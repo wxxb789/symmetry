@@ -554,6 +554,25 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       the bundle-derived pair too) and have both gate files import them. Found by the adversarial
       review of PR #145 (P3-2).
 
+## Deferred review findings (PR #137)
+
+- [ ] Close the default-scope non-fixpoint the round-4 review of PR #137 found on
+      U+002F-escape plus escaped-backslash literals, disclosed rather than fixed in that PR's
+      round 5: re-rendering a literal whose decoded text puts a separator directly in front of a
+      rendered token reads the separator and the token's text as a POSIX path and binds the
+      token's own text into a new digest. Input (Python, `BS = chr(0x5C)`):
+      `'{"k":"' + BS + 'u002F' + BS*2 + 'opx' + BS*2 + BS + 'u002faop"}'` renders to the escape
+      plus `path-sha256:ef6452<...>` on the first render and to `path-sha256:50df1a<...>` plus
+      `:` plus the first token's own hex on the second; the first render's claim starts at the
+      escaped backslash run, so the decoded `/` the escape spells stays outside it. Neither
+      render leaks a host byte, and the `record-cleanliness` gate runs `--check --root-only`
+      (a fixpoint over the committed corpus), so both effects fail closed; the boundary is
+      disclosed in the sanitizer's docstrings and `docs/evaluations/model-routing/README.md`
+      (Explicit local limits). Fix direction: a token-text guard on the POSIX families' leading
+      positions (the raw look already keeps rendered token text out of its digests) or extending
+      a claim to the separator a raw match's start left outside it - whichever closes the shape
+      without narrowing a real path out of the patterns, pinned by a second-render fixpoint test.
+
 ## Production Linux containment witness: stop-receipt barrier stall awaiting a diagnosable occurrence
 
 - [ ] Diagnose the next occurrence of the `daemon_sigkill_after_lease_arm_before_resume` barrier

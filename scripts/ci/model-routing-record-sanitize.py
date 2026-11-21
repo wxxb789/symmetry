@@ -17,7 +17,11 @@ recorded text as a stable token instead:
 Relative paths, URLs and ``sha256:`` digests pass through unchanged, and
 rendering is idempotent - except that a ``file:`` URL or a doubled-slash
 authority spelling is an absolute location, not a URL to spare: both modes
-render it.
+render it. One default-scope non-fixpoint is disclosed rather than closed: a
+separator directly in front of a rendered token reads as a POSIX path on a
+second render and binds the token's own text into a new digest. No host byte
+survives either render, the ``--root-only`` gate scope is unaffected, and
+`sanitize_text`'s docstring names the boundary.
 
 With ``--root-only`` the renderer flags only host absolute paths: Windows drive
 and UNC roots, a root-relative Windows spelling (``\\Users\\op\\run``, which
@@ -681,10 +685,13 @@ def _rebuild_with_groups(
     # `ends` ascend, and the claims in front of a position are exactly the claims up
     # to the last one whose start is behind it - the `position` the lookup already
     # computes. That is why the shift is indexed by `position + 1` and not by a
-    # second bisect over `ends`: an earlier `bisect_left` spelling of that lookup was
-    # an equivalent mutant in tests but wrong for a position exactly at a claim's end
-    # (such a claim stands for its raw span and must count), so the form is the count
-    # itself, which cannot be respelled into that mutant.
+    # second bisect over `ends`: a claim ending exactly at the position still stands
+    # for its own raw span and must count, where a `bisect_left(ends, index)`
+    # respelling drops it and moves the span forward by that claim's own shift. The
+    # `--root` case where a slash-UNC location starts exactly where a rendered root
+    # token ends pins the difference: the respelling leaves the authority literal and
+    # binds the location's tail (the raw module's
+    # `test_a_location_at_a_root_tokens_end_binds_its_own_bytes`).
     shifts = [0]
     for _start, _end, claim_start, claim_end, text in claims:
         shifts.append(shifts[-1] + len(text) - (claim_end - claim_start))
@@ -780,11 +787,17 @@ def _merged_spans(spans: list[tuple[int, int]]) -> list[tuple[int, int]]:
 # starting deeper inside the kept match consumes the same tail run and ends at the
 # same position (the kept match's tail already runs to that end), so the window only
 # has to be wide enough to expose the starts whose own prefix straddles that end:
-# the prefixes a stop byte can sit inside are a drive path's colon - the crossing
-# prefix is one byte behind it - and a `file:` URL's scheme colon, four bytes behind
-# it, so eight bytes cover both with margin (the review's fuzz over 790k literals
-# found crossing starts at exactly one and four bytes back).
-_CONTAINED_RESUME = 8
+# the widest such prefix is a drive location's device namespace (`_DEVICE_PREFIX`'s
+# own two backslash runs, four bytes each, around the one-byte `?`/`.` selector)
+# plus the drive letter behind it, ten bytes, and a `file:` URL's scheme colon sits
+# four bytes behind its start. The namespace's width is read off its pattern text,
+# so widening the pattern widens the window with it; a narrower window hides a
+# second location whose start crossed that far behind the stop (the round-4
+# review's 10-byte straddle, pinned in the JSON module).
+_DEVICE_PREFIX_WIDTH = 1 + sum(
+    int(bound) for bound in re.findall(r"\{1,(\d+)\}", _DEVICE_PREFIX)
+)
+_CONTAINED_RESUME = _DEVICE_PREFIX_WIDTH + 1  # the drive letter behind the prefix
 
 
 def _raw_literal_spans(content: str, claimed: list[tuple[int, int, str]]) -> list[tuple[int, int]]:
@@ -1074,8 +1087,14 @@ def sanitize_text(text: str, roots: list[str], root_only: bool = False) -> str:
     token. With ``root_only`` false every other absolute path is rendered as
     a hashed token; with ``root_only`` true only host absolute paths (drive, UNC
     and the POSIX home/root/temp/mount roots) are rendered, so a product route
-    such as ``/portal/runtimes`` stays literal. The function is idempotent:
-    rendering rendered text changes nothing.
+    such as ``/portal/runtimes`` stays literal. Rendering is a fixpoint in
+    ``root_only`` mode; the default scope carries one disclosed exception, where
+    re-rendering a literal whose decoded text has a separator directly in front of a
+    rendered token (an escaped forward slash ahead of a raw spelling's token) reads
+    the separator and the token's text as a POSIX path and binds the token's own text
+    into a new digest. No host byte survives either render and ``--root-only`` is
+    unaffected, so this is a disclosed non-fixpoint, not a leak; ``docs/TODO.md``
+    carries the entry.
 
     A JSON-structured record is read as its own JSON: every string literal is
     decoded and the matchers run on the decoded text, so an escape a writer spelled

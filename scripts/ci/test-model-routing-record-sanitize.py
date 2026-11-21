@@ -231,6 +231,28 @@ class SanitizeTextTests(unittest.TestCase):
                 self.assertEqual(rendered, "<disposable-root>" + _BS + _FS + "child")
                 self.assertEqual(MODULE.sanitize_text(rendered, [root], root_only=root_only), rendered)
 
+    def test_a_location_at_a_root_tokens_end_binds_its_own_bytes(self):
+        # The `shifts` lookup in `_rebuild_with_groups`: a location starting exactly
+        # where a claim's text ends must map back to its own raw bytes, so the claim
+        # in front of it counts even though it ends at the position. A respelling
+        # that bisects the claims' ends (`bisect_left(ends, index)` instead of the
+        # start-ranked count) drops that claim from the shift and moves the raw span
+        # forward, so the token binds the location's tail and the authority stays
+        # literal: `see <disposable-root>//srv2/` + the digest of `share/x`. The pin
+        # asserts the exact render, so that respelling fails it.
+        root = "/srv/store"
+        authorities = ("//srv2/share/x", "//srv3/s/y")
+        text = "see " + root + authorities[0] + " and " + root + authorities[1]
+        for root_only in (True, False):
+            with self.subTest(root_only=root_only):
+                rendered = MODULE.sanitize_text(text, [root], root_only=root_only)
+                self.assertEqual(
+                    rendered,
+                    "see <disposable-root>" + digest_of(authorities[0]) + " and "
+                    + "<disposable-root>" + digest_of(authorities[1]),
+                )
+                self.assertEqual(MODULE.sanitize_text(rendered, [root], root_only=root_only), rendered)
+
     def test_root_match_over_a_long_separator_run_is_linear(self):
         # STD-B02: the root matcher's separator used to be an overlapping
         # alternation repeated as a group (`(?:\\+|/|\\/)+`), which parses one run

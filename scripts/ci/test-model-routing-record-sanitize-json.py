@@ -468,6 +468,25 @@ class JsonReadingTests(unittest.TestCase):
                 self.assertEqual(rendered, expected)
                 self.assertIn(digest, json.loads(rendered)["k"])
                 self.assertEqual(MODULE.sanitize_text(rendered, [], root_only=True), rendered)
+        # The round-4 review's 10-byte straddle: the widest `_DEVICE_PREFIX` (four
+        # backslashes, the `?` selector, four more) plus its drive letter puts the
+        # second location's start ten bytes before the colon that ended the first
+        # match, so a window narrower than the namespace skips it and the raw
+        # separators (`\temp\run`) stay literal behind the token. The pin asserts the
+        # one-token render, the digest binding the union span, and the fixpoint. The
+        # window is derived as `_DEVICE_PREFIX`'s width plus one, so this case fails
+        # on any window below ten (the review's windows 1, 3 and 8 all passed the
+        # suites before it).
+        straddled = ("D:" + _BS + "bx" + _BS + "n" + _BS * 4 + "?" + _BS * 4
+                     + "C:" + _BS + "temp" + _BS + "run")
+        text = '{"k":"' + straddled + '"}'
+        expected = '{"k":"' + digest_of(straddled) + '"}'
+        for root_only in (True, False):
+            with self.subTest(shape="device-prefix-straddle", root_only=root_only):
+                rendered = MODULE.sanitize_text(text, [], root_only=root_only)
+                self.assertEqual(rendered, expected)
+                self.assertEqual(json.loads(rendered)["k"], digest_of(straddled))
+                self.assertEqual(MODULE.sanitize_text(rendered, [], root_only=root_only), rendered)
         # The resume window's other side, pinned rather than silent: a start deeper than
         # `_CONTAINED_RESUME` inside a kept match is not read, so a pair-free spelling
         # nested in a pair-bearing match's one-escape tail no longer re-absorbs that tail

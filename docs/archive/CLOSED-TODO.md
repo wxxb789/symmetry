@@ -3697,11 +3697,14 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
       recorded DEL byte, which only the raw tail admits, is the discriminating shape). The scan
       no longer uses `finditer` — a location whose tail swallowed the next location's first
       bytes was invisible to one render and found by the next, the non-idempotence the review's
-      fuzz counted — and re-enters only the eight bytes behind each match it keeps
-      (`_CONTAINED_RESUME`; round 4 made the loop linear: a start deeper inside the kept match
-      consumes the same tail run and adds no byte, while a crossing start — the second
-      location's prefix straddling the stop that ended the first match, round 4's P2 pin — sits
-      at most four bytes back, one for a drive path's colon and four for a `file:` URL's), and
+      fuzz counted — and re-enters only `_CONTAINED_RESUME` bytes behind each match it keeps
+      (round 4 made the loop linear: a start deeper inside the kept match consumes the same tail
+      run and adds no byte, while a crossing start — the second location's prefix straddling the
+      stop that ended the first match, round 4's P2 pin — sits at most ten bytes back: the widest
+      `_DEVICE_PREFIX` spelling, four backslashes, `?`, four backslashes, plus the drive letter
+      behind it — round 4's literal eight was too small for that namespace and the r5 round
+      derives the window from the pattern text, where the round-4 review's 10-byte straddle is
+      the pin; a `file:` URL's scheme colon sits four bytes back), and
       `_align_span` snaps every replacement's start to the backslash run it splits, so a token
       behind an odd run cannot spell `\p` and the rendered literal still parses (the review's
       fuzz found 14 invalid renders in the pre-round-3 bytes and none at the delivered bytes).
@@ -3865,21 +3868,25 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
         round-4 CLI root-after-escape case under the mis-mapped four-hex-digit escape). Round
         4's three new pins each have their own: the P2 pin fails under the restart-at-match-end
         mutation, the token pin under the token-filter mutation, and the scaling pin under the
-        round-3 bytes (all measured above).
+        round-3 bytes (all measured above). Round 5's two new pins have theirs too, measured at
+        the delivered bytes: the device-prefix straddle pin fails on `_CONTAINED_RESUME` windows
+        1, 3, 8 and 9 (the derived ten passes), and the root-token-end pin fails under the
+        `bisect_left(ends, index)` respelling of `raw_start_of`.
       Evidence (numbers measured on the fix worktree, not on a commit — the worktree carries the
       uncommitted change, so they are bound to the bytes: sanitizer
-      `sha256:8afaeb98a1d79cfe3083a82d6d22210ea12d11c2dc709f49a8aa26b3caef5c5e`, raw module
-      `sha256:ede54a19f5f03df684ac6479f7745ff4c16e6f05ac39160454e91e41a718c514`, JSON module
-      `sha256:f278be53dd48275d62a0fb894ace156f5509c84c6decc0d5fbec2c0cd42cf9d8` (the raw module is
-      byte-identical to the r1 round's, which its hash shows; the sanitizer and the JSON module
-      carry the round-4 `_CONTAINED_RESUME` scan, the P1/P2/P3 pins and the `shifts` lookup
-      simplification); a post-commit
+      `sha256:41e5bdea5eccbb390dffe3245e0164b64024f25f0965cc36eebf385eaeaf82c7`, raw module
+      `sha256:f03cce895ac9623f8851eac0d2df64265b34e5a86cbdb30a669989b0d79cc9fd`, JSON module
+      `sha256:9320024361fc2b0420f24e9be0904423f1fdc00e55ed017798723f86f378f427` (the r5 round's
+      bytes, superseding the r4 round's `8afaeb98…`, `ede54a19…` and `f278be53…`: the resume
+      window is derived from `_DEVICE_PREFIX`'s pattern text, the 10-byte straddle and
+      root-token-end pins are added, and the default-scope non-fixpoint is disclosed in the
+      docstrings, the records README and `docs/TODO.md`); a post-commit
       re-run and the slow evaluation suite are owed): `python
-      scripts/ci/test-model-routing-record-sanitize.py` 55 tests OK and `python
+      scripts/ci/test-model-routing-record-sanitize.py` 56 tests OK and `python
       scripts/ci/test-model-routing-record-sanitize-json.py` 19 tests OK (Windows, CPython
-      3.12.10; WSL Ubuntu-24.04 as the non-root user: 55 OK and 19 OK); `python
+      3.12.10; WSL Ubuntu-24.04 as the non-root user: 56 OK and 19 OK); `python
       scripts/ci/test-check-record-cleanliness.py` 19 tests OK; `--check
-      --root-only` over all 111 committed records under `docs/evaluations/` and
+      --root-only` over all 113 committed records under `docs/evaluations/` and
       `docs/evidence/`: 0 flagged (the earlier "2 records" figure was the pre-#134 measurement
       at `2a85cb8`; PR #134 rendered the two `0008b-go-bounded-regression-strong` records, so
       the merged tree has none) and no root-only render changes a record, so no committed record
@@ -3891,9 +3898,14 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
       and its `.review.json`, where the decoded reading takes a quoted specimen's trailing
       apostrophe into the token, the fail-closed direction), so no record needed re-rendering or
       rebinding. The round-4 checks at the delivered bytes: a fresh comparison of both modules
-      over all 111 records renders every record byte-identically in both scopes (0 differences;
+      over all 113 records renders every record byte-identically in both scopes (0 differences;
       the round-3 bytes' own sweep result stands unchanged), and the CLI sweep above stays 0
-      flagged. A seeded differential/invariant fuzz over random valid-JSON records (196,096
+      flagged. The r5 round's differential at its delivered bytes: the r5 sanitizer renders all
+      113 records byte-identically to the r4 bytes in both scopes (0 differences), and the
+      `--check --root-only` CLI sweep (one process per record) exits 0 on each of the 113 files,
+      0 dirty in 49.8 s on this host, so the r5 window derivation and pins change no committed
+      byte; the default-scope flagged set stays the 51 records the boundary above names. A seeded
+      differential/invariant fuzz over random valid-JSON records (196,096
       documents, 328,604 renders; escape, mixed-spelling, nested-location, token and
       `<disposable-root>` atoms) found: every render valid JSON; every `--root-only` render a
       fixpoint except one input that is already non-idempotent at the round-3 bytes (the two
@@ -3903,17 +3915,25 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
       than fixed); and four renders differing from the round-3 bytes', two inputs in both
       scopes, each the resume window's documented narrowing — a pair-free spelling deep inside
       a pair-bearing match no longer re-absorbs that match's one-escape tail, so the tail stays
-      outside the token the way the pair-bearing rule spells it. The window's width is measured,
-      not guessed: an enumeration over 790,324 random valid literals found every match whose
-      start lies behind an earlier same-family match's end and extends past it (the M6 shape)
-      starting exactly one or four bytes behind that end — a drive path's colon and a `file:`
-      URL's scheme colon — so `_CONTAINED_RESUME = 8` covers them with margin.
+      outside the token the way the pair-bearing rule spells it. The window's width is derived
+      from the pattern, not guessed: `_DEVICE_PREFIX_WIDTH` sums the `\{1,<n>}` bounds in
+      `_DEVICE_PREFIX`'s own pattern text and adds the one-byte `?`/`.` selector (the widest
+      namespace, nine bytes), and `_CONTAINED_RESUME` adds the drive letter behind it, so a
+      kept match's stop byte can hide a second drive location starting ten bytes before it; a
+      `file:` URL's scheme colon, four bytes behind its start, is shorter. Round 4's literal
+      eight hid a device-prefixed second location whose start crossed ten bytes behind the kept
+      match's stop: the round-4 review's 80,000-literal fuzz with device-prefix atoms found 28
+      renders differing from the round-3 bytes, all on that straddle, and zero with a ten-byte
+      window, and the JSON module's straddle pin fails on windows 1, 3, 8 and 9 (the r5 round
+      measured each; the derived ten passes).
       Performance, measured at the delivered bytes (minimum of five in-process runs, one module
       per process, this host; fixtures named with each number). Round 4 (the linear raw look):
       the review's UNC-listing fixture — `json.dumps({"stdout": "\n".join(...N
-      `\\srv\share\dirN` paths...)})` — renders 1,000 / 2,000 / 4,000 / 8,000 lines in
-      0.056 s / 0.104 s / 0.308 s / 0.500 s root-only (base tool 0.005 s / 0.013 s / 0.024 s /
-      0.045 s), where the round-3 bytes took 4.6 s / 17.4 s / 101 s at 1,000 / 2,000 / 4,000
+      `\\srv\share\dirN` paths...)})` — renders 1,000 / 2,000 / 4,000 / 8,000 / 16,000 lines in
+      0.053 s / 0.150 s / 0.272 s / 0.597 s / 0.986 s root-only (base tool 0.004 s / 0.009 s /
+      0.025 s / 0.036 s / 0.067 s; the r5 round re-measured this fixture's five-size series
+      and the fixtures below keep the r4 round's numbers), where the round-3 bytes took
+      4.6 s / 17.4 s / 101 s at 1,000 / 2,000 / 4,000
       and 433 s for the scaling pin's 8,000-line case (the review measured 3.15 s / 13.15 s /
       48.79 s on its host). One JSON literal holding 2,000 /
       8,000 space-separated escaped drive paths (`{"p":"C:` + doubled escapes + `Users` + …)
@@ -3937,9 +3957,9 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
       literal lets the scan run over the whole of it — so the entry's own earlier "1.04 s
       against 1.02 s" claim is superseded by these numbers (it held on a run with no
       escape-shaped backslash before it, which the guard skips).
-      `test-model-routing-evaluation.py` was not run here (the conductor runs it; the 111-record
-      sweep is 55-128 s through the CLI, one process per record, at the round-4 bytes, host
-      state dependent). Reader-facing boundary:
+      `test-model-routing-evaluation.py` was not run here (the conductor runs it; the 113-record
+      sweep was 49.8 s through the CLI, one process per record, at the r5 bytes — 55-128 s
+      across the r4 round's runs — host state dependent). Reader-facing boundary:
       `docs/evaluations/model-routing/README.md`; the decision, the rejected readings, the edge
       cases and the evidence plan are in
       `docs/plans/2026-11-21-sanitizer-json-escape-plan.md`.
