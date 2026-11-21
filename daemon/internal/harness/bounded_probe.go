@@ -51,9 +51,9 @@ func RunBoundedProbe[T any](ctx context.Context, timeout time.Duration, run func
 type CommandInvoker func(context.Context, execution.Invocation, int) ([]byte, error)
 
 // RunProbeCommand builds the probe environment and runs one bounded probe
-// command through invoker. Every probe runner in this tree shares this
-// construction, so a host with an unusable environment or a spawn failure is
-// reported identically by all of them.
+// command through invoker. Every probe runner this change deduplicates shares
+// this construction, so a host with an unusable environment or a spawn failure
+// is reported identically by all of them.
 func RunProbeCommand(ctx context.Context, invocation execution.Invocation, limit int, invoker CommandInvoker) ([]byte, error) {
 	environment, err := execution.BuildEnvironment()
 	if err != nil {

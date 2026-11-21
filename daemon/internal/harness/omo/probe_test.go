@@ -226,16 +226,16 @@ func TestProbePinsCompleteVersionTransportAndPlatformBytes(t *testing.T) {
 // still be parsed.
 func TestProbeRejectsOutputAboveTheOmOProbeLimit(t *testing.T) {
 	for _, test := range []struct {
-		name           string
-		output         []byte
-		want           error
-		wantDiagnostic string
+		name      string
+		output    []byte
+		want      error
+		wantGuard bool
 	}{
 		{
-			name:           "one byte above the limit",
-			output:         bytes.Repeat([]byte("x"), 64*1024+1),
-			want:           harness.ErrHarnessUnavailable,
-			wantDiagnostic: "OmO probe output exceeds limit",
+			name:      "one byte above the limit",
+			output:    bytes.Repeat([]byte("x"), 64*1024+1),
+			want:      harness.ErrHarnessUnavailable,
+			wantGuard: true,
 		},
 		{
 			name:   "exactly at the limit",
@@ -253,10 +253,11 @@ func TestProbeRejectsOutputAboveTheOmOProbeLimit(t *testing.T) {
 			if !errors.Is(err, test.want) {
 				t.Fatalf("probe error = %v, want %v", err, test.want)
 			}
-			if test.wantDiagnostic != "" && !strings.Contains(err.Error(), test.wantDiagnostic) {
-				t.Fatalf("probe error = %v, want the %q guard diagnostic", err, test.wantDiagnostic)
-			}
-			if test.wantDiagnostic == "" && strings.Contains(err.Error(), "exceeds limit") {
+			if test.wantGuard {
+				if !strings.Contains(err.Error(), "OmO probe output exceeds limit") {
+					t.Fatalf("probe error = %v, want the OmO probe guard diagnostic", err)
+				}
+			} else if strings.Contains(err.Error(), "exceeds limit") {
 				t.Fatalf("probe error = %v, want an at-limit capture inspected rather than rejected", err)
 			}
 			if len(calls) != 1 || calls[0] != "--version" {

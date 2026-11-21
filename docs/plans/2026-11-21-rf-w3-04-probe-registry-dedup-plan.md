@@ -21,14 +21,15 @@ Non-test probe sources only. Line references are at `36f9a887`.
 
 | Concern | Copies before | Where | After |
 | --- | --- | --- | --- |
-| bounded probe (`context.WithTimeout` + pre/post context checks) | 8 | `registry.go:257` `runBoundedProbe`, `registry.go:276` `runBoundedSchemaProbe`, `registry.go:295` `runClaudeProbe`, `pi/probe.go:69` `runProbe`, `codex/probe.go:60` `runProbe`, `codex/probe.go:76` `runSchemaProbe`, `opencode/adapter.go:53` `runProbe`, `omo/probe.go:89-100` anonymous closure | 1 implementation (`harness.RunBoundedProbe`), 8 call sites |
+| bounded probe (`context.WithTimeout` + pre/post context checks) | 8 | `registry.go:257` `runBoundedProbe`, `registry.go:276` `runBoundedSchemaProbe`, `registry.go:295` `runClaudeProbe`, `pi/probe.go:69` `runProbe`, `codex/probe.go:60` `runProbe`, `codex/probe.go:76` `runSchemaProbe`, `opencode/adapter.go:53` `runProbe`, `omo/probe.go:89-100` anonymous closure | 1 implementation (`harness.RunBoundedProbe`), 13 call sites (5 in the root package, 8 across the four subpackages) |
 | `SchemaDigest` | 2 | `registry.go:79` `osCodexCommandRunner.SchemaDigest`, `codex/probe.go:104` `osCommandRunner.SchemaDigest` | 1 implementation (`harness.CodexSchemaDigest`), 2 one-line runner methods |
 | probe command runner (`BuildEnvironment` + bounded command) | 6 | `registry.go:46` `osClaudeCommandRunner.Run`, `registry.go:67` `osCodexCommandRunner.Run`, `pi/probe.go:85`, `codex/probe.go:92`, `omo/probe.go:38`, `opencode/adapter.go:69` | 1 implementation (`harness.RunProbeCommand`), 6 one-line `Run` methods |
 
 `grep -c "context.WithTimeout"` per probe file: `registry.go` 2 → 0, `pi/probe.go` 1 → 0,
 `codex/probe.go` 2 → 0, `omo/probe.go` 1 → 0, `opencode/adapter.go` 4 → 3 (the three survivors
-are session-cleanup bounds at `:647`, `:892`, `:1249`, not probe bounds), `claude_probe.go` 0 → 0,
-`codex_probe.go` 0 → 0; new `bounded_probe.go` 1 (the single shared bound).
+are session-cleanup bounds at `:647`, `:892`, `:1249` at the baseline and `:626`, `:871`, `:1228`
+in the final tree, not probe bounds), `claude_probe.go` 0 → 0, `codex_probe.go` 0 → 0; new
+`bounded_probe.go` 1 (the single shared bound).
 
 `grep -c "func .* Run(ctx"`: 6 production runner methods before and after; after, each body is a
 single delegation to `harness.RunProbeCommand`, so the runner *implementation* exists once.
@@ -86,12 +87,14 @@ context error and a discarded value — never evidence. A delegate error otherwi
 unwrapped (identity preserved for `errors.Is` at the call sites that classify it), and a
 successful value passes through unchanged.
 
-*Nil ctx is unreachable through every public probe entry*: `UnavailableAdapter.Probe` /
-`UnavailableAdapter.Start` (`registry.go:319`, `:333`), `probeCodexExecutableWithRunner`
-(`registry.go:380`), `probeClaudeNativeEvidence` (`claude_probe.go:72`), `pi.Probe`
-(`pi/probe.go:273`), `codex.Probe` (`codex/probe.go:198`), `opencode`'s adapter probe entry and
-`omo.probeForPlatform` (`omo/probe.go:72`) all guard a nil context before the delegate runs. The
-shared guard only makes a direct nil call fail closed instead of panicking.
+*Nil ctx is unreachable through every public probe entry* (baseline `36f9a887` coordinates,
+final-tree coordinates in parentheses): `UnavailableAdapter.Probe` / `UnavailableAdapter.Start`
+(`registry.go:325`, `:339`; `:219`, `:233`), `probeCodexExecutableWithRunner` (`registry.go:379`;
+`:273`), `probeClaudeNativeEvidence` (`claude_probe.go:71`; unchanged), `pi.Probe`
+(`pi/probe.go:272`; `:251`), `codex.Probe` (`codex/probe.go:197`; `:109`), `opencode`'s adapter
+probe entry and `omo.probeForPlatform` (`omo/probe.go:71`; `:67`) all guard a nil context before
+the delegate runs. The shared guard only makes a direct nil call fail closed instead of
+panicking.
 
 **`RunProbeCommand`.** Builds the process environment once (`execution.BuildEnvironment()`), sets
 it on a copy of the caller's `execution.Invocation` and calls `invoker(ctx, invocation, limit)`.
@@ -157,11 +160,13 @@ Measured on the final tree with `git diff --numstat` (`36f9a887` → worktree) p
 new files: non-test sources 40 inserted / 283 deleted = **−243**, of which `registry.go` −106,
 `codex/probe.go` −88, `pi/probe.go` −21, `opencode/adapter.go` −21, `omo/probe.go` −7, and
 `claude_probe.go` two call-site lines. The new shared `bounded_probe.go` is 119 lines including
-doc comments, so the **net non-test delta is −124**. Tests gain 318 lines
-(`bounded_probe_test.go` +268 new, `omo/probe_test.go` +50 new guard rows, `claude_probe_test.go`
-3/3 re-pointed). Overall `git diff --stat` over tracked files: 93 insertions / 286 deletions over
-8 files; the three untracked files add 630 lines (source +119, test +268, this plan +243, measured
-after the evidence rows of §6 were recorded). The contract's −350…−400 band is report-only
+doc comments, so the **net non-test delta is −124**. Test files: `bounded_probe_test.go` +268 (new),
+`omo/probe_test.go` +51 (new guard rows), `claude_probe_test.go` 20/3 (one test re-pointed, one
+nil-ctx entry row), `codex_probe_test.go` 17/0 (one nil-ctx entry row) — 356 inserted test lines
+and 3 rewritten. Overall `git diff --stat` (`36f9a887` → worktree over the 11 harness files, the
+new ones included): 515 insertions / 286 deletions; the new files are `bounded_probe.go` 119 lines
+and `bounded_probe_test.go` 268 lines.
+The contract's −350…−400 band is report-only
 (D2, P1-3) and the duplication table of §1 is the judged artifact: 8 bounded-probe
 implementations → 1, 2 `SchemaDigest` bodies → 1, 6 runner bodies → 1.
 
@@ -238,7 +243,8 @@ conditions named.
 Source: `daemon/internal/harness/bounded_probe.go` (new), `registry.go`, `claude_probe.go`,
 `pi/probe.go`, `codex/probe.go`, `omo/probe.go`, `opencode/adapter.go` (runner lines only).
 Tests: `daemon/internal/harness/bounded_probe_test.go` (new), `claude_probe_test.go` (one test
-re-pointed), `omo/probe_test.go` (one new guard test, §9.1).
+re-pointed, one nil-ctx entry row), `codex_probe_test.go` (one nil-ctx entry row),
+`omo/probe_test.go` (one new guard test, §9.1).
 Docs: this plan. No `docs/TODO.md` entry opens or closes (§9.4). Nothing under `daemon/internal/app`
 is required: `NewClaudeAdapterWithRunner`, `NewCodexAdapterWithRunner` and `NewRegistry` keep their
 signatures, so `app/harness_test.go:306` compiles unchanged.

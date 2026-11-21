@@ -172,6 +172,23 @@ func TestClaudeProbeRejectsSuccessAfterProbeDeadline(t *testing.T) {
 	}
 }
 
+// TestClaudeProbeRejectsNilContextBeforeTheSharedGuard pins the entry-level
+// guard: a nil context must be rejected with the Claude-specific text before
+// the shared bounded probe is reached, and the runner must never be called.
+func TestClaudeProbeRejectsNilContextBeforeTheSharedGuard(t *testing.T) {
+	runner := &claudeFixtureRunner{}
+	capabilities, err := probeClaudeExecutable(nil, "claude", runner)
+	if err == nil || err.Error() != "Claude probe context must not be nil" {
+		t.Fatalf("probeClaudeExecutable(nil) error = %v, want the entry-level Claude guard", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("runner calls = %#v, want none for a nil context", runner.calls)
+	}
+	if capabilities.VersionKnown || capabilities.NativeVersion != "" || capabilities.TransportVerified || capabilities.Verified {
+		t.Fatalf("capabilities = %+v, want no capability from a nil context", capabilities)
+	}
+}
+
 func TestClaudeProbeDoesNotParseFailedCommandOutput(t *testing.T) {
 	for _, test := range []struct {
 		name string
