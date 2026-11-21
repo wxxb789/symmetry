@@ -1057,17 +1057,14 @@ func TestClaudeCandidateCancelledControlContextDoesNotAcknowledgeFailure(t *test
 	if firstControlErr == nil || firstReceipt.Outcome != ControlFailed {
 		t.Fatalf("cancelled control = receipt=%+v error=%v, want failed non-acknowledgement", firstReceipt, firstControlErr)
 	}
-	if native, ok := session.(*claudeCandidateSession); ok {
-		native.closeGate.mutex.Lock()
-		attempt := native.closeGate.attempt
-		native.closeGate.mutex.Unlock()
-		if attempt != nil {
-			select {
-			case <-attempt.done:
-			case <-time.After(testHangGuard):
-				t.Fatal("cancelled control close attempt did not settle")
-			}
-		}
+	// The cancelled control still starts the session's single detached cleanup
+	// attempt. Close joins that attempt (or reads its stored outcome) before
+	// the retry, so the retry observes the settled observation instead of
+	// racing the attempt's start.
+	settleContext, cancelSettle := context.WithTimeout(context.Background(), testHangGuard)
+	defer cancelSettle()
+	if err := session.Close(settleContext); !errors.Is(err, firstErr) {
+		t.Fatalf("settled close = %v, want the stable %v", err, firstErr)
 	}
 	secondReceipt, secondControlErr := staged.Control(context.Background(), ControlRequest{CommandID: "cancel-retry", Kind: ControlCancel})
 	if !errors.Is(secondControlErr, firstErr) || secondReceipt.Outcome != ControlFailed {

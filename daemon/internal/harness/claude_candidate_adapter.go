@@ -648,7 +648,7 @@ func (session *claudeCandidateSession) Close(ctx context.Context) error {
 			// Process.Terminate is idempotent and retains its first failure.
 			// Preserve that observation instead of issuing another terminate
 			// call that could be mistaken for a fresh cleanup attempt.
-			return PermanentCloseFailure{Err: err}
+			return permanentCloseFailure{Err: err}
 		}
 	})
 }

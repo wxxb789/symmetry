@@ -275,16 +275,16 @@ func TestCloseGateKeepsPermanentFailureWithoutReAttempt(t *testing.T) {
 	permanentErr := errors.New("process termination is not retryable")
 	first := gate.Run(context.Background(), func(context.Context) error {
 		attempts++
-		return PermanentCloseFailure{Err: permanentErr}
+		return permanentCloseFailure{Err: permanentErr}
 	})
 	if !errors.Is(first, permanentErr) {
 		t.Fatalf("permanent close = %v, want the unwrapped %v", first, permanentErr)
 	}
-	var marker PermanentCloseFailure
+	var marker permanentCloseFailure
 	if errors.As(first, &marker) {
-		t.Fatalf("permanent close = %#v, want the unwrapped error, not a PermanentCloseFailure", first)
+		t.Fatalf("permanent close = %#v, want the unwrapped error, not the marker", first)
 	}
-	if strings.Contains(first.Error(), "PermanentCloseFailure") {
+	if strings.Contains(first.Error(), "permanentCloseFailure") {
 		t.Fatalf("permanent close text = %q, want the inner error text", first.Error())
 	}
 	second := gate.Run(context.Background(), func(context.Context) error {
@@ -295,10 +295,34 @@ func TestCloseGateKeepsPermanentFailureWithoutReAttempt(t *testing.T) {
 		t.Fatalf("repeated close = %v, want the stable %v", second, permanentErr)
 	}
 	if errors.As(second, &marker) {
-		t.Fatalf("repeated close = %#v, want the stored inner error, not a PermanentCloseFailure", second)
+		t.Fatalf("repeated close = %#v, want the stored inner error, not the marker", second)
 	}
 	if attempts != 1 {
 		t.Fatalf("attempts = %d, want 1: a permanent failure must not be retried", attempts)
+	}
+}
+
+func TestCloseGateTreatsAWrappedPermanentFailureAsRetryable(t *testing.T) {
+	gate := CloseGate{}
+	innerErr := errors.New("process termination is not retryable")
+	outerErr := errors.New("close bookkeeping failed")
+	attempts := 0
+	first := gate.Run(context.Background(), func(context.Context) error {
+		attempts++
+		return errors.Join(permanentCloseFailure{Err: innerErr}, outerErr)
+	})
+	if !errors.Is(first, outerErr) {
+		t.Fatalf("wrapped-marker close = %v, want the full attempt error including %v", first, outerErr)
+	}
+	second := gate.Run(context.Background(), func(context.Context) error {
+		attempts++
+		return nil
+	})
+	if second != nil {
+		t.Fatalf("retry after a wrapped marker = %v, want the retry to succeed", second)
+	}
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want 2: only the bare marker may make a failure permanent", attempts)
 	}
 }
 
@@ -417,6 +441,25 @@ func TestWaitTurnBarrierPrefersSettledTurnAndReportsSessionError(t *testing.T) {
 	})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled wait = %v, want context.Canceled", err)
+	}
+}
+
+func TestWaitTurnBarrierKeepsSettledTurnWhenSessionEndsConcurrently(t *testing.T) {
+	turnErr := errors.New("turn settled as the session ended")
+	sessionErr := errors.New("session ended before the turn settled")
+	settledTurn := make(chan struct{})
+	close(settledTurn)
+	sessionContext, cancelSession := context.WithCancel(context.Background())
+	cancelSession()
+	// Both barriers are already closed, so the select between the turn channel
+	// and the session-context arm is arbitrary. The session-context arm's
+	// non-blocking re-check must still report the settled turn, so every round
+	// must return the turn error; repeating exercises both orderings.
+	for round := range 128 {
+		err := WaitTurnBarrier(context.Background(), sessionContext, settledTurn, func() error { return turnErr }, func() error { return sessionErr })
+		if !errors.Is(err, turnErr) {
+			t.Fatalf("round %d = %v, want the settled turn error %v", round, err, turnErr)
+		}
 	}
 }
 

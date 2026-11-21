@@ -2,20 +2,22 @@ package harness
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"time"
 )
 
-// PermanentCloseFailure marks a close attempt whose failure must stay sticky:
+// permanentCloseFailure marks a close attempt whose failure must stay sticky:
 // the session stores the inner error and answers every later Close with it
-// because the underlying cleanup is not retryable. CloseGate unwraps the marker
-// before storing or returning it, so no caller observes this type. Err must be
-// non-nil; a marker with a nil error counts as a retryable failure.
-type PermanentCloseFailure struct{ Err error }
+// because the underlying cleanup is not retryable. CloseGate is its only
+// interpreter, so the marker stays unexported and no import site can wrap or
+// fabricate permanence. An attempt signals the marker by returning it bare;
+// the gate classifies only that object, so a wrapped or joined marker is an
+// ordinary retryable failure. Err must be non-nil; a marker with a nil error
+// counts as a retryable failure.
+type permanentCloseFailure struct{ Err error }
 
 // Error reports the wrapped attempt failure.
-func (failure PermanentCloseFailure) Error() string {
+func (failure permanentCloseFailure) Error() string {
 	if failure.Err == nil {
 		return ""
 	}
@@ -23,7 +25,7 @@ func (failure PermanentCloseFailure) Error() string {
 }
 
 // Unwrap exposes the wrapped attempt failure.
-func (failure PermanentCloseFailure) Unwrap() error { return failure.Err }
+func (failure permanentCloseFailure) Unwrap() error { return failure.Err }
 
 type closeAttempt struct {
 	done chan struct{}
@@ -41,7 +43,7 @@ const (
 // CloseGate owns one session's "at most one in-flight shutdown" protocol. The
 // first caller runs the attempt, concurrent callers join it, a successful
 // attempt is permanent, a plain failure stays retryable, and a
-// PermanentCloseFailure failure is permanent.
+// permanentCloseFailure failure is permanent.
 type CloseGate struct {
 	mutex     sync.Mutex
 	attempt   *closeAttempt
@@ -111,13 +113,14 @@ func (gate *CloseGate) begin() (*closeAttempt, closeGateMode, error) {
 	return entry, closeGateRun, nil
 }
 
-// finish publishes one attempt's outcome to every waiting caller. The attempt
-// slot is cleared only when it still holds this attempt, so a retry that began
-// after a failure is never cleared by the earlier one.
+// finish publishes one attempt's outcome to every waiting caller. Only the
+// bare marker is classified as permanent, so a wrapped marker keeps its full
+// error and stays retryable. The attempt slot is cleared only when it still
+// holds this attempt, so a retry that began after a failure is never cleared
+// by the earlier one.
 func (gate *CloseGate) finish(entry *closeAttempt, err error) {
 	permanent := false
-	var failure PermanentCloseFailure
-	if err != nil && errors.As(err, &failure) && failure.Err != nil {
+	if failure, ok := err.(permanentCloseFailure); ok && failure.Err != nil {
 		err, permanent = failure.Err, true
 	}
 	gate.mutex.Lock()

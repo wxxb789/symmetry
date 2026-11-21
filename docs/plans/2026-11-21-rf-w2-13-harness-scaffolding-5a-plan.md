@@ -77,8 +77,11 @@ func (forwarder ProcessForwarder[P]) LiveOwnerStatus(ctx context.Context) (execu
 `close_gate.go`
 
 ```go
-// PermanentCloseFailure marks a close attempt whose failure must stay sticky.
-type PermanentCloseFailure struct{ Err error }
+// permanentCloseFailure marks a close attempt whose failure must stay sticky.
+// Unexported: CloseGate is its only interpreter and classifies only the bare
+// marker, so no import site can wrap or fabricate permanence (fix r1,
+// REV-S5A-01).
+type permanentCloseFailure struct{ Err error }
 
 // CloseGate owns a session's "at most one in-flight shutdown" protocol.
 type CloseGate struct{ ... }
@@ -166,10 +169,11 @@ zero struct. Identical to the four copies being replaced (`pi:501`, `codex:273`,
   (`attempt.done` vs the caller's `ctx`, returning `ctx.Err()` if the caller leaves first); only
   otherwise does the caller run the attempt.
 - An attempt that returns nil marks the gate permanently closed. An attempt that returns a plain
-  error stays retryable. An attempt that returns `PermanentCloseFailure{Err: e}` makes `e` sticky:
-  every later `Close` returns `e` without re-running, and the initiating caller also gets `e`
-  (the marker is unwrapped, so no caller ever observes the marker type and `errors.Is`/`Is`+`%w`
-  behaviour is unchanged).
+  error stays retryable. An attempt that returns the bare `permanentCloseFailure{Err: e}` marker
+  makes `e` sticky: every later `Close` returns `e` without re-running, and the initiating caller
+  also gets `e` (the marker is unwrapped, so no caller ever observes the marker type and
+  `errors.Is`/`Is`+`%w` behaviour is unchanged). Only the returned object is classified, so a
+  wrapped or joined marker keeps its full error and stays retryable (fix r1, REV-S5A-01).
 - `Run` executes the attempt on the calling goroutine with the caller's context (`codex`, `omp`,
   claude-candidate-free `generic`; `omp` derives its own `WithTimeout(ctx, shutdownTimeout)`
   inside the attempt, exactly as today).
@@ -243,10 +247,11 @@ Non-test Go lines under `daemon/internal/harness/**` at `4dd374b`: 19,807 (test:
 The contract's −500 was measured for the whole finding, which included the JSONL decoder now
 moved to W4-15, and review P3 makes LOC deltas reported, not gated. Measured on the final tree
 with `git diff --numstat -- daemon/internal/harness` plus `wc -l` on the new files: 761 non-test
-lines removed from the six adapter files, 159 added to them, and 420 lines of new shared helper
-(docs included) = **−182 net non-test**. The apply stage added the typed-nil lease guard
+lines removed from the six adapter files, 159 added to them, and 423 lines of new shared helper
+(docs included) = **−179 net non-test**. The apply stage added the typed-nil lease guard
 (`process_forwarding.go`) and the by-value `DeliverEvent` note (+11 helper lines over the 409 the
-simplify report recorded); these numbers are re-derived from the final tree. The helpers are
+simplify report recorded); fix round r1 added the unexported-marker note to `close_gate.go`
+(+3 helper lines, REV-S5A-01); these numbers are re-derived from the final tree. The helpers are
 larger than the plan's estimate because every exported helper carries the repo's doc-comment
 style and the close gate encodes four adapter policies (join, retry, permanent, detached) in one
 place; the duplication they replace is 761 lines across six files.
@@ -262,9 +267,9 @@ place; the duplication they replace is 761 lines across six files.
 | helper pins | `go test -count=1 -run <new root-package tests> ./internal/harness/` |
 | whitespace | `git diff --check` |
 | no suppressions | `git diff -U0 origin/main...HEAD ':!docs/plans/2026-11-21-rf-w2-13-harness-scaffolding-5a-plan.md' \| grep -E '^\+.*(nolint\|credo:disable)'` (expect none; the record file itself carries the pattern text, so it is excluded) |
-| no host path | `git diff origin/main...HEAD ':!docs/plans/2026-11-21-rf-w2-13-harness-scaffolding-5a-plan.md' \| grep -i "users/"` (expect none) |
+| no host path | `git diff origin/main...HEAD \| grep -iE 'users[/\\]'` (separator-tolerant profile-directory check, whole diff and this record file included; expect none) |
 | LOC | `git diff --numstat -- daemon/internal/harness` for the changed files plus `wc -l` on the six new helper files |
-| string preservation (A10) | sorted multiset of double-quoted literals per changed file, `git show HEAD:<file>` vs the working tree: the only removals are the import paths `"reflect"`/`"slices"`/`"sync"` and the empty-string literals of the deleted nil-process branches; every error string keeps its exact text and count |
+| string preservation (A10) | sorted multiset of double-quoted literals, removed vs added, over `git diff -U0 6117e198 -- daemon/internal/harness`: removals are the imports `"reflect"` x5 / `"slices"` x4 / `"sync"` x1 (plus `"errors"` x1 in `close_gate.go` versus the pre-fix commit), empty strings x4, restructured lines repeating strings that still exist (each moved adapter error string keeps its exact text and count), and fix r1 test-message rewordings; no production error string is lost |
 
 The adapter suites named in the contract as per-adapter oracles run inside
 `./internal/harness/...`: `pi/adapter_test.go`, `codex/adapter_test.go`, `omo/adapter_test.go`,
@@ -323,10 +328,11 @@ grepping the diff.
    the probe tests are W3-04's. Applying the stricter reading, root `harness_test.go` is not
    edited; the new helper tests go into a new file `session_scaffolding_test.go`. Adapter test
    files are edited only to re-point the three clone-helper call sites (§7).
-2. **`PermanentCloseFailure` vs a classifier callback.** A marker type keeps every `Run` call site
-   one line and survives wrapping; the callback alternative adds a parameter that `pi`/`omo` would
-   always pass as nil. The gate unwraps the marker before storing or returning it, so callers see
-   exactly today's error values.
+2. **Close-failure marker vs a classifier callback.** A marker type keeps every `Run` call site
+   one line; it is unexported and classified only when returned bare, so no wrap chain can
+   smuggle or strip the observation (fix r1, REV-S5A-01). The callback alternative adds a
+   parameter that `pi`/`omo` would always pass as nil. The gate unwraps the bare marker before
+   storing or returning it, so callers see exactly today's error values.
 3. **Clone depth.** The union (§3) rather than the cheapest common denominator; the alternative
    (drop claude's per-diagnostic JSON round trip because the private map is immutable after
    decode) is recorded and rejected because it would weaken one adapter's isolation.
