@@ -142,7 +142,7 @@ function CommandPalette() {
       }
     };
     document.addEventListener("keydown", handleKey);
-    return () => document.removeEventListener("keydown", handleKey);
+    return () => { document.removeEventListener("keydown", handleKey); };
   }, [open]);
   const filter = search.trim().toLocaleLowerCase();
   const projects = query.data?.projects.filter((project) => `${project.name} ${project.key}`.toLocaleLowerCase().includes(filter)) ?? [];
@@ -159,7 +159,7 @@ function CommandPalette() {
         <div className="dialog-heading"><Dialog.Title>Command palette</Dialog.Title><Dialog.Close asChild><button className="icon-button" type="button" aria-label="Close command palette"><X size={20} aria-hidden="true" /></button></Dialog.Close></div>
         <Dialog.Description className="muted">Navigate this workspace. Use Tab to select a result and Enter to open it.</Dialog.Description>
         <label className="sr-only" htmlFor="command-search">Search destinations</label>
-        <input id="command-search" className="command-input" type="search" placeholder="Search projects and pages…" value={search} onChange={(event) => setSearch(event.currentTarget.value)} />
+        <input id="command-search" className="command-input" type="search" placeholder="Search projects and pages…" value={search} onChange={(event) => { setSearch(event.currentTarget.value); }} />
         <div className="command-results">
           {(!filter || "attention".includes(filter)) && <Link className="command-result" to="/attention" search={projectId ? { projectId } : {}} onClick={closeForNavigation}><Inbox size={18} aria-hidden="true" />Attention</Link>}
           {(!filter || "chat".includes(filter)) && <Link className="command-result" to="/chat" search={projectId ? { projectId } : {}} onClick={closeForNavigation}><MessageSquare size={18} aria-hidden="true" />Chat</Link>}
@@ -275,6 +275,6 @@ function LogoutForm({ application, cachedToken }: { application: Application; ca
   return <form className="topbar-form" ref={formRef} action="/portal/logout" method="post" onSubmit={(event) => { void submit(event); }}>
     <input type="hidden" name="_csrf_token" value={cachedToken} />
     <button className="icon-button" type="submit" aria-label="Sign out" disabled={submitting || !cachedToken}><LogOut size={18} aria-hidden="true" /></button>
-    {logoutError && <p className="notice notice-error logout-error" role="alert">{logoutError} <button className="button" type="button" onClick={() => setLogoutError(null)}>Try again</button></p>}
+    {logoutError && <p className="notice notice-error logout-error" role="alert">{logoutError} <button className="button" type="button" onClick={() => { setLogoutError(null); }}>Try again</button></p>}
   </form>;
 }

@@ -7,13 +7,13 @@ import { defineConfig } from "vitest/config";
 // that runs the suite from a sealed checkout exports this variable to keep run state
 // out of the sealed revision (the evaluator's runbook names it); with the variable
 // unset both defaults are unchanged.
-const toolCacheDir = process.env["SYMMETRY_TOOL_CACHE_DIR"];
+const toolCacheDir = process.env.SYMMETRY_TOOL_CACHE_DIR;
 // A sealed-checkout harness also switches the cache channels off: the
 // transformed-module cache would reuse a previous invocation's transformed output for
 // identical source bytes, keyed by a partly-hashed environment, and the results cache
 // would carry an earlier run's results (test ordering and `--last-failed` selection).
 // Worker runs (no variable) keep the caches.
-const disableToolCaches = process.env["SYMMETRY_DISABLE_TOOL_CACHES"] === "1";
+const disableToolCaches = process.env.SYMMETRY_DISABLE_TOOL_CACHES === "1";
 
 export default defineConfig({
   plugins: [react()],
@@ -28,5 +28,14 @@ export default defineConfig({
     // that leaves vitest's results cache on.
     ...(disableToolCaches ? { cache: false, fsModuleCache: false } : {}),
     ...(toolCacheDir ? { fsModuleCachePath: path.join(toolCacheDir, "vitest-fs") } : {}),
+    // `vitest run --coverage` (the gate step the coverage plane adds) writes its
+    // report like the other run state: into the harness tool cache when the sealed
+    // checkout exports SYMMETRY_TOOL_CACHE_DIR, and into the package's own
+    // `coverage/` directory otherwise.
+    coverage: {
+      provider: "v8",
+      reporter: ["text-summary", "lcov"],
+      reportsDirectory: toolCacheDir ? path.join(toolCacheDir, "coverage") : "coverage",
+    },
   },
 });

@@ -120,6 +120,7 @@ from __future__ import annotations
 
 import argparse
 import bisect
+import itertools
 import os
 import pathlib
 import re
@@ -141,7 +142,7 @@ AUDITED_PATHS = ("docs/runbooks", "docs/design/quality.md", "docs/archive/CLOSED
 BACKTICKED = re.compile(r"`([^`\n]+)`")
 # The line suffix, with an optional column (``file:line:col`` is what compilers, test
 # runners and linters print); the suffix is stripped and never validated.
-LINE_SUFFIX = re.compile(r":\d+(?::\d+)?(?:[-–,]\d+(?::\d+)?)*$")
+LINE_SUFFIX = re.compile(r":\d+(?::\d+)?(?:[-\u2013,]\d+(?::\d+)?)*$")
 WILDCARD = re.compile(r"\*\*|\.\.\.|…|\*")
 # A fenced code block's opening or closing line: any leading whitespace (a fence nested
 # in a list item sits deeper than the top level), any blockquote markers, then three or
@@ -158,8 +159,31 @@ WORD = re.compile(r"[A-Za-z0-9_]+")
 # The closed connective list the gap between a path and its symbol may use; anything else
 # leaves the pair unbound (see the module docstring).
 CONNECTIVES = frozenset(
-    "of in at is the its from to with uses used calls see sees runs reads writes "
-    "now only by for that so".split()
+    [
+        "of",
+        "in",
+        "at",
+        "is",
+        "the",
+        "its",
+        "from",
+        "to",
+        "with",
+        "uses",
+        "used",
+        "calls",
+        "see",
+        "sees",
+        "runs",
+        "reads",
+        "writes",
+        "now",
+        "only",
+        "by",
+        "for",
+        "that",
+        "so",
+    ]
 )
 MAX_GAP_CHARACTERS = 40
 MAX_GAP_WORDS = 2
@@ -172,7 +196,7 @@ class IgnoreQueryRefused(Exception):
 class Record:
     """One backticked token with its citation shape and its place in the document."""
 
-    __slots__ = ("match", "path_shape", "path_body", "symbol", "line")
+    __slots__ = ("line", "match", "path_body", "path_shape", "symbol")
 
     def __init__(
         self,
@@ -185,13 +209,19 @@ class Record:
         self.match = match
         self.line = line
         self.path_shape, self.path_body = path_citation(
-            match.group(1).strip(), files, directories, removed,
+            match.group(1).strip(),
+            files,
+            directories,
+            removed,
         )
         self.symbol = symbol_citation(match.group(1).strip())
 
 
 def path_citation(
-    token: str, files: set[str], directories: set[str], removed: frozenset[str],
+    token: str,
+    files: set[str],
+    directories: set[str],
+    removed: frozenset[str],
 ) -> tuple[str | None, str | None]:
     """The ``(shape, body)`` of a path citation, or ``(None, None)`` when it is not one.
 
@@ -235,7 +265,10 @@ def path_citation(
 
 
 def names_a_repo_prefix(
-    body: str, files: set[str], directories: set[str], removed: RemovedOwners,
+    body: str,
+    files: set[str],
+    directories: set[str],
+    removed: RemovedOwners,
 ) -> bool:
     """Whether ``body`` names a repo-relative prefix the head tree or the range explains.
 
@@ -282,12 +315,12 @@ def segment_matches(pattern: str, name: str) -> bool:
         return pattern == name
     if not name.startswith(parts[0]):
         return False
-    name = name[len(parts[0]):]
+    name = name[len(parts[0]) :]
     for part in parts[1:-1]:
         index = name.find(part)
         if index < 0:
             return False
-        name = name[index + len(part):]
+        name = name[index + len(part) :]
     return name.endswith(parts[-1]) and len(name) >= len(parts[-1])
 
 
@@ -309,9 +342,7 @@ def glob_matches(pattern: str, path: str) -> bool:
             continue
         advanced = [False] * len(reachable)
         for index in range(1, len(reachable)):
-            advanced[index] = (
-                reachable[index - 1] and segment_matches(pattern_segment, names[index - 1])
-            )
+            advanced[index] = reachable[index - 1] and segment_matches(pattern_segment, names[index - 1])
         reachable = advanced
     return reachable[len(names)]
 
@@ -342,7 +373,7 @@ def paragraphs(text: str):
     """``(offset, chunk)`` for every run of lines between blank lines."""
     start = 0
     for separator in PARAGRAPH_BREAK.finditer(text):
-        yield start, text[start:separator.start()]
+        yield start, text[start : separator.start()]
         start = separator.end()
     yield start, text[start:]
 
@@ -457,12 +488,16 @@ class RemovedOwners:
     def __contains__(self, segment: str) -> bool:
         if segment not in self.answers:
             listed = revision_scope.run_git(
-                self.repository, "rev-list", "-1", self.head, "--", f":(top,literal){segment}",
+                self.repository,
+                "rev-list",
+                "-1",
+                self.head,
+                "--",
+                f":(top,literal){segment}",
             )
             if listed.returncode != 0:
                 raise revision_scope.DiffRefused(
-                    f"cannot read the history of {self.head[:12]}: "
-                    f"{listed.stderr.decode('utf-8', 'replace').strip()}"
+                    f"cannot read the history of {self.head[:12]}: {listed.stderr.decode('utf-8', 'replace').strip()}"
                 )
             self.answers[segment] = bool(listed.stdout.strip())
         return self.answers[segment]
@@ -495,7 +530,10 @@ def scratch_git(scratch: pathlib.Path, *arguments: str) -> subprocess.CompletedP
     ):
         environment.pop(key, None)
     return subprocess.run(
-        ["git", "-C", str(scratch), *arguments], capture_output=True, check=False, env=environment,
+        ["git", "-C", str(scratch), *arguments],
+        capture_output=True,
+        check=False,
+        env=environment,
     )
 
 
@@ -512,19 +550,20 @@ class HeadIgnoreRules:
     """
 
     def __init__(
-        self, repository: pathlib.Path, head: str, files: set[str], scratch: pathlib.Path,
+        self,
+        repository: pathlib.Path,
+        head: str,
+        files: set[str],
+        scratch: pathlib.Path,
     ) -> None:
         self.scratch = scratch
         # The committed ignore files this checkout materializes: the only rule sources
         # a notice may name (see covering_rule).
-        self.sources = frozenset(
-            path for path in files if path == ".gitignore" or path.endswith("/.gitignore")
-        )
+        self.sources = frozenset(path for path in files if path == ".gitignore" or path.endswith("/.gitignore"))
         initialized = scratch_git(scratch, "init", "--quiet")
         if initialized.returncode != 0:
             raise IgnoreQueryRefused(
-                "cannot prepare the ignore-rule checkout: "
-                f"{initialized.stderr.decode('utf-8', 'replace').strip()}"
+                f"cannot prepare the ignore-rule checkout: {initialized.stderr.decode('utf-8', 'replace').strip()}"
             )
         for relative in sorted(self.sources):
             _mode, payload = revision_scope.head_blob(repository, head, relative)
@@ -547,7 +586,13 @@ class HeadIgnoreRules:
         """
         for probe in (body, f"{body}/"):
             decision = scratch_git(
-                self.scratch, "-c", "core.ignorecase=false", "check-ignore", "--quiet", "--", probe,
+                self.scratch,
+                "-c",
+                "core.ignorecase=false",
+                "check-ignore",
+                "--quiet",
+                "--",
+                probe,
             )
             if decision.returncode == 1:
                 continue
@@ -557,7 +602,13 @@ class HeadIgnoreRules:
                     f"{decision.stderr.decode('utf-8', 'replace').strip()}"
                 )
             named = scratch_git(
-                self.scratch, "-c", "core.ignorecase=false", "check-ignore", "-v", "--", probe,
+                self.scratch,
+                "-c",
+                "core.ignorecase=false",
+                "check-ignore",
+                "-v",
+                "--",
+                probe,
             )
             lines = named.stdout.decode("utf-8", "replace").splitlines()
             rule = lines[0].split("\t", 1)[0] if lines else ""
@@ -622,9 +673,7 @@ def audit_document(
                     # as written stays in the diagnostics.
                     pattern = pattern.rstrip("/")
                     candidates = directories
-                present = any(
-                    glob_matches(pattern, path) for path in candidates
-                )
+                present = any(glob_matches(pattern, path) for path in candidates)
                 absent = f"the cited glob `{body}` matches no entry of {head[:12]}"
             elif record.path_shape == "dir":
                 present = body in directories
@@ -650,8 +699,8 @@ def audit_document(
                     f"{relative}:{record.line}: {absent}; the ignore rule {rule} covers it, "
                     "so the committed tree cannot verify it"
                 )
-        for first, second in zip(records, records[1:]):
-            gap = paragraph[first.match.end():second.match.start()]
+        for first, second in itertools.pairwise(records):
+            gap = paragraph[first.match.end() : second.match.start()]
             if not prose_binds_path_and_symbol(gap):
                 continue
             path_record = symbol_record = None
@@ -689,12 +738,16 @@ def audit_document(
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         description="Check the backticked path and symbol citations of the runbooks, "
-                    "docs/design/quality.md and docs/archive/CLOSED-TODO.md that a revision "
-                    "range adds or modifies against the head revision.",
+        "docs/design/quality.md and docs/archive/CLOSED-TODO.md that a revision "
+        "range adds or modifies against the head revision.",
     )
     parser.add_argument("--repo", default=".", metavar="PATH", help="repository path (default: .)")
-    parser.add_argument("--base", default=None, metavar="COMMIT",
-                        help="comparison base; empty or all-zero falls back to origin/main, then HEAD^")
+    parser.add_argument(
+        "--base",
+        default=None,
+        metavar="COMMIT",
+        help="comparison base; empty or all-zero falls back to origin/main, then HEAD^",
+    )
     parser.add_argument("--head", default="HEAD", metavar="COMMIT", help="head revision (default: HEAD)")
     arguments = parser.parse_args(argv)
 
@@ -713,8 +766,7 @@ def main(argv: list[str]) -> int:
         return 2
     if base is None:
         print(
-            f"{PROGRAM} refused: cannot resolve a comparison base "
-            f"({arguments.base!r} against origin/main or HEAD^)",
+            f"{PROGRAM} refused: cannot resolve a comparison base ({arguments.base!r} against origin/main or HEAD^)",
             file=sys.stderr,
         )
         return 2
@@ -726,10 +778,7 @@ def main(argv: list[str]) -> int:
         print(f"{PROGRAM} refused: {refusal}", file=sys.stderr)
         return 2
     if not documents:
-        print(
-            f"{PROGRAM}: no audited document added or modified between {base[:12]} and "
-            f"{head[:12]}; nothing to check"
-        )
+        print(f"{PROGRAM}: no audited document added or modified between {base[:12]} and {head[:12]}; nothing to check")
         return 0
     try:
         files, directories = head_entries(repository, head)
@@ -758,7 +807,13 @@ def main(argv: list[str]) -> int:
                 continue
             try:
                 document_refusals, document_notices, document_citations = audit_document(
-                    repository, head, files, directories, removed, ignore_rules, relative,
+                    repository,
+                    head,
+                    files,
+                    directories,
+                    removed,
+                    ignore_rules,
+                    relative,
                     payload.decode("utf-8", "surrogateescape"),
                 )
             except (IgnoreQueryRefused, revision_scope.DiffRefused) as refusal:
@@ -790,8 +845,7 @@ def main(argv: list[str]) -> int:
             )
         return 1
     print(
-        f"{PROGRAM}: {len(documents)} changed document(s) pass the path and symbol check "
-        f"({citations} path citation(s))"
+        f"{PROGRAM}: {len(documents)} changed document(s) pass the path and symbol check ({citations} path citation(s))"
     )
     return 0
 

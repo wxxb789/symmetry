@@ -18,7 +18,6 @@ import textwrap
 import unittest
 from unittest import mock
 
-
 SCRIPT = pathlib.Path(__file__).with_name("omo-control-native-evidence.py")
 SPEC = importlib.util.spec_from_file_location("omo_control_native_evidence", SCRIPT)
 EVIDENCE = importlib.util.module_from_spec(SPEC)
@@ -33,18 +32,17 @@ MINUS_ZERO_REVISION = "0000000000000000000000000000000000000000"
 # A production binary built with `-buildvcs=false`, carrying the same record
 # shape a byte-scraping reader matched, from ordinary string data.
 DECOY_SOURCE = textwrap.dedent(
-    """
+    f"""
     package main
 
     import "fmt"
 
-    var decoy = "\\nbuild\\tvcs.revision=%s\\nbuild\\tvcs.time=1999-01-01T00:00:00Z\\n"
+    var decoy = "\\nbuild\\tvcs.revision={MINUS_ZERO_REVISION}\\nbuild\\tvcs.time=1999-01-01T00:00:00Z\\n"
 
-    func main() {
+    func main() {{
     \tfmt.Print(decoy)
-    }
+    }}
     """
-    % MINUS_ZERO_REVISION
 )
 
 VCS_SOURCE = textwrap.dedent(
@@ -75,9 +73,7 @@ def build(directory, binary, *flags):
 
 
 def git(directory, *arguments):
-    result = subprocess.run(
-        ["git", "-C", str(directory), *arguments], capture_output=True, text=True, check=False
-    )
+    result = subprocess.run(["git", "-C", str(directory), *arguments], capture_output=True, text=True, check=False)
     if result.returncode != 0:
         raise AssertionError(f"git {arguments} failed: {result.stderr}")
     return result.stdout.strip()
@@ -96,9 +92,8 @@ class MachineSessionPathTest(unittest.TestCase):
             f"/api/v1/machines/{MACHINE_ID}-/sessions/{SESSION_ID}",
         ]
         for path in paths:
-            with self.subTest(path=path):
-                with self.assertRaises(EVIDENCE.Rejected):
-                    EVIDENCE.machine_session_ids(path)
+            with self.subTest(path=path), self.assertRaises(EVIDENCE.Rejected):
+                EVIDENCE.machine_session_ids(path)
 
     def test_dashless_uuid_segment_is_not_the_canonical_form(self):
         with self.assertRaises(EVIDENCE.Rejected):
@@ -110,9 +105,7 @@ class MachineSessionPathTest(unittest.TestCase):
             (MACHINE_ID, SESSION_ID),
         )
         self.assertEqual(
-            EVIDENCE.machine_session_ids(
-                f"/api/v1/machines/{MACHINE_ID.upper()}/sessions/{SESSION_ID}"
-            ),
+            EVIDENCE.machine_session_ids(f"/api/v1/machines/{MACHINE_ID.upper()}/sessions/{SESSION_ID}"),
             (MACHINE_ID, SESSION_ID),
         )
 
@@ -121,9 +114,8 @@ class MachineSessionPathTest(unittest.TestCase):
             f"/api/v1/machines/{MACHINE_ID}/sessions/{SESSION_ID}?x=1",
             f"/api/v1/machines/{MACHINE_ID}/sessions/{SESSION_ID}/extra",
         ):
-            with self.subTest(path=path):
-                with self.assertRaises(EVIDENCE.Rejected):
-                    EVIDENCE.machine_session_ids(path)
+            with self.subTest(path=path), self.assertRaises(EVIDENCE.Rejected):
+                EVIDENCE.machine_session_ids(path)
 
 
 class GoBuildSettingsTest(unittest.TestCase):
@@ -157,9 +149,11 @@ class GoBuildSettingsTest(unittest.TestCase):
         )
 
     def test_missing_go_toolchain_is_refused_rather_than_guessed(self):
-        with mock.patch.object(EVIDENCE.shutil, "which", return_value=None):
-            with self.assertRaises(EVIDENCE.Rejected):
-                EVIDENCE.go_build_source(pathlib.Path("unbuilt-daemon"))
+        with (
+            mock.patch.object(EVIDENCE.shutil, "which", return_value=None),
+            self.assertRaises(EVIDENCE.Rejected),
+        ):
+            EVIDENCE.go_build_source(pathlib.Path("unbuilt-daemon"))
 
     @unittest.skipUnless(GO, "the Go toolchain is required to build the fixture binaries")
     def test_decoy_revision_in_the_image_never_wins(self):

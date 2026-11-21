@@ -36,9 +36,7 @@ def case_state(case: dict) -> str:
         # `failed`: the marker was satisfied, the case is not a pass.
         return f"expected-{case.get('expectedStatus')}"
     results = case.get("results")
-    if not isinstance(results, list) or not results or any(
-        result.get("status") != "passed" for result in results
-    ):
+    if not isinstance(results, list) or not results or any(result.get("status") != "passed" for result in results):
         return "expected without passed results"
     return EXPECTED_STATE
 
@@ -49,9 +47,7 @@ def scan_suite(suite: dict, titles: set[str], outcomes: dict[str, list[tuple[str
         title = spec.get("title")
         if title in titles:
             for case in spec.get("tests", []):
-                outcomes.setdefault(title, []).append(
-                    (case.get("projectName"), case_state(case))
-                )
+                outcomes.setdefault(title, []).append((case.get("projectName"), case_state(case)))
     for child in suite.get("suites", []):
         scan_suite(child, titles, outcomes)
 
@@ -177,9 +173,7 @@ def main() -> int:
         print(f"cannot read the Playwright report: {error}", file=sys.stderr)
         return 1
 
-    problems = check(
-        report, args.expect_skipped, args.titles, args.expect_projects, args.expect_files
-    )
+    problems = check(report, args.expect_skipped, args.titles, args.expect_projects, args.expect_files)
     if problems:
         for problem in problems:
             print(f"render gate executed set: {problem}", file=sys.stderr)

@@ -21,6 +21,7 @@ import (
 const testHangGuard = 30 * time.Second
 
 func TestWindowsGoalSessionPathsUseProtectedAccountOnlyDACL(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	intent := testGoalSessionIntent()
 	saved, err := store.SaveGoalSessionLaunchIntent(intent)
@@ -167,6 +168,7 @@ func TestWindowsWriteAtomicBoundedFailurePreservesDestinationAndCleansTemp(t *te
 }
 
 func TestWindowsRenameErrorClassification(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		err  error
@@ -187,6 +189,7 @@ func TestWindowsRenameErrorClassification(t *testing.T) {
 }
 
 func TestWindowsRenameDoesNotRetryPermanentFailure(t *testing.T) {
+	t.Parallel()
 	want := fmt.Errorf("rename: %w", syscall.ERROR_FILE_NOT_FOUND)
 	var calls atomic.Int32
 	err := renameStateFileWith(func(string, string) error {

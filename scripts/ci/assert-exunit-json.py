@@ -28,7 +28,7 @@ class EventStream:
 
     def __init__(self, expected: list[str]) -> None:
         self.expected = expected
-        self.counts = {name: {state: 0 for state in STATES} for name in expected}
+        self.counts = {name: dict.fromkeys(STATES, 0) for name in expected}
         self.lines = 0
         self.tests = 0
         self.ran = 0
@@ -86,9 +86,7 @@ class EventStream:
     def bad(self) -> dict[str, dict[str, int]]:
         """Gated names that are not present exactly once in state `passed`."""
         return {
-            name: values
-            for name, values in self.counts.items()
-            if values[PASSED] != 1 or sum(values.values()) != 1
+            name: values for name, values in self.counts.items() if values[PASSED] != 1 or sum(values.values()) != 1
         }
 
     def describe(self, values: dict[str, int]) -> str:
