@@ -11,7 +11,6 @@ import threading
 import unittest
 import urllib.parse
 
-
 SCRIPT = pathlib.Path(__file__).with_name("rootless-compose-transition-proxy.py")
 
 
@@ -24,11 +23,13 @@ class TransitionProxyRegistrationTest(unittest.TestCase):
         nonce = "gzip-registration-fixture"
         registration_path = "/api/v1/machines/fixture-machine/sessions/fixture-session"
         registration_response = {
-            "runtimes": [{
-                "runtime_key": "fixture-runtime",
-                "runtime_id": runtime_id,
-                "runtime_epoch": 7,
-            }],
+            "runtimes": [
+                {
+                    "runtime_key": "fixture-runtime",
+                    "runtime_id": runtime_id,
+                    "runtime_epoch": 7,
+                }
+            ],
         }
         compressed_body = gzip.compress(json.dumps(registration_response).encode("utf-8"), mtime=0)
 
@@ -57,18 +58,30 @@ class TransitionProxyRegistrationTest(unittest.TestCase):
             thread.start()
         client = http.client.HTTPConnection(*server.server_address, timeout=10)
         try:
-            client.request("PUT", registration_path, b"{}", headers={
-                "Content-Type": "application/json",
-                "Accept-Encoding": "gzip",
-            })
+            client.request(
+                "PUT",
+                registration_path,
+                b"{}",
+                headers={
+                    "Content-Type": "application/json",
+                    "Accept-Encoding": "gzip",
+                },
+            )
             response = client.getresponse()
             response.read()
             self.assertEqual(response.status, 200)
 
-            client.request("POST", "/__test/arm", json.dumps({
-                "runtime_id": runtime_id,
-                "nonce": nonce,
-            }), headers={"Content-Type": "application/json"})
+            client.request(
+                "POST",
+                "/__test/arm",
+                json.dumps(
+                    {
+                        "runtime_id": runtime_id,
+                        "nonce": nonce,
+                    }
+                ),
+                headers={"Content-Type": "application/json"},
+            )
             response = client.getresponse()
             response.read()
             self.assertEqual(response.status, 204)
@@ -83,7 +96,7 @@ class TransitionProxyRegistrationTest(unittest.TestCase):
             self.assertEqual(status["runtime_epoch"], 7)
         finally:
             client.close()
-            for service, thread in zip((upstream, server), threads):
+            for service, thread in zip((upstream, server), threads, strict=True):
                 service.shutdown()
                 service.server_close()
                 thread.join()

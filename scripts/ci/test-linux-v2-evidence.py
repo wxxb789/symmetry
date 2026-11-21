@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import itertools
 import json
 import os
 import pathlib
@@ -13,7 +14,6 @@ import subprocess
 import sys
 import tempfile
 import unittest
-
 
 SCRIPT = pathlib.Path(__file__).with_name("export-linux-v2-redacted-evidence.py")
 DAEMON_LOG_SCAN_DIRECTORIES = ("daemon/internal/app", "daemon/internal/platform", "daemon/cmd")
@@ -29,11 +29,22 @@ DAEMON_LOG_SCANNED_PRODUCERS = (
     ("newIDWithRetry", 3, "kind"),
 )
 LEGACY_NAMES = (
-    "bind-before-commit", "prepare-before-bind", "commit-before-resume", "lease-arm-before-resume",
-    "daemon-after-resume", "daemon-after-resume-clean-seal-boundary", "helper-mirror",
-    "wrong-hello-session", "setsid-escape", "scan-failure", "helper-scan-failure-crash",
-    "helper-scan-pending-crash", "literal-pid-reuse", "stop-response-lost",
-    "release-response-lost", "helper-dead-mirror",
+    "bind-before-commit",
+    "prepare-before-bind",
+    "commit-before-resume",
+    "lease-arm-before-resume",
+    "daemon-after-resume",
+    "daemon-after-resume-clean-seal-boundary",
+    "helper-mirror",
+    "wrong-hello-session",
+    "setsid-escape",
+    "scan-failure",
+    "helper-scan-failure-crash",
+    "helper-scan-pending-crash",
+    "literal-pid-reuse",
+    "stop-response-lost",
+    "release-response-lost",
+    "helper-dead-mirror",
 )
 
 
@@ -129,73 +140,141 @@ def receipt() -> dict:
 
 def journal() -> dict:
     owner = {
-        "owner_kind": "linux_helper", "owner_context_sha256": "a" * 64,
-        "target_pid": 2101, "target_identity": "2101:111", "supervisor_pid": 2102,
-        "supervisor_identity": "2102:112", "job_id_sha256": "b" * 64,
+        "owner_kind": "linux_helper",
+        "owner_context_sha256": "a" * 64,
+        "target_pid": 2101,
+        "target_identity": "2101:111",
+        "supervisor_pid": 2102,
+        "supervisor_identity": "2102:112",
+        "job_id_sha256": "b" * 64,
         "has_stop_receipt": True,
     }
     return {
-        "at": "2026-09-29T12:00:00Z", "path": "/private/runs/claim.json",
-        "raw_sha256": "c" * 64, "run_id": "private-run-id", "generation": 3,
-        "local_state": "stopping", "terminal_state": "cancelled", "terminal_verdict": "accepted",
-        "pid": 2101, "process_identity": "2101:111", "started_at": "2026-09-29T11:59:00Z",
-        "lease_expires_at": "2026-09-29T12:01:00Z", "has_process_details": True,
-        "containment_unproven": False, "retain_workspace": True, "pending_events": 1,
+        "at": "2026-09-29T12:00:00Z",
+        "path": "/private/runs/claim.json",
+        "raw_sha256": "c" * 64,
+        "run_id": "private-run-id",
+        "generation": 3,
+        "local_state": "stopping",
+        "terminal_state": "cancelled",
+        "terminal_verdict": "accepted",
+        "pid": 2101,
+        "process_identity": "2101:111",
+        "started_at": "2026-09-29T11:59:00Z",
+        "lease_expires_at": "2026-09-29T12:01:00Z",
+        "has_process_details": True,
+        "containment_unproven": False,
+        "retain_workspace": True,
+        "pending_events": 1,
         "pending_transitions": 0,
         "containment_scans": {
-            "target_pid": 2101, "target_identity": "2101:111", "supervisor_pid": 2102,
+            "target_pid": 2101,
+            "target_identity": "2101:111",
+            "supervisor_pid": 2102,
             "supervisor_identity": "2102:112",
-            "helper": {"pending_sequence": 2, "clean_result_sequence": 2, "completed_sequence": 2,
-                       "sealed_sequence": 2, "unproven_sequence": 0},
-            "mirror": {"pending_sequence": 2, "clean_result_sequence": 2, "completed_sequence": 2,
-                       "sealed_sequence": 2, "unproven_sequence": 0},
+            "helper": {
+                "pending_sequence": 2,
+                "clean_result_sequence": 2,
+                "completed_sequence": 2,
+                "sealed_sequence": 2,
+                "unproven_sequence": 0,
+            },
+            "mirror": {
+                "pending_sequence": 2,
+                "clean_result_sequence": 2,
+                "completed_sequence": 2,
+                "sealed_sequence": 2,
+                "unproven_sequence": 0,
+            },
         },
-        "stop_receipt": receipt(), "handoff": owner, "authority": owner,
+        "stop_receipt": receipt(),
+        "handoff": owner,
+        "authority": owner,
     }
 
 
 def process() -> dict:
     return {
-        "at": "2026-09-29T12:00:00Z", "role": "target_after_replay", "pid": 2101,
-        "identity": "2101:111", "state": "Z", "pgrp": 2101, "session": 2000,
-        "start_time": 111, "exists": False, "error": "private diagnostic text",
+        "at": "2026-09-29T12:00:00Z",
+        "role": "target_after_replay",
+        "pid": 2101,
+        "identity": "2101:111",
+        "state": "Z",
+        "pgrp": 2101,
+        "session": 2000,
+        "start_time": 111,
+        "exists": False,
+        "error": "private diagnostic text",
     }
 
 
 def exit_status() -> dict:
-    return {"requested_signal": "SIGKILL", "signaled": True, "signal": "SIGKILL", "exit_code": -1, "error": "private error"}
+    return {
+        "requested_signal": "SIGKILL",
+        "signaled": True,
+        "signal": "SIGKILL",
+        "exit_code": -1,
+        "error": "private error",
+    }
 
 
 def legacy_fixture(name: str, raw_secret: str = "RAW-PRIVATE-SECRET") -> dict:
     common = {
-        "version": 1, "case": name.replace("-", "_"), "metadata": metadata(),
-        "case_root": "/private/case/root", "crash": exit_status(),
-        "journal_snapshots": [journal()], "process_snapshots": [process()],
+        "version": 1,
+        "case": name.replace("-", "_"),
+        "metadata": metadata(),
+        "case_root": "/private/case/root",
+        "crash": exit_status(),
+        "journal_snapshots": [journal()],
+        "process_snapshots": [process()],
         "raw_output": {"first.stdout.log": f"provider token={raw_secret}"},
         "notes": [f"private log text {raw_secret}"],
     }
     if name in LEGACY_NAMES[:7]:
-        common.update({"stage": "recovered_and_cleared", "task_id": "private-task", "run_id": "private-run",
-                       "generation": 3, "journal_key": "private-run/3", "stop_receipt_before_release": receipt()})
+        common.update(
+            {
+                "stage": "recovered_and_cleared",
+                "task_id": "private-task",
+                "run_id": "private-run",
+                "generation": 3,
+                "journal_key": "private-run/3",
+                "stop_receipt_before_release": receipt(),
+            }
+        )
         return common
     if name in LEGACY_NAMES[7:13]:
         common.update({"status": "passed", "assertions": {"physical_stop_observed": True, "no_clear": False}})
         if name == "wrong-hello-session":
-            anchor = {"target_pid": 2101, "target_identity": "2101:111", "target_pgrp": 2101,
-                      "target_session": 2000, "target_start_time": 111}
-            common["helper_hello"] = {"actual": anchor, "transmitted": anchor, "supervisor_pid": 2102,
-                                      "supervisor_identity": "2102:112"}
+            anchor = {
+                "target_pid": 2101,
+                "target_identity": "2101:111",
+                "target_pgrp": 2101,
+                "target_session": 2000,
+                "target_start_time": 111,
+            }
+            common["helper_hello"] = {
+                "actual": anchor,
+                "transmitted": anchor,
+                "supervisor_pid": 2102,
+                "supervisor_identity": "2102:112",
+            }
         if name == "literal-pid-reuse":
             identity = {"pid": 2101, "identity": "2101:111", "pgrp": 2101, "session": 2000, "start_time": 111}
             common["pid_reuse"] = {
-                "task_id": "private-task", "parent_pid_namespace_inode": 100,
-                "private_pid_namespace_inode": 101, "parent_network_namespace_inode": 200,
-                "private_network_namespace_inode": 200, "control_url_sha256": "d" * 64,
+                "task_id": "private-task",
+                "parent_pid_namespace_inode": 100,
+                "private_pid_namespace_inode": 101,
+                "parent_network_namespace_inode": 200,
+                "private_network_namespace_inode": 200,
+                "control_url_sha256": "d" * 64,
                 "namespace_creation_flags": ["--user", "--pid"],
                 "namespace_allocator_path": "/proc/sys/kernel/ns_last_pid",
-                "namespace_allocator_before": "2100", "namespace_allocator_reset_to": 2100,
-                "namespace_allocator_readback": "2100", "pidfd_group_signal_supported": True,
-                "original_target": identity, "helper": identity,
+                "namespace_allocator_before": "2100",
+                "namespace_allocator_reset_to": 2100,
+                "namespace_allocator_readback": "2100",
+                "pidfd_group_signal_supported": True,
+                "original_target": identity,
+                "helper": identity,
                 "replacement": {**identity, "identity": "2101:222", "start_time": 222},
                 "owner_stop_before_proof_reached_path": "/private/reached",
                 "owner_stop_before_proof_release_path": "/private/release",
@@ -218,28 +297,52 @@ def legacy_fixture(name: str, raw_secret: str = "RAW-PRIVATE-SECRET") -> dict:
             }
         return common
     common["metadata"] = metadata(replay=True)
-    common.update({
-        "stage": "replayed_receipt_released_and_cleared", "crash_statuses": [exit_status()],
-        "raw_journal_snapshots": [{"at": "2026-09-29T12:00:00Z", "path": "/private/journal",
-                                   "sha256": "d" * 64, "snapshot": {"lease_token": raw_secret}}],
-        "receipt_before_clear": receipt(), "replay_count": 2, "exact_receipt_replay": True,
-        "clear_observed": True, "response_drop_operation": "stop", "response_drop_fired": True,
-        "duplicate_stop_seen": False,
-    })
+    common.update(
+        {
+            "stage": "replayed_receipt_released_and_cleared",
+            "crash_statuses": [exit_status()],
+            "raw_journal_snapshots": [
+                {
+                    "at": "2026-09-29T12:00:00Z",
+                    "path": "/private/journal",
+                    "sha256": "d" * 64,
+                    "snapshot": {"lease_token": raw_secret},
+                }
+            ],
+            "receipt_before_clear": receipt(),
+            "replay_count": 2,
+            "exact_receipt_replay": True,
+            "clear_observed": True,
+            "response_drop_operation": "stop",
+            "response_drop_fired": True,
+            "duplicate_stop_seen": False,
+        }
+    )
     return common
 
 
 def compose_refusal(harness: str) -> dict:
     return {
-        "version": 1, "case": "rootless_compose_native_work_item_refusal", "harness": harness,
-        "native_version": "1.5.2" if harness == "pi" else "", "generation": 1,
+        "version": 1,
+        "case": "rootless_compose_native_work_item_refusal",
+        "harness": harness,
+        "native_version": "1.5.2" if harness == "pi" else "",
+        "generation": 1,
         "probe_returned_err_native_unverified": harness == "pi",
         "probe_returned_err_harness_unavailable": harness == "opencode",
-        "work_item_id_sha256": "1" * 64, "task_id_sha256": "2" * 64,
-        "run_id_sha256": "3" * 64, "runtime_id_sha256": "4" * 64,
-        "run_state": "failed", "failure_stage": "linux_v2_required", "claim_fence_observed": True,
-        "no_native_task_process": True, "no_task_result": True, "no_process_authority": True,
-        "no_stop_receipt": True, "no_provider_access": True, "non_goal_work_item": True,
+        "work_item_id_sha256": "1" * 64,
+        "task_id_sha256": "2" * 64,
+        "run_id_sha256": "3" * 64,
+        "runtime_id_sha256": "4" * 64,
+        "run_state": "failed",
+        "failure_stage": "linux_v2_required",
+        "claim_fence_observed": True,
+        "no_native_task_process": True,
+        "no_task_result": True,
+        "no_process_authority": True,
+        "no_stop_receipt": True,
+        "no_provider_access": True,
+        "non_goal_work_item": True,
     }
 
 
@@ -274,7 +377,9 @@ class ExporterTest(unittest.TestCase):
     def run_export(self, *arguments: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run([sys.executable, str(SCRIPT), *arguments], text=True, capture_output=True, check=False)
 
-    def populate_legacy(self, source: pathlib.Path, raw_secret: str = "RAW-PRIVATE-SECRET") -> dict[pathlib.Path, bytes]:
+    def populate_legacy(
+        self, source: pathlib.Path, raw_secret: str = "RAW-PRIVATE-SECRET"
+    ) -> dict[pathlib.Path, bytes]:
         originals = {}
         for name in LEGACY_NAMES:
             path = source / name / "witness-evidence.json"
@@ -290,8 +395,17 @@ class ExporterTest(unittest.TestCase):
         manifest = json.loads((output / "manifest.json").read_text())
         self.assertEqual((manifest["status"], manifest["complete"], len(manifest["files"])), ("passed", True, 16))
         combined = b"".join(path.read_bytes() for path in output.iterdir())
-        for forbidden in (b"RAW-PRIVATE-SECRET", b"raw_output", b"raw_journal_snapshots", b"lease_token",
-                          b"private-task", b"private-run", b"/private/", b"notes", b"error"):
+        for forbidden in (
+            b"RAW-PRIVATE-SECRET",
+            b"raw_output",
+            b"raw_journal_snapshots",
+            b"lease_token",
+            b"private-task",
+            b"private-run",
+            b"/private/",
+            b"notes",
+            b"error",
+        ):
             self.assertNotIn(forbidden, combined)
         replay = json.loads((output / "stop-response-lost.json").read_text())
         self.assertTrue(replay["exact_receipt_replay"])
@@ -324,11 +438,15 @@ class ExporterTest(unittest.TestCase):
         result = self.run_export("legacy", str(output), "1" * 40, "passed", "--witness-root", str(source))
         self.assertEqual(result.returncode, 0, result.stderr)
         handoff = json.loads((output / "prepare-before-bind.json").read_text())["journal_snapshots"][0]["handoff"]
-        self.assertEqual((handoff["supervisor_pid"], handoff["supervisor_identity"], handoff["has_stop_receipt"]), (0, "", False))
+        self.assertEqual(
+            (handoff["supervisor_pid"], handoff["supervisor_identity"], handoff["has_stop_receipt"]), (0, "", False)
+        )
         self.assertEqual(path.read_bytes(), original)
 
     def test_legacy_rejects_unbound_handoff_with_bound_journal_evidence(self) -> None:
-        for index, contradiction in enumerate(("stop_receipt", "authority", "containment_scans", "has_process_details", "pid", "process_identity")):
+        for index, contradiction in enumerate(
+            ("stop_receipt", "authority", "containment_scans", "has_process_details", "pid", "process_identity")
+        ):
             with self.subTest(contradiction=contradiction):
                 source = self.private_dir(f"contradictory-unbound-source-{index}")
                 output = self.private_dir(f"contradictory-unbound-output-{index}")
@@ -351,7 +469,9 @@ class ExporterTest(unittest.TestCase):
                 self.assertEqual(path.read_bytes(), original)
 
     def test_legacy_rejects_empty_bound_or_receipted_supervisor_identity(self) -> None:
-        for index, (nested, pid, has_receipt) in enumerate((("handoff", 2102, False), ("handoff", 0, True), ("authority", 0, False))):
+        for index, (nested, pid, has_receipt) in enumerate(
+            (("handoff", 2102, False), ("handoff", 0, True), ("authority", 0, False))
+        ):
             with self.subTest(nested=nested, pid=pid, has_receipt=has_receipt):
                 source = self.private_dir(f"invalid-owner-source-{index}")
                 output = self.private_dir(f"invalid-owner-output-{index}")
@@ -364,7 +484,9 @@ class ExporterTest(unittest.TestCase):
                     value["journal_snapshots"][0]["has_process_details"] = False
                     value["journal_snapshots"][0].pop("pid")
                     value["journal_snapshots"][0].pop("process_identity")
-                value["journal_snapshots"][0][nested].update({"supervisor_pid": pid, "supervisor_identity": "", "has_stop_receipt": has_receipt})
+                value["journal_snapshots"][0][nested].update(
+                    {"supervisor_pid": pid, "supervisor_identity": "", "has_stop_receipt": has_receipt}
+                )
                 self.write_json(path, value)
                 result = self.run_export("legacy", str(output), "1" * 40, "passed", "--witness-root", str(source))
                 self.assertNotEqual(result.returncode, 0)
@@ -415,15 +537,26 @@ class ExporterTest(unittest.TestCase):
                     source = self.private_dir(f"{name}-source-{index}")
                     self.populate_legacy(source)
                     path = source / name / "witness-evidence.json"
-                    value = {"version": 1, "case": case, "status": "initialized", "metadata": metadata(),
-                             "case_root": "/private/case/root", "assertions": {},
-                             "journal_snapshots": None, "process_snapshots": None}
+                    value = {
+                        "version": 1,
+                        "case": case,
+                        "status": "initialized",
+                        "metadata": metadata(),
+                        "case_root": "/private/case/root",
+                        "assertions": {},
+                        "journal_snapshots": None,
+                        "process_snapshots": None,
+                    }
                     if stage is not None:
                         value["stage"] = stage
                     original = self.write_json(path, value)
-                    for run_status in (("failed", "passed") if stage in ("cancel_api_409_failed_run", "complete") else ("failed",)):
+                    for run_status in (
+                        ("failed", "passed") if stage in ("cancel_api_409_failed_run", "complete") else ("failed",)
+                    ):
                         output = self.private_dir(f"{name}-output-{index}-{run_status}")
-                        result = self.run_export("legacy", str(output), "1" * 40, run_status, "--witness-root", str(source))
+                        result = self.run_export(
+                            "legacy", str(output), "1" * 40, run_status, "--witness-root", str(source)
+                        )
                         if run_status == "failed":
                             self.assertEqual(result.returncode, 0, result.stderr)
                         else:
@@ -449,18 +582,32 @@ class ExporterTest(unittest.TestCase):
             ("helper-scan-failure-crash", "helper_scan_failure_sigkill_before_cancel", "mirror_pending_scan"),
             ("helper-scan-pending-crash", "helper_pending_scan_sigkill", "mirror_unproven_scan"),
         ):
-            for index, (stage, credential) in enumerate((
-                ("CREDENTIAL-CANARY-NOT-A-STAGE", False), (other_scan_stage, False), ("running_journal", True),
-                ("cancel_api_409_private_error", False), ("offline", False), ("cancel_api_409_failed_run", True),
-            )):
+            for index, (stage, credential) in enumerate(
+                (
+                    ("CREDENTIAL-CANARY-NOT-A-STAGE", False),
+                    (other_scan_stage, False),
+                    ("running_journal", True),
+                    ("cancel_api_409_private_error", False),
+                    ("offline", False),
+                    ("cancel_api_409_failed_run", True),
+                )
+            ):
                 with self.subTest(case=case, stage=stage, credential=credential):
                     source = self.private_dir(f"{name}-rejected-source-{index}")
                     output = self.private_dir(f"{name}-rejected-output-{index}")
                     self.populate_legacy(source)
                     path = source / name / "witness-evidence.json"
-                    value = {"version": 1, "case": case, "status": "initialized", "stage": stage,
-                             "metadata": metadata(), "case_root": "/private/case/root", "assertions": {},
-                             "journal_snapshots": None, "process_snapshots": None}
+                    value = {
+                        "version": 1,
+                        "case": case,
+                        "status": "initialized",
+                        "stage": stage,
+                        "metadata": metadata(),
+                        "case_root": "/private/case/root",
+                        "assertions": {},
+                        "journal_snapshots": None,
+                        "process_snapshots": None,
+                    }
                     original = self.write_json(path, value)
                     arguments = ["legacy", str(output), "1" * 40, "failed", "--witness-root", str(source)]
                     if credential:
@@ -469,7 +616,9 @@ class ExporterTest(unittest.TestCase):
                         arguments.extend(("--secret-values-file", str(secret_file)))
                     result = self.run_export(*arguments)
                     self.assertNotEqual(result.returncode, 0)
-                    self.assertIn("configured credential value" if credential else "stage is not allowlisted", result.stderr)
+                    self.assertIn(
+                        "configured credential value" if credential else "stage is not allowlisted", result.stderr
+                    )
                     self.assertNotIn(stage, result.stdout + result.stderr)
                     self.assertFalse((output / f"{name}.json").exists())
                     self.assertFalse((output / "manifest.json").exists())
@@ -526,8 +675,16 @@ class ExporterTest(unittest.TestCase):
         self.populate_legacy(source)
         secret_file = self.root / "secrets"
         secret_file.write_bytes(b"recovered_and_cleared\0")
-        result = self.run_export("legacy", str(output), "1" * 40, "failed", "--witness-root", str(source),
-                                 "--secret-values-file", str(secret_file))
+        result = self.run_export(
+            "legacy",
+            str(output),
+            "1" * 40,
+            "failed",
+            "--witness-root",
+            str(source),
+            "--secret-values-file",
+            str(secret_file),
+        )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("configured credential value", result.stderr)
 
@@ -550,60 +707,129 @@ class ExporterTest(unittest.TestCase):
         originals = self.populate_legacy(source)
         case = "lease-arm-before-resume"
         stdout_lines = [
-            json.dumps({
-                "time": "2026-11-20T18:42:24.695900552Z", "level": "WARN", "msg": "stop_recovered_process_failed",
-                "run_id": "LEASE-TOKEN-abc123def456", "generation": 1, "stage": "process_exit", "state": "failed",
-                "reason": "lease renewal failed", "outcome": "failed", "kind": "terminal transition", "attempt": 2,
-                "runtime_epoch": 7, "skew_ms": -250, "lease_safety_margin_ms": 1500, "command_id": "private-command",
-                "error": "open /home/runner/work/symmetry/daemon.json: permission denied",
-                "workspace": "/home/runner/work/_temp/symmetry-linux-containment-witness/lease-arm-before-resume",
-            }).encode(),
-            json.dumps({
-                "time": "2026-11-20T18:42:24Z", "level": "WARN", "msg": "recovered_journal_stopped",
-                "reason": "stale_stop", "kind": "terminal transition",
-            }).encode(),
-            json.dumps({
-                "time": "2026-11-20T18:42:25Z", "level": "INFO",
-                "msg": "/home/runner/work/_temp/symmetry-linux-containment-witness", "error": "JOINED-TOKEN-77ff",
-            }).encode(),
+            json.dumps(
+                {
+                    "time": "2026-11-20T18:42:24.695900552Z",
+                    "level": "WARN",
+                    "msg": "stop_recovered_process_failed",
+                    "run_id": "LEASE-TOKEN-abc123def456",
+                    "generation": 1,
+                    "stage": "process_exit",
+                    "state": "failed",
+                    "reason": "lease renewal failed",
+                    "outcome": "failed",
+                    "kind": "terminal transition",
+                    "attempt": 2,
+                    "runtime_epoch": 7,
+                    "skew_ms": -250,
+                    "lease_safety_margin_ms": 1500,
+                    "command_id": "private-command",
+                    "error": "open /home/runner/work/symmetry/daemon.json: permission denied",
+                    "workspace": "/home/runner/work/_temp/symmetry-linux-containment-witness/lease-arm-before-resume",
+                }
+            ).encode(),
+            json.dumps(
+                {
+                    "time": "2026-11-20T18:42:24Z",
+                    "level": "WARN",
+                    "msg": "recovered_journal_stopped",
+                    "reason": "stale_stop",
+                    "kind": "terminal transition",
+                }
+            ).encode(),
+            json.dumps(
+                {
+                    "time": "2026-11-20T18:42:25Z",
+                    "level": "INFO",
+                    "msg": "/home/runner/work/_temp/symmetry-linux-containment-witness",
+                    "error": "JOINED-TOKEN-77ff",
+                }
+            ).encode(),
             # Negative boundaries: a bad time, a non-ASCII digit in the time, a
             # bad level, made-up text values, an out-of-range integer and a
             # boolean integer must be dropped without losing the records.
             json.dumps({"time": "2026-11-20 18:42:25Z", "level": "INFO", "msg": "runtime_registered"}).encode(),
             json.dumps({"time": "\u0662026-11-20T18:42:25Z", "level": "INFO", "msg": "runtime_registered"}).encode(),
             json.dumps({"time": "2026-11-20T18:42:25Z", "level": "NOTICE", "msg": "runtime_registered"}).encode(),
-            json.dumps({"time": "2026-11-20T18:42:25Z", "level": "INFO", "msg": "runtime_registered",
-                        "state": "stopping", "reason": "owner_loss", "outcome": "lost", "kind": "stop",
-                        "bytes": 2 ** 31, "attempt": True, "generation": 3}).encode(),
+            json.dumps(
+                {
+                    "time": "2026-11-20T18:42:25Z",
+                    "level": "INFO",
+                    "msg": "runtime_registered",
+                    "state": "stopping",
+                    "reason": "owner_loss",
+                    "outcome": "lost",
+                    "kind": "stop",
+                    "bytes": 2**31,
+                    "attempt": True,
+                    "generation": 3,
+                }
+            ).encode(),
             b"goroutine 1 [running]: /home/runner/work/symmetry/daemon/internal/app/app.go:2148",
             b'{"time":"2026-11-20T18:42:26Z","level":"INFO","msg":"runtime_registered","msg":"duplicated"}',
         ]
         stdout_bytes = self.write_log(source / case / "second-daemon.stdout.log", stdout_lines)
-        self.write_log(source / case / "second-daemon.stderr.log", [b"run daemon: linux child subreaper: operation not permitted"])
+        self.write_log(
+            source / case / "second-daemon.stderr.log", [b"run daemon: linux child subreaper: operation not permitted"]
+        )
         result = self.run_export("legacy", str(output), "1" * 40, "failed", "--witness-root", str(source))
         self.assertEqual(result.returncode, 0, result.stderr)
         document = json.loads((output / f"{case}-second-daemon-stdout.json").read_text())
-        self.assertEqual((document["version"], document["case"], document["daemon"], document["stream"]),
-                         (1, case, "second", "stdout"))
+        self.assertEqual(
+            (document["version"], document["case"], document["daemon"], document["stream"]),
+            (1, case, "second", "stdout"),
+        )
         self.assertFalse(document["truncated"])
         self.assertEqual(document["dropped_lines"], 5)
-        self.assertEqual(document["messages"], [
-            {"time": "2026-11-20T18:42:24.695900552Z", "level": "WARN", "msg": "stop_recovered_process_failed",
-             "attempt": 2, "generation": 1, "lease_safety_margin_ms": 1500, "runtime_epoch": 7, "skew_ms": -250,
-             "kind": "terminal transition", "outcome": "failed", "reason": "lease renewal failed",
-             "stage": "process_exit", "state": "failed"},
-            {"time": "2026-11-20T18:42:24Z", "level": "WARN", "msg": "recovered_journal_stopped",
-             "kind": "terminal transition", "reason": "stale_stop"},
-            {"time": "2026-11-20T18:42:25Z", "level": "INFO"},
-            {"time": "2026-11-20T18:42:25Z", "level": "INFO", "msg": "runtime_registered", "generation": 3},
-        ])
+        self.assertEqual(
+            document["messages"],
+            [
+                {
+                    "time": "2026-11-20T18:42:24.695900552Z",
+                    "level": "WARN",
+                    "msg": "stop_recovered_process_failed",
+                    "attempt": 2,
+                    "generation": 1,
+                    "lease_safety_margin_ms": 1500,
+                    "runtime_epoch": 7,
+                    "skew_ms": -250,
+                    "kind": "terminal transition",
+                    "outcome": "failed",
+                    "reason": "lease renewal failed",
+                    "stage": "process_exit",
+                    "state": "failed",
+                },
+                {
+                    "time": "2026-11-20T18:42:24Z",
+                    "level": "WARN",
+                    "msg": "recovered_journal_stopped",
+                    "kind": "terminal transition",
+                    "reason": "stale_stop",
+                },
+                {"time": "2026-11-20T18:42:25Z", "level": "INFO"},
+                {"time": "2026-11-20T18:42:25Z", "level": "INFO", "msg": "runtime_registered", "generation": 3},
+            ],
+        )
         stderr_document = json.loads((output / f"{case}-second-daemon-stderr.json").read_text())
         self.assertEqual((stderr_document["messages"], stderr_document["dropped_lines"]), ([], 1))
-        published = (output / f"{case}-second-daemon-stdout.json").read_bytes() + \
-            (output / f"{case}-second-daemon-stderr.json").read_bytes()
-        for forbidden in (b"/home/runner", b"LEASE-TOKEN-abc123def456", b"JOINED-TOKEN-77ff", b"permission denied",
-                          b"private-command", b"goroutine", b"duplicated", b"operation not permitted", b'"error"',
-                          b'"run_id"', b'"workspace"', b"owner_loss", b"NOTICE"):
+        published = (output / f"{case}-second-daemon-stdout.json").read_bytes() + (
+            output / f"{case}-second-daemon-stderr.json"
+        ).read_bytes()
+        for forbidden in (
+            b"/home/runner",
+            b"LEASE-TOKEN-abc123def456",
+            b"JOINED-TOKEN-77ff",
+            b"permission denied",
+            b"private-command",
+            b"goroutine",
+            b"duplicated",
+            b"operation not permitted",
+            b'"error"',
+            b'"run_id"',
+            b'"workspace"',
+            b"owner_loss",
+            b"NOTICE",
+        ):
             self.assertNotIn(forbidden, published)
         manifest = json.loads((output / "manifest.json").read_text())
         self.assertEqual(len(manifest["files"]), 18)
@@ -611,10 +837,17 @@ class ExporterTest(unittest.TestCase):
         entries = {entry["file"]: entry for entry in manifest["files"]}
         self.assertEqual(
             entries[f"{case}-second-daemon-stdout.json"],
-            {"file": f"{case}-second-daemon-stdout.json", "bytes": len((output / f"{case}-second-daemon-stdout.json").read_bytes()),
-             "sha256": hashlib.sha256((output / f"{case}-second-daemon-stdout.json").read_bytes()).hexdigest(),
-             "kind": "daemon_log_tail", "daemon": "second", "stream": "stdout", "truncated": False,
-             "records": 4, "dropped_lines": 5},
+            {
+                "file": f"{case}-second-daemon-stdout.json",
+                "bytes": len((output / f"{case}-second-daemon-stdout.json").read_bytes()),
+                "sha256": hashlib.sha256((output / f"{case}-second-daemon-stdout.json").read_bytes()).hexdigest(),
+                "kind": "daemon_log_tail",
+                "daemon": "second",
+                "stream": "stdout",
+                "truncated": False,
+                "records": 4,
+                "dropped_lines": 5,
+            },
         )
         self.assertEqual(entries[f"{case}-second-daemon-stderr.json"]["records"], 0)
         for path, data in originals.items():
@@ -626,14 +859,18 @@ class ExporterTest(unittest.TestCase):
         output = self.private_dir("log-passed-output")
         self.populate_legacy(source)
         case = "lease-arm-before-resume"
-        self.write_log(source / case / "second-daemon.stdout.log",
-                       [json.dumps({"time": "2026-11-20T18:42:24Z", "level": "INFO", "msg": "runtime_registered"}).encode()])
+        self.write_log(
+            source / case / "second-daemon.stdout.log",
+            [json.dumps({"time": "2026-11-20T18:42:24Z", "level": "INFO", "msg": "runtime_registered"}).encode()],
+        )
         result = self.run_export("legacy", str(output), "1" * 40, "passed", "--witness-root", str(source))
         self.assertEqual(result.returncode, 0, result.stderr)
         manifest = json.loads((output / "manifest.json").read_text())
         self.assertEqual(len(manifest["files"]), 16)
-        self.assertEqual(sorted(path.name for path in output.iterdir()),
-                         sorted(["manifest.json"] + [f"{name}.json" for name in LEGACY_NAMES]))
+        self.assertEqual(
+            sorted(path.name for path in output.iterdir()),
+            sorted(["manifest.json"] + [f"{name}.json" for name in LEGACY_NAMES]),
+        )
         self.assertEqual([entry for entry in manifest["files"] if entry.get("kind") == "daemon_log_tail"], [])
 
     def test_legacy_daemon_log_tail_is_bounded_to_its_last_bytes(self) -> None:
@@ -642,8 +879,9 @@ class ExporterTest(unittest.TestCase):
         self.populate_legacy(source)
         case = "lease-arm-before-resume"
         lines = [
-            json.dumps({"time": "2026-11-20T18:42:24Z", "level": "INFO", "msg": "runtime_registered",
-                        "generation": index}).encode()
+            json.dumps(
+                {"time": "2026-11-20T18:42:24Z", "level": "INFO", "msg": "runtime_registered", "generation": index}
+            ).encode()
             for index in range(2400)
         ]
         raw = self.write_log(source / case / "second-daemon.stdout.log", lines)
@@ -681,16 +919,32 @@ class ExporterTest(unittest.TestCase):
         result = self.run_export("legacy", str(output), "1" * 40, "failed", "--witness-root", str(source))
         self.assertEqual(result.returncode, 0, result.stderr)
         document = json.loads((output / f"{case}-second-daemon-stderr.json").read_text())
-        self.assertEqual((document["daemon"], document["stream"], document["truncated"], document["messages"],
-                          document["dropped_lines"]), ("second", "stderr", False, [], 0))
+        self.assertEqual(
+            (
+                document["daemon"],
+                document["stream"],
+                document["truncated"],
+                document["messages"],
+                document["dropped_lines"],
+            ),
+            ("second", "stderr", False, [], 0),
+        )
         manifest = json.loads((output / "manifest.json").read_text())
         entries = {entry["file"]: entry for entry in manifest["files"]}
         published = (output / f"{case}-second-daemon-stderr.json").read_bytes()
         self.assertEqual(
             entries[f"{case}-second-daemon-stderr.json"],
-            {"file": f"{case}-second-daemon-stderr.json", "bytes": len(published),
-             "sha256": hashlib.sha256(published).hexdigest(), "kind": "daemon_log_tail", "daemon": "second",
-             "stream": "stderr", "truncated": False, "records": 0, "dropped_lines": 0},
+            {
+                "file": f"{case}-second-daemon-stderr.json",
+                "bytes": len(published),
+                "sha256": hashlib.sha256(published).hexdigest(),
+                "kind": "daemon_log_tail",
+                "daemon": "second",
+                "stream": "stderr",
+                "truncated": False,
+                "records": 0,
+                "dropped_lines": 0,
+            },
         )
 
     def test_legacy_daemon_log_tail_source_size_is_not_capped(self) -> None:
@@ -701,8 +955,9 @@ class ExporterTest(unittest.TestCase):
         self.populate_legacy(source)
         case = "lease-arm-before-resume"
         lines = [
-            json.dumps({"time": "2026-11-20T18:42:24Z", "level": "INFO", "msg": "runtime_registered",
-                        "generation": index}).encode()
+            json.dumps(
+                {"time": "2026-11-20T18:42:24Z", "level": "INFO", "msg": "runtime_registered", "generation": index}
+            ).encode()
             for index in range(34000)
         ]
         raw = self.write_log(source / case / "second-daemon.stdout.log", lines)
@@ -723,7 +978,14 @@ class ExporterTest(unittest.TestCase):
                 self.populate_legacy(source)
                 case = "lease-arm-before-resume"
                 path = source / case / "second-daemon.stdout.log"
-                self.write_log(path, [json.dumps({"time": "2026-11-20T18:42:24Z", "level": "INFO", "msg": "runtime_registered"}).encode()])
+                self.write_log(
+                    path,
+                    [
+                        json.dumps(
+                            {"time": "2026-11-20T18:42:24Z", "level": "INFO", "msg": "runtime_registered"}
+                        ).encode()
+                    ],
+                )
                 if kind == "permissions":
                     os.chmod(path, 0o644)
                 elif kind == "symlink":
@@ -749,14 +1011,32 @@ class ExporterTest(unittest.TestCase):
         self.populate_legacy(source)
         case = "lease-arm-before-resume"
         secret = "lease renewal failed"
-        self.write_log(source / case / "second-daemon.stdout.log", [json.dumps({
-            "time": "2026-11-20T18:42:24Z", "level": "WARN", "msg": "claim_failed", "reason": secret,
-        }).encode()])
+        self.write_log(
+            source / case / "second-daemon.stdout.log",
+            [
+                json.dumps(
+                    {
+                        "time": "2026-11-20T18:42:24Z",
+                        "level": "WARN",
+                        "msg": "claim_failed",
+                        "reason": secret,
+                    }
+                ).encode()
+            ],
+        )
         secret_file = self.root / "log-secrets"
         secret_file.write_bytes(secret.encode() + b"\0")
         os.chmod(secret_file, 0o600)
-        result = self.run_export("legacy", str(output), "1" * 40, "failed", "--witness-root", str(source),
-                                 "--secret-values-file", str(secret_file))
+        result = self.run_export(
+            "legacy",
+            str(output),
+            "1" * 40,
+            "failed",
+            "--witness-root",
+            str(source),
+            "--secret-values-file",
+            str(secret_file),
+        )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("configured credential value", result.stderr)
         self.assertNotIn(secret, result.stdout + result.stderr)
@@ -775,9 +1055,19 @@ class ExporterTest(unittest.TestCase):
         output = self.private_dir("log-shape-output")
         self.populate_legacy(source)
         case = "lease-arm-before-resume"
-        self.write_log(source / case / "second-daemon.stdout.log", [json.dumps({
-            "time": "2026-11-20T18:42:24Z", "level": "WARN", "msg": hex_digest, "reason": token,
-        }).encode()])
+        self.write_log(
+            source / case / "second-daemon.stdout.log",
+            [
+                json.dumps(
+                    {
+                        "time": "2026-11-20T18:42:24Z",
+                        "level": "WARN",
+                        "msg": hex_digest,
+                        "reason": token,
+                    }
+                ).encode()
+            ],
+        )
         result = self.run_export("legacy", str(output), "1" * 40, "failed", "--witness-root", str(source))
         self.assertEqual(result.returncode, 0, result.stderr)
         document = json.loads((output / f"{case}-second-daemon-stdout.json").read_text())
@@ -811,7 +1101,7 @@ class ExporterTest(unittest.TestCase):
                     self.assertIsNotNone(message, f"{path}: daemon log call without a literal message")
                     if message is not None:
                         messages.add(message)
-                    for key, value in zip(arguments, arguments[1:]):
+                    for key, value in itertools.pairwise(arguments):
                         field = go_string_literal(key)
                         literal = go_string_literal(value)
                         if field in observed and literal is not None:
@@ -826,11 +1116,17 @@ class ExporterTest(unittest.TestCase):
         if protocol.is_file():
             observed["reason"].update(re.findall(r'Reconcile\w+Kind = "([^"]*)"', protocol.read_text(encoding="utf-8")))
         self.assertGreater(log_calls, 0, "the daemon log call scan found no call sites")
-        self.assertEqual(sorted(messages - set(exporter.DAEMON_LOG_MESSAGES)), [],
-                         "daemon log messages missing from DAEMON_LOG_MESSAGES")
+        self.assertEqual(
+            sorted(messages - set(exporter.DAEMON_LOG_MESSAGES)),
+            [],
+            "daemon log messages missing from DAEMON_LOG_MESSAGES",
+        )
         for field, allowed in exporter.DAEMON_LOG_TEXT_VALUES.items():
-            self.assertEqual(sorted(observed[field] - set(allowed)), [],
-                             f"daemon {field} literals missing from DAEMON_LOG_TEXT_VALUES")
+            self.assertEqual(
+                sorted(observed[field] - set(allowed)),
+                [],
+                f"daemon {field} literals missing from DAEMON_LOG_TEXT_VALUES",
+            )
         self.assertIn("process_exit", observed["stage"])
         self.assertIn("terminal transition", observed["kind"])
         self.assertIn("lease renewal failed", observed["reason"])
@@ -856,8 +1152,10 @@ class ExporterTest(unittest.TestCase):
         name = "TestProductionLinuxV2UnprovisionedHostRefusal.json"
         expected[name] = self.write_json(source / name, {"case": name, "status": "refused"})
         for case in ("shared", "pi", "opencode", "unprovisioned"):
-            self.write_json(source / f"rootless-compose-{case}-diagnostic.json",
-                            {"version": 1, "case": case, "outcome": "passed", "stage": "complete"})
+            self.write_json(
+                source / f"rootless-compose-{case}-diagnostic.json",
+                {"version": 1, "case": case, "outcome": "passed", "stage": "complete"},
+            )
         result = self.run_export("compose", str(output), "1" * 40, "passed", "--witness-root", str(source))
         self.assertEqual(result.returncode, 0, result.stderr)
         for name, data in expected.items():
@@ -865,14 +1163,28 @@ class ExporterTest(unittest.TestCase):
 
     def test_compose_opencode_refusal_rejects_native_promotion_or_missing_durable_proof(self) -> None:
         changes = [
-            {"native_version": "1.18.32"}, {"native_version": "2.3.0"}, {"native_version": "unavailable"},
-            {"probe_returned_err_native_unverified": True}, {"probe_returned_err_harness_unavailable": False},
-            {"probe_returned_err_harness_unavailable": 1}, {"transport_verified": True},
-            {"run_state": "completed"}, {"failure_stage": "capability_rejection"},
-            {"generation": 0}, {"generation": True}, {"run_id_sha256": "private-run"},
+            {"native_version": "1.18.32"},
+            {"native_version": "2.3.0"},
+            {"native_version": "unavailable"},
+            {"probe_returned_err_native_unverified": True},
+            {"probe_returned_err_harness_unavailable": False},
+            {"probe_returned_err_harness_unavailable": 1},
+            {"transport_verified": True},
+            {"run_state": "completed"},
+            {"failure_stage": "capability_rejection"},
+            {"generation": 0},
+            {"generation": True},
+            {"run_id_sha256": "private-run"},
         ]
-        for key in ("claim_fence_observed", "no_native_task_process", "no_task_result", "no_process_authority",
-                    "no_stop_receipt", "no_provider_access", "non_goal_work_item"):
+        for key in (
+            "claim_fence_observed",
+            "no_native_task_process",
+            "no_task_result",
+            "no_process_authority",
+            "no_stop_receipt",
+            "no_provider_access",
+            "non_goal_work_item",
+        ):
             changes.extend(({key: False}, {key: 1}))
         for index, change in enumerate(changes):
             with self.subTest(change=change):
@@ -886,15 +1198,17 @@ class ExporterTest(unittest.TestCase):
                 self.assertEqual(path.read_bytes(), original)
 
     def test_compose_refusal_requires_exact_fields_and_keeps_pi_transport_evidence(self) -> None:
-        for index, (harness, change, omit) in enumerate((
-            ("pi", {"native_version": ""}, None),
-            ("pi", {"probe_returned_err_native_unverified": False}, None),
-            ("pi", {"probe_returned_err_harness_unavailable": True}, None),
-            ("opencode", {}, "no_process_authority"),
-            ("opencode", {}, "probe_returned_err_harness_unavailable"),
-            ("opencode", {"harness": "pi"}, None),
-            ("opencode", {"status": "accepted"}, None),
-        )):
+        for index, (harness, change, omit) in enumerate(
+            (
+                ("pi", {"native_version": ""}, None),
+                ("pi", {"probe_returned_err_native_unverified": False}, None),
+                ("pi", {"probe_returned_err_harness_unavailable": True}, None),
+                ("opencode", {}, "no_process_authority"),
+                ("opencode", {}, "probe_returned_err_harness_unavailable"),
+                ("opencode", {"harness": "pi"}, None),
+                ("opencode", {"status": "accepted"}, None),
+            )
+        ):
             with self.subTest(harness=harness, change=change, omit=omit):
                 source = self.private_dir(f"source-{index}")
                 output = self.private_dir(f"output-{index}")
@@ -908,20 +1222,29 @@ class ExporterTest(unittest.TestCase):
                 self.assertFalse((output / path.name).exists())
 
     def test_compose_failure_diagnostic_exports_without_success_receipts(self) -> None:
-        for index, (case, stage, observation) in enumerate((
-            ("pi", "probe_projection", "transport_unverified"),
-            ("pi", "runtime_registration", "offline"),
-            ("opencode", "runtime_registration", "portal_unavailable"),
-        )):
+        for index, (case, stage, observation) in enumerate(
+            (
+                ("pi", "probe_projection", "transport_unverified"),
+                ("pi", "runtime_registration", "offline"),
+                ("opencode", "runtime_registration", "portal_unavailable"),
+            )
+        ):
             with self.subTest(case=case, stage=stage, observation=observation):
                 source = self.private_dir(f"source-{index}")
-                diagnostic = {"version": 1, "case": case, "outcome": "failed", "stage": stage,
-                              "observation": observation}
+                diagnostic = {
+                    "version": 1,
+                    "case": case,
+                    "outcome": "failed",
+                    "stage": stage,
+                    "observation": observation,
+                }
                 name = f"rootless-compose-{case}-diagnostic.json"
                 original = self.write_json(source / name, diagnostic)
                 for run_status in ("failed", "passed"):
                     output = self.private_dir(f"output-{index}-{run_status}")
-                    result = self.run_export("compose", str(output), "1" * 40, run_status, "--witness-root", str(source))
+                    result = self.run_export(
+                        "compose", str(output), "1" * 40, run_status, "--witness-root", str(source)
+                    )
                     if run_status == "failed":
                         self.assertEqual(result.returncode, 0, result.stderr)
                     else:
@@ -938,23 +1261,33 @@ class ExporterTest(unittest.TestCase):
         source = self.private_dir("source")
         output = self.private_dir("output")
         for case in ("shared", "pi", "opencode", "unprovisioned"):
-            self.write_json(source / f"rootless-compose-{case}-diagnostic.json",
-                            {"version": 1, "case": case, "outcome": "passed", "stage": "complete"})
+            self.write_json(
+                source / f"rootless-compose-{case}-diagnostic.json",
+                {"version": 1, "case": case, "outcome": "passed", "stage": "complete"},
+            )
         result = self.run_export("compose", str(output), "1" * 40, "passed", "--witness-root", str(source))
         self.assertNotEqual(result.returncode, 0)
         manifest = json.loads((output / "manifest.json").read_text())
         self.assertEqual(manifest["status"], "failed")
-        self.assertEqual(set(manifest["missing_allowlisted_files"]), {
-            "rootless-compose-pi.json", "rootless-compose-opencode.json",
-            "TestProductionLinuxV2UnprovisionedHostRefusal.json",
-        })
+        self.assertEqual(
+            set(manifest["missing_allowlisted_files"]),
+            {
+                "rootless-compose-pi.json",
+                "rootless-compose-opencode.json",
+                "TestProductionLinuxV2UnprovisionedHostRefusal.json",
+            },
+        )
 
     def test_compose_diagnostic_rejects_private_or_contradictory_values(self) -> None:
         base = {"version": 1, "case": "pi", "outcome": "failed", "stage": "probe"}
         changes = (
-            ("pi", {"stage": "private-error-with-credential"}), ("pi", {"observation": "private-error-with-credential"}),
-            ("pi", {"details": "private-error-with-credential"}), ("pi", {"case": "opencode"}),
-            ("pi", {"version": True}), ("pi", {"outcome": "passed"}), ("pi", {"stage": "complete"}),
+            ("pi", {"stage": "private-error-with-credential"}),
+            ("pi", {"observation": "private-error-with-credential"}),
+            ("pi", {"details": "private-error-with-credential"}),
+            ("pi", {"case": "opencode"}),
+            ("pi", {"version": True}),
+            ("pi", {"outcome": "passed"}),
+            ("pi", {"stage": "complete"}),
             ("pi", {"stage": "runtime_registration", "observation": "private-error-with-credential"}),
             ("pi", {"stage": "runtime_registration", "observation": "transport_unverified"}),
             ("pi", {"observation": "offline"}),
@@ -991,21 +1324,38 @@ class ExporterTest(unittest.TestCase):
         self.assertEqual(json.loads((output / "manifest.json").read_text())["status"], "failed")
 
     def test_compose_diagnostic_preserves_credential_scan_for_allowlisted_values(self) -> None:
-        for index, (stage, observation) in enumerate((
-            ("probe_projection", "transport_unverified"), ("runtime_registration", "offline"),
-        )):
+        for index, (stage, observation) in enumerate(
+            (
+                ("probe_projection", "transport_unverified"),
+                ("runtime_registration", "offline"),
+            )
+        ):
             with self.subTest(stage=stage, observation=observation):
                 source = self.private_dir(f"source-{index}")
                 output = self.private_dir(f"output-{index}")
                 path = source / "rootless-compose-pi-diagnostic.json"
-                original = self.write_json(path, {
-                    "version": 1, "case": "pi", "outcome": "failed", "stage": stage,
-                    "observation": observation,
-                })
+                original = self.write_json(
+                    path,
+                    {
+                        "version": 1,
+                        "case": "pi",
+                        "outcome": "failed",
+                        "stage": stage,
+                        "observation": observation,
+                    },
+                )
                 secret_file = self.root / f"secrets-{index}"
                 secret_file.write_bytes(observation.encode() + b"\0")
-                result = self.run_export("compose", str(output), "1" * 40, "failed", "--witness-root", str(source),
-                                         "--secret-values-file", str(secret_file))
+                result = self.run_export(
+                    "compose",
+                    str(output),
+                    "1" * 40,
+                    "failed",
+                    "--witness-root",
+                    str(source),
+                    "--secret-values-file",
+                    str(secret_file),
+                )
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("configured credential value", result.stderr)
                 self.assertNotIn(observation, result.stdout + result.stderr)
@@ -1046,8 +1396,16 @@ class ExporterTest(unittest.TestCase):
         secret_file = self.root / "secrets"
         secret_file.write_bytes(secret.encode() + b"\0")
         os.chmod(secret_file, 0o600)
-        result = self.run_export("compose", str(output), "1" * 40, "passed", "--witness-root", str(source),
-                                 "--secret-values-file", str(secret_file))
+        result = self.run_export(
+            "compose",
+            str(output),
+            "1" * 40,
+            "passed",
+            "--witness-root",
+            str(source),
+            "--secret-values-file",
+            str(secret_file),
+        )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("configured credential value", result.stderr)
         self.assertNotIn(secret, result.stdout + result.stderr)
@@ -1056,23 +1414,34 @@ class ExporterTest(unittest.TestCase):
 
     def test_compose_rejects_raw_credential_before_publication(self) -> None:
         secret = "OWNED-RAW-CREDENTIAL"
-        self.assert_compose_rejects_credential({"case": "refusal", "details": ["prefix " + secret + " suffix"]},
-                                             secret, escaped=False)
+        self.assert_compose_rejects_credential(
+            {"case": "refusal", "details": ["prefix " + secret + " suffix"]}, secret, escaped=False
+        )
 
     def test_compose_rejects_escaped_credential_value_before_publication(self) -> None:
         secret = "OWNED-ESCAPED-CREDENTIAL"
-        self.assert_compose_rejects_credential({"case": "refusal", "details": [{"note": "prefix " + secret + " suffix"}]},
-                                             secret, escaped=True)
+        self.assert_compose_rejects_credential(
+            {"case": "refusal", "details": [{"note": "prefix " + secret + " suffix"}]}, secret, escaped=True
+        )
 
     def test_compose_rejects_escaped_credential_key_before_publication(self) -> None:
         secret = "OWNED-ESCAPED-CREDENTIAL"
-        self.assert_compose_rejects_credential({"case": "refusal", "details": [{"prefix-" + secret + "-suffix": "refused"}]},
-                                             secret, escaped=True)
+        self.assert_compose_rejects_credential(
+            {"case": "refusal", "details": [{"prefix-" + secret + "-suffix": "refused"}]}, secret, escaped=True
+        )
 
     def test_manual_missing_case_set_remains_rejected(self) -> None:
         output = self.private_dir("output")
-        result = self.run_export("manual", str(output), "1" * 40, "failed", "--witness-root", "/tmp/witness",
-                                 "--receipt-root", "/tmp/receipt")
+        result = self.run_export(
+            "manual",
+            str(output),
+            "1" * 40,
+            "failed",
+            "--witness-root",
+            "/tmp/witness",
+            "--receipt-root",
+            "/tmp/receipt",
+        )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("one exact case set", result.stderr)
 

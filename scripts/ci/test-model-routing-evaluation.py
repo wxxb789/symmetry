@@ -2,6 +2,8 @@
 """Exercise the evaluation CLI through real Git, subprocess and file surfaces."""
 
 import ast
+import contextlib
+import functools
 import hashlib
 import importlib.util
 import json
@@ -15,7 +17,6 @@ import tempfile
 import threading
 import time
 import unittest
-
 
 SCRIPT = pathlib.Path(__file__).with_name("model-routing-evaluation.py")
 
@@ -49,8 +50,10 @@ def refusal_returns(source_text, function):
                 if isinstance(value, ast.Constant) and value.value is None:
                     continue
                 kind = (
-                    "literal" if isinstance(value, ast.Constant) and isinstance(value.value, str)
-                    else "template" if isinstance(value, ast.JoinedStr)
+                    "literal"
+                    if isinstance(value, ast.Constant) and isinstance(value.value, str)
+                    else "template"
+                    if isinstance(value, ast.JoinedStr)
                     else "other"
                 )
                 rows.append((statement.lineno, kind, ast.get_source_segment(source_text, value)))
@@ -90,10 +93,7 @@ EMIT_PASS = (
     "):\n"
     "    print(json.dumps(event))\n"
 )
-EMIT_RUN_ONLY = (
-    "import json\n"
-    "print(json.dumps({'Action': 'run', 'Package': 'example/app', 'Test': 'TestWitness'}))\n"
-)
+EMIT_RUN_ONLY = "import json\nprint(json.dumps({'Action': 'run', 'Package': 'example/app', 'Test': 'TestWitness'}))\n"
 EMIT_SKIP = (
     "import json\n"
     "for event in (\n"
@@ -122,7 +122,7 @@ VITEST_NAMED_TESTS = (
 
 FILES = {
     "app/main.go": "package app\n\nfunc Main() int { return 1 }\n",
-    "app/main_test.go": "package app\n\nimport \"testing\"\n\nfunc TestBaseline(t *testing.T) {}\n",
+    "app/main_test.go": 'package app\n\nimport "testing"\n\nfunc TestBaseline(t *testing.T) {}\n',
     "app/app.go": "package app\n",
     "app/check_test.py": "def test_placeholder():\n    assert True\n",
     "web/thing.test.ts": "export const thing = 1;\n",
@@ -164,9 +164,7 @@ class EvaluationTests(unittest.TestCase):
     # -- environment helpers -------------------------------------------------
 
     def git(self, *arguments: str, cwd: pathlib.Path | None = None) -> bytes:
-        return subprocess.check_output(
-            ["git", "-C", str(cwd or self.repo), *arguments], stderr=subprocess.PIPE
-        )
+        return subprocess.check_output(["git", "-C", str(cwd or self.repo), *arguments], stderr=subprocess.PIPE)
 
     def git_text(self, *arguments: str, cwd: pathlib.Path | None = None) -> str:
         return self.git(*arguments, cwd=cwd).decode("ascii").strip()
@@ -186,7 +184,10 @@ class EvaluationTests(unittest.TestCase):
     def cli(self, *arguments: str) -> subprocess.CompletedProcess:
         return subprocess.run(
             [sys.executable, str(SCRIPT), *arguments],
-            capture_output=True, text=True, cwd=str(self.root), check=False,
+            capture_output=True,
+            text=True,
+            cwd=str(self.root),
+            check=False,
         )
 
     def assert_ok(self, result: subprocess.CompletedProcess):
@@ -246,15 +247,25 @@ class EvaluationTests(unittest.TestCase):
                 "credential_route": "fixture-credential-route",
                 "authorization_ref": "reuse_existing",
             }
+
         return {"worker": role(worker), "reviewer": role(reviewer)}
 
-    def prepare(self, task=None, routes=None, run=None, source=None, environment_json=None) -> subprocess.CompletedProcess:
+    def prepare(
+        self, task=None, routes=None, run=None, source=None, environment_json=None
+    ) -> subprocess.CompletedProcess:
         inputs = self.root / "inputs"
         task_path = self.write_json(inputs / "task.json", self.task() if task is None else task)
         routes_path = self.write_json(inputs / "routes.json", self.routes() if routes is None else routes)
         command = [
-            "prepare", "--run-dir", str(run or self.run_dir()), "--task", str(task_path),
-            "--routes", str(routes_path), "--source", str(source or self.repo),
+            "prepare",
+            "--run-dir",
+            str(run or self.run_dir()),
+            "--task",
+            str(task_path),
+            "--routes",
+            str(routes_path),
+            "--source",
+            str(source or self.repo),
         ]
         if environment_json is not None:
             command += ["--environment-json", str(environment_json)]
@@ -323,8 +334,11 @@ class EvaluationTests(unittest.TestCase):
             "const index = args.indexOf('--outputFile');\n"
             f"const report = {report_literal};\n"
             "if (args[0] === 'run' && index >= 0) {\n"
-            + ("  if (report !== null) writeFileSync(args[index + 1], JSON.stringify(report));\n"
-               if write_report else "")
+            + (
+                "  if (report !== null) writeFileSync(args[index + 1], JSON.stringify(report));\n"
+                if write_report
+                else ""
+            )
             + f"  process.exit({report_exit});\n"
             "}\n"
             "console.log('vitest gate command ran');\n"
@@ -360,9 +374,9 @@ class EvaluationTests(unittest.TestCase):
         log = self.root / "inputs" / (run_dir.name + "-pnpm-install.log")
         log.parent.mkdir(parents=True, exist_ok=True)
         log.write_bytes(b"Progress: resolved 1, reused 0, downloaded 1\nDone in 1.2s\n")
-        return self.assert_ok(self.cli(
-            "bind-dependencies", "--run-dir", str(run_dir), "--tree", str(tree), "--log", str(log)
-        ))
+        return self.assert_ok(
+            self.cli("bind-dependencies", "--run-dir", str(run_dir), "--tree", str(tree), "--log", str(log))
+        )
 
     def run_dir(self) -> pathlib.Path:
         return self.root / "run"
@@ -398,9 +412,8 @@ class EvaluationTests(unittest.TestCase):
         checkout = self.checkout(run)
         attributes = checkout / ".git" / "info" / "attributes"
         attributes.parent.mkdir(parents=True, exist_ok=True)
-        attributes.write_bytes(f"{relative} filter=hide\n".encode("utf-8"))
-        self.git("config", "filter.hide.clean",
-                 f"git cat-file blob {self.base}:{relative}", cwd=checkout)
+        attributes.write_bytes(f"{relative} filter=hide\n".encode())
+        self.git("config", "filter.hide.clean", f"git cat-file blob {self.base}:{relative}", cwd=checkout)
 
     def remove_base_echo_filter(self, run: pathlib.Path | None = None) -> None:
         checkout = self.checkout(run)
@@ -411,8 +424,11 @@ class EvaluationTests(unittest.TestCase):
 
     def unset_base_echo_filter(self, run: pathlib.Path | None = None) -> None:
         """Drop only the clean-filter configuration, leaving any attribute file alone."""
-        subprocess.run(["git", "-C", str(self.checkout(run)), "config", "--unset", "filter.hide.clean"],
-                       capture_output=True, check=False)
+        subprocess.run(
+            ["git", "-C", str(self.checkout(run)), "config", "--unset", "filter.hide.clean"],
+            capture_output=True,
+            check=False,
+        )
 
     def seal(self, run: pathlib.Path | None = None) -> subprocess.CompletedProcess:
         return self.cli("seal", "--run-dir", str(run or self.run_dir()))
@@ -458,15 +474,21 @@ class EvaluationTests(unittest.TestCase):
             "gate_weakening": False,
             "findings": [],
             "explanations": {
-                text: "attested explanation for: " + text
-                for text in self.frozen("task.json", run_path)["explanations"]
+                text: "attested explanation for: " + text for text in self.frozen("task.json", run_path)["explanations"]
             },
         }
         record.update(overrides)
         return record
 
-    def usage_rows(self, *, tokens=None, metadata=True, provenance="harness-estimate",
-                   non_model_provenance="not-applicable", estimated_cost=1.5):
+    def usage_rows(
+        self,
+        *,
+        tokens=None,
+        metadata=True,
+        provenance="harness-estimate",
+        non_model_provenance="not-applicable",
+        estimated_cost=1.5,
+    ):
         tokens_value = tokens if tokens is not None else {"input": 10, "output": 2, "cached": 0}
         prompt = [{"kind": "task", "sha256": "ab" * 32, "index": 0}]
 
@@ -518,14 +540,18 @@ class EvaluationTests(unittest.TestCase):
                 "wall_time": 1.0,
             }
 
-        return {"repair_count": 0, "wall_time": 12.0, "phases": [
-            model_row("exploration", "explorer-session-1", "worker-model"),
-            model_row("implementation", "worker-session-1", "worker-model"),
-            non_model_row("verification", "frozen gates executed without a model session"),
-            model_row("review", "reviewer-session-1", "reviewer-model"),
-            non_model_row("repair", "no repair was required"),
-            non_model_row("failed_attempt", "no failed attempt occurred"),
-        ]}
+        return {
+            "repair_count": 0,
+            "wall_time": 12.0,
+            "phases": [
+                model_row("exploration", "explorer-session-1", "worker-model"),
+                model_row("implementation", "worker-session-1", "worker-model"),
+                non_model_row("verification", "frozen gates executed without a model session"),
+                model_row("review", "reviewer-session-1", "reviewer-model"),
+                non_model_row("repair", "no repair was required"),
+                non_model_row("failed_attempt", "no failed attempt occurred"),
+            ],
+        }
 
     def accepted_run(self, run: pathlib.Path | None = None, task=None, usage=None, environment_json=None):
         """Prepare, edit, seal, check, review and derive one accepted receipt."""
@@ -535,7 +561,9 @@ class EvaluationTests(unittest.TestCase):
         if load_runner_module().requires_dependency_provisioning(frozen_task):
             self.bind_tree(run_path)
         self.edit("app/main.go", EDITED_MAIN_GO, run=run_path)
-        self.edit("app/new_test.go", "package app\n\nimport \"testing\"\n\nfunc TestWitness2(t *testing.T) {}\n", run=run_path)
+        self.edit(
+            "app/new_test.go", 'package app\n\nimport "testing"\n\nfunc TestWitness2(t *testing.T) {}\n', run=run_path
+        )
         self.assert_ok(self.seal(run=run_path))
         checked = self.assert_ok(self.check(run=run_path))
         self.assert_ok(self.import_review(self.review_record(checked, run=run_path), run=run_path))
@@ -551,7 +579,7 @@ class EvaluationTests(unittest.TestCase):
         self.assertTrue(prepared["base_tree_digest"].startswith("sha256:"))
 
         self.edit("app/main.go", EDITED_MAIN_GO)
-        self.edit("app/new_test.go", "package app\n\nimport \"testing\"\n\nfunc TestWitness2(t *testing.T) {}\n")
+        self.edit("app/new_test.go", 'package app\n\nimport "testing"\n\nfunc TestWitness2(t *testing.T) {}\n')
         sealed = self.assert_ok(self.seal())
         self.assertEqual(sealed["head"], self.base)
         self.assertTrue(sealed["content_revision"].startswith("uncommitted:"))
@@ -570,10 +598,17 @@ class EvaluationTests(unittest.TestCase):
         self.assertTrue(summary["accepted"], summary["acceptance_blockers"])
         receipt = self.stored_receipt()
         self.assertEqual(receipt["acceptance_blockers"], [])
-        self.assertEqual(receipt["tokens"], {
-            "input": 30, "output": 6, "cached": 0,
-            "known_input_subtotal": 30, "known_output_subtotal": 6, "known_cached_subtotal": 0,
-        })
+        self.assertEqual(
+            receipt["tokens"],
+            {
+                "input": 30,
+                "output": 6,
+                "cached": 0,
+                "known_input_subtotal": 30,
+                "known_output_subtotal": 6,
+                "known_cached_subtotal": 0,
+            },
+        )
         self.assertIsNone(receipt["cost"]["reported_cost"])
         self.assertEqual(receipt["cost"]["estimated_cost"], 4.5)
         self.assertEqual(receipt["cost"]["known_estimated_cost_subtotal"], 4.5)
@@ -665,7 +700,7 @@ class EvaluationTests(unittest.TestCase):
         self.assertEqual(runner.number_sum([1e16, 1.0, 1.0], "fixture"), sum([1e16, 1.0, 1.0]))
         self.assertNotEqual(runner.number_sum([1e16, 1.0, 1.0], "fixture"), 1e16)
         with self.assertRaisesRegex(runner.Refused, "finite number range"):
-            runner.number_sum([10 ** 400, 0.5], "fixture")
+            runner.number_sum([10**400, 0.5], "fixture")
 
     def test_canonical_json_distinguishes_non_finite_from_unserializable(self) -> None:
         # Opus P3: `allow_nan=False` and the integer conversion-digit limit share a
@@ -674,7 +709,7 @@ class EvaluationTests(unittest.TestCase):
         with self.assertRaisesRegex(runner.Refused, "non-finite number"):
             runner.canonical_json({"n": float("inf")})
         with self.assertRaisesRegex(runner.Refused, "outside the serializable range"):
-            runner.canonical_json({"n": 10 ** 4301})
+            runner.canonical_json({"n": 10**4301})
 
     def test_source_edit_after_checks_or_review_is_refused_and_preserved(self) -> None:
         run = self.root / "run-late"
@@ -759,7 +794,11 @@ class EvaluationTests(unittest.TestCase):
         task = self.task(allowed_paths=["**"])
         self.assert_ok(self.prepare(task=task))
         cases = (
-            ("app/main_test.go", "package app\n\nimport \"testing\"\n\nfunc TestBaseline(t *testing.T) { t.Skip() }\n", "baseline test"),
+            (
+                "app/main_test.go",
+                'package app\n\nimport "testing"\n\nfunc TestBaseline(t *testing.T) { t.Skip() }\n',
+                "baseline test",
+            ),
             (".github/workflows/ci.yml", "name: weakened\n", "protected asset"),
             (".github/workflows/extra.yml", "name: extra\n", "protected asset"),
             ("AGENTS.md", "# weakened\n", "protected asset"),
@@ -787,12 +826,14 @@ class EvaluationTests(unittest.TestCase):
         self.write(self.checkout() / "app/main_test.go", FILES["app/main_test.go"])
 
     def test_new_tests_require_explicit_allowed_paths(self) -> None:
-        new_test = "package app\n\nimport \"testing\"\n\nfunc TestOther(t *testing.T) {}\n"
+        new_test = 'package app\n\nimport "testing"\n\nfunc TestOther(t *testing.T) {}\n'
         task = self.task(allowed_paths=["app/main.go"])
         self.assert_ok(self.prepare(task=task, run=self.root / "run-narrow"))
         self.edit("app/other_test.go", new_test, run=self.root / "run-narrow")
         self.assert_refused(self.seal(run=self.root / "run-narrow"), "new test")
-        self.assertEqual(self.read(self.checkout(self.root / "run-narrow") / "app/other_test.go").decode("utf-8"), new_test)
+        self.assertEqual(
+            self.read(self.checkout(self.root / "run-narrow") / "app/other_test.go").decode("utf-8"), new_test
+        )
 
         task = self.task(allowed_paths=["app/main.go", "app/other_test.go"])
         run = self.root / "run-scoped"
@@ -814,7 +855,8 @@ class EvaluationTests(unittest.TestCase):
         self.edit("app/extra.local.go", "package app\n", run=run)
         ignored = subprocess.run(
             ["git", "-C", str(self.checkout(run)), "check-ignore", "app/extra.local.go"],
-            capture_output=True, check=False,
+            capture_output=True,
+            check=False,
         )
         self.assertEqual(ignored.returncode, 0, "fixture premise: *.local.* must ignore the file")
         self.assert_refused(self.seal(run=run), "outside allowed_paths")
@@ -842,15 +884,39 @@ class EvaluationTests(unittest.TestCase):
         self.assert_ok(self.seal())
         checked = self.assert_ok(self.check())
         cases = (
-            ("same-session", {"reviewer": {"model_id": "reviewer-model", "session_ref": "worker-session-1"}}, "not independent"),
+            (
+                "same-session",
+                {"reviewer": {"model_id": "reviewer-model", "session_ref": "worker-session-1"}},
+                "not independent",
+            ),
             ("verdict-fail", {"verdict": "fail"}, "verdict is fail"),
             ("gate-weakening", {"gate_weakening": True}, "gate weakening"),
-            ("open-finding", {"findings": [{"id": "F1", "severity": "major", "status": "open", "description": "open"}]}, "unresolved findings"),
+            (
+                "open-finding",
+                {"findings": [{"id": "F1", "severity": "major", "status": "open", "description": "open"}]},
+                "unresolved findings",
+            ),
             ("missing-explanation", {"explanations": {"explain fixture one": "x"}}, "does not attest"),
-            ("empty-explanation", {"explanations": {"explain fixture one": "x", "explain fixture two": "   "}}, "empty explanation"),
-            ("extra-explanation", {"explanations": {"explain fixture one": "x", "explain fixture two": "y", "extra": "z"}}, "not required"),
-            ("reviewer-model", {"reviewer": {"model_id": "other-model", "session_ref": "reviewer-session-1"}}, "reviewer model"),
-            ("worker-model", {"worker": {"model_id": "other-model", "session_refs": ["worker-session-1"]}}, "worker model"),
+            (
+                "empty-explanation",
+                {"explanations": {"explain fixture one": "x", "explain fixture two": "   "}},
+                "empty explanation",
+            ),
+            (
+                "extra-explanation",
+                {"explanations": {"explain fixture one": "x", "explain fixture two": "y", "extra": "z"}},
+                "not required",
+            ),
+            (
+                "reviewer-model",
+                {"reviewer": {"model_id": "other-model", "session_ref": "reviewer-session-1"}},
+                "reviewer model",
+            ),
+            (
+                "worker-model",
+                {"worker": {"model_id": "other-model", "session_refs": ["worker-session-1"]}},
+                "worker model",
+            ),
             ("subject", {"subject_hash": "sha256:" + "0" * 64}, "sealed subject"),
             ("attempt-id", {"check_attempt_id": "attempt-9999"}, "latest sealed-subject attempt"),
             ("evidence", {"check_evidence_sha256": "sha256:" + "1" * 64}, "check attempt evidence"),
@@ -970,8 +1036,9 @@ class EvaluationTests(unittest.TestCase):
         run_record = self.read(run / "run.json")
         receipt_record = self.read(run / "receipt.json")
         accepted = self.stored_receipt(run)
-        self.assertEqual(accepted["evidence"]["frozen_usage_sha256"],
-                         "sha256:" + hashlib.sha256(frozen_usage).hexdigest())
+        self.assertEqual(
+            accepted["evidence"]["frozen_usage_sha256"], "sha256:" + hashlib.sha256(frozen_usage).hexdigest()
+        )
 
         self.assert_ok(self.receipt(self.usage_rows(), run=run))
         self.assertEqual(self.read(run / "frozen" / "usage.json"), frozen_usage)
@@ -1005,9 +1072,17 @@ class EvaluationTests(unittest.TestCase):
         usage = self.usage_rows()
         for row in usage["phases"]:
             row.pop("known_subtotals", None)
-            row.update(session_ref=None, non_model_reason="No model usage evidence was recorded.",
-                       model_ids=[], prompt_hashes=[], tokens={"input": None, "output": None, "cached": None},
-                       reported_cost=None, estimated_cost=None, cost_provenance=None, price_version=None)
+            row.update(
+                session_ref=None,
+                non_model_reason="No model usage evidence was recorded.",
+                model_ids=[],
+                prompt_hashes=[],
+                tokens={"input": None, "output": None, "cached": None},
+                reported_cost=None,
+                estimated_cost=None,
+                cost_provenance=None,
+                price_version=None,
+            )
         self.assert_ok(self.receipt(usage))
         receipt = self.stored_receipt()
         self.assertFalse(receipt["accepted"])
@@ -1032,14 +1107,20 @@ class EvaluationTests(unittest.TestCase):
         self.accepted_run()
         tools = self.root / "changed-tools"
         tools.mkdir()
-        for name in (SCRIPT.name, "assert-go-test-json.py", "linux-v2-source-subject.py",
-                     "model-routing-record-sanitize.py"):
+        for name in (
+            SCRIPT.name,
+            "assert-go-test-json.py",
+            "linux-v2-source-subject.py",
+            "model-routing-record-sanitize.py",
+        ):
             shutil.copyfile(SCRIPT.with_name(name), tools / name)
         # The pristine copies reproduce the accepted receipt, so each mutation below is
         # what makes the evidence differ.
         pristine = subprocess.run(
             [sys.executable, str(tools / SCRIPT.name), "accept", "--run-dir", str(self.run_dir())],
-            text=True, capture_output=True, check=False,
+            text=True,
+            capture_output=True,
+            check=False,
         )
         self.assertTrue(json.loads(pristine.stdout)["accepted"], pristine.stdout + pristine.stderr)
         # F21: the sanitize tool is bound into evidence.tooling_sources (its patterns
@@ -1052,7 +1133,9 @@ class EvaluationTests(unittest.TestCase):
                 changed.write_bytes(original + b"\n# Tooling revision control.\n")
                 result = subprocess.run(
                     [sys.executable, str(tools / SCRIPT.name), "accept", "--run-dir", str(self.run_dir())],
-                    text=True, capture_output=True, check=False,
+                    text=True,
+                    capture_output=True,
+                    check=False,
                 )
                 self.assert_refused(result, "does not match")
                 changed.write_bytes(original)
@@ -1128,9 +1211,15 @@ class EvaluationTests(unittest.TestCase):
         )
         self.assert_refused(
             self.cli(
-                "prepare", "--run-dir", str(self.root / "run-json-duplicate"), "--task", str(duplicate_task),
-                "--routes", str(self.write_json(self.root / "routes.json", self.routes())),
-                "--source", str(self.repo),
+                "prepare",
+                "--run-dir",
+                str(self.root / "run-json-duplicate"),
+                "--task",
+                str(duplicate_task),
+                "--routes",
+                str(self.write_json(self.root / "routes.json", self.routes())),
+                "--source",
+                str(self.repo),
             ),
             "repeats the JSON key",
         )
@@ -1154,13 +1243,15 @@ class EvaluationTests(unittest.TestCase):
         receipt_text = (run / "receipt.json").read_text(encoding="utf-8")
         duplicate_receipt = self.root / "duplicate-receipt.json"
         duplicate_receipt.write_bytes(
-            receipt_text.replace('"task_id": "fixture-task",', '"task_id": "fixture-task",\n  "task_id": "other",', 1).encode("utf-8")
+            receipt_text.replace(
+                '"task_id": "fixture-task",', '"task_id": "fixture-task",\n  "task_id": "other",', 1
+            ).encode("utf-8")
         )
-        self.assert_refused(
-            self.accept(run=run, receipt_path=duplicate_receipt), "repeats the JSON key"
-        )
+        self.assert_refused(self.accept(run=run, receipt_path=duplicate_receipt), "repeats the JSON key")
         nan_receipt = self.root / "nan-receipt.json"
-        nan_receipt.write_bytes(receipt_text.replace('"estimated_cost": 4.5', '"estimated_cost": NaN', 1).encode("utf-8"))
+        nan_receipt.write_bytes(
+            receipt_text.replace('"estimated_cost": 4.5', '"estimated_cost": NaN', 1).encode("utf-8")
+        )
         self.assert_refused(self.accept(run=run, receipt_path=nan_receipt), "non-JSON constant")
         duplicate_review = self.root / "duplicate-review.json"
         duplicate_review.write_bytes(b'{"subject_hash": "sha256:00", "subject_hash": "sha256:11"}\n')
@@ -1175,12 +1266,40 @@ class EvaluationTests(unittest.TestCase):
             ("base-missing", self.task(base="0" * 40), None, "failed"),
             ("absolute-allowed", self.task(allowed_paths=["/etc/passwd"]), None, "must be relative"),
             ("parent-allowed", self.task(allowed_paths=["app/../etc"]), None, "must not contain"),
-            ("empty-argv", self.task(gates=[{"id": "bad", "cwd": ".", "argv": []}]), None, "argv must be a non-empty list"),
-            ("absolute-cwd", self.task(gates=[{"id": "bad", "cwd": "/tmp", "argv": [sys.executable, "-c", "pass"]}]), None, "must be relative"),
-            ("package-without-tests", self.task(gates=[{"id": "bad", "cwd": ".", "argv": [sys.executable, "-c", "pass"], "go_package": "x"}]), None, "go_package requires go_tests"),
+            (
+                "empty-argv",
+                self.task(gates=[{"id": "bad", "cwd": ".", "argv": []}]),
+                None,
+                "argv must be a non-empty list",
+            ),
+            (
+                "absolute-cwd",
+                self.task(gates=[{"id": "bad", "cwd": "/tmp", "argv": [sys.executable, "-c", "pass"]}]),
+                None,
+                "must be relative",
+            ),
+            (
+                "package-without-tests",
+                self.task(gates=[{"id": "bad", "cwd": ".", "argv": [sys.executable, "-c", "pass"], "go_package": "x"}]),
+                None,
+                "go_package requires go_tests",
+            ),
             ("routes-missing-role", None, {"worker": self.routes()["worker"]}, "missing keys"),
-            ("routes-secret", None, {"worker": self.routes()["worker"], "reviewer": {**self.routes()["reviewer"], "api_key": "x"}}, "secret-like key"),
-            ("routes-authorization", None, {"worker": self.routes()["worker"], "reviewer": {k: v for k, v in self.routes()["reviewer"].items() if k != "authorization_ref"}}, "missing keys"),
+            (
+                "routes-secret",
+                None,
+                {"worker": self.routes()["worker"], "reviewer": {**self.routes()["reviewer"], "api_key": "x"}},
+                "secret-like key",
+            ),
+            (
+                "routes-authorization",
+                None,
+                {
+                    "worker": self.routes()["worker"],
+                    "reviewer": {k: v for k, v in self.routes()["reviewer"].items() if k != "authorization_ref"},
+                },
+                "missing keys",
+            ),
         )
         for index, (label, task, routes, needle) in enumerate(cases):
             with self.subTest(case=label):
@@ -1241,8 +1360,10 @@ class EvaluationTests(unittest.TestCase):
             # inherited stdout/stderr pipes: on Windows that would keep the runner's
             # bounded reap waiting until the descendant's own wait cap expired,
             # delaying the release until the witness had already been missed.
-            f"subprocess.Popen([sys.executable, '-c', {descendant!r}], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
-            "Path('..', 'timeout-tree-handshake', 'gate-spawned-descendant.txt').write_text('spawned', encoding='utf-8')\n"
+            f"subprocess.Popen([sys.executable, '-c', {descendant!r}], stdin=subprocess.DEVNULL, "
+            "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+            "Path('..', 'timeout-tree-handshake', 'gate-spawned-descendant.txt').write_text("
+            "'spawned', encoding='utf-8')\n"
             "time.sleep(60)\n"
         )
         run = self.root / "run-timeout-tree"
@@ -1338,10 +1459,8 @@ class EvaluationTests(unittest.TestCase):
             if os.name == "nt":
                 subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True, check=False)
             else:
-                try:
+                with contextlib.suppress(ProcessLookupError):
                     os.kill(pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
 
         def terminate_survivor() -> None:
             pid = survivor_pid()
@@ -1417,9 +1536,7 @@ class EvaluationTests(unittest.TestCase):
         started = time.monotonic()
 
         def reap() -> None:
-            outcome["reaped"] = runner.run_owned_command(
-                [sys.executable, "-c", gate_code], str(self.root), timeout
-            )
+            outcome["reaped"] = runner.run_owned_command([sys.executable, "-c", gate_code], str(self.root), timeout)
             outcome["elapsed"] = time.monotonic() - started
 
         thread = threading.Thread(target=reap, daemon=True)
@@ -1456,7 +1573,7 @@ class EvaluationTests(unittest.TestCase):
             survivor_running(pid),
             "the pipe-holding survivor was not running when the reap returned, so the reap never faced it",
         )
-        exit_code, stdout, stderr, timed_out = outcome["reaped"]
+        exit_code, stdout, _stderr, timed_out = outcome["reaped"]
         self.assertIsNone(exit_code, "a timed-out gate must not report an exit code")
         self.assertTrue(timed_out, "the reap must report the run as timed out")
         # Positive control for the premise: the survivor held the write ends until the
@@ -1532,7 +1649,9 @@ class EvaluationTests(unittest.TestCase):
         self.assert_ok(self.prepare(task=self.task(allowed_paths=["app/main.go"]), run=run))
         filemode = subprocess.run(
             ["git", "-C", str(self.checkout(run)), "config", "--bool", "core.filemode"],
-            capture_output=True, text=True, check=False,
+            capture_output=True,
+            text=True,
+            check=False,
         )
         if filemode.stdout.strip() == "false":
             self.skipTest("core.filemode is disabled in the isolated checkout")
@@ -1594,7 +1713,7 @@ class EvaluationTests(unittest.TestCase):
         self.assert_ok(self.prepare(task=task, run=run))
         checkout = self.checkout(run)
         self.install_base_echo_filter("app/main_test.go", run)
-        weakened = "package app\n\nimport \"testing\"\n\nfunc TestBaseline(t *testing.T) { t.Skip() }\n"
+        weakened = 'package app\n\nimport "testing"\n\nfunc TestBaseline(t *testing.T) { t.Skip() }\n'
         self.edit("app/main_test.go", weakened, run=run)
 
         # Bypass premise: the clean filter makes git diff report no change at all.
@@ -1618,7 +1737,6 @@ class EvaluationTests(unittest.TestCase):
         run = self.root / "run-filter-machinery"
         task = self.task(allowed_paths=["**"])
         self.assert_ok(self.prepare(task=task, run=run))
-        checkout = self.checkout(run)
         self.install_base_echo_filter("app/main_test.go", run)
 
         # Nothing is edited, so only fail-closed machinery detection can refuse this.
@@ -1632,16 +1750,20 @@ class EvaluationTests(unittest.TestCase):
         self.assert_ok(self.seal(run=run))
 
     def test_replacement_objects_cannot_substitute_the_frozen_baseline(self) -> None:
-        weakened = "package app\n\nimport \"testing\"\n\nfunc TestBaseline(t *testing.T) { t.Skip() }\n"
+        weakened = 'package app\n\nimport "testing"\n\nfunc TestBaseline(t *testing.T) { t.Skip() }\n'
 
         run = self.root / "run-replace-blob"
         self.assert_ok(self.prepare(run=run))
         checkout = self.checkout(run)
         self.edit("app/main_test.go", weakened, run=run)
         base_object = self.git_text("rev-parse", f"{self.base}:app/main_test.go", cwd=checkout)
-        replacement = subprocess.check_output(
-            ["git", "-C", str(checkout), "hash-object", "-w", "--stdin"], input=weakened.encode("utf-8")
-        ).decode("ascii").strip()
+        replacement = (
+            subprocess.check_output(
+                ["git", "-C", str(checkout), "hash-object", "-w", "--stdin"], input=weakened.encode("utf-8")
+            )
+            .decode("ascii")
+            .strip()
+        )
         self.git("replace", base_object, replacement, cwd=checkout)
         # Bypass premise: the replacement serves the weakened bytes under the frozen
         # blob id, so an unguarded seal sees the "frozen" baseline already matching.
@@ -1752,18 +1874,18 @@ class EvaluationTests(unittest.TestCase):
         forged = (
             "package app\n\n"
             "import (\n"
-            "\t\"fmt\"\n"
-            "\t\"os\"\n"
-            "\t\"testing\"\n"
+            '\t"fmt"\n'
+            '\t"os"\n'
+            '\t"testing"\n'
             ")\n\n"
             "func TestMain(m *testing.M) {\n"
-            "\tfmt.Println(\"=== RUN   TestWitnessGo\")\n"
-            "\tfmt.Println(\"--- PASS: TestWitnessGo (0.00s)\")\n"
+            '\tfmt.Println("=== RUN   TestWitnessGo")\n'
+            '\tfmt.Println("--- PASS: TestWitnessGo (0.00s)")\n'
             "\tos.Exit(0)\n"
             "}\n\n"
-            "func TestWitnessGo(t *testing.T) { t.Fatal(\"must not run\") }\n"
+            'func TestWitnessGo(t *testing.T) { t.Fatal("must not run") }\n'
         )
-        honest = "package app\n\nimport \"testing\"\n\nfunc TestWitnessGo(t *testing.T) {}\n"
+        honest = 'package app\n\nimport "testing"\n\nfunc TestWitnessGo(t *testing.T) {}\n'
         task = self.task(
             allowed_paths=["app/gate_test.go"],
             gates=[self.go_gate()],
@@ -1800,11 +1922,11 @@ class EvaluationTests(unittest.TestCase):
         writer = (
             "package app\n\n"
             "import (\n"
-            "\t\"os\"\n"
-            "\t\"testing\"\n"
+            '\t"os"\n'
+            '\t"testing"\n'
             ")\n\n"
             "func TestWitnessGo(t *testing.T) {\n"
-            "\tif err := os.WriteFile(\"wrote_during_gate.txt\", []byte(\"x\"), 0o644); err != nil {\n"
+            '\tif err := os.WriteFile("wrote_during_gate.txt", []byte("x"), 0o644); err != nil {\n'
             "\t\tt.Fatal(err)\n"
             "\t}\n"
             "}\n"
@@ -1941,10 +2063,7 @@ class EvaluationTests(unittest.TestCase):
                 path = frozen / name
                 original = self.read(path)
                 path.write_bytes(b"{}")
-                if command == "seal":
-                    refused = self.seal(run=run)
-                else:
-                    refused = self.receipt(self.usage_rows(), run=run)
+                refused = self.seal(run=run) if command == "seal" else self.receipt(self.usage_rows(), run=run)
                 path.write_bytes(original)
                 self.assertEqual(self.read(path), original)
                 self.assert_refused(refused, needle)
@@ -1980,7 +2099,7 @@ class EvaluationTests(unittest.TestCase):
         huge = self.usage_rows()
         # A JSON integer beyond float range must refuse as a value: converting it to a
         # float must not escape validation as an uncaught OverflowError traceback.
-        huge["wall_time"] = 10 ** 400
+        huge["wall_time"] = 10**400
         huge_usage = self.root / "inputs" / "huge-int-usage.json"
         huge_usage.write_bytes((json.dumps(huge, indent=2, sort_keys=True) + "\n").encode("utf-8"))
         refused = self.cli("receipt", "--run-dir", str(run), "--usage", str(huge_usage))
@@ -1991,7 +2110,7 @@ class EvaluationTests(unittest.TestCase):
         # must refuse as a value when the derived subtotal meets a float partial from
         # another phase, not escape addition as an uncaught OverflowError traceback.
         mixed = self.usage_rows()
-        mixed["phases"][0]["tokens"]["input"] = 10 ** 400
+        mixed["phases"][0]["tokens"]["input"] = 10**400
         # The phase's stale complete subtotal (10) would refuse as a disagreement
         # before the derivation adds anything, so drop it and let the huge int meet
         # the float partial in the known subtotal.
@@ -2008,7 +2127,7 @@ class EvaluationTests(unittest.TestCase):
         # the third addend is a float, so the int total converts to float in the sum
         # and must refuse the same way.
         partials = self.usage_rows()
-        for index, value in ((0, 10 ** 308), (1, 10 ** 308), (3, 0.5)):
+        for index, value in ((0, 10**308), (1, 10**308), (3, 0.5)):
             partials["phases"][index]["estimated_cost"] = None
             partials["phases"][index]["known_subtotals"]["cost"] = {"total": {"sum": value, "messages": 1}}
         partials_usage = self.root / "inputs" / "partial-overflow-usage.json"
@@ -2023,9 +2142,7 @@ class EvaluationTests(unittest.TestCase):
         if limit:
             oversized = self.root / "inputs" / "oversized-integer-usage.json"
             raw_usage = json.dumps(self.usage_rows(), indent=2, sort_keys=True) + "\n"
-            oversized.write_bytes(
-                raw_usage.replace('"input": 10', '"input": ' + "9" * (limit + 1), 1).encode("utf-8")
-            )
+            oversized.write_bytes(raw_usage.replace('"input": 10', '"input": ' + "9" * (limit + 1), 1).encode("utf-8"))
             refused = self.cli("receipt", "--run-dir", str(run), "--usage", str(oversized))
             self.assert_refused(refused, "integer outside the supported range")
             self.assertNotIn("Traceback", refused.stderr + refused.stdout)
@@ -2107,17 +2224,17 @@ class EvaluationTests(unittest.TestCase):
         junction = self.checkout(run) / "linked"
         created = subprocess.run(
             ["cmd", "/c", "mklink", "/J", str(junction), str(outside)],
-            capture_output=True, text=True, check=False,
+            capture_output=True,
+            text=True,
+            check=False,
         )
         if created.returncode != 0:
             self.skipTest(f"cannot create a directory junction: {created.stdout}{created.stderr}")
         try:
             self.assert_refused(self.seal(run=run), "reparse")
         finally:
-            try:
+            with contextlib.suppress(OSError):
                 os.rmdir(junction)
-            except OSError:
-                pass
 
     def test_exunit_trace_gate_requires_every_named_test_once(self) -> None:
         first = "committed harness session receipts recover through real Go HTTP after listener restarts"
@@ -2145,9 +2262,24 @@ class EvaluationTests(unittest.TestCase):
 
         variants = (
             ("missing", (observations[0], "", "Result: 1 passed"), 0, f"missing {second}"),
-            ("duplicate", (observations[0], observations[0], observations[1], *summary), 0, f"{first} was observed 2 times"),
-            ("skipped", (observations[0], observations[1].replace("(0.2ms)", "(skipped)"), "", "Result: 1 passed, 1 skipped"), 0, f"missing {second}"),
-            ("excluded", (observations[0], observations[1].replace("(0.2ms)", "(excluded)"), "", "Result: 1 passed, 1 excluded"), 0, f"missing {second}"),
+            (
+                "duplicate",
+                (observations[0], observations[0], observations[1], *summary),
+                0,
+                f"{first} was observed 2 times",
+            ),
+            (
+                "skipped",
+                (observations[0], observations[1].replace("(0.2ms)", "(skipped)"), "", "Result: 1 passed, 1 skipped"),
+                0,
+                f"missing {second}",
+            ),
+            (
+                "excluded",
+                (observations[0], observations[1].replace("(0.2ms)", "(excluded)"), "", "Result: 1 passed, 1 excluded"),
+                0,
+                f"missing {second}",
+            ),
             (
                 "describe-prefixed",
                 (observations[0], "\r  * test a describe block " + second + " (0.2ms) [L#12]", "", "Result: 2 passed"),
@@ -2155,7 +2287,12 @@ class EvaluationTests(unittest.TestCase):
                 f"missing {second}",
             ),
             ("exited-non-zero", observations + summary, 1, "the traced run exited with 1"),
-            ("reported-failures", (observations[0], observations[1], "", "Result: 1/4 passed", "Failed: 3 tests"), 0, "the traced run reported 3 failures"),
+            (
+                "reported-failures",
+                (observations[0], observations[1], "", "Result: 1/4 passed", "Failed: 3 tests"),
+                0,
+                "the traced run reported 3 failures",
+            ),
             (
                 "reported-failures-tail",
                 (observations[0], observations[1], "", "Result: 2 passed, 3 failed"),
@@ -2208,11 +2345,13 @@ class EvaluationTests(unittest.TestCase):
         # must map the frozen spelling back or every launched test reads as missing.
         frozen = "receipts\nrecover through the boundary"
         rendered = frozen.replace("\n", " ")
-        mix = self.install_fake_mix((
-            "\r  * test " + rendered + " (0.4ms) [L#7]",
-            "",
-            "Result: 1 passed",
-        ))
+        mix = self.install_fake_mix(
+            (
+                "\r  * test " + rendered + " (0.4ms) [L#7]",
+                "",
+                "Result: 1 passed",
+            )
+        )
         run = self.root / "run-exunit-newline"
         task = self.task(gates=[self.exunit_gate(mix, tests=(frozen,))])
         self.accepted_run(task=task, run=run)
@@ -2235,21 +2374,38 @@ class EvaluationTests(unittest.TestCase):
         plain = {"id": "gate", "cwd": ".", "argv": ["mix", "test"]}
         cases = (
             ("tests-without-files", {**plain, "exunit_tests": ["test one"]}, "exunit_tests requires exunit_files"),
-            ("files-without-tests", {**plain, "exunit_files": ["test/x_test.exs"]}, "exunit_files requires exunit_tests"),
+            (
+                "files-without-tests",
+                {**plain, "exunit_files": ["test/x_test.exs"]},
+                "exunit_files requires exunit_tests",
+            ),
             (
                 "non-mix-argv",
-                {"id": "gate", "cwd": ".", "argv": [sys.executable, "-c", "pass"],
-                 "exunit_files": ["test/x_test.exs"], "exunit_tests": ["test one"]},
+                {
+                    "id": "gate",
+                    "cwd": ".",
+                    "argv": [sys.executable, "-c", "pass"],
+                    "exunit_files": ["test/x_test.exs"],
+                    "exunit_tests": ["test one"],
+                },
                 "requires a mix gate command",
             ),
             (
                 "too-many-tests",
-                {**plain, "exunit_files": ["test/x_test.exs"], "exunit_tests": [f"test {index}" for index in range(51)]},
+                {
+                    **plain,
+                    "exunit_files": ["test/x_test.exs"],
+                    "exunit_tests": [f"test {index}" for index in range(51)],
+                },
                 "at most 50 tests",
             ),
             (
                 "too-many-files",
-                {**plain, "exunit_files": [f"test/{index}_test.exs" for index in range(21)], "exunit_tests": ["test one"]},
+                {
+                    **plain,
+                    "exunit_files": [f"test/{index}_test.exs" for index in range(21)],
+                    "exunit_tests": ["test one"],
+                },
                 "at most 20 files",
             ),
             (
@@ -2264,7 +2420,11 @@ class EvaluationTests(unittest.TestCase):
             ),
             (
                 "aliasing-tests",
-                {**plain, "exunit_files": ["test/x_test.exs"], "exunit_tests": ["receipts\nrecover", "receipts recover"]},
+                {
+                    **plain,
+                    "exunit_files": ["test/x_test.exs"],
+                    "exunit_tests": ["receipts\nrecover", "receipts recover"],
+                },
                 "unique after newlines render as spaces",
             ),
             (
@@ -2304,12 +2464,16 @@ class EvaluationTests(unittest.TestCase):
     def test_gate_environment_is_applied_and_recorded(self) -> None:
         probe = "import os\nprint(os.environ.get('SYMMETRY_FIXTURE_MODE', 'missing'))\n"
         run = self.root / "run-gate-env"
-        task = self.task(gates=[{
-            "id": "env-gate",
-            "cwd": ".",
-            "argv": [sys.executable, "-c", probe],
-            "env": {"SYMMETRY_FIXTURE_MODE": "measured-fixture"},
-        }])
+        task = self.task(
+            gates=[
+                {
+                    "id": "env-gate",
+                    "cwd": ".",
+                    "argv": [sys.executable, "-c", probe],
+                    "env": {"SYMMETRY_FIXTURE_MODE": "measured-fixture"},
+                }
+            ]
+        )
         self.accepted_run(task=task, run=run)
         gate_dir = run / "checks" / "attempt-0001" / "env-gate"
         self.assertEqual(
@@ -2362,12 +2526,14 @@ class EvaluationTests(unittest.TestCase):
         first = "committed harness session receipts recover through real Go HTTP after listener restarts"
         second = "a stale synchronization is reported as attention by the workspace read model"
         expected = (first, second)
-        mix = self.install_fake_mix((
-            "\r\x1b[32m  * test " + first + " (0.4ms) [L#7]\x1b[0m",
-            "\r  * test " + second + " (0.2ms) [L#12]",
-            "",
-            "Result: 2 passed",
-        ))
+        mix = self.install_fake_mix(
+            (
+                "\r\x1b[32m  * test " + first + " (0.4ms) [L#7]\x1b[0m",
+                "\r  * test " + second + " (0.2ms) [L#12]",
+                "",
+                "Result: 2 passed",
+            )
+        )
         run = self.root / "run-exunit-verify"
         task = self.task(gates=[self.exunit_gate(mix, tests=expected)])
         self.assert_ok(self.prepare(task=task, run=run))
@@ -2378,8 +2544,10 @@ class EvaluationTests(unittest.TestCase):
         result_path = gate_dir / "result.json"
         original_raw = result_path.read_bytes()
         original_stdout = (gate_dir / "exunit.stdout.bin").read_bytes()
-        self.assertEqual(sorted(entry.name for entry in gate_dir.iterdir()),
-                         ["exunit.stderr.bin", "exunit.stdout.bin", "result.json", "stderr.bin", "stdout.bin"])
+        self.assertEqual(
+            sorted(entry.name for entry in gate_dir.iterdir()),
+            ["exunit.stderr.bin", "exunit.stdout.bin", "result.json", "stderr.bin", "stdout.bin"],
+        )
 
         def mutate_exit_code(result, directory):
             result["exunit_exit_code"] = 7
@@ -2512,9 +2680,7 @@ class EvaluationTests(unittest.TestCase):
         self.assert_ok(self.seal(run=run))
         checked = self.check(run=run)
         self.assertNotEqual(checked.returncode, 0, checked.stdout)
-        result = json.loads(
-            (run / "checks" / "attempt-0001" / "plain" / "result.json").read_text(encoding="utf-8")
-        )
+        result = json.loads((run / "checks" / "attempt-0001" / "plain" / "result.json").read_text(encoding="utf-8"))
         self.assertIn("source changed while executing this gate", result["error"])
         self.assertFalse(result["passed"])
 
@@ -2596,9 +2762,7 @@ class EvaluationTests(unittest.TestCase):
     def test_vitest_report_gate_requires_every_named_test_once(self) -> None:
         first, second = VITEST_NAMED_TESTS
         expected = (first, second)
-        entry = self.install_fake_vitest(
-            self.vitest_report(((first, "passed", ()), (second, "passed", ())))
-        )
+        entry = self.install_fake_vitest(self.vitest_report(((first, "passed", ()), (second, "passed", ()))))
         run = self.root / "run-vitest-passing"
         task = self.task(gates=[self.vitest_gate(entry, tests=expected)])
         self.accepted_run(task=task, run=run)
@@ -2616,8 +2780,13 @@ class EvaluationTests(unittest.TestCase):
         self.assertEqual(
             result["vitest_argv"],
             [
-                "node", str(entry), "run", "--reporter=json", "--outputFile",
-                str(gate_dir / "vitest-report.json"), "src/witness.test.tsx",
+                "node",
+                str(entry),
+                "run",
+                "--reporter=json",
+                "--outputFile",
+                str(gate_dir / "vitest-report.json"),
+                "src/witness.test.tsx",
             ],
         )
         self.assertTrue((gate_dir / "vitest-report.json").is_file())
@@ -2657,9 +2826,7 @@ class EvaluationTests(unittest.TestCase):
             ),
             (
                 "summary-failed",
-                cls.vitest_report(
-                    ((first, "passed", ()), (second, "failed", ())), success=False, failed=1
-                ),
+                cls.vitest_report(((first, "passed", ()), (second, "failed", ())), success=False, failed=1),
                 0,
                 True,
                 "does not record a successful run",
@@ -2708,22 +2875,35 @@ class EvaluationTests(unittest.TestCase):
             ),
             (
                 "assertions-not-a-list",
-                {"success": True, "numTotalTests": 2, "numFailedTests": 0,
-                 "testResults": [{"assertionResults": "nope"}]},
+                {
+                    "success": True,
+                    "numTotalTests": 2,
+                    "numFailedTests": 0,
+                    "testResults": [{"assertionResults": "nope"}],
+                },
                 0,
                 True,
                 "carries a file result without assertions",
             ),
             (
                 "assertion-without-fields",
-                {"success": True, "numTotalTests": 2, "numFailedTests": 0,
-                 "testResults": [{"assertionResults": [{"fullName": 1}]}]},
+                {
+                    "success": True,
+                    "numTotalTests": 2,
+                    "numFailedTests": 0,
+                    "testResults": [{"assertionResults": [{"fullName": 1}]}],
+                },
                 0,
                 True,
                 "carries an assertion without a name, status or ancestor list",
             ),
-            ("no-report", cls.vitest_report(((first, "passed", ()), (second, "passed", ()))), 0, False,
-             "wrote no readable JSON report"),
+            (
+                "no-report",
+                cls.vitest_report(((first, "passed", ()), (second, "passed", ()))),
+                0,
+                False,
+                "wrote no readable JSON report",
+            ),
             (
                 "report-exit-nonzero",
                 cls.vitest_report(((first, "passed", ()), (second, "passed", ()))),
@@ -2738,9 +2918,7 @@ class EvaluationTests(unittest.TestCase):
         expected = VITEST_NAMED_TESTS
         for label, report, report_exit, write_report, needle in self.vitest_refusal_variants():
             with self.subTest(case=label):
-                entry = self.install_fake_vitest(
-                    report, report_exit=report_exit, write_report=write_report
-                )
+                entry = self.install_fake_vitest(report, report_exit=report_exit, write_report=write_report)
                 run = self.root / ("run-vitest-" + label)
                 task = self.task(gates=[self.vitest_gate(entry, tests=expected)])
                 self.assert_ok(self.prepare(task=task, run=run))
@@ -2757,8 +2935,13 @@ class EvaluationTests(unittest.TestCase):
                 self.assertEqual(
                     result["vitest_argv"],
                     [
-                        "node", str(entry), "run", "--reporter=json", "--outputFile",
-                        str(gate_dir / "vitest-report.json"), "src/witness.test.tsx",
+                        "node",
+                        str(entry),
+                        "run",
+                        "--reporter=json",
+                        "--outputFile",
+                        str(gate_dir / "vitest-report.json"),
+                        "src/witness.test.tsx",
                     ],
                 )
                 self.assertEqual(result["vitest_exit_code"], report_exit)
@@ -2797,7 +2980,7 @@ class EvaluationTests(unittest.TestCase):
                 raw = b"" if not write_report else json.dumps(document).encode("utf-8")
                 message, executed = exercise(
                     runner.vitest_report_detail,
-                    lambda: runner.vitest_report_detail(VITEST_NAMED_TESTS, report_exit, raw),
+                    functools.partial(runner.vitest_report_detail, VITEST_NAMED_TESTS, report_exit, raw),
                 )
                 self.assertIn(needle, message or "", label)
                 hit = sorted(inventory_lines & set(executed))
@@ -2807,8 +2990,7 @@ class EvaluationTests(unittest.TestCase):
         print(
             f"vitest_report_detail refusal shapes: {len(inventory)} returns, "
             f"{len(reached)} reached by the suite's malformed-report cases, "
-            f"{len(uncovered)} unreached: "
-            + ", ".join(f"{text} (line {line})" for line, _kind, text in uncovered)
+            f"{len(uncovered)} unreached: " + ", ".join(f"{text} (line {line})" for line, _kind, text in uncovered)
         )
         self.assertEqual(
             [(kind, text) for _line, kind, text in uncovered],
@@ -2877,20 +3059,23 @@ class EvaluationTests(unittest.TestCase):
             ),
             (
                 "non-vitest-argv",
-                {"id": "gate", "cwd": ".", "argv": ["node", "eslint/bin/eslint.js", "."],
-                 "vitest_files": ["src/x.test.tsx"], "vitest_tests": ["one"]},
+                {
+                    "id": "gate",
+                    "cwd": ".",
+                    "argv": ["node", "eslint/bin/eslint.js", "."],
+                    "vitest_files": ["src/x.test.tsx"],
+                    "vitest_tests": ["one"],
+                },
                 "requires a vitest entry-point gate command",
             ),
             (
                 "too-many-tests",
-                {**plain, "vitest_files": ["src/x.test.tsx"],
-                 "vitest_tests": [f"case {index}" for index in range(51)]},
+                {**plain, "vitest_files": ["src/x.test.tsx"], "vitest_tests": [f"case {index}" for index in range(51)]},
                 "at most 50 tests",
             ),
             (
                 "too-many-files",
-                {**plain, "vitest_files": [f"src/{index}.test.tsx" for index in range(21)],
-                 "vitest_tests": ["one"]},
+                {**plain, "vitest_files": [f"src/{index}.test.tsx" for index in range(21)], "vitest_tests": ["one"]},
                 "at most 20 files",
             ),
             (
@@ -2922,9 +3107,7 @@ class EvaluationTests(unittest.TestCase):
     def test_vitest_report_evidence_is_reverified_from_stored_bytes(self) -> None:
         first, second = VITEST_NAMED_TESTS
         expected = (first, second)
-        entry = self.install_fake_vitest(
-            self.vitest_report(((first, "passed", ()), (second, "passed", ())))
-        )
+        entry = self.install_fake_vitest(self.vitest_report(((first, "passed", ()), (second, "passed", ()))))
         run = self.root / "run-vitest-verify"
         task = self.task(gates=[self.vitest_gate(entry, tests=expected)])
         self.accepted_run(task=task, run=run)
@@ -2935,13 +3118,25 @@ class EvaluationTests(unittest.TestCase):
         self.assertEqual(
             sorted(entry_name.name for entry_name in gate_dir.iterdir()),
             [
-                "result.json", "stderr.bin", "stdout.bin",
-                "vitest-report.json", "vitest.stderr.bin", "vitest.stdout.bin",
+                "result.json",
+                "stderr.bin",
+                "stdout.bin",
+                "vitest-report.json",
+                "vitest.stderr.bin",
+                "vitest.stdout.bin",
             ],
         )
         cases = (
-            ("tests", lambda value: value.update(vitest_tests=["other"]), "does not match the frozen gate vitest_tests"),
-            ("files", lambda value: value.update(vitest_files=["src/other.test.tsx"]), "does not match the frozen gate vitest_files"),
+            (
+                "tests",
+                lambda value: value.update(vitest_tests=["other"]),
+                "does not match the frozen gate vitest_tests",
+            ),
+            (
+                "files",
+                lambda value: value.update(vitest_files=["src/other.test.tsx"]),
+                "does not match the frozen gate vitest_files",
+            ),
             ("exit-code", lambda value: value.update(vitest_exit_code=7), "but its evidence says"),
             (
                 "commands",
@@ -3101,7 +3296,9 @@ class EvaluationTests(unittest.TestCase):
             if os.name == "nt":
                 completed = subprocess.run(
                     ["cmd", "/c", "mklink", "/J", str(link), str(target)],
-                    capture_output=True, text=True, check=False,
+                    capture_output=True,
+                    text=True,
+                    check=False,
                 )
                 if completed.returncode != 0:
                     self.skipTest(f"junction creation is unavailable: {completed.stdout}{completed.stderr}")
@@ -3137,9 +3334,9 @@ class EvaluationTests(unittest.TestCase):
         self.write(tree / ".modules.yaml", "hoistPattern: []\n")
         log = self.root / "pnpm-install.log"
         log.write_bytes(b"Progress: resolved 1, reused 0, downloaded 1\nDone in 1.2s\n")
-        bound = self.assert_ok(self.cli(
-            "bind-dependencies", "--run-dir", str(run), "--tree", str(tree), "--log", str(log)
-        ))
+        bound = self.assert_ok(
+            self.cli("bind-dependencies", "--run-dir", str(run), "--tree", str(tree), "--log", str(log))
+        )
         self.assertEqual(bound["tree_entries"], 2)
         self.assertEqual((run / "provisioning" / "install.log").read_bytes(), log.read_bytes())
         provisioning = self.run_record(run)["environment"]["provisioning"]
@@ -3152,9 +3349,7 @@ class EvaluationTests(unittest.TestCase):
         self.assertEqual(provisioning["install_log_sha256"], bound["install_log_sha256"])
         self.assertEqual(provisioning["install_log_bytes"], len(log.read_bytes()))
         # The recorded digest re-verifies against the tree and refuses a changed tree.
-        self.assert_ok(self.cli(
-            "bind-dependencies", "--run-dir", str(run), "--tree", str(tree), "--check"
-        ))
+        self.assert_ok(self.cli("bind-dependencies", "--run-dir", str(run), "--tree", str(tree), "--check"))
         self.write(tree / "react" / "index.js", "module.exports = { changed: true }\n")
         # Loading the run already recomputes the digest, before --check can compare it.
         self.assert_refused(self.receipt(self.usage_rows(), run=run), "changed after it was recorded")
@@ -3162,24 +3357,22 @@ class EvaluationTests(unittest.TestCase):
         # Pointing --check at a different tree is a different refusal.
         other = self.root / "runs" / "other-node_modules"
         self.write(other / "react" / "index.js", "module.exports = {}\n")
-        self.assert_refused(self.cli(
-            "bind-dependencies", "--run-dir", str(run), "--tree", str(other), "--check"
-        ), "tree no longer matches")
-        self.assert_ok(self.cli(
-            "bind-dependencies", "--run-dir", str(run), "--tree", str(tree), "--check"
-        ))
+        self.assert_refused(
+            self.cli("bind-dependencies", "--run-dir", str(run), "--tree", str(other), "--check"),
+            "tree no longer matches",
+        )
+        self.assert_ok(self.cli("bind-dependencies", "--run-dir", str(run), "--tree", str(tree), "--check"))
         # One provisioning step per run, and the receipt states it.
-        self.assert_refused(self.cli(
-            "bind-dependencies", "--run-dir", str(run), "--tree", str(tree), "--log", str(log)
-        ), "already records a provisioning step")
+        self.assert_refused(
+            self.cli("bind-dependencies", "--run-dir", str(run), "--tree", str(tree), "--log", str(log)),
+            "already records a provisioning step",
+        )
         self.edit("app/main.go", EDITED_MAIN_GO, run=run)
         self.assert_ok(self.seal(run=run))
         checked = self.assert_ok(self.check(run=run))
         self.assert_ok(self.import_review(self.review_record(checked, run=run), run=run))
         self.assert_ok(self.receipt(self.usage_rows(), run=run))
-        self.assertEqual(
-            self.stored_receipt(run)["environment"]["provisioning"]["tree_digest"], bound["tree_digest"]
-        )
+        self.assertEqual(self.stored_receipt(run)["environment"]["provisioning"]["tree_digest"], bound["tree_digest"])
         # A tree pruned after the run refuses at load through the missing-tree arm, the
         # refusal that guards the digest recomputation every later command depends on.
         moved = self.root / "node_modules-moved-aside"
@@ -3201,38 +3394,45 @@ class EvaluationTests(unittest.TestCase):
         # lives outside it.
         inside = self.checkout(run) / "node_modules"
         self.write(inside / "react" / "index.js", "module.exports = {}\n")
-        self.assert_refused(self.cli(
-            "bind-dependencies", "--run-dir", str(run), "--tree", str(inside), "--log", str(log)
-        ), "outside the sealed checkout")
+        self.assert_refused(
+            self.cli("bind-dependencies", "--run-dir", str(run), "--tree", str(inside), "--log", str(log)),
+            "outside the sealed checkout",
+        )
         # The checkout-local tree would be what every gate resolves first, so the
         # fixture removes it before binding the hoisted tree (F01's resolution check).
         shutil.rmtree(inside)
-        self.assert_refused(self.cli(
-            "bind-dependencies", "--run-dir", str(run), "--tree", str(tree)
-        ), "requires --log")
+        self.assert_refused(self.cli("bind-dependencies", "--run-dir", str(run), "--tree", str(tree)), "requires --log")
         empty = self.root / "empty-install.log"
         empty.write_bytes(b"")
-        self.assert_refused(self.cli(
-            "bind-dependencies", "--run-dir", str(run), "--tree", str(tree), "--log", str(empty)
-        ), "log is empty")
-        self.assert_refused(self.cli(
-            "bind-dependencies", "--run-dir", str(run), "--tree", str(tree),
-            "--log", str(self.root / "missing.log"),
-        ), "cannot read dependency provisioning log")
+        self.assert_refused(
+            self.cli("bind-dependencies", "--run-dir", str(run), "--tree", str(tree), "--log", str(empty)),
+            "log is empty",
+        )
+        self.assert_refused(
+            self.cli(
+                "bind-dependencies",
+                "--run-dir",
+                str(run),
+                "--tree",
+                str(tree),
+                "--log",
+                str(self.root / "missing.log"),
+            ),
+            "cannot read dependency provisioning log",
+        )
         # An unrecorded run cannot check a provisioning step, and a recorded block is
         # refused when its shape is tampered with.
-        self.assert_refused(self.cli(
-            "bind-dependencies", "--run-dir", str(run), "--tree", str(tree), "--check"
-        ), "no provisioning step")
-        self.assert_ok(self.cli(
-            "bind-dependencies", "--run-dir", str(run), "--tree", str(tree), "--log", str(log)
-        ))
+        self.assert_refused(
+            self.cli("bind-dependencies", "--run-dir", str(run), "--tree", str(tree), "--check"), "no provisioning step"
+        )
+        self.assert_ok(self.cli("bind-dependencies", "--run-dir", str(run), "--tree", str(tree), "--log", str(log)))
         record = self.run_record(run)
         record["environment"]["provisioning"]["tree_digest"] = "sha256:" + "0" * 64
         self.write_json(run / "run.json", record)
-        self.assert_refused(self.cli(
-            "bind-dependencies", "--run-dir", str(run), "--tree", str(tree), "--check"
-        ), "changed after it was recorded")
+        self.assert_refused(
+            self.cli("bind-dependencies", "--run-dir", str(run), "--tree", str(tree), "--check"),
+            "changed after it was recorded",
+        )
 
     def test_typescript_task_requires_a_bound_dependency_tree(self) -> None:
         run = self.root / "run-ts-requirement"
@@ -3252,24 +3452,49 @@ class EvaluationTests(unittest.TestCase):
         runner = load_runner_module()
         cases = (
             ({"language": "typescript", "gates": [{"id": "gate", "argv": ["go", "test", "./..."]}]}, True),
-            ({"language": "go", "gates": [
-                {"id": "gate", "argv": ["node", "tools/run.mjs", "run"], "vitest_tests": ["a"]}]}, True),
-            ({"language": "go", "gates": [
-                {"id": "gate", "argv": ["node", ".bin/vitest.mjs", "run"]}]}, True),
+            (
+                {
+                    "language": "go",
+                    "gates": [{"id": "gate", "argv": ["node", "tools/run.mjs", "run"], "vitest_tests": ["a"]}],
+                },
+                True,
+            ),
+            ({"language": "go", "gates": [{"id": "gate", "argv": ["node", ".bin/vitest.mjs", "run"]}]}, True),
             # The launcher's own flags stand between the interpreter and the entry; the
             # predicate must see the entry past them (F09).
-            ({"language": "go", "gates": [
-                {"id": "gate", "argv": ["node", "--no-warnings", "x/vitest.mjs", "run"]}]}, True),
-            ({"language": "go", "gates": [
-                {"id": "gate", "argv": ["node", "--max-old-space-size=4096", "vitest.mjs", "run"]}]}, True),
+            (
+                {"language": "go", "gates": [{"id": "gate", "argv": ["node", "--no-warnings", "x/vitest.mjs", "run"]}]},
+                True,
+            ),
+            (
+                {
+                    "language": "go",
+                    "gates": [{"id": "gate", "argv": ["node", "--max-old-space-size=4096", "vitest.mjs", "run"]}],
+                },
+                True,
+            ),
             # A non-vitest entry file stays a non-vitest invocation, flags or not.
-            ({"language": "go", "gates": [
-                {"id": "gate", "argv": ["node", "--no-warnings", "run.mjs", "run"]}]}, False),
+            ({"language": "go", "gates": [{"id": "gate", "argv": ["node", "--no-warnings", "run.mjs", "run"]}]}, False),
             # A value-taking launcher flag hides its value, not the entry behind it
             # (STD-A04: this was the review's exact spelling).
-            ({"language": "go", "gates": [
-                {"id": "gate", "argv": ["node", "--require", "./setup.cjs",
-                                        "../../../node_modules/vitest/vitest.mjs", "run"]}]}, True),
+            (
+                {
+                    "language": "go",
+                    "gates": [
+                        {
+                            "id": "gate",
+                            "argv": [
+                                "node",
+                                "--require",
+                                "./setup.cjs",
+                                "../../../node_modules/vitest/vitest.mjs",
+                                "run",
+                            ],
+                        }
+                    ],
+                },
+                True,
+            ),
             ({"language": "go", "gates": [{"id": "gate", "argv": ["go", "test", "./..."]}]}, False),
             ({"language": "go"}, False),
         )
@@ -3312,20 +3537,32 @@ class EvaluationTests(unittest.TestCase):
         for argv, expected in cases:
             with self.subTest(argv=argv):
                 self.assertEqual(runner.is_vitest_entry(argv), expected)
-        gate = runner.validate_gate({
-            "id": "gate", "cwd": ".", "argv": ["node", "--no-warnings", "x/vitest.mjs", "run"],
-            "vitest_files": ["src/x.test.tsx"], "vitest_tests": ["one"],
-        }, 0)
+        gate = runner.validate_gate(
+            {
+                "id": "gate",
+                "cwd": ".",
+                "argv": ["node", "--no-warnings", "x/vitest.mjs", "run"],
+                "vitest_files": ["src/x.test.tsx"],
+                "vitest_tests": ["one"],
+            },
+            0,
+        )
         derived = runner.vitest_report_argv(gate, pathlib.Path("gate-dir"))
         self.assertEqual(derived[:4], ["node", "--no-warnings", "x/vitest.mjs", "run"])
         self.assertIn("--reporter=json", derived)
         self.assertEqual(derived[-1], "src/x.test.tsx")
         # The derived report command reuses the launcher, the value-taking flag and
         # its value up to the entry, so it reruns the declared spelling.
-        flagged = runner.validate_gate({
-            "id": "gate", "cwd": ".", "argv": ["node", "--require", "./setup.cjs", "x/vitest.mjs", "run"],
-            "vitest_files": ["src/x.test.tsx"], "vitest_tests": ["one"],
-        }, 0)
+        flagged = runner.validate_gate(
+            {
+                "id": "gate",
+                "cwd": ".",
+                "argv": ["node", "--require", "./setup.cjs", "x/vitest.mjs", "run"],
+                "vitest_files": ["src/x.test.tsx"],
+                "vitest_tests": ["one"],
+            },
+            0,
+        )
         derived = runner.vitest_report_argv(flagged, pathlib.Path("gate-dir"))
         self.assertEqual(derived[:5], ["node", "--require", "./setup.cjs", "x/vitest.mjs", "run"])
 
@@ -3362,26 +3599,22 @@ class EvaluationTests(unittest.TestCase):
         self.write(resolved / "react" / "index.js", "module.exports = {}\n")
         decoy = self.root / "decoy-node_modules"
         self.write(decoy / "react" / "index.js", "module.exports = {}\n")
-        self.assert_refused(self.cli(
-            "bind-dependencies", "--run-dir", str(run), "--tree", str(decoy), "--log", str(log)
-        ), "the gates execute from")
-        self.assert_ok(self.cli(
-            "bind-dependencies", "--run-dir", str(run), "--tree", str(resolved), "--log", str(log)
-        ))
-        self.assert_ok(self.cli(
-            "bind-dependencies", "--run-dir", str(run), "--tree", str(resolved), "--check"
-        ))
+        self.assert_refused(
+            self.cli("bind-dependencies", "--run-dir", str(run), "--tree", str(decoy), "--log", str(log)),
+            "the gates execute from",
+        )
+        self.assert_ok(self.cli("bind-dependencies", "--run-dir", str(run), "--tree", str(resolved), "--log", str(log)))
+        self.assert_ok(self.cli("bind-dependencies", "--run-dir", str(run), "--tree", str(resolved), "--check"))
         # A nearer tree inside the checkout shadows the bound one: the gates would
         # resolve from it, so even --check refuses the now-stale binding.
         shadow = self.checkout(run) / "node_modules"
         self.write(shadow / "react" / "index.js", "module.exports = {}\n")
-        self.assert_refused(self.cli(
-            "bind-dependencies", "--run-dir", str(run), "--tree", str(resolved), "--check"
-        ), "the gates execute from")
+        self.assert_refused(
+            self.cli("bind-dependencies", "--run-dir", str(run), "--tree", str(resolved), "--check"),
+            "the gates execute from",
+        )
         shutil.rmtree(shadow)
-        self.assert_ok(self.cli(
-            "bind-dependencies", "--run-dir", str(run), "--tree", str(resolved), "--check"
-        ))
+        self.assert_ok(self.cli("bind-dependencies", "--run-dir", str(run), "--tree", str(resolved), "--check"))
 
     def test_a_late_bound_dependency_tree_requires_a_new_check(self) -> None:
         # F02: this run's task does not require provisioning, so nothing stopped the
@@ -3435,7 +3668,9 @@ class EvaluationTests(unittest.TestCase):
         if os.name == "nt":
             created = subprocess.run(
                 ["cmd", "/c", "mklink", "/J", str(placeholder), str(other)],
-                capture_output=True, text=True, check=False,
+                capture_output=True,
+                text=True,
+                check=False,
             )
             if created.returncode != 0:
                 self.skipTest(f"junction creation is unavailable: {created.stdout}{created.stderr}")
@@ -3497,9 +3732,7 @@ class EvaluationTests(unittest.TestCase):
         )
         measured_run = self.root / "run-redaction-measured"
         self.accepted_run(run=measured_run, environment_json=measured)
-        self.assertEqual(
-            self.run_record(measured_run)["environment"]["measured_sanitizer_sha256"], digest
-        )
+        self.assertEqual(self.run_record(measured_run)["environment"]["measured_sanitizer_sha256"], digest)
         bound_run = self.root / "run-redaction-bound"
         self.accepted_run(run=bound_run, task=self.task(language="typescript"))
         provisioning = self.run_record(bound_run)["environment"]["provisioning"]
@@ -3508,14 +3741,20 @@ class EvaluationTests(unittest.TestCase):
         # is what makes the derivation refuse.
         tools = self.root / "changed-redaction-tools"
         tools.mkdir()
-        for name in (SCRIPT.name, "assert-go-test-json.py", "linux-v2-source-subject.py",
-                     "model-routing-record-sanitize.py"):
+        for name in (
+            SCRIPT.name,
+            "assert-go-test-json.py",
+            "linux-v2-source-subject.py",
+            "model-routing-record-sanitize.py",
+        ):
             shutil.copyfile(SCRIPT.with_name(name), tools / name)
 
         def run_copy(*arguments: str) -> subprocess.CompletedProcess:
             return subprocess.run(
                 [sys.executable, str(tools / SCRIPT.name), *arguments],
-                text=True, capture_output=True, check=False,
+                text=True,
+                capture_output=True,
+                check=False,
             )
 
         for run in (measured_run, bound_run):
@@ -3528,9 +3767,7 @@ class EvaluationTests(unittest.TestCase):
         try:
             for run in (measured_run, bound_run):
                 with self.subTest(run=run.name):
-                    derived = run_copy(
-                        "receipt", "--run-dir", str(run), "--usage", str(usage)
-                    )
+                    derived = run_copy("receipt", "--run-dir", str(run), "--usage", str(usage))
                     self.assert_refused(derived, "does not match")
                     self.assertIn("recorded redaction", derived.stderr)
                     accepted = run_copy("accept", "--run-dir", str(run))

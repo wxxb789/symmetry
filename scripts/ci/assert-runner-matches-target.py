@@ -92,9 +92,7 @@ def parse_target(triple: str) -> tuple[str, str]:
         if mapped:
             systems.append(mapped)
     if not systems:
-        raise TargetError(
-            f"no system field (for example linux or windows) in the middle of {triple!r}"
-        )
+        raise TargetError(f"no system field (for example linux or windows) in the middle of {triple!r}")
     if len(set(systems)) > 1:
         raise TargetError(f"conflicting system fields {sorted(set(systems))} in {triple!r}")
     return architecture, systems[0]
@@ -144,10 +142,7 @@ def main(argv: list[str]) -> int:
             file=sys.stderr,
         )
         return 1
-    print(
-        f"verified runner matches pinned Pi target {args.target}: "
-        f"uname -s={args.system!r} uname -m={args.machine!r}"
-    )
+    print(f"verified runner matches pinned Pi target {args.target}: uname -s={args.system!r} uname -m={args.machine!r}")
     return 0
 
 
