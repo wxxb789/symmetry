@@ -1,18 +1,21 @@
 # daemon-test-enablers plan — per-test goleak, `t.Parallel()` state tests, folded short waits
 
 Contract: `goal-rf-w1-08-daemon-test-enablers.md` (GDD, 2026-11-21), branch
-`wt-w1-08-daemon-test-enable`, baseline `origin/main` = `a3039f0` (this worktree's HEAD; re-verified
-against `git log`). Source: program plan §4 W1-08 (row), findings `daemon-app.md` F16 (59 test
-files, 1.4× prod LOC, 0 `t.Parallel()`, 5 ad-hoc sub-second waits, 149.1 s `internal/app` / 45.1 s
-`internal/state`, goleak proposal), plan review `plan-review-ds-1.md` P3-7 (the wait-site
-enumeration) and the binding `plan-review-opus-1.md` amendments (no package-level goleak TestMain;
-keep process-global-seam tests serial; the wave-1 go.mod owner).
+`refactor/rf-w1-08-daemon-test-enablers`; merge base with `origin/main` (then at `6817693`, checked
+2026-11-21) = `c8f2018`, and the branch is committed, not a dirty baseline: `aba4914` (the slice),
+then `9063ab3` (the `origin/main` merge). Source: program plan §4 W1-08 (row), findings
+`daemon-app.md` F16 (59 test files, 1.4× prod LOC, 0 `t.Parallel()`, 5 ad-hoc sub-second waits,
+149.1 s `internal/app` / 45.1 s `internal/state`, goleak proposal), plan review
+`plan-review-ds-1.md` P3-7 (the wait-site enumeration) and the binding `plan-review-opus-1.md`
+amendments (no package-level goleak TestMain; keep process-global-seam tests serial; the wave-1
+go.mod owner).
 
 ## Deliverable shape
 
 1. `daemon/go.mod`, `daemon/go.sum`: `go.uber.org/goleak v1.3.0` (test-only, MIT; `go mod tidy`
    form: one direct require plus the checksum lines tidy records).
-2. `daemon/internal/app/main_test.go` (new): `verifyNoLeakedGoroutines(tb)`, a `t.Cleanup` wrapper
+2. `daemon/internal/app/leak_check_test.go` (new; named for its content after the review, since it
+   deliberately has no `TestMain`): `verifyNoLeakedGoroutines(tb)`, a `t.Cleanup` wrapper
    that snapshots `goleak.IgnoreCurrent()` at the test's entry and passes it to `goleak.VerifyNone`
    with no other options, plus `TestLeakOracleDetectsLeakedGoroutine`, the self-check that drives
    that wrapper through a recording TB and fails if the oracle stops naming the goroutine parked by
@@ -73,8 +76,8 @@ mutation record.
 | --- | --- | --- | --- | --- |
 | 1 | `app_test.go:5588` TestCancelPreemptsBlockedInputInSameSnapshot | `select { <-terminated / time.After(500ms) }` then a bool into the final `Fatalf` | `select { <-input.terminated / time.After(testHangGuard) }` → `t.Fatal("cancel did not preempt blocked input")`; the blocked write is then released, so a preempted handler that won the race for `inputMu` cannot sit out `inputWriteTimeout` | cancel preemption of a blocked input |
 | 2 | `app_test.go:5698` TestScheduledSnapshotCancelPreemptsBlockedInputAndJoins | 10 ms poll loop with a 30 s deadline for `terminal_pending` + settled input | direct assertion at the existing `cancelPersisted` fence (the receipt is persisted under the run's input lock, which the preempted input command held until it recorded outcome + acknowledgement) | the preempted input is durably settled when the cancellation receipt lands |
-| 3 | `app_test.go:6915` TestScheduledCancelDuringClaimCompletesAfterDurableReceipt | `select { <-completion / time.After(100ms) }` | deterministic parked-state checks: completion channel open, command still in `daemon.queuedCommands`, no durable acknowledgement for `cancel-1` | no early completion before the durable acknowledgement |
-| 4 | `app_test.go:7107` TestRenewLeasesJoinsWorkersAfterShutdown | `select { <-done / time.After(200ms) }` plus post-release join wait | positive fence: wait until run-1's in-flight request barrier is released *by the drain loop* (2 → 1) while run-2 is parked; each poll probes `done`; then the post-release join wait stays | the loop joins cancelled workers before returning |
+| 3 | `app_test.go:6915` TestScheduledCancelDuringClaimCompletesAfterDurableReceipt | `select { <-completion / time.After(100ms) }` | `commandWG` join fence bounded by `testHangGuard` (a worker started for the unclaimed run reddens here), then the parked-state checks: completion channel open, command still in `daemon.queuedCommands`, no durable acknowledgement for `cancel-1` | no early completion before the durable acknowledgement, including one handed to a goroutine |
+| 4 | `app_test.go:7120` TestRenewLeasesJoinsWorkersAfterShutdown | `select { <-done / time.After(200ms) }` plus post-release join wait | positive fence: wait until run-1's in-flight request barrier is released *by the drain loop* (2 → 1) while run-2 is parked; each poll probes `done`; then the post-release join wait stays | the loop joins cancelled workers before returning |
 | 5 | `native_settlement_regression_test.go:1393` cleanup | silent `time.After(time.Second)` then `backgroundWG.Wait()` | `awaitNativeSettlementSignal(t, flushDone, "outbox flush did not stop after cancellation")` | the outbox flush stops after cancellation |
 
 Site 4's fence needs run-1's renewal to *return* rather than return an error, so that its request
@@ -136,23 +139,30 @@ Mutations (each applied, run, reverted; `git diff` clean for the mutated file af
 3. site 3: dispatch completes the unclaimed cancel command (`finishQueuedCommandLocked` before the
    return) → FAIL `app_test.go:6956: cancel command completed before its durable acknowledgement`
    (0.50 s), exit 1.
+3b. site 3, asynchronous class: dispatch falls through the unclaimed-cancel branch to
+   `commandWG.Add(1); go executeQueuedCommand`, which completes the command before any durable
+   receipt exists → `go test -count=5 -run '^TestScheduledCancelDuringClaimCompletesAfterDurableReceipt$' ./internal/app/`
+   → 5/5 FAIL `app_test.go:6969: cancel command completed before its durable acknowledgement`,
+   exit 1. The same mutation against the checks without the join fence was 5/5 green (round-1
+   review, scratch tree): the parked-state checks raced ahead of the unscheduled worker. The fence
+   keeps the old 100 ms window's verdict by joining the worker before sampling.
 4. site 4: the drain loop returns on cancellation instead of draining results → FAIL
    `app_test.go:7164: renewal loop returned before cancelled workers joined` (0.61 s), exit 1.
 5. site 5: the test's flush goroutine stops signalling `flushDone` → FAIL
    `native_settlement_regression_test.go:1421` and `:1393: outbox flush did not stop after
    cancellation` (60.14 s), exit 1 — the folded cleanup wait reddens on its own path too.
 6. planted goroutine leak in `TestCancelDuringClaimDefersUntilGrantAndNeverLaunchesAgent` →
-   `main_test.go:46: found unexpected goroutines: [Goroutine 9 in state select (no cases), with
+   `leak_check_test.go:46: found unexpected goroutines: [Goroutine 9 in state select (no cases), with
    … TestCancelDuringClaimDefersUntilGrantAndNeverLaunchesAgent.func1 on top of the stack … ]`,
    FAIL (0.51 s), exit 1 (re-run 2026-11-21 against the wrapper with its baseline snapshot).
 7. wrapper without the baseline snapshot (`goleak.VerifyNone(tb)`), with a residue goroutine parked
    by an earlier test in the package (temporary probe test, removed afterwards) → FAIL
-   `main_test.go:46: found unexpected goroutines: … TestTempResidueLeakProbe.func1 on top of the
+   `leak_check_test.go:46: found unexpected goroutines: … TestTempResidueLeakProbe.func1 on top of the
    stack …`, reported on
    `TestPersistentTerminalJournalFailureAfterUsageRetryDoesNotBlockOtherRunOutbox` (0.69 s), exit 1:
    the leak is attributed to a test that did not create it. With the baseline restored the same pair
    is green (both directions re-run 2026-11-21).
-8. `verifyNoLeakedGoroutines` reduced to a no-op → FAIL `main_test.go:69: verifyNoLeakedGoroutines
+8. `verifyNoLeakedGoroutines` reduced to a no-op → FAIL `leak_check_test.go:69: verifyNoLeakedGoroutines
    reported no failure while a goroutine was parked in this test; the per-test leak oracle is inert`,
    exit 1: the in-tree self-test, not a mutation record, is what pins the oracle.
 
@@ -211,15 +221,25 @@ cache, which was seeded from the host cache because the distro has no egress.
    `cancelPersisted` fires — waiting longer could only observe the same journal. The old loop was
    a 30 s *tolerance* for a state that is atomic with the fence; the assertion is strictly
    stronger (it fails if that atomicity regresses).
-3. **Sites 3 and 4 replace negative windows with parked-state checks.** Both waits asserted "the
-   bad thing has not happened yet", which no fence can prove in general; the replacement asserts
-   the *state* that makes the bad thing impossible at that instant (command parked, unacknowledged;
-   worker parked, loop alive) and keeps the positive waits that pin the good thing. Residual: a
+3. **Site 3 joins `commandWG` before its parked-state checks; site 4 uses parked-state checks.**
+   Site 3's old `time.After(100ms)` asserted "the bad thing has not happened yet"; a synchronous
+   check cannot prove that once completion can be handed to a goroutine. The replacement first
+   joins any command worker that dispatch started (bounded by `testHangGuard`), so the completion
+   channel, queue and journal checks run after that worker has finished and are a verdict rather
+   than a sample (mutation 3b: 5/5 red with the fence; the same mutation was 5/5 green against the
+   checks alone). Site 4 asserts the *state* that makes the bad thing impossible at that instant
+   (worker parked, loop alive) and keeps the positive waits that pin the good thing. Residual: a
    regression that returns *after* releasing the barriers but before the other worker returns is
    caught only if it closes `done` before the next poll's probe — the same scheduling-dependent
    detection the old window had, now anchored to a causal event instead of a wall clock.
-4. **Subtests stay sequential** (reason above); the acceptance is about package wall time, and the
-   parents are the unit that gains concurrency.
+4. **Own-store subtests are parallel; parent-store and seam subtests stay sequential.** The 51
+   subtests that open their own store in their first lines are isolated by construction (own
+   `t.TempDir()` store, no parent state, no process-global seam), the same rule the top-level tests
+   follow; the round-1 review verified the capture sets (per-iteration loop variables and the pure
+   `newPending` helper) and that the seven seam-assigning top-level tests and their subtests stay
+   serial. Subtests that use the parent's store stay sequential, so the parents and their
+   own-store subtests are both units of concurrency; the acceptance is about package wall time, and
+   the 30-case Linux v2 admission table's subtests were its critical path.
 5. **`awaitTestCondition` helper** (one user, next to `testHangGuard`): site 4's fence needs a
    compound condition plus a `done` probe inside the loop; the helper keeps one poll convention
    with the hang guard as the single failure bound and a comment that its interval is never a
@@ -230,13 +250,13 @@ cache, which was seeded from the host cache because the distro has no egress.
 
 ## Out of scope (with reasons)
 
-- The other pinned waits in `internal/app` tests: `app_test.go:5492` (3 s) and `:7094` (1 s),
+- The other pinned waits in `internal/app` tests: `app_test.go:5492` (3 s) and `:7107` (1 s),
   `atomic_terminal_ack_interleaving_test.go:48` (2 s), `cleanup_test.go:655` (1 ms poll),
   `harness_test.go:4780` (5 ms poll). None is in the contract's enumerated five
   (`plan-review-ds-1.md` P3-7) and the wall-clock burn-down is W4-13's slice; touching them here
   would widen a test-enabler slice into a timing-semantics change of other scenarios.
 - `app_test.go` scenario split (W3-15), ExUnit `async:` conversion (W3-14), production code
-  (except the `docs/TODO.md` entry), subtest parallelization in `internal/state`.
+  (except the `docs/TODO.md` entry).
 - `state_windows_test.go:107`'s ≤750 ms bound: it stays serial by the seam rule, so no threshold
   change is needed or made.
 

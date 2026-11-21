@@ -681,6 +681,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       track the goroutine in `daemon.workers` with a documented bound and assert its exit at
       shutdown. Pin it with a test that a blocked writer returns after timeout + terminate.
       Consequence carried meanwhile by refactor slice rf-w1-08: `internal/app` verifies goroutines
-      per-test (`verifyNoLeakedGoroutines` in `daemon/internal/app/main_test.go`) instead of a
+      per-test (`verifyNoLeakedGoroutines` in `daemon/internal/app/leak_check_test.go`) instead of a
       package-wide `goleak.TestMain`, because this path would force wildcard ignore lists that would
       hide real leaks.
