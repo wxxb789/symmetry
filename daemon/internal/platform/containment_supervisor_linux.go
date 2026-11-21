@@ -355,7 +355,7 @@ func writeLinuxSupervisorOwnerRecoveryAuthenticatedMarker(marker linuxSupervisor
 		return errors.New("Linux supervisor authenticated owner-recovery marker has no latched owner-loss proof category")
 	}
 	contents := fmt.Sprintf("operation=%s\ntarget_pid=%d\nhelper_pid=%d\nowner_loss_proof_category=%s\n", operation, targetPID, helperPID, proofCategory)
-	if err := writeLinuxSupervisorTestMarker(marker.path, contents); err != nil {
+	if err := writeLinuxSupervisorAbsentWitnessMarker(marker.path, contents); err != nil {
 		return fmt.Errorf("publish Linux supervisor authenticated owner-recovery marker: %w", err)
 	}
 	return nil
@@ -416,7 +416,7 @@ func validateLinuxSupervisorOwnerLossProofBarrierEnv() error {
 }
 
 func waitForLinuxSupervisorOwnerLossProofBarrier(barrier linuxSupervisorOwnerLossProofBarrier) error {
-	if err := writeLinuxSupervisorTestMarker(barrier.reachedPath, "post_reap_pre_proof\n"); err != nil {
+	if err := writeLinuxSupervisorAbsentWitnessMarker(barrier.reachedPath, "post_reap_pre_proof\n"); err != nil {
 		return fmt.Errorf("publish Linux supervisor owner-loss proof barrier: %w", err)
 	}
 	deadline := time.NewTimer(linuxSupervisorReleaseBarrierTimeout)
@@ -442,7 +442,7 @@ func writeLinuxSupervisorOwnerLossProofResult(barrier linuxSupervisorOwnerLossPr
 	if category := linuxSupervisorOwnerLossProofResultCategory(proofErr); category != "" {
 		contents += "category=" + category + "\n"
 	}
-	if err := writeLinuxSupervisorTestMarker(barrier.resultPath, contents); err != nil {
+	if err := writeLinuxSupervisorAbsentWitnessMarker(barrier.resultPath, contents); err != nil {
 		return fmt.Errorf("publish Linux supervisor owner-loss proof result: %w", err)
 	}
 	return nil
@@ -459,7 +459,7 @@ func linuxSupervisorOwnerLossProofResultCategory(proofErr error) string {
 	return "other_error"
 }
 
-func writeLinuxSupervisorTestMarker(path, contents string) error {
+func writeLinuxSupervisorAbsentWitnessMarker(path, contents string) error {
 	return publishLinuxSupervisorWitnessFile(path, []byte(contents))
 }
 

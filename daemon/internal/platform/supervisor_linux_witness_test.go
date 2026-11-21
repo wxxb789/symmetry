@@ -35,9 +35,7 @@ func TestLinuxSupervisorWitnessConfigIsReadPerUse(t *testing.T) {
 		t.Fatalf("unset witness gate: %v", err)
 	}
 	unarmed := linuxSupervisorWitnessConfigFromEnv()
-	if unarmed.armed || unarmed.productionWitness != "" || unarmed.scanFailureMode != "" ||
-		unarmed.scanFailureTriggerPath != "" || unarmed.scanFailureFiredPath != "" ||
-		unarmed.dropResponseOnce != "" || unarmed.ownerLossProofReachedPath != "" {
+	if unarmed != (linuxSupervisorWitnessConfig{}) {
 		t.Fatalf("witness config after the gate was cleared = %+v, want an empty unarmed config", unarmed)
 	}
 	if injection, enabled := linuxSupervisorScanFailureInjectionFromEnv(); enabled {
@@ -61,38 +59,36 @@ func TestLinuxSupervisorWitnessHooksAreInertWithoutTheGate(t *testing.T) {
 	directory := t.TempDir()
 	marker := func(name string) string { return filepath.Join(directory, name) }
 	triggerPath := marker("scan.trigger")
-	firedPath := marker("scan.fired")
-	paths := []string{
-		firedPath,
-		marker("scan.release"),
-		marker("hello.json"),
-		marker("hello.release"),
-		marker("owner-loss.reached"),
-		marker("owner-loss.release"),
-		marker("owner-loss.result"),
-		marker("owner-recovery.marker"),
-		marker("lease-armed.reached"),
-		marker("response-drop.marker"),
-		marker("release-loss.reached"),
-		marker("release-loss.release"),
+	markers := []struct{ env, path string }{
+		{linuxSupervisorScanFailureFiredEnv, marker("scan.fired")},
+		{linuxSupervisorScanPendingReleaseEnv, marker("scan.release")},
+		{linuxSupervisorHelloSessionFiredEnv, marker("hello.json")},
+		{linuxSupervisorHelloSessionReleaseEnv, marker("hello.release")},
+		{linuxSupervisorOwnerLossProofReachedEnv, marker("owner-loss.reached")},
+		{linuxSupervisorOwnerLossProofReleaseEnv, marker("owner-loss.release")},
+		{linuxSupervisorOwnerLossProofResultEnv, marker("owner-loss.result")},
+		{linuxSupervisorOwnerRecoveryAuthenticatedEnv, marker("owner-recovery.marker")},
+		{linuxSupervisorLeaseArmedBarrierReachedEnv, marker("lease-armed.reached")},
+		{linuxSupervisorDropResponseMarkerEnv, marker("response-drop.marker")},
+		{linuxSupervisorReleaseBarrierReachedEnv, marker("release-loss.reached")},
+		{linuxSupervisorReleaseBarrierReleaseEnv, marker("release-loss.release")},
+	}
+	for _, entry := range markers {
+		t.Setenv(entry.env, entry.path)
 	}
 	t.Setenv(linuxSupervisorScanFailureModeEnv, linuxSupervisorScanFailureChildren)
 	t.Setenv(linuxSupervisorScanFailureTriggerEnv, triggerPath)
-	t.Setenv(linuxSupervisorScanFailureFiredEnv, firedPath)
-	t.Setenv(linuxSupervisorScanPendingReleaseEnv, marker("scan.release"))
 	t.Setenv(linuxSupervisorScanSealOwnerEnv, "both")
 	t.Setenv(linuxSupervisorHelloSessionInjectionEnv, "1")
-	t.Setenv(linuxSupervisorHelloSessionFiredEnv, marker("hello.json"))
-	t.Setenv(linuxSupervisorHelloSessionReleaseEnv, marker("hello.release"))
-	t.Setenv(linuxSupervisorOwnerLossProofReachedEnv, marker("owner-loss.reached"))
-	t.Setenv(linuxSupervisorOwnerLossProofReleaseEnv, marker("owner-loss.release"))
-	t.Setenv(linuxSupervisorOwnerLossProofResultEnv, marker("owner-loss.result"))
-	t.Setenv(linuxSupervisorOwnerRecoveryAuthenticatedEnv, marker("owner-recovery.marker"))
-	t.Setenv(linuxSupervisorLeaseArmedBarrierReachedEnv, marker("lease-armed.reached"))
 	t.Setenv(linuxSupervisorDropResponseOnceEnv, linuxSupervisorOpRelease)
-	t.Setenv(linuxSupervisorDropResponseMarkerEnv, marker("response-drop.marker"))
-	t.Setenv(linuxSupervisorReleaseBarrierReachedEnv, marker("release-loss.reached"))
-	t.Setenv(linuxSupervisorReleaseBarrierReleaseEnv, marker("release-loss.release"))
+	ambientGate, ambientGateSet := os.LookupEnv(linuxSupervisorProductionWitnessEnv)
+	t.Cleanup(func() {
+		if ambientGateSet {
+			_ = os.Setenv(linuxSupervisorProductionWitnessEnv, ambientGate)
+		} else {
+			_ = os.Unsetenv(linuxSupervisorProductionWitnessEnv)
+		}
+	})
 	if err := os.Unsetenv(linuxSupervisorProductionWitnessEnv); err != nil {
 		t.Fatalf("unset witness gate: %v", err)
 	}
@@ -101,12 +97,8 @@ func TestLinuxSupervisorWitnessHooksAreInertWithoutTheGate(t *testing.T) {
 	}
 
 	witness := linuxSupervisorWitnessConfigFromEnv()
-	if witness.armed || witness.productionWitness != "" || witness.scanFailureMode != "" ||
-		witness.helloSessionInjection != "" || witness.ownerLossProofReachedPath != "" ||
-		witness.ownerLossProofReachedSet || witness.dropResponseOnce != "" ||
-		witness.releaseBarrierReachedPath != "" || witness.releaseBarrierReachedSet ||
-		witness.leaseArmedBarrierReachedPath != "" {
-		t.Fatalf("gate-unset witness config = %+v, want an empty unarmed config", witness)
+	if witness != (linuxSupervisorWitnessConfig{ownerRecoveryAuthenticatedSet: true}) {
+		t.Fatalf("gate-unset witness config = %+v, want the unarmed config with only the owner-recovery presence flag", witness)
 	}
 	if injection, enabled := linuxSupervisorScanFailureInjectionFromEnv(); enabled {
 		t.Fatalf("gate-unset scan-failure injection = %+v, want none", injection)
@@ -139,13 +131,7 @@ func TestLinuxSupervisorWitnessHooksAreInertWithoutTheGate(t *testing.T) {
 		t.Fatalf("read witness test identity: %v", err)
 	}
 	calls := 0
-	group := &processGroup{
-		monitorReadStat: func(int) (linuxProcessStat, error) { return linuxProcessStat{}, nil },
-		monitorReadChildren: func(int) ([]int, error) {
-			calls++
-			return []int{7}, nil
-		},
-	}
+	group := countingProcessGroup(&calls)
 	restore := installLinuxSupervisorScanInjection(group, os.Getpid(), identity, true, authority.SupervisorScanOwnerHelper, false)
 	t.Cleanup(restore)
 	children, err := group.monitorReadChildren(os.Getpid())
@@ -155,9 +141,9 @@ func TestLinuxSupervisorWitnessHooksAreInertWithoutTheGate(t *testing.T) {
 	if _, err := os.Lstat(triggerPath); err != nil {
 		t.Fatalf("gate-unset scan trigger = %v, want the untouched trigger", err)
 	}
-	for _, path := range paths {
-		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("gate-unset hook produced witness path %q: %v", path, err)
+	for _, entry := range markers {
+		if _, err := os.Lstat(entry.path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("gate-unset hook produced witness path %q: %v", entry.path, err)
 		}
 	}
 }
@@ -165,7 +151,7 @@ func TestLinuxSupervisorWitnessHooksAreInertWithoutTheGate(t *testing.T) {
 func TestLinuxSupervisorWitnessMarkerParentRefusal(t *testing.T) {
 	owned := t.TempDir()
 	ownedMarker := filepath.Join(owned, "marker")
-	if err := writeLinuxSupervisorTestMarker(ownedMarker, "owned\n"); err != nil {
+	if err := writeLinuxSupervisorAbsentWitnessMarker(ownedMarker, "owned\n"); err != nil {
 		t.Fatalf("owned-directory witness marker = %v, want published", err)
 	}
 	if contents, err := os.ReadFile(ownedMarker); err != nil || string(contents) != "owned\n" {
@@ -185,7 +171,7 @@ func TestLinuxSupervisorWitnessMarkerParentRefusal(t *testing.T) {
 	symlinkedMarker := filepath.Join(symlinkParent, "symlink-marker")
 	for name, write := range map[string]func() error{
 		"publish behind a symlinked parent": func() error {
-			return writeLinuxSupervisorTestMarker(symlinkedMarker, "refused\n")
+			return writeLinuxSupervisorAbsentWitnessMarker(symlinkedMarker, "refused\n")
 		},
 		"scan witness behind a symlinked parent": func() error {
 			return writeLinuxSupervisorScanWitnessMarker(symlinkedMarker, "refused\n")
@@ -210,7 +196,7 @@ func TestLinuxSupervisorWitnessMarkerParentRefusal(t *testing.T) {
 		t.Fatalf("widen group-writable witness parent: %v", err)
 	}
 	sharedMarker := filepath.Join(shared, "marker")
-	if err := writeLinuxSupervisorTestMarker(sharedMarker, "refused\n"); !errors.Is(err, errLinuxSupervisorWitnessMarkerParentUnsafe) {
+	if err := writeLinuxSupervisorAbsentWitnessMarker(sharedMarker, "refused\n"); !errors.Is(err, errLinuxSupervisorWitnessMarkerParentUnsafe) {
 		t.Fatalf("group- or other-writable-parent witness marker = %v, want the marker parent refusal", err)
 	}
 	if _, err := os.Lstat(sharedMarker); !errors.Is(err, os.ErrNotExist) {
@@ -218,17 +204,27 @@ func TestLinuxSupervisorWitnessMarkerParentRefusal(t *testing.T) {
 	}
 
 	absentParentMarker := filepath.Join(t.TempDir(), "absent", "marker")
-	if err := writeLinuxSupervisorTestMarker(absentParentMarker, "refused\n"); !errors.Is(err, errLinuxSupervisorWitnessMarkerParentUnsafe) {
+	if err := writeLinuxSupervisorAbsentWitnessMarker(absentParentMarker, "refused\n"); !errors.Is(err, errLinuxSupervisorWitnessMarkerParentUnsafe) {
 		t.Fatalf("absent-parent witness marker = %v, want the marker parent refusal", err)
 	}
 
 	if os.Getuid() != 0 {
 		rootOwnedMarker := filepath.Join("/", fmt.Sprintf("symmetry-witness-refusal-%d.marker", os.Getpid()))
-		if err := writeLinuxSupervisorTestMarker(rootOwnedMarker, "refused\n"); !errors.Is(err, errLinuxSupervisorWitnessMarkerParentUnsafe) {
+		if err := writeLinuxSupervisorAbsentWitnessMarker(rootOwnedMarker, "refused\n"); !errors.Is(err, errLinuxSupervisorWitnessMarkerParentUnsafe) {
 			t.Fatalf("root-owned-parent witness marker = %v, want the marker parent refusal", err)
 		}
 		if _, err := os.Lstat(rootOwnedMarker); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("root-owned-parent witness marker = %v, want nothing written", err)
 		}
+	}
+}
+
+func countingProcessGroup(calls *int) *processGroup {
+	return &processGroup{
+		monitorReadStat: func(int) (linuxProcessStat, error) { return linuxProcessStat{}, nil },
+		monitorReadChildren: func(int) ([]int, error) {
+			*calls++
+			return []int{7}, nil
+		},
 	}
 }

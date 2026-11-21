@@ -34,11 +34,8 @@ const (
 
 var errLinuxSupervisorWitnessMarkerParentUnsafe = errors.New("Linux supervisor witness marker parent is not a safe witness directory")
 
-// linuxSupervisorWitnessConfig is one read of the witness environment. It is
-// re-parsed at every hook entry, never cached: the app-side witness installs
-// and restores the gate and barrier names inside the running daemon
-// (app/linux_owner_witness_linux.go installRunnerBarrierEnvironment), so a
-// process-lifetime snapshot would freeze the pre-install environment.
+// linuxSupervisorWitnessConfig is re-parsed at every hook entry, never cached:
+// the app witness toggles the gate in-process, so a snapshot would go stale.
 type linuxSupervisorWitnessConfig struct {
 	productionWitness string
 	armed             bool
@@ -79,9 +76,8 @@ func linuxSupervisorWitnessConfigFromEnv() linuxSupervisorWitnessConfig {
 	config.ownerRecoveryAuthenticatedPath, config.ownerRecoveryAuthenticatedSet = os.LookupEnv(linuxSupervisorOwnerRecoveryAuthenticatedEnv)
 	config.armed = strings.TrimSpace(config.productionWitness) == "1"
 	if !config.armed {
-		// The presence flag survives the empty config: the owner-recovery reader
-		// keeps its fail-closed "configured without the gate" error, and no
-		// consumer reads a path from an unarmed config.
+		// The presence flag survives the empty config so the owner-recovery
+		// reader keeps its fail-closed "configured without the gate" error.
 		config.ownerRecoveryAuthenticatedPath = ""
 		return config
 	}

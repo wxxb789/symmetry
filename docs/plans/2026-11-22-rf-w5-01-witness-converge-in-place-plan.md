@@ -147,8 +147,8 @@ report: witness evidence binds the production binary's SHA-256
   `daemon` job's `go test -race ./...`; the four PR-gated witness steps keep their assert lists.
 - Non-witness wire/persisted/error/log text: unchanged. The only new error text is on witness
   refusal paths, which did not exist before.
-- No `//nolint`/`credo:disable` added; comment policy applied (code carries no new comments except
-  the config struct's one-line why for the per-use requirement).
+- No `//nolint`/`credo:disable` added; comment policy applied (the only new comments are the
+  config struct's per-use why and the unarmed branch's owner-recovery presence-flag exception).
 
 ## Public / API shape
 
@@ -342,10 +342,11 @@ contract's gate line allows. What is verified locally instead:
   behavior, and it is factored once.
 - **Config struct vs per-reader `os.Getenv`.** Rejected: per-reader reads are the pre-change state
   and contradict the single-switch requirement.
-- **No new abstraction beyond the module**: the net production delta is +129 lines (134-line
-  witness module minus 10 lines removed from `containment_supervisor_linux.go` plus 5 in
-  `supervisor_linux_client.go`); the tracked diff is +78/−66 and the new test file is +234.
-  D2 keeps dLOC report-only.
+- **No new abstraction beyond the module**: re-measured after the apply-stage simplify pass, the
+  net production delta is +125 lines (130-line witness module minus 10 lines removed from
+  `containment_supervisor_linux.go` plus 5 in `supervisor_linux_client.go`); the tracked diff is
+  +83/−77 (now including the shared counting-fake call-site swap in
+  `containment_supervisor_linux_test.go`) and the new test file is +230. D2 keeps dLOC report-only.
 
 ## Dependency / rebase note
 
