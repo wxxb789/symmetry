@@ -84,6 +84,19 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       widening there needs a rename plus an arm64-compilability proof. The four packages W1-06
       touched vet clean on all three targets.
 
+- [ ] Revalidate and remove three pre-existing dead stores of the class the daemon-app/state hygiene
+      slice fixed, found while applying it. Evidence: the slice's `golangci-lint v2.15.0` run
+      (`GOOS=linux`, `--default=none -E staticcheck,ineffassign,gocritic`, `./internal/app/...`) at
+      `a3039f0` reports them among its `ineffassign` findings; after this slice they are the only
+      remaining ones in `internal/app/`:
+      `daemon/internal/app/app_test.go:4881` (`journal, err := store.LoadJournal(key)`),
+      `daemon/internal/app/stale_ack_settlement_test.go:32` and `:125`
+      (`journal, err := store.SetLocalState(key, "stale")`). Each binds `journal` and overwrites it on
+      the next statement (`journal = expireLeaseBeforeCleanup(t, store, key)`) with no read in between,
+      so the first value is dead; each needs its own review before removal, because the intermediate
+      journal may be the value an intended assertion would read, and the daemon test split (W3-15)
+      owns those files.
+
 ## Retro review follow-ups
 
 - [ ] Investigate the intermittent Control failure class behind the provider-action cases at

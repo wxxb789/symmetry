@@ -478,8 +478,11 @@ func bindRecoveredV2PreGateStopReceipt(
 	if !evidence.PreGate.Launcher.Equal(*reservation.Launcher) {
 		return state.RunJournal{}, state.LinuxCgroupReservation{}, errors.New("measured pre-gate launcher differs from the durable reservation")
 	}
-	updatedJournal, updatedReservation := journal, reservation
-	var err error
+	var (
+		updatedJournal     state.RunJournal
+		updatedReservation state.LinuxCgroupReservation
+		err                error
+	)
 	if evidence.PreGate.Proof != nil && evidence.PreGate.Proof.HelperExit != nil {
 		updatedJournal, updatedReservation, err = persistRecoveredV2HelperExit(
 			ctx, daemon, journal, reservation, *evidence.PreGate.Proof.HelperExit, callbacks,
