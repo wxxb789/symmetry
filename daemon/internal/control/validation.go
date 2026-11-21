@@ -206,62 +206,6 @@ func validateReconcileResponse(response protocol.ReconcileResponse) error {
 	return validateSnapshotParts("reconcile", response.Assignments, response.Commands)
 }
 
-func validateTaskResponse(operation, expectedTaskID string, response protocol.Task) error {
-	for _, field := range []string{"task_id", "state", "run_id", "generation", "work", "result", "failure", "waiting", "latest_command"} {
-		if !response.HasField(field) {
-			return invalidResponse(operation, field+" is required")
-		}
-	}
-	if response.TaskID == "" || response.State == "" || response.Generation == nil || response.Work == nil {
-		return invalidResponse(operation, "task_id, state, generation, and work must be non-null")
-	}
-	if expectedTaskID != "" && response.TaskID != expectedTaskID {
-		return invalidResponse(operation, "task_id does not match the request")
-	}
-	if err := validateWork(*response.Work); err != nil {
-		return invalidResponse(operation, err.Error())
-	}
-	if err := validateNullableJSONObject(response.Result); err != nil {
-		return invalidResponse(operation, "result "+err.Error())
-	}
-	if err := validateNullableJSONObject(response.Failure); err != nil {
-		return invalidResponse(operation, "failure "+err.Error())
-	}
-	if !isTaskState(response.State) {
-		return invalidResponse(operation, "state is not recognized")
-	}
-	if *response.Generation <= 0 {
-		return invalidResponse(operation, "task generation must be positive")
-	}
-	if response.RunID != nil && *response.RunID == "" {
-		return invalidResponse(operation, "run_id must be non-empty when present")
-	}
-	if requiresTaskRun(response.State) && response.RunID == nil {
-		return invalidResponse(operation, "state requires a run_id")
-	}
-	if err := validateTerminalPayloads(operation, response.State, response.Result, response.Failure); err != nil {
-		return err
-	}
-	if response.Waiting == nil {
-		if response.State == "waiting_for_input" {
-			return invalidResponse(operation, "waiting_for_input state requires waiting")
-		}
-	} else {
-		if response.State != "waiting_for_input" {
-			return invalidResponse(operation, "only waiting_for_input state may include waiting")
-		}
-		if err := validateTaskWaiting(response, *response.Waiting); err != nil {
-			return invalidResponse(operation, "waiting "+err.Error())
-		}
-	}
-	if response.LatestCommand != nil {
-		if err := validateTaskCommandResource(response.TaskID, *response.LatestCommand); err != nil {
-			return invalidResponse(operation, "latest_command "+err.Error())
-		}
-	}
-	return nil
-}
-
 func validateTerminalPayloads(operation, state string, result, failure json.RawMessage) error {
 	if state == "completed" && isJSONNull(result) {
 		return invalidResponse(operation, "completed state requires result")
@@ -278,43 +222,6 @@ func validateTerminalPayloads(operation, state string, result, failure json.RawM
 	return nil
 }
 
-func validateTaskCommandRequest(request protocol.TaskCommandRequest) error {
-	switch request.Kind {
-	case "cancel":
-		if len(bytes.TrimSpace(request.Payload)) != 0 {
-			return errors.New("cancel command must omit payload")
-		}
-	case "provide_input":
-		if err := validateJSONObject(request.Payload); err != nil {
-			return fmt.Errorf("provide_input payload %w", err)
-		}
-	case "guidance", "pause", "resume":
-		if request.Generation <= 0 {
-			return errors.New("supervisory command requires a positive generation")
-		}
-		return ValidateSupervisoryPayload(request.Kind, request.Payload)
-	default:
-		return errors.New("task command kind is not recognized")
-	}
-	return nil
-}
-
-func validateTaskCommandResponse(operation, expectedTaskID string, request protocol.TaskCommandRequest, response protocol.TaskCommand) error {
-	if err := validateTaskCommandResource(expectedTaskID, response); err != nil {
-		return invalidResponse(operation, err.Error())
-	}
-	if response.Kind != request.Kind || !sameCommandPayload(request, response.Payload) {
-		return invalidResponse(operation, "kind or payload does not match the request")
-	}
-	// Cancelling queued work applies to the task without creating a run. The
-	// server validates its generation fence, while the command retains nil run IDs.
-	runlessCancellation := response.Kind == "cancel" && response.State == "applied" && response.RunID == nil && response.Generation == nil
-	if request.Generation > 0 && !runlessCancellation && (response.Generation == nil || *response.Generation != request.Generation) {
-		return invalidResponse(operation, "generation does not match the request")
-	}
-	return nil
-}
-
 func validateAcknowledgementResponse(commandID string, request protocol.CommandAcknowledgement, response protocol.TaskCommand) error {
 	if err := validateTaskCommandResource("", response); err != nil {
 		return invalidResponse("acknowledge command", err.Error())
@@ -327,24 +234,6 @@ func validateAcknowledgementResponse(commandID string, request protocol.CommandA
 	}
 	if response.AcknowledgementID == nil || *response.AcknowledgementID != request.AckID || response.AcknowledgementOutcome == nil || *response.AcknowledgementOutcome != request.Outcome {
 		return invalidResponse("acknowledge command", "acknowledgement_id or outcome does not match the request")
-	}
-	return nil
-}
-
-func validateTaskWaiting(task protocol.Task, waiting protocol.TaskWaiting) error {
-	for _, field := range []string{"run_id", "generation", "transition_id", "question", "payload", "recorded_at"} {
-		if !waiting.HasField(field) {
-			return errors.New(field + " is required")
-		}
-	}
-	if waiting.RunID == "" || waiting.Generation <= 0 || waiting.TransitionID == "" || waiting.RecordedAt.IsZero() {
-		return errors.New("run_id, generation, transition_id, and recorded_at must be non-null")
-	}
-	if task.RunID == nil || task.Generation == nil || waiting.RunID != *task.RunID || waiting.Generation != *task.Generation {
-		return errors.New("run_id and generation must match the current run")
-	}
-	if err := validateJSONObject(waiting.Payload); err != nil {
-		return fmt.Errorf("payload %w", err)
 	}
 	return nil
 }
@@ -436,13 +325,6 @@ func validateTaskCommandResource(expectedTaskID string, response protocol.TaskCo
 		}
 	}
 	return nil
-}
-
-func sameCommandPayload(request protocol.TaskCommandRequest, response json.RawMessage) bool {
-	if request.Kind == "cancel" {
-		return sameJSONObject(json.RawMessage(`{}`), response)
-	}
-	return sameJSONObject(request.Payload, response)
 }
 
 func sameJSONObject(left, right json.RawMessage) bool {
@@ -608,27 +490,9 @@ func isJSONNull(value json.RawMessage) bool {
 	return bytes.Equal(bytes.TrimSpace(value), []byte("null"))
 }
 
-func isTaskState(value string) bool {
-	switch value {
-	case "queued", "assigned", "claimed", "running", "paused", "waiting_for_input", "cancelling", "completed", "failed", "cancelled":
-		return true
-	default:
-		return false
-	}
-}
-
 func isTransitionState(value string) bool {
 	switch value {
 	case "running", "paused", "waiting_for_input", "completed", "failed", "cancelled":
-		return true
-	default:
-		return false
-	}
-}
-
-func requiresTaskRun(state string) bool {
-	switch state {
-	case "assigned", "claimed", "running", "paused", "waiting_for_input", "cancelling", "completed", "failed":
 		return true
 	default:
 		return false
