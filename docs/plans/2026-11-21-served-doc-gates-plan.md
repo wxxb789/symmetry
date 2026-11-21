@@ -32,11 +32,15 @@ All four schemas are permissive: `additionalProperties: true` and zero `false`
 22/34/8/4 occurrences; none `false`). So the bundle comparison fails red only for a **required**
 member:
 
-- **`connections-read` needs no member pin.** Every member of `Connection` (12), `ConnectionResource`
-  (17) and `ConnectionProvider` (3) is in its definition's `required` array, so the bundle
-  comparison is the complete rename oracle for this read. What its gate must add is that the served
-  document is *populated* — the existing read test already serves two provider rows, one connection
-  and one bound resource, so a rename inside any of the three definitions is exercised.
+- **`connections-read` needs no member pin.** Every declared member of `Connection` (12),
+  `ConnectionResource` (17) and `ConnectionProvider` (3) is in its definition's `required` array, so
+  the bundle comparison refuses a serving rename of every member this surface reads. The resource
+  projection also emits one member its definition does not declare (`connection_id`, from
+  `PortalJSON.resource/1` under `connection_resource/1`): no connections surface reads it, and the
+  workspace gate pins the same serving member in its `WorkspaceResource` row. What this gate adds is
+  the bundle comparison over the populated response the existing read test already serves — two
+  provider rows, one connection and one bound resource — so a rename inside any declared member is
+  exercised.
 - **The other three reads need presence pins for their optional-but-consumed members.** The pin per
   read is (members the frontend reads) ∩ (members optional in the schema definition that serves
   them), with the parent object present in the gate's scenario. That set is exactly the class the
@@ -78,9 +82,12 @@ TODO entry records and no gate can assert.
 
 ### Pin 2 — `work-detail-read` (`portal_workflow_test.exs`)
 
-- the shared `WorkspaceWorkItem` 21-name row pin above (presence only; `external` and the
-  provider-sourced delivery values are served by Pin 1's scenario, since `PortalJSON.work_item/2`
-  is one body);
+- the shared `WorkspaceWorkItem` 21-name row pin above (presence only), including its nested
+  consumed members — `WorkItemDeliveryValue` `provider`/`recorded_at` and `WorkItemExternal`
+  `provider_owned_fields`: this gate's own scenario syncs a provider delivery and imports a
+  tracker row, so the nested members are populated and pinned here too, not only through Pin 1's
+  scenario on the shared `PortalJSON.work_item/2` body (the detail read keeps its own row contract
+  if the two reads stop sharing the body);
 - `WorkItemTimelineItem`: `source`, `run_id`, `generation`, `recorded_at`, `data` — read at
   `features/work/presentation.ts:479-521`, `features/work/receipts.ts:155-178`,
   `features/work/history.tsx:60-62`. These five are required inside each `oneOf` variant of the
@@ -99,10 +106,14 @@ The `WorkItemTimelineItem` five names above over the paginated page's items; the
 (`items`, `next_before`) and the variant `data` bodies are required-complete, and so are the five
 item names inside each variant (the pin is a restatement there, see Pin 2).
 
-### Pass-through boundary (documented, not pinned deeper)
+### Pass-through boundary (the vocabulary is the writer's, the copy is still pinned)
 
-Three member groups are served verbatim from an upstream writer, so no serving-side rename is
-possible and the pin stops at the member name the projection decides:
+Three member groups take their member vocabulary from an upstream writer, and the current serving
+projections copy them verbatim, so the pin stops at the member name the projection emits — the
+names themselves are the writer's. That is no waiver: the nested pins above are exactly what
+catches a serving change that stops preserving the verbatim copy (the apply-stage throwaway rename
+of `supervisory_control` inside `Protocol.runtime/1` went red at the `RuntimeSnapshot.capabilities`
+pin):
 
 - `RuntimeSnapshot.capabilities` — the registered map, copied by
   `Orchestration.register_runtimes/4` (`orchestration.ex:232`) and served by `Protocol.runtime/1`
@@ -127,24 +138,28 @@ possible and the pin stops at the member name the projection decides:
    transitioned to `waiting_for_input` with a decision packet. The gate asserts the served rows,
    the pins above, and `validate_served_document!("workspace-read", served)`.
 2. **`control/test/symmetry_control_web/controllers/portal_workflow_test.exs`** — one new gate
-   serving `work-detail-read` and `work-timeline-read` from the same scenario (item + run + claim +
-   `running` + `waiting_for_input` with the decision packet + one event, one transition and one
-   command so `raw.timeline`/`items` carry all three sources), asserting both pins and both
-   `validate_served_document!/2` calls.
+   serving `work-detail-read` and `work-timeline-read` from the same scenario (a provider-synced
+   repository and an imported tracker row — so this scenario itself serves the shared row's
+   `external` row and provider-sourced delivery values and this file pins them too — then that
+   item's run + claim + `running` + `waiting_for_input` with the decision packet + one event, two
+   transitions (running and waiting) and one command so `raw.timeline`/`items` carry all three
+   sources), asserting both pins and both `validate_served_document!/2` calls.
 3. **`control/test/symmetry_control_web/controllers/portal_integrations_test.exs`** — the existing
    `connection read lists provider policy, connections and bound resources` test captures the whole
    response, asserts it is populated by the three definitions' rows and calls
    `validate_served_document!("connections-read", response)`, with a comment recording that every
-   consumed member of this read is `required` so the bundle comparison is its complete rename
-   oracle.
+   member the surface reads is `required` (so the bundle comparison refuses its renames) and that
+   the projection's undeclared `connection_id` extra is read by no connections surface and pinned
+   by the workspace gate.
 4. **`docs/TODO.md` / `docs/archive/CLOSED-TODO.md`** — the remaining `## Deferred review findings
    (0007h)` item (the workspace-read row) is closed by option (b) of its own text; the entry moves
    to `docs/archive/CLOSED-TODO.md` under that heading with the landed behaviour and the measured
    evidence, and `docs/TODO.md` loses it.
 
-Each gate file carries its own private `assert_served_members!/3` + `assert_served_rows!/3` (about
+Each pinning file carries its own private `assert_served_members!/3` + `assert_served_rows!/3` (about
 ten lines): `control/test/support/**` is outside this increment's owned files, and a module defined
-in one test file would break a single-file run of the others.
+in one test file would break a single-file run of the others. (`portal_integrations_test.exs` pins
+no member — every declared member of its read is `required` — so it adds neither helper.)
 
 ## Exact edge-case semantics
 
@@ -158,9 +173,10 @@ in one test file would break a single-file run of the others.
 - **Conditional members are reached by state, not by weakening the pin.** `delivery.*.provider` and
   `delivery.*.recorded_at` exist only in the provider-sourced branch of `effective_delivery/6`
   (`portal_json.ex:519-534`), and `external.*` only when `external_work_item_resource_id` is set
-  (`:545`), so the workspace gate's scenario syncs a provider delivery and a tracker row instead of
-  relaxing those names. The detail/timeline gate's scenario has no provider sync of its own, so it
-  does not restate them (Pin 1's scenario serves them through the same `work_item/2` body).
+  (`:545`), so both gates' scenarios sync a provider delivery and import a tracker row instead of
+  relaxing those names (the workspace gate through its steering provider, the detail/timeline gate
+  through the support `ProviderStub`, whose tracker sync imports the external row and whose
+  repository sync writes the provider-sourced delivery values).
 - **The waiting packet is served from the transition when it carries a decision.** The gate's
   waiting transition carries `question` and `decision`, which is the authoritative-packet branch
   (`read_model.ex:221`); the served `execution.waiting.decision` is then the packet's own members.
@@ -173,7 +189,7 @@ in one test file would break a single-file run of the others.
 All gates foreground, in this order (never the full suite beside another suite or a harness on this
 host):
 
-1. `sh C:/Users/lhan/.local/state/gdd/scratch/rf-w1-13-mix.sh format --check-formatted` (portable
+1. `sh <HOST-PATH>/rf-w1-13-mix.sh format --check-formatted` (portable
    Elixir 1.20.4 / OTP 29 recipe adapted from `served-read-closeout-mix.sh` for this worktree,
    `MIX_DEPS_PATH` = the main checkout's `deps`, `MIX_TEST_PARTITION=rf-w1-13`,
    `PHX_SERVER`/`POSTGRES_PORT`/`SYMMETRY_CONTRACTS_DIR` unset).
@@ -187,8 +203,14 @@ host):
    - `PortalJSON.work_item/2` `goal_id` → `goal_id_renamed` (optional consumed, shared row): the
      workspace gate must fail on the presence assertion, not on the bundle comparison — the failure
      message names the missing member.
-   - `Protocol.timeline_item/2` `recorded_at` → `recorded_at_renamed` (optional consumed, both
-     timeline surfaces): both the detail and the timeline gate must fail.
+   - `Protocol.timeline_item/2` `recorded_at` → `recorded_at_renamed` (required in each `oneOf`
+     variant — the bundle refuses it; the pin restates it): the detail gate must fail inside its
+     bundle comparison at `#/raw/timeline/0-3`, and the standalone page carries the same items at
+     `#/timeline/0-3`.
+   - `PortalApiController.work_item_timeline/2` serving the page without `next_before` (the
+     standalone route is the only serving surface a page-level rename can red alone — every page
+     member is also embedded, and required, in the detail document): the `work-timeline-read`
+     validator must fail on the page root while the detail comparison stays green.
    - `PortalJSON.connection/2` `auth_type` → `auth_type_renamed` (required): the connections gate
      must fail inside `validate_served_document!/2`.
    - `read_model.ex`'s authoritative-packet selection is *not* mutated: the packet members are the

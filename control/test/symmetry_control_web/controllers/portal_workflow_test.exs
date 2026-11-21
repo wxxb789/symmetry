@@ -3,13 +3,14 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
 
   import Ecto.Query
 
-  import SymmetryControlWeb.PortalFixtures, only: [create_project: 2]
+  import SymmetryControlWeb.PortalFixtures, only: [create_connection: 4, create_project: 2]
   import SymmetryControlWeb.ServedDocument, only: [validate_served_document!: 2]
   import SymmetryControlWeb.TestConn, only: [api_conn: 0]
 
   alias SymmetryControl.Goals
   alias SymmetryControl.{Orchestration, Repo}
   alias SymmetryControl.Orchestration.RunTransition
+  alias SymmetryControl.TestEnv
   alias SymmetryControl.Workspaces
   alias SymmetryControl.Workspaces.WorkItem
   alias SymmetryControl.TelemetryReads
@@ -32,7 +33,10 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
   #                    features/work/detail.tsx:310-343,370 — the row body is
   #                    `WorkspaceWorkItem`, shared with `workspace-read` and served by the same
   #                    `PortalJSON.work_item/2`; this file states the pin again because the detail
-  #                    read must keep its own row contract if the two reads stop sharing the body
+  #                    read must keep its own row contract if the two reads stop sharing the body.
+  #                    Its nested consumed members (`delivery.*.provider`/`recorded_at`,
+  #                    `external.provider_owned_fields`) are populated by this scenario's provider
+  #                    sync and tracker import and pinned here too
   #   timeline item    features/work/presentation.ts:479-521; features/work/receipts.ts:155-178;
   #                    features/work/history.tsx:60-62
   #   waiting decision features/work/presentation.ts:389-409
@@ -40,6 +44,8 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
     repository_resource_id repository ci_resource_id ci_resource branch pull_request_url
     ci_status review_status delivery external goal_managed version can_start execution updated_at)
   @timeline_item_members ~w(source run_id generation recorded_at data)
+  @delivery_value_members ~w(provider recorded_at)
+  @external_row_members ~w(provider_owned_fields)
   @waiting_decision_members ~w(context reason options recommended_option_id)
   @waiting_decision_option_members ~w(id label consequence)
 
@@ -1276,16 +1282,79 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
   # durable rows, so one scenario drives them and each pin names its own read.
   # The bundle comparison refuses a renamed member only where the schema requires
   # it, so the member lists above carry the optional-but-consumed names, the class
-  # a serving-side rename would otherwise leave green.
+  # a serving-side rename would otherwise leave green. The scenario syncs its own
+  # provider repository and imports a tracker row, so the shared row's nested
+  # consumed members are served and pinned here too, not only through the
+  # workspace gate's scenario on the shared `PortalJSON.work_item/2` body.
   test "the real served work detail and timeline carry every member the surfaces read" do
+    TestEnv.put!(:integration_providers,
+      github: SymmetryControl.Integrations.ProviderStub,
+      azure_devops: SymmetryControl.Integrations.ProviderStub
+    )
+
     project = create_project("DTGATE")
 
-    item =
-      create_work_item(project["id"], "Detail gate item", %{
-        "assignee_type" => "agent",
-        "agent_profile" => "codex",
-        "description" => "Served by the work-detail gate."
-      })
+    connection =
+      create_connection("github", "Detail gate binding", "acme", [
+        "repositories",
+        "work_items",
+        "changes",
+        "ci"
+      ])
+
+    repository =
+      create_resource(
+        project,
+        connection,
+        "repository",
+        "Detail gate repository",
+        "acme/symmetry"
+      )
+
+    tracker =
+      create_resource(
+        project,
+        connection,
+        "work_tracking",
+        "Detail gate tracker",
+        "acme/symmetry"
+      )
+
+    # The tracker sync imports the external work item this gate serves; the
+    # matching `external_ref` binds it to the repository, which is what the
+    # repository sync below needs to run the delivery path for it.
+    assert %{"resource" => _tracker_synced} =
+             api_conn()
+             |> post("/portal/api/resources/#{tracker["id"]}/sync")
+             |> json_response(200)
+
+    assert %{"projects" => [workspace]} =
+             api_conn()
+             |> get("/portal/api/workspace?project_id=#{project["id"]}")
+             |> json_response(200)
+
+    [item] = workspace["work_items"]
+    assert item["repository_resource_id"] == repository["id"]
+
+    assert %{"work_item" => _assigned} =
+             api_conn()
+             |> patch("/portal/api/work-items/#{item["id"]}", %{
+               "version" => item["version"],
+               "assignee_type" => "agent",
+               "assignee_name" => "Codex",
+               "agent_profile" => "codex",
+               "workspace" => "primary",
+               "branch" => "codex/detail-gate",
+               "pull_request_url" => "https://github.com/acme/symmetry/pull/42"
+             })
+             |> json_response(200)
+
+    # The repository sync runs the delivery path for the bound item: the served
+    # `delivery` values then carry the provider-sourced branch this gate pins.
+    assert %{"resource" => _repository_synced} =
+             api_conn()
+             |> post("/portal/api/resources/#{repository["id"]}/sync")
+             |> json_response(200)
 
     assert %{"execution" => %{"generation" => 1, "task_id" => task_id}} =
              api_conn()
@@ -1294,13 +1363,15 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
              })
              |> json_response(202)
 
-    {_runtime, fence, run} = claim_current_task()
+    {_runtime, fence, run} =
+      claim_current_task(%{"provider_access" => true, "structured_input" => true})
+
     assert run.task_id == task_id
     transition(run.id, fence, "running", 5_101)
 
-    # One item per timeline source — an event, the waiting transition and the
-    # input command below — so the item pin and the bundle comparison exercise
-    # all three `data` variants.
+    # At least one item from each timeline source — the running and waiting
+    # transitions, the event and the input command below — so the item pin and
+    # the bundle comparison exercise all three `data` variants.
     assert {:ok, [_event]} =
              Orchestration.append_events(
                run.id,
@@ -1347,6 +1418,23 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
     row = detail["work_item"]
     assert_served_members!("work-detail-read work row", row, @work_row_members)
 
+    Enum.each(["pull_request", "ci", "review"], fn field ->
+      value = row["delivery"][field]
+      assert value["source"] == "provider"
+
+      assert_served_members!(
+        "work-detail-read delivery #{field} value",
+        value,
+        @delivery_value_members
+      )
+    end)
+
+    assert_served_members!(
+      "work-detail-read external row",
+      row["external"],
+      @external_row_members
+    )
+
     assert_served_rows!(
       "work-detail-read timeline item",
       detail["raw"]["timeline"],
@@ -1374,13 +1462,31 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
 
     assert_served_rows!("work-timeline-read item", page["items"], @timeline_item_members)
 
-    for source <- ["event", "transition", "command"] do
-      assert Enum.any?(page["items"], &(&1["source"] == source)),
-             "the timeline page must serve the #{source} variant the surface reads"
+    for {label, items} <- [
+          {"work-detail-read raw timeline", detail["raw"]["timeline"]},
+          {"work-timeline-read page", page["items"]}
+        ],
+        source <- ["event", "transition", "command"] do
+      assert Enum.any?(items, &(&1["source"] == source)),
+             "the #{label} must serve the #{source} variant the surface reads"
     end
   end
 
   defp create_project(key), do: create_project(key, "Project #{key}")
+
+  defp create_resource(project, connection, kind, name, external_ref) do
+    %{"resource" => resource} =
+      api_conn()
+      |> post("/portal/api/projects/#{project["id"]}/resources", %{
+        "connection_id" => connection["id"],
+        "kind" => kind,
+        "name" => name,
+        "external_ref" => external_ref
+      })
+      |> json_response(201)
+
+    resource
+  end
 
   defp served_work_item(work_item_id) do
     assert %{"work_item" => work_item} =
@@ -1520,7 +1626,11 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
     ]
   end
 
-  defp claim_current_task do
+  # `capabilities` lets one gate register the runtime its item's binding
+  # requires (a provider-bound item requires `provider_access`, which
+  # registration admits only beside `structured_input`); the default empty map
+  # serves the unbound items.
+  defp claim_current_task(capabilities \\ %{}) do
     key = Ecto.UUID.generate()
 
     assert {:ok, enrolled, :created} =
@@ -1543,7 +1653,7 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
                    capacity: 1,
                    agent_profile: "codex",
                    workspace: "primary",
-                   capabilities: %{}
+                   capabilities: capabilities
                  }
                ],
                now: @now

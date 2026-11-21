@@ -1758,19 +1758,24 @@ whole class it names are closed.*
       adapter-backed runtime registered with all five `RuntimeCapabilities` members, and one work item
       bound to the repository and the CI resource, run, claimed and transitioned to
       `waiting_for_input` with a decision packet), `work-detail-read` and `work-timeline-read` from one
-      scenario in `portal_workflow_test.exs` (the same attempt plus one event, one transition and one
-      input command, so the timeline items cover all three sources), and `connections-read` on the
-      existing connection-read test in `portal_integrations_test.exs`. Every gate calls
-      `validate_served_document!/2` on the response and asserts the members the surfaces read: the
-      workspace pin is this item's own 66 members, the detail pin adds the shared `WorkspaceWorkItem`
-      row body plus the `WorkItemTimelineItem` names and the waiting decision packet, and
-      `connections-read` has no optional-but-consumed member to pin — every member of `Connection`
-      (12), `ConnectionResource` (17) and `ConnectionProvider` (3) sits in its definition's `required`
-      array — so its bundle comparison is the complete rename oracle and the gate's added assertion is
-      that a populated response exercises all three definitions. The bundle comparison alone could not
-      have closed this: all four schemas set `additionalProperties: true` and none sets it `false`
-      (22/34/8/4 occurrences). Option (a) (dropping the schema tolerance) stays a product decision and
-      is not taken here.
+      scenario in `portal_workflow_test.exs` (a provider-synced repository and an imported tracker row
+      serve the shared row's `external` row and provider-sourced delivery values, then the imported
+      item's attempt plus one event, the running and waiting transitions and one input command, so the
+      timeline items cover all three sources), and `connections-read` on the existing connection-read
+      test in `portal_integrations_test.exs`. Every gate calls `validate_served_document!/2` on the
+      response and asserts the members the surfaces read: the workspace pin is this item's own 66
+      members, the detail pin adds the shared `WorkspaceWorkItem` row body (its nested consumed
+      `delivery.*.provider`/`recorded_at` and `external.provider_owned_fields` included, served and
+      pinned by this scenario itself) plus the `WorkItemTimelineItem` names and the waiting decision
+      packet, and `connections-read` has no optional-but-consumed member to pin — every declared
+      member of `Connection` (12), `ConnectionResource` (17) and `ConnectionProvider` (3) sits in its
+      definition's `required` array — so its bundle comparison refuses a serving rename of every
+      member the surface reads (the projection's undeclared extra `connection_id` on resource rows is
+      read by no connections surface and is pinned by the workspace gate's `WorkspaceResource` row),
+      and the gate validates the populated response its existing assertions already exercise against
+      the bundle. The bundle comparison alone could not have closed this: all four schemas set
+      `additionalProperties: true` and none sets it `false` (22/34/8/4 occurrences). Option (a)
+      (dropping the schema tolerance) stays a product decision and is not taken here.
       Recorded red, exact commands. With `PortalJSON.work_item/2` serving `goal_id_renamed` for
       `goal_id`, `portal_resources_test.exs` fails *after* its bundle comparison passed —
       `workspace-read work row stopped serving ["goal_id"]`, exit 2 — and
@@ -1778,11 +1783,18 @@ whole class it names are closed.*
       ["goal_id"]`, the served row's keys printing `goal_id_renamed`), exit 2: failing these gates
       needs no required-member rename, an optional consumed one is enough. With
       `Protocol.timeline_item/2` serving `recorded_at_renamed`, the detail gate fails inside the bundle
-      comparison at `#/raw/timeline/0-3` and `#/timeline/0-3` (exit 2), and no serving rename reaches
-      the standalone timeline page without reaching that embedded copy, because the detail read serves
-      the same `Protocol.timeline_page/2` items at `raw.timeline`. With `PortalJSON.connection/2`
+      comparison at `#/raw/timeline/0-3` (exit 2), and the standalone page carries the same
+      `Protocol.timeline_page/2` items at `#/timeline/0-3`, so that recorded red is the embedded
+      copy's. The timeline read's own red is recorded on the route that serves it alone (single-test
+      run, `portal_workflow_test.exs:1289`): with `PortalApiController.work_item_timeline/2` serving
+      the page without `next_before`, `validate_served_document!("work-timeline-read", …)` fails —
+      `work-timeline-read real served document failed the contract bundle: [{"Required property
+      next_before was not present.", "#"}]`, exit 2, `Result: 0/1 passed, 17 excluded` — while the
+      detail comparison ahead of it passes. A `Protocol.timeline_page/2` rename cannot be the page's
+      own artifact: every page member (`items`, `next_before`, and the item names) is also embedded,
+      and required, in the detail document, whose validator runs first. With `PortalJSON.connection/2`
       serving `auth_type_renamed`, the connections gate fails inside the bundle comparison
-      (`Required property auth_type was not present. #/connections/0`), exit 2. All three mutations are
+      (`Required property auth_type was not present. #/connections/0`), exit 2. All mutations are
       reverted; `git diff` over `control/lib` and `control/test/support` is empty. The three gated
       files score `Result: 45 passed`, exit 0, with `mix format --check-formatted` and
       `mix compile --warnings-as-errors` green.
