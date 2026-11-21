@@ -72,10 +72,12 @@ re-appears at the next-deepest leaf:
   `Repo.rollback(reason)` branch, the returned `{run, task, provider_access, disposition}` tuple and
   `claim_provider_access_result/1` (emit only on `:created`, replay unchanged) are preserved.
 - `daemon_controller.ex:357` (`append_evidence/2`: `with` → `case` → `if` → `if`): route the
-  `{:error, {:idempotency_conflict, fields}}` branch through `append_evidence_conflict/3` and both
-  conflict branches through the shared `conflict_error/1`; the three-way envelope policy (batch +
-  valid details → `:idempotency_conflict` with fields; batch + invalid details → `:invalid_request`;
-  non-batch → `:idempotency_conflict`) is preserved verbatim.
+  `{:error, {:idempotency_conflict, fields}}` branch through `append_evidence_conflict/3`, whose
+  non-batch fallback passes the original `{:idempotency_conflict, fields}` tuple to
+  `Protocol.error/2`; the bare-atom branch goes through the shared `conflict_error/1`. The
+  three-way envelope policy (batch + valid details → `:idempotency_conflict` with fields; batch +
+  invalid details → `:invalid_request`; non-batch → the original `{:idempotency_conflict, fields}`
+  tuple) is preserved verbatim.
 - `task_controller.ex:20` (`create/2`: `case` → `with` → `if`): bind the status through
   `created_or_ok/1`, used by `create/2` and the identical `command/2` status line so the file keeps
   one convention (`201` on `:created`, `200` otherwise).

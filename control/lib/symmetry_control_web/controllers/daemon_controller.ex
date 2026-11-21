@@ -384,7 +384,10 @@ defmodule SymmetryControlWeb.DaemonController do
     if batch_evidence?(evidence) and valid_batch_conflict_details?(fields) do
       Protocol.error(conn, {:idempotency_conflict, fields})
     else
-      Protocol.error(conn, conflict_error(evidence))
+      error =
+        if(batch_evidence?(evidence), do: :invalid_request, else: {:idempotency_conflict, fields})
+
+      Protocol.error(conn, error)
     end
   end
 
