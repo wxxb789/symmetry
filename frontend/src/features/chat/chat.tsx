@@ -133,9 +133,9 @@ export function ChatPage() {
   const pauseIsUnsupported = pauseUnsupported(adapter);
   const runSignals: ChatRunSignals | null = urlScope === "run" && servedRunExecution !== null
     ? {
-      canGuide: servedRunExecution.can_guide === true,
-      canPause: servedRunExecution.can_pause === true,
-      canResume: servedRunExecution.can_resume === true,
+      canGuide: servedRunExecution.can_guide,
+      canPause: servedRunExecution.can_pause,
+      canResume: servedRunExecution.can_resume,
       pauseUnsupported: pauseIsUnsupported,
     }
     : null;
@@ -243,7 +243,7 @@ export function ChatPage() {
           });
         },
       )
-      .finally(() => setOlderLoads((current) => current.filter((load) => load !== press)));
+      .finally(() => { setOlderLoads((current) => current.filter((load) => load !== press)); });
   };
 
   const scrollRef = useRef<HTMLDivElement | null>(null);

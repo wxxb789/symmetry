@@ -211,19 +211,19 @@ function createHarness(state: HarnessState = baseState()): Harness {
     }
     if (gate !== null) await gate.promise;
     if (method === "POST" && url.pathname === "/portal/api/projects") {
-      const key = text(body?.["key"], "");
+      const key = text(body?.key, "");
       if (state.projects.some((project) => project.key === key)) {
         return json({ error: { code: "validation_failed", message: "request contains invalid fields", fields: { key: ["has already been taken"] } } }, 422);
       }
       const created: HarnessProject = {
         id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
         key,
-        name: text(body?.["name"], ""),
-        description: text(body?.["description"], ""),
+        name: text(body?.name, ""),
+        description: text(body?.description, ""),
         status: "active",
         version: 1,
-        default_agent_profile: text(body?.["default_agent_profile"], "default"),
-        default_workspace: text(body?.["default_workspace"], "primary"),
+        default_agent_profile: text(body?.default_agent_profile, "default"),
+        default_workspace: text(body?.default_workspace, "primary"),
         resources: [],
         creation_ids: {},
         work_items: [],
@@ -235,13 +235,13 @@ function createHarness(state: HarnessState = baseState()): Harness {
     if (method === "PATCH" && projectMatch !== undefined && projectMatch !== null) {
       const project = projectOf(state, projectMatch[1] ?? "");
       if (project === undefined) return json({ error: { code: "not_found", message: "not found" } }, 404);
-      if (body?.["version"] !== project.version) return json({ error: { code: "stale", message: "resource changed since it was loaded" } }, 409);
+      if (body?.version !== project.version) return json({ error: { code: "stale", message: "resource changed since it was loaded" } }, 409);
       if (project.status === "archived" && Object.keys(body ?? {}).some((key) => key !== "version" && key !== "status")) {
         return json({ error: { code: "state_conflict", message: "state has already advanced" } }, 409);
       }
-      if (typeof body?.["name"] === "string") project.name = body["name"];
-      if (typeof body?.["description"] === "string") project.description = body["description"];
-      if (typeof body?.["status"] === "string") project.status = body["status"];
+      if (typeof body?.name === "string") project.name = body.name;
+      if (typeof body?.description === "string") project.description = body.description;
+      if (typeof body?.status === "string") project.status = body.status;
       project.version += 1;
       return json({ project: { id: project.id } });
     }
@@ -249,16 +249,16 @@ function createHarness(state: HarnessState = baseState()): Harness {
     if (method === "POST" && createItemMatch !== undefined && createItemMatch !== null) {
       const project = projectOf(state, createItemMatch[1] ?? "");
       if (project === undefined) return json({ error: { code: "not_found", message: "not found" } }, 404);
-      const title = text(body?.["title"], "");
+      const title = text(body?.title, "");
       if (title.trim() === "") {
         return json({ error: { code: "validation_failed", message: "request contains invalid fields", fields: { title: ["can't be blank"] } } }, 422);
       }
       // The server's creation identity: a replayed identity answers with the
       // row the original submission created instead of inserting a second one.
-      const creationId = typeof body?.["creation_id"] === "string" ? body["creation_id"] : "";
+      const creationId = typeof body?.creation_id === "string" ? body.creation_id : "";
       const replayedId = creationId === "" ? undefined : project.creation_ids[creationId];
       if (replayedId !== undefined) return json({ disposition: "replayed", work_item: { id: replayedId } });
-      const created = workItem({ id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", title, project_id: project.id, status: text(body?.["status"], "backlog") });
+      const created = workItem({ id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", title, project_id: project.id, status: text(body?.status, "backlog") });
       project.work_items = [...project.work_items, created];
       if (creationId !== "") project.creation_ids[creationId] = created.id;
       if (harness.loseNextCreateResponse.current) {
@@ -273,9 +273,9 @@ function createHarness(state: HarnessState = baseState()): Harness {
       const found = itemOf(state, moveMatch[1] ?? "");
       if (found === null) return json({ error: { code: "not_found", message: "not found" } }, 404);
       if (found.item.goal_managed === true) return json({ error: { code: "goal_authority_required", message: "Goal authority is required for this operation" } }, 403);
-      if (body?.["version"] !== found.item.version) return json({ error: { code: "stale", message: "resource changed since it was loaded" } }, 409);
-      found.item.status = text(body?.["status"], found.item.status);
-      found.item.position = body?.["before_id"] === null ? 99 : 0;
+      if (body?.version !== found.item.version) return json({ error: { code: "stale", message: "resource changed since it was loaded" } }, 409);
+      found.item.status = text(body?.status, found.item.status);
+      found.item.position = body?.before_id === null ? 99 : 0;
       found.item.version = (found.item.version ?? 0) + 1;
       return json({ work_item: { id: found.item.id } });
     }
@@ -287,10 +287,10 @@ function createHarness(state: HarnessState = baseState()): Harness {
         return json({ error: { code: "validation_failed", message: "request contains invalid fields", fields: { status: ["must be changed through a Kanban move"] } } }, 422);
       }
       if (found.item.goal_managed === true) return json({ error: { code: "goal_authority_required", message: "Goal authority is required for this operation" } }, 403);
-      if (body?.["version"] !== found.item.version) return json({ error: { code: "stale", message: "resource changed since it was loaded" } }, 409);
+      if (body?.version !== found.item.version) return json({ error: { code: "stale", message: "resource changed since it was loaded" } }, 409);
       const owned = found.item.external?.provider_owned_fields ?? [];
       if (owned.some((field) => field in (body ?? {}))) return json({ error: { code: "provider_owned", message: "field is authoritative in the external provider" } }, 409);
-      if (body?.["blocked"] === true && !text(body?.["blocker"], "").trim()) {
+      if (body?.blocked === true && !text(body?.blocker, "").trim()) {
         return json({ error: { code: "validation_failed", message: "request contains invalid fields", fields: { blocker: ["must be present when blocked"] } } }, 422);
       }
       Object.assign(found.item, Object.fromEntries(Object.entries(body ?? {}).filter(([key]) => key !== "version")));
@@ -577,13 +577,13 @@ describe("project planning", () => {
     const user = userEvent.setup();
     const harness = createHarness();
     const served = readWorkDetail({ id: firstItemId, projectId: firstProjectId, title: "First item" });
-    const servedItem = served["work_item"] as Record<string, unknown>;
-    servedItem["version"] = 1;
-    servedItem["description"] = "Recorded description";
-    servedItem["branch"] = "feat/recorded";
+    const servedItem = served.work_item as Record<string, unknown>;
+    servedItem.version = 1;
+    servedItem.description = "Recorded description";
+    servedItem.branch = "feat/recorded";
     // Recorded manual delivery values, so every editable delivery control
     // holds a value the operator can empty.
-    servedItem["delivery"] = {
+    servedItem.delivery = {
       pull_request: { value: "https://example.invalid/pr/1", source: "manual", generation: null, url: "https://example.invalid/pr/1", status: null },
       ci: { value: "passed", source: "manual", generation: null, url: null, status: "passed" },
       review: { value: "approved", source: "manual", generation: null, url: null, status: "approved" },
@@ -634,7 +634,7 @@ describe("project planning", () => {
     const release = harness.holdNextMutation();
     card.focus();
     fireEvent.keyDown(card, { key: "ArrowRight", shiftKey: true });
-    await waitFor(() => expect(patchesOf(harness, `/portal/api/work-items/${firstItemId}/move`)).toHaveLength(1));
+    await waitFor(() => { expect(patchesOf(harness, `/portal/api/work-items/${firstItemId}/move`)).toHaveLength(1); });
     // A move is not modal, so the operator can leave while it is in flight. The
     // announcement is the announcing board's own local state and that board
     // instance unmounts with the navigation, so no surface — including project
@@ -697,10 +697,10 @@ describe("work item planning", () => {
     await screen.findByText(/Work item created\./);
     const posts = postsOf(harness, `/portal/api/projects/${firstProjectId}/work-items`);
     expect(posts).toHaveLength(2);
-    const firstIdentity = posts[0]?.body?.["creation_id"];
+    const firstIdentity = posts[0]?.body?.creation_id;
     expect(typeof firstIdentity).toBe("string");
     expect(firstIdentity).not.toBe("");
-    expect(posts[1]?.body?.["creation_id"]).toBe(firstIdentity);
+    expect(posts[1]?.body?.creation_id).toBe(firstIdentity);
     expect(projectOf(harness.state, firstProjectId)?.work_items.filter((item) => item.title === "Identity item")).toHaveLength(1);
   });
 
@@ -719,7 +719,7 @@ describe("work item planning", () => {
     expect(projectOf(harness.state, firstProjectId)?.work_items.filter((item) => item.title === "Lost answer")).toHaveLength(1);
     const posts = postsOf(harness, `/portal/api/projects/${firstProjectId}/work-items`);
     expect(posts).toHaveLength(2);
-    expect(posts[1]?.body?.["creation_id"]).toBe(posts[0]?.body?.["creation_id"]);
+    expect(posts[1]?.body?.creation_id).toBe(posts[0]?.body?.creation_id);
   });
 
   it("keeps the pending creation identity when the operator reopens the draft", async () => {
@@ -741,7 +741,7 @@ describe("work item planning", () => {
     await screen.findByText(/Work item already existed; the server returned the original row, so this submission was not applied\./);
     const posts = postsOf(harness, `/portal/api/projects/${firstProjectId}/work-items`);
     expect(posts).toHaveLength(2);
-    expect(posts[1]?.body?.["creation_id"]).toBe(posts[0]?.body?.["creation_id"]);
+    expect(posts[1]?.body?.creation_id).toBe(posts[0]?.body?.creation_id);
     expect(projectOf(harness.state, firstProjectId)?.work_items.filter((item) => item.title === "Reopened draft")).toHaveLength(1);
   });
 
@@ -776,10 +776,10 @@ describe("work item planning", () => {
     const card = await screen.findByRole("link", { name: "Legacy item" });
     card.focus();
     fireEvent.keyDown(card, { key: "ArrowRight", shiftKey: true });
-    await waitFor(() => expect(patchesOf(harness, `/portal/api/work-items/${firstItemId}/move`)).toHaveLength(1));
+    await waitFor(() => { expect(patchesOf(harness, `/portal/api/work-items/${firstItemId}/move`)).toHaveLength(1); });
     expect(patchesOf(harness, `/portal/api/work-items/${firstItemId}/move`)[0]?.body).toEqual({ version: 1, status: "ready", before_id: null });
     const moved = screen.getByRole("link", { name: "Legacy item" });
-    await waitFor(() => expect(document.activeElement).toBe(moved));
+    await waitFor(() => { expect(document.activeElement).toBe(moved); });
     const readyColumn = screen.getByRole("heading", { name: /^ready$/i }).closest(".board-column");
     if (readyColumn === null) throw new Error("ready column missing");
     expect(within(readyColumn as HTMLElement).getByRole("link", { name: "Legacy item" })).toBeVisible();
@@ -801,13 +801,13 @@ describe("work item planning", () => {
     const user = userEvent.setup();
     const harness = createHarness();
     const served = readWorkDetail({ id: providerItemId, projectId: firstProjectId, title: "Provider item" });
-    const servedItem = served["work_item"] as Record<string, unknown>;
-    servedItem["version"] = 1;
+    const servedItem = served.work_item as Record<string, unknown>;
+    servedItem.version = 1;
     // The write-side row carries the tracker binding the read serves; the editor
     // must present those fields read-only from the served list.
     const found = itemOf(harness.state, providerItemId);
     if (found === null) throw new Error("item missing");
-    servedItem["external"] = found.item.external;
+    servedItem.external = found.item.external;
     harness.state.detail[providerItemId] = served;
     renderWorkspace(`/portal/work/${providerItemId}`, harness);
     await user.click(await screen.findByRole("button", { name: "Edit work item" }));
@@ -831,8 +831,8 @@ describe("work item planning", () => {
     const user = userEvent.setup();
     const harness = createHarness();
     const served = readWorkDetail({ id: firstItemId, projectId: firstProjectId, title: "First item" });
-    const servedItem = served["work_item"] as Record<string, unknown>;
-    servedItem["version"] = 1;
+    const servedItem = served.work_item as Record<string, unknown>;
+    servedItem.version = 1;
     harness.state.detail[firstItemId] = served;
     renderWorkspace(`/portal/work/${firstItemId}`, harness);
     await user.click(await screen.findByRole("button", { name: "Edit work item" }));
@@ -848,8 +848,8 @@ describe("work item planning", () => {
     const user = userEvent.setup();
     const harness = createHarness();
     const served = readWorkDetail({ id: firstItemId, projectId: firstProjectId, title: "First item" });
-    const servedItem = served["work_item"] as Record<string, unknown>;
-    servedItem["version"] = 1;
+    const servedItem = served.work_item as Record<string, unknown>;
+    servedItem.version = 1;
     harness.state.detail[firstItemId] = served;
     renderWorkspace(`/portal/work/${firstItemId}`, harness);
     await user.click(await screen.findByRole("button", { name: "Edit work item" }));
@@ -870,11 +870,11 @@ describe("work item planning", () => {
     const user = userEvent.setup();
     const harness = createHarness();
     const served = readWorkDetail({ id: firstItemId, projectId: firstProjectId, title: "First item" });
-    const servedItem = served["work_item"] as Record<string, unknown>;
-    servedItem["version"] = 1;
+    const servedItem = served.work_item as Record<string, unknown>;
+    servedItem.version = 1;
     // A recorded owner name: every field the unassigned rewrite discards is
     // carried by the payload and named in the fixed owner-name-first order.
-    servedItem["assignee"] = { type: "agent", name: "Ada", agent_profile: "default" };
+    servedItem.assignee = { type: "agent", name: "Ada", agent_profile: "default" };
     harness.state.detail[firstItemId] = served;
     renderWorkspace(`/portal/work/${firstItemId}`, harness);
     await user.click(await screen.findByRole("button", { name: "Edit work item" }));
@@ -908,8 +908,8 @@ describe("work item planning", () => {
     // server's guard refuses execution-defining changes and the editor states
     // that before the operator submits one.
     const served = readWorkDetail({ id: firstItemId, projectId: firstProjectId, title: "First item", execution: { state: "completed" } });
-    const servedItem = served["work_item"] as Record<string, unknown>;
-    servedItem["version"] = 1;
+    const servedItem = served.work_item as Record<string, unknown>;
+    servedItem.version = 1;
     harness.state.detail[firstItemId] = served;
     renderWorkspace(`/portal/work/${firstItemId}`, harness);
     await user.click(await screen.findByRole("button", { name: "Edit work item" }));
@@ -920,8 +920,8 @@ describe("work item planning", () => {
     const user = userEvent.setup();
     const harness = createHarness();
     const served = readWorkDetail({ id: firstItemId, projectId: firstProjectId, title: "First item" });
-    const servedItem = served["work_item"] as Record<string, unknown>;
-    servedItem["version"] = 1;
+    const servedItem = served.work_item as Record<string, unknown>;
+    servedItem.version = 1;
     harness.state.detail[firstItemId] = served;
     const { application } = renderWorkspace(`/portal/work/${firstItemId}`, harness);
     await user.click(await screen.findByRole("button", { name: "Edit work item" }));
@@ -931,7 +931,7 @@ describe("work item planning", () => {
     // read-only, and the submission may no longer carry the typed value.
     const trackerExternal = itemOf(harness.state, providerItemId)?.item.external;
     if (trackerExternal === undefined) throw new Error("tracker fixture missing");
-    servedItem["external"] = { ...trackerExternal, provider_owned_fields: ["title"] };
+    servedItem.external = { ...trackerExternal, provider_owned_fields: ["title"] };
     await act(async () => { await application.queryClient.refetchQueries({ queryKey: ["work-item", { workItemId: firstItemId }] }); });
     await vi.waitFor(() => expect(screen.getByLabelText("Title")).toBeDisabled());
     await user.click(screen.getByRole("button", { name: "Save" }));
@@ -945,18 +945,18 @@ describe("work item planning", () => {
     const user = userEvent.setup();
     const harness = createHarness();
     const served = readWorkDetail({ id: firstItemId, projectId: firstProjectId, title: "First item" });
-    const servedItem = served["work_item"] as Record<string, unknown>;
-    servedItem["version"] = 1;
+    const servedItem = served.work_item as Record<string, unknown>;
+    servedItem.version = 1;
     harness.state.detail[firstItemId] = served;
     const { application } = renderWorkspace(`/portal/work/${firstItemId}`, harness);
     await user.click(await screen.findByRole("button", { name: "Edit work item" }));
     await user.selectOptions(screen.getByLabelText("CI"), "passed");
     // Reported execution claims the CI status while the form is open.
-    const servedDelivery = servedItem["delivery"] as { ci: { source: string; value: string | null } };
+    const servedDelivery = servedItem.delivery as { ci: { source: string; value: string | null } };
     servedDelivery.ci.source = "agent";
     servedDelivery.ci.value = "passed";
     await act(async () => { await application.queryClient.refetchQueries({ queryKey: ["work-item", { workItemId: firstItemId }] }); });
-    await vi.waitFor(() => expect(screen.queryByRole("combobox", { name: "CI" })).toBeNull());
+    await vi.waitFor(() => { expect(screen.queryByRole("combobox", { name: "CI" })).toBeNull(); });
     await user.click(screen.getByRole("button", { name: "Save" }));
     const notice = await screen.findByText(/Work item updated\./);
     expect(notice).toHaveTextContent(/CI status/);
@@ -968,13 +968,13 @@ describe("work item planning", () => {
     const user = userEvent.setup();
     const harness = createHarness();
     const served = readWorkDetail({ id: firstItemId, projectId: firstProjectId, title: "First item" });
-    const servedItem = served["work_item"] as Record<string, unknown>;
-    servedItem["version"] = 1;
+    const servedItem = served.work_item as Record<string, unknown>;
+    servedItem.version = 1;
     harness.state.detail[firstItemId] = served;
     const { application } = renderWorkspace(`/portal/work/${firstItemId}`, harness);
     await user.click(await screen.findByRole("button", { name: "Edit work item" }));
     await user.type(screen.getByLabelText("Branch"), "feat/draft");
-    delete servedItem["version"];
+    delete servedItem.version;
     await act(async () => { await application.queryClient.invalidateQueries({ queryKey: ["work-item", { workItemId: firstItemId }] }); });
     expect(await screen.findByRole("alert")).toHaveTextContent(/revision is no longer served/);
     expect(screen.queryByRole("dialog", { name: "Edit work item" })).toBeNull();
@@ -988,8 +988,8 @@ describe("work item planning", () => {
     // carries no marker; the server's row is Goal-managed, so the legacy write
     // is refused with the authoritative 403 and the surface re-reads.
     const served = readWorkDetail({ id: firstItemId, projectId: firstProjectId, title: "Legacy item" });
-    const servedItem = served["work_item"] as Record<string, unknown>;
-    servedItem["version"] = 1;
+    const servedItem = served.work_item as Record<string, unknown>;
+    servedItem.version = 1;
     harness.state.detail[firstItemId] = served;
     const found = itemOf(harness.state, firstItemId);
     if (found === null) throw new Error("item missing");
@@ -1007,6 +1007,6 @@ describe("work item planning", () => {
     expect(found.item.title).toBe("Legacy item");
     // The authoritative refusal re-reads the server's workspace state instead
     // of leaving the surface on the snapshot the refused write was built from.
-    await waitFor(() => expect(harness.requests.filter((request) => request.method === "GET" && request.path === "/portal/api/workspace")).toHaveLength(readsBeforeSave + 1));
+    await waitFor(() => { expect(harness.requests.filter((request) => request.method === "GET" && request.path === "/portal/api/workspace")).toHaveLength(readsBeforeSave + 1); });
   });
 });

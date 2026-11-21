@@ -38,7 +38,7 @@ function workspaceResponse(selected: string) {
 // carries with it.
 function displayedIdentity() {
   const text = screen.getByText(/mutation identity [0-9a-f]/).textContent ?? "";
-  return text.match(/mutation identity ([0-9a-f-]{36})/)?.[1] ?? "";
+  return (/mutation identity ([0-9a-f-]{36})/.exec(text))?.[1] ?? "";
 }
 
 describe("attention entry point", () => {
@@ -336,7 +336,7 @@ describe("goal detail surface", () => {
     // version the server serves at submit, not the settled one, or the server
     // refuses it as stale.
     let advanced = false;
-    const commands: Array<{ expected_version: number; expected_revision: number }> = [];
+    const commands: { expected_version: number; expected_revision: number }[] = [];
     const { fetcher } = portalFetcher((path, init) => {
       const url = new URL(path, "http://localhost");
       if (url.pathname === `/portal/api/goals/${goalId}`) {
@@ -367,7 +367,7 @@ describe("goal detail surface", () => {
     await user.click(screen.getByRole("button", { name: "Send Amend" }));
     // The command carries the version the server serves now; pre-fix it carries
     // the settled 8 and the server answers the stale conflict instead.
-    await waitFor(() => expect(commands).toHaveLength(1));
+    await waitFor(() => { expect(commands).toHaveLength(1); });
     expect(commands[0]?.expected_version).toBe(9);
     expect(commands[0]?.expected_revision).toBe(1);
     expect(await screen.findByText("Amend accepted by the server.", {}, { timeout: 5_000 })).toBeVisible();
@@ -419,7 +419,7 @@ describe("goal detail surface", () => {
     // The surface states acceptance only after the served goal settles on the
     // applied state (bounded), so this wait allows for that bound.
     expect(await screen.findByText("Pause accepted by the server.", {}, { timeout: 5_000 })).toBeVisible();
-    await waitFor(() => expect(identities).toEqual([shown, shown]));
+    await waitFor(() => { expect(identities).toEqual([shown, shown]); });
     // The re-send repeated the frozen attempt byte for byte — the identity and
     // both expected versions the first attempt carried, not the version the
     // goal now serves — because the server replays only a byte-equal body and
@@ -433,7 +433,7 @@ describe("goal detail surface", () => {
     const renewed = displayedIdentity();
     expect(renewed).not.toBe(shown);
     await user.click(screen.getByRole("button", { name: "Send Pause" }));
-    await waitFor(() => expect(identities).toEqual([shown, shown, renewed]));
+    await waitFor(() => { expect(identities).toEqual([shown, shown, renewed]); });
     // The attempt must settle (and release its identity) before the next one;
     // the acceptance notice waits for the served goal, so allow that bound.
     await waitFor(() => expect(screen.getByRole("button", { name: "Pause" })).toBeEnabled(), { timeout: 5_000 });
@@ -469,7 +469,7 @@ describe("goal detail surface", () => {
     await user.click(screen.getByRole("button", { name: "Send Pause" }));
     // Session expiry owns this answer: the private cache is cleared and the
     // operator returns to login instead of reading a refusal panel.
-    await vi.waitFor(() => expect(replace).toHaveBeenCalledWith(`/portal/login?return_to=${encodeURIComponent(`/portal/goals/${goalId}`)}`));
+    await vi.waitFor(() => { expect(replace).toHaveBeenCalledWith(`/portal/login?return_to=${encodeURIComponent(`/portal/goals/${goalId}`)}`); });
     expect(screen.queryByRole("heading", { name: "The server refused this action" })).not.toBeInTheDocument();
     expect(application.auth.getSnapshot()).toBe(true);
   });
@@ -508,7 +508,7 @@ describe("goal detail surface", () => {
     await user.click(screen.getByRole("button", { name: "Pause" }));
     expect(displayedIdentity()).toBe(first);
     await user.click(screen.getByRole("button", { name: "Send Pause" }));
-    await waitFor(() => expect(identities).toEqual([first, first]));
+    await waitFor(() => { expect(identities).toEqual([first, first]); });
     expect(screen.queryByText(/accepted by the server/)).not.toBeInTheDocument();
   });
 
@@ -538,7 +538,11 @@ describe("goal detail surface", () => {
     const integrationSubject = { resource_id: "88888888-8888-4888-8888-888888888888", commit: "c".repeat(40), tree_digest: `sha256:${"d".repeat(64)}` };
     const implementationEvidence = "99999999-9999-4999-8999-999999999999";
     const integrationEvidence = "99999999-9999-4999-8999-999999999998";
-    let achievePayload: Record<string, unknown> | null = null;
+    // `undefined`, not `null`, as the sentinel: the capture happens inside the
+    // fetched command handler, so a `= null` initializer narrows the variable to
+    // `null` for the checker and leaves everything after the guard unreachable
+    // (`never`; the earlier `payload["subject"]` element accesses masked it).
+    let achievePayload: Record<string, unknown> | undefined;
     const { fetcher } = portalFetcher((path, init) => {
       const url = new URL(path, "http://localhost");
       if (url.pathname === `/portal/api/goals/${goalId}`) {
@@ -576,13 +580,13 @@ describe("goal detail surface", () => {
     await screen.findByRole("heading", { level: 1, name: "Ready goal" });
     await user.click(screen.getByRole("button", { name: "Achieve" }));
     await user.click(screen.getByRole("button", { name: "Send Achieve" }));
-    await waitFor(() => expect(achievePayload).not.toBeNull());
-    if (achievePayload === null) throw new Error("the achieve command was not sent");
+    await waitFor(() => { expect(achievePayload).toBeDefined(); });
+    if (achievePayload === undefined) throw new Error("the achieve command was not sent");
     const payload = achievePayload;
-    expect(payload["subject"]).toEqual(integrationSubject);
-    expect(payload["evidence_ids"]).toEqual([integrationEvidence]);
-    expect(payload["integration_work_item_id"]).toBe("55555555-5555-4555-8555-555555555555");
-    expect(payload["decision_id"]).toBeNull();
+    expect(payload.subject).toEqual(integrationSubject);
+    expect(payload.evidence_ids).toEqual([integrationEvidence]);
+    expect(payload.integration_work_item_id).toBe("55555555-5555-4555-8555-555555555555");
+    expect(payload.decision_id).toBeNull();
   });
 
   it("renders the served refusal when the server does not allow an action", async () => {
@@ -668,7 +672,7 @@ describe("goal detail surface", () => {
       ],
       resolution: null,
     };
-    const commands: Array<Record<string, unknown>> = [];
+    const commands: Record<string, unknown>[] = [];
     const { fetcher } = portalFetcher((path: string, init?: RequestInit) => {
       const url = new URL(path, "http://localhost");
       if (url.pathname === `/portal/api/goals/${goalId}`) {
@@ -691,21 +695,21 @@ describe("goal detail surface", () => {
     await user.click(screen.getByRole("button", { name: "Resolve the decision with accept" }));
     // The accepted two-step contract: the served decision is resolved with the
     // served option, then the plan admission follows with the re-read versions.
-    await waitFor(() => expect(commands.length).toBe(2));
-    const [resolve, admit] = commands as Array<{ kind?: string; payload?: Record<string, unknown> } | undefined>;
+    await waitFor(() => { expect(commands.length).toBe(2); });
+    const [resolve, admit] = commands as ({ kind?: string; payload?: Record<string, unknown> } | undefined)[];
     if (!resolve || !admit) throw new Error("the approval commands were not sent");
     expect(resolve.kind).toBe("resolve_decision");
-    expect(resolve.payload?.["decision_id"]).toBe(decision.id);
-    expect(resolve.payload?.["expected_decision_version"]).toBe(3);
-    expect(resolve.payload?.["option_id"]).toBe("accept");
+    expect(resolve.payload?.decision_id).toBe(decision.id);
+    expect(resolve.payload?.expected_decision_version).toBe(3);
+    expect(resolve.payload?.option_id).toBe("accept");
     expect(admit.kind).toBe("accept_plan");
-    expect(admit.payload?.["decision_id"]).toBe(decision.id);
+    expect(admit.payload?.decision_id).toBe(decision.id);
     // The plan admission carries the server's own digest for this proposal; the
     // vector was computed in this worktree with the portable Elixir toolchain
     // and cross-checked with Python hashlib:
     //   mix run --no-start -e 'IO.puts("sha256:" <> Base.encode16(SymmetryControl.RequestHash.canonical(%{"schema_version" => "symmetry.plan.v1", "items" => []}), case: :lower))'
     // i.e. sha256 over {"items":[],"schema_version":"symmetry.plan.v1"}.
-    expect(admit.payload?.["proposal_hash"]).toBe("sha256:e9a1f1719763b645d05e4b1fcc241b7c7fb71c0594876ae16428757a7e222805");
+    expect(admit.payload?.proposal_hash).toBe("sha256:e9a1f1719763b645d05e4b1fcc241b7c7fb71c0594876ae16428757a7e222805");
   });
 
   it("builds the decision resolution from a submit-time read so a concurrently advanced goal is not sent stale", async () => {
@@ -733,7 +737,7 @@ describe("goal detail surface", () => {
     let advanced = false;
     let applied = false;
     const servedPair = () => (applied ? { goal: 6, decision: 5 } : advanced ? { goal: 5, decision: 4 } : { goal: 4, decision: 3 });
-    const commands: Array<{ kind: string; expected_version: number; expected_revision: number; payload: Record<string, unknown> }> = [];
+    const commands: { kind: string; expected_version: number; expected_revision: number; payload: Record<string, unknown> }[] = [];
     const { fetcher } = portalFetcher((path: string, init?: RequestInit) => {
       const url = new URL(path, "http://localhost");
       if (url.pathname === `/portal/api/goals/${goalId}`) {
@@ -763,7 +767,7 @@ describe("goal detail surface", () => {
           return jsonResponse({ error: { code: "stale", message: "resource changed since it was loaded", current_version: pair.goal, current_revision: 1, allowed_actions: ["amend", "cancel"] } }, 409);
         }
         if (envelope.kind === "resolve_decision") {
-          if (envelope.payload["expected_decision_version"] !== pair.decision || envelope.payload["decision_id"] !== decision.id || envelope.payload["option_id"] !== "accept") {
+          if (envelope.payload.expected_decision_version !== pair.decision || envelope.payload.decision_id !== decision.id || envelope.payload.option_id !== "accept") {
             return jsonResponse({ error: { code: "invalid_decision", message: "decision is no longer valid for this Goal" } }, 409);
           }
           applied = true;
@@ -786,7 +790,7 @@ describe("goal detail surface", () => {
     // The concurrent operator command advances the goal and the decision before the press.
     advanced = true;
     await user.click(screen.getByRole("button", { name: "Resolve the decision with accept" }));
-    await waitFor(() => expect(commands.map((command) => command.kind)).toEqual(["resolve_decision", "accept_plan"]));
+    await waitFor(() => { expect(commands.map((command) => command.kind)).toEqual(["resolve_decision", "accept_plan"]); });
     const [resolve, admit] = commands;
     if (!resolve || !admit) throw new Error("the approval commands were not sent");
     // The resolution carries the versions the server serves now — the envelope
@@ -794,9 +798,9 @@ describe("goal detail surface", () => {
     // settled 4/3 pair and the server answers the 409 stale conflict instead.
     expect(resolve.expected_version).toBe(5);
     expect(resolve.expected_revision).toBe(1);
-    expect(resolve.payload["decision_id"]).toBe(decision.id);
-    expect(resolve.payload["expected_decision_version"]).toBe(4);
-    expect(resolve.payload["option_id"]).toBe("accept");
+    expect(resolve.payload.decision_id).toBe(decision.id);
+    expect(resolve.payload.expected_decision_version).toBe(4);
+    expect(resolve.payload.option_id).toBe("accept");
     // The admission follows the applied resolution's own read (the goal moved
     // to 6), exactly as the two-step contract states.
     expect(admit.kind).toBe("accept_plan");
@@ -879,13 +883,13 @@ describe("goal detail surface", () => {
     // The first attempt read at submit: it carries the served 5/4 pair.
     const first = JSON.parse(resolveBodies[0] ?? "{}") as { expected_version: number; payload: Record<string, unknown> };
     expect(first.expected_version).toBe(5);
-    expect(first.payload["expected_decision_version"]).toBe(4);
+    expect(first.payload.expected_decision_version).toBe(4);
     // Re-pressing the same intent resends the recorded bytes, so the server
     // replays the applied resolution instead of refusing the resolved decision;
     // a body rebuilt from a fresh read (6/5, resolved) is not the recorded
     // request and would be refused.
     await user.click(screen.getByRole("button", { name: "Resolve the decision with accept" }));
-    await waitFor(() => expect(resolveBodies).toHaveLength(2));
+    await waitFor(() => { expect(resolveBodies).toHaveLength(2); });
     expect(resolveBodies[1]).toBe(resolveBodies[0]);
     // The admission follows the applied resolution's read and is acknowledged
     // with the notice, which waits for the served goal to settle (bounded).
@@ -990,7 +994,7 @@ describe("goal detail surface", () => {
     // server replays the applied admission; a body rebuilt from the post-admission
     // read (7/1) is not the recorded request and would be refused.
     await user.click(screen.getByRole("button", { name: "Resolve the decision with accept" }));
-    await waitFor(() => expect(admitBodies).toHaveLength(2));
+    await waitFor(() => { expect(admitBodies).toHaveLength(2); });
     expect(resolveBodies[1]).toBe(resolveBodies[0]);
     expect(admitBodies[1]).toBe(admitBodies[0]);
     // The replay is acknowledged with the notice, which waits for the served goal
@@ -1018,7 +1022,7 @@ describe("goal detail surface", () => {
     let servedVersion = 5;
     let concurrentlyAdvanced = false;
     let decisionResolved = false;
-    const resolveBodies: Array<{ mutation_id: string; expected_version: number; expected_revision: number; payload: Record<string, unknown> }> = [];
+    const resolveBodies: { mutation_id: string; expected_version: number; expected_revision: number; payload: Record<string, unknown> }[] = [];
     const { fetcher } = portalFetcher((path: string, init?: RequestInit) => {
       const url = new URL(path, "http://localhost");
       if (url.pathname === `/portal/api/goals/${goalId}`) {
@@ -1079,11 +1083,11 @@ describe("goal detail surface", () => {
     // serves now. A kept attempt resends the refused bytes (5) under the first
     // identity, and the server answers the same refusal again.
     await user.click(screen.getByRole("button", { name: "Resolve the decision with accept" }));
-    await waitFor(() => expect(resolveBodies).toHaveLength(2));
+    await waitFor(() => { expect(resolveBodies).toHaveLength(2); });
     expect(resolveBodies[1]?.mutation_id).not.toBe(resolveBodies[0]?.mutation_id);
     expect(resolveBodies[1]?.expected_version).toBe(6);
     expect(resolveBodies[1]?.expected_revision).toBe(1);
-    expect(resolveBodies[1]?.payload["expected_decision_version"]).toBe(3);
+    expect(resolveBodies[1]?.payload.expected_decision_version).toBe(3);
     // The acceptance notice waits for the served goal to settle (bounded), so
     // this wait allows for that bound.
     expect(await screen.findByText("The server admitted the plan.", {}, { timeout: 5_000 })).toBeVisible();
@@ -1109,8 +1113,8 @@ describe("goal detail surface", () => {
     let resolveAttempts = 0;
     let decisionResolved = false;
     let servedVersion = 5;
-    const resolveBodies: Array<{ mutation_id: string }> = [];
-    const admitBodies: Array<{ mutation_id: string; payload: Record<string, unknown> }> = [];
+    const resolveBodies: { mutation_id: string }[] = [];
+    const admitBodies: { mutation_id: string; payload: Record<string, unknown> }[] = [];
     const { fetcher } = portalFetcher((path: string, init?: RequestInit) => {
       const url = new URL(path, "http://localhost");
       if (url.pathname === `/portal/api/goals/${goalId}`) {
@@ -1159,11 +1163,11 @@ describe("goal detail surface", () => {
     // The operator edits the pasted proposal, which is the changed intent.
     fireEvent.change(screen.getByLabelText("Plan proposal"), { target: { value: JSON.stringify({ schema_version: "symmetry.plan.v1", items: [{ title: "Admit the corrected plan" }] }) } });
     await user.click(screen.getByRole("button", { name: "Resolve the decision with accept" }));
-    await waitFor(() => expect(resolveBodies).toHaveLength(2));
+    await waitFor(() => { expect(resolveBodies).toHaveLength(2); });
     // The changed intent mints its own identity; replaying the frozen attempt
     // would resend the first attempt's bytes under the first identity.
     expect(resolveBodies[1]?.mutation_id).not.toBe(resolveBodies[0]?.mutation_id);
-    await waitFor(() => expect(admitBodies).toHaveLength(1));
+    await waitFor(() => { expect(admitBodies).toHaveLength(1); });
     // The admission carries the document the operator confirmed, not the frozen
     // attempt's. The vector is the server's own digest for the defaulted
     // document, computed in this worktree with the portable Elixir toolchain and
@@ -1171,13 +1175,13 @@ describe("goal detail surface", () => {
     //   mix run --no-start -e 'IO.puts("sha256:" <> Base.encode16(SymmetryControl.RequestHash.canonical(%{"schema_version" => "symmetry.plan.v1", "items" => [%{"title" => "Admit the corrected plan", "integration" => false, "change_target" => nil}]}), case: :lower))'
     // i.e. sha256 over
     // {"items":[{"change_target":null,"integration":false,"title":"Admit the corrected plan"}],"schema_version":"symmetry.plan.v1"}.
-    expect(admitBodies[0]?.payload["proposal_hash"]).toBe("sha256:749eb3c4bb07d2d9ef09496c0472b11a3e1384b527a5e63ac0b1dfa5e9712afd");
+    expect(admitBodies[0]?.payload.proposal_hash).toBe("sha256:749eb3c4bb07d2d9ef09496c0472b11a3e1384b527a5e63ac0b1dfa5e9712afd");
     expect(await screen.findByText("The server admitted the plan.", {}, { timeout: 5_000 })).toBeVisible();
   }, 15_000);
 
   it("hashes the plan proposal the server validates, with the per-item defaults applied", async () => {
     const decision = { id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", kind: "plan", state: "open", "open?": true, version: 2, goal_revision: 1, question: "Accept the proposed plan?", options: [{ id: "accept", label: "Accept", consequence: "Apply the approved action." }], resolution: null };
-    const commands: Array<Record<string, unknown>> = [];
+    const commands: Record<string, unknown>[] = [];
     const { fetcher } = portalFetcher((path: string, init?: RequestInit) => {
       const url = new URL(path, "http://localhost");
       if (url.pathname === `/portal/api/goals/${goalId}`) {
@@ -1200,7 +1204,7 @@ describe("goal detail surface", () => {
     // key descriptors; set the controlled textarea value directly instead.
     fireEvent.change(screen.getByLabelText("Plan proposal"), { target: { value: JSON.stringify(omittedProposal) } });
     await user.click(screen.getByRole("button", { name: "Resolve the decision with accept" }));
-    await waitFor(() => expect(commands.length).toBe(2));
+    await waitFor(() => { expect(commands.length).toBe(2); });
     const admit = commands[1] as { kind?: string; payload?: Record<string, unknown> } | undefined;
     if (!admit) throw new Error("the plan admission was not sent");
     expect(admit.kind).toBe("accept_plan");
@@ -1210,13 +1214,13 @@ describe("goal detail surface", () => {
     // (`Map.put_new(item, "integration", false)`), the omitted-default fixture
     // hashes to sha256:aaae9efd… while its raw bytes hash to sha256:9b04f528….
     const expectedProposal = { ...omittedProposal, items: omittedProposal.items.map((item) => ({ ...item, integration: false })) };
-    expect(admit.payload?.["proposal"]).toEqual(expectedProposal);
-    expect(admit.payload?.["proposal_hash"]).toBe("sha256:aaae9efde4b51964698a64eac92a5f485213e1b072801d139b0b1a2c597f2519");
+    expect(admit.payload?.proposal).toEqual(expectedProposal);
+    expect(admit.payload?.proposal_hash).toBe("sha256:aaae9efde4b51964698a64eac92a5f485213e1b072801d139b0b1a2c597f2519");
   });
 
   it("escapes C0 controls in the canonical digest exactly as the server's Jason does", async () => {
     const decision = { id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", kind: "plan", state: "open", "open?": true, version: 2, goal_revision: 1, question: "Accept the proposed plan?", options: [{ id: "accept", label: "Accept", consequence: "Apply the approved action." }], resolution: null };
-    const commands: Array<Record<string, unknown>> = [];
+    const commands: Record<string, unknown>[] = [];
     const { fetcher } = portalFetcher((path: string, init?: RequestInit) => {
       const url = new URL(path, "http://localhost");
       if (url.pathname === `/portal/api/goals/${goalId}`) {
@@ -1242,7 +1246,7 @@ describe("goal detail surface", () => {
     // key descriptors; set the controlled textarea value directly instead.
     fireEvent.change(screen.getByLabelText("Plan proposal"), { target: { value: JSON.stringify(document) } });
     await user.click(screen.getByRole("button", { name: "Resolve the decision with accept" }));
-    await waitFor(() => expect(commands.length).toBe(2));
+    await waitFor(() => { expect(commands.length).toBe(2); });
     const admit = commands[1] as { kind?: string; payload?: Record<string, unknown> } | undefined;
     if (!admit) throw new Error("the plan admission was not sent");
     expect(admit.kind).toBe("accept_plan");
@@ -1252,7 +1256,7 @@ describe("goal detail surface", () => {
     //   mix run --no-start -e 'IO.puts("sha256:" <> Base.encode16(SymmetryControl.RequestHash.canonical(%{"schema_version" => "symmetry.plan.v1", "items" => [%{"description" => "before\x0Bafter\x1Bend", "integration" => false, "change_target" => nil}]}), case: :lower))'
     // i.e. sha256 over
     // {"items":[{"change_target":null,"description":"before\u000Bafter\u001Bend","integration":false}],"schema_version":"symmetry.plan.v1"}.
-    expect(admit.payload?.["proposal_hash"]).toBe("sha256:6a41b487e2e260e048b11ea7e3221f53aa9705fc5a9d943a353e6b8c39d202e5");
+    expect(admit.payload?.proposal_hash).toBe("sha256:6a41b487e2e260e048b11ea7e3221f53aa9705fc5a9d943a353e6b8c39d202e5");
   });
 
   it("offers no plan approval when the served plan decision carries no acceptance option", async () => {
