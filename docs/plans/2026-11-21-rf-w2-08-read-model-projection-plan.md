@@ -52,9 +52,10 @@ another converted function, keeping its genuinely per-row/per-candidate argument
 (the settlement-receipt chain keeps `projection` first for the same reason). Deliberately **not**
 converted, although each also takes three or more projection-resident values: the three pure
 builders `graph_projection/4`, `execution_by_work_item/4` and `planning_execution_projection/3` —
-each is called once from `build_projection/2`, takes plain lists and returns one projection
-fragment, so swapping its arguments for `projection` would add coupling without removing a
-threaded call shape. Functions below the
+each is called once (`planning_execution_projection/3` from `project/2`, the other two from
+`build_projection/2`), takes plain lists and returns one projection fragment, so swapping its
+arguments for `projection` would add coupling without removing a threaded call shape.
+Functions below the
 threshold keep their shape and read `projection.<field>` at the call site: `waiting_decision_blocker/2`,
 `stale_context_blocker/2`, `automatic_execution?/1`, `automatic_admission_blocker_replaced?/5`,
 `current_runtime_run?/2`, `latest_planning_task_id/2`, `planning_task?/2`, `matching_receipt_field/3`,
@@ -102,7 +103,7 @@ threshold keep their shape and read `projection.<field>` at the call site: `wait
 | `required_goal_predicates_satisfied?` | `/7` | `/3` (projection, authority, subject_hash) |
 | `unmet_required_goal_evidence_predicates` | `/6` | `/2` (projection, subject_hash) |
 | `eligible_goal_evidence` | `/4` | `/1` |
-| `allowed_actions` | `/7` | `/3` (state, projection, completion) — the five state clauses and their match semantics are preserved |
+| `allowed_actions` | `/7` | `/3` (state, projection, completion) — the four state clauses (`draft`, `active`, `paused`, catch-all) and their match semantics are preserved |
 | `pending_planning_task?` | `/3` | `/1` |
 | `plan_decision_pending_acceptance?` | `/2` | `/1` |
 | `item_projection` | `/5` | `/2` (projection, item) |
@@ -125,8 +126,9 @@ signature and its output.
   built from the same list. Everything else is a pure move of a value into a named field.
 - **`outcomes` shadowing.** Inside `blockers/20` the parameter named `outcomes` was the
   *current-revision* list; `tasks`/`runs` were the *current* sets while `all_tasks`/`all_runs` were
-  the unfiltered sets. The struct names keep that distinction explicitly (`outcomes`/`tasks`/`runs`
-  vs `all_tasks`/`all_runs`); no call site may swap them.
+  the unfiltered sets. The struct keeps that distinction explicitly: the unfiltered `records/3`
+  loads are `outcomes`/`tasks`/`runs`, the filtered subsets are
+  `current_outcomes`/`current_tasks`/`current_runs`; no call site may swap them.
 - **Unused argument dropped.** `completion_projection`'s `_blockers` parameter was dead; it is
   removed rather than carried into the struct, and `completion` is still computed independently of
   `blockers`.
@@ -143,7 +145,7 @@ signature and its output.
 - **Nil/absent input semantics unchanged.** `map_value`/`records`/`normalize_records` are not
   touched, so a goal map without `state`, an unloaded association, `nil` related values and
   list-shaped `related` (the second `project/2` clause) behave exactly as before.
-- **`allowed_actions` clause matching.** The five clauses keep `state` as the first argument and
+- **`allowed_actions` clause matching.** The four state clauses keep `state` as the first argument and
   therefore keep their clause selection; the context fields they read come from the projection.
 - **Block/attention output is the judged surface.** `attention/1` derives its entries from the
   public projection (`attention_entry/1`), so the byte-identical `project/2` oracle covers the
@@ -363,7 +365,7 @@ corrections and one coverage pin, applied to the owned set only and then re-meas
 | record rule (P-1) | the conversion rule above now names the argument-threading chain and lists the three deliberately unconverted builders (`graph_projection/4`, `execution_by_work_item/4`, `planning_execution_projection/3`) | rule text checked against the head source: 41 rows, 42 names, all 42 take `projection` |
 | record count (P-2) | "41 private functions collapse" → 42 (42 names in 41 rows; one row holds two names) | table recount by script over the head source |
 | record scan (P-3) | the user-path row records the measured 1-line self-match of the contract's literal pattern (spelled `users[/]` here so this row cannot match it) and a substantive check whose pattern cannot match the row | `git diff origin/main...HEAD \| grep -icE "[Cc]:[\\/]Users"` = 0 and the same scan over the working-tree diff = 0; the contract's literal scan self-matches only (1 committed / 2 worktree lines, the gate row's `-`/`+` pair) |
-| coverage pin | one new test: `a nonterminal Task from a prior revision splits the two readiness gates by task scope` | two-sided mutation check: flipping the candidates gate to `projection.current_tasks` fails only this test at its first assertion, flipping the integration gate to `projection.tasks` fails only this test at its second assertion; both mutations reverted, source hash re-checked (`99cde951…`) |
+| coverage pin | one new test: `a nonterminal Task from a prior revision splits the two readiness gates by task scope` | two-sided mutation check: flipping the candidates gate (`read_model.ex:1471`) to `projection.current_tasks` fails only this test at `goals_read_model_test.exs:1130` (`refute "required_predicates_unmet" in projection.blocker_reasons`), flipping the integration gate (`read_model.ex:1485`) to `projection.tasks` fails only this test at `goals_read_model_test.exs:1147` (`assert [%{reason: "integration_outcome_required", …}] = projection.blockers`); both runs 50/51 passed, both mutations reverted, source hash re-checked (`99cde951…`) |
 
 ## Contract-preserving decisions taken without a guess
 
