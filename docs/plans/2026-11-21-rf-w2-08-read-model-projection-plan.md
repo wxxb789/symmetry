@@ -316,15 +316,18 @@ the same 14 changed lines.
 
 ## Design trade-offs
 
-- **Struct, not keyed map.** The contract names `%Projection{}`; a struct also makes a typo a
-  compile-time warning-free `nil` at worst and documents the field set in one place. `Map` would
-  hide misspellings; `@enforce_keys` is not used because the struct is filled in one builder.
+- **Struct, not keyed map.** The contract names `%Projection{}`; a misspelled field on the
+  projection struct raises `KeyError` at runtime and Elixir 1.20 warns at compile time
+  (incompatible types). Plain map dot access also raises `KeyError`, so the struct's benefit is
+  the compile-time warning and the declared field set in one place, not nil-vs-`KeyError`.
+  `@enforce_keys` is not used because the struct is filled in one builder.
 - **Nested module in the owned file.** A separate `projection.ex` would be one more file for one
   `defstruct` and would leave the owned set. The struct is a private implementation detail of this
   module: not exported through `Projection` in any public signature.
 - **Convert only ≥3-field readers.** Reading `projection.<field>` inside a two-argument helper
-  (`effective_integration_item_ids(projection.work_items)`, `planning_task?(task, …)`) keeps the
-  diff focused; converting them would enlarge the diff without removing a long call shape.
+  (`effective_integration_item_ids(projection.current_work_items)`, `planning_task?(task, …)`)
+  keeps the diff focused; converting them would enlarge the diff without removing a long call
+  shape.
 - **Not stored on the struct: `blockers`, `settlement_attention`, `completion`.** They are pass
   outputs, not context; storing them would make `project/2`'s assembly order significant. Their
   dependencies are already on the struct (`completion_projection/1` no longer needs `blockers`).
@@ -344,7 +347,7 @@ the same 14 changed lines.
 - `control/lib/symmetry_control_web/**` (W2-04's `portal_goal_attention_test.exs` oracle) and
   `workspaces/read_model.ex`: separate read models, no shared code path.
 - The other Credo `FunctionArity`/`CyclomaticComplexity` reports in the same file that F5 mentions
-  beyond the converted set (for example `budget_blocker/5` internals): not argument-threading
+  beyond the converted set (for example `budget_blocker/1` internals): not argument-threading
   defects of this slice.
 - New tests: the oracle is the existing read-model tests plus the differential dump; no test may be
   weakened, and no new assertion was needed during implementation because the differential check
