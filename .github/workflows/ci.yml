@@ -155,10 +155,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 12.17.0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: pnpm
@@ -187,7 +187,7 @@ jobs:
       - run: pnpm --filter @symmetry/frontend lint
       - run: pnpm --filter @symmetry/frontend test
       - run: pnpm --filter @symmetry/frontend build
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: portal-assets
           path: control/priv/static/portal
@@ -201,7 +201,7 @@ jobs:
           MIX_ENV=prod mix deps.get
           MIX_ENV=prod mix release --overwrite
           tar --create --gzip --file "$RUNNER_TEMP/control-release-linux.tar.gz" --directory _build/prod/rel symmetry_control
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: control-release-linux
           path: ${{ runner.temp }}/control-release-linux.tar.gz
@@ -682,7 +682,7 @@ jobs:
       - name: Upload Linux Pi E2E log and provenance
         id: linux_pi_upload
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pi-control-e2e-linux-${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: error
@@ -724,10 +724,10 @@ jobs:
           mkdir -p _build/prod/rel
           tar --extract --gzip --file "$RUNNER_TEMP/control-release-linux.tar.gz" --directory _build/prod/rel
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 12.17.0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: pnpm
@@ -846,7 +846,7 @@ jobs:
           fi
       - name: Upload release shell boot logs
         if: failure() && steps.render_release_shell.outcome == 'failure'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: shell-release-boot-${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: warn
@@ -855,7 +855,7 @@ jobs:
             ${{ runner.temp }}/shell-release.log
             ${{ runner.temp }}/shell-expiry.log
             ${{ runner.temp }}/shell-goals-off.log
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: workspace-render
@@ -1364,7 +1364,7 @@ jobs:
           }
       - name: Upload Windows Pi E2E log, provenance, and markers
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pi-control-e2e-windows-${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: error
@@ -1496,6 +1496,7 @@ jobs:
           python3 ../scripts/ci/test-model-routing-evaluation.py
           python3 ../scripts/ci/test-model-routing-omp-usage.py
           python3 ../scripts/ci/test-model-routing-record-sanitize.py
+          python3 ../scripts/ci/test-model-routing-record-sanitize-json.py
           python3 ../scripts/ci/test-check-record-cleanliness.py
           python3 ../scripts/ci/test-model-routing-source-subject.py
       # The ordinary (non-race) pass is scoped to the two packages whose named
@@ -1531,7 +1532,7 @@ jobs:
       - run: GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ./...
       - name: Upload ordinary namespace prerequisite evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ordinary-private-namespace-daemon-${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: warn
@@ -1603,7 +1604,7 @@ jobs:
       - name: Upload OpenCode synthetic provenance
         id: opencode_native_upload
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: opencode-native-synthetic-${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: error
@@ -1905,7 +1906,7 @@ jobs:
       - name: Upload production unsupported admission test events
         id: opencode_admission_upload
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: opencode-production-unsupported-windows-${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: error
@@ -2226,7 +2227,7 @@ jobs:
 
       - name: Upload allowlisted sanitized production Linux containment evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: production-linux-containment-witness-${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: error
@@ -2235,7 +2236,7 @@ jobs:
       - name: Upload raw Go test events on witness failure
         # Diagnostic only; local paths and raw test output are not acceptance evidence.
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: production-linux-containment-witness-events-${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: warn
@@ -2243,7 +2244,7 @@ jobs:
           path: ${{ runner.temp }}/production-linux-containment-witness-test.json
       - name: Upload ordinary namespace prerequisite evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ordinary-private-namespace-integration-${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: warn
@@ -2549,7 +2550,7 @@ jobs:
 
       - name: Upload allowlisted sanitized rootless Compose evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: rootless-compose-native-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: warn

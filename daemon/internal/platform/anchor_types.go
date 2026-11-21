@@ -37,6 +37,9 @@ const (
 	linuxOwnerAnchorOperationAuthorizeGate        = "authorize-gate-release-v2"
 	linuxOwnerAnchorOperationStopLeaf             = "stop-leaf-v2"
 	linuxOwnerAnchorOperationClassifyChild        = "classify-run-child-origin-v2"
+	linuxOwnerAnchorOperationIdentity             = "identity"
+	linuxOwnerAnchorOperationRegisterProcess      = "register-process"
+	linuxOwnerAnchorOperationWaitReap             = "wait-reap"
 	linuxOwnerAnchorStopEvidenceVersion           = 1
 	linuxOwnerAnchorRunChildClassificationVersion = 1
 	linuxOwnerAnchorMaxUserNamespaceDepth         = 32

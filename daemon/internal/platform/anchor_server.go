@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/wxxb789/symmetry/daemon/internal/authority"
-	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 	linuxgate "github.com/wxxb789/symmetry/daemon/native/linux-gate/protocol"
 	"golang.org/x/sys/unix"
 )
@@ -1040,31 +1039,22 @@ func (anchor *linuxOwnerAnchor) serveConnection(connection *net.UnixConn) (detac
 	if request.Version != linuxOwnerAnchorProtocolVersion || request.ClientPID != peer.PID || request.ClientIdentity != peer.Identity {
 		return
 	}
-	if request.Operation != linuxOwnerAnchorOperationCloneCleanup &&
-		(request.CloneGrant != nil || request.Cleanup != nil || request.TargetFDPresent) {
+	row, known := linuxOwnerAnchorOperationShapeFor(request.Operation)
+	if !known {
 		return
 	}
-	gateOperation := request.Operation == linuxOwnerAnchorOperationRegisterGate || request.Operation == linuxOwnerAnchorOperationAuthorizeGate
-	stopLeafOperation := request.Operation == linuxOwnerAnchorOperationStopLeaf
-	classifyChildOperation := request.Operation == linuxOwnerAnchorOperationClassifyChild
-	if !gateOperation && (request.Gate != nil || request.UserNamespace != nil) {
+	if request.exclusiveFieldRejected(row) {
 		return
 	}
-	if !stopLeafOperation && request.StopFence != nil {
+	if anchor.stopping && row.stoppingAnswer {
+		anchor.writeResponse(connection, anchor.baseResponse(request, "anchor_stopping"))
 		return
 	}
-	if anchor.stopping && (request.Operation == "identity" || request.Operation == linuxOwnerAnchorOperationStart ||
-		request.Operation == "register-process" || gateOperation || stopLeafOperation || classifyChildOperation) {
-		anchor.writeResponse(connection, request, "anchor_stopping", nil, nil)
+	if row.refuses(request, len(receivedFDs)) {
 		return
 	}
-	if request.Operation == "identity" {
+	if request.Operation == linuxOwnerAnchorOperationIdentity {
 		if linuxOwnerCgroupPathsOverlap(peer.CgroupPath, anchor.managerPath) {
-			return
-		}
-		if len(receivedFDs) != 0 || request.Grant != (LinuxOwnerAnchorGrant{}) || request.Helper != nil || request.Creator != nil || request.Process != nil || request.Role != "" ||
-			request.ReleaseProof != nil || request.PreGateReleaseProof != nil || request.AbortProof != nil || request.CloneGrant != nil || request.Cleanup != nil || request.TargetFDPresent ||
-			request.RunKey != (LinuxOwnerAnchorRunKey{}) || request.Fence != (protocol.Fence{}) {
 			return
 		}
 		if err := verifyLinuxOwnerAnchorManagerMembership(os.Getpid(), anchor.managerPath); err != nil {
@@ -1073,22 +1063,14 @@ func (anchor *linuxOwnerAnchor) serveConnection(connection *net.UnixConn) (detac
 		if err := anchor.parent.verifyPinnedParent(); err != nil {
 			return
 		}
-		anchor.writeResponse(connection, request, "ready", nil, nil)
+		anchor.writeResponse(connection, anchor.baseResponse(request, "ready"))
 		return
 	}
 	if request.Operation == linuxOwnerAnchorOperationRetireCleared || request.Operation == linuxOwnerAnchorOperationRetireAborted {
-		validProofShape := request.ReleaseProof != nil && request.PreGateReleaseProof == nil && request.AbortProof == nil ||
-			request.ReleaseProof == nil && request.PreGateReleaseProof != nil && request.AbortProof == nil ||
-			request.ReleaseProof == nil && request.PreGateReleaseProof == nil && request.AbortProof != nil
-		if len(receivedFDs) != 0 || request.Grant != (LinuxOwnerAnchorGrant{}) ||
-			request.Helper == nil || request.Helper.Validate() != nil || request.RunKey.Generation <= 0 ||
-			request.Fence.Generation != request.RunKey.Generation || !validLinuxOwnerAnchorRunID(request.RunKey.RunID) ||
-			!validProofShape || request.Operation == linuxOwnerAnchorOperationRetireAborted && request.AbortProof == nil ||
-			request.Operation == linuxOwnerAnchorOperationRetireCleared && request.AbortProof != nil ||
-			linuxOwnerCgroupPathsOverlap(peer.CgroupPath, anchor.managerPath) {
+		if linuxOwnerCgroupPathsOverlap(peer.CgroupPath, anchor.managerPath) {
 			return
 		}
-		if err := connection.SetDeadline(time.Now().Add(linuxOwnerAnchorWaitTimeout)); err != nil {
+		if err := connection.SetDeadline(time.Now().Add(row.timeoutClass.duration())); err != nil {
 			return
 		}
 		if err := verifyLinuxOwnerAnchorManagerMembership(os.Getpid(), anchor.managerPath); err != nil {
@@ -1114,7 +1096,7 @@ func (anchor *linuxOwnerAnchor) serveConnection(connection *net.UnixConn) (detac
 		return
 	}
 	helperPeer := false
-	if (request.Operation == "register-process" || gateOperation || stopLeafOperation || classifyChildOperation) && request.Helper != nil {
+	if row.runHelperPeer && request.Helper != nil {
 		run := anchor.runs[request.Grant.RunKey]
 		helperPeer = run != nil && run.grant.Equal(request.Grant) && run.helper.Equal(*request.Helper) &&
 			peer.PID == run.helper.PID && peer.Identity == run.helper.Identity
@@ -1122,15 +1104,7 @@ func (anchor *linuxOwnerAnchor) serveConnection(connection *net.UnixConn) (detac
 	if linuxOwnerCgroupPathsOverlap(peer.CgroupPath, anchor.managerPath) && !helperPeer {
 		return
 	}
-	operationTimeout := linuxOwnerAnchorRequestTimeout
-	if request.Operation == "wait-reap" || request.Operation == linuxOwnerAnchorOperationReapRun ||
-		request.Operation == linuxOwnerAnchorOperationWaitHelper || request.Operation == linuxOwnerAnchorOperationLookup {
-		operationTimeout = linuxOwnerAnchorWaitTimeout
-	}
-	if stopLeafOperation || classifyChildOperation {
-		operationTimeout = linuxOwnerAnchorWaitTimeout
-	}
-	if err := connection.SetDeadline(time.Now().Add(operationTimeout)); err != nil {
+	if err := connection.SetDeadline(time.Now().Add(row.timeoutClass.duration())); err != nil {
 		return
 	}
 	if err := verifyLinuxOwnerAnchorManagerMembership(os.Getpid(), anchor.managerPath); err != nil {
@@ -1141,27 +1115,22 @@ func (anchor *linuxOwnerAnchor) serveConnection(connection *net.UnixConn) (detac
 	}
 	switch request.Operation {
 	case linuxOwnerAnchorOperationStart:
-		if len(receivedFDs) != 2 || request.Helper != nil || request.Creator != nil || request.Process != nil || request.Role != "" {
-			return
-		}
-		if anchor.stopping {
-			anchor.writeResponse(connection, request, "anchor_stopping", nil, nil)
-			return
-		}
 		if err := verifyLinuxOwnerAnchorLeafFD(receivedFDs[0], request.Grant.Leaf, anchor.owner.AUID); err != nil {
-			anchor.writeResponse(connection, request, "request_rejected", nil, nil)
+			anchor.writeResponse(connection, anchor.baseResponse(request, "request_rejected"))
 			return
 		}
 		if err := verifyLinuxOwnerAnchorOwnerPipeReadFD(receivedFDs[1]); err != nil {
-			anchor.writeResponse(connection, request, "request_rejected", nil, nil)
+			anchor.writeResponse(connection, anchor.baseResponse(request, "request_rejected"))
 			return
 		}
 		if existing, exists := anchor.runs[request.Grant.RunKey]; exists {
 			if existing == nil || !existing.grant.Equal(request.Grant) {
-				anchor.writeResponse(connection, request, "run_unresolved", nil, nil)
+				anchor.writeResponse(connection, anchor.baseResponse(request, "run_unresolved"))
 				return
 			}
-			anchor.writeResponse(connection, request, "already_started", &existing.helper, nil)
+			response := anchor.baseResponse(request, "already_started")
+			response.Helper = &existing.helper
+			anchor.writeResponse(connection, response)
 			return
 		}
 		var witnessForRun *linuxOwnerAnchorWitnessConfig
@@ -1183,81 +1152,97 @@ func (anchor *linuxOwnerAnchor) serveConnection(connection *net.UnixConn) (detac
 			if _, forkMayHaveOccurred := anchor.runs[request.Grant.RunKey]; forkMayHaveOccurred {
 				status = "start_unresolved"
 			}
-			anchor.writeResponse(connection, request, status, nil, nil)
+			anchor.writeResponse(connection, anchor.baseResponse(request, status))
 			return
 		}
 		helperFD, err := unix.FcntlInt(run.helperPIDFD.Fd(), unix.F_DUPFD_CLOEXEC, 0)
 		if err != nil {
-			anchor.writeResponse(connection, request, "start_unresolved", &run.helper, nil)
+			response := anchor.baseResponse(request, "start_unresolved")
+			response.Helper = &run.helper
+			anchor.writeResponse(connection, response)
 			return
 		}
 		leafFD, err := run.leaf.DuplicateFD()
 		if err != nil {
 			_ = unix.Close(helperFD)
-			anchor.writeResponse(connection, request, "start_unresolved", &run.helper, nil)
+			response := anchor.baseResponse(request, "start_unresolved")
+			response.Helper = &run.helper
+			anchor.writeResponse(connection, response)
 			return
 		}
 		parentFD, err := anchor.parent.DuplicateFD()
 		if err != nil {
 			_ = unix.Close(helperFD)
 			_ = leafFD.Close()
-			anchor.writeResponse(connection, request, "start_unresolved", &run.helper, nil)
+			response := anchor.baseResponse(request, "start_unresolved")
+			response.Helper = &run.helper
+			anchor.writeResponse(connection, response)
 			return
 		}
-		anchor.writeResponseWithFDs(connection, request, "started", &run.helper, nil, helperFD, int(leafFD.Fd()), int(parentFD.Fd()))
+		response := anchor.baseResponse(request, "started")
+		response.Helper = &run.helper
+		anchor.writeResponse(connection, response, helperFD, int(leafFD.Fd()), int(parentFD.Fd()))
 		_ = unix.Close(helperFD)
 		_ = leafFD.Close()
 		_ = parentFD.Close()
 	case linuxOwnerAnchorOperationAttach:
-		if len(receivedFDs) != 0 || request.Helper == nil || request.Creator != nil || request.Process != nil || request.Role != "" {
-			return
-		}
 		run, exists := anchor.runs[request.Grant.RunKey]
 		if !exists || run == nil || !run.grant.Equal(request.Grant) || !run.helper.Equal(*request.Helper) {
-			anchor.writeResponse(connection, request, "run_unavailable", nil, nil)
+			anchor.writeResponse(connection, anchor.baseResponse(request, "run_unavailable"))
 			return
 		}
 		if run.retired {
-			anchor.writeResponse(connection, request, "retired", &run.helper, nil)
+			response := anchor.baseResponse(request, "retired")
+			response.Helper = &run.helper
+			anchor.writeResponse(connection, response)
 			return
 		}
 		if err := verifyLinuxOwnerAnchorPIDFD(int(run.helperPIDFD.Fd()), run.helper); err != nil {
-			anchor.writeResponse(connection, request, "helper_lost", &run.helper, nil)
+			response := anchor.baseResponse(request, "helper_lost")
+			response.Helper = &run.helper
+			anchor.writeResponse(connection, response)
 			return
 		}
 		helperFD, err := unix.FcntlInt(run.helperPIDFD.Fd(), unix.F_DUPFD_CLOEXEC, 0)
 		if err != nil {
-			anchor.writeResponse(connection, request, "attach_unresolved", &run.helper, nil)
+			response := anchor.baseResponse(request, "attach_unresolved")
+			response.Helper = &run.helper
+			anchor.writeResponse(connection, response)
 			return
 		}
 		leafFD, err := run.leaf.DuplicateFD()
 		if err != nil {
 			_ = unix.Close(helperFD)
-			anchor.writeResponse(connection, request, "attach_unresolved", &run.helper, nil)
+			response := anchor.baseResponse(request, "attach_unresolved")
+			response.Helper = &run.helper
+			anchor.writeResponse(connection, response)
 			return
 		}
 		parentFD, err := anchor.parent.DuplicateFD()
 		if err != nil {
 			_ = unix.Close(helperFD)
 			_ = leafFD.Close()
-			anchor.writeResponse(connection, request, "attach_unresolved", &run.helper, nil)
+			response := anchor.baseResponse(request, "attach_unresolved")
+			response.Helper = &run.helper
+			anchor.writeResponse(connection, response)
 			return
 		}
-		anchor.writeResponseWithFDs(connection, request, "attached", &run.helper, nil, helperFD, int(leafFD.Fd()), int(parentFD.Fd()))
+		response := anchor.baseResponse(request, "attached")
+		response.Helper = &run.helper
+		anchor.writeResponse(connection, response, helperFD, int(leafFD.Fd()), int(parentFD.Fd()))
 		_ = unix.Close(helperFD)
 		_ = leafFD.Close()
 		_ = parentFD.Close()
 	case linuxOwnerAnchorOperationLookup:
-		if len(receivedFDs) != 0 || request.Helper != nil || request.Creator != nil || request.Process != nil || request.Role != "" {
-			return
-		}
 		run, exists := anchor.runs[request.Grant.RunKey]
 		if !exists || run == nil || !run.grant.Equal(request.Grant) || run.helper.Validate() != nil {
-			anchor.writeResponse(connection, request, "run_unavailable", nil, nil)
+			anchor.writeResponse(connection, anchor.baseResponse(request, "run_unavailable"))
 			return
 		}
 		if run.retired {
-			anchor.writeResponse(connection, request, "retired", &run.helper, nil)
+			response := anchor.baseResponse(request, "retired")
+			response.Helper = &run.helper
+			anchor.writeResponse(connection, response)
 			return
 		}
 		helperExited := run.helperExit != nil
@@ -1267,7 +1252,9 @@ func (anchor *linuxOwnerAnchor) serveConnection(connection *net.UnixConn) (detac
 				waitErr := run.waitHelper(waitContext)
 				cancel()
 				if waitErr != nil {
-					anchor.writeResponse(connection, request, "wait_unproven", &run.helper, nil)
+					response := anchor.baseResponse(request, "wait_unproven")
+					response.Helper = &run.helper
+					anchor.writeResponse(connection, response)
 					return
 				}
 				helperExited = true
@@ -1275,82 +1262,100 @@ func (anchor *linuxOwnerAnchor) serveConnection(connection *net.UnixConn) (detac
 		}
 		leafFD, err := run.leaf.DuplicateFD()
 		if err != nil {
-			anchor.writeResponse(connection, request, "lookup_unresolved", &run.helper, nil)
+			response := anchor.baseResponse(request, "lookup_unresolved")
+			response.Helper = &run.helper
+			anchor.writeResponse(connection, response)
 			return
 		}
 		parentFD, err := anchor.parent.DuplicateFD()
 		if err != nil {
 			_ = leafFD.Close()
-			anchor.writeResponse(connection, request, "lookup_unresolved", &run.helper, nil)
+			response := anchor.baseResponse(request, "lookup_unresolved")
+			response.Helper = &run.helper
+			anchor.writeResponse(connection, response)
 			return
 		}
 		if helperExited {
-			anchor.writeResponseWithRunPins(connection, request, "helper_exited", &run.helper, run.helperExit, int(leafFD.Fd()), int(parentFD.Fd()))
+			response := anchor.baseResponse(request, "helper_exited")
+			response.Helper = &run.helper
+			response.HelperExit = run.helperExit
+			anchor.writeResponse(connection, response, int(leafFD.Fd()), int(parentFD.Fd()))
 		} else {
 			helperFD, err := unix.FcntlInt(run.helperPIDFD.Fd(), unix.F_DUPFD_CLOEXEC, 0)
 			if err != nil {
 				_ = leafFD.Close()
 				_ = parentFD.Close()
-				anchor.writeResponse(connection, request, "lookup_unresolved", &run.helper, nil)
+				response := anchor.baseResponse(request, "lookup_unresolved")
+				response.Helper = &run.helper
+				anchor.writeResponse(connection, response)
 				return
 			}
-			anchor.writeResponseWithFDs(connection, request, "attached", &run.helper, nil, helperFD, int(leafFD.Fd()), int(parentFD.Fd()))
+			response := anchor.baseResponse(request, "attached")
+			response.Helper = &run.helper
+			anchor.writeResponse(connection, response, helperFD, int(leafFD.Fd()), int(parentFD.Fd()))
 			_ = unix.Close(helperFD)
 		}
 		_ = leafFD.Close()
 		_ = parentFD.Close()
-	case "register-process":
-		if len(receivedFDs) != 1 || request.Helper == nil || request.Creator == nil || request.Process == nil ||
-			request.Gate != nil || request.UserNamespace != nil ||
-			(request.Role != "launcher" && request.Role != "native" && request.Role != "descendant") {
-			return
-		}
+	case linuxOwnerAnchorOperationRegisterProcess:
 		run := anchor.runs[request.Grant.RunKey]
 		if run == nil || !run.grant.Equal(request.Grant) || !run.helper.Equal(*request.Helper) {
-			anchor.writeResponse(connection, request, "run_unavailable", nil, nil)
+			anchor.writeResponse(connection, anchor.baseResponse(request, "run_unavailable"))
 			return
 		}
 		if err := run.registerChild(*request.Process, *request.Creator, request.Role, receivedFDs[0]); err != nil {
-			anchor.writeResponse(connection, request, "request_rejected", nil, nil)
+			anchor.writeResponse(connection, anchor.baseResponse(request, "request_rejected"))
 			return
 		}
-		anchor.writeResponse(connection, request, "registered", nil, nil)
+		anchor.writeResponse(connection, anchor.baseResponse(request, "registered"))
 	case linuxOwnerAnchorOperationClassifyChild:
-		if len(receivedFDs) != 1 || !validLinuxOwnerAnchorChildOriginRequest(request) || !helperPeer {
+		if !helperPeer {
 			return
 		}
 		run := anchor.runs[request.Grant.RunKey]
 		if run == nil || !run.grant.Equal(request.Grant) || !run.helper.Equal(*request.Helper) {
-			anchor.writeResponse(connection, request, "run_unavailable", nil, nil)
+			anchor.writeResponse(connection, anchor.baseResponse(request, "run_unavailable"))
 			return
 		}
 		if err := verifyLinuxOwnerAnchorPIDFDIdentity(receivedFDs[0], *request.Process); err != nil {
-			anchor.writeResponseWithChildClassification(connection, request, "origin_unproven", linuxOwnerAnchorUnknownChildClassification(run, *request.Process))
+			unproven := linuxOwnerAnchorUnknownChildClassification(run, *request.Process)
+			response := anchor.baseResponse(request, "origin_unproven")
+			response.Helper = request.Helper
+			response.ChildClassification = &unproven
+			anchor.writeResponse(connection, response)
 			return
 		}
 		credentials, err := readLinuxOwnerProcessCredentials(request.Process.PID)
 		if err != nil || credentials.Parent != run.helper.PID {
 			run.migrationObserved = true
-			anchor.writeResponseWithChildClassification(connection, request, "origin_unproven", linuxOwnerAnchorUnknownChildClassification(run, *request.Process))
+			unproven := linuxOwnerAnchorUnknownChildClassification(run, *request.Process)
+			response := anchor.baseResponse(request, "origin_unproven")
+			response.Helper = request.Helper
+			response.ChildClassification = &unproven
+			anchor.writeResponse(connection, response)
 			return
 		}
-		classifyContext, cancel := context.WithTimeout(context.Background(), operationTimeout)
+		classifyContext, cancel := context.WithTimeout(context.Background(), row.timeoutClass.duration())
 		classification, err := anchor.classifyRunChildOrigin(classifyContext, run, *request.Process, receivedFDs[0])
 		cancel()
 		credentials, parentErr := readLinuxOwnerProcessCredentials(request.Process.PID)
 		if err != nil || parentErr != nil || credentials.Parent != run.helper.PID {
 			run.migrationObserved = true
-			anchor.writeResponseWithChildClassification(connection, request, "origin_unproven", linuxOwnerAnchorUnknownChildClassification(run, *request.Process))
+			unproven := linuxOwnerAnchorUnknownChildClassification(run, *request.Process)
+			response := anchor.baseResponse(request, "origin_unproven")
+			response.Helper = request.Helper
+			response.ChildClassification = &unproven
+			anchor.writeResponse(connection, response)
 			return
 		}
-		anchor.writeResponseWithChildClassification(connection, request, "classified", classification)
+		response := anchor.baseResponse(request, "classified")
+		response.Helper = request.Helper
+		response.ChildClassification = &classification
+		anchor.writeResponse(connection, response)
 	case linuxOwnerAnchorOperationRegisterGate:
-		if len(receivedFDs) != 1 || !validLinuxOwnerAnchorGateRequest(request) || request.Creator != nil || request.Process != nil || request.Role != "" {
-			return
-		}
 		run := anchor.runs[request.Grant.RunKey]
 		if run == nil || !run.grant.Equal(request.Grant) || !run.helper.Equal(*request.Helper) || !helperPeer {
-			anchor.writeResponse(connection, request, "run_unavailable", nil, nil)
+			anchor.writeResponse(connection, anchor.baseResponse(request, "run_unavailable"))
 			return
 		}
 		for key, other := range anchor.runs {
@@ -1359,112 +1364,104 @@ func (anchor *linuxOwnerAnchor) serveConnection(connection *net.UnixConn) (detac
 			}
 			otherNamespace, err := linuxOwnerAnchorUserNamespaceFDIdentity(other.gateUserNamespaceFD)
 			if err != nil || otherNamespace == *request.UserNamespace {
-				anchor.writeResponse(connection, request, "request_rejected", nil, nil)
+				anchor.writeResponse(connection, anchor.baseResponse(request, "request_rejected"))
 				return
 			}
 		}
 		if err := run.registerGate(*request.Gate, *request.UserNamespace, receivedFDs[0], anchor.userNamespaceFD); err != nil {
-			anchor.writeResponse(connection, request, "request_rejected", nil, nil)
+			anchor.writeResponse(connection, anchor.baseResponse(request, "request_rejected"))
 			return
 		}
-		anchor.writeResponse(connection, request, "registered", nil, nil)
+		anchor.writeResponse(connection, anchor.baseResponse(request, "registered"))
 	case linuxOwnerAnchorOperationAuthorizeGate:
-		if len(receivedFDs) != 0 || !validLinuxOwnerAnchorGateRequest(request) || request.Creator != nil || request.Process != nil || request.Role != "" {
-			return
-		}
 		run := anchor.runs[request.Grant.RunKey]
 		if run == nil || !run.grant.Equal(request.Grant) || !run.helper.Equal(*request.Helper) || !helperPeer {
-			anchor.writeResponse(connection, request, "run_unavailable", nil, nil)
+			anchor.writeResponse(connection, anchor.baseResponse(request, "run_unavailable"))
 			return
 		}
 		if err := run.authorizeGateRelease(*request.Gate, *request.UserNamespace); err != nil {
-			anchor.writeResponse(connection, request, "request_rejected", nil, nil)
+			anchor.writeResponse(connection, anchor.baseResponse(request, "request_rejected"))
 			return
 		}
-		anchor.writeResponse(connection, request, "release_authorized", nil, nil)
+		anchor.writeResponse(connection, anchor.baseResponse(request, "release_authorized"))
 	case linuxOwnerAnchorOperationStopLeaf:
-		if len(receivedFDs) != 0 || !validLinuxOwnerAnchorStopLeafRequest(request) {
-			return
-		}
 		run := anchor.runs[request.Grant.RunKey]
 		if run == nil || !run.grant.Equal(request.Grant) || !run.helper.Equal(*request.Helper) || !helperPeer {
-			anchor.writeResponse(connection, request, "run_unavailable", nil, nil)
+			anchor.writeResponse(connection, anchor.baseResponse(request, "run_unavailable"))
 			return
 		}
 		stopContext, cancel := context.WithTimeout(context.Background(), linuxOwnerAnchorWaitTimeout)
 		stopEvidence, err := anchor.stopRunLeaf(stopContext, run, request.StopFence)
 		cancel()
 		if err != nil {
-			anchor.writeResponse(connection, request, "stop_unproven", nil, nil)
+			anchor.writeResponse(connection, anchor.baseResponse(request, "stop_unproven"))
 			return
 		}
-		anchor.writeResponseWithStopEvidence(connection, request, "stopped", stopEvidence)
-	case "wait-reap":
-		if len(receivedFDs) != 0 || request.Helper == nil || request.Creator != nil || request.Process == nil || !linuxOwnerAnchorValidChildRole(request.Role) {
-			return
-		}
+		response := anchor.baseResponse(request, "stopped")
+		response.StopEvidence = &stopEvidence
+		anchor.writeResponse(connection, response)
+	case linuxOwnerAnchorOperationWaitReap:
 		run := anchor.runs[request.Grant.RunKey]
 		if run == nil || !run.grant.Equal(request.Grant) || !run.helper.Equal(*request.Helper) {
-			anchor.writeResponse(connection, request, "run_unavailable", nil, nil)
+			anchor.writeResponse(connection, anchor.baseResponse(request, "run_unavailable"))
 			return
 		}
 		tracked, registered := run.children[request.Process.PID]
 		if !registered || !tracked.identity.Equal(*request.Process) || tracked.role != request.Role {
-			anchor.writeResponse(connection, request, "request_rejected", nil, nil)
+			anchor.writeResponse(connection, anchor.baseResponse(request, "request_rejected"))
 			return
 		}
 		waitContext, cancel := context.WithTimeout(context.Background(), linuxOwnerAnchorWaitTimeout)
 		if run.helperExit == nil {
 			if err := run.waitHelper(waitContext); err != nil {
 				cancel()
-				anchor.writeResponse(connection, request, "wait_unproven", nil, nil)
+				anchor.writeResponse(connection, anchor.baseResponse(request, "wait_unproven"))
 				return
 			}
 		}
 		if err := anchor.ensureExitedHelperContained(waitContext, run); err != nil {
 			cancel()
-			anchor.writeResponse(connection, request, "stop_unproven", nil, nil)
+			anchor.writeResponse(connection, anchor.baseResponse(request, "stop_unproven"))
 			return
 		}
 		evidence, err := run.reapChild(waitContext, anchor.identity, *request.Process, request.Role)
 		cancel()
 		if err != nil {
-			anchor.writeResponse(connection, request, "wait_unproven", nil, nil)
+			anchor.writeResponse(connection, anchor.baseResponse(request, "wait_unproven"))
 			return
 		}
-		anchor.writeResponse(connection, request, "reaped", nil, &evidence)
+		response := anchor.baseResponse(request, "reaped")
+		response.Evidence = &evidence
+		anchor.writeResponse(connection, response)
 	case linuxOwnerAnchorOperationReapRun:
-		if len(receivedFDs) != 0 || request.Helper == nil || request.Creator != nil || request.Process != nil || request.Role != "" || request.AfterPID < 0 {
-			return
-		}
 		run, exists := anchor.runs[request.Grant.RunKey]
 		if !exists || run == nil || !run.grant.Equal(request.Grant) || !run.helper.Equal(*request.Helper) {
-			anchor.writeResponse(connection, request, "run_unavailable", nil, nil)
+			anchor.writeResponse(connection, anchor.baseResponse(request, "run_unavailable"))
 			return
 		}
 		waitContext, cancel := context.WithTimeout(context.Background(), linuxOwnerAnchorWaitTimeout)
 		if run.helperExit == nil {
 			if err := run.waitHelper(waitContext); err != nil {
 				cancel()
-				anchor.writeResponse(connection, request, "wait_unproven", nil, nil)
+				anchor.writeResponse(connection, anchor.baseResponse(request, "wait_unproven"))
 				return
 			}
 		}
 		if err := anchor.ensureExitedHelperContained(waitContext, run); err != nil {
 			cancel()
-			anchor.writeResponse(connection, request, "stop_unproven", nil, nil)
+			anchor.writeResponse(connection, anchor.baseResponse(request, "stop_unproven"))
 			return
 		}
 		evidence, err := anchor.reapRunChildren(waitContext, run)
 		if err != nil {
 			cancel()
-			anchor.writeResponse(connection, request, "wait_unproven", nil, nil)
+			anchor.writeResponse(connection, anchor.baseResponse(request, "wait_unproven"))
 			return
 		}
 		stopEvidence, err := anchor.finalizeRunStopEvidence(waitContext, run, evidence)
 		cancel()
 		if err != nil {
-			anchor.writeResponse(connection, request, "stop_unproven", nil, nil)
+			anchor.writeResponse(connection, anchor.baseResponse(request, "stop_unproven"))
 			return
 		}
 		filtered := make([]LinuxOwnerAnchorReapEvidence, 0, linuxOwnerAnchorReapPageSize)
@@ -1484,30 +1481,33 @@ func (anchor *linuxOwnerAnchor) serveConnection(connection *net.UnixConn) (detac
 				}
 			}
 		}
-		anchor.writeResponseWithReapEvidence(connection, request, "reaped", filtered, nextPID, more, stopEvidence)
+		response := anchor.baseResponse(request, "reaped")
+		response.ReapEvidence = filtered
+		response.StopEvidence = &stopEvidence
+		response.NextPID = nextPID
+		response.More = more
+		anchor.writeResponse(connection, response)
 	case linuxOwnerAnchorOperationWaitHelper:
-		if len(receivedFDs) != 0 || request.Helper == nil || request.Creator != nil || request.Process != nil || request.Role != "" {
-			return
-		}
 		run, exists := anchor.runs[request.Grant.RunKey]
 		if !exists || run == nil || !run.grant.Equal(request.Grant) || !run.helper.Equal(*request.Helper) {
-			anchor.writeResponse(connection, request, "run_unavailable", nil, nil)
+			anchor.writeResponse(connection, anchor.baseResponse(request, "run_unavailable"))
 			return
 		}
 		waitContext, cancel := context.WithTimeout(context.Background(), linuxOwnerAnchorWaitTimeout)
 		if run.helperExit == nil {
 			if err := run.waitHelper(waitContext); err != nil {
 				cancel()
-				anchor.writeResponse(connection, request, "wait_unproven", nil, nil)
+				anchor.writeResponse(connection, anchor.baseResponse(request, "wait_unproven"))
 				return
 			}
 		}
 		cancel()
-		anchor.writeResponseWithHelperExit(connection, request, *run.helperExit)
+		response := anchor.baseResponse(request, "reaped")
+		response.Helper = request.Helper
+		response.HelperExit = run.helperExit
+		anchor.writeResponse(connection, response)
 	case linuxOwnerAnchorOperationRetire:
-		anchor.handleRetireHelper(connection, request, receivedFDs)
-	default:
-		return
+		anchor.handleRetireHelper(connection, request)
 	}
 	return
 }
@@ -1523,33 +1523,6 @@ func (anchor *linuxOwnerAnchor) recordHelperForkMayStart(key LinuxOwnerAnchorRun
 	// outcome keeps the tombstone; pre-fork validation failures stay retryable.
 	anchor.runs[key] = nil
 	return nil
-}
-
-func validLinuxOwnerAnchorChildOriginRequest(request linuxOwnerAnchorRequest) bool {
-	return request.Operation == linuxOwnerAnchorOperationClassifyChild && request.Grant.Validate() == nil &&
-		request.Helper != nil && request.Helper.Validate() == nil && request.Process != nil && request.Process.Validate() == nil &&
-		request.Gate == nil && request.UserNamespace == nil && request.StopFence == nil && request.Creator == nil && request.Role == "" &&
-		request.ReleaseProof == nil && request.PreGateReleaseProof == nil && request.AbortProof == nil &&
-		request.RunKey == (LinuxOwnerAnchorRunKey{}) && request.Fence == (protocol.Fence{}) && request.FenceDigest == "" &&
-		request.AfterPID == 0 && request.CloneGrant == nil && request.Cleanup == nil && request.PriorRemovalProof == nil && !request.TargetFDPresent
-}
-
-func validLinuxOwnerAnchorGateRequest(request linuxOwnerAnchorRequest) bool {
-	return (request.Operation == linuxOwnerAnchorOperationRegisterGate || request.Operation == linuxOwnerAnchorOperationAuthorizeGate) &&
-		request.Helper != nil && request.Helper.Validate() == nil && request.Gate != nil && request.Gate.Validate() == nil &&
-		request.UserNamespace != nil && request.UserNamespace.valid() && request.Creator == nil && request.Process == nil && request.Role == "" &&
-		request.ReleaseProof == nil && request.PreGateReleaseProof == nil && request.AbortProof == nil &&
-		request.RunKey == (LinuxOwnerAnchorRunKey{}) && request.Fence == (protocol.Fence{}) && request.FenceDigest == "" &&
-		request.AfterPID == 0 && request.CloneGrant == nil && request.Cleanup == nil && request.PriorRemovalProof == nil && !request.TargetFDPresent
-}
-
-func validLinuxOwnerAnchorStopLeafRequest(request linuxOwnerAnchorRequest) bool {
-	return request.Operation == linuxOwnerAnchorOperationStopLeaf && request.Helper != nil && request.Helper.Validate() == nil &&
-		request.StopFence != nil && request.StopFence.ValidateFor(request.Grant, *request.Helper) == nil &&
-		request.Gate == nil && request.UserNamespace == nil && request.Creator == nil && request.Process == nil && request.Role == "" &&
-		request.ReleaseProof == nil && request.PreGateReleaseProof == nil && request.AbortProof == nil &&
-		request.RunKey == (LinuxOwnerAnchorRunKey{}) && request.Fence == (protocol.Fence{}) && request.FenceDigest == "" &&
-		request.AfterPID == 0 && request.CloneGrant == nil && request.Cleanup == nil && request.PriorRemovalProof == nil && !request.TargetFDPresent
 }
 
 // runCloneCleanupAfterStateReadback is called only after the socket request,
@@ -1599,19 +1572,9 @@ func (anchor *linuxOwnerAnchor) serveCloneCleanup(
 	request linuxOwnerAnchorRequest,
 	receivedFDs []int,
 ) bool {
-	wantFDs := 1
-	if request.TargetFDPresent {
-		wantFDs++
-	}
-	if len(receivedFDs) != wantFDs || request.Grant != (LinuxOwnerAnchorGrant{}) ||
-		request.CloneGrant == nil || request.Cleanup == nil || request.Helper != nil || request.Creator != nil ||
-		request.Process != nil || request.Role != "" || request.ReleaseProof != nil ||
-		request.PreGateReleaseProof != nil || request.AbortProof != nil ||
-		request.TargetFDPresent && request.PriorRemovalProof != nil || !request.TargetFDPresent && request.PriorRemovalProof == nil ||
-		request.AfterPID != 0 ||
-		request.RunKey != (LinuxOwnerAnchorRunKey{RunID: request.Cleanup.Intent.RunID, Generation: request.Cleanup.Intent.Generation}) ||
-		request.Fence != (protocol.Fence{}) || request.FenceDigest != request.Cleanup.FenceDigest ||
-		linuxOwnerCgroupPathsOverlap(peer.CgroupPath, anchor.managerPath) {
+	// The per-operation shape gate already enforced this request's presence
+	// rules, descriptor count and cleanup-intent relations.
+	if linuxOwnerCgroupPathsOverlap(peer.CgroupPath, anchor.managerPath) {
 		return false
 	}
 	expectedAnchor := authority.LinuxCgroupProcessIdentity{
@@ -1621,42 +1584,42 @@ func (anchor *linuxOwnerAnchor) serveCloneCleanup(
 	if err := validateLinuxOwnerAnchorCloneCleanup(*request.CloneGrant, *request.Cleanup, anchor.owner.AUID); err != nil ||
 		!expectedAnchor.Equal(anchor.identity) || request.Cleanup.NormalReleaseProof.CgroupIdentity == nil ||
 		!request.Cleanup.NormalReleaseProof.CgroupIdentity.Parent.Equal(anchor.parent.Identity()) {
-		anchor.writeResponse(connection, request, "request_rejected", nil, nil)
+		anchor.writeResponse(connection, anchor.baseResponse(request, "request_rejected"))
 		return false
 	}
 	if !request.TargetFDPresent {
 		if err := verifyLinuxOwnerAnchorPriorRemoval(receivedFDs[0], *request.Cleanup, request.PriorRemovalProof, anchor.owner); err != nil {
-			anchor.writeResponse(connection, request, "request_rejected", nil, nil)
+			anchor.writeResponse(connection, anchor.baseResponse(request, "request_rejected"))
 			return false
 		}
 	}
-	if err := connection.SetDeadline(time.Now().Add(linuxOwnerAnchorCleanupTimeout)); err != nil {
+	if err := connection.SetDeadline(time.Now().Add(linuxOwnerAnchorTimeoutFor(request.Operation))); err != nil {
 		return false
 	}
 	if err := verifyLinuxOwnerAnchorManagerMembership(os.Getpid(), anchor.managerPath); err != nil {
-		anchor.writeResponse(connection, request, "request_rejected", nil, nil)
+		anchor.writeResponse(connection, anchor.baseResponse(request, "request_rejected"))
 		return false
 	}
 	if err := anchor.parent.verifyPinnedParent(); err != nil {
-		anchor.writeResponse(connection, request, "request_rejected", nil, nil)
+		anchor.writeResponse(connection, anchor.baseResponse(request, "request_rejected"))
 		return false
 	}
 	if anchor.cloneCleanupWorkers.Add(1) > 1 {
 		anchor.cloneCleanupWorkers.Add(-1)
-		anchor.writeResponse(connection, request, "cleanup_busy", nil, nil)
+		anchor.writeResponse(connection, anchor.baseResponse(request, "cleanup_busy"))
 		return false
 	}
 	rootCopy, err := unix.FcntlInt(uintptr(receivedFDs[0]), unix.F_DUPFD_CLOEXEC, 0)
 	if err != nil {
 		anchor.cloneCleanupWorkers.Add(-1)
-		anchor.writeResponse(connection, request, "cleanup_unproven", nil, nil)
+		anchor.writeResponse(connection, anchor.baseResponse(request, "cleanup_unproven"))
 		return false
 	}
 	rootFile := os.NewFile(uintptr(rootCopy), "symmetry-owner-anchor-clone-root")
 	if rootFile == nil {
 		_ = unix.Close(rootCopy)
 		anchor.cloneCleanupWorkers.Add(-1)
-		anchor.writeResponse(connection, request, "cleanup_unproven", nil, nil)
+		anchor.writeResponse(connection, anchor.baseResponse(request, "cleanup_unproven"))
 		return false
 	}
 	targetFD := -1
@@ -1666,7 +1629,7 @@ func (anchor *linuxOwnerAnchor) serveCloneCleanup(
 		if duplicateErr != nil {
 			_ = rootFile.Close()
 			anchor.cloneCleanupWorkers.Add(-1)
-			anchor.writeResponse(connection, request, "cleanup_unproven", nil, nil)
+			anchor.writeResponse(connection, anchor.baseResponse(request, "cleanup_unproven"))
 			return false
 		}
 		targetFile = os.NewFile(uintptr(targetCopy), "symmetry-owner-anchor-clone-target")
@@ -1674,7 +1637,7 @@ func (anchor *linuxOwnerAnchor) serveCloneCleanup(
 			_ = unix.Close(targetCopy)
 			_ = rootFile.Close()
 			anchor.cloneCleanupWorkers.Add(-1)
-			anchor.writeResponse(connection, request, "cleanup_unproven", nil, nil)
+			anchor.writeResponse(connection, anchor.baseResponse(request, "cleanup_unproven"))
 			return false
 		}
 		targetFD = int(targetFile.Fd())
@@ -1708,138 +1671,49 @@ func (anchor *linuxOwnerAnchor) serveCloneCleanup(
 			if errors.Is(err, errLinuxOwnerAnchorCleanupAuthority) {
 				status = "cleanup_authority_unproven"
 			}
-			anchor.writeResponse(connection, requestCopy, status, nil, nil)
+			anchor.writeResponse(connection, anchor.baseResponse(requestCopy, status))
 			return
 		}
-		anchor.writeResponseWithCloneRemoval(connection, requestCopy, "clone_removed", nil, nil, &proof)
+		response := anchor.baseResponse(requestCopy, "clone_removed")
+		response.CloneRemoval = &proof
+		anchor.writeResponse(connection, response)
 	}()
 	return true
 }
 
-func (anchor *linuxOwnerAnchor) writeResponse(connection *net.UnixConn, request linuxOwnerAnchorRequest, status string, helper *authority.LinuxCgroupProcessIdentity, evidence *LinuxOwnerAnchorReapEvidence) {
-	anchor.writeResponseWithCloneRemoval(connection, request, status, helper, evidence, nil)
-}
-
-func (anchor *linuxOwnerAnchor) writeResponseWithStopEvidence(
-	connection *net.UnixConn,
-	request linuxOwnerAnchorRequest,
-	status string,
-	evidence LinuxOwnerAnchorStopEvidence,
-) {
+// baseResponse stamps the identity fields every anchor response carries. The
+// clone-cleanup key override stays exactly where the base writer had it: a
+// clone-cleanup response reports the durable RunKey and fence digest of the
+// cleanup intent and its normal-release launch token instead of a zero grant.
+func (anchor *linuxOwnerAnchor) baseResponse(request linuxOwnerAnchorRequest, status string) linuxOwnerAnchorResponse {
 	response := linuxOwnerAnchorResponse{
 		Version: linuxOwnerAnchorProtocolVersion, Operation: request.Operation, Status: status,
 		RunKey: request.Grant.RunKey, Fence: request.Grant.Fence, LaunchToken: request.Grant.LaunchToken,
 		Anchor: anchor.identity, Parent: anchor.parent.Identity(), OwnerUID: anchor.owner.AUID,
-		ManagerPath: anchor.managerPath, StopEvidence: &evidence,
-	}
-	encoded, err := json.Marshal(response)
-	if err != nil || len(encoded) > linuxOwnerAnchorMaxFrame {
-		return
-	}
-	_, _, _ = connection.WriteMsgUnix(encoded, nil, nil)
-}
-
-func (anchor *linuxOwnerAnchor) writeResponseWithCloneRemoval(connection *net.UnixConn, request linuxOwnerAnchorRequest, status string, helper *authority.LinuxCgroupProcessIdentity, evidence *LinuxOwnerAnchorReapEvidence, cloneRemoval *authority.LinuxCloneTargetRemovalProof) {
-	response := linuxOwnerAnchorResponse{
-		Version: linuxOwnerAnchorProtocolVersion, Operation: request.Operation, Status: status,
-		RunKey: request.Grant.RunKey, Fence: request.Grant.Fence, LaunchToken: request.Grant.LaunchToken,
-		Anchor: anchor.identity, Parent: anchor.parent.Identity(), OwnerUID: anchor.owner.AUID,
-		ManagerPath: anchor.managerPath, Helper: helper, Evidence: evidence, CloneRemoval: cloneRemoval,
+		ManagerPath: anchor.managerPath,
 	}
 	if request.Operation == linuxOwnerAnchorOperationCloneCleanup && request.Cleanup != nil {
 		response.RunKey = request.RunKey
 		response.FenceDigest = request.FenceDigest
 		response.LaunchToken = request.Cleanup.NormalReleaseProof.LaunchToken
 	}
+	return response
+}
+
+// writeResponse sends one bounded anchor response frame. The frame carries an
+// SCM_RIGHTS message only when the caller passes pin descriptors, so no response
+// can advertise descriptors it does not carry; every pin-carrying call site
+// builds its descriptors immediately before the call.
+func (anchor *linuxOwnerAnchor) writeResponse(connection *net.UnixConn, response linuxOwnerAnchorResponse, fds ...int) {
 	encoded, err := json.Marshal(response)
 	if err != nil || len(encoded) > linuxOwnerAnchorMaxFrame {
 		return
 	}
-	_, _, _ = connection.WriteMsgUnix(encoded, nil, nil)
-}
-
-func (anchor *linuxOwnerAnchor) writeResponseWithFDs(connection *net.UnixConn, request linuxOwnerAnchorRequest, status string, helper *authority.LinuxCgroupProcessIdentity, evidence *LinuxOwnerAnchorReapEvidence, fds ...int) {
-	response := linuxOwnerAnchorResponse{
-		Version: linuxOwnerAnchorProtocolVersion, Operation: request.Operation, Status: status,
-		RunKey: request.Grant.RunKey, Fence: request.Grant.Fence, LaunchToken: request.Grant.LaunchToken,
-		Anchor: anchor.identity, Parent: anchor.parent.Identity(), OwnerUID: anchor.owner.AUID,
-		ManagerPath: anchor.managerPath, Helper: helper, Evidence: evidence,
+	var rights []byte
+	if len(fds) != 0 {
+		rights = syscall.UnixRights(fds...)
 	}
-	encoded, err := json.Marshal(response)
-	if err != nil || len(encoded) > linuxOwnerAnchorMaxFrame || len(fds) == 0 {
-		return
-	}
-	_, _, _ = connection.WriteMsgUnix(encoded, syscall.UnixRights(fds...), nil)
-}
-
-func (anchor *linuxOwnerAnchor) writeResponseWithReapEvidence(
-	connection *net.UnixConn,
-	request linuxOwnerAnchorRequest,
-	status string,
-	evidence []LinuxOwnerAnchorReapEvidence,
-	nextPID int,
-	more bool,
-	stopEvidence LinuxOwnerAnchorStopEvidence,
-) {
-	response := linuxOwnerAnchorResponse{
-		Version: linuxOwnerAnchorProtocolVersion, Operation: request.Operation, Status: status,
-		RunKey: request.Grant.RunKey, Fence: request.Grant.Fence, LaunchToken: request.Grant.LaunchToken,
-		Anchor: anchor.identity, Parent: anchor.parent.Identity(), OwnerUID: anchor.owner.AUID,
-		ManagerPath: anchor.managerPath, ReapEvidence: evidence, StopEvidence: &stopEvidence, NextPID: nextPID, More: more,
-	}
-	encoded, err := json.Marshal(response)
-	if err != nil || len(encoded) > linuxOwnerAnchorMaxFrame {
-		return
-	}
-	_, _, _ = connection.WriteMsgUnix(encoded, nil, nil)
-}
-
-func (anchor *linuxOwnerAnchor) writeResponseWithChildClassification(
-	connection *net.UnixConn,
-	request linuxOwnerAnchorRequest,
-	status string,
-	classification linuxOwnerAnchorRunChildClassification,
-) {
-	copy := classification
-	response := linuxOwnerAnchorResponse{
-		Version: linuxOwnerAnchorProtocolVersion, Operation: request.Operation, Status: status,
-		RunKey: request.Grant.RunKey, Fence: request.Grant.Fence, LaunchToken: request.Grant.LaunchToken,
-		Anchor: anchor.identity, Parent: anchor.parent.Identity(), OwnerUID: anchor.owner.AUID,
-		ManagerPath: anchor.managerPath, Helper: request.Helper, ChildClassification: &copy,
-	}
-	encoded, err := json.Marshal(response)
-	if err != nil || len(encoded) > linuxOwnerAnchorMaxFrame {
-		return
-	}
-	_, _, _ = connection.WriteMsgUnix(encoded, nil, nil)
-}
-
-func (anchor *linuxOwnerAnchor) writeResponseWithHelperExit(connection *net.UnixConn, request linuxOwnerAnchorRequest, proof authority.LinuxCgroupExitProof) {
-	response := linuxOwnerAnchorResponse{
-		Version: linuxOwnerAnchorProtocolVersion, Operation: request.Operation, Status: "reaped",
-		RunKey: request.Grant.RunKey, Fence: request.Grant.Fence, LaunchToken: request.Grant.LaunchToken,
-		Anchor: anchor.identity, Parent: anchor.parent.Identity(), OwnerUID: anchor.owner.AUID,
-		ManagerPath: anchor.managerPath, Helper: request.Helper, HelperExit: &proof,
-	}
-	encoded, err := json.Marshal(response)
-	if err != nil || len(encoded) > linuxOwnerAnchorMaxFrame {
-		return
-	}
-	_, _, _ = connection.WriteMsgUnix(encoded, nil, nil)
-}
-
-func (anchor *linuxOwnerAnchor) writeResponseWithRunPins(connection *net.UnixConn, request linuxOwnerAnchorRequest, status string, helper *authority.LinuxCgroupProcessIdentity, helperExit *authority.LinuxCgroupExitProof, fds ...int) {
-	response := linuxOwnerAnchorResponse{
-		Version: linuxOwnerAnchorProtocolVersion, Operation: request.Operation, Status: status,
-		RunKey: request.Grant.RunKey, Fence: request.Grant.Fence, LaunchToken: request.Grant.LaunchToken,
-		Anchor: anchor.identity, Parent: anchor.parent.Identity(), OwnerUID: anchor.owner.AUID,
-		ManagerPath: anchor.managerPath, Helper: helper, HelperExit: helperExit,
-	}
-	encoded, err := json.Marshal(response)
-	if err != nil || len(encoded) > linuxOwnerAnchorMaxFrame || len(fds) == 0 {
-		return
-	}
-	_, _, _ = connection.WriteMsgUnix(encoded, syscall.UnixRights(fds...), nil)
+	_, _, _ = connection.WriteMsgUnix(encoded, rights, nil)
 }
 
 func parseLinuxOwnerAnchorRights(oob []byte, flags int) ([]int, error) {
