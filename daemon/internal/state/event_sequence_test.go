@@ -9,6 +9,7 @@ import (
 )
 
 func TestOutputAndControlReceiptAllocateOneMonotonicEventSequence(t *testing.T) {
+	t.Parallel()
 	store, err := New(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
