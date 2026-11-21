@@ -13,6 +13,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 )
 
 const (
@@ -293,46 +295,11 @@ func (value *Config) Validate() error {
 }
 
 func validateNativeModel(value, field string) error {
-	if len(value) < 1 || len(value) > 128 {
-		return fmt.Errorf("%s must contain 1..128 characters", field)
-	}
-	for index, character := range value {
-		if index == 0 {
-			if !isASCIIAlphaNumeric(character) {
-				return fmt.Errorf("%s has an invalid identifier", field)
-			}
-			continue
-		}
-		if !isASCIIAlphaNumeric(character) && !strings.ContainsRune("._:-", character) {
-			return fmt.Errorf("%s has an invalid identifier", field)
-		}
-	}
-	return nil
-}
-
-func isASCIIAlphaNumeric(value rune) bool {
-	return value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z' || value >= '0' && value <= '9'
+	return protocol.ValidateShortIdentifier(value, field)
 }
 
 func validateCanonicalUUID(value, field string) error {
-	if len(value) != 36 {
-		return fmt.Errorf("%s must be a canonical UUID", field)
-	}
-	for index, character := range value {
-		if index == 8 || index == 13 || index == 18 || index == 23 {
-			if character != '-' {
-				return fmt.Errorf("%s must be a canonical UUID", field)
-			}
-			continue
-		}
-		if character >= 'A' && character <= 'F' || !(character >= '0' && character <= '9' || character >= 'a' && character <= 'f') {
-			return fmt.Errorf("%s must be a canonical UUID", field)
-		}
-	}
-	if value[14] < '1' || value[14] > '5' || !strings.ContainsRune("89ab", rune(value[19])) {
-		return fmt.Errorf("%s must be a canonical UUID", field)
-	}
-	return nil
+	return protocol.ValidateUUID(value, field, protocol.CanonicalUUIDPolicy)
 }
 
 func normalizeRuntimeAdapterMetadata(runtime *Runtime) error {

@@ -83,6 +83,38 @@ defmodule SymmetryControlWeb.ChatControllerTest do
              |> json_response(400)
   end
 
+  # A refused `start_work` payload rolls a workspace changeset back, and the
+  # controller's changeset clause delegates to `Protocol.validation_error/2`.
+  # The route-level pin matters: serving the plain protocol error for a
+  # changeset (`Protocol.error/2`, 400 `invalid_request`) fails here.
+  test "a refused chat work changeset serves the validation envelope" do
+    assert {:ok, project} =
+             Workspaces.create_project(%{
+               name: "Chat refusal",
+               key: "REFUSE",
+               default_agent_profile: "codex",
+               default_workspace: "primary"
+             })
+
+    assert %{
+             "error" => %{
+               "code" => "validation_failed",
+               "message" => "request contains invalid fields",
+               "fields" => %{"title" => ["can't be blank" | _]}
+             }
+           } =
+             api_conn()
+             |> post("/portal/api/chat/messages", %{
+               scope: "project",
+               project_id: project.id,
+               action_id: "refused-work-title",
+               intent: "start_work",
+               content: "Start a work item whose title is blank.",
+               work: %{"title" => ""}
+             })
+             |> json_response(422)
+  end
+
   # The served conversation document is validated against the same canonical
   # bundle the fixture manifest and the daemon use. A member-name disagreement
   # between `Chat.conversation/1` and `contracts/v1/chat-read.schema.json`
