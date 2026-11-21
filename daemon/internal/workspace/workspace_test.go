@@ -542,7 +542,10 @@ func TestCleanupRefusesWorktreeWithoutOwnershipJournal(t *testing.T) {
 // TestCleanupRefusesLinuxCloneWithoutStoreReadback pins the two outcomes of the
 // guard that keeps a reserved Linux clone out of the linked-worktree remover:
 // the linuxClone refusal precedes the unmanaged no-op and owns its exact string,
-// while an unmanaged Prepared is a silent success that touches no path.
+// while an unmanaged Prepared is a silent success that touches no path. The
+// unmanaged case uses an existing directory with content, because a missing
+// path makes the no-op indistinguishable from the unguarded remover's
+// "not a worktree of configured repository" refusal.
 func TestCleanupRefusesLinuxCloneWithoutStoreReadback(t *testing.T) {
 	manager := New(nil)
 	reserved := Prepared{
@@ -557,14 +560,23 @@ func TestCleanupRefusesLinuxCloneWithoutStoreReadback(t *testing.T) {
 		t.Fatalf("Cleanup(linuxClone) error = %v, want the Store readback refusal", err)
 	}
 
+	unmanagedRoot := t.TempDir()
+	sentinel := filepath.Join(unmanagedRoot, "sentinel.txt")
+	if err := os.WriteFile(sentinel, []byte("untouched"), 0o600); err != nil {
+		t.Fatalf("WriteFile(sentinel) error = %v", err)
+	}
 	unmanaged := Prepared{
-		Path:       filepath.Join(t.TempDir(), "unmanaged-target"),
+		Path:       unmanagedRoot,
 		BindingKey: "existing-checkout",
 		Run:        RunRef{RunID: "cleanup-unmanaged", Generation: 1},
 		policy:     config.CleanupAlways,
 	}
 	if err := manager.Cleanup(context.Background(), unmanaged, true); err != nil {
 		t.Fatalf("Cleanup(unmanaged) error = %v, want nil no-op", err)
+	}
+	content, err := os.ReadFile(sentinel)
+	if err != nil || string(content) != "untouched" {
+		t.Fatalf("Cleanup(unmanaged) sentinel = %q, %v; want the unmanaged directory untouched", content, err)
 	}
 }
 

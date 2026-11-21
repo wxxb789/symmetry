@@ -41,14 +41,19 @@ reproduced here.
    inlining the `materializeAtRepository` body (`:321-339`); the shared function is renamed
    to the contract's name and called by `MaterializeSubject`, `PrepareSubject` (`:169-202`)
    and `RecoverSubject` (`:206-239`), and keeps serving `VerifySubject`/`DeriveSubject`.
-   Every caller's `subject.Validate()` call, its `SubjectError` fields and its place in the
-   control flow are preserved literally: the shared function derives only (identity
+   The subject checks each caller owns, its `SubjectError` fields and its place in the
+   control flow are preserved literally: `MaterializeSubject`, `PrepareSubject`,
+   `RecoverSubject`, `VerifySubject` and `ReadSubjectArtifact` keep their own
+   `subject.Validate()` call, and `DeriveSubject` keeps `validateSubjectResourceID` (it has
+   no `subject.Validate()` call at base either). The shared function derives only (identity
    validation, commit reachability, tree digest) and validates nothing.
-   The rename migrates its sixth call site, `SubjectArtifact` (`artifact.go:62`), with a
-   one-line call update: a rename forces a clean cutover and the repository rules forbid a
-   compatibility shim, so that line is the only edit outside the contract's owned file
-   list. It changes no behaviour, no string and no control flow in `artifact.go` (the
-   before/after error-literal diff for that file is empty).
+   The rename migrates one call site outside `subject.go`: `ReadSubjectArtifact`
+   (`artifact.go:62`), one of the five base call sites of `materializeAtRepository`; it
+   becomes the sixth call site at HEAD because `MaterializeSubject`'s previously inlined
+   body turns into a call. A rename forces a clean cutover, so that line is the only edit
+   outside the contract's owned file list. It changes no behaviour, no string and no
+   control flow in `artifact.go` (the before/after error-literal diff for that file is
+   empty).
 4. **Five new pins in existing test files**, one per refusal site touched, one per flag
    surface and one for the trusted walk's pre-stat order, each with a named red mutant:
    - `TestCleanupRefusesLinuxCloneWithoutStoreReadback` — `workspace.go`;
@@ -76,8 +81,10 @@ records it as the "3 lifecycle" sites, and it follows from the clean cutover.
 Unchanged. No exported identifier is added, renamed, re-signed or deleted: all four pieces
 are unexported, and the exported surface (`Manager.MaterializeSubject`,
 `Manager.PrepareSubject`, `Manager.RecoverSubject`, `Manager.VerifySubject`,
-`Manager.DeriveSubject`, `Manager.Cleanup`, `Fingerprint`, `Prepared`, `SubjectWorkspace`,
-`SubjectError`) keeps its name, signature and error identity. `go doc -all
+`Manager.DeriveSubject`, `Manager.ReadSubjectArtifact`, `Manager.Cleanup`, `Fingerprint`,
+`Prepared`, `SubjectWorkspace`, `SubjectError`) keeps its name, signature and error
+identity. `Manager.ReadSubjectArtifact` is the only exported method whose body changes (the
+one-line call rename); its own `subject.Validate()` check is untouched. `go doc -all
 ./internal/workspace` is not a useful diff for an unexported-only change; the in-repo
 proof is the pinned before/after byte-compare of every touched refusal string plus the
 unchanged-symbol grep over the removed definitions.
@@ -95,7 +102,7 @@ unchanged-symbol grep over the removed definitions.
 | `S_IFMT != S_IFDIR` refusal | parent descriptor released |
 | last-component mode refusal / ancestor trust policy | `Fstat(child)` |
 | `Openat(parentFD, component, accessFlags\|O_DIRECTORY\|O_CLOEXEC\|O_NOFOLLOW)` | `S_IFMT != S_IFDIR` refusal |
-| parent descriptor released | last: A-owned + not group/world writable; ancestor: root/A-owned, non-sticky world-write refusal, foreign-group-write refusal |
+| parent descriptor released | last: A-owned + not group/world writable; ancestor: refusal when the owner is neither root nor A, or when any group/other write bit is set unless the owner is root and the mode is sticky (no gid comparison) |
 | `Fstat(child)` | advance |
 | identity/mode recheck (`sameLinuxCloneDirectoryIdentity`, uid/gid/mode bits) | final: `Fstat(fd)` |
 | policy re-check on the pinned descriptor (root mode, ancestor trust), advance | |
@@ -137,7 +144,7 @@ flags plus parent release, `Fstat` plus release-on-failure, and the final descri
 | owned walk, kind | `A-owned path contains a non-directory component` |
 | owned walk, last component | `final directory must be A-owned and not group/world writable` |
 | owned walk, ancestor | `A-owned path has an unsafe ancestor` |
-| dir opener | `entry is not a real directory` (unchanged; both callers wrap it) |
+| dir opener | `entry is not a real directory` (string unchanged; the one opener now produces it for both former callers, and the call sites do not share one wrapping: `openLinuxCloneTargetParent`, `openLinuxCloneTarget` and `removeLinuxCloneScratchDirectory` return it unwrapped, others add a prefix such as `open exact B cleanup path component %q: %w`) |
 | Cleanup linuxClone refusal | `Linux clone cleanup requires explicit Store readback authorization` |
 | Cleanup unmanaged no-op | `nil` (success, no work) |
 | Fingerprint linuxClone identity | `Linux clone Prepared identity differs from its reserved grant` |
@@ -156,14 +163,19 @@ preserved yes/no) in the "Per-extraction control-flow audit" table under
 **Measured outcome** below, reproduced in the stage `answer.md`. The three rows that
 matter most:
 
-- **trusted walk** — 13 refusal points + 1 success return; all 14 preserved in order, with
-  the two closed-descriptor error paths now closed by the shared reader instead of inline
-  (same syscall, same release, same returned error).
-- **owned walk** — 5 refusal points + 1 success return; preserved. The only shape change is
-  `var info unix.Stat_t; Fstat` becoming `info, err := readLinuxClonePinnedDirectory(fd)`,
-  which performs the identical `Fstat` and closes the descriptor on failure exactly where
-  base does.
-- **materialize** — 4 refusal points + 1 success return; preserved verbatim. `PrepareSubject`
+- **trusted walk** — 16 returns, counted as 13 constructed refusals + 2 raw syscall
+  passthroughs (the root `unix.Open` and the final descriptor read) + 1 success; all 16
+  preserved in order, with the two closed-descriptor error paths now closed by the shared
+  reader instead of inline (same syscall, same release, same returned error).
+- **owned walk** — 9 returns, counted as 4 constructed refusals + 4 raw syscall passthroughs
+  (the root open, both component reads and the final descriptor read) + 1 success;
+  preserved. The only shape change is `var info unix.Stat_t; Fstat` becoming
+  `info, err := readLinuxClonePinnedDirectory(fd)`, which performs the identical `Fstat` and
+  closes the descriptor on failure exactly where base does.
+- **materialize** — 6 returns, counted as 2 constructed refusals (the
+  `SubjectErrorUnreachable` and digest-code paths) + 1 raw identity passthrough
+  (`validateSubjectIdentity`) + 2 `ctx.Err()` early exits + 1 success; preserved verbatim.
+  `PrepareSubject`
   and `RecoverSubject` keep `admitted.Validate()` before the call and their
   `materialized != admitted` mismatch check after it; `VerifySubject` keeps
   `expected.Validate()` and its commit/digest compare; `DeriveSubject` keeps
@@ -174,8 +186,8 @@ matter most:
 
 | Pin | Covers | Named mutant (one-line edit, applied in place through the patch tool and reverted after the red run) |
 | --- | --- | --- |
-| `TestCleanupRefusesLinuxCloneWithoutStoreReadback` | `workspace.go` linuxClone refusal + `!managed` no-op | delete the `if prepared.linuxClone` block in `Cleanup` |
-| `TestFingerprintRefusesLinuxCloneIdentityMismatch` | `fingerprint.go` identity branch, both strings | drop the `prepared.Path != prepared.linuxCloneTarget` term (identity case); `if !validLinuxCloneFingerprint` becomes `if false` (digest case) |
+| `TestCleanupRefusesLinuxCloneWithoutStoreReadback` | `workspace.go` linuxClone refusal + `!managed` no-op over an existing unmanaged directory | delete the `if prepared.linuxClone` block in `Cleanup`; delete the `if !prepared.managed { return nil }` no-op |
+| `TestFingerprintRefusesLinuxCloneIdentityMismatch` | `fingerprint.go` identity branch, both strings, and the identity-before-digest precedence | drop the `prepared.Path != prepared.linuxCloneTarget` term (identity case); `if !validLinuxCloneFingerprint` becomes `if false` (digest case); swap the identity and digest checks (precedence case) |
 | `TestVerifySubjectRefusesUnmanagedWorktree` | `subject.go` managed/binding refusal, code + string | drop `!prepared.managed` from the guard predicate |
 | `TestLinuxCloneDirectoryOpenFlagsStayByteIdentical` | `OpenHow` request + walk-core flag consts | drop `RESOLVE_NO_XDEV` from `linuxCloneDirOpenHow`; drop `O_NOFOLLOW` from `linuxCloneConfiguredPathComponentFlags` |
 | `TestLinuxCloneTrustedPathRefusesSymlinkedComponent` | trusted walk's `Fstatat(AT_SYMLINK_NOFOLLOW)` pre-stat order + the `configured directory component %q is not a real directory` string | drop `AT_SYMLINK_NOFOLLOW` from the pre-stat (the walk then reaches the open) |
@@ -242,13 +254,15 @@ each, with no other line touched:
 No branch is added or removed anywhere: the shared materialization function validates
 nothing, so no caller gains or loses a refusal.
 
-### Mutations (one named red mutant per new pin, applied in place and reverted)
+### Mutations (named red mutants per new pin, applied in place and reverted)
 
 | mutant | pin | observed |
 | --- | --- | --- |
 | M1 delete the `Cleanup` linuxClone refusal | `TestCleanupRefusesLinuxCloneWithoutStoreReadback` | FAIL, exit 1: `Cleanup(linuxClone) error = <nil>, want the Store readback refusal` |
+| M1b delete the `Cleanup` unmanaged no-op (`if !prepared.managed { return nil }`) | same pin | FAIL, exit 1: `Cleanup(unmanaged) error = workspace target "<host temp path>\002" is not a worktree of configured repository, want nil no-op`; the pin's pre-fix input (a missing temp path) stayed green under this mutant |
 | M2 drop the `prepared.Path` term from the Fingerprint identity predicate | `TestFingerprintRefusesLinuxCloneIdentityMismatch` | FAIL, exit 1: `Fingerprint(path) = "sha256:0000…", <nil>; want the identity refusal` |
 | M2b `if !validLinuxCloneFingerprint(...)` becomes `if false` | same pin | FAIL, exit 1: `Fingerprint(digest prefix) = "sha1:0000…", <nil>` |
+| M2c swap the Fingerprint identity and digest checks | same pin | FAIL, exit 1: `Fingerprint(path and digest) = "", Linux clone fingerprint is invalid; want error "Linux clone Prepared identity differs from its reserved grant"` |
 | M3 drop `!prepared.managed` from the `verifyPreparedSubject` guard | `TestVerifySubjectRefusesUnmanagedWorktree` | FAIL, exit 1 on the "unmanaged with repository" case; the message becomes `workspace binding "primary" is not configured` |
 | M4 drop `RESOLVE_NO_XDEV` from `linuxCloneDirOpenHow` | `TestLinuxCloneDirectoryOpenFlagsStayByteIdentical` (WSL) | FAIL: `resolve 0xe, want resolve 0xf` |
 | M5 drop `O_NOFOLLOW` from `linuxCloneConfiguredPathComponentFlags` | same pin (WSL) | FAIL: `component flags = 0x90000, want 0xb0000` |
@@ -281,9 +295,9 @@ Call-site grep for the removed and inlined definitions:
 | `openLinuxCloneDirAt` | 1 definition, 19 call sites (16 fs, 3 lifecycle) | 0 |
 | `unix.Openat2` in `internal/workspace` | 3 (2 directory openers, 1 file opener) | 2 (`openLinuxCloneDirAtFlags`, `openLinuxCloneFileAt`) |
 | `openLinuxCloneDirAtFlags` | — | 1 definition, 23 call sites (18 fs, 3 lifecycle, 2 tests) |
-| `openLinuxCloneDirPath` / `openLinuxCloneOPathDirPath` | 2 definitions, 1 + 3 call sites | unchanged 3-line callers of the trusted walk |
-| `materializeAtRepository` | 1 definition, 6 call sites | 0 |
-| `materializeAdmittedSubject` | — | 1 definition, 6 call sites |
+| `openLinuxCloneDirPath` / `openLinuxCloneOPathDirPath` | 2 definitions; `openLinuxCloneDirPath` 3 production call sites, `openLinuxCloneOPathDirPath` 2 production + 2 test | unchanged 3-line callers of the trusted walk; HEAD adds one test call site to `openLinuxCloneDirPath` (the symlink pin) |
+| `materializeAtRepository` | 1 definition, 5 call sites (4 in `subject.go`, 1 in `artifact.go`) | 0 |
+| `materializeAdmittedSubject` | — | 1 definition, 6 call sites (the same 5 + `MaterializeSubject`, whose body was inlined at base) |
 
 Flag / kind / identity lines (every line matching
 `S_IFMT|S_IFDIR|O_CLOEXEC|O_NOFOLLOW|AT_SYMLINK_NOFOLLOW|sameLinuxCloneDirectoryIdentity`):
@@ -293,10 +307,13 @@ Flag / kind / identity lines (every line matching
 | `linux_clone_fs_linux.go` | 70 | 68 | 7 base-only, 5 HEAD-only: the two opener `Flags:` lines become the one `linuxCloneDirOpenHow` line plus the same access flags at the 23 call sites; the two root `Open` lines become the same lines with `linuxCloneConfiguredPathRootFlags`; one duplicated dir-opener `S_IFMT != S_IFDIR` becomes the single copy in the one opener; the two component `Openat` lines become the one `openLinuxClonePinnedChild` line plus the same access flags at its two call sites |
 | `linux_clone_linux.go` | 23 | 23 | identical set, `diff` empty |
 
-The effective values behind every one of those lines are pinned by
-`TestLinuxCloneDirectoryOpenFlagsStayByteIdentical` (openat2 `Flags`/`Resolve` for both
-access flags plus the two descriptor-flag constants), and the identity rechecks
-(`sameLinuxCloneDirectoryIdentity` and the uid/gid/mode-bit comparisons) are unchanged lines.
+The effective values behind the flag lines are pinned by
+`TestLinuxCloneDirectoryOpenFlagsStayByteIdentical`, which asserts the `OpenHow` request
+(`Flags`/`Resolve`) `linuxCloneDirOpenHow` builds for both access flags plus the two
+descriptor-flag constants; it does not pin the opener's use of them nor the `S_IFMT` lines.
+The `S_IFMT` checks and the identity rechecks (`sameLinuxCloneDirectoryIdentity`, the
+uid/gid/mode-bit comparisons) are unchanged lines covered by the control-flow audit above
+and the pre-existing suite.
 
 ### dLOC (report-only per D2)
 
@@ -312,8 +329,9 @@ the materialize helper.
 
 ### Gates
 
-All commands ran on the delivered tree unless the row names the base tree; `daemon/` is the
-working directory for Go commands.
+All commands ran on the delivered tree unless the row names another revision or tree (the
+extracted base tree, the extracted head tree, or an earlier stage revision); `daemon/` is
+the working directory for Go commands.
 
 | gate | command | result |
 | --- | --- | --- |
@@ -330,7 +348,7 @@ working directory for Go commands.
 | linux suite (WSL, HEAD) | same command in the worktree | `ok 50.992s`, exit 0; PASS 96, FAIL 0, SKIP 2 (implement-stage run: `ok 95.511s`, PASS 95) |
 | skip list (identical both sides) | `TestLinuxCloneOPathRootAllowsMountedRootButForbidsNestedMount` — `bind mounts unavailable; mounted root traversal was verified: operation not permitted`; `TestSubjectMeasurementWitness` — requires `SYMMETRY_SUBJECT_WITNESS_*` | no new skips |
 | new pins under Linux | `-run 'TestLinuxCloneDirectoryOpenFlagsStayByteIdentical'` (WSL) | PASS 0.04s, exit 0; apply-stage re-run adds the symlink pin: `-run 'TestLinuxCloneDirectoryOpenFlagsStayByteIdentical\|TestLinuxCloneTrustedPathRefusesSymlinkedComponent'` → 2 PASS (0.00s / 0.01s), exit 0 |
-| citation gate | `python scripts/ci/check-citation-existence.py --base c9ed23b4 --head HEAD` (and `--base b89e14d7`) | `no audited document added or modified … nothing to check`, exit 0 both |
+| citation gate | `python scripts/ci/check-citation-existence.py --base c9ed23b4 --head HEAD` (apply stage, revision `9ae53011`) and `--base 79548368 --head 551bc6f1` (fix stage, delivered head) | `no audited document added or modified … nothing to check`, exit 0 both; this plan is outside the audited corpus (`docs/runbooks/**`, `docs/design/quality.md`, `docs/archive/CLOSED-TODO.md`) |
 | whitespace | `git diff --check` | exit 0 |
 | host-path hygiene | `git diff c9ed23b4 \| grep -icE "users[/][a-z]"` | 0 |
 | backslash-u hygiene | grep the delivered diff for the program rule's DLP trigger (a backslash immediately before a `u`) | 0 |
@@ -346,6 +364,39 @@ working directory for Go commands.
 | host workspace suite (retry, 30m budget) | `go test -count=1 -timeout 30m ./internal/workspace/...` | `ok 304.939s`, exit 0, 0 `--- FAIL` (apply-stage re-run: `ok 635.051s`, exit 0) |
 | host app suite (retry, 30m budget) | `go test -count=1 -timeout 30m ./internal/app/...` | `ok 438.903s`, exit 0, 0 `--- FAIL` (apply-stage re-run: `ok 255.897s`, exit 0) |
 | advisory lint base re-run | `golangci-lint run … --timeout 20m` in the extracted base tree | 15 issues, exit 1; the complete base side of the row above |
+
+Fix-stage re-runs (after the r1 review, `answer.md`): the two strengthened pins and this
+plan's corrections are the only fix-stage edits; production code is untouched.
+
+| gate | command | result |
+| --- | --- | --- |
+| format / vet / build (fix stage) | `gofmt -l internal/workspace/`; `go vet ./internal/workspace/`; `GOOS=linux GOARCH=amd64 go vet ./internal/workspace/`; `GOOS=linux GOARCH=arm64 go build ./internal/workspace/` | all exit 0 |
+| focused windows pins (fix stage) | `go test -count=1 -v -run 'TestCleanupRefusesLinuxCloneWithoutStoreReadback\|TestFingerprintRefusesLinuxCloneIdentityMismatch\|TestVerifySubjectRefusesUnmanagedWorktree' ./internal/workspace/` | 3 PASS, exit 0 (`ok 0.118s`) |
+| host focused set (fix stage) | `go test -count=1 -timeout 15m ./internal/workspace/ -run 'TestLinuxClone\|TestSubject\|TestWorkspace\|TestFingerprint'` | `ok 67.217s`, exit 0 |
+| host workspace suite (fix stage) | `go test -count=1 -timeout 30m ./internal/workspace/...` | `ok 584.530s`, exit 0, 0 `--- FAIL` |
+| linux suite (WSL, HEAD, fix stage) | `wsl -d Ubuntu-24.04 -u accept` → `cd <WT>/daemon && go test -count=1 -v ./internal/workspace/` | `ok 50.964s`, exit 0; PASS 96, FAIL 0, SKIP 2; the same two top-level skips plus the pre-existing nested `reappeared_bind_mount` skip (`bind mounts unavailable for target replacement test: operation not permitted`) |
+| app suite (Linux, WSL-local extracted head tree) | `git archive` of the delivered head untarred into a WSL-local directory, then `cd daemon && go test -count=1 -timeout 30m ./internal/app/...`; retry `go test -count=1 -timeout 20m -v ./internal/app/... > /tmp/app-v.log` | neither attempt completed; see the app-suite note below |
+| whitespace / hygiene (fix stage) | `git diff --check`; the host-path hygiene grep above plus its backslash variant, over the branch diff and the working diff | exit 0; 0 hits each |
+
+App-suite note (W404-R1): no stage before the fix ran the contract's `./internal/app/...`
+gate on Linux, and the fix stage could not complete it locally either, so the local Linux
+app row remains unexecuted and is recorded as such rather than implied. Both attempts ran
+against a WSL-local copy of the delivered head (an extracted tree in the VM's own
+filesystem, so only the one-time extraction read came from the Windows mount; the review's
+own `/mnt/q` attempt also timed out at 30 minutes). Attempt 1
+(`-timeout 30m`) was killed at its 30-minute budget with no output, because the run's
+output was buffered behind the pipe. Attempt 2 (`-timeout 20m -v`, log
+`/tmp/app-v.log`) reached 17 top-level PASS in the first ~11 minutes and then stopped
+advancing for at least nine minutes inside
+`TestClaimAdmissionInputFailsClosedBeforeWorkspaceOrProcessStart/mixed_null_marker_survives_replay_and_restart`
+(29 top-level tests started, 67 log lines; log mtime `11:17:28Z`, checked at `11:26:19Z`)
+before it was cancelled. The package compiles and its test binary starts under WSL in
+seconds (`go build ./internal/app/...` 5.152s, exit 0; `go test -count=1 -run <no match>
+./internal/app/...` 2.840s, exit 0), so the local gap is suite runtime, not a build or
+environment break. Nothing in `internal/app` references the unified symbols (0 hits; the
+app-side uses are its own interface declarations and the
+`fakeWorkspace`/`deterministicValidationWorkspace` fakes), and CI runs the app suite on
+Linux before merge.
 
 Load note for the two host timeouts: throughout these runs, other sessions on the same host
 ran `app.test`, `cli.test`, `cargo` and `cargo-clippy` processes. Both stalls are inside
@@ -388,5 +439,7 @@ its tests, so nothing is closed or moved.
   open that follows would change the refusal to the `pin configured root component %q`
   wrapping. The owned walk's post-open verify order has no refusal-string oracle; its
   evidence is the audit table above plus the unchanged test bodies.
-- Mount-crossing behaviour (`RESOLVE_NO_XDEV`) is asserted flag-level on every host and
-  behaviourally only where the pre-existing bind-mount test is not skipped.
+- Mount-crossing behaviour (`RESOLVE_NO_XDEV`) is asserted flag-level by
+  `TestLinuxCloneDirectoryOpenFlagsStayByteIdentical`, which carries
+  `//go:build linux && amd64` and runs under WSL, and behaviourally only where the
+  pre-existing bind-mount test is not skipped; Windows hosts get no assertion on this path.

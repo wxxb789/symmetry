@@ -152,7 +152,8 @@ func TestFingerprintPropagatesContextCancellation(t *testing.T) {
 // Fingerprint: a reserved clone is fingerprinted only when the Prepared identity
 // is exactly its grant and the recorded fingerprint is a canonical sha256 digest.
 // Every divergence is refused with the branch's exact string instead of
-// consulting Git, and the matching identity returns the recorded digest.
+// consulting Git, an invalid identity refusal precedes an invalid digest, and
+// the matching identity returns the recorded digest.
 func TestFingerprintRefusesLinuxCloneIdentityMismatch(t *testing.T) {
 	const identityRefusal = "Linux clone Prepared identity differs from its reserved grant"
 	const fingerprintRefusal = "Linux clone fingerprint is invalid"
@@ -184,6 +185,10 @@ func TestFingerprintRefusesLinuxCloneIdentityMismatch(t *testing.T) {
 		{"digest prefix", func(candidate *Prepared) { candidate.linuxCloneFingerprint = "sha1:" + strings.Repeat("0", 64) }, fingerprintRefusal},
 		{"digest length", func(candidate *Prepared) { candidate.linuxCloneFingerprint = "sha256:00" }, fingerprintRefusal},
 		{"digest case", func(candidate *Prepared) { candidate.linuxCloneFingerprint = "sha256:" + strings.Repeat("A", 64) }, fingerprintRefusal},
+		{"path and digest", func(candidate *Prepared) {
+			candidate.Path = "/clone/other"
+			candidate.linuxCloneFingerprint = "sha1:" + strings.Repeat("0", 64)
+		}, identityRefusal},
 	} {
 		candidate := reserved
 		testCase.mutate(&candidate)
