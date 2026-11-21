@@ -150,15 +150,15 @@ func TestClaudeProbeBoundsHangingRunnerAndPreservesCallerCancellation(t *testing
 }
 
 func TestBoundedProbeRejectsSuccessAfterDeadline(t *testing.T) {
-	output, err := runBoundedProbe(context.Background(), time.Nanosecond, func(ctx context.Context) ([]byte, error) {
+	output, err := RunBoundedProbe(context.Background(), time.Nanosecond, func(ctx context.Context) ([]byte, error) {
 		<-ctx.Done()
 		return []byte("valid capability output"), nil
 	})
 	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("runBoundedProbe() error = %v, want context.DeadlineExceeded", err)
+		t.Fatalf("RunBoundedProbe() error = %v, want context.DeadlineExceeded", err)
 	}
 	if output != nil {
-		t.Fatalf("runBoundedProbe() output = %q, want nil after deadline", output)
+		t.Fatalf("RunBoundedProbe() output = %q, want nil after deadline", output)
 	}
 }
 
@@ -169,6 +169,23 @@ func TestClaudeProbeRejectsSuccessAfterProbeDeadline(t *testing.T) {
 	}
 	if capabilities.VersionKnown || capabilities.NativeVersion != "" || capabilities.TransportVerified || capabilities.Verified {
 		t.Fatalf("capabilities = %+v, want no capability from success-after-deadline output", capabilities)
+	}
+}
+
+// TestClaudeProbeRejectsNilContextBeforeTheSharedGuard pins the entry-level
+// guard: a nil context must be rejected with the Claude-specific text before
+// the shared bounded probe is reached, and the runner must never be called.
+func TestClaudeProbeRejectsNilContextBeforeTheSharedGuard(t *testing.T) {
+	runner := &claudeFixtureRunner{}
+	capabilities, err := probeClaudeExecutable(nil, "claude", runner)
+	if err == nil || err.Error() != "Claude probe context must not be nil" {
+		t.Fatalf("probeClaudeExecutable(nil) error = %v, want the entry-level Claude guard", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("runner calls = %#v, want none for a nil context", runner.calls)
+	}
+	if capabilities.VersionKnown || capabilities.NativeVersion != "" || capabilities.TransportVerified || capabilities.Verified {
+		t.Fatalf("capabilities = %+v, want no capability from a nil context", capabilities)
 	}
 }
 

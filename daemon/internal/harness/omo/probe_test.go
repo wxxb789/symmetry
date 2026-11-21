@@ -1,6 +1,7 @@
 package omo
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -216,6 +217,56 @@ func TestProbePinsCompleteVersionTransportAndPlatformBytes(t *testing.T) {
 	}
 	if _, err := probeForPlatform(context.Background(), "recorded-omo", "darwin", recordedProbe{}); !errors.Is(err, harness.ErrUnsupportedVersion) {
 		t.Fatalf("unknown platform = %v", err)
+	}
+}
+
+// TestProbeRejectsOutputAboveTheOmOProbeLimit pins the provider-local probe
+// output guard: the shared bounded probe carries no limit of its own, so an
+// oversized capture must fail here and a capture exactly at the limit must
+// still be parsed.
+func TestProbeRejectsOutputAboveTheOmOProbeLimit(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		output    []byte
+		want      error
+		wantGuard bool
+	}{
+		{
+			name:      "one byte above the limit",
+			output:    bytes.Repeat([]byte("x"), 64*1024+1),
+			want:      harness.ErrHarnessUnavailable,
+			wantGuard: true,
+		},
+		{
+			name:   "exactly at the limit",
+			output: bytes.Repeat([]byte("x"), 64*1024),
+			want:   harness.ErrUnsupportedVersion,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var calls []string
+			runner := reviewProbeRunner{run: func(_ context.Context, argument string) ([]byte, error) {
+				calls = append(calls, argument)
+				return test.output, nil
+			}}
+			result, err := probeForPlatform(context.Background(), "recorded-omo", "windows", runner)
+			if !errors.Is(err, test.want) {
+				t.Fatalf("probe error = %v, want %v", err, test.want)
+			}
+			if test.wantGuard {
+				if !strings.Contains(err.Error(), "OmO probe output exceeds limit") {
+					t.Fatalf("probe error = %v, want the OmO probe guard diagnostic", err)
+				}
+			} else if strings.Contains(err.Error(), "exceeds limit") {
+				t.Fatalf("probe error = %v, want an at-limit capture inspected rather than rejected", err)
+			}
+			if len(calls) != 1 || calls[0] != "--version" {
+				t.Fatalf("probe commands = %v, want only --version", calls)
+			}
+			if result.VersionKnown || result.TransportKnown || result.Capabilities.Verified || result.Capabilities.Start {
+				t.Fatalf("rejected capture promoted evidence: %+v", result)
+			}
+		})
 	}
 }
 
