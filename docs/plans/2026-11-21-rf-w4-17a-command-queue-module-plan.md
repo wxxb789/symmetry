@@ -115,23 +115,36 @@ evidence record.
 
 ## Contract-preserving decisions (recorded, not guessed)
 
-**D1 — the ≤8-method budget and the receipt bookkeeping.** Design clause 1 asks for the three queue fields
+**D1 — the receipt bookkeeping is a sibling value type.** Design clause 1 asks for the three queue fields
 *plus* "the request-id bookkeeping used by begin/finishCommandRequest and the command-receipt state if it is
 only touched by these methods (if receipts are also touched elsewhere, leave them and record why)". The
 receipt state is touched elsewhere: `markCommandAcknowledgementDelivered` (outbox.go) writes the tombstones
 *before* and the delivered flag *after* a `Store` write, from outside any queue call, and the wire between
 the two phases is `commandReceiptMu` — a mutex that is held while a journal write may block, so it cannot
-become a lock-free queue method and cannot move into the module's no-lock contract. Counting the operations
-the daemon actually needs (13: arrival put/pop, lane put/pop, membership, complete-instance,
-complete-by-key, release-run, window open/close, tombstone, delivered-evict) against the budget leaves 8
-queue-flow/guard/completion/release verbs. Options: (a) 12 methods on one type — violates the binding
-budget; (b) one or two enum-dispatch "god methods" (`finish(key, instance, stage)` carrying unrelated
+become a lock-free queue method and cannot move into the module's no-lock contract, and a suppression window
+is not queue-flow state. Counting the operations the daemon actually needs (13: arrival put/pop, lane
+put/pop, membership, complete-instance, complete-by-key, release-run, window open/close, tombstone,
+delivered-evict) leaves 8 queue-flow/guard/completion/release verbs. The split is *not* a budget artefact:
+the binding budget is at most 12 methods (arch-decision-2, superseding amendment 1's 11), and the delivered
+file counts exactly 12 (8 + 4), so one type with all 12 would also fit. Options considered: (a) 12 methods
+on one type — within the amended budget, but the module's single lock contract would then also cover the
+suppression windows, whose two mutations in `markCommandAcknowledgementDelivered` are ordered by
+`commandReceiptMu` across a journal write (the tombstone under `commandReceiptMu` + `daemon.mu`, the
+delivered mark under `commandReceiptMu` alone), so the file-level comment would have to qualify itself;
+(b) one or two enum-dispatch "god methods" (`finish(key, instance, stage)` carrying unrelated
 eviction/completion effects) — a worse interface, and the enum would have to bypass the completion effects
 for the delivery phase; (c) package-level helper functions over queue state — keeps the count but hides the
 surface, not a design argument. **Recommendation, adopted:** the receipt bookkeeping is a sibling value type
 in the same module file, held by the queue (`commandQueue.receipts`), with 4 methods of its own; the queue
-itself stays at exactly the budgeted 8. The queue still *holds* the request-id bookkeeping (nested), the
-module owns every write to it, and both are tested without `&daemon{}`.
+itself stays at 8. The queue still *holds* the request-id bookkeeping (nested), the module owns every write
+to it, and both are tested without `&daemon{}`.
+
+Correction (2026-11-21, simplify review + apply stage): this decision's first version justified the split
+with the superseded method budget ("the ≤8-method budget cannot carry the receipt lifecycle", option (a)
+rejected as over budget) and the module comment said the queue "stays within its method budget" under the
+old per-type reading. Both readings are stale after arch-decision-2; the two types, their contents and
+their lock contract are unchanged — only the retired budget argument is replaced by the cohesion and
+lock-contract reasons above.
 
 **D2 — the snapshot enqueue loop stays in `commands.go`.** `enqueueSnapshotCommandsForRequest` gates every
 command on `commandWake == nil || backgroundStop` (daemon lifecycle state, read in non-queue contexts too,
@@ -205,6 +218,12 @@ window inside the same `startBackground` lifetime), no test or production path t
    against the changed-path list, not assumed.
 9. Host-path and DLP checks over the working-tree diff: no `users/`-style profile path, no backslash-u
    sequence in any added line.
+10. arch-decision-2 R9: `daemon/internal/app/command_queue.go` is added to `SOURCE_PATHS` in
+    `scripts/ci/omo-control-native-evidence.py` (owned for that line only; appended at the end of the list
+    so the entries the contract cites by line keep their coordinates), the moved declarations are mapped to
+    their listed paths in the evidence record, and `python3 scripts/ci/test-omo-control-native-evidence.py`
+    runs green. Without the path the native-evidence identity set (`source_files`) would exclude the file
+    the slice's behaviour moved into.
 
 ## Out of scope (with reasons)
 

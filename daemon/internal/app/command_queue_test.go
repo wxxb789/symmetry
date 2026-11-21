@@ -288,3 +288,30 @@ func TestCommandQueueRequestWindowsAccountTombstones(t *testing.T) {
 		t.Fatalf("live windows after finishing all of them = %d, want none", len(receipts.requests))
 	}
 }
+
+// Red mutant: drop the byKey nil guard in enqueue (or the lanes nil guard in
+// lane) -> the assignment into the nil map panics with "assignment to entry in
+// nil map".
+func TestCommandQueueZeroValueCreatesItsMaps(t *testing.T) {
+	var queue commandQueue
+	queued, created := queue.enqueue(queuedTestCommand("run-1", 1, "input-1"))
+	if !created {
+		t.Fatal("the zero-value queue did not register a command")
+	}
+	if !queue.current(queued) {
+		t.Fatal("the zero-value queue's dedupe index did not register the entry")
+	}
+	if popped, ok := queue.next(); !ok || popped != queued {
+		t.Fatalf("the zero-value queue's arrival pop = %p/%v, want %p", popped, ok, queued)
+	}
+	key := state.RunKey{RunID: "run-1", Generation: 1}
+	if !queue.lane(key, queued) {
+		t.Fatal("the zero-value queue's first lane append did not report a start")
+	}
+	if popped, ok := queue.nextInLane(key); !ok || popped != queued {
+		t.Fatalf("the zero-value queue's lane pop = %p/%v, want %p", popped, ok, queued)
+	}
+	if requestID := queue.receipts.begin(); requestID == 0 {
+		t.Fatal("the zero-value queue's receipt bookkeeping did not open a window")
+	}
+}

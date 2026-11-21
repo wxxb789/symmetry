@@ -165,13 +165,13 @@ func (queue *commandQueue) finish(key commandKey, registered *queuedCommand, rec
 // Entries already popped into the arrival FIFO's consumers or into a lane are
 // not removed here; their consumers drop them through current.
 func (queue *commandQueue) dropRun(key state.RunKey) {
-	for commandKey, queued := range queue.byKey {
-		if commandKey.run == key {
+	for queuedKey, queued := range queue.byKey {
+		if queuedKey.run == key {
 			if !queued.completed {
 				queued.completed = true
 				close(queued.done)
 			}
-			delete(queue.byKey, commandKey)
+			delete(queue.byKey, queuedKey)
 		}
 	}
 }
@@ -199,9 +199,12 @@ func (queue *commandQueue) markDelivered(key commandKey) {
 // tombstones and delivered marks are written by the outbox delivery path across
 // a journal write, outside any queue call, and the mutex that wires those two
 // phases (daemon.commandReceiptMu) is held while that write may block. That
-// mutex cannot become part of this module's lock-free contract, and commandQueue
-// stays within its method budget while every write to the bookkeeping stays
-// inside this file. Lock contract and zero-value tolerance are commandQueue's.
+// mutex cannot become part of this module's lock-free contract, so the receipt
+// state stays a sibling value rather than four more queue methods: one intent per
+// type, every write to the bookkeeping inside this file, and the module's total
+// stays at the contract's binding budget (at most 12 methods: the 8 queue methods
+// above plus the 4 receipt methods below). Lock contract and zero-value tolerance
+// are commandQueue's.
 type commandReceipts struct {
 	requests    map[uint64]map[commandKey]struct{}
 	nextRequest uint64
