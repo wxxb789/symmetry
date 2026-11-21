@@ -72,6 +72,11 @@ that served their pages` below were moved on 2026-11-21 from branch `fix/chat-hi
 The revalidated dead surfaces appended to the second `## Dead-code candidates` section below were
 moved on 2026-11-21 from branch `refactor/rf-w1-14-core-dead-surface`.
 
+The closed served-document gate-helper item appended to the new `## Deferred review findings
+(PR #145)` section at the end of this file was moved on 2026-11-21 from branch
+`refactor/rf-w3-03-elixir-fixtures-2`; its line bindings name the helpers' new home,
+`control/test/support/served_document.ex`.
+
 ## Model-routing evaluation records
 
 - [x] Fixed the half-applied usage-receipt import (serialization gap) reported by the cancelled 0008a round-2
@@ -3651,3 +3656,46 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
       `sha256:d2f694ddf97d861a1e00cfa577ef7ed36f0b6e2213aa4e917cb55cf52371a8e0`,
       `assets/index-Cy35eFtz.css` `sha256:0c216884aa5315566e05140b108408e7f878c0890f4c26ad6cb74794f1cafa09`,
       `assets/index-xLlmZ95U.js` `sha256:7b7562c7296d733a4c45b270be8b99f07bbf7703b147da4171730e3d73e5b133`).
+
+## Deferred review findings (PR #145)
+
+- [ ] Consolidate the served-document gate helpers after the increment that owns
+      `control/test/support/**` (W1-12) has landed. `assert_served_members!/3`, `assert_served_rows!/3`,
+      `waiting_decision_payload/0`, the deterministic version-4 `uuid/1` and the bundle-derived
+      `gate_members/3`/`declared_members/2` were duplicated between the two portal gate suites
+      (`control/test/symmetry_control_web/controllers/portal_resources_test.exs` and
+      `control/test/symmetry_control_web/controllers/portal_workflow_test.exs`), and so were
+      `definition_variants/2` and `contract_bundle/0`. Each file kept its own copy because
+      `control/test/support/**` was outside the gate increment's owned files and a module defined in
+      one test file would break a single-file run of the others, but the copies could drift. Move
+      them into `SymmetryControlWeb.ServedDocument` (the natural home for the bundle-derived pair
+      too) and have both gate files import them. Found by the adversarial review of PR #145 (P3-2).
+
+      **Closed (2026-11-21, branch `refactor/rf-w3-03-elixir-fixtures-2`):** the eight helpers now
+      have one definition in `control/test/support/served_document.ex` — `uuid/1` at `:51`,
+      `waiting_decision_payload/0` at `:60`, `assert_served_members!/3` at `:87`,
+      `assert_served_rows!/3` at `:95`, `gate_members/3` at `:108`, `declared_members/2` at `:122`,
+      `definition_variants/2` at `:132`, `contract_bundle/0` at `:140` — and both gate suites
+      import the module and dropped their `@schema_bundle` attribute. Move-only proof: the two
+      source regions
+      (`control/test/symmetry_control_web/controllers/portal_resources_test.exs:1665-1712`,
+      `control/test/symmetry_control_web/controllers/portal_workflow_test.exs:1896-1943`) were
+      byte-identical to each other
+      (`sha256:e8aa33abce63b1b706983c5f9f1fce6862b023f5d17e0f29507ef57569c089e4`) and every moved
+      body is byte-identical to its source copy (per-function sha256 in
+      `docs/plans/2026-11-21-elixir-fixture-extraction-batch-2-plan.md`); no test name changed.
+      Gates on the final tree (portable Elixir 1.20.4 / OTP 29.0.6, `MIX_TEST_PARTITION=rf-w3-03`,
+      local PostgreSQL, `--exclude portal_assets` because this host has no staged frontend bundle):
+      `mix format --check-formatted` exit 0; `MIX_ENV=test mix compile --warnings-as-errors` exit 0;
+      the web controller directory 275 passed, 1 skipped, 4 excluded, exit 0; the two e2e files
+      2 passed, 10 skipped (environment-tagged), exit 0; full suite 976 passed, 21 skipped,
+      4 excluded, exit 0, with its `(module, name)` set identical to the same run on a clean
+      worktree at `a503eab7` (1001 names in both runs, 0 missing and 0 added; the pre-change run
+      failed 7 tests on this host under load — one 100 ms mailbox window in `integrations_test.exs`
+      and six
+      `goal_0006_migration_test.exs` cases with a 4000 ms `DBConnection` queue drop — and all
+      seven pass on the converted tree); mutation check: flipping `enabled: true` in
+      `control/test/support/test_fixtures.ex`'s `validation_profiles/0` reddens
+      `control/test/symmetry_control_web/controllers/task_goal_guard_controller_test.exs`
+      (`{:error, :invalid_validation_profile}`, 1/2 passed), restored byte-identically
+      (`sha256:171c5cce4c2b89a1ff1752974cea19a45ac82474e8687f350fa371feb98ac3db`) and green again.

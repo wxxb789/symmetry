@@ -1,6 +1,9 @@
 defmodule SymmetryControlWeb.ProtocolControllerTest do
   use SymmetryControlWeb.ConnCase, async: false
 
+  import SymmetryControl.TestFixtures, only: [uuid: 0]
+  import SymmetryControlWeb.TestConn, only: [assert_error: 3, bearer: 2]
+
   alias SymmetryControl.Orchestration
   alias SymmetryControl.Orchestration.{Run, Task}
   alias SymmetryControl.Orchestration.Scheduler
@@ -1374,10 +1377,6 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
     assert acknowledged_at == nil or is_binary(acknowledged_at)
   end
 
-  defp assert_error(conn, status, code) do
-    assert %{"error" => %{"code" => ^code}} = json_response(conn, status)
-  end
-
   defp assert_fence_response(conn, 404), do: assert_error(conn, 404, "not_found")
   defp assert_fence_response(conn, 400), do: assert_error(conn, 400, "invalid_request")
 
@@ -1408,9 +1407,6 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
 
   defp request(conn, :get, path), do: get(conn, path)
   defp request(conn, :post, path), do: post(conn, path, %{})
-
-  defp bearer(conn, token), do: put_req_header(conn, "authorization", "Bearer " <> token)
-  defp uuid, do: Ecto.UUID.generate()
 
   defp wire_task_payload, do: %{"work" => work_payload()}
 

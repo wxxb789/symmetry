@@ -68,6 +68,19 @@ defmodule SymmetryControl.IntegrationsTest do
 
   import Ecto.Query
 
+  import SymmetryControl.IntegrationFixtures,
+    only: [
+      assert_sync_waiting_on_work_item: 3,
+      format_sync_wait_sample: 1,
+      provider_snapshot: 5,
+      provider_work_item: 1,
+      sync_lock_order_task: 4,
+      sync_wait_sample: 2,
+      use_blocking_connection_check_provider: 0,
+      use_credential_leak_provider: 0,
+      work_item_row_locked?: 1
+    ]
+
   alias Ecto.Adapters.SQL.Sandbox
   alias SymmetryControl.Integrations
   alias SymmetryControl.Integrations.CredentialLeakProviderStub
@@ -1782,192 +1795,6 @@ defmodule SymmetryControl.IntegrationsTest do
     refute function_exported?(Integrations, :execute_provider_action, 5)
     assert function_exported?(Integrations, :execute_unprojected_provider_action, 5)
     assert function_exported?(Integrations, :execute_unprojected_provider_action, 6)
-  end
-
-  defp sync_lock_order_task(resource, provider_items, owner, ref) do
-    Task.async(fn ->
-      Sandbox.unboxed_run(Repo, fn ->
-        [[backend]] = Repo.query!("SELECT pg_backend_pid()").rows
-        send(owner, {:sync_backend, ref, self(), backend})
-
-        receive do
-          {:start_sync, ^ref} ->
-            CredentialLeakProviderStub.respond_with(:sync_resource, %{
-              resource: %{metadata: %{}},
-              work_items: provider_items
-            })
-
-            Integrations.sync_resource(resource.id)
-        after
-          15_000 -> {:error, :sync_barrier_timeout}
-        end
-      end)
-    end)
-  end
-
-  # `FOR UPDATE SKIP LOCKED` reports a row locked by an in-progress transaction
-  # without waiting; the lock a free row takes is released with the statement.
-  defp work_item_row_locked?(id) do
-    Repo.query!(
-      "SELECT 1 FROM work_items WHERE id = $1::uuid FOR UPDATE SKIP LOCKED",
-      [Ecto.UUID.dump!(id)]
-    ).rows == []
-  end
-
-  # The sync's wait is read from the lock manager, not from the statement text:
-  # run 43891279765 job 133383740181 put `pg_stat_activity.query` on the import's
-  # repository lookup while the import was in a delivery-attributed lock wait, so
-  # the query field is not usable evidence here. A sample is accepted once the
-  # import's own backend holds an ungranted lock and the delivery backend blocks
-  # it; the accepted sample then asserts that the delivery backend holds a
-  # granted lock on `work_items`, the lock the import's ordered prelock waits
-  # for. Anything else keeps polling until the deadline, which reports the raw
-  # sample.
-  defp assert_sync_waiting_on_work_item(backend, blocker, deadline) do
-    sample = sync_wait_sample(backend, blocker)
-
-    if sample.ungranted_lock? and sample.blocked_by_delivery? do
-      assert sample.waiter_on_delivery_xid? and sample.blocker_holds_work_item_lock?,
-             "import sync did not wait on the delivery transaction's WorkItem locks" <>
-               " (#{format_sync_wait_sample(sample)})"
-
-      :ok
-    else
-      assert System.monotonic_time(:millisecond) < deadline,
-             "import sync did not wait for the delivery WorkItem locks" <>
-               " (last sample: #{format_sync_wait_sample(sample)})"
-
-      assert_sync_waiting_on_work_item(backend, blocker, deadline)
-    end
-  end
-
-  defp sync_wait_sample(backend, blocker) do
-    result =
-      Repo.query!(
-        """
-        SELECT activity.query,
-               coalesce(activity.wait_event_type, '-'),
-               coalesce(activity.wait_event, '-'),
-               $2::integer = ANY(pg_blocking_pids($1)),
-               EXISTS (SELECT 1 FROM pg_locks WHERE pid = $1 AND NOT granted),
-               EXISTS (
-                 SELECT 1 FROM pg_locks held
-                 WHERE held.pid = $2 AND held.granted AND held.relation = 'work_items'::regclass
-               ),
-               EXISTS (
-                 SELECT 1 FROM pg_locks waiter
-                 WHERE waiter.pid = $1 AND NOT waiter.granted
-                   AND waiter.transactionid =
-                         (SELECT backend_xid FROM pg_stat_activity WHERE pid = $2)
-               )
-        FROM pg_stat_activity AS activity
-        WHERE activity.pid = $1
-        """,
-        [backend, blocker]
-      )
-
-    case result.rows do
-      [[query, wait_event_type, wait_event, blocked_by_delivery?, ungranted?, holds?, on_xid?]] ->
-        %{
-          query: query,
-          wait_event_type: wait_event_type,
-          wait_event: wait_event,
-          blocked_by_delivery?: blocked_by_delivery?,
-          ungranted_lock?: ungranted?,
-          blocker_holds_work_item_lock?: holds?,
-          waiter_on_delivery_xid?: on_xid?
-        }
-
-      [] ->
-        %{
-          query: nil,
-          wait_event_type: "absent",
-          wait_event: "absent",
-          blocked_by_delivery?: false,
-          ungranted_lock?: false,
-          blocker_holds_work_item_lock?: false,
-          waiter_on_delivery_xid?: false
-        }
-    end
-  end
-
-  # The query can be NULL (or held by another backend's activity slot) while the
-  # backend still waits, so the sample always names the wait event too.
-  defp format_sync_wait_sample(sample) do
-    query =
-      case sample.query do
-        nil -> ""
-        value -> " query=" <> String.slice(to_string(value), 0, 160)
-      end
-
-    "#{sample.wait_event_type}/#{sample.wait_event}" <>
-      " ungranted=#{sample.ungranted_lock?}" <>
-      " waiter_on_delivery_xid=#{sample.waiter_on_delivery_xid?}" <>
-      " blocker_holds_work_items=#{sample.blocker_holds_work_item_lock?}" <> query
-  end
-
-  defp use_credential_leak_provider do
-    Application.put_env(:symmetry_control, :integration_providers,
-      github: CredentialLeakProviderStub,
-      azure_devops: CredentialLeakProviderStub
-    )
-  end
-
-  defp use_blocking_connection_check_provider do
-    use_credential_leak_provider()
-    previous = Application.get_env(:symmetry_control, :integration_provider_test_controller)
-    Application.put_env(:symmetry_control, :integration_provider_test_controller, self())
-
-    on_exit(fn ->
-      if previous do
-        Application.put_env(:symmetry_control, :integration_provider_test_controller, previous)
-      else
-        Application.delete_env(:symmetry_control, :integration_provider_test_controller)
-      end
-    end)
-  end
-
-  defp provider_work_item(provider_data) do
-    %{
-      external_id: Ecto.UUID.generate(),
-      external_url: "https://github.com/acme/symmetry/issues/credential-check",
-      external_state: "open",
-      external_updated_at: ~U[2026-09-05 09:30:00.000000Z],
-      title: "Provider credential validation",
-      description: "Provider data must remain credential-free.",
-      labels: ["security"],
-      external_assignee_name: nil,
-      status: "ready",
-      priority: "high",
-      provider_data: provider_data
-    }
-  end
-
-  defp provider_snapshot(provider, updated_at, title, external_state, provider_data) do
-    base_url =
-      case provider do
-        "github" -> "https://github.com/acme/symmetry/issues/101"
-        "azure_devops" -> "https://dev.azure.com/acme/symmetry/_workitems/edit/101"
-      end
-
-    %{
-      resource: %{metadata: %{}},
-      work_items: [
-        %{
-          external_id: "101",
-          external_url: base_url,
-          external_state: external_state,
-          external_updated_at: updated_at,
-          title: title,
-          description: title <> " description",
-          labels: [String.downcase(title)],
-          external_assignee_name: title <> " owner",
-          status: "ready",
-          priority: "high",
-          provider_data: provider_data
-        }
-      ]
-    }
   end
 
   defp connection_fixture(provider, auth_type) do

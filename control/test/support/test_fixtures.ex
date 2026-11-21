@@ -15,6 +15,7 @@ defmodule SymmetryControl.TestFixtures do
 
   alias SymmetryControl.Goals
   alias SymmetryControl.Orchestration
+  alias SymmetryControl.Workspaces
 
   @doc """
   Injects the suite's command surface: `command_opts/0` returns the suite's
@@ -66,6 +67,12 @@ defmodule SymmetryControl.TestFixtures do
 
   @task_base %{goal: "Run tests", agent_profile: "codex", workspace: "primary", input: %{}}
   @provider_task_base Map.put(@task_base, :goal, "Use provider")
+
+  @doc """
+  A fresh version-4 UUID: the converted suites' `uuid/0` one-liner, kept as a
+  name so a call site that wants a fresh id per call says so.
+  """
+  def uuid, do: Ecto.UUID.generate()
 
   @doc """
   Registers one runtime for `machine` at `now` and returns it.
@@ -157,6 +164,51 @@ defmodule SymmetryControl.TestFixtures do
   @doc "Task attributes over the capability suite's `\"Use provider\"` goal."
   def provider_task_attrs(overrides) do
     Map.merge(@provider_task_base, Map.new(overrides))
+  end
+
+  @doc "The baseline subject of a repository resource."
+  def subject(repository_id) do
+    %{
+      "resource_id" => repository_id,
+      "commit" => String.duplicate("a", 40),
+      "tree_digest" => "sha256:" <> String.duplicate("4", 64)
+    }
+  end
+
+  @doc "The acceptance contract the converted suites pin: one `check` predicate."
+  def check_contract do
+    %{
+      "schema_version" => "symmetry.acceptance.v1",
+      "description" => "An independent check must pass.",
+      "predicates" => [%{"id" => "check", "kind" => "check", "validator_profile" => "test"}]
+    }
+  end
+
+  @doc """
+  The validation profile the converted web suites register: one enabled check
+  whose `allowed_runtime_ids` carries a fresh id, so the profile admits the
+  runtime the same test just registered.
+  """
+  def validation_profiles do
+    [
+      test: [
+        kind: :check,
+        profile_digest: "sha256:" <> String.duplicate("c", 64),
+        enabled: true,
+        allowed_runtime_ids: [Ecto.UUID.generate()]
+      ]
+    ]
+  end
+
+  @doc "Creates a repository resource for `project` and returns it."
+  def repository_fixture(project) do
+    {:ok, repository} =
+      Workspaces.create_resource(project.id, %{
+        kind: "repository",
+        name: "Repository #{System.unique_integer([:positive])}"
+      })
+
+    repository
   end
 
   @doc """
