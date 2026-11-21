@@ -86,7 +86,7 @@ Delivered message: `release state directory lock: The handle is invalid.` + the 
 `gofmt -l .` (empty) · `go vet ./...` · `GOOS=linux go vet ./...` · `GOOS=darwin GOARCH=arm64 go vet
 ./internal/app/` · `go build ./...` · `go test -count=1 ./internal/state/... ./internal/app/...`.
 All foreground on this worktree (Windows/amd64, go1.27.4), 2026-11-22; the commit carrying this
-record adds no code change over the gated worktree.
+record adds no code change over the gated worktree. The table records the `accb6c2f` run.
 
 | # | command | exit | observed |
 |---|---:|---:|---|
@@ -96,6 +96,11 @@ record adds no code change over the gated worktree.
 | 4 | `GOOS=darwin GOARCH=arm64 go vet ./internal/app/` | 0 | no output |
 | 5 | `go build ./...` | 0 | no output |
 | 6 | `go test -count=1 ./internal/state/... ./internal/app/...` | 0 | `ok …/internal/state 5.282s`; `ok …/internal/app 128.849s` |
+
+Review round-1 fixes (`18f45902`, adds tests): `gofmt -l .` empty; `go vet ./...` and
+`GOOS=linux go vet ./...` exit 0; `go test -count=1 ./internal/state/...` → `ok 5.440s`
+(Windows); the S7 app test re-run green. Independent review r2 re-ran the state suite at
+`18f45902`: `ok 6.651s` (Windows) and `ok 14.256s` (WSL Linux).
 
 `git diff --check` reports no whitespace errors and the host-path scan finds no absolute profile
 paths in the branch diff.

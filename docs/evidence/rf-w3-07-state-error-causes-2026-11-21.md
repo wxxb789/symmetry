@@ -789,7 +789,7 @@ unchanged at this branch's head: `rows 28 (static-new 28, static-fmt-no-w 0, sen
 `-all`: row 28 / pred 196 / other-branch 39 / no-branch 265, raw listing total 528, `-selfcheck`
 exit 0.
 
-### 12.1 Applied changes (all inside the combined W3-07/W3-08 owned sets)
+### 12.1 Applied changes (authorized by `goal-rf-w3-07b-state-error-followups.md`)
 
 | finding | file(s) | change | apply-tip site |
 |---|---|---|---|
