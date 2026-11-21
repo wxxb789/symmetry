@@ -3,7 +3,7 @@ defmodule SymmetryControl.TestFixtures do
   Data builders shared by the control suites.
 
   Each builder below replaces a helper that had been copy-pasted into every
-  suite that needed it (5-11 copies per name). The values stay identical to the
+  suite that needed it (2-11 copies per name). The values stay identical to the
   copies': a knob the converted call sites set differently from the documented
   default is an explicit option, and the defaults are the deterministic fixture
   values most of those call sites rely on. Suite-specific values (the suite
@@ -186,8 +186,8 @@ defmodule SymmetryControl.TestFixtures do
 
   @doc """
   The validation profile the converted web suites register: one enabled check
-  whose `allowed_runtime_ids` carries a fresh id, so the profile admits the
-  runtime the same test just registered.
+  under `:test`, whose `allowed_runtime_ids` is a fresh id that admits no
+  registered runtime (call sites pass `validation_profiles(runtime_id)`).
   """
   def validation_profiles do
     [

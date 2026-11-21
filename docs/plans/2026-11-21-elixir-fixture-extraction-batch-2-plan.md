@@ -32,7 +32,7 @@ converted tree. Counts are name+arity scoped.
 | `enforce_csrf/1` | 1 | 1 (`TestConn`, new) | portal_workflow | byte-identical to `portal_session_test.exs:415` (non-owned, keeps its copy) |
 | `command_current/4` | 2 (+1 support definition) | 1 (`TestFixtures.__using__/1`) | goal_machine, task_goal_guard | the two copies are a byte-identical 19-line clone |
 | `subject/1` | 2 | 1 (`TestFixtures`, new) | goal_machine, task_goal_guard | the two copies byte-identical |
-| `validation_profiles/0` | 2 (`/0`, one of them a default-arg clause) | 1 (`TestFixtures`, new) | task_goal_guard (imports `/0`), goal_machine (its clause becomes the arity-1 variant, which imports the shared `/0` for its default path) | task_goal_guard's copy byte-identical to `goals/workers_test.exs:178` (non-owned, keeps its copy) |
+| `validation_profiles/0` | 3 (`/0`; one of them a default-arg clause) | 2 (`TestFixtures`, new + `portal_workflow`'s pinned copy — Left local — reason) | task_goal_guard (imports `/0`), goal_machine (its clause becomes the arity-1 variant, which imports the shared `/0` for its default path) | task_goal_guard's copy byte-identical to `goals/workers_test.exs:178` (non-owned, keeps its copy); `portal_workflow`'s copy pins its own `allowed_runtime_ids` and is not interchangeable |
 | `check_contract/0` | 1 | 1 (`TestFixtures`, new) | goal_machine | byte-identical to `goals_test.exs:9480` and `goals/dispatch_notification_test.exs:699` (non-owned, keep their copies) |
 | `repository_fixture/1` | 1 | 1 (`TestFixtures`, new) | goal_machine | byte-identical to `goals_test.exs:9591` (non-owned, keeps its copy) |
 | `uuid/0` | 3 | 1 (`TestFixtures`, new) | operator_read, protocol, provider_action | all 3 byte-identical (`defp uuid, do: Ecto.UUID.generate()`) |
@@ -62,6 +62,10 @@ re-based by construction, not by a new literal.
 Every same-name/arity family the converted files still define, and every cloned family the other
 owned files define, is listed here. "cloned" = byte-identical copies exist.
 
+Change (1) scopes conversion to byte-identical bodies and requires the same-name families left
+local to be recorded here, so a family listed here is not a converted helper left duplicated:
+the contract's Failure control reads against the converted families.
+
 | family | owned definitions (files) | reason left local |
 | --- | --- | --- |
 | `project_fixture/0` | integrations_test:1986, goal_machine:1293, provider_action:3244 (+4 non-owned) | 8 distinct bodies in 9 files (each pins its own project name/key literal); the only byte-identical pair is `workspaces_read_model_test.exs:635` = `workspaces_test.exs:551`, both non-owned. No owned pair is interchangeable, and converting one copy while the others stay file-local would leave a two-definition family in the owned set (contract Failure control). |
@@ -82,7 +86,8 @@ owned files define, is listed here. "cloned" = byte-identical copies exist.
 | `claim/3` | protocol_controller:1316 | HTTP-layer helper (`conn`, `machine_token`, `runtime_id` → dispatch + `POST /runs/:id/claims/:claim_id`); same name+arity as `TestFixtures.claim/3` but a different layer |
 | `create_resource/5` | portal_resources:1557, portal_workflow:1498 | the two are byte-identical HTTP helpers (`api_conn/0` + `POST …/resources` + `json_response(201)`); same fence as `create_project/1` — `PortalFixtures` is not owned, and `TestFixtures` hosts pure data builders only (contract P1-3: not converted — different layer) |
 | `create_resource/2`, `create_work_item/3`, `create_work_item/1` | portal_resource_identity:129, portal_resources:1575, portal_workflow:1521, portal_controller:439 | HTTP-layer helpers; the `create_work_item` bodies differ (the workflow copy injects `status`/`priority`) |
-| `enforce_csrf/1` | portal_workflow converted; `portal_session_test.exs:415` (non-owned) keeps its copy | non-owned survivor |
+| `enforce_csrf/1` | portal_workflow converted; `portal_session_test.exs:415` keeps its byte-identical copy | non-owned survivor. Re-derivation of the contract clause's paths: `portal_session_controller_test.exs` and `channels/portal_realtime_test.exs` do not exist in the tree — the actual files are `portal_session_test.exs` and `portal_realtime_test.exs` (its `operator_conn/0` at `:17` matches no converted helper by name+arity) — so the conditional extension does not reach the byte-identical sibling, which stays outside the re-derived owned set |
+| `validation_profiles/0` | portal_workflow:1634 (kept) | the kept body pins `allowed_runtime_ids: ["00000000-0000-4000-8000-000000000001"]` for the `:goals` app-config registry write in `enable_goal_rollout/0`; it is not byte-identical to the shared fresh-id builder, so Change (1)'s conversion scope leaves it local — converting it would change the registered profile value |
 | `sync_ci/4`, `sync_delivery/4`, `sync_resource/3`, `check/2`, `authenticate/1`, `validate_resource_reference/3`, `execute/6`, `github_headers/1`, `azure_devops_headers/1`, `request/4`, `respond_with/2` | inline stub modules in integrations_test, portal_integrations_test, portal_resources_test, provider_action_controller_test, resource_sync_*_test, router_invalidation_coverage_test | module-level `def` behaviour implementations (provider stubs), not per-suite fixtures; the shared `IntegrationProviderStub`/`IntegrationAuthStub`/`IntegrationHTTPStub` support modules are the existing mechanism for the common path, and each stub exists to inject a file-local failure that the shared stub does not model |
 | `goal_command/4` | goal_controller:643 | HTTP-layer envelope reader (GET the goal, POST the command); same name as `TestFixtures.goal_command/3,4` but a different layer and different arity semantics (batch-1 plan already records the name collision) |
 | `goal_fixture/1`, `goal_fixture/2`, `work_item_fixture/3`, `history_fixture/0`, `runtime_fixture/0,1`, `transition/4,5`, `baseline_subject/1`, `evidence_attrs/2`, `plan_proposal/2`, `usage_attrs/1`, `task_result/3`, `errors_on/1`, … | the owned files above | every cross-file pair either differs in body (checked by the same grouping) or has no owned support home; they were already recorded as out of scope by the batch-1 plan ("other duplicated helper names inside the owned set … not among the contract's converted names") and stay recorded for the follow-up extraction slice |
@@ -185,9 +190,9 @@ All foreground, serially; never a suite next to a measurement harness. Portable-
 2. Per converted file, a targeted `mix test <file>` as it converts.
 3. `mix format --check-formatted`; `MIX_ENV=test mix compile --warnings-as-errors`;
    `mix test test/symmetry_control_web/` and the two e2e files.
-4. Mutation red run: flip `TestFixtures.validation_profiles/0`'s `profile_digest` padding byte
-   (`"c"` → `"d"`), run `mix test test/symmetry_control_web/controllers/task_goal_guard_controller_test.exs`
-   and show the red, then restore byte-identically and re-run.
+4. Mutation red run: flip `TestFixtures.validation_profiles/0`'s `enabled` field (`true` → `false`),
+   run `mix test test/symmetry_control_web/controllers/task_goal_guard_controller_test.exs` and show
+   the red, then restore byte-identically and re-run.
 5. After: the same named-definition table; move-only hashes; the full `mix test` run with the
    JSON formatter, compared to the pre-change name list (`--exclude portal_assets` where the
    frontend bundle is not staged, the documented host path).
@@ -235,7 +240,8 @@ suite + provider-broker e2e + goal-receipt e2e steps.
 - **Goal-machine's `validation_profiles` clause loses its default argument** (`runtime_id \`
   `Ecto.UUID.generate()` → `runtime_id`), so the arity-0 path resolves to the shared
   `TestFixtures.validation_profiles/0` (same fresh id, same profile body) and the arity-1 variant
-  stays local; this keeps exactly one definition per name+arity in the owned set.
+  stays local; among the converted copies this leaves one definition per name+arity, while
+  portal_workflow's distinct-body `/0` copy stays recorded in "Left local — reason".
 
 ## Verification owner
 
@@ -244,8 +250,9 @@ independent read-only review follows in the review stage.
 
 ## Implementation record (as converted)
 
-The converted tree holds one definition per name+arity for every helper in the deliverable table;
-the definitions live at:
+The converted tree holds one shared definition per name+arity for every helper the deliverable
+table converts; families left local keep their file-local copies, recorded in "Left local —
+reason". The definitions live at:
 
 * `control/test/support/test_conn.ex` — `bearer/2` at `:40`, `enforce_csrf/1` at `:43`
   (`assert_error/3` at `:47` is the pre-existing body the five web copies carried).
