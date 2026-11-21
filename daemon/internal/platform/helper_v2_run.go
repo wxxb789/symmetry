@@ -250,7 +250,7 @@ func readLinuxOwnerProcessChildrenSnapshot(ctx context.Context, process authorit
 	}
 	identity, err := ProcessIdentity(process.PID)
 	if err != nil || identity != process.Identity {
-		return nil, fmt.Errorf("verify process identity before all-thread child census: %w", errOr(err, errors.New("creation identity differs")))
+		return nil, fmt.Errorf("verify process identity before all-thread child census: %w", errOr(err, ErrLinuxOwnerCreationIdentityDiffers))
 	}
 	threadIDs, err := readLinuxOwnerProcessThreadIDs(process.PID)
 	if err != nil {
@@ -273,7 +273,7 @@ func readLinuxOwnerProcessChildrenSnapshot(ctx context.Context, process authorit
 	}
 	threadIDsAfter, err := readLinuxOwnerProcessThreadIDs(process.PID)
 	if err != nil || !equalLinuxOwnerProcessThreadIDs(threadIDs, threadIDsAfter) {
-		return nil, fmt.Errorf("%w: process TID set changed during all-thread child census: %w", errLinuxOwnerProcessChildrenChanged, errOr(err, errors.New("thread snapshot differs")))
+		return nil, fmt.Errorf("%w: process TID set changed during all-thread child census: %w", errLinuxOwnerProcessChildrenChanged, errOr(err, ErrLinuxOwnerThreadSnapshotDiffers))
 	}
 	verifiedChildrenByThread, err := readLinuxOwnerProcessThreadChildren(ctx, process.PID, threadIDs)
 	if err != nil || !equalLinuxOwnerProcessChildLists(childrenByThread, verifiedChildrenByThread) {
@@ -281,11 +281,11 @@ func readLinuxOwnerProcessChildrenSnapshot(ctx context.Context, process authorit
 	}
 	identityAfter, err := ProcessIdentity(process.PID)
 	if err != nil || identityAfter != process.Identity {
-		return nil, fmt.Errorf("revalidate process identity after all-thread child census: %w", errOr(err, errors.New("creation identity changed")))
+		return nil, fmt.Errorf("revalidate process identity after all-thread child census: %w", errOr(err, ErrLinuxOwnerCreationIdentityChanged))
 	}
 	threadIDsAfter, err = readLinuxOwnerProcessThreadIDs(process.PID)
 	if err != nil || !equalLinuxOwnerProcessThreadIDs(threadIDs, threadIDsAfter) {
-		return nil, fmt.Errorf("%w: process TID set changed after all-thread child census: %w", errLinuxOwnerProcessChildrenChanged, errOr(err, errors.New("thread snapshot differs")))
+		return nil, fmt.Errorf("%w: process TID set changed after all-thread child census: %w", errLinuxOwnerProcessChildrenChanged, errOr(err, ErrLinuxOwnerThreadSnapshotDiffers))
 	}
 	sort.Ints(children)
 	return children, nil

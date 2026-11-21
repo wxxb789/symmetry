@@ -1232,6 +1232,23 @@ describe("project resources", () => {
     expect(unknown.getAllByText("Unknown")).toHaveLength(2);
   });
 
+  it("renders a whitespace-only served name, status and sync status verbatim", async () => {
+    // Served text is rendered as served: a whitespace-only member is not blank
+    // for this surface's own presence rule, so the name reaches the heading
+    // unchanged instead of the id fallback, and the two badges label the
+    // unreadable status they were served rather than a known status word. A
+    // helper that trims has to be a declared policy here, not a silent swap.
+    renderConnections(() => unexpectedRequest(), "/portal/connections", {
+      projects: [projectFixture({ resources: [resourceFixture({ name: " ", status: " ", sync_status: " " })] })],
+    });
+    expect(await screen.findByRole("heading", { name: "Project resources" })).toBeVisible();
+    const section = within(screen.getByRole("region", { name: "Project resources" }));
+    await section.findByText(/Showing Connected engineering/);
+    expect(screen.getAllByRole("heading", { level: 3 }).some((heading) => heading.textContent === " ")).toBe(true);
+    expect(screen.queryByRole("heading", { level: 3, name: alphaId })).toBeNull();
+    expect(screen.getAllByText(/^Unknown (resource|sync) status:/)).toHaveLength(2);
+  });
+
   it("renders a refused sync with the server's code and next step and never as synchronized", async () => {
     const target = resourceFixture({
       id: betaId, kind: "work_tracking", name: "engineering issues", connection_id: null, external_ref: "acme",

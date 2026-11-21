@@ -1132,12 +1132,12 @@ def project_pid_reuse(value) -> dict:
                 fail("legacy pid_reuse.crash_statuses must be a list")
             crashes = []
             for index, item in enumerate(child):
-                item = require_object(item, f"pid_reuse.crash_statuses[{index}]")
-                reject_unknown(item, PID_REUSE_CRASH_KEYS, f"pid_reuse.crash_statuses[{index}]")
+                projected_item = require_object(item, f"pid_reuse.crash_statuses[{index}]")
+                reject_unknown(projected_item, PID_REUSE_CRASH_KEYS, f"pid_reuse.crash_statuses[{index}]")
                 crashes.append(
                     {
-                        "stage": safe_text(item["stage"], "pid_reuse crash stage"),
-                        "status": project_exit(item["status"], "pid_reuse crash status"),
+                        "stage": safe_text(projected_item["stage"], "pid_reuse crash stage"),
+                        "status": project_exit(projected_item["status"], "pid_reuse crash status"),
                     }
                 )
             result[key] = crashes
@@ -1147,10 +1147,10 @@ def project_pid_reuse(value) -> dict:
             digests = require_object(child, "pid_reuse.output_digests")
             projected = {}
             for name, digest in digests.items():
-                name = safe_text(name, "pid_reuse output digest key")
+                safe_name = safe_text(name, "pid_reuse output digest key")
                 if not isinstance(digest, str) or not re.fullmatch(r"[0-9]+ bytes sha256[:=][a-fA-F0-9]{64}", digest):
                     fail("legacy output digest is not a byte-count and SHA-256")
-                projected[name] = digest.lower()
+                projected[safe_name] = digest.lower()
             result[key] = projected
         elif key in ("owner_stop_proof_result",):
             result[key] = safe_text(child, f"pid_reuse.{key}")
@@ -1328,10 +1328,7 @@ def read_regular(
     diagnostic_owner: tuple[int, int] | None = None,
 ) -> tuple[bytes, dict | None]:
     maximum_size = 2048 if diagnostic_owner is not None else MAX_EVIDENCE_SIZE
-    try:
-        info = path.lstat()
-    except FileNotFoundError:
-        raise
+    info = path.lstat()
     if (
         not stat.S_ISREG(info.st_mode)
         or stat.S_IMODE(info.st_mode) != 0o600

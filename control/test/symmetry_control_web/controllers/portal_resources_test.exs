@@ -112,8 +112,8 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
 
   import Ecto.Query
   import SymmetryControlWeb.PortalFixtures, only: [create_connection: 4, create_project: 2]
-  import SymmetryControlWeb.ServedDocument, only: [validate_served_document!: 2]
-  import SymmetryControlWeb.TestConn, only: [api_conn: 0]
+  import SymmetryControlWeb.ServedDocument
+  import SymmetryControlWeb.TestConn, only: [api_conn: 0, create_resource: 5]
 
   alias SymmetryControl.Orchestration
   alias SymmetryControl.Repo
@@ -199,26 +199,21 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
   # consumed surface reads pinned by name even if a schema edit stops declaring
   # it. Frontend read sites, list by list:
   #
-  #   root             features/runtimes/runtimes.tsx:81,85,95; features/connections/resources.tsx:136
-  #   project row      features/projects/projects.tsx:89,108; features/planning/write-policy.ts:50,201;
-  #                    features/work/assignment.tsx:250; features/connections/resources.tsx:130
-  #   resource row     features/connections/resources.tsx:102-116; features/work/assignment.tsx:53-57
-  #   registered row   features/connections/resources.tsx:137-140
-  #   runtime row      features/runtimes/runtimes.tsx:17,25,37-41
-  #   capabilities     features/runtimes/runtimes.tsx:16,50-56 read `adapter`; the four booleans have no
+  #   root             features/runtimes/runtimes.tsx:82,86,96; features/connections/resources.tsx:121
+  #   project row      features/projects/projects.tsx:90,109; features/planning/write-policy.ts:50,201;
+  #                    features/work/assignment.tsx:251; features/connections/resources.tsx:115
+  #   resource row     features/connections/resources.tsx:87-101; features/work/assignment.tsx:54-58
+  #   registered row   features/connections/resources.tsx:122-125
+  #   runtime row      features/runtimes/runtimes.tsx:18,26,38-42
+  #   capabilities     features/runtimes/runtimes.tsx:17,51-57 read `adapter`; the four booleans have no
   #                    member-named read site — the whole map is serialized into `data-capabilities`
-  #                    (`runtimes.tsx:24`) and `browser/tests/portal-live-daemon.spec.mjs` asserts that
+  #                    (`runtimes.tsx:25`) and `browser/tests/portal-live-daemon.spec.mjs` asserts that
   #                    attribute equals the registration-side map
-  #   work row         features/work/control.tsx:304,444; features/work/assignment.tsx:152-155;
+  #   work row         features/work/control.tsx:305,445; features/work/assignment.tsx:153-156;
   #                    features/planning/write-policy.ts:27-28,40,264-279; features/work/detail.tsx:310-343,370
-  #   delivery value   features/work/presentation.ts:293,339-340,347-348,355-356
+  #   delivery value   features/work/presentation.ts:262,308-309,316-317,324-325
   #   external row     features/work/detail.tsx:320; features/planning/write-policy.ts:20
-  #   waiting decision features/work/presentation.ts:399-409
-  # The canonical bundle `ServedDocument.validate_served_document!/2` compares
-  # every gate's response against; the presence assertions derive their
-  # declared-member half from it at test time.
-  @schema_bundle Path.expand("../../../../daemon/internal/contracts/schema_bundle.json", __DIR__)
-
+  #   waiting decision features/work/presentation.ts:368-378
   @workspace_read_members ~w(runtimes registered_runtimes)
   @workspace_project_members ~w(version default_agent_profile default_workspace resources)
   @workspace_resource_members ~w(id project_id connection_id kind name provider external_ref url
@@ -1554,20 +1549,6 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
 
   defp create_project(key), do: create_project(key, "Resource project #{key}")
 
-  defp create_resource(project, connection, kind, name, external_ref) do
-    %{"resource" => resource} =
-      api_conn()
-      |> post("/portal/api/projects/#{project["id"]}/resources", %{
-        "connection_id" => connection["id"],
-        "kind" => kind,
-        "name" => name,
-        "external_ref" => external_ref
-      })
-      |> json_response(201)
-
-    resource
-  end
-
   defp create_tracker(project, connection, name, external_ref) do
     create_resource(project, connection, "work_tracking", name, external_ref)
   end
@@ -1656,61 +1637,6 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
     runtime
   end
 
-  # `assert_served_members!/3` and `assert_served_rows!/3` are the gate's
-  # presence oracle: a member is pinned by key, so a served `null` stays
-  # accepted while a renamed or omitted key fails here. They are defined in this
-  # file because `control/test/support/**` is outside this increment's owned
-  # files, and a module defined in one test file would break a single-file run
-  # of the others.
-  defp assert_served_members!(label, served, members) do
-    assert is_map(served), "#{label} is not served at all: #{inspect(served)}"
-
-    assert Enum.all?(members, &Map.has_key?(served, &1)),
-           "#{label} stopped serving #{inspect(Enum.reject(members, &Map.has_key?(served, &1)))}"
-  end
-
-  defp assert_served_rows!(label, rows, members) do
-    assert is_list(rows) and rows != [], "#{label}: the gate must serve at least one row"
-    Enum.each(rows, &assert_served_members!(label, &1, members))
-  end
-
-  # The member set a gate assertion walks: the definition's declared members
-  # from the contract bundle plus the frontend-read list the call passes. A
-  # schema-side rename (bundle side) and a serving-side rename or omission
-  # (either side) fail the same "stopped serving" message, so the assertion
-  # cannot stay green while the schema, the projection and the read sites
-  # disagree.
-  defp gate_members(read, definition, frontend_members) do
-    Enum.uniq(declared_members(read, definition) ++ frontend_members)
-  end
-
-  # The contract bundle's declared members for `definition` in `read`, its
-  # `oneOf` variants included (`WorkItemTimelineItem` declares its names in the
-  # variants, not in the parent body); `:root` names the read's own schema. The
-  # bundle is read at test time, so a rename inside it (e.g.
-  # `WorkspaceWorkItem.goal_id` -> `goal_ref`) fails the presence assertion
-  # until the served projection follows: the bundle comparison alone cannot
-  # refuse it, because the definitions are `additionalProperties: true` and an
-  # optional member may be absent.
-  defp declared_members(read, definition) do
-    schema = contract_bundle() |> Map.fetch!("#{read}.schema.json")
-
-    schema
-    |> definition_variants(definition)
-    |> Enum.flat_map(&Map.keys(Map.get(&1, "properties", %{})))
-    |> Enum.uniq()
-  end
-
-  defp definition_variants(schema, :root), do: [schema]
-
-  defp definition_variants(schema, definition) do
-    definition = Map.fetch!(schema["definitions"], definition)
-    [definition | Map.get(definition, "oneOf", [])]
-  end
-
-  defp contract_bundle,
-    do: @schema_bundle |> File.read!() |> Jason.decode!()
-
   # Claims the gate item's queued attempt for the runtime the gate registered:
   # that runtime is the only one assignment can select for this test's binding,
   # so the picked attempt must be the gate item's own.
@@ -1743,32 +1669,6 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
     assert {:ok, _run} = Orchestration.transition(run.id, fence, state, payload, uuid(number))
   end
 
-  # The agent's waiting packet. The read model serves the transition's payload as
-  # the authoritative packet when it carries a decision
-  # (`workspaces/read_model.ex:221`), so this is the packet the surface reads.
-  defp waiting_decision_payload do
-    %{
-      "question" => "Which reviewer should accept this?",
-      "decision" => %{
-        "context" => "The attempt needs an operator decision before it continues.",
-        "reason" => "consequential",
-        "options" => [
-          %{
-            "id" => "reviewer-a",
-            "label" => "Reviewer A",
-            "consequence" => "Reviews the change first."
-          },
-          %{
-            "id" => "reviewer-b",
-            "label" => "Reviewer B",
-            "consequence" => "Reviews the change second."
-          }
-        ],
-        "recommended_option_id" => "reviewer-a"
-      }
-    }
-  end
-
   # The tracker's own sync document: the shape `Integrations` writes an external
   # work item from.
   defp tracker_document(connection) do
@@ -1790,12 +1690,6 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
       work_items: []
     }
   end
-
-  # A deterministic version-4 UUID: the contract bundle's `UUID` pattern pins the
-  # version and variant nibbles, so a zeroed UUID is refused by the gate's own
-  # bundle comparison.
-  defp uuid(number),
-    do: "00000000-0000-4000-8000-" <> String.pad_leading(Integer.to_string(number), 12, "0")
 
   defp provider_item(external_id, external_url) do
     %{
