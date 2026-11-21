@@ -537,3 +537,16 @@ Gates on this tree (all foreground, serialized):
 | citation proof | every `file:line` in the refreshed TODO block printed at this tree | — | `detail.tsx:413/388/539/632-633/224/414` each read what the prose claims; both `.exs` comment blocks are untouched and no frontend line they cite moved at this stage |
 | diff hygiene | `git diff --check` | 0 | clean |
 | host-path check | profile-directory grep over `git diff origin/main...HEAD` and over the working tree | 1 | no host path in either |
+
+## Fix-stage note (2026-11-21, review findings r2)
+
+Comment-only. Round-2 finding P2-1: the r1 fix reworded the `resources.tsx` module header
+comment, 2 → 4 lines, shifting every later line by +2, so the four pins in the
+`portal_resources_test.exs:200-216` block went stale by +2. Refreshed and each printed at
+this tree: `resources.tsx 85-99 → 87-101`, `113 → 115`, `119 → 121`, `120-123 → 122-125`
+(the apply note's pins at `:460` and the citation-proof row above — "no frontend line they
+cite moved" — are superseded for these four pins; no other frontend line the block cites
+moved). The tree-wide `resources.tsx:<line>` scan (`git grep -n "resources\.tsx:[0-9]"`)
+leaves only dated records: the measured-basis rows (`:22-23`, `:35`, `:55`, `:340`, `:376`),
+the W2-15 and served-doc-gates plans, and `docs/archive/CLOSED-TODO.md`. Production net
+`+93 → +97`; `resources.tsx` `706 → 710` L.

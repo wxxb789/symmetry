@@ -199,11 +199,11 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
   # consumed surface reads pinned by name even if a schema edit stops declaring
   # it. Frontend read sites, list by list:
   #
-  #   root             features/runtimes/runtimes.tsx:82,86,96; features/connections/resources.tsx:119
+  #   root             features/runtimes/runtimes.tsx:82,86,96; features/connections/resources.tsx:121
   #   project row      features/projects/projects.tsx:90,109; features/planning/write-policy.ts:50,201;
-  #                    features/work/assignment.tsx:251; features/connections/resources.tsx:113
-  #   resource row     features/connections/resources.tsx:85-99; features/work/assignment.tsx:54-58
-  #   registered row   features/connections/resources.tsx:120-123
+  #                    features/work/assignment.tsx:251; features/connections/resources.tsx:115
+  #   resource row     features/connections/resources.tsx:87-101; features/work/assignment.tsx:54-58
+  #   registered row   features/connections/resources.tsx:122-125
   #   runtime row      features/runtimes/runtimes.tsx:18,26,38-42
   #   capabilities     features/runtimes/runtimes.tsx:17,51-57 read `adapter`; the four booleans have no
   #                    member-named read site — the whole map is serialized into `data-capabilities`
