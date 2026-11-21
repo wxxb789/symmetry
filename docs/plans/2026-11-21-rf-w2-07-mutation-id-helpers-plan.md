@@ -43,7 +43,7 @@ Call sites of the six names: 24 in `goals.ex` (`:1609,2787,2934,2954,3537,3983,4
 | helper | integrations.ex | workspaces.ex | measured relation | disposition |
 | --- | --- | --- | --- | --- |
 | `expected_version/1` | `:1804-1809` | `:1130-1135` | same result; lookup spelling differs (`attr_value(attrs, :version)` = `Map.get(attrs, :version) \|\| Map.get(attrs, "version")` vs the explicit `\|\|`) | one shared definition |
-| `matches_version/2` | `:1811-1812` (2 clauses) | `:1144-1149` (3 clauses) | **divergent tail** (see semantics) | one shared definition, strict tail |
+| `matches_version/2` | `:1811-1812` (2 clauses) | `:1144-1149` (3 clauses) | **divergent tail** (see semantics) | one shared definition, verdicts keyed on `expected` |
 | `update_with_stale_error/1` | `:1814-1817` | `:1151-1154` | byte-identical | shared |
 | `delete_with_stale_error/1` | absent (inlined at `:210-211`) | `:1156-1159` | same call shape | shared; `Integrations.delete_connection/2` adopts it |
 | `normalize_stale_result/1` | `:1819-1827` | `:1161-1169` | byte-identical (cond: `:lock_version` → `:stale`; `:provider_action_intents` → `:state_conflict`; else the changeset error; non-error passthrough) | shared |
@@ -122,10 +122,10 @@ drop_attr(attrs, key)              :: map()
 drop_attrs(attrs, keys)            :: map()
 ```
 
-Bodies are the base bodies moved, not rewritten: `matches_version/2` is the workspaces 3-clause
-version; `put_attr/3` is the base text; `drop_attrs/2` reduces `drop_attr/2` (the integrations
-spelling, which produces the same map as the workspaces inline `Map.drop(acc, [key,
-Atom.to_string(key)])`).
+Bodies are the base bodies moved, not rewritten: `matches_version/2` keeps the workspaces 3-clause
+shape with its stale clause keyed on the expected version alone (see semantics); `put_attr/3` is
+the base text; `drop_attrs/2` reduces `drop_attr/2` (the integrations spelling, which produces the
+same map as the workspaces inline `Map.drop(acc, [key, Atom.to_string(key)])`).
 
 ## Exact edge-case semantics
 
@@ -148,25 +148,33 @@ admission identities are `<>`-built before the builder runs (`automatic_candidat
 evidence table asserts the six ids are pairwise distinct on one shared part vector (a formatter
 that dropped the prefix would collide).
 
-**`matches_version/2`, the one resolved divergence.** Base integrations returned `{:error,
-:stale}` for any non-match, including a non-integer `expected`; base workspaces returned
-`{:error, :invalid_request}` when the record has a `lock_version` and `expected` is not an
-integer. The shared version keeps the strict clause (`%{lock_version: _}, expected when
-is_integer(expected)` → `:stale`, otherwise `:invalid_request`) because `:invalid_request` is the
-verdict the same module's `expected_version/1` gives the same malformed input, and the HTTP gate
+**`matches_version/2`, verdicts keyed on `expected`.** Base integrations returned `{:error,
+:stale}` for any non-match — a stale row and a `nil` locked re-read alike — including a non-integer
+`expected`; base workspaces returned `{:error, :invalid_request}` when the record has a
+`lock_version` and `expected` is not an integer. The shared version keys the verdicts on `expected`
+alone: `%{lock_version: version}, version` → `:ok`; any record with an integer `expected` →
+`:stale`; any non-integer `expected` → `:invalid_request`, the verdict the same module's
+`expected_version/1` gives the same malformed input (the HTTP gate
 (`PortalApiController.version_param/1`, `:535-545`) normalizes an integer string to the integer
-and answers 400 for anything else, so a non-integer version never reaches either context.
+and answers 400 for anything else, so a non-integer version never reaches either context). The
+stale clause deliberately does not require `%{lock_version: _}` on the record:
+`mark_resource_syncing/1` (`:594`) and `record_resource_failure/3` (`:1544`) pass whatever the
+locked re-read returned — `nil` when the resource was deleted mid-transaction — and base
+integrations answered those `:stale` (409), not 400.
 
 Observable delta: `Integrations.delete_connection(connection_id, expected)` with a non-integer
-`expected` returns `{:error, :invalid_request}` instead of `{:error, :stale}`. Reachability of the
-base behaviour through production code: none. The only production callers are
+`expected` returns `{:error, :invalid_request}` instead of `{:error, :stale}`. That delta is not
+reachable through production code: the only production callers are
 `PortalApiController.delete_connection/2` (behind `version_param/1`) and — post-W1-14 — nothing
 else (measured `grep -rn "delete_connection(\|delete_resource(" lib/`: two controller sites).
 `Integrations.delete_connection/2` has no `@spec`; `Workspaces.delete_resource/2` is specced
-`pos_integer()`. The other five `matches_version/2` call sites in `Integrations` pass validated
-positive integers or a row's own `lock_version` (DB integer, `NOT NULL DEFAULT 1`). No test pins
-the base behaviour (all `delete_connection`/`delete_resource` test calls pass integers). The delta
-is pinned by one new test rather than left silent (evidence plan, gate E7).
+`pos_integer()`. Of the five remaining `matches_version/2` call sites in `Integrations`,
+`update_connection/2` (`:147`, `|| Repo.rollback(:not_found)`), `delete_connection/2` (`:214`,
+`fetch/2`) and the work-item delivery lock (`:915`, behind its `match?/2` guard) always pass locked
+structs; `mark_resource_syncing/1` (`:594`) and `record_resource_failure/3` (`:1544`) may pass
+`nil` and keep the base `:stale` verdict. No test pins the base behaviour (all
+`delete_connection`/`delete_resource` test calls pass integers). The delete-path delta is pinned by
+one new test and both `nil`-record paths by two new tests (evidence plan, gate E7).
 
 **`normalize_stale_result/1` order.** Unchanged cond order: `:lock_version` → `:stale` before
 `:provider_action_intents` → `:state_conflict` before the changeset passthrough; a non-`{:error,
@@ -197,8 +205,8 @@ checkout's tree (identical `mix.lock` md5 `99cf712f…`) at `Q:/repos/wt-w2-07-m
 | E4 targeted suites (head) | `mix test test/symmetry_control/goals_test.exs test/symmetry_control/integrations_test.exs test/symmetry_control/workspaces_test.exs test/symmetry_control/orchestration_review_test.exs` | exit 0; counts recorded |
 | E5 format + compile | `mix format --check-formatted`, `mix compile --warnings-as-errors` | exit 0, empty / 0 warnings |
 | E6 duplicate-definition census | `sh rf-w2-07-count.sh <base|head>` | measured: base `TRACKED-TOTAL 25` (6 builders + 19 helper clauses across the two contexts, worst case 3 clauses for `matches_version/2`), head `18` (6 builders + `mutation_id/2` + 11 clauses — 8 helpers — all in the shared module); UUID formatter normalized blocks 1 form × 6 copies → 1 form × 1 copy with an unchanged form-text sha256; a planted local duplicate moves the count (M5) |
-| E7 new pins | the two added tests plus the frozen durable-key pins (below) | green on head; the integrations pin is red on base for the non-integer version |
-| E8 mutation checks | M1 drop the prefix from `mutation_id/2`; M2 change `-5` to `-4`; M3 keep the old 2-clause `matches_version/2` tail in the shared module; M4 delete the `:lock_version` branch from `normalize_stale_result/1`; M5 plant a duplicate `expected_version/1` in `workspaces.ex`; M6 make `put_attr/3` always use the atom spelling; M7 accept `version == 0` in `expected_version/1`; M8 swap the part order inside each of the four builders the family pins cover | observed: M1/M2 → E1 red (1200/1200 mismatches; M1 also `collisions=1`); M3 → both new pins red (integer versions keep E3 identical); M4 → the concurrent race test (`integrations_test.exs:97`) red, E3 canonically unchanged because a non-race stale write is pre-checked by `matches_version/2`; M5 → E6 count 1→2 and `compile --warnings-as-errors` fails on the unused function; M6 → the capture's first write raises in `Ecto.Changeset.cast`; M7 → the capture bytes differ; M8 → the four family pins red (`goals_test.exs:5343/5350/5599/7803`) while the settlement/late pins stay green. Each reverted, `md5sum -c` restore proof |
+| E7 new pins | the four added tests plus the frozen durable-key pins (below) | green on head; the integrations delete pin is red on base for the non-integer version; the two sync-delete pins are red on d9c3e7d8 (clause 2 requires `%{lock_version: _}`) and green after the fix |
+| E8 mutation checks | M1 drop the prefix from `mutation_id/2`; M2 change `-5` to `-4`; M3 keep the old 2-clause `matches_version/2` tail in the shared module; M4 delete the `:lock_version` branch from `normalize_stale_result/1`; M5 plant a duplicate `expected_version/1` in `workspaces.ex`; M6 make `put_attr/3` always use the atom spelling; M7 accept `version == 0` in `expected_version/1`; M8 swap the part order inside each of the four builders the family pins cover; M9 restore the `%{lock_version: _}` requirement on `matches_version/2` clause 2 | observed: M1/M2 → E1 red (1200/1200 mismatches; M1 also `collisions=1`); M3 → both delete pins red (integer versions keep E3 identical); M4 → the concurrent race test (`integrations_test.exs:97`) red, E3 canonically unchanged because a non-race stale write is pre-checked by `matches_version/2`; M5 → E6 count 1→2 and `compile --warnings-as-errors` fails on the unused function; M6 → the capture's first write raises in `Ecto.Changeset.cast`; M7 → the capture bytes differ; M8 → the four family pins red (`goals_test.exs:5343/5350/5599/7803`) while the settlement/late pins stay green; M9 → both sync-delete pins red (integer versions keep E3 identical). Each reverted, `md5sum -c` restore proof |
 | E9 whitespace | `git diff --check` | exit 0, empty |
 | E10 full suite | `mix test` (conductor gate-runner per contract; run here only if no other suite is concurrent) | exit 0; counts recorded |
 | E11 profile-path grep | `git diff origin/main...HEAD \| grep -i "users/"` | no match |
@@ -209,7 +217,10 @@ checkout's tree (identical `mix.lock` md5 `99cf712f…`) at `Q:/repos/wt-w2-07-m
 `control/w207-mutation-ids.exs` (E1), `<gdd-state>/scratch/rf-w2-07-count.sh` (E6).
 
 **New pins.** `integrations_test.exs`: `delete_connection/2` with a non-integer version returns
-`{:error, :invalid_request}` (the resolved unified rule; red on base). `workspaces_test.exs`:
+`{:error, :invalid_request}` (the resolved unified rule; red on base); a resource deleted before
+`mark_resource_syncing/1`'s `FOR UPDATE` re-read and one deleted during the provider call both keep
+`Integrations.sync_resource/1` on the base `{:error, :stale}` (red while clause 2 requires
+`%{lock_version: _}` on the record). `workspaces_test.exs`:
 `delete_resource/2` with a non-integer version returns `{:error, :invalid_request}` (unchanged
 behaviour, now pinned so the shared clause cannot drift). `goals_test.exs:3667`: the settlement
 and late-validation-outcome receipts' `mutation_id`s are asserted against the frozen id expression
@@ -234,10 +245,13 @@ assertion is deleted, renamed or weakened.
    they belong to one "write a versioned row from a JSON attrs map" module; `fetch/2` is a read
    helper with a third copy in an unowned file, and moving it would rename nothing while touching
    16 read call sites. F7 lists both; the boundary is recorded here rather than glossed over.
-3. **Strict `matches_version/2` tail.** See semantics; the alternative (keep the integrations
-   `:stale` tail) would make `Workspaces.delete_resource/2` answer 409 for a malformed version
-   argument, which contradicts the module's own `expected_version/1` verdict and the controller's
-   400 gate. One atom changes on an HTTP-unreachable, typespec-violating call, and it is pinned.
+3. **`matches_version/2` verdicts keyed on `expected`.** See semantics; the alternative (keep the
+   base integrations 2-clause tail) would make `Workspaces.delete_resource/2` answer 409 for a
+   malformed version argument, which contradicts the module's own `expected_version/1` verdict and
+   the controller's 400 gate; requiring `%{lock_version: _}` on the record instead turns a row
+   deleted mid-transaction into 400 where both bases answer 409. One atom changes on an
+   HTTP-unreachable, typespec-violating call, and it is pinned; the missing-row verdict is pinned
+   by the two sync-delete tests.
 4. **Alias + qualified calls, no `import`.** Repo convention (`Goals.ChangesetValidators`,
    `Integrations.Providers.Support`); `import` would keep call-site text identical but hides the
    ownership of the 409/stale contract at 60 call sites.
@@ -268,9 +282,10 @@ assertion is deleted, renamed or weakened.
   call site outside `goals.ex` cannot exist (all six are `defp`) and the 24 in-file call sites are
   untouched by the diff.
 - The unified `matches_version/2` tail is a deliberate, documented micro-change (one atom on a
-  typespec-violating direct call); if a reviewer prefers byte parity there, the revert is the two
-  integrations clauses — but that leaves a second definition, which the contract's failure control
-  forbids.
+  typespec-violating direct call): a missing record keeps `:stale` and a non-integer `expected` is
+  `:invalid_request`, both pinned by the delete and sync-delete tests. If a reviewer prefers byte
+  parity there, the revert is the two integrations clauses — but that leaves a second definition,
+  which the contract's failure control forbids.
 - `deadcode`-style reachability tooling does not exist for Elixir here; the E6 census is the
   instrument, with the planted-duplicate check showing it bites.
 - Full `mix test` and the CI `control` job remain the conductor's gate-runner steps per the
