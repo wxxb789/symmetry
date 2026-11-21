@@ -92,8 +92,10 @@ const readerJoinTimeout = 50 * time.Millisecond
 // runAutonomous runs the autonomous fixture mode. reader must be the buffered
 // reader that consumed the initial input record, so the record's read-ahead
 // bytes are not lost; input is the stream behind it and is closed on return
-// when it is an io.Closer, so the reader goroutine cannot outlive the run
-// parked in readLine.
+// when it is an io.Closer, releasing the reader goroutine on carriers whose
+// Close unblocks a parked read. On a carrier whose Close cannot do that, the
+// bounded join below caps the wait and the goroutine then exits with the
+// process, as before this change; a non-closable input is left untouched.
 func runAutonomous(reader *bufio.Reader, input io.Reader, output io.Writer, envelope protocol.AgentInputRecord) error {
 	config, err := autonomousSettings(envelope.Input, os.Getenv)
 	if err != nil {
