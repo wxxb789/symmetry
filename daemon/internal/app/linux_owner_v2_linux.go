@@ -19,6 +19,7 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/config"
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
+	"github.com/wxxb789/symmetry/daemon/internal/linuxpreflight"
 	"github.com/wxxb789/symmetry/daemon/internal/platform"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 	"github.com/wxxb789/symmetry/daemon/internal/state"
@@ -53,7 +54,7 @@ func newLinuxV2OwnerResources(value config.Config) (linuxV2NativeOwner, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read trusted root-installed Linux A/B owner configuration: %w", err)
 	}
-	if err := verifyLinuxOwnerIdentity(owner, uint32(os.Getuid()), uint32(os.Geteuid()), uint32(os.Getgid()), uint32(os.Getegid())); err != nil {
+	if err := linuxpreflight.VerifyOwnerIdentity(owner, uint32(os.Getuid()), uint32(os.Geteuid()), uint32(os.Getgid()), uint32(os.Getegid())); err != nil {
 		return nil, err
 	}
 	// The provider extension share's B primary GID is installed authority, not
@@ -87,7 +88,7 @@ func (owner *linuxV2OwnerResources) Preflight(ctx context.Context, value config.
 	// cgroup capability probe. It must remain closed until the owner-approved
 	// B-owned standalone clone trust boundary and the Linux/WSL2 namespace plus
 	// pidfd_getfd peer capability are both verified by the per-run preflight.
-	if err := VerifyLinuxOwnerInstallation(value); err != nil {
+	if err := linuxpreflight.VerifyLinuxOwnerInstallation(value); err != nil {
 		return nil, err
 	}
 	currentOwner, err := linuxgate.ReadInstalledOwnerConfig()
@@ -208,7 +209,7 @@ func (owner *linuxV2OwnerResources) BuildInvocation(ctx context.Context, key sta
 	if invocation.InitialLeaseDeadlineAt.IsZero() || invocation.InitialLeaseSequence != 1 || !filepath.IsAbs(invocation.Dir) {
 		return execution.Invocation{}, errors.New("Linux v2 native invocation lacks the claim-derived initial lease or exact workspace")
 	}
-	if err := VerifyLinuxOwnerInstallation(owner.config); err != nil {
+	if err := linuxpreflight.VerifyLinuxOwnerInstallation(owner.config); err != nil {
 		return execution.Invocation{}, fmt.Errorf("revalidate Linux owner before native invocation: %w", err)
 	}
 	currentOwner, err := linuxgate.ReadInstalledOwnerConfig()
@@ -271,47 +272,47 @@ func linuxV2FixedNativeHome(owner linuxgate.OwnerConfig) (string, *user.User, er
 	if account.Username == "" || account.HomeDir == "" || !filepath.IsAbs(account.HomeDir) || filepath.Clean(account.HomeDir) != account.HomeDir || account.HomeDir == "/" {
 		return "", nil, errors.New("fixed-B account has no canonical provisioned HOME")
 	}
-	home, err := lstatCanonicalLinuxPath(account.HomeDir)
+	home, err := linuxpreflight.LstatCanonicalPath(account.HomeDir)
 	if err != nil {
 		return "", nil, fmt.Errorf("inspect fixed-B HOME: %w", err)
 	}
-	identity, err := linuxFileIdentity(home)
-	if err != nil || !home.IsDir() || identity.uid != owner.BUID || identity.gid != owner.BGID {
+	identity, err := linuxpreflight.FileIdentity(home)
+	if err != nil || !home.IsDir() || identity.UID != owner.BUID || identity.GID != owner.BGID {
 		return "", nil, errors.New("fixed-B HOME ownership differs from trusted root-installed UID/GID")
 	}
-	b := linuxACLSubject{uid: owner.BUID, gid: owner.BGID}
-	a := linuxACLSubject{uid: owner.AUID, gid: owner.AGID}
-	if err := verifyLinuxPathTraversal(account.HomeDir, b); err != nil {
+	b := linuxpreflight.ACLSubject{UID: owner.BUID, GID: owner.BGID}
+	a := linuxpreflight.ACLSubject{UID: owner.AUID, GID: owner.AGID}
+	if err := linuxpreflight.VerifyPathTraversal(account.HomeDir, b); err != nil {
 		return "", nil, fmt.Errorf("fixed B cannot traverse HOME: %w", err)
 	}
-	if err := verifyEffectiveLinuxAccess(account.HomeDir, b, 7, 0); err != nil {
+	if err := linuxpreflight.VerifyEffectiveAccess(account.HomeDir, b, 7, 0); err != nil {
 		return "", nil, fmt.Errorf("fixed B cannot update its HOME: %w", err)
 	}
-	if err := verifyEffectiveLinuxAccess(account.HomeDir, a, 1, 6); err != nil {
+	if err := linuxpreflight.VerifyEffectiveAccess(account.HomeDir, a, 1, 6); err != nil {
 		return "", nil, fmt.Errorf("A cannot stat fixed-B native files without reading or modifying HOME: %w", err)
 	}
 	return account.HomeDir, account, nil
 }
 
 func linuxV2ValidateOwnedDirectory(path string, owner linuxgate.OwnerConfig, statAccessibleByA bool) error {
-	info, err := lstatCanonicalLinuxPath(path)
+	info, err := linuxpreflight.LstatCanonicalPath(path)
 	if err != nil {
 		return err
 	}
-	identity, err := linuxFileIdentity(info)
-	if err != nil || !info.IsDir() || identity.uid != owner.BUID || identity.gid != owner.BGID {
+	identity, err := linuxpreflight.FileIdentity(info)
+	if err != nil || !info.IsDir() || identity.UID != owner.BUID || identity.GID != owner.BGID {
 		return errors.New("directory must be B-owned on the configured primary group")
 	}
-	b := linuxACLSubject{uid: owner.BUID, gid: owner.BGID}
-	if err := verifyEffectiveLinuxAccess(path, b, 7, 0); err != nil {
+	b := linuxpreflight.ACLSubject{UID: owner.BUID, GID: owner.BGID}
+	if err := linuxpreflight.VerifyEffectiveAccess(path, b, 7, 0); err != nil {
 		return fmt.Errorf("fixed B cannot read, search, and update directory: %w", err)
 	}
 	if statAccessibleByA {
-		a := linuxACLSubject{uid: owner.AUID, gid: owner.AGID}
-		if err := verifyLinuxPathTraversal(path, a); err != nil {
+		a := linuxpreflight.ACLSubject{UID: owner.AUID, GID: owner.AGID}
+		if err := linuxpreflight.VerifyPathTraversal(path, a); err != nil {
 			return fmt.Errorf("A cannot traverse the fixed-B directory path: %w", err)
 		}
-		if err := verifyEffectiveLinuxAccess(path, a, 1, 6); err != nil {
+		if err := linuxpreflight.VerifyEffectiveAccess(path, a, 1, 6); err != nil {
 			return fmt.Errorf("A cannot stat fixed-B session files without listing or changing them: %w", err)
 		}
 	}

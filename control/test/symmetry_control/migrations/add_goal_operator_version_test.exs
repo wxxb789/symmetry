@@ -93,15 +93,6 @@ defmodule SymmetryControl.Migrations.AddGoalOperatorVersionMigrationTest do
     end)
   end
 
-  defp migrate_all_up! do
-    Ecto.Migrator.run(Repo, migrations_path(), :up,
-      all: true,
-      log: false,
-      migration_lock: false,
-      dynamic_repo: Repo.get_dynamic_repo()
-    )
-  end
-
   defp migrate_operator_version_up! do
     Ecto.Migrator.run(Repo, [{@migration_version, AddGoalOperatorVersion}], :up,
       all: true,
@@ -226,9 +217,5 @@ defmodule SymmetryControl.Migrations.AddGoalOperatorVersionMigrationTest do
       "allowed_actions" => [],
       "allowed_resource_ids" => []
     })
-  end
-
-  defp migrations_path do
-    Path.expand("../../../priv/repo/migrations", __DIR__)
   end
 end

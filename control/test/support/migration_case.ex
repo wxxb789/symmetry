@@ -13,7 +13,13 @@ defmodule SymmetryControl.MigrationCase do
   using do
     quote do
       import SymmetryControl.MigrationCase,
-        only: [with_schema: 2, start_schema_repo: 1, create_schema!: 1, drop_schema!: 1]
+        only: [
+          with_schema: 2,
+          start_schema_repo: 1,
+          create_schema!: 1,
+          drop_schema!: 1,
+          migrate_all_up!: 0
+        ]
     end
   end
 
@@ -72,5 +78,19 @@ defmodule SymmetryControl.MigrationCase do
   @doc "Drops `schema` and everything in it."
   def drop_schema!(schema) do
     Sandbox.unboxed_run(Repo, fn -> Repo.query!("DROP SCHEMA IF EXISTS #{schema} CASCADE") end)
+  end
+
+  defp migrations_path do
+    Path.expand("../../priv/repo/migrations", __DIR__)
+  end
+
+  @doc "Runs every migration up through the dynamic repo, i.e. into the suite's private schema, never the shared test schema."
+  def migrate_all_up! do
+    Ecto.Migrator.run(Repo, migrations_path(), :up,
+      all: true,
+      log: false,
+      migration_lock: false,
+      dynamic_repo: Repo.get_dynamic_repo()
+    )
   end
 end

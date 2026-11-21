@@ -31,25 +31,24 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       file set; reproduction is the three `deadcode` runs plus the baseline-scoped grep, as
       recorded in the plan.
 
-- [ ] Revalidate and remove the daemon surfaces that are unreachable from both mains but still
-      referenced, so no deletion is possible without retargeting a caller (2026-11-21, same
-      branch and plan). Three groups were surveyed; only the first, below, is dead-code material
-      — the other two are live — do not remove (decision note below).
-      **In the three-target `deadcode -test` intersection and referenced:**
-      `control.NewOperatorClient` (`client.go:485`) with `SubmitTask`/`GetTask`/
-      `CreateTaskCommand`/`operatorRequest`/`operatorRequestWithStatus` and
-      `control.WithMaxResponseBytes` (`:99`) — callers `daemon/e2e/core_test.go:696`,
-      `e2e/production_linux_containment_witness_test.go:2046`, the control tests, and
-      `app/pi_provider_bridge_test.go:409` (the oversized-response case of the live `NewClient`);
-      the seven legacy task validators in `daemon/internal/control/validation.go`
-      (`:209/:281/:302/:334/:441/:611/:629`) — reached from
-      `daemon/internal/control/client.go:992,:1007,:1022,:1034` (inside the dead operator client),
-      from sibling validators (`validation.go:230,:239,:253,:306`), and from
-      `daemon/internal/control/supervisory_validation_test.go:39,:48,:55,:125,:129,:148,:152`;
-      the `protocol.Task`/`TaskWaiting` v1 decoders (65 and 8 references, 37 in
-      `e2e/core_test.go`); and `harness.NewClaudeAdapterWithRunner` (`registry.go:245`, three test
-      files). Removing any of them needs an owner for `daemon/e2e/**` and the app/control test
-      seams — the W2-12 follow-up is that owner (program plan §4).
+- [ ] Revalidate and remove `harness.NewClaudeAdapterWithRunner` (three test files), the residual
+      of the 2026-11-21 W1-06 daemon dead-code survey (branch
+      `refactor/rf-w1-06-daemon-deadcode`, plan
+      `docs/plans/2026-11-21-w1-06-daemon-deadcode-plan.md`). The survey's other
+      unreachable-but-referenced, in-intersection surfaces were dispositioned by the W2-12b
+      relocation (branch `refactor/rf-w2-12b-operator-client-relocation`, plan
+      `docs/plans/2026-11-21-rf-w2-12b-operator-client-relocation-plan.md`): the operator client,
+      its five methods, the seven operator-exclusive task validators of
+      `daemon/internal/control/validation.go` and the v1 task decoders now live in
+      the e2e-owned `daemon/e2e/internal/operator/` package beside their only callers; six
+      declarations of the relocated set differ from their originals only by the sanctioned package
+      qualifiers, the rest byte-identical. The closed
+      part is recorded in `docs/archive/CLOSED-TODO.md` under `## Dead-code candidates`.
+      `control.WithMaxResponseBytes` stays in `control` by that slice's binding amendment (its
+      callers are the machine-client and PI-bridge tests). This residual belongs to the
+      probe/registry dedup (W3-04), not to a deletion pass: its shadowed root-probe siblings are
+      main-reachable through `NewCodexAdapter`/`NewClaudeAdapter`. The two live groups of the same
+      survey stay covered by the decision note below.
 
 - live — do not remove (decision note, 2026-11-21, same branch and plan): the two remaining
       groups of that survey are production-live surfaces that no deletion pass may touch.
@@ -62,9 +61,11 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       `validateNullableJSONObject` (`:584`), `validateJSONObject` (`:595`), `isJSONNull` (`:607`)
       and `isTransitionState` (`:620`).
       **Not dead-code at all:** the shadowed root probe paths `probeCodexExecutableWithRunner`
-      (`:379`) and `probeClaudeExecutable` (`:299`) are main-reachable through
+      (`:273`) and `probeClaudeExecutable` (`:193`) are main-reachable through
       `NewCodexAdapter`/`NewClaudeAdapter` and appear in none of the three baseline `deadcode`
-      reports; they belong to the probe/registry dedup (W3-04), not to a deletion pass.
+      reports; the probe/registry dedup (W3-04, #187) kept them (D4: the root stays fail-closed
+      and undelegated — no `harness` → `harness/codex` import), so no deletion pass may remove
+      them either.
 
 ## Build-tag parity (arm64 oracle)
 
@@ -508,8 +509,10 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       linux-gate decisions cannot be exercised on this host and need a provisioned runner plus
       independent review; `scripts/ci/linux-v2-host-peer-probe.go` keeps its own tool timeouts
       (capability probes, not test verdicts). Findings, not fixed: the negative-reconnect window in
-      `notification/client_test.go:283` and the descendant-monitor polls wait on conditions the product
-      deliberately does not publish, so their windows stay wall-clock. Verification: `gofmt -l .` empty,
+      `notification/client_test.go:285` and the descendant-monitor polls wait on conditions the product
+      deliberately does not publish, so their windows stay wall-clock. (Coordinate re-pointed from
+      `:283` by the W3-05 notification tests, whose two added imports shift every line of that file by
+      two; the cited `time.Sleep(20 * time.Millisecond)` itself is unchanged.) Verification: `gofmt -l .` empty,
       `go vet ./...` rc 0 on windows, `GOOS=linux go vet ./...` rc 0, `go test -count=1` rc 0 over the six
       touched packages, and the guard was demonstrated to fire with its named step in a byte-identical
       scratch copy whose only difference was a fixture that never wrote its readiness marker.
@@ -705,60 +708,40 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       that crosses a claim (starts before it, ends after it), under the same no-narrowing rule
       and the same second-render pin.
 
-## Production Linux containment witness: stop-receipt barrier stall awaiting a diagnosable occurrence
+## Linux supervisor: remaining sticky-refusal paths after the owner-loss latch
 
-- [ ] Diagnose the next occurrence of the `daemon_sigkill_after_lease_arm_before_resume` barrier
-      stall from the restarted daemon's exported log tail; do not raise the 45 s bound in the
-      meantime. **Occurrence:** CI run `44794227912` job `136491073605` (`integration`; PR #119 head
-      `22ec193`, test merge `3b4a6ce` on base `adf6d38`) failed subtest
-      `TestProductionLinuxContainmentWitnessSpine/daemon_sigkill_after_lease_arm_before_resume` after
-      **110.19 s** with (the marker path's `$RUNNER_TEMP/symmetry-linux-containment-witness/<case>/`
-      prefix elided here; the CI log spells it out),
-      `production_linux_containment_witness_test.go:509: wait for durable stop-receipt-before-release barrier: marker "…/lease-arm-before-resume/stop-receipt-before-release.reached" did not appear within 45s`
-      — the reported `:509` is the caller frame of the `t.Helper()` runner, whose `t.Fatalf` sits at
-      `daemon/e2e/production_linux_containment_witness_test.go:1026` — followed by a failure cleanup
-      that could not prove the stop: `:738: Linux production witness failure cleanup could not prove
-      exact helper stop/release: bound recovery did not clear journal during failure cleanup: journal
-      a2c5a551-2026-45d3-9eaf-467717f281e6/1 retained containment after 45s`, `containment journal
-      remains unresolved after failure cleanup: … retained containment after 5s`, and
-      `failure cleanup could not prove exact helper 21107/"linux:v2:9d556fd5-837f-4845-b407-4c6aa53983b4:4026531836:21107:19582"
-      gone: process 21107 with identity "…" remained live`. **Classification:** flake of the witness's
-      restart replay, not a product regression — every file under `daemon/e2e`, `daemon/internal/app`
-      and `daemon/internal/platform` is byte-identical between the failing revision and current main
-      (`git diff --name-only 22ec193 a7afdf4 -- daemon/e2e daemon/internal/app
-      daemon/internal/platform` prints nothing), the same subtest is green in `0.56 s` on main
-      (`44795802448` job `136495892251`: `PASS: …/daemon_sigkill_after_lease_arm_before_resume
-      (0.56s)`), the run's own merge diff (`git diff adf6d38 3b4a6ce --stat`, 14 files) touches
-      neither those trees nor `.github/workflows/ci.yml`, and the failing run's uploaded evidence
-      (artifact `production-linux-containment-witness-44794227912-1`, 17 files) was complete: its
-      `lease-arm-before-resume.json` stops at stage
-      `daemon_crashed_after_lease_arm_with_durable_mirror_seal_before_resume` while the manifest
-      reports `"complete": true` and `"incomplete_evidence_files": []`, i.e. the stall left no
-      daemon-side trace in that evidence at all. **Recurrence (2026-11-21):** CI run `44803673577`
-      attempt 1 (PR #126 head `17d838b`, the merge of `origin/main` into
-      `fix/provider-action-chain-removal`) failed the same subtest in its `integration` job
-      (`136524113298`) after **110.29 s**, with the identical
-      `production_linux_containment_witness_test.go:509` 45 s barrier line and the same cleanup
-      shape (journal `b2090059-1137-4b6b-a975-58f1e202834c/1` retained containment after 45s;
-      helper 15580 remained live), while main's last six CI runs (through `44804764621` @
-      `ea65742`) were all green. **Suspect path** for the restart pass:
-      `daemon/internal/app/cleanup_glue.go:118-143` (record the durable receipt →
-      `verifyDurableContainmentStopReceipt` at `:285` → `observeContainmentStop`) →
-      `waitForLinuxStopReceiptBarrier` (`:203`), which publishes the reached marker at `:234` only
-      after both marker paths pass `assertLinuxStopReceiptBarrierPathAbsent` (`:218`/`:221`), and
-      whose own release bound is `linuxStopReceiptBarrierTimeout = 30s` (`:21`); the marker never
-      appeared, so either the restart pass never reached the callback or it stalled before
-      publishing. **Diagnosis rule:** read the restarted daemon's log tail now exported by
-      `scripts/ci/export-linux-v2-redacted-evidence.py` (2026-11-21, `witness-stall-evidence`): a
-      failed legacy witness run adds `<case>-second-daemon-stdout.json` and `-stderr.json` to the
-      `production-linux-containment-witness-<run id>-<attempt>` artifact, carrying a ≤64 KiB
-      sanitized tail of the `second-daemon.*.log` files written at
-      `daemon/e2e/production_linux_containment_witness_test.go:1723-1754`; each record keeps
-      `time`/`level` plus the allowlisted message/enum/integer fields, while identities, paths and
-      `error` text are intentionally never exported and `dropped_lines` counts lines that could not
-      be projected (a Go panic dump therefore appears only as a count). The 45 s harness wait and the
-      30 s daemon bound are declared bounds, not the defect: no timeout changes until an occurrence
-      has been diagnosed from that tail.
+The closed witness-stall entry (`docs/archive/CLOSED-TODO.md`, "Production Linux containment
+witness: stop-receipt barrier stall awaiting a diagnosable occurrence", closed 2026-11-21 by commit
+`e9c457d8`) latched owner loss at every `enterRecovery` entry; the review of that fix (PR #185
+round 1) left two paths open here.
+
+- [ ] Close the same sticky-refusal class for the lease-expiry arm. `runLinuxSupervisorHelperLoop`
+      still computes `ownerLostStop` from `ownerLostLatched || channelClosedV2(watchdog.ownerLost())`
+      (`daemon/internal/platform/supervisor_linux_helper.go:838`) and the lease-expiry arm
+      (`:978-993`) calls `stop()` without `enterRecovery`; if the owner dies or wedges as the lease
+      expires and that timer arm wins the `select` before the control-EOF event, the final
+      descendant scan persists over the dead metadata transport, the failure latches the sticky
+      `descendantScanLost` (`process_unix.go`, the final-scan block and the monitor's
+      `pre_scan_ack_failure` path), and every later stop is refused exactly as in CI 44876100236.
+      Direction (root-cause §5 P2, kept in the local flake analysis `flake/root-cause-1.md`): do
+      not latch sticky `descendantScanLost` on a final-scan *persistence* failure — return a
+      retryable stop error with the authority retained so a later attempt (after the watchdog
+      latch) seals through the owner-loss branch — and clear `descendantSealPending` when the
+      observer seal write fails in `sealDescendantScanAfterMonitorStop`. This changes retry
+      semantics and needs its own increment; the plan of the closed fix records it as out of scope.
+- [ ] Give the in-process `recoverResponseLossStop` consumer the helper's owner-loss terminal seal.
+      The live-owner entries of the latch (a daemon-side control close on response-transport loss,
+      and response writes that fail before any pipe I/O) make the helper seal locally with no
+      observer writes, so the durable helper progress keeps its pre-latch sequence; the restarted
+      daemon records the seal returned over the recovery endpoint
+      (`RecordSupervisorRecoveryScanSeal`, exact `Completed+1`) before the receipt, but the
+      in-process consumer does not, `assert_all_sealed` refuses, and that stop fails closed into a
+      durable containment-unproven mark. Pinned by
+      `TestLinuxSupervisorLiveOwnerControlCloseInProcessStopFailsClosed`; the amendment (record the
+      returned seal before the mirror freeze, added once where the run-journal callback is plumbed)
+      is deferred to the RunJournalRecorder lane — the callback is added once there instead of being
+      hand-copied into every adapter — and the interim state stays fail-closed (PR #185 review
+      round 1, finding F1; conductor decision 2026-11-21).
 
 ## Daemon: state validator dead branches, a nil-deref panic and the `validGoalSessionUUID` follow-up (rf-w2-09 survey)
 
@@ -865,8 +848,8 @@ instead of appended.
       process's pipe, so the goroutine outlives the call, belongs to no WaitGroup, and contradicts
       `daemon/AGENTS.md` ("Every goroutine has an owner and exit path"). Found by the 2026-11-21
       daemon audit (finding F15). Fix direction: prefer the context-aware write path the runner
-      already implements -- `internal/execution/runner.go:1378` `WriteInputContext` closes the stdin
-      write end when its context is cancelled (`:1408-1412`) -- which `internal/app` cannot reach
+      already implements -- `internal/execution/runner.go:1380` `WriteInputContext` closes the stdin
+      write end when its context is cancelled (`:1410-1414`) -- which `internal/app` cannot reach
       today only because its `Process` interface (`app.go:232-233`) declares `WriteInput([]byte)
       error` alone; otherwise close the pipe's write end on timeout (the runner owns the pipe), or
       track the goroutine in `daemon.workers` with a documented bound and assert its exit at
@@ -930,6 +913,21 @@ instead of appended.
       and the three `Support` delegators, as a separately authorized change; `integrations.ex:690`
       already short-circuits a nil `pull_request_url`.
 
+## Deferred review findings (PR #198)
+
+- [ ] Cover the linux-gate wire validations no test kills (2026-11-21, branch
+      `refactor/rf-w4-20-linux-gate-protocol-split`; found by the Opus review of PR #198, which is a
+      pure move and kept them byte-identical). Single-point mutants of
+      `daemon/native/linux-gate/protocol/wire.go` survive the whole package suite at base and HEAD
+      for: `DecodeLaunchResult`'s `OwnerPID <= 1` and `UserNSInode == 0` checks, `readWireString`'s
+      NUL check and `maxCommandString` bound, the receipt generation upper bound and minimum length,
+      and `encodeGuardedRelease`'s body and grant bounds. The generation and minimum-length checks may
+      be shadowed by later reads or `receipt.Validate`; the rest are real gaps. Add one rejection test
+      per check in a separate maintenance slice.
+- [ ] `scripts/ci/linux-v2-native-acceptance.sh:1490` pins
+      `TestInstalledLinuxOwnerRejectsUnexpectedCgroupKillFD`, which no Go file defines (base and
+      HEAD); owner: the acceptance-script maintainer — restore the test or drop the pin.
+
 ## Deferred review findings (PR #205)
 
 - [ ] STD-A09 from the Opus review of PR #205 (2026-11-21, branch
@@ -973,11 +971,11 @@ instead of appended.
       `opencode/**` stayed read-only (P2-3/D1: its six CI assertions and the release-acceptance
       case stay green), so every surface this slice consolidated elsewhere still has an
       `opencode` copy: process forwarding with its own guards
-      (`daemon/internal/harness/opencode/adapter.go:543` ProcessDetails, `:559`
-      LinuxV2LiveOwnerStatus, `:578` LeaseRenewalAvailable, `:589` RenewLease),
-      `isNilNativeProcess` (`:421`, `reflect.Pointer`-only), the Close/join state machine
-      (`:1063`), `emit` (`:1344`, stamps `At` and calls `sink.Handle` directly instead of
-      `harness.DeliverEvent`) and `Wait` (`:975`). Consolidating them is part of opencode
+      (`daemon/internal/harness/opencode/adapter.go:522` ProcessDetails, `:538`
+      LinuxV2LiveOwnerStatus, `:557` LeaseRenewalAvailable, `:568` RenewLease),
+      `isNilNativeProcess` (`:400`, `reflect.Pointer`-only), the Close/join state machine
+      (`:1042`), `emit` (`:1323`, stamps `At` and calls `sink.Handle` directly instead of
+      `harness.DeliverEvent`) and `Wait` (`:954`). Consolidating them is part of opencode
       capability work, not this increment, and must keep those CI oracles green.
 
 ## pi provider-bridge close-retry timing flake under host load (PR #155 review)
@@ -1089,3 +1087,146 @@ instead of appended.
       job instead of shrinking the oracle. `ci.yml` is untouched by rf-w3-16 because W3-01/#157
       owned it in wave 3 (that PR has since landed as `6a815c0f`, the revision the line numbers
       above bind); W6-01 is its wave-6 owner.
+
+## Deferred review findings (PR #193)
+
+- [ ] Pin two containment close-path behaviours that the rf-w4-03 runner decomposition left
+      untested (2026-11-21, branch `refactor/rf-w4-03-runner-decomposition`; plan
+      `docs/plans/2026-11-21-rf-w4-03-runner-decomposition-plan.md`). Two mutants on a scratch
+      copy over `./internal/execution/` stayed green under WSL: flipping the `closeOwnerOnce(false)`
+      argument in `closeContainmentOwnerLocked` (`daemon/internal/execution/runner.go:2393`) to
+      `true` — no test distinguishes the flag, and the pending-handoff owner does not implement
+      `containmentUnprovenCallbackSetter`, so a future edit could flip it silently — and swapping
+      the `containmentAuthorityUncertain` / `containmentAuthority != nil` guards in
+      `persistReceiptOrAbort` (`:2143`, `:2146`), whose check order is the base order
+      (pre-existing gap: base had the same untested order). Behaviour is correct at HEAD; this is
+      test coverage only, no code change. Found by the opus round-1 review of PR #193. Owner:
+      W4-12/W4-13 test work.
+
+## Deferred review findings (PR #189, provider access lock order)
+
+- [ ] Pin `IntentContext`'s intent-context lock order with an oracle (2026-11-21, branch
+      `refactor/rf-w4-06-provider-access-intent`; plan
+      `docs/plans/2026-11-21-rf-w4-06-provider-access-intent-plan.md`; found by the Opus review of
+      PR #189 (P3-4) as review STD-A02, report-only per conductor decision E8).
+      `IntentContext.legacy_lock/1`
+      (`control/lib/symmetry_control/integrations/provider_access.ex:1147-1150` with
+      `lock_scope_rows/2` `:1168-1184`) and `IntentContext.goal_lock/2` (`:1152-1164`) hold the
+      merged lock order, but no test drives them: the only order assertion is the controller case
+      "Goal provider claim scope locks Project before Goal"
+      (`control/test/symmetry_control_web/controllers/provider_action_controller_test.exs:400`, its
+      `FOR SHARE` telemetry probe at `:431`), and it drives `ProviderAccess.lock_claim_scope/1`
+      (`:442`) instead. Measured during the slice: swapping Project and Goal in `goal_lock/2`, or
+      reversing `lock_scope_rows/2`'s rows, keeps the 13 targeted tests and the 79 controller tests
+      green. Add a controller or `ProviderAccess` test that pins the `goal_lock/2` and
+      `legacy_lock/1` order with telemetry, mirroring `:400`, and record its red mutation.
+
+- [ ] Fold `lock_goal_claim_scope/1`'s third Goal-order encoding into `IntentContext` (2026-11-21,
+      same branch and plan; the plan's "Out of scope" section records it).
+      `lock_goal_claim_scope/1`
+      (`control/lib/symmetry_control/integrations/provider_access.ex:379-400`, comment `:375-377`)
+      walks Project `FOR SHARE` -> Goal -> resources/connections (`lock_claim_resources/1`
+      `:412-437`) -> WorkItem -> Task -> revision inline — the same order
+      `IntentContext.goal_lock/2` (`:1152-1164`) now encodes once — but returns the claim-scope
+      shape rather than the intent-context map, so the slice left it; folding it must keep the
+      lock-order case `:400` and the advisory-lock case `:2092` green.
+
+## Deferred review findings (PR #195)
+
+- [ ] Drop the host path from `TestPinnedNativeTranscript`'s fixture comparison before the next OmO
+      fixture re-record (2026-11-21, PR #195, branch `fix/ci-evidence-host-paths`). PR #195 removed
+      the committed executable path from `scripts/ci/omo-native-evidence.py`: `PINS[platform]` keeps
+      only `size` and `sha256`, and the operator names the file in `SYMMETRY_OMO_BINARY`, so a
+      receipt written by the updated witness carries `binary.independentPlatformPin` **without** a
+      `path` member. The fixture consumer still requires all three: `transcriptBinary` is
+      `{Path, Size, SHA256}` (`daemon/internal/harness/omo/transcript_test.go:16-20`), embedded as
+      `IndependentPlatformPin` at `:26` and compared whole against the per-GOOS expectations at
+      `:46`/`:52`, so `:73` answers `fixture does not bind the independent <goos> executable pin`
+      for any fixture re-recorded from the new receipt. The committed fixtures
+      (`daemon/internal/harness/testdata/omo/5.1.69/{windows,linux}.json`) are unchanged and CI is
+      unaffected today. The Go change — compare the pin's size and digest, not its `path` — is
+      outside PR #195's scope, whose "Left unchanged" note treats the recorded pins as provenance.
+      Owner: whoever re-records the OmO fixture. The opt-in native acceptance run pins the same
+      host path separately (`daemon/internal/harness/omo/native_test.go:190-200`, resolved at
+      `:219`) and does not read the fixture, so a re-record does not touch it.
+
+## Control full-suite wall-time target and the D9 migration-file pin
+
+- [ ] Own the Control `mix test` wall-time target (~102 s → ≤65 s, program-plan row W3-14)
+      (2026-11-22, branch `refactor/rf-w3-14-exunit-async`, plan
+      `docs/plans/2026-11-21-rf-w3-14-exunit-async-plan.md`; PR #211 review P2-1 under conductor
+      amendment 2). The rf-w3-14 conversion could not carry it: the nine D9-pinned sync migration
+      files carry 58.4 % of the suite's work (282.0 s of 482.6 s of per-test work at `d0761739`,
+      with `Goal0006MigrationTest` 180.8 s bounding any async phase), and ExUnit concurrency is
+      module-granular. CI `coverage-control` on the branch measured 989 tests in 140.2 s =
+      18.1 s async + 122.0 s sync on the 4-scheduler runner, and main's `control` job spans
+      73.0-159.4 s sync against 14.7-22.9 s async. Needs a conductor D9 re-evaluation of the
+      migration-file `async: false` pin (their DDL already runs through a private schema, so the
+      pin, not the fixture shape, now bounds the async phase) before any slice can own the target.
+      W3-15 cannot: its contract has no wall-time clause and `goals_test.exs` stays `async: false`
+      as an app-env mutator.
+
+## Deferred review findings (PR #197)
+
+- [ ] Unify the three copies of the runtime harness-kind vocabulary left by the rf-w4-19
+      `linuxpreflight` extraction (2026-11-21, branch `refactor/rf-w4-19-linuxpreflight-package`;
+      found by the round-1 review of PR #197 (P3-2)). The extraction could not move the vocabulary
+      out of `internal/app`: `configuredHarnessKind` and `nativeGoalHarnessKind` are copied from
+      `internal/app/probe.go:123,156` into `daemon/internal/linuxpreflight/cgroup_linux.go:31-63`,
+      and the same seven-kind table exists a third time in the config loader
+      (`internal/config/config.go:321-323`, message at `:323`, byte-identical to
+      `internal/app/probe.go:140`). Only the "new kind" direction fails closed: a kind the copy does
+      not know is rejected by `verifyLinuxNativeRuntimeSelection`, never admitted; if `app` dropped a
+      kind from its native-goal set, preflight would still accept it — though the runtime would still
+      refuse it, so this is not an authority gap. The pin test
+      `TestNativeRuntimeSelectionVocabularyMatchesTheConfiguredKinds`
+      (`daemon/internal/linuxpreflight/preflight_linux_test.go:326`) compares the copy against a
+      hard-coded literal table, not against `app`'s copy, so drift between the two copies goes
+      undetected. Fix direction: one `internal/harness` vocabulary — `ParseKind` plus the native-goal
+      predicate — consumed by `internal/config`, `internal/app/probe.go`/`goal_admission.go` and
+      `linuxpreflight`, with the pin test reading that shared table instead of a literal. That
+      touches `internal/harness`, `internal/app/probe.go` and `internal/app/goal_admission.go`, all
+      outside the rf-w4-19 owned set (plan
+      `docs/plans/2026-11-21-rf-w4-19-linuxpreflight-package-plan.md`, "The runtime-selection
+      vocabulary"), so the slice kept the copy and recorded this entry instead.
+
+## Daemon state: decorative trailing-data disjunct in the provider-action decoder (rf-w3-07 survey)
+
+- [ ] Revalidate and merge the redundant trailing-data arms of
+      `normalizeProviderActionResult` (`daemon/internal/state/provider_action.go`). At the
+      rf-w3-07 base `52bdffd2` the block was
+      `if token, tokenErr := decoder.Token(); tokenErr != io.EOF { if tokenErr == nil || token !=
+      nil { return errors.New("provider action result has trailing data") }; return
+      errors.New("provider action result has trailing data") }`: both arms returned the identical
+      static error, so the disjunct could not change any outcome, and `json.Decoder.Token`
+      returns a nil token whenever it returns an error. rf-w3-07 (2026-11-21) split the block to
+      wrap the decoder cause (`if tokenErr != nil { wrapped }`, `if token != nil { static }`,
+      final `static`) and kept the third arm because that slice's contract requires base-vs-head
+      control-flow preservation for every early return; the last two arms still return the same
+      bytes. No test asserts the message by equality (`grep -rn --include=*_test.go '"provider
+      action result has trailing data"' daemon/` matches nothing). A follow-up maintenance task
+      can collapse the arms to one static return after re-running the state suite on the Linux
+      lane; the sweep and the classification table live in
+      `docs/evidence/rf-w3-07-state-error-causes-2026-11-21.md` §1/§2.
+
+## Deferred review findings (PR #200)
+
+- [ ] Harden the goal-session uncertain-reason budget against invalid UTF-8 at the store
+      boundary (`daemon/internal/state/goal_session.go:1052` write check vs `:1688` read
+      validation; 2026-11-21, branch `refactor/rf-w3-07-state-error-causes`, PR #200 review
+      P2-1). A within-budget reason containing invalid UTF-8 bytes passes the write check
+      (`validRequiredString` is length-only), but the journal's JSON round trip replaces each
+      invalid byte with U+FFFD (3 bytes), so the reloaded `UncertainReason` can exceed the
+      4096-byte budget and `LoadGoalSession` then rejects the whole journal
+      (`invalid goal session journal`), making the session unreadable after a mark that was
+      accepted — e.g. a 4096-byte reason with one invalid byte reloads at 4098 bytes. The same
+      hazard exists on base `52bdffd2`; PR #200 fixed only the reason strings the app composes
+      (`boundedGoalSessionUncertainReason` now runs `strings.ToValidUTF8` over the over-budget
+      prefix), because the W307-R1 decision forbids changing the sink. Owner: state store. Fix
+      direction: reject or normalize non-UTF-8 reasons in
+      `MarkGoalSessionUncertain`/`validateGoalSessionStates` the way the app bound does.
+      Reproduction: `MarkGoalSessionUncertain(key, strings.Repeat("r", 4095)+"\xff")` succeeds,
+      then `LoadGoalSession(key)` returns `invalid goal session journal`; the app-side callers
+      are pinned by `daemon/internal/app/goal_delivery_test.go`:
+      `TestAbandonGoalSessionBoundsOversizedUncertainReason` (the interior-invalid-byte case)
+      and `TestBoundedGoalSessionUncertainReason` (the within-budget invalid-byte case).
