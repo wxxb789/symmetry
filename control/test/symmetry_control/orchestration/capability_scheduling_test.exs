@@ -1,5 +1,5 @@
 defmodule SymmetryControl.Orchestration.CapabilitySchedulingTest do
-  use SymmetryControl.OrchestrationCase, async: false
+  use SymmetryControl.OrchestrationCase, async: true
 
   alias SymmetryControl.Integrations
   alias SymmetryControl.Orchestration

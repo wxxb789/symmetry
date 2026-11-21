@@ -2,13 +2,9 @@ package harness
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -44,15 +40,10 @@ type ClaudeCommandRunner interface {
 type osClaudeCommandRunner struct{}
 
 func (osClaudeCommandRunner) Run(ctx context.Context, executable string, args ...string) ([]byte, error) {
-	environment, err := execution.BuildEnvironment()
-	if err != nil {
-		return nil, err
-	}
-	return execution.RunBoundedCommand(ctx, execution.Invocation{
+	return RunProbeCommand(ctx, execution.Invocation{
 		Program: executable,
 		Args:    args,
-		Env:     environment,
-	}, claudeProbeMaxOutputBytes)
+	}, claudeProbeMaxOutputBytes, execution.RunBoundedCommand)
 }
 
 // CodexCommandRunner is the narrow command boundary used by the root Codex
@@ -65,69 +56,14 @@ type CodexCommandRunner interface {
 type osCodexCommandRunner struct{}
 
 func (osCodexCommandRunner) Run(ctx context.Context, executable string, args ...string) ([]byte, error) {
-	environment, err := execution.BuildEnvironment()
-	if err != nil {
-		return nil, err
-	}
-	return execution.RunBoundedCommand(ctx, execution.Invocation{
+	return RunProbeCommand(ctx, execution.Invocation{
 		Program: executable,
 		Args:    args,
-		Env:     environment,
-	}, codexProbeMaxOutputBytes)
+	}, codexProbeMaxOutputBytes, execution.RunBoundedCommand)
 }
 
-func (osCodexCommandRunner) SchemaDigest(ctx context.Context, executable string) (digest string, resultErr error) {
-	if ctx == nil {
-		return "", errors.New("codex schema probe context must not be nil")
-	}
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	directory, err := os.MkdirTemp("", "symmetry-codex-schema-")
-	if err != nil {
-		if contextErr := ctx.Err(); contextErr != nil {
-			return "", contextErr
-		}
-		return "", fmt.Errorf("create Codex schema temp directory: %w", err)
-	}
-	defer func() {
-		if cleanupErr := os.RemoveAll(directory); cleanupErr != nil {
-			resultErr = errors.Join(resultErr, fmt.Errorf("remove Codex schema temp directory: %w", cleanupErr))
-		}
-	}()
-	environment, err := execution.BuildEnvironment()
-	if err != nil {
-		return "", err
-	}
-	output, err := execution.RunBoundedCommand(ctx, execution.Invocation{
-		Program: executable,
-		Args:    []string{"app-server", "generate-json-schema", "--out", directory},
-		Env:     environment,
-	}, codexProbeMaxOutputBytes)
-	if contextErr := ctx.Err(); contextErr != nil {
-		return "", contextErr
-	}
-	if err != nil {
-		return "", fmt.Errorf("generate Codex app-server schema: %w: %s", err, strings.TrimSpace(string(output)))
-	}
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	bundle, err := os.ReadFile(filepath.Join(directory, "codex_app_server_protocol.v2.schemas.json"))
-	if contextErr := ctx.Err(); contextErr != nil {
-		return "", contextErr
-	}
-	if err != nil {
-		return "", fmt.Errorf("read generated Codex v2 schema: %w", err)
-	}
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	digestBytes := sha256.Sum256(bundle)
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	return "sha256:" + hex.EncodeToString(digestBytes[:]), nil
+func (osCodexCommandRunner) SchemaDigest(ctx context.Context, executable string) (string, error) {
+	return CodexSchemaDigest(ctx, executable, codexProbeMaxOutputBytes, execution.RunBoundedCommand)
 }
 
 // Registry is a concrete, process-local adapter registry. It is intentionally
@@ -254,48 +190,6 @@ func newClaudeAdapterWithRunner(executable string, runner ClaudeCommandRunner) *
 	return adapter
 }
 
-func runBoundedProbe(ctx context.Context, timeout time.Duration, run func(context.Context) ([]byte, error)) ([]byte, error) {
-	if ctx == nil {
-		return nil, errors.New("harness probe context must not be nil")
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	probeContext, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	output, err := run(probeContext)
-	if contextErr := ctx.Err(); contextErr != nil {
-		return nil, contextErr
-	}
-	if contextErr := probeContext.Err(); contextErr != nil {
-		return nil, contextErr
-	}
-	return output, err
-}
-
-func runBoundedSchemaProbe(ctx context.Context, timeout time.Duration, run func(context.Context) (string, error)) (string, error) {
-	if ctx == nil {
-		return "", errors.New("harness probe context must not be nil")
-	}
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	probeContext, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	digest, err := run(probeContext)
-	if contextErr := ctx.Err(); contextErr != nil {
-		return "", contextErr
-	}
-	if contextErr := probeContext.Err(); contextErr != nil {
-		return "", contextErr
-	}
-	return digest, err
-}
-
-func runClaudeProbe(ctx context.Context, run func(context.Context) ([]byte, error)) ([]byte, error) {
-	return runBoundedProbe(ctx, claudeProbeTimeout, run)
-}
-
 func probeClaudeExecutable(ctx context.Context, executable string, runner ClaudeCommandRunner) (Capabilities, error) {
 	evidence, probeErr := probeClaudeNativeEvidence(ctx, executable, runner)
 	capabilities := claudeEvidenceCapabilities(evidence, probeErr)
@@ -399,7 +293,7 @@ func probeCodexExecutableWithRunner(ctx context.Context, executable string, runn
 	}
 
 	capabilities := UnsupportedCapabilities(KindCodex, "Codex app-server native session behavior is unverified")
-	output, err := runBoundedProbe(ctx, codexProbeTimeout, func(probeContext context.Context) ([]byte, error) {
+	output, err := RunBoundedProbe(ctx, codexProbeTimeout, func(probeContext context.Context) ([]byte, error) {
 		return runner.Run(probeContext, executable, "--version")
 	})
 	if err != nil {
@@ -418,7 +312,7 @@ func probeCodexExecutableWithRunner(ctx context.Context, executable string, runn
 	if versionErr != nil {
 		return capabilities, versionErr
 	}
-	helpOutput, err := runBoundedProbe(ctx, codexProbeTimeout, func(probeContext context.Context) ([]byte, error) {
+	helpOutput, err := RunBoundedProbe(ctx, codexProbeTimeout, func(probeContext context.Context) ([]byte, error) {
 		return runner.Run(probeContext, executable, "app-server", "--help")
 	})
 	if err != nil {
@@ -440,7 +334,7 @@ func probeCodexExecutableWithRunner(ctx context.Context, executable string, runn
 	})
 	schemaDigest := ""
 	if schemaCaptured {
-		schemaDigest, err = runBoundedSchemaProbe(ctx, codexProbeTimeout, func(probeContext context.Context) (string, error) {
+		schemaDigest, err = RunBoundedProbe(ctx, codexProbeTimeout, func(probeContext context.Context) (string, error) {
 			return schemaRunner.SchemaDigest(probeContext, executable)
 		})
 		if err != nil {

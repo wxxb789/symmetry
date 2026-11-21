@@ -3,7 +3,9 @@
 
 The operator credential is inherited only through TENCENT_GLM_API_KEY. Native
 HTTP payloads, logs and state are checked before evidence is written. No proxy,
-synthetic provider, credential endpoint or remote mutation is used.
+synthetic provider, credential endpoint or remote mutation is used. The blob's
+host path comes from SYMMETRY_OPENCODE_BINARY; only its exact size and digest are
+committed, and an unset variable, a missing file or a different blob refuses the run.
 """
 
 import argparse
@@ -21,11 +23,26 @@ import tempfile
 import threading
 import time
 
-BINARY = pathlib.Path(r"C:\Users\lhan\AppData\Local\mise\installs\aqua-anomalyco-opencode\latest\opencode.exe")
+BINARY_ENVIRONMENT = "SYMMETRY_OPENCODE_BINARY"
 DIGEST = "38153a142354634c82b5cfe6c00b19df15a71e6cf8c17ef5f5c1a4cc684a6917"
 SIZE = 257553288
 MODEL = "deepseek-v4.1-flash-fast"
 PROVIDER = "tencent-litellm"
+
+
+def pinned_binary():
+    """Resolve the operator-named blob; the exact size and digest below still authorize it."""
+    configured = os.environ.get(BINARY_ENVIRONMENT, "")
+    if not configured:
+        raise RuntimeError(BINARY_ENVIRONMENT + " must name the owner-pinned Windows executable")
+    binary = pathlib.Path(configured).resolve()
+    if not binary.is_file():
+        raise RuntimeError(BINARY_ENVIRONMENT + " must name an existing file")
+    with binary.open("rb") as stream:
+        size = os.fstat(stream.fileno()).st_size
+        if size != SIZE or hashlib.file_digest(stream, "sha256").hexdigest() != DIGEST:
+            raise RuntimeError("owner-pinned executable identity mismatch")
+    return binary
 
 
 def classify(receipt):
@@ -207,14 +224,12 @@ def main():
     key = os.environ.get("TENCENT_GLM_API_KEY", "")
     if not key or os.name != "nt":
         raise RuntimeError("Windows and the operator credential environment are required")
-    with BINARY.open("rb") as binary:
-        if os.fstat(binary.fileno()).st_size != SIZE or hashlib.file_digest(binary, "sha256").hexdigest() != DIGEST:
-            raise RuntimeError("owner-pinned executable identity mismatch")
+    binary = pinned_binary()
     root = pathlib.Path(tempfile.mkdtemp(prefix="symmetry-0006g-witness-"))
     repository = pathlib.Path(__file__).resolve().parents[2]
     receipt = {
         "decision": "unsupported",
-        "binary": {"path": str(BINARY), "size": SIZE, "sha256": DIGEST},
+        "binary": {"path": str(binary), "size": SIZE, "sha256": DIGEST},
         "platform": {"system": platform.system(), "kernel": platform.version(), "distribution": platform.platform()},
         "source_head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repository, text=True).strip(),
         "witness_sha256": hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest(),
@@ -295,7 +310,7 @@ def main():
     with socket.socket() as reservation:
         reservation.bind(("127.0.0.1", 0))
         port = reservation.getsockname()[1]
-    argv = [str(BINARY), "serve", "--hostname", "127.0.0.1", "--port", str(port)]
+    argv = [str(binary), "serve", "--hostname", "127.0.0.1", "--port", str(port)]
     receipt["server_command"] = argv
     process = subprocess.Popen(argv, cwd=root, env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     receipt["server_pid"] = process.pid

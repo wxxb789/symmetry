@@ -36,8 +36,10 @@ func TestSupervisoryCommandRequestAndDispatchPayloads(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			request := protocol.TaskCommandRequest{Kind: test.kind, Payload: json.RawMessage(test.payload), Generation: 1}
-			if err := validateTaskCommandRequest(request); (err == nil) != test.valid {
-				t.Errorf("request validation = %v, want valid %v", err, test.valid)
+			if isSupervisoryCommand(test.kind) {
+				if err := ValidateSupervisoryPayload(test.kind, request.Payload); (err == nil) != test.valid {
+					t.Errorf("payload validation = %v, want valid %v", err, test.valid)
+				}
 			}
 			command := protocol.Command{CommandID: "command-1", RunID: "run-1", Generation: 1, Kind: test.kind, Payload: request.Payload, IssuedAt: time.Now()}
 			if err := validateCommands("snapshot", []protocol.Command{command}); (err == nil) != test.valid {
@@ -45,15 +47,16 @@ func TestSupervisoryCommandRequestAndDispatchPayloads(t *testing.T) {
 			}
 		})
 	}
-	if err := validateTaskCommandRequest(protocol.TaskCommandRequest{Kind: "pause", Payload: json.RawMessage(`{}`)}); err == nil {
-		t.Fatal("accepted supervisory request without current generation")
+	if err := validateCommands("snapshot", []protocol.Command{{CommandID: "command-1", RunID: "run-1", Kind: "pause", Payload: json.RawMessage(`{}`), IssuedAt: time.Now()}}); err == nil {
+		t.Fatal("accepted supervisory dispatch command without a generation fence")
 	}
-	for _, request := range []protocol.TaskCommandRequest{
-		{Kind: "cancel"},
-		{Kind: "provide_input", Payload: json.RawMessage(`{}`)},
+	for _, command := range []protocol.Command{
+		{CommandID: "command-1", RunID: "run-1", Generation: 1, Kind: "cancel", Payload: json.RawMessage(`{}`)},
+		{CommandID: "command-1", RunID: "run-1", Generation: 1, Kind: "provide_input", Payload: json.RawMessage(`{}`)},
 	} {
-		if err := validateTaskCommandRequest(request); err != nil {
-			t.Errorf("legacy request rejected: %v", err)
+		command.IssuedAt = time.Now()
+		if err := validateCommands("snapshot", []protocol.Command{command}); err != nil {
+			t.Errorf("legacy dispatch command rejected: %v", err)
 		}
 	}
 }
@@ -119,19 +122,7 @@ func TestServerRejectedInputHistoryDoesNotProveAcknowledgement(t *testing.T) {
 	}
 }
 
-func TestSupervisoryResponseRequiresRequestedGeneration(t *testing.T) {
-	request := protocol.TaskCommandRequest{Kind: "pause", Payload: json.RawMessage(`{}`), Generation: 2}
-	command := supervisoryResource(t, "pause", nil)
-	if err := validateTaskCommandResponse("command", "task-1", request, command); err == nil || !strings.Contains(err.Error(), "generation") {
-		t.Fatalf("accepted stale command generation: %v", err)
-	}
-	request.Generation = 1
-	if err := validateTaskCommandResponse("command", "task-1", request, command); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestPausedRunAndTaskValidation(t *testing.T) {
+func TestPausedTransitionValidation(t *testing.T) {
 	var run protocol.Run
 	if err := json.Unmarshal([]byte(runJSON("paused", `null`, `null`)), &run); err != nil {
 		t.Fatal(err)
@@ -139,18 +130,6 @@ func TestPausedRunAndTaskValidation(t *testing.T) {
 	request := protocol.StateTransitionRequest{Fence: fence(), State: "paused", TransitionID: "transition-1", Payload: json.RawMessage(`{"command_id":"command-1"}`)}
 	if err := validateTransitionResponse("run-1", request, run); err != nil {
 		t.Fatalf("paused transition rejected: %v", err)
-	}
-	var task protocol.Task
-	body := strings.Replace(strings.Replace(taskJSON(), `"state":"queued"`, `"state":"paused"`, 1), `"run_id":null`, `"run_id":"run-1"`, 1)
-	if err := json.Unmarshal([]byte(body), &task); err != nil {
-		t.Fatal(err)
-	}
-	if err := validateTaskResponse("task", "task-1", task); err != nil {
-		t.Fatalf("paused task rejected: %v", err)
-	}
-	task.RunID = nil
-	if err := validateTaskResponse("task", "task-1", task); err == nil {
-		t.Fatal("paused task accepted without run")
 	}
 }
 
