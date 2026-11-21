@@ -1,5 +1,5 @@
 defmodule SymmetryControl.WorkspacesReadModelTest do
-  use SymmetryControl.OrchestrationCase, async: false
+  use SymmetryControl.OrchestrationCase, async: true
 
   alias SymmetryControl.Orchestration
   alias SymmetryControl.Workspaces

@@ -50,32 +50,11 @@ type CommandRunner interface {
 
 type osCommandRunner struct{}
 
-func runProbe(ctx context.Context, run func(context.Context) ([]byte, error)) ([]byte, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	probeContext, cancel := context.WithTimeout(ctx, probeTimeout)
-	defer cancel()
-	output, err := run(probeContext)
-	if contextErr := ctx.Err(); contextErr != nil {
-		return nil, contextErr
-	}
-	if contextErr := probeContext.Err(); contextErr != nil {
-		return nil, contextErr
-	}
-	return output, err
-}
-
 func (osCommandRunner) Run(ctx context.Context, executable string, args ...string) ([]byte, error) {
-	environment, err := execution.BuildEnvironment()
-	if err != nil {
-		return nil, err
-	}
-	return execution.RunBoundedCommand(ctx, execution.Invocation{
+	return harness.RunProbeCommand(ctx, execution.Invocation{
 		Program: executable,
 		Args:    args,
-		Env:     environment,
-	}, probeOutputLimitBytes)
+	}, probeOutputLimitBytes, execution.RunBoundedCommand)
 }
 
 // nativeProcess retains only the shared execution.Runner behavior this adapter
@@ -264,7 +243,7 @@ func (adapter *Adapter) Probe(ctx context.Context) (harness.Capabilities, error)
 	if runner == nil {
 		runner = osCommandRunner{}
 	}
-	versionOutput, err := runProbe(ctx, func(probeContext context.Context) ([]byte, error) {
+	versionOutput, err := harness.RunBoundedProbe(ctx, probeTimeout, func(probeContext context.Context) ([]byte, error) {
 		return runner.Run(probeContext, adapter.executable, "--version")
 	})
 	if err != nil {
@@ -283,7 +262,7 @@ func (adapter *Adapter) Probe(ctx context.Context) (harness.Capabilities, error)
 	if version != TestedVersion {
 		return capabilities, fmt.Errorf("%w: OpenCode %s is not in the tested version set", harness.ErrUnsupportedVersion, version)
 	}
-	helpOutput, err := runProbe(ctx, func(probeContext context.Context) ([]byte, error) {
+	helpOutput, err := harness.RunBoundedProbe(ctx, probeTimeout, func(probeContext context.Context) ([]byte, error) {
 		return runner.Run(probeContext, adapter.executable, "serve", "--help")
 	})
 	if err != nil {

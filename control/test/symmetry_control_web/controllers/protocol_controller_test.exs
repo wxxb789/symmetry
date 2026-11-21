@@ -1,5 +1,8 @@
 defmodule SymmetryControlWeb.ProtocolControllerTest do
-  use SymmetryControlWeb.ConnCase, async: false
+  use SymmetryControlWeb.ConnCase, async: true
+
+  import SymmetryControl.TestFixtures, only: [uuid: 0]
+  import SymmetryControlWeb.TestConn, only: [assert_error: 3, bearer: 2, operator_token: 0]
 
   alias SymmetryControl.Orchestration
   alias SymmetryControl.Orchestration.{Run, Task}
@@ -8,7 +11,6 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
   alias SymmetryControlWeb.Protocol
 
   @enrollment_token "test-enrollment-token"
-  @operator_token "test-operator-token"
 
   test "renders terminal grace expiry with the protocol error envelope" do
     response = SymmetryControlWeb.Protocol.error(build_conn(), :terminal_grace_expired)
@@ -136,7 +138,7 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
     assert is_integer(lease_remaining_ms) and lease_remaining_ms > 0
 
     command =
-      bearer(conn, @operator_token)
+      bearer(conn, operator_token())
       |> put_req_header("idempotency-key", "cancel-#{System.unique_integer([:positive])}")
       |> post("/api/v1/tasks/#{task_id}/commands", %{"kind" => "cancel"})
       |> json_response(201)
@@ -223,7 +225,7 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
              |> json_response(200)
 
     history =
-      bearer(conn, @operator_token)
+      bearer(conn, operator_token())
       |> get("/api/v1/tasks/#{task_id}/commands")
       |> json_response(200)
 
@@ -499,7 +501,7 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
     )
 
     command =
-      bearer(conn, @operator_token)
+      bearer(conn, operator_token())
       |> put_req_header("idempotency-key", "ack-command")
       |> post("/api/v1/tasks/#{task_id}/commands", %{"kind" => "cancel"})
       |> json_response(201)
@@ -517,7 +519,7 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
   test "task creation requires a map work envelope", %{conn: conn} do
     for body <- [%{}, work_payload(), %{"work" => "not-a-map"}] do
       assert_error(
-        bearer(conn, @operator_token)
+        bearer(conn, operator_token())
         |> put_req_header("idempotency-key", "task-#{System.unique_integer([:positive])}")
         |> post("/api/v1/tasks", body),
         400,
@@ -531,13 +533,13 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
     explicit_empty_input = Map.put(work_payload(), "input", %{})
 
     assert %{"work" => %{"input" => nil}} =
-             bearer(conn, @operator_token)
+             bearer(conn, operator_token())
              |> put_req_header("idempotency-key", "omitted-input")
              |> post("/api/v1/tasks", %{"work" => omitted_input})
              |> json_response(201)
 
     assert %{"work" => %{"input" => %{}}} =
-             bearer(conn, @operator_token)
+             bearer(conn, operator_token())
              |> put_req_header("idempotency-key", "empty-input")
              |> post("/api/v1/tasks", %{"work" => explicit_empty_input})
              |> json_response(201)
@@ -546,7 +548,7 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
   test "public task creation rejects server-owned work fields", %{conn: conn} do
     for field <- ["required_capabilities", "unknown"] do
       assert_error(
-        bearer(conn, @operator_token)
+        bearer(conn, operator_token())
         |> put_req_header("idempotency-key", "server-owned-#{field}")
         |> post("/api/v1/tasks", %{
           "work" => Map.put(work_payload(), field, %{"provider_access" => true})
@@ -561,13 +563,13 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
     key = "replay-#{System.unique_integer([:positive])}"
 
     created =
-      bearer(conn, @operator_token)
+      bearer(conn, operator_token())
       |> put_req_header("idempotency-key", key)
       |> post("/api/v1/tasks", wire_task_payload())
       |> json_response(201)
 
     replayed =
-      bearer(conn, @operator_token)
+      bearer(conn, operator_token())
       |> put_req_header("idempotency-key", key)
       |> post("/api/v1/tasks", wire_task_payload())
       |> json_response(200)
@@ -575,7 +577,7 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
     assert replayed == created
 
     assert_error(
-      bearer(conn, @operator_token)
+      bearer(conn, operator_token())
       |> put_req_header("idempotency-key", key)
       |> post(
         "/api/v1/tasks",
@@ -657,7 +659,7 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
     key = "cancel-#{System.unique_integer([:positive])}"
 
     created_conn =
-      bearer(conn, @operator_token)
+      bearer(conn, operator_token())
       |> put_req_header("idempotency-key", key)
       |> post("/api/v1/tasks/#{task_id}/commands", %{"kind" => "cancel"})
 
@@ -670,13 +672,13 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
     assert command["acknowledged_at"] == nil
 
     assert ^command =
-             bearer(conn, @operator_token)
+             bearer(conn, operator_token())
              |> put_req_header("idempotency-key", key)
              |> post("/api/v1/tasks/#{task_id}/commands", %{"kind" => "cancel"})
              |> json_response(200)
 
     assert %{"error" => %{"code" => "idempotency_conflict"}} =
-             bearer(conn, @operator_token)
+             bearer(conn, operator_token())
              |> put_req_header("idempotency-key", key)
              |> post("/api/v1/tasks/#{task_id}/commands", %{
                "kind" => "provide_input",
@@ -685,7 +687,7 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
              |> json_response(409)
 
     assert %{"error" => %{"code" => "state_conflict"}} =
-             bearer(conn, @operator_token)
+             bearer(conn, operator_token())
              |> put_req_header("idempotency-key", "new-#{key}")
              |> post("/api/v1/tasks/#{task_id}/commands", %{"kind" => "cancel"})
              |> json_response(409)
@@ -697,7 +699,7 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
           %{"kind" => "provide_input", "payload" => %{}, "extra" => true}
         ] do
       assert %{"error" => %{"code" => "invalid_request"}} =
-               bearer(conn, @operator_token)
+               bearer(conn, operator_token())
                |> put_req_header(
                  "idempotency-key",
                  "invalid-#{System.unique_integer([:positive])}"
@@ -715,7 +717,7 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
     key = "fenced-cancel-#{System.unique_integer([:positive])}"
 
     assert %{"error" => %{"code" => "state_conflict"}} =
-             bearer(conn, @operator_token)
+             bearer(conn, operator_token())
              |> put_req_header("idempotency-key", key)
              |> post("/api/v1/tasks/#{task_id}/commands", %{
                "kind" => "cancel",
@@ -728,7 +730,7 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
     body = %{"kind" => "cancel", "generation" => task.attempt_generation}
 
     assert %{"error" => %{"code" => "invalid_request"}} =
-             bearer(conn, @operator_token)
+             bearer(conn, operator_token())
              |> put_req_header("idempotency-key", key)
              |> post("/api/v1/tasks/#{task_id}/commands", Map.put(body, "payload", %{}))
              |> json_response(400)
@@ -737,7 +739,7 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
     assert {:ok, %{entries: []}} = Orchestration.list_task_commands(task_id)
 
     command =
-      bearer(conn, @operator_token)
+      bearer(conn, operator_token())
       |> put_req_header("idempotency-key", key)
       |> post("/api/v1/tasks/#{task_id}/commands", body)
       |> json_response(201)
@@ -745,7 +747,7 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
     assert_command(command, task_id, nil, nil, "cancel", %{}, "applied")
 
     assert ^command =
-             bearer(conn, @operator_token)
+             bearer(conn, operator_token())
              |> put_req_header("idempotency-key", key)
              |> post("/api/v1/tasks/#{task_id}/commands", body)
              |> json_response(200)
@@ -773,7 +775,7 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
       }
 
       assert %{"kind" => "guidance", "state" => "pending"} =
-               bearer(conn, @operator_token)
+               bearer(conn, operator_token())
                |> put_req_header("idempotency-key", uuid())
                |> post("/api/v1/tasks/#{task_id}/commands", body)
                |> json_response(201)
@@ -781,7 +783,7 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
       assert {:ok, before} = Orchestration.list_task_commands(task_id)
 
       assert %{"error" => %{"code" => "invalid_request"}} =
-               bearer(conn, @operator_token)
+               bearer(conn, operator_token())
                |> put_req_header("idempotency-key", uuid())
                |> post(
                  "/api/v1/tasks/#{task_id}/commands",
@@ -812,7 +814,7 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
 
     assert %{"run_id" => ^run_id, "generation" => ^generation} =
              command =
-             bearer(conn, @operator_token)
+             bearer(conn, operator_token())
              |> put_req_header("idempotency-key", "input-#{System.unique_integer([:positive])}")
              |> post("/api/v1/tasks/#{task_id}/commands", %{
                "kind" => "provide_input",
@@ -848,7 +850,7 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
              |> json_response(200)
 
     command =
-      bearer(conn, @operator_token)
+      bearer(conn, operator_token())
       |> put_req_header("idempotency-key", "input-#{System.unique_integer([:positive])}")
       |> post("/api/v1/tasks/#{task_id}/commands", %{
         "kind" => "provide_input",
@@ -869,7 +871,7 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
     )
 
     assert_error(
-      bearer(conn, @operator_token)
+      bearer(conn, operator_token())
       |> put_req_header("idempotency-key", "input-#{System.unique_integer([:positive])}")
       |> post("/api/v1/tasks/#{task_id}/commands", %{
         "kind" => "provide_input",
@@ -915,7 +917,7 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
           }
         ] do
       assert_error(
-        bearer(conn, @operator_token)
+        bearer(conn, operator_token())
         |> put_req_header("idempotency-key", "input-#{System.unique_integer([:positive])}")
         |> post("/api/v1/tasks/#{task_id}/commands", body),
         400,
@@ -943,7 +945,7 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
     end
 
     %{"command_id" => command_id} =
-      bearer(conn, @operator_token)
+      bearer(conn, operator_token())
       |> put_req_header("idempotency-key", "input-#{System.unique_integer([:positive])}")
       |> post("/api/v1/tasks/#{task_id}/commands", %{
         "kind" => "provide_input",
@@ -1004,7 +1006,7 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
     )
 
     assert_error(
-      bearer(conn, @operator_token) |> post("/api/v1/machines", %{"machine" => %{}}),
+      bearer(conn, operator_token()) |> post("/api/v1/machines", %{"machine" => %{}}),
       403,
       "forbidden"
     )
@@ -1045,7 +1047,7 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
     )
 
     assert_error(
-      bearer(conn, @operator_token)
+      bearer(conn, operator_token())
       |> put("/api/v1/machines/#{first_machine_id}/sessions/#{uuid()}", %{"runtimes" => []}),
       403,
       "forbidden"
@@ -1076,7 +1078,7 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
     {_second_machine_id, second_token} = enroll(conn, "second")
 
     command =
-      bearer(conn, @operator_token)
+      bearer(conn, operator_token())
       |> put_req_header("idempotency-key", "cancel-#{System.unique_integer([:positive])}")
       |> post("/api/v1/tasks/#{task_id}/commands", %{"kind" => "cancel"})
       |> json_response(201)
@@ -1300,7 +1302,7 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
   end
 
   defp submit_task(conn) do
-    bearer(conn, @operator_token)
+    bearer(conn, operator_token())
     |> put_req_header("idempotency-key", "task-#{System.unique_integer([:positive])}")
     |> post("/api/v1/tasks", wire_task_payload())
     |> json_response(201)
@@ -1374,10 +1376,6 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
     assert acknowledged_at == nil or is_binary(acknowledged_at)
   end
 
-  defp assert_error(conn, status, code) do
-    assert %{"error" => %{"code" => ^code}} = json_response(conn, status)
-  end
-
   defp assert_fence_response(conn, 404), do: assert_error(conn, 404, "not_found")
   defp assert_fence_response(conn, 400), do: assert_error(conn, 400, "invalid_request")
 
@@ -1408,9 +1406,6 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
 
   defp request(conn, :get, path), do: get(conn, path)
   defp request(conn, :post, path), do: post(conn, path, %{})
-
-  defp bearer(conn, token), do: put_req_header(conn, "authorization", "Bearer " <> token)
-  defp uuid, do: Ecto.UUID.generate()
 
   defp wire_task_payload, do: %{"work" => work_payload()}
 

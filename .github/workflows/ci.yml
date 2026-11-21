@@ -155,7 +155,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 12.17.0
       - uses: actions/setup-node@v7
@@ -324,7 +324,13 @@ jobs:
       # dev environment: the same sources are not compiled twice, the test-only
       # support tree is compiled too, and a warning there now fails this gate.
       - run: MIX_ENV=test mix compile --warnings-as-errors
-      - run: mix test
+      # Per-test duration telemetry (refactor slice W2-01; conductor decision
+      # 2026-11-21): the owned test-support formatter prints the twenty slowest
+      # tests at suite end. `--slowest` stays out - it forces ExUnit trace mode
+      # (`max_cases: 1`, every test timeout `:infinity`) - and
+      # `ExUnit.CLIFormatter` stays listed, so the run keeps its normal output
+      # and exit status.
+      - run: mix test --formatter ExUnit.CLIFormatter --formatter SymmetryControl.SlowestFormatter
       - name: Run provider broker end-to-end tests
         timeout-minutes: 10
         env:
@@ -724,7 +730,7 @@ jobs:
           mkdir -p _build/prod/rel
           tar --extract --gzip --file "$RUNNER_TEMP/control-release-linux.tar.gz" --directory _build/prod/rel
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 12.17.0
       - uses: actions/setup-node@v7
@@ -862,6 +868,156 @@ jobs:
           path: |
             browser/playwright-report
             /tmp/symmetry-playwright-results
+
+  # Coverage plane (refactor slice W2-17; program plan §10.5, decision D14).
+  # Each coverage job is `continue-on-error: true` and gated exactly like the
+  # heavy matrix (`needs: changes` + `run-heavy`), so a coverage failure can
+  # never gate a pull request and a documentation-only one runs none of them.
+  # They own their runners on purpose: the instrumentation must not join the
+  # existing steps, because the race step sits at its `-timeout 600s` budget and
+  # the `mix test` step is the Control job's canonical suite. Floors stay
+  # advisory here (blocking coverage belongs to W6-10/W6-12), so the uploaded
+  # report - not the exit status - is what this plane produces.
+  coverage-control:
+    # `contracts` stages the `portal-assets` artifact below; `changes` is still
+    # the gate, and the classifier suite checks that every gated job names it.
+    needs: [changes, contracts]
+    if: needs.changes.outputs.run-heavy == 'true'
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:18.6-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: symmetry_control_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d symmetry_control_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    defaults:
+      run:
+        working-directory: control
+    env:
+      POSTGRES_HOST: 127.0.0.1
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: symmetry_control_test
+    steps:
+      - uses: actions/checkout@v4
+      # Four `:portal_assets` cases assert against the real staged bundle, so the
+      # job stages the same artifact the `control` job stages.
+      - uses: actions/download-artifact@v4
+        with:
+          name: portal-assets
+          path: control/priv/static/portal
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: 1.20.4
+          otp-version: 29.0.6
+      - run: mix deps.get
+      # `test_coverage: [summary: [threshold: 0]]` in control/mix.exs keeps the
+      # task's default 90% summary threshold from exiting the run, so this
+      # step's status is the suite's own status and the report below is advisory
+      # by construction.
+      - name: Run the Control suite with a coverage report (advisory)
+        run: mix test --cover
+      - name: Upload the Control coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: control-coverage
+          path: control/cover
+          if-no-files-found: warn
+          retention-days: 7
+
+  coverage-daemon:
+    needs: changes
+    if: needs.changes.outputs.run-heavy == 'true'
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: daemon
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.27.0
+          cache-dependency-path: daemon/go.sum
+      # The same prerequisite the daemon job establishes: the suite's private
+      # user/PID namespace fixtures need the prepared private `unshare` path.
+      - name: Prepare ordinary private user and PID namespaces
+        working-directory: ${{ github.workspace }}
+        shell: bash
+        env:
+          SYMMETRY_CI_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: bash scripts/ci/prepare-private-namespace-tests.sh
+      # The same stdio-only caller boundary the daemon job establishes before Go.
+      # `-timeout` is this step's own doubled per-package budget: coverage
+      # instrumentation slows every package, and the race step keeps its
+      # `-timeout 600s` untouched. The profile path is the one the root
+      # `.gitignore` reserves (`/daemon/coverage.out`).
+      # `go test` itself sets `GOCOVERDIR` for each instrumented test binary
+      # (`cmd/go` `test.go` appends it beside `-test.gocoverdir`), so the step
+      # carries no env of its own: `internal/execution`'s cases re-exec the test
+      # binary itself (`os.Args[0]` through `minimalEnvironment()` in
+      # runner_test.go, which forwards the variable), and the helper child writes
+      # covdata into the tool's merge directory instead of printing
+      # `warning: GOCOVERDIR not set, no coverage data emitted`, which four
+      # exact-output assertions capture (run 44887419717).
+      - name: Run the Go suite with a coverage profile (advisory)
+        shell: bash
+        run: |
+          python3 ../scripts/ci/stdio-only-caller-boundary.py \
+            "$(command -v go)" test -count=1 -timeout 1200s -coverprofile=coverage.out ./...
+      - name: Upload the Go coverage profile
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daemon-coverage
+          path: daemon/coverage.out
+          if-no-files-found: warn
+          retention-days: 7
+
+  coverage-frontend:
+    needs: changes
+    if: needs.changes.outputs.run-heavy == 'true'
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.17.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # The provider (`@vitest/coverage-v8`) and the coverage block - v8,
+      # `text-summary` + `lcov`, `coverage/` unless the sealed harness redirects
+      # it - are `frontend/vitest.config.ts`, landed by refactor slice W1-10. No
+      # threshold is configured, so the step's status is the suite's own and the
+      # report lands where the root `.gitignore` reserves it.
+      - name: Run the frontend suite with a coverage report (advisory)
+        run: pnpm --filter @symmetry/frontend exec vitest run --coverage
+      - name: Upload the frontend coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-coverage
+          path: frontend/coverage
+          if-no-files-found: warn
+          retention-days: 7
 
   pi-control-e2e-windows:
     needs: changes
@@ -1513,7 +1669,6 @@ jobs:
           set -Eeuo pipefail
           python3 ../scripts/ci/go-test-json-gate.py \
             --events "$RUNNER_TEMP/daemon-go-test.json" \
-            --stderr "$RUNNER_TEMP/daemon-go-tool.stderr" \
             --stdio-boundary \
             --assert github.com/wxxb789/symmetry/daemon/internal/harness/pi \
               TestProviderBridgeCloseReleasesBoundPeerFD \
@@ -1526,9 +1681,35 @@ jobs:
               TestOpenCodeAdapterWithoutV2OwnerFailsBeforeHealthRequest \
             -- "$(command -v go)" test -count=1 -timeout 300s -json \
               ./internal/harness/pi ./internal/harness/opencode
+      # The race pass is this job's critical path (~450 s), and without `-json`
+      # no per-test elapsed time reaches the log. The shared gate captures the
+      # event stream for the duration summary below, keeps the stdio-only caller
+      # boundary before Go, and preserves the suite's own exit status. Its named
+      # witness is a test the ordinary pass above already requires to run and
+      # pass, so the race configuration enforces one of the same names rather
+      # than inventing a new requirement.
       - name: Run race tests with the same stdio-only caller boundary
+        id: daemon_race_tests
         run: |
-          python3 ../scripts/ci/stdio-only-caller-boundary.py "$(command -v go)" test -race -count=1 -timeout 600s ./...
+          python3 ../scripts/ci/go-test-json-gate.py \
+            --events "$RUNNER_TEMP/daemon-go-race.json" \
+            --stdio-boundary \
+            --assert github.com/wxxb789/symmetry/daemon/internal/harness/opencode \
+              TestOpenCodeV2VerifierRejectsReleasedPeer \
+            -- "$(command -v go)" test -race -count=1 -timeout 600s -json ./...
+      # Advisory until refactor slice W6-12 flips the duration thresholds to
+      # blocking (program plan section 10.5): the summarizer's exit status is the
+      # verdict and the table prints whenever the stream carries per-test
+      # outcomes - marked partial when the run itself is refused - while the job
+      # keeps its current conclusion semantics. `if: always()` keeps the table
+      # beside a red race run, which is when the attribution is needed; the
+      # outcome check keeps it from erroring when an earlier step's failure
+      # skipped the race run, so its event file never exists.
+      - name: Summarize Go test durations
+        if: always() && steps.daemon_race_tests.outcome != 'skipped'
+        continue-on-error: true
+        run: |
+          python3 ../scripts/ci/go-test-durations.py "$RUNNER_TEMP/daemon-go-race.json"
       - run: GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ./...
       - name: Upload ordinary namespace prerequisite evidence
         if: always()
@@ -1640,6 +1821,17 @@ jobs:
       # extracts the classifier program out of the workflow, routes fixture diffs
       # through it and pins the routing those outputs gate.
       - run: python3 scripts/ci/test-ci-changed-path-classifier.py
+
+      # The browser-suite inventory (refactor slice W2-01): every
+      # `browser/tests/**/*.spec.mjs` and `browser/scripts/**/*.test.mjs` must be
+      # named by a workflow file outside its YAML comments (a comment is not a
+      # step and runs nothing) or listed in the `browser/README.md` manual
+      # matrix; refactor slice W6-02 owns wiring the remaining families. It runs
+      # here because the matrix lives in a Markdown file: a README-only pull
+      # request classifies documentation-only, and a `run-heavy`-gated step
+      # would never check it.
+      # Unlike the lint metrics below, this step is blocking.
+      - run: python3 scripts/ci/assert-browser-suite-coverage.py
 
       # Prerequisite ownership: the root `pyproject.toml` (the ruff configuration,
       # refactor slice W1-11), a preinstalled shellcheck, the pinned actionlint
