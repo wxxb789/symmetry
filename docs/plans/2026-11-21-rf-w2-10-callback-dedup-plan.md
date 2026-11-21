@@ -1,10 +1,13 @@
 # callback factory dedup plan — one store-callback selector, ten factories, two measured clone pairs
 
 Contract: `goal-rf-w2-10-callback-dedup.md` (GDD, 2026-11-21), branch
-`refactor/rf-w2-10-callback-dedup`, baseline `origin/main` = this worktree's HEAD =
-`6117e1983860c8fe1862747a6513bdf33be126a6` (`6117e198`, the merge of #144
-`rf-w1-05-app-go-split`) — the contract's dispatch gate, so the pre-split `app.go` region it names
-now lives in `daemon/internal/app/cleanup_glue.go`.
+`refactor/rf-w2-10-callback-dedup`; the contract's dispatch anchor is
+`6117e1983860c8fe1862747a6513bdf33be126a6` (`6117e198`, the merge of #144 `rf-w1-05-app-go-split`)
+and the delivered diff's frozen base is `origin/main` =
+`bda93b11709404f04454e06565a11cd25b2be428` (`bda93b11`). `daemon/internal/app/cleanup_glue.go` is
+byte-identical between the two (`git diff 6117e198 bda93b11 -- daemon/internal/app/cleanup_glue.go`
+is empty), so the base measurements bind either revision. The pre-split `app.go` region the contract
+names now lives in `daemon/internal/app/cleanup_glue.go`.
 Source item: program plan §5 W2-10; `findings/daemon-app.md` §4 S3; contract review rounds 1–2
 (`refactor/w2-contract-review-opus-2.md`, `refactor/w2-contract-review-ds-2.md`).
 
@@ -16,7 +19,7 @@ Source item: program plan §5 W2-10; `findings/daemon-app.md` §4 S3; contract r
    `prepareSupervisorHandoffCallback` `:321`, `bindSupervisorHandoffCallback` `:339`,
    `commitSupervisorHandoffCallback` `:357`, `recordSupervisorHandoffStopReceiptCallback` `:381`,
    `clearSupervisorHandoffCallback` `:387`, `clearSupervisorHandoffAfterAbortCallback` `:405` — the
-   contract's nine-value list plus `:321`.
+   contract's ten-value list.
 2. **C2 — owned set is exactly two files**: `daemon/internal/app/cleanup_glue.go` and
    `daemon/internal/app/process_persistence_test.go`, plus this plan. No caller file
    (`app.go`, `goal_admission.go`, `recovery.go`, `recovery_glue.go`, `linux_owner_witness_linux.go`)
@@ -38,7 +41,7 @@ Source item: program plan §5 W2-10; `findings/daemon-app.md` §4 S3; contract r
 1. `daemon/internal/app/cleanup_glue.go`: one generic selector (`selectStoreWrite`) replaces the
    per-factory option-or-Store selection — and the lock/refusal that came with it — in eight
    factories. `persistProcessAuthorityCallback` keeps its own refusal with the identical predicate,
-   because its write path and indeterminate-write retry live in `persistProcessAuthority`, an
+   because its write path and single retry of a failed write live in `persistProcessAuthority`, an
    unowned file shared with recovery; the selector is not split into a second helper for its one
    caller. `recordSupervisorHandoffStopReceiptCallback` is unchanged: it holds no store CAS of its
    own.
@@ -96,17 +99,25 @@ still runs its two-attempt CAS through `persistProcessAuthority`.
 One table drives the nine store-touching factories, each entry installing its own override and
 invoking its own factory, so the shared predicate is tested through nine independent call sites:
 
-- **(a)** `storeClosing = true` with the override set → `errors.Is(err, errDaemonStoreClosing)` and
-  the override ran `0` times;
+- **(a)** `storeClosing = true` with the override set → `errors.Is(err, errDaemonStoreClosing)`, the
+  refusal is the unwrapped sentinel (`err == errDaemonStoreClosing`), and the override ran `0` times;
 - **(b)** `storeClosing = false`, `store == nil`, override nil → `errors.Is(err, errDaemonStoreClosing)`;
   this is also the case that would panic if a selector formed a Store method value on a nil Store and
   the refusal path failed to run first;
 - **(c)** inside the override, `daemon.storeLifetimeMu.TryLock()` returns false (the read lock spans
   the whole CAS) and the override's own error is the one that surfaces;
 - **(d)** the caller's handoff/authority is mutated through its pointer field (`CreatorSessionID`)
-  after the call; the value the override received still carries the original session id;
+  after the call; the value the override received still carries the original session id; for
+  `persistProcessAuthorityCallback`, which retries a failed write inside one call, the mutation also
+  runs inside the first override invocation, so a copy taken only before the retry is caught;
 - **(e)** for `persistProcessAuthorityCallback` and `commitSupervisorHandoffCallback`, a shared event
-  log shows `write` before `observe`, and no `observe` at all when the override fails.
+  log shows `write` before `observe`, and no `observe` at all when the override fails;
+- **(f)** the same table with `storeClosing = true`, a Store present and no override — the production
+  configuration → the unwrapped `errDaemonStoreClosing` (`errors.Is` holds and the identity check
+  passes) while no Store method is invoked;
+- **(g)** the mark/clear twins with no override and a real claimed Store → the call reaches the
+  matching Store method and flips exactly the journal's `ContainmentUnproven` flag, which the
+  override-driven cases cannot observe.
 
 Non-vacuity: flipping one closing check in a scratch copy of `cleanup_glue.go` must turn the pins red.
 The flip is done twice — once on the base text (the pins are written first), once on the refactored
@@ -135,7 +146,8 @@ Sequence:
 3. dupl after, same two commands, same helper; the after pair set must equal the base set minus the
    two owned pairs.
 4. `gofmt -l <changed files>`, `go vet ./...`, `GOOS=linux go build ./...`, `GOOS=windows go build ./...`,
-   `git diff --check`, `git diff origin/main...HEAD | grep -i "users/"` (expect no match).
+   `git diff --check`, `git diff origin/main...HEAD | grep -i 'user[s]/'` (non-self-matching spelling
+   of the program rule's profile-path check; expect no match).
 5. CI-only oracle (conductor): the daemon `-race` jobs. Optional local substitute, only if WSL with a
    Linux Go toolchain is available: the focused pins under `-race`; reported either way.
 
@@ -151,7 +163,8 @@ Sequence:
   (type set 15, selector 21, two blank separator lines 2, retained-call-site comment 3, call-site
   plumbing 39). The plan row's −60 dLOC projected from the "4 dupl blocks" reading that contract C4
   corrects to two measured pairs; the measured pair removal, not the line count, is the acceptance.
-- `go test -count=1 ./internal/app/...` on an idle host: exit 0, `ok … 458.523s`. An earlier run on a
+- `go test -count=1 ./internal/app/...` on an idle host: exit 0 — `ok … 458.523s` at the implement
+  stage, `ok … 454.957s` on the delivered bytes at the apply stage. An earlier run on a
   loaded host failed the 2 s-deadline test `TestOmOAttachAckRegressionCancellationAndDeadlineDoNotRenewBudget`
   and then hit Go's 10-minute default timeout on a Store file-open stall; the same focused test passes
   on both the base worktree (23.289 s) and the delivered tree (22.421 s) idle, so both symptoms are
@@ -173,12 +186,13 @@ Sequence:
    before the lock is taken; forming a method value on a nil pointer receiver does not panic
    (measured on go1.27.4), and the refusal path returns before any invocation. `daemon.store` is
    written only during construction (`app.go:549`/`:555`) and by quiescent tests that assign it
-   between phases (`harness_test.go:2806`, `linux_owner_witness_linux_test.go:139`) — the base code's
-   read lock does not synchronize those writes either, so nothing new is unsynchronized.
+   between phases (`harness_test.go:2806`) — the base code's read lock does not synchronize those
+   writes either, so nothing new is unsynchronized.
 4. **`persistProcessAuthorityCallback` keeps its own invocation.** Its write path and its
-   single retry of a failed write are `persistProcessAuthority` (`recovery.go`, unowned); only its
-   guard moves to `selectStoreWrite`. Rewriting that delegate here would either duplicate the retry
-   protocol or change it — both are store-callback semantics changes.
+   single retry of a failed write are `persistProcessAuthority` (`recovery.go`, unowned); its refusal
+   stays in the factory with the same predicate `selectStoreWrite` applies. Rewriting that delegate
+   here would either duplicate the retry protocol or change it — both are store-callback semantics
+   changes.
 5. **No new suppression.** No `//nolint`, no repository lint config, no second convention for
    selecting a write path.
 

@@ -408,15 +408,23 @@ func TestStoreCallbackFactoriesRefuseClosingStore(t *testing.T) {
 			closing.storeClosing = true
 			var closingObserved storeCallbackObservations
 			pin.installOverride(closing, &closingObserved)
-			if err := pin.invoke(closing); !errors.Is(err, errDaemonStoreClosing) {
-				t.Fatalf("closing store: error = %v, want %v", err, errDaemonStoreClosing)
+			if err := pin.invoke(closing); !errors.Is(err, errDaemonStoreClosing) || err != errDaemonStoreClosing {
+				t.Fatalf("closing store: error = %v, want the unwrapped sentinel %v", err, errDaemonStoreClosing)
 			}
 			if closingObserved.calls != 0 {
 				t.Fatalf("closing store: override calls = %d, want 0", closingObserved.calls)
 			}
 
-			if err := pin.invoke(&daemon{}); !errors.Is(err, errDaemonStoreClosing) {
-				t.Fatalf("no store and no override: error = %v, want %v", err, errDaemonStoreClosing)
+			// The production configuration has no override: a closing daemon
+			// with a Store must still refuse before it forms a Store write path.
+			closingStoreOnly := &daemon{store: store}
+			closingStoreOnly.storeClosing = true
+			if err := pin.invoke(closingStoreOnly); !errors.Is(err, errDaemonStoreClosing) || err != errDaemonStoreClosing {
+				t.Fatalf("closing store without an override: error = %v, want the unwrapped sentinel %v", err, errDaemonStoreClosing)
+			}
+
+			if err := pin.invoke(&daemon{}); !errors.Is(err, errDaemonStoreClosing) || err != errDaemonStoreClosing {
+				t.Fatalf("no store and no override: error = %v, want the unwrapped sentinel %v", err, errDaemonStoreClosing)
 			}
 
 			var overrideObserved storeCallbackObservations
@@ -429,6 +437,42 @@ func TestStoreCallbackFactoriesRefuseClosingStore(t *testing.T) {
 				t.Fatalf("override without a store: override calls = %d, want %d", overrideObserved.calls, pin.wantCalls)
 			}
 		})
+	}
+}
+
+// TestStoreCallbackMarkAndClearFallbackToTheStore pins the selector's Store
+// fallback for the mark/clear twins: with no daemon-wide override the call
+// must reach the matching Store method and flip exactly the journal flag that
+// method owns, which the override-only pins cannot observe.
+func TestStoreCallbackMarkAndClearFallbackToTheStore(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	startedAt := time.Date(2026, 9, 22, 9, 10, 11, 0, time.UTC)
+	if _, err := store.SetProcessDetails(key, 52, "windows:52:created-at", startedAt); err != nil {
+		t.Fatal(err)
+	}
+	app := &daemon{store: store}
+
+	if err := app.markContainmentUnprovenCallback(key)(52, "windows:52:created-at"); err != nil {
+		t.Fatalf("markContainmentUnprovenCallback() error = %v", err)
+	}
+	marked, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !marked.ContainmentUnproven {
+		t.Fatalf("journal after mark = %#v, want containment unproven", marked)
+	}
+
+	if err := app.clearContainmentUnprovenCallback(key)(52, "windows:52:created-at"); err != nil {
+		t.Fatalf("clearContainmentUnprovenCallback() error = %v", err)
+	}
+	cleared, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cleared.ContainmentUnproven {
+		t.Fatalf("journal after clear = %#v, want containment proven", cleared)
 	}
 }
 
@@ -471,15 +515,17 @@ func TestStoreCallbackFactoriesCloneCallerArguments(t *testing.T) {
 		t.Run(pin.name, func(t *testing.T) {
 			app := &daemon{store: store}
 			var received []*uint32
-			pin.installOverride(app, &received)
 			invoke, callerSessionID, mutateCaller := pin.buildCaller()
+			pin.installOverride(app, &received, mutateCaller)
+			// Read the original before the call: a pin whose factory retries a
+			// failed write inside one call moves the caller during that call.
+			original := sessionIDOf(callerSessionID)
 			if err := invoke(app); !errors.Is(err, errStoreCallbackProbe) {
 				t.Fatalf("override error = %v, want %v", err, errStoreCallbackProbe)
 			}
 			if len(received) != pin.wantCalls {
 				t.Fatalf("override calls = %d, want %d", len(received), pin.wantCalls)
 			}
-			original := sessionIDOf(callerSessionID)
 			mutateCaller()
 			for index, receivedSessionID := range received {
 				if got := sessionIDOf(receivedSessionID); got != original {
@@ -611,8 +657,8 @@ func testAppHandoffFixture(pid int, identity string) authority.SupervisorHandoff
 }
 
 // errStoreCallbackProbe is the error every pinned store-callback override
-// returns. A pin asserts that a factory propagated exactly this error, which is
-// how it proves the override ran instead of the Store method.
+// returns. A pin asserts by errors.Is that a factory propagated this error,
+// which is how it proves the override ran instead of the Store method.
 var errStoreCallbackProbe = errors.New("store callback override probe")
 
 // storeCallbackObservations is what one pinned override saw while it ran.
@@ -639,12 +685,14 @@ type storeCallbackPin struct {
 // carries an optional creator session id. buildCaller creates the caller-owned
 // fixture and returns the call that hands it to the factory, the session id
 // pointer the caller keeps, and the mutation of the caller's own copy that must
-// not reach the override.
+// not reach the override. installOverride receives that mutation, so a pin
+// whose factory retries a failed write inside one call runs it between the
+// attempts.
 type storeCallbackClonePin struct {
 	name string
 	// wantCalls is the number of override invocations one pinned call makes.
 	wantCalls       int
-	installOverride func(app *daemon, received *[]*uint32)
+	installOverride func(app *daemon, received *[]*uint32, mutateCaller func())
 	buildCaller     func() (invoke func(app *daemon) error, callerSessionID *uint32, mutateCaller func())
 }
 
@@ -771,9 +819,16 @@ func storeCallbackClonePins(key state.RunKey) []storeCallbackClonePin {
 		{
 			name:      "persistProcessAuthorityCallback",
 			wantCalls: 2,
-			installOverride: func(app *daemon, received *[]*uint32) {
+			installOverride: func(app *daemon, received *[]*uint32, mutateCaller func()) {
 				app.options.recordProcessAuthority = func(_ state.RunKey, _ int, _ string, got authority.Supervisor, _ time.Time) (state.RunJournal, error) {
 					*received = append(*received, got.CreatorSessionID)
+					if len(*received) == 1 {
+						// persistProcessAuthority retries the failed write
+						// inside this call, so the caller must move between the
+						// attempts for the pin to see whether the argument was
+						// copied before the retry.
+						mutateCaller()
+					}
 					return state.RunJournal{}, errStoreCallbackProbe
 				}
 			},
@@ -855,7 +910,7 @@ func handoffClonePin(name string, setOverride func(app *daemon, override func(au
 	return storeCallbackClonePin{
 		name:      name,
 		wantCalls: 1,
-		installOverride: func(app *daemon, received *[]*uint32) {
+		installOverride: func(app *daemon, received *[]*uint32, _ func()) {
 			setOverride(app, func(got authority.SupervisorHandoff) (state.RunJournal, error) {
 				*received = append(*received, got.CreatorSessionID)
 				return state.RunJournal{}, errStoreCallbackProbe
