@@ -9,6 +9,7 @@ import type { Project } from "../services/api";
 import { readAttention, readWorkDetail, readWorkItem } from "../services/api.fixtures";
 import { socketEndpoint, type RealtimePush, type RealtimeSocket } from "../services/realtime";
 import { createApplication, safeReturnTo, type Application } from "./application";
+import { jsonResponse, portal } from "./portal-double";
 import { createAppRouter } from "./router";
 
 const firstProjectId = "11111111-1111-4111-8111-111111111111";
@@ -20,36 +21,23 @@ const projects: Project[] = [
   ] },
 ];
 const applications: Application[] = [];
-afterEach(() => { for (const app of applications) app.queryClient.clear(); applications.length = 0; localStorage.clear(); });
+afterEach(() => {
+  for (const app of applications) { app.realtime.close(); app.queryClient.clear(); }
+  applications.length = 0;
+  localStorage.clear();
+});
 
-// The session bootstrap serves the CSRF token for commands and the short-lived
-// socket token for the invalidation channel; every fixture serves both members.
 const sessionBody = (csrfToken: string) => JSON.stringify({ csrf_token: csrfToken, socket_token: "test-socket-token" });
 
-// The workspace's own transport: the bootstrap read mints the socket token the
-// shell connects its invalidation client with, and every other read answers with
-// the served document the surface asked for.
-function servedFetcher(): typeof fetch {
-  return vi.fn<typeof fetch>().mockImplementation((input) => {
-    const requestPath = input instanceof Request ? input.url : String(input);
-    const url = new URL(requestPath, "http://localhost");
-    const projectId = url.searchParams.get("project_id") ?? firstProjectId;
-    if (url.pathname === "/portal/api/attention") {
-      const scoped = url.searchParams.get("project_id") ?? firstProjectId;
-      const project = projects.find((candidate) => candidate.id === scoped);
-      return Promise.resolve(new Response(JSON.stringify(readAttention({
-        selectedProjectId: scoped,
-        blocked: (project?.work_items ?? []).filter((item) => item.blocked).map((item) => ({ projectId: scoped, projectName: project?.name ?? null, workItemId: item.id, key: item.key, title: item.title, status: item.status, blocker: item.blocker })),
-      }))));
-    }
-    return Promise.resolve(new Response(JSON.stringify(requestPath.endsWith("/session")
-      ? { csrf_token: "session-token", socket_token: "test-socket-token" }
-      : { selected_project_id: projectId, projects: projects.map((project) => ({ ...project, work_items: project.id === projectId ? project.work_items : [] })) })));
-  });
-}
+const seedProjectsWorkspace = (socketToken: string | null = "test-socket-token") => {
+  portal.seed({ session: { csrfToken: "session-token", socketToken }, workspace: { projects } });
+};
 
-function renderWorkspace(path: string, fetcher: typeof fetch = servedFetcher(), realtime?: NonNullable<Parameters<typeof createApplication>[0]>["realtime"]) {
-  const application = createApplication({ fetcher, location: { href: `http://localhost${path}`, replace: vi.fn() }, ...(realtime === undefined ? {} : { realtime }) });
+function renderWorkspace(path: string, realtime?: NonNullable<Parameters<typeof createApplication>[0]>["realtime"]) {
+  const application = createApplication({
+    location: { href: `http://localhost${path}`, replace: vi.fn() },
+    realtime: { socketFactory: () => scriptedSocket().socket, ...(realtime ?? {}) },
+  });
   applications.push(application);
   const history = createMemoryHistory({ initialEntries: [path] });
   const router = createAppRouter(application, history);
@@ -60,6 +48,7 @@ function renderWorkspace(path: string, fetcher: typeof fetch = servedFetcher(), 
 describe("workspace navigation", () => {
   it("does not report unloaded project work as zero and opens project selection from the list", async () => {
     const user = userEvent.setup();
+    seedProjectsWorkspace();
     const { history } = renderWorkspace("/portal/projects");
     await screen.findByRole("heading", { level: 2, name: "Project Two" });
     expect(screen.getByText("Open project to load work")).toBeVisible();
@@ -70,6 +59,7 @@ describe("workspace navigation", () => {
   });
 
   it("renders deep-linked archived work with honest unknown state and blocker labels", async () => {
+    seedProjectsWorkspace();
     renderWorkspace(`/portal/projects/${secondProjectId}`);
     expect(await screen.findByRole("heading", { level: 1, name: "Project Two" })).toBeVisible();
     expect(screen.getByText("Resolve release blocker")).toBeVisible();
@@ -82,6 +72,16 @@ describe("workspace navigation", () => {
 
   it("keeps Attention project scope in search, history and reload, and clears to the server default", async () => {
     const user = userEvent.setup();
+    seedProjectsWorkspace();
+    portal.serve((request) => {
+      if (request.url.pathname !== "/portal/api/attention") return undefined;
+      const scoped = request.url.searchParams.get("project_id") ?? firstProjectId;
+      const project = projects.find((candidate) => candidate.id === scoped);
+      return jsonResponse(readAttention({
+        selectedProjectId: scoped,
+        blocked: (project?.work_items ?? []).filter((item) => item.blocked).map((item) => ({ projectId: scoped, projectName: project?.name ?? null, workItemId: item.id, key: item.key, title: item.title, status: item.status, blocker: item.blocker })),
+      }));
+    });
     const { history, unmount } = renderWorkspace("/portal/attention");
     expect(await screen.findByRole("heading", { name: "No blocked work" })).toBeVisible();
     expect(screen.getByLabelText("Project")).toHaveValue(firstProjectId);
@@ -117,6 +117,7 @@ describe("workspace navigation", () => {
 
   it("carries project detail scope into Attention navigation and command palette links", async () => {
     const user = userEvent.setup();
+    seedProjectsWorkspace();
     const { history } = renderWorkspace(`/portal/projects/${secondProjectId}`);
     await screen.findByRole("heading", { level: 1, name: "Project Two" });
     const attentionLink = screen.getByRole("link", { name: "Attention" });
@@ -140,6 +141,7 @@ describe("workspace navigation", () => {
 
   it("keeps selection in history and focuses content after navigation, not refresh", async () => {
     const user = userEvent.setup();
+    seedProjectsWorkspace();
     const { history } = renderWorkspace(`/portal/projects/${firstProjectId}`);
     await screen.findByRole("heading", { level: 1, name: "Project One" });
     await user.selectOptions(screen.getByLabelText("Project"), secondProjectId);
@@ -156,13 +158,13 @@ describe("workspace navigation", () => {
 
   it("ignores a late response from a project left during loading", async () => {
     const old = Promise.withResolvers<Response>();
-    const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => {
-      const path = input instanceof Request ? input.url : String(input);
-      if (path.endsWith("/session")) return Promise.resolve(new Response(sessionBody("token")));
-      if (path.includes(`project_id=${firstProjectId}`)) return old.promise;
-      return Promise.resolve(new Response(JSON.stringify({ selected_project_id: secondProjectId, projects: [projects[1]] })));
+    portal.seed({ session: { csrfToken: "token", socketToken: "test-socket-token" } });
+    portal.serve((request) => {
+      if (request.url.pathname === "/portal/api/session") return undefined;
+      if (request.url.searchParams.get("project_id") === firstProjectId) return old.promise;
+      return jsonResponse({ selected_project_id: secondProjectId, projects: [projects[1]] });
     });
-    const { router } = renderWorkspace(`/portal/projects/${firstProjectId}`, fetcher);
+    const { router } = renderWorkspace(`/portal/projects/${firstProjectId}`);
     await screen.findByText("Loading project…");
     await act(async () => { await router.navigate({ to: "/projects/$projectId", params: { projectId: secondProjectId } }); });
     await screen.findByRole("heading", { level: 1, name: "Project Two" });
@@ -173,16 +175,16 @@ describe("workspace navigation", () => {
 
   it.each(["/portal/projects/missing", "/portal/attention?projectId=missing"])("keeps project navigation usable after a scoped read fails at %s", async (path) => {
     const user = userEvent.setup();
-    const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => {
-      const requestPath = input instanceof Request ? input.url : String(input);
-      if (requestPath.endsWith("/session")) return Promise.resolve(new Response(sessionBody("token")));
-      const projectId = new URL(requestPath, "http://localhost").searchParams.get("project_id") ?? firstProjectId;
-      return Promise.resolve(projectId === "missing" ? new Response("{}", { status: 404 }) : new Response(JSON.stringify({
+    portal.seed({ session: { csrfToken: "token", socketToken: "test-socket-token" } });
+    portal.serve((request) => {
+      if (request.url.pathname === "/portal/api/session") return undefined;
+      const projectId = request.url.searchParams.get("project_id") ?? firstProjectId;
+      return projectId === "missing" ? new Response("{}", { status: 404 }) : jsonResponse({
         selected_project_id: projectId,
         projects: projects.map((project) => ({ ...project, work_items: project.id === projectId ? project.work_items : [] })),
-      })));
+      });
     });
-    const { history } = renderWorkspace(path, fetcher);
+    const { history } = renderWorkspace(path);
     expect(await screen.findByRole("alert")).toHaveTextContent("The requested resource was not found");
     const selection = screen.getByLabelText("Project");
     await waitFor(() => expect(selection).toBeEnabled());
@@ -198,6 +200,7 @@ describe("workspace navigation", () => {
 
   it("returns keyboard focus when the command palette closes with Escape", async () => {
     const user = userEvent.setup();
+    seedProjectsWorkspace();
     renderWorkspace("/portal/attention");
     await screen.findByRole("heading", { level: 1, name: "Attention" });
     const projectSelection = screen.getByLabelText("Project");
@@ -213,12 +216,13 @@ describe("workspace navigation", () => {
 
   it("shows a recoverable error and renders empty data only after successful retry", async () => {
     let workspaceRead = 0;
-    const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => {
-      if ((input instanceof Request ? input.url : String(input)).endsWith("/session")) return Promise.resolve(new Response(sessionBody("token")));
+    portal.seed({ session: { csrfToken: "token", socketToken: "test-socket-token" }, workspace: { projects: [] } });
+    portal.serve((request) => {
+      if (request.method !== "GET" || request.url.pathname !== "/portal/api/workspace") return undefined;
       workspaceRead += 1;
-      return Promise.resolve(workspaceRead === 1 ? new Response("{}", { status: 403 }) : new Response('{"selected_project_id":null,"projects":[]}'));
+      return workspaceRead === 1 ? new Response("{}", { status: 403 }) : undefined;
     });
-    renderWorkspace("/portal/projects", fetcher);
+    renderWorkspace("/portal/projects");
     expect(await screen.findByRole("alert")).toHaveTextContent("You do not have access");
     expect(screen.queryByText("No projects yet")).not.toBeInTheDocument();
     await userEvent.setup().click(screen.getByRole("button", { name: "Try again" }));
@@ -226,7 +230,9 @@ describe("workspace navigation", () => {
   });
 
   it("removes private shell content when bootstrap authentication expires", async () => {
-    renderWorkspace("/portal/attention", vi.fn<typeof fetch>().mockResolvedValue(new Response("{}", { status: 401 })));
+    portal.seed({ workspace: { projects } });
+    portal.serve(() => new Response("{}", { status: 401 }));
+    renderWorkspace("/portal/attention");
     expect(await screen.findByRole("heading", { name: "Signed out" })).toBeVisible();
     expect(screen.queryByRole("navigation")).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Sign in" })).toHaveAttribute("href", "/portal/login");
@@ -234,16 +240,14 @@ describe("workspace navigation", () => {
 
   it("keeps the operator's focus when a background session read fails and then recovers", async () => {
     const sessionReads: ((response: Response) => void)[] = [];
-    const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => {
-      const path = input instanceof Request ? input.url : String(input);
-      if (path.endsWith("/session")) {
-        const { promise, resolve } = Promise.withResolvers<Response>();
-        sessionReads.push(resolve);
-        return promise;
-      }
-      return Promise.resolve(new Response(JSON.stringify({ selected_project_id: firstProjectId, projects: [projects[0]] })));
+    portal.seed({ workspace: { selectedProjectId: firstProjectId, projects: [projects[0]!] } });
+    portal.serve((request) => {
+      if (request.url.pathname !== "/portal/api/session") return undefined;
+      const { promise, resolve } = Promise.withResolvers<Response>();
+      sessionReads.push(resolve);
+      return promise;
     });
-    const { application } = renderWorkspace("/portal/attention", fetcher);
+    const { application } = renderWorkspace("/portal/attention");
     // The 503 must settle into an error state before recovery; transient retries
     // would keep the fetch in flight and mask the focus transition under test.
     application.queryClient.setQueryDefaults(["session"], { retry: false });
@@ -276,13 +280,10 @@ describe("workspace navigation", () => {
     meta.content = "old-html-token";
     document.head.append(meta);
     let csrfToken = "initial-session-token";
-    const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => Promise.resolve(new Response(JSON.stringify(
-      (input instanceof Request ? input.url : String(input)).endsWith("/session")
-        ? { csrf_token: csrfToken, socket_token: "test-socket-token" }
-        : { selected_project_id: firstProjectId, projects: [projects[0]] },
-    ))));
+    portal.seed({ workspace: { selectedProjectId: firstProjectId, projects: [projects[0]!] } });
+    portal.serve((request) => request.url.pathname === "/portal/api/session" ? new Response(sessionBody(csrfToken)) : undefined);
     try {
-      const { application } = renderWorkspace("/portal/attention", fetcher);
+      const { application } = renderWorkspace("/portal/attention");
       await screen.findByRole("heading", { level: 1, name: "Attention" });
       const form = screen.getByRole("button", { name: "Sign out" }).closest("form");
       expect(form).toHaveAttribute("action", "/portal/logout");
@@ -302,15 +303,15 @@ describe("workspace navigation", () => {
     let csrfToken = "initial-session-token";
     let sessionRead = 0;
     const { promise: bootstrap, resolve: releaseBootstrap } = Promise.withResolvers<Response>();
-    const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => {
-      const path = input instanceof Request ? input.url : String(input);
-      if (!path.endsWith("/session")) return Promise.resolve(new Response(JSON.stringify({ selected_project_id: firstProjectId, projects: [projects[0]] })));
+    portal.seed({ workspace: { selectedProjectId: firstProjectId, projects: [projects[0]!] } });
+    portal.serve((request) => {
+      if (request.url.pathname !== "/portal/api/session") return undefined;
       sessionRead += 1;
       return sessionRead === 1
-        ? Promise.resolve(new Response(sessionBody(csrfToken)))
+        ? new Response(sessionBody(csrfToken))
         : bootstrap.then(() => new Response(sessionBody(csrfToken)));
     });
-    renderWorkspace("/portal/attention", fetcher);
+    renderWorkspace("/portal/attention");
     await screen.findByRole("heading", { level: 1, name: "Attention" });
     expect(screen.getByRole("button", { name: "Sign out" })).toBeEnabled();
     // Another window logs out and back in, rotating the shared cookie's token;
@@ -352,44 +353,42 @@ const workViewProjects: Project[] = [
   ] },
 ];
 
-/** Serves the project snapshot per requested scope plus one real work-detail envelope. */
-function workReadFetcher({ detail, holdDetail }: { detail: Record<string, unknown>; holdDetail?: Promise<void> }) {
-  return vi.fn<typeof fetch>().mockImplementation((input) => {
-    const requestPath = input instanceof Request ? input.url : String(input);
-    if (requestPath.endsWith("/session")) return Promise.resolve(new Response(sessionBody("session-token")));
-    if (requestPath.includes("/portal/api/work-items/")) {
-      const respond = () => new Response(requestPath.endsWith("/timeline")
-        ? JSON.stringify({ items: [], next_before: null })
-        : JSON.stringify(detail));
-      return holdDetail === undefined ? Promise.resolve(respond()) : holdDetail.then(respond);
-    }
-    const projectId = new URL(requestPath, "http://localhost").searchParams.get("project_id");
-    return Promise.resolve(new Response(JSON.stringify({
+const subjectDetail = () => readWorkDetail({ id: subjectId, projectId: firstProjectId, title: subjectTitle });
+
+function serveWorkViewProjects() {
+  portal.serve((request) => {
+    if (request.url.pathname !== "/portal/api/workspace") return undefined;
+    const projectId = request.url.searchParams.get("project_id");
+    return jsonResponse({
       selected_project_id: null,
       projects: workViewProjects.map((project) => ({ ...project, work_items: project.id === projectId ? project.work_items : [] })),
       health: { status: "unknown" },
-    })));
+    });
   });
 }
 
-const subjectDetail = () => readWorkDetail({ id: subjectId, projectId: firstProjectId, title: subjectTitle });
+function seedWorkView({ detail = subjectDetail(), holdDetail }: { detail?: Record<string, unknown>; holdDetail?: Promise<void> } = {}) {
+  portal.seed({
+    session: { csrfToken: "session-token", socketToken: "test-socket-token" },
+    workspace: { selectedProjectId: null, projects: workViewProjects },
+    details: { [subjectId]: detail },
+  });
+  serveWorkViewProjects();
+  if (holdDetail !== undefined) {
+    portal.serve(async (request) => {
+      if (request.url.pathname !== `/portal/api/work-items/${subjectId}`) return undefined;
+      await holdDetail;
+      return undefined;
+    });
+  }
+}
 
-/**
- * Serves the two-item project snapshot plus the real work-detail envelope. The
- * subject's status is read through `subjectStatus`, so a refetch can regroup the
- * board (and reorder the list) the way a workspace refresh does.
- */
-function movableSubjectFetcher(subjectStatus: () => string) {
-  return vi.fn<typeof fetch>().mockImplementation((input) => {
-    const requestPath = input instanceof Request ? input.url : String(input);
-    if (requestPath.endsWith("/session")) return Promise.resolve(new Response(JSON.stringify({ csrf_token: "session-token" })));
-    if (requestPath.includes("/portal/api/work-items/")) {
-      return Promise.resolve(new Response(requestPath.endsWith("/timeline")
-        ? JSON.stringify({ items: [], next_before: null })
-        : JSON.stringify(subjectDetail())));
-    }
-    const projectId = new URL(requestPath, "http://localhost").searchParams.get("project_id");
-    return Promise.resolve(new Response(JSON.stringify({
+function serveMovableSubject(subjectStatus: () => string) {
+  portal.seed({ session: { csrfToken: "session-token", socketToken: null }, details: { [subjectId]: subjectDetail() } });
+  portal.serve((request) => {
+    if (request.url.pathname !== "/portal/api/workspace") return undefined;
+    const projectId = request.url.searchParams.get("project_id");
+    return jsonResponse({
       selected_project_id: null,
       projects: [{ id: firstProjectId, key: "ONE", name: "Project One", description: null, status: "active",
         work_items: projectId === firstProjectId ? [
@@ -397,14 +396,15 @@ function movableSubjectFetcher(subjectStatus: () => string) {
           { id: siblingId, key: "ONE-10", title: siblingTitle, status: "backlog", blocked: false, blocker: null },
         ] : [] }],
       health: { status: "unknown" },
-    })));
+    });
   });
 }
 
 describe("readable work views", () => {
   it("mounts the desktop drawer while the detail is pending and renders no unverified project background", async () => {
     const release = Promise.withResolvers<void>();
-    renderWorkspace(`/portal/work/${subjectId}`, workReadFetcher({ detail: subjectDetail(), holdDetail: release.promise }));
+    seedWorkView({ holdDetail: release.promise });
+    renderWorkspace(`/portal/work/${subjectId}`);
     const pending = await screen.findByRole("dialog", { name: "Work item" });
     expect(within(pending).getByText("Loading work item…")).toBeVisible();
     // Radix marks the page behind the modal inert (aria-hidden) while the drawer is
@@ -418,7 +418,8 @@ describe("readable work views", () => {
   });
 
   it("keeps the desktop drawer and the supplied view state for a work URL without project scope", async () => {
-    const { history } = renderWorkspace(`/portal/work/${subjectId}?view=board`, workReadFetcher({ detail: subjectDetail() }));
+    seedWorkView();
+    const { history } = renderWorkspace(`/portal/work/${subjectId}?view=board`);
     const detail = await screen.findByRole("dialog", { name: subjectTitle });
     expect(within(detail).getByRole("heading", { level: 1, name: subjectTitle })).toBeVisible();
     const board = await screen.findByRole("region", { name: "Work board", hidden: true });
@@ -431,9 +432,9 @@ describe("readable work views", () => {
   });
 
   it("canonicalizes a foreign project scope instead of showing the wrong project's work", async () => {
+    seedWorkView();
     const { history } = renderWorkspace(
       `/portal/work/${subjectId}?projectId=${secondProjectId}&q=Foreign&state=future_state`,
-      workReadFetcher({ detail: subjectDetail() }),
     );
     const detail = await screen.findByRole("dialog", { name: subjectTitle });
     expect(within(detail).getByRole("heading", { level: 1, name: subjectTitle })).toBeVisible();
@@ -449,7 +450,8 @@ describe("readable work views", () => {
   });
 
   it("keeps a URL filter visible when the current snapshot no longer contains that state or owner", async () => {
-    renderWorkspace(`/portal/projects/${firstProjectId}?state=future_state&owner=human:Ada`, workReadFetcher({ detail: subjectDetail() }));
+    seedWorkView();
+    renderWorkspace(`/portal/projects/${firstProjectId}?state=future_state&owner=human:Ada`);
     await screen.findByRole("heading", { level: 1, name: "Project One" });
     expect(screen.getByLabelText("Work state")).toHaveValue("future_state");
     expect(screen.getByLabelText("Work owner")).toHaveValue("human:Ada");
@@ -460,20 +462,20 @@ describe("readable work views", () => {
 
   it("selects the row's own owner option for a legacy sentinel bookmark instead of an absent duplicate", async () => {
     const unnamedAgentTitle = "Unnamed agent work item";
-    const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => {
-      const requestPath = input instanceof Request ? input.url : String(input);
-      if (requestPath.endsWith("/session")) return Promise.resolve(new Response(sessionBody("session-token")));
-      const projectId = new URL(requestPath, "http://localhost").searchParams.get("project_id");
-      return Promise.resolve(new Response(JSON.stringify({
+    portal.seed({ session: { csrfToken: "session-token", socketToken: "test-socket-token" } });
+    portal.serve((request) => {
+      if (request.url.pathname !== "/portal/api/workspace") return undefined;
+      const projectId = request.url.searchParams.get("project_id");
+      return jsonResponse({
         selected_project_id: null,
         projects: [{ id: firstProjectId, key: "ONE", name: "Project One", description: null, status: "active",
           work_items: projectId === firstProjectId ? [
             { id: subjectId, key: "ONE-9", title: unnamedAgentTitle, status: "ready", blocked: false, blocker: null, assignee: { type: "agent", name: null, agent_profile: null } },
           ] : [] }],
         health: { status: "unknown" },
-      })));
+      });
     });
-    renderWorkspace(`/portal/projects/${firstProjectId}?owner=agent%3Aunrecorded`, fetcher);
+    renderWorkspace(`/portal/projects/${firstProjectId}?owner=agent%3Aunrecorded`);
     await screen.findByRole("heading", { level: 1, name: "Project One" });
     const owner = screen.getByLabelText("Work owner");
     expect(owner).toHaveValue("agent:");
@@ -483,7 +485,8 @@ describe("readable work views", () => {
   });
 
   it("applies rapid compound filter changes on the latest search instead of a stale render", async () => {
-    const { history } = renderWorkspace(`/portal/projects/${firstProjectId}`, workReadFetcher({ detail: subjectDetail() }));
+    seedWorkView();
+    const { history } = renderWorkspace(`/portal/projects/${firstProjectId}`);
     await screen.findByRole("heading", { level: 1, name: "Project One" });
     // Both changes land in the same tick, before either navigation commits.
     act(() => {
@@ -502,7 +505,8 @@ describe("readable work views", () => {
 
   it("keeps focus and every keystroke in the URL-backed work filter while the search changes", async () => {
     const user = userEvent.setup();
-    const { history } = renderWorkspace(`/portal/projects/${firstProjectId}`, workReadFetcher({ detail: subjectDetail() }));
+    seedWorkView();
+    const { history } = renderWorkspace(`/portal/projects/${firstProjectId}`);
     await screen.findByRole("heading", { level: 1, name: "Project One" });
     const filter = screen.getByLabelText("Filter work items");
     // Every keystroke updates the URL search. A search-only update is not a route
@@ -524,7 +528,8 @@ describe("readable work views", () => {
 
   it("focuses the content heading on a genuine route change", async () => {
     const user = userEvent.setup();
-    const { history } = renderWorkspace(`/portal/projects/${firstProjectId}`, workReadFetcher({ detail: subjectDetail() }));
+    seedWorkView();
+    const { history } = renderWorkspace(`/portal/projects/${firstProjectId}`);
     const list = await screen.findByRole("list", { name: "Work items" });
     // The route change into the work detail still moves focus to its heading.
     await user.click(within(list).getByRole("link", { name: subjectTitle }));
@@ -535,7 +540,8 @@ describe("readable work views", () => {
 
   it("returns focus to the filter input after Clear filters removes its own button", async () => {
     const user = userEvent.setup();
-    const { history } = renderWorkspace(`/portal/projects/${firstProjectId}?q=nothing-matches`, workReadFetcher({ detail: subjectDetail() }));
+    seedWorkView();
+    const { history } = renderWorkspace(`/portal/projects/${firstProjectId}?q=nothing-matches`);
     await screen.findByRole("heading", { level: 1, name: "Project One" });
     expect(screen.getByRole("heading", { name: "No matching work items" })).toBeVisible();
     const filter = screen.getByLabelText("Filter work items");
@@ -551,7 +557,8 @@ describe("readable work views", () => {
 
   it("clears filters without dropping the selected view", async () => {
     const user = userEvent.setup();
-    const { history } = renderWorkspace(`/portal/projects/${firstProjectId}?view=board&q=nothing-matches`, workReadFetcher({ detail: subjectDetail() }));
+    seedWorkView();
+    const { history } = renderWorkspace(`/portal/projects/${firstProjectId}?view=board&q=nothing-matches`);
     await screen.findByRole("heading", { level: 1, name: "Project One" });
     expect(screen.getByRole("heading", { name: "No matching work items" })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Clear filters" }));
@@ -571,7 +578,8 @@ describe("readable work views", () => {
       scope: window.location.origin,
       projects: { [firstProjectId]: [{ name: "Blocked only", search: { blocked: "1" } }] },
     }));
-    renderWorkspace(`/portal/projects/${firstProjectId}?blocked=1`, workReadFetcher({ detail: subjectDetail() }));
+    seedWorkView();
+    renderWorkspace(`/portal/projects/${firstProjectId}?blocked=1`);
     await screen.findByRole("heading", { level: 1, name: "Project One" });
     const savedViews = screen.getByLabelText("Saved views");
     expect(savedViews).toHaveValue("Blocked only");
@@ -587,7 +595,8 @@ describe("readable work views", () => {
   it("keeps keyboard focus on the board card when a refresh moves it to another column", async () => {
     const user = userEvent.setup();
     let subjectStatus = "ready";
-    const { application } = renderWorkspace(`/portal/projects/${firstProjectId}?view=board`, movableSubjectFetcher(() => subjectStatus));
+    serveMovableSubject(() => subjectStatus);
+    const { application } = renderWorkspace(`/portal/projects/${firstProjectId}?view=board`);
     const board = await screen.findByRole("region", { name: "Work board" });
     const card = within(board).getByRole("link", { name: subjectTitle });
     const siblingCard = within(board).getByRole("link", { name: siblingTitle });
@@ -617,7 +626,8 @@ describe("readable work views", () => {
   it("does not move focus to a moved card while the operator is in the work filter", async () => {
     const user = userEvent.setup();
     let subjectStatus = "ready";
-    const { application } = renderWorkspace(`/portal/projects/${firstProjectId}?view=board`, movableSubjectFetcher(() => subjectStatus));
+    serveMovableSubject(() => subjectStatus);
+    const { application } = renderWorkspace(`/portal/projects/${firstProjectId}?view=board`);
     const board = await screen.findByRole("region", { name: "Work board" });
     within(board).getByRole("link", { name: subjectTitle }).focus();
     // The operator's focus left the card for the filter before the refresh landed:
@@ -633,19 +643,19 @@ describe("readable work views", () => {
 
   it("renders a row's object result summary as its JSON text and marks a task-less row unreported", async () => {
     const user = userEvent.setup();
-    const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => {
-      const requestPath = input instanceof Request ? input.url : String(input);
-      if (requestPath.endsWith("/session")) return Promise.resolve(new Response(sessionBody("session-token")));
-      if (requestPath.includes("/portal/api/work-items/")) {
-        return Promise.resolve(new Response(JSON.stringify(readWorkDetail({
-          id: subjectId,
-          projectId: firstProjectId,
-          title: subjectTitle,
-          outcomeSummary: { message: "legacy structured summary" },
-        }))));
-      }
-      const projectId = new URL(requestPath, "http://localhost").searchParams.get("project_id");
-      return Promise.resolve(new Response(JSON.stringify({
+    portal.seed({
+      session: { csrfToken: "session-token", socketToken: "test-socket-token" },
+      details: { [subjectId]: readWorkDetail({
+        id: subjectId,
+        projectId: firstProjectId,
+        title: subjectTitle,
+        outcomeSummary: { message: "legacy structured summary" },
+      }) },
+    });
+    portal.serve((request) => {
+      if (request.url.pathname !== "/portal/api/workspace") return undefined;
+      const projectId = request.url.searchParams.get("project_id");
+      return jsonResponse({
         selected_project_id: null,
         projects: [{
           id: firstProjectId,
@@ -659,9 +669,9 @@ describe("readable work views", () => {
           ] : [],
         }],
         health: { status: "unknown" },
-      })));
+      });
     });
-    renderWorkspace(`/portal/projects/${firstProjectId}`, fetcher);
+    renderWorkspace(`/portal/projects/${firstProjectId}`);
     const list = await screen.findByRole("list", { name: "Work items" });
     const reportedRow = within(list).getByRole("link", { name: subjectTitle });
     expect(within(reportedRow).getByText("Acceptance not recorded")).toBeVisible();
@@ -678,9 +688,8 @@ describe("readable work views", () => {
   });
 
   it("counts an unrecognised structured outcome value as reported output, not as an absence", async () => {
-    renderWorkspace(`/portal/work/${subjectId}`, workReadFetcher({
-      detail: readWorkDetail({ id: subjectId, projectId: firstProjectId, title: subjectTitle, outcomeTests: { passed: 12, failed: 0 } }),
-    }));
+    seedWorkView({ detail: readWorkDetail({ id: subjectId, projectId: firstProjectId, title: subjectTitle, outcomeTests: { passed: 12, failed: 0 } }) });
+    renderWorkspace(`/portal/work/${subjectId}`);
     const detail = await screen.findByRole("dialog", { name: subjectTitle });
     expect(within(detail).getByText('{"passed":12,"failed":0}')).toBeVisible();
     expect(within(detail).queryByText("No reported execution output")).not.toBeInTheDocument();
@@ -708,17 +717,12 @@ describe("readable work views", () => {
           delivery: { pull_request: emptyDelivery, ci: passedDelivery, review: emptyDelivery } },
       ],
     };
-    const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => {
-      const requestPath = input instanceof Request ? input.url : String(input);
-      if (requestPath.endsWith("/session")) return Promise.resolve(new Response(sessionBody("session-token")));
-      if (requestPath.includes("/portal/api/work-items/")) {
-        return Promise.resolve(new Response(requestPath.endsWith("/timeline")
-          ? JSON.stringify({ items: [], next_before: null })
-          : JSON.stringify(readWorkDetail({ id: subjectId, projectId: firstProjectId, title: subjectTitle }))));
-      }
-      return Promise.resolve(new Response(JSON.stringify({ selected_project_id: project.id, projects: [project], health: { status: "unknown" } })));
+    portal.seed({
+      session: { csrfToken: "session-token", socketToken: "test-socket-token" },
+      workspace: { selectedProjectId: project.id, projects: [project] },
+      details: { [subjectId]: readWorkDetail({ id: subjectId, projectId: firstProjectId, title: subjectTitle }) },
     });
-    renderWorkspace(`/portal/projects/${firstProjectId}`, fetcher);
+    renderWorkspace(`/portal/projects/${firstProjectId}`);
     const list = await screen.findByRole("list", { name: "Work items" });
     // The tone, not a fixed class or a swapped stylesheet pair, decides the chip:
     // a confirmed fresh provider CI is green and a bound offline resource is not.
@@ -739,45 +743,45 @@ describe("execution history boundaries", () => {
     data: { transition_id: timelineItemId, state: "failed", payload: { reason: "older entry" } },
   };
 
-  /**
-   * Counts detail reads and answers the timeline boundary the current cursor
-   * names: the first served boundary is refused as aged out, and the refreshed
-   * detail serves the next one.
-   */
-  function historyFetcher(reads: { details: number; timelineBefore: string[] }) {
-    return vi.fn<typeof fetch>().mockImplementation((input) => {
-      const requestPath = input instanceof Request ? input.url : String(input);
-      if (requestPath.endsWith("/session")) return Promise.resolve(new Response(sessionBody("session-token")));
-      if (requestPath.includes("/portal/api/work-items/")) {
-        const url = new URL(requestPath, "http://localhost");
-        if (url.pathname.endsWith("/timeline")) {
-          const before = url.searchParams.get("before");
-          reads.timelineBefore.push(before ?? "");
-          return Promise.resolve(before === "cursor-1"
-            ? new Response("{}", { status: 400 })
-            : new Response(JSON.stringify({ items: [olderEntry], next_before: null })));
-        }
-        reads.details += 1;
-        return Promise.resolve(new Response(JSON.stringify(readWorkDetail({
-          id: subjectId,
-          projectId: firstProjectId,
-          title: subjectTitle,
-          nextBefore: reads.details === 1 ? "cursor-1" : "cursor-2",
-        }))));
+  function serveHistoryReads(
+    reads: { details: number; timelineBefore: string[] },
+    timeline: (before: string | null) => Response,
+    detail: (read: number) => Record<string, unknown>,
+  ): void {
+    portal.seed({ session: { csrfToken: "session-token", socketToken: "test-socket-token" } });
+    portal.serve((request) => {
+      if (request.url.pathname === `/portal/api/work-items/${subjectId}/timeline`) {
+        const before = request.url.searchParams.get("before");
+        reads.timelineBefore.push(before ?? "");
+        return timeline(before);
       }
-      const projectId = new URL(requestPath, "http://localhost").searchParams.get("project_id");
-      return Promise.resolve(new Response(JSON.stringify({
+      if (request.url.pathname === `/portal/api/work-items/${subjectId}`) {
+        reads.details += 1;
+        return jsonResponse(detail(reads.details));
+      }
+      if (request.url.pathname !== "/portal/api/workspace") return undefined;
+      const projectId = request.url.searchParams.get("project_id");
+      return jsonResponse({
         selected_project_id: null,
         projects: workViewProjects.map((project) => ({ ...project, work_items: project.id === projectId ? project.work_items : [] })),
         health: { status: "unknown" },
-      })));
+      });
     });
+  }
+
+  function serveAgedOutHistory(reads: { details: number; timelineBefore: string[] }) {
+    serveHistoryReads(
+      reads,
+      (before) => before === "cursor-1" ? new Response("{}", { status: 400 }) : jsonResponse({ items: [olderEntry], next_before: null }),
+      (read) => readWorkDetail({ id: subjectId, projectId: firstProjectId, title: subjectTitle, nextBefore: read === 1 ? "cursor-1" : "cursor-2" }),
+    );
   }
 
   it("re-reads the served boundary when the timeline cursor has aged out", async () => {
     const user = userEvent.setup();
     const reads = { details: 0, timelineBefore: [] as string[] };
-    renderWorkspace(`/portal/work/${subjectId}`, historyFetcher(reads));
+    serveAgedOutHistory(reads);
+    renderWorkspace(`/portal/work/${subjectId}`);
     await screen.findByRole("heading", { level: 1, name: subjectTitle });
 
     await user.click(screen.getByRole("button", { name: "Load older history" }));
@@ -794,7 +798,8 @@ describe("execution history boundaries", () => {
   it("loads older history behind the refreshed detail boundary instead of the stale one", async () => {
     const user = userEvent.setup();
     const reads = { details: 0, timelineBefore: [] as string[] };
-    const { application } = renderWorkspace(`/portal/work/${subjectId}`, historyFetcher(reads));
+    serveAgedOutHistory(reads);
+    const { application } = renderWorkspace(`/portal/work/${subjectId}`);
     await screen.findByRole("heading", { level: 1, name: subjectTitle });
 
     await act(async () => { await application.queryClient.refetchQueries({ queryKey: ["work-item", { workItemId: subjectId }], exact: true }); });
@@ -817,32 +822,18 @@ describe("execution history boundaries", () => {
       recorded_at: "2026-03-01T10:00:00Z",
       data: { transition_id: "77777777-7777-4777-8777-777777777777", state: "running", payload: { reason: "newest entry" } },
     };
-    const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => {
-      const requestPath = input instanceof Request ? input.url : String(input);
-      if (requestPath.endsWith("/session")) return Promise.resolve(new Response(sessionBody("session-token")));
-      if (requestPath.includes("/portal/api/work-items/")) {
-        const url = new URL(requestPath, "http://localhost");
-        if (url.pathname.endsWith("/timeline")) {
-          reads.timelineBefore.push(url.searchParams.get("before") ?? "");
-          return Promise.resolve(new Response(JSON.stringify({ items: [olderEntry], next_before: null })));
-        }
-        reads.details += 1;
-        return Promise.resolve(new Response(JSON.stringify(readWorkDetail({
-          id: subjectId,
-          projectId: firstProjectId,
-          title: subjectTitle,
-          timeline: [boundaryEntry],
-          nextBefore: reads.details === 1 ? "cursor-1" : "cursor-2",
-        }))));
-      }
-      const projectId = new URL(requestPath, "http://localhost").searchParams.get("project_id");
-      return Promise.resolve(new Response(JSON.stringify({
-        selected_project_id: null,
-        projects: workViewProjects.map((project) => ({ ...project, work_items: project.id === projectId ? project.work_items : [] })),
-        health: { status: "unknown" },
-      })));
-    });
-    const { application } = renderWorkspace(`/portal/work/${subjectId}`, fetcher);
+    serveHistoryReads(
+      reads,
+      () => jsonResponse({ items: [olderEntry], next_before: null }),
+      (read) => readWorkDetail({
+        id: subjectId,
+        projectId: firstProjectId,
+        title: subjectTitle,
+        timeline: [boundaryEntry],
+        nextBefore: read === 1 ? "cursor-1" : "cursor-2",
+      }),
+    );
+    const { application } = renderWorkspace(`/portal/work/${subjectId}`);
     await screen.findByRole("heading", { level: 1, name: subjectTitle });
 
     await user.click(screen.getByRole("button", { name: "Load older history" }));
@@ -880,32 +871,18 @@ describe("execution history boundaries", () => {
       recorded_at: "2026-03-01T11:00:00Z",
       data: { transition_id: "88888888-8888-4888-8888-888888888888", state: "running", payload: { reason: "later entry" } },
     };
-    const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => {
-      const requestPath = input instanceof Request ? input.url : String(input);
-      if (requestPath.endsWith("/session")) return Promise.resolve(new Response(sessionBody("session-token")));
-      if (requestPath.includes("/portal/api/work-items/")) {
-        const url = new URL(requestPath, "http://localhost");
-        if (url.pathname.endsWith("/timeline")) {
-          reads.timelineBefore.push(url.searchParams.get("before") ?? "");
-          return Promise.resolve(new Response(JSON.stringify({ items: [olderEntry], next_before: null })));
-        }
-        reads.details += 1;
-        return Promise.resolve(new Response(JSON.stringify(readWorkDetail({
-          id: subjectId,
-          projectId: firstProjectId,
-          title: subjectTitle,
-          timeline: [reads.details === 1 ? servedBoundary : refreshedBoundary],
-          nextBefore: reads.details === 1 ? "cursor-1" : "cursor-2",
-        }))));
-      }
-      const projectId = new URL(requestPath, "http://localhost").searchParams.get("project_id");
-      return Promise.resolve(new Response(JSON.stringify({
-        selected_project_id: null,
-        projects: workViewProjects.map((project) => ({ ...project, work_items: project.id === projectId ? project.work_items : [] })),
-        health: { status: "unknown" },
-      })));
-    });
-    const { application } = renderWorkspace(`/portal/work/${subjectId}`, fetcher);
+    serveHistoryReads(
+      reads,
+      () => jsonResponse({ items: [olderEntry], next_before: null }),
+      (read) => readWorkDetail({
+        id: subjectId,
+        projectId: firstProjectId,
+        title: subjectTitle,
+        timeline: [read === 1 ? servedBoundary : refreshedBoundary],
+        nextBefore: read === 1 ? "cursor-1" : "cursor-2",
+      }),
+    );
+    const { application } = renderWorkspace(`/portal/work/${subjectId}`);
     await screen.findByRole("heading", { level: 1, name: subjectTitle });
 
     await user.click(screen.getByRole("button", { name: "Load older history" }));
@@ -927,35 +904,14 @@ describe("execution history boundaries", () => {
   it("does not paginate a loaded older page against a superseded detail boundary", async () => {
     const user = userEvent.setup();
     const reads = { details: 0, timelineBefore: [] as string[] };
-    const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => {
-      const requestPath = input instanceof Request ? input.url : String(input);
-      if (requestPath.endsWith("/session")) return Promise.resolve(new Response(sessionBody("session-token")));
-      if (requestPath.includes("/portal/api/work-items/")) {
-        const url = new URL(requestPath, "http://localhost");
-        if (url.pathname.endsWith("/timeline")) {
-          const before = url.searchParams.get("before");
-          reads.timelineBefore.push(before ?? "");
-          // The first boundary has a second page; the refreshed boundary is the
-          // only valid continuation once the detail re-renders.
-          if (before === "cursor-1") return Promise.resolve(new Response(JSON.stringify({ items: [olderEntry], next_before: "cursor-1b" })));
-          return Promise.resolve(new Response(JSON.stringify({ items: [{ ...olderEntry, data: { ...olderEntry.data, payload: { reason: "refreshed entry" } } }], next_before: null })));
-        }
-        reads.details += 1;
-        return Promise.resolve(new Response(JSON.stringify(readWorkDetail({
-          id: subjectId,
-          projectId: firstProjectId,
-          title: subjectTitle,
-          nextBefore: reads.details === 1 ? "cursor-1" : "cursor-2",
-        }))));
-      }
-      const projectId = new URL(requestPath, "http://localhost").searchParams.get("project_id");
-      return Promise.resolve(new Response(JSON.stringify({
-        selected_project_id: null,
-        projects: workViewProjects.map((project) => ({ ...project, work_items: project.id === projectId ? project.work_items : [] })),
-        health: { status: "unknown" },
-      })));
-    });
-    const { application } = renderWorkspace(`/portal/work/${subjectId}`, fetcher);
+    serveHistoryReads(
+      reads,
+      (before) => before === "cursor-1"
+        ? jsonResponse({ items: [olderEntry], next_before: "cursor-1b" })
+        : jsonResponse({ items: [{ ...olderEntry, data: { ...olderEntry.data, payload: { reason: "refreshed entry" } } }], next_before: null }),
+      (read) => readWorkDetail({ id: subjectId, projectId: firstProjectId, title: subjectTitle, nextBefore: read === 1 ? "cursor-1" : "cursor-2" }),
+    );
+    const { application } = renderWorkspace(`/portal/work/${subjectId}`);
     await screen.findByRole("heading", { level: 1, name: subjectTitle });
 
     await user.click(screen.getByRole("button", { name: "Load older history" }));
@@ -972,31 +928,12 @@ describe("execution history boundaries", () => {
   it("re-renders the cached older pages when the detail is reopened inside the freshness window", async () => {
     const user = userEvent.setup();
     const reads = { details: 0, timelineBefore: [] as string[] };
-    const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => {
-      const requestPath = input instanceof Request ? input.url : String(input);
-      if (requestPath.endsWith("/session")) return Promise.resolve(new Response(sessionBody("session-token")));
-      if (requestPath.includes("/portal/api/work-items/")) {
-        const url = new URL(requestPath, "http://localhost");
-        if (url.pathname.endsWith("/timeline")) {
-          reads.timelineBefore.push(url.searchParams.get("before") ?? "");
-          return Promise.resolve(new Response(JSON.stringify({ items: [olderEntry], next_before: null })));
-        }
-        reads.details += 1;
-        return Promise.resolve(new Response(JSON.stringify(readWorkDetail({
-          id: subjectId,
-          projectId: firstProjectId,
-          title: subjectTitle,
-          nextBefore: "cursor-1",
-        }))));
-      }
-      const projectId = new URL(requestPath, "http://localhost").searchParams.get("project_id");
-      return Promise.resolve(new Response(JSON.stringify({
-        selected_project_id: null,
-        projects: workViewProjects.map((project) => ({ ...project, work_items: project.id === projectId ? project.work_items : [] })),
-        health: { status: "unknown" },
-      })));
-    });
-    renderWorkspace(`/portal/work/${subjectId}`, fetcher);
+    serveHistoryReads(
+      reads,
+      () => jsonResponse({ items: [olderEntry], next_before: null }),
+      () => readWorkDetail({ id: subjectId, projectId: firstProjectId, title: subjectTitle, nextBefore: "cursor-1" }),
+    );
+    renderWorkspace(`/portal/work/${subjectId}`);
     await screen.findByRole("heading", { level: 1, name: subjectTitle });
 
     await user.click(screen.getByRole("button", { name: "Load older history" }));
@@ -1018,27 +955,10 @@ describe("execution history boundaries", () => {
 });
 
 describe("chat route", () => {
-  const chatFetcher = () => vi.fn<typeof fetch>().mockImplementation((input) => {
-    const requestPath = input instanceof Request ? input.url : String(input);
-    const url = new URL(requestPath, "http://localhost");
-    if (url.pathname === "/portal/api/session") return Promise.resolve(new Response('{"csrf_token":"session-token"}'));
-    if (url.pathname === "/portal/api/chat") {
-      const scope = url.searchParams.get("scope");
-      return Promise.resolve(new Response(JSON.stringify({
-        scope,
-        project_id: scope === "project" ? url.searchParams.get("project_id") : null,
-        run_id: scope === "run" ? url.searchParams.get("run_id") : null,
-        messages: [],
-        runs: [],
-        next_before: null,
-      })));
-    }
-    return Promise.resolve(new Response(JSON.stringify({ selected_project_id: firstProjectId, projects })));
-  });
-
   it("subscribes /chat and carries the shell's project scope in its navigation", async () => {
     const user = userEvent.setup();
-    const { history } = renderWorkspace(`/portal/chat?scope=workspace&projectId=${firstProjectId}`, chatFetcher());
+    portal.seed({ session: { csrfToken: "session-token", socketToken: null }, workspace: { selectedProjectId: firstProjectId, projects } });
+    const { history } = renderWorkspace(`/portal/chat?scope=workspace&projectId=${firstProjectId}`);
     expect(await screen.findByRole("heading", { level: 1, name: "Chat" })).toBeVisible();
     await screen.findByText("Workspace conversation");
     // The scope member and the project travel with the route, so the shell's
@@ -1120,7 +1040,8 @@ class ScriptedTransport {
 describe("workspace socket lifetime", () => {
   it("releases the invalidation client it started when the shell unmounts", async () => {
     const socket = scriptedSocket();
-    const { application, unmount } = renderWorkspace("/portal/attention", servedFetcher(), { socketFactory: () => socket.socket });
+    seedProjectsWorkspace();
+    const { application, unmount } = renderWorkspace("/portal/attention", { socketFactory: () => socket.socket });
     await waitFor(() => { expect(socket.connects()).toBe(1); });
     expect(application.realtime.status()).toBe("connecting");
     unmount();
@@ -1140,7 +1061,8 @@ describe("workspace socket lifetime", () => {
       params: {},
       transport: ScriptedTransport,
     } as PhoenixSocketOptions);
-    const { unmount } = renderWorkspace("/portal/attention", servedFetcher(), { socketFactory });
+    seedProjectsWorkspace();
+    const { unmount } = renderWorkspace("/portal/attention", { socketFactory });
     await waitFor(() => { expect(ScriptedTransport.instances).toHaveLength(1); });
     expect(ScriptedTransport.instances[0]?.url).toBe(`ws://${window.location.host}/portal/socket/websocket?vsn=2.0.0`);
     // A refused connect arms the client's retry (10 ms out); the workspace is torn
@@ -1153,20 +1075,9 @@ describe("workspace socket lifetime", () => {
   });
 
   it("starts the polling fallback when the session serves no socket token", async () => {
-    // A partial bootstrap serves the CSRF token but no socket_token: the shell
-    // must still connect the invalidation client — its empty-token branch reports
-    // `disconnected` and starts the polling fallback — so a visible client keeps
-    // refreshing its reads, and no socket is ever opened.
-    const served = servedFetcher();
-    const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => {
-      const url = new URL(input instanceof Request ? input.url : String(input), "http://localhost");
-      if (url.pathname === "/portal/api/session") {
-        return Promise.resolve(new Response(JSON.stringify({ csrf_token: "session-token" })));
-      }
-      return served(input);
-    });
     const socketFactory = vi.fn(() => scriptedSocket().socket);
-    const { application, unmount } = renderWorkspace("/portal/attention", fetcher, {
+    seedProjectsWorkspace(null);
+    const { application, unmount } = renderWorkspace("/portal/attention", {
       socketFactory,
       pollIntervalMs: 20,
       visibility: () => true,
@@ -1251,32 +1162,22 @@ describe("channel-join read epoch", () => {
     const socket = joiningSocket();
     let runPosted = false;
     let detailReads = 0;
-    const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => {
-      const url = new URL(input instanceof Request ? input.url : String(input), "http://localhost");
-      if (url.pathname === "/portal/api/session") {
-        return Promise.resolve(new Response(JSON.stringify({ csrf_token: "session-token", socket_token: "test-socket-token" })));
-      }
-      if (url.pathname === `/portal/api/work-items/${subjectId}`) {
-        detailReads += 1;
-        // The served document is fixed while the read is answered, so the case can
-        // state which read saw which state.
-        return Promise.resolve(new Response(JSON.stringify(runPosted ? runDetail() : preRunDetail())));
-      }
-      if (url.pathname === "/portal/api/workspace") {
-        return Promise.resolve(new Response(JSON.stringify({
-          selected_project_id: firstProjectId,
-          projects: [{ id: firstProjectId, key: "ONE", name: "Project One", description: null, status: "active", resources: [], work_items: [] }],
-          health: { status: "unknown" },
-          runtimes: [],
-          registered_runtimes: [],
-        })));
-      }
-      return Promise.resolve(new Response("{}", { status: 404 }));
+    portal.seed({
+      session: { csrfToken: "session-token", socketToken: "test-socket-token" },
+      workspace: {
+        selectedProjectId: firstProjectId,
+        projects: [{ id: firstProjectId, key: "ONE", name: "Project One", description: null, status: "active", resources: [], work_items: [] }],
+        runtimes: [],
+        registeredRuntimes: [],
+        health: { status: "unknown" },
+      },
     });
-    // The fallback cadence is out of this case's reach: the read observed below can
-    // only be the one the completed join issues, never a poll tick. The fallback's
-    // own stop-when-connected guarantee is `realtime.test.ts`'s.
-    const { unmount } = renderWorkspace(`/portal/work/${subjectId}`, fetcher, { socketFactory: () => socket.socket, pollIntervalMs: 60_000 });
+    portal.serve((request) => {
+      if (request.url.pathname !== `/portal/api/work-items/${subjectId}`) return undefined;
+      detailReads += 1;
+      return jsonResponse(runPosted ? runDetail() : preRunDetail());
+    });
+    const { unmount } = renderWorkspace(`/portal/work/${subjectId}`, { socketFactory: () => socket.socket, pollIntervalMs: 60_000 });
     try {
       await screen.findByText("No execution recorded");
       const preRunReads = detailReads;

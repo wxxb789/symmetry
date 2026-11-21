@@ -1,7 +1,8 @@
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { recordingFetcher, renderRoute, trackApplications } from "../../app/test-harness";
+import { jsonResponse, portal, type PortalRequest } from "../../app/portal-double";
+import { renderRoute, trackApplications } from "../../app/test-harness";
 import { readWorkDetail } from "../../services/api.fixtures";
 
 /**
@@ -39,17 +40,6 @@ const siblingProjectResources = [
   { id: siblingResourceId, project_id: otherProjectId, kind: "repository", name: "sibling-repo", external_ref: "acme/sibling", status: "healthy", sync_status: "synced" },
 ];
 
-function workspaceBody(requested: string | null) {
-  return {
-    selected_project_id: requested,
-    projects: [
-      { id: projectId, key: "ONE", name: "Project One", description: null, status: "active", default_agent_profile: "codex-default", default_workspace: "primary", resources: itemProjectResources, work_items: [] },
-      { id: otherProjectId, key: "TWO", name: "Project Two", description: null, status: "active", resources: siblingProjectResources, work_items: [] },
-    ],
-    health: { status: "unknown" },
-  };
-}
-
 /** A real detail envelope whose work item carries the served assignment fields. */
 function detailBody(workItemId: string, overrides: Record<string, unknown> = {}, execution?: Record<string, unknown>) {
   const envelope = readWorkDetail({
@@ -73,25 +63,13 @@ function detailBody(workItemId: string, overrides: Record<string, unknown> = {},
   };
 }
 
-interface RequestRecord {
-  method: string;
-  path: string;
-  body: unknown;
-}
-
-/** One recorded call in the log shape above: origin dropped, JSON body parsed. */
-function requestRecord(call: { path: string; init: RequestInit | undefined }): RequestRecord {
-  const url = new URL(call.path, "http://localhost");
-  const method = call.init?.method ?? "GET";
-  const body: unknown = typeof call.init?.body === "string" ? JSON.parse(call.init.body) : undefined;
-  return { method, path: url.pathname + url.search, body };
-}
-
 interface HarnessOptions {
   desktop?: boolean;
-  detail?: (workItemId: string) => Record<string, unknown>;
-  workspace?: (requested: string | null) => Response | Promise<Response>;
-  patch?: (body: unknown) => Response | Promise<Response>;
+  details?: Record<string, Record<string, unknown>>;
+  /** The workspace read: an answer, or `undefined` to fall through to the seed. */
+  workspace?: () => Response | undefined | Promise<Response | undefined>;
+  /** The assignment write: the answer, a refusal, or a transport failure. */
+  patch?: (body: Record<string, unknown> | null) => Response | Promise<Response>;
 }
 
 const applications = trackApplications();
@@ -110,41 +88,49 @@ function stubMatchMedia(desktop: boolean) {
   });
 }
 
+function countReads(method: string, matches: (request: PortalRequest) => boolean) {
+  return portal.requests.filter((request) => request.method === method && matches(request)).length;
+}
+
 function renderWorkDetail(options: HarnessOptions = {}) {
   stubMatchMedia(options.desktop ?? false);
-  const { fetcher, calls } = recordingFetcher((path, init) => {
-    const url = new URL(path, "http://localhost");
-    const method = init?.method ?? "GET";
-    const body: unknown = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
-    if (url.pathname === "/portal/api/session") return new Response(JSON.stringify({ csrf_token: "session-token" }));
-    if (url.pathname.startsWith("/portal/api/work-items/")) {
-      if (url.pathname.endsWith("/timeline")) return new Response(JSON.stringify({ items: [], next_before: null }));
-      const workItemId = decodeURIComponent(url.pathname.slice("/portal/api/work-items/".length));
-      if (method === "PATCH") {
-        const respond = options.patch ?? (() => new Response(JSON.stringify({ work_item: { id: workItemId, version: subjectVersion + 1 } })));
-        return respond(body);
-      }
-      return new Response(JSON.stringify((options.detail ?? detailBody)(workItemId)));
-    }
-    if (url.pathname === "/portal/api/workspace") {
-      const requested = url.searchParams.get("project_id");
-      const respond = options.workspace ?? ((scope: string | null) => new Response(JSON.stringify(workspaceBody(scope))));
-      return respond(requested);
-    }
-    return new Response("{}", { status: 404 });
+  portal.seed({
+    workspace: {
+      selectedProjectId: projectId,
+      projects: [
+        { id: projectId, key: "ONE", name: "Project One", description: null, status: "active", default_agent_profile: "codex-default", default_workspace: "primary", resources: itemProjectResources, work_items: [] },
+        { id: otherProjectId, key: "TWO", name: "Project Two", description: null, status: "active", resources: siblingProjectResources, work_items: [] },
+      ],
+      health: { status: "unknown" },
+    },
+    details: {
+      [subjectId]: detailBody(subjectId),
+      [siblingItemId]: detailBody(siblingItemId),
+      ...options.details,
+    },
   });
-  const { application, history } = renderRoute(`/portal/work/${subjectId}`, fetcher);
+  portal.serve((request) => {
+    if (request.method === "PATCH" && request.url.pathname.startsWith("/portal/api/work-items/")) {
+      if (options.patch === undefined) {
+        const workItemId = decodeURIComponent(request.url.pathname.slice("/portal/api/work-items/".length));
+        return jsonResponse({ work_item: { id: workItemId, version: subjectVersion + 1 } });
+      }
+      return options.patch(request.body);
+    }
+    if (options.workspace !== undefined && request.method === "GET" && request.url.pathname === "/portal/api/workspace") {
+      return options.workspace();
+    }
+    return undefined;
+  });
+  const { application, history } = renderRoute(`/portal/work/${subjectId}`);
   applications.push(application);
-  const countReads = (method: string, matches: (request: RequestRecord) => boolean) =>
-    calls.map(requestRecord).filter((request) => request.method === method && matches(request)).length;
   return {
     application,
     history,
-    get requests(): RequestRecord[] { return calls.map(requestRecord); },
-    detailReads: (workItemId: string) => countReads("GET", (request) => request.path === `/portal/api/work-items/${workItemId}`),
+    detailReads: (workItemId: string) => countReads("GET", (request) => request.url.pathname === `/portal/api/work-items/${workItemId}`),
     projectReads: (requested: string | null) =>
-      countReads("GET", (request) => request.path.startsWith("/portal/api/workspace") && new URL(request.path, "http://localhost").searchParams.get("project_id") === requested),
-    patches: () => calls.map(requestRecord).filter((request) => request.method === "PATCH"),
+      countReads("GET", (request) => request.url.pathname === "/portal/api/workspace" && request.url.searchParams.get("project_id") === requested),
+    patches: () => portal.requests.filter((request) => request.method === "PATCH"),
   };
 }
 
@@ -236,7 +222,7 @@ describe("work assignment", () => {
 
   it("disables the editor while the served execution holds the item's intent", async () => {
     const user = userEvent.setup();
-    renderWorkDetail({ detail: (workItemId) => detailBody(workItemId, {}, { intent_locked: true }) });
+    renderWorkDetail({ details: { [subjectId]: detailBody(subjectId, {}, { intent_locked: true }) } });
     await screen.findByRole("heading", { level: 1, name: "Subject work item" });
     expect(screen.getByText(/holds this item's intent/)).toBeVisible();
     const edit = screen.getByRole("button", { name: "Edit assignment" });
@@ -247,8 +233,7 @@ describe("work assignment", () => {
 
   it("returns focus to the Assignment heading when a pending write disables the opener", async () => {
     const user = userEvent.setup();
-    let locked = false;
-    const harness = renderWorkDetail({ detail: () => detailBody(subjectId, {}, { intent_locked: locked }) });
+    const harness = renderWorkDetail();
     await screen.findByRole("heading", { level: 1, name: "Subject work item" });
     // The opener is captured before the dialog opens: Radix hides the rest of
     // the page from assistive queries while its modal content is mounted.
@@ -258,7 +243,7 @@ describe("work assignment", () => {
     expect(opener).toBeEnabled();
     // A background detail re-read flips `intent_locked` while the dialog is
     // open, which disables the invoking control underneath it.
-    locked = true;
+    portal.state.details[subjectId] = detailBody(subjectId, {}, { intent_locked: true });
     const readsBefore = harness.detailReads(subjectId);
     await act(async () => {
       await harness.application.queryClient.invalidateQueries({ queryKey: ["work-item", { workItemId: subjectId }] });
@@ -276,7 +261,7 @@ describe("work assignment", () => {
   it("renders the server's refusal code and re-reads the detail", async () => {
     const user = userEvent.setup();
     const harness = renderWorkDetail({
-      patch: () => new Response(JSON.stringify({ error: { code: "provider_owned", message: "title is authoritative in the external provider" } }), { status: 409 }),
+      patch: () => jsonResponse({ error: { code: "provider_owned", message: "title is authoritative in the external provider" } }, 409),
     });
     const dialog = await openAssignmentEditor(user);
     const detailsBefore = harness.detailReads(subjectId);
@@ -292,9 +277,7 @@ describe("work assignment", () => {
     const user = userEvent.setup();
     const deferred = Promise.withResolvers<Response>();
     const harness = renderWorkDetail({
-      detail: (workItemId) => workItemId === siblingItemId
-        ? detailBody(siblingItemId, { assignee: { type: "human", name: "Grace", agent_profile: null } })
-        : detailBody(subjectId),
+      details: { [siblingItemId]: detailBody(siblingItemId, { assignee: { type: "human", name: "Grace", agent_profile: null } }) },
       patch: () => deferred.promise,
     });
     const subjectDialog = await openAssignmentEditor(user);
@@ -310,7 +293,7 @@ describe("work assignment", () => {
     const siblingDialog = await screen.findByRole("dialog", { name: "Assignment" });
     expect(within(siblingDialog).getByLabelText("Owner")).toHaveValue("Grace");
     expect(within(siblingDialog).getByLabelText("Repository")).toHaveValue("");
-    deferred.resolve(new Response(JSON.stringify({ work_item: { id: subjectId, version: subjectVersion + 1 } })));
+    deferred.resolve(jsonResponse({ work_item: { id: subjectId, version: subjectVersion + 1 } }));
     // The continuation still re-reads the project the option sets came from…
     await waitFor(() => { expect(harness.projectReads(projectId)).toBeGreaterThan(projectsBefore); });
     // …but it cannot close, mark or rewrite the sibling's editor.
@@ -324,7 +307,7 @@ describe("work assignment", () => {
     const user = userEvent.setup();
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const harness = renderWorkDetail({
-      workspace: () => new Response(JSON.stringify({ error: { code: "forbidden", message: "connection is not authorized" } }), { status: 403 }),
+      workspace: () => jsonResponse({ error: { code: "forbidden", message: "connection is not authorized" } }, 403),
     });
     // The served facts stay rendered from the detail read even though the project
     // read failed: the failure is only about the option sets.
@@ -352,9 +335,9 @@ describe("work assignment", () => {
     const user = userEvent.setup();
     const gate = Promise.withResolvers<void>();
     renderWorkDetail({
-      workspace: async (scope) => {
+      workspace: async () => {
         await gate.promise;
-        return new Response(JSON.stringify(workspaceBody(scope)));
+        return undefined;
       },
     });
     await screen.findByRole("heading", { level: 1, name: "Subject work item" });
@@ -373,7 +356,7 @@ describe("work assignment", () => {
 
   it("renders the served assignment facts in the desktop drawer", async () => {
     const user = userEvent.setup();
-    renderWorkDetail({ desktop: true, detail: (workItemId) => detailBody(workItemId, { repository: "acme/symmetry" }) });
+    renderWorkDetail({ desktop: true, details: { [subjectId]: detailBody(subjectId, { repository: "acme/symmetry" }) } });
     const drawer = await screen.findByRole("dialog", { name: "Subject work item" });
     expect(within(drawer).getByRole("heading", { name: "Assignment" })).toBeVisible();
     // The served facts name this item's own binding; the Outcome section above

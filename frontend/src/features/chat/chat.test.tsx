@@ -1,10 +1,10 @@
-import { QueryClientProvider } from "@tanstack/react-query";
-import { createMemoryHistory, RouterProvider, type RouterHistory } from "@tanstack/react-router";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { chatConversationOptions, createApplication, type Application } from "../../app/application";
-import { createAppRouter } from "../../app/router";
+import { HttpResponse } from "msw";
+import { describe, expect, it } from "vitest";
+import { chatConversationOptions } from "../../app/application";
+import { jsonResponse, portal } from "../../app/portal-double";
+import { renderRoute, trackApplications } from "../../app/test-harness";
 import { readWorkDetail, readWorkItem } from "../../services/api.fixtures";
 import { asRecord } from "../../services/served";
 
@@ -164,58 +164,35 @@ function workspaceBody(options: { execution?: Record<string, unknown>; runtimes?
   };
 }
 
-interface RecordedRequest {
-  method: string;
-  path: string;
-  headers: Record<string, string>;
-  body: Record<string, unknown> | undefined;
-}
-
 interface HarnessOptions {
-  /** The conversation read. */
   conversation?: (url: URL) => Response | Promise<Response>;
-  /** The message POST; `postIndex` starts at 1. */
   message?: (body: Record<string, unknown>, postIndex: number) => Response | Promise<Response>;
   workspace?: () => Record<string, unknown>;
 }
 
-const applications: Application[] = [];
-afterEach(() => {
-  for (const application of applications) application.queryClient.clear();
-  applications.length = 0;
-});
+const applications = trackApplications();
 
 function renderChat(path: string, options: HarnessOptions = {}) {
-  const requests: RecordedRequest[] = [];
   let messagePosts = 0;
-  const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
-    const url = new URL(input instanceof Request ? input.url : String(input), "http://localhost");
-    const method = init?.method ?? "GET";
-    const body = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : undefined;
-    requests.push({ method, path: url.pathname + url.search, headers: (init?.headers ?? {}) as Record<string, string>, body });
-    if (url.pathname === "/portal/api/session") return new Response(JSON.stringify({ csrf_token: "session-token" }));
-    if (url.pathname === "/portal/api/workspace") return new Response(JSON.stringify((options.workspace ?? workspaceBody)()));
-    if (url.pathname === "/portal/api/chat") {
-      const respond = options.conversation ?? (() => new Response(JSON.stringify(conversationBody({ scope: "workspace" }))));
-      return await respond(url);
+  portal.serve((request) => {
+    if (request.method === "GET" && request.url.pathname === "/portal/api/workspace") {
+      return jsonResponse((options.workspace ?? workspaceBody)());
     }
-    if (url.pathname === "/portal/api/chat/messages") {
+    if (request.method === "GET" && request.url.pathname === "/portal/api/chat") {
+      return options.conversation?.(request.url);
+    }
+    if (request.method === "POST" && request.url.pathname === "/portal/api/chat/messages") {
       messagePosts += 1;
-      const respond = options.message ?? (() => new Response("{}", { status: 500 }));
-      return await respond(body ?? {}, messagePosts);
+      return options.message?.(request.body ?? {}, messagePosts);
     }
-    return new Response("{}", { status: 404 });
+    return undefined;
   });
-  const application = createApplication({ fetcher, location: { href: `http://localhost${path}`, replace: vi.fn() } });
+  const { application, history } = renderRoute(path);
   applications.push(application);
-  const history: RouterHistory = createMemoryHistory({ initialEntries: [path] });
-  const router = createAppRouter(application, history);
-  render(<QueryClientProvider client={application.queryClient}><RouterProvider router={router} /></QueryClientProvider>);
   return {
     application,
     history,
-    requests,
-    posts: () => requests.filter((request) => request.method === "POST"),
+    posts: () => portal.requests.filter((request) => request.method === "POST"),
   };
 }
 
@@ -386,12 +363,12 @@ describe("per-scope state", () => {
 
   it("leaves another scope's draft and selection alone when one scope refreshes", async () => {
     const user = userEvent.setup();
-    const { requests } = renderChat(`/portal/chat?scope=workspace&projectId=${projectId}`, {
+    renderChat(`/portal/chat?scope=workspace&projectId=${projectId}`, {
       conversation: (url) => new Response(JSON.stringify(url.searchParams.get("scope") === "project"
         ? conversationBody({ scope: "project", projectId })
         : conversationBody({ scope: "workspace", messages: [message(1, { content: "workspace history" })] }))),
     });
-    const projectReads = () => requests.filter((request) => request.path.startsWith("/portal/api/chat?") && request.path.includes("scope=project")).length;
+    const projectReads = () => portal.requests.filter((request) => request.path.startsWith("/portal/api/chat?") && request.path.includes("scope=project")).length;
     await openChat();
     await screen.findByText("workspace history");
     await user.selectOptions(intentSelect(), "status");
@@ -419,7 +396,7 @@ describe("sending", () => {
       conversation: () => new Response(JSON.stringify(conversationBody({ scope: "project", projectId, messages: served }))),
       message: (body) => {
         bodies.push(body);
-        if (bodies.length === 1) throw new TypeError("offline");
+        if (bodies.length === 1) return HttpResponse.error();
         served.push(message(3, { content: String(body.content) }), message(4, { role: "assistant", content: "reply" }));
         return new Response(JSON.stringify({ message: message(3), reply: message(4), work_item_id: null, command: null }), { status: 200 });
       },
@@ -444,13 +421,13 @@ describe("sending", () => {
   it("reuses the frozen action identity when an in-flight edit is reverted before the retry", async () => {
     const user = userEvent.setup();
     const bodies: Record<string, unknown>[] = [];
-    const held = Promise.withResolvers<Response>();
+    const held = Promise.withResolvers<void>();
     renderChat(`/portal/chat?scope=project&projectId=${projectId}`, {
       conversation: () => new Response(JSON.stringify(conversationBody({ scope: "project", projectId }))),
       message: (body) => {
         bodies.push(body);
         return bodies.length === 1
-          ? held.promise
+          ? held.promise.then(() => HttpResponse.error())
           : new Response(JSON.stringify({ message: message(3), reply: message(4, { role: "assistant" }), work_item_id: null, command: null }), { status: 200 });
       },
     });
@@ -467,7 +444,7 @@ describe("sending", () => {
     await user.clear(contentField());
     await user.type(contentField(), "uncertain question");
 
-    held.reject(new TypeError("offline"));
+    held.resolve();
     await screen.findByText(/Send not confirmed/);
     expect(contentField()).toHaveValue("uncertain question");
 
@@ -485,7 +462,7 @@ describe("sending", () => {
       conversation: () => new Response(JSON.stringify(conversationBody({ scope: "project", projectId }))),
       message: (body) => {
         bodies.push(body);
-        if (bodies.length === 1) throw new TypeError("offline");
+        if (bodies.length === 1) return HttpResponse.error();
         return new Response(JSON.stringify({ message: message(3), reply: message(4, { role: "assistant" }), work_item_id: null, command: null }), { status: 200 });
       },
     });
@@ -593,7 +570,7 @@ describe("sending", () => {
   it("settles a scope's pane on its own offset after a switch, even while the pane clamped it", async () => {
     const user = userEvent.setup();
     const release = Promise.withResolvers<void>();
-    const { application, requests } = renderChat(`/portal/chat?scope=workspace&projectId=${projectId}`, {
+    const { application } = renderChat(`/portal/chat?scope=workspace&projectId=${projectId}`, {
       conversation: (url) => url.searchParams.get("scope") === "project"
         // Held, and re-served as a fresh response on every project read.
         ? release.promise.then(() => new Response(JSON.stringify(conversationBody({ scope: "project", projectId, messages: [message(2, { content: "project history" })] }))))
@@ -631,7 +608,7 @@ describe("sending", () => {
     await screen.findByText("project history");
     fireEvent.scroll(node, { target: { scrollTop: 120 } });
     await user.selectOptions(scopeSelect(), "workspace");
-    await waitFor(() => { expect(requests.filter((request) => request.path.includes("scope=workspace")).length).toBeGreaterThan(1); });
+    await waitFor(() => { expect(portal.requests.filter((request) => request.path.includes("scope=workspace")).length).toBeGreaterThan(1); });
     expect(node.scrollTop).toBe(40);
     await act(async () => {
       await application.queryClient.invalidateQueries({ queryKey: ["chat"] });
@@ -754,7 +731,7 @@ describe("sending", () => {
   });
 
   it("keeps the composer focused with its caret selection across a background refresh", async () => {
-    const { application, requests } = renderChat(`/portal/chat?scope=workspace&projectId=${projectId}`, {
+    const { application } = renderChat(`/portal/chat?scope=workspace&projectId=${projectId}`, {
       conversation: () => new Response(JSON.stringify(conversationBody({ scope: "workspace", messages: [message(1, { content: "history" })] }))),
     });
     await openChat();
@@ -762,13 +739,13 @@ describe("sending", () => {
     fireEvent.change(contentField(), { target: { value: "keep editing during refresh" } });
     contentField().focus();
     contentField().setSelectionRange(5, 12);
-    const before = requests.filter((request) => request.path.startsWith("/portal/api/chat?")).length;
+    const before = portal.requests.filter((request) => request.path.startsWith("/portal/api/chat?")).length;
     await act(async () => {
       await application.queryClient.refetchQueries({ queryKey: ["chat"] });
     });
     // The refresh must actually have re-read the conversation: the DOM
     // assertions below would also hold with no request at all.
-    await waitFor(() => { expect(requests.filter((request) => request.path.startsWith("/portal/api/chat?")).length).toBeGreaterThan(before); });
+    await waitFor(() => { expect(portal.requests.filter((request) => request.path.startsWith("/portal/api/chat?")).length).toBeGreaterThan(before); });
     expect(contentField()).toHaveFocus();
     expect(contentField()).toHaveValue("keep editing during refresh");
     expect([contentField().selectionStart, contentField().selectionEnd]).toEqual([5, 12]);
@@ -1944,7 +1921,7 @@ describe("run scope", () => {
       workspace: () => workspaceBody({ execution: { run_id: runId, generation: 3, state: "waiting_for_input", runtime_id: runtimeId, can_guide: false, can_pause: false }, runtimes: [] }),
       message: (body) => {
         bodies.push(body);
-        throw new TypeError("offline");
+        return HttpResponse.error();
       },
     });
     await openChat();

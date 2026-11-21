@@ -15,7 +15,7 @@ import servedGoalRead from "../../../contracts/fixtures/valid/goal-read.active.j
  */
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
-interface ReadWorkItemOptions {
+export interface ReadWorkItemOptions {
   id: string;
   projectId: string;
   title: string;
@@ -32,7 +32,7 @@ interface ReadWorkItemOptions {
   delivery?: Record<string, unknown>;
 }
 
-interface ReadWorkDetailOptions extends ReadWorkItemOptions {
+export interface ReadWorkDetailOptions extends ReadWorkItemOptions {
   nextBefore?: string | null;
   timeline?: unknown[];
   /** Served outcome summary (open JSON); null by default. */
@@ -119,7 +119,7 @@ export function readWorkDetail(options: ReadWorkDetailOptions): Record<string, u
   };
 }
 
-interface ReadAttentionOptions {
+export interface ReadAttentionOptions {
   selectedProjectId: string | null;
   blocked?: { projectId: string; projectName?: string | null; projectKey?: string | null; workItemId: string; key?: string; title: string; status?: string; blocker?: string | null }[];
   goals?: { goalId: string; projectId: string; title: string; state?: string; currentRevision?: number; blockerReasons?: string[]; attentionReasons?: string[]; activeTasks?: number; nonterminalTasks?: number; readyToAchieve?: boolean }[];

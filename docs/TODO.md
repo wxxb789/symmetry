@@ -1283,3 +1283,15 @@ instead of appended.
       inversion plus `decision.lock_version`, consuming the new
       `SymmetryControl.Workspaces.WorkItemEligibility` for the chat override. The served chat
       document is unchanged by rf-a4.
+
+## Frontend test double: the WebSocket interception trap (rf-w4-11)
+
+- [ ] A suite that seeds a `socket_token` in the shared portal double (`frontend/src/app/portal-double.ts`)
+      makes the shell's invalidation client open a real socket, which MSW's node server intercepts as an
+      unhandled **WebSocket** frame: under `listen({ onUnhandledFrame: "error" })` every incidental connect
+      prints an `intercepted a WebSocket connection without a matching event handler` block and can leak the
+      app's token-refresh reads into the next case. `frontend/src/app/router.test.tsx` solves it locally by
+      passing an inert `socketFactory` to `createApplication` by default (`renderWorkspace`). If a later
+      suite needs a token without exercising the socket, do the same, or extend the double's listen options
+      so WebSocket frames stay quiet while HTTP paths keep failing loudly (the contract's mechanism). The
+      second half is out of rf-w4-11's owned set.
