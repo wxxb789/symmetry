@@ -6,9 +6,18 @@
 // are produced by the server.
 import { allowBrowserError, expect, test } from "./fixtures.mjs";
 import { readGoalContextSnapshot } from "./goal-context-fixtures.mjs";
-import { capture } from "./readable-fixtures.mjs";
+import {
+  acceptanceContract,
+  api,
+  authorityPolicy,
+  capture,
+  contextManifest,
+  createProject,
+  executionPolicy,
+  login,
+  planProposal
+} from "./readable-fixtures.mjs";
 
-const operatorToken = process.env.SYMMETRY_OPERATOR_TOKEN || "development-operator-token";
 // A second release instance started with Goal rollout off. Without it the
 // rollout-off case is explicitly skipped, never passed on the primary instance.
 const goalsOffUrl = process.env.SYMMETRY_GOALS_OFF_URL;
@@ -22,79 +31,24 @@ if (process.env.SYMMETRY_RENDER_GATE_REQUIRED === "1" && !goalsOffUrl) {
   );
 }
 
-async function login(page, path = "/portal/attention", base = "") {
-  await page.goto(`${base}/portal/login?return_to=${encodeURIComponent(path)}`);
-  await page.getByLabel("Operator token").fill(operatorToken);
-  await page.getByRole("button", { name: "Open workspace" }).click();
-  await expect(page.getByRole("button", { name: "Refresh", exact: true })).toBeVisible();
-}
-
-async function api(page, method, path, body) {
-  return page.evaluate(async ({ method, path, body }) => {
-    const csrf = document.querySelector('meta[name="csrf-token"]')?.content;
-    const response = await fetch(path, {
-      method,
-      credentials: "same-origin",
-      headers: { "content-type": "application/json", "x-csrf-token": csrf },
-      body: body === undefined ? undefined : JSON.stringify(body)
-    });
-    return { status: response.status, body: await response.json().catch(() => null) };
-  }, { method, path, body });
-}
-
-const acceptance = () => ({
-  schema_version: "symmetry.acceptance.v1",
-  description: "Operator verifies the goal workspace boundary.",
-  predicates: [{ id: "operator", kind: "operator_acceptance" }]
-});
-
-const authorityPolicy = () => ({
-  operator_required_for_scope_change: true,
-  operator_required_for_completion: true,
-  publication_allowed: false,
-  allowed_actions: []
-});
-
-const executionPolicy = () => ({
-  automatic_execution: false,
-  max_parallel_tasks: 1,
-  max_task_admissions: 4,
-  max_run_attempts_per_task: 2,
-  budget_limit_microusd: null,
-  per_run_cost_limit_microusd: null,
-  budget_mode: "soft",
-  hard_cost_limit_required: false,
-  allowed_runtime_ids: [],
-  allowed_model_profiles: [],
-  final_acceptance: "operator",
-  allowed_actions: [],
-  allowed_resource_ids: []
-});
-
-const contextManifest = () => ({ byte_budget: 32768, required_source_kinds: ["repository"], include_advisory_recall: false });
-
-async function createProject(page, suffix, { blocked = false } = {}) {
+// This suite's fixture identity over the shared payload builders: the frozen
+// acceptance description, and a project preset that mints the `H`-prefixed key
+// and names the codex/primary bindings the Goal cases run against. Every
+// mechanic — the project POST and its 201 assertion, the optional blocked work
+// item — lives in the shared `createProject`; this preserves only the identity
+// the suite's own assertions render (`Goal workspace <key>`, `Blocked work <key>`).
+const acceptanceDescription = "Operator verifies the goal workspace boundary.";
+const goalProject = (page, suffix, { blocked = false } = {}) => {
   const key = `H${Date.now().toString(36).slice(-5)}${suffix}`.toUpperCase().slice(0, 8);
-  const response = await api(page, "POST", "/portal/api/projects", {
+  return createProject(page, {
     key,
     name: `Goal workspace ${key}`,
     description: "Real Phoenix fixture",
-    default_agent_profile: "codex",
-    default_workspace: "primary"
+    defaultAgentProfile: "codex",
+    defaultWorkspace: "primary",
+    blocked
   });
-  expect(response.status).toBe(201);
-  const projectId = response.body.project.id;
-  if (blocked) {
-    const work = await api(page, "POST", `/portal/api/projects/${projectId}/work-items`, {
-      title: `Blocked work ${key}`,
-      status: "ready",
-      blocked: true,
-      blocker: "Operator review required"
-    });
-    expect(work.status).toBe(201);
-  }
-  return { id: projectId, key, name: `Goal workspace ${key}` };
-}
+};
 
 async function attachRepository(page, projectId) {
   const response = await api(page, "POST", `/portal/api/projects/${projectId}/resources`, {
@@ -133,7 +87,7 @@ async function createGoal(page, project, title) {
     initial_revision: {
       objective: `Expose ${title} through the portal goal surface.`,
       non_goals: [],
-      acceptance_contract: acceptance(),
+      acceptance_contract: acceptanceContract(acceptanceDescription),
       authority_policy: authorityPolicy(),
       execution_policy: executionPolicy(),
       context_manifest: contextManifest(),
@@ -153,28 +107,7 @@ async function createGoal(page, project, title) {
 async function createGoalWithPlan(page, project, repositoryId, title) {
   const goalId = await createGoal(page, project, title);
 
-  const proposal = {
-    schema_version: "symmetry.plan.v1",
-    proposal_id: crypto.randomUUID(),
-    goal_id: goalId,
-    expected_revision: 1,
-    items: [{
-      key: "implement",
-      title: `Implement ${title}`,
-      description: "Bounded goal work",
-      required: true,
-      integration: true,
-      repository_resource_id: repositoryId,
-      acceptance: acceptance(),
-      depends_on_keys: [],
-      model_profile: "codex",
-      change_target: null,
-      baseline: {
-        kind: "subject",
-        subject: { resource_id: repositoryId, commit: "a".repeat(40), tree_digest: `sha256:${"b".repeat(64)}` }
-      }
-    }]
-  };
+  const proposal = planProposal({ goalId, title, repositoryId, acceptanceDescription });
 
   const decision = await goalCommand(page, goalId, "request_decision", {
     kind: "plan",
@@ -191,7 +124,7 @@ async function createGoalWithPlan(page, project, repositoryId, title) {
 test.describe("Goal attention workspace", () => {
   test("attention merges Goal attention with the project blockers from real reads", async ({ page }, testInfo) => {
     await login(page);
-    const project = await createProject(page, "A", { blocked: true });
+    const project = await goalProject(page, "A", { blocked: true });
 
     const empty = await api(page, "GET", `/portal/api/attention?project_id=${project.id}`);
     expect(empty.status).toBe(200);
@@ -219,7 +152,7 @@ test.describe("Goal attention workspace", () => {
 
   test("plan approval, activation, pause, resume and amendment run through the delegated commands with server versions", async ({ page }, testInfo) => {
     await login(page);
-    const project = await createProject(page, "B");
+    const project = await goalProject(page, "B");
     const repositoryId = await attachRepository(page, project.id);
     const { goalId, proposalJson } = await createGoalWithPlan(page, project, repositoryId, "Lifecycle goal");
 
@@ -281,7 +214,7 @@ test.describe("Goal attention workspace", () => {
   test("a stale version is refused with the server's current state and the surface never overwrites", async ({ page }, testInfo) => {
     allowBrowserError(page, /status of 409|status of 422/);
     await login(page);
-    const project = await createProject(page, "C");
+    const project = await goalProject(page, "C");
     const repositoryId = await attachRepository(page, project.id);
     const { goalId } = await createGoalWithPlan(page, project, repositoryId, "Stale conflict goal");
 
@@ -325,7 +258,7 @@ test.describe("Goal attention workspace", () => {
   test("mutation replay returns the stored receipt for the same mutation identity", async ({ page }) => {
     allowBrowserError(page, /status of 409/);
     await login(page);
-    const project = await createProject(page, "D");
+    const project = await goalProject(page, "D");
     const repositoryId = await attachRepository(page, project.id);
     const { goalId } = await createGoalWithPlan(page, project, repositoryId, "Replay goal");
 
@@ -342,7 +275,7 @@ test.describe("Goal attention workspace", () => {
         revision_contract: {
           objective: "Replayed amendment objective",
           non_goals: [],
-          acceptance_contract: acceptance(),
+          acceptance_contract: acceptanceContract(acceptanceDescription),
           authority_policy: authorityPolicy(),
           execution_policy: executionPolicy(),
           context_manifest: contextManifest()
@@ -371,7 +304,7 @@ test.describe("Goal attention workspace", () => {
   test("the dependency projection renders read-only; the receipts render the served oldest page in sequence order", async ({ page }, testInfo) => {
     allowBrowserError(page, /status of 409/);
     await login(page);
-    const project = await createProject(page, "E");
+    const project = await goalProject(page, "E");
     const repositoryId = await attachRepository(page, project.id);
     const { goalId } = await createGoalWithPlan(page, project, repositoryId, "Projection goal");
 
@@ -435,7 +368,7 @@ test.describe("Goal attention workspace", () => {
   test("the Goal context read serves the owning goal's snapshot; a foreign goal's snapshot and a credential-less request are refused", async ({ page }) => {
     allowBrowserError(page, /status of 404|status of 401/);
     await login(page);
-    const project = await createProject(page, "F");
+    const project = await goalProject(page, "F");
     const repositoryId = await attachRepository(page, project.id);
 
     // A draft Goal admitted through the accepted `request_plan` command: the
@@ -483,7 +416,7 @@ test.describe("Goal attention workspace", () => {
 
   test("the Goal surfaces recover from a disconnected read and refresh the accumulated state", async ({ page }, testInfo) => {
     await login(page);
-    const project = await createProject(page, "G");
+    const project = await goalProject(page, "G");
     const repositoryId = await attachRepository(page, project.id);
     const { goalId, proposalJson } = await createGoalWithPlan(page, project, repositoryId, "Recovery goal");
 
@@ -509,8 +442,8 @@ test.describe("Goal attention workspace", () => {
 
   test("with Goal rollout off a present Goal still serves its real attention entry", async ({ page }, testInfo) => {
     test.skip(!goalsOffUrl, "SYMMETRY_GOALS_OFF_URL is not set: a rollout-off release instance is required, so this case is skipped, not passed.");
-    await login(page, "/portal/attention", goalsOffUrl);
-    const project = await createProject(page, "J", { blocked: true });
+    await login(page, "/portal/attention", { base: goalsOffUrl });
+    const project = await goalProject(page, "J", { blocked: true });
 
     // Creation is an ordinary accepted command on this instance; the
     // admission refusal below and the read are what this case binds.
@@ -521,7 +454,7 @@ test.describe("Goal attention workspace", () => {
       initial_revision: {
         objective: "Serve the attention read while Goal admission is disabled.",
         non_goals: [],
-        acceptance_contract: acceptance(),
+        acceptance_contract: acceptanceContract(acceptanceDescription),
         authority_policy: authorityPolicy(),
         execution_policy: executionPolicy(),
         context_manifest: contextManifest(),
@@ -570,7 +503,7 @@ test.describe("Goal attention workspace", () => {
 
   test("the attention list is keyboard reachable and the Goal surface hands focus back", async ({ page }, testInfo) => {
     await login(page);
-    const project = await createProject(page, "K");
+    const project = await goalProject(page, "K");
     const repositoryId = await attachRepository(page, project.id);
     const { goalId } = await createGoalWithPlan(page, project, repositoryId, "Keyboard goal");
 
