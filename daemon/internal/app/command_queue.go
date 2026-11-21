@@ -137,19 +137,18 @@ func (queue *commandQueue) current(queued *queuedCommand) bool {
 	return queue.byKey[queued.key] == queued
 }
 
-// finish completes the entry currently registered for key, if any. Completion
-// closes the entry's done channel once, marks it completed, and evicts it
-// unless a durable acknowledgement is still pending delivery (receipt true)
-// that has not been delivered yet.
+// finish completes the entry registered for key. When registered is non-nil it
+// must be that exact entry: a released run may have re-enqueued the same key with
+// a new entry, and completing the new entry from a stale caller would settle a
+// live command. A nil registered means "the entry key currently maps to" and is
+// the deferred-completion path.
 //
-// Completion is by key, so a caller that holds a specific entry checks current
-// before calling finish: a released run may have re-enqueued the same key with
-// a new entry, and completing the re-enqueued one from a stale pointer would
-// settle a live command. finishQueuedCommand composes that check; the deferred
-// path calls finish directly because it has no instance to compare.
-func (queue *commandQueue) finish(key commandKey, receipt bool) {
+// Completion closes the entry's done channel once, marks it completed, and
+// evicts it unless a durable acknowledgement is still pending delivery
+// (receipt true) that has not been delivered yet.
+func (queue *commandQueue) finish(key commandKey, registered *queuedCommand, receipt bool) {
 	current := queue.byKey[key]
-	if current == nil {
+	if current == nil || (registered != nil && current != registered) {
 		return
 	}
 	if !current.completed {

@@ -68,11 +68,10 @@ evidence record.
 3. **`daemon/internal/app/commands.go`** — the queue methods' bodies are replaced by queue calls:
    `enqueueCommandLocked` (gate stays: `CommandID`/`commandWake`/`backgroundStop` are daemon lifecycle state),
    `nextQueuedCommand`, `nextLaneCommand`, `dispatchQueuedCommand` (membership check → `current`, lane block →
-   `lane`), `executeQueuedCommand` (membership check → `current`), `finishQueuedCommand` (`current(queued)`
-   guard + `finish(queued.key, receipt)`), `finishDeferredCommand` (`finish(key, receipt)`),
-   `enqueueSnapshotCommandsForRequest` (tombstone read/delete → `receipts`), `beginCommandRequest`,
-   `finishCommandRequest`; `finishQueuedCommandLocked` is deleted (its identity guard is the instance
-   caller's `current` check, its body is `commandQueue.finish`).
+   `lane`), `executeQueuedCommand` (membership check → `current`), `finishQueuedCommand`,
+   `finishDeferredCommand`, `enqueueSnapshotCommandsForRequest` (tombstone read/delete → `receipts`),
+   `beginCommandRequest`, `finishCommandRequest`; `finishQueuedCommandLocked` is deleted (its body is
+   `commandQueue.finish`).
 4. **`daemon/internal/app/outbox.go`** — `markCommandAcknowledgementDelivered` calls
    `daemon.commands.receipts.suppress(key)` before and `daemon.commands.markDelivered(key)` after the journal
    write; lock sites unchanged.
@@ -103,7 +102,7 @@ evidence record.
 | `lane(key, queued) bool` | append to the run's lane; `true` = the caller must start the lane's drain goroutine | `dispatchQueuedCommand` |
 | `nextInLane(key) (*queuedCommand, bool)` | pop the run lane's head; drop the drained lane | `nextLaneCommand` |
 | `current(queued) bool` | is `queued` still the entry registered for its key | `dispatchQueuedCommand`, `executeQueuedCommand` |
-| `finish(key, receipt)` | complete whatever entry `key` currently maps to; a caller holding a specific entry (`finishQueuedCommand`) checks `current(queued)` first; receipt rule below | `finishQueuedCommand`, `finishDeferredCommand` |
+| `finish(key, registered, receipt)` | complete the registered entry (nil `registered` = whatever `key` maps to, the deferred path); receipt rule below | `finishQueuedCommand`, `finishDeferredCommand` |
 | `dropRun(key)` | release every entry of a run (close waiters, evict) | `releaseRun`, `clearCompletedCommandReceipts` |
 | `markDelivered(key)` | record a delivered receipt; evict a completed entry | `markCommandAcknowledgementDelivered` |
 
@@ -131,8 +130,8 @@ block; the delivered mark (`queuedCommand.delivered`) is queue state, not receip
 holds `commandReceiptMu` across a journal write is the terminal-acknowledgement persistence loop
 (outbox.go:210-241), which never touches this bookkeeping. A suppression window is ordered against
 acknowledgement delivery by that mutex, not by queue flow, so the receipt bookkeeping stays a sibling value
-type. Counting the operations the daemon actually needs (12: arrival put/pop, lane put/pop, membership,
-complete-by-key, release-run, window open/close, tombstone read/write, delivered-evict) leaves 8
+type. Counting the operations the daemon actually needs (13: arrival put/pop, lane put/pop, membership,
+complete-instance, complete-by-key, release-run, window open/close, tombstone, delivered-evict) leaves 8
 queue-flow/guard/completion/release verbs. The split is *not* a budget artefact:
 the binding budget is at most 12 methods (arch-decision-2, superseding amendment 1's 11), and the delivered
 file counts exactly 12 (8 + 4), so one type with all 12 would also fit. Options considered: (a) 12 methods
@@ -188,11 +187,9 @@ window inside the same `startBackground` lifetime), no test or production path t
    the arrival FIFO and the lanes may still hold pointers to released entries — exactly as base. Such an entry
    fails `current`, so `dispatch` and `execute` drop it; that is the documented consistency contract of
    `dropRun` (base behavior, not fixed here).
-5. **Completion.** `finish` completes whatever entry `key` currently maps to and does nothing when the key
-   is absent. The identity guard stays with the instance callers: `finishQueuedCommand` checks
-   `current(queued)` before calling `finish(queued.key, receipt)`, so a stale pointer cannot settle an
-   entry a released run re-enqueued under the same key. Completion closes `done` once (`completed` guard),
-   marks the entry complete, and evicts it unless `receipt && !delivered`.
+5. **Completion.** `finish` acts only when the entry is still registered for its key (identity, not key
+   equality), closes `done` once (`completed` guard), marks it complete, and evicts unless
+   `receipt && !delivered`. Deferred completion resolves the entry the key currently maps to.
 6. **Receipts.** `markDelivered` marks the entry delivered and evicts it only when already completed;
    `suppress` tombstones a key in every live window (and tolerates a nil window set, as base);
    `suppressed` reads a window's set; `finish(window)` deletes it. Nothing else removes a window.
@@ -200,6 +197,21 @@ window inside the same `startBackground` lifetime), no test or production path t
    order; `commandReceiptMu` keeps its base sites and stays outer to `daemon.mu` where base had it that way.
    No goroutine, channel, `WaitGroup` or timer change.
 8. **Text.** No error string, log key or test name changes in any touched file.
+
+## Round-2 note (2026-11-21) — opus review 2 (N1, N2); review-1 finding F3 declined
+
+Review-1 finding F3 (replace `finish(key, registered, receipt)` with `finish(key, receipt)` and move the
+identity check into `finishQueuedCommand`) was applied in the fix round and then **declined** by the
+conductor (2026-11-21) under option (b): the identity check must stay inside the queue method so the
+module-level test guards the stale-pointer invariant — `finishQueuedCommand`'s check and the
+dispatch/execute callers' `current` checks run in different critical sections, and with the check moved
+out of `finish` the guard-removal mutant survived the whole package (review 2, G1). The delivered shape is
+the round-1 `finish(key, registered, receipt)`; the revert restored `finishQueuedCommand` /
+`finishDeferredCommand` to their round-1 bodies and the stale-pointer test to a call of the real queue
+method, with mutant M7 red again and G1 equivalent to M7 in the restored shape (evidence fix-round-3
+note). Review-2 finding N2 added `TestCommandQueueRepeatedFinishClosesDoneOnce`: a second, deferred
+completion of the same key closes `done` exactly once and evicts; mutant M12 (drop the `!current.completed`
+guard) is red.
 
 ## Evidence plan (all foreground; heavy suites serialized)
 
