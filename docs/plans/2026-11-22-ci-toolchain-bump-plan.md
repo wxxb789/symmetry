@@ -58,8 +58,11 @@ sites also pass `cache-dependency-path: daemon/go.sum`.
 | 16 | `.github/workflows/linux-native-v2-acceptance.yml:162` (contracts) | none | `@v7` |
 
 Twelve sites keep the input defaults `fetch-depth: 1`, `persist-credentials: true`; four set
-`persist-credentials: false` (1-3, 15). No site sets `ref`, `path`, `fetch-tags`, `lfs`,
-`sparse-checkout` or `submodules` (`git grep` over `.github/`: no hits).
+`persist-credentials: false` (1-3, 15). No checkout site sets `ref`, `fetch-tags`, `lfs`,
+`sparse-checkout` or `submodules` (`git grep -n -E '(ref|fetch-tags|lfs|sparse-checkout|submodules):'
+-- .github/workflows` → no hits). Every `path:` occurrence under `.github/workflows` belongs to a
+non-checkout step: artifact `path:` inputs, setup-go `cache-dependency-path:` values and the local
+`prepare-pi-release` `executable-path:`.
 
 ### `actions/setup-go@v5` → `@v7` — 8 sites (7 + 1)
 
@@ -100,7 +103,7 @@ bump stays at the major tag.
   `ci.yml:892`, `:942` and `:974` (the three coverage jobs' report uploads) are still
   `actions/upload-artifact@v4`, and `ci.yml:960` is `actions/setup-node@v4` beside
   `ci.yml:957` `pnpm/action-setup@v4`. Change 3 names three actions and clause 4 excludes other
-  actions, so none of these four sites is touched; they are the residual Node 20 deprecation surface
+  actions, so none of these five sites is touched; they are the residual Node 20 deprecation surface
   in these two files (see Risks).
 
 ## Breaking-change table (contract Change 3)
@@ -116,7 +119,7 @@ download sites.
 | Action | Major | Documented breaking change | This repo's usage |
 | --- | --- | --- | --- |
 | checkout | v5.0.0 | `runs.using` node20 → node24; runner ≥ 2.327.1 | Not affected in behaviour. `runs-on: ubuntu-latest` on GitHub-hosted runners is far past 2.327.1; the change removes node20 from these steps. |
-| checkout | v6.0.0 | `persist-credentials: true` (the default) now persists the token to a separate file inside the workspace instead of `.git/config` (PR #2286), which is what makes worktree support possible | Not affected. No step of either workflow, and no script they invoke, runs a git network command: `git grep -n -E 'git (fetch\|push\|clone\|ls-remote)' -- .github` → no hits, and the two hits under `scripts/` are a local `--no-hardlinks` clone into a sandbox fixture (`scripts/ci/linux-v2-native-acceptance.sh:796`) and an evaluation harness clone (`scripts/ci/model-routing-evaluation.py:3616`). Nothing reads `.git/config` for credentials. The four sites that set `persist-credentials: false` are unaffected by construction; the twelve default sites keep the token, in a new file location nothing depends on. |
+| checkout | v6.0.0 | `persist-credentials: true` (the default) now persists the token to a separate credentials config file under `$RUNNER_TEMP` (outside the workspace) instead of `.git/config` (PR #2286) | Not affected. No step of either workflow, and no script they invoke, runs a git network command: `git grep -n -E 'git (fetch\|push\|clone\|ls-remote)' -- .github` → no hits, and the two hits under `scripts/` are a local `--no-hardlinks` clone into a sandbox fixture (`scripts/ci/linux-v2-native-acceptance.sh:796`) and an evaluation harness clone (`scripts/ci/model-routing-evaluation.py:3616`). Nothing reads `.git/config` for credentials. The four sites that set `persist-credentials: false` are unaffected by construction; the twelve default sites keep the token, in a new file location nothing depends on. |
 | checkout | v6.0.1-v6.0.3 | worktree support for `persist-credentials` includeIf (#2327); tag handling fix for `fetch-tags` (#2356); SHA-256 repository init (#2439) | Not affected. No `fetch-tags` input (`git grep` → no hits); this repository is SHA-1. |
 | checkout | v7.0.0 | refuses to check out fork-PR code when the trigger is `pull_request_target` or `workflow_run` unless the new `allow-unsafe-pr-checkout: true` is set (PR #2454); module migrated to ESM; error wording | Not affected. The triggers in these two files are `pull_request`, `push` (main, tags), `workflow_dispatch` (and `workflow_dispatch` only in the acceptance workflow); no `pull_request_target`/`workflow_run` anywhere (`git grep` over `.github/workflows`). The new input stays unset (its default preserves the v4 behaviour for these triggers). |
 | checkout | v7.0.1 | skip the unsafe-PR check when its input is default (#2518); trim only ASCII whitespace for `branch` (#2521); escape `--unset` values (#2530) | Not affected: the guarded triggers are not used, and no site passes `ref`/`branch`. |
@@ -143,7 +146,7 @@ therefore produces a pure version-string diff.
 2. Nothing but the four pin families changes: no step key, `with:` key, `if:`, `needs:`, `env`,
    comment or blank line is added or removed. The judging diff is checkable hunk by hunk, and the
    pin gate below fails if any old value survives.
-3. The three workflows' *schedules* and triggers are untouched; the acceptance workflow stays
+3. Both workflows' *triggers* are untouched; the acceptance workflow stays
    `workflow_dispatch`-only.
 4. `docs/TODO.md` loses exactly the section `## CI Go toolchain: bump past the stdlib advisories` and
    its one entry; `docs/archive/CLOSED-TODO.md` gains that section at the end of the file plus a
@@ -160,7 +163,7 @@ Foreground, on the frozen tree, recorded with real exit codes:
 | 1 | `actionlint -shellcheck= -pyflakes= .github/workflows/ci.yml .github/workflows/linux-native-v2-acceptance.yml` (1.7.12, the version earlier slices used) | exit 0, no output |
 | 2 | `git grep -n -E 'go-version\|actions/(checkout\|setup-go\|download-artifact)@' -- .github/workflows` | only `1.27.4` / `@v7` / `@v7` / `@v8` values |
 | 3 | `git diff --check` | exit 0 |
-| 4 | host-path scan: the whole increment (`git diff HEAD` plus the untracked plan file) grepped for the profile-directory segment the program rule names (`<profile-segment>/`, as in `docs/plans/2026-11-21-rf-w3-01-classifier-extract-plan.md`) | empty |
+| 4 | host-path scan: the whole increment (`git diff HEAD` plus the untracked plan file) grepped for the profile-directory segment the program rule names (`<profile-segment>/`, as in `docs/plans/2026-11-22-rf-w3-01-classifier-extract-plan.md`) | empty |
 | 5 | `git diff origin/main -- .github/workflows` | every hunk is a value change in the four pin families |
 | 6 | advisory measurement, the same command the `daemon` job's advisory step runs, from `daemon/`: `GOOS=linux GOARCH=amd64 govulncheck ./...` with govulncheck v1.10.0, at go1.27.0 and at go1.27.4 | 12 vulnerabilities (`exit 3`) before, 0 (`exit 0`) after |
 | 7 | citation-existence gate over a dangling snapshot commit (`GIT_INDEX_FILE=<temp>`, `git read-tree HEAD` + `git add -A` + `git write-tree` + `git commit-tree`, so the gate reads this increment's bytes without touching the index or the tree): scoped run `--base HEAD --head <snapshot>` (audits the `docs/archive/CLOSED-TODO.md` this change modifies — the file is in the audited corpus) and the full-corpus run from the root commit | exit 0 both |
