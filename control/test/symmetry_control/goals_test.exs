@@ -2466,333 +2466,12 @@ defmodule SymmetryControl.GoalsTest do
   end
 
   test "terminal producer, validation evidence, accepted outcome, and achieve close the Goal loop" do
-    {goal, item, producer} =
-      admitted_task_fixture("primary", check_contract(), %{
-        execution_policy: %{"max_task_admissions" => 3}
-      })
+    setup = goal_loop_validation_setup()
 
-    producer_runtime = runtime_fixture(@validation_runtime_id)
+    accepted_outcome = goal_loop_accept_validation(setup)
+    decision_id = goal_loop_resolve_achieve_decisions(setup)
 
-    candidate_subject = candidate_subject(item_repository_resource_id(item))
-
-    {producer_run, _producer_fence} =
-      completed_goal_run_fixture(producer, producer_runtime, candidate_subject)
-
-    assert {:ok, %{"settlement" => "awaiting_validation"}} =
-             Goals.settle_task(producer.id, producer_run.id, 1, now: @now)
-
-    assert {:error, {:invalid_contract, _}} =
-             command_current(
-               goal.id,
-               "admit_task",
-               admission_payload(item, %{
-                 purpose: "validate",
-                 validation_of_task_id: producer.id,
-                 reserved_microusd: 0
-               })
-               |> Map.put(:subject, candidate_subject),
-               rollout_enabled: true
-             )
-
-    assert {:ok, validation_receipt, :created} =
-             command_current(
-               goal.id,
-               "admit_task",
-               admission_payload(item, %{
-                 purpose: "validate",
-                 validation_of_task_id: producer.id,
-                 reserved_microusd: 0
-               }),
-               rollout_enabled: true
-             )
-
-    validation = Repo.get!(Task, validation_receipt.response["task"]["id"])
-    assert validation.input["subject"] == candidate_subject
-    validation_runtime = runtime_fixture(@validation_runtime_id)
-
-    {validation_run, validation_fence} =
-      completed_goal_run_fixture(validation, validation_runtime)
-
-    evidence = evidence_attrs(validation_run.id, item, candidate_subject)
-
-    assert {:ok, %{evidence: stored_evidence}, :created} =
-             Goals.append_evidence(
-               validation_runtime.machine_id,
-               validation_run.id,
-               validation_fence,
-               evidence,
-               now: @now
-             )
-
-    assert stored_evidence.subject_hash == evidence.subject_hash
-
-    old_subject_evidence = evidence_attrs(validation_run.id, item)
-
-    assert {:error, :invalid_evidence_identity} =
-             Goals.append_evidence(
-               validation_runtime.machine_id,
-               validation_run.id,
-               validation_fence,
-               Map.put(old_subject_evidence, :evidence_key, "check:initial-subject"),
-               now: @now
-             )
-
-    delete_goal_wakeup_jobs(goal.id)
-
-    assert {:ok, %{"settlement" => "accepted", "reason" => "validation_passed"}} =
-             Goals.settle_task(validation.id, validation_run.id, 1, now: @now)
-
-    assert wakeup_job_count(goal.id) == 1
-
-    assert {:ok, %{evidence: ^stored_evidence}, :replayed} =
-             Goals.append_evidence(
-               validation_runtime.machine_id,
-               validation_run.id,
-               validation_fence,
-               evidence,
-               now: @now
-             )
-
-    assert {:error, :validation_evidence_closed} =
-             Goals.append_evidence(
-               validation_runtime.machine_id,
-               validation_run.id,
-               validation_fence,
-               evidence
-               |> Map.put(:evidence_id, Ecto.UUID.generate())
-               |> Map.put(:evidence_key, "check:late"),
-               now: @now
-             )
-
-    assert {:error, :already_accepted} =
-             command_current(
-               goal.id,
-               "admit_task",
-               admission_payload(item, %{
-                 purpose: "validate",
-                 validation_of_task_id: validation.id,
-                 reserved_microusd: 0
-               }),
-               rollout_enabled: true
-             )
-
-    subject_hash = String.replace_prefix(evidence.subject_hash, "sha256:", "")
-
-    [accepted_outcome] =
-      Repo.all(
-        from(outcome in SymmetryControl.Goals.WorkOutcome,
-          where:
-            outcome.goal_id == ^goal.id and outcome.work_item_id == ^item.id and
-              outcome.validation_task_id == ^validation.id and outcome.disposition == "accepted"
-        )
-      )
-
-    assert accepted_outcome.candidate_subject == candidate_subject
-    assert accepted_outcome.producing_result_id == producer_run.result["task_result"]["result_id"]
-
-    assert {:error, :outcome_derived} =
-             Goals.accept_outcome(goal.id, %{
-               work_item_id: item.id,
-               producing_task_id: producer.id,
-               producing_run_id: producer_run.id,
-               validation_task_id: validation.id,
-               subject_hash: subject_hash,
-               evidence_ids: [stored_evidence.id],
-               reason: "A validator outcome is derived during settlement."
-             })
-
-    pre_achieve = fetch_goal!(goal.id)
-
-    assert pre_achieve.completion.ready?
-    assert "achieve" in pre_achieve.allowed_actions
-    refute "final_acceptance_required" in pre_achieve.blocker_reasons
-
-    assert {:error, {:invalid_contract, _}} =
-             command_current(goal.id, "request_decision", %{
-               kind: "completion",
-               work_item_id: item.id,
-               subject_hash: evidence.subject_hash,
-               question: "Accept one work item?",
-               options: [
-                 %{
-                   "id" => "accept",
-                   "label" => "Accept",
-                   "consequence" => "Mark the Goal achieved"
-                 }
-               ]
-             })
-
-    assert {:ok, completion_request, :created} =
-             command_current(goal.id, "request_decision", %{
-               kind: "completion",
-               work_item_id: nil,
-               subject_hash: evidence.subject_hash,
-               proposal: nil
-             })
-
-    decision_id = completion_request.response["decision"]["id"]
-    decision_version = Repo.get!(SymmetryControl.Goals.GoalDecision, decision_id).lock_version
-
-    assert {:ok, _resolved, :created} =
-             command_current(goal.id, "resolve_decision", %{
-               decision_id: decision_id,
-               expected_decision_version: decision_version,
-               option_id: "accept"
-             })
-
-    weaker_evidence =
-      %SymmetryControl.Goals.RunEvidence{}
-      |> SymmetryControl.Goals.RunEvidence.changeset(%{
-        run_id: validation_run.id,
-        evidence_key: "check:weaker-profile",
-        kind: "check",
-        subject_hash: SymmetryControl.RequestHash.canonical(evidence.subject),
-        source_ref: Map.put(evidence.source_ref, "validator_profile", "weaker"),
-        source_revision: evidence.source_revision,
-        validator_profile: "weaker",
-        verdict: "passed",
-        payload: evidence.payload
-      })
-      |> Repo.insert!()
-
-    assert {:error, :missing_evidence} =
-             command_current(goal.id, "achieve", %{
-               subject: evidence.subject,
-               integration_work_item_id: item.id,
-               evidence_ids: [weaker_evidence.id],
-               decision_id: decision_id
-             })
-
-    assert {:ok, review_request, :created} =
-             command_current(goal.id, "request_decision", %{
-               kind: "review",
-               work_item_id: item.id,
-               subject_hash: evidence.subject_hash,
-               question: "Accept one WorkItem?",
-               options: [
-                 %{
-                   "id" => "accept",
-                   "label" => "Accept",
-                   "consequence" => "Accept the validated WorkItem"
-                 }
-               ]
-             })
-
-    review_decision_id = review_request.response["decision"]["id"]
-
-    assert {:ok, _resolved, :created} =
-             command_current(goal.id, "resolve_decision", %{
-               decision_id: review_decision_id,
-               expected_decision_version:
-                 Repo.get!(SymmetryControl.Goals.GoalDecision, review_decision_id).lock_version,
-               option_id: "accept"
-             })
-
-    assert {:error, :invalid_decision} =
-             command_current(goal.id, "achieve", %{
-               subject: evidence.subject,
-               integration_work_item_id: item.id,
-               evidence_ids: [stored_evidence.id],
-               decision_id: review_decision_id
-             })
-
-    assert {:error, :integration_outcome_required} =
-             command_current(goal.id, "achieve", %{
-               subject: evidence.subject,
-               integration_work_item_id: Ecto.UUID.generate(),
-               evidence_ids: [stored_evidence.id],
-               decision_id: decision_id
-             })
-
-    optional_dependency = optional_goal_work_item!(goal, item, "Optional prerequisite")
-    optional_follow_up = optional_goal_work_item!(goal, item, "Optional follow-up")
-
-    %SymmetryControl.Goals.WorkDependency{}
-    |> SymmetryControl.Goals.WorkDependency.changeset(%{
-      goal_id: goal.id,
-      work_item_id: optional_follow_up.id,
-      depends_on_id: optional_dependency.id
-    })
-    |> Repo.insert!()
-
-    assert {:ok, optional_admission, :created} =
-             command_current(
-               goal.id,
-               "admit_task",
-               admission_payload(optional_dependency),
-               rollout_enabled: true
-             )
-
-    optional_producer = Repo.get!(Task, optional_admission.response["task"]["id"])
-
-    {optional_run, _optional_fence} =
-      completed_goal_run_fixture(optional_producer, runtime_fixture(), candidate_subject)
-
-    insert_accepted_work_outcome!(goal, optional_dependency.id, optional_run, candidate_subject)
-
-    assert {:error, :integration_outcome_required} =
-             command_current(goal.id, "achieve", %{
-               subject: evidence.subject,
-               integration_work_item_id: optional_dependency.id,
-               evidence_ids: [stored_evidence.id],
-               decision_id: decision_id
-             })
-
-    achieve_payload = %{
-      subject: evidence.subject,
-      integration_work_item_id: item.id,
-      evidence_ids: [stored_evidence.id],
-      decision_id: decision_id
-    }
-
-    achieve_goal = fetch_goal!(goal.id)
-    achieve_command = goal_command(achieve_goal, "achieve", achieve_payload)
-
-    assert {:ok, achieved, :created} =
-             Goals.command(goal.id, achieve_command, "operator:test", now: @now)
-
-    assert achieved.goal.state == "achieved"
-
-    assert Repo.exists?(
-             from(outcome in SymmetryControl.Goals.WorkOutcome,
-               where: outcome.id == ^accepted_outcome.id
-             )
-           )
-
-    achieve_event_count =
-      Repo.aggregate(
-        from(event in SymmetryControl.Goals.GoalEvent,
-          where: event.goal_id == ^goal.id and event.kind == "achieve"
-        ),
-        :count
-      )
-
-    assert achieve_event_count == 1
-
-    assert {:ok, replayed, :replayed} =
-             Goals.command(goal.id, achieve_command, "operator:test", now: @now)
-
-    assert replayed == achieved
-
-    assert Repo.aggregate(
-             from(event in SymmetryControl.Goals.GoalEvent,
-               where: event.goal_id == ^goal.id and event.kind == "achieve"
-             ),
-             :count
-           ) == achieve_event_count
-
-    conflicting_achieve_command =
-      put_in(achieve_command, [:payload, :evidence_ids], [])
-
-    assert {:error, :idempotency_conflict} =
-             Goals.command(goal.id, conflicting_achieve_command, "operator:test", now: @now)
-
-    assert Repo.aggregate(
-             from(event in SymmetryControl.Goals.GoalEvent,
-               where: event.goal_id == ^goal.id and event.kind == "achieve"
-             ),
-             :count
-           ) == achieve_event_count
+    goal_loop_achieve_and_replay(setup, accepted_outcome, decision_id)
   end
 
   test "a Goal-level operator acceptance predicate is satisfied by the operator achieve" do
@@ -8309,6 +7988,388 @@ defmodule SymmetryControl.GoalsTest do
              )
 
     assert Repo.aggregate(from(task in Task, where: task.goal_id == ^goal.id), :count) == 2
+  end
+
+  defp goal_loop_validation_setup do
+    {goal, item, producer} =
+      admitted_task_fixture("primary", check_contract(), %{
+        execution_policy: %{"max_task_admissions" => 3}
+      })
+
+    producer_runtime = runtime_fixture(@validation_runtime_id)
+
+    candidate_subject = candidate_subject(item_repository_resource_id(item))
+
+    {producer_run, _producer_fence} =
+      completed_goal_run_fixture(producer, producer_runtime, candidate_subject)
+
+    assert {:ok, %{"settlement" => "awaiting_validation"}} =
+             Goals.settle_task(producer.id, producer_run.id, 1, now: @now)
+
+    assert {:error, {:invalid_contract, _}} =
+             command_current(
+               goal.id,
+               "admit_task",
+               admission_payload(item, %{
+                 purpose: "validate",
+                 validation_of_task_id: producer.id,
+                 reserved_microusd: 0
+               })
+               |> Map.put(:subject, candidate_subject),
+               rollout_enabled: true
+             )
+
+    assert {:ok, validation_receipt, :created} =
+             command_current(
+               goal.id,
+               "admit_task",
+               admission_payload(item, %{
+                 purpose: "validate",
+                 validation_of_task_id: producer.id,
+                 reserved_microusd: 0
+               }),
+               rollout_enabled: true
+             )
+
+    validation = Repo.get!(Task, validation_receipt.response["task"]["id"])
+    assert validation.input["subject"] == candidate_subject
+    validation_runtime = runtime_fixture(@validation_runtime_id)
+
+    {validation_run, validation_fence} =
+      completed_goal_run_fixture(validation, validation_runtime)
+
+    evidence = evidence_attrs(validation_run.id, item, candidate_subject)
+
+    assert {:ok, %{evidence: stored_evidence}, :created} =
+             Goals.append_evidence(
+               validation_runtime.machine_id,
+               validation_run.id,
+               validation_fence,
+               evidence,
+               now: @now
+             )
+
+    assert stored_evidence.subject_hash == evidence.subject_hash
+
+    old_subject_evidence = evidence_attrs(validation_run.id, item)
+
+    assert {:error, :invalid_evidence_identity} =
+             Goals.append_evidence(
+               validation_runtime.machine_id,
+               validation_run.id,
+               validation_fence,
+               Map.put(old_subject_evidence, :evidence_key, "check:initial-subject"),
+               now: @now
+             )
+
+    %{
+      goal: goal,
+      item: item,
+      producer: producer,
+      producer_run: producer_run,
+      candidate_subject: candidate_subject,
+      validation: validation,
+      validation_run: validation_run,
+      validation_fence: validation_fence,
+      validation_runtime: validation_runtime,
+      evidence: evidence,
+      stored_evidence: stored_evidence
+    }
+  end
+
+  defp goal_loop_accept_validation(%{
+         goal: goal,
+         item: item,
+         producer: producer,
+         producer_run: producer_run,
+         candidate_subject: candidate_subject,
+         validation: validation,
+         validation_run: validation_run,
+         validation_fence: validation_fence,
+         validation_runtime: validation_runtime,
+         evidence: evidence,
+         stored_evidence: stored_evidence
+       }) do
+    delete_goal_wakeup_jobs(goal.id)
+
+    assert {:ok, %{"settlement" => "accepted", "reason" => "validation_passed"}} =
+             Goals.settle_task(validation.id, validation_run.id, 1, now: @now)
+
+    assert wakeup_job_count(goal.id) == 1
+
+    assert {:ok, %{evidence: ^stored_evidence}, :replayed} =
+             Goals.append_evidence(
+               validation_runtime.machine_id,
+               validation_run.id,
+               validation_fence,
+               evidence,
+               now: @now
+             )
+
+    assert {:error, :validation_evidence_closed} =
+             Goals.append_evidence(
+               validation_runtime.machine_id,
+               validation_run.id,
+               validation_fence,
+               evidence
+               |> Map.put(:evidence_id, Ecto.UUID.generate())
+               |> Map.put(:evidence_key, "check:late"),
+               now: @now
+             )
+
+    assert {:error, :already_accepted} =
+             command_current(
+               goal.id,
+               "admit_task",
+               admission_payload(item, %{
+                 purpose: "validate",
+                 validation_of_task_id: validation.id,
+                 reserved_microusd: 0
+               }),
+               rollout_enabled: true
+             )
+
+    subject_hash = String.replace_prefix(evidence.subject_hash, "sha256:", "")
+
+    [accepted_outcome] =
+      Repo.all(
+        from(outcome in SymmetryControl.Goals.WorkOutcome,
+          where:
+            outcome.goal_id == ^goal.id and outcome.work_item_id == ^item.id and
+              outcome.validation_task_id == ^validation.id and outcome.disposition == "accepted"
+        )
+      )
+
+    assert accepted_outcome.candidate_subject == candidate_subject
+    assert accepted_outcome.producing_result_id == producer_run.result["task_result"]["result_id"]
+
+    assert {:error, :outcome_derived} =
+             Goals.accept_outcome(goal.id, %{
+               work_item_id: item.id,
+               producing_task_id: producer.id,
+               producing_run_id: producer_run.id,
+               validation_task_id: validation.id,
+               subject_hash: subject_hash,
+               evidence_ids: [stored_evidence.id],
+               reason: "A validator outcome is derived during settlement."
+             })
+
+    accepted_outcome
+  end
+
+  defp goal_loop_resolve_achieve_decisions(%{
+         goal: goal,
+         item: item,
+         candidate_subject: candidate_subject,
+         validation_run: validation_run,
+         evidence: evidence,
+         stored_evidence: stored_evidence
+       }) do
+    pre_achieve = fetch_goal!(goal.id)
+
+    assert pre_achieve.completion.ready?
+    assert "achieve" in pre_achieve.allowed_actions
+    refute "final_acceptance_required" in pre_achieve.blocker_reasons
+
+    assert {:error, {:invalid_contract, _}} =
+             command_current(goal.id, "request_decision", %{
+               kind: "completion",
+               work_item_id: item.id,
+               subject_hash: evidence.subject_hash,
+               question: "Accept one work item?",
+               options: [
+                 %{
+                   "id" => "accept",
+                   "label" => "Accept",
+                   "consequence" => "Mark the Goal achieved"
+                 }
+               ]
+             })
+
+    assert {:ok, completion_request, :created} =
+             command_current(goal.id, "request_decision", %{
+               kind: "completion",
+               work_item_id: nil,
+               subject_hash: evidence.subject_hash,
+               proposal: nil
+             })
+
+    decision_id = completion_request.response["decision"]["id"]
+    decision_version = Repo.get!(SymmetryControl.Goals.GoalDecision, decision_id).lock_version
+
+    assert {:ok, _resolved, :created} =
+             command_current(goal.id, "resolve_decision", %{
+               decision_id: decision_id,
+               expected_decision_version: decision_version,
+               option_id: "accept"
+             })
+
+    weaker_evidence =
+      %SymmetryControl.Goals.RunEvidence{}
+      |> SymmetryControl.Goals.RunEvidence.changeset(%{
+        run_id: validation_run.id,
+        evidence_key: "check:weaker-profile",
+        kind: "check",
+        subject_hash: SymmetryControl.RequestHash.canonical(evidence.subject),
+        source_ref: Map.put(evidence.source_ref, "validator_profile", "weaker"),
+        source_revision: evidence.source_revision,
+        validator_profile: "weaker",
+        verdict: "passed",
+        payload: evidence.payload
+      })
+      |> Repo.insert!()
+
+    assert {:error, :missing_evidence} =
+             command_current(goal.id, "achieve", %{
+               subject: evidence.subject,
+               integration_work_item_id: item.id,
+               evidence_ids: [weaker_evidence.id],
+               decision_id: decision_id
+             })
+
+    assert {:ok, review_request, :created} =
+             command_current(goal.id, "request_decision", %{
+               kind: "review",
+               work_item_id: item.id,
+               subject_hash: evidence.subject_hash,
+               question: "Accept one WorkItem?",
+               options: [
+                 %{
+                   "id" => "accept",
+                   "label" => "Accept",
+                   "consequence" => "Accept the validated WorkItem"
+                 }
+               ]
+             })
+
+    review_decision_id = review_request.response["decision"]["id"]
+
+    assert {:ok, _resolved, :created} =
+             command_current(goal.id, "resolve_decision", %{
+               decision_id: review_decision_id,
+               expected_decision_version:
+                 Repo.get!(SymmetryControl.Goals.GoalDecision, review_decision_id).lock_version,
+               option_id: "accept"
+             })
+
+    assert {:error, :invalid_decision} =
+             command_current(goal.id, "achieve", %{
+               subject: evidence.subject,
+               integration_work_item_id: item.id,
+               evidence_ids: [stored_evidence.id],
+               decision_id: review_decision_id
+             })
+
+    assert {:error, :integration_outcome_required} =
+             command_current(goal.id, "achieve", %{
+               subject: evidence.subject,
+               integration_work_item_id: Ecto.UUID.generate(),
+               evidence_ids: [stored_evidence.id],
+               decision_id: decision_id
+             })
+
+    optional_dependency = optional_goal_work_item!(goal, item, "Optional prerequisite")
+    optional_follow_up = optional_goal_work_item!(goal, item, "Optional follow-up")
+
+    %SymmetryControl.Goals.WorkDependency{}
+    |> SymmetryControl.Goals.WorkDependency.changeset(%{
+      goal_id: goal.id,
+      work_item_id: optional_follow_up.id,
+      depends_on_id: optional_dependency.id
+    })
+    |> Repo.insert!()
+
+    assert {:ok, optional_admission, :created} =
+             command_current(
+               goal.id,
+               "admit_task",
+               admission_payload(optional_dependency),
+               rollout_enabled: true
+             )
+
+    optional_producer = Repo.get!(Task, optional_admission.response["task"]["id"])
+
+    {optional_run, _optional_fence} =
+      completed_goal_run_fixture(optional_producer, runtime_fixture(), candidate_subject)
+
+    insert_accepted_work_outcome!(goal, optional_dependency.id, optional_run, candidate_subject)
+
+    assert {:error, :integration_outcome_required} =
+             command_current(goal.id, "achieve", %{
+               subject: evidence.subject,
+               integration_work_item_id: optional_dependency.id,
+               evidence_ids: [stored_evidence.id],
+               decision_id: decision_id
+             })
+
+    decision_id
+  end
+
+  defp goal_loop_achieve_and_replay(
+         %{
+           goal: goal,
+           item: item,
+           evidence: evidence,
+           stored_evidence: stored_evidence
+         },
+         accepted_outcome,
+         decision_id
+       ) do
+    achieve_payload = %{
+      subject: evidence.subject,
+      integration_work_item_id: item.id,
+      evidence_ids: [stored_evidence.id],
+      decision_id: decision_id
+    }
+
+    achieve_goal = fetch_goal!(goal.id)
+    achieve_command = goal_command(achieve_goal, "achieve", achieve_payload)
+
+    assert {:ok, achieved, :created} =
+             Goals.command(goal.id, achieve_command, "operator:test", now: @now)
+
+    assert achieved.goal.state == "achieved"
+
+    assert Repo.exists?(
+             from(outcome in SymmetryControl.Goals.WorkOutcome,
+               where: outcome.id == ^accepted_outcome.id
+             )
+           )
+
+    achieve_event_count =
+      Repo.aggregate(
+        from(event in SymmetryControl.Goals.GoalEvent,
+          where: event.goal_id == ^goal.id and event.kind == "achieve"
+        ),
+        :count
+      )
+
+    assert achieve_event_count == 1
+
+    assert {:ok, replayed, :replayed} =
+             Goals.command(goal.id, achieve_command, "operator:test", now: @now)
+
+    assert replayed == achieved
+
+    assert Repo.aggregate(
+             from(event in SymmetryControl.Goals.GoalEvent,
+               where: event.goal_id == ^goal.id and event.kind == "achieve"
+             ),
+             :count
+           ) == achieve_event_count
+
+    conflicting_achieve_command =
+      put_in(achieve_command, [:payload, :evidence_ids], [])
+
+    assert {:error, :idempotency_conflict} =
+             Goals.command(goal.id, conflicting_achieve_command, "operator:test", now: @now)
+
+    assert Repo.aggregate(
+             from(event in SymmetryControl.Goals.GoalEvent,
+               where: event.goal_id == ^goal.id and event.kind == "achieve"
+             ),
+             :count
+           ) == achieve_event_count
   end
 
   defp goal_with_items_fixture(execution_policy, item_count \\ 1) do
