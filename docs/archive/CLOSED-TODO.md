@@ -72,6 +72,11 @@ that served their pages` below were moved on 2026-11-21 from branch `fix/chat-hi
 The revalidated dead surfaces appended to the second `## Dead-code candidates` section below were
 moved on 2026-11-21 from branch `refactor/rf-w1-14-core-dead-surface`.
 
+The closed witness stop-receipt barrier stall entry that carries its own
+`## Production Linux containment witness: stop-receipt barrier stall awaiting a diagnosable
+occurrence` section at the end of this file was moved on 2026-11-21 from branch
+`fix/witness-owner-loss-latch`.
+
 ## Model-routing evaluation records
 
 - [x] Fixed the half-applied usage-receipt import (serialization gap) reported by the cancelled 0008a round-2
@@ -3651,3 +3656,96 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
       `sha256:d2f694ddf97d861a1e00cfa577ef7ed36f0b6e2213aa4e917cb55cf52371a8e0`,
       `assets/index-Cy35eFtz.css` `sha256:0c216884aa5315566e05140b108408e7f878c0890f4c26ad6cb74794f1cafa09`,
       `assets/index-xLlmZ95U.js` `sha256:7b7562c7296d733a4c45b270be8b99f07bbf7703b147da4171730e3d73e5b133`).
+
+## Production Linux containment witness: stop-receipt barrier stall awaiting a diagnosable occurrence
+
+- [ ] Diagnose the next occurrence of the `daemon_sigkill_after_lease_arm_before_resume` barrier
+      stall from the restarted daemon's exported log tail; do not raise the 45 s bound in the
+      meantime. **Occurrence:** CI run `44794227912` job `136491073605` (`integration`; PR #119 head
+      `22ec193`, test merge `3b4a6ce` on base `adf6d38`) failed subtest
+      `TestProductionLinuxContainmentWitnessSpine/daemon_sigkill_after_lease_arm_before_resume` after
+      **110.19 s** with (the marker path's `$RUNNER_TEMP/symmetry-linux-containment-witness/<case>/`
+      prefix elided here; the CI log spells it out),
+      `production_linux_containment_witness_test.go:509: wait for durable stop-receipt-before-release barrier: marker "…/lease-arm-before-resume/stop-receipt-before-release.reached" did not appear within 45s`
+      — the reported `:509` is the caller frame of the `t.Helper()` runner, whose `t.Fatalf` sits at
+      `daemon/e2e/production_linux_containment_witness_test.go:1026` — followed by a failure cleanup
+      that could not prove the stop: `:738: Linux production witness failure cleanup could not prove
+      exact helper stop/release: bound recovery did not clear journal during failure cleanup: journal
+      a2c5a551-2026-45d3-9eaf-467717f281e6/1 retained containment after 45s`, `containment journal
+      remains unresolved after failure cleanup: … retained containment after 5s`, and
+      `failure cleanup could not prove exact helper 21107/"linux:v2:9d556fd5-837f-4845-b407-4c6aa53983b4:4026531836:21107:19582"
+      gone: process 21107 with identity "…" remained live`. **Classification:** flake of the witness's
+      restart replay, not a product regression — every file under `daemon/e2e`, `daemon/internal/app`
+      and `daemon/internal/platform` is byte-identical between the failing revision and current main
+      (`git diff --name-only 22ec193 a7afdf4 -- daemon/e2e daemon/internal/app
+      daemon/internal/platform` prints nothing), the same subtest is green in `0.56 s` on main
+      (`44795802448` job `136495892251`: `PASS: …/daemon_sigkill_after_lease_arm_before_resume
+      (0.56s)`), the run's own merge diff (`git diff adf6d38 3b4a6ce --stat`, 14 files) touches
+      neither those trees nor `.github/workflows/ci.yml`, and the failing run's uploaded evidence
+      (artifact `production-linux-containment-witness-44794227912-1`, 17 files) was complete: its
+      `lease-arm-before-resume.json` stops at stage
+      `daemon_crashed_after_lease_arm_with_durable_mirror_seal_before_resume` while the manifest
+      reports `"complete": true` and `"incomplete_evidence_files": []`, i.e. the stall left no
+      daemon-side trace in that evidence at all. **Recurrence (2026-11-21):** CI run `44803673577`
+      attempt 1 (PR #126 head `17d838b`, the merge of `origin/main` into
+      `fix/provider-action-chain-removal`) failed the same subtest in its `integration` job
+      (`136524113298`) after **110.29 s**, with the identical
+      `production_linux_containment_witness_test.go:509` 45 s barrier line and the same cleanup
+      shape (journal `b2090059-1137-4b6b-a975-58f1e202834c/1` retained containment after 45s;
+      helper 15580 remained live), while main's last six CI runs (through `44804764621` @
+      `ea65742`) were all green. **Suspect path** for the restart pass:
+      `daemon/internal/app/cleanup_glue.go:118-143` (record the durable receipt →
+      `verifyDurableContainmentStopReceipt` at `:285` → `observeContainmentStop`) →
+      `waitForLinuxStopReceiptBarrier` (`:203`), which publishes the reached marker at `:234` only
+      after both marker paths pass `assertLinuxStopReceiptBarrierPathAbsent` (`:218`/`:221`), and
+      whose own release bound is `linuxStopReceiptBarrierTimeout = 30s` (`:21`); the marker never
+      appeared, so either the restart pass never reached the callback or it stalled before
+      publishing. **Diagnosis rule:** read the restarted daemon's log tail now exported by
+      `scripts/ci/export-linux-v2-redacted-evidence.py` (2026-11-21, `witness-stall-evidence`): a
+      failed legacy witness run adds `<case>-second-daemon-stdout.json` and `-stderr.json` to the
+      `production-linux-containment-witness-<run id>-<attempt>` artifact, carrying a ≤64 KiB
+      sanitized tail of the `second-daemon.*.log` files written at
+      `daemon/e2e/production_linux_containment_witness_test.go:1723-1754`; each record keeps
+      `time`/`level` plus the allowlisted message/enum/integer fields, while identities, paths and
+      `error` text are intentionally never exported and `dropped_lines` counts lines that could not
+      be projected (a Go panic dump therefore appears only as a count). The 45 s harness wait and the
+      30 s daemon bound are declared bounds, not the defect: no timeout changes until an occurrence
+      has been diagnosed from that tail.
+
+      **Closed (2026-11-21, branch `fix/witness-owner-loss-latch`, fix commit `e9c457d8`):** the
+      next occurrence was diagnosed from the tail this entry's diagnosis rule asked for — CI run
+      `44876100236` attempt 1 (PR #168 head `bb26602`, merge `680a2085` on base `6a815c0f`; artifact
+      `production-linux-containment-witness-44876100236-1`, whose
+      `lease-arm-before-resume-second-daemon-stdout.json` carries 18 ×
+      `stop_recovered_process_failed` — first 7.8 ms after `runtime_registered`, then a 29.999 s gap
+      matching the persisted 30 s lease, then a 1 Hz train — stderr empty, 0 dropped lines; frozen
+      journal `has_stop_receipt:false`, helper scan `completed_sequence:1`, mirror sealed 2, target
+      gone, `containment_unproven:false`, helper alive across daemon restarts). Root cause
+      confirmed: the helper processed the control-pipe EOF before the owner watchdog published
+      owner loss, so the first `stop()` took the live-owner branch; its final descendant scan
+      persisted a `begin` fence over the helper→daemon metadata transport that died with the
+      SIGKILLed daemon, the failed persist latched sticky descendant uncertainty, and every
+      recovery stop was refused (`Linux descendant containment is unproven`), so the receipt
+      callback / 45 s harness barrier (`stop-receipt-before-release.reached`) was never reached,
+      and the failure cleanup's third daemon failed identically for 45 s. Fix: `enterRecovery`
+      (`daemon/internal/platform/supervisor_linux_helper.go`) now latches owner loss at entry — all
+      nine call sites are owner-transport-loss boundaries (the watchdog arm, control EOF/error, and
+      failed response-pipe writes, which require every daemon-side reader to be closed; a live but
+      slow reader blocks the write instead of failing it) — so the first stop uses the
+      observer-free owner-loss branch and seals descendant scans locally. The artifact's missing
+      attribution is closed too: `stop_recovered_process_failed` now logs its already-computed
+      `reason` (one line, `daemon/internal/app/recovery_glue.go`; every value is already in the
+      evidence exporter's `reason` allowlist and the exporter suite stays green). Pinned by the
+      deterministic platform regression test
+      `TestLinuxSupervisorControlEOFWithDeadOwnerMetadataUsesOwnerLossSeal`
+      (`daemon/internal/platform/containment_supervisor_linux_test.go`), which constructs the
+      ordering itself (daemon-side metadata connection closed before the control pipe, owner writer
+      left open): on the unfixed tree it fails 20/20 with the flake's exact refusal
+      (`Linux descendant containment is unproven: descendant observation was uncertain`); with the
+      fix it passes 50/50 and mints a receipt with `sealSequence == 2` (previous clean sequence
+      1 + 1). Residual, recorded in the plan rather than left implicit: the exact originating
+      write-error suffix (broken pipe vs acknowledgement EOF) was never exported; the next failing
+      artifact should cross-check `reason` against the refusal, and the fix removes the
+      dead-transport branch for either suffix. Plan and gate evidence:
+      `docs/plans/2026-11-21-witness-owner-loss-latch-plan.md`. The 45 s harness wait and the 30 s
+      daemon bound were not changed.
