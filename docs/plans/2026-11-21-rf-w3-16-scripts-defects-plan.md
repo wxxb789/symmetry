@@ -75,6 +75,8 @@ three findings above.
      contract's own example text, byte for byte)
    * `SKIP_REASON = "PyYAML is the optional cross-check oracle, not the contract"` (the existing
      skip text, kept)
+   * `REQUIRE_NOTICE = "requires the PyYAML differential oracle"` (the phrase the strict failure
+     carries; the `-S` subprocess test pins it)
 
    `load_optional_pyyaml()` prints `ABSENCE_NOTICE` to stderr on `ImportError` and returns `None`;
    the module-level probe is wrapped in `contextlib.redirect_stderr(RecordedStderr(sys.stderr))`,
@@ -134,8 +136,10 @@ deleted wrapper (it bound only `FileNotFoundError`).
 | no | unset | `ABSENCE_NOTICE` on stderr and asserted; differential skipped with `SKIP_REASON`; golden assertions green |
 | no | `1` | `@unittest.skipUnless(PYYAML is not None or REQUIRE_PYYAML, …)` no longer skips: the differential method runs, `assertIsNotNone(PYYAML, …)` fails with the requirement message, and the suite exits non-zero (`FAILED (failures=1)`) |
 
-The suite's test count therefore moves 23 → 24 (the new `OracleVisibilityTests` method is the only
-addition); the contract's mutation (d) text quotes the pre-change 23.
+The suite's test count therefore moves 23 → 25: the two added `OracleVisibilityTests` methods are
+the notice-visibility assertion above, and a `-S` subprocess test that observes the switched
+interpreter's exit code (a suite's own non-zero exit is only observable from outside the process);
+the contract's mutation (d) text quotes the pre-change 23.
 
 The notice text and the env-var name are the machine-checkable handles: the notice is the line the
 `ci.yml` step can grep for, the env var is the switch W6-01 sets once PyYAML is pinned.
@@ -182,6 +186,7 @@ The notice text and the env-var name are the machine-checkable handles: the noti
 | mutation (b) | restore the `try/except FileNotFoundError: raise` → `TRY203` |
 | mutation (c) | remove the `print(ABSENCE_NOTICE, …)` line → under `python -S` the visibility assertion fails |
 | mutation (d) | oracle present → the differential method executes (no skip in the run's status line) |
+| mutation (e) | drop `or REQUIRE_PYYAML` from the `DifferentialTests` gate → the `-S` subprocess test reddens on Windows and WSL while `SYMMETRY_REQUIRE_PYYAML=1 … -S` exits 0 and skips again |
 | behavioural equivalence of the renames | throwaway driver importing the `HEAD` and edited modules, comparing `project_pid_reuse` outputs and refusal messages |
 | other audit suites | `test-opencode-v2-support-witness.py`, `test-go-test-json-gate.py`, `test-check-citation-existence.py`, `test-omo-native-evidence.py` cover unedited files: CI oracles, re-run only if cheap |
 | `test-model-routing-evaluation.py` | covers an unedited file; out of the foreground gate per the contract's budget note — run in the background if at all, and report its wall time (the 580 s vs §11 ~146 s conflict stays unresolved) |

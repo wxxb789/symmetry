@@ -114,12 +114,15 @@ snapshots:
 
 # The machine-checkable handles for the differential oracle's availability: the
 # environment switch a job sets once PyYAML is pinned, the exact notice a run
-# without the module prints on stderr, and the reason the oracle is skipped when
-# its absence is tolerated. `docs/TODO.md` records the pinned install for the
-# `ci.yml` "Check CI gate helper scripts" step; no job greps the notice yet.
+# without the module prints on stderr, the reason the oracle is skipped when its
+# absence is tolerated, and the phrase the switch-forced failure carries (pinned
+# by the `-S` subprocess test below). `docs/TODO.md` records the pinned install
+# for the `ci.yml` "Check CI gate helper scripts" step; no job greps the notice
+# yet.
 REQUIRE_PYYAML_ENV = "SYMMETRY_REQUIRE_PYYAML"
 ABSENCE_NOTICE = "PyYAML differential oracle skipped: module not importable"
 SKIP_REASON = "PyYAML is the optional cross-check oracle, not the contract"
+REQUIRE_NOTICE = "requires the PyYAML differential oracle"
 
 
 class RecordedStderr:
@@ -398,13 +401,25 @@ class OracleVisibilityTests(unittest.TestCase):
         else:
             self.assertNotIn(ABSENCE_NOTICE, ABSENCE_REPORT.text)
 
+    def test_the_require_switch_turns_absence_into_a_failure(self):
+        """`-S` hides site-packages, so the switched subprocess runs without PyYAML."""
+        result = subprocess.run(
+            [sys.executable, "-S", __file__, "DifferentialTests"],
+            capture_output=True,
+            text=True,
+            check=False,
+            env={**os.environ, REQUIRE_PYYAML_ENV: "1"},
+        )
+        self.assertNotEqual(result.returncode, 0, result.stderr)
+        self.assertIn(REQUIRE_NOTICE, result.stderr)
+
 
 @unittest.skipUnless(PYYAML is not None or REQUIRE_PYYAML, SKIP_REASON)
 class DifferentialTests(unittest.TestCase):
     def test_reader_and_pyyaml_extract_the_same_entries(self):
         self.assertIsNotNone(
             PYYAML,
-            f"{REQUIRE_PYYAML_ENV}=1 requires the PyYAML differential oracle, and it is not importable",
+            f"{REQUIRE_PYYAML_ENV}=1 {REQUIRE_NOTICE}, and it is not importable",
         )
         fixtures = {
             "canonical": CANONICAL_LOCKFILE,
