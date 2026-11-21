@@ -16,6 +16,7 @@ import (
 )
 
 func TestGoalSessionAttachDeliveryIsDurableBeforeLaunchAndReadyAfterHandle(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	key := RunKey{RunID: "00000000-0000-4000-8000-000000000001", Generation: 1}
 	if err := store.SaveJournal(testGoalDeliveryJournal(key)); err != nil {
@@ -76,6 +77,7 @@ func TestGoalSessionAttachDeliveryIsDurableBeforeLaunchAndReadyAfterHandle(t *te
 }
 
 func TestGoalSessionStoppedDeliveryIsDurableAndUsesBindingAsReceiptIdentity(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	key := RunKey{RunID: "00000000-0000-4000-8000-000000000001", Generation: 1}
 	if err := store.SaveJournal(testGoalDeliveryJournal(key)); err != nil {
@@ -108,6 +110,7 @@ func TestGoalSessionStoppedDeliveryIsDurableAndUsesBindingAsReceiptIdentity(t *t
 }
 
 func TestLegacyGoalDeliveryDigestAndJournalRemainReadableWithoutBinding(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	key := RunKey{RunID: "00000000-0000-4000-8000-000000000001", Generation: 1}
 	delivery := GoalDelivery{Kind: GoalDeliverySessionAttach, DeliveryID: "00000000-0000-4000-8000-000000000004", Fence: testGoalDeliveryJournal(key).Fence(), Ready: true, SessionAttach: &GoalSessionAttachDelivery{
@@ -144,6 +147,7 @@ func TestLegacyGoalDeliveryDigestAndJournalRemainReadableWithoutBinding(t *testi
 }
 
 func TestNativeUsageObservationIgnoresOutOfOrderRegressionAcrossRestart(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	key := RunKey{RunID: "00000000-0000-4000-8000-000000000001", Generation: 1}
 	if err := store.SaveJournal(testGoalDeliveryJournal(key)); err != nil {
@@ -178,6 +182,7 @@ func TestNativeUsageObservationIgnoresOutOfOrderRegressionAcrossRestart(t *testi
 }
 
 func TestNativeUsageObservationCoversEqualCountersRegardlessOfObservationTime(t *testing.T) {
+	t.Parallel()
 	expected := NativeUsageObservation{
 		SchemaVersion: 1, InputTokens: 100, OutputTokens: 40, CachedInputTokens: 20,
 		ReasoningOutputTokens: 10, TotalTokens: 150, ObservedAt: time.Date(2026, 9, 9, 1, 0, 2, 0, time.UTC),
@@ -194,6 +199,7 @@ func TestNativeUsageObservationCoversEqualCountersRegardlessOfObservationTime(t 
 }
 
 func TestGoalUsageDeliverySurvivesConclusiveTerminalAndBlocksCleanup(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	key := RunKey{RunID: "00000000-0000-4000-8000-000000000001", Generation: 1}
 	if err := store.SaveJournal(testGoalDeliveryJournal(key)); err != nil {
@@ -261,6 +267,7 @@ func TestGoalUsageDeliverySurvivesConclusiveTerminalAndBlocksCleanup(t *testing.
 }
 
 func TestNativeUsageRecoveryRequiresExactUsageBeforeClearOrJournalDeletion(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	key := RunKey{RunID: "00000000-0000-4000-8000-000000000001", Generation: 1}
 	if err := store.SaveJournal(testGoalDeliveryJournal(key)); err != nil {
@@ -295,6 +302,7 @@ func TestNativeUsageRecoveryRequiresExactUsageBeforeClearOrJournalDeletion(t *te
 }
 
 func TestNativeUsageRecoverySettlementPersistsExactTerminalIntent(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	key := RunKey{RunID: "00000000-0000-4000-8000-000000000001", Generation: 1}
 	if err := store.SaveJournal(testGoalDeliveryJournal(key)); err != nil {
@@ -338,8 +346,10 @@ func TestNativeUsageRecoverySettlementPersistsExactTerminalIntent(t *testing.T) 
 }
 
 func TestTerminalSettlementDigestsSurviveDeliveryAndRetirement(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"delivered", "retired"} {
 		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
 			store := mustStore(t)
 			key := RunKey{RunID: "00000000-0000-4000-8000-000000000001", Generation: 1}
 			if err := store.SaveJournal(testGoalDeliveryJournal(key)); err != nil {
@@ -395,6 +405,7 @@ func TestTerminalSettlementDigestsSurviveDeliveryAndRetirement(t *testing.T) {
 }
 
 func TestQueueGoalEvidenceAndTerminalTransitionIsAtomicAndIdempotent(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	key := RunKey{RunID: "00000000-0000-4000-8000-000000000001", Generation: 1}
 	base := testGoalDeliveryJournal(key)
@@ -459,6 +470,7 @@ func TestQueueGoalEvidenceAndTerminalTransitionIsAtomicAndIdempotent(t *testing.
 }
 
 func TestQueueGoalEvidenceAndTerminalTransitionWriteFailureLeavesNoPartialState(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	key := RunKey{RunID: "00000000-0000-4000-8000-000000000001", Generation: 1}
 	base := testGoalDeliveryJournal(key)
@@ -490,6 +502,7 @@ func TestQueueGoalEvidenceAndTerminalTransitionWriteFailureLeavesNoPartialState(
 }
 
 func TestQueueGoalEvidenceAndTerminalTransitionDoesNotAddEvidenceAfterCancellation(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	key := RunKey{RunID: "00000000-0000-4000-8000-000000000001", Generation: 1}
 	base := testGoalDeliveryJournal(key)
@@ -520,6 +533,7 @@ func TestQueueGoalEvidenceAndTerminalTransitionDoesNotAddEvidenceAfterCancellati
 }
 
 func TestGoalEvidenceTerminalCannotBeReplacedByCancellation(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	key := RunKey{RunID: "00000000-0000-4000-8000-000000000001", Generation: 1}
 	base := testGoalDeliveryJournal(key)
@@ -551,7 +565,9 @@ func TestGoalEvidenceTerminalCannotBeReplacedByCancellation(t *testing.T) {
 }
 
 func TestPersistedGoalDeliveryRequiresStablePayloadDigest(t *testing.T) {
+	t.Parallel()
 	t.Run("evidence", func(t *testing.T) {
+		t.Parallel()
 		store := mustStore(t)
 		key := RunKey{RunID: "00000000-0000-4000-8000-000000000001", Generation: 1}
 		if err := store.SaveJournal(testGoalDeliveryJournal(key)); err != nil {
@@ -577,6 +593,7 @@ func TestPersistedGoalDeliveryRequiresStablePayloadDigest(t *testing.T) {
 	})
 
 	t.Run("usage", func(t *testing.T) {
+		t.Parallel()
 		store := mustStore(t)
 		key := RunKey{RunID: "00000000-0000-4000-8000-000000000001", Generation: 1}
 		if err := store.SaveJournal(testGoalDeliveryJournal(key)); err != nil {
@@ -602,6 +619,7 @@ func TestPersistedGoalDeliveryRequiresStablePayloadDigest(t *testing.T) {
 	})
 
 	t.Run("late usage ledger load", func(t *testing.T) {
+		t.Parallel()
 		store := mustStore(t)
 		key := RunKey{RunID: "00000000-0000-4000-8000-000000000001", Generation: 1}
 		if err := store.SaveJournal(testGoalDeliveryJournal(key)); err != nil {
@@ -644,6 +662,7 @@ func TestPersistedGoalDeliveryRequiresStablePayloadDigest(t *testing.T) {
 }
 
 func TestDeleteJournalIgnoresRetiredNonUsageDeliveries(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	key := RunKey{RunID: "00000000-0000-4000-8000-000000000001", Generation: 1}
 	if err := store.SaveJournal(testGoalDeliveryJournal(key)); err != nil {
@@ -695,6 +714,7 @@ func TestQueueGoalDeliveryWriteFailureLeavesNoPartialIntent(t *testing.T) {
 }
 
 func TestKnownPreNativeAbortRetiresOnlyUnreadyAttachIntent(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	key := RunKey{RunID: "00000000-0000-4000-8000-000000000001", Generation: 1}
 	if err := store.SaveJournal(testGoalDeliveryJournal(key)); err != nil {
@@ -744,6 +764,7 @@ func TestKnownPreNativeAbortRetiresOnlyUnreadyAttachIntent(t *testing.T) {
 }
 
 func TestMarkGoalSessionAttachDeliveryReadyRejectsUnprovenOrMismatchedSession(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		setup   func(*testing.T, *Store, RunKey, GoalSessionAttachDelivery)
@@ -806,6 +827,7 @@ func TestMarkGoalSessionAttachDeliveryReadyRejectsUnprovenOrMismatchedSession(t 
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			store := mustStore(t)
 			key := RunKey{RunID: "00000000-0000-4000-8000-000000000001", Generation: 1}
 			if err := store.SaveJournal(testGoalDeliveryJournal(key)); err != nil {
@@ -835,6 +857,7 @@ func TestMarkGoalSessionAttachDeliveryReadyRejectsUnprovenOrMismatchedSession(t 
 }
 
 func TestMarkGoalSessionAttachDeliveryReadyAllowsFreshServerIssuedBindingWithoutFilename(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	key := RunKey{RunID: "00000000-0000-4000-8000-000000000001", Generation: 1}
 	if err := store.SaveJournal(testGoalDeliveryJournal(key)); err != nil {
@@ -860,6 +883,7 @@ func TestMarkGoalSessionAttachDeliveryReadyAllowsFreshServerIssuedBindingWithout
 }
 
 func TestMarkGoalSessionAttachDeliveryReadyRejectsResumeOldBinding(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	source, certificate := mustAvailableRetainedGoalSession(t, store)
 	rebind := testGoalSessionResumeRebind(certificate)
@@ -880,6 +904,7 @@ func TestMarkGoalSessionAttachDeliveryReadyRejectsResumeOldBinding(t *testing.T)
 }
 
 func TestMarkGoalSessionAttachDeliveryReadyPermitsQueuedResumeAfterRebindBeforeStart(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	source, certificate := mustAvailableRetainedGoalSession(t, store)
 	rebind := testGoalSessionResumeRebind(certificate)
@@ -915,6 +940,7 @@ func TestMarkGoalSessionAttachDeliveryReadyPermitsQueuedResumeAfterRebindBeforeS
 }
 
 func TestMarkGoalSessionAttachDeliveryReadyReplayDoesNotMutateAfterRebind(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	source, certificate := mustAvailableRetainedGoalSession(t, store)
 	key := RunKey{RunID: source.RunID, Generation: source.Generation}
