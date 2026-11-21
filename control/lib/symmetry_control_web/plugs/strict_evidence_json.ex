@@ -33,10 +33,6 @@ defmodule SymmetryControlWeb.StrictJSONDecoder do
 
   @doc """
   Decodes one evidence body as a top-level JSON object without duplicates.
-
-  The evidence endpoint defers materialization until the controller has
-  authenticated and claimed run ownership; errors intentionally contain no
-  decoder exception or raw request body.
   """
   @spec decode_object(binary()) :: {:ok, map()} | {:error, decode_error()}
   def decode_object(body) when is_binary(body) do
@@ -107,11 +103,7 @@ defmodule SymmetryControlWeb.Plugs.StrictEvidenceJSON do
 
   @raw_body_private_key :symmetry_control_raw_evidence_json
 
-  @type materialize_error ::
-          :not_captured
-          | :malformed_json
-          | :expected_json_object
-          | :duplicate_json_key
+  @type materialize_error :: :not_captured | StrictJSONDecoder.decode_error()
 
   @mutation_methods ~w(POST PUT PATCH DELETE)
 
@@ -151,7 +143,7 @@ defmodule SymmetryControlWeb.Plugs.StrictEvidenceJSON do
   @impl true
   def call(
         %Conn{body_params: %Conn.Unfetched{}} = conn,
-        {parser_options, strict_parser_options}
+        {parser_options, strict_options}
       ) do
     path_info = Plug.Router.Utils.decode_path_info!(conn)
 
@@ -160,14 +152,14 @@ defmodule SymmetryControlWeb.Plugs.StrictEvidenceJSON do
         capture(conn, parser_options)
 
       strict_json_mutation_request?(conn, path_info) ->
-        parse_strict_json_mutation(conn, strict_parser_options)
+        parse_strict_json_mutation(conn, strict_options)
 
       true ->
         Plug.Parsers.call(conn, parser_options)
     end
   end
 
-  def call(conn, {parser_options, _strict_parser_options}) do
+  def call(conn, {parser_options, _strict_options}) do
     Plug.Parsers.call(conn, parser_options)
   end
 

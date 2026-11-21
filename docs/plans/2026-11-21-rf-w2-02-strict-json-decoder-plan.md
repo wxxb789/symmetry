@@ -47,12 +47,13 @@ single-pass by design and keeps its shape (C2); `daemon_controller.ex:401` stays
      `validate_duplicate_json_members/1`, the plug-local `decode_object/1` and the
      `materialize_object/1` / `materialize_pairs/2` / `materialize_value/1` /
      `materialize_list/2` walk (it moves, once, into the decoder). Keep `capture/2`,
-     `raw_body_private_key/0`, `materialize/1`, `json_options!/1` (its only remaining caller
-     is `capture/2`) and the duplicate-member → `Protocol.error(:invalid_request)` mapping.
+     `raw_body_private_key/0`, `materialize/1`, `json_options!/1` (its callers are `capture/2` and
+     `init/1`, which validates the parser options at boot) and the duplicate-member →
+     `Protocol.error(:invalid_request)` mapping.
 2. `control/test/symmetry_control_web/plugs/strict_evidence_json_test.exs`: characterization
    tests that are green on the base bytes (endpoint-level duplicate envelope byte-for-byte,
    malformed-body parser rendering, `+json` on a mutation route, top-level array `_json`,
-   empty body, `/portal/login` last-wins) plus one wiring pin that is red on base: the strict
+   empty body, `/portal/login` first-wins) plus one wiring pin that is red on base: the strict
    options hold `{StrictJSONDecoder, :decode!, []}` with the untouched body reader while the
    plain options keep `{Jason, :decode!, []}`. No existing test is renamed, deleted or
    weakened.
@@ -77,12 +78,12 @@ outside the owned set goes stale. `docs/TODO.md` holds no `W2-02` entry, so no T
 | malformed *and* duplicate | malformed wins (decode fails before the walk) | identical precedence |
 | `application/vnd.*+json` | strict decoder applies | identical |
 | non-JSON content type, non-mutation method, non-`/api/v1\|/portal/api` path, evidence route | plain parser / capture | identical |
-| `POST /portal/login` with duplicate members | plain decoder, last-wins, not rejected | identical |
+| `POST /portal/login` with duplicate members | plain decoder, first-wins, not rejected | identical |
 
 ## Evidence plan (all gates foreground; never a measurement beside the suite)
 
 1. Characterization tests first, on base bytes: `sh <gate-runner> test test/.../strict_evidence_json_test.exs`
-   — the seven C3/C4 additions green, the wiring pin red (red-on-base is the pin's purpose).
+   — the eight C3/C4 additions green, the wiring pin red (red-on-base is the pin's purpose).
 2. Implementation; then the same file green with the pin.
 3. Contract gates, final bytes, serially:
    - `mix format --check-formatted` → empty, exit 0
@@ -114,9 +115,9 @@ outside the owned set goes stale. `docs/TODO.md` holds no `W2-02` entry, so no T
      rendering "request is invalid"), the malformed pin stays green;
    - M2: the strict options keep the plain decoder (decoder swap deleted) → the wiring pin
      goes red, and the duplicate tests on the strict path go red because the base body-reader
-     wrapper is gone too (the duplicate is then accepted last-wins by the modular evidence
+     wrapper is gone too (the duplicate is then accepted first-wins by the modular evidence
      path test but rejected by… measured, then restored);
-   - M3: the non-strict branch also gets the strict options → the `/portal/login` last-wins
+   - M3: the non-strict branch also gets the strict options → the `/portal/login` first-wins
      test goes red (a 400 replaces the redirect).
 6. `mix credo` on the changed file: same (or lower) issue count as base — the contract forbids
    new `credo:disable` suppressions; recorded as supporting evidence, not a contract gate
@@ -146,8 +147,9 @@ outside the owned set goes stale. `docs/TODO.md` holds no `W2-02` entry, so no T
 4. **One walk, shared by `decode!/1` and `materialize/1`.** The deferred evidence path needs
    the same duplicate check and materialization; keeping the base's two copies would leave
    `materialize/1` on its own decoder and re-open the same asymmetry. The walk's error tags
-   (`:malformed_json`, `:expected_json_object`, `:duplicate_json_key`) and its
-   `{:ok, %{}}`-for-empty-captured-body behavior are unchanged, pinned by the existing tests.
+   (`:malformed_json`, `:expected_json_object`, `:duplicate_json_key`) are unchanged, pinned by
+   the existing tests; the empty-capture clause (`{:ok, ""}` → `{:ok, %{}}`) is pinned by the new
+   plug-level empty-evidence-capture test.
 5. **Not endpoint-wide.** CW-1's proposal installed the decoder in `endpoint.ex`; the
    conductor ruled strict scope stays the strict route set (C1), so non-strict routes keep the
    plain decoder. Cheaper and narrower than the finding.

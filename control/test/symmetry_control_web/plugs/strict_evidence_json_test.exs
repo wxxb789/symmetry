@@ -50,6 +50,16 @@ defmodule SymmetryControlWeb.Plugs.StrictEvidenceJSONTest do
     end
   end
 
+  test "treats an empty captured evidence body as empty params" do
+    conn =
+      :post
+      |> conn("/api/v1/runs/run-1/evidence", "")
+      |> put_req_header("content-type", "application/json")
+      |> StrictEvidenceJSON.call(@parser_options)
+
+    assert {:ok, %{}} = StrictEvidenceJSON.materialize(conn)
+  end
+
   test "rejects duplicate decoded keys recursively, including escaped aliases" do
     body = ~S({"items":[{"name":1,"\u006eame":2}]})
 
@@ -120,9 +130,12 @@ defmodule SymmetryControlWeb.Plugs.StrictEvidenceJSONTest do
       |> conn("/api/v1/runs/run-1/usage", ~s({"name":))
       |> put_req_header("content-type", "application/json")
 
-    assert_raise Plug.Parsers.ParseError, fn ->
-      StrictEvidenceJSON.call(conn, @parser_options)
-    end
+    error =
+      assert_raise Plug.Parsers.ParseError, fn ->
+        StrictEvidenceJSON.call(conn, @parser_options)
+      end
+
+    assert %Jason.DecodeError{} = error.exception
   end
 
   test "parses a top-level array on the strict scope into the _json body param" do
