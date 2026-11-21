@@ -19,7 +19,6 @@ import sys
 import tempfile
 import unittest
 
-
 SCRIPT = pathlib.Path(__file__).with_name("check-citation-existence.py")
 ZERO = "0" * 40
 
@@ -57,9 +56,7 @@ class CitationExistenceTests(unittest.TestCase):
     # -- helpers -------------------------------------------------------------
 
     def git(self, *arguments: str, input: bytes | None = None) -> bytes:
-        return subprocess.check_output(
-            ["git", "-C", str(self.repo), *arguments], input=input, stderr=subprocess.PIPE
-        )
+        return subprocess.check_output(["git", "-C", str(self.repo), *arguments], input=input, stderr=subprocess.PIPE)
 
     def git_text(self, *arguments: str) -> str:
         return self.git(*arguments).decode("ascii").strip()
@@ -78,7 +75,9 @@ class CitationExistenceTests(unittest.TestCase):
     def run_gate(self, *arguments: str) -> subprocess.CompletedProcess:
         return subprocess.run(
             [sys.executable, str(SCRIPT), "--repo", str(self.repo), *arguments],
-            capture_output=True, text=True, check=False,
+            capture_output=True,
+            text=True,
+            check=False,
         )
 
     def cite_in_runbook(self, citation: str, message: str = "cite") -> str:
@@ -147,9 +146,7 @@ class CitationExistenceTests(unittest.TestCase):
         self.assertIn("0 path citation(s)", result.stdout)
 
     def test_a_bound_symbol_absent_from_the_cited_file_is_refused(self) -> None:
-        head = self.cite_in_runbook(
-            "`snapshot_progress/2` in `control/lib/thing.ex`", "cite an absent symbol"
-        )
+        head = self.cite_in_runbook("`snapshot_progress/2` in `control/lib/thing.ex`", "cite an absent symbol")
         result = self.run_gate("--base", self.base, "--head", head)
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("snapshot_progress", result.stderr)
@@ -164,9 +161,7 @@ class CitationExistenceTests(unittest.TestCase):
     def test_a_symbol_the_prose_does_not_bind_is_not_checked(self) -> None:
         # The connective list is closed and the sentence break is respected: prose the
         # gate cannot parse as a binding must never demand a rewrite.
-        head = self.cite_in_runbook(
-            "`health/4` was moved out of `control/lib/legacy.ex`", "cite across a sentence"
-        )
+        head = self.cite_in_runbook("`health/4` was moved out of `control/lib/legacy.ex`", "cite across a sentence")
         result = self.run_gate("--base", self.base, "--head", head)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
@@ -216,8 +211,9 @@ class CitationExistenceTests(unittest.TestCase):
         target = self.root / "clean-target.md"
         target.write_text(CLEAN_RUNBOOK, encoding="utf-8")
         blob = self.git("hash-object", "-w", "--stdin", input=str(target).encode("utf-8"))
-        self.git("update-index", "--add", "--cacheinfo",
-                 f"120000,{blob.decode('ascii').strip()},docs/runbooks/portal.md")
+        self.git(
+            "update-index", "--add", "--cacheinfo", f"120000,{blob.decode('ascii').strip()},docs/runbooks/portal.md"
+        )
         tree = self.git_text("write-tree")
         head = self.git_text("commit-tree", tree, "-p", self.base, "-m", "commit the runbook as a link")
         self.git("update-ref", "HEAD", head)
@@ -238,7 +234,10 @@ class CitationExistenceTests(unittest.TestCase):
         )
         result = subprocess.run(
             [sys.executable, str(SCRIPT), "--repo", str(self.repo), "--base", self.base, "--head", head],
-            capture_output=True, text=True, check=False, env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+            env=environment,
         )
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("cannot diff", result.stderr)
@@ -260,7 +259,9 @@ class CitationExistenceTests(unittest.TestCase):
         subprocess.check_call(["git", "commit", "--quiet", "-m", "only commit"], cwd=str(orphan))
         result = subprocess.run(
             [sys.executable, str(SCRIPT), "--repo", str(orphan), "--base", ZERO],
-            capture_output=True, text=True, check=False,
+            capture_output=True,
+            text=True,
+            check=False,
         )
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("cannot resolve a comparison base", result.stderr)
@@ -271,9 +272,7 @@ class CitationExistenceTests(unittest.TestCase):
         # The path arm owns a missing path; the symbol arm must not read the absent
         # file's blob, turn the run into an "unusable revision" exit and drop the
         # refusal the path arm already collected.
-        head = self.cite_in_runbook(
-            "`health/4` in `control/lib/moved.ex`", "bind a symbol to a moved path"
-        )
+        head = self.cite_in_runbook("`health/4` in `control/lib/moved.ex`", "bind a symbol to a moved path")
         result = self.run_gate("--base", self.base, "--head", head)
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("control/lib/moved.ex", result.stderr)
@@ -336,9 +335,7 @@ class CitationExistenceTests(unittest.TestCase):
 
     def test_an_ellipsis_truncated_name_matches_the_family(self) -> None:
         # `...` and `…` both mean "and so on": both are wildcards inside the name.
-        head = self.cite_in_runbook(
-            "`docs/runbooks/port...` and `docs/runbooks/port…`", "cite truncated names"
-        )
+        head = self.cite_in_runbook("`docs/runbooks/port...` and `docs/runbooks/port…`", "cite truncated names")
         result = self.run_gate("--base", self.base, "--head", head)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("2 path citation(s)", result.stdout)
@@ -370,12 +367,7 @@ class CitationExistenceTests(unittest.TestCase):
         # the same backticks prose does; the example code is not a citation, and the
         # prose around the fence still is.
         self.write(
-            "docs/runbooks/portal.md",
-            "# Portal runbook\n"
-            "\n"
-            "```js\n"
-            "const gone = `docs/runbooks/moved.md`;\n"
-            "```\n"
+            "docs/runbooks/portal.md", "# Portal runbook\n\n```js\nconst gone = `docs/runbooks/moved.md`;\n```\n"
         )
         head = self.commit("show example code")
         result = self.run_gate("--base", self.base, "--head", head)
@@ -422,12 +414,7 @@ class CitationExistenceTests(unittest.TestCase):
         # is content: reading it as a closer would audit the example code below it.
         self.write(
             "docs/runbooks/portal.md",
-            "# Portal runbook\n"
-            "\n"
-            "```md\n"
-            "```js\n"
-            "const gone = `docs/runbooks/moved.md`;\n"
-            "```\n",
+            "# Portal runbook\n\n```md\n```js\nconst gone = `docs/runbooks/moved.md`;\n```\n",
         )
         head = self.commit("show code inside a fence")
         result = self.run_gate("--base", self.base, "--head", head)
@@ -439,11 +426,7 @@ class CitationExistenceTests(unittest.TestCase):
         # must not be audited as prose.
         self.write(
             "docs/runbooks/portal.md",
-            "# Portal runbook\n"
-            "\n"
-            "> ```js\n"
-            "> const gone = `docs/runbooks/moved.md`;\n"
-            "> ```\n",
+            "# Portal runbook\n\n> ```js\n> const gone = `docs/runbooks/moved.md`;\n> ```\n",
         )
         head = self.commit("show a quoted example")
         result = self.run_gate("--base", self.base, "--head", head)
@@ -457,11 +440,7 @@ class CitationExistenceTests(unittest.TestCase):
         # silently skip the absent citation below it - a false negative, never a red.
         self.write(
             "docs/runbooks/portal.md",
-            "# Portal runbook\n"
-            "\n"
-            "```code``` is how a span is written.\n"
-            "\n"
-            "See `docs/runbooks/moved.md`.\n",
+            "# Portal runbook\n\n```code``` is how a span is written.\n\nSee `docs/runbooks/moved.md`.\n",
         )
         head = self.commit("write a prose line that starts with a span")
         result = self.run_gate("--base", self.base, "--head", head)
@@ -472,11 +451,7 @@ class CitationExistenceTests(unittest.TestCase):
         # its info string, and the block's content stays blanked.
         self.write(
             "docs/runbooks/portal.md",
-            "# Portal runbook\n"
-            "\n"
-            "~~~ `docs/runbooks/moved.md`\n"
-            "example\n"
-            "~~~\n",
+            "# Portal runbook\n\n~~~ `docs/runbooks/moved.md`\nexample\n~~~\n",
         )
         head = self.commit("quote a path in a tilde fence's info string")
         result = self.run_gate("--base", self.base, "--head", head)
@@ -486,17 +461,13 @@ class CitationExistenceTests(unittest.TestCase):
     def test_a_coordinating_conjunction_does_not_bind_a_path_and_symbol(self) -> None:
         # `and` joins list items: it must not demand that a symbol belonging to some
         # other file occur in the file the list happens to mention first.
-        head = self.cite_in_runbook(
-            "`control/lib/thing.ex` and `snapshot_progress/2`", "list beside a symbol"
-        )
+        head = self.cite_in_runbook("`control/lib/thing.ex` and `snapshot_progress/2`", "list beside a symbol")
         result = self.run_gate("--base", self.base, "--head", head)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("1 path citation(s)", result.stdout)
 
     def test_a_symbol_after_the_path_it_binds_to_is_checked(self) -> None:
-        head = self.cite_in_runbook(
-            "`control/lib/thing.ex` calls `snapshot_progress/2`", "bind path-first"
-        )
+        head = self.cite_in_runbook("`control/lib/thing.ex` calls `snapshot_progress/2`", "bind path-first")
         result = self.run_gate("--base", self.base, "--head", head)
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("snapshot_progress", result.stderr)
@@ -545,9 +516,7 @@ class CitationExistenceTests(unittest.TestCase):
         self.write("browser/tests/portal.spec.mjs", "// fixture\n")
         self.base = self.commit("fixture a browser tree")
         self.git("rm", "-r", "--quiet", "browser")
-        head = self.cite_in_runbook(
-            "`browser/tests/portal.spec.mjs:12` and `browser/`", "cite a removed tree"
-        )
+        head = self.cite_in_runbook("`browser/tests/portal.spec.mjs:12` and `browser/`", "cite a removed tree")
         result = self.run_gate("--base", self.base, "--head", head)
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("the cited path `browser/tests/portal.spec.mjs` is in no entry", result.stderr)
@@ -563,9 +532,7 @@ class CitationExistenceTests(unittest.TestCase):
         self.commit("fixture a browser tree")
         self.git("rm", "-r", "--quiet", "browser")
         removal = self.commit("remove the browser tree")
-        head = self.cite_in_runbook(
-            "`browser/tests/portal.spec.mjs:12` and `browser/`", "cite a tree removed earlier"
-        )
+        head = self.cite_in_runbook("`browser/tests/portal.spec.mjs:12` and `browser/`", "cite a tree removed earlier")
         result = self.run_gate("--base", removal, "--head", head)
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("the cited path `browser/tests/portal.spec.mjs` is in no entry", result.stderr)
@@ -581,9 +548,7 @@ class CitationExistenceTests(unittest.TestCase):
         self.base = self.commit("fixture a browser tree")
         self.git("rm", "-r", "--quiet", "browser")
         self.write(".gitignore", "/browser/\n")
-        head = self.cite_in_runbook(
-            "`browser/tests/portal.spec.mjs:12`", "cite a removed, ignored tree"
-        )
+        head = self.cite_in_runbook("`browser/tests/portal.spec.mjs:12`", "cite a removed, ignored tree")
         result = self.run_gate("--base", self.base, "--head", head)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("the ignore rule .gitignore:1:/browser/", result.stdout)
@@ -605,8 +570,7 @@ class CitationExistenceTests(unittest.TestCase):
         self.write(".gitignore", "/control/priv/static/portal/\n")
         self.write(
             "docs/runbooks/portal.md",
-            "# Portal runbook\n\nThe build stages hashed assets in "
-            "`control/priv/static/portal/index.html`.\n",
+            "# Portal runbook\n\nThe build stages hashed assets in `control/priv/static/portal/index.html`.\n",
         )
         head = self.commit("document the generated bundle")
         (self.repo / ".gitignore").unlink()
@@ -640,8 +604,7 @@ class CitationExistenceTests(unittest.TestCase):
         self.write(".gitignore", "/control/generated/\n")
         self.write(
             "docs/runbooks/portal.md",
-            "# Portal runbook\n\nThe build stages hashed assets in "
-            "`control/generated/index.html`.\n",
+            "# Portal runbook\n\nThe build stages hashed assets in `control/generated/index.html`.\n",
         )
         self.git("add", "docs/runbooks/portal.md")
         self.git("commit", "--quiet", "-m", "cite an untracked generated path")
@@ -658,7 +621,8 @@ class CitationExistenceTests(unittest.TestCase):
         result = self.run_gate("--base", self.base, "--head", head)
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn(
-            "the cited path `docs/runbooks/portal.md` names a file, not a directory", result.stderr,
+            "the cited path `docs/runbooks/portal.md` names a file, not a directory",
+            result.stderr,
         )
         self.assertNotIn("the cited path `docs/runbooks/portal.md` is in no entry", result.stderr)
 
@@ -684,22 +648,19 @@ class CitationExistenceTests(unittest.TestCase):
         other = self.root / "other-repository"
         subprocess.check_call(["git", "clone", "--quiet", str(self.repo), str(other)])
         subprocess.check_call(["git", "config", "user.name", "Fixture"], cwd=str(other))
-        subprocess.check_call(
-            ["git", "config", "user.email", "fixture@example.invalid"], cwd=str(other)
-        )
+        subprocess.check_call(["git", "config", "user.email", "fixture@example.invalid"], cwd=str(other))
         (other / "daemon").mkdir(exist_ok=True)
-        (other / "daemon" / "main.go").write_text(
-            "package main\n\nfunc main() {}\n", encoding="utf-8", newline="\n"
-        )
+        (other / "daemon" / "main.go").write_text("package main\n\nfunc main() {}\n", encoding="utf-8", newline="\n")
         subprocess.check_call(["git", "add", "-A"], cwd=str(other))
-        subprocess.check_call(
-            ["git", "commit", "--quiet", "-m", "change only unrelated code"], cwd=str(other)
-        )
-        head = self.cite_in_runbook("`docs/runbooks/moved.md`", "cite a moved path")
+        subprocess.check_call(["git", "commit", "--quiet", "-m", "change only unrelated code"], cwd=str(other))
+        self.cite_in_runbook("`docs/runbooks/moved.md`", "cite a moved path")
         environment = dict(os.environ, GIT_DIR=str(other / ".git"))
         result = subprocess.run(
             [sys.executable, str(SCRIPT), "--repo", str(self.repo), "--base", "HEAD^", "--head", "HEAD"],
-            capture_output=True, text=True, check=False, env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+            env=environment,
         )
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("moved.md", result.stderr)

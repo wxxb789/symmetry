@@ -77,9 +77,7 @@ class Mapping:
 
     def add(self, key: str, value: object, line_number: int) -> None:
         if key in self.entries:
-            raise UnusableLockfile(
-                f"line {line_number}: key {key!r} repeats inside one mapping"
-            )
+            raise UnusableLockfile(f"line {line_number}: key {key!r} repeats inside one mapping")
         self.entries[key] = value
 
 
@@ -152,9 +150,7 @@ def _split_documents(text: str) -> list[list[tuple[int, str]]]:
         content = _body(line)
         if content.startswith("---") or content.startswith("..."):
             if content not in ("---", "..."):
-                raise UnusableLockfile(
-                    f"line {number}: document marker carries inline content: {content!r}"
-                )
+                raise UnusableLockfile(f"line {number}: document marker carries inline content: {content!r}")
             documents.append([])
             continue
         if content.startswith("%"):
@@ -168,9 +164,7 @@ def parse_documents(text: str) -> list[Mapping]:
 
     documents: list[Mapping] = []
     for lines in _split_documents(text):
-        content_lines = [
-            (number, line) for number, line in lines if _body(line)
-        ]
+        content_lines = [(number, line) for number, line in lines if _body(line)]
         if not content_lines:
             continue
         reader = _Reader(content_lines)
@@ -205,14 +199,11 @@ def _parse_mapping(reader: _Reader, indent: int) -> Mapping:
             return mapping
         if _indent(text) > indent:
             raise UnusableLockfile(
-                f"line {number}: unexpected indentation {_indent(text)} "
-                f"inside a mapping at indentation {indent}"
+                f"line {number}: unexpected indentation {_indent(text)} inside a mapping at indentation {indent}"
             )
         content = _body(text)
         if _is_sequence_entry(content):
-            raise UnusableLockfile(
-                f"line {number}: sequence entry inside a mapping: {content!r}"
-            )
+            raise UnusableLockfile(f"line {number}: sequence entry inside a mapping: {content!r}")
         key, value_text = _split_key(content, number)
         reader.take()
         mapping.add(key, _parse_value(reader, indent, value_text, number), number)
@@ -251,12 +242,9 @@ def _parse_sequence(reader: _Reader, indent: int) -> Sequence:
                 raise UnusableLockfile(f"line {number}: sequence entry carries no value")
             sequence.items.append(_parse_block(reader, _indent(following[1])))
             continue
-        if not item_text.startswith(("'", "{", "[")) and (
-            ": " in item_text or item_text.endswith(":")
-        ):
+        if not item_text.startswith(("'", "{", "[")) and (": " in item_text or item_text.endswith(":")):
             raise UnusableLockfile(
-                f"line {number}: mappings inline in a sequence entry are outside "
-                f"the lockfile subset: {item_text!r}"
+                f"line {number}: mappings inline in a sequence entry are outside the lockfile subset: {item_text!r}"
             )
         sequence.items.append(_parse_inline_value(item_text, number))
 
@@ -274,9 +262,7 @@ def _split_key(content: str, number: int) -> tuple[str, str]:
                 raise UnusableLockfile(f"line {number}: empty mapping key")
             _reject_unquoted_marker(key, number)
             return key, content[position + 1 :].strip()
-    raise UnusableLockfile(
-        f"line {number}: line carries no `key: value` separator: {content!r}"
-    )
+    raise UnusableLockfile(f"line {number}: line carries no `key: value` separator: {content!r}")
 
 
 def _parse_single_quoted(text: str, number: int) -> tuple[str, str]:
@@ -297,9 +283,7 @@ def _parse_single_quoted(text: str, number: int) -> tuple[str, str]:
 
 def _reject_unquoted_marker(text: str, number: int) -> None:
     if text.startswith(PLAIN_SCALAR_RESERVED_STARTS):
-        raise UnusableLockfile(
-            f"line {number}: unquoted scalar starts with a YAML indicator: {text!r}"
-        )
+        raise UnusableLockfile(f"line {number}: unquoted scalar starts with a YAML indicator: {text!r}")
 
 
 def _parse_inline_value(text: str, number: int) -> object:
@@ -321,18 +305,14 @@ def _parse_inline_value(text: str, number: int) -> object:
         _reject_trailing(remainder, number)
         return Scalar(scalar)
     if ": " in value or value.endswith(":"):
-        raise UnusableLockfile(
-            f"line {number}: unquoted scalar is ambiguous with a mapping: {value!r}"
-        )
+        raise UnusableLockfile(f"line {number}: unquoted scalar is ambiguous with a mapping: {value!r}")
     _reject_unquoted_marker(value, number)
     return Scalar(value)
 
 
 def _reject_trailing(remainder: str, number: int) -> None:
     if remainder.strip():
-        raise UnusableLockfile(
-            f"line {number}: unexpected content after a value: {remainder.strip()!r}"
-        )
+        raise UnusableLockfile(f"line {number}: unexpected content after a value: {remainder.strip()!r}")
 
 
 def _skip_spaces(text: str, position: int) -> int:
@@ -348,24 +328,19 @@ def _parse_flow_mapping(text: str, number: int) -> tuple[Mapping, str]:
         return mapping, text[position + 1 :]
     while True:
         if position >= len(text):
-            raise UnusableLockfile(
-                f"line {number}: flow mapping does not close on its line"
-            )
+            raise UnusableLockfile(f"line {number}: flow mapping does not close on its line")
         if text[position] == "'":
             key, remainder = _parse_single_quoted(text[position:], number)
             position = len(text) - len(remainder)
         else:
             separator = None
             for candidate in range(position, len(text)):
-                if text[candidate] == ":" and (
-                    candidate + 1 == len(text) or text[candidate + 1] in " ,}"
-                ):
+                if text[candidate] == ":" and (candidate + 1 == len(text) or text[candidate + 1] in " ,}"):
                     separator = candidate
                     break
             if separator is None:
                 raise UnusableLockfile(
-                    f"line {number}: flow mapping entry carries no key separator: "
-                    f"{text[position:]!r}"
+                    f"line {number}: flow mapping entry carries no key separator: {text[position:]!r}"
                 )
             key = text[position:separator].strip()
             position = separator
@@ -373,17 +348,13 @@ def _parse_flow_mapping(text: str, number: int) -> tuple[Mapping, str]:
                 raise UnusableLockfile(f"line {number}: empty flow mapping key")
             _reject_unquoted_marker(key, number)
         if position >= len(text) or text[position] != ":":
-            raise UnusableLockfile(
-                f"line {number}: flow mapping key is not followed by its separator"
-            )
+            raise UnusableLockfile(f"line {number}: flow mapping key is not followed by its separator")
         position = _skip_spaces(text, position + 1)
         value, position = _parse_flow_value(text, position, number)
         mapping.add(key, value, number)
         position = _skip_spaces(text, position)
         if position >= len(text):
-            raise UnusableLockfile(
-                f"line {number}: flow mapping does not close on its line"
-            )
+            raise UnusableLockfile(f"line {number}: flow mapping does not close on its line")
         if text[position] == ",":
             position = _skip_spaces(text, position + 1)
             if position < len(text) and text[position] == "}":
@@ -391,10 +362,7 @@ def _parse_flow_mapping(text: str, number: int) -> tuple[Mapping, str]:
             continue
         if text[position] == "}":
             return mapping, text[position + 1 :]
-        raise UnusableLockfile(
-            f"line {number}: flow mapping entry is not followed by `,` or `}}`: "
-            f"{text[position:]!r}"
-        )
+        raise UnusableLockfile(f"line {number}: flow mapping entry is not followed by `,` or `}}`: {text[position:]!r}")
 
 
 def _parse_flow_sequence(text: str, number: int) -> tuple[Sequence, str]:
@@ -407,9 +375,7 @@ def _parse_flow_sequence(text: str, number: int) -> tuple[Sequence, str]:
         sequence.items.append(value)
         position = _skip_spaces(text, position)
         if position >= len(text):
-            raise UnusableLockfile(
-                f"line {number}: flow sequence does not close on its line"
-            )
+            raise UnusableLockfile(f"line {number}: flow sequence does not close on its line")
         if text[position] == ",":
             position = _skip_spaces(text, position + 1)
             if position < len(text) and text[position] == "]":
@@ -417,10 +383,7 @@ def _parse_flow_sequence(text: str, number: int) -> tuple[Sequence, str]:
             continue
         if text[position] == "]":
             return sequence, text[position + 1 :]
-        raise UnusableLockfile(
-            f"line {number}: flow sequence entry is not followed by `,` or `]`: "
-            f"{text[position:]!r}"
-        )
+        raise UnusableLockfile(f"line {number}: flow sequence entry is not followed by `,` or `]`: {text[position:]!r}")
 
 
 def _parse_flow_value(text: str, position: int, number: int) -> tuple[object, int]:
@@ -445,13 +408,9 @@ def _parse_flow_value(text: str, position: int, number: int) -> tuple[object, in
     if not value:
         raise UnusableLockfile(f"line {number}: flow collection entry carries no value")
     if value.startswith(PLAIN_SCALAR_RESERVED_STARTS):
-        raise UnusableLockfile(
-            f"line {number}: unquoted scalar starts with a YAML indicator: {value!r}"
-        )
+        raise UnusableLockfile(f"line {number}: unquoted scalar starts with a YAML indicator: {value!r}")
     if ": " in value:
-        raise UnusableLockfile(
-            f"line {number}: unquoted flow scalar is ambiguous with a mapping: {value!r}"
-        )
+        raise UnusableLockfile(f"line {number}: unquoted flow scalar is ambiguous with a mapping: {value!r}")
     return Scalar(value), stop
 
 
@@ -481,15 +440,11 @@ def load_lockfile(path: Path) -> list[Mapping]:
         and document.entries["lockfileVersion"].value.strip()
         for document in documents
     ):
-        raise UnusableLockfile(
-            f"{path} carries no lockfileVersion, so it is not a pnpm lockfile"
-        )
+        raise UnusableLockfile(f"{path} carries no lockfileVersion, so it is not a pnpm lockfile")
     return documents
 
 
-def classify(
-    entry_path: str, node: object, canonical_host: str = CANONICAL_REGISTRY_HOST
-) -> str | None:
+def classify(entry_path: str, node: object, canonical_host: str = CANONICAL_REGISTRY_HOST) -> str | None:
     """Return why this recorded tarball URL is off-registry, or `None` when it is not."""
 
     if not isinstance(node, Scalar):
@@ -506,16 +461,11 @@ def classify(
     if parts.hostname != canonical_host or parts.port is not None:
         host = parts.hostname or "<none>"
         port = f":{parts.port}" if parts.port is not None else ""
-        return (
-            f"{entry_path}: recorded tarball host {host}{port} is not {canonical_host}: "
-            f"{value}"
-        )
+        return f"{entry_path}: recorded tarball host {host}{port} is not {canonical_host}: {value}"
     return None
 
 
-def _collect_tarballs(
-    node: object, trail: list[str], found: list[tuple[str, object]]
-) -> None:
+def _collect_tarballs(node: object, trail: list[str], found: list[tuple[str, object]]) -> None:
     if trail[-1] == "tarball":
         found.append((".".join(trail), node))
         return
@@ -553,11 +503,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
     problems = [
-        problem
-        for problem in (
-            classify(entry_path, node) for entry_path, node in entries
-        )
-        if problem is not None
+        problem for problem in (classify(entry_path, node) for entry_path, node in entries) if problem is not None
     ]
     if problems:
         print(

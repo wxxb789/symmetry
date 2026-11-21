@@ -24,7 +24,7 @@ export function WorkHistory({ workItemId, firstPage, cursor }: { workItemId: str
   // pages already hold; the newest page owns it then, so no entry renders twice.
   const firstPageKeys = new Set(firstPage.map(timelineItemKey));
   const items = [...firstPage, ...retained.filter((item) => !firstPageKeys.has(timelineItemKey(item)))];
-  const exhausted = query.isSuccess && query.hasNextPage === false;
+  const exhausted = query.isSuccess && !query.hasNextPage;
   const staleCursor = query.error instanceof UnexpectedResponse && query.error.status === 400;
   if (items.length === 0 && cursor === null) return <p className="muted">No execution history recorded</p>;
   return <>
