@@ -8,8 +8,8 @@ defmodule SymmetryControlWeb.Plugs.StrictEvidenceJSONTest do
   alias SymmetryControlWeb.StrictJSONDecoder
 
   # The plug's private connection key for a captured evidence body. Pinned here
-  # because the plug exposes no accessor: a renamed key inside the plug must
-  # redden this file's capture assertions and its not-captured assertions alike.
+  # because the plug exposes no accessor: a plug that captures under a renamed
+  # key must redden this file's capture assertions and its not-captured assertions alike.
   @raw_body_private_key :symmetry_control_raw_evidence_json
 
   @parser_options StrictEvidenceJSON.init(

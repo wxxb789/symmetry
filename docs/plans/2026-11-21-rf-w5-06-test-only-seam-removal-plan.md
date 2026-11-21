@@ -58,31 +58,32 @@ The plug test pins that key with a module attribute:
 
 ```elixir
 # The plug's private connection key for a captured evidence body. Pinned here
-# because the plug exposes no accessor: renaming the key inside the plug must
-# redden this file's capture assertions and its not-captured assertions alike.
+# because the plug exposes no accessor: a plug that captures under a renamed
+# key must redden this file's capture assertions and its not-captured assertions alike.
 @raw_body_private_key :symmetry_control_raw_evidence_json
 ```
 
 Its five accessor call sites become the two read forms
 `conn.private[@raw_body_private_key] == body` (`:26`,`:32`,`:48`) and
-`refute Map.has_key?(conn.private, @raw_body_private_key)` (`:226`,`:285`); no test name, no
-other assertion and no other line changes.
+`refute Map.has_key?(conn.private, @raw_body_private_key)` (`:231`,`:291`), and each refute site
+gains the strengthened value assertion
+`refute Enum.any?(conn.private, fn {_key, value} -> value == body end)` (`:232`,`:292`). No test
+name changes.
 
 The clock seam keeps its code and gains one comment at the read site (prod file, comment only):
 
 ```elixir
 defp claim_response_time(conn) do
-  # Test-only clock seam: <test file> (the expired-at-response replay case) sets
-  # this private key and production never does, so the fallback below is
-  # production's only path.
+  # Test-only clock seam: `protocol_controller_test.exs:644` (the
+  # expired-at-response replay case) puts this private key in the conn, and
+  # production never does, so the fallback below is production's only path.
   case Map.get(conn.private, :claim_server_time) do
 ```
 
-The comment names the test file and the case; the contract's `:644` citation is kept in this plan
-and in the evidence record instead of a line number in code, because a code comment carrying a
-line number rots silently — the file plus case name is the durable form of the same pointer. The
-contract's own text is "a comment naming `protocol_controller_test.exs:644`", and the file plus
-test name identifies exactly that writer; the line number is recorded here and in the report.
+The comment carries the contract's citation form: the literal `protocol_controller_test.exs:644`
+plus the case description at the read site — Change (2)'s "comment naming
+`protocol_controller_test.exs:644`" — so the read site itself names the writer that sets the key;
+the same citation is also recorded in the seam table above and in the report.
 
 ## Edge-case semantics the contract demands
 
@@ -153,15 +154,33 @@ final report.
 
 ## Measured results (this tree, `fc8e95a2` + working-tree change)
 
-Every row is a command actually run in this worktree. The mutation runs and the first gate round
-ran on the revision whose working-tree `git diff | sha256sum` is
-`ff31a72a1675767ceb7f0381faeaee88e0187eeb88c2728881a3096c8e0664d5`; all mutation edits were
+Every row is a command actually run in this worktree. The byte hashes cited here are
+delivered-bytes hashes of `control/lib` and `control/test` against `fc8e95a2`, taken with the
+prefix flags the gate artifact used —
+`git diff --src-prefix=i/ --dst-prefix=w/ fc8e95a2 -- control/lib control/test | sha256sum`
+(a plain `git diff` prints `a/`,`b/` headers instead and hashes identical content differently:
+`d8ccf7c5ead1a51344f1c1c5b30caea7cbfa9f3162b58b104e5bd22168617c49` instead of
+`51097c07e40a845994aa6ae8d5e0fdd60a34cbcc6cb39ae4923226a9ee0a17ec` on the implement-stage
+bytes). The mutation runs and the first gate round ran on the revision whose delivered-bytes hash
+is `ff31a72a1675767ceb7f0381faeaee88e0187eeb88c2728881a3096c8e0664d5`; all mutation edits were
 reverted and the tree was verified back to that hash (`cmp`-identical diff). The delivered bytes
 then tightened the seam comment to carry the literal `protocol_controller_test.exs:644` citation
-(comment text only, no executable and no test line), giving the delivered diff hash
-`51097c07e40a845994aa6ae8d5e0fdd60a34cbcc6cb39ae4923226a9ee0a17ec`; every gate row below was
-re-run on those delivered bytes. Runner: GDD-state scratch `rf-w5-06-mix.sh` (Elixir 1.20.4 /
+(comment text only, no executable and no test line), giving the implement-stage delivered-bytes
+hash `51097c07e40a845994aa6ae8d5e0fdd60a34cbcc6cb39ae4923226a9ee0a17ec` (reproduced at apply
+time); every gate row below was re-run on those delivered bytes. Runner: GDD-state scratch
+`rf-w5-06-mix.sh` (Elixir 1.20.4 /
 OTP 29.0.6, `MIX_TEST_PARTITION=rf-w5-06`, deps fetched locally, PostgreSQL on 5432).
+
+**Apply-stage note (`rf-w5-06` apply, 2026-11-21).** The accepted simplify findings R1, PD-A and
+PD-B are applied on top of `cc7170bc`: R1 reworded the test-side constant's rationale comment in
+`strict_evidence_json_test.exs` (comment text only; assertions, test names and line counts
+unchanged), and PD-A/PD-B corrected this plan's comment quote, coordinates and hash-reproduction
+command to the delivered form. The shipped working tree's delivered-bytes hash is therefore
+`6eae05f72b9b809b8f1db6e80a695f284f0dbd2fecb73281d97957a0edcb1463`; the apply-stage re-runs on
+that revision are green: format exit 0, compile exit 0, the plug test 24 passed, the two suites
+55 passed, the web tree `--exclude portal_assets` 275 passed / 1 skipped / 4 excluded, and
+`git diff --check` exit 0. Committed history is untouched: the range `fc8e95a2..cc7170bc` still
+hashes to `51097c07e40a845994aa6ae8d5e0fdd60a34cbcc6cb39ae4923226a9ee0a17ec`.
 
 | Gate | Result |
 | --- | --- |
@@ -252,8 +271,9 @@ setup failures), and no other case is excluded.
    the discriminating control — the same spurious capture under the **original** key also reddens
    the strengthened refute, while the bare `Map.has_key?` form stays green under the rename.
    Reported inside mutation (a), not as a fourth mutation.
-3. **Comment citation form.** See "Public / API shape" above: file + test name in code, `:644`
-   recorded in this plan and the report.
+3. **Comment citation form.** See "Public / API shape" above: the read-site comment carries the
+   literal `protocol_controller_test.exs:644` citation plus the case description (contract Change
+   (2)); the same citation is recorded in this plan and the report.
 4. **Evidence file location.** The contract's owned set is STRICT and does not include
    `docs/evidence/`; this plan carries the evidence section and the run's `answer.md` carries the
    report (shape reference `a503eab7` / `rf-w2-16`). No repository file outside the owned set is
