@@ -280,15 +280,13 @@ type supervisorCore struct {
 	StopReceipt        *StopReceipt
 }
 
+// core converts to the shared core directly: Supervisor's field names, types
+// and order are identical to supervisorCore's, and a struct conversion ignores
+// tags, so the compiler checks this mapping. The handoff and the release proof
+// carry different field orders and non-core fields, so their extractors stay
+// explicit literals.
 func (value Supervisor) core() supervisorCore {
-	return supervisorCore{
-		Version: value.Version, Secret: value.Secret, LaunchToken: value.LaunchToken, OwnerKind: value.OwnerKind, OwnerContext: value.OwnerContext,
-		TargetPID: value.TargetPID, TargetIdentity: value.TargetIdentity, OwnerUID: value.OwnerUID, LauncherUID: value.LauncherUID,
-		PipeToken: value.PipeToken, JobID: value.JobID, SupervisorPID: value.SupervisorPID, SupervisorIdentity: value.SupervisorIdentity,
-		TargetBirthKind: value.TargetBirthKind, CgroupIdentity: value.CgroupIdentity, AnchorPID: value.AnchorPID, AnchorIdentity: value.AnchorIdentity,
-		LauncherPID: value.LauncherPID, LauncherIdentity: value.LauncherIdentity, LauncherExit: value.LauncherExit, Mirror: value.Mirror,
-		CreatorSessionID: value.CreatorSessionID, StopReceipt: value.StopReceipt,
-	}
+	return supervisorCore(value)
 }
 
 func (value SupervisorHandoff) core() supervisorCore {

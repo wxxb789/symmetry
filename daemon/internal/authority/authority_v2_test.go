@@ -388,14 +388,29 @@ func durableSupervisorRecords(t *testing.T) []durableRecord {
 	}
 }
 
-// durableStopReceiptFixture is a fully populated v2 receipt: every durable
-// field carries a non-zero value, both nested exit proofs are present and the
-// cgroup identity is independently allocated.
+// durableStopReceiptFixture is a fully populated v2 receipt for the record
+// testLinuxCgroupV2Handoff builds: every field v2 permits to be non-zero is
+// set, both nested exit proofs are present and the cgroup identity is
+// independently allocated. ActiveProcesses stays 0 because
+// matchesStoppedReceipt requires a drained leaf, and LauncherUID stays 0
+// because v2 validation rejects a non-zero value.
+//
+// The two record-bound identities are the record's, so a receipt derived here
+// validates for the handoff it is attached to (ValidForHandoff): a mirror-kind
+// stop proof names the record's Mirror as its issuer, and the proof's launcher
+// exit must equal the record's LauncherExit.
 func durableStopReceiptFixture() StopReceipt {
 	anchor := LinuxCgroupProcessIdentity{PID: 10, Identity: "anchor:10:start"}
 	helper := LinuxCgroupProcessIdentity{PID: 20, Identity: "helper:20:start"}
 	launcher := LinuxCgroupProcessIdentity{PID: 30, Identity: "launcher:30:start"}
-	mirror := LinuxCgroupProcessIdentity{PID: 50, Identity: "mirror:50:start"}
+	mirror := LinuxCgroupProcessIdentity{PID: 50, Identity: "daemon:50:start"}
+	launcherExit := LinuxCgroupExitProof{
+		Version: LinuxCgroupIdentityVersion,
+		Process: launcher,
+		Witness: helper,
+		Waited:  true,
+		Reaped:  true,
+	}
 	gateExit := LinuxCgroupExitProof{
 		Version: LinuxCgroupIdentityVersion,
 		Process: LinuxCgroupProcessIdentity{PID: 40, Identity: "gate:40:start"},
@@ -447,12 +462,9 @@ func durableStopReceiptFixture() StopReceipt {
 			NoMigrationObserved:    true,
 			ProducerFenced:         true,
 			DescendantsReaped:      true,
-			LauncherExit: LinuxCgroupExitProof{
-				Version: LinuxCgroupIdentityVersion, Process: launcher, Witness: anchor, Waited: true, Reaped: true,
-				HelperExit: &adoptedHelperExit,
-			},
-			GateExit:   mirrorGateExit,
-			HelperExit: &adoptedHelperExit,
+			LauncherExit:           launcherExit,
+			GateExit:               mirrorGateExit,
+			HelperExit:             &adoptedHelperExit,
 		},
 	}
 }
@@ -586,11 +598,53 @@ func TestSupervisorHandoffScanUpdateIsRequestOnly(t *testing.T) {
 	if cloned.ScanUpdate.Phase != SupervisorScanPhaseClean {
 		t.Fatal("Clone() shared the request-only ScanUpdate envelope")
 	}
-	encoded, err := json.Marshal(plain)
+	// The envelope is the only reason this record is not a durable authority:
+	// the stripped copy validates and converts, so the rejections below pin the
+	// request-only boundary rather than an incoherent fixture.
+	if err := plain.Validate(); err != nil {
+		t.Fatalf("fixture without the envelope failed Validate(): %v", err)
+	}
+	if _, err := plain.ToSupervisor(); err != nil {
+		t.Fatalf("fixture without the envelope failed ToSupervisor(): %v", err)
+	}
+	if _, err := handoff.ToSupervisor(); err == nil || err.Error() != "supervisor handoff is invalid" {
+		t.Fatalf("ToSupervisor() on a v2 handoff holding the envelope = %v, want the handoff-shape rejection", err)
+	}
+	// A v1 handoff carries the envelope through Validate (the legacy branch
+	// shape-checks it), so ToSupervisor is the boundary that refuses the
+	// conversion there. The rejection is pinned by message because the
+	// helper-bound check behind the guard rejects the same handoff with a
+	// different error.
+	legacy := SupervisorHandoff{
+		Version:        SupervisorHandoffVersion,
+		LaunchToken:    strings.Repeat("a", TokenBytes*2),
+		Secret:         strings.Repeat("b", SecretBytes*2),
+		TargetPID:      40,
+		TargetIdentity: "gate:40:start",
+		OwnerKind:      OwnerKindLinuxHelper,
+		OwnerContext:   "/run/symmetry/recovery.sock",
+		PipeToken:      strings.Repeat("c", TokenBytes*2),
+		JobID:          strings.Repeat("d", TokenBytes*2),
+		ScanUpdate: &SupervisorScanUpdate{
+			SupervisorPID: 20, SupervisorIdentity: "helper:20:start",
+			MirrorIdentity: strings.Repeat("e", TokenBytes*2),
+			Owner:          SupervisorScanOwnerHelper, Sequence: 3, Phase: SupervisorScanPhaseClean,
+		},
+	}
+	if err := legacy.Validate(); err != nil {
+		t.Fatalf("v1 handoff with a request-only envelope failed Validate(): %v", err)
+	}
+	if _, err := legacy.ToSupervisor(); err == nil || err.Error() != "supervisor scan update is not a durable authority" {
+		t.Fatalf("ToSupervisor() on a v1 request-only envelope = %v, want the scan-update rejection", err)
+	}
+	// Durable JSON never carries the envelope; the marshalled value holds the
+	// envelope, so a dropped `json:"-"` (or a renamed tag) fails here instead of
+	// passing on a nil field.
+	encoded, err := json.Marshal(handoff)
 	if err != nil {
 		t.Fatalf("Marshal() error = %v", err)
 	}
-	if strings.Contains(string(encoded), "scan_update") {
+	if strings.Contains(string(encoded), "ScanUpdate") || strings.Contains(string(encoded), "scan_update") {
 		t.Fatalf("handoff JSON emitted the request-only envelope: %s", encoded)
 	}
 }
@@ -618,6 +672,14 @@ func TestSupervisorConversionParityAgainstBaseFieldSet(t *testing.T) {
 	assertDurablePointersIndependent(t, handoff, value)
 	if value.StopReceipt == nil || !value.StopReceipt.Equal(*handoff.StopReceipt) {
 		t.Fatal("ToSupervisor() lost the terminal stop receipt")
+	}
+	// Parity compares the conversion against its source, so a field every
+	// valid record pins to zero is invisible to it: a dropped
+	// `LauncherUID: core.LauncherUID` mapping would still compare 0 against 0.
+	// v2 validation rejects a non-zero LauncherUID, so assert that reserved-zero
+	// mapping on a synthetic core directly.
+	if got := supervisorFromCore(supervisorCore{LauncherUID: 7}).LauncherUID; got != 7 {
+		t.Fatalf("supervisorFromCore() dropped the reserved-zero LauncherUID mapping: got %d", got)
 	}
 
 	projection := supervisorFromHandoff(handoff)

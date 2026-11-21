@@ -28,9 +28,11 @@ declaration and per comment group, base `authority.go` vs the three new files �
 248 = 248 lines, `diff` exit 0. The only line delta is the regenerated per-file header
 (package line, recomputed import block and its blank lines): 2187 = 2173 + 14.
 
-The logic stage then brings `supervisor.go` to 875 lines: production totals
-2149 = 2173 − 24 (net delta for the whole slice, reported not gated), and the
-supervisor family alone shrinks by 38 lines relative to the move-only state.
+The logic stage then brings `supervisor.go` to 875 lines; the apply stage's accepted
+simplify finding R1 replaces the `Supervisor.core()` field literal with a struct
+conversion and takes it to 873: production totals 2147 = 2173 − 26 (net delta for the
+whole slice, reported not gated), and the supervisor family alone shrinks by 40 lines
+relative to the move-only state.
 
 Default (`GOOS=linux`, `GOOS=windows`, `GOOS=darwin`) and linux/arm64 builds see exactly
 the same declarations as before; the package had no build constraints, and no new file
@@ -51,8 +53,11 @@ Unchanged, and provable as such:
   changes.
 
 The exported surface is consumed by `state`, `app`, `protocol`-adjacent callers, `cmd`
-and the `e2e` witness tests (118 `authority.SupervisorHandoff`, 110 `authority.StopReceipt`
-references outside the package); nothing in the slice renames, re-signs or deletes an
+and the `e2e` witness tests. Counts are scoped: `internal/state` + `internal/app` hold
+118 `authority.SupervisorHandoff` (39 + 79, `rg -o 'authority\.SupervisorHandoff\b'` on
+the exact symbol) and 110 `authority.StopReceipt` (19 + 91) occurrences; repo-wide the
+same exact symbols appear in Go files 184 non-test / 119 test (`SupervisorHandoff`) and
+154 / 126 (`StopReceipt`) times. Nothing in the slice renames, re-signs or deletes an
 exported symbol.
 
 ## Role rules (the mechanically re-runnable part)
@@ -150,15 +155,18 @@ a patch plus the git tree object id it was captured from
 | pins + plan | `stage-0-pins.tree` | `stage-0-pins.diff` (HEAD → pins + plan; the pins commit carries the complete pin set, including the one assertion added after the first pin run) |
 | move-only split | `stage-A-move-only.tree` | `stage-A-move-only.diff` (pins → move-only; production files only) |
 | unification | `stage-B-unification.tree` | `stage-B-unification.diff` (move-only → unification; production files only) |
+| apply (accepted simplify findings R1–R4, T1–T3) | `stage-apply.tree` | `stage-apply.diff` (unification → apply; production and test files plus this plan) |
 
-`git apply` in that order on a clean checkout of HEAD reproduces the deliverable tree
-exactly; the replayed tree was verified equal to the tree id in
-`stage-B-unification.tree`. The cumulative views of the last two steps are kept beside
-the series as `stage-*-cumulative.diff` (base → that state) for reviewers. The tree ids
-live in the sidecar files rather than in this plan, so the captured trees cover this
-document as written. Option rejected: committing here, which the dispatch explicitly
-forbids; also rejected: a single undifferentiated diff, which would make the move-only
-claim unverifiable.
+`git apply` in that order on a clean checkout of HEAD reproduces the tree the simplify
+stage reviewed exactly; the replayed tree was verified equal to the tree id in
+`stage-B-unification.tree`. The apply stage then lands the accepted simplify findings as
+the fourth step (`stage-apply.tree` / `stage-apply.diff`). The cumulative views of the
+last two steps are kept beside the series as `stage-*-cumulative.diff` (base → that
+state) for reviewers. The tree ids live in the sidecar files rather than in this plan,
+so each captured code state stays reviewable independently of later edits to this
+document. Option rejected: committing here, which the dispatch explicitly forbids; also
+rejected: a single undifferentiated diff, which would make the move-only claim
+unverifiable.
 
 ## Evidence plan and measured results (exact commands, run at the final tree)
 
@@ -167,7 +175,7 @@ claim unverifiable.
 | format | `gofmt -l daemon/internal/authority` | empty, exit 0 |
 | vet | `cd daemon && go vet ./...` | exit 0 |
 | builds | `cd daemon && GOOS=linux go build ./...`; `GOOS=windows go build ./...` | exit 0 each |
-| package suites | `cd daemon && go test -count=1 ./internal/authority/...` | `ok ... 0.270s`, exit 0; the same command is green at the pins-only and move-only states (`stage0-suite.log`, `stageA-suite.log`) |
+| package suites | `cd daemon && go test -count=1 ./internal/authority/...` | `ok ... 0.244s`, exit 0 (re-measured after the apply stage's test additions); the same command is green at the pins-only and move-only states (`stage0-suite.log`, `stageA-suite.log`) |
 | movement | `pfs declset` base `authority.go` vs the three files (multiset) | 248 = 248 lines, `diff` exit 0 |
 | movement (aid) | scratch `git diff --color-moved=zebra -M` HEAD vs the move-only tree over the four production files | 2187 insertions / 2173 deletions: 2172 deleted and 2179 added lines recognized as moved; the 8 added and 1 removed unmatched lines are import-block lines only |
 | durable bytes | `run-durable-bytes.sh <repo> <outdir>` | 52 output lines incl. 10 frozen-literal round-trips, identical `sha256 62f437f5…` on both sides, exit 0 |
@@ -177,17 +185,21 @@ claim unverifiable.
 | citations | `run-citation-gate.sh` with `CONTROL=none` / `positive` / `negative` | gate exit 0 / 0 / 1 (negative control caught as designed), script expectation met in all three runs |
 | pins' sensitivity | three planted defects (Equal field drop, clone pointer share, conversion field drop) | each caught by its own pin (`planted-red*.log`) |
 | whitespace | `git diff --check` | exit 0 |
-| host-path hygiene | `git diff \| grep -ic "users/"` | 0 |
+| host-path hygiene | `git diff 6117e198..3d484899 \| grep -icE "users[/][a-z]"` | 0 (the earlier bare pattern matched this row's own text; the bracket form cannot self-match, so the slice range and the committed branch diff are 0; the bare string survives only as a removed line in the apply-stage worktree diff) |
 
 ## Design trade-offs
 
 - **Why a core value at all.** The three records share 23 fields but differ in JSON field
-  order and in their non-core fields, and anonymous embedding is forbidden, so Go's
-  struct-conversion trick (conversion to an identically-typed struct) cannot apply either
-  — field *order* is part of the underlying type. The core therefore pays a one-off
-  extractor per record (5 dense lines each, matching the file's existing long-comparison
-  style) and buys one place each for clone, equal, same-launch, receipt matching,
-  release-proof matching, v2 field validation and the conversion mapping.
+  order and in their non-core fields, and anonymous embedding is forbidden, so a struct
+  conversion between the three records cannot apply — field *order* is part of the
+  underlying type. `Supervisor` is the exception: its field names, types and order are
+  identical to `supervisorCore`'s (only the tags differ, and conversions ignore tags), so
+  its extractor is the conversion `supervisorCore(value)` and adding or dropping a field
+  on either side is a compile error instead of a silent divergence (apply-stage finding
+  R1). The handoff and the release proof keep one-off extractor literals (5 dense lines
+  each, matching the file's existing long-comparison style). The core buys one place each
+  for clone, equal, same-launch, receipt matching, release-proof matching, v2 field
+  validation and the conversion mapping.
 - **A pointer-clone helper instead of three rebuilders.** `Clone` needs no field-by-field
   rebuild: one helper deep-clones the five shared pointer fields and returns them in the
   assignment order every record's `Clone` uses. A newly added, unwired pointer field
