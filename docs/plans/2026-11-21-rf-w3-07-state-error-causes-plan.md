@@ -410,6 +410,15 @@ predicate arms); two of the 12 (base `provider_action.go:571`/`:592`) land on th
 declares residual. `sweep -all`: row 29 / pred 197 / other-branch 39 / no-branch 267 (base
 57 / 197 / 36 / 259). `sweep -selfcheck` exits 0.
 
+Apply-stage update (2026-11-21, rf-w3-08 apply stage): the accepted simplify findings S1
+(collapsed trailing-data arms), S3 (`serializeRunJournalWithinLimit`) and S4 (propagated
+alias-check cause) restructured three of these rows. The block above stays as the recorded
+implementation-stage stdout of the tree it names; the republished apply-tip stdout and counts —
+`rows 28 (static-new 28, …)`, `sweep -all`: row 28 / pred 196 / other-branch 39 / no-branch 265,
+raw listing total 528 — are in
+`docs/evidence/rf-w3-07-state-error-causes-2026-11-21.md` §1 and §12 (Appendix B carries the
+apply-tip listing).
+
 **Tests added**: `state_wrap_test.go` (`TestSaveJournalWrapsAtomicWriteCause` with the run-journal
 and goal-session lanes, `TestLoadJournalWrapsDecodeCause`, and — fix round 1 —
 `TestMarkGoalSessionUncertainReasonBudget`) and `provider_action_test.go`

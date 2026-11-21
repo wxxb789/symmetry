@@ -65,6 +65,14 @@ The single 10 → 9 delta is deliberate and is the only non-identifier edit in t
 prose comment `state.go:1282` ("`// returns a typed NotFoundError.`") becomes
 "`// returns a typed not-found error.`" — a comment, not code (§2 proves byte identity elsewhere).
 
+Apply-stage delta (rf-w3-08 apply, 2026-11-21, §8): the delivered counts above bind the
+implement-stage tree `50619a34`. The apply stage deleted `Store.EnsureGoalSessionLineageAvailable`
+(S2), whose signature and body were the in-package occurrences that disappear here: at the apply
+tip `goalSessionLineageKey` 15 (was 16), `goalSessionLineageStateLaunching` 6 (was 7),
+`goalSessionLineageStateUncertain` 11 (was 12), every other row unchanged — table total 153 (was
+156). Re-measured with `rg -o -w <name> goal_delivery.go goal_session.go state.go
+goal_session_test.go | wc -l`.
+
 ### 1b. Out-of-package references (contract clause 1 command form)
 
 Pattern: `state\.(GoalDeliveryRetirement|LateGoalUsageLedger|GoalSessionLineage(Key|State|Status)|GoalSessionControl(Attachment(Lineage)?|Projection)|GoalSessionConsumedStopCertificateHistory|NotFoundError)`
@@ -80,6 +88,13 @@ BARE_EXIT=1             # no matches
 
 Same scan on the pristine base tree copy (`git archive HEAD daemon`, no probe files): qualified = 0,
 bare = 0. Both sides are zero, as the contract's re-derivation states.
+
+Apply-stage re-check (rf-w3-08 apply, 2026-11-21): the same qualified pattern, Go-scoped —
+`git grep --untracked -n -E 'state\.(…)' -- '*.go' ':!daemon/internal/state'` — exits 1 with 0
+matches at the apply tip (compiler boundary intact; every other file in the tree is unchanged by
+the apply stage). The whole-tree form of the command now matches documentation prose only:
+this evidence file's quoted `zzprobe` compiler errors (22 lines, unchanged from §1c) are the sole
+non-Go matches, which is why the Go-scoped form is the boundary statement at the apply tip.
 
 ### 1c. Planted-reference pair (compiler-enforced boundary)
 
@@ -171,6 +186,15 @@ This subsumes every per-branch control-flow comparison for those files: no `if`,
 `switch`, `case`, `select`, `goto`, `defer`, `break`, `continue` or `return` token can have moved
 (§4 records the token counts as the audit row).
 
+Apply-stage delta (rf-w3-08 apply, 2026-11-21, §8): this byte-identity proof binds the
+implement-stage tree (`50619a34`, the base of this record). The apply stage deliberately makes the
+four-file "rename-only" statement no longer literally true at the apply tip: `goal_session.go`
+carries the S2 deletion (−18 lines, 2167 → 2149), `state.go` carries the S3/S4 edits (+6 / −7
+against the implement tip) and `provider_action.go` (not part of this rename set) carries S1/S3
+(+20 / −18). The rename rules and the field/tag comparison above still describe those files'
+*rename* portion; the apply-stage control-flow audit is the W3-07 evidence §3.1, its republished
+numbers and cells are §12 there, and the apply-tip gates are §8 here.
+
 **Serialized surface.** JSON tag multisets per file are identical (`goal_delivery.go` 36 tags,
 `goal_session.go` 94, `state.go` 126, `goal_session_test.go` 0, `app.go` 0). All 33 struct field
 blocks in the four files are identical modulo the renames — including the three that carry the
@@ -257,6 +281,9 @@ exhaustive, funlen, gocritic, gocyclo, misspell, nilerr, unconvert, unparam, whi
 rule that flags an exported function returning an unexported type, and `unused` cannot fire because
 every renamed type is referenced in-package.
 
+Apply-stage re-run (2026-11-21): the same command set was re-run at the apply tip; the codes and
+outputs are §8 and the W3-07 evidence §12.5.
+
 ## 6. Judging artifact (clause 2)
 
 - reference-count table before/after: §1a (and §1b for the out-of-package zeros);
@@ -278,6 +305,37 @@ every renamed type is referenced in-package.
    this record does not convert them into passes.
 5. This stage does not commit, push or archive the contract file; the operator's commit/merge gate
    re-derives the diff and the branch state.
+
+## 8. rf-w3-08 apply stage (2026-11-21) — accepted simplifications
+
+Apply stage of the same goal over the range `d0761739..aa43c2f2` (this record's W3-08 work plus
+W3-07's and the two `origin/main` merges). The accepted findings, the not-applied set and the stage
+gate table are the stage result; the W3-07 evidence §12 is the apply-stage record for the code this
+record does not own. The apply-stage worktree delta (`git diff --numstat` against `aa43c2f2`):
+
+| file | +/- | change |
+|---|---|---|
+| `daemon/internal/state/goal_session.go` | +0 / −18 | S2: delete the callerless `EnsureGoalSessionLineageAvailable` (closed into `docs/archive/CLOSED-TODO.md`; `git grep -nw` = 0 at the apply tip) |
+| `daemon/internal/state/state.go` | +6 / −7 | S4 (alias-check cause propagation) + S3 (`saveJournalLocked` uses `serializeRunJournalWithinLimit`) |
+| `daemon/internal/state/provider_action.go` | +20 / −18 | S1 (trailing-data collapse) + S3 (the helper and its two validator callers) |
+| `daemon/internal/app/goal_delivery_test.go` | +54 / −0 | S7: `TestAbandonGoalSessionUncertainBoundsOversizedCloseReason` |
+| `docs/TODO.md` | +22 / −24 | S1 entry closed; S6 `ControlProjection` entry added; W1-06 entry keeps its two open surfaces |
+| `docs/archive/CLOSED-TODO.md` | +46 / −0 | the two closures above |
+| `docs/evidence/rf-w3-07-…md`, `docs/plans/2026-11-21-rf-w3-07-…-plan.md` | — | S9/W3-07 refreshes (W3-07 evidence §12) |
+
+Boundary and counts at the apply tip: §1a's three changed rows (S2's deletions, §1a note); §1b's
+Go-scoped re-check (0 matches); §1c's pair re-run — pre-rename base `6d10da97` exit 0 (15
+references compile) vs apply tip exit 1 (15 `undefined: state.<Name>` errors); §2's byte-identity
+proof binds the implement-stage revision with the apply deltas named in §2's note; §3's move-only
+proof for `export_test.go` is untouched by the apply stage.
+
+Apply-tip gates (same command set as §5, all foreground; exact codes in the W3-07 evidence §12.5):
+`gofmt -l .` 0 · `go vet ./...` 0 · `GOOS=windows go build ./...` 0 · `GOOS=linux go build ./...` 0
+· `go build ./...` 0 · `GOOS=linux GOARCH=amd64 go vet ./e2e/` 0 · `GOOS=darwin GOARCH=arm64 go vet
+./internal/app/` 0 · `go test -count=1 -v ./internal/state/...` 0 (458 RUN, 0 FAIL, 7.218s) · WSL
+`Ubuntu-24.04 go test -count=1 ./internal/state/...` 0 (15.547s) · `go test -count=1
+./internal/app/` 0 (235.644s) · `git diff --check` 0 · host-path scans and
+`model-routing-record-sanitize.py --check --root-only` 0. This stage does not commit or push.
 
 ## Appendix A — exact edits
 

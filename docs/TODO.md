@@ -19,17 +19,18 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       card renders on the repository page. The image is 1280×640 and mirrors the
       README banner (`docs/assets/symmetry-banner.png`).
 
-- [ ] Revalidate and remove three daemon surfaces the re-scoped dead-code sweep left in
-      `internal/state` (2026-11-21, branch `refactor/rf-w1-06-daemon-deadcode`; plan
+- [ ] Revalidate and remove the two remaining daemon surfaces the re-scoped dead-code sweep left
+      in `internal/state` (2026-11-21, branch `refactor/rf-w1-06-daemon-deadcode`; plan
       `docs/plans/2026-11-21-w1-06-daemon-deadcode-plan.md`). `Store.AttachGoalSession`
-      (`daemon/internal/state/goal_session.go:1044`), `Store.EnsureGoalSessionLineageAvailable`
-      (`:592`) and `Store.FailUnresolvedProvideInput` (`daemon/internal/state/state.go:4238`) are
+      (`daemon/internal/state/goal_session.go:1044`) and `Store.FailUnresolvedProvideInput`
+      (`daemon/internal/state/state.go:4238`) are
       unreachable from `deadcode -test ./cmd/...` on windows/amd64, linux/amd64 and linux/arm64
       alike, and at the baseline revision `a3039f0` `git grep -nw <symbol>` matches only each
       definition plus its doc comment — no call site, no test, no doc citation anywhere; this
       entry and the plan are the only matches added since. They were outside that sweep's owned
       file set; reproduction is the three `deadcode` runs plus the baseline-scoped grep, as
-      recorded in the plan.
+      recorded in the plan. The third candidate, `Store.EnsureGoalSessionLineageAvailable`, was
+      revalidated and removed in the rf-w3-08 apply stage (moved to `docs/archive/CLOSED-TODO.md`).
 
 - [ ] Revalidate and remove the daemon surfaces that are unreachable from both mains but still
       referenced, so no deletion is possible without retargeting a caller (2026-11-21, same
@@ -1070,25 +1071,6 @@ instead of appended.
       owned it in wave 3 (that PR has since landed as `6a815c0f`, the revision the line numbers
       above bind); W6-01 is its wave-6 owner.
 
-## Daemon state: decorative trailing-data disjunct in the provider-action decoder (rf-w3-07 survey)
-
-- [ ] Revalidate and merge the redundant trailing-data arms of
-      `normalizeProviderActionResult` (`daemon/internal/state/provider_action.go`). At the
-      rf-w3-07 base `52bdffd2` the block was
-      `if token, tokenErr := decoder.Token(); tokenErr != io.EOF { if tokenErr == nil || token !=
-      nil { return errors.New("provider action result has trailing data") }; return
-      errors.New("provider action result has trailing data") }`: both arms returned the identical
-      static error, so the disjunct could not change any outcome, and `json.Decoder.Token`
-      returns a nil token whenever it returns an error. rf-w3-07 (2026-11-21) split the block to
-      wrap the decoder cause (`if tokenErr != nil { wrapped }`, `if token != nil { static }`,
-      final `static`) and kept the third arm because that slice's contract requires base-vs-head
-      control-flow preservation for every early return; the last two arms still return the same
-      bytes. No test asserts the message by equality (`grep -rn --include=*_test.go '"provider
-      action result has trailing data"' daemon/` matches nothing). A follow-up maintenance task
-      can collapse the arms to one static return after re-running the state suite on the Linux
-      lane; the sweep and the classification table live in
-      `docs/evidence/rf-w3-07-state-error-causes-2026-11-21.md` §1/§2.
-
 ## Deferred review findings (PR #200)
 
 - [ ] Harden the goal-session uncertain-reason budget against invalid UTF-8 at the store
@@ -1110,3 +1092,19 @@ instead of appended.
       are pinned by `daemon/internal/app/goal_delivery_test.go`:
       `TestAbandonGoalSessionBoundsOversizedUncertainReason` (the interior-invalid-byte case)
       and `TestBoundedGoalSessionUncertainReason` (the within-budget invalid-byte case).
+
+## Daemon state: test-only `ControlProjection` surface (rf-w3-08 survey)
+
+- [ ] Revalidate and remove `GoalSessionJournal.ControlProjection`
+      (`daemon/internal/state/goal_session.go:412`) together with its
+      `goalSessionControlProjection` type (`:308`, unexported by rf-w3-08). At the rf-w3-08 apply
+      tip `git grep -nw ControlProjection` matches only the method definition, the doc comment at
+      `:411`, the doc comment at `:185` that promises callers ("callers must use
+      ControlProjection when building a control request") which do not exist, and two in-package
+      test call sites (`goal_session_test.go:707`, `:1340`); there is no production consumer at
+      the apply tip or at the rf-w3-08 base. It was not deleted in the rf-w3-08 apply stage
+      because the test that pins it, `TestGoalSessionControlProjectionOmitsRawNativeIdentity`, is
+      a contract-pinning proof that the projection carries no raw native identity — deleting the
+      surface would retire that test, which the stage rules forbid. A follow-up owner must decide
+      between wiring the intended production consumer and retiring the surface together with its
+      test under an explicit contract amendment.

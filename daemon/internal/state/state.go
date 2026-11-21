@@ -5306,12 +5306,9 @@ func (store *Store) saveJournalLocked(journal RunJournal) error {
 	if err := validateJournal(journal); err != nil {
 		return err
 	}
-	data, err := serializeRunJournal(journal)
+	data, err := serializeRunJournalWithinLimit(journal)
 	if err != nil {
-		return fmt.Errorf("serialize run journal: %w", err)
-	}
-	if len(data) > maxJournalFileBytes {
-		return ErrProviderActionCapacity
+		return err
 	}
 	writer := store.atomicWrite
 	if writer == nil {
@@ -5360,8 +5357,10 @@ func decodeJSONWithLimitAndTags(data []byte, resource string, destination any, l
 	if err := protocol.RejectDuplicateJSONMembers(data); err != nil {
 		return fmt.Errorf("decode %s: %w", resource, err)
 	}
-	if rootType != nil && rejectCaseInsensitiveJSONTagAliases(data, rootType) != nil {
-		return errors.New("decode " + resource)
+	if rootType != nil {
+		if err := rejectCaseInsensitiveJSONTagAliases(data, rootType); err != nil {
+			return fmt.Errorf("decode %s: %w", resource, err)
+		}
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
