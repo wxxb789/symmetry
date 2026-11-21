@@ -16,12 +16,13 @@ re-measured here. Deltas against the contract text, re-derived at this head:
 - The 18 witness env constants are `containment_supervisor_linux.go:46-67`; the env reads are
   21 in that file and 8 in `supervisor_linux_client.go` (29 total), matching the contract's
   post-split count.
-- `ci.yml` step coordinates moved with #212/W3-01: daemon job `:1493` (`go test -race -count=1
-  ./...` at `:1652`), integration witness matrix `:2322`, compose rootless refusal step `:2649`,
-  Windows containment witness `:1997`, Windows pre-authority matrix `:2015`, daemon crash
-  response-loss witness `:2258` (renamed region; the contract's `:2058` coordinate). No step,
-  job, test-name or artifact-name change is planned, so those coordinates stay verification
-  surfaces only.
+- `ci.yml` step coordinates moved with #212/W3-01, re-measured at `95498fdf` (`.github/workflows`
+  is untouched by the branch, so they hold for every revision of this range): daemon job `:1493`
+  (race step name `:1650`; the `go test -race -count=1` command sits at `:1658`), integration
+  witness matrix `:2322`, compose rootless refusal step `:2649`, Windows containment witness step
+  `:1988`, Windows pre-authority matrix step `:2007`, daemon crash response-loss witness step
+  `:2210` (renamed region; the contract's `:2058` coordinate). No step, job, test-name or
+  artifact-name change is planned, so those coordinates stay verification surfaces only.
 
 ## Owned set (STRICT, re-derived at this head)
 
@@ -85,7 +86,7 @@ the gate and barrier names inside the running daemon
 package-level cache; a cache is the mutation the per-use test reddens.
 
 Values are recorded only while the gate reads armed (`strings.TrimSpace(gate) == "1"`), so a
-gate-unset config carries no action value. The four `LookupEnv` families record value+presence;
+gate-unset config carries no action value. The three `LookupEnv` families (six names) record value+presence;
 the owner-recovery presence flag is recorded even when the gate is unset, because that reader's
 base behavior is a fail-closed error for "configured without the gate" and must stay byte-exact
 (clause 3's control-flow rule; the error text is base-identical). `productionWitness` keeps its raw
@@ -189,15 +190,25 @@ file contributes none and the new test file only its three `Test…` entry point
    armed=false, action values empty; gate re-set → armed again. Red mutation: a `sync.Once`
    snapshot in the parser makes the second read stale.
 2. `TestLinuxSupervisorWitnessHooksAreInertWithoutTheGate` — every hook env name set with the gate
-   off: the config is unarmed, each family reader returns nothing, the injection hook preserves the
-   real monitor reader and writes no fired marker, `dropResponseTransportOnce` /
-   `waitForLinuxSupervisorReleaseResponseLossBarrier` are inert, the owner-recovery reader keeps its
-   fail-closed error, and no configured marker path exists afterwards. Red mutation: drop the gate
-   check in a hook.
+   off: the config is unarmed, each family reader returns nothing, the injection hook leaves the
+   real monitor reader installed (`skipInitial=false`, so a mutant that installs the injection
+   reddens on the first read), `dropResponseTransportOnce` /
+   `waitForLinuxSupervisorReleaseResponseLossBarrier` are inert against a live harness (open
+   `responseRead`, receipt present; the release harness carries `responseDropTriggered`), the
+   owner-recovery reader keeps its fail-closed error with the base refusal text pinned, and no
+   configured marker path exists afterwards. A second phase sets the gate to a raw `" 1 "` (the
+   parser arms via `TrimSpace` while every raw-comparing hook check stays false) with a bad scan
+   mode and partial owner-loss / barrier sets, so deleting the raw gate check of the scan-failure
+   validator, hello-session injection, owner-loss reader/validator, owner-recovery reader,
+   drop-response or release-barrier hook reddens at that hook's own checkpoint. Red mutation:
+   delete the parser's unarmed early return (M2/M3); the scan-injection reader trims exactly like
+   the parser, so its own check is implied by the armed rule and has no independent mutant.
 3. `TestLinuxSupervisorWitnessMarkerParentRefusal` — the three write funnels accept an owned private
    directory (happy-path pin), and refuse a symlinked parent, a group/other-writable parent and a
-   root-owned parent (when the writer is not root), with no marker byte written: mutant "always
-   refuse" reddens the happy path, mutant "no validation" reddens the refusals.
+   root-owned parent (when the writer is not root), with no marker byte written and no directory
+   entry added to the refused symlinked or group-writable parent (validation precedes `CreateTemp`):
+   mutant "always refuse" reddens the happy path, mutant "no validation" reddens the refusals,
+   mutant "validate after `CreateTemp`" reddens the entry-count pins.
 
 ## Evidence plan (exact commands; carriers: this plan + the stage report = `answer.md`)
 
@@ -245,12 +256,12 @@ the app-side stop-receipt barrier (`internal/app/cleanup_glue.go:18-20`, out of 
 both keep their bytes.
 
 CI-side oracles (named; not runnable from this stage, which neither commits nor pushes — recorded
-in the report): the four PR-gated witness steps — daemon-windows containment `ci.yml:1997`,
-daemon-windows pre-authority matrix `:2015`, integration "Run production Linux containment witness
+in the report): the four PR-gated witness steps — daemon-windows containment `ci.yml:1988`,
+daemon-windows pre-authority matrix `:2007`, integration "Run production Linux containment witness
 matrix" `:2322` (the Linux-family oracle; also the per-use negative/toggle tests via the daemon
-job's `go test -race ./...` at `:1652`), compose "Run rootless Compose native refusal witnesses"
+job's `go test -race ./...` at `:1658`), compose "Run rootless Compose native refusal witnesses"
 `:2649` (also runs the two `TestProductionLinuxV2*` refusal tests); daemon crash response-loss
-witness `:2258` named as unaffected. The dispatch-only `linux-native-v2-acceptance` workflow is
+witness `:2210` named as unaffected. The dispatch-only `linux-native-v2-acceptance` workflow is
 not run (D3); its consumed env and artifact names are unchanged.
 
 ## Executed gates (this tree, 2026-11-22; artifacts in the stage artifact directory)
@@ -268,18 +279,18 @@ not run (D3); its consumed env and artifact names are unchanged.
 | new tests focused (WSL) | `go test -count=1 -v -run "TestLinuxSupervisorWitness" ./internal/platform/` (uid 1000) | 0 | 4 PASS (the three new tests plus `TestLinuxSupervisorWitnessPublishKeepsDirectoryClean`) |
 | platform suite, contract form (WSL) | `go test -count=1 -v ./internal/platform/` | 1 | 231 top-level PASS, 184 subtest PASS, 4 FAIL, 1 SKIP, then `panic: test timed out after 10m0s` (`FAIL … 600.069s`). The four failures are this host's documented loopback limitation in untouched files: `TestVerifyLoopbackTCPPeerWaitsForDeferredAcceptWithoutWriting` (133.92s), `TestVerifyLoopbackTCPPeerDoesNotExtendCallerDeadlineDuringDeferredAccept` (135.16s), `TestLinuxTCPPeerV2RejectsDifferentNetworkCookie` (135.15s), `TestVerifyLoopbackTCPPeerV2UsesRetainedPIDFDAndPinnedNamespace` (135.17s), each `dial tcp4 127.0.0.1:<port>: connect: connection timed out`; the hang is `TestVerifyLoopbackTCPPeerV2WaitsForPendingAcceptOnSameConnectionWithoutWriting` |
 | platform suite, host pattern (WSL) | `go test -count=1 -v -skip "Loopback\|TCPPeer" ./internal/platform/` | 0 | `ok … 21.495s`; 228 top-level PASS, 171 subtest PASS, 0 FAIL, 1 SKIP |
-| Windows containment witness (CI step `:1997`, run locally) | `SYMMETRY_PRODUCTION_CONTAINMENT_WITNESS=1 go test -count=1 -timeout 180s ./internal/platform -run '^TestProductionContainmentSupervisorReplaysReceiptAfterLostRecoverResponse$'` | 0 | `--- PASS … (6.80s)`, `ok … 6.987s` |
-| Windows pre-authority matrix (CI step `:2015`, run locally) | `SYMMETRY_PRODUCTION_PREAUTHORITY_WITNESS=1 go test -count=1 -timeout 600s ./e2e -run '^TestProductionPreAuthority(CrashWitnessMatrix\|WrongSecretFirstClientRace)$'` | 0 | `ok e2e 49.549s`; both named tests PASS (`…CrashWitnessMatrix` incl. `clear` 1.83s, `…WrongSecretFirstClientRace` 29.04s) |
+| Windows containment witness (CI step `:1988`, run locally) | `SYMMETRY_PRODUCTION_CONTAINMENT_WITNESS=1 go test -count=1 -timeout 180s ./internal/platform -run '^TestProductionContainmentSupervisorReplaysReceiptAfterLostRecoverResponse$'` | 0 | `--- PASS … (6.80s)`, `ok … 6.987s` |
+| Windows pre-authority matrix (CI step `:2007`, run locally) | `SYMMETRY_PRODUCTION_PREAUTHORITY_WITNESS=1 go test -count=1 -timeout 600s ./e2e -run '^TestProductionPreAuthority(CrashWitnessMatrix\|WrongSecretFirstClientRace)$'` | 0 | `ok e2e 49.549s`; both named tests PASS (`…CrashWitnessMatrix` incl. `clear` 1.83s, `…WrongSecretFirstClientRace` 29.04s) |
 | witness e2e compile (linux) | `GOOS=linux GOARCH=amd64 go vet ./e2e/` | 0 | three containment witness files type-check against the new platform code |
 | platform/cmd vet (linux) | `GOOS=linux GOARCH=amd64 go vet ./internal/platform/ ./cmd/symmetry-daemon/` | 0 | 0 diagnostics |
-| env-name set | `git grep -h -o -E 'SYMMETRY_[A-Z0-9_]+'` over `*.go|*.yml|*.yaml|*.sh|*.py`, `HEAD` vs working tree | 0 | 270 = 270 names, `diff` empty |
+| env-name set | `git grep -h -o -E 'SYMMETRY_[A-Z0-9_]+' <rev> -- '*.go' '*.yml' '*.yaml' '*.sh' '*.py' \| sort -u`, `de526861` vs `95498fdf` | 0 | 270 = 270 names, `diff` empty |
 | parser-only read grep | `grep -n 'os\.Getenv\|os\.LookupEnv' internal/platform/*.go` filtered to non-test, non-Windows | 0 (grep) | only `supervisor_linux_witness.go` (18 reads) plus the unrelated `NOTIFY_SOCKET` read in `anchor_wire.go:909` |
-| parser-per-use grep | `grep -rn 'linuxSupervisorWitnessConfigFromEnv()' internal/platform/*.go` filtered to non-test | 0 (grep) | 1 definition (`supervisor_linux_witness.go:77`) and 8 call sites — `containment_supervisor_linux.go:104,143,181,323,365` (the five family readers) and `supervisor_linux_client.go:1432,1581,1620` (mirror seal, drop-response, release barrier), i.e. every base read-site function re-reads per use (`parser-per-use-grep.txt`) |
+| parser-per-use grep | `grep -rn 'linuxSupervisorWitnessConfigFromEnv()' internal/platform/*.go` filtered to non-test | 0 (grep) | 1 definition (`supervisor_linux_witness.go:74`) and 8 call sites — `containment_supervisor_linux.go:104,143,181,323,365` (the five family readers) and `supervisor_linux_client.go:1432,1581,1620` (mirror seal, drop-response, release barrier), i.e. every base read-site function re-reads per use (`parser-per-use-grep.txt`) |
 | witness-name coverage | parser name set vs every e2e-set name in the `SYMMETRY_LINUX_SUPERVISOR_*`/`SYMMETRY_RUNNER_LEASE_ARMED_*` namespace | 0 | 3 e2e names have no platform reader and must not: `…_STOP_RECEIPT_BARRIER_{REACHED,RELEASE}_FILE` (app `cleanup_glue.go`) and `SYMMETRY_RUNNER_LEASE_ARMED_RESUME_BARRIER_RELEASE_FILE` (`execution/runner.go`) |
-| build constraints | `git diff -U0 \| grep -c '^[+-]//go:build'` | 1 (no hit) | 0 build-tag changes; the two new files carry `//go:build linux` |
-| suppressions | `git diff \| grep -c 'nolint\|credo:disable'` | 1 (no hit) | 0 new suppressions |
-| whitespace | `git diff --check` | 0 | — |
-| host path leak | profile-path / account-name grep over the diff and the new files | 1 (no hit) | 0 hits; 0 backslash-u occurrences in the new files |
+| build constraints | `git diff -U0 de526861..95498fdf -- daemon .github \| grep -c '^[+-]//go:build'` | 0 | 2 hits, both `+//go:build linux` on the two new files (expected); 0 elsewhere |
+| suppressions | `git diff de526861..95498fdf -- daemon .github \| grep -c 'nolint\|credo:disable'` | 1 (no match) | 0 in code/CI; the 2 whole-range hits are this plan's own prose |
+| whitespace | `git diff --check de526861..95498fdf` | 0 | — |
+| host path leak | `git diff origin/main...HEAD` plus profile-path / account-name grep over the range diff and the new files | 1 (no match) | 0 hits |
 
 SKIP list, verbatim (identical in both WSL runs): one entry —
 `--- SKIP: TestLinuxOwnerAnchorRunReaperRejectsForeignChildBeforeAdoptingIt`
@@ -325,8 +336,8 @@ contract's gate line allows. What is verified locally instead:
 
 | step | CI coordinate | status in this stage |
 | --- | --- | --- |
-| daemon-windows "Run production Windows containment witness" | `ci.yml:1997` | run locally, exit 0 (6.80s) |
-| daemon-windows "Run production pre-authority crash witness matrix" | `ci.yml:2015` | run locally, exit 0 (49.55s) |
+| daemon-windows "Run production Windows containment witness" | `ci.yml:1988` | run locally, exit 0 (6.80s) |
+| daemon-windows "Run production pre-authority crash witness matrix" | `ci.yml:2007` | run locally, exit 0 (49.55s) |
 | integration "Run production Linux containment witness matrix" | `ci.yml:2322` | CI-only: needs `SYMMETRY_E2E=1` + a live Control plane and Postgres; the WSL probes return `000`/inactive, so the conclusion belongs to the draft PR |
 | compose "Run rootless Compose native refusal witnesses" | `ci.yml:2649` | CI-only: needs the Docker rootless Compose stack (35-minute step); the conclusion belongs to the draft PR |
 
@@ -361,6 +372,12 @@ file. The slice's own base stays `12de9428` as dispatched.
   is empty" wording while remaining behavior-identical, because every consumer checks the gate
   itself (verified in the control-flow audit). The gate's raw value and the `LookupEnv` presence
   flags stay readable so the untrimmed checks and the fail-closed owner-recovery error survive.
+- **Entry snapshot vs later intra-call re-read (decision F).** Each hook snapshots the parsed
+  config once at its entry; the base code's later intra-call re-reads — the drop-response marker
+  path at its publish point (base `supervisor_linux_client.go:1599`) and the release-barrier
+  `LookupEnv` pair after the drop check (base `:1627-1628`) — are folded into that entry
+  snapshot. Static environments are equivalent (verified per read site); a concurrent in-process
+  restore racing an in-flight hook is accepted as the decision-F per-use boundary, not a defect.
 - **Trim in the parser vs at the site.** Nothing is normalized in the parser: the drop-response
   operation comparison and the untrimmed gate checks would change behavior under parser-side
   trimming.
@@ -382,6 +399,17 @@ Conductor decision A/B/F scope, restated: the Windows raw literals and hooks (W6
 `scripts/ci/export-linux-v2-redacted-evidence.py`; the v2 selector/bootstrap path
 (`anchor_gate.go`, `helper_v2_*.go`, `anchor_types.go`, D3); the v2 finalize pipeline (W4-05);
 `isGoTestBinary` fork removal (W6-03); `cmd/symmetry-daemon/*` internals; CI workflow edits.
+
+- **Clause-1 scope (CR-06 residual).** Marker-parent validation covers the two write funnels in
+  the privileged Linux helper (`daemon/internal/platform`). Two daemon-side witness writers still
+  publish env-supplied marker paths unvalidated: the stop-receipt barrier reached marker
+  (`daemon/internal/app/cleanup_glue.go:232-233` reads
+  `SYMMETRY_LINUX_SUPERVISOR_STOP_RECEIPT_BARRIER_{REACHED,RELEASE}_FILE`, written at `:259`
+  through `publishLinuxStopReceiptBarrierMarker`) and the commit-resume barrier reached marker
+  (`daemon/internal/execution/runner.go:1084-1085` reads
+  `SYMMETRY_RUNNER_COMMIT_RESUME_BARRIER_{REACHED,RELEASE}_FILE`, written at `:1114` through the
+  publisher at `:1046`). Both are pre-existing, outside this slice's owned set, and recorded as
+  residual debt in `docs/TODO.md`.
 
 ## Ambiguities resolved
 
