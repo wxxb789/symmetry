@@ -444,11 +444,11 @@ this slice's owned region. All terminal `return`s in the moved paths are explici
 
 - **`runStop <- base `stop` closure`** — events 33 -> 33, preserved: yes
   - base: guard@835; return@836; guard@841; guard@845; guard@847; guard@848; return@849; guard@855; return@856; guard@862; return@863; guard@865; return@866; guard@869; guard@870; guard@875; return@876; guard@884; else@886; guard@889; guard@892; else@894; guard@898; return@899; guard@901; return@902; guard@904; return@908; guard@911; else@913; guard@916; return@917; return@921
-  - head: guard@304; return@305; guard@310; guard@314; guard@316; guard@317; return@318; guard@324; return@325; guard@331; return@332; guard@334; return@335; guard@338; guard@339; guard@344; return@345; guard@353; else@355; guard@358; guard@361; else@363; guard@367; return@368; guard@370; return@371; guard@373; return@377; guard@380; else@382; guard@385; return@386; return@390
+  - head: guard@288; return@289; guard@294; guard@298; guard@300; guard@301; return@302; guard@308; return@309; guard@315; return@316; guard@318; return@319; guard@322; guard@323; guard@328; return@329; guard@336; else@338; guard@341; guard@344; else@346; guard@350; return@351; guard@353; return@354; guard@356; return@359; guard@362; else@364; guard@367; return@368; return@372
   - note: closure body moved verbatim; `group`/`target`/`launch`/`leaseState`/`watchdog`/receipt/flag locals -> session fields
 - **`startWait <- base `startWait` closure`** — events 1 -> 1, preserved: yes
   - base: guard@824
-  - head: guard@292
+  - head: guard@276
   - note: `waitOnce`/`waitDone`/status+stdio files -> session fields
 - **`enterRecovery <- base `enterRecovery` closure`** — events 1 -> 1, preserved: yes
   - base: return@928
