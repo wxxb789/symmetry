@@ -1784,6 +1784,21 @@ defmodule SymmetryControl.IntegrationsTest do
     assert function_exported?(Integrations, :execute_unprojected_provider_action, 6)
   end
 
+  test "delete_connection refuses a non-integer expected version as an invalid request" do
+    connection = connection_fixture("github", "gh_cli")
+
+    # One version rule for both portal contexts: a malformed expected version is
+    # `:invalid_request` (the verdict `Schemas.VersionedChangeset.expected_version/1`
+    # gives the same input, and the HTTP route rejects it before either context is
+    # reached), not a stale row. This function answered `:stale` before the shared
+    # clause landed; the assertion pins the unified verdict.
+    assert {:error, :invalid_request} = Integrations.delete_connection(connection.id, "1")
+    assert {:error, :invalid_request} = Integrations.delete_connection(connection.id, nil)
+
+    assert {:ok, deleted} = Integrations.delete_connection(connection.id, connection.lock_version)
+    assert deleted.id == connection.id
+  end
+
   defp sync_lock_order_task(resource, provider_items, owner, ref) do
     Task.async(fn ->
       Sandbox.unboxed_run(Repo, fn ->

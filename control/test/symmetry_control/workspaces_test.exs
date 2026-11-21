@@ -493,6 +493,28 @@ defmodule SymmetryControl.WorkspacesTest do
              Workspaces.retry_binding(item)
   end
 
+  test "delete_resource refuses a non-integer expected version as an invalid request" do
+    project = project_fixture()
+
+    assert {:ok, resource} =
+             Workspaces.create_resource(project.id, %{
+               kind: "repository",
+               name: "version-guard",
+               provider: "github",
+               url: "https://github.com/acme/version-guard",
+               status: "healthy"
+             })
+
+    # One version rule for both portal contexts: a malformed expected version is
+    # `:invalid_request` (the verdict `Schemas.VersionedChangeset.expected_version/1`
+    # gives the same input, and the HTTP route rejects it before either context is
+    # reached), not a stale row. Pinned so the shared clause cannot drift.
+    assert {:error, :invalid_request} = Workspaces.delete_resource(resource.id, "1")
+
+    assert {:ok, deleted} = Workspaces.delete_resource(resource.id, resource.lock_version)
+    assert deleted.id == resource.id
+  end
+
   # One enrolled machine with an adapter-backed runtime for the default binding,
   # advertising `start`: a binding a registered runtime can actually select.
   defp register_adapter_runtime do

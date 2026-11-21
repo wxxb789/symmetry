@@ -12,6 +12,7 @@ defmodule SymmetryControl.Workspaces do
   alias SymmetryControl.Orchestration
   alias SymmetryControl.Orchestration.{Notifier, Runtime, Scheduler, Task}
   alias SymmetryControl.Repo
+  alias SymmetryControl.Schemas.VersionedChangeset
   alias SymmetryControl.Workspaces.{Project, ProjectResource, WorkItem}
 
   @active_execution_states [
@@ -56,7 +57,7 @@ defmodule SymmetryControl.Workspaces do
              :ok <- project_mutation_allowed(project, attrs),
              changeset <- Project.update_changeset(project, attrs),
              :ok <- project_archive_allowed(project, changeset) do
-          changeset |> update_with_stale_error() |> unwrap_or_rollback()
+          changeset |> VersionedChangeset.update_with_stale_error() |> unwrap_or_rollback()
         else
           {:error, reason} -> Repo.rollback(reason)
         end
@@ -106,7 +107,7 @@ defmodule SymmetryControl.Workspaces do
                )
                |> validate_registered_reference(),
              :ok <- resource_identity_change_allowed(resource, changeset) do
-          changeset |> update_with_stale_error() |> unwrap_or_rollback()
+          changeset |> VersionedChangeset.update_with_stale_error() |> unwrap_or_rollback()
         else
           {:error, reason} -> Repo.rollback(reason)
         end
@@ -126,10 +127,10 @@ defmodule SymmetryControl.Workspaces do
 
         with :ok <- ensure_active_project(resource.project),
              :ok <- ensure_resource_unreferenced(resource),
-             :ok <- matches_version(resource, expected_version) do
+             :ok <- VersionedChangeset.matches_version(resource, expected_version) do
           resource
           |> ProjectResource.delete_changeset()
-          |> delete_with_stale_error()
+          |> VersionedChangeset.delete_with_stale_error()
           |> unwrap_or_rollback()
         else
           {:error, reason} -> Repo.rollback(reason)
@@ -163,7 +164,10 @@ defmodule SymmetryControl.Workspaces do
               attrs
               |> normalize_work_item_attrs(project)
               |> put_creation_id(creation_id)
-              |> put_attr(:position, next_position(project.id, work_item_status(attrs)))
+              |> VersionedChangeset.put_attr(
+                :position,
+                next_position(project.id, work_item_status(attrs))
+              )
 
             changeset =
               project
@@ -204,7 +208,7 @@ defmodule SymmetryControl.Workspaces do
                :ok <- execution_fields_editable(work_item, changeset) do
             changeset
             |> validate_work_item_resources(work_item.project_id)
-            |> update_with_stale_error()
+            |> VersionedChangeset.update_with_stale_error()
             |> unwrap_or_rollback()
           else
             {:error, reason} -> Repo.rollback(reason)
@@ -221,7 +225,7 @@ defmodule SymmetryControl.Workspaces do
           {:ok, WorkItem.t()}
           | {:error, :not_found | :invalid_request | :stale | Ecto.Changeset.t()}
   def move_work_item(work_item_id, attrs) when is_map(attrs) do
-    with {:ok, expected_version} <- expected_version(attrs),
+    with {:ok, expected_version} <- VersionedChangeset.expected_version(attrs),
          {:ok, status} <- work_item_move_status(attrs),
          {:ok, before_id} <-
            optional_uuid(attr_value(attrs, :before_id, nil)),
@@ -1033,13 +1037,13 @@ defmodule SymmetryControl.Workspaces do
         attrs =
           if resource && resource.connection_id do
             attrs
-            |> put_attr(:connection_id, nil)
-            |> put_attr(:provider, nil)
-            |> put_attr(:status, "unknown")
-            |> put_attr(:sync_status, "unknown")
-            |> put_attr(:status_message, nil)
-            |> put_attr(:last_checked_at, nil)
-            |> put_attr(:last_synced_at, nil)
+            |> VersionedChangeset.put_attr(:connection_id, nil)
+            |> VersionedChangeset.put_attr(:provider, nil)
+            |> VersionedChangeset.put_attr(:status, "unknown")
+            |> VersionedChangeset.put_attr(:sync_status, "unknown")
+            |> VersionedChangeset.put_attr(:status_message, nil)
+            |> VersionedChangeset.put_attr(:last_checked_at, nil)
+            |> VersionedChangeset.put_attr(:last_synced_at, nil)
           else
             attrs
           end
@@ -1072,7 +1076,7 @@ defmodule SymmetryControl.Workspaces do
 
           attrs =
             attrs
-            |> drop_attrs([
+            |> VersionedChangeset.drop_attrs([
               :provider,
               :url,
               :status,
@@ -1082,19 +1086,19 @@ defmodule SymmetryControl.Workspaces do
               :last_checked_at,
               :last_synced_at
             ])
-            |> put_attr(:connection_id, connection.id)
-            |> put_attr(:provider, connection.provider)
+            |> VersionedChangeset.put_attr(:connection_id, connection.id)
+            |> VersionedChangeset.put_attr(:provider, connection.provider)
 
           attrs =
             if reset? do
               attrs
-              |> put_attr(:url, nil)
-              |> put_attr(:status, "unknown")
-              |> put_attr(:sync_status, "unknown")
-              |> put_attr(:status_message, nil)
-              |> put_attr(:metadata, %{})
-              |> put_attr(:last_checked_at, nil)
-              |> put_attr(:last_synced_at, nil)
+              |> VersionedChangeset.put_attr(:url, nil)
+              |> VersionedChangeset.put_attr(:status, "unknown")
+              |> VersionedChangeset.put_attr(:sync_status, "unknown")
+              |> VersionedChangeset.put_attr(:status_message, nil)
+              |> VersionedChangeset.put_attr(:metadata, %{})
+              |> VersionedChangeset.put_attr(:last_checked_at, nil)
+              |> VersionedChangeset.put_attr(:last_synced_at, nil)
             else
               attrs
             end
@@ -1127,46 +1131,12 @@ defmodule SymmetryControl.Workspaces do
 
   defp valid_uuid?(id), do: match?({:ok, _}, Ecto.UUID.cast(id))
 
-  defp expected_version(attrs) do
-    case Map.get(attrs, :version) || Map.get(attrs, "version") do
-      version when is_integer(version) and version > 0 -> {:ok, version}
-      _ -> {:error, :invalid_request}
-    end
-  end
-
   defp expect_version(record, attrs) do
-    with {:ok, expected_version} <- expected_version(attrs),
-         :ok <- matches_version(record, expected_version) do
+    with {:ok, expected_version} <- VersionedChangeset.expected_version(attrs),
+         :ok <- VersionedChangeset.matches_version(record, expected_version) do
       {:ok, Map.drop(attrs, [:version, "version"])}
     end
   end
-
-  defp matches_version(%{lock_version: version}, version), do: :ok
-
-  defp matches_version(%{lock_version: _version}, expected) when is_integer(expected),
-    do: {:error, :stale}
-
-  defp matches_version(_record, _expected), do: {:error, :invalid_request}
-
-  defp update_with_stale_error(changeset) do
-    Repo.update(changeset, stale_error_field: :lock_version, stale_error_message: "is stale")
-    |> normalize_stale_result()
-  end
-
-  defp delete_with_stale_error(changeset) do
-    Repo.delete(changeset, stale_error_field: :lock_version, stale_error_message: "is stale")
-    |> normalize_stale_result()
-  end
-
-  defp normalize_stale_result({:error, changeset} = error) do
-    cond do
-      Keyword.has_key?(changeset.errors, :lock_version) -> {:error, :stale}
-      Keyword.has_key?(changeset.errors, :provider_action_intents) -> {:error, :state_conflict}
-      true -> error
-    end
-  end
-
-  defp normalize_stale_result(result), do: result
 
   defp unwrap_or_rollback({:ok, value}), do: value
   defp unwrap_or_rollback({:error, reason}), do: Repo.rollback(reason)
@@ -1217,26 +1187,26 @@ defmodule SymmetryControl.Workspaces do
             end
 
           attrs
-          |> put_attr(:agent_profile, profile)
-          |> put_attr(:workspace, workspace)
-          |> put_attr(:assignee_name, assignee_name || profile)
+          |> VersionedChangeset.put_attr(:agent_profile, profile)
+          |> VersionedChangeset.put_attr(:workspace, workspace)
+          |> VersionedChangeset.put_attr(:assignee_name, assignee_name || profile)
 
         "human" ->
           attrs
-          |> put_attr(:agent_profile, nil)
-          |> put_attr(:workspace, nil)
+          |> VersionedChangeset.put_attr(:agent_profile, nil)
+          |> VersionedChangeset.put_attr(:workspace, nil)
 
         "unassigned" ->
           attrs
-          |> put_attr(:assignee_name, nil)
-          |> put_attr(:agent_profile, nil)
-          |> put_attr(:workspace, nil)
+          |> VersionedChangeset.put_attr(:assignee_name, nil)
+          |> VersionedChangeset.put_attr(:agent_profile, nil)
+          |> VersionedChangeset.put_attr(:workspace, nil)
 
         _ ->
           attrs
       end
 
-    if blocked == false, do: put_attr(attrs, :blocker, nil), else: attrs
+    if blocked == false, do: VersionedChangeset.put_attr(attrs, :blocker, nil), else: attrs
   end
 
   defp validate_registered_reference(changeset) do
@@ -1268,10 +1238,6 @@ defmodule SymmetryControl.Workspaces do
   defp attr_present?(attrs, key),
     do: Map.has_key?(attrs, key) or Map.has_key?(attrs, Atom.to_string(key))
 
-  defp drop_attrs(attrs, keys) do
-    Enum.reduce(keys, attrs, fn key, acc -> Map.drop(acc, [key, Atom.to_string(key)]) end)
-  end
-
   defp attr_value(attrs, key, default) do
     cond do
       Map.has_key?(attrs, key) -> Map.get(attrs, key)
@@ -1280,15 +1246,10 @@ defmodule SymmetryControl.Workspaces do
     end
   end
 
-  defp put_attr(attrs, key, value) do
-    if Enum.any?(Map.keys(attrs), &is_binary/1),
-      do: Map.put(attrs, Atom.to_string(key), value),
-      else: Map.put(attrs, key, value)
-  end
-
   defp put_creation_id(attrs, nil), do: attrs
 
-  defp put_creation_id(attrs, creation_id), do: put_attr(attrs, :creation_id, creation_id)
+  defp put_creation_id(attrs, creation_id),
+    do: VersionedChangeset.put_attr(attrs, :creation_id, creation_id)
 
   # A replay returns the row the first attempt created; only a real insert is `:created`.
   defp unwrap_creation_transaction({:ok, {:created, work_item}}), do: {:ok, work_item}
