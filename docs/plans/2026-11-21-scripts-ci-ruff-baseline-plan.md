@@ -208,7 +208,7 @@ with its cause established:
 | `test-credentialed-provider-witness.py` | `FAILED (errors=2)`, same count as the before-run | no `mix` on Windows (`FileNotFoundError` from `subprocess.run(["mix", …])`) |
 | `test-linux-v2-evidence.py` | `FAILED (failures=55, errors=5)`, same counts as the before-run | Linux-targeted suite |
 | `test-linux-v2-control-receipt.py` | exit 1 with its own message `receipt CLI regressions require Linux root…` | the suite refuses on non-Linux/non-root by construction (`raise SystemExit("…")`); CI runs it as root on Linux |
-| `test-no-legacy-routes-audit.py` | `FAILED (failures=11)`, every one `/bin/bash: C:/…/scripts/audit-no-legacy-routes.sh: No such file or directory` (exit 127) | this MSYS `bash` cannot open a Windows-style path. **Proven pre-existing:** the same 6 tests / 11 failures / 127 assertion reproduce byte-for-byte in a pristine `git archive HEAD` checkout (`C:/Users/lhan/.local/state/gdd/scratch/rf-w1-11/pristine`), untracked by this increment |
+| `test-no-legacy-routes-audit.py` | `FAILED (failures=11)`, every one `/bin/bash: C:/…/scripts/audit-no-legacy-routes.sh: No such file or directory` (exit 127) | this MSYS `bash` cannot open a Windows-style path. **Proven pre-existing:** the same 6 tests / 11 failures / 127 assertion reproduce byte-for-byte in a pristine `git archive HEAD` checkout (`<HOST-PATH>`), untracked by this increment |
 | `test-model-routing-evaluation.py` | the matrix run was killed by the runner's own 1200 s per-suite timeout with one `F` at test 60 (`test_review_record_requires_independent_accepted_evidence`); the dedicated verbose re-run of the same suite finished `Ran 80 tests in 1647.311s`, `OK (skipped=2)`, exit 0 | the suite needs ~28 min on this host. The single occurrence is a load-contention artifact, not a code verdict: it landed while a diagnostic single-test run of the same suite executed alongside the matrix run, and with the suite alone it is green. Test 60 also passes in isolation on the worktree (`Ran 1 test in 35.326s`, `OK`) and on the pristine `git archive HEAD` checkout (`Ran 1 test in 42.802s`, `OK`), and the same suite's Linux pair is identical (`80 tests`, `errors=18` from the missing `node`, `skipped=1`). None of this increment's edits introduces timing or ordering nondeterminism: the three SIM105 rewrites in that file are the same code path as the `try/except: pass` they replace (`process.kill()`, `process.wait(timeout=…)`, `stream.close()`), read in the diff |
 
 WSL Ubuntu-24.04 matrix after the change (`run-suites.sh`, the same script and environment as the
@@ -257,8 +257,17 @@ change (the before-state was measured the same way: `Ran 28 tests in 21.096s`, `
 * W1-01 must install ruff 0.17.5 (or the config refuses to run) and pass `scripts/ci` as a
   directory (or pass `--force-exclude`). Recorded in `docs/TODO.md` and the report.
 * The format pass reflows 46 files, so blame noise is real; the Opus amendment's mitigation is a
-  format-only commit plus `.git-blame-ignore-revs`. This stage may not commit, so the mitigation
-  ships as the recorded `format-only.patch` plus the conductor instruction, not as an applied file.
+  format-only commit plus `.git-blame-ignore-revs`. It stays unapplied: the branch carries the
+  implementation as two fused commits — `ec918271` (49 files, +6395/−3000, config + semantic
+  fixes) and `623052bd` (5 files, +37/−21) — with no format-only commit and no
+  `.git-blame-ignore-revs` in any history, and no later stage of this goal may rewrite history.
+  A `.git-blame-ignore-revs` entry cannot name the fused hash — `ec918271` carries the semantic
+  fixes, so skipping it would blur them too.
+  Recorded waiver (review finding R1, fix round 2026-11-21): the fused commits are accepted as
+  the landed form, subject to the conductor repeating this waiver in the PR body before merge; a
+  conductor-side rewrite as format-only + lint-fix commits, adding `.git-blame-ignore-revs` with
+  the new hash, remains available from the recorded `format-only.patch` (numstat recorded in the
+  evidence plan above), and the ruff gates must be re-run on the final tree if any byte changes.
 * Two files (plus the sibling test module #137 adds, pre-excluded by name) stay outside the lint
   corpus until #137 lands (known limit, tracked).
 * E501 wrapping is mechanical but touches long lines inside refusal messages some suites assert on;

@@ -691,9 +691,9 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       `scripts/ci/test-model-routing-record-sanitize-json.py` that #137 adds, named in the config
       ahead of its arrival) are the files #137 rewrites or adds, and the 2026-11-21 ruff baseline
       (`rf-w1-11`) excluded them so the reformat could not conflict with that branch. Measured
-      pre-state (2026-11-21, ruff 0.17.5, `7e7f857`; ruff run on the explicit paths so the exclude
-      cannot hide them): the two shipped files carry **5 findings** under the committed config
-      (`E731` ×2, `E501`, `UP012`, `I001` — all in
+      pre-state (2026-11-21, ruff 0.17.5, `a3039f0` plus the committed config; ruff run on the
+      explicit paths so the exclude cannot hide them): the two shipped files carry **5 findings**
+      under the committed config (`E731` ×2, `E501`, `UP012`, `I001` — all in
       `scripts/ci/test-model-routing-record-sanitize.py`; `model-routing-record-sanitize.py`
       itself is clean) and `ruff format --check` reports `2 files would be reformatted`. The
       block may therefore only be deleted once #137 (or the follow-up that lands its content) has
