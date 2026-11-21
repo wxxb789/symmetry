@@ -194,7 +194,7 @@ export type ExecutionGeneration = number & { readonly ExecutionGeneration: uniqu
 
 type MutationDisposition = "created" | "replayed";
 
-export type Attention = SymmetryAttentionReadV1;
+type Attention = SymmetryAttentionReadV1;
 export type GoalAttentionEntry = Attention["goal_attention"]["entries"][number];
 export type ProjectBlockedEntry = Attention["project_blocked"]["entries"][number];
 export type GoalProjection = SymmetryGoalReadV1;
@@ -288,7 +288,7 @@ const Session = Schema.Struct({
   // converging without a socket.
   socket_token: Schema.optionalWith(Schema.String, { default: () => "" }),
 });
-export type Session = typeof Session.Type;
+type Session = typeof Session.Type;
 // The one refusal envelope every boundary decodes: the union of the members the
 // server sends and the two write surfaces consume. `code`/`message` are
 // required and non-empty — a document that cannot name its own refusal is

@@ -865,8 +865,8 @@ instead of appended.
       process's pipe, so the goroutine outlives the call, belongs to no WaitGroup, and contradicts
       `daemon/AGENTS.md` ("Every goroutine has an owner and exit path"). Found by the 2026-11-21
       daemon audit (finding F15). Fix direction: prefer the context-aware write path the runner
-      already implements -- `internal/execution/runner.go:1378` `WriteInputContext` closes the stdin
-      write end when its context is cancelled (`:1408-1412`) -- which `internal/app` cannot reach
+      already implements -- `internal/execution/runner.go:1380` `WriteInputContext` closes the stdin
+      write end when its context is cancelled (`:1410-1414`) -- which `internal/app` cannot reach
       today only because its `Process` interface (`app.go:232-233`) declares `WriteInput([]byte)
       error` alone; otherwise close the pipe's write end on timeout (the runner owns the pipe), or
       track the goroutine in `daemon.workers` with a documented bound and assert its exit at
@@ -1069,3 +1069,18 @@ instead of appended.
       job instead of shrinking the oracle. `ci.yml` is untouched by rf-w3-16 because W3-01/#157
       owned it in wave 3 (that PR has since landed as `6a815c0f`, the revision the line numbers
       above bind); W6-01 is its wave-6 owner.
+
+## Deferred review findings (PR #193)
+
+- [ ] Pin two containment close-path behaviours that the rf-w4-03 runner decomposition left
+      untested (2026-11-21, branch `refactor/rf-w4-03-runner-decomposition`; plan
+      `docs/plans/2026-11-21-rf-w4-03-runner-decomposition-plan.md`). Two mutants on a scratch
+      copy over `./internal/execution/` stayed green under WSL: flipping the `closeOwnerOnce(false)`
+      argument in `closeContainmentOwnerLocked` (`daemon/internal/execution/runner.go:2393`) to
+      `true` — no test distinguishes the flag, and the pending-handoff owner does not implement
+      `containmentUnprovenCallbackSetter`, so a future edit could flip it silently — and swapping
+      the `containmentAuthorityUncertain` / `containmentAuthority != nil` guards in
+      `persistReceiptOrAbort` (`:2143`, `:2146`), whose check order is the base order
+      (pre-existing gap: base had the same untested order). Behaviour is correct at HEAD; this is
+      test coverage only, no code change. Found by the opus round-1 review of PR #193. Owner:
+      W4-12/W4-13 test work.
