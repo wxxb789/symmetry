@@ -20,15 +20,15 @@ defmodule SymmetryControlWeb.UserSocket do
   defp bearer(connect_info) do
     headers = Map.get(connect_info, :x_headers, Map.get(connect_info, "x_headers", []))
 
-    case Enum.find_value(headers, fn
-           {name, value} when is_binary(name) and is_binary(value) ->
-             if String.downcase(name) == "x-symmetry-token", do: value
-
-           _ ->
-             nil
-         end) do
+    case Enum.find_value(headers, &token_header/1) do
       token when is_binary(token) and byte_size(token) > 0 -> {:ok, token}
       _ -> {:error, :unauthenticated}
     end
   end
+
+  defp token_header({name, value}) when is_binary(name) and is_binary(value) do
+    if String.downcase(name) == "x-symmetry-token", do: value
+  end
+
+  defp token_header(_header), do: nil
 end
