@@ -872,6 +872,7 @@ func TestUnescapeLinuxMountPathDecodesMountinfoEscapes(t *testing.T) {
 		`/mnt/with\134backslash`: `/mnt/with\backslash`,
 		`/mnt/a\040b\040c`:       "/mnt/a b c",
 		`/mnt/a\040\011b`:        "/mnt/a \tb",
+		`/mnt/a\040`:             "/mnt/a ",
 	} {
 		got, err := unescapeLinuxMountPath(value)
 		if err != nil {

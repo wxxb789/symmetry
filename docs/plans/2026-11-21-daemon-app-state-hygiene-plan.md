@@ -70,7 +70,7 @@ pre-fix behavior for contrast:
 | `/mnt/a\134b` | `/mnt/a\134b` | `/mnt/a\b` | backslash escape, digits leak pre-fix |
 | `/mnt/a\040\011b` | `/mnt/a 040\t011b` | `/mnt/a \tb` | adjacent escapes |
 | `/mnt/a\040b\040c` | `/mnt/a 040b 040c` | `/mnt/a b c` | escape, literal run, escape |
-| `/mnt/a\040` | `/mnt/a ` | unchanged | escape at end of value (bound check `i+3 >= len(value)` is already correct) |
+| `/mnt/a\040` | `/mnt/a 040` | `/mnt/a ` | escape at end of value (bound check `i+3 >= len(value)` is already correct) |
 | `\`, `abc\`, `/mnt/\04` | `short mount path escape` | unchanged | truncated escape |
 | `/mnt/\777`, `/mnt/\04x` | `unknown mount path escape` | unchanged | unknown escape |
 
