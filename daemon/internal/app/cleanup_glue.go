@@ -22,8 +22,49 @@ const (
 	linuxStopReceiptBarrierPoll       = 25 * time.Millisecond
 )
 
+// storeCallbackWrite is the set of write paths one store callback selects
+// between: a daemon-wide option override and the matching Store method, which
+// share a signature per callback. Go forbids type parameters on methods, so the
+// selector below is a free function that names the signatures it accepts in a
+// constraint; a func value is comparable to nil, which is the only test the
+// selector needs.
+type storeCallbackWrite interface {
+	~func(state.RunKey, int, string) (state.RunJournal, error) |
+		~func(state.RunKey, int, string, authority.StopReceipt) (state.RunJournal, error) |
+		~func(state.RunKey, authority.SupervisorHandoff) (state.RunJournal, error) |
+		~func(state.RunKey, authority.SupervisorHandoff, int, string) (state.RunJournal, error) |
+		~func(state.RunKey, authority.SupervisorHandoff, time.Time) (state.RunJournal, error) |
+		~func(state.RunKey, authority.SupervisorHandoff, authority.SupervisorHandoffReleaseProof) (state.RunJournal, error) |
+		~func(state.RunKey, authority.SupervisorHandoff, authority.SupervisorHandoffAbortProof) (state.RunJournal, error)
+}
+
+// selectStoreWrite resolves the write path of one store-callback CAS: the
+// daemon-wide override when the harness set one, otherwise the Store method. It
+// takes the store lifetime read lock and returns it as release, which the caller
+// defers, so the lock spans the complete CAS and daemon shutdown cannot close
+// the Store while a runner still decides whether a write outcome is known. A
+// closing daemon, or a missing Store without an override, refuses with
+// errDaemonStoreClosing and no write path. fromStore is a Store method value, so
+// the caller forms it before the lock; a refused call never invokes it.
+func selectStoreWrite[Fn storeCallbackWrite](daemon *daemon, override, fromStore Fn) (Fn, func(), error) {
+	daemon.storeLifetimeMu.RLock()
+	release := daemon.storeLifetimeMu.RUnlock
+	if !daemon.storeClosing && (override != nil || daemon.store != nil) {
+		if override == nil {
+			override = fromStore
+		}
+		return override, release, nil
+	}
+	release()
+	var refused Fn
+	return refused, nil, errDaemonStoreClosing
+}
+
 func (daemon *daemon) persistProcessAuthorityCallback(key state.RunKey) func(int, string, *authority.Supervisor) error {
 	return func(pid int, identity string, value *authority.Supervisor) error {
+		// persistProcessAuthority owns this callback's write selection and its
+		// indeterminate-write retry because recovery shares them, so the refusal
+		// stays here with the same predicate selectStoreWrite applies.
 		daemon.storeLifetimeMu.RLock()
 		defer daemon.storeLifetimeMu.RUnlock()
 		if daemon.storeClosing || (daemon.store == nil && daemon.options.recordProcessAuthority == nil) {
@@ -81,52 +122,36 @@ func (daemon *daemon) persistProcessMarker(key state.RunKey, pid int, identity s
 
 func (daemon *daemon) markContainmentUnprovenCallback(key state.RunKey) func(int, string) error {
 	return func(pid int, identity string) error {
-		daemon.storeLifetimeMu.RLock()
-		defer daemon.storeLifetimeMu.RUnlock()
-		mark := daemon.options.markContainmentUnproven
-		if mark == nil {
-			if daemon.storeClosing || daemon.store == nil {
-				return errDaemonStoreClosing
-			}
-			mark = daemon.store.MarkContainmentUnproven
-		} else if daemon.storeClosing {
-			return errDaemonStoreClosing
+		mark, release, err := selectStoreWrite(daemon, daemon.options.markContainmentUnproven, daemon.store.MarkContainmentUnproven)
+		if err != nil {
+			return err
 		}
-		_, err := mark(key, pid, identity)
+		defer release()
+		_, err = mark(key, pid, identity)
 		return err
 	}
 }
 
 func (daemon *daemon) clearContainmentUnprovenCallback(key state.RunKey) func(int, string) error {
 	return func(pid int, identity string) error {
-		daemon.storeLifetimeMu.RLock()
-		defer daemon.storeLifetimeMu.RUnlock()
-		clear := daemon.options.clearContainmentUnproven
-		if clear == nil {
-			if daemon.storeClosing || daemon.store == nil {
-				return errDaemonStoreClosing
-			}
-			clear = daemon.store.ClearContainmentUnproven
-		} else if daemon.storeClosing {
-			return errDaemonStoreClosing
+		clear, release, err := selectStoreWrite(daemon, daemon.options.clearContainmentUnproven, daemon.store.ClearContainmentUnproven)
+		if err != nil {
+			return err
 		}
-		_, err := clear(key, pid, identity)
+		defer release()
+		_, err = clear(key, pid, identity)
 		return err
 	}
 }
 
 func (daemon *daemon) persistContainmentStopReceiptCallback(key state.RunKey) func(int, string, authority.StopReceipt) error {
 	return func(pid int, identity string, receipt authority.StopReceipt) error {
-		daemon.storeLifetimeMu.RLock()
-		defer daemon.storeLifetimeMu.RUnlock()
-		if daemon.storeClosing || (daemon.store == nil && daemon.options.recordContainmentStopReceipt == nil) {
-			return errDaemonStoreClosing
+		record, release, err := selectStoreWrite(daemon, daemon.options.recordContainmentStopReceipt, daemon.store.RecordContainmentStopReceipt)
+		if err != nil {
+			return err
 		}
-		if daemon.options.recordContainmentStopReceipt != nil {
-			if _, err := daemon.options.recordContainmentStopReceipt(key, pid, identity, receipt); err != nil {
-				return err
-			}
-		} else if _, err := daemon.store.RecordContainmentStopReceipt(key, pid, identity, receipt); err != nil {
+		defer release()
+		if _, err := record(key, pid, identity, receipt); err != nil {
 			return err
 		}
 		if err := daemon.verifyDurableContainmentStopReceipt(key, pid, identity, receipt); err != nil {
@@ -320,53 +345,35 @@ func (daemon *daemon) verifyDurableContainmentStopReceipt(key state.RunKey, pid 
 // a runner is still deciding whether a write outcome is known.
 func (daemon *daemon) prepareSupervisorHandoffCallback(key state.RunKey) func(authority.SupervisorHandoff) error {
 	return func(handoff authority.SupervisorHandoff) error {
-		daemon.storeLifetimeMu.RLock()
-		defer daemon.storeLifetimeMu.RUnlock()
-		prepare := daemon.options.prepareSupervisorHandoff
-		if prepare == nil {
-			if daemon.storeClosing || daemon.store == nil {
-				return errDaemonStoreClosing
-			}
-			prepare = daemon.store.PrepareSupervisorHandoff
-		} else if daemon.storeClosing {
-			return errDaemonStoreClosing
+		prepare, release, err := selectStoreWrite(daemon, daemon.options.prepareSupervisorHandoff, daemon.store.PrepareSupervisorHandoff)
+		if err != nil {
+			return err
 		}
-		_, err := prepare(key, handoff.Clone())
+		defer release()
+		_, err = prepare(key, handoff.Clone())
 		return err
 	}
 }
 
 func (daemon *daemon) bindSupervisorHandoffCallback(key state.RunKey) func(authority.SupervisorHandoff, int, string) error {
 	return func(expected authority.SupervisorHandoff, pid int, identity string) error {
-		daemon.storeLifetimeMu.RLock()
-		defer daemon.storeLifetimeMu.RUnlock()
-		bind := daemon.options.bindSupervisorHandoff
-		if bind == nil {
-			if daemon.storeClosing || daemon.store == nil {
-				return errDaemonStoreClosing
-			}
-			bind = daemon.store.BindSupervisorHandoff
-		} else if daemon.storeClosing {
-			return errDaemonStoreClosing
+		bind, release, err := selectStoreWrite(daemon, daemon.options.bindSupervisorHandoff, daemon.store.BindSupervisorHandoff)
+		if err != nil {
+			return err
 		}
-		_, err := bind(key, expected.Clone(), pid, identity)
+		defer release()
+		_, err = bind(key, expected.Clone(), pid, identity)
 		return err
 	}
 }
 
 func (daemon *daemon) commitSupervisorHandoffCallback(key state.RunKey) func(authority.SupervisorHandoff, time.Time) error {
 	return func(expected authority.SupervisorHandoff, startedAt time.Time) error {
-		daemon.storeLifetimeMu.RLock()
-		defer daemon.storeLifetimeMu.RUnlock()
-		commit := daemon.options.commitSupervisorHandoff
-		if commit == nil {
-			if daemon.storeClosing || daemon.store == nil {
-				return errDaemonStoreClosing
-			}
-			commit = daemon.store.CommitSupervisorHandoff
-		} else if daemon.storeClosing {
-			return errDaemonStoreClosing
+		commit, release, err := selectStoreWrite(daemon, daemon.options.commitSupervisorHandoff, daemon.store.CommitSupervisorHandoff)
+		if err != nil {
+			return err
 		}
+		defer release()
 		committed, err := commit(key, expected.Clone(), startedAt)
 		if err != nil {
 			return err
@@ -386,36 +393,24 @@ func (daemon *daemon) recordSupervisorHandoffStopReceiptCallback(key state.RunKe
 
 func (daemon *daemon) clearSupervisorHandoffCallback(key state.RunKey) func(authority.SupervisorHandoff, authority.SupervisorHandoffReleaseProof) error {
 	return func(expected authority.SupervisorHandoff, proof authority.SupervisorHandoffReleaseProof) error {
-		daemon.storeLifetimeMu.RLock()
-		defer daemon.storeLifetimeMu.RUnlock()
-		clear := daemon.options.clearSupervisorHandoff
-		if clear == nil {
-			if daemon.storeClosing || daemon.store == nil {
-				return errDaemonStoreClosing
-			}
-			clear = daemon.store.ClearSupervisorHandoff
-		} else if daemon.storeClosing {
-			return errDaemonStoreClosing
+		clear, release, err := selectStoreWrite(daemon, daemon.options.clearSupervisorHandoff, daemon.store.ClearSupervisorHandoff)
+		if err != nil {
+			return err
 		}
-		_, err := clear(key, expected.Clone(), proof)
+		defer release()
+		_, err = clear(key, expected.Clone(), proof)
 		return err
 	}
 }
 
 func (daemon *daemon) clearSupervisorHandoffAfterAbortCallback(key state.RunKey) func(authority.SupervisorHandoff, authority.SupervisorHandoffAbortProof) error {
 	return func(expected authority.SupervisorHandoff, proof authority.SupervisorHandoffAbortProof) error {
-		daemon.storeLifetimeMu.RLock()
-		defer daemon.storeLifetimeMu.RUnlock()
-		clear := daemon.options.clearSupervisorHandoffAfterAbort
-		if clear == nil {
-			if daemon.storeClosing || daemon.store == nil {
-				return errDaemonStoreClosing
-			}
-			clear = daemon.store.ClearSupervisorHandoffAfterAbort
-		} else if daemon.storeClosing {
-			return errDaemonStoreClosing
+		clear, release, err := selectStoreWrite(daemon, daemon.options.clearSupervisorHandoffAfterAbort, daemon.store.ClearSupervisorHandoffAfterAbort)
+		if err != nil {
+			return err
 		}
-		_, err := clear(key, expected.Clone(), proof)
+		defer release()
+		_, err = clear(key, expected.Clone(), proof)
 		return err
 	}
 }
