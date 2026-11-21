@@ -607,7 +607,8 @@ The slice merged `origin/main` `f70553bf` (which carries #185 `4b034f50`) into `
   and `TestLinuxSupervisorLiveOwnerControlCloseInProcessStopFailsClosed` — pass at the merge head
   (`go test -count=3 -run '<the two names>'` → `ok`), and both fail with the latch reverted via
   `-overlay` to the pre-#185 expression (M1), so the port is load-bearing.
-- **WSL platform suite.** Green as the non-root `accept` user (`uid=1000`, gid 1001):
+- **WSL platform suite.** Green as non-root uid/gid 1001 (`setpriv --reuid=1001 --regid=1001
+  --clear-groups`):
   `go test -count=1 -timeout 1800s -v -skip '<the six loopback TCP-peer tests, regex from the
   #185 plan :238-239>' ./internal/platform/` → exit 0, 229 top-level `--- PASS`, 0 FAIL, the
   pre-existing `TestLinuxOwnerAnchorRunReaperRejectsForeignChildBeforeAdoptingIt` skip the only
