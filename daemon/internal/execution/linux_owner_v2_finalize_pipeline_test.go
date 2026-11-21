@@ -59,13 +59,10 @@ type linuxV2CloseHarness struct {
 	anchorLauncherExit authority.LinuxCgroupExitProof
 	helperExit         authority.LinuxCgroupExitProof
 
-	handoff authority.SupervisorHandoff
-
 	ownerReceipt        authority.StopReceipt
 	ownerReleaseProof   authority.SupervisorHandoffReleaseProof
 	preGateReceipt      authority.LinuxCgroupPreGateStopReceipt
 	preGateReleaseProof authority.LinuxCgroupPreGateReleaseProof
-	grant               platform.LinuxOwnerAnchorGrant
 
 	// receiptAttempts counts every RecordStopReceipt invocation; receiptFailures
 	// fails that many initial attempts and receiptAckLost makes the first
@@ -105,7 +102,6 @@ func newLinuxV2CloseHarness(t *testing.T) *linuxV2CloseHarness {
 		Version: authority.LinuxCgroupIdentityVersion, Process: harness.launcher,
 		Witness: harness.anchor, Waited: true, Reaped: true, HelperExit: &adoptedHelperExit,
 	}
-	harness.handoff = harness.newHandoff(harness.helperLauncherExit)
 	return harness
 }
 
@@ -441,7 +437,6 @@ func newLinuxV2ClosePreGateOwner(t *testing.T, harness *linuxV2CloseHarness) *li
 	if err := receipt.Validate(); err != nil {
 		t.Fatalf("pre-gate receipt fixture is invalid: %v", err)
 	}
-	harness.grant = grant
 	harness.preGateReceipt = receipt
 	harness.preGateReleaseProof = authority.LinuxCgroupPreGateReleaseProof{
 		Version: authority.LinuxCgroupIdentityVersion, Receipt: receipt,
@@ -728,5 +723,34 @@ func TestLinuxV2FinalizePreGateReleasesHelperOnlyAfterClear(t *testing.T) {
 	if !released || !helperReleased || !receiptAcked || !persisted {
 		t.Fatalf("pre-gate close state released=%t helperReleased=%t acked=%t persisted=%t, want all four",
 			released, helperReleased, receiptAcked, persisted)
+	}
+}
+
+func TestLinuxV2FinalizePreGateClaimsCapabilityOnlyAfterClear(t *testing.T) {
+	harness := newLinuxV2CloseHarness(t)
+	owner := newLinuxV2ClosePreGateOwner(t, harness)
+	// The capability is not issued yet: a pipeline that claimed it before the
+	// durable clear would stop on the claim error instead of the clear failure.
+	owner.closeSeams.preGateReleaseSnapshot = func(platform.LinuxCgroupV2Release) (authority.LinuxCgroupPreGateReleaseProof, bool) {
+		return authority.LinuxCgroupPreGateReleaseProof{}, false
+	}
+	wantErr := errors.New("reservation clear failed")
+	owner.invocation.Callbacks.ClearReservationV2 = func(state.LinuxCgroupReservation, platform.LinuxCgroupV2Release) error {
+		harness.record("clear")
+		return wantErr
+	}
+	err := owner.finalizePreGate(context.Background())
+	const clearError = "clear exact no-gate Linux v2 reservation with opaque release"
+	if err == nil || !strings.Contains(err.Error(), clearError) || !errors.Is(err, wantErr) {
+		t.Fatalf("finalizePreGate() error = %v, want the failed durable clear before any capability claim", err)
+	}
+	if order := harness.order(); !slices.Equal(order, []string{"receipt", "ack", "clear", "clear"}) {
+		t.Fatalf("pre-gate close order = %#v, want the retried clear and no claim before it", order)
+	}
+	owner.mu.Lock()
+	released := owner.ownerReleased
+	owner.mu.Unlock()
+	if released {
+		t.Fatal("failed pre-gate clear settled the owner")
 	}
 }

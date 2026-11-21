@@ -303,9 +303,10 @@ name. Recorded; the mutant run for fence 8 proves the policy is still pinned.
   (543 +/221 − against the 0fa9b705 base). The plan row's −150…−260 dLOC is not met and is
   report-only per D2.
 - Tests: 12 new tests in `linux_owner_v2_finalize_pipeline_test.go` (the nine planned fences plus
-  the failed-acknowledgement and resume-from-applied-steps cases) plus the cross-platform
-  vocabulary test; 9 mutants (M1, M2, M3, M3b, M4, M5, M6, M7, M8) each observed red and
-  reverted, including the consumer-side app red for the dropped stage name.
+  the failed-acknowledgement, resume-from-applied-steps and pre-gate capability-claim position
+  cases) plus the cross-platform vocabulary test; 10 mutants (M1, M2, M3, M3b, M4, M5, M6, M7,
+  M8, M9 — M9 added at the apply stage) each observed red and reverted, including the
+  consumer-side app red for the dropped stage name.
 - Gates: `gofmt -l`, `go vet ./...`, three builds, Windows execution + app, WSL focused + WSL
   execution, the WSL witness subset and the citation gate all exit 0; the full WSL app suite does
   not complete on this host (nondeterministic admission/httptest HTTP-dial hangs that the

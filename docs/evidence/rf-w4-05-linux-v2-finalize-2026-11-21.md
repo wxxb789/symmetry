@@ -26,15 +26,15 @@ decisions (Wave-4 draft, W4 review reconcile, lesson-32 control-flow preservatio
 
 | file | change |
 | --- | --- |
-| `linux_owner_v2_linux.go` | `finalize` 163 → 79 L and `finalizePreGate` 141 → 59 L; one `runClosePipeline` driver (34 L) + two step sets (`linuxV2CloseGateSteps` 10 methods, `linuxV2ClosePreGateSteps` 10 methods); `linuxV2HelperControl`, `linuxV2CloseSeams` + 3 accessors; `retryMutation` replaces the five retry names (11 L definition, 32 call sites + 1 test call) |
+| `linux_owner_v2_linux.go` | `finalize` 163 → 79 L and `finalizePreGate` 141 → 59 L; one `runClosePipeline` driver (34 L) + two step sets (`linuxV2CloseGateSteps` 10 methods, `linuxV2ClosePreGateSteps` 10 methods); `linuxV2HelperControl`, `linuxV2CloseSeams` + 3 accessors; `retryMutation` replaces the five retry names (11 L definition, 33 call sites + 1 test call) |
 | `runner.go` | `LinuxV2AckStages` added below the ten constants (`:228-246`): one exported ten-name source, no name added, removed or renamed, table bytes unchanged |
 | `linux_owner_witness_linux.go` | `linuxV2NativeWitnessAckLossSupported` `:2458-2463` derives membership from `execution.LinuxV2AckStages` with `slices.Contains`; the witness stage vocabulary `:55-75` is untouched |
-| `linux_owner_v2_finalize_pipeline_test.go` (new, 732 L) | the CI characterization tests of the close fences (12 tests) |
+| `linux_owner_v2_finalize_pipeline_test.go` (new, 756 L) | the CI characterization tests of the close fences (12 tests: 11 fences + the pre-gate capability-claim position pin) |
 | `linux_v2_ack_stages_test.go` (new, no build tag) | the ten-name source completeness test |
 | `linux_owner_v2_test.go` | `TestLinuxV2MutationAckLostIsNotReplayed` calls `retryMutation` (same closure, same assertions, same test name) |
 
 Line totals: `linux_owner_v2_linux.go` 2,753 → 3,075; `runner.go` 2,756 → 2,776 (W4-03 base
-plus the 20-line source); the two test files add 732 + 22 L; against the 0fa9b705 base the
+plus the 20-line source); the two test files add 756 + 22 L; against the 0fa9b705 base the
 numstat is `543 +/221 −` for `linux_owner_v2_linux.go` and `1 +/1 −` for the test call site. The
 plan row's −150…−260 dLOC is not met (net +322 L in the source file: the ten step methods carry
 their own doc comments and signatures) and is report-only per contract D2.
@@ -238,6 +238,7 @@ pre-gate reconcile, which the fence test executes on the real `finalizePreGate`.
 | clear-after-receipt | `TestLinuxV2FinalizeClearFollowsDurableReceiptAndAck` | real `finalize` (receipt < ack < clear, receipt published, owner settled) |
 | release-after-clear | `TestLinuxV2FinalizeReleasesHelperOnlyAfterClear` | real `finalize` (clear < release, `helperReleased`) |
 | pre-gate clear + release | `TestLinuxV2FinalizePreGateReleasesHelperOnlyAfterClear` | real `finalizePreGate` (receipt/ack/clear/release order, all four flags) |
+| pre-gate capability-claim position | `TestLinuxV2FinalizePreGateClaimsCapabilityOnlyAfterClear` | real `finalizePreGate` (unissued capability + failing `ClearReservationV2`: the durable clear fails before any capability claim) |
 | cached-receipt reuse | `TestLinuxV2FinalizeReusesDurableReceiptWithoutRewriting` | real `finalize` (persisted receipt: no rewrite, ack/clear/release) |
 | fresh clone per attempt | `TestLinuxV2FinalizeMutationAttemptsSeeFreshClones` | real `finalize` (first attempt mutates its clone and fails; attempt 2 asserts pristine inputs) |
 | ack-lost no-replay | `TestLinuxV2FinalizeDoesNotReplayLostReceiptAck` + `TestLinuxV2MutationAckLostIsNotReplayed` | real `finalize` (one attempt, sentinel propagated) and `retryMutation` directly |
@@ -254,7 +255,8 @@ tests instead of silently weakening them.
 
 A mutant is accepted only with the observed red output of the test that owns the fence; every
 mutant was reverted and the affected invariant re-verified afterwards (grep of the restored line,
-`gofmt -l` clean, focused suite green in §11).
+`gofmt -l` clean, focused suite green in §11). M9 was added and run by the apply stage under the
+same protocol (scratch-copy overlay, tree untouched).
 
 | # | fence | mutant | test | observed |
 | --- | --- | --- | --- | --- |
@@ -267,6 +269,7 @@ mutant was reverted and the affected invariant re-verified afterwards (grep of t
 | M6 | ack-lost no-replay | `if first == nil \|\| errors.Is(first, ErrLinuxV2MutationAckLost)` → `if first == nil` | `TestLinuxV2MutationAckLostIsNotReplayed`, `TestLinuxV2FinalizeDoesNotReplayLostReceiptAck` | FAIL both: `mutation retry error=… calls=2, want one non-replayable ACK-loss attempt` and `finalize() error = <nil>, want the response-loss sentinel` |
 | M7 | fresh clone per attempt | hoist `cloneLinuxV2StopReceiptValue(steps.receipt)` above `retryMutation` in the gate `persistReceipt` | `TestLinuxV2FinalizeMutationAttemptsSeeFreshClones` | FAIL: `stop receipt attempt 2 observed a mutated receipt clone` |
 | M8 | D6 ten-name source | drop `LinuxV2AckStageJournalCleared` from `LinuxV2AckStages` | `TestLinuxV2AckStageVocabularyIsComplete` (+ the app consumer oracle) | FAIL both: `LinuxV2AckStages = [9]string{…}, want the ten live ACK-loss stages […]` and `TestLinuxV2NativeWitnessAllowsReceiptBackedLostClearAck: receipt-backed lost-clear response rejected` |
+| M9 | pre-gate capability-claim position | `linuxV2ClosePreGateSteps.claimsCapabilityAfterClear` `true` → `false` (claim before the durable clear) | `TestLinuxV2FinalizePreGateClaimsCapabilityOnlyAfterClear` | FAIL: `finalizePreGate() error = Linux v2 pre-gate release capability differs from its receipt, want the failed durable clear before any capability claim` |
 
 M8's second failure is the consumer-side proof: the app derives its witness validation from the
 single source, so a dropped name reddens an existing witness oracle, not only the new test.
@@ -329,7 +332,7 @@ All commands run in `daemon/` unless stated. "WSL" is
 | windows execution | `go test -count=1 ./internal/execution/...` | `ok`, exit 0 (9.871 s) |
 | windows app | `go test -count=1 ./internal/app/...` | `ok`, exit 0 (116.686 s) |
 | WSL focused | `go test -count=1 -run 'TestLinuxV2\|TestRunnerStopReceipt' ./internal/execution/` | `ok`, exit 0 (0.035 s) |
-| WSL execution | `go test -count=1 ./internal/execution/` | `ok`, exit 0 (1.864 s); 116 named tests listed (12 new + the retargeted ack-lost oracle among them) |
+| WSL execution | `go test -count=1 ./internal/execution/` | `ok`, exit 0 (2.359 s); 117 named tests listed (13 new: 12 in the pipeline file + 1 ack-stages; plus the retargeted ack-lost oracle among them) |
 | WSL app (full) | `go test -count=1 ./internal/app/...` | exit 1: `FAIL … 600.058s`, test-binary timeout inside `TestClaimAdmissionInputFailsClosedBeforeWorkspaceOrProcessStart` (pre-existing; reproduced in the untouched base worktree, §12) |
 | WSL app (witness subset) | `go test -count=1 -run 'TestLinuxV2NativeWitness' ./internal/app/` | `ok`, exit 0 (0.739 s) — the Linux-only oracle for the changed app function |
 | WSL app (full, first hang skipped) | `go test -count=1 -timeout 900s -skip '^TestClaimAdmissionInputFailsClosedBeforeWorkspaceOrProcessStart$' ./internal/app/` | exit 1: `FAIL … 900.133s`, timeout inside `TestNativeResumeAdmissionRejectsIncompatibleOrUnavailableRetainedSessionBeforeNativeStart` (admission family, unrelated to the changed code; §12) |

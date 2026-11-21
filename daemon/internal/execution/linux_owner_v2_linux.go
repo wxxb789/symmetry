@@ -2417,7 +2417,7 @@ func (steps *linuxV2ClosePreGateSteps) persistReceipt() error {
 	}
 	steps.reservation.PreGateStopReceipt = cloneLinuxV2PreGateReceipt(&steps.receipt)
 	steps.owner.mu.Lock()
-	steps.owner.reservation.PreGateStopReceipt = cloneLinuxV2PreGateReceipt(&steps.receipt)
+	steps.owner.reservation.PreGateStopReceipt = steps.reservation.PreGateStopReceipt
 	steps.owner.mu.Unlock()
 	return nil
 }
