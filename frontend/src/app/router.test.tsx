@@ -94,10 +94,10 @@ describe("workspace navigation", () => {
     expect(new URL(history.location.href, "http://localhost").searchParams.get("projectId")).toBe(secondProjectId);
     expect(screen.getByRole("link", { name: "Attention" })).toHaveAttribute("href", `/portal/attention?projectId=${secondProjectId}`);
 
-    act(() => history.back());
+    act(() => { history.back(); });
     expect(await screen.findByRole("heading", { name: "No blocked work" })).toBeVisible();
     expect(screen.getByLabelText("Project")).toHaveValue(firstProjectId);
-    act(() => history.forward());
+    act(() => { history.forward(); });
     expect(await screen.findByText("Resolve release blocker")).toBeVisible();
     expect(screen.getByLabelText("Project")).toHaveValue(secondProjectId);
 
@@ -125,7 +125,7 @@ describe("workspace navigation", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "Attention" })).toBeVisible();
     expect(await screen.findByText("Resolve release blocker")).toBeVisible();
 
-    act(() => history.back());
+    act(() => { history.back(); });
     await screen.findByRole("heading", { level: 1, name: "Project Two" });
     await user.click(screen.getByRole("button", { name: /Search or navigate/ }));
     const palette = await screen.findByRole("dialog", { name: "Command palette" });
@@ -149,7 +149,7 @@ describe("workspace navigation", () => {
     const refresh = screen.getByRole("button", { name: "Refresh" });
     await user.click(refresh);
     await waitFor(() => expect(screen.getByRole("button", { name: "Refresh" })).toHaveFocus());
-    act(() => history.back());
+    act(() => { history.back(); });
     await screen.findByRole("heading", { level: 1, name: "Project One" });
     expect(screen.getByLabelText("Project")).toHaveValue(firstProjectId);
   });
@@ -233,7 +233,7 @@ describe("workspace navigation", () => {
   });
 
   it("keeps the operator's focus when a background session read fails and then recovers", async () => {
-    const sessionReads: Array<(response: Response) => void> = [];
+    const sessionReads: ((response: Response) => void)[] = [];
     const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => {
       const path = input instanceof Request ? input.url : String(input);
       if (path.endsWith("/session")) {
@@ -247,7 +247,7 @@ describe("workspace navigation", () => {
     // The 503 must settle into an error state before recovery; transient retries
     // would keep the fetch in flight and mask the focus transition under test.
     application.queryClient.setQueryDefaults(["session"], { retry: false });
-    await vi.waitFor(() => expect(sessionReads.length).toBeGreaterThan(0));
+    await vi.waitFor(() => { expect(sessionReads.length).toBeGreaterThan(0); });
     sessionReads[0]?.(new Response(sessionBody("cached-token")));
     await screen.findByRole("heading", { level: 1, name: "Attention" });
     const selection = screen.getByLabelText("Project");
@@ -256,14 +256,14 @@ describe("workspace navigation", () => {
     expect(selection).toHaveFocus();
     // A background session refetch fails while the cached session still renders the shell.
     act(() => { window.dispatchEvent(new Event("visibilitychange")); });
-    await vi.waitFor(() => expect(sessionReads.length).toBeGreaterThan(1));
+    await vi.waitFor(() => { expect(sessionReads.length).toBeGreaterThan(1); });
     sessionReads[1]?.(new Response("{}", { status: 503 }));
     await act(async () => { const { promise, resolve } = Promise.withResolvers<void>(); setTimeout(resolve, 20); await promise; });
     expect(screen.getByRole("heading", { level: 1, name: "Attention" })).toBeVisible();
     expect(selection).toHaveFocus();
     // The read then recovers; the URL is unchanged and the router stays idle.
     act(() => { window.dispatchEvent(new Event("visibilitychange")); });
-    await vi.waitFor(() => expect(sessionReads.length).toBeGreaterThan(2));
+    await vi.waitFor(() => { expect(sessionReads.length).toBeGreaterThan(2); });
     sessionReads[2]?.(new Response(sessionBody("recovered-token")));
     await act(async () => { const { promise, resolve } = Promise.withResolvers<void>(); setTimeout(resolve, 20); await promise; });
     expect(selection).toHaveFocus();
@@ -511,12 +511,12 @@ describe("readable work views", () => {
     await user.keyboard("Subject");
     expect(filter).toHaveFocus();
     expect(filter).toHaveValue("Subject");
-    await waitFor(() => expect(new URL(history.location.href, "http://localhost").searchParams.get("q")).toBe("Subject"));
+    await waitFor(() => { expect(new URL(history.location.href, "http://localhost").searchParams.get("q")).toBe("Subject"); });
     // The same class of URL-backed control: a select keeps focus on its change.
     const state = screen.getByLabelText("Work state");
     await user.selectOptions(state, "ready");
     expect(state).toHaveFocus();
-    await waitFor(() => expect(new URL(history.location.href, "http://localhost").searchParams.get("state")).toBe("ready"));
+    await waitFor(() => { expect(new URL(history.location.href, "http://localhost").searchParams.get("state")).toBe("ready"); });
     const list = screen.getByRole("list", { name: "Work items" });
     expect(within(list).getByText(subjectTitle)).toBeVisible();
     expect(within(list).queryByText(siblingTitle)).not.toBeInTheDocument();
@@ -785,7 +785,7 @@ describe("execution history boundaries", () => {
     expect(reads.timelineBefore).toEqual(["cursor-1"]);
 
     await user.click(screen.getByRole("button", { name: "Retry history" }));
-    await waitFor(() => expect(reads.details).toBeGreaterThan(1));
+    await waitFor(() => { expect(reads.details).toBeGreaterThan(1); });
     await user.click(await screen.findByRole("button", { name: "Load older history" }));
     expect(await screen.findByText("older entry")).toBeVisible();
     expect(reads.timelineBefore).toEqual(["cursor-1", "cursor-2"]);
@@ -1050,7 +1050,7 @@ describe("chat route", () => {
     const paletteChat = within(palette).getByRole("link", { name: "Chat" });
     expect(paletteChat).toHaveAttribute("href", `/portal/chat?projectId=${firstProjectId}`);
     await user.click(paletteChat);
-    await waitFor(() => expect(new URL(history.location.href, "http://localhost").searchParams.get("projectId")).toBe(firstProjectId));
+    await waitFor(() => { expect(new URL(history.location.href, "http://localhost").searchParams.get("projectId")).toBe(firstProjectId); });
     expect(new URL(history.location.href, "http://localhost").searchParams.has("scope")).toBe(false);
     await screen.findByText("Workspace conversation");
   });
@@ -1121,7 +1121,7 @@ describe("workspace socket lifetime", () => {
   it("releases the invalidation client it started when the shell unmounts", async () => {
     const socket = scriptedSocket();
     const { application, unmount } = renderWorkspace("/portal/attention", servedFetcher(), { socketFactory: () => socket.socket });
-    await waitFor(() => expect(socket.connects()).toBe(1));
+    await waitFor(() => { expect(socket.connects()).toBe(1); });
     expect(application.realtime.status()).toBe("connecting");
     unmount();
     expect(socket.disconnects()).toBe(1);
@@ -1141,7 +1141,7 @@ describe("workspace socket lifetime", () => {
       transport: ScriptedTransport,
     } as PhoenixSocketOptions);
     const { unmount } = renderWorkspace("/portal/attention", servedFetcher(), { socketFactory });
-    await waitFor(() => expect(ScriptedTransport.instances).toHaveLength(1));
+    await waitFor(() => { expect(ScriptedTransport.instances).toHaveLength(1); });
     expect(ScriptedTransport.instances[0]?.url).toBe(`ws://${window.location.host}/portal/socket/websocket?vsn=2.0.0`);
     // A refused connect arms the client's retry (10 ms out); the workspace is torn
     // down while that retry is still pending, exactly as a finished test file
@@ -1172,7 +1172,7 @@ describe("workspace socket lifetime", () => {
       visibility: () => true,
     });
 
-    await waitFor(() => expect(application.realtime.lastRefresh()).not.toBeNull());
+    await waitFor(() => { expect(application.realtime.lastRefresh()).not.toBeNull(); });
     expect(application.realtime.status()).toBe("disconnected");
     expect(socketFactory).not.toHaveBeenCalled();
     unmount();
@@ -1190,9 +1190,9 @@ describe("workspace socket lifetime", () => {
 function joiningSocket() {
   let joined = false;
   let dropped = 0;
-  const opens: Array<() => void> = [];
-  const invalidations: Array<(payload: unknown) => void> = [];
-  const okReplies: Array<() => void> = [];
+  const opens: (() => void)[] = [];
+  const invalidations: ((payload: unknown) => void)[] = [];
+  const okReplies: (() => void)[] = [];
   const push: RealtimePush = {
     receive: (status, callback) => {
       if (status === "ok") okReplies.push(callback);
@@ -1285,7 +1285,7 @@ describe("channel-join read epoch", () => {
       // fallback stops, then issues its snapshot read — answered, still, from the
       // pre-run document, because the run has not been posted yet.
       act(() => { socket.open(); });
-      await waitFor(() => expect(detailReads).toBe(preRunReads + 1));
+      await waitFor(() => { expect(detailReads).toBe(preRunReads + 1); });
       expect(screen.getByText("No execution recorded")).toBeInTheDocument();
 
       // The run posts and its invalidation is published inside the window. This
@@ -1316,7 +1316,7 @@ describe("channel-join read epoch", () => {
       expect(status).toHaveAttribute("data-connection", "connected");
       expect(status).toHaveAttribute("data-refresh-source", "join");
       expect(Number(status?.getAttribute("data-refresh-issued-at"))).toBeGreaterThan(0);
-      await waitFor(() => expect(status?.getAttribute("data-refresh-settled-at")).toMatch(/^\d+$/));
+      await waitFor(() => { expect(status?.getAttribute("data-refresh-settled-at")).toMatch(/^\d+$/); });
       expect(Number(status?.getAttribute("data-refresh-settled-at"))).toBeGreaterThanOrEqual(
         Number(status?.getAttribute("data-refresh-issued-at")),
       );

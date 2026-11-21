@@ -17,7 +17,7 @@ export type ChatIntent = "discuss" | "status" | "start_work" | "guidance" | "dec
  * Which affordance owns an unconfirmed attempt's retry: the composer, whose
  * draft is kept, or the decision packet's option, re-chosen from its button.
  */
-export type ChatAttemptSource = "composer" | "decision";
+type ChatAttemptSource = "composer" | "decision";
 
 /** The scope's send state; every rendered text is one of these exact observables. */
 export type ChatSendStatus =
@@ -45,7 +45,7 @@ export interface ChatHistoryPage {
   readonly fetchBeforeId: string | null;
 }
 
-export interface ChatScopeState {
+interface ChatScopeState {
   readonly draft: string;
   readonly intent: ChatIntent;
   /** The start-work goal title, optional. */
@@ -70,7 +70,7 @@ export interface ChatScopeState {
   readonly servedSource: object | null;
 }
 
-export function emptyChatScopeState(): ChatScopeState {
+function emptyChatScopeState(): ChatScopeState {
   return {
     draft: "",
     intent: "discuss",
@@ -214,7 +214,7 @@ export function pendingOlderLoadFor(
     : load.cursor === candidate.cursor));
 }
 
-export interface ChatScopeStore {
+interface ChatScopeStore {
   readonly stateOf: (key: string) => ChatScopeState;
   readonly update: (key: string, patch: Partial<ChatScopeState>) => void;
   readonly updateWith: (key: string, change: (state: ChatScopeState) => ChatScopeState) => void;

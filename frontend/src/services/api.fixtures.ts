@@ -15,7 +15,7 @@ import servedGoalRead from "../../../contracts/fixtures/valid/goal-read.active.j
  */
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
-export interface ReadWorkItemOptions {
+interface ReadWorkItemOptions {
   id: string;
   projectId: string;
   title: string;
@@ -32,7 +32,7 @@ export interface ReadWorkItemOptions {
   delivery?: Record<string, unknown>;
 }
 
-export interface ReadWorkDetailOptions extends ReadWorkItemOptions {
+interface ReadWorkDetailOptions extends ReadWorkItemOptions {
   nextBefore?: string | null;
   timeline?: unknown[];
   /** Served outcome summary (open JSON); null by default. */
@@ -101,7 +101,7 @@ export function readWorkDetail(options: ReadWorkDetailOptions): Record<string, u
     outcome: {
       goal: options.title,
       phase: options.status ?? "ready",
-      owner: workItem["assignee"],
+      owner: workItem.assignee,
       summary: options.outcomeSummary ?? null,
       findings: [],
       changed_artifacts: [],
@@ -110,7 +110,7 @@ export function readWorkDetail(options: ReadWorkDetailOptions): Record<string, u
       pull_request_url: null,
       ci_status: null,
       review_status: null,
-      delivery: workItem["delivery"],
+      delivery: workItem.delivery,
       result: null,
       failure: null,
     },
@@ -119,10 +119,10 @@ export function readWorkDetail(options: ReadWorkDetailOptions): Record<string, u
   };
 }
 
-export interface ReadAttentionOptions {
+interface ReadAttentionOptions {
   selectedProjectId: string | null;
-  blocked?: Array<{ projectId: string; projectName?: string | null; projectKey?: string | null; workItemId: string; key?: string; title: string; status?: string; blocker?: string | null }>;
-  goals?: Array<{ goalId: string; projectId: string; title: string; state?: string; currentRevision?: number; blockerReasons?: string[]; attentionReasons?: string[]; activeTasks?: number; nonterminalTasks?: number; readyToAchieve?: boolean }>;
+  blocked?: { projectId: string; projectName?: string | null; projectKey?: string | null; workItemId: string; key?: string; title: string; status?: string; blocker?: string | null }[];
+  goals?: { goalId: string; projectId: string; title: string; state?: string; currentRevision?: number; blockerReasons?: string[]; attentionReasons?: string[]; activeTasks?: number; nonterminalTasks?: number; readyToAchieve?: boolean }[];
   nextCursor?: string | null;
   goalUnavailable?: { code: string; message: string } | null;
   projectUnavailable?: { code: string; message: string } | null;
@@ -175,7 +175,7 @@ export function readAttention(options: ReadAttentionOptions): Record<string, unk
   };
 }
 
-export interface ReadGoalOptions {
+interface ReadGoalOptions {
   id: string;
   projectId: string;
   projectKey?: string | null;
@@ -186,14 +186,14 @@ export interface ReadGoalOptions {
   version?: number;
   objective?: string;
   allowedActions?: string[];
-  workItems?: Array<Record<string, unknown>>;
-  decisions?: Array<Record<string, unknown>>;
-  graph?: { nodes?: Array<Record<string, unknown>>; edges?: Array<Record<string, unknown>>; "cycle_detected?"?: boolean };
+  workItems?: Record<string, unknown>[];
+  decisions?: Record<string, unknown>[];
+  graph?: { nodes?: Record<string, unknown>[]; edges?: Record<string, unknown>[]; "cycle_detected?"?: boolean };
   accounting?: Record<string, unknown>;
-  externalWaits?: Array<Record<string, unknown>>;
-  acceptedOutcomes?: Array<Record<string, unknown>>;
-  blockers?: Array<Record<string, unknown>>;
-  settlementAttention?: Array<Record<string, unknown>>;
+  externalWaits?: Record<string, unknown>[];
+  acceptedOutcomes?: Record<string, unknown>[];
+  blockers?: Record<string, unknown>[];
+  settlementAttention?: Record<string, unknown>[];
 }
 
 /** One Goal read as the portal API serves it, overridden per test. */
@@ -222,7 +222,7 @@ export function readGoalProjection(options: ReadGoalOptions): Record<string, unk
       objective: options.objective ?? options.title,
     },
     blockers: options.blockers ?? [],
-    blocker_reasons: (options.blockers ?? []).map((blocker) => (typeof blocker["reason"] === "string" ? blocker["reason"] : "")),
+    blocker_reasons: (options.blockers ?? []).map((blocker) => (typeof blocker.reason === "string" ? blocker.reason : "")),
     settlement_attention: options.settlementAttention ?? [],
     completion: {
       ...document.completion,
@@ -242,22 +242,5 @@ export function readGoalProjection(options: ReadGoalOptions): Record<string, unk
     accepted_outcomes: options.acceptedOutcomes ?? [],
     accounting: options.accounting ?? document.accounting,
     external_waits: options.externalWaits ?? [],
-  };
-}
-
-/** One Goal audit receipt page as the portal event read serves it. */
-export function readGoalEvents(entries: Array<{ sequence: number; kind: string; revision?: number | null }>, nextAfter: number | null): Record<string, unknown> {
-  return {
-    entries: entries.map((entry) => ({
-      id: `event-${entry.sequence}`,
-      sequence: entry.sequence,
-      kind: entry.kind,
-      actor_ref: "portal_operator",
-      revision: entry.revision ?? 1,
-      payload: {},
-      response: {},
-      inserted_at: "2026-11-16T10:00:00Z",
-    })),
-    next_after: nextAfter,
   };
 }
