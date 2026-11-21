@@ -124,7 +124,8 @@ legacy path (`decodeJSON`, `:1240`) already rejects duplicates via `rejectDuplic
 existing trailing/unknown-field checks), run `protocol.RejectDuplicateJSONMembers` over the same
 bytes and return its error unwrapped — the message is
 `duplicate JSON object member "<name>" at <path>` (top level `$`, nested `$.item[0]`), exactly the
-daemon-side `decodeStrictObject` wording (`protocol/goal_subject.go:266-291`), and
+daemon-side `decodeStrictObject` wording (format string in `scanJSONValue`,
+`protocol/goal_evidence_batch.go:176`), and
 `requestGoalWithStatus` wraps it as `decode strict goal response: …` as it does today.
 Ordering is deliberately **after** the decode, not before: every body the base rejected keeps its
 exact message and precedence (`json: unknown field …`, `response must contain one JSON value`,

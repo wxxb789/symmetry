@@ -811,6 +811,7 @@ func TestValidateProviderActionUUIDPinsRejectionMessages(t *testing.T) {
 	}{
 		{name: "valid", value: uuid},
 		{name: "too short", value: uuid[:35], want: canonical},
+		{name: "36 runes 37 bytes", value: uuid[:35] + "\u00e9", want: canonical},
 		{name: "misplaced dash", value: uuid[:8] + "0" + uuid[9:], want: canonical},
 		{name: "uppercase hex digit", value: uuid[:15] + "A" + uuid[16:], want: lowerHex},
 		{name: "non-hex lowercase", value: uuid[:16] + "g" + uuid[17:], want: lowerHex},

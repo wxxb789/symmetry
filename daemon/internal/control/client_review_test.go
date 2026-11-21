@@ -1257,3 +1257,39 @@ func TestDecodeStrictObjectJSONRejectsDuplicateMembers(t *testing.T) {
 		})
 	}
 }
+
+// The tolerant legacy path (decodeJSON) rejects duplicate members alongside
+// the strict-path F-05 tightening; these rows pin that rejection so a later
+// tolerance relaxation cannot silently reopen the gap.
+func TestDecodeJSONRejectsDuplicateMembers(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "duplicate top-level member",
+			body: `{"a":1,"a":2}`,
+			want: `duplicate JSON object member "a" at $`,
+		},
+		{name: "accepted single value", body: `{"a":1}`},
+		{name: "malformed body keeps its message", body: `{"a":`, want: "unexpected EOF"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var decoded map[string]any
+			err := decodeJSON([]byte(test.body), &decoded)
+			if test.want == "" {
+				if err != nil {
+					t.Fatalf("decodeJSON(%q) error = %v, want accept", test.body, err)
+				}
+				if decoded["a"] != float64(1) {
+					t.Fatalf("decodeJSON(%q) decoded = %#v, want a=1", test.body, decoded)
+				}
+				return
+			}
+			if err == nil || err.Error() != test.want {
+				t.Fatalf("decodeJSON(%q) error = %v, want %q", test.body, err, test.want)
+			}
+		})
+	}
+}

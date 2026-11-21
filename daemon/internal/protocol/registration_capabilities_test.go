@@ -424,11 +424,11 @@ func TestRuntimeRegistrationRejectsPartialOrInvalidNativeMetadata(t *testing.T) 
 }
 
 // TestValidateRegistrationUUIDPinsRejectionMessages pins the exact rejection
-// message for every runtime.repository_resource_id rejection class. This
+// message for every repository_resource_id rejection class. This
 // boundary folds every class into the canonical-UUID body, so every rejection
 // row pins that one string.
 func TestValidateRegistrationUUIDPinsRejectionMessages(t *testing.T) {
-	const field = "runtime.repository_resource_id"
+	const field = "repository_resource_id"
 	const uuid = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
 	canonical := fmt.Sprintf("%s must be a canonical UUID", field)
 
