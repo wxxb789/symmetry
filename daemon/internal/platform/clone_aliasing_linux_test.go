@@ -28,6 +28,15 @@ import (
 // field whose mutation becomes visible inside the clone, so a newly added
 // pointer/slice/map field fails this test red until its clone copies it.
 //
+// A few exit proofs cannot be populated uniformly: cloneLinuxOwnerAnchorExitProof
+// (anchor_server.go:44-49) truncates the nested HelperExit by design, and
+// cloneLinuxCgroupStopReceipt (linux_cgroup_v2_linux.go:1443-1457) shares it
+// under recorded debt (docs/TODO.md, "rf-w2-16 clone-aliasing gate"). Each such
+// case lists the dotted field paths it leaves nil (cloneAliasingCase's
+// skipExitProofs) and the driver fails a case whose listed path never appears.
+// Every other exit-proof pointer is populated one nesting level deep; the next
+// level stays nil because Validate rejects it (authority/authority.go:1164).
+//
 // The covered clones split by build universe. This file carries the harness and
 // the three clones compiled under //go:build linux; the seven clones compiled
 // under //go:build linux && amd64 live in clone_aliasing_linux_amd64_test.go,
@@ -47,7 +56,11 @@ const (
 var (
 	cloneAliasingTimeType      = reflect.TypeOf(time.Time{})
 	cloneAliasingExitProofType = reflect.TypeOf(authority.LinuxCgroupExitProof{})
-	cloneAliasingFixedTime     = time.Date(2026, 11, 21, 0, 0, 0, 0, time.UTC)
+	// cloneAliasingExitProofPointerType is the type every skipExitProofs path
+	// must name: the harness only ever leaves a *authority.LinuxCgroupExitProof
+	// field nil.
+	cloneAliasingExitProofPointerType = reflect.TypeOf((*authority.LinuxCgroupExitProof)(nil))
+	cloneAliasingFixedTime            = time.Date(2026, 11, 21, 0, 0, 0, 0, time.UTC)
 )
 
 // cloneAliasingFieldOverrides pins the fields whose value must satisfy a
@@ -65,20 +78,26 @@ var cloneAliasingFieldOverrides = map[string]any{
 }
 
 // cloneAliasingCase is one covered clone: fresh builds a zero *T whose pointee
-// the driver populates, clone runs the production clone on that value.
+// the driver populates, clone runs the production clone on that value, and
+// skipExitProofs lists the dotted field paths (slice elements flatten into
+// their field's name) whose *authority.LinuxCgroupExitProof field is left nil.
 type cloneAliasingCase struct {
-	name  string
-	fresh func() any
-	clone func(original reflect.Value) any
+	name           string
+	fresh          func() any
+	clone          func(original reflect.Value) any
+	skipExitProofs []string
 }
 
 // cloneAliasingCaseFor registers a clone that takes a *T (or a value the case
-// dereferences itself) and returns the cloned value.
-func cloneAliasingCaseFor[T any](name string, clone func(value *T) any) cloneAliasingCase {
+// dereferences itself) and returns the cloned value. skipExitProofs are only
+// for paths production truncates or shares under recorded debt; the driver
+// fails the case when population never reaches a listed path.
+func cloneAliasingCaseFor[T any](name string, clone func(value *T) any, skipExitProofs ...string) cloneAliasingCase {
 	return cloneAliasingCase{
-		name:  name,
-		fresh: func() any { return new(T) },
-		clone: func(original reflect.Value) any { return clone(original.Interface().(*T)) },
+		name:           name,
+		fresh:          func() any { return new(T) },
+		clone:          func(original reflect.Value) any { return clone(original.Interface().(*T)) },
+		skipExitProofs: skipExitProofs,
 	}
 }
 
@@ -88,13 +107,29 @@ func TestCloneAliasingLinuxCgroupEvidence(t *testing.T) {
 	for _, testCase := range []cloneAliasingCase{
 		cloneAliasingCaseFor("cloneLinuxCgroupV2RemovalAuthorization", func(value *LinuxCgroupV2RemovalAuthorization) any {
 			return cloneLinuxCgroupV2RemovalAuthorization(*value)
-		}),
+		},
+			// The Supervisor and Handoff clones are authority's deep clones;
+			// the authorization's own Receipt goes through the platform
+			// cloneLinuxCgroupStopReceipt, which shares the LinuxProof nested
+			// exits with the input (linux_cgroup_v2_linux.go:1449-1453) - the
+			// live alias recorded in docs/TODO.md.
+			"Receipt.LinuxProof.GateExit.HelperExit",
+			"Receipt.LinuxProof.HelperExit.HelperExit",
+			"Receipt.LinuxProof.LauncherExit.HelperExit"),
 		cloneAliasingCaseFor("cloneLinuxCgroupV2PreGateRemovalAuthorization", func(value *LinuxCgroupV2PreGateRemovalAuthorization) any {
 			return cloneLinuxCgroupV2PreGateRemovalAuthorization(*value)
 		}),
 		cloneAliasingCaseFor("cloneLinuxCgroupStopReceipt", func(value *authority.StopReceipt) any {
 			return cloneLinuxCgroupStopReceipt(*value)
-		}),
+		},
+			// The LinuxProof struct copy at linux_cgroup_v2_linux.go:1449
+			// leaves GateExit.HelperExit and LauncherExit.HelperExit shared
+			// with the input - the live alias recorded in docs/TODO.md - and
+			// the stored HelperExit copy at :1450-1453 shares one nesting
+			// deeper.
+			"LinuxProof.GateExit.HelperExit",
+			"LinuxProof.HelperExit.HelperExit",
+			"LinuxProof.LauncherExit.HelperExit"),
 	} {
 		t.Run(testCase.name, func(t *testing.T) { runCloneAliasingCase(t, testCase) })
 	}
@@ -109,8 +144,17 @@ func runCloneAliasingCase(t *testing.T, testCase cloneAliasingCase) {
 	if original.Kind() != reflect.Ptr || original.IsNil() {
 		t.Fatalf("case did not provide a *T original")
 	}
-	if err := cloneAliasingPopulate(original.Elem()); err != nil {
+	skipExitProofs := make(map[string]bool, len(testCase.skipExitProofs))
+	for _, path := range testCase.skipExitProofs {
+		skipExitProofs[path] = false
+	}
+	if err := cloneAliasingPopulate(original.Elem(), "", 0, skipExitProofs); err != nil {
 		t.Fatalf("populate the covered value: %v", err)
+	}
+	for path, reached := range skipExitProofs {
+		if !reached {
+			t.Fatalf("skip path %q was never reached; fix or drop the entry", path)
+		}
 	}
 	cloned := reflect.ValueOf(testCase.clone(original))
 	if !cloned.IsValid() || (cloned.Kind() == reflect.Ptr && cloned.IsNil()) {
@@ -142,10 +186,12 @@ func cloneAliasingDereference(v reflect.Value) reflect.Value {
 
 // cloneAliasingPopulate fills every settable field of v with a non-zero,
 // deterministic value: pointers allocate and recurse, slices get two populated
-// elements, maps one populated entry, structs recurse field by field. Unknown
-// kinds and unexported fields are errors, so a field added later forces a
-// harness decision instead of a silent skip.
-func cloneAliasingPopulate(v reflect.Value) error {
+// elements, maps one populated entry, structs recurse field by field. path is
+// the dotted field path from the case root (slice elements keep their slice
+// field's path) and helperDepth counts the HelperExit hops that lead to v.
+// Unknown kinds and unexported fields are errors, so a field added later forces
+// a harness decision instead of a silent skip.
+func cloneAliasingPopulate(v reflect.Value, path string, helperDepth int, skipPaths map[string]bool) error {
 	if v.Type() == cloneAliasingTimeType {
 		if !v.CanSet() {
 			return fmt.Errorf("time.Time field is not settable")
@@ -156,11 +202,11 @@ func cloneAliasingPopulate(v reflect.Value) error {
 	switch v.Kind() {
 	case reflect.Ptr:
 		v.Set(reflect.New(v.Type().Elem()))
-		return cloneAliasingPopulate(v.Elem())
+		return cloneAliasingPopulate(v.Elem(), path, helperDepth, skipPaths)
 	case reflect.Slice:
 		v.Set(reflect.MakeSlice(v.Type(), 2, 2))
 		for index := range v.Len() {
-			if err := cloneAliasingPopulate(v.Index(index)); err != nil {
+			if err := cloneAliasingPopulate(v.Index(index), path, helperDepth, skipPaths); err != nil {
 				return fmt.Errorf("slice element %d: %w", index, err)
 			}
 		}
@@ -178,7 +224,7 @@ func cloneAliasingPopulate(v reflect.Value) error {
 		v.SetMapIndex(key, value)
 		return nil
 	case reflect.Struct:
-		return cloneAliasingPopulateStruct(v)
+		return cloneAliasingPopulateStruct(v, path, helperDepth, skipPaths)
 	case reflect.Interface:
 		marker := reflect.ValueOf(cloneAliasingPopulateMarker)
 		if !marker.Type().AssignableTo(v.Type()) {
@@ -206,35 +252,37 @@ func cloneAliasingPopulate(v reflect.Value) error {
 	}
 }
 
-// cloneAliasingPopulateStruct populates one struct value field by field.
-func cloneAliasingPopulateStruct(v reflect.Value) error {
+// cloneAliasingPopulateStruct populates one struct value field by field. A
+// field path listed in skipPaths is left nil, must name a
+// *authority.LinuxCgroupExitProof and is marked reached. An exit proof's own
+// HelperExit is populated only at helperDepth zero; the exit proof nested
+// there stops in turn, because Validate accepts one nesting level at most
+// (authority/authority.go:1164) and the stop keeps the recursion finite.
+func cloneAliasingPopulateStruct(v reflect.Value, path string, helperDepth int, skipPaths map[string]bool) error {
 	t := v.Type()
 	for index := range t.NumField() {
 		field, target := t.Field(index), v.Field(index)
 		if !target.CanSet() {
 			return fmt.Errorf("struct %s field %s is not settable; extend the aliasing harness", t, field.Name)
 		}
+		fieldPath := field.Name
+		if path != "" {
+			fieldPath = path + "." + field.Name
+		}
+		if _, ok := skipPaths[fieldPath]; ok {
+			if target.Type() != cloneAliasingExitProofPointerType {
+				return fmt.Errorf("skip path %s names %s, not *authority.LinuxCgroupExitProof", fieldPath, target.Type())
+			}
+			skipPaths[fieldPath] = true
+			continue
+		}
 		if t == cloneAliasingExitProofType && field.Name == "HelperExit" {
-			// Deliberately nil; this is a documented limit, not a coverage
-			// claim. Only a *double* nested helper exit is invalid
-			// (authority/authority.go:1164). A single-level HelperExit is
-			// valid and reachable: mirror stop proofs require it for
-			// anchor-reaped gate children (authority.go:1470-1474 through
-			// ValidForOwnedDescendant, :1174-1184; constructed at
-			// anchor_run.go:1531, validated at
-			// execution/linux_owner_v2_linux.go:1338, sealed into the mirror
-			// proof at :1360). cloneLinuxCgroupStopReceipt
-			// (linux_cgroup_v2_linux.go:1443-1457) shares GateExit.HelperExit
-			// and LauncherExit.HelperExit with its input through the
-			// LinuxProof struct copy at :1449 (only the stored HelperExit is
-			// deep-copied, :1451-1452), so this skip hides a live alias. And
-			// populating the field cannot go green today:
-			// cloneLinuxOwnerAnchorExitProof (anchor_server.go:44-49) nils it
-			// by design, so the fidelity comparison would assert that drop
-			// instead of independence. Debt: a production goal must deep-copy
-			// GateExit.HelperExit (auditing the LauncherExit mirror) and then
-			// narrow this exception. The outer HelperExit pointers on the
-			// evidence structs are populated.
+			if helperDepth > 0 {
+				continue
+			}
+			if err := cloneAliasingPopulate(target, fieldPath, helperDepth+1, skipPaths); err != nil {
+				return fmt.Errorf("%s.%s: %w", t, field.Name, err)
+			}
 			continue
 		}
 		if pinned, ok := cloneAliasingFieldOverrides[t.String()+"."+field.Name]; ok {
@@ -245,7 +293,7 @@ func cloneAliasingPopulateStruct(v reflect.Value) error {
 			target.Set(value)
 			continue
 		}
-		if err := cloneAliasingPopulate(target); err != nil {
+		if err := cloneAliasingPopulate(target, fieldPath, helperDepth, skipPaths); err != nil {
 			return fmt.Errorf("%s.%s: %w", t, field.Name, err)
 		}
 	}
@@ -256,7 +304,7 @@ func cloneAliasingPopulateStruct(v reflect.Value) error {
 // by cloneAliasingPopulate.
 func cloneAliasingPopulatedValue(t reflect.Type) (reflect.Value, error) {
 	v := reflect.New(t).Elem()
-	if err := cloneAliasingPopulate(v); err != nil {
+	if err := cloneAliasingPopulate(v, "", 0, map[string]bool{}); err != nil {
 		return reflect.Value{}, err
 	}
 	return v, nil

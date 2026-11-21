@@ -592,27 +592,44 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 
 ## Deferred review findings (rf-w2-16 clone-aliasing gate)
 
-- [ ] Deep-copy the nested helper exits `cloneLinuxCgroupStopReceipt` still shares with its
-      input, then narrow the aliasing harness's single populate exception and extend it to the
-      shape. `cloneLinuxCgroupStopReceipt`
+- [ ] Deep-copy the nested helper exits that the platform stop-evidence clones still share or
+      truncate, then remove the matching per-case skip paths from the aliasing harness.
+      `cloneLinuxCgroupStopReceipt`
       (`daemon/internal/platform/linux_cgroup_v2_linux.go:1443-1457`) copies `LinuxProof` by
       value (`:1449`) and deep-copies only the stored `LinuxProof.HelperExit` (`:1451-1452`), so
       `LinuxProof.GateExit.HelperExit` and `LinuxProof.LauncherExit.HelperExit` stay shared with
-      the caller's receipt. That is a live alias on a valid shape: a mirror stop proof demands
+      the caller's receipt; that stored `HelperExit` copy shares its own nested exit in turn.
+      The `GateExit`/`LauncherExit` alias is live on a valid shape: a mirror stop proof demands
       `proof.HelperExit != nil` and a `GateExit` anchored on that same exit
       (`daemon/internal/authority/authority.go:1470-1474` via `ValidForOwnedDescendant`,
       `:1174-1184`), every v2 removal receipt must carry such a proof
       (`StopReceipt.ValidForHandoff`, `authority.go:1822-1833`), and the platform constructs it
       (`daemon/internal/platform/anchor_run.go:1531`; validated at
       `daemon/internal/execution/linux_owner_v2_linux.go:1338` and sealed into the mirror proof
-      at `:1360`); `authority.go:2027` also accepts a non-nil `LauncherExit.HelperExit`. The
-      review of branch `refactor/rf-w2-16-clone-aliasing-test` (2026-11-21) confirmed the alias
-      with a probe against the shipped clone - mutating the original's
-      `LinuxProof.GateExit.HelperExit` changed the clone while the stored `HelperExit` copy
-      stayed independent - and that goal's contract forbids production changes. The gate file
-      `daemon/internal/platform/clone_aliasing_linux_test.go` documents this at the
-      `LinuxCgroupExitProof.HelperExit` populate skip; widening the exception before this
-      production fix turns `TestCloneAliasing` red.
+      at `:1360`); `authority.go:2027` also accepts a non-nil `LauncherExit.HelperExit`.
+      `cloneLinuxOwnerHelperV2StopEvidence` (`helper_v2_stop.go:1540-1573`) instead drops every
+      nested exit it copies through `cloneLinuxOwnerAnchorExitProof`
+      (`anchor_server.go:44-49` nils `HelperExit`): `Proof.LauncherExit.HelperExit`,
+      `Proof.GateExit.HelperExit`, `Proof.HelperExit.HelperExit`,
+      `PreGate.LauncherExit.HelperExit`, `PreGate.Proof.HelperExit.HelperExit` and the
+      `AnchorStop` helper exits are nil in the clone, and
+      `PreGate.Proof.LauncherExit.HelperExit` stays shared through the `PreGate.Proof` struct
+      copy (`:1563-1567`). The helper's own constructors truncate the same receipt paths before
+      this clone runs (`:1173-1179`, `:1284-1286`), so the drop is latent for today's producers,
+      but it silently loses data if one ever starts carrying the single-level nested exit that
+      the receipt shape allows. The review of branch `refactor/rf-w2-16-clone-aliasing-test`
+      (2026-11-21) confirmed the `GateExit`/`LauncherExit` alias with a probe against the
+      shipped clone - mutating the original's `LinuxProof.GateExit.HelperExit` changed the
+      clone while the stored `HelperExit` copy stayed independent - and that goal's contract
+      forbids production changes. The gate files
+      `daemon/internal/platform/clone_aliasing_linux_test.go` and
+      `clone_aliasing_linux_amd64_test.go` list every path above as an explicit
+      `skipExitProofs` entry next to its reason, and a driver check fails any case whose listed
+      path population never reaches. Removing one of those entries before the matching
+      production fix turns the covering subtest red: `TestCloneAliasingLinuxAMD64Evidence` for
+      the helper-v2 and anchor paths, `TestCloneAliasingLinuxCgroupEvidence` for the
+      StopReceipt paths. `TestCloneAliasingWindowsContainmentSessionID` does not share the
+      Linux harness and is unaffected.
 
 ## Production Linux containment witness: stop-receipt barrier stall awaiting a diagnosable occurrence
 
