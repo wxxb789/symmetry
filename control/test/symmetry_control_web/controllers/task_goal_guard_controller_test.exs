@@ -1,5 +1,5 @@
 defmodule SymmetryControlWeb.TaskGoalGuardControllerTest do
-  use SymmetryControlWeb.ConnCase, async: false
+  use SymmetryControlWeb.ConnCase, async: true
 
   import SymmetryControl.TestFixtures, only: [subject: 1, validation_profiles: 0]
   import SymmetryControlWeb.TestConn, only: [assert_error: 3, operator_conn: 1]
