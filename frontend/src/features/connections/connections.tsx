@@ -108,13 +108,13 @@ function ConnectionEditor({ connection, providers, api, csrf, editorId, fallback
     // update changes the capabilities; the receipt notice must not claim a
     // reset that did not happen.
     onSuccess: (receipt, payload) => { onSaved(
-      receipt.disposition,
-      receipt.connectionId,
-      editorId,
-      editedCapabilities !== null &&
-        (payload.capabilities.length !== editedCapabilities.length ||
-          payload.capabilities.some((capability) => !editedCapabilities.includes(capability))),
-    ); },
+        receipt.disposition,
+        receipt.connectionId,
+        editorId,
+        editedCapabilities !== null &&
+          (payload.capabilities.length !== editedCapabilities.length ||
+            payload.capabilities.some((capability) => !editedCapabilities.includes(capability))),
+      ); },
     // A refused write is never rendered as success: re-read the server's state
     // so the console shows what the server actually holds.
     onError: () => { void queryClient.invalidateQueries({ queryKey: ["connections"] }); },
@@ -126,13 +126,13 @@ function ConnectionEditor({ connection, providers, api, csrf, editorId, fallback
   // "repositories", so selecting one selects the other and dropping
   // "repositories" also drops "changes".
   const toggleCapability = (capability: string) => { setDraft((current) => {
-    const capabilities = current.capabilities.includes(capability)
-      ? current.capabilities.filter((value) => value !== capability && !(capability === "repositories" && value === "changes"))
-      : capability === "changes" && !current.capabilities.includes("repositories")
-        ? [...current.capabilities, "repositories", capability]
-        : [...current.capabilities, capability];
-    return { ...current, capabilities };
-  }); };
+      const capabilities = current.capabilities.includes(capability)
+        ? current.capabilities.filter((value) => value !== capability && !(capability === "repositories" && value === "changes"))
+        : capability === "changes" && !current.capabilities.includes("repositories")
+          ? [...current.capabilities, "repositories", capability]
+          : [...current.capabilities, capability];
+      return { ...current, capabilities };
+    }); };
   const failure = save.error;
   const stale = failure instanceof ServerRefusal && failure.code === "stale";
   const blocked = save.isPending || stale;

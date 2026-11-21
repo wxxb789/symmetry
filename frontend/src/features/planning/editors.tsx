@@ -26,7 +26,7 @@ import {
 } from "./write-policy";
 
 /** The server's field message for one control, verbatim. */
-export function FieldErrors({ error, field }: { error: unknown; field: string }) {
+function FieldErrors({ error, field }: { error: unknown; field: string }) {
   const messages = (error instanceof ServerRefusal && error.fields?.[field]) || [];
   if (messages.length === 0) return null;
   return <p className="field-error" role="alert">{messages.join(" ")}</p>;

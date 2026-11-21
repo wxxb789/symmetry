@@ -86,7 +86,8 @@ audit's 713-error figure excludes the 30 cap findings (14 + 16), which is why th
 measurement here is 743; the 515 autofixable count is unchanged, so the contract's "the 515
 mechanical findings" is satisfied as written. The caps are counted by ESLint, not by the audit's
 approximate AST walk: the §5 comment "5 src functions > 25 / 8 src functions > 150" under-counts
-(14 complexity + 16 length across src+tests, including nine test files with 150-897-line bodies).
+(14 complexity + 16 length across src+tests: 30 cap findings over 21 files — 14 production + 7 test,
+`chat.tsx` and `planning.test.tsx` carrying both rules).
 
 Post-`--fix` residual (the ratchet table; each row's count is re-measured after the fix pass, and
 `package.json`'s `--max-warnings` is the exact total):
@@ -140,8 +141,9 @@ those resolved URLs equal the registry default and are omitted).
   trim and knip; §10.3's staged-rollout item 5 instead says "enable with the allowlist above".
   Options: (A) caps as errors with the §10.3 allowlist; (B) caps as errors scoped to production
   source only, with a src-file allowlist; (C) caps enabled but inside the residual warn block;
-  (D) caps omitted. Measured, (A) needs 19 file-level exemptions (14 src files + 8 test files; one
-  file carries both rules row), which cannot be "shrink-only" inside ESLint itself and weakens
+  (D) caps omitted. Measured, (A) needs 21 file-level exemptions (14 src files + 7 test files,
+  `chat.tsx` and `planning.test.tsx` carrying both rules), which cannot be "shrink-only" inside
+  ESLint itself and weakens
   enforcement exactly in the files that carry the debt; (C) keeps the rules active for every file
   with no exemptions, and the `--max-warnings` ceiling makes any NEW oversized function fail
   `pnpm lint` exactly as an error severity would (any new finding of any rule exceeds the ceiling).
@@ -281,3 +283,20 @@ mutation check for the gate itself.
   and the project blocked work together` (1,227 ms) exceeded their content waits under the extra
   transform cost — the F7/W5-04 wall-clock-budget class; both files pass in isolation under the same
   environment (71/71, `--coverage` with and without the cache switch).
+- **knip.json shipped in its measured-minimal shape (simplify apply).** Item 8 above (entry
+  `src/main.tsx`, tests, vite/vitest configs, `scripts/`, `ignoreExportsUsedInFile`, two ignores) is
+  superseded: the shipped file had tests + `scripts/**/*.mjs` as `entry`, and both remaining pieces
+  of it were removed after measurement — the vitest plugin globs the test files, the vite plugin
+  resolves `index.html` and package.json script detection covers `scripts/**/*.mjs` (a no-entry run
+  reports no entry-related findings), and `ignoreExportsUsedInFile: true` (knip's default is `false`)
+  suppressed exactly one real finding, `FieldErrors` in `features/planning/editors.tsx` — the
+  implement-stage scan missed it because `features/connections/resources.tsx` defines a
+  byte-identical same-named component. The flag was removed atomically with un-exporting that
+  component, so `pnpm knip` stays at exit 0 with strictly less config; the tailwindcss ignore had
+  already been dropped (answer.md records why).
+- **Size-cap exemption arithmetic corrected to the measurement (simplify apply).** The tree carries
+  30 cap findings (16 `max-lines-per-function` + 14 `complexity`) across 21 files — 14 production +
+  7 test — with `features/chat/chat.tsx` and `features/planning/planning.test.tsx` carrying both
+  rules; the `eslint.config.js` comment and decision D1 above now record that instead of the
+  earlier 19-file arithmetic. D1's choice (C) is unaffected; the ratchet table and the
+  `--max-warnings 229` ceiling are unchanged.

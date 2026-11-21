@@ -18,9 +18,10 @@ import tseslint from "typescript-eslint";
 // ceiling and a burn-down slice lowers both together. No rule is set to `off`.
 //
 // The two size caps are counted in the ratchet rather than exempted per file:
-// measured, an allowlist would need 19 file-level exemptions (10 production
-// files + 9 test files) whose enforcement ESLint cannot shrink, while the
-// `--max-warnings` ceiling already fails any new oversized function everywhere.
+// measured, an allowlist would need 21 file-level exemptions (14 production
+// files + 7 test files; two files carry both rules) for 30 cap findings whose
+// enforcement ESLint cannot shrink, while the `--max-warnings` ceiling already
+// fails any new oversized function everywhere.
 export default tseslint.config(
   { ignores: ["dist/**", "node_modules/**"] },
   js.configs.recommended,
