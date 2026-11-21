@@ -73,8 +73,8 @@ returning `error`, and 1 in `crashPreAuthorityWitnessWithEvidence` (`:510-520`).
 - **Non-crash failure aborts the invocation before the crash point** (exit `1` from `init`), intended
   by the conductor's P3: a missing report must never exit `0`.
 - **Atomicity**: publication is still temp-file + rename inside the result directory; a reader never
-  observes a partial report, and the result directory never keeps a `.preauthority-report-*` file after
-  a failure.
+  observes a partial report, and temp-file removal stays best-effort (the deferred `os.Remove` error is
+  ignored by design), so a `.preauthority-report-*` file may survive a failed write.
 
 ## Evidence plan (all foreground; commands run from `daemon/`)
 
