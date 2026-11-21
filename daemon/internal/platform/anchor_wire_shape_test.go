@@ -512,7 +512,8 @@ func TestLinuxOwnerAnchorWireCodecRejectsMalformedFrames(t *testing.T) {
 // TestLinuxOwnerAnchorShapeWriterGoldens in anchor_shape_table_test.go.
 //
 // The pinned frames embed the harness anchor's A UID, which is the test
-// process's own uid; `linuxOwnerAnchorShapeGoldenFrame` substitutes that one
+// process's own uid, as `owner_uid` and (clone-removal proofs) as
+// `root_deleter_uid`; `linuxOwnerAnchorShapeGoldenFrame` substitutes that one
 // host-dependent number. Every other byte is pinned verbatim, including the
 // literal anchor process identity, parent boot ID, mount/device/inode and
 // manager path of the harness fixture.
@@ -524,11 +525,14 @@ const linuxOwnerAnchorShapeGoldenOwnerUID = 1000
 // pinned frame: the harness anchor's A UID is the test process uid.
 func linuxOwnerAnchorShapeGoldenFrame(t *testing.T, golden string) string {
 	t.Helper()
-	return strings.ReplaceAll(
-		golden,
-		fmt.Sprintf(`"owner_uid":%d,`, uint32(linuxOwnerAnchorShapeGoldenOwnerUID)),
-		fmt.Sprintf(`"owner_uid":%d,`, uint32(os.Getuid())),
-	)
+	for _, field := range []string{"owner_uid", "root_deleter_uid"} {
+		golden = strings.ReplaceAll(
+			golden,
+			fmt.Sprintf(`"%s":%d,`, field, uint32(linuxOwnerAnchorShapeGoldenOwnerUID)),
+			fmt.Sprintf(`"%s":%d,`, field, uint32(os.Getuid())),
+		)
+	}
+	return golden
 }
 
 // linuxOwnerAnchorShapeWriterGoldens pins one frame per former writer variant,
