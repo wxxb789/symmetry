@@ -1284,3 +1284,20 @@ instead of appended.
       inversion plus `decision.lock_version`, consuming the new
       `SymmetryControl.Workspaces.WorkItemEligibility` for the chat override. The served chat
       document is unchanged by rf-a4.
+
+## Daemon platform: the Windows witness hooks stay outside the Linux witness config (rf-w5-01)
+
+- [ ] Consolidate the Windows pre-authority witness hooks the way rf-w5-01 (2026-11-22, branch
+      `refactor/rf-w5-01-witness-converge-in-place`) consolidated the Linux surface. The Windows
+      side still reads raw literals with no witness gate —
+      `supervisor_windows_helper.go:554-555` (`SYMMETRY_PREAUTHORITY_DROP_FIRST_HELLO_RESPONSE`,
+      `SYMMETRY_PREAUTHORITY_HELLO_RETRY_MARKER`) and `supervisor_windows_client.go:1080`
+      (`SYMMETRY_PREAUTHORITY_WRONG_SECRET_MARKER`) — and
+      `cmd/symmetry-daemon/preauthority_witness_command_windows.go` enters witness mode from argv
+      (`init()` `:26-36`) while setting the same three names for the helper child (`:135-137`).
+      Conductor decision A (2026-11-21) scoped rf-w5-01 to the Linux family and left these bytes
+      for W6-03, which already owns the same files and dispatches after rf-w5-01; the Linux half
+      now has one per-use witness-config parser
+      (`daemon/internal/platform/supervisor_linux_witness.go`) behind
+      `SYMMETRY_PRODUCTION_LINUX_CONTAINMENT_WITNESS` plus marker-parent validation, so the two
+      conventions coexist until W6-03 lands.
