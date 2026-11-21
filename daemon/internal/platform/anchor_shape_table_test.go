@@ -10,14 +10,17 @@ package platform
 // the pre-refactor values, so mutating one production row or one baseResponse
 // field fails here instead of moving the expectation with it. The writer cases
 // re-pin the byte strings captured from the eight former `writeResponse*`
-// variants (anchor_shape_goldens_test.go), including the clone-cleanup key
+// variants (the golden literals live in anchor_wire_shape_test.go, which also
+// compiles against the pre-slice base tree), including the clone-cleanup key
 // override and the zero-valued identity response.
 
 import (
 	"encoding/json"
 	"net"
+	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wxxb789/symmetry/daemon/internal/authority"
 	daemonprotocol "github.com/wxxb789/symmetry/daemon/internal/protocol"
@@ -119,7 +122,7 @@ var linuxOwnerAnchorShapeFieldExpectations = map[string]string{
 	linuxOwnerAnchorOperationWaitReap:        "grant,helper,process,role|creator,gate,user_namespace,stop_fence,clone_grant,cleanup,target_fd_present",
 	linuxOwnerAnchorOperationReapRun:         "grant,helper|creator,process,role,gate,user_namespace,stop_fence,clone_grant,cleanup,target_fd_present",
 	linuxOwnerAnchorOperationWaitHelper:      "grant,helper|creator,process,role,gate,user_namespace,stop_fence,clone_grant,cleanup,target_fd_present",
-	linuxOwnerAnchorOperationRetire:          "grant,helper|creator,process,role,abort_proof,gate,user_namespace,stop_fence,clone_grant,cleanup,target_fd_present",
+	linuxOwnerAnchorOperationRetire:          "grant,helper|creator,process,role,gate,user_namespace,stop_fence,clone_grant,cleanup,target_fd_present",
 	linuxOwnerAnchorOperationRetireCleared:   "helper,run_key,fence|grant,abort_proof,gate,user_namespace,stop_fence,clone_grant,cleanup,target_fd_present",
 	linuxOwnerAnchorOperationRetireAborted:   "helper,run_key,fence,abort_proof|grant,release_proof,pre_gate_release_proof,gate,user_namespace,stop_fence,clone_grant,cleanup,target_fd_present",
 	linuxOwnerAnchorOperationCloneCleanup:    "clone_grant,cleanup|grant,helper,creator,process,role,release_proof,pre_gate_release_proof,abort_proof,fence,after_pid,gate,user_namespace,stop_fence",
@@ -127,25 +130,74 @@ var linuxOwnerAnchorShapeFieldExpectations = map[string]string{
 
 // TestLinuxOwnerAnchorShapeTableFieldSets pins every row's required and
 // forbidden field names; a row that drops, adds or renames a field fails here.
+// The presence check is order-independent, so both sides are compared as sorted
+// sets: the declaration order is not part of the contract.
 func TestLinuxOwnerAnchorShapeTableFieldSets(t *testing.T) {
 	if len(linuxOwnerAnchorShapeFieldExpectations) != len(linuxOwnerAnchorOperationShapes) {
 		t.Fatalf("field expectations cover %d operations, table has %d",
 			len(linuxOwnerAnchorShapeFieldExpectations), len(linuxOwnerAnchorOperationShapes))
 	}
-	names := func(fields []linuxOwnerAnchorRequestField) string {
+	sortedNames := func(fields []linuxOwnerAnchorRequestField) string {
 		parts := make([]string, 0, len(fields))
 		for _, field := range fields {
 			parts = append(parts, string(field))
 		}
+		sort.Strings(parts)
+		return strings.Join(parts, ",")
+	}
+	sortedList := func(list string) string {
+		if list == "" {
+			return ""
+		}
+		parts := strings.Split(list, ",")
+		sort.Strings(parts)
 		return strings.Join(parts, ",")
 	}
 	for operation, expected := range linuxOwnerAnchorShapeFieldExpectations {
 		row := linuxOwnerAnchorShapeRowFor(t, operation)
-		observed := names(row.required) + "|" + names(row.forbidden)
-		if observed != expected {
+		wantRequired, wantForbidden, ok := strings.Cut(expected, "|")
+		if !ok {
+			t.Fatalf("field expectation for %q is missing the required|forbidden separator", operation)
+		}
+		observed := sortedNames(row.required) + "|" + sortedNames(row.forbidden)
+		want := sortedList(wantRequired) + "|" + sortedList(wantForbidden)
+		if observed != want {
 			t.Fatalf("operation %q declares\n  %s\nwant the pre-refactor field set\n  %s", operation, observed, expected)
 		}
 	}
+}
+
+// TestLinuxOwnerAnchorShapeTableOperationLiterals pins the wire strings of the
+// three operations that were bare literals before this slice. The pinned
+// stopping goldens cover the `identity` and `register-process` frames, but no
+// golden frame carries `wait-reap`, so its wire string has this independent pin
+// (a renamed constant fails here even though the table keys both sides by the
+// same constant).
+func TestLinuxOwnerAnchorShapeTableOperationLiterals(t *testing.T) {
+	for _, item := range []struct {
+		operation string
+		literal   string
+	}{
+		{linuxOwnerAnchorOperationIdentity, "identity"},
+		{linuxOwnerAnchorOperationRegisterProcess, "register-process"},
+		{linuxOwnerAnchorOperationWaitReap, "wait-reap"},
+	} {
+		if item.operation != item.literal {
+			t.Fatalf("operation constant for %q is %q, want the pre-slice wire string %q",
+				item.literal, item.operation, item.literal)
+		}
+	}
+}
+
+// linuxOwnerAnchorShapeExpectedFDs mirrors the row's TargetFDPresent-dependent
+// descriptor expectation, so a rejection assertion that goes through
+// row.refuses (the composition the server runs) still isolates the rule under
+// test instead of failing for a descriptor-count reason.
+func linuxOwnerAnchorShapeExpectedFDs(request linuxOwnerAnchorRequest, expected linuxOwnerAnchorShapeExpectation) int {
+	if request.TargetFDPresent {
+		return expected.serverFDsWithTarget
+	}
+	return expected.serverRequiredFDs
 }
 
 func linuxOwnerAnchorShapeRowFor(t *testing.T, operation string) linuxOwnerAnchorOperationShape {
@@ -202,6 +254,28 @@ func TestLinuxOwnerAnchorShapeTableCoverage(t *testing.T) {
 				t.Fatalf("operation %q sends %d descriptors beyond the %d-descriptor request cap",
 					row.operation, count, linuxOwnerAnchorRequestFDCap)
 			}
+		}
+	}
+}
+
+// TestLinuxOwnerAnchorShapeTableTimeoutDeadlines pins the class-to-deadline
+// relation the consumers read through linuxOwnerAnchorTimeoutFor: the client
+// exchange and serveCloneCleanup (the one server call site that takes its
+// deadline from a row) must resolve every operation to its class's production
+// constant.
+func TestLinuxOwnerAnchorShapeTableTimeoutDeadlines(t *testing.T) {
+	deadlines := map[linuxOwnerAnchorTimeoutClass]time.Duration{
+		linuxOwnerAnchorTimeoutClassRequest: linuxOwnerAnchorRequestTimeout,
+		linuxOwnerAnchorTimeoutClassWait:    linuxOwnerAnchorWaitTimeout,
+		linuxOwnerAnchorTimeoutClassCleanup: linuxOwnerAnchorCleanupTimeout,
+	}
+	for operation, expected := range linuxOwnerAnchorShapeExpectations {
+		want, ok := deadlines[expected.timeoutClass]
+		if !ok {
+			t.Fatalf("operation %q has no production deadline for its class %d", operation, expected.timeoutClass)
+		}
+		if got := linuxOwnerAnchorTimeoutFor(operation); got != want {
+			t.Fatalf("operation %q deadline = %s, want %s", operation, got, want)
 		}
 	}
 }
@@ -311,6 +385,7 @@ func TestLinuxOwnerAnchorShapeTableRejectsForbiddenFields(t *testing.T) {
 	fixture := newLinuxOwnerAnchorWireFixture(t, false)
 	for operation := range linuxOwnerAnchorShapeExpectations {
 		row := linuxOwnerAnchorShapeRowFor(t, operation)
+		expected := linuxOwnerAnchorShapeExpectations[operation]
 		if len(row.forbidden) == 0 {
 			t.Fatalf("operation %q forbids no field, so the rejection set is untested", operation)
 		}
@@ -318,11 +393,20 @@ func TestLinuxOwnerAnchorShapeTableRejectsForbiddenFields(t *testing.T) {
 		if row.presenceRejected(clean) {
 			t.Fatalf("operation %q refuses the shape-clean request before any field is present", operation)
 		}
+		if row.refuses(clean, linuxOwnerAnchorShapeExpectedFDs(clean, expected)) {
+			t.Fatalf("operation %q refuses the shape-clean request before any field is present", operation)
+		}
 		for _, field := range row.forbidden {
 			request := linuxOwnerAnchorWireShapeRequest(t, fixture, operation)
 			linuxOwnerAnchorShapePresentField(&request, field)
 			if !row.presenceRejected(request) {
 				t.Fatalf("operation %q accepted forbidden field %q", operation, field)
+			}
+			// The server refuses through row.refuses, which composes the
+			// presence, descriptor and relational terms; asserting the
+			// composition keeps a dropped term red.
+			if !row.refuses(request, linuxOwnerAnchorShapeExpectedFDs(request, expected)) {
+				t.Fatalf("operation %q does not refuse forbidden field %q in row.refuses", operation, field)
 			}
 		}
 	}
@@ -333,12 +417,16 @@ func TestLinuxOwnerAnchorShapeTableRejectsMissingRequiredFields(t *testing.T) {
 	required := 0
 	for operation := range linuxOwnerAnchorShapeExpectations {
 		row := linuxOwnerAnchorShapeRowFor(t, operation)
+		expected := linuxOwnerAnchorShapeExpectations[operation]
 		for _, field := range row.required {
 			required++
 			request := linuxOwnerAnchorWireShapeRequest(t, fixture, operation)
 			linuxOwnerAnchorShapeClearField(&request, field)
 			if !row.presenceRejected(request) {
 				t.Fatalf("operation %q accepted a request without required field %q", operation, field)
+			}
+			if !row.refuses(request, linuxOwnerAnchorShapeExpectedFDs(request, expected)) {
+				t.Fatalf("operation %q does not refuse a missing required field %q in row.refuses", operation, field)
 			}
 		}
 	}
@@ -357,6 +445,9 @@ func TestLinuxOwnerAnchorShapeTableRejectsDescriptorCounts(t *testing.T) {
 			if got := row.descriptorRejected(request, count); got != wantRefused {
 				t.Fatalf("operation %q with %d descriptors refused = %t, want %t", operation, count, got, wantRefused)
 			}
+			if got := row.refuses(request, count); got != wantRefused {
+				t.Fatalf("operation %q row.refuses with %d descriptors = %t, want %t", operation, count, got, wantRefused)
+			}
 			if row.serverRequiredFDsWithTarget != 0 {
 				withTarget := request
 				withTarget.TargetFDPresent = true
@@ -364,6 +455,10 @@ func TestLinuxOwnerAnchorShapeTableRejectsDescriptorCounts(t *testing.T) {
 				wantRefused = count != expected.serverFDsWithTarget
 				if got := row.descriptorRejected(withTarget, count); got != wantRefused {
 					t.Fatalf("operation %q with a live target and %d descriptors refused = %t, want %t",
+						operation, count, got, wantRefused)
+				}
+				if got := row.refuses(withTarget, count); got != wantRefused {
+					t.Fatalf("operation %q row.refuses with a live target and %d descriptors = %t, want %t",
 						operation, count, got, wantRefused)
 				}
 			}
@@ -391,12 +486,21 @@ func TestLinuxOwnerAnchorShapeTableRejectsRelationalViolations(t *testing.T) {
 		{"register-gate identity", linuxOwnerAnchorOperationRegisterGate, func(request *linuxOwnerAnchorRequest) {
 			request.Gate = &authority.LinuxCgroupGateIdentity{}
 		}, "gate validation"},
+		{"register-gate helper validation", linuxOwnerAnchorOperationRegisterGate, func(request *linuxOwnerAnchorRequest) {
+			request.Helper.Identity = ""
+		}, "helper validation"},
 		{"authorize-gate user namespace", linuxOwnerAnchorOperationAuthorizeGate, func(request *linuxOwnerAnchorRequest) {
 			request.UserNamespace = &LinuxUserNamespaceIdentity{}
 		}, "user namespace validation"},
+		{"authorize-gate helper validation", linuxOwnerAnchorOperationAuthorizeGate, func(request *linuxOwnerAnchorRequest) {
+			request.Helper.Identity = ""
+		}, "helper validation"},
 		{"stop-leaf fence", linuxOwnerAnchorOperationStopLeaf, func(request *linuxOwnerAnchorRequest) {
 			request.StopFence = &LinuxOwnerAnchorProducerFence{}
 		}, "producer fence validation"},
+		{"stop-leaf helper validation", linuxOwnerAnchorOperationStopLeaf, func(request *linuxOwnerAnchorRequest) {
+			request.Helper.Identity = ""
+		}, "helper validation"},
 		{"wait-reap role", linuxOwnerAnchorOperationWaitReap, func(request *linuxOwnerAnchorRequest) {
 			request.Role = "helper"
 		}, "child role whitelist"},
@@ -409,12 +513,29 @@ func TestLinuxOwnerAnchorShapeTableRejectsRelationalViolations(t *testing.T) {
 		{"retire-helper no proof", linuxOwnerAnchorOperationRetire, func(request *linuxOwnerAnchorRequest) {
 			request.ReleaseProof = nil
 		}, "exactly one release capability"},
+		{"retire-cleared helper validation", linuxOwnerAnchorOperationRetireCleared, func(request *linuxOwnerAnchorRequest) {
+			request.Helper.Identity = ""
+		}, "helper validation"},
+		{"retire-cleared run key generation", linuxOwnerAnchorOperationRetireCleared, func(request *linuxOwnerAnchorRequest) {
+			request.RunKey.Generation = 0
+			request.Fence.Generation = 0
+		}, "run key generation"},
 		{"retire-cleared fence generation", linuxOwnerAnchorOperationRetireCleared, func(request *linuxOwnerAnchorRequest) {
 			request.Fence.Generation = request.RunKey.Generation + 1
 		}, "fence generation"},
 		{"retire-cleared run id", linuxOwnerAnchorOperationRetireCleared, func(request *linuxOwnerAnchorRequest) {
 			request.RunKey.RunID = ""
 		}, "run id"},
+		{"retire-aborted helper validation", linuxOwnerAnchorOperationRetireAborted, func(request *linuxOwnerAnchorRequest) {
+			request.Helper.Identity = ""
+		}, "helper validation"},
+		{"retire-aborted run id", linuxOwnerAnchorOperationRetireAborted, func(request *linuxOwnerAnchorRequest) {
+			request.RunKey.RunID = ""
+		}, "run id"},
+		{"retire-aborted run key generation", linuxOwnerAnchorOperationRetireAborted, func(request *linuxOwnerAnchorRequest) {
+			request.RunKey.Generation = 0
+			request.Fence.Generation = 0
+		}, "run key generation"},
 		{"retire-aborted fence generation", linuxOwnerAnchorOperationRetireAborted, func(request *linuxOwnerAnchorRequest) {
 			request.Fence.Generation = request.RunKey.Generation + 1
 		}, "fence generation"},
@@ -441,6 +562,9 @@ func TestLinuxOwnerAnchorShapeTableRejectsRelationalViolations(t *testing.T) {
 		item.violate(&request)
 		if !row.shapeRejected(request) {
 			t.Fatalf("case %q (%s) was accepted by the relational rules", item.name, item.wantReason)
+		}
+		if !row.refuses(request, linuxOwnerAnchorShapeExpectedFDs(request, linuxOwnerAnchorShapeExpectations[item.operation])) {
+			t.Fatalf("case %q (%s) was accepted by row.refuses", item.name, item.wantReason)
 		}
 		covered[item.operation] = true
 	}
@@ -485,13 +609,15 @@ func TestLinuxOwnerAnchorShapeTableAcceptsLocallyToleratedFields(t *testing.T) {
 		{linuxOwnerAnchorOperationRetire, func(request *linuxOwnerAnchorRequest) {
 			request.RunKey = LinuxOwnerAnchorRunKey{RunID: "tolerated", Generation: 1}
 			request.AfterPID = 4
+			request.AbortProof = &authority.LinuxCgroupReservationAbortProof{}
 		}},
 	}
 	for _, item := range tolerated {
 		row := linuxOwnerAnchorShapeRowFor(t, item.operation)
 		request := linuxOwnerAnchorWireShapeRequest(t, fixture, item.operation)
 		item.tolerate(&request)
-		if row.refuses(request, row.serverRequiredFDs) {
+		expected := linuxOwnerAnchorShapeExpectations[item.operation]
+		if row.refuses(request, linuxOwnerAnchorShapeExpectedFDs(request, expected)) {
 			t.Fatalf("operation %q no longer tolerates the optional fields it accepted before the refactor", item.operation)
 		}
 	}

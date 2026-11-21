@@ -568,7 +568,7 @@ var linuxOwnerAnchorOperationShapes = []linuxOwnerAnchorOperationShape{
 		required:  []linuxOwnerAnchorRequestField{linuxOwnerAnchorFieldGrant, linuxOwnerAnchorFieldHelper},
 		forbidden: []linuxOwnerAnchorRequestField{
 			linuxOwnerAnchorFieldCreator, linuxOwnerAnchorFieldProcess, linuxOwnerAnchorFieldRole,
-			linuxOwnerAnchorFieldAbortProof, linuxOwnerAnchorFieldGate, linuxOwnerAnchorFieldUserNamespace,
+			linuxOwnerAnchorFieldGate, linuxOwnerAnchorFieldUserNamespace,
 			linuxOwnerAnchorFieldStopFence, linuxOwnerAnchorFieldCloneGrant, linuxOwnerAnchorFieldCleanup,
 			linuxOwnerAnchorFieldTargetFDPresent,
 		},

@@ -21,10 +21,18 @@ package platform
 // descriptor counts; those statuses stay unpinned end to end here because
 // reaching them requires a spawned helper run and a real delegated cgroup
 // topology, not because the code path is untested. No test in this file skips.
+//
+// Host precondition: the clone-cleanup acceptance cases need the test process
+// not to sit at the host's cgroup root. `linuxOwnerCgroupPathWithin` treats `/`
+// as containing every path, so a test process whose cgroup is `/` overlaps the
+// anchor's manager path and the peer-overlap gate refuses the accepted clone
+// request before the response; on the recorded hosts (WSL uid 1000) the test
+// process sits under /user.slice and the cases pass.
 
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -58,8 +66,11 @@ const (
 // The three operations below were string literals before this slice. The local
 // names are deliberate: this harness must also keep compiling against the
 // pre-slice base tree, which has no such production constants, so the recorded
-// pre-refactor run stays reproducible. The wire strings themselves are pinned
-// byte-for-byte by the goldens in anchor_shape_goldens_test.go.
+// pre-refactor run stays reproducible. The wire strings are pinned by the
+// goldens below (the `identity` and `register-process` frames of the stopping
+// answers) and for all three operations, including `wait-reap` which no golden
+// frame carries, by TestLinuxOwnerAnchorShapeTableOperationLiterals in
+// anchor_shape_table_test.go (a head-only test, so it cannot live here).
 const (
 	linuxOwnerAnchorWireIdentityOperation        = "identity"
 	linuxOwnerAnchorWireRegisterProcessOperation = "register-process"
@@ -296,6 +307,22 @@ func linuxOwnerAnchorWireServe(t *testing.T, anchor *linuxOwnerAnchor, request l
 	return linuxOwnerAnchorWireServeRaw(t, anchor, encoded, rights)
 }
 
+// linuxOwnerAnchorWireReadRequest writes already-encoded bytes into a fresh
+// unixpacket pair and returns the codec's own verdict. It is the discriminating
+// oracle for the malformed-frame cases below: every rejection serveConnection
+// makes after a successful decode is a silent close, so a codec that accepted a
+// malformed frame would look identical end to end.
+func linuxOwnerAnchorWireReadRequest(t *testing.T, encoded []byte, rights []byte) error {
+	t.Helper()
+	client, server := linuxOwnerAnchorWirePair(t)
+	if _, _, err := client.WriteMsgUnix(encoded, rights, nil); err != nil {
+		t.Fatalf("write wire request: %v", err)
+	}
+	_, fds, err := readLinuxOwnerAnchorRequest(server)
+	closeLinuxOwnerAnchorFDs(fds)
+	return err
+}
+
 func TestLinuxOwnerAnchorWireShapeRejectsWrongDescriptorCounts(t *testing.T) {
 	if len(wireDescriptorCounts) != 16 {
 		t.Fatalf("wire descriptor table covers %d operations, want 16", len(wireDescriptorCounts))
@@ -332,9 +359,9 @@ func TestLinuxOwnerAnchorWireCloneCleanupDescriptorGate(t *testing.T) {
 	if frame == nil || len(fds) != 0 {
 		t.Fatalf("one-descriptor clone cleanup = %d frame bytes / %d descriptors; want the row's accepted count answered", len(frame), len(fds))
 	}
-	priorRemovalGolden := linuxOwnerAnchorShapeGoldenFrame(t, linuxOwnerAnchorWireClonePriorRemovalGolden)
-	if string(frame) != priorRemovalGolden {
-		t.Fatalf("one-descriptor clone cleanup frame = %q, want the pinned bytes %q", frame, priorRemovalGolden)
+	rejectedGolden := linuxOwnerAnchorShapeGoldenFrame(t, linuxOwnerAnchorWireCloneRejectedGolden)
+	if string(frame) != rejectedGolden {
+		t.Fatalf("one-descriptor clone cleanup frame = %q, want the pinned bytes %q", frame, rejectedGolden)
 	}
 	withTarget := linuxOwnerAnchorWireShapeRequest(t, fixture, linuxOwnerAnchorOperationCloneCleanup)
 	withTarget.TargetFDPresent, withTarget.PriorRemovalProof = true, nil
@@ -342,9 +369,8 @@ func TestLinuxOwnerAnchorWireCloneCleanupDescriptorGate(t *testing.T) {
 	if frame == nil || len(fds) != 0 {
 		t.Fatalf("two-descriptor clone cleanup = %d frame bytes / %d descriptors; want the row's variable count answered", len(frame), len(fds))
 	}
-	liveTargetGolden := linuxOwnerAnchorShapeGoldenFrame(t, linuxOwnerAnchorWireCloneLiveTargetGolden)
-	if string(frame) != liveTargetGolden {
-		t.Fatalf("two-descriptor clone cleanup frame = %q, want the pinned bytes %q", frame, liveTargetGolden)
+	if string(frame) != rejectedGolden {
+		t.Fatalf("two-descriptor clone cleanup frame = %q, want the pinned bytes %q", frame, rejectedGolden)
 	}
 	for _, refused := range []struct {
 		target bool
@@ -430,6 +456,9 @@ func TestLinuxOwnerAnchorWireCodecRejectsMalformedFrames(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal clean identity request: %v", err)
 	}
+	if err := linuxOwnerAnchorWireReadRequest(t, encoded, nil); err != nil {
+		t.Fatalf("readLinuxOwnerAnchorRequest rejected the clean identity request: %v", err)
+	}
 	oversize := linuxOwnerAnchorRequest{
 		Version: linuxOwnerAnchorProtocolVersion, Operation: linuxOwnerAnchorWireIdentityOperation,
 		ClientPID: os.Getpid(), ClientIdentity: linuxOwnerAnchorWireClientIdentity(t),
@@ -450,9 +479,100 @@ func TestLinuxOwnerAnchorWireCodecRejectsMalformedFrames(t *testing.T) {
 		{"descriptor-overflow", encoded, syscall.UnixRights(linuxOwnerAnchorWireFDs(t, 5)...)},
 	}
 	for _, item := range cases {
+		// Direct codec assertion: the codec itself must reject the frame (the
+		// end-to-end check below would pass even if the codec accepted it,
+		// because the later shape and membership gates are silent).
+		if err := linuxOwnerAnchorWireReadRequest(t, item.encoded, item.rights); err == nil {
+			t.Fatalf("%s was accepted by readLinuxOwnerAnchorRequest; want a decode error", item.name)
+		}
 		frame, fds := linuxOwnerAnchorWireServeRaw(t, fixture.anchor, item.encoded, item.rights)
 		if frame != nil || len(fds) != 0 {
 			t.Fatalf("%s was answered with %d frame bytes and %d descriptors; want a silent refusal", item.name, len(frame), len(fds))
 		}
 	}
 }
+
+// The goldens below pin the response bytes of the pre-refactor head.
+//
+// Provenance: every literal was captured on the pre-refactor head
+// `3ccc62f5618fdd16b38c2c4b7d6421a95f48bdfb` by the scratch harness archived at
+// <GDD-STATE>/refactor/tools/w3-02-response-table/capture-harness_test.go, whose
+// raw output is `capture-output.txt` in the same directory. The writer cases run
+// through the eight base `writeResponse*` variants; the serve cases run through
+// the real `serveConnection` (the statuses reachable without a delegated A/B
+// cgroup and a spawned helper run). The refactored code re-pins the same bytes
+// through `baseResponse` + the single `writeResponse`, so the goldens prove the
+// response field sets, JSON tags, omitempty behaviour and field order survived
+// the unification byte for byte.
+//
+// The literals live in this file, and not in anchor_shape_table_test.go, because
+// this harness also compiles against the pre-slice base tree (the recorded
+// reproof re-runs the goldens there); the writer cases that consume
+// linuxOwnerAnchorShapeWriterGoldens are asserted by
+// TestLinuxOwnerAnchorShapeWriterGoldens in anchor_shape_table_test.go.
+//
+// The pinned frames embed the harness anchor's A UID, which is the test
+// process's own uid; `linuxOwnerAnchorShapeGoldenFrame` substitutes that one
+// host-dependent number. Every other byte is pinned verbatim, including the
+// literal anchor process identity, parent boot ID, mount/device/inode and
+// manager path of the harness fixture.
+
+// linuxOwnerAnchorShapeGoldenOwnerUID is the uid the capture ran with.
+const linuxOwnerAnchorShapeGoldenOwnerUID = 1000
+
+// linuxOwnerAnchorShapeGoldenFrame resolves the one host-dependent value of a
+// pinned frame: the harness anchor's A UID is the test process uid.
+func linuxOwnerAnchorShapeGoldenFrame(t *testing.T, golden string) string {
+	t.Helper()
+	return strings.ReplaceAll(
+		golden,
+		fmt.Sprintf(`"owner_uid":%d,`, uint32(linuxOwnerAnchorShapeGoldenOwnerUID)),
+		fmt.Sprintf(`"owner_uid":%d,`, uint32(os.Getuid())),
+	)
+}
+
+// linuxOwnerAnchorShapeWriterGoldens pins one frame per former writer variant,
+// each with every stamped field non-zero: plain (`writeResponse`),
+// stop-evidence, clone-removal, descriptors (`...WithFDs`), reap-evidence,
+// child-classification, helper-exit, run-pins, the clone-cleanup key override
+// and the zero-valued identity response.
+var linuxOwnerAnchorShapeWriterGoldens = map[string]string{
+	"plain":                "{\"version\":1,\"operation\":\"stop-leaf-v2\",\"status\":\"stopped\",\"run_key\":{\"run_id\":\"owner-anchor-run-test\",\"generation\":1},\"fence\":{\"runtime_id\":\"runtime-test\",\"runtime_epoch\":1,\"generation\":1,\"claim_id\":\"claim-test\",\"lease_token\":\"lease-test\"},\"launch_token\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"anchor\":{\"pid\":4242,\"identity\":\"linux:v2:capture-anchor\"},\"parent\":{\"boot_id\":\"00000000-0000-0000-0000-000000000000\",\"mount_id\":1,\"device\":1,\"inode\":2,\"path\":\"/system.slice/symmetry-owner.service/manager\"},\"owner_uid\":1000,\"manager_path\":\"/system.slice/symmetry-owner.service/manager\",\"helper\":{\"pid\":5150,\"identity\":\"linux:v2:capture-helper\"},\"evidence\":{\"version\":1,\"run_key\":{\"run_id\":\"owner-anchor-run-test\",\"generation\":1},\"fence\":{\"runtime_id\":\"runtime-test\",\"runtime_epoch\":1,\"generation\":1,\"claim_id\":\"claim-test\",\"lease_token\":\"lease-test\"},\"launch_token\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"parent\":{\"boot_id\":\"00000000-0000-0000-0000-000000000000\",\"mount_id\":1,\"device\":1,\"inode\":2,\"path\":\"/system.slice/symmetry-owner.service/manager\"},\"leaf\":{\"version\":2,\"parent\":{\"boot_id\":\"00000000-0000-0000-0000-000000000000\",\"mount_id\":1,\"device\":1,\"inode\":2,\"path\":\"/system.slice/symmetry-owner.service/manager\"},\"leaf_name\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"leaf_device\":1,\"leaf_inode\":3},\"helper\":{\"pid\":5150,\"identity\":\"linux:v2:capture-helper\"},\"process\":{\"pid\":5151,\"identity\":\"linux:v2:capture-process\"},\"process_role\":\"native\",\"helper_exit\":{\"version\":1,\"process\":{\"pid\":5150,\"identity\":\"linux:v2:capture-helper\"},\"witness\":{\"pid\":5152,\"identity\":\"linux:v2:capture-witness\"},\"waited\":true,\"reaped\":true},\"process_exit\":{\"version\":1,\"process\":{\"pid\":5150,\"identity\":\"linux:v2:capture-helper\"},\"witness\":{\"pid\":5152,\"identity\":\"linux:v2:capture-witness\"},\"waited\":true,\"reaped\":true}}}",
+	"stop-evidence":        "{\"version\":1,\"operation\":\"stop-leaf-v2\",\"status\":\"stopped\",\"run_key\":{\"run_id\":\"owner-anchor-run-test\",\"generation\":1},\"fence\":{\"runtime_id\":\"runtime-test\",\"runtime_epoch\":1,\"generation\":1,\"claim_id\":\"claim-test\",\"lease_token\":\"lease-test\"},\"launch_token\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"anchor\":{\"pid\":4242,\"identity\":\"linux:v2:capture-anchor\"},\"parent\":{\"boot_id\":\"00000000-0000-0000-0000-000000000000\",\"mount_id\":1,\"device\":1,\"inode\":2,\"path\":\"/system.slice/symmetry-owner.service/manager\"},\"owner_uid\":1000,\"manager_path\":\"/system.slice/symmetry-owner.service/manager\",\"stop_evidence\":{\"version\":1,\"run_key\":{\"run_id\":\"owner-anchor-run-test\",\"generation\":1},\"fence\":{\"runtime_id\":\"runtime-test\",\"runtime_epoch\":1,\"generation\":1,\"claim_id\":\"claim-test\",\"lease_token\":\"lease-test\"},\"launch_token\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"parent\":{\"boot_id\":\"00000000-0000-0000-0000-000000000000\",\"mount_id\":1,\"device\":1,\"inode\":2,\"path\":\"/system.slice/symmetry-owner.service/manager\"},\"leaf\":{\"version\":2,\"parent\":{\"boot_id\":\"00000000-0000-0000-0000-000000000000\",\"mount_id\":1,\"device\":1,\"inode\":2,\"path\":\"/system.slice/symmetry-owner.service/manager\"},\"leaf_name\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"leaf_device\":1,\"leaf_inode\":3},\"anchor\":{\"pid\":4242,\"identity\":\"linux:v2:capture-anchor\"},\"helper\":{\"pid\":5150,\"identity\":\"linux:v2:capture-helper\"},\"gate_release_authorized\":false,\"pinned_leaf_fd\":true,\"kill_attempted\":true,\"kill_acknowledged\":true,\"cgroup_populated_zero\":true,\"no_migration_observed\":false,\"producer_fenced\":false,\"descendants_reaped\":false,\"reap_count\":0}}",
+	"clone-removal":        "{\"version\":1,\"operation\":\"stop-leaf-v2\",\"status\":\"clone_removed\",\"run_key\":{\"run_id\":\"owner-anchor-run-test\",\"generation\":1},\"fence\":{\"runtime_id\":\"runtime-test\",\"runtime_epoch\":1,\"generation\":1,\"claim_id\":\"claim-test\",\"lease_token\":\"lease-test\"},\"launch_token\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"anchor\":{\"pid\":4242,\"identity\":\"linux:v2:capture-anchor\"},\"parent\":{\"boot_id\":\"00000000-0000-0000-0000-000000000000\",\"mount_id\":1,\"device\":1,\"inode\":2,\"path\":\"/system.slice/symmetry-owner.service/manager\"},\"owner_uid\":1000,\"manager_path\":\"/system.slice/symmetry-owner.service/manager\",\"helper\":{\"pid\":5150,\"identity\":\"linux:v2:capture-helper\"},\"evidence\":{\"version\":1,\"run_key\":{\"run_id\":\"owner-anchor-run-test\",\"generation\":1},\"fence\":{\"runtime_id\":\"runtime-test\",\"runtime_epoch\":1,\"generation\":1,\"claim_id\":\"claim-test\",\"lease_token\":\"lease-test\"},\"launch_token\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"parent\":{\"boot_id\":\"00000000-0000-0000-0000-000000000000\",\"mount_id\":1,\"device\":1,\"inode\":2,\"path\":\"/system.slice/symmetry-owner.service/manager\"},\"leaf\":{\"version\":2,\"parent\":{\"boot_id\":\"00000000-0000-0000-0000-000000000000\",\"mount_id\":1,\"device\":1,\"inode\":2,\"path\":\"/system.slice/symmetry-owner.service/manager\"},\"leaf_name\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"leaf_device\":1,\"leaf_inode\":3},\"helper\":{\"pid\":5150,\"identity\":\"linux:v2:capture-helper\"},\"process\":{\"pid\":5151,\"identity\":\"linux:v2:capture-process\"},\"process_role\":\"native\",\"helper_exit\":{\"version\":1,\"process\":{\"pid\":5150,\"identity\":\"linux:v2:capture-helper\"},\"witness\":{\"pid\":5152,\"identity\":\"linux:v2:capture-witness\"},\"waited\":true,\"reaped\":true},\"process_exit\":{\"version\":1,\"process\":{\"pid\":5150,\"identity\":\"linux:v2:capture-helper\"},\"witness\":{\"pid\":5152,\"identity\":\"linux:v2:capture-witness\"},\"waited\":true,\"reaped\":true}},\"clone_removal_proof\":{\"version\":2,\"intent\":{\"version\":2,\"intent\":{\"version\":2,\"run_id\":\"owner-anchor-run-test\",\"generation\":1,\"binding_key\":\"\",\"resource_id\":\"\",\"base_commit\":\"\",\"base_tree_digest\":\"\",\"nonce\":\"\",\"seed_path\":\"\",\"target\":\"/b/clone\"},\"fence_digest\":\"sha256:capture-fence-digest\",\"root_path\":\"/b/clone-root\",\"base_ref\":\"\",\"seed_receipt\":{\"version\":2,\"base_commit\":\"\",\"digest\":\"\",\"size\":4096,\"device\":9,\"inode\":10},\"checkout_receipt\":{\"version\":2,\"run_id\":\"owner-anchor-run-test\",\"generation\":1,\"binding_key\":\"\",\"resource_id\":\"\",\"target\":\"/b/clone\",\"nonce\":\"\",\"seed_digest\":\"\",\"base_commit\":\"\",\"target_device\":11,\"target_inode\":12},\"promotion_intent\":{\"version\":0,\"resource_id\":\"\",\"commit\":\"\",\"tree_digest\":\"\"},\"promotion_receipt\":{\"version\":0,\"commit\":\"\",\"tree_digest\":\"\",\"ref\":\"\"},\"normal_release_proof\":{\"version\":0,\"status\":\"\",\"launch_token\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"target_pid\":0,\"target_identity\":\"\",\"owner_uid\":1000,\"pipe_token\":\"\",\"job_id\":\"\",\"supervisor_pid\":0,\"supervisor_identity\":\"\",\"cgroup_identity\":{\"version\":2,\"parent\":{\"boot_id\":\"00000000-0000-0000-0000-000000000000\",\"mount_id\":1,\"device\":1,\"inode\":2,\"path\":\"/system.slice/symmetry-owner.service/manager\"},\"leaf_name\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"leaf_device\":1,\"leaf_inode\":3},\"anchor_pid\":4242,\"anchor_identity\":\"linux:v2:capture-anchor\"},\"artifact_evidence_id\":\"\",\"artifact_evidence_key\":\"\",\"artifact_subject_hash\":\"\",\"artifact_delivery_digest\":\"\"},\"root_device\":17,\"root_inode\":18,\"target_device\":19,\"target_inode\":20,\"disposition\":\"removed\",\"path_rewalk_verified\":true,\"b_owned_mount_confined\":true,\"target_nlink_zero\":true,\"root_deleter_uid\":1000,\"root_deleter\":{\"pid\":5150,\"identity\":\"linux:v2:capture-helper\"},\"root_deleter_exit\":{\"version\":1,\"process\":{\"pid\":5150,\"identity\":\"linux:v2:capture-helper\"},\"witness\":{\"pid\":5152,\"identity\":\"linux:v2:capture-witness\"},\"waited\":true,\"reaped\":true}}}",
+	"descriptors":          "{\"version\":1,\"operation\":\"stop-leaf-v2\",\"status\":\"attached\",\"run_key\":{\"run_id\":\"owner-anchor-run-test\",\"generation\":1},\"fence\":{\"runtime_id\":\"runtime-test\",\"runtime_epoch\":1,\"generation\":1,\"claim_id\":\"claim-test\",\"lease_token\":\"lease-test\"},\"launch_token\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"anchor\":{\"pid\":4242,\"identity\":\"linux:v2:capture-anchor\"},\"parent\":{\"boot_id\":\"00000000-0000-0000-0000-000000000000\",\"mount_id\":1,\"device\":1,\"inode\":2,\"path\":\"/system.slice/symmetry-owner.service/manager\"},\"owner_uid\":1000,\"manager_path\":\"/system.slice/symmetry-owner.service/manager\",\"helper\":{\"pid\":5150,\"identity\":\"linux:v2:capture-helper\"},\"evidence\":{\"version\":1,\"run_key\":{\"run_id\":\"owner-anchor-run-test\",\"generation\":1},\"fence\":{\"runtime_id\":\"runtime-test\",\"runtime_epoch\":1,\"generation\":1,\"claim_id\":\"claim-test\",\"lease_token\":\"lease-test\"},\"launch_token\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"parent\":{\"boot_id\":\"00000000-0000-0000-0000-000000000000\",\"mount_id\":1,\"device\":1,\"inode\":2,\"path\":\"/system.slice/symmetry-owner.service/manager\"},\"leaf\":{\"version\":2,\"parent\":{\"boot_id\":\"00000000-0000-0000-0000-000000000000\",\"mount_id\":1,\"device\":1,\"inode\":2,\"path\":\"/system.slice/symmetry-owner.service/manager\"},\"leaf_name\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"leaf_device\":1,\"leaf_inode\":3},\"helper\":{\"pid\":5150,\"identity\":\"linux:v2:capture-helper\"},\"process\":{\"pid\":5151,\"identity\":\"linux:v2:capture-process\"},\"process_role\":\"native\",\"helper_exit\":{\"version\":1,\"process\":{\"pid\":5150,\"identity\":\"linux:v2:capture-helper\"},\"witness\":{\"pid\":5152,\"identity\":\"linux:v2:capture-witness\"},\"waited\":true,\"reaped\":true},\"process_exit\":{\"version\":1,\"process\":{\"pid\":5150,\"identity\":\"linux:v2:capture-helper\"},\"witness\":{\"pid\":5152,\"identity\":\"linux:v2:capture-witness\"},\"waited\":true,\"reaped\":true}}}",
+	"reap-evidence":        "{\"version\":1,\"operation\":\"stop-leaf-v2\",\"status\":\"reaped\",\"run_key\":{\"run_id\":\"owner-anchor-run-test\",\"generation\":1},\"fence\":{\"runtime_id\":\"runtime-test\",\"runtime_epoch\":1,\"generation\":1,\"claim_id\":\"claim-test\",\"lease_token\":\"lease-test\"},\"launch_token\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"anchor\":{\"pid\":4242,\"identity\":\"linux:v2:capture-anchor\"},\"parent\":{\"boot_id\":\"00000000-0000-0000-0000-000000000000\",\"mount_id\":1,\"device\":1,\"inode\":2,\"path\":\"/system.slice/symmetry-owner.service/manager\"},\"owner_uid\":1000,\"manager_path\":\"/system.slice/symmetry-owner.service/manager\",\"reap_evidence\":[{\"version\":1,\"run_key\":{\"run_id\":\"owner-anchor-run-test\",\"generation\":1},\"fence\":{\"runtime_id\":\"runtime-test\",\"runtime_epoch\":1,\"generation\":1,\"claim_id\":\"claim-test\",\"lease_token\":\"lease-test\"},\"launch_token\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"parent\":{\"boot_id\":\"00000000-0000-0000-0000-000000000000\",\"mount_id\":1,\"device\":1,\"inode\":2,\"path\":\"/system.slice/symmetry-owner.service/manager\"},\"leaf\":{\"version\":2,\"parent\":{\"boot_id\":\"00000000-0000-0000-0000-000000000000\",\"mount_id\":1,\"device\":1,\"inode\":2,\"path\":\"/system.slice/symmetry-owner.service/manager\"},\"leaf_name\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"leaf_device\":1,\"leaf_inode\":3},\"helper\":{\"pid\":5150,\"identity\":\"linux:v2:capture-helper\"},\"process\":{\"pid\":5151,\"identity\":\"linux:v2:capture-process\"},\"process_role\":\"native\",\"helper_exit\":{\"version\":1,\"process\":{\"pid\":5150,\"identity\":\"linux:v2:capture-helper\"},\"witness\":{\"pid\":5152,\"identity\":\"linux:v2:capture-witness\"},\"waited\":true,\"reaped\":true},\"process_exit\":{\"version\":1,\"process\":{\"pid\":5150,\"identity\":\"linux:v2:capture-helper\"},\"witness\":{\"pid\":5152,\"identity\":\"linux:v2:capture-witness\"},\"waited\":true,\"reaped\":true}}],\"stop_evidence\":{\"version\":1,\"run_key\":{\"run_id\":\"owner-anchor-run-test\",\"generation\":1},\"fence\":{\"runtime_id\":\"runtime-test\",\"runtime_epoch\":1,\"generation\":1,\"claim_id\":\"claim-test\",\"lease_token\":\"lease-test\"},\"launch_token\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"parent\":{\"boot_id\":\"00000000-0000-0000-0000-000000000000\",\"mount_id\":1,\"device\":1,\"inode\":2,\"path\":\"/system.slice/symmetry-owner.service/manager\"},\"leaf\":{\"version\":2,\"parent\":{\"boot_id\":\"00000000-0000-0000-0000-000000000000\",\"mount_id\":1,\"device\":1,\"inode\":2,\"path\":\"/system.slice/symmetry-owner.service/manager\"},\"leaf_name\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"leaf_device\":1,\"leaf_inode\":3},\"anchor\":{\"pid\":4242,\"identity\":\"linux:v2:capture-anchor\"},\"helper\":{\"pid\":5150,\"identity\":\"linux:v2:capture-helper\"},\"gate_release_authorized\":false,\"pinned_leaf_fd\":true,\"kill_attempted\":true,\"kill_acknowledged\":true,\"cgroup_populated_zero\":true,\"no_migration_observed\":false,\"producer_fenced\":false,\"descendants_reaped\":false,\"reap_count\":0},\"next_pid\":5151,\"more\":true}",
+	"child-classification": "{\"version\":1,\"operation\":\"stop-leaf-v2\",\"status\":\"classified\",\"run_key\":{\"run_id\":\"owner-anchor-run-test\",\"generation\":1},\"fence\":{\"runtime_id\":\"runtime-test\",\"runtime_epoch\":1,\"generation\":1,\"claim_id\":\"claim-test\",\"lease_token\":\"lease-test\"},\"launch_token\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"anchor\":{\"pid\":4242,\"identity\":\"linux:v2:capture-anchor\"},\"parent\":{\"boot_id\":\"00000000-0000-0000-0000-000000000000\",\"mount_id\":1,\"device\":1,\"inode\":2,\"path\":\"/system.slice/symmetry-owner.service/manager\"},\"owner_uid\":1000,\"manager_path\":\"/system.slice/symmetry-owner.service/manager\",\"helper\":{\"pid\":5150,\"identity\":\"linux:v2:capture-helper\"},\"child_classification\":{\"version\":1,\"run_key\":{\"run_id\":\"owner-anchor-run-test\",\"generation\":1},\"origin_run_key\":{\"run_id\":\"owner-anchor-run-test\",\"generation\":1},\"fence\":{\"runtime_id\":\"runtime-test\",\"runtime_epoch\":1,\"generation\":1,\"claim_id\":\"claim-test\",\"lease_token\":\"lease-test\"},\"launch_token\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"helper\":{\"pid\":5150,\"identity\":\"linux:v2:capture-helper\"},\"process\":{\"pid\":5151,\"identity\":\"linux:v2:capture-process\"},\"role\":\"native\",\"origin\":\"registered_current\"}}",
+	"helper-exit":          "{\"version\":1,\"operation\":\"stop-leaf-v2\",\"status\":\"reaped\",\"run_key\":{\"run_id\":\"owner-anchor-run-test\",\"generation\":1},\"fence\":{\"runtime_id\":\"runtime-test\",\"runtime_epoch\":1,\"generation\":1,\"claim_id\":\"claim-test\",\"lease_token\":\"lease-test\"},\"launch_token\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"anchor\":{\"pid\":4242,\"identity\":\"linux:v2:capture-anchor\"},\"parent\":{\"boot_id\":\"00000000-0000-0000-0000-000000000000\",\"mount_id\":1,\"device\":1,\"inode\":2,\"path\":\"/system.slice/symmetry-owner.service/manager\"},\"owner_uid\":1000,\"manager_path\":\"/system.slice/symmetry-owner.service/manager\",\"helper\":{\"pid\":5150,\"identity\":\"linux:v2:capture-helper\"},\"helper_exit\":{\"version\":1,\"process\":{\"pid\":5150,\"identity\":\"linux:v2:capture-helper\"},\"witness\":{\"pid\":5152,\"identity\":\"linux:v2:capture-witness\"},\"waited\":true,\"reaped\":true}}",
+	"run-pins":             "{\"version\":1,\"operation\":\"stop-leaf-v2\",\"status\":\"helper_exited\",\"run_key\":{\"run_id\":\"owner-anchor-run-test\",\"generation\":1},\"fence\":{\"runtime_id\":\"runtime-test\",\"runtime_epoch\":1,\"generation\":1,\"claim_id\":\"claim-test\",\"lease_token\":\"lease-test\"},\"launch_token\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"anchor\":{\"pid\":4242,\"identity\":\"linux:v2:capture-anchor\"},\"parent\":{\"boot_id\":\"00000000-0000-0000-0000-000000000000\",\"mount_id\":1,\"device\":1,\"inode\":2,\"path\":\"/system.slice/symmetry-owner.service/manager\"},\"owner_uid\":1000,\"manager_path\":\"/system.slice/symmetry-owner.service/manager\",\"helper\":{\"pid\":5150,\"identity\":\"linux:v2:capture-helper\"},\"helper_exit\":{\"version\":1,\"process\":{\"pid\":5150,\"identity\":\"linux:v2:capture-helper\"},\"witness\":{\"pid\":5152,\"identity\":\"linux:v2:capture-witness\"},\"waited\":true,\"reaped\":true}}",
+	"clone-override":       "{\"version\":1,\"operation\":\"remove-b-clone-after-receipt\",\"status\":\"clone_removed\",\"run_key\":{\"run_id\":\"owner-anchor-run-test\",\"generation\":1},\"fence\":{\"runtime_id\":\"\",\"runtime_epoch\":0,\"generation\":0,\"claim_id\":\"\",\"lease_token\":\"\"},\"fence_digest\":\"sha256:capture-fence-digest\",\"launch_token\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"anchor\":{\"pid\":4242,\"identity\":\"linux:v2:capture-anchor\"},\"parent\":{\"boot_id\":\"00000000-0000-0000-0000-000000000000\",\"mount_id\":1,\"device\":1,\"inode\":2,\"path\":\"/system.slice/symmetry-owner.service/manager\"},\"owner_uid\":1000,\"manager_path\":\"/system.slice/symmetry-owner.service/manager\",\"clone_removal_proof\":{\"version\":2,\"intent\":{\"version\":2,\"intent\":{\"version\":2,\"run_id\":\"owner-anchor-run-test\",\"generation\":1,\"binding_key\":\"\",\"resource_id\":\"\",\"base_commit\":\"\",\"base_tree_digest\":\"\",\"nonce\":\"\",\"seed_path\":\"\",\"target\":\"/b/clone\"},\"fence_digest\":\"sha256:capture-fence-digest\",\"root_path\":\"/b/clone-root\",\"base_ref\":\"\",\"seed_receipt\":{\"version\":2,\"base_commit\":\"\",\"digest\":\"\",\"size\":4096,\"device\":9,\"inode\":10},\"checkout_receipt\":{\"version\":2,\"run_id\":\"owner-anchor-run-test\",\"generation\":1,\"binding_key\":\"\",\"resource_id\":\"\",\"target\":\"/b/clone\",\"nonce\":\"\",\"seed_digest\":\"\",\"base_commit\":\"\",\"target_device\":11,\"target_inode\":12},\"promotion_intent\":{\"version\":0,\"resource_id\":\"\",\"commit\":\"\",\"tree_digest\":\"\"},\"promotion_receipt\":{\"version\":0,\"commit\":\"\",\"tree_digest\":\"\",\"ref\":\"\"},\"normal_release_proof\":{\"version\":0,\"status\":\"\",\"launch_token\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"target_pid\":0,\"target_identity\":\"\",\"owner_uid\":1000,\"pipe_token\":\"\",\"job_id\":\"\",\"supervisor_pid\":0,\"supervisor_identity\":\"\",\"cgroup_identity\":{\"version\":2,\"parent\":{\"boot_id\":\"00000000-0000-0000-0000-000000000000\",\"mount_id\":1,\"device\":1,\"inode\":2,\"path\":\"/system.slice/symmetry-owner.service/manager\"},\"leaf_name\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"leaf_device\":1,\"leaf_inode\":3},\"anchor_pid\":4242,\"anchor_identity\":\"linux:v2:capture-anchor\"},\"artifact_evidence_id\":\"\",\"artifact_evidence_key\":\"\",\"artifact_subject_hash\":\"\",\"artifact_delivery_digest\":\"\"},\"root_device\":17,\"root_inode\":18,\"target_device\":19,\"target_inode\":20,\"disposition\":\"removed\",\"path_rewalk_verified\":true,\"b_owned_mount_confined\":true,\"target_nlink_zero\":true,\"root_deleter_uid\":1000,\"root_deleter\":{\"pid\":5150,\"identity\":\"linux:v2:capture-helper\"},\"root_deleter_exit\":{\"version\":1,\"process\":{\"pid\":5150,\"identity\":\"linux:v2:capture-helper\"},\"witness\":{\"pid\":5152,\"identity\":\"linux:v2:capture-witness\"},\"waited\":true,\"reaped\":true}}}",
+	"zero-identity":        "{\"version\":1,\"operation\":\"identity\",\"status\":\"ready\",\"run_key\":{\"run_id\":\"\",\"generation\":0},\"fence\":{\"runtime_id\":\"\",\"runtime_epoch\":0,\"generation\":0,\"claim_id\":\"\",\"lease_token\":\"\"},\"launch_token\":\"\",\"anchor\":{\"pid\":4242,\"identity\":\"linux:v2:capture-anchor\"},\"parent\":{\"boot_id\":\"00000000-0000-0000-0000-000000000000\",\"mount_id\":1,\"device\":1,\"inode\":2,\"path\":\"/system.slice/symmetry-owner.service/manager\"},\"owner_uid\":1000,\"manager_path\":\"/system.slice/symmetry-owner.service/manager\"}",
+}
+
+// linuxOwnerAnchorShapeWriterGoldenFDs is the descriptor count each pinned
+// writer frame carries; every case not listed transfers none.
+var linuxOwnerAnchorShapeWriterGoldenFDs = map[string]int{
+	"descriptors": 3,
+	"run-pins":    2,
+}
+
+// linuxOwnerAnchorWireStoppingGoldens pins the `anchor_stopping` answer of every
+// operation whose row answers a stopping anchor, captured through the real
+// serveConnection (keyed by the operation).
+var linuxOwnerAnchorWireStoppingGoldens = map[string]string{
+	"identity":                     "{\"version\":1,\"operation\":\"identity\",\"status\":\"anchor_stopping\",\"run_key\":{\"run_id\":\"\",\"generation\":0},\"fence\":{\"runtime_id\":\"\",\"runtime_epoch\":0,\"generation\":0,\"claim_id\":\"\",\"lease_token\":\"\"},\"launch_token\":\"\",\"anchor\":{\"pid\":4242,\"identity\":\"linux:v2:capture-anchor\"},\"parent\":{\"boot_id\":\"00000000-0000-0000-0000-000000000000\",\"mount_id\":1,\"device\":1,\"inode\":2,\"path\":\"/system.slice/symmetry-owner.service/manager\"},\"owner_uid\":1000,\"manager_path\":\"/system.slice/symmetry-owner.service/manager\"}",
+	"start-helper-v2":              "{\"version\":1,\"operation\":\"start-helper-v2\",\"status\":\"anchor_stopping\",\"run_key\":{\"run_id\":\"owner-anchor-run-test\",\"generation\":1},\"fence\":{\"runtime_id\":\"runtime-test\",\"runtime_epoch\":1,\"generation\":1,\"claim_id\":\"claim-test\",\"lease_token\":\"lease-test\"},\"launch_token\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"anchor\":{\"pid\":4242,\"identity\":\"linux:v2:capture-anchor\"},\"parent\":{\"boot_id\":\"00000000-0000-0000-0000-000000000000\",\"mount_id\":1,\"device\":1,\"inode\":2,\"path\":\"/system.slice/symmetry-owner.service/manager\"},\"owner_uid\":1000,\"manager_path\":\"/system.slice/symmetry-owner.service/manager\"}",
+	"register-process":             "{\"version\":1,\"operation\":\"register-process\",\"status\":\"anchor_stopping\",\"run_key\":{\"run_id\":\"owner-anchor-run-test\",\"generation\":1},\"fence\":{\"runtime_id\":\"runtime-test\",\"runtime_epoch\":1,\"generation\":1,\"claim_id\":\"claim-test\",\"lease_token\":\"lease-test\"},\"launch_token\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"anchor\":{\"pid\":4242,\"identity\":\"linux:v2:capture-anchor\"},\"parent\":{\"boot_id\":\"00000000-0000-0000-0000-000000000000\",\"mount_id\":1,\"device\":1,\"inode\":2,\"path\":\"/system.slice/symmetry-owner.service/manager\"},\"owner_uid\":1000,\"manager_path\":\"/system.slice/symmetry-owner.service/manager\"}",
+	"register-gate-v2":             "{\"version\":1,\"operation\":\"register-gate-v2\",\"status\":\"anchor_stopping\",\"run_key\":{\"run_id\":\"owner-anchor-run-test\",\"generation\":1},\"fence\":{\"runtime_id\":\"runtime-test\",\"runtime_epoch\":1,\"generation\":1,\"claim_id\":\"claim-test\",\"lease_token\":\"lease-test\"},\"launch_token\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"anchor\":{\"pid\":4242,\"identity\":\"linux:v2:capture-anchor\"},\"parent\":{\"boot_id\":\"00000000-0000-0000-0000-000000000000\",\"mount_id\":1,\"device\":1,\"inode\":2,\"path\":\"/system.slice/symmetry-owner.service/manager\"},\"owner_uid\":1000,\"manager_path\":\"/system.slice/symmetry-owner.service/manager\"}",
+	"authorize-gate-release-v2":    "{\"version\":1,\"operation\":\"authorize-gate-release-v2\",\"status\":\"anchor_stopping\",\"run_key\":{\"run_id\":\"owner-anchor-run-test\",\"generation\":1},\"fence\":{\"runtime_id\":\"runtime-test\",\"runtime_epoch\":1,\"generation\":1,\"claim_id\":\"claim-test\",\"lease_token\":\"lease-test\"},\"launch_token\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"anchor\":{\"pid\":4242,\"identity\":\"linux:v2:capture-anchor\"},\"parent\":{\"boot_id\":\"00000000-0000-0000-0000-000000000000\",\"mount_id\":1,\"device\":1,\"inode\":2,\"path\":\"/system.slice/symmetry-owner.service/manager\"},\"owner_uid\":1000,\"manager_path\":\"/system.slice/symmetry-owner.service/manager\"}",
+	"stop-leaf-v2":                 "{\"version\":1,\"operation\":\"stop-leaf-v2\",\"status\":\"anchor_stopping\",\"run_key\":{\"run_id\":\"owner-anchor-run-test\",\"generation\":1},\"fence\":{\"runtime_id\":\"runtime-test\",\"runtime_epoch\":1,\"generation\":1,\"claim_id\":\"claim-test\",\"lease_token\":\"lease-test\"},\"launch_token\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"anchor\":{\"pid\":4242,\"identity\":\"linux:v2:capture-anchor\"},\"parent\":{\"boot_id\":\"00000000-0000-0000-0000-000000000000\",\"mount_id\":1,\"device\":1,\"inode\":2,\"path\":\"/system.slice/symmetry-owner.service/manager\"},\"owner_uid\":1000,\"manager_path\":\"/system.slice/symmetry-owner.service/manager\"}",
+	"classify-run-child-origin-v2": "{\"version\":1,\"operation\":\"classify-run-child-origin-v2\",\"status\":\"anchor_stopping\",\"run_key\":{\"run_id\":\"owner-anchor-run-test\",\"generation\":1},\"fence\":{\"runtime_id\":\"runtime-test\",\"runtime_epoch\":1,\"generation\":1,\"claim_id\":\"claim-test\",\"lease_token\":\"lease-test\"},\"launch_token\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"anchor\":{\"pid\":4242,\"identity\":\"linux:v2:capture-anchor\"},\"parent\":{\"boot_id\":\"00000000-0000-0000-0000-000000000000\",\"mount_id\":1,\"device\":1,\"inode\":2,\"path\":\"/system.slice/symmetry-owner.service/manager\"},\"owner_uid\":1000,\"manager_path\":\"/system.slice/symmetry-owner.service/manager\"}",
+}
+
+// linuxOwnerAnchorWireCloneRejectedGolden pins the clone-cleanup rejection
+// frame. Both rejection branches (absent target without a prior-removal proof,
+// live target with one) emit the same base-only fields, so one golden covers
+// both; which branch ran is pinned at the request level by the clone-cleanup
+// shape cases in anchor_shape_table_test.go, because the frame itself carries no
+// branch signal.
+const linuxOwnerAnchorWireCloneRejectedGolden = "{\"version\":1,\"operation\":\"remove-b-clone-after-receipt\",\"status\":\"request_rejected\",\"run_key\":{\"run_id\":\"\",\"generation\":0},\"fence\":{\"runtime_id\":\"\",\"runtime_epoch\":0,\"generation\":0,\"claim_id\":\"\",\"lease_token\":\"\"},\"launch_token\":\"\",\"anchor\":{\"pid\":4242,\"identity\":\"linux:v2:capture-anchor\"},\"parent\":{\"boot_id\":\"00000000-0000-0000-0000-000000000000\",\"mount_id\":1,\"device\":1,\"inode\":2,\"path\":\"/system.slice/symmetry-owner.service/manager\"},\"owner_uid\":1000,\"manager_path\":\"/system.slice/symmetry-owner.service/manager\"}"

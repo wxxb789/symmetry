@@ -11,12 +11,17 @@ D6's dispatch gate). Branch `refactor/rf-w3-02-response-table`. Area:
 
 ## Owned set (re-derived at the dispatch head)
 
-- `daemon/internal/platform/anchor_server.go` — the 8-variant writer block
-  (`writeResponse` :1719, and the seven `writeResponseWith*` variants :1723-1843) and
-  `serveConnection`'s shape gates/dispatch (:1020-1513) plus `serveCloneCleanup` (:1524-1716) and
-  `validLinuxOwnerAnchor{ChildOrigin,Gate,StopLeaf}Request` (:1528-1554).
-- `daemon/internal/platform/anchor_wire.go` — request/response structs (:23-71), `matches` (:72),
-  codecs (:79-140); the new request-shape table lives here (wire-shape home).
+- `daemon/internal/platform/anchor_server.go` — the 8-variant writer block (dispatch-head tree:
+  `writeResponse` :1719 and the seven `writeResponseWith*` variants :1723-1843; final tree: one
+  `writeResponse` :1707 plus `baseResponse` :1688), `serveConnection`'s shape gates/dispatch
+  (:1020-1513 on both trees), `serveCloneCleanup` (dispatch head :1524-1716; final tree
+  :1569-1682) and the three `validLinuxOwnerAnchor{ChildOrigin,Gate,StopLeaf}Request` validators
+  (dispatch head :1528-1554, deleted by this slice as dead weight; zero test references, `grep`
+  verified).
+- `daemon/internal/platform/anchor_wire.go` — request/response structs (dispatch head :23-71;
+  final tree :24-82), the request-field vocabulary and the request-shape table (final tree
+  :83-655; the table lives here, wire-shape home) and the codecs (dispatch head :79-140; final
+  tree :658-717).
 - `daemon/internal/platform/anchor_types.go` — the 13 op constants (:27-39); the three literal
   operations become constants.
 - `daemon/internal/platform/linux_owner_anchor_linux.go` — the anchor client: builders
@@ -24,9 +29,12 @@ D6's dispatch gate). Branch `refactor/rf-w3-02-response-table`. Area:
 - `daemon/internal/platform/linux_owner_helper_v2_linux.go` — anchor-client retire paths
   (`RetireHelper`/`RetirePreGateHelper` :1001/:1020 via `exchange`; `retireClearedRunWithProofs`
   :1084-1159 and `RetireAbortedHelper` :1161-1203, the two inline encode/read/verify blocks).
-- New tests: `anchor_wire_shape_test.go` (`linux && amd64`, no skips),
-  `anchor_shape_goldens_test.go` (the pinned writer/stopping/clone frames both
-  new test files consume) and `anchor_shape_table_test.go` (`linux && amd64`).
+- New tests, the two files the contract's owned set enumerates:
+  `anchor_wire_shape_test.go` (`linux && amd64`, no skips; it also carries the pinned
+  writer/stopping/clone golden literals, because that file must keep compiling on the pre-slice base
+  tree for the recorded reproof) and `anchor_shape_table_test.go` (`linux && amd64`, which asserts
+  the 8 writer goldens plus the override and zero-valued cases). The implement stage's extra
+  `anchor_shape_goldens_test.go` was merged into these two owned files at the fix stage.
 - This plan file.
 
 Owned but deliberately unmodified, with the reason (P2-2 narrowed the change to anchor-only):
@@ -34,7 +42,7 @@ Owned but deliberately unmodified, with the reason (P2-2 narrowed the change to 
 helper-v2 shape this slice mirrors — `baseResponse` (`helper_v2_stop.go:291`) + one
 `helper`-receiver `writeResponse(connection, operation, status, …, fds ...int)`
 (`helper_v2_stop.go:299`) + `writeLinuxOwnerHelperV2{Request,Response}` codecs
-(`helper_v2_protocol.go:424/469`) whose `len(fds) != 0` rights rule is the precedent this slice
+(`helper_v2_protocol.go:423/469`) whose `len(fds) != 0` rights rule is the precedent this slice
 follows. The helper-v2 rejections stay exactly as they are (P2-2), including
 `serveOwnerConnection`/`handleRequest`'s per-op `len(rights) != 0` clauses
 (`helper_v2_server.go:479-560`, `:587-647`), so those files need no edit; the 30 plain
@@ -63,14 +71,16 @@ func (anchor *linuxOwnerAnchor) writeResponse(connection *net.UnixConn, response
 - `writeResponse` marshals, bounds-checks `linuxOwnerAnchorMaxFrame`, and passes
   `syscall.UnixRights(fds...)` only when descriptors are passed — the same rights rule as
   `writeLinuxOwnerHelperV2Response` (`helper_v2_protocol.go:469-483`).
-- The 8 variants are deleted; every one of the 101 call sites builds the response value explicitly
+- The 8 variants are deleted; every one of the 100 production call sites (`anchor_server.go` 70 +
+  `helper_v2_recovery.go` 30, the final tree's `grep -c "anchor\.writeResponse("` count) builds the
+  response value explicitly
   (`response := anchor.baseResponse(request, status)`, optional field assignments, then one
   `writeResponse` call). Field sets per former variant are unchanged and pinned by goldens.
 - New named constants (`anchor_types.go`) for the three literal operations:
   `linuxOwnerAnchorOperationIdentity` (`"identity"`), `linuxOwnerAnchorOperationRegisterProcess`
-  (`"register-process"`), `linuxOwnerAnchorOperationWaitReap` (`"wait-reap"`); all 8 literal uses
-  (server `:1056/:1057/:1061/:1117/:1126/:1302/:1402`, client `:237/:252/:593/:723/:931`) become
-  constants so the table keys are exhaustive.
+  (`"register-process"`), `linuxOwnerAnchorOperationWaitReap` (`"wait-reap"`); all 12 literal uses
+  (dispatch-head server `:1056/:1057/:1061/:1117/:1126/:1302/:1402`, client
+  `:237/:252/:593/:723/:931`) become constants so the table keys are exhaustive.
 
 ### The request-shape table (`anchor_wire.go`, anchor-only per P2-2)
 
@@ -101,15 +111,16 @@ Rows are derived 1:1 from the base checks (this is the control-flow audit's sour
 | `wait-reap` | grant, helper, process, role | creator, gate/user-ns, stop fence, clone fields; role must be a child role | 0 | 0 | no | 0 | wait | no |
 | `wait-reap-run-v2` | grant, helper | creator, process, role, gate/user-ns, stop fence, clone fields; after-pid ≥ 0 | 0 | 0 | no | 0 | wait | no |
 | `wait-helper-v2` | grant, helper | creator, process, role, gate/user-ns, stop fence, clone fields | 0 | 0 | no | 0 | wait | no |
-| `retire-helper-v2` | grant, helper | creator, process, role, abort proof, gate/user-ns, stop fence, clone fields; exactly one of release/pre-gate proof | 0 | 0 | no | 0 | request | no |
+| `retire-helper-v2` | grant, helper | creator, process, role, gate/user-ns, stop fence, clone fields; exactly one of release/pre-gate proof; an abort proof is tolerated exactly as in the base gate | 0 | 0 | no | 0 | request | no |
 | `retire-cleared-run-v2` | helper, run key, fence | grant, abort proof, gate/user-ns, stop fence, clone fields; exactly one of release/pre-gate proof; `Fence.Generation == RunKey.Generation`, valid run id, helper valid | 0 | 0 | no | 0 | wait | no |
 | `retire-aborted-helper-v2` | helper, run key, fence, abort proof | grant, release/pre-gate proof, gate/user-ns, stop fence, clone fields; `Fence.Generation == RunKey.Generation`, valid run id, helper valid | 0 | 0 | no | 0 | wait | no |
 | `remove-b-clone-after-receipt` | clone grant, cleanup, run key | grant, helper, creator, process, role, proofs, gate/user-ns, stop fence, after-pid, fence; prior-removal proof required iff no target fd, forbidden with one; run key = cleanup intent, fence digest = cleanup digest, target-fd ⇒ 2 descriptors else 1 | 1/2 | 1/2 | yes | 0 | cleanup | no |
 
 The duplicate cap (P2-1) is uniform and lives table-adjacent as
-`linuxOwnerAnchorRequestFDCap = 3` (sized by `readLinuxOwnerAnchorRequest`'s 4-descriptor ancillary
-buffer); the table test asserts it dominates every row's descriptor counts, so the column is one
-constant plus a consistency check instead of 16 identical values.
+`linuxOwnerAnchorRequestFDCap = 3`, the client's transfer limit (`exchange`'s duplicate check — the
+real twin of the cap, not the 4-descriptor ancillary buffer `readLinuxOwnerAnchorRequest` reads
+into); the table test asserts it dominates every row's server and client descriptor counts, so the
+column is one constant plus a consistency check instead of 16 identical values.
 
 ### Consumers (one source, two sides)
 
@@ -150,12 +161,16 @@ constant plus a consistency check instead of 16 identical values.
    write a pin-bearing status without its pins; clause 3's "sends FDs when the old variant refused
    to" stays false. Reported as the one intentional semantic delta.
 4. **Loose fields stay loose.** Base tolerates unconstrained optional fields on several operations
-   (e.g. proofs on `start-helper-v2`, after-pid on `wait-reap`). Clause 3 forbids any per-operation
-   accept/reject change, so the rows reproduce the base tolerance exactly instead of tightening it;
-   the table test pins the tolerated cases as accepted.
+   (e.g. proofs on `start-helper-v2`, after-pid on `wait-reap`, an abort proof on
+   `retire-helper-v2` — the base `handleRetireHelper` gate never inspected that field). Clause 3
+   forbids any per-operation accept/reject change, so the rows reproduce the base tolerance exactly
+   instead of tightening it; the table test pins the tolerated cases as accepted.
 5. **Failure control.** No response field set, status, per-op accept/reject set, FD count, or
    timeout class changes; `responseFDs` for `lookup-helper-v2` is status-dependent by construction;
-   clients and servers read the same row for FD counts and timeouts.
+   clients and servers read the same row for FD counts, and every socket deadline takes its value
+   from the row (`linuxOwnerAnchorTimeoutFor`). One deadline is not socket-scoped: the
+   clone-cleanup worker's own timeout context (`anchor_server.go:1665`) keeps the bare
+   `linuxOwnerAnchorCleanupTimeout`, numerically identical to the row's cleanup class.
 
 ## Tests
 
@@ -180,20 +195,38 @@ the pre-refactor head):
 1. Per-operation accept/reject: for each of the 16 rows and hard-coded expectations (never read from
    the table), the table-consistent request is accepted while each forbidden field present, each
    required field absent, each wrong descriptor count, and each relational violation is rejected.
+   The rejection assertions go through `row.refuses` — the composition the server evaluates — so
+   deleting a term from `refuses` is red, in addition to the direct predicate assertions.
 2. Locally tolerated fields are accepted (edge-case semantics 4).
-2b. Each row's declared required and forbidden field names are pinned as strings
-   (`TestLinuxOwnerAnchorShapeTableFieldSets`), because the generated rejection cases can only
-   test the fields a row still declares: without this pin a row that silently drops a forbidden
-   field would widen the accept set and stay green.
+2b. Each row's declared required and forbidden field names are pinned as sorted sets
+   (`TestLinuxOwnerAnchorShapeTableFieldSets`; the presence check is order-independent, so the
+   declaration order is not contractual), because the generated rejection cases can only test the
+   fields a row still declares: without this pin a row that silently drops a forbidden field would
+   widen the accept set and stay green.
 3. Eight golden byte strings (one per former variant, every stamped field non-zero), the
    clone-cleanup key-override case, and the zero-valued `identity` case; each golden is captured
-   from the base tree and re-pinned through `baseResponse`.
+   from the base tree and re-pinned through `baseResponse`. The literals live in
+   `anchor_wire_shape_test.go` (base-compilable) and are asserted here.
 4. `linuxOwnerAnchorRequestFDCap` dominates every row's descriptor counts.
+5. The three operations that were literals are pinned against their pre-slice wire strings
+   (`TestLinuxOwnerAnchorShapeTableOperationLiterals`: `identity`, `register-process`, `wait-reap`);
+   no golden frame carries `wait-reap`.
+6. Every row's class resolves through `linuxOwnerAnchorTimeoutFor` to its class's production
+   deadline constant (`TestLinuxOwnerAnchorShapeTableTimeoutDeadlines`).
 
-Mutation matrix (WSL, each reverted): (a) one table row mutated (`register-gate-v2` FD 1→0,
-`wait-reap` FD 0→1, `stop-leaf-v2` timeout wait→request) ⇒ table test red; (b) one stamping field
-removed from `baseResponse` ⇒ the affected goldens red; (c) one JSON tag renamed ⇒ golden and wire
-tests red.
+Mutation matrix (WSL, implement/apply stage reverted in the tree, fix stage by `-overlay`; full logs
+in the evidence dir's `mutations.md` and `fix-mutations.txt`): (a) one table row mutated
+(`register-gate-v2` FD 1→0, `wait-reap` FD 0→1, `stop-leaf-v2` timeout wait→request) ⇒ table test
+red; (b) one stamping field removed from `baseResponse` ⇒ the affected goldens red; (c) one JSON tag
+renamed ⇒ the writer golden red (the stopping-answer frames carry no such field and stay green —
+measured, `mutations.md` #c); (d) one `refuses` term deleted (`presenceRejected`,
+`descriptorRejected` or `shapeRejected`) ⇒ table test red; (e) one relational clause deleted
+(gate helper validation, retire-cleared run-key generation, retire-aborted run id) ⇒ table test red,
+while the stop-leaf helper-validation clause is behaviour-equivalent to its fence check
+(`ValidateFor` validates the helper) and stays green; (f) an operation constant renamed ⇒
+`TestLinuxOwnerAnchorShapeTableOperationLiterals` red; (g) `abort_proof` added back to the
+retire-helper-v2 row ⇒ `TestLinuxOwnerAnchorShapeTableFieldSets` and
+`TestLinuxOwnerAnchorShapeTableAcceptsLocallyToleratedFields` red.
 
 ## Evidence plan
 
@@ -207,7 +240,7 @@ All foreground, final tree, counts and exit codes recorded:
 | build | `GOOS=windows go build ./...`, `GOOS=linux GOARCH=arm64 go build ./...` | host |
 | Linux package suite | `go test -count=1 -v ./internal/platform/` (records the `--- SKIP` list; 0 skips required in the new wire test) | WSL `Ubuntu-24.04` user `accept` |
 | writer inventory | `grep -c "func (anchor \*linuxOwnerAnchor) writeResponse"` = 1 and the 7 variants gone | this tree |
-| operation inventory | 16 rows; three literal ops now constants; `grep -rn '"identity"\|"register-process"\|"wait-reap"'` = 0 in owned files | this tree |
+| operation inventory | 16 rows; three literal ops now constants; `grep -rn '"identity"\|"register-process"\|"wait-reap"'` = 0 in the owned production files (the remaining hits are the three constant definitions in `anchor_types.go`, the literal pin in the table test, and the harness's deliberate base-compatible aliases) | this tree |
 | control-flow audit | base-vs-head mapping of every early return/fall-through/default in the touched paths | evidence file |
 | whitespace | `git diff --check` | host |
 | host-path leak | profile-directory grep over `git diff origin/main...HEAD` and both new files | host |
@@ -231,6 +264,13 @@ concurrently with another suite on this host.
   the column carries the `attached` count and the test hard-codes both.
 - **Descriptor-cap column**: uniform per-request value (3), realised as a table-adjacent constant
   plus a dominance assertion (P2-1's intent) instead of 16 duplicate row fields.
+- **`serveCloneCleanup` deadline value** (PD1): the call site reads
+  `linuxOwnerAnchorTimeoutFor(request.Operation)` and
+  `TestLinuxOwnerAnchorShapeTableTimeoutDeadlines` pins every row's class to its production deadline
+  constant, but no test observes the deadline actually set on that connection: replacing the one
+  expression with the bare request constant stays green (measured, `mut11`), because a 6-minute
+  cleanup deadline cannot be waited out in the unprivileged harness. Re-pin the call site by hand if
+  it moves.
 - **P2-2 scope**: helper-v2 rejections and the already-unified helper-v2 builder stay untouched, so
   the "one writer" property is anchor-scoped; `helper_v2_stop.go`/`helper_v2_server.go`/
   `helper_v2_protocol.go` are owned-but-unmodified with the reason above.
