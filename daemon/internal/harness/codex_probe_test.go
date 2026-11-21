@@ -124,6 +124,23 @@ func TestCodexProbeSchemaMismatchFailsClosed(t *testing.T) {
 	}
 }
 
+// TestCodexProbeRejectsNilContextWithoutCallingTheRunner pins the entry-level
+// guard. Its text is the shared helper's string by design, so the observable
+// pin is: no panic, no runner call, no promoted evidence.
+func TestCodexProbeRejectsNilContextWithoutCallingTheRunner(t *testing.T) {
+	runner := &codexFixtureRunner{}
+	capabilities, err := probeCodexExecutableWithRunner(nil, "codex", runner)
+	if err == nil || err.Error() != "harness probe context must not be nil" {
+		t.Fatalf("probeCodexExecutableWithRunner(nil) error = %v, want the entry-level guard", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("runner calls = %#v, want none for a nil context", runner.calls)
+	}
+	if capabilities.VersionKnown || capabilities.NativeVersion != "" || capabilities.TransportVerified || capabilities.Verified {
+		t.Fatalf("capabilities = %+v, want no capability from a nil context", capabilities)
+	}
+}
+
 func TestCodexProbeDoesNotParseFailedCommandOutput(t *testing.T) {
 	for _, test := range []struct {
 		name  string

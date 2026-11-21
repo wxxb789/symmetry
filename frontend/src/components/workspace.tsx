@@ -1,4 +1,4 @@
-import { AlertCircle, CircleCheck, Inbox, RefreshCw } from "lucide-react";
+import { AlertCircle, Inbox, RefreshCw } from "lucide-react";
 import type { ReactNode } from "react";
 import { errorMessage } from "../services/api";
 
@@ -43,21 +43,4 @@ export function RefreshButton({ fetching, refresh }: { fetching: boolean; refres
     <RefreshCw size={16} aria-hidden="true" className={fetching ? "loading-icon" : ""} />
     {fetching ? "Refreshing…" : "Refresh"}
   </button>;
-}
-
-const knownStatuses = new Set([
-  "active", "archived", "backlog", "ready", "in_progress", "in_review", "review", "done", "cancelled", "blocked", "todo",
-  // Runtime lifecycle states (the orchestration check constraint allows exactly these two).
-  "online", "offline"
-]);
-
-export function statusLabel(status: string): string {
-  return knownStatuses.has(status) ? status.replaceAll("_", " ") : `Unknown status${status ? `: ${status}` : ""}`;
-}
-
-export function StatusBadge({ status }: { status: string }) {
-  return <span className={`status-badge ${status === "done" ? "status-complete" : ""}`}>
-    {status === "done" && <CircleCheck size={12} aria-hidden="true" />}
-    {statusLabel(status)}
-  </span>;
 }

@@ -1,12 +1,15 @@
 defmodule SymmetryControlWeb.TaskGoalGuardControllerTest do
   use SymmetryControlWeb.ConnCase, async: false
 
+  import SymmetryControl.TestFixtures, only: [subject: 1, validation_profiles: 0]
+  import SymmetryControlWeb.TestConn, only: [assert_error: 3, operator_conn: 1]
+
+  use SymmetryControl.TestFixtures, command_opts: [validation_profiles: validation_profiles()]
+
   alias SymmetryControl.Goals
   alias SymmetryControl.Repo
   alias SymmetryControl.RequestHash
   alias SymmetryControl.Workspaces
-
-  @operator_token "test-operator-token"
 
   test "a queued Goal Task cannot be cancelled through the legacy Task command endpoint", %{
     conn: conn
@@ -128,36 +131,6 @@ defmodule SymmetryControlWeb.TaskGoalGuardControllerTest do
     admitted.response["task"]["id"]
   end
 
-  defp command_current(goal_id, kind, payload, opts \\ []) do
-    assert {:ok, goal} = Goals.fetch_goal(goal_id)
-    opts = Keyword.put_new(opts, :validation_profiles, validation_profiles())
-
-    Goals.command(
-      goal_id,
-      %{
-        schema_version: "symmetry.goal_command.v1",
-        mutation_id: Ecto.UUID.generate(),
-        expected_version: goal.version,
-        expected_revision: goal.current_revision,
-        kind: kind,
-        payload: payload
-      },
-      "operator:test",
-      opts
-    )
-  end
-
-  defp validation_profiles do
-    [
-      test: [
-        kind: :check,
-        profile_digest: "sha256:" <> String.duplicate("c", 64),
-        enabled: true,
-        allowed_runtime_ids: [Ecto.UUID.generate()]
-      ]
-    ]
-  end
-
   defp goal_work_item_id(goal_id) do
     assert {:ok, %{work_items: [item]}} = Goals.fetch_goal(goal_id)
     item.id
@@ -233,20 +206,5 @@ defmodule SymmetryControlWeb.TaskGoalGuardControllerTest do
       "description" => "A separate check is required.",
       "predicates" => [%{"id" => "check", "kind" => "check", "validator_profile" => "test"}]
     }
-  end
-
-  defp subject(repository_id) do
-    %{
-      "resource_id" => repository_id,
-      "commit" => String.duplicate("a", 40),
-      "tree_digest" => "sha256:" <> String.duplicate("4", 64)
-    }
-  end
-
-  defp operator_conn(conn),
-    do: put_req_header(conn, "authorization", "Bearer " <> @operator_token)
-
-  defp assert_error(conn, status, code) do
-    assert %{"error" => %{"code" => ^code}} = json_response(conn, status)
   end
 end
