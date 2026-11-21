@@ -1230,3 +1230,29 @@ instead of appended.
       are pinned by `daemon/internal/app/goal_delivery_test.go`:
       `TestAbandonGoalSessionBoundsOversizedUncertainReason` (the interior-invalid-byte case)
       and `TestBoundedGoalSessionUncertainReason` (the within-budget invalid-byte case).
+
+## Daemon state: test-only `ControlProjection` surface (rf-w3-08 survey)
+
+- [ ] Revalidate and remove `GoalSessionJournal.ControlProjection`
+      (`daemon/internal/state/goal_session.go:412`) together with its
+      `goalSessionControlProjection` type (`:308`, unexported by rf-w3-08). `git grep -nw
+      ControlProjection` matches only the method definition, the doc comment at `:411`, the doc
+      comment at `:185` that promises callers ("callers must use ControlProjection when building a
+      control request") which do not exist, and two in-package test call sites
+      (`goal_session_test.go:707`, `:1340`); there is no production consumer at this branch's head
+      or at its base. It was not deleted in the rf-w3-08 apply stage because the test that pins it,
+      `TestGoalSessionControlProjectionOmitsRawNativeIdentity`, is a contract-pinning proof that
+      the projection carries no raw native identity — deleting the surface would retire that test.
+      A follow-up owner must decide between wiring the intended production consumer and retiring
+      the surface together with its test under an explicit contract amendment.
+- [ ] The same retention question covers the other exported state methods whose signatures name
+      now-unexported types: `Store.CheckGoalSessionLineage`
+      (`daemon/internal/state/goal_session.go:576`, `goalSessionLineageStatusValue`) and
+      `Store.QueueLateGoalUsage` (`daemon/internal/state/goal_delivery.go:829`,
+      `lateGoalUsageLedger`). Both stay legal Go through inference (`status, err :=
+      store.CheckGoalSessionLineage(key)`), neither has an out-of-package caller at this branch's
+      head, and rf-w3-08 kept them rather than widening its slice; this entry tracks the retained
+      surface so a follow-up owner can decide unexport/retire/wire for all three together.
+      `Store.EnsureGoalSessionLineageAvailable` (`:592`, `goalSessionLineageKey`) is the same
+      shape; the W3-07 follow-up PR #215 removes it (the rf-w1-06 dead-code candidate above), so
+      its signature question resolves with that removal rather than here.
