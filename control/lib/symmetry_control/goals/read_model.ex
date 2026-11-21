@@ -50,7 +50,7 @@ defmodule SymmetryControl.Goals.ReadModel do
       :current_tasks,
       :current_runs,
       :accepted,
-      :work_items_by_id,
+      :current_work_items_by_id,
       :tasks_by_id,
       :runs_by_id,
       :evidence,
@@ -244,7 +244,7 @@ defmodule SymmetryControl.Goals.ReadModel do
       current_tasks: current_tasks,
       current_runs: current_runs,
       accepted: accepted,
-      work_items_by_id: Map.new(current_work_items, &{map_value(&1, :id), &1}),
+      current_work_items_by_id: Map.new(current_work_items, &{map_value(&1, :id), &1}),
       tasks_by_id: Map.new(tasks, &{map_value(&1, :id), &1}),
       runs_by_id: Map.new(runs, &{map_value(&1, :id), &1}),
       evidence: evidence,
@@ -1365,7 +1365,7 @@ defmodule SymmetryControl.Goals.ReadModel do
     work_item_id = map_value(task, :work_item_id)
     task_id = map_value(task, :id)
 
-    with %{} = item <- Map.get(projection.work_items_by_id, work_item_id),
+    with %{} = item <- Map.get(projection.current_work_items_by_id, work_item_id),
          true <- map_value(item, :orchestration_task_id) == task_id,
          false <- Map.has_key?(projection.accepted, work_item_id) do
       settlement_entry(projection, event, response, task, run, settlement, item, true)
@@ -1801,12 +1801,9 @@ defmodule SymmetryControl.Goals.ReadModel do
   end
 
   defp eligible_goal_evidence(projection) do
-    task_by_id = Map.new(projection.tasks, &{map_value(&1, :id), &1})
-    run_by_id = Map.new(projection.runs, &{map_value(&1, :id), &1})
-
     Enum.filter(projection.evidence, fn row ->
-      run = Map.get(run_by_id, map_value(row, :run_id))
-      task = run && Map.get(task_by_id, map_value(run, :task_id))
+      run = Map.get(projection.runs_by_id, map_value(row, :run_id))
+      task = run && Map.get(projection.tasks_by_id, map_value(run, :task_id))
 
       is_map(task) and map_value(task, :purpose) == "validate" and
         map_value(task, :goal_revision) == projection.current_revision and

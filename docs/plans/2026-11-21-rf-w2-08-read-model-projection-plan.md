@@ -36,7 +36,7 @@ the goal-revision context. Observable projection output must stay byte-identical
   | `current_work_item_ids` | the `MapSet` of current work-item ids (history assembly) |
   | `current_tasks`, `current_runs` | `current_goal_tasks/3` and the runs of those tasks |
   | `accepted` | `accepted_outcomes(current_outcomes)`, the by-work-item-id map |
-  | `work_items_by_id`, `tasks_by_id`, `runs_by_id` | the by-id maps the settlement receipt pass built locally (over `current_work_items`, all tasks, all runs) |
+  | `current_work_items_by_id`, `tasks_by_id`, `runs_by_id` | the by-id maps the settlement receipt pass built locally (over `current_work_items`, all tasks, all runs); the `current_*` prefix marks the one map over a filtered subset |
   | `settled_receipts` | `current_task_settlements(projection)` |
   | `execution`, `graph` | `execution_by_work_item/4` and `graph_projection/4`, computed once |
 
@@ -46,9 +46,15 @@ the goal-revision context. Observable projection output must stay byte-identical
 
 ## Function shapes: before → after
 
-Applied rule: a private function that today takes **three or more** values that live on the
-projection takes `projection` instead, keeping its genuinely per-row/per-candidate arguments
-(the settlement-receipt chain keeps `projection` first for the same reason). Functions below the
+Applied rule: a private function **on the argument-threading chain** takes `projection` instead when
+it today receives three or more projection-resident values threaded down from `project/2` through
+another converted function, keeping its genuinely per-row/per-candidate arguments
+(the settlement-receipt chain keeps `projection` first for the same reason). Deliberately **not**
+converted, although each also takes three or more projection-resident values: the three pure
+builders `graph_projection/4`, `execution_by_work_item/4` and `planning_execution_projection/3` —
+each is called once from `build_projection/2`, takes plain lists and returns one projection
+fragment, so swapping its arguments for `projection` would add coupling without removing a
+threaded call shape. Functions below the
 threshold keep their shape and read `projection.<field>` at the call site: `waiting_decision_blocker/2`,
 `stale_context_blocker/2`, `automatic_execution?/1`, `automatic_admission_blocker_replaced?/5`,
 `current_runtime_run?/2`, `latest_planning_task_id/2`, `planning_task?/2`, `matching_receipt_field/3`,
@@ -101,7 +107,8 @@ threshold keep their shape and read `projection.<field>` at the call site: `wait
 | `plan_decision_pending_acceptance?` | `/2` | `/1` |
 | `item_projection` | `/5` | `/2` (projection, item) |
 
-41 private functions collapse; the `project/2` → `fetch/1` → `graph/1` → `attention/1` surface keeps its
+42 private functions collapse (the 42 names in the 41 rows above; one row holds two names); the
+`project/2` → `fetch/1` → `graph/1` → `attention/1` surface keeps its
 signature and its output.
 
 `project/2` becomes: `build_projection/2` (loads, derives, fills `%Projection{}` including
@@ -153,14 +160,15 @@ Elixir 1.20.4, `MIX_ENV=test`, `MIX_TEST_PARTITION=rf-w2-08`, `PHX_SERVER`/`POST
 | --- | --- | --- |
 | format | `mix format --check-formatted` | exit 0 |
 | compile | `mix compile --warnings-as-errors` | exit 0, no warnings |
-| targeted suite | `mix test test/symmetry_control/goals_read_model_test.exs` | exit 0, `Result: 50 passed` |
-| full suite (conductor gate) | `mix test` (own `MIX_TEST_PARTITION=rf-w2-08`) | exit 2: `938/942 passed, 21 skipped, 4 failed`; all 4 are the `:portal_assets` cases of `SymmetryControlWeb.PortalControllerTest`, failing in `ConnCase` setup because the gitignored frontend bundle is not staged in this fresh worktree (the failure text itself documents `mix test --exclude portal_assets` as the host remedy and that CI stages the bundle) |
-| full suite, documented exclusion | `mix test --exclude portal_assets` | exit 2: `937/938 passed, 21 skipped, 4 excluded, 1 failed`; the failure is `AddOmoHarnessKindMigrationTest` "rolling the OmO kind back…" with `DBConnection.ConnectionError … connection not available and request was dropped from queue after 4000ms`; the isolated re-run of that file is exit 0 with `3 passed`, and the same shared-PostgreSQL host-load artifact is already recorded at `docs/archive/CLOSED-TODO.md:998-1000` |
+| targeted suite | `mix test test/symmetry_control/goals_read_model_test.exs` | exit 0, `Result: 51 passed` (apply stage, head `99cde951…`; the implement stage ran the same command at head `e254f025…` with `Result: 50 passed`) |
+| full suite (conductor gate) | `mix test` (own `MIX_TEST_PARTITION=rf-w2-08`) | implement stage, head `e254f025…`: exit 2, `938/942 passed, 21 skipped, 4 failed`; all 4 are the `:portal_assets` cases of `SymmetryControlWeb.PortalControllerTest`, failing in `ConnCase` setup because the gitignored frontend bundle is not staged in this fresh worktree (the failure text itself documents `mix test --exclude portal_assets` as the host remedy and that CI stages the bundle) |
+| full suite (apply-stage re-run) | `mix test` (own `MIX_TEST_PARTITION=rf-w2-08`) | apply stage, head `99cde951…`: exit 2, `951/955 passed, 21 skipped, 4 failed`; the same four `:portal_assets` prerequisite cases and no other failure (the run's totals grew from 942 to 955 because `bda93b11` — main's goal-schema validators — is now merged into this branch); the `AddOmoHarnessKindMigrationTest` connection-pool flake did not recur |
+| full suite, documented exclusion | `mix test --exclude portal_assets` | implement stage, head `e254f025…`: exit 2, `937/938 passed, 21 skipped, 4 excluded, 1 failed`; the failure is `AddOmoHarnessKindMigrationTest` "rolling the OmO kind back…" with `DBConnection.ConnectionError … connection not available and request was dropped from queue after 4000ms`; the isolated re-run of that file is exit 0 with `3 passed`, and the same shared-PostgreSQL host-load artifact is already recorded at `docs/archive/CLOSED-TODO.md:998-1000` |
 | whitespace | `git diff --check` | exit 0 |
-| user-path scan | `git diff origin/main...HEAD \| grep -i "users/"`; on the uncommitted tree `git diff` is clean and `git status --short --untracked-files=all` names only `control/lib/symmetry_control/goals/read_model.ex` and the plan file | 0 hits |
+| user-path scan | the contract's literal check `git diff origin/main...HEAD \| grep -i "users/"` returns **1** line, and that line is this row's own committed text (the quoted pattern self-matches; recorded by the 2026-11-21 simplify pass; the working-tree diff of the same literal returns 2 lines — this row's `-`/`+` pair). The substantive check uses a pattern that cannot match this row: `git diff origin/main...HEAD \| grep -icE "[Cc]:[\\/]Users"` | **0 hits** — no host path in the committed diff (0) nor in the working-tree diff (0); self-matches only: 1 committed / 2 worktree. `git status --short --untracked-files=all` names only `control/lib/symmetry_control/goals/read_model.ex`, `control/test/symmetry_control/goals_read_model_test.exs` and this plan file |
 
 Every suite run above was run alone, never concurrently with the differential dumps or another full
-suite (shared Postgres 100-connection cap); the two full-suite runs were sequential.
+suite (shared Postgres 100-connection cap); the three full-suite runs were sequential.
 
 ### Differential oracle (amendment P1-4, binding)
 
@@ -175,17 +183,21 @@ Throwaway and uncommitted, in the GDD scratch tree, no repository edit:
 - Runner: `RF_W2_08_DUMP=… RF_W2_08_FILES="test/symmetry_control/goals_read_model_test.exs"
   sh scratch/rf-w2-08-mix.sh run scratch/rf-w2-08-dump.exs` (same for `goals_test.exs`). The dump
   and the read-model file swap live in `scratch/rf-w2-08/capture.sh`, which snapshots the head
-  source by sha256, puts the base (`git show HEAD:…`) or head copy in place, runs the four dumps,
-  and restores the head copy.
+  source by sha256, puts the base (`git show <baseline>:…`; the baseline `4dd374b…` and the
+  pre-slice `bda93b11…` both carry the file as `d70d4dba…`) or head copy in place, runs the dumps,
+  and restores the head copy. The apply stage re-captured through
+  `scratch/rf-w2-08/apply-capture.sh` — same hook and same mechanism, with the base revision pinned
+  to `bda93b11` because `HEAD` now carries the slice.
 - The same hook runs unchanged on the base and head trees, so the comparison is
   implementation-independent: no source edit is needed to capture either side.
 - **Canonical form.** Each captured value is rendered through one normalization before `inspect/2`:
   map and struct keys are sorted and structs become `{:struct, Module, sorted_pairs}`; every value,
   nesting and list order is otherwise untouched. This is forced by the oracle, not chosen for
   convenience: `inspect/2` prints map keys in the VM's internal order, and two runs of the *same*
-  base code already differ on that order (measured: base run 1 vs base run 2 differ on 89/89
-  read-model lines before this normalization, and on 51 of 1335 `goals_test.exs` lines — including
-  ordering effects beyond key order — see the noise floor in the results). Key order is not observable behaviour of an Elixir
+  base code already differ on that order (implement-stage measurement: base run 1 vs base run 2
+  differ on 89/89 read-model lines before this normalization, and on 51 of 1335 `goals_test.exs`
+  lines; the apply stage widens the identical-code sample to six pairs per side and measures 79
+  base / 86 head noise lines — see the noise floor in the results). Key order is not observable behaviour of an Elixir
   map, so normalizing it cannot mask a projection change; a changed, added or missing key, value,
   count, blocker, attention reason or list order still changes the canonical text.
 - `goals_read_model_test.exs` builds every goal from hand-written maps with fixed ids and
@@ -199,8 +211,9 @@ Throwaway and uncommitted, in the GDD scratch tree, no repository edit:
   to be confined to the lines where identical base code already differs (the noise floor), with an
   explicit count of the byte-identical lines.
 
-Both dumps are captured **before** any edit (base) and again after the last edit (head), twice per
-side, and the counts and diffs are recorded here and in the stage report.
+Both dumps are captured **before** any edit (base) and again after the last edit (head): twice per
+side at the implement stage, four times per side in the apply-stage re-measurement, and the counts
+and diffs are recorded here and in the stage report.
 
 **Sensitivity control (planted red).** After the clean head capture, one blocker line is deleted
 from the head copy (`stale_context_blocker` dropped from `blockers/1`), the read-model dump is
@@ -208,35 +221,52 @@ retaken, and the diff against the clean head dump is required to be non-empty; t
 reverted and the source hash re-checked. A differential oracle that cannot see a removed blocker is
 not evidence.
 
-### Results (filled at the end of the stage)
+### Results (implement stage head `e254f025…`; re-measured by the apply stage at head `99cde951…`)
 
-Dumps (GDD scratch tree, `scratch/rf-w2-08/`): `base-rm-1/2.dump`, `head-rm-1/2.dump`,
-`base-goals-1/2.dump`, `head-goals-1/2.dump`, each ending with
+The numbers below are the **apply-stage re-measurement** of the applied head; the implement-stage
+values are named where they differ. The accepted apply-stage findings (one duplicated by-id
+derivation removed, one struct-field rename, one coverage pin) changed the source text, so the
+implement-stage hashes, dump counts and stage-report numbers no longer bind the shipped revision
+and are replaced here.
+
+Dumps (GDD scratch tree, `scratch/rf-w2-08/`): implement stage `base-rm-1/2.dump`, `head-rm-1/2.dump`,
+`base-goals-1/2.dump`, `head-goals-1/2.dump`; apply stage `ap-base-rm-1/2.dump`,
+`ap-head-rm-1/2.dump`, `ap-base-goals-1..4.dump`, `ap-head-goals-1..4.dump`, each ending with
 `# ExUnit total=… failures=0 excluded=0`.
 
 **Tier A — `goals_read_model_test.exs`, canonical byte comparison.**
 
 | Check | Command | Result |
 | --- | --- | --- |
-| determinism control | `diff head-rm-1.dump head-rm-2.dump` | exit 0, 0 bytes (90 lines = 80 `project:` + 9 `attention:` + summary) |
-| determinism control (base) | `diff base-rm-1.dump base-rm-2.dump` | exit 0, 0 bytes |
-| **base vs head** | `diff base-rm-1.dump head-rm-1.dump` | **exit 0, 0 bytes** over 89 value lines (80 `project:`, 9 `attention:`) |
+| determinism control (head) | `diff ap-head-rm-1.dump ap-head-rm-2.dump` | exit 0, 0 bytes (92 lines = 82 `project:` + 9 `attention:` + summary) |
+| determinism control (base) | `diff ap-base-rm-1.dump ap-base-rm-2.dump` | exit 0, 0 bytes |
+| **base vs head** | `diff ap-base-rm-1.dump ap-head-rm-1.dump` | **exit 0, 0 bytes** over 91 value lines (82 `project:`, 9 `attention:`) |
 
-Both sides ran `50 passed`; the base file sha256 is the `git show HEAD:` content
-(`d70d4dba…`) and the head file sha256 is `e254f025…`.
+Both sides ran `51 passed` (`# ExUnit total=51 failures=0 excluded=0`); the base file sha256 is the
+pre-slice content `d70d4dba…` (`bda93b11:` and `4dd374b:` agree) and the applied head file sha256 is
+`99cde951…`. The two extra `project:` lines over the implement stage's 80 are the coverage pin's two
+`project/2` calls; the implement stage measured the same 0-byte comparison over 89 value lines at
+`e254f025…` with 50 tests.
 
-**Tier B — `goals_test.exs`, noise-floor comparison (146 passed on both sides).**
+**Tier B — `goals_test.exs`, noise-floor comparison (146 passed per run; four dumps per side).**
 
 | Check | Lines |
 | --- | --- |
 | dump lines per run | 1335 (1332 `project:`, 2 `attention:`, 1 summary) |
-| base run 1 vs base run 2 (identical code) | 51 differ |
-| head run 1 vs head run 2 (identical code) | 45 differ |
-| base vs head | 47 differ, of which 31 are inside the identical-code noise floor |
-| identical in all four runs | 1255 |
+| identical-code pairs per side | 6, from four dumps per side (1-2, 1-3, 1-4, 2-3, 2-4, 3-4) |
+| noise base (union of the six base pairs) | 79 |
+| noise head (union of the six head pairs) | 86 |
+| noise union | 95 |
+| base vs head (base-1 vs head-1) | 46 |
+| base-vs-head lines inside the widened noise | 46 |
+| **base-vs-head lines outside the noise** | **0** |
+| identical across all eight dumps | 1240 |
 
-The 16 lines outside that particular pair's noise floor were inspected token by token. They are
-two input-order shapes, not projection logic:
+Widening the identical-code sample from one pair per side to six removes the need for the
+implement-stage outlier inspection: every base-vs-head difference also appears between two runs of
+identical code on the same side. The implement stage's single-pair measurement (noise 51/45, union
+64; base vs head 47, of which 31 inside the noise, 16 outliers = lines 436-443/910/1012/1199-1204)
+is superseded; the two classes it classified are the classes the widened noise reproduces:
 
 1. `purpose: "validate"` vs `"implement"` on the task a work item's execution projection selects
    (lines 436-443). The pick follows `latest_tasks_by_work_item/1`'s `{inserted_at, id}` order, and
@@ -245,17 +275,18 @@ two input-order shapes, not projection logic:
    list (lines 910, 1012, 1199-1204): the projection renders `records(related, :decisions, …)` in
    load order, and the read is unordered.
 
-**Controlled differential probe (fixed inputs, base vs head).** `scratch/rf-w2-08/probe-scenario.exs`
+**Controlled differential probe (fixed inputs, base vs applied head).** `scratch/rf-w2-08/probe-scenario.exs`
 builds one work item with two same-timestamp tasks (`implement`/`validate`, ids `task-a`/`task-b`)
-and a two-decision list, runs `project/2`, and prints the pick and the decision order. Base and head
-produce **identical values** on every line: the pick follows the larger id for both id orders and
+and a two-decision list, runs `project/2`, and prints the pick and the decision order. The base and
+the applied head run produce **byte-identical output** (`diff ap-probe-scenario-base.out
+ap-probe-scenario-head.out` exit 0, 0 bytes): the pick follows the larger id for both id orders and
 regardless of the input list order (`["validate"]` for `a=implement,b=validate`;
-`["implement"]` for `a=validate,b=implement`), the decision list preserves the input order, and the
-`completion`, `blocker_reasons`, `attention_reasons` and `allowed_actions` values are identical (the
-only text difference is `inspect/2` map key order). The difference class is therefore input-driven,
-which is what the Tier B outliers observed.
+`["implement"]` for `a=validate,b=implement`), the decision list preserves the input order, and
+`completion`, `blocker_reasons`, `attention_reasons` and `allowed_actions` match on every line.
+The difference class is therefore input-driven.
 
-**Flakiness reproduction on the real fixture.** The Tier B outlier test was identified by bisecting
+**Flakiness reproduction on the real fixture (implement stage, head `e254f025…`).** The Tier B
+outlier test was identified by bisecting
 `only_test_ids` over the suite (7 runs, `scratch/rf-w2-08/bisect.sh`):
 `"terminal producer, validation evidence, accepted outcome, and achieve close the Goal loop"`, 22
 `project/2` calls per run. Running *that single test* six times per side
@@ -272,10 +303,14 @@ The same code produces both variants, so the Tier B line differences are test-da
 this pre-existing flakiness is a *test-data* property and not the read model's contract is also why
 the differential oracle must not be run as an assertion inside the suite: it is evidence, not a gate.
 
-**Sensitivity control result.** With `stale_context_blocker` deleted from `blockers/1` on the head
-copy, the read-model dump run reports `ExUnit total=50 failures=1` and `diff head-rm-1.dump
-mutation-rm.dump` lists 14 changed dump lines (28 diff lines). The oracle therefore sees a one-line
-blocker change; the deletion was reverted and the source hash re-checked (`e254f025…`).
+**Sensitivity control result (apply stage, head `99cde951…`).** With `stale_context_blocker` deleted
+from `blockers/1` on the applied head copy, the read-model dump run reports `ExUnit total=51
+failures=1` (the failing test is `projects lifecycle separately from execution and accepted outcome
+receipts`, which asserts `"stale_context" in reasons`) and `diff ap-head-rm-1.dump ap-mut-rm-1.dump`
+lists 14 changed dump lines (28 diff lines over 7 hunks). The oracle therefore sees a one-line
+blocker change; the deletion was reverted and the source hash re-checked (`99cde951…`). The
+implement stage measured the same planted red at `e254f025…` with `ExUnit total=50 failures=1` and
+the same 14 changed lines.
 
 ## Design trade-offs
 
@@ -309,9 +344,26 @@ blocker change; the deletion was reverted and the source hash re-checked (`e254f
 - The other Credo `FunctionArity`/`CyclomaticComplexity` reports in the same file that F5 mentions
   beyond the converted set (for example `budget_blocker/5` internals): not argument-threading
   defects of this slice.
-- New tests: the oracle is the existing 50 read-model tests plus the differential dump; no test may
-  be weakened, and no new assertion is needed to observe output that stayed identical. If the
-  differential check had shown a difference, the fix would be in the implementation, not in a test.
+- New tests: the oracle is the existing read-model tests plus the differential dump; no test may be
+  weakened, and no new assertion was needed during implementation because the differential check
+  observed identical output. If the differential check had shown a difference, the fix would have
+  been in the implementation, not in a test. The apply stage added exactly one coverage test (see
+  the apply-stage record below) for a load-bearing split that had no fixture; no existing assertion
+  was changed, weakened or removed.
+
+## Apply stage (accepted simplify findings, 2026-11-21)
+
+Two code changes (one duplicated derivation removed, one struct-field rename), three record
+corrections and one coverage pin, applied to the owned set only and then re-measured:
+
+| Finding | Change | Verification |
+| --- | --- | --- |
+| duplicate derivation | `eligible_goal_evidence/1` no longer rebuilds `tasks_by_id`/`runs_by_id`; it reads `projection.tasks_by_id`/`projection.runs_by_id` (2 lines fewer) | same by-id maps, same key function; re-measured dumps below |
+| misleading name | struct field `work_items_by_id` → `current_work_items_by_id` (defstruct, builder, single reader) so the `current_*` prefix matches the struct's own rule for filtered subsets | rename only; re-measured dumps below |
+| record rule (P-1) | the conversion rule above now names the argument-threading chain and lists the three deliberately unconverted builders (`graph_projection/4`, `execution_by_work_item/4`, `planning_execution_projection/3`) | rule text checked against the head source: 41 rows, 42 names, all 42 take `projection` |
+| record count (P-2) | "41 private functions collapse" → 42 (42 names in 41 rows; one row holds two names) | table recount by script over the head source |
+| record scan (P-3) | the user-path row records the measured 1-line self-match of the contract's literal pattern (spelled `users[/]` here so this row cannot match it) and a substantive check whose pattern cannot match the row | `git diff origin/main...HEAD \| grep -icE "[Cc]:[\\/]Users"` = 0 and the same scan over the working-tree diff = 0; the contract's literal scan self-matches only (1 committed / 2 worktree lines, the gate row's `-`/`+` pair) |
+| coverage pin | one new test: `a nonterminal Task from a prior revision splits the two readiness gates by task scope` | two-sided mutation check: flipping the candidates gate to `projection.current_tasks` fails only this test at its first assertion, flipping the integration gate to `projection.tasks` fails only this test at its second assertion; both mutations reverted, source hash re-checked (`99cde951…`) |
 
 ## Contract-preserving decisions taken without a guess
 
