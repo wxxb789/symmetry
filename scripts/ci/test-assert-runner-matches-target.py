@@ -9,7 +9,6 @@ import subprocess
 import sys
 import unittest
 
-
 SCRIPT = pathlib.Path(__file__).with_name("assert-runner-matches-target.py")
 SPEC = importlib.util.spec_from_file_location("assert_runner_matches_target", SCRIPT)
 GUARD = importlib.util.module_from_spec(SPEC)
@@ -58,9 +57,8 @@ class ParseTests(unittest.TestCase):
 
     def test_malformed_triples_are_rejected(self):
         for triple in ("x86_64-linux", "x86_64-pc-gnu", "foo-pc-linux", "x86_64-pc-linux-windows", "x86_64-pc-"):
-            with self.subTest(triple=triple):
-                with self.assertRaises(GUARD.TargetError):
-                    GUARD.parse_target(triple)
+            with self.subTest(triple=triple), self.assertRaises(GUARD.TargetError):
+                GUARD.parse_target(triple)
 
 
 class CommandLineTests(unittest.TestCase):
@@ -70,9 +68,7 @@ class CommandLineTests(unittest.TestCase):
         self.assertIn("verified runner matches pinned Pi target x86_64-pc-linux-gnu", result.stdout)
 
     def test_environment_variables_inject_the_uname_values(self):
-        result = run_guard(
-            LINUX_TARGET, env={"PI_RUNNER_SYSTEM": "Linux", "PI_RUNNER_MACHINE": "x86_64"}
-        )
+        result = run_guard(LINUX_TARGET, env={"PI_RUNNER_SYSTEM": "Linux", "PI_RUNNER_MACHINE": "x86_64"})
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_windows_runner_accepts_the_windows_triple(self):

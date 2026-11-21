@@ -39,7 +39,7 @@ export function ProjectsPage() {
         onClick={() => { setNotice(null); setCreating(true); }}><Plus size={16} aria-hidden="true" />New project</button>
       <RefreshButton fetching={query.isFetching} refresh={refresh} />
     </PageHeading>
-    <NoticeLine notice={notice} onDismiss={() => setNotice(null)} />
+    <NoticeLine notice={notice} onDismiss={() => { setNotice(null); }} />
     {query.isPending && <LoadingState label="Loading projects…" />}
     {query.isError && <ErrorState error={query.error} retry={refresh} stale={query.data !== undefined} />}
     {query.data && (query.data.projects.length === 0
@@ -67,7 +67,7 @@ export function ProjectsPage() {
         void reRead();
       }}
       onRefused={(message) => { setCreating(false); setNotice({ tone: "alert", text: message }); void reRead(); }}
-      onClose={() => setCreating(false)} />}
+      onClose={() => { setCreating(false); }} />}
   </>;
 }
 
@@ -109,7 +109,7 @@ export function ProjectPage() {
         <RefreshButton fetching={query.isFetching} refresh={refresh} />
       </div>
     </PageHeading>
-    <NoticeLine notice={notice} onDismiss={() => setNotice(null)} />
+    <NoticeLine notice={notice} onDismiss={() => { setNotice(null); }} />
     {query.isPending && <LoadingState label="Loading project…" />}
     {query.isError && <ErrorState error={query.error} retry={refresh} stale={query.data !== undefined} />}
     {query.data && !project && <EmptyState title="Project not found">This project is unavailable or you no longer have access. <Link to="/projects">View all projects</Link>.</EmptyState>}
@@ -127,16 +127,16 @@ export function ProjectPage() {
     </>}
     <p className="sr-only" role="status">{query.isFetching && !query.isPending ? "Refreshing project" : ""}</p>
     {versioned !== null && settings && <ProjectEditor project={versioned} api={application.api} csrf={csrf}
-      onWriteStart={() => setPendingWrites((count) => count + 1)}
-      onWriteSettled={() => setPendingWrites((count) => Math.max(0, count - 1))}
+      onWriteStart={() => { setPendingWrites((count) => count + 1); }}
+      onWriteSettled={() => { setPendingWrites((count) => Math.max(0, count - 1)); }}
       onSaved={(_receipt, text) => { setSettings(false); setNotice({ tone: "status", text }); void reRead(); }}
       onRefused={(message) => { setSettings(false); setNotice({ tone: "alert", text: message }); void reRead(); }}
-      onClose={() => setSettings(false)} />}
+      onClose={() => { setSettings(false); }} />}
     {project !== undefined && creatingWork && <WorkItemEditor presentation="page" project={project} item={null} api={application.api} csrf={csrf}
-      onWriteStart={() => setPendingWrites((count) => count + 1)}
-      onWriteSettled={() => setPendingWrites((count) => Math.max(0, count - 1))}
+      onWriteStart={() => { setPendingWrites((count) => count + 1); }}
+      onWriteSettled={() => { setPendingWrites((count) => Math.max(0, count - 1)); }}
       onSaved={(_receipt, text) => { setCreatingWork(false); setNotice({ tone: "status", text }); void reRead(); }}
       onRefused={(message) => { setCreatingWork(false); setNotice({ tone: "alert", text: message }); void reRead(); }}
-      onClose={() => setCreatingWork(false)} />}
+      onClose={() => { setCreatingWork(false); }} />}
   </>;
 }

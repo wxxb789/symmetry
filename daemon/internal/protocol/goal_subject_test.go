@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"testing"
 )
 
@@ -228,5 +229,54 @@ func TestNormalizeJSONStringEscapesLeavesNonC0TokensUnchanged(t *testing.T) {
 	input := []byte(`"\ufffd"`)
 	if got := normalizeJSONStringEscapes(input); !bytes.Equal(got, input) {
 		t.Fatalf("non-C0 escape token = %q, want %q", got, input)
+	}
+}
+
+// TestValidateUUIDPinsRejectionMessages pins the exact rejection message for
+// every admission_id rejection class. The strings are the byte-identity
+// contract for the wire-validator unification: this table must stay green when
+// the validator body becomes a policy-driven delegate.
+func TestValidateUUIDPinsRejectionMessages(t *testing.T) {
+	const field = "admission_id"
+	const uuid = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+	canonical := fmt.Sprintf("%s must be a canonical UUID", field)
+	lowerHex := fmt.Sprintf("%s must use lowercase hexadecimal UUID digits", field)
+	version := fmt.Sprintf("%s must use a supported UUID version", field)
+	variant := fmt.Sprintf("%s must use a supported UUID variant", field)
+
+	for _, test := range []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{name: "valid", value: uuid},
+		{name: "too short", value: uuid[:35], want: canonical},
+		{name: "36 bytes 35 runes", value: uuid[:15] + "é" + uuid[17:], want: canonical},
+		{name: "misplaced dash", value: uuid[:8] + "0" + uuid[9:], want: canonical},
+		{name: "uppercase hex digit", value: uuid[:15] + "A" + uuid[16:], want: lowerHex},
+		{name: "non-hex lowercase", value: uuid[:16] + "g" + uuid[17:], want: canonical},
+		{name: "non-hex uppercase outside A-F", value: uuid[:16] + "Z" + uuid[17:], want: canonical},
+		{name: "unsupported version", value: uuid[:14] + "0" + uuid[15:], want: version},
+		{name: "version six above the supported range", value: uuid[:14] + "6" + uuid[15:], want: version},
+		{name: "unsupported variant", value: uuid[:19] + "0" + uuid[20:], want: variant},
+		{name: "variant c above the supported range", value: uuid[:19] + "c" + uuid[20:], want: variant},
+		{name: "version and variant both unsupported", value: uuid[:14] + "0" + uuid[15:19] + "0" + uuid[20:], want: version},
+		{name: "length beats uppercase", value: uuid[:15] + "A" + uuid[16:35], want: canonical},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateUUID(test.value, field)
+			if test.want == "" {
+				if err != nil {
+					t.Fatalf("validateUUID(%q, %q) error = %v, want accept", test.value, field, err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("validateUUID(%q, %q) accepted, want %q", test.value, field, test.want)
+			}
+			if got := err.Error(); got != test.want {
+				t.Fatalf("validateUUID(%q, %q) error = %q, want %q", test.value, field, got, test.want)
+			}
+		})
 	}
 }
