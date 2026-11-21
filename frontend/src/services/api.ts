@@ -633,9 +633,6 @@ function request<A>(
   // the HTTP status rather than a served member (a replayed chat message
   // answers 200, a created one 201).
   decode: (body: Uint8Array, status: number) => Effect.Effect<A, unknown>,
-  // A refused write answers with one of the two refusal errors: the server's
-  // typed `ServerRefusal` for every control/chat surface, or the Goal command's
-  // `MutationRefused` when the caller passes `"mutation"`.
   surface: RefusalSurface = "server",
 ): Effect.Effect<A, ApiError> {
   return Effect.gen(function* () {

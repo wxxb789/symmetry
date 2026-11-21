@@ -113,6 +113,20 @@ describe("read boundary", () => {
     expect(readRetry(0, failure)).toBe(false);
   });
 
+  it("classifies a 401 write's expiry from its status when its body cannot be read", async () => {
+    // An expiry answer is classified from its status alone: its body is never
+    // the refusal envelope, so an unreadable one must not turn the session
+    // failure into a transport failure (or a retry).
+    const body = new ReadableStream({ start(controller) { controller.error(new Error("body read failed")); } });
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(body, { status: 401 }));
+    const failure = await createApi(fetcher)
+      .updateWorkItem(workItemId, { version: 1, title: "Expiry probe" }, "csrf-token", new AbortController().signal)
+      .then(() => null, (error: unknown) => error);
+    expect(failure).toBeInstanceOf(Unauthenticated);
+    expect(failure).toMatchObject({ message: "Your session has ended. Sign in to continue." });
+    expect(failure).not.toBeInstanceOf(Network);
+  });
+
   it("marks a server fault retryable so a command keeps its frozen intent", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response("{}", { status: 500 }));
     const api = createApi(fetcher);
@@ -232,6 +246,23 @@ describe("goal command boundary", () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ goal_id: goalId, mutation_id: envelope.mutation_id, goal: { id: goalId }, event: { id: envelope.mutation_id, sequence: 2, kind: "pause", revision: 1 } }), { status: 200 }));
     const receipt = await postGoalCommand(fetcher, "csrf", goalId, envelope);
     expect(receipt).toMatchObject({ goal_id: goalId, mutation_id: envelope.mutation_id });
+  });
+
+  it("carries an accepted write's receipt on both command paths and refuses a receiptless creation", async () => {
+    // One body, two calls: each call needs its own Response (a body is consumed once).
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({ goal_id: goalId, mutation_id: envelope.mutation_id, goal: { id: goalId } }), { status: 201 })));
+    const command = await postGoalCommand(fetcher, "csrf", goalId, envelope);
+    expect(command).toMatchObject({ goal_id: goalId, mutation_id: envelope.mutation_id });
+    // The creation path decodes the same receipt and percent-encodes its
+    // project id into the path.
+    const created = await postGoalCreation(fetcher, "csrf", "p x", { schema_version: "symmetry.goal_create.v1" });
+    expect(created).toMatchObject({ goal_id: goalId, mutation_id: envelope.mutation_id });
+    expect(fetcher.mock.calls[1]?.[0]).toBe("/portal/api/projects/p%20x/goals");
+    // D6 holds on this path too: a 2xx without the receipt is not a success.
+    const receiptless = vi.fn<typeof fetch>().mockResolvedValue(new Response("{}", { status: 200 }));
+    const failure = await postGoalCreation(receiptless, "csrf", "p1", { schema_version: "symmetry.goal_create.v1" }).then(() => null, (error: unknown) => error);
+    expect(failure).toBeInstanceOf(UnexpectedResponse);
+    expect(failure).toMatchObject({ message: "The server response could not be read safely. Refresh or contact your operator." });
   });
 
   it("keeps an undescribed command 403 on the shared session-protection message", async () => {

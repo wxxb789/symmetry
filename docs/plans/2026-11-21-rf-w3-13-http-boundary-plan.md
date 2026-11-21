@@ -161,6 +161,7 @@ moves.
 | D8 | other statuses | `statusError`/`mutationStatusError` mapping unchanged (D1 excepted) | existing control 403 `:277`; mutation (d) |
 | D9 | fetch/body-read rejection | `Network` "Cannot reach the server. Check your connection and try again." in both paths; the frozen envelope is untouched (the same `JSON.stringify(init.body)` bytes) | existing `Network` cases; `detail.tsx` frozen-envelope tests |
 | D10 | failed GET | reads no body (the GET branch reads `arrayBuffer()` only when `ok`) | existing `:100-105` body-read failure case |
+| D11 | expiry answer whose body cannot be read (apply-stage record 2026-11-21, not a contract row) | the 302/303/`opaqueredirect`/401 classification runs before the body read on every path, so an expiry answer is classified from its status alone and its body is never read: an unreadable one cannot produce `Network`, and a body-read failure under any other status keeps the D9 mapping | new `api.test.ts` case "classifies a 401 write's expiry from its status when its body cannot be read" |
 
 Additional invariants: the write request sends the same method, headers (`Accept`,
 `content-type`, `x-csrf-token`), `credentials: "same-origin"`, `cache: "no-store"`,
@@ -344,3 +345,62 @@ entry naming this slice, the deleted names or `api.ts` line numbers, so it is un
 other document cites `api.ts` by line number (the only `api.ts:` citations in the tree live in
 historical `docs/evaluations/model-routing/*` and `docs/evidence/goal-0007c-*` records). The
 contract file is left unchanged for the conductor to archive. Nothing is committed.
+
+## Apply-stage note (2026-11-21, simplify apply)
+
+Conductor brief: accept every simplify finding that stays inside this contract's owned set and
+weakens no test/type/validation/permission; reject the others with the reason kept. The simplify
+answer reviewed `52bdffd..3f1163e` (this slice stacked on W3-12/PR #190); its five findings:
+
+| # | file | disposition | what changed / reason kept |
+| --- | --- | --- | --- |
+| 1 | `frontend/src/services/api.ts` (the `surface` parameter comment, `:636-638` before this stage) | **APPLIED** | the three-line comment deleted; the `RefusalSurface` type doc above the function carries the same rule. |
+| 2 | `frontend/src/features/connections/resources.tsx:460-468` | **REJECTED** | file outside this contract's owned set — `features/connections/resources.tsx` is W3-12's (delivered by PR #190) — and no conductor amendment extends the set. Not applied; the duplicated kind-default derivation stands. Route: the W3-12 branch/#190, or an explicit extension here. |
+| 3 | `frontend/src/features/connections/connections.tsx:279-281`; `frontend/src/features/work/assignment.tsx:202,268-270` | **REJECTED** | needs `connections.tsx` (W3-12 owns it as "import line only") and `assignment.tsx` (W3-12's explicit non-goal; W4-10 owns it); no amendment extends the set. Not applied; the two hand-written clear-then-restore copies stand. |
+| 4 | `frontend/src/services/api.test.ts` (goal command boundary) | **APPLIED** | one new case: a 2xx receipt decodes on both command functions, the creation path percent-encodes its project id, and a receiptless creation 2xx is refused (D6). |
+| 5 | the boundary's expiry/body-read order vs D7/D9 | **APPLIED as its recommended option (a)** | no behaviour change. The shipped boundary classifies an expiry answer from its status alone before reading the body — what D7/Change (4) require ("401 → `Unauthenticated`, byte for byte") — so the precedence is recorded as new row **D11** above and pinned by one new case. Option (b) (body read before the expiry checks) was not taken: it makes a 401 write whose body cannot be read produce `Network`, contradicting D7/Change (4). The contract file is unchanged; D11 is this stage's record, not a contract row. |
+
+Refreshed numbers (single source = this plan; the implement-stage tables above remain that
+stage's record and are superseded by this note):
+
+| value | implement record | on the final tree |
+| --- | --- | --- |
+| `api.ts` line count | 1,044 → 1,042 | **1,039** (apply: −3) |
+| `api.ts` numstat vs `77861e00` | +131/−133 (−2) | **+128/−133 (−5)** |
+| `api.ts` refs after the deletion point | `goalReceipt :706-709`, `goalCommand :964-980`, entry points `:982-1004` | `:703-706`, `:961-977`, `:979-1001` (−3); refs before `:636` (`:559`, `:562`, `:598-626`) unchanged |
+| `api.test.ts` LOC | 410 → 472 | **503** (apply +31/−0; vs base +95/−2) |
+| `api.test.ts` declared cases | 30 → 34 | **36** (apply +2) |
+| focused suites | 3 files / 159 tests | **3 files / 161 tests** |
+| full suite | 21 files / 528 tests | **21 files / 530 tests** |
+
+### Gates (final tree, uncommitted; foreground, serialized; no measurement harness beside a suite)
+
+| gate | command | exit | counts |
+| --- | --- | ---: | --- |
+| typecheck | `pnpm --pm-on-fail=ignore --filter @symmetry/frontend typecheck` | 0 | `tsc --noEmit`, no output, 2.71 s |
+| lint | `pnpm --pm-on-fail=ignore --filter @symmetry/frontend lint` | 0 | 227 problems (0 errors, 227 warnings); `--max-warnings 229` untouched, 36.92 s |
+| focused suites | `… exec vitest run src/services/api.test.ts src/features/goals/goal-attention.test.tsx src/app/application.test.ts` | 0 | 3 files / 161 tests passed, 18.18 s |
+| full suite | `pnpm --pm-on-fail=ignore --filter @symmetry/frontend test` | 0 | 21 files / 530 tests passed, 35.20 s |
+| the touched suite alone | `… vitest run src/services/api.test.ts` | 0 | 42 passed (36 declared cases) |
+| diff hygiene | `git diff --check` | 0 | clean |
+
+### Deletion greps / census (re-run by this stage)
+
+| grep | result |
+| --- | --- |
+| `git grep -nE "\bpostPortalCommand\b\|CommandErrorBody" -- frontend/src` | 0 lines (exit 1) |
+| `git grep -nE "\brefusal\(" -- frontend/src/services/api.ts` | 0 lines (exit 1) |
+| `git grep -n "TextDecoder" -- frontend/src/services/api.ts` | 1 (`:562`, `decodeBodyText`; before the apply's deletion point) |
+| `git grep -n "response\.text()" -- frontend/src` | 1 (the comment at `:559`); 0 code uses |
+| `git grep -n "new AbortController" -- frontend/src/services/api.ts` | 0 (the boundary mints none) |
+| `git grep -n "new AbortController" -- frontend/src/services/api.test.ts` | 31 (the file's per-case test signal, +1 from the new pin) |
+
+### New-pin flips (each applied alone, run, reverted; sha256 restored)
+
+`sha256sum -c` after the last revert printed `frontend/src/services/api.ts: OK`, and the touched
+suite passed again on the restored bytes.
+
+| flip | applied mutation | witness | result |
+| --- | --- | --- | --- |
+| (f) | `postGoalCreation` drops `encodeURIComponent(projectId)` | `vitest run src/services/api.test.ts -t "carries an accepted write's receipt on both command paths"` | exit 1, 1 failed / 41 skipped — `expected '/portal/api/projects/p x/goals' to be '/portal/api/projects/p%20x/goals'` |
+| (g) | the early `status === 401` classification removed (the option-(b) shape) | `vitest run src/services/api.test.ts -t "classifies a 401 write's expiry from its status"` | exit 1, 1 failed / 41 skipped — `expected Network: Cannot reach the server… to be an instance of Unauthenticated` |
