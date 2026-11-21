@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { failureMode } from "../features/planning/write-policy";
-import { createApi, Forbidden, Network, postGoalCommand, postPortalCommand, readRetry, refusalNotice, ServerRefusal, Unauthenticated, UnexpectedResponse, Validation, type ActionId, type Api, type ExecutionGeneration } from "./api";
+import { createApi, Forbidden, Network, postGoalCommand, postGoalCreation, readRetry, refusalNotice, ServerRefusal, Unauthenticated, UnexpectedResponse, Validation, type ActionId, type Api, type ExecutionGeneration } from "./api";
+import { MutationRefused } from "./commands";
 import { readWorkDetail } from "./api.fixtures";
 
 const workspace = {
@@ -112,6 +113,20 @@ describe("read boundary", () => {
     expect(readRetry(0, failure)).toBe(false);
   });
 
+  it("classifies a 401 write's expiry from its status when its body cannot be read", async () => {
+    // An expiry answer is classified from its status alone: its body is never
+    // the refusal envelope, so an unreadable one must not turn the session
+    // failure into a transport failure (or a retry).
+    const body = new ReadableStream({ start(controller) { controller.error(new Error("body read failed")); } });
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(body, { status: 401 }));
+    const failure = await createApi(fetcher)
+      .updateWorkItem(workItemId, { version: 1, title: "Expiry probe" }, "csrf-token", new AbortController().signal)
+      .then(() => null, (error: unknown) => error);
+    expect(failure).toBeInstanceOf(Unauthenticated);
+    expect(failure).toMatchObject({ message: "Your session has ended. Sign in to continue." });
+    expect(failure).not.toBeInstanceOf(Network);
+  });
+
   it("marks a server fault retryable so a command keeps its frozen intent", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response("{}", { status: 500 }));
     const api = createApi(fetcher);
@@ -180,6 +195,36 @@ describe("read boundary", () => {
   });
 });
 
+describe("request cancellation", () => {
+  it("aborts the in-flight body download when the consumer cancels during the read", async () => {
+    // Fetch and body read share one signalled step, so a cancel that lands
+    // after the fetch resolved still aborts the fetch signal (and, in a
+    // browser, the response stream with it). A controller-free second step
+    // would leave the body downloading. The response is hand-built because the
+    // test environment's `Response` starts pulling its stream at construction,
+    // which would fire before the boundary is actually reading.
+    let requestSignal: AbortSignal | null | undefined;
+    const download = Promise.withResolvers<ArrayBuffer>(); // never settles: the read is still in flight
+    const read = vi.fn(() => download.promise);
+    const fetcher = vi.fn<typeof fetch>().mockImplementation((_input, init) => {
+      requestSignal = init?.signal;
+      const response = {
+        type: "basic",
+        status: 200,
+        ok: true,
+        arrayBuffer: read,
+      } as unknown as Response;
+      return Promise.resolve(response);
+    });
+    const controller = new AbortController();
+    const pending = createApi(fetcher).workspace(null, controller.signal);
+    await vi.waitFor(() => { expect(read).toHaveBeenCalledTimes(1); });
+    controller.abort();
+    await expect(pending).rejects.toBeDefined();
+    expect(requestSignal?.aborted).toBe(true);
+  });
+});
+
 describe("work-item receipts", () => {
   it("sends the create draft verbatim and decodes the server's disposition", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ disposition: "replayed", work_item: { id: workItemId } })));
@@ -210,7 +255,7 @@ describe("goal command boundary", () => {
     const failure = await postGoalCommand(fetcher, "csrf", goalId, envelope).then(() => null, (error: unknown) => error);
     expect(failure).toBeInstanceOf(Unauthenticated);
     // The Goal creation path shares the transport.
-    const created = await postPortalCommand(fetcher, "csrf", "/portal/api/projects/p1/goals", { schema_version: "symmetry.goal_create.v1" }).then(() => null, (error: unknown) => error);
+    const created = await postGoalCreation(fetcher, "csrf", "p1", { schema_version: "symmetry.goal_create.v1" }).then(() => null, (error: unknown) => error);
     expect(created).toBeInstanceOf(Unauthenticated);
   });
 
@@ -233,6 +278,84 @@ describe("goal command boundary", () => {
     expect(receipt).toMatchObject({ goal_id: goalId, mutation_id: envelope.mutation_id });
   });
 
+  it("carries an accepted write's receipt on both command paths and refuses a receiptless creation", async () => {
+    // One body, two calls: each call needs its own Response (a body is consumed once).
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({ goal_id: goalId, mutation_id: envelope.mutation_id, goal: { id: goalId } }), { status: 201 })));
+    const command = await postGoalCommand(fetcher, "csrf", goalId, envelope);
+    expect(command).toMatchObject({ goal_id: goalId, mutation_id: envelope.mutation_id });
+    // The creation path decodes the same receipt and percent-encodes its
+    // project id into the path.
+    const created = await postGoalCreation(fetcher, "csrf", "p x", { schema_version: "symmetry.goal_create.v1" });
+    expect(created).toMatchObject({ goal_id: goalId, mutation_id: envelope.mutation_id });
+    expect(fetcher.mock.calls[1]?.[0]).toBe("/portal/api/projects/p%20x/goals");
+    // D6 holds on this path too: a 2xx without the receipt is not a success.
+    const receiptless = vi.fn<typeof fetch>().mockResolvedValue(new Response("{}", { status: 200 }));
+    const failure = await postGoalCreation(receiptless, "csrf", "p1", { schema_version: "symmetry.goal_create.v1" }).then(() => null, (error: unknown) => error);
+    expect(failure).toBeInstanceOf(UnexpectedResponse);
+    expect(failure).toMatchObject({ message: "The server response could not be read safely. Refresh or contact your operator." });
+  });
+
+  it("keeps an undescribed command 403 on the shared session-protection message", async () => {
+    const message = "This change was refused. If you signed in elsewhere, refresh the page and try again.";
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(() => Promise.resolve(new Response("{}", { status: 403 })));
+    const refused = await postGoalCommand(fetcher, "csrf", goalId, envelope).then(() => null, (error: unknown) => error);
+    expect(refused).toBeInstanceOf(Forbidden);
+    expect(refused).toMatchObject({ message });
+    // The Goal creation path shares the boundary: the same answer, the same text.
+    const created = await postGoalCreation(fetcher, "csrf", "p1", { schema_version: "symmetry.goal_create.v1" }).then(() => null, (error: unknown) => error);
+    expect(created).toBeInstanceOf(Forbidden);
+    expect(created).toMatchObject({ message });
+  });
+
+  it("degrades a command refusal that cannot name itself to the status mapping", async () => {
+    // `code`/`message` are non-empty members on both surfaces: an empty pair is
+    // not a described refusal, so the 403 answers the session-protection message.
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({ error: { code: "", message: "" } }), { status: 403 })));
+    const refused = await postGoalCommand(fetcher, "csrf", goalId, envelope).then(() => null, (error: unknown) => error);
+    expect(refused).toBeInstanceOf(Forbidden);
+    expect(refused).toMatchObject({ message: "This change was refused. If you signed in elsewhere, refresh the page and try again." });
+  });
+
+  it("carries a described command refusal's own members into MutationRefused", async () => {
+    const body = JSON.stringify({
+      error: {
+        code: "stale",
+        message: "resource changed since it was loaded",
+        fields: { title: ["stale"] },
+        current_version: 9,
+        current_revision: 3,
+        allowed_actions: ["resume"],
+        details: { reason: "stale" },
+      },
+    });
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(() => Promise.resolve(new Response(body, { status: 409 })));
+    const refused = await postGoalCommand(fetcher, "csrf", goalId, envelope).then(() => null, (error: unknown) => error);
+    expect(refused).toBeInstanceOf(MutationRefused);
+    // Exactly the command members: the read surface's `fields` never reaches a
+    // command's `details`.
+    expect((refused as MutationRefused).details).toEqual({ current_version: 9, current_revision: 3, allowed_actions: ["resume"], details: { reason: "stale" } });
+    expect((refused as MutationRefused).stale).toBe(true);
+    // The same body on the one parser's other surface keeps the read members.
+    const control = await createApi(fetcher)
+      .cancelWork(workItemId, 2 as ExecutionGeneration, "action-1" as ActionId, "csrf", new AbortController().signal)
+      .then(() => null, (error: unknown) => error);
+    expect(control).toBeInstanceOf(ServerRefusal);
+    expect(control).toMatchObject({ status: 409, code: "stale", fields: { title: ["stale"] } });
+  });
+
+  it("rejects invalid UTF-8 bytes in an accepted write instead of announcing U+FFFD", async () => {
+    const body = new Uint8Array([
+      ...new TextEncoder().encode(`{"goal_id":"${goalId}","mutation_id":"safe`),
+      0xff,
+      ...new TextEncoder().encode('"}'),
+    ]);
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(body, { status: 200 }));
+    const failure = await postGoalCommand(fetcher, "csrf", goalId, envelope).then(() => null, (error: unknown) => error);
+    expect(failure).toBeInstanceOf(UnexpectedResponse);
+    expect(failure).not.toBeInstanceOf(Network);
+    expect(failure).toMatchObject({ status: 200, transient: false, message: "The server response could not be read safely. Refresh or contact your operator." });
+  });
+
   it("adds a guidance step only for a code the map itself owns", () => {
     const guidance = { stale: "Reload to see the server's current values." };
     const owned = new ServerRefusal({ status: 409, code: "stale", message: "resource changed", fields: null });
@@ -240,6 +363,52 @@ describe("goal command boundary", () => {
     // A served code may name a prototype member: it contributes no step.
     const prototype = new ServerRefusal({ status: 409, code: "constructor", message: "resource changed", fields: null });
     expect(refusalNotice(prototype, guidance)).toBe("resource changed (constructor)");
+  });
+
+  it("keeps a goal write's unreadable body a transport failure that preserves the attempt", async () => {
+    // The write path reads its refusal from the body, so a body that never
+    // arrives describes nothing: the attempt's fate stays unknown through the
+    // same catch a failed fetch uses. At the base this rejection escaped
+    // `postPortalCommand` uncaught, so only the shared boundary answers Network
+    // (D12); `detail.tsx`'s `outcomeUnknown` therefore keeps the frozen
+    // envelope for a replay instead of releasing it.
+    const refusalFetcher = vi.fn<typeof fetch>().mockImplementation(() => Promise.resolve(new Response(
+      new ReadableStream({ start(controller) { controller.error(new Error("body read failed")); } }),
+      { status: 409 },
+    )));
+    const refused = await postGoalCommand(refusalFetcher, "csrf", goalId, envelope).then(() => null, (error: unknown) => error);
+    expect(refused).toBeInstanceOf(Network);
+    expect(refused).toMatchObject({ message: "Cannot reach the server. Check your connection and try again." });
+    expect(refused).not.toBeInstanceOf(MutationRefused);
+    // The accepted answer's body rejects through the same catch.
+    const acceptedFetcher = vi.fn<typeof fetch>().mockImplementation(() => Promise.resolve(new Response(
+      new ReadableStream({ start(controller) { controller.error(new Error("body read failed")); } }),
+      { status: 200 },
+    )));
+    const lost = await postGoalCreation(acceptedFetcher, "csrf", "p1", { schema_version: "symmetry.goal_create.v1" }).then(() => null, (error: unknown) => error);
+    expect(lost).toBeInstanceOf(Network);
+    expect(lost).toMatchObject({ message: "Cannot reach the server. Check your connection and try again." });
+  });
+
+  it("classifies a redirect write's expiry from its status when its body cannot be read", async () => {
+    // D11's 302 half: the expiry classification runs before the body read, so
+    // an unreadable redirect body cannot become a transport failure.
+    const body = new ReadableStream({ start(controller) { controller.error(new Error("body read failed")); } });
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(body, { status: 302 }));
+    const failure = await postGoalCommand(fetcher, "csrf", goalId, envelope).then(() => null, (error: unknown) => error);
+    expect(failure).toBeInstanceOf(Unauthenticated);
+    expect(failure).toMatchObject({ message: "Your session has ended. Sign in to continue." });
+    expect(failure).not.toBeInstanceOf(Network);
+  });
+
+  it("classifies an opaqueredirect write's expiry from its type before the body", async () => {
+    // A hand-built opaqueredirect carries no readable body at all: the type
+    // check must answer from the type alone, or this input surfaces as Network.
+    const opaque = { type: "opaqueredirect", status: 0, ok: false } as unknown as Response;
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(opaque);
+    const failure = await postGoalCommand(fetcher, "csrf", goalId, envelope).then(() => null, (error: unknown) => error);
+    expect(failure).toBeInstanceOf(Unauthenticated);
+    expect(failure).toMatchObject({ message: "Your session has ended. Sign in to continue." });
   });
 });
 
