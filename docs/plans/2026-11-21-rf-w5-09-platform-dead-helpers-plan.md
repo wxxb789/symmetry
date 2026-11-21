@@ -29,7 +29,7 @@ entry points and W1-06's state surfaces), so neither TODO file is edited.
 | --- | --- | ---: | ---: | --- | --- |
 | `installLinuxSupervisorScanFailureInjection` | `containment_supervisor_linux.go:476` | 476-478 | 3 | `containment_supervisor_linux_test.go:2864,2926,3008` | `installLinuxSupervisorScanInjection` (`:488`, production, env-gated, now `:485`) |
 | `containmentEndpointForIdentity` | `containment_supervisor_windows.go:688` | 688-722 | 35 | `containment_supervisor_windows_test.go:396,446,473,834,1031,1035` | `parseWindowsProcessIdentity`, `randomContainmentToken`, `randomContainmentSecret`, `validateSupervisorEndpoint` |
-| `readLinuxOwnerChildPIDs` | `helper_v2_run.go:197` | 197-200 | 4 | `linux_owner_helper_v2_linux_test.go:77,189` | `readLinuxOwnerChildPIDsBounded` (`:202`) |
+| `readLinuxOwnerChildPIDs` | `helper_v2_run.go:197` | 197-200 | 4 | `linux_owner_helper_v2_linux_test.go:77,189` | `readLinuxOwnerChildPIDsBounded` (`:202`, base; now `:197`) |
 | `nativeHandleInformation` | `native_launch_windows.go:274` | 274-284 | 11 | `native_launch_windows_test.go:141,157,403,427` | `getNativeHandleInformation` (`native_launch_windows.go:29`) |
 
 Measured total: **53 production lines across 4 files** (the plan's `−45` is D2 report-only; the
@@ -56,7 +56,8 @@ Not moved, deliberately:
 - `installLinuxSupervisorScanFailureInjectionAfterInitial` (`containment_supervisor_linux.go:480`)
   has a **live production call site** (`supervisor_linux_helper.go:615`) and stays;
 - `installLinuxSupervisorScanInjection` (`:488`), `readLinuxOwnerChildPIDsBounded`
-  (`helper_v2_run.go:202`) and the env parser are production and stay (W5-01's territory);
+  (`helper_v2_run.go:202`, base; now `:197`) and the env parser are production and stay (W5-01's
+  territory);
 - `getNativeHandleInformation` (`native_launch_windows.go:29`) stays in production: it is the
   proc handle the moved test-local body must call, and `native_launch_windows.go` is owned for
   deletions only. Leaving a package-level `var` used only by tests is not a compile or vet
@@ -139,7 +140,7 @@ least as strict as the source file's (`linux` → `linux`; `linux && amd64` → 
 | move proof (negative control) | operand flip inside the moved wrapper, scratch copy | 1 | `pfs declset -f` diff = 1 record, digest changes (`4c7f05c3…` → `33a2b158…`); copy outside the repo, tree untouched |
 | body identity | per-helper sha256 of the base span vs the test-file span | 0 | 4/4 identical; 53 lines total |
 | call sites | argument-text multisets of each helper's callers, base vs head | 0 | identical: 3 / 7 / 2 / 6 occurrences |
-| reference scan | `git grep -nw <helper>` | 1 (no non-test hit) | every hit is a `_test.go` file |
+| reference scan | `git grep -nw <helper>` (from `daemon/`) | 1 (no non-test hit) | zero non-test Go references; every hit is a `_test.go` file; a repo-root run also hits `docs/plans/**` prose |
 | hunk audit | `git diff -U0` hunk starts | 0 | 8 hunks: 4 deletions inside the four base spans, 4 EOF insertions in the consuming test files |
 | prod shrink | `wc -l` on the four production files | 0 | 968→964, 876→840, 375→370, 642→630 = **−57** (53 declaration lines + 4 blank separators); test side +57 |
 | build constraints | `git diff -U0 \| grep '^[+-]//go:build'` | 1 (no hit) | no file added, removed or re-gated |
@@ -157,8 +158,9 @@ bind; the WSL run is executed alone, not concurrently with a host suite.
 ## Design trade-offs
 
 - **Move vs delete.** The contract allows deleting a helper where a test-local equivalent is
-  clearer. All four are kept as moved bodies: each is a two-call forwarding wrapper or a thin
-  error-mapping helper, and inlining them into the ~40 existing call sites would be a test-function
+  clearer. All four are kept as moved bodies: three small forwarding wrappers (3, 4 and 11 lines)
+  plus the 35-line `containmentEndpointForIdentity` constructor, and inlining them would edit 15
+  test call sites (18 textual occurrences, three of them `t.Fatalf` strings) — a test-function
   body edit, which the contract forbids (`no test function body changes`). Deletion of
   `containmentEndpointForIdentity` and `nativeHandleInformation` would additionally drop the
   `validateSupervisorEndpoint` / `GetHandleInformation` checks those tests rely on.
