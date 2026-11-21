@@ -290,12 +290,9 @@ func normalizeProviderActionResult(result json.RawMessage) (json.RawMessage, err
 	if value.kind != providerActionJSONObject {
 		return nil, errors.New("provider action result must be a JSON object")
 	}
-	if token, tokenErr := decoder.Token(); tokenErr != io.EOF {
+	if _, tokenErr := decoder.Token(); tokenErr != io.EOF {
 		if tokenErr != nil {
 			return nil, fmt.Errorf("provider action result has trailing data: %w", tokenErr)
-		}
-		if token != nil {
-			return nil, errors.New("provider action result has trailing data")
 		}
 		return nil, errors.New("provider action result has trailing data")
 	}
@@ -587,17 +584,24 @@ func reserveWorstCaseCompletions(journal RunJournal) RunJournal {
 	return reserved
 }
 
+func serializeRunJournalWithinLimit(journal RunJournal) ([]byte, error) {
+	data, err := serializeRunJournal(journal)
+	if err != nil {
+		return nil, fmt.Errorf("serialize run journal: %w", err)
+	}
+	if len(data) > maxJournalFileBytes {
+		return nil, ErrProviderActionCapacity
+	}
+	return data, nil
+}
+
 // validateJournalSaveCapacity is the centralized lossless-mutation guard. A
 // journal may contain completed provider data larger than the provider-only
 // admission budget, but every unresolved dispatch must still have room for its
 // maximum legal completion within the full 4 MiB journal.
 func validateJournalSaveCapacity(journal RunJournal) error {
-	data, err := serializeRunJournal(journal)
-	if err != nil {
-		return fmt.Errorf("serialize run journal: %w", err)
-	}
-	if len(data) > maxJournalFileBytes {
-		return ErrProviderActionCapacity
+	if _, err := serializeRunJournalWithinLimit(journal); err != nil {
+		return err
 	}
 	if !hasUnresolvedProviderActions(journal) {
 		return nil
@@ -619,14 +623,8 @@ func maxProviderFailureCodeForCapacity() string {
 // recovery so an existing external effect can still be settled exactly while
 // preserving the 4 MiB journal guard.
 func validateProviderActionJournalSize(journal RunJournal) error {
-	data, err := serializeRunJournal(journal)
-	if err != nil {
-		return fmt.Errorf("serialize run journal: %w", err)
-	}
-	if len(data) > maxJournalFileBytes {
-		return ErrProviderActionCapacity
-	}
-	return nil
+	_, err := serializeRunJournalWithinLimit(journal)
+	return err
 }
 
 // hasUnresolvedProviderActions reports whether cleanup would discard a

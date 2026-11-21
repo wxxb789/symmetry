@@ -31,7 +31,7 @@ func TestAcceptedTerminalWaitsForUnresolvedFailedStartProcessMarker(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	active := &runningRun{process: newStartFailureProcess(), cleanupBlocked: true, slotHeld: true}
+	active := &runningRun{process: newStartFailureProcess(), cleanupBlocked: true, runLifecycle: runLifecycle{slotHeld: true}}
 	d := &daemon{
 		config:  config.Config{CleanupTimeoutMS: 10000},
 		store:   store,
@@ -61,7 +61,7 @@ func TestConfirmedGenericProcessExitClearsMarkerBeforeTerminalCleanup(t *testing
 	if _, err := store.SetProcessDetails(key, 42, "test:42", time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
-	active := &runningRun{process: fakeProcess{result: execution.Result{}}, cleanupBlocked: true, slotHeld: true}
+	active := &runningRun{process: fakeProcess{result: execution.Result{}}, cleanupBlocked: true, runLifecycle: runLifecycle{slotHeld: true}}
 	d := &daemon{
 		config:    config.Config{CleanupTimeoutMS: 10000},
 		store:     store,
@@ -353,7 +353,7 @@ func TestGenericProcessMarkerClearFailureDoesNotBlockTerminalDelivery(t *testing
 		running: map[state.RunKey]*runningRun{key: {
 			process:        fakeProcess{result: execution.Result{}},
 			cleanupBlocked: true,
-			slotHeld:       true,
+			runLifecycle:   runLifecycle{slotHeld: true},
 		}},
 		slots: slots,
 		options: options{
