@@ -715,11 +715,12 @@ witness: stop-receipt barrier stall awaiting a diagnosable occurrence", closed 2
 `e9c457d8`) latched owner loss at every `enterRecovery` entry; the review of that fix (PR #185
 round 1) left two paths open here.
 
-- [ ] Close the same sticky-refusal class for the lease-expiry arm. `runLinuxSupervisorHelperLoop`
-      still computes `ownerLostStop` from `ownerLostLatched || channelClosedV2(watchdog.ownerLost())`
-      (`daemon/internal/platform/supervisor_linux_helper.go:838`) and the lease-expiry arm
-      (`:978-993`) calls `stop()` without `enterRecovery`; if the owner dies or wedges as the lease
-      expires and that timer arm wins the `select` before the control-EOF event, the final
+- [ ] Close the same sticky-refusal class for the lease-expiry arm. `ownerLostStop` in
+      `(*linuxSupervisorSession).runStop` is still computed from `ownerLostLatched ||
+      channelClosedV2(watchdog.ownerLost())` (`supervisor_session.go`); the lease-expiry arm of
+      `(*linuxSupervisorSession).runHelperLoop` calls `session.stop()` without `enterRecovery`. If
+      the owner dies or wedges as the lease expires and that timer arm wins the `select` before the
+      control-EOF event, the final
       descendant scan persists over the dead metadata transport, the failure latches the sticky
       `descendantScanLost` (`process_unix.go`, the final-scan block and the monitor's
       `pre_scan_ack_failure` path), and every later stop is refused exactly as in CI 44876100236.
