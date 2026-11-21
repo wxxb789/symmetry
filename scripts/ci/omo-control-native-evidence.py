@@ -44,6 +44,11 @@ GO_BUILD_SETTINGS = ("vcs", "vcs.revision", "vcs.time", "vcs.modified")
 MACHINE_SESSION_ENDPOINT = re.compile(r"/api/v1/machines/([^/]+)/sessions/([^/]+)")
 SOURCE_PATHS = ["scripts/ci/omo-control-native-evidence.py", "scripts/ci/omo-control-native-fixture.exs",
                 "daemon/cmd/symmetry-daemon/main.go", "daemon/internal/app/app.go",
+                "daemon/internal/app/cleanup_glue.go", "daemon/internal/app/commands.go",
+                "daemon/internal/app/events.go", "daemon/internal/app/goal_admission.go",
+                "daemon/internal/app/goal_delivery.go", "daemon/internal/app/lease.go",
+                "daemon/internal/app/native_run.go", "daemon/internal/app/outbox.go",
+                "daemon/internal/app/probe.go", "daemon/internal/app/recovery_glue.go",
                 "daemon/internal/config/config.go", "daemon/internal/control/client.go",
                 "daemon/internal/control/validation.go", "daemon/internal/protocol/protocol.go",
                 "daemon/internal/state/state.go", "daemon/internal/state/goal_session.go",
