@@ -32,6 +32,11 @@ sources with `Code.string_to_quoted/2`, strips all metadata, groups `def`/`defp`
   provider-private `sync_resource_with_headers/3` (verified by the tool's dependency column),
   so it cannot move without either exposing a private provider mapping function or moving the
   mapping itself — both forbidden by the contract's failure control.
+  [Apply-stage correction, 2026-11-21, accepted finding F2: the pair is un-movable *into
+  `Support`* as written, but it is removable in place — `sync_resource_with_headers/3` is
+  inlined into the public `@impl sync_resource/3` in both providers, so no residual
+  `sync_resource/3` duplicate pair remains (after-count 4 → 3, all pure `Support` delegators).
+  See the apply-stage answer for the re-measured numbers.]
 
 | Shared pair | github | azure | Move shape |
 | --- | --- | --- | --- |
@@ -113,6 +118,9 @@ connection (no authenticate call, no request).
   4-arity callbacks keep their own nil guard in both providers untouched.
 - **`sync_resource/3` stays.** Its body is AST-equal across providers but its callee is
   provider-private, so it remains a two-line delegator in each provider.
+  [Apply-stage correction, 2026-11-21, accepted finding F2: superseded — the private callee is
+  inlined into the public callback above the provider mapping, so neither provider keeps a
+  delegator. No mapping or error atom changed.]
 - **No suppressions, no behaviour flag.** No test, type, validation or permission is weakened;
   no `credo:disable` or `#[allow]` is added.
 
@@ -121,15 +129,15 @@ connection (no authenticate call, no request).
 | Gate / artifact | Command | Expected |
 | --- | --- | --- |
 | derivation (before) | `provider_ast.exs github.ex azure_devops.ex` at base blobs | 26 pairs / 13 equal |
-| duplicate-helper count (before/after) | `provider_ast.exs ... --dups-only` at base blobs and at head | 13 → 4, with `support_delegate=true` for `check/1`, `sync_resource/2`, `sync_delivery/3` (one-line delegators) and `false` for `sync_resource/3` (its callee is provider-private) |
-| extraction proof | `extract_proof.exs support.ex base-github.ex base-azure.ex` | 9 `as-is` pairs AST-identical to both base providers (modulo `defp` → `def`), 3 wrappers with `head_without_provider_equal=true`, 0 mismatch |
+| duplicate-helper count (before/after) | `provider_ast.exs ... --dups-only` at base blobs and at head | implement revision 13 → 4 (`support_delegate=true` for `check/1`, `sync_resource/2`, `sync_delivery/3`; `false` for `sync_resource/3`); apply revision (F2) 13 → 3, all `support_delegate=true` |
+| extraction proof | `extract_proof.exs support.ex base-github.ex base-azure.ex` | 9 `as-is` pairs AST-identical to both base providers (modulo `defp` → `def`), 3 wrappers with `head_without_provider_equal=true`, 0 mismatch; re-run at the apply revision: byte-identical output (F1 kept unapplied) |
 | targeted suites (before) | `mix test --seed 0 --formatter SymmetryControl.ExUnitJsonFormatter <3 files>` | green, events file recorded |
-| targeted suites (after) | same command at head | same set of test names/states |
+| targeted suites (after) | same command at head | same set of test names/states; apply revision (F3) 51 passed — base 49 plus the two new nil-URL short-circuit cases (names diff = exactly those two) |
 | format | `mix format --check-formatted` | exit 0, empty |
 | compile | `mix compile --warnings-as-errors` | exit 0, 0 warnings |
 | whitespace | `git diff --check` | exit 0 |
-| mutation checks | flip `Support.priority/1` (`"priority:urgent"/"priority:high"` → `"mutated"`), flip `Support.segment/1` (identity), flip `Support.check/2` (skip authenticate) | observed: exit 2 with 2 / 9 / 2 failing tests (both providers in every flip); reverted, then format/compile/suites green again |
-| full suite | `ERL_SCHEDULERS=4 mix test --seed 0 --exclude portal_assets` (the conductor may re-run it on the PR; never two full suites at once on this host) | observed: exit 0, `938 passed, 21 skipped, 4 excluded` in 707.3 s |
+| mutation checks | flip `Support.priority/1` (`"priority:urgent"/"priority:high"` → `"mutated"`), flip `Support.segment/1` (identity), flip `Support.check/2` (skip authenticate); apply revision (F3) adds a flip of `Support.sync_delivery/4` clause 1 (delete the `%{pull_request_url: nil}` short-circuit) | observed: exit 2 with 2 / 9 / 2 failing tests (both providers in every flip); apply-revision flip: exit 2, 2/2 new cases red (`{:error, :authenticate_must_not_be_called}` vs `{:ok, nil}`); reverted, then format/compile/suites green again |
+| full suite | `ERL_SCHEDULERS=4 mix test --seed 0 --exclude portal_assets` (the conductor may re-run it on the PR; never two full suites at once on this host) | observed: exit 0, `938 passed, 21 skipped, 4 excluded` in 707.3 s; apply revision re-run: exit 0, `946 passed, 21 skipped, 4 excluded` in 712.0 s (938 plus origin/main's tests merged into `ef567a1c` plus the 2 new cases) |
 
 ## Design trade-offs
 
@@ -150,6 +158,11 @@ connection (no authenticate call, no request).
   extraction (`Workspaces.ChangesetValidators`) is consumed by `alias` + qualified calls.
   Following the existing convention wins; the mechanical proof is the derivation tool, not
   diff minimality.
+  [Apply-stage correction, 2026-11-21, accepted finding F5: "imports only DSL modules" is
+  overstated — `SymmetryControlWeb.QueryParams` is a plain-function module imported by
+  `goal_controller.ex:5` and `portal_api_controller.ex:4` (and `Ecto.Changeset` itself imports
+  plain functions). The `alias` + qualified-call decision and its `Workspaces.ChangesetValidators`
+  precedent stand; only this rationale sentence is corrected.]
 - **One `Support` module, not three.** The pairs fall in three families (environment/HTTP,
   value helpers, authenticate wrappers) but the contract names one file and the module is
   small; splitting would be a second convention for no benefit.
@@ -162,10 +175,13 @@ connection (no authenticate call, no request).
 - Pagination, `repository_parts/1`, `pull_request_state/1`, `ci_reference/1`, `request/4`,
   `sync_ci/4`, `execute/6`, `execute_change/7`: measured non-equal (or excluded by name), and
   merging them would change provider semantics.
-- `sync_resource/3`: private dependency, see above.
+- `sync_resource/3`: private dependency, see above. [Apply revision, F2: its private callee is
+  folded in place; the function still stays provider-specific (not moved into `Support`).]
 - New tests: the owned set has no new test file and the contract's oracle is the three
   existing suites; the base-vs-head event-stream comparison plus the mutation checks carry the
   parity evidence. (A `support_test.exs` would need an owned-set extension; not requested.)
+  [Apply revision, F3: still no new test file — one nil-URL short-circuit case is added to each
+  of the two owned provider suites (49 → 51) and its guard mutation observed red.]
 
 ## Ambiguities resolved (options and the chosen reading)
 
@@ -179,6 +195,8 @@ connection (no authenticate call, no request).
    reviewer insists on DS's literal stay list.
 4. **`sync_resource/3`.** Kept local; the "12 pairs" acceptance is met by the 12 extractable
    pairs and the remaining duplicate is named and justified rather than forced into `Support`.
+   [Apply revision, F2: kept local, and the residual duplicate pair removed in place — no
+   duplicate pair outside `Support` remains (13 → 3).]
 5. **`sync_delivery/3`'s nil clause.** Moved into `Support` rather than left duplicated in the
    providers (see trade-offs); the alternative — keeping the guard local — is a two-line
    revert that would leave the pair with one duplicated logic clause.

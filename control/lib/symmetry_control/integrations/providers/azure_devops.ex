@@ -79,14 +79,7 @@ defmodule SymmetryControl.Integrations.Providers.AzureDevOps do
     do: Support.sync_resource(__MODULE__, connection, resource)
 
   @impl true
-  def sync_resource(connection, resource, headers),
-    do: sync_resource_with_headers(connection, resource, headers)
-
-  defp sync_resource_with_headers(
-         connection,
-         %{kind: "work_tracking", external_ref: project},
-         headers
-       ) do
+  def sync_resource(connection, %{kind: "work_tracking", external_ref: project}, headers) do
     with {:ok, references} <- work_item_references(connection, project, headers),
          {:ok, items} <- work_items(connection, project, references, headers) do
       {:ok,
@@ -100,11 +93,7 @@ defmodule SymmetryControl.Integrations.Providers.AzureDevOps do
     end
   end
 
-  defp sync_resource_with_headers(
-         connection,
-         %{kind: "repository", external_ref: reference},
-         headers
-       ) do
+  def sync_resource(connection, %{kind: "repository", external_ref: reference}, headers) do
     with {:ok, {project, repository}} <- repository_parts(reference),
          {:ok, body} <- repository(connection, project, repository, headers) do
       {:ok,
@@ -125,7 +114,7 @@ defmodule SymmetryControl.Integrations.Providers.AzureDevOps do
     end
   end
 
-  defp sync_resource_with_headers(connection, %{kind: "ci", external_ref: reference}, headers) do
+  def sync_resource(connection, %{kind: "ci", external_ref: reference}, headers) do
     with {:ok, {project, {:definition, definition_id} = selector}} <- ci_reference(reference),
          {:ok, definition} <- build_definition(connection, project, definition_id, headers),
          {:ok, builds} <- builds(connection, project, selector, nil, headers) do
@@ -140,7 +129,7 @@ defmodule SymmetryControl.Integrations.Providers.AzureDevOps do
     end
   end
 
-  defp sync_resource_with_headers(_connection, _resource, _headers),
+  def sync_resource(_connection, _resource, _headers),
     do: {:error, :unsupported_resource}
 
   @impl true

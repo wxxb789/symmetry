@@ -59,14 +59,7 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
     do: Support.sync_resource(__MODULE__, connection, resource)
 
   @impl true
-  def sync_resource(connection, resource, headers),
-    do: sync_resource_with_headers(connection, resource, headers)
-
-  defp sync_resource_with_headers(
-         connection,
-         %{kind: "work_tracking", external_ref: repository},
-         headers
-       ) do
+  def sync_resource(connection, %{kind: "work_tracking", external_ref: repository}, headers) do
     with {:ok, {owner, name}} <- repository_parts(repository),
          :ok <- require_account(connection, owner),
          {:ok, issues} <- issues(owner, name, headers) do
@@ -81,11 +74,7 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
     end
   end
 
-  defp sync_resource_with_headers(
-         connection,
-         %{kind: "repository", external_ref: repository},
-         headers
-       ) do
+  def sync_resource(connection, %{kind: "repository", external_ref: repository}, headers) do
     with {:ok, {owner, name}} <- repository_parts(repository),
          :ok <- require_account(connection, owner),
          {:ok, body} <- get("/repos/#{Support.segment(owner)}/#{Support.segment(name)}", headers) do
@@ -108,7 +97,7 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
     end
   end
 
-  defp sync_resource_with_headers(connection, %{kind: "ci", external_ref: repository}, headers) do
+  def sync_resource(connection, %{kind: "ci", external_ref: repository}, headers) do
     with {:ok, {owner, name}} <- repository_parts(repository),
          :ok <- require_account(connection, owner),
          {:ok, body} <-
@@ -134,7 +123,7 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
     end
   end
 
-  defp sync_resource_with_headers(_connection, _resource, _headers),
+  def sync_resource(_connection, _resource, _headers),
     do: {:error, :unsupported_resource}
 
   @impl true
