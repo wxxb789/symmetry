@@ -393,7 +393,32 @@ func (session *linuxSupervisorSession) runStop() error {
 func (session *linuxSupervisorSession) enterRecovery() error {
 	// Keep the authenticated endpoint alive whether stop succeeds now or
 	// still needs a retry through recovery.
-	session.ownerLostLatched = session.ownerLostLatched || channelClosedV2(session.watchdog.ownerLost())
+	//
+	// The paths that reach here are the owner watchdog publishing owner
+	// loss, the control pipe reaching EOF/a read error, or a response
+	// write failing. Latch owner loss now: the watchdog goroutine may not
+	// have published its notification yet, and the first stop must not
+	// take the live-owner branch, whose final descendant scan persists
+	// its fence over the dead owner transport. That failed persist
+	// latches sticky descendant uncertainty and refuses every recovery
+	// stop, so no stop receipt can ever be minted (CI 2026-11-21). The
+	// owner-loss branch seals descendant scans locally and never depends
+	// on owner I/O.
+	//
+	// Two entries can be reached while the owner process is still alive:
+	// the daemon closes its own control writer on response-transport loss
+	// (closeControlAfterResponseLossRequestLocked) and keeps running, and
+	// a response write can fail before any pipe I/O (a ProcessIdentity or
+	// frame-encoding error, including a frame above the 16 KiB limit).
+	// The latch makes the helper seal such a stop locally, so the owner
+	// learns the seal only from the authenticated recovery response: the
+	// restarted-daemon path records it before the receipt
+	// (RecordSupervisorRecoveryScanSeal, Completed+1), while the
+	// in-process recoverResponseLossStop consumer does not yet record it
+	// and therefore fails that stop closed into a durable
+	// containment-unproven mark (pinned by
+	// TestLinuxSupervisorLiveOwnerControlCloseInProcessStopFailsClosed).
+	session.ownerLostLatched = true
 	_ = session.stop()
 	session.ownerLost = session.watchdog.ownerLost()
 	session.allowAbort = !session.committed && !session.resumed

@@ -47,7 +47,7 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       from sibling validators (`validation.go:230,:239,:253,:306`), and from
       `daemon/internal/control/supervisory_validation_test.go:39,:48,:55,:125,:129,:148,:152`;
       the `protocol.Task`/`TaskWaiting` v1 decoders (65 and 8 references, 37 in
-      `e2e/core_test.go`); and `harness.NewClaudeAdapterWithRunner` (`registry.go:245`, three test
+      `e2e/core_test.go`); and `harness.NewClaudeAdapterWithRunner` (`registry.go:181`, three test
       files). Removing any of them needs an owner for `daemon/e2e/**` and the app/control test
       seams — the W2-12 follow-up is that owner (program plan §4).
 
@@ -62,9 +62,11 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       `validateNullableJSONObject` (`:584`), `validateJSONObject` (`:595`), `isJSONNull` (`:607`)
       and `isTransitionState` (`:620`).
       **Not dead-code at all:** the shadowed root probe paths `probeCodexExecutableWithRunner`
-      (`:379`) and `probeClaudeExecutable` (`:299`) are main-reachable through
+      (`:273`) and `probeClaudeExecutable` (`:193`) are main-reachable through
       `NewCodexAdapter`/`NewClaudeAdapter` and appear in none of the three baseline `deadcode`
-      reports; they belong to the probe/registry dedup (W3-04), not to a deletion pass.
+      reports; the probe/registry dedup (W3-04, #187) kept them (D4: the root stays fail-closed
+      and undelegated — no `harness` → `harness/codex` import), so no deletion pass may remove
+      them either.
 
 ## Build-tag parity (arm64 oracle)
 
@@ -705,60 +707,40 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       that crosses a claim (starts before it, ends after it), under the same no-narrowing rule
       and the same second-render pin.
 
-## Production Linux containment witness: stop-receipt barrier stall awaiting a diagnosable occurrence
+## Linux supervisor: remaining sticky-refusal paths after the owner-loss latch
 
-- [ ] Diagnose the next occurrence of the `daemon_sigkill_after_lease_arm_before_resume` barrier
-      stall from the restarted daemon's exported log tail; do not raise the 45 s bound in the
-      meantime. **Occurrence:** CI run `44794227912` job `136491073605` (`integration`; PR #119 head
-      `22ec193`, test merge `3b4a6ce` on base `adf6d38`) failed subtest
-      `TestProductionLinuxContainmentWitnessSpine/daemon_sigkill_after_lease_arm_before_resume` after
-      **110.19 s** with (the marker path's `$RUNNER_TEMP/symmetry-linux-containment-witness/<case>/`
-      prefix elided here; the CI log spells it out),
-      `production_linux_containment_witness_test.go:509: wait for durable stop-receipt-before-release barrier: marker "…/lease-arm-before-resume/stop-receipt-before-release.reached" did not appear within 45s`
-      — the reported `:509` is the caller frame of the `t.Helper()` runner, whose `t.Fatalf` sits at
-      `daemon/e2e/production_linux_containment_witness_test.go:1026` — followed by a failure cleanup
-      that could not prove the stop: `:738: Linux production witness failure cleanup could not prove
-      exact helper stop/release: bound recovery did not clear journal during failure cleanup: journal
-      a2c5a551-2026-45d3-9eaf-467717f281e6/1 retained containment after 45s`, `containment journal
-      remains unresolved after failure cleanup: … retained containment after 5s`, and
-      `failure cleanup could not prove exact helper 21107/"linux:v2:9d556fd5-837f-4845-b407-4c6aa53983b4:4026531836:21107:19582"
-      gone: process 21107 with identity "…" remained live`. **Classification:** flake of the witness's
-      restart replay, not a product regression — every file under `daemon/e2e`, `daemon/internal/app`
-      and `daemon/internal/platform` is byte-identical between the failing revision and current main
-      (`git diff --name-only 22ec193 a7afdf4 -- daemon/e2e daemon/internal/app
-      daemon/internal/platform` prints nothing), the same subtest is green in `0.56 s` on main
-      (`44795802448` job `136495892251`: `PASS: …/daemon_sigkill_after_lease_arm_before_resume
-      (0.56s)`), the run's own merge diff (`git diff adf6d38 3b4a6ce --stat`, 14 files) touches
-      neither those trees nor `.github/workflows/ci.yml`, and the failing run's uploaded evidence
-      (artifact `production-linux-containment-witness-44794227912-1`, 17 files) was complete: its
-      `lease-arm-before-resume.json` stops at stage
-      `daemon_crashed_after_lease_arm_with_durable_mirror_seal_before_resume` while the manifest
-      reports `"complete": true` and `"incomplete_evidence_files": []`, i.e. the stall left no
-      daemon-side trace in that evidence at all. **Recurrence (2026-11-21):** CI run `44803673577`
-      attempt 1 (PR #126 head `17d838b`, the merge of `origin/main` into
-      `fix/provider-action-chain-removal`) failed the same subtest in its `integration` job
-      (`136524113298`) after **110.29 s**, with the identical
-      `production_linux_containment_witness_test.go:509` 45 s barrier line and the same cleanup
-      shape (journal `b2090059-1137-4b6b-a975-58f1e202834c/1` retained containment after 45s;
-      helper 15580 remained live), while main's last six CI runs (through `44804764621` @
-      `ea65742`) were all green. **Suspect path** for the restart pass:
-      `daemon/internal/app/cleanup_glue.go:118-143` (record the durable receipt →
-      `verifyDurableContainmentStopReceipt` at `:285` → `observeContainmentStop`) →
-      `waitForLinuxStopReceiptBarrier` (`:203`), which publishes the reached marker at `:234` only
-      after both marker paths pass `assertLinuxStopReceiptBarrierPathAbsent` (`:218`/`:221`), and
-      whose own release bound is `linuxStopReceiptBarrierTimeout = 30s` (`:21`); the marker never
-      appeared, so either the restart pass never reached the callback or it stalled before
-      publishing. **Diagnosis rule:** read the restarted daemon's log tail now exported by
-      `scripts/ci/export-linux-v2-redacted-evidence.py` (2026-11-21, `witness-stall-evidence`): a
-      failed legacy witness run adds `<case>-second-daemon-stdout.json` and `-stderr.json` to the
-      `production-linux-containment-witness-<run id>-<attempt>` artifact, carrying a ≤64 KiB
-      sanitized tail of the `second-daemon.*.log` files written at
-      `daemon/e2e/production_linux_containment_witness_test.go:1723-1754`; each record keeps
-      `time`/`level` plus the allowlisted message/enum/integer fields, while identities, paths and
-      `error` text are intentionally never exported and `dropped_lines` counts lines that could not
-      be projected (a Go panic dump therefore appears only as a count). The 45 s harness wait and the
-      30 s daemon bound are declared bounds, not the defect: no timeout changes until an occurrence
-      has been diagnosed from that tail.
+The closed witness-stall entry (`docs/archive/CLOSED-TODO.md`, "Production Linux containment
+witness: stop-receipt barrier stall awaiting a diagnosable occurrence", closed 2026-11-21 by commit
+`e9c457d8`) latched owner loss at every `enterRecovery` entry; the review of that fix (PR #185
+round 1) left two paths open here.
+
+- [ ] Close the same sticky-refusal class for the lease-expiry arm. `runLinuxSupervisorHelperLoop`
+      still computes `ownerLostStop` from `ownerLostLatched || channelClosedV2(watchdog.ownerLost())`
+      (`daemon/internal/platform/supervisor_linux_helper.go:838`) and the lease-expiry arm
+      (`:978-993`) calls `stop()` without `enterRecovery`; if the owner dies or wedges as the lease
+      expires and that timer arm wins the `select` before the control-EOF event, the final
+      descendant scan persists over the dead metadata transport, the failure latches the sticky
+      `descendantScanLost` (`process_unix.go`, the final-scan block and the monitor's
+      `pre_scan_ack_failure` path), and every later stop is refused exactly as in CI 44876100236.
+      Direction (root-cause §5 P2, kept in the local flake analysis `flake/root-cause-1.md`): do
+      not latch sticky `descendantScanLost` on a final-scan *persistence* failure — return a
+      retryable stop error with the authority retained so a later attempt (after the watchdog
+      latch) seals through the owner-loss branch — and clear `descendantSealPending` when the
+      observer seal write fails in `sealDescendantScanAfterMonitorStop`. This changes retry
+      semantics and needs its own increment; the plan of the closed fix records it as out of scope.
+- [ ] Give the in-process `recoverResponseLossStop` consumer the helper's owner-loss terminal seal.
+      The live-owner entries of the latch (a daemon-side control close on response-transport loss,
+      and response writes that fail before any pipe I/O) make the helper seal locally with no
+      observer writes, so the durable helper progress keeps its pre-latch sequence; the restarted
+      daemon records the seal returned over the recovery endpoint
+      (`RecordSupervisorRecoveryScanSeal`, exact `Completed+1`) before the receipt, but the
+      in-process consumer does not, `assert_all_sealed` refuses, and that stop fails closed into a
+      durable containment-unproven mark. Pinned by
+      `TestLinuxSupervisorLiveOwnerControlCloseInProcessStopFailsClosed`; the amendment (record the
+      returned seal before the mirror freeze, added once where the run-journal callback is plumbed)
+      is deferred to the RunJournalRecorder lane — the callback is added once there instead of being
+      hand-copied into every adapter — and the interim state stays fail-closed (PR #185 review
+      round 1, finding F1; conductor decision 2026-11-21).
 
 ## Daemon: state validator dead branches, a nil-deref panic and the `validGoalSessionUUID` follow-up (rf-w2-09 survey)
 
@@ -953,11 +935,11 @@ instead of appended.
       `opencode/**` stayed read-only (P2-3/D1: its six CI assertions and the release-acceptance
       case stay green), so every surface this slice consolidated elsewhere still has an
       `opencode` copy: process forwarding with its own guards
-      (`daemon/internal/harness/opencode/adapter.go:543` ProcessDetails, `:559`
-      LinuxV2LiveOwnerStatus, `:578` LeaseRenewalAvailable, `:589` RenewLease),
-      `isNilNativeProcess` (`:421`, `reflect.Pointer`-only), the Close/join state machine
-      (`:1063`), `emit` (`:1344`, stamps `At` and calls `sink.Handle` directly instead of
-      `harness.DeliverEvent`) and `Wait` (`:975`). Consolidating them is part of opencode
+      (`daemon/internal/harness/opencode/adapter.go:522` ProcessDetails, `:538`
+      LinuxV2LiveOwnerStatus, `:557` LeaseRenewalAvailable, `:568` RenewLease),
+      `isNilNativeProcess` (`:400`, `reflect.Pointer`-only), the Close/join state machine
+      (`:1042`), `emit` (`:1323`, stamps `At` and calls `sink.Handle` directly instead of
+      `harness.DeliverEvent`) and `Wait` (`:954`). Consolidating them is part of opencode
       capability work, not this increment, and must keep those CI oracles green.
 
 ## pi provider-bridge close-retry timing flake under host load (PR #155 review)
