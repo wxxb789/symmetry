@@ -24,8 +24,9 @@ D6's dispatch gate). Branch `refactor/rf-w3-02-response-table`. Area:
 - `daemon/internal/platform/linux_owner_helper_v2_linux.go` — anchor-client retire paths
   (`RetireHelper`/`RetirePreGateHelper` :1001/:1020 via `exchange`; `retireClearedRunWithProofs`
   :1084-1159 and `RetireAbortedHelper` :1161-1203, the two inline encode/read/verify blocks).
-- New tests: `anchor_wire_shape_test.go` (`linux && amd64`, no skips) and
-  `anchor_shape_table_test.go` (`linux && amd64`).
+- New tests: `anchor_wire_shape_test.go` (`linux && amd64`, no skips),
+  `anchor_shape_goldens_test.go` (the pinned writer/stopping/clone frames both
+  new test files consume) and `anchor_shape_table_test.go` (`linux && amd64`).
 - This plan file.
 
 Owned but deliberately unmodified, with the reason (P2-2 narrowed the change to anchor-only):
@@ -76,7 +77,7 @@ func (anchor *linuxOwnerAnchor) writeResponse(connection *net.UnixConn, response
 Columns: `operation`, `required`/`forbidden` request-field sets, `serverRequiredFDs`
 (+ `serverRequiredFDsWithTarget` for the clone-cleanup variable count), `clientSendFDs`
 (+ `clientSendFDsWithTarget`), `clientCheckedFDs`, `clientFDsMismatch`, `responseFDs`,
-`timeoutClass`, `stoppingResponse`, and a `shape` predicate for the relational rules presence sets
+`timeoutClass`, `stoppingAnswer`, and a `shape` predicate for the relational rules presence sets
 cannot express. Field presence is defined once (`linuxOwnerAnchorRequestField` +
 `func (request linuxOwnerAnchorRequest) fieldPresent(linuxOwnerAnchorRequestField) bool`), the
 generic gates are `func (request linuxOwnerAnchorRequest) exclusiveFieldRejected(row) bool` and
@@ -114,7 +115,7 @@ constant plus a consistency check instead of 16 identical values.
 
 - Server `serveConnection`: `ShapeFor` replaces the `switch` `default`; `exclusiveFieldRejected`
   replaces the three global gates (`:1038-1050`); the stopping gate (`:1053-1058`) is now
-  `row.stoppingResponse`; `refuses(request, len(receivedFDs))` replaces every per-op presence and
+  `row.stoppingAnswer`; `refuses(request, len(receivedFDs))` replaces every per-op presence and
   descriptor-count clause (case bodies, the retire block `:1078-1097`, and the three
   `validLinuxOwnerAnchor*Request` helpers, which are deleted as dead weight — zero test references,
   `grep` verified); the timeout chains at `:1123-1131` and `:1081` become `row.timeoutClass`.

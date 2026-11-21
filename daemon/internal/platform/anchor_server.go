@@ -1115,10 +1115,6 @@ func (anchor *linuxOwnerAnchor) serveConnection(connection *net.UnixConn) (detac
 	}
 	switch request.Operation {
 	case linuxOwnerAnchorOperationStart:
-		if anchor.stopping {
-			anchor.writeResponse(connection, anchor.baseResponse(request, "anchor_stopping"))
-			return
-		}
 		if err := verifyLinuxOwnerAnchorLeafFD(receivedFDs[0], request.Grant.Leaf, anchor.owner.AUID); err != nil {
 			anchor.writeResponse(connection, anchor.baseResponse(request, "request_rejected"))
 			return
@@ -1597,7 +1593,7 @@ func (anchor *linuxOwnerAnchor) serveCloneCleanup(
 			return false
 		}
 	}
-	if err := connection.SetDeadline(time.Now().Add(linuxOwnerAnchorCleanupTimeout)); err != nil {
+	if err := connection.SetDeadline(time.Now().Add(linuxOwnerAnchorTimeoutFor(request.Operation))); err != nil {
 		return false
 	}
 	if err := verifyLinuxOwnerAnchorManagerMembership(os.Getpid(), anchor.managerPath); err != nil {

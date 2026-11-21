@@ -949,7 +949,7 @@ func (client *LinuxOwnerAnchorClient) exchange(ctx context.Context, request linu
 		}
 		duplicates = append(duplicates, duplicate)
 	}
-	if len(duplicates) > 3 {
+	if len(duplicates) > linuxOwnerAnchorRequestFDCap {
 		return linuxOwnerAnchorResponse{}, nil, errors.New("Linux owner anchor descriptor transfer exceeds its fixed limit")
 	}
 	if len(duplicates) > 0 {

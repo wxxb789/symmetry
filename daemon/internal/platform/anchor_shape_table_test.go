@@ -15,14 +15,9 @@ package platform
 
 import (
 	"encoding/json"
-	"errors"
-	"io"
 	"net"
-	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
-	"time"
 
 	"github.com/wxxb789/symmetry/daemon/internal/authority"
 	daemonprotocol "github.com/wxxb789/symmetry/daemon/internal/protocol"
@@ -53,54 +48,54 @@ type linuxOwnerAnchorShapeExpectation struct {
 // five run-helper-peer operations.
 var linuxOwnerAnchorShapeExpectations = map[string]linuxOwnerAnchorShapeExpectation{
 	linuxOwnerAnchorOperationIdentity: {
-		timeoutClass: linuxOwnerAnchorTimeoutRequest, serverRequiredFDs: 0, responseFDs: 0, stoppingAnswer: true,
+		timeoutClass: linuxOwnerAnchorTimeoutClassRequest, serverRequiredFDs: 0, responseFDs: 0, stoppingAnswer: true,
 	},
 	linuxOwnerAnchorOperationStart: {
-		timeoutClass: linuxOwnerAnchorTimeoutRequest, serverRequiredFDs: 2, clientSendFDs: 2, responseFDs: 3, stoppingAnswer: true,
+		timeoutClass: linuxOwnerAnchorTimeoutClassRequest, serverRequiredFDs: 2, clientSendFDs: 2, responseFDs: 3, stoppingAnswer: true,
 	},
 	linuxOwnerAnchorOperationAttach: {
-		timeoutClass: linuxOwnerAnchorTimeoutRequest, serverRequiredFDs: 0, responseFDs: 3,
+		timeoutClass: linuxOwnerAnchorTimeoutClassRequest, serverRequiredFDs: 0, responseFDs: 3,
 	},
 	linuxOwnerAnchorOperationLookup: {
-		timeoutClass: linuxOwnerAnchorTimeoutWait, serverRequiredFDs: 0, responseFDs: -1,
+		timeoutClass: linuxOwnerAnchorTimeoutClassWait, serverRequiredFDs: 0, responseFDs: -1,
 	},
 	linuxOwnerAnchorOperationRegisterProcess: {
-		timeoutClass: linuxOwnerAnchorTimeoutRequest, serverRequiredFDs: 1, clientSendFDs: 1, stoppingAnswer: true, runHelperPeer: true,
+		timeoutClass: linuxOwnerAnchorTimeoutClassRequest, serverRequiredFDs: 1, clientSendFDs: 1, stoppingAnswer: true, runHelperPeer: true,
 	},
 	linuxOwnerAnchorOperationClassifyChild: {
-		timeoutClass: linuxOwnerAnchorTimeoutWait, serverRequiredFDs: 1, clientSendFDs: 1, clientCheckedFDs: true,
+		timeoutClass: linuxOwnerAnchorTimeoutClassWait, serverRequiredFDs: 1, clientSendFDs: 1, clientCheckedFDs: true,
 		stoppingAnswer: true, runHelperPeer: true,
 	},
 	linuxOwnerAnchorOperationRegisterGate: {
-		timeoutClass: linuxOwnerAnchorTimeoutRequest, serverRequiredFDs: 1, clientSendFDs: 1, stoppingAnswer: true, runHelperPeer: true,
+		timeoutClass: linuxOwnerAnchorTimeoutClassRequest, serverRequiredFDs: 1, clientSendFDs: 1, stoppingAnswer: true, runHelperPeer: true,
 	},
 	linuxOwnerAnchorOperationAuthorizeGate: {
-		timeoutClass: linuxOwnerAnchorTimeoutRequest, serverRequiredFDs: 0, stoppingAnswer: true, runHelperPeer: true,
+		timeoutClass: linuxOwnerAnchorTimeoutClassRequest, serverRequiredFDs: 0, stoppingAnswer: true, runHelperPeer: true,
 	},
 	linuxOwnerAnchorOperationStopLeaf: {
-		timeoutClass: linuxOwnerAnchorTimeoutWait, serverRequiredFDs: 0, clientCheckedFDs: true,
+		timeoutClass: linuxOwnerAnchorTimeoutClassWait, serverRequiredFDs: 0, clientCheckedFDs: true,
 		stoppingAnswer: true, runHelperPeer: true,
 	},
 	linuxOwnerAnchorOperationWaitReap: {
-		timeoutClass: linuxOwnerAnchorTimeoutWait, serverRequiredFDs: 0,
+		timeoutClass: linuxOwnerAnchorTimeoutClassWait, serverRequiredFDs: 0,
 	},
 	linuxOwnerAnchorOperationReapRun: {
-		timeoutClass: linuxOwnerAnchorTimeoutWait, serverRequiredFDs: 0,
+		timeoutClass: linuxOwnerAnchorTimeoutClassWait, serverRequiredFDs: 0,
 	},
 	linuxOwnerAnchorOperationWaitHelper: {
-		timeoutClass: linuxOwnerAnchorTimeoutWait, serverRequiredFDs: 0,
+		timeoutClass: linuxOwnerAnchorTimeoutClassWait, serverRequiredFDs: 0,
 	},
 	linuxOwnerAnchorOperationRetire: {
-		timeoutClass: linuxOwnerAnchorTimeoutRequest, serverRequiredFDs: 0,
+		timeoutClass: linuxOwnerAnchorTimeoutClassRequest, serverRequiredFDs: 0,
 	},
 	linuxOwnerAnchorOperationRetireCleared: {
-		timeoutClass: linuxOwnerAnchorTimeoutWait, serverRequiredFDs: 0,
+		timeoutClass: linuxOwnerAnchorTimeoutClassWait, serverRequiredFDs: 0,
 	},
 	linuxOwnerAnchorOperationRetireAborted: {
-		timeoutClass: linuxOwnerAnchorTimeoutWait, serverRequiredFDs: 0,
+		timeoutClass: linuxOwnerAnchorTimeoutClassWait, serverRequiredFDs: 0,
 	},
 	linuxOwnerAnchorOperationCloneCleanup: {
-		timeoutClass: linuxOwnerAnchorTimeoutCleanup, serverRequiredFDs: 1, serverFDsWithTarget: 2,
+		timeoutClass: linuxOwnerAnchorTimeoutClassCleanup, serverRequiredFDs: 1, serverFDsWithTarget: 2,
 		clientSendFDs: 1, clientFDsWithTarget: 2, clientCheckedFDs: true,
 	},
 }
@@ -362,16 +357,15 @@ func TestLinuxOwnerAnchorShapeTableRejectsDescriptorCounts(t *testing.T) {
 			if got := row.descriptorRejected(request, count); got != wantRefused {
 				t.Fatalf("operation %q with %d descriptors refused = %t, want %t", operation, count, got, wantRefused)
 			}
-			if row.serverRequiredFDsWithTarget == 0 {
-				continue
-			}
-			withTarget := request
-			withTarget.TargetFDPresent = true
-			withTarget.PriorRemovalProof = nil
-			wantRefused = count != expected.serverFDsWithTarget
-			if got := row.descriptorRejected(withTarget, count); got != wantRefused {
-				t.Fatalf("operation %q with a live target and %d descriptors refused = %t, want %t",
-					operation, count, got, wantRefused)
+			if row.serverRequiredFDsWithTarget != 0 {
+				withTarget := request
+				withTarget.TargetFDPresent = true
+				withTarget.PriorRemovalProof = nil
+				wantRefused = count != expected.serverFDsWithTarget
+				if got := row.descriptorRejected(withTarget, count); got != wantRefused {
+					t.Fatalf("operation %q with a live target and %d descriptors refused = %t, want %t",
+						operation, count, got, wantRefused)
+				}
 			}
 		}
 	}
@@ -507,43 +501,9 @@ func TestLinuxOwnerAnchorShapeTableAcceptsLocallyToleratedFields(t *testing.T) {
 // unixpacket pair and returns the frame and transferred descriptor count.
 func linuxOwnerAnchorShapeWriteFrame(t *testing.T, write func(*net.UnixConn)) ([]byte, []int) {
 	t.Helper()
-	endpoint := filepath.Join(t.TempDir(), "shape.sock")
-	listener, err := net.ListenUnix("unixpacket", &net.UnixAddr{Name: endpoint, Net: "unixpacket"})
-	if err != nil {
-		t.Fatalf("listen unixpacket: %v", err)
-	}
-	defer listener.Close()
-	client, err := net.DialUnix("unixpacket", nil, &net.UnixAddr{Name: endpoint, Net: "unixpacket"})
-	if err != nil {
-		t.Fatalf("dial unixpacket: %v", err)
-	}
-	defer client.Close()
-	server, err := listener.AcceptUnix()
-	if err != nil {
-		t.Fatalf("accept unixpacket: %v", err)
-	}
-	deadline := time.Now().Add(30 * time.Second)
-	if err := server.SetDeadline(deadline); err != nil {
-		t.Fatalf("set server deadline: %v", err)
-	}
-	if err := client.SetDeadline(deadline); err != nil {
-		t.Fatalf("set client deadline: %v", err)
-	}
+	client, server := linuxOwnerAnchorWirePair(t)
 	write(server)
-	data := make([]byte, linuxOwnerAnchorMaxFrame+1)
-	oob := make([]byte, syscall.CmsgSpace(8*4))
-	n, oobn, _, _, err := client.ReadMsgUnix(data, oob)
-	if err != nil {
-		if errors.Is(err, io.EOF) {
-			return nil, nil
-		}
-		t.Fatalf("read writer frame: %v", err)
-	}
-	fds, err := parseLinuxOwnerAnchorRights(oob[:oobn], 0)
-	if err != nil {
-		t.Fatalf("parse writer frame descriptors: %v", err)
-	}
-	return data[:n], fds
+	return linuxOwnerAnchorWireReadFrame(t, client)
 }
 
 // linuxOwnerAnchorShapeWriterPayload reproduces the capture harness payloads so
@@ -719,15 +679,6 @@ func TestLinuxOwnerAnchorShapeWriterGoldens(t *testing.T) {
 		if !strings.Contains(zero, fragment) {
 			t.Fatalf("the pinned identity frame is missing %s", fragment)
 		}
-	}
-	identityRows := 0
-	for _, row := range linuxOwnerAnchorOperationShapes {
-		if row.operation == linuxOwnerAnchorOperationIdentity {
-			identityRows++
-		}
-	}
-	if identityRows != 1 {
-		t.Fatalf("identity has %d shape rows, want 1", identityRows)
 	}
 }
 

@@ -156,18 +156,18 @@ func (request linuxOwnerAnchorRequest) fieldPresent(field linuxOwnerAnchorReques
 type linuxOwnerAnchorTimeoutClass int
 
 const (
-	// linuxOwnerAnchorTimeoutRequest is the zero value, and also the class of an
-	// operation the table does not cover.
-	linuxOwnerAnchorTimeoutRequest linuxOwnerAnchorTimeoutClass = iota
-	linuxOwnerAnchorTimeoutWait
-	linuxOwnerAnchorTimeoutCleanup
+	// linuxOwnerAnchorTimeoutClassRequest is the zero value, and also the class
+	// of an operation the table does not cover.
+	linuxOwnerAnchorTimeoutClassRequest linuxOwnerAnchorTimeoutClass = iota
+	linuxOwnerAnchorTimeoutClassWait
+	linuxOwnerAnchorTimeoutClassCleanup
 )
 
 func (class linuxOwnerAnchorTimeoutClass) duration() time.Duration {
 	switch class {
-	case linuxOwnerAnchorTimeoutWait:
+	case linuxOwnerAnchorTimeoutClassWait:
 		return linuxOwnerAnchorWaitTimeout
-	case linuxOwnerAnchorTimeoutCleanup:
+	case linuxOwnerAnchorTimeoutClassCleanup:
 		return linuxOwnerAnchorCleanupTimeout
 	default:
 		return linuxOwnerAnchorRequestTimeout
@@ -295,9 +295,9 @@ func (request linuxOwnerAnchorRequest) exclusiveFieldRejected(row linuxOwnerAnch
 }
 
 // linuxOwnerAnchorRequestFDCap bounds the descriptors one request may transfer.
-// It is sized by readLinuxOwnerAnchorRequest's four-descriptor ancillary buffer
-// and dominates every row's variable descriptor count; the table test asserts
-// that dominance.
+// The client refuses more than this (exchange's duplicate check) and the table
+// test asserts it dominates every row's server and client descriptor counts, so
+// the limit stays single-sourced here.
 const linuxOwnerAnchorRequestFDCap = 3
 
 func linuxOwnerAnchorRegisterProcessShape(request linuxOwnerAnchorRequest) bool {
@@ -371,7 +371,7 @@ var linuxOwnerAnchorOperationShapes = []linuxOwnerAnchorOperationShape{
 		},
 		serverRequiredFDs: 0,
 		responseFDs:       0,
-		timeoutClass:      linuxOwnerAnchorTimeoutRequest,
+		timeoutClass:      linuxOwnerAnchorTimeoutClassRequest,
 		stoppingAnswer:    true,
 	},
 	{
@@ -386,7 +386,7 @@ var linuxOwnerAnchorOperationShapes = []linuxOwnerAnchorOperationShape{
 		serverRequiredFDs: 2,
 		clientSendFDs:     2,
 		responseFDs:       3,
-		timeoutClass:      linuxOwnerAnchorTimeoutRequest,
+		timeoutClass:      linuxOwnerAnchorTimeoutClassRequest,
 		stoppingAnswer:    true,
 	},
 	{
@@ -399,7 +399,7 @@ var linuxOwnerAnchorOperationShapes = []linuxOwnerAnchorOperationShape{
 		},
 		serverRequiredFDs: 0,
 		responseFDs:       3,
-		timeoutClass:      linuxOwnerAnchorTimeoutRequest,
+		timeoutClass:      linuxOwnerAnchorTimeoutClassRequest,
 	},
 	{
 		operation: linuxOwnerAnchorOperationLookup,
@@ -412,7 +412,7 @@ var linuxOwnerAnchorOperationShapes = []linuxOwnerAnchorOperationShape{
 		},
 		serverRequiredFDs: 0,
 		responseFDs:       -1,
-		timeoutClass:      linuxOwnerAnchorTimeoutWait,
+		timeoutClass:      linuxOwnerAnchorTimeoutClassWait,
 	},
 	{
 		operation: linuxOwnerAnchorOperationRegisterProcess,
@@ -427,7 +427,7 @@ var linuxOwnerAnchorOperationShapes = []linuxOwnerAnchorOperationShape{
 		serverRequiredFDs: 1,
 		clientSendFDs:     1,
 		responseFDs:       0,
-		timeoutClass:      linuxOwnerAnchorTimeoutRequest,
+		timeoutClass:      linuxOwnerAnchorTimeoutClassRequest,
 		stoppingAnswer:    true,
 		runHelperPeer:     true,
 		shape:             linuxOwnerAnchorRegisterProcessShape,
@@ -451,7 +451,7 @@ var linuxOwnerAnchorOperationShapes = []linuxOwnerAnchorOperationShape{
 		clientCheckedFDs:  true,
 		clientFDsMismatch: "Linux owner child-origin request differs from its exact helper/process PIDFD",
 		responseFDs:       0,
-		timeoutClass:      linuxOwnerAnchorTimeoutWait,
+		timeoutClass:      linuxOwnerAnchorTimeoutClassWait,
 		stoppingAnswer:    true,
 		runHelperPeer:     true,
 		shape:             linuxOwnerAnchorClassifyChildShape,
@@ -473,7 +473,7 @@ var linuxOwnerAnchorOperationShapes = []linuxOwnerAnchorOperationShape{
 		serverRequiredFDs: 1,
 		clientSendFDs:     1,
 		responseFDs:       0,
-		timeoutClass:      linuxOwnerAnchorTimeoutRequest,
+		timeoutClass:      linuxOwnerAnchorTimeoutClassRequest,
 		stoppingAnswer:    true,
 		runHelperPeer:     true,
 		shape:             linuxOwnerAnchorGateShape,
@@ -494,7 +494,7 @@ var linuxOwnerAnchorOperationShapes = []linuxOwnerAnchorOperationShape{
 		},
 		serverRequiredFDs: 0,
 		responseFDs:       0,
-		timeoutClass:      linuxOwnerAnchorTimeoutRequest,
+		timeoutClass:      linuxOwnerAnchorTimeoutClassRequest,
 		stoppingAnswer:    true,
 		runHelperPeer:     true,
 		shape:             linuxOwnerAnchorGateShape,
@@ -517,7 +517,7 @@ var linuxOwnerAnchorOperationShapes = []linuxOwnerAnchorOperationShape{
 		clientCheckedFDs:  true,
 		clientFDsMismatch: "Linux owner anchor StopLeaf request differs from its exact helper producer fence",
 		responseFDs:       0,
-		timeoutClass:      linuxOwnerAnchorTimeoutWait,
+		timeoutClass:      linuxOwnerAnchorTimeoutClassWait,
 		stoppingAnswer:    true,
 		runHelperPeer:     true,
 		shape:             linuxOwnerAnchorStopLeafShape,
@@ -535,7 +535,7 @@ var linuxOwnerAnchorOperationShapes = []linuxOwnerAnchorOperationShape{
 		},
 		serverRequiredFDs: 0,
 		responseFDs:       0,
-		timeoutClass:      linuxOwnerAnchorTimeoutWait,
+		timeoutClass:      linuxOwnerAnchorTimeoutClassWait,
 		shape:             linuxOwnerAnchorWaitReapShape,
 	},
 	{
@@ -548,7 +548,7 @@ var linuxOwnerAnchorOperationShapes = []linuxOwnerAnchorOperationShape{
 		},
 		serverRequiredFDs: 0,
 		responseFDs:       0,
-		timeoutClass:      linuxOwnerAnchorTimeoutWait,
+		timeoutClass:      linuxOwnerAnchorTimeoutClassWait,
 		shape:             linuxOwnerAnchorReapRunShape,
 	},
 	{
@@ -561,7 +561,7 @@ var linuxOwnerAnchorOperationShapes = []linuxOwnerAnchorOperationShape{
 		},
 		serverRequiredFDs: 0,
 		responseFDs:       0,
-		timeoutClass:      linuxOwnerAnchorTimeoutWait,
+		timeoutClass:      linuxOwnerAnchorTimeoutClassWait,
 	},
 	{
 		operation: linuxOwnerAnchorOperationRetire,
@@ -574,7 +574,7 @@ var linuxOwnerAnchorOperationShapes = []linuxOwnerAnchorOperationShape{
 		},
 		serverRequiredFDs: 0,
 		responseFDs:       0,
-		timeoutClass:      linuxOwnerAnchorTimeoutRequest,
+		timeoutClass:      linuxOwnerAnchorTimeoutClassRequest,
 		shape:             linuxOwnerAnchorRetireReleaseShape,
 	},
 	{
@@ -589,7 +589,7 @@ var linuxOwnerAnchorOperationShapes = []linuxOwnerAnchorOperationShape{
 		},
 		serverRequiredFDs: 0,
 		responseFDs:       0,
-		timeoutClass:      linuxOwnerAnchorTimeoutWait,
+		timeoutClass:      linuxOwnerAnchorTimeoutClassWait,
 		shape:             linuxOwnerAnchorRetireClearedShape,
 	},
 	{
@@ -606,7 +606,7 @@ var linuxOwnerAnchorOperationShapes = []linuxOwnerAnchorOperationShape{
 		},
 		serverRequiredFDs: 0,
 		responseFDs:       0,
-		timeoutClass:      linuxOwnerAnchorTimeoutWait,
+		timeoutClass:      linuxOwnerAnchorTimeoutClassWait,
 		shape:             linuxOwnerAnchorRetireAbortedShape,
 	},
 	{
@@ -628,7 +628,7 @@ var linuxOwnerAnchorOperationShapes = []linuxOwnerAnchorOperationShape{
 		clientCheckedFDs:            true,
 		clientFDsMismatch:           "Linux owner anchor cleanup request is not bound to its durable RunKey and fence digest",
 		responseFDs:                 0,
-		timeoutClass:                linuxOwnerAnchorTimeoutCleanup,
+		timeoutClass:                linuxOwnerAnchorTimeoutClassCleanup,
 		shape:                       linuxOwnerAnchorCloneCleanupShape,
 	},
 }
@@ -650,7 +650,7 @@ func linuxOwnerAnchorOperationShapeFor(operation string) (linuxOwnerAnchorOperat
 func linuxOwnerAnchorTimeoutFor(operation string) time.Duration {
 	row, ok := linuxOwnerAnchorOperationShapeFor(operation)
 	if !ok {
-		return linuxOwnerAnchorTimeoutRequest.duration()
+		return linuxOwnerAnchorTimeoutClassRequest.duration()
 	}
 	return row.timeoutClass.duration()
 }

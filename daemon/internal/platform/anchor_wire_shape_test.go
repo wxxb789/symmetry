@@ -55,9 +55,11 @@ const (
 	linuxOwnerAnchorWireProcessPID      = 5151
 )
 
-// The three operations below were string literals before this slice; the local
-// names keep this harness compiling against both the base and the head tree
-// while the production constants are introduced.
+// The three operations below were string literals before this slice. The local
+// names are deliberate: this harness must also keep compiling against the
+// pre-slice base tree, which has no such production constants, so the recorded
+// pre-refactor run stays reproducible. The wire strings themselves are pinned
+// byte-for-byte by the goldens in anchor_shape_goldens_test.go.
 const (
 	linuxOwnerAnchorWireIdentityOperation        = "identity"
 	linuxOwnerAnchorWireRegisterProcessOperation = "register-process"
@@ -214,10 +216,9 @@ func linuxOwnerAnchorWireShapeRequest(t *testing.T, fixture linuxOwnerAnchorWire
 	return request
 }
 
-// linuxOwnerAnchorWireServe sends one request into a fresh unixpacket pair and
-// returns the frame serveConnection wrote, or nil when it refused the request
-// and closed the connection (the anchor closes every non-detached connection).
-func linuxOwnerAnchorWireServe(t *testing.T, anchor *linuxOwnerAnchor, request linuxOwnerAnchorRequest, fds []int) ([]byte, []int) {
+// linuxOwnerAnchorWirePair opens one unixpacket pair with a 30-second deadline
+// on both ends and returns the client and server sides.
+func linuxOwnerAnchorWirePair(t *testing.T) (*net.UnixConn, *net.UnixConn) {
 	t.Helper()
 	endpoint := filepath.Join(t.TempDir(), "owner.sock")
 	listener, err := net.ListenUnix("unixpacket", &net.UnixAddr{Name: endpoint, Net: "unixpacket"})
@@ -229,11 +230,12 @@ func linuxOwnerAnchorWireServe(t *testing.T, anchor *linuxOwnerAnchor, request l
 	if err != nil {
 		t.Fatalf("dial unixpacket: %v", err)
 	}
-	defer client.Close()
+	t.Cleanup(func() { _ = client.Close() })
 	server, err := listener.AcceptUnix()
 	if err != nil {
 		t.Fatalf("accept unixpacket: %v", err)
 	}
+	t.Cleanup(func() { _ = server.Close() })
 	deadline := time.Now().Add(30 * time.Second)
 	if err := client.SetDeadline(deadline); err != nil {
 		t.Fatalf("set client deadline: %v", err)
@@ -241,18 +243,13 @@ func linuxOwnerAnchorWireServe(t *testing.T, anchor *linuxOwnerAnchor, request l
 	if err := server.SetDeadline(deadline); err != nil {
 		t.Fatalf("set server deadline: %v", err)
 	}
-	encoded, err := json.Marshal(request)
-	if err != nil {
-		t.Fatalf("marshal wire request: %v", err)
-	}
-	var rights []byte
-	if len(fds) != 0 {
-		rights = syscall.UnixRights(fds...)
-	}
-	if _, _, err := client.WriteMsgUnix(encoded, rights, nil); err != nil {
-		t.Fatalf("write wire request: %v", err)
-	}
-	anchor.serveConnection(server)
+	return client, server
+}
+
+// linuxOwnerAnchorWireReadFrame reads the single frame the server wrote and its
+// descriptors; a closed connection is the silent refusal.
+func linuxOwnerAnchorWireReadFrame(t *testing.T, client *net.UnixConn) ([]byte, []int) {
+	t.Helper()
 	data := make([]byte, linuxOwnerAnchorMaxFrame+1)
 	oob := make([]byte, syscall.CmsgSpace(8*4))
 	n, oobn, _, _, err := client.ReadMsgUnix(data, oob)
@@ -269,50 +266,34 @@ func linuxOwnerAnchorWireServe(t *testing.T, anchor *linuxOwnerAnchor, request l
 	return data[:n], received
 }
 
-// linuxOwnerAnchorWireServeRaw sends already-encoded bytes so codec-level
-// rejections can be exercised without a shape-clean request.
+// linuxOwnerAnchorWireServeRaw sends already-encoded bytes into a fresh
+// unixpacket pair and returns the frame serveConnection wrote, or nil when it
+// refused the request and closed the connection (the anchor closes every
+// non-detached connection). Codec-level rejections use it to send a request
+// that must not be shape-clean.
 func linuxOwnerAnchorWireServeRaw(t *testing.T, anchor *linuxOwnerAnchor, encoded []byte, rights []byte) ([]byte, []int) {
 	t.Helper()
-	endpoint := filepath.Join(t.TempDir(), "owner.sock")
-	listener, err := net.ListenUnix("unixpacket", &net.UnixAddr{Name: endpoint, Net: "unixpacket"})
-	if err != nil {
-		t.Fatalf("listen unixpacket: %v", err)
-	}
-	defer listener.Close()
-	client, err := net.DialUnix("unixpacket", nil, &net.UnixAddr{Name: endpoint, Net: "unixpacket"})
-	if err != nil {
-		t.Fatalf("dial unixpacket: %v", err)
-	}
-	defer client.Close()
-	server, err := listener.AcceptUnix()
-	if err != nil {
-		t.Fatalf("accept unixpacket: %v", err)
-	}
-	deadline := time.Now().Add(30 * time.Second)
-	if err := client.SetDeadline(deadline); err != nil {
-		t.Fatalf("set client deadline: %v", err)
-	}
-	if err := server.SetDeadline(deadline); err != nil {
-		t.Fatalf("set server deadline: %v", err)
-	}
+	client, server := linuxOwnerAnchorWirePair(t)
 	if _, _, err := client.WriteMsgUnix(encoded, rights, nil); err != nil {
-		t.Fatalf("write raw wire request: %v", err)
+		t.Fatalf("write wire request: %v", err)
 	}
 	anchor.serveConnection(server)
-	data := make([]byte, linuxOwnerAnchorMaxFrame+1)
-	oob := make([]byte, syscall.CmsgSpace(8*4))
-	n, oobn, _, _, err := client.ReadMsgUnix(data, oob)
+	return linuxOwnerAnchorWireReadFrame(t, client)
+}
+
+// linuxOwnerAnchorWireServe marshals one request and sends it with the given
+// descriptors.
+func linuxOwnerAnchorWireServe(t *testing.T, anchor *linuxOwnerAnchor, request linuxOwnerAnchorRequest, fds []int) ([]byte, []int) {
+	t.Helper()
+	encoded, err := json.Marshal(request)
 	if err != nil {
-		if errors.Is(err, io.EOF) {
-			return nil, nil
-		}
-		t.Fatalf("read raw wire frame: %v", err)
+		t.Fatalf("marshal wire request: %v", err)
 	}
-	received, err := parseLinuxOwnerAnchorRights(oob[:oobn], 0)
-	if err != nil {
-		t.Fatalf("parse raw wire frame descriptors: %v", err)
+	var rights []byte
+	if len(fds) != 0 {
+		rights = syscall.UnixRights(fds...)
 	}
-	return data[:n], received
+	return linuxOwnerAnchorWireServeRaw(t, anchor, encoded, rights)
 }
 
 func TestLinuxOwnerAnchorWireShapeRejectsWrongDescriptorCounts(t *testing.T) {
@@ -404,6 +385,40 @@ func TestLinuxOwnerAnchorWireStoppingAnswerPrecedesShape(t *testing.T) {
 		frame, fds = linuxOwnerAnchorWireServe(t, fixture.anchor, request, linuxOwnerAnchorWireFDs(t, wrong))
 		if len(fds) != 0 || string(frame) != golden {
 			t.Fatalf("stopping answer for %q with %d descriptors = %q / %d descriptors, want the pinned bytes and no descriptors", operation, wrong, frame, len(fds))
+		}
+	}
+}
+
+// TestLinuxOwnerAnchorWireExclusiveFieldsRefusedBeforeStoppingAnswer pins the
+// phase-1 ordering the plan promises: the six clone/gate/stop-fence fields that
+// only their owning operation group may carry are refused silently even by a
+// stopping anchor, before its anchor_stopping answer. A single hoisted gate (the
+// phase-1 check dropped, or one of its six fields dropped) answers a frame here.
+func TestLinuxOwnerAnchorWireExclusiveFieldsRefusedBeforeStoppingAnswer(t *testing.T) {
+	fixture := newLinuxOwnerAnchorWireFixture(t, true)
+	cases := []struct {
+		name    string
+		present func(*linuxOwnerAnchorRequest)
+	}{
+		{"clone grant", func(request *linuxOwnerAnchorRequest) { request.CloneGrant = &authority.LinuxCloneGrant{} }},
+		{"clone cleanup intent", func(request *linuxOwnerAnchorRequest) {
+			request.Cleanup = &authority.LinuxCloneCleanupIntent{}
+		}},
+		{"clone target fd", func(request *linuxOwnerAnchorRequest) { request.TargetFDPresent = true }},
+		{"gate identity", func(request *linuxOwnerAnchorRequest) { request.Gate = &authority.LinuxCgroupGateIdentity{} }},
+		{"user namespace", func(request *linuxOwnerAnchorRequest) {
+			request.UserNamespace = &LinuxUserNamespaceIdentity{}
+		}},
+		{"stop fence", func(request *linuxOwnerAnchorRequest) {
+			request.StopFence = &LinuxOwnerAnchorProducerFence{}
+		}},
+	}
+	for _, item := range cases {
+		request := linuxOwnerAnchorWireShapeRequest(t, fixture, linuxOwnerAnchorWireIdentityOperation)
+		item.present(&request)
+		frame, fds := linuxOwnerAnchorWireServe(t, fixture.anchor, request, nil)
+		if frame != nil || len(fds) != 0 {
+			t.Fatalf("stopping anchor answered a shape-forbidden identity request (%s) with %d frame bytes and %d descriptors; want the silent phase-1 refusal", item.name, len(frame), len(fds))
 		}
 	}
 }
