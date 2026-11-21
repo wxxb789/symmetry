@@ -10,7 +10,6 @@ import (
 	"reflect"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/wxxb789/symmetry/daemon/internal/authority"
 	"github.com/wxxb789/symmetry/daemon/internal/control"
@@ -1308,22 +1307,17 @@ func goalSessionClosed(journal state.GoalSessionJournal) bool {
 // boundedGoalSessionUncertainReason caps the reason handed to
 // MarkGoalSessionUncertain at the store's durable budget. The store rejects an
 // over-budget reason, so an unbounded composed reason would leave an uncertain
-// native outcome unrecorded. The cut lands on a UTF-8 rune boundary; only the
-// reason text handed to the store is bounded, never the error chains returned
-// to callers.
+// native outcome unrecorded. The bounded prefix is made valid UTF-8, dropping
+// every invalid or partial-rune byte, because the store's JSON round trip
+// expands each invalid byte into U+FFFD and would otherwise push the reloaded
+// reason back over the budget, making the journal unloadable; only the reason
+// text handed to the store is bounded, never the error chains returned to
+// callers.
 func boundedGoalSessionUncertainReason(reason string) string {
 	if len(reason) <= state.GoalSessionUncertainReasonBytes {
 		return reason
 	}
-	bounded := reason[:state.GoalSessionUncertainReasonBytes]
-	for len(bounded) > 0 {
-		r, size := utf8.DecodeLastRuneInString(bounded)
-		if r != utf8.RuneError || size > 1 {
-			break
-		}
-		bounded = bounded[:len(bounded)-1]
-	}
-	return bounded
+	return strings.ToValidUTF8(reason[:state.GoalSessionUncertainReasonBytes], "")
 }
 
 func (daemon *daemon) markGoalSessionUncertain(key state.GoalSessionKey, reason string) error {

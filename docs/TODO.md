@@ -1104,3 +1104,25 @@ instead of appended.
       can collapse the arms to one static return after re-running the state suite on the Linux
       lane; the sweep and the classification table live in
       `docs/evidence/rf-w3-07-state-error-causes-2026-11-21.md` §1/§2.
+
+## Deferred review findings (PR #200)
+
+- [ ] Harden the goal-session uncertain-reason budget against invalid UTF-8 at the store
+      boundary (`daemon/internal/state/goal_session.go:1052` write check vs `:1688` read
+      validation; 2026-11-21, branch `refactor/rf-w3-07-state-error-causes`, PR #200 review
+      P2-1). A within-budget reason containing invalid UTF-8 bytes passes the write check
+      (`validRequiredString` is length-only), but the journal's JSON round trip replaces each
+      invalid byte with U+FFFD (3 bytes), so the reloaded `UncertainReason` can exceed the
+      4096-byte budget and `LoadGoalSession` then rejects the whole journal
+      (`invalid goal session journal`), making the session unreadable after a mark that was
+      accepted — e.g. a 4096-byte reason with one invalid byte reloads at 4098 bytes. The same
+      hazard exists on base `52bdffd2`; PR #200 fixed only the reason strings the app composes
+      (`boundedGoalSessionUncertainReason` now runs `strings.ToValidUTF8` over the over-budget
+      prefix), because the W307-R1 decision forbids changing the sink. Owner: state store. Fix
+      direction: reject or normalize non-UTF-8 reasons in
+      `MarkGoalSessionUncertain`/`validateGoalSessionStates` the way the app bound does.
+      Reproduction: `MarkGoalSessionUncertain(key, strings.Repeat("r", 4095)+"\xff")` succeeds,
+      then `LoadGoalSession(key)` returns `invalid goal session journal`; the app-side callers
+      are pinned by `daemon/internal/app/goal_delivery_test.go`:
+      `TestAbandonGoalSessionBoundsOversizedUncertainReason` (the interior-invalid-byte case)
+      and `TestBoundedGoalSessionUncertainReason` (the within-budget invalid-byte case).
