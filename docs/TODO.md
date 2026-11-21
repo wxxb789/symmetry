@@ -58,7 +58,8 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 
 - [ ] Revalidate and remove the daemon surfaces that are unreachable from both mains but still
       referenced, so no deletion is possible without retargeting a caller (2026-11-21, same
-      branch and plan). Three distinct groups, only the first of which is dead-code material.
+      branch and plan). Three groups were surveyed; only the first, below, is dead-code material
+      — the other two are live — do not remove (decision note below).
       **In the three-target `deadcode -test` intersection and referenced:**
       `control.NewOperatorClient` (`client.go:485`) with `SubmitTask`/`GetTask`/
       `CreateTaskCommand`/`operatorRequest`/`operatorRequestWithStatus` and
@@ -74,6 +75,9 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       `e2e/core_test.go`); and `harness.NewClaudeAdapterWithRunner` (`registry.go:245`, three test
       files). Removing any of them needs an owner for `daemon/e2e/**` and the app/control test
       seams — the W2-12 follow-up is that owner (program plan §4).
+
+- live — do not remove (decision note, 2026-11-21, same branch and plan): the two remaining
+      groups of that survey are production-live surfaces that no deletion pass may touch.
       **In the same `validation.go:209-629` range but in no target's `deadcode` findings (live
       code, not candidates):** `validateTerminalPayloads` (`:265`),
       `validateAcknowledgementResponse` (`:318`, caller `client.go:980`),
@@ -99,7 +103,7 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       does have method Verify)`. Pre-existing: both files are at the same lines in the baseline
       revision `a3039f0`, and CI's `go vet ./...` runs on the amd64 host, so nothing in the
       pipeline sees it. Fix by moving `TestLinuxCloneCleanupBeginCompleteRequiresExactReadbacks`
-      (`:723-1151`) into an amd64-tagged test file, keeping both assertions; do not delete them,
+      (`:723-1150`) into an amd64-tagged test file, keeping both assertions; do not delete them,
       do not narrow the whole test file's tag (its other 13 tests would leave the arm64 oracle),
       and do not widen only the reader's tag — the reader's file name pins GOOS/GOARCH, so a tag
       widening there needs a rename plus an arm64-compilability proof. The four packages W1-06
