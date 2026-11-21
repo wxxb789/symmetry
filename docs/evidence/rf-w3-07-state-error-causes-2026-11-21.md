@@ -774,14 +774,17 @@ stage moved them, and this section republishes every affected number.
 
 Moved (2026-11-22). The split of PR #214 moved this apply-stage set — S1, S2, S3, S4, S7 and the S9
 citation refresh — to the W3-07 follow-up branch `refactor/rf-w3-07b-state-error-followups`, which
-is where the code now lands; the W3-08 branch keeps only its rename/move slice (the split, the
-delivered tests and the branch's own gates are recorded in
+is where the code now lands under its own contract, `goal-rf-w3-07b-state-error-followups.md`
+(conductor decision 2026-11-22): the W3-07 contract alone does not admit the S2 deletion or the
+`state_unix.go`/`state_windows.go` STD-04 remedy (review round 1 P2-1). The W3-08 branch keeps only
+its rename/move slice; the split, the delivered tests and the branch's own gates are recorded in
 [`docs/plans/2026-11-22-rf-w3-07b-state-error-followups-plan.md`](../plans/2026-11-22-rf-w3-07b-state-error-followups-plan.md)).
 Cells marked "apply tip" resolve at the pre-split apply tip: on this branch every `state.go` cell
 at or below `Store.Close` resolves 3 lines lower and every `provider_action.go` cell at or below
-`serializeRunJournalWithinLimit` 2 lines lower (`Close` returns `releaseStoreLock`'s error directly
-and the helper's doc comment is two lines), while the `goal_session.go` cells resolve as written;
-§12.3's failing assertion resolves at `goal_delivery_test.go:808`. The sweep totals reproduce
+`serializeRunJournalWithinLimit` 4 lines lower (`Close` returns `releaseStoreLock`'s error directly
+and the helper's doc comment was dropped by review round 1), while the `goal_session.go` cells
+resolve as written;
+§12.3's failing assertion resolves at `goal_delivery_test.go:806`. The sweep totals reproduce
 unchanged at this branch's head: `rows 28 (static-new 28, static-fmt-no-w 0, sentinel-return 0)`,
 `-all`: row 28 / pred 196 / other-branch 39 / no-branch 265, raw listing total 528, `-selfcheck`
 exit 0.

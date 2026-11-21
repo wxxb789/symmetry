@@ -773,8 +773,6 @@ func TestAbandonGoalSessionBoundsOversizedUncertainReason(t *testing.T) {
 	}
 }
 
-// TestAbandonGoalSessionUncertainBoundsOversizedCloseReason pins that an
-// over-budget native-close cause cannot divert the session off the uncertain path.
 func TestAbandonGoalSessionUncertainBoundsOversizedCloseReason(t *testing.T) {
 	for _, test := range []struct {
 		name         string

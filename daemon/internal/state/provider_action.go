@@ -584,8 +584,6 @@ func reserveWorstCaseCompletions(journal RunJournal) RunJournal {
 	return reserved
 }
 
-// serializeRunJournalWithinLimit wraps a serialize failure; only the size arm
-// returns ErrProviderActionCapacity.
 func serializeRunJournalWithinLimit(journal RunJournal) ([]byte, error) {
 	data, err := serializeRunJournal(journal)
 	if err != nil {

@@ -97,11 +97,6 @@ func TestLoadJournalWrapsDecodeCause(t *testing.T) {
 	}
 }
 
-// TestMarkGoalSessionUncertainReasonBudget pins the durable reason budget the
-// composed write causes feed into: the 4096-byte GoalSessionUncertainReasonBytes
-// budget bounds the reason on the write and on the read. Exactly 4096 bytes is
-// accepted and loadable again; one byte more is rejected before the mutation,
-// so the journal file stays byte-identical.
 func TestMarkGoalSessionUncertainReasonBudget(t *testing.T) {
 	const limit = 4096
 	store := mustStore(t)
@@ -143,9 +138,6 @@ func TestMarkGoalSessionUncertainReasonBudget(t *testing.T) {
 	}
 }
 
-// TestLoadJournalWrapsCaseInsensitiveAliasCause pins the alias-check arm of the
-// decode path: a case-insensitive tag alias must report the alias it matched,
-// not a bare verdict, so the field can name the offending member.
 func TestLoadJournalWrapsCaseInsensitiveAliasCause(t *testing.T) {
 	t.Parallel()
 	store := mustStore(t)
@@ -171,9 +163,6 @@ func TestLoadJournalWrapsCaseInsensitiveAliasCause(t *testing.T) {
 	}
 }
 
-// TestStoreClosePreservesReleaseLockCauses pins the release seam: when the
-// state directory lock cannot be released, Close must carry the unlock/close
-// cause and must not repeat the release prefix.
 func TestStoreClosePreservesReleaseLockCauses(t *testing.T) {
 	t.Parallel()
 	store := mustStore(t)
@@ -193,7 +182,7 @@ func TestStoreClosePreservesReleaseLockCauses(t *testing.T) {
 		t.Fatalf("Close() error = %q, want the release prefix plus cause", err)
 	}
 	if got := strings.Count(err.Error(), "release state directory lock"); got != 1 {
-		t.Fatalf("Close() error = %q, want the release prefix %d time(s)", err, got)
+		t.Fatalf("Close() error = %q, release prefix appears %d time(s), want 1", err, got)
 	}
 	if !errors.Is(err, os.ErrClosed) {
 		t.Fatalf("Close() error = %v, want the closed-lock cause in its chain", err)
