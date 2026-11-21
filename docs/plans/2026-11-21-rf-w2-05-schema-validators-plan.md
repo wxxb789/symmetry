@@ -231,7 +231,7 @@ behaviour change beyond the extraction, no documentation change outside
 ## Residual risks
 
 - The extraction's only real risk is a silently changed message or ordering; it
-  is bounded by the new 30-drive pin table (green on base first) plus the
+  is bounded by the new 32-drive pin table (green on base first) plus the
   existing suites, and by the two mutation runs.
 - dLOC lands slightly above the plan row's estimate (the shared module head and
   alias lines are new lines). Reported as measured, not adjusted.
