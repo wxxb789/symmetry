@@ -616,6 +616,7 @@ func TestAcknowledgeCommandRequiresMatchingCommandResource(t *testing.T) {
 		{name: "mismatched generation", status: http.StatusOK, body: strings.Replace(valid, `"generation":2`, `"generation":3`, 1), wantErr: "command_id, run_id, or generation does not match the request"},
 		{name: "mismatched state", status: http.StatusOK, body: strings.Replace(valid, `"state":"acknowledged"`, `"state":"pending"`, 1), wantErr: "pending command must be run-bound without applied_at or acknowledgement"},
 		{name: "unpaired run", status: http.StatusOK, body: strings.Replace(valid, `"generation":2`, `"generation":null`, 1), wantErr: "run_id and generation must be null together"},
+		{name: "partial acknowledgement", status: http.StatusOK, body: strings.Replace(valid, `"acknowledged_at":"2026-09-03T00:00:01Z"`, `"acknowledged_at":null`, 1), wantErr: "acknowledgement fields must be null together"},
 		{name: "mismatched acknowledgement", status: http.StatusOK, body: strings.Replace(valid, `"acknowledgement_id":"ack-1"`, `"acknowledgement_id":"ack-2"`, 1), wantErr: "acknowledgement_id or outcome does not match the request"},
 		{name: "mismatched outcome", status: http.StatusOK, body: strings.Replace(valid, `"acknowledgement_outcome":"applied"`, `"acknowledgement_outcome":"rejected"`, 1), wantErr: "acknowledgement_id or outcome does not match the request"},
 	}

@@ -223,6 +223,15 @@ provider-action tables, `ValidateSupervisoryPayload`/`validateCommands` by
 `TestSupervisoryCommandRequestAndDispatchPayloads`, `validateTransitionResponse` by
 `TestPausedTransitionValidation`).
 
+**Review fix (P2-1, round 2).** Opus round 2 found the retained ack-path guard at
+`validation.go:296` ("acknowledgement fields must be null together") still covered but no longer
+asserted by any failing arm: with the guard off, a Control response carrying `acknowledgement_id`
+and `acknowledgement_outcome` but `"acknowledged_at":null` reaches the next check and panics on the
+nil `*time.Time`. `TestAcknowledgeCommandRequiresMatchingCommandResource` gains the
+`partial acknowledgement` row; neutralising the guard (`cond` → `false && (cond)`) reddens it at
+`validation.go:299` with that panic (full `control` + `protocol` suites: `ok` clean, `FAIL` under
+the flip). The round-1 list above is unchanged; this is the tenth flip.
+
 ## Evidence plan
 
 Every gate is foreground and sequential; no deadcode run or measurement runs beside a test suite on
@@ -252,8 +261,9 @@ this host.
    5 deliberately changed — the two mixed-table splits (`TestClientProtocolRequests`,
    `TestClientRejectsIncompleteSuccessResponses`) whose operator rows re-home, the two retargets
    (`TestNewClientRejectsInvalidConfiguration`,
-   `TestSupervisoryCommandRequestAndDispatchPayloads`), and the `unpaired run` row this fix adds to
-   `TestAcknowledgeCommandRequiresMatchingCommandResource`. That set gains 6 declarations
+   `TestSupervisoryCommandRequestAndDispatchPayloads`), and the two review-fix rows added to
+   `TestAcknowledgeCommandRequiresMatchingCommandResource` (`unpaired run`, `partial
+   acknowledgement`). That set gains 6 declarations
    (`TestMachineClientOversizedErrorResponseKeepsTypedFallback` and
    `TestPausedTransitionValidation` from the relocation, four from this fix), and this fix adds two
    more in `control/validation_test.go` (`TestSameJSONObjectPreservesNumericPrecision`,

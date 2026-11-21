@@ -1627,8 +1627,8 @@ moved on 2026-11-21 from branch `refactor/rf-w1-14-core-dead-surface`.
       `TestClientRejectsIncompleteSuccessResponses` (operator rows re-homed), the two retargets
       `TestNewClientRejectsInvalidConfiguration` and
       `TestSupervisoryCommandRequestAndDispatchPayloads`, and the `unpaired run` row the
-      review-round-1 fix adds to `TestAcknowledgeCommandRequiresMatchingCommandResource`. The
-      removal
+      review-round-1 fix adds to `TestAcknowledgeCommandRequiresMatchingCommandResource` plus the
+      `partial acknowledgement` row the review-round-2 fix adds to the same test. The removal
       evidence: `deadcode -test ./cmd/...` reports every moved symbol unreachable on all three
       targets (GOOS=windows amd64, GOOS=linux amd64, GOOS=linux arm64; 140, 250 and 158 findings
       at the baseline), and the tree-wide `git grep` leaves no reference outside `daemon/e2e/**`.
@@ -1638,12 +1638,12 @@ moved on 2026-11-21 from branch `refactor/rf-w1-14-core-dead-surface`.
       assertions still fail when the guarded behaviour is flipped (six artificial flips, six red
       runs — the sixth re-adds a task API to the machine `Client` and reddens the restored guard).
       `control.WithMaxResponseBytes` stays in `control` by the same contract's binding
-      amendment. The review-round-1 fix then restored the production guards the moved rows had
-      carried, with nine further artificial flips and nine red runs (production trailing-JSON
+      amendment. The review fixes then restored the production guards the moved rows had
+      carried, with ten further artificial flips and ten red runs (production trailing-JSON
       rejection, oversized success response, `IsOwnershipLost`/`IsTerminalGraceExpired`,
-      explicit-zero `Retry-After`, work-input presence and shape, paired `run_id`/`generation` on
-      the ack path, `expectedTaskID`, and the retained numeric comparator). The full suite and CI
-      remain the pull request's verification.
+      explicit-zero `Retry-After`, work-input presence and shape, paired `run_id`/`generation` and
+      all-or-nothing acknowledgement fields on the ack path, `expectedTaskID`, and the retained
+      numeric comparator). The full suite and CI remain the pull request's verification.
 
 ## Deferred review findings (0007f)
 
