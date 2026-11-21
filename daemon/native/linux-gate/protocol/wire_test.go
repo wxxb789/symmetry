@@ -11,9 +11,10 @@ import (
 )
 
 // Golden bytes for every portable frame whose bytes are fully determined by the
-// deterministic fixtures below and the fixed header layout. They were captured
-// from the assertion output of the first run of TestWireFrameRoundTrips and are
-// pinned here so a layout change fails even when the round trip still holds.
+// deterministic fixtures below and the fixed header layout. They were taken from
+// the base revision's encoders in the base-vs-HEAD frame dump (identical on both
+// sides) and are pinned here so a layout change fails even when the round trip
+// still holds.
 const (
 	wireTestLaunchRequestGoldenHex         = "53594d4c41303031010001000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20ababababababababababababababababcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
 	wireTestLaunchResultGoldenHex          = "53594d4c413030310100020000000000000000000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f2069100000e9030000ea0300006a1000000000000075f3c8f4e500000004000000000000001300000000000000a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf"
@@ -387,9 +388,6 @@ func wireTestRefusals(t *testing.T, valid []byte, decode func(packet []byte) err
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			if err := decode(valid); err != nil {
-				t.Fatalf("valid frame was rejected inside a refusal case: %v", err)
-			}
 			err := decode(testCase.mutate(valid))
 			if testCase.wantPrefix {
 				if err == nil || !strings.HasPrefix(err.Error(), testCase.want) {
@@ -473,6 +471,14 @@ func wireTestCopyUpTo(size int) func([]byte) []byte {
 func wireTestAppendZero() func([]byte) []byte {
 	return func(packet []byte) []byte {
 		return append(wireTestCopy(packet), 0)
+	}
+}
+
+// wireTestAppendOversizedCloneStatus drives a checkout status frame past the
+// 64 KiB status frame bound, the size branch a one-byte append cannot reach.
+func wireTestAppendOversizedCloneStatus() func([]byte) []byte {
+	return func(packet []byte) []byte {
+		return append(wireTestCopy(packet), make([]byte, maxCloneStatusFrameSize)...)
 	}
 }
 
@@ -696,8 +702,8 @@ func TestWireCloneStatusRefusals(t *testing.T) {
 					want: "Linux clone checkout image identity is truncated or has trailing bytes",
 				},
 				{
-					name: "oversized", mutate: wireTestAppendZero(),
-					want: "Linux clone checkout image identity is truncated or has trailing bytes",
+					name: "oversized", mutate: wireTestAppendOversizedCloneStatus(),
+					want: "Linux clone checkout frame header or size is invalid",
 				},
 				{
 					name: "unknown tag", mutate: wireTestSetUint16(10, wireTestUnknownFrameKind),

@@ -13,13 +13,16 @@ renamed or merged. `launcher_linux.go` is deleted; the package is compiled from 
 | `wire.go` | none | 680 | 111 | 58 const, 12 type, 3 method, 38 func |
 | `wire_linux.go` | `linux && amd64` | 766 | 30 | 2 type, 3 method, 25 func |
 | `owner_config_linux.go` | `linux && amd64` | 138 | 8 | 4 const, 1 method, 3 func |
-| `proc_identity_linux.go` | `linux && amd64` | 534 | 30 | 1 var, 5 type, 4 method, 20 func |
-| `gate_lifecycle_linux.go` | `linux && amd64` | 1,250 | 51 | 11 const, 3 var, 5 type, 24 method, 8 func |
-| total | | 3,368 | 230 | |
+| `proc_identity_linux.go` | `linux && amd64` | 530 | 29 | 5 type, 4 method, 20 func |
+| `gate_lifecycle_linux.go` | `linux && amd64` | 1,251 | 52 | 11 const, 4 var, 5 type, 24 method, 8 func |
+| total | | 3,365 | 230 | |
 
-`launcher_linux.go` (3,303 lines) is gone; the largest file is 1,250 lines (limit 1,500).
-3,098 of the original lines are the moved unit bodies; the remaining 205 are the deleted
-block delimiters, the five file headers/import blocks and the blank separators.
+`launcher_linux.go` (3,303 lines) is gone; the largest of the five split targets is 1,251
+lines (limit 1,500). The limit is scoped to the five split targets: the pre-existing
+`launcher_integration_linux_test.go` (1,573 lines, identical at base and HEAD) is untouched by
+this slice, as change step 4 requires. 3,098 of the original lines are the moved unit bodies;
+the remaining 205 are the deleted block delimiters, the five file headers/import blocks and
+the blank separators.
 
 Concern boundaries:
 
@@ -94,11 +97,11 @@ Concern boundaries:
   declaration end, plus a same-line trailing comment) from the base file and re-emitted
   verbatim; the splitter copies the original source lines. Verification re-parses the base
   file and the five targets and compares per-unit text keyed by `kind|receiver|name(s)`:
-  230/230 units present, 0 missing, 0 extra, 219 byte-identical, 11 differing **only in
-  gofmt's block-local `=` alignment** (9 `const` specs and 2 `var` specs whose new block has a
-  shorter longest name; space runs only, verified by whitespace-normalized equality *and*
-  token-stream equality, both 100%). The 11 are listed in the answer record with their
-  verbatim before/after text. No unit's token stream, comment text or literal changed.
+  230/230 units present, 0 missing, 0 extra, 221 byte-identical, 9 differing **only in
+  gofmt's block-local `=` alignment** (9 `const` specs whose new block has a shorter longest
+  name; space runs only, verified by whitespace-normalized equality *and* token-stream
+  equality, both 100%). The 9 are listed in the answer record with their verbatim before/after
+  text. No unit's token stream, comment text or literal changed.
 - **Wire frame bytes.** A scratch dump test (`.agents`-external, in the run scratch dir)
   encodes every frame type from fixed fixtures with the base revision and with the split
   revision: 100/100 lines identical, covering the 15 frame encoders (including RELEASE v2 and
@@ -180,8 +183,15 @@ Targets: `W`=`wire.go`, `WL`=`wire_linux.go`, `OC`=`owner_config_linux.go`,
 | `^type\|(ReleaseGuard\|execStatus)$`, `^method\|(NativeCommand\|GateProductionAuth)\|` | WL |
 | the 25 fd/SCM functions (`sendPacket`, `receiveLauncherResult`, `parseRights`, `waitForStatus`, `EncodeRelease`, `DecodeRelease`, `decodeReleaseFrame`, `EncodeGateMap`, `DecodeGateMap`, `receiveExecStatus`, `closeFDs`, …) | WL |
 | `^const\|(OwnerConfigMaxBytes\|maxOwnerConfigBytes\|maxOwnerStateDirBytes\|ownerConfigPath)$`, `^method\|OwnerConfig\|`, `^func\|\|(ReadInstalledOwnerConfig\|parseOwnerConfig\|validateOwnerStateDir)$` | OC |
-| `^var\|ErrInaccessibleUserNamespace$`, `^type\|(InaccessibleUserNamespaceError\|nativeImageIdentity\|pinnedNativeImage\|procStatus\|namespaceStat)$`, `^method\|(InaccessibleUserNamespaceError\|pinnedNativeImage)\|`, the 20 `/proc`+pinning functions | PI |
-| `^const\|(launcherPath\|cloneBootstrapPath\|bootstrapTimeout\|execAckTimeout\|cloneBootstrapTimeout)$`, `^var\|(ErrOutcomeUnknown\|ErrReleaseUsed\|ErrGateNeverProduced)$`, `^const\|gate[A-Z]`, `^type\|(GateNeverProducedError\|LauncherOutcomeError\|PreparedGate\|gateState\|LauncherStartHook)$`, `^method\|(GateNeverProducedError\|LauncherOutcomeError\|PreparedGate)\|`, `^func\|\|(launcherExitProof\|Prepare\|validateCloneCheckoutReceipt\|validateReleaseGuardLive\|waitProcessFD\|stopLauncher\|closeFiles\|errOr)$` | GL |
+| `^type\|(InaccessibleUserNamespaceError\|nativeImageIdentity\|pinnedNativeImage\|procStatus\|namespaceStat)$`, `^method\|(InaccessibleUserNamespaceError\|pinnedNativeImage)\|`, the 20 `/proc`+pinning functions | PI |
+| `^const\|(launcherPath\|cloneBootstrapPath\|bootstrapTimeout\|execAckTimeout\|cloneBootstrapTimeout)$`, `^var\|(ErrOutcomeUnknown\|ErrReleaseUsed\|ErrGateNeverProduced\|ErrInaccessibleUserNamespace)$`, `^const\|gate[A-Z]`, `^type\|(GateNeverProducedError\|LauncherOutcomeError\|PreparedGate\|gateState\|LauncherStartHook)$`, `^method\|(GateNeverProducedError\|LauncherOutcomeError\|PreparedGate)\|`, `^func\|\|(launcherExitProof\|Prepare\|validateCloneCheckoutReceipt\|validateReleaseGuardLive\|waitProcessFD\|stopLauncher\|closeFiles\|errOr)$` | GL |
+
+Block exception (same mechanism as decision 4): the `var ( … )` block holding
+`ErrOutcomeUnknown`, `ErrReleaseUsed` and `ErrInaccessibleUserNamespace`
+(`gate_lifecycle_linux.go:34-38`) moved whole because the splitter never splits a block, so
+`ErrInaccessibleUserNamespace` ships in `GL` although the typed error it belongs to
+(`InaccessibleUserNamespaceError`) is in `PI`. `ErrGateNeverProduced` is the fourth `GL`
+`var` unit; `PI` carries no `var`.
 
 ## Out of scope
 
@@ -200,7 +210,7 @@ run's scratch directory holds the whole artifacts. Summary of what the delivered
 
 | check | result |
 |---|---|
-| file sizes | `wire.go` 680, `wire_linux.go` 766, `owner_config_linux.go` 138, `proc_identity_linux.go` 530, `gate_lifecycle_linux.go` 1,250; `launcher_linux.go` deleted |
+| file sizes | `wire.go` 680, `wire_linux.go` 766, `owner_config_linux.go` 138, `proc_identity_linux.go` 530, `gate_lifecycle_linux.go` 1,251; `launcher_linux.go` deleted |
 | declaration set | 230/230 units, 0 missing, 0 extra, 221 byte-identical, 9 whitespace-only (gofmt `=` alignment in the two `const` blocks whose longest name changed), 0 token differences, import set 21 = 21 |
 | `go doc -all` | byte-identical base vs HEAD (508 lines) |
 | frame/refusal golden | base vs HEAD dump identical, 100/100 lines: 16 frame encodes (all 15 kinds incl. RELEASE v2 and a v3 clone frame), 14 decoded forms, 70 decode-refusal strings, 5 encoder-refusal strings |
@@ -210,5 +220,5 @@ run's scratch directory holds the whole artifacts. Summary of what the delivered
 | host tests | `go test -count=1 ./native/linux-gate/protocol/...`: ok (portable codec off-Linux) |
 | WSL tests | `go test -count=1 -race -v ./native/linux-gate/... ./internal/platform/...`: `native/linux-gate/protocol` ok (4.196 s, 243 pass, 0 fail); `internal/platform` fails 4 loopback-TCP tests and its 600 s package budget, identically at the base revision (4 failures, 600.097 s) — a loopback-dial environment limit of this WSL instance, not this slice; 12 skips, all declared in files this slice did not touch |
 | fuzzing | 14 fuzz targets, `-fuzztime=30s` each: 11 portable on the host (4.6M-8.2M execs each) and 3 linux-only in WSL (28k-1.4M execs each); 0 failures |
-| red mutants | 11 flipped guards (one per new refusal test function), each control-green, mutant-red on the intended test function, and the file restored byte-identically |
+| red mutants | 11 flipped guards across the 8 new refusal test functions (5 portable + 3 linux; `TestWireLauncherReadyRefusals` and `TestWireCloneStatusRefusals` carry two each), each control-green, mutant-red on the intended test function, and the file restored byte-identically. The apply stage re-ran all 11 against the simplified tests (each still control-green and mutant-red) and verified one further guard for the newly covered oversized checkout-status bound: 12/12 |
 | citation gate | `python3 scripts/ci/check-citation-existence.py --base 79548368 --head HEAD`: nothing to check (no committed range) |

@@ -139,9 +139,6 @@ func TestWireLinuxReleaseCloneRoundTrip(t *testing.T) {
 		Dir: grant.Intent.Target, Stdin: pipes.stdinRead, Stdout: pipes.stdoutWrite, Stderr: pipes.stderrWrite,
 		Clone: &grant,
 	}
-	if command.Dir != grant.Intent.Target {
-		t.Fatalf("clone command directory %q is not its exact target %q", command.Dir, grant.Intent.Target)
-	}
 	packet, err := EncodeRelease(token, command, guard)
 	if err != nil {
 		t.Fatalf("encode guarded clone RELEASE: %v", err)
@@ -515,6 +512,26 @@ func wireTestReleaseCanonical(t *testing.T, token [32]byte, command NativeComman
 	return hex.EncodeToString(packet)
 }
 
+// wireTestFuzzReleaseReplay fuzzes one RELEASE-family decoder for replay
+// determinism: an accepted packet must decode twice to the same deadline and to
+// the same canonical re-encoded bytes. label names the decoder in failures.
+func wireTestFuzzReleaseReplay(t *testing.T, candidate []byte, label string, token [32]byte,
+	decode func(packet []byte) (NativeCommand, uint64, error)) {
+	t.Helper()
+	first, firstDeadline, err := decode(candidate)
+	if err != nil {
+		return
+	}
+	second, secondDeadline, err := decode(candidate)
+	if err != nil {
+		t.Fatalf("accepted %s was rejected on replay: %v", label, err)
+	}
+	if firstDeadline != secondDeadline ||
+		wireTestReleaseCanonical(t, token, first, firstDeadline) != wireTestReleaseCanonical(t, token, second, secondDeadline) {
+		t.Fatalf("%s decode is not order-independent: %d != %d", label, firstDeadline, secondDeadline)
+	}
+}
+
 func FuzzDecodeRelease(f *testing.F) {
 	descriptors := wireTestFuzzReleaseDescriptors(f)
 	token := wireTestToken()
@@ -534,18 +551,9 @@ func FuzzDecodeRelease(f *testing.F) {
 	wireTestAddFrameSeeds(f, packetV2)
 	wireTestAddFrameSeeds(f, packetV3)
 	f.Fuzz(func(t *testing.T, candidate []byte) {
-		first, firstDeadline, err := DecodeRelease(candidate, token, descriptors)
-		if err != nil {
-			return
-		}
-		second, secondDeadline, err := DecodeRelease(candidate, token, descriptors)
-		if err != nil {
-			t.Fatalf("accepted RELEASE was rejected on replay: %v", err)
-		}
-		if firstDeadline != secondDeadline ||
-			wireTestReleaseCanonical(t, token, first, firstDeadline) != wireTestReleaseCanonical(t, token, second, secondDeadline) {
-			t.Fatalf("RELEASE decode is not order-independent: %d != %d", firstDeadline, secondDeadline)
-		}
+		wireTestFuzzReleaseReplay(t, candidate, "RELEASE", token, func(packet []byte) (NativeCommand, uint64, error) {
+			return DecodeRelease(packet, token, descriptors)
+		})
 	})
 }
 
@@ -568,17 +576,8 @@ func FuzzDecodeCloneBootstrapRequest(f *testing.F) {
 	wireTestAddFrameSeeds(f, sealed)
 	wireTestAddFrameSeeds(f, scratch)
 	f.Fuzz(func(t *testing.T, candidate []byte) {
-		first, firstDeadline, err := DecodeCloneBootstrapRequest(candidate)
-		if err != nil {
-			return
-		}
-		second, secondDeadline, err := DecodeCloneBootstrapRequest(candidate)
-		if err != nil {
-			t.Fatalf("accepted clone bootstrap request was rejected on replay: %v", err)
-		}
-		if firstDeadline != secondDeadline ||
-			wireTestReleaseCanonical(t, [32]byte{}, first, firstDeadline) != wireTestReleaseCanonical(t, [32]byte{}, second, secondDeadline) {
-			t.Fatalf("clone bootstrap decode is not order-independent: %d != %d", firstDeadline, secondDeadline)
-		}
+		wireTestFuzzReleaseReplay(t, candidate, "clone bootstrap request", [32]byte{}, func(packet []byte) (NativeCommand, uint64, error) {
+			return DecodeCloneBootstrapRequest(packet)
+		})
 	})
 }
