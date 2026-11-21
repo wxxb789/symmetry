@@ -45,6 +45,7 @@ defmodule SymmetryControlWeb.PortalIntegrationsTest do
 
   import Ecto.Query
   import SymmetryControlWeb.PortalFixtures, only: [create_connection: 4, create_project: 2]
+  import SymmetryControlWeb.ServedDocument, only: [validate_served_document!: 2]
   import SymmetryControlWeb.TestConn, only: [api_conn: 0]
 
   alias Ecto.Adapters.SQL.Sandbox
@@ -107,8 +108,24 @@ defmodule SymmetryControlWeb.PortalIntegrationsTest do
 
     resource = create_tracker(project, connection, "Read tracker")
 
+    response = api_conn() |> get("/portal/api/connections") |> json_response(200)
+
+    # The connections-read gate: this real served document — the populated rows
+    # this test already asserts — is compared with the canonical bundle. Every
+    # declared member sits in its definition's `required` array — `Connection`
+    # 12, `ConnectionResource` 17, `ConnectionProvider` 3
+    # (`jq -c '.definitions.<definition>.required'` over
+    # `contracts/v1/connections-read.schema.json`) — so the bundle comparison
+    # refuses a serving rename of every member the surface reads and no member
+    # needs a hand-written presence pin. The resource projection also emits one
+    # member the definition does not declare (`connection_id`, from
+    # `PortalJSON.resource/1` under `connection_resource/1`): no connections
+    # surface reads it, and the workspace gate pins the same serving member in
+    # its `WorkspaceResource` row.
+    validate_served_document!("connections-read", response)
+
     assert %{"providers" => providers, "connections" => connections} =
-             api_conn() |> get("/portal/api/connections") |> json_response(200)
+             response
 
     assert Enum.map(providers, & &1["id"]) |> Enum.sort() == ["azure_devops", "github"]
 
