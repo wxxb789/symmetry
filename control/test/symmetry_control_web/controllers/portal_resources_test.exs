@@ -112,13 +112,14 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
 
   import Ecto.Query
   import SymmetryControlWeb.PortalFixtures, only: [create_connection: 4, create_project: 2]
-  import SymmetryControlWeb.ServedDocument, only: [validate_served_document!: 2]
-  import SymmetryControlWeb.TestConn, only: [api_conn: 0]
+  import SymmetryControlWeb.ServedDocument
+  import SymmetryControlWeb.TestConn, only: [api_conn: 0, create_resource: 5]
 
   alias SymmetryControl.Orchestration
   alias SymmetryControl.Repo
   alias SymmetryControl.TestEnv
   alias SymmetryControl.Workspaces.{ProjectResource, WorkItem}
+  alias SymmetryControlWeb.PortalJSON
 
   @delivery_url "https://github.com/acme/symmetry/pull/42"
   # The manual seed is GitHub's diff permalink, so the provider's own canonical
@@ -127,6 +128,63 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
   @delivery_updated_at ~U[2026-09-05 09:45:00.000000Z]
   @delivery_head_sha "9f2c1d4b6a8e0f3c5d7b9a1e2f4c6d8b0a2e4f6c"
   @delivery_ci_url "https://github.com/acme/symmetry/actions/runs/9"
+
+  # The delivery precedence matrix's inputs. The provider and manual values are
+  # distinguishable per member, and the CI provider timestamp differs from the
+  # change one so a member fed the wrong provider context fails its row.
+  @delivery_provider_url "https://provider.example/acme/symmetry/pull/410"
+  @delivery_provider_state "merged"
+  @delivery_provider_ci "passed"
+  @delivery_provider_review "approved"
+  @delivery_ci_updated_at ~U[2026-09-06 10:15:00.000000Z]
+  @delivery_manual_ci "pending"
+  @delivery_manual_review "required"
+  @delivery_agent_recorded_at ~U[2026-09-07 11:30:00.000000Z]
+  @delivery_event_id "00000000-0000-4000-8000-000000000901"
+  @delivery_agent_pr_url "https://agent.example/acme/symmetry/pull/77"
+  @delivery_agent_ci_url "https://agent.example/acme/symmetry/actions/runs/77"
+  @delivery_agent_review_url "https://agent.example/acme/symmetry/reviews/77"
+  @delivery_agent_summary "One failing test in control"
+
+  # The read model's evidence entries (`workspaces/read_model.ex`): `source/1`
+  # contributes source/generation/event_id/recorded_at, the kind's own event
+  # members are merged over it, and `url`/`state` (pull_request) or
+  # `status`/`url`/`summary` (ci, review) exist only when the payload carried
+  # them. `@delivery_bare_agent` is the map the read model does not write (an
+  # entry without its kind's required member is never recorded), so it pins the
+  # `Map.put_new(field, value)` half of the agent branch.
+  @delivery_agent_pull_request %{
+    source: "agent",
+    generation: 3,
+    event_id: @delivery_event_id,
+    recorded_at: @delivery_agent_recorded_at,
+    url: @delivery_agent_pr_url,
+    state: "open"
+  }
+  @delivery_agent_ci %{
+    source: "agent",
+    generation: 3,
+    event_id: @delivery_event_id,
+    recorded_at: @delivery_agent_recorded_at,
+    status: "failed",
+    url: @delivery_agent_ci_url,
+    summary: @delivery_agent_summary
+  }
+  @delivery_agent_review %{
+    source: "agent",
+    generation: 3,
+    event_id: @delivery_event_id,
+    recorded_at: @delivery_agent_recorded_at,
+    status: "changes_requested",
+    url: @delivery_agent_review_url,
+    summary: @delivery_agent_summary
+  }
+  @delivery_bare_agent %{
+    source: "agent",
+    generation: 4,
+    event_id: @delivery_event_id,
+    recorded_at: @delivery_agent_recorded_at
+  }
 
   # The optional-but-consumed members of `workspace-read`
   # (`contracts/v1/workspace-read.schema.json`): each name is read by
@@ -141,26 +199,21 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
   # consumed surface reads pinned by name even if a schema edit stops declaring
   # it. Frontend read sites, list by list:
   #
-  #   root             features/runtimes/runtimes.tsx:81,85,95; features/connections/resources.tsx:136
-  #   project row      features/projects/projects.tsx:89,108; features/planning/write-policy.ts:50,201;
-  #                    features/work/assignment.tsx:250; features/connections/resources.tsx:130
-  #   resource row     features/connections/resources.tsx:102-116; features/work/assignment.tsx:53-57
-  #   registered row   features/connections/resources.tsx:137-140
-  #   runtime row      features/runtimes/runtimes.tsx:17,25,37-41
-  #   capabilities     features/runtimes/runtimes.tsx:16,50-56 read `adapter`; the four booleans have no
+  #   root             features/runtimes/runtimes.tsx:82,86,96; features/connections/resources.tsx:121
+  #   project row      features/projects/projects.tsx:90,109; features/planning/write-policy.ts:50,201;
+  #                    features/work/assignment.tsx:251; features/connections/resources.tsx:115
+  #   resource row     features/connections/resources.tsx:87-101; features/work/assignment.tsx:54-58
+  #   registered row   features/connections/resources.tsx:122-125
+  #   runtime row      features/runtimes/runtimes.tsx:18,26,38-42
+  #   capabilities     features/runtimes/runtimes.tsx:17,51-57 read `adapter`; the four booleans have no
   #                    member-named read site — the whole map is serialized into `data-capabilities`
-  #                    (`runtimes.tsx:24`) and `browser/tests/portal-live-daemon.spec.mjs` asserts that
+  #                    (`runtimes.tsx:25`) and `browser/tests/portal-live-daemon.spec.mjs` asserts that
   #                    attribute equals the registration-side map
-  #   work row         features/work/control.tsx:304,444; features/work/assignment.tsx:152-155;
+  #   work row         features/work/control.tsx:305,445; features/work/assignment.tsx:153-156;
   #                    features/planning/write-policy.ts:27-28,40,264-279; features/work/detail.tsx:310-343,370
-  #   delivery value   features/work/presentation.ts:293,339-340,347-348,355-356
+  #   delivery value   features/work/presentation.ts:262,308-309,316-317,324-325
   #   external row     features/work/detail.tsx:320; features/planning/write-policy.ts:20
-  #   waiting decision features/work/presentation.ts:399-409
-  # The canonical bundle `ServedDocument.validate_served_document!/2` compares
-  # every gate's response against; the presence assertions derive their
-  # declared-member half from it at test time.
-  @schema_bundle Path.expand("../../../../daemon/internal/contracts/schema_bundle.json", __DIR__)
-
+  #   waiting decision features/work/presentation.ts:368-378
   @workspace_read_members ~w(runtimes registered_runtimes)
   @workspace_project_members ~w(version default_agent_profile default_workspace resources)
   @workspace_resource_members ~w(id project_id connection_id kind name provider external_ref url
@@ -895,6 +948,234 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
     assert stored.external_ci_data == %{}
   end
 
+  # The delivery member is the wire's one place where a provider-owned value, an
+  # operator's manual value and the attempt's agent evidence compete. Only the
+  # provider branch adds `provider`/`recorded_at`, only the agent branch carries
+  # the evidence map's own members; manual and none serve the same five, and the
+  # pull request's `status` is overridden after resolution
+  # (`provider_pull_request_state/2`). This matrix pins the full served map —
+  # exact member set and values — of every branch for every member, on the
+  # projection every delivery-serving read shares (`PortalJSON.work_item/2`).
+  test "the served delivery keeps the provider, manual, agent and none precedence member by member" do
+    matrix = delivery_precedence_matrix()
+
+    assert matrix |> Enum.map(&elem(&1, 0)) |> Enum.uniq() |> Enum.sort() ==
+             [:ci, :pull_request, :review]
+
+    assert length(matrix) == 24
+
+    Enum.each(matrix, fn {member, label, attrs, evidence, expected} ->
+      served = delivery_row(attrs, evidence)
+
+      assert served.delivery[member] == expected,
+             "delivery #{member} (#{label}) served #{inspect(served.delivery[member])}"
+    end)
+  end
+
+  # The one thing the projection-level matrix cannot reach: the agent branch's
+  # members as the *read model* writes them (not a hand-built map), travelling
+  # through Jason to the response body — the evidence's `recorded_at` is a
+  # `DateTime` there and an ISO 8601 string on the wire. No test in the four
+  # owned files serves a delivery from evidence today; repo-wide, the agent
+  # branch's pass-through members were pinned only as `delivery.ci.generation`
+  # (`chat_test.exs:847`), so this case is their first full-member wire pin.
+  test "the served agent delivery carries the attempt's evidence members through the wire" do
+    project = create_project("AGENTDEL")
+
+    runtime = enroll_adapter_runtime("agent-delivery", "Agent delivery runtime")
+
+    item =
+      create_work_item(project, "Agent delivery target", %{
+        "assignee_type" => "agent",
+        "agent_profile" => "codex"
+      })
+
+    assert %{"execution" => %{"task_id" => task_id}} =
+             api_conn()
+             |> post("/portal/api/work-items/#{item["id"]}/run", %{
+               "action_id" => "agent-delivery-run"
+             })
+             |> json_response(202)
+
+    {run, fence} = claim_gate_attempt(runtime, task_id, 4_600)
+
+    # The three semantic delivery events the read model folds into one evidence
+    # entry per member; `now:` pins the recording time every entry reports.
+    assert {:ok, stored} =
+             Orchestration.append_events(
+               run.id,
+               fence,
+               [
+                 %{
+                   event_id: uuid(4_610),
+                   sequence: 1,
+                   kind: "pull_request",
+                   payload: %{"url" => @delivery_agent_pr_url, "state" => "open"},
+                   occurred_at: @delivery_agent_recorded_at
+                 },
+                 %{
+                   event_id: uuid(4_611),
+                   sequence: 2,
+                   kind: "ci",
+                   payload: %{
+                     "status" => "failed",
+                     "url" => @delivery_agent_ci_url,
+                     "summary" => @delivery_agent_summary
+                   },
+                   occurred_at: @delivery_agent_recorded_at
+                 },
+                 %{
+                   event_id: uuid(4_612),
+                   sequence: 3,
+                   kind: "review",
+                   payload: %{
+                     "status" => "changes_requested",
+                     "url" => @delivery_agent_review_url,
+                     "summary" => @delivery_agent_summary
+                   },
+                   occurred_at: @delivery_agent_recorded_at
+                 }
+               ],
+               now: @delivery_agent_recorded_at
+             )
+
+    assert length(stored) == 3
+
+    delivery = served_item(project["id"], item["id"])["delivery"]
+
+    assert delivery["pull_request"] == %{
+             "value" => @delivery_agent_pr_url,
+             "source" => "agent",
+             "generation" => run.generation,
+             "event_id" => uuid(4_610),
+             "recorded_at" => "2026-09-07T11:30:00.000000Z",
+             "url" => @delivery_agent_pr_url,
+             "state" => "open",
+             "status" => nil
+           }
+
+    assert delivery["ci"] == %{
+             "value" => "failed",
+             "source" => "agent",
+             "generation" => run.generation,
+             "event_id" => uuid(4_611),
+             "recorded_at" => "2026-09-07T11:30:00.000000Z",
+             "status" => "failed",
+             "url" => @delivery_agent_ci_url,
+             "summary" => @delivery_agent_summary
+           }
+
+    assert delivery["review"] == %{
+             "value" => "changes_requested",
+             "source" => "agent",
+             "generation" => run.generation,
+             "event_id" => uuid(4_612),
+             "recorded_at" => "2026-09-07T11:30:00.000000Z",
+             "status" => "changes_requested",
+             "url" => @delivery_agent_review_url,
+             "summary" => @delivery_agent_summary
+           }
+  end
+
+  # CW-8a's getter reads the attempt's result under two spellings, and the
+  # string one is the spelling a result JSON arrives in. These two cases are the
+  # only tests in the four owned suites that serve a non-empty attempt result
+  # through `PortalJSON.outcome/5` — the getter's key table reduced to a single
+  # key left every suite green (plan, `## Evidence as run`) — so they are the
+  # table's committed pins: each served member below fails if its own key leaves
+  # the table.
+  test "the served outcome reads the attempt result's string-keyed members" do
+    project = create_project("OUTCOME")
+    runtime = enroll_adapter_runtime("outcome-result", "Outcome result runtime")
+
+    item =
+      create_work_item(project, "Outcome result target", %{
+        "assignee_type" => "agent",
+        "agent_profile" => "codex"
+      })
+
+    assert %{"execution" => %{"task_id" => task_id}} =
+             api_conn()
+             |> post("/portal/api/work-items/#{item["id"]}/run", %{
+               "action_id" => "outcome-result-run"
+             })
+             |> json_response(202)
+
+    {run, fence} = claim_gate_attempt(runtime, task_id, 4_700)
+
+    # The attempt's result JSON, string keys and all: the served outcome's
+    # members resolve only through the getter's string spelling.
+    transition(run, fence, "completed", 4_701, %{
+      "summary" => "The attempt's own result summary",
+      "findings" => [
+        %{"message" => "The getter serves the string spelling", "severity" => "info"}
+      ],
+      "changed_artifacts" => [
+        %{"path" => "control/lib/symmetry_control_web/portal_json.ex", "kind" => "file"}
+      ],
+      "tests" => [%{"name" => "portal_resources_test", "status" => "passed"}]
+    })
+
+    outcome =
+      api_conn()
+      |> get("/portal/api/work-items/#{item["id"]}")
+      |> json_response(200)
+      |> Map.fetch!("outcome")
+
+    assert outcome["summary"] == "The attempt's own result summary"
+
+    assert outcome["findings"] == [
+             %{"message" => "The getter serves the string spelling", "severity" => "info"}
+           ]
+
+    assert outcome["changed_artifacts"] == [
+             %{"path" => "control/lib/symmetry_control_web/portal_json.ex", "kind" => "file"}
+           ]
+
+    assert outcome["tests"] == [%{"name" => "portal_resources_test", "status" => "passed"}]
+  end
+
+  # The getter's fallback spelling: the outcome serves `changed_artifacts`
+  # through `list_value(result, "changed_artifacts", "changed_files")`, so a
+  # result carrying only `changed_files` exercises the fallback lookup — the
+  # case above carries the primary spelling. This is the committed pin for the
+  # table's `changed_files` entry (plan, `## Fix-stage re-record`).
+  test "the served outcome reads a changed_files result through the fallback spelling" do
+    project = create_project("CHGFILES")
+    runtime = enroll_adapter_runtime("changed-files", "Changed files runtime")
+
+    item =
+      create_work_item(project, "Changed files target", %{
+        "assignee_type" => "agent",
+        "agent_profile" => "codex"
+      })
+
+    assert %{"execution" => %{"task_id" => task_id}} =
+             api_conn()
+             |> post("/portal/api/work-items/#{item["id"]}/run", %{
+               "action_id" => "changed-files-run"
+             })
+             |> json_response(202)
+
+    {run, fence} = claim_gate_attempt(runtime, task_id, 4_800)
+
+    transition(run, fence, "completed", 4_801, %{
+      "changed_files" => [
+        %{"path" => "control/lib/symmetry_control_web/portal_json.ex", "kind" => "file"}
+      ]
+    })
+
+    outcome =
+      api_conn()
+      |> get("/portal/api/work-items/#{item["id"]}")
+      |> json_response(200)
+      |> Map.fetch!("outcome")
+
+    assert outcome["changed_artifacts"] == [
+             %{"path" => "control/lib/symmetry_control_web/portal_json.ex", "kind" => "file"}
+           ]
+  end
+
   test "work item assignment is scoped to the work item's project and resource kind" do
     project = create_project("ASSIGN")
     other_project = create_project("OTHER")
@@ -1268,20 +1549,6 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
 
   defp create_project(key), do: create_project(key, "Resource project #{key}")
 
-  defp create_resource(project, connection, kind, name, external_ref) do
-    %{"resource" => resource} =
-      api_conn()
-      |> post("/portal/api/projects/#{project["id"]}/resources", %{
-        "connection_id" => connection["id"],
-        "kind" => kind,
-        "name" => name,
-        "external_ref" => external_ref
-      })
-      |> json_response(201)
-
-    resource
-  end
-
   defp create_tracker(project, connection, name, external_ref) do
     create_resource(project, connection, "work_tracking", name, external_ref)
   end
@@ -1370,61 +1637,6 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
     runtime
   end
 
-  # `assert_served_members!/3` and `assert_served_rows!/3` are the gate's
-  # presence oracle: a member is pinned by key, so a served `null` stays
-  # accepted while a renamed or omitted key fails here. They are defined in this
-  # file because `control/test/support/**` is outside this increment's owned
-  # files, and a module defined in one test file would break a single-file run
-  # of the others.
-  defp assert_served_members!(label, served, members) do
-    assert is_map(served), "#{label} is not served at all: #{inspect(served)}"
-
-    assert Enum.all?(members, &Map.has_key?(served, &1)),
-           "#{label} stopped serving #{inspect(Enum.reject(members, &Map.has_key?(served, &1)))}"
-  end
-
-  defp assert_served_rows!(label, rows, members) do
-    assert is_list(rows) and rows != [], "#{label}: the gate must serve at least one row"
-    Enum.each(rows, &assert_served_members!(label, &1, members))
-  end
-
-  # The member set a gate assertion walks: the definition's declared members
-  # from the contract bundle plus the frontend-read list the call passes. A
-  # schema-side rename (bundle side) and a serving-side rename or omission
-  # (either side) fail the same "stopped serving" message, so the assertion
-  # cannot stay green while the schema, the projection and the read sites
-  # disagree.
-  defp gate_members(read, definition, frontend_members) do
-    Enum.uniq(declared_members(read, definition) ++ frontend_members)
-  end
-
-  # The contract bundle's declared members for `definition` in `read`, its
-  # `oneOf` variants included (`WorkItemTimelineItem` declares its names in the
-  # variants, not in the parent body); `:root` names the read's own schema. The
-  # bundle is read at test time, so a rename inside it (e.g.
-  # `WorkspaceWorkItem.goal_id` -> `goal_ref`) fails the presence assertion
-  # until the served projection follows: the bundle comparison alone cannot
-  # refuse it, because the definitions are `additionalProperties: true` and an
-  # optional member may be absent.
-  defp declared_members(read, definition) do
-    schema = contract_bundle() |> Map.fetch!("#{read}.schema.json")
-
-    schema
-    |> definition_variants(definition)
-    |> Enum.flat_map(&Map.keys(Map.get(&1, "properties", %{})))
-    |> Enum.uniq()
-  end
-
-  defp definition_variants(schema, :root), do: [schema]
-
-  defp definition_variants(schema, definition) do
-    definition = Map.fetch!(schema["definitions"], definition)
-    [definition | Map.get(definition, "oneOf", [])]
-  end
-
-  defp contract_bundle,
-    do: @schema_bundle |> File.read!() |> Jason.decode!()
-
   # Claims the gate item's queued attempt for the runtime the gate registered:
   # that runtime is the only one assignment can select for this test's binding,
   # so the picked attempt must be the gate item's own.
@@ -1457,32 +1669,6 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
     assert {:ok, _run} = Orchestration.transition(run.id, fence, state, payload, uuid(number))
   end
 
-  # The agent's waiting packet. The read model serves the transition's payload as
-  # the authoritative packet when it carries a decision
-  # (`workspaces/read_model.ex:221`), so this is the packet the surface reads.
-  defp waiting_decision_payload do
-    %{
-      "question" => "Which reviewer should accept this?",
-      "decision" => %{
-        "context" => "The attempt needs an operator decision before it continues.",
-        "reason" => "consequential",
-        "options" => [
-          %{
-            "id" => "reviewer-a",
-            "label" => "Reviewer A",
-            "consequence" => "Reviews the change first."
-          },
-          %{
-            "id" => "reviewer-b",
-            "label" => "Reviewer B",
-            "consequence" => "Reviews the change second."
-          }
-        ],
-        "recommended_option_id" => "reviewer-a"
-      }
-    }
-  end
-
   # The tracker's own sync document: the shape `Integrations` writes an external
   # work item from.
   defp tracker_document(connection) do
@@ -1504,12 +1690,6 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
       work_items: []
     }
   end
-
-  # A deterministic version-4 UUID: the contract bundle's `UUID` pattern pins the
-  # version and variant nibbles, so a zeroed UUID is refused by the gate's own
-  # bundle comparison.
-  defp uuid(number),
-    do: "00000000-0000-4000-8000-" <> String.pad_leading(Integer.to_string(number), 12, "0")
 
   defp provider_item(external_id, external_url) do
     %{
@@ -1564,4 +1744,309 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
 
   defp provider_url(%{"provider" => "azure_devops", "account_ref" => account_ref}, external_ref),
     do: "https://dev.azure.com/#{account_ref}/" <> external_ref
+
+  # The delivery precedence matrix: one row per (member, branch). Each row is
+  # the inputs the four branches switch on plus the *full* served map the branch
+  # must produce, so an added, dropped or revalued member fails the row. Rows
+  # that reach the same branch through a different input spelling are kept
+  # separately on purpose: `""` and an absent value are both "not set" (the
+  # empty-string fall-through), and an agent map with and without the member's
+  # own field pins the `Map.put_new(field, value)` half of that branch.
+  defp delivery_precedence_matrix do
+    [
+      {:pull_request, "provider wins over manual and agent",
+       [
+         external_provider: "github",
+         external_pull_request_url: @delivery_provider_url,
+         external_pull_request_state: @delivery_provider_state,
+         external_change_updated_at: @delivery_updated_at,
+         pull_request_url: @delivery_seed_url
+       ], %{pull_request: @delivery_agent_pull_request},
+       %{
+         value: @delivery_provider_url,
+         source: "provider",
+         provider: "github",
+         generation: nil,
+         recorded_at: DateTime.to_iso8601(@delivery_updated_at),
+         url: @delivery_provider_url,
+         status: @delivery_provider_state
+       }},
+      {:pull_request, "provider empty falls through to manual",
+       [
+         external_provider: "github",
+         external_pull_request_url: "",
+         external_pull_request_state: @delivery_provider_state,
+         external_change_updated_at: @delivery_updated_at,
+         pull_request_url: @delivery_seed_url
+       ], %{pull_request: @delivery_agent_pull_request},
+       %{
+         value: @delivery_seed_url,
+         source: "manual",
+         generation: nil,
+         url: @delivery_seed_url,
+         status: nil
+       }},
+      {:pull_request, "manual wins over agent", [pull_request_url: @delivery_seed_url],
+       %{pull_request: @delivery_agent_pull_request},
+       %{
+         value: @delivery_seed_url,
+         source: "manual",
+         generation: nil,
+         url: @delivery_seed_url,
+         status: nil
+       }},
+      {:pull_request, "manual empty falls through to agent", [pull_request_url: ""],
+       %{pull_request: @delivery_agent_pull_request},
+       %{
+         value: @delivery_agent_pr_url,
+         source: "agent",
+         generation: 3,
+         event_id: @delivery_event_id,
+         recorded_at: @delivery_agent_recorded_at,
+         url: @delivery_agent_pr_url,
+         state: "open",
+         status: nil
+       }},
+      {:pull_request, "agent carries the field", [],
+       %{pull_request: @delivery_agent_pull_request},
+       %{
+         value: @delivery_agent_pr_url,
+         source: "agent",
+         generation: 3,
+         event_id: @delivery_event_id,
+         recorded_at: @delivery_agent_recorded_at,
+         url: @delivery_agent_pr_url,
+         state: "open",
+         status: nil
+       }},
+      {:pull_request, "agent without the field serves the fallback", [],
+       %{pull_request: @delivery_bare_agent},
+       %{
+         value: nil,
+         source: "agent",
+         generation: 4,
+         event_id: @delivery_event_id,
+         recorded_at: @delivery_agent_recorded_at,
+         url: nil,
+         status: nil
+       }},
+      {:pull_request, "agent keeps its own source", [],
+       %{pull_request: %{@delivery_agent_pull_request | source: "backfilled"}},
+       %{
+         value: @delivery_agent_pr_url,
+         source: "backfilled",
+         generation: 3,
+         event_id: @delivery_event_id,
+         recorded_at: @delivery_agent_recorded_at,
+         url: @delivery_agent_pr_url,
+         state: "open",
+         status: nil
+       }},
+      {:pull_request, "none", [], nil,
+       %{value: nil, url: nil, status: nil, source: "none", generation: nil}},
+      {:ci, "provider wins over manual and agent",
+       [
+         external_provider: "github",
+         external_ci_status: @delivery_provider_ci,
+         external_ci_updated_at: @delivery_ci_updated_at,
+         ci_status: @delivery_manual_ci
+       ], %{ci: @delivery_agent_ci},
+       %{
+         value: @delivery_provider_ci,
+         source: "provider",
+         provider: "github",
+         generation: nil,
+         recorded_at: DateTime.to_iso8601(@delivery_ci_updated_at),
+         status: @delivery_provider_ci,
+         url: nil
+       }},
+      {:ci, "provider empty falls through to manual",
+       [
+         external_provider: "github",
+         external_ci_status: "",
+         external_ci_updated_at: @delivery_ci_updated_at,
+         ci_status: @delivery_manual_ci
+       ], %{ci: @delivery_agent_ci},
+       %{
+         value: @delivery_manual_ci,
+         source: "manual",
+         generation: nil,
+         status: @delivery_manual_ci,
+         url: nil
+       }},
+      {:ci, "manual wins over agent", [ci_status: @delivery_manual_ci], %{ci: @delivery_agent_ci},
+       %{
+         value: @delivery_manual_ci,
+         source: "manual",
+         generation: nil,
+         status: @delivery_manual_ci,
+         url: nil
+       }},
+      {:ci, "manual empty falls through to agent", [ci_status: ""], %{ci: @delivery_agent_ci},
+       %{
+         value: "failed",
+         source: "agent",
+         generation: 3,
+         event_id: @delivery_event_id,
+         recorded_at: @delivery_agent_recorded_at,
+         status: "failed",
+         url: @delivery_agent_ci_url,
+         summary: @delivery_agent_summary
+       }},
+      {:ci, "agent carries the field", [], %{ci: @delivery_agent_ci},
+       %{
+         value: "failed",
+         source: "agent",
+         generation: 3,
+         event_id: @delivery_event_id,
+         recorded_at: @delivery_agent_recorded_at,
+         status: "failed",
+         url: @delivery_agent_ci_url,
+         summary: @delivery_agent_summary
+       }},
+      {:ci, "agent without the field serves the fallback", [], %{ci: @delivery_bare_agent},
+       %{
+         value: "unknown",
+         source: "agent",
+         generation: 4,
+         event_id: @delivery_event_id,
+         recorded_at: @delivery_agent_recorded_at,
+         status: "unknown",
+         url: nil
+       }},
+      {:ci, "agent keeps its own source", [], %{ci: %{@delivery_agent_ci | source: "backfilled"}},
+       %{
+         value: "failed",
+         source: "backfilled",
+         generation: 3,
+         event_id: @delivery_event_id,
+         recorded_at: @delivery_agent_recorded_at,
+         status: "failed",
+         url: @delivery_agent_ci_url,
+         summary: @delivery_agent_summary
+       }},
+      {:ci, "none", [], nil,
+       %{value: "unknown", url: nil, status: "unknown", source: "none", generation: nil}},
+      {:review, "provider wins over manual and agent",
+       [
+         external_provider: "github",
+         external_review_status: @delivery_provider_review,
+         external_change_updated_at: @delivery_updated_at,
+         review_status: @delivery_manual_review
+       ], %{review: @delivery_agent_review},
+       %{
+         value: @delivery_provider_review,
+         source: "provider",
+         provider: "github",
+         generation: nil,
+         recorded_at: DateTime.to_iso8601(@delivery_updated_at),
+         status: @delivery_provider_review,
+         url: nil
+       }},
+      {:review, "provider empty falls through to manual",
+       [
+         external_provider: "github",
+         external_review_status: "",
+         external_change_updated_at: @delivery_updated_at,
+         review_status: @delivery_manual_review
+       ], %{review: @delivery_agent_review},
+       %{
+         value: @delivery_manual_review,
+         source: "manual",
+         generation: nil,
+         status: @delivery_manual_review,
+         url: nil
+       }},
+      {:review, "manual wins over agent", [review_status: @delivery_manual_review],
+       %{review: @delivery_agent_review},
+       %{
+         value: @delivery_manual_review,
+         source: "manual",
+         generation: nil,
+         status: @delivery_manual_review,
+         url: nil
+       }},
+      {:review, "manual empty falls through to agent", [review_status: ""],
+       %{review: @delivery_agent_review},
+       %{
+         value: "changes_requested",
+         source: "agent",
+         generation: 3,
+         event_id: @delivery_event_id,
+         recorded_at: @delivery_agent_recorded_at,
+         status: "changes_requested",
+         url: @delivery_agent_review_url,
+         summary: @delivery_agent_summary
+       }},
+      {:review, "agent carries the field", [], %{review: @delivery_agent_review},
+       %{
+         value: "changes_requested",
+         source: "agent",
+         generation: 3,
+         event_id: @delivery_event_id,
+         recorded_at: @delivery_agent_recorded_at,
+         status: "changes_requested",
+         url: @delivery_agent_review_url,
+         summary: @delivery_agent_summary
+       }},
+      {:review, "agent without the field serves the fallback", [],
+       %{review: @delivery_bare_agent},
+       %{
+         value: "none",
+         source: "agent",
+         generation: 4,
+         event_id: @delivery_event_id,
+         recorded_at: @delivery_agent_recorded_at,
+         status: "none",
+         url: nil
+       }},
+      {:review, "agent keeps its own source", [],
+       %{review: %{@delivery_agent_review | source: "backfilled"}},
+       %{
+         value: "changes_requested",
+         source: "backfilled",
+         generation: 3,
+         event_id: @delivery_event_id,
+         recorded_at: @delivery_agent_recorded_at,
+         status: "changes_requested",
+         url: @delivery_agent_review_url,
+         summary: @delivery_agent_summary
+       }},
+      {:review, "none", [], nil,
+       %{value: "none", url: nil, status: "none", source: "none", generation: nil}}
+    ]
+  end
+
+  # One matrix row's served row: the work item carrying the row's provider and
+  # manual inputs, with the row's evidence attached to its attempt projection —
+  # the shape `PortalJSON.activity_entry/1` builds — projected by the same
+  # `PortalJSON.work_item/2` the workspace read, the work detail read, the chat
+  # outcome and the activity feed serve their delivery from.
+  defp delivery_row(attrs, evidence) do
+    work_item = struct!(delivery_work_item(), attrs)
+    # The resolver reads each member straight off the evidence map, and the read
+    # model always hands it all three entries (`nil` until an event lands), so a
+    # row naming one member still gets the other two as `nil`. A row passing no
+    # evidence at all keeps the `nil`-map path.
+    evidence = evidence && Map.merge(%{pull_request: nil, ci: nil, review: nil}, evidence)
+    projections = %{work_item.orchestration_task_id => %{execution: nil, evidence: evidence}}
+
+    PortalJSON.work_item(work_item, projections)
+  end
+
+  defp delivery_work_item do
+    %WorkItem{
+      id: 1,
+      number: 7,
+      project_id: 1,
+      project: %{id: 1, key: "DELIVERY", name: "Delivery matrix", status: "active"},
+      title: "Delivery precedence target",
+      status: "ready",
+      priority: "normal",
+      position: 1,
+      orchestration_task_id: 11,
+      assignee_type: "agent",
+      updated_at: @delivery_updated_at
+    }
+  end
 end

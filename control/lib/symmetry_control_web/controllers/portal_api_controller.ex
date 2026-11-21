@@ -69,7 +69,7 @@ defmodule SymmetryControlWeb.PortalApiController do
     with true <- allowed_query_params?(conn, params, ["project_id", "cursor", "limit"]),
          {:ok, project_id} <- optional_uuid(Map.get(params, "project_id")),
          {:ok, cursor} <- optional_text(Map.get(params, "cursor")),
-         {:ok, limit} <- optional_positive_integer(Map.get(params, "limit")) do
+         {:ok, limit} <- optional_wire_integer(Map.get(params, "limit"), {1, :infinity}) do
       goal_options =
         []
         |> maybe_put(:project_id, project_id)
@@ -100,10 +100,14 @@ defmodule SymmetryControlWeb.PortalApiController do
   def create_connection(conn, params) do
     case Integrations.create_connection(params) do
       {:ok, connection} ->
-        connection_receipt(conn, :created, connection, :created)
+        action_receipt(conn, {:created, :created}, %{
+          connection: connection_projection(connection)
+        })
 
       {:replayed, connection} ->
-        connection_receipt(conn, :ok, connection, :replayed)
+        action_receipt(conn, {:replayed, :created}, %{
+          connection: connection_projection(connection)
+        })
 
       {:error, reason} ->
         error(conn, reason)
@@ -114,8 +118,13 @@ defmodule SymmetryControlWeb.PortalApiController do
     connection_id = Map.fetch!(conn.path_params, "connection_id")
 
     case Integrations.update_connection(connection_id, Map.delete(params, "connection_id")) do
-      {:ok, connection} -> connection_receipt(conn, :ok, connection, :updated)
-      {:error, reason} -> error(conn, reason)
+      {:ok, connection} ->
+        action_receipt(conn, {:updated, :created}, %{
+          connection: connection_projection(connection)
+        })
+
+      {:error, reason} ->
+        error(conn, reason)
     end
   end
 
@@ -135,7 +144,9 @@ defmodule SymmetryControlWeb.PortalApiController do
 
     case Integrations.check_connection(connection_id) do
       {:ok, connection} ->
-        connection_receipt(conn, :ok, connection, :checked)
+        action_receipt(conn, {:checked, :created}, %{
+          connection: connection_projection(connection)
+        })
 
       {:error, reason, connection} ->
         {status, code, message} = Protocol.error_details(reason)
@@ -247,12 +258,10 @@ defmodule SymmetryControlWeb.PortalApiController do
 
     case Workspaces.create_work_item(project_id, params) do
       {:ok, work_item} ->
-        conn
-        |> put_status(:created)
-        |> json(%{disposition: "created", work_item: work_item_json(work_item)})
+        action_receipt(conn, {:created, :created}, %{work_item: work_item_json(work_item)})
 
       {:replayed, work_item} ->
-        json(conn, %{disposition: "replayed", work_item: work_item_json(work_item)})
+        action_receipt(conn, {:replayed, :created}, %{work_item: work_item_json(work_item)})
 
       {:error, reason} ->
         error(conn, reason)
@@ -320,12 +329,7 @@ defmodule SymmetryControlWeb.PortalApiController do
 
     case Workspaces.launch_work_item(work_item_id, action_id) do
       {:ok, snapshot, disposition} ->
-        status = if disposition == :created, do: :accepted, else: :ok
-
-        conn
-        |> put_status(status)
-        |> json(%{
-          disposition: Atom.to_string(disposition),
+        action_receipt(conn, {disposition, :accepted}, %{
           work_item: work_item_json(snapshot.work_item),
           execution: PortalJSON.execution(snapshot.task, snapshot.work_item)
         })
@@ -342,12 +346,7 @@ defmodule SymmetryControlWeb.PortalApiController do
 
     case Workspaces.cancel_work_item(work_item_id, generation, action_id) do
       {:ok, snapshot, disposition} ->
-        status = if disposition == :created, do: :accepted, else: :ok
-
-        conn
-        |> put_status(status)
-        |> json(%{
-          disposition: Atom.to_string(disposition),
+        action_receipt(conn, {disposition, :accepted}, %{
           command: Protocol.command(snapshot.command),
           execution: PortalJSON.execution(snapshot.task, snapshot.work_item)
         })
@@ -365,12 +364,7 @@ defmodule SymmetryControlWeb.PortalApiController do
 
     case Workspaces.retry_work_item(work_item_id, generation, action_id) do
       {:ok, snapshot, disposition} ->
-        status = if disposition == :created, do: :accepted, else: :ok
-
-        conn
-        |> put_status(status)
-        |> json(%{
-          disposition: Atom.to_string(disposition),
+        action_receipt(conn, {disposition, :accepted}, %{
           command: Protocol.command(snapshot.command),
           work_item: work_item_json(snapshot.work_item),
           execution: PortalJSON.execution(snapshot.task, snapshot.work_item)
@@ -401,12 +395,7 @@ defmodule SymmetryControlWeb.PortalApiController do
            action_id
          ) do
       {:ok, snapshot, disposition} ->
-        status = if disposition == :created, do: :accepted, else: :ok
-
-        conn
-        |> put_status(status)
-        |> json(%{
-          disposition: Atom.to_string(disposition),
+        action_receipt(conn, {disposition, :accepted}, %{
           command: Protocol.command(snapshot.command),
           execution: PortalJSON.execution(snapshot.task, snapshot.work_item)
         })
@@ -418,13 +407,19 @@ defmodule SymmetryControlWeb.PortalApiController do
 
   def provide_input(conn, _params), do: error(conn, :invalid_request)
 
-  defp connection_receipt(conn, status, connection, disposition) do
+  # One receipt for every portal mutation that carries a disposition — the
+  # resource and project writes that answer with their own member keep their own
+  # envelopes. This one serves the durable disposition label plus the members
+  # the surface renders, and the status policy is `{disposition, created_status}`
+  # — a fresh mutation takes the caller's created status (`:accepted` for an
+  # asynchronous work-item action, `:created` for a resource write) and a replay
+  # is a plain 200.
+  defp action_receipt(conn, {disposition, created_status}, fields) do
+    status = if disposition == :created, do: created_status, else: :ok
+
     conn
     |> put_status(status)
-    |> json(%{
-      disposition: Atom.to_string(disposition),
-      connection: connection_projection(connection)
-    })
+    |> json(Map.put(fields, :disposition, Atom.to_string(disposition)))
   end
 
   defp connection_projection(connection) do
@@ -442,17 +437,8 @@ defmodule SymmetryControlWeb.PortalApiController do
     PortalJSON.work_item(work_item, ReadModel.projections([work_item]))
   end
 
-  defp error(conn, %Ecto.Changeset{} = changeset) do
-    conn
-    |> put_status(:unprocessable_entity)
-    |> json(%{
-      error: %{
-        code: "validation_failed",
-        message: "request contains invalid fields",
-        fields: PortalJSON.changeset_errors(changeset)
-      }
-    })
-  end
+  defp error(conn, %Ecto.Changeset{} = changeset),
+    do: Protocol.validation_error(conn, changeset)
 
   defp error(conn, reason), do: Protocol.error(conn, reason)
 
@@ -532,15 +518,8 @@ defmodule SymmetryControlWeb.PortalApiController do
 
   defp resource_status_message(_resource), do: nil
 
-  defp version_param(%{"version" => version}) when is_integer(version) and version > 0,
-    do: {:ok, version}
-
-  defp version_param(%{"version" => version}) when is_binary(version) do
-    case Integer.parse(version) do
-      {parsed, ""} when parsed > 0 -> {:ok, parsed}
-      _ -> {:error, :invalid_request}
-    end
-  end
+  defp version_param(params) when is_map(params),
+    do: wire_integer(Map.get(params, "version"), {1, :infinity})
 
   defp version_param(_params), do: {:error, :invalid_request}
 end

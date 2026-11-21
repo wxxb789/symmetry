@@ -10519,114 +10519,59 @@ defmodule SymmetryControl.Goals do
   end
 
   defp settlement_mutation_id(task_id, run_id, generation) do
-    :crypto.hash(
-      :sha256,
-      "settlement:" <> task_id <> ":" <> run_id <> ":" <> Integer.to_string(generation)
-    )
-    |> Base.encode16(case: :lower)
-    |> then(fn hex ->
-      String.slice(hex, 0, 8) <>
-        "-" <>
-        String.slice(hex, 8, 4) <>
-        "-5" <>
-        String.slice(hex, 13, 3) <>
-        "-a" <> String.slice(hex, 17, 3) <> "-" <> String.slice(hex, 20, 12)
-    end)
+    mutation_id("settlement", [task_id, run_id, Integer.to_string(generation)])
   end
 
   defp late_validation_outcome_mutation_id(task_id, run_id, generation) do
-    :crypto.hash(
-      :sha256,
-      "late-validation-outcome:" <>
-        task_id <> ":" <> run_id <> ":" <> Integer.to_string(generation)
-    )
-    |> Base.encode16(case: :lower)
-    |> then(fn hex ->
-      String.slice(hex, 0, 8) <>
-        "-" <>
-        String.slice(hex, 8, 4) <>
-        "-5" <>
-        String.slice(hex, 13, 3) <>
-        "-a" <> String.slice(hex, 17, 3) <> "-" <> String.slice(hex, 20, 12)
-    end)
+    mutation_id("late-validation-outcome", [task_id, run_id, Integer.to_string(generation)])
   end
 
   defp unstarted_settlement_mutation_id(task_id, reason) do
-    :crypto.hash(:sha256, "unstarted-settlement:" <> task_id <> ":" <> reason)
-    |> Base.encode16(case: :lower)
-    |> then(fn hex ->
-      String.slice(hex, 0, 8) <>
-        "-" <>
-        String.slice(hex, 8, 4) <>
-        "-5" <>
-        String.slice(hex, 13, 3) <>
-        "-a" <>
-        String.slice(hex, 17, 3) <>
-        "-" <>
-        String.slice(hex, 20, 12)
-    end)
+    mutation_id("unstarted-settlement", [task_id, reason])
   end
 
   defp automatic_admission_mutation_id(goal, item, purpose, source_identity) do
-    :crypto.hash(
-      :sha256,
-      "automatic-admission:" <>
-        goal.id <>
-        ":" <>
-        Integer.to_string(goal.current_revision) <>
-        ":" <> item.id <> ":" <> purpose <> ":" <> source_identity
-    )
-    |> Base.encode16(case: :lower)
-    |> then(fn hex ->
-      String.slice(hex, 0, 8) <>
-        "-" <>
-        String.slice(hex, 8, 4) <>
-        "-5" <>
-        String.slice(hex, 13, 3) <>
-        "-a" <>
-        String.slice(hex, 17, 3) <>
-        "-" <>
-        String.slice(hex, 20, 12)
-    end)
+    mutation_id("automatic-admission", [
+      goal.id,
+      Integer.to_string(goal.current_revision),
+      item.id,
+      purpose,
+      source_identity
+    ])
   end
 
   defp automatic_admission_blocked_mutation_id(goal, candidate_identity) do
-    :crypto.hash(
-      :sha256,
-      "automatic-admission-blocked:" <>
-        goal.id <> ":" <> Integer.to_string(goal.current_revision) <> ":" <> candidate_identity
-    )
-    |> Base.encode16(case: :lower)
-    |> then(fn hex ->
-      String.slice(hex, 0, 8) <>
-        "-" <>
-        String.slice(hex, 8, 4) <>
-        "-5" <>
-        String.slice(hex, 13, 3) <>
-        "-a" <>
-        String.slice(hex, 17, 3) <>
-        "-" <> String.slice(hex, 20, 12)
-    end)
+    mutation_id("automatic-admission-blocked", [
+      goal.id,
+      Integer.to_string(goal.current_revision),
+      candidate_identity
+    ])
   end
 
   defp automatic_reconciliation_deferred_mutation_id(goal, deferred_identity, reason) do
-    :crypto.hash(
-      :sha256,
-      "automatic-reconciliation-deferred:" <>
-        goal.id <>
-        ":" <>
-        Integer.to_string(goal.current_revision) <> ":" <> deferred_identity <> ":" <> reason
-    )
-    |> Base.encode16(case: :lower)
-    |> then(fn hex ->
-      String.slice(hex, 0, 8) <>
-        "-" <>
-        String.slice(hex, 8, 4) <>
-        "-5" <>
-        String.slice(hex, 13, 3) <>
-        "-a" <>
-        String.slice(hex, 17, 3) <> "-" <> String.slice(hex, 20, 12)
-    end)
+    mutation_id("automatic-reconciliation-deferred", [
+      goal.id,
+      Integer.to_string(goal.current_revision),
+      deferred_identity,
+      reason
+    ])
+  end
+
+  # One deterministic UUID-shaped id for the durable mutation keys: sha256 over
+  # "<prefix>:<part>:<part>…" rendered with the version-5 and "a" variant nibbles these
+  # keys have always carried (not RFC 9562 name hashing). Settlement events and automatic
+  # admissions are keyed by it, so a change to these bytes is a durable-key change.
+  defp mutation_id(prefix, parts) do
+    hex =
+      :crypto.hash(:sha256, prefix <> ":" <> Enum.join(parts, ":"))
+      |> Base.encode16(case: :lower)
+
+    String.slice(hex, 0, 8) <>
+      "-" <>
+      String.slice(hex, 8, 4) <>
+      "-5" <>
+      String.slice(hex, 13, 3) <>
+      "-a" <> String.slice(hex, 17, 3) <> "-" <> String.slice(hex, 20, 12)
   end
 
   defp automatic_source_task_id(source_identity) when is_binary(source_identity) do
