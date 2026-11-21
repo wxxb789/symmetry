@@ -52,8 +52,9 @@ verified by reading both revisions
      no location while the recorded bytes spell one, and the record used to render unchanged.
      `_raw_literal_spans` therefore runs `_RAW_READING.windows` (drive, UNC, slash-UNC,
      root-relative and `file:` URL - the families whose separators a record may spell with
-     single backslashes) over the literal's recorded bytes, and **every match contributes the
-     parts of its span that no decoded claim and no rendered token's own text covers**: those
+     single backslashes) over the literal's recorded bytes, and **every match the scan reads
+     contributes the parts of its span that no decoded claim and no rendered token's own text
+     covers**: those
      parts and the decoded claims are unioned by `_literal_replacements` (overlapping or
      touching spans become one token), so no token nests in or overlaps another and **no raw
      match is discarded because a decoded span overlaps it** (round 3's P1/F1 decision: the
@@ -74,7 +75,15 @@ verified by reading both revisions
      runs only where a literal's bytes can hold such a spelling at all - an odd backslash run
      whose last backslash is an escape's (`n`, `r`, `t`, `f`, `b` or `u`,
      `_RAW_SPELLING_ESCAPE`; per literal, so one escape anywhere in a literal lets the scan run
-     over the whole of it, which is the residual cost the trade-offs record).
+     over the whole of it, which is the residual cost the trade-offs record). Round 4 made that
+     scan's loop linear: it re-enters only `_CONTAINED_RESUME` (eight) bytes behind each match it
+     keeps, because a start deeper inside the kept match consumes the same tail run - the kept
+     match's tail already reaches the run's end - so its span adds no byte and its parts are the
+     kept match's own (a pair-bearing match's one-escape tail stays outside, which is the rule
+     the kept match applies), while the starts that must still be re-tried (the round-4 P2 pin:
+     the second location's prefix straddling the stop that ended the first match) sit at most
+     four bytes back. The review's UNC-listing fixture went from 3.15 s at 1,000 lines / 49 s at
+     4,000 to linear time (the trade-offs record the numbers).
    - **Two byte-class profiles, one pattern compiler.** `_compile_patterns(classes, guard)`
      builds each reading's matcher set from a `_ByteClasses` record: the raw reading keeps the
      base tool's recorded-syntax set, and the decoded reading refuses the control characters and
@@ -102,7 +111,13 @@ verified by reading both revisions
    file, the escaped-pair prefix and the odd-run raw suffix render whole, the forward-slash
    spelling with the escape behind it is absorbed whole, a replacement never splits a backslash
    run), the wide-record rebuild pin (the number of `_rebuild_with_groups` calls does not grow
-   with the matches, in a literal and in prose), and the fail-closed property corpus over every
+   with the matches, in a literal and in prose), round 4's three pins (a raw location whose
+   bytes begin inside an earlier match's span - the review's M6 shapes - still renders as the
+   one union token; the UNC listing of N `json.dumps` paths is scanned once per location, with
+   the covered-character count bounded against the literal's own length and the line count,
+   and the round-3 scan fails that bound; a raw spelling glued in front of an existing
+   `path-sha256:` token renders its own bytes and leaves the token byte for byte), and the
+   fail-closed property corpus over every
    repro shape (thirty-three cases after the r2 and r3 extensions); each pin's discrimination
    (pre-fix bytes or a named mutation) is measured and recorded in the closure.
 3. `docs/TODO.md` → `docs/archive/CLOSED-TODO.md`: the entry "Stop the Windows-family path tail
@@ -179,22 +194,35 @@ slash-UNC, root-relative and `file:` URL spellings.
   where a doubled run is a recorded spelling rather than a decoded one.
 - **Cost**: one `json.loads` per document (and per line for JSONL), one decode and one pass
   sequence per string literal, one rebuild per matching pass, and one whole-text pass sequence
-  for prose. Measured at the delivered bytes (minimum of five in-process runs, one module per
-  process, on this host): one literal with 2,000 / 8,000 escaped drive paths renders in
-  0.070 s / 0.282 s root-only (base 0.018 s / 0.071 s; the pre-round-3 head: 4.3 s at 2,000,
-  and the review's 115.5 s at 8,000), prose with 2,000 / 8,000 path lines in 0.055 s / 0.222 s
-  (base 0.020 s / 0.084 s; pre-round-3 head 41.7 s at 8,000), and the 111-record corpus check
-  through the CLI runs in 21.8 s. The vs-base constant factor on inert input is 2.1x for 1 MB
-  of prose (0.236 s -> 0.504 s) and 6.7x for a 1 MB literal (0.121 s -> 0.813 s). One
-  superlinear shape survives and is reported rather than hidden: a `file:` URL followed by a
-  long backslash run inside a literal still grows superlinearly (about 4x per doubling). On the
-  named fixture `{"out":"ok` + newline escape + `file:` + N backslashes + `x"}`, root-only:
-  base 0.001 s / 0.003 s at N = 4,000 / 16,000, the pre-r2 tool (`f261e21`) 0.035 s / 0.554 s,
-  the delivered bytes 0.169 s / 2.692 s (default scope at 16,000: 2.832 s; `--check --root-only`
-  through the CLI: 3.19 s, exit 0). The r2 raw look is where the step from the pre-r2 tool
-  (~5x) comes from, and its guard is per literal: one escape-shaped backslash anywhere in a
-  literal lets the scan run over the whole of it. The closure records that as the accepted
-  residual of the fail-closed scan, with these numbers, not as a claim the scan is free.
+  for prose. Round 4 made the raw look's scan linear (it re-enters only `_CONTAINED_RESUME`
+  bytes behind each match it keeps): the review's UNC-listing fixture -
+  `json.dumps({"stdout": "\n".join(...N `\\srv\share\dirN` paths...)})`, the shape a captured
+  directory listing on a network share has - renders 1,000 / 2,000 / 4,000 / 8,000 lines in
+  0.056 s / 0.104 s / 0.308 s / 0.500 s root-only at the delivered bytes (base tool 0.005 s /
+  0.013 s / 0.024 s / 0.045 s), where round 3's delivered sanitizer
+  (`sha256:75e01391…`) took 4.6 s / 17.4 s / 101 s at 1,000 / 2,000 / 4,000 (about 4x per
+  doubling; the review measured 3.15 s / 13.15 s / 48.79 s on its host) and 433 s for the
+  scaling pin's 8,000-line case, against ~1 s now. Re-measured at the delivered bytes (minimum
+  of five in-process runs, one module per process, on this host): one literal with 2,000 /
+  8,000 escaped drive paths renders in 0.092 s / 0.349 s root-only (base 0.031 s / 0.131 s;
+  the pre-round-3 head: 4.3 s at 2,000, and the review's 115.5 s at 8,000), prose with 2,000 /
+  8,000 path lines in 0.123 s / 0.304 s (base 0.028 s / 0.109 s; pre-round-3 head 41.7 s at
+  8,000), and the 111-record corpus check through the CLI (one process per record) runs in
+  55-128 s on this host (host state dependent). The vs-base constant factor on inert input is 2.8x for 1 MB of prose (0.194 s ->
+  0.547 s) and 7.1x for a 1 MB literal (0.202 s -> 1.435 s). One superlinear shape survives
+  and is reported rather than hidden: a `file:` URL followed by a long backslash run inside a
+  literal still grows superlinearly (about 4x per doubling; the scan change does not touch it,
+  and that fixture's 16,000-backslash case is noisy on this host - 0.190 s / 3.819 s at the
+  delivered bytes against 0.213 s / 3.472 s at round 3's bytes, in one five-run series each,
+  with the delivered series spread over 3.5-5.6 s). On the named fixture `{"out":"ok` +
+  newline escape + `file:` + N backslashes + `x"}`, root-only: base 0.001 s / 0.004 s at
+  N = 4,000 / 16,000, the pre-r2 tool (`f261e21`) 0.035 s / 0.554 s, the round-3 measurement
+  at the delivered bytes then 0.169 s / 2.692 s (default scope at 16,000: 2.832 s;
+  `--check --root-only` through the CLI: 3.19 s, exit 0). The r2 raw look is where the step
+  from the pre-r2 tool (~5x) comes from, and its guard is per literal: one escape-shaped
+  backslash anywhere in a literal lets the scan run over the whole of it. The closure records
+  that as the accepted residual of the fail-closed scan, with these numbers, not as a claim
+  the scan is free.
 - **Round 3 replaced the single-condition rejection**: the r2 rule dropped a raw match that
   overlapped a decoded claim, so a forward-slash prefix continued by raw separators left its
   segment names literal and the tool refused its own render (`--check --root-only` on
@@ -202,11 +230,12 @@ slash-UNC, root-relative and `file:` URL spellings.
   uncovered parts with the claims. The cost is the accepted over-redaction:
   `//server/share/run` + the newline escape + `FAILED` absorbs the escape and `FAILED`, where
   the properly escaped spelling keeps them outside - over-redaction rather than a leak, and the
-  pair-bearing parts rule keeps the producer-mix tails (`C:\a\repo`'s `\repo`) exactly where
+  pair-bearing parts rule keeps the producer-mix tails (`C:\\a\repo`'s `\repo`) exactly where
   the decoded reading put them. The scan also no longer uses `finditer`: a location whose tail
   swallowed the next location's first bytes was invisible to one render and found by the next,
-  so the scan steps one byte past each match's start and renders the overlapping starts it
-  exposes (which is what makes the render a fixpoint).
+  so the scan re-enters the last `_CONTAINED_RESUME` (eight) bytes behind each match it keeps -
+  round 4's linear loop - which exposes the overlapping starts a match's tail swallowed (the
+  render's fixpoint) without walking that match's tail once per start inside it.
 - **Round 3 simplifications, each proven in place**: `_decode_literal`'s surrogate pairing is
   deleted - the character a pair spells and each lone unit are characters no byte class refuses
   and no pattern atom reads, and a 30k-document differential fuzz over pair, lone-half and

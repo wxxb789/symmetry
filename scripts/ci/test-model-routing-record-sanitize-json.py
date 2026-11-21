@@ -340,6 +340,25 @@ class JsonReadingTests(unittest.TestCase):
             MODULE.sanitize_text('{"p":"' + token_tail + '"}', ["/srv/store"], root_only=True),
             '{"p":"' + digest_of(token_tail) + '"}',
         )
+        # Round 4's P3 pin: the filter that removes a rendered token's own text from
+        # the raw look's spans had no discriminating case (the review's M11 mutant
+        # stayed green), yet without it a raw spelling glued to the front of an
+        # existing token bound that token's `path-sha256` text into a second digest
+        # and left the first token as an orphaned `:<hex>` fragment. The raw
+        # spelling's own bytes (`C:\temp\run`, the part before the token) render as
+        # their token, and the existing token is left byte for byte.
+        existing = "path-sha256:" + "a" * 64
+        glued = "C:" + _BS + "temp" + _BS + "run" + existing
+        for root_only in (True, False):
+            with self.subTest(shape="glued-token", root_only=root_only):
+                rendered = MODULE.sanitize_text('{"k":"' + glued + '"}', [], root_only=root_only)
+                self.assertEqual(
+                    rendered, '{"k":"' + digest_of(glued[:-len(existing)]) + existing + '"}',
+                )
+                self.assertEqual(
+                    json.loads(rendered)["k"], digest_of(glued[:-len(existing)]) + existing,
+                )
+                self.assertEqual(MODULE.sanitize_text(rendered, [], root_only=root_only), rendered)
 
     def test_the_reading_is_decided_at_the_document_level(self):
         # A JSONL record decodes each line's literals: the escape stays outside the
@@ -412,6 +431,56 @@ class JsonReadingTests(unittest.TestCase):
                 rendered = MODULE.sanitize_text('{"p":"' + sealed + '"}', [], root_only=root_only)
                 self.assertEqual(rendered, '{"p":"' + digest_of(sealed) + '"}')
                 self.assertEqual(MODULE.sanitize_text(rendered, [], root_only=root_only), rendered)
+
+    def test_a_raw_location_inside_an_earlier_match_is_still_rendered(self):
+        # P2 (round 4): the raw look scans again from each match's first byte plus one,
+        # because a match's greedy tail can swallow the first bytes of the location
+        # behind it. The second location's own bytes begin inside the first match's
+        # span here - the first match's tail stops at the second location's `C:` colon,
+        # and the second location's prefix (`C:` plus its separator) straddles that
+        # stop - so resuming at the first match's end (as `finditer` does, the review's
+        # M6 mutant) left the second location's bytes in the record instead of the one
+        # token the union renders: the mutant emitted `{"k":"path-sha256:50b450…:`
+        # followed by the recorded `\tsrv\\xfile:"}` bytes. The pin asserts the exact
+        # one-token render, that the digest binds the recorded spelling of the union
+        # span, and the fixpoint.
+        cases = (
+            # `C:\f` + `C:\t` + `srv` + the escaped pair + `xfile` + the trailing colon
+            # (the review's first reproduction): the token binds everything but the
+            # colon, which ended the second match's tail.
+            (
+                "C:" + _BS + "fC:" + _BS + "tsrv" + _BS * 2 + "xfile",
+                '{"k":"C:' + _BS + 'fC:' + _BS + 'tsrv' + _BS * 2 + 'xfile:"}',
+            ),
+            # The review's second reproduction: a raw `\r` run then `\n` behind a
+            # space-continued tail; the leading space stays outside the one token,
+            # which binds the whole raw run behind it.
+            (
+                "C:" + _BS + "tC:" + _BS * 3 + "r " + _BS + "n",
+                '{"k":" C:' + _BS + 'tC:' + _BS * 3 + 'r ' + _BS + 'n"}',
+            ),
+        )
+        for bound, text in cases:
+            digest = digest_of(bound)
+            expected = text.replace(bound, digest)
+            with self.subTest(text=text, root_only=True):
+                rendered = MODULE.sanitize_text(text, [], root_only=True)
+                self.assertEqual(rendered, expected)
+                self.assertIn(digest, json.loads(rendered)["k"])
+                self.assertEqual(MODULE.sanitize_text(rendered, [], root_only=True), rendered)
+        # The resume window's other side, pinned rather than silent: a start deeper than
+        # `_CONTAINED_RESUME` inside a kept match is not read, so a pair-free spelling
+        # nested in a pair-bearing match's one-escape tail no longer re-absorbs that tail
+        # - the pair-bearing rule (`C:\\a\repo` keeps `\repo` outside) governs it, and the
+        # round-3 bytes the review measured rendered the tail inside a second digest.
+        # The kept match's own parts end before the trailing six-character escape here.
+        nested = "//tserver" + _BS * 6 + "-" + _BS + "//run" + _BS + "u0020x/rootx" + _BS + "/opop/tmp"
+        escape = _BS + "u000a"
+        text = '{"p":"' + nested + escape + '"}'
+        rendered = MODULE.sanitize_text(text, [], root_only=True)
+        self.assertEqual(rendered, '{"p":"' + digest_of(nested) + escape + '"}')
+        self.assertEqual(json.loads(rendered)["p"], digest_of(nested) + "\n")
+        self.assertEqual(MODULE.sanitize_text(rendered, [], root_only=True), rendered)
 
     def test_a_host_path_after_a_json_escape_is_caught(self):
         # The #119 round-5 follow-up: the POSIX families' leading boundary read the
@@ -679,6 +748,64 @@ class JsonReadingTests(unittest.TestCase):
         self.assertEqual(literal_counts[0], literal_counts[1])
         self.assertEqual(prose_counts[0], prose_counts[1])
         self.assertLessEqual(max(literal_counts + prose_counts), 12)
+
+    def test_a_wide_raw_listing_is_scanned_once_per_location(self):
+        # P1 (round 4): the raw look's scans ran to their match's end from every match
+        # start plus one, and a match's greedy tail reaches the literal's end, so one
+        # listing of N UNC paths - the shape `json.dumps` writes for the captured
+        # output of a directory listing on a network share - walked the whole tail once
+        # per line: 99 KB rendered in ~49 s at round 3's HEAD (0.03 s on the base
+        # tool), and a 400 KB capture extrapolated to minutes. The scan now re-enters
+        # only a small window behind each match it keeps, so the bytes it covers grow
+        # with the listing, not with the lines times the listing. The pin counts the
+        # characters the raw look's searches match - the quadratic scan's counter
+        # grows with the square of N, the linear one's with N - and the rendered bytes
+        # and their fixpoint are checked so a scan that skipped work fails the count's
+        # premise.
+        class CountingPattern:
+            def __init__(self, pattern):
+                self.pattern = pattern
+                self.calls = 0
+                self.matched = 0
+
+            def search(self, *arguments):
+                match = self.pattern.search(*arguments)
+                self.calls += 1
+                if match is not None:
+                    self.matched += match.end() - match.start()
+                return match
+
+        def scanned(text):
+            patterns = tuple(CountingPattern(pattern) for pattern in MODULE._RAW_READING.windows)
+            with unittest.mock.patch.object(
+                MODULE, "_RAW_READING", unittest.mock.Mock(windows=patterns),
+            ):
+                rendered = MODULE.sanitize_text(text, [], root_only=True)
+            return sum(p.matched for p in patterns), sum(p.calls for p in patterns), rendered
+
+        listing_counts = []
+        for lines in (1000, 8000):
+            paths = [_BS * 2 + "srv" + _BS + "share" + _BS + ("dir%d" % index)
+                     for index in range(lines)]
+            text = json.dumps({"stdout": "\n".join(paths)})
+            matched, calls, rendered = scanned(text)
+            listing_counts.append((matched, calls, len(text)))
+            # The decoded reading renders a token per line; the raw look's parts here
+            # are the escape-only seams, which the pair-bearing match keeps outside.
+            self.assertEqual(rendered.count("path-sha256:"), lines)
+            self.assertEqual(MODULE.sanitize_text(rendered, [], root_only=True), rendered)
+        matched_1000, calls_1000, length_1000 = listing_counts[0]
+        matched_8000, calls_8000, length_8000 = listing_counts[1]
+        # 8x the lines: a linear scan's covered characters grow ~8x, the scan that
+        # re-ran a tail per line grew ~64x (measured: 12.0M bytes at 1,000 lines).
+        self.assertLess(matched_8000, matched_1000 * 16)
+        # An absolute bound: one listing's own bytes, not its bytes times its lines.
+        self.assertLess(matched_1000, length_1000 * 4)
+        self.assertLess(matched_8000, length_8000 * 4)
+        # The scan finds the listing's first location and re-enters only its own last
+        # bytes: a handful of searches for the whole listing, not one per line.
+        self.assertLessEqual(calls_1000, 64)
+        self.assertLessEqual(calls_8000, 64)
 
     def test_cli_root_only_check_refuses_a_root_after_a_json_escape(self):
         # Opus P2 (round 4): inside a quoted record, a line's root follows an

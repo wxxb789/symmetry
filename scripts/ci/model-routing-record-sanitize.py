@@ -676,7 +676,15 @@ def _rebuild_with_groups(
     starts = [claim[0] for claim in claims]
     ends = [claim[1] for claim in claims]
     # The cumulative difference between each claim's text length and its raw span's,
-    # so an unclaimed position maps back to raw bytes with one bisect.
+    # so an unclaimed position maps back to raw bytes with the claim count in front
+    # of it. Claims are written in order and pairwise disjoint, so both `starts` and
+    # `ends` ascend, and the claims in front of a position are exactly the claims up
+    # to the last one whose start is behind it - the `position` the lookup already
+    # computes. That is why the shift is indexed by `position + 1` and not by a
+    # second bisect over `ends`: an earlier `bisect_left` spelling of that lookup was
+    # an equivalent mutant in tests but wrong for a position exactly at a claim's end
+    # (such a claim stands for its raw span and must count), so the form is the count
+    # itself, which cannot be respelled into that mutant.
     shifts = [0]
     for _start, _end, claim_start, claim_end, text in claims:
         shifts.append(shifts[-1] + len(text) - (claim_end - claim_start))
@@ -687,7 +695,9 @@ def _rebuild_with_groups(
         position = bisect.bisect_right(starts, index) - 1
         if position >= 0 and ends[position] > index:
             return claims[position][2]
-        return index - shifts[bisect.bisect_right(ends, index)]
+        # No claim covers `index`; the last one behind it ends at or before it, so the
+        # claims in front are `0 .. position` and their shifts are `shifts[position+1]`.
+        return index - shifts[position + 1]
 
     def raw_end_of(end: int) -> int:
         if mapped is not None:
@@ -696,7 +706,7 @@ def _rebuild_with_groups(
         position = bisect.bisect_right(starts, index) - 1
         if position >= 0 and ends[position] > index:
             return claims[position][3]
-        return end - shifts[bisect.bisect_right(ends, index)]
+        return end - shifts[position + 1]
 
     pieces: list[str] = []
     piece_mapped: list[tuple[int, int]] | None = [] if mapped is not None else None
@@ -766,6 +776,17 @@ def _merged_spans(spans: list[tuple[int, int]]) -> list[tuple[int, int]]:
     return [(start, end) for start, end in merged]
 
 
+# The bytes `_raw_literal_spans`' scan re-enters behind a match it kept. A match
+# starting deeper inside the kept match consumes the same tail run and ends at the
+# same position (the kept match's tail already runs to that end), so the window only
+# has to be wide enough to expose the starts whose own prefix straddles that end:
+# the prefixes a stop byte can sit inside are a drive path's colon - the crossing
+# prefix is one byte behind it - and a `file:` URL's scheme colon, four bytes behind
+# it, so eight bytes cover both with margin (the review's fuzz over 790k literals
+# found crossing starts at exactly one and four bytes back).
+_CONTAINED_RESUME = 8
+
+
 def _raw_literal_spans(content: str, claimed: list[tuple[int, int, str]]) -> list[tuple[int, int]]:
     """The raw Windows spellings a JSON string literal's recorded bytes carry.
 
@@ -778,20 +799,28 @@ def _raw_literal_spans(content: str, claimed: list[tuple[int, int, str]]) -> lis
     returned here is unioned with the claims by the caller, which renders each
     connected group as one token, so no token can nest inside or overlap another.
 
-    Every match contributes the parts of its span that no claim and no rendered
-    token's own text covers: the union merges a part with the claims it touches, so
-    one location renders as one token, and a rendered token's text is never bound
-    into a digest (the ``path-sha256:<A>:<B>`` corruption). A match whose span
-    carries no escaped backslash pair (``\\\\``) is the raw spelling throughout all
-    its parts, and it is never discarded for overlapping a claim: a forward-slash
-    prefix continued by raw separators renders whole, and the escape and text behind
-    a forward-slash spelling are absorbed with it (over-redaction, the fail-closed
-    direction). A match that carries a pair is the producer mix of the decoded
-    reading's own spelling and a raw one, and there the decoded reading governs: of
-    the uncovered parts, only those carrying a backslash beyond their opening escape
-    character are raw spellings and render (``...\\\\a\\repo`` renders whole); a part
-    that is one escape character and the text behind it stays outside the token,
-    exactly as the decoded reading spells it: ``C:\\\\Users\\\\op\\\\run`` + the
+    Every match the scan reads contributes the parts of its span that no claim and
+    no rendered token's own text covers: the union merges a part with the claims it
+    touches, so one location renders as one token, and a rendered token's text is
+    never bound into a digest (the ``path-sha256:<A>:<B>`` corruption). The scan
+    reads each family's matches in one pass and does not re-enter a match it kept
+    deeper than `_CONTAINED_RESUME` bytes: a match starting there consumes the same
+    byte run the kept match's tail already reaches the end of, so its span adds no
+    byte the kept match does not hold, and the parts it would render are inside the
+    kept match's own parts - a pair-bearing match's one-escape tail stays outside as
+    the decoded reading spells it, the rule the kept match already applies, so a
+    spelling nested inside that tail is not read as a second, pair-free match over
+    it. A match whose span carries no escaped backslash pair (``\\\\``) is the raw
+    spelling throughout all its parts, and it is never discarded for overlapping a
+    claim: a forward-slash prefix continued by raw separators renders whole, and the
+    escape and text behind a forward-slash spelling are absorbed with it
+    (over-redaction, the fail-closed direction). A match that carries a pair is the
+    producer mix of the decoded reading's own spelling and a raw one, and there the
+    decoded reading governs: of the uncovered parts, only those carrying a backslash
+    beyond their opening escape character are raw spellings and render
+    (``...\\\\a\\repo`` renders whole); a part that is one escape character and the
+    text behind it stays outside the token, exactly as the decoded reading spells it:
+    ``C:\\\\Users\\\\op\\\\run`` + the
     newline escape + ``FAILED`` keeps the escape and ``FAILED`` outside, and the
     pinned mixed spelling ``C:\\\\a\\repo`` keeps ``\\repo`` outside. No pair-bearing
     match's raw bytes are left for a later render to find, so rendering stays a
@@ -838,17 +867,29 @@ def _raw_literal_spans(content: str, claimed: list[tuple[int, int, str]]) -> lis
     spans: list[tuple[int, int]] = []
     for pattern in _RAW_READING.windows:
         start = 0
+        frontier = -1
         while True:
-            # `finditer` resumes after each match, so a location whose tail swallowed
-            # the next location's first bytes would be hidden from this render and
-            # found by the next one - the fixpoint the leak broke. Scanning again from
-            # each match's first byte plus one exposes those starts (the union renders
-            # their spans with the visible ones), and every scan runs only to its own
-            # match, so the work stays linear in the text and the overlapping spans.
+            # `finditer` would resume at a match's end, so a location whose tail
+            # swallowed the next location's first bytes was hidden from this render
+            # and found by the next one - the non-idempotence the union exists to
+            # close (the review's M6 shape: the second location's prefix straddles
+            # the stop that ended the first match). The scan therefore re-enters a
+            # match it kept, but never deeper than `_CONTAINED_RESUME` bytes: a start
+            # deeper inside begins the same tail run the kept match's tail already
+            # reaches the end of, so its span adds no byte and its parts are the kept
+            # match's own (the docstring's rule), while every scan runs at most to its
+            # own match's end - a listing whose lines are one run no longer walks that
+            # run once per line (the review's P1: 99 KB in 49 s).
             match = pattern.search(content, start)
             if match is None:
                 break
-            start = match.start() + 1
+            if match.end() <= frontier:
+                # Contained in the kept match whose window this start is in: its own
+                # span adds no byte, and scanning one byte on stays inside the window.
+                start = match.start() + 1
+                continue
+            frontier = match.end()
+            start = max(match.start() + 1, frontier - _CONTAINED_RESUME)
             if "\\" not in match.group():
                 continue
             if "\\\\" not in match.group():
