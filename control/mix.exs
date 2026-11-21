@@ -43,8 +43,6 @@ defmodule SymmetryControl.MixProject do
       {:phoenix_ecto, "~> 4.5"},
       {:ecto_sql, "~> 3.13"},
       {:postgrex, ">= 0.0.0"},
-      {:telemetry_metrics, "~> 1.0"},
-      {:telemetry_poller, "~> 1.0"},
       {:jason, "~> 1.2"},
       {:dns_cluster, "~> 0.3.1"},
       {:bandit, "~> 1.5"},
@@ -53,7 +51,8 @@ defmodule SymmetryControl.MixProject do
       {:oban, "~> 2.24"},
       # ExJsonSchema 0.11.5 is a stable release compatible with the existing
       # Decimal 3.x dependency and all supported Elixir versions in this project.
-      {:ex_json_schema, "~> 0.11.5"}
+      {:ex_json_schema, "~> 0.11.5"},
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false}
     ]
   end
 
