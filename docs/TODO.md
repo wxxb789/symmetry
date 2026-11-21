@@ -742,9 +742,11 @@ round 1) left two paths open here.
       (`RecordSupervisorRecoveryScanSeal`, exact `Completed+1`) before the receipt, but the
       in-process consumer does not, `assert_all_sealed` refuses, and that stop fails closed into a
       durable containment-unproven mark. Pinned by
-      `TestLinuxSupervisorLiveOwnerControlCloseInProcessStopFailsClosed`; the amendment is to
-      record the returned seal before the mirror freeze in that path, or to keep the live-owner
-      branch for live-owner entries (PR #185 review round 1, finding F1, options (a)/(b)).
+      `TestLinuxSupervisorLiveOwnerControlCloseInProcessStopFailsClosed`; the amendment (record the
+      returned seal before the mirror freeze, added once where the run-journal callback is plumbed)
+      is deferred to the RunJournalRecorder lane — the callback is added once there instead of being
+      hand-copied into every adapter — and the interim state stays fail-closed (PR #185 review
+      round 1, finding F1; conductor decision 2026-11-21).
 
 ## Daemon: `writeInputBounded` can strand its writer goroutine (audit F15)
 

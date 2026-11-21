@@ -265,7 +265,9 @@ CI remains the merge gate for the gated production witness matrix itself
   observed interleaving, and it changes retry semantics — a separate increment, now tracked in
   `docs/TODO.md` as the residual for the lease-expiry arm (review round 1, finding F2).
 - Recording the helper's returned recovery seal in the in-process `recoverResponseLossStop`
-  consumer (option (a) of review finding F1): a follow-up increment, tracked in `docs/TODO.md`.
+  consumer (option (a) of review finding F1): deferred to the RunJournalRecorder lane (conductor
+  decision 2026-11-21 — the callback is added once there instead of being hand-copied into every
+  adapter); tracked in `docs/TODO.md`.
 - The 45 s harness barrier and the 30 s daemon receipt bound: declared bounds, untouched.
 - `daemon/e2e` witness code: unchanged; the platform-level regression test is the deterministic
   pin, and the CI matrix is the end-to-end confirmation.
@@ -282,7 +284,8 @@ CI remains the merge gate for the gated production witness matrix itself
 - The latch also covers live-owner entries (control EOF from a daemon-side response-loss close and
   non-I/O response-write failures), where the local owner-loss seal is not yet consumed by the
   in-process path and the stop fails closed into a durable containment-unproven mark; pinned by
-  `TestLinuxSupervisorLiveOwnerControlCloseInProcessStopFailsClosed` and tracked in `docs/TODO.md`.
+  `TestLinuxSupervisorLiveOwnerControlCloseInProcessStopFailsClosed`, kept fail-closed, and
+  deferred to the RunJournalRecorder lane as tracked in `docs/TODO.md`.
 - The lease-expiry arm (`supervisor_linux_helper.go:978-993`) stays on the live-owner branch: if
   the owner dies or wedges as the lease expires and the timer arm wins the `select`, the same
   sticky refusal class is still reachable (review finding F2; root-cause §5 P2 direction in
