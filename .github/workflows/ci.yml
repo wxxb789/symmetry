@@ -1516,7 +1516,6 @@ jobs:
           set -Eeuo pipefail
           python3 ../scripts/ci/go-test-json-gate.py \
             --events "$RUNNER_TEMP/daemon-go-test.json" \
-            --stderr "$RUNNER_TEMP/daemon-go-tool.stderr" \
             --stdio-boundary \
             --assert github.com/wxxb789/symmetry/daemon/internal/harness/pi \
               TestProviderBridgeCloseReleasesBoundPeerFD \
@@ -1540,7 +1539,6 @@ jobs:
         run: |
           python3 ../scripts/ci/go-test-json-gate.py \
             --events "$RUNNER_TEMP/daemon-go-race.json" \
-            --stderr "$RUNNER_TEMP/daemon-go-race.stderr" \
             --stdio-boundary \
             --assert github.com/wxxb789/symmetry/daemon/internal/harness/opencode \
               TestOpenCodeV2VerifierRejectsReleasedPeer \

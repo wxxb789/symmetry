@@ -31,8 +31,11 @@ import pathlib
 import re
 import sys
 
-# Browser-relative suite patterns; discovery and the manual-matrix shape share
-# them so a matrix entry can name exactly what discovery can find.
+# Browser-relative suite patterns. SUITE_PATTERNS (globs, where `*` does not
+# cross `/`) and SUITE_SHAPE (the manual-matrix shape, a regex independently
+# written over the same families and flat file names) are two spellings of one
+# constraint, so a new family belongs in both; an entry the shape does not match
+# is skipped by the shape check in main rather than rot-checked.
 SUITE_PATTERNS = ("tests/*.spec.mjs", "scripts/*.test.mjs")
 SUITE_SHAPE = re.compile(r"^(?:browser/)?(?:tests/[^/]+\.spec\.mjs|scripts/[^/]+\.test\.mjs)$")
 WORKFLOW_PATTERNS = (".github/workflows/*.yml", ".github/workflows/*.yaml")
@@ -118,7 +121,7 @@ def manual_entries(readme_path: pathlib.Path) -> list[str]:
         if line.startswith("## "):
             break
         if line.lstrip().startswith("|"):
-            suite_cell = line.split("|")[1] if line.count("|") >= 2 else ""
+            suite_cell = line.split("|")[1]
             entries.extend(span.strip() for span in BACKTICKED.findall(suite_cell))
     if not seen_heading:
         raise SystemExit(f"assert-browser-suite-coverage.py: {readme_path} carries no `{MATRIX_HEADING}` section")

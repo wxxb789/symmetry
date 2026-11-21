@@ -176,7 +176,7 @@ def main(argv: list[str] | None = None) -> int:
 
     print_test_table(tests)
     print_package_table(packages)
-    ratio = p95 / P95_BASELINE_SECONDS if P95_BASELINE_SECONDS > 0 else 0.0
+    ratio = p95 / P95_BASELINE_SECONDS
     print(
         f"go_test_durations: tests={len(tests)} skipped={skipped} packages={len(packages)} "
         f"p95={p95:.3f}s baseline={P95_BASELINE_SECONDS:.3f}s ratio={ratio:.2f}x limit={limit:.3f}s "

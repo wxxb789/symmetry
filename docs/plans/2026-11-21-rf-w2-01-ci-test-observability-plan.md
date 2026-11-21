@@ -60,7 +60,6 @@ caller boundary before Go and preserves the suite's exit status:
   run: |
     python3 ../scripts/ci/go-test-json-gate.py \
       --events "$RUNNER_TEMP/daemon-go-race.json" \
-      --stderr "$RUNNER_TEMP/daemon-go-race.stderr" \
       --stdio-boundary \
       --assert github.com/wxxb789/symmetry/daemon/internal/harness/opencode \
         TestOpenCodeV2VerifierRejectsReleasedPeer \
