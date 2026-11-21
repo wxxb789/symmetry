@@ -179,6 +179,32 @@ minimization.
 Cookies, bootstrap response and logout are real, but this case does not claim
 native tab background/foreground event propagation.
 
+## Manual-only suite matrix
+
+The render step in `.github/workflows/ci.yml` names and runs seven specs on the
+release it starts; every other suite under `browser/tests/**/*.spec.mjs` and
+`browser/scripts/**/*.test.mjs` is manual-only, because the render step does not
+name it: the six remaining specs need a fixture family that step does not
+provide, and the three node-level suites are not part of that step at all. This
+table is the explicit label for that manual set:
+`scripts/ci/assert-browser-suite-coverage.py` runs as a blocking CI step and
+refuses any suite that is neither named by a workflow nor listed here — and
+refuses a suite that is listed here while a workflow also names it, so wiring a
+family (refactor slice W6-02, decision D7) must drop its row below in the same
+change.
+
+| suite | why it stays manual | how to run it today |
+| --- | --- | --- |
+| `browser/tests/portal-connections.spec.mjs` | needs the controlled provider-fixture process, its identity/steering documents and a real release on the loopback port the driver owns | `browser/scripts/run-connection-fixture-tests.ps1` |
+| `browser/tests/portal-work-planning.spec.mjs` | needs the planning harness's own release instance and the fixture-created planning rows (`SYMMETRY_PLANNING_HARNESS`) | `browser/scripts/run-planning-tests.ps1` |
+| `browser/tests/portal-compose-daemon.spec.mjs` | needs the production Compose stack and a real daemon behind it; the spec is skipped, never passed, without `SYMMETRY_COMPOSE_DAEMON=1` | `pnpm --filter symmetry-browser-acceptance test:compose` against a running stack |
+| `browser/tests/portal-compose-restart.spec.mjs` | the same stack, restarted mid-run; skipped, never passed, without the `SYMMETRY_COMPOSE_PROJECT_*` variables the driver seeds | `browser/scripts/run-compose-daemon-tests.ps1` (or `test:compose:read`) |
+| `browser/tests/portal-live-daemon.spec.mjs` | needs a real daemon and `SYMMETRY_LIVE_DAEMON=1`; skipped, never passed, without it | `browser/scripts/run-live-daemon-tests.ps1` (or `test:live`) |
+| `browser/tests/portal-chat-live.spec.mjs` | needs a real daemon container and `SYMMETRY_CHAT_LIVE=1`; skipped, never passed, without it | `browser/scripts/run-chat-daemon-tests.ps1` |
+| `browser/scripts/control-instance-isolation.test.mjs` | node unit test of the per-instance build-path pins every driver above relies on; needs no release | `pnpm --filter symmetry-browser-acceptance test:control-isolation` |
+| `browser/scripts/connection-spec-env.test.mjs` | node test of the connection spec's environment and collection contract; needs an installed workspace, not a release | `pnpm --filter symmetry-browser-acceptance test:connection-env` |
+| `browser/scripts/goal-context-fixtures.test.mjs` | node test of the Goal-context snapshot fixtures `tests/portal-goal-attention.spec.mjs` imports; no package script yet | `node --test scripts/goal-context-fixtures.test.mjs` from `browser/` |
+
 ## Readable work views acceptance
 
 `tests/portal-work-views.spec.mjs` covers the 0007b read surfaces on the running

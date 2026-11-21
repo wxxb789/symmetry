@@ -52,6 +52,9 @@ type clientOptions struct {
 	dialTimeout       time.Duration
 	writeTimeout      time.Duration
 	heartbeatTimeout  time.Duration
+	// connectionErrorHandler, when set, receives every retried connection
+	// failure of Run. See WithConnectionErrorHandler.
+	connectionErrorHandler func(error)
 }
 
 func defaultClientOptions() clientOptions {
@@ -65,10 +68,30 @@ func defaultClientOptions() clientOptions {
 	}
 }
 
+// Option adjusts a client's connection policy. Only this package can construct
+// one, so the option set stays known.
+type Option func(*clientOptions)
+
+// WithConnectionErrorHandler reports connection failures that Run retries: a
+// failed dial or a dropped connection, as that attempt's error, before the
+// retry backoff. Run's only terminal error is the caller's context error, which
+// is never reported. The handler runs on Run's goroutine, so it must not block
+// the connection loop.
+func WithConnectionErrorHandler(handler func(error)) Option {
+	return func(options *clientOptions) {
+		options.connectionErrorHandler = handler
+	}
+}
+
 // New creates a notification client. websocketPath is the server-provided
-// Phoenix path, such as /socket/websocket?vsn=2.0.0.
-func New(baseURL, websocketPath, machineID, machineToken string, httpClient *http.Client) (*Client, error) {
-	return newClient(baseURL, websocketPath, machineID, machineToken, httpClient, defaultClientOptions())
+// Phoenix path, such as /socket/websocket?vsn=2.0.0. A client without a
+// connection error handler discards the retried connection failures of Run.
+func New(baseURL, websocketPath, machineID, machineToken string, httpClient *http.Client, options ...Option) (*Client, error) {
+	configured := defaultClientOptions()
+	for _, option := range options {
+		option(&configured)
+	}
+	return newClient(baseURL, websocketPath, machineID, machineToken, httpClient, configured)
 }
 
 func newClient(baseURL, websocketPath, machineID, machineToken string, httpClient *http.Client, options clientOptions) (*Client, error) {
@@ -167,6 +190,7 @@ func (client *Client) Run(ctx context.Context, hints chan<- Hint) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		client.reportConnectionError(ctx, err)
 		if connected {
 			backoff = client.options.reconnectInitial
 		}
@@ -174,6 +198,16 @@ func (client *Client) Run(ctx context.Context, hints chan<- Hint) error {
 			return ctx.Err()
 		}
 		backoff = nextBackoff(backoff, client.options.reconnectMaximum)
+	}
+}
+
+// reportConnectionError hands one retried connection failure to the configured
+// handler. Run's terminal contract is ctx.Err(), so a failure observed after
+// the context ended is the caller's cancellation or deadline, not a connection
+// failure, and is never reported.
+func (client *Client) reportConnectionError(ctx context.Context, err error) {
+	if err != nil && ctx.Err() == nil && client.options.connectionErrorHandler != nil {
+		client.options.connectionErrorHandler(err)
 	}
 }
 

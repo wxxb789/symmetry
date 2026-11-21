@@ -1,5 +1,5 @@
 defmodule SymmetryControl.Goals.ContractValidationTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   alias SymmetryControl.Goals.ContractValidation
   alias SymmetryControl.RequestHash

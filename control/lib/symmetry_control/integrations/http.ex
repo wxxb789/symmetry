@@ -4,40 +4,53 @@ defmodule SymmetryControl.Integrations.HTTP do
   @timeout 15_000
 
   def request(method, url, headers, body \\ nil) when method in [:get, :post, :patch, :put] do
-    request =
-      case body do
-        nil ->
-          {String.to_charlist(url), encode_headers(headers)}
+    request = encode_request(url, headers, body)
 
-        value ->
-          {
-            String.to_charlist(url),
-            encode_headers(headers),
-            ~c"application/json",
-            Jason.encode!(value)
-          }
-      end
-
-    options = [
-      autoredirect: false,
-      timeout: @timeout,
-      connect_timeout: 5_000,
-      ssl: [
-        verify: :verify_peer,
-        cacerts: :public_key.cacerts_get(),
-        customize_hostname_check: [match_fun: :public_key.pkix_verify_hostname_match_fun(:https)]
-      ]
-    ]
-
-    case :httpc.request(method, request, options, body_format: :binary) do
+    case perform(method, request) do
       {:ok, {{_version, status, _reason}, response_headers, response_body}} ->
         {:ok, status, decode_headers(response_headers), decode_body(response_body)}
 
       {:error, reason} ->
         {:error, {:transport, reason}}
+
+      {:rescue, error} ->
+        {:error, {:transport, Exception.message(error)}}
     end
-  rescue
-    error -> {:error, {:transport, Exception.message(error)}}
+  end
+
+  defp encode_request(url, headers, nil), do: {String.to_charlist(url), encode_headers(headers)}
+
+  defp encode_request(url, headers, value) do
+    {
+      String.to_charlist(url),
+      encode_headers(headers),
+      ~c"application/json",
+      Jason.encode!(value)
+    }
+  end
+
+  # The socket call and the environment-dependent options (the CA-store load in
+  # particular) are rescued together; the `{:error, reason}` clause above cannot
+  # double-wrap this tagged outcome.
+  defp perform(method, request) do
+    try do
+      options = [
+        autoredirect: false,
+        timeout: @timeout,
+        connect_timeout: 5_000,
+        ssl: [
+          verify: :verify_peer,
+          cacerts: :public_key.cacerts_get(),
+          customize_hostname_check: [
+            match_fun: :public_key.pkix_verify_hostname_match_fun(:https)
+          ]
+        ]
+      ]
+
+      :httpc.request(method, request, options, body_format: :binary)
+    rescue
+      error -> {:rescue, error}
+    end
   end
 
   defp encode_headers(headers) do
