@@ -6,8 +6,10 @@ Contract: `goal-rf-w2-10-callback-dedup.md` (GDD, 2026-11-21), branch
 and the delivered diff's frozen base is `origin/main` =
 `bda93b11709404f04454e06565a11cd25b2be428` (`bda93b11`). `daemon/internal/app/cleanup_glue.go` is
 byte-identical between the two (`git diff 6117e198 bda93b11 -- daemon/internal/app/cleanup_glue.go`
-is empty), so the base measurements bind either revision. The pre-split `app.go` region the contract
-names now lives in `daemon/internal/app/cleanup_glue.go`.
+is empty), so the base measurements bind either revision. The branch has since merged `origin/main`
+(merge-base `c87c9918e4f8aa09511018a4e23c42fc949d8295`, `c87c9918`); `git diff bda93b11 c87c9918 --
+daemon/internal/app/` is empty, so every measurement in this plan still holds. The pre-split `app.go`
+region the contract names now lives in `daemon/internal/app/cleanup_glue.go`.
 Source item: program plan §5 W2-10; `findings/daemon-app.md` §4 S3; contract review rounds 1–2
 (`refactor/w2-contract-review-opus-2.md`, `refactor/w2-contract-review-ds-2.md`).
 
