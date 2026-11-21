@@ -10,10 +10,9 @@ import { createAppRouter } from "./router";
  * shared portal double, and an unhandled path fails instead of answering. */
 export function renderRoute(
   path: string,
-  options: { fetcher?: typeof fetch; location?: { href: string; replace: (url: string) => void } } = {},
+  options: { location?: { href: string; replace: (url: string) => void } } = {},
 ) {
   const application = createApplication({
-    ...(options.fetcher === undefined ? {} : { fetcher: options.fetcher }),
     location: options.location ?? { href: `http://localhost${path}`, replace: vi.fn() },
   });
   const history = createMemoryHistory({ initialEntries: [path] });

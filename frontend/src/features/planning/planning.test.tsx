@@ -1,9 +1,8 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Application } from "../../app/application";
-import { portal, type PortalProject, type PortalSeed, type PortalWorkItem } from "../../app/portal-double";
-import { renderRoute } from "../../app/test-harness";
+import { itemOf, portal, projectOf, workItem, type PortalProject } from "../../app/portal-double";
+import { renderRoute, trackApplications } from "../../app/test-harness";
 import { ServerRefusal, type Project, type WorkItem } from "../../services/api";
 import { readWorkDetail } from "../../services/api.fixtures";
 import { boardMoveRequest, executionDefiningWritesRefused, failureMode, ownerDiscardNote, providerOwnedControlsOf, refusalNotice, resetPendingWorkItemCreations, workItemDraftOf, workItemFormStateOf, workItemUpdatePayload, type BoardColumnSnapshot } from "./write-policy";
@@ -15,30 +14,6 @@ const secondItemId = "44444444-4444-4444-8444-444444444444";
 const goalItemId = "55555555-5555-4555-8555-555555555555";
 const providerItemId = "66666666-6666-4666-8666-666666666666";
 const repositoryResourceId = "77777777-7777-4777-8777-777777777777";
-
-function workItem(overrides: Partial<WorkItem> & { id: string; title: string }): WorkItem {
-  return {
-    key: "ONE-1",
-    project_id: firstProjectId,
-    description: null,
-    status: "backlog",
-    priority: "medium",
-    position: 0,
-    blocked: false,
-    blocker: null,
-    version: 1,
-    assignee: { type: "unassigned", name: null, agent_profile: null },
-    delivery: {
-      pull_request: { value: null, source: "none", generation: null, url: null, status: null },
-      ci: { value: "unknown", source: "none", generation: null, url: null, status: "unknown" },
-      review: { value: "none", source: "none", generation: null, url: null, status: "none" },
-    },
-    execution: null,
-    external: null,
-    updated_at: null,
-    ...overrides,
-  };
-}
 
 function baseProjects(): PortalProject[] {
   return [
@@ -100,23 +75,12 @@ function seedWorkspace(): void {
   portal.seed({ workspace: { selectedProjectId: firstProjectId, projects: baseProjects() } });
 }
 
-function projectOf(workspace: PortalSeed["workspace"], id: string): PortalProject | undefined {
-  return workspace.projects.find((candidate) => candidate.id === id);
-}
+afterEach(() => { localStorage.clear(); resetPendingWorkItemCreations(); });
 
-function itemOf(workspace: PortalSeed["workspace"], id: string): { project: PortalProject; item: PortalWorkItem } | null {
-  for (const project of workspace.projects) {
-    const item = (project.work_items ?? []).find((candidate) => candidate.id === id);
-    if (item !== undefined) return { project, item };
-  }
-  return null;
-}
+const applications = trackApplications();
 
-const applications: Application[] = [];
-afterEach(() => { for (const application of applications) application.queryClient.clear(); applications.length = 0; localStorage.clear(); resetPendingWorkItemCreations(); });
-
-function renderWorkspace(path: string, options: { location?: { href: string; replace: (url: string) => void } } = {}) {
-  const { application, router } = renderRoute(path, options);
+function renderWorkspace(path: string) {
+  const { application, router } = renderRoute(path);
   applications.push(application);
   return { application, router };
 }
@@ -438,7 +402,7 @@ describe("project planning", () => {
 
   it("does not apply a late board move to the project the operator switched to", async () => {
     seedWorkspace();
-    const { router } = renderWorkspace(`/portal/projects/${firstProjectId}?view=board`, { location: { href: "http://localhost/portal/projects", replace: vi.fn() } });
+    const { router } = renderWorkspace(`/portal/projects/${firstProjectId}?view=board`);
     const card = await screen.findByRole("link", { name: "Legacy item" });
     const release = portal.holdNextMutation();
     card.focus();

@@ -187,7 +187,7 @@ describe("control mutation boundary", () => {
     await waitFor(() => { expect(harness.posts()).toHaveLength(1); });
     expect(harness.posts()[0]?.path).toBe(`/portal/api/work-items/${subjectId}/${path}`);
     expect(harness.posts()[0]?.headers["x-csrf-token"]).toBe("session-token");
-    expect(harness.posts()[0]?.headers["x-csrfToken"]).toBeUndefined();
+    expect(harness.posts()[0]?.headers["x-csrftoken"]).toBeUndefined();
   });
 
   it("uses the rotated session token after another tab renews the shared cookie", async () => {

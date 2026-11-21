@@ -6,7 +6,7 @@ import { Socket, type PhoenixSocketOptions } from "phoenix";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { savedViewStorageKey } from "../features/projects/saved-views";
 import type { Project } from "../services/api";
-import { readAttention, readWorkDetail, readWorkItem } from "../services/api.fixtures";
+import { readWorkDetail, readWorkItem } from "../services/api.fixtures";
 import { socketEndpoint, type RealtimePush, type RealtimeSocket } from "../services/realtime";
 import { createApplication, safeReturnTo, type Application } from "./application";
 import { jsonResponse, portal } from "./portal-double";
@@ -73,15 +73,6 @@ describe("workspace navigation", () => {
   it("keeps Attention project scope in search, history and reload, and clears to the server default", async () => {
     const user = userEvent.setup();
     seedProjectsWorkspace();
-    portal.serve((request) => {
-      if (request.url.pathname !== "/portal/api/attention") return undefined;
-      const scoped = request.url.searchParams.get("project_id") ?? firstProjectId;
-      const project = projects.find((candidate) => candidate.id === scoped);
-      return jsonResponse(readAttention({
-        selectedProjectId: scoped,
-        blocked: (project?.work_items ?? []).filter((item) => item.blocked).map((item) => ({ projectId: scoped, projectName: project?.name ?? null, workItemId: item.id, key: item.key, title: item.title, status: item.status, blocker: item.blocker })),
-      }));
-    });
     const { history, unmount } = renderWorkspace("/portal/attention");
     expect(await screen.findByRole("heading", { name: "No blocked work" })).toBeVisible();
     expect(screen.getByLabelText("Project")).toHaveValue(firstProjectId);
@@ -720,7 +711,7 @@ describe("readable work views", () => {
     portal.seed({
       session: { csrfToken: "session-token", socketToken: "test-socket-token" },
       workspace: { selectedProjectId: project.id, projects: [project] },
-      details: { [subjectId]: readWorkDetail({ id: subjectId, projectId: firstProjectId, title: subjectTitle }) },
+      details: { [subjectId]: subjectDetail() },
     });
     renderWorkspace(`/portal/projects/${firstProjectId}`);
     const list = await screen.findByRole("list", { name: "Work items" });
@@ -749,6 +740,7 @@ describe("execution history boundaries", () => {
     detail: (read: number) => Record<string, unknown>,
   ): void {
     portal.seed({ session: { csrfToken: "session-token", socketToken: "test-socket-token" } });
+    serveWorkViewProjects();
     portal.serve((request) => {
       if (request.url.pathname === `/portal/api/work-items/${subjectId}/timeline`) {
         const before = request.url.searchParams.get("before");
@@ -759,13 +751,7 @@ describe("execution history boundaries", () => {
         reads.details += 1;
         return jsonResponse(detail(reads.details));
       }
-      if (request.url.pathname !== "/portal/api/workspace") return undefined;
-      const projectId = request.url.searchParams.get("project_id");
-      return jsonResponse({
-        selected_project_id: null,
-        projects: workViewProjects.map((project) => ({ ...project, work_items: project.id === projectId ? project.work_items : [] })),
-        health: { status: "unknown" },
-      });
+      return undefined;
     });
   }
 

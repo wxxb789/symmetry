@@ -24,8 +24,8 @@ export default defineConfig({
     setupFiles: ["./src/test-setup.ts"],
     restoreMocks: true,
     clearMocks: true,
-    // The pool split trades no isolation: threads share the process's module graph,
-    // and the measured shapes are in the slice plan.
+    // Pool/worker shape chosen from the measured runs recorded in the slice plan;
+    // isolation stays at vitest's default.
     pool: "threads",
     maxWorkers: "50%",
     // `cache` is a test-level option: at the config root it is an unknown Vite key

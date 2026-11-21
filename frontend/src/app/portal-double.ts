@@ -1,16 +1,12 @@
 import { http, HttpResponse, type JsonBodyType } from "msw";
 import { setupServer } from "msw/node";
 import type { WorkItem } from "../services/api";
-import { readAttention, readWorkDetail, type ReadAttentionOptions } from "../services/api.fixtures";
+import { readAttention, readWorkDetail } from "../services/api.fixtures";
 import { asRecord } from "../services/served";
 
 /**
- * The one in-memory portal double every frontend suite drives. A suite seeds the
- * served state, scripts per-case answers with `serve`, and reads what the surface
- * sent from `requests`. A path with no seed-derived answer is either registered
- * here as scripted-only (an unscripted call fails as a transport error) or
- * absent, in which case MSW reports an unhandled request and the call reaches
- * the real network — a case that stops answering a path reddens either way.
+ * The one in-memory portal double every frontend suite drives. An unscripted path
+ * is failed outright — transport error when registered, MSW rejection when absent.
  */
 
 export type PortalWorkItem = WorkItem & {
@@ -31,6 +27,29 @@ export interface PortalProject {
   /** creation_id -> work item id: the server's own creation identity index. */
   creation_ids?: Record<string, string>;
 }
+
+/** One row shape for the double's creations and the suites' seeds, so the two cannot drift. */
+export const workItem = (overrides: Partial<PortalWorkItem> & { id: string; title: string }): PortalWorkItem => ({
+  key: "ONE-1",
+  project_id: "11111111-1111-4111-8111-111111111111",
+  description: null,
+  status: "backlog",
+  priority: "medium",
+  position: 0,
+  blocked: false,
+  blocker: null,
+  version: 1,
+  assignee: { type: "unassigned", name: null, agent_profile: null },
+  delivery: {
+    pull_request: { value: null, source: "none", generation: null, url: null, status: null },
+    ci: { value: "unknown", source: "none", generation: null, url: null, status: "unknown" },
+    review: { value: "none", source: "none", generation: null, url: null, status: "none" },
+  },
+  execution: null,
+  external: null,
+  updated_at: null,
+  ...overrides,
+});
 
 export interface PortalRequest {
   method: string;
@@ -54,14 +73,7 @@ export interface PortalSeed {
     health?: unknown;
   };
   connections: { providers: unknown[]; connections: unknown[] };
-  attention: {
-    goals?: ReadAttentionOptions["goals"];
-    blocked?: ReadAttentionOptions["blocked"];
-    nextCursor?: string | null;
-    goalUnavailable?: { code: string; message: string } | null;
-  };
   details: Record<string, Record<string, unknown>>;
-  timeline: Record<string, Record<string, unknown>>;
   mutations: { failNext: boolean; loseNextCreateResponse: boolean; hold: Promise<void> | null };
 }
 
@@ -99,9 +111,7 @@ const defaultSeed = (): PortalSeed => ({
   session: { csrfToken: "session-token", socketToken: null },
   workspace: { projects: [] },
   connections: { providers: [], connections: [] },
-  attention: {},
   details: {},
-  timeline: {},
   mutations: { failNext: false, loseNextCreateResponse: false, hold: null },
 });
 
@@ -115,9 +125,7 @@ const mergedSeed = (seed: PortalSeedInput): PortalSeed => {
       projects: seed.workspace?.projects ?? [],
     },
     connections: { ...base.connections, ...seed.connections },
-    attention: { goals: [], ...seed.attention },
     details: { ...seed.details },
-    timeline: { ...seed.timeline },
     mutations: { ...base.mutations, ...seed.mutations },
   };
 };
@@ -140,16 +148,16 @@ const validationFailed = (fields: Record<string, string[]>) =>
 const goalAuthorityRequired = () =>
   jsonResponse({ error: { code: "goal_authority_required", message: "Goal authority is required for this operation" } }, 403);
 
-const itemOf = (state: PortalSeed, id: string): { project: PortalProject; item: PortalWorkItem } | null => {
-  for (const project of state.workspace.projects) {
+export const itemOf = (workspace: PortalSeed["workspace"], id: string): { project: PortalProject; item: PortalWorkItem } | null => {
+  for (const project of workspace.projects) {
     const item = (project.work_items ?? []).find((candidate) => candidate.id === id);
     if (item !== undefined) return { project, item };
   }
   return null;
 };
 
-const projectOf = (state: PortalSeed, id: string): PortalProject | undefined =>
-  state.workspace.projects.find((candidate) => candidate.id === id);
+export const projectOf = (workspace: PortalSeed["workspace"], id: string): PortalProject | undefined =>
+  workspace.projects.find((candidate) => candidate.id === id);
 
 const selectedProjectId = (request: PortalRequest, state: PortalSeed): string | null =>
   request.url.searchParams.get("project_id") ??
@@ -175,28 +183,20 @@ const workspaceBody = (request: PortalRequest, state: PortalSeed) => {
 const attentionBody = (request: PortalRequest, state: PortalSeed) => {
   const selected = selectedProjectId(request, state);
   const scoped = selected === null ? state.workspace.projects : state.workspace.projects.filter((project) => project.id === selected);
-  const blocked =
-    state.attention.blocked ??
-    scoped.flatMap((project) =>
-      (project.work_items ?? [])
-        .filter((item) => item.blocked)
-        .map((item) => ({
-          projectId: project.id,
-          projectName: project.name,
-          workItemId: item.id,
-          key: item.key,
-          title: item.title,
-          status: item.status,
-          blocker: item.blocker,
-        })),
-    );
-  return readAttention({
-    selectedProjectId: selected,
-    goals: state.attention.goals ?? [],
-    blocked,
-    nextCursor: state.attention.nextCursor ?? null,
-    goalUnavailable: state.attention.goalUnavailable ?? null,
-  });
+  const blocked = scoped.flatMap((project) =>
+    (project.work_items ?? [])
+      .filter((item) => item.blocked)
+      .map((item) => ({
+        projectId: project.id,
+        projectName: project.name,
+        workItemId: item.id,
+        key: item.key,
+        title: item.title,
+        status: item.status,
+        blocker: item.blocker,
+      })),
+  );
+  return readAttention({ selectedProjectId: selected, blocked });
 };
 
 const pathParam = (request: PortalRequest, pattern: RegExp): string => pattern.exec(request.url.pathname)?.[1] ?? "";
@@ -230,7 +230,7 @@ const createProject = (request: PortalRequest, state: PortalSeed): Response => {
 };
 
 const updateProject = (request: PortalRequest, state: PortalSeed): Response => {
-  const project = projectOf(state, pathParam(request, projectPattern));
+  const project = projectOf(state.workspace, pathParam(request, projectPattern));
   if (project === undefined) return notFound();
   const body = request.body;
   if (body?.version !== project.version) return stale();
@@ -245,7 +245,7 @@ const updateProject = (request: PortalRequest, state: PortalSeed): Response => {
 };
 
 const createWorkItem = (request: PortalRequest, state: PortalSeed): Response => {
-  const project = projectOf(state, pathParam(request, createWorkItemPattern));
+  const project = projectOf(state.workspace, pathParam(request, createWorkItemPattern));
   if (project === undefined) return notFound();
   const body = request.body;
   const title = text(body?.title, "");
@@ -255,29 +255,12 @@ const createWorkItem = (request: PortalRequest, state: PortalSeed): Response => 
   const creationId = typeof body?.creation_id === "string" ? body.creation_id : "";
   const replayedId = creationId === "" ? undefined : project.creation_ids?.[creationId];
   if (replayedId !== undefined) return jsonResponse({ disposition: "replayed", work_item: { id: replayedId } });
-  const created: PortalWorkItem = {
+  const created = workItem({
     id: createdWorkItemId,
-    key: "ONE-1",
     project_id: project.id,
     title,
-    description: null,
-    status: "backlog",
-    priority: "medium",
-    position: 0,
-    blocked: false,
-    blocker: null,
-    version: 1,
-    assignee: { type: "unassigned", name: null, agent_profile: null },
-    delivery: {
-      pull_request: { value: null, source: "none", generation: null, url: null, status: null },
-      ci: { value: "unknown", source: "none", generation: null, url: null, status: "unknown" },
-      review: { value: "none", source: "none", generation: null, url: null, status: "none" },
-    },
-    execution: null,
-    external: null,
-    updated_at: null,
     ...(typeof body?.status === "string" ? { status: body.status } : {}),
-  };
+  });
   project.work_items = [...(project.work_items ?? []), created];
   if (creationId !== "") {
     project.creation_ids = { ...project.creation_ids, [creationId]: created.id };
@@ -291,7 +274,7 @@ const createWorkItem = (request: PortalRequest, state: PortalSeed): Response => 
 };
 
 const moveWorkItem = (request: PortalRequest, state: PortalSeed): Response => {
-  const found = itemOf(state, pathParam(request, movePattern));
+  const found = itemOf(state.workspace, pathParam(request, movePattern));
   if (found === null) return notFound();
   if (found.item.goal_managed === true) return goalAuthorityRequired();
   const body = request.body;
@@ -303,7 +286,7 @@ const moveWorkItem = (request: PortalRequest, state: PortalSeed): Response => {
 };
 
 const updateWorkItem = (request: PortalRequest, state: PortalSeed): Response => {
-  const found = itemOf(state, pathParam(request, workItemPattern));
+  const found = itemOf(state.workspace, pathParam(request, workItemPattern));
   if (found === null) return notFound();
   const body = request.body;
   if (body !== null && ("status" in body || "position" in body)) {
@@ -325,7 +308,7 @@ const updateWorkItem = (request: PortalRequest, state: PortalSeed): Response => 
 
 const readWorkItemDetail = (request: PortalRequest, state: PortalSeed): Response => {
   const id = pathParam(request, workItemPattern);
-  const found = itemOf(state, id);
+  const found = itemOf(state.workspace, id);
   const projectId = found?.project.id ?? state.workspace.selectedProjectId ?? state.workspace.projects[0]?.id ?? "";
   const served =
     found === null
@@ -334,8 +317,7 @@ const readWorkItemDetail = (request: PortalRequest, state: PortalSeed): Response
   return jsonResponse(state.details[id] ?? readWorkDetail(served));
 };
 
-const readTimeline = (request: PortalRequest, state: PortalSeed): Response =>
-  jsonResponse(state.timeline[pathParam(request, workItemPattern)] ?? { items: [], next_before: null });
+const readTimeline = (): Response => jsonResponse({ items: [], next_before: null });
 
 const readConversation = (request: PortalRequest): Response => {
   const scope = request.url.searchParams.get("scope") ?? "workspace";
@@ -348,9 +330,6 @@ const readConversation = (request: PortalRequest): Response => {
     next_before: null,
   });
 };
-
-/** Answers a path a case must script: an unscripted call fails as a transport error. */
-const scriptedOnly = (): Response => HttpResponse.error();
 
 const entries: PortalEntry[] = [
   {
@@ -373,24 +352,24 @@ const entries: PortalEntry[] = [
   { method: "POST", path: "/portal/api/projects/:id/work-items", respond: createWorkItem },
   { method: "PATCH", path: "/portal/api/work-items/:id", respond: updateWorkItem },
   { method: "PATCH", path: "/portal/api/work-items/:id/move", respond: moveWorkItem },
-  { method: "POST", path: "/portal/api/connections", respond: scriptedOnly },
-  { method: "PATCH", path: "/portal/api/connections/:id", respond: scriptedOnly },
-  { method: "DELETE", path: "/portal/api/connections/:id", respond: scriptedOnly },
-  { method: "POST", path: "/portal/api/connections/:id/check", respond: scriptedOnly },
-  { method: "POST", path: "/portal/api/chat/messages", respond: scriptedOnly },
-  { method: "GET", path: "/portal/api/goals/:id", respond: scriptedOnly },
-  { method: "GET", path: "/portal/api/goals/:id/events", respond: scriptedOnly },
-  { method: "POST", path: "/portal/api/goals/:id/commands", respond: scriptedOnly },
-  { method: "POST", path: "/portal/api/projects/:id/goals", respond: scriptedOnly },
-  { method: "POST", path: "/portal/api/projects/:id/resources", respond: scriptedOnly },
-  { method: "POST", path: "/portal/api/projects/:id/sync", respond: scriptedOnly },
-  { method: "PATCH", path: "/portal/api/resources/:id", respond: scriptedOnly },
-  { method: "DELETE", path: "/portal/api/resources/:id", respond: scriptedOnly },
-  { method: "POST", path: "/portal/api/resources/:id/sync", respond: scriptedOnly },
-  { method: "POST", path: "/portal/api/work-items/:id/run", respond: scriptedOnly },
-  { method: "POST", path: "/portal/api/work-items/:id/cancel", respond: scriptedOnly },
-  { method: "POST", path: "/portal/api/work-items/:id/retry", respond: scriptedOnly },
-  { method: "POST", path: "/portal/api/work-items/:id/input", respond: scriptedOnly },
+  { method: "POST", path: "/portal/api/connections" },
+  { method: "PATCH", path: "/portal/api/connections/:id" },
+  { method: "DELETE", path: "/portal/api/connections/:id" },
+  { method: "POST", path: "/portal/api/connections/:id/check" },
+  { method: "POST", path: "/portal/api/chat/messages" },
+  { method: "GET", path: "/portal/api/goals/:id" },
+  { method: "GET", path: "/portal/api/goals/:id/events" },
+  { method: "POST", path: "/portal/api/goals/:id/commands" },
+  { method: "POST", path: "/portal/api/projects/:id/goals" },
+  { method: "POST", path: "/portal/api/projects/:id/resources" },
+  { method: "POST", path: "/portal/api/projects/:id/sync" },
+  { method: "PATCH", path: "/portal/api/resources/:id" },
+  { method: "DELETE", path: "/portal/api/resources/:id" },
+  { method: "POST", path: "/portal/api/resources/:id/sync" },
+  { method: "POST", path: "/portal/api/work-items/:id/run" },
+  { method: "POST", path: "/portal/api/work-items/:id/cancel" },
+  { method: "POST", path: "/portal/api/work-items/:id/retry" },
+  { method: "POST", path: "/portal/api/work-items/:id/input" },
 ];
 
 const decodeBody = (raw: string | null): Record<string, unknown> | null => {

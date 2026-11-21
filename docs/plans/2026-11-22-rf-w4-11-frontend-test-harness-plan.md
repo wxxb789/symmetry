@@ -112,10 +112,7 @@ export interface PortalSeed {
   session: { csrfToken: string; socketToken: string | null };
   workspace: { selectedProjectId: string | null; projects: PortalProject[]; runtimes: unknown[]; registeredRuntimes: unknown[] };
   connections: { providers: unknown[]; connections: unknown[] };
-  attention: { goals: unknown[]; blocked: unknown[]; nextCursor: string | null; goalUnavailable: { code: string; message: string } | null };
-  chat: Record<string, unknown>;        // keyed by the conversation's scope key
   details: Record<string, unknown>;     // work item id -> detail body
-  timeline: Record<string, unknown>;    // work item id -> timeline body
 }
 
 export interface PortalDouble {
@@ -131,10 +128,11 @@ export function resetPortalDouble(): void;        // test-setup afterEach
 ```
 
 `renderRoute(path, options?)` needs no fetcher: the app's default transport is the intercepted
-global fetch, and a case that needs an injected transport passes `options.fetcher`. The seed groups
-are `session`, `workspace` (`selectedProjectId` absent = the first seeded project, explicit `null`
-= no selection, `projects`, `runtimes`, `registeredRuntimes`, `health`), `connections`, `attention`,
-`details`, `timeline`, `mutations`. The double memoises each request's answer by MSW's `requestId`
+global fetch, and a case that needs a non-HTTP failure scripts it through the double's `serve`
+layer returning `HttpResponse.error()`. The seed groups are `session`, `workspace`
+(`selectedProjectId` absent = the first seeded project, explicit `null` = no selection, `projects`,
+`runtimes`, `registeredRuntimes`, `health`), `connections`, `details`, `mutations`. The double
+memoises each request's answer by MSW's `requestId`
 (MSW v3 resolves a handler twice; the first answer is the delivered one), so a suite's counters and
 state changes still happen exactly once per request.
 
@@ -149,15 +147,15 @@ method+path case.
 | `GET /portal/api/session` | `{ csrf_token, socket_token? }` from the seed |
 | `GET /portal/api/workspace` | seeded projects with resources and work items scoped to `project_id` (workspace reads scope rows like the server does), `selected_project_id`, `runtimes`, `registered_runtimes` |
 | `GET /portal/api/connections` | seeded providers + connections |
-| `GET /portal/api/attention` | seeded goals/blocked/next cursor; when no blocked list is seeded, derived from the seeded projects' blocked items exactly as `router.test.tsx`'s `servedFetcher` derived it |
+| `GET /portal/api/attention` | derived from the seeded projects' blocked items exactly as `router.test.tsx`'s `servedFetcher` derived it, scoped by `project_id` (explicit select, else the first project) |
 | `GET /portal/api/work-items/:id` | seeded detail body, else `readWorkDetail` over the seeded row's projection |
-| `GET /portal/api/work-items/:id/timeline` | seeded timeline body, else `{ items: [], next_before: null }` |
-| `GET /portal/api/chat` | seeded conversation for the URL's scope key, else the empty conversation for that scope |
+| `GET /portal/api/work-items/:id/timeline` | `{ items: [], next_before: null }`; a case that needs another body scripts it through `serve` |
+| `GET /portal/api/chat` | the empty conversation for the URL's scope key; a case scripts the conversation through `serve` |
 | planning's write model | `POST /portal/api/projects`, `PATCH /portal/api/projects/:id`, `POST /portal/api/projects/:id/work-items`, `PATCH /portal/api/work-items/:id`, `PATCH /portal/api/work-items/:id/move` — the seven refusal rules the deleted `createHarness` held (version 409, archived 409, move-fields 422, goal authority 403, provider-owned 409, blocked-without-blocker 422, duplicate key 422, creation-id replay) |
 
-Everything else is **unhandled**: MSW's `onUnhandledRequest: "error"` reports it and the request
-attempts a real network call, so a case that silently stops being scripted reddens instead of
-passing. This is stricter than every deleted double (each of them answered 404/500 or, in
+Everything else is **unhandled**: MSW's `onUnhandledFrame: "error"` rejects the request at the
+interceptor without a network attempt, so a case that silently stops being scripted reddens
+instead of passing. This is stricter than every deleted double (each of them answered 404/500 or, in
 router's and goal-attention's case, *any* path with a workspace body).
 
 ## Exact edge-case semantics the contract demands
@@ -263,7 +261,8 @@ Environment findings that shape the delivered tree:
 - MSW v3 names the unhandled-request strategy `onUnhandledFrame` (`onUnhandledRequest` is not a
   member of v3's listen options; the v2 spelling is silently ignored). `listen({ onUnhandledFrame:
   "error" })` prints `[MSW] Error: intercepted a request without a matching request handler` and
-  lets the call reach the real network, where it fails — the contract's mechanism.
+  the request is rejected at the interceptor — no real network attempt (apply-stage re-probe:
+  `error` rejects, `bypass` reaches a live local server) — the contract's mechanism.
 - Probes that the design depends on: a **relative** `fetch("/portal/api/...")` is matched and
   answered by a relative handler path; a handler returning `HttpResponse.error()` rejects the
   client fetch; a plain `new Response(...)` returned by a handler is delivered normally; MSW
@@ -353,7 +352,7 @@ report-only (D2).
 
 `connections.test.tsx` (45 sites, all `harness.requests` → `portal.requests`; observables in brackets): submits a new connection once (227 POST count, 229 body `toEqual`); stale capability update (263 body); removal version (337 DELETE path with `?version=3`); draft version (416 `.some(PATCH)`, 417 body `toMatchObject({version:3})`); mutual exclusion (440/447 POST count, 469/470/477, 499/500/507, 558/565, 593 counts); another connection selected (695 GET count = 3); refresh re-reads (909, 939 workspace read deltas); provider catalog (990 POST count, 991 body `toEqual`); name-only edit (1033 body); replayed create (1051 count); resource create (1076/1077/1078 count/path/body, 1110/1132 paths, 1167/1168 count/body); refused sync (1263/1272 workspace re-read count), project sync receipt (1319 path), aggregate failure (1331/1334 counts); resource update (1355/1356 count/body), unbind (1387/1388 count/path); control locks (1413/1421 counts); late response (1464 sync count), late editor response (1481/1490 read deltas).
 
-`control.test.tsx` (2 sites): session rotation — `harness.requests.filter(r => r.path === "/portal/api/session")` → `portal.requests.filter(…)`; `harness.posts()` → `portal.requests.filter((r) => r.method === "POST")` (receipt and mutation cases; the `x-csrf-token` header assertion now reads the double's lower-cased `Headers` snapshot, so the camelCase negative assertion is preserved but no longer independently discriminating — the guarded behaviour still reddens the positive assertion).
+`control.test.tsx` (2 sites): session rotation — `harness.requests.filter(r => r.path === "/portal/api/session")` → `portal.requests.filter(…)`; `harness.posts()` → `portal.requests.filter((r) => r.method === "POST")` (receipt and mutation cases; the header assertions read the double's lower-cased `Headers` snapshot: the `x-csrf-token` positive read and the `x-csrftoken` duplicate check — the spelling a duplicated camelCase `x-csrfToken` header collides with — which the apply-stage mutation check reddens, F14).
 
 `assignment.test.tsx` (4 helpers; assertions unchanged): `patches()` → `portal.requests.filter((r) => r.method === "PATCH")`; `detailReads(id)` → `r.url.pathname === \`/portal/api/work-items/${id}\``; `projectReads(id)` → `r.url.searchParams.get("project_id")`; `requestRecord` deleted (`PortalRequest` carries the decoded body).
 
@@ -368,8 +367,8 @@ report-only (D2).
 `connections`: session, connections read (gate → failure → list), workspace read (gate → failure → scoped body), 502/409/404/422/403 `provider_unauthorized`/`provider_failure` branches, all pending/hold branches, read-count observables — preserved; deltas recorded: an unscripted scripted-only write answers `HttpResponse.error()` (one case, its assertions are the recorded POST count/body), `work_items` scoping added (every fixture carries `[]`), `body: null` instead of `undefined` for body-less requests (unasserted). No 401 branch exists in this suite.
 `goal-attention`: cursor pagination (two first-page branches + `firstPageReads` counter), `goalUnavailable` refusal, session-expiry 401, refusal codes 422 `invalid_contract`/409 `stale`/403 `forbidden`/422 `invalid_plan`/`invalid_decision`, 200 undecodable/empty receipts, 5 thrown transports → `HttpResponse.error()` — preserved; the catch-all workspace fallback is intentionally gone (no case needed it).
 `chat`: per-scope conversation bodies and their `scope`/`before` conditions, 13 `Promise.withResolvers` holds (late read, late write, pane settle, cursor renew, refused press, 8k, three in-flight pages, scope switch, same-cursor-bytes), 409 `idempotency_conflict`, 400/500 older-page refusals, 403 read failures, three thrown `TypeError`s, one rejected held promise, 1-based `postIndex` — preserved; the unscripted message-POST 500 default and the 404 catch-all are gone (no case relied on them; unscripted now fails loudly).
-`router`: 400 aged-out timeline, 401 bootstrap expiry, 403 recoverable workspace error, 404 `project_id=missing`, held session/first-project/bootstrap reads, `holdDetail`, mutable `subjectStatus` projection, dynamic detail reads, scoped attention where a case asserts it — preserved; the 404 catch-all was unexercised; the default attention derivation is unscoped, and the four cases that read unscoped attention assert no blocked row (T3 keeps a scoped layer where the scope matters).
-`control`: session rotation by read index, detail by read index, command acceptances (202), refusals (409/403/default 500), a never-settling second detail read, timeline cursor reads, `Promise.reject` → `HttpResponse.error()`, the "must not reach the server" tripwire (no resolver for that path, so a sent POST would log) — preserved.
+`router`: 400 aged-out timeline, 401 bootstrap expiry, 403 recoverable workspace error, 404 `project_id=missing`, held session/first-project/bootstrap reads, `holdDetail`, mutable `subjectStatus` projection, dynamic detail reads, scoped attention where a case asserts it — preserved; the 404 catch-all was unexercised; the default attention derivation is scope-aware (`project_id` → explicit select → first project) and the four cases that read unscoped attention assert no blocked row; the scoped layer one case carried at implement time duplicated that derivation and was removed in the apply stage (F5), its DOM/history assertions unchanged.
+`control`: session rotation by read index, detail by read index, command acceptances (202), refusals (409/403/default 500), a never-settling second detail read, timeline cursor reads, `Promise.reject` → `HttpResponse.error()`, the "must not reach the server" tripwire (a sent POST would be logged and answered by the layer's default 500 responder) — preserved.
 `assignment`: session/workspace/detail/timeline reads, 403 refusal, gated workspace read, per-item detail overrides and the live `intent_locked` flip via `portal.state.details`, deferred PATCH for the late save, 409 `provider_owned` — preserved.
 
 No case in any converted suite kept an injected fetcher, and no assertion was deleted or weakened.
@@ -462,3 +461,85 @@ the repository is archived or re-indexed here.
   tarball hosts only — its own `docs/TODO.md` entry records that limit.
 - **Not committed** (stage rule): the tree is left for verification with 16 modified files and
   two new files, all inside the contract's owned set.
+
+## Annotation (2026-11-22, apply stage)
+
+The accepted simplify findings are applied to the working tree (not committed; nothing pushed or
+rewritten). Code changes and the record corrections made above:
+
+- **F1** `portal-double.ts`: `scriptedOnly` and the 18 `respond: scriptedOnly` entries deleted;
+  `dispatch`'s `entry.respond?.(call, state) ?? HttpResponse.error()` is the one failure path for
+  a registered-but-unscripted request (same transport error, paths still registered and logged).
+- **F2** `test-harness.tsx`: the callerless `options.fetcher` seam deleted; failure injection
+  stays available through `serve` layers returning `HttpResponse.error()` (edge-case semantics 3),
+  and no converted case ever needed the seam (above).
+- **F3** `chat.test.tsx`: `renderChat`'s unused `history` return deleted.
+- **F4** `api.fixtures.ts`: no option interface is exported any more — `ReadWorkItemOptions` and
+  `ReadWorkDetailOptions` revert, and `ReadAttentionOptions` follows once F7 removes its last
+  importer; the census phrase "three option interfaces exported for the double's seed types" is
+  superseded by this annotation.
+- **F5** `router.test.tsx`: the scoped attention layer (implement `:74-83`) deleted; its case now
+  runs against the double's scope-aware default derivation and the `readAttention` import is
+  dropped; all DOM/history assertions unchanged.
+- **F6** `planning.test.tsx`: `renderWorkspace`'s inert `location` override and parameter deleted
+  (`location.href` is read only on the login-redirect path; no planning case scripts a 401, and
+  `replace` is unasserted there).
+- **F7** `portal-double.ts`: the never-seeded `attention` and `timeline` seed groups deleted; the
+  API-shape sketch, seed-groups paragraph and default-table rows above are corrected accordingly.
+- **F8/F9** `router.test.tsx`: `serveHistoryReads` reuses `serveWorkViewProjects()`; the CI-tone
+  case seeds the existing `subjectDetail()`.
+- **F10** `planning.test.tsx`: applications tracked with `trackApplications()`; the extra
+  `localStorage.clear()`/`resetPendingWorkItemCreations()` hook is registered *before* it, so the
+  LIFO order (query clients first) is unchanged.
+- **F11** `portal-double.ts`/`planning.test.tsx`: one exported `workItem` row builder serves both
+  the double's creations and the suite's seeds (the suite's private copy deleted); the double's
+  `itemOf`/`projectOf` are exported and the suite's duplicate copies deleted, call sites unchanged.
+- **F12**/**PD2** `portal-double.ts` header trimmed to the failure-semantics statement, corrected:
+  an unhandled path is rejected at the MSW interceptor without a network attempt. Re-probe on the
+  delivered bytes: with `onUnhandledFrame: "error"` the client fetch rejects and a live local
+  server on the target port is not reached; with `"bypass"` it answers 200 from the network. The
+  two plan sentences and the probe row above are corrected with it.
+- **F13** `vitest.config.ts`: the pool comment restated to the measured fact (vitest's own
+  diagnostics print the `isolate: false` suggestion — that switch is what shares modules across
+  files; the delivered config keeps isolation at the default).
+- **F14**/**PD1** `control.test.tsx:190`: the duplicate-header assertion now reads `x-csrftoken`,
+  the spelling a duplicated camelCase `x-csrfToken` header collides with in the double's
+  lower-cased `Headers` snapshot. Mutation check: a temporary second header in `services/api.ts`
+  (`"x-csrfToken": "duplicate"`) reddens the three `it.each` mutation cases (exit 1,
+  `expected 'duplicate' to be undefined`); reverted, the same filter is green (3 passed). PD1 is
+  resolved by this repair, so "no assertion was deleted or weakened" holds.
+- **PD3**/**PD5**: the `control` and `router` branch-audit sentences above corrected to the
+  delivered layer behaviour.
+
+Apply-stage census (`wc -l`, measured):
+
+| file | base `f1fe1e59` | pre-apply `5a22476` | apply tree | apply Δ |
+| --- | ---: | ---: | ---: | ---: |
+| `app/portal-double.ts` | 0 (new) | 498 | 477 | −21 |
+| `app/router.test.tsx` | 1,328 | 1,229 | 1,215 | −14 |
+| `features/planning/planning.test.tsx` | 1,018 | 819 | 783 | −36 |
+| `features/chat/chat.test.tsx` | 2,086 | 2,063 | 2,062 | −1 |
+| `features/work/control.test.tsx` | 516 | 483 | 483 | 0 |
+| `app/test-harness.tsx` | 61 | 32 | 31 | −1 |
+| `services/api.fixtures.ts` | 246 | 246 | 246 | 0 |
+| `vitest.config.ts` | 41 | 45 | 45 | 0 |
+| all 21 test files | 11,624 | 11,200 | 11,149 | −51 |
+
+(The implement census's totals "11,547 → 11,122" exclude `tool-cache-config.test.ts` (77 lines)
+and its router head row reads one below `wc -l`; the rows above are the measured values.)
+
+Gates re-run on the apply tree (foreground, serialized; the host's pnpm is 12.21.0 against the
+project's 12.17.0 pin, so every command carries `--pm-on-fail=ignore`, a host-version escape and
+not a project change; the apply set touches no dependency file, so `pnpm install` and
+`scripts/ci/check-lockfile-registry.py` are not re-run):
+
+| gate | command | exit | counts |
+| --- | --- | ---: | --- |
+| typecheck | `pnpm --pm-on-fail=ignore --filter @symmetry/frontend typecheck` | 0 | no output |
+| lint | `pnpm --pm-on-fail=ignore --filter @symmetry/frontend lint` | 0 | 223 problems (0 errors, 223 warnings), ceiling 229 untouched |
+| suite (contract command) | `pnpm --pm-on-fail=ignore --filter @symmetry/frontend test` | 0 | 21 files / 534 tests, 33.78 s |
+| suite (json, name pin) | `… exec vitest run --reporter=default --reporter=json` | 0 | 534/534, stderr 0 bytes; no test-name declaration line changed in the diff |
+| suite (shuffled) | `… exec vitest run --sequence.shuffle --sequence.seed=20261122` | 0 | 21 files / 534 tests, 56.75 s (host variance; the count, not the clock, is the pin) |
+| diff hygiene | `git diff --check` | 0 | clean |
+| DLP | `git diff` greps for a users-directory path and a backslash before `u` | 1 | no match |
+| mutation (F14) | duplicate `x-csrfToken` header in `services/api.ts`, control suite `-t "sends the"` | 1 | 3 failed / 10 skipped; reverted → exit 0, 3 passed |

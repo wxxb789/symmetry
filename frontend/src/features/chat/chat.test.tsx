@@ -187,11 +187,10 @@ function renderChat(path: string, options: HarnessOptions = {}) {
     }
     return undefined;
   });
-  const { application, history } = renderRoute(path);
+  const { application } = renderRoute(path);
   applications.push(application);
   return {
     application,
-    history,
     posts: () => portal.requests.filter((request) => request.method === "POST"),
   };
 }
