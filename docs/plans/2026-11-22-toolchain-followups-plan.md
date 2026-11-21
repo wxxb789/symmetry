@@ -43,7 +43,7 @@ ecosystem in `.github/dependabot.yml` maintains it), so the bump stays at the ma
 | # | Site | Before | After | Why |
 | --- | --- | --- | --- | --- |
 | 1 | `docker/daemon.Dockerfile:3` | `golang:1.27.0-bookworm` | `golang:1.27.4-bookworm` | Contract Change 2. Built from `compose.yaml:56`; the `compose` job runs `docker compose up --build --detach` with no service list (`ci.yml:2487`), so hosted CI builds this image and is the behavioural oracle. |
-| 2 | `scripts/ci/rootless-compose-native-acceptance.sh:473` | `golang:1.27.0-bookworm` | `golang:1.27.4-bookworm` | Change 2's "any other file that pins a Go image"; live path: the `compose` job runs the script at `ci.yml:2700` and the image runs the rootless Compose refusal E2E (`go test ./e2e -run ...`). The daemon binary itself is built by the runner's pinned `go-version: 1.27.4` (`:125-126`), so the container only provides the test toolchain; keeping it at 1.27.4 removes the last old-stdlib execution surface in these workflows. |
+| 2 | `scripts/ci/rootless-compose-native-acceptance.sh:473` | `golang:1.27.0-bookworm` | `golang:1.27.4-bookworm` | Change 2's "any other file that pins a Go image"; live path: the `compose` job runs the script at `ci.yml:2700` and the image runs the rootless Compose refusal E2E (`go test ./e2e -run ...`). The daemon binary itself is built by the runner's pinned `go-version: 1.27.4` (the `compose` job's `setup-go` pin at `ci.yml:2411-2413`; the build runs at `scripts/ci/rootless-compose-native-acceptance.sh:125-126`), so the container only provides the test toolchain; keeping it at 1.27.4 removes the last old-stdlib execution surface in these workflows. |
 
 **Tag existence and digest** (recorded before editing): `golang:1.27.4-bookworm` exists — Docker Hub
 tag API `https://hub.docker.com/v2/repositories/library/golang/tags/1.27.4-bookworm`, `last_updated`
@@ -127,7 +127,11 @@ then passed 2/2 alone on that base and 3/3 on the PR head. Coordinates re-derive
   `daemon/internal/app/app.go:38`); whether the `admission_deadline` arm gets its own treatment is an
   owner decision, not this slice's.
 
-`grep -n OmO docs/TODO.md` → no hits at `e0782105`: the entry this slice adds is the first.
+`git grep -n 'admission_deadline' e0782105 -- docs/TODO.md` → no hits: the entry this slice adds is
+`docs/TODO.md`'s first record of the flake. Earlier records of the same arm live in merged artifacts:
+`docs/plans/2026-11-21-rf-w2-10-callback-dedup-plan.md:168-173` (the parent test, loaded host),
+`docs/plans/2026-11-21-rf-w4-02-platform-sessions-plan.md:533` (re-observed),
+`docs/evidence/rf-w4-03-runner-decomposition-2026-11-21.md:483-491` (starvation analysis).
 
 ## Decision recorded: the 0010 advisories bullet is rewritten, not one-token swapped
 
@@ -176,14 +180,15 @@ Foreground, on the frozen tree, recorded with real exit codes:
 | 3 | `python3 scripts/ci/test-ci-changed-path-classifier.py` | exit 0 (the fixture test that pins the three coverage upload steps) |
 | 4 | `git diff --check` | exit 0 |
 | 5 | host-path scan: the whole increment (`git diff HEAD` plus the untracked plan file) grepped for the profile-directory segment the program rule names (`<profile-segment>/`, the phrasing `docs/plans/2026-11-22-ci-toolchain-bump-plan.md` uses) | empty (program rule) |
-| 6 | `git grep -n -E '1\.27\.[0-3]'` | the four live statements above disappear (79 → 75 hits); every remaining hit is a historical-record class of the census above, and `git grep -n 'golang:[0-9]'` outside docs → no hits |
+| 6 | `git grep -n -E '1\.27\.[0-3]'` | the four live statements above disappear: the census-class survivors are 75 lines in 35 files, and this plan's own 10 before-value quotes make the full-tree command return 85 = 75 + 10; the gate-2 form `git grep -n 'golang:[0-9]' -- . ':(exclude)docs' ':(exclude)daemon/internal/harness/testdata'` returns only the two bumped `golang:1.27.4-bookworm` pins — no old Go image |
 | 7 | `docker build -f docker/daemon.Dockerfile .` (engine 29.9.3 reachable on this host) | exit 0; recorded as not run if the engine is unavailable (hosted `compose` job is then the oracle) |
 | 8 | `git diff origin/main -- .github docker scripts/ci` | every hunk is a value change in the five action sites, the two Go image sites and the three classifier literals |
 
 Hosted CI on the PR (every job green, including the `compose` job that builds
 `docker/daemon.Dockerfile` and runs the rootless script's container, and `legacy-route-audit` that
 runs the classifier test) is the behavioural oracle and belongs to the conductor: this stage must not
-push, so it cannot observe it.
+push, so it cannot observe it. The local gates prove the values, the Dockerfile build and the fixture
+test, not the hosted runs.
 
 ## Out of scope, with reasons
 
@@ -209,10 +214,7 @@ push, so it cannot observe it.
   is built with the runner's 1.27.4), so the exposure is confined to the test toolchain.
 - `upload-artifact@v7`'s `archive` default keeps the artifacts zipped, which is what the
   `download-artifact@v8` consumers of `portal-assets` and `control-release-linux` rely on; the three
-  coverage artifacts are upload-only (`git grep -n -E 'control-coverage\|daemon-coverage\|
-  frontend-coverage'` matches only the upload steps and the classifier test).
+  coverage artifacts are upload-only (`git grep -n -E 'control-coverage|daemon-coverage|frontend-coverage' -- . ':(exclude)docs'` matches only the three upload steps in `ci.yml` and the classifier test).
 - The classifier test's literals are a text-level pin of `ci.yml`; if a later slice renames the upload
   step's version again, the same co-change is required. That coupling is pre-existing and is why the
   change is minimal (one token per literal) rather than a rewrite of the pin.
-- The hosted oracle is unobservable from this stage (no push): the local gates prove the values, the
-  Dockerfile build and the fixture test, not the hosted runs.

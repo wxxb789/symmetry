@@ -1306,7 +1306,8 @@ instead of appended.
       `DeadlineAt` and then waits on the request context, so the failure is consistent with the
       deadline expiring before the run reaches its stop and pending-delivery assertions, but the
       cause is unknown and no fix belongs to the toolchain-followups slice that recorded this entry
-      (`grep -n OmO docs/TODO.md` had no match before it). The refactor program's rf-w4-13 contract
+      (`git grep -n 'admission_deadline' e0782105 -- docs/TODO.md` → no hits, so it is
+      `docs/TODO.md`'s first record of the arm). The refactor program's rf-w4-13 contract
       (E5) marks tests whose duration is bounded by a production limit as `out of scope
       (production-bound)` and names this test's `request_deadline` arm
       (`controlRequestLimit = 15 * time.Second`, `daemon/internal/app/app.go:38`), so a fix needs an
