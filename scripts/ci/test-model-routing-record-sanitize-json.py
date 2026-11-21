@@ -786,6 +786,8 @@ class JsonReadingTests(unittest.TestCase):
                 self.pattern = pattern
                 self.calls = 0
                 self.matched = 0
+                self.anchor_calls = 0
+                self.anchor_matched = 0
 
             def search(self, *arguments):
                 match = self.pattern.search(*arguments)
@@ -794,27 +796,41 @@ class JsonReadingTests(unittest.TestCase):
                     self.matched += match.end() - match.start()
                 return match
 
+            def match(self, *arguments):
+                # The anchored pass (`_raw_literal_spans`' docstring): one bounded
+                # attempt per claim end per family, counted apart from the scan's own
+                # searches so this pin's search bounds keep their meaning.
+                match = self.pattern.match(*arguments)
+                self.anchor_calls += 1
+                if match is not None:
+                    self.anchor_matched += match.end() - match.start()
+                return match
+
         def scanned(text):
             patterns = tuple(CountingPattern(pattern) for pattern in MODULE._RAW_READING.windows)
             with unittest.mock.patch.object(
                 MODULE, "_RAW_READING", unittest.mock.Mock(windows=patterns),
             ):
                 rendered = MODULE.sanitize_text(text, [], root_only=True)
-            return sum(p.matched for p in patterns), sum(p.calls for p in patterns), rendered
+            return (
+                sum(p.matched for p in patterns), sum(p.calls for p in patterns),
+                sum(p.anchor_calls for p in patterns), sum(p.anchor_matched for p in patterns),
+                rendered,
+            )
 
         listing_counts = []
         for lines in (1000, 8000):
             paths = [_BS * 2 + "srv" + _BS + "share" + _BS + ("dir%d" % index)
                      for index in range(lines)]
             text = json.dumps({"stdout": "\n".join(paths)})
-            matched, calls, rendered = scanned(text)
-            listing_counts.append((matched, calls, len(text)))
+            matched, calls, anchor_calls, anchor_matched, rendered = scanned(text)
+            listing_counts.append((matched, calls, anchor_calls, anchor_matched, len(text)))
             # The decoded reading renders a token per line; the raw look's parts here
             # are the escape-only seams, which the pair-bearing match keeps outside.
             self.assertEqual(rendered.count("path-sha256:"), lines)
             self.assertEqual(MODULE.sanitize_text(rendered, [], root_only=True), rendered)
-        matched_1000, calls_1000, length_1000 = listing_counts[0]
-        matched_8000, calls_8000, length_8000 = listing_counts[1]
+        matched_1000, calls_1000, anchor_calls_1000, anchor_matched_1000, length_1000 = listing_counts[0]
+        matched_8000, calls_8000, anchor_calls_8000, anchor_matched_8000, length_8000 = listing_counts[1]
         # 8x the lines: a linear scan's covered characters grow ~8x, the scan that
         # re-ran a tail per line grew ~64x (measured: 12.0M bytes at 1,000 lines).
         self.assertLess(matched_8000, matched_1000 * 16)
@@ -825,6 +841,14 @@ class JsonReadingTests(unittest.TestCase):
         # bytes: a handful of searches for the whole listing, not one per line.
         self.assertLessEqual(calls_1000, 64)
         self.assertLessEqual(calls_8000, 64)
+        # The anchored pass attempts one bounded match per claim end per family - its
+        # attempts grow with the listing's lines, not its bytes - and none of this
+        # listing's claim ends (hashed tokens) lets a family body start: the anchored
+        # scan reads no character at all.
+        self.assertLessEqual(anchor_calls_1000, 8 * 1000)
+        self.assertLessEqual(anchor_calls_8000, 8 * 8000)
+        self.assertEqual(anchor_matched_1000, 0)
+        self.assertEqual(anchor_matched_8000, 0)
 
     def test_cli_root_only_check_refuses_a_root_after_a_json_escape(self):
         # Opus P2 (round 4): inside a quoted record, a line's root follows an
@@ -908,6 +932,54 @@ class JsonReadingTests(unittest.TestCase):
             {"out": "wrote " + digest_of(ESCAPED_DRIVE_RUN) + "\nFAILED",
              "note": digest_of("C:" + _BS * 2 + "Users" + _BS * 2 + "O" + _BS + "u0027Brien")},
         )
+
+    def test_cli_root_render_then_check_is_a_fixpoint(self):
+        # Opus P2 (round 5): the documented publish flow is `--root --root-only`, then the
+        # `record-cleanliness` gate's own `--check --root-only`. With a root token followed by a
+        # raw spelling (`//run` + the newline escape + `FAILED`) the first render used to leave
+        # the spelling behind the token, the gate refused the tool's own output ("a host absolute
+        # path is present"), and a second render bound the token's own text into a new digest -
+        # the publish flow wrote a record its own gate refused. The raw look ran over the
+        # literal's original bytes, where the byte in front of `//run` is a root name character
+        # its leading boundary refuses (the `e` of `store`), while the decoded reading's rebuild
+        # writes the token there and the token's `>` is a boundary for the slash-UNC and
+        # `file:` families. The anchored read sees that spelling, the touching spans merge, and
+        # the first render writes one token binding the whole location - the root's own bytes
+        # included, the fail-closed direction - so the gate accepts the output and a second
+        # render through the same command is byte-identical. Both roots are synthetic; the drive
+        # root covers the Windows-family spelling, and the default scope is checked beside
+        # `--root-only`.
+        posix_root = "/srv/store"
+        drive_root = "C:" + _BS + "Work" + _BS + "run"
+        drive_spelling = "C:" + _BS * 2 + "Work" + _BS * 2 + "run"
+        cases = (
+            (posix_root, posix_root + "//run" + _BS + "nFAILED", ("srv", "store")),
+            (drive_root, drive_spelling + "//child" + _BS + "nFAILED", ("Work",)),
+        )
+        for root, whole, fragments in cases:
+            text = '{"out":"' + whole + '"}'
+            for scope in (["--root-only"], []):
+                with self.subTest(root=root, scope=scope):
+                    refused = run_cli(text, "--check", *scope, "--root", root)
+                    self.assertEqual(refused.returncode, 1, text)
+                    self.assertEqual(refused.stdout, "")
+                    self.assertIn("refused", refused.stderr)
+                    rendered = run_cli(text, *scope, "--root", root)
+                    self.assertEqual(rendered.returncode, 0, rendered.stderr)
+                    self.assertEqual(rendered.stdout, '{"out":"' + digest_of(whole) + '"}')
+                    for fragment in fragments:
+                        self.assertNotIn(fragment, rendered.stdout)
+                    # The gate exactly as the cleanliness job runs it: `--check --root-only`
+                    # with no `--root`, over the rendered bytes - and with the root supplied.
+                    for arguments in (["--check", "--root-only"],
+                                      ["--check", "--root-only", "--root", root]):
+                        gated = run_cli(rendered.stdout, *arguments)
+                        self.assertEqual(gated.returncode, 0, gated.stderr)
+                        self.assertEqual(gated.stdout, "")
+                    # A second render through the publishing command writes the same bytes.
+                    again = run_cli(rendered.stdout, *scope, "--root", root)
+                    self.assertEqual(again.returncode, 0, again.stderr)
+                    self.assertEqual(again.stdout, rendered.stdout)
 
 
 if __name__ == "__main__":

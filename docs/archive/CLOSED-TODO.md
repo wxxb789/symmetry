@@ -3708,6 +3708,15 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
       `_align_span` snaps every replacement's start to the backslash run it splits, so a token
       behind an odd run cannot spell `\p` and the rendered literal still parses (the review's
       fuzz found 14 invalid renders in the pre-round-3 bytes and none at the delivered bytes).
+      The families read a second time, anchored at each claim's end, over the decoded reading's own
+      rebuild (`_render_passes`' output text — the text the next render reads), because a `--root`
+      token's end exposes a spelling the byte it replaced hid: the round-5 review's P2 shape (a root
+      immediately followed by `//child` and an escape) renders as one token in the first pass, where
+      the pre-fix bytes left the spelling behind the token and the next pass bound the token's own
+      text into a new digest — the documented `--root` publish flow wrote a record the
+      `--check --root-only` gate refused. The anchored attempts follow the scan's own containment
+      rule (a start deeper inside a kept match consumes the same tail run the kept match's end
+      already reaches) and contribute the recorded bytes behind the claim under the pair rules.
       `_RAW_SPELLING_ESCAPE`
       gates the scan per literal — an odd backslash run whose last backslash begins one of the
       escapes `n`, `r`, `t`, `f`, `b`, `u` (round 3 fixed the predicate, which saw only runs of
@@ -3717,10 +3726,10 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
       a `--root` renders as the Windows family's hashed token rather than `<disposable-root>`
       (the root's bytes are removed either way). All of them are pinned in the JSON module so a
       later narrowing is a deliberate decision.
-      Pins live in the split suites — `scripts/ci/test-model-routing-record-sanitize.py` (55
+      Pins live in the split suites — `scripts/ci/test-model-routing-record-sanitize.py` (57
       cases, the raw reading's pattern and CLI battery) and its sibling
-      `scripts/ci/test-model-routing-record-sanitize-json.py` (19 cases, the JSON reading - the
-      two new round-4 methods included; the
+      `scripts/ci/test-model-routing-record-sanitize-json.py` (20 cases, the JSON reading - the
+      round-4 methods and the round-6 CLI `--root` publish-fixpoint pin included; the
       split keeps both tester files under the 1000-line decomposition threshold, the JSON module loads
       the raw module by path for the shared fixtures, and both run in the same `ci.yml` step and
       README gate list). JSON module: "a JSON escape after a Windows path survives the render" —
@@ -3793,11 +3802,18 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
       host path after a JSON escape" (the round-5 command shape exits 1, the default scope
       refuses the same bytes, every shape's render passes the check it refused and survives a
       re-render, and `aa/home/runner/x` still passes) and "CLI renders JSON records to bytes its
-      own check accepts" (the publishing round trip). The raw module keeps the pattern, quoted,
-      URL, space-continuation and CLI battery, and its own new pin "a host path after a raw
-      escape spelling is caught" (`ok\t/tmp/run` and `ok` + the `u0020` escape +
-      `/tmp/symmetry-run`, both scopes: the two `leading_boundary` escape arms no JSON-reading
-      pin needs, because a decoded control character is a boundary by itself).
+      own check accepts" (the publishing round trip), and round 6's "CLI root render then check
+      is a fixpoint" (a `--root` immediately followed by `//child` and an escape renders as one
+      token in both scopes, `--check --root-only` accepts the output with and without the
+      `--root`, and a second render is byte-identical — the round-5 P2 publish flow). The raw
+      module keeps the pattern, quoted, URL, space-continuation and CLI battery, and its own
+      pins: "a host path after a raw escape spelling is caught" (`ok\t/tmp/run` and `ok` + the
+      `u0020` escape + `/tmp/symmetry-run`, both scopes: the two `leading_boundary` escape arms
+      no JSON-reading pin needs, because a decoded control character is a boundary by itself),
+      and the round-6 M9b pin `test_a_group_ending_at_a_claims_end_binds_its_whole_raw_span` (a
+      merged group ending exactly at a rendered root token's end binds its whole raw span; the
+      `bisect_left(ends, index)` respelling of `raw_end_of` over-binds the colon the render left
+      outside).
       Mutation checks (scratch copies of both suites beside a mutated tool, deleted afterwards;
       every `FAIL:`/`ERROR:` case counted, subtest-keyed and method-level alike, and every number
       below measured in this round):
@@ -3871,20 +3887,34 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
         round-3 bytes (all measured above). Round 5's two new pins have theirs too, measured at
         the delivered bytes: the device-prefix straddle pin fails on `_CONTAINED_RESUME` windows
         1, 3, 8 and 9 (the derived ten passes), and the root-token-end pin fails under the
-        `bisect_left(ends, index)` respelling of `raw_start_of`.
+        `bisect_left(ends, index)` respelling of `raw_start_of`. Round 6's pins have theirs,
+        measured at its bytes: disabling the anchored read (the anchored loop deleted) leaves the
+        raw module green and fails exactly the JSON module's new CLI method, the round-5 head's
+        own bytes fail the same method, and the
+        `bisect_left(ends, index)` respelling of `raw_end_of` (the review's M9b, which the
+        round-5 review could not distinguish and left unpinned) fails exactly the new raw-module
+        pin `test_a_group_ending_at_a_claims_end_binds_its_whole_raw_span` (two failing
+        subtests). The respelling is not equivalent, so the round pins the lookup on both sides
+        instead of documenting it: its `bisect_left` count drops the claim that ends exactly at
+        the group's last character, and the raw end moves past the group by that claim's shift
+        (the colon a render left outside goes into the digest; on a wider shape, a second
+        rendered root claim behind the first, the digest binds bytes of that claim's raw span
+        too).
       Evidence (numbers measured on the fix worktree, not on a commit — the worktree carries the
       uncommitted change, so they are bound to the bytes: sanitizer
-      `sha256:41e5bdea5eccbb390dffe3245e0164b64024f25f0965cc36eebf385eaeaf82c7`, raw module
-      `sha256:f03cce895ac9623f8851eac0d2df64265b34e5a86cbdb30a669989b0d79cc9fd`, JSON module
-      `sha256:9320024361fc2b0420f24e9be0904423f1fdc00e55ed017798723f86f378f427` (the r5 round's
-      bytes, superseding the r4 round's `8afaeb98…`, `ede54a19…` and `f278be53…`: the resume
-      window is derived from `_DEVICE_PREFIX`'s pattern text, the 10-byte straddle and
-      root-token-end pins are added, and the default-scope non-fixpoint is disclosed in the
-      docstrings, the records README and `docs/TODO.md`); a post-commit
+      `sha256:732312c48fe4602d87475d4ddd3670c84d5db687ed1381e65cfd332713977725`, raw module
+      `sha256:ac2148fd894c1a4abae7869e5c544edf6d12bf295511ef7d11b539cdb3b40250`, JSON module
+      `sha256:9ea2752eec9228f4f52b8ca2d38c78110ff184f3ad5969531d08781117442aa5` (the r6 round's
+      bytes, superseding the r5 round's `41e5bdea…`, `f03cce89…` and `93200243…` and the r4
+      round's `8afaeb98…`, `ede54a19…` and `f278be53…`: the raw look's anchored read absorbs a
+      `--root` token's exposed trailing spelling, both `shifts` lookups are pinned, and both
+      disclosed non-fixpoints — the default-scope separator shape and the hand-written-token-text
+      shape — are disclosed in the docstrings, the records README and `docs/TODO.md`); a post-commit
       re-run and the slow evaluation suite are owed): `python
-      scripts/ci/test-model-routing-record-sanitize.py` 56 tests OK and `python
-      scripts/ci/test-model-routing-record-sanitize-json.py` 19 tests OK (Windows, CPython
-      3.12.10; WSL Ubuntu-24.04 as the non-root user: 56 OK and 19 OK); `python
+      scripts/ci/test-model-routing-record-sanitize.py` 57 tests OK and `python
+      scripts/ci/test-model-routing-record-sanitize-json.py` 20 tests OK (Windows, CPython
+      3.12.10; the r5 round's WSL Ubuntu-24.04 runs of its own bytes stood at 56 and 19 and are
+      not re-run at these bytes); `python
       scripts/ci/test-check-record-cleanliness.py` 19 tests OK; `--check
       --root-only` over all 113 committed records under `docs/evaluations/` and
       `docs/evidence/`: 0 flagged (the earlier "2 records" figure was the pre-#134 measurement
@@ -3904,7 +3934,12 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
       113 records byte-identically to the r4 bytes in both scopes (0 differences), and the
       `--check --root-only` CLI sweep (one process per record) exits 0 on each of the 113 files,
       0 dirty in 49.8 s on this host, so the r5 window derivation and pins change no committed
-      byte; the default-scope flagged set stays the 51 records the boundary above names. A seeded
+      byte; the default-scope flagged set stays the 51 records the boundary above names. The r6
+      round's sweep at its bytes: the `--check --root-only` CLI sweep (one process per record)
+      exits 0 on each of the 113 files, 0 dirty in 48.5 s, and the in-process sweep renders
+      every record byte-identically in the root-only scope (0 differences), the default scope
+      still changing the same 51 records — the anchored read and the new pins change no
+      committed byte. A seeded
       differential/invariant fuzz over random valid-JSON records (196,096
       documents, 328,604 renders; escape, mixed-spelling, nested-location, token and
       `<disposable-root>` atoms) found: every render valid JSON; every `--root-only` render a
@@ -3915,7 +3950,17 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
       than fixed); and four renders differing from the round-3 bytes', two inputs in both
       scopes, each the resume window's documented narrowing — a pair-free spelling deep inside
       a pair-bearing match no longer re-absorbs that match's one-escape tail, so the tail stays
-      outside the token the way the pair-bearing rule spells it. The window's width is derived
+      outside the token the way the pair-bearing rule spells it. The r6 round's `--root` fuzz at
+      its bytes (three seeds × 20,000 records from escape, mixed-spelling, root-spelling and
+      prefix atoms — 60,000 records, roots `/srv/store` and a drive-root spelling): 0
+      root-only non-fixpoints; the default scope's 105 non-fixpoints all carry the disclosed
+      site (a separator, literal or the `u002F` escape, directly in front of a rendered token),
+      and the fragments that stay literal are spellings the families refuse by their own
+      boundaries (a name-glued `srv/store`, a colon-adjacent relative spelling, a root whose
+      after-lookahead refuses a name continuation), so none leaves a matched host location; a
+      second run with `<disposable-root>` and `path-sha256:` atoms added gave 10 root-only
+      non-fixpoints, every one an input that already spells a token (the disclosed
+      hand-written-token-text class). The window's width is derived
       from the pattern, not guessed: `_DEVICE_PREFIX_WIDTH` sums the `\{1,<n>}` bounds in
       `_DEVICE_PREFIX`'s own pattern text and adds the one-byte `?`/`.` selector (the widest
       namespace, nine bytes), and `_CONTAINED_RESUME` adds the drive letter behind it, so a
@@ -3957,6 +4002,19 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
       literal lets the scan run over the whole of it — so the entry's own earlier "1.04 s
       against 1.02 s" claim is superseded by these numbers (it held on a run with no
       escape-shaped backslash before it, which the guard skips).
+      Round 6 re-measured the named series at its bytes in one session (minimum of three
+      in-process runs, one module per process): the UNC-listing fixture 0.042 / 0.100 / 0.202 /
+      0.375 / 0.753 s at 1,000 / 2,000 / 4,000 / 8,000 / 16,000 lines, the 2,000/8,000-path
+      literal 0.062 / 0.262 s, the 2,000/8,000-line prose 0.057 / 0.223 s, the escape-arc
+      literal 0.021 / 0.043 s, and the `file:`-run fixture 0.170 / 2.713 s at N = 4,000 /
+      16,000 (the recorded 0.169 / 2.692 s re-measured within noise); the round-5 bytes measured
+      in the same session gave 0.059 / 0.093 / 0.177 / 0.340 / 0.736 s on the listing, 0.061 /
+      0.255 s, 0.053 / 0.222 s, 0.021 / 0.042 s and 0.176 / 2.779 s, so the anchored read
+      changes no named fixture beyond host noise. The anchored pass's own adversarial shape — one
+      literal of 1,000 root tokens each followed by a `//` run the family body fails — renders
+      1 MB in 0.622 s against the round-5 bytes' 0.607 s, so its per-claim attempts stay linear
+      in the record (the runs behind a claim reach the next claim's raw spelling, so the
+      attempts' covered characters are disjoint).
       `test-model-routing-evaluation.py` was not run here (the conductor runs it; the 113-record
       sweep was 49.8 s through the CLI, one process per record, at the r5 bytes — 55-128 s
       across the r4 round's runs — host state dependent). Reader-facing boundary:

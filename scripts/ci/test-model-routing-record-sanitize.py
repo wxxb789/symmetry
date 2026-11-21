@@ -253,6 +253,28 @@ class SanitizeTextTests(unittest.TestCase):
                 )
                 self.assertEqual(MODULE.sanitize_text(rendered, [root], root_only=root_only), rendered)
 
+    def test_a_group_ending_at_a_claims_end_binds_its_whole_raw_span(self):
+        # The same `shifts` lookup, other side (round 5's M9b). A merged group's last
+        # character sits exactly at a rendered root token's end when a later match's
+        # tail absorbs the separator the root's own match left outside: here the UNC
+        # match's tail runs from the share name through the token and takes the `/`
+        # behind it, and only the `:` stops it, so the raw end of the group has to
+        # count the claim ending at its last character. The `bisect_left(ends, index)`
+        # respelling drops that claim from the shift and moves the raw end past the
+        # group - the digest over-binds the colon the render left outside (and, on a
+        # longer differential shape with a second rendered root claim behind the first,
+        # that claim's raw bytes too). The pin asserts the exact render, so the
+        # respelling fails it.
+        root = "/srv/store"
+        text = _BS * 2 + "srv/share>" + root + "/:"
+        for root_only in (True, False):
+            with self.subTest(root_only=root_only):
+                rendered = MODULE.sanitize_text(text, [root], root_only=root_only)
+                self.assertEqual(
+                    rendered, digest_of(_BS * 2 + "srv/share>" + root + "/") + ":",
+                )
+                self.assertEqual(MODULE.sanitize_text(rendered, [root], root_only=root_only), rendered)
+
     def test_root_match_over_a_long_separator_run_is_linear(self):
         # STD-B02: the root matcher's separator used to be an overlapping
         # alternation repeated as a group (`(?:\\+|/|\\/)+`), which parses one run

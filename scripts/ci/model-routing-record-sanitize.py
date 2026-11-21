@@ -17,11 +17,14 @@ recorded text as a stable token instead:
 Relative paths, URLs and ``sha256:`` digests pass through unchanged, and
 rendering is idempotent - except that a ``file:`` URL or a doubled-slash
 authority spelling is an absolute location, not a URL to spare: both modes
-render it. One default-scope non-fixpoint is disclosed rather than closed: a
-separator directly in front of a rendered token reads as a POSIX path on a
-second render and binds the token's own text into a new digest. No host byte
-survives either render, the ``--root-only`` gate scope is unaffected, and
-`sanitize_text`'s docstring names the boundary.
+render it. Two non-fixpoints are disclosed rather than closed, and both bind a
+rendered token's own text instead of a host byte: a separator directly in front
+of a rendered token reads as a POSIX path on a second render in the default
+scope, and text that already spells a token of its own (``//<disposable-root>``,
+a ``path-sha256:`` spelling inside a location) can bind that token's text in
+either scope. No host byte survives either render, the ``--root-only`` gate
+scope is a fixpoint for records that carry no rendered token text of their own,
+and `sanitize_text`'s docstring names both boundaries.
 
 With ``--root-only`` the renderer flags only host absolute paths: Windows drive
 and UNC roots, a root-relative Windows spelling (``\\Users\\op\\run``, which
@@ -83,7 +86,12 @@ The text is read in one of two ways, decided at the document level:
   pinned mixed spelling ``C:\\\\a\\repo`` keeps ``\\repo`` outside. A raw match
   whose span carries no backslash at all is left to the decoded reading, which
   reads those bytes as written; and every replacement is snapped to the
-  backslash runs its span splits, so the rendered bytes stay valid JSON. POSIX
+  backslash runs its span splits, so the rendered bytes stay valid JSON. The
+  families also read the decoded reading's own rebuild, anchored at each claim's
+  end, because that rebuild is the text the next render will read: a ``--root``
+  token's own end exposes a spelling the byte it replaced hid, so the first
+  render absorbs it rather than leaving a residue the next render would bind
+  with the token's own text (``_raw_literal_spans``' anchored paragraph). POSIX
   spellings are not re-read this way: their separators carry no backslash, so
   the decoded reading already reads them as written.
 * Anything else is **prose**, and prose keeps the base tool's raw reading,
@@ -691,7 +699,11 @@ def _rebuild_with_groups(
     # `--root` case where a slash-UNC location starts exactly where a rendered root
     # token ends pins the difference: the respelling leaves the authority literal and
     # binds the location's tail (the raw module's
-    # `test_a_location_at_a_root_tokens_end_binds_its_own_bytes`).
+    # `test_a_location_at_a_root_tokens_end_binds_its_own_bytes`). The end side obeys
+    # the same rule - a group whose last character is a claim's end counts that claim
+    # too - and the respelling there moves the raw end past the group, over-binding
+    # the bytes behind it (the raw module's
+    # `test_a_group_ending_at_a_claims_end_binds_its_whole_raw_span` pins that side).
     shifts = [0]
     for _start, _end, claim_start, claim_end, text in claims:
         shifts.append(shifts[-1] + len(text) - (claim_end - claim_start))
@@ -839,6 +851,25 @@ def _raw_literal_spans(content: str, claimed: list[tuple[int, int, str]]) -> lis
     match's raw bytes are left for a later render to find, so rendering stays a
     fixpoint.
 
+    The scan reads the recorded bytes, where the left context of a spelling is the
+    byte the *input* wrote, but the decoded reading's rebuild - every claim's
+    rendered text in place of the raw span it replaced - is the text the next render
+    will read. The left context therefore differs in exactly one place: a spelling
+    that begins where a claim's text ends. The same families run a second time over
+    that rebuild, anchored at each claim's end (`pattern.match` at the rebuilt
+    offset sees the rebuilt left context), because a `--root` token's own end
+    exposes a spelling the raw byte before it hides: the slash-UNC and `file:`
+    families accept a preceding `>` and refuse the root name character the token
+    replaced, so `{"out":"/srv/store//run` + the newline escape + `FAILED"}`
+    renders as one group in the first pass instead of leaving `//run` and the
+    escape for the next pass to bind together with the token's own text (the
+    round-5 review's P2, where the documented `--root` publish flow wrote a record
+    the gate then refused). An anchored match contributes exactly what the same
+    family's raw scan would have contributed from that start - the recorded bytes
+    from the claim's raw end, under the pair rules below - and the containment rule
+    above governs the anchored attempts too: a match starting at a deeper claim's
+    end consumes the same tail run the kept match already reaches the end of.
+
     A match whose span carries no backslash at all is left to the decoded reading,
     which reads those bytes as written: the raw look exists for the single-backslash
     spellings, and where the two readings' byte classes still differ outside one (a
@@ -877,6 +908,61 @@ def _raw_literal_spans(content: str, claimed: list[tuple[int, int, str]]) -> lis
         index = bisect.bisect_left(backslashes, part_start + 1)
         return index < len(backslashes) and backslashes[index] < part_end
 
+    def contribute(span_start: int, span_end: int) -> None:
+        """Union one match's uncovered parts, under the docstring's pair rules.
+
+        ``span_start``/``span_end`` are raw offsets: the match's own span for the
+        recorded-bytes scan, and the recorded bytes an anchored match covers behind
+        the claim it starts at. A span carrying no backslash at all is left to the
+        decoded reading; a span carrying no escaped pair is a raw spelling through
+        all its parts; a pair-bearing span keeps only the parts carrying a backslash
+        beyond their opening escape character.
+        """
+
+        text = content[span_start:span_end]
+        if "\\" not in text:
+            return
+        if "\\\\" not in text:
+            spans.extend(uncovered(span_start, span_end))
+            return
+        spans.extend(
+            part for part in uncovered(span_start, span_end) if separator_after_first(*part)
+        )
+
+    # The decoded reading's rebuild (`_render_passes`' own output text) and where each
+    # claim's text sits in it, so the anchored pass below reads the left context the
+    # next render will read. The shifts mirror `_rebuild_with_groups`': claims are
+    # written in order and pairwise disjoint, so both lists ascend.
+    rebuilt: list[str] = []
+    rebuilt_starts: list[int] = []
+    rebuilt_ends: list[int] = []
+    claim_ends: list[tuple[int, int]] = []
+    shifts = [0]
+    position = 0
+    for raw_start, raw_end, text in claimed:
+        rebuilt.append(content[position:raw_start])
+        rebuilt.append(text)
+        rebuilt_starts.append(raw_start + shifts[-1])
+        rebuilt_ends.append(raw_start + shifts[-1] + len(text))
+        claim_ends.append((raw_end, rebuilt_ends[-1]))
+        shifts.append(shifts[-1] + len(text) - (raw_end - raw_start))
+        position = raw_end
+    rebuilt.append(content[position:])
+    rebuilt_text = "".join(rebuilt)
+
+    def raw_of(rebuilt_offset: int) -> int:
+        """The raw offset one rebuilt-text offset maps back to, through the claims' shifts.
+
+        An offset inside a claim's text is the far side of that claim's raw span (the
+        claim's rendered text stands for the whole span); an offset outside every
+        claim drops the shifts of the claims in front of it.
+        """
+
+        index = bisect.bisect_right(rebuilt_starts, rebuilt_offset) - 1
+        if index >= 0 and rebuilt_offset < rebuilt_ends[index]:
+            return claimed[index][1]
+        return rebuilt_offset - shifts[bisect.bisect_right(rebuilt_ends, rebuilt_offset)]
+
     spans: list[tuple[int, int]] = []
     for pattern in _RAW_READING.windows:
         start = 0
@@ -903,15 +989,22 @@ def _raw_literal_spans(content: str, claimed: list[tuple[int, int, str]]) -> lis
                 continue
             frontier = match.end()
             start = max(match.start() + 1, frontier - _CONTAINED_RESUME)
-            if "\\" not in match.group():
+            contribute(match.start(), match.end())
+        # The same family over the decoded reading's rebuild, anchored at each claim's
+        # end: the one left context the recorded bytes get wrong (the docstring's
+        # anchored paragraph). An attempt starting inside a kept match is contained -
+        # its own tail run is the kept match's, which already reaches its end - and a
+        # claim's rendered text ends with a name character for every hashed token, so
+        # a family body only starts behind a `--root` token's own end.
+        frontier = -1
+        for raw_end, rebuilt_end in claim_ends:
+            if rebuilt_end < frontier:
                 continue
-            if "\\\\" not in match.group():
-                spans.extend(uncovered(match.start(), match.end()))
+            match = pattern.match(rebuilt_text, rebuilt_end)
+            if match is None:
                 continue
-            spans.extend(
-                part for part in uncovered(match.start(), match.end())
-                if separator_after_first(*part)
-            )
+            frontier = match.end()
+            contribute(raw_end, raw_of(match.end()))
     return _merged_spans(spans)
 
 
@@ -1088,13 +1181,16 @@ def sanitize_text(text: str, roots: list[str], root_only: bool = False) -> str:
     a hashed token; with ``root_only`` true only host absolute paths (drive, UNC
     and the POSIX home/root/temp/mount roots) are rendered, so a product route
     such as ``/portal/runtimes`` stays literal. Rendering is a fixpoint in
-    ``root_only`` mode; the default scope carries one disclosed exception, where
+    ``root_only`` mode for text that carries no rendered token text of its own:
+    an input already spelling a token (``//<disposable-root>`` + an escape, a
+    ``path-sha256:`` spelling inside a location) can bind that token's own text on
+    a later render. The default scope carries one further disclosed exception, where
     re-rendering a literal whose decoded text has a separator directly in front of a
     rendered token (an escaped forward slash ahead of a raw spelling's token) reads
     the separator and the token's text as a POSIX path and binds the token's own text
-    into a new digest. No host byte survives either render and ``--root-only`` is
-    unaffected, so this is a disclosed non-fixpoint, not a leak; ``docs/TODO.md``
-    carries the entry.
+    into a new digest. No host byte survives either render - what a second render
+    binds is a rendered token, not host data - so these are disclosed
+    non-fixpoints, not leaks; ``docs/TODO.md`` carries the entries.
 
     A JSON-structured record is read as its own JSON: every string literal is
     decoded and the matchers run on the decoded text, so an escape a writer spelled
@@ -1105,7 +1201,10 @@ def sanitize_text(text: str, roots: list[str], root_only: bool = False) -> str:
     spelling. The Windows families also run over the literal's recorded bytes, and
     the parts they read - a *raw* spelling, whose separators are single backslashes
     that decode into control characters, leaving the decoded reading no location to
-    read - are unioned with the decoded reading's own spans, so a raw match is never
+    read - are unioned with the decoded reading's own spans; they run a second time,
+    anchored at each claim's end, over the decoded reading's own rebuild, where a
+    ``--root`` token's end exposes a spelling the raw byte before it hid (the
+    publish flow's root directly followed by ``//child``). A raw match is never
     left behind beside a decoded claim: a forward-slash prefix continued by raw
     separators renders whole, the escape and the text behind it included, where the
     decoded reading read only the prefix. A raw match carrying an escaped backslash

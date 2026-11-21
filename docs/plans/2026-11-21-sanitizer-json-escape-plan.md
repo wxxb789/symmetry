@@ -87,6 +87,18 @@ verified by reading both revisions
      which the round-4 review's 10-byte device-prefixed straddle showed too small, to the
      derived ten). The review's UNC-listing fixture went from 3.15 s at 1,000 lines / 49 s at
      4,000 to linear time (the trade-offs record the numbers).
+     Round 6 added the anchored read this section's left-context rule needs: the same families
+     run a second time over the decoded reading's own rebuild, anchored at each claim's end,
+     because that rebuild is the text the next render reads - a `--root` token's own end exposes
+     a spelling the byte it replaced hid (the round-5 review's P2: a root immediately followed by
+     `//child` and an escape left a residue behind the token, and the next render bound it
+     together with the token's own text, so the documented `--root` publish flow wrote a record
+     the `--check --root-only` gate refused). An anchored attempt follows the scan's own
+     containment rule and contributes the recorded bytes behind the claim under the same pair
+     rules. Round 6 also pinned the other shift lookup: the round-5 review's M9b respelling
+     (`bisect_left(ends, index)` in `raw_end_of`) is not equivalent - it drops the claim ending
+     exactly at the group's last character, and the raw end moves past the group by that claim's
+     shift - so the new raw-module pin fails it and both lookups are pinned on their own sides.
    - **Two byte-class profiles, one pattern compiler.** `_compile_patterns(classes, guard)`
      builds each reading's matcher set from a `_ByteClasses` record: the raw reading keeps the
      base tool's recorded-syntax set, and the decoded reading refuses the control characters and
@@ -121,7 +133,10 @@ verified by reading both revisions
    and the round-3 scan fails that bound; a raw spelling glued in front of an existing
    `path-sha256:` token renders its own bytes and leaves the token byte for byte), and the
    fail-closed property corpus over every
-   repro shape (thirty-three cases after the r2 and r3 extensions); each pin's discrimination
+   repro shape (thirty-three cases after the r2 and r3 extensions), and round 6's `--root`
+   publish-fixpoint pin (a root immediately followed by `//child` and an escape renders as one
+   token in both scopes, the rendered bytes pass `--check --root-only` with and without the
+   `--root`, and a second render is byte-identical); each pin's discrimination
    (pre-fix bytes or a named mutation) is measured and recorded in the closure.
 3. `docs/TODO.md` → `docs/archive/CLOSED-TODO.md`: the entry "Stop the Windows-family path tail
    from absorbing a JSON escape that follows the path" moves with a closure statement naming the
@@ -130,6 +145,10 @@ verified by reading both revisions
 4. `docs/evaluations/model-routing/README.md`: only if the change makes a sentence stale. The
    three accepted false positives and the record-rendering exception are history and stay
    verbatim; the `--root-only` scope sentence gains the escape boundary it now enforces.
+   The r5 round added the default-scope non-fixpoint to the limits, and the r6 round adds the
+   anchored read to the reading paragraph and qualifies the root-only fixpoint claim with the
+   hand-written-token-text shape (a `//<disposable-root>` or `path-sha256:` spelling inside a
+   location can bind on a later render), tracked in `docs/TODO.md`.
 5. No new gate: the split's sibling tester runs in the same `ci.yml` step and the same README
    gate list as the raw module, and no other file is added. No record is re-rendered unless the
    sweep flags one (none expected; the two `0008b-go-bounded-regression-strong` records are

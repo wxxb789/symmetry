@@ -572,6 +572,20 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       positions (the raw look already keeps rendered token text out of its digests) or extending
       a claim to the separator a raw match's start left outside it - whichever closes the shape
       without narrowing a real path out of the patterns, pinned by a second-render fixpoint test.
+- [ ] Close the second disclosed non-fixpoint the round-5 review of PR #137 found: a record
+      that already spells a rendered token can bind that token's own text on a later render, in
+      either scope, because a separator run directly in front of the token is a location's start
+      and the union binds the token text the match covers. Shape (Python, `BS = chr(0x5C)`):
+      `'{"k":"//<disposable-root>' + BS + 'n<disposable-root>' + BS*2 + '"}'` renders to
+      `//<disposable-root>` plus the newline escape plus `<disposable-root>` plus
+      `path-sha256:b11b4c<...>` and re-renders to `path-sha256:a2c233<...>` plus
+      `<disposable-root>` plus `path-sha256:a80e51<...>` plus the rest. The input carries no host
+      byte, so the render over-redacts a token rather than leaking; the boundary is disclosed in
+      the sanitizer's docstrings and `docs/evaluations/model-routing/README.md` (Explicit local
+      limits). Fix direction: the raw look's token-text filter keeps that text out of its own
+      digests, but a separator run in front of a token is still a location's start; closing the
+      shape must not narrow a real path out of the patterns, pinned by a second-render fixpoint
+      test.
 
 ## Production Linux containment witness: stop-receipt barrier stall awaiting a diagnosable occurrence
 
