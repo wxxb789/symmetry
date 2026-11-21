@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -417,6 +418,52 @@ func TestRuntimeRegistrationRejectsPartialOrInvalidNativeMetadata(t *testing.T) 
 			var registration RuntimeRegistration
 			if err := json.Unmarshal([]byte(value), &registration); err == nil {
 				t.Fatalf("accepted invalid registration: %s", value)
+			}
+		})
+	}
+}
+
+// TestValidateRegistrationUUIDPinsRejectionMessages pins the exact rejection
+// message for every repository_resource_id rejection class. This
+// boundary folds every class into the canonical-UUID body, so every rejection
+// row pins that one string.
+func TestValidateRegistrationUUIDPinsRejectionMessages(t *testing.T) {
+	const field = "repository_resource_id"
+	const uuid = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+	canonical := fmt.Sprintf("%s must be a canonical UUID", field)
+
+	for _, test := range []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{name: "valid", value: uuid},
+		{name: "too short", value: uuid[:35], want: canonical},
+		{name: "36 bytes 35 runes", value: uuid[:15] + "é" + uuid[17:], want: canonical},
+		{name: "misplaced dash", value: uuid[:8] + "0" + uuid[9:], want: canonical},
+		{name: "uppercase hex digit", value: uuid[:15] + "A" + uuid[16:], want: canonical},
+		{name: "non-hex lowercase", value: uuid[:16] + "g" + uuid[17:], want: canonical},
+		{name: "non-hex uppercase outside A-F", value: uuid[:16] + "Z" + uuid[17:], want: canonical},
+		{name: "unsupported version", value: uuid[:14] + "0" + uuid[15:], want: canonical},
+		{name: "version six above the supported range", value: uuid[:14] + "6" + uuid[15:], want: canonical},
+		{name: "unsupported variant", value: uuid[:19] + "0" + uuid[20:], want: canonical},
+		{name: "variant c above the supported range", value: uuid[:19] + "c" + uuid[20:], want: canonical},
+		{name: "version and variant both unsupported", value: uuid[:14] + "0" + uuid[15:19] + "0" + uuid[20:], want: canonical},
+		{name: "length beats uppercase", value: uuid[:15] + "A" + uuid[16:35], want: canonical},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateRegistrationUUID(test.value, field)
+			if test.want == "" {
+				if err != nil {
+					t.Fatalf("validateRegistrationUUID(%q, %q) error = %v, want accept", test.value, field, err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("validateRegistrationUUID(%q, %q) accepted, want %q", test.value, field, test.want)
+			}
+			if got := err.Error(); got != test.want {
+				t.Fatalf("validateRegistrationUUID(%q, %q) error = %q, want %q", test.value, field, got, test.want)
 			}
 		})
 	}
