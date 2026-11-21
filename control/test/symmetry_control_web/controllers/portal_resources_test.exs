@@ -199,20 +199,20 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
   # consumed surface reads pinned by name even if a schema edit stops declaring
   # it. Frontend read sites, list by list:
   #
-  #   root             features/runtimes/runtimes.tsx:81,85,95; features/connections/resources.tsx:138
-  #   project row      features/projects/projects.tsx:89,108; features/planning/write-policy.ts:50,201;
-  #                    features/work/assignment.tsx:251; features/connections/resources.tsx:132
-  #   resource row     features/connections/resources.tsx:104-118; features/work/assignment.tsx:54-58
-  #   registered row   features/connections/resources.tsx:139-142
-  #   runtime row      features/runtimes/runtimes.tsx:17,25,37-41
-  #   capabilities     features/runtimes/runtimes.tsx:16,50-56 read `adapter`; the four booleans have no
+  #   root             features/runtimes/runtimes.tsx:82,86,96; features/connections/resources.tsx:122
+  #   project row      features/projects/projects.tsx:90,109; features/planning/write-policy.ts:50,201;
+  #                    features/work/assignment.tsx:251; features/connections/resources.tsx:116
+  #   resource row     features/connections/resources.tsx:88-102; features/work/assignment.tsx:54-58
+  #   registered row   features/connections/resources.tsx:123-126
+  #   runtime row      features/runtimes/runtimes.tsx:18,26,38-42
+  #   capabilities     features/runtimes/runtimes.tsx:17,51-57 read `adapter`; the four booleans have no
   #                    member-named read site — the whole map is serialized into `data-capabilities`
-  #                    (`runtimes.tsx:24`) and `browser/tests/portal-live-daemon.spec.mjs` asserts that
+  #                    (`runtimes.tsx:25`) and `browser/tests/portal-live-daemon.spec.mjs` asserts that
   #                    attribute equals the registration-side map
   #   work row         features/work/control.tsx:305,445; features/work/assignment.tsx:153-156;
-  #                    features/planning/write-policy.ts:27-28,40,264-279; features/work/detail.tsx:309-342,369
+  #                    features/planning/write-policy.ts:27-28,40,264-279; features/work/detail.tsx:310-343,370
   #   delivery value   features/work/presentation.ts:262,308-309,316-317,324-325
-  #   external row     features/work/detail.tsx:319; features/planning/write-policy.ts:20
+  #   external row     features/work/detail.tsx:320; features/planning/write-policy.ts:20
   #   waiting decision features/work/presentation.ts:368-378
   # The canonical bundle `ServedDocument.validate_served_document!/2` compares
   # every gate's response against; the presence assertions derive their

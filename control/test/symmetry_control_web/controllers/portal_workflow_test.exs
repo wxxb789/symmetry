@@ -38,7 +38,7 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
   #
   #   work row         features/work/control.tsx:305,445; features/work/assignment.tsx:153-156;
   #                    features/planning/write-policy.ts:27-28,40,264-279;
-  #                    features/work/detail.tsx:309-342,369 — the row body is
+  #                    features/work/detail.tsx:310-343,370 — the row body is
   #                    `WorkspaceWorkItem`, shared with `workspace-read` and served by the same
   #                    `PortalJSON.work_item/2`; this file states the pin again because the detail
   #                    read must keep its own row contract if the two reads stop sharing the body.
