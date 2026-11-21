@@ -3,7 +3,8 @@ import { Link, useRouteContext, useSearch } from "@tanstack/react-router";
 import { AlertCircle, CircleCheck, Plus, Target } from "lucide-react";
 import { useState } from "react";
 import { attentionOptions, sessionOptions, workspaceOptions } from "../../app/application";
-import { EmptyState, ErrorState, LoadingState, PageHeading, RefreshButton, StatusBadge } from "../../components/workspace";
+import { StatusBadge } from "../../components/primitives";
+import { EmptyState, ErrorState, LoadingState, PageHeading, RefreshButton } from "../../components/workspace";
 import { errorMessage, postPortalCommand, type GoalAttentionEntry, type ProjectBlockedEntry } from "../../services/api";
 import { MutationRefused, newMutationId } from "../../services/commands";
 

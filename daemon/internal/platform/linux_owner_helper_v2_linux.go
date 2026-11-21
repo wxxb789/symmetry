@@ -1081,6 +1081,45 @@ func (client *LinuxOwnerAnchorClient) RetirePreGateClearedRunWithProof(
 	return client.retireClearedRunWithProofs(ctx, key, fence, helper, nil, &proofCopy)
 }
 
+// sendRetireRequest performs the authenticated, bounded send and read the two
+// retired-run paths share; each caller keeps its own verification of the
+// response and its own purpose text, so the errors stay byte-identical.
+func (client *LinuxOwnerAnchorClient) sendRetireRequest(
+	ctx context.Context,
+	request linuxOwnerAnchorRequest,
+	expectedAnchor authority.LinuxCgroupProcessIdentity,
+	purpose string,
+) (linuxOwnerAnchorResponse, error) {
+	connection, stopClose, err := client.dial(ctx, linuxOwnerAnchorTimeoutFor(request.Operation))
+	if err != nil {
+		return linuxOwnerAnchorResponse{}, err
+	}
+	defer connection.Close()
+	defer stopClose()
+	if err := verifyLinuxOwnerAnchorPeer(connection, client.owner, expectedAnchor); err != nil {
+		return linuxOwnerAnchorResponse{}, fmt.Errorf("authenticate anchor for %s retirement: %w", purpose, err)
+	}
+	clientIdentity, err := ProcessIdentity(os.Getpid())
+	if err != nil {
+		return linuxOwnerAnchorResponse{}, err
+	}
+	request.ClientPID = os.Getpid()
+	request.ClientIdentity = clientIdentity
+	encoded, err := json.Marshal(request)
+	if err != nil || len(encoded) > linuxOwnerAnchorMaxFrame {
+		return linuxOwnerAnchorResponse{}, errors.Join(fmt.Errorf("encode bounded %s retirement request", purpose), err)
+	}
+	if written, _, err := connection.WriteMsgUnix(encoded, nil, nil); err != nil || written != len(encoded) {
+		return linuxOwnerAnchorResponse{}, fmt.Errorf("send %s retirement request: %w", purpose, errOr(err, io.ErrShortWrite))
+	}
+	response, rights, err := readLinuxOwnerAnchorResponse(connection)
+	closeLinuxOwnerAnchorFDs(rights)
+	if err != nil {
+		return linuxOwnerAnchorResponse{}, err
+	}
+	return response, nil
+}
+
 func (client *LinuxOwnerAnchorClient) retireClearedRunWithProofs(
 	ctx context.Context,
 	key LinuxOwnerAnchorRunKey,
@@ -1114,22 +1153,8 @@ func (client *LinuxOwnerAnchorClient) retireClearedRunWithProofs(
 	if anchor.Validate() != nil || parent.Validate() != nil || ownerUID != client.owner.AUID {
 		return errors.New("Linux release capability differs from the fixed anchor owner")
 	}
-	connection, stopClose, err := client.dial(ctx, linuxOwnerAnchorWaitTimeout)
-	if err != nil {
-		return err
-	}
-	defer connection.Close()
-	defer stopClose()
-	if err := verifyLinuxOwnerAnchorPeer(connection, client.owner, anchor); err != nil {
-		return fmt.Errorf("authenticate anchor for cleared-run retirement: %w", err)
-	}
-	clientIdentity, err := ProcessIdentity(os.Getpid())
-	if err != nil {
-		return err
-	}
 	request := linuxOwnerAnchorRequest{
 		Version: linuxOwnerAnchorProtocolVersion, Operation: linuxOwnerAnchorOperationRetireCleared,
-		ClientPID: os.Getpid(), ClientIdentity: clientIdentity,
 		RunKey: key, Fence: fence, Helper: &helper,
 	}
 	if normalProof != nil {
@@ -1137,15 +1162,7 @@ func (client *LinuxOwnerAnchorClient) retireClearedRunWithProofs(
 	} else {
 		request.PreGateReleaseProof = preGateProof
 	}
-	encoded, err := json.Marshal(request)
-	if err != nil || len(encoded) > linuxOwnerAnchorMaxFrame {
-		return errors.Join(errors.New("encode bounded cleared-run retirement request"), err)
-	}
-	if written, _, err := connection.WriteMsgUnix(encoded, nil, nil); err != nil || written != len(encoded) {
-		return fmt.Errorf("send cleared-run retirement request: %w", errOr(err, io.ErrShortWrite))
-	}
-	response, rights, err := readLinuxOwnerAnchorResponse(connection)
-	closeLinuxOwnerAnchorFDs(rights)
+	response, err := client.sendRetireRequest(ctx, request, anchor, "cleared-run")
 	if err != nil {
 		return err
 	}
@@ -1163,34 +1180,12 @@ func (client *LinuxOwnerAnchorClient) RetireAbortedHelper(ctx context.Context, k
 		fence.Generation != key.Generation || helper.Validate() != nil || proof.Validate() != nil {
 		return errors.New("Linux aborted-helper retirement is incomplete")
 	}
-	connection, stopClose, err := client.dial(ctx, linuxOwnerAnchorWaitTimeout)
-	if err != nil {
-		return err
-	}
-	defer connection.Close()
-	defer stopClose()
 	anchor := proof.Anchor
-	if err := verifyLinuxOwnerAnchorPeer(connection, client.owner, anchor); err != nil {
-		return fmt.Errorf("authenticate anchor for aborted-helper retirement: %w", err)
-	}
-	clientIdentity, err := ProcessIdentity(os.Getpid())
-	if err != nil {
-		return err
-	}
 	request := linuxOwnerAnchorRequest{
 		Version: linuxOwnerAnchorProtocolVersion, Operation: linuxOwnerAnchorOperationRetireAborted,
-		ClientPID: os.Getpid(), ClientIdentity: clientIdentity,
 		RunKey: key, Fence: fence, Helper: &helper, AbortProof: &proof,
 	}
-	encoded, err := json.Marshal(request)
-	if err != nil || len(encoded) > linuxOwnerAnchorMaxFrame {
-		return errors.Join(errors.New("encode bounded aborted-helper retirement request"), err)
-	}
-	if written, _, err := connection.WriteMsgUnix(encoded, nil, nil); err != nil || written != len(encoded) {
-		return fmt.Errorf("send aborted-helper retirement request: %w", errOr(err, io.ErrShortWrite))
-	}
-	response, rights, err := readLinuxOwnerAnchorResponse(connection)
-	closeLinuxOwnerAnchorFDs(rights)
+	response, err := client.sendRetireRequest(ctx, request, anchor, "aborted-helper")
 	if err != nil {
 		return err
 	}

@@ -13,27 +13,9 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/state"
 )
 
-type queuedCommand struct {
-	command   protocol.Command
-	key       commandKey
-	done      chan struct{}
-	completed bool
-	delivered bool
-}
-
-type commandKey struct {
-	run state.RunKey
-	id  string
-}
-
 type commandCompletion struct {
 	run  state.RunKey
 	done <-chan struct{}
-}
-
-type commandLane struct {
-	pending []*queuedCommand
-	running bool
 }
 
 func (daemon *daemon) enqueueCommand(command protocol.Command) <-chan struct{} {
@@ -51,22 +33,13 @@ func (daemon *daemon) enqueueCommand(command protocol.Command) <-chan struct{} {
 
 // enqueueCommandLocked must be called with daemon.mu held.
 func (daemon *daemon) enqueueCommandLocked(command protocol.Command) (<-chan struct{}, chan<- struct{}) {
-	if command.CommandID == "" {
+	if command.CommandID == "" || daemon.commandWake == nil || daemon.backgroundStop {
 		return nil, nil
 	}
-	key := commandKey{run: state.RunKey{RunID: command.RunID, Generation: command.Generation}, id: command.CommandID}
-	if daemon.commandWake == nil || daemon.backgroundStop {
-		return nil, nil
-	}
-	if daemon.queuedCommands == nil {
-		daemon.queuedCommands = make(map[commandKey]*queuedCommand)
-	}
-	if queued, exists := daemon.queuedCommands[key]; exists {
+	queued, created := daemon.commands.enqueue(command)
+	if !created {
 		return queued.done, nil
 	}
-	queued := &queuedCommand{command: command, key: key, done: make(chan struct{})}
-	daemon.queuedCommands[key] = queued
-	daemon.commandQueue = append(daemon.commandQueue, queued)
 	return queued.done, daemon.commandWake
 }
 
@@ -91,7 +64,7 @@ func (daemon *daemon) runCommandExecutor(ctx context.Context) {
 func (daemon *daemon) dispatchQueuedCommand(ctx context.Context, queued *queuedCommand) {
 	key := state.RunKey{RunID: queued.command.RunID, Generation: queued.command.Generation}
 	daemon.mu.Lock()
-	if daemon.queuedCommands[queued.key] != queued {
+	if !daemon.commands.current(queued) {
 		daemon.mu.Unlock()
 		return
 	}
@@ -124,20 +97,10 @@ func (daemon *daemon) dispatchQueuedCommand(ctx context.Context, queued *queuedC
 		}()
 		return
 	}
-	if daemon.commandLanes == nil {
-		daemon.commandLanes = make(map[state.RunKey]*commandLane)
-	}
-	lane := daemon.commandLanes[key]
-	if lane == nil {
-		lane = &commandLane{}
-		daemon.commandLanes[key] = lane
-	}
-	lane.pending = append(lane.pending, queued)
-	if lane.running {
+	if !daemon.commands.lane(key, queued) {
 		daemon.mu.Unlock()
 		return
 	}
-	lane.running = true
 	daemon.commandWG.Add(1)
 	daemon.mu.Unlock()
 	go daemon.runCommandLane(ctx, key)
@@ -157,20 +120,12 @@ func (daemon *daemon) runCommandLane(ctx context.Context, key state.RunKey) {
 func (daemon *daemon) nextLaneCommand(key state.RunKey) (*queuedCommand, bool) {
 	daemon.mu.Lock()
 	defer daemon.mu.Unlock()
-	lane := daemon.commandLanes[key]
-	if lane == nil || len(lane.pending) == 0 {
-		delete(daemon.commandLanes, key)
-		return nil, false
-	}
-	queued := lane.pending[0]
-	lane.pending[0] = nil
-	lane.pending = lane.pending[1:]
-	return queued, true
+	return daemon.commands.nextInLane(key)
 }
 
 func (daemon *daemon) executeQueuedCommand(ctx context.Context, queued *queuedCommand) {
 	daemon.mu.Lock()
-	current := daemon.queuedCommands[queued.key] == queued
+	current := daemon.commands.current(queued)
 	daemon.mu.Unlock()
 	if !current {
 		return
@@ -186,39 +141,21 @@ func (daemon *daemon) executeQueuedCommand(ctx context.Context, queued *queuedCo
 func (daemon *daemon) nextQueuedCommand() (*queuedCommand, bool) {
 	daemon.mu.Lock()
 	defer daemon.mu.Unlock()
-	if len(daemon.commandQueue) == 0 {
-		return nil, false
-	}
-	command := daemon.commandQueue[0]
-	daemon.commandQueue[0] = nil
-	daemon.commandQueue = daemon.commandQueue[1:]
-	return command, true
+	return daemon.commands.next()
 }
 
 func (daemon *daemon) finishQueuedCommand(queued *queuedCommand, receipt bool) {
 	daemon.mu.Lock()
 	defer daemon.mu.Unlock()
-	daemon.finishQueuedCommandLocked(queued, receipt)
+	daemon.commands.finish(queued.key, queued, receipt)
 }
 
 func (daemon *daemon) finishDeferredCommand(key commandKey, receipt bool) {
 	daemon.mu.Lock()
 	defer daemon.mu.Unlock()
-	if queued := daemon.queuedCommands[key]; queued != nil {
-		daemon.finishQueuedCommandLocked(queued, receipt)
-	}
-}
-
-func (daemon *daemon) finishQueuedCommandLocked(queued *queuedCommand, receipt bool) {
-	if daemon.queuedCommands[queued.key] == queued {
-		if !queued.completed {
-			close(queued.done)
-		}
-		queued.completed = true
-		if !receipt || queued.delivered {
-			delete(daemon.queuedCommands, queued.key)
-		}
-	}
+	// A nil entry resolves whatever key currently maps to: the deferred path
+	// completes the entry the command key is registered under, if any.
+	daemon.commands.finish(key, nil, receipt)
 }
 
 func (daemon *daemon) commandSignal() <-chan struct{} {
@@ -296,18 +233,17 @@ func (daemon *daemon) enqueueSnapshotCommandsForRequest(requestID uint64, comman
 	completions := make([]commandCompletion, 0, len(commands))
 	var wake chan<- struct{}
 	daemon.mu.Lock()
-	tombstones := daemon.commandRequests[requestID]
 	for _, command := range commands {
 		key := commandKey{run: state.RunKey{RunID: command.RunID, Generation: command.Generation}, id: command.CommandID}
 		if requestID != 0 {
-			if _, suppressed := tombstones[key]; suppressed {
+			if daemon.commands.receipts.suppressed(requestID, key) {
 				continue
 			}
 		}
 		completion, commandWake := daemon.enqueueCommandLocked(command)
 		if completion == nil {
 			if requestID != 0 {
-				delete(daemon.commandRequests, requestID)
+				daemon.commands.receipts.finish(requestID)
 			}
 			daemon.mu.Unlock()
 			return nil, false
@@ -321,7 +257,7 @@ func (daemon *daemon) enqueueSnapshotCommandsForRequest(requestID uint64, comman
 		})
 	}
 	if requestID != 0 {
-		delete(daemon.commandRequests, requestID)
+		daemon.commands.receipts.finish(requestID)
 	}
 	daemon.mu.Unlock()
 	if wake != nil {
@@ -338,13 +274,7 @@ func (daemon *daemon) beginCommandRequest() uint64 {
 	defer daemon.commandReceiptMu.Unlock()
 	daemon.mu.Lock()
 	defer daemon.mu.Unlock()
-	if daemon.commandRequests == nil {
-		daemon.commandRequests = make(map[uint64]map[commandKey]struct{})
-	}
-	daemon.nextCommandRequest++
-	requestID := daemon.nextCommandRequest
-	daemon.commandRequests[requestID] = make(map[commandKey]struct{})
-	return requestID
+	return daemon.commands.receipts.begin()
 }
 
 func (daemon *daemon) finishCommandRequest(requestID uint64) {
@@ -354,7 +284,7 @@ func (daemon *daemon) finishCommandRequest(requestID uint64) {
 	daemon.commandReceiptMu.Lock()
 	defer daemon.commandReceiptMu.Unlock()
 	daemon.mu.Lock()
-	delete(daemon.commandRequests, requestID)
+	daemon.commands.receipts.finish(requestID)
 	daemon.mu.Unlock()
 }
 

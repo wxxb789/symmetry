@@ -3,6 +3,13 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
 
   import Ecto.Query
 
+  import SymmetryControl.TestFixtures,
+    only: [check_contract: 0, repository_fixture: 1, subject: 1, validation_profiles: 0]
+
+  import SymmetryControlWeb.TestConn, only: [assert_error: 3, bearer: 2]
+
+  use SymmetryControl.TestFixtures, command_opts: [validation_profiles: validation_profiles()]
+
   alias SymmetryControl.Goals.ContractValidation
   alias SymmetryControl.Goals
 
@@ -1113,26 +1120,7 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
     }
   end
 
-  defp command_current(goal_id, kind, payload, opts \\ []) do
-    assert {:ok, goal} = Goals.fetch_goal(goal_id)
-    opts = Keyword.put_new(opts, :validation_profiles, validation_profiles())
-
-    Goals.command(
-      goal_id,
-      %{
-        schema_version: "symmetry.goal_command.v1",
-        mutation_id: Ecto.UUID.generate(),
-        expected_version: goal.version,
-        expected_revision: goal.current_revision,
-        kind: kind,
-        payload: payload
-      },
-      "operator:test",
-      opts
-    )
-  end
-
-  defp validation_profiles(runtime_id \\ Ecto.UUID.generate()) do
+  defp validation_profiles(runtime_id) do
     [
       test: [
         kind: :check,
@@ -1207,14 +1195,6 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
     }
   end
 
-  defp check_contract do
-    %{
-      "schema_version" => "symmetry.acceptance.v1",
-      "description" => "An independent check must pass.",
-      "predicates" => [%{"id" => "check", "kind" => "check", "validator_profile" => "test"}]
-    }
-  end
-
   defp session_attrs(item) do
     repository_resource_id =
       Map.get(item, :repository_resource_id) ||
@@ -1263,14 +1243,6 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
     }
   end
 
-  defp subject(repository_id) do
-    %{
-      "resource_id" => repository_id,
-      "commit" => String.duplicate("a", 40),
-      "tree_digest" => "sha256:" <> String.duplicate("4", 64)
-    }
-  end
-
   defp usage_attrs(run_id) do
     %{
       schema_version: "symmetry.usage.v1",
@@ -1300,16 +1272,6 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
       })
 
     project
-  end
-
-  defp repository_fixture(project) do
-    {:ok, repository} =
-      Workspaces.create_resource(project.id, %{
-        kind: "repository",
-        name: "Repository #{System.unique_integer([:positive])}"
-      })
-
-    repository
   end
 
   defp enroll(conn, name) do
@@ -1675,9 +1637,4 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
   end
 
   defp stringify_keys(map), do: Map.new(map, fn {key, value} -> {to_string(key), value} end)
-  defp bearer(conn, token), do: put_req_header(conn, "authorization", "Bearer " <> token)
-
-  defp assert_error(conn, status, code) do
-    assert %{"error" => %{"code" => ^code}} = json_response(conn, status)
-  end
 end

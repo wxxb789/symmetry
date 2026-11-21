@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/wxxb789/symmetry/daemon/internal/authority"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
@@ -74,6 +75,584 @@ func (response linuxOwnerAnchorResponse) matches(grant LinuxOwnerAnchorGrant, op
 		response.RunKey == grant.RunKey && response.Fence == grant.Fence && response.LaunchToken == grant.LaunchToken &&
 		response.Anchor.Equal(grant.Anchor) && response.Parent.Equal(grant.Parent) &&
 		response.OwnerUID == grant.OwnerUID && response.ManagerPath == grant.Parent.Path
+}
+
+// linuxOwnerAnchorRequestField names one presence-bearing optional request
+// field so the per-operation shape table can state its required and forbidden
+// fields declaratively.
+type linuxOwnerAnchorRequestField string
+
+const (
+	linuxOwnerAnchorFieldGrant               linuxOwnerAnchorRequestField = "grant"
+	linuxOwnerAnchorFieldHelper              linuxOwnerAnchorRequestField = "helper"
+	linuxOwnerAnchorFieldGate                linuxOwnerAnchorRequestField = "gate"
+	linuxOwnerAnchorFieldUserNamespace       linuxOwnerAnchorRequestField = "user_namespace"
+	linuxOwnerAnchorFieldStopFence           linuxOwnerAnchorRequestField = "stop_fence"
+	linuxOwnerAnchorFieldCreator             linuxOwnerAnchorRequestField = "creator"
+	linuxOwnerAnchorFieldProcess             linuxOwnerAnchorRequestField = "process"
+	linuxOwnerAnchorFieldRole                linuxOwnerAnchorRequestField = "role"
+	linuxOwnerAnchorFieldReleaseProof        linuxOwnerAnchorRequestField = "release_proof"
+	linuxOwnerAnchorFieldPreGateReleaseProof linuxOwnerAnchorRequestField = "pre_gate_release_proof"
+	linuxOwnerAnchorFieldAbortProof          linuxOwnerAnchorRequestField = "abort_proof"
+	linuxOwnerAnchorFieldRunKey              linuxOwnerAnchorRequestField = "run_key"
+	linuxOwnerAnchorFieldFence               linuxOwnerAnchorRequestField = "fence"
+	linuxOwnerAnchorFieldFenceDigest         linuxOwnerAnchorRequestField = "fence_digest"
+	linuxOwnerAnchorFieldAfterPID            linuxOwnerAnchorRequestField = "after_pid"
+	linuxOwnerAnchorFieldCloneGrant          linuxOwnerAnchorRequestField = "clone_grant"
+	linuxOwnerAnchorFieldCleanup             linuxOwnerAnchorRequestField = "cleanup"
+	linuxOwnerAnchorFieldPriorRemovalProof   linuxOwnerAnchorRequestField = "prior_removal_proof"
+	linuxOwnerAnchorFieldTargetFDPresent     linuxOwnerAnchorRequestField = "target_fd_present"
+)
+
+// fieldPresent reports whether one optional request field carries a value. The
+// zero value of a field is absent, exactly as the pre-table checks treated it.
+func (request linuxOwnerAnchorRequest) fieldPresent(field linuxOwnerAnchorRequestField) bool {
+	switch field {
+	case linuxOwnerAnchorFieldGrant:
+		return request.Grant != (LinuxOwnerAnchorGrant{})
+	case linuxOwnerAnchorFieldHelper:
+		return request.Helper != nil
+	case linuxOwnerAnchorFieldGate:
+		return request.Gate != nil
+	case linuxOwnerAnchorFieldUserNamespace:
+		return request.UserNamespace != nil
+	case linuxOwnerAnchorFieldStopFence:
+		return request.StopFence != nil
+	case linuxOwnerAnchorFieldCreator:
+		return request.Creator != nil
+	case linuxOwnerAnchorFieldProcess:
+		return request.Process != nil
+	case linuxOwnerAnchorFieldRole:
+		return request.Role != ""
+	case linuxOwnerAnchorFieldReleaseProof:
+		return request.ReleaseProof != nil
+	case linuxOwnerAnchorFieldPreGateReleaseProof:
+		return request.PreGateReleaseProof != nil
+	case linuxOwnerAnchorFieldAbortProof:
+		return request.AbortProof != nil
+	case linuxOwnerAnchorFieldRunKey:
+		return request.RunKey != (LinuxOwnerAnchorRunKey{})
+	case linuxOwnerAnchorFieldFence:
+		return request.Fence != (protocol.Fence{})
+	case linuxOwnerAnchorFieldFenceDigest:
+		return request.FenceDigest != ""
+	case linuxOwnerAnchorFieldAfterPID:
+		return request.AfterPID != 0
+	case linuxOwnerAnchorFieldCloneGrant:
+		return request.CloneGrant != nil
+	case linuxOwnerAnchorFieldCleanup:
+		return request.Cleanup != nil
+	case linuxOwnerAnchorFieldPriorRemovalProof:
+		return request.PriorRemovalProof != nil
+	case linuxOwnerAnchorFieldTargetFDPresent:
+		return request.TargetFDPresent
+	default:
+		return false
+	}
+}
+
+// linuxOwnerAnchorTimeoutClass is the deadline class one operation shares
+// between the server connection deadline and the client exchange timeout.
+type linuxOwnerAnchorTimeoutClass int
+
+const (
+	// linuxOwnerAnchorTimeoutClassRequest is the zero value, and also the class
+	// of an operation the table does not cover.
+	linuxOwnerAnchorTimeoutClassRequest linuxOwnerAnchorTimeoutClass = iota
+	linuxOwnerAnchorTimeoutClassWait
+	linuxOwnerAnchorTimeoutClassCleanup
+)
+
+func (class linuxOwnerAnchorTimeoutClass) duration() time.Duration {
+	switch class {
+	case linuxOwnerAnchorTimeoutClassWait:
+		return linuxOwnerAnchorWaitTimeout
+	case linuxOwnerAnchorTimeoutClassCleanup:
+		return linuxOwnerAnchorCleanupTimeout
+	default:
+		return linuxOwnerAnchorRequestTimeout
+	}
+}
+
+// linuxOwnerAnchorOperationShape is the declarative per-operation request
+// contract of the anchor control socket, and the single source both sides read:
+// the server enforces the field-presence sets, the received descriptor count and
+// the timeout class; the client enforces the descriptor counts it may transfer
+// and the timeout class it must use. The presence sets reproduce the pre-table
+// checks exactly, including the optional fields the base accepted on operations
+// that never inspected them.
+type linuxOwnerAnchorOperationShape struct {
+	operation string
+
+	// required and forbidden are the presence rules of the operation.
+	required  []linuxOwnerAnchorRequestField
+	forbidden []linuxOwnerAnchorRequestField
+
+	// serverRequiredFDs is the exact count of received descriptors;
+	// serverRequiredFDsWithTarget is used when TargetFDPresent is set
+	// (remove-b-clone-after-receipt's variable count).
+	serverRequiredFDs           int
+	serverRequiredFDsWithTarget int
+
+	// clientSendFDs is the count of descriptors the client transfers;
+	// clientSendFDsWithTarget is used when TargetFDPresent is set.
+	// clientCheckedFDs records whether exchange enforces the count (the three
+	// operations that check it today) and clientFDsMismatch is their error text.
+	clientSendFDs           int
+	clientSendFDsWithTarget int
+	clientCheckedFDs        bool
+	clientFDsMismatch       string
+
+	// responseFDs is the descriptor count a non-rejection response carries; it
+	// is -1 when the count depends on the status (lookup-helper-v2 carries three
+	// descriptors for attached and two for helper_exited).
+	responseFDs int
+
+	// timeoutClass is the deadline class both sides use.
+	timeoutClass linuxOwnerAnchorTimeoutClass
+
+	// stoppingAnswer records whether a stopping anchor answers this operation
+	// with anchor_stopping before the per-operation shape gate runs.
+	stoppingAnswer bool
+
+	// runHelperPeer records whether the operation requires the request helper to
+	// be the exact registered run helper of the authenticated peer.
+	runHelperPeer bool
+
+	// shape carries the relational rules a presence set cannot express; it may
+	// assume every required field is present.
+	shape func(linuxOwnerAnchorRequest) bool
+}
+
+func (row linuxOwnerAnchorOperationShape) forbids(field linuxOwnerAnchorRequestField) bool {
+	for _, candidate := range row.forbidden {
+		if candidate == field {
+			return true
+		}
+	}
+	return false
+}
+
+// presenceRejected reports whether a forbidden field is present or a required
+// field is absent.
+func (row linuxOwnerAnchorOperationShape) presenceRejected(request linuxOwnerAnchorRequest) bool {
+	for _, field := range row.forbidden {
+		if request.fieldPresent(field) {
+			return true
+		}
+	}
+	for _, field := range row.required {
+		if !request.fieldPresent(field) {
+			return true
+		}
+	}
+	return false
+}
+
+// descriptorRejected reports whether the descriptor count differs from the row's
+// expectation for this request, including the TargetFDPresent-dependent count of
+// remove-b-clone-after-receipt.
+func (row linuxOwnerAnchorOperationShape) descriptorRejected(request linuxOwnerAnchorRequest, descriptors int) bool {
+	expected := row.serverRequiredFDs
+	if request.TargetFDPresent {
+		expected = row.serverRequiredFDsWithTarget
+	}
+	return descriptors != expected
+}
+
+// shapeRejected reports whether the relational rules fail; it may assume every
+// required field is present.
+func (row linuxOwnerAnchorOperationShape) shapeRejected(request linuxOwnerAnchorRequest) bool {
+	return row.shape != nil && !row.shape(request)
+}
+
+// refuses reports whether the request violates this row: a forbidden field is
+// present, a required field is absent, the received descriptor count differs, or
+// a relational rule fails.
+func (row linuxOwnerAnchorOperationShape) refuses(request linuxOwnerAnchorRequest, descriptors int) bool {
+	return row.presenceRejected(request) || row.descriptorRejected(request, descriptors) || row.shapeRejected(request)
+}
+
+// exclusiveFieldRejected reports whether the request carries one of the six
+// fields that only their owning operation group may carry. The base server
+// checked exactly these three groups (clone cleanup, gate, stop leaf) before its
+// stopping answer, so the check keeps that position ahead of the per-operation
+// shape gate.
+func (request linuxOwnerAnchorRequest) exclusiveFieldRejected(row linuxOwnerAnchorOperationShape) bool {
+	for _, field := range [...]linuxOwnerAnchorRequestField{
+		linuxOwnerAnchorFieldCloneGrant,
+		linuxOwnerAnchorFieldCleanup,
+		linuxOwnerAnchorFieldTargetFDPresent,
+		linuxOwnerAnchorFieldGate,
+		linuxOwnerAnchorFieldUserNamespace,
+		linuxOwnerAnchorFieldStopFence,
+	} {
+		if request.fieldPresent(field) && row.forbids(field) {
+			return true
+		}
+	}
+	return false
+}
+
+// linuxOwnerAnchorRequestFDCap bounds the descriptors one request may transfer.
+// The client refuses more than this (exchange's duplicate check) and the table
+// test asserts it dominates every row's server and client descriptor counts, so
+// the limit stays single-sourced here.
+const linuxOwnerAnchorRequestFDCap = 3
+
+func linuxOwnerAnchorRegisterProcessShape(request linuxOwnerAnchorRequest) bool {
+	return request.Role == "launcher" || request.Role == "native" || request.Role == "descendant"
+}
+
+func linuxOwnerAnchorClassifyChildShape(request linuxOwnerAnchorRequest) bool {
+	return request.Helper.Validate() == nil && request.Process.Validate() == nil
+}
+
+func linuxOwnerAnchorGateShape(request linuxOwnerAnchorRequest) bool {
+	return request.Helper.Validate() == nil && request.Gate.Validate() == nil && request.UserNamespace.valid()
+}
+
+func linuxOwnerAnchorStopLeafShape(request linuxOwnerAnchorRequest) bool {
+	return request.Helper.Validate() == nil && request.StopFence.ValidateFor(request.Grant, *request.Helper) == nil
+}
+
+func linuxOwnerAnchorWaitReapShape(request linuxOwnerAnchorRequest) bool {
+	return linuxOwnerAnchorValidChildRole(request.Role)
+}
+
+func linuxOwnerAnchorReapRunShape(request linuxOwnerAnchorRequest) bool {
+	return request.AfterPID >= 0
+}
+
+// linuxOwnerAnchorRetireReleaseShape requires exactly one release capability.
+func linuxOwnerAnchorRetireReleaseShape(request linuxOwnerAnchorRequest) bool {
+	return (request.ReleaseProof == nil) != (request.PreGateReleaseProof == nil)
+}
+
+func linuxOwnerAnchorRetireClearedShape(request linuxOwnerAnchorRequest) bool {
+	return request.Helper.Validate() == nil && validLinuxOwnerAnchorRunID(request.RunKey.RunID) &&
+		request.RunKey.Generation > 0 && request.Fence.Generation == request.RunKey.Generation &&
+		linuxOwnerAnchorRetireReleaseShape(request)
+}
+
+func linuxOwnerAnchorRetireAbortedShape(request linuxOwnerAnchorRequest) bool {
+	return request.Helper.Validate() == nil && validLinuxOwnerAnchorRunID(request.RunKey.RunID) &&
+		request.RunKey.Generation > 0 && request.Fence.Generation == request.RunKey.Generation
+}
+
+// linuxOwnerAnchorCloneCleanupShape carries the clone-cleanup rules that depend
+// on the cleanup intent: the run key and fence digest must equal the intent's,
+// and the prior-removal proof is required for an absent target and forbidden for
+// a live one.
+func linuxOwnerAnchorCloneCleanupShape(request linuxOwnerAnchorRequest) bool {
+	if request.TargetFDPresent && request.PriorRemovalProof != nil {
+		return false
+	}
+	if !request.TargetFDPresent && request.PriorRemovalProof == nil {
+		return false
+	}
+	return request.RunKey == (LinuxOwnerAnchorRunKey{RunID: request.Cleanup.Intent.RunID, Generation: request.Cleanup.Intent.Generation}) &&
+		request.FenceDigest == request.Cleanup.FenceDigest
+}
+
+// linuxOwnerAnchorOperationShapes is the single source of the per-operation
+// request shape: field presence, descriptor counts, timeout class and the
+// relational predicates above.
+var linuxOwnerAnchorOperationShapes = []linuxOwnerAnchorOperationShape{
+	{
+		operation: linuxOwnerAnchorOperationIdentity,
+		forbidden: []linuxOwnerAnchorRequestField{
+			linuxOwnerAnchorFieldGrant, linuxOwnerAnchorFieldHelper, linuxOwnerAnchorFieldCreator,
+			linuxOwnerAnchorFieldProcess, linuxOwnerAnchorFieldRole, linuxOwnerAnchorFieldReleaseProof,
+			linuxOwnerAnchorFieldPreGateReleaseProof, linuxOwnerAnchorFieldAbortProof,
+			linuxOwnerAnchorFieldRunKey, linuxOwnerAnchorFieldFence,
+			linuxOwnerAnchorFieldGate, linuxOwnerAnchorFieldUserNamespace, linuxOwnerAnchorFieldStopFence,
+			linuxOwnerAnchorFieldCloneGrant, linuxOwnerAnchorFieldCleanup, linuxOwnerAnchorFieldTargetFDPresent,
+		},
+		serverRequiredFDs: 0,
+		responseFDs:       0,
+		timeoutClass:      linuxOwnerAnchorTimeoutClassRequest,
+		stoppingAnswer:    true,
+	},
+	{
+		operation: linuxOwnerAnchorOperationStart,
+		required:  []linuxOwnerAnchorRequestField{linuxOwnerAnchorFieldGrant},
+		forbidden: []linuxOwnerAnchorRequestField{
+			linuxOwnerAnchorFieldHelper, linuxOwnerAnchorFieldCreator, linuxOwnerAnchorFieldProcess,
+			linuxOwnerAnchorFieldRole, linuxOwnerAnchorFieldGate, linuxOwnerAnchorFieldUserNamespace,
+			linuxOwnerAnchorFieldStopFence, linuxOwnerAnchorFieldCloneGrant, linuxOwnerAnchorFieldCleanup,
+			linuxOwnerAnchorFieldTargetFDPresent,
+		},
+		serverRequiredFDs: 2,
+		clientSendFDs:     2,
+		responseFDs:       3,
+		timeoutClass:      linuxOwnerAnchorTimeoutClassRequest,
+		stoppingAnswer:    true,
+	},
+	{
+		operation: linuxOwnerAnchorOperationAttach,
+		required:  []linuxOwnerAnchorRequestField{linuxOwnerAnchorFieldGrant, linuxOwnerAnchorFieldHelper},
+		forbidden: []linuxOwnerAnchorRequestField{
+			linuxOwnerAnchorFieldCreator, linuxOwnerAnchorFieldProcess, linuxOwnerAnchorFieldRole,
+			linuxOwnerAnchorFieldGate, linuxOwnerAnchorFieldUserNamespace, linuxOwnerAnchorFieldStopFence,
+			linuxOwnerAnchorFieldCloneGrant, linuxOwnerAnchorFieldCleanup, linuxOwnerAnchorFieldTargetFDPresent,
+		},
+		serverRequiredFDs: 0,
+		responseFDs:       3,
+		timeoutClass:      linuxOwnerAnchorTimeoutClassRequest,
+	},
+	{
+		operation: linuxOwnerAnchorOperationLookup,
+		required:  []linuxOwnerAnchorRequestField{linuxOwnerAnchorFieldGrant},
+		forbidden: []linuxOwnerAnchorRequestField{
+			linuxOwnerAnchorFieldHelper, linuxOwnerAnchorFieldCreator, linuxOwnerAnchorFieldProcess,
+			linuxOwnerAnchorFieldRole, linuxOwnerAnchorFieldGate, linuxOwnerAnchorFieldUserNamespace,
+			linuxOwnerAnchorFieldStopFence, linuxOwnerAnchorFieldCloneGrant, linuxOwnerAnchorFieldCleanup,
+			linuxOwnerAnchorFieldTargetFDPresent,
+		},
+		serverRequiredFDs: 0,
+		responseFDs:       -1,
+		timeoutClass:      linuxOwnerAnchorTimeoutClassWait,
+	},
+	{
+		operation: linuxOwnerAnchorOperationRegisterProcess,
+		required: []linuxOwnerAnchorRequestField{
+			linuxOwnerAnchorFieldGrant, linuxOwnerAnchorFieldHelper, linuxOwnerAnchorFieldCreator,
+			linuxOwnerAnchorFieldProcess, linuxOwnerAnchorFieldRole,
+		},
+		forbidden: []linuxOwnerAnchorRequestField{
+			linuxOwnerAnchorFieldGate, linuxOwnerAnchorFieldUserNamespace, linuxOwnerAnchorFieldStopFence,
+			linuxOwnerAnchorFieldCloneGrant, linuxOwnerAnchorFieldCleanup, linuxOwnerAnchorFieldTargetFDPresent,
+		},
+		serverRequiredFDs: 1,
+		clientSendFDs:     1,
+		responseFDs:       0,
+		timeoutClass:      linuxOwnerAnchorTimeoutClassRequest,
+		stoppingAnswer:    true,
+		runHelperPeer:     true,
+		shape:             linuxOwnerAnchorRegisterProcessShape,
+	},
+	{
+		operation: linuxOwnerAnchorOperationClassifyChild,
+		required: []linuxOwnerAnchorRequestField{
+			linuxOwnerAnchorFieldGrant, linuxOwnerAnchorFieldHelper, linuxOwnerAnchorFieldProcess,
+		},
+		forbidden: []linuxOwnerAnchorRequestField{
+			linuxOwnerAnchorFieldRole, linuxOwnerAnchorFieldCreator, linuxOwnerAnchorFieldGate,
+			linuxOwnerAnchorFieldUserNamespace, linuxOwnerAnchorFieldStopFence,
+			linuxOwnerAnchorFieldReleaseProof, linuxOwnerAnchorFieldPreGateReleaseProof,
+			linuxOwnerAnchorFieldAbortProof, linuxOwnerAnchorFieldRunKey, linuxOwnerAnchorFieldFence,
+			linuxOwnerAnchorFieldFenceDigest, linuxOwnerAnchorFieldAfterPID,
+			linuxOwnerAnchorFieldCloneGrant, linuxOwnerAnchorFieldCleanup,
+			linuxOwnerAnchorFieldPriorRemovalProof, linuxOwnerAnchorFieldTargetFDPresent,
+		},
+		serverRequiredFDs: 1,
+		clientSendFDs:     1,
+		clientCheckedFDs:  true,
+		clientFDsMismatch: "Linux owner child-origin request differs from its exact helper/process PIDFD",
+		responseFDs:       0,
+		timeoutClass:      linuxOwnerAnchorTimeoutClassWait,
+		stoppingAnswer:    true,
+		runHelperPeer:     true,
+		shape:             linuxOwnerAnchorClassifyChildShape,
+	},
+	{
+		operation: linuxOwnerAnchorOperationRegisterGate,
+		required: []linuxOwnerAnchorRequestField{
+			linuxOwnerAnchorFieldGrant, linuxOwnerAnchorFieldHelper, linuxOwnerAnchorFieldGate,
+			linuxOwnerAnchorFieldUserNamespace,
+		},
+		forbidden: []linuxOwnerAnchorRequestField{
+			linuxOwnerAnchorFieldCreator, linuxOwnerAnchorFieldProcess, linuxOwnerAnchorFieldRole,
+			linuxOwnerAnchorFieldStopFence, linuxOwnerAnchorFieldReleaseProof,
+			linuxOwnerAnchorFieldPreGateReleaseProof, linuxOwnerAnchorFieldAbortProof,
+			linuxOwnerAnchorFieldRunKey, linuxOwnerAnchorFieldFence, linuxOwnerAnchorFieldFenceDigest,
+			linuxOwnerAnchorFieldAfterPID, linuxOwnerAnchorFieldCloneGrant, linuxOwnerAnchorFieldCleanup,
+			linuxOwnerAnchorFieldPriorRemovalProof, linuxOwnerAnchorFieldTargetFDPresent,
+		},
+		serverRequiredFDs: 1,
+		clientSendFDs:     1,
+		responseFDs:       0,
+		timeoutClass:      linuxOwnerAnchorTimeoutClassRequest,
+		stoppingAnswer:    true,
+		runHelperPeer:     true,
+		shape:             linuxOwnerAnchorGateShape,
+	},
+	{
+		operation: linuxOwnerAnchorOperationAuthorizeGate,
+		required: []linuxOwnerAnchorRequestField{
+			linuxOwnerAnchorFieldGrant, linuxOwnerAnchorFieldHelper, linuxOwnerAnchorFieldGate,
+			linuxOwnerAnchorFieldUserNamespace,
+		},
+		forbidden: []linuxOwnerAnchorRequestField{
+			linuxOwnerAnchorFieldCreator, linuxOwnerAnchorFieldProcess, linuxOwnerAnchorFieldRole,
+			linuxOwnerAnchorFieldStopFence, linuxOwnerAnchorFieldReleaseProof,
+			linuxOwnerAnchorFieldPreGateReleaseProof, linuxOwnerAnchorFieldAbortProof,
+			linuxOwnerAnchorFieldRunKey, linuxOwnerAnchorFieldFence, linuxOwnerAnchorFieldFenceDigest,
+			linuxOwnerAnchorFieldAfterPID, linuxOwnerAnchorFieldCloneGrant, linuxOwnerAnchorFieldCleanup,
+			linuxOwnerAnchorFieldPriorRemovalProof, linuxOwnerAnchorFieldTargetFDPresent,
+		},
+		serverRequiredFDs: 0,
+		responseFDs:       0,
+		timeoutClass:      linuxOwnerAnchorTimeoutClassRequest,
+		stoppingAnswer:    true,
+		runHelperPeer:     true,
+		shape:             linuxOwnerAnchorGateShape,
+	},
+	{
+		operation: linuxOwnerAnchorOperationStopLeaf,
+		required: []linuxOwnerAnchorRequestField{
+			linuxOwnerAnchorFieldGrant, linuxOwnerAnchorFieldHelper, linuxOwnerAnchorFieldStopFence,
+		},
+		forbidden: []linuxOwnerAnchorRequestField{
+			linuxOwnerAnchorFieldCreator, linuxOwnerAnchorFieldProcess, linuxOwnerAnchorFieldRole,
+			linuxOwnerAnchorFieldGate, linuxOwnerAnchorFieldUserNamespace,
+			linuxOwnerAnchorFieldReleaseProof, linuxOwnerAnchorFieldPreGateReleaseProof,
+			linuxOwnerAnchorFieldAbortProof, linuxOwnerAnchorFieldRunKey, linuxOwnerAnchorFieldFence,
+			linuxOwnerAnchorFieldFenceDigest, linuxOwnerAnchorFieldAfterPID,
+			linuxOwnerAnchorFieldCloneGrant, linuxOwnerAnchorFieldCleanup,
+			linuxOwnerAnchorFieldPriorRemovalProof, linuxOwnerAnchorFieldTargetFDPresent,
+		},
+		serverRequiredFDs: 0,
+		clientCheckedFDs:  true,
+		clientFDsMismatch: "Linux owner anchor StopLeaf request differs from its exact helper producer fence",
+		responseFDs:       0,
+		timeoutClass:      linuxOwnerAnchorTimeoutClassWait,
+		stoppingAnswer:    true,
+		runHelperPeer:     true,
+		shape:             linuxOwnerAnchorStopLeafShape,
+	},
+	{
+		operation: linuxOwnerAnchorOperationWaitReap,
+		required: []linuxOwnerAnchorRequestField{
+			linuxOwnerAnchorFieldGrant, linuxOwnerAnchorFieldHelper, linuxOwnerAnchorFieldProcess,
+			linuxOwnerAnchorFieldRole,
+		},
+		forbidden: []linuxOwnerAnchorRequestField{
+			linuxOwnerAnchorFieldCreator, linuxOwnerAnchorFieldGate, linuxOwnerAnchorFieldUserNamespace,
+			linuxOwnerAnchorFieldStopFence, linuxOwnerAnchorFieldCloneGrant, linuxOwnerAnchorFieldCleanup,
+			linuxOwnerAnchorFieldTargetFDPresent,
+		},
+		serverRequiredFDs: 0,
+		responseFDs:       0,
+		timeoutClass:      linuxOwnerAnchorTimeoutClassWait,
+		shape:             linuxOwnerAnchorWaitReapShape,
+	},
+	{
+		operation: linuxOwnerAnchorOperationReapRun,
+		required:  []linuxOwnerAnchorRequestField{linuxOwnerAnchorFieldGrant, linuxOwnerAnchorFieldHelper},
+		forbidden: []linuxOwnerAnchorRequestField{
+			linuxOwnerAnchorFieldCreator, linuxOwnerAnchorFieldProcess, linuxOwnerAnchorFieldRole,
+			linuxOwnerAnchorFieldGate, linuxOwnerAnchorFieldUserNamespace, linuxOwnerAnchorFieldStopFence,
+			linuxOwnerAnchorFieldCloneGrant, linuxOwnerAnchorFieldCleanup, linuxOwnerAnchorFieldTargetFDPresent,
+		},
+		serverRequiredFDs: 0,
+		responseFDs:       0,
+		timeoutClass:      linuxOwnerAnchorTimeoutClassWait,
+		shape:             linuxOwnerAnchorReapRunShape,
+	},
+	{
+		operation: linuxOwnerAnchorOperationWaitHelper,
+		required:  []linuxOwnerAnchorRequestField{linuxOwnerAnchorFieldGrant, linuxOwnerAnchorFieldHelper},
+		forbidden: []linuxOwnerAnchorRequestField{
+			linuxOwnerAnchorFieldCreator, linuxOwnerAnchorFieldProcess, linuxOwnerAnchorFieldRole,
+			linuxOwnerAnchorFieldGate, linuxOwnerAnchorFieldUserNamespace, linuxOwnerAnchorFieldStopFence,
+			linuxOwnerAnchorFieldCloneGrant, linuxOwnerAnchorFieldCleanup, linuxOwnerAnchorFieldTargetFDPresent,
+		},
+		serverRequiredFDs: 0,
+		responseFDs:       0,
+		timeoutClass:      linuxOwnerAnchorTimeoutClassWait,
+	},
+	{
+		operation: linuxOwnerAnchorOperationRetire,
+		required:  []linuxOwnerAnchorRequestField{linuxOwnerAnchorFieldGrant, linuxOwnerAnchorFieldHelper},
+		forbidden: []linuxOwnerAnchorRequestField{
+			linuxOwnerAnchorFieldCreator, linuxOwnerAnchorFieldProcess, linuxOwnerAnchorFieldRole,
+			linuxOwnerAnchorFieldGate, linuxOwnerAnchorFieldUserNamespace,
+			linuxOwnerAnchorFieldStopFence, linuxOwnerAnchorFieldCloneGrant, linuxOwnerAnchorFieldCleanup,
+			linuxOwnerAnchorFieldTargetFDPresent,
+		},
+		serverRequiredFDs: 0,
+		responseFDs:       0,
+		timeoutClass:      linuxOwnerAnchorTimeoutClassRequest,
+		shape:             linuxOwnerAnchorRetireReleaseShape,
+	},
+	{
+		operation: linuxOwnerAnchorOperationRetireCleared,
+		required: []linuxOwnerAnchorRequestField{
+			linuxOwnerAnchorFieldHelper, linuxOwnerAnchorFieldRunKey, linuxOwnerAnchorFieldFence,
+		},
+		forbidden: []linuxOwnerAnchorRequestField{
+			linuxOwnerAnchorFieldGrant, linuxOwnerAnchorFieldAbortProof, linuxOwnerAnchorFieldGate,
+			linuxOwnerAnchorFieldUserNamespace, linuxOwnerAnchorFieldStopFence,
+			linuxOwnerAnchorFieldCloneGrant, linuxOwnerAnchorFieldCleanup, linuxOwnerAnchorFieldTargetFDPresent,
+		},
+		serverRequiredFDs: 0,
+		responseFDs:       0,
+		timeoutClass:      linuxOwnerAnchorTimeoutClassWait,
+		shape:             linuxOwnerAnchorRetireClearedShape,
+	},
+	{
+		operation: linuxOwnerAnchorOperationRetireAborted,
+		required: []linuxOwnerAnchorRequestField{
+			linuxOwnerAnchorFieldHelper, linuxOwnerAnchorFieldRunKey, linuxOwnerAnchorFieldFence,
+			linuxOwnerAnchorFieldAbortProof,
+		},
+		forbidden: []linuxOwnerAnchorRequestField{
+			linuxOwnerAnchorFieldGrant, linuxOwnerAnchorFieldReleaseProof,
+			linuxOwnerAnchorFieldPreGateReleaseProof, linuxOwnerAnchorFieldGate,
+			linuxOwnerAnchorFieldUserNamespace, linuxOwnerAnchorFieldStopFence,
+			linuxOwnerAnchorFieldCloneGrant, linuxOwnerAnchorFieldCleanup, linuxOwnerAnchorFieldTargetFDPresent,
+		},
+		serverRequiredFDs: 0,
+		responseFDs:       0,
+		timeoutClass:      linuxOwnerAnchorTimeoutClassWait,
+		shape:             linuxOwnerAnchorRetireAbortedShape,
+	},
+	{
+		operation: linuxOwnerAnchorOperationCloneCleanup,
+		required: []linuxOwnerAnchorRequestField{
+			linuxOwnerAnchorFieldCloneGrant, linuxOwnerAnchorFieldCleanup,
+		},
+		forbidden: []linuxOwnerAnchorRequestField{
+			linuxOwnerAnchorFieldGrant, linuxOwnerAnchorFieldHelper, linuxOwnerAnchorFieldCreator,
+			linuxOwnerAnchorFieldProcess, linuxOwnerAnchorFieldRole, linuxOwnerAnchorFieldReleaseProof,
+			linuxOwnerAnchorFieldPreGateReleaseProof, linuxOwnerAnchorFieldAbortProof,
+			linuxOwnerAnchorFieldFence, linuxOwnerAnchorFieldAfterPID, linuxOwnerAnchorFieldGate,
+			linuxOwnerAnchorFieldUserNamespace, linuxOwnerAnchorFieldStopFence,
+		},
+		serverRequiredFDs:           1,
+		serverRequiredFDsWithTarget: 2,
+		clientSendFDs:               1,
+		clientSendFDsWithTarget:     2,
+		clientCheckedFDs:            true,
+		clientFDsMismatch:           "Linux owner anchor cleanup request is not bound to its durable RunKey and fence digest",
+		responseFDs:                 0,
+		timeoutClass:                linuxOwnerAnchorTimeoutClassCleanup,
+		shape:                       linuxOwnerAnchorCloneCleanupShape,
+	},
+}
+
+// linuxOwnerAnchorOperationShapeFor returns the shape row of one operation. An
+// absent row replaces the base switch's default arm: the request is refused
+// without a response.
+func linuxOwnerAnchorOperationShapeFor(operation string) (linuxOwnerAnchorOperationShape, bool) {
+	for _, row := range linuxOwnerAnchorOperationShapes {
+		if row.operation == operation {
+			return row, true
+		}
+	}
+	return linuxOwnerAnchorOperationShape{}, false
+}
+
+// linuxOwnerAnchorTimeoutFor is the deadline class of one operation; an unknown
+// operation keeps the request class.
+func linuxOwnerAnchorTimeoutFor(operation string) time.Duration {
+	row, ok := linuxOwnerAnchorOperationShapeFor(operation)
+	if !ok {
+		return linuxOwnerAnchorTimeoutClassRequest.duration()
+	}
+	return row.timeoutClass.duration()
 }
 
 func readLinuxOwnerAnchorRequest(connection *net.UnixConn) (linuxOwnerAnchorRequest, []int, error) {
