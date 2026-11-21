@@ -1645,17 +1645,53 @@ func validateGoalSessionIntent(intent GoalSessionLaunchIntent) error {
 }
 
 func validateGoalSessionJournal(journal GoalSessionJournal) error {
+	if err := validateGoalSessionSchema(journal); err != nil {
+		return err
+	}
+	if err := validateGoalSessionIntent(journal.Intent()); err != nil {
+		return err
+	}
+	if err := validateGoalSessionStates(journal); err != nil {
+		return err
+	}
+	if err := validateGoalSessionLaunchAttempt(journal); err != nil {
+		return err
+	}
+	if err := validateGoalSessionLaunchOutcome(journal); err != nil {
+		return err
+	}
+	if err := validateGoalSessionControlAttachment(journal); err != nil {
+		return err
+	}
+	if err := validateGoalSessionStopReceiptHistory(journal); err != nil {
+		return err
+	}
+	if err := validateGoalSessionResumeState(journal); err != nil {
+		return err
+	}
+	if err := validateGoalSessionStopReceipt(journal); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateGoalSessionSchema(journal GoalSessionJournal) error {
 	// Wall-clock time can move backwards across a restart or an injected
 	// recovery timestamp; ordering is not a journal-integrity invariant.
 	if journal.SchemaVersion != goalSessionSchemaVersion || journal.CreatedAt.IsZero() || journal.UpdatedAt.IsZero() {
 		return errors.New("goal session journal is invalid")
 	}
-	if err := validateGoalSessionIntent(journal.Intent()); err != nil {
-		return err
-	}
+	return nil
+}
+
+func validateGoalSessionStates(journal GoalSessionJournal) error {
 	if !validGoalSessionState(journal.SessionState) || !validGoalSessionLaunchState(journal.LaunchState) || len(journal.NativeSessionID) > 65536 || len(journal.NativeSessionFilename) > 32768 || len(journal.UncertainReason) > 4096 || (journal.ControlSessionID != "" && !validGoalSessionUUID(journal.ControlSessionID)) || (journal.ControlAttachmentReceiptID != "" && !validGoalSessionUUID(journal.ControlAttachmentReceiptID)) {
 		return errors.New("goal session journal is invalid")
 	}
+	return nil
+}
+
+func validateGoalSessionLaunchAttempt(journal GoalSessionJournal) error {
 	if journal.LaunchAttemptedAt.IsZero() != !journal.LaunchAttempted {
 		return errors.New("goal session launch attempt metadata is invalid")
 	}
@@ -1665,6 +1701,10 @@ func validateGoalSessionJournal(journal GoalSessionJournal) error {
 	if journal.LaunchState == GoalSessionLaunchStateLaunching && !journal.LaunchAttempted {
 		return errors.New("goal session launch state is invalid")
 	}
+	return nil
+}
+
+func validateGoalSessionLaunchOutcome(journal GoalSessionJournal) error {
 	if journal.LaunchState == GoalSessionLaunchStateAttached && (!journal.LaunchAttempted || journal.NativeSessionID == "") {
 		return errors.New("goal session native handle is invalid")
 	}
@@ -1683,6 +1723,10 @@ func validateGoalSessionJournal(journal GoalSessionJournal) error {
 	if journal.LaunchState != GoalSessionLaunchStateAttached && (journal.NativeSessionID != "" || journal.NativeSessionFilename != "") {
 		return errors.New("goal session native handle is invalid")
 	}
+	return nil
+}
+
+func validateGoalSessionControlAttachment(journal GoalSessionJournal) error {
 	if (journal.ControlSessionID != "" || journal.ControlAttachmentReceiptID != "") && (journal.LaunchState != GoalSessionLaunchStateAttached || journal.BindingID == "" || journal.ControlSessionID == "") {
 		return errors.New("goal session control attachment is invalid")
 	}
@@ -1693,6 +1737,10 @@ func validateGoalSessionJournal(journal GoalSessionJournal) error {
 		(journal.ControlAttachmentLineage.Original.SessionID != journal.ControlSessionID || journal.ControlAttachmentLineage.Current.SessionID != journal.ControlSessionID) {
 		return errors.New("goal session control attachment lineage is invalid")
 	}
+	return nil
+}
+
+func validateGoalSessionStopReceiptHistory(journal GoalSessionJournal) error {
 	if journal.ResumeSourceStopCertificate != nil && !validGoalSessionStopCertificate(*journal.ResumeSourceStopCertificate) {
 		return errors.New("goal session resume source receipt is invalid")
 	}
@@ -1702,6 +1750,10 @@ func validateGoalSessionJournal(journal GoalSessionJournal) error {
 	if journal.ResumeSourceStopCertificate != nil && journal.ConsumedStopCertificates != nil && !journal.ConsumedStopCertificates.containsExact(*journal.ResumeSourceStopCertificate) {
 		return errors.New("goal session resume source receipt history is invalid")
 	}
+	return nil
+}
+
+func validateGoalSessionResumeState(journal GoalSessionJournal) error {
 	if journal.ResumeStartPending && (journal.SessionMode != GoalSessionModeResume || journal.ResumeSourceStopCertificate == nil || journal.StopCertificate != nil ||
 		journal.SessionState != GoalSessionStateBusy || journal.LaunchState != GoalSessionLaunchStateAttached || journal.NativeSessionID == "") {
 		return errors.New("goal session resume pre-start state is invalid")
@@ -1712,6 +1764,10 @@ func validateGoalSessionJournal(journal GoalSessionJournal) error {
 	if journal.ResumeTerminalReason != "" && (!journal.HasKnownRetainedResumeNativeStop() || journal.ResumeTerminalReason != "resume_rejected") {
 		return errors.New("goal session retained resume terminal reason is invalid")
 	}
+	return nil
+}
+
+func validateGoalSessionStopReceipt(journal GoalSessionJournal) error {
 	if journal.StopCertificate != nil && (!validGoalSessionStopCertificate(*journal.StopCertificate) || journal.SessionState != GoalSessionStateAvailable || journal.ControlSessionID != journal.StopCertificate.SessionID || journal.BindingID != journal.StopCertificate.BindingID || journal.RunID != journal.StopCertificate.RunID || journal.Generation != journal.StopCertificate.Generation || journal.LocalHandleID != journal.StopCertificate.LocalHandleID) {
 		return errors.New("goal session stop receipt is invalid")
 	}
