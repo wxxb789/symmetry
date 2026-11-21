@@ -149,6 +149,20 @@ func TestProcessForwarderForwardsOptionalProcessCapabilities(t *testing.T) {
 	}
 }
 
+func TestProcessForwarderLeaseRenewalAvailableReportsTheProcessAnswer(t *testing.T) {
+	// LeaseRenewalAvailable must return the process's own answer, not merely
+	// report that the method exists: a LeaseRenewer that answers false is the
+	// common case for an uncontained process, and reporting it as renewable
+	// would let the daemon renew a lease that cannot be renewed.
+	var mutex sync.Mutex
+	process := &scaffoldingProcess{pid: 11, identity: "test:11", renewable: false}
+	var owner ProcessIdentity = process
+	forwarder := NewProcessForwarder(&mutex, &owner)
+	if forwarder.LeaseRenewalAvailable() {
+		t.Fatal("LeaseRenewalAvailable() = true for a process that answers false")
+	}
+}
+
 func TestProcessForwarderReportsUnsupportedWithoutCapabilities(t *testing.T) {
 	var mutex sync.Mutex
 	var owner ProcessIdentity = scaffoldingIdentity{}
@@ -489,8 +503,12 @@ func TestDeliverEventStampsMissingTimeAndForwardsSinkError(t *testing.T) {
 
 	sinkErr := errors.New("journal unavailable")
 	failing := &scaffoldingSink{err: sinkErr}
-	if err := DeliverEvent(context.Background(), failing, event); !errors.Is(err, sinkErr) {
-		t.Fatalf("DeliverEvent() error = %v, want the unwrapped sink error %v", err, sinkErr)
+	// Identity, not errors.Is: every adapter wraps the helper's result in its
+	// own "persist <adapter> native event: %w" literal, so a wrapper added
+	// here would change every adapter's persisted sink-failure text while an
+	// errors.Is check stayed green.
+	if err := DeliverEvent(context.Background(), failing, event); err != sinkErr {
+		t.Fatalf("DeliverEvent() error = %v, want the sink error identity %v", err, sinkErr)
 	}
 }
 

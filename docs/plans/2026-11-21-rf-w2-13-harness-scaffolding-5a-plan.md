@@ -62,8 +62,9 @@ func IsNilInterface(value any) bool
 type ProcessIdentity interface{ ProcessDetails() (int, string) }
 
 // ProcessForwarder forwards a staged session's optional process capabilities.
-// It holds the session's process field and the mutex that guards it, so the
-// session keeps a single process authority and its existing lock discipline.
+// It holds the session's process field and the session mutex used for
+// concurrent reads of that field, so the session keeps a single process
+// authority and its existing lock discipline.
 type ProcessForwarder[P ProcessIdentity] struct{ ... }
 
 func NewProcessForwarder[P ProcessIdentity](mutex *sync.Mutex, process *P) ProcessForwarder[P]
@@ -87,10 +88,13 @@ type permanentCloseFailure struct{ Err error }
 type CloseGate struct{ ... }
 
 func (gate *CloseGate) Run(ctx context.Context, attempt func(context.Context) error) error
-// RunDetached runs attempt on its own goroutine under
-// context.WithTimeout(context.WithoutCancel(ctx), budget); the initiating
-// caller may return on ctx while bounded cleanup continues.
-func (gate *CloseGate) RunDetached(ctx context.Context, budget time.Duration, attempt func(context.Context) error) error
+// RunDetached runs attempt on its own goroutine under context.WithTimeout(
+// context.WithoutCancel(ctx), budget); the initiating caller may return on ctx
+// while bounded cleanup continues. start, when non-nil, runs on the calling
+// goroutine after the gate decided that this caller owns the attempt and
+// before the cleanup goroutine starts, so a caller-side close fence is set
+// when RunDetached returns.
+func (gate *CloseGate) RunDetached(ctx context.Context, budget time.Duration, start func(), attempt func(context.Context) error) error
 ```
 
 `wait_barrier.go`
@@ -179,7 +183,10 @@ zero struct. Identical to the four copies being replaced (`pi:501`, `codex:273`,
   inside the attempt, exactly as today).
 - `RunDetached` derives `context.WithTimeout(context.WithoutCancel(ctx), budget)` and runs the
   attempt on its own goroutine, so a caller that leaves on `ctx.Done()` (or `context.Canceled`)
-  cannot abandon bounded cleanup; the budget expression stays in each adapter
+  cannot abandon bounded cleanup; the `start` hook (claude candidate: `requestClose`; `nil` in
+  `pi`/`omo`) runs on the calling goroutine after the gate assigns this caller the attempt and
+  before the cleanup goroutine starts, so claude's caller-side close fence is set when
+  `RunDetached` returns; the budget expression stays in each adapter
   (`pi`: `cancelTimeout+processCleanupTimeout+processTerminationGrace`;
   `omo`: `cleanupTimeout`; claude candidate:
   `claudeCandidateCleanupTimeout+claudeCandidateTerminationGrace`).
@@ -288,11 +295,11 @@ counts) and by reading the shared helper strings:
 
 | String produced by the shared code | Existing assertion | Compensating action |
 | --- | --- | --- |
-| `"persist <adapter> native event: %w"` | 0 hits for all five literals; `codex:1129` asserts the sink error text is contained | The literal does not move: it stays in each adapter's `emit` (§3). The helper's own output is pinned in the new root test file. |
+| `"persist <adapter> native event: %w"` | 0 hits for all five literals; `codex:1129` asserts the sink error text is contained | The literal does not move: it stays in each adapter's `emit` (§3). The helper's output is pinned by error identity in the new root test (`TestDeliverEventStampsMissingTimeAndForwardsSinkError`), and the `pi` literal is pinned to its exact text (`persist pi native event: <sink text>`) by `TestEmitPinsPersistPiNativeEventTextAfterSinkFailure`; a wrapper inside `DeliverEvent` turns both red (fix r2 evidence). |
 | `errors.ErrUnsupported` from lease/live-owner forwarding | 0 hits | Unchanged value and identity; the helper test asserts it for a process without the optional methods, and the four moved arms keep the identical return. |
 | close-gate `ctx.Err()` / sticky error | close tests already pin them hard: `harness_test.go:342`, `omo:514`/`:682`, `pi:637`/`:741`, `codex:2416`/`:2453`, `omp:851`, claude `:256`/`:813`/`:844`/`:1040`, `opencode:492`/`:520`/`:565`/`:783` | The gate implementation is the union of those behaviours; the new root test pins join, retry, sticky and detached-cleanup semantics. |
 | `WaitResult`/`WaitTurnBarrier` outputs | `omo:188`/`:216`, `omp:245`/`:289`/`:294`, `pi:514`/`:528`, `claude:300`, `codex:1340`, `opencode:261` | Callbacks keep each adapter's own value and error; the new root test pins arm preference. |
-| `CloneTaskResult` | `pi:25`, `codex:1389`/`:1406`, `claude:872` | Per-field isolation + wire-byte equality added in the new root test; the three adapter tests are re-pointed to the shared helper without changing their assertions. |
+| `CloneTaskResult` | `pi:25`, `codex:1389`/`:1406`, `claude:872` | Per-field isolation + wire-byte equality added in the new root test. `pi` and `codex` re-point their clone call site to the shared helper without changing their assertions; claude re-points its clone call site (`claude_candidate_adapter_test.go:893`) and also replaces its private-field settle wait with a `session.Close` join plus a new `errors.Is(err, firstErr)` assertion (fix round REV-S5A-02; §9.1). |
 
 The per-adapter `session == nil`/`ctx == nil` and "wait cancelled" strings are not moved and are
 not re-pinned here: the diff leaves those literals byte-identical, which the report shows by
@@ -326,8 +333,11 @@ grepping the diff.
 1. **Owned test files.** Review P2-5 (opus) gives W2-13 everything under `internal/harness/**`
    except `registry.go` and the four probe files; review A8 (ds) says root `harness_test.go` and
    the probe tests are W3-04's. Applying the stricter reading, root `harness_test.go` is not
-   edited; the new helper tests go into a new file `session_scaffolding_test.go`. Adapter test
-   files are edited only to re-point the three clone-helper call sites (§7).
+   edited; the new helper tests go into a new file `session_scaffolding_test.go`. `pi` and
+   `codex` adapter tests only re-point their clone-helper call site (§7); the claude test
+   re-points its clone call site and additionally replaces its private-field settle wait with a
+   `session.Close` join plus a new `errors.Is(err, firstErr)` assertion (fix round REV-S5A-02),
+   keeping the cancelled-control oracle equally strong.
 2. **Close-failure marker vs a classifier callback.** A marker type keeps every `Run` call site
    one line; it is unexported and classified only when returned bare, so no wrap chain can
    smuggle or strip the observation (fix r1, REV-S5A-01). The callback alternative adds a
@@ -342,9 +352,11 @@ grepping the diff.
    string-preservation check a pure diff.
 5. **Closing the increment.** Contracts, the run ledger and the answer artifact live in the GDD
    state tree (`<GDD-STATE>/contracts`, `ledger.tsv`) and are operator-owned; this repository
-   closes an increment with the plan file, the source/tests, and the TODO note. No index for the
-   contract file exists in this repository, and moving or editing the contract file is not a
-   repository edit this slice may make.
+   closes an increment with the plan file, the source/tests, and its `docs/TODO.md` follow-up
+   entries — here the two §8 deferrals this slice opens: the `pi`/`state` UUID-validator copies
+   and the frozen `opencode` duplicates. No index for the contract file exists in this
+   repository, and moving or editing the contract file is not a repository edit this slice may
+   make.
 6. **The W2-12 plan file.** A8 requires the partition text in both plan files. W2-12's plan file
    does not exist in this tree (W2-12 has not dispatched). This plan carries the text verbatim in
    §10 so the W2-12 author can copy it; this slice does not create another slice's plan file.
@@ -356,8 +368,10 @@ grepping the diff.
 > `codex_probe_test.go` and `claude_probe_test.go` (W3-04's). Within its own set, W2-13 edits
 > `pi/**`, `codex/**`, `omo/**`, `omp/**`, `claude_candidate_*_test.go`, root `harness` helper and
 > test files, and re-points three clone-helper call sites in `pi/adapter_test.go:30`,
-> `codex/adapter_test.go:1394` and `claude_candidate_adapter_test.go:893`. Root `harness_test.go`
-> and the probe tests are not edited by either slice this wave.
+> `codex/adapter_test.go:1394` and `claude_candidate_adapter_test.go:893` (the claude test also
+> replaces its private-field settle wait with a `session.Close` join plus a new assertion, fix
+> round REV-S5A-02). Root `harness_test.go` and the probe tests are not edited by either slice
+> this wave.
 
 ## 11. Files this slice writes
 
@@ -365,6 +379,8 @@ Source: `daemon/internal/harness/nil_value.go`, `process_forwarding.go`, `close_
 `wait_barrier.go`, `event_delivery.go`, `result_clone.go`, `generic.go` (close gate + nil helper),
 `pi/adapter.go`, `codex/adapter.go`, `omo/adapter.go`, `omp/adapter.go`,
 `claude_candidate_adapter.go`.
-Tests: `daemon/internal/harness/session_scaffolding_test.go` (new), `pi/adapter_test.go`,
-`codex/adapter_test.go`, `claude_candidate_adapter_test.go` (call-site re-points only).
-Docs: this plan. `docs/TODO.md` only if an entry closes.
+Tests: `daemon/internal/harness/session_scaffolding_test.go` (new), `pi/adapter_test.go`
+(clone-call-site re-point and the new exact-text sink-failure pin), `codex/adapter_test.go`
+(clone-call-site re-point), `claude_candidate_adapter_test.go` (clone-call-site re-point plus the
+settle-wait `session.Close` join and its new assertion, REV-S5A-02).
+Docs: this plan; `docs/TODO.md` gains the two open §8 deferrals (§9.5), and no entry closes.

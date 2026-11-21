@@ -663,3 +663,32 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       per-test (`verifyNoLeakedGoroutines` in `daemon/internal/app/leak_check_test.go`) instead of a
       package-wide `goleak.TestMain`, because this path would force wildcard ignore lists that would
       hide real leaks.
+
+## Harness shared-scaffolding deferrals (rf-w2-13, PR #155)
+
+- [ ] Delegate the two provider-action UUID validator copies the W2-12a unification left outside
+      its owned set, behind the message-policy primitive that review P1-1 requires (2026-11-21,
+      branch `refactor/rf-w2-13-harness-scaffolding-5a`; plan
+      `docs/plans/2026-11-21-rf-w2-13-harness-scaffolding-5a-plan.md` §8). The copies are
+      `validateProviderBridgeUUID` (`daemon/internal/harness/pi/provider_bridge.go:976`), whose
+      follow-up owner is W2-13, and `validGoalSessionUUID`
+      (`daemon/internal/state/goal_session.go:1988`), whose owner is W2-09. They differ in message
+      text and strength from each other and from the canonical validators: the `pi` copy returns
+      "UUID is invalid" / "UUID must use lowercase hexadecimal digits" (no version/variant check),
+      the `state` copy returns a bool and rejects non-v5 versions and bad variants, while
+      `control.validateProviderActionUUID` and `protocol.validateUUID` use other strings. Pin
+      every current rejection string per call site before delegating, so the unification changes
+      no message; `pi/provider_bridge.go:1102-1120` stamps v5 UUIDs, so the stricter check is
+      safe for journaled action IDs.
+
+- [ ] Consolidate the frozen `opencode` duplicates onto the shared harness helpers when the D1
+      freeze lifts with opencode capability work (W6-04) (2026-11-21, same branch and plan, §8).
+      `opencode/**` stayed read-only (P2-3/D1: its six CI assertions and the release-acceptance
+      case stay green), so every surface this slice consolidated elsewhere still has an
+      `opencode` copy: process forwarding with its own guards
+      (`daemon/internal/harness/opencode/adapter.go:543` ProcessDetails, `:559`
+      LinuxV2LiveOwnerStatus, `:578` LeaseRenewalAvailable, `:589` RenewLease),
+      `isNilNativeProcess` (`:421`, `reflect.Pointer`-only), the Close/join state machine
+      (`:1063`), `emit` (`:1344`, stamps `At` and calls `sink.Handle` directly instead of
+      `harness.DeliverEvent`) and `Wait` (`:975`). Consolidating them is part of opencode
+      capability work, not this increment, and must keep those CI oracles green.
