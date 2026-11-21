@@ -5,7 +5,7 @@ import { useState } from "react";
 import { attentionOptions, sessionOptions, workspaceOptions } from "../../app/application";
 import { StatusBadge } from "../../components/primitives";
 import { EmptyState, ErrorState, LoadingState, PageHeading, RefreshButton } from "../../components/workspace";
-import { errorMessage, postPortalCommand, type GoalAttentionEntry, type ProjectBlockedEntry } from "../../services/api";
+import { errorMessage, postGoalCreation, type GoalAttentionEntry, type ProjectBlockedEntry } from "../../services/api";
 import { MutationRefused, newMutationId } from "../../services/commands";
 
 export function AttentionPage() {
@@ -175,7 +175,7 @@ function NewGoalButton({ projectId }: { projectId: string | null }) {
           reason: "Initial approved Goal contract from the attention entry point",
         },
       };
-      return postPortalCommand(application.fetcher, csrf, `/portal/api/projects/${encodeURIComponent(project.id)}/goals`, body);
+      return postGoalCreation(application.fetcher, csrf, project.id, body);
     },
     onSuccess: async () => {
       setNotice("The server created the Goal.");
