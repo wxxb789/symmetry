@@ -928,6 +928,26 @@ instead of appended.
       `TestInstalledLinuxOwnerRejectsUnexpectedCgroupKillFD`, which no Go file defines (base and
       HEAD); owner: the acceptance-script maintainer — restore the test or drop the pin.
 
+## Deferred review findings (PR #205)
+
+- [ ] STD-A09 from the Opus review of PR #205 (2026-11-21, branch
+      `refactor/rf-w4-14-browser-fixtures`): the merged #188 test-observability code loses the
+      `(partial)` label on a timeout-truncated package once any test in that package failed.
+      `scripts/ci/go-test-durations.py:213` computes
+      `unexplained = [package for package in failed_packages if not any(key[0] == package for key in failed)]`,
+      so a package that has a failed test counts as fully explained even when its stream is cut
+      off by a timeout before the remaining tests ran. The step is `continue-on-error` today, so
+      there is no gate impact, but the W2-01/W6-12 follow-up that flips the thresholds to blocking
+      must fix the partial-run detection first.
+- [ ] The merged W2-01 plan (`docs/plans/2026-11-21-rf-w2-01-ci-test-observability-plan.md:363`)
+      misstates the run: it records the checks as run "with the pinned ruff 0.17.6", which
+      `pyproject.toml:6` `required-version = "==0.17.5"` makes impossible (the config refuses any
+      other version, exit 2). The real conflict (`pyproject.toml` `==0.17.5` vs `ci.yml:1707`
+      `ruff_version='0.17.6'`) is already tracked above
+      (`## scripts/ci ruff baseline: drop the #137 exclude and keep the gate's ruff version pinned`,
+      `docs/TODO.md:901`); this entry only records the misstatement in the merged evidence plan
+      (found by the Opus review of PR #205).
+
 ## Harness shared-scaffolding deferrals (rf-w2-13, PR #155)
 
 - [ ] Delegate the two provider-action UUID validator copies the W2-12a unification left outside
