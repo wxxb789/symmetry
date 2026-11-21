@@ -31,25 +31,24 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       file set; reproduction is the three `deadcode` runs plus the baseline-scoped grep, as
       recorded in the plan.
 
-- [ ] Revalidate and remove the daemon surfaces that are unreachable from both mains but still
-      referenced, so no deletion is possible without retargeting a caller (2026-11-21, same
-      branch and plan). Three groups were surveyed; only the first, below, is dead-code material
-      — the other two are live — do not remove (decision note below).
-      **In the three-target `deadcode -test` intersection and referenced:**
-      `control.NewOperatorClient` (`client.go:485`) with `SubmitTask`/`GetTask`/
-      `CreateTaskCommand`/`operatorRequest`/`operatorRequestWithStatus` and
-      `control.WithMaxResponseBytes` (`:99`) — callers `daemon/e2e/core_test.go:696`,
-      `e2e/production_linux_containment_witness_test.go:2046`, the control tests, and
-      `app/pi_provider_bridge_test.go:409` (the oversized-response case of the live `NewClient`);
-      the seven legacy task validators in `daemon/internal/control/validation.go`
-      (`:209/:281/:302/:334/:441/:611/:629`) — reached from
-      `daemon/internal/control/client.go:992,:1007,:1022,:1034` (inside the dead operator client),
-      from sibling validators (`validation.go:230,:239,:253,:306`), and from
-      `daemon/internal/control/supervisory_validation_test.go:39,:48,:55,:125,:129,:148,:152`;
-      the `protocol.Task`/`TaskWaiting` v1 decoders (65 and 8 references, 37 in
-      `e2e/core_test.go`); and `harness.NewClaudeAdapterWithRunner` (`registry.go:181`, three test
-      files). Removing any of them needs an owner for `daemon/e2e/**` and the app/control test
-      seams — the W2-12 follow-up is that owner (program plan §4).
+- [ ] Revalidate and remove `harness.NewClaudeAdapterWithRunner` (three test files), the residual
+      of the 2026-11-21 W1-06 daemon dead-code survey (branch
+      `refactor/rf-w1-06-daemon-deadcode`, plan
+      `docs/plans/2026-11-21-w1-06-daemon-deadcode-plan.md`). The survey's other
+      unreachable-but-referenced, in-intersection surfaces were dispositioned by the W2-12b
+      relocation (branch `refactor/rf-w2-12b-operator-client-relocation`, plan
+      `docs/plans/2026-11-21-rf-w2-12b-operator-client-relocation-plan.md`): the operator client,
+      its five methods, the seven operator-exclusive task validators of
+      `daemon/internal/control/validation.go` and the v1 task decoders now live in
+      the e2e-owned `daemon/e2e/internal/operator/` package beside their only callers; six
+      declarations of the relocated set differ from their originals only by the sanctioned package
+      qualifiers, the rest byte-identical. The closed
+      part is recorded in `docs/archive/CLOSED-TODO.md` under `## Dead-code candidates`.
+      `control.WithMaxResponseBytes` stays in `control` by that slice's binding amendment (its
+      callers are the machine-client and PI-bridge tests). This residual belongs to the
+      probe/registry dedup (W3-04), not to a deletion pass: its shadowed root-probe siblings are
+      main-reachable through `NewCodexAdapter`/`NewClaudeAdapter`. The two live groups of the same
+      survey stay covered by the decision note below.
 
 - live — do not remove (decision note, 2026-11-21, same branch and plan): the two remaining
       groups of that survey are production-live surfaces that no deletion pass may touch.
@@ -1068,3 +1067,31 @@ instead of appended.
       (pre-existing gap: base had the same untested order). Behaviour is correct at HEAD; this is
       test coverage only, no code change. Found by the opus round-1 review of PR #193. Owner:
       W4-12/W4-13 test work.
+
+## Deferred review findings (PR #189, provider access lock order)
+
+- [ ] Pin `IntentContext`'s intent-context lock order with an oracle (2026-11-21, branch
+      `refactor/rf-w4-06-provider-access-intent`; plan
+      `docs/plans/2026-11-21-rf-w4-06-provider-access-intent-plan.md`; found by the Opus review of
+      PR #189 (P3-4) as review STD-A02, report-only per conductor decision E8).
+      `IntentContext.legacy_lock/1`
+      (`control/lib/symmetry_control/integrations/provider_access.ex:1147-1150` with
+      `lock_scope_rows/2` `:1168-1184`) and `IntentContext.goal_lock/2` (`:1152-1164`) hold the
+      merged lock order, but no test drives them: the only order assertion is the controller case
+      "Goal provider claim scope locks Project before Goal"
+      (`control/test/symmetry_control_web/controllers/provider_action_controller_test.exs:400`, its
+      `FOR SHARE` telemetry probe at `:431`), and it drives `ProviderAccess.lock_claim_scope/1`
+      (`:442`) instead. Measured during the slice: swapping Project and Goal in `goal_lock/2`, or
+      reversing `lock_scope_rows/2`'s rows, keeps the 13 targeted tests and the 79 controller tests
+      green. Add a controller or `ProviderAccess` test that pins the `goal_lock/2` and
+      `legacy_lock/1` order with telemetry, mirroring `:400`, and record its red mutation.
+
+- [ ] Fold `lock_goal_claim_scope/1`'s third Goal-order encoding into `IntentContext` (2026-11-21,
+      same branch and plan; the plan's "Out of scope" section records it).
+      `lock_goal_claim_scope/1`
+      (`control/lib/symmetry_control/integrations/provider_access.ex:379-400`, comment `:375-377`)
+      walks Project `FOR SHARE` -> Goal -> resources/connections (`lock_claim_resources/1`
+      `:412-437`) -> WorkItem -> Task -> revision inline — the same order
+      `IntentContext.goal_lock/2` (`:1152-1164`) now encodes once — but returns the claim-scope
+      shape rather than the intent-context map, so the slice left it; folding it must keep the
+      lock-order case `:400` and the advisory-lock case `:2092` green.
