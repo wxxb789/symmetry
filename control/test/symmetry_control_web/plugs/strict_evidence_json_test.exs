@@ -152,6 +152,36 @@ defmodule SymmetryControlWeb.Plugs.StrictEvidenceJSONTest do
     end
   end
 
+  test "does not parse multipart/form-data bodies at the endpoint" do
+    boundary = "strict-evidence-json-test"
+
+    body =
+      "--#{boundary}\r\n" <>
+        "Content-Disposition: form-data; name=\"operator_token\"\r\n" <>
+        "\r\nwrong\r\n--#{boundary}--\r\n"
+
+    multipart_type = "multipart/form-data; boundary=#{boundary}"
+
+    login =
+      :post
+      |> conn("/portal/login", body)
+      |> put_req_header("content-type", multipart_type)
+      |> put_private(:plug_skip_csrf_protection, true)
+      |> SymmetryControlWeb.Endpoint.call([])
+
+    assert login.body_params == %Plug.Conn.Unfetched{aspect: :body_params}
+    assert login.status == 422
+
+    machine_api =
+      :post
+      |> conn("/api/v1/machines", body)
+      |> put_req_header("content-type", multipart_type)
+      |> SymmetryControlWeb.Endpoint.call([])
+
+    assert machine_api.body_params == %Plug.Conn.Unfetched{aspect: :body_params}
+    assert machine_api.status == 401
+  end
+
   test "recognizes the JSON structured suffix on the exact route" do
     conn =
       :post
