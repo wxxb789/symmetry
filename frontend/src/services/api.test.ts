@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { failureMode } from "../features/planning/write-policy";
-import { createApi, Forbidden, Network, postGoalCommand, postPortalCommand, readRetry, refusalNotice, ServerRefusal, Unauthenticated, UnexpectedResponse, Validation, type ActionId, type Api, type ExecutionGeneration } from "./api";
+import { createApi, Forbidden, Network, postGoalCommand, postGoalCreation, readRetry, refusalNotice, ServerRefusal, Unauthenticated, UnexpectedResponse, Validation, type ActionId, type Api, type ExecutionGeneration } from "./api";
+import { MutationRefused } from "./commands";
 import { readWorkDetail } from "./api.fixtures";
 
 const workspace = {
@@ -210,7 +211,7 @@ describe("goal command boundary", () => {
     const failure = await postGoalCommand(fetcher, "csrf", goalId, envelope).then(() => null, (error: unknown) => error);
     expect(failure).toBeInstanceOf(Unauthenticated);
     // The Goal creation path shares the transport.
-    const created = await postPortalCommand(fetcher, "csrf", "/portal/api/projects/p1/goals", { schema_version: "symmetry.goal_create.v1" }).then(() => null, (error: unknown) => error);
+    const created = await postGoalCreation(fetcher, "csrf", "p1", { schema_version: "symmetry.goal_create.v1" }).then(() => null, (error: unknown) => error);
     expect(created).toBeInstanceOf(Unauthenticated);
   });
 
@@ -231,6 +232,67 @@ describe("goal command boundary", () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ goal_id: goalId, mutation_id: envelope.mutation_id, goal: { id: goalId }, event: { id: envelope.mutation_id, sequence: 2, kind: "pause", revision: 1 } }), { status: 200 }));
     const receipt = await postGoalCommand(fetcher, "csrf", goalId, envelope);
     expect(receipt).toMatchObject({ goal_id: goalId, mutation_id: envelope.mutation_id });
+  });
+
+  it("keeps an undescribed command 403 on the shared session-protection message", async () => {
+    const message = "This change was refused. If you signed in elsewhere, refresh the page and try again.";
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(() => Promise.resolve(new Response("{}", { status: 403 })));
+    const refused = await postGoalCommand(fetcher, "csrf", goalId, envelope).then(() => null, (error: unknown) => error);
+    expect(refused).toBeInstanceOf(Forbidden);
+    expect(refused).toMatchObject({ message });
+    // The Goal creation path shares the boundary: the same answer, the same text.
+    const created = await postGoalCreation(fetcher, "csrf", "p1", { schema_version: "symmetry.goal_create.v1" }).then(() => null, (error: unknown) => error);
+    expect(created).toBeInstanceOf(Forbidden);
+    expect(created).toMatchObject({ message });
+  });
+
+  it("degrades a command refusal that cannot name itself to the status mapping", async () => {
+    // `code`/`message` are non-empty members on both surfaces: an empty pair is
+    // not a described refusal, so the 403 answers the session-protection message.
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({ error: { code: "", message: "" } }), { status: 403 })));
+    const refused = await postGoalCommand(fetcher, "csrf", goalId, envelope).then(() => null, (error: unknown) => error);
+    expect(refused).toBeInstanceOf(Forbidden);
+    expect(refused).toMatchObject({ message: "This change was refused. If you signed in elsewhere, refresh the page and try again." });
+  });
+
+  it("carries a described command refusal's own members into MutationRefused", async () => {
+    const body = JSON.stringify({
+      error: {
+        code: "stale",
+        message: "resource changed since it was loaded",
+        fields: { title: ["stale"] },
+        current_version: 9,
+        current_revision: 3,
+        allowed_actions: ["resume"],
+        details: { reason: "stale" },
+      },
+    });
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(() => Promise.resolve(new Response(body, { status: 409 })));
+    const refused = await postGoalCommand(fetcher, "csrf", goalId, envelope).then(() => null, (error: unknown) => error);
+    expect(refused).toBeInstanceOf(MutationRefused);
+    // Exactly the command members: the read surface's `fields` never reaches a
+    // command's `details`.
+    expect((refused as MutationRefused).details).toEqual({ current_version: 9, current_revision: 3, allowed_actions: ["resume"], details: { reason: "stale" } });
+    expect((refused as MutationRefused).stale).toBe(true);
+    // The same body on the one parser's other surface keeps the read members.
+    const control = await createApi(fetcher)
+      .cancelWork(workItemId, 2 as ExecutionGeneration, "action-1" as ActionId, "csrf", new AbortController().signal)
+      .then(() => null, (error: unknown) => error);
+    expect(control).toBeInstanceOf(ServerRefusal);
+    expect(control).toMatchObject({ status: 409, code: "stale", fields: { title: ["stale"] } });
+  });
+
+  it("rejects invalid UTF-8 bytes in an accepted write instead of announcing U+FFFD", async () => {
+    const body = new Uint8Array([
+      ...new TextEncoder().encode(`{"goal_id":"${goalId}","mutation_id":"safe`),
+      0xff,
+      ...new TextEncoder().encode('"}'),
+    ]);
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(body, { status: 200 }));
+    const failure = await postGoalCommand(fetcher, "csrf", goalId, envelope).then(() => null, (error: unknown) => error);
+    expect(failure).toBeInstanceOf(UnexpectedResponse);
+    expect(failure).not.toBeInstanceOf(Network);
+    expect(failure).toMatchObject({ status: 200, transient: false, message: "The server response could not be read safely. Refresh or contact your operator." });
   });
 
   it("adds a guidance step only for a code the map itself owns", () => {
