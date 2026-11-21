@@ -102,6 +102,11 @@ type linuxV2ProcessOwner struct {
 
 	waitMu     sync.Mutex
 	waitResult *platform.LinuxOwnerHelperV2Exit
+
+	// closeSeams binds the close pipeline's CI test doubles. Production owners
+	// leave it zero: the pipeline then reads the bound helper's exact native
+	// control channel and the opaque platform release capability stored above.
+	closeSeams linuxV2CloseSeams
 }
 
 type linuxV2Containment struct {
@@ -426,11 +431,15 @@ func (owner *linuxV2ProcessOwner) reserveAndCreate(ctx context.Context) error {
 		Mirror: &mirror,
 	}
 	owner.reservationAttempted = true
-	if err := runLinuxV2JournalMutation(owner.invocation.Callbacks.Reserve, owner.reservation); err != nil {
+	if err := retryMutation(func() error {
+		return owner.invocation.Callbacks.Reserve(owner.reservation.Clone())
+	}); err != nil {
 		return fmt.Errorf("durably reserve exact Linux cgroup leaf: %w", err)
 	}
 	createIntent := owner.reservation.Clone()
-	if err := runLinuxV2JournalMutation(owner.invocation.Callbacks.MarkCreateStarted, createIntent); err != nil {
+	if err := retryMutation(func() error {
+		return owner.invocation.Callbacks.MarkCreateStarted(createIntent.Clone())
+	}); err != nil {
 		return fmt.Errorf("durably record Linux cgroup creation intent before mkdir: %w", err)
 	}
 	owner.reservation.CreateStarted = true
@@ -443,9 +452,9 @@ func (owner *linuxV2ProcessOwner) reserveAndCreate(ctx context.Context) error {
 	if err := leaf.VerifyKillControl(); err != nil {
 		return fmt.Errorf("verify A-owned run leaf cgroup.kill: %w", err)
 	}
-	if err := runLinuxV2JournalMutation(func(expected state.LinuxCgroupReservation) error {
-		return owner.invocation.Callbacks.BindLeaf(expected, leafIdentity)
-	}, owner.reservation); err != nil {
+	if err := retryMutation(func() error {
+		return owner.invocation.Callbacks.BindLeaf(owner.reservation.Clone(), leafIdentity)
+	}); err != nil {
 		return fmt.Errorf("durably bind measured Linux cgroup leaf: %w", err)
 	}
 	owner.reservation.LeafIdentity = &leafIdentity
@@ -494,13 +503,13 @@ func (owner *linuxV2ProcessOwner) startHelper(ctx context.Context) error {
 		owner.reservation.Mirror != nil && helperIdentity.Equal(*owner.reservation.Mirror) {
 		return errors.New("Linux owner helper identity aliases a distinct A owner")
 	}
-	if err := runLinuxV2JournalMutation(func(expected state.LinuxCgroupReservation) error {
-		return owner.invocation.Callbacks.BindHelper(expected, helperIdentity)
-	}, owner.reservation); err != nil {
+	if err := retryMutation(func() error {
+		return owner.invocation.Callbacks.BindHelper(owner.reservation.Clone(), helperIdentity)
+	}); err != nil {
 		return fmt.Errorf("durably bind exact Linux v2 helper identity: %w", err)
 	}
 	owner.reservation.Helper = &helperIdentity
-	if err := retryLinuxV2(func() error { return helper.Control.AcknowledgeHelper(ctx) }); err != nil {
+	if err := retryMutation(func() error { return helper.Control.AcknowledgeHelper(ctx) }); err != nil {
 		return fmt.Errorf("acknowledge Store-bound Linux v2 helper grant: %w", err)
 	}
 	owner.helperBound = true
@@ -633,14 +642,16 @@ func (owner *linuxV2ProcessOwner) bindAndArmLauncher(launcher authority.LinuxCgr
 		owner.reservation.LauncherGrantPossible || launcher.Validate() != nil {
 		return errors.New("Linux root launcher is not the exact first producer for this bound helper")
 	}
-	if err := runLinuxV2JournalMutation(func(expected state.LinuxCgroupReservation) error {
-		return owner.invocation.Callbacks.BindLauncher(expected, launcher)
-	}, owner.reservation); err != nil {
+	if err := retryMutation(func() error {
+		return owner.invocation.Callbacks.BindLauncher(owner.reservation.Clone(), launcher)
+	}); err != nil {
 		return fmt.Errorf("durably bind transient root launcher before its grant: %w", err)
 	}
 	copy := launcher
 	owner.reservation.Launcher = &copy
-	if err := runLinuxV2JournalMutation(owner.invocation.Callbacks.ArmLauncherGrant, owner.reservation); err != nil {
+	if err := retryMutation(func() error {
+		return owner.invocation.Callbacks.ArmLauncherGrant(owner.reservation.Clone())
+	}); err != nil {
 		return fmt.Errorf("durably arm root launcher grant before release: %w", err)
 	}
 	owner.reservation.LauncherGrantPossible = true
@@ -661,9 +672,9 @@ func (owner *linuxV2ProcessOwner) recordLauncherExit(proof authority.LinuxCgroup
 		!proof.ValidForOwnedDescendant(*owner.reservation.Launcher, *owner.reservation.Helper, owner.reservation.Anchor, owner.reservation.HelperExit) {
 		return errors.New("Linux v2 launcher exit proof does not identify the exact durable launcher and helper")
 	}
-	if err := runLinuxV2JournalMutation(func(expected state.LinuxCgroupReservation) error {
-		return owner.invocation.Callbacks.RecordLauncherExit(expected, proof)
-	}, owner.reservation); err != nil {
+	if err := retryMutation(func() error {
+		return owner.invocation.Callbacks.RecordLauncherExit(owner.reservation.Clone(), proof)
+	}); err != nil {
 		return err
 	}
 	copy := proof
@@ -686,9 +697,9 @@ func (owner *linuxV2ProcessOwner) bindGate() error {
 		}
 		return errors.New("Linux v2 gate binding conflicts with its durable reservation")
 	}
-	if err := runLinuxV2JournalMutation(func(expected state.LinuxCgroupReservation) error {
-		return owner.invocation.Callbacks.BindGate(expected, *owner.gate)
-	}, owner.reservation); err != nil {
+	if err := retryMutation(func() error {
+		return owner.invocation.Callbacks.BindGate(owner.reservation.Clone(), *owner.gate)
+	}); err != nil {
 		return err
 	}
 	copy := *owner.gate
@@ -722,7 +733,9 @@ func (owner *linuxV2ProcessOwner) bindHandoff() error {
 		return fmt.Errorf("validate exact v2 supervisor handoff: %w", err)
 	}
 	if !owner.handoffPreparedFlag {
-		if err := runLinuxV2JournalMutation(owner.invocation.Callbacks.PrepareHandoff, prepared); err != nil {
+		if err := retryMutation(func() error {
+			return owner.invocation.Callbacks.PrepareHandoff(prepared.Clone())
+		}); err != nil {
 			return fmt.Errorf("durably prepare exact Linux v2 handoff: %w", err)
 		}
 		owner.handoffPreparedFlag = true
@@ -730,9 +743,9 @@ func (owner *linuxV2ProcessOwner) bindHandoff() error {
 	helperIdentity := *owner.reservation.Helper
 	mirrorIdentity := *owner.reservation.Mirror
 	if !owner.handoffBound {
-		if err := runLinuxV2JournalMutation(func(expected authority.SupervisorHandoff) error {
-			return owner.invocation.Callbacks.BindHandoffV2(expected, helperIdentity, mirrorIdentity)
-		}, prepared); err != nil {
+		if err := retryMutation(func() error {
+			return owner.invocation.Callbacks.BindHandoffV2(prepared.Clone(), helperIdentity, mirrorIdentity)
+		}); err != nil {
 			return fmt.Errorf("durably bind exact helper and daemon mirror to Linux v2 handoff: %w", err)
 		}
 		bound := prepared.Clone()
@@ -757,9 +770,9 @@ func (owner *linuxV2ProcessOwner) commitHandoff(expected authority.SupervisorHan
 	prepared := owner.prepared
 	owner.mu.Unlock()
 	if !journalCommitted {
-		if err := runLinuxV2JournalMutation(func(value authority.SupervisorHandoff) error {
-			return owner.invocation.Callbacks.CommitHandoff(value, startedAt)
-		}, expected); err != nil {
+		if err := retryMutation(func() error {
+			return owner.invocation.Callbacks.CommitHandoff(expected.Clone(), startedAt)
+		}); err != nil {
 			return fmt.Errorf("durably commit Linux v2 handoff and process authority: %w", err)
 		}
 		owner.mu.Lock()
@@ -799,7 +812,7 @@ func (owner *linuxV2ProcessOwner) renewLease(ctx context.Context, deadline time.
 	owner.leaseRenewalSequence = sequence
 	owner.leaseRenewalDone = done
 	owner.mu.Unlock()
-	if err := retryLinuxV2(func() error { return helper.RenewLease(ctx, deadline, sequence) }); err != nil {
+	if err := retryMutation(func() error { return helper.RenewLease(ctx, deadline, sequence) }); err != nil {
 		statusContext, cancel := context.WithTimeout(ctx, linuxV2AdmissionStatusTimeout)
 		status, statusErr := helper.Status(statusContext)
 		cancel()
@@ -1140,7 +1153,7 @@ func (owner *linuxV2ProcessOwner) recordLinuxCloneCheckoutReady(ctx context.Cont
 	if err := validateLinuxCloneCheckoutReceipt(grantCopy, receipt); err != nil {
 		return err
 	}
-	if err := runLinuxV2MutationRetry(func() error {
+	if err := retryMutation(func() error {
 		return owner.invocation.Callbacks.RecordLinuxCloneCheckoutReady(receipt.Clone())
 	}); err != nil {
 		return fmt.Errorf("persist exact B-owned Linux clone checkout before native exec ACK: %w", err)
@@ -1339,9 +1352,9 @@ func (owner *linuxV2ProcessOwner) stopAsMirror(ctx context.Context, helper autho
 		return platform.LinuxOwnerHelperV2StopEvidence{}, errors.New("no exact helper-owned or anchor-adopted gate wait/reap proof exists for mirror receipt")
 	}
 	if owner.reservation.HelperExit == nil {
-		if err := runLinuxV2JournalMutation(func(expected state.LinuxCgroupReservation) error {
-			return owner.invocation.Callbacks.RecordHelperExit(expected, helperExit)
-		}, owner.reservation); err != nil {
+		if err := retryMutation(func() error {
+			return owner.invocation.Callbacks.RecordHelperExit(owner.reservation.Clone(), helperExit)
+		}); err != nil {
 			return platform.LinuxOwnerHelperV2StopEvidence{}, fmt.Errorf("durably record anchor's exact helper wait before mirror receipt: %w", err)
 		}
 		copy := *cloneLinuxV2Exit(&helperExit)
@@ -1455,7 +1468,6 @@ func (owner *linuxV2ProcessOwner) finalize() error {
 	}
 	owner.mu.Lock()
 	handoff := cloneSupervisorHandoff(owner.handoff)
-	helper := owner.helper
 	receiptAcked := owner.stopReceiptAcked
 	normalRelease := owner.normalRelease
 	clearDone := owner.clearDone
@@ -1465,6 +1477,9 @@ func (owner *linuxV2ProcessOwner) finalize() error {
 	if handoff == nil || evidence.Proof.ValidateFor(owner.supervisorForProof(evidence.Proof.LauncherExit)) != nil {
 		return errors.New("Linux v2 stop proof does not match the exact bound handoff")
 	}
+	// The cached-receipt reconcile stays byte-identical here: a valid bound
+	// handoff already determines the measured proof, so a CI fixture cannot
+	// execute its conflict branch (see the rf-w4-05 evidence record).
 	baseHandoff := handoff.Clone()
 	var receipt *authority.StopReceipt
 	receiptPersisted := baseHandoff.StopReceipt != nil
@@ -1484,97 +1499,310 @@ func (owner *linuxV2ProcessOwner) finalize() error {
 		return errors.New("Linux v2 helper stop evidence did not produce an exact authority receipt")
 	}
 	mirrorStop := evidence.Proof.Kind == authority.LinuxCgroupStopProofMirror
-	if !receiptPersisted {
-		if err := runLinuxV2ReceiptMutation(owner.invocation.Callbacks.RecordStopReceipt, baseHandoff, *receipt); err != nil {
-			return fmt.Errorf("persist exact Linux v2 physical-stop receipt: %w", err)
-		}
-		handoffWithReceipt := baseHandoff.Clone()
-		receiptCopy := *receipt
-		handoffWithReceipt.StopReceipt = &receiptCopy
-		owner.mu.Lock()
-		owner.handoff = &handoffWithReceipt
-		owner.mu.Unlock()
-		handoff = &handoffWithReceipt
-	} else {
-		handoff.StopReceipt = receipt
+	return owner.runClosePipeline(&linuxV2CloseGateSteps{
+		owner: owner, ctx: ctx, handoff: *handoff, baseHandoff: baseHandoff,
+		receipt: *receipt, receiptPersisted: receiptPersisted, mirrorStop: mirrorStop,
+		receiptAcked: receiptAcked, release: normalRelease, clearDone: clearDone,
+		helperReleased: helperReleased, anchorRetired: anchorRetired,
+	})
+}
+
+// linuxV2HelperControl is the helper's control channel as the close pipeline
+// uses it. A bound helper carries the concrete native client; the pipeline
+// reads the channel through helperControl() so the CI characterization tests
+// can drive the real pipeline where no native helper can exist.
+type linuxV2HelperControl interface {
+	AcknowledgeStopReceipt(ctx context.Context, receipt authority.StopReceipt) error
+	ReleaseAfterClear(ctx context.Context, proof authority.SupervisorHandoffReleaseProof) error
+	AcknowledgePreGateStopReceipt(ctx context.Context, receipt authority.LinuxCgroupPreGateStopReceipt) error
+	ReleaseAfterPreGateClear(ctx context.Context, proof authority.LinuxCgroupPreGateReleaseProof) error
+}
+
+// linuxV2CloseSeams are the close pipeline's test doubles. Every field is nil
+// in production, where the pipeline reads the bound helper's exact native
+// client and the opaque platform release capability stored on the owner; the
+// CI characterization tests install doubles because no native helper, cgroup
+// leaf or anchor can exist in the test process. Only the capability snapshots
+// are doubled: the pipeline still runs the issued/valid guards on their result.
+type linuxV2CloseSeams struct {
+	helperControl          linuxV2HelperControl
+	ownerReleaseSnapshot   func(platform.LinuxCgroupV2Release) (authority.SupervisorHandoffReleaseProof, bool)
+	preGateReleaseSnapshot func(platform.LinuxCgroupV2Release) (authority.LinuxCgroupPreGateReleaseProof, bool)
+}
+
+// helperControl returns the close pipeline's helper control channel.
+func (owner *linuxV2ProcessOwner) helperControl() linuxV2HelperControl {
+	if owner.closeSeams.helperControl != nil {
+		return owner.closeSeams.helperControl
 	}
-	if !mirrorStop && !receiptAcked {
-		var firstAckError error
-		ackErr := retryLinuxV2(func() error {
-			err := helper.Control.AcknowledgeStopReceipt(ctx, *receipt)
-			if err != nil && firstAckError == nil {
-				firstAckError = err
-			}
-			return err
-		})
-		if firstAckError != nil {
-			owner.captureWitnessDropStatus()
-		}
-		if ackErr != nil {
-			return fmt.Errorf("acknowledge durable Linux v2 stop receipt before release: %w", ackErr)
-		}
-		owner.mu.Lock()
-		owner.stopReceiptAcked = true
-		owner.mu.Unlock()
+	if owner.helper == nil {
+		return nil
 	}
-	if normalRelease == nil {
-		release, err := owner.removeAfterReceipt(ctx, *handoff, *receipt)
-		if err != nil {
-			return err
-		}
-		normalRelease = &release
-		owner.mu.Lock()
-		owner.normalRelease = normalRelease
-		owner.mu.Unlock()
+	return owner.helper.Control
+}
+
+// ownerReleaseProof snapshots the opaque removed-leaf capability of the gate
+// path; the caller still validates the proof against the durable receipt.
+func (owner *linuxV2ProcessOwner) ownerReleaseProof(release platform.LinuxCgroupV2Release) (authority.SupervisorHandoffReleaseProof, bool) {
+	if owner.closeSeams.ownerReleaseSnapshot != nil {
+		return owner.closeSeams.ownerReleaseSnapshot(release)
 	}
-	releaseProof, issued := normalRelease.Snapshot()
-	if !issued || !releaseProof.ValidFor(*handoff) {
-		return errors.New("Linux v2 platform release capability does not match the durable receipt")
+	return release.Snapshot()
+}
+
+// preGateReleaseProof snapshots the opaque pre-gate removal capability.
+func (owner *linuxV2ProcessOwner) preGateReleaseProof(release platform.LinuxCgroupV2Release) (authority.LinuxCgroupPreGateReleaseProof, bool) {
+	if owner.closeSeams.preGateReleaseSnapshot != nil {
+		return owner.closeSeams.preGateReleaseSnapshot(release)
 	}
-	if err := owner.promoteCloneAfterStop(ctx, *receipt, *normalRelease); err != nil {
+	return release.SnapshotPreGate()
+}
+
+// linuxV2CloseSteps is one close path's typed steps for the shared close
+// pipeline. Each step keeps its base guards, wrap texts and owner-flag updates;
+// runClosePipeline owns the single order both paths share. The gate path claims
+// the release capability before the promotion hop (base :1527-1535) and the
+// pre-gate path claims after its clear (base :2184-2197), which
+// claimsCapabilityAfterClear selects.
+type linuxV2CloseSteps interface {
+	persistReceipt() error
+	acknowledgeReceipt() error
+	removeLeaf() error
+	claimRelease() error
+	promoteClone() error
+	clearJournal() error
+	releaseHelper() error
+	retireAnchor() error
+	settle() error
+	claimsCapabilityAfterClear() bool
+}
+
+// runClosePipeline executes the close sequence both close paths share:
+//
+//	persist receipt → acknowledge receipt → remove leaf → claim capability →
+//	[promotion hop] → clear journal → claim capability → release helper →
+//	retire anchor → settle
+//
+// Every step returns its base error unwrapped, exactly as the base close paths
+// returned it, so a failure stops the sequence where the base path stopped.
+func (owner *linuxV2ProcessOwner) runClosePipeline(steps linuxV2CloseSteps) error {
+	if err := steps.persistReceipt(); err != nil {
 		return err
 	}
-	if !clearDone {
-		if err := owner.clearAfterReceipt(*handoff, *normalRelease); err != nil {
+	if err := steps.acknowledgeReceipt(); err != nil {
+		return err
+	}
+	if err := steps.removeLeaf(); err != nil {
+		return err
+	}
+	if !steps.claimsCapabilityAfterClear() {
+		if err := steps.claimRelease(); err != nil {
 			return err
 		}
-		owner.mu.Lock()
-		owner.clearDone = true
-		owner.mu.Unlock()
 	}
-	if !mirrorStop && !helperReleased {
-		if err := retryLinuxV2(func() error { return helper.Control.ReleaseAfterClear(ctx, releaseProof) }); err != nil {
-			// A lost helper response is resolved only by the anchor's exact
-			// receipt-bound retirement readback; no release is retried through a
-			// replacement helper or numeric PID.
-			if retireErr := owner.retireAnchorRun(ctx, *handoff, releaseProof); retireErr != nil {
-				return errors.Join(fmt.Errorf("release Linux v2 helper only after opaque Store clear: %w", err),
-					fmt.Errorf("read back exact anchor retirement after lost helper release ACK: %w", retireErr))
-			}
-			owner.mu.Lock()
-			owner.helperReleased = true
-			owner.anchorRetired = true
-			owner.mu.Unlock()
-			helperReleased = true
-			anchorRetired = true
-		} else {
-			owner.mu.Lock()
-			owner.helperReleased = true
-			owner.mu.Unlock()
-			helperReleased = true
-		}
+	if err := steps.promoteClone(); err != nil {
+		return err
 	}
-	if !anchorRetired {
-		if err := owner.retireAnchorRun(ctx, *handoff, releaseProof); err != nil {
+	if err := steps.clearJournal(); err != nil {
+		return err
+	}
+	if steps.claimsCapabilityAfterClear() {
+		if err := steps.claimRelease(); err != nil {
 			return err
 		}
-		owner.mu.Lock()
-		owner.anchorRetired = true
-		owner.mu.Unlock()
+	}
+	if err := steps.releaseHelper(); err != nil {
+		return err
+	}
+	if err := steps.retireAnchor(); err != nil {
+		return err
+	}
+	return steps.settle()
+}
+
+// linuxV2CloseGateSteps is the gate path's step set: the durably bound
+// handoff, its exact physical-stop receipt and the mirror-stop acknowledgement
+// skip.
+type linuxV2CloseGateSteps struct {
+	owner *linuxV2ProcessOwner
+	ctx   context.Context
+
+	// handoff is the receipt-bearing close handoff; baseHandoff is the same
+	// handoff with its cached receipt cleared for the durable write.
+	handoff          authority.SupervisorHandoff
+	baseHandoff      authority.SupervisorHandoff
+	receipt          authority.StopReceipt
+	receiptPersisted bool
+	mirrorStop       bool
+
+	release      *platform.LinuxCgroupV2Release
+	releaseProof authority.SupervisorHandoffReleaseProof
+
+	receiptAcked   bool
+	clearDone      bool
+	helperReleased bool
+	anchorRetired  bool
+}
+
+// claimsCapabilityAfterClear reports the gate path's claim position: the
+// promotion hop runs after the release-capability snapshot and before the
+// clear.
+func (steps *linuxV2CloseGateSteps) claimsCapabilityAfterClear() bool { return false }
+
+// persistReceipt persists the exact physical-stop receipt when it is not
+// durable yet and publishes the receipt-bound handoff to the owner
+// (base :1487-1500).
+func (steps *linuxV2CloseGateSteps) persistReceipt() error {
+	if !steps.receiptPersisted {
+		if err := retryMutation(func() error {
+			return steps.owner.invocation.Callbacks.RecordStopReceipt(steps.baseHandoff.Clone(), cloneLinuxV2StopReceiptValue(steps.receipt))
+		}); err != nil {
+			return fmt.Errorf("persist exact Linux v2 physical-stop receipt: %w", err)
+		}
+		handoffWithReceipt := steps.baseHandoff.Clone()
+		receiptCopy := steps.receipt
+		handoffWithReceipt.StopReceipt = &receiptCopy
+		steps.owner.mu.Lock()
+		steps.owner.handoff = &handoffWithReceipt
+		steps.owner.mu.Unlock()
+		steps.handoff = handoffWithReceipt
+		return nil
+	}
+	steps.handoff.StopReceipt = &steps.receipt
+	return nil
+}
+
+// acknowledgeReceipt acknowledges the durable stop receipt and captures the
+// first attempt's failure as a witness drop; a mirror stop has no bound helper
+// left to acknowledge (base :1501-1516).
+func (steps *linuxV2CloseGateSteps) acknowledgeReceipt() error {
+	if steps.mirrorStop || steps.receiptAcked {
+		return nil
+	}
+	owner := steps.owner
+	var firstAckError error
+	ackErr := retryMutation(func() error {
+		err := owner.helperControl().AcknowledgeStopReceipt(steps.ctx, steps.receipt)
+		if err != nil && firstAckError == nil {
+			firstAckError = err
+		}
+		return err
+	})
+	if firstAckError != nil {
+		owner.captureWitnessDropStatus()
+	}
+	if ackErr != nil {
+		return fmt.Errorf("acknowledge durable Linux v2 stop receipt before release: %w", ackErr)
 	}
 	owner.mu.Lock()
-	owner.ownerReleased = true
+	owner.stopReceiptAcked = true
 	owner.mu.Unlock()
+	return nil
+}
+
+// removeLeaf removes the exact receipt-authorized leaf, or proves only
+// receipt-backed pinned-parent absence, and remembers the opaque release that
+// authorizes the clear and the helper release (base :1517-1526).
+func (steps *linuxV2CloseGateSteps) removeLeaf() error {
+	if steps.release != nil {
+		return nil
+	}
+	release, err := steps.owner.removeAfterReceipt(steps.ctx, steps.handoff, steps.receipt)
+	if err != nil {
+		return err
+	}
+	steps.release = &release
+	steps.owner.mu.Lock()
+	steps.owner.normalRelease = steps.release
+	steps.owner.mu.Unlock()
+	return nil
+}
+
+// claimRelease snapshots the opaque release capability and verifies it against
+// the receipt-bound handoff (base :1527-1531).
+func (steps *linuxV2CloseGateSteps) claimRelease() error {
+	releaseProof, issued := steps.owner.ownerReleaseProof(*steps.release)
+	if !issued || !releaseProof.ValidFor(steps.handoff) {
+		return errors.New("Linux v2 platform release capability does not match the durable receipt")
+	}
+	steps.releaseProof = releaseProof
+	return nil
+}
+
+// promoteClone runs the A-owned promotion hop after the release capability is
+// proven and before the durable clear (base :1532-1535).
+func (steps *linuxV2CloseGateSteps) promoteClone() error {
+	return steps.owner.promoteCloneAfterStop(steps.ctx, steps.receipt, *steps.release)
+}
+
+// clearJournal clears the exact receipt-bound journal entry with the opaque
+// leaf release, only after the durable receipt and its acknowledgement
+// (base :1536-1543).
+func (steps *linuxV2CloseGateSteps) clearJournal() error {
+	if steps.clearDone {
+		return nil
+	}
+	if err := steps.owner.clearAfterReceipt(steps.handoff, *steps.release); err != nil {
+		return err
+	}
+	steps.owner.mu.Lock()
+	steps.owner.clearDone = true
+	steps.owner.mu.Unlock()
+	return nil
+}
+
+// releaseHelper releases the helper only after the durable Store clear and
+// resolves a lost release acknowledgement through the exact receipt-bound
+// anchor retirement readback (base :1544-1566).
+func (steps *linuxV2CloseGateSteps) releaseHelper() error {
+	if steps.mirrorStop || steps.helperReleased {
+		return nil
+	}
+	owner := steps.owner
+	if err := retryMutation(func() error { return owner.helperControl().ReleaseAfterClear(steps.ctx, steps.releaseProof) }); err != nil {
+		// A lost helper response is resolved only by the anchor's exact
+		// receipt-bound retirement readback; no release is retried through a
+		// replacement helper or numeric PID.
+		if retireErr := owner.retireAnchorRun(steps.ctx, steps.handoff, steps.releaseProof); retireErr != nil {
+			return errors.Join(fmt.Errorf("release Linux v2 helper only after opaque Store clear: %w", err),
+				fmt.Errorf("read back exact anchor retirement after lost helper release ACK: %w", retireErr))
+		}
+		owner.mu.Lock()
+		owner.helperReleased = true
+		owner.anchorRetired = true
+		owner.mu.Unlock()
+		steps.helperReleased = true
+		steps.anchorRetired = true
+		return nil
+	}
+	owner.mu.Lock()
+	owner.helperReleased = true
+	owner.mu.Unlock()
+	steps.helperReleased = true
+	return nil
+}
+
+// retireAnchor retires the exact anchor run after the durable clear
+// (base :1567-1574).
+func (steps *linuxV2CloseGateSteps) retireAnchor() error {
+	if steps.anchorRetired {
+		return nil
+	}
+	if err := steps.owner.retireAnchorRun(steps.ctx, steps.handoff, steps.releaseProof); err != nil {
+		return err
+	}
+	steps.owner.mu.Lock()
+	steps.owner.anchorRetired = true
+	steps.owner.mu.Unlock()
+	return nil
+}
+
+// settle marks the owner released once every step above completed
+// (base :1575-1578).
+func (steps *linuxV2CloseGateSteps) settle() error {
+	steps.owner.mu.Lock()
+	steps.owner.ownerReleased = true
+	steps.owner.mu.Unlock()
 	return nil
 }
 
@@ -1720,7 +1948,7 @@ func (owner *linuxV2ProcessOwner) promoteCloneAfterStop(ctx context.Context, sto
 		owner.clonePromotion = &copy
 		owner.mu.Unlock()
 	}
-	if err := runLinuxV2MutationRetry(func() error {
+	if err := retryMutation(func() error {
 		return owner.invocation.Callbacks.RecordLinuxClonePromotion(promotion.Clone())
 	}); err != nil {
 		return fmt.Errorf("persist A-owned Linux clone promotion receipt: %w", err)
@@ -1738,7 +1966,7 @@ func (owner *linuxV2ProcessOwner) retainUnpromotedClone(ctx context.Context) err
 		return nil
 	}
 	owner.mu.Unlock()
-	if err := retryLinuxV2(func() error { return owner.invocation.Callbacks.RetainUnpromotedLinuxClone(ctx) }); err != nil {
+	if err := retryMutation(func() error { return owner.invocation.Callbacks.RetainUnpromotedLinuxClone(ctx) }); err != nil {
 		return err
 	}
 	owner.mu.Lock()
@@ -1760,9 +1988,9 @@ func (owner *linuxV2ProcessOwner) recordHelperExitBeforeNoPrepareAbort(
 		}
 		return reservation, nil
 	}
-	if err := runLinuxV2JournalMutation(func(expected state.LinuxCgroupReservation) error {
-		return owner.invocation.Callbacks.RecordHelperExit(expected, helperExit)
-	}, reservation); err != nil {
+	if err := retryMutation(func() error {
+		return owner.invocation.Callbacks.RecordHelperExit(reservation.Clone(), helperExit)
+	}); err != nil {
 		return state.LinuxCgroupReservation{}, fmt.Errorf("durably record exact no-Prepare helper wait before leaf removal: %w", err)
 	}
 	copy := helperExit
@@ -1811,7 +2039,7 @@ func (owner *linuxV2ProcessOwner) abortNoPrepareReservationAfterHelperExit(
 		owner.abortProof = &copy
 		owner.mu.Unlock()
 	}
-	if err := runLinuxV2MutationRetry(func() error {
+	if err := retryMutation(func() error {
 		return owner.invocation.Callbacks.AbortReservation(reservation.Clone(), proof.Clone())
 	}); err != nil {
 		return state.LinuxCgroupReservation{}, authority.LinuxCgroupReservationAbortProof{}, err
@@ -1961,7 +2189,7 @@ func (owner *linuxV2ProcessOwner) finalizeNoPrepareAbort(ctx context.Context, ev
 	if err != nil {
 		return fmt.Errorf("complete exact no-Prepare helper-exit/leaf-abort Store sequence: %w", err)
 	}
-	if err := retryLinuxV2(func() error {
+	if err := retryMutation(func() error {
 		return owner.anchor.RetireAbortedHelper(ctx, owner.grant.RunKey, owner.grant.Fence, helperIdentity, proof)
 	}); err != nil {
 		return fmt.Errorf("retire anchor helper only after durable no-Prepare abort: %w", err)
@@ -2019,7 +2247,7 @@ func (owner *linuxV2ProcessOwner) ensureCommitReadback() error {
 	if handoff == nil || gate == nil {
 		return errors.New("Linux v2 handoff commit outcome is unknown without the exact gate and handoff")
 	}
-	if err := runLinuxV2MutationRetry(func() error {
+	if err := retryMutation(func() error {
 		return owner.invocation.Callbacks.CommitHandoff(handoff.Clone(), gate.ObservedAt)
 	}); err != nil {
 		return fmt.Errorf("replay exact Linux v2 handoff commit after unknown acknowledgement: %w", err)
@@ -2064,14 +2292,14 @@ func (owner *linuxV2ProcessOwner) clearAfterReceipt(handoff authority.Supervisor
 	committed := owner.journalCommitted
 	owner.mu.Unlock()
 	if committed {
-		if err := runLinuxV2MutationRetry(func() error {
+		if err := retryMutation(func() error {
 			return owner.invocation.Callbacks.ClearProcessDetailsV2(handoff.TargetPID, handoff.TargetIdentity, release)
 		}); err != nil {
 			return fmt.Errorf("clear committed Linux v2 process with opaque leaf release: %w", err)
 		}
 		return nil
 	}
-	if err := runLinuxV2MutationRetry(func() error {
+	if err := retryMutation(func() error {
 		return owner.invocation.Callbacks.ClearHandoffV2(handoff, release)
 	}); err != nil {
 		return fmt.Errorf("clear pending Linux v2 handoff with opaque leaf release: %w", err)
@@ -2083,7 +2311,7 @@ func (owner *linuxV2ProcessOwner) retireAnchorRun(ctx context.Context, handoff a
 	// The anchor owns an independent helper/leaf pin. It may retire only after
 	// State has durably cleared the exact receipt-bound RunJournal entry.
 	helper := authority.LinuxCgroupProcessIdentity{PID: handoff.SupervisorPID, Identity: handoff.SupervisorIdentity}
-	if err := retryLinuxV2(func() error { return owner.anchor.RetireHelper(ctx, owner.grant, helper, proof) }); err != nil {
+	if err := retryMutation(func() error { return owner.anchor.RetireHelper(ctx, owner.grant, helper, proof) }); err != nil {
 		return fmt.Errorf("retire exact cleared Linux v2 anchor run: %w", err)
 	}
 	return nil
@@ -2119,11 +2347,12 @@ func (owner *linuxV2ProcessOwner) finalizePreGate(ctx context.Context) error {
 	if err := candidate.Validate(); err != nil {
 		return fmt.Errorf("construct exact authenticated Linux pre-gate stop receipt: %w", err)
 	}
-	var receipt authority.LinuxCgroupPreGateStopReceipt
 	owner.mu.Lock()
+	reservation := owner.reservation
 	receiptPersisted := owner.reservation.PreGateStopReceipt != nil
+	var cachedReceipt authority.LinuxCgroupPreGateStopReceipt
 	if receiptPersisted {
-		receipt = owner.reservation.PreGateStopReceipt.Clone()
+		cachedReceipt = owner.reservation.PreGateStopReceipt.Clone()
 	}
 	preGateAcked := owner.preGateReceiptAcked
 	preGateRelease := owner.preGateRelease
@@ -2131,103 +2360,204 @@ func (owner *linuxV2ProcessOwner) finalizePreGate(ctx context.Context) error {
 	helperReleased := owner.helperReleased
 	anchorRetired := owner.anchorRetired
 	owner.mu.Unlock()
+	var receipt authority.LinuxCgroupPreGateStopReceipt
 	if receiptPersisted {
+		receipt = cachedReceipt
 		if !receipt.Equal(candidate) {
 			return errors.New("cached Linux v2 pre-gate receipt differs from exact physical-stop evidence")
 		}
 	} else {
 		receipt = candidate
-		if err := runLinuxV2PreGateReceiptMutation(owner.invocation.Callbacks.RecordPreGateStopReceipt, owner.reservation, receipt); err != nil {
-			return fmt.Errorf("persist authenticated Linux v2 pre-gate stop receipt: %w", err)
-		}
-		owner.mu.Lock()
-		owner.reservation.PreGateStopReceipt = cloneLinuxV2PreGateReceipt(&receipt)
-		owner.mu.Unlock()
 	}
-	if !preGateAcked {
-		var firstAckError error
-		ackErr := retryLinuxV2(func() error {
-			err := owner.helper.Control.AcknowledgePreGateStopReceipt(ctx, receipt)
-			if err != nil && firstAckError == nil {
-				firstAckError = err
-			}
-			return err
-		})
-		if firstAckError != nil {
-			owner.captureWitnessDropStatus()
-		}
-		if ackErr != nil {
-			return fmt.Errorf("acknowledge durable Linux v2 pre-gate stop receipt: %w", ackErr)
-		}
-		owner.mu.Lock()
-		owner.preGateReceiptAcked = true
-		owner.mu.Unlock()
+	return owner.runClosePipeline(&linuxV2ClosePreGateSteps{
+		owner: owner, ctx: ctx, reservation: reservation, receipt: receipt,
+		receiptPersisted: receiptPersisted, receiptAcked: preGateAcked,
+		release: preGateRelease, clearDone: clearDone,
+		helperReleased: helperReleased, anchorRetired: anchorRetired,
+	})
+}
+
+// linuxV2ClosePreGateSteps is the pre-gate path's step set: the durably armed
+// never-created reservation, its authenticated pre-gate receipt and the
+// distinct pre-gate removal capability. Its capability claim sits after the
+// clear, exactly as base finalizePreGate ordered it, and it has no promotion
+// hop.
+type linuxV2ClosePreGateSteps struct {
+	owner *linuxV2ProcessOwner
+	ctx   context.Context
+
+	reservation      state.LinuxCgroupReservation
+	receipt          authority.LinuxCgroupPreGateStopReceipt
+	receiptPersisted bool
+
+	release      *platform.LinuxCgroupV2Release
+	releaseProof authority.LinuxCgroupPreGateReleaseProof
+
+	receiptAcked   bool
+	clearDone      bool
+	helperReleased bool
+	anchorRetired  bool
+}
+
+// claimsCapabilityAfterClear reports the pre-gate claim position: base
+// finalizePreGate cleared the durable reservation before it consumed the
+// pre-gate release proof.
+func (steps *linuxV2ClosePreGateSteps) claimsCapabilityAfterClear() bool { return true }
+
+// persistReceipt persists the authenticated pre-gate receipt when it is not
+// durable yet and publishes it to the owner's reservation (base :2138-2146).
+func (steps *linuxV2ClosePreGateSteps) persistReceipt() error {
+	if steps.receiptPersisted {
+		return nil
 	}
-	// Pre-gate release uses a distinct opaque proof and helper acknowledgement;
-	// never pass the gate-bound handoff release method or a generic receipt.
-	authorization := platform.LinuxCgroupV2PreGateRemovalAuthorization{
-		Receipt: receipt, Secret: owner.reservation.Secret, LauncherGrantPossible: true,
+	if err := retryMutation(func() error {
+		return steps.owner.invocation.Callbacks.RecordPreGateStopReceipt(steps.reservation.Clone(), steps.receipt.Clone())
+	}); err != nil {
+		return fmt.Errorf("persist authenticated Linux v2 pre-gate stop receipt: %w", err)
 	}
-	if preGateRelease == nil {
-		release, removeErr := owner.leaf.RemoveAfterPreGateStopReceipt(ctx, authorization)
-		if removeErr != nil {
-			release, removeErr = owner.parent.CompletePreGateRemovalAfterReceipt(ctx, *owner.reservation.LeafIdentity, authorization)
+	steps.reservation.PreGateStopReceipt = cloneLinuxV2PreGateReceipt(&steps.receipt)
+	steps.owner.mu.Lock()
+	steps.owner.reservation.PreGateStopReceipt = steps.reservation.PreGateStopReceipt
+	steps.owner.mu.Unlock()
+	return nil
+}
+
+// acknowledgeReceipt acknowledges the durable pre-gate stop receipt and
+// captures the first attempt's failure as a witness drop (base :2147-2163).
+func (steps *linuxV2ClosePreGateSteps) acknowledgeReceipt() error {
+	if steps.receiptAcked {
+		return nil
+	}
+	owner := steps.owner
+	var firstAckError error
+	ackErr := retryMutation(func() error {
+		err := owner.helperControl().AcknowledgePreGateStopReceipt(steps.ctx, steps.receipt)
+		if err != nil && firstAckError == nil {
+			firstAckError = err
 		}
-		if removeErr != nil {
-			return fmt.Errorf("remove authenticated no-gate Linux v2 leaf: %w", removeErr)
-		}
-		preGateRelease = &release
-		owner.mu.Lock()
-		owner.preGateRelease = preGateRelease
-		owner.mu.Unlock()
+		return err
+	})
+	if firstAckError != nil {
+		owner.captureWitnessDropStatus()
 	}
-	if !clearDone {
-		if err := runLinuxV2MutationRetry(func() error {
-			return owner.invocation.Callbacks.ClearReservationV2(owner.reservation, *preGateRelease)
-		}); err != nil {
-			return fmt.Errorf("clear exact no-gate Linux v2 reservation with opaque release: %w", err)
-		}
-		owner.mu.Lock()
-		owner.clearDone = true
-		owner.mu.Unlock()
-	}
-	proof, issued := preGateRelease.SnapshotPreGate()
-	if !issued || !proof.ValidFor(receipt) {
-		return errors.New("Linux v2 pre-gate release capability differs from its receipt")
-	}
-	if !helperReleased {
-		if err := retryLinuxV2(func() error { return owner.helper.Control.ReleaseAfterPreGateClear(ctx, proof) }); err != nil {
-			if retireErr := owner.retireAnchorPreGate(ctx, proof); retireErr != nil {
-				return errors.Join(fmt.Errorf("release no-gate Linux v2 helper after durable clear: %w", err),
-					fmt.Errorf("read back exact anchor pre-gate retirement after lost helper release ACK: %w", retireErr))
-			}
-			owner.mu.Lock()
-			owner.helperReleased = true
-			owner.anchorRetired = true
-			owner.mu.Unlock()
-			helperReleased = true
-			anchorRetired = true
-		} else {
-			owner.mu.Lock()
-			owner.helperReleased = true
-			owner.mu.Unlock()
-			helperReleased = true
-		}
-	}
-	if !anchorRetired {
-		if err := owner.retireAnchorPreGate(ctx, proof); err != nil {
-			return err
-		}
-		owner.mu.Lock()
-		owner.anchorRetired = true
-		owner.mu.Unlock()
-	}
-	if err := owner.finalizeNoCheckoutCloneAfterRetirement(ctx, &proof, nil); err != nil {
-		return fmt.Errorf("finalize no-checkout Linux clone after exact pre-gate retirement: %w", err)
+	if ackErr != nil {
+		return fmt.Errorf("acknowledge durable Linux v2 pre-gate stop receipt: %w", ackErr)
 	}
 	owner.mu.Lock()
-	owner.ownerReleased = true
+	owner.preGateReceiptAcked = true
 	owner.mu.Unlock()
+	return nil
+}
+
+// removeLeaf removes the authenticated no-gate leaf, or proves only
+// receipt-backed pinned-parent absence, with the distinct pre-gate
+// authorization; never the gate-bound handoff release method or a generic
+// receipt (base :2164-2183).
+func (steps *linuxV2ClosePreGateSteps) removeLeaf() error {
+	if steps.release != nil {
+		return nil
+	}
+	authorization := platform.LinuxCgroupV2PreGateRemovalAuthorization{
+		Receipt: steps.receipt, Secret: steps.reservation.Secret, LauncherGrantPossible: true,
+	}
+	release, removeErr := steps.owner.leaf.RemoveAfterPreGateStopReceipt(steps.ctx, authorization)
+	if removeErr != nil {
+		release, removeErr = steps.owner.parent.CompletePreGateRemovalAfterReceipt(steps.ctx, *steps.reservation.LeafIdentity, authorization)
+	}
+	if removeErr != nil {
+		return fmt.Errorf("remove authenticated no-gate Linux v2 leaf: %w", removeErr)
+	}
+	steps.release = &release
+	steps.owner.mu.Lock()
+	steps.owner.preGateRelease = steps.release
+	steps.owner.mu.Unlock()
+	return nil
+}
+
+// clearJournal clears the exact no-gate reservation with the opaque release
+// (base :2184-2193).
+func (steps *linuxV2ClosePreGateSteps) clearJournal() error {
+	if steps.clearDone {
+		return nil
+	}
+	if err := retryMutation(func() error {
+		return steps.owner.invocation.Callbacks.ClearReservationV2(steps.reservation, *steps.release)
+	}); err != nil {
+		return fmt.Errorf("clear exact no-gate Linux v2 reservation with opaque release: %w", err)
+	}
+	steps.owner.mu.Lock()
+	steps.owner.clearDone = true
+	steps.owner.mu.Unlock()
+	return nil
+}
+
+// claimRelease snapshots the pre-gate removal capability and verifies it
+// against the exact pre-gate receipt (base :2194-2197).
+func (steps *linuxV2ClosePreGateSteps) claimRelease() error {
+	releaseProof, issued := steps.owner.preGateReleaseProof(*steps.release)
+	if !issued || !releaseProof.ValidFor(steps.receipt) {
+		return errors.New("Linux v2 pre-gate release capability differs from its receipt")
+	}
+	steps.releaseProof = releaseProof
+	return nil
+}
+
+// promoteClone is the pre-gate path's promotion hop: base finalizePreGate had
+// none, because a never-created launcher cannot own a promoted clone
+// (base :2092-2231).
+func (steps *linuxV2ClosePreGateSteps) promoteClone() error { return nil }
+
+// releaseHelper releases the pre-gate helper only after the durable clear and
+// resolves a lost release acknowledgement through the exact anchor pre-gate
+// retirement readback (base :2198-2216).
+func (steps *linuxV2ClosePreGateSteps) releaseHelper() error {
+	if steps.helperReleased {
+		return nil
+	}
+	owner := steps.owner
+	if err := retryMutation(func() error { return owner.helperControl().ReleaseAfterPreGateClear(steps.ctx, steps.releaseProof) }); err != nil {
+		if retireErr := owner.retireAnchorPreGate(steps.ctx, steps.releaseProof); retireErr != nil {
+			return errors.Join(fmt.Errorf("release no-gate Linux v2 helper after durable clear: %w", err),
+				fmt.Errorf("read back exact anchor pre-gate retirement after lost helper release ACK: %w", retireErr))
+		}
+		owner.mu.Lock()
+		owner.helperReleased = true
+		owner.anchorRetired = true
+		owner.mu.Unlock()
+		steps.helperReleased = true
+		steps.anchorRetired = true
+		return nil
+	}
+	owner.mu.Lock()
+	owner.helperReleased = true
+	owner.mu.Unlock()
+	steps.helperReleased = true
+	return nil
+}
+
+// retireAnchor retires the exact cleared pre-gate anchor run (base :2217-2224).
+func (steps *linuxV2ClosePreGateSteps) retireAnchor() error {
+	if steps.anchorRetired {
+		return nil
+	}
+	if err := steps.owner.retireAnchorPreGate(steps.ctx, steps.releaseProof); err != nil {
+		return err
+	}
+	steps.owner.mu.Lock()
+	steps.owner.anchorRetired = true
+	steps.owner.mu.Unlock()
+	return nil
+}
+
+// settle finalizes the no-checkout clone after the exact pre-gate retirement
+// and marks the owner released (base :2225-2231).
+func (steps *linuxV2ClosePreGateSteps) settle() error {
+	if err := steps.owner.finalizeNoCheckoutCloneAfterRetirement(steps.ctx, &steps.releaseProof, nil); err != nil {
+		return fmt.Errorf("finalize no-checkout Linux clone after exact pre-gate retirement: %w", err)
+	}
+	steps.owner.mu.Lock()
+	steps.owner.ownerReleased = true
+	steps.owner.mu.Unlock()
 	return nil
 }
 
@@ -2236,7 +2566,7 @@ func (owner *linuxV2ProcessOwner) retireAnchorPreGate(ctx context.Context, proof
 		return errors.New("Linux v2 pre-gate helper handle is unavailable")
 	}
 	helper := authority.LinuxCgroupProcessIdentity{PID: owner.helper.PID, Identity: owner.helper.Identity}
-	if err := retryLinuxV2(func() error { return owner.anchor.RetirePreGateHelper(ctx, owner.grant, helper, proof) }); err != nil {
+	if err := retryMutation(func() error { return owner.anchor.RetirePreGateHelper(ctx, owner.grant, helper, proof) }); err != nil {
 		return fmt.Errorf("retire exact cleared Linux v2 pre-gate anchor run: %w", err)
 	}
 	return nil
@@ -2287,7 +2617,7 @@ func (owner *linuxV2ProcessOwner) abortBeforeProducer(ctx context.Context) error
 		owner.abortProof = &copy
 		owner.mu.Unlock()
 	}
-	if err := runLinuxV2MutationRetry(func() error {
+	if err := retryMutation(func() error {
 		return owner.invocation.Callbacks.AbortReservation(reservation, proof)
 	}); err != nil {
 		return fmt.Errorf("persist exact Linux v2 no-producer abort tombstone: %w", err)
@@ -2584,11 +2914,14 @@ func (owner *linuxV2ProcessOwner) closeAfterClear() error {
 	return closeErr
 }
 
-func runLinuxV2JournalMutation[T interface{ Clone() T }](callback func(T) error, value T) error {
-	return runLinuxV2MutationRetry(func() error { return callback(value.Clone()) })
-}
-
-func runLinuxV2MutationRetry(callback func() error) error {
+// retryMutation runs one idempotent journal mutation at most twice. A first
+// attempt that reports ErrLinuxV2MutationAckLost already took durable effect
+// and lost its response, so it is never replayed and recovery owns the next
+// observation; any other first failure is retried once and both attempts are
+// joined. The value-carrying sites clone their inputs inside callback, so a
+// callback that mutates its arguments there cannot leak the mutation into the
+// retry; the clone-less sites pass the same values to both attempts.
+func retryMutation(callback func() error) error {
 	first := callback()
 	if first == nil || errors.Is(first, ErrLinuxV2MutationAckLost) {
 		return first
@@ -2598,16 +2931,6 @@ func runLinuxV2MutationRetry(callback func() error) error {
 		return nil
 	}
 	return errors.Join(first, second)
-}
-
-func retryLinuxV2(callback func() error) error { return runLinuxV2MutationRetry(callback) }
-
-func runLinuxV2ReceiptMutation(callback func(authority.SupervisorHandoff, authority.StopReceipt) error, handoff authority.SupervisorHandoff, receipt authority.StopReceipt) error {
-	return runLinuxV2MutationRetry(func() error { return callback(handoff.Clone(), cloneLinuxV2StopReceiptValue(receipt)) })
-}
-
-func runLinuxV2PreGateReceiptMutation(callback func(state.LinuxCgroupReservation, authority.LinuxCgroupPreGateStopReceipt) error, reservation state.LinuxCgroupReservation, receipt authority.LinuxCgroupPreGateStopReceipt) error {
-	return runLinuxV2MutationRetry(func() error { return callback(reservation.Clone(), receipt.Clone()) })
 }
 
 func randomLinuxV2Token(size int) (string, error) {

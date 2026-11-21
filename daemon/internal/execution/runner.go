@@ -225,6 +225,26 @@ const (
 	LinuxV2AckStageJournalCleared     = "journal_cleared"
 )
 
+// LinuxV2AckStages is the single source of the ack-stage vocabulary an
+// acknowledgement can be dropped after. Every name is live ACK-loss
+// vocabulary: the runner emits lease_armed and native_release through
+// DropAckAfter, and the native witness layer injects the remaining eight
+// through the same seam while the release acceptance consumes them. The stage
+// strings are a durable protocol surface, so App's witness validation derives
+// its membership from this list instead of repeating the names.
+var LinuxV2AckStages = [...]string{
+	LinuxV2AckStageHelperBound,
+	LinuxV2AckStageLauncherBound,
+	LinuxV2AckStageGateBound,
+	LinuxV2AckStageHandoffPrepared,
+	LinuxV2AckStageHandoffCommitted,
+	LinuxV2AckStageLeaseArmed,
+	LinuxV2AckStageCheckoutReady,
+	LinuxV2AckStageStopReceiptDurable,
+	LinuxV2AckStageNativeRelease,
+	LinuxV2AckStageJournalCleared,
+}
+
 // LinuxCloneRunOutcome is Runner's independent observation of the B process
 // before App considers an A-owned promotion. It deliberately does not use the
 // adapter's eventual Wait result, which may depend on Runner finalization.

@@ -395,7 +395,7 @@ func TestRunContinuesAfterTypedRecoveryPending(t *testing.T) {
 		finished := make(chan struct{})
 		go func() {
 			defer close(finished)
-			done <- Run(ctx, testConfig(t), WithStore(store), WithControl(control), WithWorkspace(&fakeWorkspace{}), WithStartProcess(func(context.Context, execution.Invocation, execution.Sink) (Process, error) {
+			done <- Run(ctx, testConfig(t), withStore(store), withControl(control), withWorkspace(&fakeWorkspace{}), withStartProcess(func(context.Context, execution.Invocation, execution.Sink) (Process, error) {
 				startCalls <- struct{}{}
 				return nil, errors.New("input recovery test must not start an agent")
 			}), WithLogWriter(io.Discard), func(settings *options) {
@@ -494,7 +494,7 @@ func TestRunContinuesAfterTypedRecoveryPending(t *testing.T) {
 		finished := make(chan struct{})
 		go func() {
 			defer close(finished)
-			done <- Run(ctx, testConfig(t), WithStore(store), WithControl(control), WithWorkspace(&fakeWorkspace{}), WithStartProcess(func(context.Context, execution.Invocation, execution.Sink) (Process, error) {
+			done <- Run(ctx, testConfig(t), withStore(store), withControl(control), withWorkspace(&fakeWorkspace{}), withStartProcess(func(context.Context, execution.Invocation, execution.Sink) (Process, error) {
 				return nil, errors.New("native recovery test must not start an agent")
 			}), WithLogWriter(io.Discard), func(settings *options) {
 				settings.newTimer = timers.new
@@ -589,7 +589,7 @@ func TestReconcilePendingRecoverySchedulesSnapshotBeforeBackoff(t *testing.T) {
 	finished := make(chan struct{})
 	go func() {
 		defer close(finished)
-		done <- Run(ctx, testConfig(t), WithStore(store), WithControl(control), WithWorkspace(&fakeWorkspace{}), WithStartProcess(start), WithLogWriter(io.Discard), func(settings *options) {
+		done <- Run(ctx, testConfig(t), withStore(store), withControl(control), withWorkspace(&fakeWorkspace{}), withStartProcess(start), WithLogWriter(io.Discard), func(settings *options) {
 			settings.newTimer = timers.new
 			settings.newID = ids()
 		})

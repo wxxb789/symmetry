@@ -566,8 +566,8 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       `:1174-1184`), every v2 removal receipt must carry such a proof
       (`StopReceipt.ValidForHandoff`, `authority.go:1822-1833`), and the platform constructs it
       (`daemon/internal/platform/anchor_run.go:1531`; validated at
-      `daemon/internal/execution/linux_owner_v2_linux.go:1338` and sealed into the mirror proof
-      at `:1360`); `authority.go:2027` also accepts a non-nil `LauncherExit.HelperExit`.
+      `daemon/internal/execution/linux_owner_v2_linux.go:1351` and sealed into the mirror proof
+      at `:1373`); `authority.go:2027` also accepts a non-nil `LauncherExit.HelperExit`.
       `cloneLinuxOwnerHelperV2StopEvidence` (`helper_v2_stop.go:1540-1573`) instead drops every
       nested exit it copies through `cloneLinuxOwnerAnchorExitProof`
       (`anchor_server.go:44-49` nils `HelperExit`): `Proof.LauncherExit.HelperExit`,
@@ -848,8 +848,8 @@ instead of appended.
       process's pipe, so the goroutine outlives the call, belongs to no WaitGroup, and contradicts
       `daemon/AGENTS.md` ("Every goroutine has an owner and exit path"). Found by the 2026-11-21
       daemon audit (finding F15). Fix direction: prefer the context-aware write path the runner
-      already implements -- `internal/execution/runner.go:1380` `WriteInputContext` closes the stdin
-      write end when its context is cancelled (`:1410-1414`) -- which `internal/app` cannot reach
+      already implements -- `internal/execution/runner.go:1400` `WriteInputContext` closes the stdin
+      write end when its context is cancelled (`:1430-1434`) -- which `internal/app` cannot reach
       today only because its `Process` interface (`app.go:232-233`) declares `WriteInput([]byte)
       error` alone; otherwise close the pipe's write end on timeout (the runner owns the pipe), or
       track the goroutine in `daemon.workers` with a documented bound and assert its exit at
@@ -1094,11 +1094,11 @@ instead of appended.
       untested (2026-11-21, branch `refactor/rf-w4-03-runner-decomposition`; plan
       `docs/plans/2026-11-21-rf-w4-03-runner-decomposition-plan.md`). Two mutants on a scratch
       copy over `./internal/execution/` stayed green under WSL: flipping the `closeOwnerOnce(false)`
-      argument in `closeContainmentOwnerLocked` (`daemon/internal/execution/runner.go:2393`) to
+      argument in `closeContainmentOwnerLocked` (`daemon/internal/execution/runner.go:2413`) to
       `true` — no test distinguishes the flag, and the pending-handoff owner does not implement
       `containmentUnprovenCallbackSetter`, so a future edit could flip it silently — and swapping
       the `containmentAuthorityUncertain` / `containmentAuthority != nil` guards in
-      `persistReceiptOrAbort` (`:2143`, `:2146`), whose check order is the base order
+      `persistReceiptOrAbort` (`:2163`, `:2166`), whose check order is the base order
       (pre-existing gap: base had the same untested order). Behaviour is correct at HEAD; this is
       test coverage only, no code change. Found by the opus round-1 review of PR #193. Owner:
       W4-12/W4-13 test work.
@@ -1230,6 +1230,32 @@ instead of appended.
       are pinned by `daemon/internal/app/goal_delivery_test.go`:
       `TestAbandonGoalSessionBoundsOversizedUncertainReason` (the interior-invalid-byte case)
       and `TestBoundedGoalSessionUncertainReason` (the within-budget invalid-byte case).
+
+## Daemon state: test-only `ControlProjection` surface (rf-w3-08 survey)
+
+- [ ] Revalidate and remove `GoalSessionJournal.ControlProjection`
+      (`daemon/internal/state/goal_session.go:412`) together with its
+      `goalSessionControlProjection` type (`:308`, unexported by rf-w3-08). `git grep -nw
+      ControlProjection` matches only the method definition, the doc comment at `:411`, the doc
+      comment at `:185` that promises callers ("callers must use ControlProjection when building a
+      control request") which do not exist, and two in-package test call sites
+      (`goal_session_test.go:707`, `:1340`); there is no production consumer at this branch's head
+      or at its base. It was not deleted in the rf-w3-08 apply stage because the test that pins it,
+      `TestGoalSessionControlProjectionOmitsRawNativeIdentity`, is a contract-pinning proof that
+      the projection carries no raw native identity — deleting the surface would retire that test.
+      A follow-up owner must decide between wiring the intended production consumer and retiring
+      the surface together with its test under an explicit contract amendment.
+- [ ] The same retention question covers the other exported state methods whose signatures name
+      now-unexported types: `Store.CheckGoalSessionLineage`
+      (`daemon/internal/state/goal_session.go:576`, `goalSessionLineageStatusValue`) and
+      `Store.QueueLateGoalUsage` (`daemon/internal/state/goal_delivery.go:829`,
+      `lateGoalUsageLedger`). Both stay legal Go through inference (`status, err :=
+      store.CheckGoalSessionLineage(key)`), neither has an out-of-package caller at this branch's
+      head, and rf-w3-08 kept them rather than widening its slice; this entry tracks the retained
+      surface so a follow-up owner can decide unexport/retire/wire for all three together.
+      `Store.EnsureGoalSessionLineageAvailable` (`:592`, `goalSessionLineageKey`) is the same
+      shape; the W3-07 follow-up PR #215 removes it (the rf-w1-06 dead-code candidate above), so
+      its signature question resolves with that removal rather than here.
 
 ## Daemon: the durable terminal-transition payload has no capacity policy (rf-w3-09 review W309-R2)
 
