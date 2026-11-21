@@ -33,7 +33,7 @@ export interface WorkSurfaceNavigation {
   createDisabled?: boolean;
 }
 
-export interface ViewLinkOptions {
+interface ViewLinkOptions {
   label: string;
   className: string;
   "aria-current": "page" | undefined;
@@ -66,7 +66,7 @@ function useWorkFocusRestore<T extends HTMLElement>() {
     let focusedWork: { itemId: string; node: HTMLElement } | null = null;
     const track = (event: FocusEvent) => {
       const link = event.target instanceof Element ? event.target.closest<HTMLElement>("[data-work-item]") : null;
-      focusedWork = link !== null && root.contains(link) ? { itemId: link.dataset["workItem"] ?? "", node: link } : null;
+      focusedWork = link !== null && root.contains(link) ? { itemId: link.dataset.workItem ?? "", node: link } : null;
     };
     // The restore keys on the focused node itself being detached, so a commit
     // that only re-renders the surface never moves focus.
@@ -83,7 +83,7 @@ function useWorkFocusRestore<T extends HTMLElement>() {
       // fell back to the document is restored.
       if (active instanceof HTMLElement && active !== document.body && active !== document.documentElement && active.isConnected) return;
       for (const link of root.querySelectorAll<HTMLElement>("[data-work-item]")) {
-        if (link.dataset["workItem"] === previous.itemId) {
+        if (link.dataset.workItem === previous.itemId) {
           link.focus();
           return;
         }
@@ -181,7 +181,7 @@ function WorkToolbar({ project, navigation }: { project: Project; navigation: Wo
         <option value="">{saved.views.length === 0 ? "No saved views" : "Saved views"}</option>
         {saved.views.map((entry) => <option key={entry.name} value={entry.name}>{entry.name}</option>)}
       </select>
-      <input type="text" aria-label="Saved view name" placeholder="View name" value={name} onChange={(event) => setName(event.currentTarget.value)} />
+      <input type="text" aria-label="Saved view name" placeholder="View name" value={name} onChange={(event) => { setName(event.currentTarget.value); }} />
       <button className="button" type="button" disabled={name.trim() === ""} onClick={() => { saved.save(name, search); setName(""); }}>Save view</button>
       {activeView !== "" && <button className="button" type="button" onClick={() => { saved.remove(activeView); focusWorkControl("work-saved-view-select"); }}>Delete saved view</button>}
     </div>
@@ -270,7 +270,7 @@ function WorkBoard({ items, search, resources, projectStatus }: { items: readonl
       moveBoardFocus(event);
       return;
     }
-    const itemId = card.querySelector<HTMLElement>("[data-work-item]")?.dataset["workItem"];
+    const itemId = card.querySelector<HTMLElement>("[data-work-item]")?.dataset.workItem;
     const item = items.find((candidate) => candidate.id === itemId);
     if (item === undefined) return;
     moveFocusedCard(event, item, direction);
@@ -340,11 +340,11 @@ function moveBoardFocus(event: KeyboardEvent<HTMLElement>) {
   const card = target.closest("[data-board-card]");
   if (!(card instanceof HTMLElement)) return;
   const cards = Array.from(event.currentTarget.querySelectorAll<HTMLElement>("[data-board-card]"));
-  const column = card.dataset["boardColumn"] ?? "";
-  const index = Number(card.dataset["boardIndex"] ?? "0");
+  const column = card.dataset.boardColumn ?? "";
+  const index = Number(card.dataset.boardIndex ?? "0");
   const next = vertical === 0
     ? neighbourCard(cards, column, index, horizontal)
-    : cards.find((entry) => entry.dataset["boardColumn"] === column && Number(entry.dataset["boardIndex"]) === index + vertical);
+    : cards.find((entry) => entry.dataset.boardColumn === column && Number(entry.dataset.boardIndex) === index + vertical);
   if (next) {
     event.preventDefault();
     next.querySelector("a")?.focus();
@@ -353,7 +353,7 @@ function moveBoardFocus(event: KeyboardEvent<HTMLElement>) {
 
 /** Nearest card in the neighbouring column, clamped to that column's length. */
 function neighbourCard(cards: readonly HTMLElement[], column: string, index: number, step: number): HTMLElement | undefined {
-  const columns = [...new Set(cards.map((entry) => entry.dataset["boardColumn"] ?? ""))];
-  const neighbour = cards.filter((entry) => entry.dataset["boardColumn"] === columns[columns.indexOf(column) + step]);
+  const columns = [...new Set(cards.map((entry) => entry.dataset.boardColumn ?? ""))];
+  const neighbour = cards.filter((entry) => entry.dataset.boardColumn === columns[columns.indexOf(column) + step]);
   return neighbour[Math.min(index, neighbour.length - 1)];
 }
