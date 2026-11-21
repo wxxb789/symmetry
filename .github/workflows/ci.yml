@@ -29,9 +29,11 @@ jobs:
   # reproduce.
   #
   # And `run-citations`: a change to a document the citation existence gate audits -
-  # `docs/runbooks/**`, `docs/design/quality.md` or `docs/archive/CLOSED-TODO.md` -
-  # or to the gate's own program, its fixture suite or the shared `revision_scope.py`,
-  # gates the citation-existence job below. The audited documents are the documents a
+  # the corpus in `scripts/ci/audited_paths.py`: `docs/runbooks/**`,
+  # `docs/design/quality.md` or `docs/archive/CLOSED-TODO.md`, the document family the
+  # classifier derives from that same tuple - or to the gate's own program, its fixture
+  # suite, the shared `revision_scope.py` or the corpus module itself, gates the
+  # citation-existence job below. The audited documents are the documents a
   # documentation-only pull request can change, so this too is a separate output
   # rather than part of run-heavy, and the self-triggering tool paths run the gate end
   # to end exactly the same way.
@@ -51,48 +53,7 @@ jobs:
         id: paths
         if: github.event_name == 'pull_request'
         shell: bash
-        run: |
-          python3 - <<'PY'
-          import os
-          import subprocess
-
-          # --no-renames keeps renames and deletions deterministic: a path moved
-          # across the documentation boundary still reports both sides.
-          paths = subprocess.check_output(
-              ["git", "diff", "--name-only", "--no-renames", "-z", "HEAD^1", "HEAD"]
-          ).split(b"\0")
-          run_heavy = any(
-              path and not (path.startswith(b"docs/") or path.endswith(b".md"))
-              for path in paths
-          )
-          run_records = any(
-              path.startswith(b"docs/evaluations/")
-              or path.startswith(b"docs/evidence/")
-              or path == b"scripts/ci/model-routing-record-sanitize.py"
-              or path == b"scripts/ci/check-record-cleanliness.py"
-              or path == b"scripts/ci/revision_scope.py"
-              for path in paths
-          )
-          # The documents the citation existence gate audits, plus the gate's own
-          # program, its fixture suite and the shared revision-range module it reads;
-          # the gate keeps its own copy of the corpus in
-          # scripts/ci/check-citation-existence.py, and the two are held together by
-          # scripts/ci/test-ci-changed-path-classifier.py, which routes a fixture diff
-          # through each audited path and through each tool path.
-          run_citations = any(
-              path.startswith(b"docs/runbooks/")
-              or path == b"docs/design/quality.md"
-              or path == b"docs/archive/CLOSED-TODO.md"
-              or path == b"scripts/ci/check-citation-existence.py"
-              or path == b"scripts/ci/test-check-citation-existence.py"
-              or path == b"scripts/ci/revision_scope.py"
-              for path in paths
-          )
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-              output.write(f"run-heavy={'true' if run_heavy else 'false'}\n")
-              output.write(f"run-records={'true' if run_records else 'false'}\n")
-              output.write(f"run-citations={'true' if run_citations else 'false'}\n")
-          PY
+        run: python3 scripts/ci/classify-changed-paths.py
 
   # The sanitize tool's own root-only `--check` over records a change adds or
   # modifies. It is deliberately independent of the heavy matrix - the change it
@@ -130,11 +91,13 @@ jobs:
   # the cleanliness gate above it is deliberately independent of the heavy matrix: the
   # documents it audits are documents a documentation-only pull request can change,
   # and the classifier also fires it for a change to the gate's own program, its
-  # fixture suite or the revision-range module, so a change to either of those runs
-  # the gate end to end.
-  # The audited corpus is the check's own (`AUDITED_PATHS`); the classifier above only
-  # decides whether this job runs, and `test-ci-changed-path-classifier.py` holds the
-  # two together. `fetch-depth: 0` gives the job the comparison base the gate needs.
+  # fixture suite, the revision-range module or the corpus module, so a change to any
+  # of those runs the gate end to end.
+  # The audited corpus is `scripts/ci/audited_paths.py`: the gate imports its
+  # `AUDITED_PATHS` and the classifier above derives the document family it gates from
+  # the same tuple, so the documents this job audits and the changes that start it
+  # cannot drift apart. `fetch-depth: 0` gives the job the comparison base the gate
+  # needs.
   citation-existence:
     needs: changes
     if: needs.changes.outputs.run-citations == 'true'
@@ -1817,9 +1780,9 @@ jobs:
       # and that the remaining exclusions are still load-bearing.
       - run: python3 scripts/ci/test-no-legacy-routes-audit.py
       # The `changes` job's classifier decides which jobs run at all, and this job is
-      # the one place in this workflow that runs unconditionally: the fixture test
-      # extracts the classifier program out of the workflow, routes fixture diffs
-      # through it and pins the routing those outputs gate.
+      # the one place in this workflow that runs unconditionally: the fixture test runs
+      # the classifier program that step invokes (`scripts/ci/classify-changed-paths.py`),
+      # routes fixture diffs through it and pins the routing those outputs gate.
       - run: python3 scripts/ci/test-ci-changed-path-classifier.py
 
       # The browser-suite inventory (refactor slice W2-01): every

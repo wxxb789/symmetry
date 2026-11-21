@@ -134,10 +134,13 @@ import tempfile
 # way from any working directory.
 import revision_scope
 
+# The audited corpus is the shared one: the changed-path classifier derives the document
+# family it gates from the same tuple, so the documents a run audits and the changes that
+# start the run cannot drift apart. `AUDITED_PATHS` is the operator runbooks, the design
+# file the runbooks point at as the canonical gate list, and the archived closures.
+from audited_paths import AUDITED_PATHS
+
 PROGRAM = "check-citation-existence"
-# The documents this gate audits: the operator runbooks, the design file the runbooks
-# point at as the canonical gate list, and the archived closures.
-AUDITED_PATHS = ("docs/runbooks", "docs/design/quality.md", "docs/archive/CLOSED-TODO.md")
 
 BACKTICKED = re.compile(r"`([^`\n]+)`")
 # The line suffix, with an optional column (``file:line:col`` is what compilers, test
