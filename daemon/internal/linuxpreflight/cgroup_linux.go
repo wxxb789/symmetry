@@ -25,9 +25,10 @@ import (
 // the app package (internal/app/probe.go), which also validates the same set in
 // the config loader (internal/config/config.go); linuxpreflight must not import
 // internal/app and that file is outside this extraction, so this is a verbatim
-// copy. It has to stay in lockstep with both owners, is pinned by
-// TestNativeRuntimeSelectionVocabularyMatchesTheConfiguredKinds, and drift is
-// fail-closed: a kind this copy does not know is rejected here, never admitted.
+// copy. It has to stay in lockstep with both owners; it is pinned by
+// TestNativeRuntimeSelectionVocabularyMatchesTheConfiguredKinds to a literal
+// table, not to the app-side copy, so drift between the copies is undetected. A
+// kind this copy does not know is still rejected here, never admitted.
 func configuredHarnessKind(value string) (harness.Kind, error) {
 	switch value {
 	case config.RuntimeHarnessGeneric:

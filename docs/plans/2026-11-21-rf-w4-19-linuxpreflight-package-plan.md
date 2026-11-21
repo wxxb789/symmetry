@@ -1,7 +1,9 @@
 # rf-w4-19 linuxpreflight package plan — extract the Linux host preflight verifiers out of package app
 
 Contract: the GDD goal contract `goal-rf-w4-19-linuxpreflight-package.md` (2026-11-21, at the GDD
-state root). Baseline for every coordinate in this plan: HEAD
+state root), sha256 `b5a2176e7ca6a20b9424303c2ca026ea653cbe1daf84391d6d6f4ca97cbaafba` (the BOUND
+binding; recorded here per round-1 review P3-1; `sha256sum` matches the `in-flight` row of the GDD
+state root's `refactor/arch-decision-2-contracts.tsv`). Baseline for every coordinate in this plan: HEAD
 `7954836892f39bc8a92abe11e5efcb5b3bac3476` (the dispatch base, the commit that landed W3-06/#166;
 `origin/main` has since moved to `52bdffd2` — see "Recorded decisions"); the branch tree is that
 commit plus this slice. Area: `daemon/internal/linuxpreflight/**` (new),
@@ -110,10 +112,13 @@ Alternatives considered and rejected (recorded, with the evidence that decided t
 | Move the vocabulary into `internal/harness` and rewire its consumers | correct long-term home, but `internal/harness`, `internal/app/probe.go` and `internal/app/goal_admission.go` are outside this slice's owned set |
 | Keep the whole verifier in `app` | contradicts the contract's observable pass condition (the verifiers must be in the package behind its entry points) |
 
-Drift is fail-closed (a kind the copy does not know is rejected at step 6, never admitted), and the
-copy is pinned by the new table test `TestNativeRuntimeSelectionVocabularyMatchesTheConfiguredKinds`
-(all seven configured kinds resolve; the unknown-kind message is byte-exact). The copied message is
-byte-identical to `internal/app/probe.go:140` and `internal/config/config.go:323` (verified).
+New kinds fail closed (a kind the copy does not know is rejected at step 6, never admitted); the
+reverse direction is not guarded — if `app` dropped a kind from its native-goal set, preflight would
+still accept it, though the runtime would still refuse it. The copy is pinned by the new table test
+`TestNativeRuntimeSelectionVocabularyMatchesTheConfiguredKinds` to a hard-coded seven-kind literal
+table, **not** to `app`'s copy, so drift between the two copies goes undetected (round-1 review
+P3-2 corrected this paragraph's earlier "drift fail-closed and pinned" wording). The copied message
+is byte-identical to `internal/app/probe.go:140` and `internal/config/config.go:323` (verified).
 
 Step-6 detail preserved verbatim: the `|| kind == "generic"` disjunct is unreachable, because the
 native-goal set already excludes generic; it is kept byte-for-byte and the M2 mutation below confirms
@@ -123,7 +128,8 @@ Residual risk and follow-up candidate (recorded, not owned here): the tree now c
 of the kind table (`internal/config`, `internal/app/probe.go`, this package). The clean fix is one
 `internal/harness` vocabulary (`ParseKind` plus the native-goal predicate) consumed by all three; that
 touches `internal/harness`, `internal/app/probe.go` and `internal/app/goal_admission.go`, all outside
-this slice's owned set, so it is left to a separate increment.
+this slice's owned set, so it is left to a separate increment. The conductor recorded this follow-up
+in `docs/TODO.md` ("Deferred review findings (PR #197)") per round-1 review P3-2.
 
 ## Public / API shape
 
@@ -260,7 +266,9 @@ appear in the table above; the declaration-set table in the evidence section acc
   consumes `VerifyLinuxOwnerInstallation`; it is outside `daemon/internal/app/**` and
   `daemon/cmd/**`, but leaving it would break the module build and keeping an `app` wrapper would
   contradict "no backward compatibility" and the failure control. One import + call rename (and the
-  now-unused `internal/app` import is dropped from that file).
+  now-unused `internal/app` import is dropped from that file). The conductor ACCEPTS this
+  owned-files scope extension because the alternative is a module that does not compile:
+  **conductor-accepted scope extension (review P3-3)**.
 - **`linux_owner_preflight_unsupported.go` is deleted.** The owned set names the `_linux.go` file and
   its tests; the unsupported stub defines the same exported API in `app` and cannot survive the move
   (it would shadow the package or keep the verifier surface in `app`). Its text is preserved in
@@ -418,6 +426,76 @@ ignore-rule notes); `check-record-cleanliness.py` same range exit 0; fixture sui
 `test-check-citation-existence.py` (49 tests) and `test-check-record-cleanliness.py` (19 tests)
 exit 0 each; `git diff --check` exit 0;
 host-path and backslash-u greps over `origin/main...HEAD` and the worktree diff 0 matches.
+
+## Round-1 review fix pass (2026-11-21 — `197-opus-review-1.md`, Opus, head `1bd89ac9`)
+
+The round-1 review returned three findings (P2-1 required, P3-1 required, P3-2 and P3-3 conductor
+records) and confirmed the refactor itself (declarations, literals, call sites, builds, R9, test
+move). Its verdict sentence: "Amendment 1's required proof is incomplete: the test does not detect a
+dropped `value.StateDir = stateDir`, as mutant M4 survives (P2-1)."
+
+### P2-1 — the pi state-dir subtest now observes the normalized value
+
+The old third subtest ("pi relative path normalizes before validation") expected the
+config-validation refusal for missing adapter metadata, which is the same error whether or not the
+assignment ran, so it pinned the branch gate, the refusal wrapping and the check order but not the
+applied value. It is replaced by
+`pi relative path reaches the Store at the normalized absolute path`
+(`daemon/internal/app/linux_owner_preflight_state_dir_app_test.go:63-105`; the file is 106 L): the
+subtest `t.Chdir`s to a scratch working directory, sets `StateDir` to the absolute temporary path
+with its leading separator stripped (so the normalized path is that same writable temporary
+directory while the unnormalized path resolves under the working directory), gives the config the
+complete non-legacy pi metadata plus the native `git_worktree` workspace policy `Validate` demands,
+omits `WithStore`, and asserts the first-enrollment refusal (which can only fire after `state.New`
+succeeded) plus that the Store directory exists at the normalized absolute path and not under the
+working directory. No production seam was added: the observation is `state.New`'s directory effect
+at `app.go:552`, and no privilege is needed because the routed path is a writable temporary
+directory, not the filesystem root. The three refusal/branch subtests of the table are unchanged.
+
+Mutation evidence (WSL Ubuntu-24.04, `GOFLAGS=-buildvcs=false`, applied in place and reverted after
+each run; command `go test -count=1 -v -run TestRunNormalizesLinuxV2NativeOwnerStateDir
+./internal/app/`):
+
+| Mutant | Edit | Result |
+| --- | --- | --- |
+| M4 (the review's surviving mutant) | `value.StateDir = stateDir` → `_ = stateDir` (`app.go:283`) | exit 1: the new subtest fails with `Store was not opened at the normalized absolute StateDir "/tmp/TestRunNormalizes…/002/state": stat …: no such file or directory`; the three table subtests pass (0.05 s total). Re-run against the final test text after the setup guard was added: same result |
+| M1 (normalizer identity) | `NormalizeOwnerStateDir` body → `return path, nil` (`preflight_linux.go:770-782`) | exit 1: all three pi/opencode subtests fail, the new one with the same "Store was not opened" message (0.04 s total) |
+
+Reverted: same command, exit 0, 4/4 subtests pass.
+
+### P3-1 — the contract SHA-256 is recorded
+
+`b5a2176e7ca6a20b9424303c2ca026ea653cbe1daf84391d6d6f4ca97cbaafba` is in this plan's header
+(`:4`), with the `sha256sum` check against the GDD state root's
+`refactor/arch-decision-2-contracts.tsv` (`in-flight` row), and in the PR #197 body under
+"Contract".
+
+### P3-2 — the vocabulary follow-up is recorded and the over-stated pin claim is corrected
+
+`docs/TODO.md` now carries `## Deferred review findings (PR #197)` with the one-vocabulary
+follow-up (`internal/harness` `ParseKind` plus the native-goal predicate), the three copy sites, the
+one-direction fail-closed analysis and the literal-table pin gap. The "The runtime-selection
+vocabulary" section above is reworded to "new kinds fail closed; the copy is pinned to a literal
+table, not to app's copy", and the same correction is applied to the `configuredHarnessKind` doc
+comment (`daemon/internal/linuxpreflight/cgroup_linux.go:28-31`); that comment is the only code
+change of this pass.
+
+### P3-3 — the e2e scope extension is accepted
+
+Recorded in "Recorded decisions where the contract was silent" as
+**conductor-accepted scope extension (review P3-3)**.
+
+### Gates re-run on the round-1 tree
+
+`gofmt -l` on the three touched Go files is empty; WSL
+`go test -count=1 -v -run TestRunNormalizesLinuxV2NativeOwnerStateDir ./internal/app/` exit 0 with
+4/4 subtests pass (0.23 s); WSL `go test -count=1 ./internal/linuxpreflight/...` exit 0; WSL
+`go vet ./internal/linuxpreflight/... ./internal/app/...` and
+`GOOS=windows go vet ./internal/linuxpreflight/... ./internal/app/...` exit 0; `git diff --check`
+exit 0; host-path and backslash-u greps over the worktree diff 0 matches. The review's own
+verified-clean list (builds for linux/amd64, linux/arm64, windows/amd64, darwin/amd64, no `app`
+import, export surface, literal/declaration comparison, moved suite 55/55) is unchanged by this
+pass because no production statement other than the comment above moved.
 
 ## Out of scope (with reasons)
 
