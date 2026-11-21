@@ -362,7 +362,7 @@ python <scratch>/mutants.py <repo>/daemon <scratch>/mut all
 
 | document | old citation | new citation | reason |
 | --- | --- | --- | --- |
-| `docs/TODO.md:765-766` | `internal/execution/runner.go:1378`, `:1408-1412` | `:1380`, `:1410-1414` | `WriteInputContext`'s definition moved +2 lines, so the two citations the open F15 entry quotes needed re-pointing |
+| `docs/TODO.md:779-780` | `internal/execution/runner.go:1378`, `:1408-1412` | `:1380`, `:1410-1414` | `WriteInputContext`'s definition moved +2 lines, so the two citations the open F15 entry quotes needed re-pointing |
 
 Not re-pointed by decision: `docs/archive/CLOSED-TODO.md:543,551` cite
 `daemon/internal/execution/runner.go:1046` from a repair made against a much older tree; the

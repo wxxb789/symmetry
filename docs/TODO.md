@@ -951,3 +951,18 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       `type linuxOwnerMismatch struct { text string; class error }` whose `Error()` returns
       `text` and whose `Is(target)` reports `target == class`, so each phrasing keeps its exact
       wire text and joins its class.
+
+## Deferred review findings (PR #193)
+
+- [ ] Pin two containment close-path behaviours that the rf-w4-03 runner decomposition left
+      untested (2026-11-21, branch `refactor/rf-w4-03-runner-decomposition`; plan
+      `docs/plans/2026-11-21-rf-w4-03-runner-decomposition-plan.md`). Two mutants on a scratch
+      copy over `./internal/execution/` stayed green under WSL: flipping the `closeOwnerOnce(false)`
+      argument in `closeContainmentOwnerLocked` (`daemon/internal/execution/runner.go:2393`) to
+      `true` — no test distinguishes the flag, and the pending-handoff owner does not implement
+      `containmentUnprovenCallbackSetter`, so a future edit could flip it silently — and swapping
+      the `containmentAuthorityUncertain` / `containmentAuthority != nil` guards in
+      `persistReceiptOrAbort` (`:2143`, `:2146`), whose check order is the base order
+      (pre-existing gap: base had the same untested order). Behaviour is correct at HEAD; this is
+      test coverage only, no code change. Found by the opus round-1 review of PR #193. Owner:
+      W4-12/W4-13 test work.
