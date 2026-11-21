@@ -29,10 +29,10 @@ observe the run's end.
 | --- | --- | --- | --- |
 | 1 | notification option seam | `Option`, `WithConnectionErrorHandler(func(error)) Option`, `New(..., options ...Option)`, new `clientOptions.connectionErrorHandler` field | `daemon/internal/notification/client.go` |
 | 2 | notification reporting | `Run` hands every dial error and every `runConnection` error to `reportConnectionError`, which reports only when `err != nil && ctx.Err() == nil` and the handler is set | same file |
-| 3 | notification tests | `testOptions.connectionErrorHandler` passthrough, the two new tests (§5), a quiet frame reader for the server-side heartbeat loop | `daemon/internal/notification/client_test.go` |
+| 3 | notification tests | `testOptions.connectionErrorHandler` passthrough, the three new tests (§5.1, §5.2, §5.5), a quiet frame reader for the server-side heartbeat loop | `daemon/internal/notification/client_test.go` |
 | 4 | fake-agent reader exit | `runAutonomous(reader *bufio.Reader, input io.Reader, output io.Writer, envelope)` closes `done`, closes `input` when it is an `io.Closer`, and joins the reader goroutine through `readerDone`, bounded by `readerJoinTimeout` | `daemon/cmd/symmetry-fake-agent/autonomous.go` |
 | 5 | fake-agent call site | the one `runAutonomous` call passes the input stream | `daemon/cmd/symmetry-fake-agent/main.go:68` |
-| 6 | fake-agent test | per-test goleak helper plus the io.Pipe exit test | `daemon/cmd/symmetry-fake-agent/autonomous_test.go` |
+| 6 | fake-agent test | per-test goleak helper with its recording-TB self-test, the io.Pipe exit test, and the bounded-join test (§5.5) | `daemon/cmd/symmetry-fake-agent/autonomous_test.go` |
 | 7 | this plan | — | `docs/plans/2026-11-21-rf-w3-05-notification-fake-agent-plan.md` |
 | 8 | docs reconciliation | re-point the one line citation this change shifts (`docs/TODO.md:539`, `client_test.go:283` → `:285`) | `docs/TODO.md` |
 
@@ -221,9 +221,9 @@ load average was ~10.6 on 16 vCPU (a sibling run's `state.test` held 321% CPU). 
 product behaviour — the deadline cancelled the dial, and cancellation is never reported — and a
 wrong test verdict: a wall-clock budget is exactly the "statement about how fast the client should
 be" the repo's own `testHangGuard` comment forbids. The event-driven form has no such coupling, so
-a loaded host cannot redden it. This is the one addition beyond the contract's "one new
-notification test"; the reason is that the option constructor is otherwise untested (the
-contract's test harness bypasses it).
+a loaded host cannot redden it. This is the first of two additions beyond the contract's "one new
+notification test" (§5.5 adds the second); the reason is that the option constructor is otherwise
+untested (the contract's test harness bypasses it).
 
 ### 5.3 `TestAutonomousReturnReleasesItsInputReader` (new, `autonomous_test.go`)
 
@@ -248,8 +248,10 @@ before the defer was removed, and the same mutation then reported the parked gor
 write end open, only the product can release the reader. The pipe holds no goroutine, so leaving it
 open costs nothing.
 
-The helper is the W1-08 form without its recording-TB self-test: this package has one verifying
-test, and the mutation run (b) is the red evidence for the oracle in this slice.
+The helper is the W1-08 form with its recording-TB self-test, added by the apply pass (§5.5). The
+mutation run (b) is not evidence of the oracle's own liveness: with the oracle neutered, mutation
+(b) stays red on the `io.ErrClosedPipe` write assertion, which pins the input close, not the
+oracle (measured in the simplify pass, 2026-11-21).
 
 ### 5.4 `readChannelFrameQuietly` (test helper refactor)
 
@@ -267,6 +269,24 @@ it moves from `:283` to `:285`, and `docs/TODO.md` is re-pointed accordingly wit
 this diff. Rejected alternative: dropping the two content assertions and the `%w` decoding errors
 so no import is needed and no line moves — that trades real assertion strength and error detail
 for a docs coordinate, which is the wrong direction.
+
+### 5.5 Apply-pass additions (post-simplify, 2026-11-21)
+
+Three tests were added after the implementation stage, each with its own measured mutation red:
+
+- `TestAutonomousReturnBoundsTheJoinOnAnUnblockableCarrier` (`autonomous_test.go`) — pins the
+  `readerJoinTimeout` arm of the exit join with an input whose `Close` cannot unblock a parked read
+  (§3.2's Linux inherited-stdio carrier). Deleting the arm leaves the run parked in the join;
+  measured red: exit 1 after 30.01 s, the test's `testHangGuard` ("runAutonomous did not return:
+  the input cannot be unblocked and the join was not bounded").
+- `TestConnectionErrorHandlerRunsBeforeTheRetryBackoff` (`client_test.go`) — pins the documented
+  handler-before-backoff ordering with `reconnectInitial`/`reconnectMaximum` at 5 minutes. Moving
+  the `reportConnectionError` call below `waitForBackoff` leaves the report unreachable; measured
+  red: exit 1 after 30.02 s at `awaitConnectionError`'s guard.
+- `TestLeakOracleDetectsLeakedGoroutine` (`autonomous_test.go`, the W1-08 recording-TB self-test
+  with the `leakCheckTB` interface) — pins the per-test leak oracle's own liveness. Neuter the
+  oracle body and this self-test fails ("the per-test leak oracle is inert", exit 1) while
+  `TestAutonomousReturnReleasesItsInputReader` stays green — the gap the self-test closes.
 
 ## 6. Design trade-offs
 
@@ -339,10 +359,16 @@ first. Until then the daemon passes no handler and behaves exactly as before.
 - A Linux goroutine that stays parked in `readLine` until process exit is not verified by a Linux
   oracle on this host's test run alone; the probe above is the evidence, and the CI daemon job
   (Linux) plus any daemon e2e autonomous run exercise the real carrier.
-- **Linux oracle, fake-agent package: green.** `GOOS=linux GOARCH=amd64 go test -c` on this host, the
-  binary run in WSL Ubuntu-24.04: all nine `^TestAutonomous` tests pass, including
-  `TestAutonomousReturnReleasesItsInputReader` (0.01 s, per-test goleak included), exit 0. This is the
-  changed surface's Linux verdict and it needs no network.
+- **Linux oracle, fake-agent package: green on the changed surface (re-measured by the apply pass).**
+  `GOOS=linux GOARCH=amd64 go test -c` on this host, the binary run in WSL Ubuntu-24.04 with
+  `-test.run '^TestAutonomous|^TestLeakOracleDetectsLeakedGoroutine'`: all ten `^TestAutonomous`
+  tests pass, including `TestAutonomousReturnReleasesItsInputReader` (0.01 s, per-test goleak
+  included) and `TestAutonomousReturnBoundsTheJoinOnAnUnblockableCarrier` (0.06 s), plus
+  `TestLeakOracleDetectsLeakedGoroutine` (0.46 s) — 11 pass, 0 fail, exit 0, 2 s wall. Running the
+  whole package from its source directory instead: 31 pass, 1 fail —
+  `TestProviderActionFlowUsesBrokerCapability` fails on the same VM's IPv4-loopback fault below
+  ("Post http://127.0.0.1:46553: context deadline exceeded"), not on this change; it passes on the
+  Windows host. This is the changed surface's Linux verdict and it needs no network.
 - **Linux oracle, notification package: unobtainable on this host's WSL instance — environment fault,
   not a verdict.** IPv4 loopback TCP does not complete in that VM: a plain Python connect from one
   socket to a listener in the same process on `127.0.0.1` times out after 5 s at load average 0.09,

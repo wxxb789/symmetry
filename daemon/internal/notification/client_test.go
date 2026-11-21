@@ -558,6 +558,35 @@ func TestConnectionErrorHandlerOptionReportsFailedDial(t *testing.T) {
 	}
 }
 
+// TestConnectionErrorHandlerRunsBeforeTheRetryBackoff pins the ordering the
+// WithConnectionErrorHandler doc promises: the handler runs on Run's goroutine
+// before waitForBackoff, so a failed dial is reported while the first backoff
+// is still pending. The five-minute first backoff makes the ordering
+// load-bearing: with the report moved below waitForBackoff it cannot arrive
+// inside testHangGuard.
+func TestConnectionErrorHandlerRunsBeforeTheRetryBackoff(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		http.Error(writer, "control plane is not ready", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	reported := make(chan error, 1)
+	client := newTestClient(t, server.URL, testOptions{
+		heartbeatInterval:      time.Millisecond,
+		reconnectInitial:       5 * time.Minute,
+		reconnectMaximum:       5 * time.Minute,
+		connectionErrorHandler: func(err error) { reported <- err },
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := runClient(client, ctx, make(chan Hint, 4))
+	awaitConnectionError(t, reported)
+	cancel()
+	if err := waitForRun(t, done); !errors.Is(err, context.Canceled) {
+		t.Errorf("Run error = %v, want context.Canceled", err)
+	}
+}
+
 // awaitConnectionError receives the next connection failure the handler
 // reported, or fails the test when none arrives.
 func awaitConnectionError(t *testing.T, reported <-chan error) error {
