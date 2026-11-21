@@ -7,6 +7,11 @@ defmodule SymmetryControlWeb.Plugs.StrictEvidenceJSONTest do
   alias SymmetryControlWeb.Plugs.StrictEvidenceJSON
   alias SymmetryControlWeb.StrictJSONDecoder
 
+  # The plug's private connection key for a captured evidence body. Pinned here
+  # because the plug exposes no accessor: a renamed key inside the plug must
+  # redden this file's capture assertions and its not-captured assertions alike.
+  @raw_body_private_key :symmetry_control_raw_evidence_json
+
   @parser_options StrictEvidenceJSON.init(
                     parsers: [:urlencoded, :multipart, :json],
                     pass: ["*/*"],
@@ -23,13 +28,13 @@ defmodule SymmetryControlWeb.Plugs.StrictEvidenceJSONTest do
       |> StrictEvidenceJSON.call(@parser_options)
 
     assert conn.body_params == %{}
-    assert conn.private[StrictEvidenceJSON.raw_body_private_key()] == body
+    assert conn.private[@raw_body_private_key] == body
 
     assert {:ok, %{"value" => 1, "nested" => %{"items" => [true, nil]}}} =
              StrictEvidenceJSON.materialize(conn)
 
     conn = StrictEvidenceJSON.call(conn, @parser_options)
-    assert conn.private[StrictEvidenceJSON.raw_body_private_key()] == body
+    assert conn.private[@raw_body_private_key] == body
 
     assert {:ok, "", _conn} = read_body(conn)
   end
@@ -45,7 +50,7 @@ defmodule SymmetryControlWeb.Plugs.StrictEvidenceJSONTest do
         |> StrictEvidenceJSON.call(@parser_options)
 
       assert conn.body_params == %{}
-      assert conn.private[StrictEvidenceJSON.raw_body_private_key()] == body
+      assert conn.private[@raw_body_private_key] == body
       assert {:ok, %{"value" => 1}} = StrictEvidenceJSON.materialize(conn)
     end
   end
@@ -223,7 +228,8 @@ defmodule SymmetryControlWeb.Plugs.StrictEvidenceJSONTest do
 
     assert conn.body_params == %{"left" => %{"name" => 1}, "right" => %{"name" => 2}}
     refute conn.halted
-    refute Map.has_key?(conn.private, StrictEvidenceJSON.raw_body_private_key())
+    refute Map.has_key?(conn.private, @raw_body_private_key)
+    refute Enum.any?(conn.private, fn {_key, value} -> value == body end)
   end
 
   test "does not inspect JSON bodies on GET requests" do
@@ -282,7 +288,8 @@ defmodule SymmetryControlWeb.Plugs.StrictEvidenceJSONTest do
         |> StrictEvidenceJSON.call(@parser_options)
 
       assert conn.body_params in [%{"value" => 1}, %{"value" => "1"}]
-      refute Map.has_key?(conn.private, StrictEvidenceJSON.raw_body_private_key())
+      refute Map.has_key?(conn.private, @raw_body_private_key)
+      refute Enum.any?(conn.private, fn {_key, value} -> value == body end)
     end
   end
 
