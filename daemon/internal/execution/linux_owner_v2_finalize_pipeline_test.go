@@ -275,6 +275,19 @@ func (harness *linuxV2CloseHarness) assertPristineReceiptInput(attempt int, hand
 	}
 }
 
+// assertPreGateClearInput pins the pre-gate clear input: the reservation the
+// close sends must carry the just-persisted pre-gate stop receipt, never a
+// reservation without its durable receipt.
+func (harness *linuxV2CloseHarness) assertPreGateClearInput(expected state.LinuxCgroupReservation) {
+	harness.t.Helper()
+	if expected.PreGateStopReceipt == nil {
+		harness.t.Fatal("pre-gate ClearReservationV2 carried a reservation without the just-persisted stop receipt")
+	}
+	if !expected.PreGateStopReceipt.Equal(harness.preGateReceipt) {
+		harness.t.Fatal("pre-gate ClearReservationV2 carried a stop receipt that differs from the just-persisted one")
+	}
+}
+
 // linuxV2CloseTestControl doubles the helper control channel of the close
 // pipeline and records every call in the harness order.
 type linuxV2CloseTestControl struct {
@@ -457,7 +470,8 @@ func newLinuxV2ClosePreGateOwner(t *testing.T, harness *linuxV2CloseHarness) *li
 				harness.record("receipt")
 				return nil
 			},
-			ClearReservationV2: func(state.LinuxCgroupReservation, platform.LinuxCgroupV2Release) error {
+			ClearReservationV2: func(expected state.LinuxCgroupReservation, _ platform.LinuxCgroupV2Release) error {
+				harness.assertPreGateClearInput(expected)
 				harness.record("clear")
 				return nil
 			},
@@ -775,6 +789,46 @@ func TestLinuxV2FinalizePreGateClaimsCapabilityOnlyAfterClear(t *testing.T) {
 		t.Fatalf("pre-gate close order = %#v, want the durable clear before the capability claim and no release", order)
 	}
 	assertLinuxV2CloseUnsettled(t, "pre-gate", claimOwner)
+}
+
+func TestLinuxV2FinalizeRejectsCapabilityBoundToAnotherReceipt(t *testing.T) {
+	// The seam reports an issued capability whose proof binds a different
+	// receipt: the real ValidFor half of the claim guard must stop the
+	// sequence on the claim error, before the hop on the gate path and after
+	// the durable clear on the pre-gate path.
+	gateHarness := newLinuxV2CloseHarness(t)
+	gateOwner := newLinuxV2CloseGateOwner(t, gateHarness, false)
+	foreignGateProof := gateHarness.ownerReleaseProof.Clone()
+	foreignGateProof.LaunchToken = strings.Repeat("f", authority.TokenBytes*2)
+	gateOwner.closeSeams.ownerReleaseSnapshot = func(platform.LinuxCgroupV2Release) (authority.SupervisorHandoffReleaseProof, bool) {
+		return foreignGateProof, true
+	}
+	err := gateOwner.finalize()
+	const gateClaimError = "Linux v2 platform release capability does not match the durable receipt"
+	if err == nil || err.Error() != gateClaimError {
+		t.Fatalf("finalize() error = %v, want the capability claim bound to another receipt rejected", err)
+	}
+	if order := gateHarness.order(); !slices.Equal(order, []string{"receipt", "ack"}) {
+		t.Fatalf("close order = %#v, want the durable receipt and its acknowledgement only", order)
+	}
+	assertLinuxV2CloseUnsettled(t, "gate", gateOwner)
+
+	preGateHarness := newLinuxV2CloseHarness(t)
+	preGateOwner := newLinuxV2ClosePreGateOwner(t, preGateHarness)
+	foreignPreGateProof := preGateHarness.preGateReleaseProof.Clone()
+	foreignPreGateProof.Receipt.LaunchToken = strings.Repeat("f", authority.TokenBytes*2)
+	preGateOwner.closeSeams.preGateReleaseSnapshot = func(platform.LinuxCgroupV2Release) (authority.LinuxCgroupPreGateReleaseProof, bool) {
+		return foreignPreGateProof, true
+	}
+	err = preGateOwner.finalizePreGate(context.Background())
+	const preGateClaimError = "Linux v2 pre-gate release capability differs from its receipt"
+	if err == nil || err.Error() != preGateClaimError {
+		t.Fatalf("finalizePreGate() error = %v, want the capability claim bound to another receipt rejected", err)
+	}
+	if order := preGateHarness.order(); !slices.Equal(order, []string{"receipt", "ack", "clear"}) {
+		t.Fatalf("pre-gate close order = %#v, want the durable clear before the capability claim and no release", order)
+	}
+	assertLinuxV2CloseUnsettled(t, "pre-gate", preGateOwner)
 }
 
 func TestLinuxV2FinalizeJoinsLostReleaseAckRetirementReadback(t *testing.T) {

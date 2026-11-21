@@ -40,8 +40,8 @@ Retry family (definition + call sites inside this file): `runLinuxV2JournalMutat
 inside the deleted wrappers), `retryLinuxV2` `:2603` (10),
 `runLinuxV2ReceiptMutation` `:2605` (1), `runLinuxV2PreGateReceiptMutation` `:2609` (1); one
 further call site in `linux_owner_v2_test.go:479` (the ack-lost oracle). Handler twins
-`retrySupervisorHandoffReceipt`/`retrySupervisorHandoffClear` (`runner.go:2484-2504`) stay
-byte-identical.
+`retrySupervisorHandoffReceipt`/`retrySupervisorHandoffClear` (base `0fa9b705`
+`runner.go:2484-2504`, HEAD `runner.go:2522-2543`) stay byte-identical.
 
 Ack-stage vocabulary: ten constants `runner.go:216-225`, consumed by
 `app/linux_owner_witness_linux.go:2458-2469` (`linuxV2NativeWitnessAckLossSupported`). The
@@ -174,8 +174,8 @@ cannot run at all in a test process: `helper.Control` is a concrete
 `*platform.LinuxOwnerHelperV2Client` (a live socket client), and the opaque
 `platform.LinuxCgroupV2Release` capability can only be minted by a real cgroup removal inside
 package `platform` (its `issued` field is unexported, and package `platform` is out of scope). The
-old tests therefore inject a fake `closeLinuxV2Containment` (`runner.go:374` →
-`owner.finalize`) and the real `finalize` never executes.
+old tests therefore inject a fake `closeLinuxV2Containment` (`linux_owner_v2_linux.go:374`
+(base) → `owner.finalize`) and the real `finalize` never executes.
 
 Seams (all on the owner, all nil in production, each with a fallback to the exact platform call):
 
@@ -220,7 +220,9 @@ real `finalize()` / `finalizePreGate()` on a hand-built `linuxV2ProcessOwner`.
 
 Delivered beyond the plan: `TestLinuxV2FinalizeDoesNotReplayLostReceiptAck` (the same policy
 through the real `finalize`), `TestLinuxV2FinalizeStopsBeforeClearWhenReceiptAckFails` and
-`TestLinuxV2FinalizeResumesFromAlreadyAppliedSteps`.
+`TestLinuxV2FinalizeResumesFromAlreadyAppliedSteps`, plus the review-round
+`TestLinuxV2FinalizeRejectsCapabilityBoundToAnotherReceipt` (the `ValidFor` half of both
+capability-claim guards) and the pre-gate clear-input pin.
 
 Tests 1-6 also assert the observed call order of the fakes (callback order + control-call order),
 so the "clear-after-receipt" and "release-after-clear" fences are asserted positively, not only by
@@ -308,13 +310,15 @@ name. Recorded; the mutant run for fence 8 proves the policy is still pinned.
   −6 L net (the ten-arm switch → one derivation); `linux_owner_v2_linux.go` +323 L net
   (544 +/221 − against the 0fa9b705 base). The plan row's −150…−260 dLOC is not met and is
   report-only per D2.
-- Tests: 13 new tests in `linux_owner_v2_finalize_pipeline_test.go` (the seven planned
+- Tests: 14 new tests in `linux_owner_v2_finalize_pipeline_test.go` (the seven planned
   pipeline-file fences — rows 1-7 — plus the reused-durable-receipt, ack-lost-through-`finalize`,
   failed-acknowledgement, resume-from-applied-steps, pre-gate capability-claim position and
-  lost-release-ACK readback cases), the retargeted ack-lost oracle and the cross-platform
+  lost-release-ACK readback cases, and the review-round capability-bound-to-another-receipt case),
+  the retargeted ack-lost oracle and the cross-platform
   vocabulary test; 13 mutants (M1–M12 including M3b, of which M9 was added at the apply stage and
   M10–M12 by the fix pass for the whole-increment review) each observed red and reverted,
-  including the consumer-side app red for the dropped stage name.
+  including the consumer-side app red for the dropped stage name, plus the review-round mutants
+  re-run after the P3 fixes (N1/N2/N4 red, N5 green — the entry-snapshot equivalence).
 - Gates: `gofmt -l`, `go vet ./...`, three builds, Windows execution + app, WSL focused + WSL
   execution, the WSL witness subset and the citation gate all exit 0; the full WSL app suite does
   not complete on this host (nondeterministic admission/httptest HTTP-dial hangs that the

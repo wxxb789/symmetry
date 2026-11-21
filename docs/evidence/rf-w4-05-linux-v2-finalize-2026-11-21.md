@@ -5,10 +5,12 @@ Subject: `daemon/internal/execution/linux_owner_v2_linux.go` (pipeline + retry u
 `daemon/internal/app/linux_owner_witness_linux.go` (`linuxV2NativeWitnessAckLossSupported`
 derivation), the two new test files (`linux_owner_v2_finalize_pipeline_test.go`,
 `linux_v2_ack_stages_test.go`) and one retargeted call in `linux_owner_v2_test.go:479`.
-Uncommitted on this worktree's base `376ff525` (W4-03 branch head, which includes W4-03's
-runner decomposition); the contract re-derivation base is `origin/main 0fa9b705`, and
-`git log 0fa9b705..376ff525 -- daemon/internal/execution/linux_owner_v2_linux.go` is empty, so
-every base line number below is valid at both revisions (base file sha256
+Committed on this branch (`d34e8281`, plus `183188f4` after the merge `a2bb8440` joined
+origin/main `e3d4f150`, #193, the W4-03 decomposition). The contract re-derivation base is
+`origin/main 0fa9b705`, and
+`git log 0fa9b705..e3d4f150 -- daemon/internal/execution/linux_owner_v2_linux.go` is empty, so
+every base line number below is valid at `0fa9b705`, at the W4-03 head `376ff525` and at
+`e3d4f150` (identical base blob sha256
 `914dae6760b68b12481287bb7ecafdce75fadf4d08718b899e99085aaffc09e8`).
 
 Baseline sizes: `linux_owner_v2_linux.go` **2,753 L**; `finalize` `:1417-1579` (**163 L**,
@@ -30,13 +32,13 @@ decisions (Wave-4 draft, W4 review reconcile, lesson-32 control-flow preservatio
 | `linux_owner_v2_linux.go` | `finalize` 163 → 79 L and `finalizePreGate` 141 → 59 L; one `runClosePipeline` driver (34 L) + two step sets (`linuxV2CloseGateSteps` 10 methods, `linuxV2ClosePreGateSteps` 10 methods); `linuxV2HelperControl`, `linuxV2CloseSeams` + 3 accessors; `retryMutation` replaces the five retry names (11 L definition, 33 call sites + 1 test call) |
 | `runner.go` | `LinuxV2AckStages` added below the ten constants (`:228-246`): one exported ten-name source, no name added, removed or renamed, table bytes unchanged |
 | `linux_owner_witness_linux.go` | `linuxV2NativeWitnessAckLossSupported` `:2458-2463` derives membership from `execution.LinuxV2AckStages` with `slices.Contains`; the witness stage vocabulary `:55-75` is untouched |
-| `linux_owner_v2_finalize_pipeline_test.go` (new, 837 L) | the CI characterization tests of the close fences (13 tests, listed in §6) |
+| `linux_owner_v2_finalize_pipeline_test.go` (new, 891 L) | the CI characterization tests of the close fences (14 tests, listed in §6) |
 | `linux_v2_ack_stages_test.go` (new, no build tag) | the ten-name source completeness test |
 | `linux_owner_v2_test.go` | `TestLinuxV2MutationAckLostIsNotReplayed` calls `retryMutation` (same closure, same assertions, same test name) |
 | `docs/TODO.md` | re-anchored four citations its own runner.go line insertion invalidated (`WriteInputContext` `:1380`→`:1400`, `:1410-1414`→`:1430-1434`; the PR #193 deferral entry's `:2393`→`:2413`, `:2143`/`:2146`→`:2163`/`:2166`) |
 
 Line totals: `linux_owner_v2_linux.go` 2,753 → 3,076; `runner.go` 2,756 → 2,776 (W4-03 base
-plus the 20-line source); the two test files add 837 + 22 L; against the 0fa9b705 base the
+plus the 20-line source); the two test files add 891 + 22 L; against the 0fa9b705 base the
 numstat is `544 +/221 −` for `linux_owner_v2_linux.go` and `1 +/1 −` for the test call site. The
 plan row's −150…−260 dLOC is not met (net +323 L in the source file: the ten step methods carry
 their own doc comments and signatures) and is report-only per contract D2.
@@ -53,7 +55,7 @@ Function sizes (delivered tree, measured with a brace-matched awk over both revi
 | retry family | 22 L across 5 names | `retryMutation` 11 L |
 
 Complexity per function is under the advisory `funlen`/`gocyclo` thresholds; the advisory lint
-distribution is reported in §7.
+distribution is reported in §11.
 
 ## 2. Pipeline step table (base → HEAD)
 
@@ -85,7 +87,7 @@ Pre-gate path:
 | persist receipt | 2138-2146 | `linuxV2ClosePreGateSteps.persistReceipt` `:2409-2423` | callback + reservation publish |
 | acknowledge receipt | 2147-2163 | `.acknowledgeReceipt` `:2427-2448` | `!preGateReceiptAcked`, witness capture |
 | remove leaf | 2164-2183 | `.removeLeaf` `:2456-2475` | pre-gate authorization, leaf then parent completion |
-| clear | 2184-2193 | `.clearJournal` `:2479-2492` | `ClearReservationV2`, `clearDone` |
+| clear | 2184-2193 | `.clearJournal` `:2479-2492` | `ClearReservationV2` on the entry snapshot, `clearDone` |
 | claim capability | 2194-2197 | `.claimRelease` `:2496-2504` (driver call `:1611`) | after the clear, exactly as base |
 | promotion hop | — | `.promoteClone` `:2508` | `return nil` (base had none) |
 | release helper | 2198-2216 | `.releaseHelper` `:2513-2535` | `!helperReleased`, lost-ACK pre-gate retirement join |
@@ -123,8 +125,8 @@ exactly the 8 + 10 + 13 + 1 + 1 migrated sites. The base `runLinuxV2MutationRetr
 production references (the 8 outer call sites plus the 4 inside the deleted definitions) and the
 one test call.
 
-`retrySupervisorHandoffReceipt`/`retrySupervisorHandoffClear` (`runner.go:2484-2504`) are
-byte-identical and were not touched.
+`retrySupervisorHandoffReceipt`/`retrySupervisorHandoffClear` (base `0fa9b705`
+`runner.go:2484-2504`, HEAD `runner.go:2522-2543`) are byte-identical and were not touched.
 
 The value sites where the base callback received a *typed closure parameter* now pass the clone
 expression directly (`Callbacks.BindLeaf(owner.reservation.Clone(), …)`), and the value is read at
@@ -178,6 +180,7 @@ base line's text survives verbatim at the HEAD line.
 | 2112-2118 | `ValidateFor` + outcome equality exits | 2333-2341 | yes | unchanged bytes |
 | 2119-2128 | candidate construction + `Validate` exit | 2342-2351 | yes | unchanged bytes |
 | 2134-2137 | cached-receipt `Equal` exit | 2363-2371 | yes | unchanged bytes, CI-executable (fence 1) |
+| 2139-2141, 2164-2183, 2185-2192 | live `owner.reservation` reads (receipt write, removal authorization, clear) | entry snapshot `:2351` + `persistReceipt` `:2418-2421` | yes | one snapshot read under `mu` at entry; no writer of `owner.reservation` can run after `stop()` caches the evidence and the only in-path writer mirrors into the snapshot, so the live-read form is indistinguishable (N5 green); a missing or stale receipt fails closed in `Store.ClearLinuxCgroupReservationV2` (`internal/state/cgroup_release_linux.go:149`) |
 | 2139-2141 | receipt write branch | `persistReceipt` 2410-2417 | yes | unchanged predicate and wrap text |
 | 2143-2145 | reservation publish | 2418-2421 | yes | same clone, same order |
 | 2147 | `!preGateAcked` | `acknowledgeReceipt` 2428 | yes | short-circuit inverted |
@@ -187,7 +190,7 @@ base line's text survives verbatim at the HEAD line.
 | 2172-2179 | leaf removal, parent completion, failure exit | 2467-2474 | yes | same call order and text |
 | 2180-2182 | capability publish | 2475-2477 | yes | same field |
 | 2184 | `!clearDone` | `clearJournal` 2485-2487 | yes | same predicate |
-| 2185-2192 | clear retry + wrap + flag | 2488-2491 | yes | same clone-less closure |
+| 2185-2192 | clear retry + wrap + flag | 2488-2491 | yes | same retry shape; the closure sends the entry snapshot carrying the durable receipt, not a fresh live read |
 | 2194-2196 | `!issued || !ValidFor(receipt)` exit | `claimRelease` 2503-2506 | yes | same text, real guard |
 | 2198-2216 | `!helperReleased`, release, lost-ACK join, flags | `releaseHelper` 2519-2535 | yes | same texts and order |
 | 2217-2223 | `!anchorRetired` retirement | `retireAnchor` 2545-2552 | yes | unchanged |
@@ -205,8 +208,8 @@ Baseline fact: the two close paths cannot run in a CI process without doubles �
 is a concrete `*platform.LinuxOwnerHelperV2Client` (live socket client) and
 `platform.LinuxCgroupV2Release` can only be minted by a real cgroup removal inside package
 `platform` (unexported `issued` field; package `platform` is out of this slice's scope). The
-baseline tests therefore inject a fake `closeLinuxV2Containment` (`runner.go:374` →
-`owner.finalize`), which means the real `finalize` never executed.
+baseline tests therefore inject a fake `closeLinuxV2Containment` (`linux_owner_v2_linux.go:374`
+(base) → `owner.finalize`), which means the real `finalize` never executed.
 
 Delivered seams (`linuxV2CloseSeams`, nil in production, one owner field, three accessors):
 
@@ -217,8 +220,9 @@ Delivered seams (`linuxV2CloseSeams`, nil in production, one owner field, three 
 | `preGateReleaseSnapshot` | `platform.LinuxCgroupV2Release` → `authority.LinuxCgroupPreGateReleaseProof` | `release.SnapshotPreGate()` |
 
 The snapshot seams replace only the snapshot: the pipeline still runs the real
-`issued`/`ValidFor` guards on the returned value, and the mutants in §8 prove the fences are
-sensitive. Outside CI execution and therefore byte-identical: leaf/parent removal (the tests
+`issued`/`ValidFor` guards on the returned value (the issued-but-foreign arm is pinned by
+`TestLinuxV2FinalizeRejectsCapabilityBoundToAnotherReceipt`), and the mutants in §7 prove the
+fences are sensitive. Outside CI execution and therefore byte-identical: leaf/parent removal (the tests
 preset the capability, exercising the "already removed" branch), anchor retirement (tests preset
 `anchorRetired`), `promoteCloneAfterStop` internals, and `stop` (tests preset `stopEvidence`).
 
@@ -241,8 +245,9 @@ pre-gate reconcile, which the fence test executes on the real `finalizePreGate`.
 | promotion-hop position | `TestLinuxV2FinalizePromotionHopStaysBeforeClear` | real `finalize` (valid claim stops on the hop before any clear; unissued claim stops before the hop) |
 | clear-after-receipt | `TestLinuxV2FinalizeClearFollowsDurableReceiptAndAck` | real `finalize` (receipt < ack < clear, receipt published, owner settled) |
 | release-after-clear | `TestLinuxV2FinalizeReleasesHelperOnlyAfterClear` | real `finalize` (clear < release, `helperReleased`) |
-| pre-gate clear + release | `TestLinuxV2FinalizePreGateReleasesHelperOnlyAfterClear` | real `finalizePreGate` (receipt/ack/clear/release order, all four flags) |
+| pre-gate clear + release | `TestLinuxV2FinalizePreGateReleasesHelperOnlyAfterClear` | real `finalizePreGate` (receipt/ack/clear/release order, all four flags, and the clear input carries the just-persisted receipt — N1 red without it) |
 | pre-gate capability-claim position | `TestLinuxV2FinalizePreGateClaimsCapabilityOnlyAfterClear` | real `finalizePreGate` (unissued capability + failing `ClearReservationV2`: the durable clear fails before any capability claim; unissued capability + successful clear: the exact claim error stops the sequence after `[receipt, ack, clear]`) |
+| capability `ValidFor` (both paths) | `TestLinuxV2FinalizeRejectsCapabilityBoundToAnotherReceipt` | real `finalize` and `finalizePreGate` (issued seam, proof bound to another receipt: exact claim error, `[receipt, ack]` gate and `[receipt, ack, clear]` pre-gate, owner unsettled) |
 | cached-receipt reuse | `TestLinuxV2FinalizeReusesDurableReceiptWithoutRewriting` | real `finalize` (persisted receipt: no rewrite, ack/clear/release) |
 | fresh clone per attempt | `TestLinuxV2FinalizeMutationAttemptsSeeFreshClones` | real `finalize` (first attempt mutates its clone and fails; attempt 2 asserts pristine inputs) |
 | ack-lost no-replay | `TestLinuxV2FinalizeDoesNotReplayLostReceiptAck` + `TestLinuxV2MutationAckLostIsNotReplayed` | real `finalize` (one attempt, sentinel propagated) and `retryMutation` directly |
@@ -282,6 +287,19 @@ were added and run by the fix pass for the whole-increment review under the same
 
 M8's second failure is the consumer-side proof: the app derives its witness validation from the
 single source, so a dropped name reddens an existing witness oracle, not only the new test.
+
+Fix round 1 (opus review P3-1/P3-2) re-ran the review's green mutants on a scratch overlay of the
+delivered tree (tree untouched): **N1** (pre-gate `persistReceipt` publishes the receipt to the
+owner only, so the clear sends a reservation without it) → FAIL ×4, incl.
+`TestLinuxV2FinalizePreGateReleasesHelperOnlyAfterClear`: `pre-gate ClearReservationV2 carried a
+reservation without the just-persisted stop receipt`; **N2** (gate `claimRelease` drops
+`!releaseProof.ValidFor(steps.handoff)`) → FAIL
+`TestLinuxV2FinalizeRejectsCapabilityBoundToAnotherReceipt`: `finalize() error = <nil>, want the
+capability claim bound to another receipt rejected`; **N4** (pre-gate `claimRelease` drops
+`!releaseProof.ValidFor(steps.receipt)`) → FAIL the same test: `finalizePreGate() error = <nil>,
+want the capability claim bound to another receipt rejected`; **N5** (pre-gate clear sends the
+live `owner.reservation` instead of the entry snapshot) → green, exit 0, the recorded
+equivalence of the entry snapshot.
 
 ## 8. Ten-name live-consumer census (D6)
 
@@ -361,6 +379,13 @@ Rows above carry the fix round's re-run numbers where a row was re-run (every ro
 full WSL `./internal/app/...` rows, whose environmental hang is the delivery-time record and was
 not re-attempted); no consumed artifact changes other than the pipeline test file the fix round
 extends.
+
+The review-fix round (P3-1..P3-3, on top of `183188f4`) re-ran: `gofmt -l` (no output, exit 0),
+`go vet ./internal/execution/ ./internal/app/` and `GOOS=linux go vet` (exit 0),
+`git diff --check` (no output, exit 0), WSL
+`go test -count=1 -race -run 'TestLinuxV2|TestRunnerStopReceipt' ./internal/execution/` (exit 0,
+2.279 s), the new-test verbose run (PASS) and WSL `go test -count=1 ./internal/execution/`
+(exit 0, 1.562 s), plus the §7 N1/N2/N4/N5 mutant runs (N1/N2/N4 exit 1; N5 exit 0).
 
 Acceptance-oracle note (contract E8): `linux-native-v2-acceptance` is `workflow_dispatch`-only
 with zero dispatches and the v2 witness matrix is env-gated, so neither is an acceptance oracle
