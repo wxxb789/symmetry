@@ -33,7 +33,7 @@ Measured caller census at the base revision, whole repository:
   a historical plan describing the base state of a merged slice. So the accessor is a leaf whose
   only callers are one test file; `mix compile --warnings-as-errors` would not have flagged it.
 - `claim_server_time` — 2 hits: the read at `daemon_controller.ex:127` and the write at
-  `protocol_controller_test.exs:644`, inside `assert_error(...)` `:641-651` in the test
+  `protocol_controller_test.exs:644`, inside `assert_error(...)` `:642-652` in the test
   "claim replay returns ownership_lost when its response render observes an expired lease" `:621`.
   Production never sets the key; the `DateTime.utc_now()` fallback is production's only path.
 
@@ -64,7 +64,7 @@ The plug test pins that key with a module attribute:
 ```
 
 Its five accessor call sites become the two read forms
-`conn.private[@raw_body_private_key] == body` (`:26`,`:32`,`:48`) and
+`conn.private[@raw_body_private_key] == body` (`:31`,`:37`,`:53`) and
 `refute Map.has_key?(conn.private, @raw_body_private_key)` (`:231`,`:291`), and each refute site
 gains the strengthened value assertion
 `refute Enum.any?(conn.private, fn {_key, value} -> value == body end)` (`:232`,`:292`). No test
@@ -73,10 +73,10 @@ name changes.
 The clock seam keeps its code and gains one comment at the read site (prod file, comment only):
 
 ```elixir
+# Test-only clock seam: `protocol_controller_test.exs:644` (the
+# expired-at-response replay case) puts this private key in the conn, and
+# production never does, so the fallback below is production's only path.
 defp claim_response_time(conn) do
-  # Test-only clock seam: `protocol_controller_test.exs:644` (the
-  # expired-at-response replay case) puts this private key in the conn, and
-  # production never does, so the fallback below is production's only path.
   case Map.get(conn.private, :claim_server_time) do
 ```
 
@@ -90,9 +90,10 @@ the same citation is also recorded in the seam table above and in the report.
 - **No test-only accessor remains on the request path.** After the change, `raw_body_private_key/0`
   has no definition and no caller (mutation (c) is the grep record).
 - **The test still pins the captured-body key.** A rename of the plug's `@raw_body_private_key`
-  atom reddens the three capture assertions *and* the two strengthened refute sites; no test-side
-  helper re-derives the key from the plug (that would be the forbidden "new test-only API instead
-  of the constant").
+  atom reddens the three capture assertions; the rename + spurious-capture composite (a plug that
+  captures under a renamed key in a case that must not capture, record rows a-1/a-2) also reddens
+  the two strengthened refute sites; no test-side helper re-derives the key from the plug (that
+  would be the forbidden "new test-only API instead of the constant").
 - **The two refute sites stop being vacuous.** `refute Map.has_key?(conn.private, key)` alone
   passes whenever the plug captures under a *renamed* key. Each site also asserts the stronger
   property that no `conn.private` value equals the request body, so a plug that starts capturing
@@ -116,10 +117,10 @@ deletion removes no branch anywhere: the audit below covers every branch the sea
 | --- | --- | --- | --- |
 | evidence capture, binary body | `capture/2` `:175` `Conn.put_private(@raw_body_private_key, body)` | identical line | yes |
 | evidence capture, empty body | `capture/2` captures `""` (no branch; the empty case is decided in `materialize/1`) | identical | yes |
-| `materialize/1`, captured `""` | `:130-131` → `{:ok, %{}}` | identical | yes |
-| `materialize/1`, captured binary | `:132` → `StrictJSONDecoder.decode_object/1` | identical | yes |
-| `materialize/1`, captured non-binary | `:133` → `{:error, :malformed_json}` | identical | yes |
-| `materialize/1`, not captured | `:134` → `{:error, :not_captured}` | identical | yes |
+| `materialize/1`, captured `""` | `:132` → `{:ok, %{}}` | identical | yes |
+| `materialize/1`, captured binary | `:133` → `StrictJSONDecoder.decode_object/1` | identical | yes |
+| `materialize/1`, captured non-binary | `:134` → `{:error, :malformed_json}` | identical | yes |
+| `materialize/1`, not captured | `:135` → `{:error, :not_captured}` | identical | yes |
 | accessor itself | `raw_body_private_key/0` returns the attribute | deleted; no caller in lib or test | n/a (leaf, zero callers after the test-side constant) |
 | clock, private key set | `claim_response_time/1` `:127-128` → the `%DateTime{}` value (test writer `protocol_controller_test.exs:644`) | identical code; the branch keeps working | yes |
 | clock, private key unset (production) | `:129` → `DateTime.utc_now()` | identical code, now documented as production's only path | yes |
@@ -143,9 +144,9 @@ the main checkout's `deps/` — `mix.lock` verified identical — and a dedicate
 | two suites (the oracle pair) | `mix test test/symmetry_control_web/plugs/strict_evidence_json_test.exs test/symmetry_control_web/controllers/protocol_controller_test.exs` | exit 0; 24 + 31 tests, all pass, `protocol_controller_test.exs` unmodified |
 | web tree | `mix test test/symmetry_control_web/` | exit 0, all pass |
 | whitespace | `git diff --check` | exit 0 |
-| mutation (a) | rename the plug's `@raw_body_private_key` atom **and** make the strict-mutation branch capture (a plug that starts capturing under a renamed key in a case that must not capture) | capture assertions `:26,:32,:48` and strengthened refutes `:226,:285` redden; the bare `Map.has_key?` form alone stays green, proving the strengthening load-bearing |
+| mutation (a) | rename the plug's `@raw_body_private_key` atom **and** make the strict-mutation branch capture (a plug that starts capturing under a renamed key in a case that must not capture) | capture assertions `:31,:37,:53` and the strengthened refute assertions `:232,:292` redden (HEAD coordinates); the bare `Map.has_key?` forms `:231,:291` stay green, proving the strengthening load-bearing |
 | mutation (b) | remove the `DateTime.utc_now()` fallback from `claim_response_time/1` | the controller suite reddens (the fallback is production's only path) |
-| mutation (c) | `git grep -n "raw_body_private_key"` / `raw_body_private_key/0` | `raw_body_private_key/0` absent; remaining hits are the private attribute and its two internal uses |
+| mutation (c) | `git grep -n "raw_body_private_key" -- control/lib control/test` / `git grep -n "raw_body_private_key/0" -- control/lib control/test` | `raw_body_private_key/0` absent; remaining hits are the private attribute and its two internal uses |
 | full suite | **not this stage** — the conductor's gate-runner owns `mix test` (never two full suites on this host) | — |
 
 Mutations are planted edits reverted before handover; the three-mutation record (a)-(c) is fixed
@@ -174,8 +175,8 @@ OTP 29.0.6, `MIX_TEST_PARTITION=rf-w5-06`, deps fetched locally, PostgreSQL on 5
 **Apply-stage note (`rf-w5-06` apply, 2026-11-21).** The accepted simplify findings R1, PD-A and
 PD-B are applied on top of `cc7170bc`: R1 reworded the test-side constant's rationale comment in
 `strict_evidence_json_test.exs` (comment text only; assertions, test names and line counts
-unchanged), and PD-A/PD-B corrected this plan's comment quote, coordinates and hash-reproduction
-command to the delivered form. The shipped working tree's delivered-bytes hash is therefore
+unchanged), and PD-A/PD-B corrected this plan's coordinates and hash-reproduction command to the
+delivered form. The shipped working tree's delivered-bytes hash is therefore
 `6eae05f72b9b809b8f1db6e80a695f284f0dbd2fecb73281d97957a0edcb1463`; the apply-stage re-runs on
 that revision are green: format exit 0, compile exit 0, the plug test 24 passed, the two suites
 55 passed, the web tree `--exclude portal_assets` 275 passed / 1 skipped / 4 excluded, and
@@ -192,7 +193,7 @@ hashes to `51097c07e40a845994aa6ae8d5e0fdd60a34cbcc6cb39ae4923226a9ee0a17ec`.
 | whitespace | `git diff --check` **exit 0** |
 | mutation (a) | three planted runs (same mutant class, all reverted): **(a-1)** rename the plug's `@raw_body_private_key` atom only → **exit 2**, `22/24` passed: the two capture tests red with `code: assert conn.private[@raw_body_private_key] == body`, `left: nil` (the test-side constant pins the key; no accessor involved). **(a-2)** rename **plus** a strict-mutation capture-with-replay mutant (the plug starts capturing every strict JSON mutation body under its — renamed — key) → **exit 2**, `20/24` passed: the two capture tests **and both refute tests** red, and the failing assertion at both refute sites is exactly `code: refute Enum.any?(conn.private, fn {_key, value} -> value == body end)` (the bare `Map.has_key?` form stays green because the key was renamed). **(a-3)** (a-2) with the two strengthened lines removed → **exit 2**, `22/24`: only the two capture tests red; both refute tests pass → the strengthened assertion is load-bearing and the previous form was vacuous under a renamed key |
 | mutation (b) | replace `_ -> DateTime.utc_now()` with a raise in `claim_response_time/1` → **exit 2**, `18/31` passed: 13 controller tests red, including "an expired lease returns ownership_lost instead of a zero remaining lease" with `** (RuntimeError) claim_server_time missing on the production path` raised from `daemon_controller.ex:133` via `claim/2:112` → the fallback is production's only path |
-| mutation (c) | `git grep -n "raw_body_private_key/0"` → **no match (exit 1)**; `git grep -n "def raw_body_private_key"` → **no match (exit 1)**; `git grep -n "StrictEvidenceJSON.raw_body_private_key"` → **no match (exit 1)**. Remaining `raw_body_private_key` hits: lib `:107` (attribute), `:122` (`materialize/1`), `:166` (`capture/2`); test `:13` (test-side attribute), `:31,:37,:53,:231,:291` |
+| mutation (c) | all three scoped to `-- control/lib control/test` → **no match (exit 1)**: `git grep -n "raw_body_private_key/0"`; `git grep -n "def raw_body_private_key"`; `git grep -n "StrictEvidenceJSON.raw_body_private_key"`. Remaining `raw_body_private_key` hits in the code trees: lib `:107` (attribute), `:122` (`materialize/1`), `:166` (`capture/2`); test `:13` (test-side attribute), `:31,:37,:53,:231,:291` — unscoped, the token also appears as prose in this plan and in `docs/plans/2026-11-21-rf-w2-02-strict-json-decoder-plan.md:27,55` |
 | full suite | **not run here** — assigned to the conductor's gate-runner (never two full suites on this host) |
 | dLOC (report-only, D2) | `git diff --numstat` on the delivered bytes: `daemon_controller.ex` +3/−0 (comment only), `strict_evidence_json.ex` +0/−9 (272 → 263 lines), plug test +12/−5 (352 → 359 lines); slice total +15/−14, production lib removed **9** lines and added 3 comment lines, test file net +7 |
 
