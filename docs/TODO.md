@@ -166,18 +166,21 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       leader-absent path, `:1237` on the post-readback final scan), where they become sticky
       `descendantScanLost` (`:1248-1252`) or an unproven containment return (`:1205-1207`), and the
       same manufactured errors also reach the supervisor mirror path —
-      `containment_supervisor_linux.go:1801` (`verifyMirrorObservation`, returned as-is) and `:2026`
+      `supervisor_linux_client.go:1223` (`verifyMirrorObservation`, returned as-is) and `:1448`
       (`sealInitialMirrorScanForWitness`, whose pre-resume witness scan wraps the error). Same shape
       as the barrier join `:665-688` (fixed, with pins, by PR #105 `e64f8c0`) and
       `stopDescendantMonitor` (fixed, with pins, on branch `fix/stop-descendant-recheck`). Apply the
       same recheck here and pin both directions (an arm that becomes ready at the deadline is honored;
       a monitor that never answers still fails closed), in a separate maintenance change. This entry's
       inventory is scoped to the RPC arms: two further pre-existing arms of the same class —
-      `containment_supervisor_linux.go`'s `sealInitialMirrorScanForWitness` (`:2046-2048`, timer arm on
-      `mirror.monitorDone`) and `waitForScanEvents` (`:1232-1235`, timer arm on `done`, the channel
-      `serveScanEvents` closes at `:1084`) — are recorded for completeness but not part of this fix
+      `supervisor_linux_client.go`'s `sealInitialMirrorScanForWitness` (`:1468-1470`, timer arm on
+      `mirror.monitorDone`) and `waitForScanEvents` (`:654-657`, timer arm on `done`, the channel
+      `serveScanEvents` closes at `:506`) — are recorded for completeness but not part of this fix
       direction.
       Closed part moved to `docs/archive/CLOSED-TODO.md`.
+      Coordinates re-pointed to `supervisor_linux_client.go` by the move-only platform split
+      (`docs/plans/2026-11-21-rf-w1-04-platform-split-plan.md`); the four declarations were moved
+      unchanged, no line above them in that file was edited.
 
 ## Retro review follow-ups (second pass, 2026-11-20)
 
