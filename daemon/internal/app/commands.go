@@ -147,15 +147,21 @@ func (daemon *daemon) nextQueuedCommand() (*queuedCommand, bool) {
 func (daemon *daemon) finishQueuedCommand(queued *queuedCommand, receipt bool) {
 	daemon.mu.Lock()
 	defer daemon.mu.Unlock()
-	daemon.commands.finish(queued.key, queued, receipt)
+	// Completion is by key, so the holder of a specific entry first checks
+	// that it is still the registered one: a released run may have re-enqueued
+	// the same key with a new entry, and settling that one from a stale
+	// pointer would complete a live command.
+	if daemon.commands.current(queued) {
+		daemon.commands.finish(queued.key, receipt)
+	}
 }
 
 func (daemon *daemon) finishDeferredCommand(key commandKey, receipt bool) {
 	daemon.mu.Lock()
 	defer daemon.mu.Unlock()
-	// A nil entry resolves whatever key currently maps to: the deferred path
-	// completes the entry the command key is registered under, if any.
-	daemon.commands.finish(key, nil, receipt)
+	// The deferred path completes the entry the command key is registered
+	// under, if any.
+	daemon.commands.finish(key, receipt)
 }
 
 func (daemon *daemon) commandSignal() <-chan struct{} {

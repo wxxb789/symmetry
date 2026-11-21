@@ -2,8 +2,11 @@
 
 Contract: `goal-rf-w4-17a-command-queue-module.md` (GDD, 2026-11-21), binding with its
 conductor design clauses 1-5 and the program-wide rules. Base revision
-`7954836892f39bc8a92abe11e5efcb5b3bac3476` (= `origin/main`, this worktree's HEAD, clean tree);
-every line coordinate below resolves at it. Shape reference: `docs/plans/2026-11-21-rf-w1-05-app-go-split-plan.md`
+`7954836892f39bc8a92abe11e5efcb5b3bac3476` — the revision every line coordinate below resolves at.
+The branch later merged `origin/main` three times (`fc8e95a2` as `a4770eda`, `94d04e42` as `9207e5a4`,
+`9e473513` as `2715b780`) and `origin/main` has advanced past `9e473513`; no commit on `origin/main`
+changed a delivered file (`git diff` over the nine paths of the delivered range is empty at every step).
+Shape reference: `docs/plans/2026-11-21-rf-w1-05-app-go-split-plan.md`
 + `docs/evidence/rf-w1-05-app-go-split-2026-11-21.md` (same package, same wave-4 program; plan +
 `docs/evidence/<slice>-<date>.md` record + mechanical move/shape proofs).
 
@@ -65,10 +68,11 @@ evidence record.
 3. **`daemon/internal/app/commands.go`** — the queue methods' bodies are replaced by queue calls:
    `enqueueCommandLocked` (gate stays: `CommandID`/`commandWake`/`backgroundStop` are daemon lifecycle state),
    `nextQueuedCommand`, `nextLaneCommand`, `dispatchQueuedCommand` (membership check → `current`, lane block →
-   `lane`), `executeQueuedCommand` (membership check → `current`), `finishQueuedCommand`,
-   `finishDeferredCommand`, `enqueueSnapshotCommandsForRequest` (tombstone read/delete → `receipts`),
-   `beginCommandRequest`, `finishCommandRequest`; `finishQueuedCommandLocked` is deleted (its body is
-   `commandQueue.finish`).
+   `lane`), `executeQueuedCommand` (membership check → `current`), `finishQueuedCommand` (`current(queued)`
+   guard + `finish(queued.key, receipt)`), `finishDeferredCommand` (`finish(key, receipt)`),
+   `enqueueSnapshotCommandsForRequest` (tombstone read/delete → `receipts`), `beginCommandRequest`,
+   `finishCommandRequest`; `finishQueuedCommandLocked` is deleted (its identity guard is the instance
+   caller's `current` check, its body is `commandQueue.finish`).
 4. **`daemon/internal/app/outbox.go`** — `markCommandAcknowledgementDelivered` calls
    `daemon.commands.receipts.suppress(key)` before and `daemon.commands.markDelivered(key)` after the journal
    write; lock sites unchanged.
@@ -99,7 +103,7 @@ evidence record.
 | `lane(key, queued) bool` | append to the run's lane; `true` = the caller must start the lane's drain goroutine | `dispatchQueuedCommand` |
 | `nextInLane(key) (*queuedCommand, bool)` | pop the run lane's head; drop the drained lane | `nextLaneCommand` |
 | `current(queued) bool` | is `queued` still the entry registered for its key | `dispatchQueuedCommand`, `executeQueuedCommand` |
-| `finish(key, registered, receipt)` | complete the registered entry (nil `registered` = whatever `key` maps to, the deferred path); receipt rule below | `finishQueuedCommand`, `finishDeferredCommand` |
+| `finish(key, receipt)` | complete whatever entry `key` currently maps to; a caller holding a specific entry (`finishQueuedCommand`) checks `current(queued)` first; receipt rule below | `finishQueuedCommand`, `finishDeferredCommand` |
 | `dropRun(key)` | release every entry of a run (close waiters, evict) | `releaseRun`, `clearCompletedCommandReceipts` |
 | `markDelivered(key)` | record a delivered receipt; evict a completed entry | `markCommandAcknowledgementDelivered` |
 
@@ -118,19 +122,24 @@ evidence record.
 **D1 — the receipt bookkeeping is a sibling value type.** Design clause 1 asks for the three queue fields
 *plus* "the request-id bookkeeping used by begin/finishCommandRequest and the command-receipt state if it is
 only touched by these methods (if receipts are also touched elsewhere, leave them and record why)". The
-receipt state is touched elsewhere: `markCommandAcknowledgementDelivered` (outbox.go) writes the tombstones
-*before* and the delivered flag *after* a `Store` write, from outside any queue call, and the wire between
-the two phases is `commandReceiptMu` — a mutex that is held while a journal write may block, so it cannot
-become a lock-free queue method and cannot move into the module's no-lock contract, and a suppression window
-is not queue-flow state. Counting the operations the daemon actually needs (13: arrival put/pop, lane
-put/pop, membership, complete-instance, complete-by-key, release-run, window open/close, tombstone,
-delivered-evict) leaves 8 queue-flow/guard/completion/release verbs. The split is *not* a budget artefact:
+receipt state is touched elsewhere: `markCommandAcknowledgementDelivered` (outbox.go:1124-1149) writes the
+tombstones *before* and marks the delivered entry *after* a `Store` write. Both writes are queue calls under
+the caller's locks — `receipts.suppress` under `commandReceiptMu` + `daemon.mu` (outbox.go:1126-1128) before
+the write, and `commands.markDelivered` under the same two locks (outbox.go:1143-1146) after re-acquiring
+them — so `commandReceiptMu` is *released across* the journal write and is not held while that write may
+block; the delivered mark (`queuedCommand.delivered`) is queue state, not receipt state. The only site that
+holds `commandReceiptMu` across a journal write is the terminal-acknowledgement persistence loop
+(outbox.go:210-241), which never touches this bookkeeping. A suppression window is ordered against
+acknowledgement delivery by that mutex, not by queue flow, so the receipt bookkeeping stays a sibling value
+type. Counting the operations the daemon actually needs (12: arrival put/pop, lane put/pop, membership,
+complete-by-key, release-run, window open/close, tombstone read/write, delivered-evict) leaves 8
+queue-flow/guard/completion/release verbs. The split is *not* a budget artefact:
 the binding budget is at most 12 methods (arch-decision-2, superseding amendment 1's 11), and the delivered
 file counts exactly 12 (8 + 4), so one type with all 12 would also fit. Options considered: (a) 12 methods
 on one type — within the amended budget, but the module's single lock contract would then also cover the
-suppression windows, whose two mutations in `markCommandAcknowledgementDelivered` are ordered by
-`commandReceiptMu` across a journal write (the tombstone under `commandReceiptMu` + `daemon.mu`, the
-delivered mark under `commandReceiptMu` alone), so the file-level comment would have to qualify itself;
+suppression windows, whose mutations in `markCommandAcknowledgementDelivered` are ordered by
+`commandReceiptMu` around a journal write (both phases under `commandReceiptMu` + `daemon.mu`, with the lock
+released across the write), so the file-level comment would have to qualify itself;
 (b) one or two enum-dispatch "god methods" (`finish(key, instance, stage)` carrying unrelated
 eviction/completion effects) — a worse interface, and the enum would have to bypass the completion effects
 for the delivery phase; (c) package-level helper functions over queue state — keeps the count but hides the
@@ -179,9 +188,11 @@ window inside the same `startBackground` lifetime), no test or production path t
    the arrival FIFO and the lanes may still hold pointers to released entries — exactly as base. Such an entry
    fails `current`, so `dispatch` and `execute` drop it; that is the documented consistency contract of
    `dropRun` (base behavior, not fixed here).
-5. **Completion.** `finish` acts only when the entry is still registered for its key (identity, not key
-   equality), closes `done` once (`completed` guard), marks it complete, and evicts unless
-   `receipt && !delivered`. Deferred completion resolves the entry the key currently maps to.
+5. **Completion.** `finish` completes whatever entry `key` currently maps to and does nothing when the key
+   is absent. The identity guard stays with the instance callers: `finishQueuedCommand` checks
+   `current(queued)` before calling `finish(queued.key, receipt)`, so a stale pointer cannot settle an
+   entry a released run re-enqueued under the same key. Completion closes `done` once (`completed` guard),
+   marks the entry complete, and evicts it unless `receipt && !delivered`.
 6. **Receipts.** `markDelivered` marks the entry delivered and evicts it only when already completed;
    `suppress` tombstones a key in every live window (and tolerates a nil window set, as base);
    `suppressed` reads a window's set; `finish(window)` deletes it. Nothing else removes a window.

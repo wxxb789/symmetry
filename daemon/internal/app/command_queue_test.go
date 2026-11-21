@@ -162,7 +162,7 @@ func TestCommandQueueDropRunReleasesExactlyOneRun(t *testing.T) {
 		t.Fatal("run-a's lane append did not report a start")
 	}
 	// a2 finished with a receipt still pending: completed but registered.
-	queue.finish(a2.key, a2, true)
+	queue.finish(a2.key, true)
 	if !queue.current(a2) {
 		t.Fatal("an entry with a pending receipt was evicted by finish")
 	}
@@ -184,7 +184,7 @@ func TestCommandQueueDropRunReleasesExactlyOneRun(t *testing.T) {
 	if popped, ok := queue.nextInLane(runA); !ok || popped != a1 || queue.current(popped) {
 		t.Fatalf("lane pop after dropRun = %p/%v, want the released entry %p marked not current", popped, ok, a1)
 	}
-	queue.finish(a1.key, a1, false)
+	queue.finish(a1.key, false)
 	if !queue.current(b1) || len(queue.byKey) != 1 {
 		t.Fatal("finishing a released entry disturbed the surviving run")
 	}
@@ -202,14 +202,14 @@ func TestCommandQueueDropRunReleasesExactlyOneRun(t *testing.T) {
 func TestCommandQueueFinishHonoursReceiptAndDelivery(t *testing.T) {
 	queue := newCommandQueue()
 	withoutReceipt, _ := queue.enqueue(queuedTestCommand("run-1", 1, "cancel-1"))
-	queue.finish(withoutReceipt.key, withoutReceipt, false)
+	queue.finish(withoutReceipt.key, false)
 	requireClosedDone(t, withoutReceipt, "entry finished without a receipt")
 	if queue.current(withoutReceipt) {
 		t.Fatal("entry finished without a receipt stayed registered")
 	}
 
 	withReceipt, _ := queue.enqueue(queuedTestCommand("run-1", 1, "input-1"))
-	queue.finish(withReceipt.key, withReceipt, true)
+	queue.finish(withReceipt.key, true)
 	requireClosedDone(t, withReceipt, "entry finished with a receipt")
 	if !queue.current(withReceipt) {
 		t.Fatal("entry with a pending receipt was evicted before delivery")
@@ -229,25 +229,33 @@ func TestCommandQueueFinishHonoursReceiptAndDelivery(t *testing.T) {
 	// dedupe entry goes with it.
 	deliveredFirst, _ := queue.enqueue(queuedTestCommand("run-1", 1, "input-3"))
 	queue.markDelivered(deliveredFirst.key)
-	queue.finish(deliveredFirst.key, deliveredFirst, true)
+	queue.finish(deliveredFirst.key, true)
 	requireClosedDone(t, deliveredFirst, "entry finished after its receipt was delivered")
 	if queue.current(deliveredFirst) {
 		t.Fatal("completion kept an entry whose receipt was already delivered")
 	}
-	queue.finish(inflight.key, inflight, false)
+	queue.finish(inflight.key, false)
 	replay, created := queue.enqueue(queuedTestCommand("run-1", 1, "input-2"))
 	if !created {
 		t.Fatal("replay after eviction was treated as a duplicate")
 	}
-	queue.finish(replay.key, inflight, false)
+	if queue.current(inflight) {
+		t.Fatal("the evicted entry still reports current after its key was re-enqueued")
+	}
+	// Completion is by key, so a caller holding a stale pointer checks current
+	// first -- the guard daemon.finishQueuedCommand composes around finish. The
+	// stale entry fails that guard, so the replay must survive.
+	if queue.current(inflight) {
+		queue.finish(inflight.key, false)
+	}
 	if !queue.current(replay) {
 		t.Fatal("a stale instance settled the re-enqueued command key")
 	}
-	queue.finish(replay.key, nil, false)
+	queue.finish(replay.key, false)
 	if queue.current(replay) {
 		t.Fatal("deferred completion did not complete the registered entry")
 	}
-	queue.finish(queuedTestKey("run-9", 1, "absent"), nil, true)
+	queue.finish(queuedTestKey("run-9", 1, "absent"), true)
 	queue.markDelivered(queuedTestKey("run-9", 1, "absent"))
 	if len(queue.byKey) != 0 {
 		t.Fatalf("registered entries after resolving an absent key = %d, want none", len(queue.byKey))

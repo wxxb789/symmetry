@@ -137,18 +137,19 @@ func (queue *commandQueue) current(queued *queuedCommand) bool {
 	return queue.byKey[queued.key] == queued
 }
 
-// finish completes the entry registered for key. When registered is non-nil it
-// must be that exact entry: a released run may have re-enqueued the same key with
-// a new entry, and completing the new entry from a stale caller would settle a
-// live command. A nil registered means "the entry key currently maps to" and is
-// the deferred-completion path.
+// finish completes the entry currently registered for key, if any. Completion
+// closes the entry's done channel once, marks it completed, and evicts it
+// unless a durable acknowledgement is still pending delivery (receipt true)
+// that has not been delivered yet.
 //
-// Completion closes the entry's done channel once, marks it completed, and
-// evicts it unless a durable acknowledgement is still pending delivery
-// (receipt true) that has not been delivered yet.
-func (queue *commandQueue) finish(key commandKey, registered *queuedCommand, receipt bool) {
+// Completion is by key, so a caller that holds a specific entry checks current
+// before calling finish: a released run may have re-enqueued the same key with
+// a new entry, and completing the re-enqueued one from a stale pointer would
+// settle a live command. finishQueuedCommand composes that check; the deferred
+// path calls finish directly because it has no instance to compare.
+func (queue *commandQueue) finish(key commandKey, receipt bool) {
 	current := queue.byKey[key]
-	if current == nil || (registered != nil && current != registered) {
+	if current == nil {
 		return
 	}
 	if !current.completed {
@@ -195,16 +196,20 @@ func (queue *commandQueue) markDelivered(key commandKey) {
 // windows opened around control-plane responses and the tombstones that an
 // acknowledgement delivery writes into every live window.
 //
-// It is a value inside commandQueue rather than more queue methods because its
-// tombstones and delivered marks are written by the outbox delivery path across
-// a journal write, outside any queue call, and the mutex that wires those two
-// phases (daemon.commandReceiptMu) is held while that write may block. That
-// mutex cannot become part of this module's lock-free contract, so the receipt
-// state stays a sibling value rather than four more queue methods: one intent per
-// type, every write to the bookkeeping inside this file, and the module's total
-// stays at the contract's binding budget (at most 12 methods: the 8 queue methods
-// above plus the 4 receipt methods below). Lock contract and zero-value tolerance
-// are commandQueue's.
+// It is a value inside commandQueue rather than more queue methods because it
+// keeps its own ordering: every write to it happens inside a queue call under
+// the caller's locks, but markCommandAcknowledgementDelivered orders the
+// tombstone against a journal write with daemon.commandReceiptMu. That method
+// takes commandReceiptMu + daemon.mu, calls receipts.suppress, releases both
+// locks across the delivery journal write, and re-takes them for the queue's
+// markDelivered -- so commandReceiptMu is not held across that write, and the
+// delivered mark (queuedCommand.delivered) is queue state, not receipt state.
+// commandReceiptMu is held across a journal write only by the
+// terminal-acknowledgement persistence loop (outbox.go:210-241), which never
+// touches this bookkeeping. One intent per type, every write to the bookkeeping
+// inside this file, and the module stays at the contract's binding budget (at
+// most 12 methods: the 8 queue methods above plus the 4 receipt methods below).
+// Lock contract and zero-value tolerance are commandQueue's.
 type commandReceipts struct {
 	requests    map[uint64]map[commandKey]struct{}
 	nextRequest uint64
