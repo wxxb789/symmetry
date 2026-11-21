@@ -3700,8 +3700,16 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
       (`{:error, :invalid_validation_profile}`, 1/2 passed), restored byte-identically
       (`sha256:171c5cce4c2b89a1ff1752974cea19a45ac82474e8687f350fa371feb98ac3db`) and green again.
 
-      Revision note: the full suite and the `(module, name)` comparison above were measured on the
-      implementation revision `0f97a3e9`; the `origin/main` merge and the 3-file apply delta — the
-      shipping revision `42fe4f85` — were re-verified with format/compile/targeted/web/e2e runs
-      with the same counts, and the full suite on `42fe4f85` remains with the conductor
-      gate-runner.
+      Revision note: the round-1 review fix (the dead `integrations_test.exs` imports and their two
+      `.exs` compiler warnings; the `CredentialLeakProviderStub` move into
+      `control/test/support/integration_fixtures.ex` with the static `respond_with/2` call
+      restored; the `create_resource/5` consolidation into `TestConn`) ships on revision
+      `61f8980526` — this revision note and the plan's rerun record are the docs-only commit
+      directly on top of it. Reruns on `61f8980526`: `mix format --check-formatted` exit 0;
+      `MIX_ENV=test mix compile --warnings-as-errors --force` exit 0; `mix test
+      test/symmetry_control/integrations_test.exs` 32 passed with 0 `warning:` lines; `mix test
+      test/symmetry_control_web/ --exclude portal_assets` 275 passed, 1 skipped, 4 excluded, exit
+      0, 0 `warning:` lines; the two e2e files 2 passed, 10 skipped, exit 0; the other three
+      `IntegrationFixtures` importers load with 0 `warning:` lines. The full suite and the
+      `(module, name)` comparison above were measured on the implementation revision `0f97a3e9`;
+      the full suite on `61f8980526` remains with the conductor gate-runner.

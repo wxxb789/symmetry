@@ -370,8 +370,8 @@ unaffected by this change and covered by the CI control job).
 ### Round-1 review fix (opus review round 1)
 
 The round-1 review's P2-1 (two dead imports and their compiler warnings), P3-1 (runtime `apply/3`
-dispatch to a stub defined in a test file) and P3-2 (stale shipping-revision note) are fixed on the
-revision named in `docs/archive/CLOSED-TODO.md`'s revision note:
+dispatch to a stub defined in a test file) and P3-2 (stale shipping-revision note) are fixed on
+revision `61f8980526` (named in `docs/archive/CLOSED-TODO.md`'s revision note):
 
 - **P2-1:** `format_sync_wait_sample: 1` and `sync_wait_sample: 2` were dead entries in
   `integrations_test.exs`'s `only:` import list (their only caller,
@@ -393,3 +393,15 @@ Escalations carried from the fix report:
   host-plumbing home). The conductor decision asks for consolidation unless a provable exception
   applies, and these need either the record's acceptance or a widened owned set for a
   host-plumbing support module.
+
+Reruns on the round-1 fix revision `61f8980526` (portable toolchain recipe,
+`MIX_TEST_PARTITION=rf-w3-03`, `--exclude portal_assets`): format exit 0; `MIX_ENV=test mix compile
+--warnings-as-errors --force` exit 0; `mix test test/symmetry_control/integrations_test.exs` 32
+passed, 0 `warning:` lines; `mix test test/symmetry_control_web/` 275 passed, 1 skipped, 4 excluded,
+exit 0, 0 `warning:` lines; the two e2e files 2 passed, 10 skipped, exit 0; the other three
+`IntegrationFixtures` importers (`integrations/syncer_test.exs`,
+`resource_sync_identity_loss_test.exs`, `resource_sync_inflight_marker_test.exs`) load with 0
+`warning:` lines. One earlier web run on the same bytes hit a host-load flake at
+`provider_action_controller_test.exs:1960` (`{:DOWN, …, :noproc}` where the test pins `:killed`);
+the file passed alone (79 passed) and the rerun above is green. The full suite stays with the
+conductor gate-runner.
