@@ -14,7 +14,7 @@ contract are decomposed into per-section helpers called in the same order, each 
 | validator | base lines | base span | base gocyclo | helpers after | after span | after gocyclo |
 |---|---|---:|---:|---|---:|---:|
 | `validateJournal` (`state.go:5817`) | 5817–6018 | 202 | 171 | 11 | 39 | 13 |
-| `validateLinuxCloneJournal` (`state.go:4881`) | 4881–5053 | 173 | 140 | 16 | 29 | 11 |
+| `validateLinuxCloneJournal` (`state.go:4881`) | 4881–5053 | 173 | 140 | 15 | 35 | 13 |
 | `validateGoalSessionJournal` (`goal_session.go:1647`) | 1647–1719 | 73 | 70 | 8 | 30 | 10 |
 | `(LinuxCgroupReservation).Validate` (`state.go:144`) | 144–212 | 69 | 78 | 9 | 30 | 10 |
 
@@ -54,12 +54,14 @@ Callers of the four validators are unchanged (`SaveJournal`, `saveJournalLocked`
    `return nil` that already terminated an extracted stage.
 2. **Strings.** Byte-identical `errors.New` literals, including the intentionally terse repeated
    `"run journal is invalid"` and the two distinct `"run journal containment scan …"` strings.
-3. **Guarded blocks stay guarded at the same site.** `if journal.ContainmentAuthority != nil {…}`,
+3. **Guarded blocks keep their original call site.** `if journal.ContainmentAuthority != nil {…}`,
    the abort branch guard, `if checkout == nil {…}`, `if promotionIntent == nil {…}`,
    `if journal.LinuxCloneCleanupIntent == nil {…}` and the `if reuse := …; reuse != nil {…}` reuse
-   branch keep their condition line in the parent validator and call one helper for the body, so the
-   "no evidence without an intent" / "git ref promotion has no checkout receipt" style probes still
-   run at their original position.
+   branch all keep their original position; for four of them the condition line itself moved into
+   the helper invoked there (`validateContainmentAuthority`, `validateLinuxCloneCheckout`,
+   `validateLinuxClonePromotion`, `validateLinuxCloneCleanup`), while the reuse and abort guard
+   lines stay in the parent validator. The "no evidence without an intent" / "git ref promotion has
+   no checkout receipt" style probes still run at their original position.
 4. **Unreachable branches are not "fixed" here.** Two conditions in `validateContainmentCgroup`
    (`v2 cgroup reservation cannot accompany a v1 authority` / `… a v1 handoff`) cannot fire: the
    authority/handoff blocks return `v1 … cannot use a v2 cgroup reservation` first whenever a v1
@@ -82,11 +84,12 @@ Reserved names from the contract are used for their blocks: `validateContainment
 `validateContainmentHandoff`, `validateContainmentCgroup`, `validateContainmentScans`,
 `validateLinuxCloneNonReuseBranch`. The last one names a *region*, not a base declaration: the base
 `validateLinuxCloneJournal` has no such function, C5 resolves the region into the per-stage helpers
-below, and the reuse region becomes `validateLinuxCloneReuseBranch(journal, reuse)`.
+below, and the reuse guard in `validateLinuxCloneJournal` calls `validateLinuxCloneReuseGrant`,
+`validateLinuxCloneReuseAbortState` and `validateLinuxCloneReuseRetainedTarget` directly.
 
 `validateJournal` (12 checks, span 39, CC 13):
-`validateJournalKeyAndScalars` (the moved `validateKey` call plus scalar fields, PID details ×2,
-containment uncertainty) · `validateContainmentAuthority` · `validateContainmentHandoff` ·
+`validateJournalKeyScalarsAndProcessDetails` (the moved `validateKey` call plus scalar fields, PID
+details ×2, containment uncertainty) · `validateContainmentAuthority` · `validateContainmentHandoff` ·
 `validateContainmentCgroup` · `validateContainmentScans` · `validateContainmentCgroupReleaseProof` ·
 `validateContainmentCgroupPreGateReleaseProof` ·
 `validateJournalLeaseTerminalAndGrantInvariants` (lease/work, terminal state, native-usage recovery
@@ -108,10 +111,9 @@ allowed-new-line set, and it would allocate in the journal-save hot path.
 `validateLinuxCloneJournal`: reuse branch · intent-absent · intent (+ fence subject) · seed receipt ·
 abort (shared checks + pending branch + proof branch) · checkout · promotion (without-intent
 sub-branch + intent/receipt) · cleanup (absent sub-branch + intent + pending + proof). The reuse
-branch became four helpers after measurement: the block measured CC 29 as one function
-(`validateLinuxCloneReuseBranch` → grant, abort state, retained target), so it is now
-`validateLinuxCloneReuseBranch` + `validateLinuxCloneReuseGrant` +
-`validateLinuxCloneReuseAbortState` + `validateLinuxCloneReuseRetainedTarget`.
+branch became three helpers after measurement: the block measured CC 29 as one function, so it is
+now `validateLinuxCloneReuseGrant` + `validateLinuxCloneReuseAbortState` +
+`validateLinuxCloneReuseRetainedTarget`, called in that order from the reuse guard in the parent.
 
 `validateGoalSessionJournal`: schema · session/launch state scalars · launch-attempt metadata ·
 launch outcome (attached/uncertain/closed/recovery/reason/native-handle) · control attachment ·
@@ -134,12 +136,11 @@ producer-exit evidence) · creation order, as unexported methods on the value ty
 - `validateContainmentCgroupReleaseProofs` measured CC 26 as one helper, one over the limit, so it
   became `validateContainmentCgroupReleaseProof` (14) and
   `validateContainmentCgroupPreGateReleaseProof` (13) in the same order.
-- `validateContainmentScans` (24), `validateJournalKeyAndScalars` (24) and
+- `validateContainmentScans` (24), `validateJournalKeyScalarsAndProcessDetails` (24) and
   `validateJournalLeaseTerminalAndGrantInvariants` (25) sit at or beside the limit: the checker
   asserts the measured values rather than assuming them, and the evidence record flags them as
   split-before-extend.
-- `validateLinuxCloneReuseBranch` measured CC 29, so it decomposes into the four reuse helpers named
-  above.
+- The inline reuse region measured CC 29, so it decomposes into the three reuse helpers named above.
 - The clone promotion/cleanup stages each contain two `return nil`-terminated sub-branches; each
   becomes its own helper, so no helper carries both stages' CC.
 
@@ -177,12 +178,12 @@ unreachable cgroup branches (recorded, not fixed); reducing `validateControlComm
    the same test suite on WSL `Ubuntu-24.04` (C2) — never concurrently with the measurement tool;
    `git diff --check`; host-path scan (`git diff origin/main...HEAD | grep -i "users/"`).
 5. **Record.** `docs/evidence/rf-w2-09-state-validators-2026-11-21.md` + move manifest, before/after
-   table and raw gate output (the manifest is the per-function span/CC table in §2, 48 functions);
+   table and raw gate output (the manifest is the per-function span/CC table in §2, 47 functions);
    `docs/TODO.md` entries for `validGoalSessionUUID` (C7), the six unreachable conditions and the
    verified nil-deref panic.
 
 Delivered outcome of this plan (all five steps ran; see the evidence record for exit codes and
-counts): move proof PASS on all four groups, pinned ≤40-line/≤25-CC gate exit 0 over the 48 sliced
+counts): move proof PASS on all four groups, pinned ≤40-line/≤25-CC gate exit 0 over the 47 sliced
 functions, `gocyclo` offender set −4 and unchanged otherwise, Windows and WSL state suites green,
 mutation check red-then-green.
 
@@ -197,7 +198,7 @@ mutation check red-then-green.
   and would need a new file, outside the owned set). Consequence: those pins run on the Linux lane
   (WSL + CI) and are not compiled into the Windows suite.
 - **`(bool, error)` reuse-branch helper (rejected)** vs. keeping the base guard line in the parent and
-  calling `validateLinuxCloneReuseBranch(journal, reuse) error` (chosen): the chosen form leaves the
+  calling the three reuse helpers from that guard's body (chosen): the chosen form leaves the
   `if reuse := journal.LinuxCloneReuseGrant; reuse != nil {` line byte-identical instead of inventing
   a new guard condition, which C3 treats as a move violation.
 - **One helper for both release proofs** was the first choice; measurement showed CC 26 (>25), so the

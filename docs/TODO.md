@@ -664,14 +664,14 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       that slice). Reachability was probed by mutating one condition at a time against the rf-w2-09
       pin fixtures (probe code not committed); the affected strings are listed in
       `docs/evidence/rf-w2-09-state-validators-2026-11-21.md` §5.
-      (a) `v2 cgroup reservation cannot accompany a v1 authority` (`state.go:6089`) and
-      `v2 cgroup reservation cannot accompany a v1 handoff` (`state.go:6092`): the authority and
+      (a) `v2 cgroup reservation cannot accompany a v1 authority` (`state.go:6082`) and
+      `v2 cgroup reservation cannot accompany a v1 handoff` (`state.go:6085`): the authority and
       handoff blocks (`validateContainmentAuthority`, `validateContainmentHandoff`) already return
       `v1 … cannot use a v2 cgroup reservation` whenever a non-v2 owner is combined with a cgroup
       reservation, so the later checks can never fire.
       (b) `Linux cgroup reservation cannot have both abort and physical-stop proof` (`state.go:259`)
       and `Linux cgroup aborted reservation lost producer-exit evidence` (`state.go:263`):
-      `linuxCgroupReservationAbortMatches` (`state.go:5854`) returns false for every proof that
+      `linuxCgroupReservationAbortMatches` (`state.go:5847`) returns false for every proof that
       carries a pre-gate receipt or lacks producer-exit parity, so the earlier abort-proof error
       fires first. Probes: aborted reservation + pre-gate receipt → `Linux cgroup reservation abort
       proof is invalid`; aborted reservation + helper exit proof → `Linux cgroup helper exit proof
@@ -682,9 +682,9 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       launcher exit→launcher exit proof, gate→gate identity, helper exit→helper exit proof,
       abort with a disposition other than `neverCreated`→abort proof). Probe: unstarted reservation
       + leaf identity → `Linux cgroup reservation leaf identity is invalid`.
-      (d) `unresolved input command has an acknowledgement` (`state.go:6230`): it needs `pending`
+      (d) `unresolved input command has an acknowledgement` (`state.go:6223`): it needs `pending`
       with `intent.Outcome == ""`, but `pending` compares against `acknowledgement.Outcome` and
-      `validAcknowledgement` (`state.go:6396`) requires a non-blank `Outcome`, so an empty-outcome
+      `validAcknowledgement` (`state.go:6389`) requires a non-blank `Outcome`, so an empty-outcome
       acknowledgement is rejected earlier with `run journal is invalid`. Probe: empty-outcome
       acknowledgement → `run journal is invalid`; an applied acknowledgement leaves the fixture
       valid.
@@ -693,8 +693,8 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       string; keep the surrounding block's other conditions.
 
 - [ ] Fix the nil-pointer panic in `validateLinuxCloneCheckout`
-      (`daemon/internal/state/state.go:5097`). It dereferences `*seed`
-      (`linuxCloneCheckoutMatches(*intent, *seed, *checkout)`, `state.go:5108`) although
+      (`daemon/internal/state/state.go:5090`). It dereferences `*seed`
+      (`linuxCloneCheckoutMatches(*intent, *seed, *checkout)`, `state.go:5101`) although
       `journal.LinuxCloneSeedReceipt` is only tested as `seed != nil && …` earlier in the same
       validator, so a journal carrying `linux_clone_checkout_receipt` without
       `linux_clone_seed_receipt` panics instead of failing validation. Verified 2026-11-21 with a
@@ -708,9 +708,10 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       first-error strings.
 
 Decision note: rf-w2-09 left `validateJournalLeaseTerminalAndGrantInvariants`
-(`state.go:6153`) at cyclomatic complexity 25 and `validateJournalKeyAndScalars` (`state.go:6005`)
-and `validateContainmentScans` (`state.go:6098`) at 24, against the wave's ≤25 acceptance. The next
-condition added to any of those three blocks must be split into a new helper instead of appended.
+(`state.go:6146`) at cyclomatic complexity 25 and `validateJournalKeyScalarsAndProcessDetails`
+(`state.go:5998`) and `validateContainmentScans` (`state.go:6091`) at 24, against the wave's ≤25
+acceptance. The next condition added to any of those three blocks must be split into a new helper
+instead of appended.
 
 ## Daemon: `writeInputBounded` can strand its writer goroutine (audit F15)
 

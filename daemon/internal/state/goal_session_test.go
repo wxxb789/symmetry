@@ -2006,11 +2006,12 @@ func testGoalSessionCompatibility() GoalSessionCompatibility {
 }
 
 // TestGoalSessionValidatorFirstErrorStringsArePinned pins the first error of
-// every validateGoalSessionJournal block. The production persist seam
-// mutateGoalSession loads, mutates and validates the journal in memory before
-// it saves, so the returned error is exactly the validator's first error and a
-// rejected case can never observe a later block's string or change the
-// persisted journal.
+// every decomposed validateGoalSessionJournal block (the inline
+// validateGoalSessionIntent call is outside the extracted set). The production
+// persist seam mutateGoalSession loads, mutates and validates the journal in
+// memory before it saves, so the returned error is exactly the validator's
+// first error and a rejected case can never observe a later block's string or
+// change the persisted journal.
 func TestGoalSessionValidatorFirstErrorStringsArePinned(t *testing.T) {
 	t.Parallel()
 	const (
@@ -2094,6 +2095,15 @@ func TestGoalSessionValidatorFirstErrorStringsArePinned(t *testing.T) {
 			name:   "attached launch without attempted launch",
 			mutate: func(journal *GoalSessionJournal) { journal.LaunchState = GoalSessionLaunchStateAttached },
 			want:   "goal session native handle is invalid",
+		},
+		{
+			name: "attached launch with native handle but no launch attempt",
+			mutate: func(journal *GoalSessionJournal) {
+				attachedShape(journal)
+				journal.LaunchAttempted = false
+				journal.LaunchAttemptedAt = time.Time{}
+			},
+			want: "goal session native handle is invalid",
 		},
 		{
 			name: "attached launch without native handle",

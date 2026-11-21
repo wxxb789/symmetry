@@ -2441,7 +2441,9 @@ func hasTerminalState(transitions []protocol.StateTransitionRequest) bool {
 }
 
 // TestJournalValidatorFirstErrorStringsArePinned pins the exact first error of
-// every reachable validateJournal and (LinuxCgroupReservation).Validate block.
+// every decomposed validateJournal and (LinuxCgroupReservation).Validate block.
+// The Linux clone blocks are pinned by the Linux-tagged sibling test
+// (linux_clone_journal_test.go), which this lane does not compile.
 //
 // The journal cases drive the production persistence seam: store.mutateJournal
 // loads, mutates, and validates the journal, so the returned error is exactly
@@ -2459,6 +2461,9 @@ func TestJournalValidatorFirstErrorStringsArePinned(t *testing.T) {
 		t.Parallel()
 		const invalidJournal = "run journal is invalid"
 		const invalidProcessDetails = "run journal process details are invalid"
+		// launchToken is the LaunchToken used by this group's scan and v1
+		// authority fixtures; the same literal plays the JobID role in others.
+		launchToken := strings.Repeat("d", authority.TokenBytes*2)
 		if err := pinnedJournalV2Authority(42, "windows:42:created-at").Validate(); err != nil {
 			t.Fatalf("V2 authority fixture Validate() error = %v, want nil", err)
 		}
@@ -2487,7 +2492,7 @@ func TestJournalValidatorFirstErrorStringsArePinned(t *testing.T) {
 				mutate: func(journal *RunJournal) {},
 			},
 			{
-				name: "scalar fields",
+				name: "runtime key is blank",
 				seed: pinnedJournalSeedClaimIntent,
 				mutate: func(journal *RunJournal) {
 					journal.RuntimeKey = ""
@@ -2627,7 +2632,7 @@ func TestJournalValidatorFirstErrorStringsArePinned(t *testing.T) {
 				mutate: func(journal *RunJournal) {
 					handoff := testStateSupervisorHandoffFixture(42, "windows:42:created-at")
 					journal.ContainmentHandoff = &handoff
-					journal.ContainmentScans = pinnedJournalScans(strings.Repeat("d", authority.TokenBytes*2))
+					journal.ContainmentScans = pinnedJournalScans(launchToken)
 				},
 				want: "run journal containment scan handoff is invalid",
 			},
@@ -2636,7 +2641,7 @@ func TestJournalValidatorFirstErrorStringsArePinned(t *testing.T) {
 				seed: pinnedJournalSeedRunningGrant,
 				mutate: func(journal *RunJournal) {
 					journal.ContainmentAuthority = pinnedJournalV1Authority(42, "windows:42:created-at", "", "", "")
-					journal.ContainmentScans = pinnedJournalScans(strings.Repeat("d", authority.TokenBytes*2))
+					journal.ContainmentScans = pinnedJournalScans(launchToken)
 				},
 				want: "run journal containment scan authority is invalid",
 			},
@@ -2644,7 +2649,7 @@ func TestJournalValidatorFirstErrorStringsArePinned(t *testing.T) {
 				name: "containment scan state without Linux owner",
 				seed: pinnedJournalSeedClaimIntent,
 				mutate: func(journal *RunJournal) {
-					journal.ContainmentScans = pinnedJournalScans(strings.Repeat("d", authority.TokenBytes*2))
+					journal.ContainmentScans = pinnedJournalScans(launchToken)
 				},
 				want: "run journal containment scan state has no Linux owner",
 			},
@@ -2652,8 +2657,8 @@ func TestJournalValidatorFirstErrorStringsArePinned(t *testing.T) {
 				name: "containment scan failure is not sticky",
 				seed: pinnedJournalSeedRunningGrant,
 				mutate: func(journal *RunJournal) {
-					journal.ContainmentAuthority = pinnedJournalV1Authority(42, "windows:42:created-at", authority.OwnerKindLinuxHelper, "linux-helper:pinned", strings.Repeat("d", authority.TokenBytes*2))
-					journal.ContainmentScans = pinnedJournalScans(strings.Repeat("d", authority.TokenBytes*2))
+					journal.ContainmentAuthority = pinnedJournalV1Authority(42, "windows:42:created-at", authority.OwnerKindLinuxHelper, "linux-helper:pinned", launchToken)
+					journal.ContainmentScans = pinnedJournalScans(launchToken)
 					journal.ContainmentScans.Helper = ContainmentScanProgress{CompletedSequence: 1, UnprovenSequence: 2, FailureKind: "helper_scan_failed"}
 				},
 				want: "run journal containment scan failure is not sticky",
@@ -2662,8 +2667,8 @@ func TestJournalValidatorFirstErrorStringsArePinned(t *testing.T) {
 				name: "valid Linux helper scan control",
 				seed: pinnedJournalSeedRunningGrant,
 				mutate: func(journal *RunJournal) {
-					journal.ContainmentAuthority = pinnedJournalV1Authority(42, "windows:42:created-at", authority.OwnerKindLinuxHelper, "linux-helper:pinned", strings.Repeat("d", authority.TokenBytes*2))
-					journal.ContainmentScans = pinnedJournalScans(strings.Repeat("d", authority.TokenBytes*2))
+					journal.ContainmentAuthority = pinnedJournalV1Authority(42, "windows:42:created-at", authority.OwnerKindLinuxHelper, "linux-helper:pinned", launchToken)
+					journal.ContainmentScans = pinnedJournalScans(launchToken)
 				},
 			},
 			{
@@ -3146,18 +3151,11 @@ func pinnedJournalPreGateStopReceipt(reservation LinuxCgroupReservation) *author
 }
 
 func pinnedJournalV1Authority(targetPID int, targetIdentity, ownerKind, ownerContext, launchToken string) *authority.Supervisor {
-	return &authority.Supervisor{
-		Version:        authority.SupervisorVersion,
-		Secret:         strings.Repeat("a", authority.SecretBytes*2),
-		LaunchToken:    launchToken,
-		OwnerKind:      ownerKind,
-		OwnerContext:   ownerContext,
-		TargetPID:      targetPID,
-		TargetIdentity: targetIdentity,
-		PipeToken:      strings.Repeat("b", authority.TokenBytes*2),
-		JobID:          strings.Repeat("c", authority.TokenBytes*2),
-		SupervisorPID:  99, SupervisorIdentity: "windows:99:created-at",
-	}
+	value := testSupervisorAuthority(targetPID, targetIdentity)
+	value.LaunchToken = launchToken
+	value.OwnerKind = ownerKind
+	value.OwnerContext = ownerContext
+	return value
 }
 
 func pinnedJournalV2Authority(targetPID int, targetIdentity string) *authority.Supervisor {

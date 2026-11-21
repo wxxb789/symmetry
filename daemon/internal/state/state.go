@@ -4943,7 +4943,13 @@ func linuxCloneStopProven(journal RunJournal) bool {
 
 func validateLinuxCloneJournal(journal RunJournal) error {
 	if reuse := journal.LinuxCloneReuseGrant; reuse != nil {
-		if err := validateLinuxCloneReuseBranch(journal, reuse); err != nil {
+		if err := validateLinuxCloneReuseGrant(journal, reuse); err != nil {
+			return err
+		}
+		if err := validateLinuxCloneReuseAbortState(journal); err != nil {
+			return err
+		}
+		if err := validateLinuxCloneReuseRetainedTarget(journal, reuse); err != nil {
 			return err
 		}
 		return nil
@@ -4966,19 +4972,6 @@ func validateLinuxCloneJournal(journal RunJournal) error {
 		return validateLinuxCloneAbort(journal, intent, seed)
 	}
 	if err := validateLinuxCloneCheckout(journal, intent, seed); err != nil {
-		return err
-	}
-	return nil
-}
-
-func validateLinuxCloneReuseBranch(journal RunJournal, reuse *authority.LinuxCloneReuseGrant) error {
-	if err := validateLinuxCloneReuseGrant(journal, reuse); err != nil {
-		return err
-	}
-	if err := validateLinuxCloneReuseAbortState(journal); err != nil {
-		return err
-	}
-	if err := validateLinuxCloneReuseRetainedTarget(journal, reuse); err != nil {
 		return err
 	}
 	return nil
@@ -5963,7 +5956,7 @@ func requireLinuxScansSealedForAuthority(journal RunJournal, value authority.Sup
 }
 
 func validateJournal(journal RunJournal) error {
-	if err := validateJournalKeyAndScalars(journal); err != nil {
+	if err := validateJournalKeyScalarsAndProcessDetails(journal); err != nil {
 		return err
 	}
 	if err := validateContainmentAuthority(journal); err != nil {
@@ -6002,7 +5995,7 @@ func validateJournal(journal RunJournal) error {
 	return nil
 }
 
-func validateJournalKeyAndScalars(journal RunJournal) error {
+func validateJournalKeyScalarsAndProcessDetails(journal RunJournal) error {
 	if err := validateKey(journal.Key()); err != nil {
 		return err
 	}
