@@ -17,17 +17,18 @@ coordinate below was read at that revision.
 | 2 | `validateUnicodeEscapes` | raw bytes | `:268` | keep (stdlib decode accepts unpaired surrogates) |
 | 3 | `validateJSONNumberLexemes` | raw bytes | `:275` | keep once |
 | 4 | `validateJSONDuplicateKeys` | decoder tokens | `:278` | keep once |
-| 5 | `decoder.Decode` into `any` | allocating parse | `:280-284` | keep once |
+| 5 | `decoder.Decode` into `any` | allocating parse | `:281-284` | keep once |
 | 6 | `json.Unmarshal` into the typed DTO | allocating parse | `:84` | keep (contract keeps the typed unmarshal) |
-| 7 | `schema.Validate(instance)` | decoded tree | `ValidateSchema:104` | keep |
-| 8 | `validateCommitPaths(instance)` | decoded tree | `:108` | keep |
+| 7 | `schema.Validate(instance)` | decoded tree | `ValidateSchema:106` | keep |
+| 8 | `validateCommitPaths(instance)` | decoded tree | `:112` | keep |
 | 3' | `validateJSONNumberLexemes` (again, inside `ValidateSchema`'s own `decodeSchemaJSON`) | raw bytes | `:98` | **remove** |
 | 4' | `validateJSONDuplicateKeys` (again) | decoder tokens | `:98` | **remove** |
 | 5' | `decoder.Decode` into a discarded `any` (again) | allocating parse | `:98` | **remove** |
 
 So a `DecodeSchema` call tunnels the bytes nine times, twice through an allocating `any` decode.
 Passes 3/4/5' exist only because `ValidateSchema` cannot see the instance `DecodeSchema` already
-decoded; the second instance is dropped unread (`contracts/schema.go:78` discards it).
+decoded and drops unread at `contracts/schema.go:78`; `ValidateSchema` decodes the same bytes again
+at `:98` and validates that instance.
 
 ## Deliverable shape
 
@@ -37,7 +38,9 @@ decoded; the second instance is dropped unread (`contracts/schema.go:78` discard
      the CommitPath switch, unchanged messages and order);
    - `DecodeSchema` decodes once (`decodeRawJSON`) and calls `validateInstance` on that instance;
    - `ValidateSchema` keeps its published raw-bytes semantics: `decodeSchemaJSON` (unchanged) +
-     `validateInstance`. Public signatures, error strings and error precedence are unchanged;
+     `validateInstance`. Public signatures and error strings are unchanged; error precedence is
+     unchanged except for the corrupt embedded-bundle row in the verdict table below, where both
+     entry points now report the decode error before the compile error;
    - `decodeSchemaJSON` increments a package-internal `decodeSchemaJSONCalls` counter (atomic) so a
      test can pin the single-pass property structurally (the traversal-count test below).
 2. `daemon/internal/contracts/schema_test.go`:
