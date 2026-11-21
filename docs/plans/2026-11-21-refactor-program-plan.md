@@ -1,8 +1,11 @@
-Synthesis snapshot recorded 2026-11-21 from the program synthesis at base revision a3039f0 (origin/main).
-Per-slice contracts, kept outside this repository under the GDD state directory, supersede this plan's
-numbers, line references and owned-file sets wherever they differ; every LOC estimate is report-only (D2).
-
 # Refactor program plan
+
+> Provenance: synthesis snapshot recorded 2026-11-21 from the program synthesis at base revision
+> `a3039f0` (origin/main). This in-repo copy is verbatim apart from this header and one
+> placeholder normalization (`<HOST-PATH>/.local/state/...` → `<GDD-STATE>/...`); per-slice
+> contracts, kept outside this repository under the GDD state directory, supersede this plan's
+> numbers, line references and owned-file sets wherever they differ, and every LOC estimate is
+> report-only (C2).
 
 Synthesized 2026-11-21 from the eight Phase-0 area audits (control-core, control-web, daemon-app,
 daemon-platform, daemon-protocol-rest, frontend, scripts-ci, tests-cross-cutting) against base
