@@ -27,7 +27,7 @@ func TestCloneTaskResultPreservesSchemaValidEmptyArrays(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cloned := cloneTaskResult(harness.TaskResult{Kind: harness.ResultSucceeded, Semantic: &semantic})
+	cloned := harness.CloneTaskResult(harness.TaskResult{Kind: harness.ResultSucceeded, Semantic: &semantic})
 	encoded, err := json.Marshal(cloned.Semantic)
 	if err != nil {
 		t.Fatal(err)
@@ -244,6 +244,32 @@ func TestStartRetainsProcessOwnerAfterPreReadyOutputFailure(t *testing.T) {
 	if process.terminateCount() != 1 {
 		t.Fatalf("Terminate calls = %d, want one session-owned cleanup", process.terminateCount())
 	}
+}
+
+func TestEmitPinsPersistPiNativeEventTextAfterSinkFailure(t *testing.T) {
+	process := newFakeNativeProcess()
+	sink := &recordingHarnessSink{}
+	session := startPiSession(t, fakePiAdapter(process), harness.StartRequest{Workspace: t.TempDir()}, sink)
+
+	// Pin the exact persisted and logged text a failing sink produces: the
+	// adapter keeps its own "persist pi native event: %w" literal around the
+	// shared helper's result, so a wrapper added inside the helper would show
+	// up here as extra text before the sink error.
+	sinkErr := errors.New("journal unavailable")
+	sink.mutex.Lock()
+	sink.err = sinkErr
+	sink.mutex.Unlock()
+	err := session.emit(harness.Event{Kind: harness.EventSessionStarted})
+	if err == nil {
+		t.Fatal("emit() error = nil, want the forwarded sink failure")
+	}
+	if got, want := err.Error(), "persist pi native event: journal unavailable"; got != want {
+		t.Fatalf("emit() error text = %q, want the exact %q", got, want)
+	}
+	if !errors.Is(err, sinkErr) {
+		t.Fatalf("emit() error = %v, want the wrapped sink error %v", err, sinkErr)
+	}
+	closePiSession(t, session)
 }
 
 func TestOpenReturnsPromptlyWhenCleanProcessExitLeavesGetStateUnacknowledged(t *testing.T) {

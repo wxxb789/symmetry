@@ -1,5 +1,5 @@
 defmodule SymmetryControl.OrchestrationTelemetryTest do
-  use SymmetryControl.DataCase, async: false
+  use SymmetryControl.OrchestrationCase, async: false
 
   alias SymmetryControl.Orchestration
   alias SymmetryControl.Repo
@@ -18,8 +18,17 @@ defmodule SymmetryControl.OrchestrationTelemetryTest do
     on_exit(fn -> :telemetry.detach(ref) end)
 
     %{machine: machine} = enroll_machine()
-    runtime = register_runtime(machine)
-    {:ok, _task, :created} = Orchestration.submit_task(task_attrs(), "telemetry-task", now: @now)
+
+    runtime =
+      register_runtime(machine, @now,
+        runtime_key: "telemetry",
+        name: "Telemetry",
+        daemon_instance_id: Ecto.UUID.generate()
+      )
+
+    {:ok, _task, :created} =
+      Orchestration.submit_task(task_attrs(goal: "Observe events"), "telemetry-task", now: @now)
+
     {:ok, run} = Orchestration.assign_one(now: @now)
 
     assert_event([:symmetry_control, :orchestration, :run, :assigned], ref, fn metadata ->
@@ -29,7 +38,7 @@ defmodule SymmetryControl.OrchestrationTelemetryTest do
       assert metadata.generation == run.generation
     end)
 
-    fence = claim(run, runtime)
+    fence = claim(run, runtime, @now, claim_id: Ecto.UUID.generate())
 
     assert_event([:symmetry_control, :orchestration, :run, :claimed], ref, fn metadata ->
       assert metadata.run_id == run.id
@@ -70,10 +79,18 @@ defmodule SymmetryControl.OrchestrationTelemetryTest do
     on_exit(fn -> :telemetry.detach(ref) end)
 
     %{machine: machine} = enroll_machine()
-    runtime = register_runtime(machine)
+
+    runtime =
+      register_runtime(machine, @now,
+        runtime_key: "telemetry",
+        name: "Telemetry",
+        daemon_instance_id: Ecto.UUID.generate()
+      )
 
     {:ok, _task, :created} =
-      Orchestration.submit_task(task_attrs(), "rolled-back-claim", now: @now)
+      Orchestration.submit_task(task_attrs(goal: "Observe events"), "rolled-back-claim",
+        now: @now
+      )
 
     {:ok, run} = Orchestration.assign_one(now: @now)
 
@@ -110,51 +127,5 @@ defmodule SymmetryControl.OrchestrationTelemetryTest do
              )
 
     enrolled
-  end
-
-  defp register_runtime(machine) do
-    assert {:ok, [runtime]} =
-             Orchestration.register_runtimes(
-               machine.id,
-               Ecto.UUID.generate(),
-               [
-                 %{
-                   runtime_key: "telemetry",
-                   name: "Telemetry",
-                   capacity: 1,
-                   agent_profile: "codex",
-                   workspace: "primary",
-                   capabilities: %{}
-                 }
-               ],
-               now: @now
-             )
-
-    runtime
-  end
-
-  defp task_attrs,
-    do: %{goal: "Observe events", agent_profile: "codex", workspace: "primary", input: %{}}
-
-  defp claim(run, runtime) do
-    assert {:ok, claimed} =
-             Orchestration.claim(
-               run.id,
-               %{
-                 runtime_id: runtime.id,
-                 runtime_epoch: runtime.connection_epoch,
-                 generation: run.generation,
-                 claim_id: Ecto.UUID.generate()
-               },
-               now: @now
-             )
-
-    %{
-      runtime_id: runtime.id,
-      runtime_epoch: runtime.connection_epoch,
-      generation: run.generation,
-      claim_id: claimed.claim_id,
-      lease_token: claimed.lease_token
-    }
   end
 end

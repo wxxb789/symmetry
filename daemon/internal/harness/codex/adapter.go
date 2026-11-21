@@ -8,8 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"reflect"
-	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -213,7 +211,7 @@ func (adapter *Adapter) Start(ctx context.Context, request harness.StartRequest,
 	} else {
 		process, err = adapter.startProcess(processContext, invocation, execution.SinkFunc(session.handleProcessOutput))
 	}
-	if isNilNativeProcess(process) {
+	if harness.IsNilInterface(process) {
 		if err != nil {
 			cancel()
 			return nil, err
@@ -270,23 +268,11 @@ func (adapter *Adapter) Start(ctx context.Context, request harness.StartRequest,
 	return session, nil
 }
 
-func isNilNativeProcess(process nativeProcess) bool {
-	if process == nil {
-		return true
-	}
-	value := reflect.ValueOf(process)
-	switch value.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return value.IsNil()
-	default:
-		return false
-	}
-}
-
 type nativeSession struct {
 	context   context.Context
 	cancel    context.CancelFunc
 	process   nativeProcess
+	forwarder harness.ProcessForwarder[nativeProcess]
 	sink      harness.EventSink
 	workspace string
 	framer    *Framer
@@ -333,9 +319,7 @@ type nativeSession struct {
 	watchDone                chan struct{}
 	watchOnce                sync.Once
 	watchStarted             bool
-	closeMutex               sync.Mutex
-	closeAttempt             *nativeCloseAttempt
-	closeSucceeded           bool
+	closeGate                harness.CloseGate
 	closeNormalCandidate     bool
 	sinkErr                  error
 	nativeFailureReason      *protocol.TaskResultReason
@@ -361,7 +345,7 @@ type stagedNotification struct {
 }
 
 func newNativeSession(ctx context.Context, cancel context.CancelFunc, sink harness.EventSink, workspace string) *nativeSession {
-	return &nativeSession{
+	session := &nativeSession{
 		context:               ctx,
 		cancel:                cancel,
 		sink:                  sink,
@@ -378,54 +362,33 @@ func newNativeSession(ctx context.Context, cancel context.CancelFunc, sink harne
 		seenNotifications:     make(map[string]struct{}),
 		cancelAttempts:        make(map[uint64]*cancelAttempt),
 	}
-}
-
-type nativeCloseAttempt struct {
-	done chan struct{}
-	err  error
+	session.forwarder = harness.NewProcessForwarder(&session.mutex, &session.process)
+	return session
 }
 
 func (session *nativeSession) ProcessDetails() (int, string) {
 	if session == nil {
 		return 0, ""
 	}
-	session.mutex.Lock()
-	defer session.mutex.Unlock()
-	return session.processDetailsLocked()
+	return session.forwarder.Details()
 }
 
 func (session *nativeSession) processDetailsLocked() (int, string) {
-	if session.process == nil {
-		return 0, ""
-	}
-	return session.process.ProcessDetails()
+	return session.forwarder.DetailsLocked()
 }
 
 func (session *nativeSession) LeaseRenewalAvailable() bool {
 	if session == nil {
 		return false
 	}
-	session.mutex.Lock()
-	process := session.process
-	session.mutex.Unlock()
-	renewer, ok := process.(interface{ LeaseRenewalAvailable() bool })
-	return ok && renewer.LeaseRenewalAvailable()
+	return session.forwarder.LeaseRenewalAvailable()
 }
 
 func (session *nativeSession) RenewLease(deadline time.Duration, sequence uint64) error {
 	if session == nil {
 		return errors.ErrUnsupported
 	}
-	session.mutex.Lock()
-	process := session.process
-	session.mutex.Unlock()
-	renewer, ok := process.(interface {
-		RenewLease(time.Duration, uint64) error
-	})
-	if !ok {
-		return errors.ErrUnsupported
-	}
-	return renewer.RenewLease(deadline, sequence)
+	return session.forwarder.RenewLease(deadline, sequence)
 }
 
 // Open performs the complete app-server initialization and opens an idle,
@@ -760,12 +723,7 @@ func (session *nativeSession) Wait(ctx context.Context) (harness.TaskResult, err
 	if ctx == nil {
 		return harness.TaskResult{}, errors.New("codex wait context must not be nil")
 	}
-	select {
-	case <-session.resultDone:
-		return session.currentResult()
-	case <-ctx.Done():
-		return harness.TaskResult{Kind: harness.ResultCancelled, Summary: "Codex wait cancelled"}, ctx.Err()
-	}
+	return harness.WaitResult(ctx, session.resultDone, session.currentResult, harness.TaskResult{Kind: harness.ResultCancelled, Summary: "Codex wait cancelled"})
 }
 
 // WaitTurn waits only until the matching native turn has been observed as
@@ -814,36 +772,7 @@ func (session *nativeSession) Close(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("codex close context must not be nil")
 	}
-	session.closeMutex.Lock()
-	if session.closeSucceeded {
-		session.closeMutex.Unlock()
-		return nil
-	}
-	if attempt := session.closeAttempt; attempt != nil {
-		session.closeMutex.Unlock()
-		select {
-		case <-attempt.done:
-			return attempt.err
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-	attempt := &nativeCloseAttempt{done: make(chan struct{})}
-	session.closeAttempt = attempt
-	session.closeMutex.Unlock()
-
-	err := session.closeOnce(ctx)
-	session.closeMutex.Lock()
-	attempt.err = err
-	if err == nil {
-		session.closeSucceeded = true
-	}
-	if session.closeAttempt == attempt {
-		session.closeAttempt = nil
-	}
-	close(attempt.done)
-	session.closeMutex.Unlock()
-	return err
+	return session.closeGate.Run(ctx, session.closeOnce)
 }
 
 func (session *nativeSession) closeOnce(ctx context.Context) error {
@@ -948,7 +877,7 @@ func (session *nativeSession) watchProcess() {
 		if session.result == nil {
 			session.completeLocked(failure)
 		} else {
-			stored := cloneTaskResult(*session.result)
+			stored := harness.CloneTaskResult(*session.result)
 			stored.Kind = failure.Kind
 			stored.Summary = failure.Summary
 			stored.Reason = failure.Reason
@@ -1236,7 +1165,7 @@ func (session *nativeSession) failFraming(event execution.Event, cause error) er
 	if session.result == nil {
 		session.completeLocked(failure)
 	} else if session.result.Kind == harness.ResultSucceeded {
-		stored := cloneTaskResult(failure)
+		stored := harness.CloneTaskResult(failure)
 		session.result = &stored
 	}
 	session.mutex.Unlock()
@@ -2162,10 +2091,7 @@ func (session *nativeSession) emit(event harness.Event) error {
 }
 
 func (session *nativeSession) emitLocked(event harness.Event) error {
-	if event.At.IsZero() {
-		event.At = time.Now().UTC()
-	}
-	if err := session.sink.Handle(session.context, event); err != nil {
+	if err := harness.DeliverEvent(session.context, session.sink, event); err != nil {
 		session.mutex.Lock()
 		if session.sinkErr == nil {
 			session.sinkErr = fmt.Errorf("persist Codex native event: %w", err)
@@ -2209,7 +2135,7 @@ func (session *nativeSession) completeLocked(result harness.TaskResult) {
 		result.Process = *session.processResult
 	}
 	session.resultOnce.Do(func() {
-		stored := cloneTaskResult(result)
+		stored := harness.CloneTaskResult(result)
 		session.result = &stored
 		close(session.resultDone)
 	})
@@ -2231,7 +2157,7 @@ func (session *nativeSession) completeTerminal(result harness.TaskResult) {
 	if session.result != nil || session.terminalResult != nil {
 		return
 	}
-	stored := cloneTaskResult(result)
+	stored := harness.CloneTaskResult(result)
 	session.terminalResult = &stored
 	session.signalTurnObservedLocked(nil)
 	if session.processResult != nil {
@@ -2241,7 +2167,7 @@ func (session *nativeSession) completeTerminal(result harness.TaskResult) {
 }
 
 func (session *nativeSession) finalizeTerminalResultLocked(result harness.TaskResult) harness.TaskResult {
-	final := cloneTaskResult(result)
+	final := harness.CloneTaskResult(result)
 	if session.processResult != nil {
 		final.Process = *session.processResult
 		if !session.processResult.Success() && !session.expectedNormalCloseLocked(*session.processResult) && final.Kind == harness.ResultSucceeded {
@@ -2288,7 +2214,7 @@ func (session *nativeSession) currentResult() (harness.TaskResult, error) {
 	if session.result == nil {
 		return harness.TaskResult{}, errors.New("Codex task result is unavailable")
 	}
-	return cloneTaskResult(*session.result), nil
+	return harness.CloneTaskResult(*session.result), nil
 }
 
 func summarizeProcessFailure(result execution.Result) string {
@@ -2311,50 +2237,6 @@ func summarizeProcessFailure(result execution.Result) string {
 		return "process output was truncated"
 	}
 	return fmt.Sprintf("process exited with code %d", result.ExitCode)
-}
-
-func cloneTaskResult(result harness.TaskResult) harness.TaskResult {
-	cloned := result
-	if result.Semantic != nil {
-		semantic := cloneProtocolTaskResult(*result.Semantic)
-		cloned.Semantic = &semantic
-	}
-	if result.Reason != nil {
-		reason := *result.Reason
-		cloned.Reason = &reason
-	}
-	return cloned
-}
-
-func cloneProtocolTaskResult(result protocol.TaskResult) protocol.TaskResult {
-	cloned := result
-	cloned.EvidenceRefs = slices.Clone(result.EvidenceRefs)
-	if result.Blocker != nil {
-		blocker := cloneBlocker(*result.Blocker)
-		cloned.Blocker = &blocker
-	}
-	if result.ProposedNextAction != nil {
-		action := *result.ProposedNextAction
-		if result.ProposedNextAction.Blocker != nil {
-			blocker := cloneBlocker(*result.ProposedNextAction.Blocker)
-			action.Blocker = &blocker
-		}
-		cloned.ProposedNextAction = &action
-	}
-	if result.Reason != nil {
-		reason := *result.Reason
-		cloned.Reason = &reason
-	}
-	cloned.Diagnostics = slices.Clone(result.Diagnostics)
-	return cloned
-}
-
-func cloneBlocker(blocker protocol.Blocker) protocol.Blocker {
-	cloned := blocker
-	if blocker.WorkItemIDs != nil {
-		cloned.WorkItemIDs = append([]string(nil), blocker.WorkItemIDs...)
-	}
-	return cloned
 }
 
 func (session *nativeSession) partialProcessResult() execution.Result {

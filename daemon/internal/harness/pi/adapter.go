@@ -7,9 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
 	"runtime"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -218,7 +216,7 @@ func (adapter *Adapter) Start(ctx context.Context, request harness.StartRequest,
 		LinuxV2:                            request.Invocation.LinuxV2,
 	}
 	process, err := adapter.startProcess(processContext, invocation, execution.SinkFunc(session.handleProcessOutput))
-	if isNilNativeProcess(process) {
+	if harness.IsNilInterface(process) {
 		cancel()
 		if providerBridge != nil {
 			closeContext, closeCancel := context.WithTimeout(context.WithoutCancel(ctx), processCleanupTimeout)
@@ -498,19 +496,6 @@ func piProfileSessionDirectory(profileArgs []string) (string, bool, error) {
 	return sessionDirectory, configured, nil
 }
 
-func isNilNativeProcess(process nativeProcess) bool {
-	if process == nil {
-		return true
-	}
-	value := reflect.ValueOf(process)
-	switch value.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return value.IsNil()
-	default:
-		return false
-	}
-}
-
 type nativeSession struct {
 	context context.Context
 	cancel  context.CancelFunc
@@ -520,10 +505,10 @@ type nativeSession struct {
 	mutex       sync.Mutex
 	outputMutex sync.Mutex
 	emitMutex   sync.Mutex
-	closeMutex  sync.Mutex
 	cancelMutex sync.Mutex
 
 	process               nativeProcess
+	forwarder             harness.ProcessForwarder[nativeProcess]
 	providerBridge        harness.ProviderBridgeLifecycle
 	cancelTimeout         time.Duration
 	processReady          bool
@@ -556,15 +541,9 @@ type nativeSession struct {
 	watchDone  chan struct{}
 	watchOnce  sync.Once
 
-	closeAttempt   *closeAttempt
-	closeSucceeded bool
-	eventCount     uint64
-	lastSequence   uint64
-}
-
-type closeAttempt struct {
-	done chan struct{}
-	err  error
+	closeGate    harness.CloseGate
+	eventCount   uint64
+	lastSequence uint64
 }
 
 func newNativeSession(ctx context.Context, cancel context.CancelFunc, sink harness.EventSink, cancelTimeout time.Duration, resumeState *SessionState) *nativeSession {
@@ -573,7 +552,7 @@ func newNativeSession(ctx context.Context, cancel context.CancelFunc, sink harne
 		copied := *resumeState
 		expected = &copied
 	}
-	return &nativeSession{
+	session := &nativeSession{
 		context:       ctx,
 		cancel:        cancel,
 		sink:          sink,
@@ -586,6 +565,8 @@ func newNativeSession(ctx context.Context, cancel context.CancelFunc, sink harne
 		resultDone:    make(chan struct{}),
 		watchDone:     make(chan struct{}),
 	}
+	session.forwarder = harness.NewProcessForwarder(&session.mutex, &session.process)
+	return session
 }
 
 // ProcessDetails exposes the exact process identity persisted by Start.
@@ -593,12 +574,7 @@ func (session *nativeSession) ProcessDetails() (int, string) {
 	if session == nil {
 		return 0, ""
 	}
-	session.mutex.Lock()
-	defer session.mutex.Unlock()
-	if session.process == nil {
-		return 0, ""
-	}
-	return session.process.ProcessDetails()
+	return session.forwarder.Details()
 }
 
 // LinuxV2LiveOwnerStatus forwards the exact native process's bounded,
@@ -608,46 +584,21 @@ func (session *nativeSession) LinuxV2LiveOwnerStatus(ctx context.Context) (execu
 	if session == nil || ctx == nil {
 		return execution.LinuxV2LiveOwnerStatus{}, errors.New("pi Linux v2 live-owner status requires session and context")
 	}
-	session.mutex.Lock()
-	process := session.process
-	session.mutex.Unlock()
-	if isNilNativeProcess(process) {
-		return execution.LinuxV2LiveOwnerStatus{}, errors.ErrUnsupported
-	}
-	provider, ok := process.(interface {
-		LinuxV2LiveOwnerStatus(context.Context) (execution.LinuxV2LiveOwnerStatus, error)
-	})
-	if !ok {
-		return execution.LinuxV2LiveOwnerStatus{}, errors.ErrUnsupported
-	}
-	return provider.LinuxV2LiveOwnerStatus(ctx)
+	return session.forwarder.LiveOwnerStatus(ctx)
 }
 
 func (session *nativeSession) LeaseRenewalAvailable() bool {
 	if session == nil {
 		return false
 	}
-	session.mutex.Lock()
-	process := session.process
-	session.mutex.Unlock()
-	renewer, ok := process.(interface{ LeaseRenewalAvailable() bool })
-	return ok && renewer.LeaseRenewalAvailable()
+	return session.forwarder.LeaseRenewalAvailable()
 }
 
 func (session *nativeSession) RenewLease(deadline time.Duration, sequence uint64) error {
 	if session == nil {
 		return errors.ErrUnsupported
 	}
-	session.mutex.Lock()
-	process := session.process
-	session.mutex.Unlock()
-	renewer, ok := process.(interface {
-		RenewLease(time.Duration, uint64) error
-	})
-	if !ok {
-		return errors.ErrUnsupported
-	}
-	return renewer.RenewLease(deadline, sequence)
+	return session.forwarder.RenewLease(deadline, sequence)
 }
 
 // Open establishes a retained native session by matching the get_state
@@ -866,28 +817,19 @@ func (session *nativeSession) WaitTurn(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("pi wait-turn context must not be nil")
 	}
-	select {
-	case <-session.turnDone:
-		session.mutex.Lock()
-		err := session.turnErr
-		session.mutex.Unlock()
-		return err
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-session.context.Done():
-		select {
-		case <-session.turnDone:
-			session.mutex.Lock()
-			err := session.turnErr
-			session.mutex.Unlock()
-			return err
-		default:
-		}
-		session.mutex.Lock()
-		err := session.sessionErrorLocked()
-		session.mutex.Unlock()
-		return err
-	}
+	return harness.WaitTurnBarrier(ctx, session.context, session.turnDone, session.turnTerminalError, session.sessionError)
+}
+
+func (session *nativeSession) turnTerminalError() error {
+	session.mutex.Lock()
+	defer session.mutex.Unlock()
+	return session.turnErr
+}
+
+func (session *nativeSession) sessionError() error {
+	session.mutex.Lock()
+	defer session.mutex.Unlock()
+	return session.sessionErrorLocked()
 }
 
 // Wait joins process exit, all bounded output decoding, and event-sink delivery.
@@ -898,17 +840,16 @@ func (session *nativeSession) Wait(ctx context.Context) (harness.TaskResult, err
 	if ctx == nil {
 		return harness.TaskResult{}, errors.New("pi wait context must not be nil")
 	}
-	select {
-	case <-session.resultDone:
-		session.mutex.Lock()
-		defer session.mutex.Unlock()
-		if session.result == nil {
-			return harness.TaskResult{}, errors.New("pi final result is unavailable")
-		}
-		return cloneTaskResult(*session.result), nil
-	case <-ctx.Done():
-		return harness.TaskResult{Kind: harness.ResultCancelled, Summary: "pi wait cancelled"}, ctx.Err()
+	return harness.WaitResult(ctx, session.resultDone, session.terminalResult, harness.TaskResult{Kind: harness.ResultCancelled, Summary: "pi wait cancelled"})
+}
+
+func (session *nativeSession) terminalResult() (harness.TaskResult, error) {
+	session.mutex.Lock()
+	defer session.mutex.Unlock()
+	if session.result == nil {
+		return harness.TaskResult{}, errors.New("pi final result is unavailable")
 	}
+	return harness.CloneTaskResult(*session.result), nil
 }
 
 // Close performs at most one in-flight shutdown. Failed termination attempts
@@ -920,50 +861,10 @@ func (session *nativeSession) Close(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("pi close context must not be nil")
 	}
-	session.closeMutex.Lock()
-	if session.closeSucceeded {
-		session.closeMutex.Unlock()
-		return nil
-	}
-	if attempt := session.closeAttempt; attempt != nil {
-		session.closeMutex.Unlock()
-		select {
-		case <-attempt.done:
-			return attempt.err
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-	attempt := &closeAttempt{done: make(chan struct{})}
-	session.closeAttempt = attempt
-	session.closeMutex.Unlock()
 	// The initiating caller may leave at any time, but a close that has begun
 	// must still attempt bounded process-tree cleanup. WithoutCancel preserves
 	// request values without deriving an unbounded Background operation.
-	cleanupContext, cleanupCancel := context.WithTimeout(
-		context.WithoutCancel(ctx),
-		session.cancelTimeout+processCleanupTimeout+processTerminationGrace,
-	)
-	go func() {
-		err := session.closeOnce(cleanupContext)
-		cleanupCancel()
-		session.closeMutex.Lock()
-		attempt.err = err
-		if err == nil {
-			session.closeSucceeded = true
-		}
-		if session.closeAttempt == attempt {
-			session.closeAttempt = nil
-		}
-		close(attempt.done)
-		session.closeMutex.Unlock()
-	}()
-	select {
-	case <-attempt.done:
-		return attempt.err
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	return session.closeGate.RunDetached(ctx, session.cancelTimeout+processCleanupTimeout+processTerminationGrace, nil, session.closeOnce)
 }
 
 func (session *nativeSession) closeOnce(ctx context.Context) error {
@@ -1285,7 +1186,7 @@ func (session *nativeSession) completeTurn(result harness.TaskResult, turnErr er
 		}
 	}
 	session.mutex.Lock()
-	stored := cloneTaskResult(result)
+	stored := harness.CloneTaskResult(result)
 	session.turnResult = &stored
 	session.turnErr = turnErr
 	session.mutex.Unlock()
@@ -1314,10 +1215,7 @@ func mustMarshalTaskResult(result *protocol.TaskResult) json.RawMessage {
 func (session *nativeSession) emit(event harness.Event) error {
 	session.emitMutex.Lock()
 	defer session.emitMutex.Unlock()
-	if event.At.IsZero() {
-		event.At = time.Now().UTC()
-	}
-	if err := session.sink.Handle(session.context, event); err != nil {
+	if err := harness.DeliverEvent(session.context, session.sink, event); err != nil {
 		return fmt.Errorf("persist pi native event: %w", err)
 	}
 	session.mutex.Lock()
@@ -1432,7 +1330,7 @@ func (session *nativeSession) watchProcess() {
 	}
 	session.mutex.Lock()
 	turnFinal = session.turnFinal
-	turnResult := cloneTaskResultPointer(session.turnResult)
+	turnResult := harness.CloneTaskResultPointer(session.turnResult)
 	turnErr := session.turnErr
 	failure := session.failure
 	normalClose := session.closeNormalCandidate
@@ -1459,7 +1357,7 @@ func (session *nativeSession) watchProcess() {
 	if turnResult == nil {
 		turnResult = &harness.TaskResult{Kind: harness.ResultFailed, Summary: "pi turn result is unavailable", Usage: harness.Usage{State: harness.UsageUnknown}}
 	}
-	final := cloneTaskResult(*turnResult)
+	final := harness.CloneTaskResult(*turnResult)
 	final.Process = processResult
 	if !processResult.Success() && !expectedNormalClose(processResult, normalClose) && !expectedCancelledExit(processResult, cancelApplied, final) {
 		reason := protocol.TaskResultReasonProcessFailure
@@ -1498,7 +1396,7 @@ func expectedCancelledExit(result execution.Result, cancelApplied bool, final ha
 
 func (session *nativeSession) completeFinal(result harness.TaskResult) {
 	session.resultOnce.Do(func() {
-		stored := cloneTaskResult(result)
+		stored := harness.CloneTaskResult(result)
 		session.mutex.Lock()
 		session.result = &stored
 		session.mutex.Unlock()
@@ -1526,27 +1424,4 @@ func summarizeProcessFailure(result execution.Result) string {
 		return "process output was truncated"
 	}
 	return fmt.Sprintf("process exited with code %d", result.ExitCode)
-}
-
-func cloneTaskResultPointer(result *harness.TaskResult) *harness.TaskResult {
-	if result == nil {
-		return nil
-	}
-	cloned := cloneTaskResult(*result)
-	return &cloned
-}
-
-func cloneTaskResult(result harness.TaskResult) harness.TaskResult {
-	cloned := result
-	if result.Semantic != nil {
-		semantic := *result.Semantic
-		semantic.EvidenceRefs = slices.Clone(semantic.EvidenceRefs)
-		semantic.Diagnostics = slices.Clone(semantic.Diagnostics)
-		cloned.Semantic = &semantic
-	}
-	if result.Reason != nil {
-		reason := *result.Reason
-		cloned.Reason = &reason
-	}
-	return cloned
 }
