@@ -95,6 +95,7 @@ SOURCE_PATHS = [
     "daemon/internal/workspace/subject.go",
     "control/lib/symmetry_control/goals.ex",
     "contracts/v1/task-result.schema.json",
+    "daemon/internal/app/command_queue.go",
 ]
 
 
