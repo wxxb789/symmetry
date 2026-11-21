@@ -349,11 +349,15 @@ duplication count (§1) and the delta numbers (§5).
    same nil output), which keeps it a pin on the shared bound instead of on a wrapper.
 4. **Closing the increment.** Contracts, the run ledger and `answer.md` live in the GDD state tree
    and are operator-owned; this repository closes an increment with the plan file, the source and
-   tests. `docs/TODO.md:64-67` holds an open entry that records the **opposite** of a deletion
+   tests. `docs/TODO.md:64-69` holds an open entry that records the **opposite** of a deletion
    candidate: the shadowed root probe paths are "Not dead-code at all", main-reachable through
-   `NewCodexAdapter`/`NewClaudeAdapter`, and "belong to the probe/registry dedup (W3-04), not to a
-   deletion pass"; this slice keeps those paths (D4) and deletes nothing, so that entry stays open
-   unchanged and no entry closes here (fix r1, SPEC-A06).
+   `NewCodexAdapter`/`NewClaudeAdapter`; this slice keeps those paths (D4) and deletes nothing, so
+   that entry stays open and no entry closes here (fix r1, SPEC-A06). Fix r1 (Opus P3-1): the
+   entry's `registry.go` refs are re-pinned to the post-dedup tree (`:245`→`:181`, `:379`→`:273`,
+   `:299`→`:193`) and its W3-04 deferral is replaced by the delivered decision (kept fail-closed,
+   no `harness` → `harness/codex` delegation); the same PR-caused −21-line shift in the W6-04
+   entry's `opencode/adapter.go` refs (`:543`→`:522`, `:559`→`:538`, `:578`→`:557`, `:589`→`:568`,
+   `:421`→`:400`, `:1063`→`:1042`, `:1344`→`:1323`, `:975`→`:954`) is re-pinned too.
 
 ## 10. Files this slice writes
 
@@ -363,6 +367,7 @@ Tests: `daemon/internal/harness/bounded_probe_test.go` (new; fix r1 widens one e
 into a deadline window, no test added or removed), `claude_probe_test.go` (one test
 re-pointed, one nil-ctx entry row), `codex_probe_test.go` (one nil-ctx entry row),
 `omo/probe_test.go` (one new guard test, §9.1).
-Docs: this plan. No `docs/TODO.md` entry opens or closes (§9.4). Nothing under `daemon/internal/app`
+Docs: this plan. No `docs/TODO.md` entry opens or closes (§9.4); fix r1 re-pins the line refs of
+two open entries (Opus P3-1). Nothing under `daemon/internal/app`
 is required: `NewClaudeAdapterWithRunner`, `NewCodexAdapterWithRunner` and `NewRegistry` keep their
 signatures, so `app/harness_test.go:306` compiles unchanged.
