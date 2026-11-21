@@ -2,6 +2,7 @@ defmodule SymmetryControl.ProviderBrokerE2ETest do
   use SymmetryControlWeb.ConnCase, async: false
 
   import Ecto.Query
+  import SymmetryControl.TestFixtures, only: [unix_signal: 1]
 
   alias SymmetryControl.Goals
   alias SymmetryControl.Goals.{Goal, GoalDecision, HarnessSession, RunEvidence, WorkOutcome}
@@ -1374,7 +1375,7 @@ defmodule SymmetryControl.ProviderBrokerE2ETest do
         session_id =
           case :os.type() do
             {:win32, _name} -> nil
-            _unix -> await_isolated_session_id!(os_pid, 2_000)
+            _unix -> await_daemon_session_id!(os_pid, 2_000)
           end
 
         %{port: port, os_pid: os_pid, session_id: session_id}
@@ -1394,7 +1395,7 @@ defmodule SymmetryControl.ProviderBrokerE2ETest do
           System.find_executable("setsid") ||
             raise "provider broker E2E requires setsid on Unix"
 
-        {setsid, ["--wait", executable, "-config", config_path]}
+        {setsid, ["--fork", "--wait", executable, "-config", config_path]}
     end
   end
 
@@ -1429,35 +1430,37 @@ defmodule SymmetryControl.ProviderBrokerE2ETest do
     :ok
   end
 
-  defp await_isolated_session_id!(os_pid, timeout) do
-    beam_pid = System.pid() |> String.to_integer()
-    beam_session_id = unix_process_info(beam_pid).session_id
+  # `setsid --fork --wait` makes the daemon the port program's child, and that
+  # child calls setsid(2) before exec, so the daemon owns the session this
+  # fixture tears down. Signaling the port program's own session instead would
+  # reach only the `setsid` wrapper and leave the daemon writing state/runs and
+  # state/goal-usage while the fixture is removed.
+  defp await_daemon_session_id!(os_pid, timeout) do
     deadline = System.monotonic_time(:millisecond) + timeout
-    await_isolated_session_id!(os_pid, beam_session_id, deadline)
+    await_daemon_session_id_loop!(os_pid, deadline)
   end
 
-  defp await_isolated_session_id!(os_pid, beam_session_id, deadline) do
-    processes = unix_processes()
-    children = Enum.group_by(Map.values(processes), & &1.parent_pid, & &1.pid)
-
-    session_id =
-      [os_pid | descendants(os_pid, children)]
-      |> Enum.map(&Map.get(processes, &1))
-      |> Enum.reject(&is_nil/1)
-      |> Enum.map(& &1.session_id)
-      |> Enum.find(&(&1 != beam_session_id))
-
-    cond do
-      is_integer(session_id) ->
+  defp await_daemon_session_id_loop!(os_pid, deadline) do
+    case daemon_session_process(os_pid) do
+      %{session_id: session_id} ->
         session_id
 
-      System.monotonic_time(:millisecond) >= deadline ->
-        raise "daemon did not enter an isolated Unix session"
+      nil ->
+        if System.monotonic_time(:millisecond) >= deadline do
+          raise "daemon did not enter an isolated Unix session"
+        end
 
-      true ->
         Process.sleep(10)
-        await_isolated_session_id!(os_pid, beam_session_id, deadline)
+        await_daemon_session_id_loop!(os_pid, deadline)
     end
+  end
+
+  defp daemon_session_process(os_pid) do
+    unix_processes()
+    |> Map.values()
+    |> Enum.find(fn process ->
+      process.parent_pid == os_pid and process.session_id == process.pid
+    end)
   end
 
   defp unix_processes do
@@ -1481,12 +1484,6 @@ defmodule SymmetryControl.ProviderBrokerE2ETest do
     else
       _unavailable -> processes
     end
-  end
-
-  defp descendants(parent_pid, children) do
-    Enum.flat_map(Map.get(children, parent_pid, []), fn child_pid ->
-      descendants(child_pid, children) ++ [child_pid]
-    end)
   end
 
   defp await_process_exit(os_pid, timeout) do
@@ -1573,10 +1570,6 @@ defmodule SymmetryControl.ProviderBrokerE2ETest do
     )
   end
 
-  defp unix_process_info(os_pid) do
-    Map.get(unix_processes(), os_pid) || raise "Unix process #{os_pid} disappeared"
-  end
-
   defp unix_process_alive?(os_pid) do
     match?(
       {_output, 0},
@@ -1608,9 +1601,6 @@ defmodule SymmetryControl.ProviderBrokerE2ETest do
       :ok
     end
   end
-
-  defp unix_signal(:term), do: "-TERM"
-  defp unix_signal(:kill), do: "-KILL"
 
   defp await!(daemon_port, description, assertion, timeout \\ 20_000) do
     deadline = System.monotonic_time(:millisecond) + timeout

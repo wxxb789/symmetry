@@ -6,6 +6,8 @@ defmodule SymmetryControlWeb.Protocol do
 
   alias SymmetryControl.Orchestration
   alias SymmetryControl.Orchestration.{Command, Run, Runtime, Task}
+  alias SymmetryControlWeb.PortalJSON
+  alias SymmetryControlWeb.QueryParams
 
   @history_cursor_salt "task-history-v1"
   @history_cursor_max_age_seconds 86_400
@@ -124,6 +126,23 @@ defmodule SymmetryControlWeb.Protocol do
   def error(conn, reason) do
     {status, code, message} = error_details(reason)
     conn |> put_status(status) |> json(%{error: %{code: code, message: message}})
+  end
+
+  # One validation envelope for every refused changeset: the same field-error
+  # shape the portal and chat controllers served before this consolidation.
+  # `error/2` deliberately does not absorb changesets: a domain rollback can
+  # hand one to a caller with no field-error wire shape (provider actions answer
+  # 400 invalid_request for it), and those responses must not change.
+  def validation_error(conn, %Ecto.Changeset{} = changeset) do
+    conn
+    |> put_status(:unprocessable_entity)
+    |> json(%{
+      error: %{
+        code: "validation_failed",
+        message: "request contains invalid fields",
+        fields: PortalJSON.changeset_errors(changeset)
+      }
+    })
   end
 
   def error_details({:invalid_contract, _details}), do: @error_statuses.invalid_contract
@@ -574,14 +593,7 @@ defmodule SymmetryControlWeb.Protocol do
 
   defp history_limit(nil), do: {:ok, @default_history_limit}
 
-  defp history_limit(value) when is_binary(value) do
-    case Integer.parse(value) do
-      {limit, ""} when limit > 0 and limit <= @max_history_limit -> {:ok, limit}
-      _ -> {:error, :invalid_request}
-    end
-  end
-
-  defp history_limit(_), do: {:error, :invalid_request}
+  defp history_limit(value), do: QueryParams.query_integer(value, {1, @max_history_limit})
 
   defp encode_history_cursor(_task_id, _surface, _direction, nil), do: nil
 
