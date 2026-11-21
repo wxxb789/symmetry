@@ -107,6 +107,24 @@ func TestFramerCountsWhitespaceTowardRawFrameLimit(t *testing.T) {
 	}
 }
 
+func TestFramerKeepsNumbersBeyondFloat64Range(t *testing.T) {
+	frames, err := NewFramer(1024).Feed([]byte(`{"id":1,"result":{"value":1e1000}}` + "\n"))
+	if err != nil || len(frames) != 1 || frames[0].DiagnosticCode != "unverified_native_response" || frames[0].IsFramingError() {
+		t.Fatalf("frames = %+v, %v; want one unverified response frame", frames, err)
+	}
+}
+
+func TestFramerAcceptsTheNextFrameAfterABoundFailure(t *testing.T) {
+	framer := NewFramer(8)
+	if _, err := framer.Feed([]byte("123456789")); !errors.Is(err, ErrFrameTooLarge) {
+		t.Fatalf("oversized Feed() error = %v, want ErrFrameTooLarge", err)
+	}
+	frames, err := framer.Feed([]byte("{}\n"))
+	if err != nil || len(frames) != 1 || frames[0].DiagnosticCode != "unknown_native_event" {
+		t.Fatalf("Feed() after overflow = %+v, %v; want a resumed decode", frames, err)
+	}
+}
+
 func TestFramerAllowsMissingAndRejectsUnsupportedJSONRPCVersion(t *testing.T) {
 	tests := []struct {
 		name           string

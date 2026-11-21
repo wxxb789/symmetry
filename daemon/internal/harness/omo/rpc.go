@@ -10,6 +10,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/wxxb789/symmetry/daemon/internal/harness/linejson"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 )
 
@@ -98,61 +99,30 @@ type Record struct {
 
 // Decoder accepts bounded LF-delimited UTF-8 JSON, including split records.
 type Decoder struct {
-	limit    int
-	buffer   []byte
-	sequence uint64
-	failed   error
+	reader *linejson.Decoder[Record]
 }
 
 func NewDecoder(limit int) *Decoder {
 	if limit <= 0 {
 		limit = defaultMaxRecordBytes
 	}
-	return &Decoder{limit: limit}
+	return &Decoder{reader: linejson.New(linejson.Policy[Record]{
+		MaxBytes:   limit,
+		Latch:      true,
+		TooLarge:   func() error { return fmt.Errorf("%w: JSONL record exceeds limit", ErrInvalidRecord) },
+		Incomplete: func() error { return fmt.Errorf("%w: unterminated JSONL record", ErrInvalidRecord) },
+		Decode:     decodeRecord,
+		Fatal:      func(record Record) error { return record.DecodeError },
+	})}
 }
 
 func (decoder *Decoder) Feed(chunk []byte) ([]Record, error) {
-	if decoder.failed != nil {
-		return nil, decoder.failed
-	}
-	var records []Record
-	for len(chunk) > 0 {
-		end := bytes.IndexByte(chunk, '\n')
-		count := len(chunk)
-		if end >= 0 {
-			count = end
-		}
-		if len(decoder.buffer)+count > decoder.limit {
-			decoder.failed = fmt.Errorf("%w: JSONL record exceeds limit", ErrInvalidRecord)
-			decoder.buffer = nil
-			return records, decoder.failed
-		}
-		decoder.buffer = append(decoder.buffer, chunk[:count]...)
-		if end < 0 {
-			break
-		}
-		decoder.sequence++
-		record := decodeRecord(decoder.sequence, decoder.buffer)
-		records = append(records, record)
-		decoder.buffer = decoder.buffer[:0]
-		chunk = chunk[end+1:]
-		if record.DecodeError != nil {
-			decoder.failed = record.DecodeError
-			return records, decoder.failed
-		}
-	}
-	return records, nil
+	return decoder.reader.Feed(chunk)
 }
 
 func (decoder *Decoder) Close() error {
-	if decoder.failed != nil {
-		return decoder.failed
-	}
-	if len(decoder.buffer) != 0 {
-		decoder.failed = fmt.Errorf("%w: unterminated JSONL record", ErrInvalidRecord)
-	}
-	decoder.buffer = nil
-	return decoder.failed
+	_, _, err := decoder.reader.Close()
+	return err
 }
 
 func decodeRecord(sequence uint64, raw []byte) Record {

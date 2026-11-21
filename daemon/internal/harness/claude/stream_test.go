@@ -322,3 +322,24 @@ func TestDecoderRejectsOversizeAndTruncatedRecords(t *testing.T) {
 		t.Fatalf("Observe() error = %v, want ErrIncompleteRecord", err)
 	}
 }
+
+func TestDecoderAcceptsTheNextRecordAfterABoundFailure(t *testing.T) {
+	decoder := NewDecoder(8)
+	if _, err := decoder.Feed([]byte("123456789")); !errors.Is(err, ErrRecordTooLarge) {
+		t.Fatalf("oversized Feed() error = %v, want ErrRecordTooLarge", err)
+	}
+	events, err := decoder.Feed([]byte("{oops}\n"))
+	if err != nil || len(events) != 1 || !errors.Is(events[0].DecodeError, ErrMalformedJSON) {
+		t.Fatalf("Feed() after overflow = %#v, %v; want a resumed decode", events, err)
+	}
+}
+
+func TestDecoderKeepsNumbersBeyondFloat64Range(t *testing.T) {
+	events, err := NewDecoder(1024).Feed([]byte(`{"type":"result","subtype":"success","is_error":false,"session_id":"s","result":"done","usage":{"input_tokens":1e1000}}` + "\n"))
+	if err != nil || len(events) != 1 || events[0].DecodeError != nil || events[0].Result == nil {
+		t.Fatalf("Feed() = %#v, %v; want one accepted result event", events, err)
+	}
+	if string(events[0].Result.Usage) != `{"input_tokens":1e1000}` {
+		t.Fatalf("usage = %s, want the raw number", events[0].Result.Usage)
+	}
+}

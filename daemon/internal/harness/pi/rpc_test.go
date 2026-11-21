@@ -283,6 +283,19 @@ func TestDecoderFailsClosedForMalformedUnknownDuplicateOversizeAndTruncatedRecor
 	}
 }
 
+func TestDecoderRetainsTheBoundFailureAcrossCalls(t *testing.T) {
+	decoder := NewDecoder(8)
+	if _, err := decoder.Feed([]byte("123456789")); !errors.Is(err, ErrRecordTooLarge) {
+		t.Fatalf("oversize Feed() error = %v, want ErrRecordTooLarge", err)
+	}
+	if _, err := decoder.Feed(nil); err != ErrRecordTooLarge {
+		t.Fatalf("Feed after overflow error = %v, want the retained ErrRecordTooLarge", err)
+	}
+	if _, err := decoder.Close(); err != ErrRecordTooLarge {
+		t.Fatalf("Close after overflow error = %v, want the retained ErrRecordTooLarge", err)
+	}
+}
+
 func TestDecoderUsesLFOnlyAndPreservesUnicodeLineSeparators(t *testing.T) {
 	decoder := NewDecoder(1024)
 	chunk := []byte("{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":\"before\\u2028after\\u2029still one record\",\"stopReason\":\"stop\"}}\n")

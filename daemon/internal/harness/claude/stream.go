@@ -11,6 +11,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/wxxb789/symmetry/daemon/internal/harness/linejson"
 )
 
 const defaultMaxRecordBytes = 1 << 20
@@ -86,9 +88,7 @@ type ControlRequest struct {
 
 // Decoder handles CRLF-compatible JSONL boundaries across arbitrary chunks.
 type Decoder struct {
-	max      int
-	buffer   []byte
-	sequence uint64
+	reader *linejson.Decoder[Event]
 }
 
 // NewDecoder creates a bounded stream-json decoder. A non-positive limit uses
@@ -97,7 +97,14 @@ func NewDecoder(maxRecordBytes int) *Decoder {
 	if maxRecordBytes <= 0 {
 		maxRecordBytes = defaultMaxRecordBytes
 	}
-	return &Decoder{max: maxRecordBytes}
+	return &Decoder{reader: linejson.New(linejson.Policy[Event]{
+		MaxBytes:   maxRecordBytes,
+		SkipBlank:  true,
+		ChunkFirst: true,
+		TooLarge:   func() error { return ErrRecordTooLarge },
+		Incomplete: func() error { return ErrIncompleteRecord },
+		Decode:     decodeEvent,
+	})}
 }
 
 // Feed appends a native stdout chunk and returns each complete JSONL record.
@@ -107,28 +114,7 @@ func (decoder *Decoder) Feed(chunk []byte) ([]Event, error) {
 	if decoder == nil {
 		return nil, errors.New("Claude stream-json decoder is nil")
 	}
-	decoder.buffer = append(decoder.buffer, chunk...)
-	var events []Event
-	for {
-		lineEnd := bytes.IndexByte(decoder.buffer, '\n')
-		if lineEnd < 0 {
-			if len(decoder.buffer) > decoder.max {
-				decoder.buffer = nil
-				return events, ErrRecordTooLarge
-			}
-			return events, nil
-		}
-		line := append([]byte(nil), decoder.buffer[:lineEnd]...)
-		decoder.buffer = decoder.buffer[lineEnd+1:]
-		if len(line) > decoder.max {
-			return events, ErrRecordTooLarge
-		}
-		if len(bytes.TrimSpace(line)) == 0 {
-			continue
-		}
-		decoder.sequence++
-		events = append(events, decodeEvent(decoder.sequence, line))
-	}
+	return decoder.reader.Feed(chunk)
 }
 
 // Close reports a non-whitespace partial record as an invalid event. Native
@@ -138,14 +124,11 @@ func (decoder *Decoder) Close() ([]Event, error) {
 	if decoder == nil {
 		return nil, errors.New("Claude stream-json decoder is nil")
 	}
-	if len(bytes.TrimSpace(decoder.buffer)) == 0 {
-		decoder.buffer = nil
-		return nil, nil
+	sequence, pending, err := decoder.reader.Close()
+	if pending == nil {
+		return nil, err
 	}
-	decoder.sequence++
-	raw := append([]byte(nil), decoder.buffer...)
-	decoder.buffer = nil
-	return []Event{invalidEvent(decoder.sequence, raw, ErrIncompleteRecord)}, ErrIncompleteRecord
+	return []Event{invalidEvent(sequence, pending, ErrIncompleteRecord)}, err
 }
 
 func decodeEvent(sequence uint64, line []byte) Event {
