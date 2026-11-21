@@ -17,14 +17,18 @@ recorded text as a stable token instead:
 Relative paths, URLs and ``sha256:`` digests pass through unchanged, and
 rendering is idempotent - except that a ``file:`` URL or a doubled-slash
 authority spelling is an absolute location, not a URL to spare: both modes
-render it. Two non-fixpoints are disclosed rather than closed, and both bind a
-rendered token's own text instead of a host byte: a separator directly in front
-of a rendered token reads as a POSIX path on a second render in the default
-scope, and text that already spells a token of its own (``//<disposable-root>``,
-a ``path-sha256:`` spelling inside a location) can bind that token's text in
-either scope. No host byte survives either render, the ``--root-only`` gate
-scope is a fixpoint for records that carry no rendered token text of their own,
-and `sanitize_text`'s docstring names both boundaries.
+render it. Non-fixpoints are disclosed rather than closed, and each binds
+recorded text other than a host byte. Two bind a rendered token's own text: a
+separator directly in front of a rendered token reads as a POSIX path on a second
+render in the default scope, and text that already spells a token of its own
+(``//<disposable-root>``, a ``path-sha256:`` spelling inside a location) can bind
+that token's text in either scope. A ``--root`` render is otherwise a fixpoint:
+it is not when a ``file:`` scheme or a space-continued chunk reaches the root -
+the first render leaves a residue (scheme text, an escape or a name glued to a
+word), ``--check`` refuses that render, and a second render converges. No host
+byte survives any render, the ``--root-only`` scope the gate itself runs (no
+``--root``) is a fixpoint for records that carry no rendered token text of their
+own, and `sanitize_text`'s docstring names every boundary.
 
 With ``--root-only`` the renderer flags only host absolute paths: Windows drive
 and UNC roots, a root-relative Windows spelling (``\\Users\\op\\run``, which
@@ -1181,16 +1185,21 @@ def sanitize_text(text: str, roots: list[str], root_only: bool = False) -> str:
     a hashed token; with ``root_only`` true only host absolute paths (drive, UNC
     and the POSIX home/root/temp/mount roots) are rendered, so a product route
     such as ``/portal/runtimes`` stays literal. Rendering is a fixpoint in
-    ``root_only`` mode for text that carries no rendered token text of its own:
-    an input already spelling a token (``//<disposable-root>`` + an escape, a
-    ``path-sha256:`` spelling inside a location) can bind that token's own text on
-    a later render. The default scope carries one further disclosed exception, where
-    re-rendering a literal whose decoded text has a separator directly in front of a
-    rendered token (an escaped forward slash ahead of a raw spelling's token) reads
-    the separator and the token's text as a POSIX path and binds the token's own text
-    into a new digest. No host byte survives either render - what a second render
-    binds is a rendered token, not host data - so these are disclosed
-    non-fixpoints, not leaks; ``docs/TODO.md`` carries the entries.
+    ``root_only`` mode with no ``--root`` configured for text that carries no
+    rendered token text of its own: an input already spelling a token
+    (``//<disposable-root>`` + an escape, a ``path-sha256:`` spelling inside a
+    location) can bind that token's own text on a later render, in either scope. A
+    ``--root`` render is otherwise a fixpoint too: it is not when a ``file:``
+    scheme or a space-continued chunk reaches the root - that first render leaves a
+    residue (scheme text, an escape or a name glued to a word), the gate refuses
+    it, and a second render converges. The default scope carries one further
+    disclosed exception, where re-rendering a literal whose decoded text has a
+    separator directly in front of a rendered token (an escaped forward slash ahead
+    of a raw spelling's token) reads the separator and the token's text as a POSIX
+    path and binds the token's own text into a new digest. No host byte survives any
+    render - what a later render binds is a rendered token or a residue, not host
+    data - so these are disclosed non-fixpoints, not leaks; ``docs/TODO.md``
+    carries the entries.
 
     A JSON-structured record is read as its own JSON: every string literal is
     decoded and the matchers run on the decoded text, so an escape a writer spelled

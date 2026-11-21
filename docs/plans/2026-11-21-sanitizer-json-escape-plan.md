@@ -138,6 +138,14 @@ verified by reading both revisions
    token in both scopes, the rendered bytes pass `--check --root-only` with and without the
    `--root`, and a second render is byte-identical); each pin's discrimination
    (pre-fix bytes or a named mutation) is measured and recorded in the closure.
+   The r7 round extends the listing pin to the anchored pass round 6 added and the round-6
+   review found unpinned: with `--root`, each line's root token ends where a family body
+   starts, so the mutant that drops the anchored loop's `frontier` skip (A2) re-ran one match
+   per claim end over the whole tail - 2.768 s at 1,000 lines and 17.9 s at 2,000 against
+   head's 0.071 s and 0.148 s, 13,489,387 anchored characters at 1,000 lines against head's
+   26,871 - and the pin's anchored-character bounds (4x the literal's own bytes per listing,
+   16x across 8x the lines) fail A2 at the first case while head passes both listings
+   (26,871 and 222,871 characters).
 3. `docs/TODO.md` → `docs/archive/CLOSED-TODO.md`: the entry "Stop the Windows-family path tail
    from absorbing a JSON escape that follows the path" moves with a closure statement naming the
    branch (`fix/sanitizer-json-escape`), the decision, the pins and the #119 round-5 follow-up
@@ -148,7 +156,12 @@ verified by reading both revisions
    The r5 round added the default-scope non-fixpoint to the limits, and the r6 round adds the
    anchored read to the reading paragraph and qualifies the root-only fixpoint claim with the
    hand-written-token-text shape (a `//<disposable-root>` or `path-sha256:` spelling inside a
-   location can bind on a later render), tracked in `docs/TODO.md`.
+   location can bind on a later render), tracked in `docs/TODO.md`. The r7 round corrects the
+   claim the round-6 review found overstated: the module and `sanitize_text` docstrings and
+   this file's limits now say the `--root`-less gate scope is the fixpoint for records without
+   token text, and that a `--root` render is a fixpoint except when a `file:` scheme or a
+   space-continued chunk reaches the root (residue, refused first render, converging second
+   render), with the two shapes recorded in the same `docs/TODO.md` entry.
 5. No new gate: the split's sibling tester runs in the same `ci.yml` step and the same README
    gate list as the raw module, and no other file is added. No record is re-rendered unless the
    sweep flags one (none expected; the two `0008b-go-bounded-regression-strong` records are
@@ -303,6 +316,12 @@ slash-UNC, root-relative and `file:` URL spellings.
   rendered without the further-separator filter, the union taken over the whole match (no parts
   filter), and the span alignment dropped - each fails at least one named pin, and the
   wide-record pin fails on the pre-round-3 bytes (no `_rebuild_with_groups` exists there).
+- Round-7 checks: the spawned pins' red/green - the anchored-pass bound fails under mutant A2
+  (the anchored loop's `frontier` skip dropped) with 13,489,387 anchored characters against
+  the 4x bound at 1,000 lines (head: 26,871 there, 222,871 at 8,000) - and the P3-1 shapes:
+  each first render leaks no host byte, is refused by `--check --root-only` (exit 1), and
+  converges on a second render (byte-identical on the third), recorded in `docs/TODO.md` and
+  the docstrings.
 - Differential fuzz at the delivered bytes: valid JSON documents over path, escape, surrogate
   and token-shaped pieces, both scopes, asserting valid JSON, fixpoint and a clean
   `--check --root-only` on every render (the round-3 corpus: ~37.5k documents; the surrogate

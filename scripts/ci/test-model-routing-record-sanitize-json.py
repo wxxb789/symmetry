@@ -806,12 +806,12 @@ class JsonReadingTests(unittest.TestCase):
                     self.anchor_matched += match.end() - match.start()
                 return match
 
-        def scanned(text):
+        def scanned(text, roots=()):
             patterns = tuple(CountingPattern(pattern) for pattern in MODULE._RAW_READING.windows)
             with unittest.mock.patch.object(
                 MODULE, "_RAW_READING", unittest.mock.Mock(windows=patterns),
             ):
-                rendered = MODULE.sanitize_text(text, [], root_only=True)
+                rendered = MODULE.sanitize_text(text, list(roots), root_only=True)
             return (
                 sum(p.matched for p in patterns), sum(p.calls for p in patterns),
                 sum(p.anchor_calls for p in patterns), sum(p.anchor_matched for p in patterns),
@@ -849,6 +849,19 @@ class JsonReadingTests(unittest.TestCase):
         self.assertLessEqual(anchor_calls_8000, 8 * 8000)
         self.assertEqual(anchor_matched_1000, 0)
         self.assertEqual(anchor_matched_8000, 0)
+        # Opus P3-2 (round 6): with `--root`, each line's root token ends where a family
+        # body starts, the shape the counters above miss - mutant A2 (the anchored loop's
+        # skip dropped) covers 13,489,387 characters at 1,000 lines against head's 26,871.
+        rooted_matched = []
+        for lines in (1000, 8000):
+            text = json.dumps({"o": "\n".join("/srv/store//run%d" % index for index in range(lines))})
+            _, _, root_calls, root_matched, rendered = scanned(text, ["/srv/store"])
+            rooted_matched.append(root_matched)
+            self.assertEqual(rendered.count("path-sha256:"), 1)  # one union token for the listing
+            self.assertLessEqual(root_calls, 8 * lines)
+            self.assertLess(root_matched, len(text) * 4)
+        # 8x the lines: head's characters grow ~8.3x (26,871 -> 222,871), A2's ~64x.
+        self.assertLess(rooted_matched[1], rooted_matched[0] * 16)
 
     def test_cli_root_only_check_refuses_a_root_after_a_json_escape(self):
         # Opus P2 (round 4): inside a quoted record, a line's root follows an

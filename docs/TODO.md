@@ -628,10 +628,23 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       `<disposable-root>` plus `path-sha256:a80e51<...>` plus the rest. The input carries no host
       byte, so the render over-redacts a token rather than leaking; the boundary is disclosed in
       the sanitizer's docstrings and `docs/evaluations/model-routing/README.md` (Explicit local
-      limits). Fix direction: the raw look's token-text filter keeps that text out of its own
+      limits). The round-6 review found two further residual shapes of the same fail-closed
+      kind, confined to a `--root` render on a record that carries no token text of its own. In
+      one a `file:` scheme, a control escape and then the root
+      (`'{"k":"file:' + BS + 'r' + root + BS + 'n"}'`, where `root` is the synthetic drive-root
+      spelling `'C:' + BS*2 + 'W'`) render as `file:` + the escape + `<disposable-root>` + the
+      newline escape. In the other a space-continued chunk reaches the root
+      (`'{"k":"store' + root + 'x/ ' + root + BS + 'n"}'`). Both are the fail-closed direction:
+      nothing leaks (the residue is scheme text, an escape or a name glued to a word), the
+      gate's `--check --root-only` refuses that first render (exit 1), and a second render
+      converges - the third render is byte-identical - and passes the gate. Masked spellings
+      only: `root` is synthetic and no digest is reproduced. Fix direction: the raw look's
+      token-text filter keeps that text out of its own
       digests, but a separator run in front of a token is still a location's start; closing the
       shape must not narrow a real path out of the patterns, pinned by a second-render fixpoint
-      test.
+      test. The same closing options cover the two `--root` residue shapes: an anchored match
+      that crosses a claim (starts before it, ends after it), under the same no-narrowing rule
+      and the same second-render pin.
 
 ## Production Linux containment witness: stop-receipt barrier stall awaiting a diagnosable occurrence
 
