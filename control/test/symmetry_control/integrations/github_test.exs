@@ -227,6 +227,25 @@ defmodule SymmetryControl.Integrations.GitHubTest do
     HTTPStub.verify!()
   end
 
+  test "short-circuits a work item without a pull request before authenticating" do
+    Application.put_env(
+      :symmetry_control,
+      :integration_auth_provider,
+      __MODULE__.AuthMustNotBeCalledStub
+    )
+
+    HTTPStub.expect([])
+
+    assert {:ok, nil} ==
+             GitHub.sync_delivery(
+               %{account_ref: "acme", auth_type: "gh_cli", capabilities: []},
+               %{kind: "repository", external_ref: "acme/symmetry"},
+               %{pull_request_url: nil}
+             )
+
+    HTTPStub.verify!()
+  end
+
   test "changes-only connections synchronize pull requests without querying Actions" do
     HTTPStub.expect([
       %{
@@ -1350,5 +1369,13 @@ defmodule SymmetryControl.Integrations.GitHubTest do
       "labels" => [],
       "assignee" => nil
     }
+  end
+
+  # Fails if called: the nil-work-item short-circuit must return before the
+  # provider authenticates.
+  defmodule AuthMustNotBeCalledStub do
+    @moduledoc false
+
+    def github_headers(_connection), do: {:error, :authenticate_must_not_be_called}
   end
 end

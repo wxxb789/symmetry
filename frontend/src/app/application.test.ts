@@ -15,7 +15,7 @@ describe("private query lifecycle", () => {
     const otherRead = app.queryClient.fetchQuery(workspaceOptions(app.api, "pending"));
     const cancelled = otherRead.catch(() => "cancelled");
     await expect(app.queryClient.fetchQuery(workspaceOptions(app.api, "expired"))).rejects.toBeDefined();
-    await vi.waitFor(() => expect(replace).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => { expect(replace).toHaveBeenCalledTimes(1); });
     expect(await cancelled).toBe("cancelled");
     expect(app.queryClient.getQueryCache().getAll()).toHaveLength(0);
     expect(app.auth.getSnapshot()).toBe(true);
@@ -94,7 +94,7 @@ describe("private query lifecycle", () => {
     await expect(mutation.execute({ provider: "github", name: "Private draft", account_ref: "acme", capabilities: [] }))
       .rejects.toBeInstanceOf(Unauthenticated);
     expect(localHandler).toHaveBeenCalledTimes(1);
-    await vi.waitFor(() => expect(replace).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => { expect(replace).toHaveBeenCalledTimes(1); });
     expect(app.queryClient.getQueryCache().getAll()).toHaveLength(0);
     expect(app.auth.getSnapshot()).toBe(true);
     expect(replace).toHaveBeenCalledWith("/portal/login?return_to=%2Fportal%2Fprojects%2Fp1");

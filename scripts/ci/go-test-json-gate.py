@@ -21,6 +21,7 @@ wherever the runner is used.
 """
 
 import argparse
+import contextlib
 import subprocess
 import sys
 import tempfile
@@ -74,19 +75,15 @@ class Gate:
         temporary_stderr = None
         stderr_path = self.args.stderr
         if not stderr_path:
-            handle = tempfile.NamedTemporaryFile(
-                prefix="go-test-json-gate-", suffix=".stderr", delete=False
-            )
-            handle.close()
-            temporary_stderr = handle.name
+            with tempfile.NamedTemporaryFile(prefix="go-test-json-gate-", suffix=".stderr", delete=False) as handle:
+                temporary_stderr = handle.name
             stderr_path = temporary_stderr
         try:
-            with open(self.args.events, "w", encoding="utf-8") as events_file, open(
-                stderr_path, "w", encoding="utf-8"
-            ) as stderr_file:
-                completed = subprocess.run(
-                    command, stdout=events_file, stderr=stderr_file, check=False
-                )
+            with (
+                open(self.args.events, "w", encoding="utf-8") as events_file,
+                open(stderr_path, "w", encoding="utf-8") as stderr_file,
+            ):
+                completed = subprocess.run(command, stdout=events_file, stderr=stderr_file, check=False)
             self.test_status = process_status(completed.returncode)
         except FileNotFoundError as error:
             print(f"could not run the Go test command: {error}", file=sys.stderr)
@@ -101,10 +98,8 @@ class Gate:
             print(f"could not read the captured Go test output: {error}", file=sys.stderr)
             raise SystemExit(1) from error
         if temporary_stderr:
-            try:
+            with contextlib.suppress(OSError):
                 Path(temporary_stderr).unlink()
-            except OSError:
-                pass
         self.append_log([events, errors])
         self.echo(errors, sys.stderr)
         self.echo(events, sys.stdout)
@@ -131,9 +126,7 @@ class Gate:
             lines.append(f"{self.args.exit_status_key}={self.test_status}")
         if self.args.gate_status_key:
             if self.test_status != 0:
-                lines.append(
-                    f"{self.args.gate_status_key}=failed: go test exited with status {self.test_status}"
-                )
+                lines.append(f"{self.args.gate_status_key}=failed: go test exited with status {self.test_status}")
             elif self.assertion_status != 0:
                 lines.append(
                     f"{self.args.gate_status_key}=failed: selective witness validation exited with "

@@ -1,5 +1,5 @@
 defmodule SymmetryControl.GoalsTest do
-  use SymmetryControl.DataCase, async: false
+  use SymmetryControl.OrchestrationCase, async: false
 
   alias SymmetryControl.Goals
   alias SymmetryControl.Goals.ReadModel
@@ -24,6 +24,9 @@ defmodule SymmetryControl.GoalsTest do
   @now ~U[2026-09-09 00:00:00.000000Z]
   @validation_runtime_id "00000000-0000-4000-8000-000000000001"
   @validation_profile_digest "sha256:" <> String.duplicate("c", 64)
+
+  use SymmetryControl.TestFixtures,
+    command_opts: [now: @now, validation_profiles: validation_profiles()]
 
   setup do
     previous_goals = Application.fetch_env!(:symmetry_control, :goals)
@@ -111,7 +114,7 @@ defmodule SymmetryControl.GoalsTest do
     decision_subject_hash = "sha256:" <> String.duplicate("a", 64)
 
     command =
-      command(created.goal, "request_decision", %{
+      goal_command(created.goal, "request_decision", %{
         kind: "completion",
         subject_hash: decision_subject_hash
       })
@@ -157,7 +160,7 @@ defmodule SymmetryControl.GoalsTest do
             {:stale, %{current_revision: 1, current_version: version, allowed_actions: actions}}} =
              Goals.command(
                goal_id,
-               command(created.goal, "pause", %{reason: "later"}),
+               goal_command(created.goal, "pause", %{reason: "later"}),
                "operator:test",
                now: @now
              )
@@ -168,7 +171,7 @@ defmodule SymmetryControl.GoalsTest do
     assert {:error, {:stale, %{current_revision: 1, current_version: _, allowed_actions: _}}} =
              Goals.command(
                goal_id,
-               command(receipt.goal, "activate", %{approved_revision: 1}),
+               goal_command(receipt.goal, "activate", %{approved_revision: 1}),
                "operator:test",
                now: @now
              )
@@ -193,7 +196,7 @@ defmodule SymmetryControl.GoalsTest do
     assert {:ok, receipt, :created} =
              Goals.command(
                goal.id,
-               command(before, "pause", %{reason: "Operator review pause"}),
+               goal_command(before, "pause", %{reason: "Operator review pause"}),
                "operator:test",
                now: @now
              )
@@ -209,7 +212,7 @@ defmodule SymmetryControl.GoalsTest do
     assert {:error, {:stale, %{current_revision: 1, current_version: current_version}}} =
              Goals.command(
                goal.id,
-               command(before, "resume", %{reason: "Operator review complete"}),
+               goal_command(before, "resume", %{reason: "Operator review complete"}),
                "operator:test",
                now: @now
              )
@@ -387,7 +390,7 @@ defmodule SymmetryControl.GoalsTest do
              Goals.create_goal(project.id, attrs, "operator:test", now: @now)
 
     command =
-      command(created.goal, "request_decision", %{
+      goal_command(created.goal, "request_decision", %{
         kind: "invalid",
         work_item_id: nil,
         subject_hash: nil
@@ -575,7 +578,7 @@ defmodule SymmetryControl.GoalsTest do
     command_id = Ecto.UUID.generate()
 
     amendment =
-      command(
+      goal_command(
         created.goal,
         "amend",
         %{revision_contract: valid_revision, reason: "Legacy amendment replay."},
@@ -1757,7 +1760,7 @@ defmodule SymmetryControl.GoalsTest do
     }
 
     request =
-      command(created.goal, "request_plan", %{
+      goal_command(created.goal, "request_plan", %{
         model_profile: "codex",
         repository_resource_id: repository.id,
         subject: subject,
@@ -2102,7 +2105,7 @@ defmodule SymmetryControl.GoalsTest do
       "sha256:" <> Base.encode16(SymmetryControl.RequestHash.canonical(proposal), case: :lower)
 
     accept_command =
-      command(fetch_goal!(goal_id), "accept_plan", %{
+      goal_command(fetch_goal!(goal_id), "accept_plan", %{
         proposal: proposal,
         proposal_hash: authorized_hash,
         decision_id: decision_id
@@ -2416,7 +2419,7 @@ defmodule SymmetryControl.GoalsTest do
     assert {:ok, admission, :created} =
              Goals.command(
                goal.id,
-               command(current, "admit_task", admission_payload(item), mutation_id),
+               goal_command(current, "admit_task", admission_payload(item), mutation_id),
                "operator:test",
                now: @now,
                rollout_enabled: true,
@@ -2743,7 +2746,7 @@ defmodule SymmetryControl.GoalsTest do
     }
 
     achieve_goal = fetch_goal!(goal.id)
-    achieve_command = command(achieve_goal, "achieve", achieve_payload)
+    achieve_command = goal_command(achieve_goal, "achieve", achieve_payload)
 
     assert {:ok, achieved, :created} =
              Goals.command(goal.id, achieve_command, "operator:test", now: @now)
@@ -2828,7 +2831,7 @@ defmodule SymmetryControl.GoalsTest do
     assert {:ok, achieved, :created} =
              Goals.command(
                goal.id,
-               command(fetch_goal!(goal.id), "achieve", %{
+               goal_command(fetch_goal!(goal.id), "achieve", %{
                  subject: evidence.subject,
                  integration_work_item_id: item.id,
                  evidence_ids: [stored_evidence.id],
@@ -3084,7 +3087,7 @@ defmodule SymmetryControl.GoalsTest do
     assert {:ok, achieved, :created} =
              Goals.command(
                goal.id,
-               command(fetch_goal!(goal.id), "achieve", %{
+               goal_command(fetch_goal!(goal.id), "achieve", %{
                  subject: revised_evidence.subject,
                  evidence_ids: [revised_stored_evidence.id],
                  decision_id: nil
@@ -3128,7 +3131,7 @@ defmodule SymmetryControl.GoalsTest do
     assert "achieve" in projection.allowed_actions
 
     achieve_command =
-      command(fetch_goal!(goal.id), "achieve", %{
+      goal_command(fetch_goal!(goal.id), "achieve", %{
         subject: evidence.subject,
         evidence_ids: [stored_evidence.id],
         decision_id: nil
@@ -3252,7 +3255,7 @@ defmodule SymmetryControl.GoalsTest do
     assert {:ok, achieved, :created} =
              Goals.command(
                goal.id,
-               command(fetch_goal!(goal.id), "achieve", %{
+               goal_command(fetch_goal!(goal.id), "achieve", %{
                  subject: evidence.subject,
                  evidence_ids: [stored_evidence.id],
                  decision_id: nil
@@ -3604,7 +3607,7 @@ defmodule SymmetryControl.GoalsTest do
     assert {:ok, current_goal} = Goals.fetch_goal(goal.id)
 
     resolve_command =
-      command(current_goal, "resolve_decision", %{
+      goal_command(current_goal, "resolve_decision", %{
         decision_id: scoped_review_id,
         expected_decision_version:
           Repo.get!(SymmetryControl.Goals.GoalDecision, scoped_review_id).lock_version,
@@ -6562,7 +6565,7 @@ defmodule SymmetryControl.GoalsTest do
     binding_id = retained.binding_id
 
     request =
-      command(
+      goal_command(
         goal,
         "admit_task",
         admission_payload(item, %{
@@ -6678,7 +6681,7 @@ defmodule SymmetryControl.GoalsTest do
     subject = baseline_subject(repository.id).subject
 
     request =
-      command(created.goal, "request_plan", %{
+      goal_command(created.goal, "request_plan", %{
         model_profile: "codex",
         repository_resource_id: repository.id,
         subject: subject,
@@ -9220,18 +9223,6 @@ defmodule SymmetryControl.GoalsTest do
     |> Repo.insert!()
   end
 
-  defp command_current(goal_id, kind, payload, opts \\ []) do
-    assert {:ok, goal} = Goals.fetch_goal(goal_id)
-    opts = Keyword.put_new(opts, :validation_profiles, validation_profiles())
-
-    Goals.command(
-      goal_id,
-      command(goal, kind, payload),
-      "operator:test",
-      Keyword.merge([now: @now], opts)
-    )
-  end
-
   defp fetch_goal!(goal_id) do
     assert {:ok, goal} = Goals.fetch_goal(goal_id)
     goal
@@ -9417,7 +9408,7 @@ defmodule SymmetryControl.GoalsTest do
     assert {:ok, receipt, :created} =
              Goals.command(
                goal.id,
-               command(before, "pause", %{reason: "Operator review pause"}),
+               goal_command(before, "pause", %{reason: "Operator review pause"}),
                "operator:test",
                now: @now
              )
@@ -9425,62 +9416,6 @@ defmodule SymmetryControl.GoalsTest do
     assert receipt.goal.version == before.version + 1
     assert fetch_goal!(goal.id).version == before.version + 1
   end
-
-  defp command(goal, kind, payload, mutation_id \\ Ecto.UUID.generate()) do
-    %{
-      schema_version: "symmetry.goal_command.v1",
-      mutation_id: mutation_id,
-      expected_version: goal.version,
-      expected_revision: goal.current_revision,
-      kind: kind,
-      payload: canonical_command_payload(kind, payload)
-    }
-  end
-
-  defp canonical_command_payload("request_decision", payload) do
-    case Map.get(payload, :kind, Map.get(payload, "kind")) do
-      "plan" ->
-        %{
-          kind: "plan",
-          work_item_id: nil,
-          subject_hash: nil,
-          proposal: Map.get(payload, :proposal, Map.get(payload, "proposal"))
-        }
-
-      "scope" ->
-        %{
-          kind: "scope",
-          work_item_id: Map.get(payload, :work_item_id, Map.get(payload, "work_item_id")),
-          subject_hash: nil,
-          proposal: %{
-            kind:
-              Map.get(payload, :dependency_operation, Map.get(payload, "dependency_operation")),
-            depends_on_id: Map.get(payload, :depends_on_id, Map.get(payload, "depends_on_id"))
-          }
-        }
-
-      "review" ->
-        %{
-          kind: "review",
-          work_item_id: Map.get(payload, :work_item_id, Map.get(payload, "work_item_id")),
-          subject_hash: Map.get(payload, :subject_hash, Map.get(payload, "subject_hash")),
-          proposal: nil
-        }
-
-      "completion" ->
-        %{
-          kind: "completion",
-          work_item_id: Map.get(payload, :work_item_id, Map.get(payload, "work_item_id")),
-          subject_hash: Map.get(payload, :subject_hash, Map.get(payload, "subject_hash")),
-          proposal: nil
-        }
-
-      decision_kind ->
-        %{kind: decision_kind, work_item_id: nil, subject_hash: nil, proposal: nil}
-    end
-  end
-
-  defp canonical_command_payload(_kind, payload), do: payload
 
   defp goal_attrs(mutation_id \\ nil, execution_policy \\ %{}, context_manifest \\ %{}) do
     execution_policy =

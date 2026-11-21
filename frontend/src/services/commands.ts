@@ -40,7 +40,7 @@ export type CommandKind =
  * surface does not send (functions, symbols, `undefined`) throw instead of
  * silently hashing a different document.
  */
-export function canonicalJson(value: unknown): string {
+function canonicalJson(value: unknown): string {
   if (value === null || typeof value === "boolean") return JSON.stringify(value);
   if (typeof value === "number") {
     if (!Number.isFinite(value)) throw new TypeError("canonical JSON rejects non-finite numbers");
@@ -61,7 +61,7 @@ export function canonicalJson(value: unknown): string {
 }
 
 /** `sha256:<64 lowercase hex>` over the canonical JSON document. */
-export async function canonicalDigest(value: unknown): Promise<string> {
+async function canonicalDigest(value: unknown): Promise<string> {
   const bytes = new TextEncoder().encode(canonicalJson(value));
   const digest = await crypto.subtle.digest("SHA-256", bytes);
   return `sha256:${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;

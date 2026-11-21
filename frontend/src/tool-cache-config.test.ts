@@ -12,6 +12,16 @@ const TOOL_CACHE_DIR = "SYMMETRY_TOOL_CACHE_DIR";
 const DISABLE_TOOL_CACHES = "SYMMETRY_DISABLE_TOOL_CACHES";
 const SEALED_CACHE = "/sealed/tool-cache";
 
+// Both cases import module-fresh configs via `vi.resetModules()` in one worker, and
+// the first import pays the process's cold `vite.config` module graph (vite plus
+// @vitejs/plugin-react and @tailwindcss/vite). The 2026-11-21 audit measured that
+// cold import at 8.2 s against vitest's 5 s default — the suite's one red test at
+// base — while this host measures ~0.5 s warm (`node` import 477 ms; vitest case
+// 678 ms). The ceiling is sized from the cold measurement: 30 s is 3.7x it and
+// still finite for a genuinely hung import. A filtered run can start at either
+// case, so both carry it.
+const CONFIG_IMPORT_TIMEOUT_MS = 30_000;
+
 // A filtered run can start at the 'unset' case alone, and the ambient environment
 // can export the harness variables (the evaluation runner itself does), so capture
 // the ambient values at module load; afterEach restores them and each case sets or
@@ -41,7 +51,7 @@ afterEach(() => {
 });
 
 describe("frontend tool-cache environment", () => {
-  it("redirects both Vite caches and switches the vitest caches off under the harness variables", async () => {
+  it("redirects both Vite caches and switches the vitest caches off under the harness variables", { timeout: CONFIG_IMPORT_TIMEOUT_MS }, async () => {
     process.env[TOOL_CACHE_DIR] = SEALED_CACHE;
     process.env[DISABLE_TOOL_CACHES] = "1";
     const { vite, vitest } = await loadConfigs();
@@ -52,7 +62,7 @@ describe("frontend tool-cache environment", () => {
     expect(vitest.test?.fsModuleCache).toBe(false);
   });
 
-  it("leaves every cache default unchanged when the harness variables are unset", async () => {
+  it("leaves every cache default unchanged when the harness variables are unset", { timeout: CONFIG_IMPORT_TIMEOUT_MS }, async () => {
     delete process.env[TOOL_CACHE_DIR];
     delete process.env[DISABLE_TOOL_CACHES];
     expect(process.env[TOOL_CACHE_DIR]).toBeUndefined();

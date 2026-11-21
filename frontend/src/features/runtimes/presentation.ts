@@ -7,18 +7,18 @@
 import type { Runtime } from "../../services/api";
 
 /** The adapter operations object as served; every member stays optional so an older partial record renders honestly. */
-export type AdapterOperationsRecord = Partial<NonNullable<Runtime["capabilities"]["adapter"]>["operations"]>;
+type AdapterOperationsRecord = Partial<NonNullable<Runtime["capabilities"]["adapter"]>["operations"]>;
 
 /** Chip tones the operations list can carry. `unknown` renders dashed and never reads as a measured value. */
-export type CapabilityTone = "passed" | "failed" | "pending" | "unknown";
+type CapabilityTone = "passed" | "failed" | "pending" | "unknown";
 
-export interface CapabilityPresentation {
+interface CapabilityPresentation {
   readonly label: string;
   readonly tone: CapabilityTone;
 }
 
 /** One operations row: the advertised key, its readable label and the served value's presentation. */
-export interface OperationRow extends CapabilityPresentation {
+interface OperationRow extends CapabilityPresentation {
   readonly key: string;
   readonly name: string;
 }
@@ -65,7 +65,7 @@ export function capacityLabel(reserved: number | undefined, capacity: number | u
 }
 
 /** The empty state of the runtime list when no compatible runtime is served. */
-export interface RuntimesEmptyState {
+interface RuntimesEmptyState {
   readonly title: string;
   readonly body: string;
 }
