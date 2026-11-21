@@ -691,7 +691,7 @@ test.describe("Readable work views", () => {
     const subject = [...fixture.items.values()][0];
     const workDetailLink = workUrl(subject.id, { view: "board" });
     // A new context starts signed out; nothing is faked or signed in first.
-    const context = await browser.newContext({ ...deviceContextOptions(testInfo), baseURL });
+    const context = await browser.newContext(deviceContextOptions(testInfo, { baseURL }));
     const fresh = await context.newPage();
     monitorBrowserErrors(fresh);
     try {
@@ -761,7 +761,7 @@ test.describe("Readable work views", () => {
     const projectLink = `/portal/projects/${fixture.id}?view=board&q=keeper`;
     // A new context starts signed out with the running project's exact viewport
     // and device flags; nothing is faked or signed in first.
-    const context = await browser.newContext({ ...deviceContextOptions(testInfo), baseURL });
+    const context = await browser.newContext(deviceContextOptions(testInfo, { baseURL }));
     const fresh = await context.newPage();
     monitorBrowserErrors(fresh);
     try {

@@ -1,7 +1,6 @@
 import { allowBrowserError, expect, test } from "./fixtures.mjs";
-import { api, capture, historyWrites, login, recordHistoryWrites } from "./readable-fixtures.mjs";
+import { api, capture, historyWrites, login, operatorToken, recordHistoryWrites } from "./readable-fixtures.mjs";
 
-const operatorToken = process.env.SYMMETRY_OPERATOR_TOKEN || "development-operator-token";
 // The expiry release is started by the render gate, which exports
 // SYMMETRY_RENDER_GATE_REQUIRED=1: a gate run missing its URL is
 // half-configured and fails collection instead of skipping green, while the
