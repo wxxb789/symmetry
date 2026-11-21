@@ -590,6 +590,25 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       the bundle-derived pair too) and have both gate files import them. Found by the adversarial
       review of PR #145 (P3-2).
 
+## Tolerated duplication: URL-state allowlists (refactor findings, 2026-11-21)
+
+- tolerated — no tracked work (decision note, 2026-11-21, `refactor/rf-w2-04-portal-json`): the
+      portal shell's URL-state policy is written twice — the `safeReturnTo` open-redirect allowlist
+      (`control/lib/symmetry_control_web/portal_session.ex:5-79`: the per-parameter regexes at
+      `:21-27`, the per-path clauses at `:58-77`) and the frontend shell router
+      (`frontend/src/app/application.ts:46` `shellPath`, `:75` `shellQuery`, used by
+      `safeReturnTo/1` at `:108`). The two spellings are kept in step by the shared corpus
+      `contracts/fixtures/shell-return-targets.json` (read by
+      `control/test/symmetry_control_web/portal_session_test.exs:372` and
+      `frontend/src/app/application.test.ts:4`, deliberately outside the fixture manifest,
+      `contracts/README.md:80`). Refactor findings CW-15 (`findings/control-web.md:450-471`) proposed
+      one data table `%{path_pattern => [param_regex]}`; the portal-json contract ruled it out of
+      scope (`portal_session.ex` is not one of its owned files, and the finding itself says the table
+      is worth doing only when the shared corpus is extended). Accepted as tolerated duplication
+      rather than scheduled work: folding the allowlist into one table changes no wire behaviour and
+      buys nothing until a new shell parameter needs the corpus extended, which is the condition that
+      should trigger it.
+
 ## Production Linux containment witness: stop-receipt barrier stall awaiting a diagnosable occurrence
 
 - [ ] Diagnose the next occurrence of the `daemon_sigkill_after_lease_arm_before_resume` barrier
