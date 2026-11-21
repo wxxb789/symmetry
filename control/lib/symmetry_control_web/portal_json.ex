@@ -489,9 +489,11 @@ defmodule SymmetryControlWeb.PortalJSON do
   # The three delivery members resolve the same way — a provider-owned value
   # wins over the operator's manual value, which wins over the attempt's agent
   # evidence, and with none of the three the member serves its own fallback —
-  # but each branch serves a different member set. The descriptor names that
-  # member's three inputs, the field they compete for, the fallback the none
-  # branch serves, and the provider metadata the provider branch serves.
+  # though only the provider branch adds `provider`/`recorded_at` and only the
+  # agent branch carries the evidence map's own members; manual and none serve
+  # the same five. The descriptor names that member's three inputs, the field
+  # they compete for, the fallback the none branch serves, and the provider
+  # metadata the provider branch serves.
   defp delivery(work_item, evidence) do
     %{
       pull_request:

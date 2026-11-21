@@ -1081,6 +1081,63 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
            }
   end
 
+  # CW-8a's getter reads the attempt's result under two spellings, and the
+  # string one is the spelling a result JSON arrives in. No other test in the
+  # four owned suites serves a non-empty result — the getter's key table
+  # reduced to a single key left every suite green (plan, `## Evidence as run`) —
+  # so this case is the table's only committed pin: each served member below
+  # fails if its own key leaves the table.
+  test "the served outcome reads the attempt result's string-keyed members" do
+    project = create_project("OUTCOME")
+    runtime = enroll_adapter_runtime("outcome-result", "Outcome result runtime")
+
+    item =
+      create_work_item(project, "Outcome result target", %{
+        "assignee_type" => "agent",
+        "agent_profile" => "codex"
+      })
+
+    assert %{"execution" => %{"task_id" => task_id}} =
+             api_conn()
+             |> post("/portal/api/work-items/#{item["id"]}/run", %{
+               "action_id" => "outcome-result-run"
+             })
+             |> json_response(202)
+
+    {run, fence} = claim_gate_attempt(runtime, task_id, 4_700)
+
+    # The attempt's result JSON, string keys and all: the served outcome's
+    # members resolve only through the getter's string spelling.
+    transition(run, fence, "completed", 4_701, %{
+      "summary" => "The attempt's own result summary",
+      "findings" => [
+        %{"message" => "The getter serves the string spelling", "severity" => "info"}
+      ],
+      "changed_artifacts" => [
+        %{"path" => "control/lib/symmetry_control_web/portal_json.ex", "kind" => "file"}
+      ],
+      "tests" => [%{"name" => "portal_resources_test", "status" => "passed"}]
+    })
+
+    outcome =
+      api_conn()
+      |> get("/portal/api/work-items/#{item["id"]}")
+      |> json_response(200)
+      |> Map.fetch!("outcome")
+
+    assert outcome["summary"] == "The attempt's own result summary"
+
+    assert outcome["findings"] == [
+             %{"message" => "The getter serves the string spelling", "severity" => "info"}
+           ]
+
+    assert outcome["changed_artifacts"] == [
+             %{"path" => "control/lib/symmetry_control_web/portal_json.ex", "kind" => "file"}
+           ]
+
+    assert outcome["tests"] == [%{"name" => "portal_resources_test", "status" => "passed"}]
+  end
+
   test "work item assignment is scoped to the work item's project and resource kind" do
     project = create_project("ASSIGN")
     other_project = create_project("OTHER")

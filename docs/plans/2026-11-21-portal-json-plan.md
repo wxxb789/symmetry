@@ -213,8 +213,10 @@ connections once several worktree suites hold pools):
    lookup on the evidence map, which the simpler `Map.get(map, Map.get(@table, key))` form would
    silently perform).
 3. **Descriptors, not a `resolve(provider, manual, agent, fallback)` tuple.** The contract's C1
-   requires every branch member to survive, and the four branches serve four *different* member sets;
-   a tuple-returning resolver would have to re-derive `provider`/`recorded_at`/field/status at the
+   requires every branch member to survive, and the branches serve three distinct member sets —
+   manual and none share `value source generation url status`, only the provider branch adds
+   `provider`/`recorded_at`, and only the agent branch carries the evidence map's own members; a
+   tuple-returning resolver would have to re-derive `provider`/`recorded_at`/field/status at the
    call site, which is where the original's 6 arguments came from. The descriptor makes the
    per-member inputs data and leaves the member sets in one place.
 4. **`provider_pull_request_state/2` stays a named, separately-tested step.** It is the one
@@ -323,3 +325,32 @@ comparison is empty. The empty diff is therefore a sensitive measurement, not a 
 `mix test` (`59 passed`) are exit 0 on the reverted tree; `pnpm contracts:check` exit 0 (typecheck,
 35/35 fixture tests, 21 schemas / 248 fixtures, DTOs current); `git diff --check` clean; the full
 `mix test` and the CI jobs belong to the conductor's gate-runner per the contract.
+
+## Apply-stage re-record (2026-11-21, rf-w2-04-portal-json apply, findings 1-3)
+
+The apply stage landed three deltas on the `i1` revision above: the `delivery/2` comment
+(finding 1 — prose only, no code path, no line-count change), the pin `the served outcome reads the
+attempt result's string-keyed members` in `portal_resources_test.exs` (finding 2 — the keyed
+getter's string spelling and key table had no committed test, which is why the one-key mutation row
+above stayed green; the pin now kills it) and the trade-off-3 sentence above (finding 3). The C3
+differential was re-run on the delivered revision with the same throwaway hook and canonical form
+(recovered from the implement run's event log; `<HOST-PATH>/gdd/scratch/w204-apply-*`):
+
+| run | result | body diff | member-path diff | delivery diff | responses |
+| --- | --- | --- | --- | --- | --- |
+| delivered revision, run 1 vs run 2 (stability control) | `60 passed` ×2, exit 0 | 0 | 0 | 0 | 384 (`/portal/api/**`), 387 delivery lines |
+| base `4afea623…594b9696` vs delivered revision, same corpus | `60 passed` + `60 passed`, exit 0 | 0 | 0 | 0 | 384, 387 |
+
+The corpus grew by the new pin's own reads (380 → 384 responses, 375 → 387 delivery lines). The
+delivery member sets per member × branch are unchanged (the base and delivered delivery tables are
+identical apart from their source filename); only the `none` counts move — `pull_request` 96 → 100,
+`ci` 106 → 110, `review` 106 → 110 — while provider (13), manual (14 / 4 / 4) and agent (2) counts
+stand. Delivered byte-identity: `portal_json.ex` is now `sha256 abaee844…7806e24` (superseding the
+`c6c97f7c…9529af` recorded for `i1` above; the delta is the finding-1 comment sentence) and
+`portal_resources_test.exs` is `sha256 ec5ba5a5…04df984f`. The delivered four-file `mix test` is
+`60 passed` exit 0, and the same suite on the base source with the same test file is `60 passed`.
+Pin mutation: `@evidence_keys` reduced to one key → the pin alone red (`0/1 passed`, exit 2,
+`findings` served `[]`), reverted and re-verified at the same sha. `mix format --check-formatted`,
+`mix compile --warnings-as-errors`, `pnpm contracts:check` (typecheck, 35/35 fixture tests,
+21 schemas / 248 fixtures, DTOs current) and `git diff --check` are exit 0; the full `mix test` and
+the CI jobs remain with the conductor's gate-runner.
