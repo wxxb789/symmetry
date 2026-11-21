@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -74,11 +75,14 @@ var (
 // DecodeSchema validates raw JSON against the selected schema before
 // unmarshalling it into a generated DTO. Protocol owns all cross-field and
 // envelope semantics. Presentation reads admit finite presentation numbers.
+// The strict raw checks and the Draft 7 validation share one decoded instance,
+// so the same bytes are decoded once per envelope.
 func DecodeSchema(envelope Envelope, data []byte, target any) error {
-	if _, err := decodeRawJSON(data, admitsPresentationNumbers(envelope)); err != nil {
+	instance, err := decodeRawJSON(data, admitsPresentationNumbers(envelope))
+	if err != nil {
 		return fmt.Errorf("decode %s JSON: %w", envelope, err)
 	}
-	if err := ValidateSchema(envelope, data); err != nil {
+	if err := validateInstance(envelope, instance); err != nil {
 		return err
 	}
 	if err := json.Unmarshal(data, target); err != nil {
@@ -91,14 +95,22 @@ func DecodeSchema(envelope Envelope, data []byte, target any) error {
 // this to distinguish structural validity from documented cross-field
 // semantics that protocol enforces at its executable boundary.
 func ValidateSchema(envelope Envelope, data []byte) error {
-	if err := ensureSchemas(); err != nil {
-		return err
-	}
-
 	instance, err := decodeSchemaJSON(data, admitsPresentationNumbers(envelope))
 	if err != nil {
 		return fmt.Errorf("decode %s JSON: %w", envelope, err)
 	}
+	return validateInstance(envelope, instance)
+}
+
+// validateInstance applies the compiled Draft 7 schema and, for the envelopes
+// that carry commit paths, the bounded ECMAScript CommitPath pattern to an
+// already-decoded instance. Both entry points share it so neither decodes the
+// same bytes twice.
+func validateInstance(envelope Envelope, instance any) error {
+	if err := ensureSchemas(); err != nil {
+		return err
+	}
+
 	schema, ok := schemas[envelope]
 	if !ok {
 		return fmt.Errorf("unsupported Goal envelope schema %q", envelope)
@@ -271,7 +283,13 @@ func decodeRawJSON(data []byte, presentationRead bool) (any, error) {
 	return decodeSchemaJSON(data, presentationRead)
 }
 
+// decodeSchemaJSONCalls counts payload decodes so tests can pin the
+// single-pass property: every entry-point call must decode an envelope's
+// bytes exactly once.
+var decodeSchemaJSONCalls atomic.Int64
+
 func decodeSchemaJSON(data []byte, presentationRead bool) (any, error) {
+	decodeSchemaJSONCalls.Add(1)
 	if err := validateJSONNumberLexemes(data, presentationRead); err != nil {
 		return nil, err
 	}

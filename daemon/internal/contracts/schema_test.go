@@ -2,6 +2,7 @@ package contracts
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -431,16 +432,125 @@ func TestTaskResultSchemaReturnsAnIndependentCanonicalDocument(t *testing.T) {
 	}
 }
 
+// TestSchemaEntryPointsDecodePayloadOnce pins the removed traversal: both entry
+// points must decode the payload exactly once, so reverting DecodeSchema to the
+// pre-refactor decodeRawJSON+ValidateSchema composition (two payload decodes)
+// fails here instead of only moving the benchmark's allocation column.
+func TestSchemaEntryPointsDecodePayloadOnce(t *testing.T) {
+	data := readContractFixture(t, "valid/goal-read.accepted-and-external.json")
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{"DecodeSchema", func() error { return DecodeSchema(EnvelopeGoalRead, data, new(SymmetryGoalReadV1)) }},
+		{"ValidateSchema", func() error { return ValidateSchema(EnvelopeGoalRead, data) }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			before := decodeSchemaJSONCalls.Load()
+			if err := test.call(); err != nil {
+				t.Fatal(err)
+			}
+			if decoded := decodeSchemaJSONCalls.Load() - before; decoded != 1 {
+				t.Fatalf("%s decoded the payload %d times, want 1", test.name, decoded)
+			}
+		})
+	}
+}
+
+// contractBenchmarkCase binds one valid fixture to the envelope and generated
+// DTO the strict boundary must decode it with.
+type contractBenchmarkCase struct {
+	name      string
+	envelope  Envelope
+	fixture   string
+	newTarget func() any
+}
+
+// contractBenchmarkCases is the shared corpus of both benchmarks below: the
+// largest read projections (presentation-number reads), a nested evidence batch
+// response, a canonical command envelope (CommitPath walk) and a safe-integer
+// usage payload.
+func contractBenchmarkCases() []contractBenchmarkCase {
+	return []contractBenchmarkCase{
+		{name: "goal-read", envelope: EnvelopeGoalRead, fixture: "valid/goal-read.accepted-and-external.json", newTarget: func() any { return new(SymmetryGoalReadV1) }},
+		{name: "chat-read", envelope: EnvelopeChatRead, fixture: "valid/chat-read.paged.json", newTarget: func() any { return new(SymmetryChatReadV1) }},
+		{name: "workspace-read", envelope: EnvelopeWorkspaceRead, fixture: "valid/workspace-read.enriched-row.json", newTarget: func() any { return new(SymmetryWorkspaceReadV1) }},
+		{name: "evidence-batch-response", envelope: EnvelopeEvidenceBatchResponse, fixture: "valid/evidence-batch-response.basic.json", newTarget: func() any { return new(SymmetryEvidenceBatchResponseV1) }},
+		{name: "goal-command", envelope: EnvelopeGoalCommand, fixture: "valid/goal-command.achieve.json", newTarget: func() any { return new(SymmetryGoalCommandV1) }},
+		{name: "usage", envelope: EnvelopeUsage, fixture: "valid/usage.safe-integer-limit.json", newTarget: func() any { return new(SymmetryUsageV1) }},
+	}
+}
+
+// BenchmarkDecodeSchema measures the delivered strict boundary per envelope:
+// one raw decode, one validation of that decoded instance, one typed unmarshal.
+// The benchmark itself only uses the exported entry point, so the pre-change
+// revision ran the identical source with its extra ValidateSchema re-decode;
+// fixture bytes are read outside the timed loop and each iteration charges the
+// same setup (a fresh generated DTO for the typed unmarshal).
+func BenchmarkDecodeSchema(b *testing.B) {
+	benchmarkDecodeSchema(b, func(b *testing.B, test contractBenchmarkCase, data []byte) {
+		if err := DecodeSchema(test.envelope, data, test.newTarget()); err != nil {
+			b.Fatal(err)
+		}
+	})
+}
+
+// BenchmarkDecodeSchemaBaselineComposition runs the pre-refactor DecodeSchema
+// body on the same fixtures — the raw decode, ValidateSchema's own re-decode of
+// the same bytes, then the typed unmarshal — so the traversal the delivered
+// path removes stays measurable in-tree and in one run instead of only across
+// the stage's before/after logs. Against the baseline revision both
+// sub-benchmarks measure this same body, which is the harness's own fairness
+// check; keep the composition byte-for-byte the historical sequence.
+func BenchmarkDecodeSchemaBaselineComposition(b *testing.B) {
+	benchmarkDecodeSchema(b, func(b *testing.B, test contractBenchmarkCase, data []byte) {
+		if _, err := decodeRawJSON(data, admitsPresentationNumbers(test.envelope)); err != nil {
+			b.Fatal(err)
+		}
+		if err := ValidateSchema(test.envelope, data); err != nil {
+			b.Fatal(err)
+		}
+		if err := json.Unmarshal(data, test.newTarget()); err != nil {
+			b.Fatal(err)
+		}
+	})
+}
+
+func benchmarkDecodeSchema(b *testing.B, decode func(b *testing.B, test contractBenchmarkCase, data []byte)) {
+	b.Helper()
+	for _, test := range contractBenchmarkCases() {
+		b.Run(test.name, func(b *testing.B) {
+			data, err := readContractFixtureBytes(test.fixture)
+			if err != nil {
+				b.Fatal(err)
+			}
+			b.ReportAllocs()
+			b.SetBytes(int64(len(data)))
+			b.ResetTimer()
+			for range b.N {
+				decode(b, test, data)
+			}
+		})
+	}
+}
+
 func readContractFixture(t *testing.T, relative string) []byte {
 	t.Helper()
-	_, source, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
-	}
-	root := filepath.Clean(filepath.Join(filepath.Dir(source), "..", "..", ".."))
-	data, err := os.ReadFile(filepath.Join(root, "contracts", "fixtures", filepath.FromSlash(relative)))
+	data, err := readContractFixtureBytes(relative)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return data
+}
+
+// readContractFixtureBytes loads a fixture without a *testing.T so the
+// benchmarks share the tests' fixture root and error handling.
+func readContractFixtureBytes(relative string) ([]byte, error) {
+	_, source, _, ok := runtime.Caller(0)
+	if !ok {
+		return nil, fmt.Errorf("runtime.Caller failed")
+	}
+	root := filepath.Clean(filepath.Join(filepath.Dir(source), "..", "..", ".."))
+	return os.ReadFile(filepath.Join(root, "contracts", "fixtures", filepath.FromSlash(relative)))
 }
