@@ -9,7 +9,6 @@ import sys
 import tempfile
 import unittest
 
-
 SCRIPT = pathlib.Path(__file__).with_name("assert-exunit-json.py")
 SPEC = importlib.util.spec_from_file_location("assert_exunit_json", SCRIPT)
 GATE = importlib.util.module_from_spec(SPEC)
@@ -32,9 +31,7 @@ def test_finished(name, state="passed", module="SymmetryControl.ExampleTest", du
 
 
 def suite_started(include=("goal_receipt_e2e",), exclude=("test",), seed=0):
-    return json.dumps(
-        {"event": "suite_started", "include": list(include), "exclude": list(exclude), "seed": seed}
-    )
+    return json.dumps({"event": "suite_started", "include": list(include), "exclude": list(exclude), "seed": seed})
 
 
 SUITE_FINISHED = json.dumps(
@@ -69,9 +66,10 @@ class GateTestCase(unittest.TestCase):
         return result
 
     def passing_stream(self, *extra):
-        return "\n".join(
-            [suite_started(), test_finished(NATIVE_POSITIVE), EXCLUDED_SIBLING, SUITE_FINISHED, *extra]
-        ) + "\n"
+        return (
+            "\n".join([suite_started(), test_finished(NATIVE_POSITIVE), EXCLUDED_SIBLING, SUITE_FINISHED, *extra])
+            + "\n"
+        )
 
 
 class PositiveTests(GateTestCase):
@@ -82,32 +80,34 @@ class PositiveTests(GateTestCase):
         self.assertIn("1 of them ran", result.stdout)
 
     def test_unselected_excluded_sibling_does_not_fail_the_gate(self):
-        stream = "\n".join(
-            [
-                suite_started(),
-                test_finished(NATIVE_POSITIVE),
-                test_finished("excluded one", state="excluded"),
-                test_finished("excluded two", state="excluded"),
-                SUITE_FINISHED,
-            ]
-        ) + "\n"
+        stream = (
+            "\n".join(
+                [
+                    suite_started(),
+                    test_finished(NATIVE_POSITIVE),
+                    test_finished("excluded one", state="excluded"),
+                    test_finished("excluded two", state="excluded"),
+                    SUITE_FINISHED,
+                ]
+            )
+            + "\n"
+        )
         result = self.run_stream(stream, NATIVE_POSITIVE)
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_selected_tag_passes_the_selector_check(self):
-        stream = "\n".join(
-            [
-                suite_started(
-                    include=("pi_control_e2e_native_positive", "skip:pi_control_e2e_native_positive")
-                ),
-                test_finished(NATIVE_POSITIVE),
-                EXCLUDED_SIBLING,
-                SUITE_FINISHED,
-            ]
-        ) + "\n"
-        result = self.run_stream(
-            stream, "--expected-selector", "pi_control_e2e_native_positive", NATIVE_POSITIVE
+        stream = (
+            "\n".join(
+                [
+                    suite_started(include=("pi_control_e2e_native_positive", "skip:pi_control_e2e_native_positive")),
+                    test_finished(NATIVE_POSITIVE),
+                    EXCLUDED_SIBLING,
+                    SUITE_FINISHED,
+                ]
+            )
+            + "\n"
         )
+        result = self.run_stream(stream, "--expected-selector", "pi_control_e2e_native_positive", NATIVE_POSITIVE)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("verified", result.stdout)
 
@@ -214,13 +214,16 @@ class SelectorAndRunnerStatusTests(GateTestCase):
 
     def test_selector_is_matched_against_parsed_filters_only(self):
         """A tag that only appears in test names or free text is not a selected filter."""
-        stream = "\n".join(
-            [
-                suite_started(include=("goal_receipt_e2e",)),
-                test_finished("pi_control_e2e_native_positive"),
-                SUITE_FINISHED,
-            ]
-        ) + "\n"
+        stream = (
+            "\n".join(
+                [
+                    suite_started(include=("goal_receipt_e2e",)),
+                    test_finished("pi_control_e2e_native_positive"),
+                    SUITE_FINISHED,
+                ]
+            )
+            + "\n"
+        )
         result = self.run_stream(
             stream,
             "--expected-selector",
@@ -228,9 +231,7 @@ class SelectorAndRunnerStatusTests(GateTestCase):
             "pi_control_e2e_native_positive",
         )
         self.assertEqual(result.returncode, 1)
-        self.assertIn(
-            "the ExUnit run did not select pi_control_e2e_native_positive", result.stderr
-        )
+        self.assertIn("the ExUnit run did not select pi_control_e2e_native_positive", result.stderr)
 
     def test_nonzero_runner_status_fails_before_the_stream_is_judged(self):
         result = self.run_gate(self.passing_stream(), "--runner-status", "2", NATIVE_POSITIVE)
@@ -242,12 +243,10 @@ class ProvenanceTests(GateTestCase):
     def test_success_records_the_summary_line_the_windows_step_reads(self):
         with tempfile.TemporaryDirectory() as directory:
             provenance = pathlib.Path(directory, "provenance.txt")
-            stream = "\n".join(
-                [suite_started(), test_finished(NATIVE_POSITIVE), EXCLUDED_SIBLING, SUITE_FINISHED]
-            ) + "\n"
-            result = self.run_stream(
-                stream, "--provenance", str(provenance), NATIVE_POSITIVE
+            stream = (
+                "\n".join([suite_started(), test_finished(NATIVE_POSITIVE), EXCLUDED_SIBLING, SUITE_FINISHED]) + "\n"
             )
+            result = self.run_stream(stream, "--provenance", str(provenance), NATIVE_POSITIVE)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(
                 provenance.read_text(encoding="utf-8"),

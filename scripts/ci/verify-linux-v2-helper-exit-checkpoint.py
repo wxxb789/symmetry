@@ -10,7 +10,6 @@ import re
 import stat
 import sys
 
-
 CHECKPOINT_FIELDS = {
     "version",
     "case",
@@ -55,10 +54,28 @@ def read_strict_json(path: pathlib.Path, expected_info: os.stat_result) -> dict:
         fd = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
         try:
             opened = os.fstat(fd)
-            if not stat.S_ISREG(opened.st_mode) or \
-                (opened.st_dev, opened.st_ino, opened.st_mode, opened.st_uid, opened.st_gid, opened.st_nlink, opened.st_size) != \
-                (expected_info.st_dev, expected_info.st_ino, expected_info.st_mode, expected_info.st_uid, expected_info.st_gid, expected_info.st_nlink, expected_info.st_size) or \
-                opened.st_size > 8192:
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or (
+                    opened.st_dev,
+                    opened.st_ino,
+                    opened.st_mode,
+                    opened.st_uid,
+                    opened.st_gid,
+                    opened.st_nlink,
+                    opened.st_size,
+                )
+                != (
+                    expected_info.st_dev,
+                    expected_info.st_ino,
+                    expected_info.st_mode,
+                    expected_info.st_uid,
+                    expected_info.st_gid,
+                    expected_info.st_nlink,
+                    expected_info.st_size,
+                )
+                or opened.st_size > 8192
+            ):
                 fail("checkpoint/selector changed during no-follow open")
             chunks = []
             remaining = 8193
@@ -121,11 +138,17 @@ def process_identity_sha256(pid: int) -> str:
         self_stat_inode = os.stat("/proc/self/ns/pid").st_ino
     except (OSError, ValueError):
         fail("exact B process creation identity is unavailable")
-    if start_time <= 0 or target_link != self_link or target_inode != self_inode or \
-        target_inode != target_stat_inode or self_inode != self_stat_inode:
+    if (
+        start_time <= 0
+        or target_link != self_link
+        or target_inode != self_inode
+        or target_inode != target_stat_inode
+        or self_inode != self_stat_inode
+    ):
         fail("exact B process PID namespace/start identity")
     identity = f"linux:v2:{boot_id}:{target_inode}:{pid}:{start_time}"
     import hashlib
+
     return hashlib.sha256(identity.encode("ascii")).hexdigest()
 
 
@@ -144,12 +167,16 @@ def live_unified_cgroup(pid: int) -> pathlib.Path:
         ]
     except OSError:
         fail("exact B gate cgroup membership")
-    if len(entries) != 1 or not entries[0].startswith("/") or entries[0] == "/" or \
-        ".." in pathlib.PurePosixPath(entries[0]).parts:
+    if (
+        len(entries) != 1
+        or not entries[0].startswith("/")
+        or entries[0] == "/"
+        or ".." in pathlib.PurePosixPath(entries[0]).parts
+    ):
         fail("single canonical unified cgroup membership")
     leaf = pathlib.Path("/sys/fs/cgroup") / entries[0].lstrip("/")
     try:
-        info = leaf.stat()
+        leaf.stat()
         processes = [int(value) for value in (leaf / "cgroup.procs").read_text(encoding="ascii").split()]
         events = (leaf / "cgroup.events").read_text(encoding="ascii").splitlines()
     except (OSError, ValueError):
@@ -199,33 +226,62 @@ def main() -> int:
         fail("fixed A/B identity arguments")
 
     checkpoint_info = checkpoint_path.lstat()
-    if not stat.S_ISREG(checkpoint_info.st_mode) or stat.S_ISLNK(checkpoint_info.st_mode) or \
-        (checkpoint_info.st_uid, checkpoint_info.st_gid, stat.S_IMODE(checkpoint_info.st_mode), checkpoint_info.st_nlink) != \
-        (a_uid, a_gid, 0o600, 1):
+    if (
+        not stat.S_ISREG(checkpoint_info.st_mode)
+        or stat.S_ISLNK(checkpoint_info.st_mode)
+        or (
+            checkpoint_info.st_uid,
+            checkpoint_info.st_gid,
+            stat.S_IMODE(checkpoint_info.st_mode),
+            checkpoint_info.st_nlink,
+        )
+        != (a_uid, a_gid, 0o600, 1)
+    ):
         fail("A-owned mode-0600 singly-linked live-B checkpoint")
     checkpoint = read_strict_json(checkpoint_path, checkpoint_info)
-    if set(checkpoint) != CHECKPOINT_FIELDS or not isinstance(checkpoint.get("version"), int) or \
-        isinstance(checkpoint.get("version"), bool) or checkpoint.get("version") != 1 or \
-        checkpoint.get("case") != CASE or checkpoint.get("helper_action") != ACTION:
+    if (
+        set(checkpoint) != CHECKPOINT_FIELDS
+        or not isinstance(checkpoint.get("version"), int)
+        or isinstance(checkpoint.get("version"), bool)
+        or checkpoint.get("version") != 1
+        or checkpoint.get("case") != CASE
+        or checkpoint.get("helper_action") != ACTION
+    ):
         fail("exact checkpoint schema/case")
 
     selector_info = selector_path.lstat()
-    if not stat.S_ISREG(selector_info.st_mode) or stat.S_ISLNK(selector_info.st_mode) or \
-        (selector_info.st_uid, selector_info.st_gid, stat.S_IMODE(selector_info.st_mode), selector_info.st_nlink) != \
-        (0, a_gid, 0o440, 1):
+    if (
+        not stat.S_ISREG(selector_info.st_mode)
+        or stat.S_ISLNK(selector_info.st_mode)
+        or (selector_info.st_uid, selector_info.st_gid, stat.S_IMODE(selector_info.st_mode), selector_info.st_nlink)
+        != (0, a_gid, 0o440, 1)
+    ):
         fail("root-owned A-readable singly-linked selector")
     selector = read_strict_json(selector_path, selector_info)
-    if set(selector) != SELECTOR_FIELDS or not isinstance(selector.get("version"), int) or \
-        isinstance(selector.get("version"), bool) or selector.get("version") != 1 or \
-        selector.get("helper_action") != ACTION or selector.get("hold_for_release_file") is not True:
+    if (
+        set(selector) != SELECTOR_FIELDS
+        or not isinstance(selector.get("version"), int)
+        or isinstance(selector.get("version"), bool)
+        or selector.get("version") != 1
+        or selector.get("helper_action") != ACTION
+        or selector.get("hold_for_release_file") is not True
+    ):
         fail("exact root-owned helper action selector")
-    if not isinstance(selector.get("run_id"), str) or not selector["run_id"] or \
-        not isinstance(selector.get("generation"), int) or isinstance(selector.get("generation"), bool) or \
-        selector["generation"] <= 0:
+    if (
+        not isinstance(selector.get("run_id"), str)
+        or not selector["run_id"]
+        or not isinstance(selector.get("generation"), int)
+        or isinstance(selector.get("generation"), bool)
+        or selector["generation"] <= 0
+    ):
         fail("selector RunKey fields")
-    if not isinstance(checkpoint.get("run_id"), str) or not checkpoint["run_id"] or \
-        not isinstance(checkpoint.get("generation"), int) or isinstance(checkpoint.get("generation"), bool) or \
-        checkpoint["generation"] <= 0:
+    if (
+        not isinstance(checkpoint.get("run_id"), str)
+        or not checkpoint["run_id"]
+        or not isinstance(checkpoint.get("generation"), int)
+        or isinstance(checkpoint.get("generation"), bool)
+        or checkpoint["generation"] <= 0
+    ):
         fail("checkpoint RunKey types")
     if checkpoint.get("run_id") != selector["run_id"] or checkpoint.get("generation") != selector["generation"]:
         fail("checkpoint RunKey matches root selector")
@@ -235,13 +291,20 @@ def main() -> int:
         fail("positive B gate PID")
     if checkpoint.get("host_uid") != b_uid or checkpoint.get("host_gid") != b_gid:
         fail("checkpoint host B credentials")
-    if checkpoint.get("uid_map") != f"1 {b_uid} 1" or checkpoint.get("gid_map") != f"1 {b_gid} 1" or \
-        checkpoint.get("setgroups") != "deny" or checkpoint.get("cap_eff") != CAP_EFF_ZERO or \
-        checkpoint.get("no_new_privs") is not True or checkpoint.get("leaf_membership") is not True or \
-        checkpoint.get("witness_action_observed") is not True:
+    if (
+        checkpoint.get("uid_map") != f"1 {b_uid} 1"
+        or checkpoint.get("gid_map") != f"1 {b_gid} 1"
+        or checkpoint.get("setgroups") != "deny"
+        or checkpoint.get("cap_eff") != CAP_EFF_ZERO
+        or checkpoint.get("no_new_privs") is not True
+        or checkpoint.get("leaf_membership") is not True
+        or checkpoint.get("witness_action_observed") is not True
+    ):
         fail("checkpoint UID/GID maps, setgroups, capabilities, NNP, leaf, and action facts")
-    if not isinstance(checkpoint.get("gate_identity_sha256"), str) or \
-        re.fullmatch(r"[0-9a-f]{64}", checkpoint["gate_identity_sha256"]) is None:
+    if (
+        not isinstance(checkpoint.get("gate_identity_sha256"), str)
+        or re.fullmatch(r"[0-9a-f]{64}", checkpoint["gate_identity_sha256"]) is None
+    ):
         fail("hashed exact B gate process identity")
     exact_positive(checkpoint.get("leaf_device"), "positive pinned leaf device")
     exact_positive(checkpoint.get("leaf_inode"), "positive pinned leaf inode")
@@ -255,8 +318,13 @@ def main() -> int:
         actual_no_new_privs = int(one_status_field(status, "NoNewPrivs")[0], 10)
     except ValueError:
         fail("parse live gate credentials/capabilities")
-    if actual_uids != [b_uid] * 4 or actual_gids != [b_gid] * 4 or actual_groups or \
-        actual_cap_eff != 0 or actual_no_new_privs != 1:
+    if (
+        actual_uids != [b_uid] * 4
+        or actual_gids != [b_gid] * 4
+        or actual_groups
+        or actual_cap_eff != 0
+        or actual_no_new_privs != 1
+    ):
         fail("live gate B UID/GID, empty supplementary groups, CapEff, and NoNewPrivs")
     if process_identity_sha256(gate_pid) != checkpoint["gate_identity_sha256"]:
         fail("live B PID/start/PID-namespace identity matches the authenticated Status")

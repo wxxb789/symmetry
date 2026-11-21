@@ -25,7 +25,7 @@ def main() -> int:
     skipped = []
     try:
         with open(path, encoding="utf-8", errors="strict") as stream:
-            for line_number, line in enumerate(stream, 1):
+            for _line_number, line in enumerate(stream, 1):
                 if not line.strip():
                     continue
                 try:
@@ -41,22 +41,21 @@ def main() -> int:
                 selected_package = args.package is None or event.get("Package") == args.package
                 if selected_package and name in counts and action in ("run", "pass", "skip"):
                     counts[name][action] += 1
-                if selected_package and action == "skip" and isinstance(name, str):
-                    if any(name == target or name.startswith(target + "/") for target in expected):
-                        skipped.append(name)
+                if (
+                    selected_package
+                    and action == "skip"
+                    and isinstance(name, str)
+                    and any(name == target or name.startswith(target + "/") for target in expected)
+                ):
+                    skipped.append(name)
     except (OSError, UnicodeError) as error:
         print(f"could not read Go test JSON events: {error}", file=sys.stderr)
         return 2
 
-    bad = {
-        name: values
-        for name, values in counts.items()
-        if values != {"run": 1, "pass": 1, "skip": 0}
-    }
+    bad = {name: values for name, values in counts.items() if values != {"run": 1, "pass": 1, "skip": 0}}
     if invalid or failures or bad or skipped:
         summary = "; ".join(
-            f"{name}=run:{values['run']},pass:{values['pass']},skip:{values['skip']}"
-            for name, values in bad.items()
+            f"{name}=run:{values['run']},pass:{values['pass']},skip:{values['skip']}" for name, values in bad.items()
         )
         print(
             "Go native acceptance event gate failed: "

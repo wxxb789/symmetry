@@ -625,3 +625,22 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       be projected (a Go panic dump therefore appears only as a count). The 45 s harness wait and the
       30 s daemon bound are declared bounds, not the defect: no timeout changes until an occurrence
       has been diagnosed from that tail.
+
+## scripts/ci ruff baseline: drop the #137 exclude and keep the gate's ruff version pinned
+
+- [ ] Delete the `extend-exclude` block in `pyproject.toml` once open PR #137
+      (`fix/sanitizer-json-escape`) is merged or abandoned. The two excluded files
+      (`scripts/ci/model-routing-record-sanitize.py`,
+      `scripts/ci/test-model-routing-record-sanitize.py`) are the ones #137 rewrites, and the
+      2026-11-21 ruff baseline (`rf-w1-11`) excluded them so the reformat could not conflict with
+      that branch. After deleting the block, run `python3 -m ruff format scripts/ci` and
+      `python3 -m ruff check scripts/ci` and expect both clean over all 51 files; until then
+      `scripts/ci` is lint-clean over 49 of its 51 Python files. The exclude applies only to
+      ruff's own file discovery: `ruff check scripts/ci` skips the two files, while
+      `ruff check scripts/ci/model-routing-record-sanitize.py` (an explicitly named path) checks
+      them anyway unless `--force-exclude` is passed.
+- [ ] The `ci.yml` ruff step (W1-01) must install ruff 0.17.5 exactly. `pyproject.toml` carries
+      `required-version = "==0.17.5"`, so any other ruff refuses to load the configuration
+      (exit 2, `Required version … does not match the running version …`) instead of reporting a
+      different finding set than the one the 2026-11-21 baseline fixed (373 findings at
+      `a3039f0`, of which 220 E501 at `line-length = 120`).

@@ -17,22 +17,52 @@ import sys
 import tempfile
 import unittest
 
-
 SCRIPT = pathlib.Path(__file__).with_name("model-routing-omp-usage.py")
 CANARY = "CANARY-SECRET-9f3a"
 COST_PROVENANCE = "observed_omp_session_harness_cost_total_sum_estimate_no_provider_billing_proof"
-ROW_FIELDS = {"stage", "session_ref", "non_model_reason", "model_ids", "prompt_hashes",
-              "tokens", "reported_cost", "estimated_cost", "cost_provenance",
-              "price_version", "wall_time", "metadata", "limitations", "known_subtotals"}
-METADATA_FIELDS = frozenset({
-    "source_format", "source_sha256", "credential_route", "routing_provenance",
-    "accounting_complete", "session_ref_source", "records", "session_records",
-    "session_init_records", "session_init", "resolved_model_identity", "model_changes",
-    "thinking_level_changes", "fallback_records", "entry_types", "assistant_messages",
-    "assistant_messages_with_usage", "assistant_messages_with_cost_total",
-    "assistant_messages_without_model_identity", "user_messages", "custom_messages",
-    "usage_includes_all_assistant_attempts", "served_model_differs_from_resolved_model",
-})
+ROW_FIELDS = {
+    "stage",
+    "session_ref",
+    "non_model_reason",
+    "model_ids",
+    "prompt_hashes",
+    "tokens",
+    "reported_cost",
+    "estimated_cost",
+    "cost_provenance",
+    "price_version",
+    "wall_time",
+    "metadata",
+    "limitations",
+    "known_subtotals",
+}
+METADATA_FIELDS = frozenset(
+    {
+        "source_format",
+        "source_sha256",
+        "credential_route",
+        "routing_provenance",
+        "accounting_complete",
+        "session_ref_source",
+        "records",
+        "session_records",
+        "session_init_records",
+        "session_init",
+        "resolved_model_identity",
+        "model_changes",
+        "thinking_level_changes",
+        "fallback_records",
+        "entry_types",
+        "assistant_messages",
+        "assistant_messages_with_usage",
+        "assistant_messages_with_cost_total",
+        "assistant_messages_without_model_identity",
+        "user_messages",
+        "custom_messages",
+        "usage_includes_all_assistant_attempts",
+        "served_model_differs_from_resolved_model",
+    }
+)
 
 
 def prompt_hash(text):
@@ -62,25 +92,41 @@ def load_usage_module():
 
 # The runner's STAGES and this literal must describe the same six accountable
 # phases; the extractor accepts exactly these stage names.
-ACCOUNTABLE_STAGES = ("exploration", "implementation", "verification", "review", "repair",
-                      "failed_attempt")
+ACCOUNTABLE_STAGES = ("exploration", "implementation", "verification", "review", "repair", "failed_attempt")
 
 
 class OmpUsageExtractionTest(unittest.TestCase):
     def run_arguments(self, arguments):
-        return subprocess.run([sys.executable, str(SCRIPT), *arguments],
-                              capture_output=True, encoding="utf-8")
+        return subprocess.run([sys.executable, str(SCRIPT), *arguments], capture_output=True, encoding="utf-8")
 
-    def run_cli(self, records=None, *, raw_lines=None, stage="implementation",
-                credential_route="safe-metadata", provenance="synthetic-parser-regression",
-                price_version=None):
+    def run_cli(
+        self,
+        records=None,
+        *,
+        raw_lines=None,
+        stage="implementation",
+        credential_route="safe-metadata",
+        provenance="synthetic-parser-regression",
+        price_version=None,
+    ):
         with tempfile.TemporaryDirectory() as directory:
             session = pathlib.Path(directory) / "session.jsonl"
-            lines = list(raw_lines) if raw_lines is not None else [
-                json.dumps(record, ensure_ascii=False) for record in records]
+            lines = (
+                list(raw_lines)
+                if raw_lines is not None
+                else [json.dumps(record, ensure_ascii=False) for record in records]
+            )
             session.write_text("\n".join(lines) + "\n", encoding="utf-8")
-            arguments = ["--session", str(session), "--stage", stage,
-                         "--credential-route", credential_route, "--provenance", provenance]
+            arguments = [
+                "--session",
+                str(session),
+                "--stage",
+                stage,
+                "--credential-route",
+                credential_route,
+                "--provenance",
+                provenance,
+            ]
             if price_version is not None:
                 arguments += ["--price-version", price_version]
             return self.run_arguments(arguments)
@@ -94,17 +140,36 @@ class OmpUsageExtractionTest(unittest.TestCase):
     def export_id_less_session(self, path, prompt="synthetic user request"):
         """Write one ID-less OMP export at path and return the extractor row."""
         lines = [
-            json.dumps({"type": "message", "timestamp": "2026-11-15T10:00:00Z",
-                        "message": {"role": "user", "content": prompt}}),
-            json.dumps({"type": "message", "timestamp": "2026-11-15T10:00:05Z",
-                        "message": {"role": "assistant", "model": "m",
-                                    "provider": "safe-provider", "api": "safe-api",
-                                    "usage": self.usage()}}),
+            json.dumps(
+                {"type": "message", "timestamp": "2026-11-15T10:00:00Z", "message": {"role": "user", "content": prompt}}
+            ),
+            json.dumps(
+                {
+                    "type": "message",
+                    "timestamp": "2026-11-15T10:00:05Z",
+                    "message": {
+                        "role": "assistant",
+                        "model": "m",
+                        "provider": "safe-provider",
+                        "api": "safe-api",
+                        "usage": self.usage(),
+                    },
+                }
+            ),
         ]
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        completed = self.run_arguments(["--session", str(path), "--stage", "implementation",
-                                        "--credential-route", "safe-metadata",
-                                        "--provenance", "synthetic-parser-regression"])
+        completed = self.run_arguments(
+            [
+                "--session",
+                str(path),
+                "--stage",
+                "implementation",
+                "--credential-route",
+                "safe-metadata",
+                "--provenance",
+                "synthetic-parser-regression",
+            ]
+        )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         return json.loads(completed.stdout)
 
@@ -114,47 +179,69 @@ class OmpUsageExtractionTest(unittest.TestCase):
         The second row is imported under the review stage, the exact double-import the
         finding reproduced: one session charged once per phase.
         """
-        usage = {"repair_count": 0, "wall_time": 12.0, "phases": [
-            self.non_model_phase("exploration"),
-            model_rows[0],
-            self.non_model_phase("verification"),
-            dict(model_rows[1], stage="review"),
-            self.non_model_phase("repair"),
-            self.non_model_phase("failed_attempt"),
-        ]}
+        usage = {
+            "repair_count": 0,
+            "wall_time": 12.0,
+            "phases": [
+                self.non_model_phase("exploration"),
+                model_rows[0],
+                self.non_model_phase("verification"),
+                dict(model_rows[1], stage="review"),
+                self.non_model_phase("repair"),
+                self.non_model_phase("failed_attempt"),
+            ],
+        }
         return usage
 
     def session_record(self, **overrides):
-        record = {"type": "session", "id": "synthetic-session-1",
-                  "timestamp": "2026-11-15T10:00:00Z",
-                  "cwd": "C:/private/synthetic-work", "parentSession": None}
+        record = {
+            "type": "session",
+            "id": "synthetic-session-1",
+            "timestamp": "2026-11-15T10:00:00Z",
+            "cwd": "C:/private/synthetic-work",
+            "parentSession": None,
+        }
         record.update(overrides)
         return record
 
     def init_record(self, **overrides):
-        record = {"type": "session_init", "timestamp": "2026-11-15T10:00:01Z",
-                  "agent": "scout", "modelRole": "lightweight",
-                  "resolvedModel": "deepseek-v4-flash", "task": "synthetic task text",
-                  "systemPrompt": "synthetic system prompt", "readOnly": True}
+        record = {
+            "type": "session_init",
+            "timestamp": "2026-11-15T10:00:01Z",
+            "agent": "scout",
+            "modelRole": "lightweight",
+            "resolvedModel": "deepseek-v4-flash",
+            "task": "synthetic task text",
+            "systemPrompt": "synthetic system prompt",
+            "readOnly": True,
+        }
         record.update(overrides)
         return record
 
     def user_record(self, content="synthetic user request", timestamp="2026-11-15T10:00:03Z"):
-        return {"type": "message", "timestamp": timestamp,
-                "message": {"role": "user", "content": content}}
+        return {"type": "message", "timestamp": timestamp, "message": {"role": "user", "content": content}}
 
     def assistant_record(self, timestamp="2026-11-15T10:00:05Z", **payload_overrides):
-        payload = {"role": "assistant", "model": "deepseek-v4.1-flash-fast",
-                   "provider": "tencent-litellm", "api": "openai-completions",
-                   "usage": self.usage()}
+        payload = {
+            "role": "assistant",
+            "model": "deepseek-v4.1-flash-fast",
+            "provider": "tencent-litellm",
+            "api": "openai-completions",
+            "usage": self.usage(),
+        }
         payload.update(payload_overrides)
         return {"type": "message", "timestamp": timestamp, "message": payload}
 
     def usage(self, **overrides):
-        usage = {"input": 100, "output": 20, "cacheRead": 5, "cacheWrite": 2,
-                 "totalTokens": 127, "reasoningTokens": 3,
-                 "cost": {"input": 0.001, "output": 0.002, "cacheRead": 0.0001,
-                          "cacheWrite": 0.0001, "total": 0.0032}}
+        usage = {
+            "input": 100,
+            "output": 20,
+            "cacheRead": 5,
+            "cacheWrite": 2,
+            "totalTokens": 127,
+            "reasoningTokens": 3,
+            "cost": {"input": 0.001, "output": 0.002, "cacheRead": 0.0001, "cacheWrite": 0.0001, "total": 0.0032},
+        }
         usage.update(overrides)
         return usage
 
@@ -162,8 +249,7 @@ class OmpUsageExtractionTest(unittest.TestCase):
         records = [
             self.session_record(),
             self.init_record(),
-            {"type": "model_change", "timestamp": "2026-11-15T10:00:02Z",
-             "model": "deepseek-v4.1-flash-fast"},
+            {"type": "model_change", "timestamp": "2026-11-15T10:00:02Z", "model": "deepseek-v4.1-flash-fast"},
             self.user_record("first request"),
             self.user_record("second request", timestamp="2026-11-15T10:00:04Z"),
             self.assistant_record(),
@@ -173,15 +259,26 @@ class OmpUsageExtractionTest(unittest.TestCase):
         self.assertEqual(row["stage"], "implementation")
         self.assertEqual(row["session_ref"], "synthetic-session-1")
         self.assertIsNone(row["non_model_reason"])
-        self.assertEqual(row["model_ids"], [{
-            "model": "deepseek-v4.1-flash-fast", "provider": "tencent-litellm",
-            "api": "openai-completions", "assistant_messages": 1}])
-        self.assertEqual(row["prompt_hashes"], [
-            {"kind": "system_prompt", "sha256": prompt_hash("synthetic system prompt")},
-            {"kind": "task", "sha256": prompt_hash("synthetic task text")},
-            {"kind": "user_message", "index": 0, "sha256": prompt_hash("first request")},
-            {"kind": "user_message", "index": 1, "sha256": prompt_hash("second request")},
-        ])
+        self.assertEqual(
+            row["model_ids"],
+            [
+                {
+                    "model": "deepseek-v4.1-flash-fast",
+                    "provider": "tencent-litellm",
+                    "api": "openai-completions",
+                    "assistant_messages": 1,
+                }
+            ],
+        )
+        self.assertEqual(
+            row["prompt_hashes"],
+            [
+                {"kind": "system_prompt", "sha256": prompt_hash("synthetic system prompt")},
+                {"kind": "task", "sha256": prompt_hash("synthetic task text")},
+                {"kind": "user_message", "index": 0, "sha256": prompt_hash("first request")},
+                {"kind": "user_message", "index": 1, "sha256": prompt_hash("second request")},
+            ],
+        )
         self.assertEqual(row["tokens"], {"input": 100, "output": 20, "cached": 7})
         self.assertIsNone(row["reported_cost"])
         self.assertAlmostEqual(row["estimated_cost"], 0.0032)
@@ -195,18 +292,16 @@ class OmpUsageExtractionTest(unittest.TestCase):
         self.assertEqual(metadata["routing_provenance"], "synthetic-parser-regression")
         self.assertFalse(metadata["accounting_complete"])
         self.assertEqual(metadata["session_ref_source"], "observed_id")
-        self.assertEqual(metadata["session_init"], {
-            "agent": "scout", "model_role": "lightweight",
-            "resolved_model": "deepseek-v4-flash", "read_only": True})
+        self.assertEqual(
+            metadata["session_init"],
+            {"agent": "scout", "model_role": "lightweight", "resolved_model": "deepseek-v4-flash", "read_only": True},
+        )
         self.assertEqual(metadata["session_init_records"], 1)
         self.assertTrue(metadata["usage_includes_all_assistant_attempts"])
-        self.assertEqual(metadata["model_changes"],
-                         [{"record": 2, "model": "deepseek-v4.1-flash-fast"}])
-        self.assertEqual(metadata["entry_types"],
-                         {"session": 1, "session_init": 1, "model_change": 1, "message": 3})
+        self.assertEqual(metadata["model_changes"], [{"record": 2, "model": "deepseek-v4.1-flash-fast"}])
+        self.assertEqual(metadata["entry_types"], {"session": 1, "session_init": 1, "model_change": 1, "message": 3})
         self.assertEqual(metadata["assistant_messages"], 1)
-        self.assertEqual(sorted(row["limitations"]),
-                         ["price_version_absent", "provider_billing_not_observed"])
+        self.assertEqual(sorted(row["limitations"]), ["price_version_absent", "provider_billing_not_observed"])
         self.assertEqual(row["known_subtotals"]["input"], {"sum": 100, "messages": 1})
         self.assertEqual(row["known_subtotals"]["cost"]["total"]["messages"], 1)
         self.assertAlmostEqual(row["known_subtotals"]["cost"]["total"]["sum"], 0.0032)
@@ -236,15 +331,20 @@ class OmpUsageExtractionTest(unittest.TestCase):
         records = [
             self.session_record(),
             self.init_record(),
-            self.assistant_record(timestamp="2026-11-15T10:00:02Z", failed=True,
-                                  usage=self.usage(input=10, output=1, cacheRead=0, cacheWrite=0,
-                                                   cost={"total": 0.0001})),
-            self.assistant_record(timestamp="2026-11-15T10:00:03Z", aborted=True,
-                                  usage=self.usage(input=20, output=2, cacheRead=1, cacheWrite=0,
-                                                   cost={"total": 0.0002})),
-            self.assistant_record(timestamp="2026-11-15T10:00:04Z",
-                                  usage=self.usage(input=30, output=3, cacheRead=2, cacheWrite=1,
-                                                   cost={"total": 0.0003})),
+            self.assistant_record(
+                timestamp="2026-11-15T10:00:02Z",
+                failed=True,
+                usage=self.usage(input=10, output=1, cacheRead=0, cacheWrite=0, cost={"total": 0.0001}),
+            ),
+            self.assistant_record(
+                timestamp="2026-11-15T10:00:03Z",
+                aborted=True,
+                usage=self.usage(input=20, output=2, cacheRead=1, cacheWrite=0, cost={"total": 0.0002}),
+            ),
+            self.assistant_record(
+                timestamp="2026-11-15T10:00:04Z",
+                usage=self.usage(input=30, output=3, cacheRead=2, cacheWrite=1, cost={"total": 0.0003}),
+            ),
         ]
         row = self.row(records)
         self.assertEqual(row["tokens"], {"input": 60, "output": 6, "cached": 4})
@@ -258,9 +358,10 @@ class OmpUsageExtractionTest(unittest.TestCase):
         records = [
             self.session_record(),
             self.init_record(),
-            self.assistant_record(timestamp="2026-11-15T10:00:02Z",
-                                  usage=self.usage(input=7, output=8, cacheRead=1, cacheWrite=1,
-                                                   cost={"total": 0.01})),
+            self.assistant_record(
+                timestamp="2026-11-15T10:00:02Z",
+                usage=self.usage(input=7, output=8, cacheRead=1, cacheWrite=1, cost={"total": 0.01}),
+            ),
             self.assistant_record(timestamp="2026-11-15T10:00:03Z", usage=None),
         ]
         row = self.row(records)
@@ -283,28 +384,33 @@ class OmpUsageExtractionTest(unittest.TestCase):
         self.assertIn("assistant_usage_fields_missing", row["limitations"])
 
     def test_observed_zero_usage_is_known_zero_not_missing(self):
-        zero_usage = {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0,
-                      "totalTokens": 0, "reasoningTokens": 0,
-                      "cost": {"input": 0, "output": 0, "cacheRead": 0,
-                               "cacheWrite": 0, "total": 0}}
-        row = self.row([self.session_record(), self.init_record(),
-                        self.assistant_record(usage=zero_usage)])
+        zero_usage = {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 0,
+            "reasoningTokens": 0,
+            "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "total": 0},
+        }
+        row = self.row([self.session_record(), self.init_record(), self.assistant_record(usage=zero_usage)])
         self.assertEqual(row["tokens"], {"input": 0, "output": 0, "cached": 0})
         self.assertEqual(row["estimated_cost"], 0)
         self.assertEqual(row["cost_provenance"], COST_PROVENANCE)
         self.assertNotIn("assistant_usage_missing", row["limitations"])
 
     def test_supplied_price_version_is_echoed_without_inventing_prices(self):
-        row = self.row([self.session_record(), self.init_record(), self.assistant_record()],
-                       price_version="provider-prices-2026-11")
+        row = self.row(
+            [self.session_record(), self.init_record(), self.assistant_record()],
+            price_version="provider-prices-2026-11",
+        )
         self.assertEqual(row["price_version"], "provider-prices-2026-11")
         self.assertNotIn("price_version_absent", row["limitations"])
         self.assertAlmostEqual(row["estimated_cost"], 0.0032)
         self.assertIsNone(row["reported_cost"])
 
     def test_price_version_without_observed_cost_is_marked(self):
-        row = self.row([self.session_record(), self.init_record()],
-                       price_version="provider-prices-2026-11")
+        row = self.row([self.session_record(), self.init_record()], price_version="provider-prices-2026-11")
         self.assertEqual(row["price_version"], "provider-prices-2026-11")
         self.assertIsNone(row["estimated_cost"])
         self.assertIn("price_version_without_observed_cost", row["limitations"])
@@ -315,24 +421,27 @@ class OmpUsageExtractionTest(unittest.TestCase):
         self.assertIsNone(row["estimated_cost"])
         self.assertEqual(row["model_ids"], [])
         self.assertIn("no_assistant_messages", row["limitations"])
-        self.assertEqual(row["prompt_hashes"], [
-            {"kind": "system_prompt", "sha256": prompt_hash("synthetic system prompt")},
-            {"kind": "task", "sha256": prompt_hash("synthetic task text")},
-        ])
+        self.assertEqual(
+            row["prompt_hashes"],
+            [
+                {"kind": "system_prompt", "sha256": prompt_hash("synthetic system prompt")},
+                {"kind": "task", "sha256": prompt_hash("synthetic task text")},
+            ],
+        )
 
     def test_served_model_difference_from_resolved_model_is_visible(self):
         row = self.row([self.session_record(), self.init_record(), self.assistant_record()])
         self.assertEqual(row["metadata"]["session_init"]["resolved_model"], "deepseek-v4-flash")
-        self.assertEqual(row["metadata"]["resolved_model_identity"],
-                         {"provider": None, "model": "deepseek-v4-flash"})
-        self.assertEqual([item["model"] for item in row["model_ids"]],
-                         ["deepseek-v4.1-flash-fast"])
+        self.assertEqual(row["metadata"]["resolved_model_identity"], {"provider": None, "model": "deepseek-v4-flash"})
+        self.assertEqual([item["model"] for item in row["model_ids"]], ["deepseek-v4.1-flash-fast"])
         self.assertTrue(row["metadata"]["served_model_differs_from_resolved_model"])
 
     def test_matching_served_and_resolved_model_is_reported_as_matching(self):
-        records = [self.session_record(),
-                   self.init_record(resolvedModel="deepseek-v4.1-flash-fast"),
-                   self.assistant_record()]
+        records = [
+            self.session_record(),
+            self.init_record(resolvedModel="deepseek-v4.1-flash-fast"),
+            self.assistant_record(),
+        ]
         row = self.row(records)
         self.assertFalse(row["metadata"]["served_model_differs_from_resolved_model"])
 
@@ -341,20 +450,21 @@ class OmpUsageExtractionTest(unittest.TestCase):
             self.session_record(),
             self.init_record(),
             self.assistant_record(timestamp="2026-11-15T10:00:02Z"),
-            self.assistant_record(timestamp="2026-11-15T10:00:03Z", model="gpt-5.6-luna",
-                                  provider="openai", api="responses",
-                                  usage=self.usage(input=1, output=2, cacheRead=0,
-                                                   cacheWrite=0, cost={"total": 0.1})),
+            self.assistant_record(
+                timestamp="2026-11-15T10:00:03Z",
+                model="gpt-5.6-luna",
+                provider="openai",
+                api="responses",
+                usage=self.usage(input=1, output=2, cacheRead=0, cacheWrite=0, cost={"total": 0.1}),
+            ),
         ]
         row = self.row(records)
-        self.assertEqual([item["model"] for item in row["model_ids"]],
-                         ["deepseek-v4.1-flash-fast", "gpt-5.6-luna"])
+        self.assertEqual([item["model"] for item in row["model_ids"]], ["deepseek-v4.1-flash-fast", "gpt-5.6-luna"])
         self.assertEqual([item["assistant_messages"] for item in row["model_ids"]], [1, 1])
         self.assertEqual(row["tokens"]["input"], 101)
 
     def test_missing_model_identity_is_counted_and_not_invented(self):
-        row = self.row([self.session_record(), self.init_record(),
-                        self.assistant_record(model=None)])
+        row = self.row([self.session_record(), self.init_record(), self.assistant_record(model=None)])
         self.assertEqual(row["model_ids"], [])
         self.assertEqual(row["metadata"]["assistant_messages_without_model_identity"], 1)
         self.assertIn("assistant_model_identity_missing", row["limitations"])
@@ -364,11 +474,9 @@ class OmpUsageExtractionTest(unittest.TestCase):
             self.session_record(cwd="C:/private/" + CANARY, parentSession=CANARY),
             self.init_record(task=CANARY + " task body", systemPrompt=CANARY + " system body"),
             self.user_record(CANARY + " user body"),
-            self.assistant_record(content=CANARY, error=CANARY,
-                                  tool={"payload": CANARY}, usage=self.usage()),
+            self.assistant_record(content=CANARY, error=CANARY, tool={"payload": CANARY}, usage=self.usage()),
             {"type": "tool_result", "timestamp": "2026-11-15T10:00:06Z", "content": CANARY},
-            {"type": "config", "timestamp": "2026-11-15T10:00:07Z", "apiKey": CANARY,
-             "credentials": {"token": CANARY}},
+            {"type": "config", "timestamp": "2026-11-15T10:00:07Z", "apiKey": CANARY, "credentials": {"token": CANARY}},
             {"type": "document", "timestamp": "2026-11-15T10:00:08Z", "text": CANARY},
         ]
         completed = self.run_cli(records)
@@ -386,21 +494,25 @@ class OmpUsageExtractionTest(unittest.TestCase):
         records = [
             self.session_record(),
             self.init_record(),
-            {"type": "thinking_level_change", "timestamp": "2026-11-15T10:00:02Z",
-             "level": "high", "text": CANARY},
-            {"type": "model_fallback", "timestamp": "2026-11-15T10:00:03Z",
-             "model": "fallback-model", "provider": "fallback-provider", "reason": CANARY},
+            {"type": "thinking_level_change", "timestamp": "2026-11-15T10:00:02Z", "level": "high", "text": CANARY},
+            {
+                "type": "model_fallback",
+                "timestamp": "2026-11-15T10:00:03Z",
+                "model": "fallback-model",
+                "provider": "fallback-provider",
+                "reason": CANARY,
+            },
             self.assistant_record(),
         ]
         completed = self.run_cli(records)
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertNotIn(CANARY, completed.stdout)
         row = json.loads(completed.stdout)
-        self.assertEqual(row["metadata"]["thinking_level_changes"],
-                         [{"record": 2, "level": "high"}])
-        self.assertEqual(row["metadata"]["fallback_records"],
-                         [{"record": 3, "model": "fallback-model",
-                           "provider": "fallback-provider"}])
+        self.assertEqual(row["metadata"]["thinking_level_changes"], [{"record": 2, "level": "high"}])
+        self.assertEqual(
+            row["metadata"]["fallback_records"],
+            [{"record": 3, "model": "fallback-model", "provider": "fallback-provider"}],
+        )
 
     def test_thinking_level_values_are_allowlisted(self):
         # STD-B04: `level` is session-controlled, so a path-shaped spelling must
@@ -410,8 +522,7 @@ class OmpUsageExtractionTest(unittest.TestCase):
             records = [
                 self.session_record(),
                 self.init_record(),
-                {"type": "thinking_level_change", "timestamp": "2026-11-15T10:00:02Z",
-                 "level": level},
+                {"type": "thinking_level_change", "timestamp": "2026-11-15T10:00:02Z", "level": level},
                 self.assistant_record(),
             ]
             completed = self.run_cli(records)
@@ -421,13 +532,11 @@ class OmpUsageExtractionTest(unittest.TestCase):
         for level in ("none", "off", "minimal", "low", "medium", "high", "xhigh", "max"):
             with self.subTest(level=level):
                 completed, row = level_row(level)
-                self.assertEqual(row["metadata"]["thinking_level_changes"],
-                                 [{"record": 2, "level": level}])
+                self.assertEqual(row["metadata"]["thinking_level_changes"], [{"record": 2, "level": level}])
                 self.assertNotIn("thinking_level_change_unrecognized", row["limitations"])
         with self.subTest(level="numeric"):
             completed, row = level_row(2)
-            self.assertEqual(row["metadata"]["thinking_level_changes"],
-                             [{"record": 2, "level": 2}])
+            self.assertEqual(row["metadata"]["thinking_level_changes"], [{"record": 2, "level": 2}])
         for level in ("C:/Users/example/private", "notes/private", "verbose"):
             with self.subTest(level=level):
                 completed, row = level_row(level)
@@ -451,16 +560,19 @@ class OmpUsageExtractionTest(unittest.TestCase):
 
         merged = self.run_cli(export("synthetic-session-a") + export("synthetic-session-b"))
         self.assertEqual(merged.returncode, 1, merged.stdout)
-        self.assertEqual(merged.stderr,
-                         "refused: session file contains more than one session id; "
-                         "import one private session file per usage row\n")
+        self.assertEqual(
+            merged.stderr,
+            "refused: session file contains more than one session id; import one private session file per usage row\n",
+        )
         self.assertEqual(merged.stdout, "")
 
         doubled = self.run_cli(export("synthetic-session-a") + export("synthetic-session-a"))
         self.assertEqual(doubled.returncode, 1, doubled.stdout)
-        self.assertEqual(doubled.stderr,
-                         "refused: session record stream repeats an entry id; "
-                         "a duplicated or merged export cannot be counted once\n")
+        self.assertEqual(
+            doubled.stderr,
+            "refused: session record stream repeats an entry id; "
+            "a duplicated or merged export cannot be counted once\n",
+        )
         self.assertEqual(doubled.stdout, "")
 
         records = export("synthetic-session-a")
@@ -497,48 +609,48 @@ class OmpUsageExtractionTest(unittest.TestCase):
         ]
         for label, overrides in cases:
             with self.subTest(case=label):
-                usage = {"input": 1, "output": 1, "cacheRead": 0, "cacheWrite": 0,
-                         "cost": {"total": 0.0}}
+                usage = {"input": 1, "output": 1, "cacheRead": 0, "cacheWrite": 0, "cost": {"total": 0.0}}
                 usage.update(overrides)
-                completed = self.run_cli([self.session_record(), self.init_record(),
-                                          self.assistant_record(usage=usage)])
+                completed = self.run_cli(
+                    [self.session_record(), self.init_record(), self.assistant_record(usage=usage)]
+                )
                 self.assertEqual(completed.returncode, 1, completed.stdout)
                 self.assertTrue(completed.stderr.startswith("refused: "), completed.stderr)
                 self.assertEqual(completed.stdout, "")
         for label, cost in (("negative cost", {"total": -0.5}), ("unsafe cost", "0.5")):
             with self.subTest(case=label):
                 usage = {"input": 1, "output": 1, "cacheRead": 0, "cacheWrite": 0, "cost": cost}
-                completed = self.run_cli([self.session_record(), self.init_record(),
-                                          self.assistant_record(usage=usage)])
+                completed = self.run_cli(
+                    [self.session_record(), self.init_record(), self.assistant_record(usage=usage)]
+                )
                 self.assertEqual(completed.returncode, 1, completed.stdout)
                 self.assertEqual(completed.stdout, "")
-        completed = self.run_cli([self.session_record(), self.init_record(),
-                                  self.assistant_record(model="deepseek flash " + CANARY)])
+        completed = self.run_cli(
+            [self.session_record(), self.init_record(), self.assistant_record(model="deepseek flash " + CANARY)]
+        )
         self.assertEqual(completed.returncode, 1)
-        self.assertEqual(completed.stderr,
-                         "refused: session assistant record has an unsafe model identity\n")
+        self.assertEqual(completed.stderr, "refused: session assistant record has an unsafe model identity\n")
         self.assertNotIn(CANARY, completed.stderr)
 
     def test_nonfinite_or_overflowing_usage_totals_are_refused(self):
         """A total that leaves the finite range refuses instead of emitting Infinity."""
         cases = {
             "cached sum overflows to infinity": [
-                self.session_record(), self.init_record(),
+                self.session_record(),
+                self.init_record(),
                 self.assistant_record(usage=self.usage(cacheRead=1e308, cacheWrite=1e308)),
             ],
             "cost sum overflows to infinity": [
-                self.session_record(), self.init_record(),
-                self.assistant_record(timestamp="2026-11-15T10:00:02Z",
-                                      usage=self.usage(cost={"total": 1e308})),
-                self.assistant_record(timestamp="2026-11-15T10:00:03Z",
-                                      usage=self.usage(cost={"total": 1e308})),
+                self.session_record(),
+                self.init_record(),
+                self.assistant_record(timestamp="2026-11-15T10:00:02Z", usage=self.usage(cost={"total": 1e308})),
+                self.assistant_record(timestamp="2026-11-15T10:00:03Z", usage=self.usage(cost={"total": 1e308})),
             ],
             "int beyond float range meets a float total": [
-                self.session_record(), self.init_record(),
-                self.assistant_record(timestamp="2026-11-15T10:00:02Z",
-                                      usage=self.usage(cost={"total": 10 ** 400})),
-                self.assistant_record(timestamp="2026-11-15T10:00:03Z",
-                                      usage=self.usage(cost={"total": 0.5})),
+                self.session_record(),
+                self.init_record(),
+                self.assistant_record(timestamp="2026-11-15T10:00:02Z", usage=self.usage(cost={"total": 10**400})),
+                self.assistant_record(timestamp="2026-11-15T10:00:03Z", usage=self.usage(cost={"total": 0.5})),
             ],
         }
         for label, records in cases.items():
@@ -554,17 +666,23 @@ class OmpUsageExtractionTest(unittest.TestCase):
         and be refused downstream by the runner's finite-number check; the extractor
         must refuse it at the source in both the one-record and the summed shape."""
         for label, records in (
-            ("one record", [
-                self.session_record(), self.init_record(),
-                self.assistant_record(usage=self.usage(cost={"total": 10 ** 400})),
-            ]),
-            ("two records", [
-                self.session_record(), self.init_record(),
-                self.assistant_record(timestamp="2026-11-15T10:00:02Z",
-                                      usage=self.usage(cost={"total": 10 ** 400})),
-                self.assistant_record(timestamp="2026-11-15T10:00:03Z",
-                                      usage=self.usage(cost={"total": 10 ** 400})),
-            ]),
+            (
+                "one record",
+                [
+                    self.session_record(),
+                    self.init_record(),
+                    self.assistant_record(usage=self.usage(cost={"total": 10**400})),
+                ],
+            ),
+            (
+                "two records",
+                [
+                    self.session_record(),
+                    self.init_record(),
+                    self.assistant_record(timestamp="2026-11-15T10:00:02Z", usage=self.usage(cost={"total": 10**400})),
+                    self.assistant_record(timestamp="2026-11-15T10:00:03Z", usage=self.usage(cost={"total": 10**400})),
+                ],
+            ),
         ):
             with self.subTest(shape=label):
                 completed = self.run_cli(records)
@@ -583,7 +701,7 @@ class OmpUsageExtractionTest(unittest.TestCase):
         if limit == 0:
             self.skipTest("this interpreter has no integer conversion-digit limit")
         digits = "9" * (limit + 1)
-        completed = self.run_cli(raw_lines=['{"type":"session","id":"a","big":' + digits + '}'])
+        completed = self.run_cli(raw_lines=['{"type":"session","id":"a","big":' + digits + "}"])
         self.assertEqual(completed.returncode, 1, completed.stdout)
         self.assertEqual(
             completed.stderr,
@@ -596,26 +714,48 @@ class OmpUsageExtractionTest(unittest.TestCase):
         # must name the actual cause - a nan or infinity float is a non-finite number,
         # while a finite integer past Python's conversion-digit limit is not.
         module = load_usage_module()
-        row = {"stage": "implementation", "session_ref": "synthetic-session", "non_model_reason": None,
-               "model_ids": [], "prompt_hashes": [], "tokens": {"input": None, "output": None, "cached": None},
-               "reported_cost": None, "estimated_cost": None, "cost_provenance": None,
-               "price_version": None, "wall_time": None, "metadata": {}, "limitations": [],
-               "known_subtotals": {}}
+        row = {
+            "stage": "implementation",
+            "session_ref": "synthetic-session",
+            "non_model_reason": None,
+            "model_ids": [],
+            "prompt_hashes": [],
+            "tokens": {"input": None, "output": None, "cached": None},
+            "reported_cost": None,
+            "estimated_cost": None,
+            "cost_provenance": None,
+            "price_version": None,
+            "wall_time": None,
+            "metadata": {},
+            "limitations": [],
+            "known_subtotals": {},
+        }
         original = module.extract_usage
         try:
             module.extract_usage = lambda *arguments, **keywords: row
             cases = [(float("inf"), "refused: usage row carries a non-finite number\n")]
             limit = sys.get_int_max_str_digits()
             if limit:
-                cases.append((10 ** (limit + 1),
-                              "refused: usage row carries a number outside the serializable range\n"))
+                cases.append(
+                    (10 ** (limit + 1), "refused: usage row carries a number outside the serializable range\n")
+                )
             for value, message in cases:
                 with self.subTest(message=message):
                     row["estimated_cost"] = value
                     errors = io.StringIO()
                     with contextlib.redirect_stderr(errors):
-                        code = module.main(["--session", "unused", "--stage", "implementation",
-                                            "--credential-route", "safe-label", "--provenance", "safe-token"])
+                        code = module.main(
+                            [
+                                "--session",
+                                "unused",
+                                "--stage",
+                                "implementation",
+                                "--credential-route",
+                                "safe-label",
+                                "--provenance",
+                                "safe-token",
+                            ]
+                        )
                     self.assertEqual(code, 1)
                     self.assertEqual(errors.getvalue(), message)
         finally:
@@ -629,39 +769,87 @@ class OmpUsageExtractionTest(unittest.TestCase):
         ]
         for record_type, message in cases:
             with self.subTest(record_type=record_type):
-                completed = self.run_cli([
-                    self.session_record(),
-                    self.init_record(),
-                    {"type": record_type, "timestamp": "2026-11-15T10:00:02Z",
-                     "model": "two words"},
-                ])
+                completed = self.run_cli(
+                    [
+                        self.session_record(),
+                        self.init_record(),
+                        {"type": record_type, "timestamp": "2026-11-15T10:00:02Z", "model": "two words"},
+                    ]
+                )
                 self.assertEqual(completed.returncode, 1, completed.stdout)
                 self.assertEqual(completed.stdout, "")
                 self.assertEqual(completed.stderr, f"refused: {message}\n")
 
     def test_cli_usage_errors_are_rejected(self):
         cases = {
-            "unknown stage": ["--session", "unused.jsonl", "--stage", "polishing",
-                              "--credential-route", "safe-metadata",
-                              "--provenance", "synthetic"],
-            "missing stage": ["--session", "unused.jsonl",
-                              "--credential-route", "safe-metadata",
-                              "--provenance", "synthetic"],
-            "missing session": ["--stage", "review", "--credential-route", "safe-metadata",
-                                "--provenance", "synthetic"],
-            "unsafe credential route": ["--session", "unused.jsonl", "--stage", "review",
-                                        "--credential-route", "token=abc",
-                                        "--provenance", "synthetic"],
-            "unsafe provenance": ["--session", "unused.jsonl", "--stage", "review",
-                                  "--credential-route", "safe-metadata",
-                                  "--provenance", "two words"],
-            "unsafe price version": ["--session", "unused.jsonl", "--stage", "review",
-                                     "--credential-route", "safe-metadata",
-                                     "--provenance", "synthetic",
-                                     "--price-version", "price version"],
-            "removed failed alias": ["--session", "unused.jsonl", "--stage", "failed",
-                                     "--credential-route", "safe-metadata",
-                                     "--provenance", "synthetic"],
+            "unknown stage": [
+                "--session",
+                "unused.jsonl",
+                "--stage",
+                "polishing",
+                "--credential-route",
+                "safe-metadata",
+                "--provenance",
+                "synthetic",
+            ],
+            "missing stage": [
+                "--session",
+                "unused.jsonl",
+                "--credential-route",
+                "safe-metadata",
+                "--provenance",
+                "synthetic",
+            ],
+            "missing session": [
+                "--stage",
+                "review",
+                "--credential-route",
+                "safe-metadata",
+                "--provenance",
+                "synthetic",
+            ],
+            "unsafe credential route": [
+                "--session",
+                "unused.jsonl",
+                "--stage",
+                "review",
+                "--credential-route",
+                "token=abc",
+                "--provenance",
+                "synthetic",
+            ],
+            "unsafe provenance": [
+                "--session",
+                "unused.jsonl",
+                "--stage",
+                "review",
+                "--credential-route",
+                "safe-metadata",
+                "--provenance",
+                "two words",
+            ],
+            "unsafe price version": [
+                "--session",
+                "unused.jsonl",
+                "--stage",
+                "review",
+                "--credential-route",
+                "safe-metadata",
+                "--provenance",
+                "synthetic",
+                "--price-version",
+                "price version",
+            ],
+            "removed failed alias": [
+                "--session",
+                "unused.jsonl",
+                "--stage",
+                "failed",
+                "--credential-route",
+                "safe-metadata",
+                "--provenance",
+                "synthetic",
+            ],
         }
         for label, arguments in cases.items():
             with self.subTest(case=label):
@@ -670,9 +858,15 @@ class OmpUsageExtractionTest(unittest.TestCase):
                 self.assertEqual(completed.stdout, "")
 
     def test_session_reference_stays_opaque_without_a_safe_id(self):
-        raw_lines = [json.dumps({"type": "message", "timestamp": "2026-11-15T10:00:00Z",
-                                 "message": {"role": "assistant", "model": "m",
-                                             "usage": self.usage()}})]
+        raw_lines = [
+            json.dumps(
+                {
+                    "type": "message",
+                    "timestamp": "2026-11-15T10:00:00Z",
+                    "message": {"role": "assistant", "model": "m", "usage": self.usage()},
+                }
+            )
+        ]
         completed = self.run_cli(raw_lines=raw_lines)
         self.assertEqual(completed.returncode, 0, completed.stderr)
         row = json.loads(completed.stdout)
@@ -680,8 +874,7 @@ class OmpUsageExtractionTest(unittest.TestCase):
         self.assertEqual(row["metadata"]["session_ref_source"], "source_sha256")
         self.assertIn("session_entry_absent", row["limitations"])
         self.assertIn("session_id_absent", row["limitations"])
-        row = self.row([self.session_record(id="session id with spaces/path"),
-                        self.assistant_record()])
+        row = self.row([self.session_record(id="session id with spaces/path"), self.assistant_record()])
         self.assertTrue(row["session_ref"].startswith("sha256:"))
         self.assertEqual(row["metadata"]["session_ref_source"], "hashed_id")
         self.assertIn("session_id_hashed", row["limitations"])
@@ -709,66 +902,76 @@ class OmpUsageExtractionTest(unittest.TestCase):
     def test_distinct_id_less_sessions_keep_distinct_identities(self):
         with tempfile.TemporaryDirectory() as directory:
             first = self.export_id_less_session(pathlib.Path(directory) / "first.jsonl")
-            second = self.export_id_less_session(pathlib.Path(directory) / "second.jsonl",
-                                                 prompt="a genuinely different request")
-        self.assertNotEqual(first["metadata"]["source_sha256"],
-                            second["metadata"]["source_sha256"])
+            second = self.export_id_less_session(
+                pathlib.Path(directory) / "second.jsonl", prompt="a genuinely different request"
+            )
+        self.assertNotEqual(first["metadata"]["source_sha256"], second["metadata"]["source_sha256"])
         self.assertNotEqual(first["session_ref"], second["session_ref"])
 
         module = load_runner_module()
         rows, repair_count, task_wall_time = module.validate_usage(
-            json.dumps(self.phases_with(first, second)).encode("utf-8"))
+            json.dumps(self.phases_with(first, second)).encode("utf-8")
+        )
         self.assertEqual(len(rows), 6)
         self.assertEqual(repair_count, 0)
         self.assertEqual(task_wall_time, 12.0)
 
     def test_wall_time_and_prompt_absence_are_limitations_not_values(self):
-        records = [self.session_record(timestamp=None),
-                   self.init_record(timestamp=None, systemPrompt=None, task=None),
-                   self.assistant_record(timestamp=None)]
+        records = [
+            self.session_record(timestamp=None),
+            self.init_record(timestamp=None, systemPrompt=None, task=None),
+            self.assistant_record(timestamp=None),
+        ]
         row = self.row(records)
         self.assertIsNone(row["wall_time"])
         self.assertIn("wall_time_unavailable", row["limitations"])
         self.assertIn("system_prompt_absent", row["limitations"])
         self.assertIn("task_prompt_absent", row["limitations"])
         self.assertEqual(row["prompt_hashes"], [])
-        row = self.row([self.session_record(), self.init_record(),
-                        self.user_record(content=None), self.assistant_record()])
+        row = self.row(
+            [self.session_record(), self.init_record(), self.user_record(content=None), self.assistant_record()]
+        )
         self.assertIn("user_message_content_absent", row["limitations"])
-        self.assertEqual([item["kind"] for item in row["prompt_hashes"]],
-                         ["system_prompt", "task"])
-        row = self.row([self.init_record(timestamp="2026-11-15T10:00:00Z"),
-                        self.assistant_record(timestamp="2026-11-15T10:00:30Z")])
+        self.assertEqual([item["kind"] for item in row["prompt_hashes"]], ["system_prompt", "task"])
+        row = self.row(
+            [
+                self.init_record(timestamp="2026-11-15T10:00:00Z"),
+                self.assistant_record(timestamp="2026-11-15T10:00:30Z"),
+            ]
+        )
         self.assertEqual(row["wall_time"], 30.0)
         self.assertIn("session_entry_absent", row["limitations"])
 
     def test_repeated_session_init_uses_first_and_records_the_repetition(self):
-        records = [self.session_record(), self.init_record(),
-                   self.init_record(resolvedModel="other-model", systemPrompt="second prompt")]
+        records = [
+            self.session_record(),
+            self.init_record(),
+            self.init_record(resolvedModel="other-model", systemPrompt="second prompt"),
+        ]
         row = self.row(records)
         self.assertEqual(row["metadata"]["session_init_records"], 2)
         self.assertEqual(row["metadata"]["session_init"]["resolved_model"], "deepseek-v4-flash")
         self.assertIn("session_init_repeated", row["limitations"])
-        self.assertEqual(row["prompt_hashes"], [
-            {"kind": "system_prompt", "sha256": prompt_hash("synthetic system prompt")},
-            {"kind": "task", "sha256": prompt_hash("synthetic task text")},
-        ])
+        self.assertEqual(
+            row["prompt_hashes"],
+            [
+                {"kind": "system_prompt", "sha256": prompt_hash("synthetic system prompt")},
+                {"kind": "task", "sha256": prompt_hash("synthetic task text")},
+            ],
+        )
 
     def test_prompt_digests_are_deterministic_for_structured_content(self):
         content = [{"type": "text", "text": "structured request"}]
-        canonical = json.dumps(content, sort_keys=True, separators=(",", ":"),
-                               ensure_ascii=False).encode("utf-8")
-        row = self.row([self.session_record(), self.user_record(content=content),
-                        self.assistant_record()])
-        self.assertEqual(row["prompt_hashes"][-1],
-                         {"kind": "user_message", "index": 0,
-                          "sha256": "sha256:" + hashlib.sha256(canonical).hexdigest()})
+        canonical = json.dumps(content, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        row = self.row([self.session_record(), self.user_record(content=content), self.assistant_record()])
+        self.assertEqual(
+            row["prompt_hashes"][-1],
+            {"kind": "user_message", "index": 0, "sha256": "sha256:" + hashlib.sha256(canonical).hexdigest()},
+        )
 
     def test_configured_provider_model_identity_ignores_only_known_thinking_suffix(self):
         def differs(resolved_model):
-            records = [self.session_record(),
-                       self.init_record(resolvedModel=resolved_model),
-                       self.assistant_record()]
+            records = [self.session_record(), self.init_record(resolvedModel=resolved_model), self.assistant_record()]
             return self.row(records)["metadata"]["served_model_differs_from_resolved_model"]
 
         self.assertFalse(differs("tencent-litellm/deepseek-v4.1-flash-fast:high"))
@@ -776,26 +979,38 @@ class OmpUsageExtractionTest(unittest.TestCase):
         self.assertTrue(differs("other-relay/deepseek-v4.1-flash-fast:high"))
         self.assertTrue(differs("tencent-litellm/other-model:high"))
         self.assertTrue(differs("tencent-litellm/deepseek-v4.1-flash-fast:unknown-effort"))
-        row = self.row([
-            self.session_record(),
-            self.init_record(resolvedModel="tencent-litellm/deepseek-v4.1-flash-fast:high"),
-            self.assistant_record(),
-        ])
-        self.assertEqual(row["metadata"]["session_init"]["resolved_model"],
-                         "tencent-litellm/deepseek-v4.1-flash-fast:high")
-        self.assertEqual(row["metadata"]["resolved_model_identity"],
-                         {"provider": "tencent-litellm", "model": "deepseek-v4.1-flash-fast"})
+        row = self.row(
+            [
+                self.session_record(),
+                self.init_record(resolvedModel="tencent-litellm/deepseek-v4.1-flash-fast:high"),
+                self.assistant_record(),
+            ]
+        )
+        self.assertEqual(
+            row["metadata"]["session_init"]["resolved_model"], "tencent-litellm/deepseek-v4.1-flash-fast:high"
+        )
+        self.assertEqual(
+            row["metadata"]["resolved_model_identity"],
+            {"provider": "tencent-litellm", "model": "deepseek-v4.1-flash-fast"},
+        )
 
     def test_custom_message_instructions_are_hashed_but_never_exported(self):
         content = CANARY + " parent follow-up instruction"
         records = [
             self.session_record(),
             self.init_record(),
-            {"type": "custom_message", "timestamp": "2026-11-15T10:00:02Z",
-             "customType": CANARY, "content": content, "display": CANARY,
-             "details": {"secret": CANARY}, "attribution": CANARY,
-             "id": "custom-1", "parentId": "custom-0",
-             "runtime": {"secret": CANARY}},
+            {
+                "type": "custom_message",
+                "timestamp": "2026-11-15T10:00:02Z",
+                "customType": CANARY,
+                "content": content,
+                "display": CANARY,
+                "details": {"secret": CANARY},
+                "attribution": CANARY,
+                "id": "custom-1",
+                "parentId": "custom-0",
+                "runtime": {"secret": CANARY},
+            },
             self.user_record("synthetic user request"),
             self.assistant_record(),
         ]
@@ -804,10 +1019,10 @@ class OmpUsageExtractionTest(unittest.TestCase):
         self.assertNotIn(CANARY, completed.stdout)
         self.assertNotIn(CANARY, completed.stderr)
         row = json.loads(completed.stdout)
-        self.assertEqual([item["kind"] for item in row["prompt_hashes"]],
-                         ["system_prompt", "task", "custom_message", "user_message"])
-        self.assertIn({"kind": "custom_message", "index": 0, "sha256": prompt_hash(content)},
-                      row["prompt_hashes"])
+        self.assertEqual(
+            [item["kind"] for item in row["prompt_hashes"]], ["system_prompt", "task", "custom_message", "user_message"]
+        )
+        self.assertIn({"kind": "custom_message", "index": 0, "sha256": prompt_hash(content)}, row["prompt_hashes"])
         self.assertEqual(row["metadata"]["entry_types"]["custom_message"], 1)
         self.assertEqual(row["metadata"]["custom_messages"], 1)
         self.assertEqual(row["metadata"]["user_messages"], 1)
@@ -818,8 +1033,7 @@ class OmpUsageExtractionTest(unittest.TestCase):
         records = [
             self.session_record(),
             self.init_record(),
-            {"type": "unrecognized_private_event", "timestamp": "2026-11-15T10:00:02Z",
-             "payload": CANARY},
+            {"type": "unrecognized_private_event", "timestamp": "2026-11-15T10:00:02Z", "payload": CANARY},
             self.assistant_record(),
         ]
         text = "\n".join(json.dumps(record) for record in records) + "\n"
@@ -827,14 +1041,22 @@ class OmpUsageExtractionTest(unittest.TestCase):
             session = pathlib.Path(directory) / "session.jsonl"
             session.write_text(text, encoding="utf-8")
             raw = session.read_bytes()
-            completed = self.run_arguments(["--session", str(session), "--stage", "review",
-                                            "--credential-route", "safe-metadata",
-                                            "--provenance", "synthetic"])
+            completed = self.run_arguments(
+                [
+                    "--session",
+                    str(session),
+                    "--stage",
+                    "review",
+                    "--credential-route",
+                    "safe-metadata",
+                    "--provenance",
+                    "synthetic",
+                ]
+            )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertNotIn(CANARY, completed.stdout)
         row = json.loads(completed.stdout)
-        self.assertEqual(row["metadata"]["source_sha256"],
-                         "sha256:" + hashlib.sha256(raw).hexdigest())
+        self.assertEqual(row["metadata"]["source_sha256"], "sha256:" + hashlib.sha256(raw).hexdigest())
         self.assertNotIn(str(session), completed.stdout)
         self.assertNotIn("session.jsonl", completed.stdout)
 
@@ -869,24 +1091,34 @@ class OmpUsageExtractionTest(unittest.TestCase):
         self.assertNotIn(CANARY, completed.stderr)
         row = json.loads(completed.stdout)
 
-        self.assertEqual(row["metadata"]["entry_types"],
-                         {surrogatepass_digest(CANARY): 1, surrogatepass_digest("token_usage"): 1,
-                          "message": 2, "session": 1, "session_init": 1})
+        self.assertEqual(
+            row["metadata"]["entry_types"],
+            {
+                surrogatepass_digest(CANARY): 1,
+                surrogatepass_digest("token_usage"): 1,
+                "message": 2,
+                "session": 1,
+                "session_init": 1,
+            },
+        )
         self.assertIn("secret_like_entry_type_redacted", row["limitations"])
 
         # The runner refuses secret-like keys anywhere in a usage row; the exported
         # row must still pass its own validator unchanged.
-        usage = {"repair_count": 0, "wall_time": 12.0, "phases": [
-            self.non_model_phase("exploration"),
-            row,
-            self.non_model_phase("verification"),
-            self.non_model_phase("review"),
-            self.non_model_phase("repair"),
-            self.non_model_phase("failed_attempt"),
-        ]}
+        usage = {
+            "repair_count": 0,
+            "wall_time": 12.0,
+            "phases": [
+                self.non_model_phase("exploration"),
+                row,
+                self.non_model_phase("verification"),
+                self.non_model_phase("review"),
+                self.non_model_phase("repair"),
+                self.non_model_phase("failed_attempt"),
+            ],
+        }
         module = load_runner_module()
-        rows, repair_count, task_wall_time = module.validate_usage(
-            json.dumps(usage).encode("utf-8"))
+        rows, repair_count, task_wall_time = module.validate_usage(json.dumps(usage).encode("utf-8"))
         self.assertEqual(len(rows), 6)
         self.assertEqual(repair_count, 0)
         self.assertEqual(task_wall_time, 12.0)
@@ -912,17 +1144,20 @@ class OmpUsageExtractionTest(unittest.TestCase):
 
         # The runner refuses secret-like keys anywhere in a usage row; the exported
         # row must still pass its own validator unchanged.
-        usage = {"repair_count": 0, "wall_time": 12.0, "phases": [
-            self.non_model_phase("exploration"),
-            row,
-            self.non_model_phase("verification"),
-            self.non_model_phase("review"),
-            self.non_model_phase("repair"),
-            self.non_model_phase("failed_attempt"),
-        ]}
+        usage = {
+            "repair_count": 0,
+            "wall_time": 12.0,
+            "phases": [
+                self.non_model_phase("exploration"),
+                row,
+                self.non_model_phase("verification"),
+                self.non_model_phase("review"),
+                self.non_model_phase("repair"),
+                self.non_model_phase("failed_attempt"),
+            ],
+        }
         module = load_runner_module()
-        rows, repair_count, task_wall_time = module.validate_usage(
-            json.dumps(usage).encode("utf-8"))
+        rows, repair_count, task_wall_time = module.validate_usage(json.dumps(usage).encode("utf-8"))
         self.assertEqual(len(rows), 6)
         self.assertEqual(repair_count, 0)
         self.assertEqual(task_wall_time, 12.0)
@@ -948,17 +1183,20 @@ class OmpUsageExtractionTest(unittest.TestCase):
                 self.assertIn("path_like_entry_type_redacted", row["limitations"])
                 self.assertNotIn("secret_like_entry_type_redacted", row["limitations"])
                 # The exported row must still pass the runner's own validator.
-                usage = {"repair_count": 0, "wall_time": 12.0, "phases": [
-                    self.non_model_phase("exploration"),
-                    row,
-                    self.non_model_phase("verification"),
-                    self.non_model_phase("review"),
-                    self.non_model_phase("repair"),
-                    self.non_model_phase("failed_attempt"),
-                ]}
+                usage = {
+                    "repair_count": 0,
+                    "wall_time": 12.0,
+                    "phases": [
+                        self.non_model_phase("exploration"),
+                        row,
+                        self.non_model_phase("verification"),
+                        self.non_model_phase("review"),
+                        self.non_model_phase("repair"),
+                        self.non_model_phase("failed_attempt"),
+                    ],
+                }
                 module = load_runner_module()
-                rows, repair_count, task_wall_time = module.validate_usage(
-                    json.dumps(usage).encode("utf-8"))
+                rows, repair_count, task_wall_time = module.validate_usage(json.dumps(usage).encode("utf-8"))
                 self.assertEqual(len(rows), 6)
                 self.assertEqual(repair_count, 0)
                 self.assertEqual(task_wall_time, 12.0)
@@ -984,8 +1222,7 @@ class OmpUsageExtractionTest(unittest.TestCase):
             self.session_record(),
             self.init_record(agent=agent, resolvedModel=resolved),
             self.assistant_record(),
-            {"type": "model_change", "timestamp": "2026-11-15T10:00:06Z",
-             "model": "C:/models/x"},
+            {"type": "model_change", "timestamp": "2026-11-15T10:00:06Z", "model": "C:/models/x"},
         ]
         completed = self.run_cli(records)
         self.assertEqual(completed.returncode, 0, completed.stderr)
@@ -993,39 +1230,62 @@ class OmpUsageExtractionTest(unittest.TestCase):
             self.assertNotIn(value, completed.stdout)
             self.assertNotIn(value, completed.stderr)
         row = json.loads(completed.stdout)
-        self.assertEqual(row["metadata"]["session_init"],
-                         {"agent": surrogatepass_digest(agent), "model_role": "lightweight",
-                          "resolved_model": surrogatepass_digest(resolved), "read_only": True})
-        self.assertEqual(row["metadata"]["model_changes"],
-                         [{"record": 3, "model": surrogatepass_digest("C:/models/x")}])
+        self.assertEqual(
+            row["metadata"]["session_init"],
+            {
+                "agent": surrogatepass_digest(agent),
+                "model_role": "lightweight",
+                "resolved_model": surrogatepass_digest(resolved),
+                "read_only": True,
+            },
+        )
+        self.assertEqual(
+            row["metadata"]["model_changes"], [{"record": 3, "model": surrogatepass_digest("C:/models/x")}]
+        )
         self.assertIsNone(row["metadata"]["resolved_model_identity"])
         self.assertIsNone(row["metadata"]["served_model_differs_from_resolved_model"])
         self.assertIn("session_init_identifier_redacted", row["limitations"])
         self.assertIn("model_identity_redacted", row["limitations"])
 
-        provider_qualified = self.row([
-            self.session_record(),
-            self.init_record(resolvedModel="tencent-litellm/deepseek-v4.1-flash-fast:high"),
-            self.assistant_record(),
-        ])
-        self.assertEqual(provider_qualified["metadata"]["session_init"]["resolved_model"],
-                         "tencent-litellm/deepseek-v4.1-flash-fast:high")
-        self.assertEqual(provider_qualified["metadata"]["resolved_model_identity"],
-                         {"provider": "tencent-litellm", "model": "deepseek-v4.1-flash-fast"})
+        provider_qualified = self.row(
+            [
+                self.session_record(),
+                self.init_record(resolvedModel="tencent-litellm/deepseek-v4.1-flash-fast:high"),
+                self.assistant_record(),
+            ]
+        )
+        self.assertEqual(
+            provider_qualified["metadata"]["session_init"]["resolved_model"],
+            "tencent-litellm/deepseek-v4.1-flash-fast:high",
+        )
+        self.assertEqual(
+            provider_qualified["metadata"]["resolved_model_identity"],
+            {"provider": "tencent-litellm", "model": "deepseek-v4.1-flash-fast"},
+        )
         self.assertNotIn("session_init_identifier_redacted", provider_qualified["limitations"])
 
         served_path = "E:/private/model-weights"
-        completed = self.run_cli([
-            self.session_record(),
-            self.init_record(),
-            self.assistant_record(model=served_path, provider="safe-provider", api="safe-api"),
-        ])
+        completed = self.run_cli(
+            [
+                self.session_record(),
+                self.init_record(),
+                self.assistant_record(model=served_path, provider="safe-provider", api="safe-api"),
+            ]
+        )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertNotIn(served_path, completed.stdout)
         row = json.loads(completed.stdout)
-        self.assertEqual(row["model_ids"], [{
-            "model": surrogatepass_digest(served_path), "provider": "safe-provider",
-            "api": "safe-api", "assistant_messages": 1}])
+        self.assertEqual(
+            row["model_ids"],
+            [
+                {
+                    "model": surrogatepass_digest(served_path),
+                    "provider": "safe-provider",
+                    "api": "safe-api",
+                    "assistant_messages": 1,
+                }
+            ],
+        )
         self.assertIn("model_identity_redacted", row["limitations"])
 
 

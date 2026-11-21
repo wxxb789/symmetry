@@ -1,0 +1,23 @@
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+# Fail closed instead of reporting a different finding set: the baseline this
+# config was fixed against was measured with ruff 0.17.5.
+required-version = "==0.17.5"
+# Open PR #137 rewrites these two files; formatting them here would land a
+# conflicting reformat. Drop both entries (docs/TODO.md tracks the removal)
+# once #137 is merged.
+extend-exclude = [
+    "scripts/ci/model-routing-record-sanitize.py",
+    "scripts/ci/test-model-routing-record-sanitize.py",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "C4", "PERF", "RUF", "ARG"]
+ignore = ["TRY003", "BLE001"]
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/ci/test-*.py" = ["ARG001", "ARG005"]
+
+[tool.ruff.format]
+quote-style = "double"
