@@ -31,25 +31,24 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       file set; reproduction is the three `deadcode` runs plus the baseline-scoped grep, as
       recorded in the plan.
 
-- [ ] Revalidate and remove the daemon surfaces that are unreachable from both mains but still
-      referenced, so no deletion is possible without retargeting a caller (2026-11-21, same
-      branch and plan). Three groups were surveyed; only the first, below, is dead-code material
-      — the other two are live — do not remove (decision note below).
-      **In the three-target `deadcode -test` intersection and referenced:**
-      `control.NewOperatorClient` (`client.go:485`) with `SubmitTask`/`GetTask`/
-      `CreateTaskCommand`/`operatorRequest`/`operatorRequestWithStatus` and
-      `control.WithMaxResponseBytes` (`:99`) — callers `daemon/e2e/core_test.go:696`,
-      `e2e/production_linux_containment_witness_test.go:2046`, the control tests, and
-      `app/pi_provider_bridge_test.go:409` (the oversized-response case of the live `NewClient`);
-      the seven legacy task validators in `daemon/internal/control/validation.go`
-      (`:209/:281/:302/:334/:441/:611/:629`) — reached from
-      `daemon/internal/control/client.go:992,:1007,:1022,:1034` (inside the dead operator client),
-      from sibling validators (`validation.go:230,:239,:253,:306`), and from
-      `daemon/internal/control/supervisory_validation_test.go:39,:48,:55,:125,:129,:148,:152`;
-      the `protocol.Task`/`TaskWaiting` v1 decoders (65 and 8 references, 37 in
-      `e2e/core_test.go`); and `harness.NewClaudeAdapterWithRunner` (`registry.go:181`, three test
-      files). Removing any of them needs an owner for `daemon/e2e/**` and the app/control test
-      seams — the W2-12 follow-up is that owner (program plan §4).
+- [ ] Revalidate and remove `harness.NewClaudeAdapterWithRunner` (three test files), the residual
+      of the 2026-11-21 W1-06 daemon dead-code survey (branch
+      `refactor/rf-w1-06-daemon-deadcode`, plan
+      `docs/plans/2026-11-21-w1-06-daemon-deadcode-plan.md`). The survey's other
+      unreachable-but-referenced, in-intersection surfaces were dispositioned by the W2-12b
+      relocation (branch `refactor/rf-w2-12b-operator-client-relocation`, plan
+      `docs/plans/2026-11-21-rf-w2-12b-operator-client-relocation-plan.md`): the operator client,
+      its five methods, the seven operator-exclusive task validators of
+      `daemon/internal/control/validation.go` and the v1 task decoders now live in
+      the e2e-owned `daemon/e2e/internal/operator/` package beside their only callers; six
+      declarations of the relocated set differ from their originals only by the sanctioned package
+      qualifiers, the rest byte-identical. The closed
+      part is recorded in `docs/archive/CLOSED-TODO.md` under `## Dead-code candidates`.
+      `control.WithMaxResponseBytes` stays in `control` by that slice's binding amendment (its
+      callers are the machine-client and PI-bridge tests). This residual belongs to the
+      probe/registry dedup (W3-04), not to a deletion pass: its shadowed root-probe siblings are
+      main-reachable through `NewCodexAdapter`/`NewClaudeAdapter`. The two live groups of the same
+      survey stay covered by the decision note below.
 
 - live — do not remove (decision note, 2026-11-21, same branch and plan): the two remaining
       groups of that survey are production-live surfaces that no deletion pass may touch.
@@ -1096,6 +1095,25 @@ instead of appended.
       `IntentContext.goal_lock/2` (`:1152-1164`) now encodes once — but returns the claim-scope
       shape rather than the intent-context map, so the slice left it; folding it must keep the
       lock-order case `:400` and the advisory-lock case `:2092` green.
+
+## Deferred review findings (PR #195)
+
+- [ ] Drop the host path from `TestPinnedNativeTranscript`'s fixture comparison before the next OmO
+      fixture re-record (2026-11-21, PR #195, branch `fix/ci-evidence-host-paths`). PR #195 removed
+      the committed executable path from `scripts/ci/omo-native-evidence.py`: `PINS[platform]` keeps
+      only `size` and `sha256`, and the operator names the file in `SYMMETRY_OMO_BINARY`, so a
+      receipt written by the updated witness carries `binary.independentPlatformPin` **without** a
+      `path` member. The fixture consumer still requires all three: `transcriptBinary` is
+      `{Path, Size, SHA256}` (`daemon/internal/harness/omo/transcript_test.go:16-20`), embedded as
+      `IndependentPlatformPin` at `:26` and compared whole against the per-GOOS expectations at
+      `:46`/`:52`, so `:73` answers `fixture does not bind the independent <goos> executable pin`
+      for any fixture re-recorded from the new receipt. The committed fixtures
+      (`daemon/internal/harness/testdata/omo/5.1.69/{windows,linux}.json`) are unchanged and CI is
+      unaffected today. The Go change — compare the pin's size and digest, not its `path` — is
+      outside PR #195's scope, whose "Left unchanged" note treats the recorded pins as provenance.
+      Owner: whoever re-records the OmO fixture. The opt-in native acceptance run pins the same
+      host path separately (`daemon/internal/harness/omo/native_test.go:190-200`, resolved at
+      `:219`) and does not read the fixture, so a re-record does not touch it.
 
 ## Control full-suite wall-time target and the D9 migration-file pin
 

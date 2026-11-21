@@ -23,6 +23,7 @@ import (
 
 	"github.com/wxxb789/symmetry/daemon/internal/config"
 	"github.com/wxxb789/symmetry/daemon/internal/platform"
+	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 )
 
 const subjectResourceID = "00000000-0000-4000-8000-000000000001"
@@ -211,6 +212,46 @@ func TestVerifySubjectIgnoresDirtyWorktreeForCommittedSubject(t *testing.T) {
 	}
 	if verified != subject {
 		t.Fatalf("verified Subject = %#v, want %#v", verified, subject)
+	}
+}
+
+// TestVerifySubjectRefusesUnmanagedWorktree pins the managed/binding refusal of
+// verifyPreparedSubject: a Prepared that is not a daemon-managed Git worktree, or
+// that carries no repository or root, can never be verified. The refusal is the
+// typed workspace_binding error with its exact message and fires before any
+// binding lookup or filesystem work.
+func TestVerifySubjectRefusesUnmanagedWorktree(t *testing.T) {
+	manager := New(nil)
+	expected := protocol.Subject{
+		ResourceID: subjectResourceID,
+		Commit:     strings.Repeat("a", 40),
+		TreeDigest: "sha256:" + strings.Repeat("b", 64),
+	}
+	if err := expected.Validate(); err != nil {
+		t.Fatalf("fixture subject is invalid: %v", err)
+	}
+
+	for _, testCase := range []struct {
+		name     string
+		prepared Prepared
+	}{
+		{"unmanaged", Prepared{BindingKey: "existing-checkout", Path: "/checkout"}},
+		{"unmanaged with repository", Prepared{BindingKey: "primary", Path: "/checkout", repository: "/repository", root: "/root"}},
+		{"missing repository", Prepared{BindingKey: "primary", Path: "/worktree", managed: true, root: "/root"}},
+		{"missing root", Prepared{BindingKey: "primary", Path: "/worktree", managed: true, repository: "/repository"}},
+	} {
+		_, err := manager.VerifySubject(context.Background(), testCase.prepared, expected)
+		var subjectErr *SubjectError
+		if !errors.As(err, &subjectErr) {
+			t.Fatalf("VerifySubject(%s) error = %v, want *SubjectError", testCase.name, err)
+		}
+		if subjectErr.Code != SubjectErrorWorkspaceBinding {
+			t.Fatalf("VerifySubject(%s) code = %q, want %q", testCase.name, subjectErr.Code, SubjectErrorWorkspaceBinding)
+		}
+		want := fmt.Sprintf("workspace_binding: binding=%q: path=%q: subject verification requires a daemon-managed Git worktree", testCase.prepared.BindingKey, testCase.prepared.Path)
+		if err.Error() != want {
+			t.Fatalf("VerifySubject(%s) message = %q, want %q", testCase.name, err.Error(), want)
+		}
 	}
 }
 
