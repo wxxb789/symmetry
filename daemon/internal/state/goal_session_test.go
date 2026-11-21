@@ -12,6 +12,7 @@ import (
 )
 
 func TestGoalSessionJournalRoundTripAcrossRestart(t *testing.T) {
+	t.Parallel()
 	directory := t.TempDir()
 	store, err := New(directory)
 	if err != nil {
@@ -75,6 +76,7 @@ func TestGoalSessionJournalRoundTripAcrossRestart(t *testing.T) {
 }
 
 func TestGoalSessionLaunchIntentReplayAndConflict(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	intent := testGoalSessionIntent()
 	first, err := store.SaveGoalSessionLaunchIntent(intent)
@@ -101,6 +103,7 @@ func TestGoalSessionLaunchIntentReplayAndConflict(t *testing.T) {
 }
 
 func TestGoalSessionHandoffLaunchIntentReplayPreservesSourceLineage(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	intent := testGoalSessionIntent()
 	intent.SessionMode = GoalSessionModeHandoff
@@ -129,6 +132,7 @@ func TestGoalSessionHandoffLaunchIntentReplayPreservesSourceLineage(t *testing.T
 }
 
 func TestGoalSessionHandoffLaunchIntentValidationKeepsNativeSessionsFresh(t *testing.T) {
+	t.Parallel()
 	base := testGoalSessionIntent()
 	validSource := "00000000-0000-4000-8000-000000000092"
 
@@ -173,6 +177,7 @@ func TestGoalSessionHandoffLaunchIntentValidationKeepsNativeSessionsFresh(t *tes
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			if _, err := mustStore(t).SaveGoalSessionLaunchIntent(test.intent); err == nil {
 				t.Fatal("SaveGoalSessionLaunchIntent() succeeded with invalid handoff lineage")
 			}
@@ -181,6 +186,7 @@ func TestGoalSessionHandoffLaunchIntentValidationKeepsNativeSessionsFresh(t *tes
 }
 
 func TestGoalSessionHandoffLineageSurvivesRestartAndRecovery(t *testing.T) {
+	t.Parallel()
 	directory := t.TempDir()
 	store, err := New(directory)
 	if err != nil {
@@ -226,6 +232,7 @@ func TestGoalSessionHandoffLineageSurvivesRestartAndRecovery(t *testing.T) {
 }
 
 func TestGoalSessionConcurrentIntentReplayIsSerialized(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	intent := testGoalSessionIntent()
 	var group sync.WaitGroup
@@ -249,6 +256,7 @@ func TestGoalSessionConcurrentIntentReplayIsSerialized(t *testing.T) {
 }
 
 func TestGoalSessionUnknownFieldsAreRejected(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	saved, err := store.SaveGoalSessionLaunchIntent(testGoalSessionIntent())
 	if err != nil {
@@ -276,6 +284,7 @@ func TestGoalSessionUnknownFieldsAreRejected(t *testing.T) {
 }
 
 func TestGoalSessionCrashGapIsQueryableAndBlocksDuplicateRestart(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	intent := testGoalSessionIntent()
 	saved, err := store.SaveGoalSessionLaunchIntent(intent)
@@ -319,6 +328,7 @@ func TestGoalSessionCrashGapIsQueryableAndBlocksDuplicateRestart(t *testing.T) {
 }
 
 func TestGoalSessionLineageBlocksCrossGenerationButAllowsIndependentWorkItem(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	firstIntent := testGoalSessionIntent()
 	first, err := store.SaveGoalSessionLaunchIntent(firstIntent)
@@ -361,6 +371,7 @@ func TestGoalSessionLineageBlocksCrossGenerationButAllowsIndependentWorkItem(t *
 }
 
 func TestGoalSessionLineageReleasesOnlyAfterExplicitKnownStopAcrossRestart(t *testing.T) {
+	t.Parallel()
 	directory := t.TempDir()
 	store, err := New(directory)
 	if err != nil {
@@ -426,6 +437,7 @@ func TestGoalSessionLineageReleasesOnlyAfterExplicitKnownStopAcrossRestart(t *te
 }
 
 func TestGoalSessionLineageAttachedStateReleasesOnlyAfterClose(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	intent := testGoalSessionIntent()
 	saved, err := store.SaveGoalSessionLaunchIntent(intent)
@@ -466,6 +478,7 @@ func TestGoalSessionLineageAttachedStateReleasesOnlyAfterClose(t *testing.T) {
 }
 
 func TestGoalSessionLineageDirtyIndexRebuildsFromJournal(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	intent := testGoalSessionIntent()
 	saved, err := store.SaveGoalSessionLaunchIntent(intent)
@@ -506,6 +519,7 @@ func TestGoalSessionLineageDirtyIndexRebuildsFromJournal(t *testing.T) {
 }
 
 func TestGoalSessionReconciliationRequiresStrictCompatibilityIncludingClosedReplay(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	intent := testGoalSessionIntent()
 	saved, err := store.SaveGoalSessionLaunchIntent(intent)
@@ -580,6 +594,7 @@ func TestGoalSessionJournalCommitSurvivesLineageIndexRefreshFailure(t *testing.T
 }
 
 func TestGoalSessionIntentGapClosesIdempotentlyBeforeNativeLaunch(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	intent := testGoalSessionIntent()
 	saved, err := store.SaveGoalSessionLaunchIntent(intent)
@@ -615,6 +630,7 @@ func TestGoalSessionIntentGapClosesIdempotentlyBeforeNativeLaunch(t *testing.T) 
 }
 
 func TestGoalSessionRecoveryDoesNotUpgradeUnstartedIntentToUncertain(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	intent := testGoalSessionIntent()
 	saved, err := store.SaveGoalSessionLaunchIntent(intent)
@@ -638,6 +654,7 @@ func TestGoalSessionRecoveryDoesNotUpgradeUnstartedIntentToUncertain(t *testing.
 }
 
 func TestGoalSessionCompatibilityRejectsOwnerVersionAndWorkspaceMismatch(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	saved, err := store.SaveGoalSessionLaunchIntent(testGoalSessionIntent())
 	if err != nil {
@@ -671,6 +688,7 @@ func TestGoalSessionCompatibilityRejectsOwnerVersionAndWorkspaceMismatch(t *test
 }
 
 func TestGoalSessionControlProjectionOmitsRawNativeIdentity(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	saved, err := store.SaveGoalSessionLaunchIntent(testGoalSessionIntent())
 	if err != nil {
@@ -699,6 +717,7 @@ func TestGoalSessionControlProjectionOmitsRawNativeIdentity(t *testing.T) {
 }
 
 func TestCloseGoalSessionClearsNativeHandleAndReplaysAfterRestart(t *testing.T) {
+	t.Parallel()
 	directory := t.TempDir()
 	store, err := New(directory)
 	if err != nil {
@@ -760,6 +779,7 @@ func TestCloseGoalSessionClearsNativeHandleAndReplaysAfterRestart(t *testing.T) 
 }
 
 func TestRetainedGoalSessionStopPreservesNativeAndControlIdentity(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	intent := testGoalSessionIntent()
 	intent.LocalHandleID = "00000000-0000-4000-8000-000000000010"
@@ -824,6 +844,7 @@ func TestRetainedGoalSessionStopPreservesNativeAndControlIdentity(t *testing.T) 
 }
 
 func TestLegacyControlAttachmentJournalLoadsButCannotResumeOrRelease(t *testing.T) {
+	t.Parallel()
 	directory := t.TempDir()
 	store, err := New(directory)
 	if err != nil {
@@ -900,6 +921,7 @@ func TestLegacyControlAttachmentJournalLoadsButCannotResumeOrRelease(t *testing.
 }
 
 func TestRetainedGoalSessionStopCertificateSurvivesStoreRestart(t *testing.T) {
+	t.Parallel()
 	directory := t.TempDir()
 	store, err := New(directory)
 	if err != nil {
@@ -944,6 +966,7 @@ func TestRetainedGoalSessionStopCertificateSurvivesStoreRestart(t *testing.T) {
 }
 
 func TestLoadGoalSessionByControlSessionIDFindsRetainedSessionAcrossRestart(t *testing.T) {
+	t.Parallel()
 	directory := t.TempDir()
 	store, err := New(directory)
 	if err != nil {
@@ -968,6 +991,7 @@ func TestLoadGoalSessionByControlSessionIDFindsRetainedSessionAcrossRestart(t *t
 }
 
 func TestRebindGoalSessionForResumeConsumesExactStoppedAttachment(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	source, certificate := mustAvailableRetainedGoalSession(t, store)
 	owner := source.WorkspaceOwnerRunKey
@@ -1116,6 +1140,7 @@ func TestRebindGoalSessionForResumeConsumesExactStoppedAttachment(t *testing.T) 
 }
 
 func TestRebindGoalSessionForResumeRejectsStaleCertificateAndCompetingCAS(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	source, certificate := mustAvailableRetainedGoalSession(t, store)
 	rebind := testGoalSessionResumeRebind(certificate)
@@ -1172,6 +1197,7 @@ func TestRebindGoalSessionForResumeRejectsStaleCertificateAndCompetingCAS(t *tes
 }
 
 func TestRebindGoalSessionForResumeRequiresExactCompatibility(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		want   error
@@ -1188,6 +1214,7 @@ func TestRebindGoalSessionForResumeRequiresExactCompatibility(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			store := mustStore(t)
 			source, certificate := mustAvailableRetainedGoalSession(t, store)
 			rebind := testGoalSessionResumeRebind(certificate)
@@ -1200,6 +1227,7 @@ func TestRebindGoalSessionForResumeRequiresExactCompatibility(t *testing.T) {
 }
 
 func TestRebindGoalSessionForResumeCannotBypassCurrentAttachmentBeforeAvailability(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	source, certificate := mustAvailableRetainedGoalSession(t, store)
 	rebind := testGoalSessionResumeRebind(certificate)
@@ -1228,6 +1256,7 @@ func TestRebindGoalSessionForResumeCannotBypassCurrentAttachmentBeforeAvailabili
 }
 
 func TestRebindGoalSessionForResumeFailsClosedForLegacyOrAfterRestart(t *testing.T) {
+	t.Parallel()
 	directory := t.TempDir()
 	store, err := New(directory)
 	if err != nil {
@@ -1268,6 +1297,7 @@ func TestRebindGoalSessionForResumeFailsClosedForLegacyOrAfterRestart(t *testing
 }
 
 func TestRebindGoalSessionForResumeSurvivesStoreRestart(t *testing.T) {
+	t.Parallel()
 	directory := t.TempDir()
 	store, err := New(directory)
 	if err != nil {
@@ -1313,6 +1343,7 @@ func TestRebindGoalSessionForResumeSurvivesStoreRestart(t *testing.T) {
 }
 
 func TestRebindGoalSessionForResumeRejectsInvalidOrStaleRuntimeEpochWithoutMutation(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		mutate func(*GoalSessionResumeRebind, GoalSessionJournal)
@@ -1327,6 +1358,7 @@ func TestRebindGoalSessionForResumeRejectsInvalidOrStaleRuntimeEpochWithoutMutat
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			store := mustStore(t)
 			source, certificate := mustAvailableRetainedGoalSession(t, store)
 			before, err := store.LoadGoalSession(source.Key())
@@ -1350,6 +1382,7 @@ func TestRebindGoalSessionForResumeRejectsInvalidOrStaleRuntimeEpochWithoutMutat
 }
 
 func TestRebindGoalSessionForResumeRejectsEpochRotationOnExactReplay(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	source, certificate := mustAvailableRetainedGoalSession(t, store)
 	rebind := testGoalSessionResumeRebind(certificate)
@@ -1377,6 +1410,7 @@ func TestRebindGoalSessionForResumeRejectsEpochRotationOnExactReplay(t *testing.
 }
 
 func TestRebindGoalSessionForResumeIgnoresPredecessorStopAndAttachReplay(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	source, certificate := mustAvailableRetainedGoalSession(t, store)
 	rebind := testGoalSessionResumeRebind(certificate)
@@ -1404,6 +1438,7 @@ func TestRebindGoalSessionForResumeIgnoresPredecessorStopAndAttachReplay(t *test
 }
 
 func TestRebindGoalSessionPreStartPhaseSurvivesAttachmentReadbackAndRestart(t *testing.T) {
+	t.Parallel()
 	directory := t.TempDir()
 	store, err := New(directory)
 	if err != nil {
@@ -1446,6 +1481,7 @@ func TestRebindGoalSessionPreStartPhaseSurvivesAttachmentReadbackAndRestart(t *t
 }
 
 func TestRebindGoalSessionKnownNativeStopPrecedesCurrentAttachment(t *testing.T) {
+	t.Parallel()
 	directory := t.TempDir()
 	store, err := New(directory)
 	if err != nil {
@@ -1497,6 +1533,7 @@ func TestRebindGoalSessionKnownNativeStopPrecedesCurrentAttachment(t *testing.T)
 }
 
 func TestMarkGoalSessionResumeRejectedSurvivesRestartAndStopDelivery(t *testing.T) {
+	t.Parallel()
 	directory := t.TempDir()
 	store, err := New(directory)
 	if err != nil {
@@ -1579,6 +1616,7 @@ func TestMarkGoalSessionResumeRejectedSurvivesRestartAndStopDelivery(t *testing.
 }
 
 func TestMarkGoalSessionResumeRejectedUpgradesUnclassifiedKnownStop(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	source, predecessor := mustAvailableRetainedGoalSession(t, store)
 	if _, err := store.RebindGoalSessionForResume(source.Key(), testGoalSessionResumeRebind(predecessor)); err != nil {
@@ -1601,6 +1639,7 @@ func TestMarkGoalSessionResumeRejectedUpgradesUnclassifiedKnownStop(t *testing.T
 }
 
 func TestGoalSessionResumeTerminalReasonJournalInvariant(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	source, predecessor := mustAvailableRetainedGoalSession(t, store)
 	if _, err := store.RebindGoalSessionForResume(source.Key(), testGoalSessionResumeRebind(predecessor)); err != nil {
@@ -1655,6 +1694,7 @@ func TestMarkGoalSessionResumeNativeStoppedWriteFailureLeavesPreStartState(t *te
 }
 
 func TestLegacyResumeSourceWithoutHistoryPreservesLateAckAndPromotesHistory(t *testing.T) {
+	t.Parallel()
 	directory := t.TempDir()
 	store, err := New(directory)
 	if err != nil {
@@ -1761,6 +1801,7 @@ func testGoalSessionResumeRebind(certificate GoalSessionStopCertificate) GoalSes
 }
 
 func TestCloseGoalSessionRejectsUncertainJournalAndPreservesIt(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	saved, err := store.SaveGoalSessionLaunchIntent(testGoalSessionIntent())
 	if err != nil {
@@ -1792,6 +1833,7 @@ func TestCloseGoalSessionRejectsUncertainJournalAndPreservesIt(t *testing.T) {
 }
 
 func TestMarkGoalSessionUncertainClearsAttachedHandleAndSurvivesReplay(t *testing.T) {
+	t.Parallel()
 	directory := t.TempDir()
 	store, err := New(directory)
 	if err != nil {
@@ -1850,6 +1892,7 @@ func TestMarkGoalSessionUncertainClearsAttachedHandleAndSurvivesReplay(t *testin
 }
 
 func TestSetGoalSessionStateClosedUsesSafeClose(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	saved, err := store.SaveGoalSessionLaunchIntent(testGoalSessionIntent())
 	if err != nil {
@@ -1871,6 +1914,7 @@ func TestSetGoalSessionStateClosedUsesSafeClose(t *testing.T) {
 }
 
 func TestSetGoalSessionStateRejectsAvailableWithoutCertificate(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	saved, err := store.SaveGoalSessionLaunchIntent(testGoalSessionIntent())
 	if err != nil {

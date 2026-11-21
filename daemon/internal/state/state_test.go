@@ -20,6 +20,7 @@ import (
 )
 
 func TestLoadIdentityMissingReturnsTypedNotFound(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 
 	_, err := store.LoadIdentity()
@@ -29,6 +30,7 @@ func TestLoadIdentityMissingReturnsTypedNotFound(t *testing.T) {
 }
 
 func TestIdentityRoundTripAndPermissions(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	want := MachineIdentity{MachineID: "machine-1", MachineToken: "secret-token"}
 	if err := store.SaveIdentity(want); err != nil {
@@ -62,6 +64,7 @@ func TestIdentityRoundTripAndPermissions(t *testing.T) {
 }
 
 func TestEnrollmentIntentRoundTripAndDelete(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	want := EnrollmentIntent{MachineName: "builder", MachineToken: "machine-token", IdempotencyKey: "enrollment-key"}
 	if err := store.SaveEnrollmentIntent(want); err != nil {
@@ -92,6 +95,7 @@ func TestEnrollmentIntentRoundTripAndDelete(t *testing.T) {
 }
 
 func TestNewMachineTokenIsOpaqueAndUnique(t *testing.T) {
+	t.Parallel()
 	seen := make(map[string]struct{})
 	for range 100 {
 		token, err := NewMachineToken()
@@ -110,6 +114,7 @@ func TestNewMachineTokenIsOpaqueAndUnique(t *testing.T) {
 }
 
 func TestStoreExclusiveLockAndClose(t *testing.T) {
+	t.Parallel()
 	directory := t.TempDir()
 	first, err := New(directory)
 	if err != nil {
@@ -207,6 +212,7 @@ func TestStateSecuritySetupFailuresPropagateWithoutToken(t *testing.T) {
 }
 
 func TestStatePathsHavePrivateSecurity(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	if err := store.SaveIdentity(MachineIdentity{MachineID: "machine-1", MachineToken: "secret-token"}); err != nil {
 		t.Fatalf("SaveIdentity() error = %v", err)
@@ -228,6 +234,7 @@ func TestStatePathsHavePrivateSecurity(t *testing.T) {
 }
 
 func TestIdentityErrorsDoNotExposeToken(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	const token = "never-report-this-token"
 	err := store.SaveIdentity(MachineIdentity{MachineID: "machine-1", MachineToken: strings.Repeat(token, 20000)})
@@ -240,6 +247,7 @@ func TestIdentityErrorsDoNotExposeToken(t *testing.T) {
 }
 
 func TestIdentityAtomicReplace(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	if err := store.SaveIdentity(MachineIdentity{MachineID: "old", MachineToken: "old-token"}); err != nil {
 		t.Fatalf("save old identity: %v", err)
@@ -258,6 +266,7 @@ func TestIdentityAtomicReplace(t *testing.T) {
 }
 
 func TestIdentityRejectsCorruptTrailingAndOversizedFiles(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	cases := []struct {
 		name string
@@ -281,6 +290,7 @@ func TestIdentityRejectsCorruptTrailingAndOversizedFiles(t *testing.T) {
 }
 
 func TestNewDaemonInstanceIDIsVersion4AndUnique(t *testing.T) {
+	t.Parallel()
 	seen := make(map[string]struct{})
 	for range 100 {
 		id, err := NewDaemonInstanceID()
@@ -298,6 +308,7 @@ func TestNewDaemonInstanceIDIsVersion4AndUnique(t *testing.T) {
 }
 
 func TestClaimIntentGrantAndPendingOutboxSurviveRestart(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	key := RunKey{RunID: "run-1", Generation: 2}
 	intent := ClaimIntent{
@@ -362,6 +373,7 @@ func TestClaimIntentGrantAndPendingOutboxSurviveRestart(t *testing.T) {
 }
 
 func TestStateRawMessagesRejectDuplicateMembersBeforePersistence(t *testing.T) {
+	t.Parallel()
 	duplicates := []struct {
 		name    string
 		payload json.RawMessage
@@ -373,6 +385,7 @@ func TestStateRawMessagesRejectDuplicateMembersBeforePersistence(t *testing.T) {
 
 	for _, test := range duplicates {
 		t.Run("SaveJournal Work.Input rejects "+test.name, func(t *testing.T) {
+			t.Parallel()
 			store := mustStore(t)
 			journal := testJournal("run-raw-work-"+test.name, 1)
 			journal.Work.Input = test.payload
@@ -382,6 +395,7 @@ func TestStateRawMessagesRejectDuplicateMembersBeforePersistence(t *testing.T) {
 		})
 
 		t.Run("QueueEvent rejects "+test.name, func(t *testing.T) {
+			t.Parallel()
 			store := mustStore(t)
 			journal := testJournal("run-raw-event-"+test.name, 1)
 			if err := store.SaveJournal(journal); err != nil {
@@ -397,6 +411,7 @@ func TestStateRawMessagesRejectDuplicateMembersBeforePersistence(t *testing.T) {
 		})
 
 		t.Run("QueueTransition rejects "+test.name, func(t *testing.T) {
+			t.Parallel()
 			store := mustStore(t)
 			journal := testJournal("run-raw-transition-"+test.name, 1)
 			if err := store.SaveJournal(journal); err != nil {
@@ -412,6 +427,7 @@ func TestStateRawMessagesRejectDuplicateMembersBeforePersistence(t *testing.T) {
 	}
 
 	t.Run("legacy unknown Work.Input fields remain allowed", func(t *testing.T) {
+		t.Parallel()
 		store := mustStore(t)
 		journal := testJournal("run-raw-legacy-unknown", 1)
 		journal.Work.Input = json.RawMessage(`{"legacy_unknown":{"nested":true}}`)
@@ -422,6 +438,7 @@ func TestStateRawMessagesRejectDuplicateMembersBeforePersistence(t *testing.T) {
 }
 
 func TestControlCommandReceiptRejectsDuplicateRawPayloadMembers(t *testing.T) {
+	t.Parallel()
 	duplicates := []struct {
 		name    string
 		payload json.RawMessage
@@ -433,6 +450,7 @@ func TestControlCommandReceiptRejectsDuplicateRawPayloadMembers(t *testing.T) {
 
 	for _, test := range duplicates {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			store := mustStore(t)
 			journal := testJournal("run-raw-command-"+test.name, 1)
 			if err := store.SaveJournal(journal); err != nil {
@@ -456,6 +474,7 @@ func TestControlCommandReceiptRejectsDuplicateRawPayloadMembers(t *testing.T) {
 }
 
 func TestQueueOutputEventBoundsPendingPayloadAndQueuesMarker(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	defer store.Close()
 	journal := testJournal("run-output-budget", 1)
@@ -513,6 +532,7 @@ func TestQueueOutputEventBoundsPendingPayloadAndQueuesMarker(t *testing.T) {
 }
 
 func TestQueueOutputEventDropFailureDoesNotClaimOrPersistDrop(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	defer store.Close()
 	journal := testJournal("run-output-drop-write-failure", 1)
@@ -540,6 +560,7 @@ func TestQueueOutputEventDropFailureDoesNotClaimOrPersistDrop(t *testing.T) {
 }
 
 func TestMarkEventsDeliveredAndQueueOutputTruncatedMarkerSurvivesRestart(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("run-output-marker", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -582,6 +603,7 @@ func TestMarkEventsDeliveredAndQueueOutputTruncatedMarkerSurvivesRestart(t *test
 }
 
 func TestQueueCommandAcknowledgementIsIdempotentByCommandAndOutcome(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("run-1", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -608,6 +630,7 @@ func TestQueueCommandAcknowledgementIsIdempotentByCommandAndOutcome(t *testing.T
 }
 
 func TestCommandAcknowledgementRetiredUsesConclusiveTerminalVerdict(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		journal RunJournal
@@ -632,6 +655,7 @@ func TestCommandAcknowledgementRetiredUsesConclusiveTerminalVerdict(t *testing.T
 }
 
 func TestProvideInputIntentIsAtomicAcrossCompletionDeliveryAndEpisodes(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("run-input", 1)
 	journal.LocalState = "waiting_for_input"
@@ -669,6 +693,7 @@ func TestProvideInputIntentIsAtomicAcrossCompletionDeliveryAndEpisodes(t *testin
 }
 
 func TestPrepareProvideInputCapturesEventSequenceBarrierAndValidatesIt(t *testing.T) {
+	t.Parallel()
 	directory := t.TempDir()
 	store, err := New(directory)
 	if err != nil {
@@ -715,6 +740,7 @@ func TestPrepareProvideInputCapturesEventSequenceBarrierAndValidatesIt(t *testin
 }
 
 func TestTerminalTransitionSettlesUnresolvedInputBeforeCleanup(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := stoppedTestJournal("run-input-terminal", 1)
 	journal.LocalState = "waiting_for_input"
@@ -748,6 +774,7 @@ func TestTerminalTransitionSettlesUnresolvedInputBeforeCleanup(t *testing.T) {
 }
 
 func TestResolveTerminalForCleanupRetiresUndeliveredInputIntent(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := stoppedTestJournal("run-input-cleanup", 1)
 	journal.LocalState = "waiting_for_input"
@@ -772,6 +799,7 @@ func TestResolveTerminalForCleanupRetiresUndeliveredInputIntent(t *testing.T) {
 }
 
 func TestJournalRejectsDuplicatePendingCommandAcknowledgementCommandIDs(t *testing.T) {
+	t.Parallel()
 	directory := t.TempDir()
 	store, err := New(directory)
 	if err != nil {
@@ -810,7 +838,9 @@ func TestJournalRejectsDuplicatePendingCommandAcknowledgementCommandIDs(t *testi
 }
 
 func TestJournalFileLimitSupportsLargeBacklogAndRejectsOversizeFiles(t *testing.T) {
+	t.Parallel()
 	t.Run("round trips a backlog larger than the control response limit", func(t *testing.T) {
+		t.Parallel()
 		store := mustStore(t)
 		journal := testJournal("run-1", 1)
 		journal.PendingEvents = []protocol.RunEvent{{
@@ -840,6 +870,7 @@ func TestJournalFileLimitSupportsLargeBacklogAndRejectsOversizeFiles(t *testing.
 	})
 
 	t.Run("rejects writes and reads beyond the journal ceiling", func(t *testing.T) {
+		t.Parallel()
 		store := mustStore(t)
 		journal := testJournal("run-1", 1)
 		journal.PendingEvents = []protocol.RunEvent{{
@@ -862,6 +893,7 @@ func TestJournalFileLimitSupportsLargeBacklogAndRejectsOversizeFiles(t *testing.
 }
 
 func TestSaveClaimIntentRequiresBoundedWorkspaceBindingKey(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	base := ClaimIntent{
 		Key: RunKey{RunID: "run-1", Generation: 1}, RuntimeKey: "local", RuntimeID: "runtime-1", RuntimeEpoch: 3,
@@ -880,6 +912,7 @@ func TestSaveClaimIntentRequiresBoundedWorkspaceBindingKey(t *testing.T) {
 }
 
 func TestPendingOutboxRequiresPersistedClaimGrant(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	key := RunKey{RunID: "run-1", Generation: 2}
 	if _, err := store.SaveClaimIntent(ClaimIntent{Key: key, RuntimeKey: "local", RuntimeID: "runtime-1", RuntimeEpoch: 3, ClaimID: "claim-1", Work: protocol.Work{Input: json.RawMessage(`{}`)}, WorkspaceBindingKey: "binding-1"}); err != nil {
@@ -892,6 +925,7 @@ func TestPendingOutboxRequiresPersistedClaimGrant(t *testing.T) {
 }
 
 func TestSetProcessDetailsPersistsNonEmptyIdentity(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := stoppedTestJournal("run-1", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -931,6 +965,7 @@ func TestSetProcessDetailsPersistsNonEmptyIdentity(t *testing.T) {
 }
 
 func TestSetProcessDetailsRejectsInvalidIdentityWithoutMutation(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("run-1", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -953,6 +988,7 @@ func TestSetProcessDetailsRejectsInvalidIdentityWithoutMutation(t *testing.T) {
 }
 
 func TestClearProcessDetailsUsesExpectedIdentityAndIsIdempotent(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := stoppedTestJournal("run-1", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -989,6 +1025,7 @@ func TestClearProcessDetailsUsesExpectedIdentityAndIsIdempotent(t *testing.T) {
 }
 
 func TestQueueTerminalTransitionIsAtomic(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("run-1", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -1016,6 +1053,7 @@ func TestQueueTerminalTransitionIsAtomic(t *testing.T) {
 }
 
 func TestCompletedTerminalTaskResultKindSurvivesDeliveryAndRestart(t *testing.T) {
+	t.Parallel()
 	directory := t.TempDir()
 	store, err := New(directory)
 	if err != nil {
@@ -1072,6 +1110,7 @@ func TestCompletedTerminalTaskResultKindSurvivesDeliveryAndRestart(t *testing.T)
 }
 
 func TestCancelledTerminalCannotReplaceCompletedTaskResultKind(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("run-terminal-cancel", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -1101,6 +1140,7 @@ func TestCancelledTerminalCannotReplaceCompletedTaskResultKind(t *testing.T) {
 }
 
 func TestCompletedTerminalTaskResultKindRejectsInvalidAtomicWrite(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("run-terminal-invalid", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -1121,6 +1161,7 @@ func TestCompletedTerminalTaskResultKindRejectsInvalidAtomicWrite(t *testing.T) 
 }
 
 func TestTerminalTaskResultKindNeverBackfillsAfterFirstTerminalTransition(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name  string
 		first protocol.StateTransitionRequest
@@ -1135,6 +1176,7 @@ func TestTerminalTaskResultKindNeverBackfillsAfterFirstTerminalTransition(t *tes
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			store := mustStore(t)
 			journal := testJournal("run-no-backfill", 1)
 			if err := store.SaveJournal(journal); err != nil {
@@ -1161,6 +1203,7 @@ func TestTerminalTaskResultKindNeverBackfillsAfterFirstTerminalTransition(t *tes
 }
 
 func TestSaveJournalCannotChangeOrClearTerminalTaskResultKind(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("run-terminal-immutable", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -1197,6 +1240,7 @@ func TestSaveJournalCannotChangeOrClearTerminalTaskResultKind(t *testing.T) {
 }
 
 func TestEnterCleanupPendingPreservesTerminalAuditAndControlsDelivery(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := stoppedTestJournal("run-1", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -1260,6 +1304,7 @@ func TestEnterCleanupPendingPreservesTerminalAuditAndControlsDelivery(t *testing
 }
 
 func TestCleanupPendingRoundTripsAcrossRestart(t *testing.T) {
+	t.Parallel()
 	directory := t.TempDir()
 	store, err := New(directory)
 	if err != nil {
@@ -1300,6 +1345,7 @@ func TestCleanupPendingRoundTripsAcrossRestart(t *testing.T) {
 }
 
 func TestResolveTerminalForCleanupIsAtomicAndIdempotent(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := stoppedTestJournal("run-atomic-cleanup", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -1330,6 +1376,7 @@ func TestResolveTerminalForCleanupIsAtomicAndIdempotent(t *testing.T) {
 }
 
 func TestWorkspacePathMutationPreservesTerminalOutboxAndRecoveryIntent(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("run-workspace-path", 1)
 	journal.WorkspacePath = ""
@@ -1357,6 +1404,7 @@ func TestWorkspacePathMutationPreservesTerminalOutboxAndRecoveryIntent(t *testin
 }
 
 func TestAdvanceLeaseExpiryIsMonotonic(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("run-1", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -1396,6 +1444,7 @@ func TestAdvanceLeaseExpiryIsMonotonic(t *testing.T) {
 }
 
 func TestQueueTerminalTransitionRejectsNonterminalStatesWithoutMutation(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("run-1", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -1417,6 +1466,7 @@ func TestQueueTerminalTransitionRejectsNonterminalStatesWithoutMutation(t *testi
 }
 
 func TestQueueTerminalTransitionSelectsOneAuthoritativeTerminal(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name          string
 		pendingStates []string
@@ -1462,6 +1512,7 @@ func TestQueueTerminalTransitionSelectsOneAuthoritativeTerminal(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			store := mustStore(t)
 			journal := testJournal("run-1", 1)
 			journal.PendingTransitions = transitionsForStates(journal, test.pendingStates)
@@ -1495,6 +1546,7 @@ func TestQueueTerminalTransitionSelectsOneAuthoritativeTerminal(t *testing.T) {
 }
 
 func TestQueueTerminalTransitionValidatesFenceBeforeCancelledReplacement(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("run-1", 1)
 	journal.PendingTransitions = transitionsForStates(journal, []string{"completed"})
@@ -1521,6 +1573,7 @@ func TestQueueTerminalTransitionValidatesFenceBeforeCancelledReplacement(t *test
 }
 
 func TestQueueCancelledTransitionAndAcknowledgementIsAtomic(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("run-1", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -1549,6 +1602,7 @@ func TestQueueCancelledTransitionAndAcknowledgementIsAtomic(t *testing.T) {
 }
 
 func TestQueueTerminalTransitionAndAcknowledgementPersistsFailedRejectedPair(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("run-terminal-command", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -1581,6 +1635,7 @@ func TestQueueTerminalTransitionAndAcknowledgementPersistsFailedRejectedPair(t *
 }
 
 func TestQueueTerminalTransitionAndAcknowledgementInvalidAcknowledgementRollsBack(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("run-terminal-command-invalid", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -1607,6 +1662,7 @@ func TestQueueTerminalTransitionAndAcknowledgementInvalidAcknowledgementRollsBac
 }
 
 func TestQueueCancelledTransitionAndAcknowledgementRejectsNonCancelledState(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("run-cancel-wrapper", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -1633,6 +1689,7 @@ func TestQueueCancelledTransitionAndAcknowledgementRejectsNonCancelledState(t *t
 }
 
 func TestQueueWaitingForInputCoalescesEventsAndPendingTransition(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("run-1", 1)
 	journal.LastEventSequence = 0
@@ -1679,6 +1736,7 @@ func TestQueueWaitingForInputCoalescesEventsAndPendingTransition(t *testing.T) {
 }
 
 func TestQueueWaitingForInputDoesNotRecreateDeliveredTransition(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("run-1", 1)
 	journal.LastEventSequence = 0
@@ -1704,6 +1762,7 @@ func TestQueueWaitingForInputDoesNotRecreateDeliveredTransition(t *testing.T) {
 }
 
 func TestQueueWaitingForInputRejectsInvalidTransitionWithoutPartialEvent(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("run-1", 1)
 	journal.LastEventSequence = 0
@@ -1724,8 +1783,10 @@ func TestQueueWaitingForInputRejectsInvalidTransitionWithoutPartialEvent(t *test
 }
 
 func TestQueueWaitingForInputPreservesTerminalTransitionsAndRestarts(t *testing.T) {
+	t.Parallel()
 	for _, terminalState := range []string{"completed", "failed", "cancelled"} {
 		t.Run(terminalState, func(t *testing.T) {
+			t.Parallel()
 			store := mustStore(t)
 			journal := testJournal("run-1", 1)
 			journal.LastEventSequence = 0
@@ -1766,6 +1827,7 @@ func TestQueueWaitingForInputPreservesTerminalTransitionsAndRestarts(t *testing.
 }
 
 func TestQueueWaitingForInputPreservesPendingTerminalTransition(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("run-1", 1)
 	journal.LastEventSequence = 0
@@ -1788,6 +1850,7 @@ func TestQueueWaitingForInputPreservesPendingTerminalTransition(t *testing.T) {
 }
 
 func TestQueueWaitingForInputStartsNewEpisodeAfterRunning(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("run-1", 1)
 	journal.LastEventSequence = 0
@@ -1812,6 +1875,7 @@ func TestQueueWaitingForInputStartsNewEpisodeAfterRunning(t *testing.T) {
 }
 
 func TestQueueWaitingForInputDoesNotUpdateAttemptedTransition(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("run-1", 1)
 	journal.LastEventSequence = 0
@@ -1837,6 +1901,7 @@ func TestQueueWaitingForInputDoesNotUpdateAttemptedTransition(t *testing.T) {
 }
 
 func TestTransitionAttemptMarkersRestartValidateAndCleanUp(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("run-1", 1)
 	journal.PendingTransitions = transitionsForStates(journal, []string{"running"})
@@ -1884,6 +1949,7 @@ func TestTransitionAttemptMarkersRestartValidateAndCleanUp(t *testing.T) {
 }
 
 func TestAttemptedTransitionMarkerValidationAndLegacyCompatibility(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	legacy := testJournal("legacy-run", 1)
 	if err := store.SaveJournal(legacy); err != nil {
@@ -1920,6 +1986,7 @@ func TestAttemptedTransitionMarkerValidationAndLegacyCompatibility(t *testing.T)
 }
 
 func TestTerminalReplacementRemovesAttemptMarkers(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("run-1", 1)
 	journal.PendingTransitions = transitionsForStates(journal, []string{"running"})
@@ -1937,6 +2004,7 @@ func TestTerminalReplacementRemovesAttemptMarkers(t *testing.T) {
 }
 
 func TestTerminalPendingTimestampSurvivesRestartAndRejectsCancelReplacement(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("run-1", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -1984,6 +2052,7 @@ func TestTerminalPendingTimestampSurvivesRestartAndRejectsCancelReplacement(t *t
 }
 
 func TestLegacyJournalWithoutTerminalFieldsLoads(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("legacy-run", 1)
 	encoded, err := json.Marshal(journal)
@@ -2015,6 +2084,7 @@ func TestLegacyJournalWithoutTerminalFieldsLoads(t *testing.T) {
 }
 
 func TestTerminalMetadataMatchesTerminalPendingLifecycle(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("run-1", 1)
 	enteredAt := time.Date(2026, 9, 3, 1, 2, 3, 0, time.UTC)
@@ -2038,6 +2108,7 @@ func TestTerminalMetadataMatchesTerminalPendingLifecycle(t *testing.T) {
 }
 
 func TestQueueRunningTransitionIsAtomic(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("run-1", 1)
 	journal.LocalState = "waiting_for_input"
@@ -2064,6 +2135,7 @@ func TestQueueRunningTransitionIsAtomic(t *testing.T) {
 }
 
 func TestQueueRunningTransitionRejectsTerminalPendingJournal(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("run-1", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -2086,6 +2158,7 @@ func TestQueueRunningTransitionRejectsTerminalPendingJournal(t *testing.T) {
 }
 
 func TestValidateJournalRequiresConsistentProcessTuple(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	base := testJournal("run-1", 1)
 	cases := []struct {
@@ -2146,6 +2219,7 @@ func TestValidateJournalRequiresConsistentProcessTuple(t *testing.T) {
 }
 
 func TestListJournalsIncludesMultipleGenerationsAndCleansOnlyOwnedTemps(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	first := testJournal("run-1", 1)
 	second := testJournal("run-1", 2)
@@ -2188,6 +2262,7 @@ func TestListJournalsIncludesMultipleGenerationsAndCleansOnlyOwnedTemps(t *testi
 }
 
 func TestListJournalsRejectsCorruptAuthoritativeJournal(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	path := store.journalPath(RunKey{RunID: "run-1", Generation: 1})
 	if err := os.WriteFile(path, []byte(`{"run_id":"run-1"`), 0o600); err != nil {
@@ -2199,6 +2274,7 @@ func TestListJournalsRejectsCorruptAuthoritativeJournal(t *testing.T) {
 }
 
 func TestDeleteJournalDeletesOnlyTarget(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	first := stoppedTestJournal("run-1", 1)
 	second := testJournal("run-1", 2)
@@ -2219,6 +2295,7 @@ func TestDeleteJournalDeletesOnlyTarget(t *testing.T) {
 }
 
 func TestDeleteJournalRequiresCommandAcknowledgementDelivery(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := stoppedTestJournal("run-stale-ack", 1)
 	journal.LocalState = "stale"
@@ -2253,6 +2330,7 @@ func TestDeleteJournalRequiresCommandAcknowledgementDelivery(t *testing.T) {
 }
 
 func TestConcurrentSavesLeaveWholeJSON(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("run-1", 1)
 	if err := store.SaveJournal(journal); err != nil {
