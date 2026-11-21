@@ -142,6 +142,37 @@ type LinuxCgroupReservation struct {
 const LinuxCgroupReservationVersion = 2
 
 func (value LinuxCgroupReservation) Validate() error {
+	if err := value.validateBaseIdentity(); err != nil {
+		return err
+	}
+	if err := value.validateLeafIdentity(); err != nil {
+		return err
+	}
+	if err := value.validateHelperIdentity(); err != nil {
+		return err
+	}
+	if err := value.validateLauncher(); err != nil {
+		return err
+	}
+	if err := value.validateGate(); err != nil {
+		return err
+	}
+	if err := value.validateHelperExitProof(); err != nil {
+		return err
+	}
+	if err := value.validateMirrorAliases(); err != nil {
+		return err
+	}
+	if err := value.validateProofs(); err != nil {
+		return err
+	}
+	if err := value.validateCreationOrder(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (value LinuxCgroupReservation) validateBaseIdentity() error {
 	if value.Version != LinuxCgroupReservationVersion || !validStateLowerHex(value.LaunchToken, authority.TokenBytes*2) ||
 		!validStateLowerHex(value.Secret, authority.SecretBytes*2) || !validStateLowerHex(value.PipeToken, authority.TokenBytes*2) ||
 		!validStateLowerHex(value.JobID, authority.TokenBytes*2) || !validRequiredString(value.RecoveryEndpoint, 4096) ||
@@ -150,18 +181,30 @@ func (value LinuxCgroupReservation) Validate() error {
 		value.Mirror == nil || value.Mirror.Validate() != nil {
 		return errors.New("Linux cgroup reservation is invalid")
 	}
+	return nil
+}
+
+func (value LinuxCgroupReservation) validateLeafIdentity() error {
 	if value.LeafIdentity != nil {
 		if !value.CreateStarted || value.LeafIdentity.Validate() != nil ||
 			!value.LeafIdentity.Parent.Equal(value.Parent) || value.LeafIdentity.LeafName != value.LeafName {
 			return errors.New("Linux cgroup reservation leaf identity is invalid")
 		}
 	}
+	return nil
+}
+
+func (value LinuxCgroupReservation) validateHelperIdentity() error {
 	if value.Helper != nil && (value.LeafIdentity == nil || value.Helper.Validate() != nil) {
 		return errors.New("Linux cgroup helper identity is invalid")
 	}
 	if value.Helper != nil && value.Helper.Equal(value.Anchor) {
 		return errors.New("Linux cgroup helper aliases the anchor process")
 	}
+	return nil
+}
+
+func (value LinuxCgroupReservation) validateLauncher() error {
 	if value.Launcher != nil && (value.Helper == nil || value.Launcher.Validate() != nil) {
 		return errors.New("Linux cgroup launcher identity is invalid")
 	}
@@ -175,6 +218,10 @@ func (value LinuxCgroupReservation) Validate() error {
 		value.Helper == nil || !value.LauncherExit.ValidForOwnedDescendant(*value.Launcher, *value.Helper, value.Anchor, value.HelperExit)) {
 		return errors.New("Linux cgroup launcher exit proof is invalid")
 	}
+	return nil
+}
+
+func (value LinuxCgroupReservation) validateGate() error {
 	if value.Gate != nil && (!value.LauncherGrantPossible || value.LauncherExit == nil || value.LeafIdentity == nil ||
 		value.Gate.Validate() != nil || value.Gate.HostUID != value.OwnerUID || !value.Gate.Cgroup.Equal(*value.LeafIdentity)) {
 		return errors.New("Linux cgroup gate identity is invalid")
@@ -183,13 +230,25 @@ func (value LinuxCgroupReservation) Validate() error {
 		value.Gate.Process.Equal(*value.Launcher)) {
 		return errors.New("Linux cgroup gate aliases another producer")
 	}
+	return nil
+}
+
+func (value LinuxCgroupReservation) validateHelperExitProof() error {
 	if value.HelperExit != nil && (value.Helper == nil || !value.HelperExit.ValidFor(*value.Helper, value.Anchor)) {
 		return errors.New("Linux cgroup helper exit proof is invalid")
 	}
+	return nil
+}
+
+func (value LinuxCgroupReservation) validateMirrorAliases() error {
 	if value.Mirror.Equal(value.Anchor) || (value.Helper != nil && value.Mirror.Equal(*value.Helper)) ||
 		(value.Launcher != nil && value.Mirror.Equal(*value.Launcher)) || (value.Gate != nil && value.Mirror.Equal(value.Gate.Process)) {
 		return errors.New("Linux cgroup mirror aliases another producer")
 	}
+	return nil
+}
+
+func (value LinuxCgroupReservation) validateProofs() error {
 	if value.AbortProof != nil && !linuxCgroupReservationAbortMatches(value, *value.AbortProof) {
 		return errors.New("Linux cgroup reservation abort proof is invalid")
 	}
@@ -203,6 +262,10 @@ func (value LinuxCgroupReservation) Validate() error {
 		value.LauncherExit != nil && value.AbortProof.LauncherExit == nil) {
 		return errors.New("Linux cgroup aborted reservation lost producer-exit evidence")
 	}
+	return nil
+}
+
+func (value LinuxCgroupReservation) validateCreationOrder() error {
 	if !value.CreateStarted && (value.LeafIdentity != nil || value.Helper != nil || value.Launcher != nil ||
 		value.LauncherExit != nil || value.Gate != nil || value.HelperExit != nil ||
 		value.AbortProof != nil && value.AbortProof.LeafDisposition != authority.LinuxCgroupAbortLeafNeverCreated) {
@@ -4880,45 +4943,97 @@ func linuxCloneStopProven(journal RunJournal) bool {
 
 func validateLinuxCloneJournal(journal RunJournal) error {
 	if reuse := journal.LinuxCloneReuseGrant; reuse != nil {
-		if reuse.Validate() != nil || reuse.RunID != journal.RunID || reuse.Generation != journal.Generation ||
-			journal.LinuxCloneIntent != nil || journal.LinuxCloneSeedReceipt != nil ||
-			journal.LinuxCloneCheckoutReceipt != nil || journal.LinuxClonePromotionIntent != nil ||
-			journal.LinuxClonePromotionReceipt != nil || journal.LinuxCloneAbortPending ||
-			journal.LinuxCloneAbortProof != nil || journal.LinuxCloneCleanupPending ||
-			journal.LinuxCloneCleanupIntent != nil || journal.LinuxCloneTargetRemovalProof != nil ||
-			journal.LinuxCloneCleanupProof != nil {
-			return errors.New("run journal Linux clone reuse grant is invalid")
-		}
-		if journal.LinuxCloneReuseAbortedBeforeNativeStart && !journal.LinuxCloneReuseRetired {
-			return errors.New("run journal Linux clone reuse abort lacks retirement")
-		}
-		if journal.LinuxCloneReuseAbortedBeforeNativeStart &&
-			(journal.HasProcessDetails() || journal.HasPendingContainment() ||
-				journal.ContainmentCgroup != nil || journal.ContainmentCgroupReleaseProof != nil ||
-				journal.ContainmentCgroupPreGateReleaseProof != nil) {
-			return errors.New("run journal Linux clone reuse abort follows a native or containment effect")
-		}
-		if journal.WorkspacePath != reuse.SourceCheckout.Target ||
-			journal.WorkspaceBindingKey != reuse.Source.Intent.BindingKey ||
-			!journal.WorkspaceRecoveryRequired || !journal.RetainWorkspace || !journal.hasClaimGrant() {
-			return errors.New("run journal Linux clone reuse lost its retained target")
-		}
-		if err := requireLinuxCloneJournalFenceSubject(journal, reuse.Source.Intent); err != nil {
-			return errors.New("run journal Linux clone reuse does not match admitted Subject")
+		if err := validateLinuxCloneReuseBranch(journal, reuse); err != nil {
+			return err
 		}
 		return nil
 	}
 	intent := journal.LinuxCloneIntent
 	if intent == nil {
-		if journal.LinuxCloneSeedReceipt != nil || journal.LinuxCloneCheckoutReceipt != nil ||
-			journal.LinuxClonePromotionIntent != nil || journal.LinuxClonePromotionReceipt != nil ||
-			journal.LinuxCloneReuseRetired || journal.LinuxCloneReuseAbortedBeforeNativeStart ||
-			journal.LinuxCloneAbortPending || journal.LinuxCloneAbortProof != nil || journal.LinuxCloneCleanupPending ||
-			journal.LinuxCloneCleanupIntent != nil || journal.LinuxCloneTargetRemovalProof != nil || journal.LinuxCloneCleanupProof != nil {
-			return errors.New("run journal has Linux clone evidence without an intent")
-		}
-		return nil
+		return validateLinuxCloneIntentAbsent(journal)
 	}
+	if err := validateLinuxCloneIntent(journal, intent); err != nil {
+		return err
+	}
+	seed := journal.LinuxCloneSeedReceipt
+	if err := validateLinuxCloneSeedReceipt(intent, seed); err != nil {
+		return err
+	}
+	if journal.LinuxCloneAbortPending && journal.LinuxCloneAbortProof != nil {
+		return errors.New("run journal Linux clone abort is both pending and complete")
+	}
+	if journal.LinuxCloneAbortPending || journal.LinuxCloneAbortProof != nil {
+		return validateLinuxCloneAbort(journal, intent, seed)
+	}
+	if err := validateLinuxCloneCheckout(journal, intent, seed); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateLinuxCloneReuseBranch(journal RunJournal, reuse *authority.LinuxCloneReuseGrant) error {
+	if err := validateLinuxCloneReuseGrant(journal, reuse); err != nil {
+		return err
+	}
+	if err := validateLinuxCloneReuseAbortState(journal); err != nil {
+		return err
+	}
+	if err := validateLinuxCloneReuseRetainedTarget(journal, reuse); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateLinuxCloneReuseGrant(journal RunJournal, reuse *authority.LinuxCloneReuseGrant) error {
+	if reuse.Validate() != nil || reuse.RunID != journal.RunID || reuse.Generation != journal.Generation ||
+		journal.LinuxCloneIntent != nil || journal.LinuxCloneSeedReceipt != nil ||
+		journal.LinuxCloneCheckoutReceipt != nil || journal.LinuxClonePromotionIntent != nil ||
+		journal.LinuxClonePromotionReceipt != nil || journal.LinuxCloneAbortPending ||
+		journal.LinuxCloneAbortProof != nil || journal.LinuxCloneCleanupPending ||
+		journal.LinuxCloneCleanupIntent != nil || journal.LinuxCloneTargetRemovalProof != nil ||
+		journal.LinuxCloneCleanupProof != nil {
+		return errors.New("run journal Linux clone reuse grant is invalid")
+	}
+	return nil
+}
+
+func validateLinuxCloneReuseAbortState(journal RunJournal) error {
+	if journal.LinuxCloneReuseAbortedBeforeNativeStart && !journal.LinuxCloneReuseRetired {
+		return errors.New("run journal Linux clone reuse abort lacks retirement")
+	}
+	if journal.LinuxCloneReuseAbortedBeforeNativeStart &&
+		(journal.HasProcessDetails() || journal.HasPendingContainment() ||
+			journal.ContainmentCgroup != nil || journal.ContainmentCgroupReleaseProof != nil ||
+			journal.ContainmentCgroupPreGateReleaseProof != nil) {
+		return errors.New("run journal Linux clone reuse abort follows a native or containment effect")
+	}
+	return nil
+}
+
+func validateLinuxCloneReuseRetainedTarget(journal RunJournal, reuse *authority.LinuxCloneReuseGrant) error {
+	if journal.WorkspacePath != reuse.SourceCheckout.Target ||
+		journal.WorkspaceBindingKey != reuse.Source.Intent.BindingKey ||
+		!journal.WorkspaceRecoveryRequired || !journal.RetainWorkspace || !journal.hasClaimGrant() {
+		return errors.New("run journal Linux clone reuse lost its retained target")
+	}
+	if err := requireLinuxCloneJournalFenceSubject(journal, reuse.Source.Intent); err != nil {
+		return errors.New("run journal Linux clone reuse does not match admitted Subject")
+	}
+	return nil
+}
+
+func validateLinuxCloneIntentAbsent(journal RunJournal) error {
+	if journal.LinuxCloneSeedReceipt != nil || journal.LinuxCloneCheckoutReceipt != nil ||
+		journal.LinuxClonePromotionIntent != nil || journal.LinuxClonePromotionReceipt != nil ||
+		journal.LinuxCloneReuseRetired || journal.LinuxCloneReuseAbortedBeforeNativeStart ||
+		journal.LinuxCloneAbortPending || journal.LinuxCloneAbortProof != nil || journal.LinuxCloneCleanupPending ||
+		journal.LinuxCloneCleanupIntent != nil || journal.LinuxCloneTargetRemovalProof != nil || journal.LinuxCloneCleanupProof != nil {
+		return errors.New("run journal has Linux clone evidence without an intent")
+	}
+	return nil
+}
+
+func validateLinuxCloneIntent(journal RunJournal, intent *authority.LinuxCloneIntent) error {
 	if intent.ValidateForJournal() != nil || intent.RunID != journal.RunID || intent.Generation != journal.Generation ||
 		intent.BindingKey != journal.WorkspaceBindingKey || !journal.hasClaimGrant() {
 		return errors.New("run journal Linux clone intent is invalid")
@@ -4926,47 +5041,60 @@ func validateLinuxCloneJournal(journal RunJournal) error {
 	if err := requireLinuxCloneJournalFenceSubject(journal, *intent); err != nil {
 		return errors.New("run journal Linux clone intent does not match admitted Subject")
 	}
-	seed := journal.LinuxCloneSeedReceipt
+	return nil
+}
+
+func validateLinuxCloneSeedReceipt(intent *authority.LinuxCloneIntent, seed *authority.LinuxCloneSeedReceipt) error {
 	if seed != nil && (seed.Validate() != nil || seed.BaseCommit != intent.BaseCommit) {
 		return errors.New("run journal Linux clone seed receipt is invalid")
 	}
-	if journal.LinuxCloneAbortPending && journal.LinuxCloneAbortProof != nil {
-		return errors.New("run journal Linux clone abort is both pending and complete")
+	return nil
+}
+
+func validateLinuxCloneAbort(journal RunJournal, intent *authority.LinuxCloneIntent, seed *authority.LinuxCloneSeedReceipt) error {
+	if journal.LinuxCloneCheckoutReceipt != nil || journal.LinuxClonePromotionIntent != nil || journal.LinuxClonePromotionReceipt != nil {
+		return errors.New("run journal Linux clone abort state is invalid")
 	}
-	if journal.LinuxCloneAbortPending || journal.LinuxCloneAbortProof != nil {
-		if journal.LinuxCloneCheckoutReceipt != nil || journal.LinuxClonePromotionIntent != nil || journal.LinuxClonePromotionReceipt != nil {
-			return errors.New("run journal Linux clone abort state is invalid")
-		}
-		if journal.LinuxCloneCleanupPending || journal.LinuxCloneCleanupIntent != nil ||
-			journal.LinuxCloneTargetRemovalProof != nil || journal.LinuxCloneCleanupProof != nil {
-			return errors.New("run journal clone abort conflicts with normal cleanup")
-		}
-		if journal.LinuxCloneAbortPending {
-			if !linuxCloneAbortFenceAvailable(journal) && !linuxCloneAbortPendingReleaseUnresolved(journal) {
-				return errors.New("run journal Linux clone abort lost its producer fence")
-			}
-			if journal.WorkspacePath != intent.Target || !journal.WorkspaceRecoveryRequired {
-				return errors.New("run journal pending clone abort lost its reserved target")
-			}
-			return nil
-		}
-		proof := journal.LinuxCloneAbortProof
-		if proof.ValidateForJournal() != nil || !proof.Intent.Equal(*intent) || journal.WorkspacePath != "" || journal.WorkspaceRecoveryRequired {
-			return errors.New("run journal Linux clone abort proof is invalid")
-		}
-		if proof.NormalReleaseProof != nil {
-			if !linuxCloneAbortPendingReleaseUnresolved(journal) ||
-				!journal.ContainmentCgroupReleaseProof.Equal(*proof.NormalReleaseProof) {
-				return errors.New("legacy normal-release Linux clone abort remains unresolved")
-			}
-		} else if !linuxCloneAbortHistoryMatches(journal, proof) {
-			return errors.New("run journal Linux clone abort proof lacks exact no-gate history")
-		}
-		if seed != nil && (proof.SeedReceipt == nil || !seed.Equal(*proof.SeedReceipt)) {
-			return errors.New("run journal Linux clone abort proof lost its bound seed receipt")
-		}
-		return nil
+	if journal.LinuxCloneCleanupPending || journal.LinuxCloneCleanupIntent != nil ||
+		journal.LinuxCloneTargetRemovalProof != nil || journal.LinuxCloneCleanupProof != nil {
+		return errors.New("run journal clone abort conflicts with normal cleanup")
 	}
+	if journal.LinuxCloneAbortPending {
+		return validateLinuxCloneAbortPending(journal, intent)
+	}
+	return validateLinuxCloneAbortProof(journal, intent, seed)
+}
+
+func validateLinuxCloneAbortPending(journal RunJournal, intent *authority.LinuxCloneIntent) error {
+	if !linuxCloneAbortFenceAvailable(journal) && !linuxCloneAbortPendingReleaseUnresolved(journal) {
+		return errors.New("run journal Linux clone abort lost its producer fence")
+	}
+	if journal.WorkspacePath != intent.Target || !journal.WorkspaceRecoveryRequired {
+		return errors.New("run journal pending clone abort lost its reserved target")
+	}
+	return nil
+}
+
+func validateLinuxCloneAbortProof(journal RunJournal, intent *authority.LinuxCloneIntent, seed *authority.LinuxCloneSeedReceipt) error {
+	proof := journal.LinuxCloneAbortProof
+	if proof.ValidateForJournal() != nil || !proof.Intent.Equal(*intent) || journal.WorkspacePath != "" || journal.WorkspaceRecoveryRequired {
+		return errors.New("run journal Linux clone abort proof is invalid")
+	}
+	if proof.NormalReleaseProof != nil {
+		if !linuxCloneAbortPendingReleaseUnresolved(journal) ||
+			!journal.ContainmentCgroupReleaseProof.Equal(*proof.NormalReleaseProof) {
+			return errors.New("legacy normal-release Linux clone abort remains unresolved")
+		}
+	} else if !linuxCloneAbortHistoryMatches(journal, proof) {
+		return errors.New("run journal Linux clone abort proof lacks exact no-gate history")
+	}
+	if seed != nil && (proof.SeedReceipt == nil || !seed.Equal(*proof.SeedReceipt)) {
+		return errors.New("run journal Linux clone abort proof lost its bound seed receipt")
+	}
+	return nil
+}
+
+func validateLinuxCloneCheckout(journal RunJournal, intent *authority.LinuxCloneIntent, seed *authority.LinuxCloneSeedReceipt) error {
 	checkout := journal.LinuxCloneCheckoutReceipt
 	if checkout == nil {
 		if journal.LinuxClonePromotionIntent != nil || journal.LinuxClonePromotionReceipt != nil ||
@@ -4980,26 +5108,13 @@ func validateLinuxCloneJournal(journal RunJournal) error {
 	if !linuxCloneCheckoutMatches(*intent, *seed, *checkout) {
 		return errors.New("run journal Linux clone checkout receipt is invalid")
 	}
+	return validateLinuxClonePromotion(journal, intent)
+}
+
+func validateLinuxClonePromotion(journal RunJournal, intent *authority.LinuxCloneIntent) error {
 	promotionIntent := journal.LinuxClonePromotionIntent
 	if promotionIntent == nil {
-		if journal.LinuxCloneCleanupPending || journal.LinuxCloneCleanupIntent != nil ||
-			journal.LinuxCloneTargetRemovalProof != nil || journal.LinuxCloneCleanupProof != nil {
-			return errors.New("run journal Linux clone promotion receipt has no intent")
-		}
-		promotion := journal.LinuxClonePromotionReceipt
-		if promotion == nil {
-			if journal.WorkspacePath != intent.Target {
-				return errors.New("run journal Linux clone target path changed")
-			}
-			return nil
-		}
-		legacyRef, refErr := authority.LinuxClonePromotionRef(journal.RunID, journal.Generation)
-		if promotion.Validate() != nil || refErr != nil || promotion.Ref != legacyRef ||
-			len(promotion.Commit) != len(intent.BaseCommit) || !linuxCloneStopProven(journal) ||
-			journal.WorkspacePath != intent.Target {
-			return errors.New("run journal legacy Linux clone promotion receipt is invalid")
-		}
-		return nil
+		return validateLinuxClonePromotionWithoutIntent(journal, intent)
 	}
 	ref, err := authority.LinuxClonePromotionRef(journal.RunID, journal.Generation)
 	if promotionIntent.Validate() != nil || promotionIntent.ResourceID != intent.ResourceID ||
@@ -5019,6 +5134,31 @@ func validateLinuxCloneJournal(journal RunJournal) error {
 		promotion.TreeDigest != promotionIntent.TreeDigest || !linuxCloneStopProven(journal) {
 		return errors.New("run journal Linux clone promotion receipt is invalid")
 	}
+	return validateLinuxCloneCleanup(journal, intent)
+}
+
+func validateLinuxClonePromotionWithoutIntent(journal RunJournal, intent *authority.LinuxCloneIntent) error {
+	if journal.LinuxCloneCleanupPending || journal.LinuxCloneCleanupIntent != nil ||
+		journal.LinuxCloneTargetRemovalProof != nil || journal.LinuxCloneCleanupProof != nil {
+		return errors.New("run journal Linux clone promotion receipt has no intent")
+	}
+	promotion := journal.LinuxClonePromotionReceipt
+	if promotion == nil {
+		if journal.WorkspacePath != intent.Target {
+			return errors.New("run journal Linux clone target path changed")
+		}
+		return nil
+	}
+	legacyRef, refErr := authority.LinuxClonePromotionRef(journal.RunID, journal.Generation)
+	if promotion.Validate() != nil || refErr != nil || promotion.Ref != legacyRef ||
+		len(promotion.Commit) != len(intent.BaseCommit) || !linuxCloneStopProven(journal) ||
+		journal.WorkspacePath != intent.Target {
+		return errors.New("run journal legacy Linux clone promotion receipt is invalid")
+	}
+	return nil
+}
+
+func validateLinuxCloneCleanup(journal RunJournal, intent *authority.LinuxCloneIntent) error {
 	if journal.LinuxCloneCleanupIntent == nil {
 		if journal.LinuxCloneCleanupPending || journal.LinuxCloneTargetRemovalProof != nil ||
 			journal.LinuxCloneCleanupProof != nil || journal.WorkspacePath != intent.Target {
@@ -5031,16 +5171,24 @@ func validateLinuxCloneJournal(journal RunJournal) error {
 		return errors.New("run journal Linux clone cleanup intent is invalid")
 	}
 	if journal.LinuxCloneCleanupPending {
-		if journal.LinuxCloneCleanupProof != nil || journal.WorkspacePath != intent.Target || !journal.WorkspaceRecoveryRequired {
-			return errors.New("run journal pending Linux clone cleanup stage is invalid")
-		}
-		if journal.LinuxCloneTargetRemovalProof != nil &&
-			(journal.LinuxCloneTargetRemovalProof.Validate() != nil ||
-				!journal.LinuxCloneTargetRemovalProof.Intent.Equal(cleanupIntent)) {
-			return errors.New("run journal pending Linux clone target-removal proof is invalid")
-		}
-		return nil
+		return validateLinuxCloneCleanupPending(journal, intent, cleanupIntent)
 	}
+	return validateLinuxCloneCleanupProof(journal, cleanupIntent)
+}
+
+func validateLinuxCloneCleanupPending(journal RunJournal, intent *authority.LinuxCloneIntent, cleanupIntent authority.LinuxCloneCleanupIntent) error {
+	if journal.LinuxCloneCleanupProof != nil || journal.WorkspacePath != intent.Target || !journal.WorkspaceRecoveryRequired {
+		return errors.New("run journal pending Linux clone cleanup stage is invalid")
+	}
+	if journal.LinuxCloneTargetRemovalProof != nil &&
+		(journal.LinuxCloneTargetRemovalProof.Validate() != nil ||
+			!journal.LinuxCloneTargetRemovalProof.Intent.Equal(cleanupIntent)) {
+		return errors.New("run journal pending Linux clone target-removal proof is invalid")
+	}
+	return nil
+}
+
+func validateLinuxCloneCleanupProof(journal RunJournal, cleanupIntent authority.LinuxCloneCleanupIntent) error {
 	cleanupProof := journal.LinuxCloneCleanupProof
 	if journal.LinuxCloneTargetRemovalProof == nil || journal.LinuxCloneTargetRemovalProof.Validate() != nil ||
 		!journal.LinuxCloneTargetRemovalProof.Intent.Equal(cleanupIntent) || cleanupProof == nil ||
@@ -5815,6 +5963,46 @@ func requireLinuxScansSealedForAuthority(journal RunJournal, value authority.Sup
 }
 
 func validateJournal(journal RunJournal) error {
+	if err := validateJournalKeyAndScalars(journal); err != nil {
+		return err
+	}
+	if err := validateContainmentAuthority(journal); err != nil {
+		return err
+	}
+	if err := validateContainmentHandoff(journal); err != nil {
+		return err
+	}
+	if err := validateContainmentCgroup(journal); err != nil {
+		return err
+	}
+	if err := validateContainmentScans(journal); err != nil {
+		return err
+	}
+	if err := validateContainmentCgroupReleaseProof(journal); err != nil {
+		return err
+	}
+	if err := validateContainmentCgroupPreGateReleaseProof(journal); err != nil {
+		return err
+	}
+	if err := validateJournalLeaseTerminalAndGrantInvariants(journal); err != nil {
+		return err
+	}
+	if err := validateLinuxCloneJournal(journal); err != nil {
+		return err
+	}
+	if err := validatePendingJournalEntriesAndDeliveries(journal); err != nil {
+		return err
+	}
+	if err := validateJournalNativeUsageObservation(journal); err != nil {
+		return err
+	}
+	if err := validateJournalInputAndCommandIntents(journal); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateJournalKeyAndScalars(journal RunJournal) error {
 	if err := validateKey(journal.Key()); err != nil {
 		return err
 	}
@@ -5831,6 +6019,10 @@ func validateJournal(journal RunJournal) error {
 		journal.ContainmentScans == nil && journal.ContainmentCgroup == nil {
 		return errors.New("run journal containment uncertainty is invalid")
 	}
+	return nil
+}
+
+func validateContainmentAuthority(journal RunJournal) error {
 	if journal.ContainmentAuthority != nil {
 		if err := journal.ContainmentAuthority.Validate(); err != nil ||
 			journal.ContainmentAuthority.TargetPID != journal.PID ||
@@ -5849,6 +6041,10 @@ func validateJournal(journal RunJournal) error {
 			return errors.New("v1 containment authority cannot use a v2 cgroup reservation")
 		}
 	}
+	return nil
+}
+
+func validateContainmentHandoff(journal RunJournal) error {
 	if journal.ContainmentHandoff != nil {
 		if journal.ContainmentAuthority != nil || journal.HasProcessDetails() || !journal.hasClaimGrant() {
 			return errors.New("run journal containment handoff is invalid")
@@ -5867,6 +6063,10 @@ func validateJournal(journal RunJournal) error {
 			return errors.New("v1 containment handoff cannot use a v2 cgroup reservation")
 		}
 	}
+	return nil
+}
+
+func validateContainmentCgroup(journal RunJournal) error {
 	if journal.ContainmentCgroup != nil {
 		reservation := journal.ContainmentCgroup
 		if reservation.Validate() != nil || !journal.hasClaimGrant() || journal.ContainmentScans != nil {
@@ -5892,6 +6092,10 @@ func validateJournal(journal RunJournal) error {
 			return errors.New("v2 cgroup reservation cannot accompany a v1 handoff")
 		}
 	}
+	return nil
+}
+
+func validateContainmentScans(journal RunJournal) error {
 	if journal.ContainmentScans != nil {
 		scans := journal.ContainmentScans
 		if journal.ContainmentCgroup != nil || scans.Version != 1 || len(scans.LaunchToken) != authority.TokenBytes*2 || !validHex(scans.LaunchToken) ||
@@ -5918,6 +6122,10 @@ func validateJournal(journal RunJournal) error {
 			return errors.New("run journal containment scan failure is not sticky")
 		}
 	}
+	return nil
+}
+
+func validateContainmentCgroupReleaseProof(journal RunJournal) error {
 	if releaseProof := journal.ContainmentCgroupReleaseProof; releaseProof != nil {
 		if releaseProof.Validate() != nil || releaseProof.Version != authority.SupervisorHandoffVersionV2 ||
 			journal.ContainmentAuthority != nil || journal.ContainmentHandoff != nil || journal.ContainmentCgroup != nil ||
@@ -5927,6 +6135,10 @@ func validateJournal(journal RunJournal) error {
 			return errors.New("run journal v2 cgroup release proof is invalid")
 		}
 	}
+	return nil
+}
+
+func validateContainmentCgroupPreGateReleaseProof(journal RunJournal) error {
 	if releaseProof := journal.ContainmentCgroupPreGateReleaseProof; releaseProof != nil {
 		if releaseProof.Validate() != nil || journal.ContainmentCgroupReleaseProof != nil ||
 			journal.ContainmentAuthority != nil || journal.ContainmentHandoff != nil || journal.ContainmentCgroup != nil ||
@@ -5935,6 +6147,10 @@ func validateJournal(journal RunJournal) error {
 			return errors.New("run journal pre-gate cgroup release proof is invalid")
 		}
 	}
+	return nil
+}
+
+func validateJournalLeaseTerminalAndGrantInvariants(journal RunJournal) error {
 	if (strings.TrimSpace(journal.LeaseToken) == "") != journal.LeaseExpiresAt.IsZero() || len(journal.LeaseToken) > 65536 || !validWork(journal.Work) {
 		return errors.New("run journal is invalid")
 	}
@@ -5954,9 +6170,10 @@ func validateJournal(journal RunJournal) error {
 		journal.DroppedOutputBytes != 0 || len(journal.PendingTransitions) != 0 || len(journal.PendingCommandAcknowledgements) != 0) {
 		return errors.New("run journal is invalid")
 	}
-	if err := validateLinuxCloneJournal(journal); err != nil {
-		return err
-	}
+	return nil
+}
+
+func validatePendingJournalEntriesAndDeliveries(journal RunJournal) error {
 	lastSequence := int64(0)
 	for _, event := range journal.PendingEvents {
 		if !validEvent(event) || event.Sequence <= lastSequence || event.Sequence > journal.LastEventSequence {
@@ -5985,11 +6202,19 @@ func validateJournal(journal RunJournal) error {
 	if err := validateGoalDeliveries(journal); err != nil {
 		return err
 	}
+	return nil
+}
+
+func validateJournalNativeUsageObservation(journal RunJournal) error {
 	if journal.NativeUsageObservation != nil {
 		if err := journal.NativeUsageObservation.Validate(); err != nil {
 			return err
 		}
 	}
+	return nil
+}
+
+func validateJournalInputAndCommandIntents(journal RunJournal) error {
 	if intent := journal.InputCommandIntent; intent != nil {
 		if !validInputCommandIntent(*intent) || intent.EventSequenceBarrier > journal.LastEventSequence {
 			return errors.New("run journal input command intent is invalid")

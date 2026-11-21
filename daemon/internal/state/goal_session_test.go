@@ -2004,3 +2004,215 @@ func testGoalSessionCompatibility() GoalSessionCompatibility {
 		RepositoryResourceID:   intent.RepositoryResourceID,
 	}
 }
+
+// TestGoalSessionValidatorFirstErrorStringsArePinned pins the first error of
+// every validateGoalSessionJournal block. The production persist seam
+// mutateGoalSession loads, mutates and validates the journal in memory before
+// it saves, so the returned error is exactly the validator's first error and a
+// rejected case can never observe a later block's string or change the
+// persisted journal.
+func TestGoalSessionValidatorFirstErrorStringsArePinned(t *testing.T) {
+	t.Parallel()
+	const (
+		bindingID        = "00000000-0000-4000-8000-000000000011"
+		controlSessionID = "00000000-0000-4000-8000-000000000012"
+		controlReceiptID = "00000000-0000-4000-8000-000000000015"
+		lineageSessionID = "00000000-0000-4000-8000-000000000019"
+		otherReceiptID   = "00000000-0000-4000-8000-000000000018"
+		localHandleUUID  = "00000000-0000-4000-8000-000000000010"
+	)
+	attemptedAt := time.Date(2026, 9, 9, 1, 0, 0, 0, time.UTC)
+	// attachedShape is the minimal attached journal that already passes the
+	// launch-attempt, launch-state, uncertainty and recovery-marker blocks.
+	attachedShape := func(journal *GoalSessionJournal) {
+		journal.LaunchState = GoalSessionLaunchStateAttached
+		journal.LaunchAttempted = true
+		journal.LaunchAttemptedAt = attemptedAt
+		journal.NativeSessionID = "native-session-1"
+	}
+	lineageAttachment := GoalSessionControlAttachment{
+		RunID: "run-1", Generation: 1, TaskID: "task-1", AdmissionID: "admission-1",
+		SessionID: lineageSessionID, BindingID: bindingID, ReceiptID: controlReceiptID,
+	}
+	sourceCertificate := GoalSessionStopCertificate{
+		RunID: "run-1", Generation: 1, SessionID: controlSessionID, LocalHandleID: localHandleUUID,
+		BindingID: bindingID, DeliveryDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		ReceiptID: controlReceiptID,
+	}
+	otherCertificate := sourceCertificate
+	otherCertificate.ReceiptID = otherReceiptID
+
+	tests := []struct {
+		name   string
+		mutate func(*GoalSessionJournal)
+		want   string
+	}{
+		{
+			name:   "schema version is unsupported",
+			mutate: func(journal *GoalSessionJournal) { journal.SchemaVersion = 0 },
+			want:   "goal session journal is invalid",
+		},
+		{
+			name:   "created_at is zero",
+			mutate: func(journal *GoalSessionJournal) { journal.CreatedAt = time.Time{} },
+			want:   "goal session journal is invalid",
+		},
+		{
+			name:   "session state is unknown",
+			mutate: func(journal *GoalSessionJournal) { journal.SessionState = "unknown" },
+			want:   "goal session journal is invalid",
+		},
+		{
+			name:   "control session ID is malformed",
+			mutate: func(journal *GoalSessionJournal) { journal.ControlSessionID = "not-a-uuid" },
+			want:   "goal session journal is invalid",
+		},
+		{
+			name:   "launch attempted without timestamp",
+			mutate: func(journal *GoalSessionJournal) { journal.LaunchAttempted = true },
+			want:   "goal session launch attempt metadata is invalid",
+		},
+		{
+			name:   "launch timestamp without attempted flag",
+			mutate: func(journal *GoalSessionJournal) { journal.LaunchAttemptedAt = attemptedAt },
+			want:   "goal session launch attempt metadata is invalid",
+		},
+		{
+			name: "intent launch marked attempted",
+			mutate: func(journal *GoalSessionJournal) {
+				journal.LaunchAttempted = true
+				journal.LaunchAttemptedAt = attemptedAt
+			},
+			want: "goal session launch state is invalid",
+		},
+		{
+			name:   "launching launch not marked attempted",
+			mutate: func(journal *GoalSessionJournal) { journal.LaunchState = GoalSessionLaunchStateLaunching },
+			want:   "goal session launch state is invalid",
+		},
+		{
+			name:   "attached launch without attempted launch",
+			mutate: func(journal *GoalSessionJournal) { journal.LaunchState = GoalSessionLaunchStateAttached },
+			want:   "goal session native handle is invalid",
+		},
+		{
+			name: "attached launch without native handle",
+			mutate: func(journal *GoalSessionJournal) {
+				attachedShape(journal)
+				journal.NativeSessionID = ""
+			},
+			want: "goal session native handle is invalid",
+		},
+		{
+			name:   "uncertain launch without reconciliation evidence",
+			mutate: func(journal *GoalSessionJournal) { journal.LaunchState = GoalSessionLaunchStateUncertain },
+			want:   "goal session uncertainty is invalid",
+		},
+		{
+			name:   "closed launch without closed session",
+			mutate: func(journal *GoalSessionJournal) { journal.LaunchState = GoalSessionLaunchStateClosed },
+			want:   "goal session closed state is invalid",
+		},
+		{
+			name: "attempted uncertain launch without recovery marker",
+			mutate: func(journal *GoalSessionJournal) {
+				journal.LaunchState = GoalSessionLaunchStateUncertain
+				journal.LaunchAttempted = true
+				journal.LaunchAttemptedAt = attemptedAt
+			},
+			want: "goal session recovery marker is invalid",
+		},
+		{
+			name: "attached launch with uncertainty reason",
+			mutate: func(journal *GoalSessionJournal) {
+				attachedShape(journal)
+				journal.UncertainReason = "native process status is unknown"
+			},
+			want: "goal session uncertainty reason is invalid",
+		},
+		{
+			name:   "native handle without attached launch",
+			mutate: func(journal *GoalSessionJournal) { journal.NativeSessionID = "native-session-1" },
+			want:   "goal session native handle is invalid",
+		},
+		{
+			name:   "control attachment without attached launch",
+			mutate: func(journal *GoalSessionJournal) { journal.ControlSessionID = controlSessionID },
+			want:   "goal session control attachment is invalid",
+		},
+		{
+			name: "control attachment lineage is malformed",
+			mutate: func(journal *GoalSessionJournal) {
+				journal.ControlAttachmentLineage = &GoalSessionControlAttachmentLineage{}
+			},
+			want: "goal session control attachment lineage is invalid",
+		},
+		{
+			name: "control attachment lineage does not match session",
+			mutate: func(journal *GoalSessionJournal) {
+				attachedShape(journal)
+				journal.ControlSessionID = controlSessionID
+				journal.BindingID = bindingID
+				journal.ControlAttachmentReceiptID = controlReceiptID
+				journal.ControlAttachmentLineage = &GoalSessionControlAttachmentLineage{Original: lineageAttachment, Current: lineageAttachment}
+			},
+			want: "goal session control attachment lineage is invalid",
+		},
+		{
+			name:   "resume source receipt is malformed",
+			mutate: func(journal *GoalSessionJournal) { journal.ResumeSourceStopCertificate = &GoalSessionStopCertificate{} },
+			want:   "goal session resume source receipt is invalid",
+		},
+		{
+			name: "consumed stop receipt history is empty",
+			mutate: func(journal *GoalSessionJournal) {
+				journal.ConsumedStopCertificates = &GoalSessionConsumedStopCertificateHistory{}
+			},
+			want: "goal session consumed stop receipt history is invalid",
+		},
+		{
+			name: "resume source receipt missing from consumed history",
+			mutate: func(journal *GoalSessionJournal) {
+				journal.ResumeSourceStopCertificate = &sourceCertificate
+				journal.ConsumedStopCertificates = &GoalSessionConsumedStopCertificateHistory{Certificates: []GoalSessionStopCertificate{otherCertificate}}
+			},
+			want: "goal session resume source receipt history is invalid",
+		},
+		{
+			name:   "resume start pending on fresh session",
+			mutate: func(journal *GoalSessionJournal) { journal.ResumeStartPending = true },
+			want:   "goal session resume pre-start state is invalid",
+		},
+		{
+			name:   "known retained resume native stop without proof",
+			mutate: func(journal *GoalSessionJournal) { journal.ResumeNativeStopKnown = true },
+			want:   "goal session retained native stop state is invalid",
+		},
+		{
+			name:   "retained resume terminal reason without known stop",
+			mutate: func(journal *GoalSessionJournal) { journal.ResumeTerminalReason = "resume_rejected" },
+			want:   "goal session retained resume terminal reason is invalid",
+		},
+		{
+			name:   "stop receipt is malformed",
+			mutate: func(journal *GoalSessionJournal) { journal.StopCertificate = &GoalSessionStopCertificate{} },
+			want:   "goal session stop receipt is invalid",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			store := mustStore(t)
+			saved, err := store.SaveGoalSessionLaunchIntent(testGoalSessionIntent())
+			if err != nil {
+				t.Fatalf("SaveGoalSessionLaunchIntent() error = %v", err)
+			}
+			if _, err := store.mutateGoalSession(saved.Key(), func(journal *GoalSessionJournal) error {
+				test.mutate(journal)
+				return nil
+			}); err == nil || err.Error() != test.want {
+				t.Fatalf("mutateGoalSession() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}

@@ -23,7 +23,7 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       `internal/state` (2026-11-21, branch `refactor/rf-w1-06-daemon-deadcode`; plan
       `docs/plans/2026-11-21-w1-06-daemon-deadcode-plan.md`). `Store.AttachGoalSession`
       (`daemon/internal/state/goal_session.go:1044`), `Store.EnsureGoalSessionLineageAvailable`
-      (`:592`) and `Store.FailUnresolvedProvideInput` (`daemon/internal/state/state.go:4175`) are
+      (`:592`) and `Store.FailUnresolvedProvideInput` (`daemon/internal/state/state.go:4238`) are
       unreachable from `deadcode -test ./cmd/...` on windows/amd64, linux/amd64 and linux/arm64
       alike, and at the baseline revision `a3039f0` `git grep -nw <symbol>` matches only each
       definition plus its doc comment — no call site, no test, no doc citation anywhere; this
@@ -644,6 +644,73 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       be projected (a Go panic dump therefore appears only as a count). The 45 s harness wait and the
       30 s daemon bound are declared bounds, not the defect: no timeout changes until an occurrence
       has been diagnosed from that tail.
+
+## Daemon: state validator dead branches, a nil-deref panic and the `validGoalSessionUUID` follow-up (rf-w2-09 survey)
+
+- [ ] Consolidate `validGoalSessionUUID` (`daemon/internal/state/goal_session.go:2044`) into the
+      exported wire-primitive validator family. It is a hand-rolled 36-character UUID check that
+      stays local to `internal/state`; the W2-12a strict-decode/wire-primitive slice (program plan §5
+      W2-12, "one validator family, exported/delegated; fix `validateProviderActionUUID`
+      (version/variant)") owns that consolidation, so refactor slice rf-w2-09 (contract clause C7)
+      left it unedited while decomposing the four validators around it. Reproduction:
+      `git grep -n validGoalSessionUUID` matches the definition and call sites inside
+      `goal_session.go` only; neither `authority` nor `protocol` exposes a UUID validator to delegate
+      to yet. W2-12a also owns the `validateProviderActionUUID` version/variant bug named by the same
+      row.
+
+- [ ] Revalidate and remove six unreachable validation conditions (found 2026-11-21, branch
+      `refactor/rf-w2-09-state-validators`; rf-w2-09 is move-only under contract clause C5, so every
+      condition below was relocated byte-identically and is recorded here instead of being fixed in
+      that slice). Reachability was probed by mutating one condition at a time against the rf-w2-09
+      pin fixtures (probe code not committed); the affected strings are listed in
+      `docs/evidence/rf-w2-09-state-validators-2026-11-21.md` §5.
+      (a) `v2 cgroup reservation cannot accompany a v1 authority` (`state.go:6089`) and
+      `v2 cgroup reservation cannot accompany a v1 handoff` (`state.go:6092`): the authority and
+      handoff blocks (`validateContainmentAuthority`, `validateContainmentHandoff`) already return
+      `v1 … cannot use a v2 cgroup reservation` whenever a non-v2 owner is combined with a cgroup
+      reservation, so the later checks can never fire.
+      (b) `Linux cgroup reservation cannot have both abort and physical-stop proof` (`state.go:259`)
+      and `Linux cgroup aborted reservation lost producer-exit evidence` (`state.go:263`):
+      `linuxCgroupReservationAbortMatches` (`state.go:5854`) returns false for every proof that
+      carries a pre-gate receipt or lacks producer-exit parity, so the earlier abort-proof error
+      fires first. Probes: aborted reservation + pre-gate receipt → `Linux cgroup reservation abort
+      proof is invalid`; aborted reservation + helper exit proof → `Linux cgroup helper exit proof
+      is invalid`.
+      (c) `Linux cgroup reservation has effects before creation intent` (`state.go:272`): with
+      `CreateStarted == false` every listed effect is shadowed by an earlier block
+      (leaf→leaf identity, helper→helper identity, launcher→launcher identity,
+      launcher exit→launcher exit proof, gate→gate identity, helper exit→helper exit proof,
+      abort with a disposition other than `neverCreated`→abort proof). Probe: unstarted reservation
+      + leaf identity → `Linux cgroup reservation leaf identity is invalid`.
+      (d) `unresolved input command has an acknowledgement` (`state.go:6230`): it needs `pending`
+      with `intent.Outcome == ""`, but `pending` compares against `acknowledgement.Outcome` and
+      `validAcknowledgement` (`state.go:6396`) requires a non-blank `Outcome`, so an empty-outcome
+      acknowledgement is rejected earlier with `run journal is invalid`. Probe: empty-outcome
+      acknowledgement → `run journal is invalid`; an applied acknowledgement leaves the fixture
+      valid.
+      Fix direction: delete each condition (and its now-dead operand list) only after re-running
+      these probes, since two of them (b, c) also decide which earlier block owns the first-error
+      string; keep the surrounding block's other conditions.
+
+- [ ] Fix the nil-pointer panic in `validateLinuxCloneCheckout`
+      (`daemon/internal/state/state.go:5097`). It dereferences `*seed`
+      (`linuxCloneCheckoutMatches(*intent, *seed, *checkout)`, `state.go:5108`) although
+      `journal.LinuxCloneSeedReceipt` is only tested as `seed != nil && …` earlier in the same
+      validator, so a journal carrying `linux_clone_checkout_receipt` without
+      `linux_clone_seed_receipt` panics instead of failing validation. Verified 2026-11-21 with a
+      temporary probe test on WSL (`PANIC_RECOVERED: runtime error: invalid memory address or nil
+      pointer dereference`; probe removed afterwards). Because `readJournalEntryLocked` wraps
+      `validateJournal`, a hand-crafted journal file can panic a `ListJournals`/`LoadJournal`
+      caller. Fix direction: give the checkout stage its own requirement that a seed receipt exists
+      (with its own first-error string) or make `linuxCloneCheckoutMatches` take pointers; both
+      change a validation verdict, so they need their own regression test and cannot be folded into
+      a move-only slice. Do not "fix" it by reordering existing conditions: that relocates
+      first-error strings.
+
+Decision note: rf-w2-09 left `validateJournalLeaseTerminalAndGrantInvariants`
+(`state.go:6153`) at cyclomatic complexity 25 and `validateJournalKeyAndScalars` (`state.go:6005`)
+and `validateContainmentScans` (`state.go:6098`) at 24, against the wave's ≤25 acceptance. The next
+condition added to any of those three blocks must be split into a new helper instead of appended.
 
 ## Daemon: `writeInputBounded` can strand its writer goroutine (audit F15)
 
