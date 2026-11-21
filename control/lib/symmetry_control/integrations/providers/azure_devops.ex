@@ -3,6 +3,7 @@ defmodule SymmetryControl.Integrations.Providers.AzureDevOps do
   @behaviour SymmetryControl.Integrations.Provider
 
   alias SymmetryControl.Integrations.ChangeAction
+  alias SymmetryControl.Integrations.Providers.Support
 
   @api_version "7.1"
   @max_build_pages 10
@@ -18,7 +19,7 @@ defmodule SymmetryControl.Integrations.Providers.AzureDevOps do
   ]
 
   @impl true
-  def authenticate(connection), do: auth().azure_devops_headers(connection)
+  def authenticate(connection), do: Support.auth().azure_devops_headers(connection)
 
   @impl true
   def validate_resource_reference(_connection, "work_tracking", reference)
@@ -59,13 +60,11 @@ defmodule SymmetryControl.Integrations.Providers.AzureDevOps do
   def validate_pull_request_url(_connection, _resource, _url),
     do: {:error, :invalid_pull_request_url}
 
-  def check(connection) do
-    with {:ok, headers} <- authenticate(connection), do: check(connection, headers)
-  end
+  def check(connection), do: Support.check(__MODULE__, connection)
 
   @impl true
   def check(connection, headers) do
-    path = "/#{segment(connection.account_ref)}/_apis/projects?" <> query(%{"$top" => 1})
+    path = "/#{Support.segment(connection.account_ref)}/_apis/projects?" <> query(%{"$top" => 1})
 
     with {:ok, body} <- request(:get, path, headers) do
       {:ok,
@@ -76,20 +75,11 @@ defmodule SymmetryControl.Integrations.Providers.AzureDevOps do
     end
   end
 
-  def sync_resource(connection, resource) do
-    with {:ok, headers} <- authenticate(connection),
-         do: sync_resource(connection, resource, headers)
-  end
+  def sync_resource(connection, resource),
+    do: Support.sync_resource(__MODULE__, connection, resource)
 
   @impl true
-  def sync_resource(connection, resource, headers),
-    do: sync_resource_with_headers(connection, resource, headers)
-
-  defp sync_resource_with_headers(
-         connection,
-         %{kind: "work_tracking", external_ref: project},
-         headers
-       ) do
+  def sync_resource(connection, %{kind: "work_tracking", external_ref: project}, headers) do
     with {:ok, references} <- work_item_references(connection, project, headers),
          {:ok, items} <- work_items(connection, project, references, headers) do
       {:ok,
@@ -103,11 +93,7 @@ defmodule SymmetryControl.Integrations.Providers.AzureDevOps do
     end
   end
 
-  defp sync_resource_with_headers(
-         connection,
-         %{kind: "repository", external_ref: reference},
-         headers
-       ) do
+  def sync_resource(connection, %{kind: "repository", external_ref: reference}, headers) do
     with {:ok, {project, repository}} <- repository_parts(reference),
          {:ok, body} <- repository(connection, project, repository, headers) do
       {:ok,
@@ -128,7 +114,7 @@ defmodule SymmetryControl.Integrations.Providers.AzureDevOps do
     end
   end
 
-  defp sync_resource_with_headers(connection, %{kind: "ci", external_ref: reference}, headers) do
+  def sync_resource(connection, %{kind: "ci", external_ref: reference}, headers) do
     with {:ok, {project, {:definition, definition_id} = selector}} <- ci_reference(reference),
          {:ok, definition} <- build_definition(connection, project, definition_id, headers),
          {:ok, builds} <- builds(connection, project, selector, nil, headers) do
@@ -143,7 +129,7 @@ defmodule SymmetryControl.Integrations.Providers.AzureDevOps do
     end
   end
 
-  defp sync_resource_with_headers(_connection, _resource, _headers),
+  def sync_resource(_connection, _resource, _headers),
     do: {:error, :unsupported_resource}
 
   @impl true
@@ -215,13 +201,8 @@ defmodule SymmetryControl.Integrations.Providers.AzureDevOps do
     end
   end
 
-  def sync_delivery(_connection, _resource, %{pull_request_url: nil}),
-    do: {:ok, nil}
-
-  def sync_delivery(connection, resource, work_item) do
-    with {:ok, headers} <- authenticate(connection),
-         do: sync_delivery(connection, resource, work_item, headers)
-  end
+  def sync_delivery(connection, resource, work_item),
+    do: Support.sync_delivery(__MODULE__, connection, resource, work_item)
 
   @impl true
   def sync_delivery(_connection, _resource, %{pull_request_url: nil}, _headers),
@@ -239,8 +220,8 @@ defmodule SymmetryControl.Integrations.Providers.AzureDevOps do
          {:ok, pull_request} <-
            request(
              :get,
-             "/#{segment(connection.account_ref)}/#{segment(project)}/_apis/git/repositories/" <>
-               "#{segment(repository)}/pullrequests/#{pull_request_id}?" <> query(%{}),
+             "/#{Support.segment(connection.account_ref)}/#{Support.segment(project)}/_apis/git/repositories/" <>
+               "#{Support.segment(repository)}/pullrequests/#{pull_request_id}?" <> query(%{}),
              headers
            ),
          source_commit_id when is_binary(source_commit_id) <-
@@ -268,7 +249,7 @@ defmodule SymmetryControl.Integrations.Providers.AzureDevOps do
         pull_request_url: work_item.pull_request_url,
         pull_request_state: pull_request_state(pull_request["status"]),
         review_status: review_status(pull_request["reviewers"] || []),
-        updated_at: now(),
+        updated_at: Support.now(),
         provider_data: provider_data
       }
 
@@ -296,7 +277,7 @@ defmodule SymmetryControl.Integrations.Providers.AzureDevOps do
       {:ok,
        %{
          ci_status: build_status(builds),
-         updated_at: now(),
+         updated_at: Support.now(),
          provider_data: %{"ci_url" => builds |> List.first() |> web_link()}
        }}
     end
@@ -326,7 +307,7 @@ defmodule SymmetryControl.Integrations.Providers.AzureDevOps do
 
   defp work_item_references(connection, project, headers) do
     path =
-      "/#{segment(connection.account_ref)}/#{segment(project)}/_apis/wit/wiql?" <>
+      "/#{Support.segment(connection.account_ref)}/#{Support.segment(project)}/_apis/wit/wiql?" <>
         query(%{})
 
     body = %{
@@ -348,7 +329,7 @@ defmodule SymmetryControl.Integrations.Providers.AzureDevOps do
       |> Enum.chunk_every(200)
       |> Enum.reduce_while({:ok, []}, fn chunk, {:ok, acc} ->
         path =
-          "/#{segment(connection.account_ref)}/#{segment(project)}/_apis/wit/workitemsbatch?" <>
+          "/#{Support.segment(connection.account_ref)}/#{Support.segment(project)}/_apis/wit/workitemsbatch?" <>
             query(%{})
 
         body = %{"ids" => chunk, "fields" => @work_item_fields, "$expand" => "Relations"}
@@ -373,13 +354,13 @@ defmodule SymmetryControl.Integrations.Providers.AzureDevOps do
       external_id: to_string(item["id"]),
       external_url: get_in(item, ["_links", "html", "href"]) || item["url"],
       external_state: fields["System.State"] || "Unknown",
-      external_updated_at: required_datetime(fields["System.ChangedDate"]),
+      external_updated_at: Support.required_datetime(fields["System.ChangedDate"]),
       external_assignee_name: assigned_to(fields["System.AssignedTo"]),
       labels: labels,
       title: fields["System.Title"],
       description: fields["System.Description"],
       status: azure_status(fields["System.State"]),
-      priority: priority(labels),
+      priority: Support.priority(labels),
       provider_data: %{
         "work_item_type" => fields["System.WorkItemType"],
         "revision" => item["rev"]
@@ -390,8 +371,8 @@ defmodule SymmetryControl.Integrations.Providers.AzureDevOps do
   defp repository(connection, project, repository, headers) do
     request(
       :get,
-      "/#{segment(connection.account_ref)}/#{segment(project)}/_apis/git/repositories/" <>
-        "#{segment(repository)}?" <> query(%{}),
+      "/#{Support.segment(connection.account_ref)}/#{Support.segment(project)}/_apis/git/repositories/" <>
+        "#{Support.segment(repository)}?" <> query(%{}),
       headers
     )
   end
@@ -405,8 +386,8 @@ defmodule SymmetryControl.Integrations.Providers.AzureDevOps do
     }
 
     path =
-      "/#{segment(connection.account_ref)}/#{segment(project)}/_apis/git/repositories/" <>
-        "#{segment(repository)}/pullrequests?" <> query(params)
+      "/#{Support.segment(connection.account_ref)}/#{Support.segment(project)}/_apis/git/repositories/" <>
+        "#{Support.segment(repository)}/pullrequests?" <> query(params)
 
     case request(:get, path, headers) do
       {:ok, %{"value" => pull_requests}} when is_list(pull_requests) ->
@@ -537,7 +518,7 @@ defmodule SymmetryControl.Integrations.Providers.AzureDevOps do
        %{
          pull_request_url: url,
          pull_request_state: pull_request_state(status),
-         updated_at: now(),
+         updated_at: Support.now(),
          provider_data: provider_data
        }}
     else
@@ -553,7 +534,7 @@ defmodule SymmetryControl.Integrations.Providers.AzureDevOps do
          status when is_binary(status) <- pull_request["status"],
          url <-
            get_in(pull_request, ["_links", "web", "href"]) ||
-             "https://dev.azure.com/#{organization}/#{segment(project)}/_git/#{segment(repository)}/pullrequest/#{id}",
+             "https://dev.azure.com/#{organization}/#{Support.segment(project)}/_git/#{Support.segment(repository)}/pullrequest/#{id}",
          {:ok, ^id} <- pull_request_id(url, organization, project, repository) do
       {:ok, {id, status, url}}
     else
@@ -562,13 +543,13 @@ defmodule SymmetryControl.Integrations.Providers.AzureDevOps do
   end
 
   defp pull_requests_path(connection, project, repository) do
-    "/#{segment(connection.account_ref)}/#{segment(project)}/_apis/git/repositories/" <>
-      "#{segment(repository)}/pullrequests?" <> query(%{})
+    "/#{Support.segment(connection.account_ref)}/#{Support.segment(project)}/_apis/git/repositories/" <>
+      "#{Support.segment(repository)}/pullrequests?" <> query(%{})
   end
 
   defp pull_request_path(connection, project, repository, pull_request_id) do
-    "/#{segment(connection.account_ref)}/#{segment(project)}/_apis/git/repositories/" <>
-      "#{segment(repository)}/pullrequests/#{pull_request_id}?" <> query(%{})
+    "/#{Support.segment(connection.account_ref)}/#{Support.segment(project)}/_apis/git/repositories/" <>
+      "#{Support.segment(repository)}/pullrequests/#{pull_request_id}?" <> query(%{})
   end
 
   defp ref_name(branch), do: "refs/heads/" <> branch
@@ -576,7 +557,7 @@ defmodule SymmetryControl.Integrations.Providers.AzureDevOps do
   defp build_definition(connection, project, definition_id, headers) do
     request(
       :get,
-      "/#{segment(connection.account_ref)}/#{segment(project)}/_apis/build/definitions/" <>
+      "/#{Support.segment(connection.account_ref)}/#{Support.segment(project)}/_apis/build/definitions/" <>
         "#{definition_id}?" <> query(%{}),
       headers
     )
@@ -607,7 +588,7 @@ defmodule SymmetryControl.Integrations.Providers.AzureDevOps do
         else: params
 
     path =
-      "/#{segment(connection.account_ref)}/#{segment(project)}/_apis/build/builds?" <>
+      "/#{Support.segment(connection.account_ref)}/#{Support.segment(project)}/_apis/build/builds?" <>
         query(params)
 
     with {:ok, response_headers, body} <- request_with_headers(:get, path, headers),
@@ -684,7 +665,7 @@ defmodule SymmetryControl.Integrations.Providers.AzureDevOps do
   end
 
   defp ci_url(organization, project, definition_id) do
-    "https://dev.azure.com/#{organization}/#{segment(project)}/_build?definitionId=#{definition_id}"
+    "https://dev.azure.com/#{organization}/#{Support.segment(project)}/_build?definitionId=#{definition_id}"
   end
 
   defp review_status(reviewers) do
@@ -704,7 +685,10 @@ defmodule SymmetryControl.Integrations.Providers.AzureDevOps do
 
   defp build_status(builds) do
     builds =
-      latest_by(builds, &(get_in(&1, ["definition", "id"]) || get_in(&1, ["definition", "name"])))
+      Support.latest_by(
+        builds,
+        &(get_in(&1, ["definition", "id"]) || get_in(&1, ["definition", "name"]))
+      )
 
     cond do
       Enum.any?(builds, &(&1["status"] != "completed")) ->
@@ -719,13 +703,6 @@ defmodule SymmetryControl.Integrations.Providers.AzureDevOps do
       true ->
         "unknown"
     end
-  end
-
-  defp latest_by(entries, key_fun) do
-    entries
-    |> Enum.with_index()
-    |> Enum.uniq_by(fn {entry, index} -> key_fun.(entry) || {:entry, index} end)
-    |> Enum.map(&elem(&1, 0))
   end
 
   defp build_metadata(nil), do: nil
@@ -761,18 +738,6 @@ defmodule SymmetryControl.Integrations.Providers.AzureDevOps do
   defp assigned_to(name) when is_binary(name), do: name
   defp assigned_to(_value), do: nil
 
-  defp priority(labels) do
-    Enum.find_value(labels, "no_priority", fn label ->
-      case String.downcase(label) do
-        "priority:urgent" -> "urgent"
-        "priority:high" -> "high"
-        "priority:medium" -> "medium"
-        "priority:low" -> "low"
-        _ -> nil
-      end
-    end)
-  end
-
   defp repository_parts(value) when is_binary(value) do
     case String.split(value, "/", parts: 2) do
       [project, repository] when project != "" and repository != "" ->
@@ -806,10 +771,10 @@ defmodule SymmetryControl.Integrations.Providers.AzureDevOps do
     with "https" <- uri.scheme,
          "dev.azure.com" <- String.downcase(uri.host || ""),
          {:ok, [url_organization, url_project, "_git", url_repository, "pullrequest", id]} <-
-           decoded_path_segments(uri.path),
-         true <- same_reference?(url_organization, organization),
-         true <- same_reference?(url_project, project),
-         true <- same_reference?(url_repository, repository),
+           Support.decoded_path_segments(uri.path),
+         true <- Support.same_reference?(url_organization, organization),
+         true <- Support.same_reference?(url_project, project),
+         true <- Support.same_reference?(url_repository, repository),
          {pull_request_id, ""} when pull_request_id > 0 <- Integer.parse(id) do
       {:ok, pull_request_id}
     else
@@ -837,20 +802,6 @@ defmodule SymmetryControl.Integrations.Providers.AzureDevOps do
     end
   end
 
-  defp decoded_path_segments(path) when is_binary(path) do
-    {:ok,
-     path
-     |> String.split("/", trim: true)
-     |> Enum.map(&URI.decode/1)}
-  rescue
-    ArgumentError -> {:error, :invalid_pull_request_url}
-  end
-
-  defp decoded_path_segments(_path), do: {:error, :invalid_pull_request_url}
-
-  defp same_reference?(left, right),
-    do: String.downcase(left) == String.downcase(right)
-
   defp request(method, path, headers, body \\ nil) do
     with {:ok, _response_headers, response} <- request_with_headers(method, path, headers, body) do
       {:ok, response}
@@ -860,7 +811,7 @@ defmodule SymmetryControl.Integrations.Providers.AzureDevOps do
   defp request_with_headers(method, path, headers, body \\ nil) do
     url = "https://dev.azure.com" <> path
 
-    case http().request(method, url, headers, body) do
+    case Support.http().request(method, url, headers, body) do
       {:ok, status, response_headers, response} when status in 200..299 ->
         {:ok, response_headers, response}
 
@@ -874,35 +825,6 @@ defmodule SymmetryControl.Integrations.Providers.AzureDevOps do
 
   defp query(params), do: params |> Map.put("api-version", @api_version) |> URI.encode_query()
 
-  defp segment(value), do: URI.encode(value, &URI.char_unreserved?/1)
-
-  defp required_datetime(value) when is_binary(value) do
-    case DateTime.from_iso8601(value) do
-      {:ok, parsed, _offset} -> DateTime.truncate(parsed, :microsecond)
-      _ -> nil
-    end
-  end
-
-  defp required_datetime(_value), do: nil
-
   defp web_link(nil), do: nil
   defp web_link(build), do: get_in(build, ["_links", "web", "href"])
-
-  defp http,
-    do:
-      Application.get_env(
-        :symmetry_control,
-        :integration_http_client,
-        SymmetryControl.Integrations.HTTP
-      )
-
-  defp auth,
-    do:
-      Application.get_env(
-        :symmetry_control,
-        :integration_auth_provider,
-        SymmetryControl.Integrations.Auth
-      )
-
-  defp now, do: DateTime.utc_now() |> DateTime.truncate(:microsecond)
 end
