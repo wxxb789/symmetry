@@ -31,18 +31,18 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
   # `WorkspaceWorkItem.goal_id` -> `goal_ref` in the bundle, with the projection
   # not yet following) fails red as well. Frontend read sites, list by list:
   #
-  #   work row         features/work/control.tsx:304,444; features/work/assignment.tsx:152-155;
+  #   work row         features/work/control.tsx:305,445; features/work/assignment.tsx:153-156;
   #                    features/planning/write-policy.ts:27-28,40,264-279;
-  #                    features/work/detail.tsx:310-343,370 — the row body is
+  #                    features/work/detail.tsx:309-342,369 — the row body is
   #                    `WorkspaceWorkItem`, shared with `workspace-read` and served by the same
   #                    `PortalJSON.work_item/2`; this file states the pin again because the detail
   #                    read must keep its own row contract if the two reads stop sharing the body.
   #                    Its nested consumed members (`delivery.*.provider`/`recorded_at`,
   #                    `external.provider_owned_fields`) are populated by this scenario's provider
   #                    sync and tracker import and pinned here too
-  #   timeline item    features/work/presentation.ts:479-521; features/work/receipts.ts:155-178;
+  #   timeline item    features/work/presentation.ts:448-490; features/work/receipts.ts:156-179;
   #                    features/work/history.tsx:60-62
-  #   waiting decision features/work/presentation.ts:389-409
+  #   waiting decision features/work/presentation.ts:358-378
   @work_row_members ~w(project_id goal_id description priority assignee workspace
     repository_resource_id repository ci_resource_id ci_resource branch pull_request_url
     ci_status review_status delivery external goal_managed version can_start execution updated_at)

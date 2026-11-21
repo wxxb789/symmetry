@@ -199,21 +199,21 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
   # consumed surface reads pinned by name even if a schema edit stops declaring
   # it. Frontend read sites, list by list:
   #
-  #   root             features/runtimes/runtimes.tsx:81,85,95; features/connections/resources.tsx:136
+  #   root             features/runtimes/runtimes.tsx:81,85,95; features/connections/resources.tsx:138
   #   project row      features/projects/projects.tsx:89,108; features/planning/write-policy.ts:50,201;
-  #                    features/work/assignment.tsx:250; features/connections/resources.tsx:130
-  #   resource row     features/connections/resources.tsx:102-116; features/work/assignment.tsx:53-57
-  #   registered row   features/connections/resources.tsx:137-140
+  #                    features/work/assignment.tsx:251; features/connections/resources.tsx:132
+  #   resource row     features/connections/resources.tsx:104-118; features/work/assignment.tsx:54-58
+  #   registered row   features/connections/resources.tsx:139-142
   #   runtime row      features/runtimes/runtimes.tsx:17,25,37-41
   #   capabilities     features/runtimes/runtimes.tsx:16,50-56 read `adapter`; the four booleans have no
   #                    member-named read site — the whole map is serialized into `data-capabilities`
   #                    (`runtimes.tsx:24`) and `browser/tests/portal-live-daemon.spec.mjs` asserts that
   #                    attribute equals the registration-side map
-  #   work row         features/work/control.tsx:304,444; features/work/assignment.tsx:152-155;
-  #                    features/planning/write-policy.ts:27-28,40,264-279; features/work/detail.tsx:310-343,370
-  #   delivery value   features/work/presentation.ts:293,339-340,347-348,355-356
-  #   external row     features/work/detail.tsx:320; features/planning/write-policy.ts:20
-  #   waiting decision features/work/presentation.ts:399-409
+  #   work row         features/work/control.tsx:305,445; features/work/assignment.tsx:153-156;
+  #                    features/planning/write-policy.ts:27-28,40,264-279; features/work/detail.tsx:309-342,369
+  #   delivery value   features/work/presentation.ts:262,308-309,316-317,324-325
+  #   external row     features/work/detail.tsx:319; features/planning/write-policy.ts:20
+  #   waiting decision features/work/presentation.ts:368-378
   @workspace_read_members ~w(runtimes registered_runtimes)
   @workspace_project_members ~w(version default_agent_profile default_workspace resources)
   @workspace_resource_members ~w(id project_id connection_id kind name provider external_ref url
