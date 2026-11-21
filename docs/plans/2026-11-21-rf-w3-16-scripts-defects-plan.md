@@ -6,8 +6,8 @@ this worktree's HEAD `36f9a887635ec89d49cce2cd13b3915a8a875a83` (`36f9a887`, ide
 Windows host (Python 3.12.10, PyYAML 6.0.3) and, for the Linux-targeted exporter suite, WSL
 Ubuntu-24.04 (Python 3.12.3, PyYAML 6.0.1). Line citations bind that baseline as well — the
 contract cites it too, so the numbers are deliberately not renumbered — and a citation at or
-below the deleted `read_regular` handler in `export-linux-v2-redacted-evidence.py` is +3 in the
-post-change tree.
+below the deleted `read_regular` handler in `export-linux-v2-redacted-evidence.py` is three
+lines earlier in the post-change tree (post-change = baseline − 3).
 
 ## Measured baseline (before)
 

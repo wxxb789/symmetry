@@ -841,8 +841,8 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 ## scripts/ci: install a pinned PyYAML for the lockfile differential oracle (W6-01)
 
 - [ ] The `ci.yml` `daemon` job's "Check CI gate helper scripts" step
-      (`.github/workflows/ci.yml:1326-1337`, which runs
-      `python3 ../scripts/ci/test-check-lockfile-registry.py` at `:1333`) must install a pinned
+      (`.github/workflows/ci.yml:1482-1493` as of `6a815c0f`, which runs
+      `python3 ../scripts/ci/test-check-lockfile-registry.py` at `:1489`) must install a pinned
       PyYAML and export `SYMMETRY_REQUIRE_PYYAML=1` for that step, so the differential cross-check
       between `check-lockfile-registry.py`'s own YAML reader and PyYAML can never silently vanish
       again. This is the recorded follow-up of contract `goal-rf-w3-16-scripts-defects` (refactor
@@ -858,8 +858,9 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       likewise; `python -S` (site-packages off) and `python3 -S` print the notice and report `OK
       (skipped=1)`; `SYMMETRY_REQUIRE_PYYAML=1
       python -S scripts/ci/test-check-lockfile-registry.py` exits 1 with `FAILED (failures=1)` on
-      both platforms. Pin the version next to the other tool pins in `ci.yml` (the ruff job's
-      `required-version = "==0.17.5"` handshake in the section above is the same pattern) and set
-      the environment variable in the same step, so a lost install reddens the job instead of
-      shrinking the oracle. `ci.yml` is untouched by rf-w3-16 because W3-01/#157 own it in wave 3;
-      W6-01 is its wave-6 owner.
+      both platforms. Pin the version next to the other tool pins in `ci.yml` (the W1-01 ruff-pin
+      entry's `required-version = "==0.17.5"` handshake at `docs/TODO.md:744` is the same
+      pattern) and set the environment variable in the same step, so a lost install reddens the
+      job instead of shrinking the oracle. `ci.yml` is untouched by rf-w3-16 because W3-01/#157
+      owned it in wave 3 (that PR has since landed as `6a815c0f`, the revision the line numbers
+      above bind); W6-01 is its wave-6 owner.
