@@ -3900,17 +3900,27 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
         (the colon a render left outside goes into the digest; on a wider shape, a second
         rendered root claim behind the first, the digest binds bytes of that claim's raw span
         too).
-      Evidence (numbers measured on the fix worktree, not on a commit — the worktree carries the
-      uncommitted change, so they are bound to the bytes: sanitizer
-      `sha256:732312c48fe4602d87475d4ddd3670c84d5db687ed1381e65cfd332713977725`, raw module
+      Evidence (numbers measured on the fix worktree and bound to the delivered bytes at the PR
+      head `4dfc08dd` — the r7 commit `b56e4aef` changes the sanitizer's docstrings only and adds
+      the JSON module's anchored-pass bound, so the r6 round's numbers carry over, and committing
+      this docs change keeps all three hashes below: sanitizer
+      `sha256:a4df116dbc7566a14c3e00cd2aa7d0ca08ee107c1abf5c34e0b3baa9b5c6078e`, raw module
       `sha256:ac2148fd894c1a4abae7869e5c544edf6d12bf295511ef7d11b539cdb3b40250`, JSON module
-      `sha256:9ea2752eec9228f4f52b8ca2d38c78110ff184f3ad5969531d08781117442aa5` (the r6 round's
-      bytes, superseding the r5 round's `41e5bdea…`, `f03cce89…` and `93200243…` and the r4
-      round's `8afaeb98…`, `ede54a19…` and `f278be53…`: the raw look's anchored read absorbs a
-      `--root` token's exposed trailing spelling, both `shifts` lookups are pinned, and both
-      disclosed non-fixpoints — the default-scope separator shape and the hand-written-token-text
-      shape — are disclosed in the docstrings, the records README and `docs/TODO.md`); a post-commit
-      re-run and the slow evaluation suite are owed): `python
+      `sha256:dce72f0be007785a3bfdc64692582022e812a91c2045bc349ddb56ef924ce21c` (the r7 round's
+      bytes, superseding the r6 round's `732312c4…` and `9ea2752e…` (the raw module's
+      `ac2148fd…` unchanged), the r5 round's `41e5bdea…`, `f03cce89…` and `93200243…` and
+      the r4 round's `8afaeb98…`, `ede54a19…` and `f278be53…`: the raw look's anchored read
+      absorbs a `--root` token's exposed trailing spelling, both `shifts` lookups are pinned,
+      and the r6 round's two disclosed non-fixpoints — the default-scope separator shape and
+      the hand-written-token-text shape — are disclosed in the docstrings, the records README
+      and `docs/TODO.md`); the r7 round bounds the anchored pass in the JSON module's listing
+      pin (the mutant that drops the anchored loop's `frontier` skip, A2, covers 13,489,387
+      anchored characters at 1,000 lines against the delivered 26,871 and fails exactly that
+      pin) and records the third disclosed non-fixpoint in the docstrings, the records README
+      and `docs/TODO.md` — a `--root` render where a `file:` scheme or a space-continued chunk
+      reaches the root: its first render leaves a residue the gate refuses, and a second render
+      converges — with both residual shapes tracked under Deferred review findings (PR #137);
+      a post-commit re-run and the slow evaluation suite are owed): `python
       scripts/ci/test-model-routing-record-sanitize.py` 57 tests OK and `python
       scripts/ci/test-model-routing-record-sanitize-json.py` 20 tests OK (Windows, CPython
       3.12.10; the r5 round's WSL Ubuntu-24.04 runs of its own bytes stood at 56 and 19 and are
