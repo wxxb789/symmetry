@@ -17,6 +17,11 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
 
   @now ~U[2026-09-04 11:00:00.000000Z]
 
+  # The canonical bundle `ServedDocument.validate_served_document!/2` compares
+  # every gate's response against; the presence assertions derive their
+  # declared-member half from it at test time.
+  @schema_bundle Path.expand("../../../../daemon/internal/contracts/schema_bundle.json", __DIR__)
+
   # The members of `work-detail-read` and `work-timeline-read` the surfaces read
   # and the bundle comparison cannot refuse on its own. The work row's names are
   # absent from `WorkspaceWorkItem`'s `required` array, and the waiting packet's
@@ -25,8 +30,11 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
   # required inside each `oneOf` variant of `WorkItemTimelineItem`, so the bundle
   # refuses their renames and the pin restates them. The presence assertions in
   # "the real served work detail and timeline carry every member the surfaces
-  # read" are what fails red for the first two classes. Frontend read sites, list
-  # by list:
+  # read" are what fails red for the first two classes, and every assertion also
+  # walks the definition's own declared members read from the contract bundle
+  # (`declared_members/2`), so a schema-side rename (e.g.
+  # `WorkspaceWorkItem.goal_id` -> `goal_ref` in the bundle, with the projection
+  # not yet following) fails red as well. Frontend read sites, list by list:
   #
   #   work row         features/work/control.tsx:304,444; features/work/assignment.tsx:152-155;
   #                    features/planning/write-policy.ts:27-28,40,264-279;
@@ -1416,7 +1424,12 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
     validate_served_document!("work-detail-read", detail)
 
     row = detail["work_item"]
-    assert_served_members!("work-detail-read work row", row, @work_row_members)
+
+    assert_served_members!(
+      "work-detail-read work row",
+      row,
+      gate_members("work-detail-read", "WorkspaceWorkItem", @work_row_members)
+    )
 
     Enum.each(["pull_request", "ci", "review"], fn field ->
       value = row["delivery"][field]
@@ -1425,20 +1438,20 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
       assert_served_members!(
         "work-detail-read delivery #{field} value",
         value,
-        @delivery_value_members
+        gate_members("work-detail-read", "WorkItemDeliveryValue", @delivery_value_members)
       )
     end)
 
     assert_served_members!(
       "work-detail-read external row",
       row["external"],
-      @external_row_members
+      gate_members("work-detail-read", "WorkItemExternal", @external_row_members)
     )
 
     assert_served_rows!(
       "work-detail-read timeline item",
       detail["raw"]["timeline"],
-      @timeline_item_members
+      gate_members("work-detail-read", "WorkItemTimelineItem", @timeline_item_members)
     )
 
     decision = row["execution"]["waiting"]["decision"]
@@ -1446,13 +1459,17 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
     assert_served_members!(
       "work-detail-read waiting decision",
       decision,
-      @waiting_decision_members
+      gate_members("work-detail-read", "WorkItemWaitingDecision", @waiting_decision_members)
     )
 
     assert_served_rows!(
       "work-detail-read waiting decision option",
       decision["options"],
-      @waiting_decision_option_members
+      gate_members(
+        "work-detail-read",
+        "WorkItemWaitingDecisionOption",
+        @waiting_decision_option_members
+      )
     )
 
     page =
@@ -1460,7 +1477,11 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
 
     validate_served_document!("work-timeline-read", page)
 
-    assert_served_rows!("work-timeline-read item", page["items"], @timeline_item_members)
+    assert_served_rows!(
+      "work-timeline-read item",
+      page["items"],
+      gate_members("work-timeline-read", "WorkItemTimelineItem", @timeline_item_members)
+    )
 
     for {label, items} <- [
           {"work-detail-read raw timeline", detail["raw"]["timeline"]},
@@ -1883,6 +1904,43 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
     assert is_list(rows) and rows != [], "#{label}: the gate must serve at least one row"
     Enum.each(rows, &assert_served_members!(label, &1, members))
   end
+
+  # The member set a gate assertion walks: the definition's declared members
+  # from the contract bundle plus the frontend-read list the call passes. A
+  # schema-side rename (bundle side) and a serving-side rename or omission
+  # (either side) fail the same "stopped serving" message, so the assertion
+  # cannot stay green while the schema, the projection and the read sites
+  # disagree.
+  defp gate_members(read, definition, frontend_members) do
+    Enum.uniq(declared_members(read, definition) ++ frontend_members)
+  end
+
+  # The contract bundle's declared members for `definition` in `read`, its
+  # `oneOf` variants included (`WorkItemTimelineItem` declares its names in the
+  # variants, not in the parent body); `:root` names the read's own schema. The
+  # bundle is read at test time, so a rename inside it (e.g.
+  # `WorkspaceWorkItem.goal_id` -> `goal_ref`) fails the presence assertion
+  # until the served projection follows: the bundle comparison alone cannot
+  # refuse it, because the definitions are `additionalProperties: true` and an
+  # optional member may be absent.
+  defp declared_members(read, definition) do
+    schema = contract_bundle() |> Map.fetch!("#{read}.schema.json")
+
+    schema
+    |> definition_variants(definition)
+    |> Enum.flat_map(&Map.keys(Map.get(&1, "properties", %{})))
+    |> Enum.uniq()
+  end
+
+  defp definition_variants(schema, :root), do: [schema]
+
+  defp definition_variants(schema, definition) do
+    definition = Map.fetch!(schema["definitions"], definition)
+    [definition | Map.get(definition, "oneOf", [])]
+  end
+
+  defp contract_bundle,
+    do: @schema_bundle |> File.read!() |> Jason.decode!()
 
   # The agent's waiting packet. The read model serves the transition's payload as
   # the authoritative packet when it carries a decision

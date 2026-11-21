@@ -1826,7 +1826,7 @@ moved on 2026-11-21 from branch `refactor/rf-w1-14-core-dead-surface`.
 
 *Closed the item “Harden the optional-but-consumed members of the served reads …” in `docs/TODO.md`;
 nothing of it stays there — option (b) of its own text landed, so the workspace-read residual and the
-whole class it names are closed.*
+whole class it names are closed (schema-side included, by the P2-1 amendment recorded below).*
 
       Recorded on branch `refactor/rf-w1-13-served-doc-gates` (2026-11-21, baseline `a3039f0`). The
       four portal reads that had schemas and manifest fixtures but no served-response gate are now
@@ -1840,17 +1840,22 @@ whole class it names are closed.*
       item's attempt plus one event, the running and waiting transitions and one input command, so the
       timeline items cover all three sources), and `connections-read` on the existing connection-read
       test in `portal_integrations_test.exs`. Every gate calls `validate_served_document!/2` on the
-      response and asserts the members the surfaces read: the workspace pin is this item's own 66
-      members, the detail pin adds the shared `WorkspaceWorkItem` row body (its nested consumed
-      `delivery.*.provider`/`recorded_at` and `external.provider_owned_fields` included, served and
-      pinned by this scenario itself) plus the `WorkItemTimelineItem` names and the waiting decision
-      packet, and `connections-read` has no optional-but-consumed member to pin — every declared
-      member of `Connection` (12), `ConnectionResource` (17) and `ConnectionProvider` (3) sits in its
-      definition's `required` array — so its bundle comparison refuses a serving rename of every
-      member the surface reads (the projection's undeclared extra `connection_id` on resource rows is
-      read by no connections surface and is pinned by the workspace gate's `WorkspaceResource` row),
-      and the gate validates the populated response its existing assertions already exercise against
-      the bundle. The bundle comparison alone could not have closed this: all four schemas set
+      response and asserts the members the surfaces read. The workspace pin is this item's own 66
+      frontend-read members; the detail pin adds the shared `WorkspaceWorkItem` row body (its nested
+      consumed `delivery.*.provider`/`recorded_at` and `external.provider_owned_fields` included,
+      served and pinned by this scenario itself) plus the `WorkItemTimelineItem` names and the
+      waiting decision packet; `connections-read` has no optional-but-consumed member to pin — every
+      declared member of `Connection` (12), `ConnectionResource` (17) and `ConnectionProvider` (3)
+      sits in its definition's `required` array — so its bundle comparison refuses a serving rename
+      of every member the surface reads (the projection's undeclared extra `connection_id` on
+      resource rows is read by no connections surface and is pinned by the workspace gate's
+      `WorkspaceResource` row), and the gate validates the populated response its existing
+      assertions already exercise against the bundle. Each presence assertion walks the
+      frontend-read list plus the definition's declared members, read from the contract bundle at
+      test time (PR #145 review amendment P2-1, `declared_members/2`/`gate_members/3` in both gate
+      files), so a schema-side rename of a declared member fails the assertion until the served
+      projection follows, not only the serving-side rename the pins were built for. The bundle
+      comparison alone could not have closed this: all four schemas set
       `additionalProperties: true` and none sets it `false` (22/34/8/4 occurrences). Option (a)
       (dropping the schema tolerance) stays a product decision and is not taken here.
       Recorded red, exact commands. With `PortalJSON.work_item/2` serving `goal_id_renamed` for
@@ -1875,6 +1880,20 @@ whole class it names are closed.*
       reverted; `git diff` over `control/lib` and `control/test/support` is empty. The three gated
       files score `Result: 45 passed`, exit 0, with `mix format --check-formatted` and
       `mix compile --warnings-as-errors` green.
+      P2-1 amendment evidence, exact commands (2026-11-21, PR #145 review). The gates now derive
+      each assertion's declared-member half from the bundle at test time, so the schema-side rename
+      fails them too. In a scratch copy of this worktree (working tree applied;
+      `WorkspaceWorkItem.properties.goal_id` renamed `goal_ref` in the `workspace-read`,
+      `work-detail-read` and `chat-read` schemas inside
+      `daemon/internal/contracts/schema_bundle.json`, checked `has_goal_id` false, `has_goal_ref`
+      true, `required` unchanged), the same single-test run that is green on the pristine bundle
+      fails both gates on the presence assertion, not the bundle comparison: `workspace-read work
+      row stopped serving ["goal_ref"]` and `work-detail-read work row stopped serving
+      ["goal_ref"]`, exit 2, `Result: 0/2 passed, 28 excluded`. The serving-side probe above is
+      unchanged by the amendment: with `PortalJSON.work_item/2` serving `goal_id_renamed` again,
+      both gates fail on the presence assertion — `stopped serving ["goal_id"]`, exit 2,
+      `Result: 0/2 passed, 28 excluded`. Both mutations are reverted; the pristine three gated
+      files stay green (`Result: 45 passed`, exit 0).
 
 ## Browser acceptance under host load
 

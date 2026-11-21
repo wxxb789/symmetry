@@ -44,7 +44,9 @@ member:
 - **The other three reads need presence pins for their optional-but-consumed members.** The pin per
   read is (members the frontend reads) ∩ (members optional in the schema definition that serves
   them), with the parent object present in the gate's scenario. That set is exactly the class the
-  `## Deferred review findings (0007h)` TODO entry names.
+  `## Deferred review findings (0007h)` TODO entry names. (The PR #145 review amendment at the end
+  of this plan adds the definition's declared members to every assertion's set, so a schema-side
+  rename is caught as well.)
 
 The workspace-read set below is the entry's own enumeration (66 members); this plan re-derived it
 mechanically (`jq` over every `required` array of `workspace-read.schema.json`, intersected with the
@@ -66,7 +68,7 @@ body goes red in both gates that serve it.
 | --- | --- | --- |
 | root | `runtimes`, `registered_runtimes` | `features/connections/resources.tsx:136`, `features/runtimes/runtimes.tsx:24` area, `app/shell.tsx` project picker |
 | `WorkspaceProject` | `version`, `default_agent_profile`, `default_workspace`, `resources` | `features/projects/projects.tsx:82`, `features/goals/detail.tsx:251`, `features/work/assignment.tsx:135` |
-| `WorkspaceResource` | `id`, `project_id`, `connection_id`, `kind`, `name`, `provider`, `external_ref`, `url`, `status`, `sync_status`, `status_message`, `last_synced_at`, `version` | `features/connections/resources.tsx:32-43`, `features/planning/editors.tsx` resource rows, `features/work/presentation.ts:264` |
+| `WorkspaceResource` | `id`, `project_id`, `connection_id`, `kind`, `name`, `provider`, `external_ref`, `url`, `status`, `sync_status`, `status_message`, `last_synced_at`, `version` | `features/connections/resources.tsx:102-116`, `features/planning/editors.tsx` resource rows, `features/work/presentation.ts:264` |
 | `RegisteredRuntime` | `runtime_id`, `runtime_name`, `agent_profile`, `workspace` | `features/connections/resources.tsx:136-154` (`referenceOptions/2`) |
 | `RuntimeSnapshot` | `capacity`, `reserved_capacity`, `connection_epoch`, `last_heartbeat_at`, `repository_resource_id`, `agent_profile`, `workspace` | `features/runtimes/runtimes.tsx`, `features/connections/resources.tsx:136`, `features/chat/chat.tsx:131` |
 | `RuntimeSnapshot.capabilities` | `adapter`, `interactive`, `provider_access`, `structured_input`, `supervisory_control` | `features/runtimes/runtimes.tsx:24` and its adapter rendering |
@@ -159,7 +161,11 @@ pin):
 Each pinning file carries its own private `assert_served_members!/3` + `assert_served_rows!/3` (about
 ten lines): `control/test/support/**` is outside this increment's owned files, and a module defined
 in one test file would break a single-file run of the others. (`portal_integrations_test.exs` pins
-no member — every declared member of its read is `required` — so it adds neither helper.)
+no member — every declared member of its read is `required` — so it adds neither helper.) The
+review amendment below adds the bundle-derived `gate_members/3`/`declared_members/2` to the same
+private block; `docs/TODO.md` (PR #145 findings) records moving the block into
+`SymmetryControlWeb.ServedDocument` once the increment that owns `control/test/support/**` (W1-12)
+has landed.
 
 ## Exact edge-case semantics
 
@@ -245,6 +251,33 @@ host):
 5. **No production change.** No projection, read model, schema or fixture changes; the increment is
    test-only plus the TODO archive move.
 
+## Review amendment (PR #145, P2-1): schema-derived member sets
+
+The adversarial review of PR #145 found the gates went red only for a *serving-side* rename: every
+pin was a hand-maintained member list, so renaming a consumed optional member in
+`daemon/internal/contracts/schema_bundle.json` (`WorkspaceWorkItem.properties.goal_id` ->
+`goal_ref` in the two gate reads' schemas, projection untouched) left both gates green — the bundle
+comparison accepts the old name as an additional property and the new optional name as absent, and
+the pin still finds the old name.
+
+Each presence assertion now walks `gate_members(read, definition, frontend_members)`: the
+definition's declared members read from the contract bundle at test time (`declared_members/2`,
+`oneOf` variants included) plus the frontend-read list the call passes. `:root` names the read's own
+schema, so the workspace root assertion now also walks `projects` and `selected_project_id`. The
+schema side turns the bundle-side rename red; the frontend side keeps every member a `frontend/src`
+read site consumes pinned by name; a serving-side rename or omission fails on either side, in the
+same "stopped serving" message.
+
+Evidence (`MIX_TEST_PARTITION=w113fix`, every probe reverted before the final run):
+
+- pristine worktree, three gated files — `Result: 45 passed`, exit 0, with `mix format
+  --check-formatted` and `mix compile --warnings-as-errors` green;
+- scratch copy of the tree with the `goal_ref` bundle rename — both gates fail on the presence
+  assertion: `workspace-read work row stopped serving ["goal_ref"]` and `work-detail-read work row
+  stopped serving ["goal_ref"]`, exit 2, `Result: 0/2 passed, 28 excluded`;
+- worktree with `PortalJSON.work_item/2` serving `goal_id_renamed` — both gates fail on the
+  presence assertion: `stopped serving ["goal_id"]`, exit 2, `Result: 0/2 passed, 28 excluded`.
+
 ## Out of scope
 
 - Production projections and any `PortalJSON`/`Protocol` change (W2-04 owns those).
@@ -253,4 +286,5 @@ host):
 - The other ungated surfaces' reads (`/portal/api/attention` is already gated; `chat-read` and
   `goal-read` keep their existing gates).
 - `WorkspaceWorkItem.position` and `RuntimeSnapshot.active_runs`, which have no feature-code read
-  site.
+  site (the P2-1 amendment's bundle-derived assertion walks them like every other declared member;
+  no frontend-read list pins them).

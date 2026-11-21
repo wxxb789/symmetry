@@ -132,9 +132,14 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
   # (`contracts/v1/workspace-read.schema.json`): each name is read by
   # `frontend/src` feature code and absent from its definition's `required`
   # array, so the bundle comparison alone cannot refuse a serving-side rename of
-  # it. The presence assertions in "the real served workspace read carries every
-  # member the surface reads" are what fails red for these. Frontend read sites,
-  # list by list:
+  # it. Every presence assertion in "the real served workspace read carries
+  # every member the surface reads" walks these lists *plus* the definition's own
+  # declared members read from the contract bundle (`declared_members/2`): the
+  # bundle side makes a schema-side rename of a declared member (e.g.
+  # `WorkspaceWorkItem.goal_id` -> `goal_ref` in the bundle, with the projection
+  # not yet following) fail red, and the hand lists below keep every member a
+  # consumed surface reads pinned by name even if a schema edit stops declaring
+  # it. Frontend read sites, list by list:
   #
   #   root             features/runtimes/runtimes.tsx:81,85,95; features/connections/resources.tsx:136
   #   project row      features/projects/projects.tsx:89,108; features/planning/write-policy.ts:50,201;
@@ -151,6 +156,11 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
   #   delivery value   features/work/presentation.ts:293,339-340,347-348,355-356
   #   external row     features/work/detail.tsx:320; features/planning/write-policy.ts:20
   #   waiting decision features/work/presentation.ts:399-409
+  # The canonical bundle `ServedDocument.validate_served_document!/2` compares
+  # every gate's response against; the presence assertions derive their
+  # declared-member half from it at test time.
+  @schema_bundle Path.expand("../../../../daemon/internal/contracts/schema_bundle.json", __DIR__)
+
   @workspace_read_members ~w(runtimes registered_runtimes)
   @workspace_project_members ~w(version default_agent_profile default_workspace resources)
   @workspace_resource_members ~w(id project_id connection_id kind name provider external_ref url
@@ -1160,12 +1170,16 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
 
     validate_served_document!("workspace-read", served)
 
-    assert_served_members!("workspace-read root", served, @workspace_read_members)
+    assert_served_members!(
+      "workspace-read root",
+      served,
+      gate_members("workspace-read", :root, @workspace_read_members)
+    )
 
     assert_served_rows!(
       "workspace-read project row",
       served["projects"],
-      @workspace_project_members
+      gate_members("workspace-read", "WorkspaceProject", @workspace_project_members)
     )
 
     [project_row] = served["projects"]
@@ -1173,32 +1187,36 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
     assert_served_rows!(
       "workspace-read resource row",
       project_row["resources"],
-      @workspace_resource_members
+      gate_members("workspace-read", "WorkspaceResource", @workspace_resource_members)
     )
 
     assert_served_rows!(
       "workspace-read work row",
       project_row["work_items"],
-      @workspace_work_item_members
+      gate_members("workspace-read", "WorkspaceWorkItem", @workspace_work_item_members)
     )
 
     assert_served_rows!(
       "workspace-read runtime row",
       served["runtimes"],
-      @workspace_runtime_members
+      gate_members("workspace-read", "RuntimeSnapshot", @workspace_runtime_members)
     )
 
     assert_served_rows!(
       "workspace-read registered runtime row",
       served["registered_runtimes"],
-      @workspace_registered_runtime_members
+      gate_members("workspace-read", "RegisteredRuntime", @workspace_registered_runtime_members)
     )
 
     Enum.each(served["runtimes"], fn row ->
       assert_served_members!(
         "workspace-read runtime capabilities",
         row["capabilities"],
-        @workspace_runtime_capability_members
+        gate_members(
+          "workspace-read",
+          "RuntimeCapabilities",
+          @workspace_runtime_capability_members
+        )
       )
     end)
 
@@ -1211,7 +1229,7 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
       assert_served_members!(
         "workspace-read delivery #{field} value",
         value,
-        @workspace_delivery_value_members
+        gate_members("workspace-read", "WorkItemDeliveryValue", @workspace_delivery_value_members)
       )
     end)
 
@@ -1222,7 +1240,7 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
     assert_served_members!(
       "workspace-read external row",
       external_item["external"],
-      @workspace_external_members
+      gate_members("workspace-read", "WorkItemExternal", @workspace_external_members)
     )
 
     decision = delivery_item["execution"]["waiting"]["decision"]
@@ -1230,13 +1248,21 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
     assert_served_members!(
       "workspace-read waiting decision",
       decision,
-      @workspace_waiting_decision_members
+      gate_members(
+        "workspace-read",
+        "WorkItemWaitingDecision",
+        @workspace_waiting_decision_members
+      )
     )
 
     assert_served_rows!(
       "workspace-read waiting decision option",
       decision["options"],
-      @workspace_waiting_decision_option_members
+      gate_members(
+        "workspace-read",
+        "WorkItemWaitingDecisionOption",
+        @workspace_waiting_decision_option_members
+      )
     )
   end
 
@@ -1361,6 +1387,43 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
     assert is_list(rows) and rows != [], "#{label}: the gate must serve at least one row"
     Enum.each(rows, &assert_served_members!(label, &1, members))
   end
+
+  # The member set a gate assertion walks: the definition's declared members
+  # from the contract bundle plus the frontend-read list the call passes. A
+  # schema-side rename (bundle side) and a serving-side rename or omission
+  # (either side) fail the same "stopped serving" message, so the assertion
+  # cannot stay green while the schema, the projection and the read sites
+  # disagree.
+  defp gate_members(read, definition, frontend_members) do
+    Enum.uniq(declared_members(read, definition) ++ frontend_members)
+  end
+
+  # The contract bundle's declared members for `definition` in `read`, its
+  # `oneOf` variants included (`WorkItemTimelineItem` declares its names in the
+  # variants, not in the parent body); `:root` names the read's own schema. The
+  # bundle is read at test time, so a rename inside it (e.g.
+  # `WorkspaceWorkItem.goal_id` -> `goal_ref`) fails the presence assertion
+  # until the served projection follows: the bundle comparison alone cannot
+  # refuse it, because the definitions are `additionalProperties: true` and an
+  # optional member may be absent.
+  defp declared_members(read, definition) do
+    schema = contract_bundle() |> Map.fetch!("#{read}.schema.json")
+
+    schema
+    |> definition_variants(definition)
+    |> Enum.flat_map(&Map.keys(Map.get(&1, "properties", %{})))
+    |> Enum.uniq()
+  end
+
+  defp definition_variants(schema, :root), do: [schema]
+
+  defp definition_variants(schema, definition) do
+    definition = Map.fetch!(schema["definitions"], definition)
+    [definition | Map.get(definition, "oneOf", [])]
+  end
+
+  defp contract_bundle,
+    do: @schema_bundle |> File.read!() |> Jason.decode!()
 
   # Claims the gate item's queued attempt for the runtime the gate registered:
   # that runtime is the only one assignment can select for this test's binding,

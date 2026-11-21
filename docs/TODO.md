@@ -495,6 +495,20 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       scope. Fix direction: sort by UTF-8 bytes (or code points) in both TypeScript encoders
       and pin a cross-language vector with a non-ASCII key in each layer's suite.
 
+## Deferred review findings (PR #145)
+
+- [ ] Consolidate the served-document gate helpers after the increment that owns
+      `control/test/support/**` (W1-12) has landed. `assert_served_members!/3`, `assert_served_rows!/3`,
+      `waiting_decision_payload/0`, the deterministic version-4 `uuid/1` and the bundle-derived
+      `gate_members/3`/`declared_members/2` are duplicated between
+      `control/test/symmetry_control_web/controllers/portal_resources_test.exs:1373-1426` and
+      `control/test/symmetry_control_web/controllers/portal_workflow_test.exs:1891-1943`. Each file
+      keeps its own copy because `control/test/support/**` was outside the gate increment's owned
+      files and a module defined in one test file would break a single-file run of the others, but
+      the copies can drift. Move them into `SymmetryControlWeb.ServedDocument` (the natural home for
+      the bundle-derived pair too) and have both gate files import them. Found by the adversarial
+      review of PR #145 (P3-2).
+
 ## Production Linux containment witness: stop-receipt barrier stall awaiting a diagnosable occurrence
 
 - [ ] Diagnose the next occurrence of the `daemon_sigkill_after_lease_arm_before_resume` barrier
