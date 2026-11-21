@@ -32,6 +32,7 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/harness/codex"
 	"github.com/wxxb789/symmetry/daemon/internal/harness/opencode"
 	"github.com/wxxb789/symmetry/daemon/internal/harness/pi"
+	"github.com/wxxb789/symmetry/daemon/internal/linuxpreflight"
 	"github.com/wxxb789/symmetry/daemon/internal/platform"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 	"github.com/wxxb789/symmetry/daemon/internal/state"
@@ -1189,8 +1190,8 @@ func readLinuxV2NativeWitnessFile(path string, owner linuxgate.OwnerConfig, deny
 	if err != nil {
 		return nil, errors.New("stat root-controlled fixture file")
 	}
-	identity, err := linuxFileIdentity(info)
-	if err != nil || !info.Mode().IsRegular() || identity.uid != 0 || identity.mode&0022 != 0 || info.Size() < 0 || info.Size() > linuxV2NativeWitnessRequestMax {
+	identity, err := linuxpreflight.FileIdentity(info)
+	if err != nil || !info.Mode().IsRegular() || identity.UID != 0 || identity.Mode&0022 != 0 || info.Size() < 0 || info.Size() > linuxV2NativeWitnessRequestMax {
 		return nil, errors.New("fixture file must be a bounded root-owned non-writable regular file")
 	}
 	if denyBRead {
@@ -1198,8 +1199,8 @@ func readLinuxV2NativeWitnessFile(path string, owner linuxgate.OwnerConfig, deny
 		if lookupErr != nil {
 			return nil, errors.New("lookup fixed B account for private request validation")
 		}
-		bSubject, subjectErr := linuxACLSubjectForAccount(bAccount)
-		if subjectErr != nil || verifyEffectiveLinuxAccess(path, bSubject, 0, 7) != nil {
+		bSubject, subjectErr := linuxpreflight.ACLSubjectForAccount(bAccount)
+		if subjectErr != nil || linuxpreflight.VerifyEffectiveAccess(path, bSubject, 0, 7) != nil {
 			return nil, errors.New("root-controlled claim/request fixture must be unreadable and unwritable by B")
 		}
 	}
@@ -1229,12 +1230,12 @@ func newLinuxV2NativeWitnessBarriers(request linuxV2NativeWitnessRequest, owner 
 	if err := verifyLinuxWitnessPathAncestors(filepath.Join(path, ".stage"), owner.AUID); err != nil {
 		return nil, fmt.Errorf("verify owner witness barrier parent chain: %w", err)
 	}
-	info, err := lstatCanonicalLinuxPath(path)
+	info, err := linuxpreflight.LstatCanonicalPath(path)
 	if err != nil {
 		return nil, fmt.Errorf("inspect witness barrier directory: %w", err)
 	}
-	identity, err := linuxFileIdentity(info)
-	if err != nil || !info.IsDir() || identity.uid != uint32(os.Geteuid()) || identity.mode&07777 != 0o700 {
+	identity, err := linuxpreflight.FileIdentity(info)
+	if err != nil || !info.IsDir() || identity.UID != uint32(os.Geteuid()) || identity.Mode&07777 != 0o700 {
 		return nil, errors.New("witness barrier directory must be A-owned mode 0700")
 	}
 	return &linuxV2NativeWitnessBarriers{
@@ -1353,9 +1354,9 @@ func (barrier *linuxV2NativeWitnessBarriers) waitRelease(ctx context.Context) er
 			if readErr != nil || statErr != nil || closeErr != nil || stat == nil || !stat.Mode().IsRegular() || string(contents) != "release\n" {
 				return errors.New("witness release marker is not the exact bounded root-controlled signal")
 			}
-			identity, identityErr := linuxFileIdentity(stat)
-			if identityErr != nil || (identity.uid != 0 && identity.uid != barrier.aUID) ||
-				identity.mode&0022 != 0 || string(contents) != "release\n" {
+			identity, identityErr := linuxpreflight.FileIdentity(stat)
+			if identityErr != nil || (identity.UID != 0 && identity.UID != barrier.aUID) ||
+				identity.Mode&0022 != 0 || string(contents) != "release\n" {
 				return errors.New("witness release marker is not the exact bounded root-controlled signal")
 			}
 			return nil
@@ -1781,12 +1782,12 @@ func verifyLinuxV2NativeWitnessHookRoot(path string, owner linuxgate.OwnerConfig
 	if err := validateLinuxV2NativeWitnessPath(path); err != nil {
 		return fmt.Errorf("native hook marker root is outside the owner witness root: %w", err)
 	}
-	info, err := lstatCanonicalLinuxPath(path)
+	info, err := linuxpreflight.LstatCanonicalPath(path)
 	if err != nil {
 		return fmt.Errorf("inspect native hook marker root: %w", err)
 	}
-	identity, err := linuxFileIdentity(info)
-	if err != nil || !info.IsDir() || identity.uid != owner.AUID || identity.gid != owner.BGID || identity.mode&07777 != 0o2770 {
+	identity, err := linuxpreflight.FileIdentity(info)
+	if err != nil || !info.IsDir() || identity.UID != owner.AUID || identity.GID != owner.BGID || identity.Mode&07777 != 0o2770 {
 		return errors.New("native hook marker root must be the isolated A-owned/B-group 2770 fixture directory")
 	}
 	return nil
@@ -2203,22 +2204,22 @@ func (witness *linuxV2NativeWitnessRun) refreshDetachedChildReaped() {
 }
 
 func verifyLinuxWitnessPathAncestors(path string, aUID uint32) error {
-	rootInfo, err := lstatCanonicalLinuxPath(linuxV2NativeOwnerWitnessRoot)
+	rootInfo, err := linuxpreflight.LstatCanonicalPath(linuxV2NativeOwnerWitnessRoot)
 	if err != nil {
 		return errors.New("fixed owner witness root is unavailable or not canonical")
 	}
-	rootIdentity, err := linuxFileIdentity(rootInfo)
-	if err != nil || !rootInfo.IsDir() || rootIdentity.uid != 0 || rootIdentity.mode&0022 != 0 {
+	rootIdentity, err := linuxpreflight.FileIdentity(rootInfo)
+	if err != nil || !rootInfo.IsDir() || rootIdentity.UID != 0 || rootIdentity.Mode&0022 != 0 {
 		return errors.New("fixed owner witness root must be root-owned and non-writable")
 	}
 	current := filepath.Dir(path)
 	for current != linuxV2NativeOwnerWitnessRoot {
-		info, statErr := lstatCanonicalLinuxPath(current)
+		info, statErr := linuxpreflight.LstatCanonicalPath(current)
 		if statErr != nil {
 			return errors.New("fixture parent directory is unavailable or not canonical")
 		}
-		identity, identityErr := linuxFileIdentity(info)
-		if identityErr != nil || !info.IsDir() || (identity.uid != 0 && identity.uid != aUID) || identity.mode&0022 != 0 {
+		identity, identityErr := linuxpreflight.FileIdentity(info)
+		if identityErr != nil || !info.IsDir() || (identity.UID != 0 && identity.UID != aUID) || identity.Mode&0022 != 0 {
 			return errors.New("fixture parent directory is not controlled by root or A")
 		}
 		parent := filepath.Dir(current)
@@ -2309,7 +2310,7 @@ func validateLinuxV2NativeWitnessInstalledOwner(owner linuxgate.OwnerConfig, uid
 	if owner.Validate() != nil {
 		return errors.New("trusted installed Linux A/B owner config is invalid")
 	}
-	return verifyLinuxOwnerIdentity(owner, uid, euid, gid, egid)
+	return linuxpreflight.VerifyOwnerIdentity(owner, uid, euid, gid, egid)
 }
 
 func verifyTrustedLinuxWitnessPiExtensionGroup(value config.Config, owner linuxgate.OwnerConfig) error {
@@ -2456,16 +2457,10 @@ func linuxV2NativeWitnessHoldSupported(stage string) bool {
 }
 
 func linuxV2NativeWitnessAckLossSupported(stage string) bool {
-	switch stage {
-	case execution.LinuxV2AckStageHelperBound, execution.LinuxV2AckStageLauncherBound,
-		execution.LinuxV2AckStageGateBound, execution.LinuxV2AckStageHandoffPrepared,
-		execution.LinuxV2AckStageHandoffCommitted, execution.LinuxV2AckStageLeaseArmed,
-		execution.LinuxV2AckStageCheckoutReady, execution.LinuxV2AckStageStopReceiptDurable,
-		execution.LinuxV2AckStageNativeRelease, execution.LinuxV2AckStageJournalCleared:
-		return true
-	default:
-		return false
-	}
+	// The ack-stage vocabulary is owned by execution; deriving membership from
+	// its single source keeps the witness request validation, the drop seam and
+	// the release acceptance from drifting apart.
+	return slices.Contains(execution.LinuxV2AckStages[:], stage)
 }
 
 func linuxV2NativeWitnessHelperDropSupported(operation string) bool {
@@ -2552,34 +2547,34 @@ func validateLinuxV2NativeWitnessStateDirectory(path string, owner linuxgate.Own
 	if err := validateLinuxV2NativeWitnessStateDirectoryPath(path, owner); err != nil {
 		return fmt.Errorf("validate installed owner witness StateDir: %w", err)
 	}
-	info, err := lstatCanonicalLinuxPath(path)
+	info, err := linuxpreflight.LstatCanonicalPath(path)
 	if err != nil {
 		return fmt.Errorf("inspect A-private owner witness StateDir: %w", err)
 	}
-	identity, err := linuxFileIdentity(info)
-	if err != nil || !info.IsDir() || identity.uid != owner.AUID || identity.gid != owner.AGID || identity.mode&07777 != 0o700 {
+	identity, err := linuxpreflight.FileIdentity(info)
+	if err != nil || !info.IsDir() || identity.UID != owner.AUID || identity.GID != owner.AGID || identity.Mode&07777 != 0o700 {
 		return errors.New("owner witness StateDir must be a private 0700 directory owned by A")
 	}
-	if err := verifyLinuxOwnerStateDirBinding(path, owner); err != nil {
+	if err := linuxpreflight.VerifyOwnerStateDirBinding(path, owner); err != nil {
 		return fmt.Errorf("pin StateDir to root-installed owner authority: %w", err)
 	}
-	accounts, err := verifyLinuxOwnerAccounts(owner)
+	accounts, err := linuxpreflight.VerifyOwnerAccounts(owner)
 	if err != nil {
 		return err
 	}
-	if err := verifyLinuxTrustedPathAncestors(path, owner.AUID, owner.AGID, &accounts.bSubject); err != nil {
+	if err := linuxpreflight.VerifyTrustedPathAncestors(path, owner.AUID, owner.AGID, &accounts.BSubject); err != nil {
 		return fmt.Errorf("verify owner witness StateDir ancestors before Store open: %w", err)
 	}
-	if err := verifyEffectiveLinuxAccess(path, accounts.aSubject, 7, 0); err != nil {
+	if err := linuxpreflight.VerifyEffectiveAccess(path, accounts.ASubject, 7, 0); err != nil {
 		return fmt.Errorf("A cannot manage owner witness StateDir before Store open: %w", err)
 	}
-	if err := verifyEffectiveLinuxAccess(path, accounts.bSubject, 0, 7); err != nil {
+	if err := linuxpreflight.VerifyEffectiveAccess(path, accounts.BSubject, 0, 7); err != nil {
 		return fmt.Errorf("fixed B can access owner witness StateDir before Store open: %w", err)
 	}
-	if err := verifyLinuxDefaultLinuxAccess(path, accounts.bSubject, 0, 7); err != nil {
+	if err := linuxpreflight.VerifyDefaultAccess(path, accounts.BSubject, 0, 7); err != nil {
 		return fmt.Errorf("future owner witness StateDir entries may be accessible to fixed B: %w", err)
 	}
-	if err := verifyLinuxNoUntrustedACLWrite(path, []uint32{0, owner.AUID}, []uint32{owner.AGID}, true); err != nil {
+	if err := linuxpreflight.VerifyNoUntrustedACLWrite(path, []uint32{0, owner.AUID}, []uint32{owner.AGID}, true); err != nil {
 		return fmt.Errorf("owner witness StateDir is changeable by an untrusted identity: %w", err)
 	}
 	return nil
@@ -2885,12 +2880,12 @@ func (witness *linuxV2NativeWitnessRun) verifyNativeExecutable(profile config.Ag
 	if !filepath.IsAbs(profile.Command) || filepath.Clean(profile.Command) != profile.Command {
 		return errors.New("owner witness native executable must be canonical and absolute")
 	}
-	info, err := lstatCanonicalLinuxPath(profile.Command)
+	info, err := linuxpreflight.LstatCanonicalPath(profile.Command)
 	if err != nil {
 		return fmt.Errorf("inspect pinned native executable: %w", err)
 	}
-	identity, err := linuxFileIdentity(info)
-	if err != nil || !info.Mode().IsRegular() || identity.uid != 0 || identity.mode&0022 != 0 || identity.links != 1 || identity.mode&0111 == 0 {
+	identity, err := linuxpreflight.FileIdentity(info)
+	if err != nil || !info.Mode().IsRegular() || identity.UID != 0 || identity.Mode&0022 != 0 || identity.Links != 1 || identity.Mode&0111 == 0 {
 		return errors.New("pinned native executable must be a single-link root-owned non-writable executable")
 	}
 	if kind == harness.KindPi && witness.config.Runtime.HarnessVersion != pi.TestedVersion {
@@ -2902,20 +2897,20 @@ func (witness *linuxV2NativeWitnessRun) verifyNativeExecutable(profile config.Ag
 	if kind == harness.KindCodex && witness.config.Runtime.HarnessVersion != codex.TestedVersion {
 		return errors.New("Codex owner witness requires the tested release")
 	}
-	accounts, err := verifyLinuxOwnerAccounts(witness.ownerConfig)
+	accounts, err := linuxpreflight.VerifyOwnerAccounts(witness.ownerConfig)
 	if err != nil {
 		return err
 	}
-	if err := verifyLinuxTrustedPathAncestors(profile.Command, 0, 0, &accounts.bSubject); err != nil {
+	if err := linuxpreflight.VerifyTrustedPathAncestors(profile.Command, 0, 0, &accounts.BSubject); err != nil {
 		return fmt.Errorf("native executable has an untrusted parent path: %w", err)
 	}
-	if err := verifyEffectiveLinuxAccess(profile.Command, accounts.aSubject, 5, 2); err != nil {
+	if err := linuxpreflight.VerifyEffectiveAccess(profile.Command, accounts.ASubject, 5, 2); err != nil {
 		return fmt.Errorf("A cannot execute the pinned native binary without modifying it: %w", err)
 	}
-	if err := verifyEffectiveLinuxAccess(profile.Command, accounts.bSubject, 5, 2); err != nil {
+	if err := linuxpreflight.VerifyEffectiveAccess(profile.Command, accounts.BSubject, 5, 2); err != nil {
 		return fmt.Errorf("B cannot execute/read the pinned native binary without modifying it: %w", err)
 	}
-	return verifyLinuxNoUntrustedACLWrite(profile.Command, []uint32{0, witness.ownerConfig.AUID}, []uint32{witness.ownerConfig.AGID}, true)
+	return linuxpreflight.VerifyNoUntrustedACLWrite(profile.Command, []uint32{0, witness.ownerConfig.AUID}, []uint32{witness.ownerConfig.AGID}, true)
 }
 
 func (witness *linuxV2NativeWitnessRun) prepareClone(

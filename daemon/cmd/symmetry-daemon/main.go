@@ -17,6 +17,7 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/app"
 	"github.com/wxxb789/symmetry/daemon/internal/authority"
 	"github.com/wxxb789/symmetry/daemon/internal/config"
+	"github.com/wxxb789/symmetry/daemon/internal/linuxpreflight"
 	"github.com/wxxb789/symmetry/daemon/internal/platform"
 	"github.com/wxxb789/symmetry/daemon/internal/state"
 )
@@ -252,16 +253,16 @@ func runConfiguredOwnerCommand(command string, args []string) error {
 	}
 	switch command {
 	case "-verify-legacy-owner-drained":
-		if err := app.VerifyLegacyLinuxOwnersDrained(value); err != nil {
+		if err := linuxpreflight.VerifyLegacyLinuxOwnersDrained(value); err != nil {
 			return err
 		}
 		fmt.Fprintln(os.Stdout, "legacy Linux owners are drained; pending Goal deliveries may remain")
 		return nil
 	case "-verify-linux-owner-install":
-		if err := app.VerifyLinuxOwnerInstallation(value); err != nil {
+		if err := linuxpreflight.VerifyLinuxOwnerInstallation(value); err != nil {
 			return err
 		}
-		fmt.Fprintln(os.Stdout, app.LinuxOwnerPreflightRuntimeBoundary)
+		fmt.Fprintln(os.Stdout, linuxpreflight.LinuxOwnerPreflightRuntimeBoundary)
 		return nil
 	case "-recover-containment-only":
 		if err := platform.EnsureLinuxChildSubreaper(); err != nil {

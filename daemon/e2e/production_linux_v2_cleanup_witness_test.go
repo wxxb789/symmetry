@@ -21,10 +21,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wxxb789/symmetry/daemon/internal/app"
 	"github.com/wxxb789/symmetry/daemon/internal/authority"
 	"github.com/wxxb789/symmetry/daemon/internal/config"
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
+	"github.com/wxxb789/symmetry/daemon/internal/linuxpreflight"
 	"github.com/wxxb789/symmetry/daemon/internal/platform"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 	"github.com/wxxb789/symmetry/daemon/internal/state"
@@ -211,7 +211,7 @@ func TestProductionLinuxV2CloneCleanupAuthenticatedScratch(t *testing.T) {
 	if value.Runtime.RepositoryResourceID == "" || bindingKey == "" {
 		t.Fatal("synthetic cleanup config lacks its exact repository resource or workspace binding")
 	}
-	if err := app.VerifyLinuxOwnerInstallation(value); err != nil {
+	if err := linuxpreflight.VerifyLinuxOwnerInstallation(value); err != nil {
 		t.Fatalf("installed owner/anchor/StateDir/workspace preflight failed: %v", err)
 	}
 	owner, err := linuxgate.ReadInstalledOwnerConfig()

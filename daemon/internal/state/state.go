@@ -39,6 +39,12 @@ const (
 	atomicTempPrefix       = ".symmetry-state-"
 )
 
+// GoalSessionUncertainReasonBytes is the durable budget for a Goal session's
+// uncertain reason. MarkGoalSessionUncertain and the goal-session read
+// validation both enforce it; callers that compose the reason from a cause
+// must bound the string they hand to the store to this budget.
+const GoalSessionUncertainReasonBytes = 4096
+
 const (
 	TerminalVerdictAccepted      = "accepted"
 	TerminalVerdictOwnershipLost = "ownership_lost"
@@ -732,7 +738,7 @@ type RunJournal struct {
 	PendingCommandAcknowledgements []protocol.CommandAcknowledgement `json:"pending_command_acknowledgements"`
 	PendingGoalDeliveries          []GoalDelivery                    `json:"pending_goal_deliveries,omitempty"`
 	DeliveredGoalDeliveries        []GoalDelivery                    `json:"delivered_goal_deliveries,omitempty"`
-	RetiredGoalDeliveries          []GoalDeliveryRetirement          `json:"retired_goal_deliveries,omitempty"`
+	RetiredGoalDeliveries          []goalDeliveryRetirement          `json:"retired_goal_deliveries,omitempty"`
 	GoalDeliveryEnabled            bool                              `json:"goal_delivery_enabled,omitempty"`
 	NativeUsageObservation         *NativeUsageObservation           `json:"native_usage_observation,omitempty"`
 	NativeUsageRecoveryRequired    bool                              `json:"native_usage_recovery_required,omitempty"`
@@ -910,7 +916,7 @@ func linuxCloneCleanupIntentFromJournal(journal RunJournal) (authority.LinuxClon
 	}
 	fenceBytes, err := json.Marshal(journal.Fence())
 	if err != nil {
-		return authority.LinuxCloneCleanupIntent{}, errors.New("encode Linux clone cleanup fence")
+		return authority.LinuxCloneCleanupIntent{}, fmt.Errorf("encode Linux clone cleanup fence: %w", err)
 	}
 	fenceHash := sha256.Sum256(fenceBytes)
 	cleanup := authority.LinuxCloneCleanupIntent{
@@ -1127,18 +1133,18 @@ func CommandAcknowledgementRetired(journal RunJournal) bool {
 	return journal.LocalState == "cleanup_pending" || (journal.LocalState == "terminal_pending" && IsConclusiveTerminalVerdict(journal.TerminalVerdict))
 }
 
-// NotFoundError distinguishes absent local durable state from malformed state.
-type NotFoundError struct {
+// notFoundError distinguishes absent local durable state from malformed state.
+type notFoundError struct {
 	Resource string
 }
 
-func (err *NotFoundError) Error() string {
+func (err *notFoundError) Error() string {
 	return err.Resource + " not found"
 }
 
 // IsNotFound reports whether err represents an absent state record.
 func IsNotFound(err error) bool {
-	var target *NotFoundError
+	var target *notFoundError
 	return errors.As(err, &target)
 }
 
@@ -1199,7 +1205,7 @@ func (store *Store) Close() error {
 	lock := store.lock
 	store.lock = nil
 	if err := releaseStoreLock(lock); err != nil {
-		return errors.New("release state directory lock")
+		return fmt.Errorf("release state directory lock: %w", err)
 	}
 	return nil
 }
@@ -1209,7 +1215,7 @@ func (store *Store) Close() error {
 func NewDaemonInstanceID() (string, error) {
 	var value [16]byte
 	if _, err := io.ReadFull(rand.Reader, value[:]); err != nil {
-		return "", errors.New("generate daemon instance ID")
+		return "", fmt.Errorf("generate daemon instance ID: %w", err)
 	}
 	value[6] = (value[6] & 0x0f) | 0x40
 	value[8] = (value[8] & 0x3f) | 0x80
@@ -1221,7 +1227,7 @@ func NewDaemonInstanceID() (string, error) {
 func NewMachineToken() (string, error) {
 	value := make([]byte, 32)
 	if _, err := io.ReadFull(rand.Reader, value); err != nil {
-		return "", errors.New("generate machine token")
+		return "", fmt.Errorf("generate machine token: %w", err)
 	}
 	return base64.RawURLEncoding.EncodeToString(value), nil
 }
@@ -1267,13 +1273,13 @@ func (store *Store) DeleteEnrollmentIntent() error {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
-		return errors.New("remove enrollment intent")
+		return fmt.Errorf("remove enrollment intent: %w", err)
 	}
 	return syncDirectory(store.dir)
 }
 
 // LoadIdentity returns the enrolled machine credentials. An absent enrollment
-// returns a typed NotFoundError.
+// returns a typed not-found error.
 func (store *Store) LoadIdentity() (MachineIdentity, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -2311,9 +2317,9 @@ func (store *Store) DeleteJournal(key RunKey) error {
 	}
 	if err := os.Remove(store.journalPath(key)); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return &NotFoundError{Resource: "run journal"}
+			return &notFoundError{Resource: "run journal"}
 		}
-		return errors.New("delete run journal")
+		return fmt.Errorf("delete run journal: %w", err)
 	}
 	return syncDirectory(store.runsDir())
 }
@@ -2332,7 +2338,7 @@ func (store *Store) ListJournals() ([]RunJournal, error) {
 func (store *Store) listJournalsLocked(cleanOwnedTemps bool) ([]RunJournal, error) {
 	entries, err := os.ReadDir(store.runsDir())
 	if err != nil {
-		return nil, errors.New("list run journal directory")
+		return nil, fmt.Errorf("list run journal directory: %w", err)
 	}
 	if cleanOwnedTemps {
 		if err := store.removeOwnedTempsLocked(entries); err != nil {
@@ -2362,7 +2368,7 @@ func (store *Store) listJournalsLocked(cleanOwnedTemps bool) ([]RunJournal, erro
 func (store *Store) forEachJournalLocked(visit func(RunJournal) error) error {
 	directory, err := os.Open(store.runsDir())
 	if err != nil {
-		return errors.New("list run journal directory")
+		return fmt.Errorf("list run journal directory: %w", err)
 	}
 	defer directory.Close()
 	for {
@@ -2383,7 +2389,7 @@ func (store *Store) forEachJournalLocked(visit func(RunJournal) error) error {
 			return nil
 		}
 		if readErr != nil {
-			return errors.New("list run journal directory")
+			return fmt.Errorf("list run journal directory: %w", readErr)
 		}
 	}
 }
@@ -5301,7 +5307,10 @@ func (store *Store) saveJournalLocked(journal RunJournal) error {
 		return err
 	}
 	data, err := serializeRunJournal(journal)
-	if err != nil || len(data) > maxJournalFileBytes {
+	if err != nil {
+		return fmt.Errorf("serialize run journal: %w", err)
+	}
+	if len(data) > maxJournalFileBytes {
 		return ErrProviderActionCapacity
 	}
 	writer := store.atomicWrite
@@ -5309,7 +5318,7 @@ func (store *Store) saveJournalLocked(journal RunJournal) error {
 		writer = writeAtomic
 	}
 	if err := writer(store.journalPath(journal.Key()), data); err != nil {
-		return errors.New("write run journal")
+		return fmt.Errorf("write run journal: %w", err)
 	}
 	return nil
 }
@@ -5337,9 +5346,9 @@ func (store *Store) readJSONWithLimitAndTags(path string, resource string, desti
 	data, err := readLimited(path, limit)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return &NotFoundError{Resource: resource}
+			return &notFoundError{Resource: resource}
 		}
-		return errors.New("read " + resource)
+		return fmt.Errorf("read %s: %w", resource, err)
 	}
 	return decodeJSONWithLimitAndTags(data, resource, destination, limit, rootType)
 }
@@ -5349,7 +5358,7 @@ func decodeJSONWithLimitAndTags(data []byte, resource string, destination any, l
 		return errors.New("read " + resource)
 	}
 	if err := protocol.RejectDuplicateJSONMembers(data); err != nil {
-		return errors.New("decode " + resource)
+		return fmt.Errorf("decode %s: %w", resource, err)
 	}
 	if rootType != nil && rejectCaseInsensitiveJSONTagAliases(data, rootType) != nil {
 		return errors.New("decode " + resource)
@@ -5357,10 +5366,13 @@ func decodeJSONWithLimitAndTags(data []byte, resource string, destination any, l
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(destination); err != nil {
-		return errors.New("decode " + resource)
+		return fmt.Errorf("decode %s: %w", resource, err)
 	}
 	var extra any
 	if err := decoder.Decode(&extra); err != io.EOF {
+		if err != nil {
+			return fmt.Errorf("decode %s: %w", resource, err)
+		}
 		return errors.New("decode " + resource)
 	}
 	return nil
@@ -5381,6 +5393,9 @@ func rejectCaseInsensitiveJSONTagAliases(data []byte, rootType reflect.Type) err
 	}
 	var extra any
 	if err := decoder.Decode(&extra); err != io.EOF {
+		if err != nil {
+			return fmt.Errorf("trailing JSON data: %w", err)
+		}
 		return errors.New("trailing JSON data")
 	}
 	return rejectJSONTagAliases(value, rootType)
@@ -5475,7 +5490,10 @@ func (store *Store) writeJSON(path string, value any, resource string) error {
 
 func (store *Store) writeJSONWithLimit(path string, value any, resource string, limit int) error {
 	data, err := json.Marshal(value)
-	if err != nil || len(data) > limit {
+	if err != nil {
+		return fmt.Errorf("encode %s: %w", resource, err)
+	}
+	if len(data) > limit {
 		return errors.New("encode " + resource)
 	}
 	writer := store.atomicWrite
@@ -5483,7 +5501,7 @@ func (store *Store) writeJSONWithLimit(path string, value any, resource string, 
 		writer = writeAtomic
 	}
 	if err := writer(path, data); err != nil {
-		return errors.New("write " + resource)
+		return fmt.Errorf("write %s: %w", resource, err)
 	}
 	return nil
 }
@@ -5511,7 +5529,7 @@ func (store *Store) removeOwnedTempsLocked(entries []os.DirEntry) error {
 			continue
 		}
 		if err := os.Remove(filepath.Join(store.runsDir(), entry.Name())); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return errors.New("remove run journal temporary file")
+			return fmt.Errorf("remove run journal temporary file: %w", err)
 		}
 	}
 	return nil
@@ -6360,7 +6378,7 @@ func validTerminalState(journal RunJournal) bool {
 func terminalTaskResultKind(payload json.RawMessage) (protocol.TaskResultKind, error) {
 	var envelope map[string]json.RawMessage
 	if err := json.Unmarshal(payload, &envelope); err != nil {
-		return "", errors.New("completed terminal payload is invalid")
+		return "", fmt.Errorf("completed terminal payload is invalid: %w", err)
 	}
 	rawResult, present := envelope["task_result"]
 	if !present {
@@ -6369,7 +6387,10 @@ func terminalTaskResultKind(payload json.RawMessage) (protocol.TaskResultKind, e
 	var result struct {
 		Kind protocol.TaskResultKind `json:"kind"`
 	}
-	if err := json.Unmarshal(rawResult, &result); err != nil || !validTaskResultKind(result.Kind) {
+	if err := json.Unmarshal(rawResult, &result); err != nil {
+		return "", fmt.Errorf("completed terminal task result kind is invalid: %w", err)
+	}
+	if !validTaskResultKind(result.Kind) {
 		return "", errors.New("completed terminal task result kind is invalid")
 	}
 	return result.Kind, nil

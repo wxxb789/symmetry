@@ -17,7 +17,7 @@ defmodule SymmetryControl.NativeHarnessKindBindingTest do
   attribute gate, while a kind outside the vocabulary is refused by both.
   """
 
-  use SymmetryControl.DataCase, async: false
+  use SymmetryControl.DataCase, async: true
 
   alias SymmetryControl.Goals
   alias SymmetryControl.Goals.HarnessSession

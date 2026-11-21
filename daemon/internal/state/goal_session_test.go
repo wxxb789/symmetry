@@ -343,7 +343,7 @@ func TestGoalSessionLineageBlocksCrossGenerationButAllowsIndependentWorkItem(t *
 	if err != nil {
 		t.Fatalf("CheckGoalSessionLineage() error = %v", err)
 	}
-	if !status.BlocksNewLaunch() || status.State != GoalSessionLineageStateUncertain || len(status.SessionKeys) != 1 || status.SessionKeys[0] != first.Key() {
+	if !status.BlocksNewLaunch() || status.State != goalSessionLineageStateUncertain || len(status.SessionKeys) != 1 || status.SessionKeys[0] != first.Key() {
 		t.Fatalf("lineage status = %#v", status)
 	}
 
@@ -401,7 +401,7 @@ func TestGoalSessionLineageReleasesOnlyAfterExplicitKnownStopAcrossRestart(t *te
 	if err != nil {
 		t.Fatalf("CheckGoalSessionLineage() after restart error = %v", err)
 	}
-	if !status.BlocksNewLaunch() || status.State != GoalSessionLineageStateUncertain {
+	if !status.BlocksNewLaunch() || status.State != goalSessionLineageStateUncertain {
 		t.Fatalf("restarted lineage status = %#v", status)
 	}
 
@@ -426,7 +426,7 @@ func TestGoalSessionLineageReleasesOnlyAfterExplicitKnownStopAcrossRestart(t *te
 	if err != nil {
 		t.Fatalf("CheckGoalSessionLineage() after known stop error = %v", err)
 	}
-	if status.BlocksNewLaunch() || status.State != GoalSessionLineageStateFree || len(status.SessionKeys) != 0 {
+	if status.BlocksNewLaunch() || status.State != goalSessionLineageStateFree || len(status.SessionKeys) != 0 {
 		t.Fatalf("lineage remained blocked after known stop: %#v", status)
 	}
 	if saved, err := restarted.SaveGoalSessionLaunchIntent(retry); err != nil {
@@ -454,7 +454,7 @@ func TestGoalSessionLineageAttachedStateReleasesOnlyAfterClose(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CheckGoalSessionLineage() attached error = %v", err)
 	}
-	if !status.BlocksNewLaunch() || status.State != GoalSessionLineageStateAttached {
+	if !status.BlocksNewLaunch() || status.State != goalSessionLineageStateAttached {
 		t.Fatalf("attached lineage status = %#v", status)
 	}
 	retry := intent
@@ -472,7 +472,7 @@ func TestGoalSessionLineageAttachedStateReleasesOnlyAfterClose(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CheckGoalSessionLineage() closed error = %v", err)
 	}
-	if status.BlocksNewLaunch() || status.State != GoalSessionLineageStateFree {
+	if status.BlocksNewLaunch() || status.State != goalSessionLineageStateFree {
 		t.Fatalf("closed lineage status = %#v", status)
 	}
 }
@@ -506,7 +506,7 @@ func TestGoalSessionLineageDirtyIndexRebuildsFromJournal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CheckGoalSessionLineage() error = %v", err)
 	}
-	if !status.BlocksNewLaunch() || status.State != GoalSessionLineageStateUncertain || len(status.SessionKeys) != 1 || status.SessionKeys[0] != saved.Key() {
+	if !status.BlocksNewLaunch() || status.State != goalSessionLineageStateUncertain || len(status.SessionKeys) != 1 || status.SessionKeys[0] != saved.Key() {
 		t.Fatalf("rebuilt lineage status = %#v", status)
 	}
 	clean, err := store.loadGoalSessionLineageIndexLocked(intent.LineageKey())
@@ -588,7 +588,7 @@ func TestGoalSessionJournalCommitSurvivesLineageIndexRefreshFailure(t *testing.T
 	if err != nil {
 		t.Fatalf("CheckGoalSessionLineage() after failed refresh error = %v", err)
 	}
-	if !status.BlocksNewLaunch() || status.State != GoalSessionLineageStateUncertain {
+	if !status.BlocksNewLaunch() || status.State != goalSessionLineageStateUncertain {
 		t.Fatalf("rebuilt status after failed refresh = %#v", status)
 	}
 }
@@ -1026,7 +1026,7 @@ func TestRebindGoalSessionForResumeConsumesExactStoppedAttachment(t *testing.T) 
 	if err != nil {
 		t.Fatalf("CheckGoalSessionLineage() for resume task error = %v", err)
 	}
-	if !newLineage.BlocksNewLaunch() || newLineage.State != GoalSessionLineageStateAttached {
+	if !newLineage.BlocksNewLaunch() || newLineage.State != goalSessionLineageStateAttached {
 		t.Fatalf("resume task lineage was not durably blocked: %#v", newLineage)
 	}
 
@@ -2031,7 +2031,7 @@ func TestGoalSessionValidatorFirstErrorStringsArePinned(t *testing.T) {
 		journal.LaunchAttemptedAt = attemptedAt
 		journal.NativeSessionID = "native-session-1"
 	}
-	lineageAttachment := GoalSessionControlAttachment{
+	lineageAttachment := goalSessionControlAttachmentRecord{
 		RunID: "run-1", Generation: 1, TaskID: "task-1", AdmissionID: "admission-1",
 		SessionID: lineageSessionID, BindingID: bindingID, ReceiptID: controlReceiptID,
 	}
@@ -2153,7 +2153,7 @@ func TestGoalSessionValidatorFirstErrorStringsArePinned(t *testing.T) {
 		{
 			name: "control attachment lineage is malformed",
 			mutate: func(journal *GoalSessionJournal) {
-				journal.ControlAttachmentLineage = &GoalSessionControlAttachmentLineage{}
+				journal.ControlAttachmentLineage = &goalSessionControlAttachmentLineage{}
 			},
 			want: "goal session control attachment lineage is invalid",
 		},
@@ -2164,7 +2164,7 @@ func TestGoalSessionValidatorFirstErrorStringsArePinned(t *testing.T) {
 				journal.ControlSessionID = controlSessionID
 				journal.BindingID = bindingID
 				journal.ControlAttachmentReceiptID = controlReceiptID
-				journal.ControlAttachmentLineage = &GoalSessionControlAttachmentLineage{Original: lineageAttachment, Current: lineageAttachment}
+				journal.ControlAttachmentLineage = &goalSessionControlAttachmentLineage{Original: lineageAttachment, Current: lineageAttachment}
 			},
 			want: "goal session control attachment lineage is invalid",
 		},
@@ -2176,7 +2176,7 @@ func TestGoalSessionValidatorFirstErrorStringsArePinned(t *testing.T) {
 		{
 			name: "consumed stop receipt history is empty",
 			mutate: func(journal *GoalSessionJournal) {
-				journal.ConsumedStopCertificates = &GoalSessionConsumedStopCertificateHistory{}
+				journal.ConsumedStopCertificates = &goalSessionConsumedStopCertificateHistory{}
 			},
 			want: "goal session consumed stop receipt history is invalid",
 		},
@@ -2184,7 +2184,7 @@ func TestGoalSessionValidatorFirstErrorStringsArePinned(t *testing.T) {
 			name: "resume source receipt missing from consumed history",
 			mutate: func(journal *GoalSessionJournal) {
 				journal.ResumeSourceStopCertificate = &sourceCertificate
-				journal.ConsumedStopCertificates = &GoalSessionConsumedStopCertificateHistory{Certificates: []GoalSessionStopCertificate{otherCertificate}}
+				journal.ConsumedStopCertificates = &goalSessionConsumedStopCertificateHistory{Certificates: []GoalSessionStopCertificate{otherCertificate}}
 			},
 			want: "goal session resume source receipt history is invalid",
 		},
@@ -2225,4 +2225,212 @@ func TestGoalSessionValidatorFirstErrorStringsArePinned(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestJournalWireShape pins the exact top-level JSON key set of the three
+// durable journal documents against literal lists: the Elixir Pi e2e harness
+// and the native-evidence CI script read these keys by literal name.
+func TestJournalWireShape(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		value any
+		keys  []string
+	}{
+		{
+			name:  "run journal",
+			value: RunJournal{},
+			keys: []string{
+				"attempted_transition_ids",
+				"claim_id",
+				"claimed_runtime_epoch",
+				"containment_authority",
+				"containment_cgroup",
+				"containment_cgroup_pre_gate_release_proof",
+				"containment_cgroup_release_proof",
+				"containment_handoff",
+				"containment_scans",
+				"containment_unproven",
+				"control_command_intents",
+				"delivered_goal_deliveries",
+				"dropped_output_bytes",
+				"dropped_output_chunks",
+				"generation",
+				"goal_delivery_enabled",
+				"input_command_intent",
+				"last_event_sequence",
+				"lease_expires_at",
+				"lease_token",
+				"linux_clone_abort_pending",
+				"linux_clone_abort_proof",
+				"linux_clone_checkout_receipt",
+				"linux_clone_cleanup_intent",
+				"linux_clone_cleanup_pending",
+				"linux_clone_cleanup_proof",
+				"linux_clone_intent",
+				"linux_clone_promotion_intent",
+				"linux_clone_promotion_receipt",
+				"linux_clone_reuse_aborted_before_native_start",
+				"linux_clone_reuse_grant",
+				"linux_clone_reuse_retired",
+				"linux_clone_seed_receipt",
+				"linux_clone_target_removal_proof",
+				"local_state",
+				"native_usage_observation",
+				"native_usage_recovery_required",
+				"native_usage_terminal_recovery",
+				"pending_command_acknowledgements",
+				"pending_events",
+				"pending_goal_deliveries",
+				"pending_transitions",
+				"pid",
+				"process_identity",
+				"provider_action_intents",
+				"retain_workspace",
+				"retired_goal_deliveries",
+				"run_id",
+				"runtime_id",
+				"runtime_key",
+				"started_at",
+				"terminal_command_digest",
+				"terminal_intent_digest",
+				"terminal_pending_at",
+				"terminal_resolved_at",
+				"terminal_settlement_digest",
+				"terminal_state",
+				"terminal_task_result_kind",
+				"terminal_verdict",
+				"work",
+				"workspace_binding_key",
+				"workspace_path",
+				"workspace_recovery_required",
+			},
+		},
+		{
+			name:  "goal session journal",
+			value: GoalSessionJournal{},
+			keys: []string{
+				"adapter_protocol_version",
+				"adapter_version",
+				"admission_id",
+				"binding_id",
+				"consumed_stop_certificates",
+				"control_attachment_lineage",
+				"control_attachment_receipt_id",
+				"control_session_id",
+				"created_at",
+				"daemon_instance_id",
+				"generation",
+				"goal_id",
+				"goal_revision",
+				"handoff_source_run_id",
+				"harness_kind",
+				"harness_version",
+				"launch_attempted",
+				"launch_attempted_at",
+				"launch_intent_id",
+				"launch_state",
+				"local_handle_id",
+				"machine_id",
+				"native_session_filename",
+				"native_session_id",
+				"owner_id",
+				"recovery_required",
+				"repository_resource_id",
+				"resume_native_stop_known",
+				"resume_source_stop_certificate",
+				"resume_start_pending",
+				"resume_terminal_reason",
+				"run_id",
+				"runtime_epoch",
+				"runtime_id",
+				"schema_version",
+				"session_mode",
+				"session_state",
+				"stop_certificate",
+				"task_id",
+				"uncertain_reason",
+				"updated_at",
+				"work_item_id",
+				"workspace_fingerprint",
+				"workspace_owner_run_key",
+				"workspace_path",
+			},
+		},
+		{
+			name:  "late goal usage ledger",
+			value: lateGoalUsageLedger{},
+			keys: []string{
+				"created_at",
+				"delivered_deliveries",
+				"fence",
+				"generation",
+				"pending_usage_deliveries",
+				"retired_deliveries",
+				"run_id",
+				"schema_version",
+				"updated_at",
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			raw, err := json.Marshal(test.value)
+			if err != nil {
+				t.Fatalf("json.Marshal() error = %v", err)
+			}
+			var document map[string]json.RawMessage
+			if err := json.Unmarshal(raw, &document); err != nil {
+				t.Fatalf("json.Unmarshal() error = %v", err)
+			}
+			pinned := make(map[string]struct{}, len(test.keys))
+			for _, key := range test.keys {
+				pinned[key] = struct{}{}
+			}
+			for key := range document {
+				if _, ok := pinned[key]; !ok {
+					t.Errorf("marshaled document carries %q, not in the pinned wire contract", key)
+				}
+			}
+			emitted := make(map[string]struct{}, len(test.keys))
+			for _, name := range journalJSONFieldNames(reflect.TypeOf(test.value)) {
+				emitted[name] = struct{}{}
+			}
+			for _, key := range test.keys {
+				if _, ok := emitted[key]; !ok {
+					t.Errorf("pinned wire key %q is no longer emitted", key)
+				}
+			}
+			for name := range emitted {
+				if _, ok := pinned[name]; !ok {
+					t.Errorf("struct field emits %q, not in the pinned wire contract", name)
+				}
+			}
+		})
+	}
+}
+
+func journalJSONFieldNames(typ reflect.Type) []string {
+	names := make([]string, 0, typ.NumField())
+	for index := range typ.NumField() {
+		field := typ.Field(index)
+		tag, tagged := field.Tag.Lookup("json")
+		if field.Anonymous && !tagged {
+			names = append(names, journalJSONFieldNames(field.Type)...)
+			continue
+		}
+		name := field.Name
+		if tagged {
+			name = strings.Split(tag, ",")[0]
+			if name == "-" {
+				continue
+			}
+			if name == "" {
+				name = field.Name
+			}
+		}
+		names = append(names, name)
+	}
+	return names
 }

@@ -31,25 +31,24 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       file set; reproduction is the three `deadcode` runs plus the baseline-scoped grep, as
       recorded in the plan.
 
-- [ ] Revalidate and remove the daemon surfaces that are unreachable from both mains but still
-      referenced, so no deletion is possible without retargeting a caller (2026-11-21, same
-      branch and plan). Three groups were surveyed; only the first, below, is dead-code material
-      — the other two are live — do not remove (decision note below).
-      **In the three-target `deadcode -test` intersection and referenced:**
-      `control.NewOperatorClient` (`client.go:485`) with `SubmitTask`/`GetTask`/
-      `CreateTaskCommand`/`operatorRequest`/`operatorRequestWithStatus` and
-      `control.WithMaxResponseBytes` (`:99`) — callers `daemon/e2e/core_test.go:696`,
-      `e2e/production_linux_containment_witness_test.go:2046`, the control tests, and
-      `app/pi_provider_bridge_test.go:409` (the oversized-response case of the live `NewClient`);
-      the seven legacy task validators in `daemon/internal/control/validation.go`
-      (`:209/:281/:302/:334/:441/:611/:629`) — reached from
-      `daemon/internal/control/client.go:992,:1007,:1022,:1034` (inside the dead operator client),
-      from sibling validators (`validation.go:230,:239,:253,:306`), and from
-      `daemon/internal/control/supervisory_validation_test.go:39,:48,:55,:125,:129,:148,:152`;
-      the `protocol.Task`/`TaskWaiting` v1 decoders (65 and 8 references, 37 in
-      `e2e/core_test.go`); and `harness.NewClaudeAdapterWithRunner` (`registry.go:181`, three test
-      files). Removing any of them needs an owner for `daemon/e2e/**` and the app/control test
-      seams — the W2-12 follow-up is that owner (program plan §4).
+- [ ] Revalidate and remove `harness.NewClaudeAdapterWithRunner` (three test files), the residual
+      of the 2026-11-21 W1-06 daemon dead-code survey (branch
+      `refactor/rf-w1-06-daemon-deadcode`, plan
+      `docs/plans/2026-11-21-w1-06-daemon-deadcode-plan.md`). The survey's other
+      unreachable-but-referenced, in-intersection surfaces were dispositioned by the W2-12b
+      relocation (branch `refactor/rf-w2-12b-operator-client-relocation`, plan
+      `docs/plans/2026-11-21-rf-w2-12b-operator-client-relocation-plan.md`): the operator client,
+      its five methods, the seven operator-exclusive task validators of
+      `daemon/internal/control/validation.go` and the v1 task decoders now live in
+      the e2e-owned `daemon/e2e/internal/operator/` package beside their only callers; six
+      declarations of the relocated set differ from their originals only by the sanctioned package
+      qualifiers, the rest byte-identical. The closed
+      part is recorded in `docs/archive/CLOSED-TODO.md` under `## Dead-code candidates`.
+      `control.WithMaxResponseBytes` stays in `control` by that slice's binding amendment (its
+      callers are the machine-client and PI-bridge tests). This residual belongs to the
+      probe/registry dedup (W3-04), not to a deletion pass: its shadowed root-probe siblings are
+      main-reachable through `NewCodexAdapter`/`NewClaudeAdapter`. The two live groups of the same
+      survey stay covered by the decision note below.
 
 - live — do not remove (decision note, 2026-11-21, same branch and plan): the two remaining
       groups of that survey are production-live surfaces that no deletion pass may touch.
@@ -567,8 +566,8 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       `:1174-1184`), every v2 removal receipt must carry such a proof
       (`StopReceipt.ValidForHandoff`, `authority.go:1822-1833`), and the platform constructs it
       (`daemon/internal/platform/anchor_run.go:1531`; validated at
-      `daemon/internal/execution/linux_owner_v2_linux.go:1338` and sealed into the mirror proof
-      at `:1360`); `authority.go:2027` also accepts a non-nil `LauncherExit.HelperExit`.
+      `daemon/internal/execution/linux_owner_v2_linux.go:1351` and sealed into the mirror proof
+      at `:1373`); `authority.go:2027` also accepts a non-nil `LauncherExit.HelperExit`.
       `cloneLinuxOwnerHelperV2StopEvidence` (`helper_v2_stop.go:1540-1573`) instead drops every
       nested exit it copies through `cloneLinuxOwnerAnchorExitProof`
       (`anchor_server.go:44-49` nils `HelperExit`): `Proof.LauncherExit.HelperExit`,
@@ -716,11 +715,12 @@ witness: stop-receipt barrier stall awaiting a diagnosable occurrence", closed 2
 `e9c457d8`) latched owner loss at every `enterRecovery` entry; the review of that fix (PR #185
 round 1) left two paths open here.
 
-- [ ] Close the same sticky-refusal class for the lease-expiry arm. `runLinuxSupervisorHelperLoop`
-      still computes `ownerLostStop` from `ownerLostLatched || channelClosedV2(watchdog.ownerLost())`
-      (`daemon/internal/platform/supervisor_linux_helper.go:838`) and the lease-expiry arm
-      (`:978-993`) calls `stop()` without `enterRecovery`; if the owner dies or wedges as the lease
-      expires and that timer arm wins the `select` before the control-EOF event, the final
+- [ ] Close the same sticky-refusal class for the lease-expiry arm. `ownerLostStop` in
+      `(*linuxSupervisorSession).runStop` is still computed from `ownerLostLatched ||
+      channelClosedV2(watchdog.ownerLost())` (`supervisor_session.go`); the lease-expiry arm of
+      `(*linuxSupervisorSession).runHelperLoop` calls `session.stop()` without `enterRecovery`. If
+      the owner dies or wedges as the lease expires and that timer arm wins the `select` before the
+      control-EOF event, the final
       descendant scan persists over the dead metadata transport, the failure latches the sticky
       `descendantScanLost` (`process_unix.go`, the final-scan block and the monitor's
       `pre_scan_ack_failure` path), and every later stop is refused exactly as in CI 44876100236.
@@ -849,8 +849,8 @@ instead of appended.
       process's pipe, so the goroutine outlives the call, belongs to no WaitGroup, and contradicts
       `daemon/AGENTS.md` ("Every goroutine has an owner and exit path"). Found by the 2026-11-21
       daemon audit (finding F15). Fix direction: prefer the context-aware write path the runner
-      already implements -- `internal/execution/runner.go:1380` `WriteInputContext` closes the stdin
-      write end when its context is cancelled (`:1410-1414`) -- which `internal/app` cannot reach
+      already implements -- `internal/execution/runner.go:1400` `WriteInputContext` closes the stdin
+      write end when its context is cancelled (`:1430-1434`) -- which `internal/app` cannot reach
       today only because its `Process` interface (`app.go:232-233`) declares `WriteInput([]byte)
       error` alone; otherwise close the pipe's write end on timeout (the runner owns the pipe), or
       track the goroutine in `daemon.workers` with a documented bound and assert its exit at
@@ -913,6 +913,41 @@ instead of appended.
       `authenticate/1` plus the auth-bearing callback arity, then delete the six provider wrappers
       and the three `Support` delegators, as a separately authorized change; `integrations.ex:690`
       already short-circuits a nil `pull_request_url`.
+
+## Deferred review findings (PR #198)
+
+- [ ] Cover the linux-gate wire validations no test kills (2026-11-21, branch
+      `refactor/rf-w4-20-linux-gate-protocol-split`; found by the Opus review of PR #198, which is a
+      pure move and kept them byte-identical). Single-point mutants of
+      `daemon/native/linux-gate/protocol/wire.go` survive the whole package suite at base and HEAD
+      for: `DecodeLaunchResult`'s `OwnerPID <= 1` and `UserNSInode == 0` checks, `readWireString`'s
+      NUL check and `maxCommandString` bound, the receipt generation upper bound and minimum length,
+      and `encodeGuardedRelease`'s body and grant bounds. The generation and minimum-length checks may
+      be shadowed by later reads or `receipt.Validate`; the rest are real gaps. Add one rejection test
+      per check in a separate maintenance slice.
+- [ ] `scripts/ci/linux-v2-native-acceptance.sh:1490` pins
+      `TestInstalledLinuxOwnerRejectsUnexpectedCgroupKillFD`, which no Go file defines (base and
+      HEAD); owner: the acceptance-script maintainer — restore the test or drop the pin.
+
+## Deferred review findings (PR #205)
+
+- [ ] STD-A09 from the Opus review of PR #205 (2026-11-21, branch
+      `refactor/rf-w4-14-browser-fixtures`): the merged #188 test-observability code loses the
+      `(partial)` label on a timeout-truncated package once any test in that package failed.
+      `scripts/ci/go-test-durations.py:213` computes
+      `unexplained = [package for package in failed_packages if not any(key[0] == package for key in failed)]`,
+      so a package that has a failed test counts as fully explained even when its stream is cut
+      off by a timeout before the remaining tests ran. The step is `continue-on-error` today, so
+      there is no gate impact, but the W2-01/W6-12 follow-up that flips the thresholds to blocking
+      must fix the partial-run detection first.
+- [ ] The merged W2-01 plan (`docs/plans/2026-11-21-rf-w2-01-ci-test-observability-plan.md:363`)
+      misstates the run: it records the checks as run "with the pinned ruff 0.17.6", which
+      `pyproject.toml:6` `required-version = "==0.17.5"` makes impossible (the config refuses any
+      other version, exit 2). The real conflict (`pyproject.toml` `==0.17.5` vs `ci.yml:1707`
+      `ruff_version='0.17.6'`) is already tracked above
+      (`## scripts/ci ruff baseline: drop the #137 exclude and keep the gate's ruff version pinned`,
+      `docs/TODO.md:901`); this entry only records the misstatement in the merged evidence plan
+      (found by the Opus review of PR #205).
 
 ## Harness shared-scaffolding deferrals (rf-w2-13, PR #155)
 
@@ -1060,11 +1095,11 @@ instead of appended.
       untested (2026-11-21, branch `refactor/rf-w4-03-runner-decomposition`; plan
       `docs/plans/2026-11-21-rf-w4-03-runner-decomposition-plan.md`). Two mutants on a scratch
       copy over `./internal/execution/` stayed green under WSL: flipping the `closeOwnerOnce(false)`
-      argument in `closeContainmentOwnerLocked` (`daemon/internal/execution/runner.go:2393`) to
+      argument in `closeContainmentOwnerLocked` (`daemon/internal/execution/runner.go:2413`) to
       `true` — no test distinguishes the flag, and the pending-handoff owner does not implement
       `containmentUnprovenCallbackSetter`, so a future edit could flip it silently — and swapping
       the `containmentAuthorityUncertain` / `containmentAuthority != nil` guards in
-      `persistReceiptOrAbort` (`:2143`, `:2146`), whose check order is the base order
+      `persistReceiptOrAbort` (`:2163`, `:2166`), whose check order is the base order
       (pre-existing gap: base had the same untested order). Behaviour is correct at HEAD; this is
       test coverage only, no code change. Found by the opus round-1 review of PR #193. Owner:
       W4-12/W4-13 test work.
@@ -1096,3 +1131,156 @@ instead of appended.
       `IntentContext.goal_lock/2` (`:1152-1164`) now encodes once — but returns the claim-scope
       shape rather than the intent-context map, so the slice left it; folding it must keep the
       lock-order case `:400` and the advisory-lock case `:2092` green.
+
+## Deferred review findings (PR #195)
+
+- [ ] Drop the host path from `TestPinnedNativeTranscript`'s fixture comparison before the next OmO
+      fixture re-record (2026-11-21, PR #195, branch `fix/ci-evidence-host-paths`). PR #195 removed
+      the committed executable path from `scripts/ci/omo-native-evidence.py`: `PINS[platform]` keeps
+      only `size` and `sha256`, and the operator names the file in `SYMMETRY_OMO_BINARY`, so a
+      receipt written by the updated witness carries `binary.independentPlatformPin` **without** a
+      `path` member. The fixture consumer still requires all three: `transcriptBinary` is
+      `{Path, Size, SHA256}` (`daemon/internal/harness/omo/transcript_test.go:16-20`), embedded as
+      `IndependentPlatformPin` at `:26` and compared whole against the per-GOOS expectations at
+      `:46`/`:52`, so `:73` answers `fixture does not bind the independent <goos> executable pin`
+      for any fixture re-recorded from the new receipt. The committed fixtures
+      (`daemon/internal/harness/testdata/omo/5.1.69/{windows,linux}.json`) are unchanged and CI is
+      unaffected today. The Go change — compare the pin's size and digest, not its `path` — is
+      outside PR #195's scope, whose "Left unchanged" note treats the recorded pins as provenance.
+      Owner: whoever re-records the OmO fixture. The opt-in native acceptance run pins the same
+      host path separately (`daemon/internal/harness/omo/native_test.go:190-200`, resolved at
+      `:219`) and does not read the fixture, so a re-record does not touch it.
+
+## Control full-suite wall-time target and the D9 migration-file pin
+
+- [ ] Own the Control `mix test` wall-time target (~102 s → ≤65 s, program-plan row W3-14)
+      (2026-11-22, branch `refactor/rf-w3-14-exunit-async`, plan
+      `docs/plans/2026-11-21-rf-w3-14-exunit-async-plan.md`; PR #211 review P2-1 under conductor
+      amendment 2). The rf-w3-14 conversion could not carry it: the nine D9-pinned sync migration
+      files carry 58.4 % of the suite's work (282.0 s of 482.6 s of per-test work at `d0761739`,
+      with `Goal0006MigrationTest` 180.8 s bounding any async phase), and ExUnit concurrency is
+      module-granular. CI `coverage-control` on the branch measured 989 tests in 140.2 s =
+      18.1 s async + 122.0 s sync on the 4-scheduler runner, and main's `control` job spans
+      73.0-159.4 s sync against 14.7-22.9 s async. Needs a conductor D9 re-evaluation of the
+      migration-file `async: false` pin (their DDL already runs through a private schema, so the
+      pin, not the fixture shape, now bounds the async phase) before any slice can own the target.
+      W3-15 cannot: its contract has no wall-time clause and `goals_test.exs` stays `async: false`
+      as an app-env mutator.
+
+## Deferred review findings (PR #197)
+
+- [ ] Unify the three copies of the runtime harness-kind vocabulary left by the rf-w4-19
+      `linuxpreflight` extraction (2026-11-21, branch `refactor/rf-w4-19-linuxpreflight-package`;
+      found by the round-1 review of PR #197 (P3-2)). The extraction could not move the vocabulary
+      out of `internal/app`: `configuredHarnessKind` and `nativeGoalHarnessKind` are copied from
+      `internal/app/probe.go:123,156` into `daemon/internal/linuxpreflight/cgroup_linux.go:31-63`,
+      and the same seven-kind table exists a third time in the config loader
+      (`internal/config/config.go:321-323`, message at `:323`, byte-identical to
+      `internal/app/probe.go:140`). Only the "new kind" direction fails closed: a kind the copy does
+      not know is rejected by `verifyLinuxNativeRuntimeSelection`, never admitted; if `app` dropped a
+      kind from its native-goal set, preflight would still accept it — though the runtime would still
+      refuse it, so this is not an authority gap. The pin test
+      `TestNativeRuntimeSelectionVocabularyMatchesTheConfiguredKinds`
+      (`daemon/internal/linuxpreflight/preflight_linux_test.go:326`) compares the copy against a
+      hard-coded literal table, not against `app`'s copy, so drift between the two copies goes
+      undetected. Fix direction: one `internal/harness` vocabulary — `ParseKind` plus the native-goal
+      predicate — consumed by `internal/config`, `internal/app/probe.go`/`goal_admission.go` and
+      `linuxpreflight`, with the pin test reading that shared table instead of a literal. That
+      touches `internal/harness`, `internal/app/probe.go` and `internal/app/goal_admission.go`, all
+      outside the rf-w4-19 owned set (plan
+      `docs/plans/2026-11-21-rf-w4-19-linuxpreflight-package-plan.md`, "The runtime-selection
+      vocabulary"), so the slice kept the copy and recorded this entry instead.
+
+## Daemon state: decorative trailing-data disjunct in the provider-action decoder (rf-w3-07 survey)
+
+- [ ] Revalidate and merge the redundant trailing-data arms of
+      `normalizeProviderActionResult` (`daemon/internal/state/provider_action.go`). At the
+      rf-w3-07 base `52bdffd2` the block was
+      `if token, tokenErr := decoder.Token(); tokenErr != io.EOF { if tokenErr == nil || token !=
+      nil { return errors.New("provider action result has trailing data") }; return
+      errors.New("provider action result has trailing data") }`: both arms returned the identical
+      static error, so the disjunct could not change any outcome, and `json.Decoder.Token`
+      returns a nil token whenever it returns an error. rf-w3-07 (2026-11-21) split the block to
+      wrap the decoder cause (`if tokenErr != nil { wrapped }`, `if token != nil { static }`,
+      final `static`) and kept the third arm because that slice's contract requires base-vs-head
+      control-flow preservation for every early return; the last two arms still return the same
+      bytes. No test asserts the message by equality (`grep -rn --include=*_test.go '"provider
+      action result has trailing data"' daemon/` matches nothing). A follow-up maintenance task
+      can collapse the arms to one static return after re-running the state suite on the Linux
+      lane; the sweep and the classification table live in
+      `docs/evidence/rf-w3-07-state-error-causes-2026-11-21.md` §1/§2.
+
+## Deferred review findings (PR #200)
+
+- [ ] Harden the goal-session uncertain-reason budget against invalid UTF-8 at the store
+      boundary (`daemon/internal/state/goal_session.go:1052` write check vs `:1688` read
+      validation; 2026-11-21, branch `refactor/rf-w3-07-state-error-causes`, PR #200 review
+      P2-1). A within-budget reason containing invalid UTF-8 bytes passes the write check
+      (`validRequiredString` is length-only), but the journal's JSON round trip replaces each
+      invalid byte with U+FFFD (3 bytes), so the reloaded `UncertainReason` can exceed the
+      4096-byte budget and `LoadGoalSession` then rejects the whole journal
+      (`invalid goal session journal`), making the session unreadable after a mark that was
+      accepted — e.g. a 4096-byte reason with one invalid byte reloads at 4098 bytes. The same
+      hazard exists on base `52bdffd2`; PR #200 fixed only the reason strings the app composes
+      (`boundedGoalSessionUncertainReason` now runs `strings.ToValidUTF8` over the over-budget
+      prefix), because the W307-R1 decision forbids changing the sink. Owner: state store. Fix
+      direction: reject or normalize non-UTF-8 reasons in
+      `MarkGoalSessionUncertain`/`validateGoalSessionStates` the way the app bound does.
+      Reproduction: `MarkGoalSessionUncertain(key, strings.Repeat("r", 4095)+"\xff")` succeeds,
+      then `LoadGoalSession(key)` returns `invalid goal session journal`; the app-side callers
+      are pinned by `daemon/internal/app/goal_delivery_test.go`:
+      `TestAbandonGoalSessionBoundsOversizedUncertainReason` (the interior-invalid-byte case)
+      and `TestBoundedGoalSessionUncertainReason` (the within-budget invalid-byte case).
+
+## Daemon state: test-only `ControlProjection` surface (rf-w3-08 survey)
+
+- [ ] Revalidate and remove `GoalSessionJournal.ControlProjection`
+      (`daemon/internal/state/goal_session.go:412`) together with its
+      `goalSessionControlProjection` type (`:308`, unexported by rf-w3-08). `git grep -nw
+      ControlProjection` matches only the method definition, the doc comment at `:411`, the doc
+      comment at `:185` that promises callers ("callers must use ControlProjection when building a
+      control request") which do not exist, and two in-package test call sites
+      (`goal_session_test.go:707`, `:1340`); there is no production consumer at this branch's head
+      or at its base. It was not deleted in the rf-w3-08 apply stage because the test that pins it,
+      `TestGoalSessionControlProjectionOmitsRawNativeIdentity`, is a contract-pinning proof that
+      the projection carries no raw native identity — deleting the surface would retire that test.
+      A follow-up owner must decide between wiring the intended production consumer and retiring
+      the surface together with its test under an explicit contract amendment.
+- [ ] The same retention question covers the other exported state methods whose signatures name
+      now-unexported types: `Store.CheckGoalSessionLineage`
+      (`daemon/internal/state/goal_session.go:576`, `goalSessionLineageStatusValue`) and
+      `Store.QueueLateGoalUsage` (`daemon/internal/state/goal_delivery.go:829`,
+      `lateGoalUsageLedger`). Both stay legal Go through inference (`status, err :=
+      store.CheckGoalSessionLineage(key)`), neither has an out-of-package caller at this branch's
+      head, and rf-w3-08 kept them rather than widening its slice; this entry tracks the retained
+      surface so a follow-up owner can decide unexport/retire/wire for all three together.
+      `Store.EnsureGoalSessionLineageAvailable` (`:592`, `goalSessionLineageKey`) is the same
+      shape; the W3-07 follow-up PR #215 removes it (the rf-w1-06 dead-code candidate above), so
+      its signature question resolves with that removal rather than here.
+
+## Deferred findings (rf-a4 core work-item eligibility, 2026-11-21)
+
+- [ ] Unify the allowed-actions predicate the Goal authority policy is read through: the two
+      spellings are `provider_operation_allowed?/2`
+      (`control/lib/symmetry_control/goals.ex:9982-9985`, `operation in
+      allowed_values(revision.authority_policy, "allowed_actions") and operation in
+      allowed_values(revision.execution_policy, "allowed_actions")`) and `goal_action_allowed?/2`
+      (`control/lib/symmetry_control/integrations/provider_access.ex:607-609`, the same conjunction
+      through `goal_allowed_actions/1`). Out of scope for rf-a4 (2026-11-21, branch
+      `refactor/rf-a4-core-work-item-eligibility`): both files are owned by other chains — the
+      `goals.ex` region by W4-07/W5-14 and `provider_access.ex` by W4-06 (#189) — and the
+      slice's failure control forbids touching them. The unification is one predicate over
+      `(revision, operation)` with one `allowed_actions` reader, whichever chain lands last owns
+      it.
+
+- [ ] Move the chat work-item projection into core (W5-15, control half): the chat read model
+      reaches web-side code instead of the shared core verdicts —
+      `control/lib/symmetry_control/chat/read_model.ex:10,46` calls
+      `SymmetryControlWeb.PortalJSON.work_item_detail/2` and then overrides the five capability
+      members (`:51-65`: `can_cancel`, `can_retry`, `can_guide`, `can_pause`, `can_resume`, with
+      `historical: true`), and `control/lib/symmetry_control/chat.ex:19` aliases
+      `SymmetryControlWeb.Protocol` for `normalize_map/1` (`:26`, `:68`). Deferred by rf-a4
+      (2026-11-21, same branch): the slice's owned set excludes `chat/**`, and W5-15 owns the
+      inversion plus `decision.lock_version`, consuming the new
+      `SymmetryControl.Workspaces.WorkItemEligibility` for the chat override. The served chat
+      document is unchanged by rf-a4.

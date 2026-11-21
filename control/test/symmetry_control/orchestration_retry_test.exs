@@ -1,5 +1,5 @@
 defmodule SymmetryControl.OrchestrationRetryTest do
-  use SymmetryControl.OrchestrationCase, async: false
+  use SymmetryControl.OrchestrationCase, async: true
 
   alias SymmetryControl.Orchestration
 

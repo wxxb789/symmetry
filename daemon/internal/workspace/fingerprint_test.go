@@ -147,3 +147,54 @@ func TestFingerprintPropagatesContextCancellation(t *testing.T) {
 		t.Fatalf("Fingerprint(canceled) error = %v, want context.Canceled", err)
 	}
 }
+
+// TestFingerprintRefusesLinuxCloneIdentityMismatch pins the Linux-clone branch of
+// Fingerprint: a reserved clone is fingerprinted only when the Prepared identity
+// is exactly its grant and the recorded fingerprint is a canonical sha256 digest.
+// Every divergence is refused with the branch's exact string instead of
+// consulting Git, an invalid identity refusal precedes an invalid digest, and
+// the matching identity returns the recorded digest.
+func TestFingerprintRefusesLinuxCloneIdentityMismatch(t *testing.T) {
+	const identityRefusal = "Linux clone Prepared identity differs from its reserved grant"
+	const fingerprintRefusal = "Linux clone fingerprint is invalid"
+	digest := "sha256:" + strings.Repeat("0", 64)
+	reserved := Prepared{
+		Path:                  "/clone/target",
+		BindingKey:            "linux-clone",
+		Run:                   RunRef{RunID: "fingerprint-linux-clone", Generation: 1},
+		linuxClone:            true,
+		linuxCloneFingerprint: digest,
+		linuxCloneTarget:      "/clone/target",
+		linuxCloneBindingKey:  "linux-clone",
+		linuxCloneRun:         RunRef{RunID: "fingerprint-linux-clone", Generation: 1},
+	}
+	fingerprint, err := Fingerprint(context.Background(), reserved)
+	if err != nil || fingerprint != digest {
+		t.Fatalf("Fingerprint(reserved clone) = %q, %v; want the recorded digest", fingerprint, err)
+	}
+
+	for _, testCase := range []struct {
+		name   string
+		mutate func(*Prepared)
+		want   string
+	}{
+		{"path", func(candidate *Prepared) { candidate.Path = "/clone/other" }, identityRefusal},
+		{"binding", func(candidate *Prepared) { candidate.BindingKey = "other" }, identityRefusal},
+		{"run", func(candidate *Prepared) { candidate.Run = RunRef{RunID: "other-run", Generation: 1} }, identityRefusal},
+		{"generation", func(candidate *Prepared) { candidate.Run = RunRef{RunID: "fingerprint-linux-clone", Generation: 2} }, identityRefusal},
+		{"digest prefix", func(candidate *Prepared) { candidate.linuxCloneFingerprint = "sha1:" + strings.Repeat("0", 64) }, fingerprintRefusal},
+		{"digest length", func(candidate *Prepared) { candidate.linuxCloneFingerprint = "sha256:00" }, fingerprintRefusal},
+		{"digest case", func(candidate *Prepared) { candidate.linuxCloneFingerprint = "sha256:" + strings.Repeat("A", 64) }, fingerprintRefusal},
+		{"path and digest", func(candidate *Prepared) {
+			candidate.Path = "/clone/other"
+			candidate.linuxCloneFingerprint = "sha1:" + strings.Repeat("0", 64)
+		}, identityRefusal},
+	} {
+		candidate := reserved
+		testCase.mutate(&candidate)
+		fingerprint, err := Fingerprint(context.Background(), candidate)
+		if err == nil || err.Error() != testCase.want {
+			t.Fatalf("Fingerprint(%s) = %q, %v; want error %q", testCase.name, fingerprint, err, testCase.want)
+		}
+	}
+}

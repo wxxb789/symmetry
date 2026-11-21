@@ -97,15 +97,6 @@ defmodule SymmetryControl.Migrations.AddOmoHarnessKindMigrationTest do
     end)
   end
 
-  defp migrate_all_up! do
-    Ecto.Migrator.run(Repo, migrations_path(), :up,
-      all: true,
-      log: false,
-      migration_lock: false,
-      dynamic_repo: Repo.get_dynamic_repo()
-    )
-  end
-
   defp migrate_omo_down! do
     Ecto.Migrator.run(
       Repo,
@@ -213,9 +204,5 @@ defmodule SymmetryControl.Migrations.AddOmoHarnessKindMigrationTest do
     )
 
     %{runtime_id: runtime_id, session_id: session_id}
-  end
-
-  defp migrations_path do
-    Path.expand("../../../priv/repo/migrations", __DIR__)
   end
 end
