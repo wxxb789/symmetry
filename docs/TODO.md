@@ -510,8 +510,10 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       linux-gate decisions cannot be exercised on this host and need a provisioned runner plus
       independent review; `scripts/ci/linux-v2-host-peer-probe.go` keeps its own tool timeouts
       (capability probes, not test verdicts). Findings, not fixed: the negative-reconnect window in
-      `notification/client_test.go:283` and the descendant-monitor polls wait on conditions the product
-      deliberately does not publish, so their windows stay wall-clock. Verification: `gofmt -l .` empty,
+      `notification/client_test.go:285` and the descendant-monitor polls wait on conditions the product
+      deliberately does not publish, so their windows stay wall-clock. (Coordinate re-pointed from
+      `:283` by the W3-05 notification tests, whose two added imports shift every line of that file by
+      two; the cited `time.Sleep(20 * time.Millisecond)` itself is unchanged.) Verification: `gofmt -l .` empty,
       `go vet ./...` rc 0 on windows, `GOOS=linux go vet ./...` rc 0, `go test -count=1` rc 0 over the six
       touched packages, and the guard was demonstrated to fire with its named step in a byte-identical
       scratch copy whose only difference was a fixture that never wrote its readiness marker.
