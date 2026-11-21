@@ -682,14 +682,23 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 ## scripts/ci ruff baseline: drop the #137 exclude and keep the gate's ruff version pinned
 
 - [ ] Delete the `extend-exclude` block in `pyproject.toml` once open PR #137
-      (`fix/sanitizer-json-escape`) is merged or abandoned. The two excluded files
-      (`scripts/ci/model-routing-record-sanitize.py`,
-      `scripts/ci/test-model-routing-record-sanitize.py`) are the ones #137 rewrites, and the
-      2026-11-21 ruff baseline (`rf-w1-11`) excluded them so the reformat could not conflict with
-      that branch. After deleting the block, run `python3 -m ruff format scripts/ci` and
-      `python3 -m ruff check scripts/ci` and expect both clean over all 51 files; until then
-      `scripts/ci` is lint-clean over 49 of its 51 Python files. The exclude applies only to
-      ruff's own file discovery: `ruff check scripts/ci` skips the two files, while
+      (`fix/sanitizer-json-escape`, still open on 2026-11-21) is merged or abandoned. The excluded
+      paths (`scripts/ci/model-routing-record-sanitize.py`,
+      `scripts/ci/test-model-routing-record-sanitize.py`, and the sibling
+      `scripts/ci/test-model-routing-record-sanitize-json.py` that #137 adds, named in the config
+      ahead of its arrival) are the files #137 rewrites or adds, and the 2026-11-21 ruff baseline
+      (`rf-w1-11`) excluded them so the reformat could not conflict with that branch. Measured
+      pre-state (2026-11-21, ruff 0.17.5, `7e7f857`; ruff run on the explicit paths so the exclude
+      cannot hide them): the two shipped files carry **5 findings** under the committed config
+      (`E731` ×2, `E501`, `UP012`, `I001` — all in
+      `scripts/ci/test-model-routing-record-sanitize.py`; `model-routing-record-sanitize.py`
+      itself is clean) and `ruff format --check` reports `2 files would be reformatted`. The
+      block may therefore only be deleted once #137 (or the follow-up that lands its content) has
+      brought every then-present file in the excluded set to this baseline. After deleting the
+      block, run `python3 -m ruff format scripts/ci` and `python3 -m ruff check scripts/ci` and
+      expect both clean over all Python files under `scripts/ci` (52 once #137 lands, 51 today);
+      until then `scripts/ci` is lint-clean over 49 of its 51 Python files. The exclude applies
+      only to ruff's own file discovery: `ruff check scripts/ci` skips the excluded files, while
       `ruff check scripts/ci/model-routing-record-sanitize.py` (an explicitly named path) checks
       them anyway unless `--force-exclude` is passed.
 - [ ] The `ci.yml` ruff step (W1-01) must install ruff 0.17.5 exactly. `pyproject.toml` carries

@@ -23,9 +23,10 @@ Mechanical pass, measured in this worktree:
 | `git diff -- scripts/ci` after that step | the recorded `format-only.patch` (5 868 insertions / 2 785 deletions across 46 files) |
 | `ruff check scripts/ci --fix` | `Found 178 errors (44 fixed, 134 remaining)` |
 | `ruff format scripts/ci` again (the fixer left three files unformatted) | `3 files reformatted, 46 files left unchanged` |
-| `ruff check scripts/ci` / `ruff format --check scripts/ci` after the pass | `Found 134 errors` in 25 files / `49 files already formatted` |
+| `ruff check scripts/ci` / `ruff format --check scripts/ci` after the pass | `Found 133 errors` in 25 files / `49 files already formatted` — the 134 post-fix findings minus one `E501` the second format reflowed away (re-measured 2026-11-21 on a pristine `c8f20186` `scripts/ci` copy with the committed config) |
 
-The 134 remaining findings are partitioned across four workers with disjoint file sets (one file, one
+The 134 post-fix findings (133 still live when the workers started — the second format had already
+reflowed one `E501` away) are partitioned across four workers with disjoint file sets (one file, one
 writer): `model-routing-evaluation.py` + `test-model-routing-evaluation.py` (66); the Linux-v2 and
 omo-control witnesses (33); the test surfaces `model-routing-omp-usage.py`,
 `test-credentialed-provider-witness.py`, `test-ci-changed-path-classifier.py`,
@@ -72,6 +73,7 @@ extended select. Both totals are the same tree; this plan uses the config-comple
    extend-exclude = [
        "scripts/ci/model-routing-record-sanitize.py",
        "scripts/ci/test-model-routing-record-sanitize.py",
+       "scripts/ci/test-model-routing-record-sanitize-json.py",
    ]
 
    [tool.ruff.lint]
@@ -113,9 +115,12 @@ extended select. Both totals are the same tree; this plan uses the config-comple
 * `required-version = "==0.17.5"` makes any other ruff refuse to load the config (measured: exit 2
   with `Required version ==9.9.9 does not match the running version 0.17.5`). The gate is
   reproducible or it does not run; it never passes under a version whose findings nobody measured.
-* The two `#137` files stay **outside the lint corpus entirely** (lint *and* format), per the
-  binding Opus amendment: PR #137 rewrites them and a reformat here would conflict. Consequence,
-  recorded as a known limit: `scripts/ci` is lint-clean over 49 of its 51 Python files until #137
+* The `#137` files stay **outside the lint corpus entirely** (lint *and* format), per the
+  binding Opus amendment: PR #137 rewrites them and a reformat here would conflict, and the third
+  entry names the sibling test module #137 adds (`scripts/ci/test-model-routing-record-sanitize-json.py`,
+  verified ADDED in `gh pr view 137 --json files`) ahead of its arrival, as the amendment's "any new
+  sibling test module of it" clause requires, so the new file cannot red the gate at #137's merge.
+  Consequence, recorded as a known limit: `scripts/ci` is lint-clean over 49 of its 51 Python files until #137
   lands and the exclude is dropped.
 
 ### Per-fix policy (behavior preservation is the default)
@@ -165,10 +170,10 @@ extended select. Both totals are the same tree; this plan uses the config-comple
   installs), (b) a floor (`">=0.17.5"`; new rules can red the gate later). Chosen: the exact pin,
   matching the repo's existing tool-pin style (golangci-lint v2.15.0, §6 of the program plan). The
   handshake is explicit: W1-01's job must install ruff 0.17.5, recorded in `docs/TODO.md`.
-* **`extend-exclude` for the two `#137` files** — alternatives: (a) reformat them and accept the
+* **`extend-exclude` for the `#137` files** — alternatives: (a) reformat them and accept the
   conflict (rejected by the binding amendment), (b) a `per-file-ignores` entry for all rules
   (silences lint but not format; the amendment says exclude both), (c) top-level `extend-exclude`
-  (chosen: one entry covering lint and format; dropping it after #137 is a two-line deletion).
+  (chosen: one entry covering lint and format; dropping it after #137 is a three-line deletion).
 * **Fix instead of ignore for the F10-class findings** — the contract's clause 3 forbids new
   blanket ignores, and clause 4 keeps the *defect work* (regression coverage, the PyYAML oracle) in
   W3-16. The split is therefore: this increment makes the linter silent by fixing the shape; W3-16
@@ -254,6 +259,7 @@ change (the before-state was measured the same way: `Ran 28 tests in 21.096s`, `
 * The format pass reflows 46 files, so blame noise is real; the Opus amendment's mitigation is a
   format-only commit plus `.git-blame-ignore-revs`. This stage may not commit, so the mitigation
   ships as the recorded `format-only.patch` plus the conductor instruction, not as an applied file.
-* Two files stay outside the lint corpus until #137 lands (known limit, tracked).
+* Two files (plus the sibling test module #137 adds, pre-excluded by name) stay outside the lint
+  corpus until #137 lands (known limit, tracked).
 * E501 wrapping is mechanical but touches long lines inside refusal messages some suites assert on;
   the string-byte rule plus the 24 suites are the guard.

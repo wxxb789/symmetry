@@ -176,7 +176,6 @@ def live_unified_cgroup(pid: int) -> pathlib.Path:
         fail("single canonical unified cgroup membership")
     leaf = pathlib.Path("/sys/fs/cgroup") / entries[0].lstrip("/")
     try:
-        leaf.stat()
         processes = [int(value) for value in (leaf / "cgroup.procs").read_text(encoding="ascii").split()]
         events = (leaf / "cgroup.events").read_text(encoding="ascii").splitlines()
     except (OSError, ValueError):

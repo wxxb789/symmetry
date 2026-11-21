@@ -4,12 +4,14 @@ line-length = 120
 # Fail closed instead of reporting a different finding set: the baseline this
 # config was fixed against was measured with ruff 0.17.5.
 required-version = "==0.17.5"
-# Open PR #137 rewrites these two files; formatting them here would land a
-# conflicting reformat. Drop both entries (docs/TODO.md tracks the removal)
-# once #137 is merged.
+# Open PR #137 rewrites these two files and adds a third (named here ahead of
+# its arrival so the new module cannot red the gate); formatting them here
+# would land a conflicting reformat. Drop every entry (docs/TODO.md tracks
+# the removal) once #137 is merged.
 extend-exclude = [
     "scripts/ci/model-routing-record-sanitize.py",
     "scripts/ci/test-model-routing-record-sanitize.py",
+    "scripts/ci/test-model-routing-record-sanitize-json.py",
 ]
 
 [tool.ruff.lint]

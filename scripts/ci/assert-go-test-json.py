@@ -25,7 +25,7 @@ def main() -> int:
     skipped = []
     try:
         with open(path, encoding="utf-8", errors="strict") as stream:
-            for _line_number, line in enumerate(stream, 1):
+            for line in stream:
                 if not line.strip():
                     continue
                 try:
