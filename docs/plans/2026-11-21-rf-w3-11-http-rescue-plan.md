@@ -99,18 +99,37 @@ The two helpers mirror the call shapes the contract names (`request/4`'s argumen
 ## Behaviour that must not change (byte-identical clauses)
 
 The two `case` clauses, the guard, the default argument, the `options` list and the two decode
-helpers are copied verbatim; the only authorised persisted-text difference is downstream (see
-below). The construction expressions are moved, not rewritten: the same `String.to_charlist/1`
-on the same values, the same `~c"application/json"`, the same `Jason.encode!/1`.
+helpers are copied verbatim; the construction expressions are moved, not rewritten: the same
+`String.to_charlist/1` on the same values, the same `~c"application/json"`, the same
+`Jason.encode!/1`. The persisted-text difference is downstream and covers **two** exception
+classes. The `options` list itself is copied verbatim, but its *evaluation* — including
+`:public_key.cacerts_get()` — also sits before `perform/4` and therefore outside the rescue; the
+contract's Change names `perform/4` as wrapping "**only** `:httpc.request(...)`", so the second
+class is inherent in the required shape, not a deviation from it.
 
-Downstream text change (conductor D1, explicitly authorised): with the raise leaving
-`request/4`, the caller's rescue (`integrations.ex:1622-1630` `provider_call/1`, unowned)
-classifies `:invalid_provider_response` -> `failure/1` -> "Provider response is invalid" for the
-un-encodable-body path, where the pre-slice shape produced `{:transport, message}` ->
+**Class 1 — un-encodable body/header value (conductor D1, explicitly authorised).** With the
+raise leaving `request/4`, the caller's rescue (`integrations.ex:1622-1630` `provider_call/1`,
+unowned) classifies `:invalid_provider_response` -> `failure/1` -> "Provider response is invalid"
+for the un-encodable-body path, where the pre-slice shape produced `{:transport, message}` ->
 "Provider transport failed". Nothing parses the text, the trigger is a programming error
 unreachable with the provider modules' own bodies, and the judging artifact records the
-before/after observation. Every other message stays byte-identical: `failure/1`'s
-`{:transport, _}` clause is untouched and still reachable through the real socket-failure path.
+before/after observation.
+
+**Class 2 — OS CA-store load failure during `options` construction (review CR-01; not covered by
+D1).** `:public_key.cacerts_get()` raises `erlang:error({failed_load_cacerts, Reason})` when the
+trust store cannot be loaded (`public_key.erl:2641` -> `pubkey_os_cacerts:get/0`). On the
+pre-slice bytes the whole-function rescue returned `{:error, {:transport, "Erlang error:
+{:failed_load_cacerts, :enoent}"}}` -> "Provider transport failed"; on the delivered bytes the
+raise leaves `request/4`, takes the same caller path as class 1 and persists "Provider response
+is invalid". Measured end to end in a fresh VM with `:public_key` `cacerts_path` pointed at a
+missing directory (commands and outputs in the fix-stage record below). That input is an
+environment failure, not the programming error class 1 names, and D1 does not authorise it:
+contract clause 1 ("every other message stays byte-identical") and clause 3 ("any user-visible
+text change other than the one authorized `status_message` = not achieved") therefore read wider
+than the delivered code. `failure/1`'s `{:transport, _}` clause is untouched and still reachable
+through the real socket-failure path; the clause 1/3 reconciliation is conductor-owned (the
+contract file lives in the GDD state tree, outside this slice's owned set) and is recorded, not
+edited, here.
 
 ## Evidence plan (exact commands, run on this worktree)
 
@@ -194,6 +213,11 @@ load-bearing, not cosmetic.
 
 - The downstream `status_message` for the un-encodable path changes text (authorised, recorded,
   unreachable in production with the provider modules' own bodies).
+- The downstream `status_message` for an OS CA-store load failure raised by
+  `:public_key.cacerts_get()` during `options` construction also changes text ("Provider transport
+  failed" -> "Provider response is invalid"); recorded, and not covered by D1's authorisation —
+  it needs a host whose trust store is unloadable or a misconfigured `:public_key`
+  `cacerts_path`, so ordinary deployments are unaffected.
 - No production path exercises the un-encodable construction path, so the raise is pinned by the
   new unit test at the module boundary plus the constructed downstream probe; the provider
   suites cannot cover it (they substitute the client module).
@@ -229,3 +253,22 @@ Two measurements corrected or added against the plan text above:
    `{:error, {:transport, _}}` tuples from `:httpc` instead of raising. The arm is therefore
    carried over as a narrow parity guard for exceptions raised by `:httpc.request/4` itself and
    is not covered by a test; the mutation check exercises its removal, not its firing.
+
+## Fix-stage record (2026-11-21, review CR-01)
+
+Review finding CR-01 (P2, this file, the "Behaviour that must not change" section): the claim
+"Every other message stays byte-identical" is false, because `options` construction (with
+`:public_key.cacerts_get()` in it) also left the narrowed rescue's coverage. Verified first-hand
+on the delivered bytes (`bc0eb608…`) and on the base blob
+(`git show b89e14d7:control/lib/symmetry_control/integrations/http.ex`, `c44285bf…`), fresh VM
+per run:
+
+| Probe | Base bytes | Delivered bytes |
+| --- | --- | --- |
+| boundary, `PROBE_SRC=<revision> bash <GDD-STATE>/scratch/rf-w3-11-mix.sh run <GDD-STATE>/scratch/rf-w3-11-fix-cacerts-probe.exs`: `HTTP.request(:get, "http://127.0.0.1:1/x", [])` with `:public_key` `cacerts_path` = `"/nonexistent/cacerts-dir"` | `{:returned, {:error, {:transport, "Erlang error: {:failed_load_cacerts, :enoent}"}}}` | `{:raised, ErlangError, "Erlang error: {:failed_load_cacerts, :enoent}"}` |
+| downstream, same recipe with `rf-w3-11-fix-cacerts-downstream-probe.exs` (real `check_connection/1` chain, no HTTP-client substitution) | `{:error, :provider_failure}`, persisted `status: "degraded"`, `status_message: "Provider transport failed"` | `{:error, :provider_failure}`, persisted `status: "degraded"`, `status_message: "Provider response is invalid"` |
+| downstream probe residue control | `committed residue after rollback: projects=0, resources=0` | `committed residue after rollback: projects=0, resources=0` |
+
+Amended by this fix: the "Behaviour that must not change" section now enumerates class 2 and
+scopes D1 to class 1, and the residual-risks list carries the corresponding entry. The contract
+clause 1/3 wording stays with the conductor (contract not in the owned set).
