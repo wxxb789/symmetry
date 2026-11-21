@@ -1,7 +1,8 @@
-# Dependabot version updates for the four lockfile-bearing package managers of
-# this repository (refactor slice W1-01). The advisory CI metrics added beside
-# this file make the *current* exposure of each lockfile visible on every run;
-# this file is how the pins move after the exposure is visible.
+# Dependabot version updates for the four package ecosystems this repository
+# depends on (refactor slice W1-01). The advisory CI metrics added beside this
+# file make the current exposure of the three lockfile-bearing ecosystems
+# (gomod, mix, npm) visible on every run; this file is how those pins move
+# after the exposure is visible.
 #
 # No update groups: each pull request stays one reviewable bump, and the weekly
 # cadence with a small open-pull-requests ceiling bounds the noise.

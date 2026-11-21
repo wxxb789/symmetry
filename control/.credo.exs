@@ -4,10 +4,12 @@
 # pull request is the ratchet baseline the burn-down slices measure against.
 #
 # Provenance: the check list is `mix credo gen.config` output (Credo 1.7.19),
-# with the two deliberate changes below. Credo merges a `checks:` map by
-# *replacing* the built-in check list the map enumerates, so an empty
-# `checks: %{}` silently drops AliasOrder, AliasUsage, PreferImplicitTry,
-# StringSigils and Apply (measured: 403 instead of 474 issues). Keep the
+# with the two contract changes below and the recorded deviations, each with
+# its inline reason. The `checks:` map decides the counted set: an empty
+# `checks: %{}` falls back to Credo's built-in defaults, so the metric shifts
+# silently (measured 474 issues with `%{}` at 1.7.19; the earlier audit's 403
+# came from a Credo that dropped AliasOrder, AliasUsage, PreferImplicitTry,
+# StringSigils and Apply, whose 71 findings are that difference). Keep the
 # `enabled`/`disabled` lists explicit; never replace them with `%{}`.
 #
 #   * `Credo.Check.Design.DuplicatedCode` is enabled at `mass_threshold: 40`
@@ -23,6 +25,9 @@
     %{
       name: "default",
       files: %{
+        # Deliberate narrowing of the generated template, which also lists
+        # `src/`, `web/` and `apps/*/` paths this application does not have;
+        # this pair is the scope the recorded issue/file count covers.
         included: ["lib/", "test/"],
         excluded: [~r"/_build/", ~r"/deps/", ~r"/node_modules/"]
       },
@@ -35,8 +40,9 @@
       # this cap and still prints a summary, which silently under-reports the
       # very count this configuration exists to record: `lib/symmetry_control/
       # goals.ex` alone is 10,810 lines and was skipped on a loaded host at
-      # 5_000 (measured 288 issues / 148 files against 528 / 154 on an idle
-      # run). The cap is a hang guard, not a budget, so it stays generous.
+      # 5_000 (measured 288 issues over 148 files against the recorded 528
+      # issues over 153 files). The cap is a hang guard, not a budget, so it
+      # stays generous.
       parse_timeout: 30000,
       # Plain text in the CI log: the step greps the summary line, and colour
       # escapes would make the extracted counts differ from a local run.

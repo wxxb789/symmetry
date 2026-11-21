@@ -164,9 +164,8 @@ jobs:
           cache: pnpm
       - name: Check lockfile registry provenance
         run: python3 scripts/ci/check-lockfile-registry.py
-      # Advisory: never gates, prints pnpm's own advisory table and count. It
-      # resolves the locked versions against the registry, so it belongs beside
-      # the provenance check, before the install.
+      # It resolves the locked versions against the registry, so it belongs
+      # beside the provenance check, before the install.
       - name: Measure production dependency advisories (advisory)
         if: always()
         continue-on-error: true
@@ -176,10 +175,9 @@ jobs:
             echo "note: the repository has no pnpm-lock.yaml; skipping the advisory production-dependency audit"
             exit 0
           fi
-          pnpm_audit_log="$RUNNER_TEMP/pnpm-audit-prod.log"
           set +e
-          pnpm audit --prod | tee "$pnpm_audit_log"
-          pnpm_audit_status=${PIPESTATUS[0]}
+          pnpm audit --prod
+          pnpm_audit_status=$?
           set -e
           echo "pnpm_audit_prod_exit_status=$pnpm_audit_status"
           exit "$pnpm_audit_status"
@@ -251,9 +249,7 @@ jobs:
           go-version: 1.27.0
           cache-dependency-path: daemon/go.sum
       - run: mix deps.get
-      # Advisory metrics: neither step gates (`continue-on-error: true`), each
-      # prints the tool's own count, and each skips with a printed note while its
-      # prerequisite is absent - the `:credo` dependency (owned by refactor slice
+      # Prerequisites owned elsewhere: the `:credo` dependency (refactor slice
       # W1-02) for the Credo metric, the Hex archive for the advisory audit. Both
       # run here, after `mix deps.get` has fetched what they read.
       - name: Measure Credo strict findings (advisory)
@@ -290,14 +286,15 @@ jobs:
           else
             echo 'note: the Credo output carried no "N mods/funs, found ..." summary line'
           fi
-          # Credo skips a file that exceeds `parse_timeout` and still prints a
-          # summary, so a slow runner would silently under-report the baseline.
-          # Say it out loud instead of letting the lowered number pass as the
-          # metric; the recorded baseline comes from a run with no skips.
+          # Credo prints the same numbered list for a file over `parse_timeout`
+          # and for one it could not parse, and still prints a summary, so a slow
+          # runner would silently under-report the baseline. Say it out loud
+          # instead of letting the lowered number pass as the metric; the
+          # recorded baseline comes from a run with no skips.
           credo_unparsed=$(grep -cE '^ +[0-9]+\) ' "$credo_log" || true)
           echo "credo_strict_unparsed_files=$credo_unparsed"
           if [ "$credo_unparsed" -ne 0 ]; then
-            echo "note: Credo skipped $credo_unparsed source file(s) that exceeded parse_timeout; the issue total above under-reports the strict baseline"
+            echo "note: Credo skipped or excluded $credo_unparsed source file(s) (over parse_timeout, or unparsable); the issue total above under-reports the strict baseline"
           fi
           exit "$credo_status"
       - name: Measure Hex advisories (advisory)
@@ -1391,12 +1388,10 @@ jobs:
         with:
           go-version: 1.27.0
           cache-dependency-path: daemon/go.sum
-      # The advisory metrics below never gate: each is
-      # `continue-on-error: true`, prints the tool's own finding count, and skips
-      # with a printed note when its prerequisite is absent. `GOOS=linux` matches
-      # this runner; the Windows half of the golangci-lint pair lives in the
-      # `daemon-windows` job, because build tags change `unused`, `gocyclo` and
-      # errcheck results and neither pass may stand in for the other.
+      # `GOOS=linux` matches this runner; the Windows half of the golangci-lint
+      # pair lives in the `daemon-windows` job, because build tags change
+      # `unused`, `gocyclo` and errcheck results and neither pass may stand in
+      # for the other.
       - name: Measure golangci-lint findings (GOOS=linux, advisory)
         if: always()
         continue-on-error: true
@@ -1436,8 +1431,7 @@ jobs:
           # against. The run prints its own `N issues:` summary.
           set +e
           GOOS=linux "$golangci_bin" run --config .golangci.yml \
-            --max-issues-per-linter=0 --max-same-issues=0 \
-            --output.json.path="$RUNNER_TEMP/golangci-lint-linux.json"
+            --max-issues-per-linter=0 --max-same-issues=0
           golangci_status=$?
           set -e
           echo "golangci_lint_linux_exit_status=$golangci_status"
@@ -1646,15 +1640,13 @@ jobs:
       # through it and pins the routing those outputs gate.
       - run: python3 scripts/ci/test-ci-changed-path-classifier.py
 
-      # The advisory lint metrics below never gate: each step is
-      # `continue-on-error: true`, prints the tool's own finding count, and skips
-      # with a printed note when a prerequisite is absent (the root
-      # `pyproject.toml` the ruff configuration is owned by refactor slice W1-11,
-      # a preinstalled shellcheck, the pinned actionlint release). This job is the
-      # workflow's only unconditional one, so the metrics are produced for every
-      # event including documentation-only pull requests, and a failure in any
-      # other job cannot skip them. No new job is added: the changed-path
-      # classifier test pins the job set, and `ci.yml` has one owner per wave.
+      # Prerequisite ownership: the root `pyproject.toml` (the ruff configuration,
+      # refactor slice W1-11), a preinstalled shellcheck, the pinned actionlint
+      # release. This job is the workflow's only unconditional one, so the metrics
+      # are produced for every event including documentation-only pull requests,
+      # and a failure in any other job cannot skip them. No new job is added: the
+      # changed-path classifier test gates the named jobs' routing, and `ci.yml`
+      # has one owner per wave.
       - name: Measure ruff findings in scripts/ci (advisory)
         if: always()
         continue-on-error: true
@@ -1788,11 +1780,9 @@ jobs:
         with:
           go-version: 1.27.0
           cache-dependency-path: daemon/go.sum
-      # Advisory, like its `GOOS=linux` twin in the `daemon` job: never gates,
-      # prints the tool's own finding count, and skips with a printed note when
-      # `daemon/.golangci.yml` is absent. The 20-minute job budget leaves room
-      # for the pinned release download plus one analysis; the step bounds
-      # itself so a hung analysis can only redden itself.
+      # Like its `GOOS=linux` twin in the `daemon` job. The 20-minute job budget
+      # leaves room for the pinned release download plus one analysis; the step
+      # bounds itself so a hung analysis can only redden itself.
       - name: Measure golangci-lint findings (GOOS=windows, advisory)
         if: always()
         continue-on-error: true
@@ -1832,7 +1822,7 @@ jobs:
           $env:GOOS = 'windows'
           # Uncapped counts, as in the Linux step: the default caps truncate the
           # measured debt this metric is the ratchet baseline for.
-          & $binary run --config .golangci.yml --max-issues-per-linter=0 --max-same-issues=0 "--output.json.path=$env:RUNNER_TEMP\golangci-lint-windows.json"
+          & $binary run --config .golangci.yml --max-issues-per-linter=0 --max-same-issues=0
           $status = $LASTEXITCODE
           Write-Output "golangci_lint_windows_exit_status=$status"
           exit $status

@@ -1,8 +1,10 @@
 # rf-w1-01-ci-quality-plane plan — the advisory lint/vulnerability plane in `ci.yml`
 
 Contract: `goal-rf-w1-01-ci-quality-plane.md` (GDD, 2026-11-21). Baseline for every coordinate in
-this plan: this worktree's HEAD `a3039f0d17fc7c7905b63bdf247cac5bf339b213` (`a3039f0`, also
-`origin/main`), branch `refactor/rf-w1-01-ci-quality-plane`. Binding inputs: program plan §4 W1-01
+this plan: this worktree's HEAD `a3039f0d17fc7c7905b63bdf247cac5bf339b213` (`a3039f0`,
+`origin/main` at plan time), branch `refactor/rf-w1-01-ci-quality-plane`; the measured baselines
+were re-taken on the delivered revision `28562bc95d5b364374f2b6fa8ba8037f7bf1bb1b`, the branch tip
+after `origin/main` moved past `a3039f0` (see "Measured baselines"). Binding inputs: program plan §4 W1-01
 and §10.1-§10.6, `docs/design/quality.md` (gate policy), and the contract's plan-review amendments
 (no new jobs; coverage dropped; vulnerability scanning added; `.github/dependabot.yml` owned).
 
@@ -23,10 +25,11 @@ and §10.1-§10.6, `docs/design/quality.md` (gate policy), and the contract's pl
 
 Every step is `continue-on-error: true` and `if: always()`: it never gates, it still runs when an
 earlier step of its job failed, and its own failure cannot change a job's conclusion. Nine steps,
-five existing jobs — the job set is pinned by
-`scripts/ci/test-ci-changed-path-classifier.py` (`PINNED_GATES`/`DEFAULT_GATE`, closed-world over
-the `jobs:` block), which the contract's amendment names as owned elsewhere, so the plane grows
-inside the jobs that already exist:
+five existing jobs — the job set is gated by
+`scripts/ci/test-ci-changed-path-classifier.py` (`PINNED_GATES`/`DEFAULT_GATE`: it pins the
+unconditional job and checks every job's `if:` routing, but it does not assert a closed world over
+job names — strengthening that assertion belongs to the test's owner), which the contract's
+amendment names as owned elsewhere, so the plane grows inside the jobs that already exist:
 
 | Job | Step | Pin | Guard (printed note + `exit 0`) | Count printed by |
 | --- | --- | --- | --- | --- |
@@ -55,28 +58,36 @@ note at exit 0.
 
 ## Measured baselines (re-taken, pinned, uncapped)
 
-All numbers below are from this increment's runs on `a3039f0` with the configs as shipped; the
-commands and exit codes are in "Evidence plan".
+All numbers below were re-taken on the delivered revision `28562bc95d5b364374f2b6fa8ba8037f7bf1bb1b`
+plus this slice's apply-stage comment/flag edits, which move no measured subject, with the configs
+as shipped; the commands and exit codes are in "Evidence plan". The merge of `origin/main` before
+review moved three records, each called out below: the golangci counts (the merged daemon commits),
+the Credo file count (154 -> 153) and `mix hex.audit` (1 -> 0, plug 1.20.4 landed with W1-02).
 
 **golangci-lint v2.15.0, `daemon/.golangci.yml`, uncapped**
 (`--max-issues-per-linter=0 --max-same-issues=0`):
 
 | Scope | GOOS=linux | GOOS=windows |
 | --- | --- | --- |
-| module-wide (the CI metric) | **1029** (791 production / 238 test) | **449** (327 / 122) |
-| `./internal/app/... ./internal/state/...` (the daemon-app report's scope) | 253 (207 / 46) | 172 (130 / 42) |
+| module-wide (the CI metric) | **1023** (785 production / 238 test) | **447** (325 / 122) |
+| `./internal/app/... ./internal/state/...` (the daemon-app report's scope) | 247 (201 / 46) | 170 (126 / 44) |
 
-The second row is deliberately measured: it reproduces the daemon-app audit's per-linter table
-exactly (gocyclo 105, gocritic 50 = 42+8, unparam 23 = 11+12, errcheck 10, exhaustive 12, staticcheck
-22, unconvert 6, nilerr 6, funlen 4, ineffassign 6, errorlint 3, copyloopvar 3, misspell 1,
-whitespace 2; windows 58/19/18/9/12/17/5/4/5/9/3/1/2/10 for the same linters) — which proves this
-config is the report's config, and shows the program plan's §10.2 line "Baselines with this
-config: linux 253 (207 prod / 46 test), windows 172 (130 / 42)" is **area-scoped, not
-module-wide**. The CI metric is the module-wide pair; the burn-down slices should report against
-it, not against 253/172.
+The second row is deliberately measured: at `a3039f0` it reproduced the daemon-app audit's
+per-linter table exactly (gocyclo 105, gocritic 50 = 42+8, unparam 23 = 11+12, errcheck 10,
+exhaustive 12, staticcheck 22, unconvert 6, nilerr 6, funlen 4, ineffassign 6, errorlint 3,
+copyloopvar 3, misspell 1, whitespace 2), which proved this config is the report's config. The
+merged `origin/main` commits (`#141`/`#142`: the mount-path unescape fix, dead stores and the
+unreachable validator removed) moved the row to the delivered-revision lists — linux: gocyclo 105,
+gocritic 48, unparam 23, staticcheck 21, exhaustive 12, errcheck 10, nilerr 6, unconvert 6, funlen
+4, copyloopvar 3, errorlint 3, ineffassign 3, whitespace 2, misspell 1 = 247; windows: gocyclo 58,
+gocritic 19, unparam 18, staticcheck 17, exhaustive 12, unused 10, errcheck 9, errorlint 9, nilerr
+5, funlen 4, copyloopvar 3, ineffassign 3, whitespace 2, misspell 1 = 170. This also shows the
+program plan's §10.2 line "Baselines with this config: linux 253 (207 prod / 46 test), windows 172
+(130 / 42)" is **area-scoped, not module-wide**. The CI metric is the module-wide pair; the
+burn-down slices should report against it, not against 247/170.
 
 **Credo strict, `control/.credo.exs`, Credo 1.7.19** (the version `{:credo, "~> 1.7"}` resolves
-to today): **528 issues**, 70 checks, 154 files (lib+test), split 6 warnings / 383 refactoring
+to today): **528 issues**, 70 checks, 153 files (lib+test), split 6 warnings / 383 refactoring
 opportunities / 84 code readability / 55 software design; 423 in `lib/`, 105 in `test/`. Largest
 classes: Nesting 162, CyclomaticComplexity 149, AliasUsage 33, MaxLineLength 32, FunctionArity 29,
 DuplicatedCode 22, AliasOrder 22. Against the audits' reference points: 474 is the same scope
@@ -86,9 +97,9 @@ findings, and `MaxLineLength` at 98 (the formatter's length, not the generated 1
 its 32 readability findings. 474 − 403 = 71 is also reproduced: AliasOrder 22 + AliasUsage 33 +
 PreferImplicitTry 8 + StringSigils 0 + Apply 0 = 71, so the audit's 403-vs-474 observation is the
 five named checks' findings, while an empty `checks: %{}` map measured **474** here (Credo 1.7.19
-falls back to its built-in list instead of disabling those five). The trap is that the map is
-*silently* replaced either way, which is why this config spells out both lists and the contract
-forbids the key.
+falls back to its built-in list instead of disabling those five). The trap is that the counted set
+shifts silently either way — a listed map replaces the built-ins, an empty map falls back to them —
+which is why this config spells out both lists and the contract forbids the key.
 
 **Credo parse-timeout under-count (a real defect found by this re-take).** With the generated
 `parse_timeout: 5000`, a run on a loaded host printed `info: Some source files were not parsed in
@@ -97,7 +108,8 @@ over 148 files, still with a `found …` summary — a silent under-count of the
 exists to record. The shipped config raises the cap to 30,000 (a hang guard, not a budget) and the
 step additionally prints `credo_strict_unparsed_files=<n>` with a loud note whenever Credo skipped
 anything, so a lowered number can never pass as the baseline. With the cap raised, the same loaded
-host reproduced 528 / 154 files / 0 unparsed.
+host re-reproduced 528 issues / 153 files / 0 unparsed at the delivered revision; the 288 / 148
+sample above was taken at `a3039f0`, whose tree had one more lib/test file.
 
 **ruff 0.17.6, `scripts/ci`** (defaults; the W1-11 `pyproject.toml` will change both numbers):
 `ruff check scripts/ci` → 94 findings, 42 fixable; `ruff format --check scripts/ci` → 50 of 51
@@ -112,14 +124,15 @@ the version it ran.
 
 **govulncheck v1.10.0, `./...` in `daemon/`** → `No vulnerabilities found.`, exit 0 (DB 2026-11-11).
 
-**`mix hex.audit` in `control/`** → **1 advisory**, exit 1: `plug 1.20.3 - EEF-CVE-2026-120287
-(MEDIUM)`, the live advisory W1-02 bumps. **`pnpm audit --prod`** (pnpm 12.17.0, lockfile only,
-no install) → `No known vulnerabilities found`, exit 0.
+**`mix hex.audit` in `control/`** → **0 advisories**, exit 0 at the delivered revision: `plug
+1.20.4` carries W1-02's fix for `EEF-CVE-2026-120287` (the `a3039f0` record measured 1 advisory on
+plug 1.20.3 — that expected red cleared with the merge). **`pnpm audit --prod`** (pnpm 12.17.0,
+lockfile only, no install) → `No known vulnerabilities found`, exit 0.
 
 The recorded ratchet baseline for the pull request is therefore: **Credo strict 528** (1.7.19,
-`control/.credo.exs`), **golangci-lint linux 1029 / windows 449** (v2.15.0, `daemon/.golangci.yml`,
+`control/.credo.exs`), **golangci-lint linux 1023 / windows 447** (v2.15.0, `daemon/.golangci.yml`,
 uncapped), **ruff 94 check / 50 format**, **shellcheck 10**, **actionlint 0**, **govulncheck 0**,
-**hex.audit 1**, **pnpm audit 0**.
+**hex.audit 0**, **pnpm audit 0**.
 
 ## Out of scope
 
@@ -163,13 +176,14 @@ uncapped), **ruff 94 check / 50 format**, **shellcheck 10**, **actionlint 0**, *
 4. **`legacy-route-audit` hosts the scripts/workflow lint metrics.** It is the only unconditional
    job, so the metrics do not depend on the heavy matrix running (a documentation-only pull request
    still produces them) and no new job is needed. Cost: ~20 s of its own runner time.
-5. **`control/.credo.exs` from `gen.config`, with the two contract changes and three recorded
-   deviations.** `mass_threshold: 40` is the 1.7 spelling of the contract's "mass 40" (`mass:`
-   is an unknown param in 1.7.19 — Credo prints a config warning and ignores it, which the first
-   cut did and this one does not); `strict: true` mirrors the `--strict` the step passes so a bare
-   `mix credo` cannot under-report; `color: false` keeps the log greppable so the extracted count
-   equals a local count; `parse_timeout: 30000` is the anti-under-count fix above. The
-   `enabled`/`disabled` lists are explicit and the file never carries `checks: %{}`.
+5. **`control/.credo.exs` from `gen.config`, with the two contract changes and four recorded
+   deviations** (the fourth, `included`, carries its inline reason after the apply-stage
+   simplification review). `mass_threshold: 40` is the 1.7 spelling of the contract's "mass 40"
+   (`mass:` is an unknown param in 1.7.19 — Credo prints a config warning and ignores it, which
+   the first cut did and this one does not); `strict: true` mirrors the `--strict` the step passes
+   so a bare `mix credo` cannot under-report; `color: false` keeps the log greppable so the
+   extracted count equals a local count; `parse_timeout: 30000` is the anti-under-count fix above.
+   The `enabled`/`disabled` lists are explicit and the file never carries `checks: %{}`.
 6. **`max_length: 98`.** The contract's number, and the length `mix format` and the rest of the
    tree use; it adds exactly 32 findings, visible in the baseline so the burn-down cannot mistake
    them for noise.
@@ -197,7 +211,7 @@ uncapped), **ruff 94 check / 50 format**, **shellcheck 10**, **actionlint 0**, *
 4. `ruff check scripts/ci` and `ruff format --check scripts/ci` with the pinned 0.17.6 binary.
 5. `shellcheck --severity=warning scripts/ci/*.sh`; and the extracted CI step script run unchanged.
 6. The extracted CI step scripts, run locally where this host can execute them: the Windows
-   golangci-lint step end to end (download, digest, extract, analysis — exit 1 with `449 issues`),
+   golangci-lint step end to end (download, digest, extract, analysis — exit 1 with `447 issues`),
    the shellcheck step (exit 1, `shellcheck_findings=10`), the ruff step's no-`pyproject.toml`
    guard branch (note, exit 0), the Credo step's no-`:credo` guard branch in the worktree (note,
    exit 0) and its real run in the scratch copy (exit 30, `credo_strict_issue_total=528`), and the
@@ -224,7 +238,7 @@ uncapped), **ruff 94 check / 50 format**, **shellcheck 10**, **actionlint 0**, *
 10. `shellcheck --shell=bash` over every new bash `run:` block, extracted from the workflow, so the
     step bodies themselves are linted.
 11. The `legacy-route-audit` job's first step (`scripts/audit-no-legacy-routes.sh`) derives its
-    target list from `git ls-files`, so the four new files and 349 added lines join its scope once
+    target list from `git ls-files`, so the four new files and 339 added lines join its scope once
     tracked. Its own matcher (the script's `legacy_route_pattern`, read from the script) reports no
     match over those bytes, which is the state a passing audit needs; the exclusion-list arm is
     untouched.
@@ -237,9 +251,10 @@ passed from inference.
 ## Residual risks and known limits
 
 - **The advisory steps are red until their burn-downs land.** Expected reds on merge: golangci
-  (1029/449), Credo (528), ruff (94 + 50 files), shellcheck (10), hex.audit (1). Expected greens:
-  actionlint (0), govulncheck (0), pnpm audit (0). A red advisory step is the intended signal, and
-  each step prints its count so the number, not the colour, is the evidence.
+  (1023/447), Credo (528), ruff (94 + 50 files), shellcheck (10). Expected greens: actionlint (0),
+  govulncheck (0), pnpm audit (0), hex.audit (0 — plug 1.20.4 landed with W1-02 before review). A
+  red advisory step is the intended signal, and each step prints its count so the number, not the
+  colour, is the evidence.
 - **Pinned versions age.** The three digests and the two `go install` versions need updating with
   the tools; dependabot does not cover them (it covers the manifest lockfiles).
 - **`shellcheck` is unpinned** (the image's build). The step prints `shellcheck --version`, so a
