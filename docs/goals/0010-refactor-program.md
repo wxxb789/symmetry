@@ -254,7 +254,7 @@ arch-derived parts held or pending.
 | W4-12 | Go test-double extraction part 1 (TC-G) | — | superseded by W4-12a/W4-12b/W4-12c (arch-decision-2 split) |
 | W4-12a | App `journalStore` interface satisfied directly by `*state.Store` (split of W4-12) | — | held (arch-decision-2; not yet bound); lane after W4-01 |
 | W4-12b | `apptest.FaultStore` replaces the 25 nil-in-prod `options` mirrors (split of W4-12) | — | held (arch-decision-2; not yet bound); after W4-12a |
-| W4-12c | One `Recorder` port for the durable callbacks of `execution.Invocation` + `harness.StartRequest` (split of W4-12) | — | held (arch-decision-2; not yet bound); after W4-15b |
+| W4-12c | One `Recorder` port for the durable callbacks of `execution.Invocation` + `harness.StartRequest` (split of W4-12) | — | held (arch-decision-2; not yet bound); after W4-12b and W4-15b |
 | W4-13 | Wall-clock burn-down part 1 — Go deadlines (TC-F) | — | held (arch-decision-2; not yet bound); gated on W4-22, W4-15b (after W4-15a), W3-04 (#187), W3-15, #178 |
 | W4-14 | Browser fixture consolidation (TC-I) | — | gated on W2-01 (#188) |
 | W4-15 | Harness staged driver 5b — split at the W4 reconcile | — | superseded by W4-15a/W4-15b |
@@ -524,6 +524,8 @@ stays verbatim apart from its provenance header and one placeholder normalizatio
   applied: a catch-all sentence covers every contract
   drafted from arch-decision-1 — including W4-18, W4-21, A4 and any §G proposal (W4-15c, W5-15,
   W5-16, W5-17), drafted before or after the entry. This rules addition and this entry take
+  effect with the independent review of this entry. Authority: the owner's standing authorization
+  (2026-11-21); review by reference as cited.
 - **2026-11-21 — T2: arch-decision-2 rulings recorded; the arch record corrected.** The
   independent Opus review of PR #182 round 6 (`182-opus-review-6.md`, 2026-11-21, bound to
   `0ad994c5`) is recorded as the independent review of the round-5 amendment text (the
@@ -541,7 +543,7 @@ stays verbatim apart from its provenance header and one placeholder normalizatio
   W4-12b → W4-12c → W4-22 → W4-13 (W4-13 also after W4-15b); W4-18 is renamed W5-18 and held
   for a `docs/design/core.md` amendment; A6 is held for owner sign-off; the #185 response-loss
   consumer becomes the behaviour slice W4-22; and the rulings carry the per-slice amendments
-  (R2-R9) the affected contracts absorb. A verification review round follows before the decision
+  (R2-R12) the affected contracts absorb. A verification review round follows before the decision
   is marked BOUND; until then no arch-derived PR merges (the pre-review rule above stands, and
   evidence binds the bound contract's SHA-256 — an amended contract requires re-verification).
   The W4 rows now show W4-12 superseded by W4-12a/W4-12b/W4-12c with W4-22 added and the holds
