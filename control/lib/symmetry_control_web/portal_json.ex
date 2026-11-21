@@ -486,61 +486,115 @@ defmodule SymmetryControlWeb.PortalJSON do
     }
   end
 
+  # The three delivery members resolve the same way — a provider-owned value
+  # wins over the operator's manual value, which wins over the attempt's agent
+  # evidence, and with none of the three the member serves its own fallback —
+  # though only the provider branch adds `provider`/`recorded_at` and only the
+  # agent branch carries the evidence map's own members; manual and none serve
+  # the same five. The descriptor names that member's three inputs, the field
+  # they compete for, the fallback the none branch serves, and the provider
+  # metadata the provider branch serves.
   defp delivery(work_item, evidence) do
     %{
       pull_request:
-        effective_delivery(
-          work_item.external_pull_request_url,
-          work_item.pull_request_url,
-          evidence && evidence.pull_request,
-          :url,
-          nil,
-          delivery_context(work_item, change_provider(work_item), :change)
-        )
+        work_item
+        |> delivery_descriptor(:pull_request, evidence)
+        |> resolve_delivery()
         |> provider_pull_request_state(work_item),
-      ci:
-        effective_delivery(
-          work_item.external_ci_status,
-          work_item.ci_status,
-          evidence && evidence.ci,
-          :status,
-          "unknown",
-          delivery_context(work_item, ci_provider(work_item), :ci)
-        ),
-      review:
-        effective_delivery(
-          work_item.external_review_status,
-          work_item.review_status,
-          evidence && evidence.review,
-          :status,
-          "none",
-          delivery_context(work_item, change_provider(work_item), :change)
-        )
+      ci: work_item |> delivery_descriptor(:ci, evidence) |> resolve_delivery(),
+      review: work_item |> delivery_descriptor(:review, evidence) |> resolve_delivery()
     }
   end
 
-  defp effective_delivery(provider_value, _manual_value, _agent_value, field, fallback, context)
+  defp delivery_descriptor(work_item, :pull_request, evidence) do
+    %{
+      provider_value: work_item.external_pull_request_url,
+      manual_value: work_item.pull_request_url,
+      agent: evidence && evidence.pull_request,
+      field: :url,
+      fallback: nil,
+      provider: change_provider(work_item),
+      recorded_at: work_item.external_change_updated_at
+    }
+  end
+
+  defp delivery_descriptor(work_item, :ci, evidence) do
+    %{
+      provider_value: work_item.external_ci_status,
+      manual_value: work_item.ci_status,
+      agent: evidence && evidence.ci,
+      field: :status,
+      fallback: "unknown",
+      provider: ci_provider(work_item),
+      recorded_at: work_item.external_ci_updated_at
+    }
+  end
+
+  defp delivery_descriptor(work_item, :review, evidence) do
+    %{
+      provider_value: work_item.external_review_status,
+      manual_value: work_item.review_status,
+      agent: evidence && evidence.review,
+      field: :status,
+      fallback: "none",
+      provider: change_provider(work_item),
+      recorded_at: work_item.external_change_updated_at
+    }
+  end
+
+  # An empty provider value means "never synchronized", so it falls through to
+  # the manual value exactly as an absent one does.
+  defp resolve_delivery(%{provider_value: provider_value} = descriptor)
        when is_binary(provider_value) and provider_value != "" do
     %{
       value: provider_value,
       source: "provider",
-      provider: context.provider,
+      provider: descriptor.provider,
       generation: nil,
-      recorded_at: iso8601(context.recorded_at)
+      recorded_at: iso8601(descriptor.recorded_at)
     }
-    |> Map.put(field, provider_value)
-    |> normalize_delivery(fallback)
+    |> Map.put(descriptor.field, provider_value)
+    |> normalize_delivery(descriptor.fallback)
   end
 
-  defp effective_delivery(
-         _provider_value,
-         manual_value,
-         agent_value,
-         field,
-         fallback,
-         _context
-       ),
-       do: effective_delivery(manual_value, agent_value, field, fallback)
+  # The manual branch serves neither `provider` nor `recorded_at`: those members
+  # exist only where a provider owns the value.
+  defp resolve_delivery(%{manual_value: manual_value} = descriptor)
+       when is_binary(manual_value) and manual_value != "" do
+    %{value: manual_value, source: "manual", generation: nil}
+    |> Map.put(descriptor.field, manual_value)
+    |> normalize_delivery(descriptor.fallback)
+  end
+
+  # The agent branch serves the whole evidence map: its own `source` (the
+  # evidence's, not necessarily "agent") and every member the agent wrote.
+  # `:value` is always replaced by the resolved value; `source`, the member's own
+  # field, `generation`, `url` and `status` are added only where the map does not
+  # already carry them.
+  defp resolve_delivery(%{agent: agent} = descriptor) when is_map(agent) do
+    value = Map.get(agent, descriptor.field) || descriptor.fallback
+
+    agent
+    |> Map.put(:value, value)
+    |> Map.put_new(:source, "agent")
+    |> Map.put_new(descriptor.field, value)
+    |> normalize_delivery(descriptor.fallback)
+  end
+
+  # Nothing resolved: a `:url` member claims neither a value nor a status, a
+  # `:status` member serves its fallback in both.
+  defp resolve_delivery(%{field: :url}),
+    do: %{value: nil, url: nil, status: nil, source: "none", generation: nil}
+
+  defp resolve_delivery(%{field: :status, fallback: fallback}),
+    do: %{value: fallback, url: nil, status: fallback, source: "none", generation: nil}
+
+  defp normalize_delivery(delivery, fallback) do
+    delivery
+    |> Map.put_new(:generation, nil)
+    |> Map.put_new(:url, nil)
+    |> Map.put_new(:status, fallback)
+  end
 
   defp external_work_item(%{external_work_item_resource_id: nil}), do: nil
 
@@ -564,36 +618,6 @@ defmodule SymmetryControlWeb.PortalJSON do
     }
   end
 
-  defp effective_delivery(manual_value, _agent_value, field, fallback)
-       when is_binary(manual_value) and manual_value != "" do
-    %{value: manual_value, source: "manual", generation: nil}
-    |> Map.put(field, manual_value)
-    |> normalize_delivery(fallback)
-  end
-
-  defp effective_delivery(_manual_value, agent_value, field, fallback) when is_map(agent_value) do
-    value = Map.get(agent_value, field) || fallback
-
-    agent_value
-    |> Map.put(:value, value)
-    |> Map.put_new(:source, "agent")
-    |> Map.put_new(field, value)
-    |> normalize_delivery(fallback)
-  end
-
-  defp effective_delivery(_manual_value, _agent_value, :url, _fallback),
-    do: %{value: nil, url: nil, status: nil, source: "none", generation: nil}
-
-  defp effective_delivery(_manual_value, _agent_value, :status, fallback),
-    do: %{value: fallback, url: nil, status: fallback, source: "none", generation: nil}
-
-  defp normalize_delivery(delivery, fallback) do
-    delivery
-    |> Map.put_new(:generation, nil)
-    |> Map.put_new(:url, nil)
-    |> Map.put_new(:status, fallback)
-  end
-
   defp repository_label(work_item) do
     case work_item.repository_resource do
       %ProjectResource{} = resource -> resource.external_ref || resource.name
@@ -603,12 +627,6 @@ defmodule SymmetryControlWeb.PortalJSON do
 
   defp resource_label(%ProjectResource{} = resource), do: resource.external_ref || resource.name
   defp resource_label(_not_loaded_or_missing), do: nil
-
-  defp delivery_context(work_item, provider, :change),
-    do: %{provider: provider, recorded_at: work_item.external_change_updated_at}
-
-  defp delivery_context(work_item, provider, :ci),
-    do: %{provider: provider, recorded_at: work_item.external_ci_updated_at}
 
   defp provider_pull_request_state(%{source: "provider"} = delivery, work_item),
     do: Map.put(delivery, :status, work_item.external_pull_request_state || "unknown")
@@ -695,25 +713,22 @@ defmodule SymmetryControlWeb.PortalJSON do
   defp project_active?(%{status: "active"}), do: true
   defp project_active?(_project), do: false
 
-  defp value(map, "summary") when is_map(map),
-    do: Map.get(map, "summary") || Map.get(map, :summary)
+  # The getter answers the two spellings a key can arrive under: the string is
+  # the wire spelling (the attempt's result JSON, deep-stringified before it is
+  # stored and string-keyed again after the JSONB round trip), the atom arm is a
+  # legacy fallback that no producer in this revision reaches. One table names
+  # both, so a new evidence field is a word here instead of another clause, and
+  # the atoms are this module's own literals (never built from a served key).
+  @evidence_keys ~w[summary message question findings changed_artifacts changed_files tests]a
+  @evidence_key_strings Map.new(@evidence_keys, &{Atom.to_string(&1), &1})
 
-  defp value(map, "message") when is_map(map),
-    do: Map.get(map, "message") || Map.get(map, :message)
+  defp value(map, key) when is_map(map) do
+    case Map.fetch(@evidence_key_strings, key) do
+      {:ok, atom_key} -> Map.get(map, key) || Map.get(map, atom_key)
+      :error -> nil
+    end
+  end
 
-  defp value(map, "question") when is_map(map),
-    do: Map.get(map, "question") || Map.get(map, :question)
-
-  defp value(map, "findings") when is_map(map),
-    do: Map.get(map, "findings") || Map.get(map, :findings)
-
-  defp value(map, "changed_artifacts") when is_map(map),
-    do: Map.get(map, "changed_artifacts") || Map.get(map, :changed_artifacts)
-
-  defp value(map, "changed_files") when is_map(map),
-    do: Map.get(map, "changed_files") || Map.get(map, :changed_files)
-
-  defp value(map, "tests") when is_map(map), do: Map.get(map, "tests") || Map.get(map, :tests)
   defp value(_map, _key), do: nil
 
   defp list_value(map, primary, fallback \\ nil) do
