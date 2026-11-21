@@ -1,5 +1,5 @@
 defmodule SymmetryControl.WorkspacesCompletionTest do
-  use SymmetryControl.DataCase, async: false
+  use SymmetryControl.OrchestrationCase, async: false
 
   alias Ecto.Adapters.SQL.Sandbox
   alias SymmetryControl.{Orchestration, Workspaces}
@@ -127,7 +127,14 @@ defmodule SymmetryControl.WorkspacesCompletionTest do
   test "agent and runtime resources require registered identities" do
     project = project_fixture()
     %{machine: machine} = enroll_machine("resource-identity-machine")
-    runtime = register_runtime(machine, "resource-identity-runtime", "codex")
+
+    runtime =
+      register_runtime(machine, ~U[2026-09-04 08:00:00.000000Z],
+        runtime_key: "resource-identity-runtime",
+        name: "resource-identity-runtime",
+        agent_profile: "codex",
+        daemon_instance_id: Ecto.UUID.generate()
+      )
 
     for attrs <- [
           %{kind: "runtime", name: "Missing runtime"},
@@ -478,9 +485,17 @@ defmodule SymmetryControl.WorkspacesCompletionTest do
 
     assert {:ok, launched, :created} = Workspaces.launch_work_item(item.id)
     %{machine: machine} = enroll_machine("retry-policy-machine")
-    runtime = register_runtime(machine, "retry-policy-runtime", project.default_agent_profile)
+
+    runtime =
+      register_runtime(machine, ~U[2026-09-04 08:00:00.000000Z],
+        runtime_key: "retry-policy-runtime",
+        name: "retry-policy-runtime",
+        agent_profile: project.default_agent_profile,
+        daemon_instance_id: Ecto.UUID.generate()
+      )
+
     assert {:ok, run} = Orchestration.assign_one(now: ~U[2026-09-04 08:00:00.000000Z])
-    fence = claim(run, runtime)
+    fence = claim(run, runtime, ~U[2026-09-04 08:00:00.000000Z], claim_id: Ecto.UUID.generate())
 
     assert {:ok, _running} =
              Orchestration.transition(
@@ -660,51 +675,6 @@ defmodule SymmetryControl.WorkspacesCompletionTest do
              )
 
     enrolled
-  end
-
-  defp register_runtime(machine, runtime_key, agent_profile) do
-    assert {:ok, [runtime]} =
-             Orchestration.register_runtimes(
-               machine.id,
-               Ecto.UUID.generate(),
-               [
-                 %{
-                   runtime_key: runtime_key,
-                   name: runtime_key,
-                   capacity: 1,
-                   agent_profile: agent_profile,
-                   workspace: "primary",
-                   capabilities: %{}
-                 }
-               ],
-               now: ~U[2026-09-04 08:00:00.000000Z]
-             )
-
-    runtime
-  end
-
-  defp claim(run, runtime) do
-    claim_id = Ecto.UUID.generate()
-
-    assert {:ok, claimed} =
-             Orchestration.claim(
-               run.id,
-               %{
-                 runtime_id: runtime.id,
-                 runtime_epoch: runtime.connection_epoch,
-                 generation: run.generation,
-                 claim_id: claim_id
-               },
-               now: ~U[2026-09-04 08:00:00.000000Z]
-             )
-
-    %{
-      runtime_id: runtime.id,
-      runtime_epoch: runtime.connection_epoch,
-      generation: run.generation,
-      claim_id: claimed.claim_id,
-      lease_token: claimed.lease_token
-    }
   end
 
   defp fetch_item(id) do

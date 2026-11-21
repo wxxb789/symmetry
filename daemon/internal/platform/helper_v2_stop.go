@@ -499,7 +499,7 @@ func (helper *linuxOwnerHelperV2) verifyLeafMembershipBeforeStop(
 		if gateLive {
 			identity, err := ProcessIdentity(gate.Process.PID)
 			if err != nil || identity != gate.Process.Identity {
-				return fmt.Errorf("verify exact live gate identity before anchor stop: %w", errOr(err, errors.New("creation identity differs")))
+				return fmt.Errorf("verify exact live gate identity before anchor stop: %w", errOr(err, ErrLinuxOwnerCreationIdentityDiffers))
 			}
 			if err := prepared.VerifyLeafMembership(int(helper.leaf.leafFD)); err != nil {
 				return fmt.Errorf("verify exact live gate remains in its prepared leaf: %w", err)
@@ -509,7 +509,7 @@ func (helper *linuxOwnerHelperV2) verifyLeafMembershipBeforeStop(
 	if untrustedProcess != nil {
 		preparedIdentity, err := linuxOwnerHelperUntrustedProcessIdentity(prepared.Identity(), prepared.PIDFD(), helper.helper, launcher)
 		if err != nil || !preparedIdentity.Equal(*untrustedProcess) {
-			return fmt.Errorf("verify exact failed-Prepare child PIDFD identity: %w", errOr(err, errors.New("identity differs")))
+			return fmt.Errorf("verify exact failed-Prepare child PIDFD identity: %w", errOr(err, ErrLinuxOwnerIdentityDiffers))
 		}
 		ready, err := linuxOwnerAnchorPIDFDReady(prepared.PIDFD())
 		if err != nil {
@@ -553,7 +553,7 @@ func (helper *linuxOwnerHelperV2) verifyLeafMembershipBeforeStop(
 	identities := map[int]string{helper.helper.PID: helper.helper.Identity}
 	helperIdentity, err := ProcessIdentity(helper.helper.PID)
 	if err != nil || helperIdentity != helper.helper.Identity {
-		return fmt.Errorf("verify exact helper identity before StopLeaf: %w", errOr(err, errors.New("creation identity differs")))
+		return fmt.Errorf("verify exact helper identity before StopLeaf: %w", errOr(err, ErrLinuxOwnerCreationIdentityDiffers))
 	}
 	verifiedParents := map[int]struct{}{helper.helper.PID: {}}
 	descendants := make(map[int]authority.LinuxCgroupProcessIdentity)
@@ -579,14 +579,14 @@ func (helper *linuxOwnerHelperV2) verifyLeafMembershipBeforeStop(
 			}
 			actualParentIdentity, err := ProcessIdentity(parentPID)
 			if err != nil || actualParentIdentity != parentIdentity {
-				return fmt.Errorf("verify exact process-tree parent identity before StopLeaf: %w", errOr(err, errors.New("creation identity differs")))
+				return fmt.Errorf("verify exact process-tree parent identity before StopLeaf: %w", errOr(err, ErrLinuxOwnerCreationIdentityDiffers))
 			}
 			verifiedParents[parentPID] = struct{}{}
 		}
 		process := snapshot.process
 		identity, err := ProcessIdentity(pid)
 		if err != nil || identity != process.Identity {
-			return fmt.Errorf("capture exact recursive run-process identity: %w", errOr(err, errors.New("creation identity changed")))
+			return fmt.Errorf("capture exact recursive run-process identity: %w", errOr(err, ErrLinuxOwnerCreationIdentityChanged))
 		}
 		if launcher != nil && pid == launcher.PID {
 			if process.Equal(*launcher) {
@@ -630,7 +630,7 @@ func (helper *linuxOwnerHelperV2) verifyLeafMembershipBeforeStop(
 		}
 		identityAfter, err := ProcessIdentity(pid)
 		if err != nil || identityAfter != process.Identity {
-			return fmt.Errorf("revalidate exact recursive process identity before StopLeaf: %w", errOr(err, errors.New("creation identity changed")))
+			return fmt.Errorf("revalidate exact recursive process identity before StopLeaf: %w", errOr(err, ErrLinuxOwnerCreationIdentityChanged))
 		}
 		role := "descendant"
 		if gate != nil && process.Equal(gate.Process) {
@@ -1046,7 +1046,7 @@ func (helper *linuxOwnerHelperV2) reapAdoptedChildren(ctx context.Context, gate 
 			}
 			credentials, err := readLinuxOwnerProcessCredentials(pid)
 			if err != nil || credentials.Parent != os.Getpid() {
-				return 0, "", fmt.Errorf("verify exact adopted child parent: %w", errOr(err, errors.New("parent differs from helper")))
+				return 0, "", fmt.Errorf("verify exact adopted child parent: %w", errOr(err, ErrLinuxOwnerParentDiffersFromHelper))
 			}
 			if err := verifyLinuxOwnerRunChildCredentials(pid, "descendant", helper.owner); err != nil {
 				return 0, "", err
@@ -1091,12 +1091,12 @@ func (helper *linuxOwnerHelperV2) reapAdoptedChildren(ctx context.Context, gate 
 			identityAfter, err := ProcessIdentity(pid)
 			if err != nil || identityAfter != process.Identity {
 				_ = pidfdFile.Close()
-				return 0, "", fmt.Errorf("revalidate adopted child identity after origin proof: %w", errOr(err, errors.New("creation identity changed")))
+				return 0, "", fmt.Errorf("revalidate adopted child identity after origin proof: %w", errOr(err, ErrLinuxOwnerCreationIdentityChanged))
 			}
 			credentials, err = readLinuxOwnerProcessCredentials(pid)
 			if err != nil || credentials.Parent != os.Getpid() {
 				_ = pidfdFile.Close()
-				return 0, "", fmt.Errorf("revalidate adopted child parent after origin proof: %w", errOr(err, errors.New("parent differs from helper")))
+				return 0, "", fmt.Errorf("revalidate adopted child parent after origin proof: %w", errOr(err, ErrLinuxOwnerParentDiffersFromHelper))
 			}
 			if err := verifyLinuxOwnerRunChildCredentials(pid, "descendant", helper.owner); err != nil {
 				_ = pidfdFile.Close()
