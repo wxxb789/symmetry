@@ -614,38 +614,32 @@ defmodule SymmetryControlWeb.GoalControllerTest do
   end
 
   defp post_goal_command(conn, goal_id, kind, payload) do
-    goal =
-      operator_conn(conn)
-      |> get("/api/v1/goals/#{goal_id}")
-      |> json_response(200)
-
     operator_conn(conn)
-    |> post("/api/v1/goals/#{goal_id}/commands", %{
-      "schema_version" => "symmetry.goal_command.v1",
-      "mutation_id" => Ecto.UUID.generate(),
-      "expected_version" => goal["version"],
-      "expected_revision" => goal["current_revision"],
-      "kind" => kind,
-      "payload" => payload
-    })
+    |> goal_command("/api/v1", goal_id, kind, payload)
     |> json_response(200)
   end
 
   defp create_project, do: create_context_project("Goal API project", "G")
 
   defp amend_goal(conn, prefix, goal_id, initial_revision) do
-    read = conn |> get("#{prefix}/goals/#{goal_id}") |> json_response(200)
+    goal_command(conn, prefix, goal_id, "amend", %{
+      "reason" => "Amend the contract from the surface under test",
+      "revision_contract" => Map.delete(initial_revision, "reason")
+    })
+  end
+
+  # The one goal-command envelope both helpers above send: read the goal's
+  # current version/revision on the surface under test, then post the command.
+  defp goal_command(conn, prefix, goal_id, kind, payload) do
+    goal = conn |> get("#{prefix}/goals/#{goal_id}") |> json_response(200)
 
     post(conn, "#{prefix}/goals/#{goal_id}/commands", %{
       "schema_version" => "symmetry.goal_command.v1",
       "mutation_id" => Ecto.UUID.generate(),
-      "expected_version" => read["version"],
-      "expected_revision" => read["current_revision"],
-      "kind" => "amend",
-      "payload" => %{
-        "reason" => "Amend the contract from the surface under test",
-        "revision_contract" => Map.delete(initial_revision, "reason")
-      }
+      "expected_version" => goal["version"],
+      "expected_revision" => goal["current_revision"],
+      "kind" => kind,
+      "payload" => payload
     })
   end
 

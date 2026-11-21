@@ -63,7 +63,7 @@ defmodule SymmetryControlWeb.QueryParams do
   def body_params(conn) when is_map(conn.body_params), do: conn.body_params
   def body_params(_conn), do: %{}
 
-  @doc "The replay key every write route requires exactly once."
+  @doc "The replay key a write route requires exactly once."
   def idempotency_key(conn) do
     case get_req_header(conn, "idempotency-key") do
       [key] when byte_size(key) > 0 -> {:ok, key}

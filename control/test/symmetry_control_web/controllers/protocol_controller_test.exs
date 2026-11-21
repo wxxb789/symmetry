@@ -1222,6 +1222,18 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
         "invalid_request"
       )
     end
+
+    # A query fence carrying `machine_id` fails as a `with`-clause error — an
+    # unhandled 500 in production, where an unknown key answers 400. The branch
+    # is preserved deliberately (plan CW-7 in
+    # docs/plans/2026-11-21-rf-w2-03-controller-plumbing-plan.md); the one-line
+    # fix increment flips this pin to the standard `invalid_request` 400.
+    machine_id_query = fence |> Map.put("machine_id", machine_id) |> URI.encode_query()
+
+    assert_raise WithClauseError, fn ->
+      bearer(conn, machine_token)
+      |> get("/api/v1/runs/#{run_id}/context?#{machine_id_query}")
+    end
   end
 
   test "the dispatch epoch accepts the decimal text a query carries", %{conn: conn} do

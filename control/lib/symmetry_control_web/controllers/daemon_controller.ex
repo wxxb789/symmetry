@@ -478,8 +478,9 @@ defmodule SymmetryControlWeb.DaemonController do
 
   # The one fence rule: the daemon presents these five fields, in this order, on
   # every fenced request. `:string` is a non-empty string; the integers are any
-  # positive value the durable columns hold. Only the carrier differs — a JSON
-  # body carries the number, a query string the decimal text.
+  # positive integer (no upper bound; the baseline accepted the same set). Only
+  # the carrier differs — a JSON body carries the number, a query string the
+  # decimal text.
   @fence_spec [
     {"runtime_id", :string},
     {"runtime_epoch", :integer},
