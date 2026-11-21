@@ -1,13 +1,4 @@
 #!/usr/bin/env python3
-"""Classify a pull request's changed paths into the `changes` job's routing outputs.
-
-This program lived in the `Classify changed paths` step's `python3 - <<'PY'` heredoc in
-`.github/workflows/ci.yml` until refactor slice W3-01 moved it here; the step runs it in
-the checkout root, exactly as the heredoc ran in it. It appends `run-heavy`,
-`run-records` and `run-citations` to `$GITHUB_OUTPUT`; the step, and only it, runs for
-pull requests - the job folds each output true for every other event - so a run of
-this program always classifies a pull request's `HEAD^1..HEAD` diff.
-"""
 
 import os
 import subprocess
@@ -26,10 +17,6 @@ run_records = any(
     or path == b"scripts/ci/revision_scope.py"
     for path in paths
 )
-# The documents the citation existence gate audits - the corpus this program and the gate
-# both import from scripts/ci/audited_paths.py - plus the gate's own program, its fixture
-# suite, the shared revision-range module and the corpus module itself, so a change to any
-# of them runs the gate end to end.
 run_citations = any(
     any(path == entry.encode() or path.startswith(entry.encode() + b"/") for entry in AUDITED_PATHS)
     or path == b"scripts/ci/check-citation-existence.py"

@@ -51,6 +51,10 @@ two reflowed statements differ only in whitespace. The proof command and its out
 the final report: a `diff` of the dedented heredoc from `git show 5c4d59f5:.github/workflows/ci.yml`
 against the new file, which shows only the four deltas above.
 
+Review round 1 (P2-1) removed the docstring delta 1 had added and the repointed delta 2 comment: the
+delivered module is the shebang line plus the program, with the verbatim `--no-renames` why-comment
+(see "Review round 1 fixes" below).
+
 The step becomes:
 
 ```yaml
@@ -71,12 +75,10 @@ different program and stays (W6-01's set).
 
 ## One corpus source (contract Change 2)
 
-`scripts/ci/audited_paths.py`:
+`scripts/ci/audited_paths.py` (a library module, not an entry point: review round 1, P2-1, dropped
+its shebang and docstring):
 
 ```python
-#!/usr/bin/env python3
-"""The audited document corpus the citation existence gate and the classifier share."""
-
 AUDITED_PATHS = ("docs/runbooks", "docs/design/quality.md", "docs/archive/CLOSED-TODO.md")
 ```
 
@@ -112,7 +114,8 @@ Deleted: `extract_classifier`. Retargeted: `setUpClass` runs
 `scripts/ci/classify-changed-paths.py` itself (the real file, not a copy), and
 `classifier_step_keys`/`check_classifier_step` anchor on the step whose `run` invokes that file,
 still pinning `id: paths`, the pull-request-only `if:` and `shell: bash`, and additionally pinning
-that the workflow text carries no remaining `python3 - <<'PY'` heredoc.
+that the `changes` job carries no re-embedded `python3 - <<'PY'` heredoc (review round 1, P3-1:
+scoped to that job's block, so an unrelated job's heredoc stays green).
 
 `predicate_literals` stays for what is still literal-based: the records predicate and the
 run-citations tool paths. The audited-family coverage check moves from "a trailing-slash literal is
@@ -164,10 +167,77 @@ Mutation cases (all run in-memory copies; the files under test are never touched
 | workflow: condition `legacy-route-audit` | `check_job_gating` raises |
 | workflow: drop the `run-records` fold | `check_output_folds` raises |
 | workflow: run the classifier step off pull requests | `check_classifier_step` raises |
+| workflow: **reintroduce a heredoc step into the `changes` job** (the classifier step's `run` line intact) | `check_classifier_step` raises; the guard inspects only the `changes` job block, so a `python3 - <<'PY'` step added to an unrelated job stays green (review round 1, P3-1) |
 
 The suite prints each fixture's measured triple (`fixture <name>: run-heavy=… run-records=… run-citations=…`)
 while it measures them, so the judging artifact's 18 triples are the suite's own output rather than a
 re-run by hand.
+
+## Review round 1 fixes (P2-1, P3-1, P3-2)
+
+Owner review `212-opus-review-1.md` requested changes on three findings; the conductor kept the
+heredoc regression guard (scoped, not deleted) and re-affirmed the comment policy as binding for
+every hunk this slice writes.
+
+Comment policy (P2-1) — no slice provenance, module-intent prose or banners remain in the changed
+bytes:
+
+- `scripts/ci/classify-changed-paths.py`: the module docstring (program history, `GITHUB_OUTPUT`
+  mechanics) and the four-line `run_citations` what-comment are gone; the shebang, the verbatim
+  `--no-renames` why-comment and the program stay.
+- `scripts/ci/audited_paths.py`: one assignment, no shebang, no docstring.
+- `scripts/ci/check-citation-existence.py`: the four-line import comment is gone; the sibling
+  `from audited_paths import AUDITED_PATHS` now groups with `import revision_scope`, whose comment
+  already states the sibling-resolution rule (ruff's import sorter requires the grouping).
+- `scripts/ci/test-ci-changed-path-classifier.py`: the module docstring, the `CLASSIFIER`/
+  `CORPUS_MODULE` provenance comments, the renamed divider banner, the history in
+  `check_corpus_single_definition` and the signature-restating helper docstrings (`parse_text`,
+  `module_level_names`, `imported_names`, `predicate_assignment`, `loaded_names`) are gone; the
+  remaining comments and docstrings are ≤2 lines and why-only (the family-fixture witness, the
+  corpus/mapping sync, the `b"/"` filter, the gate's sibling import, the mutation-copy import trap).
+- `.github/workflows/ci.yml`: the `changes`-job `run-citations` region and the `citation-existence`
+  corpus region are back to their pre-slice line counts (3 and 5 replaced lines; both blocks at
+  their pre-slice lengths).
+
+The intent text the source used to carry is here: the classifier runs from the checkout root of a
+pull request, writes `run-heavy`/`run-records`/`run-citations` to `$GITHUB_OUTPUT`, and the step's
+pull-request-only `if:` is why every run of it classifies exactly `HEAD^1..HEAD` ("The step becomes"
+above); the fixture repositories are real two-commit repositories because only a real diff pins the
+`--no-renames` rename and deletion behaviour, and the mutation cases sabotage in-memory copies of
+the workflow and program text, never the files ("The suite retarget" above).
+
+Scoped heredoc guard (P3-1) — `check_classifier_step(keys, changes_block)` takes the `changes` job's
+block and refuses `python3 - <<'PY'` only inside it; the failure names the changes job. Two tests
+pin the scope: `test_mutation_reintroducing_a_heredoc_step_in_the_changes_job_breaks_the_step_check`
+(a heredoc step inserted above the classifier step, its `run` line intact; `classifier_step_keys`
+still finds the anchor, the check must raise) and `test_a_heredoc_in_an_unrelated_job_stays_green`
+(a heredoc step added to `legacy-route-audit`; the check must not raise). Guard-removal mutation,
+measured on the shipped bytes — the `not any(...)` require replaced by `True or ...`, the suite
+re-run, the require restored and verified by matching md5:
+
+| Mutation | Observed |
+| --- | --- |
+| scoped heredoc require removed | **exit 1**, `Ran 31 tests`, `FAILED (failures=1)` — `test_mutation_reintroducing_a_heredoc_step_in_the_changes_job_breaks_the_step_check`: `AssertionError: AssertionError not raised`; the green-control test passes throughout |
+
+Parse-once AST (P3-2) — `parse_text` is gone. `module_level_names` and `imported_names` call
+`ast.parse` directly; `predicate_assignment(tree, output)` takes a parsed module; `predicate_literals`
+parses each program text once and looks the three predicates up in that one tree;
+`check_run_citations_consumes_corpus` parses its text once. Four parses per program text became one,
+with the same assertions.
+
+Re-run gates (foreground, on the frozen tree, 2026-11-22):
+
+| Command | Result |
+| --- | --- |
+| `python3 scripts/ci/test-ci-changed-path-classifier.py` | **exit 0**, `Ran 31 tests`, `OK` (18 fixture triples printed, all at their pinned values) |
+| `python3 scripts/ci/test-check-citation-existence.py` | **exit 0**, `Ran 49 tests`, `OK` |
+| `python3 scripts/ci/test-check-record-cleanliness.py` | **exit 0**, `Ran 19 tests`, `OK` |
+| `python3 scripts/ci/test-no-legacy-routes-audit.py` (WSL Ubuntu-24.04, clean `PATH`) | **exit 0**, `Ran 6 tests`, `OK`; on the Windows host the pre-existing 11 environmental failures repeat unchanged (`/bin/bash` invoked on a Windows planted path) |
+| `ruff check scripts/ci` (0.17.5) | **exit 0**, `All checks passed!` |
+| `ruff format --check scripts/ci` (0.17.5) | **exit 0**, `53 files already formatted` |
+| `git diff --check` | **exit 0** |
+| `actionlint -shellcheck= -pyflakes= .github/workflows/ci.yml` (1.7.12) | **exit 0**, no output |
+| host-path scan over the committed range (conductor rule; the literal pattern is the profile segment) | no matches |
 
 ## The 18 pinned triples (fixture order)
 

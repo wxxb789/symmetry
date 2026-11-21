@@ -29,10 +29,8 @@ jobs:
   # reproduce.
   #
   # And `run-citations`: a change to a document the citation existence gate audits -
-  # the corpus in `scripts/ci/audited_paths.py`: `docs/runbooks/**`,
-  # `docs/design/quality.md` or `docs/archive/CLOSED-TODO.md`, the document family the
-  # classifier derives from that same tuple - or to the gate's own program, its fixture
-  # suite, the shared `revision_scope.py` or the corpus module itself, gates the
+  # the corpus in `scripts/ci/audited_paths.py` - or to the gate's own program, its
+  # fixture suite, the shared `revision_scope.py` or the corpus module, gates the
   # citation-existence job below. The audited documents are the documents a
   # documentation-only pull request can change, so this too is a separate output
   # rather than part of run-heavy, and the self-triggering tool paths run the gate end
@@ -92,12 +90,10 @@ jobs:
   # documents it audits are documents a documentation-only pull request can change,
   # and the classifier also fires it for a change to the gate's own program, its
   # fixture suite, the revision-range module or the corpus module, so a change to any
-  # of those runs the gate end to end.
-  # The audited corpus is `scripts/ci/audited_paths.py`: the gate imports its
-  # `AUDITED_PATHS` and the classifier above derives the document family it gates from
-  # the same tuple, so the documents this job audits and the changes that start it
-  # cannot drift apart. `fetch-depth: 0` gives the job the comparison base the gate
-  # needs.
+  # of those runs the gate end to end. The gate's pathspec and the classifier's document
+  # family both derive from the shared `scripts/ci/audited_paths.py`, so the documents
+  # audited and the changes that start the audit cannot drift apart. `fetch-depth: 0`
+  # gives the job the comparison base the gate needs.
   citation-existence:
     needs: changes
     if: needs.changes.outputs.run-citations == 'true'
