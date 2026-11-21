@@ -1134,7 +1134,7 @@ defmodule SymmetryControl.Workspaces do
   defp expect_version(record, attrs) do
     with {:ok, expected_version} <- VersionedChangeset.expected_version(attrs),
          :ok <- VersionedChangeset.matches_version(record, expected_version) do
-      {:ok, Map.drop(attrs, [:version, "version"])}
+      {:ok, VersionedChangeset.drop_attr(attrs, :version)}
     end
   end
 

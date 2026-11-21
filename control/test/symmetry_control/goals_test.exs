@@ -3666,6 +3666,15 @@ defmodule SymmetryControl.GoalsTest do
     assert late_receipt["event_sequence"] == late_outcome_event.sequence
     refute late_receipt["mutation_id"] == original_settlement_receipt["mutation_id"]
 
+    # These ids are durable idempotency keys (settlement events and admission keys); freeze the
+    # delivered bytes here so a formatter change (prefix, version nibble, layout) fails in this
+    # test instead of silently rewriting stored keys.
+    assert original_settlement_receipt["mutation_id"] ==
+             frozen_mutation_id("settlement", [validation.id, validation_run.id, "1"])
+
+    assert late_receipt["mutation_id"] ==
+             frozen_mutation_id("late-validation-outcome", [validation.id, validation_run.id, "1"])
+
     assert {:ok, original_replay} =
              Goals.settle_task(validation.id, validation_run.id, 1, now: @now)
 
@@ -9175,6 +9184,23 @@ defmodule SymmetryControl.GoalsTest do
 
   defp evidence_subject_hash(subject) do
     "sha256:" <> Base.encode16(SymmetryControl.RequestHash.canonical(subject), case: :lower)
+  end
+
+  # The frozen bytes `Goals.mutation_id/2` renders for the six named part vectors: sha256 over
+  # "<prefix>:<part>:<part>…" with the version-5 and "a" variant nibbles these durable keys have
+  # always carried (not RFC 9562 name hashing). Deliberately independent of the production
+  # helper, so the ids the receipts serve cannot change bytes without a red test.
+  defp frozen_mutation_id(prefix, parts) do
+    hex =
+      :crypto.hash(:sha256, prefix <> ":" <> Enum.join(parts, ":"))
+      |> Base.encode16(case: :lower)
+
+    String.slice(hex, 0, 8) <>
+      "-" <>
+      String.slice(hex, 8, 4) <>
+      "-5" <>
+      String.slice(hex, 13, 3) <>
+      "-a" <> String.slice(hex, 17, 3) <> "-" <> String.slice(hex, 20, 12)
   end
 
   defp persist_run_evidence!(evidence) do

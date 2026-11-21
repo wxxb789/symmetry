@@ -39,8 +39,7 @@ defmodule SymmetryControl.Schemas.VersionedChangeset do
     |> normalize_stale_result()
   end
 
-  @spec normalize_stale_result(term()) :: term()
-  def normalize_stale_result({:error, changeset} = error) do
+  defp normalize_stale_result({:error, changeset} = error) do
     cond do
       Keyword.has_key?(changeset.errors, :lock_version) -> {:error, :stale}
       Keyword.has_key?(changeset.errors, :provider_action_intents) -> {:error, :state_conflict}
@@ -48,7 +47,7 @@ defmodule SymmetryControl.Schemas.VersionedChangeset do
     end
   end
 
-  def normalize_stale_result(result), do: result
+  defp normalize_stale_result(result), do: result
 
   @spec put_attr(map(), atom(), term()) :: map()
   def put_attr(attrs, key, value) do

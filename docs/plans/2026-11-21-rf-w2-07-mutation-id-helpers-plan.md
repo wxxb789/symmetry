@@ -116,7 +116,7 @@ expected_version(attrs)        :: {:ok, pos_integer()} | {:error, :invalid_reque
 matches_version(record, expected) :: :ok | {:error, :stale | :invalid_request}
 update_with_stale_error(changeset) :: {:ok, struct()} | {:error, :stale | :state_conflict | Ecto.Changeset.t()}
 delete_with_stale_error(changeset) :: {:ok, struct()} | {:error, :stale | :state_conflict | Ecto.Changeset.t()}
-normalize_stale_result(result)     :: result (the two clauses above, verbatim)
+defp normalize_stale_result(result) :: result (the two clauses above, verbatim; private, no @spec)
 put_attr(attrs, key, value)        :: map()
 drop_attr(attrs, key)              :: map()
 drop_attrs(attrs, keys)            :: map()
@@ -191,7 +191,7 @@ checkout's tree (identical `mix.lock` md5 `99cf712f…`) at `Q:/repos/wt-w2-07-m
 | E4 targeted suites (head) | `mix test test/symmetry_control/goals_test.exs test/symmetry_control/integrations_test.exs test/symmetry_control/workspaces_test.exs test/symmetry_control/orchestration_review_test.exs` | exit 0; counts recorded |
 | E5 format + compile | `mix format --check-formatted`, `mix compile --warnings-as-errors` | exit 0, empty / 0 warnings |
 | E6 duplicate-definition census | `sh rf-w2-07-count.sh <base|head>` | measured: base `TRACKED-TOTAL 25` (6 builders + 19 helper clauses across the two contexts, worst case 3 clauses for `matches_version/2`), head `18` (6 builders + `mutation_id/2` + 11 clauses — 8 helpers — all in the shared module); UUID formatter normalized blocks 1 form × 6 copies → 1 form × 1 copy with an unchanged form-text sha256; a planted local duplicate moves the count (M5) |
-| E7 new pins | the two added tests (below) | green on head; the integrations pin is red on base for the non-integer version |
+| E7 new pins | the three added tests (below) | green on head; the integrations pin is red on base for the non-integer version |
 | E8 mutation checks | M1 drop the prefix from `mutation_id/2`; M2 change `-5` to `-4`; M3 keep the old 2-clause `matches_version/2` tail in the shared module; M4 delete the `:lock_version` branch from `normalize_stale_result/1`; M5 plant a duplicate `expected_version/1` in `workspaces.ex`; M6 make `put_attr/3` always use the atom spelling; M7 accept `version == 0` in `expected_version/1` | observed: M1/M2 → E1 red (1200/1200 mismatches; M1 also `collisions=1`); M3 → both new pins red (integer versions keep E3 identical); M4 → the concurrent race test (`integrations_test.exs:97`) red, E3 canonically unchanged because a non-race stale write is pre-checked by `matches_version/2`; M5 → E6 count 1→2 and `compile --warnings-as-errors` fails on the unused function; M6 → the capture's first write raises in `Ecto.Changeset.cast`; M7 → the capture bytes differ. Each reverted, `md5sum -c` restore proof |
 | E9 whitespace | `git diff --check` | exit 0, empty |
 | E10 full suite | `mix test` (conductor gate-runner per contract; run here only if no other suite is concurrent) | exit 0; counts recorded |
@@ -205,8 +205,11 @@ checkout's tree (identical `mix.lock` md5 `99cf712f…`) at `Q:/repos/wt-w2-07-m
 **New pins.** `integrations_test.exs`: `delete_connection/2` with a non-integer version returns
 `{:error, :invalid_request}` (the resolved unified rule; red on base). `workspaces_test.exs`:
 `delete_resource/2` with a non-integer version returns `{:error, :invalid_request}` (unchanged
-behaviour, now pinned so the shared clause cannot drift). Both are one request-free call each;
-they are the only test additions, no assertion is deleted, renamed or weakened.
+behaviour, now pinned so the shared clause cannot drift). `goals_test.exs:3667`: the settlement
+and late-validation-outcome receipts' `mutation_id`s are asserted against the frozen id expression
+(`frozen_mutation_id/2`, the delivered bytes kept independently of `Goals.mutation_id/2`) next to
+the existing inequality refutation. The first two are one request-free call each; these three are
+the only test additions, no assertion is deleted, renamed or weakened.
 
 ## Design trade-offs
 
@@ -238,8 +241,9 @@ they are the only test additions, no assertion is deleted, renamed or weakened.
 - Result dispatch flattening (W3-10) and the `goals.ex` facade split (W4-07): the mutation-id
   region stops at the six builders plus `mutation_id/2`.
 - Goal schema validators (W2-05, landed as `bda93b11`) and provider access (W4-06): untouched.
-- `goals_test.exs` settlement/usage cases are **not** edited; W1-12 (#149) already rewrote the
-  fixture usage there and this slice deliberately adds no test to that file.
+- `goals_test.exs`: only the two frozen mutation-id equalities beside the existing settlement and
+  late-validation receipt assertions (`:3667`); no other settlement/usage case is edited (W1-12
+  (#149) owns the fixture usage rewrite there).
 - `fetch/2` (three copies, one unowned) and `delete_changeset/1` (unowned files), as above.
 - `chat.ex`, `integration_provider_stub.ex`, the portal controllers: no edits; the controllers are
   the *oracle* for the bodies, not part of the change.
