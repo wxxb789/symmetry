@@ -271,7 +271,7 @@ working tree, all foreground (the fix is documentation only, so the code gates a
 | DLP replay, whole delivered diff | `git diff origin/main \| grep -i "us[e]rs/"` (repo root) | no matches (exit 1) |
 | DLP replay, added lines | `git diff origin/main \| grep '^+' \| grep -i "us[e]rs/"` | no matches (exit 1) |
 | DLP replay, this fix's added lines | `git diff HEAD \| grep '^+' \| grep -i "us[e]rs/"` | no matches (exit 1) |
-| profile-path scan | `git diff origin/main \| grep -inE 'c:[/\\]+use[a-z]s[/\\]\|/home/[a-z]\|/use[a-z]s/[a-z]'`; `git diff origin/main \| grep -in 'lha[n]'` (the profile name spelled with a character class, like the three transcriptions above) | no matches (exit 1 each) |
+| profile-path scan | `git diff origin/main` piped to case-insensitive extended-regex greps for a Windows user-profile root, a Linux home root and a POSIX users root, plus a grep for the operator's profile name (each spelled with a character class so this record does not match itself) | no matches (exit 1 each) |
 | backslash-u scan | `git diff origin/main \| grep -nP '\\[u]'` | no matches (exit 1) |
 | whitespace | `git diff --check` | exit 0 |
 | gofmt / vet | `gofmt -l ./internal/app/`; `go vet ./...` (`daemon/`) | no files (exit 0); exit 0 |
