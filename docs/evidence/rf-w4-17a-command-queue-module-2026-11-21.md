@@ -16,9 +16,10 @@ not self-referential and is omitted): `command_queue.go 5e42f1d4c682c3acf86fe72e
 `commands.go 8f9667ee3d04b72a7bcc2c52cc3d77cfbe2b812386a2275d19c41f96f14cb046`,
 `outbox.go 9a704d713a7e3de13bb15919f37a32d01dd6d15b8892534c7958c6d295d9766e`,
 `app_test.go 2af9a9b922971ae5cc7ae43e3e6c38464e76c333a1578fdfc54729d045522656`,
-`plan 794da6ca8042718ad50196a12730859abddb7215b2a850e9005a4f7a88a12582`.
-The first two values and the plan value are the apply-stage re-measurement; the other four are the
-implement-stage files, untouched by the accepted findings, so their hashes still bind the delivered tree.
+`plan eb095cee98959f23066d4efb63fde1efaf7df21b363134b13be5830f116ae654`.
+The first two values are the apply-stage re-measurement and the plan value the fix-stage re-measurement
+(that stage's DLP-pattern respelling; fix-stage note in section 6); the other four are the implement-stage
+files, untouched by the accepted findings, so their hashes still bind the delivered tree.
 
 ## 1. Deliverable shape (files, counts)
 
@@ -215,7 +216,7 @@ All gates ran foreground in this worktree on 2026-11-21; heavy suites were seria
 | field-access gate | `grep -rc 'daemon\.\(commandQueue\|queuedCommands\|commandLanes\)' daemon/internal/app/*.go \| grep -v ':0$'`; `grep -rho … \| wc -l` | no non-zero file, 0 matches package-wide (even inside the module) |
 | module purity | `grep -n "daemon\." daemon/internal/app/command_queue.go`; `grep -nE "daemon\.store\|daemon\.log\|os\.\|net/\|http\.\|io\." daemon/internal/app/command_queue.go`; `grep -rn "nolint"` over the diff and the new files | comments only / no matches / no matches (exit 1 each) |
 | citation gate | snapshot commit `37a935a6` in a throwaway clone outside the worktree, carrying exactly this worktree's eight changed paths; `python3 scripts/ci/check-citation-existence.py --base 7954836892f39bc8a92abe11e5efcb5b3bac3476 --head HEAD` | `no audited document added or modified between 7954836892f3 and 37a935a6727c; nothing to check`, exit 0 |
-| host-path / DLP | `git diff \| grep -i "users/"`; `grep -rnP '\\[u]'` over every added line and new file (pattern spelled with a character class so this record does not carry a backslash immediately followed by the letter u) | no matches (exit 1 each) |
+| host-path / DLP | `git diff \| grep -i "us[e]rs/"`; `grep -rnP '\\[u]'` over every added line and new file (both patterns spelled with a character class, so the text of this record does not itself match either check) | no matches (exit 1 each) |
 | exported surface | `grep -nE "^func [A-Z]\|^type [A-Z]\|^var [A-Z]" daemon/internal/app/command_queue.go` | no matches (exit 1): the module adds no public API |
 | whitespace | `git diff --check` | exit 0 (no whitespace errors) |
 | stale-document scan | `grep -rn "command executor\|command queue\|command lane\|queued command\|daemon\.commands\|commandQueue\|commandLane" docs/design docs/runbooks contracts` | no match outside this record and the W1-05 move manifest (a record bound to its own subject revision): no design, runbook, contract or TODO document names the queue fields, so the slice leaves none stale and closes no tracked item |
@@ -242,8 +243,48 @@ working tree and heavy runs were serialized; the header's identity hashes are th
 | new-test mutants | `command_queue.go` with the `byKey` guard (7a) / the `lanes` guard (7b) deleted, target test alone | both red — `panic: assignment to entry in nil map`, reverted; module hash `5e42f1d4…` before and after (section 5) |
 | field-access gate | `grep -rc 'daemon\.\(commandQueue\|queuedCommands\|commandLanes\|commandRequests\|nextCommandRequest\)' daemon/internal/app/*.go` | no non-zero file (exit 1): 0 matches anywhere |
 | module lock / purity / exported surface / nolint | the section 6 rows re-run | unchanged: no lock call, comments-only `daemon.`, no exported symbol, no `nolint` |
-| whitespace / host-path / DLP | `git diff --check`; `git diff \| grep '^+' \| grep -i "users/"`; `git diff \| grep '^+' \| grep -P '\\[u]'` | exit 0; no added line matches (exit 1 each) |
+| whitespace / host-path / DLP | `git diff --check`; `git diff \| grep '^+' \| grep -i "us[e]rs/"`; `git diff \| grep '^+' \| grep -P '\\[u]'` | exit 0; no added line matches (exit 1 each) |
 | citation gate | not re-run | the apply stage adds/modifies no audited document (`docs/runbooks/**`, `docs/design/quality.md`, `docs/archive/CLOSED-TODO.md`); the five changed paths are listed above |
+
+### Fix-stage note (2026-11-21) — review finding R1: the DLP check's own text
+
+The review of `94d04e4..9207e5a4` returned one finding (R1, P3): the closing host-path check
+`git diff origin/main...HEAD | grep -i "us[e]rs/"` (pattern as respelled by this fix) matched the three
+transcriptions of that check inside this record (the implement-stage row above and the apply-stage row
+below) and in the plan's evidence-plan item 9 — the check's own text, not a user-profile path — and the
+apply-stage row's "no added line matches" result was not replayable over the apply commit's own diff,
+whose added row line carried the pattern literally. This stage respells all three transcriptions with a
+character class — the same regex, and the delivered text no longer matches the scans below.
+
+| location | respelled to |
+|---|---|
+| this record, section 6 implement-stage host-path / DLP row | `grep -i "us[e]rs/"` |
+| this record, apply-stage note whitespace / host-path / DLP row | `grep -i "us[e]rs/"` |
+| plan, evidence-plan item 9 | "no `us[e]rs/`-style profile path" |
+
+The plan value in the subject-identity list above is this stage's re-measurement of the respelled plan
+(`sha256 eb095cee98959f23066d4efb63fde1efaf7df21b363134b13be5830f116ae654`). Re-run on the fix-stage
+working tree, all foreground (the fix is documentation only, so the code gates are controls):
+
+| gate | command (cwd) | result |
+|---|---|---|
+| DLP replay, whole delivered diff | `git diff origin/main \| grep -i "us[e]rs/"` (repo root) | no matches (exit 1) |
+| DLP replay, added lines | `git diff origin/main \| grep '^+' \| grep -i "us[e]rs/"` | no matches (exit 1) |
+| DLP replay, this fix's added lines | `git diff HEAD \| grep '^+' \| grep -i "us[e]rs/"` | no matches (exit 1) |
+| profile-path scan | `git diff origin/main \| grep -inE 'c:[/\\]+use[a-z]s[/\\]\|/home/[a-z]\|/use[a-z]s/[a-z]'`; `git diff origin/main \| grep -in 'lha[n]'` (the profile name spelled with a character class, like the three transcriptions above) | no matches (exit 1 each) |
+| backslash-u scan | `git diff origin/main \| grep -nP '\\[u]'` | no matches (exit 1) |
+| whitespace | `git diff --check` | exit 0 |
+| gofmt / vet | `gofmt -l ./internal/app/`; `go vet ./...` (`daemon/`) | no files (exit 0); exit 0 |
+| builds | `GOOS=linux go build ./...`; `GOOS=windows go build ./...` (`daemon/`) | exit 0 each |
+| focused (windows, no race) | `go test -count=1 -v ./internal/app/ -run 'Command\|Queue\|Lane\|Outbox\|Receipt\|Acknowledg'` (`daemon/`) | `ok … 27.133s`, exit 0; 116 top-level + 60 subtest = 176 PASS lines, 0 FAIL; 116 selected (`go test -list`) |
+| native-evidence identity set (R9) | `python3 scripts/ci/test-omo-control-native-evidence.py` (repo root) | `Ran 10 tests in 4.035s`, `OK`, exit 0 |
+| citation gate | `python3 scripts/ci/check-citation-existence.py --base 94d04e4… --head HEAD` (repo root) | `nothing to check`, exit 0 (the fix touches no audited document) |
+| structural rows | the section 6 field-access, module lock / purity / exported-surface / nolint commands | unchanged: 0 matches / no lock call / comments-only `daemon.` / no exported symbol / no `nolint` (exit 1 each) |
+
+The verbatim contract check over the committed range (`git diff origin/main...HEAD`) still reports the
+pre-fix committed tree (3 lines) because this stage must not commit; the same diff over the working tree
+(`git diff origin/main`, which equals the committed range once the operator commits it) answers with no
+matches.
 
 ## 7. Contract clause mapping
 

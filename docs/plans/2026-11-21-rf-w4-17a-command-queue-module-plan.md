@@ -216,7 +216,7 @@ window inside the same `startBackground` lifetime), no test or production path t
    adds/modifies no audited document (`docs/runbooks/**`, `docs/design/quality.md`,
    `docs/archive/CLOSED-TODO.md`), so the expected result is "nothing to check" — and that claim is verified
    against the changed-path list, not assumed.
-9. Host-path and DLP checks over the working-tree diff: no `users/`-style profile path, no backslash-u
+9. Host-path and DLP checks over the working-tree diff: no `us[e]rs/`-style profile path, no backslash-u
    sequence in any added line.
 10. arch-decision-2 R9: `daemon/internal/app/command_queue.go` is added to `SOURCE_PATHS` in
     `scripts/ci/omo-control-native-evidence.py` (owned for that line only; appended at the end of the list
