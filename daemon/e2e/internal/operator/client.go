@@ -1,5 +1,5 @@
-// Package operator carries the operator task-control driver its only callers
-// still drive: the end-to-end witnesses under daemon/e2e. Production has no
+// Package operator carries the operator task-control driver for its only
+// callers — the end-to-end witnesses under daemon/e2e. Production has no
 // reachable caller for the driver, so it ships beside those callers instead of
 // staying unreachable in the machine control client. The transport, error and
 // decode substrate below is a byte-identical copy of the declarations the

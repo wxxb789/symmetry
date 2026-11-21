@@ -82,7 +82,7 @@ recorded here, not a deviation.)
    - `task.go` — `Task`, `TaskWaiting`, their presence-tracking decoders and a `presentFields` copy.
    - `client_test.go`, `client_review_test.go`, `validation_test.go` — the moved operator unit cases
      and the helper copies they need (see *Test split*).
-2. **Production deletions**: exactly the 17 declarations of the first table, and nothing else.
+2. **Production deletions**: exactly the 20 declarations of the first table, and nothing else.
 3. **Production retargets (never deletions)**:
    - `internal/control/client_test.go` loses the four operator rows of `TestClientProtocolRequests`,
      the operator row of `TestClientRejectsIncompleteSuccessResponses`'s sibling file, the
@@ -137,9 +137,10 @@ subject stayed. For the three mixed tables this means:
   `TestOperatorClientRejectsIncompleteSuccessResponses` with the same body, `wantError` string and
   assertion text; the seven machine/enrollment rows keep their table.
 - `TestOperatorClientUsesDedicatedToken` moves whole (the operator token assertion and the
-  machine-client interface assertion, whose interface now names the relocated `Task`); the machine
-  leg is asserted from the same file through an import of `daemon/internal/control`, so the
-  assertion text survives byte-identical instead of being re-invented.
+  machine-client guard, asserted from the same file through an import of `daemon/internal/control`).
+  The guard's original interface named `protocol.Task`; after the move it could only name the
+  relocated `Task`, which the machine client can never return, so it became unfalsifiable — the
+  accepted simplify finding restored it as a name-level `reflect` check (mutation-checked red).
 - `TestNewClientRejectsInvalidConfiguration` stays; its `NewOperatorClient` empty-token assertion
   re-homes as `TestNewOperatorClientRejectsInvalidConfiguration`, which additionally drives the six
   base-URL rejection rows through the moved `parseBaseURL` copy so the copy keeps a rejection arm on
@@ -152,7 +153,7 @@ subject stayed. For the three mixed tables this means:
   below.
 
 **Supervisory retarget (`supervisory_validation_test.go`, retained validators).**
-`TestSupervisoryCommandRequestAndDispatchPayloads` keeps its 18 rows and its dispatch leg
+`TestSupervisoryCommandRequestAndDispatchPayloads` keeps its 17 rows and its dispatch leg
 (`validateCommands`, byte-identical), and the request leg becomes `ValidateSupervisoryPayload`
 guarded by the retained `isSupervisoryCommand` (for every supervisory row the two verdicts agree —
 checked row by row; the `teleport` row's rejection is carried by the dispatch leg, which is where
@@ -185,7 +186,7 @@ this host.
    `GOOS=linux go vet ./e2e/... ./internal/control/... ./internal/protocol/...`,
    `GOOS=linux|windows go build ./...`, `GOOS=linux GOARCH=arm64 go build ./...`,
    `go test -count=1 ./internal/control/... ./internal/protocol/... ./e2e/...`, `git diff --check`.
-2. **Two-strategy removal proof** for each of the 17 moved declarations:
+2. **Two-strategy removal proof** for each of the 20 moved declarations:
    (a) `deadcode -test ./cmd/...` (v0.53.0) for `GOOS=windows GOARCH=amd64`,
    `GOOS=linux GOARCH=amd64`, `GOOS=linux GOARCH=arm64`, run at the baseline revision; the symbol
    must appear in all three findings; (b) `git grep -nw <symbol> -- daemon` at the head revision:
@@ -196,7 +197,7 @@ this host.
    with `go/printer`, and reports (i) every declaration placed in the new package byte-identical to
    its original, (ii) the two remaining declarations (if any) differing only by the sanctioned
    package qualifiers, (iii) every declaration retained in `control`/`protocol` byte-identical to
-   base, (iv) the removed set equalling the intended 17.
+   base, (iv) the removed set equalling the intended 20.
    As implemented, the qualifier normalization covers the `protocol.`, `contracts.` and `control.`
    token prefixes (the third is the machine `Client` type a moved test helper must qualify), prints
    the go/printer diff of every declaration that is not byte-identical, and reports the deliberate

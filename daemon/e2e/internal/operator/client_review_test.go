@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -98,9 +99,7 @@ func TestOperatorClientUsesDedicatedToken(t *testing.T) {
 	}
 
 	machine := mustMachineClient(t, server)
-	if _, ok := any(machine).(interface {
-		GetTask(context.Context, string) (Task, error)
-	}); ok {
+	if _, ok := reflect.TypeOf(machine).MethodByName("GetTask"); ok {
 		t.Fatal("machine Client must not implement task APIs")
 	}
 }

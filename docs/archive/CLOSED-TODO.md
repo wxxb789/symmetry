@@ -1615,18 +1615,23 @@ moved on 2026-11-21 from branch `refactor/rf-w1-14-core-dead-surface`.
       `daemon/internal/protocol/protocol.go` now live in the e2e-owned
       `daemon/e2e/internal/operator/` package beside their only callers, with the transport, error
       and decode substrate copied verbatim and every retained declaration unchanged. The
-      declaration-set proof at this revision: 106 placed declarations, 99 byte-identical to their
-      control or protocol original, 7 differing by the sanctioned package qualifier only (each
-      diff printed), 0 unexplained; 297 retained declarations, 295 byte-identical, 2 deliberately
-      retargeted in `supervisory_validation_test.go` and `client_review_test.go`. The removal
+      declaration-set proof at this revision: 106 placed declarations — 99 byte-identical to their
+      control or protocol original, 6 differing by the sanctioned package qualifier only (each
+      diff printed), and 1 deliberate apply-stage conversion: the machine-client guard in
+      `client_review_test.go`, whose relocation interface could only name the relocated `Task` and
+      so could never match the machine client, restored as a name-level check by the accepted
+      simplify finding (its go/printer diff printed, mutation-checked red); 297 retained
+      declarations, 295 byte-identical, 2 deliberately retargeted in
+      `supervisory_validation_test.go` and `client_review_test.go`. The removal
       evidence: `deadcode -test ./cmd/...` reports every moved symbol unreachable on all three
       targets (GOOS=windows amd64, GOOS=linux amd64, GOOS=linux arm64; 140, 250 and 158 findings
       at the baseline), and the tree-wide `git grep` leaves no reference outside `daemon/e2e/**`.
       The five witness files carry 66 qualifier-only changed lines and 5 added plus 2 removed
       import lines, with zero other changed lines, so no witness body, name, assertion, timeout or
       `--assert` name moved with the code. Mutation checks show the retargeted and moved
-      assertions still fail when the guarded behaviour is flipped (five artificial flips, five red
-      runs). `control.WithMaxResponseBytes` stays in `control` by the same contract's binding
+      assertions still fail when the guarded behaviour is flipped (six artificial flips, six red
+      runs — the sixth re-adds a task API to the machine `Client` and reddens the restored guard).
+      `control.WithMaxResponseBytes` stays in `control` by the same contract's binding
       amendment. The full suite and CI remain the pull request's verification.
 
 ## Deferred review findings (0007f)
