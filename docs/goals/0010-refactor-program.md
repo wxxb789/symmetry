@@ -74,9 +74,9 @@ and flip blocking per area when that area's count reaches zero (plan §10).
   selected-project hook, settle-poll removal, error-reason coverage, test-only seam removal,
   jsdom/browser split, platform dead helpers, capture-fixture consolidation, source-subject
   single implementation, model-routing split.
-- **W6 — tail micro-waves (12 planned slices; W6-12 split at the W6 review, W6-03/W6-06 held for
-  conductor decisions)**: CI structure finalization, browser-spec wiring,
-  `isGoTestBinary` fork removal, opencode promote-or-drop (parked under D1), containment
+- **W6 — tail micro-waves (12 planned slices; W6-12 split at the W6 reconcile; W6-03 HOLD for its
+  re-draft after W4-12, W6-06 for an owner re-scope)**: CI structure finalization, browser-spec
+  wiring, `isGoTestBinary` fork removal, opencode promote-or-drop (parked under D1), containment
   convergence phase 2 (blocked under D3), cmd extraction, frontend route splitting, dead protocol
   API deletion, `GoalAttentionFeed.unavailable` removal, Elixir lint/coverage flips, Styler
   adoption, wall-clock burn-down part 2. Rows touching `ci.yml` serialize in the order shown, at
@@ -105,8 +105,10 @@ GDD increments with DeepSeek worker stages and independent Opus review:
   decomposition or consolidation records a base-vs-HEAD map of each early return, fall-through,
   error short-circuit and default clause, with a gate covering every package whose tests exercise
   the moved paths, not only the edited package). C1-C3 are conductor rules; D1-D16 below remain
-  the owner decisions. Contracts written before 2026-11-21 spell C1/C2 as D1/D2; the rule ids are
-  unchanged.
+  the owner decisions. Contracts written before this amendment (the C1-C3 rename, 2026-11-21)
+  use D1 for C1 where it labels frozen/byte-identical surfaces and D2 for C2 where it labels LOC
+  report-only; a D-number that names an owner-decision topic (for example W6-09's "D2 (binding)"
+  on `GoalAttentionFeed.unavailable`) keeps its owner-decision meaning.
 - Landing: one serialized landing lane at a time; Control slices land only after the full
   `mix test`; after each landing the other ready PRs catch up to `main` with merges whose
   merge-only deltas are verified mechanically. Slow oracles (daemon `-race`, the frontend suite,
@@ -152,13 +154,15 @@ this program.
 ## Status
 
 State re-derived on 2026-11-21 from `gh`, the contracts and the live branches at `origin/main`
-`7954836`, gh snapshot 11:01Z (the T1 refresh logged below). "Pipeline" = dispatched work with no
-PR yet: W3-02, W3-03, W3-12, W4-03 and W4-04 have pushed branches. "Gated on X" lists the
-merge-first set at this snapshot; the contracts are the authority and every gate is re-derived at
-dispatch. The W4 and W5 reconciles under independent two-model review are recorded (reconcile
-reports, parts a and b): W4 split W4-15 into 15a/15b and W5 dropped W5-07 and W5-13. The W6
-contracts were batch-drafted in two parts and reviewed (DeepSeek and Opus); the Opus review holds
-W6-03 and W6-06 for conductor decisions and splits W6-12, and the W6 reconcile is pending.
+`7954836`, gh snapshot 11:36Z (the round-3 T1 refresh logged below). "Pipeline" = dispatched work
+with no PR yet: W3-02, W3-03 and W4-03 have pushed branches. "Gated on X" lists the merge-first
+set at this snapshot; the contracts are the authority and every gate is re-derived at dispatch.
+The W4 and W5 reconciles under independent two-model review are recorded (reconcile reports,
+parts a and b): W4 split W4-15 into 15a/15b and W5 dropped W5-07 and W5-13. The W6 contracts were
+batch-drafted in two parts and reviewed (DeepSeek and Opus), and the W6 reconcile's binding
+decisions are now folded into the contracts: W6-03 stays HOLD (capability supplied via the
+reshaped W4-12; contract re-drafted after W4-12), W6-06 stays HOLD for an owner re-scope plus a
+6a/6b split, and W6-12 splits into 12a/12b.
 
 ### Wave 1 — low-risk enablers (14 slices) — complete
 
@@ -218,7 +222,7 @@ W6-03 and W6-06 for conductor decisions and splits W6-12, and the W6 reconcile i
 | W3-09 | Errcheck triage part 1 — app recovery paths (DA S7a) | — | gated on W3-07; must land before W4-01 |
 | W3-10 | Result dispatch flattening (CCS5) | — | gated on W2-07 (#184) |
 | W3-11 | Narrow HTTP rescue (CCS9b) | #179 | in review |
-| W3-12 | UI primitives + resource-dialog collapse (FE S4+S9) | — | pipeline (branch pushed, no PR; gate W3-03) |
+| W3-12 | UI primitives + resource-dialog collapse (FE S4+S9) | #190 | in review (gate W3-03) |
 | W3-13 | HTTP boundary unify (FE S5) | — | gated on W3-12 (#164 merged) |
 | W3-14 | ExUnit async conversion (TC-E) | — | gated on W3-03 |
 | W3-15 | Giant-test split (TC-H) | — | gated on W2-09, W3-08, W3-10, W3-14 |
@@ -231,7 +235,7 @@ W6-03 and W6-06 for conductor decisions and splits W6-12, and the W6 reconcile i
 | W4-01 | `startGoalAdmission` phase split (DA S13) | — | gated on W3-09; W3-08 co-writes `app.go` |
 | W4-02 | Session objects for supervisor/anchor loops (DP S-5) | — | gated on W3-02; before W5-01 |
 | W4-03 | Execution `Start`/`closeContainmentAttempt` decomposition (DR S7) | — | pipeline (branch pushed, no PR; no open-PR gate) |
-| W4-04 | Workspace walkers + subject guards (DR S10) | — | pipeline (branch pushed, no PR; no open-PR gate) |
+| W4-04 | Workspace walkers + subject guards (DR S10) | #191 | in review (no open-PR gate) |
 | W4-05 | Linux v2 finalize pipeline unification (DR S9, D6) | — | gated on W4-03 |
 | W4-06 | `provider_access` intent-context unification (CCS8) | #189 | in review |
 | W4-07 | `goals.ex` facade split phase 1 (CCS7) | — | gated on W2-07 (#184) + W3-10 (#162 merged) |
@@ -269,20 +273,20 @@ W6-03 and W6-06 for conductor decisions and splits W6-12, and the W6 reconcile i
 
 | Slice | Purpose | PR | State |
 | --- | --- | --- | --- |
-| W6-01 | CI structure finalization: inline program extraction + contracts composite action | — | queued — gates: W2-01, W2-17, W3-01, W5-01 merged; #137, dependabot #167-#172 merge-first; `ci.yml` lane W6-01 → W6-02 → W6-10 → W6-12 |
+| W6-01 | CI structure finalization: inline program extraction + contracts composite action | — | queued — gates: W2-01, W2-17, W3-01, W5-01 merged; #137, #180, dependabot #167-#172 merge-first; `ci.yml` lane W6-01 → W6-02 → W6-10 → W6-12b |
 | W6-02 | Browser spec wiring per D7 | — | gated on W2-01 → W4-14 → {W5-03, W5-04} → W5-08 → W6-01; render gate green on `main` |
-| W6-03 | `isGoTestBinary` fork removal (DP P-05, D4) | — | HOLD (W6 review: handoff-capability design undecided); then #160 → W3-02 → W4-02 → W5-01 → W5-09 |
+| W6-03 | `isGoTestBinary` fork removal (DP P-05, D4) | — | HOLD (W6 reconcile: capability supplied via the reshaped W4-12; contract re-drafted after W4-12); then #160 → W3-02 → W4-02; W5-09 → W5-01 (both) → W6-03 |
 | W6-04 | opencode promote-or-drop | — | parked (D1) |
 | W6-05 | Containment convergence phase 2: delete the legacy generation (DP S-11b, D3) | — | blocked (D3) |
-| W6-06 | cmd extraction: launcher handshake + clone-bootstrap (DR S13) | — | HOLD (W6 review: split + owner re-scope of the W6-05 dependency) |
-| W6-07 | Frontend route code splitting (FE S13) | — | gated on #164 → W3-12 → W4-11 → W4-08 → W4-09 → W4-10 → W5-03 + W5-04 → W4-14 → W5-08; stale-chunk policy decision |
+| W6-06 | cmd extraction: launcher handshake + clone-bootstrap (DR S13) | — | blocked (D3, via W6-05); HOLD for owner re-scope + split into 06a/06b |
+| W6-07 | Frontend route code splitting (FE S13) | — | gated on #164 (merged) → W3-12 → W4-11 → W4-08 → W4-09 → W4-10 → W5-03 + W5-04 → W4-14 → W5-08; stale-chunk policy set by the W6 reconcile |
 | W6-08 | Dead protocol API deletion: goal-envelope family (DR F-07, D5) | — | gated on #178 + #165 merge-first; W3-07/W3-08/W3-15/W4-01/W4-04/W4-12/W4-13 land first or rebase (recorded per writer); no design amendment (`proto: none`) |
-| W6-09 | Remove always-null `GoalAttentionFeed.unavailable` (CW S12, D2) | — | gated on #163 → W3-03 → W5-05, W3-14, the frontend chain through W5-08 and W6-02; mandate slice — carries the same-PR `protocol.md`/`frontend.md` amendment |
-| W6-10 | Elixir lint/coverage flips | — | gated on W6-11, W6-01/W6-02, W2-17, W2-01 and the control writers W3-03/W3-14/W5-05/W5-06/W6-09; credo flip-vs-ratchet decision pending |
+| W6-09 | Remove always-null `GoalAttentionFeed.unavailable` (CW S12, D2) | — | gated on #163 (merged) → W3-03 → W5-05, W3-14, the frontend chain through W5-08 and W6-02; A4 (core work-item eligibility) first (W6 reconcile); mandate slice — carries the same-PR `protocol.md`/`frontend.md` amendment |
+| W6-10 | Elixir lint/coverage flips | — | gated on W6-11, W6-01/W6-02, W2-17, W2-01 and the control writers W3-03/W3-14/W5-05/W5-06/W6-09; credo gate ratchets against a committed baseline (W6 reconcile) |
 | W6-11 | Styler adoption + duplication burn-down (D12, D16) | — | gated on W2-17 and every W2-W5 control-source writer (see contract) + W6-09; lands before W6-10/W6-12 |
-| W6-12 | Wall-clock burn-down part 2 + duration/coverage ratchets (TC-F/TC-B cont.) | — | split at the W6 review (W6-12a + W6-12b) |
-| W6-12a | Wall-clock burn-down part 2 — test files only, no `ci.yml` | — | gated on W4-13, W5-04, W6-03, W6-09, W6-11 + writers W4-03/W4-04/W3-05 (#181)/W4-06; before W6-12b |
-| W6-12b | Ratchet flips + jscpd step (last `ci.yml` writer) | — | gated on W6-10, W6-12a, W6-11; duration-flip target vs W2-01 pending |
+| W6-12 | Wall-clock burn-down part 2 + duration/coverage ratchets (TC-F/TC-B cont.) | — | split recorded at the W6 reconcile (W6-12a + W6-12b); the 12a/12b contracts are written before dispatch |
+| W6-12a | Wall-clock burn-down part 2 — test files only, no `ci.yml` | — | split recorded at the W6 reconcile; contract pending — gated on W4-13, W5-04, W6-03, W6-09, W6-11 + writers W4-03/W4-04/W3-05 (#181)/W4-06; before W6-12b |
+| W6-12b | Ratchet flips + jscpd step (last `ci.yml` writer) | — | split recorded at the W6 reconcile; contract pending — gated on W6-10, W6-12a, W6-11; the flips target what W2-01 lands (formatter table + duration-p95 script; variance measured first) |
 
 ### Blocked, parked and dropped items
 
@@ -313,7 +317,7 @@ W6-03 and W6-06 for conductor decisions and splits W6-12, and the W6 reconcile i
   in the Amendment log and its contract's disposition; W5-07 and W5-13 are the recorded drops.
 - Every lint and coverage gate is live per its staging, each carrying its owning slice or an
   explicit carry recorded either way:
-  - Credo strict — W6-10 flips it blocking at count zero;
+  - Credo strict — W6-10 ratchets it blocking against a committed baseline;
   - golangci-lint (both GOOS), strict ESLint, ruff and shellcheck/actionlint — no owning slice
     today: each is carried to `docs/TODO.md` with its current count;
   - the changed-file jscpd gate — W6-11; coverage floors — W6-10/W6-12 (after W2-17's advisory
@@ -400,6 +404,37 @@ stays verbatim apart from its provenance header and one placeholder normalizatio
   remains for the W6 reconcile: the W6-03 and W6-05 contracts still list the dropped W5-07 as a
   dependency and must strike it. Authority: the owner's standing authorization (2026-11-21);
   review by reference as cited.
+
+- **2026-11-21 — T2: the W6 reconcile recorded.** The W6 reconcile (the conductor's fold of the W6
+  DeepSeek and Opus contract reviews) is recorded in the contracts' binding
+  `## Conductor decision` sections: W6-03 stays HOLD — the durable-handoff capability is supplied
+  through the reshaped W4-12 and the contract is re-drafted after W4-12; W6-06 stays HOLD pending
+  an owner re-scope (drop the W6-05 dependency) plus a 6a/6b split; W6-12 splits into W6-12a
+  (test-only burn-down) and W6-12b (`ci.yml` flips + jscpd, last `ci.yml` writer), so the `ci.yml`
+  lane ends at W6-12b; W6-07's stale-chunk policy, W6-10's Credo ratchet (the Done-when line is
+  corrected to the ratchet) and W6-09's A4 prerequisite are recorded. Pending contract work: the
+  W6-03 re-draft (after W4-12) and the W6-05 unblock strike their stale W5-07 dependency, the
+  W6-03 chain order is rewritten to W5-09 → W5-01 (both) → W6-03, and the W6-12a/12b contracts
+  are written before dispatch. Authority: the conductor's reconcile decisions under the owner's
+  standing authorization; reviews by reference: the W6 contract reviews
+  (`w6-contract-review-ds-1.md`, `w6-contract-review-opus-1.md`).
+- **2026-11-21 — T1 status refresh (round 3).** Status rows and facts re-derived from `gh` and the
+  live branches at `origin/main` `7954836`, gh snapshot 11:36Z: #190 (W3-12) and #191 (W4-04)
+  opened; the pipeline set is now W3-02, W3-03 and W4-03; #184-#189 remain in review; #183
+  remains the consolidated npm bump; the merge facts are unchanged since the round-2 refresh. The
+  W6 rows are re-derived from the W6 contracts with the W6 reconcile folded in, in the same pass.
+- **2026-11-21 — T2: round-3 review; D-number qualifier and W6 gate rows corrected.** The
+  independent Opus review of PR #182 round 3 (`182-opus-review-3.md`, 2026-11-21, bound to
+  `457be4d8`) is recorded as the independent review of the round-2 amendment text (T2), and its
+  findings are applied: contracts written before the C1-C3 rename use D1 for C1 only where it
+  labels frozen/byte-identical surfaces and D2 for C2 only where it labels LOC report-only, so a
+  D-number naming an owner-decision topic (W6-09's "D2 (binding)" on
+  `GoalAttentionFeed.unavailable`) keeps its owner-decision meaning; W6-03's gate chain shows
+  W5-09 → W5-01 (both) → W6-03; W6-01 adds #180 to the merge-first set; W6-07 and W6-09 mark
+  #164/#163 merged; W6-06 is labelled blocked (D3, via W6-05) with HOLD for owner re-scope +
+  split; W6-12's rows show the reconcile-recorded split with the 12a/12b contracts pending.
+  These corrections and the W6-reconcile entry above take effect with the passing review round.
+  Authority: the owner's standing authorization (2026-11-21); review by reference as cited.
 
 ## Known follow-ups
 
