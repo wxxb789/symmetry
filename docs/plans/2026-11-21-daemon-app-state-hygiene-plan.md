@@ -41,7 +41,7 @@ Source item: program plan §4 W1-07 and `findings/daemon-app.md` F10:364-377 / S
 4. `daemon/internal/app/linux_owner_preflight_linux_test.go`: one new table test
    (`TestUnescapeLinuxMountPathDecodesMountinfoEscapes`) pinning all four mountinfo escapes, the
    adjacent-escape and escape-then-literal byte runs, the caller's absolute/canonical acceptance
-   condition, and the four rejection classes.
+   condition, and the two rejection classes (five inputs).
 5. This plan; the gate and mutant-run outputs go into the stage's `answer.md` (outside the repository).
 
 ## Site-by-site dead-store review (no blanket deletion)
@@ -102,9 +102,9 @@ use the literals. Options considered:
 
 Behavior-preservation evidence instead: the three-clause identity `filepath.Join(x) == filepath.Clean(x)
 == x` recorded from the same toolchain in WSL for both arguments, the finding-set diff from the lint
-oracle (only the target findings leave, none arrive), and the green suites below. The same
-one-argument shape at `:1876` (`filepath.Join("/etc/systemd/system", policy.unit)`) has two arguments
-and is not flagged; it stays as it is.
+oracle (only the target findings leave, none arrive), and the green suites below. The two-argument
+`Join` at `:1876` (`filepath.Join("/etc/systemd/system", policy.unit)`) is not flagged; it stays as
+it is.
 
 ## Evidence plan (exact commands; never a measurement beside the full suite on this host)
 

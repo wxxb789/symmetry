@@ -47,7 +47,8 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 - [ ] Revalidate and remove three pre-existing dead stores of the class the daemon-app/state hygiene
       slice fixed, found while applying it. Evidence: the slice's `golangci-lint v2.15.0` run
       (`GOOS=linux`, `--default=none -E staticcheck,ineffassign,gocritic`, `./internal/app/...`) at
-      `a3039f0` reports them as its only remaining `ineffassign` findings in `internal/app/`:
+      `a3039f0` reports them among its `ineffassign` findings; after this slice they are the only
+      remaining ones in `internal/app/`:
       `daemon/internal/app/app_test.go:4881` (`journal, err := store.LoadJournal(key)`),
       `daemon/internal/app/stale_ack_settlement_test.go:32` and `:125`
       (`journal, err := store.SetLocalState(key, "stale")`). Each binds `journal` and overwrites it on
