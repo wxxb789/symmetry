@@ -4,7 +4,7 @@ defmodule SymmetryControlWeb.PortalJSON do
   alias SymmetryControl.Orchestration
   alias SymmetryControl.Orchestration.Task
   alias SymmetryControl.Workspaces
-  alias SymmetryControl.Workspaces.{ProjectResource, WorkItem}
+  alias SymmetryControl.Workspaces.{ProjectResource, WorkItem, WorkItemEligibility}
   alias SymmetryControlWeb.Protocol
 
   def workspace(model) do
@@ -223,7 +223,7 @@ defmodule SymmetryControlWeb.PortalJSON do
     evidence = projection && projection.evidence
     delivery = delivery(work_item, evidence)
     goal_managed = WorkItem.goal_managed?(work_item)
-    execution = projection |> execution_summary() |> legacy_capabilities(work_item, goal_managed)
+    execution = projection |> execution_summary() |> legacy_capabilities(work_item)
 
     %{
       id: work_item.id,
@@ -251,10 +251,7 @@ defmodule SymmetryControlWeb.PortalJSON do
       external: external_work_item(work_item),
       goal_managed: goal_managed,
       version: work_item.lock_version,
-      can_start:
-        not goal_managed and is_nil(work_item.orchestration_task_id) and
-          work_item.assignee_type == "agent" and work_item.status in ["backlog", "ready"] and
-          project_active?(work_item.project) and WorkItem.external_work_available?(work_item),
+      can_start: WorkItemEligibility.start_allowed?(work_item),
       execution: execution,
       updated_at: iso8601(work_item.updated_at)
     }
@@ -308,7 +305,7 @@ defmodule SymmetryControlWeb.PortalJSON do
       execution ->
         execution
         |> Map.put(:can_retry, work_item_retry_runtime_eligible?(task, work_item))
-        |> legacy_capabilities(work_item, WorkItem.goal_managed?(work_item))
+        |> legacy_capabilities(work_item)
     end
   end
 
@@ -376,7 +373,7 @@ defmodule SymmetryControlWeb.PortalJSON do
   # no retry. Unknown runtime support fails closed: the served read never
   # offers an operation no runtime could perform. The work item's own fences —
   # the Goal refusal of `can_cancel` and the retry conditions — are applied by
-  # `legacy_capabilities/3` after this summary.
+  # `legacy_capabilities/2` after this summary.
   defp execution_summary(%{task: task_record, run: run} = snapshot) do
     task = Protocol.task(snapshot)
     runtime = Map.get(snapshot, :runtime)
@@ -407,22 +404,19 @@ defmodule SymmetryControlWeb.PortalJSON do
     }
   end
 
-  # The execution members only the work item decides. `can_cancel` is withheld
-  # from every Goal-managed item in every state: the legacy cancel path refuses
-  # that item (`Workspaces.ensure_legacy_work_item/1`, the same
-  # `WorkItem.goal_managed?/1` test), and a Goal is the authority that stops its
-  # work. `can_retry` joins the attempt's own gates with the work item's
+  # The execution members only the work item decides, resolved by
+  # `WorkItemEligibility` — the same verdicts the commands enforce.
+  # `can_cancel` is withheld from every Goal-managed item in every state: the
+  # legacy cancel path refuses that item (`ensure_legacy_work_item/1` applies
+  # `WorkItemEligibility.cancel_gate/1`), and a Goal is the authority that stops
+  # its work. `can_retry` joins the attempt's own gates with the work item's
   # agent-assignment, external-work and active-project conditions.
-  defp legacy_capabilities(nil, _work_item, _goal_managed), do: nil
+  defp legacy_capabilities(nil, _work_item), do: nil
 
-  defp legacy_capabilities(execution, work_item, goal_managed) do
+  defp legacy_capabilities(execution, work_item) do
     execution
-    |> Map.update!(:can_cancel, &(&1 and not goal_managed))
-    |> Map.update!(
-      :can_retry,
-      &(&1 and work_item.assignee_type == "agent" and
-          WorkItem.external_work_available?(work_item) and project_active?(work_item.project))
-    )
+    |> Map.update!(:can_cancel, &(&1 and WorkItemEligibility.cancel_allowed?(work_item)))
+    |> Map.update!(:can_retry, &(&1 and WorkItemEligibility.retry_allowed?(work_item)))
   end
 
   defp execution_timing(task, run) do
@@ -709,9 +703,6 @@ defmodule SymmetryControlWeb.PortalJSON do
 
   defp loaded(%Ecto.Association.NotLoaded{}), do: []
   defp loaded(values), do: values
-
-  defp project_active?(%{status: "active"}), do: true
-  defp project_active?(_project), do: false
 
   # The getter answers the two spellings a key can arrive under: the string is
   # the wire spelling (the attempt's result JSON, deep-stringified before it is

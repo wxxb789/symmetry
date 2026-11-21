@@ -69,7 +69,7 @@ func TestRunEnrollsOnceAndReusesPersistedIdentity(t *testing.T) {
 	for attempt := 0; attempt < 2; attempt++ {
 		ctx, cancel := context.WithCancel(context.Background())
 		control.cancel = cancel
-		if err := Run(ctx, value, WithStore(store), WithControl(control), WithEnrollment(enrollment), WithWorkspace(&fakeWorkspace{}), WithStartProcess(failStart)); err != nil {
+		if err := Run(ctx, value, withStore(store), withControl(control), withEnrollment(enrollment), withWorkspace(&fakeWorkspace{}), withStartProcess(failStart)); err != nil {
 			t.Fatalf("Run() attempt %d: %v", attempt, err)
 		}
 	}
@@ -117,7 +117,7 @@ func TestRunAdvertisesConfiguredCapabilities(t *testing.T) {
 			profile.InputMode = test.mode
 			profile.ProviderAccess = test.providerAccess
 			value.AgentProfiles[value.Runtime.AgentProfile] = profile
-			if err := Run(ctx, value, WithStore(store), WithControl(control), WithWorkspace(&fakeWorkspace{}), WithStartProcess(failStart)); err != nil {
+			if err := Run(ctx, value, withStore(store), withControl(control), withWorkspace(&fakeWorkspace{}), withStartProcess(failStart)); err != nil {
 				t.Fatal(err)
 			}
 			if len(control.registrations) != 1 || len(control.registrations[0].Runtimes) != 1 {
@@ -284,7 +284,7 @@ func TestRunRejectsRegistrationLeaseBelowSafetyMinimum(t *testing.T) {
 		t.Fatal(err)
 	}
 	control := &shortLeaseRegistrationControl{leaseDurationMS: 29_999}
-	err = Run(context.Background(), testConfig(t), WithStore(store), WithControl(control), WithWorkspace(&fakeWorkspace{}), WithStartProcess(failStart))
+	err = Run(context.Background(), testConfig(t), withStore(store), withControl(control), withWorkspace(&fakeWorkspace{}), withStartProcess(failStart))
 	if err == nil || !strings.Contains(err.Error(), "lease duration must be at least 30000ms") {
 		t.Fatalf("Run() error = %v, want minimum lease rejection", err)
 	}
@@ -332,7 +332,7 @@ func TestRunPersistsClaimIntentBeforeClaimAndHandlesNotification(t *testing.T) {
 	profile.ProviderAccess = true
 	value.AgentProfiles[value.Runtime.AgentProfile] = profile
 	var logs bytes.Buffer
-	err = Run(ctx, value, WithStore(store), WithControl(control), WithWorkspace(&fakeWorkspace{}), WithStartProcess(start), WithNotificationClient(notifier), WithLogWriter(&logs))
+	err = Run(ctx, value, withStore(store), withControl(control), withWorkspace(&fakeWorkspace{}), withStartProcess(start), WithNotificationClient(notifier), WithLogWriter(&logs))
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -1381,7 +1381,7 @@ func TestRunRestartDrainsAppliedInputOutboxBeforeRegistrationThenFailsTerminal(t
 	startCalls := 0
 	done := make(chan error, 1)
 	go func() {
-		done <- Run(ctx, testConfig(t), WithStore(recoveredStore), WithControl(api), WithWorkspace(cleaner), WithStartProcess(func(context.Context, execution.Invocation, execution.Sink) (Process, error) {
+		done <- Run(ctx, testConfig(t), withStore(recoveredStore), withControl(api), withWorkspace(cleaner), withStartProcess(func(context.Context, execution.Invocation, execution.Sink) (Process, error) {
 			startCalls++
 			return nil, errors.New("restart recovery must not start an agent")
 		}), WithLogWriter(io.Discard))
@@ -4107,7 +4107,7 @@ func TestRetainedTerminalJournalDoesNotBlockNewSessionRegistration(t *testing.T)
 	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
 	control := &terminalRecoveryControl{cancel: cancel, cancelAfterFlush: true, transitionErr: errors.New("temporary failure")}
-	err := Run(ctx, testConfig(t), WithStore(store), WithControl(control), WithWorkspace(&fakeWorkspace{}), WithStartProcess(failStart))
+	err := Run(ctx, testConfig(t), withStore(store), withControl(control), withWorkspace(&fakeWorkspace{}), withStartProcess(failStart))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4516,7 +4516,7 @@ func TestRunRetriesReconcileWithBackoffWithoutNotifications(t *testing.T) {
 	clock.Store(time.Now().UTC())
 	done := make(chan error, 1)
 	go func() {
-		done <- Run(ctx, value, WithStore(store), WithControl(control), WithWorkspace(cleanup), WithStartProcess(failStart), WithLogWriter(io.Discard), func(settings *options) {
+		done <- Run(ctx, value, withStore(store), withControl(control), withWorkspace(cleanup), withStartProcess(failStart), WithLogWriter(io.Discard), func(settings *options) {
 			settings.newTimer = timers.new
 			settings.newID = ids()
 			settings.clock = func() time.Time { return clock.Load().(time.Time) }
@@ -9299,7 +9299,7 @@ func TestRunShutdownDoesNotWaitForUnresolvedProcessReturnedWithStartError(t *tes
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		done <- Run(ctx, value, WithStore(store), WithControl(control), WithWorkspace(&fakeWorkspace{}), WithStartProcess(func(_ context.Context, invocation execution.Invocation, _ execution.Sink) (Process, error) {
+		done <- Run(ctx, value, withStore(store), withControl(control), withWorkspace(&fakeWorkspace{}), withStartProcess(func(_ context.Context, invocation execution.Invocation, _ execution.Sink) (Process, error) {
 			startOnce.Do(func() { close(started) })
 			if invocation.PersistProcessWithAuthority == nil {
 				return nil, errors.New("atomic process persistence callback is missing")

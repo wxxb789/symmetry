@@ -194,11 +194,6 @@ func parseLinuxOwnerChildPIDsBounded(contents []byte, maxBytes, maxPIDs int) ([]
 	return pids, nil
 }
 
-func readLinuxOwnerChildPIDs(path string) ([]int, error) {
-	pids, _, err := readLinuxOwnerChildPIDsBounded(path, linuxOwnerAnchorMaxChildrenBytes, linuxOwnerHelperV2MaxMembershipProcesses)
-	return pids, err
-}
-
 func readLinuxOwnerChildPIDsBounded(path string, maxBytes, maxPIDs int) ([]int, int, error) {
 	if maxBytes < 0 || maxPIDs < 0 {
 		return nil, 0, errors.New("Linux /proc children reader received negative bounds")

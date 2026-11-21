@@ -1379,6 +1379,93 @@ func TestProviderActionCompletionRejectsOverLimitWorstCaseUnknownWithoutMutation
 	}
 }
 
+// TestProviderActionCapacitySplitSeparatesSerializationFromSize pins the
+// capacity split. A serialize/marshal failure leaves ErrProviderActionCapacity,
+// so the bridge cannot classify it as local_action_rejected
+// (pi_provider_bridge.go) and falls to RecoverProviderAction with
+// local_persistence_unknown instead; a genuine over-budget journal still
+// returns the ErrProviderActionCapacity value itself, so every out-of-package
+// errors.Is consumer keeps working unchanged.
+func TestProviderActionCapacitySplitSeparatesSerializationFromSize(t *testing.T) {
+	t.Parallel()
+	unencodable := testJournal("run-provider-serialize-capacity", 1)
+	unencodable.ProviderActionIntents = []ProviderActionIntent{{
+		ActionID:      "action-unencodable",
+		ActionKey:     "key-unencodable",
+		RequestDigest: strings.Repeat("a", 64),
+		ResourceID:    "resource-1",
+		Operation:     "resource_sync",
+		Outcome:       ProviderActionOutcomeSucceeded,
+		Result:        json.RawMessage("{"),
+	}}
+	overBudget := testJournal("run-provider-size-capacity", 1)
+	overBudget.WorkspacePath = strings.Repeat("x", maxJournalFileBytes)
+
+	t.Run("serialize failure leaves capacity", func(t *testing.T) {
+		t.Parallel()
+		tests := []struct {
+			name   string
+			run    func() error
+			prefix string
+		}{
+			{
+				name:   "dispatch capacity guard",
+				run:    func() error { return validateProviderActionDispatchCapacity(unencodable) },
+				prefix: "serialize provider action intents: ",
+			},
+			{
+				name:   "journal size guard",
+				run:    func() error { return validateProviderActionJournalSize(unencodable) },
+				prefix: "serialize run journal: ",
+			},
+			{
+				name:   "lossless mutation guard",
+				run:    func() error { return validateJournalSaveCapacity(unencodable) },
+				prefix: "serialize run journal: ",
+			},
+		}
+		for _, test := range tests {
+			t.Run(test.name, func(t *testing.T) {
+				t.Parallel()
+				err := test.run()
+				if err == nil {
+					t.Fatal("guard accepted a journal whose provider action result cannot be encoded")
+				}
+				if errors.Is(err, ErrProviderActionCapacity) {
+					t.Fatalf("guard error = %v, want a serialize failure outside the capacity verdict", err)
+				}
+				if !strings.HasPrefix(err.Error(), test.prefix) {
+					t.Fatalf("guard error = %q, want prefix %q", err, test.prefix)
+				}
+				var syntaxErr *json.SyntaxError
+				if !errors.As(err, &syntaxErr) {
+					t.Fatalf("guard error = %v, want the encoding/json syntax cause in its chain", err)
+				}
+			})
+		}
+	})
+
+	t.Run("size arm returns the sentinel value", func(t *testing.T) {
+		t.Parallel()
+		tests := []struct {
+			name string
+			run  func() error
+		}{
+			{name: "dispatch capacity guard", run: func() error { return validateProviderActionDispatchCapacity(overBudget) }},
+			{name: "journal size guard", run: func() error { return validateProviderActionJournalSize(overBudget) }},
+			{name: "lossless mutation guard", run: func() error { return validateJournalSaveCapacity(overBudget) }},
+		}
+		for _, test := range tests {
+			t.Run(test.name, func(t *testing.T) {
+				t.Parallel()
+				if err := test.run(); err != ErrProviderActionCapacity {
+					t.Fatalf("guard error = %v, want the ErrProviderActionCapacity value itself", err)
+				}
+			})
+		}
+	})
+}
+
 func journalWithProviderCapacityPayload(base RunJournal, payloadBytes int) RunJournal {
 	journal := base
 	if journal.LastEventSequence < 2 {

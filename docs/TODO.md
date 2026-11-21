@@ -566,8 +566,8 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       `:1174-1184`), every v2 removal receipt must carry such a proof
       (`StopReceipt.ValidForHandoff`, `authority.go:1822-1833`), and the platform constructs it
       (`daemon/internal/platform/anchor_run.go:1531`; validated at
-      `daemon/internal/execution/linux_owner_v2_linux.go:1338` and sealed into the mirror proof
-      at `:1360`); `authority.go:2027` also accepts a non-nil `LauncherExit.HelperExit`.
+      `daemon/internal/execution/linux_owner_v2_linux.go:1351` and sealed into the mirror proof
+      at `:1373`); `authority.go:2027` also accepts a non-nil `LauncherExit.HelperExit`.
       `cloneLinuxOwnerHelperV2StopEvidence` (`helper_v2_stop.go:1540-1573`) instead drops every
       nested exit it copies through `cloneLinuxOwnerAnchorExitProof`
       (`anchor_server.go:44-49` nils `HelperExit`): `Proof.LauncherExit.HelperExit`,
@@ -715,11 +715,12 @@ witness: stop-receipt barrier stall awaiting a diagnosable occurrence", closed 2
 `e9c457d8`) latched owner loss at every `enterRecovery` entry; the review of that fix (PR #185
 round 1) left two paths open here.
 
-- [ ] Close the same sticky-refusal class for the lease-expiry arm. `runLinuxSupervisorHelperLoop`
-      still computes `ownerLostStop` from `ownerLostLatched || channelClosedV2(watchdog.ownerLost())`
-      (`daemon/internal/platform/supervisor_linux_helper.go:838`) and the lease-expiry arm
-      (`:978-993`) calls `stop()` without `enterRecovery`; if the owner dies or wedges as the lease
-      expires and that timer arm wins the `select` before the control-EOF event, the final
+- [ ] Close the same sticky-refusal class for the lease-expiry arm. `ownerLostStop` in
+      `(*linuxSupervisorSession).runStop` is still computed from `ownerLostLatched ||
+      channelClosedV2(watchdog.ownerLost())` (`supervisor_session.go`); the lease-expiry arm of
+      `(*linuxSupervisorSession).runHelperLoop` calls `session.stop()` without `enterRecovery`. If
+      the owner dies or wedges as the lease expires and that timer arm wins the `select` before the
+      control-EOF event, the final
       descendant scan persists over the dead metadata transport, the failure latches the sticky
       `descendantScanLost` (`process_unix.go`, the final-scan block and the monitor's
       `pre_scan_ack_failure` path), and every later stop is refused exactly as in CI 44876100236.
@@ -848,8 +849,8 @@ instead of appended.
       process's pipe, so the goroutine outlives the call, belongs to no WaitGroup, and contradicts
       `daemon/AGENTS.md` ("Every goroutine has an owner and exit path"). Found by the 2026-11-21
       daemon audit (finding F15). Fix direction: prefer the context-aware write path the runner
-      already implements -- `internal/execution/runner.go:1380` `WriteInputContext` closes the stdin
-      write end when its context is cancelled (`:1410-1414`) -- which `internal/app` cannot reach
+      already implements -- `internal/execution/runner.go:1400` `WriteInputContext` closes the stdin
+      write end when its context is cancelled (`:1430-1434`) -- which `internal/app` cannot reach
       today only because its `Process` interface (`app.go:232-233`) declares `WriteInput([]byte)
       error` alone; otherwise close the pipe's write end on timeout (the runner owns the pipe), or
       track the goroutine in `daemon.workers` with a documented bound and assert its exit at
@@ -927,6 +928,26 @@ instead of appended.
 - [ ] `scripts/ci/linux-v2-native-acceptance.sh:1490` pins
       `TestInstalledLinuxOwnerRejectsUnexpectedCgroupKillFD`, which no Go file defines (base and
       HEAD); owner: the acceptance-script maintainer — restore the test or drop the pin.
+
+## Deferred review findings (PR #205)
+
+- [ ] STD-A09 from the Opus review of PR #205 (2026-11-21, branch
+      `refactor/rf-w4-14-browser-fixtures`): the merged #188 test-observability code loses the
+      `(partial)` label on a timeout-truncated package once any test in that package failed.
+      `scripts/ci/go-test-durations.py:213` computes
+      `unexplained = [package for package in failed_packages if not any(key[0] == package for key in failed)]`,
+      so a package that has a failed test counts as fully explained even when its stream is cut
+      off by a timeout before the remaining tests ran. The step is `continue-on-error` today, so
+      there is no gate impact, but the W2-01/W6-12 follow-up that flips the thresholds to blocking
+      must fix the partial-run detection first.
+- [ ] The merged W2-01 plan (`docs/plans/2026-11-21-rf-w2-01-ci-test-observability-plan.md:363`)
+      misstates the run: it records the checks as run "with the pinned ruff 0.17.6", which
+      `pyproject.toml:6` `required-version = "==0.17.5"` makes impossible (the config refuses any
+      other version, exit 2). The real conflict (`pyproject.toml` `==0.17.5` vs `ci.yml:1707`
+      `ruff_version='0.17.6'`) is already tracked above
+      (`## scripts/ci ruff baseline: drop the #137 exclude and keep the gate's ruff version pinned`,
+      `docs/TODO.md:901`); this entry only records the misstatement in the merged evidence plan
+      (found by the Opus review of PR #205).
 
 ## Harness shared-scaffolding deferrals (rf-w2-13, PR #155)
 
@@ -1074,11 +1095,11 @@ instead of appended.
       untested (2026-11-21, branch `refactor/rf-w4-03-runner-decomposition`; plan
       `docs/plans/2026-11-21-rf-w4-03-runner-decomposition-plan.md`). Two mutants on a scratch
       copy over `./internal/execution/` stayed green under WSL: flipping the `closeOwnerOnce(false)`
-      argument in `closeContainmentOwnerLocked` (`daemon/internal/execution/runner.go:2393`) to
+      argument in `closeContainmentOwnerLocked` (`daemon/internal/execution/runner.go:2413`) to
       `true` — no test distinguishes the flag, and the pending-handoff owner does not implement
       `containmentUnprovenCallbackSetter`, so a future edit could flip it silently — and swapping
       the `containmentAuthorityUncertain` / `containmentAuthority != nil` guards in
-      `persistReceiptOrAbort` (`:2143`, `:2146`), whose check order is the base order
+      `persistReceiptOrAbort` (`:2163`, `:2166`), whose check order is the base order
       (pre-existing gap: base had the same untested order). Behaviour is correct at HEAD; this is
       test coverage only, no code change. Found by the opus round-1 review of PR #193. Owner:
       W4-12/W4-13 test work.
@@ -1169,6 +1190,100 @@ instead of appended.
       outside the rf-w4-19 owned set (plan
       `docs/plans/2026-11-21-rf-w4-19-linuxpreflight-package-plan.md`, "The runtime-selection
       vocabulary"), so the slice kept the copy and recorded this entry instead.
+
+## Daemon state: decorative trailing-data disjunct in the provider-action decoder (rf-w3-07 survey)
+
+- [ ] Revalidate and merge the redundant trailing-data arms of
+      `normalizeProviderActionResult` (`daemon/internal/state/provider_action.go`). At the
+      rf-w3-07 base `52bdffd2` the block was
+      `if token, tokenErr := decoder.Token(); tokenErr != io.EOF { if tokenErr == nil || token !=
+      nil { return errors.New("provider action result has trailing data") }; return
+      errors.New("provider action result has trailing data") }`: both arms returned the identical
+      static error, so the disjunct could not change any outcome, and `json.Decoder.Token`
+      returns a nil token whenever it returns an error. rf-w3-07 (2026-11-21) split the block to
+      wrap the decoder cause (`if tokenErr != nil { wrapped }`, `if token != nil { static }`,
+      final `static`) and kept the third arm because that slice's contract requires base-vs-head
+      control-flow preservation for every early return; the last two arms still return the same
+      bytes. No test asserts the message by equality (`grep -rn --include=*_test.go '"provider
+      action result has trailing data"' daemon/` matches nothing). A follow-up maintenance task
+      can collapse the arms to one static return after re-running the state suite on the Linux
+      lane; the sweep and the classification table live in
+      `docs/evidence/rf-w3-07-state-error-causes-2026-11-21.md` §1/§2.
+
+## Deferred review findings (PR #200)
+
+- [ ] Harden the goal-session uncertain-reason budget against invalid UTF-8 at the store
+      boundary (`daemon/internal/state/goal_session.go:1052` write check vs `:1688` read
+      validation; 2026-11-21, branch `refactor/rf-w3-07-state-error-causes`, PR #200 review
+      P2-1). A within-budget reason containing invalid UTF-8 bytes passes the write check
+      (`validRequiredString` is length-only), but the journal's JSON round trip replaces each
+      invalid byte with U+FFFD (3 bytes), so the reloaded `UncertainReason` can exceed the
+      4096-byte budget and `LoadGoalSession` then rejects the whole journal
+      (`invalid goal session journal`), making the session unreadable after a mark that was
+      accepted — e.g. a 4096-byte reason with one invalid byte reloads at 4098 bytes. The same
+      hazard exists on base `52bdffd2`; PR #200 fixed only the reason strings the app composes
+      (`boundedGoalSessionUncertainReason` now runs `strings.ToValidUTF8` over the over-budget
+      prefix), because the W307-R1 decision forbids changing the sink. Owner: state store. Fix
+      direction: reject or normalize non-UTF-8 reasons in
+      `MarkGoalSessionUncertain`/`validateGoalSessionStates` the way the app bound does.
+      Reproduction: `MarkGoalSessionUncertain(key, strings.Repeat("r", 4095)+"\xff")` succeeds,
+      then `LoadGoalSession(key)` returns `invalid goal session journal`; the app-side callers
+      are pinned by `daemon/internal/app/goal_delivery_test.go`:
+      `TestAbandonGoalSessionBoundsOversizedUncertainReason` (the interior-invalid-byte case)
+      and `TestBoundedGoalSessionUncertainReason` (the within-budget invalid-byte case).
+
+## Daemon state: test-only `ControlProjection` surface (rf-w3-08 survey)
+
+- [ ] Revalidate and remove `GoalSessionJournal.ControlProjection`
+      (`daemon/internal/state/goal_session.go:412`) together with its
+      `goalSessionControlProjection` type (`:308`, unexported by rf-w3-08). `git grep -nw
+      ControlProjection` matches only the method definition, the doc comment at `:411`, the doc
+      comment at `:185` that promises callers ("callers must use ControlProjection when building a
+      control request") which do not exist, and two in-package test call sites
+      (`goal_session_test.go:707`, `:1340`); there is no production consumer at this branch's head
+      or at its base. It was not deleted in the rf-w3-08 apply stage because the test that pins it,
+      `TestGoalSessionControlProjectionOmitsRawNativeIdentity`, is a contract-pinning proof that
+      the projection carries no raw native identity — deleting the surface would retire that test.
+      A follow-up owner must decide between wiring the intended production consumer and retiring
+      the surface together with its test under an explicit contract amendment.
+- [ ] The same retention question covers the other exported state methods whose signatures name
+      now-unexported types: `Store.CheckGoalSessionLineage`
+      (`daemon/internal/state/goal_session.go:576`, `goalSessionLineageStatusValue`) and
+      `Store.QueueLateGoalUsage` (`daemon/internal/state/goal_delivery.go:829`,
+      `lateGoalUsageLedger`). Both stay legal Go through inference (`status, err :=
+      store.CheckGoalSessionLineage(key)`), neither has an out-of-package caller at this branch's
+      head, and rf-w3-08 kept them rather than widening its slice; this entry tracks the retained
+      surface so a follow-up owner can decide unexport/retire/wire for all three together.
+      `Store.EnsureGoalSessionLineageAvailable` (`:592`, `goalSessionLineageKey`) is the same
+      shape; the W3-07 follow-up PR #215 removes it (the rf-w1-06 dead-code candidate above), so
+      its signature question resolves with that removal rather than here.
+
+## Deferred findings (rf-a4 core work-item eligibility, 2026-11-21)
+
+- [ ] Unify the allowed-actions predicate the Goal authority policy is read through: the two
+      spellings are `provider_operation_allowed?/2`
+      (`control/lib/symmetry_control/goals.ex:9982-9985`, `operation in
+      allowed_values(revision.authority_policy, "allowed_actions") and operation in
+      allowed_values(revision.execution_policy, "allowed_actions")`) and `goal_action_allowed?/2`
+      (`control/lib/symmetry_control/integrations/provider_access.ex:607-609`, the same conjunction
+      through `goal_allowed_actions/1`). Out of scope for rf-a4 (2026-11-21, branch
+      `refactor/rf-a4-core-work-item-eligibility`): both files are owned by other chains — the
+      `goals.ex` region by W4-07/W5-14 and `provider_access.ex` by W4-06 (#189) — and the
+      slice's failure control forbids touching them. The unification is one predicate over
+      `(revision, operation)` with one `allowed_actions` reader, whichever chain lands last owns
+      it.
+
+- [ ] Move the chat work-item projection into core (W5-15, control half): the chat read model
+      reaches web-side code instead of the shared core verdicts —
+      `control/lib/symmetry_control/chat/read_model.ex:10,46` calls
+      `SymmetryControlWeb.PortalJSON.work_item_detail/2` and then overrides the five capability
+      members (`:51-65`: `can_cancel`, `can_retry`, `can_guide`, `can_pause`, `can_resume`, with
+      `historical: true`), and `control/lib/symmetry_control/chat.ex:19` aliases
+      `SymmetryControlWeb.Protocol` for `normalize_map/1` (`:26`, `:68`). Deferred by rf-a4
+      (2026-11-21, same branch): the slice's owned set excludes `chat/**`, and W5-15 owns the
+      inversion plus `decision.lock_version`, consuming the new
+      `SymmetryControl.Workspaces.WorkItemEligibility` for the chat override. The served chat
+      document is unchanged by rf-a4.
 
 ## Deferred review findings (PR #213)
 
