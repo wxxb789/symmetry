@@ -162,7 +162,7 @@ func linuxOwnerAnchorPeerFromConn(connection *net.UnixConn, owner linuxgate.Owne
 	}
 	actualIdentity, err := ProcessIdentity(int(credentials.Pid))
 	if err != nil || actualIdentity != identity {
-		return linuxOwnerAnchorPeer{}, fmt.Errorf("Linux owner anchor peer identity changed during authentication: %w", errOr(err, errors.New("creation identity differs")))
+		return linuxOwnerAnchorPeer{}, fmt.Errorf("Linux owner anchor peer identity changed during authentication: %w", errOr(err, ErrLinuxOwnerCreationIdentityDiffers))
 	}
 	return linuxOwnerAnchorPeer{PID: int(credentials.Pid), Identity: identity, CgroupPath: cgroupPath}, nil
 }
