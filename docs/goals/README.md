@@ -6,8 +6,8 @@ protocol/schema changes without backward compatibility, framework swaps and new 
 allowed when they measurably improve robustness, performance or engineering quality, or greatly
 reduce LOC, while PostgreSQL/Elixir/Go/frontend state ownership, fences, idempotency, transaction
 boundaries, credential locality, provider-owned fields and the acceptance conditions are never
-traded; the only non-additive v1 changes are the goal's two named slices (W6-08 and W6-09), each
-carrying its `docs/design/protocol.md` amendment in the same PR. It runs as one GDD slice per PR
+traded; the only non-additive v1 change is the goal's named slice (W6-09), which carries its
+`docs/design/protocol.md` amendment in the same PR. It runs as one GDD slice per PR
 across waves W1-W5 and a tail W6, planned by the
 [program plan](../plans/2026-11-21-refactor-program-plan.md) (the synthesis snapshot at `a3039f0`)
 and by per-slice contracts kept outside the repository; its [goal file](0010-refactor-program.md)
@@ -15,10 +15,9 @@ records the owner decisions, the per-wave status and the blocked/parked/dropped 
 earlier goals whose contract bytes are frozen, goal 0010 is owner-authorized amendable under a
 three-tier policy: status refreshes are conductor-only and logged; scope, slice, Done-when and
 decision changes take effect only with an independent review recorded in its append-only
-Amendment log;
-and it archives only when its Done-when closes and the owner's verdict is recorded — no model
-declares completion. Recording it takes the unsuffixed 0010; the closing note below now reserves
-0011.
+Amendment log; and it archives only when its Done-when closes and the owner's verdict is
+recorded — no model declares completion. Recording it takes the unsuffixed 0010; the closing
+note below now reserves 0011.
 
 Goal [0007i](archive/0007i-portal-cutover.md) completed the single real-time Portal
 cutover run on 2026-11-17 and stays in place (the 0007 lettered goals are not
@@ -358,7 +357,6 @@ the receipt incomplete; owner verdicts are recorded separately when they arrive.
 | [0006j](archive/0006j-omp-native-capability.md) | Evidence-bounded Oh My Pi native capability |
 | [0006k](archive/0006k-omo-native-capability.md) | Evidence-bounded OmO native capability |
 | [0006-final](archive/0006-final.md) | Archived series-review record; **accepted by the owner** (wxxb789, 2026-11-17) with recorded incompleteness: the series' own findings F1-F8 stay unmet and no claim is made that the completion contract is satisfied |
-| [0010](0010-refactor-program.md) | Active whole-repository refactor program under the owner's 2026-11-21 mandate; owner-authorized amendable; archives only at the owner's recorded verdict |
 
 ## Modern workspace
 
@@ -388,6 +386,12 @@ the receipt incomplete; owner verdicts are recorded separately when they arrive.
 | Goal | Desired outcome |
 | --- | --- |
 | [0009](archive/0009-achieve-contract-amendments.md) | Produced achieve authority, single-item integration and single-stream Subject amendments A/B/C; **accepted by the owner** (wxxb789, 2026-11-17) |
+
+## Refactor program
+
+| Goal | Desired outcome |
+| --- | --- |
+| [0010](0010-refactor-program.md) | Active whole-repository refactor program under the owner's 2026-11-21 mandate; owner-authorized amendable; archives only at the owner's recorded verdict |
 
 Read [fixed design](../design/README.md) and root `AGENTS.md` before executing.
 Goal payloads define completion, not implementation plans. A dependency listed

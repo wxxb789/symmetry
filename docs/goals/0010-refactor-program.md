@@ -1,7 +1,7 @@
 # 0010 - Refactor program
 
 Status: **active** — started 2026-11-21 under the owner's mandate, recorded mid-program (wave W1
-complete; W2 mostly merged, with five PRs in review and three slices in flight).
+complete; W2 mostly merged, the rest in review).
 **Owner-authorized amendable** under the three-tier policy below: T1 status refreshes are
 conductor-only and logged; T2 scope, slice, Done-when and decision changes take effect only after
 an independent review recorded in the [Amendment log](#amendment-log); and T3 closes only on an
@@ -15,9 +15,10 @@ and schema changes without backward compatibility, framework swaps, new packages
 measurably improves robustness, performance or engineering quality, or greatly reduces LOC.
 The 2026-11-21 mandate (no backward compatibility) is itself the owner-approved amendment of the
 additive-only v1 rule (`docs/design/protocol.md:34-37`, with the frontend compatibility note in
-`docs/design/frontend.md`), and it permits non-additive protocol changes for the two named
-slices only — W6-08 and W6-09 — each of which amends `docs/design/protocol.md` (and
-`frontend.md` where relevant) in the same PR. The
+`docs/design/frontend.md`), and it permits a non-additive protocol change for one named slice
+only — W6-09 — which amends `docs/design/protocol.md` and `docs/design/frontend.md` in the same
+PR. W6-08 deletes caller-free Go decoders only (its contract records `proto: none`); it changes
+no v1 wire and carries no design amendment. The
 program plan is the synthesis snapshot at base `a3039f0`
 ([docs/plans/2026-11-21-refactor-program-plan.md](../plans/2026-11-21-refactor-program-plan.md));
 per-slice contracts live outside the repository under the GDD state directory and supersede the
@@ -37,7 +38,7 @@ and archives — only when its Done-when closes.
   blocking only when its area's count reaches zero.
 - Evidence binds its revision; older evidence never validates newer code. A fixed-design change
   needs a documented amendment, not a worker choice (root `AGENTS.md`); the mandate amendment
-  covers the two named non-additive slices (W6-08, W6-09) only.
+  covers the one named non-additive slice (W6-09) only — W6-08 changes no v1 wire.
 
 ## Program shape
 
@@ -73,7 +74,8 @@ and flip blocking per area when that area's count reaches zero (plan §10).
   selected-project hook, settle-poll removal, error-reason coverage, test-only seam removal,
   jsdom/browser split, platform dead helpers, capture-fixture consolidation, source-subject
   single implementation, model-routing split.
-- **W6 — tail micro-waves (12 slices)**: CI structure finalization, browser-spec wiring,
+- **W6 — tail micro-waves (12 planned slices; W6-12 split at the W6 review, W6-03/W6-06 held for
+  conductor decisions)**: CI structure finalization, browser-spec wiring,
   `isGoTestBinary` fork removal, opencode promote-or-drop (parked under D1), containment
   convergence phase 2 (blocked under D3), cmd extraction, frontend route splitting, dead protocol
   API deletion, `GoalAttentionFeed.unavailable` removal, Elixir lint/coverage flips, Styler
@@ -103,7 +105,8 @@ GDD increments with DeepSeek worker stages and independent Opus review:
   decomposition or consolidation records a base-vs-HEAD map of each early return, fall-through,
   error short-circuit and default clause, with a gate covering every package whose tests exercise
   the moved paths, not only the edited package). C1-C3 are conductor rules; D1-D16 below remain
-  the owner decisions.
+  the owner decisions. Contracts written before 2026-11-21 spell C1/C2 as D1/D2; the rule ids are
+  unchanged.
 - Landing: one serialized landing lane at a time; Control slices land only after the full
   `mix test`; after each landing the other ready PRs catch up to `main` with merges whose
   merge-only deltas are verified mechanically. Slow oracles (daemon `-race`, the frontend suite,
@@ -130,7 +133,7 @@ detail.
 | D3 | dual Linux containment generations (legacy supervisor + cgroup-v2 owner) | **Deferred / amendment-gated**: W5-02 and W6-05 are blocked until an owner-approved `harness.md` design amendment covers the OmO/OMP/generic/workspace policy and host prerequisites, and a dispatched `linux-native-v2-acceptance` run is green for each kind's exact binary on a qualifying host. |
 | D4 | test-only witness authority in production binaries; `isGoTestBinary` fork | **Consolidate in place** (W5-01): one witness-config struct parsed once behind the single `SYMMETRY_PRODUCTION_LINUX_CONTAINMENT_WITNESS` gate, privileged writes confined to a witness-owned directory; **no build tag** — witness evidence binds the shipped binary's SHA-256. Delete the self-inspection fork in W6-03 (independent of D3). |
 | D5 | dead goal-envelope decode/validate family in `internal/protocol` | **Delete**; retarget the fixture suites to the production entry points (W6-08). |
-| D6 | Linux v2 ack stages (10 declared, 2 emitted) | **Shrink the table to the emitted stages** inside W4-05, after proving no persisted journal/receipt can carry a removed stage name — otherwise keep decode tolerance for removed names. |
+| D6 | Linux v2 ack stages (10 declared, 2 emitted) | **Resolved at the W4 review reconcile (E1): keep all ten stage names** — the shrink premise is disproved (all ten are live ACK-loss vocabulary the witness layer injects and the release acceptance drives). W4-05 delivers the single-source derivation only: one exported ten-name source consumed by `linuxV2NativeWitnessAckLossSupported`, pinned by a drop-one-name mutant. |
 | D7 | browser specs never run in CI | **Keep and wire by fixture family** (W6-02): compose specs into the existing compose job; connections/planning into a new Linux fixture job; live-daemon/chat-live as an explicit manual matrix; the W2-01 inventory gate prevents regression. |
 | D8 | ST1005 (584 capitalized Go error strings) | **Exclude ST1005 from the golangci gate**; the optional mechanical slice for the ~134 genuine cases (W5-13) was dropped at the W5 reconcile (decision G — the genuine-case premise was disputed and both measurements are recorded). |
 | D9 | ExUnit serialization | **Convert DB-only files to `async: true`**, keep app-env/migration files serial; new flakes are findings, not normalized (W3-14). |
@@ -149,13 +152,13 @@ this program.
 ## Status
 
 State re-derived on 2026-11-21 from `gh`, the contracts and the live branches at `origin/main`
-`a503eab7` (the T1 refresh logged below). "Pipeline" = dispatched work with no PR yet: W2-01,
-W4-03, W4-04 and W4-06 have work in their worktrees; W2-07, W2-17 and W3-04 have pushed branches
-without a PR; W3-03 has a prepared worktree at `main`. "Gated on X" lists the merge-first set at
-this snapshot; the contracts are the authority and every gate is re-derived at dispatch. The W4
-and W5 reconciles under independent two-model review are recorded (reconcile reports, parts a
-and b): W4 split W4-15 into 15a/15b and W5 dropped W5-07 and W5-13. The W6 contracts were
-batch-drafted in two parts and reviewed before dispatch.
+`7954836`, gh snapshot 11:01Z (the T1 refresh logged below). "Pipeline" = dispatched work with no
+PR yet: W3-02, W3-03, W3-12, W4-03 and W4-04 have pushed branches. "Gated on X" lists the
+merge-first set at this snapshot; the contracts are the authority and every gate is re-derived at
+dispatch. The W4 and W5 reconciles under independent two-model review are recorded (reconcile
+reports, parts a and b): W4 split W4-15 into 15a/15b and W5 dropped W5-07 and W5-13. The W6
+contracts were batch-drafted in two parts and reviewed (DeepSeek and Opus); the Opus review holds
+W6-03 and W6-06 for conductor decisions and splits W6-12, and the W6 reconcile is pending.
 
 ### Wave 1 — low-risk enablers (14 slices) — complete
 
@@ -180,43 +183,43 @@ batch-drafted in two parts and reviewed before dispatch.
 
 | Slice | Purpose | PR | State |
 | --- | --- | --- | --- |
-| W2-01 | CI test observability: durations + browser-suite inventory gate | — | pipeline |
+| W2-01 | CI test observability: durations + browser-suite inventory gate | #188 | in review |
 | W2-02 | Strict JSON decoded in one ordered pass (CW-1) | #156 | merged |
 | W2-03 | Controller plumbing consolidation (CW-2/3/4/5/6/7/10) | #163 | merged |
 | W2-04 | `PortalJSON` consolidation (CW-8a/8b, CW-15) | #161 | merged |
 | W2-05 | Goal schema validators (CCS1) | #150 | merged |
 | W2-06 | Provider shared support (CCS2) | #154 | merged |
-| W2-07 | Mutation-id + versioned-changeset helpers (CCS3) | — | pipeline (branch pushed, no PR) |
-| W2-08 | Read-model projection context (CCS4) | #162 | in review |
+| W2-07 | Mutation-id + versioned-changeset helpers (CCS3) | #184 | in review |
+| W2-08 | Read-model projection context (CCS4) | #162 | merged |
 | W2-09 | State validator section helpers (DA S2) | #165 | in review |
 | W2-10 | Callback factory dedup (DA S3) | #159 | merged |
-| W2-11 | Typed error identities (DP S-3) | #160 | in review |
+| W2-11 | Typed error identities (DP S-3) | #160 | merged |
 | W2-12 | Wire primitives + strict-decode parity (DR S3) | — | superseded by W2-12a/W2-12b (split at contract review) |
 | W2-12a | Wire validator family (split of W2-12) | #153 | merged |
 | W2-12b | Operator client relocated to its test-only callers (split of W2-12) | #178 | in review |
 | W2-13 | Harness shared session scaffolding 5a (DR S5a) | #155 | merged |
 | W2-14 | `authority.go` split + clone/equal unification (DR S8) | #158 | merged |
-| W2-15 | Served-value helper module (FE S2) | #164 | in review |
+| W2-15 | Served-value helper module (FE S2) | #164 | merged |
 | W2-16 | Clone-aliasing reflection test (DP S-9) | #152 | merged |
-| W2-17 | Coverage plane (D14; moved from W1-01) | — | pipeline (branch pushed, no PR; serialized after W2-01 on `ci.yml`) |
+| W2-17 | Coverage plane (D14; moved from W1-01) | #186 | in review (merge after W2-01 on `ci.yml`) |
 
 ### Wave 3 — abstraction/dedup II + medium-risk (16 slices)
 
 | Slice | Purpose | PR | State |
 | --- | --- | --- | --- |
-| W3-01 | Changed-path classifier extraction + corpus single source (SC S2) | — | gated on W2-01 + W2-17 (`ci.yml` serialization) |
-| W3-02 | Response builder + per-operation request-shape table (DP S-4) | — | gated on W2-11 (#160) |
-| W3-03 | Elixir fixture extraction batch 2 — web + integrations (T1 cont.) | — | queued — gates merged (#163, #161); worktree staged |
-| W3-04 | Probe/registry dedup, cycle-free (DR S6) | — | pipeline (branch pushed; #155 merged) |
+| W3-01 | Changed-path classifier extraction + corpus single source (SC S2) | — | gated on W2-01 (#188) + W2-17 (#186) (`ci.yml` serialization) |
+| W3-02 | Response builder + per-operation request-shape table (DP S-4) | — | pipeline (branch pushed, no PR; #160 merged) |
+| W3-03 | Elixir fixture extraction batch 2 — web + integrations (T1 cont.) | — | pipeline (branch pushed, no PR) |
+| W3-04 | Probe/registry dedup, cycle-free (DR S6) | #187 | in review |
 | W3-05 | Notification reconnect seam + fake-agent exit path (DR S11) | #181 | in review |
-| W3-06 | Witness-writer error propagation (DR S12) | #166 | in review |
+| W3-06 | Witness-writer error propagation (DR S12) | #166 | merged |
 | W3-07 | Error-cause wrapping + capacity split (DA S4) | — | gated on W2-09 (#165) |
 | W3-08 | Unexport unused state surface + test-only options (DA S8) | — | gated on W2-09 + W3-07 |
 | W3-09 | Errcheck triage part 1 — app recovery paths (DA S7a) | — | gated on W3-07; must land before W4-01 |
-| W3-10 | Result dispatch flattening (CCS5) | — | gated on W2-07 |
+| W3-10 | Result dispatch flattening (CCS5) | — | gated on W2-07 (#184) |
 | W3-11 | Narrow HTTP rescue (CCS9b) | #179 | in review |
-| W3-12 | UI primitives + resource-dialog collapse (FE S4+S9) | — | gated on W2-15 (#164) + W3-03 |
-| W3-13 | HTTP boundary unify (FE S5) | — | gated on W2-15 (#164) + W3-12 |
+| W3-12 | UI primitives + resource-dialog collapse (FE S4+S9) | — | pipeline (branch pushed, no PR; gate W3-03) |
+| W3-13 | HTTP boundary unify (FE S5) | — | gated on W3-12 (#164 merged) |
 | W3-14 | ExUnit async conversion (TC-E) | — | gated on W3-03 |
 | W3-15 | Giant-test split (TC-H) | — | gated on W2-09, W3-08, W3-10, W3-14 |
 | W3-16 | `scripts/ci` defect repairs + visible PyYAML oracle (SC S8) | #180 | in review |
@@ -227,20 +230,20 @@ batch-drafted in two parts and reviewed before dispatch.
 | --- | --- | --- | --- |
 | W4-01 | `startGoalAdmission` phase split (DA S13) | — | gated on W3-09; W3-08 co-writes `app.go` |
 | W4-02 | Session objects for supervisor/anchor loops (DP S-5) | — | gated on W3-02; before W5-01 |
-| W4-03 | Execution `Start`/`closeContainmentAttempt` decomposition (DR S7) | — | pipeline (work in its worktree; no open-PR gate) |
-| W4-04 | Workspace walkers + subject guards (DR S10) | — | pipeline (work in its worktree; no open-PR gate) |
+| W4-03 | Execution `Start`/`closeContainmentAttempt` decomposition (DR S7) | — | pipeline (branch pushed, no PR; no open-PR gate) |
+| W4-04 | Workspace walkers + subject guards (DR S10) | — | pipeline (branch pushed, no PR; no open-PR gate) |
 | W4-05 | Linux v2 finalize pipeline unification (DR S9, D6) | — | gated on W4-03 |
-| W4-06 | `provider_access` intent-context unification (CCS8) | — | pipeline (work in its worktree; no open-PR gate) |
-| W4-07 | `goals.ex` facade split phase 1 (CCS7) | — | gated on W2-07, W3-10, #162 |
+| W4-06 | `provider_access` intent-context unification (CCS8) | #189 | in review |
+| W4-07 | `goals.ex` facade split phase 1 (CCS7) | — | gated on W2-07 (#184) + W3-10 (#162 merged) |
 | W4-08 | ChatPage decomposition (FE S7) | — | gated on W4-11 (frontend serial order) |
 | W4-09 | Api reads/writes split (FE S6) | — | gated on W4-08 |
 | W4-10 | Refusal/outcome classification module (FE S3) | — | gated on W4-09 |
-| W4-11 | Frontend test-harness consolidation + MSW (FE S10, D13) | — | gated on W2-15 (#164) + W3-12 + W3-13 + the consolidated npm bump (#183, replaces the #173-#177 family); head of the frontend serial order |
+| W4-11 | Frontend test-harness consolidation + MSW (FE S10, D13) | — | gated on W3-12 + W3-13 + the consolidated npm bump (#183, replaces the #173-#177 family); head of the frontend serial order |
 | W4-12 | Go test-double extraction part 1 (TC-G) | — | gated on W3-08 → W3-15 |
-| W4-13 | Wall-clock burn-down part 1 — Go deadlines (TC-F) | — | gated on W4-12, W4-15b (after W4-15a), W3-04, W3-15, #178 |
-| W4-14 | Browser fixture consolidation (TC-I) | — | gated on W2-01 |
+| W4-13 | Wall-clock burn-down part 1 — Go deadlines (TC-F) | — | gated on W4-12, W4-15b (after W4-15a), W3-04 (#187), W3-15, #178 |
+| W4-14 | Browser fixture consolidation (TC-I) | — | gated on W2-01 (#188) |
 | W4-15 | Harness staged driver 5b — split at the W4 reconcile | — | superseded by W4-15a/W4-15b |
-| W4-15a | Harness JSONL decoder leaf (`internal/harness/linejson`) | — | gated on W3-04 + W3-15 |
+| W4-15a | Harness JSONL decoder leaf (`internal/harness/linejson`) | — | gated on W3-04 (#187) + W3-15 |
 | W4-15b | Harness staged driver 5b (DR S5b) | — | gated on W4-15a |
 | W4-16 | Python test harness: git fixture + citest (SC S5 + T8) | — | gated on W3-16, W3-01 |
 
@@ -248,36 +251,38 @@ batch-drafted in two parts and reviewed before dispatch.
 
 | Slice | Purpose | PR | State |
 | --- | --- | --- | --- |
-| W5-01 | Witness scaffolding converge-in-place: one gate, no build tag (DP S-7, D4) | — | queued — see contract (gates: #160 → W5-09; W3-02 → W4-02; W4-13, #137, #178, dependabot #167-#172; W3-01 before any `ci.yml` edit) |
+| W5-01 | Witness scaffolding converge-in-place: one gate, no build tag (DP S-7, D4) | — | queued — see contract (#160 merged; W5-09 lands before this slice; W3-02 → W4-02; W4-13, #137, #178, dependabot #167-#172; W3-01 before any `ci.yml` edit) |
 | W5-02 | Containment convergence phase 1: v2 mandatory on Linux (DP S-11a, D3) | — | blocked (D3) |
-| W5-03 | ChatPage/scope-hook follow-ups (FE S7b + S8) | — | gated on #164 → W3-12 → W4-11 → W4-08 → W4-09 → W4-10 |
-| W5-04 | Goal-settle poll removal + wait budgets (FE S11 + TC-J) | — | gated on #164 → W3-12 → W4-11 → W4-08 → W4-09 → W4-10 |
+| W5-03 | ChatPage/scope-hook follow-ups (FE S7b + S8) | — | gated on W3-12 → W4-11 → W4-08 → W4-09 → W4-10 (#164 merged) |
+| W5-04 | Goal-settle poll removal + wait budgets (FE S11 + TC-J) | — | gated on W3-12 → W4-11 → W4-08 → W4-09 → W4-10 (#164 merged) |
 | W5-05 | Error-reason coverage + fallback counter (CW-9) | — | gated on W3-03 → W3-14 (#163 merged) |
 | W5-06 | Test-only seam removal (CW-12 remainder) | — | queued — #163 merged; rebase at dispatch (W3-03/W3-14 touch the oracle test only) |
 | W5-07 | Descendant-monitor state machine (DP S-10) | — | dropped (W5 reconcile, decision D) |
-| W5-08 | jsdom/browser layer split (TC-K, D15) | — | gated on the frontend chain (#164 → W3-12 → W4-11 → W4-08 → W4-09 → W4-10), W4-14, W5-03 + W5-04 |
-| W5-09 | Platform dead test-only helpers (DP S-8) | — | gated on #160 (lands before W5-01) |
-| W5-10 | Harness capture fixture consolidation (TC-M, D10) | — | gated on W3-04 → W3-15 → W4-15a → W4-15b → W4-13 (W2-13 merged); runbook check at dispatch |
+| W5-08 | jsdom/browser layer split (TC-K, D15) | — | gated on W3-12 → W4-11 → W4-08 → W4-09 → W4-10 → W4-14 → W5-03 + W5-04 (#164 merged) |
+| W5-09 | Platform dead test-only helpers (DP S-8) | — | queued — #160 merged; lands before W5-01 |
+| W5-10 | Harness capture fixture consolidation (TC-M, D10) | — | gated on W3-04 (#187) → W3-15 → W4-15a → W4-15b → W4-13 (W2-13 merged); runbook check at dispatch |
 | W5-11 | Source-subject single implementation (SC S9) | — | gated on W3-16 (#180) + W4-16 |
 | W5-12 | model-routing module split (SC S10) | — | gated on W4-16 + W3-16 (#180); W5-11 no longer a dependency (decision E) |
 | W5-13 | ST1005 genuine-case mechanical slice (D8) | — | dropped (W5 reconcile, decision G) |
 
-### Tail W6 — micro-waves (12 slices)
+### Tail W6 — micro-waves (12 planned; W6-12 split, W6-03/W6-06 HOLD)
 
 | Slice | Purpose | PR | State |
 | --- | --- | --- | --- |
-| W6-01 | CI structure finalization: inline program extraction + contracts composite action | — | queued (W1-01 merged; `ci.yml` micro-wave) |
-| W6-02 | Browser spec wiring per D7 | — | gated on W2-01 |
-| W6-03 | `isGoTestBinary` fork removal (DP P-05, D4) | — | gated on W5-01 → W5-09; W5-07 dropped (its monitor code stays) |
+| W6-01 | CI structure finalization: inline program extraction + contracts composite action | — | queued — gates: W2-01, W2-17, W3-01, W5-01 merged; #137, dependabot #167-#172 merge-first; `ci.yml` lane W6-01 → W6-02 → W6-10 → W6-12 |
+| W6-02 | Browser spec wiring per D7 | — | gated on W2-01 → W4-14 → {W5-03, W5-04} → W5-08 → W6-01; render gate green on `main` |
+| W6-03 | `isGoTestBinary` fork removal (DP P-05, D4) | — | HOLD (W6 review: handoff-capability design undecided); then #160 → W3-02 → W4-02 → W5-01 → W5-09 |
 | W6-04 | opencode promote-or-drop | — | parked (D1) |
 | W6-05 | Containment convergence phase 2: delete the legacy generation (DP S-11b, D3) | — | blocked (D3) |
-| W6-06 | cmd extraction: launcher handshake + clone-bootstrap (DR S13) | — | gated on W6-05 |
-| W6-07 | Frontend route code splitting (FE S13) | — | gated on W4-08 |
-| W6-08 | Dead protocol API deletion: goal-envelope family (DR F-07, D5) | — | queued (W1-06 merged; micro-wave); mandate slice — amends `docs/design/protocol.md` in-PR |
-| W6-09 | Remove always-null `GoalAttentionFeed.unavailable` (CW S12, D2) | — | gated on W5-05; mandate slice — carries the `protocol.md` + `frontend.md` amendment in-PR |
-| W6-10 | Elixir lint/coverage flips | — | gated on W6-01 + area counts at zero |
-| W6-11 | Styler adoption + duplication burn-down (D12, D16) | — | gated on the control-slice tail |
-| W6-12 | Wall-clock burn-down part 2 + duration ratchet blocking (TC-F/TC-B cont.) | — | gated on W4-13, W2-01 |
+| W6-06 | cmd extraction: launcher handshake + clone-bootstrap (DR S13) | — | HOLD (W6 review: split + owner re-scope of the W6-05 dependency) |
+| W6-07 | Frontend route code splitting (FE S13) | — | gated on #164 → W3-12 → W4-11 → W4-08 → W4-09 → W4-10 → W5-03 + W5-04 → W4-14 → W5-08; stale-chunk policy decision |
+| W6-08 | Dead protocol API deletion: goal-envelope family (DR F-07, D5) | — | gated on #178 + #165 merge-first; W3-07/W3-08/W3-15/W4-01/W4-04/W4-12/W4-13 land first or rebase (recorded per writer); no design amendment (`proto: none`) |
+| W6-09 | Remove always-null `GoalAttentionFeed.unavailable` (CW S12, D2) | — | gated on #163 → W3-03 → W5-05, W3-14, the frontend chain through W5-08 and W6-02; mandate slice — carries the same-PR `protocol.md`/`frontend.md` amendment |
+| W6-10 | Elixir lint/coverage flips | — | gated on W6-11, W6-01/W6-02, W2-17, W2-01 and the control writers W3-03/W3-14/W5-05/W5-06/W6-09; credo flip-vs-ratchet decision pending |
+| W6-11 | Styler adoption + duplication burn-down (D12, D16) | — | gated on W2-17 and every W2-W5 control-source writer (see contract) + W6-09; lands before W6-10/W6-12 |
+| W6-12 | Wall-clock burn-down part 2 + duration/coverage ratchets (TC-F/TC-B cont.) | — | split at the W6 review (W6-12a + W6-12b) |
+| W6-12a | Wall-clock burn-down part 2 — test files only, no `ci.yml` | — | gated on W4-13, W5-04, W6-03, W6-09, W6-11 + writers W4-03/W4-04/W3-05 (#181)/W4-06; before W6-12b |
+| W6-12b | Ratchet flips + jscpd step (last `ci.yml` writer) | — | gated on W6-10, W6-12a, W6-11; duration-flip target vs W2-01 pending |
 
 ### Blocked, parked and dropped items
 
@@ -375,6 +380,26 @@ stays verbatim apart from its provenance header and one placeholder normalizatio
   premise disputed, both measurements recorded). Authority: the conductor's reconcile decisions
   under the owner's standing authorization; reviews by reference: the W4/W5 contract reviews and
   reconcile reports (parts a and b, 2026-11-21).
+- **2026-11-21 — T1 status refresh (round 2).** Status rows and facts re-derived from `gh` and
+  the live branches at `origin/main` `7954836`, gh snapshot 11:01Z: #160, #162, #164 and #166
+  merged; #184-#189 opened (W2-07, the witness-latch fix, W2-17, W3-04, W2-01, W4-06); W3-02,
+  W3-03, W3-12, W4-03 and W4-04 have pushed branches without a PR; #183 remains the consolidated
+  npm bump. The W6 rows are re-derived from the W6 contracts and both W6 reviews in the same
+  pass.
+- **2026-11-21 — T2: round-2 review; W6 rows, D6 and the mandate label corrected.** The
+  independent Opus review of PR #182 round 2 (`182-opus-review-2.md`, 2026-11-21, bound to
+  `bfd81bc9`) is recorded as the independent review of the round-1 amendment text (T2), and its
+  findings are applied: W6-09 is the program's only non-additive mandate slice — W6-08 deletes
+  caller-free Go decoders and changes no v1 wire — and the design-amendment duty is added to
+  W6-09's binding contract as a Conductor decision (owned set gains `docs/design/protocol.md`
+  and `docs/design/frontend.md`); every W6 row is re-derived from the contracts and the two W6
+  reviews (W6-03 and W6-06 show HOLD, W6-12 is split into 12a/12b); the D6 row is corrected to
+  the W4 review reconcile's resolution (keep all ten ack stages — the shrink premise is
+  disproved; W4-05 delivers the single-source derivation only); contracts written before
+  2026-11-21 that spell C1/C2 as D1/D2 are recorded as the same rules. One binding-contract edit
+  remains for the W6 reconcile: the W6-03 and W6-05 contracts still list the dropped W5-07 as a
+  dependency and must strike it. Authority: the owner's standing authorization (2026-11-21);
+  review by reference as cited.
 
 ## Known follow-ups
 
