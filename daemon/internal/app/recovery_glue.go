@@ -378,7 +378,7 @@ func (daemon *daemon) stopRecoveredJournal(journal state.RunJournal, reason stri
 		}
 		if err := daemon.stopPersistedProcess(daemon.rootContext(context.Background()), journal); err != nil {
 			if daemon.log != nil {
-				daemon.log.Warn("stop_recovered_process_failed", "run_id", journal.RunID, "generation", journal.Generation, "error", err)
+				daemon.log.Warn("stop_recovered_process_failed", "run_id", journal.RunID, "generation", journal.Generation, "reason", reason, "error", err)
 			}
 			return
 		}
