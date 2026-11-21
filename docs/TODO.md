@@ -713,6 +713,39 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       (plan CW-7 in `docs/plans/2026-11-21-rf-w2-03-controller-plumbing-plan.md`). Found by the
       adversarial review of PR #163 (P3-1).
 
+## Linux supervisor: remaining sticky-refusal paths after the owner-loss latch
+
+The closed witness-stall entry (`docs/archive/CLOSED-TODO.md`, "Production Linux containment
+witness: stop-receipt barrier stall awaiting a diagnosable occurrence", closed 2026-11-21 by commit
+`e9c457d8`) latched owner loss at every `enterRecovery` entry; the review of that fix (PR #185
+round 1) left two paths open here.
+
+- [ ] Close the same sticky-refusal class for the lease-expiry arm. `runLinuxSupervisorHelperLoop`
+      still computes `ownerLostStop` from `ownerLostLatched || channelClosedV2(watchdog.ownerLost())`
+      (`daemon/internal/platform/supervisor_linux_helper.go:838`) and the lease-expiry arm
+      (`:978-993`) calls `stop()` without `enterRecovery`; if the owner dies or wedges as the lease
+      expires and that timer arm wins the `select` before the control-EOF event, the final
+      descendant scan persists over the dead metadata transport, the failure latches the sticky
+      `descendantScanLost` (`process_unix.go`, the final-scan block and the monitor's
+      `pre_scan_ack_failure` path), and every later stop is refused exactly as in CI 44876100236.
+      Direction (root-cause §5 P2, kept in the local flake analysis `flake/root-cause-1.md`): do
+      not latch sticky `descendantScanLost` on a final-scan *persistence* failure — return a
+      retryable stop error with the authority retained so a later attempt (after the watchdog
+      latch) seals through the owner-loss branch — and clear `descendantSealPending` when the
+      observer seal write fails in `sealDescendantScanAfterMonitorStop`. This changes retry
+      semantics and needs its own increment; the plan of the closed fix records it as out of scope.
+- [ ] Give the in-process `recoverResponseLossStop` consumer the helper's owner-loss terminal seal.
+      The live-owner entries of the latch (a daemon-side control close on response-transport loss,
+      and response writes that fail before any pipe I/O) make the helper seal locally with no
+      observer writes, so the durable helper progress keeps its pre-latch sequence; the restarted
+      daemon records the seal returned over the recovery endpoint
+      (`RecordSupervisorRecoveryScanSeal`, exact `Completed+1`) before the receipt, but the
+      in-process consumer does not, `assert_all_sealed` refuses, and that stop fails closed into a
+      durable containment-unproven mark. Pinned by
+      `TestLinuxSupervisorLiveOwnerControlCloseInProcessStopFailsClosed`; the amendment is to
+      record the returned seal before the mirror freeze in that path, or to keep the live-owner
+      branch for live-owner entries (PR #185 review round 1, finding F1, options (a)/(b)).
+
 ## Daemon: `writeInputBounded` can strand its writer goroutine (audit F15)
 
 - [ ] Give `writeInputBounded` (`daemon/internal/app/app.go:7240-7272`) an owned exit path for the

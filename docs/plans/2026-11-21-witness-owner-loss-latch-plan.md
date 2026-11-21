@@ -55,8 +55,8 @@ usually wins the race; the regression test below constructs the losing interleav
 
 `enterRecovery` is a closure in `runLinuxSupervisorHelperLoop`; `grep -n 'enterRecovery()'` finds
 exactly nine call sites at the baseline: `:952, :973, :979, :984, :1002, :1013, :1018, :1033,
-:1092` (HEAD after the fix: `:963, :984, :990, :995, :1013, :1024, :1029, :1044, :1103`). Each is
-an owner-transport-loss boundary:
+:1092` (HEAD after the fix and the round-1 comment correction: `:977, :998, :1004, :1009, :1027,
+:1038, :1043, :1058, :1117`):
 
 | # | baseline line | trigger | owner-transport-loss evidence |
 | --- | --- | --- | --- |
@@ -71,7 +71,7 @@ an owner-transport-loss boundary:
 | 9 | `:1092` | main-switch response write failed | same |
 
 Why a failed response write is an owner-transport-loss boundary and cannot misclassify a reachable
-live owner:
+live owner — with the review round 1 corrections noted after the list:
 
 - The response pipe's read end is held only by the daemon (`linuxSupervisor.responseRead`), read in
   `request()` (`supervisor_linux_client.go:1511-1530`). A live but slow reader makes the write
@@ -84,13 +84,40 @@ live owner:
   channel and the recovery endpoint is the designed migration (the `stop-response-lost` /
   `release-response-lost` witness cases).
 - The one stop that is *not* an owner-transport boundary — the lease-expiry retry
-  (`supervisor_linux_helper.go:954-967`) — deliberately stays on the live-owner branch and does not
-  call `enterRecovery` at all. The pre-commit/unbound abort path is likewise unchanged: owner-loss
-  preparation is gated on `ownerLostStop && (bound || resumed) && !precommitAbort`, and
+  (`supervisor_linux_helper.go:978-993` at HEAD) — deliberately stays on the live-owner branch and
+  does not call `enterRecovery` at all. The pre-commit/unbound abort path is likewise unchanged:
+  owner-loss preparation is gated on `ownerLostStop && (bound || resumed) && !precommitAbort`, and
   `precommitAbort` returns through `closePreparedAbort` before the scan assertion.
 
-Conclusion of the audit: all nine entries are owner-transport-loss events; latching owner loss at
-the top of `enterRecovery` cannot reach a live owner through any of them.
+Corrections to this audit (review round 1, finding F1) — two entries can be reached while the owner
+process is still alive:
+
+- Call site 2 (control EOF/error) is reachable with a live daemon: the daemon itself closes its
+  control writer on any response-transport loss (`request()`'s already-lost/control-write/
+  response-read failures, `closeControlAfterResponseLossRequestLocked`, called by
+  `recoverResponseLossStop` and `ReleaseContainment`) while `ownerWrite` and the metadata transport
+  stay open. `TestLinuxSupervisorControlEOFFailsClosedBeforeOwnerLoss` constructs exactly that
+  state. The bullet list above only covers the daemon *exiting* or the gated witness seam, not this
+  live-owner close.
+- A response write can fail before any pipe I/O with a live reader:
+  `writeLinuxSupervisorResponseV2` returns the `ProcessIdentity(os.Getpid())` error, and
+  `writeLinuxSupervisorFrame` returns a marshal error or `errLinuxSupervisorFrameTooLarge`. Arms
+  3–8 stay inert on the latch (`precommitAbort`), and arm 5 is only reachable on a bind replayed
+  after commit; arm 9 (main-switch write) does take the latched owner-loss branch with a live
+  daemon, which is then blocked on its deadline-free response read until it restarts — the
+  restarted-daemon consumer records the returned seal correctly.
+
+Measured consequence for a live owner (review probe C): the helper takes the owner-loss branch,
+stops its monitor before the kill and seals locally at previous+1 with no observer writes, so the
+owner's durable helper progress keeps its pre-latch sequence (`completed=1, sealed=0`). The
+restarted-daemon consumer records the returned seal (`RecordSupervisorRecoveryScanSeal`,
+Completed+1) before the receipt; the in-process `recoverResponseLossStop` consumer does not, so
+`assert_all_sealed` refuses and that stop fails closed into a durable containment-unproven mark.
+Pinned by `TestLinuxSupervisorLiveOwnerControlCloseInProcessStopFailsClosed`. Conclusion of the
+audit after the correction: the latch covers every recovery entry, but not every entry is an
+owner-transport-loss event — the live-owner entries above are the semantic delta, and the follow-up
+choice (record the returned seal in the in-process path, or keep the live-owner branch for
+live-owner entries via root-cause §5 P2) is tracked in `docs/TODO.md`.
 
 ## Fix
 
@@ -100,10 +127,10 @@ endpoint and the `stop()`+recovery-loop shape:
 
 ```go
 enterRecovery := func() error {
-    // Every path that reaches here is an owner-transport-loss boundary: the
-    // owner watchdog published owner loss, the control pipe reached EOF/a
-    // read error, or a response write failed on a pipe whose reader is gone.
-    // … (full comment in the file)
+    // The paths that reach here are the owner watchdog publishing owner loss,
+    // the control pipe reaching EOF/a read error, or a response write failing.
+    // … two of them can be reached while the owner process is still alive
+    // (full comment in the file).
     ownerLostLatched = true
     _ = stop()
     return runLinuxSupervisorRecoveryLoop(…)
@@ -113,7 +140,9 @@ enterRecovery := func() error {
 Invariant restored: *a stop attempted after the owner transport is unusable must seal descendant
 scans with the local owner-loss seal and must never depend on persisting scan events to the owner.*
 The recovery response carries the local `recoverySealSequence` (previous clean sequence + 1), which
-the daemon records durably with `RecordSupervisorRecoveryScanSeal` (`state.go:3786-3823`).
+the restarted-daemon path records durably with `RecordSupervisorRecoveryScanSeal`
+(`state.go:3786-3823`, call site `daemon/internal/app/recovery.go:449-466`) before the receipt; the
+in-process response-loss consumer does not yet (audit corrections above, `docs/TODO.md`).
 
 Fences and idempotency preserved (unchanged code, re-stated as the fence inventory):
 
@@ -143,10 +172,24 @@ scheduler dependence:
    the helper's next scan persist is guaranteed to hit a closed peer.
 3. One `StopPersistedLinuxSupervisorWithScanSeal` call must mint a receipt with
    `sealSequence == 2` (previous clean sequence 1 + 1), prove target/process-group absence, and
-   release; a scan-update counter asserts no helper scan frame is processed after the transport
-   closed.
+   release. The stop succeeding over the closed metadata transport is the observer-free invariant;
+   the scan-update counter that originally accompanied it was removed in review round 1 (finding
+   F4) because `closeScanTransport` joins the scan server first, so the counter could never fail.
 4. Cleanup kills the helper process if a red run leaves it alive (the CI occurrence's own failure
    shape: the helper survived its stopped owner), so repeated red runs leak nothing.
+
+`TestLinuxSupervisorLiveOwnerControlCloseInProcessStopFailsClosed` (review round 1, finding F1)
+pins the other side of the latch: a daemon-side control close with a live owner. It starts the
+supervisor with a test double for the app's scan-persistence callback (per-owner progress plus the
+`assert_clean`/`assert_all_sealed` rules), commits, renews a 30 s lease, closes the control writer
+exactly as `closeControlAfterResponseLossRequestLocked` does, and calls `Terminate(true)`. The
+helper seals locally at sequence 2 with no observer writes, the durable all-sealed assertion is
+refused, the stop fails closed with `ErrLinuxSupervisorStopUnproven`/`ErrLinuxSupervisorResponseLost`
+and exactly one containment-unproven callback, and the helper's terminal seal is still available
+over the recovery endpoint (`sealSequence == 2`). Run against the pre-latch helper
+(`git show a503eab7:…supervisor_linux_helper.go` through `go test -overlay`), the same test fails
+at the first assertion with `<nil>`: the live-owner branch minted the receipt through observer
+writes.
 
 ## Diagnostics (root cause §7 D1)
 
@@ -169,9 +212,13 @@ Filled by the runs below; all commands run on this host, WSL = Ubuntu-24.04, Go 
 
 The regression test was added first on the unfixed tree. `go test ./internal/platform/ -run
 '^TestLinuxSupervisorControlEOFWithDeadOwnerMetadataUsesOwnerLossSeal$' -count=20` in WSL:
-`rc=1`, **20/20 failures**, each in 0.06–0.13 s, every one with the CI flake's refusal —
-`stop after control EOF with a dead owner metadata transport = Linux descendant containment is
-unproven: descendant observation was uncertain` — and `leaked_helpers=0`. Single-run transcript in
+`rc=1`, **20/20 failures**, each in 0.06–0.13 s, every one through the same sticky
+`descendantScanLost` latch and `ErrLinuxDescendantContainmentUnproven` class — with the owner
+writer still open the message is `stop after control EOF with a dead owner metadata transport =
+Linux descendant containment is unproven: descendant observation was uncertain` (the local
+`forceStopUnprovenClose` path); once the owner pipe closes, root-cause §3's text appears instead,
+`owner loss interrupted descendant observation`, which is what the CI retries would have read (the
+CI error text itself was never exported). `leaked_helpers=0`. Single-run transcript in
 `root-cause-1.md` §6 vocabulary: pre-fix the first stop's final scan persist dies on the closed
 peer, latches sticky descendant uncertainty, and the recovery-loop retry is refused locally.
 
@@ -215,7 +262,10 @@ CI remains the merge gate for the gated production witness matrix itself
 
 - Root-cause §5 P2 (do not latch sticky `descendantScanLost` on a final-scan persistence failure;
   clear `descendantSealPending` on observer seal failure): defense in depth, not required for the
-  observed interleaving, and it changes retry semantics — a separate increment.
+  observed interleaving, and it changes retry semantics — a separate increment, now tracked in
+  `docs/TODO.md` as the residual for the lease-expiry arm (review round 1, finding F2).
+- Recording the helper's returned recovery seal in the in-process `recoverResponseLossStop`
+  consumer (option (a) of review finding F1): a follow-up increment, tracked in `docs/TODO.md`.
 - The 45 s harness barrier and the 30 s daemon receipt bound: declared bounds, untouched.
 - `daemon/e2e` witness code: unchanged; the platform-level regression test is the deterministic
   pin, and the CI matrix is the end-to-end confirmation.
@@ -229,3 +279,11 @@ CI remains the merge gate for the gated production witness matrix itself
 - The new test pins the control-EOF entry (call site 2) because it is the observed one; the audit
   above covers the other eight entries by code reading, and the response-write arms are exercised
   by the existing response-loss fixtures (which use fake servers and are unaffected by P1).
+- The latch also covers live-owner entries (control EOF from a daemon-side response-loss close and
+  non-I/O response-write failures), where the local owner-loss seal is not yet consumed by the
+  in-process path and the stop fails closed into a durable containment-unproven mark; pinned by
+  `TestLinuxSupervisorLiveOwnerControlCloseInProcessStopFailsClosed` and tracked in `docs/TODO.md`.
+- The lease-expiry arm (`supervisor_linux_helper.go:978-993`) stays on the live-owner branch: if
+  the owner dies or wedges as the lease expires and the timer arm wins the `select`, the same
+  sticky refusal class is still reachable (review finding F2; root-cause §5 P2 direction in
+  `docs/TODO.md`).

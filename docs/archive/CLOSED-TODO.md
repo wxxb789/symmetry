@@ -3728,11 +3728,17 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
       recovery stop was refused (`Linux descendant containment is unproven`), so the receipt
       callback / 45 s harness barrier (`stop-receipt-before-release.reached`) was never reached,
       and the failure cleanup's third daemon failed identically for 45 s. Fix: `enterRecovery`
-      (`daemon/internal/platform/supervisor_linux_helper.go`) now latches owner loss at entry — all
-      nine call sites are owner-transport-loss boundaries (the watchdog arm, control EOF/error, and
-      failed response-pipe writes, which require every daemon-side reader to be closed; a live but
-      slow reader blocks the write instead of failing it) — so the first stop uses the
-      observer-free owner-loss branch and seals descendant scans locally. The artifact's missing
+      (`daemon/internal/platform/supervisor_linux_helper.go`) now latches owner loss at entry — the
+      watchdog arm, control EOF/error, and failed response writes all latch it — so the first stop
+      uses the observer-free owner-loss branch and seals descendant scans locally. Two of those
+      entries can be reached while the owner process is still alive (the daemon closes its own
+      control writer on response-transport loss, and a response write can fail before any pipe
+      I/O); for them the helper seals locally with no observer writes, the restarted-daemon
+      consumer records the returned seal durably (`RecordSupervisorRecoveryScanSeal`, Completed+1)
+      before the receipt, and the in-process response-loss consumer does not yet, so that stop
+      fails closed into a durable containment-unproven mark — pinned by
+      `TestLinuxSupervisorLiveOwnerControlCloseInProcessStopFailsClosed`, follow-up tracked in
+      `docs/TODO.md` (PR #185 review round 1, finding F1). The artifact's missing
       attribution is closed too: `stop_recovered_process_failed` now logs its already-computed
       `reason` (one line, `daemon/internal/app/recovery_glue.go`; every value is already in the
       evidence exporter's `reason` allowlist and the exporter suite stays green). Pinned by the
@@ -3740,12 +3746,19 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
       `TestLinuxSupervisorControlEOFWithDeadOwnerMetadataUsesOwnerLossSeal`
       (`daemon/internal/platform/containment_supervisor_linux_test.go`), which constructs the
       ordering itself (daemon-side metadata connection closed before the control pipe, owner writer
-      left open): on the unfixed tree it fails 20/20 with the flake's exact refusal
-      (`Linux descendant containment is unproven: descendant observation was uncertain`); with the
-      fix it passes 50/50 and mints a receipt with `sealSequence == 2` (previous clean sequence
-      1 + 1). Residual, recorded in the plan rather than left implicit: the exact originating
-      write-error suffix (broken pipe vs acknowledgement EOF) was never exported; the next failing
-      artifact should cross-check `reason` against the refusal, and the fix removes the
-      dead-transport branch for either suffix. Plan and gate evidence:
+      left open): on the unfixed tree it fails 20/20 through the same sticky `descendantScanLost`
+      latch and `ErrLinuxDescendantContainmentUnproven` class — with the owner writer open the
+      message is `Linux descendant containment is unproven: descendant observation was uncertain`,
+      and once the owner pipe closes it reads `owner loss interrupted descendant observation`,
+      which is what the CI retries would have produced (the CI error text itself was never
+      exported); with the fix it passes 50/50 and mints a receipt with `sealSequence == 2`
+      (previous clean sequence 1 + 1). Residuals, recorded in the plan and tracked in `docs/TODO.md`
+      rather than left implicit: the exact originating write-error suffix (broken pipe vs
+      acknowledgement EOF) was never exported (the next failing artifact should cross-check
+      `reason` against the refusal; the fix removes the dead-transport branch for either suffix);
+      the lease-expiry arm still stays on the live-owner branch, where the same sticky refusal
+      class remains reachable if the owner dies or wedges as the lease expires (root-cause §5 P2
+      direction); and the live-owner entries above still lack an in-process consumer for the local
+      seal. Plan and gate evidence:
       `docs/plans/2026-11-21-witness-owner-loss-latch-plan.md`. The 45 s harness wait and the 30 s
       daemon bound were not changed.
