@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"reflect"
-	"sync"
 	"time"
 
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
@@ -144,7 +142,7 @@ func (adapter *GenericAdapter) Start(ctx context.Context, request StartRequest, 
 			Data:     append([]byte(nil), event.Data...),
 		})
 	}))
-	if isNilProcessHandle(process) {
+	if IsNilInterface(process) {
 		if err != nil {
 			return nil, fmt.Errorf("start generic harness: %w", err)
 		}
@@ -158,33 +156,13 @@ func (adapter *GenericAdapter) Start(ctx context.Context, request StartRequest, 
 	return session, nil
 }
 
-func isNilProcessHandle(process ProcessHandle) bool {
-	if process == nil {
-		return true
-	}
-	value := reflect.ValueOf(process)
-	switch value.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return value.IsNil()
-	default:
-		return false
-	}
-}
-
 type genericSession struct {
 	process ProcessHandle
 
-	closeMutex     sync.Mutex
-	closeAttempt   *genericCloseAttempt
-	closeSucceeded bool
+	closeGate CloseGate
 
 	resultDone chan struct{}
 	result     TaskResult
-}
-
-type genericCloseAttempt struct {
-	done chan struct{}
-	err  error
 }
 
 func (session *genericSession) await() {
@@ -265,36 +243,9 @@ func (session *genericSession) Close(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("close context must not be nil")
 	}
-	session.closeMutex.Lock()
-	if session.closeSucceeded {
-		session.closeMutex.Unlock()
-		return nil
-	}
-	if attempt := session.closeAttempt; attempt != nil {
-		session.closeMutex.Unlock()
-		select {
-		case <-attempt.done:
-			return attempt.err
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-	attempt := &genericCloseAttempt{done: make(chan struct{})}
-	session.closeAttempt = attempt
-	session.closeMutex.Unlock()
-
-	err := session.process.Terminate(ctx, genericTerminationGrace)
-	session.closeMutex.Lock()
-	attempt.err = err
-	if err == nil {
-		session.closeSucceeded = true
-	}
-	if session.closeAttempt == attempt {
-		session.closeAttempt = nil
-	}
-	close(attempt.done)
-	session.closeMutex.Unlock()
-	return err
+	return session.closeGate.Run(ctx, func(attemptContext context.Context) error {
+		return session.process.Terminate(attemptContext, genericTerminationGrace)
+	})
 }
 
 func (session *genericSession) done() <-chan struct{} {

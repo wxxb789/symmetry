@@ -9,8 +9,6 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
-	"reflect"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -188,6 +186,7 @@ func (adapter *Adapter) start(ctx context.Context, request harness.StartRequest,
 		pending: make(map[string]chan Response), turnDone: make(chan struct{}), processDone: make(chan struct{}),
 		turnGate: make(chan struct{}, 1), controlGate: make(chan struct{}, 1),
 	}
+	session.forwarder = harness.NewProcessForwarder(&session.mutex, &session.process)
 	invocation := request.Invocation
 	invocation.Program, invocation.Args, invocation.Dir = executable, args, request.Workspace
 	invocation.Env = append([]string(nil), request.Invocation.Env...)
@@ -204,7 +203,7 @@ func (adapter *Adapter) start(ctx context.Context, request harness.StartRequest,
 			process = launched
 		}
 	}
-	if nilProcess(process) {
+	if harness.IsNilInterface(process) {
 		cancel()
 		if err == nil {
 			err = errors.New("OmO process launcher returned no process")
@@ -238,19 +237,6 @@ func (adapter *Adapter) start(ctx context.Context, request harness.StartRequest,
 	return session, err
 }
 
-func nilProcess(process harness.NativeProcess) bool {
-	if process == nil {
-		return true
-	}
-	value := reflect.ValueOf(process)
-	return value.Kind() == reflect.Pointer && value.IsNil()
-}
-
-type closeAttempt struct {
-	done chan struct{}
-	err  error
-}
-
 type nativeSession struct {
 	context         context.Context
 	cancel          context.CancelFunc
@@ -258,6 +244,7 @@ type nativeSession struct {
 	decoder         *Decoder
 	validator       *Validator
 	process         harness.NativeProcess
+	forwarder       harness.ProcessForwarder[harness.NativeProcess]
 	expected        *SessionState
 	directory       string
 	workspace       string
@@ -269,7 +256,7 @@ type nativeSession struct {
 	emitMutex       sync.Mutex
 	turnGate        chan struct{}
 	controlGate     chan struct{}
-	closeMutex      sync.Mutex
+	closeGate       harness.CloseGate
 	ready           bool
 	preReady        []execution.Event
 	preReadyBytes   int
@@ -294,8 +281,6 @@ type nativeSession struct {
 	final           harness.TaskResult
 	finalErr        error
 	processFinished bool
-	closeAttempt    *closeAttempt
-	closeSucceeded  bool
 	eventCount      uint64
 	lastSequence    uint64
 }
@@ -304,44 +289,19 @@ var _ harness.Adapter = (*Adapter)(nil)
 var _ harness.StagedSession = (*nativeSession)(nil)
 
 func (session *nativeSession) ProcessDetails() (int, string) {
-	session.mutex.Lock()
-	defer session.mutex.Unlock()
-	if session.process == nil {
-		return 0, ""
-	}
-	return session.process.ProcessDetails()
+	return session.forwarder.Details()
 }
 
 func (session *nativeSession) LeaseRenewalAvailable() bool {
-	session.mutex.Lock()
-	process := session.process
-	session.mutex.Unlock()
-	renewer, ok := process.(execution.LeaseRenewer)
-	return ok && renewer.LeaseRenewalAvailable()
+	return session.forwarder.LeaseRenewalAvailable()
 }
 
 func (session *nativeSession) RenewLease(deadline time.Duration, sequence uint64) error {
-	session.mutex.Lock()
-	process := session.process
-	session.mutex.Unlock()
-	renewer, ok := process.(execution.LeaseRenewer)
-	if !ok {
-		return errors.ErrUnsupported
-	}
-	return renewer.RenewLease(deadline, sequence)
+	return session.forwarder.RenewLease(deadline, sequence)
 }
 
 func (session *nativeSession) LinuxV2LiveOwnerStatus(ctx context.Context) (execution.LinuxV2LiveOwnerStatus, error) {
-	session.mutex.Lock()
-	process := session.process
-	session.mutex.Unlock()
-	provider, ok := process.(interface {
-		LinuxV2LiveOwnerStatus(context.Context) (execution.LinuxV2LiveOwnerStatus, error)
-	})
-	if !ok {
-		return execution.LinuxV2LiveOwnerStatus{}, errors.ErrUnsupported
-	}
-	return provider.LinuxV2LiveOwnerStatus(ctx)
+	return session.forwarder.LiveOwnerStatus(ctx)
 }
 
 func (session *nativeSession) Open(ctx context.Context) (harness.NativeSessionHandle, error) {
@@ -613,50 +573,23 @@ func (session *nativeSession) Wait(ctx context.Context) (harness.TaskResult, err
 	if ctx == nil {
 		return harness.TaskResult{}, errors.New("OmO Wait requires context")
 	}
-	select {
-	case <-session.processDone:
-		session.mutex.Lock()
-		defer session.mutex.Unlock()
-		// The join succeeded. Semantic/lifecycle failures remain in WaitTurn
-		// and the complete result, including every physical Process field.
-		return cloneResult(session.final), nil
-	case <-ctx.Done():
-		return harness.TaskResult{}, ctx.Err()
-	}
+	return harness.WaitResult(ctx, session.processDone, session.publishedResult, harness.TaskResult{})
+}
+
+// publishedResult returns the persisted result after the physical join.
+// Semantic/lifecycle failures remain in WaitTurn and the complete result,
+// including every physical Process field.
+func (session *nativeSession) publishedResult() (harness.TaskResult, error) {
+	session.mutex.Lock()
+	defer session.mutex.Unlock()
+	return harness.CloneTaskResult(session.final), nil
 }
 
 func (session *nativeSession) Close(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("OmO Close requires context")
 	}
-	session.closeMutex.Lock()
-	if session.closeSucceeded {
-		session.closeMutex.Unlock()
-		return nil
-	}
-	attempt := session.closeAttempt
-	if attempt == nil {
-		attempt = &closeAttempt{done: make(chan struct{})}
-		session.closeAttempt = attempt
-		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
-		go func() {
-			err := session.closeOnce(cleanup)
-			cancel()
-			session.closeMutex.Lock()
-			attempt.err = err
-			session.closeSucceeded = err == nil
-			session.closeAttempt = nil
-			close(attempt.done)
-			session.closeMutex.Unlock()
-		}()
-	}
-	session.closeMutex.Unlock()
-	select {
-	case <-attempt.done:
-		return attempt.err
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	return session.closeGate.RunDetached(ctx, cleanupTimeout, nil, session.closeOnce)
 }
 
 func (session *nativeSession) closeOnce(ctx context.Context) error {
@@ -973,10 +906,7 @@ func (session *nativeSession) completeTurn(result harness.TaskResult, turnErr er
 func (session *nativeSession) emit(event harness.Event) error {
 	session.emitMutex.Lock()
 	defer session.emitMutex.Unlock()
-	if event.At.IsZero() {
-		event.At = time.Now().UTC()
-	}
-	if err := session.sink.Handle(session.context, event); err != nil {
+	if err := harness.DeliverEvent(session.context, session.sink, &event); err != nil {
 		return fmt.Errorf("persist OmO native event: %w", err)
 	}
 	session.mutex.Lock()
@@ -1073,47 +1003,4 @@ func (session *nativeSession) watchProcess() {
 	close(session.processDone)
 	session.mutex.Unlock()
 	session.cancel()
-}
-
-func cloneResult(result harness.TaskResult) harness.TaskResult {
-	if result.Reason != nil {
-		reason := *result.Reason
-		result.Reason = &reason
-	}
-	if result.Semantic != nil {
-		semantic := *result.Semantic
-		semantic.EvidenceRefs = slices.Clone(semantic.EvidenceRefs)
-		semantic.Diagnostics = slices.Clone(semantic.Diagnostics)
-		for index := range semantic.Diagnostics {
-			if semantic.Diagnostics[index].Severity != nil {
-				value := *semantic.Diagnostics[index].Severity
-				semantic.Diagnostics[index].Severity = &value
-			}
-		}
-		if semantic.Reason != nil {
-			value := *semantic.Reason
-			semantic.Reason = &value
-		}
-		if semantic.Proposal != nil {
-			value := slices.Clone(*semantic.Proposal)
-			semantic.Proposal = &value
-		}
-		semantic.Blocker = cloneBlocker(semantic.Blocker)
-		if semantic.ProposedNextAction != nil {
-			value := *semantic.ProposedNextAction
-			value.Blocker = cloneBlocker(value.Blocker)
-			semantic.ProposedNextAction = &value
-		}
-		result.Semantic = &semantic
-	}
-	return result
-}
-
-func cloneBlocker(blocker *protocol.Blocker) *protocol.Blocker {
-	if blocker == nil {
-		return nil
-	}
-	value := *blocker
-	value.WorkItemIDs = slices.Clone(value.WorkItemIDs)
-	return &value
 }

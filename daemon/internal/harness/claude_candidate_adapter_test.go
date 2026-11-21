@@ -890,7 +890,7 @@ func TestCloneClaudeCandidateTaskResultDeepCopiesNestedProtocolFields(t *testing
 		Diagnostics: []protocol.Diagnostic{{Code: "observed", Message: "original"}},
 	}
 	original := TaskResult{Semantic: &semantic, Reason: &reason}
-	cloned := cloneClaudeCandidateTaskResult(original)
+	cloned := CloneTaskResult(original)
 	cloned.Semantic.EvidenceRefs[0] = "changed"
 	cloned.Semantic.Blocker.WorkItemIDs[0] = "changed"
 	cloned.Semantic.ProposedNextAction.Blocker.WorkItemIDs[0] = "changed"
@@ -1058,9 +1058,9 @@ func TestClaudeCandidateCancelledControlContextDoesNotAcknowledgeFailure(t *test
 		t.Fatalf("cancelled control = receipt=%+v error=%v, want failed non-acknowledgement", firstReceipt, firstControlErr)
 	}
 	if native, ok := session.(*claudeCandidateSession); ok {
-		native.closeMutex.Lock()
-		attempt := native.closeAttempt
-		native.closeMutex.Unlock()
+		native.closeGate.mutex.Lock()
+		attempt := native.closeGate.attempt
+		native.closeGate.mutex.Unlock()
 		if attempt != nil {
 			select {
 			case <-attempt.done:

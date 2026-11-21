@@ -8,8 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"reflect"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -212,7 +210,7 @@ func (adapter *ClaudeCandidateAdapter) Start(ctx context.Context, request StartR
 		LinuxV2:                            request.Invocation.LinuxV2,
 	}
 	process, startErr := startProcess(processContext, invocation, execution.SinkFunc(session.handleProcessOutput))
-	if isNilClaudeCandidateProcess(process) {
+	if IsNilInterface(process) {
 		cancel()
 		if startErr != nil {
 			return nil, startErr
@@ -266,19 +264,6 @@ func (adapter *ClaudeCandidateAdapter) Start(ctx context.Context, request StartR
 	return session, nil
 }
 
-func isNilClaudeCandidateProcess(process claudeCandidateProcess) bool {
-	if process == nil {
-		return true
-	}
-	value := reflect.ValueOf(process)
-	switch value.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return value.IsNil()
-	default:
-		return false
-	}
-}
-
 type claudeCandidateSession struct {
 	context           context.Context
 	cancel            context.CancelFunc
@@ -290,9 +275,9 @@ type claudeCandidateSession struct {
 	mutex       sync.Mutex
 	outputMutex sync.Mutex
 	emitMutex   sync.Mutex
-	closeMutex  sync.Mutex
 	writeMutex  sync.Mutex
 
+	forwarder      ProcessForwarder[claudeCandidateProcess]
 	process        claudeCandidateProcess
 	processReady   bool
 	preReadyEvents []execution.Event
@@ -323,18 +308,11 @@ type claudeCandidateSession struct {
 	watchDone  chan struct{}
 	watchOnce  sync.Once
 
-	closeAttempt   *claudeCandidateCloseAttempt
-	closeSucceeded bool
-	closeError     error
-}
-
-type claudeCandidateCloseAttempt struct {
-	done chan struct{}
-	err  error
+	closeGate CloseGate
 }
 
 func newClaudeCandidateSession(ctx context.Context, cancel context.CancelFunc, sink EventSink, sessionID string) *claudeCandidateSession {
-	return &claudeCandidateSession{
+	session := &claudeCandidateSession{
 		context:           ctx,
 		cancel:            cancel,
 		sink:              sink,
@@ -345,45 +323,29 @@ func newClaudeCandidateSession(ctx context.Context, cancel context.CancelFunc, s
 		resultDone:        make(chan struct{}),
 		watchDone:         make(chan struct{}),
 	}
+	session.forwarder = NewProcessForwarder(&session.mutex, &session.process)
+	return session
 }
 
 func (session *claudeCandidateSession) ProcessDetails() (int, string) {
 	if session == nil {
 		return 0, ""
 	}
-	session.mutex.Lock()
-	defer session.mutex.Unlock()
-	if session.process == nil {
-		return 0, ""
-	}
-	return session.process.ProcessDetails()
+	return session.forwarder.Details()
 }
 
 func (session *claudeCandidateSession) LeaseRenewalAvailable() bool {
 	if session == nil {
 		return false
 	}
-	session.mutex.Lock()
-	process := session.process
-	session.mutex.Unlock()
-	renewer, ok := process.(interface{ LeaseRenewalAvailable() bool })
-	return ok && renewer.LeaseRenewalAvailable()
+	return session.forwarder.LeaseRenewalAvailable()
 }
 
 func (session *claudeCandidateSession) RenewLease(deadline time.Duration, sequence uint64) error {
 	if session == nil {
 		return errors.ErrUnsupported
 	}
-	session.mutex.Lock()
-	process := session.process
-	session.mutex.Unlock()
-	renewer, ok := process.(interface {
-		RenewLease(time.Duration, uint64) error
-	})
-	if !ok {
-		return errors.ErrUnsupported
-	}
-	return renewer.RenewLease(deadline, sequence)
+	return session.forwarder.RenewLease(deadline, sequence)
 }
 
 // Open never writes to stdin. Claude Code 2.1.323 emits system/init only after
@@ -628,28 +590,7 @@ func (session *claudeCandidateSession) WaitTurn(ctx context.Context) error {
 		return errors.New("Claude Code native adapter turn has not started")
 	}
 	session.mutex.Unlock()
-	select {
-	case <-session.turnDone:
-		session.mutex.Lock()
-		err := session.turnErr
-		session.mutex.Unlock()
-		return err
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-session.context.Done():
-		select {
-		case <-session.turnDone:
-			session.mutex.Lock()
-			err := session.turnErr
-			session.mutex.Unlock()
-			return err
-		default:
-		}
-		session.mutex.Lock()
-		err := session.sessionErrorLocked()
-		session.mutex.Unlock()
-		return err
-	}
+	return WaitTurnBarrier(ctx, session.context, session.turnDone, session.turnTerminalError, session.sessionError)
 }
 
 func (session *claudeCandidateSession) Wait(ctx context.Context) (TaskResult, error) {
@@ -659,17 +600,28 @@ func (session *claudeCandidateSession) Wait(ctx context.Context) (TaskResult, er
 	if ctx == nil {
 		return TaskResult{}, errors.New("Claude Code native adapter wait context must not be nil")
 	}
-	select {
-	case <-session.resultDone:
-		session.mutex.Lock()
-		defer session.mutex.Unlock()
-		if session.result == nil {
-			return TaskResult{}, errors.New("Claude Code native adapter final result is unavailable")
-		}
-		return cloneClaudeCandidateTaskResult(*session.result), nil
-	case <-ctx.Done():
-		return TaskResult{Kind: ResultCancelled, Summary: "Claude wait cancelled", Usage: Usage{State: UsageUnknown}}, ctx.Err()
+	return WaitResult(ctx, session.resultDone, session.terminalResult, TaskResult{Kind: ResultCancelled, Summary: "Claude wait cancelled", Usage: Usage{State: UsageUnknown}})
+}
+
+func (session *claudeCandidateSession) terminalResult() (TaskResult, error) {
+	session.mutex.Lock()
+	defer session.mutex.Unlock()
+	if session.result == nil {
+		return TaskResult{}, errors.New("Claude Code native adapter final result is unavailable")
 	}
+	return CloneTaskResult(*session.result), nil
+}
+
+func (session *claudeCandidateSession) turnTerminalError() error {
+	session.mutex.Lock()
+	defer session.mutex.Unlock()
+	return session.turnErr
+}
+
+func (session *claudeCandidateSession) sessionError() error {
+	session.mutex.Lock()
+	defer session.mutex.Unlock()
+	return session.sessionErrorLocked()
 }
 
 // Close owns bounded process-tree termination. A failed termination remains a
@@ -682,61 +634,23 @@ func (session *claudeCandidateSession) Close(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("Claude Code native adapter close context must not be nil")
 	}
-	session.closeMutex.Lock()
-	if session.closeSucceeded {
-		session.closeMutex.Unlock()
-		return nil
-	}
-	if session.closeError != nil {
-		err := session.closeError
-		session.closeMutex.Unlock()
-		return err
-	}
-	if attempt := session.closeAttempt; attempt != nil {
-		session.closeMutex.Unlock()
-		select {
-		case <-attempt.done:
-			return attempt.err
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-	attempt := &claudeCandidateCloseAttempt{done: make(chan struct{})}
-	session.closeAttempt = attempt
-	session.closeMutex.Unlock()
-	session.requestClose()
-
-	cleanupContext, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), claudeCandidateCleanupTimeout+claudeCandidateTerminationGrace)
-	go func() {
+	return session.closeGate.RunDetached(ctx, claudeCandidateCleanupTimeout+claudeCandidateTerminationGrace, session.requestClose, func(cleanupContext context.Context) error {
 		err, retryable := session.closeOnce(cleanupContext)
-		cleanupCancel()
-		session.closeMutex.Lock()
-		attempt.err = err
-		if err == nil {
-			session.closeSucceeded = true
-		} else if !retryable {
-			// Process.Terminate is idempotent and retains its first failure.
-			// Preserve that observation instead of issuing another terminate
-			// call that could be mistaken for a fresh cleanup attempt.
-			session.closeError = err
-		} else {
+		switch {
+		case err == nil:
+			return nil
+		case retryable:
 			// A watcher-only timeout is provisional: the native process can
 			// settle after this bounded attempt. Leave Close retryable so a
 			// later reconciliation can observe watchDone and prove cleanup.
-			session.closeError = nil
+			return err
+		default:
+			// Process.Terminate is idempotent and retains its first failure.
+			// Preserve that observation instead of issuing another terminate
+			// call that could be mistaken for a fresh cleanup attempt.
+			return PermanentCloseFailure{Err: err}
 		}
-		if session.closeAttempt == attempt {
-			session.closeAttempt = nil
-		}
-		close(attempt.done)
-		session.closeMutex.Unlock()
-	}()
-	select {
-	case <-attempt.done:
-		return attempt.err
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	})
 }
 
 func (session *claudeCandidateSession) requestClose() {
@@ -967,7 +881,7 @@ func (session *claudeCandidateSession) completeTurn(result TaskResult, turnErr e
 		}
 	}
 	session.mutex.Lock()
-	stored := cloneClaudeCandidateTaskResult(result)
+	stored := CloneTaskResult(result)
 	session.turnResult = &stored
 	session.turnErr = turnErr
 	session.mutex.Unlock()
@@ -1060,7 +974,7 @@ func (session *claudeCandidateSession) watchProcess() {
 		cancelRequested := session.cancelRequested
 		failure := session.failure
 		normalClose := session.closeNormalCandidate
-		turnResult := cloneClaudeCandidateTaskResultPointer(session.turnResult)
+		turnResult := CloneTaskResultPointer(session.turnResult)
 		turnErr := session.turnErr
 		session.mutex.Unlock()
 		if turnStarted && !turnFinal {
@@ -1084,7 +998,7 @@ func (session *claudeCandidateSession) watchProcess() {
 		if turnResult == nil {
 			turnResult = &TaskResult{Kind: ResultFailed, Summary: errClaudeCandidateMissingResult.Error(), Usage: Usage{State: UsageUnknown}}
 		}
-		final := cloneClaudeCandidateTaskResult(*turnResult)
+		final := CloneTaskResult(*turnResult)
 		final.Process = processResult
 		session.mutex.Lock()
 		final.EventCount = session.eventCount
@@ -1155,7 +1069,7 @@ func summarizeClaudeCandidateProcessFailure(result execution.Result) string {
 
 func (session *claudeCandidateSession) completeFinal(result TaskResult) {
 	session.resultOnce.Do(func() {
-		stored := cloneClaudeCandidateTaskResult(result)
+		stored := CloneTaskResult(result)
 		session.mutex.Lock()
 		session.result = &stored
 		session.mutex.Unlock()
@@ -1166,10 +1080,7 @@ func (session *claudeCandidateSession) completeFinal(result TaskResult) {
 func (session *claudeCandidateSession) emit(event Event) error {
 	session.emitMutex.Lock()
 	defer session.emitMutex.Unlock()
-	if event.At.IsZero() {
-		event.At = time.Now().UTC()
-	}
-	if err := session.sink.Handle(session.context, event); err != nil {
+	if err := DeliverEvent(session.context, session.sink, &event); err != nil {
 		return fmt.Errorf("persist Claude native event: %w", err)
 	}
 	session.mutex.Lock()
@@ -1261,76 +1172,4 @@ func marshalClaudeCandidateTaskResult(result *protocol.TaskResult) json.RawMessa
 		return nil
 	}
 	return encoded
-}
-
-func cloneClaudeCandidateTaskResultPointer(result *TaskResult) *TaskResult {
-	if result == nil {
-		return nil
-	}
-	cloned := cloneClaudeCandidateTaskResult(*result)
-	return &cloned
-}
-
-func cloneClaudeCandidateTaskResult(result TaskResult) TaskResult {
-	cloned := result
-	if result.Semantic != nil {
-		semantic := cloneClaudeCandidateProtocolTaskResult(*result.Semantic)
-		cloned.Semantic = &semantic
-	}
-	if result.Reason != nil {
-		reason := *result.Reason
-		cloned.Reason = &reason
-	}
-	return cloned
-}
-
-func cloneClaudeCandidateProtocolTaskResult(result protocol.TaskResult) protocol.TaskResult {
-	cloned := result
-	cloned.EvidenceRefs = slices.Clone(result.EvidenceRefs)
-	if result.Blocker != nil {
-		blocker := cloneClaudeCandidateBlocker(*result.Blocker)
-		cloned.Blocker = &blocker
-	}
-	if result.ProposedNextAction != nil {
-		action := *result.ProposedNextAction
-		if result.ProposedNextAction.Blocker != nil {
-			blocker := cloneClaudeCandidateBlocker(*result.ProposedNextAction.Blocker)
-			action.Blocker = &blocker
-		}
-		cloned.ProposedNextAction = &action
-	}
-	if result.Proposal != nil {
-		proposal := append(json.RawMessage(nil), (*result.Proposal)...)
-		cloned.Proposal = &proposal
-	}
-	if result.Reason != nil {
-		reason := *result.Reason
-		cloned.Reason = &reason
-	}
-	if result.Diagnostics != nil {
-		cloned.Diagnostics = make([]protocol.Diagnostic, len(result.Diagnostics))
-		for index, diagnostic := range result.Diagnostics {
-			cloned.Diagnostics[index] = cloneClaudeCandidateDiagnostic(diagnostic)
-		}
-	}
-	return cloned
-}
-
-func cloneClaudeCandidateBlocker(blocker protocol.Blocker) protocol.Blocker {
-	cloned := blocker
-	cloned.WorkItemIDs = slices.Clone(blocker.WorkItemIDs)
-	return cloned
-}
-
-func cloneClaudeCandidateDiagnostic(diagnostic protocol.Diagnostic) protocol.Diagnostic {
-	// Diagnostic keeps a private parsed-field map. A JSON round trip rebuilds
-	// that map without coupling this package to the protocol's private state.
-	encoded, err := json.Marshal(diagnostic)
-	if err == nil {
-		var cloned protocol.Diagnostic
-		if json.Unmarshal(encoded, &cloned) == nil {
-			return cloned
-		}
-	}
-	return diagnostic
 }

@@ -134,15 +134,12 @@ type pendingCall struct {
 	command  string
 	response chan frame
 }
-type closeAttempt struct {
-	done chan struct{}
-	err  error
-}
 
 type nativeSession struct {
 	ctx                                                             context.Context
 	cancel                                                          context.CancelFunc
 	process                                                         harness.NativeProcess
+	forwarder                                                       harness.ProcessForwarder[harness.NativeProcess]
 	sink                                                            harness.EventSink
 	directory                                                       string
 	resume                                                          *harness.ResumeHandle
@@ -162,44 +159,33 @@ type nativeSession struct {
 	turnFinished, nativeTerminal                                    bool
 	result                                                          harness.TaskResult
 	physical                                                        execution.Result
-	closeAttempt                                                    *closeAttempt
-	closed, stopping, cancelFallback                                bool
+	closeGate                                                       harness.CloseGate
+	stopping, cancelFallback                                        bool
 }
 
 func newSession(ctx context.Context, cancel context.CancelFunc, sink harness.EventSink, directory string, resume *harness.ResumeHandle) *nativeSession {
-	return &nativeSession{ctx: ctx, cancel: cancel, sink: sink, directory: directory, resume: resume,
+	session := &nativeSession{ctx: ctx, cancel: cancel, sink: sink, directory: directory, resume: resume,
 		launchReady: make(chan struct{}), ready: make(chan struct{}), turnDone: make(chan struct{}), physicalDone: make(chan struct{}),
 		pending: make(map[string]pendingCall),
 		result:  harness.TaskResult{Kind: harness.ResultUnknown, Usage: harness.Usage{State: harness.UsageUnknown}}}
+	session.forwarder = harness.NewProcessForwarder(&session.mu, &session.process)
+	return session
 }
 
 var _ harness.StagedSession = (*nativeSession)(nil)
 
-func (session *nativeSession) ProcessDetails() (int, string) { return session.process.ProcessDetails() }
+func (session *nativeSession) ProcessDetails() (int, string) { return session.forwarder.Details() }
 
 func (session *nativeSession) LeaseRenewalAvailable() bool {
-	process, ok := session.process.(interface{ LeaseRenewalAvailable() bool })
-	return ok && process.LeaseRenewalAvailable()
+	return session.forwarder.LeaseRenewalAvailable()
 }
 
 func (session *nativeSession) RenewLease(deadline time.Duration, sequence uint64) error {
-	process, ok := session.process.(interface {
-		RenewLease(time.Duration, uint64) error
-	})
-	if !ok {
-		return errors.ErrUnsupported
-	}
-	return process.RenewLease(deadline, sequence)
+	return session.forwarder.RenewLease(deadline, sequence)
 }
 
 func (session *nativeSession) LinuxV2LiveOwnerStatus(ctx context.Context) (execution.LinuxV2LiveOwnerStatus, error) {
-	process, ok := session.process.(interface {
-		LinuxV2LiveOwnerStatus(context.Context) (execution.LinuxV2LiveOwnerStatus, error)
-	})
-	if !ok {
-		return execution.LinuxV2LiveOwnerStatus{}, errors.ErrUnsupported
-	}
-	return process.LinuxV2LiveOwnerStatus(ctx)
+	return session.forwarder.LiveOwnerStatus(ctx)
 }
 
 func (session *nativeSession) Open(ctx context.Context) (handle harness.NativeSessionHandle, err error) {
@@ -283,10 +269,7 @@ func (session *nativeSession) StartTurn(ctx context.Context, request harness.Tur
 }
 
 func (session *nativeSession) emit(event harness.Event) error {
-	if event.At.IsZero() {
-		event.At = time.Now().UTC()
-	}
-	if err := session.sink.Handle(session.ctx, event); err != nil {
+	if err := harness.DeliverEvent(session.ctx, session.sink, &event); err != nil {
 		return fmt.Errorf("persist OMP native event: %w", err)
 	}
 	return nil
@@ -731,16 +714,15 @@ func (session *nativeSession) Wait(ctx context.Context) (harness.TaskResult, err
 	if ctx == nil {
 		return harness.TaskResult{}, errors.New("OMP wait requires context")
 	}
-	select {
-	case <-session.physicalDone:
-		session.mu.Lock()
-		defer session.mu.Unlock()
-		result := session.result
-		result.Process, result.EventCount, result.LastSequence = session.physical, session.sequence, session.sequence
-		return result, session.failure
-	case <-ctx.Done():
-		return harness.TaskResult{}, ctx.Err()
-	}
+	return harness.WaitResult(ctx, session.physicalDone, session.physicalResult, harness.TaskResult{})
+}
+
+func (session *nativeSession) physicalResult() (harness.TaskResult, error) {
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	result := harness.CloneTaskResult(session.result)
+	result.Process, result.EventCount, result.LastSequence = session.physical, session.sequence, session.sequence
+	return result, session.failure
 }
 
 func (session *nativeSession) WaitStopped(ctx context.Context) (execution.Result, error) {
@@ -828,32 +810,14 @@ func (session *nativeSession) Close(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("OMP close requires context")
 	}
-	session.mu.Lock()
-	if session.closed {
+	return session.closeGate.Run(ctx, func(attemptContext context.Context) error {
+		bounded, cancel := context.WithTimeout(attemptContext, shutdownTimeout)
+		defer cancel()
+		session.mu.Lock()
+		session.stopping = true
 		session.mu.Unlock()
-		return nil
-	}
-	if session.closeAttempt != nil {
-		attempt := session.closeAttempt
-		session.mu.Unlock()
-		select {
-		case <-attempt.done:
-			return attempt.err
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-	attempt := &closeAttempt{done: make(chan struct{})}
-	session.closeAttempt, session.stopping = attempt, true
-	session.mu.Unlock()
-	bounded, cancel := context.WithTimeout(ctx, shutdownTimeout)
-	err := session.stop(bounded)
-	cancel()
-	session.mu.Lock()
-	attempt.err, session.closeAttempt, session.closed = err, nil, err == nil
-	close(attempt.done)
-	session.mu.Unlock()
-	return err
+		return session.stop(bounded)
+	})
 }
 
 func (session *nativeSession) stop(ctx context.Context) error {
