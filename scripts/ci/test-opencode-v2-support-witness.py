@@ -2,6 +2,7 @@
 """Keep failed native executions and no-op interrupts out of success evidence."""
 
 import copy
+import hashlib
 import http.client
 import importlib.util
 import json
@@ -10,6 +11,7 @@ import pathlib
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import unittest
 from unittest import mock
@@ -202,6 +204,49 @@ class ChunkedSSETests(unittest.TestCase):
         event = {"type": "session.step.first-token", "data": {"sessionID": "ses_native"}}
         body = b"data: " + json.dumps(event).encode() + b"\n\n"
         self.assertEqual(self.capture([b": keepalive\n\n", body]), [event])
+
+
+class PinnedBlobTest(unittest.TestCase):
+    """The blob path is operator-supplied; an unset variable or a changed blob is refused."""
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.blob = pathlib.Path(directory.name) / "opencode.exe"
+        self.content = b"owner-pinned opencode blob stand-in\n"
+        self.blob.write_bytes(self.content)
+        self.digest = hashlib.sha256(self.content).hexdigest()
+
+    def resolve(self, configured=None, size=None, digest=None):
+        """Call the pin with this host's environment and SIZE/DIGEST patched out for the duration."""
+        environment = {} if configured is None else {witness.BINARY_ENVIRONMENT: configured}
+        with (
+            mock.patch.dict(os.environ),
+            mock.patch.object(witness, "SIZE", len(self.content) if size is None else size),
+            mock.patch.object(witness, "DIGEST", self.digest if digest is None else digest),
+        ):
+            os.environ.pop(witness.BINARY_ENVIRONMENT, None)
+            os.environ.update(environment)
+            return witness.pinned_binary()
+
+    def test_unset_environment_is_refused_by_name(self):
+        with self.assertRaisesRegex(RuntimeError, witness.BINARY_ENVIRONMENT):
+            self.resolve()
+
+    def test_missing_declared_blob_is_refused(self):
+        with self.assertRaisesRegex(RuntimeError, "must name an existing file"):
+            self.resolve(str(pathlib.Path(self.blob.parent) / "absent.exe"))
+
+    def test_wrong_digest_is_refused_at_the_pinned_size(self):
+        with self.assertRaisesRegex(RuntimeError, "owner-pinned executable identity mismatch"):
+            self.resolve(str(self.blob), digest="0" * 64)
+
+    def test_wrong_size_is_refused_at_the_pinned_digest(self):
+        with self.assertRaisesRegex(RuntimeError, "owner-pinned executable identity mismatch"):
+            self.resolve(str(self.blob), size=len(self.content) + 1)
+
+    def test_matching_pin_returns_the_declared_blob(self):
+        self.assertEqual(self.resolve(str(self.blob)), self.blob.resolve())
 
 
 if __name__ == "__main__":
