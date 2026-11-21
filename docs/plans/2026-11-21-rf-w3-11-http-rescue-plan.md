@@ -54,7 +54,7 @@ New private helpers, in file order:
 
 ```elixir
 defp encode_request(_method, url, headers, body)   # construction only; may raise
-defp perform(method, request, options, body_format) # try/rescue around :httpc.request/4 only
+defp perform(method, request)                      # try/rescue: options evaluation + :httpc.request/4
 ```
 
 The two helpers mirror the call shapes the contract names (`request/4`'s argument list and
@@ -69,13 +69,19 @@ The two helpers mirror the call shapes the contract names (`request/4`'s argumen
    It contains exactly the moved expressions (`String.to_charlist/1`, `encode_headers/1`,
    `Jason.encode!/1`); it may raise `Protocol.UndefinedError`, `Jason.EncodeError` and any other
    exception those functions raise, and nothing in this slice catches them.
-2. `perform/4` — `try/rescue` around `:httpc.request(method, request, options, body_format: body_format)`
-   only, returning the raw `:httpc` result or `{:rescue, error}`. It deliberately does **not**
-   return a `{:transport, _}`-wrapped value: `request/4`'s existing `{:error, reason}` clause is
-   byte-identical and would double-wrap it as `{:transport, {:transport, message}}`.
-3. `request/4` — keeps the name, arity, default `body \\ nil`, the method guard, the `options`
-   list (same keys, same order, same literals) and both existing result clauses byte-identical,
-   and adds one arm: `{:rescue, error} -> {:error, {:transport, Exception.message(error)}}`.
+2. `perform/2` — evaluates the `options` list, then calls
+   `:httpc.request(method, request, options, body_format: :binary)`, both **inside** one
+   `try/rescue`; returns the raw `:httpc` result or `{:rescue, error}`. The rescue wraps the
+   socket call together with the environment-dependent `options` evaluation (conductor
+   amendment 2026-11-21, PR #179 review P1-1: "only the socket call and its
+   environment-dependent options"), so an OS CA-store load failure stays classified `transport`
+   — behaviour parity with base. It deliberately does **not** return a `{:transport, _}`-wrapped
+   value: `request/4`'s existing `{:error, reason}` clause cannot double-wrap this tagged
+   outcome.
+3. `request/4` — keeps the name, arity, default `body \\ nil`, the method guard and both existing
+   result clauses byte-identical; the `options` list moves into `perform/2`'s `try` (same keys,
+   same order, same values) and one arm is added:
+   `{:rescue, error} -> {:error, {:transport, Exception.message(error)}}`.
 4. `decode_headers/1` and `decode_body/1` unchanged, byte-for-byte.
 
 ## Edge-case semantics the contract demands
@@ -101,11 +107,12 @@ The two helpers mirror the call shapes the contract names (`request/4`'s argumen
 The two `case` clauses, the guard, the default argument, the `options` list and the two decode
 helpers are copied verbatim; the construction expressions are moved, not rewritten: the same
 `String.to_charlist/1` on the same values, the same `~c"application/json"`, the same
-`Jason.encode!/1`. The persisted-text difference is downstream and covers **two** exception
-classes. The `options` list itself is copied verbatim, but its *evaluation* — including
-`:public_key.cacerts_get()` — also sits before `perform/4` and therefore outside the rescue; the
-contract's Change names `perform/4` as wrapping "**only** `:httpc.request(...)`", so the second
-class is inherent in the required shape, not a deviation from it.
+`Jason.encode!/1`. The `options` list keeps the same keys, order and values, and its *evaluation*
+— including `:public_key.cacerts_get()` — moves inside `perform/2`'s `try/rescue` together with
+the socket call (conductor amendment 2026-11-21, PR #179 review P1-1), so an OS CA-store load
+failure still returns `{:error, {:transport, _}}` exactly as on base. The persisted-text
+difference is downstream and covers **one** exception class, the D1-authorised construction
+path.
 
 **Class 1 — un-encodable body/header value (conductor D1, explicitly authorised).** With the
 raise leaving `request/4`, the caller's rescue (`integrations.ex:1622-1630` `provider_call/1`,
@@ -115,21 +122,16 @@ for the un-encodable-body path, where the pre-slice shape produced `{:transport,
 unreachable with the provider modules' own bodies, and the judging artifact records the
 before/after observation.
 
-**Class 2 — OS CA-store load failure during `options` construction (review CR-01; not covered by
-D1).** `:public_key.cacerts_get()` raises `erlang:error({failed_load_cacerts, Reason})` when the
-trust store cannot be loaded (`public_key.erl:2641` -> `pubkey_os_cacerts:get/0`). On the
-pre-slice bytes the whole-function rescue returned `{:error, {:transport, "Erlang error:
-{:failed_load_cacerts, :enoent}"}}` -> "Provider transport failed"; on the delivered bytes the
-raise leaves `request/4`, takes the same caller path as class 1 and persists "Provider response
-is invalid". Measured end to end in a fresh VM with `:public_key` `cacerts_path` pointed at a
-missing directory (commands and outputs in the fix-stage record below). That input is an
-environment failure, not the programming error class 1 names, and D1 does not authorise it:
-contract clause 1 ("every other message stays byte-identical") and clause 3 ("any user-visible
-text change other than the one authorized `status_message` = not achieved") therefore read wider
-than the delivered code. `failure/1`'s `{:transport, _}` clause is untouched and still reachable
-through the real socket-failure path; the clause 1/3 reconciliation is conductor-owned (the
-contract file lives in the GDD state tree, outside this slice's owned set) and is recorded, not
-edited, here.
+**Class 2 — OS CA-store load failure during `options` construction (review CR-01).** Resolved by
+the conductor decision 2026-11-21 on the PR #179 Opus review (P1-1): the `options` evaluation,
+including `:public_key.cacerts_get()`, now runs inside `perform/2`'s `try/rescue` together with
+the socket call, so this class is back in the transport mapping — behaviour parity with base.
+`:public_key.cacerts_get()` raises `erlang:error({failed_load_cacerts, Reason})` when the trust
+store cannot be loaded (`public_key.erl:2641` -> `pubkey_os_cacerts:get/0`); the probe recorded
+below (`:public_key` `cacerts_path` -> missing dir, fresh VM) returns
+`{:error, {:transport, "Erlang error: {:failed_load_cacerts, :enoent}"}}` on both base and HEAD
+and persists "Provider transport failed" as before. No user-visible text change remains for
+this input; `failure/1`'s `{:transport, _}` clause is untouched.
 
 ## Evidence plan (exact commands, run on this worktree)
 
@@ -146,6 +148,7 @@ the local default instance) and `MIX_DEPS_PATH` at the main checkout's identical
 | provider oracle (after) | same command on the delivered bytes | exit 0, `63 passed` (59 + the 4 new cases); module/name/state sets diff against the base stream = exactly the new `HTTPTest` cases |
 | focused unit run | `bash rf-w3-11-mix.sh test test/symmetry_control/integrations/http_test.exs` | exit 0, `4 passed` |
 | mutation (judging) | widen the rescue back over the construction path (pre-slice shape) and re-run the focused file | exit 2, the three construction cases red (`{:returned, {:error, {:transport, _}}}` instead of a raise); `perform`/decode cases stay green; reverted, then focused run green again |
+| cacerts probe (P1-1) | `PROBE_SRC=<revision> bash rf-w3-11-mix.sh run <GDD-STATE>/scratch/rf-w3-11-fix-cacerts-probe.exs` (`:public_key` `cacerts_path` = `"/nonexistent/cacerts-dir"`), once on base and once on HEAD | both exit 0, `{:returned, {:error, {:transport, "Erlang error: {:failed_load_cacerts, :enoent}"}}}` |
 | downstream before/after | `MIX_ENV=test bash rf-w3-11-mix.sh run <GDD-STATE>/scratch/rf-w3-11-status-message-probe.exs`, once on the base bytes and once on the delivered bytes | base: `status_message: "Provider transport failed"`; delivered: `"Provider response is invalid"`; `check_connection/1` code `{:error, :provider_failure}` in both; fixture writes rolled back (`projects=0, resources=0`) |
 | whitespace | `git diff --check` | exit 0 |
 | profile-path scan | `git diff origin/main...HEAD \| grep -i "users/"` | no host path (corrected at the apply stage: the command reads committed history only — the implement-time diff was empty, and a re-run matches only this row's own command text) |
@@ -160,10 +163,11 @@ load-bearing, not cosmetic.
 
 ## Design trade-offs
 
-- **`perform/4` returns `{:rescue, error}` instead of the wrapped tuple.** The alternative
+- **`perform/2` returns `{:rescue, error}` instead of the wrapped tuple.** The alternative
   (mapping inside `perform`) would double-wrap through the byte-identical `{:error, reason}`
   clause (`{:transport, {:transport, message}}`); returning a tagged non-transport value keeps
-  the existing clauses untouched and makes the new arm explicit (conductor P2-2).
+  the existing clauses untouched and makes the new arm explicit (conductor P2-2). The P1-1 fix
+  moved the `options` evaluation into `perform`'s `try` (see the P1-1 fix record).
 - **Narrow the rescue, not delete it.** Deleting the rescue would turn a `:httpc`-internal
   exception into a caller-visible crash and would change the `{:error, {:transport, _}}` contract
   for genuine transport exceptions; the contract's failure control names this explicitly.
@@ -190,7 +194,9 @@ load-bearing, not cosmetic.
    acceptance clauses bind `request/4`'s exported shape and the moved semantics (not private
    helper arities), and a permanently unused parameter is dead weight in a 60-line module whose
    entire purpose is to stop disguising programming errors. The names, the construction
-   boundary and `perform`'s `{:rescue, error}` return value follow the contract literally.
+   boundary and `perform`'s `{:rescue, error}` return value follow the contract literally. The
+   P1-1 fix later moved the `options` evaluation inside `perform`'s `try`, so `perform` now takes
+   `(method, request)`; the reading above is unchanged otherwise (P1-1 fix record).
 2. **The un-encodable-header case.** The contract names it in clause 1 but pins only the body
    classes in the mutation check (P1-1). Both are asserted: a PID header value raises
    `Protocol.UndefinedError`, and it is covered by the same re-widened-rescue mutation.
@@ -213,11 +219,10 @@ load-bearing, not cosmetic.
 
 - The downstream `status_message` for the un-encodable path changes text (authorised, recorded,
   unreachable in production with the provider modules' own bodies).
-- The downstream `status_message` for an OS CA-store load failure raised by
-  `:public_key.cacerts_get()` during `options` construction also changes text ("Provider transport
-  failed" -> "Provider response is invalid"); recorded, and not covered by D1's authorisation —
-  it needs a host whose trust store is unloadable or a misconfigured `:public_key`
-  `cacerts_path`, so ordinary deployments are unaffected.
+- The OS CA-store load failure path (`:public_key.cacerts_get()` during the `options` evaluation)
+  stays inside the transport rescue and persists "Provider transport failed" on HEAD as on base
+  (P1-1 record below); it needs a host whose trust store is unloadable or a misconfigured
+  `:public_key` `cacerts_path`, so ordinary deployments are unaffected.
 - No production path exercises the un-encodable construction path, so the raise is pinned by the
   new unit test at the module boundary plus the constructed downstream probe; the provider
   suites cannot cover it (they substitute the client module).
@@ -272,3 +277,35 @@ per run:
 Amended by this fix: the "Behaviour that must not change" section now enumerates class 2 and
 scopes D1 to class 1, and the residual-risks list carries the corresponding entry. The contract
 clause 1/3 wording stays with the conductor (contract not in the owned set).
+
+*(Superseded by the P1-1 fix record below: the conductor amended the Change sentence to include
+the `options` evaluation, the class-2 text above is reverted to a parity statement, and the
+rescue now covers the CA-store load.)*
+
+## P1-1 fix record (2026-11-21, Opus PR #179 review)
+
+Conductor decision (2026-11-21, Opus PR #179 review P1-1): the Change sentence "wraps **only**
+`:httpc.request(...)`" is amended to "only the socket call and its environment-dependent
+options" — the rescue wraps the `options` evaluation (incl. `:public_key.cacerts_get()`, literal
+and order unchanged) together with `:httpc.request`; `encode_request/3` stays outside the rescue
+(the D1-authorised construction raise is unchanged). Code change, commit subject
+`fix(control): keep CA-store load failures in the transport rescue`: `options` evaluated inside
+`perform/2`'s `try`; keys, order and values unchanged (one formatter-driven wrap of the
+`customize_hostname_check` value line inside the moved block).
+
+Reviewer's cacerts probe, fresh VM per run, `<GDD-STATE>/scratch/rf-w3-11-fix-cacerts-probe.exs`
+with `:public_key` `cacerts_path` = `"/nonexistent/cacerts-dir"` and the requested call
+`HTTP.request(:get, "http://127.0.0.1:1/x", [])`:
+
+| Revision | Output | Exit |
+| --- | --- | --- |
+| base (`PROBE_SRC=<GDD-STATE>/scratch/rf-w3-11-fix-http-base.ex`; `diff -q` against `git show origin/main:control/lib/symmetry_control/integrations/http.ex` reports no difference) | `{:returned, {:error, {:transport, "Erlang error: {:failed_load_cacerts, :enoent}"}}}` | 0 |
+| HEAD (`PROBE_SRC=<worktree>/control/lib/symmetry_control/integrations/http.ex`) | `{:returned, {:error, {:transport, "Erlang error: {:failed_load_cacerts, :enoent}"}}}` | 0 |
+
+Gates re-run on the fixed bytes (recipe above): `format --check-formatted` exit 0; `MIX_ENV=test
+compile --warnings-as-errors` exit 0, 0 warnings; focused `http_test.exs` exit 0, `4 passed`;
+six-file `integrations/` run (7 files incl. the new one, seed 0) exit 0, `63 passed`; `git diff
+--check` exit 0. Mutation re-check (function-level `rescue` restored over `request/4`, pre-slice
+shape): exit 2, `1/4 passed` — the three construction cases red with `{:returned, {:error,
+{:transport, _}}}`, the socket-failure case green; mutation reverted and the file's sha256
+returned to the pre-mutation value (`2efa880a…`), i.e. byte-identical to the tested bytes.
