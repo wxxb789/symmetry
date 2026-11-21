@@ -1114,3 +1114,19 @@ instead of appended.
       Owner: whoever re-records the OmO fixture. The opt-in native acceptance run pins the same
       host path separately (`daemon/internal/harness/omo/native_test.go:190-200`, resolved at
       `:219`) and does not read the fixture, so a re-record does not touch it.
+
+## Control full-suite wall-time target and the D9 migration-file pin
+
+- [ ] Own the Control `mix test` wall-time target (~102 s → ≤65 s, program-plan row W3-14)
+      (2026-11-22, branch `refactor/rf-w3-14-exunit-async`, plan
+      `docs/plans/2026-11-21-rf-w3-14-exunit-async-plan.md`; PR #211 review P2-1 under conductor
+      amendment 2). The rf-w3-14 conversion could not carry it: the nine D9-pinned sync migration
+      files carry 58.4 % of the suite's work (282.0 s of 482.6 s of per-test work at `d0761739`,
+      with `Goal0006MigrationTest` 180.8 s bounding any async phase), and ExUnit concurrency is
+      module-granular. CI `coverage-control` on the branch measured 989 tests in 140.2 s =
+      18.1 s async + 122.0 s sync on the 4-scheduler runner, and main's `control` job spans
+      73.0-159.4 s sync against 14.7-22.9 s async. Needs a conductor D9 re-evaluation of the
+      migration-file `async: false` pin (their DDL already runs through a private schema, so the
+      pin, not the fixture shape, now bounds the async phase) before any slice can own the target.
+      W3-15 cannot: its contract has no wall-time clause and `goals_test.exs` stays `async: false`
+      as an app-env mutator.

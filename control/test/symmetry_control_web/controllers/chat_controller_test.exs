@@ -1,5 +1,5 @@
 defmodule SymmetryControlWeb.ChatControllerTest do
-  use SymmetryControlWeb.ConnCase, async: false
+  use SymmetryControlWeb.ConnCase, async: true
 
   import SymmetryControlWeb.ServedDocument, only: [validate_served_document!: 2]
   import SymmetryControlWeb.TestConn, only: [api_conn: 0]

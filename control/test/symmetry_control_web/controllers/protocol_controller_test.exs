@@ -1,5 +1,5 @@
 defmodule SymmetryControlWeb.ProtocolControllerTest do
-  use SymmetryControlWeb.ConnCase, async: false
+  use SymmetryControlWeb.ConnCase, async: true
 
   import SymmetryControl.TestFixtures, only: [uuid: 0]
   import SymmetryControlWeb.TestConn, only: [assert_error: 3, bearer: 2, operator_token: 0]
