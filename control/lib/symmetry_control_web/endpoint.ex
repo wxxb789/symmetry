@@ -68,7 +68,7 @@ defmodule SymmetryControlWeb.Endpoint do
   plug Plug.Telemetry, event_prefix: [:phoenix, :endpoint]
 
   plug SymmetryControlWeb.Plugs.StrictEvidenceJSON,
-    parsers: [:urlencoded, :multipart, :json],
+    parsers: [:urlencoded, :json],
     pass: ["*/*"],
     json_decoder: Phoenix.json_library()
 
