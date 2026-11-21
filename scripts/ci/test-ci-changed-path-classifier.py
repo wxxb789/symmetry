@@ -592,7 +592,6 @@ def check_coverage_artifacts(workflow_text: str) -> None:
 
 STEP_HEADER = re.compile(r"^      - ")
 STEP_KEY = re.compile(r"^        ([a-z][a-z0-9-]*): (.+?)\s*$")
-# The step line that invokes the classifier, as the workflow spells it.
 CLASSIFIER_INVOCATION = f"run: python3 {CLASSIFIER.relative_to(ROOT).as_posix()}"
 
 
