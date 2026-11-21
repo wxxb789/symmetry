@@ -5,7 +5,7 @@ defmodule SymmetryControl.Integrations.HTTPTest do
 
   # Port 1 is reserved and unbound, so a socket attempt fails immediately with
   # econnrefused instead of reaching a server.
-  @unreachable_url "http://127.0.0.1:1/rf-w3-11"
+  @unreachable_url "http://127.0.0.1:1/x"
 
   describe "request/4 request construction" do
     test "an un-encodable body value raises instead of mapping to a transport error" do
@@ -27,7 +27,7 @@ defmodule SymmetryControl.Integrations.HTTPTest do
     end
 
     test "an un-encodable header value raises instead of mapping to a transport error" do
-      outcome = capture(fn -> HTTP.request(:get, @unreachable_url, [{"x-rf-w3-11", self()}]) end)
+      outcome = capture(fn -> HTTP.request(:get, @unreachable_url, [{"x-test", self()}]) end)
 
       refute match?({:returned, {:error, {:transport, _}}}, outcome),
              "un-encodable header value classified as a transport failure: #{inspect(outcome)}"

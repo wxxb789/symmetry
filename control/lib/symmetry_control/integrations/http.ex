@@ -29,9 +29,6 @@ defmodule SymmetryControl.Integrations.HTTP do
     end
   end
 
-  # Request construction runs outside the transport rescue above: a body or
-  # header value these functions cannot encode raises out of the module instead
-  # of being classified as a transport failure.
   defp encode_request(url, headers, nil), do: {String.to_charlist(url), encode_headers(headers)}
 
   defp encode_request(url, headers, value) do

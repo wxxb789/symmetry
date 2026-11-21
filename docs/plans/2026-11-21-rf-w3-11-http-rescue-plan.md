@@ -129,7 +129,7 @@ the local default instance) and `MIX_DEPS_PATH` at the main checkout's identical
 | mutation (judging) | widen the rescue back over the construction path (pre-slice shape) and re-run the focused file | exit 2, the three construction cases red (`{:returned, {:error, {:transport, _}}}` instead of a raise); `perform`/decode cases stay green; reverted, then focused run green again |
 | downstream before/after | `MIX_ENV=test bash rf-w3-11-mix.sh run <GDD-STATE>/scratch/rf-w3-11-status-message-probe.exs`, once on the base bytes and once on the delivered bytes | base: `status_message: "Provider transport failed"`; delivered: `"Provider response is invalid"`; `check_connection/1` code `{:error, :provider_failure}` in both; fixture writes rolled back (`projects=0, resources=0`) |
 | whitespace | `git diff --check` | exit 0 |
-| profile-path scan | `git diff origin/main...HEAD \| grep -i "users/"` | no match (nothing is committed; the scan covers the working tree diff) |
+| profile-path scan | `git diff origin/main...HEAD \| grep -i "users/"` | no host path (corrected at the apply stage: the command reads committed history only — the implement-time diff was empty, and a re-run matches only this row's own command text) |
 | full `mix test` | conductor's gate-runner only, per the contract | not run here |
 
 The provider oracle runs on a database the probe leaves clean: the probe's fixture writes are
