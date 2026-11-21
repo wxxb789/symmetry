@@ -16,11 +16,21 @@ One shared data-builder module `SymmetryControl.TestFixtures` and one case templ
 | `claim` | 7 | 1 (`TestFixtures`) | 7 non-web files |
 | `with_schema` | 7 (`/1` wrappers) + 1 (`MigrationCase` `/2`) | 1 (`MigrationCase.with_schema/2`) | 7 migration files |
 | `command_current` | 3 | 1 (`TestFixtures`) | 3 goals files |
-| `task_attrs` | 4 | 1 (`TestFixtures`) | 4 orchestration files |
+| `task_attrs/1` | 4 | 1 (`TestFixtures`) | 4 orchestration files |
 
-Measured before/after counts are produced with
-`grep -rn "defp\? <name>(" control/test/symmetry_control --include=*.exs` (web files excluded by the
-owned set; their copies are listed for W3-03 batch 2 at the end of this plan).
+Measured before/after counts come from the two owned paths combined, with `defp? <name>(` — the
+`foo(args)` / `foo(args \\ [])` declaration shape the converted copies used; a same-named definition
+written without parentheses is outside this pattern's scope:
+
+    git grep -nE "defp? (register_runtime|claim|with_schema|command_current|task_attrs)\(" <rev> \
+      -- control/test/symmetry_control        # base cb88bf8e: 9/7/7/5/4; converted tree: 0/0/0/2/0
+    (same pattern) <rev> -- control/test/support   # base: 0/0/1/0/0; converted tree: 1/1/1/1/1
+
+`command_current`'s base 5 and converted-tree 2 are the two e2e copies, which are out of scope, so
+the owned-set pair is 3 / 1; `with_schema`'s support hit is the single `MigrationCase.with_schema/2`.
+The `task_attrs` row is arity-scoped (`task_attrs/1`): the two same-named arity-0 helpers that were
+never copies are listed under Out of scope. Web files stay outside the count (their copies are
+listed for W3-03 batch 2 at the end of this plan).
 
 ## Public shape
 
@@ -30,7 +40,7 @@ owned set; their copies are listed for W3-03 batch 2 at the end of this plan).
 register_runtime(machine, now, opts \\ [])   # arities 2, 3
 claim(run, runtime, now, opts \\ [])         # arities 3, 4
 task_attrs(overrides \\ [])                  # arities 0, 1
-provider_task_attrs(overrides \\ [])         # arities 0, 1
+provider_task_attrs(overrides)               # arity 1
 command_current(goal_id, kind, payload, command_opts, opts \\ [])  # arities 4, 5
 goal_command(goal, kind, payload, mutation_id \\ Ecto.UUID.generate())
 ```
@@ -68,13 +78,15 @@ Semantics that keep every converted call site byte-equivalent:
   `command_opts/0`; `workers`: `[validation_profiles: validation_profiles()]`). The merge keeps the
   original precedence (`opts` win; `put_new` on profiles is equivalent because the defaults only
   supply the key when the caller's list did not).
-- `goal_command/4` is the canonicalising command builder; `goals_test`'s and
-  `dispatch_notification`'s local `command/4` become one-line delegations so their ~70 direct call
-  sites and the two canonical-compliance suites keep one implementation. The canonicalisation is
-  only observable for `"request_decision"` payloads, and every `request_decision` payload passed
-  from `dispatch_notification`/`workers` is already exactly the canonical key set
-  (`%{kind:, work_item_id:, subject_hash:, proposal:}`) — re-verified by reading each of those 14
-  call sites.
+- `goal_command/3..4` is the canonicalising command builder; `goals_test`'s 19 and
+  `dispatch_notification`'s 2 local command-building call sites call it directly, so the two files
+  and the two canonical-compliance suites keep one implementation and no second name for the same
+  function (their former `command/4` delegations are gone; the earlier "~70 direct call sites"
+  figure counted every command-submission token, not the 21 wrapper call sites). The
+  canonicalisation is only observable for `"request_decision"` payloads, and every
+  `request_decision` payload passed from `dispatch_notification`/`workers` is already exactly the
+  canonical key set (`%{kind:, work_item_id:, subject_hash:, proposal:}`) — re-verified by reading
+  each of those 14 call sites.
 
 `SymmetryControl.OrchestrationCase` (new, `control/test/support/orchestration_case.ex`) is the case
 template the converted files `use` in place of `SymmetryControl.DataCase`:
@@ -154,6 +166,10 @@ recipe), `ERL_SCHEDULERS=4` to match CI's 4-CPU pool arithmetic.
   `migrate_up!`, `migrate_all_up!`, `enforce_goal_phase`, …) — not among the contract's converted
   names; converting them widens the diff past this slice's acceptance bar. Recorded for the
   follow-up extraction slice.
+- Two same-named arity-0 `task_attrs` helpers in owned files are not copies of the converted
+  `task_attrs/1` builder and stay: `goals_schema_test.exs:587` (a 9-key insert attrs map) and
+  `orchestration_supervision_test.exs:693` (`"Build the adapter"` / `"supervised"` base). They are
+  why the deliverable table's `task_attrs` row is arity-scoped.
 - ExUnit `async` conversion (W3-14) and production code (none touched). `MigrationCase` is reused,
   not rewritten; the one edit the conversion forced is failure-path parity: `with_schema/2` now
   starts the private-schema Repo inside its `try` so a Repo-start failure still drops the schema

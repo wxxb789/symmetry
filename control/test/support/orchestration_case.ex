@@ -40,7 +40,6 @@ defmodule SymmetryControl.OrchestrationCase do
           claim: 4,
           task_attrs: 0,
           task_attrs: 1,
-          provider_task_attrs: 0,
           provider_task_attrs: 1,
           goal_command: 3,
           goal_command: 4,

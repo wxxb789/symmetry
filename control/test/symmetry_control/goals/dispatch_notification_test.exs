@@ -4,7 +4,7 @@ defmodule SymmetryControl.Goals.DispatchNotificationTest do
   import Ecto.Query
 
   import SymmetryControl.TestFixtures,
-    only: [command_current: 4, goal_command: 4]
+    only: [command_current: 4, goal_command: 3, goal_command: 4]
 
   alias Ecto.Adapters.SQL.Sandbox
   alias Oban.Job
@@ -191,7 +191,7 @@ defmodule SymmetryControl.Goals.DispatchNotificationTest do
       assert {:ok, _receipt, :created} =
                Goals.command(
                  fixture.goal.id,
-                 command(
+                 goal_command(
                    fixture.goal,
                    "admit_task",
                    admission_payload(fixture.item),
@@ -429,7 +429,7 @@ defmodule SymmetryControl.Goals.DispatchNotificationTest do
   defp now, do: DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
   defp request_plan_command(fixture) do
-    command(fixture.goal, "request_plan", %{
+    goal_command(fixture.goal, "request_plan", %{
       model_profile: "codex",
       repository_resource_id: fixture.repository.id,
       subject: baseline_subject(fixture.repository.id).subject,
@@ -437,9 +437,6 @@ defmodule SymmetryControl.Goals.DispatchNotificationTest do
       requested_session_id: nil
     })
   end
-
-  defp command(goal, kind, payload, mutation_id \\ Ecto.UUID.generate()),
-    do: goal_command(goal, kind, payload, mutation_id)
 
   defp goal_fixture(policy_overrides \\ %{}) do
     project = project_fixture()

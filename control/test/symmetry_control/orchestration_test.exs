@@ -128,11 +128,8 @@ defmodule SymmetryControl.OrchestrationTest do
   test "same daemon instance replays epoch and a replacement increments it" do
     %{machine: machine} = enroll_machine()
 
-    first =
-      register_runtime(machine, @now, daemon_instance_id: "00000000-0000-0000-0000-000000000001")
-
-    replayed =
-      register_runtime(machine, @now, daemon_instance_id: "00000000-0000-0000-0000-000000000001")
+    first = register_runtime(machine, @now)
+    replayed = register_runtime(machine, @now)
 
     replacement =
       register_runtime(machine, @now, daemon_instance_id: "00000000-0000-0000-0000-000000000002")

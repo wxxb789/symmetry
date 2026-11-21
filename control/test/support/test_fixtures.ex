@@ -24,12 +24,7 @@ defmodule SymmetryControl.TestFixtures do
   @claim_id "00000000-0000-0000-0000-000000000010"
 
   @task_base %{goal: "Run tests", agent_profile: "codex", workspace: "primary", input: %{}}
-  @provider_task_base %{
-    goal: "Use provider",
-    agent_profile: "codex",
-    workspace: "primary",
-    input: %{}
-  }
+  @provider_task_base Map.put(@task_base, :goal, "Use provider")
 
   @doc """
   Registers one runtime for `machine` at `now` and returns it.
@@ -107,7 +102,7 @@ defmodule SymmetryControl.TestFixtures do
   end
 
   @doc "Task attributes over the capability suite's `\"Use provider\"` goal."
-  def provider_task_attrs(overrides \\ []) do
+  def provider_task_attrs(overrides) do
     Map.merge(@provider_task_base, Map.new(overrides))
   end
 
