@@ -853,8 +853,6 @@ defmodule SymmetryControl.Workspaces do
 
   # Goal ownership is an all-or-nothing relational invariant. Partial rows stay
   # on the legacy path until the Goals migration has made them authoritative.
-  # The Goal gate is `WorkItemEligibility.cancel_gate/1`, the clause every
-  # legacy command path shares.
   defp ensure_legacy_work_item(work_item), do: WorkItemEligibility.cancel_gate(work_item)
 
   defp project_mutation_allowed(%Project{status: "active"}, _attrs), do: :ok

@@ -408,7 +408,7 @@ inventoried above, head ranges are in the head tree.
 | `legacy_capabilities/3` → `/2` (p:416-426 → 414-420) | `nil` clause → `nil` | `nil, _work_item` | yes |
 | | `&1 and not goal_managed` | `&1 and cancel_allowed?(work_item)` (`cancel_gate == :ok`), same value | yes |
 | | `&1 and assignee == "agent" and external_work_available? and project_active?` | `&1 and retry_allowed?(work_item)`, same conjuncts in the same order | yes |
-| `ensure_legacy_work_item/1` (w:869-873 → 858) | `{:error, :goal_authority_required}` / `:ok` | `cancel_gate/1` returns the same | yes |
+| `ensure_legacy_work_item/1` (w:869-873 → 856) | `{:error, :goal_authority_required}` / `:ok` | `cancel_gate/1` returns the same | yes |
 | `ensure_external_work_available/1` (w:861-866) | `{:error, :state_conflict}` / `:ok` | deleted; its only caller collapsed into `retry_gate/1`, same atom | yes |
 | `ensure_active_project/1` (w:858-859) | `:ok` / `{:error, :state_conflict}` | unchanged | yes |
 
@@ -452,7 +452,11 @@ re-hashed at `546efed75669…af923` afterwards)
 ### Delivered hashes
 
 `work_item_eligibility.ex` `sha256 546efed75669…af923`; `work_item_eligibility_test.exs`
-`8bca6503b82b…`; `workspaces.ex` `d0e9899bd53e…`; `portal_json.ex` `df7663bfb354…`; this plan and
-`docs/TODO.md` as committed by the conductor. The differential/probe harnesses and the base
-worktree are gone from the tree; `git status` shows the three modified tracked files and the three
-new files only.
+`8bca6503b82b…`; `workspaces.ex` `4b166c05eef2…`; `portal_json.ex` `df7663bfb354…`; this plan and
+`docs/TODO.md` as committed by the conductor. (`workspaces.ex` re-hashed 2026-11-22 in the apply
+stage: the accepted simplify finding removed the duplicated Goal-gate sentence above
+`ensure_legacy_work_item/1`, so that helper's E9 head coordinate is now `:856` (every later
+`workspaces.ex` head coordinate shifts by −2; no other one is recorded here), and the rest of the
+file is untouched. The other three delivered files are unchanged.) The
+differential/probe harnesses and the base worktree are gone from the tree; `git status` shows the
+three modified tracked files and the three new files only.
