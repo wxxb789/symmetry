@@ -19,31 +19,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       card renders on the repository page. The image is 1280×640 and mirrors the
       README banner (`docs/assets/symmetry-banner.png`).
 
-## Dead-code candidates
-
-- [ ] Revalidate and remove two pre-existing dead surfaces found while applying the
-      provider-action-chain-removal simplify findings (2026-11-21).
-      (a) `Integrations.execute_accepted_resource_sync/2` and its catch-all
-      (`control/lib/symmetry_control/integrations.ex:554`, `:579`) have zero callers tree-wide:
-      `git grep -nw "execute_accepted_resource_sync" -- control/` matches only those two definition
-      clauses (the unanchored form also matches the `_unprojected` sibling's name), while the live
-      sibling `execute_accepted_resource_sync_unprojected/2` is called at
-      `control/lib/symmetry_control/integrations/provider_access.ex:1569`, `:1808`.
-      `record_provider_action_failure/2` (`integrations.ex:1111`) is reachable only from its two call
-      sites `:572`, `:575` inside this function and is dead with it; removing (a) must remove it too
-      (`compile --warnings-as-errors` will otherwise fail).
-      (b) The `{:provider_action_failure, code, outcome}` 3-tuple clause of `provider_failure/1`
-      (`control/lib/symmetry_control/integrations/provider_access.ex:2311`) has no producer: its only
-      literal builder was the non-nil-outcome clause of `provider_action_failure_result/2`
-      (`integrations.ex:1134-1135` before the apply stage removed it), fed by the then-existing
-      `outcome` argument of `record_provider_action_failure/3`; it was unreachable once the
-      callerless projected chain was deleted. The surviving builders emit only the 4-tuple form:
-      the sole literal builder is `unprojected_provider_action_failure/1` (`integrations.ex:369`,
-      pass-through at `:364-365`), while `:514` is the clause head of
-      `project_provider_action_failure/2` matching the 4-tuple and `provider_access.ex:2315` the
-      4-tuple clause head of `provider_failure/1`.
-      Do not delete either surface here; revalidate and remove in a separate maintenance change.
-
 - [ ] Revalidate and remove three daemon surfaces the re-scoped dead-code sweep left in
       `internal/state` (2026-11-21, branch `refactor/rf-w1-06-daemon-deadcode`; plan
       `docs/plans/2026-11-21-w1-06-daemon-deadcode-plan.md`). `Store.AttachGoalSession`
