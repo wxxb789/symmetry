@@ -163,7 +163,7 @@ export function WorkDetailPage() {
   const backgroundProjectId = foreignScope ? undefined : itemProjectId;
   const detailBody = (bodyScopedProjectId: string | null, drawer = false) =>
     <WorkDetailBody workItemId={workItemId} scopedProjectId={bodyScopedProjectId} backSearch={foreignScope ? {} : listState}
-      editable={editable} opening={opening} pendingWrites={pendingWrites} notice={shownNotice} onDismissNotice={() => setNotice(null)}
+      editable={editable} opening={opening} pendingWrites={pendingWrites} notice={shownNotice} onDismissNotice={() => { setNotice(null); }}
       openEditor={() => { void openEditor(); }} drawer={drawer} />;
   // Filters of another project never describe this subject, so both detail branches
   // drop them once the served scope is known to be foreign.
@@ -180,7 +180,7 @@ export function WorkDetailPage() {
       <Dialog.Root open>
         <Dialog.Portal>
           <Dialog.Overlay className="dialog-overlay" />
-          <Dialog.Content className="work-drawer" onCloseAutoFocus={(event) => event.preventDefault()}
+          <Dialog.Content className="work-drawer" onCloseAutoFocus={(event) => { event.preventDefault(); }}
             onEscapeKeyDown={close} onPointerDownOutside={close}>
             <button className="icon-button work-drawer-close" type="button" aria-label="Close work detail" onClick={close}><X size={20} aria-hidden="true" /></button>
             {detailBody(queryProjectId ?? itemProjectId ?? null, true)}
@@ -193,11 +193,11 @@ export function WorkDetailPage() {
   // The editor and its draft owner stay in one stable position across the
   // branch swap; only its dialog shell follows the presentation.
   return <>{presentation}{editing !== null && versionedItem !== null && <WorkItemEditor key={versionedItem.id} presentation={desktop ? "drawer" : "page"} drawerHost={drawerHost} project={editing} item={versionedItem} api={application.api} csrf={csrf}
-    onWriteStart={() => setPendingWrites((count) => count + 1)}
-    onWriteSettled={() => setPendingWrites((count) => Math.max(0, count - 1))}
+    onWriteStart={() => { setPendingWrites((count) => count + 1); }}
+    onWriteSettled={() => { setPendingWrites((count) => Math.max(0, count - 1)); }}
     onSaved={(_receipt, text) => { setEditing(null); setNotice({ tone: "status", text }); void reRead(); }}
     onRefused={(message) => { setEditing(null); setNotice({ tone: "alert", text: message }); void reRead(); }}
-    onClose={() => setEditing(null)} />}</>;
+    onClose={() => { setEditing(null); }} />}</>;
 }
 
 /** The project list/board behind the desktop drawer, so the detail URL reloads into the same view. */
@@ -275,7 +275,7 @@ function WorkDetailBody({ workItemId, scopedProjectId, backSearch, editable, ope
         {runChatSearch !== null && <Link className="button" to="/chat" search={runChatSearch}>
           {hasDecisionPacket(execution?.waiting) ? "Review decision in Chat" : "Open in Chat"}
         </Link>}
-        {item !== undefined && editable && <button className="button button-primary" type="button" disabled={opening || pendingWrites > 0} onClick={() => { void openEditor(); }}>{opening ? "Opening…" : "Edit work item"}</button>}
+        {item !== undefined && editable && <button className="button button-primary" type="button" disabled={opening || pendingWrites > 0} onClick={() => { openEditor(); }}>{opening ? "Opening…" : "Edit work item"}</button>}
         <RefreshButton fetching={query.isFetching} refresh={refresh} />
       </div>
     </PageHeading>
@@ -344,7 +344,7 @@ function WorkDetailSections({ detail, api }: { detail: WorkDetail; api: Api }) {
         <div><dt>Updated</dt><dd>{updated === null ? "Not recorded" : <time dateTime={updated.exact} title={updated.exact}>{updated.readable}</time>}</dd></div>
         <div><dt>Cost</dt><dd>{costLabel}</dd></div>
         {external !== null && <div><dt>Provider</dt><dd>
-          {asText(external.provider) ?? "unrecorded"}{providerState === null ? "" : ` · ${providerState}`}{external.available === false ? " · unavailable" : ""}
+          {asText(external.provider) ?? "unrecorded"}{providerState === null ? "" : ` · ${providerState}`}{!external.available ? " · unavailable" : ""}
           {providerUrl !== null && <> <a href={providerUrl} rel="noreferrer noopener" target="_blank">Open external record</a></>}
         </dd></div>}
       </dl>
@@ -447,10 +447,10 @@ function useDesktopDrawer(): boolean {
   const [desktop, setDesktop] = useState(() => window.matchMedia("(min-width: 1024px)").matches);
   useEffect(() => {
     const media = window.matchMedia("(min-width: 1024px)");
-    const update = () => setDesktop(media.matches);
+    const update = () => { setDesktop(media.matches); };
     update();
     media.addEventListener("change", update);
-    return () => media.removeEventListener("change", update);
+    return () => { media.removeEventListener("change", update); };
   }, []);
   return desktop;
 }

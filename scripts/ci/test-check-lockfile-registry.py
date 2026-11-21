@@ -168,8 +168,7 @@ class CheckTests(unittest.TestCase):
         self.assertEqual(result.stderr, "")
         self.assertEqual(
             result.stdout,
-            f"verified every recorded tarball URL in {path} sits on {CANONICAL}: "
-            "2 entries checked\n",
+            f"verified every recorded tarball URL in {path} sits on {CANONICAL}: 2 entries checked\n",
         )
 
     def test_mirror_host_fixture_fails_and_names_every_offending_entry(self):
@@ -178,13 +177,9 @@ class CheckTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertEqual(result.stdout, "")
         self.assertIn(f"2 of 3 recorded tarball URL(s) in {path} are not on {CANONICAL}", result.stderr)
-        self.assertIn(
-            "document 1.packages.right-pad@2.0.0.resolution.tarball", result.stderr
-        )
+        self.assertIn("document 1.packages.right-pad@2.0.0.resolution.tarball", result.stderr)
         self.assertIn(f"https://{MIRROR}/right-pad/-/right-pad-2.0.0.tgz", result.stderr)
-        self.assertIn(
-            "document 1.packages.@scope/pkg@3.1.0.resolution.tarball", result.stderr
-        )
+        self.assertIn("document 1.packages.@scope/pkg@3.1.0.resolution.tarball", result.stderr)
         self.assertIn(f"https://{MIRROR}/@scope/pkg/-/pkg-3.1.0.tgz", result.stderr)
         self.assertNotIn(f"https://{CANONICAL}/left-pad/-/left-pad-1.3.0.tgz", result.stderr)
 
@@ -201,8 +196,7 @@ class CheckTests(unittest.TestCase):
 
     def test_lockfile_without_any_tarball_entry_fails_closed(self):
         path = self.write_lockfile(
-            "---\nlockfileVersion: '9.0'\n\npackages:\n\n  left-pad@1.3.0:\n"
-            "    resolution: {integrity: sha512-aaa==}\n"
+            "---\nlockfileVersion: '9.0'\n\npackages:\n\n  left-pad@1.3.0:\n    resolution: {integrity: sha512-aaa==}\n"
         )
         result = self.run_check("--lockfile", str(path))
         self.assert_failed_closed(result, "records no tarball URL")
@@ -226,17 +220,12 @@ class CheckTests(unittest.TestCase):
         self.assert_failed_closed(result, "tab used for indentation")
 
     def test_anchor_fails_closed(self):
-        path = self.write_lockfile(
-            "lockfileVersion: '9.0'\n\npackages:\n\n  left-pad@1.3.0: &left-pad\n"
-        )
+        path = self.write_lockfile("lockfileVersion: '9.0'\n\npackages:\n\n  left-pad@1.3.0: &left-pad\n")
         result = self.run_check("--lockfile", str(path))
         self.assert_failed_closed(result, "unquoted scalar starts with a YAML indicator")
 
     def test_block_scalar_fails_closed(self):
-        path = self.write_lockfile(
-            "lockfileVersion: '9.0'\n\npackages:\n\n  left-pad@1.3.0:\n"
-            "    resolution: |\n"
-        )
+        path = self.write_lockfile("lockfileVersion: '9.0'\n\npackages:\n\n  left-pad@1.3.0:\n    resolution: |\n")
         result = self.run_check("--lockfile", str(path))
         self.assert_failed_closed(result, "block scalars are outside the lockfile subset")
 
@@ -250,8 +239,7 @@ class CheckTests(unittest.TestCase):
 
     def test_unclosed_flow_collection_fails_closed(self):
         path = self.write_lockfile(
-            "lockfileVersion: '9.0'\n\npackages:\n\n  left-pad@1.3.0:\n"
-            "    resolution: {integrity: sha512-aaa==\n"
+            "lockfileVersion: '9.0'\n\npackages:\n\n  left-pad@1.3.0:\n    resolution: {integrity: sha512-aaa==\n"
         )
         result = self.run_check("--lockfile", str(path))
         self.assert_failed_closed(result, "flow mapping does not close on its line")
@@ -299,8 +287,7 @@ class CheckTests(unittest.TestCase):
 
     def test_empty_tarball_fails(self):
         path = self.write_lockfile(
-            "lockfileVersion: '9.0'\n\npackages:\n\n  left-pad@1.3.0:\n"
-            "    resolution: {tarball: ''}\n"
+            "lockfileVersion: '9.0'\n\npackages:\n\n  left-pad@1.3.0:\n    resolution: {tarball: ''}\n"
         )
         result = self.run_check("--lockfile", str(path))
         self.assertEqual(result.returncode, 1, result.stdout)
@@ -337,8 +324,7 @@ class ReaderTests(unittest.TestCase):
             "@napi-rs/wasm-runtime",
         )
         self.assertEqual(
-            [item.value for item in second.entries["packages"].entries["right-pad@2.0.0"]
-             .entries["os"].items],
+            [item.value for item in second.entries["packages"].entries["right-pad@2.0.0"].entries["os"].items],
             ["linux", "darwin"],
         )
 
@@ -346,15 +332,19 @@ class ReaderTests(unittest.TestCase):
         self.assertEqual(
             [(path, node.value) for path, node in CHECK.recorded_tarballs(CHECK.parse_documents(CANONICAL_LOCKFILE))],
             [
-                ("document 0.packages.left-pad@1.3.0.resolution.tarball", f"https://{CANONICAL}/left-pad/-/left-pad-1.3.0.tgz"),
-                ("document 1.packages.right-pad@2.0.0.resolution.tarball", f"https://{CANONICAL}/right-pad/-/right-pad-2.0.0.tgz"),
+                (
+                    "document 0.packages.left-pad@1.3.0.resolution.tarball",
+                    f"https://{CANONICAL}/left-pad/-/left-pad-1.3.0.tgz",
+                ),
+                (
+                    "document 1.packages.right-pad@2.0.0.resolution.tarball",
+                    f"https://{CANONICAL}/right-pad/-/right-pad-2.0.0.tgz",
+                ),
             ],
         )
 
     def test_reader_accepts_the_repository_lockfile(self):
-        documents = CHECK.parse_documents(
-            CHECK.DEFAULT_LOCKFILE.read_text(encoding="utf-8")
-        )
+        documents = CHECK.parse_documents(CHECK.DEFAULT_LOCKFILE.read_text(encoding="utf-8"))
         self.assertGreaterEqual(len(documents), 2)
         self.assertGreater(len(CHECK.recorded_tarballs(documents)), 0)
 
@@ -370,10 +360,7 @@ class DifferentialTests(unittest.TestCase):
         for name, text in fixtures.items():
             with self.subTest(fixture=name):
                 self.assertEqual(
-                    [
-                        (path, node.value)
-                        for path, node in CHECK.recorded_tarballs(CHECK.parse_documents(text))
-                    ],
+                    [(path, node.value) for path, node in CHECK.recorded_tarballs(CHECK.parse_documents(text))],
                     pyyaml_tarballs(text),
                 )
 

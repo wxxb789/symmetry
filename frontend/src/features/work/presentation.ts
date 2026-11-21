@@ -177,7 +177,7 @@ export function executionStateLabel(state: Text): string | null {
     : `Unknown execution state: ${value}`;
 }
 
-export interface ReportedResult {
+interface ReportedResult {
   text: string | null;
   kind: string | null;
 }
@@ -185,7 +185,7 @@ export interface ReportedResult {
 export function failureText(failure: unknown): string | null {
   const record = asRecord(failure);
   if (record === null) return null;
-  const reason = asText(record["reason"]) ?? asText(record["message"]) ?? asText(record["summary"]);
+  const reason = asText(record.reason) ?? asText(record.message) ?? asText(record.summary);
   return reason === null ? null : `Failed: ${reason}`;
 }
 
@@ -207,8 +207,8 @@ export function reportedText(value: unknown): string | null {
 export function reportedResult(execution: ExecutionLike | null | undefined): ReportedResult {
   const result = asRecord(execution?.result);
   return {
-    text: reportedText(result?.["summary"]) ?? reportedText(result?.["message"]) ?? failureText(execution?.failure),
-    kind: result === null ? null : asText(result["kind"]),
+    text: reportedText(result?.summary) ?? reportedText(result?.message) ?? failureText(execution?.failure),
+    kind: result === null ? null : asText(result.kind),
   };
 }
 
@@ -221,9 +221,9 @@ export interface EvidenceAttribution {
 export function attributionOf(value: unknown): EvidenceAttribution | null {
   const record = asRecord(value);
   if (record === null) return null;
-  const source = asText(record["source"]);
-  const generation = typeof record["generation"] === "number" ? record["generation"] : null;
-  const recordedAt = asText(record["recorded_at"]);
+  const source = asText(record.source);
+  const generation = typeof record.generation === "number" ? record.generation : null;
+  const recordedAt = asText(record.recorded_at);
   if (source === null && generation === null && recordedAt === null) return null;
   return { source: source ?? "unlabelled", generation, recordedAt };
 }
@@ -241,19 +241,19 @@ export function evidenceRows(values: unknown): EvidenceRow[] {
       const text = reportedText(value);
       return text === null ? [] : [{ text, attribution: null }];
     }
-    const name = asText(record["name"]);
-    const status = asText(record["status"]);
+    const name = asText(record.name);
+    const status = asText(record.status);
     // Recognised fields first; otherwise the record's own JSON, so an
     // unrecognised structured value (e.g. a served outcome.tests object) is
     // still reported output and never judged as an absence.
     const text = name !== null && status !== null
       ? `${name} · ${status}`
-      : asText(record["message"]) ?? asText(record["title"]) ?? name ?? reportedText(record["summary"]) ?? asText(record["path"]) ?? asText(record["url"]) ?? asText(record["text"]) ?? reportedText(record);
+      : asText(record.message) ?? asText(record.title) ?? name ?? reportedText(record.summary) ?? asText(record.path) ?? asText(record.url) ?? asText(record.text) ?? reportedText(record);
     return text === null ? [] : [{ text, attribution: attributionOf(record) }];
   });
 }
 
-export interface CiLabel {
+interface CiLabel {
   text: string;
   tone: "unknown" | "pending" | "failed" | "passed" | "stale";
   title: string;
@@ -309,14 +309,14 @@ export function ciLabel(delivery: DeliveryLike | null | undefined, resource?: Ci
 /** The project read's bound resources, addressable by id for the CI chip on each row. */
 export function ciResourcesOf(project: unknown): ReadonlyMap<string, CiResourceLike> {
   const resources = new Map<string, CiResourceLike>();
-  for (const record of asRecords(asRecord(project)?.["resources"])) {
-    const id = asText(record["id"]);
-    if (id !== null) resources.set(id, { status: asText(record["status"]), sync_status: asText(record["sync_status"]) });
+  for (const record of asRecords(asRecord(project)?.resources)) {
+    const id = asText(record.id);
+    if (id !== null) resources.set(id, { status: asText(record.status), sync_status: asText(record.sync_status) });
   }
   return resources;
 }
 
-export interface DeliveryRow {
+interface DeliveryRow {
   label: string;
   value: string;
   source: string;
@@ -359,13 +359,13 @@ export function deliveryRows(delivery: DeliveryLike | null | undefined, resource
   return rows;
 }
 
-export interface DecisionOption {
+interface DecisionOption {
   label: string;
   consequence: string;
   recommended: boolean;
 }
 
-export interface DecisionView {
+interface DecisionView {
   question: string;
   reason: string | null;
   context: string | null;
@@ -376,8 +376,8 @@ export interface DecisionView {
 export function decisionScopeLabel(waiting: unknown): string | null {
   const record = asRecord(waiting);
   if (record === null) return null;
-  const transitionId = asText(record["transition_id"]);
-  const generation = typeof record["generation"] === "number" ? record["generation"] : null;
+  const transitionId = asText(record.transition_id);
+  const generation = typeof record.generation === "number" ? record.generation : null;
   if (transitionId === null && generation === null) return null;
   return `Scope: ${transitionId === null ? "transition not recorded" : `transition ${transitionId}`}${generation === null ? "" : ` · generation ${generation}`}`;
 }
@@ -386,27 +386,27 @@ export function decisionScopeLabel(waiting: unknown): string | null {
 export function decisionRecord(waiting: unknown): Record<string, unknown> | null {
   const record = asRecord(waiting);
   if (record === null) return null;
-  return asRecord(record["decision"]) ?? asRecord(asRecord(record["payload"])?.["decision"]);
+  return asRecord(record.decision) ?? asRecord(asRecord(record.payload)?.decision);
 }
 
 export function decisionView(waiting: unknown, fallbackQuestion: string | null): DecisionView | null {
   const record = asRecord(waiting);
   if (record === null) return null;
-  const payload = asRecord(record["payload"]);
+  const payload = asRecord(record.payload);
   const decision = decisionRecord(waiting);
-  const question = asText(record["question"]) ?? (payload === null ? null : asText(payload["question"])) ?? fallbackQuestion;
+  const question = asText(record.question) ?? (payload === null ? null : asText(payload.question)) ?? fallbackQuestion;
   if (question === null && decision === null) return null;
-  const recommendation = decision === null ? null : asText(decision["recommended_option_id"]);
-  const options = asRecords(decision?.["options"]).flatMap((option) => {
-    const id = asText(option["id"]);
-    const label = asText(option["label"]);
+  const recommendation = decision === null ? null : asText(decision.recommended_option_id);
+  const options = asRecords(decision?.options).flatMap((option) => {
+    const id = asText(option.id);
+    const label = asText(option.label);
     if (label === null) return [];
-    return [{ label, consequence: asText(option["consequence"]) ?? "No consequence recorded", recommended: id !== null && id === recommendation }];
+    return [{ label, consequence: asText(option.consequence) ?? "No consequence recorded", recommended: id !== null && id === recommendation }];
   });
   return {
     question: question ?? "A decision is needed to continue.",
-    reason: decision === null ? null : asText(decision["reason"]),
-    context: decision === null ? null : asText(decision["context"]),
+    reason: decision === null ? null : asText(decision.reason),
+    context: decision === null ? null : asText(decision.context),
     options,
   };
 }
@@ -420,26 +420,26 @@ const shortId = (value: string): string => (value.length > 13 ? `${value.slice(0
 
 /** Reads the reported task result's proposed next action; advisory text only, never an executable command. */
 export function nextActionLabel(result: unknown): string | null {
-  const next = asRecord(asRecord(result)?.["proposed_next_action"]);
+  const next = asRecord(asRecord(result)?.proposed_next_action);
   if (next === null) return null;
-  const kind = asText(next["kind"]);
+  const kind = asText(next.kind);
   switch (kind) {
     case "validate": {
-      const taskId = asText(next["producing_task_id"]);
+      const taskId = asText(next.producing_task_id);
       return taskId === null ? "Validate the produced work" : `Validate the produced work (task ${shortId(taskId)})`;
     }
     case "repair": {
-      const workItemId = asText(next["work_item_id"]);
-      const reason = asText(next["reason"]);
+      const workItemId = asText(next.work_item_id);
+      const reason = asText(next.reason);
       return `Repair ${workItemId === null ? "the affected work item" : `work item ${shortId(workItemId)}`}${reason === null ? "" : `: ${reason}`}`;
     }
     case "observe": {
-      const resourceId = asText(next["resource_id"]);
-      const reference = asText(next["external_ref"]);
+      const resourceId = asText(next.resource_id);
+      const reference = asText(next.external_ref);
       return `Observe ${resourceId === null ? "the bound resource" : `resource ${shortId(resourceId)}`}${reference === null ? "" : ` (${reference})`}`;
     }
     case "replan": {
-      const reason = asText(next["reason"]);
+      const reason = asText(next.reason);
       return reason === null ? "Replan the remaining work" : `Replan: ${reason}`;
     }
     case "wait":
@@ -458,7 +458,7 @@ export function resultKindLabel(kind: string | null): string | null {
 /** Timeline rows arrive from both the detail read and the timeline page; only `data` stays free-form. */
 export type TimelineItemLike = Omit<Loosen<SymmetryWorkTimelineReadV1["items"][number]>, "data"> & { readonly data?: unknown };
 
-export interface TimelineView {
+interface TimelineView {
   label: string;
   headline: string | null;
   link: string | null;
@@ -477,24 +477,24 @@ function payloadText(payload: Record<string, unknown> | null): string | null {
 
 export function timelineItemView(item: TimelineItemLike): TimelineView {
   const data = asRecord(item.data) ?? {};
-  const payload = asRecord(data["payload"]);
+  const payload = asRecord(data.payload);
   const source = asText(item.source) ?? "event";
   if (source === "event") {
-    const kind = asText(data["kind"]) ?? "event";
+    const kind = asText(data.kind) ?? "event";
     return {
       label: `event · ${kind.replaceAll("_", " ")}`,
-      headline: kind === "test" ? [asText(payload?.["name"]), asText(payload?.["status"])].filter((part): part is string => part !== null).join(" · ") || payloadText(payload) : payloadText(payload),
-      link: safeUrl(payload?.["url"]),
+      headline: kind === "test" ? [asText(payload?.name), asText(payload?.status)].filter((part): part is string => part !== null).join(" · ") || payloadText(payload) : payloadText(payload),
+      link: safeUrl(payload?.url),
     };
   }
   if (source === "transition") {
-    const state = asText(data["state"]) ?? "unknown";
-    return { label: `transition · ${state.replaceAll("_", " ")}`, headline: payloadText(payload) ?? asText(payload?.["failure"]) ?? null, link: safeUrl(payload?.["url"]) };
+    const state = asText(data.state) ?? "unknown";
+    return { label: `transition · ${state.replaceAll("_", " ")}`, headline: payloadText(payload) ?? asText(payload?.failure) ?? null, link: safeUrl(payload?.url) };
   }
   if (source === "command") {
-    const kind = asText(data["kind"]) ?? "command";
-    const state = asText(data["state"]) ?? "unknown";
-    const acknowledgement = asText(data["acknowledgement_outcome"]);
+    const kind = asText(data.kind) ?? "command";
+    const state = asText(data.state) ?? "unknown";
+    const acknowledgement = asText(data.acknowledgement_outcome);
     return { label: `command · ${kind.replaceAll("_", " ")}`, headline: `Command ${state}${acknowledgement === null ? "" : ` · acknowledged ${acknowledgement}`}`, link: null };
   }
   return { label: source, headline: payloadText(payload), link: null };
@@ -502,7 +502,7 @@ export function timelineItemView(item: TimelineItemLike): TimelineView {
 
 export function timelineItemKey(item: TimelineItemLike): string {
   const data = asRecord(item.data) ?? {};
-  const identity = asText(data["event_id"]) ?? asText(data["transition_id"]) ?? asText(data["command_id"]) ?? asText(item.recorded_at) ?? "recorded";
+  const identity = asText(data.event_id) ?? asText(data.transition_id) ?? asText(data.command_id) ?? asText(item.recorded_at) ?? "recorded";
   return `${asText(item.source) ?? "event"}:${identity}:${typeof item.generation === "number" ? item.generation : ""}`;
 }
 
@@ -525,7 +525,7 @@ export function timelineBoundary(item: TimelineItemLike | undefined): string | n
 
 const timestampFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
 
-export interface TimestampView {
+interface TimestampView {
   exact: string;
   readable: string;
 }
