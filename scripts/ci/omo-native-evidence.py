@@ -988,19 +988,28 @@ def replay_without_work(
     return data.get("admission")
 
 
-def pinned_binary(system, binary):
-    """Authorize the operator-named executable against the committed platform pin."""
-    pin = PINS.get(system)
-    require(pin is not None, "unsupported operating system")
+def pinned_binary(pin, binary, receipt):
+    """Authorize the operator-named executable against the committed platform pin.
+
+    The observed identity is recorded before it is judged, so a refused run still
+    carries the size and digest of the executable that was refused.
+    """
     configured = os.environ.get(BINARY_ENVIRONMENT, "")
     require(bool(configured), BINARY_ENVIRONMENT + " must name the pinned executable")
     declared = pathlib.Path(configured).resolve()
     require(declared.is_file(), BINARY_ENVIRONMENT + " must name an existing file")
     require(same_path(binary, declared), "--binary must name the file declared by " + BINARY_ENVIRONMENT)
-    size = binary.stat().st_size
-    observed = digest(binary)
-    require(size == pin["size"] and observed == pin["sha256"], "exact platform binary pin mismatch")
-    return {"path": str(binary), "size": size, "sha256": observed, "independentPlatformPin": pin}
+    receipt.value["binary"] = {
+        "path": str(binary),
+        "size": binary.stat().st_size,
+        "sha256": digest(binary),
+        "independentPlatformPin": pin,
+    }
+    observed = receipt.value["binary"]
+    require(
+        observed["size"] == pin["size"] and observed["sha256"] == pin["sha256"],
+        "exact platform binary pin mismatch",
+    )
 
 
 def run(args, receipt, active):
@@ -1019,6 +1028,8 @@ def run(args, receipt, active):
     require(not root.is_symlink(), "private evidence root must not be a symlink")
     receipt.record("private_root", path=str(root), accessControl=private_root(root))
     system = platform.system()
+    pin = PINS.get(system)
+    require(pin is not None, "unsupported operating system")
     receipt.value["platform"] = {
         "system": system,
         "platform": platform.platform(),
@@ -1030,7 +1041,7 @@ def run(args, receipt, active):
         else bounded_read(pathlib.Path("/etc/os-release"), 65536).decode("utf-8"),
         "wslDistribution": os.environ.get("WSL_DISTRO_NAME") if system == "Linux" else None,
     }
-    receipt.value["binary"] = pinned_binary(system, binary)
+    pinned_binary(pin, binary, receipt)
     if system == "Linux":
         distribution = receipt.value["platform"]["distribution"]
         require(

@@ -230,11 +230,13 @@ class PinnedBlobTest(unittest.TestCase):
             return witness.pinned_binary()
 
     def test_unset_environment_is_refused_by_name(self):
-        with self.assertRaisesRegex(RuntimeError, witness.BINARY_ENVIRONMENT):
+        with self.assertRaisesRegex(
+            RuntimeError, "SYMMETRY_OPENCODE_BINARY must name the owner-pinned Windows executable"
+        ):
             self.resolve()
 
     def test_missing_declared_blob_is_refused(self):
-        with self.assertRaisesRegex(RuntimeError, "must name an existing file"):
+        with self.assertRaisesRegex(RuntimeError, "SYMMETRY_OPENCODE_BINARY must name an existing file"):
             self.resolve(str(pathlib.Path(self.blob.parent) / "absent.exe"))
 
     def test_wrong_digest_is_refused_at_the_pinned_size(self):
