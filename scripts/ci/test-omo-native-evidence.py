@@ -11,7 +11,6 @@ import threading
 import time
 import unittest
 
-
 SCRIPT = pathlib.Path(__file__).with_name("omo-native-evidence.py")
 SPEC = importlib.util.spec_from_file_location("omo_native_evidence", SCRIPT)
 WITNESS = importlib.util.module_from_spec(SPEC)
@@ -21,11 +20,15 @@ SPEC.loader.exec_module(WITNESS)
 class OmONativeEvidenceTest(unittest.TestCase):
     def start_process(self, receipt, root, code, arguments, rpc=True):
         allowed = {"SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT"}
-        environment = {key: value for key, value in os.environ.items()
-                       if os.name == "nt" and key.upper() in allowed}
+        environment = {key: value for key, value in os.environ.items() if os.name == "nt" and key.upper() in allowed}
         process = WITNESS.NativeProcess(
-            receipt, "isolated-python-capture", [sys.executable, "-I", "-u", "-c", code, *arguments],
-            root, environment, rpc=rpc)
+            receipt,
+            "isolated-python-capture",
+            [sys.executable, "-I", "-u", "-c", code, *arguments],
+            root,
+            environment,
+            rpc=rpc,
+        )
         self.addCleanup(process.stop)
         return process
 
@@ -49,8 +52,13 @@ os.write(3 - fd, bytes.fromhex(sys.argv[4]))
                 tail_text = json.dumps(tail_frame, ensure_ascii=False)
                 tail = (tail_text + "\n").encode("utf-8")
                 other = b'{"type":"other_stream_drained"}\n'
-                process = self.start_process(receipt, root, writer, [
-                    "1" if label == "stdout" else "2", invalid.hex(), tail.hex(), other.hex()], rpc)
+                process = self.start_process(
+                    receipt,
+                    root,
+                    writer,
+                    ["1" if label == "stdout" else "2", invalid.hex(), tail.hex(), other.hex()],
+                    rpc,
+                )
                 try:
                     # The tail exceeds a pipe buffer: a reader that stops at the
                     # invalid line prevents this child from reaching normal exit.
@@ -80,8 +88,7 @@ os.write(3 - fd, bytes.fromhex(sys.argv[4]))
                 self.assertNotIn("frame", failed[0])
                 self.assertNotIn("\ufffd", json.dumps(native, ensure_ascii=False))
                 self.assertNotIn("private-undecodable-output", json.dumps(native))
-                tail_rows = [item for item in native
-                             if item["stream"] == label and item.get("raw") == tail_text]
+                tail_rows = [item for item in native if item["stream"] == label and item.get("raw") == tail_text]
                 self.assertEqual(len(tail_rows), 128)
                 other_rows = [item for item in native if item["stream"] != label]
                 self.assertEqual(len(other_rows), 1)
@@ -111,10 +118,13 @@ for byte in stderr:
                 ready = threading.Event()
 
                 class SignallingReceipt(WITNESS.Receipt):
-                    def record(self, operation, classification="passed", **data):
+                    def record(self, operation, classification="passed", *, ready=ready, **data):
                         observation = super().record(operation, classification, **data)
-                        if (operation == "native_output" and data.get("stream") == "stderr"
-                                and data.get("raw") == "split_ready"):
+                        if (
+                            operation == "native_output"
+                            and data.get("stream") == "stderr"
+                            and data.get("raw") == "split_ready"
+                        ):
                             ready.set()
                         return observation
 
@@ -125,8 +135,7 @@ for byte in stderr:
                 stderr_text = "diagnostic \u6c49\U0001f642\u00e9"
                 stderr = stderr_text.encode("utf-8")
                 split = stdout.index("\u6c49".encode("utf-8")) + 1
-                process = self.start_process(receipt, root, writer,
-                                             [stdout.hex(), stderr.hex(), str(split)], rpc)
+                process = self.start_process(receipt, root, writer, [stdout.hex(), stderr.hex(), str(split)], rpc)
                 try:
                     self.assertTrue(ready.wait(timeout=10), "split-byte writer did not reach its barrier")
                     process.send("continue")
@@ -146,8 +155,9 @@ for byte in stderr:
                 archived = json.loads(output.read_text(encoding="utf-8"))
                 native = [item for item in archived["observations"] if item["operation"] == "native_output"]
                 self.assertEqual([item["raw"] for item in native if item["stream"] == "stdout"], [text])
-                self.assertEqual([item["raw"] for item in native if item["stream"] == "stderr"],
-                                 ["split_ready", stderr_text])
+                self.assertEqual(
+                    [item["raw"] for item in native if item["stream"] == "stderr"], ["split_ready", stderr_text]
+                )
                 self.assertTrue(all(item["classification"] == "passed" for item in native))
                 self.assertTrue(all(not thread.is_alive() for thread in process.threads))
 
@@ -161,7 +171,7 @@ class UrlUserinfoRedactionTest(unittest.TestCase):
         return WITNESS.Receipt("").sanitize(text)
 
     def test_password_containing_at_sign_is_redacted_whole(self):
-        sanitized = self.sanitize('{"url": "%s"}' % self.PASSWORD_IN_USERINFO)
+        sanitized = self.sanitize(f'{{"url": "{self.PASSWORD_IN_USERINFO}"}}')
         self.assertEqual(sanitized, '{"url": "https://[REDACTED]@control.internal/x"}')
         for fragment in ("alice", "p@s:w0rd", "s:w0rd"):
             self.assertNotIn(fragment, sanitized)

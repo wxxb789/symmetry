@@ -143,12 +143,12 @@ describe("read boundary", () => {
     const fetcher = vi.fn<typeof fetch>().mockImplementation((_input, init) => {
       requestSignal = init?.signal;
       const { promise, reject } = Promise.withResolvers<Response>();
-      requestSignal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+      requestSignal?.addEventListener("abort", () => { reject(new DOMException("Aborted", "AbortError")); });
       return promise;
     });
     const controller = new AbortController();
     const pending = createApi(fetcher).workspace(null, controller.signal);
-    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => { expect(fetcher).toHaveBeenCalledTimes(1); });
     controller.abort();
     await expect(pending).rejects.toBeDefined();
     expect(requestSignal?.aborted).toBe(true);

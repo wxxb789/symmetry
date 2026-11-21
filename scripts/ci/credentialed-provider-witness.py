@@ -42,12 +42,11 @@ import argparse
 import hashlib
 import json
 import os
-from pathlib import Path
 import re
 import subprocess
 import sys
 import time
-
+from pathlib import Path
 
 FIXTURE = "wxxb789/symmetry-provider-sandbox"
 BASE = "551e0057e4829816587eaa8efb39f0b18eaa6445"
@@ -83,15 +82,13 @@ def safe_write(path, value):
 
 
 def git(root, *args):
-    result = subprocess.run(["git", *args], cwd=root, stdout=subprocess.PIPE,
-                            stderr=subprocess.DEVNULL, check=False)
+    result = subprocess.run(["git", *args], cwd=root, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False)
     require(result.returncode == 0, "source_inspection_failed")
     return result.stdout
 
 
 def source(root, config):
-    require(git(root, "rev-parse", "HEAD").decode().strip() == config["code_head_sha"],
-            "code_head_mismatch")
+    require(git(root, "rev-parse", "HEAD").decode().strip() == config["code_head_sha"], "code_head_mismatch")
     require(config["code_base_sha"] == BASE, "code_base_mismatch")
     entries = config["changed_source_manifest"]
     require(isinstance(entries, list) and entries, "source_manifest_required")
@@ -99,15 +96,27 @@ def source(root, config):
     for entry in entries:
         rel = entry["path"]
         path = (root / rel).resolve()
-        require(path.is_relative_to(root) and path.is_file() and rel not in paths,
-                "invalid_source_manifest_path")
+        require(path.is_relative_to(root) and path.is_file() and rel not in paths, "invalid_source_manifest_path")
         paths.add(rel)
-        require(hashlib.sha256(path.read_bytes()).hexdigest() == entry["sha256"].removeprefix("sha256:"),
-                "changed_source_digest_mismatch")
-    dirty = git(root, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--",
-                "control/lib", "control/priv", "control/config", "control/mix.exs", "control/mix.lock",
-                "scripts/ci/credentialed-provider-witness.py",
-                "scripts/ci/credentialed-provider-witness.exs").split(b"\0")
+        require(
+            hashlib.sha256(path.read_bytes()).hexdigest() == entry["sha256"].removeprefix("sha256:"),
+            "changed_source_digest_mismatch",
+        )
+    dirty = git(
+        root,
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=all",
+        "--",
+        "control/lib",
+        "control/priv",
+        "control/config",
+        "control/mix.exs",
+        "control/mix.lock",
+        "scripts/ci/credentialed-provider-witness.py",
+        "scripts/ci/credentialed-provider-witness.exs",
+    ).split(b"\0")
     relevant = set()
     i = 0
     while i < len(dirty):
@@ -119,25 +128,33 @@ def source(root, config):
         if b"R" in status or b"C" in status:
             i += 1
         if name.startswith(("control/lib/", "control/priv/", "control/config/")) or name in {
-            "control/mix.exs", "control/mix.lock",
+            "control/mix.exs",
+            "control/mix.lock",
             "scripts/ci/credentialed-provider-witness.py",
             "scripts/ci/credentialed-provider-witness.exs",
         }:
             relevant.add(name)
     require(relevant <= paths, "dirty_source_missing_from_manifest")
-    require(not relevant or config.get("allow_manifest_bound_dirty") is True,
-            "dirty_source_requires_explicit_manifest_consent")
-    return {"head_sha": config["code_head_sha"], "base_sha": BASE,
-            "changed_source_manifest": entries, "manifest_bound_dirty_paths": sorted(relevant),
-            "manifest_sha256": hashlib.sha256(encoded(entries)).hexdigest()}
+    require(
+        not relevant or config.get("allow_manifest_bound_dirty") is True,
+        "dirty_source_requires_explicit_manifest_consent",
+    )
+    return {
+        "head_sha": config["code_head_sha"],
+        "base_sha": BASE,
+        "changed_source_manifest": entries,
+        "manifest_bound_dirty_paths": sorted(relevant),
+        "manifest_sha256": hashlib.sha256(encoded(entries)).hexdigest(),
+    }
 
 
 def scan_evidence(directory):
     count = 0
     for path in directory.iterdir():
         if path.is_file():
-            require(not GITHUB_OR_BEARER_CREDENTIAL.search(path.read_bytes()),
-                    "github_or_bearer_credential_in_evidence")
+            require(
+                not GITHUB_OR_BEARER_CREDENTIAL.search(path.read_bytes()), "github_or_bearer_credential_in_evidence"
+            )
             count += 1
     return count
 
@@ -149,12 +166,12 @@ def safe_diagnostic(value):
         return None
     for key in names:
         item = value[key]
-        if item is not None and not (isinstance(item, str) and len(item) <= 160 and
-                                     re.fullmatch(r"[A-Za-z0-9_.!?]+", item)):
+        if item is not None and not (
+            isinstance(item, str) and len(item) <= 160 and re.fullmatch(r"[A-Za-z0-9_.!?]+", item)
+        ):
             return None
     file = value["source_file"]
-    if file is not None and not (isinstance(file, str) and len(file) <= 200 and
-                                 re.fullmatch(r"[A-Za-z0-9_.-]+", file)):
+    if file is not None and not (isinstance(file, str) and len(file) <= 200 and re.fullmatch(r"[A-Za-z0-9_.-]+", file)):
         return None
     for key, lower, upper in [("stack_arity", 0, 255), ("source_line", 1, 1_000_000)]:
         item = value[key]
@@ -168,21 +185,35 @@ def compile_validated_source(root, config, observed_source, directory, environme
     command = ["mix", "compile", "--force"]
     started = time.monotonic()
     try:
-        result = subprocess.run(command, cwd=root / "control", env=environment,
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=180, check=False)
-        require(not GITHUB_OR_BEARER_CREDENTIAL.search(result.stdout + result.stderr),
-                "github_or_bearer_credential_in_process_output")
+        result = subprocess.run(
+            command,
+            cwd=root / "control",
+            env=environment,
+            capture_output=True,
+            timeout=180,
+            check=False,
+        )
+        require(
+            not GITHUB_OR_BEARER_CREDENTIAL.search(result.stdout + result.stderr),
+            "github_or_bearer_credential_in_process_output",
+        )
         code = result.returncode
     except subprocess.TimeoutExpired as error:
-        require(not GITHUB_OR_BEARER_CREDENTIAL.search((error.stdout or b"") + (error.stderr or b"")),
-                    "github_or_bearer_credential_in_process_output")
+        require(
+            not GITHUB_OR_BEARER_CREDENTIAL.search((error.stdout or b"") + (error.stderr or b"")),
+            "github_or_bearer_credential_in_process_output",
+        )
         code = -1
-    safe_write(directory / ("compile-recovery.json" if recovering else "compile.json"), {
-        "command": command, "exit_code": code,
-        "elapsed_seconds": round(time.monotonic() - started, 3),
-        "manifest_sha256": observed_source["manifest_sha256"],
-        "process_output": "discarded; GitHub and Bearer credential shapes checked before discard",
-    })
+    safe_write(
+        directory / ("compile-recovery.json" if recovering else "compile.json"),
+        {
+            "command": command,
+            "exit_code": code,
+            "elapsed_seconds": round(time.monotonic() - started, 3),
+            "manifest_sha256": observed_source["manifest_sha256"],
+            "process_output": "discarded; GitHub and Bearer credential shapes checked before discard",
+        },
+    )
     require(code == 0, "validated_source_compile_failed")
     require(source(root, config) == observed_source, "source_changed_during_compile")
 
@@ -199,11 +230,15 @@ def main():
     config = json.loads(args.config.read_text(encoding="utf-8"))
     require(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{7,79}", config["namespace"]), "invalid_namespace")
     require(config["base_branch"] == "main", "invalid_base_branch")
-    require(not os.environ.get("GH_TOKEN") and not os.environ.get("GITHUB_TOKEN"), "environment_provider_token_forbidden")
-    require(os.environ.get("POSTGRES_PORT") == "55436" and
-            os.environ.get("POSTGRES_DB") == "symmetry_0006h_test" and
-            os.environ.get("POSTGRES_HOST", "localhost") in {"localhost", "127.0.0.1"},
-            "isolated_postgresql_required")
+    require(
+        not os.environ.get("GH_TOKEN") and not os.environ.get("GITHUB_TOKEN"), "environment_provider_token_forbidden"
+    )
+    require(
+        os.environ.get("POSTGRES_PORT") == "55436"
+        and os.environ.get("POSTGRES_DB") == "symmetry_0006h_test"
+        and os.environ.get("POSTGRES_HOST", "localhost") in {"localhost", "127.0.0.1"},
+        "isolated_postgresql_required",
+    )
     observed_source = source(root, config)
     if args.recover_existing:
         require(directory.is_dir(), "missing_recovery_evidence")
@@ -226,11 +261,19 @@ def main():
         command = ["mix", "run", "--no-start", "--no-compile", str(script), phase, str(directory)]
         started = time.monotonic()
         try:
-            result = subprocess.run(command, cwd=root / "control", env=environment,
-                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=180, check=False)
+            result = subprocess.run(
+                command,
+                cwd=root / "control",
+                env=environment,
+                capture_output=True,
+                timeout=180,
+                check=False,
+            )
             # Raw process output is never written or printed: exceptions may contain headers.
-            require(not GITHUB_OR_BEARER_CREDENTIAL.search(result.stdout + result.stderr),
-                    "github_or_bearer_credential_in_process_output")
+            require(
+                not GITHUB_OR_BEARER_CREDENTIAL.search(result.stdout + result.stderr),
+                "github_or_bearer_credential_in_process_output",
+            )
             code = result.returncode
             failure_reason = None
             diagnostic = None
@@ -248,11 +291,16 @@ def main():
             code = -1
             failure_reason = "phase_deadline_expired"
             diagnostic = None
-        row = {"phase": phase, "command": command, "exit_code": code,
-               "elapsed_seconds": round(time.monotonic() - started, 3),
-               "expected_exit_code": 86 if phase == "crash" else 0,
-               "process_output": "discarded; GitHub and Bearer credential shapes checked before discard",
-               "failure_reason": failure_reason, "diagnostic": diagnostic}
+        row = {
+            "phase": phase,
+            "command": command,
+            "exit_code": code,
+            "elapsed_seconds": round(time.monotonic() - started, 3),
+            "expected_exit_code": 86 if phase == "crash" else 0,
+            "process_output": "discarded; GitHub and Bearer credential shapes checked before discard",
+            "failure_reason": failure_reason,
+            "diagnostic": diagnostic,
+        }
         with open(directory / "commands.jsonl", "ab") as stream:
             os.chmod(directory / "commands.jsonl", 0o600)
             stream.write(json.dumps(row, sort_keys=True).encode() + b"\n")
@@ -260,13 +308,24 @@ def main():
             os.fsync(stream.fileno())
         scan_evidence(directory)
         require(code == row["expected_exit_code"], "phase_failed_" + phase)
-        require((directory / ("barrier-crash.json" if phase == "crash" else "phase-" + phase + ".json")).is_file(),
-                "phase_receipt_missing_" + phase)
+        require(
+            (directory / ("barrier-crash.json" if phase == "crash" else "phase-" + phase + ".json")).is_file(),
+            "phase_receipt_missing_" + phase,
+        )
     require(source(root, config) == observed_source, "source_changed_during_witness")
     scanned = scan_evidence(directory)
-    print(json.dumps({"status": "passed_with_limitations", "surface": "Control broker; standalone Linux BEAM processes",
-                      "fixture": FIXTURE, "receipt": str(directory / "receipt.json"),
-                      "redaction_files_scanned": scanned}, sort_keys=True))
+    print(
+        json.dumps(
+            {
+                "status": "passed_with_limitations",
+                "surface": "Control broker; standalone Linux BEAM processes",
+                "fixture": FIXTURE,
+                "receipt": str(directory / "receipt.json"),
+                "redaction_files_scanned": scanned,
+            },
+            sort_keys=True,
+        )
+    )
 
 
 if __name__ == "__main__":
