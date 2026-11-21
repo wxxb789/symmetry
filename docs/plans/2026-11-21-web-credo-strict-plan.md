@@ -1,10 +1,12 @@
 # web-credo-strict plan — the ten owned control-web lib files strict-Credo clean, no behaviour change
 
 Contract: `goal-rf-w1-03-web-credo-strict.md` (GDD, 2026-11-21). Coordinate baseline: this
-worktree's HEAD `a3039f0d17fc7c7905b63bdf247cac5bf339b213` (`a3039f0`); every file, line and count
-below was read or measured at that revision. Shape reference: `7ea9a9d` (refactor slice closed by a
-plan file under `docs/plans/` plus the TODO bookkeeping it actually closed; no in-repo goal archive
-participates — `docs/goals/archive/` holds the 000x lettered contracts only).
+worktree's HEAD `a3039f0d17fc7c7905b63bdf247cac5bf339b213` (`a3039f0`); every file, line and count in
+the baseline sections below was read or measured at that revision, and the fix-stage amendment
+points at the host-local evidence manifest for the re-measured fix bytes. Shape reference:
+`7ea9a9d` (refactor slice closed by a plan file under `docs/plans/` plus the TODO bookkeeping it
+actually closed; no in-repo goal archive participates — `docs/goals/archive/` holds the 000x
+lettered contracts only).
 
 ## The strict-Credo state being burned down
 
@@ -61,18 +63,19 @@ function, depth = the count of `if/unless/case/cond/for/fn/with` ancestors of th
 **≤ 2** on *all* paths, not only at the reported line — after a partial fix the issue simply
 re-appears at the next-deepest leaf:
 - `daemon_controller.ex:25` (`enroll/2`: `with` → `case` → `if`): bind the created/ok status through
-  a new `disposition_status/1` (`:created`/`_`), no `if` inside the `case`. Status mapping
-  `:created → 201`, otherwise `200` preserved.
+  the `created_or_ok/1` helper (`:created` → `:created`, `_` → `:ok`) — the same name
+  `task_controller.ex` uses — no `if` inside the `case`. Status mapping `:created → 201`, otherwise
+  `200` preserved.
 - `daemon_controller.ex:145` (`claim_with_provider_access/2`: `with` → `fn` → `with`): move the
   `Repo.transaction(fn -> … end)` body into `claim_in_transaction/3`; lock order
   (`Orchestration.claim_owner` → transaction → `ProviderAccess.lock_claim_scope`), the
   `Repo.rollback(reason)` branch, the returned `{run, task, provider_access, disposition}` tuple and
   `claim_provider_access_result/1` (emit only on `:created`, replay unchanged) are preserved.
-- `daemon_controller.ex:357` (`append_evidence/2`: `with` → `case` → `if` → `if`): extract the
-  `{:error, {:idempotency_conflict, fields}}` branch to `append_evidence_conflict/4` and the
-  `{:error, :idempotency_conflict}` branch to `idempotency_conflict_error/1`; the three-way envelope
-  policy (batch + valid details → `:idempotency_conflict` with fields; batch + invalid details →
-  `:invalid_request`; non-batch → `:idempotency_conflict`) is preserved verbatim.
+- `daemon_controller.ex:357` (`append_evidence/2`: `with` → `case` → `if` → `if`): route the
+  `{:error, {:idempotency_conflict, fields}}` branch through `append_evidence_conflict/3` and both
+  conflict branches through the shared `conflict_error/1`; the three-way envelope policy (batch +
+  valid details → `:idempotency_conflict` with fields; batch + invalid details → `:invalid_request`;
+  non-batch → `:idempotency_conflict`) is preserved verbatim.
 - `task_controller.ex:20` (`create/2`: `case` → `with` → `if`): bind the status through
   `created_or_ok/1`, used by `create/2` and the identical `command/2` status line so the file keeps
   one convention (`201` on `:created`, `200` otherwise).
@@ -96,29 +99,33 @@ to be listed in the current environment's `config :logger, :default_formatter, m
 (`…/warning/missed_metadata_key_in_logger_config.ex:124-137`). This tree declares
 `metadata: [:request_id]` only (`control/config/config.exs:59-61`), so `check: name`
 (`health_controller.ex:16`) is not in any formatter's metadata list — and `config/dev.exs:57`
-overrides the format without `$metadata`, so the key is rendered nowhere today. `config/**` is
-outside the owned set (W1-03 owns the ten lib files only), so the call site is the only place the
-issue can be fixed. Decision: fold the check name into the message —
-`Logger.error("health check failed: #{name}")` — which keeps the diagnostic (currently carried by a
-key the formatter drops) and removes the unconfigured key. The alternative, dropping the metadata
-and keeping the bare message, preserves the rendered line byte-for-byte but deletes the only copy of
-the failing check's name; rejected as the weaker fix. HTTP behaviour (`200` body with the four
-checks, `503` body on error) is untouched; no test asserts the log line (`health_controller_test.exs`
-asserts the 200 body only). This is the slice's single observable delta and is reported as such.
+overrides the format without `$metadata`, so the key is never rendered. `config/**` is outside the
+slice's owned set, so the call site is the only place the issue can be fixed: the shipped call is
+`Logger.error("health check failed")`, which keeps the rendered line byte-identical in every
+environment and drops the unconfigured `:check` key. Folding the name into the message was rejected
+in the R1 adjudication (contract clauses 1/3: no behaviour change); registering `:check` in
+`config/**` would change test/prod rendering, where `$metadata` is part of the format string. HTTP
+behaviour (`200` body with the four checks, `503` body on error) is untouched and the failing check's
+name stays in the `503` body; no test asserts the log line (`health_controller_test.exs` asserts the
+200 body only).
 
 7 — **AliasUsage**: `alias Plug.Conn.Status` at the top (alphabetically before the
 `SymmetryControlWeb.{…}` group) and call `Status.code(status)` at
 `portal_session_controller.ex:53`. The status-code value passed to `send_resp/3` is unchanged.
 
 9–10–11 — **WithSingleClause**: three single-clause `with`/`else` blocks in `plugs/auth.ex` become
-`case Protocol.machine_token(conn) do {:ok, token} -> …; {:error, :unauthenticated} -> … end`.
-`Protocol.machine_token/1` returns exactly `{:ok, binary} | {:error, :unauthenticated}`, so the
-`case` is total and the 401 (unknown/absent) / 403 (known-but-wrong class) mapping and the assigns
+a call to the new `Protocol.authenticate/2` (`protocol.ex:153-158`), which wraps
+`Protocol.machine_token/1` plus the shared 401/halt policy; each plug's `call/2` keeps only its
+credential-class dispatch. `Protocol.machine_token/1` returns exactly
+`{:ok, binary} | {:error, :unauthenticated}` and `authenticate/2` maps the error to the plug's 401,
+so the 401 (unknown/absent) / 403 (known-but-wrong class) mapping and the assigns
 (`:enrollment_token`, `:machine`) are preserved. The credential precedence stays in
 `Protocol.credential_class/1`; it is not touched.
 
-15 — **ModuleDoc**: `@moduledoc false` on `DaemonChannel`, matching every other module in the
-subtree (`@moduledoc false` is the repo's convention for undocumented private web modules).
+15 — **ModuleDoc**: `@moduledoc false` on `DaemonChannel`. In the ten files only 6 of the 12 modules
+carry `@moduledoc` (auth.ex ×3, portal_auth, protocol, daemon_channel) — the `*Controller`s and
+`UserSocket` are skipped by Credo's default `ignore_names` — and `@moduledoc false` is the repo's
+convention for undocumented private web modules.
 
 16 — `daemon_controller.ex:199`: bind `lease_duration_ms/0` (a one-line wrapper over
 `config(:lease_duration_ms)`) so the `renew_lease` clause fits 98 columns without touching the value
@@ -134,7 +141,7 @@ shape is confirmed against `mix format` output before the gates run.
 The credo dep lands in W1-02, which has not merged here (this worktree's `control/mix.exs` has no
 `credo` entry; `control/.credo.exs` does not exist). Per the contract amendment, credo is injected
 **only** into a throwaway `git archive HEAD control` copy under
-`C:/Users/lhan/.local/state/gdd/refactor/scratch/w1-03/`:
+the host scratch directory `<HOST-PATH>/refactor/scratch/w1-03/`:
 - `control/mix.exs` in the copy gains `{:credo, "~> 1.7", only: [:dev, :test], runtime: false}`;
   `deps/credo`, `deps/bunt`, `deps/file_system` are copied from the W1-02 worktree, which already
   resolved credo **1.7.19** (the version of the finding's baseline).
@@ -162,28 +169,31 @@ The credo dep lands in W1-02, which has not merged here (this worktree's `contro
 | E7 | full suite | left to the conductor gate-runner (never two full suites on this host) |
 
 Portable-toolchain recipe for this worktree:
-`C:/Users/lhan/.local/state/gdd/refactor/scratch/w1-03-mix.sh` (adapted from
+`<HOST-PATH>/refactor/scratch/w1-03-mix.sh` (adapted from
 `scratch/retro-g2-mix.sh`: `erl.exe` invoked directly, `MIX_TEST_PARTITION=rf-w1-03`,
 `PHX_SERVER`/`POSTGRES_PORT`/`SYMMETRY_CONTRACTS_DIR` unset).
 
 ## Behaviour-preservation oracle
 
-No test file is edited (test lint belongs to W1-13/W3; test bodies are outside the owned set). The
-oracle is the existing `test/symmetry_control_web/` suite — 17 files, including the route-level
-suites that exercise every pipeline the three auth plugs guard
-(`protocol_controller_test.exs`, `operator_read_controller_test.exs`,
-`provider_action_controller_test.exs`), the daemon fence/evidence receipts
-(`protocol_controller_test.exs`, `goal_machine_controller_test.exs`), the portal projection mounts
-(`goal_controller_test.exs`, `portal_session_test.exs`, `portal_workflow_test.exs`), the channel
-mount (`daemon_channel_test.exs`) and health (`health_controller_test.exs`). The two structural
-extractions with no direct unit test (`parse_event_time/1`, `token_header/1`) are covered through
-`append_events` and the socket connect path in `protocol_controller_test.exs`.
+Until the fix stage no test file was edited (test lint belongs to W1-13/W3); the fix stage adds four
+discriminating tests under the conductor's R4/R5 extension (see the fix-stage amendment below). The
+oracle is the `test/symmetry_control_web/` suite — 22 `.exs` files, including the route-level suites
+that exercise every pipeline the three auth plugs guard (`protocol_controller_test.exs`,
+`operator_read_controller_test.exs`, `provider_action_controller_test.exs`), the daemon
+fence/evidence receipts (`protocol_controller_test.exs`, `goal_machine_controller_test.exs`), the
+portal projection mounts (`goal_controller_test.exs`, `portal_session_test.exs`,
+`portal_workflow_test.exs`), the channel mount (`daemon_channel_test.exs`) and health
+(`health_controller_test.exs`). The two structural extractions with no direct unit test
+(`parse_event_time/1`, `token_header/1`) are covered through `append_events`
+(`protocol_controller_test.exs`) and the socket connect path (`daemon_channel_test.exs`), plus the
+fix-stage tests.
 
 ## Out of scope, with reasons
 
-- **Test-file lint issues** (31 in the subtree, incl. 15 AliasUsage in
-  `provider_action_controller_test.exs`): owned by W1-13 and the W3 batches; the contract excludes
-  them. Fixing them would collide with their writers.
+- **Test-file lint issues** (31 in the subtree: 19 AliasUsage, of which 11 sit in
+  `provider_action_controller_test.exs`, whose 15 issues in total include 4 other checks): owned by
+  W1-13 and the W3 batches; the contract excludes them. Fixing them would collide with their
+  writers, and the fix stage's own tests are written against the §10.1 instrument so they add none.
 - **`control/.credo.exs`**: W1-01 owns it; this slice only *uses* the §10.1 content as a local
   instrument. `--files-included`/positional narrowing does not work in Credo 1.7.19 (finding §5),
   hence the throwaway copy.
@@ -191,21 +201,51 @@ extractions with no direct unit test (`parse_event_time/1`, `token_header/1`) ar
 - **Other lib files** and **Styler** (D12/W6-11): contract excludes; Styler would mechanically
   recreate the alias-order/alias-usage families later, and re-doing them here would collide with it.
 - **`config/**`** (the logger metadata list): no wave-1 owner; adding `:check` to
-  `metadata: [:request_id]` would change formatter output for every environment, which is a wider
-  change than this slice's contract.
+  `metadata: [:request_id]` would change formatter output in test/prod, where `$metadata` is part of
+  the format string, which is a wider change than this slice's contract.
 - **`docs/TODO.md`**: no entry in it names credo/web-lint at `a3039f0` (checked), so this increment
   closes none; no TODO move is invented.
 
 ## Residual risks
 
-- `health_controller.ex` log text changes (`"health check failed"` → `"health check failed: <name>"`)
-  — the one observable delta, argued above; nothing asserts it.
+- `health_controller.ex`: the rendered log line is byte-identical to `a3039f0` in all three
+  environments; the never-rendered `:check` metadata key is dropped (MissedMetadataKeyInLoggerConfig
+  requires configured keys and `config/**` is outside the slice). No consumer; nothing asserts the
+  line.
 - Nesting depth is a whole-function property: a wrong extraction could leave a different leaf at
   depth 3; the after-run (E1/E2) is the oracle for the count, and E5 for the behaviour.
 - The §10.1 instrument is *my* reconstruction of W1-01's config (W1-01 has not written it yet). It
   uses the documented `checks.extra` form, preserves the default histogram exactly (474 → 528 = +32
   +22), and the ten-file result is recorded under both instruments so the re-measurement after
   W1-01/W1-02 merge is a diff of configs, not a new investigation.
-- The scratch tree holds HEAD's other lib/test files, so the project counts here are not the counts
-  CI will see after W1-02 (which deletes `telemetry.ex` and adds credo) and W1-13 merge; the
+- The scratch tree holds `a3039f0`'s other lib/test files (the fix-stage runs additionally copy in
+  the ten worktree lib files and the two edited test files), so the project counts here are not the
+  counts CI will see after W1-02 (which deletes `telemetry.ex` and adds credo) and W1-13 merge; the
   load-bearing numbers are the ten-file subset (0) and the same-tree drop (≥15).
+
+## Fix-stage amendment (2026-11-21, review R1–R5)
+
+The review of `a3039f0..77fd035` returned `DECISION_NEEDED`; the conductor adjudicated the five
+findings and extended the owned set to this plan file and to
+`control/test/symmetry_control_web/**` (except the three W1-13 portal files). Resolutions, all
+shipped by the fix stage:
+
+- **R1 (health log)** — decision 6 above rewritten: the shipped call is the bare
+  `Logger.error("health check failed")`. Rendering is byte-identical in dev/test/prod; the
+  unconfigured `:check` metadata key is gone, which is the only shape strict Credo accepts. Folding
+  the name into the message was reverted.
+- **R2 (decision drift)** — decisions 2/4/9–11 now name the shipped helpers (`created_or_ok/1`,
+  `append_evidence_conflict/3` + `conflict_error/1`, `Protocol.authenticate/2`).
+- **R3 (statistics)** — the module-count, suite-size, socket-connect and AliasUsage statements are
+  corrected to the verified numbers.
+- **R4/R5 (coverage)** — four discriminating tests added: `protocol_controller_test.exs` ("task
+  creation replays the stored task…", "provide_input accepts the four-key waiting_transition_id
+  fence", "events with invalid occurred_at values…") and `daemon_channel_test.exs` ("accepts a
+  mixed-case X-Symmetry-Token header…"). Each was shown red under its named swap:
+  `generation >= 0`; `is_binary(waiting_id)` dropped; the accept clause flipped to reject;
+  `parse_event_time/1` returning `:stale`; case-sensitive header matching; the header-name filter
+  dropped; `create/2` pinned to `:created`.
+
+Re-measured on the fix bytes: both instruments still report **0** issues in the ten files; the
+project totals and the mutation-run logs live in the slice's host-local evidence manifest
+(`<HOST-PATH>/refactor/scratch/w1-03/EVIDENCE-MANIFEST.md`), their single source.

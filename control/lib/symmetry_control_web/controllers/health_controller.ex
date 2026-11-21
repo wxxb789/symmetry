@@ -13,7 +13,7 @@ defmodule SymmetryControlWeb.HealthController do
       {:error, body} ->
         body.checks
         |> Enum.filter(fn {_name, status} -> status == "error" end)
-        |> Enum.each(fn {name, _status} -> Logger.error("health check failed: #{name}") end)
+        |> Enum.each(fn {_name, _status} -> Logger.error("health check failed") end)
 
         conn
         |> put_status(:service_unavailable)
