@@ -1908,3 +1908,29 @@ func TestLinuxCloneDirectoryOpenFlagsStayByteIdentical(t *testing.T) {
 		t.Fatalf("configured-path component flags = %#x, want %#x", linuxCloneConfiguredPathComponentFlags, unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW)
 	}
 }
+
+// TestLinuxCloneTrustedPathRefusesSymlinkedComponent pins the trusted walk's
+// Fstatat(AT_SYMLINK_NOFOLLOW) pre-stat: a component that is a symlink must be
+// refused by the pre-stat's kind check, because the open step that follows would
+// otherwise change the refusal to the "pin configured root component" wrapping.
+// Red mutant M6: drop AT_SYMLINK_NOFOLLOW from the pre-stat, which lets the walk
+// reach the open and changes this message.
+func TestLinuxCloneTrustedPathRefusesSymlinkedComponent(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "target")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	fd, _, err := openLinuxCloneDirPath(link)
+	if fd != -1 {
+		_ = unix.Close(fd)
+		t.Fatalf("openLinuxCloneDirPath(symlinked component) = descriptor %d, want no descriptor", fd)
+	}
+	if want := `configured directory component "link" is not a real directory`; err == nil || err.Error() != want {
+		t.Fatalf("openLinuxCloneDirPath(symlinked component) error = %v, want %q", err, want)
+	}
+}

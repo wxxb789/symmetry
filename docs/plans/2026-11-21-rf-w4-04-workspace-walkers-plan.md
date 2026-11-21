@@ -16,7 +16,7 @@ existing test files. No evidence file: as in the sibling control and daemon incr
 the judging artifact is the stage's `answer.md`; the tables clause 2 demands are also
 reproduced here.
 
-## Deliverable shape (three production pieces, four new pins)
+## Deliverable shape (three production pieces, five new pins)
 
 1. **One `openat2` directory opener.** `openLinuxCloneDirAtFlags(parentFD, name, accessFlags)`
    replaces `openLinuxCloneOPathDirAt` (`:206-225`) and `openLinuxCloneDirAt`
@@ -26,7 +26,9 @@ reproduced here.
    literals (clause 2). Every at-call site passes its own access flag; the two path-level
    3-line callers `openLinuxCloneDirPath`/`openLinuxCloneOPathDirPath` (`:97-103`) stay as
    they are. `openLinuxCloneFileAt` (`:1274-1280`) is **not** unified (contract: caller-flags
-   file opener).
+   file opener). The opener reads its post-open `Fstat` through
+   `readLinuxClonePinnedDirectory`, so the release-on-failure mechanic has one spelling in
+   this file.
 2. **One fd-stepping core for the two configured-path walkers.** `openLinuxClonePinnedChild`
    (openat with the shared descriptor flags, parent released) and
    `readLinuxClonePinnedDirectory` (Fstat, descriptor released on failure) are the only
@@ -47,18 +49,27 @@ reproduced here.
    compatibility shim, so that line is the only edit outside the contract's owned file
    list. It changes no behaviour, no string and no control flow in `artifact.go` (the
    before/after error-literal diff for that file is empty).
-4. **Four new pins in existing test files**, one per refusal site touched and one per flag
-   surface, each with a named red mutant:
+4. **Five new pins in existing test files**, one per refusal site touched, one per flag
+   surface and one for the trusted walk's pre-stat order, each with a named red mutant:
    - `TestCleanupRefusesLinuxCloneWithoutStoreReadback` — `workspace.go`;
    - `TestFingerprintRefusesLinuxCloneIdentityMismatch` — `fingerprint.go` branch;
    - `TestVerifySubjectRefusesUnmanagedWorktree` — `subject.go` guard;
    - `TestLinuxCloneDirectoryOpenFlagsStayByteIdentical` — the `OpenHow` and walk-core flag
-     sets, including `RESOLVE_NO_XDEV`.
+     sets, including `RESOLVE_NO_XDEV`;
+   - `TestLinuxCloneTrustedPathRefusesSymlinkedComponent` — the trusted walk's
+     `Fstatat(AT_SYMLINK_NOFOLLOW)` pre-stat order (apply-stage coverage pin; the other
+     four are the implement-stage pins).
 
 No shared `requireManaged()` predicate is added: the three guard sites have different
 predicates, outcomes and strings, and E4 drops that unification. `workspace.go` and
-`fingerprint.go` therefore get pins only, no production edit; `linux_clone_linux.go` is
-untouched (the clone `Prepared` literal needs no shared predicate once E4 lands).
+`fingerprint.go` therefore get pins only, no production edit. In `linux_clone_linux.go`
+only the three `openLinuxCloneDirAt` call sites are migrated to `openLinuxCloneDirAtFlags`,
+because change (1) deletes that wrapper and the repository rules forbid a compatibility
+shim; nothing else in the file changes, and the clone `Prepared` literal still needs no
+shared predicate once E4 lands. Reconciliation: the contract's owned-set parenthetical for
+this file ("only if the linuxClone Prepared-identity construction consumes a shared
+predicate") does not literally cover that call-site migration; the call-site table below
+records it as the "3 lifecycle" sites, and it follows from the clean cutover.
 
 ## Public / API shape
 
@@ -167,6 +178,7 @@ matter most:
 | `TestFingerprintRefusesLinuxCloneIdentityMismatch` | `fingerprint.go` identity branch, both strings | drop the `prepared.Path != prepared.linuxCloneTarget` term (identity case); `if !validLinuxCloneFingerprint` becomes `if false` (digest case) |
 | `TestVerifySubjectRefusesUnmanagedWorktree` | `subject.go` managed/binding refusal, code + string | drop `!prepared.managed` from the guard predicate |
 | `TestLinuxCloneDirectoryOpenFlagsStayByteIdentical` | `OpenHow` request + walk-core flag consts | drop `RESOLVE_NO_XDEV` from `linuxCloneDirOpenHow`; drop `O_NOFOLLOW` from `linuxCloneConfiguredPathComponentFlags` |
+| `TestLinuxCloneTrustedPathRefusesSymlinkedComponent` | trusted walk's `Fstatat(AT_SYMLINK_NOFOLLOW)` pre-stat order + the `configured directory component %q is not a real directory` string | drop `AT_SYMLINK_NOFOLLOW` from the pre-stat (the walk then reaches the open) |
 
 The flag pin is the required oracle for `RESOLVE_NO_XDEV`, because the pre-existing
 bind-mount case `TestLinuxCloneOPathRootAllowsMountedRootButForbidsNestedMount`
@@ -198,7 +210,7 @@ From `daemon/` unless a `cd` is shown; `<WT>` is the worktree root.
    `python scripts/ci/check-citation-existence.py --base c9ed23b4 --head HEAD`.
 7. Mutants: one row per pin in the table below, each applied as a one-line patch to the
    production file, run with `go test -count=1 -run <pin> ./internal/workspace/`
-   (Windows for the three cross-platform pins, WSL for the flag pin), then reverted through
+   (Windows for the three cross-platform pins, WSL for the two Linux-only pins), then reverted through
    the same patch tool; every mutant is expected to redden exactly its pin and the reverted
    tree to leave the suites green.
 8. Error-string byte-compare: `git show c9ed23b4:<file> | diff - <file>` restricted to the
@@ -224,7 +236,7 @@ each, with no other line touched:
 | owned walk component open | 2 | `openLinuxClonePinnedChild` + raw error passthrough | yes |
 | owned walk read (component and final) | 2 each | `readLinuxClonePinnedDirectory` + raw error passthrough | yes |
 | owned walk kind check + ownership/mode policy | 4 | untouched lines | yes |
-| directory opener pair → `openLinuxCloneDirAtFlags` + `linuxCloneDirOpenHow` | 4 (openat2 error, fstat error, kind error, success) | identical branch order, one access-flag parameter; both former call sites keep their access flag (`O_PATH`/`O_RDONLY`) | yes |
+| directory opener pair → `openLinuxCloneDirAtFlags` + `linuxCloneDirOpenHow` | 4 (openat2 error, fstat error, kind error, success) | identical branch order, one access-flag parameter; both former call sites keep their access flag (`O_PATH`/`O_RDONLY`); the fstat failure closes through `readLinuxClonePinnedDirectory`, the same release-on-failure mechanic the walkers use | yes |
 | `MaterializeSubject` inline materialization → `materializeAdmittedSubject` | 5 (identity, commit unreachable, digest, subject validate, success) | the shared function holds the first three verbatim; the caller keeps `subject.Validate()` and its exact `SubjectError` | yes |
 
 No branch is added or removed anywhere: the shared materialization function validates
@@ -240,6 +252,7 @@ nothing, so no caller gains or loses a refusal.
 | M3 drop `!prepared.managed` from the `verifyPreparedSubject` guard | `TestVerifySubjectRefusesUnmanagedWorktree` | FAIL, exit 1 on the "unmanaged with repository" case; the message becomes `workspace binding "primary" is not configured` |
 | M4 drop `RESOLVE_NO_XDEV` from `linuxCloneDirOpenHow` | `TestLinuxCloneDirectoryOpenFlagsStayByteIdentical` (WSL) | FAIL: `resolve 0xe, want resolve 0xf` |
 | M5 drop `O_NOFOLLOW` from `linuxCloneConfiguredPathComponentFlags` | same pin (WSL) | FAIL: `component flags = 0x90000, want 0xb0000` |
+| M6 drop `AT_SYMLINK_NOFOLLOW` from the trusted walk pre-stat | `TestLinuxCloneTrustedPathRefusesSymlinkedComponent` (WSL) | FAIL, exit 1: `openLinuxCloneDirPath(symlinked component) error = pin configured root component "link": not a directory, want "configured directory component \"link\" is not a real directory"` |
 
 M3 is why the pin carries an "unmanaged with repository" case: without it the mutant stayed
 green, because the first case had an empty repository and root as well. Every mutant was
@@ -288,12 +301,14 @@ access flags plus the two descriptor-flag constants), and the identity rechecks
 ### dLOC (report-only per D2)
 
 Production lines (non-comment, non-blank) over the six touched files: base 5676 → HEAD
-5656, **−20 net** (`linux_clone_fs_linux.go` 1633 → 1626, `subject.go` 835 → 822, the other
-four unchanged). Raw line counts rise by 20 because the new core, the flag constants and
-the extracted functions carry doc comments. The contract's plan-row projection (−130…−175)
-assumed the pre-review shape — a walker driver with policy callbacks plus the single
-`requireManaged()` guard — and the binding E4 and walker-shape decisions remove both from
-scope, so the delivered reduction is the fd-stepping core plus the materialize helper.
+5655, **−21 net** (`linux_clone_fs_linux.go` 1633 → 1625, `subject.go` 835 → 822, the other
+four unchanged; the apply-stage F1 dedup moved the opener's fstat release into
+`readLinuxClonePinnedDirectory`, one further line). Raw line counts rise by 19 because the
+new core, the flag constants and the extracted functions carry doc comments. The contract's
+plan-row projection (−130…−175) assumed the pre-review shape — a walker driver with policy
+callbacks plus the single `requireManaged()` guard — and the binding E4 and walker-shape
+decisions remove both from scope, so the delivered reduction is the fd-stepping core plus
+the materialize helper.
 
 ### Gates
 
@@ -312,24 +327,24 @@ working directory for Go commands.
 | build linux/arm64 | `GOOS=linux GOARCH=arm64 go build ./...` | exit 0 |
 | focused windows pins | `go test -count=1 -v -run 'TestCleanupRefusesLinuxCloneWithoutStoreReadback\|TestFingerprintRefusesLinuxCloneIdentityMismatch\|TestVerifySubjectRefusesUnmanagedWorktree' ./internal/workspace/` | 3 PASS, exit 0 |
 | linux suite (WSL, base tree) | `wsl -d Ubuntu-24.04 -u accept` → `cd /tmp/rf-w4-04-base/daemon && go test -count=1 -v ./internal/workspace/` | `ok 49.106s`, exit 0; PASS 91, FAIL 0, SKIP 2 |
-| linux suite (WSL, HEAD) | same command in the worktree | `ok 95.511s`, exit 0; PASS 95, FAIL 0, SKIP 2 |
+| linux suite (WSL, HEAD) | same command in the worktree | `ok 50.992s`, exit 0; PASS 96, FAIL 0, SKIP 2 (implement-stage run: `ok 95.511s`, PASS 95) |
 | skip list (identical both sides) | `TestLinuxCloneOPathRootAllowsMountedRootButForbidsNestedMount` — `bind mounts unavailable; mounted root traversal was verified: operation not permitted`; `TestSubjectMeasurementWitness` — requires `SYMMETRY_SUBJECT_WITNESS_*` | no new skips |
-| new pins under Linux | `-run 'TestLinuxCloneDirectoryOpenFlagsStayByteIdentical'` (WSL) | PASS 0.04s, exit 0 |
+| new pins under Linux | `-run 'TestLinuxCloneDirectoryOpenFlagsStayByteIdentical'` (WSL) | PASS 0.04s, exit 0; apply-stage re-run adds the symlink pin: `-run 'TestLinuxCloneDirectoryOpenFlagsStayByteIdentical\|TestLinuxCloneTrustedPathRefusesSymlinkedComponent'` → 2 PASS (0.00s / 0.01s), exit 0 |
 | citation gate | `python scripts/ci/check-citation-existence.py --base c9ed23b4 --head HEAD` (and `--base b89e14d7`) | `no audited document added or modified … nothing to check`, exit 0 both |
 | whitespace | `git diff --check` | exit 0 |
 | host-path hygiene | `git diff c9ed23b4 \| grep -icE "users[/][a-z]"` | 0 |
 | backslash-u hygiene | grep the delivered diff for the program rule's DLP trigger (a backslash immediately before a `u`) | 0 |
 | removed-symbol leftovers | `grep -rn 'openLinuxCloneDirAt(\|openLinuxCloneOPathDirAt('` over the module | 0 |
-| advisory lint (windows) | `golangci-lint run -c .golangci.yml --max-issues-per-linter=0 --max-same-issues=0 ./internal/workspace/...` | HEAD 14 issues (errcheck 1, errorlint 9, exhaustive 1, gocritic 1, gocyclo 1, staticcheck 1), exit 1; base 15 issues with the same set plus one `unparam` finding; normalized finding sets identical apart from that removal |
+| advisory lint (windows) | `golangci-lint run -c .golangci.yml --max-issues-per-linter=0 --max-same-issues=0 ./internal/workspace/...` | HEAD 14 issues (errcheck 1, errorlint 9, exhaustive 1, gocritic 1, gocyclo 1, staticcheck 1), exit 1; base 15 issues with the same set plus one `unparam` finding; normalized finding sets identical apart from that removal; apply-stage re-run identical (14 issues) |
 | host workspace suite (baseline, pre-change) | `go test -count=1 ./internal/workspace/` on `c9ed23b4` | `ok 164.123s`, exit 0 |
 | host workspace suite (attempt 1) | same command on the delivered tree | TIMEOUT after 10m0s in `TestRecoverSubjectRevalidatesCommitAfterJournalLoss` → `prepareWorktreeAt` → `git worktree add` child (`CreateProcess`/`WaitForSingleObject`), exit 1 |
 | host workspace suite (attempt 2) | same command | TIMEOUT after 10m0s in `TestPrepareReleasesCreatedReservationAfterFailedAdd` → `newRepository` → `git init` (`CreateProcess` stalled in the syscall), exit 1 |
 | stall suspect isolated | `go test -count=1 -v -run 'TestRecoverSubjectRevalidatesCommitAfterJournalLoss' ./internal/workspace/` | PASS 17.07s, exit 0 |
-| focused red/green set (host) | `go test -count=1 ./internal/workspace/ -run 'TestLinuxClone\|TestSubject\|TestWorkspace\|TestFingerprint'` | `ok 73.905s`, exit 0 |
+| focused red/green set (host) | `go test -count=1 ./internal/workspace/ -run 'TestLinuxClone\|TestSubject\|TestWorkspace\|TestFingerprint'` | `ok 73.905s`, exit 0 (apply-stage re-run: `ok 201.569s`, exit 0) |
 | host app suite (attempt 1) | `go test -count=1 ./internal/app/...` | TIMEOUT after 10m0s in `TestDefinitiveStopRejectionClosesRetainedSession` → `state.ensurePrivateDirectory` → `os.MkdirAll` stalled in `CreateDirectory`, exit 1 |
-| harness consumers (host) | `go test -count=1 ./internal/harness/pi/ ./internal/harness/omp/ ./internal/harness/omo/` | `ok` 16.326s / 16.280s / 13.875s, exit 0 |
-| host workspace suite (retry, 30m budget) | `go test -count=1 -timeout 30m ./internal/workspace/...` | `ok 304.939s`, exit 0, 0 `--- FAIL` |
-| host app suite (retry, 30m budget) | `go test -count=1 -timeout 30m ./internal/app/...` | `ok 438.903s`, exit 0, 0 `--- FAIL` |
+| harness consumers (host) | `go test -count=1 ./internal/harness/pi/ ./internal/harness/omp/ ./internal/harness/omo/` | `ok` 16.326s / 16.280s / 13.875s, exit 0 (apply-stage re-run: 12.694s / 6.765s / 5.782s, exit 0) |
+| host workspace suite (retry, 30m budget) | `go test -count=1 -timeout 30m ./internal/workspace/...` | `ok 304.939s`, exit 0, 0 `--- FAIL` (apply-stage re-run: `ok 635.051s`, exit 0) |
+| host app suite (retry, 30m budget) | `go test -count=1 -timeout 30m ./internal/app/...` | `ok 438.903s`, exit 0, 0 `--- FAIL` (apply-stage re-run: `ok 255.897s`, exit 0) |
 | advisory lint base re-run | `golangci-lint run … --timeout 20m` in the extracted base tree | 15 issues, exit 1; the complete base side of the row above |
 
 Load note for the two host timeouts: throughout these runs, other sessions on the same host
@@ -367,10 +382,11 @@ its tests, so nothing is closed or moved.
   close after the policy checks, which changes the per-component syscall sequence the
   contract freezes. The cost is that the two loops stay textual duplicates apart from the
   mechanics.
-- The trusted walk's pre-stat and the owned walk's post-open verify are pinned by
-  behaviour (`linux_clone_linux_test.go`) and by the mutant-based pins only indirectly:
-  removing the pre-stat would change the trusted order without changing any refusal string
-  this slice pins. The contract's mitigation is the audit table above plus the unchanged
-  test bodies.
+- The trusted walk's pre-stat order is pinned by
+  `TestLinuxCloneTrustedPathRefusesSymlinkedComponent` (red under mutant M6, which drops
+  `AT_SYMLINK_NOFOLLOW`): a symlinked component must be refused by the pre-stat, because the
+  open that follows would change the refusal to the `pin configured root component %q`
+  wrapping. The owned walk's post-open verify order has no refusal-string oracle; its
+  evidence is the audit table above plus the unchanged test bodies.
 - Mount-crossing behaviour (`RESOLVE_NO_XDEV`) is asserted flag-level on every host and
   behaviourally only where the pre-existing bind-mount test is not skipped.

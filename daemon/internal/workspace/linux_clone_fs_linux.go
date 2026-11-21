@@ -260,9 +260,8 @@ func openLinuxCloneDirAtFlags(parentFD int, name string, accessFlags int) (int, 
 	if err != nil {
 		return -1, err
 	}
-	var info unix.Stat_t
-	if err := unix.Fstat(fd, &info); err != nil {
-		_ = unix.Close(fd)
+	info, err := readLinuxClonePinnedDirectory(fd)
+	if err != nil {
 		return -1, err
 	}
 	if info.Mode&unix.S_IFMT != unix.S_IFDIR {

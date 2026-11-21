@@ -308,12 +308,12 @@ func (manager *Manager) verifyPreparedSubject(ctx context.Context, prepared Prep
 // materializeAdmittedSubject is the single materialization path for an admitted
 // subject identity: it validates the identity pair, proves that the exact
 // commit is reachable in the resolved repository's object database and derives
-// the committed tree digest. MaterializeSubject, PrepareSubject and
-// RecoverSubject all derive through it; VerifySubject and DeriveSubject read
-// the same object database through it after establishing a prepared worktree's
-// own identity. It validates nothing about the derived subject: every caller
-// keeps its own subject.Validate() call and the exact SubjectError construction
-// that belongs to it.
+// the committed tree digest. It validates nothing about the derived subject:
+// MaterializeSubject, PrepareSubject, RecoverSubject, VerifySubject,
+// DeriveSubject and ReadSubjectArtifact all derive through it and keep their own
+// subject checks and SubjectError construction; DeriveSubject keeps its
+// resource-ID check, which is the only identity check it needs before the
+// shared materialization.
 func (manager *Manager) materializeAdmittedSubject(ctx context.Context, bindingKey, repository, resourceID, commit string) (protocol.Subject, error) {
 	if err := validateSubjectIdentity(resourceID, commit); err != nil {
 		return protocol.Subject{}, err
