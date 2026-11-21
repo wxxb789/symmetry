@@ -60,7 +60,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   @omp_harness_kind_migration_version 20_261_114_010_000
 
   test "upgrades legacy rows without assigning their textual goal to durable Goal history" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       project_id = insert_project!()
       work_item_id = insert_work_item!(project_id)
       task_id = insert_legacy_task!("Legacy textual goal")
@@ -92,7 +92,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "backfills only provably provider-free active legacy claim replays" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       machine_id = Ecto.UUID.bingenerate()
       runtime_id = Ecto.UUID.bingenerate()
       provider_free_task_id = insert_legacy_task!("Provider-free claim replay")
@@ -245,7 +245,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "provider access snapshots roll back and reapply on a clean tree" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_provider_access_snapshot_up!()
       migrate_provider_access_snapshot_down!()
 
@@ -264,7 +264,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "backfills and freezes the Task runtime policy snapshot" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_goal_up!()
       migrate_terminal_policy_up!()
 
@@ -321,7 +321,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "direct SQL runtime policy snapshots compare unique members as a set" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_goal_up!()
       migrate_terminal_policy_up!()
 
@@ -441,7 +441,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
     ]
 
     Enum.each(invalid_policies, fn {_label, runtime_ids} ->
-      with_schema(fn ->
+      with_base_schema(fn ->
         migrate_goal_up!()
         migrate_terminal_policy_up!()
 
@@ -490,7 +490,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "goal-less schemas roll back and reapply the runtime policy snapshot" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_goal_up!()
       migrate_terminal_policy_up!()
       legacy_task_id = insert_legacy_task!("Clean runtime policy snapshot rollback")
@@ -526,7 +526,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "migrated goal-less legacy tasks pass the existing lifecycle changesets" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       project_id = insert_project!()
       work_item_id = insert_work_item!(project_id)
       task_id = insert_legacy_task!("Legacy lifecycle task")
@@ -577,7 +577,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "permits the documented legacy generic runtime adapter" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_goal_up!()
       machine_id = Ecto.UUID.bingenerate()
       runtime_id = Ecto.UUID.bingenerate()
@@ -609,7 +609,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "adds OMP runtime and session kinds without admitting unknown kinds or losing retained identities" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_goal_up!()
       %{runtime_id: runtime_id, session_id: session_id} = insert_harness_session_fixture!()
 
@@ -702,7 +702,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "enforces Goal-owned membership, validation identity, and one active task per WorkItem" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_goal_up!()
 
       %{goal_id: goal_id, project_id: project_id, work_item_id: work_item_id} =
@@ -776,7 +776,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "enforces the planning Task and ContextSnapshot ownership branch" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_goal_up!()
       migrate_integration_designation_up!()
 
@@ -880,7 +880,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "retains incompatible existing planning WIP by refusing its destructive reinterpretation" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_goal_up!()
       %{goal_id: goal_id, work_item_id: work_item_id} = insert_goal_fixture!()
 
@@ -896,7 +896,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "planning Task identity guards roll back and reapply on a clean tree" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_goal_up!()
       migrate_integration_designation_up!()
       migrate_baseline_up!()
@@ -927,7 +927,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "enforces composite ownership and immutable Goal history" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_goal_up!()
       %{goal_id: goal_id, work_item_id: work_item_id} = insert_goal_fixture!()
       snapshot_id = Ecto.UUID.bingenerate()
@@ -966,7 +966,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "rejects deletion of a resolved Goal decision" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_goal_up!()
       %{goal_id: goal_id} = insert_goal_fixture!()
       decision_id = insert_resolved_goal_decision!(goal_id)
@@ -981,7 +981,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "stores an immutable full candidate Subject and producer result identity with each outcome" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_goal_up!()
 
       assert %{rows: [["candidate_subject", "NO"], ["producing_result_id", "NO"]]} =
@@ -1005,7 +1005,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "enforces canonical UUIDs in Goal JSON arrays at the SQL boundary" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_goal_up!()
 
       assert %{rows: [[true]]} =
@@ -1031,7 +1031,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "enforces the run usage cost basis and amount invariant in SQL" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_goal_up!()
       task_id = insert_legacy_task!("Usage invariant")
       machine_id = Ecto.UUID.bingenerate()
@@ -1086,7 +1086,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "refuses destructive rollback after Goal history and preserves it" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_goal_up!()
       %{goal_id: goal_id} = insert_goal_fixture!()
 
@@ -1105,7 +1105,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "refuses destructive rollback while a harness session exists" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_goal_up!()
       machine_id = Ecto.UUID.bingenerate()
       runtime_id = Ecto.UUID.bingenerate()
@@ -1165,7 +1165,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "rolls back a schema with no Goal history without disturbing legacy rows" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       project_id = insert_project!()
       work_item_id = insert_work_item!(project_id)
       task_id = insert_legacy_task!("No durable Goal")
@@ -1200,7 +1200,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "refuses rollback when inferred legacy membership is no longer the current pointer" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       project_id = insert_project!()
       original_work_item_id = insert_work_item!(project_id)
       replacement_work_item_id = insert_work_item!(project_id)
@@ -1237,7 +1237,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "applies the Goal control plane before its Oban jobs dependency" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_goal_up!()
       migrate_oban_up!()
 
@@ -1253,7 +1253,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "refuses Oban rollback while an incomplete Goal worker remains queued" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_goal_up!()
 
       assert %{rows: [[oban_jobs_before]]} =
@@ -1301,7 +1301,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "adds nullable runtime repository affinity without invalidating old runtimes" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_goal_up!()
       machine_id = Ecto.UUID.bingenerate()
       runtime_id = Ecto.UUID.bingenerate()
@@ -1351,7 +1351,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "refuses runtime affinity rollback while a runtime binding exists" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_goal_up!()
       machine_id = Ecto.UUID.bingenerate()
       runtime_id = Ecto.UUID.bingenerate()
@@ -1419,7 +1419,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "requires repository resources when runtime affinity is inserted or changed" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_runtime_affinity_up!()
 
       project_id = insert_project!()
@@ -1473,7 +1473,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "holds the repository resource share lock while recording a runtime binding" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_runtime_affinity_up!()
       migrate_runtime_affinity_guard_up!()
 
@@ -1556,7 +1556,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "freezes resources bound by any runtime while permitting presentation updates and safe rollback" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_runtime_affinity_up!()
       migrate_runtime_affinity_guard_up!()
 
@@ -1618,7 +1618,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "persists integration designation only for Goal WorkItems and rejects mutation after admission" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_goal_up!()
       migrate_integration_designation_up!()
 
@@ -1658,7 +1658,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "refuses integration designation rollback while a designation would be lost" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_goal_up!()
       migrate_integration_designation_up!()
       %{goal_id: goal_id, project_id: project_id} = insert_goal_fixture!()
@@ -1676,7 +1676,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "persists nullable immutable Goal change targets without rewriting goal-less items" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_goal_up!()
       migrate_integration_designation_up!()
       migrate_baseline_up!()
@@ -1796,7 +1796,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "rolls back change-target storage when no frozen target exists" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_goal_up!()
       migrate_integration_designation_up!()
       migrate_baseline_up!()
@@ -1815,7 +1815,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "adds nullable baseline sources and rolls back when no source is present" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_goal_up!()
       migrate_integration_designation_up!()
       %{work_item_id: goal_work_item_id} = insert_goal_fixture!(execution_policy_json(), true)
@@ -1855,7 +1855,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "refuses baseline guards when admitted history lacks an integration WorkItem" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_goal_up!()
       migrate_integration_designation_up!()
       insert_goal_fixture!()
@@ -1867,7 +1867,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "requires an integration WorkItem for each nonempty admitted revision at commit" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_goal_up!()
       migrate_integration_designation_up!()
       migrate_baseline_up!()
@@ -1929,7 +1929,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "requires a baseline for new Goal ownership but preserves historic NULL baselines" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_goal_up!()
       migrate_integration_designation_up!()
 
@@ -1989,7 +1989,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "enforces immutable exact-resource and declared-dependency baseline sources" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_goal_up!()
       migrate_integration_designation_up!()
       migrate_baseline_up!()
@@ -2228,7 +2228,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "retains Goal WorkItems while legacy project deletion nilifies legacy task pointers" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_goal_up!()
       migrate_integration_designation_up!()
 
@@ -2268,7 +2268,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "enforces Goal repository project and kind identity and freezes referenced resources" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_goal_up!()
       migrate_integration_designation_up!()
 
@@ -2320,7 +2320,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "freezes Goal WorkItem and Task admission identity while allowing lifecycle updates" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_goal_up!()
       migrate_integration_designation_up!()
 
@@ -2369,7 +2369,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "refuses identity guard rollback after Goal history exists" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_goal_up!()
       migrate_integration_designation_up!()
       %{goal_id: goal_id} = insert_goal_fixture!(execution_policy_json(), true)
@@ -2385,7 +2385,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "permits released session reuse while retaining historical run identity" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_goal_up!()
       migrate_integration_designation_up!()
 
@@ -2520,7 +2520,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "adds a per-attachment binding and immutable stop receipt history" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_goal_up!()
 
       %{
@@ -2755,7 +2755,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "rolls back stop receipt storage only after every legacy session is closed" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_goal_up!()
       %{session_id: session_id} = insert_harness_session_fixture!()
 
@@ -2782,7 +2782,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "adds immutable attach receipt storage without reconstructing legacy history" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_goal_up!()
       migrate_session_stop_receipt_up!()
       migrate_session_attach_receipt_up!()
@@ -2808,7 +2808,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "guards terminal Goal authority, terminal decisions, and exact execution policies in SQL" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_goal_up!()
       %{goal_id: goal_id, project_id: project_id} = insert_goal_fixture!()
 
@@ -2967,7 +2967,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "guards terminal Goal parent authority while preserving nonterminal decisions and late audit history" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_goal_up!()
       migrate_terminal_policy_up!()
       migrate_terminal_authority_up!()
@@ -3101,7 +3101,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "uses final deferred session and run rows while retaining completed run session history" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_goal_up!()
       migrate_integration_designation_up!()
 
@@ -3200,7 +3200,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "refuses inconsistent legacy session and run rows before installing final-state reciprocity" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_goal_up!()
       migrate_integration_designation_up!()
       migrate_baseline_up!()
@@ -3232,7 +3232,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "refuses a legacy terminal Run that remains active in a session" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_goal_up!()
       migrate_integration_designation_up!()
       migrate_baseline_up!()
@@ -3270,7 +3270,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "terminal authority and final-state reciprocity guards roll back only without protected Goal or active session history" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_goal_up!()
       migrate_integration_designation_up!()
 
@@ -3307,7 +3307,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "refuses terminal policy rollback after protected history exists" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_goal_up!()
       %{goal_id: goal_id} = insert_goal_fixture!()
 
@@ -3329,7 +3329,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "normalizes immutable legacy execution policies additively without rewriting explicit values" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_goal_up!()
       %{goal_id: goal_id} = insert_goal_fixture!()
 
@@ -3368,7 +3368,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "rolls terminal policy guards back and reapplies after default-only legacy normalization" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_goal_up!()
       %{goal_id: goal_id} = insert_goal_fixture!()
       migrate_terminal_policy_up!()
@@ -3401,7 +3401,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
           {%{"hard_cost_limit_required" => "false"},
            ~r/cannot add exact execution policy guard while revisions contain an invalid hard-cost-limit requirement/i}
         ] do
-      with_schema(fn ->
+      with_base_schema(fn ->
         migrate_goal_up!()
         %{goal_id: goal_id} = insert_goal_fixture!()
         insert_goal_revision_policy!(goal_id, 2, legacy_execution_policy_json(overrides))
@@ -3412,7 +3412,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "terminal policy migration rolls back and reapplies on a clean schema" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_goal_up!()
       migrate_terminal_policy_up!()
       migrate_terminal_policy_down!()
@@ -3438,7 +3438,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "persists only immutable, terminal, same-scope handoff source Run lineage" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_goal_up!()
       migrate_integration_designation_up!()
 
@@ -3735,7 +3735,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   test "serializes handoff lineage admission against source and Goal authority changes" do
-    with_schema(fn ->
+    with_base_schema(fn ->
       migrate_goal_up!()
       migrate_integration_designation_up!()
 
@@ -3828,28 +3828,13 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
     end)
   end
 
-  defp with_schema(test) do
+  defp with_base_schema(test) do
     load_migration_modules!()
 
-    schema =
-      "goal_0006_migration_#{System.system_time(:microsecond)}_#{System.unique_integer([:positive])}"
-
-    create_schema!(schema)
-
-    try do
-      repo = start_schema_repo(schema)
-      previous_dynamic_repo = Repo.put_dynamic_repo(repo)
-
-      try do
-        migrate_base_up!()
-        test.()
-      after
-        Repo.put_dynamic_repo(previous_dynamic_repo)
-        GenServer.stop(repo)
-      end
-    after
-      drop_schema!(schema)
-    end
+    with_schema("goal_0006_migration_#{System.system_time(:microsecond)}", fn ->
+      migrate_base_up!()
+      test.()
+    end)
   end
 
   defp migrate_base_up! do

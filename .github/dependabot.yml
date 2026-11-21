@@ -1,0 +1,33 @@
+# Dependabot version updates for the four package ecosystems this repository
+# depends on (refactor slice W1-01). The advisory CI metrics added beside this
+# file make the current exposure of the three lockfile-bearing ecosystems
+# (gomod, mix, npm) visible on every run; this file is how those pins move
+# after the exposure is visible.
+#
+# No update groups: each pull request stays one reviewable bump, and the weekly
+# cadence with a small open-pull-requests ceiling bounds the noise.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /daemon
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+  - package-ecosystem: mix
+    directory: /control
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+  - package-ecosystem: npm
+    # One entry for the whole pnpm workspace: `contracts/`, `frontend/` and
+    # `browser/` share the root `pnpm-lock.yaml`, which is the repository's only
+    # lockfile on the npm side (`pnpm-workspace.yaml`).
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5

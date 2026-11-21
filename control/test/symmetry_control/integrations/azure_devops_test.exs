@@ -247,6 +247,25 @@ defmodule SymmetryControl.Integrations.AzureDevOpsTest do
     HTTPStub.verify!()
   end
 
+  test "short-circuits a work item without a pull request before authenticating" do
+    Application.put_env(
+      :symmetry_control,
+      :integration_auth_provider,
+      __MODULE__.AuthMustNotBeCalledStub
+    )
+
+    HTTPStub.expect([])
+
+    assert {:ok, nil} ==
+             AzureDevOps.sync_delivery(
+               %{account_ref: "acme", auth_type: "entra_id", capabilities: []},
+               %{kind: "repository", external_ref: "Platform/symmetry"},
+               %{pull_request_url: nil}
+             )
+
+    HTTPStub.verify!()
+  end
+
   test "synchronizes a separately bound Azure Pipelines resource" do
     HTTPStub.expect([
       %{
@@ -904,5 +923,13 @@ defmodule SymmetryControl.Integrations.AzureDevOpsTest do
              )
 
     HTTPStub.verify!()
+  end
+
+  # Fails if called: the nil-work-item short-circuit must return before the
+  # provider authenticates.
+  defmodule AuthMustNotBeCalledStub do
+    @moduledoc false
+
+    def azure_devops_headers(_connection), do: {:error, :authenticate_must_not_be_called}
   end
 end

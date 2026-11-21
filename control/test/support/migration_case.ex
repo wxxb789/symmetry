@@ -24,7 +24,8 @@ defmodule SymmetryControl.MigrationCase do
   The schema is created first, a dedicated single-connection Repo starts
   against it, and the dynamic repo points there for the duration of `test`.
   The dynamic repo is restored, the Repo stopped and the schema dropped
-  afterwards.
+  afterwards; a failure while starting the Repo still drops the schema, and a
+  failure while pointing the dynamic repo at it still stops the Repo.
 
   Tests that need to observe pre-migration state call `create_schema!/1`,
   `start_schema_repo/1` and `drop_schema!/1` directly instead.
@@ -32,14 +33,22 @@ defmodule SymmetryControl.MigrationCase do
   def with_schema(schema_base, test) do
     schema = "#{schema_base}_#{System.unique_integer([:positive])}"
     create_schema!(schema)
-    repo = start_schema_repo(schema)
-    previous_dynamic_repo = Repo.put_dynamic_repo(repo)
 
     try do
-      test.()
+      repo = start_schema_repo(schema)
+
+      try do
+        previous_dynamic_repo = Repo.put_dynamic_repo(repo)
+
+        try do
+          test.()
+        after
+          Repo.put_dynamic_repo(previous_dynamic_repo)
+        end
+      after
+        GenServer.stop(repo)
+      end
     after
-      Repo.put_dynamic_repo(previous_dynamic_repo)
-      GenServer.stop(repo)
       drop_schema!(schema)
     end
   end

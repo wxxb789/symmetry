@@ -8,7 +8,7 @@ defmodule SymmetryControl.Migrations.AddOmoHarnessKindMigrationTest do
   @omo_harness_kind_migration_version 20_261_114_020_000
 
   test "the migrations directory applies end to end without a duplicated version" do
-    with_schema(fn ->
+    with_schema("add_omo_harness_kind_migration", fn ->
       migrate_all_up!()
 
       assert %{
@@ -25,7 +25,7 @@ defmodule SymmetryControl.Migrations.AddOmoHarnessKindMigrationTest do
   end
 
   test "adds the OmO kinds without regressing the OMP kinds" do
-    with_schema(fn ->
+    with_schema("add_omo_harness_kind_migration", fn ->
       migrate_all_up!()
 
       # The OMP kinds remain admissible after the OmO migration rebuilds both constraints.
@@ -57,7 +57,7 @@ defmodule SymmetryControl.Migrations.AddOmoHarnessKindMigrationTest do
   end
 
   test "rolling the OmO kind back refuses retained OmO rows and preserves the OMP kinds" do
-    with_schema(fn ->
+    with_schema("add_omo_harness_kind_migration", fn ->
       migrate_all_up!()
 
       %{runtime_id: runtime_id, session_id: session_id} = insert_omo_harness_rows!()
@@ -95,10 +95,6 @@ defmodule SymmetryControl.Migrations.AddOmoHarnessKindMigrationTest do
         end
       end
     end)
-  end
-
-  defp with_schema(test) do
-    with_schema("add_omo_harness_kind_migration", test)
   end
 
   defp migrate_all_up! do

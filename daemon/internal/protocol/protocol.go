@@ -134,24 +134,7 @@ func (registration RuntimeRegistration) validateRegisteredAdapter(metadataPresen
 }
 
 func validateRegistrationUUID(value, field string) error {
-	if len(value) != 36 {
-		return fmt.Errorf("%s must be a canonical UUID", field)
-	}
-	for index, character := range value {
-		if index == 8 || index == 13 || index == 18 || index == 23 {
-			if character != '-' {
-				return fmt.Errorf("%s must be a canonical UUID", field)
-			}
-			continue
-		}
-		if character >= 'A' && character <= 'F' || !(character >= '0' && character <= '9' || character >= 'a' && character <= 'f') {
-			return fmt.Errorf("%s must be a canonical UUID", field)
-		}
-	}
-	if value[14] < '1' || value[14] > '5' || !strings.ContainsRune("89ab", rune(value[19])) {
-		return fmt.Errorf("%s must be a canonical UUID", field)
-	}
-	return nil
+	return ValidateUUID(value, field, CanonicalUUIDPolicy)
 }
 
 // UnmarshalJSON retains legacy unknown-field tolerance while validating any

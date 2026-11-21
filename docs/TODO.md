@@ -237,9 +237,17 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
   run of that shape is recorded on this host — while the same binary over the same file with
   `-color -shellcheck= -pyflakes=` finished in 0.6 s at exit 0 with no findings, and the
   2026-11-15 trim record already carries a 120 s sample of the same shape
-  (`docs/evidence/ci-process-trim-2026-11-15.md:228-234`). No CI job invokes `actionlint` (a
-  repository search for the name matches `docs/` only), so this is a local-lint gap only: nothing
-  in a hosted run is skipped by it. Owner area: CI tooling.
+  (`docs/evidence/ci-process-trim-2026-11-15.md:228-234`). When this entry was written no CI job
+  invoked `actionlint` (a repository search for the name matched `docs/` only); refactor slice
+  W1-01 added the shellcheck-disabled shape to the `legacy-route-audit` job as the advisory step
+  `Measure actionlint findings for the workflows (advisory)` (pinned upstream actionlint 1.7.12,
+  `actionlint -shellcheck= -pyflakes=` over every `.github/workflows/*.yml`) beside
+  `Measure shellcheck findings in scripts/ci (advisory)`
+  (`shellcheck --severity=warning scripts/ci/*.sh`); both are `continue-on-error: true`. The
+  shellcheck-*enabled* shape still runs nowhere: not on this host (the observed non-termination
+  above) and not in CI, where the hosted step disables the integration deliberately so the
+  verdict stays the shellcheck-disabled one. This entry therefore stays open as the local-lint
+  gap it describes, with its substitute recipe unchanged. Owner area: CI tooling.
 
 ## CI consolidation owner decisions (2026-11-17)
 
@@ -582,13 +590,114 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       `control/test/support/**` (W1-12) has landed. `assert_served_members!/3`, `assert_served_rows!/3`,
       `waiting_decision_payload/0`, the deterministic version-4 `uuid/1` and the bundle-derived
       `gate_members/3`/`declared_members/2` are duplicated between
-      `control/test/symmetry_control_web/controllers/portal_resources_test.exs:1373-1426` and
-      `control/test/symmetry_control_web/controllers/portal_workflow_test.exs:1891-1943`. Each file
+      `control/test/symmetry_control_web/controllers/portal_resources_test.exs`
+      (`assert_served_members!/3` at `:1665`, `assert_served_rows!/3` at `:1672`,
+      `gate_members/3` at `:1683`, `declared_members/2` at `:1695`,
+      `waiting_decision_payload/0` at `:1749`, `uuid/1` at `:1797`) and the same six
+      in `control/test/symmetry_control_web/controllers/portal_workflow_test.exs`
+      (`:1896`, `:1903`, `:1914`, `:1926`, `:1949`, `:1975`). Each file
       keeps its own copy because `control/test/support/**` was outside the gate increment's owned
       files and a module defined in one test file would break a single-file run of the others, but
       the copies can drift. Move them into `SymmetryControlWeb.ServedDocument` (the natural home for
       the bundle-derived pair too) and have both gate files import them. Found by the adversarial
       review of PR #145 (P3-2).
+
+## Deferred review findings (rf-w2-16 clone-aliasing gate)
+
+- [ ] Deep-copy the nested helper exits that the platform stop-evidence clones still share or
+      truncate, then remove the matching per-case skip paths from the aliasing harness.
+      `cloneLinuxCgroupStopReceipt`
+      (`daemon/internal/platform/linux_cgroup_v2_linux.go:1443-1457`) copies `LinuxProof` by
+      value (`:1449`) and deep-copies only the stored `LinuxProof.HelperExit` (`:1451-1452`), so
+      `LinuxProof.GateExit.HelperExit` and `LinuxProof.LauncherExit.HelperExit` stay shared with
+      the caller's receipt; that stored `HelperExit` copy shares its own nested exit in turn.
+      The `GateExit`/`LauncherExit` alias is live on a valid shape: a mirror stop proof demands
+      `proof.HelperExit != nil` and a `GateExit` anchored on that same exit
+      (`daemon/internal/authority/authority.go:1470-1474` via `ValidForOwnedDescendant`,
+      `:1174-1184`), every v2 removal receipt must carry such a proof
+      (`StopReceipt.ValidForHandoff`, `authority.go:1822-1833`), and the platform constructs it
+      (`daemon/internal/platform/anchor_run.go:1531`; validated at
+      `daemon/internal/execution/linux_owner_v2_linux.go:1338` and sealed into the mirror proof
+      at `:1360`); `authority.go:2027` also accepts a non-nil `LauncherExit.HelperExit`.
+      `cloneLinuxOwnerHelperV2StopEvidence` (`helper_v2_stop.go:1540-1573`) instead drops every
+      nested exit it copies through `cloneLinuxOwnerAnchorExitProof`
+      (`anchor_server.go:44-49` nils `HelperExit`): `Proof.LauncherExit.HelperExit`,
+      `Proof.GateExit.HelperExit`, `Proof.HelperExit.HelperExit`,
+      `PreGate.LauncherExit.HelperExit`, `PreGate.Proof.HelperExit.HelperExit` and the
+      `AnchorStop` helper exits are nil in the clone, and
+      `PreGate.Proof.LauncherExit.HelperExit` stays shared through the `PreGate.Proof` struct
+      copy (`:1563-1567`). The drop is latent for today's producers because both evidence
+      producers build helper-kind proofs whose exits are witnessed by the helper, so the
+      nested `HelperExit` is nil: the pre-gate proof at `:861-869` and the full stop proof at
+      `:983-990`. The receipt-ack copies at `:1173-1179` and `:1282-1288` are a separate path
+      that truncates a possibly mirror-kind `StopReceipt` the same way. The clone would
+      silently lose data if a producer ever starts carrying the single-level nested exit that
+      the receipt shape allows. The review of branch `refactor/rf-w2-16-clone-aliasing-test`
+      (2026-11-21) confirmed the `GateExit`/`LauncherExit` alias with a probe against the
+      shipped clone - mutating the original's `LinuxProof.GateExit.HelperExit` changed the
+      clone while the stored `HelperExit` copy stayed independent - and that goal's contract
+      forbids production changes. The gate files
+      `daemon/internal/platform/clone_aliasing_linux_test.go` and
+      `clone_aliasing_linux_amd64_test.go` list every path above as an explicit
+      `skipExitProofs` entry next to its reason; the driver fails a case whose listed path
+      population never reaches, and it re-runs each case with every skip removed, failing any
+      skip that no longer changes the outcome. Removing one of those entries before the
+      matching production fix turns the covering subtest red:
+      `TestCloneAliasingLinuxAMD64Evidence` for the helper-v2 and anchor paths,
+      `TestCloneAliasingLinuxCgroupEvidence` for the StopReceipt paths.
+      `TestCloneAliasingWindowsContainmentSessionID` does not share the Linux harness and is
+      unaffected.
+
+## Deferred review findings (PR #161)
+
+- [ ] Retire the `effective_delivery/6` references left after PR #161 deleted the helper, and
+      revalidate two callerless `@evidence_keys` entries as dead code (2026-11-21, branch
+      `refactor/rf-w2-04-portal-json`). PR #161 deleted `effective_delivery/6`,
+      `effective_delivery/4` and `delivery_context/3` from
+      `control/lib/symmetry_control_web/portal_json.ex` (the work they did is now the private
+      `resolve_delivery/1`), but `git grep -n effective_delivery` at the reviewed revision
+      `c459b6a0` still finds the symbol in three schema descriptions —
+      `contracts/v1/workspace-read.schema.json:225`,
+      `contracts/v1/work-detail-read.schema.json:86`, `contracts/v1/chat-read.schema.json:168` —
+      in their generated copies (`contracts/generated/ts/workspace-read.ts:122`,
+      `contracts/generated/ts/work-detail-read.ts:96`, `contracts/generated/ts/chat-read.ts:144`;
+      `daemon/internal/contracts/generated.go:238`, `:1510`, `:1888`;
+      `daemon/internal/contracts/schema_bundle.json:8389`, `:39339`, `:44347`), in two frontend
+      comments (`frontend/src/features/planning/write-policy.ts:251`,
+      `frontend/src/services/api.fixtures.ts:44`) and in two plan files
+      (`docs/plans/2026-11-21-portal-json-plan.md`,
+      `docs/plans/2026-11-21-served-doc-gates-plan.md`), which are historical and stay. Reword the
+      three descriptions and the two comments to drop the deleted symbol (or to describe the
+      projection without naming the private `resolve_delivery/1`), then regenerate
+      the DTOs with `pnpm contracts:generate` (`contracts/README.md:208`) and verify with
+      `pnpm contracts:check`. Separately, `message` and `question` in `@evidence_keys`
+      (`control/lib/symmetry_control_web/portal_json.ex:722`) are callerless: the getter's only
+      call sites ask for `summary` (`:470`), `findings` (`:471`),
+      `changed_artifacts`/`changed_files` (`:476`) and `tests` (`:478`), and
+      `git grep -n '"message"\|"question"'` over
+      `control/lib/symmetry_control_web/portal_json.ex` finds nothing, so treat both as dead-code
+      candidates for a separate authorized cleanup. RV-11 was judged valid but out of scope by the
+      fix stage (`docs/plans/2026-11-21-portal-json-plan.md:373-374`); found by the adversarial
+      review of PR #161 (P3-1).
+
+## Tolerated duplication: URL-state allowlists (refactor findings, 2026-11-21)
+
+- tolerated — no tracked work (decision note, 2026-11-21, `refactor/rf-w2-04-portal-json`): the
+      portal shell's URL-state policy is written twice — the `safeReturnTo` open-redirect allowlist
+      (`control/lib/symmetry_control_web/portal_session.ex:5-79`: the per-parameter regexes at
+      `:21-27`, the per-path clauses at `:46-79`) and the frontend shell router
+      (`frontend/src/app/application.ts:46` `shellPath`, `:75` `shellQuery`, used by
+      `safeReturnTo/1` at `:108`). The two spellings are kept in step by the shared corpus
+      `contracts/fixtures/shell-return-targets.json` (read by
+      `control/test/symmetry_control_web/portal_session_test.exs:372` and
+      `frontend/src/app/application.test.ts:4`, deliberately outside the fixture manifest,
+      `contracts/README.md:80`). Refactor findings CW-15 (`findings/control-web.md:450-471`) proposed
+      one data table `%{path_pattern => [param_regex]}`; the portal-json contract ruled it out of
+      scope (`portal_session.ex` is not one of its owned files, and the finding itself says the table
+      is worth doing only when the shared corpus is extended). Accepted as tolerated duplication
+      rather than scheduled work: folding the allowlist into one table changes no wire behaviour and
+      buys nothing until a new shell parameter needs the corpus extended, which is the condition that
+      should trigger it.
 
 ## Production Linux containment witness: stop-receipt barrier stall awaiting a diagnosable occurrence
 
@@ -691,3 +800,95 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       (exit 2, `Required version … does not match the running version …`) instead of reporting a
       different finding set than the one the 2026-11-21 baseline fixed (373 findings at
       `a3039f0`, of which 220 E501 at `line-length = 120`).
+
+## Deferred review findings (PR #154)
+
+- [ ] Revalidate and remove nine test-only provider entry points (2026-11-21, branch
+      `refactor/rf-w2-06-provider-support`; plan
+      `docs/plans/2026-11-21-rf-w2-06-provider-support-plan.md`; found by the Opus review of
+      PR #154 (P3-2)). `GitHub.check/1`, `GitHub.sync_resource/2`, `GitHub.sync_delivery/3`
+      (`control/lib/symmetry_control/integrations/providers/github.ex:41,58,453`), the
+      `AzureDevOps` twins (`azure_devops.ex:63,78,204`) and their new homes `Support.check/2`,
+      `Support.sync_resource/3`, `Support.sync_delivery/4` (`support.ex:12,18,27`) have no
+      production caller in `control/lib`: only the two provider suites call them. Evidence, run at
+      `e4cac8d5`:
+      `rg -n "provider\.(check|sync_resource|sync_delivery)\(" control/lib/symmetry_control/integrations.ex`
+      matches only the auth-bearing callbacks — `:224` `provider.check(connection, auth)`,
+      `:480`/`:619` `provider.sync_resource(connection, resource, auth)`, `:700`
+      `provider.sync_delivery(connection, resource, item, auth)`;
+      `rg -n "\b(GitHub|AzureDevOps)\.(check|sync_resource|sync_delivery)\(" control/lib` has no
+      matches (exit 1); `rg -n "\bSupport\.(check|sync_resource|sync_delivery)\(" control/lib`
+      matches only the six provider wrapper bodies themselves; and
+      `rg -n "\b(GitHub|AzureDevOps|Support)\.(check|sync_resource|sync_delivery)\(" control/test`
+      yields 17 call sites, 9 in `github_test.exs` and 8 in `azure_devops_test.exs`. Dynamic
+      `apply/3` dispatch is not exhaustively ruled out, but every production dispatch goes through
+      the `provider_call` closures above [inference]. Cleanup direction: migrate the tests to
+      `authenticate/1` plus the auth-bearing callback arity, then delete the six provider wrappers
+      and the three `Support` delegators, as a separately authorized change; `integrations.ex:690`
+      already short-circuits a nil `pull_request_url`.
+
+## Harness shared-scaffolding deferrals (rf-w2-13, PR #155)
+
+- [ ] Delegate the two provider-action UUID validator copies the W2-12a unification left outside
+      its owned set, behind the message-policy primitive that review P1-1 requires (2026-11-21,
+      branch `refactor/rf-w2-13-harness-scaffolding-5a`; plan
+      `docs/plans/2026-11-21-rf-w2-13-harness-scaffolding-5a-plan.md` §8). The copies are
+      `validateProviderBridgeUUID` (`daemon/internal/harness/pi/provider_bridge.go:976`), whose
+      follow-up owner is W2-13, and `validGoalSessionUUID`
+      (`daemon/internal/state/goal_session.go:1988`), whose owner is W2-09. They differ in message
+      text and strength from each other and from the canonical validators: the `pi` copy returns
+      "UUID is invalid" / "UUID must use lowercase hexadecimal digits" (no version/variant check),
+      the `state` copy returns a bool and accepts only versions 1–5 and RFC 4122 variants
+      (`8`/`9`/`a`/`b`), while
+      `control.validateProviderActionUUID` and `protocol.validateUUID` use other strings. Pin
+      every current rejection string per call site before delegating, so the unification changes
+      no message; `pi/provider_bridge.go:1102-1120` stamps v5 UUIDs, so the stricter check is
+      safe for journaled action IDs.
+
+- [ ] Consolidate the frozen `opencode` duplicates onto the shared harness helpers when the D1
+      freeze lifts with opencode capability work (W6-04) (2026-11-21, same branch and plan, §8).
+      `opencode/**` stayed read-only (P2-3/D1: its six CI assertions and the release-acceptance
+      case stay green), so every surface this slice consolidated elsewhere still has an
+      `opencode` copy: process forwarding with its own guards
+      (`daemon/internal/harness/opencode/adapter.go:543` ProcessDetails, `:559`
+      LinuxV2LiveOwnerStatus, `:578` LeaseRenewalAvailable, `:589` RenewLease),
+      `isNilNativeProcess` (`:421`, `reflect.Pointer`-only), the Close/join state machine
+      (`:1063`), `emit` (`:1344`, stamps `At` and calls `sink.Handle` directly instead of
+      `harness.DeliverEvent`) and `Wait` (`:975`). Consolidating them is part of opencode
+      capability work, not this increment, and must keep those CI oracles green.
+
+## pi provider-bridge close-retry timing flake under host load (PR #155 review)
+
+- [ ] Revalidate the pre-existing host-load flake in
+      `TestProviderBridgeCloseRetryClearsUnprovenAfterExecutorExits`
+      (`daemon/internal/harness/pi/provider_bridge_test.go:941`): it failed once in 26
+      executions during the PR #155 round-2 review — 1 of 3 full parallel
+      `./internal/harness/...` runs, 0 of 20 isolated `-count=20 -run` runs and 0 of 3
+      package-only `./internal/harness/pi/` runs, so reproduction needs full-suite load
+      (2026-11-21, branch `refactor/rf-w2-13-harness-scaffolding-5a`; plan
+      `docs/plans/2026-11-21-rf-w2-13-harness-scaffolding-5a-plan.md`). The test's first `Close`
+      runs under a 25 ms `context.WithTimeout` (`:968-969`) and must return
+      `errProviderBridgeExecutionUnproven` (`:971`); the failure is consistent with the deadline
+      winning under load before that verdict is stored, but the cause is inferred, not proven,
+      because the failure message was not captured. The flake is pre-existing: the test and
+      `pi/provider_bridge.go` are outside this PR's diff (the test file was last changed in
+      `8082317b`, #44), and the sibling
+      `TestProviderBridgeCloseReportsIgnoringExecutorAsUnproven` (`:904`) uses the same 25 ms
+      first-`Close` window (`:924`). Revalidate against a recovered failure before changing the
+      window or the assertion.
+
+## CI Go toolchain: bump past the stdlib advisories
+
+- [ ] Bump the CI-pinned Go toolchain past the 12 standard-library vulnerabilities the advisory
+      govulncheck step reports. `go-version: 1.27.0` is pinned in six places in
+      `.github/workflows/ci.yml` and once in `.github/workflows/linux-native-v2-acceptance.yml`;
+      hosted CI run 44862556617's `daemon` job shows `Go: go1.27.0`,
+      `govulncheck_exit_status=3`, `govulncheck_vulnerabilities=12`, every finding fixed in
+      go1.27.2-go1.27.4 (for example GO-2026-6859 `net/http@go1.27.4`, GO-2026-6809
+      `crypto/x509@go1.27.3`), while the same command on a go1.27.4 host reports none.
+      Found 2026-11-21 by refactor slice W1-01 (branch `refactor/rf-w1-01-ci-quality-plane`,
+      plan `docs/plans/2026-11-21-ci-quality-plane-plan.md`), which records the 12 as the
+      advisory baseline and leaves the pin alone: changing it alters pre-existing steps, which
+      the slice's contract (clause 3) rules out. Fix direction: raise `go-version` in every
+      workflow that sets it, re-run the advisory step and record the patched-toolchain count.
+      Owner area: CI tooling.

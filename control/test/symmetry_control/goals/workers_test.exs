@@ -1,5 +1,6 @@
 defmodule SymmetryControl.Goals.WorkersTest do
-  use SymmetryControl.DataCase, async: false
+  use SymmetryControl.OrchestrationCase, async: false
+  use SymmetryControl.TestFixtures, command_opts: [validation_profiles: validation_profiles()]
 
   alias Oban.Job
   alias SymmetryControl.{Goals, Repo, Workspaces}
@@ -172,25 +173,6 @@ defmodule SymmetryControl.Goals.WorkersTest do
              })
 
     activated.goal
-  end
-
-  defp command_current(goal_id, kind, payload, opts \\ []) do
-    {:ok, goal} = Goals.fetch_goal(goal_id)
-    opts = Keyword.put_new(opts, :validation_profiles, validation_profiles())
-
-    Goals.command(
-      goal_id,
-      %{
-        schema_version: "symmetry.goal_command.v1",
-        mutation_id: Ecto.UUID.generate(),
-        expected_version: goal.version,
-        expected_revision: goal.current_revision,
-        kind: kind,
-        payload: payload
-      },
-      "operator:test",
-      opts
-    )
   end
 
   defp validation_profiles do

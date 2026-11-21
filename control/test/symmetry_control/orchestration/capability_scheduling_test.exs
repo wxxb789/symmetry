@@ -1,5 +1,5 @@
 defmodule SymmetryControl.Orchestration.CapabilitySchedulingTest do
-  use SymmetryControl.DataCase, async: false
+  use SymmetryControl.OrchestrationCase, async: false
 
   alias SymmetryControl.Integrations
   alias SymmetryControl.Orchestration
@@ -7,6 +7,15 @@ defmodule SymmetryControl.Orchestration.CapabilitySchedulingTest do
   alias SymmetryControl.Workspaces
 
   @now ~U[2026-09-06 09:00:00.000000Z]
+
+  # The registration fields every runtime in this suite pinned.
+  @runtime_extra %{
+    harness_kind: "codex",
+    harness_version: "0.153.4",
+    adapter_version: "symmetry-codex-1",
+    adapter_protocol_version: 1,
+    heartbeat_interval_ms: 60_000
+  }
 
   test "connected work snapshots immutable change scope and refreshes it on retry" do
     project = project_fixture()
@@ -261,11 +270,17 @@ defmodule SymmetryControl.Orchestration.CapabilitySchedulingTest do
     %{machine: compatible_machine} = enroll_machine("compatible-machine")
 
     _incompatible =
-      register_runtime(incompatible_machine, "incompatible", %{}, @now, handoff?: false)
+      register_runtime(incompatible_machine, @now,
+        runtime_key: "incompatible",
+        name: "incompatible",
+        daemon_instance_id: Ecto.UUID.generate(),
+        capabilities: runtime_capabilities(%{}, false),
+        extra: @runtime_extra
+      )
 
     assert {:ok, task, :created} =
              Orchestration.submit_task(
-               task_attrs(required_capabilities: %{"provider_access" => true}),
+               provider_task_attrs(required_capabilities: %{"provider_access" => true}),
                "provider-task",
                now: @now
              )
@@ -273,12 +288,16 @@ defmodule SymmetryControl.Orchestration.CapabilitySchedulingTest do
     assert {:error, :no_assignment} = Orchestration.assign_one(now: @now)
 
     compatible =
-      register_runtime(
-        compatible_machine,
-        "compatible",
-        %{"structured_input" => true, "provider_access" => true, "shell" => true},
-        DateTime.add(@now, 1, :microsecond),
-        handoff?: true
+      register_runtime(compatible_machine, DateTime.add(@now, 1, :microsecond),
+        runtime_key: "compatible",
+        name: "compatible",
+        daemon_instance_id: Ecto.UUID.generate(),
+        capabilities:
+          runtime_capabilities(
+            %{"structured_input" => true, "provider_access" => true, "shell" => true},
+            true
+          ),
+        extra: @runtime_extra
       )
 
     assert {:ok, run} = Orchestration.assign_one(now: @now)
@@ -296,17 +315,18 @@ defmodule SymmetryControl.Orchestration.CapabilitySchedulingTest do
       daemon_instance_id = Ecto.UUID.generate()
 
       runtime =
-        register_runtime(
-          machine,
-          "claim-#{label}",
-          %{"structured_input" => true, "provider_access" => true},
-          @now,
-          daemon_instance_id: daemon_instance_id
+        register_runtime(machine, @now,
+          runtime_key: "claim-#{label}",
+          name: "claim-#{label}",
+          capabilities:
+            runtime_capabilities(%{"structured_input" => true, "provider_access" => true}, false),
+          daemon_instance_id: daemon_instance_id,
+          extra: @runtime_extra
         )
 
       assert {:ok, task, :created} =
                Orchestration.submit_task(
-                 task_attrs(required_capabilities: %{"provider_access" => true}),
+                 provider_task_attrs(required_capabilities: %{"provider_access" => true}),
                  "claim-task-#{label}",
                  now: @now
                )
@@ -315,18 +335,22 @@ defmodule SymmetryControl.Orchestration.CapabilitySchedulingTest do
       assert run.runtime_id == runtime.id
 
       replacement_runtime =
-        register_runtime(
-          machine,
-          runtime.runtime_key,
-          Keyword.get(
-            replacement,
-            :capabilities,
-            %{"structured_input" => true, "provider_access" => true}
-          ),
-          DateTime.add(@now, 1, :microsecond),
+        register_runtime(machine, DateTime.add(@now, 1, :microsecond),
+          runtime_key: runtime.runtime_key,
+          name: runtime.runtime_key,
+          capabilities:
+            runtime_capabilities(
+              Keyword.get(
+                replacement,
+                :capabilities,
+                %{"structured_input" => true, "provider_access" => true}
+              ),
+              false
+            ),
           daemon_instance_id: daemon_instance_id,
           agent_profile: Keyword.get(replacement, :agent_profile, "codex"),
-          workspace: Keyword.get(replacement, :workspace, "primary")
+          workspace: Keyword.get(replacement, :workspace, "primary"),
+          extra: @runtime_extra
         )
 
       assert replacement_runtime.id == runtime.id
@@ -353,11 +377,19 @@ defmodule SymmetryControl.Orchestration.CapabilitySchedulingTest do
 
   test "claim rejects a runtime that goes offline after assignment" do
     %{machine: machine} = enroll_machine("offline-claim")
-    runtime = register_runtime(machine, "offline-claim", %{}, @now)
+
+    runtime =
+      register_runtime(machine, @now,
+        runtime_key: "offline-claim",
+        name: "offline-claim",
+        daemon_instance_id: Ecto.UUID.generate(),
+        capabilities: runtime_capabilities(%{}, false),
+        extra: @runtime_extra
+      )
 
     assert {:ok, task, :created} =
              Orchestration.submit_task(
-               task_attrs(required_capabilities: %{}),
+               provider_task_attrs(required_capabilities: %{}),
                "offline-claim-task",
                now: @now
              )
@@ -389,14 +421,14 @@ defmodule SymmetryControl.Orchestration.CapabilitySchedulingTest do
 
   test "required capabilities participate in submission and retry idempotency" do
     requirements = %{"provider_access" => true}
-    attrs = task_attrs(required_capabilities: requirements)
+    attrs = provider_task_attrs(required_capabilities: requirements)
 
     assert {:ok, task, :created} =
              Orchestration.submit_task(attrs, "retry-provider-task", now: @now)
 
     assert {:error, :idempotency_conflict} =
              Orchestration.submit_task(
-               task_attrs(required_capabilities: %{}),
+               provider_task_attrs(required_capabilities: %{}),
                "retry-provider-task",
                now: @now
              )
@@ -412,7 +444,7 @@ defmodule SymmetryControl.Orchestration.CapabilitySchedulingTest do
     assert {:error, :idempotency_conflict} =
              Orchestration.retry_task(
                task.id,
-               task_attrs(required_capabilities: %{}),
+               provider_task_attrs(required_capabilities: %{}),
                "retry-provider-action",
                now: @now
              )
@@ -462,34 +494,6 @@ defmodule SymmetryControl.Orchestration.CapabilitySchedulingTest do
     enrolled
   end
 
-  defp register_runtime(machine, runtime_key, capabilities, now, opts \\ []) do
-    handoff? = Keyword.get(opts, :handoff?, false)
-
-    assert {:ok, [runtime]} =
-             Orchestration.register_runtimes(
-               machine.id,
-               Keyword.get_lazy(opts, :daemon_instance_id, &Ecto.UUID.generate/0),
-               [
-                 %{
-                   runtime_key: runtime_key,
-                   name: runtime_key,
-                   capacity: 1,
-                   agent_profile: Keyword.get(opts, :agent_profile, "codex"),
-                   workspace: Keyword.get(opts, :workspace, "primary"),
-                   harness_kind: "codex",
-                   harness_version: "0.153.4",
-                   adapter_version: "symmetry-codex-1",
-                   adapter_protocol_version: 1,
-                   capabilities: runtime_capabilities(capabilities, handoff?),
-                   heartbeat_interval_ms: 60_000
-                 }
-               ],
-               now: now
-             )
-
-    runtime
-  end
-
   defp runtime_capabilities(capabilities, handoff?) do
     interactive = Map.get(capabilities, "interactive", Map.get(capabilities, "shell", false))
 
@@ -514,12 +518,5 @@ defmodule SymmetryControl.Orchestration.CapabilitySchedulingTest do
         "hard_cost_limit" => false
       }
     })
-  end
-
-  defp task_attrs(overrides) do
-    Map.merge(
-      %{goal: "Use provider", agent_profile: "codex", workspace: "primary", input: %{}},
-      Map.new(overrides)
-    )
   end
 end
