@@ -1085,8 +1085,8 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 
 	runJournal, err := daemon.store.LoadJournal(key)
 	if err != nil {
-		daemon.abandonGoalSession(sessionKey, session, attached, err)
-		return fmt.Errorf("load native run fence: %w", err)
+		abandonErr := daemon.abandonGoalSession(sessionKey, session, attached, err)
+		return fmt.Errorf("load native run fence: %w", errors.Join(err, abandonErr))
 	}
 	var receipt *control.GoalSessionReceipt
 	runJournal, receipt, err = daemon.deliverGoalDelivery(operationContext, runJournal, state.GoalDeliverySessionAttach, localHandleID, func(receipt control.GoalSessionReceipt) error {
@@ -1096,12 +1096,12 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 		if settled, settleErr := settlePublishedCancellation("attachment delivery", err, false); settled {
 			return settleErr
 		}
-		daemon.abandonGoalSession(sessionKey, session, attached, err)
-		return fmt.Errorf("attach native Goal session: %w", err)
+		abandonErr := daemon.abandonGoalSession(sessionKey, session, attached, err)
+		return fmt.Errorf("attach native Goal session: %w", errors.Join(err, abandonErr))
 	}
 	if receipt == nil {
-		daemon.abandonGoalSession(sessionKey, session, attached, errors.New("native Goal session attach receipt is unavailable"))
-		return errors.New("native Goal session attach receipt is unavailable")
+		cause := errors.New("native Goal session attach receipt is unavailable")
+		return errors.Join(cause, daemon.abandonGoalSession(sessionKey, session, attached, cause))
 	}
 	requestContext, cancel := daemon.controlContext(operationContext)
 	canonical, err := goalAPI.FetchRunContext(requestContext, key.RunID, runJournal.Fence())
@@ -1110,24 +1110,24 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 		if settled, settleErr := settlePublishedCancellation("context fetch", err, false); settled {
 			return settleErr
 		}
-		daemon.abandonGoalSession(sessionKey, session, attached, err)
-		return fmt.Errorf("fetch Goal run context: %w", err)
+		abandonErr := daemon.abandonGoalSession(sessionKey, session, attached, err)
+		return fmt.Errorf("fetch Goal run context: %w", errors.Join(err, abandonErr))
 	}
 	if err := validateGoalRunContext(admission, claim, key, *receipt, canonical); err != nil {
-		daemon.abandonGoalSession(sessionKey, session, attached, err)
-		return err
+		abandonErr := daemon.abandonGoalSession(sessionKey, session, attached, err)
+		return errors.Join(err, abandonErr)
 	}
 	canonicalJSON, err := json.Marshal(canonical.Context)
 	if err != nil {
-		daemon.abandonGoalSession(sessionKey, session, attached, err)
-		return fmt.Errorf("encode canonical Goal context: %w", err)
+		abandonErr := daemon.abandonGoalSession(sessionKey, session, attached, err)
+		return fmt.Errorf("encode canonical Goal context: %w", errors.Join(err, abandonErr))
 	}
 	if err := daemon.markRunning(key); err != nil {
 		if settled, settleErr := settlePublishedCancellation("running publication", err, false); settled {
 			return settleErr
 		}
-		daemon.abandonGoalSession(sessionKey, session, attached, err)
-		return fmt.Errorf("mark native Goal run running: %w", err)
+		abandonErr := daemon.abandonGoalSession(sessionKey, session, attached, err)
+		return fmt.Errorf("mark native Goal run running: %w", errors.Join(err, abandonErr))
 	}
 	daemon.mu.Lock()
 	active := daemon.running[key]
@@ -1140,8 +1140,8 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 	}
 	daemon.mu.Unlock()
 	if active == nil {
-		daemon.abandonGoalSession(sessionKey, session, attached, errors.New("Goal run was cancelled before native turn start"))
-		return errors.New("Goal run ended before native turn start")
+		abandonErr := daemon.abandonGoalSession(sessionKey, session, attached, errors.New("Goal run was cancelled before native turn start"))
+		return errors.Join(errors.New("Goal run ended before native turn start"), abandonErr)
 	}
 	if daemon.isCancelled(key) {
 		settled, settleErr := daemon.settleCancelledNativeStart(ctx, key, sessionKey, localHandleID, session, false, false)
@@ -1153,8 +1153,8 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 		}
 	}
 	if ctx.Err() != nil {
-		daemon.abandonGoalSession(sessionKey, session, attached, ctx.Err())
-		return ctx.Err()
+		abandonErr := daemon.abandonGoalSession(sessionKey, session, attached, ctx.Err())
+		return errors.Join(ctx.Err(), abandonErr)
 	}
 	turnErr := staged.StartTurn(operationContext, harness.TurnRequest{Goal: claim.Work.Goal, Context: canonicalJSON})
 	if leaseExpired, leaseReason := daemon.nativeStartLeaseExpired(key); leaseExpired {
