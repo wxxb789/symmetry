@@ -241,57 +241,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
   repository search for the name matches `docs/` only), so this is a local-lint gap only: nothing
   in a hosted run is skipped by it. Owner area: CI tooling.
 
-## Deferred review findings (0007h)
-
-- [ ] Harden the optional-but-consumed members of the served reads: the `workspace-read` row remains.
-      The Goal/attention half of this
-      item, and the empty-capture residual it carried, are closed on branch `fix/served-read-closeout`
-      (`docs/archive/CLOSED-TODO.md`, this section): every member this item named sits in a `required`
-      array at `fdf332d` and is read by the surface it cited, and the real-served controller gate now
-      serves an accepted outcome and a recorded external wait — the two collections it previously
-      validated only as empty arrays — beside the settlement attention it already asserted.
-      Still open is the same class on the workspace read, which the 0007h entry scoped out as per-surface
-      work: of the 68 members `workspace-read.schema.json` leaves optional (a `jq` walk of
-      `required` arrays), 66 are read by `frontend/src` feature code and only two are not
-      (`RuntimeSnapshot.active_runs` and `WorkspaceWorkItem.position` — verified by grep: no
-      feature-code read site for either; the four `RuntimeCapabilities` booleans `interactive`,
-      `provider_access`, `structured_input` and `supervisory_control` are consumed only as the whole
-      map, `frontend/src/features/runtimes/runtimes.tsx:24` serializing it into `data-capabilities`
-      and `browser/tests/portal-live-daemon.spec.mjs:433` asserting that attribute equals the
-      registration-side map, so no member-named read site exists for them), and
-      those surfaces render their own fallbacks instead of refusing. The 66 read members are the root
-      `runtimes` and `registered_runtimes`; project `version`, `default_agent_profile`,
-      `default_workspace` and `resources`; the resource row's `id`, `project_id`, `connection_id`,
-      `kind`, `name`, `provider`, `external_ref`, `url`, `status`, `sync_status`, `status_message`,
-      `last_synced_at` and `version`; the registered-runtime row's `runtime_id`, `runtime_name`,
-      `agent_profile` and `workspace`; the runtime snapshot's `capacity`, `reserved_capacity`,
-      `connection_epoch`, `last_heartbeat_at`, `repository_resource_id`, `agent_profile`, `workspace`
-      and `capabilities.adapter`, plus that map's `interactive`, `provider_access`, `structured_input`
-      and `supervisory_control`; the work row's `project_id`, `goal_id`, `description`, `priority`,
-      `assignee`, `workspace`, `repository_resource_id`, `repository`, `ci_resource_id`, `ci_resource`,
-      `branch`, `pull_request_url`, `ci_status`, `review_status`, `delivery`, `external`, `goal_managed`,
-      `version`, `can_start`, `execution` and `updated_at`; the `provider` and `recorded_at` of each
-      `delivery` value; `external.provider_owned_fields`; and the waiting-decision packet's `context`,
-      `reason`, `options`, `recommended_option_id` and each option's `id`, `label` and `consequence`.
-      Two options, both needing the owner because they decide whether an older partial workspace
-      projection stays renderable (the tolerance `contracts/README.md:22-23` records as "keeps accepting
-      older partial projections", while the serving projection does emit every one of those members,
-      `control/lib/symmetry_control_web/portal_json.ex:70-101,229-259` and
-      `control/lib/symmetry_control_web/protocol.ex:328-345`): option (a) drops the tolerance and requires
-      every always-emitted consumed member; because `WorkspaceWorkItem` is one shared definition body
-      across `workspace-read`, `work-detail-read` and `chat-read`
-      (`contracts/generated/effect/index.ts:633`), that single requiredness edit moves the required
-      arrays, the valid fixtures of all three schemas, the frontend fixture layer
-      (`frontend/src/services/api.fixtures.ts`) and the generated Go DTOs together, while the
-      `RuntimeCapabilities` members and the `WorkItemWaitingDecision` packet stay optional either way
-      because the projection passes the stored registration map and the agent's own waiting payload
-      through verbatim. Option (b) keeps the tolerance and pins the serving side instead, by validating a
-      real served `workspace-read` document against the contract bundle with the consumed members
-      asserted on that output — `validate_served_document!` today pins `chat-read`, `goal-read` and
-      `attention-read` only, so no gate compares a served workspace read with the contract at all.
-      Recommendation: (b) is the smaller, reversible step and keeps older projections renderable; (a) is
-      the class-consistent one.
-
 ## CI consolidation owner decisions (2026-11-17)
 
 - [ ] Decide whether `linux-native-v2-acceptance.yml` is dispatched against a current subject or its gap
@@ -627,6 +576,20 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       scope. Fix direction: sort by UTF-8 bytes (or code points) in both TypeScript encoders
       and pin a cross-language vector with a non-ASCII key in each layer's suite.
 
+## Deferred review findings (PR #145)
+
+- [ ] Consolidate the served-document gate helpers after the increment that owns
+      `control/test/support/**` (W1-12) has landed. `assert_served_members!/3`, `assert_served_rows!/3`,
+      `waiting_decision_payload/0`, the deterministic version-4 `uuid/1` and the bundle-derived
+      `gate_members/3`/`declared_members/2` are duplicated between
+      `control/test/symmetry_control_web/controllers/portal_resources_test.exs:1373-1426` and
+      `control/test/symmetry_control_web/controllers/portal_workflow_test.exs:1891-1943`. Each file
+      keeps its own copy because `control/test/support/**` was outside the gate increment's owned
+      files and a module defined in one test file would break a single-file run of the others, but
+      the copies can drift. Move them into `SymmetryControlWeb.ServedDocument` (the natural home for
+      the bundle-derived pair too) and have both gate files import them. Found by the adversarial
+      review of PR #145 (P3-2).
+
 ## Production Linux containment witness: stop-receipt barrier stall awaiting a diagnosable occurrence
 
 - [ ] Diagnose the next occurrence of the `daemon_sigkill_after_lease_arm_before_resume` barrier
@@ -664,11 +627,11 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       shape (journal `b2090059-1137-4b6b-a975-58f1e202834c/1` retained containment after 45s;
       helper 15580 remained live), while main's last six CI runs (through `44804764621` @
       `ea65742`) were all green. **Suspect path** for the restart pass:
-      `daemon/internal/app/app.go:2148-2159` (record the durable receipt →
-      `verifyDurableContainmentStopReceipt` → `observeContainmentStop`) →
-      `waitForLinuxStopReceiptBarrier` (`:2227`), which publishes the reached marker at `:2258` only
-      after both marker paths pass `assertLinuxStopReceiptBarrierPathAbsent` (`:2242`/`:2245`), and
-      whose own release bound is `linuxStopReceiptBarrierTimeout = 30s` (`:71`); the marker never
+      `daemon/internal/app/cleanup_glue.go:118-143` (record the durable receipt →
+      `verifyDurableContainmentStopReceipt` at `:285` → `observeContainmentStop`) →
+      `waitForLinuxStopReceiptBarrier` (`:203`), which publishes the reached marker at `:234` only
+      after both marker paths pass `assertLinuxStopReceiptBarrierPathAbsent` (`:218`/`:221`), and
+      whose own release bound is `linuxStopReceiptBarrierTimeout = 30s` (`:21`); the marker never
       appeared, so either the restart pass never reached the callback or it stalled before
       publishing. **Diagnosis rule:** read the restarted daemon's log tail now exported by
       `scripts/ci/export-linux-v2-redacted-evidence.py` (2026-11-21, `witness-stall-evidence`): a

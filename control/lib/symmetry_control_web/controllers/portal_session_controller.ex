@@ -1,6 +1,7 @@
 defmodule SymmetryControlWeb.PortalSessionController do
   use SymmetryControlWeb, :controller
 
+  alias Plug.Conn.Status
   alias SymmetryControlWeb.{PortalHTML, PortalSession, PortalSocketToken, Protocol}
 
   def new(conn, params), do: render_login(conn, :ok, nil, params["return_to"])
@@ -50,6 +51,6 @@ defmodule SymmetryControlWeb.PortalSessionController do
 
     conn
     |> put_resp_content_type("text/html")
-    |> send_resp(Plug.Conn.Status.code(status), html)
+    |> send_resp(Status.code(status), html)
   end
 end
