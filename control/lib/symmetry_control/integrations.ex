@@ -15,6 +15,7 @@ defmodule SymmetryControl.Integrations do
   alias SymmetryControl.Integrations.Connection
   alias SymmetryControl.Orchestration.{Run, RunEvent, Task}
   alias SymmetryControl.Repo
+  alias SymmetryControl.Schemas.VersionedChangeset
   alias SymmetryControl.Workspaces.{Project, ProjectResource, WorkItem}
 
   @secret_key_names ~w(
@@ -82,8 +83,8 @@ defmodule SymmetryControl.Integrations do
          {:ok, auth_type} <- connection_auth_type(attr_value(attrs, :provider)) do
       attrs =
         attrs
-        |> drop_attrs([:status, :status_message, :metadata, :last_checked_at])
-        |> put_attr(:auth_type, auth_type)
+        |> VersionedChangeset.drop_attrs([:status, :status_message, :metadata, :last_checked_at])
+        |> VersionedChangeset.put_attr(:auth_type, auth_type)
 
       changeset = Connection.changeset(%Connection{}, attrs)
 
@@ -108,7 +109,7 @@ defmodule SymmetryControl.Integrations do
 
   def update_connection(connection_id, attrs) when is_map(attrs) do
     with :ok <- reject_secret_attrs(attrs),
-         {:ok, expected_version} <- expected_version(attrs),
+         {:ok, expected_version} <- VersionedChangeset.expected_version(attrs),
          {:ok, connection_id} <- Ecto.UUID.cast(connection_id) do
       Repo.transaction(fn ->
         connection_snapshot =
@@ -143,12 +144,18 @@ defmodule SymmetryControl.Integrations do
               lock: "FOR UPDATE"
           ) || Repo.rollback(:not_found)
 
-        with :ok <- matches_version(connection, expected_version),
+        with :ok <- VersionedChangeset.matches_version(connection, expected_version),
              :ok <- connection_identity_editable(connection, attrs) do
           attrs =
             attrs
-            |> drop_attr(:version)
-            |> drop_attrs([:auth_type, :status, :status_message, :metadata, :last_checked_at])
+            |> VersionedChangeset.drop_attr(:version)
+            |> VersionedChangeset.drop_attrs([
+              :auth_type,
+              :status,
+              :status_message,
+              :metadata,
+              :last_checked_at
+            ])
 
           changeset = Connection.update_changeset(connection, attrs)
           reset_health? = Map.has_key?(changeset.changes, :capabilities)
@@ -164,7 +171,7 @@ defmodule SymmetryControl.Integrations do
               changeset
             end
 
-          case update_with_stale_error(changeset) do
+          case VersionedChangeset.update_with_stale_error(changeset) do
             {:ok, updated} ->
               if reset_health? do
                 from(resource in ProjectResource,
@@ -204,11 +211,10 @@ defmodule SymmetryControl.Integrations do
 
   def delete_connection(connection_id, expected_version) do
     with {:ok, connection} <- fetch(Connection, connection_id),
-         :ok <- matches_version(connection, expected_version) do
+         :ok <- VersionedChangeset.matches_version(connection, expected_version) do
       connection
       |> Connection.delete_changeset()
-      |> Repo.delete(stale_error_field: :lock_version, stale_error_message: "is stale")
-      |> normalize_stale_result()
+      |> VersionedChangeset.delete_with_stale_error()
     end
   end
 
@@ -585,7 +591,7 @@ defmodule SymmetryControl.Integrations do
                  where: current.id == ^resource.id,
                  lock: "FOR UPDATE"
              ),
-           :ok <- matches_version(locked, resource.lock_version),
+           :ok <- VersionedChangeset.matches_version(locked, resource.lock_version),
            {:ok, syncing} <-
              update_sync_marker(locked, sync_status: "syncing", last_checked_at: now()) do
         {locked, syncing}
@@ -770,7 +776,7 @@ defmodule SymmetryControl.Integrations do
                         last_synced_at: synced_at
                       })
                     )
-                    |> update_with_stale_error() do
+                    |> VersionedChangeset.update_with_stale_error() do
                  {:ok, synced_resource} ->
                    with :ok <-
                           persist_sync_work_items(
@@ -859,7 +865,9 @@ defmodule SymmetryControl.Integrations do
 
   defp persist_deliveries(prepared_deliveries) do
     Enum.reduce_while(prepared_deliveries, :ok, fn {item, attrs}, :ok ->
-      case item |> WorkItem.delivery_changeset(attrs) |> update_with_stale_error() do
+      case item
+           |> WorkItem.delivery_changeset(attrs)
+           |> VersionedChangeset.update_with_stale_error() do
         {:ok, _item} ->
           {:cont, :ok}
 
@@ -903,7 +911,8 @@ defmodule SymmetryControl.Integrations do
                 true <- match?(%ProjectResource{}, current_resource) || {:error, :stale},
                 true <- match?(%Connection{}, current_connection) || {:error, :stale},
                 true <- match?(%WorkItem{}, current_work_item) || {:error, :stale},
-                :ok <- matches_version(current_work_item, work_item.lock_version),
+                :ok <-
+                  VersionedChangeset.matches_version(current_work_item, work_item.lock_version),
                 true <-
                   current_resource.project_id == current_work_item.project_id ||
                     {:error, :stale},
@@ -918,7 +927,7 @@ defmodule SymmetryControl.Integrations do
                 {:ok, persisted} <-
                   current_work_item
                   |> WorkItem.delivery_changeset(attrs)
-                  |> update_with_stale_error() do
+                  |> VersionedChangeset.update_with_stale_error() do
              persisted
            else
              {:error, :stale} -> :stale
@@ -1335,7 +1344,7 @@ defmodule SymmetryControl.Integrations do
 
       case provider_snapshot_order(candidate, work_item) do
         :newer ->
-          update_with_stale_error(changeset)
+          VersionedChangeset.update_with_stale_error(changeset)
 
         :older ->
           restore_provider_availability(work_item, attrs)
@@ -1358,7 +1367,7 @@ defmodule SymmetryControl.Integrations do
 
     work_item
     |> WorkItem.provider_update_changeset(availability_attrs)
-    |> update_with_stale_error()
+    |> VersionedChangeset.update_with_stale_error()
   end
 
   defp provider_snapshot_order(
@@ -1489,7 +1498,7 @@ defmodule SymmetryControl.Integrations do
   defp update_connection_health(connection, attrs) do
     connection
     |> Connection.health_changeset(attrs)
-    |> update_with_stale_error()
+    |> VersionedChangeset.update_with_stale_error()
   end
 
   defp record_connection_failure(%Connection{} = connection, reason) do
@@ -1531,7 +1540,8 @@ defmodule SymmetryControl.Integrations do
              )
 
            with :ok <- require_active_project(project),
-                :ok <- matches_version(resource, resource_snapshot.lock_version),
+                :ok <-
+                  VersionedChangeset.matches_version(resource, resource_snapshot.lock_version),
                 {:ok, degraded} <-
                   resource
                   |> ProjectResource.sync_changeset(%{
@@ -1540,7 +1550,7 @@ defmodule SymmetryControl.Integrations do
                     status_message: message,
                     last_checked_at: now()
                   })
-                  |> update_with_stale_error() do
+                  |> VersionedChangeset.update_with_stale_error() do
              degraded
            else
              {:error, :stale} -> :stale
@@ -1801,47 +1811,10 @@ defmodule SymmetryControl.Integrations do
 
   defp fetch(_schema, _id), do: {:error, :not_found}
 
-  defp expected_version(attrs) do
-    case attr_value(attrs, :version) do
-      version when is_integer(version) and version > 0 -> {:ok, version}
-      _ -> {:error, :invalid_request}
-    end
-  end
-
-  defp matches_version(%{lock_version: version}, version), do: :ok
-  defp matches_version(_, _), do: {:error, :stale}
-
-  defp update_with_stale_error(changeset) do
-    Repo.update(changeset, stale_error_field: :lock_version, stale_error_message: "is stale")
-    |> normalize_stale_result()
-  end
-
-  defp normalize_stale_result({:error, changeset} = error) do
-    cond do
-      Keyword.has_key?(changeset.errors, :lock_version) -> {:error, :stale}
-      Keyword.has_key?(changeset.errors, :provider_action_intents) -> {:error, :state_conflict}
-      true -> error
-    end
-  end
-
-  defp normalize_stale_result(result), do: result
-
   defp unwrap_transaction({:ok, value}), do: {:ok, value}
   defp unwrap_transaction({:error, reason}), do: {:error, reason}
 
   defp attr_value(attrs, key), do: Map.get(attrs, key) || Map.get(attrs, Atom.to_string(key))
-
-  defp put_attr(attrs, key, value) do
-    if Enum.any?(Map.keys(attrs), &is_binary/1),
-      do: Map.put(attrs, Atom.to_string(key), value),
-      else: Map.put(attrs, key, value)
-  end
-
-  defp drop_attr(attrs, key), do: Map.drop(attrs, [key, Atom.to_string(key)])
-
-  defp drop_attrs(attrs, keys) do
-    Enum.reduce(keys, attrs, fn key, acc -> drop_attr(acc, key) end)
-  end
 
   defp now, do: DateTime.utc_now() |> DateTime.truncate(:microsecond)
 end
