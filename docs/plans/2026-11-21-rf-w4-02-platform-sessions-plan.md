@@ -71,14 +71,15 @@ type anchorConnection struct {
   exclusive-field and stopping gates, `refuses`) plus one 16-way dispatch switch. Every exit is an
   explicit `return false`/`return detached`; zero bare `return` statements.
 - Handlers, one per operation, all in `anchor_session.go`:
-  `handleIdentity`, `handleRetire` (the cleared/aborted pair — the base already selects between
-  `handleRetireClearedRun`/`handleRetireAbortedHelper` inside the shared block),
+  `handleIdentity`, `handleRetireRequest` (the cleared/aborted pair — the base already selects
+  between `handleRetireClearedRun`/`handleRetireAbortedHelper` inside the shared block),
   `handleCloneCleanup` (returns the detached flag), and `handleRunOperation`, which owns the
   grant-gated group: the base's pre-switch grant/peer/overlap/deadline/membership/parent-pin block
   becomes `authorizeRunRequest() bool`, and the base's 12-case switch becomes a 12-way dispatch to
   `handleStart`, `handleAttach`, `handleLookup`, `handleRegisterProcess`, `handleClassifyChild`,
   `handleRegisterGate`, `handleAuthorizeGate`, `handleStopLeaf`, `handleWaitReap`, `handleReapRun`,
-  `handleWaitHelper`, `handleRetire` (the existing `handleRetireHelper` wrapper is kept).
+  `handleWaitHelper`, and the `retire-helper-v2` case to the existing anchor method
+  `handleRetireHelper`.
 - Every handler body is the base case body **textually unchanged** except the selector
   substitutions `anchor.` → `session.anchor.`, `connection` → `session.connection`, `request` →
   `session.request`, `row` → `session.row`, `receivedFDs` → `session.receivedFDs`, `helperPeer` →
@@ -227,7 +228,7 @@ All foreground, final tree, counts and exit codes recorded; the measurement harn
 | platform suite (Linux, real) | `go test -count=1 -v ./internal/platform/` + the `--- SKIP` list | WSL `Ubuntu-24.04` user `accept`, `/mnt/q/repos/wt-w4-02-platform-sessions/symmetry/daemon` |
 | focused wire oracle | `go test -count=1 ./internal/platform/ -run 'TestLinuxOwnerAnchor|TestLinuxSupervisor'` | WSL |
 | callers' packages (lesson 32) | `go test -count=1 ./internal/execution/` and `go test -count=1 ./internal/app/...` | WSL (Linux) and host where it compiles |
-| naked-return proof | `rg -c '^\s*return\s*(//.*)?$'` over `anchor_server.go` + the new session files, before/after (≥83 drop against the contract's `0fa9b705` base; 70 against the slice base) | host |
+| naked-return proof | `rg -c '^\s*return\s*(//.*)?$'` over `anchor_server.go` + the new session files, before/after (≥83 drop against the contract's `0fa9b705` base; against the slice base `59da44d3`: `anchor_server.go` 72 → 2 = 70, or 72 → 3 = 69 when the head count adds `supervisor_session.go`'s inherited survivor, `anchor_session.go` 0) | host |
 | move-only proof | text comparison of every moved body, base vs head, after the documented substitutions | host (scratch, outside the tree) |
 | control-flow audit | per-handler base→head rows (early return, fall-through, error short-circuit, default) | this file, filled at implementation |
 | citation gate | `scripts/ci/check-citation-existence.py` at the slice head | host |
@@ -289,10 +290,22 @@ head (selector substitutions, bare `return` → explicit `return false`, appende
 dropped `helperPeer := false` declaration, `if`-wrapper removal) and the ordered control-flow event
 chain of both sides is compared; the chains below are the audit's rows. `guard` = `if` condition
 (the rejecting gates), `return` = an exit, `loop`/`continue`/`break` = iteration control, `else` = an
-`else`/`} else` branch, `case`/`switch` = dispatch. Base line numbers are those of
-`supervisor_linux_helper.go` / `anchor_server.go` at the slice base; head numbers are those of
+`else`/`} else` branch, `case`/`switch` = dispatch. Base line numbers come from
+`supervisor_linux_helper.go` / `anchor_server.go` at the slice base (transformed-base coordinates —
+see below); head numbers are those of
 `anchor_session.go`, `supervisor_session.go` or the new `anchor_server.go` `serveConnection` span,
 as the row states.
+
+Coordinate provenance (added while applying review finding F5/PD-1): a **base** line number is a
+*transformed-base* coordinate — the line of that event in the extracted base slice *after* the
+documented transformation — so a line-removing step moves later events up (`authorizeRunRequest`'s
+`guard@1098` is the dropped `helperPeer := false` line; the guard itself is `:1099`), and each run
+case's appended trailing `return false` lands on the following `case` label's number
+(`handleStart`'s `return@1188` is `case linuxOwnerAnchorOperationAttach:`); where the transformation
+removes and appends nothing, base numbers equal the raw `supervisor_linux_helper.go` /
+`anchor_server.go` lines at the slice base. **Head** numbers are raw lines of `anchor_session.go`,
+`supervisor_session.go` or the new `anchor_server.go` span, except the hand-written
+`handleCloneCleanup` row, whose `return@60` is the function's signature line (the `return` is `:61`).
 
 ### Naked-return proof
 
@@ -302,12 +315,13 @@ as the row states.
 | slice base `59da44d3` (post-W3-02, post-#160) | 72 | 70 | — |
 | worktree HEAD | 2 | **0** | `anchor_session.go` 0, `supervisor_session.go` 1 (a `return` in the void `requestEvents` reader closure, inherited verbatim) |
 
-Drop over the contract's own base: 91 → 3 = **88 ≥ 83**; drop over the slice base: 72 → 3 = 69, of
-which 70 → 0 inside `serveConnection` (W3-02 had already named 19 of the 91, 13 of them inside the
-`serveConnection` span). The two survivors in `anchor_server.go` are `serveCloneCleanup` (:1230) and
-`writeResponse` (:1265) — both W3-02's landed functions, outside this slice's owned region. All
-terminal `return`s in the moved paths are explicit `return false` / `return detached`, and every
-handler result is named (`detached bool`).
+Drop over the contract's own base: 91 → 3 = **88 ≥ 83**. Drop over the slice base: `anchor_server.go`
+72 → 2 = 70 (or 72 → 3 = 69 when the head count adds `supervisor_session.go`'s inherited survivor;
+`anchor_session.go` 0), of which 70 → 0 inside `serveConnection` (W3-02 had already named 19 of the
+91, 13 of them inside the `serveConnection` span). The two survivors in `anchor_server.go` are
+`serveCloneCleanup` (:1230) and `writeResponse` (:1265) — both W3-02's landed functions, outside
+this slice's owned region. All terminal `return`s in the moved paths are explicit `return false` /
+`return detached`, and every handler result is named (`detached bool`).
 
 ### Base → head control-flow rows
 
@@ -420,6 +434,15 @@ the documented transformation, reverse-substitutes the head selectors and compar
 (`runHelperLoop`) are printed as a normalized diff whose only deltas are the removed declaration
 lines, the three extracted closures and `:=` → `=` on the fields that became session state.
 
+Base revision (added while applying review finding F4/C-2): both scripts read their base text from
+an explicit revision — `python verify_sessions.py --base <rev>` / `python audit_rows.py --base <rev>`
+(`BASE_REV` also works; default = the slice base `59da44d383b080159bbf670717748f17f732a1b7`) —
+because the original `git show HEAD:` pin only held while the slice was uncommitted and exits 1 at
+the committed head. Re-run at the committed head with that base, both print the revision, `RESULT:
+PASS` (22/22) and `AUDIT RESULT: PASS` (22 rows) with output identical to the rows recorded above.
+The scripts are scratch (`<HOST-PATH>/.local/state/gdd/tmp/w4-02/verify_sessions.py`, `…/audit_rows.py`),
+outside this tree.
+
 ### Executed gates (final tree, results in the stage evidence record)
 
 | gate | result |
@@ -431,7 +454,46 @@ lines, the three extracted closures and `:=` → `=` on the fields that became s
 | Linux focused `-run 'TestLinuxOwnerAnchor\|TestLinuxSupervisor'` | 152 run / 151 pass / 1 pre-existing skip / 0 fail, `ok` 3.790s; all 17 W3-02 wire/shape tests PASS |
 | Linux/Windows `./internal/execution/` | `ok` 1.548s (Linux) / 10.332s (Windows), exit 0 |
 | Linux `./internal/app/...` | `ok` 239.067s, exit 0 |
-| moves | the 22 move-only comparisons above PASS; literal multiset: 508 base string/backtick literals, head adds only the two new files' import paths (12) and folds 10 `""` arguments/declarations into session zero values |
+| moves | the 22 move-only comparisons above PASS; literal multiset: 508 base string/backtick literals, head adds only the two new files' import paths (15 occurrences, 9 distinct) and folds 10 `""` arguments/declarations into session zero values |
+
+### Advisory lint delta (not a gate — review finding F3/C-1)
+
+The implement stage ran no advisory lint (its answer's "Not run" list), so the numbers below were
+re-measured while applying the finding: `golangci-lint` **v2.15.0** (the `.github/workflows/ci.yml`
+pin), `GOOS=linux`, `--config .golangci.yml --max-issues-per-linter=0 --max-same-issues=0`,
+`./internal/platform/...` (the slice's package; the CI step lints the whole module) → slice base
+`59da44d3` **234** issues, worktree head **236**: `unparam` 8 → 11 (the new `serveConnection` named
+result plus the always-false `handleIdentity`/`handleRetireRequest` results), `ineffassign` 6 → 5,
+and `gocyclo` 70 / `gocritic` 17 / `errorlint` 58 / `funlen` 4 / `staticcheck` 29 unchanged, with
+finding attribution moved to `supervisor_session.go`.
+
+Boundary: do **not** silence the two handler `unparam` findings by dropping their named results —
+that adds 9 bare returns and moves the union bare-return drop from 88 to 79, below clause 1's ≥83.
+
+### Apply-stage amendment record (2026-11-21, simplify → apply)
+
+Accepted simplify findings applied in this file: F3/C-1 (lint delta above), F4/C-2 (base revision
+named in the move-only proof), F5/PD-1 (coordinate provenance in the audit header), F6/PD-2
+(`handleRetireRequest` / `handleRetireHelper`), F7/PD-3 (counts re-derived at the head, never
+arithmetically: import-path literals 15 occurrences / 9 distinct, the slice-base bare-return drops
+scoped, **33** `linuxSupervisorSession` fields, **22** audit rows). Not applied: F1 (retained — the
+two tautological field assignments at `supervisor_session.go:101-102` are the documented reshape
+artifact; changing them is count-refreshing for one line), F2 (declined — the `detached == true`
+clone-cleanup path has no reachable oracle; inherited gap, disclosed here and under E8). The
+implement-stage run answer keeps its superseded figures ("12 import paths", "35 fields", "21 rows
+preserved"); this file is the slice's in-repo record of the corrected values.
+
+Gate re-run at the apply head (the tree's code and tests are byte-identical to the implement head;
+this file is the diff): all green — host `gofmt`/`go vet` and all four `GOOS` builds exit 0, Windows
+platform `ok` 6.833s, execution `ok` 11.026s, app `ok` 153.959s; Linux (netns) platform `ok` 33.502s
+with 425 run / 0 fail / 1 pre-existing skip, focused `152 run / 151 pass / 1 skip` with all 17
+W3-02 wire/shape tests PASS, execution `ok` 1.660s, app `ok` 186.582s. One host-load artifact: the
+first Windows `./internal/app/...` run (which overlapped the advisory lint) failed the 2 s-deadline
+test `TestOmOAttachAckRegressionCancellationAndDeadlineDoNotRenewBudget/admission_deadline` on a
+loopback HTTP `context deadline exceeded`; that class is the one
+`docs/plans/2026-11-21-rf-w2-10-callback-dedup-plan.md:168-173` and
+`docs/evidence/goal-0009-achieve-contract-amendments-2026-11-15.md:202` record — the focused test
+passes idle (22.14s, 4/4 subtests) and the idle full run exits 0.
 
 ### Parameter counts (summary)
 
