@@ -342,6 +342,10 @@ All clauses of the amendment are met on the delivered tree:
 - **F3/F4 follow-ups recorded:** `execution_policy_json/0`'s fixture clone moves to the
   fixture-extraction slice; host wall time is not a gate oracle (paired workload or CI-side
   measurement instead).
-- **Full-suite wall-time goal moved out of this slice:** to W3-15 (`goals_test.exs` split) and a D9
-  re-evaluation of the migration-file pin (its DDL is already private-schema) — recorded as a
-  follow-up, not claimed here.
+- **Full-suite wall-time goal moved out of this slice:** its owner is the `docs/TODO.md` entry
+  "Control full-suite wall-time target and the D9 migration-file pin" (2026-11-22), which records
+  the target (`mix test` ~102 s → ≤65 s), the measured split (the D9-pinned sync migration files
+  carry 58.4 % of suite work; CI `coverage-control`: 989 tests in 140.2 s = 18.1 s async + 122.0 s
+  sync) and the conductor D9 re-evaluation of the migration-file `async: false` pin it waits on —
+  not claimed here. W3-15 is not a wall-time lever: its contract has no wall-time clause and
+  `goals_test.exs` stays `async: false` as an app-env mutator.

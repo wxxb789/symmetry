@@ -84,13 +84,7 @@ defmodule SymmetryControl.MigrationCase do
     Path.expand("../../priv/repo/migrations", __DIR__)
   end
 
-  @doc """
-  Runs every migration in `migrations_path/0` up through the Repo's dynamic repo.
-
-  The dynamic repo is the private-schema repo a suite started with
-  `start_schema_repo/1` (or `with_schema/2`), so the migrations land in that
-  private schema and never in the shared test schema.
-  """
+  @doc "Runs every migration up through the dynamic repo, i.e. into the suite's private schema, never the shared test schema."
   def migrate_all_up! do
     Ecto.Migrator.run(Repo, migrations_path(), :up,
       all: true,
