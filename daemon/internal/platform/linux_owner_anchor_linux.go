@@ -219,7 +219,7 @@ func (client *LinuxOwnerAnchorClient) Discover(ctx context.Context) (LinuxOwnerA
 	if client == nil || ctx == nil || ctx.Err() != nil {
 		return LinuxOwnerAnchorIdentity{}, errors.New("Linux owner anchor discovery requires a live client and context")
 	}
-	connection, stopClose, err := client.dial(ctx, linuxOwnerAnchorRequestTimeout)
+	connection, stopClose, err := client.dial(ctx, linuxOwnerAnchorTimeoutFor(linuxOwnerAnchorOperationIdentity))
 	if err != nil {
 		return LinuxOwnerAnchorIdentity{}, err
 	}
@@ -234,7 +234,7 @@ func (client *LinuxOwnerAnchorClient) Discover(ctx context.Context) (LinuxOwnerA
 		return LinuxOwnerAnchorIdentity{}, fmt.Errorf("capture daemon identity for owner-anchor discovery: %w", err)
 	}
 	request := linuxOwnerAnchorRequest{
-		Version: linuxOwnerAnchorProtocolVersion, Operation: "identity",
+		Version: linuxOwnerAnchorProtocolVersion, Operation: linuxOwnerAnchorOperationIdentity,
 		ClientPID: os.Getpid(), ClientIdentity: clientIdentity,
 	}
 	encoded, err := json.Marshal(request)
@@ -249,7 +249,7 @@ func (client *LinuxOwnerAnchorClient) Discover(ctx context.Context) (LinuxOwnerA
 		closeLinuxOwnerAnchorFDs(rights)
 		return LinuxOwnerAnchorIdentity{}, err
 	}
-	if len(rights) != 0 || response.Version != linuxOwnerAnchorProtocolVersion || response.Operation != "identity" || response.Status != "ready" ||
+	if len(rights) != 0 || response.Version != linuxOwnerAnchorProtocolVersion || response.Operation != linuxOwnerAnchorOperationIdentity || response.Status != "ready" ||
 		response.Anchor.PID != peer.PID || response.Anchor.Identity != peer.Identity || response.Parent.Validate() != nil ||
 		response.OwnerUID != client.owner.AUID || response.ManagerPath != response.Parent.Path ||
 		response.ManagerPath == "/" ||
@@ -590,7 +590,7 @@ func (client *LinuxOwnerAnchorClient) RegisterProcess(ctx context.Context, grant
 		return fmt.Errorf("verify process pidfd before owner-anchor registration: %w", err)
 	}
 	request := linuxOwnerAnchorRequest{
-		Version: linuxOwnerAnchorProtocolVersion, Operation: "register-process", Grant: grant,
+		Version: linuxOwnerAnchorProtocolVersion, Operation: linuxOwnerAnchorOperationRegisterProcess, Grant: grant,
 		Helper: &helper, Creator: &creator, Process: &process, Role: role,
 	}
 	response, rights, err := client.exchange(ctx, request, pidfd)
@@ -720,7 +720,7 @@ func (client *LinuxOwnerAnchorClient) WaitReap(ctx context.Context, grant LinuxO
 		return LinuxOwnerAnchorReapEvidence{}, errors.New("Linux owner anchor wait/reap request is incomplete")
 	}
 	request := linuxOwnerAnchorRequest{
-		Version: linuxOwnerAnchorProtocolVersion, Operation: "wait-reap", Grant: grant,
+		Version: linuxOwnerAnchorProtocolVersion, Operation: linuxOwnerAnchorOperationWaitReap, Grant: grant,
 		Helper: &helper, Process: &process, Role: role,
 	}
 	response, rights, err := client.exchange(ctx, request, -1)
@@ -855,23 +855,22 @@ func (client *LinuxOwnerAnchorClient) exchange(ctx context.Context, request linu
 		return linuxOwnerAnchorResponse{}, nil, errors.New("Linux owner anchor request has no live client or context")
 	}
 	var expectedAnchor authority.LinuxCgroupProcessIdentity
+	row, _ := linuxOwnerAnchorOperationShapeFor(request.Operation)
 	cloneCleanup := request.Operation == linuxOwnerAnchorOperationCloneCleanup
 	stopLeaf := request.Operation == linuxOwnerAnchorOperationStopLeaf
 	classifyChild := request.Operation == linuxOwnerAnchorOperationClassifyChild
-	if cloneCleanup {
-		wantFDs := 1
+	if row.clientCheckedFDs {
+		expectedFDs := row.clientSendFDs
 		if request.TargetFDPresent {
-			wantFDs++
+			expectedFDs = row.clientSendFDsWithTarget
 		}
-		if request.Grant != (LinuxOwnerAnchorGrant{}) || request.CloneGrant == nil || request.Cleanup == nil ||
-			request.RunKey != (LinuxOwnerAnchorRunKey{RunID: request.Cleanup.Intent.RunID, Generation: request.Cleanup.Intent.Generation}) ||
-			request.FenceDigest != request.Cleanup.FenceDigest || request.Fence != (protocol.Fence{}) ||
-			len(sendFDs) != wantFDs || request.Helper != nil || request.Gate != nil || request.UserNamespace != nil ||
-			request.StopFence != nil ||
-			request.Creator != nil || request.Process != nil || request.Role != "" ||
-			request.ReleaseProof != nil || request.PreGateReleaseProof != nil || request.AbortProof != nil || request.AfterPID != 0 ||
-			request.Cleanup.NormalReleaseProof.CgroupIdentity == nil ||
-			(request.TargetFDPresent && request.PriorRemovalProof != nil) || (!request.TargetFDPresent && request.PriorRemovalProof == nil) {
+		if len(sendFDs) != expectedFDs {
+			return linuxOwnerAnchorResponse{}, nil, errors.New(row.clientFDsMismatch)
+		}
+	}
+	if cloneCleanup {
+		if row.presenceRejected(request) || row.shapeRejected(request) ||
+			request.Cleanup.NormalReleaseProof.CgroupIdentity == nil {
 			return linuxOwnerAnchorResponse{}, nil, errors.New("Linux owner anchor cleanup request is not bound to its durable RunKey and fence digest")
 		}
 		if err := validateLinuxOwnerAnchorCloneCleanup(*request.CloneGrant, *request.Cleanup, client.owner.AUID); err != nil {
@@ -890,12 +889,7 @@ func (client *LinuxOwnerAnchorClient) exchange(ctx context.Context, request linu
 			return linuxOwnerAnchorResponse{}, nil, errors.New("clone cleanup daemon and owner anchor must be distinct exact processes")
 		}
 	} else if classifyChild {
-		if len(sendFDs) != 1 || request.Grant.Validate() != nil || request.Helper == nil || request.Helper.Validate() != nil ||
-			request.Process == nil || request.Process.Validate() != nil || request.Gate != nil || request.UserNamespace != nil ||
-			request.StopFence != nil || request.Creator != nil || request.Role != "" ||
-			request.ReleaseProof != nil || request.PreGateReleaseProof != nil || request.AbortProof != nil ||
-			request.RunKey != (LinuxOwnerAnchorRunKey{}) || request.Fence != (protocol.Fence{}) || request.FenceDigest != "" ||
-			request.AfterPID != 0 || request.CloneGrant != nil || request.Cleanup != nil || request.PriorRemovalProof != nil || request.TargetFDPresent {
+		if request.Grant.Validate() != nil || row.presenceRejected(request) || row.shapeRejected(request) {
 			return linuxOwnerAnchorResponse{}, nil, errors.New("Linux owner child-origin request differs from its exact helper/process PIDFD")
 		}
 		if err := verifyLinuxOwnerAnchorPIDFD(sendFDs[0], *request.Process); err != nil {
@@ -903,12 +897,7 @@ func (client *LinuxOwnerAnchorClient) exchange(ctx context.Context, request linu
 		}
 		expectedAnchor = request.Grant.Anchor
 	} else if stopLeaf {
-		if len(sendFDs) != 0 || request.Grant.Validate() != nil || request.Helper == nil || request.Helper.Validate() != nil ||
-			request.StopFence == nil || request.StopFence.ValidateFor(request.Grant, *request.Helper) != nil ||
-			request.Gate != nil || request.UserNamespace != nil || request.Creator != nil || request.Process != nil || request.Role != "" ||
-			request.ReleaseProof != nil || request.PreGateReleaseProof != nil || request.AbortProof != nil ||
-			request.RunKey != (LinuxOwnerAnchorRunKey{}) || request.Fence != (protocol.Fence{}) || request.FenceDigest != "" ||
-			request.AfterPID != 0 || request.CloneGrant != nil || request.Cleanup != nil || request.PriorRemovalProof != nil || request.TargetFDPresent {
+		if request.Grant.Validate() != nil || row.presenceRejected(request) || row.shapeRejected(request) {
 			return linuxOwnerAnchorResponse{}, nil, errors.New("Linux owner anchor StopLeaf request differs from its exact helper producer fence")
 		}
 		expectedAnchor = request.Grant.Anchor
@@ -927,25 +916,7 @@ func (client *LinuxOwnerAnchorClient) exchange(ctx context.Context, request linu
 		}
 		expectedAnchor = request.Grant.Anchor
 	}
-	timeout := linuxOwnerAnchorRequestTimeout
-	if request.Operation == "wait-reap" || classifyChild {
-		timeout = linuxOwnerAnchorWaitTimeout
-	}
-	if request.Operation == linuxOwnerAnchorOperationReapRun {
-		timeout = linuxOwnerAnchorWaitTimeout
-	}
-	if request.Operation == linuxOwnerAnchorOperationWaitHelper {
-		timeout = linuxOwnerAnchorWaitTimeout
-	}
-	if request.Operation == linuxOwnerAnchorOperationLookup {
-		timeout = linuxOwnerAnchorWaitTimeout
-	}
-	if request.Operation == linuxOwnerAnchorOperationCloneCleanup {
-		timeout = linuxOwnerAnchorCleanupTimeout
-	}
-	if stopLeaf {
-		timeout = linuxOwnerAnchorWaitTimeout
-	}
+	timeout := row.timeoutClass.duration()
 	connection, stopClose, err := client.dial(ctx, timeout)
 	if err != nil {
 		return linuxOwnerAnchorResponse{}, nil, err
