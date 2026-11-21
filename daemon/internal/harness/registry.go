@@ -212,15 +212,6 @@ func (registry *Registry) Probe(ctx context.Context, kind Kind) (Capabilities, e
 	return capabilities, err
 }
 
-// ValidateRequired probes one adapter and checks operation requirements.
-func (registry *Registry) ValidateRequired(ctx context.Context, kind Kind, required ...Capability) (Capabilities, error) {
-	capabilities, err := registry.Probe(ctx, kind)
-	if err != nil {
-		return capabilities, err
-	}
-	return capabilities, capabilities.Require(required...)
-}
-
 // UnavailableAdapter represents a native harness that is not installed or
 // whose protocol is not verified for this daemon build.
 type UnavailableAdapter struct {
