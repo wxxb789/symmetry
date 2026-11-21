@@ -1058,3 +1058,22 @@ instead of appended.
       `type linuxOwnerMismatch struct { text string; class error }` whose `Error()` returns
       `text` and whose `Is(target)` reports `target == class`, so each phrasing keeps its exact
       wire text and joins its class.
+
+## Daemon state: decorative trailing-data disjunct in the provider-action decoder (rf-w3-07 survey)
+
+- [ ] Revalidate and merge the redundant trailing-data arms of
+      `normalizeProviderActionResult` (`daemon/internal/state/provider_action.go`). At the
+      rf-w3-07 base `52bdffd2` the block was
+      `if token, tokenErr := decoder.Token(); tokenErr != io.EOF { if tokenErr == nil || token !=
+      nil { return errors.New("provider action result has trailing data") }; return
+      errors.New("provider action result has trailing data") }`: both arms returned the identical
+      static error, so the disjunct could not change any outcome, and `json.Decoder.Token`
+      returns a nil token whenever it returns an error. rf-w3-07 (2026-11-21) split the block to
+      wrap the decoder cause (`if tokenErr != nil { wrapped }`, `if token != nil { static }`,
+      final `static`) and kept the third arm because that slice's contract requires base-vs-head
+      control-flow preservation for every early return; the last two arms still return the same
+      bytes. No test asserts the message by equality (`grep -rn --include=*_test.go '"provider
+      action result has trailing data"' daemon/` matches nothing). A follow-up maintenance task
+      can collapse the arms to one static return after re-running the state suite on the Linux
+      lane; the sweep and the classification table live in
+      `docs/evidence/rf-w3-07-state-error-causes-2026-11-21.md` §1/§2.
