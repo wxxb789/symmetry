@@ -31,6 +31,7 @@ converted tree. Counts are name+arity scoped.
 | `operator_conn/1` | 1 (task_goal_guard, header-only) | 0 (`TestConn.operator_conn/1`) | task_goal_guard | task_goal_guard's copy is body-identical to operator_read's `bearer/1` |
 | `enforce_csrf/1` | 1 | 1 (`TestConn`, new) | portal_workflow | byte-identical to `portal_session_test.exs:415` (non-owned, keeps its copy) |
 | `create_resource/5` | 2 | 1 (`TestConn`, new) | portal_resources, portal_workflow | the two copies byte-identical (round-1 fix; `api_conn/0` + `POST …/resources` + `json_response(201)`) |
+| `unix_signal/1` (2 clauses each) | 4 clauses | 2 clauses (`TestFixtures`, new) | pi_control, provider_broker | round-2 fix; both clause pairs byte-identical (the two source copies and the new home share `91f42c84…` / `0f298da3…`) |
 | `command_current/4` | 2 (+1 support definition) | 1 (`TestFixtures.__using__/1`) | goal_machine, task_goal_guard | the two copies are a byte-identical 19-line clone |
 | `subject/1` | 2 | 1 (`TestFixtures`, new) | goal_machine, task_goal_guard | the two copies byte-identical |
 | `validation_profiles/0` | 3 (`/0`; one of them a default-arg clause) | 2 (`TestFixtures`, new + `portal_workflow`'s pinned copy — Left local — reason) | task_goal_guard (imports `/0`), goal_machine (its clause becomes the arity-1 variant, which imports the shared `/0` for its default path) | task_goal_guard's copy byte-identical to `goals/workers_test.exs:178` (non-owned, keeps its copy); `portal_workflow`'s copy pins its own `allowed_runtime_ids` and is not interchangeable |
@@ -91,12 +92,12 @@ the contract's Failure control reads against the converted families.
 | `sync_ci/4`, `sync_delivery/4`, `sync_resource/3`, `check/2`, `authenticate/1`, `validate_resource_reference/3`, `execute/6`, `github_headers/1`, `azure_devops_headers/1`, `request/4`, `respond_with/2` | inline stub modules in integrations_test, portal_integrations_test, portal_resources_test, provider_action_controller_test, resource_sync_*_test, router_invalidation_coverage_test | module-level `def` behaviour implementations (provider stubs), not per-suite fixtures; the shared `IntegrationProviderStub`/`IntegrationAuthStub`/`IntegrationHTTPStub` support modules are the existing mechanism for the common path, and each stub exists to inject a file-local failure that the shared stub does not model |
 | `goal_command/4` | goal_controller:643 | HTTP-layer envelope reader (GET the goal, POST the command); same name as `TestFixtures.goal_command/3,4` but a different layer and different arity semantics (batch-1 plan already records the name collision) |
 | `goal_fixture/1`, `goal_fixture/2`, `work_item_fixture/3`, `history_fixture/0`, `runtime_fixture/0,1`, `transition/4,5`, `baseline_subject/1`, `evidence_attrs/2`, `plan_proposal/2`, `usage_attrs/1`, `task_result/3`, `errors_on/1`, … | the owned files above | every cross-file pair either differs in body (checked by the same grouping) or has no owned support home; they were already recorded as out of scope by the batch-1 plan ("other duplicated helper names inside the owned set … not among the contract's converted names") and stay recorded for the follow-up extraction slice |
-| e2e host plumbing: `git_output_bytes!/2`, `unix_signal/1` (2 clauses each) | pi_control, provider_broker (byte-identical pairs) | round-1 fix re-checked consolidation: `git_output_bytes!/2` cannot move alone (it delegates to the file-local `git_output!/2`, which the standalone support-tree compile under `--warnings-as-errors` cannot call from `.exs` files) and its family is not interchangeable (pi_control routes `git_output!/2` through `system_cmd_options/1`'s Windows `use_stdio` path; provider_broker does not), so a shared body changes one file's `System.cmd/3` options; `unix_signal/1` is pure but none of the four owned support modules is a host-plumbing home and a new `control/test/support/*.ex` module is outside the STRICT owned set. Escalated in the Round-1 review fix subsection |
-| remaining e2e helpers (`await!/4`, `await_loop!/5`, `command_current/3,4` in the two e2e files, `daemon_command/2`, `start_daemon!/*`, `git_output!/2`, `run_git!/2`, `subject_hash!/1`, `digest!/1`, `os_process_alive?/1`, …) | pi_control, provider_broker | the two files' copies are **not** byte-identical (different ports, build dirs, operator refs, option lists, clocks), so they are not interchangeable; the batch-1 plan already lists the e2e copies for this slice and the grouping shows only the two plumbing pairs above are clones |
+| e2e host plumbing: `git_output_bytes!/2` | pi_control, provider_broker (byte-identical pair) | cannot move alone (it delegates to the file-local `git_output!/2`, which the standalone support-tree compile under `--warnings-as-errors` cannot call from `.exs` files) and its family is not interchangeable (pi_control routes `git_output!/2` through `system_cmd_options/1`'s Windows `use_stdio` path; provider_broker does not), so a shared body changes one file's `System.cmd/3` options; review round 2 accepted the reason. `unix_signal/1` was moved into `TestFixtures` in round 2 (the conductor allowed no exception) — see the Round-2 review fix subsection |
+| remaining e2e helpers (`await!/4`, `await_loop!/5`, `command_current/3,4` in the two e2e files, `daemon_command/2`, `start_daemon!/*`, `git_output!/2`, `run_git!/2`, `subject_hash!/1`, `digest!/1`, `os_process_alive?/1`, …) | pi_control, provider_broker | the two files' copies are **not** byte-identical (different ports, build dirs, operator refs, option lists, clocks), so they are not interchangeable; the batch-1 plan already lists the e2e copies for this slice and the grouping shows only the plumbing pair above is a clone |
 
 ## Public shape
 
-`SymmetryControl.TestFixtures` (extended; each new builder's doc states the values it pins):
+`SymmetryControl.TestFixtures` (extended; each new function's doc states the values it pins):
 
 ```elixir
 subject(resource_id)            # {"resource_id", commit: 40×"a", tree_digest: "sha256:" <> 64×"4"}
@@ -105,6 +106,7 @@ validation_profiles()           # [test: [kind: :check, profile_digest: "sha256:
 check_contract()                # the "An independent check must pass." acceptance contract
 repository_fixture(project)     # Workspaces.create_resource(kind: "repository", unique name)
 uuid()                          # Ecto.UUID.generate/0 — the converted suites' fresh-id one-liner
+unix_signal(:term | :kill)      # "-TERM" / "-KILL", round-2 fix: the flag the e2e suites pass to System.cmd("kill", …)
 ```
 
 `SymmetryControlWeb.TestConn` (extended):
@@ -217,12 +219,12 @@ suite + provider-broker e2e + goal-receipt e2e steps.
   (`acceptance_contract`, `execution_policy`, the HTTP builders) stay there per P1-2/P1-3.
 - Production code, new fixtures for behaviour not already asserted, giant-test splitting (W3-15),
   and `async` conversion.
-- The e2e host-plumbing pairs (`git_output_bytes!/2`, `unix_signal/1`) — the round-1 review fix
-  re-checked consolidation against the conductor decision and kept them local: `git_output_bytes!/2`
-  cannot move without its non-interchangeable `git_output!/2` family (standalone support-tree
-  compile boundary, and a shared body changes one file's `System.cmd/3` options on Windows), and
-  `unix_signal/1` has no home inside the STRICT owned set. Both are recorded in "Left local —
-  reason" and escalated in the Round-1 review fix subsection.
+- The e2e host-plumbing helper `git_output_bytes!/2` — the round-1 review fix and review round 2
+  both accept keeping it local: it cannot move without its non-interchangeable `git_output!/2`
+  family (standalone support-tree compile boundary, and a shared body changes one file's
+  `System.cmd/3` options on Windows). Recorded in "Left local — reason". `unix_signal/1`, left
+  local in round 1, moved into `TestFixtures` in round 2 (the conductor allowed no exception) —
+  see the Round-2 review fix subsection.
 - Pre-existing dead code found while re-deriving: none added to `docs/TODO.md` because the
   contract fences `docs/TODO.md` edits to the closure; anything found is reported in the answer.
 
@@ -273,9 +275,10 @@ reason". The definitions live at:
   `create_resource/5` at `:50` (round-1 fix; it dispatches through the `@endpoint
   SymmetryControlWeb.Endpoint` attribute at `:20`), and `assert_error/3` at `:65` is the
   pre-existing body the five web copies carried.
-* `control/test/support/test_fixtures.ex` — `uuid/0` at `:75`, `subject/1` at `:170`,
-  `check_contract/0` at `:179`, `validation_profiles/0` at `:192`, `repository_fixture/1` at `:204`
-  (the injected command surface stays in `__using__/1`).
+* `control/test/support/test_fixtures.ex` — `uuid/0` at `:76`, `subject/1` at `:171`,
+  `check_contract/0` at `:180`, `validation_profiles/0` at `:193`, `repository_fixture/1` at
+  `:205` (the injected command surface stays in `__using__/1`), and `unix_signal/1` at `:232`
+  (round-2 fix).
 * `control/test/support/served_document.ex` — `uuid/1` at `:51`, `waiting_decision_payload/0` at
   `:60`, `assert_served_members!/3` at `:87`, `assert_served_rows!/3` at `:95`, `gate_members/3` at
   `:108`, `declared_members/2` at `:122`, `definition_variants/2` at `:132`, `contract_bundle/0` at
@@ -327,6 +330,7 @@ home share; a row whose counts changed keeps the hash of the copy that stayed un
 | `bearer` | TestConn | 2 | 1 | `efab688ead7687fde9d98739a6476b46182e384e4881001e087349f972c26a52` (the `/2` one-liner; the `/1` copy is the operator-token path, Edge cases §4) |
 | `enforce_csrf` | TestConn | 1 | 1 | `d9a18eb25fab2e3b64e7b5a76fed86f7c77f755c84850f984fda48c912aa39d6` |
 | `create_resource` | TestConn | 2 | 1 | `c1a41089412ed1ec26bc72b8275a1e90f3a175328fe75f3f57081adf5b2a4ac6` (round-1 fix; both source copies byte-identical to the new home) |
+| `unix_signal` | TestFixtures | 4 clauses | 2 clauses | `91f42c845e72437798e95dad347459e67785142b6aab95db858623d117fdefc8` (`:term` clause; the `:kill` clause is `0f298da3510e3a2635eea7cd924375bfbb0b449e931f40b613b4a81c1d99ed31`; round-2 fix, both source pairs byte-identical to the new home) |
 | `subject` | TestFixtures | 1 | 1 | `151c2069c6967ba7bd7faf6c53cc8bf3c6b84f709fd408e645acb9208d71c456` |
 | `check_contract` | TestFixtures | 1 | 1 | `cad03c430dda8ae70c1d6a7428751a256841e152948608c285202ea72a4fd458` |
 | `repository_fixture` | TestFixtures | 1 | 1 | `44618a9ecc4a2bce8a17e4a360fb9d5ece145656c3cbbfa6c24cb4f1260c931b` |
@@ -388,11 +392,11 @@ revision `61f8980526` (named in `docs/archive/CLOSED-TODO.md`'s revision note):
 
 Escalations carried from the fix report:
 
-- `git_output_bytes!/2` and `unix_signal/1` stay local — exact reasons in "Left local — reason"
-  (support compile boundary plus the non-interchangeable `git_output!/2` family; no owned
-  host-plumbing home). The conductor decision asks for consolidation unless a provable exception
-  applies, and these need either the record's acceptance or a widened owned set for a
-  host-plumbing support module.
+- `git_output_bytes!/2` and `unix_signal/1` were left local in round 1 — the reasons recorded in
+  "Left local — reason". Review round 2 accepted the `git_output_bytes!/2` reason (compile boundary
+  plus non-interchangeable `git_output!/2` family) and rejected the `unix_signal/1` one (a
+  placement preference, not a compile boundary or behaviour difference); the conductor required its
+  consolidation, done in the Round-2 review fix subsection.
 
 Reruns on the round-1 fix revision `61f8980526` (portable toolchain recipe,
 `MIX_TEST_PARTITION=rf-w3-03`, `--exclude portal_assets`): format exit 0; `MIX_ENV=test mix compile
@@ -405,3 +409,17 @@ exit 0, 0 `warning:` lines; the two e2e files 2 passed, 10 skipped, exit 0; the 
 `provider_action_controller_test.exs:1960` (`{:DOWN, …, :noproc}` where the test pins `:killed`);
 the file passed alone (79 passed) and the rerun above is green. The full suite stays with the
 conductor gate-runner.
+
+### Round-2 review fix (opus review round 2)
+
+Review round 2 accepted every round-1 fix and left one item: `unix_signal/1` (its P2-1) had to be
+consolidated. The conductor allowed no exception, so it is fixed on the round-2 revision named in
+`docs/archive/CLOSED-TODO.md`'s revision note:
+
+- `SymmetryControl.TestFixtures` gains `unix_signal/1` (`:232`) with a one-line `@doc` and a
+  moduledoc that now says "data builders and host-signal helpers"; the `:term`/`:kill` clause pair
+  is byte-identical to both deleted copies (`91f42c84…` / `0f298da3…`).
+- `pi_control_e2e_test.exs` and `provider_broker_e2e_test.exs` each `import
+  SymmetryControl.TestFixtures, only: [unix_signal: 1]` and drop their local `defp` pairs; both
+  callers keep their own `System.cmd` invocation.
+- `git_output_bytes!/2` stays local with the reason review round 2 accepted.

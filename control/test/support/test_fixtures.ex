@@ -1,6 +1,6 @@
 defmodule SymmetryControl.TestFixtures do
   @moduledoc """
-  Data builders shared by the control suites.
+  Data builders and host-signal helpers shared by the control suites.
 
   Each builder below replaces a helper that had been copy-pasted into every
   suite that needed it (2-11 copies per name). The values stay identical to the
@@ -8,7 +8,8 @@ defmodule SymmetryControl.TestFixtures do
   default is an explicit option, and the defaults are the deterministic fixture
   values most of those call sites rely on. Suite-specific values (the suite
   clock, the schema base, a fresh daemon or claim id) are arguments at the call
-  site, never hidden defaults.
+  site, never hidden defaults; `unix_signal/1` is the one non-builder, the flag
+  pair the e2e suites pass to `System.cmd("kill", ...)`.
   """
 
   import ExUnit.Assertions
@@ -226,6 +227,10 @@ defmodule SymmetryControl.TestFixtures do
       payload: canonical_command_payload(kind, payload)
     }
   end
+
+  @doc "The `kill` flag for `:term`/`:kill`, shared by the two e2e suites."
+  def unix_signal(:term), do: "-TERM"
+  def unix_signal(:kill), do: "-KILL"
 
   defp canonical_command_payload("request_decision", payload) do
     case Map.get(payload, :kind, Map.get(payload, "kind")) do

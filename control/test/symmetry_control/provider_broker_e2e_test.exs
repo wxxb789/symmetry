@@ -2,6 +2,7 @@ defmodule SymmetryControl.ProviderBrokerE2ETest do
   use SymmetryControlWeb.ConnCase, async: false
 
   import Ecto.Query
+  import SymmetryControl.TestFixtures, only: [unix_signal: 1]
 
   alias SymmetryControl.Goals
   alias SymmetryControl.Goals.{Goal, GoalDecision, HarnessSession, RunEvidence, WorkOutcome}
@@ -1608,9 +1609,6 @@ defmodule SymmetryControl.ProviderBrokerE2ETest do
       :ok
     end
   end
-
-  defp unix_signal(:term), do: "-TERM"
-  defp unix_signal(:kill), do: "-KILL"
 
   defp await!(daemon_port, description, assertion, timeout \\ 20_000) do
     deadline = System.monotonic_time(:millisecond) + timeout
