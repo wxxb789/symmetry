@@ -1,5 +1,5 @@
 defmodule SymmetryControl.OrchestrationReviewTest do
-  use SymmetryControl.DataCase, async: false
+  use SymmetryControl.OrchestrationCase, async: false
 
   alias Ecto.Adapters.SQL.Sandbox
   alias SymmetryControl.Orchestration
@@ -9,7 +9,7 @@ defmodule SymmetryControl.OrchestrationReviewTest do
 
   test "cancelling expires by lease into cancelled and cannot renew" do
     %{machine: machine} = enroll_machine()
-    runtime = register_runtime(machine)
+    runtime = register_runtime(machine, @now)
     {:ok, task, :created} = Orchestration.submit_task(task_attrs(), "cancel-expiry", now: @now)
     {:ok, run} = Orchestration.assign_one(now: @now)
     claimed_at = DateTime.add(@now, 20, :second)
@@ -58,7 +58,7 @@ defmodule SymmetryControl.OrchestrationReviewTest do
 
   test "assigned cancellation is applied by control, audited as a command, and rejects late claim" do
     %{machine: machine} = enroll_machine()
-    runtime = register_runtime(machine)
+    runtime = register_runtime(machine, @now)
     {:ok, task, :created} = Orchestration.submit_task(task_attrs(), "assigned-cancel", now: @now)
     {:ok, run} = Orchestration.assign_one(now: @now)
 
@@ -109,10 +109,10 @@ defmodule SymmetryControl.OrchestrationReviewTest do
 
   test "snapshot retains input until both acknowledgement and resume, then hides it" do
     %{machine: machine} = enroll_machine()
-    runtime = register_runtime(machine)
+    runtime = register_runtime(machine, @now)
     {:ok, task, :created} = Orchestration.submit_task(task_attrs(), "input-cleanup", now: @now)
     {:ok, run} = Orchestration.assign_one(now: @now)
-    fence = claim(run, runtime)
+    fence = claim(run, runtime, @now)
     transition(run.id, fence, "running", 61)
     transition(run.id, fence, "waiting_for_input", 62)
 
@@ -140,10 +140,10 @@ defmodule SymmetryControl.OrchestrationReviewTest do
 
   test "failed input acknowledgement stops redelivery and permits a replacement input" do
     %{machine: machine} = enroll_machine()
-    runtime = register_runtime(machine)
+    runtime = register_runtime(machine, @now)
     {:ok, task, :created} = Orchestration.submit_task(task_attrs(), "input-failed-ack", now: @now)
     {:ok, run} = Orchestration.assign_one(now: @now)
-    fence = claim(run, runtime)
+    fence = claim(run, runtime, @now)
     transition(run.id, fence, "running", 65)
     transition(run.id, fence, "waiting_for_input", 66)
 
@@ -177,10 +177,10 @@ defmodule SymmetryControl.OrchestrationReviewTest do
 
   test "transition replay projects the stored transition onto the current run and event replay rejects body changes" do
     %{machine: machine} = enroll_machine()
-    runtime = register_runtime(machine)
+    runtime = register_runtime(machine, @now)
     {:ok, _task, :created} = Orchestration.submit_task(task_attrs(), "replay-body", now: @now)
     {:ok, run} = Orchestration.assign_one(now: @now)
-    fence = claim(run, runtime)
+    fence = claim(run, runtime, @now)
     transition(run.id, fence, "running", 71)
 
     transition_id = uuid(72)
@@ -227,7 +227,7 @@ defmodule SymmetryControl.OrchestrationReviewTest do
 
   test "a queued task without a matching runtime does not starve a later matching task" do
     %{machine: machine} = enroll_machine()
-    runtime = register_runtime(machine)
+    runtime = register_runtime(machine, @now)
 
     {:ok, unmatched, :created} =
       Orchestration.submit_task(task_attrs(agent_profile: "other"), "unmatched", now: @now)
@@ -266,7 +266,7 @@ defmodule SymmetryControl.OrchestrationReviewTest do
 
     for task <- [first_task, second_task] do
       run = Map.fetch!(runs_by_task, task.id)
-      fence = claim(run, runtime)
+      fence = claim(run, runtime, @now)
       transition(run.id, fence, "running", System.unique_integer([:positive]))
       transition(run.id, fence, "waiting_for_input", System.unique_integer([:positive]))
     end
@@ -299,7 +299,7 @@ defmodule SymmetryControl.OrchestrationReviewTest do
 
   test "heartbeat and reconcile reject malformed active run payloads" do
     %{machine: machine} = enroll_machine()
-    runtime = register_runtime(machine)
+    runtime = register_runtime(machine, @now)
 
     assert {:error, :invalid_request} =
              Orchestration.heartbeat(runtime.id, runtime.connection_epoch, :not_a_list, now: @now)
@@ -315,10 +315,10 @@ defmodule SymmetryControl.OrchestrationReviewTest do
 
   test "completed run accepts a late fenced input acknowledgement without changing lifecycle" do
     %{machine: machine} = enroll_machine()
-    runtime = register_runtime(machine)
+    runtime = register_runtime(machine, @now)
     {:ok, task, :created} = Orchestration.submit_task(task_attrs(), "late-input-ack", now: @now)
     {:ok, run} = Orchestration.assign_one(now: @now)
-    fence = claim(run, runtime)
+    fence = claim(run, runtime, @now)
     transition(run.id, fence, "running", 101)
     transition(run.id, fence, "waiting_for_input", 102)
 
@@ -349,10 +349,10 @@ defmodule SymmetryControl.OrchestrationReviewTest do
 
   test "cancelled run accepts a late fenced cancel acknowledgement without changing lifecycle" do
     %{machine: machine} = enroll_machine()
-    runtime = register_runtime(machine)
+    runtime = register_runtime(machine, @now)
     {:ok, task, :created} = Orchestration.submit_task(task_attrs(), "late-cancel-ack", now: @now)
     {:ok, run} = Orchestration.assign_one(now: @now)
-    fence = claim(run, runtime)
+    fence = claim(run, runtime, @now)
     {:ok, _cancelling, command} = Orchestration.request_cancel(task.id, now: @now)
     transition(run.id, fence, "cancelled", 111)
 
@@ -368,13 +368,13 @@ defmodule SymmetryControl.OrchestrationReviewTest do
 
   test "terminal acknowledgement rejects stale epoch and generation" do
     %{machine: machine} = enroll_machine()
-    runtime = register_runtime(machine)
+    runtime = register_runtime(machine, @now)
 
     {:ok, task, :created} =
       Orchestration.submit_task(task_attrs(), "terminal-stale-ack", now: @now)
 
     {:ok, run} = Orchestration.assign_one(now: @now)
-    fence = claim(run, runtime)
+    fence = claim(run, runtime, @now)
     transition(run.id, fence, "running", 121)
     transition(run.id, fence, "waiting_for_input", 122)
 
@@ -407,13 +407,13 @@ defmodule SymmetryControl.OrchestrationReviewTest do
 
   test "a cancelling run replays its original unexpired claim without reopening lifecycle" do
     %{machine: machine} = enroll_machine()
-    runtime = register_runtime(machine)
+    runtime = register_runtime(machine, @now)
 
     {:ok, task, :created} =
       Orchestration.submit_task(task_attrs(), "cancelling-claim-replay", now: @now)
 
     {:ok, run} = Orchestration.assign_one(now: @now)
-    fence = claim(run, runtime)
+    fence = claim(run, runtime, @now)
 
     assert {:ok, cancelling, _command} = Orchestration.request_cancel(task.id, now: @now)
     assert cancelling.state == "cancelling"
@@ -448,13 +448,13 @@ defmodule SymmetryControl.OrchestrationReviewTest do
 
   test "a waiting episode permits one unacknowledged input command" do
     %{machine: machine} = enroll_machine()
-    runtime = register_runtime(machine)
+    runtime = register_runtime(machine, @now)
 
     {:ok, task, :created} =
       Orchestration.submit_task(task_attrs(), "single-input-episode", now: @now)
 
     {:ok, run} = Orchestration.assign_one(now: @now)
-    fence = claim(run, runtime)
+    fence = claim(run, runtime, @now)
     transition(run.id, fence, "running", 141)
     transition(run.id, fence, "waiting_for_input", 142)
 
@@ -589,13 +589,13 @@ defmodule SymmetryControl.OrchestrationReviewTest do
   test "provide_input cannot bind to a replacement generation after lease expiry" do
     Sandbox.unboxed_run(Repo, fn ->
       %{machine: machine} = enroll_machine()
-      runtime = register_runtime(machine)
+      runtime = register_runtime(machine, @now)
 
       {:ok, task, :created} =
         Orchestration.submit_task(task_attrs(), "input-generation-race", now: @now)
 
       {:ok, run} = Orchestration.assign_one(now: @now)
-      fence = claim(run, runtime)
+      fence = claim(run, runtime, @now)
       transition(run.id, fence, "running", 151)
       transition(run.id, fence, "waiting_for_input", 152)
       expired_at = DateTime.add(@now, 31, :second)
@@ -677,7 +677,7 @@ defmodule SymmetryControl.OrchestrationReviewTest do
                )
 
       assert {:ok, run} = Orchestration.assign_one(now: @now)
-      fence = claim(run, runtime)
+      fence = claim(run, runtime, @now)
       transition(run.id, fence, "running", 251)
       expired_at = DateTime.add(@now, 30, :second)
       terminal_at = DateTime.add(expired_at, 1, :second)
@@ -735,14 +735,7 @@ defmodule SymmetryControl.OrchestrationReviewTest do
     enrolled
   end
 
-  defp register_runtime(machine) do
-    assert {:ok, [runtime]} =
-             Orchestration.register_runtimes(machine.id, uuid(1), [runtime_attrs()], now: @now)
-
-    runtime
-  end
-
-  defp runtime_attrs(overrides \\ []) do
+  defp runtime_attrs(overrides) do
     Map.merge(
       %{
         runtime_key: "default",
@@ -754,35 +747,6 @@ defmodule SymmetryControl.OrchestrationReviewTest do
       },
       Map.new(overrides)
     )
-  end
-
-  defp task_attrs(overrides \\ []) do
-    Map.merge(
-      %{goal: "Run tests", agent_profile: "codex", workspace: "primary", input: %{}},
-      Map.new(overrides)
-    )
-  end
-
-  defp claim(run, runtime, current \\ @now) do
-    assert {:ok, claimed} =
-             Orchestration.claim(
-               run.id,
-               %{
-                 runtime_id: runtime.id,
-                 runtime_epoch: runtime.connection_epoch,
-                 generation: run.generation,
-                 claim_id: uuid(10)
-               },
-               now: current
-             )
-
-    %{
-      runtime_id: runtime.id,
-      runtime_epoch: runtime.connection_epoch,
-      generation: run.generation,
-      claim_id: claimed.claim_id,
-      lease_token: claimed.lease_token
-    }
   end
 
   defp transition(run_id, fence, state, number, current \\ @now) do
