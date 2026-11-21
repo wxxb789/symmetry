@@ -36,11 +36,7 @@ func (osCommandRunner) ExecutableDigest(ctx context.Context, executable string) 
 }
 
 func (osCommandRunner) Run(ctx context.Context, executable string, args ...string) ([]byte, error) {
-	environment, err := execution.BuildEnvironment()
-	if err != nil {
-		return nil, err
-	}
-	return execution.RunBoundedCommand(ctx, execution.Invocation{Program: executable, Args: args, Env: environment}, 64*1024)
+	return harness.RunProbeCommand(ctx, execution.Invocation{Program: executable, Args: args}, 64*1024, execution.RunBoundedCommand)
 }
 
 // ProbeResult separates exact executable identity from behavioral promotion.
@@ -87,16 +83,13 @@ func probeForPlatform(ctx context.Context, executable, platform string, runner C
 		return result, fmt.Errorf("%w: OmO platform is not pinned", harness.ErrUnsupportedVersion)
 	}
 	run := func(argument string) ([]byte, error) {
-		bounded, cancel := context.WithTimeout(ctx, probeTimeout)
-		defer cancel()
-		output, err := runner.Run(bounded, executable, argument)
-		if bounded.Err() != nil {
-			return nil, bounded.Err()
-		}
-		if len(output) > 64*1024 {
-			return nil, errors.New("OmO probe output exceeds limit")
-		}
-		return output, err
+		return harness.RunBoundedProbe(ctx, probeTimeout, func(probeContext context.Context) ([]byte, error) {
+			output, err := runner.Run(probeContext, executable, argument)
+			if len(output) > 64*1024 {
+				return nil, errors.New("OmO probe output exceeds limit")
+			}
+			return output, err
+		})
 	}
 	version, err := run("--version")
 	if contextErr := ctx.Err(); contextErr != nil {

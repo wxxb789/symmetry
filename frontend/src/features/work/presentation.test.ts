@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { asRecord, asText, attributionOf, ciLabel, ciResourcesOf, costLabel, decisionScopeLabel, decisionView, evidenceRows, executionStateLabel, failureText, nextActionLabel, ownerKey, ownerKeyLabel, ownerLabel, reportedResult, reportedText, timelineBoundary, timelineItemKey, timelineItemView, timestamp, type TimelineItemLike } from "./presentation";
+import { asRecord, asText } from "../../services/served";
+import { attributionOf, ciLabel, ciResourcesOf, costLabel, decisionScopeLabel, decisionView, evidenceRows, executionStateLabel, nextActionLabel, ownerKey, ownerKeyLabel, ownerLabel, reportedResult, reportedText, timelineBoundary, timelineItemKey, timelineItemView, timestamp, workFailureText, type TimelineItemLike } from "./presentation";
 
 const workItemId = "11111111-1111-4111-8111-111111111111";
 const taskId = "22222222-2222-4222-8222-222222222222";
@@ -29,7 +30,7 @@ describe("cost and acceptance truthfulness", () => {
     const reported = reportedResult({ generation: 2, result: { summary: "Touched the read path", kind: "candidate_completion" } });
     expect(reported).toEqual({ text: "Touched the read path", kind: "candidate_completion" });
     expect(reportedResult({ failure: { reason: "network" } }).text).toBe("Failed: network");
-    expect(failureText(null)).toBeNull();
+    expect(workFailureText(null)).toBeNull();
   });
 
   it("renders structured reported output as its JSON text and invents no row for empty values", () => {
