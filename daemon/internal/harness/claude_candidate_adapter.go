@@ -1080,7 +1080,7 @@ func (session *claudeCandidateSession) completeFinal(result TaskResult) {
 func (session *claudeCandidateSession) emit(event Event) error {
 	session.emitMutex.Lock()
 	defer session.emitMutex.Unlock()
-	if err := DeliverEvent(session.context, session.sink, &event); err != nil {
+	if err := DeliverEvent(session.context, session.sink, event); err != nil {
 		return fmt.Errorf("persist Claude native event: %w", err)
 	}
 	session.mutex.Lock()

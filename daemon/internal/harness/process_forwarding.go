@@ -16,17 +16,17 @@ type ProcessIdentity interface {
 }
 
 // ProcessForwarder forwards the optional capabilities of the process one
-// staged session owns. It holds the session's process field and the mutex that
-// guards it, so the session keeps a single process authority and its existing
-// lock discipline. Build the forwarder after the session struct so the field
-// address it holds is stable.
+// staged session owns. It holds the session's process field and the session
+// mutex used for concurrent reads of that field, so the session keeps a single
+// process authority and its existing lock discipline. Build the forwarder
+// after the session struct so the field address it holds is stable.
 type ProcessForwarder[P ProcessIdentity] struct {
 	mutex   *sync.Mutex
 	process *P
 }
 
-// NewProcessForwarder binds a session's process field and the mutex that
-// guards it.
+// NewProcessForwarder binds a session's process field and the session mutex
+// used for concurrent reads of that field.
 func NewProcessForwarder[P ProcessIdentity](mutex *sync.Mutex, process *P) ProcessForwarder[P] {
 	return ProcessForwarder[P]{mutex: mutex, process: process}
 }
@@ -52,17 +52,27 @@ func (forwarder ProcessForwarder[P]) DetailsLocked() (int, string) {
 }
 
 // LeaseRenewalAvailable reports whether the owned process can renew a
-// containment lease. The process is read under the session lock; the capability
-// check runs after that lock is released.
+// containment lease. The process is read under the session lock; a nil or
+// typed-nil process has no lease capability, and the capability check runs
+// after that lock is released.
 func (forwarder ProcessForwarder[P]) LeaseRenewalAvailable() bool {
-	renewer, ok := any(forwarder.snapshot()).(execution.LeaseRenewer)
+	process := forwarder.snapshot()
+	if IsNilInterface(process) {
+		return false
+	}
+	renewer, ok := any(process).(execution.LeaseRenewer)
 	return ok && renewer.LeaseRenewalAvailable()
 }
 
 // RenewLease renews the containment lease of the owned process, or reports
-// errors.ErrUnsupported when the process has no lease capability.
+// errors.ErrUnsupported when the process is nil, typed-nil or has no lease
+// capability.
 func (forwarder ProcessForwarder[P]) RenewLease(deadline time.Duration, sequence uint64) error {
-	renewer, ok := any(forwarder.snapshot()).(execution.LeaseRenewer)
+	process := forwarder.snapshot()
+	if IsNilInterface(process) {
+		return errors.ErrUnsupported
+	}
+	renewer, ok := any(process).(execution.LeaseRenewer)
 	if !ok {
 		return errors.ErrUnsupported
 	}

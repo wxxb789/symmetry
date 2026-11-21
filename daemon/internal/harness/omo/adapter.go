@@ -906,7 +906,7 @@ func (session *nativeSession) completeTurn(result harness.TaskResult, turnErr er
 func (session *nativeSession) emit(event harness.Event) error {
 	session.emitMutex.Lock()
 	defer session.emitMutex.Unlock()
-	if err := harness.DeliverEvent(session.context, session.sink, &event); err != nil {
+	if err := harness.DeliverEvent(session.context, session.sink, event); err != nil {
 		return fmt.Errorf("persist OmO native event: %w", err)
 	}
 	session.mutex.Lock()

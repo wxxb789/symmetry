@@ -105,11 +105,12 @@ func WaitTurnBarrier(ctx context.Context, sessionContext context.Context, turnDo
 `event_delivery.go`
 
 ```go
-// DeliverEvent stamps a missing event time and forwards the event to the
-// session's sink. A sink failure is returned unwrapped: each adapter keeps its
-// own "persist <adapter> native event: %w" literal at the call site so the wire
-// and log text is provably unchanged.
-func DeliverEvent(ctx context.Context, sink EventSink, event *Event) error
+// DeliverEvent stamps a missing event time on its copy of the event and
+// forwards it to the session's sink, leaving the caller's copy untouched. A
+// sink failure is returned unwrapped: each adapter keeps its own "persist
+// <adapter> native event: %w" literal at the call site so the wire and log
+// text is provably unchanged.
+func DeliverEvent(ctx context.Context, sink EventSink, event Event) error
 ```
 
 `result_clone.go`
@@ -197,10 +198,12 @@ their own barriers, because adopting this helper would change which error a turn
 concurrently with its session context reports — that is per-adapter terminal semantics, which
 clause 3 forbids changing.
 
-**`DeliverEvent`.** A zero `Event.At` is stamped with `time.Now().UTC()`; a non-zero `At` is
-preserved; the event is passed by value to `sink.Handle(ctx, event)`; the sink error is returned
-unwrapped so the adapter keeps its own `fmt.Errorf("persist <adapter> native event: %w", err)`
-literal byte-identical. Serialization (`emitMutex`/`emitMu`), the failure bookkeeping
+**`DeliverEvent`.** The event is taken by value: a zero `Event.At` is stamped with
+`time.Now().UTC()` on that copy, a non-zero `At` is preserved, and the caller's local event is
+never mutated (the five call sites read only `event.Sequence` after delivery); the stamped copy
+goes by value to `sink.Handle(ctx, event)`; the sink error is returned unwrapped so the adapter
+keeps its own `fmt.Errorf("persist <adapter> native event: %w", err)` literal byte-identical.
+Serialization (`emitMutex`/`emitMu`), the failure bookkeeping
 (`codex.sinkErr`, frozen `opencode.sinkErr`) and the `eventCount`/`lastSequence` counters stay in
 each adapter: they are guarded by that adapter's own session mutex, and folding them into the
 helper would create a second state authority.
@@ -240,11 +243,13 @@ Non-test Go lines under `daemon/internal/harness/**` at `4dd374b`: 19,807 (test:
 The contract's −500 was measured for the whole finding, which included the JSONL decoder now
 moved to W4-15, and review P3 makes LOC deltas reported, not gated. Measured on the final tree
 with `git diff --numstat -- daemon/internal/harness` plus `wc -l` on the new files: 761 non-test
-lines removed from the six adapter files, 159 added to them, and 409 lines of new shared helper
-(docs included) = **−193 net non-test**. The helpers are larger than the plan's estimate
-because every exported helper carries the repo's doc-comment style and the close gate encodes
-four adapter policies (join, retry, permanent, detached) in one place; the duplication they
-replace is 761 lines across six files.
+lines removed from the six adapter files, 159 added to them, and 420 lines of new shared helper
+(docs included) = **−182 net non-test**. The apply stage added the typed-nil lease guard
+(`process_forwarding.go`) and the by-value `DeliverEvent` note (+11 helper lines over the 409 the
+simplify report recorded); these numbers are re-derived from the final tree. The helpers are
+larger than the plan's estimate because every exported helper carries the repo's doc-comment
+style and the close gate encodes four adapter policies (join, retry, permanent, detached) in one
+place; the duplication they replace is 761 lines across six files.
 
 ## 6. Evidence plan (all foreground, on the final tree)
 
@@ -256,8 +261,8 @@ replace is 761 lines across six files.
 | targeted suites | `cd daemon && go test -count=1 ./internal/harness/...` |
 | helper pins | `go test -count=1 -run <new root-package tests> ./internal/harness/` |
 | whitespace | `git diff --check` |
-| no suppressions | `git diff -U0 \| grep -E '^\+.*(nolint\|credo:disable)'` (expect none) |
-| no host path | `git diff origin/main...HEAD \| grep -i "users/"` (expect none) |
+| no suppressions | `git diff -U0 origin/main...HEAD ':!docs/plans/2026-11-21-rf-w2-13-harness-scaffolding-5a-plan.md' \| grep -E '^\+.*(nolint\|credo:disable)'` (expect none; the record file itself carries the pattern text, so it is excluded) |
+| no host path | `git diff origin/main...HEAD ':!docs/plans/2026-11-21-rf-w2-13-harness-scaffolding-5a-plan.md' \| grep -i "users/"` (expect none) |
 | LOC | `git diff --numstat -- daemon/internal/harness` for the changed files plus `wc -l` on the six new helper files |
 | string preservation (A10) | sorted multiset of double-quoted literals per changed file, `git show HEAD:<file>` vs the working tree: the only removals are the import paths `"reflect"`/`"slices"`/`"sync"` and the empty-string literals of the deleted nil-process branches; every error string keeps its exact text and count |
 

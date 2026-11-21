@@ -269,7 +269,7 @@ func (session *nativeSession) StartTurn(ctx context.Context, request harness.Tur
 }
 
 func (session *nativeSession) emit(event harness.Event) error {
-	if err := harness.DeliverEvent(session.ctx, session.sink, &event); err != nil {
+	if err := harness.DeliverEvent(session.ctx, session.sink, event); err != nil {
 		return fmt.Errorf("persist OMP native event: %w", err)
 	}
 	return nil

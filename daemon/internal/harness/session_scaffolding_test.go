@@ -118,7 +118,9 @@ func TestIsNilInterfaceClassifiesTypedNil(t *testing.T) {
 
 func TestProcessForwarderForwardsOptionalProcessCapabilities(t *testing.T) {
 	process := &scaffoldingProcess{pid: 42, identity: "test:42", renewable: true}
-	process.status = execution.LinuxV2LiveOwnerStatus{}
+	statusErr := errors.New("live owner status unavailable")
+	process.status = execution.LinuxV2LiveOwnerStatus{LeaseSequence: 3, LeaseLive: true}
+	process.statusErr = statusErr
 	var mutex sync.Mutex
 	var owner ProcessIdentity = process
 	forwarder := NewProcessForwarder(&mutex, &owner)
@@ -142,8 +144,8 @@ func TestProcessForwarderForwardsOptionalProcessCapabilities(t *testing.T) {
 		t.Fatalf("renewals = %v, want one renewal with sequence 9", process.renewals)
 	}
 	status, err := forwarder.LiveOwnerStatus(context.Background())
-	if err != nil || status != process.status {
-		t.Fatalf("LiveOwnerStatus() = (%+v, %v), want the process's own observation", status, err)
+	if !errors.Is(err, statusErr) || status != process.status {
+		t.Fatalf("LiveOwnerStatus() = (%+v, %v), want the process's own observation and error", status, err)
 	}
 }
 
@@ -180,6 +182,12 @@ func TestProcessForwarderReportsUnsupportedWithoutCapabilities(t *testing.T) {
 	}
 	if _, err := typedNilForwarder.LiveOwnerStatus(context.Background()); !errors.Is(err, errors.ErrUnsupported) {
 		t.Fatalf("typed-nil-owner LiveOwnerStatus() error = %v, want errors.ErrUnsupported", err)
+	}
+	if typedNilForwarder.LeaseRenewalAvailable() {
+		t.Fatal("typed-nil-owner LeaseRenewalAvailable() = true, want false")
+	}
+	if err := typedNilForwarder.RenewLease(time.Second, 1); !errors.Is(err, errors.ErrUnsupported) {
+		t.Fatalf("typed-nil-owner RenewLease() error = %v, want errors.ErrUnsupported", err)
 	}
 }
 
@@ -272,6 +280,10 @@ func TestCloseGateKeepsPermanentFailureWithoutReAttempt(t *testing.T) {
 	if !errors.Is(first, permanentErr) {
 		t.Fatalf("permanent close = %v, want the unwrapped %v", first, permanentErr)
 	}
+	var marker PermanentCloseFailure
+	if errors.As(first, &marker) {
+		t.Fatalf("permanent close = %#v, want the unwrapped error, not a PermanentCloseFailure", first)
+	}
 	if strings.Contains(first.Error(), "PermanentCloseFailure") {
 		t.Fatalf("permanent close text = %q, want the inner error text", first.Error())
 	}
@@ -281,6 +293,9 @@ func TestCloseGateKeepsPermanentFailureWithoutReAttempt(t *testing.T) {
 	})
 	if !errors.Is(second, permanentErr) {
 		t.Fatalf("repeated close = %v, want the stable %v", second, permanentErr)
+	}
+	if errors.As(second, &marker) {
+		t.Fatalf("repeated close = %#v, want the stored inner error, not a PermanentCloseFailure", second)
 	}
 	if attempts != 1 {
 		t.Fatalf("attempts = %d, want 1: a permanent failure must not be retried", attempts)
@@ -408,29 +423,30 @@ func TestWaitTurnBarrierPrefersSettledTurnAndReportsSessionError(t *testing.T) {
 func TestDeliverEventStampsMissingTimeAndForwardsSinkError(t *testing.T) {
 	sink := &scaffoldingSink{}
 	event := Event{Kind: EventOutput, Sequence: 3, Data: []byte("payload")}
-	if err := DeliverEvent(context.Background(), sink, &event); err != nil {
+	if err := DeliverEvent(context.Background(), sink, event); err != nil {
 		t.Fatalf("DeliverEvent() error = %v, want nil", err)
 	}
-	if event.At.IsZero() {
-		t.Fatal("DeliverEvent left a zero event time unstamped")
-	}
 	delivered := sink.delivered()
-	if len(delivered) != 1 || delivered[0].Sequence != 3 || string(delivered[0].Data) != "payload" || delivered[0].At != event.At {
+	if len(delivered) != 1 || delivered[0].Sequence != 3 || string(delivered[0].Data) != "payload" {
 		t.Fatalf("delivered events = %+v, want the stamped event", delivered)
+	}
+	if delivered[0].At.IsZero() {
+		t.Fatal("DeliverEvent delivered a zero event time unstamped")
 	}
 
 	stamped := time.Date(2026, 11, 21, 12, 0, 0, 0, time.UTC)
 	preserved := Event{Kind: EventSessionStarted, At: stamped}
-	if err := DeliverEvent(context.Background(), sink, &preserved); err != nil {
+	if err := DeliverEvent(context.Background(), sink, preserved); err != nil {
 		t.Fatalf("DeliverEvent() error = %v, want nil", err)
 	}
-	if preserved.At != stamped {
-		t.Fatalf("DeliverEvent changed a set event time to %v, want %v", preserved.At, stamped)
+	delivered = sink.delivered()
+	if len(delivered) != 2 || delivered[1].At != stamped {
+		t.Fatalf("delivered events = %+v, want a preserved event time %v", delivered, stamped)
 	}
 
 	sinkErr := errors.New("journal unavailable")
 	failing := &scaffoldingSink{err: sinkErr}
-	if err := DeliverEvent(context.Background(), failing, &event); !errors.Is(err, sinkErr) {
+	if err := DeliverEvent(context.Background(), failing, event); !errors.Is(err, sinkErr) {
 		t.Fatalf("DeliverEvent() error = %v, want the unwrapped sink error %v", err, sinkErr)
 	}
 }

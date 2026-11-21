@@ -1215,7 +1215,7 @@ func mustMarshalTaskResult(result *protocol.TaskResult) json.RawMessage {
 func (session *nativeSession) emit(event harness.Event) error {
 	session.emitMutex.Lock()
 	defer session.emitMutex.Unlock()
-	if err := harness.DeliverEvent(session.context, session.sink, &event); err != nil {
+	if err := harness.DeliverEvent(session.context, session.sink, event); err != nil {
 		return fmt.Errorf("persist pi native event: %w", err)
 	}
 	session.mutex.Lock()

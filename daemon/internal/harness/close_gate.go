@@ -61,7 +61,7 @@ func (gate *CloseGate) Run(ctx context.Context, attempt func(context.Context) er
 	}
 	err := attempt(ctx)
 	gate.finish(entry, err)
-	return err
+	return entry.err
 }
 
 // RunDetached runs attempt on its own goroutine under a cleanup context derived

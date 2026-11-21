@@ -2091,7 +2091,7 @@ func (session *nativeSession) emit(event harness.Event) error {
 }
 
 func (session *nativeSession) emitLocked(event harness.Event) error {
-	if err := harness.DeliverEvent(session.context, session.sink, &event); err != nil {
+	if err := harness.DeliverEvent(session.context, session.sink, event); err != nil {
 		session.mutex.Lock()
 		if session.sinkErr == nil {
 			session.sinkErr = fmt.Errorf("persist Codex native event: %w", err)
