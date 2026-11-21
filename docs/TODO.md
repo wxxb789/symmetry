@@ -590,6 +590,30 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       the bundle-derived pair too) and have both gate files import them. Found by the adversarial
       review of PR #145 (P3-2).
 
+## Deferred review findings (rf-w2-16 clone-aliasing gate)
+
+- [ ] Deep-copy the nested helper exits `cloneLinuxCgroupStopReceipt` still shares with its
+      input, then narrow the aliasing harness's single populate exception and extend it to the
+      shape. `cloneLinuxCgroupStopReceipt`
+      (`daemon/internal/platform/linux_cgroup_v2_linux.go:1443-1457`) copies `LinuxProof` by
+      value (`:1449`) and deep-copies only the stored `LinuxProof.HelperExit` (`:1451-1452`), so
+      `LinuxProof.GateExit.HelperExit` and `LinuxProof.LauncherExit.HelperExit` stay shared with
+      the caller's receipt. That is a live alias on a valid shape: a mirror stop proof demands
+      `proof.HelperExit != nil` and a `GateExit` anchored on that same exit
+      (`daemon/internal/authority/authority.go:1470-1474` via `ValidForOwnedDescendant`,
+      `:1174-1184`), every v2 removal receipt must carry such a proof
+      (`StopReceipt.ValidForHandoff`, `authority.go:1822-1833`), and the platform constructs it
+      (`daemon/internal/platform/anchor_run.go:1531`; validated at
+      `daemon/internal/execution/linux_owner_v2_linux.go:1338` and sealed into the mirror proof
+      at `:1360`); `authority.go:2027` also accepts a non-nil `LauncherExit.HelperExit`. The
+      review of branch `refactor/rf-w2-16-clone-aliasing-test` (2026-11-21) confirmed the alias
+      with a probe against the shipped clone - mutating the original's
+      `LinuxProof.GateExit.HelperExit` changed the clone while the stored `HelperExit` copy
+      stayed independent - and that goal's contract forbids production changes. The gate file
+      `daemon/internal/platform/clone_aliasing_linux_test.go` documents this at the
+      `LinuxCgroupExitProof.HelperExit` populate skip; widening the exception before this
+      production fix turns `TestCloneAliasing` red.
+
 ## Production Linux containment witness: stop-receipt barrier stall awaiting a diagnosable occurrence
 
 - [ ] Diagnose the next occurrence of the `daemon_sigkill_after_lease_arm_before_resume` barrier

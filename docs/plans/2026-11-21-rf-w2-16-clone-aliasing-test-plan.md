@@ -62,14 +62,33 @@ stay byte-identical - the acceptance runs against the clones as shipped.
    (`authority/authority.go:1317`) refuses the value; without them that case would degenerate.
    Any field added later still gets populated and mutated by kind - the overrides name value
    formats, not clone coverage.
-3. **One documented populate exception.** `LinuxCgroupExitProof.HelperExit`
-   (`authority/authority.go:826`) is left `nil` when the exit proof itself is populated.
-   Reason, with evidence: `LinuxCgroupExitProof.Validate` rejects a nested helper exit
-   (`authority/authority.go:1164`: `value.HelperExit.HelperExit != nil` is invalid), so the
-   shape is unreachable in any valid authority graph; and every platform clone that receives an
-   exit proof outside the authority package truncates that field by design
-   (`cloneLinuxOwnerAnchorExitProof`, `anchor_server.go:44-49` sets `cloned.HelperExit = nil`),
-   so populating it would make the fidelity comparison assert a drop instead of independence.
+3. **One documented populate exception, stated with its real limits.** `LinuxCgroupExitProof.HelperExit`
+   (`authority/authority.go:826`) is left `nil` when the exit proof itself is populated. This is
+   a recorded limit, not a claim that the shape is unreachable:
+   - Nested shapes: `LinuxCgroupExitProof.Validate` (`authority/authority.go:1164`) rejects only
+     a *double* nested helper exit (`value.HelperExit.HelperExit != nil`); a *single-level*
+     `HelperExit` is valid.
+   - A single-level `HelperExit` is reachable and required: a mirror stop proof demands
+     `proof.HelperExit != nil` and a `GateExit` anchored on that same exit
+     (`authority.go:1470-1474` via `ValidForOwnedDescendant`, `:1174-1184`), and every v2
+     removal receipt must carry such a proof (`StopReceipt.ValidForHandoff`,
+     `authority.go:1822-1833`). The platform constructs the shape: `anchor_run.go:1531`,
+     validated at `execution/linux_owner_v2_linux.go:1338` and sealed into the mirror proof at
+     `:1360`; also `app/linux_owner_recovery_linux.go:1115-1130`.
+   - The skipped field therefore hides a *live* alias: `cloneLinuxCgroupStopReceipt`
+     (`linux_cgroup_v2_linux.go:1443-1457`) shares `LinuxProof.GateExit.HelperExit` and
+     `LinuxProof.LauncherExit.HelperExit` with its input through the `LinuxProof` struct copy
+     at `:1449` (only the stored `LinuxProof.HelperExit` is deep-copied, `:1451-1452`), and a
+     mirror `StopReceipt` carrying a single-level helper exit is a valid removal input.
+   - The second reason for the exception is mechanical: every platform clone that receives an
+     exit proof outside the authority package truncates that field by design
+     (`cloneLinuxOwnerAnchorExitProof`, `anchor_server.go:44-49` sets `cloned.HelperExit = nil`),
+     so populating it would make the fidelity comparison assert a drop instead of independence.
+   Recorded debt (production changes are out of contract scope, so not fixed here): a later
+   production goal must deep-copy `GateExit.HelperExit` in `cloneLinuxCgroupStopReceipt` (audit
+   the `LauncherExit` mirror too; `authority.go:2027` also accepts its non-nil `HelperExit`),
+   then narrow this exception and extend the harness. Loosening the exception before that fix
+   makes the suite red, which the contract's failure control forbids.
    The *outer* `HelperExit` pointers of `LinuxOwnerAnchorStopEvidence`,
    `LinuxOwnerHelperV2StopEvidence`, `LinuxCgroupStopProof`,
    `LinuxCgroupPreGateStopProof` and `LinuxCgroupPreGateStopReceipt`, and the `LauncherExit`
@@ -81,10 +100,14 @@ stay byte-identical - the acceptance runs against the clones as shipped.
    guard that makes the independence check meaningful (a clone that copies nothing would
    trivially pass an independence-only check).
 6. **Mutate.** The driver writes a mutated sentinel through every settable location reachable
-   from the original through a pointer, slice element or map entry (map entries are deleted),
-   and recurses into the pointees so that shallow-copied inner pointers are also caught. It
-   returns the number of write sites; zero write sites fails the case, so a populate that
-   silently produced a value-only graph cannot make the case vacuous.
+   from the original through a pointer, slice element or map entry, recursing into the pointees
+   so that shallow-copied inner pointers are also caught. The map arm recurses into every
+   entry's value (the entry itself is not addressable, but a pointer, slice or interface it
+   holds still reaches writable pointees) and then deletes one key: the recursion catches a map
+   copied entry-wise over shared pointees (e.g. `maps.Clone`), the deletion catches a map
+   copied with a shared header, and a fully deep-copied map stays green. It returns the number
+   of write sites; zero write sites fails the case, so a populate that silently produced a
+   value-only graph cannot make the case vacuous.
 7. **Independence.** After the mutation, the clone's rendering must still equal the rendering
    captured before it. Sharing one pointee, backing array or map with the original changes that
    rendering and fails with before/after images.
@@ -175,10 +198,11 @@ files and the plan). No `-race` locally: no cgo on this Windows host; the daemon
 
 - P-08 option (a) (restrict evidence types to value-only fields): touches
   `internal/authority` consumers; the contract excludes it.
-- Any production clone change, including `cloneLinuxCgroupStopReceipt`'s shallow copy of
-  `LinuxProof.HelperExit.HelperExit` and `helper_v2_stop.go`'s nested exit-proof truncations:
-  unreachable on valid shapes (see the populate exception above); recorded in the report, not
-  edited here.
+- Any production clone change, including `cloneLinuxCgroupStopReceipt`'s shared
+  `LinuxProof.GateExit.HelperExit` and `LinuxProof.LauncherExit.HelperExit` (a live, reachable
+  shape - see the populate exception above) and `helper_v2_stop.go`'s nested exit-proof
+  truncations: recorded as explicit debt in `docs/TODO.md` and in the harness comment, not
+  edited here (the contract forbids production changes in this goal).
 - `internal/authority`'s own clones (`Supervisor`, `SupervisorHandoff`,
   `LinuxCgroupPreGateStopReceipt`, `SupervisorHandoffReleaseProof`, ...): W2-14's scope; this
   test only exercises the clones that consume those values.

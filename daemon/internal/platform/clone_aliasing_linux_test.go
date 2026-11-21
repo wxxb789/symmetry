@@ -22,10 +22,11 @@ import (
 // These tests convert the invariant into a gate: for every covered clone they
 // populate all fields of the input by reflection, clone it through the
 // production function, then write the mutation marker through every pointer,
-// slice element and map entry the original still holds and require the clone's
-// rendered content to be unchanged. A field the clone copies shallowly is
-// exactly a field whose mutation becomes visible inside the clone, so a newly
-// added pointer/slice/map field fails this test red until its clone copies it.
+// slice element and map entry the original still holds (a map value is
+// recursed into and one key is deleted) and require the clone's rendered
+// content to be unchanged. A field the clone copies shallowly is exactly a
+// field whose mutation becomes visible inside the clone, so a newly added
+// pointer/slice/map field fails this test red until its clone copies it.
 //
 // The covered clones split by build universe. This file carries the harness and
 // the three clones compiled under //go:build linux; the seven clones compiled
@@ -214,11 +215,26 @@ func cloneAliasingPopulateStruct(v reflect.Value) error {
 			return fmt.Errorf("struct %s field %s is not settable; extend the aliasing harness", t, field.Name)
 		}
 		if t == cloneAliasingExitProofType && field.Name == "HelperExit" {
-			// Deliberately nil: LinuxCgroupExitProof.Validate rejects a nested
-			// helper exit (authority/authority.go:1164), so the shape is
-			// unreachable, and the platform clones that receive an exit proof
-			// truncate the field by design (anchor_server.go:44-49). The outer
-			// HelperExit pointers on the evidence structs are populated.
+			// Deliberately nil; this is a documented limit, not a coverage
+			// claim. Only a *double* nested helper exit is invalid
+			// (authority/authority.go:1164). A single-level HelperExit is
+			// valid and reachable: mirror stop proofs require it for
+			// anchor-reaped gate children (authority.go:1470-1474 through
+			// ValidForOwnedDescendant, :1174-1184; constructed at
+			// anchor_run.go:1531, validated at
+			// execution/linux_owner_v2_linux.go:1338, sealed into the mirror
+			// proof at :1360). cloneLinuxCgroupStopReceipt
+			// (linux_cgroup_v2_linux.go:1443-1457) shares GateExit.HelperExit
+			// and LauncherExit.HelperExit with its input through the
+			// LinuxProof struct copy at :1449 (only the stored HelperExit is
+			// deep-copied, :1451-1452), so this skip hides a live alias. And
+			// populating the field cannot go green today:
+			// cloneLinuxOwnerAnchorExitProof (anchor_server.go:44-49) nils it
+			// by design, so the fidelity comparison would assert that drop
+			// instead of independence. Debt: a production goal must deep-copy
+			// GateExit.HelperExit (auditing the LauncherExit mirror) and then
+			// narrow this exception. The outer HelperExit pointers on the
+			// evidence structs are populated.
 			continue
 		}
 		if pinned, ok := cloneAliasingFieldOverrides[t.String()+"."+field.Name]; ok {
@@ -335,8 +351,10 @@ func cloneAliasingRenderValue(builder *strings.Builder, v reflect.Value, depth i
 
 // cloneAliasingMutateReferences writes the mutation marker through the case's
 // *T handle and every pointer, slice element and map entry reachable from it,
-// recursing into pointees so that shallow-copied inner pointers are caught too.
-// It returns the number of write sites; a zero count means the case exercised
+// recursing into map values and deleting one map key, so a clone that shares a
+// pointee, a backing array or a map - whether the clone shares the map header
+// itself or only its values' pointees - changes the clone's rendering. It
+// returns the number of write sites; a zero count means the case exercised
 // nothing that a clone could alias.
 func cloneAliasingMutateReferences(original reflect.Value) int {
 	if original.Kind() != reflect.Ptr || original.IsNil() {
@@ -346,8 +364,9 @@ func cloneAliasingMutateReferences(original reflect.Value) int {
 }
 
 // cloneAliasingMutateValue mutates one reachable value in place: every pointer
-// is followed, every slice element and map entry is written, and every settable
-// scalar is replaced, so a clone that shares any of them changes its rendering.
+// is followed, every slice element is written, every map value is recursed
+// into and one map key is deleted, and every settable scalar is replaced, so a
+// clone that shares any of them changes its rendering.
 func cloneAliasingMutateValue(v reflect.Value) int {
 	switch v.Kind() {
 	case reflect.Ptr:
@@ -367,8 +386,19 @@ func cloneAliasingMutateValue(v reflect.Value) int {
 		}
 		keys := v.MapKeys()
 		sort.Slice(keys, func(i, j int) bool { return cloneAliasingRender(keys[i]) < cloneAliasingRender(keys[j]) })
+		writes := 0
+		for _, key := range keys {
+			// A map entry's value is not addressable, but a pointer, slice or
+			// interface it holds still reaches a writable pointee, so a map
+			// copied entry-wise over shared pointees (maps.Clone) cannot hide
+			// behind its fresh map header.
+			writes += cloneAliasingMutateValue(v.MapIndex(key))
+		}
+		// Deleting one key catches a clone that still shares the original's
+		// map header, which the recursion above cannot see through a
+		// value-only entry.
 		v.SetMapIndex(keys[0], reflect.Value{})
-		return 1
+		return writes + 1
 	case reflect.Interface:
 		if v.IsNil() {
 			return 0
