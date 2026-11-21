@@ -15,11 +15,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// linuxSupervisorSession carries the supervisor helper state that outlives a
-// single loop iteration. The helper loop builds it, the stop path and the
-// recovery endpoint keep operating on the same values, and the pre-hello
-// recovery path builds a deliberately minimal value because no handshake
-// state exists yet.
 type linuxSupervisorSession struct {
 	launch              linuxSupervisorLaunch
 	listener            *net.UnixListener
@@ -77,11 +72,6 @@ func newLinuxSupervisorSession(launch linuxSupervisorLaunch, listener *net.UnixL
 	return session
 }
 
-// newLinuxSupervisorPreHelloRecoverySession reproduces the four pre-hello call
-// sites of the recovery endpoint: the target never reached hello, so the stop
-// receipt is nil, the bound secret is empty, the owner-loss channel is nil,
-// allowAbort is true, the descendant scan seal sequence is nil, and the owner
-// loss proof result category is empty.
 func newLinuxSupervisorPreHelloRecoverySession(listener *net.UnixListener, launch linuxSupervisorLaunch, target *LinuxPtraceProcess, stop func() error, ownerRecoveryMarker linuxSupervisorOwnerRecoveryAuthenticatedMarker) *linuxSupervisorSession {
 	return &linuxSupervisorSession{
 		listener:            listener,
@@ -133,21 +123,17 @@ func (session *linuxSupervisorSession) runHelperLoop() error {
 				continue
 			}
 			if err := session.stop(); err != nil {
-				// Lease expiry does not prove that the owner process is dead. Keep
-				// the authenticated control channel available so the live owner can
-				// retry the physical stop; control EOF/owner loss will migrate to
-				// the recovery endpoint below.
+				// Lease expiry does not prove owner death. Keep the authenticated channel
+				// available so the live owner can retry the stop; control EOF/owner loss migrates.
 				continue
 			}
-			// The target is reaped and the receipt is durable. Continue serving
-			// the original pipe so the owner can release it without a channel
-			// migration race.
+			// The target is reaped and the receipt is durable: keep serving the original
+			// pipe so the owner can release it without a channel-migration race.
 			continue
 		case event := <-requestEvents:
 			if event.err != nil {
-				// Control EOF/error is itself an owner-loss boundary. The owner
-				// watchdog may publish its notification later, so never return
-				// the raw protocol error while target authority is still active.
+				// Control EOF/error is an owner-loss boundary: the watchdog may publish later,
+				// so never return the raw error while target authority is still active.
 				return session.enterRecovery()
 			}
 			request := event.request
@@ -270,10 +256,8 @@ func (session *linuxSupervisorSession) runHelperLoop() error {
 				return session.enterRecovery()
 			}
 			if needsRecovery {
-				// The error response reached the live daemon. Keep servicing the
-				// original control channel so it can retry the physical proof;
-				// switch to the recovery endpoint only when that channel itself is
-				// lost or a response write fails.
+				// The error response reached the live daemon: keep servicing the original
+				// channel so it can retry; recovery starts only on channel loss or write failure.
 				continue
 			}
 			if request.Operation == linuxSupervisorOpRelease && status == "released" {
@@ -344,9 +328,8 @@ func (session *linuxSupervisorSession) runStop() error {
 		if !session.ownerLossProofBarrierReleased {
 			return errors.Join(ownerLossScanErr, session.ownerLossProofBarrierErr)
 		}
-		// The bounded stop deadline above covered signal, target wait, and
-		// same-group reaping. The witness pause must not consume the close
-		// proof's independent bounded deadline.
+		// The earlier stop deadline covered signal, target wait and same-group reaping; the
+		// witness pause must not consume the close proof's independent bounded deadline.
 		proofDeadline = time.Now().Add(containmentCloseDeadline)
 	}
 	var closeErr error
@@ -371,9 +354,8 @@ func (session *linuxSupervisorSession) runStop() error {
 		return ownerLossScanErr
 	}
 	if precommitAbort {
-		// The target remained exec-stopped because commit never crossed the
-		// helper. Abort is proved by exact helper/target/group absence, not by
-		// inventing a scan receipt for an execution that never became runnable.
+		// The target stayed exec-stopped because commit never crossed the helper:
+		// abort is proved by exact helper/target/group absence, not a manufactured scan receipt.
 		return nil
 	}
 	var scanErr error
@@ -402,9 +384,7 @@ func (session *linuxSupervisorSession) enterRecovery() error {
 }
 
 func (session *linuxSupervisorSession) runRecoveryLoop() error {
-	// The base passed the category by value, so the recovery endpoint keeps
-	// reporting the handover-time value even when a stop issued from inside
-	// this loop latches a newer one into the session field.
+	// Snapshot: a stop run inside this loop may latch a newer category; the marker reports the handover-time value.
 	ownerLossProofResultCategory := session.ownerLossProofResultCategory
 	ownerLossHandled := false
 	ownerRecoveryMarkerPublished := false
