@@ -27,52 +27,66 @@ Three independent checks, all on the delivered tree against `git show 12a94c79:<
    their call sites) must contain every base source line (whitespace-normalised, so
    `--color-moved-ws=allow-indentation-change` re-indentation is allowed) in the original order,
    the delivered-only lines must all be helper headers, braces, `if err := validateX(...); err != nil {`
-   call lines, `return err`, `return nil` or `return validateX(...)`, and the ordered sequence of
-   `errors.New` literals must be identical.
+   call lines, `return err` or `return nil` — exactly the C3 letter, with no `return validateX(...)`
+   allowance — and the ordered sequence of `errors.New` literals must be identical.
+
+   The fix stage removed the nine `return validateX(...)` clone-stage tail calls the review flagged
+   (R3) and rewrote them to the enumerated call form; two structural consequences were needed to
+   stay inside the ≤40-line acceptance: the reuse dispatcher `validateLinuxCloneReuseBranch` came
+   back out of `validateLinuxCloneJournal` (the apply-stage inlining put the parent at 41 lines) and
+   the intent-nil dispatch stayed inside the parent rather than moving into
+   `validateLinuxCloneIntent`, because folding it in lets a nil-intent journal fall through to
+   `validateLinuxCloneCheckout` and dereference `intent.Target` (a probe caught this; see §3).
 
 ```
 validmove -base <12a94c79 state.go> -new daemon/internal/state/state.go \
-  -group validateJournal=<11 helpers> -group validateLinuxCloneJournal=<15 helpers> \
-  -group LinuxCgroupReservation.Validate=<9 helpers>
-GROUP validateJournal: PASS (base lines=200, errors=37)
-GROUP validateLinuxCloneJournal: PASS (base lines=171, errors=31)
-GROUP LinuxCgroupReservation.Validate: PASS (base lines=67, errors=17)
-STATE_MOVE_EXIT=0
+  -only validateJournal -only validateLinuxCloneJournal -only LinuxCgroupReservation
+GROUP validateJournal: PASS (base lines=200, errors=37, delivered lines=257, allowed additions=57)
+GROUP validateLinuxCloneJournal: PASS (base lines=171, errors=31, delivered lines=253, allowed additions=82)
+GROUP (LinuxCgroupReservation).Validate: PASS (base lines=67, errors=17, delivered lines=114, allowed additions=47)
+MOVE_EXIT=0
 validmove -base <12a94c79 goal_session.go> -new daemon/internal/state/goal_session.go \
-  -group validateGoalSessionJournal=<8 helpers>
-GROUP validateGoalSessionJournal: PASS (base lines=71, errors=21)
-GOAL_MOVE_EXIT=0
+  -only validateGoalSessionJournal
+GROUP validateGoalSessionJournal: PASS (base lines=71, errors=21, delivered lines=113, allowed additions=42)
+MOVE_EXIT=0
 ```
 
-Zero base lines missing, zero reordered, zero delivered-only lines outside the allowed set in all
-four groups. Negative controls on the same tool: one changed error literal and one swapped
-authority/handoff block both report FAIL (exit 1), so the check discriminates.
+Zero base lines missing, zero reordered, zero delivered-only lines outside the C3 set in all four
+groups. Negative controls on the same tool: one changed error literal and one swapped
+authority/handoff block both report FAIL (exit 1), so the check discriminates. The journal group
+splices only the 11 helpers extracted from the base `validateJournal`; `validateLinuxCloneJournal`
+was a pre-existing helper at the base revision, so its call line is compared as a moved line and its
+body is covered by its own group.
 
 2. **`git diff --color-moved=zebra --color-moved-ws=allow-indentation-change`** (C3's own command):
-   `daemon/internal/state/state.go | 412 +++---`, `daemon/internal/state/goal_session.go | 62 +++-`,
-   374 insertions / 100 deletions over the two production files, exit 0. Every removed
+   `daemon/internal/state/state.go | 443 +++---`, `daemon/internal/state/goal_session.go | 62 +++-`,
+   408 insertions / 97 deletions over the two production files, exit 0. Every removed
    `if`-condition and `return errors.New(...)` line appears as a moved (relocated) line; the
    non-moved additions are the new helper headers/braces, the call lines, and the `return nil` that
-   already terminated an extracted sub-branch. `git diff --numstat` for the whole slice:
+   already terminated an extracted sub-branch. No `return validateX(...)` tail call remains in the
+   slice, so the allowed-new-line set is exactly C3's. `git diff --numstat` for the whole slice
+   (fix revision 2026-11-21):
 
 | file | + | − |
 |---|---:|---:|
-| `daemon/internal/state/state.go` | 315 | 97 |
+| `daemon/internal/state/state.go` | 349 | 94 |
 | `daemon/internal/state/goal_session.go` | 59 | 3 |
-| `daemon/internal/state/state_test.go` | 786 | 0 |
+| `daemon/internal/state/state_test.go` | 879 | 0 |
 | `daemon/internal/state/goal_session_test.go` | 222 | 0 |
-| `daemon/internal/state/linux_clone_journal_test.go` | 613 | 130 |
+| `daemon/internal/state/linux_clone_journal_test.go` | 671 | 129 |
 
 3. **No collateral edits.** Every `-U0` hunk of `daemon/internal/state/state.go` starts inside one of
-   the three validator spans of that file (hunk starts `144 152 158 164 177 185 188 192 205` ⊆
-   `Validate` 144-212; `4883 4892 4895 4913 4921 4929 4933 4936 4969 4982 4985 5021 5034 5043` ⊆
-   `validateLinuxCloneJournal` 4881-5053; `5817 5833 5851 5869 5894 5920 5929 5937 5957 5987 5992` ⊆
-   `validateJournal` 5817-6018), and every `goal_session.go` hunk starts inside
-   `validateGoalSessionJournal` (1647-1719). No other declaration in either file is touched.
+   the three validator regions of that file (hunk starts `145 184 194 204 221 233 240 248 265` ⊆
+   `(LinuxCgroupReservation).Validate` + helpers 144-275; `4945 4950 4955 5053 5060 5067 5077 5126
+   5135 5158 5198 5203` ⊆ `validateLinuxCloneJournal` + helpers 4944-5231; `5996 6052 6074 6096 6125
+   6155 6168 6180 6203 6235 6244` ⊆ `validateJournal` + helpers 5995-6273), and every
+   `goal_session.go` hunk starts inside `validateGoalSessionJournal` + helpers (`1647 1653 1658
+   1667 1685 1695 1704 1714` ⊆ 1647-1775). Since every hunk start lands inside a sliced declaration
+   or one of its helpers, no other declaration in either file is touched.
 
-All three checks were re-derived 2026-11-21 on the apply revision (the reuse dispatcher inlined into
-the reuse guard and one helper renamed); the base-line counts and error-literal counts are unchanged
-by that simplification.
+All three checks were re-derived 2026-11-21 on the fix revision (R3 rewritten to the enumerated call
+form, the reuse dispatcher restored, the operand-isolation cases added); the base-line counts
+(200/171/67/71) and error-literal counts (37/31/17/21) are unchanged by the extraction.
 
 Comparison carrier: whitespace-stripped lines (the rf-w1-05 precedent's carrier), because extracted
 blocks move one indent level outward; `gofmt -l internal/state/` is empty, so the delivered
@@ -82,21 +96,23 @@ indentation is canonical.
 
 The 40-line target is pinned by a span/cyclo check over the sliced function set: a scratch `go/ast`
 tool (no repository changes) that reports `end-start+1` lines and a gocyclo-identical visitor
-(`FuncDecl`/`FuncLit`/`IfStmt`/`ForStmt`/`RangeStmt`/`CaseClause`/`CommClause` plus `&&`/`||`).
-Its base output reproduces C6's values exactly (202/171, 173/140, 73/70, 69/78) and it agrees with
-`golangci-lint` 2.15.0 `gocyclo` on every function that linter reports, so it is a faithful carrier
-for the ≤40-line half that `funlen`'s 120-line limit does not enforce.
+(`IfStmt`/`ForStmt`/`RangeStmt`/non-default `CaseClause`/non-default `CommClause` plus `&&`/`||`,
+matching `gocyclo`'s "default clauses do not count" rule). Its base output reproduces C6's values
+exactly (202/171, 173/140, 73/70, 69/78), and on the delivered tree it matches `golangci-lint`
+2.15.0 `gocyclo` on every one of the 21 production functions that linter still reports (0
+mismatches), so it is a faithful carrier for the ≤40-line half that `funlen`'s 120-line limit does
+not enforce.
 
 ```
-funclen -dir daemon/internal/state -match '<the 4 validators and their 43 helpers>' \
+funclen -dir daemon/internal/state -match '<the 4 validators and their 44 helpers>' \
   -max-lines 40 -max-cyclo 25
-PINNED_LIMIT_EXIT=0 SLICED_FUNCTIONS=48 MAX_SPAN=39 MAX_CYCLO=25
+PINNED_LIMIT_EXIT=0 SLICED_FUNCTIONS=49 MAX_SPAN=39 MAX_CYCLO=25
 ```
 
-48 rows = the 47 sliced functions plus `(NativeUsageObservation).Validate` matched by the shared
+49 rows = the 48 sliced functions plus `(NativeUsageObservation).Validate` matched by the shared
 `Validate` name filter. Per-function spans and cyclomatic complexity of the delivered slice
-(`file,line,span,cyclo`; the 43 new helpers are unexported, the 4 top-level validators keep their
-names):
+(`file,line,span,cyclo`; the 44 new helpers are unexported, the 4 top-level validators keep their
+names; fix revision 2026-11-21):
 
 ```
 validateGoalSessionJournal,goal_session.go,1647,30,10
@@ -118,34 +134,36 @@ validateGoalSessionStopReceipt,goal_session.go,1770,6,9
 (LinuxCgroupReservation).validateMirrorAliases,state.go,243,7,8
 (LinuxCgroupReservation).validateProofs,state.go,251,16,12
 (LinuxCgroupReservation).validateCreationOrder,state.go,268,8,10
-validateLinuxCloneJournal,state.go,4944,35,13
-validateLinuxCloneReuseGrant,state.go,4980,12,15
-validateLinuxCloneReuseAbortState,state.go,4993,12,9
-validateLinuxCloneReuseRetainedTarget,state.go,5006,11,7
-validateLinuxCloneIntentAbsent,state.go,5018,10,13
-validateLinuxCloneIntent,state.go,5029,10,7
-validateLinuxCloneSeedReceipt,state.go,5040,6,4
-validateLinuxCloneAbort,state.go,5047,13,9
-validateLinuxCloneAbortPending,state.go,5061,9,5
-validateLinuxCloneAbortProof,state.go,5071,18,12
-validateLinuxCloneCheckout,state.go,5090,16,10
-validateLinuxClonePromotion,state.go,5107,25,18
-validateLinuxClonePromotionWithoutIntent,state.go,5133,20,13
-validateLinuxCloneCleanup,state.go,5154,17,9
-validateLinuxCloneCleanupPending,state.go,5172,11,7
-validateLinuxCloneCleanupProof,state.go,5184,11,10
-validateJournal,state.go,5958,39,13
-validateJournalKeyScalarsAndProcessDetails,state.go,5998,19,24
-validateContainmentAuthority,state.go,6018,21,15
-validateContainmentHandoff,state.go,6040,21,14
-validateContainmentCgroup,state.go,6062,28,22
-validateContainmentScans,state.go,6091,29,24
-validateContainmentCgroupReleaseProof,state.go,6121,12,14
-validateContainmentCgroupPreGateReleaseProof,state.go,6134,11,13
-validateJournalLeaseTerminalAndGrantInvariants,state.go,6146,22,25
-validatePendingJournalEntriesAndDeliveries,state.go,6169,31,13
-validateJournalNativeUsageObservation,state.go,6201,8,3
-validateJournalInputAndCommandIntents,state.go,6210,27,13
+validateLinuxCloneJournal,state.go,4944,32,12
+validateLinuxCloneReuseBranch,state.go,4980,15,5
+validateLinuxCloneReuseGrant,state.go,4996,12,15
+validateLinuxCloneReuseAbortState,state.go,5009,12,9
+validateLinuxCloneReuseRetainedTarget,state.go,5022,11,7
+validateLinuxCloneIntentAbsent,state.go,5034,10,13
+validateLinuxCloneIntent,state.go,5045,10,7
+validateLinuxCloneSeedReceipt,state.go,5056,6,4
+validateLinuxCloneAbort,state.go,5063,19,11
+validateLinuxCloneAbortPending,state.go,5083,9,5
+validateLinuxCloneAbortProof,state.go,5093,18,12
+validateLinuxCloneCheckout,state.go,5112,19,11
+validateLinuxClonePromotion,state.go,5132,31,20
+validateLinuxClonePromotionWithoutIntent,state.go,5164,20,13
+validateLinuxCloneCleanup,state.go,5185,23,11
+validateLinuxCloneCleanupPending,state.go,5209,11,7
+validateLinuxCloneCleanupProof,state.go,5221,11,10
+validateJournal,state.go,5995,39,13
+validateJournalKeyScalarsAndProcessDetails,state.go,6035,19,24
+validateContainmentAuthority,state.go,6055,21,15
+validateContainmentHandoff,state.go,6077,21,14
+validateContainmentCgroup,state.go,6099,28,22
+validateContainmentScans,state.go,6128,29,24
+validateContainmentCgroupReleaseProof,state.go,6158,12,14
+validateContainmentCgroupPreGateReleaseProof,state.go,6171,11,13
+validateJournalLeaseTerminalAndGrantInvariants,state.go,6183,22,25
+validatePendingJournalEntriesAndDeliveries,state.go,6206,31,13
+validateJournalNativeUsageObservation,state.go,6238,8,3
+validateJournalInputAndCommandIntents,state.go,6247,27,13
+(NativeUsageObservation).Validate,goal_usage.go,23,8,8
 ```
 
 `golangci-lint run` 2.15.0 with `gocyclo.min-complexity: 25` over `./internal/state/...` (temporary
@@ -154,12 +172,15 @@ config outside the repository):
 | run | findings | exit | delta |
 |---|---:|---:|---|
 | base `12a94c79` (`base-gocyclo25.txt`) | 36 | 1 | — |
-| apply revision, re-run (`apply-gocyclo25.txt`) | 32 | 1 | −4, exactly `validateJournal`, `validateLinuxCloneJournal`, `validateGoalSessionJournal`, `(LinuxCgroupReservation).Validate`; **zero** new findings, and the finding set is identical by function name to the pre-apply delivered run |
+| apply revision (`apply-gocyclo25.txt`) | 32 | 1 | −4, exactly `validateJournal`, `validateLinuxCloneJournal`, `validateGoalSessionJournal`, `(LinuxCgroupReservation).Validate`; **zero** new findings |
+| fix revision, re-run 2026-11-21 (`gocyclo-head2.txt`) | 32 | 1 | finding set identical **by function name** to the apply/review runs; the four validators still absent |
 
 The remaining 32 findings are pre-existing functions outside this slice's owned files or outside its
 extraction set (patch/scan/handoff helpers, `validateControlCommandIntents` in `control.go`,
-`validateGoalSessionIntent`, `validTerminalState`, plus 12 test functions), identical by name before
-and after.
+`validateGoalSessionIntent`, `validTerminalState`, `compareGoalSessionIdentityStrict`,
+`prepareGoalDelivery`, plus 9 test functions: `control_test.go` 1, `goal_delivery_test.go` 2,
+`goal_session_test.go` 4, `state_test.go` 1, `supervisor_handoff_test.go` 1), identical by name
+before and after.
 
 ## 3. Pins first (C4) and the mutation check
 
@@ -169,16 +190,24 @@ reordered condition, merged/split string or changed verdict turns them red):
 
 | test | driver | subtests | literals | not covered |
 |---|---|---:|---:|---|
-| `TestJournalValidatorFirstErrorStringsArePinned` (`state_test.go`) | `store.mutateJournal` (load → mutate → `saveJournalWithLocked` → `validateJournal`); `(LinuxCgroupReservation).Validate` called directly because the journal-level surface collapses its inner strings and `ReserveLinuxCgroup` is `linux/amd64`-gated | 54 subtests | 37/41 | 4 proven unreachable (§5) |
+| `TestJournalValidatorFirstErrorStringsArePinned` (`state_test.go`) | `store.mutateJournal` (load → mutate → `saveJournalWithCapacityGuardLocked` `state.go:5316` → `saveJournalLocked` `state.go:5298` → `validateJournal`); `(LinuxCgroupReservation).Validate` called directly because the journal-level surface collapses its inner strings and `ReserveLinuxCgroup` is `linux/amd64`-gated | 64 subtests | 37/43 | 6 proven unreachable (§5) |
 | `TestGoalSessionValidatorFirstErrorStringsArePinned` (`goal_session_test.go`) | `store.mutateGoalSession` | 26 subtests | 17/17 | none |
-| `TestLinuxCloneValidatorFirstErrorStringsArePinned` (`linux_clone_journal_test.go`, `//go:build linux`) | `store.mutateJournal` on store-built clone chains | 31 subtests | 31/31 | none |
+| `TestLinuxCloneValidatorFirstErrorStringsArePinned` (`linux_clone_journal_test.go`, `//go:build linux`) | `store.mutateJournal` on store-built clone chains | 35 subtests | 31/31 | none |
 
-Counts from `go test -count=1 -v -run FirstErrorStringsArePinned ./internal/state/`:
+Counts from `go test -count=1 -v -run FirstErrorStringsArePinned ./internal/state/` (PASS lines
+below each top-level pin test, group wrappers included — the journal pin's cases live under two
+group subtests):
 
 | platform | journal | goal session | clone | failures |
 |---|---:|---:|---:|---:|
-| Windows (local, foreground) | 54 | 26 | not compiled (`//go:build linux`) | 0 |
-| WSL `Ubuntu-24.04` (Linux) | 54 | 26 | 31 | 0 |
+| Windows (local, foreground) | 64 | 26 | not compiled (`//go:build linux`) | 0 |
+| WSL `Ubuntu-24.04` (Linux) | 64 | 26 | 35 | 0 |
+
+The journal row's denominator: the two validators under the journal pin carry 43 distinct
+`errors.New` strings (25 journal + 17 reservation + the pinned delegated
+`native usage observation is invalid`). 37 are asserted; the six unasserted ones are exactly the
+§5 unreachable conditions.
+
 
 **Mutation check** (C4, "flip the guarded behaviour, red shown"): inside the extracted helper
 `validateGoalSessionStates` (`goal_session.go:1688`) the control-attachment operand
@@ -200,11 +229,40 @@ pre-existing goal-session cases green. One case was added (`LaunchState = Attach
 invalid"`, exit 1) while the other 25 cases stay green; with the deletion reverted the pin is green
 again (26/26, exit 0).
 
+**Fix-stage operand isolation (review R2).** The review found operands across the decomposed
+validators that no test isolated: deleting them kept both lanes green. Fourteen of them now carry a
+table case — ten journal-pin cases (`containment_authority_target_pid_mismatch`,
+`containment_authority_target_identity_mismatch`, `containment_handoff_with_process_details`,
+`cgroup_reservation_with_containment_scans`, `aborted_cgroup_reservation_with_containment_uncertainty`,
+`pre-gate_cgroup_receipt_with_containment_uncertainty`, `containment_scan_version`,
+`v1_cgroup_release_proof`, `native_usage_terminal_recovery_without_required_flag`,
+`pending_event_without_identity`) and four clone-pin reuse cases (`reuse abort after pending
+containment` / `cgroup reservation` / `cgroup release proof` / `pre-gate release proof`) — each
+carrying exactly one inconsistency on a valid base. Every case was verified with a
+delete-the-operand `go test -overlay` run over a scratch copy of `state.go`: each deletion reddens
+its single target case (the group wrapper line is the only companion failure) and no other case;
+the combined overlay of all fourteen deletions reddens exactly the fourteen new cases. The
+seven operands left over are shadowed by earlier checks (§5) and are recorded in `docs/TODO.md`
+instead: no case can isolate an operand that can never decide a verdict.
+
+**Clone-cleanup readback oracle (review R1).** The apply-stage shared-builder refactor had changed
+`TestLinuxCloneCleanupBeginCompleteRequiresExactReadbacks`'s expected target-removal proof source
+from the submitted checkout literal to the journal readback, so a persistence divergence now passed.
+The builder keeps the submitted `checkout` on `pinnedLinuxCloneBase` again and the test asserts the
+persisted readback equals it (`linux_clone_journal_test.go:719`) before deriving the proof from the
+submitted value. Mutation check on WSL: with the builder persisting `checkout.TargetInode+1` (a
+scratch test-file overlay), the test reddens alone at the new assertion
+(`persisted checkout receipt = …TargetInode:0x30, want the submitted …TargetInode:0x2f`) and the
+rest of the Linux suite stays green. The shared builder's fixture numbers differ from the superseded
+per-test literals (seed `Size/Device/Inode` 4096/3/5 → 2048/17/31; checkout `TargetDevice/TargetInode`
+17/23 → 23/47); the numbers carry no semantic role, they are only distinct from the sibling reuse
+and abort fixtures.
+
 ## 4. Gate results (exact commands, exit codes)
 
-All from `daemon/` unless stated; `gofmt`/`vet`/builds/tests foreground. Re-derived 2026-11-21 on
-the apply revision (the reuse dispatcher inlined into the reuse guard, one helper renamed, the
-shared test fixtures extracted); the scratch measurement tools were serialized against the suites.
+All from `daemon/` unless stated; `gofmt`/`vet`/builds/tests foreground, re-run 2026-11-21 on the
+fix revision (R3 rewritten to C3's call form, the reuse dispatcher restored, R1's readback oracle
+restored, R2's fourteen operand cases added).
 
 | gate | command | result |
 |---|---|---|
@@ -213,16 +271,20 @@ shared test fixtures extracted); the scratch measurement tools were serialized a
 | build linux/amd64 | `GOOS=linux GOARCH=amd64 go build ./...` | exit 0 |
 | build windows/amd64 | `GOOS=windows GOARCH=amd64 go build ./...` | exit 0 |
 | linux vet (compiles `//go:build linux` state tests) | `GOOS=linux GOARCH=amd64 go vet ./internal/state/` | no output, exit 0 |
-| package tests (Windows) | `go test -count=1 ./internal/state/...` | `ok github.com/wxxb789/symmetry/daemon/internal/state 17.570s`, exit 0 |
-| package tests (Linux, C2) | `wsl.exe -d Ubuntu-24.04 -u accept -- bash <scratch>/wsl-verify.sh` (`cd /mnt/q/…/symmetry/daemon`; `go test -count=1 ./internal/state/...`) | `ok github.com/wxxb789/symmetry/daemon/internal/state 24.127s`, exit 0 |
-| Linux suite detail | `go test -count=1 -v ./internal/state/` (WSL) | 241 top-level PASS, 0 FAIL, 73 linux-tagged cgroup/clone test runs, `ok … 24.127s`, exit 0 |
-| Linux pin detail | `go test -count=1 -v -run FirstErrorStringsArePinned ./internal/state/` (WSL) | 3 pin tests, 111 subtest PASS lines (54 journal + 26 goal session + 31 clone), 0 FAIL, exit 0 |
+| package tests (Windows) | `go test -count=1 ./internal/state/...` | `ok github.com/wxxb789/symmetry/daemon/internal/state 8.276s`, exit 0 |
+| package tests (Linux, C2) | `wsl.exe -d Ubuntu-24.04 -u accept -- bash <scratch>/wsl-verify.sh` (`cd /mnt/q/…/symmetry/daemon`; `go test -count=1 ./internal/state/...`) | `ok github.com/wxxb789/symmetry/daemon/internal/state 13.786s`, exit 0 |
+| Linux suite detail | `go test -count=1 -v ./internal/state/` (WSL) | 241 top-level PASS, 0 FAIL, 322 subtest PASS lines, `ok … 15.341s`, exit 0 |
+| Linux tag detail | same run filtered to the 25 top-level tests declared by `linux_clone_journal_test.go` and `linux_cgroup_v2_test.go` | 128 `=== RUN` lines (25 top-level + 103 subtests), all PASS |
+| Linux pin detail | `go test -count=1 -v -run FirstErrorStringsArePinned ./internal/state/` (WSL) | 3 pin tests, 125 subtest PASS lines (64 journal + 26 goal session + 35 clone), 0 FAIL, exit 0 |
+| Windows pin detail | `go test -count=1 -v -run FirstErrorStringsArePinned ./internal/state/` | 2 pin tests, 90 subtest PASS lines (64 journal + 26 goal session), 0 FAIL, exit 0 |
 | whitespace | `git diff --check` | exit 0 |
-| host-path scan | every changed/untracked file and added diff line grepped for `Users\`, the account name, `AppData`, drive-letter paths and `/mnt/q` | exit 0; the only hits are this record's and the plan's own text describing the scan, the elided WSL prefix `/mnt/q/…`, and generic `C:\…` fixture strings that carry no account name |
-| move proof | `validmove` over both revisions, 4 groups (43-helper grouping with the reuse guard inline) | PASS, exit 0 (§1) |
+| host-path scan | branch diff and every changed file grepped for the Windows user-profile directory name, the account name, `AppData`, drive-letter paths and `/mnt/q` | exit 0; the only hits are this record's and the plan's own text describing the scan, the elided WSL prefix `/mnt/q/…`, and generic `C:\…` fixture strings that carry no account name |
+| move proof | `validmove` over both revisions, 4 groups (44-helper grouping, reuse dispatcher restored) | PASS, exit 0 (§1) |
 | colour-moved | `git diff --color-moved=zebra --color-moved-ws=allow-indentation-change --stat` | exit 0 (§1) |
-| pinned ≤40/≤25 | `funclen … -max-lines 40 -max-cyclo 25` | exit 0, max span 39, max cyclo 25 (§2) |
+| pinned ≤40/≤25 | `funclen … -max-lines 40 -max-cyclo 25` | exit 0, 49 matched functions, max span 39, max cyclo 25 (§2) |
 | gocyclo gate | `golangci-lint run --config <gocyclo min-complexity 25> ./internal/state/...` | 32 findings, all pre-existing; delta vs base = exactly the four validators removed (§2) |
+| operand isolation (R2) | `go test -overlay <scratch state.go with one operand deleted> -count=1 ./internal/state/` per operand (14 mutations) | each deletion reddens exactly its target case and nothing else; the combined overlay reddens exactly the 14 new cases |
+| persistence-divergence mutation (R1) | `go test -overlay <scratch test file with the builder persisting checkout.TargetInode+1> -count=1 ./internal/state/` (WSL) | exit 1; only `TestLinuxCloneCleanupBeginCompleteRequiresExactReadbacks` fails, at the new readback assertion |
 | race | not run locally (`-race` needs cgo) | CI daemon race job is the oracle (contract) |
 
 ## 5. Delivered contract deviations, all deliberate
@@ -245,10 +307,10 @@ shared test fixtures extracted); the scratch measurement tools were serialized a
 2. **`validateLinuxCloneNonReuseBranch` is a region, not a function.** The base revision has no such
    declaration; C5's per-stage refinement ("intent, seed, abort, checkout, promotion, cleanup")
    decomposes that region, and each stage is its own helper. The reuse region is the three reuse
-   helpers called in order from the reuse guard in `validateLinuxCloneJournal` (the slice's first
-   form wrapped them in a `validateLinuxCloneReuseBranch` dispatcher; the apply-stage
-   simplification inlined it — C5 names no dispatcher and the parent stays inside the acceptance at
-   35 lines / CC 13).
+   helpers called in order from `validateLinuxCloneReuseBranch`, the dispatcher the slice's first
+   form used; the apply-stage simplification inlined it, and the fix stage restored it because
+   C3's enumerated call form puts the inline parent at 41 lines. The dispatcher is 15 lines / CC 5,
+   the parent 32 lines / CC 12, so both stay inside the acceptance.
 3. **Unreachable pre-existing branches are moved, not fixed.** Six conditions cannot fire at the base
    revision; they stay byte-identical (move-only) and are recorded as `docs/TODO.md` candidates with
    the reasoning: `v2 cgroup reservation cannot accompany a v1 authority` and `… a v1 handoff`
@@ -258,9 +320,16 @@ shared test fixtures extracted); the scratch measurement tools were serialized a
    an acknowledgement`. The pin test's reachability probes confirmed four of the six; the two
    v1/v2 cgroup-accompany conditions rest on the guard-order reasoning recorded above and in
    `docs/TODO.md`, not on a probe.
+   Seven further operands inside reachable conditions are shadowed by earlier checks and can never
+   decide a verdict: the scans first-check `journal.ContainmentCgroup != nil`, the scans handoff
+   check `handoff.SupervisorPID <= 0`, the handoff first-check `journal.ContainmentAuthority != nil`,
+   the abort and pre-gate preconditions' `journal.ContainmentAuthority != nil` and
+   `journal.ContainmentHandoff != nil` (both blocks). They are recorded in the second `docs/TODO.md`
+   entry with the guard-order argument; no pin case can isolate them, because the mutation keeps
+   every verdict unchanged.
 4. **Latent nil dereference preserved, not repaired, and now verified.** When a journal carries a
    checkout receipt without a seed receipt, `validateLinuxCloneCheckout` dereferences a nil `*seed`
-   (`linuxCloneCheckoutMatches(*intent, *seed, *checkout)`, `state.go:5101`) although the earlier
+   (`linuxCloneCheckoutMatches(*intent, *seed, *checkout)`, `state.go:5123`) although the earlier
    seed check only fires for `seed != nil`. Verified on WSL 2026-11-21 with a temporary probe test —
    a store journal built by `newPinnedLinuxCloneBase(…, "seed")` with `LinuxCloneCheckoutReceipt`
    set and `LinuxCloneSeedReceipt` cleared reported `PANIC_RECOVERED: runtime error: invalid memory
@@ -270,14 +339,24 @@ shared test fixtures extracted); the scratch measurement tools were serialized a
    candidate with the recipe; changing it changes a validation verdict and is out of a move-only
    slice.
 
+5. **This evidence record is outside the contract's STRICT owned set.** The owned set lists the
+   three production files, the six state test files and the two `docs/TODO.md` files; the program
+   rules add only the plan file, and this record is neither. The apply stage wrote it, the operator
+   committed it, and the fix stage edited the same file (R1/R2/R3/R4–R7/R9 records) — a single
+   writer throughout, no functional risk. The conductor should fold the convention into the owned
+   set (`docs/evidence/<date>-<slice>-<date>.md` is an expected write target for the implement,
+   apply and fix stages) rather than treat each record as an out-of-set write.
+
 ## 6. Residual risks and known limits
 
 - **Pins cover the reachable strings, not all branches.** Six conditions are unreachable (four proven
   by probe in the journal pin, two excluded by the same guard-order reasoning); for those the
   extraction's protection is the ordered-literal/subsequence proof (§1), which does cover them.
+  Seven operands inside reachable conditions are shadowed by earlier checks (§5) and cannot be
+  isolated by any case; they are recorded in `docs/TODO.md` for a revalidate-or-remove pass.
 - **The clone-journal pins compile only on Linux** (`//go:build linux`, existing file tag), so the
-  Windows lane runs 80 of the 111 pin subtests (54 journal + 26 goal session); WSL and CI run all
-  111.
+  Windows lane runs 90 of the 125 pin subtests (64 journal + 26 goal session); WSL and CI run all
+  125.
 - **Measurement tooling is scratch, not committed** (precedent rf-w1-05): the span/cyclo tool, the
   move checker, the temporary `golangci-lint` config and the base-revision copies live outside the
   repository. Their inputs (base revision, group lists, thresholds) are recorded above so the run is

@@ -2532,6 +2532,22 @@ func TestJournalValidatorFirstErrorStringsArePinned(t *testing.T) {
 				want: "run journal containment authority is invalid",
 			},
 			{
+				name: "containment authority target pid mismatch",
+				seed: pinnedJournalSeedRunningGrant,
+				mutate: func(journal *RunJournal) {
+					journal.ContainmentAuthority = testSupervisorAuthority(43, "windows:42:created-at")
+				},
+				want: "run journal containment authority is invalid",
+			},
+			{
+				name: "containment authority target identity mismatch",
+				seed: pinnedJournalSeedRunningGrant,
+				mutate: func(journal *RunJournal) {
+					journal.ContainmentAuthority = testSupervisorAuthority(42, "windows:43:created-at")
+				},
+				want: "run journal containment authority is invalid",
+			},
+			{
 				name: "v2 containment authority",
 				seed: pinnedJournalSeedRunningGrant,
 				mutate: func(journal *RunJournal) {
@@ -2553,6 +2569,18 @@ func TestJournalValidatorFirstErrorStringsArePinned(t *testing.T) {
 				seed: pinnedJournalSeedStoppedGrant,
 				mutate: func(journal *RunJournal) {
 					journal.ContainmentHandoff = &authority.SupervisorHandoff{}
+				},
+				want: "run journal containment handoff is invalid",
+			},
+			{
+				name: "containment handoff with process details",
+				seed: pinnedJournalSeedStoppedGrant,
+				mutate: func(journal *RunJournal) {
+					handoff := testStateSupervisorHandoffFixture(42, "windows:42:created-at")
+					journal.ContainmentHandoff = &handoff
+					journal.PID = 42
+					journal.ProcessIdentity = "windows:42:created-at"
+					journal.StartedAt = time.Date(2026, 9, 3, 1, 2, 4, 0, time.UTC)
 				},
 				want: "run journal containment handoff is invalid",
 			},
@@ -2619,10 +2647,50 @@ func TestJournalValidatorFirstErrorStringsArePinned(t *testing.T) {
 				want: "uncommitted v2 cgroup reservation has process authority",
 			},
 			{
+				name: "cgroup reservation with containment scans",
+				seed: pinnedJournalSeedRunningGrant,
+				mutate: func(journal *RunJournal) {
+					cgroup := pinnedJournalMinimalCgroupReservation()
+					journal.ContainmentCgroup = &cgroup
+					journal.ContainmentScans = pinnedJournalScans(launchToken)
+				},
+				want: "run journal v2 cgroup reservation is invalid",
+			},
+			{
+				name: "aborted cgroup reservation with containment uncertainty",
+				seed: pinnedJournalSeedStoppedGrant,
+				mutate: func(journal *RunJournal) {
+					cgroup := pinnedJournalAbortedCgroupReservation()
+					journal.ContainmentCgroup = &cgroup
+					journal.ContainmentUnproven = true
+				},
+				want: "run journal aborted cgroup reservation has active owner state",
+			},
+			{
+				name: "pre-gate cgroup receipt with containment uncertainty",
+				seed: pinnedJournalSeedStoppedGrant,
+				mutate: func(journal *RunJournal) {
+					cgroup := pinnedJournalPreGateCgroupReservation()
+					journal.ContainmentCgroup = &cgroup
+					journal.ContainmentUnproven = true
+				},
+				want: "run journal pre-gate cgroup receipt has active owner state",
+			},
+			{
 				name: "containment scan state",
 				seed: pinnedJournalSeedClaimIntent,
 				mutate: func(journal *RunJournal) {
 					journal.ContainmentScans = &ContainmentScanJournal{Version: 0}
+				},
+				want: "run journal containment scan state is invalid",
+			},
+			{
+				name: "containment scan version",
+				seed: pinnedJournalSeedRunningGrant,
+				mutate: func(journal *RunJournal) {
+					journal.ContainmentAuthority = pinnedJournalV1Authority(42, "windows:42:created-at", authority.OwnerKindLinuxHelper, "linux-helper:pinned", launchToken)
+					journal.ContainmentScans = pinnedJournalScans(launchToken)
+					journal.ContainmentScans.Version = 0
 				},
 				want: "run journal containment scan state is invalid",
 			},
@@ -2680,6 +2748,15 @@ func TestJournalValidatorFirstErrorStringsArePinned(t *testing.T) {
 				want: "run journal v2 cgroup release proof is invalid",
 			},
 			{
+				name: "v1 cgroup release proof",
+				seed: pinnedJournalSeedClaimIntent,
+				mutate: func(journal *RunJournal) {
+					legacy := testStateSupervisorHandoffFixture(42, "windows:42:created-at").ReleaseProof()
+					journal.ContainmentCgroupReleaseProof = &legacy
+				},
+				want: "run journal v2 cgroup release proof is invalid",
+			},
+			{
 				name: "pre-gate cgroup release proof",
 				seed: pinnedJournalSeedClaimIntent,
 				mutate: func(journal *RunJournal) {
@@ -2716,6 +2793,14 @@ func TestJournalValidatorFirstErrorStringsArePinned(t *testing.T) {
 				seed: pinnedJournalSeedStoppedGrant,
 				mutate: func(journal *RunJournal) {
 					journal.PendingEvents = []protocol.RunEvent{{}}
+				},
+				want: invalidJournal,
+			},
+			{
+				name: "pending event without identity",
+				seed: pinnedJournalSeedStoppedGrant,
+				mutate: func(journal *RunJournal) {
+					journal.PendingEvents = []protocol.RunEvent{pinnedJournalEvent("", 1)}
 				},
 				want: invalidJournal,
 			},
@@ -2768,6 +2853,14 @@ func TestJournalValidatorFirstErrorStringsArePinned(t *testing.T) {
 					journal.NativeUsageObservation = &NativeUsageObservation{}
 				},
 				want: "native usage observation is invalid",
+			},
+			{
+				name: "native usage terminal recovery without required flag",
+				seed: pinnedJournalSeedClaimIntent,
+				mutate: func(journal *RunJournal) {
+					journal.NativeUsageTerminalRecovery = &NativeUsageTerminalRecovery{State: "completed", Payload: json.RawMessage(`{}`)}
+				},
+				want: invalidJournal,
 			},
 			{
 				name: "input command intent",

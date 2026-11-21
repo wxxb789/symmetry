@@ -664,14 +664,14 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       that slice). Reachability was probed by mutating one condition at a time against the rf-w2-09
       pin fixtures (probe code not committed); the affected strings are listed in
       `docs/evidence/rf-w2-09-state-validators-2026-11-21.md` §5.
-      (a) `v2 cgroup reservation cannot accompany a v1 authority` (`state.go:6082`) and
-      `v2 cgroup reservation cannot accompany a v1 handoff` (`state.go:6085`): the authority and
+      (a) `v2 cgroup reservation cannot accompany a v1 authority` (`state.go:6119`) and
+      `v2 cgroup reservation cannot accompany a v1 handoff` (`state.go:6122`): the authority and
       handoff blocks (`validateContainmentAuthority`, `validateContainmentHandoff`) already return
       `v1 … cannot use a v2 cgroup reservation` whenever a non-v2 owner is combined with a cgroup
       reservation, so the later checks can never fire.
       (b) `Linux cgroup reservation cannot have both abort and physical-stop proof` (`state.go:259`)
       and `Linux cgroup aborted reservation lost producer-exit evidence` (`state.go:263`):
-      `linuxCgroupReservationAbortMatches` (`state.go:5847`) returns false for every proof that
+      `linuxCgroupReservationAbortMatches` (`state.go:5884`) returns false for every proof that
       carries a pre-gate receipt or lacks producer-exit parity, so the earlier abort-proof error
       fires first. Probes: aborted reservation + pre-gate receipt → `Linux cgroup reservation abort
       proof is invalid`; aborted reservation + helper exit proof → `Linux cgroup helper exit proof
@@ -682,9 +682,9 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       launcher exit→launcher exit proof, gate→gate identity, helper exit→helper exit proof,
       abort with a disposition other than `neverCreated`→abort proof). Probe: unstarted reservation
       + leaf identity → `Linux cgroup reservation leaf identity is invalid`.
-      (d) `unresolved input command has an acknowledgement` (`state.go:6223`): it needs `pending`
+      (d) `unresolved input command has an acknowledgement` (`state.go:6260`): it needs `pending`
       with `intent.Outcome == ""`, but `pending` compares against `acknowledgement.Outcome` and
-      `validAcknowledgement` (`state.go:6389`) requires a non-blank `Outcome`, so an empty-outcome
+      `validAcknowledgement` (`state.go:6426`) requires a non-blank `Outcome`, so an empty-outcome
       acknowledgement is rejected earlier with `run journal is invalid`. Probe: empty-outcome
       acknowledgement → `run journal is invalid`; an applied acknowledgement leaves the fixture
       valid.
@@ -692,9 +692,38 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       these probes, since two of them (b, c) also decide which earlier block owns the first-error
       string; keep the surrounding block's other conditions.
 
+- [ ] Revalidate and remove seven shadowed operands inside reachable validation conditions (found
+      2026-11-21 by the rf-w2-09 fix review's operand-isolation sweep, branch
+      `refactor/rf-w2-09-state-validators`). Each operand sits in a condition that does fire, but an
+      earlier block or an earlier operand of the same condition already covers every journal that
+      could satisfy it, so deleting it changes no verdict — a pin case cannot isolate it. Recorded
+      instead of edited for the same move-only reason as the entry above.
+      (a) `journal.ContainmentCgroup != nil` in `validateContainmentScans` (`state.go:6131`): a
+      journal carrying both a cgroup reservation and containment scans is rejected earlier by
+      `validateContainmentCgroup` (`state.go:6102` `journal.ContainmentScans != nil`).
+      (b) `handoff.SupervisorPID <= 0` in `validateContainmentScans` (`state.go:6140`): the earlier
+      scan block rejects `scans.SupervisorPID <= 0`, and `scans.matchesHandoff` equates the two
+      supervisor PIDs, so a non-positive handoff supervisor PID can never be the deciding operand.
+      (c) `journal.ContainmentAuthority != nil` in `validateContainmentHandoff` (`state.go:6079`):
+      a valid authority always carries `TargetPID > 0` (`state.go:6058`) equal to the journal PID,
+      so `journal.HasProcessDetails()` is already true in the same condition whenever the authority
+      operand could matter.
+      (d) `journal.ContainmentAuthority != nil` in the aborted / pre-gate cgroup preconditions
+      (`state.go:6105`, `state.go:6109`): `validateContainmentAuthority` rejects a v1 authority
+      beside a cgroup reservation, and a v2 authority whose cgroup carries an abort or pre-gate
+      proof fails `linuxCgroupReservationMatchesAuthority` (it requires both to be nil), so the
+      authority block always errors first.
+      (e) `journal.ContainmentHandoff != nil` in the same two preconditions (`state.go:6106`,
+      `state.go:6110`): a v2 handoff passes only when its cgroup matches it with a gate, a bound
+      launcher grant and no pre-gate receipt, while an aborted cgroup must have no gate and no
+      launcher grant (`linuxCgroupReservationAbortMatches`) and a pre-gate receipt requires no abort
+      proof; a v1 handoff beside any cgroup always errors in the handoff block.
+      Fix direction: re-run each argument as a probe before deleting; keep the surrounding
+      condition's live operands.
+
 - [ ] Fix the nil-pointer panic in `validateLinuxCloneCheckout`
-      (`daemon/internal/state/state.go:5090`). It dereferences `*seed`
-      (`linuxCloneCheckoutMatches(*intent, *seed, *checkout)`, `state.go:5101`) although
+      (`daemon/internal/state/state.go:5112`). It dereferences `*seed`
+      (`linuxCloneCheckoutMatches(*intent, *seed, *checkout)`, `state.go:5123`) although
       `journal.LinuxCloneSeedReceipt` is only tested as `seed != nil && …` earlier in the same
       validator, so a journal carrying `linux_clone_checkout_receipt` without
       `linux_clone_seed_receipt` panics instead of failing validation. Verified 2026-11-21 with a

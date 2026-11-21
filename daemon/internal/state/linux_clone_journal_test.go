@@ -716,7 +716,10 @@ func TestLinuxCloneCleanupBeginCompleteRequiresExactReadbacks(t *testing.T) {
 	base := newPinnedLinuxCloneCleanupReady(t, "00000000-0000-4000-8000-000000000077", "clone-cleanup-completed")
 	store, key, fence, intent, seed := base.store, base.key, base.fence, base.intent, base.seed
 	ready := loadStateJournal(t, store, key)
-	checkout := ready.LinuxCloneCheckoutReceipt
+	if ready.LinuxCloneCheckoutReceipt == nil || !ready.LinuxCloneCheckoutReceipt.Equal(base.checkout) {
+		t.Fatalf("persisted checkout receipt = %#v, want the submitted %#v", ready.LinuxCloneCheckoutReceipt, base.checkout)
+	}
+	checkout := base.checkout
 	retainedReady := ready
 	retainedReady.RetainWorkspace = true
 	if retainedReady.LinuxCloneCleanupBeginEligible(key, fence) {
@@ -1402,12 +1405,15 @@ func TestLinuxCloneReuseAliasRetiresOnlyAfterStableStop(t *testing.T) {
 // the journal-path seam (see newPinnedLinuxCloneReuse). Cases may share one
 // base store: validateJournal rejects a mutation before the write, so a failed
 // case leaves the persisted journal untouched.
+// checkout is the receipt submitted to the store, kept so tests can assert the
+// persisted readback independently of the value they submit.
 type pinnedLinuxCloneBase struct {
 	store           *Store
 	key             RunKey
 	fence           protocol.Fence
 	intent          authority.LinuxCloneIntent
 	seed            authority.LinuxCloneSeedReceipt
+	checkout        authority.LinuxCloneCheckoutReceipt
 	promotionIntent authority.LinuxClonePromotionIntent
 	handoff         authority.SupervisorHandoff
 	stopReceipt     authority.StopReceipt
@@ -1478,6 +1484,7 @@ func newPinnedLinuxCloneBase(t *testing.T, runID, stage string) pinnedLinuxClone
 	if _, err := base.store.RecordLinuxCloneCheckoutReady(base.key, base.fence, intent, checkout); err != nil {
 		t.Fatal(err)
 	}
+	base.checkout = checkout
 	owner := loadStateJournal(t, base.store, base.key).ContainmentAuthority.Clone()
 	stopReceipt := testStateLinuxCgroupV2Receipt(owner, authority.LinuxCgroupStopProofHelper, nil)
 	if _, err := base.store.RecordContainmentStopReceipt(base.key, owner.TargetPID, owner.TargetIdentity, stopReceipt); err != nil {
@@ -1661,6 +1668,14 @@ func TestLinuxCloneValidatorFirstErrorStringsArePinned(t *testing.T) {
 	normalReleaseProof := testStateLinuxCgroupV2ReleaseDTO(promoted.handoff, promoted.stopReceipt)
 	if err := normalReleaseProof.Validate(); err != nil {
 		t.Fatalf("legacy normal-release fixture: %v", err)
+	}
+	preGateReleaseProof := authority.LinuxCgroupPreGateReleaseProof{
+		Version:         authority.LinuxCgroupIdentityVersion,
+		Receipt:         *pinnedJournalPreGateStopReceipt(pinnedJournalLauncherBoundCgroupReservation()),
+		LeafDisposition: authority.LinuxCgroupLeafRemoved,
+	}
+	if err := preGateReleaseProof.Validate(); err != nil {
+		t.Fatalf("pre-gate release proof fixture: %v", err)
 	}
 	promotedMismatchedAdmission := linuxCloneAdmissionInput(t, protocol.Subject{
 		ResourceID: "00000000-0000-4000-8000-000000000097",
@@ -1941,6 +1956,50 @@ func TestLinuxCloneValidatorFirstErrorStringsArePinned(t *testing.T) {
 				journal.PID = 42
 				journal.ProcessIdentity = "linux:42:start"
 				journal.StartedAt = time.Date(2026, 9, 27, 1, 1, 1, 0, time.UTC)
+				return nil
+			},
+		},
+		{
+			name: "reuse abort after pending containment",
+			want: "run journal Linux clone reuse abort follows a native or containment effect",
+			mutate: func(journal *RunJournal) error {
+				handoff := testStateSupervisorHandoffFixture(42, "windows:42:created-at")
+				journal.ContainmentHandoff = &handoff
+				journal.LinuxCloneReuseAbortedBeforeNativeStart = true
+				journal.LinuxCloneReuseRetired = true
+				return nil
+			},
+		},
+		{
+			name: "reuse abort after cgroup reservation",
+			want: "run journal Linux clone reuse abort follows a native or containment effect",
+			mutate: func(journal *RunJournal) error {
+				cgroup := pinnedJournalAbortedCgroupReservation()
+				journal.ContainmentCgroup = &cgroup
+				journal.LinuxCloneReuseAbortedBeforeNativeStart = true
+				journal.LinuxCloneReuseRetired = true
+				return nil
+			},
+		},
+		{
+			name: "reuse abort after cgroup release proof",
+			want: "run journal Linux clone reuse abort follows a native or containment effect",
+			mutate: func(journal *RunJournal) error {
+				proof := normalReleaseProof
+				journal.ContainmentCgroupReleaseProof = &proof
+				journal.LinuxCloneReuseAbortedBeforeNativeStart = true
+				journal.LinuxCloneReuseRetired = true
+				return nil
+			},
+		},
+		{
+			name: "reuse abort after pre-gate release proof",
+			want: "run journal Linux clone reuse abort follows a native or containment effect",
+			mutate: func(journal *RunJournal) error {
+				proof := preGateReleaseProof
+				journal.ContainmentCgroupPreGateReleaseProof = &proof
+				journal.LinuxCloneReuseAbortedBeforeNativeStart = true
+				journal.LinuxCloneReuseRetired = true
 				return nil
 			},
 		},

@@ -4942,21 +4942,15 @@ func linuxCloneStopProven(journal RunJournal) bool {
 }
 
 func validateLinuxCloneJournal(journal RunJournal) error {
-	if reuse := journal.LinuxCloneReuseGrant; reuse != nil {
-		if err := validateLinuxCloneReuseGrant(journal, reuse); err != nil {
-			return err
-		}
-		if err := validateLinuxCloneReuseAbortState(journal); err != nil {
-			return err
-		}
-		if err := validateLinuxCloneReuseRetainedTarget(journal, reuse); err != nil {
-			return err
-		}
-		return nil
+	if err := validateLinuxCloneReuseBranch(journal); err != nil {
+		return err
 	}
 	intent := journal.LinuxCloneIntent
 	if intent == nil {
-		return validateLinuxCloneIntentAbsent(journal)
+		if err := validateLinuxCloneIntentAbsent(journal); err != nil {
+			return err
+		}
+		return nil
 	}
 	if err := validateLinuxCloneIntent(journal, intent); err != nil {
 		return err
@@ -4969,10 +4963,32 @@ func validateLinuxCloneJournal(journal RunJournal) error {
 		return errors.New("run journal Linux clone abort is both pending and complete")
 	}
 	if journal.LinuxCloneAbortPending || journal.LinuxCloneAbortProof != nil {
-		return validateLinuxCloneAbort(journal, intent, seed)
+		if err := validateLinuxCloneAbort(journal, intent, seed); err != nil {
+			return err
+		}
+		return nil
 	}
 	if err := validateLinuxCloneCheckout(journal, intent, seed); err != nil {
 		return err
+	}
+	return nil
+}
+
+// validateLinuxCloneReuseBranch runs the reuse-grant branch of the clone
+// journal validator: the three reuse helpers in the base order, skipped when
+// the journal carries no reuse grant.
+func validateLinuxCloneReuseBranch(journal RunJournal) error {
+	if reuse := journal.LinuxCloneReuseGrant; reuse != nil {
+		if err := validateLinuxCloneReuseGrant(journal, reuse); err != nil {
+			return err
+		}
+		if err := validateLinuxCloneReuseAbortState(journal); err != nil {
+			return err
+		}
+		if err := validateLinuxCloneReuseRetainedTarget(journal, reuse); err != nil {
+			return err
+		}
+		return nil
 	}
 	return nil
 }
@@ -5053,9 +5069,15 @@ func validateLinuxCloneAbort(journal RunJournal, intent *authority.LinuxCloneInt
 		return errors.New("run journal clone abort conflicts with normal cleanup")
 	}
 	if journal.LinuxCloneAbortPending {
-		return validateLinuxCloneAbortPending(journal, intent)
+		if err := validateLinuxCloneAbortPending(journal, intent); err != nil {
+			return err
+		}
+		return nil
 	}
-	return validateLinuxCloneAbortProof(journal, intent, seed)
+	if err := validateLinuxCloneAbortProof(journal, intent, seed); err != nil {
+		return err
+	}
+	return nil
 }
 
 func validateLinuxCloneAbortPending(journal RunJournal, intent *authority.LinuxCloneIntent) error {
@@ -5101,13 +5123,19 @@ func validateLinuxCloneCheckout(journal RunJournal, intent *authority.LinuxClone
 	if !linuxCloneCheckoutMatches(*intent, *seed, *checkout) {
 		return errors.New("run journal Linux clone checkout receipt is invalid")
 	}
-	return validateLinuxClonePromotion(journal, intent)
+	if err := validateLinuxClonePromotion(journal, intent); err != nil {
+		return err
+	}
+	return nil
 }
 
 func validateLinuxClonePromotion(journal RunJournal, intent *authority.LinuxCloneIntent) error {
 	promotionIntent := journal.LinuxClonePromotionIntent
 	if promotionIntent == nil {
-		return validateLinuxClonePromotionWithoutIntent(journal, intent)
+		if err := validateLinuxClonePromotionWithoutIntent(journal, intent); err != nil {
+			return err
+		}
+		return nil
 	}
 	ref, err := authority.LinuxClonePromotionRef(journal.RunID, journal.Generation)
 	if promotionIntent.Validate() != nil || promotionIntent.ResourceID != intent.ResourceID ||
@@ -5127,7 +5155,10 @@ func validateLinuxClonePromotion(journal RunJournal, intent *authority.LinuxClon
 		promotion.TreeDigest != promotionIntent.TreeDigest || !linuxCloneStopProven(journal) {
 		return errors.New("run journal Linux clone promotion receipt is invalid")
 	}
-	return validateLinuxCloneCleanup(journal, intent)
+	if err := validateLinuxCloneCleanup(journal, intent); err != nil {
+		return err
+	}
+	return nil
 }
 
 func validateLinuxClonePromotionWithoutIntent(journal RunJournal, intent *authority.LinuxCloneIntent) error {
@@ -5164,9 +5195,15 @@ func validateLinuxCloneCleanup(journal RunJournal, intent *authority.LinuxCloneI
 		return errors.New("run journal Linux clone cleanup intent is invalid")
 	}
 	if journal.LinuxCloneCleanupPending {
-		return validateLinuxCloneCleanupPending(journal, intent, cleanupIntent)
+		if err := validateLinuxCloneCleanupPending(journal, intent, cleanupIntent); err != nil {
+			return err
+		}
+		return nil
 	}
-	return validateLinuxCloneCleanupProof(journal, cleanupIntent)
+	if err := validateLinuxCloneCleanupProof(journal, cleanupIntent); err != nil {
+		return err
+	}
+	return nil
 }
 
 func validateLinuxCloneCleanupPending(journal RunJournal, intent *authority.LinuxCloneIntent, cleanupIntent authority.LinuxCloneCleanupIntent) error {

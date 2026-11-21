@@ -176,14 +176,15 @@ unreachable cgroup branches (recorded, not fixed); reducing `validateControlComm
 4. **Gates.** `gofmt -l`; `go vet ./...`; `GOOS=linux go build ./...`; `GOOS=windows go build ./...`;
    `go test -count=1 ./internal/state/...`; `GOOS=linux GOARCH=amd64 go vet ./internal/state/`;
    the same test suite on WSL `Ubuntu-24.04` (C2) — never concurrently with the measurement tool;
-   `git diff --check`; host-path scan (`git diff origin/main...HEAD | grep -i "users/"`).
+   `git diff --check`; host-path scan (grep the branch diff for the Windows user-profile directory
+   name before finishing; matching content is rewritten as `<HOST-PATH>`).
 5. **Record.** `docs/evidence/rf-w2-09-state-validators-2026-11-21.md` + move manifest, before/after
-   table and raw gate output (the manifest is the per-function span/CC table in §2, 47 functions);
+   table and raw gate output (the manifest is the per-function span/CC table in §2, 48 functions);
    `docs/TODO.md` entries for `validGoalSessionUUID` (C7), the six unreachable conditions and the
    verified nil-deref panic.
 
 Delivered outcome of this plan (all five steps ran; see the evidence record for exit codes and
-counts): move proof PASS on all four groups, pinned ≤40-line/≤25-CC gate exit 0 over the 47 sliced
+counts): move proof PASS on all four groups, pinned ≤40-line/≤25-CC gate exit 0 over the 48 sliced
 functions, `gocyclo` offender set −4 and unchanged otherwise, Windows and WSL state suites green,
 mutation check red-then-green.
 
