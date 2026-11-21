@@ -4,50 +4,107 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
 import pathlib
 import re
 import stat
-import sys
 import tempfile
-
 
 MANUAL_WITNESSES = (
     ("pi_provider_action/TestProductionLinuxV2PiNativeProviderAction.json", "pi-native-provider-action.json"),
     ("opencode_native_health/TestProductionLinuxV2OpenCodeNativeHealth.json", "opencode-native-health.json"),
-    ("helper_sigkill_detached_child/TestProductionLinuxV2HelperSIGKILLAnchorReapsDetachedChild.json", "pi-helper-sigkill-detached-child.json"),
-    ("daemon_sigkill_helper_survives_detached_child/TestProductionLinuxV2DaemonSIGKILLHelperSurvivesDetachedChild.json", "pi-daemon-sigkill-helper-survives.json"),
-    ("stale-owner-request-denials/TestProductionLinuxV2StaleOwnerRequestDenials_stale_journal_run_key.json", "stale-run-key-denial.json"),
-    ("stale-owner-request-denials/TestProductionLinuxV2StaleOwnerRequestDenials_stale_journal_fence.json", "stale-fence-denial.json"),
-    ("stale-owner-request-denials/TestProductionLinuxV2StaleOwnerRequestDenials_stale_journal_subject.json", "stale-subject-denial.json"),
+    (
+        "helper_sigkill_detached_child/TestProductionLinuxV2HelperSIGKILLAnchorReapsDetachedChild.json",
+        "pi-helper-sigkill-detached-child.json",
+    ),
+    (
+        "daemon_sigkill_helper_survives_detached_child/TestProductionLinuxV2DaemonSIGKILLHelperSurvivesDetachedChild.json",
+        "pi-daemon-sigkill-helper-survives.json",
+    ),
+    (
+        "stale-owner-request-denials/TestProductionLinuxV2StaleOwnerRequestDenials_stale_journal_run_key.json",
+        "stale-run-key-denial.json",
+    ),
+    (
+        "stale-owner-request-denials/TestProductionLinuxV2StaleOwnerRequestDenials_stale_journal_fence.json",
+        "stale-fence-denial.json",
+    ),
+    (
+        "stale-owner-request-denials/TestProductionLinuxV2StaleOwnerRequestDenials_stale_journal_subject.json",
+        "stale-subject-denial.json",
+    ),
     ("migration-denial/TestProductionLinuxV2MigrationDenialRetainsJournal.json", "migration-denial.json"),
-    ("receipt-persist-failure/TestProductionLinuxV2StopReceiptPersistenceFailureRetainsJournal.json", "receipt-persistence-failure.json"),
+    (
+        "receipt-persist-failure/TestProductionLinuxV2StopReceiptPersistenceFailureRetainsJournal.json",
+        "receipt-persistence-failure.json",
+    ),
     ("stale-leaf/TestProductionLinuxV2StaleLeafIdentityRetainsJournal.json", "stale-leaf-identity.json"),
     ("alternate-mount/TestProductionLinuxV2AlternateCgroupMountRefusal.json", "alternate-mount-refusal.json"),
     ("literal-pid-reuse/TestProductionLinuxV2LiteralPIDReuseAfterStopReceipt.json", "literal-pid-reuse.json"),
-    ("helper-response-loss-stop/TestProductionLinuxV2HelperResponseLossReplayMatrix_stop.json", "helper-stop-response-loss.json"),
-    ("helper-response-loss-ack_stop_receipt/TestProductionLinuxV2HelperResponseLossReplayMatrix_ack_stop_receipt.json", "helper-ack-response-loss.json"),
-    ("helper-response-loss-launcher_ready/TestProductionLinuxV2HelperResponseLossReplayMatrix_launcher_ready.json", "helper-launcher-response-loss.json"),
-    ("helper-exit-after-release-before-register/TestProductionLinuxV2HelperExitAfterReleaseBeforeNativeRegister.json", "helper-exit-after-release-before-register.json"),
-    ("synthetic-goal-cleanup/TestProductionLinuxV2CloneCleanupAuthenticatedScratch.json", "synthetic-goal-cleanup.json"),
-    ("unresolved-journal-guard/TestProductionLinuxV2UnresolvedJournalBlocksFreshRun.json", "unresolved-journal-guard.json"),
+    (
+        "helper-response-loss-stop/TestProductionLinuxV2HelperResponseLossReplayMatrix_stop.json",
+        "helper-stop-response-loss.json",
+    ),
+    (
+        "helper-response-loss-ack_stop_receipt/TestProductionLinuxV2HelperResponseLossReplayMatrix_ack_stop_receipt.json",
+        "helper-ack-response-loss.json",
+    ),
+    (
+        "helper-response-loss-launcher_ready/TestProductionLinuxV2HelperResponseLossReplayMatrix_launcher_ready.json",
+        "helper-launcher-response-loss.json",
+    ),
+    (
+        "helper-exit-after-release-before-register/TestProductionLinuxV2HelperExitAfterReleaseBeforeNativeRegister.json",
+        "helper-exit-after-release-before-register.json",
+    ),
+    (
+        "synthetic-goal-cleanup/TestProductionLinuxV2CloneCleanupAuthenticatedScratch.json",
+        "synthetic-goal-cleanup.json",
+    ),
+    (
+        "unresolved-journal-guard/TestProductionLinuxV2UnresolvedJournalBlocksFreshRun.json",
+        "unresolved-journal-guard.json",
+    ),
     ("unprovisioned/TestProductionLinuxV2UnprovisionedHostRefusal.json", "unprovisioned-owner-refusal.json"),
 )
 MANUAL_STAGE_HOLDS = (
-    "reservation_durable", "create_started", "leaf_bound", "helper_bound", "launcher_bound", "gate_bound",
-    "handoff_prepared", "handoff_committed", "lease_armed", "checkout_ready", "native_release",
-    "stop_receipt_durable", "leaf_removed", "journal_cleared",
+    "reservation_durable",
+    "create_started",
+    "leaf_bound",
+    "helper_bound",
+    "launcher_bound",
+    "gate_bound",
+    "handoff_prepared",
+    "handoff_committed",
+    "lease_armed",
+    "checkout_ready",
+    "native_release",
+    "stop_receipt_durable",
+    "leaf_removed",
+    "journal_cleared",
 )
 MANUAL_ACK_LOSS_STAGES = (
-    "helper_bound", "launcher_bound", "gate_bound", "handoff_prepared", "handoff_committed",
-    "lease_armed", "checkout_ready", "stop_receipt_durable", "native_release", "journal_cleared",
+    "helper_bound",
+    "launcher_bound",
+    "gate_bound",
+    "handoff_prepared",
+    "handoff_committed",
+    "lease_armed",
+    "checkout_ready",
+    "stop_receipt_durable",
+    "native_release",
+    "journal_cleared",
 )
 MANUAL_RECEIPTS = (
     ("control-provider-action-pi_provider_action.json", "control-provider-action-pi.json"),
     ("control-provider-action-helper_sigkill_detached_child.json", "control-provider-action-helper-crash.json"),
-    ("control-provider-action-daemon_sigkill_helper_survives_detached_child.json", "control-provider-action-daemon-crash.json"),
+    (
+        "control-provider-action-daemon_sigkill_helper_survives_detached_child.json",
+        "control-provider-action-daemon-crash.json",
+    ),
 )
 COMPOSE_WITNESSES = (
     "rootless-compose-pi.json",
@@ -55,81 +112,191 @@ COMPOSE_WITNESSES = (
     "TestProductionLinuxV2UnprovisionedHostRefusal.json",
 )
 COMPOSE_DIAGNOSTICS = {
-    f"rootless-compose-{case}-diagnostic.json": case
-    for case in ("shared", "pi", "opencode", "unprovisioned")
+    f"rootless-compose-{case}-diagnostic.json": case for case in ("shared", "pi", "opencode", "unprovisioned")
 }
 COMPOSE_NATIVE_STAGES = {
-    "case_inputs", "pinned_version", "probe", "probe_projection", "runtime_registration",
-    "arm", "early_release", "work_item", "launch", "failed_run", "held_response",
-    "held_binding", "journal_read", "claim_binding", "no_effects", "wrong_releases",
-    "exact_release", "evidence_write", "complete",
+    "case_inputs",
+    "pinned_version",
+    "probe",
+    "probe_projection",
+    "runtime_registration",
+    "arm",
+    "early_release",
+    "work_item",
+    "launch",
+    "failed_run",
+    "held_response",
+    "held_binding",
+    "journal_read",
+    "claim_binding",
+    "no_effects",
+    "wrong_releases",
+    "exact_release",
+    "evidence_write",
+    "complete",
 }
 COMPOSE_DIAGNOSTIC_STAGES = {
     "shared": {"rootless_guards", "portal", "transition_proxy", "native_cases", "complete"},
     "pi": COMPOSE_NATIVE_STAGES,
     "opencode": COMPOSE_NATIVE_STAGES,
     "unprovisioned": {
-        "rootless_guards", "fixture_files", "config", "empty_store", "request_contract",
-        "fresh_barrier", "binary_access", "command", "owner_refusal", "empty_response",
-        "store_unchanged", "barrier_unchanged", "evidence_write", "complete",
+        "rootless_guards",
+        "fixture_files",
+        "config",
+        "empty_store",
+        "request_contract",
+        "fresh_barrier",
+        "binary_access",
+        "command",
+        "owner_refusal",
+        "empty_response",
+        "store_unchanged",
+        "barrier_unchanged",
+        "evidence_write",
+        "complete",
     },
 }
 COMPOSE_DIAGNOSTIC_OBSERVATIONS = {
     "probe": {"native_unverified", "unsupported_version", "unavailable", "cancelled", "deadline", "other"},
     "probe_projection": {"transport_verified", "transport_unverified"},
     "runtime_registration": {
-        "portal_unavailable", "not_observed", "offline", "native_version_mismatch", "other_projection",
+        "portal_unavailable",
+        "not_observed",
+        "offline",
+        "native_version_mismatch",
+        "other_projection",
     },
     "failed_run": {
-        "queued", "assigned", "claimed", "running", "paused", "waiting_for_input", "cancelling",
-        "failed", "completed", "cancelled", "expired", "other", "runtime_mismatch",
-        "assignment_missing", "refusal_mismatch",
+        "queued",
+        "assigned",
+        "claimed",
+        "running",
+        "paused",
+        "waiting_for_input",
+        "cancelling",
+        "failed",
+        "completed",
+        "cancelled",
+        "expired",
+        "other",
+        "runtime_mismatch",
+        "assignment_missing",
+        "refusal_mismatch",
     },
     "command": {"command_failed", "command_succeeded", "response_close_failed"},
     "owner_refusal": {"other_refusal"},
 }
 LEGACY_WITNESSES = (
-    "bind-before-commit", "prepare-before-bind", "commit-before-resume", "lease-arm-before-resume",
-    "daemon-after-resume", "daemon-after-resume-clean-seal-boundary", "helper-mirror",
-    "wrong-hello-session", "setsid-escape", "scan-failure", "helper-scan-failure-crash",
-    "helper-scan-pending-crash", "literal-pid-reuse", "stop-response-lost",
-    "release-response-lost", "helper-dead-mirror",
+    "bind-before-commit",
+    "prepare-before-bind",
+    "commit-before-resume",
+    "lease-arm-before-resume",
+    "daemon-after-resume",
+    "daemon-after-resume-clean-seal-boundary",
+    "helper-mirror",
+    "wrong-hello-session",
+    "setsid-escape",
+    "scan-failure",
+    "helper-scan-failure-crash",
+    "helper-scan-pending-crash",
+    "literal-pid-reuse",
+    "stop-response-lost",
+    "release-response-lost",
+    "helper-dead-mirror",
 )
 LEGACY_HELPER_SCAN_CRASH_STAGES = {
     "helper_scan_failure_sigkill_before_cancel": {
-        "daemon_task_setup", "running_journal", "descendant_marker", "trigger_fired_marker",
-        "scan_failure_journal", "helper_exit", "cancel_request", "mirror_takeover",
-        "cancel_api_409_state_conflict", "cancel_api_409_failed_run", "cancel_api_409_other",
-        "cancel_api_other", "cancel_invalid_response", "cancel_timeout", "cancel_transport", "cancel_other_error",
-        "mirror_authority", "mirror_stop_receipt_absent", "mirror_process_details",
-        "mirror_scan_ledger", "mirror_unproven_scan", "post_takeover", "complete",
+        "daemon_task_setup",
+        "running_journal",
+        "descendant_marker",
+        "trigger_fired_marker",
+        "scan_failure_journal",
+        "helper_exit",
+        "cancel_request",
+        "mirror_takeover",
+        "cancel_api_409_state_conflict",
+        "cancel_api_409_failed_run",
+        "cancel_api_409_other",
+        "cancel_api_other",
+        "cancel_invalid_response",
+        "cancel_timeout",
+        "cancel_transport",
+        "cancel_other_error",
+        "mirror_authority",
+        "mirror_stop_receipt_absent",
+        "mirror_process_details",
+        "mirror_scan_ledger",
+        "mirror_unproven_scan",
+        "post_takeover",
+        "complete",
     },
     "helper_pending_scan_sigkill": {
-        "daemon_task_setup", "running_journal", "descendant_marker", "trigger_fired_marker",
-        "pending_scan_journal", "helper_exit", "cancel_request", "mirror_takeover",
-        "cancel_api_409_state_conflict", "cancel_api_409_failed_run", "cancel_api_409_other",
-        "cancel_api_other", "cancel_invalid_response", "cancel_timeout", "cancel_transport", "cancel_other_error",
-        "mirror_authority", "mirror_stop_receipt_absent", "mirror_process_details",
-        "mirror_scan_ledger", "mirror_pending_scan", "post_takeover", "complete",
+        "daemon_task_setup",
+        "running_journal",
+        "descendant_marker",
+        "trigger_fired_marker",
+        "pending_scan_journal",
+        "helper_exit",
+        "cancel_request",
+        "mirror_takeover",
+        "cancel_api_409_state_conflict",
+        "cancel_api_409_failed_run",
+        "cancel_api_409_other",
+        "cancel_api_other",
+        "cancel_invalid_response",
+        "cancel_timeout",
+        "cancel_transport",
+        "cancel_other_error",
+        "mirror_authority",
+        "mirror_stop_receipt_absent",
+        "mirror_process_details",
+        "mirror_scan_ledger",
+        "mirror_pending_scan",
+        "post_takeover",
+        "complete",
     },
 }
 SAFE_STAGE_HOLDS = (
-    "reservation_durable", "helper_bound", "gate_bound", "handoff_prepared", "handoff_committed",
-    "lease_armed", "checkout_ready", "native_release", "stop_receipt_durable", "leaf_removed", "journal_cleared",
+    "reservation_durable",
+    "helper_bound",
+    "gate_bound",
+    "handoff_prepared",
+    "handoff_committed",
+    "lease_armed",
+    "checkout_ready",
+    "native_release",
+    "stop_receipt_durable",
+    "leaf_removed",
+    "journal_cleared",
 )
 SAFE_ACK_LOSS_STAGES = (
-    "helper_bound", "gate_bound", "handoff_prepared", "handoff_committed", "lease_armed",
-    "checkout_ready", "stop_receipt_durable", "native_release", "journal_cleared",
+    "helper_bound",
+    "gate_bound",
+    "handoff_prepared",
+    "handoff_committed",
+    "lease_armed",
+    "checkout_ready",
+    "stop_receipt_durable",
+    "native_release",
+    "journal_cleared",
 )
 MANUAL_CASE_SET_FILES = {
     "shared": {
-        "pi-native-provider-action.json", "opencode-native-health.json",
-        "pi-helper-sigkill-detached-child.json", "pi-daemon-sigkill-helper-survives.json",
-        "receipt-persistence-failure.json", "alternate-mount-refusal.json", "literal-pid-reuse.json",
-        "helper-stop-response-loss.json", "helper-ack-response-loss.json",
-        "helper-launcher-response-loss.json", "helper-exit-after-release-before-register.json",
-        "unprovisioned-owner-refusal.json", "control-provider-action-pi.json",
-        "control-provider-action-helper-crash.json", "control-provider-action-daemon-crash.json",
+        "pi-native-provider-action.json",
+        "opencode-native-health.json",
+        "pi-helper-sigkill-detached-child.json",
+        "pi-daemon-sigkill-helper-survives.json",
+        "receipt-persistence-failure.json",
+        "alternate-mount-refusal.json",
+        "literal-pid-reuse.json",
+        "helper-stop-response-loss.json",
+        "helper-ack-response-loss.json",
+        "helper-launcher-response-loss.json",
+        "helper-exit-after-release-before-register.json",
+        "unprovisioned-owner-refusal.json",
+        "control-provider-action-pi.json",
+        "control-provider-action-helper-crash.json",
+        "control-provider-action-daemon-crash.json",
         *(f"stage-crash-replay-{stage}.json" for stage in SAFE_STAGE_HOLDS),
         *(f"ack-loss-replay-{stage}.json" for stage in SAFE_ACK_LOSS_STAGES),
     },
@@ -161,31 +328,77 @@ SAFE_TEXT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:/+@ -]{0,255}$")
 SAFE_HASH = re.compile(r"^(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})$")
 
 METADATA_KEYS = {
-    "subject", "tree", "tree_sha256", "go_version", "kernel_release", "goos", "goarch",
-    "source_path", "source_sha256", "binary_path", "binary_sha256", "tree_digest",
+    "subject",
+    "tree",
+    "tree_sha256",
+    "go_version",
+    "kernel_release",
+    "goos",
+    "goarch",
+    "source_path",
+    "source_sha256",
+    "binary_path",
+    "binary_sha256",
+    "tree_digest",
     "dirty_status_sha256",
 }
 EXIT_KEYS = {"requested_signal", "signaled", "signal", "exit_code", "error"}
 PROCESS_KEYS = {"at", "role", "pid", "identity", "state", "pgrp", "session", "start_time", "exists", "error"}
 RECEIPT_KEYS = {
-    "version", "legacy_v1_no_v2_proof", "status", "owner_kind", "owner_context_sha256",
-    "target_pid", "target_identity", "pipe_token_sha256", "job_id_sha256", "supervisor_pid",
-    "supervisor_identity", "active_processes",
+    "version",
+    "legacy_v1_no_v2_proof",
+    "status",
+    "owner_kind",
+    "owner_context_sha256",
+    "target_pid",
+    "target_identity",
+    "pipe_token_sha256",
+    "job_id_sha256",
+    "supervisor_pid",
+    "supervisor_identity",
+    "active_processes",
 }
 OWNER_KEYS = {
-    "owner_kind", "owner_context_sha256", "target_pid", "target_identity", "supervisor_pid",
-    "supervisor_identity", "job_id_sha256", "has_stop_receipt",
+    "owner_kind",
+    "owner_context_sha256",
+    "target_pid",
+    "target_identity",
+    "supervisor_pid",
+    "supervisor_identity",
+    "job_id_sha256",
+    "has_stop_receipt",
 }
 SCAN_PROGRESS_KEYS = {
-    "pending_sequence", "clean_result_sequence", "completed_sequence", "sealed_sequence",
-    "unproven_sequence", "failure_kind",
+    "pending_sequence",
+    "clean_result_sequence",
+    "completed_sequence",
+    "sealed_sequence",
+    "unproven_sequence",
+    "failure_kind",
 }
 SCAN_KEYS = {"target_pid", "target_identity", "supervisor_pid", "supervisor_identity", "helper", "mirror"}
 JOURNAL_KEYS = {
-    "at", "path", "raw_sha256", "run_id", "generation", "local_state", "terminal_state",
-    "terminal_verdict", "pid", "process_identity", "started_at", "lease_expires_at",
-    "has_process_details", "containment_unproven", "retain_workspace", "pending_events",
-    "pending_transitions", "containment_scans", "stop_receipt", "handoff", "authority",
+    "at",
+    "path",
+    "raw_sha256",
+    "run_id",
+    "generation",
+    "local_state",
+    "terminal_state",
+    "terminal_verdict",
+    "pid",
+    "process_identity",
+    "started_at",
+    "lease_expires_at",
+    "has_process_details",
+    "containment_unproven",
+    "retain_workspace",
+    "pending_events",
+    "pending_transitions",
+    "containment_scans",
+    "stop_receipt",
+    "handoff",
+    "authority",
 }
 BARRIER_KEYS = {"run_id", "generation", "pid", "identity", "receipt"}
 HELLO_ANCHOR_KEYS = {"target_pid", "target_identity", "target_pgrp", "target_session", "target_start_time"}
@@ -193,43 +406,110 @@ HELLO_KEYS = {"actual", "transmitted", "supervisor_pid", "supervisor_identity"}
 PID_IDENTITY_KEYS = {"pid", "identity", "pgrp", "session", "start_time"}
 PID_REUSE_CRASH_KEYS = {"stage", "status"}
 PID_REUSE_KEYS = {
-    "task_id", "parent_pid_namespace_inode", "private_pid_namespace_inode",
-    "parent_network_namespace_inode", "private_network_namespace_inode", "control_url_sha256",
-    "namespace_creation_flags", "namespace_allocator_path", "namespace_allocator_before",
-    "namespace_allocator_reset_to", "namespace_allocator_readback", "pidfd_group_signal_supported",
-    "original_target", "helper", "replacement", "owner_stop_before_proof_reached_path",
-    "owner_stop_before_proof_release_path", "owner_stop_proof_result_path",
-    "recovery_authenticated_marker_path", "owner_stop_before_proof_reached",
-    "owner_stop_before_proof_reached_sha256", "owner_stop_before_proof_release",
-    "owner_stop_proof_result", "recovery_helper_scan_seal_eligible",
-    "recovery_helper_scan_seal_eligible_after_proof", "recovery_stop_failure_observed",
-    "recovery_stop_failure_event", "recovery_runtime_registered", "crash_statuses",
-    "recovery_daemon_shutdown", "assertions", "output_digests", "notes",
+    "task_id",
+    "parent_pid_namespace_inode",
+    "private_pid_namespace_inode",
+    "parent_network_namespace_inode",
+    "private_network_namespace_inode",
+    "control_url_sha256",
+    "namespace_creation_flags",
+    "namespace_allocator_path",
+    "namespace_allocator_before",
+    "namespace_allocator_reset_to",
+    "namespace_allocator_readback",
+    "pidfd_group_signal_supported",
+    "original_target",
+    "helper",
+    "replacement",
+    "owner_stop_before_proof_reached_path",
+    "owner_stop_before_proof_release_path",
+    "owner_stop_proof_result_path",
+    "recovery_authenticated_marker_path",
+    "owner_stop_before_proof_reached",
+    "owner_stop_before_proof_reached_sha256",
+    "owner_stop_before_proof_release",
+    "owner_stop_proof_result",
+    "recovery_helper_scan_seal_eligible",
+    "recovery_helper_scan_seal_eligible_after_proof",
+    "recovery_stop_failure_observed",
+    "recovery_stop_failure_event",
+    "recovery_runtime_registered",
+    "crash_statuses",
+    "recovery_daemon_shutdown",
+    "assertions",
+    "output_digests",
+    "notes",
 }
 LEGACY_COMMON_KEYS = {
-    "version", "case", "metadata", "case_root", "crash", "journal_snapshots",
-    "process_snapshots", "raw_output", "notes",
+    "version",
+    "case",
+    "metadata",
+    "case_root",
+    "crash",
+    "journal_snapshots",
+    "process_snapshots",
+    "raw_output",
+    "notes",
 }
 LEGACY_SPINE_KEYS = LEGACY_COMMON_KEYS | {
-    "stage", "task_id", "run_id", "generation", "journal_key", "barrier_reached_path",
-    "barrier_release_path", "barrier_reached_contents", "barrier_release_contents",
-    "scan_trigger_path", "scan_reached_path", "scan_helper_reached", "scan_mirror_reached",
-    "scan_release_path", "scan_release_contents", "stop_receipt_reached_path",
-    "stop_receipt_reached", "stop_receipt_release_path", "stop_receipt_release",
-    "crash_after_stop_receipt", "stop_receipt_before_release",
+    "stage",
+    "task_id",
+    "run_id",
+    "generation",
+    "journal_key",
+    "barrier_reached_path",
+    "barrier_release_path",
+    "barrier_reached_contents",
+    "barrier_release_contents",
+    "scan_trigger_path",
+    "scan_reached_path",
+    "scan_helper_reached",
+    "scan_mirror_reached",
+    "scan_release_path",
+    "scan_release_contents",
+    "stop_receipt_reached_path",
+    "stop_receipt_reached",
+    "stop_receipt_release_path",
+    "stop_receipt_release",
+    "crash_after_stop_receipt",
+    "stop_receipt_before_release",
 }
 LEGACY_NEGATIVE_KEYS = LEGACY_COMMON_KEYS | {"status", "helper_hello", "pid_reuse", "assertions"}
 LEGACY_REPLAY_KEYS = LEGACY_COMMON_KEYS | {
-    "stage", "task_id", "run_id", "generation", "journal_key", "crash_statuses",
-    "raw_journal_snapshots", "receipt_before_clear", "replay_count", "exact_receipt_replay",
-    "clear_observed", "response_drop_operation", "response_drop_marker", "response_drop_fired",
-    "barrier_reached_path", "barrier_release_path", "barrier_reached", "barrier_release",
-    "stop_receipt_barrier_reached_path", "stop_receipt_barrier_release_path",
-    "stop_receipt_barrier_reached", "stop_receipt_barrier_release",
-    "replay_receipt_barrier_reached_path", "replay_receipt_barrier_release_path",
-    "replay_receipt_barrier_reached", "replay_receipt_barrier_release", "scan_trigger_path",
-    "scan_reached_path", "scan_release_path", "scan_helper_reached", "scan_mirror_reached",
-    "scan_release", "duplicate_stop_marker", "duplicate_stop_seen",
+    "stage",
+    "task_id",
+    "run_id",
+    "generation",
+    "journal_key",
+    "crash_statuses",
+    "raw_journal_snapshots",
+    "receipt_before_clear",
+    "replay_count",
+    "exact_receipt_replay",
+    "clear_observed",
+    "response_drop_operation",
+    "response_drop_marker",
+    "response_drop_fired",
+    "barrier_reached_path",
+    "barrier_release_path",
+    "barrier_reached",
+    "barrier_release",
+    "stop_receipt_barrier_reached_path",
+    "stop_receipt_barrier_release_path",
+    "stop_receipt_barrier_reached",
+    "stop_receipt_barrier_release",
+    "replay_receipt_barrier_reached_path",
+    "replay_receipt_barrier_release_path",
+    "replay_receipt_barrier_reached",
+    "replay_receipt_barrier_release",
+    "scan_trigger_path",
+    "scan_reached_path",
+    "scan_release_path",
+    "scan_helper_reached",
+    "scan_mirror_reached",
+    "scan_release",
+    "duplicate_stop_marker",
+    "duplicate_stop_seen",
 }
 
 # The restarted daemon's stdout/stderr logs, written into each case root beside
@@ -278,62 +558,135 @@ LEGACY_DAEMON_LOG_STREAMS = ("stdout", "stderr")
 # variable (for example a stateName passed down a helper, or the outcome values
 # assigned from a literal at native_run.go:1584-1620, 2180-2210; commands.go:721
 # and supervisory.go:140) are covered by this rule, not by that scan.
-DAEMON_LOG_TIME = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,9})?(?:Z|[+-][0-9]{2}:[0-9]{2})$")
+DAEMON_LOG_TIME = re.compile(
+    r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,9})?(?:Z|[+-][0-9]{2}:[0-9]{2})$"
+)
 DAEMON_LOG_LEVELS = ("DEBUG", "INFO", "WARN", "ERROR")
-DAEMON_LOG_MESSAGES = frozenset({
-    "advance_lease_expiry_failed", "claim_failed", "cleanup_recovered_workspace_failed",
-    "cleanup_terminal_workspace_failed", "clear_native_usage_recovery_failed",
-    "complete_provide_input_failed", "control_clock_skew_cleared", "control_clock_skew_detected",
-    "delete_enrollment_intent_failed", "delete_stale_enrollment_intent_failed",
-    "delete_terminal_journal_failed", "discard_unready_goal_session_attach_failed",
-    "generate_cancelled_receipt_id_failed", "generate_claim_id_failed",
-    "generate_command_acknowledgement_id_failed", "input_write_timeout",
-    "linux_v2_native_assignment_blocked_by_owner_recovery", "list_cleanup_journals_failed",
-    "list_journals_failed", "load_claim_intent_failed", "load_recovered_goal_session_failed",
-    "load_unready_pi_resume_barrier_failed", "machine_enrolled", "mark_lease_expired_stale_failed",
-    "mark_native_start_lease_expired_stale_failed", "mark_recovered_journal_stale_failed",
-    "mark_workspace_recovery_required_failed", "native_goal_usage_retry_exhausted",
-    "notification_client_stopped", "output_dropped_pending_budget",
-    "persist_native_goal_usage_recovery_failed", "persist_native_terminal_stale_failed",
-    "persist_prepared_startup_stale_failed", "persist_stale_process_exit_failed",
-    "persist_startup_stale_failed", "queue_cancelled_transition_failed",
-    "queue_command_acknowledgement_failed", "queue_completed_transition_failed",
-    "queue_failed_transition_failed", "queue_native_goal_usage_before_cancel_failed",
-    "queue_native_goal_usage_before_terminal_cancel_failed", "queue_native_goal_usage_failed",
-    "queue_native_terminal_transition_failed", "queue_recovered_cancel_transition_failed",
-    "queue_running_failed", "queue_terminal_transition_and_acknowledgement_failed",
-    "queue_terminal_transition_failed", "record_recovered_cancel_process_stop_failed",
-    "record_recovered_process_stop_failed", "record_workspace_failed",
-    "recover_goal_session_attachment_failed", "recover_input_command_intents_failed",
-    "recover_unclosed_goal_sessions_failed", "recover_unclosed_goal_sessions_pending",
-    "recovered_cancel_process_stop_blocked_by_terminal", "recovered_input_process_stop_pending",
-    "recovered_journal_stopped", "recovered_process_stop_blocked_by_terminal",
-    "resolve_recovered_goal_session_stop_failed", "retain_recovered_cancel_workspace_failed",
-    "retain_supervised_workspace_failed", "retain_unknown_goal_workspace_failed",
-    "retry_native_goal_session_close_failed", "retry_native_goal_usage_failed",
-    "runtime_heartbeat_failed", "runtime_poll_failed", "runtime_reconcile_failed",
-    "runtime_registered", "save_claim_grant_failed", "save_claim_intent_failed",
-    "schedule_process_exit_cleanup_failed", "stop_recovered_cancel_goal_session_unproven",
-    "stop_recovered_cancel_process_failed", "stop_recovered_cancel_process_unavailable",
-    "stop_recovered_goal_session_unproven", "stop_recovered_process_failed",
-    "stop_recovered_process_unavailable",
-})
+DAEMON_LOG_MESSAGES = frozenset(
+    {
+        "advance_lease_expiry_failed",
+        "claim_failed",
+        "cleanup_recovered_workspace_failed",
+        "cleanup_terminal_workspace_failed",
+        "clear_native_usage_recovery_failed",
+        "complete_provide_input_failed",
+        "control_clock_skew_cleared",
+        "control_clock_skew_detected",
+        "delete_enrollment_intent_failed",
+        "delete_stale_enrollment_intent_failed",
+        "delete_terminal_journal_failed",
+        "discard_unready_goal_session_attach_failed",
+        "generate_cancelled_receipt_id_failed",
+        "generate_claim_id_failed",
+        "generate_command_acknowledgement_id_failed",
+        "input_write_timeout",
+        "linux_v2_native_assignment_blocked_by_owner_recovery",
+        "list_cleanup_journals_failed",
+        "list_journals_failed",
+        "load_claim_intent_failed",
+        "load_recovered_goal_session_failed",
+        "load_unready_pi_resume_barrier_failed",
+        "machine_enrolled",
+        "mark_lease_expired_stale_failed",
+        "mark_native_start_lease_expired_stale_failed",
+        "mark_recovered_journal_stale_failed",
+        "mark_workspace_recovery_required_failed",
+        "native_goal_usage_retry_exhausted",
+        "notification_client_stopped",
+        "output_dropped_pending_budget",
+        "persist_native_goal_usage_recovery_failed",
+        "persist_native_terminal_stale_failed",
+        "persist_prepared_startup_stale_failed",
+        "persist_stale_process_exit_failed",
+        "persist_startup_stale_failed",
+        "queue_cancelled_transition_failed",
+        "queue_command_acknowledgement_failed",
+        "queue_completed_transition_failed",
+        "queue_failed_transition_failed",
+        "queue_native_goal_usage_before_cancel_failed",
+        "queue_native_goal_usage_before_terminal_cancel_failed",
+        "queue_native_goal_usage_failed",
+        "queue_native_terminal_transition_failed",
+        "queue_recovered_cancel_transition_failed",
+        "queue_running_failed",
+        "queue_terminal_transition_and_acknowledgement_failed",
+        "queue_terminal_transition_failed",
+        "record_recovered_cancel_process_stop_failed",
+        "record_recovered_process_stop_failed",
+        "record_workspace_failed",
+        "recover_goal_session_attachment_failed",
+        "recover_input_command_intents_failed",
+        "recover_unclosed_goal_sessions_failed",
+        "recover_unclosed_goal_sessions_pending",
+        "recovered_cancel_process_stop_blocked_by_terminal",
+        "recovered_input_process_stop_pending",
+        "recovered_journal_stopped",
+        "recovered_process_stop_blocked_by_terminal",
+        "resolve_recovered_goal_session_stop_failed",
+        "retain_recovered_cancel_workspace_failed",
+        "retain_supervised_workspace_failed",
+        "retain_unknown_goal_workspace_failed",
+        "retry_native_goal_session_close_failed",
+        "retry_native_goal_usage_failed",
+        "runtime_heartbeat_failed",
+        "runtime_poll_failed",
+        "runtime_reconcile_failed",
+        "runtime_registered",
+        "save_claim_grant_failed",
+        "save_claim_intent_failed",
+        "schedule_process_exit_cleanup_failed",
+        "stop_recovered_cancel_goal_session_unproven",
+        "stop_recovered_cancel_process_failed",
+        "stop_recovered_cancel_process_unavailable",
+        "stop_recovered_goal_session_unproven",
+        "stop_recovered_process_failed",
+        "stop_recovered_process_unavailable",
+    }
+)
 DAEMON_LOG_TEXT_VALUES = {
     "state": frozenset({"cancelled", "completed", "failed"}),
-    "stage": frozenset({
-        "build_environment", "encode_input", "goal_admission", "goal_admission_required",
-        "harness_capability", "initial_lease_deadline", "invalid_admission", "linux_v2_required",
-        "mark_workspace_recovery_required", "prepare_workspace", "process_exit", "queue_running",
-        "read_process_identity", "record_process", "start_agent",
-    }),
-    "reason": frozenset({
-        "ack ownership lost", "cancel", "claim ownership lost", "continue", "event ownership lost",
-        "lease expired", "lease expired during renewal", "lease fence is incomplete",
-        "lease renewal failed", "local lease watchdog renewal failed", "not eligible for reconcile",
-        "relative lease deadline elapsed", "relative lease deadline elapsed during renewal",
-        "renewed lease has no safe local deadline", "renewed lease is already unsafe",
-        "stale_stop", "terminal", "transition ownership lost", "unknown_stop",
-    }),
+    "stage": frozenset(
+        {
+            "build_environment",
+            "encode_input",
+            "goal_admission",
+            "goal_admission_required",
+            "harness_capability",
+            "initial_lease_deadline",
+            "invalid_admission",
+            "linux_v2_required",
+            "mark_workspace_recovery_required",
+            "prepare_workspace",
+            "process_exit",
+            "queue_running",
+            "read_process_identity",
+            "record_process",
+            "start_agent",
+        }
+    ),
+    "reason": frozenset(
+        {
+            "ack ownership lost",
+            "cancel",
+            "claim ownership lost",
+            "continue",
+            "event ownership lost",
+            "lease expired",
+            "lease expired during renewal",
+            "lease fence is incomplete",
+            "lease renewal failed",
+            "local lease watchdog renewal failed",
+            "not eligible for reconcile",
+            "relative lease deadline elapsed",
+            "relative lease deadline elapsed during renewal",
+            "renewed lease has no safe local deadline",
+            "renewed lease is already unsafe",
+            "stale_stop",
+            "terminal",
+            "transition ownership lost",
+            "unknown_stop",
+        }
+    ),
     "outcome": frozenset({"applied", "failed", "rejected"}),
     "kind": frozenset({"acknowledgement", "control_failure_event", "terminal transition", "transition"}),
 }
@@ -379,9 +732,8 @@ def validate_document(data: bytes, secret_values: tuple[bytes, ...]) -> dict:
         elif isinstance(value, list):
             for child in value:
                 inspect(child)
-        elif isinstance(value, str):
-            if any(secret in value for secret in decoded_secrets):
-                fail("allowlisted evidence contains a configured credential value")
+        elif isinstance(value, str) and any(secret in value for secret in decoded_secrets):
+            fail("allowlisted evidence contains a configured credential value")
 
     inspect(document)
     return document
@@ -394,30 +746,53 @@ def reject_unknown(document: dict, allowed: set[str], context: str) -> None:
 
 
 COMPOSE_REFUSAL_PREDICATES = (
-    "claim_fence_observed", "no_native_task_process", "no_task_result", "no_process_authority",
-    "no_stop_receipt", "no_provider_access", "non_goal_work_item",
+    "claim_fence_observed",
+    "no_native_task_process",
+    "no_task_result",
+    "no_process_authority",
+    "no_stop_receipt",
+    "no_provider_access",
+    "non_goal_work_item",
 )
 COMPOSE_REFUSAL_HASHES = ("work_item_id_sha256", "task_id_sha256", "run_id_sha256", "runtime_id_sha256")
 
 
 def validate_compose_refusal(document: dict, harness: str) -> None:
     required = {
-        "version", "case", "harness", "native_version", "generation", "run_state", "failure_stage",
-        "probe_returned_err_native_unverified", "probe_returned_err_harness_unavailable",
-        *COMPOSE_REFUSAL_PREDICATES, *COMPOSE_REFUSAL_HASHES,
+        "version",
+        "case",
+        "harness",
+        "native_version",
+        "generation",
+        "run_state",
+        "failure_stage",
+        "probe_returned_err_native_unverified",
+        "probe_returned_err_harness_unavailable",
+        *COMPOSE_REFUSAL_PREDICATES,
+        *COMPOSE_REFUSAL_HASHES,
     }
     if set(document) != required:
         fail("Compose refusal contains unexpected or missing fields")
-    if (type(document["version"]) is not int or document["version"] != 1 or
-            document["case"] != "rootless_compose_native_work_item_refusal" or document["harness"] != harness):
+    if (
+        type(document["version"]) is not int
+        or document["version"] != 1
+        or document["case"] != "rootless_compose_native_work_item_refusal"
+        or document["harness"] != harness
+    ):
         fail("Compose refusal version, case or harness does not match its fixed filename")
     native_version = "1.5.2" if harness == "pi" else ""
-    if (document["native_version"] != native_version or
-            document["probe_returned_err_native_unverified"] is not (harness == "pi") or
-            document["probe_returned_err_harness_unavailable"] is not (harness == "opencode")):
+    if (
+        document["native_version"] != native_version
+        or document["probe_returned_err_native_unverified"] is not (harness == "pi")
+        or document["probe_returned_err_harness_unavailable"] is not (harness == "opencode")
+    ):
         fail("Compose refusal does not match the production adapter availability projection")
-    if (type(document["generation"]) is not int or not 0 < document["generation"] <= (1 << 63) - 1 or
-            document["run_state"] != "failed" or document["failure_stage"] != "linux_v2_required"):
+    if (
+        type(document["generation"]) is not int
+        or not 0 < document["generation"] <= (1 << 63) - 1
+        or document["run_state"] != "failed"
+        or document["failure_stage"] != "linux_v2_required"
+    ):
         fail("Compose refusal does not retain the exact durable failed Run boundary")
     for key in COMPOSE_REFUSAL_HASHES:
         if not isinstance(document[key], str) or not re.fullmatch(r"[a-f0-9]{64}", document[key]):
@@ -436,7 +811,11 @@ def validate_compose_diagnostic(document: dict, case: str) -> None:
     outcome = document["outcome"]
     if not isinstance(stage, str) or stage not in COMPOSE_DIAGNOSTIC_STAGES[case]:
         fail("Compose diagnostic stage is not allowlisted")
-    if not isinstance(outcome, str) or outcome not in {"passed", "failed"} or (outcome == "passed") != (stage == "complete"):
+    if (
+        not isinstance(outcome, str)
+        or outcome not in {"passed", "failed"}
+        or (outcome == "passed") != (stage == "complete")
+    ):
         fail("Compose diagnostic outcome contradicts its stage")
     if "observation" in document:
         observation = document["observation"]
@@ -483,7 +862,11 @@ def project_metadata(value) -> dict:
     result = {key: safe_hash(source[key], f"metadata.{key}") for key in required}
     for key in ("go_version", "kernel_release", "goos", "goarch", "tree_digest", "dirty_status_sha256"):
         if key in source:
-            result[key] = safe_hash(source[key], f"metadata.{key}") if key.endswith("sha256") or key == "tree_digest" else safe_text(source[key], f"metadata.{key}")
+            result[key] = (
+                safe_hash(source[key], f"metadata.{key}")
+                if key.endswith("sha256") or key == "tree_digest"
+                else safe_text(source[key], f"metadata.{key}")
+            )
     return result
 
 
@@ -506,8 +889,15 @@ def project_receipt(value, context: str) -> dict:
     source = require_object(value, context)
     reject_unknown(source, RECEIPT_KEYS, context)
     required = {
-        "version", "legacy_v1_no_v2_proof", "status", "target_pid", "target_identity",
-        "pipe_token_sha256", "supervisor_pid", "supervisor_identity", "active_processes",
+        "version",
+        "legacy_v1_no_v2_proof",
+        "status",
+        "target_pid",
+        "target_identity",
+        "pipe_token_sha256",
+        "supervisor_pid",
+        "supervisor_identity",
+        "active_processes",
     }
     missing = required - set(source)
     if missing:
@@ -540,7 +930,13 @@ def project_owner(value, context: str, *, handoff: bool = False) -> dict:
             result[key] = safe_bool(child, f"{context}.{key}")
         elif key.endswith("sha256"):
             result[key] = safe_hash(child, f"{context}.{key}")
-        elif key == "supervisor_identity" and child == "" and handoff and source["supervisor_pid"] == 0 and source["has_stop_receipt"] is False:
+        elif (
+            key == "supervisor_identity"
+            and child == ""
+            and handoff
+            and source["supervisor_pid"] == 0
+            and source["has_stop_receipt"] is False
+        ):
             # A prepared handoff has not bound a supervisor; authority and receipts never use this shape.
             result[key] = ""
         else:
@@ -575,16 +971,30 @@ def project_journal(value, context: str) -> dict:
     source = require_object(value, context)
     reject_unknown(source, JOURNAL_KEYS, context)
     required = {
-        "raw_sha256", "generation", "local_state", "has_process_details", "containment_unproven",
-        "retain_workspace", "pending_events", "pending_transitions",
+        "raw_sha256",
+        "generation",
+        "local_state",
+        "has_process_details",
+        "containment_unproven",
+        "retain_workspace",
+        "pending_events",
+        "pending_transitions",
     }
     missing = required - set(source)
     if missing:
         fail(f"legacy {context} omits required fields: {', '.join(sorted(missing))}")
     handoff = source.get("handoff")
-    if isinstance(handoff, dict) and handoff.get("supervisor_identity") == "":
-        if any(key in source for key in ("stop_receipt", "authority", "containment_scans")) or source["has_process_details"] is not False or source.get("pid", 0) != 0 or source.get("process_identity", "") != "":
-            fail(f"legacy {context} unbound handoff contradicts bound process, receipt, authority, or scan evidence")
+    if (
+        isinstance(handoff, dict)
+        and handoff.get("supervisor_identity") == ""
+        and (
+            any(key in source for key in ("stop_receipt", "authority", "containment_scans"))
+            or source["has_process_details"] is not False
+            or source.get("pid", 0) != 0
+            or source.get("process_identity", "") != ""
+        )
+    ):
+        fail(f"legacy {context} unbound handoff contradicts bound process, receipt, authority, or scan evidence")
     result = {}
     for key, child in source.items():
         if key in ("path", "run_id", "at", "started_at", "lease_expires_at"):
@@ -657,7 +1067,10 @@ def project_barrier(value, context: str) -> dict:
 def project_hello_anchor(value, context: str) -> dict:
     source = require_object(value, context)
     reject_unknown(source, HELLO_ANCHOR_KEYS, context)
-    return {key: safe_text(child, f"{context}.{key}") if key == "target_identity" else safe_int(child, f"{context}.{key}") for key, child in source.items()}
+    return {
+        key: safe_text(child, f"{context}.{key}") if key == "target_identity" else safe_int(child, f"{context}.{key}")
+        for key, child in source.items()
+    }
 
 
 def project_hello(value) -> dict:
@@ -677,7 +1090,10 @@ def project_hello(value) -> dict:
 def project_pid_identity(value, context: str) -> dict:
     source = require_object(value, context)
     reject_unknown(source, PID_IDENTITY_KEYS, context)
-    return {key: safe_text(child, f"{context}.{key}") if key == "identity" else safe_int(child, f"{context}.{key}") for key, child in source.items()}
+    return {
+        key: safe_text(child, f"{context}.{key}") if key == "identity" else safe_int(child, f"{context}.{key}")
+        for key, child in source.items()
+    }
 
 
 def project_pid_reuse(value) -> dict:
@@ -685,13 +1101,20 @@ def project_pid_reuse(value) -> dict:
     reject_unknown(source, PID_REUSE_KEYS, "pid_reuse")
     result = {}
     integer_fields = {
-        "parent_pid_namespace_inode", "private_pid_namespace_inode", "parent_network_namespace_inode",
-        "private_network_namespace_inode", "namespace_allocator_reset_to",
+        "parent_pid_namespace_inode",
+        "private_pid_namespace_inode",
+        "parent_network_namespace_inode",
+        "private_network_namespace_inode",
+        "namespace_allocator_reset_to",
     }
     boolean_fields = {
-        "pidfd_group_signal_supported", "owner_stop_before_proof_reached", "owner_stop_before_proof_release",
-        "recovery_helper_scan_seal_eligible", "recovery_helper_scan_seal_eligible_after_proof",
-        "recovery_stop_failure_observed", "recovery_runtime_registered",
+        "pidfd_group_signal_supported",
+        "owner_stop_before_proof_reached",
+        "owner_stop_before_proof_release",
+        "recovery_helper_scan_seal_eligible",
+        "recovery_helper_scan_seal_eligible_after_proof",
+        "recovery_stop_failure_observed",
+        "recovery_runtime_registered",
     }
     for key, child in source.items():
         if key in integer_fields:
@@ -711,7 +1134,12 @@ def project_pid_reuse(value) -> dict:
             for index, item in enumerate(child):
                 item = require_object(item, f"pid_reuse.crash_statuses[{index}]")
                 reject_unknown(item, PID_REUSE_CRASH_KEYS, f"pid_reuse.crash_statuses[{index}]")
-                crashes.append({"stage": safe_text(item["stage"], "pid_reuse crash stage"), "status": project_exit(item["status"], "pid_reuse crash status")})
+                crashes.append(
+                    {
+                        "stage": safe_text(item["stage"], "pid_reuse crash stage"),
+                        "status": project_exit(item["status"], "pid_reuse crash status"),
+                    }
+                )
             result[key] = crashes
         elif key == "recovery_daemon_shutdown":
             result[key] = project_exit(child, "pid_reuse.recovery_daemon_shutdown")
@@ -743,8 +1171,12 @@ def project_daemon_log_record(value) -> dict | None:
         return None
     time_value = value.get("time")
     level = value.get("level")
-    if not (isinstance(level, str) and level in DAEMON_LOG_LEVELS and
-            isinstance(time_value, str) and DAEMON_LOG_TIME.fullmatch(time_value)):
+    if not (
+        isinstance(level, str)
+        and level in DAEMON_LOG_LEVELS
+        and isinstance(time_value, str)
+        and DAEMON_LOG_TIME.fullmatch(time_value)
+    ):
         return None
     record = {"time": time_value, "level": level}
     message = value.get("msg")
@@ -756,7 +1188,11 @@ def project_daemon_log_record(value) -> dict | None:
             record[key] = child
     for key in DAEMON_LOG_INT_KEYS:
         child = value.get(key)
-        if isinstance(child, int) and not isinstance(child, bool) and -DAEMON_LOG_INT_LIMIT < child < DAEMON_LOG_INT_LIMIT:
+        if (
+            isinstance(child, int)
+            and not isinstance(child, bool)
+            and -DAEMON_LOG_INT_LIMIT < child < DAEMON_LOG_INT_LIMIT
+        ):
             record[key] = child
     return record
 
@@ -817,7 +1253,10 @@ def project_legacy_document(document: dict) -> dict:
     }
     if "stage" in document:
         result["stage"] = safe_text(document["stage"], "stage")
-        if result["case"] in LEGACY_HELPER_SCAN_CRASH_STAGES and result["stage"] not in LEGACY_HELPER_SCAN_CRASH_STAGES[result["case"]]:
+        if (
+            result["case"] in LEGACY_HELPER_SCAN_CRASH_STAGES
+            and result["stage"] not in LEGACY_HELPER_SCAN_CRASH_STAGES[result["case"]]
+        ):
             fail("legacy helper scan crash stage is not allowlisted")
     if "status" in document:
         result["status"] = safe_text(document["status"], "status")
@@ -827,19 +1266,25 @@ def project_legacy_document(document: dict) -> dict:
     if "crash_statuses" in document:
         if not isinstance(document["crash_statuses"], list):
             fail("legacy crash_statuses must be a list")
-        result["crash_statuses"] = [project_exit(item, f"crash_statuses[{index}]") for index, item in enumerate(document["crash_statuses"])]
+        result["crash_statuses"] = [
+            project_exit(item, f"crash_statuses[{index}]") for index, item in enumerate(document["crash_statuses"])
+        ]
     journal_snapshots = document["journal_snapshots"]
     process_snapshots = document["process_snapshots"]
     if journal_snapshots is not None and not isinstance(journal_snapshots, list):
         fail("legacy journal_snapshots must be a list or null")
     if process_snapshots is not None and not isinstance(process_snapshots, list):
         fail("legacy process_snapshots must be a list or null")
-    result["journal_snapshots"] = None if journal_snapshots is None else [
-        project_journal(item, f"journal_snapshots[{index}]") for index, item in enumerate(journal_snapshots)
-    ]
-    result["process_snapshots"] = None if process_snapshots is None else [
-        project_process(item, f"process_snapshots[{index}]") for index, item in enumerate(process_snapshots)
-    ]
+    result["journal_snapshots"] = (
+        None
+        if journal_snapshots is None
+        else [project_journal(item, f"journal_snapshots[{index}]") for index, item in enumerate(journal_snapshots)]
+    )
+    result["process_snapshots"] = (
+        None
+        if process_snapshots is None
+        else [project_process(item, f"process_snapshots[{index}]") for index, item in enumerate(process_snapshots)]
+    )
     for key in ("stop_receipt_before_release", "receipt_before_clear"):
         if key in document:
             result[key] = project_receipt(document[key], key)
@@ -876,14 +1321,23 @@ def read_json_regular(path: pathlib.Path) -> dict:
     return document
 
 
-def read_regular(path: pathlib.Path, secret_values: tuple[bytes, ...], validate: bool = True,
-                 diagnostic_owner: tuple[int, int] | None = None) -> tuple[bytes, dict | None]:
+def read_regular(
+    path: pathlib.Path,
+    secret_values: tuple[bytes, ...],
+    validate: bool = True,
+    diagnostic_owner: tuple[int, int] | None = None,
+) -> tuple[bytes, dict | None]:
     maximum_size = 2048 if diagnostic_owner is not None else MAX_EVIDENCE_SIZE
     try:
         info = path.lstat()
     except FileNotFoundError:
         raise
-    if not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600 or info.st_size <= 0 or info.st_size > maximum_size:
+    if (
+        not stat.S_ISREG(info.st_mode)
+        or stat.S_IMODE(info.st_mode) != 0o600
+        or info.st_size <= 0
+        or info.st_size > maximum_size
+    ):
         fail("allowlisted source must be a bounded regular file")
     if diagnostic_owner is not None and ((info.st_uid, info.st_gid) != diagnostic_owner or info.st_nlink != 1):
         fail("Compose diagnostic must be a bounded private singly-linked file")
@@ -894,9 +1348,12 @@ def read_regular(path: pathlib.Path, secret_values: tuple[bytes, ...], validate:
             opened = os.fstat(fd)
             if not stat.S_ISREG(opened.st_mode) or opened.st_ino != info.st_ino or opened.st_dev != info.st_dev:
                 fail("allowlisted source changed during open")
-            if diagnostic_owner is not None and ((opened.st_uid, opened.st_gid) != diagnostic_owner or
-                                                  opened.st_nlink != 1 or stat.S_IMODE(opened.st_mode) != 0o600 or
-                                                  opened.st_size > maximum_size):
+            if diagnostic_owner is not None and (
+                (opened.st_uid, opened.st_gid) != diagnostic_owner
+                or opened.st_nlink != 1
+                or stat.S_IMODE(opened.st_mode) != 0o600
+                or opened.st_size > maximum_size
+            ):
                 fail("Compose diagnostic changed its private file boundary")
             data = bytearray()
             while len(data) <= maximum_size:
@@ -948,7 +1405,7 @@ def read_daemon_log_tail(path: pathlib.Path, maximum: int) -> tuple[bytes, bool]
     raw = bytes(data)
     if truncated:
         boundary = raw.find(b"\n")
-        raw = raw[boundary + 1:] if boundary >= 0 else b""
+        raw = raw[boundary + 1 :] if boundary >= 0 else b""
     return raw, truncated
 
 
@@ -970,10 +1427,8 @@ def atomic_write(directory: pathlib.Path, name: str, contents: bytes, uid: int, 
     finally:
         if temporary_fd >= 0:
             os.close(temporary_fd)
-        try:
+        with contextlib.suppress(FileNotFoundError):
             os.unlink(temporary_name)
-        except FileNotFoundError:
-            pass
 
 
 def main() -> int:
@@ -1038,9 +1493,7 @@ def main() -> int:
         )
         expected.extend((receipt_root / source, target) for source, target in MANUAL_RECEIPTS)
         expected = [
-            (source, target)
-            for source, target in expected
-            if target in MANUAL_CASE_SET_FILES[arguments.case_set]
+            (source, target) for source, target in expected if target in MANUAL_CASE_SET_FILES[arguments.case_set]
         ]
     elif arguments.mode == "compose":
         if not arguments.witness_root:
@@ -1080,7 +1533,10 @@ def main() -> int:
                 validate_compose_diagnostic(document, COMPOSE_DIAGNOSTICS[target])
                 if document["outcome"] == "failed":
                     failed_diagnostics.append(target)
-            elif arguments.mode == "compose" and target in ("rootless-compose-pi.json", "rootless-compose-opencode.json"):
+            elif arguments.mode == "compose" and target in (
+                "rootless-compose-pi.json",
+                "rootless-compose-opencode.json",
+            ):
                 data, document = read_regular(source, secret_values)
                 validate_compose_refusal(document, "pi" if target == "rootless-compose-pi.json" else "opencode")
             else:
@@ -1115,12 +1571,19 @@ def main() -> int:
                 if destination.exists() or destination.is_symlink():
                     fail("evidence destination already exists")
                 atomic_write(output, target, data, runner_uid, runner_gid)
-                copied.append({
-                    "file": target, "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest(),
-                    "kind": "daemon_log_tail", "daemon": document["daemon"], "stream": document["stream"],
-                    "truncated": document["truncated"], "records": len(document["messages"]),
-                    "dropped_lines": document["dropped_lines"],
-                })
+                copied.append(
+                    {
+                        "file": target,
+                        "bytes": len(data),
+                        "sha256": hashlib.sha256(data).hexdigest(),
+                        "kind": "daemon_log_tail",
+                        "daemon": document["daemon"],
+                        "stream": document["stream"],
+                        "truncated": document["truncated"],
+                        "records": len(document["messages"]),
+                        "dropped_lines": document["dropped_lines"],
+                    }
+                )
                 expected_destinations.add(target)
 
     for child in output.iterdir():
@@ -1128,7 +1591,10 @@ def main() -> int:
             fail("output directory contains a file outside the allowlist")
 
     if arguments.mode == "manual" and arguments.case_set == "synthetic_goal_cleanup":
-        scope = "INSTALLED SYNTHETIC-GOAL CLEANUP; direct test-scoped Runner/Store/Workspace, not App end-to-end or Goal/Control acceptance"
+        scope = (
+            "INSTALLED SYNTHETIC-GOAL CLEANUP; direct test-scoped Runner/Store/Workspace, "
+            "not App end-to-end or Goal/Control acceptance"
+        )
     elif arguments.mode == "manual":
         scope = f"production Linux amd64 A/B owner witness case set: {arguments.case_set}"
     elif arguments.mode == "compose":

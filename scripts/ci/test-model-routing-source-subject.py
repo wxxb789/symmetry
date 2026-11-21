@@ -78,9 +78,7 @@ class SourceSubjectTests(unittest.TestCase):
         os.chmod(path, 0o755)
         if not path.stat().st_mode & 0o111:
             self.skipTest("this platform does not report an execute bit")
-        self.assertEqual(
-            tool.entry_bytes(self.root, "scripts/run.sh").split(b"\0", 1)[0], b"100755"
-        )
+        self.assertEqual(tool.entry_bytes(self.root, "scripts/run.sh").split(b"\0", 1)[0], b"100755")
         self.assertEqual(tool.executable_paths(self.root), ["scripts/run.sh"])
 
     def test_digest_ignores_the_tree_location_and_the_exclusions(self) -> None:
