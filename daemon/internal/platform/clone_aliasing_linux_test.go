@@ -286,7 +286,7 @@ func cloneAliasingRenderValue(builder *strings.Builder, v reflect.Value, depth i
 		}
 		builder.WriteString("*")
 		cloneAliasingRenderValue(builder, v.Elem(), depth+1)
-	case reflect.Slice, reflect.Array:
+	case reflect.Slice:
 		fmt.Fprintf(builder, "%s[len=%d]{", v.Type(), v.Len())
 		for index := range v.Len() {
 			if index > 0 {
@@ -374,7 +374,7 @@ func cloneAliasingMutateValue(v reflect.Value) int {
 			return 0
 		}
 		return cloneAliasingMutateValue(v.Elem())
-	case reflect.Struct, reflect.Array:
+	case reflect.Struct:
 		writes := 0
 		for index := range v.NumField() {
 			writes += cloneAliasingMutateValue(v.Field(index))
@@ -410,6 +410,9 @@ func cloneAliasingMutatedScalar(v reflect.Value) reflect.Value {
 		value.SetFloat(v.Float() + 1)
 		return value
 	default:
-		return reflect.Value{}
+		// Populate rejects every kind beyond the cases above, so this arm is
+		// reached only if the harness's kind sets drift apart. Panic with the
+		// kind so the gap is self-locating.
+		panic(fmt.Sprintf("cloneAliasingMutatedScalar: kind %s is not handled by the aliasing harness", v.Kind()))
 	}
 }
