@@ -31,11 +31,13 @@ Declaration-level copies at HEAD (`grep -rn "const asText\|function asText\|cons
 | `failureText` | `features/chat/presentation.ts:432` (module-local) | `message → summary → error`, no prefix |
 | `servedText`/`servedMember` | `features/goals/served-text.ts` (exported, only file) | scalars stringified, caller-supplied absence |
 
-Import/render surface at HEAD (`grep -rn "work/presentation\|served-text" frontend/src`): 15
-modules import from `work/presentation`; `goals/served-text.ts` has exactly one importer
-(`goals/detail.tsx:8`). Pins that must stay green: `work/presentation.test.ts` (22 cases,
-including `asText("  ") → null` at `:10`), `chat/presentation.test.ts` (39 cases),
-`connections.test.tsx` (the resources DOM tests).
+Import/render surface at the base revision: 13 modules import the `work/presentation` module —
+6 through `../work/presentation` (`git grep -l '\.\./work/presentation' c87c9918 -- frontend/src`)
+and 7 through `./presentation` inside `features/work` (`git grep -l -e "from ['\"]\./presentation['\"]" c87c9918 -- frontend/src/features/work`);
+12 import it at the final tree, because `chat.test.tsx` moves its `asRecord` import to
+`services/served`; `goals/served-text.ts` has exactly one importer (`goals/detail.tsx:8`). Pins
+that must stay green: `work/presentation.test.ts` (22 cases, including `asText("  ") → null` at
+`:10`), `chat/presentation.test.ts` (39 cases), `connections.test.tsx` (the resources DOM tests).
 
 ## Deliverable shape
 
@@ -53,11 +55,12 @@ including `asText("  ") → null` at `:10`), `chat/presentation.test.ts` (39 cas
 3. **`frontend/src/features/chat/presentation.ts`** — the `work/presentation` import keeps only
    `decisionRecord`, `executionStateLabel`; the four primitives come from
    `../../services/served`; the local `failureText` (`:432`) renamed `chatFailureText` (its one
-   other use is in `chatFailureView`, `:452`). Doc comment at the old `:12` updated to name
+   other use is in `chatFailureView`, `:451`). Doc comment at the old `:12` updated to name
    both import sources.
 4. **`frontend/src/features/connections/resources.tsx`** — local `safeUrl` deleted and adopted
    from `../../services/served` (identical for every string input: the shared helper's `asText`
-   guard rejects exactly the inputs `new URL` would throw on). Local `asText` renamed
+   guard only short-circuits empty or whitespace-only strings, which `new URL` throws on as well,
+   and every other throwing form is covered by the identical `try`/`catch`). Local `asText` renamed
    `presentText` with a one-line rationale, **pending the C1 measurement below**; if the
    measurement shows the trimming helper is rendering-equivalent on the pinned inputs, the local
    helper is deleted and the shared `asText` adopted instead.
@@ -247,6 +250,7 @@ unchanged". No test is renamed, deleted or weakened; one case is added.
 | C1 pin (final) | same, final tree | 0 | 1 passed / 56 skipped |
 | moved bytes | `diff -u <(git show HEAD:<file> \| sed -n …) <(sed -n … ` for both moved blocks | 0 | empty diff (byte-identical) |
 | diff hygiene | `git diff --check`; the program's case-insensitive profile-directory grep over `git diff origin/main...HEAD` | 0 / 1 | no whitespace damage; no host path |
+| dLOC (C5, reported, not gated) | `git diff origin/main...HEAD -- frontend/src` (`-U0` hunks): raw added−removed; executable = non-blank, non-comment-only; executable non-test = excluding `*.test.ts(x)` | — | raw **+36**, executable **+9**, executable non-test **−3** (non-test raw net +18) — the C5 prediction "about −10..−25" does not reproduce at any scope; only the non-test executable net is negative, at −3. Measured at the fix stage on the same final tree (the fix is docs-only) |
 
 Copy census on the final tree (`grep -rn` over `frontend/src` for every definition form):
 exactly one definition each of `asText`, `asRecord`, `asRecords`, `safeUrl`, `servedText`,
