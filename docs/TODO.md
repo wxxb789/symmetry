@@ -548,24 +548,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       scope. Fix direction: sort by UTF-8 bytes (or code points) in both TypeScript encoders
       and pin a cross-language vector with a non-ASCII key in each layer's suite.
 
-## Deferred review findings (PR #145)
-
-- [ ] Consolidate the served-document gate helpers after the increment that owns
-      `control/test/support/**` (W1-12) has landed. `assert_served_members!/3`, `assert_served_rows!/3`,
-      `waiting_decision_payload/0`, the deterministic version-4 `uuid/1` and the bundle-derived
-      `gate_members/3`/`declared_members/2` are duplicated between
-      `control/test/symmetry_control_web/controllers/portal_resources_test.exs`
-      (`assert_served_members!/3` at `:1665`, `assert_served_rows!/3` at `:1672`,
-      `gate_members/3` at `:1683`, `declared_members/2` at `:1695`,
-      `waiting_decision_payload/0` at `:1749`, `uuid/1` at `:1797`) and the same six
-      in `control/test/symmetry_control_web/controllers/portal_workflow_test.exs`
-      (`:1896`, `:1903`, `:1914`, `:1926`, `:1949`, `:1975`). Each file
-      keeps its own copy because `control/test/support/**` was outside the gate increment's owned
-      files and a module defined in one test file would break a single-file run of the others, but
-      the copies can drift. Move them into `SymmetryControlWeb.ServedDocument` (the natural home for
-      the bundle-derived pair too) and have both gate files import them. Found by the adversarial
-      review of PR #145 (P3-2).
-
 ## Deferred review findings (rf-w2-16 clone-aliasing gate)
 
 - [ ] Deep-copy the nested helper exits that the platform stop-evidence clones still share or

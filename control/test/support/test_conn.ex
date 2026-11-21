@@ -4,13 +4,20 @@ defmodule SymmetryControlWeb.TestConn do
 
   One authenticated operator session, a JSON `accept` header and disabled CSRF
   are the mechanics every portal read and write starts from; the protocol error
-  assertion is the shape every refused command test pins.
+  assertion is the shape every refused command test pins, and `create_resource/5`
+  posts one portal resource and returns its payload.
+
+  `bearer/2` carries a caller's own machine or enrollment token — the operator
+  path is `operator_conn/1`, which binds the operator token — and
+  `enforce_csrf/1` hands a session connection back to the CSRF plug.
   """
   import ExUnit.Assertions
-  import Phoenix.ConnTest, only: [init_test_session: 2, json_response: 2]
+  import Phoenix.ConnTest, only: [init_test_session: 2, json_response: 2, post: 3]
   import Plug.Conn, only: [put_private: 3, put_req_header: 3]
 
   alias SymmetryControlWeb.PortalSession
+
+  @endpoint SymmetryControlWeb.Endpoint
 
   @operator_token "test-operator-token"
 
@@ -30,6 +37,28 @@ defmodule SymmetryControlWeb.TestConn do
     conn
     |> put_req_header("accept", "application/json")
     |> put_req_header("authorization", "Bearer #{@operator_token}")
+  end
+
+  @doc "Adds one of the caller's own machine or enrollment bearer tokens to `conn`."
+  def bearer(conn, token), do: put_req_header(conn, "authorization", "Bearer " <> token)
+
+  @doc "Drops the CSRF skip `api_conn/0` installs, so the pipeline enforces CSRF again."
+  def enforce_csrf(conn),
+    do: %{conn | private: Map.delete(conn.private, :plug_skip_csrf_protection)}
+
+  @doc "Creates one resource through the portal API and returns the resource payload."
+  def create_resource(project, connection, kind, name, external_ref) do
+    %{"resource" => resource} =
+      api_conn()
+      |> post("/portal/api/projects/#{project["id"]}/resources", %{
+        "connection_id" => connection["id"],
+        "kind" => kind,
+        "name" => name,
+        "external_ref" => external_ref
+      })
+      |> json_response(201)
+
+    resource
   end
 
   @doc "Asserts the staged error body's protocol `code` for `status`."
