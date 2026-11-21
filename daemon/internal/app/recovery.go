@@ -296,7 +296,6 @@ func (daemon *daemon) recoverGoalSession(rootContext context.Context, session st
 				if _, uncertainErr := daemon.store.MarkGoalSessionUncertain(session.Key(), "native Goal session stop is unproven"); uncertainErr != nil {
 					return fmt.Errorf("stop recovered native process %s/%d: %w", key.RunID, key.Generation, errors.Join(stopErr, fmt.Errorf("mark Goal session uncertain: %w", uncertainErr)))
 				}
-				goalSessionUncertainPersisted = true
 			}
 		}
 		if stopErr == nil {
@@ -331,7 +330,7 @@ func (daemon *daemon) recoverGoalSession(rootContext context.Context, session st
 		if usageErr != nil {
 			return fmt.Errorf("restore native usage recovery for %s/%d: %w", key.RunID, key.Generation, usageErr)
 		}
-		updated, usageErr = daemon.queueNativeUsageRecoveryTerminal(rootContext, updated, nil)
+		_, usageErr = daemon.queueNativeUsageRecoveryTerminal(rootContext, updated, nil)
 		if usageErr != nil {
 			return fmt.Errorf("restore exact native terminal for %s/%d: %w", key.RunID, key.Generation, usageErr)
 		}

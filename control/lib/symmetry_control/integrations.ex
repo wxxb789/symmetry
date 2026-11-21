@@ -551,33 +551,6 @@ defmodule SymmetryControl.Integrations do
        else: :ambiguous
   end
 
-  def execute_accepted_resource_sync(%Connection{} = connection, %ProjectResource{} = resource) do
-    provider = provider_module(connection.provider)
-
-    with {:ok, auth} <- provider.authenticate(connection),
-         {:ok, result} <-
-           provider_call(fn -> provider.sync_resource(connection, resource, auth) end),
-         {:ok, deliveries} <-
-           provider_call(fn ->
-             delivery_updates(provider, connection, delivery_resource(resource, result), auth)
-           end) do
-      case persist_sync(connection, resource, result, deliveries) do
-        {:ok, synced} ->
-          {:ok, accepted_sync_result(synced, true, result)}
-
-        {:error, reason} when reason in [:stale, :state_conflict] ->
-          {:ok, accepted_sync_result(resource, false, result)}
-
-        {:error, reason} ->
-          record_provider_action_failure(resource, reason)
-      end
-    else
-      {:error, reason} -> record_provider_action_failure(resource, reason)
-    end
-  end
-
-  def execute_accepted_resource_sync(_, _), do: {:error, :invalid_request}
-
   defp sync_connected_resource(resource) do
     with {:ok, {previous, syncing}} <- mark_resource_syncing(resource) do
       case sync_marked_resource(syncing) do
@@ -1107,27 +1080,6 @@ defmodule SymmetryControl.Integrations do
        do: reason
 
   defp provider_action_error(reason), do: reason |> failure() |> elem(0)
-
-  defp record_provider_action_failure(resource, reason) do
-    case provider_action_error(reason) do
-      code
-      when code in [
-             :invalid_request,
-             :forbidden,
-             :capability_not_granted,
-             :stale,
-             :state_conflict,
-             :ownership_lost
-           ] ->
-        {:error, code}
-
-      provider_error ->
-        case record_resource_failure(resource, reason) do
-          {:error, _code, _degraded} -> {:error, provider_error}
-          {:error, _update_reason} -> {:error, provider_error}
-        end
-    end
-  end
 
   defp maybe_put_delivery(attrs, delivery, source, target) do
     if Map.has_key?(delivery, source),
