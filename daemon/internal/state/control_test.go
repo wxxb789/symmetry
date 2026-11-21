@@ -20,6 +20,7 @@ func controlReceipt(commandID, kind, outcome string) protocol.RunEvent {
 }
 
 func TestConclusiveCleanupRetainsArtifactsBeforeRetiringSupervisoryIntent(t *testing.T) {
+	t.Parallel()
 	store, err := New(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -52,6 +53,7 @@ func TestConclusiveCleanupRetainsArtifactsBeforeRetiringSupervisoryIntent(t *tes
 }
 
 func TestControlCommandPauseResumeAndReplaySurviveRestart(t *testing.T) {
+	t.Parallel()
 	directory := t.TempDir()
 	store, err := New(directory)
 	if err != nil {
@@ -108,6 +110,7 @@ func TestControlCommandPauseResumeAndReplaySurviveRestart(t *testing.T) {
 }
 
 func TestControlCommandCompletionIsAtomicAndMatchesIntent(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("control-atomic", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -140,6 +143,7 @@ func TestControlCommandCompletionIsAtomicAndMatchesIntent(t *testing.T) {
 }
 
 func TestControlCommandWaitingWinsAndPausedWaitingCannotResume(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("control-waiting", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -170,6 +174,7 @@ func TestControlCommandWaitingWinsAndPausedWaitingCannotResume(t *testing.T) {
 }
 
 func TestControlCommandCancellationSettlesAndRetainsWorkspace(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := stoppedTestJournal("control-cancel", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -206,6 +211,7 @@ func TestControlCommandCancellationSettlesAndRetainsWorkspace(t *testing.T) {
 }
 
 func TestControlCommandConclusiveCleanupRetiresUndeliverableIntents(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := stoppedTestJournal("control-retire", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -227,6 +233,7 @@ func TestControlCommandConclusiveCleanupRetiresUndeliverableIntents(t *testing.T
 }
 
 func TestControlCommandJournalRejectsForgedAcknowledgement(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := testJournal("control-validation", 1)
 	if err := store.SaveJournal(journal); err != nil {
