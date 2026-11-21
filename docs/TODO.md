@@ -47,7 +47,7 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       from sibling validators (`validation.go:230,:239,:253,:306`), and from
       `daemon/internal/control/supervisory_validation_test.go:39,:48,:55,:125,:129,:148,:152`;
       the `protocol.Task`/`TaskWaiting` v1 decoders (65 and 8 references, 37 in
-      `e2e/core_test.go`); and `harness.NewClaudeAdapterWithRunner` (`registry.go:245`, three test
+      `e2e/core_test.go`); and `harness.NewClaudeAdapterWithRunner` (`registry.go:181`, three test
       files). Removing any of them needs an owner for `daemon/e2e/**` and the app/control test
       seams — the W2-12 follow-up is that owner (program plan §4).
 
@@ -62,9 +62,11 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       `validateNullableJSONObject` (`:584`), `validateJSONObject` (`:595`), `isJSONNull` (`:607`)
       and `isTransitionState` (`:620`).
       **Not dead-code at all:** the shadowed root probe paths `probeCodexExecutableWithRunner`
-      (`:379`) and `probeClaudeExecutable` (`:299`) are main-reachable through
+      (`:273`) and `probeClaudeExecutable` (`:193`) are main-reachable through
       `NewCodexAdapter`/`NewClaudeAdapter` and appear in none of the three baseline `deadcode`
-      reports; they belong to the probe/registry dedup (W3-04), not to a deletion pass.
+      reports; the probe/registry dedup (W3-04, #187) kept them (D4: the root stays fail-closed
+      and undelegated — no `harness` → `harness/codex` import), so no deletion pass may remove
+      them either.
 
 ## Build-tag parity (arm64 oracle)
 
@@ -933,11 +935,11 @@ instead of appended.
       `opencode/**` stayed read-only (P2-3/D1: its six CI assertions and the release-acceptance
       case stay green), so every surface this slice consolidated elsewhere still has an
       `opencode` copy: process forwarding with its own guards
-      (`daemon/internal/harness/opencode/adapter.go:543` ProcessDetails, `:559`
-      LinuxV2LiveOwnerStatus, `:578` LeaseRenewalAvailable, `:589` RenewLease),
-      `isNilNativeProcess` (`:421`, `reflect.Pointer`-only), the Close/join state machine
-      (`:1063`), `emit` (`:1344`, stamps `At` and calls `sink.Handle` directly instead of
-      `harness.DeliverEvent`) and `Wait` (`:975`). Consolidating them is part of opencode
+      (`daemon/internal/harness/opencode/adapter.go:522` ProcessDetails, `:538`
+      LinuxV2LiveOwnerStatus, `:557` LeaseRenewalAvailable, `:568` RenewLease),
+      `isNilNativeProcess` (`:400`, `reflect.Pointer`-only), the Close/join state machine
+      (`:1042`), `emit` (`:1323`, stamps `At` and calls `sink.Handle` directly instead of
+      `harness.DeliverEvent`) and `Wait` (`:954`). Consolidating them is part of opencode
       capability work, not this increment, and must keep those CI oracles green.
 
 ## pi provider-bridge close-retry timing flake under host load (PR #155 review)
