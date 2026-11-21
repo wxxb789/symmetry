@@ -266,7 +266,7 @@ func TestLinuxSupervisorWitnessMarkerParentRefusal(t *testing.T) {
 	}
 
 	if os.Getuid() != 0 {
-		rootOwnedMarker := filepath.Join("/", fmt.Sprintf("symmetry-witness-refusal-%d.marker", os.Getpid()))
+		rootOwnedMarker := "/" + fmt.Sprintf("symmetry-witness-refusal-%d.marker", os.Getpid())
 		if err := writeLinuxSupervisorAbsentWitnessMarker(rootOwnedMarker, "refused\n"); !errors.Is(err, errLinuxSupervisorWitnessMarkerParentUnsafe) {
 			t.Fatalf("root-owned-parent witness marker = %v, want the marker parent refusal", err)
 		}

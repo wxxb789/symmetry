@@ -103,7 +103,7 @@ func validateLinuxSupervisorWitnessMarkerParent(path string) error {
 	parent := filepath.Dir(path)
 	info, err := os.Lstat(parent)
 	if err != nil {
-		return fmt.Errorf("%w: inspect %q: %v", errLinuxSupervisorWitnessMarkerParentUnsafe, parent, err)
+		return fmt.Errorf("%w: inspect %q: %w", errLinuxSupervisorWitnessMarkerParentUnsafe, parent, err)
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 		return fmt.Errorf("%w: %q is not a real directory", errLinuxSupervisorWitnessMarkerParentUnsafe, parent)
