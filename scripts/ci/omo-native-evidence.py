@@ -3,7 +3,9 @@
 
 Run only with an authorized local fixture and relay credentials supplied by the
 operator's environment. Evidence roots are deliberately retained, including on
-failure. This is native-process evidence, not daemon or Control evidence.
+failure. The pinned executable's host path comes from SYMMETRY_OMO_BINARY; the
+committed size and digest remain the authority. This is native-process evidence,
+not daemon or Control evidence.
 """
 
 import argparse
@@ -27,14 +29,16 @@ import time
 import urllib.parse
 import uuid
 
+# The executable's location is host-specific, so no path is committed: the operator
+# names it in BINARY_ENVIRONMENT, and the exact size and digest below stay the
+# authority. An unset variable, a missing file, or a different blob refuses the run.
+BINARY_ENVIRONMENT = "SYMMETRY_OMO_BINARY"
 PINS = {
     "Windows": {
-        "path": "C:/Users/lhan/.local/bin/omo.exe",
         "size": 202352128,
         "sha256": "04338dd63b24c53156492e1a0777d996034416c4131a26e1ba48eb07b5429464",
     },
     "Linux": {
-        "path": "/root/.local/bin/omo",
         "size": 211998896,
         "sha256": "3a74aba613cf02e740073b302171c0fb9d9155f5ff6069f91bea23972ffa1444",
     },
@@ -984,6 +988,30 @@ def replay_without_work(
     return data.get("admission")
 
 
+def pinned_binary(pin, binary, receipt):
+    """Authorize the operator-named executable against the committed platform pin.
+
+    The observed identity is recorded before it is judged, so a refused run still
+    carries the size and digest of the executable that was refused.
+    """
+    configured = os.environ.get(BINARY_ENVIRONMENT, "")
+    require(bool(configured), BINARY_ENVIRONMENT + " must name the pinned executable")
+    declared = pathlib.Path(configured).resolve()
+    require(declared.is_file(), BINARY_ENVIRONMENT + " must name an existing file")
+    require(same_path(binary, declared), "--binary must name the file declared by " + BINARY_ENVIRONMENT)
+    receipt.value["binary"] = {
+        "path": str(binary),
+        "size": binary.stat().st_size,
+        "sha256": digest(binary),
+        "independentPlatformPin": pin,
+    }
+    observed = receipt.value["binary"]
+    require(
+        observed["size"] == pin["size"] and observed["sha256"] == pin["sha256"],
+        "exact platform binary pin mismatch",
+    )
+
+
 def run(args, receipt, active):
     binary = pathlib.Path(args.binary).resolve()
     repository = pathlib.Path(args.repository).resolve()
@@ -1013,18 +1041,7 @@ def run(args, receipt, active):
         else bounded_read(pathlib.Path("/etc/os-release"), 65536).decode("utf-8"),
         "wslDistribution": os.environ.get("WSL_DISTRO_NAME") if system == "Linux" else None,
     }
-    receipt.value["binary"] = {
-        "path": str(binary),
-        "size": binary.stat().st_size,
-        "sha256": digest(binary),
-        "independentPlatformPin": pin,
-    }
-    require(
-        same_path(binary, pin["path"])
-        and binary.stat().st_size == pin["size"]
-        and receipt.value["binary"]["sha256"] == pin["sha256"],
-        "exact platform binary pin mismatch",
-    )
+    pinned_binary(pin, binary, receipt)
     if system == "Linux":
         distribution = receipt.value["platform"]["distribution"]
         require(
@@ -1311,7 +1328,7 @@ def run(args, receipt, active):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--binary", required=True)
+    parser.add_argument("--binary", required=True, help="Must be the file named by SYMMETRY_OMO_BINARY")
     parser.add_argument("--repository", required=True, help="Authorized local fixture clone; never modified")
     parser.add_argument("--out", required=True, help="Sanitized JSON receipt destination")
     parser.add_argument("--root", help="New private evidence directory; retained on failure and success")

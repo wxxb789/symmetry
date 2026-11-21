@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 
@@ -263,7 +264,10 @@ func ValidateNewProviderActionResult(result json.RawMessage) error {
 		return errors.New("provider action result is invalid")
 	}
 	persisted, err := serializeJSONWithoutHTMLEscaping(result)
-	if err != nil || len(persisted) > maxProviderActionResultBytes {
+	if err != nil {
+		return fmt.Errorf("serialize provider action result: %w", err)
+	}
+	if len(persisted) > maxProviderActionResultBytes {
 		return ErrProviderActionCapacity
 	}
 	return nil
@@ -280,11 +284,17 @@ func normalizeProviderActionResult(result json.RawMessage) (json.RawMessage, err
 	decoder := json.NewDecoder(bytes.NewReader(result))
 	decoder.UseNumber()
 	value, err := decodeProviderActionJSONValue(decoder)
-	if err != nil || value.kind != providerActionJSONObject {
+	if err != nil {
+		return nil, fmt.Errorf("provider action result must be a JSON object: %w", err)
+	}
+	if value.kind != providerActionJSONObject {
 		return nil, errors.New("provider action result must be a JSON object")
 	}
 	if token, tokenErr := decoder.Token(); tokenErr != io.EOF {
-		if tokenErr == nil || token != nil {
+		if tokenErr != nil {
+			return nil, fmt.Errorf("provider action result has trailing data: %w", tokenErr)
+		}
+		if token != nil {
 			return nil, errors.New("provider action result has trailing data")
 		}
 		return nil, errors.New("provider action result has trailing data")
@@ -354,7 +364,10 @@ func decodeProviderActionJSONValue(decoder *json.Decoder) (providerActionJSONVal
 				values = append(values, item)
 			}
 			end, err := decoder.Token()
-			if err != nil || end != json.Delim(']') {
+			if err != nil {
+				return providerActionJSONValue{}, fmt.Errorf("provider action result array is invalid: %w", err)
+			}
+			if end != json.Delim(']') {
 				return providerActionJSONValue{}, errors.New("provider action result array is invalid")
 			}
 			return providerActionJSONValue{kind: providerActionJSONArray, a: values}, nil
@@ -364,7 +377,10 @@ func decodeProviderActionJSONValue(decoder *json.Decoder) (providerActionJSONVal
 			for decoder.More() {
 				keyToken, err := decoder.Token()
 				key, ok := keyToken.(string)
-				if err != nil || !ok {
+				if err != nil {
+					return providerActionJSONValue{}, fmt.Errorf("provider action result object key is invalid: %w", err)
+				}
+				if !ok {
 					return providerActionJSONValue{}, errors.New("provider action result object key is invalid")
 				}
 				if _, exists := seen[key]; exists {
@@ -378,7 +394,10 @@ func decodeProviderActionJSONValue(decoder *json.Decoder) (providerActionJSONVal
 				members = append(members, providerActionJSONObjectMember{key: key, value: item})
 			}
 			end, err := decoder.Token()
-			if err != nil || end != json.Delim('}') {
+			if err != nil {
+				return providerActionJSONValue{}, fmt.Errorf("provider action result object is invalid: %w", err)
+			}
+			if end != json.Delim('}') {
 				return providerActionJSONValue{}, errors.New("provider action result object is invalid")
 			}
 			return providerActionJSONValue{kind: providerActionJSONObject, o: members}, nil
@@ -537,14 +556,21 @@ func validateProviderActionIntents(journal RunJournal) error {
 // read-only even when the journal is already near its limit.
 func validateProviderActionDispatchCapacity(journal RunJournal) error {
 	providerData, err := serializeJSONWithoutHTMLEscaping(journal.ProviderActionIntents)
-	if err != nil || len(providerData) > maxProviderActionBytes {
+	if err != nil {
+		return fmt.Errorf("serialize provider action intents: %w", err)
+	}
+	if len(providerData) > maxProviderActionBytes {
 		return ErrProviderActionCapacity
 	}
+	return validateProviderActionJournalSize(reserveWorstCaseCompletions(journal))
+}
 
-	// Reserve the complete serialized shape of the largest legal completion for
-	// every unresolved intent. Completed provider data may already exceed the
-	// provider-only budget, but a new dispatch must leave enough journal space to
-	// classify every outstanding effect without making completion lossy.
+// reserveWorstCaseCompletions returns a copy of the journal with the complete
+// serialized shape of the largest legal completion reserved for every
+// unresolved intent. Completed provider data may already exceed the
+// provider-only budget, but a mutation must leave enough journal space to
+// classify every outstanding effect without making completion lossy.
+func reserveWorstCaseCompletions(journal RunJournal) RunJournal {
 	reserved := journal
 	reserved.ProviderActionIntents = append([]ProviderActionIntent(nil), journal.ProviderActionIntents...)
 	completionResult := maxProviderActionResult()
@@ -558,7 +584,7 @@ func validateProviderActionDispatchCapacity(journal RunJournal) error {
 		intent.Result = append(json.RawMessage(nil), completionResult...)
 		intent.FailureCode = completionFailureCode
 	}
-	return validateProviderActionJournalSize(reserved)
+	return reserved
 }
 
 // validateJournalSaveCapacity is the centralized lossless-mutation guard. A
@@ -567,31 +593,16 @@ func validateProviderActionDispatchCapacity(journal RunJournal) error {
 // maximum legal completion within the full 4 MiB journal.
 func validateJournalSaveCapacity(journal RunJournal) error {
 	data, err := serializeRunJournal(journal)
-	if err != nil || len(data) > maxJournalFileBytes {
+	if err != nil {
+		return fmt.Errorf("serialize run journal: %w", err)
+	}
+	if len(data) > maxJournalFileBytes {
 		return ErrProviderActionCapacity
 	}
 	if !hasUnresolvedProviderActions(journal) {
 		return nil
 	}
-
-	reserved := journal
-	reserved.ProviderActionIntents = append([]ProviderActionIntent(nil), journal.ProviderActionIntents...)
-	completionResult := maxProviderActionResult()
-	completionFailureCode := maxProviderFailureCodeForCapacity()
-	for index := range reserved.ProviderActionIntents {
-		intent := &reserved.ProviderActionIntents[index]
-		if intent.Outcome != "" {
-			continue
-		}
-		intent.Outcome = ProviderActionOutcomeUnknown
-		intent.Result = append(json.RawMessage(nil), completionResult...)
-		intent.FailureCode = completionFailureCode
-	}
-	reservedData, err := serializeRunJournal(reserved)
-	if err != nil || len(reservedData) > maxJournalFileBytes {
-		return ErrProviderActionCapacity
-	}
-	return nil
+	return validateProviderActionJournalSize(reserveWorstCaseCompletions(journal))
 }
 
 func maxProviderActionResult() json.RawMessage {
@@ -609,7 +620,10 @@ func maxProviderFailureCodeForCapacity() string {
 // preserving the 4 MiB journal guard.
 func validateProviderActionJournalSize(journal RunJournal) error {
 	data, err := serializeRunJournal(journal)
-	if err != nil || len(data) > maxJournalFileBytes {
+	if err != nil {
+		return fmt.Errorf("serialize run journal: %w", err)
+	}
+	if len(data) > maxJournalFileBytes {
 		return ErrProviderActionCapacity
 	}
 	return nil

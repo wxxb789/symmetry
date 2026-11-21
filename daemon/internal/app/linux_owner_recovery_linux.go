@@ -12,6 +12,7 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/authority"
 	"github.com/wxxb789/symmetry/daemon/internal/config"
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
+	"github.com/wxxb789/symmetry/daemon/internal/linuxpreflight"
 	"github.com/wxxb789/symmetry/daemon/internal/platform"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 	"github.com/wxxb789/symmetry/daemon/internal/state"
@@ -1573,7 +1574,7 @@ func runLinuxContainmentOnlyRecovery(ctx context.Context, value config.Config) (
 	if ctx == nil {
 		return errors.New("Linux containment-only recovery requires a context and StateDir")
 	}
-	stateDir, err := canonicalLinuxOwnerStateDir(value.StateDir)
+	stateDir, err := linuxpreflight.NormalizeOwnerStateDir(value.StateDir)
 	if err != nil {
 		return fmt.Errorf("normalize Linux containment-only StateDir against root working directory: %w", err)
 	}

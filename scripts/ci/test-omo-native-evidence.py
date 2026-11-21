@@ -9,7 +9,9 @@ import sys
 import tempfile
 import threading
 import time
+import types
 import unittest
+from unittest import mock
 
 SCRIPT = pathlib.Path(__file__).with_name("omo-native-evidence.py")
 SPEC = importlib.util.spec_from_file_location("omo_native_evidence", SCRIPT)
@@ -160,6 +162,102 @@ for byte in stderr:
                 )
                 self.assertTrue(all(item["classification"] == "passed" for item in native))
                 self.assertTrue(all(not thread.is_alive() for thread in process.threads))
+
+
+class PinnedBinaryTest(unittest.TestCase):
+    """The operator names the pinned executable; an unset variable or a changed blob is refused."""
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = pathlib.Path(directory.name)
+        self.binary = self.root / "omo.exe"
+        self.binary.write_bytes(b"pinned omo native evidence\n")
+        self.pin = {"size": self.binary.stat().st_size, "sha256": WITNESS.digest(self.binary)}
+
+    def resolve(self, receipt, pin=None, configured=None, path=None):
+        """Run the pin with this host's environment patched out for the duration."""
+        environment = {} if configured is None else {WITNESS.BINARY_ENVIRONMENT: configured}
+        with mock.patch.dict(os.environ):
+            os.environ.pop(WITNESS.BINARY_ENVIRONMENT, None)
+            os.environ.update(environment)
+            WITNESS.pinned_binary(self.pin if pin is None else pin, path or self.binary, receipt)
+
+    def test_unset_environment_is_refused_by_name(self):
+        receipt = WITNESS.Receipt("")
+        with self.assertRaisesRegex(WITNESS.WitnessError, "SYMMETRY_OMO_BINARY must name the pinned executable"):
+            self.resolve(receipt)
+        self.assertNotIn("binary", receipt.value)
+
+    def test_missing_declared_file_is_refused(self):
+        receipt = WITNESS.Receipt("")
+        with self.assertRaisesRegex(WITNESS.WitnessError, "SYMMETRY_OMO_BINARY must name an existing file"):
+            self.resolve(receipt, configured=str(self.root / "absent.exe"))
+        self.assertNotIn("binary", receipt.value)
+
+    def test_wrong_digest_is_refused_after_recording_the_observed_identity(self):
+        # The pre-environment witness recorded the observed identity and refused afterwards;
+        # a refused run keeps that evidence instead of dropping it.
+        receipt = WITNESS.Receipt("")
+        pins = {"size": self.pin["size"], "sha256": "0" * 64}
+        with self.assertRaisesRegex(WITNESS.WitnessError, "exact platform binary pin mismatch"):
+            self.resolve(receipt, pin=pins, configured=str(self.binary))
+        self.assertEqual(
+            receipt.value["binary"],
+            {
+                "path": str(self.binary),
+                "size": self.pin["size"],
+                "sha256": self.pin["sha256"],
+                "independentPlatformPin": pins,
+            },
+        )
+
+    def test_wrong_size_is_refused_at_the_pinned_digest(self):
+        receipt = WITNESS.Receipt("")
+        pins = {"size": self.pin["size"] + 1, "sha256": self.pin["sha256"]}
+        with self.assertRaisesRegex(WITNESS.WitnessError, "exact platform binary pin mismatch"):
+            self.resolve(receipt, pin=pins, configured=str(self.binary))
+        self.assertEqual(receipt.value["binary"]["sha256"], self.pin["sha256"])
+        self.assertEqual(receipt.value["binary"]["independentPlatformPin"], pins)
+
+    def test_binary_argument_must_name_the_declared_file(self):
+        receipt = WITNESS.Receipt("")
+        other = self.root / "other.exe"
+        other.write_bytes(b"not the pinned blob\n")
+        with self.assertRaisesRegex(WITNESS.WitnessError, "--binary must name the file declared by"):
+            self.resolve(receipt, configured=str(self.binary), path=other)
+        self.assertNotIn("binary", receipt.value)
+
+    def test_matching_pin_records_the_declared_executable(self):
+        receipt = WITNESS.Receipt("")
+        self.resolve(receipt, configured=str(self.binary))
+        self.assertEqual(
+            receipt.value["binary"],
+            {
+                "path": str(self.binary),
+                "size": self.pin["size"],
+                "sha256": self.pin["sha256"],
+                "independentPlatformPin": self.pin,
+            },
+        )
+
+    def test_unsupported_system_is_refused_before_the_platform_identity_is_read(self):
+        args = types.SimpleNamespace(
+            binary=self.binary,
+            repository=self.root / "fixture",
+            out=self.root / "receipt.json",
+            root=self.root / "evidence",
+        )
+        receipt = WITNESS.Receipt("")
+        read_identity = mock.Mock(side_effect=AssertionError("platform identity outran the system check"))
+        with (
+            mock.patch.object(WITNESS.platform, "system", return_value="Plan9"),
+            mock.patch.object(WITNESS, "bounded_read", read_identity),
+            mock.patch.object(WITNESS.platform, "win32_ver", read_identity),
+            self.assertRaisesRegex(WITNESS.WitnessError, "unsupported operating system"),
+        ):
+            WITNESS.run(args, receipt, [])
+        self.assertNotIn("binary", receipt.value)
 
 
 class UrlUserinfoRedactionTest(unittest.TestCase):

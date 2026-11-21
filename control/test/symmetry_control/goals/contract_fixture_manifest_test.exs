@@ -1,5 +1,5 @@
 defmodule SymmetryControl.Goals.ContractFixtureManifestTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   alias SymmetryControl.ContractSchema
   alias SymmetryControl.Goals.ContractValidation

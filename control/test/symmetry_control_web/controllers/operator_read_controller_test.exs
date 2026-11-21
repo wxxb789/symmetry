@@ -1,5 +1,5 @@
 defmodule SymmetryControlWeb.OperatorReadControllerTest do
-  use SymmetryControlWeb.ConnCase, async: false
+  use SymmetryControlWeb.ConnCase, async: true
 
   import SymmetryControl.TestFixtures,
     only: [claim: 4, register_runtime: 3, task_attrs: 0, task_attrs: 1, uuid: 0]

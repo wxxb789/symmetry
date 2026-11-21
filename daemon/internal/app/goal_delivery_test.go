@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/wxxb789/symmetry/daemon/internal/control"
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
@@ -633,6 +634,142 @@ func TestAbandonGoalSessionAfterStartTurnResponseLossQueuesStopWhenCloseSucceeds
 	}
 	if journal.PID != 0 || journal.ProcessIdentity != "" || len(journal.PendingGoalDeliveries) != 1 || journal.PendingGoalDeliveries[0].Kind != state.GoalDeliverySessionStopped || journal.PendingGoalDeliveries[0].SessionStopped == nil || journal.PendingGoalDeliveries[0].SessionStopped.SessionID != controlSessionID || journal.PendingGoalDeliveries[0].SessionStopped.BindingID != bindingID {
 		t.Fatalf("known-close start-turn recovery evidence = %#v", journal)
+	}
+}
+
+// TestBoundedGoalSessionUncertainReason pins the helper's exact output: reasons
+// within budget are returned byte-identically (including bytes that are not
+// valid UTF-8 — the store-side hazard for those is tracked in docs/TODO.md),
+// and an over-budget reason is cut at the store budget with exactly the invalid
+// or partial-rune bytes dropped, so the result is valid UTF-8 and the store's
+// JSON round trip cannot expand it back over the budget.
+func TestBoundedGoalSessionUncertainReason(t *testing.T) {
+	budget := state.GoalSessionUncertainReasonBytes
+	for _, test := range []struct {
+		name   string
+		reason string
+		want   string
+	}{
+		{
+			name:   "within budget is byte-identical",
+			reason: "native stop unproven: café ☕ " + strings.Repeat("a", 64),
+			want:   "native stop unproven: café ☕ " + strings.Repeat("a", 64),
+		},
+		{
+			name:   "within-budget invalid byte is left untouched (store-side follow-up in docs/TODO.md)",
+			reason: "native stop unproven: bad\xffbyte",
+			want:   "native stop unproven: bad\xffbyte",
+		},
+		{
+			name:   "exact budget is byte-identical",
+			reason: strings.Repeat("a", budget-3) + "\uFFFD",
+			want:   strings.Repeat("a", budget-3) + "\uFFFD",
+		},
+		{
+			name:   "over budget ASCII drops only the excess bytes",
+			reason: strings.Repeat("a", budget+1),
+			want:   strings.Repeat("a", budget),
+		},
+		{
+			name:   "cut inside a two-byte rune drops the partial rune",
+			reason: strings.Repeat("a", budget-1) + "é",
+			want:   strings.Repeat("a", budget-1),
+		},
+		{
+			name:   "cut inside a three-byte rune drops the partial rune",
+			reason: strings.Repeat("a", budget-2) + "€",
+			want:   strings.Repeat("a", budget-2),
+		},
+		{
+			name:   "cut inside a four-byte rune drops the partial rune",
+			reason: strings.Repeat("a", budget-3) + "𝄞",
+			want:   strings.Repeat("a", budget-3),
+		},
+		{
+			name:   "interior invalid byte is dropped",
+			reason: strings.Repeat("a", 100) + "\xff" + strings.Repeat("b", 4000),
+			want:   strings.Repeat("a", 100) + strings.Repeat("b", 3995),
+		},
+		{
+			name:   "interior invalid run is dropped whole",
+			reason: strings.Repeat("a", 50) + "\xff\xfe" + strings.Repeat("b", 4100),
+			want:   strings.Repeat("a", 50) + strings.Repeat("b", 4044),
+		},
+		{
+			name:   "invalid bytes past the cut are irrelevant",
+			reason: strings.Repeat("a", budget) + "\xff",
+			want:   strings.Repeat("a", budget),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := boundedGoalSessionUncertainReason(test.reason)
+			if got != test.want {
+				t.Fatalf("boundedGoalSessionUncertainReason() = %q (%d bytes), want %q (%d bytes)", got, len(got), test.want, len(test.want))
+			}
+			if len(test.reason) > budget && !utf8.ValidString(got) {
+				t.Fatalf("boundedGoalSessionUncertainReason() = %q, want valid UTF-8 for an over-budget reason", got)
+			}
+		})
+	}
+}
+
+// TestAbandonGoalSessionBoundsOversizedUncertainReason drives the abandon path
+// with writer-failure causes larger than the durable reason budget (W307-R1:
+// the state layer's wrapped causes lengthen the composed reason, and the store
+// rejects an over-budget reason outright, which would leave the uncertain mark
+// unrecorded). The session must still reach the durable uncertain state, and
+// the stored reason must remain readable back: the store's JSON round trip
+// expands invalid bytes into U+FFFD, so a bounded reason that kept an interior
+// invalid byte would pass the write check and then make the journal unloadable.
+func TestAbandonGoalSessionBoundsOversizedUncertainReason(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		cause        error
+		wantContains string
+	}{
+		{
+			name:         "multibyte writer cause is cut on a rune boundary",
+			cause:        fmt.Errorf("write goal session journal: %w", errors.New(strings.Repeat("é", 2100))),
+			wantContains: strings.Repeat("é", 64),
+		},
+		{
+			name:         "writer cause with an interior invalid byte stays loadable",
+			cause:        fmt.Errorf("write goal session journal: %w", errors.New("bad\xffbyte: "+strings.Repeat("a", 5000))),
+			wantContains: strings.Repeat("a", 64),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store, key := claimedGoalDeliveryStore(t)
+			defer store.Close()
+			sessionKey, _, _ := saveRetainedGoalSession(t, store, key)
+			daemon := &daemon{store: store, options: options{clock: time.Now}}
+			if err := daemon.abandonGoalSession(sessionKey, &closeFailureGoalSession{err: errors.New("native close failed")}, false, test.cause); err == nil {
+				t.Fatal("abandonGoalSession() with a failed native close reported success")
+			}
+			session, err := store.LoadGoalSession(sessionKey)
+			if err != nil {
+				t.Fatalf("LoadGoalSession() error = %v", err)
+			}
+			if session.LaunchState != state.GoalSessionLaunchStateUncertain || session.SessionState != state.GoalSessionStateUnavailable || !session.NeedsReconciliation() {
+				t.Fatalf("oversized uncertain reason left the session off the uncertain path: %#v", session)
+			}
+			reason := session.UncertainReason
+			if !strings.HasPrefix(reason, "native Goal session did not reach a known stopped state: ") {
+				t.Fatalf("durable uncertain reason = %q, want the composed prefix", reason)
+			}
+			if !strings.Contains(reason, test.wantContains) {
+				t.Fatalf("durable uncertain reason dropped the writer cause text: %q", reason)
+			}
+			if !utf8.ValidString(reason) {
+				t.Fatalf("durable uncertain reason is not valid UTF-8 (%d bytes)", len(reason))
+			}
+			if len(reason) > state.GoalSessionUncertainReasonBytes {
+				t.Fatalf("durable uncertain reason = %d bytes, over the %d-byte store budget", len(reason), state.GoalSessionUncertainReasonBytes)
+			}
+			if len(reason) < state.GoalSessionUncertainReasonBytes-1 {
+				t.Fatalf("durable uncertain reason = %d bytes, want the store budget filled up to one dropped byte", len(reason))
+			}
+		})
 	}
 }
 
