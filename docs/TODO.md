@@ -1145,3 +1145,27 @@ instead of appended.
       pin, not the fixture shape, now bounds the async phase) before any slice can own the target.
       W3-15 cannot: its contract has no wall-time clause and `goals_test.exs` stays `async: false`
       as an app-env mutator.
+
+## Deferred review findings (PR #197)
+
+- [ ] Unify the three copies of the runtime harness-kind vocabulary left by the rf-w4-19
+      `linuxpreflight` extraction (2026-11-21, branch `refactor/rf-w4-19-linuxpreflight-package`;
+      found by the round-1 review of PR #197 (P3-2)). The extraction could not move the vocabulary
+      out of `internal/app`: `configuredHarnessKind` and `nativeGoalHarnessKind` are copied from
+      `internal/app/probe.go:123,156` into `daemon/internal/linuxpreflight/cgroup_linux.go:31-63`,
+      and the same seven-kind table exists a third time in the config loader
+      (`internal/config/config.go:321-323`, message at `:323`, byte-identical to
+      `internal/app/probe.go:140`). Only the "new kind" direction fails closed: a kind the copy does
+      not know is rejected by `verifyLinuxNativeRuntimeSelection`, never admitted; if `app` dropped a
+      kind from its native-goal set, preflight would still accept it — though the runtime would still
+      refuse it, so this is not an authority gap. The pin test
+      `TestNativeRuntimeSelectionVocabularyMatchesTheConfiguredKinds`
+      (`daemon/internal/linuxpreflight/preflight_linux_test.go:326`) compares the copy against a
+      hard-coded literal table, not against `app`'s copy, so drift between the two copies goes
+      undetected. Fix direction: one `internal/harness` vocabulary — `ParseKind` plus the native-goal
+      predicate — consumed by `internal/config`, `internal/app/probe.go`/`goal_admission.go` and
+      `linuxpreflight`, with the pin test reading that shared table instead of a literal. That
+      touches `internal/harness`, `internal/app/probe.go` and `internal/app/goal_admission.go`, all
+      outside the rf-w4-19 owned set (plan
+      `docs/plans/2026-11-21-rf-w4-19-linuxpreflight-package-plan.md`, "The runtime-selection
+      vocabulary"), so the slice kept the copy and recorded this entry instead.

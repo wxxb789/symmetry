@@ -20,6 +20,7 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/control"
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
+	"github.com/wxxb789/symmetry/daemon/internal/linuxpreflight"
 	"github.com/wxxb789/symmetry/daemon/internal/notification"
 	"github.com/wxxb789/symmetry/daemon/internal/platform"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
@@ -276,7 +277,7 @@ func Run(ctx context.Context, value config.Config, changes ...Options) error {
 		return errors.New("daemon context must not be nil")
 	}
 	if requiresLinuxV2NativeOwner(harness.Kind(value.Runtime.HarnessKind)) {
-		stateDir, err := normalizeLinuxNativeStateDir(value.StateDir)
+		stateDir, err := linuxpreflight.NormalizeOwnerStateDir(value.StateDir)
 		if err != nil {
 			return fmt.Errorf("normalize Linux v2 StateDir against root working directory: %w", err)
 		}
