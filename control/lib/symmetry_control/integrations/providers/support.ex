@@ -2,8 +2,10 @@ defmodule SymmetryControl.Integrations.Providers.Support do
   @moduledoc false
 
   # Shared plumbing for the HTTP-backed provider implementations. Every function
-  # below was byte-identical across GitHub and AzureDevOps before this module
-  # existed; provider-specific URL/body mapping, pagination and error atoms stay
+  # below was AST-identical across GitHub and AzureDevOps before this module
+  # existed (decoded_path_segments/1 differed by whitespace only); the three
+  # authenticate-then-delegate functions take the provider module as their first
+  # argument. Provider-specific URL/body mapping, pagination and error atoms stay
   # in the provider modules.
 
   @doc "Authenticates the connection, then delegates to the provider's `check/2`."
