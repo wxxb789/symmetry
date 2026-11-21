@@ -1,7 +1,7 @@
 # rf-w1-04 platform split plan — daemon-platform god-file split (move-only)
 
-Contract: `C:/Users/lhan/.local/state/gdd/contracts/goal-rf-w1-04-platform-split.md` (GDD,
-2026-11-21), plus its binding review amendments
+Contract: the GDD goal contract `goal-rf-w1-04-platform-split.md` (2026-11-21, at the GDD
+state root), plus its binding review amendments
 (`refactor/plan-review-ds-1.md` P2-4/A8, `refactor/plan-review-opus-1.md` P2-1/P2-2).
 Baseline for every coordinate in this plan: `origin/main` at
 `a3039f0d17fc7c7905b63bdf247cac5bf339b213` (the worktree's HEAD). Branch:
@@ -34,9 +34,11 @@ build line and recomputed import block; no declaration line is added or removed.
 
 Unchanged, and provable as such: the package's exported surface is identical because every
 top-level declaration keeps its name, kind, receiver and body. The slot W3-02 needs is now
-local: the eight anchor response writers (`writeResponse`, `writeResponseWithStopEvidence`,
-`WithCloneRemoval`, `WithFDs`, `WithReapEvidence`, `WithChildClassification`, `WithHelperExit`,
-`WithRunPins`) and every `validLinuxOwnerAnchor*Request` validator live in
+local: the eight anchor response writers (`writeResponse` and the seven
+`writeResponseWith*` variants: `writeResponseWithStopEvidence`,
+`writeResponseWithCloneRemoval`, `writeResponseWithFDs`, `writeResponseWithReapEvidence`,
+`writeResponseWithChildClassification`, `writeResponseWithHelperExit`,
+`writeResponseWithRunPins`) and every `validLinuxOwnerAnchor*Request` validator live in
 `anchor_server.go`; the anchor request/response structs and their codec live in
 `anchor_wire.go`.
 
@@ -69,10 +71,14 @@ declaration unassigned or names a file outside the contract's sibling set.
 - **Build constraints are copied verbatim** (amendment A8/P2-1). The six `anchor_*` and five
   `helper_v2_*` siblings carry `//go:build linux && amd64`, `supervisor_linux_*` carries
   `//go:build linux`, `supervisor_windows_*` carries `//go:build windows` — the exact constraint
-  of their source. Verified by `go list` per target: on `linux/arm64` the visible platform files
-  are exactly `containment_supervisor_linux.go`, `supervisor_linux_client.go`,
-  `supervisor_linux_helper.go` and `linux_owner_anchor_unsupported.go` (no anchor/helper_v2
-  sibling leaks into the arm64 build), and the `windows`/`darwin` sets are likewise unchanged.
+  of their source. Verified by `go list` per target: on `linux/arm64` the split's visible files
+  are exactly the residual `containment_supervisor_linux.go`, the two new siblings
+  `supervisor_linux_client.go` and `supervisor_linux_helper.go`, and the pre-existing
+  `linux_owner_anchor_unsupported.go` stand-in (no `anchor_*`/`helper_v2_*` sibling leaks into
+  the arm64 build). The same rule holds on every target, measured as the package's `GoFiles`
+  count against the baseline: 14 → 16 on `linux/arm64` and 14 → 16 on `windows/amd64` (+2
+  supervisor siblings each), 13 → 13 on `darwin/amd64`, and 15 → 28 on `linux/amd64` (+6
+  `anchor_*`, +5 `helper_v2_*`, +2 `supervisor_linux_*`).
 - **One file per role, one residual per source.** No sibling file is empty and no declaration is
   assigned twice; `pfs apply` fails loudly on either.
 - **Import blocks are recomputed per file** from the identifiers the file's own declarations use
@@ -114,8 +120,8 @@ checked instead by the `go list` file sets above.
 
 - **Generated, not hand-edited.** 680 declarations across four files (`git diff` would be ~875 KB
   of hunks) cannot be moved by hand without transcription risk. The split is a Go AST tool plus a
-  rule table, both kept outside the repository
-  (`C:/Users/lhan/.local/state/gdd/refactor/tools/w1-04-platform-split/`), so a rebase re-run is
+  rule table, both kept outside the repository (in the GDD state tree at
+  `refactor/tools/w1-04-platform-split/`), so a rebase re-run is
   `classify.py && pfs apply -src <git-show staging> -dst daemon/internal/platform -map map.json`
   with no review of individual lines. The tools read pristine sources (`git show HEAD:<path>`)
   and never edit the AST, only re-emit source ranges.
