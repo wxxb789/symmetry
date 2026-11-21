@@ -66,7 +66,7 @@ that may only decrease (plan §10; the W6-10 Credo ratchet applies the second mo
   rescue narrowing, UI primitives, HTTP boundary unify, ExUnit async conversion, giant-test split,
   scripts/ci defect repairs.
 - **W4 — structural refactors (16 planned slices; W4-15 split into 15a/15b at the W4 reconcile;
-  arch-decision-1 additions pending review)**: `startGoalAdmission` phase split, platform session
+  arch-decision-1 additions pending binding)**: `startGoalAdmission` phase split, platform session
   objects, execution runner decomposition, workspace walkers, Linux v2 finalize unification,
   provider-access intent context, `goals.ex` facade phase 1, ChatPage decomposition, Api
   reads/writes split, refusal classification, frontend test-harness consolidation, Go test
@@ -164,10 +164,10 @@ and W5 reconciles under independent two-model review are recorded (reconcile rep
 and b): W4 split W4-15 into 15a/15b and W5 dropped W5-07 and W5-13. The W6 contracts were
 batch-drafted in two parts and reviewed (DeepSeek and Opus), and the W6 reconcile's binding
 decisions are now folded into the contracts: W6-03 stays HOLD (capability supplied via the
-W4-12 reshape — pending arch-decision-1 review, T2 unreviewed; contract re-drafted after W4-12),
+W4-12 reshape — pending arch-decision-2 binding, T2; contract re-drafted after W4-12),
 W6-06 stays HOLD for an owner re-scope plus a 06a/06b split, and W6-12 splits into 12a/12b.
-Architecture decision arch-decision-1 (T2, pending independent review — logged below) is not yet
-binding: it proposes the W4-07 and W4-12 reshapes, adds W4-17a/W4-17b/W4-19/W4-20 and
+Architecture decision arch-decision-1 (T2, pending binding after the verification round — logged
+below) is not yet binding: it proposes the W4-07 and W4-12 reshapes, adds W4-17a/W4-17b/W4-19/W4-20 and
 A4/A5/W5-14 (W4-17a/W4-19/W4-20 sit in pre-review implementation; no arch-derived PR merges
 before the review is bound), and holds W4-01/W4-07/W4-12/W4-13/W4-15b; the tables below mark the
 arch-derived parts held or pending.
@@ -236,34 +236,38 @@ arch-derived parts held or pending.
 | W3-15 | Giant-test split (TC-H) | — | gated on W2-09, W3-08, W3-10, W3-14 |
 | W3-16 | `scripts/ci` defect repairs + visible PyYAML oracle (SC S8) | #180 | in review |
 
-### Wave 4 — structural refactors (16 planned; W4-15 split; arch-decision-1 additions pending review)
+### Wave 4 — structural refactors (16 planned; W4-15 split; arch-decision-1 additions pending binding)
 
 | Slice | Purpose | PR | State |
 | --- | --- | --- | --- |
-| W4-01 | `startGoalAdmission` phase split (DA S13) | — | held (arch-decision-1 pending review); gated on W3-09; W3-08 co-writes `app.go` |
+| W4-01 | `startGoalAdmission` phase split (DA S13) | — | held (arch-decision-2; not yet bound); lane after W4-17b; gated on W3-09; W3-08 co-writes `app.go` |
 | W4-02 | Session objects for supervisor/anchor loops (DP S-5) | — | gated on W3-02; before W5-01 |
 | W4-03 | Execution `Start`/`closeContainmentAttempt` decomposition (DR S7) | #193 | in review (no open-PR gate) |
 | W4-04 | Workspace walkers + subject guards (DR S10) | #191 | in review (no open-PR gate) |
 | W4-05 | Linux v2 finalize pipeline unification (DR S9, D6) | — | gated on W4-03 |
 | W4-06 | `provider_access` intent-context unification (CCS8) | #189 | in review |
-| W4-07 | `goals.ex` facade split phase 1 (CCS7) | — | held (arch-decision-1 pending review); gated on W2-07 (#184) + W3-10 (#162 merged) |
+| W4-07 | `goals.ex` facade split phase 1 (CCS7) | — | held (arch-decision-2; not yet bound); gated on W2-07 (#184) + W3-10 (#162 merged) |
 | W4-08 | ChatPage decomposition (FE S7) | — | gated on W4-11 (frontend serial order) |
 | W4-09 | Api reads/writes split (FE S6) | — | gated on W4-08 |
 | W4-10 | Refusal/outcome classification module (FE S3) | — | gated on W4-09 |
 | W4-11 | Frontend test-harness consolidation + MSW (FE S10, D13) | — | gated on W3-12 + W3-13 + the consolidated npm bump (#183, replaces the #173-#177 family); head of the frontend serial order |
-| W4-12 | Go test-double extraction part 1 (TC-G) | — | held (arch-decision-1 pending review); gated on W3-08 → W3-15 |
-| W4-13 | Wall-clock burn-down part 1 — Go deadlines (TC-F) | — | held (arch-decision-1 pending review); gated on W4-12, W4-15b (after W4-15a), W3-04 (#187), W3-15, #178 |
+| W4-12 | Go test-double extraction part 1 (TC-G) | — | superseded by W4-12a/W4-12b/W4-12c (arch-decision-2 split) |
+| W4-12a | App `journalStore` interface satisfied directly by `*state.Store` (split of W4-12) | — | held (arch-decision-2; not yet bound); lane after W4-01 |
+| W4-12b | `apptest.FaultStore` replaces the 25 nil-in-prod `options` mirrors (split of W4-12) | — | held (arch-decision-2; not yet bound); after W4-12a |
+| W4-12c | One `Recorder` port for the durable callbacks of `execution.Invocation` + `harness.StartRequest` (split of W4-12) | — | held (arch-decision-2; not yet bound); after W4-15b |
+| W4-13 | Wall-clock burn-down part 1 — Go deadlines (TC-F) | — | held (arch-decision-2; not yet bound); gated on W4-22, W4-15b (after W4-15a), W3-04 (#187), W3-15, #178 |
 | W4-14 | Browser fixture consolidation (TC-I) | — | gated on W2-01 (#188) |
 | W4-15 | Harness staged driver 5b — split at the W4 reconcile | — | superseded by W4-15a/W4-15b |
 | W4-15a | Harness JSONL decoder leaf (`internal/harness/linejson`) | — | gated on W3-04 (#187) + W3-15 |
-| W4-15b | Harness staged driver 5b (DR S5b) | — | held (arch-decision-1 pending review); gated on W4-15a |
+| W4-15b | Harness staged driver 5b (DR S5b) | — | held (arch-decision-2; not yet bound); gated on W4-15a |
 | W4-16 | Python test harness: git fixture + citest (SC S5 + T8) | — | gated on W3-16, W3-01 |
-| W4-17a | Command-queue module out of `daemon` (A1a) | — | in flight (pre-review implementation); landing gated on arch-decision-1 review |
-| W4-17b | Run-lifecycle state machine with guarded transitions (A1b) | — | queued (after W4-17a); landing gated on arch-decision-1 review |
-| W4-19 | Linux host verifiers extracted to `internal/linuxpreflight` | — | in flight (pre-review implementation); landing gated on arch-decision-1 review |
-| W4-20 | linux-gate protocol split: wire codec + /proc identity vs gate lifecycle | — | in flight (pre-review implementation); landing gated on arch-decision-1 review |
+| W4-17a | Command-queue module out of `daemon` (A1a) | — | in flight (pre-review implementation); landing gated on arch-decision-2 binding |
+| W4-17b | Run-lifecycle state machine with guarded transitions (A1b) | — | queued (after W4-17a); landing gated on arch-decision-2 binding |
+| W4-19 | Linux host verifiers extracted to `internal/linuxpreflight` | — | in flight (pre-review implementation); landing gated on arch-decision-2 binding |
+| W4-20 | linux-gate protocol split: wire codec + /proc identity vs gate lifecycle | — | in flight (pre-review implementation); landing gated on arch-decision-2 binding |
+| W4-22 | #185 response-loss consumer: record the recovery seal on the in-process stop (behaviour slice) | — | queued (after W4-12c; before W4-13); landing gated on arch-decision-2 binding |
 
-### Wave 5 — high-risk programs (13 planned; W5-07 and W5-13 dropped)
+### Wave 5 — high-risk programs (13 planned; W5-07 and W5-13 dropped; W5-18 held)
 
 | Slice | Purpose | PR | State |
 | --- | --- | --- | --- |
@@ -280,6 +284,7 @@ arch-derived parts held or pending.
 | W5-11 | Source-subject single implementation (SC S9) | — | gated on W3-16 (#180) + W4-16 |
 | W5-12 | model-routing module split (SC S10) | — | gated on W4-16 + W3-16 (#180); W5-11 no longer a dependency (decision E) |
 | W5-13 | ST1005 genuine-case mechanical slice (D8) | — | dropped (W5 reconcile, decision G) |
+| W5-18 | `orchestration.ex` concept split (renamed from W4-18 at arch-decision-2) | — | held — requires a reviewed `docs/design/core.md:18-19` amendment first |
 
 ### Tail W6 — micro-waves (12 planned; W6-12 split, W6-03/W6-06 HOLD)
 
@@ -287,13 +292,13 @@ arch-derived parts held or pending.
 | --- | --- | --- | --- |
 | W6-01 | CI structure finalization: inline program extraction + contracts composite action | — | queued — gates: W2-01, W2-17, W3-01, W5-01 merged; #137, #180, dependabot #167-#172 merge-first; `ci.yml` lane W6-01 → W6-02 → W6-10 → W6-12b |
 | W6-02 | Browser spec wiring per D7 | — | gated on W2-01 → W4-14 → {W5-03, W5-04} → W5-08 → W6-01; render gate green on `main` |
-| W6-03 | `isGoTestBinary` fork removal (DP P-05, D4) | — | HOLD (W6 reconcile: capability supplied via the W4-12 reshape — pending arch-decision-1 (T2, unreviewed); contract re-drafted after W4-12); then #160 → W3-02 → W4-02; W5-09 → W5-01 (both) → W6-03 |
+| W6-03 | `isGoTestBinary` fork removal (DP P-05, D4) | — | HOLD (W6 reconcile: capability supplied via the W4-12 reshape — pending arch-decision-2 binding (T2); contract re-drafted after W4-12); then #160 → W3-02 → W4-02; W5-09 → W5-01 (both) → W6-03 |
 | W6-04 | opencode promote-or-drop | — | parked (D1) |
 | W6-05 | Containment convergence phase 2: delete the legacy generation (DP S-11b, D3) | — | blocked (D3) |
-| W6-06 | cmd extraction: launcher handshake + clone-bootstrap (DR S13) | — | blocked (D3, via W6-05); HOLD for owner re-scope + split into 06a/06b; W4-20 protocol-layout dependency pending arch-decision-1 (T2, unreviewed) |
+| W6-06 | cmd extraction: launcher handshake + clone-bootstrap (DR S13) | — | blocked (D3, via W6-05); HOLD for owner re-scope + split into 06a/06b; W4-20 protocol-layout dependency pending arch-decision-2 binding (T2) |
 | W6-07 | Frontend route code splitting (FE S13) | — | gated on #164 (merged) → W3-12 → W4-11 → W4-08 → W4-09 → W4-10 → W5-03 + W5-04 → W4-14 → W5-08; stale-chunk policy set by the W6 reconcile |
 | W6-08 | Dead protocol API deletion: goal-envelope family (DR F-07, D5) | — | gated on #178 + #165 merge-first; W3-07/W3-08/W3-15/W4-01/W4-04/W4-12/W4-13 land first or rebase (recorded per writer); no design amendment (`proto: none`) |
-| W6-09 | Remove always-null `GoalAttentionFeed.unavailable` (CW S12, D2) | — | gated on #163 (merged) → W3-03 → W5-05, W3-14, the frontend chain through W5-08 and W6-02; A4 (core work-item eligibility; proposed — pending arch-decision-1 (T2, unreviewed)) first; mandate slice — carries the same-PR `protocol.md`/`frontend.md` amendment |
+| W6-09 | Remove always-null `GoalAttentionFeed.unavailable` (CW S12, D2) | — | gated on #163 (merged) → W3-03 → W5-05, W3-14, the frontend chain through W5-08 and W6-02; A4 (core work-item eligibility; proposed — pending arch-decision-2 binding (T2)) first; mandate slice — carries the same-PR `protocol.md`/`frontend.md` amendment |
 | W6-10 | Elixir lint/coverage flips | — | gated on W6-11, W6-01/W6-02, W2-17, W2-01 and the control writers W3-03/W3-14/W5-05/W5-06/W6-09; credo gate ratchets against a committed baseline (W6 reconcile) |
 | W6-11 | Styler adoption + duplication burn-down (D12, D16) | — | gated on W2-17 and every W2-W5 control-source writer (see contract) + W6-09; lands before W6-10/W6-12 |
 | W6-12 | Wall-clock burn-down part 2 + duration/coverage ratchets (TC-F/TC-B cont.) | — | split recorded at the W6 reconcile (W6-12a + W6-12b); the 12a/12b contracts are written before dispatch |
@@ -519,8 +524,29 @@ stays verbatim apart from its provenance header and one placeholder normalizatio
   applied: a catch-all sentence covers every contract
   drafted from arch-decision-1 — including W4-18, W4-21, A4 and any §G proposal (W4-15c, W5-15,
   W5-16, W5-17), drafted before or after the entry. This rules addition and this entry take
-  effect with the independent review of this entry. Authority: the owner's standing authorization
-  (2026-11-21); review by reference as cited.
+- **2026-11-21 — T2: arch-decision-2 rulings recorded; the arch record corrected.** The
+  independent Opus review of PR #182 round 6 (`182-opus-review-6.md`, 2026-11-21, bound to
+  `0ad994c5`) is recorded as the independent review of the round-5 amendment text (the
+  pre-review rule and the arch catch-all), which it accepts; those entries are now effective.
+  Its P3-1 finding is applied: W4-01, W4-12 and W4-15b already carry their architecture-reshape
+  Conductor decisions (superseding Change, Owned files, Dependencies and clauses 1-3), written
+  2026-11-21 with the W4-07 reshape (W4-01 19:50 local, W4-12 19:51 local; W4-15b's section is
+  present), so the "not yet drafted" reading is corrected and the hold condition reads "until
+  the reshaped contracts are bound by the arch review". The arch state: both independent
+  reviews of arch-decision-1 completed with VERDICT amend — Opus
+  (`refactor/arch-decision-review-opus-1.md`) and DeepSeek
+  (`refactor/arch-decision-audit-deepseek-1.md`) — plus the Gemini split-pattern review
+  (`gemini-split-pattern-review-1.md`, VERDICT changes). The conductor reconciled them in
+  `refactor/arch-decision-2-rulings.md`: the daemon lane is W4-17a → W4-17b → W4-01 → W4-12a →
+  W4-12b → W4-12c → W4-22 → W4-13 (W4-13 also after W4-15b); W4-18 is renamed W5-18 and held
+  for a `docs/design/core.md` amendment; A6 is held for owner sign-off; the #185 response-loss
+  consumer becomes the behaviour slice W4-22; and the rulings carry the per-slice amendments
+  (R2-R9) the affected contracts absorb. A verification review round follows before the decision
+  is marked BOUND; until then no arch-derived PR merges (the pre-review rule above stands, and
+  evidence binds the bound contract's SHA-256 — an amended contract requires re-verification).
+  The W4 rows now show W4-12 superseded by W4-12a/W4-12b/W4-12c with W4-22 added and the holds
+  and in-flight gates re-based on arch-decision-2; the W5 table adds W5-18 (held). Authority:
+  the owner's standing authorization (2026-11-21); reviews by reference as cited.
 
 ## Known follow-ups
 
