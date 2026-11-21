@@ -83,7 +83,7 @@ func probeClaudeNativeEvidence(ctx context.Context, executable string, runner Cl
 		runner = osClaudeCommandRunner{}
 	}
 
-	versionOutput, err := runClaudeProbe(ctx, func(probeContext context.Context) ([]byte, error) {
+	versionOutput, err := RunBoundedProbe(ctx, claudeProbeTimeout, func(probeContext context.Context) ([]byte, error) {
 		return runner.Run(probeContext, executable, "--version")
 	})
 	if err != nil {
@@ -107,7 +107,7 @@ func probeClaudeNativeEvidence(ctx context.Context, executable string, runner Cl
 		return evidence, fmt.Errorf("%w: Claude Code %s is not in the tested version set", ErrUnsupportedVersion, evidence.Version)
 	}
 
-	helpOutput, err := runClaudeProbe(ctx, func(probeContext context.Context) ([]byte, error) {
+	helpOutput, err := RunBoundedProbe(ctx, claudeProbeTimeout, func(probeContext context.Context) ([]byte, error) {
 		return runner.Run(probeContext, executable, "--help")
 	})
 	if err != nil {

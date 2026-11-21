@@ -1,0 +1,447 @@
+# rf-w4-17a command-queue module — evidence record (2026-11-21)
+
+Subject: the daemon command-queue field cluster moved out of `daemon` into a new
+`daemon/internal/app/command_queue.go` module (`commandQueue` + `commandReceipts`), with the daemon
+keeping I/O and lock ownership. Contract: `goal-rf-w4-17a-command-queue-module.md`. Base revision
+`7954836892f39bc8a92abe11e5efcb5b3bac3476` — the revision every coordinate below resolves at. The branch
+merged `origin/main` three times on top of it (`fc8e95a2` as `a4770eda`, `94d04e42` as `9207e5a4`,
+`9e473513` as `2715b780`) and `origin/main` has since advanced to `c7ee8a4c`; `git diff` over the nine
+paths of section 1 is empty for both `79548368..9e473513` and `9e473513..c7ee8a4c` (it was `d0761739`
+at the fix round and `c0784952` at opus review 2; the empty delta held at each check), so no
+`origin/main` commit changed a delivered file.
+Plan: `docs/plans/2026-11-21-rf-w4-17a-command-queue-module-plan.md`. Nothing was committed when the
+gates below ran; they exercised the working tree described in section 1 (the operator committed it as
+`2350d55c` and merged `origin/main` as `a4770ed` afterwards, and the apply-stage note at the end of
+section 6 re-ran the gates on the post-simplification-review working tree).
+
+Subject identity (sha256 of the delivered working-tree files; this record's own hash is naturally
+not self-referential and is omitted): `command_queue.go cc614fed1865031b5a691764968768440dca9644a876d27e2566485a4a17c9e5`,
+`command_queue_test.go 9344f57c8dc3fd355d0f3286bb8906f7f9ca7cd9678d956eb97fc9fdaabab664`,
+`app.go ff26a5ee977d7a8790c41116cb48469522fad2b075bd6f8524ca2d70cf49cde9`,
+`commands.go 8f9667ee3d04b72a7bcc2c52cc3d77cfbe2b812386a2275d19c41f96f14cb046`,
+`outbox.go 9a704d713a7e3de13bb15919f37a32d01dd6d15b8892534c7958c6d295d9766e`,
+`app_test.go 2af9a9b922971ae5cc7ae43e3e6c38464e76c333a1578fdfc54729d045522656`,
+`plan e8361ce569377ddadc12bd03e2b2bf2f53ede8745d08355db867c84af1e94d60`.
+The opus-review-2 fix round (fix-round-3 note in section 6) re-measured `command_queue.go`,
+`command_queue_test.go`, `commands.go` and the plan; `commands.go` is byte-identical to its
+implement-stage value `8f9667ee…` (the round-2 wrapper check was reverted with declined finding F3).
+`app.go`, `outbox.go` and `app_test.go` carry the implement-stage values, untouched by every accepted
+finding.
+
+## 1. Deliverable shape (files, counts)
+
+| file | status | lines (base → head) | note |
+|---|---|---:|---|
+| `daemon/internal/app/command_queue.go` | new | — → 255 | module: 5 types + 12 methods + `newCommandQueue` |
+| `daemon/internal/app/command_queue_test.go` | new | — → 340 | 8 tests at the module interface, no `&daemon{}` |
+| `daemon/internal/app/app.go` | edited | 2238 → 2221 | 5 fields removed, `commands commandQueue` added; `startBackground` reset; `releaseRun`/`clearCompletedCommandReceipts` delegate; `releaseCommandReceiptsLocked` deleted |
+| `daemon/internal/app/commands.go` | edited | 1009 → 939 | wrappers delegate; `finishQueuedCommandLocked` deleted; 3 entry types moved |
+| `daemon/internal/app/outbox.go` | edited | 1175 → 1164 | `markCommandAcknowledgementDelivered` delegates both receipt phases |
+| `daemon/internal/app/app_test.go` | edited | 10078 → 10078 | 26 mechanical lines (`git diff -w`: 26 insertions / 26 deletions); column realignment only besides those |
+| `docs/plans/2026-11-21-rf-w4-17a-command-queue-module-plan.md` | new | — → 265 | plan + recorded contract-preserving decisions D1-D4, round-2 note (F3 declined, N1/N2) |
+| `docs/evidence/rf-w4-17a-command-queue-module-2026-11-21.md` | new | — | this record (method list, lock table, control-flow audit, mutants, gates); its own line count is not self-measured |
+| `scripts/ci/omo-control-native-evidence.py` | edited | 1811 → 1812 | one line: `SOURCE_PATHS` gains `daemon/internal/app/command_queue.go` (arch-decision-2 R9; mapping in section 2) |
+
+Line budget: no file crosses 1500 L. `app.go` (2221) and `app_test.go` (10078) already exceeded it
+at base; both shrink or stay equal under this change, and the two new files are 255 and 340 L.
+
+## 2. Interface and callers (clause 2)
+
+`commandQueue` — 8 methods, each documented "caller holds `daemon.mu`", none locking, none I/O
+(`grep -n "Lock()" daemon/internal/app/command_queue.go` → no matches):
+
+| method | callers (after the change) |
+|---|---|
+| `enqueue(command) (*queuedCommand, bool)` | `enqueueCommandLocked` |
+| `next() (*queuedCommand, bool)` | `nextQueuedCommand` |
+| `lane(key, queued) bool` | `dispatchQueuedCommand` |
+| `nextInLane(key) (*queuedCommand, bool)` | `nextLaneCommand` |
+| `current(queued) bool` | `dispatchQueuedCommand`, `executeQueuedCommand` |
+| `finish(key, registered, receipt)` | `finishQueuedCommand`, `finishDeferredCommand` |
+| `dropRun(key)` | `releaseRun`, `clearCompletedCommandReceipts` |
+| `markDelivered(key)` | `markCommandAcknowledgementDelivered` |
+
+`commandReceipts` — 4 methods, same lock contract, held by the queue (`commandQueue.receipts`):
+
+| method | callers (after the change) |
+|---|---|
+| `begin() uint64` | `beginCommandRequest` |
+| `finish(requestID)` | `finishCommandRequest`, `enqueueSnapshotCommandsForRequest` (both exits) |
+| `suppressed(requestID, key) bool` | `enqueueSnapshotCommandsForRequest` |
+| `suppress(key)` | `markCommandAcknowledgementDelivered` |
+
+The 8/4 split and its reason are the plan's decision D1 (design clause 1's escape hatch: the receipt
+state is written by the outbox delivery path in two queue calls — `receipts.suppress` before the journal
+write and `commands.markDelivered` after it, both under `commandReceiptMu` + `daemon.mu` — and
+`commandReceiptMu` is released across that write). D2 records why the snapshot loop stays
+in `commands.go` (per-command gate on `commandWake`/`backgroundStop`, which is daemon lifecycle
+state); D3 keeps `commandWake` and `commandReceiptMu` on the daemon; D4 makes `startBackground`
+construct a fresh queue.
+
+Mapping from the contract's example interface (design clause 2) to the delivered one, so the
+deviation is auditable rather than implicit:
+
+| contract example | delivered | note |
+|---|---|---|
+| `enqueue(command) (done, release)` | `enqueue(command) (*queuedCommand, bool)` | the wake channel is daemon lifecycle state (`commandWake`), so the daemon wrapper selects it; dedupe and the arrival append are the queue's |
+| `enqueueSnapshot(requestID, commands)` | stays in `commands.go` | per-command gate on `commandWake`/`backgroundStop` (D2); it composes `enqueue` with `receipts.suppressed`/`receipts.finish` |
+| `next()` | `next()` | identical |
+| `nextInLane(key)` | `nextInLane(key)` | identical (also drops the drained lane) |
+| `finish(queued, receipt)` | `finish(key, registered, receipt)` | one method covers the instance path and `finishDeferredCommand`'s key lookup (`registered == nil`) |
+| `dropRun(key)` | `dropRun(key)` | identical (`releaseCommandReceiptsLocked`'s body) |
+| `beginRequest()` / `finishRequest(id)` | `receipts.begin()` / `receipts.finish(id)` | on the receipt value, per D1 |
+| — (not in the example) | `lane(key, queued) bool` | the lane put and the "start the drain" decision the executor needs |
+| — (not in the example) | `current(queued) bool` | the membership check `dispatchQueuedCommand` and `executeQueuedCommand` both had inline |
+| — (not in the example) | `markDelivered(key)` | the post-persist eviction in `markCommandAcknowledgementDelivered` |
+| — (not in the example) | `receipts.suppressed` / `receipts.suppress` | the window read and the tombstone write |
+
+The module is a pure value module: `grep -n "daemon\." daemon/internal/app/command_queue.go` matches
+comments only (lines 13, 14, 201-202); imports are `protocol` and `state` (types) only; no lock call, no
+`Store`/`log`/`os`/`net`/`io` reference, no `//nolint`, no goroutine and no channel creation beyond
+the per-entry `done` channel the base created in `enqueueCommandLocked`.
+
+### Native-evidence source mapping (arch-decision-2 R9)
+
+`daemon/internal/app/command_queue.go` is listed in `SOURCE_PATHS` of
+`scripts/ci/omo-control-native-evidence.py` (appended after the last entry, so the `:73`/`:75`/`:81`
+coordinates the contract cites keep their lines), so the native-evidence identity set (`source_files`)
+covers the file this slice's behaviour moved into. Every moved declaration and the listed path it left:
+
+| moved declaration (now in `command_queue.go`) | base home (listed path) |
+|---|---|
+| `commandQueue` + its 8 methods | `app.go` (the five loose fields, `releaseCommandReceiptsLocked`, `clearCompletedCommandReceipts`, `releaseRun`, the `startBackground` reset), `commands.go` (arrival/lane/completion wrappers, `finishQueuedCommandLocked`) |
+| `commandReceipts` + its 4 methods | `commands.go` (`beginCommandRequest`, `finishCommandRequest`, `enqueueSnapshotCommandsForRequest` window open/read/close), `outbox.go` (`markCommandAcknowledgementDelivered` tombstone + delivered phases) |
+| `queuedCommand`, `commandKey`, `commandLane`, `newCommandQueue` | `app.go` (type declarations, the lazily created maps), `commands.go` (lane construction in `dispatchQueuedCommand`) |
+
+## 3. Lock-site table before/after (every `daemon.mu` / `commandReceiptMu` site in the touched methods)
+
+Extracted mechanically (scratch tool `w4-17a-locks.py`, `git show HEAD:<file>` vs the working tree);
+`cRM` = `daemon.commandReceiptMu`. Order and count are identical in every row.
+
+| method | base sequence | head sequence | identical |
+|---|---|---|---|
+| `enqueueCommand` | mu.Lock; mu.Unlock | mu.Lock; mu.Unlock | yes |
+| `enqueueCommandLocked` | — | — | yes |
+| `dispatchQueuedCommand` | mu.Lock; mu.Unlock ×6 | mu.Lock; mu.Unlock ×6 | yes |
+| `runCommandLane` | — | — | yes |
+| `nextLaneCommand` | mu.Lock; defer mu.Unlock | mu.Lock; defer mu.Unlock | yes |
+| `executeQueuedCommand` | mu.Lock; mu.Unlock | mu.Lock; mu.Unlock | yes |
+| `nextQueuedCommand` | mu.Lock; defer mu.Unlock | mu.Lock; defer mu.Unlock | yes |
+| `finishQueuedCommand` | mu.Lock; defer mu.Unlock | mu.Lock; defer mu.Unlock | yes |
+| `finishDeferredCommand` | mu.Lock; defer mu.Unlock | mu.Lock; defer mu.Unlock | yes |
+| `finishQueuedCommandLocked` → `commandQueue.finish` | — (locked caller) | — (caller-held contract) | yes |
+| `enqueueSnapshotCommandsForRequest` | cRM.Lock; defer cRM.Unlock; mu.Lock; mu.Unlock ×2 | identical | yes |
+| `beginCommandRequest` | cRM.Lock; defer cRM.Unlock; mu.Lock; defer mu.Unlock | identical | yes |
+| `finishCommandRequest` | cRM.Lock; defer cRM.Unlock; mu.Lock; mu.Unlock | identical | yes |
+| `releaseRun` | cRM.Lock; defer cRM.Unlock; mu.Lock; mu.Unlock | identical | yes |
+| `clearCompletedCommandReceipts` | cRM.Lock; defer cRM.Unlock; mu.Lock; defer mu.Unlock | identical | yes |
+| `releaseCommandReceiptsLocked` → `commandQueue.dropRun` | — (locked caller) | — (caller-held contract) | yes |
+| `markCommandAcknowledgementDelivered` | cRM.Lock; mu.Lock; mu.Unlock; cRM.Unlock; cRM.Lock; defer cRM.Unlock; mu.Lock; mu.Unlock | identical | yes |
+
+No new mutex: the module takes no lock at all; `commandReceiptMu` keeps every base acquisition point
+and stays outer to `daemon.mu` where base had it that way.
+
+## 4. Base-vs-HEAD control-flow audit (lesson 32)
+
+Point extraction: scratch tool `w4-17a-flow.py` (base revision vs working tree, per method); the
+table maps every base decision/effect to its HEAD equivalent. No row is lost.
+
+| method (base → head) | base control-flow points | HEAD equivalent | preserved |
+|---|---|---|---|
+| `enqueueCommandLocked` → same | empty-ID early return; wake/stop early return; lazy map init; duplicate early return (no wake); insert; append; return done+wake | first `if` holds both early-return conditions before any queue call; `enqueue` owns the lazy init, the duplicate return (`created=false` → `done`, no wake) and the insert+append | yes |
+| `dispatchQueuedCommand` → same | membership early return; stop early return (finish without receipt); cancel branch (running/terminal/claimed/park); lane create + append; `lane.running` early return; start flag; `Add(1)` + goroutine | membership early return via `current`; stop early return unchanged; cancel branch unchanged byte-for-byte; create/append/`running`/start-flag moved verbatim into `lane`; `!lane(...)` reproduces the "already draining" return; `Add(1)` + goroutine unchanged | yes |
+| `nextQueuedCommand` → `commandQueue.next` | empty early return; pop head; nil slot; re-slice; return true | identical statements inside the queue | yes |
+| `nextLaneCommand` → `commandQueue.nextInLane` | `lane == nil \|\| empty` → delete + false; pop head; return true | identical | yes |
+| `executeQueuedCommand` → same | membership early return; `ctx.Err()` early return (finish without receipt); handleCommand; finish | `current` for membership; the other three unchanged | yes |
+| membership checks (`commands.go:94`, `:173`) → `commandQueue.current` | `byKey[key] != queued` / `== queued` | `queue.byKey[queued.key] == queued` | yes |
+| `finishQueuedCommandLocked` → `commandQueue.finish` | `byKey[key] == queued` guard; close once (`completed`); set `completed`; evict unless `receipt && !delivered` | guard becomes `current == nil \|\| (registered != nil && current != registered)`; close/set/evict unchanged | yes |
+| `finishDeferredCommand` → same | `byKey[key]` lookup guard, then the locked finish | the lookup is the `registered == nil` arm of `finish`; the wrapper calls it once | yes |
+| `releaseCommandReceiptsLocked` → `commandQueue.dropRun` | range `byKey`; run match; close once (`completed`); evict | identical statements | yes |
+| `enqueueSnapshotCommandsForRequest` → same | per command: window read; suppressed → `continue`; `enqueueCommandLocked`; nil completion → delete window + `return nil,false`; wake capture; append completion; after the loop: delete window; signal wake; `return completions,true` | `receipts.suppressed` per command; `receipts.finish` on both exits; the rest unchanged. The base read the window map once before the loop; HEAD reads it per command — inside the loop both locks (`commandReceiptMu` + `daemon.mu`) are held, so no window mutation can interleave (`suppress`/`finishRequest` both take `commandReceiptMu`), and tombstone additions mutate the same map instance, so the two forms are equivalent | yes |
+| `beginCommandRequest` → same | lazy init; increment; create set; return id | `receipts.begin` with the same statements | yes |
+| `finishCommandRequest` → same | requestID 0 early return; locks; delete window | the early return stays in the wrapper (so the lock sites are unchanged); `receipts.finish` deletes | yes |
+| `releaseRun` → same | queue part: `releaseCommandReceiptsLocked` | `commands.dropRun(key)` at the same point, inside the same two locks | yes |
+| `clearCompletedCommandReceipts` → same | `releaseCommandReceiptsLocked` under both locks | `commands.dropRun(key)` under both locks | yes |
+| `markCommandAcknowledgementDelivered` → same | tombstone every live window (pre-write); persist; error early return; mark delivered + evict-if-completed (post-write) | `receipts.suppress` and `commands.markDelivered` at the same two phases; the persist branch and the error return unchanged | yes |
+| `startBackground` → same | reset `queuedCommands` + `commandRequests` under `daemon.mu` | `daemon.commands = newCommandQueue()` under `daemon.mu` (also clears the empty arrival FIFO/lanes and restarts the window counter, recorded as plan D4; unobservable, no test or production path threads a window id across `startBackground`) | yes |
+
+## 5. Red-mutant records (clause 4)
+
+Each test in `command_queue_test.go` names its mutant. Recorded failure output (mutant applied to
+`command_queue.go`, target test run alone, then reverted; the module file hashed
+`sha256 5e42f1d4c682c3acf86fe72e35ad84b98794f78906466b5a11c6b24cf360d9bf` before and after the
+implement/apply-stage rounds; rows 7a/7b were added by the apply stage under the same rule; rows 5c and
+8 are fix-round-3 (current line numbers); rows 1-7b cite the implement/apply-stage tree's line numbers):
+
+| # | test | mutant | observed failure |
+|---|---|---|---|
+| 1 | `TestCommandQueueDeduplicatesByCommandKey` | delete the `byKey` existence check in `enqueue` | `command_queue_test.go:53: duplicate command key created a second entry` |
+| 2 | `TestCommandQueueLanePreservesFIFOOrderPerRun` | `nextInLane` pops `pending[len-1]` (LIFO) | `command_queue_test.go:88: first lane pop = 0x…1860/true, want 0x…17c0` |
+| 3 | `TestCommandQueueArrivalOrderAndLanesAreIndependentPerRun` | key the lane map by `RunID` only | `command_queue_test.go:133: the next generation of the same run id reused the previous generation's lane` |
+| 4 | `TestCommandQueueDropRunReleasesExactlyOneRun` | `dropRun` closes waiters but never evicts | `command_queue_test.go:174: registered entries after dropping run-a = 3, want only run-b's` |
+| 5 | `TestCommandQueueFinishHonoursReceiptAndDelivery` | `finish` ignores `delivered` (`if !receipt`) | `command_queue_test.go:235: completion kept an entry whose receipt was already delivered` |
+| 5b | `TestCommandQueueFinishHonoursReceiptAndDelivery` | drop the nil-entry guard in `markDelivered` | `panic: runtime error: invalid memory address or nil pointer dereference` inside `(*commandQueue).markDelivered` (the absent-key resolution is a documented no-op) |
+| 5c | `TestCommandQueueFinishHonoursReceiptAndDelivery` | drop the identity clause in `finish` (`registered != nil && current != registered`) — the G1-equivalent guard drop | `command_queue_test.go:246: a stale instance settled the re-enqueued command key` (fix-round-3) |
+| 6 | `TestCommandQueueRequestWindowsAccountTombstones` | `suppress` returns after the first window | `command_queue_test.go:272: live windows were not both tombstoned` |
+| 7a | `TestCommandQueueZeroValueCreatesItsMaps` | delete the `byKey` nil guard in `enqueue` | `panic: assignment to entry in nil map [recovered, repanicked]` inside `(*commandQueue).enqueue`, `command_queue.go:76`, call frame `command_queue_test.go:297` |
+| 7b | `TestCommandQueueZeroValueCreatesItsMaps` | delete the `lanes` nil guard in `lane` | `panic: assignment to entry in nil map [recovered, repanicked]` inside `(*commandQueue).lane`, `command_queue.go:103` |
+| 8 | `TestCommandQueueRepeatedFinishClosesDoneOnce` | drop the `!current.completed` close-once guard in `finish` | `panic: close of closed channel [recovered, repanicked]` inside `(*commandQueue).finish`, called from the new test (fix-round-3) |
+
+Two mutants survived the first attempt, and the tests were extended (not weakened) until each was
+red: #3, because the test's runs differed in `RunID` while the mutant only drops the generation — the
+test now also pins two generations of one `RunID` in separate lanes; #5, because the test only
+exercised delivery *after* completion while the mutant breaks delivery *before* completion — the test
+now pins that path too. The mutants were re-run and are red as recorded. No assertion of an existing
+test was changed, so no further mutant records are required by the owner rules.
+
+"No assertion change" is mechanical, not a claim: every `t.Fatal*`/`t.Error*` line and every
+`if … daemon.…` guard in `app_test.go` (1166 lines at base, 1166 at HEAD) was extracted from both
+revisions and compared after normalizing only the three moved-field expressions
+(`daemon.queuedCommands` → `daemon.commands.byKey`, `daemon.commandRequests` →
+`daemon.commands.receipts.requests`): 0 mismatches. Independently, the multiset of string literals on
+both sides of the whole production+test diff is identical (5 distinct literals removed, the same 5
+re-added), so no error, log or test-message string changed.
+
+Fix round 2 (opus review 1, F3) removed `finish`'s instance parameter, and opus review 2 (N1) showed the
+moved identity guard had no killing test (mutant G1 survived the whole package). The conductor declined
+F3 (option (b), plan round-2 note) and the round-1 shape is delivered again; the stale-pointer block
+calls the real queue method (`finish(replay.key, inflight, false)`). Mutants run on the delivered tree,
+one at a time, target test alone, each reverted: M7 — drop the `(registered != nil && current != registered)`
+clause in `finish` → `command_queue_test.go:246: a stale instance settled the re-enqueued command key`;
+M12 — drop the `!current.completed` close-once guard (`TestCommandQueueRepeatedFinishClosesDoneOnce`, the
+new N2 test) → `panic: close of closed channel [recovered, repanicked]` inside `(*commandQueue).finish`,
+called from the test. G1 (round-2's wrapper guard-drop mutant) has no mutation site in the restored
+shape — the wrapper carries no guard; its equivalent is M7, run red above.
+
+## 6. Gate results (exact commands, counts, exit codes)
+
+All gates ran foreground in this worktree on 2026-11-21; heavy suites were serialized.
+
+| gate | command (cwd) | result |
+|---|---|---|
+| gofmt | `gofmt -l ./internal/app/` (`daemon/`) | no output, exit 0 |
+| vet | `go vet ./...` (`daemon/`) | exit 0 |
+| build linux | `GOOS=linux go build ./...` (`daemon/`) | exit 0 |
+| build windows | `GOOS=windows go build ./...` (`daemon/`) | exit 0 |
+| extra cross-builds | `GOOS=linux GOARCH=arm64 go build ./...`; `GOOS=darwin GOARCH=arm64 go build ./...`; `GOOS=windows GOARCH=arm64 go build ./...` (`daemon/`) | exit 0 each |
+| race probe (windows) | `go test -count=1 -race ./internal/app/ -run 'Command\|Queue\|Lane\|Outbox\|Receipt\|Acknowledg'` | refused: `go: -race requires cgo; enable cgo by setting CGO_ENABLED=1`; `CGO_ENABLED=1` retry: `cgo: C compiler "gcc" not found: exec: "gcc": executable file not found in %PATH%` → `[build failed]` — the race oracle is the WSL run |
+| focused (windows, no race) | `go test -count=1 -v ./internal/app/ -run 'Command\|Queue\|Lane\|Outbox\|Receipt\|Acknowledg'` | final tree: `ok github.com/wxxb789/symmetry/daemon/internal/app 54.003s`, exit 0, 175 PASS lines, 0 FAIL lines (the first pass, before the extra "5b" assertion in the new test file, was `ok … 73.085s` with the same counts); 115 top-level tests selected (`go test -list`) |
+| full (windows) | `go test -count=1 ./internal/app/...` | final tree: `ok github.com/wxxb789/symmetry/daemon/internal/app 330.382s`, exit 0 (slower than the first pass's `ok … 207.555s` because the WSL race suite was in flight on this host; both passes exit 0) |
+| race (wsl Ubuntu-24.04), attempt 1 | `wsl -d Ubuntu-24.04 -u accept` → `go test -count=1 -race ./internal/app/...` (`daemon/`) | `panic: test timed out after 10m0s` at `FAIL … 600.152s`, no `--- FAIL` line and no `DATA RACE`: Go's default 10-minute test timeout killed a run that was stuck on the pre-existing hang diagnosed below |
+| race cost control (windows, one P) | `go test -count=1 -cpu=1 ./internal/app/...` (`daemon/`) | `ok github.com/wxxb789/symmetry/daemon/internal/app 203.397s`, exit 0 — the suite is ~200 s with one logical CPU, and the shard diagnosis below shows normal race-instrumented durations, so the failed full WSL runs were the hang, not uniform race overhead |
+| race (wsl Ubuntu-24.04), attempt 2 | same command with `-timeout 90m` | ran ~85 minutes without completing and was cancelled deliberately; the shard diagnosis below shows it was stuck on the same pre-existing hang (no attempt-2 result exists) |
+| race (wsl, shard diagnosis) | sharded run `-race -timeout 90m -v -run '^Test[A-H]'` (script `wsl-race-shards.sh`, scratch), cancelled after ~55 minutes | the shard's output file stops growing at `=== RUN TestClaimAdmissionInputFailsClosedBeforeWorkspaceOrProcessStart/mixed_null_marker_survives_replay_and_restart`; every earlier test passed with normal durations (0.00-0.23 s), so the race cost is near-native on this host and the run was stuck on that one test, not slow overall |
+| race hang attribution (HEAD) | `wsl … go test -count=1 -race -timeout 3m ./internal/app/ -run '^TestClaimAdmissionInputFailsClosedBeforeWorkspaceOrProcessStart$'` | `panic: test timed out after 3m0s`; the running tests are `TestClaimAdmissionInputFailsClosedBeforeWorkspaceOrProcessStart` and its subtest `mixed_null_marker_survives_replay_and_restart` (3m0s each); frames are the test's own `func3` call and `net/http/httptest.(*Server).goServe`; `FAIL … 180.616s` |
+| race hang attribution (base `79548368`, detached in the scratch clone) | same command in the clone at base | identical artifact: same panic, same two running tests, same `httptest` frames, `FAIL … 180.303s` — the hang is pre-existing on this host, not caused by this slice |
+| race (wsl, full suite minus the pre-existing hanger) | `go test -count=1 -race -timeout 45m -skip '^TestClaimAdmissionInputFailsClosedBeforeWorkspaceOrProcessStart$' ./internal/app/...` | did not complete either; cancelled after ~20 minutes and its output file is empty (0 bytes: without `-v` Go buffers a single package's output), so a second stall is not named. The same loopback-`httptest` pattern also appears in `omo_attach_ack_test.go` and `pi_provider_bridge_test.go` (3 files, 15 `httptest` references) — a plausible second stall of the same class, not verified |
+| race (wsl, focused subset) | `wsl -d Ubuntu-24.04 -u accept` → `go test -count=1 -race -timeout 30m -v ./internal/app/ -run 'TestCommandQueue\|TestCommandRequest\|TestReleaseRun\|TestSameRunCommands\|TestSameCommandID\|TestCancel\|TestDelivered\|TestAcknowledgement\|TestRenewal\|TestConclusiveCleanup\|TestBlockedInput\|TestBlockedCommand\|TestFailedAcknowledgement\|TestCancelledSnapshot\|TestScheduledCancel'` (`daemon/`) | `ok github.com/wxxb789/symmetry/daemon/internal/app 10.789s`, exit 0; 52 top-level PASS (all six `TestCommandQueue…` module tests among them), 0 FAIL, 0 `DATA RACE` — the touched paths under the race detector |
+| module lock check | `grep -n "Lock()" daemon/internal/app/command_queue.go` | no matches (exit 1) |
+| field-access gate | `grep -rc 'daemon\.\(commandQueue\|queuedCommands\|commandLanes\)' daemon/internal/app/*.go \| grep -v ':0$'`; `grep -rho … \| wc -l` | no non-zero file, 0 matches package-wide (even inside the module) |
+| module purity | `grep -n "daemon\." daemon/internal/app/command_queue.go`; `grep -nE "daemon\.store\|daemon\.log\|os\.\|net/\|http\.\|io\." daemon/internal/app/command_queue.go`; `grep -rn "nolint"` over the diff and the new files | comments only / no matches / no matches (exit 1 each) |
+| citation gate | snapshot commit `37a935a6` in a throwaway clone outside the worktree, carrying exactly this worktree's eight changed paths; `python3 scripts/ci/check-citation-existence.py --base 7954836892f39bc8a92abe11e5efcb5b3bac3476 --head HEAD` | `no audited document added or modified between 7954836892f3 and 37a935a6727c; nothing to check`, exit 0 |
+| host-path / DLP | `git diff \| grep -i "us[e]rs/"`; `grep -rnP '\\[u]'` over every added line and new file (both patterns spelled with a character class, so the text of this record does not itself match either check) | no matches (exit 1 each) |
+| exported surface | `grep -nE "^func [A-Z]\|^type [A-Z]\|^var [A-Z]" daemon/internal/app/command_queue.go` | no matches (exit 1): the module adds no public API |
+| whitespace | `git diff --check` | exit 0 (no whitespace errors) |
+| stale-document scan | `grep -rn "command executor\|command queue\|command lane\|queued command\|daemon\.commands\|commandQueue\|commandLane" docs/design docs/runbooks contracts` | no match outside this record and the W1-05 move manifest (a record bound to its own subject revision): no design, runbook, contract or TODO document names the queue fields, so the slice leaves none stale and closes no tracked item |
+| native-evidence identity set (arch-decision-2 R9) | `python3 scripts/ci/test-omo-control-native-evidence.py` (repo root) | `Ran 10 tests in 3.059s`, `OK`, exit 0 — run by the apply stage, after `daemon/internal/app/command_queue.go` joined `SOURCE_PATHS`; the moved-declaration → listed-path mapping is in section 2 |
+| coverage, R2 touched-file gate (fix-round-2 measurement) | base export `9e473513` and the fix-round-2 worktree, both: `go test -count=1 -coverprofile=cover.out ./internal/app/` (`daemon/`) | both `ok`, exit 0 (base 181.055s, head 183.138s). Statements covered/total: app.go 874/1196 = 73.08% → 867/1189 = 72.92% (uncovered 322 → 322); commands.go 510/603 = 84.58% → 473/564 = 83.87% (uncovered 93 → 91); outbox.go 595/686 = 86.73% → 589/679 = 86.75% (uncovered 91 → 90); command_queue.go — → 69/70 = 98.57% (uncovered — → 1); touched set 1979/2485 = 79.64% → 1998/2502 = 79.86%; package 6287/8509 = 73.89% → 6306/8526 = 73.96%. No pre-existing touched file gains uncovered statements; the app.go/commands.go percentage dips are denominator artefacts of covered statements moving into command_queue.go |
+| coverage, R2 touched-file gate (fix-round-3 measurement, final tree; serial idle runs) | fresh base export `9e473513` and the final worktree, each run alone: `go test -count=1 -coverprofile=cover.out ./internal/app/` (`daemon/`) | both `ok`, exit 0 (base 135.551s; head 161.468s, a second loaded head run 428.930s gave identical numbers). Statements covered/total: app.go 874/1196 = 73.08% → 867/1189 = 72.92% (uncovered 322 → 322); commands.go 510/603 = 84.58% → 472/563 = 83.84% (uncovered 93 → 91); outbox.go 591/686 = 86.15% → 585/679 = 86.16% (uncovered 95 → 94); command_queue.go — → 69/70 = 98.57% (uncovered — → 1); touched set 1975/2485 = 79.48% → 1993/2501 = 79.69%; package 6273/8509 = 73.72% → 6301/8525 = 73.91%. No pre-existing touched file gains uncovered statements (total uncovered 510 → 508); the app.go/commands.go percentage dips are denominator artefacts. Run-to-run spread on this host is ±1-4 covered statements in timing-sensitive files (the earlier fix-round-2 row's base/head ran under concurrent load); this idle base run reproduces opus review 1's base numbers exactly (app.go 874/1196, commands.go 510/603, outbox.go 591/686) and the idle head numbers reproduced across two runs |
+
+### Apply-stage note (2026-11-21) — accepted simplify findings, gates re-run
+
+The simplify review of `fc8e95a..a4770ed` was applied on top of this record's tree. Accepted set: the D1
+rationale correction, the `dropRun` loop-variable rename, the zero-value queue test, the `SOURCE_PATHS`
+addition (mapping in section 2) and this record's count/hash refresh. Five paths changed: the two module
+files, the plan, this record, the evidence script. Every gate below ran foreground on that apply-stage
+working tree and heavy runs were serialized; the header's identity hashes are the post-change values.
+
+| gate | command (cwd) | result |
+|---|---|---|
+| gofmt | `gofmt -l ./internal/app/` (`daemon/`) | no output, exit 0 |
+| vet | `go vet ./...` (`daemon/`) | exit 0 |
+| build linux / windows | `GOOS=linux go build ./...`; `GOOS=windows go build ./...` (`daemon/`) | exit 0 each |
+| extra cross-builds | `GOOS=linux\|darwin\|windows GOARCH=arm64 go build ./...` (`daemon/`) | exit 0 each (3 builds) |
+| focused (windows, no race) | `go test -count=1 -v ./internal/app/ -run 'Command\|Queue\|Lane\|Outbox\|Receipt\|Acknowledg'` | `ok github.com/wxxb789/symmetry/daemon/internal/app 22.645s`, exit 0; 176 PASS lines, 0 FAIL; 116 top-level tests selected (`go test -list`, was 115) |
+| full (windows) | `go test -count=1 ./internal/app/...` | `ok github.com/wxxb789/symmetry/daemon/internal/app 135.025s`, exit 0 |
+| race (wsl Ubuntu-24.04, focused subset) | same `-run` pattern as the focused row, `-race -timeout 30m -v` (`daemon/`) | `ok github.com/wxxb789/symmetry/daemon/internal/app 7.887s`, exit 0; 53 top-level PASS (all 7 `TestCommandQueue…` module tests among them), 0 FAIL, 0 `DATA RACE` |
+| race (wsl, full suite, re-attempt) | `go test -count=1 -race -timeout 20m ./internal/app/...` (`daemon/`) | `panic: test timed out after 20m0s`, `FAIL github.com/wxxb789/symmetry/daemon/internal/app 1200.159s`: the two running tests are `TestClaimAdmissionInputFailsClosedBeforeWorkspaceOrProcessStart` and its `mixed_null_marker_survives_replay_and_restart` subtest (19m59s each) — the pre-existing hang of section 8, unchanged on the apply-stage tree; 0 `--- FAIL` lines, 0 `DATA RACE` |
+| new-test mutants | `command_queue.go` with the `byKey` guard (7a) / the `lanes` guard (7b) deleted, target test alone | both red — `panic: assignment to entry in nil map`, reverted; module hash `5e42f1d4…` before and after (section 5) |
+| field-access gate | `grep -rc 'daemon\.\(commandQueue\|queuedCommands\|commandLanes\|commandRequests\|nextCommandRequest\)' daemon/internal/app/*.go` | no non-zero file (exit 1): 0 matches anywhere |
+| module lock / purity / exported surface / nolint | the section 6 rows re-run | unchanged: no lock call, comments-only `daemon.`, no exported symbol, no `nolint` |
+| whitespace / host-path / DLP | `git diff --check`; `git diff \| grep '^+' \| grep -i "us[e]rs/"`; `git diff \| grep '^+' \| grep -P '\\[u]'` | exit 0; no added line matches (exit 1 each) |
+| citation gate | not re-run | the apply stage adds/modifies no audited document (`docs/runbooks/**`, `docs/design/quality.md`, `docs/archive/CLOSED-TODO.md`); the five changed paths are listed above |
+
+### Fix-stage note (2026-11-21) — review finding R1: the DLP check's own text
+
+The review of `94d04e4..9207e5a4` returned one finding (R1, P3): the closing host-path check
+`git diff origin/main...HEAD | grep -i "us[e]rs/"` (pattern as respelled by this fix) matched the three
+transcriptions of that check inside this record (the implement-stage row above and the apply-stage row
+below) and in the plan's evidence-plan item 9 — the check's own text, not a user-profile path — and the
+apply-stage row's "no added line matches" result was not replayable over the apply commit's own diff,
+whose added row line carried the pattern literally. This stage respells all three transcriptions with a
+character class — the same regex, and the delivered text no longer matches the scans below.
+
+| location | respelled to |
+|---|---|
+| this record, section 6 implement-stage host-path / DLP row | `grep -i "us[e]rs/"` |
+| this record, apply-stage note whitespace / host-path / DLP row | `grep -i "us[e]rs/"` |
+| plan, evidence-plan item 9 | "no `us[e]rs/`-style profile path" |
+
+The plan value in the subject-identity list above is this stage's re-measurement of the respelled plan
+(`sha256 eb095cee98959f23066d4efb63fde1efaf7df21b363134b13be5830f116ae654`). Re-run on the fix-stage
+working tree, all foreground (the fix is documentation only, so the code gates are controls):
+
+| gate | command (cwd) | result |
+|---|---|---|
+| DLP replay, whole delivered diff | `git diff origin/main \| grep -i "us[e]rs/"` (repo root) | no matches (exit 1) |
+| DLP replay, added lines | `git diff origin/main \| grep '^+' \| grep -i "us[e]rs/"` | no matches (exit 1) |
+| DLP replay, this fix's added lines | `git diff HEAD \| grep '^+' \| grep -i "us[e]rs/"` | no matches (exit 1) |
+| profile-path scan | `git diff origin/main` piped to case-insensitive extended-regex greps for a Windows user-profile root, a Linux home root and a POSIX users root, plus a grep for the operator's profile name (each spelled with a character class so this record does not match itself) | no matches (exit 1 each) |
+| backslash-u scan | `git diff origin/main \| grep -nP '\\[u]'` | no matches (exit 1) |
+| whitespace | `git diff --check` | exit 0 |
+| gofmt / vet | `gofmt -l ./internal/app/`; `go vet ./...` (`daemon/`) | no files (exit 0); exit 0 |
+| builds | `GOOS=linux go build ./...`; `GOOS=windows go build ./...` (`daemon/`) | exit 0 each |
+| focused (windows, no race) | `go test -count=1 -v ./internal/app/ -run 'Command\|Queue\|Lane\|Outbox\|Receipt\|Acknowledg'` (`daemon/`) | `ok … 27.133s`, exit 0; 116 top-level + 60 subtest = 176 PASS lines, 0 FAIL; 116 selected (`go test -list`) |
+| native-evidence identity set (R9) | `python3 scripts/ci/test-omo-control-native-evidence.py` (repo root) | `Ran 10 tests in 4.035s`, `OK`, exit 0 |
+| citation gate | `python3 scripts/ci/check-citation-existence.py --base 94d04e4… --head HEAD` (repo root) | `nothing to check`, exit 0 (the fix touches no audited document) |
+| structural rows | the section 6 field-access, module lock / purity / exported-surface / nolint commands | unchanged: 0 matches / no lock call / comments-only `daemon.` / no exported symbol / no `nolint` (exit 1 each) |
+
+The verbatim contract check over the committed range (`git diff origin/main...HEAD`) still reports the
+pre-fix committed tree (3 lines) because this stage must not commit; the same diff over the working tree
+(`git diff origin/main`, which equals the committed range once the operator commits it) answers with no
+matches.
+
+### Fix-round-2 note (2026-11-21) — opus review round 1 (F1-F4) applied
+
+Accepted findings and changes: F1 — the `commandReceipts` comment and plan D1 restated to the true lock
+scopes (`commandReceiptMu` is released across the delivery journal write; `receipts.suppress` and
+`commands.markDelivered` both run under `commandReceiptMu` + `daemon.mu`; the delivered mark is queue
+state). F2 — the coverage row above. F3 — `finish(key, registered, receipt)` became `finish(key, receipt)`
+with the identity guard at the instance caller (`finishQueuedCommand`'s `current(queued)` check); the
+stale-pointer test and the mutant record in section 5 were updated. Review round 2 (N1) then showed that
+this moved the identity guard out of the killing tests' reach (mutant G1 survived the whole package); per
+the conductor's option (b) the change was reverted and F3 is **declined** — the delivered shape is the
+round-1 `finish(key, registered, receipt)` (plan round-2 note; fix-round-3 note below). F4 — section 1 carries the
+`scripts/ci/omo-control-native-evidence.py` row, section 7 clause 4 counts nine paths, and the base
+statement above names the `origin/main` advances. Five paths changed: the two module files, `commands.go`,
+the plan, this record. All gates below ran foreground on the fix-round-2 working tree unless named
+otherwise; heavy suites were serialized.
+
+| gate | command (cwd) | result |
+|---|---|---|
+| gofmt | `gofmt -l ./internal/app/` (`daemon/`) | no output, exit 0 |
+| vet | `go vet ./...`; `go vet ./internal/app/`; `GOOS=linux go vet ./...` (`daemon/`) | exit 0 each |
+| builds | `GOOS=linux go build ./...`; `GOOS=windows go build ./...` (`daemon/`) | exit 0 each |
+| queue tests (windows) | `go test -count=1 -v ./internal/app/ -run '^TestCommandQueue'` (`daemon/`) | `ok … 0.228s`, exit 0; 7 PASS, 0 FAIL |
+| focused (windows, no race) | `go test -count=1 -v ./internal/app/ -run 'Command\|Queue\|Lane\|Outbox\|Receipt\|Acknowledg'` (`daemon/`) | `ok … 24.729s`, exit 0; 116 PASS, 0 FAIL |
+| coverage (R2) | the coverage row above | both `ok`, exit 0; touched set 79.64% → 79.86% |
+| race (wsl), focused set | `wsl -d Ubuntu-24.04 -u root` → scratch script: `go test -count=1 -race -timeout 30m -v -run 'Command\|Queue\|Lane\|Outbox\|Receipt\|Acknowledg' ./internal/app/` (`daemon/`) | 126 PASS, 2 FAIL, 0 `DATA RACE`, exit 1 (`FAIL … 246.970s`): `TestLargePersistedEventBacklogDrainsAfterNoContentAcknowledgement` and `TestOmOAttachAckRegressionHistoricalReceiptDoesNotAuthorizeCancelledTurn` (`operator_cancel`, `lease_expired`) fail with loopback-`httptest` `context deadline exceeded` |
+| race attribution (wsl, base export `9e473513`) | the two failing tests alone, `-race`: `go test -count=1 -race -timeout 10m -v -run '^(TestLargePersisted…\|TestOmOAttachAck…)$' ./internal/app/` (base export under a scratch dir) | identical failure on base: 2 FAIL, same `context deadline exceeded` artifacts, 0 `DATA RACE`, exit 1 (`FAIL … 53.646s`) — pre-existing on this host, not this review round |
+| race (wsl), focused set minus the two environment failures | same focused command plus `-skip '^(TestLargePersisted…\|TestOmOAttachAck…)$'` | `ok … 215.721s`, exit 0; 126 PASS, 0 FAIL, 0 `DATA RACE` — the touched paths are race-clean |
+| R9 native-evidence identity set | `python scripts/ci/test-omo-control-native-evidence.py` (repo root) | `Ran 10 tests in 6.379s`, `OK`, exit 0 |
+| whitespace | `git diff --check` (repo root) | exit 0 |
+
+### Fix-round-3 note (2026-11-21) — opus review 2 (N1, N2); review-1 F3 declined
+
+Per the conductor's ruling (option (b), plan round-2 note) review-1 finding F3 is **declined** and the
+round-1 shape is delivered again: `finish(key, registered, receipt)` with the identity check inside the
+queue method — the check must stay inside the queue so the module test guards the stale-pointer
+invariant (the F3 wrapper check and the dispatch/execute callers' `current` checks run in different
+critical sections; with the check out of `finish`, mutant G1 survived the whole package). Review-2
+finding N1's dead branch is gone: the stale-pointer block calls the real method
+(`finish(replay.key, inflight, false)`). Review-2 finding N2 added
+`TestCommandQueueRepeatedFinishClosesDoneOnce`: a second, deferred completion of the same key closes
+`done` exactly once and evicts. `commands.go` is byte-identical to the implement-stage revision again
+(`git diff 0a04da24 -- daemon/internal/app/commands.go` shows no change against the working tree); `command_queue.go`
+differs from `0a04da24` only in the F1 comment, so every lock site, order and effect in these functions
+is exactly the round-1 one. Five paths changed vs `5aa49241`: `command_queue.go`, `command_queue_test.go`,
+`commands.go`, the plan, this record. Gates re-run foreground on the fix-round-3 working tree;
+heavy runs were serialized.
+
+| gate | command (cwd) | result |
+|---|---|---|
+| mutants M7 / M12 | one at a time on the fix-round-3 tree, target test alone, each reverted | M7 red: `command_queue_test.go:246: a stale instance settled the re-enqueued command key`; M12 red: `panic: close of closed channel [recovered, repanicked]` inside `(*commandQueue).finish`, called from the new test — records in section 5 |
+| queue tests (windows) | `go test -count=1 -v ./internal/app/ -run '^TestCommandQueue'` (`daemon/`) | `ok … 0.404s`, exit 0; 8 PASS, 0 FAIL |
+| focused (windows, no race) | `go test -count=1 -v ./internal/app/ -run 'Command\|Queue\|Lane\|Outbox\|Receipt\|Acknowledg'` (`daemon/`) | `ok … 50.369s`, exit 0; 117 PASS, 0 FAIL |
+| race (wsl), queue tests | `wsl -d Ubuntu-24.04 -u root` → scratch script: `go test -count=1 -race -timeout 10m -v -run '^TestCommandQueue' ./internal/app/` (`daemon/`) | `ok … 1.225s`, exit 0; 8 PASS, 0 FAIL, 0 `DATA RACE` |
+| coverage (R2, final tree) | the fix-round-3 coverage row above | base 79.48% → head 79.69%; uncovered 322→322, 93→91, 95→94, +1 in `command_queue.go`; both `ok`, exit 0 |
+| gofmt | `gofmt -l ./internal/app/` (`daemon/`) | no output, exit 0 |
+| vet | `go vet ./...`; `go vet ./internal/app/`; `GOOS=linux go vet ./...` (`daemon/`) | exit 0 each |
+| builds | `GOOS=linux go build ./...`; `GOOS=windows go build ./...` (`daemon/`) | exit 0 each |
+| whitespace | `git diff --check` (repo root) | exit 0 |
+
+## 7. Contract clause mapping
+
+1. Pass condition: the three loose fields are gone from `daemon` (grep gate row); `commandQueue` has
+   exactly 8 methods (section 2); queue invariants are tested without `&daemon{}`
+   (`command_queue_test.go` constructs only `newCommandQueue()`/`commandReceipts{}`); existing app
+   tests green (focused + full rows) with 26 mechanical lines replaced (`git diff -w`); lock order
+   identical (section 3); no file crosses 1500 L (section 1).
+2. Judging artifact: this record — method list with callers (section 2), lock-site table (section 3),
+   control-flow audit (section 4), red-mutant records (section 5), Windows + WSL outputs (section 6).
+3. Failure control: no ordering, dedupe, receipt/ack or outbox-order change (sections 3-4 plus the
+   unchanged app suite); no new mutex; no queue method performs I/O (section 2); no test builds
+   `&daemon{}` to test queue invariants; no existing assertion changed.
+4. Out of scope items untouched: `runningRun`/run lifecycle, goal admission, test doubles, Control
+   client — `git status` lists only the nine paths of section 1 (six Go files, this plan, this record,
+   and the one-line `SOURCE_PATHS` edit in `scripts/ci/omo-control-native-evidence.py`).
+5. Evidence plan: section 6, with one environment-limited gate named there: the WSL full-suite race
+   run cannot complete on this host because of a pre-existing `httptest` hang in an unrelated test
+   (base-verified); the touched paths are race-clean (focused race run) and CI runs the full race
+   suite.
+6. Mergeable alone: the change is self-contained in `daemon/internal/app` plus this slice's plan and
+   evidence record.
+
+## 8. Residual risks and limits
+
+- Windows cannot run `-race` on this host (no cgo toolchain), so the race oracle for this slice is
+  the WSL run — and the WSL *full-suite* run cannot complete on this host for a pre-existing reason:
+  `TestClaimAdmissionInputFailsClosedBeforeWorkspaceOrProcessStart/…mixed_null_marker_survives_replay_and_restart`
+  hangs on an `httptest` loopback dial under `-race`, identically at HEAD (`FAIL … 180.616s`) and at
+  the base revision (`FAIL … 180.303s`, same stack). The touched paths are race-clean (52 tests,
+  `ok … 10.789s`, 0 `DATA RACE`; apply-stage re-run of the same subset: 53 top-level PASS,
+  `ok … 7.887s`, 0 `DATA RACE`, section 6), and the CI race oracle remains
+  `.github/workflows/ci.yml:1528-1530`: `test -race -count=1 -timeout 600s ./...` (all daemon
+  packages, `internal/app` included) behind the stdio-only caller boundary. Reported here rather
+  than fixed: the hang is outside this slice's owned files and pre-dates it. The apply stage
+  re-attempted the full suite with `-timeout 20m` and got the identical artifact
+  (`FAIL … 1200.159s`, same two running tests, section 6), so this limit still stands.
+- `dropRun` keeps the base tolerance for entries already in the arrival FIFO or a lane: their
+  consumers drop them through `current`. The queue test pins that tolerance explicitly; fixing it is
+  out of scope (the contract requires `dropRun` to release exactly what `releaseCommandReceiptsLocked`
+  released).
+- The receipt bookkeeping is a sibling value type inside the queue rather than queue methods: its
+  delivery-path mutations are ordered by `commandReceiptMu` around a journal write (the lock is released
+  across the write; both phases run under `commandReceiptMu` + `daemon.mu`), and one type would then span
+  two lock contracts. The
+  superseded method-budget reading of this reason was retired by the apply stage (arch-decision-2 sets
+  the budget at most 12 methods and the file counts 12 either way); the reason, the options and the
+  chosen amendment are recorded as plan D1.
+- `app_test.go` shows column realignment inside the 18 rewritten composite literals (the removed key
+  was the widest); `git diff -w` shows exactly 26 replaced lines and no assertion change.
+
+## 9. Scoped simplification review
+
+The repository asks for a scoped simplification review before completion; this slice is itself a
+simplification, and nothing further was removable without losing behaviour or clarity. Every field of
+the module's five types is read (`pending`/`byKey`/`lanes`/`receipts`/`requests`/`nextRequest`/
+`command`/`key`/`done`/`completed`/`delivered`/`running` each occur at least 3 times in
+`command_queue.go`), and every `commandQueue` method has at least one caller outside the module
+(`enqueue`/`next`/`lane`/`nextInLane`/`markDelivered` one each, `current`/`finish`/`dropRun` two
+each), so the module has no unexercised surface. The two dispatch helpers a coarser interface could
+have dropped (`current` folded into the lane put, `lane`'s start flag folded into its caller) each
+carry a load-bearing race guard or a base-verbatim decision, so they stay.
+
+Counts on the delivered tree: production files +23/−121 (`app.go` +4/−21, `commands.go` +17/−87,
+`outbox.go` +2/−13); the module adds 255 lines and its tests 340; `app_test.go` is +129/−129 raw,
+which `git diff -w` reduces to the 26 replaced lines (the rest is the column realignment above). The
+two deleted daemon methods are the module's bodies, not behaviour.
+
+Post-merge simplification review (slice range `fc8e95a..a4770ed`, 2026-11-21): its applicable findings
+were applied in the apply stage — the D1 rationale correction (the superseded method-budget argument
+retired, decision unchanged), the `dropRun` loop variable no longer shadowing the `commandKey` type,
+the zero-value queue test with its two mutants recorded in section 5, the `SOURCE_PATHS` addition for
+arch-decision-2 R9, and this record's count/hash refresh. Its "merge `commandQueue` and
+`commandReceipts` into one 12-method type" variant was left unapplied (it changes decision D1 and
+awaits an explicit conductor ruling), and the clause 1 `no file > 1500 L` disclosure in section 1
+stays exactly as recorded.

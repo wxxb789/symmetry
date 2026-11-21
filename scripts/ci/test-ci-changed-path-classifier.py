@@ -61,6 +61,71 @@ PREDICATE_NAMES = {"run-heavy": "run_heavy", "run-records": "run_records", "run-
 PINNED_GATES = {"record-cleanliness": "run-records", "citation-existence": "run-citations"}
 DEFAULT_GATE = "run-heavy"
 UNCONDITIONAL_JOBS = ("legacy-route-audit",)
+# The coverage plane's advisory artifact jobs (refactor slice W2-17). They are
+# routed like the heavy matrix on purpose - a coverage run is only worth its
+# runner time beside the matrix - so each is gated `run-heavy`, and
+# `check_coverage_plane_routing` below binds the three names to that output
+# against every fixture diff, not only against the workflow text.
+COVERAGE_JOBS = ("coverage-control", "coverage-daemon", "coverage-frontend")
+# The coverage-daemon job's gated header as the workflow spells it: both
+# coverage mutation tests below anchor on it, so it is spelled once here.
+COVERAGE_DAEMON_HEADER = "  coverage-daemon:\n    needs: changes\n    if: needs.changes.outputs.run-heavy == 'true'\n"
+# The upload step and the command line(s) that produce each coverage job's
+# artifact (refactor slice W2-17, contract clause 1), as the workflow spells
+# them: the routing and advisory checks pin when a coverage job runs, these
+# literals pin its product, so a deleted upload step, a renamed artifact, a
+# moved report path or a dropped command reddens the artifact check below
+# instead of only the draft-PR run. Each literal spans the step's
+# `if: always()`, the decision-7 promise that a red coverage run still uploads
+# its report, so a dropped `if: always()` reddens here too. The daemon command
+# is a block scalar under the stdio-only caller boundary over the whole module:
+# no package is excluded, because `go test` sets `GOCOVERDIR` for each
+# instrumented test binary itself and `internal/execution`'s re-exec'd helper
+# children forward it through their environment builder.
+COVERAGE_UPLOADS = {
+    "coverage-control": (
+        "        if: always()\n"
+        "        uses: actions/upload-artifact@v4\n"
+        "        with:\n"
+        "          name: control-coverage\n"
+        "          path: control/cover\n"
+    ),
+    "coverage-daemon": (
+        "        if: always()\n"
+        "        uses: actions/upload-artifact@v4\n"
+        "        with:\n"
+        "          name: daemon-coverage\n"
+        "          path: daemon/coverage.out\n"
+    ),
+    "coverage-frontend": (
+        "        if: always()\n"
+        "        uses: actions/upload-artifact@v4\n"
+        "        with:\n"
+        "          name: frontend-coverage\n"
+        "          path: frontend/coverage\n"
+    ),
+}
+# The `defaults.run` block that carries the working directory each coverage
+# job's command resolves against, as the workflow spells it: the Control
+# command's report lands in `control/cover/` because the job runs in
+# `control/`, and the daemon command reaches `../scripts/ci/...` and writes
+# `coverage.out` from `daemon/`. Both directories are load-bearing, so they are
+# pinned beside the command and the artifact. `coverage-frontend` is
+# deliberately absent: its `pnpm --filter` command and `pnpm install
+# --frozen-lockfile` step must run at the workspace root, where the lockfile
+# lives.
+COVERAGE_DEFAULTS = {
+    "coverage-control": "    defaults:\n      run:\n        working-directory: control\n",
+    "coverage-daemon": "    defaults:\n      run:\n        working-directory: daemon\n",
+}
+COVERAGE_COMMANDS = {
+    "coverage-control": ("        run: mix test --cover",),
+    "coverage-daemon": (
+        "          python3 ../scripts/ci/stdio-only-caller-boundary.py \\",
+        '            "$(command -v go)" test -count=1 -timeout 1200s -coverprofile=coverage.out ./...',
+    ),
+    "coverage-frontend": ("        run: pnpm --filter @symmetry/frontend exec vitest run --coverage",),
+}
 
 # The audited corpus the citation gate keeps in
 # scripts/ci/check-citation-existence.py, mapped to the fixture whose diff
@@ -436,6 +501,80 @@ def pinned_ran_jobs(job_names: collections.abc.Iterable[str], outputs: dict[str,
         if outputs[PINNED_GATES.get(name, DEFAULT_GATE)]:
             ran.add(name)
     return ran
+
+
+def check_coverage_plane_routing(
+    model: WorkflowModel,
+    outputs_by_fixture: collections.abc.Mapping[str, dict[str, bool]],
+) -> None:
+    """Every coverage job exists and runs exactly when its fixture's run-heavy does.
+
+    ``check_job_gating`` already refuses an unconditional job and an unrecognized
+    gate, but its message names the routing rule, not the plane. This check binds
+    the three jobs the coverage plane adds (refactor slice W2-17) to the heavy
+    output by name and measures that binding against every fixture diff, so a
+    renamed, regated or deleted coverage job reddens here as well.
+    """
+    for name in COVERAGE_JOBS:
+        require(name in model.jobs, f"the workflow has no coverage job {name!r}")
+    for fixture_name, outputs in outputs_by_fixture.items():
+        ran = ran_jobs(model, "pull_request", outputs)
+        heavy = outputs["run-heavy"]
+        for name in COVERAGE_JOBS:
+            require(
+                (name in ran) == heavy,
+                f"fixture {fixture_name}: coverage job {name} must run exactly when run-heavy is "
+                f"true (run-heavy={heavy}); it {'did not run' if heavy else 'ran'}",
+            )
+
+
+def check_coverage_jobs_are_advisory(workflow_text: str) -> None:
+    """Every coverage job carries the job-level ``continue-on-error: true``.
+
+    The gate alone would still let a coverage failure gate a pull request and the
+    heavy matrix's conclusions: the contract's failure control names a coverage
+    job without the advisory flag as not-achieved, so it is pinned here rather
+    than left to review.
+    """
+    blocks = job_blocks(workflow_text)
+    for name in COVERAGE_JOBS:
+        require(name in blocks, f"the workflow has no coverage job {name!r}")
+        require(
+            any(line == "    continue-on-error: true" for line in blocks[name]),
+            f"coverage job {name} must carry the job-level `continue-on-error: true`: a coverage "
+            "failure must not be able to gate a pull request",
+        )
+
+
+def check_coverage_artifacts(workflow_text: str) -> None:
+    """Every coverage job carries its pinned upload step and its pinned command.
+
+    The routing and advisory checks pin when a coverage job runs and that its
+    failure cannot gate a pull request, but not what the plane produces: with
+    only those pins, deleting an upload step, renaming an artifact, moving its
+    report path or dropping the command leaves the suite green, and only the
+    draft-PR run - advisory by construction - would ever notice. The upload
+    literal spans the step's ``if: always()``, so dropping the always-upload
+    promise reddens here, and each command's ``defaults.run`` working directory
+    is pinned beside it because the daemon command's ``../scripts/...``
+    reference and its ``coverage.out`` path resolve against it.
+    """
+    blocks = job_blocks(workflow_text)
+    for name in COVERAGE_JOBS:
+        require(name in blocks, f"the workflow has no coverage job {name!r}")
+        block = "\n".join(blocks[name])
+        require(
+            COVERAGE_UPLOADS[name] in block,
+            f"coverage job {name} must carry its pinned upload step:\n{COVERAGE_UPLOADS[name]}",
+        )
+        if name in COVERAGE_DEFAULTS:
+            require(
+                COVERAGE_DEFAULTS[name] in block,
+                f"coverage job {name} must keep the working directory its command resolves against:\n"
+                f"{COVERAGE_DEFAULTS[name]}",
+            )
+        for line in COVERAGE_COMMANDS[name]:
+            require(line in block, f"coverage job {name} must keep its pinned command line {line.strip()!r}")
 
 
 STEP_HEADER = re.compile(r"^      - ")
@@ -855,6 +994,11 @@ class ChangedPathClassifierTests(unittest.TestCase):
                 with self.subTest(event=event, fixture=fixture.name):
                     self.assertEqual(ran_jobs(self.model, event, self.outputs[fixture.name]), everything)
 
+    def test_the_coverage_jobs_follow_the_heavy_matrix_across_every_fixture(self) -> None:
+        check_coverage_plane_routing(self.model, self.outputs)
+        check_coverage_jobs_are_advisory(self.workflow_text)
+        check_coverage_artifacts(self.workflow_text)
+
     # -- mutations: the assertions must fail when a routing is changed --------
 
     def test_mutation_dropping_the_evaluations_clause_breaks_the_records_fixture(self) -> None:
@@ -894,6 +1038,53 @@ class ChangedPathClassifierTests(unittest.TestCase):
         self.assertEqual(model.jobs["citation-existence"].condition, "needs.changes.outputs.run-heavy == 'true'")
         with self.assertRaises(AssertionError):
             check_job_gating(model)
+
+    def test_mutation_regating_a_coverage_job_off_the_heavy_output_breaks_its_routing(self) -> None:
+        self.assertIn(
+            COVERAGE_DAEMON_HEADER,
+            self.workflow_text,
+            "the mutation's anchor must be the coverage job's own gated header",
+        )
+        mutated = self.workflow_text.replace(
+            COVERAGE_DAEMON_HEADER,
+            COVERAGE_DAEMON_HEADER.replace(
+                "needs.changes.outputs.run-heavy == 'true'",
+                "needs.changes.outputs.run-citations == 'true'",
+            ),
+        )
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        model = parse_model(mutated)
+        self.assertEqual(model.jobs["coverage-daemon"].condition, "needs.changes.outputs.run-citations == 'true'")
+        with self.assertRaises(AssertionError):
+            check_coverage_plane_routing(model, self.outputs)
+
+    def test_mutation_dropping_a_coverage_jobs_advisory_flag_breaks_the_advisory_check(self) -> None:
+        advisory_line = "    continue-on-error: true\n"
+        self.assertIn(
+            COVERAGE_DAEMON_HEADER + advisory_line,
+            self.workflow_text,
+            "the mutation's anchor must be the coverage job's gated, advisory header",
+        )
+        mutated = self.workflow_text.replace(COVERAGE_DAEMON_HEADER + advisory_line, COVERAGE_DAEMON_HEADER)
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaises(AssertionError):
+            check_coverage_jobs_are_advisory(mutated)
+
+    def test_mutation_dropping_a_coverage_uploads_always_flag_breaks_the_artifact_check(self) -> None:
+        upload = COVERAGE_UPLOADS["coverage-daemon"]
+        self.assertIn(upload, self.workflow_text, "the mutation's anchor must be a coverage upload step")
+        mutated = self.workflow_text.replace(upload, upload.replace("        if: always()\n", ""))
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaises(AssertionError):
+            check_coverage_artifacts(mutated)
+
+    def test_mutation_dropping_a_coverage_jobs_working_directory_breaks_the_artifact_check(self) -> None:
+        defaults = COVERAGE_DEFAULTS["coverage-daemon"]
+        self.assertIn(defaults, self.workflow_text, "the mutation's anchor must be a coverage job's defaults block")
+        mutated = self.workflow_text.replace(defaults, "")
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaises(AssertionError):
+            check_coverage_artifacts(mutated)
 
     def test_mutation_conditioning_legacy_route_audit_breaks_its_unconditional_assertion(self) -> None:
         mutated = self.workflow_text.replace(

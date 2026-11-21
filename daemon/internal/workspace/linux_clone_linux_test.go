@@ -493,7 +493,7 @@ func TestLinuxCloneOPathRootAllowsMountedRootButForbidsNestedMount(t *testing.T)
 	if err := os.Mkdir(nested, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if nestedFD, err := openLinuxCloneOPathDirAt(rootFD, "nested"); err != nil {
+	if nestedFD, err := openLinuxCloneDirAtFlags(rootFD, "nested", unix.O_PATH); err != nil {
 		t.Fatalf("open same-mount subtree under pinned root: %v", err)
 	} else {
 		_ = unix.Close(nestedFD)
@@ -502,7 +502,7 @@ func TestLinuxCloneOPathRootAllowsMountedRootButForbidsNestedMount(t *testing.T)
 		t.Skipf("bind mounts unavailable; mounted root traversal was verified: %v", err)
 	}
 	defer unix.Unmount(nested, 0)
-	if nestedFD, err := openLinuxCloneOPathDirAt(rootFD, "nested"); err == nil {
+	if nestedFD, err := openLinuxCloneDirAtFlags(rootFD, "nested", unix.O_PATH); err == nil {
 		_ = unix.Close(nestedFD)
 		t.Fatal("pinned B root traversal crossed a nested mount")
 	}
@@ -1876,4 +1876,61 @@ func TestLinuxCloneTreeDigestRefusesOversizedBlob(t *testing.T) {
 		t.Fatalf("linuxCloneTreeDigest() error = %v, want the unresolved process-group fence of a terminated batch stream", err)
 	}
 	assertNoOwnedGitChildProcesses(t)
+}
+
+// TestLinuxCloneDirectoryOpenFlagsStayByteIdentical pins the exact openat2
+// request and the descriptor flag sets of the configured-path walk core, because
+// the mount-crossing refusal of RESOLVE_NO_XDEV is observable only on a host that
+// can create a bind mount: the pre-existing nested-mount case skips without mount
+// privileges. The compared literals are the base ones; the caller's access flag
+// (O_PATH for a descriptor kept only as a parent, O_RDONLY when the entry's own
+// content is read) is the single difference the unification introduced.
+func TestLinuxCloneDirectoryOpenFlagsStayByteIdentical(t *testing.T) {
+	wantResolve := uint64(unix.RESOLVE_BENEATH | unix.RESOLVE_NO_SYMLINKS | unix.RESOLVE_NO_MAGICLINKS | unix.RESOLVE_NO_XDEV)
+	for _, testCase := range []struct {
+		name        string
+		accessFlags int
+		wantFlags   uint64
+	}{
+		{"O_PATH", unix.O_PATH, uint64(unix.O_PATH | unix.O_DIRECTORY | unix.O_CLOEXEC | unix.O_NOFOLLOW)},
+		{"O_RDONLY", unix.O_RDONLY, uint64(unix.O_RDONLY | unix.O_DIRECTORY | unix.O_CLOEXEC | unix.O_NOFOLLOW)},
+	} {
+		how := linuxCloneDirOpenHow(testCase.accessFlags)
+		if how.Flags != testCase.wantFlags || how.Resolve != wantResolve {
+			t.Fatalf("openat2 request for %s = flags %#x resolve %#x, want flags %#x resolve %#x",
+				testCase.name, how.Flags, how.Resolve, testCase.wantFlags, wantResolve)
+		}
+	}
+	if linuxCloneConfiguredPathRootFlags != unix.O_DIRECTORY|unix.O_CLOEXEC {
+		t.Fatalf("configured-path root flags = %#x, want %#x", linuxCloneConfiguredPathRootFlags, unix.O_DIRECTORY|unix.O_CLOEXEC)
+	}
+	if linuxCloneConfiguredPathComponentFlags != unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW {
+		t.Fatalf("configured-path component flags = %#x, want %#x", linuxCloneConfiguredPathComponentFlags, unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW)
+	}
+}
+
+// TestLinuxCloneTrustedPathRefusesSymlinkedComponent pins the trusted walk's
+// Fstatat(AT_SYMLINK_NOFOLLOW) pre-stat: a component that is a symlink must be
+// refused by the pre-stat's kind check, because the open step that follows would
+// otherwise change the refusal to the "pin configured root component" wrapping.
+// Red mutant M6: drop AT_SYMLINK_NOFOLLOW from the pre-stat, which lets the walk
+// reach the open and changes this message.
+func TestLinuxCloneTrustedPathRefusesSymlinkedComponent(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "target")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	fd, _, err := openLinuxCloneDirPath(link)
+	if fd != -1 {
+		_ = unix.Close(fd)
+		t.Fatalf("openLinuxCloneDirPath(symlinked component) = descriptor %d, want no descriptor", fd)
+	}
+	if want := `configured directory component "link" is not a real directory`; err == nil || err.Error() != want {
+		t.Fatalf("openLinuxCloneDirPath(symlinked component) error = %v, want %q", err, want)
+	}
 }

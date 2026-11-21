@@ -608,7 +608,7 @@ func (daemon *daemon) resolveCancelledNativeStartAbortFailure(key state.RunKey, 
 		return nil
 	}
 	retentionErr := daemon.retainUnknownGoalLaunchWorkspaceChecked(key)
-	uncertainErr := daemon.markGoalSessionUncertain(sessionKey, "cancelled native Goal launch abort outcome is unproven: "+errorText(cause))
+	uncertainErr := daemon.markGoalSessionUncertain(sessionKey, boundedGoalSessionUncertainReason("cancelled native Goal launch abort outcome is unproven: "+errorText(cause)))
 	resolved, resolveErr := daemon.loadGoalSession(sessionKey)
 	if state.IsNotFound(resolveErr) || (resolveErr == nil && goalSessionClosed(resolved)) {
 		return nil
@@ -847,7 +847,7 @@ func (daemon *daemon) publishNativeCloseRetryAfterEvidence(key state.RunKey, act
 	retentionErr := daemon.retainUnknownGoalLaunchWorkspaceChecked(key)
 	var uncertaintyErr error
 	if markUncertain {
-		_, uncertaintyErr = daemon.store.MarkGoalSessionUncertain(goalSession, reason)
+		_, uncertaintyErr = daemon.store.MarkGoalSessionUncertain(goalSession, boundedGoalSessionUncertainReason(reason))
 	}
 	// Publish retry only after all recovery evidence has been attempted. A
 	// concurrent final waiter then observes the actual close/accounting flags.

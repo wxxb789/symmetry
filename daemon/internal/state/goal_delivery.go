@@ -67,9 +67,9 @@ type GoalDelivery struct {
 	Usage          *protocol.Usage             `json:"usage,omitempty"`
 }
 
-// GoalDeliveryRetirement preserves a definitive receiver rejection without
+// goalDeliveryRetirement preserves a definitive receiver rejection without
 // treating it as successful delivery or silently discarding the request.
-type GoalDeliveryRetirement struct {
+type goalDeliveryRetirement struct {
 	Delivery   GoalDelivery `json:"delivery"`
 	StatusCode int          `json:"status_code"`
 	Code       string       `json:"code"`
@@ -77,16 +77,16 @@ type GoalDeliveryRetirement struct {
 	RetiredAt  time.Time    `json:"retired_at"`
 }
 
-// LateGoalUsageLedger persists the original fence and usage accounting after
+// lateGoalUsageLedger persists the original fence and usage accounting after
 // execution cleanup. It cannot recreate a RunJournal or native execution.
-type LateGoalUsageLedger struct {
+type lateGoalUsageLedger struct {
 	SchemaVersion          int                      `json:"schema_version"`
 	RunID                  string                   `json:"run_id"`
 	Generation             int64                    `json:"generation"`
 	Fence                  protocol.Fence           `json:"fence"`
 	PendingUsageDeliveries []GoalDelivery           `json:"pending_usage_deliveries,omitempty"`
 	DeliveredDeliveries    []GoalDelivery           `json:"delivered_deliveries,omitempty"`
-	RetiredDeliveries      []GoalDeliveryRetirement `json:"retired_deliveries,omitempty"`
+	RetiredDeliveries      []goalDeliveryRetirement `json:"retired_deliveries,omitempty"`
 	CreatedAt              time.Time                `json:"created_at"`
 	UpdatedAt              time.Time                `json:"updated_at"`
 }
@@ -659,7 +659,7 @@ func (store *Store) RetireGoalDelivery(key RunKey, kind GoalDeliveryKind, delive
 				return ErrGoalDeliveryConflict
 			}
 			journal.PendingGoalDeliveries = append(journal.PendingGoalDeliveries[:index], journal.PendingGoalDeliveries[index+1:]...)
-			journal.RetiredGoalDeliveries = append(journal.RetiredGoalDeliveries, GoalDeliveryRetirement{Delivery: pending, StatusCode: statusCode, Code: code, Message: message, RetiredAt: retiredAt.UTC()})
+			journal.RetiredGoalDeliveries = append(journal.RetiredGoalDeliveries, goalDeliveryRetirement{Delivery: pending, StatusCode: statusCode, Code: code, Message: message, RetiredAt: retiredAt.UTC()})
 			return nil
 		}
 		return errors.New("Goal delivery is not pending")
@@ -801,7 +801,7 @@ func validateGoalDeliveries(journal RunJournal) error {
 	return nil
 }
 
-func validateGoalDeliveryRetirement(runID string, fence protocol.Fence, retired *GoalDeliveryRetirement) error {
+func validateGoalDeliveryRetirement(runID string, fence protocol.Fence, retired *goalDeliveryRetirement) error {
 	if retired == nil || retired.StatusCode < 400 || retired.StatusCode > 599 || !validRequiredString(retired.Code, 256) || !validRequiredString(retired.Message, 4096) || retired.RetiredAt.IsZero() || !sameFence(retired.Delivery.Fence, fence) {
 		return errors.New("Goal delivery retirement is invalid")
 	}
@@ -826,22 +826,22 @@ func validatePersistedGoalDelivery(runID string, delivery *GoalDelivery) error {
 
 // QueueLateGoalUsage records final accounting under a fence retained during
 // execution cleanup. It never creates a RunJournal.
-func (store *Store) QueueLateGoalUsage(key RunKey, usage protocol.Usage) (LateGoalUsageLedger, error) {
+func (store *Store) QueueLateGoalUsage(key RunKey, usage protocol.Usage) (lateGoalUsageLedger, error) {
 	if err := validateKey(key); err != nil {
-		return LateGoalUsageLedger{}, err
+		return lateGoalUsageLedger{}, err
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if err := store.ensureOpenLocked(); err != nil {
-		return LateGoalUsageLedger{}, err
+		return lateGoalUsageLedger{}, err
 	}
 	ledger, err := store.loadLateGoalUsageLocked(key)
 	if err != nil {
-		return LateGoalUsageLedger{}, err
+		return lateGoalUsageLedger{}, err
 	}
 	delivery := GoalDelivery{Kind: GoalDeliveryUsage, DeliveryID: usage.UsageKey, Fence: ledger.Fence, Ready: true, Usage: &usage}
 	if err := prepareGoalDelivery(ledger.RunID, &delivery); err != nil {
-		return LateGoalUsageLedger{}, err
+		return lateGoalUsageLedger{}, err
 	}
 	for _, pending := range ledger.PendingUsageDeliveries {
 		if pending.DeliveryID != delivery.DeliveryID {
@@ -850,11 +850,11 @@ func (store *Store) QueueLateGoalUsage(key RunKey, usage protocol.Usage) (LateGo
 		if pending.PayloadDigest == delivery.PayloadDigest && equalGoalDelivery(pending, delivery) {
 			return ledger, nil
 		}
-		return LateGoalUsageLedger{}, ErrGoalDeliveryConflict
+		return lateGoalUsageLedger{}, ErrGoalDeliveryConflict
 	}
 	for _, retired := range ledger.RetiredDeliveries {
 		if retired.Delivery.DeliveryID == delivery.DeliveryID {
-			return LateGoalUsageLedger{}, ErrGoalDeliveryConflict
+			return lateGoalUsageLedger{}, ErrGoalDeliveryConflict
 		}
 	}
 	for _, delivered := range ledger.DeliveredDeliveries {
@@ -862,30 +862,30 @@ func (store *Store) QueueLateGoalUsage(key RunKey, usage protocol.Usage) (LateGo
 			if delivered.PayloadDigest == delivery.PayloadDigest && equalGoalDelivery(delivered, delivery) {
 				return ledger, nil
 			}
-			return LateGoalUsageLedger{}, ErrGoalDeliveryConflict
+			return lateGoalUsageLedger{}, ErrGoalDeliveryConflict
 		}
 	}
 	ledger.PendingUsageDeliveries = append(ledger.PendingUsageDeliveries, delivery)
 	ledger.UpdatedAt = time.Now().UTC()
 	if err := store.saveLateGoalUsageLocked(ledger); err != nil {
-		return LateGoalUsageLedger{}, err
+		return lateGoalUsageLedger{}, err
 	}
 	return ledger, nil
 }
 
-func (store *Store) LoadLateGoalUsage(key RunKey) (LateGoalUsageLedger, error) {
+func (store *Store) LoadLateGoalUsage(key RunKey) (lateGoalUsageLedger, error) {
 	if err := validateKey(key); err != nil {
-		return LateGoalUsageLedger{}, err
+		return lateGoalUsageLedger{}, err
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if err := store.ensureOpenLocked(); err != nil {
-		return LateGoalUsageLedger{}, err
+		return lateGoalUsageLedger{}, err
 	}
 	return store.loadLateGoalUsageLocked(key)
 }
 
-func (store *Store) ListLateGoalUsage() ([]LateGoalUsageLedger, error) {
+func (store *Store) ListLateGoalUsage() ([]lateGoalUsageLedger, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if err := store.ensureOpenLocked(); err != nil {
@@ -898,7 +898,7 @@ func (store *Store) ListLateGoalUsage() ([]LateGoalUsageLedger, error) {
 	if err != nil {
 		return nil, errors.New("list late Goal usage ledgers")
 	}
-	result := make([]LateGoalUsageLedger, 0, len(entries))
+	result := make([]lateGoalUsageLedger, 0, len(entries))
 	for _, entry := range entries {
 		if entry.IsDir() || !isLateGoalUsageFile(entry.Name()) {
 			continue
@@ -915,8 +915,8 @@ func (store *Store) ListLateGoalUsage() ([]LateGoalUsageLedger, error) {
 	return result, nil
 }
 
-func (store *Store) MarkLateGoalUsageDelivered(key RunKey, deliveryID, payloadDigest string) (LateGoalUsageLedger, error) {
-	return store.mutateLateGoalUsage(key, func(ledger *LateGoalUsageLedger) error {
+func (store *Store) MarkLateGoalUsageDelivered(key RunKey, deliveryID, payloadDigest string) (lateGoalUsageLedger, error) {
+	return store.mutateLateGoalUsage(key, func(ledger *lateGoalUsageLedger) error {
 		for _, delivered := range ledger.DeliveredDeliveries {
 			if delivered.DeliveryID != deliveryID {
 				continue
@@ -941,8 +941,8 @@ func (store *Store) MarkLateGoalUsageDelivered(key RunKey, deliveryID, payloadDi
 	})
 }
 
-func (store *Store) RetireLateGoalUsage(key RunKey, deliveryID, payloadDigest string, statusCode int, code, message string, retiredAt time.Time) (LateGoalUsageLedger, error) {
-	return store.mutateLateGoalUsage(key, func(ledger *LateGoalUsageLedger) error {
+func (store *Store) RetireLateGoalUsage(key RunKey, deliveryID, payloadDigest string, statusCode int, code, message string, retiredAt time.Time) (lateGoalUsageLedger, error) {
+	return store.mutateLateGoalUsage(key, func(ledger *lateGoalUsageLedger) error {
 		if statusCode < 400 || statusCode > 599 || !validRequiredString(code, 256) || !validRequiredString(message, 4096) || retiredAt.IsZero() {
 			return errors.New("late Goal usage retirement is invalid")
 		}
@@ -954,7 +954,7 @@ func (store *Store) RetireLateGoalUsage(key RunKey, deliveryID, payloadDigest st
 				return ErrGoalDeliveryConflict
 			}
 			ledger.PendingUsageDeliveries = append(ledger.PendingUsageDeliveries[:index], ledger.PendingUsageDeliveries[index+1:]...)
-			ledger.RetiredDeliveries = append(ledger.RetiredDeliveries, GoalDeliveryRetirement{Delivery: delivery, StatusCode: statusCode, Code: code, Message: message, RetiredAt: retiredAt.UTC()})
+			ledger.RetiredDeliveries = append(ledger.RetiredDeliveries, goalDeliveryRetirement{Delivery: delivery, StatusCode: statusCode, Code: code, Message: message, RetiredAt: retiredAt.UTC()})
 			return nil
 		}
 		return errors.New("late Goal usage delivery is not pending")
@@ -962,7 +962,7 @@ func (store *Store) RetireLateGoalUsage(key RunKey, deliveryID, payloadDigest st
 }
 
 func (store *Store) archiveLateGoalUsageLocked(journal RunJournal) error {
-	retiredUsage := make([]GoalDeliveryRetirement, 0, len(journal.RetiredGoalDeliveries))
+	retiredUsage := make([]goalDeliveryRetirement, 0, len(journal.RetiredGoalDeliveries))
 	for _, retired := range journal.RetiredGoalDeliveries {
 		if retired.Delivery.Kind == GoalDeliveryUsage {
 			retiredUsage = append(retiredUsage, retired)
@@ -974,7 +974,7 @@ func (store *Store) archiveLateGoalUsageLocked(journal RunJournal) error {
 			deliveredUsage = append(deliveredUsage, delivered)
 		}
 	}
-	ledger := LateGoalUsageLedger{SchemaVersion: lateGoalUsageLedgerSchemaVersion, RunID: journal.RunID, Generation: journal.Generation, Fence: journal.Fence(), DeliveredDeliveries: deliveredUsage, RetiredDeliveries: retiredUsage, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+	ledger := lateGoalUsageLedger{SchemaVersion: lateGoalUsageLedgerSchemaVersion, RunID: journal.RunID, Generation: journal.Generation, Fence: journal.Fence(), DeliveredDeliveries: deliveredUsage, RetiredDeliveries: retiredUsage, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
 	if existing, err := store.loadLateGoalUsageLocked(journal.Key()); err == nil {
 		if existing.Fence != ledger.Fence {
 			return ErrGoalDeliveryConflict
@@ -997,25 +997,25 @@ func (store *Store) archiveLateGoalUsageLocked(journal RunJournal) error {
 	return store.saveLateGoalUsageLocked(ledger)
 }
 
-func (store *Store) mutateLateGoalUsage(key RunKey, mutate func(*LateGoalUsageLedger) error) (LateGoalUsageLedger, error) {
+func (store *Store) mutateLateGoalUsage(key RunKey, mutate func(*lateGoalUsageLedger) error) (lateGoalUsageLedger, error) {
 	if err := validateKey(key); err != nil {
-		return LateGoalUsageLedger{}, err
+		return lateGoalUsageLedger{}, err
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if err := store.ensureOpenLocked(); err != nil {
-		return LateGoalUsageLedger{}, err
+		return lateGoalUsageLedger{}, err
 	}
 	ledger, err := store.loadLateGoalUsageLocked(key)
 	if err != nil {
-		return LateGoalUsageLedger{}, err
+		return lateGoalUsageLedger{}, err
 	}
 	if err := mutate(&ledger); err != nil {
-		return LateGoalUsageLedger{}, err
+		return lateGoalUsageLedger{}, err
 	}
 	ledger.UpdatedAt = time.Now().UTC()
 	if err := store.saveLateGoalUsageLocked(ledger); err != nil {
-		return LateGoalUsageLedger{}, err
+		return lateGoalUsageLedger{}, err
 	}
 	return ledger, nil
 }
@@ -1035,20 +1035,20 @@ func isLateGoalUsageFile(name string) bool {
 	_, err := hex.DecodeString(digest)
 	return strings.HasPrefix(name, "usage-") && strings.HasSuffix(name, ".json") && len(digest) == sha256.Size*2 && err == nil
 }
-func (store *Store) loadLateGoalUsageLocked(key RunKey) (LateGoalUsageLedger, error) {
+func (store *Store) loadLateGoalUsageLocked(key RunKey) (lateGoalUsageLedger, error) {
 	return store.loadLateGoalUsagePathLocked(store.lateGoalUsagePath(key))
 }
-func (store *Store) loadLateGoalUsagePathLocked(path string) (LateGoalUsageLedger, error) {
-	var ledger LateGoalUsageLedger
+func (store *Store) loadLateGoalUsagePathLocked(path string) (lateGoalUsageLedger, error) {
+	var ledger lateGoalUsageLedger
 	if err := store.readJSONWithLimit(path, "late Goal usage ledger", &ledger, maxJournalFileBytes); err != nil {
-		return LateGoalUsageLedger{}, err
+		return lateGoalUsageLedger{}, err
 	}
 	if err := validateLateGoalUsageLedger(ledger); err != nil || filepath.Base(path) != filepath.Base(store.lateGoalUsagePath(RunKey{RunID: ledger.RunID, Generation: ledger.Generation})) {
-		return LateGoalUsageLedger{}, errors.New("invalid late Goal usage ledger")
+		return lateGoalUsageLedger{}, errors.New("invalid late Goal usage ledger")
 	}
 	return ledger, nil
 }
-func (store *Store) saveLateGoalUsageLocked(ledger LateGoalUsageLedger) error {
+func (store *Store) saveLateGoalUsageLocked(ledger lateGoalUsageLedger) error {
 	if err := validateLateGoalUsageLedger(ledger); err != nil {
 		return err
 	}
@@ -1057,7 +1057,7 @@ func (store *Store) saveLateGoalUsageLocked(ledger LateGoalUsageLedger) error {
 	}
 	return store.writeJSONWithLimit(store.lateGoalUsagePath(RunKey{RunID: ledger.RunID, Generation: ledger.Generation}), ledger, "late Goal usage ledger", maxJournalFileBytes)
 }
-func validateLateGoalUsageLedger(ledger LateGoalUsageLedger) error {
+func validateLateGoalUsageLedger(ledger lateGoalUsageLedger) error {
 	if ledger.SchemaVersion != lateGoalUsageLedgerSchemaVersion || validateKey(RunKey{RunID: ledger.RunID, Generation: ledger.Generation}) != nil || ledger.Fence.Generation != ledger.Generation || ledger.Fence == (protocol.Fence{}) || ledger.CreatedAt.IsZero() || ledger.UpdatedAt.IsZero() {
 		return errors.New("late Goal usage ledger is invalid")
 	}

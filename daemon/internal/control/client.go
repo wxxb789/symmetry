@@ -121,12 +121,6 @@ type EnrollmentClient struct {
 	*transport
 }
 
-// OperatorClient invokes task-control endpoints with an explicitly supplied operator token.
-type OperatorClient struct {
-	*transport
-	operatorToken string
-}
-
 // GoalSessionAttachRequest is the flat request body accepted by the fenced
 // machine-only session endpoint. The run ID remains authoritative in the URL;
 // it is intentionally not duplicated in this body.
@@ -479,18 +473,6 @@ func NewEnrollmentClient(baseURL string, httpClient *http.Client, options ...Opt
 		return nil, err
 	}
 	return &EnrollmentClient{transport: transport}, nil
-}
-
-// NewOperatorClient creates a client for task-control requests under a distinct operator credential.
-func NewOperatorClient(baseURL, operatorToken string, httpClient *http.Client, options ...Option) (*OperatorClient, error) {
-	if strings.TrimSpace(operatorToken) == "" {
-		return nil, errors.New("operator token must not be empty")
-	}
-	transport, err := newTransport(baseURL, httpClient, options...)
-	if err != nil {
-		return nil, err
-	}
-	return &OperatorClient{transport: transport, operatorToken: operatorToken}, nil
 }
 
 func newTransport(baseURL string, httpClient *http.Client, options ...Option) (*transport, error) {
@@ -983,60 +965,6 @@ func (client *Client) AcknowledgeCommand(ctx context.Context, commandID string, 
 	return nil
 }
 
-// SubmitTask creates or retrieves a task under the supplied idempotency key.
-func (client *OperatorClient) SubmitTask(ctx context.Context, idempotencyKey string, request protocol.TaskSubmitRequest) (protocol.Task, error) {
-	var response protocol.Task
-	if err := client.operatorRequest(ctx, http.MethodPost, "v1/tasks", nil, idempotencyKey, request, &response); err != nil {
-		return protocol.Task{}, err
-	}
-	if err := validateTaskResponse("submit task", "", response); err != nil {
-		return protocol.Task{}, err
-	}
-	return response, nil
-}
-
-// GetTask returns the current durable task state.
-func (client *OperatorClient) GetTask(ctx context.Context, taskID string) (protocol.Task, error) {
-	if err := validatePathID("task ID", taskID); err != nil {
-		return protocol.Task{}, err
-	}
-	var response protocol.Task
-	if err := client.operatorRequest(ctx, http.MethodGet, "v1/tasks/"+taskID, nil, "", nil, &response); err != nil {
-		return protocol.Task{}, err
-	}
-	if err := validateTaskResponse("get task", taskID, response); err != nil {
-		return protocol.Task{}, err
-	}
-	return response, nil
-}
-
-// CreateTaskCommand creates or retrieves an operator command under the supplied
-// idempotency key. The returned resource may be runless for historical actions.
-func (client *OperatorClient) CreateTaskCommand(ctx context.Context, taskID, idempotencyKey string, request protocol.TaskCommandRequest) (protocol.TaskCommand, error) {
-	if err := validatePathID("task ID", taskID); err != nil {
-		return protocol.TaskCommand{}, err
-	}
-	if strings.TrimSpace(idempotencyKey) == "" {
-		return protocol.TaskCommand{}, errors.New("idempotency key must not be empty")
-	}
-	if err := validateTaskCommandRequest(request); err != nil {
-		return protocol.TaskCommand{}, err
-	}
-	var response protocol.TaskCommand
-	endpoint := "v1/tasks/" + taskID + "/commands"
-	statusCode, err := client.operatorRequestWithStatus(ctx, http.MethodPost, endpoint, nil, idempotencyKey, request, &response)
-	if err != nil {
-		return protocol.TaskCommand{}, err
-	}
-	if statusCode != http.StatusOK && statusCode != http.StatusCreated {
-		return protocol.TaskCommand{}, responseErrorf("invalid create task command response: expected HTTP 200 or 201, got HTTP %d", statusCode)
-	}
-	if err := validateTaskCommandResponse("create task command", taskID, request, response); err != nil {
-		return protocol.TaskCommand{}, err
-	}
-	return response, nil
-}
-
 // RetryDelay classifies a failed request and selects a retry delay. It does not
 // perform retries; callers retain their own retry and liveness policies.
 func RetryDelay(ctx context.Context, err error, fallback time.Duration) (time.Duration, bool) {
@@ -1116,14 +1044,6 @@ func (client *Client) requestGoalContractWithStatus(ctx context.Context, method,
 		return 0, responseErrorf("decode strict goal response: %w", err)
 	}
 	return statusCode, nil
-}
-
-func (client *OperatorClient) operatorRequest(ctx context.Context, method, endpoint string, query url.Values, idempotencyKey string, request, response any) error {
-	return client.request(ctx, method, endpoint, query, client.operatorToken, idempotencyKey, request, response)
-}
-
-func (client *OperatorClient) operatorRequestWithStatus(ctx context.Context, method, endpoint string, query url.Values, idempotencyKey string, request, response any) (int, error) {
-	return client.requestWithStatus(ctx, method, endpoint, query, client.operatorToken, idempotencyKey, request, response)
 }
 
 func (client *transport) request(ctx context.Context, method, endpoint string, query url.Values, token, idempotencyKey string, request, response any) error {

@@ -1346,7 +1346,7 @@ func verifyLinuxCloneSource(ctx context.Context, repository string) error {
 	if err := rejectLinuxCloneEntry(gitFD, "shallow"); err != nil {
 		return fmt.Errorf("A-owned Git source must contain complete history: %w", err)
 	}
-	objectsFD, err := openLinuxCloneDirAt(gitFD, "objects")
+	objectsFD, err := openLinuxCloneDirAtFlags(gitFD, "objects", unix.O_RDONLY)
 	if err != nil {
 		return fmt.Errorf("open A-owned Git object directory: %w", err)
 	}
@@ -1359,7 +1359,7 @@ func verifyLinuxCloneSource(ctx context.Context, repository string) error {
 		_ = unix.Close(objectsFD)
 		return errors.New("Git object directory must be A-owned and not group/world writable")
 	}
-	if infoFD, err := openLinuxCloneDirAt(objectsFD, "info"); err == nil {
+	if infoFD, err := openLinuxCloneDirAtFlags(objectsFD, "info", unix.O_RDONLY); err == nil {
 		if err := rejectLinuxCloneEntry(infoFD, "alternates"); err != nil {
 			_ = unix.Close(infoFD)
 			_ = unix.Close(objectsFD)
@@ -1434,7 +1434,7 @@ func requireLinuxCloneRefLockAbsent(ctx context.Context, repository, ref string)
 		if component == "" || component == "." || component == ".." {
 			return errors.New("Linux clone ref path contains an invalid component")
 		}
-		next, openErr := openLinuxCloneDirAt(parentFD, component)
+		next, openErr := openLinuxCloneDirAtFlags(parentFD, component, unix.O_RDONLY)
 		if errors.Is(openErr, unix.ENOENT) {
 			return nil
 		}

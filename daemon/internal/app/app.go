@@ -20,6 +20,7 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/control"
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
+	"github.com/wxxb789/symmetry/daemon/internal/linuxpreflight"
 	"github.com/wxxb789/symmetry/daemon/internal/notification"
 	"github.com/wxxb789/symmetry/daemon/internal/platform"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
@@ -237,27 +238,6 @@ func WithHTTPClient(client *http.Client) Options {
 	return func(value *options) { value.httpClient = client }
 }
 
-// WithStore supplies an already-open state store. Run does not close it.
-func WithStore(store *state.Store) Options { return func(value *options) { value.store = store } }
-
-// WithControl supplies the authenticated control-plane client.
-func WithControl(client ControlAPI) Options { return func(value *options) { value.control = client } }
-
-// WithEnrollment supplies the enrollment client.
-func WithEnrollment(client EnrollmentAPI) Options {
-	return func(value *options) { value.enrollment = client }
-}
-
-// WithWorkspace supplies the local workspace service.
-func WithWorkspace(service workspace.Service) Options {
-	return func(value *options) { value.workspace = service }
-}
-
-// WithStartProcess supplies the local process launcher.
-func WithStartProcess(start StartProcess) Options {
-	return func(value *options) { value.start = start }
-}
-
 // WithNotificationClient supplies a notification source, normally for tests.
 func WithNotificationClient(client NotificationClient) Options {
 	return func(value *options) { value.notifications = client }
@@ -276,7 +256,7 @@ func Run(ctx context.Context, value config.Config, changes ...Options) error {
 		return errors.New("daemon context must not be nil")
 	}
 	if requiresLinuxV2NativeOwner(harness.Kind(value.Runtime.HarnessKind)) {
-		stateDir, err := normalizeLinuxNativeStateDir(value.StateDir)
+		stateDir, err := linuxpreflight.NormalizeOwnerStateDir(value.StateDir)
 		if err != nil {
 			return fmt.Errorf("normalize Linux v2 StateDir against root working directory: %w", err)
 		}
@@ -367,11 +347,7 @@ type daemon struct {
 	retainedWorkspaces      map[state.RunKey]struct{}
 	clockSkewWarned         bool
 	commandWake             chan struct{}
-	commandQueue            []*queuedCommand
-	queuedCommands          map[commandKey]*queuedCommand
-	commandLanes            map[state.RunKey]*commandLane
-	commandRequests         map[uint64]map[commandKey]struct{}
-	nextCommandRequest      uint64
+	commands                commandQueue
 }
 
 func (daemon *daemon) run(ctx context.Context) error {
@@ -490,8 +466,7 @@ func (daemon *daemon) startBackground(ctx context.Context) func() {
 	daemon.cleanupQueued = make(map[state.RunKey]struct{})
 	daemon.cleanupRetry = make(map[state.RunKey]time.Time)
 	daemon.commandWake = make(chan struct{}, 1)
-	daemon.queuedCommands = make(map[commandKey]*queuedCommand)
-	daemon.commandRequests = make(map[uint64]map[commandKey]struct{})
+	daemon.commands = newCommandQueue()
 	daemon.mu.Unlock()
 
 	livenessStarted := make(chan struct{})
@@ -1723,7 +1698,7 @@ func (daemon *daemon) releaseRun(key state.RunKey) {
 	daemon.mu.Lock()
 	active := daemon.running[key]
 	delete(daemon.running, key)
-	daemon.releaseCommandReceiptsLocked(key)
+	daemon.commands.dropRun(key)
 	releaseSlot := active != nil && active.slotHeld
 	renewCancel := context.CancelFunc(nil)
 	terminalCancel := context.CancelFunc(nil)
@@ -1765,19 +1740,7 @@ func (daemon *daemon) clearCompletedCommandReceipts(key state.RunKey) {
 	defer daemon.commandReceiptMu.Unlock()
 	daemon.mu.Lock()
 	defer daemon.mu.Unlock()
-	daemon.releaseCommandReceiptsLocked(key)
-}
-
-func (daemon *daemon) releaseCommandReceiptsLocked(key state.RunKey) {
-	for commandKey, queued := range daemon.queuedCommands {
-		if commandKey.run == key {
-			if !queued.completed {
-				queued.completed = true
-				close(queued.done)
-			}
-			delete(daemon.queuedCommands, commandKey)
-		}
-	}
+	daemon.commands.dropRun(key)
 }
 
 func (daemon *daemon) releaseSlotOnce(key state.RunKey) {

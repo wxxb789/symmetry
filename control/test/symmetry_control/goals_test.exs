@@ -3848,6 +3848,36 @@ defmodule SymmetryControl.GoalsTest do
     assert {:ok, []} = Goals.recover_pending_terminal_settlements(goal_ids: [goal.id], now: @now)
   end
 
+  test "a competing accepted Subject settles a first terminal validation as historical result" do
+    {goal, item, _producer, producer_run, validation, validation_run, validation_runtime,
+     validation_fence, candidate_subject} =
+      independent_validation_attempt_fixture(check_and_operator_acceptance_contract())
+
+    assert {:ok, %{evidence: _stored}, :created} =
+             Goals.append_evidence(
+               validation_runtime.machine_id,
+               validation_run.id,
+               validation_fence,
+               evidence_attrs(validation_run.id, item, candidate_subject),
+               now: @now
+             )
+
+    accepted_subject = Map.put(candidate_subject, "commit", String.duplicate("a", 40))
+
+    insert_accepted_work_outcome!(goal, item.id, producer_run, accepted_subject)
+
+    assert {:ok, %{"settlement" => "historical_result", "next_wake_at" => nil}} =
+             Goals.settle_task(validation.id, validation_run.id, 1, now: @now)
+
+    assert [%{disposition: "rejected", reason: "historical_result"}] =
+             Repo.all(
+               from(outcome in SymmetryControl.Goals.WorkOutcome,
+                 where: outcome.validation_task_id == ^validation.id,
+                 select: %{disposition: outcome.disposition, reason: outcome.reason}
+               )
+             )
+  end
+
   test "failed validation evidence remains rejected even with scoped operator acceptance" do
     {goal, item, _producer, _producer_run, validation, validation_run, validation_runtime,
      validation_fence, candidate_subject} =
@@ -4097,7 +4127,7 @@ defmodule SymmetryControl.GoalsTest do
       task_result(validation, "failed", %{"reason" => "network"})
     )
 
-    assert {:ok, %{"settlement" => "failed"}} =
+    assert {:ok, %{"settlement" => "failed", "next_wake_at" => nil}} =
              Goals.settle_task(validation.id, validation_run.id, 1, now: @now)
 
     refute Repo.exists?(
@@ -4422,8 +4452,10 @@ defmodule SymmetryControl.GoalsTest do
     put_task_result!(first_run, first_progress)
     delete_goal_wakeup_jobs(goal.id)
 
-    assert {:ok, %{"settlement" => "progress"}} =
+    assert {:ok, %{"settlement" => "progress", "next_wake_at" => next_wake_at}} =
              Goals.settle_task(first_task.id, first_run.id, 1, now: @now)
+
+    assert next_wake_at == DateTime.to_iso8601(@now)
 
     assert {:ok, admitted, :created} =
              command_current(
