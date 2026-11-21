@@ -43,7 +43,7 @@ func TestStaleCleanupWaitsForCommandAcknowledgementWithoutSendingOrdinaryOutbox(
 	workspaceService := &staleAcknowledgementWorkspace{fakeWorkspace: &fakeWorkspace{}, record: record}
 	slots := make(chan struct{}, 1)
 	slots <- struct{}{}
-	active := &runningRun{nativeStartInFlight: true, slotHeld: true}
+	active := &runningRun{runLifecycle: runLifecycle{nativeStartInFlight: true, slotHeld: true}}
 	app := &daemon{
 		config:      testConfig(t),
 		store:       store,

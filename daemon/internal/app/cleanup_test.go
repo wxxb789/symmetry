@@ -672,7 +672,7 @@ func TestProcessExitBeforeTerminalDeliveryReleasesCleanupOnce(t *testing.T) {
 		running: map[state.RunKey]*runningRun{key: {
 			process:        fakeProcess{result: execution.Result{ExitCode: 0}},
 			cleanupBlocked: true,
-			slotHeld:       true,
+			runLifecycle:   runLifecycle{slotHeld: true},
 		}},
 		slots: slots,
 	}

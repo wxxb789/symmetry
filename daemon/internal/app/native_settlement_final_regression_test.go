@@ -208,15 +208,17 @@ func TestNativeUsageRetryExhaustionPreservesDurableStopWitness(t *testing.T) {
 			}
 			result := harness.TaskResult{Kind: harness.ResultFailed, Summary: "usage recovery exhausted"}
 			active := &runningRun{
-				goalSession:                 &sessionKey,
-				nativeFinalResult:           &result,
-				nativeFinalUsage:            &usage,
-				nativeTerminalOwner:         true,
-				nativeTerminalOwnerClaim:    1,
-				nativeTerminalOwnerSequence: 1,
-				nativeUsageRetryOwnerClaim:  1,
-				terminalizing:               1,
-				cleanupBlocked:              true,
+				goalSession:       &sessionKey,
+				nativeFinalResult: &result,
+				nativeFinalUsage:  &usage,
+				runLifecycle: runLifecycle{
+					nativeTerminalOwner:         true,
+					nativeTerminalOwnerClaim:    1,
+					nativeTerminalOwnerSequence: 1,
+					nativeUsageRetryOwnerClaim:  1,
+					terminalizing:               1,
+				},
+				cleanupBlocked: true,
 			}
 			app := &daemon{
 				config: testConfig(t), store: store, running: map[state.RunKey]*runningRun{key: active},
@@ -248,14 +250,16 @@ func TestNativeUsageRecoveryPersistenceUsesCappedBackoff(t *testing.T) {
 	now := time.Date(2026, 9, 20, 3, 0, 0, 0, time.UTC)
 	result := harness.TaskResult{Kind: harness.ResultFailed, Summary: "recovery persistence failed"}
 	active := &runningRun{
-		nativeFinalResult:           &result,
-		nativeTerminalOwner:         true,
-		nativeTerminalOwnerClaim:    1,
-		nativeTerminalOwnerSequence: 1,
-		nativeUsageRetryOwnerClaim:  1,
-		nativeUsageRetryAttempts:    nativeUsageRetryLimit,
-		terminalizing:               1,
-		cleanupBlocked:              true,
+		nativeFinalResult: &result,
+		runLifecycle: runLifecycle{
+			nativeTerminalOwner:         true,
+			nativeTerminalOwnerClaim:    1,
+			nativeTerminalOwnerSequence: 1,
+			nativeUsageRetryOwnerClaim:  1,
+			nativeUsageRetryAttempts:    nativeUsageRetryLimit,
+			terminalizing:               1,
+		},
+		cleanupBlocked: true,
 	}
 	app := &daemon{
 		config: testConfig(t), store: store, running: map[state.RunKey]*runningRun{key: active},
@@ -361,7 +365,7 @@ func TestStartTurnObservedTerminalWinsCancellation(t *testing.T) {
 func TestTaskResultUnknownWriteReadbackPrecedesEventRetirement(t *testing.T) {
 	store, key := claimedGoalDeliveryStore(t)
 	t.Cleanup(func() { _ = store.Close() })
-	active := &runningRun{nativeStartInFlight: true}
+	active := &runningRun{runLifecycle: runLifecycle{nativeStartInFlight: true}}
 	controlClient := &eventDeliveryInterleavingControl{fakeControl: &fakeControl{}, appended: make(chan struct{})}
 	app := &daemon{
 		config: testConfig(t), store: store, control: controlClient,
@@ -539,8 +543,14 @@ func TestCancelledNativeStartFinalWaitStopsOnDaemonShutdown(t *testing.T) {
 		finalEntered:          finalEntered,
 	}
 	active := &runningRun{
-		starting: true, claimed: true, nativeStartInFlight: true, nativeSession: session, goalSession: &sessionKey,
-		goalAdmission: &admission, cancelled: true, cancelCommandID: "cancel-shutdown", cleanupBlocked: true,
+		runLifecycle: runLifecycle{
+			starting:            true,
+			claimed:             true,
+			nativeStartInFlight: true,
+			cancelled:           true,
+			cancelCommandID:     "cancel-shutdown",
+		}, nativeSession: session, goalSession: &sessionKey,
+		goalAdmission: &admission, cleanupBlocked: true,
 	}
 	background, shutdown := context.WithCancel(context.Background())
 	app := &daemon{

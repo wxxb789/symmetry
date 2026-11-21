@@ -128,7 +128,7 @@ func TestNativeCloseFailureStaleRunDoesNotReleaseActiveRecoveryBarrier(t *testin
 	if _, err := store.SetProcessDetails(key, 71, "native:71", time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
-	active := &runningRun{nativeSession: &closeFailureGoalSession{err: errors.New("native child stop failed"), waitResult: harness.TaskResult{Kind: harness.ResultSucceeded}}, goalSession: &sessionKey, goalAdmission: &admission, stale: true}
+	active := &runningRun{nativeSession: &closeFailureGoalSession{err: errors.New("native child stop failed"), waitResult: harness.TaskResult{Kind: harness.ResultSucceeded}}, goalSession: &sessionKey, goalAdmission: &admission, runLifecycle: runLifecycle{stale: true}}
 	daemon := &daemon{store: store, options: options{newID: ids(), clock: time.Now}, running: map[state.RunKey]*runningRun{key: active}}
 
 	daemon.waitForNativeRun(context.Background(), key, active, active.nativeSession)
@@ -2254,7 +2254,7 @@ func TestNativeCancellationOwnerStopsLosingTerminalWaiter(t *testing.T) {
 		processIdentity: "native:71",
 	}
 	session.onControl = func() { close(waitTurnGate) }
-	active := &runningRun{claimed: true, nativeSession: session, goalSession: &sessionKey, goalAdmission: &admission}
+	active := &runningRun{runLifecycle: runLifecycle{claimed: true}, nativeSession: session, goalSession: &sessionKey, goalAdmission: &admission}
 	app := &daemon{
 		config:  testConfig(t),
 		store:   store,
@@ -2355,7 +2355,7 @@ func TestNativeTerminalOwnerRejectsConcurrentCancellation(t *testing.T) {
 		processPID:      71,
 		processIdentity: "native:71",
 	}
-	active := &runningRun{claimed: true, nativeSession: session, goalSession: &sessionKey, goalAdmission: &admission}
+	active := &runningRun{runLifecycle: runLifecycle{claimed: true}, nativeSession: session, goalSession: &sessionKey, goalAdmission: &admission}
 	app := &daemon{
 		config:  testConfig(t),
 		store:   store,
