@@ -4,8 +4,8 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
   import Ecto.Query
 
   import SymmetryControlWeb.PortalFixtures, only: [create_connection: 4, create_project: 2]
-  import SymmetryControlWeb.ServedDocument, only: [validate_served_document!: 2]
-  import SymmetryControlWeb.TestConn, only: [api_conn: 0]
+  import SymmetryControlWeb.ServedDocument
+  import SymmetryControlWeb.TestConn, only: [api_conn: 0, create_resource: 5, enforce_csrf: 1]
 
   alias SymmetryControl.Goals
   alias SymmetryControl.{Orchestration, Repo}
@@ -16,11 +16,6 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
   alias SymmetryControl.TelemetryReads
 
   @now ~U[2026-09-04 11:00:00.000000Z]
-
-  # The canonical bundle `ServedDocument.validate_served_document!/2` compares
-  # every gate's response against; the presence assertions derive their
-  # declared-member half from it at test time.
-  @schema_bundle Path.expand("../../../../daemon/internal/contracts/schema_bundle.json", __DIR__)
 
   # The members of `work-detail-read` and `work-timeline-read` the surfaces read
   # and the bundle comparison cannot refuse on its own. The work row's names are
@@ -1495,20 +1490,6 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
 
   defp create_project(key), do: create_project(key, "Project #{key}")
 
-  defp create_resource(project, connection, kind, name, external_ref) do
-    %{"resource" => resource} =
-      api_conn()
-      |> post("/portal/api/projects/#{project["id"]}/resources", %{
-        "connection_id" => connection["id"],
-        "kind" => kind,
-        "name" => name,
-        "external_ref" => external_ref
-      })
-      |> json_response(201)
-
-    resource
-  end
-
   defp served_work_item(work_item_id) do
     assert %{"work_item" => work_item} =
              api_conn()
@@ -1887,94 +1868,4 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
     assert {:ok, _run} =
              Orchestration.transition(run_id, fence, state, %{}, uuid(number), now: @now)
   end
-
-  # `assert_served_members!/3` and `assert_served_rows!/3` are the gate's presence
-  # oracle: a member is pinned by key, so a served `null` stays accepted while a
-  # renamed or omitted key fails here. They are defined in this file because
-  # `control/test/support/**` is outside this increment's owned files, and a module
-  # defined in one test file would break a single-file run of the others.
-  defp assert_served_members!(label, served, members) do
-    assert is_map(served), "#{label} is not served at all: #{inspect(served)}"
-
-    assert Enum.all?(members, &Map.has_key?(served, &1)),
-           "#{label} stopped serving #{inspect(Enum.reject(members, &Map.has_key?(served, &1)))}"
-  end
-
-  defp assert_served_rows!(label, rows, members) do
-    assert is_list(rows) and rows != [], "#{label}: the gate must serve at least one row"
-    Enum.each(rows, &assert_served_members!(label, &1, members))
-  end
-
-  # The member set a gate assertion walks: the definition's declared members
-  # from the contract bundle plus the frontend-read list the call passes. A
-  # schema-side rename (bundle side) and a serving-side rename or omission
-  # (either side) fail the same "stopped serving" message, so the assertion
-  # cannot stay green while the schema, the projection and the read sites
-  # disagree.
-  defp gate_members(read, definition, frontend_members) do
-    Enum.uniq(declared_members(read, definition) ++ frontend_members)
-  end
-
-  # The contract bundle's declared members for `definition` in `read`, its
-  # `oneOf` variants included (`WorkItemTimelineItem` declares its names in the
-  # variants, not in the parent body); `:root` names the read's own schema. The
-  # bundle is read at test time, so a rename inside it (e.g.
-  # `WorkspaceWorkItem.goal_id` -> `goal_ref`) fails the presence assertion
-  # until the served projection follows: the bundle comparison alone cannot
-  # refuse it, because the definitions are `additionalProperties: true` and an
-  # optional member may be absent.
-  defp declared_members(read, definition) do
-    schema = contract_bundle() |> Map.fetch!("#{read}.schema.json")
-
-    schema
-    |> definition_variants(definition)
-    |> Enum.flat_map(&Map.keys(Map.get(&1, "properties", %{})))
-    |> Enum.uniq()
-  end
-
-  defp definition_variants(schema, :root), do: [schema]
-
-  defp definition_variants(schema, definition) do
-    definition = Map.fetch!(schema["definitions"], definition)
-    [definition | Map.get(definition, "oneOf", [])]
-  end
-
-  defp contract_bundle,
-    do: @schema_bundle |> File.read!() |> Jason.decode!()
-
-  # The agent's waiting packet. The read model serves the transition's payload as
-  # the authoritative packet when it carries a decision
-  # (`workspaces/read_model.ex:221`), so this is the packet the surface reads;
-  # its members are the ones `Orchestration.validate_decision_packet!/2` admits.
-  defp waiting_decision_payload do
-    %{
-      "question" => "Which reviewer should accept this?",
-      "decision" => %{
-        "context" => "The attempt needs an operator decision before it continues.",
-        "reason" => "consequential",
-        "options" => [
-          %{
-            "id" => "reviewer-a",
-            "label" => "Reviewer A",
-            "consequence" => "Reviews the change first."
-          },
-          %{
-            "id" => "reviewer-b",
-            "label" => "Reviewer B",
-            "consequence" => "Reviews the change second."
-          }
-        ],
-        "recommended_option_id" => "reviewer-a"
-      }
-    }
-  end
-
-  # A deterministic version-4 UUID: the contract bundle's `UUID` pattern pins the
-  # version and variant nibbles, so a zeroed UUID is refused by the served-document
-  # gates that read these ids back.
-  defp uuid(number),
-    do: "00000000-0000-4000-8000-" <> String.pad_leading(Integer.to_string(number), 12, "0")
-
-  defp enforce_csrf(conn),
-    do: %{conn | private: Map.delete(conn.private, :plug_skip_csrf_protection)}
 end

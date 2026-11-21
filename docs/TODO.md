@@ -548,24 +548,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       scope. Fix direction: sort by UTF-8 bytes (or code points) in both TypeScript encoders
       and pin a cross-language vector with a non-ASCII key in each layer's suite.
 
-## Deferred review findings (PR #145)
-
-- [ ] Consolidate the served-document gate helpers after the increment that owns
-      `control/test/support/**` (W1-12) has landed. `assert_served_members!/3`, `assert_served_rows!/3`,
-      `waiting_decision_payload/0`, the deterministic version-4 `uuid/1` and the bundle-derived
-      `gate_members/3`/`declared_members/2` are duplicated between
-      `control/test/symmetry_control_web/controllers/portal_resources_test.exs`
-      (`assert_served_members!/3` at `:1665`, `assert_served_rows!/3` at `:1672`,
-      `gate_members/3` at `:1683`, `declared_members/2` at `:1695`,
-      `waiting_decision_payload/0` at `:1749`, `uuid/1` at `:1797`) and the same six
-      in `control/test/symmetry_control_web/controllers/portal_workflow_test.exs`
-      (`:1896`, `:1903`, `:1914`, `:1926`, `:1949`, `:1975`). Each file
-      keeps its own copy because `control/test/support/**` was outside the gate increment's owned
-      files and a module defined in one test file would break a single-file run of the others, but
-      the copies can drift. Move them into `SymmetryControlWeb.ServedDocument` (the natural home for
-      the bundle-derived pair too) and have both gate files import them. Found by the adversarial
-      review of PR #145 (P3-2).
-
 ## Deferred review findings (rf-w2-16 clone-aliasing gate)
 
 - [ ] Deep-copy the nested helper exits that the platform stop-evidence clones still share or
@@ -1017,7 +999,8 @@ instead of appended.
 ## Daemon platform: anchor socket-error sanitation keeps its outermost-only type switch
 
 - [ ] Follow-up error-sanitation slice: resolve the remaining `errorlint` finding in
-      `daemon/internal/platform/anchor_wire.go:346`
+      `daemon/internal/platform/anchor_wire.go:925` (`:346` at the merge base; the coordinate
+      moved with `rf-w3-02`'s request-shape table in the same file)
       (`sanitizeLinuxOwnerAnchorSocketError`'s `switch typed := err.(type)`). The slice
       `rf-w2-11-typed-errors` fixed the other owned-file finding
       (`daemon/internal/platform/anchor_server.go:305`, the direct `AcceptUnix` error) by
@@ -1032,7 +1015,7 @@ instead of appended.
       --enable=errorlint ./internal/platform/...` (v2.15.0) on 2026-11-21: 8 findings at the
       merge base `c87c9918` (this one and `anchor_server.go:305:27`, which the slice then
       fixed, plus six outside the owned set), and 7 after the fix, of which exactly this one is
-      in the owned files (`:346:18`). The follow-up should either restructure the
+      in the owned files (`:925:18`). The follow-up should either restructure the
       sanitizer so the "outermost only" rule is explicit in a form errorlint accepts and get the
       count to zero, or record the accepted shape in the plan that owns error sanitation.
 
@@ -1053,8 +1036,36 @@ instead of appended.
       (`namespace identity differs`), `helper_v2_protocol.go:361`
       (`PID or creation identity differs`); the parent-class synonyms are
       `anchor_gate.go:380`, `:417`, `anchor_run.go:278`, `helper_v2_run.go:122`, and
-      `helper_v2_recovery.go:830`. The PR #160 review's suggested fix keeps every byte: one
+      `helper_v2_recovery.go:878` (`:830` at the merge base; the coordinate moved with
+      `rf-w3-02`'s call-site codemod in the same file). The PR #160 review's suggested fix keeps every byte: one
       exported class sentinel per semantic class, backed by an unexported
       `type linuxOwnerMismatch struct { text string; class error }` whose `Error()` returns
       `text` and whose `Is(target)` reports `target == class`, so each phrasing keeps its exact
       wire text and joins its class.
+
+## scripts/ci: install a pinned PyYAML for the lockfile differential oracle (W6-01)
+
+- [ ] The `ci.yml` `daemon` job's "Check CI gate helper scripts" step
+      (`.github/workflows/ci.yml:1482-1493` as of `6a815c0f`, which runs
+      `python3 ../scripts/ci/test-check-lockfile-registry.py` at `:1489`) must install a pinned
+      PyYAML and export `SYMMETRY_REQUIRE_PYYAML=1` for that step, so the differential cross-check
+      between `check-lockfile-registry.py`'s own YAML reader and PyYAML can never silently vanish
+      again. This is the recorded follow-up of contract `goal-rf-w3-16-scripts-defects` (refactor
+      wave 3, SC S8, branch `refactor/rf-w3-16-scripts-defects`, plan
+      `docs/plans/2026-11-21-rf-w3-16-scripts-defects-plan.md`): the suite now prints the exact
+      notice `PyYAML differential oracle skipped: module not importable` on stderr and asserts
+      that string when the module is not importable, and with `SYMMETRY_REQUIRE_PYYAML=1` set the
+      differential test fails instead of skipping. The repository still declares no Python
+      dependency and no workflow performs a `pip install`, so on a runner without PyYAML the
+      oracle stays skipped. Measured 2026-11-21 at `a7681da4` (this slice's increment commit on top
+      of `36f9a887`): portable Python 3.12.10 on the Windows host has PyYAML 6.0.3 and runs `Ran 24
+      tests`, `OK` with no skip; WSL Ubuntu-24.04 Python 3.12.3 has PyYAML 6.0.1 and is `OK`
+      likewise; `python -S` (site-packages off) and `python3 -S` print the notice and report `OK
+      (skipped=1)`; `SYMMETRY_REQUIRE_PYYAML=1
+      python -S scripts/ci/test-check-lockfile-registry.py` exits 1 with `FAILED (failures=1)` on
+      both platforms. Pin the version next to the other tool pins in `ci.yml` (the W1-01 ruff-pin
+      entry's `required-version = "==0.17.5"` handshake at `docs/TODO.md:744` is the same
+      pattern) and set the environment variable in the same step, so a lost install reddens the
+      job instead of shrinking the oracle. `ci.yml` is untouched by rf-w3-16 because W3-01/#157
+      owned it in wave 3 (that PR has since landed as `6a815c0f`, the revision the line numbers
+      above bind); W6-01 is its wave-6 owner.
