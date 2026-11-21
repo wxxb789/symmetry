@@ -699,6 +699,20 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       buys nothing until a new shell parameter needs the corpus extended, which is the condition that
       should trigger it.
 
+## Deferred review findings (PR #163)
+
+- [ ] Fix the query fence's `machine_id` crash: a run-context query carrying `machine_id` raises
+      `WithClauseError` — an unhandled 500 in production — where an unknown query key answers 400.
+      The raise site is the `with` clause in `query_fence/1`,
+      `control/lib/symmetry_control_web/controllers/daemon_controller.ex:514-516` (the
+      `false <- Map.has_key?(query, "machine_id")` member at `:515`); the crash is pinned by
+      `control/test/symmetry_control_web/controllers/protocol_controller_test.exs:1233`
+      (`assert_raise WithClauseError`). One-line fix: drop that redundant member — the subset check
+      already refuses `machine_id` as an unknown key — and flip the pin to a 400
+      `invalid_request`. Behaviour is unchanged from base; the fix belongs to its own increment
+      (plan CW-7 in `docs/plans/2026-11-21-rf-w2-03-controller-plumbing-plan.md`). Found by the
+      adversarial review of PR #163 (P3-1).
+
 ## Production Linux containment witness: stop-receipt barrier stall awaiting a diagnosable occurrence
 
 - [ ] Diagnose the next occurrence of the `daemon_sigkill_after_lease_arm_before_resume` barrier
