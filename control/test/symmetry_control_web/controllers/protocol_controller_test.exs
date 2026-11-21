@@ -1159,6 +1159,110 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
     end
   end
 
+  test "the fence reads the JSON number on a body and the decimal text on a query", %{
+    conn: conn
+  } do
+    {machine_id, machine_token} = enroll(conn)
+    runtime_id = register(conn, machine_id, machine_token)
+    _task_id = submit_and_assign(conn)
+    {run_id, _generation, fence} = claim(conn, machine_token, runtime_id)
+
+    # A fence the parser accepts reaches the Goal-scoped read, which refuses
+    # this legacy run with not_found; a fence it refuses is 400 invalid_request.
+    for {value, status} <- [
+          {"1", 404},
+          {"+1", 404},
+          {" 1", 400},
+          {"", 400},
+          {"-1", 400},
+          {"1.5", 400},
+          {"9223372036854775807", 404},
+          {"9223372036854775808", 404}
+        ] do
+      query = fence |> Map.put("runtime_epoch", value) |> URI.encode_query()
+
+      bearer(conn, machine_token)
+      |> get("/api/v1/runs/#{run_id}/context?#{query}")
+      |> assert_fence_response(status)
+    end
+
+    # A body fence carries only the JSON number: the decimal text a query fence
+    # accepts is refused here.
+    for {value, status} <- [
+          {1, 404},
+          {"1", 400},
+          {0, 400},
+          {-1, 400},
+          {1.5, 400},
+          {9_223_372_036_854_775_807, 404},
+          {9_223_372_036_854_775_808, 404},
+          {nil, 400}
+        ] do
+      bearer(conn, machine_token)
+      |> put("/api/v1/runs/#{run_id}/session", attach_request(fence, "runtime_epoch", value))
+      |> assert_fence_response(status)
+    end
+
+    for {value, status} <- [{1, 404}, {"1", 400}, {0, 400}, {-1, 400}, {1.5, 400}] do
+      bearer(conn, machine_token)
+      |> put("/api/v1/runs/#{run_id}/session", attach_request(fence, "generation", value))
+      |> assert_fence_response(status)
+    end
+
+    # A query fence accepts exactly the five fence fields, all of them present.
+    for query <- [
+          Map.put(fence, "unknown", "1"),
+          Map.delete(fence, "lease_token"),
+          Map.put(fence, "claim_id", "")
+        ] do
+      assert_error(
+        bearer(conn, machine_token)
+        |> get("/api/v1/runs/#{run_id}/context?#{URI.encode_query(query)}"),
+        400,
+        "invalid_request"
+      )
+    end
+
+    # A query fence carrying `machine_id` fails as a `with`-clause error — an
+    # unhandled 500 in production, where an unknown key answers 400. The branch
+    # is preserved deliberately (plan CW-7 in
+    # docs/plans/2026-11-21-rf-w2-03-controller-plumbing-plan.md); the one-line
+    # fix increment flips this pin to the standard `invalid_request` 400.
+    machine_id_query = fence |> Map.put("machine_id", machine_id) |> URI.encode_query()
+
+    assert_raise WithClauseError, fn ->
+      bearer(conn, machine_token)
+      |> get("/api/v1/runs/#{run_id}/context?#{machine_id_query}")
+    end
+  end
+
+  test "the dispatch epoch accepts the decimal text a query carries", %{conn: conn} do
+    {machine_id, machine_token} = enroll(conn)
+    runtime_id = register(conn, machine_id, machine_token)
+    _task_id = submit_and_assign(conn)
+
+    for {value, status, code} <- [
+          {"1", 200, nil},
+          {"+1", 200, nil},
+          {"0", 400, "invalid_request"},
+          {"-1", 400, "invalid_request"},
+          {"1.5", 400, "invalid_request"},
+          {"9223372036854775808", 409, "ownership_lost"}
+        ] do
+      response =
+        bearer(conn, machine_token)
+        |> get(
+          "/api/v1/runtimes/#{runtime_id}/dispatch?runtime_epoch=#{URI.encode_www_form(value)}"
+        )
+
+      if status == 200 do
+        assert %{"assignments" => _} = json_response(response, 200)
+      else
+        assert_error(response, status, code)
+      end
+    end
+  end
+
   defp enroll(conn, name \\ "builder") do
     key = uuid()
     token = "machine-token-#{uuid()}"
@@ -1272,6 +1376,22 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
 
   defp assert_error(conn, status, code) do
     assert %{"error" => %{"code" => ^code}} = json_response(conn, status)
+  end
+
+  defp assert_fence_response(conn, 404), do: assert_error(conn, 404, "not_found")
+  defp assert_fence_response(conn, 400), do: assert_error(conn, 400, "invalid_request")
+
+  defp attach_request(fence, key, value) do
+    fence
+    |> Map.put(key, value)
+    |> Map.merge(%{
+      "local_handle_id" => uuid(),
+      "harness_kind" => "codex",
+      "harness_version" => "1.0.0",
+      "adapter_version" => "1.0.0",
+      "workspace_fingerprint" => "workspace-1",
+      "workspace" => "primary"
+    })
   end
 
   defp assert_direct_invalid_request(conn) do

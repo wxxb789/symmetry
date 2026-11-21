@@ -35,7 +35,8 @@ import {
   type WorkDetail,
   type WorkTimeline,
 } from "../../services/api";
-import { asRecord, asText, executionStateLabel, hasDecisionPacket, timelineBoundary, timelineItemKey, timestamp, type TimelineItemLike } from "./presentation";
+import { asRecord, asText } from "../../services/served";
+import { executionStateLabel, hasDecisionPacket, timelineBoundary, timelineItemKey, timestamp, type TimelineItemLike } from "./presentation";
 import {
   attemptReceiptView,
   receiptLabel,
