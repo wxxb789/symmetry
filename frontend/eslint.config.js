@@ -23,7 +23,7 @@ import tseslint from "typescript-eslint";
 // enforcement ESLint cannot shrink, while the `--max-warnings` ceiling already
 // fails any new oversized function everywhere.
 export default tseslint.config(
-  { ignores: ["dist/**", "node_modules/**"] },
+  { ignores: ["dist/**", "node_modules/**", "coverage/**"] },
   js.configs.recommended,
   ...tseslint.configs.strictTypeChecked.map((config) => ({
     ...config,
