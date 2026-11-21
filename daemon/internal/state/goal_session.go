@@ -1049,7 +1049,7 @@ func (store *Store) AttachGoalSession(key GoalSessionKey, handle GoalSessionHand
 // durable. It clears any retained native handle so an attached session cannot
 // be re-used after its state becomes uncertain.
 func (store *Store) MarkGoalSessionUncertain(key GoalSessionKey, reason string) (GoalSessionJournal, error) {
-	if !validRequiredString(reason, 4096) {
+	if !validRequiredString(reason, GoalSessionUncertainReasonBytes) {
 		return GoalSessionJournal{}, errors.New("uncertain launch reason is invalid")
 	}
 	return store.mutateGoalSession(key, func(journal *GoalSessionJournal) error {
@@ -1685,7 +1685,7 @@ func validateGoalSessionSchema(journal GoalSessionJournal) error {
 }
 
 func validateGoalSessionStates(journal GoalSessionJournal) error {
-	if !validGoalSessionState(journal.SessionState) || !validGoalSessionLaunchState(journal.LaunchState) || len(journal.NativeSessionID) > 65536 || len(journal.NativeSessionFilename) > 32768 || len(journal.UncertainReason) > 4096 || (journal.ControlSessionID != "" && !validGoalSessionUUID(journal.ControlSessionID)) || (journal.ControlAttachmentReceiptID != "" && !validGoalSessionUUID(journal.ControlAttachmentReceiptID)) {
+	if !validGoalSessionState(journal.SessionState) || !validGoalSessionLaunchState(journal.LaunchState) || len(journal.NativeSessionID) > 65536 || len(journal.NativeSessionFilename) > 32768 || len(journal.UncertainReason) > GoalSessionUncertainReasonBytes || (journal.ControlSessionID != "" && !validGoalSessionUUID(journal.ControlSessionID)) || (journal.ControlAttachmentReceiptID != "" && !validGoalSessionUUID(journal.ControlAttachmentReceiptID)) {
 		return errors.New("goal session journal is invalid")
 	}
 	return nil
