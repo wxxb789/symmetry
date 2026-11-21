@@ -1234,5 +1234,5 @@ instead of appended.
       head, and rf-w3-08 kept them rather than widening its slice; this entry tracks the retained
       surface so a follow-up owner can decide unexport/retire/wire for all three together.
       `Store.EnsureGoalSessionLineageAvailable` (`:592`, `goalSessionLineageKey`) is the same
-      shape; it is additionally tracked for deletion by the rf-w1-06 dead-code entry above, so its
-      signature question resolves with that removal rather than here.
+      shape; the W3-07 follow-up PR #215 removes it (the rf-w1-06 dead-code candidate above), so
+      its signature question resolves with that removal rather than here.

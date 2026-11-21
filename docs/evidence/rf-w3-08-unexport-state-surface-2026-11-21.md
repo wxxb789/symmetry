@@ -473,7 +473,7 @@ here (banner and name-restating docstrings dropped, the `withStore` lifecycle ha
 
 Delivered diff (`0132bd2b` → the single commit `refactor(state): unexport the test-only state
 surface`; its SHA and the gate numbers below are recorded in the PR body):
-`git diff --stat` = 13 files, +1150/−176 — the four state files (renames, plus
+`git diff --stat` = 13 files, +1151/−176 — the four state files (renames, plus
 `goal_session_test.go`'s wire-shape guard), `app.go`/`export_test.go` and the five call-site files,
 `docs/TODO.md`, this record and the plan. Gates (foreground, cwd `daemon/`, 2026-11-22 04:08–04:10
 on the delivered Go tree): `gofmt -l .` empty · `go vet ./...` 0 · `GOOS=linux go vet ./...` 0 ·
