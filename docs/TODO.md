@@ -58,35 +58,52 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 
 - [ ] Revalidate and remove the daemon surfaces that are unreachable from both mains but still
       referenced, so no deletion is possible without retargeting a caller (2026-11-21, same
-      branch and plan). All sit in the same three-target `deadcode -test` intersection:
+      branch and plan). Three distinct groups, only the first of which is dead-code material.
+      **In the three-target `deadcode -test` intersection and referenced:**
       `control.NewOperatorClient` (`client.go:485`) with `SubmitTask`/`GetTask`/
       `CreateTaskCommand`/`operatorRequest`/`operatorRequestWithStatus` and
       `control.WithMaxResponseBytes` (`:99`) — callers `daemon/e2e/core_test.go:696`,
       `e2e/production_linux_containment_witness_test.go:2046`, the control tests, and
       `app/pi_provider_bridge_test.go:409` (the oversized-response case of the live `NewClient`);
-      the legacy task validators (`daemon/internal/control/validation.go:209-629`) — kept live by
-      `daemon/internal/control/client.go:992,:1007,:1022,:1034` and
-      `daemon/internal/control/supervisory_validation_test.go`;
+      the seven legacy task validators in `daemon/internal/control/validation.go`
+      (`:209/:281/:302/:334/:441/:611/:629`) — reached from
+      `daemon/internal/control/client.go:992,:1007,:1022,:1034` (inside the dead operator client),
+      from sibling validators (`validation.go:230,:239,:253,:306`), and from
+      `daemon/internal/control/supervisory_validation_test.go:39,:48,:55,:125,:129,:148,:152`;
       the `protocol.Task`/`TaskWaiting` v1 decoders (65 and 8 references, 37 in
-      `e2e/core_test.go`); `harness.NewClaudeAdapterWithRunner` (`registry.go:245`, three test
-      files) and the shadowed root probe paths `probeCodexExecutableWithRunner` (`:379`) and
-      `probeClaudeExecutable` (`:299`), which are still main-reachable through
-      `NewCodexAdapter`/`NewClaudeAdapter` and belong to the probe/registry dedup instead.
-      Removing any of them needs an owner for `daemon/e2e/**` and the app/control test seams.
+      `e2e/core_test.go`); and `harness.NewClaudeAdapterWithRunner` (`registry.go:245`, three test
+      files). Removing any of them needs an owner for `daemon/e2e/**` and the app/control test
+      seams — the W2-12 follow-up is that owner (program plan §4).
+      **In the same `validation.go:209-629` range but in no target's `deadcode` findings (live
+      code, not candidates):** `validateTerminalPayloads` (`:265`),
+      `validateAcknowledgementResponse` (`:318`, caller `client.go:980`),
+      `validateTaskCommandResource` (`:352`), `sameJSONObject/Value/Number` (`:448/:460/:501`),
+      `validateSnapshotParts` (`:507`), `validateCommands` (`:519`), `isSupervisoryCommand`
+      (`:544`), `ValidateSupervisoryPayload` (`:549`), `validateWork` (`:568`),
+      `validateNullableJSONObject` (`:584`), `validateJSONObject` (`:595`), `isJSONNull` (`:607`)
+      and `isTransitionState` (`:620`).
+      **Not dead-code at all:** the shadowed root probe paths `probeCodexExecutableWithRunner`
+      (`:379`) and `probeClaudeExecutable` (`:299`) are main-reachable through
+      `NewCodexAdapter`/`NewClaudeAdapter` and appear in none of the three baseline `deadcode`
+      reports; they belong to the probe/registry dedup (W3-04), not to a deletion pass.
 
 ## Build-tag parity (arm64 oracle)
 
 - [ ] `GOOS=linux GOARCH=arm64 go vet ./...` cannot pass until
       `daemon/internal/state/linux_clone_journal_test.go` stops calling an amd64-only method
       (found 2026-11-21 while running the re-scoped W1-06 oracle). The test file is
-      `//go:build linux` and calls `reader.verify(...)` (`:1077`), whose only definition is
-      `daemon/internal/state/linux_clone_cleanup_reader_linux_amd64.go:154` under
+      `//go:build linux` and calls `reader.verify(...)` at `:1077` and `:1091`, whose only
+      definition is `daemon/internal/state/linux_clone_cleanup_reader_linux_amd64.go:154` under
       `//go:build linux && amd64`; the arm64 vet therefore reports
       `reader.verify undefined (type *LinuxCloneCleanupReader has no field or method verify, but
       does have method Verify)`. Pre-existing: both files are at the same lines in the baseline
       revision `a3039f0`, and CI's `go vet ./...` runs on the amd64 host, so nothing in the
-      pipeline sees it. Fix by widening the reader's tag or narrowing the test's, not by deleting
-      the assertion. The four packages W1-06 touched vet clean on all three targets.
+      pipeline sees it. Fix by moving `TestLinuxCloneCleanupBeginCompleteRequiresExactReadbacks`
+      (`:723-1151`) into an amd64-tagged test file, keeping both assertions; do not delete them,
+      do not narrow the whole test file's tag (its other 13 tests would leave the arm64 oracle),
+      and do not widen only the reader's tag — the reader's file name pins GOOS/GOARCH, so a tag
+      widening there needs a rename plus an arm64-compilability proof. The four packages W1-06
+      touched vet clean on all three targets.
 
 ## Retro review follow-ups
 

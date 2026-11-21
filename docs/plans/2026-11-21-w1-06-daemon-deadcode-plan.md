@@ -20,9 +20,9 @@ enumeration. A symbol is deletable only when **both** proofs hold:
    Nothing else is deleted; no test is deleted, retargeted or weakened (no test names it).
 2. `docs/TODO.md` → `## Dead-code candidates`: record the re-scoped residual with both proofs and a
    reproduction command, so the successor owners (W3-04 probe/registry dedup, W6-08 goal-envelope
-   family, and whichever later slice owns `daemon/e2e/**`) inherit the evidence instead of
-   re-deriving it. This is the only place the residue has: the program plan and the contract live
-   outside the repository.
+   family, and the W2-12 follow-up, whose owned set adds `daemon/e2e/**` and the control/app/harness
+   test files) inherit the evidence instead of re-deriving it. This is the only place the residue
+   has: the program plan and the contract live outside the repository.
 3. No other file is edited. No `//nolint` (`git grep -n nolint -- daemon` returns nothing at the
    baseline and the diff adds none), no test file, no CI file, no e2e/witness file.
 
@@ -53,15 +53,16 @@ excluded families below). The 4 with **no call site anywhere**:
 | `EnsureGoalSessionLineageAvailable` | `daemon/internal/state/goal_session.go:592` (doc comment `:588`) | no → TODO candidate |
 | `FailUnresolvedProvideInput` | `daemon/internal/state/state.go:4173` (`func` `:4175`) | no → TODO candidate |
 
-Both proofs for the deleted symbol, verbatim:
+Both proofs for the deleted symbol, verbatim (host-native path separators — this Windows host
+prints `\` on all three targets, the GOOS does not change the printed style):
 
 ```
 $ deadcode -test ./cmd/... | grep ValidateRequired
 internal\harness\registry.go:216:27: unreachable func: Registry.ValidateRequired     # windows/amd64
 $ GOOS=linux GOARCH=amd64 deadcode -test ./cmd/... | grep ValidateRequired
-internal/harness/registry.go:216:27: unreachable func: Registry.ValidateRequired     # linux/amd64
+internal\harness\registry.go:216:27: unreachable func: Registry.ValidateRequired     # linux/amd64
 $ GOOS=linux GOARCH=arm64 deadcode -test ./cmd/... | grep ValidateRequired
-internal/harness/registry.go:216:27: unreachable func: Registry.ValidateRequired     # linux/arm64
+internal\harness\registry.go:216:27: unreachable func: Registry.ValidateRequired     # linux/arm64
 $ git grep -nw -- ValidateRequired
 daemon/internal/harness/registry.go:215:// ValidateRequired probes one adapter and checks operation requirements.
 daemon/internal/harness/registry.go:216:func (registry *Registry) ValidateRequired(ctx context.Context, kind Kind, required ...Capability) (Capabilities, error) {
@@ -85,8 +86,8 @@ linux/arm64.
 | `Registry.ValidateRequired` (`harness/registry.go:216`) | yes · yes · yes | definition + doc comment only | **deleted** |
 | `NewOperatorClient` (`daemon/internal/control/client.go:485`) | yes · yes · yes | 16: `e2e/core_test.go:696`, `e2e/production_linux_containment_witness_test.go:2046`, `daemon/internal/control/client.go` ×2, `client_review_test.go` ×6, `client_test.go` ×6 | kept (amendment exclusion; e2e/witness callers) |
 | `OperatorClient.SubmitTask` `:987`, `.GetTask` `:999`, `.CreateTaskCommand` `:1015`, `.operatorRequest` `:1121`, `.operatorRequestWithStatus` `:1125` | yes · yes · yes | call sites inside `daemon/internal/control/client.go:989`, `:1004`, `:1027` and in the e2e files/tests above | kept (same family) |
-| `WithMaxResponseBytes` (`daemon/internal/control/client.go:99`) | yes · yes · yes | 6: `app/pi_provider_bridge_test.go:409` (oversized-response case of the live `NewClient`), `daemon/internal/control/client_test.go:420`, `provider_action_client_test.go:425` | kept (live test seam) |
-| `validateTaskResponse` `:209`, `validateTaskCommandRequest` `:281`, `validateTaskCommandResponse` `:302`, `validateTaskWaiting` `:334`, `sameCommandPayload` `:441`, `isTaskState` `:611`, `requiresTaskRun` `:629` (`daemon/internal/control/validation.go`) | yes · yes · yes | call sites `daemon/internal/control/client.go:992`, `:1007`, `:1022`, `:1034` (inside the dead operator client) and `daemon/internal/control/supervisory_validation_test.go:39,43,48,55,107,125,129,148,152` | kept (amendment exclusion; a live sibling shares the file) |
+| `WithMaxResponseBytes` (`daemon/internal/control/client.go:99`) | yes · yes · yes | 6 = doc `client.go:98` + definition `:99` + 4 call sites: `app/pi_provider_bridge_test.go:409` (oversized-response case of the live `NewClient`), `daemon/internal/control/client_review_test.go:439`, `daemon/internal/control/client_test.go:420`, `provider_action_client_test.go:425` | kept (live test seam) |
+| `validateTaskResponse` `:209`, `validateTaskCommandRequest` `:281`, `validateTaskCommandResponse` `:302`, `validateTaskWaiting` `:334`, `sameCommandPayload` `:441`, `isTaskState` `:611`, `requiresTaskRun` `:629` (`daemon/internal/control/validation.go`) | yes · yes · yes | call sites `daemon/internal/control/client.go:992`, `:1007`, `:1022`, `:1034` (inside the dead operator client) and `daemon/internal/control/supervisory_validation_test.go:39,:48,:55,:125,:129,:148,:152` (the other four of the seven are reached only from sibling validators, `validation.go:230,:239,:253,:306`) | kept (amendment exclusion; a live sibling shares the file) |
 | `Task.UnmarshalJSON/HasField`, `TaskWaiting.UnmarshalJSON/HasField` (`protocol/protocol.go`) | yes · yes · yes | `protocol.Task` 65 references over 8 files (`e2e/core_test.go` 37, `daemon/internal/control/client.go` 9, `e2e/production_linux_containment_witness_test.go` 9, `e2e/production_linux_containment_replay_witness_test.go` 4, `e2e/production_daemon_crash_witness_test.go` 2, `daemon/internal/control/validation.go` 2, two control tests 1 each); `TaskWaiting` 8 (7 in `protocol/protocol.go`, 1 in `validation.go`) | kept (amendment exclusion; e2e/witness decoders) |
 | `NewClaudeAdapterWithRunner` (`harness/registry.go:254`) | yes · yes · yes | 5: `app/harness_test.go:306`, `harness/harness_test.go:61`, `harness/claude_probe_test.go:96` (+2 in `registry.go`) | kept (test-referenced seam; W3-04 owns the probe/registry dedup) |
 | `launchLinuxV2Process` (`execution/linux_owner_v2_unsupported.go:12`) | **yes** (windows only) · no · no | 4: real `linux && amd64` definition `linux_owner_v2_linux.go`, caller `process_launcher_linux.go:33`, test | kept (linux/arm64 builds against the stub; not an intersection member) |
@@ -94,11 +95,13 @@ linux/arm64.
 | root probe paths `probeCodexExecutableWithRunner` (`harness/registry.go:388`), `probeClaudeExecutable` (`:308`) | **no · no · no** | main-reachable through the default adapters (`NewCodexAdapter` `:374` → `NewCodexAdapterWithRunner` `:380` → `probeCodexExecutableWithRunner`; `NewClaudeAdapterWithExecutable` `:248` → `newClaudeAdapterWithRunner` → `probeClaudeExecutable`); plus `harness/codex_probe_test.go` ×5, `harness/claude_probe_test.go` ×12, and two docs citations | kept (neither proof holds; W3-04 owns delegation) |
 
 The remaining functions in the cited `validation.go:209-629` range
-(`validateTerminalPayloads` `:265`, `validateTaskCommandResource` `:352`,
-`sameJSONObject/Value/Number` `:448/:460/:501`, `validateSnapshotParts` `:507`, `validateCommands`
-`:519`, `isSupervisoryCommand` `:544`, `ValidateSupervisoryPayload` `:549`, `isTransitionState`
-`:620`) appear in **no** target's findings: they are reached from the live `Client` and supervisory
-paths (`internal/app/supervisory.go:29` uses `ValidateSupervisoryPayload`). Untouched.
+(`validateTerminalPayloads` `:265`, `validateAcknowledgementResponse` `:318`,
+`validateTaskCommandResource` `:352`, `sameJSONObject/Value/Number` `:448/:460/:501`,
+`validateSnapshotParts` `:507`, `validateCommands` `:519`, `isSupervisoryCommand` `:544`,
+`ValidateSupervisoryPayload` `:549`, `validateWork` `:568`, `validateNullableJSONObject` `:584`,
+`validateJSONObject` `:595`, `isJSONNull` `:607`, `isTransitionState` `:620`) appear in **no**
+target's findings: they are reached from the live `Client` and supervisory paths
+(`internal/app/supervisory.go:29` uses `ValidateSupervisoryPayload`). Untouched.
 
 ## Acceptance-target conflict, stated rather than hidden
 
@@ -122,6 +125,12 @@ Options, as required by the dispatch rule:
 
 Recommendation: A. The measured numbers, not the inherited estimate, are the honest evidence for
 this slice; the successors' own estimates stand on their own file sets.
+
+Conductor decision (2026-11-21, recorded in the contract): clause 1's numeric target is replaced by
+the result the amended criterion measures — exactly the set satisfying both proofs (measured:
+`Registry.ValidateRequired`, 1 finding per target) — and the remaining candidates move to W2-12,
+whose owned set adds `daemon/e2e/**` and the control/app/harness test files. Option A stands as
+implemented.
 
 ## Evidence plan (all foreground, in this order, one heavy job at a time)
 
@@ -158,10 +167,11 @@ and the defect is recorded in `docs/TODO.md` → `## Build-tag parity (arm64 ora
 
 - The excluded families of the binding amendment (operator client + methods, `WithMaxResponseBytes`,
   the legacy task validators, the v1 decoders, the stub) — they have live references; their removal
-  needs an owner for `daemon/e2e/**` and the app/control test seams.
+  belongs to the W2-12 follow-up, which owns `daemon/e2e/**` and the app/control/harness test seams
+  (program plan §4).
 - Probe/registry dedup and the root probe delegation — W3-04's file set and design
   (`RunBoundedProbe[T]`), deliberately not half-done here.
-- The goal-envelope family — W6-08 (decision D5); opencode — W6-03 (D1); ack stages — W3.
+- The goal-envelope family — W6-08 (decision D5); opencode — W6-04 (D1, parked); ack stages — W3.
 - `internal/state` (`AttachGoalSession`, `EnsureGoalSessionLineageAvailable`,
   `FailUnresolvedProvideInput`) — outside the owned file set; recorded in `docs/TODO.md`.
 - Any test-file deletion or retargeting: no test file exclusively covers a deleted symbol, so there
@@ -187,9 +197,15 @@ and the defect is recorded in `docs/TODO.md` → `## Build-tag parity (arm64 ora
 
 ## Residual risks and limits
 
-- `deadcode` reachability is RTA from `./cmd/...`; a caller reachable only through reflection or an
-  interface value would be invisible to it. Covered by the second strategy: the whole-repo
-  `git grep -nw` finds no other spelling, and Go has no dynamic dispatch by name.
+- `deadcode` reachability is RTA from `./cmd/...`; the tool's own documented caveats bound it
+  (x/tools v0.53.0 `cmd/deadcode/doc.go`): it "can soundly analyze dynamic calls though func
+  values, interface methods, and reflection", but it "does not currently understand the aliasing
+  created by //go:linkname directives" (spurious dead reports), it does not report generated
+  files or marker interface methods by default, and "the analysis is valid only for a single
+  GOOS/GOARCH/-tags configuration". The configuration limit is answered by running all three
+  targets; the rest by the second strategy, whose real role is the references RTA cannot see from
+  `./cmd/...` alone: `*_test.go`, `daemon/e2e/**`, witness tests, scripts and docs that the
+  whole-repo `git grep -nw` does find.
 - Windows host: no local `-race` (no cgo) and no Linux-only suite execution; the linux/arm64 and
   linux/amd64 evidence here is compile/analysis-level.
 - The amended slice's drop is 1 finding per target. Anything larger requires the successor slices,
