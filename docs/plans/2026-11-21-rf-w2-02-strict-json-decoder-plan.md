@@ -89,7 +89,8 @@ outside the owned set goes stale. `docs/TODO.md` holds no `W2-02` entry, so no T
 ## Evidence plan (all gates foreground; never a measurement beside the suite)
 
 1. Characterization tests first, on base bytes: `sh <gate-runner> test test/.../strict_evidence_json_test.exs`
-   — the eight C3/C4 additions green, the wiring pin red (red-on-base is the pin's purpose).
+   — the ten C3/C4 additions green, the wiring pin red (red-on-base is the pin's purpose;
+   recorded as 23/24 with the sole red at the pin).
 2. Implementation; then the same file green with the pin.
 3. Contract gates, final bytes, serially:
    - `mix format --check-formatted` → empty, exit 0
@@ -103,7 +104,7 @@ outside the owned set goes stale. `docs/TODO.md` holds no `W2-02` entry, so no T
    - the mix gate runner defaults `MIX_TEST_PARTITION=rf-w2-02` and unsets
      `PHX_SERVER`/`POSTGRES_PORT`/`SYMMETRY_CONTRACTS_DIR`; full `mix test` and the CI `control`
      job stay the conductor's gate-runner steps (never two full suites on this host).
-4. Single-pass accounting (C6), two independent witnesses:
+4. Single-pass accounting (C6) — two witnesses, no test guard:
    - structural: the wiring pin above, one `Jason.decode` call site in the delivered decoder
      path (`grep -c 'Jason.decode'` = 1 in the plug file, against 2 base call sites plus the
      library's plain decode), and the deleted body-reader wrapper;
@@ -114,17 +115,32 @@ outside the owned set goes stale. `docs/TODO.md` holds no `W2-02` entry, so no T
      `StrictJSONDecoder.decode!/1`; medians over repeated runs. This host's timer is noisy
      (W1-09 shipped a fairness check for exactly that), so the report carries the medians and
      the counters, not a per-run speed claim.
+   - no test guard: nothing in the suite fails if a second `Jason.decode!(body)` is
+     re-introduced after the walk — the full plug suite stays green at 24 passed under that
+     mutant. Single-pass therefore rests on the structural one-call-site check and the timing
+     witness, not on CI; an edit that adds a parse back will not be caught by the tests.
 5. Mutation checks (red shown, then restored by re-applying the final file bytes and
-   re-verifying their hash):
+   re-verifying their hash; counts as recorded in the stage logs — M1–M4 at the 22-test byte,
+   the R1 flip at the 24-test byte):
    - M1: `parse_strict_json_mutation/2` re-raises the wrapped `ParseError` instead of mapping
-     it → the duplicate-envelope byte pin goes red (the response becomes the ErrorJSON
-     rendering "request is invalid"), the malformed pin stays green;
-   - M2: the strict options keep the plain decoder (decoder swap deleted) → the wiring pin
-     goes red, and the duplicate tests on the strict path go red because the base body-reader
-     wrapper is gone too (the duplicate is then accepted first-wins by the modular evidence
-     path test but rejected by… measured, then restored);
-   - M3: the non-strict branch also gets the strict options → the `/portal/login` first-wins
-     test goes red (a 400 replaces the redirect).
+     it → 5 red, exactly the duplicate-rejection tests (17/22); the endpoint byte pin fails by
+     raising `Plug.Parsers.ParseError` out of `Endpoint.call/2` — no response is rendered
+     there, so it is not the ErrorJSON rendering — while the malformed pin stays green;
+   - M2: the strict options keep the plain decoder (decoder swap deleted) → 6 red (16/22): the
+     wiring pin (the options show `{Jason, :decode!, []}`) plus the 5 duplicate-rejection
+     tests, because the deleted base body-reader wrapper no longer rejects them, so the
+     duplicate bytes are accepted first-wins and reach the route (the envelope pin sees 401
+     instead of 400);
+   - M3: the non-strict branch also gets the strict options → 2 red (20/22), exactly the two
+     non-strict layering pins: the `/portal/login` pin asserts 401 and now reads 400, and the
+     plug-level first-wins pin sees the duplicate rejected instead of
+     `body_params == %{"operator_token" => "wrong"}`;
+   - M4: the rescue is broadened to map every `ParseError` to the envelope → 1 red (21/22),
+     exactly the malformed-precedence pin, which expects the raised `Plug.Parsers.ParseError`
+     and gets no exception instead;
+   - R1 pin flip: reverting `decode_object/1` to run the duplicate walk before the root-shape
+     check → 1 red (23/24), exactly the new evidence root-shape pin: a `[{"a":1,"a":2}]`-shaped
+     body answers `:duplicate_json_key` where the pin asserts `:expected_json_object`.
 6. `mix credo` on the changed file: same (or lower) issue count as base — the contract forbids
    new `credo:disable` suppressions; recorded as supporting evidence, not a contract gate
    (the CI `control` job does not run credo).
@@ -161,10 +177,13 @@ outside the owned set goes stale. `docs/TODO.md` holds no `W2-02` entry, so no T
    conductor ruled strict scope stays the strict route set (C1), so non-strict routes keep the
    plain decoder. Cheaper and narrower than the finding.
 6. **The ordered decode is the floor.** The measured target is one ordered parse plus one
-   materialize walk (≈1.3× plain decode), not "1×"; the second parse and the discarded walk
-   are what disappear. No hand-rolled single-pass Jason replacement is attempted —
-   `:ordered_objects` is the only duplicate-capable decode the dependency offers, and a
-   hand-rolled parser would trade a library call for owned tokenizer code.
+   materialize walk; the recorded medians give head/plain 1.41–1.60× and head/base 0.55–0.58×
+   (CW-1 reference: ≈1.3× plain, ≈0.57× base), not "1×"; the second parse and the discarded
+   walk are what disappear. This host's clock is quantized at 102.4 µs (every recorded median
+   is an integer multiple of that quantum), so ratios, not absolute times, are the reportable
+   values. No hand-rolled single-pass Jason replacement is attempted — `:ordered_objects` is
+   the only duplicate-capable decode the dependency offers, and a hand-rolled parser would
+   trade a library call for owned tokenizer code.
 
 ## Out of scope (contract clause 4, with reasons)
 
