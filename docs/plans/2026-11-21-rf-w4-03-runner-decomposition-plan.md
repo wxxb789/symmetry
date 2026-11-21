@@ -38,7 +38,7 @@ surface:
 | `startPipes` + `createStartPipes` + `Close` + `closeChildEnds` | type + 3 funcs | new sibling `runner_pipes.go` (the contract's single allowed new file) |
 | `startRun` + `launchStarted`/`persist`/`commitHandoff`/`persistAtomicAuthority`/`persistLegacyIdentity`/`bindStopReceiptPersistence`/`armInitialLease`/`resumeTarget`/`deliverInitialInput`/`fail` | unexported struct + phase methods | `runner.go`, immediately after `Start` |
 | `errContainmentAuthorityUncertain` | package var (one construction replaces three) | `runner.go`, immediately above its users |
-| `failContainment`, `failContainmentWith`, `persistReceiptOrAbort`, `persistUncertainAuthority`, `closeOwnerOnce` | unexported `*Process` helpers | `runner.go`, next to `closeContainmentAttempt` |
+| `failContainment`, `failContainmentWith`, `finalizeContainment`, `persistReceiptOrAbort`, `persistUncertainAuthority`, `closeOwnerOnce` | unexported `*Process` helpers | `runner.go`, next to `closeContainmentAttempt` |
 | `closeContainmentAttempt` (body), `closeContainmentOwnerLocked` (body) | rewritten in terms of the helpers | `runner.go` |
 
 Frozen byte-identical (contract D1): the ack-stage constant table `:216-225`, the callback struct
