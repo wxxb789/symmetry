@@ -59,7 +59,8 @@ def require(condition: bool, message: str) -> None:
 def main() -> int:
     if len(sys.argv) not in (8, 9):
         print(
-            "usage: write-linux-v2-owner-request.py CASE RUN.json CONFIG.json BARRIER_DIR CONTROL_URL MACHINE_TOKEN_FILE OUTPUT.json [STAGE_HOLD_AFTER]",
+            "usage: write-linux-v2-owner-request.py CASE RUN.json CONFIG.json BARRIER_DIR CONTROL_URL "
+            "MACHINE_TOKEN_FILE OUTPUT.json [STAGE_HOLD_AFTER]",
             file=sys.stderr,
         )
         return 2
@@ -76,7 +77,7 @@ def main() -> int:
         ack_loss_stage = hold_after.removeprefix("drop_ack_after=")
         require(
             hold_after in STAGE_REPLAY_HOLDS
-            or hold_after.startswith("drop_ack_after=") and ack_loss_stage in ACK_LOSS_STAGES,
+            or (hold_after.startswith("drop_ack_after=") and ack_loss_stage in ACK_LOSS_STAGES),
             "stage replay hold is unsupported",
         )
     else:
@@ -91,10 +92,21 @@ def main() -> int:
     require(runtime.get("harness_kind") == harness, "request harness differs from daemon config")
     require(runtime.get("agent_profile") == profile_name, "request profile differs from daemon config")
     require(runtime.get("workspace") == "native", "request workspace differs from the A/B clone fixture")
-    require(runtime.get("repository_resource_id") == run.get("repository_resource_id"), "request Subject ResourceID differs from config")
-    require(run.get("agent_profile") == profile_name and run.get("workspace") == "native", "Control Run profile/workspace differs from config")
-    require(run.get("case") == case and run.get("harness") == harness, "Control Run fixture does not match the witness case")
-    require("SYMMETRY_LINUX_V2_NATIVE_HOOK_MARKER_ROOT" in profile.get("env_allowlist", []), "native profile omits the non-secret hook marker path")
+    require(
+        runtime.get("repository_resource_id") == run.get("repository_resource_id"),
+        "request Subject ResourceID differs from config",
+    )
+    require(
+        run.get("agent_profile") == profile_name and run.get("workspace") == "native",
+        "Control Run profile/workspace differs from config",
+    )
+    require(
+        run.get("case") == case and run.get("harness") == harness, "Control Run fixture does not match the witness case"
+    )
+    require(
+        "SYMMETRY_LINUX_V2_NATIVE_HOOK_MARKER_ROOT" in profile.get("env_allowlist", []),
+        "native profile omits the non-secret hook marker path",
+    )
     require(isinstance(run.get("run_id"), str) and run["run_id"], "Control Run ID is missing")
     require(isinstance(run.get("generation"), int) and run["generation"] > 0, "Control Run generation is invalid")
     require(isinstance(run.get("runtime_id"), str) and run["runtime_id"], "Control Runtime ID is missing")
@@ -104,21 +116,17 @@ def main() -> int:
     try:
         machine_token = pathlib.Path(machine_token_path).read_text(encoding="ascii").strip()
     except OSError:
-        raise SystemExit("test machine Claim credential is unavailable")
+        raise SystemExit("test machine Claim credential is unavailable") from None
     require(bool(machine_token), "test machine Claim credential is empty")
 
-    claim_url = (
-        control_url.rstrip("/")
-        + "/api/v1/runs/"
-        + run["run_id"]
-        + "/claims/"
-        + run["claim_id"]
-    )
-    body = json.dumps({
-        "runtime_id": run["runtime_id"],
-        "runtime_epoch": run["runtime_epoch"],
-        "generation": run["generation"],
-    }).encode("utf-8")
+    claim_url = control_url.rstrip("/") + "/api/v1/runs/" + run["run_id"] + "/claims/" + run["claim_id"]
+    body = json.dumps(
+        {
+            "runtime_id": run["runtime_id"],
+            "runtime_epoch": run["runtime_epoch"],
+            "generation": run["generation"],
+        }
+    ).encode("utf-8")
     claim_request = Request(
         claim_url,
         data=body,
@@ -134,20 +142,26 @@ def main() -> int:
                 raise SystemExit("Control Claim endpoint returned a non-success status")
             claim = json.loads(response.read().decode("utf-8", errors="strict"))
     except HTTPError as error:
-        raise SystemExit(f"Control Claim endpoint refused the exact fixture (HTTP {error.code})")
+        raise SystemExit(f"Control Claim endpoint refused the exact fixture (HTTP {error.code})") from error
     except URLError:
-        raise SystemExit("Control Claim endpoint was unavailable for the exact fixture")
+        raise SystemExit("Control Claim endpoint was unavailable for the exact fixture") from None
     except (json.JSONDecodeError, UnicodeError):
-        raise SystemExit("Control Claim endpoint returned an invalid ClaimResponse")
+        raise SystemExit("Control Claim endpoint returned an invalid ClaimResponse") from None
 
     require(isinstance(claim, dict), "Control ClaimResponse is not a JSON object")
     require(claim.get("run_id") == run["run_id"], "ClaimResponse RunKey does not match the fixture RunKey")
     require(claim.get("generation") == run["generation"], "ClaimResponse generation does not match the fixture RunKey")
     require(claim.get("claim_id") == run["claim_id"], "ClaimResponse ClaimID does not match the fixture fence")
-    require(isinstance(claim.get("lease_token"), str) and claim["lease_token"], "Control ClaimResponse omitted its lease token")
+    require(
+        isinstance(claim.get("lease_token"), str) and claim["lease_token"],
+        "Control ClaimResponse omitted its lease token",
+    )
     work = claim.get("work")
     require(isinstance(work, dict), "Control ClaimResponse omitted Work")
-    require(work.get("agent_profile") == profile_name and work.get("workspace") == "native", "ClaimResponse Work binding differs from the daemon config")
+    require(
+        work.get("agent_profile") == profile_name and work.get("workspace") == "native",
+        "ClaimResponse Work binding differs from the daemon config",
+    )
     expected_capabilities = {"provider_access": True} if harness == "pi" else {}
     require(
         work.get("required_capabilities", {}) == expected_capabilities,
@@ -155,7 +169,10 @@ def main() -> int:
     )
     work_input = work.get("input")
     require(isinstance(work_input, dict), "Control ClaimResponse Work input is invalid")
-    require(work_input.get("repository_resource_id") == run["repository_resource_id"], "ClaimResponse Work repository differs from the requested Subject")
+    require(
+        work_input.get("repository_resource_id") == run["repository_resource_id"],
+        "ClaimResponse Work repository differs from the requested Subject",
+    )
 
     if harness == "pi":
         access = claim.get("provider_access")
@@ -177,7 +194,10 @@ def main() -> int:
         require("provider_access" not in claim, "OpenCode ClaimResponse must omit provider_access")
 
     directory = pathlib.Path(barrier_dir)
-    require(directory.is_absolute() and str(directory) == os.path.normpath(str(directory)), "barrier directory must be canonical")
+    require(
+        directory.is_absolute() and str(directory) == os.path.normpath(str(directory)),
+        "barrier directory must be canonical",
+    )
     barrier = {"directory": str(directory), "timeout_seconds": 30, "hold_after": hold_after}
     if hold_after != "none":
         barrier["release_file"] = str(directory / "release")
@@ -203,7 +223,10 @@ def main() -> int:
         },
         "barrier": barrier,
     }
-    require(request["subject"]["resource_id"] == runtime.get("repository_resource_id"), "request Subject does not bind to the exact daemon repository resource")
+    require(
+        request["subject"]["resource_id"] == runtime.get("repository_resource_id"),
+        "request Subject does not bind to the exact daemon repository resource",
+    )
 
     output = pathlib.Path(output_path)
     output.write_text(json.dumps(request, separators=(",", ":")), encoding="utf-8")

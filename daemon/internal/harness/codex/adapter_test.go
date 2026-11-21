@@ -1391,7 +1391,7 @@ func TestCloneTaskResultPreservesSchemaValidEmptyArrays(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cloned := cloneTaskResult(harness.TaskResult{Kind: harness.ResultSucceeded, Semantic: &semantic})
+	cloned := harness.CloneTaskResult(harness.TaskResult{Kind: harness.ResultSucceeded, Semantic: &semantic})
 	encoded, err := json.Marshal(cloned.Semantic)
 	if err != nil {
 		t.Fatal(err)

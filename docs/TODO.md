@@ -598,6 +598,52 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       the bundle-derived pair too) and have both gate files import them. Found by the adversarial
       review of PR #145 (P3-2).
 
+## Deferred review findings (rf-w2-16 clone-aliasing gate)
+
+- [ ] Deep-copy the nested helper exits that the platform stop-evidence clones still share or
+      truncate, then remove the matching per-case skip paths from the aliasing harness.
+      `cloneLinuxCgroupStopReceipt`
+      (`daemon/internal/platform/linux_cgroup_v2_linux.go:1443-1457`) copies `LinuxProof` by
+      value (`:1449`) and deep-copies only the stored `LinuxProof.HelperExit` (`:1451-1452`), so
+      `LinuxProof.GateExit.HelperExit` and `LinuxProof.LauncherExit.HelperExit` stay shared with
+      the caller's receipt; that stored `HelperExit` copy shares its own nested exit in turn.
+      The `GateExit`/`LauncherExit` alias is live on a valid shape: a mirror stop proof demands
+      `proof.HelperExit != nil` and a `GateExit` anchored on that same exit
+      (`daemon/internal/authority/authority.go:1470-1474` via `ValidForOwnedDescendant`,
+      `:1174-1184`), every v2 removal receipt must carry such a proof
+      (`StopReceipt.ValidForHandoff`, `authority.go:1822-1833`), and the platform constructs it
+      (`daemon/internal/platform/anchor_run.go:1531`; validated at
+      `daemon/internal/execution/linux_owner_v2_linux.go:1338` and sealed into the mirror proof
+      at `:1360`); `authority.go:2027` also accepts a non-nil `LauncherExit.HelperExit`.
+      `cloneLinuxOwnerHelperV2StopEvidence` (`helper_v2_stop.go:1540-1573`) instead drops every
+      nested exit it copies through `cloneLinuxOwnerAnchorExitProof`
+      (`anchor_server.go:44-49` nils `HelperExit`): `Proof.LauncherExit.HelperExit`,
+      `Proof.GateExit.HelperExit`, `Proof.HelperExit.HelperExit`,
+      `PreGate.LauncherExit.HelperExit`, `PreGate.Proof.HelperExit.HelperExit` and the
+      `AnchorStop` helper exits are nil in the clone, and
+      `PreGate.Proof.LauncherExit.HelperExit` stays shared through the `PreGate.Proof` struct
+      copy (`:1563-1567`). The drop is latent for today's producers because both evidence
+      producers build helper-kind proofs whose exits are witnessed by the helper, so the
+      nested `HelperExit` is nil: the pre-gate proof at `:861-869` and the full stop proof at
+      `:983-990`. The receipt-ack copies at `:1173-1179` and `:1282-1288` are a separate path
+      that truncates a possibly mirror-kind `StopReceipt` the same way. The clone would
+      silently lose data if a producer ever starts carrying the single-level nested exit that
+      the receipt shape allows. The review of branch `refactor/rf-w2-16-clone-aliasing-test`
+      (2026-11-21) confirmed the `GateExit`/`LauncherExit` alias with a probe against the
+      shipped clone - mutating the original's `LinuxProof.GateExit.HelperExit` changed the
+      clone while the stored `HelperExit` copy stayed independent - and that goal's contract
+      forbids production changes. The gate files
+      `daemon/internal/platform/clone_aliasing_linux_test.go` and
+      `clone_aliasing_linux_amd64_test.go` list every path above as an explicit
+      `skipExitProofs` entry next to its reason; the driver fails a case whose listed path
+      population never reaches, and it re-runs each case with every skip removed, failing any
+      skip that no longer changes the outcome. Removing one of those entries before the
+      matching production fix turns the covering subtest red:
+      `TestCloneAliasingLinuxAMD64Evidence` for the helper-v2 and anchor paths,
+      `TestCloneAliasingLinuxCgroupEvidence` for the StopReceipt paths.
+      `TestCloneAliasingWindowsContainmentSessionID` does not share the Linux harness and is
+      unaffected.
+
 ## Production Linux containment witness: stop-receipt barrier stall awaiting a diagnosable occurrence
 
 - [ ] Diagnose the next occurrence of the `daemon_sigkill_after_lease_arm_before_resume` barrier
@@ -671,6 +717,110 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       per-test (`verifyNoLeakedGoroutines` in `daemon/internal/app/leak_check_test.go`) instead of a
       package-wide `goleak.TestMain`, because this path would force wildcard ignore lists that would
       hide real leaks.
+
+## scripts/ci ruff baseline: drop the #137 exclude and keep the gate's ruff version pinned
+
+- [ ] Delete the `extend-exclude` block in `pyproject.toml` once open PR #137
+      (`fix/sanitizer-json-escape`, still open on 2026-11-21) is merged or abandoned. The excluded
+      paths (`scripts/ci/model-routing-record-sanitize.py`,
+      `scripts/ci/test-model-routing-record-sanitize.py`, and the sibling
+      `scripts/ci/test-model-routing-record-sanitize-json.py` that #137 adds, named in the config
+      ahead of its arrival) are the files #137 rewrites or adds, and the 2026-11-21 ruff baseline
+      (`rf-w1-11`) excluded them so the reformat could not conflict with that branch. Measured
+      pre-state (2026-11-21, ruff 0.17.5, `a3039f0` plus the committed config; ruff run on the
+      explicit paths so the exclude cannot hide them): the two shipped files carry **5 findings**
+      under the committed config (`E731` ×2, `E501`, `UP012`, `I001` — all in
+      `scripts/ci/test-model-routing-record-sanitize.py`; `model-routing-record-sanitize.py`
+      itself is clean) and `ruff format --check` reports `2 files would be reformatted`. The
+      block may therefore only be deleted once #137 (or the follow-up that lands its content) has
+      brought every then-present file in the excluded set to this baseline. After deleting the
+      block, run `python3 -m ruff format scripts/ci` and `python3 -m ruff check scripts/ci` and
+      expect both clean over all Python files under `scripts/ci` (52 once #137 lands, 51 today);
+      until then `scripts/ci` is lint-clean over 49 of its 51 Python files. The exclude applies
+      only to ruff's own file discovery: `ruff check scripts/ci` skips the excluded files, while
+      `ruff check scripts/ci/model-routing-record-sanitize.py` (an explicitly named path) checks
+      them anyway unless `--force-exclude` is passed.
+- [ ] The `ci.yml` ruff step (W1-01) must install ruff 0.17.5 exactly. `pyproject.toml` carries
+      `required-version = "==0.17.5"`, so any other ruff refuses to load the configuration
+      (exit 2, `Required version … does not match the running version …`) instead of reporting a
+      different finding set than the one the 2026-11-21 baseline fixed (373 findings at
+      `a3039f0`, of which 220 E501 at `line-length = 120`).
+
+## Deferred review findings (PR #154)
+
+- [ ] Revalidate and remove nine test-only provider entry points (2026-11-21, branch
+      `refactor/rf-w2-06-provider-support`; plan
+      `docs/plans/2026-11-21-rf-w2-06-provider-support-plan.md`; found by the Opus review of
+      PR #154 (P3-2)). `GitHub.check/1`, `GitHub.sync_resource/2`, `GitHub.sync_delivery/3`
+      (`control/lib/symmetry_control/integrations/providers/github.ex:41,58,453`), the
+      `AzureDevOps` twins (`azure_devops.ex:63,78,204`) and their new homes `Support.check/2`,
+      `Support.sync_resource/3`, `Support.sync_delivery/4` (`support.ex:12,18,27`) have no
+      production caller in `control/lib`: only the two provider suites call them. Evidence, run at
+      `e4cac8d5`:
+      `rg -n "provider\.(check|sync_resource|sync_delivery)\(" control/lib/symmetry_control/integrations.ex`
+      matches only the auth-bearing callbacks — `:224` `provider.check(connection, auth)`,
+      `:480`/`:619` `provider.sync_resource(connection, resource, auth)`, `:700`
+      `provider.sync_delivery(connection, resource, item, auth)`;
+      `rg -n "\b(GitHub|AzureDevOps)\.(check|sync_resource|sync_delivery)\(" control/lib` has no
+      matches (exit 1); `rg -n "\bSupport\.(check|sync_resource|sync_delivery)\(" control/lib`
+      matches only the six provider wrapper bodies themselves; and
+      `rg -n "\b(GitHub|AzureDevOps|Support)\.(check|sync_resource|sync_delivery)\(" control/test`
+      yields 17 call sites, 9 in `github_test.exs` and 8 in `azure_devops_test.exs`. Dynamic
+      `apply/3` dispatch is not exhaustively ruled out, but every production dispatch goes through
+      the `provider_call` closures above [inference]. Cleanup direction: migrate the tests to
+      `authenticate/1` plus the auth-bearing callback arity, then delete the six provider wrappers
+      and the three `Support` delegators, as a separately authorized change; `integrations.ex:690`
+      already short-circuits a nil `pull_request_url`.
+
+## Harness shared-scaffolding deferrals (rf-w2-13, PR #155)
+
+- [ ] Delegate the two provider-action UUID validator copies the W2-12a unification left outside
+      its owned set, behind the message-policy primitive that review P1-1 requires (2026-11-21,
+      branch `refactor/rf-w2-13-harness-scaffolding-5a`; plan
+      `docs/plans/2026-11-21-rf-w2-13-harness-scaffolding-5a-plan.md` §8). The copies are
+      `validateProviderBridgeUUID` (`daemon/internal/harness/pi/provider_bridge.go:976`), whose
+      follow-up owner is W2-13, and `validGoalSessionUUID`
+      (`daemon/internal/state/goal_session.go:1988`), whose owner is W2-09. They differ in message
+      text and strength from each other and from the canonical validators: the `pi` copy returns
+      "UUID is invalid" / "UUID must use lowercase hexadecimal digits" (no version/variant check),
+      the `state` copy returns a bool and accepts only versions 1–5 and RFC 4122 variants
+      (`8`/`9`/`a`/`b`), while
+      `control.validateProviderActionUUID` and `protocol.validateUUID` use other strings. Pin
+      every current rejection string per call site before delegating, so the unification changes
+      no message; `pi/provider_bridge.go:1102-1120` stamps v5 UUIDs, so the stricter check is
+      safe for journaled action IDs.
+
+- [ ] Consolidate the frozen `opencode` duplicates onto the shared harness helpers when the D1
+      freeze lifts with opencode capability work (W6-04) (2026-11-21, same branch and plan, §8).
+      `opencode/**` stayed read-only (P2-3/D1: its six CI assertions and the release-acceptance
+      case stay green), so every surface this slice consolidated elsewhere still has an
+      `opencode` copy: process forwarding with its own guards
+      (`daemon/internal/harness/opencode/adapter.go:543` ProcessDetails, `:559`
+      LinuxV2LiveOwnerStatus, `:578` LeaseRenewalAvailable, `:589` RenewLease),
+      `isNilNativeProcess` (`:421`, `reflect.Pointer`-only), the Close/join state machine
+      (`:1063`), `emit` (`:1344`, stamps `At` and calls `sink.Handle` directly instead of
+      `harness.DeliverEvent`) and `Wait` (`:975`). Consolidating them is part of opencode
+      capability work, not this increment, and must keep those CI oracles green.
+
+## pi provider-bridge close-retry timing flake under host load (PR #155 review)
+
+- [ ] Revalidate the pre-existing host-load flake in
+      `TestProviderBridgeCloseRetryClearsUnprovenAfterExecutorExits`
+      (`daemon/internal/harness/pi/provider_bridge_test.go:941`): it failed once in 26
+      executions during the PR #155 round-2 review — 1 of 3 full parallel
+      `./internal/harness/...` runs, 0 of 20 isolated `-count=20 -run` runs and 0 of 3
+      package-only `./internal/harness/pi/` runs, so reproduction needs full-suite load
+      (2026-11-21, branch `refactor/rf-w2-13-harness-scaffolding-5a`; plan
+      `docs/plans/2026-11-21-rf-w2-13-harness-scaffolding-5a-plan.md`). The test's first `Close`
+      runs under a 25 ms `context.WithTimeout` (`:968-969`) and must return
+      `errProviderBridgeExecutionUnproven` (`:971`); the failure is consistent with the deadline
+      winning under load before that verdict is stored, but the cause is inferred, not proven,
+      because the failure message was not captured. The flake is pre-existing: the test and
+      `pi/provider_bridge.go` are outside this PR's diff (the test file was last changed in
+      `8082317b`, #44), and the sibling
+      `TestProviderBridgeCloseReportsIgnoringExecutorAsUnproven` (`:904`) uses the same 25 ms
+      first-`Close` window (`:924`). Revalidate against a recovered failure before changing the
+      window or the assertion.
 
 ## CI Go toolchain: bump past the stdlib advisories
 

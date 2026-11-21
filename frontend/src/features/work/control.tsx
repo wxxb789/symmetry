@@ -110,7 +110,7 @@ export function WorkControlSurface({ detail, cursor, children }: { detail: WorkD
   const item = detail.work_item;
   const workItemId = item.id;
   const executionRow = item.execution ?? null;
-  const goalManaged = asText(item["goal_id"]) !== null;
+  const goalManaged = asText(item.goal_id) !== null;
 
   const snapshotVersion = () => queryClient.getQueryState(["work-item", { workItemId }])?.dataUpdatedAt ?? 0;
   const [attempts, setAttempts] = useState<ControlAttempt[]>(() => (goalManaged ? [] : mountAttempts(item, snapshotVersion())));
@@ -284,7 +284,7 @@ export function WorkControlSurface({ detail, cursor, children }: { detail: WorkD
 export function WorkControls({ detail }: { detail: WorkDetail }) {
   const surface = useControlSurface();
   const item = detail.work_item;
-  const goalId = asText(item["goal_id"]);
+  const goalId = asText(item.goal_id);
   if (goalId !== null) {
     return <section className="goal-managed" aria-labelledby="goal-managed-heading">
       <h3 id="goal-managed-heading">Goal-managed work</h3>
@@ -317,7 +317,7 @@ export function WorkWaitingInput({ detail }: { detail: WorkDetail }) {
   const [draft, setDraft] = useState("");
   const item = detail.work_item;
   const waiting = item.execution?.waiting ?? null;
-  const suppressed = asText(item["goal_id"]) !== null || waiting === null || hasDecisionPacket(waiting);
+  const suppressed = asText(item.goal_id) !== null || waiting === null || hasDecisionPacket(waiting);
   if (suppressed || waiting === null) return null;
   return <section className="waiting-input" aria-labelledby="waiting-input-heading">
     <h3 id="waiting-input-heading">Agent needs a decision</h3>
@@ -348,7 +348,7 @@ export function WorkReceipts({ firstPage }: { firstPage: readonly TimelineItemLi
   for (const entry of [...firstPage, ...olderPages.flat()]) {
     if (entry.source !== "command") continue;
     const command = asRecord(entry.data);
-    const commandId = command === null ? null : asText(command["command_id"]);
+    const commandId = command === null ? null : asText(command.command_id);
     if (commandId !== null) carried.add(commandId);
   }
 

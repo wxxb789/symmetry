@@ -22,8 +22,8 @@ const attentionRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/attention",
   validateSearch: (search: Record<string, unknown>): { projectId?: string; unavailable?: string } => ({
-    ...(typeof search["projectId"] === "string" && search["projectId"] ? { projectId: search["projectId"] } : {}),
-    ...(typeof search["unavailable"] === "string" && search["unavailable"] ? { unavailable: search["unavailable"] } : {}),
+    ...(typeof search.projectId === "string" && search.projectId ? { projectId: search.projectId } : {}),
+    ...(typeof search.unavailable === "string" && search.unavailable ? { unavailable: search.unavailable } : {}),
   }),
   component: AttentionPage,
 });
@@ -37,9 +37,9 @@ const chatRoute = createRoute({
   // conversation; the read's own answer still owns the interpretation, and an
   // empty or unknown member is dropped rather than sent.
   validateSearch: (search: Record<string, unknown>): { scope?: ChatScope; projectId?: string; runId?: string } => ({
-    ...(isChatScopeSearch(search["scope"]) ? { scope: search["scope"] } : {}),
-    ...(typeof search["projectId"] === "string" && search["projectId"] ? { projectId: search["projectId"] } : {}),
-    ...(typeof search["runId"] === "string" && search["runId"] ? { runId: search["runId"] } : {}),
+    ...(isChatScopeSearch(search.scope) ? { scope: search.scope } : {}),
+    ...(typeof search.projectId === "string" && search.projectId ? { projectId: search.projectId } : {}),
+    ...(typeof search.runId === "string" && search.runId ? { runId: search.runId } : {}),
   }),
   component: ChatPage,
 });
@@ -52,8 +52,8 @@ const connectionsRoute = createRoute({
   // `projectId` scopes the project-resource surface on this route; the server
   // selected project is used when the URL carries none.
   validateSearch: (search: Record<string, unknown>): { connectionId?: string; projectId?: string } => ({
-    ...(typeof search["connectionId"] === "string" && search["connectionId"] ? { connectionId: search["connectionId"] } : {}),
-    ...(typeof search["projectId"] === "string" && search["projectId"] ? { projectId: search["projectId"] } : {}),
+    ...(typeof search.connectionId === "string" && search.connectionId ? { connectionId: search.connectionId } : {}),
+    ...(typeof search.projectId === "string" && search.projectId ? { projectId: search.projectId } : {}),
   }),
   component: ConnectionsPage,
 });
@@ -63,13 +63,13 @@ const runtimesRoute = createRoute({
   // The selected project is view state, like the Attention scope: it selects
   // which runtimes are compatible with the work this deployment holds.
   validateSearch: (search: Record<string, unknown>): { projectId?: string } =>
-    typeof search["projectId"] === "string" && search["projectId"] ? { projectId: search["projectId"] } : {},
+    typeof search.projectId === "string" && search.projectId ? { projectId: search.projectId } : {},
   component: RuntimesPage,
 });
 const goalRoute = createRoute({ getParentRoute: () => rootRoute, path: "/goals/$goalId", component: GoalDetailPage });
 const routeTree = rootRoute.addChildren([indexRoute, attentionRoute, chatRoute, projectsRoute, projectRoute, workItemRoute, connectionsRoute, runtimesRoute, goalRoute]);
 
-export type AppRouter = Router<typeof routeTree, "never", false, RouterHistory>;
+type AppRouter = Router<typeof routeTree>;
 
 export function createAppRouter(application: Application, history?: RouterHistory): AppRouter {
   return createRouter({ routeTree, context: { application }, basepath: "/portal", ...(history ? { history } : {}), defaultPreload: false, scrollRestoration: true });

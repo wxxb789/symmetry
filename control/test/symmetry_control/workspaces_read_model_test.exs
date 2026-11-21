@@ -1,5 +1,5 @@
 defmodule SymmetryControl.WorkspacesReadModelTest do
-  use SymmetryControl.DataCase, async: false
+  use SymmetryControl.OrchestrationCase, async: false
 
   alias SymmetryControl.Orchestration
   alias SymmetryControl.Workspaces
@@ -39,9 +39,16 @@ defmodule SymmetryControl.WorkspacesReadModelTest do
 
     assert {:ok, launched, :created} = Workspaces.launch_work_item(item.id)
     %{machine: machine} = enroll_machine()
-    runtime = register_runtime(machine)
+
+    runtime =
+      register_runtime(machine, @now,
+        runtime_key: "portal-runtime",
+        name: "portal-runtime",
+        daemon_instance_id: Ecto.UUID.generate()
+      )
+
     assert {:ok, run} = Orchestration.assign_one(now: @now)
-    fence = claim(run, runtime)
+    fence = claim(run, runtime, @now, claim_id: uuid(100))
     transition(run.id, fence, "running", 1)
 
     append_events(run.id, fence, [
@@ -105,9 +112,16 @@ defmodule SymmetryControl.WorkspacesReadModelTest do
 
     assert {:ok, first, :created} = Workspaces.launch_work_item(item.id)
     %{machine: machine} = enroll_machine("retry-machine")
-    runtime = register_runtime(machine, "retry-runtime")
+
+    runtime =
+      register_runtime(machine, @now,
+        runtime_key: "retry-runtime",
+        name: "retry-runtime",
+        daemon_instance_id: Ecto.UUID.generate()
+      )
+
     assert {:ok, first_run} = Orchestration.assign_one(now: @now)
-    fence = claim(first_run, runtime)
+    fence = claim(first_run, runtime, @now, claim_id: uuid(100))
     transition(first_run.id, fence, "running", 20)
     append_events(first_run.id, fence, [event(21, 1, "ci", %{"status" => "failed"})])
     transition(first_run.id, fence, "failed", 22)
@@ -189,9 +203,16 @@ defmodule SymmetryControl.WorkspacesReadModelTest do
 
     assert {:ok, _launched, :created} = Workspaces.launch_work_item(item.id)
     %{machine: machine} = enroll_machine("timing-machine")
-    runtime = register_runtime(machine, "timing-runtime")
+
+    runtime =
+      register_runtime(machine, @now,
+        runtime_key: "timing-runtime",
+        name: "timing-runtime",
+        daemon_instance_id: Ecto.UUID.generate()
+      )
+
     assert {:ok, run} = Orchestration.assign_one(now: @now)
-    fence = claim(run, runtime)
+    fence = claim(run, runtime, @now, claim_id: uuid(100))
     transition(run.id, fence, "running", 30)
     finished_at = DateTime.add(@now, 10, :second)
 
@@ -225,7 +246,7 @@ defmodule SymmetryControl.WorkspacesReadModelTest do
 
     assert {:ok, _launched, :created} = Workspaces.launch_work_item(expiring_item.id)
     assert {:ok, expiring_run} = Orchestration.assign_one(now: @now)
-    expiring_fence = claim(expiring_run, runtime)
+    expiring_fence = claim(expiring_run, runtime, @now, claim_id: uuid(100))
     transition(expiring_run.id, expiring_fence, "running", 32)
     assert %{expired_runs: 1} = Orchestration.expire(now: DateTime.add(@now, 30, :second))
     assert {:ok, expired_model} = ReadModel.workspace(project.id)
@@ -256,33 +277,45 @@ defmodule SymmetryControl.WorkspacesReadModelTest do
     %{machine: machine} = enroll_machine("capability-machine")
 
     supported_runtime =
-      register_runtime(machine, "cap-supported",
+      register_runtime(machine, @now,
+        runtime_key: "cap-supported",
+        name: "cap-supported",
         agent_profile: "cap-supported",
         workspace: "cap-supported",
-        extra_fields: adapter_metadata(),
-        capabilities: adapter_capabilities(start: true, cancel: true)
+        extra: adapter_metadata(),
+        capabilities: adapter_capabilities(start: true, cancel: true),
+        daemon_instance_id: Ecto.UUID.generate()
       )
 
     no_cancel_runtime =
-      register_runtime(machine, "cap-no-cancel",
+      register_runtime(machine, @now,
+        runtime_key: "cap-no-cancel",
+        name: "cap-no-cancel",
         agent_profile: "cap-no-cancel",
         workspace: "cap-no-cancel",
-        extra_fields: adapter_metadata(),
-        capabilities: adapter_capabilities(start: true, cancel: false)
+        extra: adapter_metadata(),
+        capabilities: adapter_capabilities(start: true, cancel: false),
+        daemon_instance_id: Ecto.UUID.generate()
       )
 
     no_start_runtime =
-      register_runtime(machine, "cap-no-start",
+      register_runtime(machine, @now,
+        runtime_key: "cap-no-start",
+        name: "cap-no-start",
         agent_profile: "cap-no-start",
         workspace: "cap-no-start",
-        extra_fields: adapter_metadata(),
-        capabilities: adapter_capabilities(start: false, cancel: false)
+        extra: adapter_metadata(),
+        capabilities: adapter_capabilities(start: false, cancel: false),
+        daemon_instance_id: Ecto.UUID.generate()
       )
 
     unknown_runtime =
-      register_runtime(machine, "cap-unknown",
+      register_runtime(machine, @now,
+        runtime_key: "cap-unknown",
+        name: "cap-unknown",
         agent_profile: "cap-unknown",
-        workspace: "cap-unknown"
+        workspace: "cap-unknown",
+        daemon_instance_id: Ecto.UUID.generate()
       )
 
     {supported_run, supported_fence} = assign_and_run(supported_runtime, 40, 101)
@@ -357,11 +390,14 @@ defmodule SymmetryControl.WorkspacesReadModelTest do
     # makes the retried attempt possible even though the failed attempt's
     # runtime does not.
     other_runtime =
-      register_runtime(machine, "cap-no-start-other",
+      register_runtime(machine, @now,
+        runtime_key: "cap-no-start-other",
+        name: "cap-no-start-other",
         agent_profile: "cap-no-start",
         workspace: "cap-no-start",
-        extra_fields: adapter_metadata(),
-        capabilities: adapter_capabilities(start: true, cancel: true)
+        extra: adapter_metadata(),
+        capabilities: adapter_capabilities(start: true, cancel: true),
+        daemon_instance_id: Ecto.UUID.generate()
       )
 
     assert other_runtime.id != no_start_runtime.id
@@ -401,7 +437,7 @@ defmodule SymmetryControl.WorkspacesReadModelTest do
     launch_for(project, "cap-supported", "Saturates the supported runtime")
     assert {:ok, capacity_run} = Orchestration.assign_one(now: @now)
     assert capacity_run.runtime_id == supported_runtime.id
-    capacity_fence = claim(capacity_run, supported_runtime, 106)
+    capacity_fence = claim(capacity_run, supported_runtime, @now, claim_id: uuid(106))
 
     Repo.update_all(
       from(runtime in Orchestration.Runtime, where: runtime.id == ^supported_runtime.id),
@@ -461,11 +497,14 @@ defmodule SymmetryControl.WorkspacesReadModelTest do
     # A runtime that could start an unsupervised attempt of this binding does
     # not make the retried attempt selectable: it advertises no
     # `supervisory_control`, and the retry re-applies the requirement.
-    register_runtime(machine, "cap-supervised-retry-unsupervised",
+    register_runtime(machine, @now,
+      runtime_key: "cap-supervised-retry-unsupervised",
+      name: "cap-supervised-retry-unsupervised",
       agent_profile: "cap-supervised-retry",
       workspace: "cap-supervised-retry",
-      extra_fields: adapter_metadata(),
-      capabilities: adapter_capabilities(start: true, cancel: true)
+      extra: adapter_metadata(),
+      capabilities: adapter_capabilities(start: true, cancel: true),
+      daemon_instance_id: Ecto.UUID.generate()
     )
 
     assert {:ok, unsupervised_model} = ReadModel.workspace(project.id)
@@ -473,11 +512,14 @@ defmodule SymmetryControl.WorkspacesReadModelTest do
 
     # A runtime that advertises the requirement and the adapter `start`
     # operation makes the same retried attempt selectable.
-    register_runtime(machine, "cap-supervised-retry-supervisor",
+    register_runtime(machine, @now,
+      runtime_key: "cap-supervised-retry-supervisor",
+      name: "cap-supervised-retry-supervisor",
       agent_profile: "cap-supervised-retry",
       workspace: "cap-supervised-retry",
-      extra_fields: adapter_metadata(),
-      capabilities: supervised_adapter_capabilities()
+      extra: adapter_metadata(),
+      capabilities: supervised_adapter_capabilities(),
+      daemon_instance_id: Ecto.UUID.generate()
     )
 
     assert {:ok, supervised_model} = ReadModel.workspace(project.id)
@@ -490,16 +532,19 @@ defmodule SymmetryControl.WorkspacesReadModelTest do
     %{machine: machine} = enroll_machine("supervised-machine")
 
     runtime =
-      register_runtime(machine, "cap-supervised",
+      register_runtime(machine, @now,
+        runtime_key: "cap-supervised",
+        name: "cap-supervised",
         agent_profile: "cap-supervised",
         workspace: "cap-supervised",
-        extra_fields: adapter_metadata(),
-        capabilities: supervised_adapter_capabilities()
+        extra: adapter_metadata(),
+        capabilities: supervised_adapter_capabilities(),
+        daemon_instance_id: Ecto.UUID.generate()
       )
 
     assert {:ok, run} = Orchestration.assign_one(now: @now)
     assert run.runtime_id == runtime.id
-    fence = claim(run, runtime, 105)
+    fence = claim(run, runtime, @now, claim_id: uuid(105))
 
     # claimed: the runtime holds the attempt and advertises cancel.
     assert %{can_cancel: true} = snapshot_execution(item.work_item)
@@ -614,32 +659,6 @@ defmodule SymmetryControl.WorkspacesReadModelTest do
     enrolled
   end
 
-  defp register_runtime(machine, key \\ "portal-runtime", opts \\ []) do
-    assert {:ok, [runtime]} =
-             Orchestration.register_runtimes(
-               machine.id,
-               Ecto.UUID.generate(),
-               [
-                 Map.merge(
-                   %{
-                     runtime_key: key,
-                     name: key,
-                     capacity: 1,
-                     agent_profile: Keyword.get(opts, :agent_profile, "codex"),
-                     workspace: Keyword.get(opts, :workspace, "primary"),
-                     capabilities: Keyword.get(opts, :capabilities, %{})
-                   },
-                   # Extra top-level registration fields (harness and adapter
-                   # versions), not the runtime's metadata column.
-                   Keyword.get(opts, :extra_fields, %{})
-                 )
-               ],
-               now: @now
-             )
-
-    runtime
-  end
-
   defp launch_for(project, profile, title) do
     assert {:ok, item} =
              Workspaces.create_work_item(project.id, %{
@@ -657,7 +676,7 @@ defmodule SymmetryControl.WorkspacesReadModelTest do
   defp assign_and_run(runtime, transition_number, claim_number) do
     assert {:ok, run} = Orchestration.assign_one(now: @now)
     assert run.runtime_id == runtime.id
-    fence = claim(run, runtime, claim_number)
+    fence = claim(run, runtime, @now, claim_id: uuid(claim_number))
     transition(run.id, fence, "running", transition_number)
     {run, fence}
   end
@@ -723,28 +742,6 @@ defmodule SymmetryControl.WorkspacesReadModelTest do
       "interactive" => true,
       "supervisory_control" => true
     })
-  end
-
-  defp claim(run, runtime, claim_number \\ 100) do
-    assert {:ok, claimed} =
-             Orchestration.claim(
-               run.id,
-               %{
-                 runtime_id: runtime.id,
-                 runtime_epoch: runtime.connection_epoch,
-                 generation: run.generation,
-                 claim_id: uuid(claim_number)
-               },
-               now: @now
-             )
-
-    %{
-      runtime_id: runtime.id,
-      runtime_epoch: runtime.connection_epoch,
-      generation: run.generation,
-      claim_id: claimed.claim_id,
-      lease_token: claimed.lease_token
-    }
   end
 
   defp transition(run_id, fence, state, number) do

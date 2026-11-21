@@ -5,6 +5,7 @@ defmodule SymmetryControlWeb.Plugs.StrictEvidenceJSONTest do
   import Plug.Test
 
   alias SymmetryControlWeb.Plugs.StrictEvidenceJSON
+  alias SymmetryControlWeb.StrictJSONDecoder
 
   @parser_options StrictEvidenceJSON.init(
                     parsers: [:urlencoded, :multipart, :json],
@@ -49,6 +50,16 @@ defmodule SymmetryControlWeb.Plugs.StrictEvidenceJSONTest do
     end
   end
 
+  test "treats an empty captured evidence body as empty params" do
+    conn =
+      :post
+      |> conn("/api/v1/runs/run-1/evidence", "")
+      |> put_req_header("content-type", "application/json")
+      |> StrictEvidenceJSON.call(@parser_options)
+
+    assert {:ok, %{}} = StrictEvidenceJSON.materialize(conn)
+  end
+
   test "rejects duplicate decoded keys recursively, including escaped aliases" do
     body = ~S({"items":[{"name":1,"\u006eame":2}]})
 
@@ -61,7 +72,7 @@ defmodule SymmetryControlWeb.Plugs.StrictEvidenceJSONTest do
     assert {:error, :duplicate_json_key} = StrictEvidenceJSON.materialize(conn)
   end
 
-  test "rejects duplicate JSON members on protocol v1 mutation routes before parsing" do
+  test "rejects duplicate JSON members on protocol v1 mutation routes during the ordered decode" do
     conn =
       :post
       |> conn("/%61pi/v1/projects/project-1/goals", ~S({"items":[{"name":1,"\u006eame":2}]}))
@@ -73,7 +84,7 @@ defmodule SymmetryControlWeb.Plugs.StrictEvidenceJSONTest do
     assert %{"error" => %{"code" => "invalid_request"}} = Jason.decode!(conn.resp_body)
   end
 
-  test "rejects duplicate JSON members on portal API mutation routes before parsing" do
+  test "rejects duplicate JSON members on portal API mutation routes during the ordered decode" do
     conn =
       :post
       |> conn(
@@ -86,6 +97,119 @@ defmodule SymmetryControlWeb.Plugs.StrictEvidenceJSONTest do
     assert conn.halted
     assert conn.status == 400
     assert %{"error" => %{"code" => "invalid_request"}} = Jason.decode!(conn.resp_body)
+  end
+
+  test "rejects duplicate JSON members with the JSON structured suffix on mutation routes" do
+    conn =
+      :post
+      |> conn("/api/v1/runs/run-1/usage", ~s({"name":1,"name":2}))
+      |> put_req_header("content-type", "application/vnd.symmetry+json")
+      |> StrictEvidenceJSON.call(@parser_options)
+
+    assert conn.halted
+    assert conn.status == 400
+    assert %{"error" => %{"code" => "invalid_request"}} = Jason.decode!(conn.resp_body)
+  end
+
+  test "answers duplicate members on the strict scope with the protocol envelope bytes" do
+    conn =
+      :post
+      |> conn("/api/v1/runs/run-1/usage", ~s({"name":1,"name":2}))
+      |> put_req_header("content-type", "application/json")
+      |> SymmetryControlWeb.Endpoint.call([])
+
+    assert conn.status == 400
+
+    assert conn.resp_body ==
+             ~s({"error":{"code":"invalid_request","message":"request payload is invalid"}})
+  end
+
+  test "leaves a malformed strict mutation body on the parser error path" do
+    conn =
+      :post
+      |> conn("/api/v1/runs/run-1/usage", ~s({"name":))
+      |> put_req_header("content-type", "application/json")
+
+    error =
+      assert_raise Plug.Parsers.ParseError, fn ->
+        StrictEvidenceJSON.call(conn, @parser_options)
+      end
+
+    assert %Jason.DecodeError{} = error.exception
+  end
+
+  test "parses a top-level array on the strict scope into the _json body param" do
+    conn =
+      :post
+      |> conn("/api/v1/runs/run-1/usage", "[1,2,3]")
+      |> put_req_header("content-type", "application/json")
+      |> StrictEvidenceJSON.call(@parser_options)
+
+    assert conn.body_params == %{"_json" => [1, 2, 3]}
+    refute conn.halted
+  end
+
+  test "rejects duplicate members nested in a top-level array on the strict scope" do
+    conn =
+      :post
+      |> conn("/api/v1/runs/run-1/usage", ~s([{"name":1,"name":2}]))
+      |> put_req_header("content-type", "application/json")
+      |> StrictEvidenceJSON.call(@parser_options)
+
+    assert conn.halted
+    assert conn.status == 400
+  end
+
+  test "treats an empty JSON mutation body as empty params on the strict scope" do
+    conn =
+      :post
+      |> conn("/api/v1/runs/run-1/usage", "")
+      |> put_req_header("content-type", "application/json")
+      |> StrictEvidenceJSON.call(@parser_options)
+
+    assert conn.body_params == %{}
+    refute conn.halted
+  end
+
+  test "parses duplicate members with the first occurrence winning outside the strict scope" do
+    body = ~s({"operator_token":"wrong","operator_token":"test-operator-token"})
+
+    conn =
+      :post
+      |> conn("/portal/login", body)
+      |> put_req_header("content-type", "application/json")
+      |> StrictEvidenceJSON.call(@parser_options)
+
+    assert conn.body_params == %{"operator_token" => "wrong"}
+    refute conn.halted
+  end
+
+  test "does not reject duplicate members on the portal login route" do
+    conn =
+      :post
+      |> conn(
+        "/portal/login",
+        ~s({"operator_token":"wrong","operator_token":"test-operator-token"})
+      )
+      |> put_req_header("content-type", "application/json")
+      |> put_private(:plug_skip_csrf_protection, true)
+      |> SymmetryControlWeb.Endpoint.call([])
+
+    assert conn.status == 401
+  end
+
+  test "installs one ordered decoder on the strict options and keeps the plain decoder elsewhere" do
+    {parser_options, strict_options} = @parser_options
+
+    strict_json = List.keyfind(elem(strict_options, 0), Plug.Parsers.JSON, 0)
+    plain_json = List.keyfind(elem(parser_options, 0), Plug.Parsers.JSON, 0)
+
+    assert strict_json ==
+             {Plug.Parsers.JSON,
+              {{Plug.Conn, :read_body, []}, {StrictJSONDecoder, :decode!, []}, []}}
+
+    assert plain_json ==
+             {Plug.Parsers.JSON, {{Plug.Conn, :read_body, []}, {Jason, :decode!, []}, []}}
   end
 
   test "allows equal member names in distinct JSON objects on protocol mutation routes" do
@@ -130,6 +254,16 @@ defmodule SymmetryControlWeb.Plugs.StrictEvidenceJSONTest do
       |> StrictEvidenceJSON.call(@parser_options)
 
     assert {:error, :expected_json_object} = StrictEvidenceJSON.materialize(scalar)
+  end
+
+  test "prefers the root-shape error over nested duplicates for an evidence body" do
+    conn =
+      :post
+      |> conn("/api/v1/runs/run-1/evidence", ~s([{"name":1,"name":2}]))
+      |> put_req_header("content-type", "application/json")
+      |> StrictEvidenceJSON.call(@parser_options)
+
+    assert {:error, :expected_json_object} = StrictEvidenceJSON.materialize(conn)
   end
 
   test "delegates non-evidence requests to Plug.Parsers unchanged" do

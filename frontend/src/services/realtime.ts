@@ -26,7 +26,7 @@ import { Socket } from "phoenix";
  * included — reads a global the page no longer has.
  */
 
-export interface InvalidationPayload {
+interface InvalidationPayload {
   kind: string;
   id?: string;
   project_id?: string;
@@ -75,7 +75,7 @@ export interface RealtimePush {
   receive(status: string, callback: (reply?: unknown) => void): RealtimePush;
 }
 
-export interface RealtimeChannel {
+interface RealtimeChannel {
   on(event: string, callback: (payload: unknown) => void): number;
   join(): RealtimePush;
 }
@@ -89,7 +89,7 @@ export interface RealtimeSocket {
   channel(topic: string): RealtimeChannel;
 }
 
-export interface RealtimeOptions {
+interface RealtimeOptions {
   queryClient: QueryClient;
   /** The current short-lived socket token, read on every connect attempt. */
   token: () => string;
@@ -112,7 +112,7 @@ export interface RealtimeHandle {
   subscribe(listener: () => void): () => void;
 }
 
-export const REALTIME_TOPIC = "portal:invalidations";
+const REALTIME_TOPIC = "portal:invalidations";
 const SOCKET_PATH = "/portal/socket";
 const DEFAULT_POLL_INTERVAL_MS = 5_000;
 const DEFAULT_BATCH_MS = 200;
