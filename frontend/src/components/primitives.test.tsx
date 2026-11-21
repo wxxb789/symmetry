@@ -44,9 +44,12 @@ describe("StatusBadge", () => {
     render(<>
       <StatusBadge status="mystery" />
       <StatusBadge status="" />
+      <StatusBadge status="constructor" />
     </>);
     expect(screen.getByText("Unknown status: mystery")).toBeVisible();
     expect(screen.getByText("Unknown status")).toBeVisible();
+    // `constructor` is a prototype member, not a workspace status either.
+    expect(screen.getByText("Unknown status: constructor")).toBeVisible();
   });
 
   it("renders the served resource scopes with their tone and their status attribute", () => {
@@ -71,11 +74,13 @@ describe("StatusBadge", () => {
       <StatusBadge status="future_kind" scope="resource" />
       <StatusBadge status="" scope="sync" />
       <StatusBadge status="constructor" scope="connection" />
+      <StatusBadge status="constructor" scope="sync" />
     </>);
     expect(screen.getByText("Unknown resource status: future_kind")).toHaveAttribute("data-status", "future_kind");
     expect(screen.getByText("Unknown sync status: unspecified")).toBeVisible();
-    // `constructor` is a prototype member, not a status this surface knows.
+    // `constructor` is a prototype member, not a status these scopes know.
     expect(screen.getByText("Unknown connection status: constructor")).toBeVisible();
+    expect(screen.getByText("Unknown sync status: constructor")).toBeVisible();
   });
 });
 
@@ -91,6 +96,7 @@ describe("FieldErrors", () => {
     const { container } = render(<>
       <FieldErrors error={refusal({ name: ["has already been taken"] })} field="key" />
       <FieldErrors error={new Error("network is unreachable")} field="name" />
+      <FieldErrors error={{ fields: { name: ["looks like a refusal but is not"] } }} field="name" />
       <FieldErrors error={refusal({ name: [] })} field="name" />
       <FieldErrors error={refusal(null)} field="name" />
     </>);
@@ -135,26 +141,30 @@ describe("useDialogOpener", () => {
     const user = userEvent.setup();
     const openerRef: RefObject<HTMLElement | null> = { current: null };
     const fallbackRef: RefObject<HTMLElement | null> = { current: null };
+    const prevented: boolean[] = [];
     render(<>
       <button type="button" disabled>Update checkout service</button>
       <h2 ref={(node) => { fallbackRef.current = node; }} tabIndex={-1}>Project resources</h2>
-      <RestoreOnClick openerRef={openerRef} fallbackRef={fallbackRef} />
+      <RestoreOnClick openerRef={openerRef} fallbackRef={fallbackRef} onRestored={(value) => { prevented.push(value); }} />
     </>);
     openerRef.current = screen.getByRole("button", { name: "Update checkout service" });
     await user.click(screen.getByRole("button", { name: "Close dialog" }));
     expect(screen.getByRole("heading", { name: "Project resources" })).toHaveFocus();
+    expect(prevented).toEqual([true]);
   });
 
   it("falls back to the caller's fallback control when the opener left the document", async () => {
     const user = userEvent.setup();
     const openerRef: RefObject<HTMLElement | null> = { current: document.createElement("button") };
     const fallbackRef: RefObject<HTMLElement | null> = { current: null };
+    const prevented: boolean[] = [];
     render(<>
       <h2 ref={(node) => { fallbackRef.current = node; }} tabIndex={-1}>Project resources</h2>
-      <RestoreOnClick openerRef={openerRef} fallbackRef={fallbackRef} />
+      <RestoreOnClick openerRef={openerRef} fallbackRef={fallbackRef} onRestored={(value) => { prevented.push(value); }} />
     </>);
     await user.click(screen.getByRole("button", { name: "Close dialog" }));
     expect(screen.getByRole("heading", { name: "Project resources" })).toHaveFocus();
+    expect(prevented).toEqual([true]);
   });
 
   it("leaves focus where it was when neither the opener nor the fallback can take it", async () => {

@@ -37,8 +37,6 @@ export function StatusBadge({ status, scope = "workspace" }: { status: string; s
       {statusLabel(status)}
     </span>;
   }
-  // Own keys only: a served status may be `constructor`, and a plain index
-  // would render Object's own member as a "known" label.
   const known = scope === "sync" ? ownValue(knownSyncStatuses, status) : ownValue(knownResourceStatuses, status);
   const tone = status === "healthy" || status === "synced" ? "status-complete" : status === "degraded" || status === "failed" || status === "offline" ? "status-attention" : "";
   return <span className={`status-badge ${tone}`} data-status={status}>{known ? formatLabel(status).replace(/(^|\s)\S/g, (letter) => letter.toUpperCase()) : `Unknown ${scope} status: ${status || "unspecified"}`}</span>;
@@ -52,10 +50,10 @@ export function FieldErrors({ error, field }: { error: unknown; field: string })
 }
 
 /**
- * One `.planning-form` row: the control's label, the control, and the server's
- * own field message. The form is a CSS grid over its direct children, so this
- * renders a fragment — a wrapper element would collapse the three grid rows
- * into one cell.
+ * One form row: the control's label, the control, and the server's own field
+ * message. `.planning-form` and `.connection-form` are CSS grids over their
+ * direct children, so this renders a fragment — a wrapper element would
+ * collapse the three grid rows into one cell.
  */
 export function Field({ id, label, error, field, children }: { id: string; label: string; error: unknown; field: string; children: ReactNode }) {
   return <>

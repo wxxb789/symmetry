@@ -2,7 +2,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, Plus, X } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
-import { FieldErrors, StatusBadge } from "../../components/primitives";
+import { Field, StatusBadge } from "../../components/primitives";
 import { useDialogOpener } from "../../components/use-dialog-opener";
 import { EmptyState, ErrorState, LoadingState } from "../../components/workspace";
 import {
@@ -16,11 +16,8 @@ import {
 } from "../../services/api";
 import { safeUrl } from "../../services/served";
 
-// This module owns the project-resource surface on `/portal/connections` plus
-// the dialog frame and the refusal map both surfaces on that page share (the
-// status badge and the field-error line live in `components/primitives`). The
-// connection surface imports the frame so the import direction stays one-way and
-// there is exactly one refusal map.
+// The connection surface imports the frame so the import direction stays one-way
+// and there is exactly one refusal map.
 
 const providerLabels: Record<string, string> = { github: "GitHub", azure_devops: "Azure DevOps" };
 const kindLabels: Record<string, string> = { repository: "Repository", work_tracking: "Work tracking", ci: "CI", agent: "Agent", runtime: "Runtime", connection: "Connection" };
@@ -221,8 +218,6 @@ function ResourceRowItem({ row, connections, locked, syncPending, onSync, onUpda
 
 // The three editors this surface offers are one dialog with one intent: binding
 // a new resource to the project, updating the served resource, and removing it.
-// The frame, the write machinery, the freeze rule and the actions row are
-// identical across the three; only the form a write is edited in differs.
 type ResourceIntent =
   | { kind: "bind"; projectId: string }
   | { kind: "update"; resource: ResourceRow }
@@ -236,10 +231,8 @@ type ResourceSubmission =
   | { kind: "update"; resourceId: string; version: number; update: { name: string; connection_id: string | null; external_ref: string | null } }
   | { kind: "unbind"; resourceId: string; version: number; name: string };
 
-// The controls a bind or an update edits. `kind` is the bind's kind selector;
-// the versioned intents edit the served row's own kind.
+// The controls a bind or an update edits.
 interface ResourceDraftState {
-  kind: string;
   connectionId: string;
   name: string;
   reference: string;
@@ -248,18 +241,17 @@ interface ResourceDraftState {
 const emptyToNull = (value: string): string | null => value === "" ? null : value;
 
 /** A bind draft is incomplete until the selection its kind requires exists: a registered reference for a local kind, a connection for a provider kind. */
-function bindDraftIncomplete(draft: ResourceDraftState, runtimes: readonly RegisteredRuntime[]): boolean {
-  if (!isLocalKind(draft.kind)) return draft.connectionId === "";
-  return referenceOptions(draft.kind, runtimes).length === 0 || draft.reference === "";
+function bindDraftIncomplete(draft: ResourceDraftState, kind: string, references: readonly { value: string; label: string }[]): boolean {
+  if (!isLocalKind(kind)) return draft.connectionId === "";
+  return references.length === 0 || draft.reference === "";
 }
 
-/** The write one submission carries. */
-function resourceSubmission(intent: ResourceIntent, draft: ResourceDraftState): ResourceSubmission {
+function resourceSubmission(intent: ResourceIntent, draft: ResourceDraftState, kind: string): ResourceSubmission {
   switch (intent.kind) {
     case "bind":
       return { kind: "bind", projectId: intent.projectId, draft: {
-        kind: draft.kind,
-        connection_id: isLocalKind(draft.kind) ? null : emptyToNull(draft.connectionId),
+        kind,
+        connection_id: isLocalKind(kind) ? null : emptyToNull(draft.connectionId),
         name: draft.name,
         external_ref: emptyToNull(draft.reference),
       } };
@@ -295,7 +287,6 @@ function resourceDialogCopy(intent: ResourceIntent): { title: string; closeLabel
   }
 }
 
-/** The success notice naming the write that was applied. */
 function resourceSavedNotice(submission: ResourceSubmission): string {
   switch (submission.kind) {
     case "bind": return `Resource attached — ${submission.draft.name}.`;
@@ -305,17 +296,18 @@ function resourceSavedNotice(submission: ResourceSubmission): string {
 }
 
 /** The refusal line, plus the next step of the refusal that froze this intent. */
-function resourceRefusalNotice(intent: ResourceIntent, error: unknown, stale: boolean, terminal: boolean): string {
+function resourceRefusalNotice(intent: ResourceIntent, error: unknown, frozen: boolean): string {
   const notice = refusalNotice(error);
-  if (intent.kind === "update" && stale) return `${notice} This resource changed elsewhere; close and reopen it to edit the server's current values.`;
-  if (intent.kind === "unbind" && terminal) return `${notice} Close and reopen this dialog to act on the server's current state.`;
+  if (intent.kind === "update" && frozen) return `${notice} This resource changed elsewhere; close and reopen it to edit the server's current values.`;
+  if (intent.kind === "unbind" && frozen) return `${notice} Close and reopen this dialog to act on the server's current state.`;
   return notice;
 }
 
 interface BindFieldsProps {
+  kind: string;
   draft: ResourceDraftState;
   connections: readonly Connection[];
-  runtimes: readonly RegisteredRuntime[];
+  references: readonly { value: string; label: string }[];
   pending: boolean;
   error: unknown;
   onChange: (patch: Partial<ResourceDraftState>) => void;
@@ -324,45 +316,44 @@ interface BindFieldsProps {
 }
 
 /** The bind draft: its kind, the connection that grants the kind's capability, the name and the reference. */
-function BindResourceFields({ draft, connections, runtimes, pending, error, onChange, onKind }: BindFieldsProps) {
-  const local = isLocalKind(draft.kind);
-  const eligible = eligibleConnections(draft.kind, connections);
-  const references = referenceOptions(draft.kind, runtimes);
+function BindResourceFields({ kind, draft, connections, references, pending, error, onChange, onKind }: BindFieldsProps) {
+  const local = isLocalKind(kind);
+  const eligible = eligibleConnections(kind, connections);
   return <>
-      <label htmlFor="resource-kind">Type</label>
-      <select id="resource-kind" name="kind" value={draft.kind} disabled={pending}
-        onChange={(event) => { onKind(event.currentTarget.value); }}>
-        {bindableKinds.map((value) => <option key={value} value={value}>{kindLabel(value)}</option>)}
-      </select>
-      <FieldErrors error={error} field="kind" />
+      <Field id="resource-kind" label="Type" error={error} field="kind">
+        <select id="resource-kind" name="kind" value={kind} disabled={pending}
+          onChange={(event) => { onKind(event.currentTarget.value); }}>
+          {bindableKinds.map((value) => <option key={value} value={value}>{kindLabel(value)}</option>)}
+        </select>
+      </Field>
 
-      <label htmlFor="resource-connection">Provider connection</label>
-      <select id="resource-connection" name="connection_id" value={local ? "" : draft.connectionId} disabled={local || pending || eligible.length === 0}
-        onChange={(event) => { onChange({ connectionId: event.currentTarget.value }); }}>
+      <Field id="resource-connection" label="Provider connection" error={error} field="connection_id">
+        <select id="resource-connection" name="connection_id" value={local ? "" : draft.connectionId} disabled={local || pending || eligible.length === 0}
+          onChange={(event) => { onChange({ connectionId: event.currentTarget.value }); }}>
+          {local
+            ? <option value="">Not required for local resources</option>
+            : eligible.length === 0
+              ? <option value="">No connection grants the required capability</option>
+              : eligible.map((connection) => <option key={connection.id} value={connection.id}>{connection.name}</option>)}
+        </select>
+      </Field>
+
+      <Field id="resource-name" label="Name" error={error} field="name">
+        <input id="resource-name" name="name" value={draft.name} required disabled={pending}
+          onChange={(event) => { onChange({ name: event.currentTarget.value }); }} />
+      </Field>
+
+      <Field id="resource-reference" label="Reference" error={error} field="external_ref">
         {local
-          ? <option value="">Not required for local resources</option>
-          : eligible.length === 0
-            ? <option value="">No connection grants the required capability</option>
-            : eligible.map((connection) => <option key={connection.id} value={connection.id}>{connection.name}</option>)}
-      </select>
-      <FieldErrors error={error} field="connection_id" />
-
-      <label htmlFor="resource-name">Name</label>
-      <input id="resource-name" name="name" value={draft.name} required disabled={pending}
-        onChange={(event) => { onChange({ name: event.currentTarget.value }); }} />
-      <FieldErrors error={error} field="name" />
-
-      <label htmlFor="resource-reference">Reference</label>
-      {local
-        ? <select id="resource-reference" name="external_ref" value={draft.reference} disabled={pending || references.length === 0}
-            onChange={(event) => { onChange({ reference: event.currentTarget.value }); }}>
-            {references.length === 0
-              ? <option value="">No registered {kindLabel(draft.kind).toLowerCase()} is available</option>
-              : references.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-          </select>
-        : <input id="resource-reference" name="external_ref" value={draft.reference} disabled={pending}
-            onChange={(event) => { onChange({ reference: event.currentTarget.value }); }} />}
-      <FieldErrors error={error} field="external_ref" />
+          ? <select id="resource-reference" name="external_ref" value={draft.reference} disabled={pending || references.length === 0}
+              onChange={(event) => { onChange({ reference: event.currentTarget.value }); }}>
+              {references.length === 0
+                ? <option value="">No registered {kindLabel(kind).toLowerCase()} is available</option>
+                : references.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+          : <input id="resource-reference" name="external_ref" value={draft.reference} disabled={pending}
+              onChange={(event) => { onChange({ reference: event.currentTarget.value }); }} />}
+      </Field>
   </>;
 }
 
@@ -399,38 +390,38 @@ function UpdateResourceFields({ resource, draft, connections, runtimes, blocked,
         <div><dt>Status detail</dt><dd>{resource.statusMessage ?? "No issues reported"}</dd></div>
       </dl>
 
-      <label htmlFor="resource-name">Name</label>
-      <input id="resource-name" name="name" value={draft.name} required disabled={blocked}
-        onChange={(event) => { onChange({ name: event.currentTarget.value }); }} />
-      <FieldErrors error={error} field="name" />
+      <Field id="resource-name" label="Name" error={error} field="name">
+        <input id="resource-name" name="name" value={draft.name} required disabled={blocked}
+          onChange={(event) => { onChange({ name: event.currentTarget.value }); }} />
+      </Field>
 
-      <label htmlFor="resource-connection">Provider connection</label>
-      <select id="resource-connection" name="connection_id" value={local ? "" : draft.connectionId} disabled={local || blocked}
-        onChange={(event) => { onChange({ connectionId: event.currentTarget.value }); }}>
+      <Field id="resource-connection" label="Provider connection" error={error} field="connection_id">
+        <select id="resource-connection" name="connection_id" value={local ? "" : draft.connectionId} disabled={local || blocked}
+          onChange={(event) => { onChange({ connectionId: event.currentTarget.value }); }}>
+          {local
+            ? <option value="">Not required for local resources</option>
+            : <>
+              {draft.connectionId !== "" && !choices.some((candidate) => candidate.id === draft.connectionId) &&
+                <option value={draft.connectionId}>{`Unknown connection: ${draft.connectionId}`}</option>}
+              {draft.connectionId === "" &&
+                <option value="">{choices.length === 0 ? "No connection grants the required capability" : "No provider connection"}</option>}
+              {choices.map((connection) => <option key={connection.id} value={connection.id}>
+                {connection.id === resource.connectionId && currentIneligible ? `${connection.name} (capability not granted)` : connection.name}
+              </option>)}
+            </>}
+        </select>
+      </Field>
+
+      <Field id="resource-reference" label="Reference" error={error} field="external_ref">
         {local
-          ? <option value="">Not required for local resources</option>
-          : <>
-            {draft.connectionId !== "" && !choices.some((candidate) => candidate.id === draft.connectionId) &&
-              <option value={draft.connectionId}>{`Unknown connection: ${draft.connectionId}`}</option>}
-            {draft.connectionId === "" &&
-              <option value="">{choices.length === 0 ? "No connection grants the required capability" : "No provider connection"}</option>}
-            {choices.map((connection) => <option key={connection.id} value={connection.id}>
-              {connection.id === resource.connectionId && currentIneligible ? `${connection.name} (capability not granted)` : connection.name}
-            </option>)}
-          </>}
-      </select>
-      <FieldErrors error={error} field="connection_id" />
-
-      <label htmlFor="resource-reference">Reference</label>
-      {local
-        ? <select id="resource-reference" name="external_ref" value={draft.reference} disabled={blocked}
-            onChange={(event) => { onChange({ reference: event.currentTarget.value }); }}>
-            {draft.reference !== "" && !referenceKnown && <option value={draft.reference}>{`${draft.reference} (not registered)`}</option>}
-            {references.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-          </select>
-        : <input id="resource-reference" name="external_ref" value={draft.reference} disabled={blocked}
-            onChange={(event) => { onChange({ reference: event.currentTarget.value }); }} />}
-      <FieldErrors error={error} field="external_ref" />
+          ? <select id="resource-reference" name="external_ref" value={draft.reference} disabled={blocked}
+              onChange={(event) => { onChange({ reference: event.currentTarget.value }); }}>
+              {draft.reference !== "" && !referenceKnown && <option value={draft.reference}>{`${draft.reference} (not registered)`}</option>}
+              {references.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+          : <input id="resource-reference" name="external_ref" value={draft.reference} disabled={blocked}
+              onChange={(event) => { onChange({ reference: event.currentTarget.value }); }} />}
+      </Field>
   </>;
 }
 
@@ -457,14 +448,19 @@ function ResourceDialog(props: ResourceDialogProps) {
   // loads another operator's change must not turn the draft into a silent
   // overwrite — the server still answers with its own stale refusal.
   const [intent] = useState(() => props.intent);
+  // The bind's kind selector: another kind re-derives the connection and the
+  // reference a fresh draft starts from.
+  const [kind, setKind] = useState("repository");
   const [draft, setDraft] = useState<ResourceDraftState>(() => intent.kind === "bind"
-    ? { kind: "repository", connectionId: eligibleConnections("repository", connections)[0]?.id ?? "", name: "", reference: "" }
-    : { kind: intent.resource.kind, connectionId: intent.resource.connectionId ?? "", name: intent.resource.name, reference: intent.resource.externalRef ?? "" });
+    ? { connectionId: eligibleConnections("repository", connections)[0]?.id ?? "", name: "", reference: "" }
+    : { connectionId: intent.resource.connectionId ?? "", name: intent.resource.name, reference: intent.resource.externalRef ?? "" });
+  const bindReferences = intent.kind === "bind" ? referenceOptions(kind, runtimes) : [];
   const set = (patch: Partial<ResourceDraftState>) => { setDraft((current) => ({ ...current, ...patch })); };
-  const chooseKind = (kind: string) => {
+  const chooseKind = (next: string) => {
     // Read the DOM value before the deferred updater runs: React resets
     // currentTarget once the event handler returns.
-    set({ kind, connectionId: isLocalKind(kind) ? "" : eligibleConnections(kind, connections)[0]?.id ?? "", reference: isLocalKind(kind) ? referenceOptions(kind, runtimes)[0]?.value ?? "" : "" });
+    setKind(next);
+    set({ connectionId: isLocalKind(next) ? "" : eligibleConnections(next, connections)[0]?.id ?? "", reference: isLocalKind(next) ? referenceOptions(next, runtimes)[0]?.value ?? "" : "" });
   };
   const pendingSubject = intent.kind === "bind" ? projectSubject(intent.projectId) : resourceSubject(intent.resource.id);
   const save = useMutation({
@@ -497,23 +493,23 @@ function ResourceDialog(props: ResourceDialogProps) {
   const frozen = intent.kind === "update" ? stale : intent.kind === "unbind" && terminal;
   const blocked = pending || frozen;
   // A bind never freezes, but its submit waits for the selection its kind needs.
-  const submitBlocked = intent.kind === "bind" ? pending || bindDraftIncomplete(draft, runtimes) : blocked;
+  const submitBlocked = blocked || (intent.kind === "bind" && bindDraftIncomplete(draft, kind, bindReferences));
   const copy = resourceDialogCopy(intent);
-  const notice = failure && resourceRefusalNotice(intent, failure, stale, terminal);
+  const notice = failure && resourceRefusalNotice(intent, failure, frozen);
   return <DialogFrame title={copy.title} closeLabel={copy.closeLabel} descriptionId={copy.descriptionId} description={copy.description} openerRef={openerRef} fallbackFocus={fallbackFocus} onClose={onClose}>
     {intent.kind === "unbind" ? <>
       {notice && <p className="notice notice-error" role="alert">{notice}</p>}
       <div className="dialog-actions">
-        <button className="button" type="button" disabled={blocked} aria-busy={pending} onClick={() => { save.mutate(resourceSubmission(intent, draft)); }}>Unbind resource</button>
+        <button className="button" type="button" disabled={blocked} aria-busy={pending} onClick={() => { save.mutate(resourceSubmission(intent, draft, kind)); }}>Unbind resource</button>
         <button className="button" type="button" onClick={onClose} disabled={pending}>Cancel</button>
       </div>
     </> : <form className="connection-form" onSubmit={(event) => {
       event.preventDefault();
       if (submitBlocked) return;
-      save.mutate(resourceSubmission(intent, draft));
+      save.mutate(resourceSubmission(intent, draft, kind));
     }}>
       {intent.kind === "bind"
-        ? <BindResourceFields draft={draft} connections={connections} runtimes={runtimes} error={failure} pending={pending} onChange={set} onKind={chooseKind} />
+        ? <BindResourceFields kind={kind} draft={draft} connections={connections} references={bindReferences} error={failure} pending={pending} onChange={set} onKind={chooseKind} />
         : <UpdateResourceFields resource={intent.resource} draft={draft} connections={connections} runtimes={runtimes} error={failure} blocked={blocked} onChange={set} />}
       {notice && <p className="notice notice-error" role="alert">{notice}</p>}
       <div className="dialog-actions">
@@ -580,15 +576,12 @@ export function ProjectResources(props: ProjectResourcesProps) {
   </section>;
 }
 
-// The editor the surface has open: a bind has no subject row, the other two name
-// the served row they opened on.
 interface ResourceEditor { id: number; kind: "bind" | "update" | "unbind"; resourceId: string }
 
-/** The dialog an open editor mounts, or null while the row it edits is not served. */
 function dialogIntentOf(editor: ResourceEditor, target: ResourceRow | undefined, projectId: string): ResourceIntent | null {
   if (editor.kind === "bind") return { kind: "bind", projectId };
   if (target === undefined) return null;
-  return editor.kind === "update" ? { kind: "update", resource: target } : { kind: "unbind", resource: target };
+  return { kind: editor.kind, resource: target };
 }
 
 function ProjectResourcesReady({ api, csrf, project, headingRef, workspace, workspaceError, connections, writePending, pendingSubjects, projectRef, onRefreshProject, onWriteStart, onWriteSettled, onSubjectPending }: ProjectResourcesProps & { project: ProjectRow; headingRef: RefObject<HTMLHeadingElement | null> }) {

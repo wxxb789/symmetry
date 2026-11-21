@@ -57,9 +57,6 @@ interface ProjectEditorProps {
  * failed intent, including the version it was edited from.
  */
 export function ProjectEditor({ project, api, csrf, onSaved, onRefused, onClose, onWriteStart, onWriteSettled }: ProjectEditorProps) {
-  // These dialogs carry no Radix trigger: the invoking control is captured when
-  // the editor mounts and focused again on close, unless a pending write
-  // disabled it — then focus is left where Radix would put it.
   const { restore } = useDialogOpener();
   // The revision this editor was opened from; never re-derived from a refresh.
   const [target] = useState(() => project === null ? null : { id: project.id, version: project.version });
@@ -207,7 +204,6 @@ interface WorkItemDraftState {
   submit: () => void;
   retry: () => void;
   close: () => void;
-  /** The opener restore this dialog's close runs (Radix's own target when the opener is gone or disabled). */
   restore: (event: Event) => void;
 }
 

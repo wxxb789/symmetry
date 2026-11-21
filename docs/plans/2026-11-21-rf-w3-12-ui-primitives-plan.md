@@ -416,3 +416,73 @@ nothing in-repo is archived or re-indexed here. No design/contract document is m
 document in `docs/**/*.md` names `StatusBadge`, `FieldErrors`, `DialogFrame`, `restoreFocus` or
 `.planning-form` outside historical plans/evidence, and `docs/TODO.md` / `docs/archive/CLOSED-TODO.md`
 hold no entry for this surface.
+
+## Apply-stage note (2026-11-21, simplify apply)
+
+Conductor's apply brief (`rf-w3-12-ui-primitives-apply.md`): accept every finding inside the owned
+set that does not weaken tests/types/validation/permissions; reject outside-owned-set findings
+unless an amendment extends the set. Disposition: **D1–D7, R1–R5, T1–T4 applied; T5, N1, PD3
+recorded with no change; PD1, PD2 rejected.**
+
+Applied, all inside the owned set (`focus.ts` byte-identical throughout, sha256
+`85cc1708406f11e942140b5a1f25df5babe8c61bcee9c4b260eaec8ab4f1de63`): D1 the hook returns
+`{ restore }` only (no caller read the dead `openerRef`); D2 the in-function own-key comment deleted
+(the table-side one kept); D3 the false "identical across the three" sentence deleted; D4 the two
+extra `editors.tsx` focus-restore comment copies deleted (`:60-62`, `:210`); D5 the hook header's
+caller census deleted (caller-owned-ref/`activeElement` semantics and the clear-before-delegating
+sentence kept — documented behaviour); D6 the ownership/narrative header sentence deleted
+(import-direction rule kept); D7 four self-restating one-liners deleted; R1 the 7 bind/update rows
+now use `Field` (28 rows, one shape; `Field`'s doc covers `.connection-form`); R2
+`resourceRefusalNotice(intent, error, frozen)` and `submitBlocked = blocked || (bind && incomplete)`;
+R3 the bind's `referenceOptions` is computed once per render in `ResourceDialog` and passed down;
+R4 `ResourceDraftState` is `{connectionId, name, reference}` with the kind selector as its own
+bind-scoped state (the pre-refactor shape); R5 `dialogIntentOf` returns
+`{ kind: editor.kind, resource: target }` (narrowed after the bind guard; the full inline was not
+taken — reviewer split, nested ternary); T1 `constructor` assertions added to the workspace and sync
+unknown-status cases; T2 a non-refusal object carrying `fields` added to the `FieldErrors` null
+case; T3 focus assertions added to two clean-close cases (project editor, work-item editor); T4
+`defaultPrevented === [true]` added to both fallback cases.
+
+No change, the finding's own reason kept: **T5** (it recommends no action — encoding the ordering
+would pin an internal ordering by invoking the handler twice; the gap stays recorded); **N1**
+(verified unreachable at implement time; no fix); **PD3** (its own text offers "gate on failure
+instead of notice for byte-exact parity; otherwise accept" — the delta is accepted: an empty
+`role="alert"` announces nothing and no test reaches the edge). Rejected: **PD1** (`docs/TODO.md`
+is editable here only when a TODO entry is closed; no amendment extends it — disclosure below);
+**PD2** (`planning/write-policy.ts` is W4-10's file and an explicit non-goal; disclosure only).
+
+Superseded numbers (single source, re-derived on this tree): census pins `FieldErrors`
+`primitives.tsx:48 → 46`, `data-status` writer `primitives.tsx:44 → 42`, `useDialogOpener`
+`use-dialog-opener.ts:18 → 16`; LOC `primitives.tsx 66 → 64`, `use-dialog-opener.ts 27 → 25`,
+`resources.tsx 713 → 706`, `editors.tsx 563 → 559`, `primitives.test.tsx 186 → 196`,
+`planning.test.tsx 1012 → 1018`; production net `+108 → +93`; `<Field ` rows `resources.tsx` 7 +
+`editors.tsx` 21; citation pins `resources.tsx 88-102 → 85-99`, `116 → 113`, `122 → 119`,
+`123-126 → 120-123`; the DOM suites' declared cases 57/35/13 + 12 are unchanged (117 together),
+so the full suite stays 21 files / 522 cases.
+
+Gates on this tree (all foreground, serialized; logs under
+`<HOST-PATH>/.local/state/gdd/runs/2026-11-21/symmetry-rf-w3-12-ui-primitives-apply/`):
+
+| gate | exit | counts |
+| --- | ---: | --- |
+| typecheck (final tree, after the flip set) | 0 | `tsc --noEmit`, no output, 16.5 s |
+| lint | 0 | `227 problems (0 errors, 227 warnings)`; the `--max-warnings 229` ceiling is not touched |
+| four DOM suites (default invocation) | 0 | 4 files / 117 tests passed, 101.19 s (`gates-4file-default-rerun.log`); five other attempts of the same command under host load (one of them `--maxWorkers=2`) returned 1 / 3 / 6 / 1 / 1 failed tests, every failure a `findBy*` 1 s wait or a 5 s test timeout in `control.test.tsx`'s `openDetail` and other untouched find-wait points (`control.test.tsx` alone: 13/13 twice, one 1-failed run) |
+| full suite (default invocation) | 1 | attempt 1: 1 failed / 521 passed (a `control.test.tsx` find-timeout); attempt 2: 17 failed / 505 passed (the plan's recorded load signature — wall-clock timeouts across 9 files, none in the diff's assertions) |
+| full suite `--maxWorkers=2` diagnostic | 0 | **21 files / 522 tests passed, 282.08 s** |
+| knip (report-only) | 0 | no findings; the one pre-existing `coverage/**` hint |
+| definition census | — | `StatusBadge` 1 (`primitives.tsx:33`), `FieldErrors` 1 (`:46`), `useDialogOpener` 1 (`use-dialog-opener.ts:16`), `restoreFocus` 1 (`focus.ts:8`), the three dialect names 0, `data-status` one writer (`primitives.tsx:42`) |
+| citation proof | — | every `file:line` in both comment blocks printed at this tree; the four `resources.tsx` pins re-derived by content and refreshed |
+| diff hygiene | 0 | `git diff --check` clean; no profile path in the diff; `frontend/package.json` untouched |
+| apply-stage flips (each applied alone, reverted) | 1 each | (f) workspace plain index → `1 failed` (`Unknown status: constructor`); (g) sync plain index → `1 failed` (`Unknown sync status: constructor`); (h) `instanceof ServerRefusal` dropped → `1 failed`; (i) project editor `onCloseAutoFocus` dropped → `1 failed` at the new `toHaveFocus`; (j) the focus.ts fallback arm dropped → `2 failed`; (k) the contract witness (d) re-run (disabled check dropped) → `1 failed`, focus to body. `focus.ts` sha256 restored after every flip |
+
+Disclosure for the conductor (PD1, recorded, not applied — `docs/TODO.md` is outside the strict
+owned set): the live citation block at `docs/TODO.md:130-134` refers to
+`frontend/src/features/goals/detail.tsx`, whose lines moved +1 in this range (an import line split
+in two above them). Measured on this tree vs the base revision `79548368`: the block's `:408` lands
+on a doc-comment line, the function is at base `:412` / now `:413`; the `:381-382` pair is now
+`:382-383`; the `accept_plan` note is at base `:538` / now `:539` against the cited `:533`; and the
+`actionPayload` `default: return null` is at base `:631-632` / now `:632-633` against the cited
+`:626-627`. Three of the four citations were already stale at the base revision (that is, before
+this range); the +1 shift adds one more to each. PD2 (plain index for a served refusal code in
+`planning/write-policy.ts:135`) stays W4-10's.
