@@ -150,15 +150,15 @@ func TestClaudeProbeBoundsHangingRunnerAndPreservesCallerCancellation(t *testing
 }
 
 func TestBoundedProbeRejectsSuccessAfterDeadline(t *testing.T) {
-	output, err := runBoundedProbe(context.Background(), time.Nanosecond, func(ctx context.Context) ([]byte, error) {
+	output, err := RunBoundedProbe(context.Background(), time.Nanosecond, func(ctx context.Context) ([]byte, error) {
 		<-ctx.Done()
 		return []byte("valid capability output"), nil
 	})
 	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("runBoundedProbe() error = %v, want context.DeadlineExceeded", err)
+		t.Fatalf("RunBoundedProbe() error = %v, want context.DeadlineExceeded", err)
 	}
 	if output != nil {
-		t.Fatalf("runBoundedProbe() output = %q, want nil after deadline", output)
+		t.Fatalf("RunBoundedProbe() output = %q, want nil after deadline", output)
 	}
 }
 
