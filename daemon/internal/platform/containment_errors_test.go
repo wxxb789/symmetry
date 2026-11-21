@@ -24,10 +24,10 @@ type linuxOwnerTypedMismatchPin struct {
 	transport     func(inner error) error
 }
 
-// linuxOwnerTypedMismatchPins is generated from the w2-11-typed-errors site
-// inventory (one row per repeated anonymous errOr fallback in the owned
-// production files): each errorf reproduces its representative site's
-// fmt.Errorf expression verbatim, with err == nil.
+// linuxOwnerTypedMismatchPins holds one row per sentinel class, each row naming
+// one representative site from the w2-11-typed-errors site inventory: each
+// errorf reproduces its representative site's fmt.Errorf expression verbatim,
+// with err == nil.
 var linuxOwnerTypedMismatchPins = []linuxOwnerTypedMismatchPin{
 	{
 		site:          "anchor_gate.go:995 classifyUnregisteredPreReleaseGate",
@@ -238,10 +238,10 @@ func TestLinuxOwnerTypedMismatchSentinelTable(t *testing.T) {
 // production code, so a site that stops returning its sentinel fails here even
 // though the expression pins above cannot observe the site itself.
 func TestLinuxOwnerTypedMismatchReachableSites(t *testing.T) {
-	if os.Getuid() == 0 {
-		t.Skip("requires an unprivileged uid for the Linux owner A process check")
-	}
 	t.Run("verifyLinuxOwnerAProcess", func(t *testing.T) {
+		if os.Getuid() == 0 {
+			t.Skip("requires an unprivileged uid for the Linux owner A process check")
+		}
 		err := verifyLinuxOwnerAProcess(os.Getpid(), "linux:v2:unrelated-identity", uint32(os.Getuid()), uint32(os.Getgid()), 0, "")
 		want := "Linux owner A process creation identity mismatch: identity differs"
 		if err == nil || err.Error() != want || !errors.Is(err, ErrLinuxOwnerIdentityDiffers) {
