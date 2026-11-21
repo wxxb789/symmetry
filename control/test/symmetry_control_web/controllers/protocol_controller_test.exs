@@ -557,6 +557,35 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
     end
   end
 
+  test "task creation replays the stored task for the same idempotency key", %{conn: conn} do
+    key = "replay-#{System.unique_integer([:positive])}"
+
+    created =
+      bearer(conn, @operator_token)
+      |> put_req_header("idempotency-key", key)
+      |> post("/api/v1/tasks", wire_task_payload())
+      |> json_response(201)
+
+    replayed =
+      bearer(conn, @operator_token)
+      |> put_req_header("idempotency-key", key)
+      |> post("/api/v1/tasks", wire_task_payload())
+      |> json_response(200)
+
+    assert replayed == created
+
+    assert_error(
+      bearer(conn, @operator_token)
+      |> put_req_header("idempotency-key", key)
+      |> post(
+        "/api/v1/tasks",
+        put_in(wire_task_payload(), ["work", "input"], %{"branch" => "other"})
+      ),
+      409,
+      "idempotency_conflict"
+    )
+  end
+
   test "a stale fence on the lease resource returns ownership_lost", %{conn: conn} do
     {machine_id, machine_token} = enroll(conn)
     runtime_id = register(conn, machine_id, machine_token)
@@ -794,6 +823,107 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
     assert_command(command, task_id, run_id, generation, "provide_input", %{}, "pending")
   end
 
+  test "provide_input accepts the four-key waiting_transition_id fence", %{conn: conn} do
+    {machine_id, machine_token} = enroll(conn)
+    runtime_id = register(conn, machine_id, machine_token)
+    task_id = submit_and_assign(conn)
+    {run_id, generation, fence} = claim(conn, machine_token, runtime_id)
+
+    assert %{"state" => "running"} =
+             bearer(conn, machine_token)
+             |> put(
+               "/api/v1/runs/#{run_id}/transitions/#{uuid()}",
+               Map.merge(fence, %{"state" => "running", "payload" => %{}})
+             )
+             |> json_response(200)
+
+    waiting_id = uuid()
+
+    assert %{"state" => "waiting_for_input"} =
+             bearer(conn, machine_token)
+             |> put(
+               "/api/v1/runs/#{run_id}/transitions/#{waiting_id}",
+               Map.merge(fence, %{"state" => "waiting_for_input", "payload" => %{}})
+             )
+             |> json_response(200)
+
+    command =
+      bearer(conn, @operator_token)
+      |> put_req_header("idempotency-key", "input-#{System.unique_integer([:positive])}")
+      |> post("/api/v1/tasks/#{task_id}/commands", %{
+        "kind" => "provide_input",
+        "payload" => %{"branch" => "release"},
+        "generation" => generation,
+        "waiting_transition_id" => waiting_id
+      })
+      |> json_response(201)
+
+    assert_command(
+      command,
+      task_id,
+      run_id,
+      generation,
+      "provide_input",
+      %{"branch" => "release"},
+      "pending"
+    )
+
+    assert_error(
+      bearer(conn, @operator_token)
+      |> put_req_header("idempotency-key", "input-#{System.unique_integer([:positive])}")
+      |> post("/api/v1/tasks/#{task_id}/commands", %{
+        "kind" => "provide_input",
+        "payload" => %{},
+        "generation" => generation,
+        "waiting_transition_id" => uuid()
+      }),
+      409,
+      "state_conflict"
+    )
+
+    for body <- [
+          %{
+            "kind" => "provide_input",
+            "payload" => %{},
+            "generation" => 0,
+            "waiting_transition_id" => waiting_id
+          },
+          %{
+            "kind" => "provide_input",
+            "payload" => %{},
+            "generation" => generation,
+            "waiting_transition_id" => nil
+          },
+          %{
+            "kind" => "provide_input",
+            "payload" => %{},
+            "generation" => generation,
+            "waiting_transition_id" => 123
+          },
+          %{
+            "kind" => "provide_input",
+            "payload" => nil,
+            "generation" => generation,
+            "waiting_transition_id" => waiting_id
+          },
+          %{
+            "kind" => "provide_input",
+            "payload" => %{},
+            "generation" => generation,
+            "waiting_transition_id" => waiting_id,
+            "extra" => true
+          }
+        ] do
+      assert_error(
+        bearer(conn, @operator_token)
+        |> put_req_header("idempotency-key", "input-#{System.unique_integer([:positive])}")
+        |> post("/api/v1/tasks/#{task_id}/commands", body),
+        400,
+        "invalid_request"
+      )
+    end
+  end
+
   test "provide_input commands are returned in dispatch and reconciliation snapshots", %{
     conn: conn
   } do
@@ -986,6 +1116,27 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
       400,
       "invalid_request"
     )
+  end
+
+  test "events with invalid occurred_at values are rejected as invalid_request", %{conn: conn} do
+    {machine_id, machine_token} = enroll(conn)
+    runtime_id = register(conn, machine_id, machine_token)
+    _task_id = submit_and_assign(conn)
+    {run_id, _generation, fence} = claim(conn, machine_token, runtime_id)
+
+    for event <- [
+          Map.put(event_payload(), "occurred_at", "not-a-timestamp"),
+          Map.put(event_payload(), "occurred_at", 123),
+          Map.delete(event_payload(), "occurred_at"),
+          "not-a-map"
+        ] do
+      assert_error(
+        bearer(conn, machine_token)
+        |> post("/api/v1/runs/#{run_id}/events", Map.put(fence, "events", [event])),
+        400,
+        "invalid_request"
+      )
+    end
   end
 
   test "does not retain legacy action routes", %{conn: conn} do
