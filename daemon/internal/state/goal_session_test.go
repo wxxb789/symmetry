@@ -343,7 +343,7 @@ func TestGoalSessionLineageBlocksCrossGenerationButAllowsIndependentWorkItem(t *
 	if err != nil {
 		t.Fatalf("CheckGoalSessionLineage() error = %v", err)
 	}
-	if !status.BlocksNewLaunch() || status.State != GoalSessionLineageStateUncertain || len(status.SessionKeys) != 1 || status.SessionKeys[0] != first.Key() {
+	if !status.BlocksNewLaunch() || status.State != goalSessionLineageStateUncertain || len(status.SessionKeys) != 1 || status.SessionKeys[0] != first.Key() {
 		t.Fatalf("lineage status = %#v", status)
 	}
 
@@ -401,7 +401,7 @@ func TestGoalSessionLineageReleasesOnlyAfterExplicitKnownStopAcrossRestart(t *te
 	if err != nil {
 		t.Fatalf("CheckGoalSessionLineage() after restart error = %v", err)
 	}
-	if !status.BlocksNewLaunch() || status.State != GoalSessionLineageStateUncertain {
+	if !status.BlocksNewLaunch() || status.State != goalSessionLineageStateUncertain {
 		t.Fatalf("restarted lineage status = %#v", status)
 	}
 
@@ -426,7 +426,7 @@ func TestGoalSessionLineageReleasesOnlyAfterExplicitKnownStopAcrossRestart(t *te
 	if err != nil {
 		t.Fatalf("CheckGoalSessionLineage() after known stop error = %v", err)
 	}
-	if status.BlocksNewLaunch() || status.State != GoalSessionLineageStateFree || len(status.SessionKeys) != 0 {
+	if status.BlocksNewLaunch() || status.State != goalSessionLineageStateFree || len(status.SessionKeys) != 0 {
 		t.Fatalf("lineage remained blocked after known stop: %#v", status)
 	}
 	if saved, err := restarted.SaveGoalSessionLaunchIntent(retry); err != nil {
@@ -454,7 +454,7 @@ func TestGoalSessionLineageAttachedStateReleasesOnlyAfterClose(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CheckGoalSessionLineage() attached error = %v", err)
 	}
-	if !status.BlocksNewLaunch() || status.State != GoalSessionLineageStateAttached {
+	if !status.BlocksNewLaunch() || status.State != goalSessionLineageStateAttached {
 		t.Fatalf("attached lineage status = %#v", status)
 	}
 	retry := intent
@@ -472,7 +472,7 @@ func TestGoalSessionLineageAttachedStateReleasesOnlyAfterClose(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CheckGoalSessionLineage() closed error = %v", err)
 	}
-	if status.BlocksNewLaunch() || status.State != GoalSessionLineageStateFree {
+	if status.BlocksNewLaunch() || status.State != goalSessionLineageStateFree {
 		t.Fatalf("closed lineage status = %#v", status)
 	}
 }
@@ -506,7 +506,7 @@ func TestGoalSessionLineageDirtyIndexRebuildsFromJournal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CheckGoalSessionLineage() error = %v", err)
 	}
-	if !status.BlocksNewLaunch() || status.State != GoalSessionLineageStateUncertain || len(status.SessionKeys) != 1 || status.SessionKeys[0] != saved.Key() {
+	if !status.BlocksNewLaunch() || status.State != goalSessionLineageStateUncertain || len(status.SessionKeys) != 1 || status.SessionKeys[0] != saved.Key() {
 		t.Fatalf("rebuilt lineage status = %#v", status)
 	}
 	clean, err := store.loadGoalSessionLineageIndexLocked(intent.LineageKey())
@@ -588,7 +588,7 @@ func TestGoalSessionJournalCommitSurvivesLineageIndexRefreshFailure(t *testing.T
 	if err != nil {
 		t.Fatalf("CheckGoalSessionLineage() after failed refresh error = %v", err)
 	}
-	if !status.BlocksNewLaunch() || status.State != GoalSessionLineageStateUncertain {
+	if !status.BlocksNewLaunch() || status.State != goalSessionLineageStateUncertain {
 		t.Fatalf("rebuilt status after failed refresh = %#v", status)
 	}
 }
@@ -1026,7 +1026,7 @@ func TestRebindGoalSessionForResumeConsumesExactStoppedAttachment(t *testing.T) 
 	if err != nil {
 		t.Fatalf("CheckGoalSessionLineage() for resume task error = %v", err)
 	}
-	if !newLineage.BlocksNewLaunch() || newLineage.State != GoalSessionLineageStateAttached {
+	if !newLineage.BlocksNewLaunch() || newLineage.State != goalSessionLineageStateAttached {
 		t.Fatalf("resume task lineage was not durably blocked: %#v", newLineage)
 	}
 
@@ -2031,7 +2031,7 @@ func TestGoalSessionValidatorFirstErrorStringsArePinned(t *testing.T) {
 		journal.LaunchAttemptedAt = attemptedAt
 		journal.NativeSessionID = "native-session-1"
 	}
-	lineageAttachment := GoalSessionControlAttachment{
+	lineageAttachment := goalSessionControlAttachmentRecord{
 		RunID: "run-1", Generation: 1, TaskID: "task-1", AdmissionID: "admission-1",
 		SessionID: lineageSessionID, BindingID: bindingID, ReceiptID: controlReceiptID,
 	}
@@ -2153,7 +2153,7 @@ func TestGoalSessionValidatorFirstErrorStringsArePinned(t *testing.T) {
 		{
 			name: "control attachment lineage is malformed",
 			mutate: func(journal *GoalSessionJournal) {
-				journal.ControlAttachmentLineage = &GoalSessionControlAttachmentLineage{}
+				journal.ControlAttachmentLineage = &goalSessionControlAttachmentLineage{}
 			},
 			want: "goal session control attachment lineage is invalid",
 		},
@@ -2164,7 +2164,7 @@ func TestGoalSessionValidatorFirstErrorStringsArePinned(t *testing.T) {
 				journal.ControlSessionID = controlSessionID
 				journal.BindingID = bindingID
 				journal.ControlAttachmentReceiptID = controlReceiptID
-				journal.ControlAttachmentLineage = &GoalSessionControlAttachmentLineage{Original: lineageAttachment, Current: lineageAttachment}
+				journal.ControlAttachmentLineage = &goalSessionControlAttachmentLineage{Original: lineageAttachment, Current: lineageAttachment}
 			},
 			want: "goal session control attachment lineage is invalid",
 		},
@@ -2176,7 +2176,7 @@ func TestGoalSessionValidatorFirstErrorStringsArePinned(t *testing.T) {
 		{
 			name: "consumed stop receipt history is empty",
 			mutate: func(journal *GoalSessionJournal) {
-				journal.ConsumedStopCertificates = &GoalSessionConsumedStopCertificateHistory{}
+				journal.ConsumedStopCertificates = &goalSessionConsumedStopCertificateHistory{}
 			},
 			want: "goal session consumed stop receipt history is invalid",
 		},
@@ -2184,7 +2184,7 @@ func TestGoalSessionValidatorFirstErrorStringsArePinned(t *testing.T) {
 			name: "resume source receipt missing from consumed history",
 			mutate: func(journal *GoalSessionJournal) {
 				journal.ResumeSourceStopCertificate = &sourceCertificate
-				journal.ConsumedStopCertificates = &GoalSessionConsumedStopCertificateHistory{Certificates: []GoalSessionStopCertificate{otherCertificate}}
+				journal.ConsumedStopCertificates = &goalSessionConsumedStopCertificateHistory{Certificates: []GoalSessionStopCertificate{otherCertificate}}
 			},
 			want: "goal session resume source receipt history is invalid",
 		},
