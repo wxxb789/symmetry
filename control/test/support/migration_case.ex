@@ -80,14 +80,7 @@ defmodule SymmetryControl.MigrationCase do
     Sandbox.unboxed_run(Repo, fn -> Repo.query!("DROP SCHEMA IF EXISTS #{schema} CASCADE") end)
   end
 
-  @doc """
-  The repository's migration directory.
-
-  The support tree sits two levels below `control/`, so this resolves to
-  `control/priv/repo/migrations` — the same directory the suites that carried
-  this helper locally resolved from `test/symmetry_control/migrations`.
-  """
-  def migrations_path do
+  defp migrations_path do
     Path.expand("../../priv/repo/migrations", __DIR__)
   end
 

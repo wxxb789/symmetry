@@ -165,14 +165,16 @@ Shared, mutable on-disk path:
 `SymmetryControl.MigrationCase` (extends the existing template; no behaviour change):
 
 ```elixir
-migrations_path()  # Path.expand("../../priv/repo/migrations", "control/test/support")
+migrations_path()  # module-scoped (defp): Path.expand("../../priv/repo/migrations", "control/test/support")
 migrate_all_up!()  # Ecto.Migrator.run(Repo, migrations_path(), :up, all: true, log: false,
                    #   migration_lock: false, dynamic_repo: Repo.get_dynamic_repo())
 ```
 
-Both bodies are copied byte-for-byte from the four private copies (`migrations_path/0` and
-`migrate_all_up!/0` each hash to one body across all four files; the dedented-body hashes are
-`057ba8c2d809` and `2c55e6bee54c`). The `using do … import SymmetryControl.MigrationCase,
+Both bodies are taken from the four private copies; each hashes to one body across all four
+donors (the dedented-body hashes are `057ba8c2d809` and `2c55e6bee54c`). Relative to the donors,
+`migrate_all_up!/0` differs only in being declared public (the suites import it) and
+`migrations_path/0` only in the relative-path literal re-expressed below. The `using do … import
+SymmetryControl.MigrationCase,
 only: […]` line gains `migrate_all_up!: 0` (wrapped over lines so `mix format --check-formatted`
 stays green at 98 columns); `migrations_path/0` stays module-scoped (nothing else calls it —
 verified: each of the four files references it exactly once, from inside its `migrate_all_up!/0`).
@@ -187,7 +189,7 @@ ExUnit.start(max_cases: 28)                       # sandbox mode line unchanged 
 Ecto.Adapters.SQL.Sandbox.mode(SymmetryControl.Repo, :manual)
 ```
 
-`28` is pinned rather than left at ExUnit's default because 25 modules are async after the
+`28` is pinned rather than left at ExUnit's default because 26 modules are async after the
 conversion: the default on this host (32) already exceeds the pool coupling below, and on the
 4-scheduler CI runner it is 8, below the module count. The effective ceiling each gate run printed
 (`Running ExUnit with seed: N, max_cases: 28`) is recorded in the answer, together with the
@@ -198,8 +200,9 @@ measured phase shift it produces.
 async module holds one sandbox owner connection, so `max_cases + 2 ≤ pool_size ≤
 min(PG max_connections − other clients, 90)` must hold on the dev host **and** on the 4-scheduler CI
 runner (the +2 is the sync-module connection plus the app's own pool user). ExUnit's default ceiling
-(`schedulers_online() * 2`) already violates the first inequality in both configurations (32/32 here,
-8/8 on CI); pinning it is what makes the coupling explicit.
+(`schedulers_online() * 2`) already violates the first inequality on this host (32 + 2 > 32) and
+leaves only 8 concurrent module slots on the 4-scheduler CI runner; pinning 28 is what makes the
+coupling explicit.
 
 ### Edge-case semantics this slice pins
 
@@ -214,8 +217,8 @@ runner (the +2 is the sync-module connection plus the app's own pool user). ExUn
    `portal_controller_test.exs` fail here by design (`PortalBundle.require_staged!/1`). The same flag
    is applied to the pre-slice and post-slice runs; CI stages the artifact in the `portal-assets`
    download step of the `control` job and runs the bare `mix test`.
-3. **`max_cases` bounds modules.** With 14 existing + 11 converted = 25 async modules, a ceiling
-   below 25 serializes the pool; the pinned value must be ≥ 25 and satisfy the pool coupling, and the
+3. **`max_cases` bounds modules.** With 15 existing + 11 converted = 26 async modules, a ceiling
+   below 26 serializes the pool; the pinned value must be ≥ 26 and satisfy the pool coupling, and the
    pre/post wall time is reported with the effective ceiling each run printed.
 4. **The mutation check is the lock-contention probe** (amended F2): two converted files take the
    same two advisory keys (41, 42) in opposite order, each waiting for the peer's first key, and the

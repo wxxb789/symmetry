@@ -15,8 +15,8 @@ config :symmetry_control, SymmetryControl.Repo,
       System.get_env("MIX_TEST_PARTITION", ""),
   pool: Ecto.Adapters.SQL.Sandbox,
   # Coupled to `max_cases` in test_helper.exs: max_cases + 2 <= pool_size <=
-  # min(PG max_connections - other clients, 90). The 32-connection floor keeps the
-  # 4-scheduler CI runner (8 by the scheduler arithmetic) above the pinned ceiling.
+  # min(PG max_connections - other clients, 90). The 32-connection floor lifts the
+  # 4-scheduler CI runner's pool from its scheduler-arithmetic 8 to 32, above the pinned ceiling.
   pool_size: min(max(System.schedulers_online() * 2, 32), 90)
 
 # We don't run a server during test. If one is required,
