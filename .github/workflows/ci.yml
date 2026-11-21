@@ -324,7 +324,11 @@ jobs:
       # dev environment: the same sources are not compiled twice, the test-only
       # support tree is compiled too, and a warning there now fails this gate.
       - run: MIX_ENV=test mix compile --warnings-as-errors
-      - run: mix test
+      # Per-test duration telemetry (refactor slice W2-01): `--slowest 20`
+      # forwards through the `test` alias to ExUnit, which prints the twenty
+      # slowest tests after the run summary; the step still fails exactly when
+      # `mix test` fails.
+      - run: mix test --slowest 20
       - name: Run provider broker end-to-end tests
         timeout-minutes: 10
         env:
@@ -1525,9 +1529,32 @@ jobs:
               TestOpenCodeAdapterWithoutV2OwnerFailsBeforeHealthRequest \
             -- "$(command -v go)" test -count=1 -timeout 300s -json \
               ./internal/harness/pi ./internal/harness/opencode
+      # The race pass is this job's critical path (~450 s), and without `-json`
+      # no per-test elapsed time reaches the log. The shared gate captures the
+      # event stream for the duration summary below, keeps the stdio-only caller
+      # boundary before Go, and preserves the suite's own exit status. Its named
+      # witness is a test the ordinary pass above already requires to run and
+      # pass, so the race configuration enforces one of the same names rather
+      # than inventing a new requirement.
       - name: Run race tests with the same stdio-only caller boundary
         run: |
-          python3 ../scripts/ci/stdio-only-caller-boundary.py "$(command -v go)" test -race -count=1 -timeout 600s ./...
+          python3 ../scripts/ci/go-test-json-gate.py \
+            --events "$RUNNER_TEMP/daemon-go-race.json" \
+            --stderr "$RUNNER_TEMP/daemon-go-race.stderr" \
+            --stdio-boundary \
+            --assert github.com/wxxb789/symmetry/daemon/internal/harness/opencode \
+              TestOpenCodeV2VerifierRejectsReleasedPeer \
+            -- "$(command -v go)" test -race -count=1 -timeout 600s -json ./...
+      # Advisory until refactor slice W6-12 flips the duration thresholds to
+      # blocking (program plan section 10.5): the summarizer's exit status is the
+      # verdict and the table prints either way, while the job keeps its current
+      # conclusion semantics. `if: always()` keeps the table beside a red race
+      # run, which is when the attribution is needed.
+      - name: Summarize Go test durations
+        if: always()
+        continue-on-error: true
+        run: |
+          python3 ../scripts/ci/go-test-durations.py "$RUNNER_TEMP/daemon-go-race.json"
       - run: GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ./...
       - name: Upload ordinary namespace prerequisite evidence
         if: always()
@@ -1639,6 +1666,15 @@ jobs:
       # extracts the classifier program out of the workflow, routes fixture diffs
       # through it and pins the routing those outputs gate.
       - run: python3 scripts/ci/test-ci-changed-path-classifier.py
+
+      # The browser-suite inventory (refactor slice W2-01): every
+      # `browser/tests/*.spec.mjs` and `browser/scripts/*.test.mjs` must be named
+      # by a workflow step or listed in the `browser/README.md` manual matrix;
+      # refactor slice W6-02 owns wiring the remaining families. It runs here
+      # because the matrix lives in a Markdown file: a README-only pull request
+      # classifies documentation-only, and a `run-heavy`-gated step would never
+      # check it. Unlike the lint metrics below, this step is blocking.
+      - run: python3 scripts/ci/assert-browser-suite-coverage.py
 
       # Prerequisite ownership: the root `pyproject.toml` (the ruff configuration,
       # refactor slice W1-11), a preinstalled shellcheck, the pinned actionlint
