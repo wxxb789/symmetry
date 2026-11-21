@@ -12,7 +12,6 @@ import sys
 import tempfile
 import unittest
 
-
 SCRIPT = pathlib.Path(__file__).with_name("publish-linux-v2-control-receipt.py")
 OWNER_UID = 65534
 OWNER_GID = 65534
@@ -29,17 +28,35 @@ class ReceiptPublisherTest(unittest.TestCase):
         self.source = self.root / "source.json"
         self.name = "owned-run.json"
         self.document = {
-            "version": 1, "operation": "resource.sync", "state": "succeeded",
-            "matched_count": 1, "failure_present": False, "case": "pi_provider_action",
-            "work_item_id": "owned-work-item", "task_id": "owned-task", "run_id": "owned-run",
-            "generation": 1, "runtime_id": "owned-runtime", "runtime_epoch": 1,
-            "claim_id": "owned-claim", "resource_id": "owned-resource", "provider": "github",
-            "resource_kind": "repository", "completed_at": "2026-10-10T00:00:00Z",
-            "intent_id_sha256": "1" * 64, "action_id_sha256": "2" * 64,
+            "version": 1,
+            "operation": "resource.sync",
+            "state": "succeeded",
+            "matched_count": 1,
+            "failure_present": False,
+            "case": "pi_provider_action",
+            "work_item_id": "owned-work-item",
+            "task_id": "owned-task",
+            "run_id": "owned-run",
+            "generation": 1,
+            "runtime_id": "owned-runtime",
+            "runtime_epoch": 1,
+            "claim_id": "owned-claim",
+            "resource_id": "owned-resource",
+            "provider": "github",
+            "resource_kind": "repository",
+            "completed_at": "2026-10-10T00:00:00Z",
+            "intent_id_sha256": "1" * 64,
+            "action_id_sha256": "2" * 64,
             "result_metadata": {
-                "operation": "resource.sync", "resource_id": "owned-resource", "projected": True,
-                "readback": "applied", "resource": {
-                    "provider": "github", "kind": "repository", "status": "ready", "sync_status": "synced",
+                "operation": "resource.sync",
+                "resource_id": "owned-resource",
+                "projected": True,
+                "readback": "applied",
+                "resource": {
+                    "provider": "github",
+                    "kind": "repository",
+                    "status": "ready",
+                    "sync_status": "synced",
                 },
             },
         }
@@ -53,7 +70,10 @@ class ReceiptPublisherTest(unittest.TestCase):
     def publish(self, uid: int = OWNER_UID, gid: int = OWNER_GID) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [sys.executable, str(SCRIPT), str(self.source), str(self.directory), self.name, str(uid), str(gid)],
-            text=True, capture_output=True, check=False, timeout=10,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=10,
         )
 
     def assert_rejected_without_publication(self, result: subprocess.CompletedProcess[str], reason: str) -> None:
@@ -68,8 +88,9 @@ class ReceiptPublisherTest(unittest.TestCase):
         target = self.directory / self.name
         info = target.stat()
         self.assertTrue(stat.S_ISREG(info.st_mode))
-        self.assertEqual((info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode), info.st_nlink),
-                         (0, OWNER_GID, 0o440, 1))
+        self.assertEqual(
+            (info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode), info.st_nlink), (0, OWNER_GID, 0o440, 1)
+        )
         self.assertEqual(target.read_bytes(), self.contents)
         self.assertEqual(self.source.read_bytes(), self.contents)
         self.assertEqual(list(self.directory.iterdir()), [target])

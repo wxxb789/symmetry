@@ -43,7 +43,6 @@ import sys
 import tempfile
 import unittest
 
-
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 CI_DIR = ROOT / "scripts" / "ci"
@@ -112,9 +111,13 @@ BASE_FILES = {
     "docs/runbooks/portal.md": "# Portal\n\nBase runbook text.\n",
     "scripts/ci/check-citation-existence.py": "# Stand-in bytes: the classifier reads this path, never its content.\n",
     "scripts/ci/check-record-cleanliness.py": "# Stand-in bytes: the classifier reads this path, never its content.\n",
-    "scripts/ci/model-routing-record-sanitize.py": "# Stand-in bytes: the classifier reads this path, never its content.\n",
+    "scripts/ci/model-routing-record-sanitize.py": (
+        "# Stand-in bytes: the classifier reads this path, never its content.\n"
+    ),
     "scripts/ci/revision_scope.py": "# Stand-in bytes: the classifier reads this path, never its content.\n",
-    "scripts/ci/test-check-citation-existence.py": "# Stand-in bytes: the classifier reads this path, never its content.\n",
+    "scripts/ci/test-check-citation-existence.py": (
+        "# Stand-in bytes: the classifier reads this path, never its content.\n"
+    ),
 }
 
 
@@ -160,12 +163,18 @@ def extract_classifier(workflow_text: str) -> str:
     block = job_blocks(workflow_text).get("changes")
     require(block is not None, "the workflow has no `changes:` job")
     anchor = first_index(
-        block, lambda line: line.strip() == "python3 - <<'PY'",
+        block,
+        lambda line: line.strip() == "python3 - <<'PY'",
         "the changes job has no `python3 - <<'PY'` classifier step",
     )
-    terminator = anchor + 1 + first_index(
-        block[anchor + 1 :], lambda line: line.strip() == "PY",
-        "the classifier heredoc has no `PY` terminator line",
+    terminator = (
+        anchor
+        + 1
+        + first_index(
+            block[anchor + 1 :],
+            lambda line: line.strip() == "PY",
+            "the classifier heredoc has no `PY` terminator line",
+        )
     )
     anchor_line = block[anchor]
     indent = anchor_line[: len(anchor_line) - len(anchor_line.lstrip())]
@@ -191,11 +200,7 @@ def predicate_literals(program_text: str) -> dict[str, tuple[str, ...]]:
     tree = ast.parse(program_text, filename="<ci.yml changes classifier>")
     literals: dict[str, tuple[str, ...]] = {}
     for node in tree.body:
-        if not (
-            isinstance(node, ast.Assign)
-            and len(node.targets) == 1
-            and isinstance(node.targets[0], ast.Name)
-        ):
+        if not (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)):
             continue
         output = next((key for key, name in PREDICATE_NAMES.items() if name == node.targets[0].id), None)
         if output is None:
@@ -205,8 +210,10 @@ def predicate_literals(program_text: str) -> dict[str, tuple[str, ...]]:
             for child in ast.walk(node.value)
             if isinstance(child, ast.Constant) and isinstance(child.value, (str, bytes))
         )
-    require(set(literals) == set(OUTPUT_KEYS),
-            f"the classifier must assign {sorted(PREDICATE_NAMES.values())}; found {sorted(literals)}")
+    require(
+        set(literals) == set(OUTPUT_KEYS),
+        f"the classifier must assign {sorted(PREDICATE_NAMES.values())}; found {sorted(literals)}",
+    )
     return literals
 
 
@@ -226,8 +233,10 @@ def load_audited_paths() -> tuple[str, ...]:
     audited = getattr(module, "AUDITED_PATHS", None)
     require(isinstance(audited, tuple) and audited, "the citation gate declares no non-empty AUDITED_PATHS tuple")
     for entry in audited:
-        require(isinstance(entry, str) and entry and not entry.startswith("/") and ".." not in entry.split("/"),
-                f"unparsable AUDITED_PATHS entry {entry!r}")
+        require(
+            isinstance(entry, str) and entry and not entry.startswith("/") and ".." not in entry.split("/"),
+            f"unparsable AUDITED_PATHS entry {entry!r}",
+        )
     return audited
 
 
@@ -247,7 +256,8 @@ def audited_family_literal(entry: str) -> str:
 
 
 def check_audited_family_coverage(
-    literals: dict[str, tuple[str, ...]], audited: tuple[str, ...],
+    literals: dict[str, tuple[str, ...]],
+    audited: tuple[str, ...],
 ) -> None:
     """Every corpus entry is named in run-citations by its family-complete literal.
 
@@ -325,12 +335,15 @@ def parse_model(workflow_text: str) -> WorkflowModel:
 
 def check_output_folds(model: WorkflowModel) -> None:
     """The changes job declares exactly the three outputs, each as the pinned fold."""
-    require(set(model.folds) == set(OUTPUT_KEYS),
-            f"the changes job must declare exactly the outputs {sorted(OUTPUT_KEYS)}; found {sorted(model.folds)}")
+    require(
+        set(model.folds) == set(OUTPUT_KEYS),
+        f"the changes job must declare exactly the outputs {sorted(OUTPUT_KEYS)}; found {sorted(model.folds)}",
+    )
     for key in OUTPUT_KEYS:
         expected = FOLD_LITERAL.format(key=key)
-        require(model.folds[key] == expected,
-                f"the {key} fold changed: expected {expected!r}, found {model.folds[key]!r}")
+        require(
+            model.folds[key] == expected, f"the {key} fold changed: expected {expected!r}, found {model.folds[key]!r}"
+        )
 
 
 def check_job_gating(model: WorkflowModel) -> None:
@@ -341,21 +354,26 @@ def check_job_gating(model: WorkflowModel) -> None:
     unconditional = sorted(
         name for name, job in jobs.items() if name != "changes" and not job.needs and job.condition is None
     )
-    require(unconditional == sorted(UNCONDITIONAL_JOBS),
-            f"{sorted(UNCONDITIONAL_JOBS)} must be the only unconditional jobs besides the classifier; "
-            f"found {unconditional}")
+    require(
+        unconditional == sorted(UNCONDITIONAL_JOBS),
+        f"{sorted(UNCONDITIONAL_JOBS)} must be the only unconditional jobs besides the classifier; "
+        f"found {unconditional}",
+    )
     for name, job in jobs.items():
         if job.condition is not None:
-            require(JOB_CONDITION.fullmatch(job.condition) is not None,
-                    f"job {name} has an unrecognized `if:` shape: {job.condition!r}")
+            require(
+                JOB_CONDITION.fullmatch(job.condition) is not None,
+                f"job {name} has an unrecognized `if:` shape: {job.condition!r}",
+            )
     for name, job in jobs.items():
         if name == "changes" or name in UNCONDITIONAL_JOBS:
             continue
         gate = PINNED_GATES.get(name, DEFAULT_GATE)
         require("changes" in job.needs, f"job {name} must depend on `changes`; needs={job.needs!r}")
         expected = f"needs.changes.outputs.{gate} == 'true'"
-        require(job.condition == expected,
-                f"job {name} must gate on {gate}: expected {expected!r}, found {job.condition!r}")
+        require(
+            job.condition == expected, f"job {name} must gate on {gate}: expected {expected!r}, found {job.condition!r}"
+        )
 
 
 def evaluate_job_condition(condition: str, outputs: dict[str, bool]) -> bool:
@@ -380,10 +398,14 @@ def evaluate_fold(expression: str, event_name: str, step_outputs: dict[str, bool
 
 def effective_outputs(model: WorkflowModel, event_name: str, step_outputs: dict[str, bool]) -> dict[str, bool]:
     """The changes job's outputs for one event, from the step outputs the program wrote."""
-    require(set(model.folds) == set(OUTPUT_KEYS),
-            f"the changes job must declare exactly the outputs {sorted(OUTPUT_KEYS)}; found {sorted(model.folds)}")
-    require(set(step_outputs) == set(OUTPUT_KEYS),
-            f"expected the classifier outputs {sorted(OUTPUT_KEYS)}; got {sorted(step_outputs)}")
+    require(
+        set(model.folds) == set(OUTPUT_KEYS),
+        f"the changes job must declare exactly the outputs {sorted(OUTPUT_KEYS)}; found {sorted(model.folds)}",
+    )
+    require(
+        set(step_outputs) == set(OUTPUT_KEYS),
+        f"expected the classifier outputs {sorted(OUTPUT_KEYS)}; got {sorted(step_outputs)}",
+    )
     return {key: evaluate_fold(model.folds[key], event_name, step_outputs) for key in OUTPUT_KEYS}
 
 
@@ -431,13 +453,14 @@ def classifier_step_keys(workflow_text: str) -> dict[str, str]:
     block = job_blocks(workflow_text).get("changes")
     require(block is not None, "the workflow has no `changes:` job")
     anchor = first_index(
-        block, lambda line: line.strip() == "python3 - <<'PY'",
+        block,
+        lambda line: line.strip() == "python3 - <<'PY'",
         "the changes job has no `python3 - <<'PY'` classifier step",
     )
     headers = [index for index in range(anchor) if STEP_HEADER.match(block[index])]
     require(bool(headers), "the classifier heredoc step has no `- ` header line above it")
     keys: dict[str, str] = {}
-    for line in block[headers[-1]:anchor]:
+    for line in block[headers[-1] : anchor]:
         match = STEP_KEY.match(line)
         if match is not None:
             keys[match.group(1)] = match.group(2)
@@ -446,14 +469,17 @@ def classifier_step_keys(workflow_text: str) -> dict[str, str]:
 
 def check_classifier_step(keys: dict[str, str]) -> None:
     """The classifier heredoc runs on pull requests, under ``id: paths``, with bash."""
-    require(keys.get("id") == "paths",
-            "the classifier heredoc step must carry `id: paths`: the outputs' fold reads "
-            f"`steps.paths.outputs`; found {keys.get('id')!r}")
-    require(keys.get("if") == "github.event_name == 'pull_request'",
-            "the classifier heredoc step must run only on pull requests - the event whose "
-            f"diff (HEAD^1..HEAD) the program classifies; found {keys.get('if')!r}")
-    require(keys.get("shell") == "bash",
-            f"the classifier step must pin `shell: bash`; found {keys.get('shell')!r}")
+    require(
+        keys.get("id") == "paths",
+        "the classifier heredoc step must carry `id: paths`: the outputs' fold reads "
+        f"`steps.paths.outputs`; found {keys.get('id')!r}",
+    )
+    require(
+        keys.get("if") == "github.event_name == 'pull_request'",
+        "the classifier heredoc step must run only on pull requests - the event whose "
+        f"diff (HEAD^1..HEAD) the program classifies; found {keys.get('if')!r}",
+    )
+    require(keys.get("shell") == "bash", f"the classifier step must pin `shell: bash`; found {keys.get('shell')!r}")
 
 
 # -- fixture repositories -----------------------------------------------------
@@ -652,18 +678,24 @@ def run_classifier(program: pathlib.Path, repo: pathlib.Path, output_directory: 
         capture_output=True,
         text=True,
     )
-    require(result.returncode == 0,
-            f"the classifier exited {result.returncode} in {repo.name}:\n{result.stdout}{result.stderr}")
+    require(
+        result.returncode == 0,
+        f"the classifier exited {result.returncode} in {repo.name}:\n{result.stdout}{result.stderr}",
+    )
     outputs: dict[str, bool] = {}
     for line in output_file.read_text(encoding="utf-8").splitlines():
         key, separator, value = line.partition("=")
-        require(bool(separator) and re.fullmatch(r"[a-z][a-z0-9-]*", key) is not None,
-                f"unparsable GITHUB_OUTPUT line {line!r} from {repo.name}")
+        require(
+            bool(separator) and re.fullmatch(r"[a-z][a-z0-9-]*", key) is not None,
+            f"unparsable GITHUB_OUTPUT line {line!r} from {repo.name}",
+        )
         require(key not in outputs, f"the classifier wrote {key!r} twice in {repo.name}")
         require(value in ("true", "false"), f"the classifier wrote a non-boolean {key}={value!r} in {repo.name}")
         outputs[key] = value == "true"
-    require(set(outputs) == set(OUTPUT_KEYS),
-            f"the classifier must emit exactly {sorted(OUTPUT_KEYS)}; emitted {sorted(outputs)} in {repo.name}")
+    require(
+        set(outputs) == set(OUTPUT_KEYS),
+        f"the classifier must emit exactly {sorted(OUTPUT_KEYS)}; emitted {sorted(outputs)} in {repo.name}",
+    )
     return outputs
 
 
@@ -674,8 +706,10 @@ def triple_of(outputs: dict[str, bool]) -> tuple[bool, bool, bool]:
 def check_fixture_triple(outputs: dict[str, bool], fixture: Fixture) -> None:
     """The comparison every pinned fixture (and every program mutation) must satisfy."""
     actual = triple_of(outputs)
-    require(actual == fixture.expected,
-            f"fixture {fixture.name} ({fixture.intent}): expected {fixture.expected}, got {actual}")
+    require(
+        actual == fixture.expected,
+        f"fixture {fixture.name} ({fixture.intent}): expected {fixture.expected}, got {actual}",
+    )
 
 
 def build_fixture_repository(root: pathlib.Path, fixture: Fixture, program: pathlib.Path) -> dict[str, bool]:
@@ -700,8 +734,10 @@ def build_fixture_repository(root: pathlib.Path, fixture: Fixture, program: path
         for part in git(repo, "diff", "--name-only", "--no-renames", "-z", "HEAD^1", "HEAD").decode("utf-8").split("\0")
         if part
     )
-    require(sorted(changed) == sorted(fixture.paths),
-            f"fixture {fixture.name} changed {sorted(changed)}, expected {sorted(fixture.paths)}")
+    require(
+        sorted(changed) == sorted(fixture.paths),
+        f"fixture {fixture.name} changed {sorted(changed)}, expected {sorted(fixture.paths)}",
+    )
     return run_classifier(program, repo, root)
 
 
@@ -740,17 +776,23 @@ class ChangedPathClassifierTests(unittest.TestCase):
 
     def test_every_audited_document_gates_only_run_citations(self) -> None:
         literals = predicate_literals(self.program_text)
-        self.assertEqual(set(self.audited), set(AUDITED_FIXTURES),
-                         "the citation gate's audited corpus changed; teach this suite the new entries")
+        self.assertEqual(
+            set(self.audited),
+            set(AUDITED_FIXTURES),
+            "the citation gate's audited corpus changed; teach this suite the new entries",
+        )
         check_audited_family_coverage(literals, self.audited)
         for entry in self.audited:
             with self.subTest(audited=entry):
                 for output in ("run-heavy", "run-records"):
-                    self.assertFalse(any(covers(literal, entry) for literal in literals[output]),
-                                     f"{entry} is audited but the {output} predicate mentions it")
+                    self.assertFalse(
+                        any(covers(literal, entry) for literal in literals[output]),
+                        f"{entry} is audited but the {output} predicate mentions it",
+                    )
                 fixture = FIXTURES_BY_NAME[AUDITED_FIXTURES[entry]]
-                self.assertTrue(any(covers(path, entry) for path in fixture.paths),
-                                f"fixture {fixture.name} does not touch {entry}")
+                self.assertTrue(
+                    any(covers(path, entry) for path in fixture.paths), f"fixture {fixture.name} does not touch {entry}"
+                )
                 check_fixture_triple(self.outputs[fixture.name], fixture)
         for literal in literals["run-citations"]:
             with self.subTest(literal=literal):
@@ -764,8 +806,10 @@ class ChangedPathClassifierTests(unittest.TestCase):
         literals = predicate_literals(self.program_text)
         for tool, fixture_name in CITATION_TOOL_FIXTURES.items():
             with self.subTest(citation_tool=tool):
-                self.assertTrue(any(covers(literal, tool) for literal in literals["run-citations"]),
-                                f"{tool} is a citation tool path but run-citations never mentions it")
+                self.assertTrue(
+                    any(covers(literal, tool) for literal in literals["run-citations"]),
+                    f"{tool} is a citation tool path but run-citations never mentions it",
+                )
                 self.assertFalse(
                     any(covers(literal, tool) for literal in literals["run-heavy"]),
                     f"{tool} is a citation tool path but run-heavy mentions it",
@@ -778,12 +822,12 @@ class ChangedPathClassifierTests(unittest.TestCase):
 
     def test_the_changes_job_folds_the_three_outputs_outside_pull_requests(self) -> None:
         check_output_folds(self.model)
-        empty = {key: False for key in OUTPUT_KEYS}
-        self.assertEqual(effective_outputs(self.model, "push", empty), {key: True for key in OUTPUT_KEYS})
+        empty = dict.fromkeys(OUTPUT_KEYS, False)
+        self.assertEqual(effective_outputs(self.model, "push", empty), dict.fromkeys(OUTPUT_KEYS, True))
         self.assertEqual(effective_outputs(self.model, "pull_request", empty), empty)
         partial = {"run-heavy": True, "run-records": False, "run-citations": True}
         self.assertEqual(effective_outputs(self.model, "pull_request", partial), partial)
-        self.assertEqual(effective_outputs(self.model, "workflow_dispatch", partial), {key: True for key in OUTPUT_KEYS})
+        self.assertEqual(effective_outputs(self.model, "workflow_dispatch", partial), dict.fromkeys(OUTPUT_KEYS, True))
 
     def test_every_gated_job_gates_on_its_pinned_classifier_output(self) -> None:
         check_job_gating(self.model)
@@ -797,8 +841,10 @@ class ChangedPathClassifierTests(unittest.TestCase):
         for fixture in FIXTURES:
             with self.subTest(fixture=fixture.name):
                 outputs = effective_outputs(self.model, "pull_request", self.outputs[fixture.name])
-                self.assertEqual(ran_jobs(self.model, "pull_request", self.outputs[fixture.name]),
-                                 pinned_ran_jobs(self.model.jobs, outputs))
+                self.assertEqual(
+                    ran_jobs(self.model, "pull_request", self.outputs[fixture.name]),
+                    pinned_ran_jobs(self.model.jobs, outputs),
+                )
 
     def test_non_pull_request_events_run_every_job_except_the_classifier(self) -> None:
         check_output_folds(self.model)
@@ -818,8 +864,11 @@ class ChangedPathClassifierTests(unittest.TestCase):
         )
         self.assertNotEqual(mutated, self.program_text, "the mutation must edit the extracted program")
         outputs = self.run_program(mutated, fixture)
-        self.assertEqual(triple_of(outputs), (False, False, False),
-                         "dropping the clause must flip run-records for the evaluations fixture")
+        self.assertEqual(
+            triple_of(outputs),
+            (False, False, False),
+            "dropping the clause must flip run-records for the evaluations fixture",
+        )
         with self.assertRaises(AssertionError):
             check_fixture_triple(outputs, fixture)
 
@@ -828,8 +877,11 @@ class ChangedPathClassifierTests(unittest.TestCase):
         mutated = self.program_text.replace('path.startswith(b"docs/") or path.endswith(b".md")', "False")
         self.assertNotEqual(mutated, self.program_text, "the mutation must edit the extracted program")
         outputs = self.run_program(mutated, fixture)
-        self.assertEqual(triple_of(outputs), (True, False, True),
-                         "ignoring docs/ and *.md must flip run-heavy for the docs-only fixture")
+        self.assertEqual(
+            triple_of(outputs),
+            (True, False, True),
+            "ignoring docs/ and *.md must flip run-heavy for the docs-only fixture",
+        )
         with self.assertRaises(AssertionError):
             check_fixture_triple(outputs, fixture)
 
@@ -869,28 +921,32 @@ class ChangedPathClassifierTests(unittest.TestCase):
     def test_mutation_dropping_the_records_revision_scope_clause_breaks_its_fixture(self) -> None:
         fixture = FIXTURES_BY_NAME["revision-scope-modified"]
         mutated = self.program_text.replace(
-            'or path == b"scripts/ci/check-record-cleanliness.py"\n'
-            '    or path == b"scripts/ci/revision_scope.py"',
+            'or path == b"scripts/ci/check-record-cleanliness.py"\n    or path == b"scripts/ci/revision_scope.py"',
             'or path == b"scripts/ci/check-record-cleanliness.py"',
         )
         self.assertNotEqual(mutated, self.program_text, "the mutation must edit the extracted program")
         outputs = self.run_program(mutated, fixture)
-        self.assertEqual(triple_of(outputs), (True, False, True),
-                         "dropping the records clause must flip run-records for the shared module")
+        self.assertEqual(
+            triple_of(outputs),
+            (True, False, True),
+            "dropping the records clause must flip run-records for the shared module",
+        )
         with self.assertRaises(AssertionError):
             check_fixture_triple(outputs, fixture)
 
     def test_mutation_dropping_the_citations_revision_scope_clause_breaks_its_fixture(self) -> None:
         fixture = FIXTURES_BY_NAME["revision-scope-modified"]
         mutated = self.program_text.replace(
-            'or path == b"scripts/ci/test-check-citation-existence.py"\n'
-            '    or path == b"scripts/ci/revision_scope.py"',
+            'or path == b"scripts/ci/test-check-citation-existence.py"\n    or path == b"scripts/ci/revision_scope.py"',
             'or path == b"scripts/ci/test-check-citation-existence.py"',
         )
         self.assertNotEqual(mutated, self.program_text, "the mutation must edit the extracted program")
         outputs = self.run_program(mutated, fixture)
-        self.assertEqual(triple_of(outputs), (True, True, False),
-                         "dropping the citations clause must flip run-citations for the shared module")
+        self.assertEqual(
+            triple_of(outputs),
+            (True, True, False),
+            "dropping the citations clause must flip run-citations for the shared module",
+        )
         with self.assertRaises(AssertionError):
             check_fixture_triple(outputs, fixture)
 
@@ -902,16 +958,16 @@ class ChangedPathClassifierTests(unittest.TestCase):
         )
         self.assertNotEqual(mutated, self.program_text, "the mutation must edit the extracted program")
         outputs = self.run_program(mutated, fixture)
-        self.assertEqual(triple_of(outputs), (True, False, False),
-                         "excusing only the .md arm for docs/ must flip run-heavy for the "
-                         "non-Markdown docs-json fixture")
+        self.assertEqual(
+            triple_of(outputs),
+            (True, False, False),
+            "excusing only the .md arm for docs/ must flip run-heavy for the non-Markdown docs-json fixture",
+        )
         with self.assertRaises(AssertionError):
             check_fixture_triple(outputs, fixture)
 
     def test_mutation_narrowing_the_runbooks_prefix_breaks_the_family_coverage(self) -> None:
-        mutated = self.program_text.replace(
-            'path.startswith(b"docs/runbooks/")', 'path == b"docs/runbooks/portal.md"'
-        )
+        mutated = self.program_text.replace('path.startswith(b"docs/runbooks/")', 'path == b"docs/runbooks/portal.md"')
         self.assertNotEqual(mutated, self.program_text, "the mutation must edit the extracted program")
         literals = predicate_literals(mutated)
         self.assertNotIn("docs/runbooks/", literals["run-citations"])

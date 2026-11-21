@@ -34,9 +34,7 @@ def spec(title, tests):
 
 def passing_report(*titles, skipped=1, nested=False):
     """A report where every title ran as expected in both projects."""
-    suites = [
-        spec(title, [test_case(project) for project in PROJECTS]) for title in titles
-    ]
+    suites = [spec(title, [test_case(project) for project in PROJECTS]) for title in titles]
     if nested:
         # Case titles live under test.describe nodes, which the JSON reporter
         # nests as child suites.
@@ -119,16 +117,12 @@ class SkipCountTests(GateTestCase):
     def test_more_skips_than_expected_fail(self):
         # Dropping a guard turns its case into a named skip while the runner
         # still exits 0; the count is the assertion that notices.
-        result = self.run_gate(
-            passing_report(ROLLOUT_OFF, skipped=3), "--expect-skipped", "1", ROLLOUT_OFF
-        )
+        result = self.run_gate(passing_report(ROLLOUT_OFF, skipped=3), "--expect-skipped", "1", ROLLOUT_OFF)
         self.assertEqual(result.returncode, 1)
         self.assertIn("stats.skipped is 3, expected 1", result.stderr)
 
     def test_fewer_skips_than_expected_fail(self):
-        result = self.run_gate(
-            passing_report(ROLLOUT_OFF, skipped=0), "--expect-skipped", "1", ROLLOUT_OFF
-        )
+        result = self.run_gate(passing_report(ROLLOUT_OFF, skipped=0), "--expect-skipped", "1", ROLLOUT_OFF)
         self.assertEqual(result.returncode, 1)
         self.assertIn("stats.skipped is 0, expected 1", result.stderr)
 
@@ -172,9 +166,7 @@ class GatedTitleTests(GateTestCase):
         self.assertIn("desktop-chromium: {expected without passed results:1}", result.stderr)
 
     def test_a_title_dropped_from_the_invocation_fails(self):
-        result = self.run_gate(
-            passing_report(ROLLOUT_OFF), "--expect-skipped", "1", ROLLOUT_OFF, GOAL_MANAGED
-        )
+        result = self.run_gate(passing_report(ROLLOUT_OFF), "--expect-skipped", "1", ROLLOUT_OFF, GOAL_MANAGED)
         self.assertEqual(result.returncode, 1)
         self.assertIn("mobile-chromium: no result", result.stderr)
         self.assertIn(GOAL_MANAGED, result.stderr)
@@ -229,9 +221,7 @@ class ReportIntegrityTests(GateTestCase):
 
     def test_a_missing_report_file_fails(self):
         with tempfile.TemporaryDirectory() as directory:
-            result = self.run_gate_path(
-                pathlib.Path(directory, "absent.json"), "--expect-skipped", "1", ROLLOUT_OFF
-            )
+            result = self.run_gate_path(pathlib.Path(directory, "absent.json"), "--expect-skipped", "1", ROLLOUT_OFF)
         self.assertEqual(result.returncode, 1)
         self.assertIn("cannot read the Playwright report", result.stderr)
 

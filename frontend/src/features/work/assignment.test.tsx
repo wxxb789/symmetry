@@ -61,7 +61,7 @@ function detailBody(workItemId: string, overrides: Record<string, unknown> = {},
   return {
     ...envelope,
     work_item: {
-      ...(envelope["work_item"] as Record<string, unknown>),
+      ...(envelope.work_item as Record<string, unknown>),
       version: subjectVersion,
       repository: null,
       ci_resource: null,
@@ -197,7 +197,7 @@ describe("work assignment", () => {
     const detailsBefore = harness.detailReads(subjectId);
     const projectsBefore = harness.projectReads(projectId);
     await user.click(within(dialog).getByRole("button", { name: "Save assignment" }));
-    await waitFor(() => expect(harness.patches()).toHaveLength(1));
+    await waitFor(() => { expect(harness.patches()).toHaveLength(1); });
     expect(harness.patches()[0]?.path).toBe(`/portal/api/work-items/${subjectId}`);
     expect(harness.patches()[0]?.body).toEqual({
       version: subjectVersion,
@@ -209,8 +209,8 @@ describe("work assignment", () => {
       ci_resource_id: ciResourceId,
     });
     // A successful save re-reads the work detail and the project read.
-    await waitFor(() => expect(harness.detailReads(subjectId)).toBeGreaterThan(detailsBefore));
-    await waitFor(() => expect(harness.projectReads(projectId)).toBeGreaterThan(projectsBefore));
+    await waitFor(() => { expect(harness.detailReads(subjectId)).toBeGreaterThan(detailsBefore); });
+    await waitFor(() => { expect(harness.projectReads(projectId)).toBeGreaterThan(projectsBefore); });
     expect(await screen.findByText(/Assignment saved at version 5/)).toBeVisible();
     expect(screen.queryByRole("dialog", { name: "Assignment" })).not.toBeInTheDocument();
   });
@@ -283,7 +283,7 @@ describe("work assignment", () => {
     await user.click(within(dialog).getByRole("button", { name: "Save assignment" }));
     const alert = await within(dialog).findByRole("alert");
     expect(alert).toHaveTextContent("title is authoritative in the external provider (provider_owned)");
-    await waitFor(() => expect(harness.detailReads(subjectId)).toBeGreaterThan(detailsBefore));
+    await waitFor(() => { expect(harness.detailReads(subjectId)).toBeGreaterThan(detailsBefore); });
     // A provider_owned refusal is not a version conflict: the editor stays usable.
     expect(within(dialog).getByRole("button", { name: "Save assignment" })).toBeEnabled();
   });
@@ -300,11 +300,11 @@ describe("work assignment", () => {
     const subjectDialog = await openAssignmentEditor(user);
     await user.type(within(subjectDialog).getByLabelText("Owner"), "Codex");
     await user.click(within(subjectDialog).getByRole("button", { name: "Save assignment" }));
-    await waitFor(() => expect(harness.patches()).toHaveLength(1));
+    await waitFor(() => { expect(harness.patches()).toHaveLength(1); });
     const projectsBefore = harness.projectReads(projectId);
     // The operator selects the sibling item and opens its editor while the
     // subject's save is still in flight.
-    act(() => harness.history.push(`/portal/work/${siblingItemId}`));
+    act(() => { harness.history.push(`/portal/work/${siblingItemId}`); });
     await screen.findByRole("heading", { level: 1, name: "Sibling work item" });
     await user.click(screen.getByRole("button", { name: "Edit assignment" }));
     const siblingDialog = await screen.findByRole("dialog", { name: "Assignment" });
@@ -312,7 +312,7 @@ describe("work assignment", () => {
     expect(within(siblingDialog).getByLabelText("Repository")).toHaveValue("");
     deferred.resolve(new Response(JSON.stringify({ work_item: { id: subjectId, version: subjectVersion + 1 } })));
     // The continuation still re-reads the project the option sets came from…
-    await waitFor(() => expect(harness.projectReads(projectId)).toBeGreaterThan(projectsBefore));
+    await waitFor(() => { expect(harness.projectReads(projectId)).toBeGreaterThan(projectsBefore); });
     // …but it cannot close, mark or rewrite the sibling's editor.
     expect(within(siblingDialog).getByLabelText("Owner")).toHaveValue("Grace");
     expect(within(siblingDialog).getByLabelText("Repository")).toHaveValue("");
@@ -336,7 +336,7 @@ describe("work assignment", () => {
     // Both resource selects render their empty option alone.
     const repository = within(dialog).getByLabelText("Repository");
     const ci = within(dialog).getByLabelText("CI resource");
-    await waitFor(() => expect(within(repository).getAllByRole("option")).toHaveLength(1));
+    await waitFor(() => { expect(within(repository).getAllByRole("option")).toHaveLength(1); });
     expect(within(ci).getAllByRole("option")).toHaveLength(1);
     expect(within(dialog).getByLabelText("Repository")).toHaveValue("");
     expect(within(dialog).getByLabelText("CI resource")).toHaveValue("");

@@ -7,7 +7,6 @@ import subprocess
 import sys
 import unittest
 
-
 SCRIPT = pathlib.Path(__file__).with_name("assert-folded-gates.py")
 SPEC = importlib.util.spec_from_file_location("assert_folded_gates", SCRIPT)
 FOLDED = importlib.util.module_from_spec(SPEC)
@@ -35,14 +34,10 @@ class CommandLineTests(unittest.TestCase):
     def test_all_success_reports_the_checked_count(self):
         result = self.run_check("--job", "control", "Gate one=success", "Gate two=success")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(
-            result.stdout, "verified every folded gate in control reported success: 2 checked\n"
-        )
+        self.assertEqual(result.stdout, "verified every folded gate in control reported success: 2 checked\n")
 
     def test_failure_and_skip_both_fail_the_check(self):
-        result = self.run_check(
-            "--job", "daemon-windows", "Gate one=failure", "Gate two=skipped", "Gate three=success"
-        )
+        result = self.run_check("--job", "daemon-windows", "Gate one=failure", "Gate two=skipped", "Gate three=success")
         self.assertEqual(result.returncode, 1)
         self.assertIn("Gate one=failure", result.stderr)
         self.assertIn("Gate two=skipped", result.stderr)
