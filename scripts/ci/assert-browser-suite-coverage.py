@@ -6,8 +6,9 @@ under `browser/`, and six of the specs plus all three node tests are reachable
 only through local driver scripts - roughly 4,600 lines of test code with no CI
 verdict and no explicit label. This gate makes the classification total:
 
-* every `<root>/browser/tests/*.spec.mjs` and `<root>/browser/scripts/*.test.mjs`
-  must be **wired** - some `.github/workflows/*.yml`/`*.yaml` names the file's
+* every `<root>/browser/tests/**/*.spec.mjs` and
+  `<root>/browser/scripts/**/*.test.mjs` must be **wired** - some
+  `.github/workflows/*.yml`/`*.yaml` names the file's
   browser-relative (`tests/foo.spec.mjs`) or repository-relative
   (`browser/tests/foo.spec.mjs`) path as a token - or **manual** - named by a
   backticked path in the suite column of a table row of the
@@ -31,13 +32,14 @@ import pathlib
 import re
 import sys
 
-# Browser-relative suite patterns. SUITE_PATTERNS (globs, where `*` does not
-# cross `/`) and SUITE_SHAPE (the manual-matrix shape, a regex independently
-# written over the same families and flat file names) are two spellings of one
-# constraint, so a new family belongs in both; an entry the shape does not match
-# is skipped by the shape check in main rather than rot-checked.
-SUITE_PATTERNS = ("tests/*.spec.mjs", "scripts/*.test.mjs")
-SUITE_SHAPE = re.compile(r"^(?:browser/)?(?:tests/[^/]+\.spec\.mjs|scripts/[^/]+\.test\.mjs)$")
+# Browser-relative suite patterns. SUITE_PATTERNS (`**` crosses directories, so
+# a nested family is discovered like a flat one) and SUITE_SHAPE (the
+# manual-matrix shape, a regex independently written over the same families and
+# file names at any depth) are two spellings of one constraint, so a new family
+# belongs in both; an entry the shape does not match is skipped by the shape
+# check in main rather than rot-checked.
+SUITE_PATTERNS = ("tests/**/*.spec.mjs", "scripts/**/*.test.mjs")
+SUITE_SHAPE = re.compile(r"^(?:browser/)?(?:tests/(?:[^/]+/)*[^/]+\.spec\.mjs|scripts/(?:[^/]+/)*[^/]+\.test\.mjs)$")
 WORKFLOW_PATTERNS = (".github/workflows/*.yml", ".github/workflows/*.yaml")
 MATRIX_HEADING = "## Manual-only suite matrix"
 README = "browser/README.md"

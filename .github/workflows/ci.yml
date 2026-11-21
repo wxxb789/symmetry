@@ -1545,9 +1545,10 @@ jobs:
             -- "$(command -v go)" test -race -count=1 -timeout 600s -json ./...
       # Advisory until refactor slice W6-12 flips the duration thresholds to
       # blocking (program plan section 10.5): the summarizer's exit status is the
-      # verdict and the table prints either way, while the job keeps its current
-      # conclusion semantics. `if: always()` keeps the table beside a red race
-      # run, which is when the attribution is needed.
+      # verdict and the table prints whenever the stream carries per-test
+      # outcomes - marked partial when the run itself is refused - while the job
+      # keeps its current conclusion semantics. `if: always()` keeps the table
+      # beside a red race run, which is when the attribution is needed.
       - name: Summarize Go test durations
         if: always()
         continue-on-error: true
@@ -1666,12 +1667,13 @@ jobs:
       - run: python3 scripts/ci/test-ci-changed-path-classifier.py
 
       # The browser-suite inventory (refactor slice W2-01): every
-      # `browser/tests/*.spec.mjs` and `browser/scripts/*.test.mjs` must be named
-      # by a workflow step or listed in the `browser/README.md` manual matrix;
-      # refactor slice W6-02 owns wiring the remaining families. It runs here
-      # because the matrix lives in a Markdown file: a README-only pull request
-      # classifies documentation-only, and a `run-heavy`-gated step would never
-      # check it. Unlike the lint metrics below, this step is blocking.
+      # `browser/tests/**/*.spec.mjs` and `browser/scripts/**/*.test.mjs` must be
+      # named by a workflow file (a mention in a comment counts as naming) or
+      # listed in the `browser/README.md` manual matrix; refactor slice W6-02
+      # owns wiring the remaining families. It runs here because the matrix
+      # lives in a Markdown file: a README-only pull request classifies
+      # documentation-only, and a `run-heavy`-gated step would never check it.
+      # Unlike the lint metrics below, this step is blocking.
       - run: python3 scripts/ci/assert-browser-suite-coverage.py
 
       # Prerequisite ownership: the root `pyproject.toml` (the ruff configuration,

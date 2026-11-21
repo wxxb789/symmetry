@@ -21,7 +21,9 @@ skip share differs by host - but they are counted and printed. A malformed
 line, a missing file, a stream without outcome events, or a package-level
 failure no named test explains (a build failure, a timeout panic: the package
 was cut off, so its durations are incomplete) is an error (exit 2), never a
-silent green.
+silent green; the tables still print whenever the stream carries per-test
+outcomes, labelled partial when the stream is refused - a red race pass cut off
+by its timeout is exactly when the slow tests need naming.
 
 The thresholds are advisory until refactor slice W6-12 flips them to blocking
 (program plan section 10.5); the exit status is the verdict either way, and the
@@ -129,16 +131,16 @@ def nearest_rank(values: list[float], fraction: float) -> float:
     return ordered[index]
 
 
-def print_test_table(tests: dict[tuple[str, str], float]) -> None:
+def print_test_table(tests: dict[tuple[str, str], float], note: str = "") -> None:
     ordered = sorted(tests.items(), key=lambda item: (-item[1], item[0][0], item[0][1]))
-    print(f"Top {min(TOP_TEST_ROWS, len(ordered))} slowest tests:")
+    print(f"Top {min(TOP_TEST_ROWS, len(ordered))} slowest tests{note}:")
     for (package, test), elapsed in ordered[:TOP_TEST_ROWS]:
         print(f"  {elapsed:8.2f}s  {package}  {test}")
 
 
-def print_package_table(packages: dict[str, float]) -> None:
+def print_package_table(packages: dict[str, float], note: str = "") -> None:
     ordered = sorted(packages.items(), key=lambda item: (-item[1], item[0]))
-    print(f"Top {min(TOP_PACKAGE_ROWS, len(ordered))} slowest packages:")
+    print(f"Top {min(TOP_PACKAGE_ROWS, len(ordered))} slowest packages{note}:")
     for package, elapsed in ordered[:TOP_PACKAGE_ROWS]:
         print(f"  {elapsed:8.2f}s  {package}")
 
@@ -151,13 +153,27 @@ def main(argv: list[str] | None = None) -> int:
         print(f"could not read the Go test JSON events: {error}", file=sys.stderr)
         return 2
     tests, packages, skipped, failed, failed_packages = collect_outcomes(events)
+    if not tests:
+        counted = f"{invalid} unparsable line(s) and " if invalid else ""
+        print(f"the Go test JSON stream carries {counted}no per-test pass/fail events", file=sys.stderr)
+        return 2
+    unexplained = [package for package in failed_packages if not any(key[0] == package for key in failed)]
+
+    # The tables print before the refusals below: a refused run is exactly the
+    # one whose slow tests need naming, so it loses the verdict, not the
+    # attribution; the table headings carry the partial label instead.
+    reasons: list[str] = []
+    if invalid:
+        reasons.append(f"{invalid} unparsable JSON line(s) were skipped")
+    if unexplained:
+        reasons.append("a package-level failure cut a package off")
+    note = f" (partial: {'; '.join(reasons)})" if reasons else ""
+    print_test_table(tests, note)
+    print_package_table(packages, note)
+
     if invalid:
         print(f"the Go test JSON stream carries {invalid} unparsable line(s)", file=sys.stderr)
         return 2
-    if not tests:
-        print("the Go test JSON stream carries no per-test pass/fail events", file=sys.stderr)
-        return 2
-    unexplained = [package for package in failed_packages if not any(key[0] == package for key in failed)]
     if unexplained:
         print(
             "the Go test JSON stream reports package-level failures no named test explains "
@@ -174,8 +190,6 @@ def main(argv: list[str] | None = None) -> int:
         key=lambda item: (-item[2], item[0], item[1]),
     )
 
-    print_test_table(tests)
-    print_package_table(packages)
     ratio = p95 / P95_BASELINE_SECONDS
     print(
         f"go_test_durations: tests={len(tests)} skipped={skipped} packages={len(packages)} "

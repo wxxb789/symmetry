@@ -15,7 +15,7 @@ and the contract's owned-file set (four files plus this plan; every other path i
 | --- | --- | --- |
 | `.github/workflows/ci.yml` | modified | `mix test` step → `mix test --slowest 20` (control job); race step emits `go test -json` through the shared gate and writes `$RUNNER_TEMP/daemon-go-race.json` (daemon job); one new advisory duration-summary step (daemon job); one new blocking inventory step (legacy-route-audit job) |
 | `scripts/ci/go-test-durations.py` | new | `go test -json` duration summarizer: prints the top-N test table and a package table, fails a test >30 s or p95 +20 % over the committed baseline |
-| `scripts/ci/assert-browser-suite-coverage.py` | new | inventory gate: every `browser/tests/*.spec.mjs` / `browser/scripts/*.test.mjs` is named by a workflow or listed in `browser/README.md`'s manual matrix |
+| `scripts/ci/assert-browser-suite-coverage.py` | new | inventory gate: every `browser/tests/**/*.spec.mjs` / `browser/scripts/**/*.test.mjs` is named by a workflow or listed in `browser/README.md`'s manual matrix |
 | `browser/README.md` | modified | new "Manual-only suite matrix" section (machine-parsed by the gate) listing the nine suites CI does not run, why, and how to run each today |
 | `docs/plans/2026-11-21-rf-w2-01-ci-test-observability-plan.md` | new | this plan |
 
@@ -115,7 +115,8 @@ One pure consumer: `EVENTS.json` (the `go test -json` stream), no command execut
   usable as an advisory ratchet seed. The step prints `p95=`, `baseline=` and `ratio=` side by
   side; W6-12 owns the move to a runner-measured baseline when the thresholds flip to blocking.
 * **Exit codes.** `0` both arms pass; `1` a threshold crossed (the verdict, in the step's own exit
-  status); `2` usage/missing-file/malformed-stream/no-outcomes (never silently green).
+  status); `2` usage/missing-file/malformed-stream/no-outcomes (never silently green; a refused
+  stream that carries per-test outcomes still prints the tables, labelled partial).
 
 ### Go: CI step and advisory framing
 
@@ -139,8 +140,8 @@ Credo, govulncheck, shellcheck and ruff. A planted 40 s test therefore fails the
 
 ### Semantics (`scripts/ci/assert-browser-suite-coverage.py`)
 
-Discoveries are the filesystem's: `<root>/browser/tests/*.spec.mjs` and
-`<root>/browser/scripts/*.test.mjs` (16 files today: 13 specs, 3 node tests). Every discovered file
+Discoveries are the filesystem's: `<root>/browser/tests/**/*.spec.mjs` and
+`<root>/browser/scripts/**/*.test.mjs` (16 files today: 13 specs, 3 node tests). Every discovered file
 must be classified exactly once:
 
 * **wired** — some `.github/workflows/*.yml`/`*.yaml` contains a path token whose suffix equals the

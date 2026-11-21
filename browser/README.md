@@ -182,14 +182,16 @@ native tab background/foreground event propagation.
 ## Manual-only suite matrix
 
 The render step in `.github/workflows/ci.yml` names and runs seven specs on the
-release it starts; every other suite under `browser/tests/*.spec.mjs` and
-`browser/scripts/*.test.mjs` is manual-only, because it needs a fixture family
-that step does not provide. This table is the explicit label for that manual
-set: `scripts/ci/assert-browser-suite-coverage.py` runs as a blocking CI step
-and refuses any suite that is neither named by a workflow nor listed here —
-and refuses a suite that is listed here while a workflow also names it, so
-wiring a family (refactor slice W6-02, decision D7) must drop its row below in
-the same change.
+release it starts; every other suite under `browser/tests/**/*.spec.mjs` and
+`browser/scripts/**/*.test.mjs` is manual-only, because the render step does not
+name it: the six remaining specs need a fixture family that step does not
+provide, and the three node-level suites are not part of that step at all. This
+table is the explicit label for that manual set:
+`scripts/ci/assert-browser-suite-coverage.py` runs as a blocking CI step and
+refuses any suite that is neither named by a workflow nor listed here — and
+refuses a suite that is listed here while a workflow also names it, so wiring a
+family (refactor slice W6-02, decision D7) must drop its row below in the same
+change.
 
 | suite | why it stays manual | how to run it today |
 | --- | --- | --- |
