@@ -7,7 +7,7 @@ defmodule SymmetryControl.Migrations.AddGoalOperatorVersionMigrationTest do
   @migration_version 20_261_121_000_000
 
   test "backfills existing Goals from lock_version and fences the operator version positive" do
-    with_schema(fn ->
+    with_schema("add_goal_operator_version", fn ->
       migrate_all_up!()
       migrate_operator_version_down!()
 
@@ -61,7 +61,7 @@ defmodule SymmetryControl.Migrations.AddGoalOperatorVersionMigrationTest do
   end
 
   test "rolling the operator version back drops the column and its guarantee" do
-    with_schema(fn ->
+    with_schema("add_goal_operator_version", fn ->
       migrate_all_up!()
       migrate_operator_version_down!()
 
@@ -91,10 +91,6 @@ defmodule SymmetryControl.Migrations.AddGoalOperatorVersionMigrationTest do
       assert %{rows: [[4]]} =
                Repo.query!("SELECT lock_version FROM goals WHERE id = $1", [goal_id])
     end)
-  end
-
-  defp with_schema(test) do
-    with_schema("add_goal_operator_version", test)
   end
 
   defp migrate_all_up! do

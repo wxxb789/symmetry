@@ -668,7 +668,10 @@ func decodeStrictJSON(value []byte, target any) error {
 		}
 		return err
 	}
-	return nil
+	// Duplicate members are rejected only after the value parsed, so every
+	// pre-existing rejection keeps its message and precedence; the scan matches
+	// the daemon-side decodeStrictObject strictness at every depth.
+	return protocol.RejectDuplicateJSONMembers(value)
 }
 
 func decodeStrictObjectJSON(value []byte, target any, required ...string) error {
@@ -1121,25 +1124,7 @@ func validGoalDigest(value string) bool {
 }
 
 func validateGoalUUID(value, field string) error {
-	if len(value) != 36 {
-		return fmt.Errorf("%s must be a canonical UUID", field)
-	}
-	for index := 0; index < len(value); index++ {
-		if index == 8 || index == 13 || index == 18 || index == 23 {
-			if value[index] != '-' {
-				return fmt.Errorf("%s must be a canonical UUID", field)
-			}
-			continue
-		}
-		character := value[index]
-		if character >= 'A' && character <= 'F' || character < '0' || character > 'f' || character > '9' && character < 'a' {
-			return fmt.Errorf("%s must use lowercase hexadecimal UUID digits", field)
-		}
-	}
-	if value[14] < '1' || value[14] > '5' || !strings.ContainsRune("89ab", rune(value[19])) {
-		return fmt.Errorf("%s must use a supported UUID version and variant", field)
-	}
-	return nil
+	return protocol.ValidateUUID(value, field, protocol.GoalMachineUUIDPolicy)
 }
 
 const (
@@ -1162,21 +1147,7 @@ func validateGoalSafeNonNegativeInteger(value int64, field string) error {
 }
 
 func validateGoalShortIdentifier(value, field string) error {
-	if len(value) < 1 || len(value) > 128 {
-		return fmt.Errorf("%s must contain 1..128 characters", field)
-	}
-	for index, character := range value {
-		if index == 0 {
-			if !goalASCIIAlphaNumeric(character) {
-				return fmt.Errorf("%s has an invalid identifier", field)
-			}
-			continue
-		}
-		if !goalASCIIAlphaNumeric(character) && !strings.ContainsRune("._:-", character) {
-			return fmt.Errorf("%s has an invalid identifier", field)
-		}
-	}
-	return nil
+	return protocol.ValidateShortIdentifier(value, field)
 }
 
 func validateGoalLongText(value, field string) error {
@@ -1223,10 +1194,6 @@ func validateGoalCommitPath(value, field string) error {
 		}
 	}
 	return nil
-}
-
-func goalASCIIAlphaNumeric(value rune) bool {
-	return value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z' || value >= '0' && value <= '9'
 }
 
 func validateGoalUniqueShortIdentifiers(values []string, field string) error {

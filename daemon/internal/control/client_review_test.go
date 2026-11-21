@@ -1092,3 +1092,168 @@ func claimResponseWithLeaseRemaining(replacement string, includeLeaseRemaining b
 	}
 	return string(encoded)
 }
+
+// validateProviderActionUUID was the one UUID copy without a version/variant
+// check. The tightened check must reuse the goal-machine message text, so each
+// row compares the two validators' error strings byte for byte on one field
+// name instead of pinning a new provider-action-only string.
+func TestValidateProviderActionUUIDRejectsBadVersionAndVariant(t *testing.T) {
+	const field = "provider action action_id"
+	const base = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+	build := func(replacements map[int]byte) string {
+		value := []byte(base)
+		for index, character := range replacements {
+			value[index] = character
+		}
+		return string(value)
+	}
+	for _, test := range []struct {
+		name  string
+		value string
+	}{
+		{name: "version zero", value: build(map[int]byte{14: '0'})},
+		{name: "version one above the supported range", value: build(map[int]byte{14: '6'})},
+		{name: "version seven", value: build(map[int]byte{14: '7'})},
+		{name: "variant zero", value: build(map[int]byte{19: '0'})},
+		{name: "variant seven", value: build(map[int]byte{19: '7'})},
+		{name: "version and variant", value: build(map[int]byte{14: '0', 19: '0'})},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			want := field + " must use a supported UUID version and variant"
+			err := validateProviderActionUUID(test.value, field)
+			if err == nil || err.Error() != want {
+				t.Fatalf("validateProviderActionUUID(%q) error = %v, want %q", test.value, err, want)
+			}
+			goalErr := validateGoalUUID(test.value, field)
+			if goalErr == nil || goalErr.Error() != err.Error() {
+				t.Fatalf("goal-machine validator error = %v, want the provider-action text %q", goalErr, err.Error())
+			}
+		})
+	}
+	for _, value := range []string{
+		base,
+		"1a2b3c4d-5e6f-1a7b-8c9d-0e1f2a3b4c5d",
+		"1a2b3c4d-5e6f-5a7b-bc9d-0e1f2a3b4c5d",
+	} {
+		if err := validateProviderActionUUID(value, field); err != nil {
+			t.Errorf("validateProviderActionUUID(%q) rejected a version-1..5 variant-89ab UUID: %v", value, err)
+		}
+	}
+}
+
+func TestRequestGoalWithStatusRejectsDuplicateMembers(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "duplicate top-level member",
+			body: `{"goal_id":"goal-1","goal_id":"goal-2"}`,
+			want: `decode strict goal response: duplicate JSON object member "goal_id" at $`,
+		},
+		{
+			name: "duplicate nested member",
+			body: `{"goal_id":"goal-1","item":{"k":1,"k":2}}`,
+			want: `decode strict goal response: duplicate JSON object member "k" at $.item`,
+		},
+		{
+			name: "unknown field keeps its message",
+			body: `{"goal_id":"goal-1","goal_id":"goal-2","extra":1}`,
+			want: `decode strict goal response: json: unknown field "extra"`,
+		},
+		{
+			name: "trailing value keeps its message",
+			body: `{"goal_id":"goal-1","goal_id":"goal-2"}{}`,
+			want: `decode strict goal response: response must contain one JSON value`,
+		},
+		{name: "accepted single value", body: `{"goal_id":"goal-1"}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := jsonServer(t, http.StatusOK, test.body, nil)
+			defer server.Close()
+			var response struct {
+				GoalID string         `json:"goal_id"`
+				Item   map[string]any `json:"item"`
+			}
+			statusCode, err := mustMachineClient(t, server).requestGoalWithStatus(
+				context.Background(), http.MethodGet, "v1/goal", nil, "", nil, &response)
+			if test.want == "" {
+				if err != nil {
+					t.Fatalf("duplicate-free response rejected: %v", err)
+				}
+				if statusCode != http.StatusOK || response.GoalID != "goal-1" {
+					t.Fatalf("status = %d goal_id = %q, want 200 and %q", statusCode, response.GoalID, "goal-1")
+				}
+				return
+			}
+			if err == nil || err.Error() != test.want {
+				t.Fatalf("error = %v, want %q", err, test.want)
+			}
+			if statusCode != 0 {
+				t.Errorf("status = %d, want 0 on a decode rejection", statusCode)
+			}
+		})
+	}
+}
+
+func TestDecodeStrictObjectJSONRejectsDuplicateMembers(t *testing.T) {
+	type target struct {
+		GoalID string         `json:"goal_id"`
+		Item   map[string]any `json:"item"`
+	}
+	for _, test := range []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "duplicate top-level member",
+			body: `{"goal_id":"goal-1","goal_id":"goal-2"}`,
+			want: `duplicate JSON object member "goal_id" at $`,
+		},
+		{
+			name: "duplicate nested member",
+			body: `{"goal_id":"goal-1","item":{"k":1,"k":2}}`,
+			want: `duplicate JSON object member "k" at $.item`,
+		},
+		{
+			name: "missing required field keeps its message",
+			body: `{"item":{},"item":{}}`,
+			want: `missing required field "goal_id"`,
+		},
+		{
+			name: "unknown field keeps its message",
+			body: `{"goal_id":"goal-1","extra":1}`,
+			want: `json: unknown field "extra"`,
+		},
+		{
+			name: "non-object keeps its message",
+			body: `[1]`,
+			want: `response must be a JSON object`,
+		},
+		{
+			name: "trailing value keeps its message",
+			body: `{"goal_id":"goal-1"}{"goal_id":"goal-2"}`,
+			want: `invalid character '{' after top-level value`,
+		},
+		{name: "accepted single value", body: `{"goal_id":"goal-1"}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var decoded target
+			err := decodeStrictObjectJSON([]byte(test.body), &decoded, "goal_id")
+			if test.want == "" {
+				if err != nil {
+					t.Fatalf("duplicate-free object rejected: %v", err)
+				}
+				if decoded.GoalID != "goal-1" {
+					t.Fatalf("goal_id = %q, want %q", decoded.GoalID, "goal-1")
+				}
+				return
+			}
+			if err == nil || err.Error() != test.want {
+				t.Fatalf("error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
