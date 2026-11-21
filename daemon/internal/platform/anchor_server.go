@@ -493,7 +493,7 @@ func (anchor *linuxOwnerAnchor) verifyNormalStopChildMembership(
 	actualCgroupPath, err := readLinuxOwnerProcessCgroupPath(process.PID)
 	if err != nil || actualCgroupPath != cgroupPath {
 		run.migrationObserved = true
-		return false, fmt.Errorf("recheck anchor child cgroup before normal StopLeaf: %w", errOr(err, errors.New("cgroup path changed")))
+		return false, fmt.Errorf("recheck anchor child cgroup before normal StopLeaf: %w", errOr(err, ErrLinuxOwnerCgroupPathChanged))
 	}
 	switch classification.Origin {
 	case linuxOwnerAnchorRunChildOriginRegisteredCurrent:
@@ -555,7 +555,7 @@ func (anchor *linuxOwnerAnchor) verifyNoUnknownRunProducer(ctx context.Context, 
 		credentials, err := readLinuxOwnerProcessCredentials(pid)
 		if err != nil || credentials.Parent != anchor.identity.PID {
 			run.migrationObserved = true
-			return fmt.Errorf("verify anchor child ancestry before takeover StopLeaf: %w", errOr(err, errors.New("parent PID differs")))
+			return fmt.Errorf("verify anchor child ancestry before takeover StopLeaf: %w", errOr(err, ErrLinuxOwnerParentPIDDiffers))
 		}
 		if err := anchor.verifyTakeoverChildOrigin(ctx, run, process); err != nil {
 			return err
@@ -601,7 +601,7 @@ func (anchor *linuxOwnerAnchor) verifyTakeoverChildOrigin(
 		if classification.Role == "launcher" {
 			ready, err := linuxOwnerAnchorPIDFDReady(tracked.pidfd)
 			if err != nil || !ready {
-				return fmt.Errorf("registered launcher remains live at anchor takeover: %w", errOr(err, errors.New("pidfd is not ready")))
+				return fmt.Errorf("registered launcher remains live at anchor takeover: %w", errOr(err, ErrLinuxOwnerPIDFDNotReady))
 			}
 			return nil
 		}
@@ -676,7 +676,7 @@ func (anchor *linuxOwnerAnchor) skipChildOwnedByAnotherRun(
 	actualCgroupPath, err := readLinuxOwnerProcessCgroupPath(process.PID)
 	if err != nil || actualCgroupPath != cgroupPath {
 		run.migrationObserved = true
-		return false, fmt.Errorf("recheck anchor child cgroup for cross-run classification: %w", errOr(err, errors.New("cgroup path changed")))
+		return false, fmt.Errorf("recheck anchor child cgroup for cross-run classification: %w", errOr(err, ErrLinuxOwnerCgroupPathChanged))
 	}
 	leafPath := path.Join(run.grant.Parent.Path, run.grant.Leaf.LeafName)
 	switch classification.Origin {
@@ -760,7 +760,7 @@ func (anchor *linuxOwnerAnchor) establishRunNoMigrationProof(
 				}
 				ready, err := linuxOwnerAnchorPIDFDReady(child.pidfd)
 				if err != nil || !ready {
-					return fmt.Errorf("verify pre-gate launcher exit: %w", errOr(err, errors.New("pidfd is not ready")))
+					return fmt.Errorf("verify pre-gate launcher exit: %w", errOr(err, ErrLinuxOwnerPIDFDNotReady))
 				}
 				launcherSeen = true
 			}
@@ -827,13 +827,13 @@ func (anchor *linuxOwnerAnchor) establishRunNoMigrationProof(
 	}
 	parentNamespace, err := linuxOwnerAnchorUserNamespaceParentIdentity(run.gateUserNamespaceFD)
 	if err != nil || parentNamespace != anchor.userNamespace {
-		return fmt.Errorf("verify exact gate user-namespace parent before cgroup.kill: %w", errOr(err, errors.New("parent namespace differs")))
+		return fmt.Errorf("verify exact gate user-namespace parent before cgroup.kill: %w", errOr(err, ErrLinuxOwnerParentNamespaceDiffers))
 	}
 	var gateImageStat unix.Stat_t
 	if err := unix.Fstat(int(run.gateImageFD.Fd()), &gateImageStat); err != nil ||
 		gateImageStat.Mode&unix.S_IFMT != unix.S_IFREG || gateImageStat.Uid != 0 || gateImageStat.Gid != 0 ||
 		gateImageStat.Mode&0022 != 0 || gateImageStat.Mode&0111 == 0 || gateImageStat.Nlink != 1 {
-		return fmt.Errorf("verify exact pinned gate image before cgroup.kill: %w", errOr(err, errors.New("root-owned image identity differs")))
+		return fmt.Errorf("verify exact pinned gate image before cgroup.kill: %w", errOr(err, ErrLinuxOwnerGateImageIdentityDiffers))
 	}
 	if fence != nil {
 		if fence.Gate == nil || !fence.Gate.Equal(*run.gateIdentity) || fence.UserNamespace == nil ||
@@ -926,7 +926,7 @@ func validateLinuxOwnerAnchorCreatorChain(ctx context.Context, run *linuxOwnerAn
 					return fmt.Errorf("verify live RunKey child creator pidfd: %w", err)
 				}
 				if identity, err := ProcessIdentity(parent.identity.PID); err != nil || identity != parent.identity.Identity {
-					return fmt.Errorf("verify live RunKey child creator identity: %w", errOr(err, errors.New("creation identity differs")))
+					return fmt.Errorf("verify live RunKey child creator identity: %w", errOr(err, ErrLinuxOwnerCreationIdentityDiffers))
 				}
 				if err := verifyLinuxOwnerRunChildCredentials(parent.identity.PID, parent.role, run.owner); err != nil {
 					return fmt.Errorf("verify live RunKey child creator credentials: %w", err)

@@ -2046,7 +2046,7 @@ func runLinuxOwnerAnchorTestProcessMode(physicalOnly bool) error {
 		return fmt.Errorf("verify subreaper adopted exact target: %w", errOr(err, errors.New("target parent is not the owner anchor")))
 	}
 	if identity, err := ProcessIdentity(targetIdentity.PID); err != nil || identity != targetIdentity.Identity {
-		return fmt.Errorf("verify adopted target creation identity: %w", errOr(err, errors.New("identity differs")))
+		return fmt.Errorf("verify adopted target creation identity: %w", errOr(err, ErrLinuxOwnerIdentityDiffers))
 	}
 	helperExit := authority.LinuxCgroupExitProof{Version: authority.LinuxCgroupIdentityVersion, Process: helperProcess, Witness: anchorProcess, Waited: true, Reaped: true}
 	if err := json.NewEncoder(os.Stdout).Encode(linuxOwnerAnchorSubprocessEvent{
@@ -2129,7 +2129,7 @@ func runLinuxOwnerAnchorTestProcessMode(physicalOnly bool) error {
 		if err != nil || foreignActual != foreignIdentity.Identity {
 			_ = physicalPIDFD.Close()
 			_ = imageFD.Close()
-			return fmt.Errorf("foreign-run test process identity changed during physical-only wait: %w", errOr(err, errors.New("creation identity differs")))
+			return fmt.Errorf("foreign-run test process identity changed during physical-only wait: %w", errOr(err, ErrLinuxOwnerCreationIdentityDiffers))
 		}
 		physicalChild := run.physicalOnlyChildren[targetIdentity.PID]
 		if err := json.NewEncoder(os.Stdout).Encode(linuxOwnerAnchorSubprocessEvent{
