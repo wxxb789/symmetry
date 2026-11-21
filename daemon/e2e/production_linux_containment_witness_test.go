@@ -23,8 +23,8 @@ import (
 	"testing"
 	"time"
 
+	operatorclient "github.com/wxxb789/symmetry/daemon/e2e/internal/operator"
 	"github.com/wxxb789/symmetry/daemon/internal/authority"
-	"github.com/wxxb789/symmetry/daemon/internal/control"
 	"github.com/wxxb789/symmetry/daemon/internal/platform"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 	"github.com/wxxb789/symmetry/daemon/internal/state"
@@ -555,7 +555,7 @@ func runLinuxDaemonCrashBeforeResumeWitness(t *testing.T, environment e2eEnviron
 		daemon                         *productionDaemonWitnessProcess
 		second                         *productionDaemonWitnessProcess
 		third                          *productionDaemonWitnessProcess
-		task                           protocol.Task
+		task                           operatorclient.Task
 		committed                      linuxWitnessJournalFile
 		key                            state.RunKey
 		targetPID, helperPID           int
@@ -1434,7 +1434,7 @@ func runLinuxHelperCrashMirrorWitness(t *testing.T, environment e2eEnvironment, 
 		helperPIDFD                    = -1
 		daemonPaused                   bool
 		leaveDaemonForRecovery         bool
-		operator                       *control.OperatorClient
+		operator                       *operatorclient.OperatorClient
 		taskID                         string
 		submitIdempotencyKey           string
 		submitRequest                  protocol.TaskSubmitRequest
@@ -1639,7 +1639,7 @@ func runLinuxHelperCrashMirrorWitness(t *testing.T, environment e2eEnvironment, 
 	} else {
 		evidence.StopReceiptRelease = string(contents)
 	}
-	waitForTask(t, operator, task.TaskID, 45*time.Second, func(value protocol.Task) bool { return value.State == "cancelled" })
+	waitForTask(t, operator, task.TaskID, 45*time.Second, func(value operatorclient.Task) bool { return value.State == "cancelled" })
 	if err := waitForLinuxWitnessProcessStopped(targetPID, targetIdentity, 20*time.Second); err != nil {
 		t.Fatalf("mirror takeover did not stop target group: %v", err)
 	}
@@ -1923,7 +1923,7 @@ type linuxWitnessFailureCleanupEvidence struct {
 type linuxWitnessHelperCrashCleanupRequest struct {
 	Daemon               *productionDaemonWitnessProcess
 	DaemonPaused         *bool
-	Operator             *control.OperatorClient
+	Operator             *operatorclient.OperatorClient
 	TaskID               *string
 	SubmissionAttempted  *bool
 	SubmitIdempotencyKey string
@@ -1943,16 +1943,16 @@ type linuxWitnessHelperCrashCleanupRequest struct {
 	ReceiptReleasePath   string
 }
 
-func submitLinuxWitnessTaskWithReplay(ctx context.Context, operator *control.OperatorClient, idempotencyKey string, request protocol.TaskSubmitRequest, attempts int) (protocol.Task, error) {
+func submitLinuxWitnessTaskWithReplay(ctx context.Context, operator *operatorclient.OperatorClient, idempotencyKey string, request protocol.TaskSubmitRequest, attempts int) (operatorclient.Task, error) {
 	if ctx == nil || operator == nil || idempotencyKey == "" || attempts <= 0 {
-		return protocol.Task{}, errors.New("bounded task submission requires context, operator, idempotency key, and positive attempts")
+		return operatorclient.Task{}, errors.New("bounded task submission requires context, operator, idempotency key, and positive attempts")
 	}
 	var lastErr error
 	for attempt := range attempts {
 		task, err := operator.SubmitTask(ctx, idempotencyKey, request)
 		if err == nil {
 			if task.TaskID == "" {
-				return protocol.Task{}, errors.New("idempotent task submission returned no task identity")
+				return operatorclient.Task{}, errors.New("idempotent task submission returned no task identity")
 			}
 			return task, nil
 		}
@@ -1966,14 +1966,14 @@ func submitLinuxWitnessTaskWithReplay(ctx context.Context, operator *control.Ope
 			case <-timer.C:
 			case <-ctx.Done():
 				timer.Stop()
-				return protocol.Task{}, fmt.Errorf("idempotent submission replay deadline: %w", ctx.Err())
+				return operatorclient.Task{}, fmt.Errorf("idempotent submission replay deadline: %w", ctx.Err())
 			}
 		}
 	}
 	if lastErr == nil {
 		lastErr = errors.New("submission attempts exhausted")
 	}
-	return protocol.Task{}, fmt.Errorf("same-key task submission remains unresolved after %d identical attempts: %w", attempts, lastErr)
+	return operatorclient.Task{}, fmt.Errorf("same-key task submission remains unresolved after %d identical attempts: %w", attempts, lastErr)
 }
 
 type linuxWitnessSubmitReplayTransport struct {
@@ -2043,7 +2043,7 @@ func runLinuxWitnessSubmitReplayCase(t *testing.T, environment e2eEnvironment, d
 	baseClient := localHTTPClient(5 * time.Second)
 	replayTransport := &linuxWitnessSubmitReplayTransport{base: baseClient.Transport, responsesToDrop: dropResponses}
 	httpClient := &http.Client{Transport: replayTransport, Timeout: baseClient.Timeout}
-	operator, err := control.NewOperatorClient(environment.baseURL, environment.operatorToken, httpClient)
+	operator, err := operatorclient.NewOperatorClient(environment.baseURL, environment.operatorToken, httpClient)
 	if err != nil {
 		t.Fatalf("create operator client for live submit replay: %v", err)
 	}
@@ -2129,7 +2129,7 @@ func runLinuxWitnessSubmitReplayCase(t *testing.T, environment e2eEnvironment, d
 		t.Fatalf("live submit replay task state = %q, want queued work without a matching runtime", task.State)
 	}
 	cancelLinuxWitnessTask(t, operator, task.TaskID, cancelMutationID)
-	waitForTask(t, operator, task.TaskID, 15*time.Second, func(value protocol.Task) bool { return value.State == "cancelled" })
+	waitForTask(t, operator, task.TaskID, 15*time.Second, func(value operatorclient.Task) bool { return value.State == "cancelled" })
 	if taskID != replayTransport.firstAcceptedID {
 		t.Fatalf("cancelled task ID %q differs from first accepted task ID %q", taskID, replayTransport.firstAcceptedID)
 	}
@@ -2181,7 +2181,7 @@ type linuxWitnessCleanupOwner struct {
 	NoOwner        bool
 }
 
-func waitForLinuxWitnessCleanupOwner(ctx context.Context, target linuxWitnessTarget, expected state.RunKey, targetPID int, targetIdentity string, helperPID int, helperIdentity string, operator *control.OperatorClient, taskID string) (linuxWitnessCleanupOwner, error) {
+func waitForLinuxWitnessCleanupOwner(ctx context.Context, target linuxWitnessTarget, expected state.RunKey, targetPID int, targetIdentity string, helperPID int, helperIdentity string, operator *operatorclient.OperatorClient, taskID string) (linuxWitnessCleanupOwner, error) {
 	if ctx == nil || operator == nil || taskID == "" {
 		return linuxWitnessCleanupOwner{}, errors.New("submitted-task cleanup requires a context, operator, and task identity")
 	}
@@ -2209,7 +2209,7 @@ func waitForLinuxWitnessCleanupOwner(ctx context.Context, target linuxWitnessTar
 	if !hasDeadline {
 		return linuxWitnessCleanupOwner{}, errors.New("submitted-task cleanup owner lookup requires a deadline")
 	}
-	var task protocol.Task
+	var task operatorclient.Task
 	var taskErr error
 	var nextTaskRead time.Time
 	for {
@@ -2638,7 +2638,7 @@ func linuxWitnessJournalHasPhysicalOwnerEvidence(journal state.RunJournal) bool 
 		journal.ContainmentUnproven || journal.HasProcessDetails()
 }
 
-func requestLinuxWitnessTaskCancellation(ctx context.Context, operator *control.OperatorClient, taskID, mutationID string) error {
+func requestLinuxWitnessTaskCancellation(ctx context.Context, operator *operatorclient.OperatorClient, taskID, mutationID string) error {
 	if ctx == nil || operator == nil || taskID == "" || mutationID == "" {
 		return errors.New("task cancellation requires context, operator, task identity, and mutation identity")
 	}
@@ -2659,7 +2659,7 @@ func requestLinuxWitnessTaskCancellation(ctx context.Context, operator *control.
 	return nil
 }
 
-func cancelLinuxWitnessTask(t *testing.T, operator *control.OperatorClient, taskID, mutationID string) {
+func cancelLinuxWitnessTask(t *testing.T, operator *operatorclient.OperatorClient, taskID, mutationID string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -2668,7 +2668,7 @@ func cancelLinuxWitnessTask(t *testing.T, operator *control.OperatorClient, task
 	}
 }
 
-func waitForLinuxWitnessTaskCancelled(ctx context.Context, operator *control.OperatorClient, taskID string) error {
+func waitForLinuxWitnessTaskCancelled(ctx context.Context, operator *operatorclient.OperatorClient, taskID string) error {
 	if ctx == nil || operator == nil || taskID == "" {
 		return errors.New("task cancellation proof requires context, operator, and task identity")
 	}

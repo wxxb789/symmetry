@@ -232,6 +232,9 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
   import Ecto.Query
   import ExUnit.CaptureLog
 
+  import SymmetryControl.TestFixtures, only: [uuid: 0]
+  import SymmetryControlWeb.TestConn, only: [assert_error: 3, bearer: 2]
+
   alias SymmetryControl.Goals.{ContextSnapshot, Goal, GoalRevision}
   alias SymmetryControl.Integrations
   alias SymmetryControl.Integrations.{Connection, ProviderAccess, ProviderActionIntent}
@@ -3667,12 +3670,6 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
     get_in(response, ["runtimes", Access.at(0), "runtime_id"])
   end
 
-  defp assert_error(conn, status, code) do
-    assert %{"error" => %{"code" => ^code}} = json_response(conn, status)
-  end
-
   defp restore_env(key, nil), do: Application.delete_env(:symmetry_control, key)
   defp restore_env(key, value), do: Application.put_env(:symmetry_control, key, value)
-  defp bearer(conn, token), do: put_req_header(conn, "authorization", "Bearer " <> token)
-  defp uuid, do: Ecto.UUID.generate()
 end

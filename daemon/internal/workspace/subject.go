@@ -140,23 +140,10 @@ func (manager *Manager) MaterializeSubject(ctx context.Context, bindingKey, reso
 	if err != nil {
 		return protocol.Subject{}, err
 	}
-	if err := validateSubjectIdentity(resourceID, commit); err != nil {
+	subject, err := manager.materializeAdmittedSubject(ctx, bindingKey, repository, resourceID, commit)
+	if err != nil {
 		return protocol.Subject{}, err
 	}
-	if err := verifySubjectCommit(ctx, repository, commit); err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return protocol.Subject{}, ctxErr
-		}
-		return protocol.Subject{}, subjectError(bindingKey, "", commit, SubjectErrorUnreachable, err)
-	}
-	treeDigest, err := gitTreeDigest(ctx, repository, commit)
-	if err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return protocol.Subject{}, ctxErr
-		}
-		return protocol.Subject{}, subjectError(bindingKey, "", commit, subjectErrorCode(err), err)
-	}
-	subject := protocol.Subject{ResourceID: resourceID, Commit: commit, TreeDigest: treeDigest}
 	if err := subject.Validate(); err != nil {
 		return protocol.Subject{}, &SubjectError{Code: SubjectErrorInvalid, BindingKey: bindingKey, Commit: commit, Cause: err}
 	}
@@ -183,7 +170,7 @@ func (manager *Manager) PrepareSubject(ctx context.Context, bindingKey string, r
 	if err := admitted.Validate(); err != nil {
 		return SubjectWorkspace{}, &SubjectError{Code: SubjectErrorInvalid, BindingKey: bindingKey, Commit: admitted.Commit, Cause: err}
 	}
-	materialized, err := manager.materializeAtRepository(ctx, bindingKey, repository, admitted.ResourceID, admitted.Commit)
+	materialized, err := manager.materializeAdmittedSubject(ctx, bindingKey, repository, admitted.ResourceID, admitted.Commit)
 	if err != nil {
 		return SubjectWorkspace{}, err
 	}
@@ -220,7 +207,7 @@ func (manager *Manager) RecoverSubject(ctx context.Context, bindingKey string, r
 	if err := admitted.Validate(); err != nil {
 		return SubjectWorkspace{}, &SubjectError{Code: SubjectErrorInvalid, BindingKey: bindingKey, Commit: admitted.Commit, Cause: err}
 	}
-	materialized, err := manager.materializeAtRepository(ctx, bindingKey, repository, admitted.ResourceID, admitted.Commit)
+	materialized, err := manager.materializeAdmittedSubject(ctx, bindingKey, repository, admitted.ResourceID, admitted.Commit)
 	if err != nil {
 		return SubjectWorkspace{}, err
 	}
@@ -258,7 +245,7 @@ func (manager *Manager) VerifySubject(ctx context.Context, prepared Prepared, ex
 	if actualCommit != expected.Commit {
 		return protocol.Subject{}, &SubjectError{Code: SubjectErrorMismatch, BindingKey: prepared.BindingKey, Path: prepared.Path, Expected: expected.Commit, Actual: actualCommit, Cause: ErrSubjectMismatch}
 	}
-	actual, err := manager.materializeAtRepository(ctx, prepared.BindingKey, repository, expected.ResourceID, expected.Commit)
+	actual, err := manager.materializeAdmittedSubject(ctx, prepared.BindingKey, repository, expected.ResourceID, expected.Commit)
 	if err != nil {
 		return protocol.Subject{}, err
 	}
@@ -286,7 +273,7 @@ func (manager *Manager) DeriveSubject(ctx context.Context, prepared Prepared, re
 	if err != nil {
 		return protocol.Subject{}, err
 	}
-	return manager.materializeAtRepository(ctx, prepared.BindingKey, repository, resourceID, commit)
+	return manager.materializeAdmittedSubject(ctx, prepared.BindingKey, repository, resourceID, commit)
 }
 
 func (manager *Manager) verifyPreparedSubject(ctx context.Context, prepared Prepared) (string, string, error) {
@@ -318,7 +305,16 @@ func (manager *Manager) verifyPreparedSubject(ctx context.Context, prepared Prep
 	return repository, actualCommit, nil
 }
 
-func (manager *Manager) materializeAtRepository(ctx context.Context, bindingKey, repository, resourceID, commit string) (protocol.Subject, error) {
+// materializeAdmittedSubject is the single materialization path for an admitted
+// subject identity: it validates the identity pair, proves that the exact
+// commit is reachable in the resolved repository's object database and derives
+// the committed tree digest. It validates nothing about the derived subject:
+// MaterializeSubject, PrepareSubject, RecoverSubject, VerifySubject,
+// DeriveSubject and ReadSubjectArtifact all derive through it and keep their own
+// subject checks and SubjectError construction; DeriveSubject keeps its
+// resource-ID check, which is the only identity check it needs before the
+// shared materialization.
+func (manager *Manager) materializeAdmittedSubject(ctx context.Context, bindingKey, repository, resourceID, commit string) (protocol.Subject, error) {
 	if err := validateSubjectIdentity(resourceID, commit); err != nil {
 		return protocol.Subject{}, err
 	}

@@ -18,6 +18,7 @@ defmodule SymmetryControl.PiControlE2ETest do
   use SymmetryControlWeb.ConnCase, async: false
 
   import Ecto.Query
+  import SymmetryControl.TestFixtures, only: [unix_signal: 1]
 
   alias SymmetryControl.Goals
 
@@ -5066,9 +5067,6 @@ defmodule SymmetryControl.PiControlE2ETest do
         raise "could not inspect Unix OS PID #{os_pid} (kill -0 status #{status}): #{String.trim(output)}"
     end
   end
-
-  defp unix_signal(:term), do: "-TERM"
-  defp unix_signal(:kill), do: "-KILL"
 
   defp required_pi_executable!(platform) do
     value = String.trim(System.get_env("SYMMETRY_PI_CONTROL_E2E_EXECUTABLE") || "")

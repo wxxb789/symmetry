@@ -123,6 +123,9 @@ defmodule SymmetryControlWeb.DaemonController do
     end
   end
 
+  # Test-only clock seam: `protocol_controller_test.exs:644` (the
+  # expired-at-response replay case) puts this private key in the conn, and
+  # production never does, so the fallback below is production's only path.
   defp claim_response_time(conn) do
     case Map.get(conn.private, :claim_server_time) do
       %DateTime{} = server_time -> server_time

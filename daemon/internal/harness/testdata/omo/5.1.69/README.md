@@ -26,14 +26,18 @@ workspace was the authorized local clone of
 `wxxb789/symmetry-0006h-provider-fixture`.
 
 Reproduce the direct native characterization from the repository root with the
-approved key and URL already in the environment:
+approved key and URL already in the environment. `SYMMETRY_OMO_BINARY` names the
+absolute pinned binary; no path is committed, and an unset variable, a missing file
+or an executable whose exact size or SHA-256 differs from the table above refuses
+the run instead of recording weaker evidence:
 
 ```text
-python3 scripts/ci/omo-native-evidence.py --binary <absolute-pinned-binary> --repository <authorized-local-clone> --out <new-local-receipt.json>
+SYMMETRY_OMO_BINARY=<absolute-pinned-binary> python3 scripts/ci/omo-native-evidence.py --binary <absolute-pinned-binary> --repository <authorized-local-clone> --out <new-local-receipt.json>
 ```
 
 For Linux, run that command inside `wsl.exe -d Ubuntu-24.04` and transport only the
-two named relay environment variables via `WSLENV`. The script proves actual
+three named environment variables via `WSLENV` (the pinned binary path and the two
+relay variables). The script proves actual
 read/write work, discarded-ACK replay, conflicting-payload rejection, native
 process restart and retained reopen, fresh-session handoff, stream cancellation,
 and unrelated-session preservation. Those are not daemon/Control restart proofs.

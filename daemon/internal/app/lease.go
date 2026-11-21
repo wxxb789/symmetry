@@ -45,7 +45,6 @@ var (
 	) error {
 		return errors.New("Linux clone cleanup persistence is supported only by the Linux v2 App")
 	}
-	normalizeLinuxNativeStateDir          = func(path string) (string, error) { return path, nil }
 	terminatePersistAuthorityWithScanSeal func(int, string, *authority.Supervisor) (authority.StopReceipt, uint64, error)
 )
 

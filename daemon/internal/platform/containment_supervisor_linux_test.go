@@ -3136,6 +3136,376 @@ func TestLinuxSupervisorControlEOFFailsClosedBeforeOwnerLoss(t *testing.T) {
 	_ = stderrWrite.Close()
 }
 
+// TestLinuxSupervisorControlEOFWithDeadOwnerMetadataUsesOwnerLossSeal pins the
+// deterministic ordering that produced CI run 44876100236's witness-spine
+// stop-receipt stall. The control-pipe EOF reaches the helper before the owner
+// watchdog publishes owner loss, and the helper's next descendant scan write
+// would hit the dead daemon-side metadata transport (the first daemon was
+// SIGKILLed there, here it is closed directly). If the first stop takes the
+// live-owner branch, its final scan persists a fence over that dead transport,
+// the failed persist latches sticky descendant uncertainty, and every later
+// recovery stop is refused as unproven, so no stop receipt can be minted. The
+// owner-loss branch never writes to the owner transport and must mint the
+// receipt from the local seal. The test constructs that ordering itself: the
+// daemon-side metadata connection is closed first and the owner writer stays
+// open, so the control EOF is the only owner-loss boundary, with no scheduler
+// dependence.
+func TestLinuxSupervisorControlEOFWithDeadOwnerMetadataUsesOwnerLossSeal(t *testing.T) {
+	stdinRead, stdinWrite, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stdinWrite.Close()
+	stdoutRead, stdoutWrite, err := os.Pipe()
+	if err != nil {
+		stdinRead.Close()
+		stdinWrite.Close()
+		t.Fatal(err)
+	}
+	defer stdoutRead.Close()
+	stderrRead, stderrWrite, err := os.Pipe()
+	if err != nil {
+		stdinRead.Close()
+		stdinWrite.Close()
+		stdoutRead.Close()
+		stdoutWrite.Close()
+		t.Fatal(err)
+	}
+	defer stderrRead.Close()
+
+	command := exec.Command("/bin/sh", "-c", "sleep 10")
+	command.Stdin = stdinRead
+	command.Stdout = stdoutWrite
+	command.Stderr = stderrWrite
+	helper := exec.Command(os.Args[0], "-test.run=^TestLinuxSupervisorHelperProcess$", "--")
+	helper.Env = append(os.Environ(), "SYMMETRY_LINUX_SUPERVISOR_HELPER=1")
+	initialScanRetired := make(chan struct{})
+	var initialScanOnce sync.Once
+	prepare := func(handoff authority.SupervisorHandoff) error {
+		if handoff.ScanUpdate == nil || handoff.ScanUpdate.Owner != authority.SupervisorScanOwnerHelper {
+			return nil
+		}
+		update := *handoff.ScanUpdate
+		if update.Sequence == 1 && update.Phase == authority.SupervisorScanPhaseRetire && update.FailureKind == "" {
+			initialScanOnce.Do(func() { close(initialScanRetired) })
+		}
+		return nil
+	}
+	supervisor, err := StartLinuxSupervisor(LinuxSupervisorStartSpec{
+		Command:       command,
+		HelperCommand: helper,
+		OwnerContext:  "linux-helper:test-owner-loss-latch",
+		Prepare:       prepare,
+		Bind:          func(authority.SupervisorHandoff, int, string) error { return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		// A pre-fix failure leaves the helper holding the poisoned ledger and
+		// an open owner pipe, exactly like the CI occurrence where the helper
+		// had to be force-stopped; kill it so a red run leaks no helpers.
+		_ = supervisor.helper.Kill()
+		select {
+		case <-supervisor.helperDone:
+		case <-time.After(testHangGuard):
+		}
+	})
+	if err := supervisor.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	// A long lease keeps the helper's own lease-expiry timer out of the
+	// window: the stop below is driven solely by the control-pipe EOF.
+	if err := supervisor.RenewLease(30*time.Second, 1); err != nil {
+		t.Fatal(err)
+	}
+	// Wait for the helper's initial clean scan to be durably acknowledged
+	// (begin, clean, retire) before removing its transport. The monitor is
+	// paused after this scan, exactly as at the pre-resume crash.
+	select {
+	case <-initialScanRetired:
+	case <-time.After(testHangGuard):
+		t.Fatal("helper did not durably retire its initial clean descendant scan")
+	}
+	value := supervisor.ContainmentAuthority()
+	if value == nil {
+		t.Fatal("missing Linux supervisor authority")
+	}
+	// Ordering hook: close the daemon side of the helper metadata transport
+	// before the control pipe, so the helper's next scan persist is guaranteed
+	// to fail on a closed peer. The owner writer stays open, so the owner
+	// watchdog can never publish owner loss and the control EOF below is the
+	// only recovery entry for the whole test.
+	if err := supervisor.closeScanTransport(time.Now().Add(containmentCloseDeadline)); err != nil {
+		t.Fatalf("close daemon metadata transport: %v", err)
+	}
+	_ = supervisor.controlWrite.Close()
+	receipt, sealSequence, stopErr := StopPersistedLinuxSupervisorWithScanSeal(*value)
+	if stopErr != nil {
+		// Pre-fix this is the CI flake's deterministic refusal: the first stop
+		// took the live-owner branch, its final scan fence write failed on the
+		// closed metadata transport, and the sticky descendant uncertainty
+		// latch refused every recovery stop.
+		t.Fatalf("stop after control EOF with a dead owner metadata transport = %v", stopErr)
+	}
+	if sealSequence != 2 {
+		t.Fatalf("owner-loss stop seal sequence = %d, want previous clean sequence 1 + 1", sealSequence)
+	}
+	if err := proveLinuxSupervisorTargetAbsent(value.TargetPID, value.TargetIdentity); err != nil {
+		t.Fatalf("owner-loss stop left target live: %v", err)
+	}
+	if err := linuxSupervisorProveProcessGroupAbsent(context.Background(), value.TargetPID, value.TargetIdentity); err != nil {
+		t.Fatalf("owner-loss stop left process group unproven: %v", err)
+	}
+	select {
+	case <-supervisor.helperDone:
+		t.Fatal("helper exited before recovery release")
+	default:
+	}
+	value.StopReceipt = &receipt
+	if err := ReleasePersistedLinuxSupervisor(*value); err != nil {
+		t.Fatal(err)
+	}
+	// The recovery release has completed; close the still-open owner writer so
+	// the watchdog's deferred shutdown cannot extend the helper exit fence.
+	_ = supervisor.ownerWrite.Close()
+	select {
+	case <-supervisor.helperDone:
+	case <-time.After(testHangGuard):
+		t.Fatal("helper did not exit after recovery release")
+	}
+	_ = stdinRead.Close()
+	_ = stdoutWrite.Close()
+	_ = stderrWrite.Close()
+}
+
+// linuxSupervisorScanJournalModel is a test double for the app's durable
+// scan-persistence callback. It models only the scan-journal fields that decide
+// one in-process response-loss outcome: per-owner progress and the two assert
+// phases (state.go's ContainmentScanJournal.sealed()/clean() and the
+// assert_all_sealed case). The store rules remain the authority; this model is
+// deliberately narrower than the store.
+type linuxSupervisorScanJournalModel struct {
+	mutex                 sync.Mutex
+	progress              map[string]linuxSupervisorScanProgressModel
+	assertAllSealed       int
+	assertAllSealedFailed int
+}
+
+type linuxSupervisorScanProgressModel struct {
+	pending   uint64
+	clean     uint64
+	completed uint64
+	sealed    uint64
+	failure   string
+}
+
+func newLinuxSupervisorScanJournalModel() *linuxSupervisorScanJournalModel {
+	return &linuxSupervisorScanJournalModel{progress: make(map[string]linuxSupervisorScanProgressModel)}
+}
+
+func (model *linuxSupervisorScanJournalModel) prepare(handoff authority.SupervisorHandoff) error {
+	update := handoff.ScanUpdate
+	if update == nil {
+		return nil
+	}
+	model.mutex.Lock()
+	defer model.mutex.Unlock()
+	progress := model.progress[update.Owner]
+	switch update.Phase {
+	case authority.SupervisorScanPhaseBegin:
+		if progress.pending != 0 || progress.sealed != 0 {
+			return errors.New("durable scan begin does not open a fresh sequence")
+		}
+		progress.pending = update.Sequence
+	case authority.SupervisorScanPhaseClean:
+		if progress.pending != update.Sequence {
+			return errors.New("durable clean result has no pending scan")
+		}
+		progress.clean = update.Sequence
+	case authority.SupervisorScanPhaseRetire:
+		if progress.pending != update.Sequence || progress.clean != update.Sequence {
+			return errors.New("durable retire has no pending clean scan")
+		}
+		progress.pending = 0
+		progress.clean = 0
+		progress.completed = update.Sequence
+	case authority.SupervisorScanPhaseSeal:
+		if progress.sealed == update.Sequence && progress.completed == update.Sequence {
+			break
+		}
+		if progress.pending != 0 || progress.clean != 0 || progress.completed == 0 ||
+			progress.completed != update.Sequence || progress.sealed != 0 || progress.failure != "" {
+			return errors.New("durable seal does not match a completed clean sequence")
+		}
+		progress.sealed = update.Sequence
+	case authority.SupervisorScanPhaseUnproven:
+		progress.failure = update.FailureKind
+	case authority.SupervisorScanPhaseAssertClean:
+		helper := model.progress[authority.SupervisorScanOwnerHelper]
+		mirror := model.progress[authority.SupervisorScanOwnerMirror]
+		if helper.completed == 0 || mirror.completed == 0 || helper.failure != "" || mirror.failure != "" {
+			return errors.New("Linux containment scan evidence is unresolved")
+		}
+	case authority.SupervisorScanPhaseAssertAllSealed:
+		model.assertAllSealed++
+		helper := model.progress[authority.SupervisorScanOwnerHelper]
+		mirror := model.progress[authority.SupervisorScanOwnerMirror]
+		if helper.completed == 0 || helper.sealed != helper.completed || helper.failure != "" ||
+			mirror.completed == 0 || mirror.sealed != mirror.completed || mirror.failure != "" {
+			model.assertAllSealedFailed++
+			return errors.New("Linux containment scan seals are unresolved")
+		}
+	}
+	model.progress[update.Owner] = progress
+	return nil
+}
+
+// TestLinuxSupervisorLiveOwnerControlCloseInProcessStopFailsClosed pins the
+// in-process outcome for the live-owner entry of the owner-loss latch: the
+// daemon closes its own control writer on response-transport loss
+// (closeControlAfterResponseLossRequestLocked) while the owner process, its
+// owner pipe and the metadata transport stay alive. The helper reaches
+// enterRecovery through the control EOF, latches owner loss, and seals its
+// descendant scans locally with no observer writes, so the daemon's durable
+// helper progress never receives a seal. The in-process response-loss consumer
+// therefore cannot satisfy the durable all-sealed assertion and fails the stop
+// closed: no receipt is adopted and the containment-unproven callback fires
+// once. The helper's terminal owner-loss seal is still available over the
+// authenticated recovery endpoint (the restarted-daemon consumer records it
+// durably); teaching the in-process consumer to record it is the follow-up
+// tracked in docs/TODO.md (PR #185 review round 1, finding F1). The test pins
+// the current fail-closed outcome, so it discriminates: on the pre-latch tree
+// the live-owner branch mints the receipt through observer writes instead.
+func TestLinuxSupervisorLiveOwnerControlCloseInProcessStopFailsClosed(t *testing.T) {
+	stdinRead, stdinWrite, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stdinWrite.Close()
+	stdoutRead, stdoutWrite, err := os.Pipe()
+	if err != nil {
+		stdinRead.Close()
+		stdinWrite.Close()
+		t.Fatal(err)
+	}
+	defer stdoutRead.Close()
+	stderrRead, stderrWrite, err := os.Pipe()
+	if err != nil {
+		stdinRead.Close()
+		stdinWrite.Close()
+		stdoutRead.Close()
+		stdoutWrite.Close()
+		t.Fatal(err)
+	}
+	defer stderrRead.Close()
+
+	command := exec.Command("/bin/sh", "-c", "sleep 30")
+	command.Stdin = stdinRead
+	command.Stdout = stdoutWrite
+	command.Stderr = stderrWrite
+	helper := exec.Command(os.Args[0], "-test.run=^TestLinuxSupervisorHelperProcess$", "--")
+	helper.Env = append(os.Environ(), "SYMMETRY_LINUX_SUPERVISOR_HELPER=1")
+	journal := newLinuxSupervisorScanJournalModel()
+	supervisor, err := StartLinuxSupervisor(LinuxSupervisorStartSpec{
+		Command:       command,
+		HelperCommand: helper,
+		OwnerContext:  "linux-helper:test-live-owner-response-loss",
+		Prepare:       journal.prepare,
+		Bind:          func(authority.SupervisorHandoff, int, string) error { return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		// A failed assertion must not leak the helper holding the target.
+		_ = supervisor.helper.Kill()
+		select {
+		case <-supervisor.helperDone:
+		case <-time.After(testHangGuard):
+		}
+	})
+	var unprovenMutex sync.Mutex
+	unprovenCalls := 0
+	if err := supervisor.SetContainmentUnprovenCallback(func() error {
+		unprovenMutex.Lock()
+		unprovenCalls++
+		unprovenMutex.Unlock()
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := supervisor.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	// A long lease keeps the helper's own lease-expiry timer out of the
+	// window; the stop below is driven solely by the daemon-side control close.
+	if err := supervisor.RenewLease(30*time.Second, 1); err != nil {
+		t.Fatal(err)
+	}
+	value := supervisor.ContainmentAuthority()
+	if value == nil {
+		t.Fatal("missing Linux supervisor authority")
+	}
+	// The production request() paths close the control writer exactly this way
+	// once the response transport is lost; the owner pipe stays open, so the
+	// owner process and its watchdog stay alive for the whole test.
+	supervisor.requestMu.Lock()
+	supervisor.closeControlAfterResponseLossRequestLocked()
+	supervisor.requestMu.Unlock()
+	stopErr := supervisor.Terminate(true)
+	if !errors.Is(stopErr, ErrLinuxSupervisorStopUnproven) || !errors.Is(stopErr, ErrLinuxSupervisorResponseLost) {
+		t.Fatalf("live-owner response-loss stop = %v, want the fail-closed unproven class", stopErr)
+	}
+	unprovenMutex.Lock()
+	calls := unprovenCalls
+	unprovenMutex.Unlock()
+	if calls != 1 {
+		t.Fatalf("containment-unproven callbacks = %d, want exactly one persisted uncertainty mark", calls)
+	}
+	if _, ok := supervisor.ContainmentStopReceipt(); ok {
+		t.Fatal("response-loss stop adopted a receipt without a durable helper seal")
+	}
+	journal.mutex.Lock()
+	helperProgress := journal.progress[authority.SupervisorScanOwnerHelper]
+	mirrorProgress := journal.progress[authority.SupervisorScanOwnerMirror]
+	assertAttempts, assertRefusals := journal.assertAllSealed, journal.assertAllSealedFailed
+	journal.mutex.Unlock()
+	if helperProgress.completed == 0 || helperProgress.sealed != 0 {
+		t.Fatalf("durable helper progress after the local owner-loss seal = %+v, want the pre-latch clean sequence and no seal", helperProgress)
+	}
+	if mirrorProgress.sealed == 0 {
+		t.Fatalf("durable mirror progress = %+v, want the mirror seal persisted before the assertion", mirrorProgress)
+	}
+	if assertAttempts == 0 || assertRefusals == 0 {
+		t.Fatalf("durable all-sealed assertions = %d attempts / %d refusals, want the assertion attempted and refused", assertAttempts, assertRefusals)
+	}
+	// The helper's own terminal seal is still available over the authenticated
+	// recovery endpoint with the persisted consumer's Completed+1 rule.
+	receipt, sealSequence, recoveryErr := StopPersistedLinuxSupervisorWithScanSeal(*value)
+	if recoveryErr != nil {
+		t.Fatalf("recovery-endpoint owner-loss seal after the refused in-process stop = %v", recoveryErr)
+	}
+	if sealSequence != 2 {
+		t.Fatalf("recovery-endpoint owner-loss seal sequence = %d, want previous clean sequence 1 + 1", sealSequence)
+	}
+	value.StopReceipt = &receipt
+	if err := ReleasePersistedLinuxSupervisor(*value); err != nil {
+		t.Fatal(err)
+	}
+	// The release has completed; close the still-open owner writer so the
+	// watchdog's deferred shutdown cannot extend the helper exit fence.
+	_ = supervisor.ownerWrite.Close()
+	select {
+	case <-supervisor.helperDone:
+	case <-time.After(testHangGuard):
+		t.Fatal("helper did not exit after recovery release")
+	}
+	_ = stdinRead.Close()
+	_ = stdoutWrite.Close()
+	_ = stderrWrite.Close()
+}
+
 func TestLinuxSupervisorPreCommitAbortUsesPhysicalAbsenceNotReceipt(t *testing.T) {
 	stdinRead, stdinWrite, err := os.Pipe()
 	if err != nil {
