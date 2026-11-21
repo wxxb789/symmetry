@@ -33,9 +33,11 @@ import (
 // cloneLinuxCgroupStopReceipt (linux_cgroup_v2_linux.go:1443-1457) shares it
 // under recorded debt (docs/TODO.md, "rf-w2-16 clone-aliasing gate"). Each such
 // case lists the dotted field paths it leaves nil (cloneAliasingCase's
-// skipExitProofs) and the driver fails a case whose listed path never appears.
-// Every other exit-proof pointer is populated one nesting level deep; the next
-// level stays nil because Validate rejects it (authority/authority.go:1164).
+// skipExitProofs); the driver fails a case whose listed path never appears,
+// and it re-runs the case with each path removed so a skip that no longer
+// changes the outcome fails too. Every other exit-proof pointer is populated
+// one nesting level deep; the next level stays nil because Validate rejects it
+// (authority/authority.go:1164).
 //
 // The covered clones split by build universe. This file carries the harness and
 // the three clones compiled under //go:build linux; the seven clones compiled
@@ -80,7 +82,9 @@ var cloneAliasingFieldOverrides = map[string]any{
 // cloneAliasingCase is one covered clone: fresh builds a zero *T whose pointee
 // the driver populates, clone runs the production clone on that value, and
 // skipExitProofs lists the dotted field paths (slice elements flatten into
-// their field's name) whose *authority.LinuxCgroupExitProof field is left nil.
+// their field's name) whose *authority.LinuxCgroupExitProof field is left nil;
+// each listed path must stay load-bearing, so the driver fails a case that
+// still passes without it.
 type cloneAliasingCase struct {
 	name           string
 	fresh          func() any
@@ -91,7 +95,8 @@ type cloneAliasingCase struct {
 // cloneAliasingCaseFor registers a clone that takes a *T (or a value the case
 // dereferences itself) and returns the cloned value. skipExitProofs are only
 // for paths production truncates or shares under recorded debt; the driver
-// fails the case when population never reaches a listed path.
+// fails the case when population never reaches a listed path, or when removing
+// the path leaves the case green.
 func cloneAliasingCaseFor[T any](name string, clone func(value *T) any, skipExitProofs ...string) cloneAliasingCase {
 	return cloneAliasingCase{
 		name:           name,
@@ -135,44 +140,86 @@ func TestCloneAliasingLinuxCgroupEvidence(t *testing.T) {
 	}
 }
 
-// runCloneAliasingCase is the shared driver: populate, clone, verify content,
-// mutate through every reference the original still holds, verify the clone
-// again.
+// runCloneAliasingCase is the shared driver. The first pass populates, clones,
+// verifies content, mutates through every reference the original still holds
+// and verifies the clone again. It then proves each listed skip still earns
+// its place: with that one path removed the pass must fail, or the skip hides
+// a path production now deep-copies and has to go (docs/TODO.md, "rf-w2-16
+// clone-aliasing gate", records the production fixes that owe those
+// deletions).
 func runCloneAliasingCase(t *testing.T, testCase cloneAliasingCase) {
 	t.Helper()
+	skipExitProofs := cloneAliasingSkipSet(testCase.skipExitProofs)
+	original, err := cloneAliasingPrepareCase(testCase, skipExitProofs)
+	if err != nil {
+		t.Fatalf("prepare the covered case: %v", err)
+	}
+	if err := cloneAliasingAssertCase(testCase, original); err != nil {
+		t.Fatal(err)
+	}
+	for path := range skipExitProofs {
+		reduced := cloneAliasingSkipSet(testCase.skipExitProofs)
+		delete(reduced, path)
+		reducedOriginal, err := cloneAliasingPrepareCase(testCase, reduced)
+		if err != nil {
+			t.Fatalf("removing skip path %q does not populate: %v", path, err)
+		}
+		if err := cloneAliasingAssertCase(testCase, reducedOriginal); err == nil {
+			t.Fatalf("skip path %q is no longer needed; remove it", path)
+		}
+	}
+}
+
+// cloneAliasingSkipSet copies the case's skip paths into a fresh marker map;
+// false means population has not reached the path yet.
+func cloneAliasingSkipSet(paths []string) map[string]bool {
+	set := make(map[string]bool, len(paths))
+	for _, path := range paths {
+		set[path] = false
+	}
+	return set
+}
+
+// cloneAliasingPrepareCase builds and populates a fresh *T for the case,
+// leaving every skip path nil and marking each one reached.
+func cloneAliasingPrepareCase(testCase cloneAliasingCase, skipExitProofs map[string]bool) (reflect.Value, error) {
 	original := reflect.ValueOf(testCase.fresh())
 	if original.Kind() != reflect.Ptr || original.IsNil() {
-		t.Fatalf("case did not provide a *T original")
-	}
-	skipExitProofs := make(map[string]bool, len(testCase.skipExitProofs))
-	for _, path := range testCase.skipExitProofs {
-		skipExitProofs[path] = false
+		return reflect.Value{}, fmt.Errorf("case did not provide a *T original")
 	}
 	if err := cloneAliasingPopulate(original.Elem(), "", 0, skipExitProofs); err != nil {
-		t.Fatalf("populate the covered value: %v", err)
+		return reflect.Value{}, fmt.Errorf("populate the covered value: %v", err)
 	}
 	for path, reached := range skipExitProofs {
 		if !reached {
-			t.Fatalf("skip path %q was never reached; fix or drop the entry", path)
+			return reflect.Value{}, fmt.Errorf("skip path %q was never reached; fix or drop the entry", path)
 		}
 	}
+	return original, nil
+}
+
+// cloneAliasingAssertCase clones the populated original through the production
+// function and asserts fidelity, mutation coverage and independence; a nil
+// return means the case passed.
+func cloneAliasingAssertCase(testCase cloneAliasingCase, original reflect.Value) error {
 	cloned := reflect.ValueOf(testCase.clone(original))
 	if !cloned.IsValid() || (cloned.Kind() == reflect.Ptr && cloned.IsNil()) {
-		t.Fatalf("clone returned an empty value for a populated original")
+		return fmt.Errorf("clone returned an empty value for a populated original")
 	}
 	// Both sides are dereferenced once so that a value-returning clone and a
 	// pointer-returning clone compare the same covered value.
 	before := cloneAliasingRender(cloneAliasingDereference(original))
 	if after := cloneAliasingRender(cloneAliasingDereference(cloned)); after != before {
-		t.Fatalf("clone content differs from the populated original\n clone: %s\norigin: %s", after, before)
+		return fmt.Errorf("clone content differs from the populated original\n clone: %s\norigin: %s", after, before)
 	}
 	writes := cloneAliasingMutateReferences(original)
 	if writes == 0 {
-		t.Fatalf("the mutation exercised no write site; the case cannot observe aliasing")
+		return fmt.Errorf("the mutation exercised no write site; the case cannot observe aliasing")
 	}
 	if after := cloneAliasingRender(cloneAliasingDereference(cloned)); after != before {
-		t.Fatalf("clone shares state with the original: %d write(s) in the original changed the clone\n before: %s\n  after: %s", writes, before, after)
+		return fmt.Errorf("clone shares state with the original: %d write(s) in the original changed the clone\n before: %s\n  after: %s", writes, before, after)
 	}
+	return nil
 }
 
 // cloneAliasingDereference strips one pointer level so that the covered value

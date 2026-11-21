@@ -614,9 +614,12 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       `PreGate.LauncherExit.HelperExit`, `PreGate.Proof.HelperExit.HelperExit` and the
       `AnchorStop` helper exits are nil in the clone, and
       `PreGate.Proof.LauncherExit.HelperExit` stays shared through the `PreGate.Proof` struct
-      copy (`:1563-1567`). The helper's own constructors truncate the same receipt paths before
-      this clone runs (`:1173-1179`, `:1284-1286`), so the drop is latent for today's producers,
-      but it silently loses data if one ever starts carrying the single-level nested exit that
+      copy (`:1563-1567`). The drop is latent for today's producers because both evidence
+      producers build helper-kind proofs whose exits are witnessed by the helper, so the
+      nested `HelperExit` is nil: the pre-gate proof at `:861-869` and the full stop proof at
+      `:983-990`. The receipt-ack copies at `:1173-1179` and `:1282-1288` are a separate path
+      that truncates a possibly mirror-kind `StopReceipt` the same way. The clone would
+      silently lose data if a producer ever starts carrying the single-level nested exit that
       the receipt shape allows. The review of branch `refactor/rf-w2-16-clone-aliasing-test`
       (2026-11-21) confirmed the `GateExit`/`LauncherExit` alias with a probe against the
       shipped clone - mutating the original's `LinuxProof.GateExit.HelperExit` changed the
@@ -624,12 +627,14 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       forbids production changes. The gate files
       `daemon/internal/platform/clone_aliasing_linux_test.go` and
       `clone_aliasing_linux_amd64_test.go` list every path above as an explicit
-      `skipExitProofs` entry next to its reason, and a driver check fails any case whose listed
-      path population never reaches. Removing one of those entries before the matching
-      production fix turns the covering subtest red: `TestCloneAliasingLinuxAMD64Evidence` for
-      the helper-v2 and anchor paths, `TestCloneAliasingLinuxCgroupEvidence` for the
-      StopReceipt paths. `TestCloneAliasingWindowsContainmentSessionID` does not share the
-      Linux harness and is unaffected.
+      `skipExitProofs` entry next to its reason; the driver fails a case whose listed path
+      population never reaches, and it re-runs each case with every skip removed, failing any
+      skip that no longer changes the outcome. Removing one of those entries before the
+      matching production fix turns the covering subtest red:
+      `TestCloneAliasingLinuxAMD64Evidence` for the helper-v2 and anchor paths,
+      `TestCloneAliasingLinuxCgroupEvidence` for the StopReceipt paths.
+      `TestCloneAliasingWindowsContainmentSessionID` does not share the Linux harness and is
+      unaffected.
 
 ## Production Linux containment witness: stop-receipt barrier stall awaiting a diagnosable occurrence
 

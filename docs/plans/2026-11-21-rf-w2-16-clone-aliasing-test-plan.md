@@ -65,9 +65,10 @@ stay byte-identical - the acceptance runs against the clones as shipped.
 3. **Per-case populate skips, stated with their real limits.** Every exit proof is populated
    one nesting level deep, except where a case lists a dotted field path in
    `cloneAliasingCase.skipExitProofs`. Each listed path must name a
-   `*authority.LinuxCgroupExitProof` field and must be reached during population (an unused
-   entry fails the case), so the skips are per clone, not type-global. Three reasons put a path
-   on a list:
+   `*authority.LinuxCgroupExitProof` field, must be reached during population (an unused entry
+   fails the case), and must stay load-bearing (the driver re-runs the case with each path
+   removed and fails any skip whose removal leaves the case green), so the skips are per clone,
+   not type-global. Three reasons put a path on a list:
    - **Truncation by design.** Every platform clone that receives an exit proof outside the
      authority package truncates the nested field (`cloneLinuxOwnerAnchorExitProof`,
      `anchor_server.go:44-49` sets `cloned.HelperExit = nil`), so
@@ -99,9 +100,10 @@ stay byte-identical - the acceptance runs against the clones as shipped.
    decide per path whether `cloneLinuxOwnerHelperV2StopEvidence` should deep-copy or keep
    dropping the nested exits it trims today, then remove the matching `skipExitProofs` entries.
    Removing such an entry before the matching production fix makes the covering case red, which
-   the contract's failure control forbids. The `RunReapEvidence` exits are *not* skipped: the
-   deep-copy loop at `helper_v2_stop.go:1547-1550` keeps them independent, so deleting that
-   loop or making `LinuxCgroupExitProof.Clone`
+   the contract's failure control forbids; forgetting to remove it after the production fix
+   fails the load-bearing check with "skip path ... is no longer needed". The `RunReapEvidence`
+   exits are *not* skipped: the deep-copy loop at `helper_v2_stop.go:1547-1550` keeps them
+   independent, so deleting that loop or making `LinuxCgroupExitProof.Clone`
    (`authority/authority.go:1195-1202`) shallow turns the suite red (both verified with
    `go test -overlay`; see the evidence table).
    The *outer* `HelperExit` pointers of `LinuxOwnerAnchorStopEvidence`,
@@ -184,12 +186,15 @@ Run from `daemon/` on this host unless noted; every heavy run was serialized wit
 | planted-red 3 (WSL, supplementary) | remove `cloned.Launcher = cloneLinuxOwnerProcessIdentity(fence.Launcher)` from `LinuxOwnerAnchorProducerFence.Clone` (`anchor_types.go`), same run | exit 1, `LinuxOwnerAnchorProducerFence.Clone` red (53 writes) plus the two nested-input cases |
 | planted-red 4 (WSL, `go test -overlay`) | remove the `RunReapEvidence` deep-copy loop (`helper_v2_stop.go:1547-1550`) in a `/tmp` scratch copy, run the `-run TestCloneAliasing` command | exit 1, `cloneLinuxOwnerHelperV2StopEvidence` red (522 writes) |
 | planted-red 5 (WSL, `go test -overlay`) | make `LinuxCgroupExitProof.Clone` return its input unchanged (`authority/authority.go:1195-1202`) in a scratch copy, same run | exit 1, `cloneLinuxOwnerHelperV2StopEvidence` red (522 writes), `cloneLinuxCgroupV2RemovalAuthorization` (305), `cloneLinuxCgroupV2PreGateRemovalAuthorization` (69) |
+| planted-red 6 (WSL, `go test -overlay`) | add the correctly deep-copied path `RunReapEvidence.ProcessExit.HelperExit` to the helper-v2 case's skips in a scratch copy, same run | exit 1, `cloneLinuxOwnerHelperV2StopEvidence` red: `skip path "RunReapEvidence.ProcessExit.HelperExit" is no longer needed; remove it` |
 | whitespace | `git diff --check` (new files recorded with `git add -N`) | exit 0 |
 
 The `-overlay` probes run against scratch copies under WSL `/tmp` and replace no repository
-file. Removing any single `skipExitProofs` entry turns its covering subtest red as well
-(verified path by path for the shared paths, and by inspection of the literal
-`cloned.HelperExit = nil` for the truncated ones).
+file. Removing any single `skipExitProofs` entry turns its covering subtest red as well - the
+shipped driver now enforces exactly that for all 19 entries (verified path by path for the
+shared paths, and by inspection of the literal `cloned.HelperExit = nil` for the truncated
+ones) - while adding a skip on a path production deep-copies fails the driver by design
+(planted-red 6).
 
 The planted edits are reverted (verified with `git status --porcelain` showing only the new test
 files and the plan). No `-race` locally: no cgo on this Windows host; the daemon race jobs
