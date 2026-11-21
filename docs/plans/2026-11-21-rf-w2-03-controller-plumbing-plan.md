@@ -359,11 +359,13 @@ the reviewers): `reviewer` (adversarial audit, frozen at `git diff` b2sum
 
 * CW-3's status pair makes the create/action distinction explicit at each call site; a wrong pair
   changes a wire status, which the differential oracle and the existing portal suites both pin.
-* CW-6/KW-7 change parsing internals that only HTTP-level tests can see (the parsers are
+* CW-6/CW-7 change parsing internals that only HTTP-level tests can see (the parsers are
   `QueryParams` functions, not a controller-facing surface); the C4 tables plus the differential
   capture are the acceptance evidence, and the unbounded sites keep `:infinity` so no accepted
   input narrows.
 * CW-10 is authority-adjacent: a missing `:surface` assign now fails loudly instead of guessing;
-  the 13-route test proves each route's pipeline carries it.
+  create, show and command pin the surface on both pipelines, and the 13-route test proves no Goal
+  route 500s on its pipeline (`/events`, `/graph`, `/contexts/:id` and `/attention` never read
+  `assigns.surface`, so they cannot pin it).
 * The scratch noise floor is proven by the base↔base capture; if that diff is not empty, the
   instrument is reported as unstable instead of claiming byte-identity from a noisy diff.
