@@ -44,8 +44,10 @@ gate applies to those 87). The other 180 literals compile unchanged.
    - `type runLifecycle struct`: the 44 fields of the ten K1 §6 groups (list below).
    - `cleanupBlocked() bool` on `runLifecycle`: the one derived predicate (K1 §6's six-flag OR),
      replacing the free function `nativeCleanupBlocked` (`goal_admission.go:1290-1292`).
-   - `phase() runPhase` on `*runningRun`: the collapsed P0-P13 derivation for diagnostics and
-     tests (design clause 3), with a documented precedence table.
+   - `phase() runPhase` on `*runningRun`: the collapsed P0-P13 derivation with a documented
+     precedence table, consumed by this module's tests; no production diagnostic reads it in this
+     slice (design clause 3's "diagnostics and tests" wording is superseded by the conductor
+     decision, and the query is retained as the state-detection surface).
    - the transition methods (table below), all declared on `*runningRun`, all documented
      "caller holds `daemon.mu`" (and `daemon.eventReceiptMu` where the base site did).
 2. **`daemon/internal/app/native_run.go`** — `runningRun` embeds `runLifecycle`; the 44 field
@@ -55,7 +57,7 @@ gate applies to those 87). The other 180 literals compile unchanged.
    **`lease.go`**, **`goal_admission.go`**, **`recovery_glue.go`**,
    **`linux_owner_witness_linux.go`** — same mechanical replacement of lifecycle writes with
    transition calls at their base positions.
-4. **`daemon/internal/app/*_test.go`** (15 files) — the 87 fixture literals rewritten into nested
+4. **`daemon/internal/app/*_test.go`** (19 files) — the 87 fixture literals rewritten into nested
    `runLifecycle: runLifecycle{…}` literals; O6 proof per literal (field→value sets equal).
    Every assertion, every test name and every other byte stays unchanged.
 5. **New `daemon/internal/app/run_lifecycle_test.go`** — the module's tests at its interface (no
@@ -172,11 +174,11 @@ its own lock sites unchanged.
 
 Internal helpers (called only from this file): `blockRenewal()`, `closeRenewal()`,
 `invalidateRenewal()`, `exhaustUsageRetry()`, `markCleanupBlocked()` (the forced-`true` memo
-writes), `refreshCleanupBlocked()` (the derived memo write), `releaseStartCancel()` and
-`releaseTerminalCancel()`; they exist so the caller-facing methods above stay semantic and so the
-composed write orders match the base exactly. The delivered module declares these plus the 57 rows
-above: 64 methods in total (`markStale` was not needed — `markLeaseLostWithSettlement` absorbs the
-`cancelled`+`stale` pair at its single base site).
+writes), `refreshCleanupBlocked()` (the derived memo write) and `releaseTerminalCancel()`; they
+exist so the caller-facing methods above stay semantic and so the composed write orders match the
+base exactly. The delivered module declares these plus the 57 rows above: 63 methods in total
+(`markStale` was not needed — `markLeaseLostWithSettlement` absorbs the `cancelled`+`stale` pair at
+its single base site).
 
 ### Per-function mapping (write order preserved)
 
@@ -301,12 +303,12 @@ resets four usage-barrier flags, `settleCancelledNativeStart`/`transferNativeSta
 outside" for a field subset while its module already wrote the subset b-2 owns; and clause 1's
 `cleanupBlocked()` replacement plus clause 3's per-function write-order control bind all 49
 functions; (b) deliver the whole slice and report the measured diff. **Recommendation adopted:
-(b)**: measured on the delivered tree, `git diff --numstat` over the tracked files gives
-`+374 / -581 = 955` changed lines (production edits ≈ 465, the mechanical test-fixture rewrite
-≈ 490) and the new files add `run_lifecycle.go` 739 + `run_lifecycle_test.go` 838 = 1,577, so the
-code diff is ≈ 2,532 lines and the two mandated records add ≈ 763 (this plan 363 + the evidence
-record). Under option (a) b-1 would carry the module file (~540 of its 739 lines), its tests
-(~500 of 838), **all 87 fixture literals** (the fields are mixed across groups, so the rewrite is
+(b)**: measured on the delivered tree at the apply revision, `git diff --numstat bced8d36` (the
+slice's merge base) over the tracked files gives `+371 / -588 = 959` changed lines (production
+edits and the script 470, the mechanical test-fixture rewrite 489) and the new files add
+`run_lifecycle.go` 585 + `run_lifecycle_test.go` 816 = 1,401, so the code diff is 2,360 lines and
+the two mandated records add 849 (this plan 376 + the evidence record 473). Under option (a) b-1
+would carry the module file (~430 of its 585 lines), its tests (~480 of 816), **all 87 fixture literals** (the fields are mixed across groups, so the rewrite is
 not divisible) and its own write/lock/flow tables — measured against the same files that is
 >1,800 lines, so the split does not produce a ≤1,500-line increment either; the plan and the
 evidence record follow the program rule C2 (LOC is report-only). If the conductor prefers (a),

@@ -19,8 +19,6 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/workspace"
 )
 
-// lifecycleSession is the minimal harness.Session the module's transitions only
-// store and compare.
 type lifecycleSession struct{ id string }
 
 func (lifecycleSession) Control(context.Context, harness.ControlRequest) (harness.ControlReceipt, error) {
@@ -31,8 +29,6 @@ func (lifecycleSession) Wait(context.Context) (harness.TaskResult, error) {
 }
 func (lifecycleSession) Close(context.Context) error { return nil }
 
-// lifecycleProcess is the minimal Process the containment transitions only
-// store and compare.
 type lifecycleProcess struct{ id int }
 
 func (lifecycleProcess) WriteInput([]byte) error                        { return nil }
@@ -40,10 +36,7 @@ func (lifecycleProcess) Terminate(context.Context, time.Duration) error { return
 func (lifecycleProcess) Wait() execution.Result                         { return execution.Result{} }
 func (lifecycleProcess) ProcessDetails() (int, string)                  { return 0, "" }
 
-// lifecycleFieldNames is the write set of the module: the 44 fields declared in
-// runLifecycle plus the cleanup memo, whose declaration stays on runningRun
-// because the derived predicate carries the same name. The scan gate below
-// fails when a field leaves or joins either set.
+// The module's write set: the 44 runLifecycle fields plus the cleanup memo.
 var lifecycleFieldNames = []string{
 	"starting", "claimed",
 	"nativeStartInFlight", "nativeStartTerminalObserved",
@@ -63,9 +56,6 @@ var (
 	lifecycleTestProcess = lifecycleProcess{id: 7}
 )
 
-// TestRunLifecycleTransitionSequences walks one legal sequence per K1 group and
-// checks the state each step leaves behind. Every step is a transition the
-// production callers use, in the order the callers use it.
 func TestRunLifecycleTransitionSequences(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -82,7 +72,9 @@ func TestRunLifecycleTransitionSequences(t *testing.T) {
 				(*runningRun).attachClaim,
 				func(run *runningRun) {
 					run.nativeSession = lifecycleTestSession
-					run.finishAttachedStart()
+					if run.finishAttachedStart() {
+						t.Fatalf("finishAttachedStart reported a terminal run for a live attach")
+					}
 				},
 			},
 			check: func(t *testing.T, run *runningRun) {
@@ -98,11 +90,15 @@ func TestRunLifecycleTransitionSequences(t *testing.T) {
 			},
 		},
 		{
-			name:    "admission/finish_starting_keeps_session_obligation",
-			initial: func() *runningRun { return &runningRun{runLifecycle: runLifecycle{starting: true}} },
+			name: "admission/finish_starting_keeps_session_obligation",
+			initial: func() *runningRun {
+				return &runningRun{runLifecycle: runLifecycle{starting: true}, cleanupBlocked: true}
+			},
 			steps: []func(*runningRun){
 				func(run *runningRun) {
-					run.finishStarting(true)
+					if run.finishStarting(true) {
+						t.Fatalf("finishStarting reported a terminal run for a fresh start")
+					}
 				},
 			},
 			check: func(t *testing.T, run *runningRun) {
@@ -142,7 +138,7 @@ func TestRunLifecycleTransitionSequences(t *testing.T) {
 		{
 			name: "native_start_publication/transfer_terminal_to_settlement",
 			initial: func() *runningRun {
-				return &runningRun{runLifecycle: runLifecycle{slotHeld: true, nativeStartInFlight: true, stale: true}, nativeSession: lifecycleTestSession}
+				return &runningRun{runLifecycle: runLifecycle{slotHeld: true, nativeStartInFlight: true, stale: true}, nativeSession: lifecycleTestSession, nativeDeadline: time.Now().UTC()}
 			},
 			steps: []func(*runningRun){
 				func(run *runningRun) {
@@ -423,7 +419,7 @@ func TestRunLifecycleTransitionSequences(t *testing.T) {
 		{
 			name: "close_retry/require_begin_end_publish",
 			initial: func() *runningRun {
-				return &runningRun{runLifecycle: runLifecycle{slotHeld: true}, nativeSession: lifecycleTestSession, goalSession: &state.GoalSessionKey{}}
+				return &runningRun{runLifecycle: runLifecycle{slotHeld: true}, nativeSession: lifecycleTestSession, goalSession: &state.GoalSessionKey{}, goalAdmission: &protocol.Admission{}}
 			},
 			steps: []func(*runningRun){
 				(*runningRun).requireCloseRetry,
@@ -484,7 +480,7 @@ func TestRunLifecycleTransitionSequences(t *testing.T) {
 		{
 			name: "containment/stop_without_witness_stays_detectable",
 			initial: func() *runningRun {
-				return &runningRun{runLifecycle: runLifecycle{slotHeld: true, processExited: true}, process: lifecycleTestProcess}
+				return &runningRun{runLifecycle: runLifecycle{slotHeld: true, processExited: true, processStopWitness: lifecycleTestProcess, processStopPID: 71, processStopIdentity: "native:71"}, process: lifecycleTestProcess}
 			},
 			steps: []func(*runningRun){
 				func(run *runningRun) {
@@ -522,9 +518,6 @@ func TestRunLifecycleTransitionSequences(t *testing.T) {
 	}
 }
 
-// TestRunLifecycleUnmodelledStatesStayWritableAndDetectable pins V1: a state the
-// base has no branch for is still written exactly as the base writes it, and it
-// is detectable through the query methods, never refused.
 func TestRunLifecycleUnmodelledStatesStayWritableAndDetectable(t *testing.T) {
 	t.Run("orphaned_usage_retry_is_superseded_by_the_next_claim", func(t *testing.T) {
 		run := &runningRun{runLifecycle: runLifecycle{
@@ -556,8 +549,6 @@ func TestRunLifecycleUnmodelledStatesStayWritableAndDetectable(t *testing.T) {
 		if got := run.phase(); got != phaseRetired {
 			t.Fatalf("phase = %q for a released slot with an open claim, want %q", got, phaseRetired)
 		}
-		// The transitions still perform their exact writes on the contradictory
-		// state: an empty release is a no-op, a real one clears ownership.
 		run.releaseTerminalReservation()
 		if run.terminalizing != 0 {
 			t.Fatalf("releaseTerminalReservation moved terminalizing to %d, want 0", run.terminalizing)
@@ -566,9 +557,6 @@ func TestRunLifecycleUnmodelledStatesStayWritableAndDetectable(t *testing.T) {
 		if run.nativeTerminalOwner || run.terminalizing != 0 {
 			t.Fatalf("releaseSettlementOwner kept ownership: owner=%t terminalizing=%d", run.nativeTerminalOwner, run.terminalizing)
 		}
-		// The usage-retry barrier is a separate obligation: releasing the
-		// settlement owner does not clear it, and the predicate keeps reporting
-		// the run as blocked.
 		if !run.runLifecycle.cleanupBlocked() {
 			t.Fatalf("cleanupBlocked() = false while the usage retry is still pending, want true")
 		}
@@ -609,8 +597,6 @@ func TestRunLifecycleUnmodelledStatesStayWritableAndDetectable(t *testing.T) {
 	})
 }
 
-// TestRunLifecycleCleanupBlockedTruthTable pins the derived predicate over all
-// 64 combinations of its six inputs.
 func TestRunLifecycleCleanupBlockedTruthTable(t *testing.T) {
 	flags := []struct {
 		name string
@@ -640,8 +626,6 @@ func TestRunLifecycleCleanupBlockedTruthTable(t *testing.T) {
 	}
 }
 
-// TestRunLifecyclePhaseTable pins every collapsed phase and the precedence
-// order the module documents.
 func TestRunLifecyclePhaseTable(t *testing.T) {
 	tests := []struct {
 		name string
@@ -674,12 +658,8 @@ func TestRunLifecyclePhaseTable(t *testing.T) {
 	}
 }
 
-// TestRunLifecycleWritesStayInTheModule is the committed write-site gate (K1
-// scanner idea, contract design clause 4): every lifecycle field write in the
-// package's non-test source resolves to run_lifecycle.go, the module declares
-// exactly the documented field set, runningRun embeds it, and the module takes
-// no lock. Test files keep constructing fixture state directly (K1's scope
-// excluded tests; the enumeration is in the evidence record).
+// Committed write-site gate (contract design clause 4, K1 scanner): every
+// lifecycle field write in the package's non-test source resolves to this module.
 func TestRunLifecycleWritesStayInTheModule(t *testing.T) {
 	fset := token.NewFileSet()
 	modulePath := "run_lifecycle.go"
@@ -770,8 +750,6 @@ func TestRunLifecycleWritesStayInTheModule(t *testing.T) {
 		t.Fatalf("runningRun does not embed runLifecycle in native_run.go")
 	}
 
-	// The module takes no lock and invokes nothing: every capture is returned to
-	// the caller, which invokes it after unlocking, exactly as the base did.
 	var calls []string
 	ast.Inspect(module, func(node ast.Node) bool {
 		call, ok := node.(*ast.CallExpr)
@@ -783,13 +761,13 @@ func TestRunLifecycleWritesStayInTheModule(t *testing.T) {
 			return true
 		}
 		switch selector.Sel.Name {
-		case "Lock", "Unlock", "RLock", "TryLock":
+		case "Lock", "Unlock", "RLock", "TryLock", "cancel", "renewCancel", "terminalCancel":
 			calls = append(calls, fmt.Sprintf("%s:%d calls %s", modulePath, fset.Position(call.Pos()).Line, selector.Sel.Name))
 		}
 		return true
 	})
 	if len(calls) > 0 {
-		t.Fatalf("the module takes a lock:\n%s", strings.Join(calls, "\n"))
+		t.Fatalf("the module takes a lock or invokes a captured handle:\n%s", strings.Join(calls, "\n"))
 	}
 }
 

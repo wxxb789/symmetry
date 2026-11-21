@@ -12,11 +12,15 @@ describes the working tree the gates ran on.
 
 Subject identity (sha256 of the delivered files):
 
+The apply revision re-hashed `run_lifecycle.go`, `run_lifecycle_test.go`, `native_run.go` and this
+slice's plan (the files its accepted simplify findings changed); the other rows are byte-identical
+to the pre-apply revision and keep their hashes.
+
 | file | sha256 |
 | --- | --- |
-| `daemon/internal/app/run_lifecycle.go` | `f8ce50e8cd4a7870aefd190e2b2ba6b9dca2fdad84a86b267cb63a9ee7d8c247` |
-| `daemon/internal/app/run_lifecycle_test.go` | `dffef0ea370d249f8861bb59d39e19f567c85b3d64d84f40aff1181c608edb9a` |
-| `daemon/internal/app/native_run.go` | `e23b01586fb00fc603c9bd197de9e15f8251bc5c2a1ecc7b515b6d05cf7a1760` |
+| `daemon/internal/app/run_lifecycle.go` | `89a15f45115710dfc63381f76e48812b320c0bf12b57e4a6273b94c86f882392` |
+| `daemon/internal/app/run_lifecycle_test.go` | `f803de6e012f123d65fc57936c564af5d41d92e529a868c5c0df8e0558a32171` |
+| `daemon/internal/app/native_run.go` | `600a367c6f1f5c97f6dfe9719342d62f8ce178add7f3c721bb19f5c538a4a7e7` |
 | `daemon/internal/app/app.go` | `efc3c46887497a4f9c5dfda391585fe7316b26efcdb7f0243b8de947232fbfef` |
 | `daemon/internal/app/cleanup.go` | `6f54a16546ad109a5e45c825543f4773c0c773ab14450af82b0ee147b62da388` |
 | `daemon/internal/app/commands.go` | `57d2feb07937291a1863cab9fe69f1fa44dbced2a54bec84a2a2a76554040114` |
@@ -25,7 +29,7 @@ Subject identity (sha256 of the delivered files):
 | `daemon/internal/app/goal_admission.go` | `a1ebf94855bd007503704d675c939d71088e58d4a73335856f4befc03c3bff51` |
 | `daemon/internal/app/recovery_glue.go` | `d4b51969697a892865319d2ba628302914b9a57f26175fbc39bb440e85992386` |
 | `daemon/internal/app/linux_owner_witness_linux.go` | `c131b3ef60de447ec2189003e4d205a43115ff6285d92cb570a426dcf42050d1` |
-| `docs/plans/2026-11-22-rf-w4-17b-run-lifecycle-plan.md` | `eac83e0eee2ee8775e05903f0edc6308844af021f8305081912af24bed96a3e7` |
+| `docs/plans/2026-11-22-rf-w4-17b-run-lifecycle-plan.md` | `7048fcc2d81c31875fd64fda4e80b613bf06ddf53484a49c60fc6d2dce0dc849` |
 | `scripts/ci/omo-control-native-evidence.py` | `d55163b436a44df43817bd27623a608a5a72b782eb9445c384bdf21580159ead` |
 
 Scratch tools and raw outputs (outside the repository, host state directory):
@@ -39,33 +43,34 @@ seq-report.txt}` (per-function write and lock sequences), `…/flow/{main.go, fl
 
 | file | status | lines (base → head) | note |
 | --- | --- | ---: | --- |
-| `daemon/internal/app/run_lifecycle.go` | new | — → 739 | `runLifecycle` (44 fields), `cleanupBlocked()`, `phase()`, 64 transition/query methods |
-| `daemon/internal/app/run_lifecycle_test.go` | new | — → 838 | 5 tests at the module interface, no `&daemon{}`; the committed write-site scan gate |
-| `daemon/internal/app/native_run.go` | edited | 2417 → 2242 | `runningRun` embeds `runLifecycle`; 44 declarations left; 127 write statements became transition calls; `claimNativeTerminalOwner` deleted (its body is `claimSettlementOwner`) |
+| `daemon/internal/app/run_lifecycle.go` | new | — → 585 | `runLifecycle` (44 fields), `cleanupBlocked()`, `phase()`, 63 transition/query methods |
+| `daemon/internal/app/run_lifecycle_test.go` | new | — → 816 | 5 tests at the module interface, no `&daemon{}`; the committed write-site scan gate |
+| `daemon/internal/app/native_run.go` | edited | 2417 → 2232 | `runningRun` embeds `runLifecycle`; 44 declarations left; 127 write statements became transition calls; `claimNativeTerminalOwner` deleted (its body is `claimSettlementOwner`) |
 | `daemon/internal/app/app.go` | edited | 2221 → 2189 | startAssigned, releaseRun, releaseSlotOnce, scheduleTerminalSlotRelease, beginTerminal, releaseTerminalReservation, clearCancellationReservation, finishStarting, finishAttachedStart, the constructor literal |
 | `daemon/internal/app/cleanup.go` | edited | 1047 → 1039 | finalizeExitedProcess, clearCleanupBlockedAfterStop |
-| `daemon/internal/app/commands.go` | edited | 939 → 939 | dispatchQueuedCommand, handleCommand |
-| `daemon/internal/app/events.go` | edited | 603 → 603 | queueEvent |
+| `daemon/internal/app/commands.go` | edited | 939 → 931 | dispatchQueuedCommand, handleCommand |
+| `daemon/internal/app/events.go` | edited | 603 → 598 | queueEvent |
 | `daemon/internal/app/lease.go` | edited | 585 → 563 | renewLeaseWithTimingAndStart, terminateForLease |
 | `daemon/internal/app/goal_admission.go` | edited | 1584 → 1577 | startGoalAdmission, requireNativeSessionCloseRetry, retryBlockedNativeSessionCloses; `nativeCleanupBlocked` deleted (the free function at base lines 1290-1292) |
 | `daemon/internal/app/recovery_glue.go` | edited | 894 → 880 | retryNativeUsageRecoveryPersistence |
 | `daemon/internal/app/linux_owner_witness_linux.go` | edited | 3843 → 3843 | witness constructor literal |
-| `daemon/internal/app/*_test.go` (15 files) | edited | — | 87 fixture literals rewritten into nested `runLifecycle: runLifecycle{…}`; 193 keys moved; assertions unchanged |
-| `docs/plans/2026-11-22-rf-w4-17b-run-lifecycle-plan.md` | new | — → 363 | plan with decisions D1-D8 |
+| `daemon/internal/app/*_test.go` (19 files) | edited | — | 87 fixture literals rewritten into nested `runLifecycle: runLifecycle{…}`; 193 keys moved; assertions unchanged |
+| `docs/plans/2026-11-22-rf-w4-17b-run-lifecycle-plan.md` | new | — → 376 | plan with decisions D1-D8 |
 | `docs/evidence/rf-w4-17b-run-lifecycle-2026-11-22.md` | new | — | this record |
 | `scripts/ci/omo-control-native-evidence.py` | edited | 1812 → 1813 | `SOURCE_PATHS` gains `daemon/internal/app/run_lifecycle.go` (R9) |
 
-Line budget (contract clause 1's "no file > 1500 L"): `run_lifecycle.go` 739 and
-`run_lifecycle_test.go` 838 are the only files this slice pushes past 400 lines; every file that
+Line budget (contract clause 1's "no file > 1500 L"): `run_lifecycle.go` 585 and
+`run_lifecycle_test.go` 816 are the only files this slice pushes past 400 lines; every file that
 already exceeded 1500 lines at base (`native_run.go`, `app.go`, `goal_admission.go`,
 `linux_owner_recovery_linux.go`, `linux_owner_v2_linux.go`, `linux_owner_preflight_linux.go`,
 `linux_owner_witness_linux.go`, the test files) shrinks or stays equal — `native_run.go`
-2417 → 2242 as the contract requires. No file crosses 1500 lines.
+2417 → 2232 as the contract requires. No file crosses 1500 lines.
 
-Diff size (measured, for the plan's decision D8): tracked files `+374 / -581 = 955` lines
-(`git diff --numstat f70553bf`: production edits ≈ 465, mechanical test-fixture rewrite ≈ 490),
-plus the new files `run_lifecycle.go` 739 and `run_lifecycle_test.go` 838 — a code diff of
-≈ 2,532 lines — and the two mandated records (plan 363 + this record ≈ 400). That total is over
+Diff size (measured at the apply revision, for the plan's decision D8): tracked files
+`+371 / -588 = 959` lines (`git diff --numstat bced8d36`, the slice's merge base: production edits
+and the script 470, mechanical test-fixture rewrite 489), plus the new files `run_lifecycle.go`
+585 and `run_lifecycle_test.go` 816 — a code diff of 2,360 lines — and the two mandated records
+(plan 376 + this record 473). That total is over
 the conductor's 1,500-line size rule. D8 in the plan records the measurement
 and the disposition: the split into W4-17b-1/W4-17b-2 does not bound the diff either (the module
 file, the fixture rewrite and the evidence tables are fixed costs of both halves: a b-1 that keeps
@@ -119,10 +124,13 @@ stay on `runningRun`: `process`, `nativeSession`, `goalSession`, `goalAdmission`
 
 ## 4. Transitions and callers (clause 2)
 
-64 methods are declared in `run_lifecycle.go`: 55 called from other files, 9 internal-only
+63 methods are declared in `run_lifecycle.go`: 55 called from other files, 8 internal-only
 (`blockRenewal`, `closeRenewal`, `exhaustUsageRetry`, `markCleanupBlocked`,
-`refreshCleanupBlocked`, `releaseStartCancel`, `releaseTerminalCancel`, `cleanupBlocked`,
-`phase`). The full table is `…/scratch/w4-17b/callers.txt`; the externally called set:
+`refreshCleanupBlocked`, `releaseTerminalCancel`, `cleanupBlocked`,
+`phase`). `releaseStartCancel` had a single call site (`markLeaseLostDuringStart`, same file), so
+the apply stage inlined its two writes there and deleted the method (simplify S9);
+`releaseTerminalCancel` keeps its two sites (`releaseSlotOnce`, `retireRun`). The full table is
+`…/scratch/w4-17b/callers.txt`; the externally called set:
 
 | transition | callers (file:function) |
 | --- | --- |
@@ -187,7 +195,8 @@ inline, so a caller's sequence is compared against the exact writes its transiti
 Output `…/seq-report.txt`.
 
 **Result: 851 functions compared, 0 field-write mismatches** (base has 852 functions; one, the
-deleted `nativeCleanupBlocked`, has no writes). The touched functions and their measured field-write
+deleted `nativeCleanupBlocked`, has no writes; re-run at the apply revision in
+`…/seq-report-apply.txt`: 851 compared, 0 mismatches). The touched functions and their measured field-write
 counts (identical on both sides):
 
 | function | writes | function | writes |
@@ -234,7 +243,8 @@ Two recorded refinements where the plan's mapping was corrected against the base
 
 Tool: the same `…/seq/main.go`, lock mode (every `daemon.mu` / `daemon.eventReceiptMu` /
 `daemon.commandReceiptMu` / `active.inputMu` `Lock`/`Unlock` call per function, in order).
-**Result: 850 functions compared, 0 mismatches.** No new mutex exists; `run_lifecycle.go` takes no
+**Result: 850 functions compared, 0 mismatches** (re-run at the apply revision in
+`…/seq-report-apply.txt`: 850 compared, 0 mismatches). No new mutex exists; `run_lifecycle.go` takes no
 lock (asserted by the committed scan test, §10). The touched functions' sequences (base and head are
 identical; the head file:line coordinates are in `…/seq-report.txt`):
 
@@ -259,7 +269,8 @@ identical; the head file:line coordinates are in `…/seq-report.txt`):
 
 Tool: `…/flow/main.go` — per function, the ordered list of `if` conditions, `case`/`default`
 clauses, `return` expressions and branch statements with whitespace-normalized text.
-**Result: 830 functions compared, 815 identical, 15 differing; every differing function's
+**Result: 830 functions compared, 815 identical, 15 differing** (re-run at the apply revision in
+`…/flow-report-apply.txt`: 830 compared, 15 differing, the same function set); every differing function's
 difference is one of the documented guard moves or the recorded `handleCommand` binding.**
 
 | function | base control-flow point | head equivalent | status |
@@ -288,7 +299,9 @@ not a transition).
 
 ## 8. Fixture-rewrite proof (O6)
 
-Tool: `…/fixtures/main.go` (parser-only). Result in `…/fixture-proof.txt`:
+Tool: `…/fixtures/main.go` (parser-only). Result in `…/fixture-proof.txt`; re-run at the apply
+revision in `…/fixture-proof-apply.txt` (same totals: 87 rewritten, 193 moved, 96 untouched, 183
+literals, 0 mismatches):
 
 - 183 `runningRun` composite literals across 49 test files (90 explicit + 93 elided inside
   `[]*runningRun` / `map[state.RunKey]*runningRun` containers).
@@ -323,21 +336,33 @@ types (`control.cancel`, `client.terminal`, `session.cancelled`); the site list 
 
 ## 9. Red mutants
 
-One mutant per new test, applied alone, the target test run, then reverted (raw outputs in
-`…/mutant-M*.txt`):
+One mutant per new test, applied alone, the target test run, then reverted. M1-M5 were recorded at
+the pre-apply revision and re-run at the apply revision (the quoted line numbers are the apply
+ones); M6-M12 are the apply stage's mutants for the assertions the simplify findings added (S10,
+S12, S13):
 
 | # | test | mutant | observed failure |
 | --- | --- | --- | --- |
-| M1 | `TestRunLifecycleTransitionSequences` | delete `run.cancelCommandID = commandID` in `requestCancel` | `run_lifecycle_test.go:175: requestCancel = (cancelled=true, id=""), want (true, command-1)` |
-| M2 | `TestRunLifecycleCleanupBlockedTruthTable` | drop `state.nativeCloseRetrying` from `cleanupBlocked()` | `run_lifecycle_test.go:638: cleanupBlocked() = false for {nativeCloseRetrying}, want true` |
-| M3 | `TestRunLifecyclePhaseTable` | disable the `terminalizing > 0` case (`false && …`) | `run_lifecycle_test.go:671: phase() = "lease-lost", want "reserving"` |
-| M4 | `TestRunLifecycleUnmodelledStatesStayWritableAndDetectable` | disable the orphaned-retry reset condition in `claimSettlementOwner` | `run_lifecycle_test.go:544: the orphaned retry survived the claim: pending=true inFlight=true exhausted=true ownerClaim=9` |
-| M5 | `TestRunLifecycleWritesStayInTheModule` | add `active.stale = false` in `daemon.isStale` (`app.go`) | `run_lifecycle_test.go:767: lifecycle fields written outside run_lifecycle.go: app.go:1853 writes stale` |
+| M1 | `TestRunLifecycleTransitionSequences` | delete `run.cancelCommandID = commandID` in `requestCancel` | `run_lifecycle_test.go:171: requestCancel = (cancelled=true, id=""), want (true, command-1)` |
+| M2 | `TestRunLifecycleCleanupBlockedTruthTable` | drop `state.nativeCloseRetrying` from `cleanupBlocked()` | `run_lifecycle_test.go:624: cleanupBlocked() = false for {nativeCloseRetrying}, want true` |
+| M3 | `TestRunLifecyclePhaseTable` | disable the `terminalizing > 0` case (`false && …`) | `run_lifecycle_test.go:655: phase() = "lease-lost", want "reserving"` (subtest `reserving`) |
+| M4 | `TestRunLifecycleUnmodelledStatesStayWritableAndDetectable` | disable the orphaned-retry reset condition in `claimSettlementOwner` | `run_lifecycle_test.go:537: the orphaned retry survived the claim: pending=true inFlight=true exhausted=true ownerClaim=9` |
+| M5 | `TestRunLifecycleWritesStayInTheModule` | add `active.stale = false` in `daemon.isStale` (`app.go`) | `run_lifecycle_test.go:747: lifecycle fields written outside run_lifecycle.go:` + `app.go:1852 writes stale` |
+| M6 | `…TransitionSequences` (`admission/finish_starting_keeps_session_obligation`) | delete the `refreshCleanupBlocked()` call in `finishStarting` | `run_lifecycle_test.go:109: finishStarting blocked cleanup without an obligation` |
+| M7 | `…TransitionSequences` (`close_retry/require_begin_end_publish`) | delete `run.goalAdmission = nil` in `publishCloseRetrySuccess` | `run_lifecycle_test.go:435: publishCloseRetrySuccess kept the session identity` |
+| M8 | `…TransitionSequences` (`native_start_publication/transfer_terminal_to_settlement`) | delete `run.nativeDeadline = time.Time{}` in `transferNativeStartTerminal` | `run_lifecycle_test.go:151: transferNativeStartTerminal kept start or stale state: inFlight=false stale=false deadline=2026-11-21 18:42:36.1261409 +0000 UTC` |
+| M9 | `…TransitionSequences` (`containment/stop_without_witness_stays_detectable`) | delete `run.processStopWitness = nil` in `recordProcessStop` | `run_lifecycle_test.go:494: recordProcessStop wrote a witness for a process that did not stop` |
+| M10 | `…TransitionSequences` (`admission/finish_starting_keeps_session_obligation`) | `return !run.terminal` in `finishStarting` | `run_lifecycle_test.go:100: finishStarting reported a terminal run for a fresh start` |
+| M11 | `…TransitionSequences` (`admission/attach_claim_and_finish_attached_start`) | `return !run.terminal \|\| run.cancelled` in `finishAttachedStart` | `run_lifecycle_test.go:76: finishAttachedStart reported a terminal run for a live attach` |
+| M12 | `TestRunLifecycleWritesStayInTheModule` | add `run.cancel()` in `beginTerminalReservation` | `run_lifecycle_test.go:770: the module takes a lock or invokes a captured handle:` + `run_lifecycle.go:283 calls cancel` |
 
 M1's first attempt survived the original test (the assertion only covered the post-`clearCancel`
 state); the test was extended with the intermediate reservation assertion (not weakened) and the
-mutant is red in the delivered test. All five mutants were reverted; the tree carries none
-(`grep -rn "false &&" daemon/internal/app/*.go` → no match).
+mutant is red in the delivered test. All mutants were reverted; the tree carries none
+(`grep -rn "false &&" daemon/internal/app/*.go` → no match). M6-M12 cover the assertions the apply
+stage added: the four module-test rows whose fixtures left the probed field at its zero value
+(M6-M9, simplify S12), the two discarded transition returns (M10-M11, S13), and the scan gate's
+captured-handle scope (M12, S10; the pre-apply gate, which matched lock calls only, passed M12).
 
 ## 10. Gate results (exact commands, counts, exit codes)
 
@@ -371,12 +396,38 @@ mutant is red in the delivered test. All five mutants were reverted; the tree ca
 | race, hang attribution (HEAD) | `go test -count=1 -race -timeout 3m ./internal/app/ -run '^TestClaimAdmissionInputFailsClosedBeforeWorkspaceOrProcessStart$'` | `panic: test timed out after 3m0s`, `running tests:` (the single selected test), `FAIL … 180.207s` — the same artifact W4-17a recorded at base `79548368`, so the stall is host-pre-existing and not caused by this slice |
 | race, touched-path subset | `go test -count=1 -race -timeout 20m ./internal/app/ ./internal/execution/... -run 'TestRunLifecycle\|TestReleaseRun\|TestBeginTerminal\|TestTerminateForLease\|TestRecordGenericProcessExit\|TestFinalizeExitedProcess\|TestRecordFinalizedStop\|TestNativeUsageRetry\|TestNativeUsageRecovery\|TestSettleCancelled\|TestCancel\|TestStale\|TestCloseRetry\|TestNativeStart\|TestConclusive\|TestReserve\|TestLeaseExpiry\|TestLeaseOwned'` (62 selected top-level tests, `go test -list`) | `ok github.com/wxxb789/symmetry/daemon/internal/app 24.961s` and `ok github.com/wxxb789/symmetry/daemon/internal/execution 1.127s [no tests to run]`, exit 0; 0 `DATA RACE` lines — the touched lifecycle paths (all five module tests included) run clean under the race detector |
 
+### Apply-revision re-run (accepted simplify findings S1-S13)
+
+Every gate above that those findings can affect was re-run on the apply revision (the tree the
+subject hashes bind); command strings are the rows above unless noted.
+
+| gate | apply-revision result |
+| --- | --- |
+| gofmt | `gofmt -l internal/app/` (`daemon/`): no output, exit 0 |
+| vet | `go vet ./internal/app/`, `go vet ./...` (`daemon/`): exit 0, exit 0 |
+| builds | `GOOS=linux`, `GOOS=windows`, `GOOS=linux GOARCH=arm64` `go build ./...` (`daemon/`): exit 0 each |
+| full package suite (windows) | `go test -count=1 ./internal/app/...`: `ok github.com/wxxb789/symmetry/daemon/internal/app 296.579s`, exit 0 |
+| focused module tests | `go test -count=1 -run 'TestRunLifecycle' ./internal/app/`: `ok … 0.357s`, exit 0; 5 tests (18 transition rows, 4 unmodelled-state cases, the 64-row truth table, the 16-row phase table, the scan gate), 0 failures |
+| race attempt (windows) | `go test -count=1 -race ./internal/app/`: refused, `go: -race requires cgo; enable cgo by setting CGO_ENABLED=1`, exit 2 |
+| WSL race, touched-path subset | `go test -count=1 -race -timeout 20m ./internal/app/ ./internal/execution/... -run '<the 18-pattern subset of the row above>'`: `ok github.com/wxxb789/symmetry/daemon/internal/app 28.727s`; `ok github.com/wxxb789/symmetry/daemon/internal/execution 1.399s [no tests to run]`, exit 0, 0 `DATA RACE` lines. The full WSL contract gate was not re-run: its failure mode at the pre-apply revision was the host-pre-existing `TestClaimAdmissionInputFailsClosedBeforeWorkspaceOrProcessStart` loopback stall (rows above), and no apply edit touches that path |
+| write-site scan (scratch, 45 names) | `…/scan/main.go` → `events-apply.tsv`: 0 non-test lifecycle writes outside `run_lifecycle.go`; the module carries 141 write statements (145 pre-apply: `finishAttachedStart`'s `starting` and `markProcessExited`'s three counters are now written by `finishStarting`/`takeFinalizeOwnership`, and the inlined `releaseStartCancel` capture nets zero) |
+| per-function write sequences | `…/seq/main.go` → `seq-report-apply.txt`: 851 compared, 0 mismatches |
+| lock sequences | `…/seq/main.go` → `seq-report-apply.txt`: 850 compared, 0 mismatches |
+| control-flow audit | `…/flow/main.go` → `flow-report-apply.txt`: 830 compared, 815 identical, 15 differing (the same 15 functions) |
+| fixture proof (O6) | `…/fixtures/main.go proof -exclude run_lifecycle_test.go` → `fixture-proof-apply.txt`: 87 rewritten literals, 193 moved keys, 96 untouched, 183 literals, 0 mismatches; nested order/set 87/87 |
+| native-evidence identity (R9) | `python3 scripts/ci/test-omo-control-native-evidence.py` (repo root): `Ran 10 tests in 3.645s`, `OK`, exit 0 |
+| string-literal multiset | per-file `grep -ohE '"[^"]*"'` + `sort` + `diff`, base `f70553bf` vs the apply tree: unchanged (`native_run.go` and `app.go` one difference each) |
+| whitespace | `git diff --check`: exit 0 |
+| host-path / DLP | `git diff bced8d36 \| grep '^+' \| grep -ci "us[e]rs/"` → 0; `… \| grep -Pc '\\[u]'` → 0 |
+| line budget | every changed file that already exceeded 1500 lines at base shrinks or stays equal (`native_run.go` 2417 → 2232; `scripts/ci/omo-control-native-evidence.py` 1812 → 1813 for the R9 `SOURCE_PATHS` line); `run_lifecycle.go` 585 and `run_lifecycle_test.go` 816 are the only files this slice pushes past 400 lines, and no file crosses the 1500-line limit |
+| mutant battery | §9 M1-M5 (re-run) and M6-M12 (new): each red as quoted, each reverted; `git status` shows only the three intended files modified and their sha256 match the subject table |
+
 ## 11. Scoped simplification review (repo AGENTS.md, before completion)
 
 Reviewed the module against "remove an abstraction only when required behavior and clarity
-survive". 64 declared methods: 55 called from other files, 9 internal steps
+survive". 63 declared methods: 55 called from other files, 8 internal steps
 (`blockRenewal`, `closeRenewal`, `exhaustUsageRetry`, `markCleanupBlocked`,
-`refreshCleanupBlocked`, `releaseStartCancel`, `releaseTerminalCancel`) or queries
+`refreshCleanupBlocked`, `releaseTerminalCancel`) or queries
 (`cleanupBlocked`, `phase`). No method is unused, no method is a wrapper without its own write
 cluster, and no field is written only by a composition that another method already covers:
 
@@ -388,12 +439,21 @@ cluster, and no field is written only by a composition that another method alrea
 - `markCancelled` + `setCancelCommandID` are required by `dispatchQueuedCommand`, where the base
   guards the `cancelCommandID` write with `!active.claimed` (§5, refinement 1);
 - `clearRenewal` (drop the handle) and `invalidateRenewal` (drop it and bump the id) are distinct
-  base clusters; `releaseStartCancel`/`releaseTerminalCancel` are each used at two sites;
+  base clusters; `releaseTerminalCancel` is used at two sites, and `releaseStartCancel` had a
+  single one, so the apply stage inlined it into `markLeaseLostDuringStart` (S9);
 - `exhaustUsageRetry` is the shared four-write step of two base sites;
   `markCleanupBlocked`/`refreshCleanupBlocked` split the forced and derived memo writes.
 
 No abstraction was removed and no code changed by this review, so no check needed repeating; the
-gate set above is the post-review state.
+gate set above is the post-review state. The apply stage then applied the accepted simplify
+findings: the comment deletions S1-S6 (179 → 41 comment lines in `run_lifecycle.go`, 33 → 5 in
+`run_lifecycle_test.go`, per the binding comment policy), the three behaviour-preserving
+compositions S7 (`finishAttachedStart` calls `finishStarting`), S8 (`markProcessExited` calls
+`takeFinalizeOwnership`) and S9 (inlined `releaseStartCancel`), the widened scan gate S10, the
+wording fix S11, and the module-test strengths S12/S13 (seeded fixtures, asserted returns). S14
+(removing the two unreachable `t.Failed()` guards) was skipped; `phase()` is recorded as test-only
+in §12 (S18). The write-order, lock-site and control-flow comparisons, the fixture proof and the
+scan gate were re-run at the apply revision with the same results (§5-§8); the mutants are §9.
 
 ## 12. Known limits
 
@@ -403,6 +463,11 @@ gate set above is the post-review state.
 - Test-side rows in §8 were produced by a parser-only tool; it proves field→value equality per
   rewritten literal and byte-equality outside the rewritten spans, not type correctness (the
   compiler plus the full suite cover that).
+- `phase()` has no production consumer: it is the module's state-detection query, read only by
+  `run_lifecycle_test.go` (simplify S18 — recorded as test-only; the design-clause-3 wording
+  "diagnostics and tests" is superseded). Its precedence treats `!slotHeld` as `retired`, so a
+  future diagnostic must not read a slotless live entry as retired: the witness constructor
+  (`linux_owner_witness_linux.go:2845`) registers `claimed: true` without a slot.
 - This slice moves no effect across an unlock (O7 reversed); the deferred behaviour slice for the
   post-unlock moves remains out of scope, as does the K1 `daemon.mu` region inventory's
   registry-coupled work.

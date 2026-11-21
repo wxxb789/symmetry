@@ -94,8 +94,8 @@ var defaultLinuxV2NativeOwnerFactory linuxV2NativeOwnerFactory = func(config.Con
 
 type runningRun struct {
 	// runLifecycle owns the run's lifecycle state. runningRun embeds it so every
-	// existing reader keeps its field path; every write to it lives in
-	// run_lifecycle.go.
+	// existing reader keeps its field path; every assignment after construction
+	// lives in run_lifecycle.go.
 	runLifecycle
 	// inputMu serializes stdin delivery with input-related lifecycle mutations.
 	// Never wait for it while holding daemon.mu.
@@ -122,14 +122,8 @@ type runningRun struct {
 	prepared              workspace.Prepared
 	output                *agentOutput
 	startFailure          error
-	// The cleanup memo is the latched value of runLifecycle.cleanupBlocked(),
-	// forced true where a process exit or a retained accounting barrier owes
-	// cleanup regardless of the predicate. It stays declared here because the
-	// predicate method carries the same name; every write to it lives in
-	// run_lifecycle.go.
-	//
-	// A close retry may release the terminal owner only when that retry is the
-	// continuation of cancelled-start compensation, never for another owner.
+	// The cleanup memo is the latched value of runLifecycle.cleanupBlocked(); it
+	// stays declared here because the predicate method carries the same name.
 	cleanupBlocked bool
 	// Native completion is retained locally until accounting is durably queued.
 	nativeFinalResult    *harness.TaskResult
@@ -1408,11 +1402,7 @@ func (daemon *daemon) completeNativeRunAfterUsageOwned(ctx context.Context, key 
 	nativeCancelTerminalObserved := active.nativeCancelTerminalObserved
 	nativeCancelRejected := active.nativeCancelRejected
 	nativeCancelTerminateErr := active.nativeCancelTerminateErr
-	// The native session has reached its final turn barrier. Keep renewal
-	// disabled until releaseRun, even if terminal transition persistence later
-	// needs another recovery pass.
-	// closeErr is terminal diagnosis from this observation. The current retry
-	// and accounting flags, rather than that historical error, own cleanup.
+	// Renewal stays closed until releaseRun, even if terminal persistence needs another pass.
 	active.clearUsageRetryBeforePublication(usageRetryCompletion)
 	daemon.mu.Unlock()
 	if stale {
