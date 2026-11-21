@@ -272,13 +272,13 @@ restored, R2's fourteen operand cases added).
 | build windows/amd64 | `GOOS=windows GOARCH=amd64 go build ./...` | exit 0 |
 | linux vet (compiles `//go:build linux` state tests) | `GOOS=linux GOARCH=amd64 go vet ./internal/state/` | no output, exit 0 |
 | package tests (Windows) | `go test -count=1 ./internal/state/...` | `ok github.com/wxxb789/symmetry/daemon/internal/state 8.276s`, exit 0 |
-| package tests (Linux, C2) | `wsl.exe -d Ubuntu-24.04 -u accept -- bash <scratch>/wsl-verify.sh` (`cd /mnt/q/…/symmetry/daemon`; `go test -count=1 ./internal/state/...`) | `ok github.com/wxxb789/symmetry/daemon/internal/state 13.786s`, exit 0 |
+| package tests (Linux, C2) | `wsl.exe -d Ubuntu-24.04 -u accept -- bash <scratch>/wsl-verify.sh` (`cd path-sha256:1d7aacf01259c2fd8f50395c8c0851c68451833de461d195beb6aa8ce71397fd`; `go test -count=1 ./internal/state/...`) | `ok github.com/wxxb789/symmetry/daemon/internal/state 13.786s`, exit 0 |
 | Linux suite detail | `go test -count=1 -v ./internal/state/` (WSL) | 241 top-level PASS, 0 FAIL, 322 subtest PASS lines, `ok … 15.341s`, exit 0 |
 | Linux tag detail | same run filtered to the 25 top-level tests declared by `linux_clone_journal_test.go` and `linux_cgroup_v2_test.go` | 128 `=== RUN` lines (25 top-level + 103 subtests), all PASS |
 | Linux pin detail | `go test -count=1 -v -run FirstErrorStringsArePinned ./internal/state/` (WSL) | 3 pin tests, 125 subtest PASS lines (64 journal + 26 goal session + 35 clone), 0 FAIL, exit 0 |
 | Windows pin detail | `go test -count=1 -v -run FirstErrorStringsArePinned ./internal/state/` | 2 pin tests, 90 subtest PASS lines (64 journal + 26 goal session), 0 FAIL, exit 0 |
 | whitespace | `git diff --check` | exit 0 |
-| host-path scan | branch diff and every changed file grepped for the Windows user-profile directory name, the account name, `AppData`, drive-letter paths and `/mnt/q` | exit 0; the only hits are this record's and the plan's own text describing the scan, the elided WSL prefix `/mnt/q/…`, and generic `C:\…` fixture strings that carry no account name |
+| host-path scan | branch diff and every changed file grepped for the Windows user-profile directory name, the account name, `AppData`, drive-letter paths and the WSL mount of the checkout drive | exit 0; the only hits were this record's and the plan's own text describing the scan, the elided WSL mount prefix (now rendered as a `path-sha256:` token in the C2 row above), and generic drive-letter fixture strings that carry no account name |
 | move proof | `validmove` over both revisions, 4 groups (44-helper grouping, reuse dispatcher restored) | PASS, exit 0 (§1) |
 | colour-moved | `git diff --color-moved=zebra --color-moved-ws=allow-indentation-change --stat` | exit 0 (§1) |
 | pinned ≤40/≤25 | `funclen … -max-lines 40 -max-cyclo 25` | exit 0, 49 matched functions, max span 39, max cyclo 25 (§2) |
