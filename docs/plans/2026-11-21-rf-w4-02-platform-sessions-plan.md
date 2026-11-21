@@ -147,7 +147,7 @@ type linuxSupervisorSession struct {
 | `stop func() error` | recovery param | `stop` |
 | `allowAbort` | recovery param | `allowAbort` |
 | `scanSealSequence` | recovery param | `scanSealSequence` |
-| `ownerLossProofResultCategory` | recovery param | `ownerLossProofResultCategory` |
+| `ownerLossProofResultCategory` | recovery param | `ownerLossProofResultCategory` (field; frozen at loop entry, see the liveness table) |
 | `bound, committed, resumed` | mutable locals | same names |
 | `ownerLostLatched` | mutable local | same |
 | `ownerLossProofBarrier{Started,Released,Err}, ownerLossProofBarrierEnabled` | mutable locals | `ownerLossProofBarrier`, `{Enabled,Started,Released}`, `Err` |
@@ -156,6 +156,31 @@ type linuxSupervisorSession struct {
 
 Parameter counts after the change: `runHelperLoop()` 0, `runRecoveryLoop()` 0; the 12-tuple now
 appears once (the constructor) and the 11-tuple once (the two constructors together).
+
+### Handover liveness (base value semantics; added with the F-A1 fix)
+
+The move-only text comparison and the control-flow audit are both blind to a by-value parameter or
+local turning into a live shared field, so every base value that crosses the handover is recorded
+with its base passing mode and its head write/read sites. Read site = the recovery loop unless
+noted; line numbers are `supervisor_session.go` lines at the head.
+
+| Base name | Base passing mode | Head writes | Freeze / equivalence argument |
+| --- | --- | --- | --- |
+| `launch`, `listener`, `target`, `ownerRecoveryMarker` | by value (struct / pointers) | constructor only | never reassigned; pointer identity kept |
+| `receipt **authority.StopReceipt` | by value (pointer to the helper loop's `receipt` local) | `runStop` sets `session.receipt` (`:389`) | the base's `&receipt` aliased that same storage, so the field is the same alias, not a copy |
+| `boundSecret` | by value (string) | helper-loop hello only (`session.boundSecret = request.Secret`, `:173`) | no write after handover |
+| `ownerLost` | by value (channel) | `enterRecovery` (`watchdog.ownerLost()`, the base argument expression, `:398`) | the helper loop's `= nil` disarm (`:128`) is local to it and precedes the handover; no write after |
+| `stop func() error` | by value (closure) | constructors | injection point preserved; never reassigned |
+| `allowAbort` | by value (bool) | `enterRecovery` (`!committed && !resumed`, the base argument expression, `:399`); pre-hello `true` | no write after handover |
+| `scanSealSequence` | by value (func) | `enterRecovery` (`group.descendantScanSealSequence`, the base argument expression, `:400`); pre-hello nil | no write after handover |
+| `ownerLossProofResultCategory` | by value (string), frozen at the handover call (`supervisor_linux_helper.go:928` → read `:1157`) | `runStop` (write-once latch, `:364`; may run from inside the recovery loop) | `runRecoveryLoop`'s first statement copies the field into a local (`:405-408`) and the marker write reads the local (`:457`): a stop latched from inside the loop cannot change the reported category |
+
+The helper loop's mutable locals (the `:805-817` block) were closure-captured in base — shared by
+reference between the loop, `stop`, `startWait` and `enterRecovery` — so the fields preserve that
+sharing one for one (`bound`, `committed`, `resumed`, `ownerLostLatched`, the
+`ownerLossProofBarrier{Enabled,Started,Released,Err}` group, `ownerLossProofResultWritten`,
+`waitDone`/`waitOnce`). `ownerLossProofResultCategory` is the one member of that block whose base
+consumer across the handover took a copy, which is why only its read is frozen.
 
 ## Exact edge-case semantics
 
@@ -189,6 +214,10 @@ appears once (the constructor) and the 11-tuple once (the two constructors toget
    `**authority.StopReceipt`. `allowAbort` is computed in `enterRecovery` after `stop()` — the same
    expression, at the same point, as the base argument — and stays `true` for the pre-hello
    sessions. The base's `ownerLost = nil` select-disarm becomes `session.ownerLost = nil`.
+   `ownerLossProofResultCategory` is the one recovery value the base passed by value into a loop:
+   `runRecoveryLoop` copies the field into a loop-entry local (`:405-408`) and the owner-recovery
+   marker write reads that local (`:457`), so a stop latched from inside the recovery loop cannot
+   change the reported category.
 7. **Failure control (clause 3).** No accept/reject set, timeout class, FD count, response field,
    status, error text or test name/assertion changes; a session field that is not equivalent to the
    local it replaces, or any bare return left in `serveConnection`, is a defect.
@@ -257,8 +286,8 @@ because W3-02's wire harness refuses to run as uid 0). No product or test file i
   `(session, ok)` would shorten `serveConnection` further but would have to move the
   `defer closeLinuxOwnerAnchorFDs` into a two-phase ownership handoff (the constructor must close on
   its own failure paths and register the defer on success). Keeping the preamble in place makes FD
-  ownership single-function and the diff provably move-only; the function still drops 495 → ~75
-  lines.
+  ownership single-function and the diff provably move-only; the function still drops 495 → 49
+  lines (`:1020-1068` at the head).
 - **`handleRunOperation` nesting.** The 12 grant-gated operations keep one shared gate and one
   dispatch point (the base's structure), instead of repeating `authorizeRunRequest()` as the first
   line of 12 handlers. Observable behaviour is identical because only one operation is handled per
@@ -412,13 +441,13 @@ this slice's owned region. All terminal `return`s in the moved paths are explici
 - **`enterRecovery <- base `enterRecovery` closure`** — events 1 -> 1, preserved: yes
   - base: return@928
   - head: return@401
-  - note: base `return runLinuxSupervisorRecoveryLoop(...)` replaced by 3 field assignments + `return session.runRecoveryLoop()` (same argument order, after `stop()`)
+  - note: base `return runLinuxSupervisorRecoveryLoop(...)` replaced by 3 field assignments + `return session.runRecoveryLoop()` (same argument order, after `stop()`); the by-value `ownerLossProofResultCategory` argument stays a session-field read, frozen in `runRecoveryLoop`'s first statement (F-A1 fix)
 - **`runRecoveryLoop <- base recovery loop`** — events 44 -> 44, preserved: yes
   - base: loop@1111; guard@1112; guard@1114; guard@1118; guard@1122; guard@1124; continue@1126; return@1128; guard@1131; continue@1133; guard@1137; continue@1139; guard@1146; else@1148; guard@1150; else@1152; guard@1156; guard@1157; return@1159; guard@1164; else@1166; guard@1167; guard@1168; else@1170; else@1172; else@1175; else@1178; guard@1179; else@1181; else@1183; else@1186; else@1188; guard@1189
     else@1191; else@1193; else@1196; else@1198; guard@1203; guard@1216; continue@1218; guard@1221; return@1222; guard@1224; return@1225
-  - head: loop@407; guard@408; guard@410; guard@414; guard@418; guard@420; continue@422; return@424; guard@427; continue@429; guard@433; continue@435; guard@442; else@444; guard@446; else@448; guard@452; guard@453; return@455; guard@460; else@462; guard@463; guard@464; else@466; else@468; else@471; else@474; guard@475; else@477; else@479; else@482; else@484; guard@485; else@487; else@489; else@492; else@494
-    guard@499; guard@512; continue@514; guard@517; return@518; guard@520; return@521
-  - note: `receipt == nil || *receipt == nil` -> `session.receipt == nil` (parameter indirection removed); locals stay locals
+  - head: loop@411; guard@412; guard@414; guard@418; guard@422; guard@424; continue@426; return@428; guard@431; continue@433; guard@437; continue@439; guard@446; else@448; guard@450; else@452; guard@456; guard@457; return@459; guard@464; else@466; guard@467; guard@468; else@470; else@472; else@475; else@478; guard@479; else@481; else@483; else@486; else@488; guard@489; else@491; else@493; else@496; else@498
+    guard@503; guard@516; continue@518; guard@521; return@522; guard@524; return@525
+  - note: `receipt == nil || *receipt == nil` -> `session.receipt == nil` (parameter indirection removed); `ownerLossProofResultCategory` is frozen into a loop-entry local (the loop's first statement), the base's by-value parameter semantics, so a stop latched from inside the loop cannot change the marker category; locals stay locals
 - **`runHelperLoop`** — events 117 -> 82, preserved: yes (container reshape)
   - base: 117 control-flow lines in the base loop body (local declarations plus the three closures)
   - head: 82 control-flow lines in the method body
@@ -454,7 +483,7 @@ outside this tree.
 | Linux focused `-run 'TestLinuxOwnerAnchor\|TestLinuxSupervisor'` | 152 run / 151 pass / 1 pre-existing skip / 0 fail, `ok` 3.790s; all 17 W3-02 wire/shape tests PASS |
 | Linux/Windows `./internal/execution/` | `ok` 1.548s (Linux) / 10.332s (Windows), exit 0 |
 | Linux `./internal/app/...` | `ok` 239.067s, exit 0 |
-| moves | the 22 move-only comparisons above PASS; literal multiset: 508 base string/backtick literals, head adds only the two new files' import paths (15 occurrences, 9 distinct) and folds 10 `""` arguments/declarations into session zero values |
+| moves | the 22 move-only comparisons above PASS; literal multiset (go/parser `ast.BasicLit`, both literal kinds): base 508 occurrences (438 interpreted + 70 raw) / 304 distinct → head 513 / 304, zero distinct lost; head adds only the two new files' import paths (15 occurrences, 9 distinct) and folds 10 `""` arguments/declarations into session zero values |
 
 ### Advisory lint delta (not a gate — review finding F3/C-1)
 
@@ -500,3 +529,48 @@ passes idle (22.14s, 4/4 subtests) and the idle full run exits 0.
 See the parameter-count table in the design section above: 12 constructor parameters → 12 fields; the
 loop's 15 mutable locals/closures → fields/methods; recovery's 11 parameters → 11 fields. `runHelperLoop()`
 and `runRecoveryLoop()` take 0 parameters.
+
+### Fix-stage record (2026-11-22, review findings F-A1/F-A2/F-A3)
+
+- **F-A1 (applied, code).** `ownerLossProofResultCategory` was read live from the session field at
+  the owner-recovery marker write, but the base passed it **by value** into
+  `runLinuxSupervisorRecoveryLoop` (`supervisor_linux_helper.go:928` → read `:1157`): a stop
+  latched from inside the recovery loop could change the category the marker reported, which the
+  base could not. `runRecoveryLoop` now copies the field into a loop-entry local
+  (`supervisor_session.go:405-408`) and the marker write reads that local (`:457`) — the base's
+  handover-time freeze, restored without adding session state or changing the parameter counts
+  (clause 1). The move-only script models the copy as one documented stripped statement and
+  re-runs `RESULT: PASS` (22/22); the regenerated audit row shows the same 44-event chain with the
+  post-fix head coordinates (`audit_rows.py`, `AUDIT RESULT: PASS`).
+- **F-A2 (applied, method).** The "Handover liveness" table above records every base
+  parameter/local that became a field with its base passing mode and head write/read sites, so the
+  by-value → live-field class that the move-only proof and the control-flow audit are both blind to
+  is now checked explicitly.
+- **F-A3 (judged invalid at `:457`; applied at `:260`).** The review's "508 double-quoted + 70
+  backtick = 578 occurrences" double-counts the raw literals: the go/parser `ast.BasicLit` count
+  over the slice base's two files is 438 interpreted + 70 raw = **508 total** (the label's own
+  number; independently reproduced: the files hold 1016 `"` characters — 876 delimiting the 438
+  interpreted literals plus 140 inside raw literals) and 513 at the head (= 508 + 15 import
+  occurrences − 10 `""`), 304 distinct values on both sides. The suggested "508 double-quoted"
+  relabel would have made the record wrong, so the row keeps 508 and now states the method and both
+  totals; the load-bearing deltas (15 import occurrences / 9 distinct, ten `""` folded, zero
+  distinct lost) reproduce. At `:260`, "495 → ~75 lines" was wrong and is now "495 → 49"
+  (`serveConnection` `:1020-1068` at the head).
+
+Gate re-run at the fix tree (foreground, `daemon` module unless noted): host `gofmt -l .` and
+`go vet ./...` exit 0, all four `GOOS` builds (`windows`, `linux`, `linux/amd64`, `linux/arm64`)
+exit 0, Windows platform `ok` 6.338s, Windows execution `ok` 8.784s, Windows app `ok` 119.032s;
+Linux (netns, `sudo unshare -n` + `sudo -u accept -H`) platform `ok` 31.882s with **425**
+`--- PASS` / 0 `--- FAIL` / 1 pre-existing `--- SKIP`
+(`TestLinuxOwnerAnchorRunReaperRejectsForeignChildBeforeAdoptingIt`), focused `-v`
+`-run 'TestLinuxOwnerAnchor|TestLinuxSupervisor'` `ok` 3.952s with 151 pass / 0 fail / 1 skip and
+**17/17** W3-02 wire/shape tests PASS, execution `ok` 1.486s, app `ok` 141.646s. Naked-return count
+re-measured: `anchor_server.go` 2 (both outside `serveConnection`, whose span is 0),
+`supervisor_session.go` 1 (inherited closure `return`), `anchor_session.go` 0 — the contract base
+drop stays 91 → 3 = 88 ≥ 83. Advisory `golangci-lint` v2.15.0 `GOOS=linux`
+`./internal/platform/...`: **236** issues, unchanged from the apply head (no new finding, no new
+suppression). `python scripts/ci/check-citation-existence.py --base origin/main --head HEAD` exit 0
+(1 changed document, 465 path citations — the script reads committed revisions, so the fix-stage
+edits are not yet visible to it; the added citations are in-file line references, each verified by
+grep). `git diff --check` clean; no host path and no backslash-`u` in the range or in the
+uncommitted diff.

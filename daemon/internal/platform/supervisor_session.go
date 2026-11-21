@@ -402,6 +402,10 @@ func (session *linuxSupervisorSession) enterRecovery() error {
 }
 
 func (session *linuxSupervisorSession) runRecoveryLoop() error {
+	// The base passed the category by value, so the recovery endpoint keeps
+	// reporting the handover-time value even when a stop issued from inside
+	// this loop latches a newer one into the session field.
+	ownerLossProofResultCategory := session.ownerLossProofResultCategory
 	ownerLossHandled := false
 	ownerRecoveryMarkerPublished := false
 	for {
@@ -450,7 +454,7 @@ func (session *linuxSupervisorSession) runRecoveryLoop() error {
 			}
 		}
 		if valid && session.ownerRecoveryMarker.path != "" && !ownerRecoveryMarkerPublished {
-			if err := writeLinuxSupervisorOwnerRecoveryAuthenticatedMarker(session.ownerRecoveryMarker, request.Operation, session.target.PID(), os.Getpid(), session.ownerLossProofResultCategory); err != nil {
+			if err := writeLinuxSupervisorOwnerRecoveryAuthenticatedMarker(session.ownerRecoveryMarker, request.Operation, session.target.PID(), os.Getpid(), ownerLossProofResultCategory); err != nil {
 				_ = connection.Close()
 				return err
 			}
