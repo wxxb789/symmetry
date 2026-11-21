@@ -192,7 +192,7 @@ export type ExecutionGeneration = number & { readonly ExecutionGeneration: uniqu
 
 type MutationDisposition = "created" | "replayed";
 
-export type Attention = SymmetryAttentionReadV1;
+type Attention = SymmetryAttentionReadV1;
 export type GoalAttentionEntry = Attention["goal_attention"]["entries"][number];
 export type ProjectBlockedEntry = Attention["project_blocked"]["entries"][number];
 export type GoalProjection = SymmetryGoalReadV1;
@@ -286,7 +286,7 @@ const Session = Schema.Struct({
   // converging without a socket.
   socket_token: Schema.optionalWith(Schema.String, { default: () => "" }),
 });
-export type Session = typeof Session.Type;
+type Session = typeof Session.Type;
 const ServerError = Schema.Struct({
   error: Schema.Struct({
     code: Schema.NonEmptyString,

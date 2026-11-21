@@ -199,7 +199,7 @@ func verifyLinuxOwnerAnchorStopEvidenceNamespacePin(evidence LinuxOwnerAnchorSto
 	}
 	identity, err := linuxOwnerAnchorUserNamespaceFDIdentity(retainedFD)
 	if err != nil || identity != *evidence.UserNamespace {
-		return fmt.Errorf("Anchor stop evidence user namespace differs from its retained exact nsfs FD: %w", errOr(err, errors.New("device or inode differs")))
+		return fmt.Errorf("Anchor stop evidence user namespace differs from its retained exact nsfs FD: %w", errOr(err, ErrLinuxOwnerDeviceOrInodeDiffers))
 	}
 	return nil
 }
@@ -299,7 +299,7 @@ func (anchor *linuxOwnerAnchor) verifyStopProducerFence(ctx context.Context, run
 		}
 		ready, err := linuxOwnerAnchorPIDFDReady(launcher.pidfd)
 		if err != nil || !ready {
-			return fmt.Errorf("exact root launcher remains live at StopLeaf: %w", errOr(err, errors.New("launcher pidfd is not ready")))
+			return fmt.Errorf("exact root launcher remains live at StopLeaf: %w", errOr(err, ErrLinuxOwnerLauncherPIDFDNotReady))
 		}
 	} else {
 		for _, child := range run.children {
@@ -332,7 +332,7 @@ func (anchor *linuxOwnerAnchor) verifyStopProducerFence(ctx context.Context, run
 			continue
 		}
 		if identity, err := ProcessIdentity(child.identity.PID); err != nil || identity != child.identity.Identity {
-			return fmt.Errorf("verify live StopLeaf child identity: %w", errOr(err, errors.New("creation identity changed")))
+			return fmt.Errorf("verify live StopLeaf child identity: %w", errOr(err, ErrLinuxOwnerCreationIdentityChanged))
 		}
 		switch child.role {
 		case "gate":
@@ -415,7 +415,7 @@ func (anchor *linuxOwnerAnchor) verifyAnchorChildrenBeforeStopLeaf(ctx context.C
 		credentials, err := readLinuxOwnerProcessCredentials(pid)
 		if err != nil || credentials.Parent != anchor.identity.PID {
 			run.migrationObserved = true
-			return fmt.Errorf("verify anchor-child ancestry before normal StopLeaf: %w", errOr(err, errors.New("parent PID differs")))
+			return fmt.Errorf("verify anchor-child ancestry before normal StopLeaf: %w", errOr(err, ErrLinuxOwnerParentPIDDiffers))
 		}
 		cgroupPath, err := readLinuxOwnerProcessCgroupPath(pid)
 		if err != nil {
@@ -431,7 +431,7 @@ func (anchor *linuxOwnerAnchor) verifyAnchorChildrenBeforeStopLeaf(ctx context.C
 				return fmt.Errorf("recheck exact helper pidfd before normal StopLeaf: %w", err)
 			}
 			if actual, err := ProcessIdentity(run.helper.PID); err != nil || actual != run.helper.Identity {
-				return fmt.Errorf("recheck exact helper identity before normal StopLeaf: %w", errOr(err, errors.New("creation identity differs")))
+				return fmt.Errorf("recheck exact helper identity before normal StopLeaf: %w", errOr(err, ErrLinuxOwnerCreationIdentityDiffers))
 			}
 			continue
 		}
@@ -444,7 +444,7 @@ func (anchor *linuxOwnerAnchor) verifyAnchorChildrenBeforeStopLeaf(ctx context.C
 			}
 		}
 		if actual, err := ProcessIdentity(pid); err != nil || actual != process.Identity {
-			return fmt.Errorf("recheck anchor child identity before normal StopLeaf: %w", errOr(err, errors.New("creation identity differs")))
+			return fmt.Errorf("recheck anchor child identity before normal StopLeaf: %w", errOr(err, ErrLinuxOwnerCreationIdentityDiffers))
 		}
 	}
 	if err := ctx.Err(); err != nil {
@@ -797,12 +797,12 @@ func (run *linuxOwnerAnchorRun) registerChild(process authority.LinuxCgroupProce
 	}
 	if role != "launcher" {
 		if actual, err := ProcessIdentity(process.PID); err != nil || actual != process.Identity {
-			return fmt.Errorf("verify registered Linux owner child identity: %w", errOr(err, errors.New("creation identity differs")))
+			return fmt.Errorf("verify registered Linux owner child identity: %w", errOr(err, ErrLinuxOwnerCreationIdentityDiffers))
 		}
 	}
 	credentials, err := readLinuxOwnerProcessCredentials(process.PID)
 	if err != nil || credentials.Parent != creator.PID {
-		return fmt.Errorf("verify registered Linux owner child ancestry: %w", errOr(err, errors.New("parent PID differs")))
+		return fmt.Errorf("verify registered Linux owner child ancestry: %w", errOr(err, ErrLinuxOwnerParentPIDDiffers))
 	}
 	if err := verifyLinuxOwnerRunChildCredentials(process.PID, role, run.owner); err != nil {
 		return err
@@ -876,7 +876,7 @@ func (run *linuxOwnerAnchorRun) trackNamespaceProvenChild(
 		return fmt.Errorf("verify namespace-derived adopted child pidfd: %w", err)
 	}
 	if identity, err := ProcessIdentity(process.PID); err != nil || identity != process.Identity {
-		return fmt.Errorf("verify namespace-derived adopted child identity: %w", errOr(err, errors.New("creation identity differs")))
+		return fmt.Errorf("verify namespace-derived adopted child identity: %w", errOr(err, ErrLinuxOwnerCreationIdentityDiffers))
 	}
 	if !run.leafRemovedObserved {
 		if err := verifyLinuxOwnerRunChildCredentials(process.PID, "native", run.owner); err != nil {
@@ -974,7 +974,7 @@ func (anchor *linuxOwnerAnchor) classifyRunChildOrigin(
 		return unknown, fmt.Errorf("verify exact process pidfd before origin classification: %w", err)
 	}
 	if identity, err := ProcessIdentity(process.PID); err != nil || identity != process.Identity {
-		return unknown, fmt.Errorf("verify process identity before origin classification: %w", errOr(err, errors.New("creation identity differs")))
+		return unknown, fmt.Errorf("verify process identity before origin classification: %w", errOr(err, ErrLinuxOwnerCreationIdentityDiffers))
 	}
 	if physicalOnly, exists := run.physicalOnlyChildren[process.PID]; exists {
 		if !physicalOnly.identity.Equal(process) || physicalOnly.pidfd == nil || physicalOnly.imageFD == nil ||
@@ -1277,14 +1277,14 @@ func (anchor *linuxOwnerAnchor) finishLinuxOwnerAnchorChildClassification(
 		return unknown, errors.New("finish exact run-child classification requires a live bounded request")
 	}
 	if identity, err := ProcessIdentity(process.PID); err != nil || identity != process.Identity {
-		return unknown, fmt.Errorf("recheck child creation identity after origin classification: %w", errOr(err, errors.New("creation identity differs")))
+		return unknown, fmt.Errorf("recheck child creation identity after origin classification: %w", errOr(err, ErrLinuxOwnerCreationIdentityDiffers))
 	}
 	if err := verifyLinuxOwnerAnchorPIDFDIdentity(pidfd, process); err != nil {
 		return unknown, fmt.Errorf("recheck child pidfd after origin classification: %w", err)
 	}
 	currentCgroupPath, err := readLinuxOwnerProcessCgroupPath(process.PID)
 	if err != nil || currentCgroupPath != cgroupPath {
-		return unknown, fmt.Errorf("recheck child cgroup after origin classification: %w", errOr(err, errors.New("cgroup path changed")))
+		return unknown, fmt.Errorf("recheck child cgroup after origin classification: %w", errOr(err, ErrLinuxOwnerCgroupPathChanged))
 	}
 	classification := anchor.makeLinuxOwnerAnchorChildClassification(run, process, originRun, role, origin)
 	if err := classification.ValidateFor(run.grant, run.helper, process); err != nil {
@@ -1444,7 +1444,7 @@ func (run *linuxOwnerAnchorRun) waitForAdoptedChild(ctx context.Context, anchor 
 		}
 		identity, err := ProcessIdentity(target.PID)
 		if err != nil || identity != target.Identity {
-			return fmt.Errorf("verify Linux run child identity during adoption: %w", errOr(err, errors.New("creation identity changed")))
+			return fmt.Errorf("verify Linux run child identity during adoption: %w", errOr(err, ErrLinuxOwnerCreationIdentityChanged))
 		}
 		switch role {
 		case "gate":
@@ -1466,7 +1466,7 @@ func (run *linuxOwnerAnchorRun) waitForAdoptedChild(ctx context.Context, anchor 
 				}
 				ready, err := linuxOwnerAnchorPIDFDReady(tracked.pidfd)
 				if err != nil || !ready {
-					return fmt.Errorf("live run child remains after exact run-leaf removal: %w", errOr(err, errors.New("pidfd is not ready")))
+					return fmt.Errorf("live run child remains after exact run-leaf removal: %w", errOr(err, ErrLinuxOwnerPIDFDNotReady))
 				}
 			} else if err := verifyLinuxOwnerRunChildMembership(target.PID, role, run.grant, run.leaf); err != nil {
 				return err
