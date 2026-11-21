@@ -767,3 +767,28 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       `TestProviderBridgeCloseReportsIgnoringExecutorAsUnproven` (`:904`) uses the same 25 ms
       first-`Close` window (`:924`). Revalidate against a recovered failure before changing the
       window or the assertion.
+
+## scripts/ci: install a pinned PyYAML for the lockfile differential oracle (W6-01)
+
+- [ ] The `ci.yml` `daemon` job's "Check CI gate helper scripts" step
+      (`.github/workflows/ci.yml:1326-1337`, which runs
+      `python3 ../scripts/ci/test-check-lockfile-registry.py` at `:1333`) must install a pinned
+      PyYAML and export `SYMMETRY_REQUIRE_PYYAML=1` for that step, so the differential cross-check
+      between `check-lockfile-registry.py`'s own YAML reader and PyYAML can never silently vanish
+      again. This is the recorded follow-up of contract `goal-rf-w3-16-scripts-defects` (refactor
+      wave 3, SC S8, branch `refactor/rf-w3-16-scripts-defects`, plan
+      `docs/plans/2026-11-21-rf-w3-16-scripts-defects-plan.md`): the suite now prints the exact
+      notice `PyYAML differential oracle skipped: module not importable` on stderr and asserts
+      that string when the module is not importable, and with `SYMMETRY_REQUIRE_PYYAML=1` set the
+      differential test fails instead of skipping. The repository still declares no Python
+      dependency and no workflow performs a `pip install`, so on a runner without PyYAML the
+      oracle stays skipped. Measured 2026-11-21 at `36f9a887`: portable Python 3.12.10 on the
+      Windows host has PyYAML 6.0.3 and runs `Ran 24 tests`, `OK` with no skip; WSL Ubuntu-24.04
+      Python 3.12.3 has PyYAML 6.0.1 and is `OK` likewise; `python -S` (site-packages off) and
+      `python3 -S` print the notice and report `OK (skipped=1)`; `SYMMETRY_REQUIRE_PYYAML=1
+      python -S scripts/ci/test-check-lockfile-registry.py` exits 1 with `FAILED (failures=1)` on
+      both platforms. Pin the version next to the other tool pins in `ci.yml` (the ruff job's
+      `required-version = "==0.17.5"` handshake in the section above is the same pattern) and set
+      the environment variable in the same step, so a lost install reddens the job instead of
+      shrinking the oracle. `ci.yml` is untouched by rf-w3-16 because W3-01/#157 own it in wave 3;
+      W6-01 is its wave-6 owner.

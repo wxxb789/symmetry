@@ -10,10 +10,15 @@ registry provenance and nothing else.
 
 The differential test at the end cross-checks the check's own YAML reader against
 PyYAML when that module is importable. PyYAML is an extra oracle, not this suite's
-contract: the contract is the golden assertions, which always run.
+contract: the contract is the golden assertions, which always run. The oracle's
+availability is reported rather than assumed: a run without PyYAML prints the
+exact `ABSENCE_NOTICE` below on stderr and asserts it, and
+`SYMMETRY_REQUIRE_PYYAML=1` turns that absence into a failure instead of a skip.
 """
 
+import contextlib
 import importlib.util
+import os
 import pathlib
 import subprocess
 import sys
@@ -107,15 +112,51 @@ snapshots:
 """
 
 
+# The machine-checkable handles for the differential oracle's availability: the
+# environment switch a job sets once PyYAML is pinned, the exact notice a run
+# without the module prints on stderr, and the reason the oracle is skipped when
+# its absence is tolerated. `docs/TODO.md` records the pinned install for the
+# `ci.yml` "Check CI gate helper scripts" step, which greps for the notice.
+REQUIRE_PYYAML_ENV = "SYMMETRY_REQUIRE_PYYAML"
+ABSENCE_NOTICE = "PyYAML differential oracle skipped: module not importable"
+SKIP_REASON = "PyYAML is the optional cross-check oracle, not the contract"
+
+
+class RecordedStderr:
+    """A stderr stand-in that forwards every write and keeps the exact bytes.
+
+    The suite has to assert what a run without PyYAML prints, and a process
+    cannot read back its own stderr, so the module-level probe writes through
+    this wrapper: the notice still reaches the job log and the assertion reads
+    the same bytes.
+    """
+
+    def __init__(self, stream):
+        self.text = ""
+        self._stream = stream
+
+    def write(self, text):
+        self.text += text
+        return self._stream.write(text)
+
+    def flush(self):
+        self._stream.flush()
+
+
 def load_optional_pyyaml():
+    """Return the PyYAML module, or report the missing differential oracle."""
     try:
         import yaml
     except ImportError:
+        print(ABSENCE_NOTICE, file=sys.stderr)
         return None
     return yaml
 
 
-PYYAML = load_optional_pyyaml()
+ABSENCE_REPORT = RecordedStderr(sys.stderr)
+with contextlib.redirect_stderr(ABSENCE_REPORT):
+    PYYAML = load_optional_pyyaml()
+REQUIRE_PYYAML = os.environ.get(REQUIRE_PYYAML_ENV) == "1"
 
 
 def pyyaml_tarballs(text):
@@ -349,9 +390,22 @@ class ReaderTests(unittest.TestCase):
         self.assertGreater(len(CHECK.recorded_tarballs(documents)), 0)
 
 
-@unittest.skipUnless(PYYAML, "PyYAML is the optional cross-check oracle, not the contract")
+class OracleVisibilityTests(unittest.TestCase):
+    def test_the_absence_of_the_differential_oracle_is_reported(self):
+        """A missing PyYAML prints the exact notice; an importable one prints none."""
+        if PYYAML is None:
+            self.assertEqual(ABSENCE_REPORT.text, f"{ABSENCE_NOTICE}\n")
+        else:
+            self.assertNotIn(ABSENCE_NOTICE, ABSENCE_REPORT.text)
+
+
+@unittest.skipUnless(PYYAML is not None or REQUIRE_PYYAML, SKIP_REASON)
 class DifferentialTests(unittest.TestCase):
     def test_reader_and_pyyaml_extract_the_same_entries(self):
+        self.assertIsNotNone(
+            PYYAML,
+            f"{REQUIRE_PYYAML_ENV}=1 requires the PyYAML differential oracle, and it is not importable",
+        )
         fixtures = {
             "canonical": CANONICAL_LOCKFILE,
             "mirror": MIRROR_LOCKFILE,
