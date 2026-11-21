@@ -636,9 +636,10 @@ Carried alongside the program, not slices in it:
   #183 on `build/frontend-dev-deps`) must not land a lockfile whose tarballs point at a mirror
   registry — the open canonical-registry work is tracked in `docs/TODO.md`
   ("Lockfiles must carry canonical registry URLs").
-- **Go stdlib advisories.** The advisory `govulncheck` step reports 12 Go standard-library
-  vulnerabilities because CI pins `go-version: 1.27.0`; all are fixed in go1.27.2-go1.27.4.
-  Tracked in `docs/TODO.md` ("CI Go toolchain: bump past the stdlib advisories").
+- **Go stdlib advisories — fixed 2026-11-22.** The advisory `govulncheck` step reported 12 Go
+  standard-library vulnerabilities while the CI pin lagged the fixes; CI now pins
+  `go-version: 1.27.4` at all eight workflow sites and the hosted run reports none. Closure record:
+  `docs/archive/CLOSED-TODO.md` ("CI Go toolchain: bump past the stdlib advisories").
 - **Pre-existing username paths in two scripts.** `scripts/ci/omo-native-evidence.py` and
   `scripts/ci/opencode-v2-support-witness.py` still carry the operator's username in committed
   default binary paths. Pre-existing DLP debt, named here by repository path only; no slice or

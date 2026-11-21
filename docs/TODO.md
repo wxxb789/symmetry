@@ -246,7 +246,7 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
     as PID 1 and unified cgroup v2 (`/run/systemd/system`, `/sys/fs/cgroup/cgroup.controllers`), a
     stop-provable delegated transient unit, `sudo -n`, `systemd-nspawn`, `debootstrap`, `setfacl`, `gh`, a C
     toolchain and `jq` (the workflow installs `acl build-essential curl debootstrap gh jq python3 sudo
-    systemd-container`); pinned tooling Go 1.27.0, Elixir 1.20.4/OTP 29.0.6 and the `postgres:18.6-alpine`
+    systemd-container`); pinned tooling Go 1.27.4, Elixir 1.20.4/OTP 29.0.6 and the `postgres:18.6-alpine`
     service; the protected Environment `linux-v2-native-acceptance` with its required reviewer and branch
     policy, which the workflow comment requires verifying before dispatch ("Before dispatch, verify the
     Environment requires @wxxb789's separate approval, permits self-review, and admits only the reviewed
@@ -1288,3 +1288,27 @@ instead of appended.
       of the unbounded retry. The sink files are outside the rf-w3-09 owned set (`events.go`,
       `outbox.go`, `state.go`), which is why that slice recorded this entry instead of changing them;
       owner: daemon outbox/state.
+
+## Daemon: the `admission_deadline` attach-ack subtest flakes on its wall-clock deadline (PR #217 review)
+
+- [ ] Revalidate and diagnose the pre-existing flake in
+      `TestOmOAttachAckRegressionCancellationAndDeadlineDoNotRenewBudget/admission_deadline`
+      (`daemon/internal/app/omo_attach_ack_test.go`; the four-mode parent starts `:602`, the
+      `admission_deadline` arm is `:616-624`, the request-context wait `:626`, the failing
+      assertion call `:629`). The PR #217 review observed it fail twice on the base tree `394859a9` —
+      once under concurrent load, once alone — with `attachment requests=[] … context deadline
+      exceeded` (the review elides the middle), then pass 2/2 alone on that base and 3/3 on the PR
+      head; the file is byte-identical between `394859a9` and `e0782105` and last changed by
+      `8ded7715`, so the observation binds the current bytes. The message is
+      `assertRequests`'s (function `:294`, message `:307`): `attachment requests=%v, want %v (PUT error=%v
+      local_state=%s terminal_state=%s failure=%s native_calls=%v journal_error=%v)` with an empty
+      request list and `context deadline exceeded` as the PUT error. The arm arms a 2 s admission
+      `DeadlineAt` and then waits on the request context, so the failure is consistent with the
+      deadline expiring before the run reaches its stop and pending-delivery assertions, but the
+      cause is unknown and no fix belongs to the toolchain-followups slice that recorded this entry
+      (`grep -n OmO docs/TODO.md` had no match before it). The refactor program's rf-w4-13 contract
+      (E5) marks tests whose duration is bounded by a production limit as `out of scope
+      (production-bound)` and names this test's `request_deadline` arm
+      (`controlRequestLimit = 15 * time.Second`, `daemon/internal/app/app.go:38`), so a fix needs an
+      owner decision rather than a W4-13 conversion. Revalidate against a recovered failure before
+      changing the deadline or the assertion.

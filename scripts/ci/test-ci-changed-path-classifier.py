@@ -57,21 +57,21 @@ COVERAGE_DAEMON_HEADER = "  coverage-daemon:\n    needs: changes\n    if: needs.
 COVERAGE_UPLOADS = {
     "coverage-control": (
         "        if: always()\n"
-        "        uses: actions/upload-artifact@v4\n"
+        "        uses: actions/upload-artifact@v7\n"
         "        with:\n"
         "          name: control-coverage\n"
         "          path: control/cover\n"
     ),
     "coverage-daemon": (
         "        if: always()\n"
-        "        uses: actions/upload-artifact@v4\n"
+        "        uses: actions/upload-artifact@v7\n"
         "        with:\n"
         "          name: daemon-coverage\n"
         "          path: daemon/coverage.out\n"
     ),
     "coverage-frontend": (
         "        if: always()\n"
-        "        uses: actions/upload-artifact@v4\n"
+        "        uses: actions/upload-artifact@v7\n"
         "        with:\n"
         "          name: frontend-coverage\n"
         "          path: frontend/coverage\n"
