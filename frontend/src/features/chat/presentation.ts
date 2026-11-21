@@ -1,13 +1,13 @@
 /**
  * Presentation of the scoped engineering conversation.
  *
- * Every rendered value is the server's own: the intent vocabulary is the
- * server's, the scope label names the conversation read's answer rather than
- * the URL that asked for it, receipts are derived by `features/work/receipts.ts`
- * (applied only from a served acknowledgement outcome) and a served value
- * becomes an anchor only through the one safe-URL helper http(s) admits. Raw
- * execution data is never a source here: evidence rows read the read's semantic
- * timeline only.
+ * Every rendered value is the server's own: the intent vocabulary is the server's, the
+ * scope label names the conversation read's answer rather than the URL that asked for
+ * it, receipts are derived by `features/work/receipts.ts` (applied only from a served
+ * acknowledgement outcome) and a served value becomes an anchor only through the one
+ * safe-URL helper http(s) admits — `services/served.ts`; the work vocabulary stays in
+ * `features/work/presentation.ts`. Raw execution data is never a source here: evidence
+ * rows read the read's semantic timeline only.
  */
 import { decisionRecord, executionStateLabel } from "../work/presentation";
 import { receiptLabel, receiptOutcome, type ReceiptCommand, type ReceiptOutcome } from "../work/receipts";

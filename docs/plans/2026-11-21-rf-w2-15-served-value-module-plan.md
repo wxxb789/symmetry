@@ -79,7 +79,7 @@ matches only 11 historical lines in `CLOSED-TODO.md` (prose inside closed entrie
 `docs/TODO.md`. No other doc in `docs/` names any of these helpers —
 `grep -rn "asText\|safeUrl\|served-text\|servedText\|servedMember" docs/ --include=*.md` exits 1
 once this plan file is excluded — so no design/contract document is made stale;
-`docs/design/frontend.md:18-19` already places presentation-independent helpers in `services/`.
+`services/commands.ts` and `services/control-actions.ts` are the existing precedent for non-API, non-event modules in `services/`.
 
 ## API shape
 

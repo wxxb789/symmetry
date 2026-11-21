@@ -68,11 +68,7 @@ export function FieldErrors({ error, field }: { error: unknown; field: string })
 
 export const refusalNotice = (error: unknown) => sharedRefusalNotice(error, refusalGuidance);
 
-// The served DTO's own presence rule: a member is present when it is not empty,
-// and a whitespace-only value is served text this surface renders as served (the
-// whitespace-only DOM case pins that). The shared `asText` trims that case away,
-// so this surface declares its own rule instead of adopting the shared one; the
-// link rule (`safeUrl`) is identical for every string, so it is shared.
+// Declared policy: a served member is present when non-empty (no trim); the shared `asText` trims that case away.
 const presentText = (value: unknown): string | null => typeof value === "string" && value !== "" ? value : null;
 const asVersion = (value: unknown): number => typeof value === "number" && Number.isFinite(value) ? value : 0;
 
@@ -215,7 +211,7 @@ interface ResourceRowProps {
 
 function ResourceRowItem({ row, connections, locked, syncPending, onSync, onUpdate, onUnbind }: ResourceRowProps) {
   const connection = connections.find((candidate) => candidate.id === row.connectionId);
-  const url = row.url === null ? null : safeUrl(row.url);
+  const url = safeUrl(row.url);
   return <li className="resource-row">
     <div className="resource-main">
       <div className="resource-title">
