@@ -235,7 +235,7 @@ Contract gates, all foreground and serialized (never a measurement harness besid
 | record hygiene | `python3 scripts/ci/test-check-record-cleanliness.py` | 0 | 19 tests OK, 94.6 s |
 | suite hygiene (ruff) | `ruff check scripts/ci` and `ruff format --check scripts/ci` (0.17.5, the pinned `required-version`; re-run on the review-round-2 fix) | 0 | all checks passed; 49 files already formatted |
 | diff hygiene | `git diff --check` | 0 | 0 whitespace errors; 0 trailing-whitespace lines across the changed files |
-| pre-existing steps | `git diff -U0 -- .github/workflows/ci.yml \| grep -c "^-[^-]"` | 1¹ | 0 deleted lines: the workflow diff is 147 added lines at the review-round-2 fix revision (142 at the implement stage, 154 at review round 1, 152 at the first round-2 revision), nothing removed or re-indented |
+| pre-existing steps | `git diff -U0 -- .github/workflows/ci.yml \| grep -c "^-[^-]"` | 1¹ | 0 deleted lines: the workflow diff is 150 added lines at the review-round-2 fix revision (142 at the implement stage, 154 at review round 1, 152 at the first round-2 revision), nothing removed or re-indented |
 | host-path scan | working-tree diff against `origin/main` plus the new plan file | 1¹ | no user-profile path in either |
 | instrumented helper failure (round 1) | `go test -count=1 -coverprofile=<scratch>/exec.out -run '<the four cases>' ./internal/execution/` (go1.27.4 windows/amd64) | 1 | the same four failures as run `44887419717`; the child-output assertions carry `warning: GOCOVERDIR not set, no coverage data emitted` |
 | uninstrumented control (round 1) | the identical command without `-coverprofile` | 0 | the four cases pass (`ok … internal/execution`, 4.9 s) — the package's ordinary shape is not the cause |
