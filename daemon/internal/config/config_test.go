@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -563,4 +564,98 @@ func validConfigObject(t *testing.T) map[string]any {
 		t.Fatalf("Unmarshal() error = %v", err)
 	}
 	return value
+}
+
+// TestValidateCanonicalUUIDPinsRejectionMessages pins the exact rejection
+// message for every runtime.repository_resource_id rejection class. This
+// boundary folds every class into the canonical-UUID body, so every rejection
+// row pins that one string.
+func TestValidateCanonicalUUIDPinsRejectionMessages(t *testing.T) {
+	const field = "runtime.repository_resource_id"
+	const uuid = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+	canonical := fmt.Sprintf("%s must be a canonical UUID", field)
+
+	for _, test := range []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{name: "valid", value: uuid},
+		{name: "too short", value: uuid[:35], want: canonical},
+		{name: "misplaced dash", value: uuid[:8] + "0" + uuid[9:], want: canonical},
+		{name: "uppercase hex digit", value: uuid[:15] + "A" + uuid[16:], want: canonical},
+		{name: "non-hex lowercase", value: uuid[:16] + "g" + uuid[17:], want: canonical},
+		{name: "non-hex uppercase outside A-F", value: uuid[:16] + "Z" + uuid[17:], want: canonical},
+		{name: "unsupported version", value: uuid[:14] + "0" + uuid[15:], want: canonical},
+		{name: "unsupported variant", value: uuid[:19] + "0" + uuid[20:], want: canonical},
+		{name: "version and variant both unsupported", value: uuid[:14] + "0" + uuid[15:19] + "0" + uuid[20:], want: canonical},
+		{name: "length beats uppercase", value: uuid[:15] + "A" + uuid[16:35], want: canonical},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateCanonicalUUID(test.value, field)
+			if test.want == "" {
+				if err != nil {
+					t.Fatalf("validateCanonicalUUID(%q, %q) error = %v, want accept", test.value, field, err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("validateCanonicalUUID(%q, %q) accepted, want %q", test.value, field, test.want)
+			}
+			if got := err.Error(); got != test.want {
+				t.Fatalf("validateCanonicalUUID(%q, %q) error = %q, want %q", test.value, field, got, test.want)
+			}
+		})
+	}
+}
+
+// TestValidateNativeModelPinsRejectionMessages pins the exact rejection
+// message for every agent_profiles.builder.native_model rejection class. The
+// length check precedes the identifier scan, so an over-length value pins the
+// length body even when it also carries an invalid first rune.
+func TestValidateNativeModelPinsRejectionMessages(t *testing.T) {
+	const field = "agent_profiles.builder.native_model"
+	length := fmt.Sprintf("%s must contain 1..128 characters", field)
+	identifier := fmt.Sprintf("%s has an invalid identifier", field)
+
+	for _, test := range []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{name: "empty", value: "", want: length},
+		{name: "one character", value: "a"},
+		{name: "127 characters", value: strings.Repeat("a", 127)},
+		{name: "128 characters", value: strings.Repeat("a", 128)},
+		{name: "129 characters", value: strings.Repeat("a", 129), want: length},
+		{name: "leading dot", value: ".goal", want: identifier},
+		{name: "leading hyphen", value: "-goal", want: identifier},
+		{name: "leading digit", value: "1goal"},
+		{name: "slash separator", value: "goal/read", want: identifier},
+		{name: "space separator", value: "goal read", want: identifier},
+		{name: "non-ASCII first character", value: "\u00e9goal", want: identifier},
+		{name: "non-ASCII later character", value: "goal\u00e9read", want: identifier},
+		{name: "dot separator", value: "goal.read"},
+		{name: "hyphen separator", value: "goal-read"},
+		{name: "underscore separator", value: "goal_read"},
+		{name: "colon separator", value: "goal:read"},
+		{name: "mixed separators", value: "gpt-5.2-claude_code:x"},
+		{name: "length beats leading dot", value: strings.Repeat("a", 128) + ".", want: length},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateNativeModel(test.value, field)
+			if test.want == "" {
+				if err != nil {
+					t.Fatalf("validateNativeModel(%q, %q) error = %v, want accept", test.value, field, err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("validateNativeModel(%q, %q) accepted, want %q", test.value, field, test.want)
+			}
+			if got := err.Error(); got != test.want {
+				t.Fatalf("validateNativeModel(%q, %q) error = %q, want %q", test.value, field, got, test.want)
+			}
+		})
+	}
 }

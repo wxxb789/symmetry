@@ -793,3 +793,44 @@ func TestGetTaskAcceptsQueuedRetryAttemptAndHistoricalRetryCommand(t *testing.T)
 		t.Fatalf("latest_command = %#v", task.LatestCommand)
 	}
 }
+
+// TestValidateProviderActionUUIDPinsRejectionMessages pins the exact rejection
+// message for the provider-action action_id classes this boundary already
+// rejects. Version and variant rows are deliberately absent: the base accepts
+// them here, and the tightening is covered by its own test.
+func TestValidateProviderActionUUIDPinsRejectionMessages(t *testing.T) {
+	const field = "provider action action_id"
+	const uuid = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+	canonical := fmt.Sprintf("%s must be a canonical UUID", field)
+	lowerHex := fmt.Sprintf("%s must use lowercase hexadecimal UUID digits", field)
+
+	for _, test := range []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{name: "valid", value: uuid},
+		{name: "too short", value: uuid[:35], want: canonical},
+		{name: "misplaced dash", value: uuid[:8] + "0" + uuid[9:], want: canonical},
+		{name: "uppercase hex digit", value: uuid[:15] + "A" + uuid[16:], want: lowerHex},
+		{name: "non-hex lowercase", value: uuid[:16] + "g" + uuid[17:], want: lowerHex},
+		{name: "non-hex uppercase outside A-F", value: uuid[:16] + "Z" + uuid[17:], want: lowerHex},
+		{name: "length beats uppercase", value: uuid[:15] + "A" + uuid[16:35], want: canonical},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateProviderActionUUID(test.value, field)
+			if test.want == "" {
+				if err != nil {
+					t.Fatalf("validateProviderActionUUID(%q, %q) error = %v, want accept", test.value, field, err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("validateProviderActionUUID(%q, %q) accepted, want %q", test.value, field, test.want)
+			}
+			if got := err.Error(); got != test.want {
+				t.Fatalf("validateProviderActionUUID(%q, %q) error = %q, want %q", test.value, field, got, test.want)
+			}
+		})
+	}
+}
