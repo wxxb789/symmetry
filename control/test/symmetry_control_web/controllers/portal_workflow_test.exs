@@ -1361,13 +1361,11 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
       @waiting_decision_members
     )
 
-    Enum.each(decision["options"], fn option ->
-      assert_served_members!(
-        "work-detail-read waiting decision option",
-        option,
-        @waiting_decision_option_members
-      )
-    end)
+    assert_served_rows!(
+      "work-detail-read waiting decision option",
+      decision["options"],
+      @waiting_decision_option_members
+    )
 
     page =
       api_conn() |> get("/portal/api/work-items/#{item["id"]}/timeline") |> json_response(200)
@@ -1761,8 +1759,9 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
 
   # `assert_served_members!/3` and `assert_served_rows!/3` are the gate's presence
   # oracle: a member is pinned by key, so a served `null` stays accepted while a
-  # renamed or omitted key fails here. They are defined in this file rather than
-  # in `test/support` so a single-file run stays self-contained.
+  # renamed or omitted key fails here. They are defined in this file because
+  # `control/test/support/**` is outside this increment's owned files, and a module
+  # defined in one test file would break a single-file run of the others.
   defp assert_served_members!(label, served, members) do
     assert is_map(served), "#{label} is not served at all: #{inspect(served)}"
 

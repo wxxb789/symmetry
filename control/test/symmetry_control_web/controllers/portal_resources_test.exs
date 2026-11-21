@@ -168,6 +168,60 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
   @workspace_waiting_decision_members ~w(context reason options recommended_option_id)
   @workspace_waiting_decision_option_members ~w(id label consequence)
 
+  # The capability maps the two runtime fixtures register.
+  @adapter_runtime_capabilities %{
+    "structured_input" => true,
+    "provider_access" => true,
+    "adapter" => %{
+      "kind" => "generic",
+      "native_version" => "generic-v1",
+      "implementation_version" => "generic-v1",
+      "protocol_version" => 1,
+      "operations" => %{
+        "start" => true,
+        "events" => true,
+        "cancel" => false,
+        "resume" => false,
+        "handoff" => false,
+        "guidance" => "unsupported",
+        "pause" => "unsupported",
+        "approval_response" => false,
+        "usage" => "unknown",
+        "hard_cost_limit" => false
+      }
+    }
+  }
+
+  # The runtime row the workspace gate serves: registered with every
+  # `RuntimeCapabilities` member the surface reads — `adapter` plus the four
+  # booleans — so the registered map's pass-through is exercised whole, and
+  # advertising the adapter `start` operation the item's launch needs a
+  # selectable runtime for.
+  @gate_runtime_capabilities %{
+    "interactive" => true,
+    "structured_input" => true,
+    "provider_access" => true,
+    "supervisory_control" => true,
+    "adapter" => %{
+      "kind" => "generic",
+      "native_version" => "generic-v1",
+      "implementation_version" => "generic-v1",
+      "protocol_version" => 1,
+      "operations" => %{
+        "start" => true,
+        "events" => true,
+        "cancel" => true,
+        "resume" => false,
+        "handoff" => false,
+        "guidance" => "unsupported",
+        "pause" => "unsupported",
+        "approval_response" => false,
+        "usage" => "unknown",
+        "hard_cost_limit" => false
+      }
+    }
+  }
+
   setup do
     TestEnv.put!(:integration_providers,
       github: SymmetryControlWeb.PortalResourcesTest.Provider,
@@ -1053,7 +1107,12 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
 
     steer_delivery("Workspace gate repository", {:ok, provider_delivery(@delivery_url)})
 
-    runtime = register_gate_runtime("workspace-gate")
+    runtime =
+      enroll_adapter_runtime(
+        "workspace-gate",
+        "Workspace gate runtime",
+        @gate_runtime_capabilities
+      )
 
     item =
       create_work_item(project, "Workspace gate item", %{
@@ -1135,7 +1194,7 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
       @workspace_registered_runtime_members
     )
 
-    Enum.each(served["runtimes"] ++ served["registered_runtimes"], fn row ->
+    Enum.each(served["runtimes"], fn row ->
       assert_served_members!(
         "workspace-read runtime capabilities",
         row["capabilities"],
@@ -1174,13 +1233,11 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
       @workspace_waiting_decision_members
     )
 
-    Enum.each(decision["options"], fn option ->
-      assert_served_members!(
-        "workspace-read waiting decision option",
-        option,
-        @workspace_waiting_decision_option_members
-      )
-    end)
+    assert_served_rows!(
+      "workspace-read waiting decision option",
+      decision["options"],
+      @workspace_waiting_decision_option_members
+    )
   end
 
   defp create_project(key), do: create_project(key, "Resource project #{key}")
@@ -1253,83 +1310,7 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
   # An enrolled machine with one adapter-backed runtime for the project's
   # default binding: provider-capable because the retried item's binding
   # requires `provider_access`, and advertising the adapter `start` operation.
-  defp enroll_adapter_runtime(key, name) do
-    enrollment_key = Ecto.UUID.generate()
-
-    assert {:ok, enrolled, :created} =
-             Orchestration.enroll_machine(
-               %{name: "#{key}-machine", machine_token: "token-#{enrollment_key}"},
-               enrollment_key,
-               enrollment_token: "enrollment-secret",
-               expected_enrollment_token: "enrollment-secret"
-             )
-
-    assert {:ok, [_runtime]} =
-             Orchestration.register_runtimes(
-               enrolled.machine.id,
-               Ecto.UUID.generate(),
-               [
-                 %{
-                   runtime_key: "#{key}-runtime",
-                   name: name,
-                   capacity: 1,
-                   agent_profile: "codex",
-                   workspace: "primary",
-                   harness_kind: "generic",
-                   harness_version: "generic-v1",
-                   adapter_version: "generic-v1",
-                   adapter_protocol_version: 1,
-                   capabilities: %{
-                     "structured_input" => true,
-                     "provider_access" => true,
-                     "adapter" => %{
-                       "kind" => "generic",
-                       "native_version" => "generic-v1",
-                       "implementation_version" => "generic-v1",
-                       "protocol_version" => 1,
-                       "operations" => %{
-                         "start" => true,
-                         "events" => true,
-                         "cancel" => false,
-                         "resume" => false,
-                         "handoff" => false,
-                         "guidance" => "unsupported",
-                         "pause" => "unsupported",
-                         "approval_response" => false,
-                         "usage" => "unknown",
-                         "hard_cost_limit" => false
-                       }
-                     }
-                   }
-                 }
-               ]
-             )
-  end
-
-  # The runtime row the workspace gate serves: registered with every
-  # `RuntimeCapabilities` member the surface reads — `adapter` plus the four
-  # booleans — so the registered map's pass-through is exercised whole, and
-  # advertising the adapter `start` operation the item's launch needs a
-  # selectable runtime for.
-  #
-  # `assert_served_members!/3` and `assert_served_rows!/3` are the gate's
-  # presence oracle: a member is pinned by key, so a served `null` stays
-  # accepted while a renamed or omitted key fails here. They are defined in this
-  # file rather than in `test/support` so a single-file run stays
-  # self-contained.
-  defp assert_served_members!(label, served, members) do
-    assert is_map(served), "#{label} is not served at all: #{inspect(served)}"
-
-    assert Enum.all?(members, &Map.has_key?(served, &1)),
-           "#{label} stopped serving #{inspect(Enum.reject(members, &Map.has_key?(served, &1)))}"
-  end
-
-  defp assert_served_rows!(label, rows, members) do
-    assert is_list(rows) and rows != [], "#{label}: the gate must serve at least one row"
-    Enum.each(rows, &assert_served_members!(label, &1, members))
-  end
-
-  defp register_gate_runtime(key) do
+  defp enroll_adapter_runtime(key, name, capabilities \\ @adapter_runtime_capabilities) do
     enrollment_key = Ecto.UUID.generate()
 
     assert {:ok, enrolled, :created} =
@@ -1347,7 +1328,7 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
                [
                  %{
                    runtime_key: "#{key}-runtime",
-                   name: "Workspace gate runtime",
+                   name: name,
                    capacity: 1,
                    agent_profile: "codex",
                    workspace: "primary",
@@ -1355,35 +1336,30 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
                    harness_version: "generic-v1",
                    adapter_version: "generic-v1",
                    adapter_protocol_version: 1,
-                   capabilities: %{
-                     "interactive" => true,
-                     "structured_input" => true,
-                     "provider_access" => true,
-                     "supervisory_control" => true,
-                     "adapter" => %{
-                       "kind" => "generic",
-                       "native_version" => "generic-v1",
-                       "implementation_version" => "generic-v1",
-                       "protocol_version" => 1,
-                       "operations" => %{
-                         "start" => true,
-                         "events" => true,
-                         "cancel" => true,
-                         "resume" => false,
-                         "handoff" => false,
-                         "guidance" => "unsupported",
-                         "pause" => "unsupported",
-                         "approval_response" => false,
-                         "usage" => "unknown",
-                         "hard_cost_limit" => false
-                       }
-                     }
-                   }
+                   capabilities: capabilities
                  }
                ]
              )
 
     runtime
+  end
+
+  # `assert_served_members!/3` and `assert_served_rows!/3` are the gate's
+  # presence oracle: a member is pinned by key, so a served `null` stays
+  # accepted while a renamed or omitted key fails here. They are defined in this
+  # file because `control/test/support/**` is outside this increment's owned
+  # files, and a module defined in one test file would break a single-file run
+  # of the others.
+  defp assert_served_members!(label, served, members) do
+    assert is_map(served), "#{label} is not served at all: #{inspect(served)}"
+
+    assert Enum.all?(members, &Map.has_key?(served, &1)),
+           "#{label} stopped serving #{inspect(Enum.reject(members, &Map.has_key?(served, &1)))}"
+  end
+
+  defp assert_served_rows!(label, rows, members) do
+    assert is_list(rows) and rows != [], "#{label}: the gate must serve at least one row"
+    Enum.each(rows, &assert_served_members!(label, &1, members))
   end
 
   # Claims the gate item's queued attempt for the runtime the gate registered:
