@@ -75,27 +75,45 @@ COVERAGE_DAEMON_HEADER = "  coverage-daemon:\n    needs: changes\n    if: needs.
 # them: the routing and advisory checks pin when a coverage job runs, these
 # literals pin its product, so a deleted upload step, a renamed artifact, a
 # moved report path or a dropped command reddens the artifact check below
-# instead of only the draft-PR run. The daemon command is a two-line block
-# scalar under the stdio-only caller boundary.
+# instead of only the draft-PR run. Each literal spans the step's
+# `if: always()`, the decision-7 promise that a red coverage run still uploads
+# its report, so a dropped `if: always()` reddens here too. The daemon command
+# is a two-line block scalar under the stdio-only caller boundary.
 COVERAGE_UPLOADS = {
     "coverage-control": (
+        "        if: always()\n"
         "        uses: actions/upload-artifact@v4\n"
         "        with:\n"
         "          name: control-coverage\n"
         "          path: control/cover\n"
     ),
     "coverage-daemon": (
+        "        if: always()\n"
         "        uses: actions/upload-artifact@v4\n"
         "        with:\n"
         "          name: daemon-coverage\n"
         "          path: daemon/coverage.out\n"
     ),
     "coverage-frontend": (
+        "        if: always()\n"
         "        uses: actions/upload-artifact@v4\n"
         "        with:\n"
         "          name: frontend-coverage\n"
         "          path: frontend/coverage\n"
     ),
+}
+# The `defaults.run` block that carries the working directory each coverage
+# job's command resolves against, as the workflow spells it: the Control
+# command's report lands in `control/cover/` because the job runs in
+# `control/`, and the daemon command reaches `../scripts/ci/...` and writes
+# `coverage.out` from `daemon/`. Both directories are load-bearing, so they are
+# pinned beside the command and the artifact. `coverage-frontend` is
+# deliberately absent: its `pnpm --filter` command and `pnpm install
+# --frozen-lockfile` step must run at the workspace root, where the lockfile
+# lives.
+COVERAGE_DEFAULTS = {
+    "coverage-control": "    defaults:\n      run:\n        working-directory: control\n",
+    "coverage-daemon": "    defaults:\n      run:\n        working-directory: daemon\n",
 }
 COVERAGE_COMMANDS = {
     "coverage-control": ("        run: mix test --cover",),
@@ -532,7 +550,11 @@ def check_coverage_artifacts(workflow_text: str) -> None:
     failure cannot gate a pull request, but not what the plane produces: with
     only those pins, deleting an upload step, renaming an artifact, moving its
     report path or dropping the command leaves the suite green, and only the
-    draft-PR run - advisory by construction - would ever notice.
+    draft-PR run - advisory by construction - would ever notice. The upload
+    literal spans the step's ``if: always()``, so dropping the always-upload
+    promise reddens here, and each command's ``defaults.run`` working directory
+    is pinned beside it because the daemon command's ``../scripts/...``
+    reference and its ``coverage.out`` path resolve against it.
     """
     blocks = job_blocks(workflow_text)
     for name in COVERAGE_JOBS:
@@ -542,6 +564,12 @@ def check_coverage_artifacts(workflow_text: str) -> None:
             COVERAGE_UPLOADS[name] in block,
             f"coverage job {name} must carry its pinned upload step:\n{COVERAGE_UPLOADS[name]}",
         )
+        if name in COVERAGE_DEFAULTS:
+            require(
+                COVERAGE_DEFAULTS[name] in block,
+                f"coverage job {name} must keep the working directory its command resolves against:\n"
+                f"{COVERAGE_DEFAULTS[name]}",
+            )
         for line in COVERAGE_COMMANDS[name]:
             require(line in block, f"coverage job {name} must keep its pinned command line {line.strip()!r}")
 
@@ -1038,6 +1066,22 @@ class ChangedPathClassifierTests(unittest.TestCase):
         self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
         with self.assertRaises(AssertionError):
             check_coverage_jobs_are_advisory(mutated)
+
+    def test_mutation_dropping_a_coverage_uploads_always_flag_breaks_the_artifact_check(self) -> None:
+        upload = COVERAGE_UPLOADS["coverage-daemon"]
+        self.assertIn(upload, self.workflow_text, "the mutation's anchor must be a coverage upload step")
+        mutated = self.workflow_text.replace(upload, upload.replace("        if: always()\n", ""))
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaises(AssertionError):
+            check_coverage_artifacts(mutated)
+
+    def test_mutation_dropping_a_coverage_jobs_working_directory_breaks_the_artifact_check(self) -> None:
+        defaults = COVERAGE_DEFAULTS["coverage-daemon"]
+        self.assertIn(defaults, self.workflow_text, "the mutation's anchor must be a coverage job's defaults block")
+        mutated = self.workflow_text.replace(defaults, "")
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaises(AssertionError):
+            check_coverage_artifacts(mutated)
 
     def test_mutation_conditioning_legacy_route_audit_breaks_its_unconditional_assertion(self) -> None:
         mutated = self.workflow_text.replace(

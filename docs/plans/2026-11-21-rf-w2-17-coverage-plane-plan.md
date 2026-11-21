@@ -123,17 +123,23 @@ message. This change adds:
   "a coverage job without `continue-on-error` = not achieved" failure mode — reddens the suite
   instead of waiting for review.
 - `check_coverage_artifacts(workflow_text)`: each coverage job's own block must carry its pinned
-  upload step (`actions/upload-artifact@v4` with the pinned artifact name and report path) and
-  the command line(s) that produce the report, so a deleted upload step, a renamed artifact, a
-  moved path or a dropped command reddens locally instead of only in the draft-PR run.
+  upload step (`if: always()` on `actions/upload-artifact@v4` with the pinned artifact name and
+  report path), the command line(s) that produce the report, and — for `coverage-control` and
+  `coverage-daemon` — the `defaults.run.working-directory` the command and the report path
+  resolve against, so a deleted upload step, a dropped always-upload, a renamed artifact, a
+  moved path, a dropped command or a strayed working directory reddens locally instead of only
+  in the draft-PR run.
 - `test_the_coverage_jobs_follow_the_heavy_matrix_across_every_fixture`, which runs the routing
   and advisory checks against all 16 fixture diffs and the artifact pin against the workflow
   text (the fixtures are the added jobs' routing evidence: a docs-only fixture must run none of
   them, a code fixture must run all three).
-- `test_mutation_regating_a_coverage_job_off_the_heavy_output_breaks_its_routing` and
-  `test_mutation_dropping_a_coverage_jobs_advisory_flag_breaks_the_advisory_check`, which re-gate
-  `coverage-daemon` on `run-citations` and strip its advisory line in in-memory copies, asserting
-  the matching check reddens — the suite's own style of proving an assertion is not vacuous.
+- `test_mutation_regating_a_coverage_job_off_the_heavy_output_breaks_its_routing`,
+  `test_mutation_dropping_a_coverage_jobs_advisory_flag_breaks_the_advisory_check`,
+  `test_mutation_dropping_a_coverage_uploads_always_flag_breaks_the_artifact_check` and
+  `test_mutation_dropping_a_coverage_jobs_working_directory_breaks_the_artifact_check`, which
+  re-gate `coverage-daemon` on `run-citations`, strip its advisory line, strip its upload's
+  `if: always()` and delete its `defaults.run` block in in-memory copies, asserting the matching
+  check reddens — the suite's own style of proving an assertion is not vacuous.
 
 No existing assertion is weakened, renamed or deleted; the added pins are additive and use the
 suite's existing parsers (`job_blocks`, `parse_model`, `ran_jobs`, `require`).
@@ -206,12 +212,12 @@ Contract gates, all foreground and serialized (never a measurement harness besid
 
 | Check | Command | Exit | Result |
 | --- | --- | ---: | --- |
-| classifier suite | `python3 scripts/ci/test-ci-changed-path-classifier.py` | 0 | 21 tests OK, 57.1 s (18 before this slice; +3 for the coverage routing pin, the advisory pin and their mutations) |
+| classifier suite | `python3 scripts/ci/test-ci-changed-path-classifier.py` | 0 | 23 tests OK, 46.7 s (18 before this slice; +5 for the coverage routing pin, the advisory pin, the artifact pin and their mutations) |
 | workflow shape | `actionlint -color -shellcheck= -pyflakes= .github/workflows/ci.yml` (1.7.12) | 0 | 0 findings |
 | new run blocks | `shellcheck --shell=bash --severity=style` over the six `run:` blocks extracted from the coverage plane | 0 | 0 findings |
 | frontend coverage command | `pnpm --filter @symmetry/frontend exec vitest run --coverage` (pnpm 12.17.0; node 26.13.1 locally, CI pins node 24) | 0 | 20 files / 509 tests passed in 77.4 s; statements 90.85 % (3328/3663), branches 83.46 % (3322/3980), functions 90.22 % (1024/1135), lines 93.98 % (2750/2926); `frontend/coverage/` written |
 | Go `-coverprofile` shape | `go test -count=1 -timeout 300s -coverprofile=coverage.out ./internal/authority/... ./internal/contracts/...` | 0 | one merged `mode: set` profile written at the invocation directory; `go tool cover -func` reads it back (total 77.8 %); profile path is the gitignored `daemon/coverage.out` |
-| Control coverage command | `mix test --cover` (portable Elixir 1.20.4/OTP 29.0.6, local PostgreSQL, staged portal bundle) | 2² | 966/967 passed, 21 skipped, 1 failed in 538.1 s; report generated at `control/cover/` (117 modules + `index.html`); **no** "Coverage test failed, threshold not met" line |
+| Control coverage command | `mix test --cover` (portable Elixir 1.20.4/OTP 29.0.6, local PostgreSQL, staged portal bundle) | 2² | 966/967 passed, 21 skipped, 1 failed in 538.1 s; report generated at `control/cover/` (117 module HTML pages); **no** "Coverage test failed, threshold not met" line |
 | Control threshold mutation | same command in a scratch copy carrying the base `mix.exs` (no `test_coverage` key), `integrations_test.exs:1105 --cover` | 3 | `Coverage test failed, threshold not met: Coverage: 2.10% / Threshold: 90.00%` — the key is load-bearing: the identical command exits 0 under the delivered `test_coverage: [summary: [threshold: 0]]` |
 | legacy-route audit | `bash scripts/audit-no-legacy-routes.sh` | 0 | 1444 tracked files audited, 0 matches |
 | legacy-route suite | `python3 scripts/ci/test-no-legacy-routes-audit.py` with Git's bash first on `PATH` | 0 | 6 tests OK, 141.7 s; with the default `PATH` the suite's `shutil.which("bash")` resolves the WSL launcher and 11 cases fail with exit 127 — the host artifact W1-01 recorded |
@@ -246,7 +252,7 @@ artifact uploads themselves. Nothing above is reported as passed from inference.
    `retention-days: 7` and `if-no-files-found: warn`, matching the repository's test-report
    artifact (`workspace-render`, also a report artifact with `warn`). A rerun attempt re-uploads
    under the same name; the evidence artifact pattern that carries `run_id`/`run_attempt` exists for
-   artifacts whose *absence must fail* (OpenCode provenance, namespace evidence) — a missing
+   artifacts whose *absence must fail* (OpenCode provenance, the Pi E2E logs) — a missing
    coverage report is not a gate here, it is a red advisory step in the log.
 3. **`-timeout 1200s` on the daemon coverage step, `timeout-minutes` on every coverage job.** The
    race step's 600 s budget is a pre-existing property this slice must not touch; the coverage job
@@ -269,13 +275,15 @@ artifact uploads themselves. Nothing above is reported as passed from inference.
 
 ## Residual risks and known limits
 
-- **The ordinary (non-race) full Go pass has no CI precedent any more.** The daemon job runs the
-  ordinary pass scoped to two packages plus the full race pass, and the scoping comment records a
-  revision (`671525c`) where the ordinary pass failed for a package the race pass covered. The
-  coverage job runs the ordinary full suite, so a first-run failure can be a package whose ordinary
-  shape is untested rather than a defect of the profile. It is advisory: the log names the package
-  and the profile is still produced for the packages that ran. A later change can scope the
-  coverage run the same way if the ordinary shape proves to hold only under `-race`.
+- **A Linux ordinary (non-race) full Go pass has no CI precedent any more.** The daemon job runs
+  the ordinary pass scoped to two packages plus the full race pass on Linux; the only whole-tree
+  ordinary pass left is the `daemon-windows` job's `go test -count=1 -timeout 600s ./...` on
+  Windows. The scoping comment records run `43975580744`, where the ordinary pass failed for a
+  package the race pass covered. The coverage job runs the ordinary full suite, so a first-run
+  failure can be a package whose ordinary shape is untested rather than a defect of the profile.
+  It is advisory: the log names the package and the profile is still produced for the packages
+  that ran. A later change can scope the coverage run the same way if the ordinary shape proves
+  to hold only under `-race`.
 - **Coverage instrumentation cost is unmeasured on a GitHub runner.** The program plan records
   ~102 s for the plain Control suite and ~449 s for the race step on the hosted runners. On this
   host the *instrumented* Control suite took 538.1 s of suite time (portable toolchain, dedicated
