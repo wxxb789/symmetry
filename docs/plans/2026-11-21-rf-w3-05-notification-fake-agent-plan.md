@@ -236,9 +236,17 @@ that drops an already-read record leaves the run blocked, and the test's `testHa
 
 - `writer.Write` must fail with `io.ErrClosedPipe` — pins that the input was closed at exit;
 - the output must contain the `summary` record — pins that the run finished through the pipe;
+- the goroutine-stack scan right after the return (`runtime.Stack(buf, true)` must not contain
+  `runAutonomous.func1`) — observes the join's success arm at the instant of return: on the polled
+  `io.Pipe` carrier only the join can have made the reader goroutine exit by then. Measured on a
+  scratch copy with the exit join's `select` deleted (2026-11-21): 15 of 50 repetitions red at
+  `-count=50`, every red this scan's message — the mutation still lets the reader exit unjoined, so
+  the remaining repetitions win that race — versus 0/200 red at HEAD;
 - `verifyNoLeakedGoroutines(t)` (per-test goleak, W1-08 pattern: `goleak.IgnoreCurrent()` baseline
   captured at test entry, `goleak.VerifyNone(tb, baseline)` in the first-registered cleanup, which
-  therefore runs after every other cleanup) — pins that no reader goroutine is parked in `readLine`.
+  therefore runs after every other cleanup) — the leak backstop: it retries, so on its own it
+  tolerates a reader that exits shortly after the return (the stack scan above is the at-return
+  oracle).
 
 The pipe's **write end is deliberately never closed** by the test. A `defer writer.Close()` runs
 before `t.Cleanup` functions, so it would close the write end while the product's reader is still
@@ -294,8 +302,10 @@ Three tests were added after the implementation stage, each with its own measure
    read stays parked on Linux after the writer process closes its own stdin (probe table in §3.2),
    and the daemon's autonomous agent has exactly that stdin at the normal end of a run. Unbounded
    joining would hang every Linux autonomous run; skipping the join for stdio would leave the Linux
-   goroutine's exit unpinned. The bounded join keeps the pin (the join completes in µs for polled
-   carriers) and caps the cost at 50 ms on carriers that cannot unblock. Cost: on Linux, ≤50 ms of
+   goroutine's exit unpinned. The bounded join keeps that exit observable on polled carriers (the
+   join completes in µs; §5.3's at-return stack scan reddens 15/50 repetitions with the join's
+   `select` deleted) and caps the cost at 50 ms on carriers that cannot unblock (that bound is
+   pinned by `TestAutonomousReturnBoundsTheJoinOnAnUnblockableCarrier`, §5.5). Cost: on Linux, ≤50 ms of
    exit latency for a run whose reader is parked; the goroutine itself still exits only at process
    exit there (today's behaviour, unchanged).
 2. **One reporting call site, not two.** `err` is assigned by the dial and by `runConnection`, and
@@ -310,9 +320,9 @@ Three tests were added after the implementation stage, each with its own measure
 4. **The callback runs on `Run`'s goroutine.** No extra goroutine, no queue, no ordering
    ambiguity with the backoff; the doc comment states the non-blocking requirement.
 5. **`readerJoinTimeout = 50 ms`.** Large enough that a polled read's wakeup is never truncated
-   under load, small enough that the parked-carrier case costs a fraction of the smallest
-   configurable step (`step_ms` default 250 ms). A truncated wait changes nothing observable: the
-   join only decides whether the return waits a little longer.
+   under load, small enough that the parked-carrier case costs a fraction of the default step
+   (`step_ms` 250 ms; the minimum is 0, so the smallest configurable step is no floor). A truncated
+   wait changes nothing observable: the join only decides whether the return waits a little longer.
 6. **The fake-agent test drives the run through the pipe, not `executeAutonomous`.** The existing
    autonomy tests call `executeAutonomous` with a channel and therefore cannot see the reader's
    lifetime; the new test is the only one that pins the goroutine's exit.
@@ -388,5 +398,7 @@ first. Until then the daemon passes no handler and behaves exactly as before.
   and called from one goroutine), and the reader exit adds two channels and one `sync`-free close
   ordering; the CI daemon race job remains the oracle.
 - The Windows console-stdin case is recorded but not probed; the bound covers it.
-- `goleak`'s window (~0.43 s of retries) means a reader that exits late still passes; the test's
-  `io.ErrClosedPipe` assertion is the timing-independent half of the pin.
+- `goleak`'s window (~0.43 s of retries) means a reader that exits late still passes, so goleak
+  alone cannot pin the join's success arm; §5.3's at-return stack scan observes it at the instant
+  of return (0/200 red at HEAD; 15/50 red with the join's `select` deleted, measured on a scratch
+  copy), and the `io.ErrClosedPipe` assertion pins the close half.

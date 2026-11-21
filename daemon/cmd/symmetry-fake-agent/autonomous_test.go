@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -290,6 +291,9 @@ func (recorder *leakCheckRecorder) runCleanups() {
 // and joins that goroutine. The decision record only reaches the run through
 // the reader goroutine, so a reader that drops an already-read record leaves
 // the run blocked in boundary and this test times out instead of finishing.
+// The stack scan right after the return pins the join itself: goleak's
+// VerifyNone retries, so it would also pass a reader that exits shortly after
+// the return instead of being joined.
 func TestAutonomousReturnReleasesItsInputReader(t *testing.T) {
 	verifyNoLeakedGoroutines(t)
 	// The run writes progress.md and result.json into the working directory.
@@ -324,6 +328,15 @@ func TestAutonomousReturnReleasesItsInputReader(t *testing.T) {
 		}
 	case <-time.After(testHangGuard):
 		t.Fatal("runAutonomous did not return after the decision was answered")
+	}
+	// At this instant the join is the only thing that can have made the reader
+	// goroutine exit, so its absence shows up here. goleak alone does not pin
+	// this: VerifyNone retries, and the io.ErrClosedPipe assertion below pins
+	// only the Close.
+	stacks := make([]byte, 1<<20)
+	stacks = stacks[:runtime.Stack(stacks, true)]
+	if bytes.Contains(stacks, []byte("runAutonomous.func1")) {
+		t.Fatalf("reader goroutine is still alive when runAutonomous returned:\n%s", stacks)
 	}
 	if _, err := writer.Write([]byte("late\n")); !errors.Is(err, io.ErrClosedPipe) {
 		t.Fatalf("write after return = %v, want io.ErrClosedPipe: the input was not closed", err)
