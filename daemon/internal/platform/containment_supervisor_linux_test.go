@@ -3526,3 +3526,7 @@ func TestSanitizeLinuxSupervisorEndpointError(t *testing.T) {
 		})
 	}
 }
+
+func installLinuxSupervisorScanFailureInjection(group *processGroup, targetPID int, targetIdentity string) func() {
+	return installLinuxSupervisorScanInjection(group, targetPID, targetIdentity, false, authority.SupervisorScanOwnerHelper, false)
+}

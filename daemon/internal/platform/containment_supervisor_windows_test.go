@@ -1073,3 +1073,39 @@ func TestContainmentSupervisorPipeOpenErrorRedactsPipeName(t *testing.T) {
 		t.Fatalf("sanitized pipe PathError = %#v, want safe typed path", pathErr)
 	}
 }
+
+func containmentEndpointForIdentity(pid int, identity string) (containmentSupervisorEndpoint, error) {
+	// This constructor is retained only for tests and diagnostics. A public
+	// process identity must never be sufficient to recover a supervisor.
+	identityPID, _, err := parseWindowsProcessIdentity(identity)
+	if err != nil {
+		return containmentSupervisorEndpoint{}, err
+	}
+	if pid <= 0 || identityPID != pid {
+		return containmentSupervisorEndpoint{}, errors.New("Windows process identity PID does not match target PID")
+	}
+	token, err := randomContainmentToken()
+	if err != nil {
+		return containmentSupervisorEndpoint{}, err
+	}
+	jobID, err := randomContainmentToken()
+	if err != nil {
+		return containmentSupervisorEndpoint{}, err
+	}
+	secret, err := randomContainmentSecret()
+	if err != nil {
+		return containmentSupervisorEndpoint{}, err
+	}
+	endpoint := containmentSupervisorEndpoint{
+		TargetPID:      pid,
+		TargetIdentity: identity,
+		PipeName:       containmentSupervisorPipePrefix + token,
+		Token:          token,
+		JobID:          jobID,
+		Secret:         secret,
+	}
+	if err := validateSupervisorEndpoint(endpoint, false); err != nil {
+		return containmentSupervisorEndpoint{}, err
+	}
+	return endpoint, nil
+}
