@@ -4,6 +4,7 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
   alias SymmetryControl.Orchestration
   alias SymmetryControl.Orchestration.{Command, RunEvent, RunTransition}
   alias SymmetryControl.Repo
+  alias SymmetryControlWeb.Protocol
 
   @operator_token "test-operator-token"
   @now ~U[2026-09-03 00:00:00.000000Z]
@@ -269,6 +270,44 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
         ] do
       assert_error(bearer(conn) |> get(path), 400, "invalid_request")
     end
+  end
+
+  test "history limits accept exactly the documented integer forms", %{conn: conn} do
+    %{task: task} = history_fixture()
+    events = "/api/v1/tasks/#{task.id}/events"
+
+    for {value, status} <- [
+          {"1", 200},
+          {"+1", 200},
+          {" 1", 400},
+          {"", 400},
+          {"0", 400},
+          {"-1", 400},
+          {"1.5", 400},
+          {"100", 200},
+          {"101", 200},
+          {"500", 200},
+          {"501", 400},
+          {"9223372036854775807", 400},
+          {"9223372036854775808", 400}
+        ] do
+      response = bearer(conn) |> get("#{events}?limit=#{URI.encode_www_form(value)}")
+
+      if status == 200 do
+        assert json_response(response, 200)
+      else
+        assert_error(response, 400, "invalid_request")
+      end
+    end
+
+    # The web layer's own upper bound is discriminated directly: the table above would still
+    # pass with `Protocol.history_limit/1` widened to `:infinity`, because `Orchestration`'s
+    # identical bound answers 400 for `"501"` end to end.
+    assert {:error, :invalid_request} =
+             Protocol.history_options(%{"limit" => "501"}, task.id, "events", "after")
+
+    assert {:ok, [limit: 500]} =
+             Protocol.history_options(%{"limit" => "500"}, task.id, "events", "after")
   end
 
   test "task timeline is newest-first across generations and only accepts before cursors", %{

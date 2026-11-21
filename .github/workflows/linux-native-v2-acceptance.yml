@@ -89,7 +89,7 @@ jobs:
         run: bash scripts/ci/linux-v2-host-prerequisite-probe.sh
       - name: Upload narrow host prerequisite evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: linux-v2-host-prerequisite-${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: warn
@@ -134,7 +134,7 @@ jobs:
         run: printf 'SYMMETRY_OPERATOR_TOKEN=\n' >> "$GITHUB_ENV"
       - name: Upload allowlisted sanitized Linux v2 evidence
         if: success()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: linux-v2-native-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: warn
@@ -175,7 +175,7 @@ jobs:
       - run: pnpm --filter @symmetry/frontend lint
       - run: pnpm --filter @symmetry/frontend test
       - run: pnpm --filter @symmetry/frontend build
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: portal-assets
           path: control/priv/static/portal

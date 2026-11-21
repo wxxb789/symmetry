@@ -95,7 +95,7 @@ func RunLinuxOwnerHelperV2(args []string) error {
 	anchorID, err := ProcessIdentity(bootstrap.Grant.Anchor.PID)
 	if err != nil || anchorID != bootstrap.Grant.Anchor.Identity {
 		_ = ownerPipe.Close()
-		return fmt.Errorf("verify exact Linux owner anchor identity from helper: %w", errOr(err, errors.New("creation identity differs")))
+		return fmt.Errorf("verify exact Linux owner anchor identity from helper: %w", errOr(err, ErrLinuxOwnerCreationIdentityDiffers))
 	}
 	parent, err := AdoptLinuxCgroupV2Parent(int(parentFile.Fd()), bootstrap.Grant.Parent)
 	if err != nil {

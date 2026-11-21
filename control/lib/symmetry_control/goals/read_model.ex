@@ -25,6 +25,48 @@ defmodule SymmetryControl.Goals.ReadModel do
   alias SymmetryControl.Repo
   alias SymmetryControl.RequestHash
 
+  # The loaded goal-revision context every read-model pass reads from. Fields
+  # named `current_*` hold the current-revision subsets; `work_items`,
+  # `dependencies`, `outcomes`, `tasks` and `runs` hold the unfiltered records
+  # because some passes (readiness gates, evidence eligibility, accounting) must
+  # see every revision. Built once by `build_projection/2`.
+  defmodule Projection do
+    @moduledoc false
+
+    defstruct [
+      :goal,
+      :current_revision,
+      :revision,
+      :work_items,
+      :dependencies,
+      :outcomes,
+      :decisions,
+      :tasks,
+      :runs,
+      :current_work_items,
+      :current_dependencies,
+      :current_outcomes,
+      :current_work_item_ids,
+      :current_tasks,
+      :current_runs,
+      :accepted,
+      :current_work_items_by_id,
+      :tasks_by_id,
+      :runs_by_id,
+      :evidence,
+      :reservations,
+      :usage,
+      :runtimes,
+      :external_waits,
+      :automatic_admission_blocked_events,
+      :automatic_reconciliation_deferred_events,
+      :task_settled_events,
+      :settled_receipts,
+      :execution,
+      :graph
+    ]
+  end
+
   @terminal_goal_states ["achieved", "cancelled"]
   @nonterminal_task_states [
     "queued",
@@ -83,10 +125,77 @@ defmodule SymmetryControl.Goals.ReadModel do
   def project(goal, related) when is_list(related), do: project(goal, Map.new(related))
 
   def project(goal, related) when is_map(goal) and is_map(related) do
+    projection = build_projection(goal, related)
+    goal = projection.goal
+
+    blockers = blockers(projection)
+    settlement_attention = settlement_attention(projection)
+    completion = completion_projection(projection)
+
+    %{
+      id: map_value(goal, :id),
+      project_id: map_value(goal, :project_id),
+      title: map_value(goal, :title),
+      state: map_value(goal, :state, "draft"),
+      current_revision: projection.current_revision,
+      next_wake_at: map_value(goal, :next_wake_at),
+      updated_at: map_value(goal, :updated_at),
+      version: map_value(goal, :operator_version),
+      lifecycle: lifecycle_projection(map_value(goal, :state, "draft")),
+      revision: revision_projection(projection.revision),
+      blockers: blockers,
+      blocker_reasons: Enum.map(blockers, & &1.reason),
+      settlement_attention: settlement_attention,
+      attention_reasons: settlement_attention |> Enum.map(& &1.settlement) |> Enum.uniq(),
+      completion: completion,
+      allowed_actions: allowed_actions(map_value(goal, :state, "draft"), projection, completion),
+      work_items: Enum.map(projection.current_work_items, &item_projection(projection, &1)),
+      graph: projection.graph,
+      decisions:
+        Enum.map(projection.decisions, &decision_projection(&1, projection.current_revision)),
+      accepted_outcomes: projection.accepted |> Map.values() |> Enum.map(&outcome_projection/1),
+      execution: goal_execution_projection(projection.current_tasks, projection.current_runs),
+      planning:
+        planning_execution_projection(
+          projection.current_tasks,
+          projection.current_runs,
+          projection.runtimes
+        ),
+      accounting: accounting_projection(projection),
+      external_waits:
+        projection.external_waits
+        |> Enum.filter(&(map_value(&1, :goal_revision) == projection.current_revision))
+        |> Enum.map(&external_wait_projection/1),
+      history: %{
+        work_items:
+          projection.work_items
+          |> Enum.reject(&MapSet.member?(projection.current_work_item_ids, map_value(&1, :id)))
+          |> Enum.map(&historical_work_item_projection/1),
+        dependencies:
+          projection.dependencies
+          |> Enum.reject(&current_dependency?(&1, projection.current_work_item_ids))
+          |> Enum.map(&dependency_projection/1),
+        outcomes:
+          projection.outcomes
+          |> Enum.reject(
+            &current_outcome?(&1, projection.current_revision, projection.current_work_item_ids)
+          )
+          |> Enum.map(&outcome_projection/1),
+        external_waits:
+          projection.external_waits
+          |> Enum.reject(&(map_value(&1, :goal_revision) == projection.current_revision))
+          |> Enum.map(&external_wait_projection/1)
+      },
+      source: :durable_records
+    }
+  end
+
+  # Loads every related record for the goal and derives the current-revision
+  # subsets once; every pass below reads the resulting context by name.
+  defp build_projection(goal, related) do
     goal = map_value(goal, :goal, goal)
     current_revision = map_value(goal, :current_revision)
     revisions = records(related, :revisions, map_value(goal, :revisions, []))
-    revision = current_revision_record(revisions, current_revision)
     work_items = records(related, :work_items, map_value(goal, :work_items, []))
     dependencies = records(related, :dependencies, map_value(goal, :dependencies, []))
     outcomes = records(related, :outcomes, map_value(goal, :outcomes, []))
@@ -116,131 +225,43 @@ defmodule SymmetryControl.Goals.ReadModel do
     current_tasks = current_goal_tasks(tasks, current_work_item_ids, current_revision)
     current_task_ids = MapSet.new(Enum.map(current_tasks, &map_value(&1, :id)))
     current_runs = Enum.filter(runs, &MapSet.member?(current_task_ids, map_value(&1, :task_id)))
-
     accepted = accepted_outcomes(current_outcomes)
-    execution = execution_by_work_item(current_work_items, current_tasks, current_runs, runtimes)
 
-    graph = graph_projection(current_work_items, current_dependencies, accepted, current_revision)
-
-    settled_receipts =
-      current_task_settlements(
-        goal,
-        current_work_items,
-        current_outcomes,
-        tasks,
-        runs,
-        task_settled_events,
-        current_revision
-      )
-
-    blockers =
-      blockers(
-        goal,
-        revision,
-        current_work_items,
-        current_dependencies,
-        current_outcomes,
-        decisions,
-        current_tasks,
-        current_runs,
-        settled_receipts,
-        evidence,
-        reservations,
-        usage,
-        runtimes,
-        external_waits,
-        automatic_admission_blocked_events,
-        automatic_reconciliation_deferred_events,
-        current_revision,
-        accepted,
-        tasks,
-        runs
-      )
-
-    settlement_attention =
-      settlement_attention(
-        goal,
-        settled_receipts,
-        decisions,
-        current_revision
-      )
-
-    completion =
-      completion_projection(
-        goal,
-        revision,
-        current_work_items,
-        current_dependencies,
-        current_outcomes,
-        decisions,
-        tasks,
-        runs,
-        evidence,
-        current_revision,
-        accepted,
-        blockers
-      )
-
-    %{
-      id: map_value(goal, :id),
-      project_id: map_value(goal, :project_id),
-      title: map_value(goal, :title),
-      state: map_value(goal, :state, "draft"),
+    projection = %Projection{
+      goal: goal,
       current_revision: current_revision,
-      next_wake_at: map_value(goal, :next_wake_at),
-      updated_at: map_value(goal, :updated_at),
-      version: map_value(goal, :operator_version),
-      lifecycle: lifecycle_projection(map_value(goal, :state, "draft")),
-      revision: revision_projection(revision),
-      blockers: blockers,
-      blocker_reasons: Enum.map(blockers, & &1.reason),
-      settlement_attention: settlement_attention,
-      attention_reasons: settlement_attention |> Enum.map(& &1.settlement) |> Enum.uniq(),
-      completion: completion,
-      allowed_actions:
-        allowed_actions(
-          map_value(goal, :state, "draft"),
-          completion,
-          current_work_items,
-          current_tasks,
-          decisions,
-          current_revision,
-          task_settled_events
-        ),
-      work_items:
-        Enum.map(current_work_items, fn item ->
-          item_projection(item, current_revision, accepted, execution, graph)
-        end),
-      graph: graph,
-      decisions: Enum.map(decisions, &decision_projection(&1, current_revision)),
-      accepted_outcomes: accepted |> Map.values() |> Enum.map(&outcome_projection/1),
-      execution: goal_execution_projection(current_tasks, current_runs),
-      planning: planning_execution_projection(current_tasks, current_runs, runtimes),
-      accounting: accounting_projection(reservations, usage, tasks, runs),
-      external_waits:
-        external_waits
-        |> Enum.filter(&(map_value(&1, :goal_revision) == current_revision))
-        |> Enum.map(&external_wait_projection/1),
-      history: %{
-        work_items:
-          work_items
-          |> Enum.reject(&MapSet.member?(current_work_item_ids, map_value(&1, :id)))
-          |> Enum.map(&historical_work_item_projection/1),
-        dependencies:
-          dependencies
-          |> Enum.reject(&current_dependency?(&1, current_work_item_ids))
-          |> Enum.map(&dependency_projection/1),
-        outcomes:
-          outcomes
-          |> Enum.reject(&current_outcome?(&1, current_revision, current_work_item_ids))
-          |> Enum.map(&outcome_projection/1),
-        external_waits:
-          external_waits
-          |> Enum.reject(&(map_value(&1, :goal_revision) == current_revision))
-          |> Enum.map(&external_wait_projection/1)
-      },
-      source: :durable_records
+      revision: current_revision_record(revisions, current_revision),
+      work_items: work_items,
+      dependencies: dependencies,
+      outcomes: outcomes,
+      decisions: decisions,
+      tasks: tasks,
+      runs: runs,
+      current_work_items: current_work_items,
+      current_dependencies: current_dependencies,
+      current_outcomes: current_outcomes,
+      current_work_item_ids: current_work_item_ids,
+      current_tasks: current_tasks,
+      current_runs: current_runs,
+      accepted: accepted,
+      current_work_items_by_id: Map.new(current_work_items, &{map_value(&1, :id), &1}),
+      tasks_by_id: Map.new(tasks, &{map_value(&1, :id), &1}),
+      runs_by_id: Map.new(runs, &{map_value(&1, :id), &1}),
+      evidence: evidence,
+      reservations: reservations,
+      usage: usage,
+      runtimes: runtimes,
+      external_waits: external_waits,
+      automatic_admission_blocked_events: automatic_admission_blocked_events,
+      automatic_reconciliation_deferred_events: automatic_reconciliation_deferred_events,
+      task_settled_events: task_settled_events,
+      execution:
+        execution_by_work_item(current_work_items, current_tasks, current_runs, runtimes),
+      graph:
+        graph_projection(current_work_items, current_dependencies, accepted, current_revision)
     }
+
+    %{projection | settled_receipts: current_task_settlements(projection)}
   end
 
   @doc "List compact, ordered Goal audit events without exposing raw payloads."
@@ -530,11 +551,11 @@ defmodule SymmetryControl.Goals.ReadModel do
     }
   end
 
-  defp item_projection(item, current_revision, accepted, execution, graph) do
+  defp item_projection(projection, item) do
     id = map_value(item, :id)
-    receipt = Map.get(accepted, id)
-    item_execution = Map.get(execution, id)
-    node = Enum.find(graph.nodes, &(&1.id == id))
+    receipt = Map.get(projection.accepted, id)
+    item_execution = Map.get(projection.execution, id)
+    node = Enum.find(projection.graph.nodes, &(&1.id == id))
 
     %{
       id: id,
@@ -561,7 +582,7 @@ defmodule SymmetryControl.Goals.ReadModel do
       execution: item_execution,
       blockers: if(node, do: node.blockers, else: [])
     }
-    |> maybe_put(:current_revision, current_revision)
+    |> maybe_put(:current_revision, projection.current_revision)
   end
 
   defp baseline_projection(item) do
@@ -709,100 +730,22 @@ defmodule SymmetryControl.Goals.ReadModel do
     |> Map.new(fn outcome -> {map_value(outcome, :work_item_id), outcome} end)
   end
 
-  defp blockers(
-         goal,
-         revision,
-         work_items,
-         dependencies,
-         outcomes,
-         decisions,
-         tasks,
-         runs,
-         settled_receipts,
-         evidence,
-         reservations,
-         usage,
-         runtimes,
-         external_waits,
-         automatic_admission_blocked_events,
-         automatic_reconciliation_deferred_events,
-         current_revision,
-         accepted,
-         all_tasks,
-         all_runs
-       ) do
+  defp blockers(projection) do
     []
-    |> add_blocker(waiting_decision_blocker(decisions, current_revision))
-    |> add_blocker(
-      waiting_dependency_blocker(work_items, dependencies, accepted, current_revision)
-    )
-    |> add_blocker(
-      automatic_baseline_missing_blocker(
-        revision,
-        work_items,
-        accepted,
-        tasks,
-        current_revision
-      )
-    )
-    |> add_blocker(
-      automatic_baseline_dependency_blocker(
-        revision,
-        work_items,
-        accepted,
-        tasks,
-        current_revision
-      )
-    )
-    |> add_blocker(validation_failed_blocker(outcomes, current_revision, accepted))
-    |> add_blocker(stale_context_blocker(tasks, current_revision))
-    |> add_blocker(runtime_unavailable_blocker(tasks, runs, runtimes, current_revision))
-    |> add_blocker(
-      automatic_admission_blocked_blocker(
-        goal,
-        automatic_admission_blocked_events,
-        tasks,
-        work_items,
-        accepted,
-        current_revision
-      )
-    )
-    |> add_blocker(
-      automatic_reconciliation_deferred_blocker(
-        goal,
-        automatic_reconciliation_deferred_events,
-        current_revision
-      )
-    )
-    |> add_blocker(unsupported_external_check_blocker(external_waits, accepted, current_revision))
-    |> add_blocker(
-      waiting_external_blocker(work_items, settled_receipts, accepted, external_waits)
-    )
-    |> add_blocker(
-      integration_outcome_required_blocker(
-        goal,
-        work_items,
-        accepted,
-        decisions,
-        tasks,
-        current_revision
-      )
-    )
-    |> add_blocker(
-      final_acceptance_readiness_blocker(
-        goal,
-        revision,
-        work_items,
-        dependencies,
-        accepted,
-        decisions,
-        all_tasks,
-        all_runs,
-        evidence,
-        current_revision
-      )
-    )
-    |> add_blocker(budget_blocker(revision, reservations, usage, all_tasks, all_runs))
+    |> add_blocker(waiting_decision_blocker(projection.decisions, projection.current_revision))
+    |> add_blocker(waiting_dependency_blocker(projection))
+    |> add_blocker(automatic_baseline_missing_blocker(projection))
+    |> add_blocker(automatic_baseline_dependency_blocker(projection))
+    |> add_blocker(validation_failed_blocker(projection))
+    |> add_blocker(stale_context_blocker(projection.current_tasks, projection.current_revision))
+    |> add_blocker(runtime_unavailable_blocker(projection))
+    |> add_blocker(automatic_admission_blocked_blocker(projection))
+    |> add_blocker(automatic_reconciliation_deferred_blocker(projection))
+    |> add_blocker(unsupported_external_check_blocker(projection))
+    |> add_blocker(waiting_external_blocker(projection))
+    |> add_blocker(integration_outcome_required_blocker(projection))
+    |> add_blocker(final_acceptance_readiness_blocker(projection))
+    |> add_blocker(budget_blocker(projection))
     |> Enum.sort_by(& &1.reason)
   end
 
@@ -826,18 +769,18 @@ defmodule SymmetryControl.Goals.ReadModel do
     end
   end
 
-  defp waiting_dependency_blocker(work_items, dependencies, accepted, current_revision) do
+  defp waiting_dependency_blocker(projection) do
     required_rows =
-      dependencies
+      projection.current_dependencies
       |> Enum.filter(
         &MapSet.member?(
-          completion_relevant_item_ids(work_items, dependencies),
+          completion_relevant_item_ids(projection),
           map_value(&1, :work_item_id)
         )
       )
-      |> Enum.reject(&Map.has_key?(accepted, map_value(&1, :depends_on_id)))
+      |> Enum.reject(&Map.has_key?(projection.accepted, map_value(&1, :depends_on_id)))
 
-    integration_rows = waiting_integration_dependency_rows(work_items, dependencies, accepted)
+    integration_rows = waiting_integration_dependency_rows(projection)
 
     rows = Enum.uniq_by(required_rows ++ integration_rows, &dependency_key/1)
 
@@ -848,33 +791,27 @@ defmodule SymmetryControl.Goals.ReadModel do
         %{
           work_item_id: map_value(row, :work_item_id),
           depends_on_id: map_value(row, :depends_on_id),
-          revision: current_revision
+          revision: projection.current_revision
         }
       end)
     end
   end
 
-  defp waiting_integration_dependency_rows(work_items, dependencies, accepted) do
-    candidates = accepted_integration_outcomes(accepted, work_items)
+  defp waiting_integration_dependency_rows(projection) do
+    candidates = accepted_integration_outcomes(projection)
 
     if candidates != [] and
          not Enum.any?(candidates, fn candidate ->
-           integration_item_dependencies_satisfied?(
-             work_items,
-             dependencies,
-             accepted,
-             candidate.work_item_id
-           )
+           integration_item_dependencies_satisfied?(projection, candidate.work_item_id)
          end) do
       candidates
       |> Enum.flat_map(fn candidate ->
-        relevant_ids =
-          completion_relevant_item_ids(work_items, dependencies, candidate.work_item_id)
+        relevant_ids = completion_relevant_item_ids(projection, candidate.work_item_id)
 
         Enum.filter(
-          dependencies,
+          projection.current_dependencies,
           &(MapSet.member?(relevant_ids, map_value(&1, :work_item_id)) and
-              not Map.has_key?(accepted, map_value(&1, :depends_on_id)))
+              not Map.has_key?(projection.accepted, map_value(&1, :depends_on_id)))
         )
       end)
       |> Enum.uniq_by(&dependency_key/1)
@@ -887,17 +824,11 @@ defmodule SymmetryControl.Goals.ReadModel do
     {map_value(row, :work_item_id), map_value(row, :depends_on_id)}
   end
 
-  defp automatic_baseline_missing_blocker(
-         revision,
-         work_items,
-         accepted,
-         tasks,
-         current_revision
-       ) do
-    if automatic_execution?(revision) do
+  defp automatic_baseline_missing_blocker(projection) do
+    if automatic_execution?(projection.revision) do
       rows =
-        work_items
-        |> Enum.filter(&unstarted_current_item?(&1, accepted, tasks, current_revision))
+        projection.current_work_items
+        |> Enum.filter(&unstarted_current_item?(projection, &1))
         |> Enum.filter(fn item ->
           is_nil(map_value(item, :baseline_subject)) and
             is_nil(map_value(item, :baseline_dependency_id))
@@ -916,20 +847,14 @@ defmodule SymmetryControl.Goals.ReadModel do
     end
   end
 
-  defp automatic_baseline_dependency_blocker(
-         revision,
-         work_items,
-         accepted,
-         tasks,
-         current_revision
-       ) do
-    if automatic_execution?(revision) do
+  defp automatic_baseline_dependency_blocker(projection) do
+    if automatic_execution?(projection.revision) do
       rows =
-        work_items
-        |> Enum.filter(&unstarted_current_item?(&1, accepted, tasks, current_revision))
+        projection.current_work_items
+        |> Enum.filter(&unstarted_current_item?(projection, &1))
         |> Enum.filter(fn item ->
           dependency_id = map_value(item, :baseline_dependency_id)
-          not is_nil(dependency_id) and not Map.has_key?(accepted, dependency_id)
+          not is_nil(dependency_id) and not Map.has_key?(projection.accepted, dependency_id)
         end)
 
       if rows == [] do
@@ -950,24 +875,24 @@ defmodule SymmetryControl.Goals.ReadModel do
     value(map_value(revision, :execution_policy, %{}), :automatic_execution, false) == true
   end
 
-  defp unstarted_current_item?(item, accepted, tasks, current_revision) do
+  defp unstarted_current_item?(projection, item) do
     item_id = map_value(item, :id)
 
-    not Map.has_key?(accepted, item_id) and
+    not Map.has_key?(projection.accepted, item_id) and
       not Enum.any?(
-        tasks,
+        projection.current_tasks,
         &(map_value(&1, :work_item_id) == item_id and
-            map_value(&1, :goal_revision) == current_revision)
+            map_value(&1, :goal_revision) == projection.current_revision)
       )
   end
 
-  defp validation_failed_blocker(outcomes, current_revision, accepted) do
+  defp validation_failed_blocker(projection) do
     rows =
       Enum.filter(
-        outcomes,
-        &(map_value(&1, :goal_revision) == current_revision and
+        projection.current_outcomes,
+        &(map_value(&1, :goal_revision) == projection.current_revision and
             map_value(&1, :disposition) == "rejected" and
-            not Map.has_key?(accepted, map_value(&1, :work_item_id)))
+            not Map.has_key?(projection.accepted, map_value(&1, :work_item_id)))
       )
 
     if rows == [] do
@@ -1004,18 +929,18 @@ defmodule SymmetryControl.Goals.ReadModel do
     end
   end
 
-  defp runtime_unavailable_blocker(tasks, runs, runtimes, current_revision) do
-    runtimes_by_id = Map.new(runtimes, &{map_value(&1, :id), &1})
+  defp runtime_unavailable_blocker(projection) do
+    runtimes_by_id = Map.new(projection.runtimes, &{map_value(&1, :id), &1})
 
     runs_by_task_generation =
-      Map.new(runs, fn run ->
+      Map.new(projection.current_runs, fn run ->
         {{map_value(run, :task_id), map_value(run, :generation)}, run}
       end)
 
     rows =
-      tasks
+      projection.current_tasks
       |> Enum.filter(fn task ->
-        map_value(task, :goal_revision) == current_revision and
+        map_value(task, :goal_revision) == projection.current_revision and
           map_value(task, :state) in @runtime_bound_states
       end)
       |> Enum.flat_map(fn task ->
@@ -1049,25 +974,11 @@ defmodule SymmetryControl.Goals.ReadModel do
 
   defp current_runtime_run?(_task, _run), do: false
 
-  defp automatic_admission_blocked_blocker(
-         goal,
-         events,
-         tasks,
-         work_items,
-         accepted,
-         current_revision
-       ) do
+  defp automatic_admission_blocked_blocker(projection) do
     rows =
       Enum.filter(
-        events,
-        &automatic_admission_blocked_event_relevant?(
-          &1,
-          goal,
-          tasks,
-          work_items,
-          accepted,
-          current_revision
-        )
+        projection.automatic_admission_blocked_events,
+        &automatic_admission_blocked_event_relevant?(projection, &1)
       )
 
     if rows == [] do
@@ -1089,35 +1000,32 @@ defmodule SymmetryControl.Goals.ReadModel do
     end
   end
 
-  defp automatic_admission_blocked_event_relevant?(
-         event,
-         goal,
-         tasks,
-         work_items,
-         accepted,
-         current_revision
-       ) do
+  defp automatic_admission_blocked_event_relevant?(projection, event) do
     payload = map_value(event, :payload, %{})
     work_item_id = value(payload, :work_item_id)
     admission_key = value(payload, :admission_key)
 
     base? =
-      map_value(goal, :state) not in @terminal_goal_states and
-        map_value(event, :revision) == current_revision and
+      map_value(projection.goal, :state) not in @terminal_goal_states and
+        map_value(event, :revision) == projection.current_revision and
         map_value(event, :kind) == "automatic_admission_blocked"
 
     if is_nil(work_item_id) do
-      base? and Enum.any?(work_items, &(not Map.has_key?(accepted, map_value(&1, :id))))
+      base? and
+        Enum.any?(
+          projection.current_work_items,
+          &(not Map.has_key?(projection.accepted, map_value(&1, :id)))
+        )
     else
       base? and
-        not Map.has_key?(accepted, work_item_id) and
-        not Enum.any?(tasks, fn task ->
+        not Map.has_key?(projection.accepted, work_item_id) and
+        not Enum.any?(projection.current_tasks, fn task ->
           automatic_admission_blocker_replaced?(
             task,
             event,
             work_item_id,
             admission_key,
-            current_revision
+            projection.current_revision
           )
         end)
     end
@@ -1145,12 +1053,13 @@ defmodule SymmetryControl.Goals.ReadModel do
 
   defp inserted_after?(_task_inserted_at, _event_inserted_at), do: false
 
-  defp automatic_reconciliation_deferred_blocker(goal, events, current_revision) do
+  defp automatic_reconciliation_deferred_blocker(projection) do
     event =
-      events
+      projection.automatic_reconciliation_deferred_events
       |> Enum.filter(fn event ->
-        map_value(goal, :state) == "active" and not is_nil(map_value(goal, :next_wake_at)) and
-          map_value(event, :revision) == current_revision and
+        map_value(projection.goal, :state) == "active" and
+          not is_nil(map_value(projection.goal, :next_wake_at)) and
+          map_value(event, :revision) == projection.current_revision and
           map_value(event, :kind) == "automatic_reconciliation_deferred"
       end)
       |> List.last()
@@ -1165,18 +1074,18 @@ defmodule SymmetryControl.Goals.ReadModel do
         %{
           event_id: map_value(event, :id),
           reason: value(response, :reason, value(payload, :reason)),
-          next_wake_at: map_value(goal, :next_wake_at)
+          next_wake_at: map_value(projection.goal, :next_wake_at)
         }
       end)
     end
   end
 
-  defp unsupported_external_check_blocker(external_waits, accepted, current_revision) do
+  defp unsupported_external_check_blocker(projection) do
     rows =
-      Enum.filter(external_waits, fn wait ->
-        map_value(wait, :goal_revision) == current_revision and
+      Enum.filter(projection.external_waits, fn wait ->
+        map_value(wait, :goal_revision) == projection.current_revision and
           map_value(wait, :state) == "unsupported" and
-          not Map.has_key?(accepted, map_value(wait, :work_item_id))
+          not Map.has_key?(projection.accepted, map_value(wait, :work_item_id))
       end)
 
     if rows == [] do
@@ -1198,21 +1107,21 @@ defmodule SymmetryControl.Goals.ReadModel do
     end
   end
 
-  defp waiting_external_blocker(work_items, settled_receipts, accepted, external_waits) do
+  defp waiting_external_blocker(projection) do
     unsupported_work_item_ids =
-      external_waits
+      projection.external_waits
       |> Enum.filter(&(map_value(&1, :state) == "unsupported"))
       |> Enum.map(&map_value(&1, :work_item_id))
       |> MapSet.new()
 
     rows =
-      Enum.filter(work_items, fn item ->
+      Enum.filter(projection.current_work_items, fn item ->
         external_available = map_value(item, :external_available, true)
 
-        not Map.has_key?(accepted, map_value(item, :id)) and
+        not Map.has_key?(projection.accepted, map_value(item, :id)) and
           not MapSet.member?(unsupported_work_item_ids, map_value(item, :id)) and
           (external_available == false or
-             Enum.any?(settled_receipts, fn receipt ->
+             Enum.any?(projection.settled_receipts, fn receipt ->
                receipt.work_item_id == map_value(item, :id) and receipt.settlement == "blocked" and
                  external_blocker?(receipt.blocker)
              end))
@@ -1227,16 +1136,16 @@ defmodule SymmetryControl.Goals.ReadModel do
     end
   end
 
-  defp budget_blocker(revision, reservations, usage, tasks, runs) do
-    policy = map_value(revision, :execution_policy, %{})
+  defp budget_blocker(projection) do
+    policy = map_value(projection.revision, :execution_policy, %{})
     limit = value(policy, :budget_limit_microusd)
     strict? = value(policy, :budget_mode) == "strict"
 
     if is_integer(limit) do
-      usage_summary = effective_usage_summary(usage, tasks, runs)
+      usage_summary = effective_usage_summary(projection)
 
       held =
-        Enum.reduce(reservations, 0, fn reservation, held_total ->
+        Enum.reduce(projection.reservations, 0, fn reservation, held_total ->
           state = map_value(reservation, :state)
           reserved = map_value(reservation, :reserved_microusd, 0) || 0
           if state in ["held", "unknown"], do: held_total + reserved, else: held_total
@@ -1246,7 +1155,7 @@ defmodule SymmetryControl.Goals.ReadModel do
 
       committed =
         spent +
-          Enum.reduce(reservations, 0, fn reservation, total ->
+          Enum.reduce(projection.reservations, 0, fn reservation, total ->
             task_id = map_value(reservation, :task_id)
             state = map_value(reservation, :state)
             reserved = map_value(reservation, :reserved_microusd, 0) || 0
@@ -1259,7 +1168,9 @@ defmodule SymmetryControl.Goals.ReadModel do
             if liability?, do: total + max(reserved - known_for_task, 0), else: total
           end)
 
-      unknown_reservations = Enum.count(reservations, &(map_value(&1, :state) == "unknown"))
+      unknown_reservations =
+        Enum.count(projection.reservations, &(map_value(&1, :state) == "unknown"))
+
       unknown_usage? = usage_summary.unknown_usage_count > 0
 
       if committed >= limit or (strict? and (unknown_reservations > 0 or unknown_usage?)) do
@@ -1281,14 +1192,17 @@ defmodule SymmetryControl.Goals.ReadModel do
     end
   end
 
-  defp effective_usage_summary(usage, tasks, runs) do
-    task_id_by_run = Map.new(runs, &{map_value(&1, :id), map_value(&1, :task_id)})
+  defp effective_usage_summary(projection) do
+    task_id_by_run = Map.new(projection.runs, &{map_value(&1, :id), map_value(&1, :task_id)})
 
     goal_task_ids =
-      tasks |> Enum.filter(&goal_task?/1) |> Enum.map(&map_value(&1, :id)) |> MapSet.new()
+      projection.tasks
+      |> Enum.filter(&goal_task?/1)
+      |> Enum.map(&map_value(&1, :id))
+      |> MapSet.new()
 
     leaves =
-      usage
+      projection.usage
       |> latest_usage()
       |> Enum.flat_map(fn row ->
         with task_id when is_binary(task_id) <- Map.get(task_id_by_run, map_value(row, :run_id)),
@@ -1302,7 +1216,7 @@ defmodule SymmetryControl.Goals.ReadModel do
     leaves_by_run = MapSet.new(leaves, &map_value(&1.row, :run_id))
 
     missing_terminal_task_ids =
-      runs
+      projection.runs
       |> Enum.filter(fn run ->
         task_id = map_value(run, :task_id)
 
@@ -1354,35 +1268,14 @@ defmodule SymmetryControl.Goals.ReadModel do
   # but never directly become completion blockers. Currentness is tied to the
   # WorkItem's latest admitted Task, not event order: a terminal receipt may
   # arrive after a replacement admission is durable.
-  defp current_task_settlements(
-         goal,
-         work_items,
-         outcomes,
-         tasks,
-         runs,
-         events,
-         current_revision
-       ) do
-    if map_value(goal, :state) in @terminal_goal_states do
+  defp current_task_settlements(projection) do
+    if map_value(projection.goal, :state) in @terminal_goal_states do
       []
     else
-      work_items_by_id = Map.new(work_items, &{map_value(&1, :id), &1})
-      tasks_by_id = Map.new(tasks, &{map_value(&1, :id), &1})
-      runs_by_id = Map.new(runs, &{map_value(&1, :id), &1})
-      accepted = accepted_outcomes(outcomes)
-
-      events
+      projection.task_settled_events
       |> Enum.sort_by(fn event -> {map_value(event, :sequence), map_value(event, :id)} end)
       |> Enum.reduce(%{}, fn event, attention ->
-        case current_task_settlement_entry(
-               event,
-               map_value(goal, :id),
-               current_revision,
-               work_items_by_id,
-               tasks_by_id,
-               runs_by_id,
-               accepted
-             ) do
+        case current_task_settlement_entry(projection, event) do
           nil -> attention
           entry -> Map.put_new(attention, {entry.task_id, entry.run_id, entry.generation}, entry)
         end
@@ -1392,19 +1285,19 @@ defmodule SymmetryControl.Goals.ReadModel do
     end
   end
 
-  defp settlement_attention(goal, settled_receipts, decisions, current_revision) do
-    if map_value(goal, :state) in @terminal_goal_states do
+  defp settlement_attention(projection) do
+    if map_value(projection.goal, :state) in @terminal_goal_states do
       []
     else
       open_decision_ids =
-        decisions
+        projection.decisions
         |> Enum.filter(
-          &(&1 |> map_value(:goal_revision) == current_revision and
+          &(&1 |> map_value(:goal_revision) == projection.current_revision and
               map_value(&1, :state) == "open")
         )
         |> MapSet.new(&map_value(&1, :id))
 
-      Enum.filter(settled_receipts, fn receipt ->
+      Enum.filter(projection.settled_receipts, fn receipt ->
         settlement_attention?(
           receipt.settlement,
           receipt.blocker,
@@ -1415,15 +1308,9 @@ defmodule SymmetryControl.Goals.ReadModel do
     end
   end
 
-  defp current_task_settlement_entry(
-         event,
-         goal_id,
-         current_revision,
-         work_items_by_id,
-         tasks_by_id,
-         runs_by_id,
-         accepted
-       ) do
+  defp current_task_settlement_entry(projection, event) do
+    current_revision = projection.current_revision
+    goal_id = map_value(projection.goal, :id)
     payload = map_value(event, :payload)
     response = map_value(event, :response)
 
@@ -1433,8 +1320,8 @@ defmodule SymmetryControl.Goals.ReadModel do
          {:ok, task_id} <- matching_receipt_field(payload, response, :task_id),
          {:ok, run_id} <- matching_receipt_field(payload, response, :run_id),
          {:ok, generation} <- matching_receipt_field(payload, response, :generation),
-         %{} = task <- Map.get(tasks_by_id, task_id),
-         %{} = run <- Map.get(runs_by_id, run_id),
+         %{} = task <- Map.get(projection.tasks_by_id, task_id),
+         %{} = run <- Map.get(projection.runs_by_id, run_id),
          ^goal_id <- map_value(task, :goal_id),
          ^current_revision <- map_value(task, :goal_revision),
          ^generation <- map_value(task, :current_generation),
@@ -1444,17 +1331,7 @@ defmodule SymmetryControl.Goals.ReadModel do
          true <- map_value(task, :state) in @terminal_task_states,
          true <- map_value(run, :state) in @terminal_task_states,
          settlement when is_binary(settlement) <- value(response, :settlement) do
-      task_settlement_entry(
-        event,
-        response,
-        task,
-        run,
-        settlement,
-        current_revision,
-        work_items_by_id,
-        accepted,
-        tasks_by_id
-      )
+      task_settlement_entry(projection, event, response, task, run, settlement)
     else
       _ -> nil
     end
@@ -1472,53 +1349,26 @@ defmodule SymmetryControl.Goals.ReadModel do
 
   defp matching_receipt_field(_payload, _response, _key), do: :error
 
-  defp task_settlement_entry(
-         event,
-         response,
-         task,
-         run,
-         settlement,
-         current_revision,
-         work_items_by_id,
-         accepted,
-         tasks_by_id
-       ) do
+  defp task_settlement_entry(projection, event, response, task, run, settlement) do
     if is_nil(map_value(task, :work_item_id)) do
-      if planning_task?(task, current_revision) and
-           latest_planning_task_id(tasks_by_id, current_revision) == map_value(task, :id) do
-        settlement_entry(event, response, task, run, settlement, current_revision, nil, false)
+      if planning_task?(task, projection.current_revision) and
+           latest_planning_task_id(projection.tasks_by_id, projection.current_revision) ==
+             map_value(task, :id) do
+        settlement_entry(projection, event, response, task, run, settlement, nil, false)
       end
     else
-      work_item_task_settlement_entry(
-        event,
-        response,
-        task,
-        run,
-        settlement,
-        current_revision,
-        work_items_by_id,
-        accepted
-      )
+      work_item_task_settlement_entry(projection, event, response, task, run, settlement)
     end
   end
 
-  defp work_item_task_settlement_entry(
-         event,
-         response,
-         task,
-         run,
-         settlement,
-         current_revision,
-         work_items_by_id,
-         accepted
-       ) do
+  defp work_item_task_settlement_entry(projection, event, response, task, run, settlement) do
     work_item_id = map_value(task, :work_item_id)
     task_id = map_value(task, :id)
 
-    with %{} = item <- Map.get(work_items_by_id, work_item_id),
+    with %{} = item <- Map.get(projection.current_work_items_by_id, work_item_id),
          true <- map_value(item, :orchestration_task_id) == task_id,
-         false <- Map.has_key?(accepted, work_item_id) do
-      settlement_entry(event, response, task, run, settlement, current_revision, item, true)
+         false <- Map.has_key?(projection.accepted, work_item_id) do
+      settlement_entry(projection, event, response, task, run, settlement, item, true)
     else
       _ -> nil
     end
@@ -1534,19 +1384,19 @@ defmodule SymmetryControl.Goals.ReadModel do
   end
 
   defp settlement_entry(
+         projection,
          event,
          response,
          task,
          run,
          settlement,
-         current_revision,
          item,
          work_item?
        ) do
     %{
       event_id: map_value(event, :id),
       event_sequence: map_value(event, :sequence),
-      goal_revision: current_revision,
+      goal_revision: projection.current_revision,
       work_item_id: if(work_item?, do: map_value(task, :work_item_id), else: nil),
       task_id: map_value(task, :id),
       run_id: map_value(run, :id),
@@ -1585,83 +1435,22 @@ defmodule SymmetryControl.Goals.ReadModel do
 
   defp disposition_required_blocker?(_blocker, _open_decision_ids), do: false
 
-  defp final_acceptance_readiness_blocker(
-         goal,
-         revision,
-         work_items,
-         dependencies,
-         accepted,
-         decisions,
-         tasks,
-         runs,
-         evidence,
-         current_revision
-       ) do
-    if final_acceptance_ready?(
-         goal,
-         revision,
-         work_items,
-         dependencies,
-         accepted,
-         decisions,
-         tasks,
-         runs,
-         evidence,
-         current_revision
-       ) do
+  defp final_acceptance_readiness_blocker(projection) do
+    if final_acceptance_ready?(projection) do
       nil
     else
-      completion_readiness_blocker(
-        goal,
-        revision,
-        work_items,
-        dependencies,
-        accepted,
-        decisions,
-        tasks,
-        runs,
-        evidence,
-        current_revision
-      )
+      completion_readiness_blocker(projection)
     end
   end
 
-  defp completion_readiness_blocker(
-         goal,
-         revision,
-         work_items,
-         dependencies,
-         accepted,
-         decisions,
-         tasks,
-         runs,
-         evidence,
-         current_revision
-       ) do
-    authority = final_acceptance_authority(revision)
+  defp completion_readiness_blocker(projection) do
+    authority = final_acceptance_authority(projection.revision)
 
-    candidates =
-      completion_readiness_candidates(
-        goal,
-        work_items,
-        dependencies,
-        accepted,
-        decisions,
-        tasks,
-        current_revision
-      )
+    candidates = completion_readiness_candidates(projection)
 
     candidates_with_unmet_predicates =
       Enum.map(candidates, fn candidate ->
-        {candidate,
-         unmet_required_goal_evidence_predicates(
-           map_value(revision, :acceptance_contract, %{}),
-           candidate.subject_hash,
-           evidence,
-           tasks,
-           runs,
-           current_revision
-         )}
+        {candidate, unmet_required_goal_evidence_predicates(projection, candidate.subject_hash)}
       end)
 
     case authority do
@@ -1675,48 +1464,35 @@ defmodule SymmetryControl.Goals.ReadModel do
     end
   end
 
-  defp completion_readiness_candidates(
-         goal,
-         work_items,
-         dependencies,
-         accepted,
-         decisions,
-         tasks,
-         current_revision
-       ) do
-    if completion_readiness_gate?(goal, work_items, accepted, decisions, tasks, current_revision) do
-      accepted_integration_outcomes(accepted, work_items)
+  defp completion_readiness_candidates(projection) do
+    # This gate sees every loaded task, matching the readiness blocker's
+    # unfiltered view of the goal; the integration blocker below gates on the
+    # current-revision tasks instead.
+    if completion_readiness_gate?(projection, projection.tasks) do
+      accepted_integration_outcomes(projection)
       |> Enum.filter(fn candidate ->
         valid_digest?(candidate.subject_hash) and
-          integration_item_dependencies_satisfied?(
-            work_items,
-            dependencies,
-            accepted,
-            candidate.work_item_id
-          )
+          integration_item_dependencies_satisfied?(projection, candidate.work_item_id)
       end)
     else
       []
     end
   end
 
-  defp integration_outcome_required_blocker(
-         goal,
-         work_items,
-         accepted,
-         decisions,
-         tasks,
-         current_revision
-       ) do
-    integration_item_ids = effective_integration_item_ids(work_items)
+  defp integration_outcome_required_blocker(projection) do
+    integration_item_ids = effective_integration_item_ids(projection.current_work_items)
 
-    if completion_readiness_gate?(goal, work_items, accepted, decisions, tasks, current_revision) and
-         accepted_integration_outcomes(accepted, work_items) == [] do
+    if completion_readiness_gate?(projection, projection.current_tasks) and
+         accepted_integration_outcomes(projection) == [] do
       %{
         reason: "integration_outcome_required",
         count: max(length(integration_item_ids), 1),
         ids: integration_item_ids,
-        details: integration_outcome_required_details(work_items, integration_item_ids)
+        details:
+          integration_outcome_required_details(
+            projection.current_work_items,
+            integration_item_ids
+          )
       }
     end
   end
@@ -1742,15 +1518,16 @@ defmodule SymmetryControl.Goals.ReadModel do
     end)
   end
 
-  defp completion_readiness_gate?(goal, work_items, accepted, decisions, tasks, current_revision) do
-    required_items = Enum.filter(work_items, &map_value(&1, :required, true))
+  defp completion_readiness_gate?(projection, tasks) do
+    required_items = Enum.filter(projection.current_work_items, &map_value(&1, :required, true))
 
-    map_value(goal, :state) in ["active", "paused"] and
-      Enum.all?(required_items, &Map.has_key?(accepted, map_value(&1, :id))) and
+    map_value(projection.goal, :state) in ["active", "paused"] and
+      Enum.all?(required_items, &Map.has_key?(projection.accepted, map_value(&1, :id))) and
       not Enum.any?(tasks, &(map_value(&1, :state) in @nonterminal_task_states)) and
       not Enum.any?(
-        decisions,
-        &(map_value(&1, :goal_revision) == current_revision and map_value(&1, :state) == "open")
+        projection.decisions,
+        &(map_value(&1, :goal_revision) == projection.current_revision and
+            map_value(&1, :state) == "open")
       )
   end
 
@@ -1774,117 +1551,78 @@ defmodule SymmetryControl.Goals.ReadModel do
     }
   end
 
-  defp completion_projection(
-         goal,
-         revision,
-         work_items,
-         dependencies,
-         outcomes,
-         decisions,
-         tasks,
-         runs,
-         evidence,
-         current_revision,
-         accepted,
-         _blockers
-       ) do
-    required_items = Enum.filter(work_items, &map_value(&1, :required, true))
-    accepted_required = Enum.count(required_items, &Map.has_key?(accepted, map_value(&1, :id)))
+  defp completion_projection(projection) do
+    required_items = Enum.filter(projection.current_work_items, &map_value(&1, :required, true))
 
-    nonterminal_tasks = Enum.filter(tasks, &(map_value(&1, :state) in @nonterminal_task_states))
+    accepted_required =
+      Enum.count(required_items, &Map.has_key?(projection.accepted, map_value(&1, :id)))
 
-    final_acceptance_ready? =
-      final_acceptance_ready?(
-        goal,
-        revision,
-        work_items,
-        dependencies,
-        accepted,
-        decisions,
-        tasks,
-        runs,
-        evidence,
-        current_revision
-      )
+    # Unfiltered on purpose, as before the projection: any nonterminal task of
+    # any revision keeps `no_nonterminal_tasks?` false.
+    nonterminal_tasks =
+      Enum.filter(projection.tasks, &(map_value(&1, :state) in @nonterminal_task_states))
+
+    final_acceptance_ready? = final_acceptance_ready?(projection)
 
     %{
-      current_revision?: current_revision == map_value(revision, :revision),
+      current_revision?: projection.current_revision == map_value(projection.revision, :revision),
       required_items: length(required_items),
       accepted_required_items: accepted_required,
       all_required_accepted?: accepted_required == length(required_items),
       no_open_decisions?:
         not Enum.any?(
-          decisions,
-          &(map_value(&1, :goal_revision) == current_revision and map_value(&1, :state) == "open")
+          projection.decisions,
+          &(map_value(&1, :goal_revision) == projection.current_revision and
+              map_value(&1, :state) == "open")
         ),
       no_nonterminal_tasks?: nonterminal_tasks == [],
       # Blockers remain visible, but optional rejected/unsupported work and
       # budget history must not hide an action that the authoritative
       # completion predicate would accept.
       ready?:
-        map_value(goal, :state) in ["active", "paused"] and
+        map_value(projection.goal, :state) in ["active", "paused"] and
           accepted_required == length(required_items) and
           not Enum.any?(
-            decisions,
-            &(map_value(&1, :goal_revision) == current_revision and
+            projection.decisions,
+            &(map_value(&1, :goal_revision) == projection.current_revision and
                 map_value(&1, :state) == "open")
           ) and
           nonterminal_tasks == [] and
           final_acceptance_ready?,
-      accepted_outcomes: map_size(accepted),
+      accepted_outcomes: map_size(projection.accepted),
       rejected_outcomes:
         Enum.count(
-          outcomes,
-          &(map_value(&1, :goal_revision) == current_revision and
+          projection.current_outcomes,
+          &(map_value(&1, :goal_revision) == projection.current_revision and
               map_value(&1, :disposition) == "rejected")
         )
     }
   end
 
-  defp final_acceptance_ready?(
-         goal,
-         revision,
-         work_items,
-         dependencies,
-         accepted,
-         decisions,
-         tasks,
-         runs,
-         evidence,
-         current_revision
-       ) do
-    case final_acceptance_authority(revision) do
+  defp final_acceptance_ready?(projection) do
+    case final_acceptance_authority(projection.revision) do
       authority when authority in [:operator, :deterministic] ->
         candidate_subjects =
           case authority do
             :operator ->
               rejected_subjects =
-                MapSet.new(rejected_completion_subjects(goal, decisions, current_revision))
+                MapSet.new(rejected_completion_subjects(projection))
 
-              accepted_integration_outcomes(accepted, work_items)
+              accepted_integration_outcomes(projection)
               |> Enum.map(&map_value(&1, :subject_hash))
               |> Enum.reject(&MapSet.member?(rejected_subjects, &1))
 
             :deterministic ->
-              accepted |> Map.values() |> Enum.map(&map_value(&1, :subject_hash))
+              projection.accepted |> Map.values() |> Enum.map(&map_value(&1, :subject_hash))
           end
 
         Enum.any?(candidate_subjects, fn subject_hash ->
           valid_digest?(subject_hash) and
-            integration_candidate_dependencies_satisfied?(
-              work_items,
-              dependencies,
-              accepted,
-              subject_hash
-            ) and
+            integration_candidate_dependencies_satisfied?(projection, subject_hash) and
             required_goal_predicates_satisfied?(
-              map_value(revision, :acceptance_contract, %{}),
+              projection,
               Atom.to_string(authority),
-              subject_hash,
-              evidence,
-              tasks,
-              runs,
-              current_revision
+              subject_hash
             )
         end)
 
@@ -1904,38 +1642,21 @@ defmodule SymmetryControl.Goals.ReadModel do
     end
   end
 
-  defp integration_candidate_dependencies_satisfied?(
-         work_items,
-         dependencies,
-         accepted,
-         subject_hash
-       )
+  defp integration_candidate_dependencies_satisfied?(projection, subject_hash)
        when is_binary(subject_hash) do
-    accepted_integration_outcomes(accepted, work_items)
+    accepted_integration_outcomes(projection)
     |> Enum.filter(&(&1.subject_hash == subject_hash))
-    |> Enum.any?(
-      &integration_item_dependencies_satisfied?(
-        work_items,
-        dependencies,
-        accepted,
-        &1.work_item_id
-      )
-    )
+    |> Enum.any?(&integration_item_dependencies_satisfied?(projection, &1.work_item_id))
   end
 
-  defp integration_item_dependencies_satisfied?(
-         work_items,
-         dependencies,
-         accepted,
-         integration_work_item_id
-       ) do
-    completion_relevant_item_ids(work_items, dependencies, integration_work_item_id)
-    |> dependencies_satisfied?(dependencies, accepted)
+  defp integration_item_dependencies_satisfied?(projection, integration_work_item_id) do
+    relevant_ids = completion_relevant_item_ids(projection, integration_work_item_id)
+    dependencies_satisfied?(projection, relevant_ids)
   end
 
-  defp completion_relevant_item_ids(work_items, dependencies, integration_work_item_id \\ nil) do
+  defp completion_relevant_item_ids(projection, integration_work_item_id \\ nil) do
     root_ids =
-      work_items
+      projection.current_work_items
       |> Enum.filter(&map_value(&1, :required, true))
       |> Enum.map(&map_value(&1, :id))
       |> MapSet.new()
@@ -1948,15 +1669,19 @@ defmodule SymmetryControl.Goals.ReadModel do
       end
 
     dependency_ids_by_item =
-      Enum.group_by(dependencies, &map_value(&1, :work_item_id), &map_value(&1, :depends_on_id))
+      Enum.group_by(
+        projection.current_dependencies,
+        &map_value(&1, :work_item_id),
+        &map_value(&1, :depends_on_id)
+      )
 
     dependency_closure(root_ids, dependency_ids_by_item)
   end
 
-  defp dependencies_satisfied?(relevant_ids, dependencies, accepted) do
-    Enum.all?(dependencies, fn dependency ->
+  defp dependencies_satisfied?(projection, relevant_ids) do
+    Enum.all?(projection.current_dependencies, fn dependency ->
       not MapSet.member?(relevant_ids, map_value(dependency, :work_item_id)) or
-        Map.has_key?(accepted, map_value(dependency, :depends_on_id))
+        Map.has_key?(projection.accepted, map_value(dependency, :depends_on_id))
     end)
   end
 
@@ -1977,28 +1702,32 @@ defmodule SymmetryControl.Goals.ReadModel do
   # A resolved completion Decision that rejected the exact current
   # goal/revision/Subject keeps that Subject out of the operator acceptance
   # surface.
-  defp rejected_completion_subjects(goal, decisions, current_revision) do
-    goal_id = map_value(goal, :id)
+  defp rejected_completion_subjects(projection) do
+    goal_id = map_value(projection.goal, :id)
 
-    decisions
+    projection.decisions
     |> Enum.filter(fn decision ->
       subject_hash = map_value(decision, :subject_hash)
 
-      map_value(decision, :goal_revision) == current_revision and
+      map_value(decision, :goal_revision) == projection.current_revision and
         map_value(decision, :kind) == "completion" and is_nil(map_value(decision, :work_item_id)) and
         map_value(decision, :state) == "resolved" and valid_digest?(subject_hash) and
         value(map_value(decision, :resolution, %{}), "option_id") == "reject" and
         map_value(decision, :action_hash) ==
-          ContractValidation.completion_action_hash(goal_id, current_revision, subject_hash)
+          ContractValidation.completion_action_hash(
+            goal_id,
+            projection.current_revision,
+            subject_hash
+          )
     end)
     |> Enum.map(&map_value(&1, :subject_hash))
   end
 
-  defp accepted_integration_outcomes(accepted, work_items) do
-    work_items
+  defp accepted_integration_outcomes(projection) do
+    projection.current_work_items
     |> effective_integration_item_ids()
     |> Enum.flat_map(fn work_item_id ->
-      case Map.get(accepted, work_item_id) do
+      case Map.get(projection.accepted, work_item_id) do
         outcome when is_map(outcome) ->
           [%{work_item_id: work_item_id, subject_hash: map_value(outcome, :subject_hash)}]
 
@@ -2029,26 +1758,12 @@ defmodule SymmetryControl.Goals.ReadModel do
     |> Enum.map(&map_value(&1, :id))
   end
 
-  defp required_goal_predicates_satisfied?(
-         acceptance_contract,
-         final_acceptance,
-         subject_hash,
-         evidence,
-         tasks,
-         runs,
-         current_revision
-       ) do
+  defp required_goal_predicates_satisfied?(projection, final_acceptance, subject_hash) do
+    acceptance_contract = map_value(projection.revision, :acceptance_contract, %{})
     predicates = value(acceptance_contract, :predicates, [])
 
     predicates != [] and
-      unmet_required_goal_evidence_predicates(
-        acceptance_contract,
-        subject_hash,
-        evidence,
-        tasks,
-        runs,
-        current_revision
-      ) == [] and
+      unmet_required_goal_evidence_predicates(projection, subject_hash) == [] and
       Enum.all?(predicates, fn predicate ->
         case value(predicate, :kind) do
           "operator_acceptance" ->
@@ -2060,17 +1775,11 @@ defmodule SymmetryControl.Goals.ReadModel do
       end)
   end
 
-  defp unmet_required_goal_evidence_predicates(
-         acceptance_contract,
-         subject_hash,
-         evidence,
-         tasks,
-         runs,
-         current_revision
-       ) do
-    eligible_evidence = eligible_goal_evidence(evidence, tasks, runs, current_revision)
+  defp unmet_required_goal_evidence_predicates(projection, subject_hash) do
+    eligible_evidence = eligible_goal_evidence(projection)
 
-    acceptance_contract
+    projection.revision
+    |> map_value(:acceptance_contract, %{})
     |> value(:predicates, [])
     |> Enum.reject(fn predicate ->
       case value(predicate, :kind) do
@@ -2091,16 +1800,13 @@ defmodule SymmetryControl.Goals.ReadModel do
     end)
   end
 
-  defp eligible_goal_evidence(evidence, tasks, runs, current_revision) do
-    task_by_id = Map.new(tasks, &{map_value(&1, :id), &1})
-    run_by_id = Map.new(runs, &{map_value(&1, :id), &1})
-
-    Enum.filter(evidence, fn row ->
-      run = Map.get(run_by_id, map_value(row, :run_id))
-      task = run && Map.get(task_by_id, map_value(run, :task_id))
+  defp eligible_goal_evidence(projection) do
+    Enum.filter(projection.evidence, fn row ->
+      run = Map.get(projection.runs_by_id, map_value(row, :run_id))
+      task = run && Map.get(projection.tasks_by_id, map_value(run, :task_id))
 
       is_map(task) and map_value(task, :purpose) == "validate" and
-        map_value(task, :goal_revision) == current_revision and
+        map_value(task, :goal_revision) == projection.current_revision and
         map_value(task, :state) == "completed" and
         map_value(run, :state) == "completed" and
         map_value(run, :generation) == map_value(task, :current_generation) and
@@ -2155,23 +1861,15 @@ defmodule SymmetryControl.Goals.ReadModel do
 
   defp valid_digest?(value), do: is_binary(value) and byte_size(value) == 32
 
-  defp allowed_actions(
-         "draft",
-         _completion,
-         work_items,
-         tasks,
-         decisions,
-         current_revision,
-         task_settled_events
-       ) do
+  defp allowed_actions("draft", projection, _completion) do
     actions = ["amend", "cancel"]
 
     cond do
-      work_items != [] ->
+      projection.current_work_items != [] ->
         ["activate" | actions]
 
-      not pending_planning_task?(tasks, task_settled_events, current_revision) and
-          not plan_decision_pending_acceptance?(decisions, current_revision) ->
+      not pending_planning_task?(projection) and
+          not plan_decision_pending_acceptance?(projection) ->
         ["request_plan" | actions]
 
       true ->
@@ -2179,42 +1877,19 @@ defmodule SymmetryControl.Goals.ReadModel do
     end
   end
 
-  defp allowed_actions(
-         "active",
-         completion,
-         _work_items,
-         _tasks,
-         _decisions,
-         _current_revision,
-         _receipts
-       ),
-       do: maybe_achieve(["pause", "amend", "cancel"], completion)
+  defp allowed_actions("active", _projection, completion),
+    do: maybe_achieve(["pause", "amend", "cancel"], completion)
 
-  defp allowed_actions(
-         "paused",
-         completion,
-         _work_items,
-         _tasks,
-         _decisions,
-         _current_revision,
-         _receipts
-       ),
-       do: maybe_achieve(["resume", "amend", "cancel"], completion)
+  defp allowed_actions("paused", _projection, completion),
+    do: maybe_achieve(["resume", "amend", "cancel"], completion)
 
-  defp allowed_actions(
-         _state,
-         _completion,
-         _work_items,
-         _tasks,
-         _decisions,
-         _current_revision,
-         _receipts
-       ),
-       do: []
+  defp allowed_actions(_state, _projection, _completion), do: []
 
-  defp pending_planning_task?(tasks, task_settled_events, current_revision) do
+  defp pending_planning_task?(projection) do
+    current_revision = projection.current_revision
+
     settled_task_ids =
-      task_settled_events
+      projection.task_settled_events
       |> Enum.reduce(MapSet.new(), fn event, settled ->
         with "task_settled" <- map_value(event, :kind),
              ^current_revision <- map_value(event, :revision),
@@ -2224,7 +1899,8 @@ defmodule SymmetryControl.Goals.ReadModel do
                  map_value(event, :response),
                  :task_id
                ),
-             %{} = task <- Enum.find(tasks, &(map_value(&1, :id) == task_id)),
+             %{} = task <-
+               Enum.find(projection.current_tasks, &(map_value(&1, :id) == task_id)),
              true <- planning_task?(task, current_revision) do
           MapSet.put(settled, task_id)
         else
@@ -2232,16 +1908,16 @@ defmodule SymmetryControl.Goals.ReadModel do
         end
       end)
 
-    Enum.any?(tasks, fn task ->
+    Enum.any?(projection.current_tasks, fn task ->
       planning_task?(task, current_revision) and
         (map_value(task, :state) in @nonterminal_task_states or
            not MapSet.member?(settled_task_ids, map_value(task, :id)))
     end)
   end
 
-  defp plan_decision_pending_acceptance?(decisions, current_revision) do
-    Enum.any?(decisions, fn decision ->
-      map_value(decision, :goal_revision) == current_revision and
+  defp plan_decision_pending_acceptance?(projection) do
+    Enum.any?(projection.decisions, fn decision ->
+      map_value(decision, :goal_revision) == projection.current_revision and
         map_value(decision, :kind) == "plan" and
         (map_value(decision, :state) == "open" or
            (map_value(decision, :state) == "resolved" and
@@ -2536,21 +2212,23 @@ defmodule SymmetryControl.Goals.ReadModel do
 
   defp same_uuid?(_left, _right), do: false
 
-  defp accounting_projection(reservations, usage, tasks, runs) do
-    usage_summary = effective_usage_summary(usage, tasks, runs)
+  defp accounting_projection(projection) do
+    usage_summary = effective_usage_summary(projection)
 
     %{
       held_microusd:
-        reservations
+        projection.reservations
         |> Enum.filter(&(map_value(&1, :state) == "held"))
         |> Enum.map(&map_value(&1, :reserved_microusd, 0))
         |> Enum.sum()
         |> microusd_wire_value(),
-      unknown_reservation_count: Enum.count(reservations, &(map_value(&1, :state) == "unknown")),
-      settled_reservation_count: Enum.count(reservations, &(map_value(&1, :state) == "settled")),
+      unknown_reservation_count:
+        Enum.count(projection.reservations, &(map_value(&1, :state) == "unknown")),
+      settled_reservation_count:
+        Enum.count(projection.reservations, &(map_value(&1, :state) == "settled")),
       released_reservation_count:
-        Enum.count(reservations, &(map_value(&1, :state) == "released")),
-      usage_records: length(usage),
+        Enum.count(projection.reservations, &(map_value(&1, :state) == "released")),
+      usage_records: length(projection.usage),
       usage_leaf_count: usage_summary.usage_leaf_count,
       known_usage_cost_microusd: microusd_wire_value(usage_summary.known_cost_microusd),
       usage_cost_microusd:
