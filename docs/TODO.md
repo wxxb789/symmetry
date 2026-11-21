@@ -566,8 +566,8 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       `:1174-1184`), every v2 removal receipt must carry such a proof
       (`StopReceipt.ValidForHandoff`, `authority.go:1822-1833`), and the platform constructs it
       (`daemon/internal/platform/anchor_run.go:1531`; validated at
-      `daemon/internal/execution/linux_owner_v2_linux.go:1338` and sealed into the mirror proof
-      at `:1360`); `authority.go:2027` also accepts a non-nil `LauncherExit.HelperExit`.
+      `daemon/internal/execution/linux_owner_v2_linux.go:1351` and sealed into the mirror proof
+      at `:1373`); `authority.go:2027` also accepts a non-nil `LauncherExit.HelperExit`.
       `cloneLinuxOwnerHelperV2StopEvidence` (`helper_v2_stop.go:1540-1573`) instead drops every
       nested exit it copies through `cloneLinuxOwnerAnchorExitProof`
       (`anchor_server.go:44-49` nils `HelperExit`): `Proof.LauncherExit.HelperExit`,
@@ -848,8 +848,8 @@ instead of appended.
       process's pipe, so the goroutine outlives the call, belongs to no WaitGroup, and contradicts
       `daemon/AGENTS.md` ("Every goroutine has an owner and exit path"). Found by the 2026-11-21
       daemon audit (finding F15). Fix direction: prefer the context-aware write path the runner
-      already implements -- `internal/execution/runner.go:1380` `WriteInputContext` closes the stdin
-      write end when its context is cancelled (`:1410-1414`) -- which `internal/app` cannot reach
+      already implements -- `internal/execution/runner.go:1400` `WriteInputContext` closes the stdin
+      write end when its context is cancelled (`:1430-1434`) -- which `internal/app` cannot reach
       today only because its `Process` interface (`app.go:232-233`) declares `WriteInput([]byte)
       error` alone; otherwise close the pipe's write end on timeout (the runner owns the pipe), or
       track the goroutine in `daemon.workers` with a documented bound and assert its exit at
@@ -1094,11 +1094,11 @@ instead of appended.
       untested (2026-11-21, branch `refactor/rf-w4-03-runner-decomposition`; plan
       `docs/plans/2026-11-21-rf-w4-03-runner-decomposition-plan.md`). Two mutants on a scratch
       copy over `./internal/execution/` stayed green under WSL: flipping the `closeOwnerOnce(false)`
-      argument in `closeContainmentOwnerLocked` (`daemon/internal/execution/runner.go:2393`) to
+      argument in `closeContainmentOwnerLocked` (`daemon/internal/execution/runner.go:2413`) to
       `true` — no test distinguishes the flag, and the pending-handoff owner does not implement
       `containmentUnprovenCallbackSetter`, so a future edit could flip it silently — and swapping
       the `containmentAuthorityUncertain` / `containmentAuthority != nil` guards in
-      `persistReceiptOrAbort` (`:2143`, `:2146`), whose check order is the base order
+      `persistReceiptOrAbort` (`:2163`, `:2166`), whose check order is the base order
       (pre-existing gap: base had the same untested order). Behaviour is correct at HEAD; this is
       test coverage only, no code change. Found by the opus round-1 review of PR #193. Owner:
       W4-12/W4-13 test work.
