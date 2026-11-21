@@ -3,7 +3,7 @@
 Contract: the GDD goal contract `goal-rf-w5-09-platform-dead-helpers.md` (2026-11-21) with its
 binding conductor decisions of the same date (frozen surfaces, D2 report-only LOC delta,
 ordering, the lesson-32 control-flow audit, the W5 review reconcile). Baseline for every
-coordinate: `origin/main` at `fc8e95a24ccace6646e7da099bc03e110c87ae17` (this worktree's HEAD;
+coordinate: `origin/main` at `fc8e95a24ccace6646e7da099bc03e110c87ae17` (measured at dispatch; `daemon/internal/platform` is unchanged from there to the landing base `d324f601`;
 `#160`/`3ccc62f5` is in history, so the dispatch dependency is satisfied). Branch:
 `refactor/rf-w5-09-platform-dead-helpers`. Area: `daemon/internal/platform`.
 
