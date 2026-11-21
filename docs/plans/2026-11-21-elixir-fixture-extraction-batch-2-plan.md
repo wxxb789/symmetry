@@ -198,7 +198,7 @@ All foreground, serially; never a suite next to a measurement harness. Portable-
    frontend bundle is not staged, the documented host path).
 6. `git diff --check`; `python3 scripts/ci/check-citation-existence.py --base <merge-base> --head <tree>`
    (a `git stash create` revision of the worktree so the uncommitted closure is visible);
-   `git diff origin/main...HEAD | grep -i "users/"` empty (program rule).
+   the branch diff (`git diff origin/main...HEAD`) contains no user-profile path prefix (program rule).
 
 CI-only oracles (not runnable on this host): the control job's format + warnings-as-errors + full
 suite + provider-broker e2e + goal-receipt e2e steps.
@@ -345,5 +345,5 @@ unaffected by this change and covered by the CI control job).
 | full suite | `mix test --exclude portal_assets` | 976 passed, 21 skipped, 4 excluded, 0 failed, exit 0 |
 | mutation | flip `enabled: true` → `false` in `TestFixtures.validation_profiles/0`, run `task_goal_guard_controller_test.exs` | red: `{:error, :invalid_validation_profile}`, 1/2 passed, exit 2; restored byte-identically (`sha256:171c5cce4c2b89a1ff1752974cea19a45ac82474e8687f350fa371feb98ac3db`) and green again (2 passed, exit 0) |
 | test names | static declaration set (`test "..."` heads) HEAD vs converted tree; runtime `(module, name)` sets of both full runs | 936 literal declarations identical (every loop-generated name sits in untouched generator code); runtime sets identical: 1001 names each, 0 missing, 0 added, same 21 skipped / 4 excluded. The 7 state differences are baseline-side host load: one 100 ms mailbox window in the pre-change `integrations_test.exs` run and six `goal_0006_migration_test.exs` cases that hit a 4000 ms `DBConnection` queue drop — all seven pass on the converted tree, and migrations are outside this change. |
-| diff hygiene | `git diff --check`; `git diff | grep -ci users/` | exit 0; 0 matches |
+| diff hygiene | `git diff --check`; branch-diff scan for a user-profile path prefix | exit 0; 0 matches |
 | citation gate | `python3 scripts/ci/check-citation-existence.py --base a503eab7 --head <worktree snapshot>` | exit 0 (after repointing the archived item's bindings; the first run refused one stale symbol binding, recorded in the answer) |

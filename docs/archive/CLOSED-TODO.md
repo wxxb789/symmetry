@@ -3684,7 +3684,7 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
       (`sha256:e8aa33abce63b1b706983c5f9f1fce6862b023f5d17e0f29507ef57569c089e4`) and every moved
       body is byte-identical to its source copy (per-function sha256 in
       `docs/plans/2026-11-21-elixir-fixture-extraction-batch-2-plan.md`); no test name changed.
-      Gates on the final tree (portable Elixir 1.20.4 / OTP 29.0.6, `MIX_TEST_PARTITION=rf-w3-03`,
+      Gates on the implementation revision `0f97a3e9` (portable Elixir 1.20.4 / OTP 29.0.6, `MIX_TEST_PARTITION=rf-w3-03`,
       local PostgreSQL, `--exclude portal_assets` because this host has no staged frontend bundle):
       `mix format --check-formatted` exit 0; `MIX_ENV=test mix compile --warnings-as-errors` exit 0;
       the web controller directory 275 passed, 1 skipped, 4 excluded, exit 0; the two e2e files
@@ -3699,3 +3699,9 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
       `control/test/symmetry_control_web/controllers/task_goal_guard_controller_test.exs`
       (`{:error, :invalid_validation_profile}`, 1/2 passed), restored byte-identically
       (`sha256:171c5cce4c2b89a1ff1752974cea19a45ac82474e8687f350fa371feb98ac3db`) and green again.
+
+      Revision note: the full suite and the `(module, name)` comparison above were measured on the
+      implementation revision `0f97a3e9`; the `origin/main` merge and the 3-file apply delta — the
+      shipping revision `42fe4f85` — were re-verified with format/compile/targeted/web/e2e runs
+      with the same counts, and the full suite on `42fe4f85` remains with the conductor
+      gate-runner.
