@@ -73,7 +73,9 @@ def check_record(payload: bytes) -> tuple[str, str]:
     """
     completed = subprocess.run(
         [sys.executable, str(SANITIZE_TOOL), "--check", "--root-only", "-"],
-        input=payload, capture_output=True, check=False,
+        input=payload,
+        capture_output=True,
+        check=False,
     )
     detail = (completed.stderr + completed.stdout).decode("utf-8", "replace").strip()
     if completed.returncode == 0:
@@ -85,12 +87,15 @@ def check_record(payload: bytes) -> tuple[str, str]:
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
-        description="Run the record sanitize tool's root-only check over records a revision adds or "
-                    "modifies.",
+        description="Run the record sanitize tool's root-only check over records a revision adds or modifies.",
     )
     parser.add_argument("--repo", default=".", metavar="PATH", help="repository path (default: .)")
-    parser.add_argument("--base", default=None, metavar="COMMIT",
-                        help="comparison base; empty or all-zero falls back to origin/main, then HEAD^")
+    parser.add_argument(
+        "--base",
+        default=None,
+        metavar="COMMIT",
+        help="comparison base; empty or all-zero falls back to origin/main, then HEAD^",
+    )
     parser.add_argument("--head", default="HEAD", metavar="COMMIT", help="head revision (default: HEAD)")
     arguments = parser.parse_args(argv)
 
@@ -126,7 +131,10 @@ def main(argv: list[str]) -> int:
         print(f"check-record-cleanliness refused: {refusal}", file=sys.stderr)
         return 2
     if not records:
-        print(f"check-record-cleanliness: no record added or modified between {base[:12]} and {head[:12]}; nothing to check")
+        print(
+            f"check-record-cleanliness: no record added or modified between {base[:12]} and {head[:12]}; "
+            "nothing to check"
+        )
         return 0
     dirty: list[tuple[str, str]] = []
     unreadable: list[tuple[str, str]] = []
