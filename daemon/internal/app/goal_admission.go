@@ -1100,8 +1100,8 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 		return fmt.Errorf("attach native Goal session: %w", errors.Join(err, abandonErr))
 	}
 	if receipt == nil {
-		abandonErr := daemon.abandonGoalSession(sessionKey, session, attached, errors.New("native Goal session attach receipt is unavailable"))
-		return errors.Join(errors.New("native Goal session attach receipt is unavailable"), abandonErr)
+		cause := errors.New("native Goal session attach receipt is unavailable")
+		return errors.Join(cause, daemon.abandonGoalSession(sessionKey, session, attached, cause))
 	}
 	requestContext, cancel := daemon.controlContext(operationContext)
 	canonical, err := goalAPI.FetchRunContext(requestContext, key.RunID, runJournal.Fence())

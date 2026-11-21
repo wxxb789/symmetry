@@ -31,8 +31,8 @@ reconciled at `a1142d4e`):
 
 | file | status | change |
 |---|---|---|
-| `daemon/internal/app/goal_admission.go` | edited | 9 statements gain `abandonErr :=`; the 9 following returns fold it in with `errors.Join`. Nothing else in the file moves. |
-| `daemon/internal/app/terminate_linux.go` | edited | line 50: `defer process.Release()` → stated-reason `defer func() { _ = process.Release() }()` |
+| `daemon/internal/app/goal_admission.go` | edited | The 9 abandon calls are error-checked and folded into their returns with `errors.Join`: 8 capture into `abandonErr`; at `:1103` the shared literal is bound once as `cause` and used as both the call's cause and the joined primary. Nothing else in the file moves. |
+| `daemon/internal/app/terminate_linux.go` | edited | `defer process.Release()` (pre-change `:50`) → stated-reason comment at `:50-51` + `defer func() { _ = process.Release() }()` at `:52` |
 | `daemon/internal/app/abandon_error_join_test.go` | new | one test `TestAbandonGoalSessionErrorJoinsIntoAdmissionReturn` driving site `:1088` with a fault inside the abandon path |
 | `docs/plans/2026-11-22-rf-w3-09-errcheck-app-plan.md` | new | this plan |
 | `docs/evidence/rf-w3-09-errcheck-app-2026-11-22.md` | new | evidence record (commands, raw output, mutants) |
@@ -49,7 +49,7 @@ only the join term. "prefix" below means the byte-identical leading text of `err
 |---|---|---|
 | 1088 | `fmt.Errorf("load native run fence: %w", err)` | `fmt.Errorf("load native run fence: %w", errors.Join(err, abandonErr))` |
 | 1099 | `fmt.Errorf("attach native Goal session: %w", err)` | `fmt.Errorf("attach native Goal session: %w", errors.Join(err, abandonErr))` |
-| 1103 | `errors.New("native Goal session attach receipt is unavailable")` | `errors.Join(errors.New("native Goal session attach receipt is unavailable"), abandonErr)` |
+| 1103 | `errors.New("native Goal session attach receipt is unavailable")` | `errors.Join(cause, daemon.abandonGoalSession(sessionKey, session, attached, cause))` |
 | 1113 | `fmt.Errorf("fetch Goal run context: %w", err)` | `fmt.Errorf("fetch Goal run context: %w", errors.Join(err, abandonErr))` |
 | 1117 | `err` | `errors.Join(err, abandonErr)` |
 | 1122 | `fmt.Errorf("encode canonical Goal context: %w", err)` | `fmt.Errorf("encode canonical Goal context: %w", errors.Join(err, abandonErr))` |
@@ -57,19 +57,25 @@ only the join term. "prefix" below means the byte-identical leading text of `err
 | 1143 | `errors.New("Goal run ended before native turn start")` | `errors.Join(errors.New("Goal run ended before native turn start"), abandonErr)` |
 | 1156 | `ctx.Err()` | `errors.Join(ctx.Err(), abandonErr)` |
 
-Each statement becomes `abandonErr := daemon.abandonGoalSession(sessionKey, session, attached, <same
-cause as today>)`; the abandon calls' own cause arguments (`err`, `ctx.Err()`, the two literals) stay
-byte-identical, including the `:1143` pair where the abandon cause
-(`"Goal run was cancelled before native turn start"`) and the returned literal
-(`"Goal run ended before native turn start"`) intentionally differ.
+Apply revision (2026-11-22, simplify finding 1): eight statements become `abandonErr :=
+daemon.abandonGoalSession(sessionKey, session, attached, <same cause as today>)`; at `:1103` the
+shared literal is bound once as `cause` and the call is folded into the return —
+`errors.Join(cause, daemon.abandonGoalSession(sessionKey, session, attached, cause))` — so the
+abandon cause and the returned primary are the same value and cannot drift. The other eight sites
+keep their cause arguments byte-identical (`err`, `ctx.Err()`, the two literals), and the `:1143`
+pair still differs intentionally: the abandon cause (`"Goal run was cancelled before native turn
+start"`) and the returned literal (`"Goal run ended before native turn start"`).
 
 Exact semantics of the joins, verified against `errors.Join`:
 
 - two non-nil operands → `Unwrap() []error` holding both; the two `errors.Is`/`errors.As` consumers
   of this path (`taskResultFailureReason`'s `errors.As` and the terminal transition's `reason`
   derivation) see the same primary cause as before;
-- one nil operand → the non-nil operand's identity is preserved (Go 1.20+ `errors.Join` returns the
-  single non-nil error unchanged), so a successful abandon adds nothing to the return;
+- one nil operand → the return is still a `*joinError` wrapping the single non-nil operand
+  (`errors.Join` has no single-operand special case; go1.27.4 `errors/join.go`): `Error()` text and
+  `errors.Is`/`errors.As` are preserved, but the operand's identity and dynamic type are not, and
+  `errors.Unwrap` finds no single cause (no daemon production caller unwraps these returns), so a
+  successful abandon adds nothing observable to the return;
 - text: `err.Error()` of a joined pair is `primary.Error() + "\n" + abandon.Error()`; the primary's
   first line is therefore unchanged. This is the declared durable change (C-D1/P2-1): the joined
   tail now reaches `payload["error"]` (`app/events.go`), pinned exactly by the new test.
@@ -77,9 +83,10 @@ Exact semantics of the joins, verified against `errors.Join`:
 ## Invariants that must not move
 
 1. First line of every one of the 9 returned errors is byte-identical to the pre-change `err.Error()`
-   (`git grep -n 'return .*"(load native run fence|attach native Goal session|native Goal session
+   (`git grep -n '"(load native run fence|attach native Goal session|native Goal session
    attach receipt|fetch Goal run context|encode canonical Goal context|mark native Goal run running|
-   Goal run ended before native turn start)'` before/after, and the full diff).
+   Goal run ended before native turn start)'` before/after resolves to the same seven message
+   strings — at `:1103` the literal feeds `errors.Join` from the binding line — and the full diff).
 2. `requireNativeSessionCloseRetry` call set unchanged: `:1080`, `:1422`, `:1439`, `:1478`, `:1494`
    (`git grep -n requireNativeSessionCloseRetry` before/after shows only the definition plus those
    five; the diff adds none). The 9 sites neither gain nor lose arming: arming happens inside
@@ -87,10 +94,10 @@ Exact semantics of the joins, verified against `errors.Join`:
 3. No hunk inside `abandonGoalSession` (`:1370-1444`) or `abandonGoalSessionUncertain`;
    `git diff -U0 -- daemon/internal/app/goal_admission.go` must show exactly the 9 two-line hunks.
 4. Durable-write order and the internal join chain inside `abandonGoalSession` are untouched.
-5. `terminate_linux.go:50` keeps the identity/stop-proof failures as returned errors; only the
-   un-waited handle release becomes explicit-unactionable. `_ =` is the repo's existing convention
-   (49 prod sites) and is not reported under the gate config's default `check-blank: false`, so no
-   suppression directive is introduced.
+5. `terminate_linux.go:52` (pre-change `:50`) keeps the identity/stop-proof failures as returned
+   errors; only the un-waited handle release becomes explicit-unactionable. `_ =` is the repo's
+   existing convention (49 prod sites) and is not reported under the gate config's default
+   `check-blank: false`, so no suppression directive is introduced.
 
 ## Test design (new file `abandon_error_join_test.go`)
 
@@ -157,7 +164,7 @@ reported as the wider F11 ledger (they include the Close family outside this sli
 | package suite | `go test -count=1 ./internal/app/...` (Windows) |
 | linux lane | `wsl -d Ubuntu-24.04 -u accept -- bash -lc 'cd /mnt/q/repos/wt-w3-09-errcheck-app/symmetry/daemon && go test -count=1 ./internal/app/...'` (worktree path; the contract's `/mnt/q/repos/symmetry` is the main clone) |
 | errcheck | the four pinned runs above, filtered to the owned files |
-| whitespace | `git diff --check`, plus a host-path scan of the diff (`grep -i "users/"`) |
+| whitespace | `git diff --check`, plus a host-path scan of the diff (`grep -i "users/"`; after commit the scan matches its own quoted text — see the evidence record §6) |
 | mutation | revert site `:1088` to the dropped call, show the new test red, restore |
 
 Execution note (2026-11-22): the WSL lane could not run the literal command — this VM's shared
