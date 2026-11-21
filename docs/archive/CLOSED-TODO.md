@@ -3704,12 +3704,17 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
       `.exs` compiler warnings; the `CredentialLeakProviderStub` move into
       `control/test/support/integration_fixtures.ex` with the static `respond_with/2` call
       restored; the `create_resource/5` consolidation into `TestConn`) ships on revision
-      `61f8980526` — this revision note and the plan's rerun record are the docs-only commit
-      directly on top of it. Reruns on `61f8980526`: `mix format --check-formatted` exit 0;
-      `MIX_ENV=test mix compile --warnings-as-errors --force` exit 0; `mix test
+      `61f8980526`, and the round-2 fix (`unix_signal/1` moved into `TestFixtures`, both e2e files
+      importing it) on revision `d556d26c04`; this revision note and the plan's rerun records are
+      the docs-only commits on top of them. Reruns on `61f8980526`: `mix format
+      --check-formatted` exit 0; `MIX_ENV=test mix compile --warnings-as-errors --force` exit 0;
+      `mix test
       test/symmetry_control/integrations_test.exs` 32 passed with 0 `warning:` lines; `mix test
       test/symmetry_control_web/ --exclude portal_assets` 275 passed, 1 skipped, 4 excluded, exit
       0, 0 `warning:` lines; the two e2e files 2 passed, 10 skipped, exit 0; the other three
-      `IntegrationFixtures` importers load with 0 `warning:` lines. The full suite and the
-      `(module, name)` comparison above were measured on the implementation revision `0f97a3e9`;
-      the full suite on `61f8980526` remains with the conductor gate-runner.
+      `IntegrationFixtures` importers load with 0 `warning:` lines. Reruns on `d556d26c04`:
+      `mix format --check-formatted` exit 0; `MIX_ENV=test mix compile --warnings-as-errors
+      --force` exit 0; the two e2e files 2 passed, 10 skipped, exit 0, 0 `warning:` lines. The
+      full suite and the `(module, name)` comparison above were measured on the implementation
+      revision `0f97a3e9`; the full suite on `d556d26c04` remains with the conductor
+      gate-runner.

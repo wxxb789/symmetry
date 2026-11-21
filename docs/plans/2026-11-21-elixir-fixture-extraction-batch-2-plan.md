@@ -413,8 +413,8 @@ conductor gate-runner.
 ### Round-2 review fix (opus review round 2)
 
 Review round 2 accepted every round-1 fix and left one item: `unix_signal/1` (its P2-1) had to be
-consolidated. The conductor allowed no exception, so it is fixed on the round-2 revision named in
-`docs/archive/CLOSED-TODO.md`'s revision note:
+consolidated. The conductor allowed no exception, so it is fixed on revision `d556d26c04` (named
+in `docs/archive/CLOSED-TODO.md`'s revision note):
 
 - `SymmetryControl.TestFixtures` gains `unix_signal/1` (`:232`) with a one-line `@doc` and a
   moduledoc that now says "data builders and host-signal helpers"; the `:term`/`:kill` clause pair
@@ -423,3 +423,8 @@ consolidated. The conductor allowed no exception, so it is fixed on the round-2 
   SymmetryControl.TestFixtures, only: [unix_signal: 1]` and drop their local `defp` pairs; both
   callers keep their own `System.cmd` invocation.
 - `git_output_bytes!/2` stays local with the reason review round 2 accepted.
+
+Reruns on the round-2 fix revision `d556d26c04` (portable toolchain recipe,
+`MIX_TEST_PARTITION=rf-w3-03`): format exit 0; `MIX_ENV=test mix compile --warnings-as-errors
+--force` exit 0; the two e2e files 2 passed, 10 skipped, exit 0, 0 `warning:` lines. The full
+suite stays with the conductor gate-runner.
