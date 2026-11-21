@@ -54,6 +54,20 @@ The text is read in one of two ways, decided at the document level:
   another token's text. Text outside string literals is never scanned in this
   reading: in a JSON document it can only be numbers, literals and
   punctuation.
+  A literal's recorded bytes are read a second time by the Windows-shaped
+  families (drive, UNC, slash-UNC, root-relative, ``file:`` URL), because a
+  *raw* Windows spelling is the one location the decoded reading cannot see: its
+  separators are the escapes ``\\n``, ``\\t``, ``\\r``, ``\\f`` and ``\\b``,
+  so ``C:\\temp`` decodes to ``C:``, a tab and ``emp``: the decoded value names
+  no location while the recorded bytes spell one. The decoded reading stays
+  primary wherever it reads a location - its own render governs, so the escape
+  and the evidence line behind a location stay outside the token - and every raw
+  match it reads no location in renders whole, merged with any decoded span it
+  overlaps into one token, so no token nests in or overlaps another. The
+  fail-closed over-approximation is the prose reading's own: a raw spelling
+  followed by an escape renders the escape and the text behind it inside the
+  token. POSIX spellings are not re-read this way: their separators carry no
+  backslash, so the decoded reading already reads them as written.
 * Anything else is **prose**, and prose keeps the base tool's raw reading,
   plus the shared leading boundary's escape arm: a matcher sees the recorded
   bytes exactly as written, so a raw Windows spelling whose separators read
@@ -209,6 +223,11 @@ class _Patterns(NamedTuple):
     host_posix: re.Pattern[str]
     root_relative: re.Pattern[str]
     file_url: re.Pattern[str]
+    # The families whose spelling a record may carry with single backslashes as its
+    # separators: the raw look inside a JSON string literal runs exactly these over the
+    # literal's recorded bytes (a POSIX location's separators are forward slashes, which
+    # the decoded reading reads as written).
+    windows: tuple[re.Pattern[str], ...]
     space_chunk: str
     # The negative lookbehind a `--root` matcher carries (the decoded reading keeps a
     # rendered token's own text from re-claiming the root behind it).
@@ -346,7 +365,9 @@ def _compile_patterns(classes: _ByteClasses, root_guard: str) -> _Patterns:
     return _Patterns(
         drive=drive, unc=unc, slash_unc=slash_unc, posix=posix, colon_posix=colon_posix,
         escaped_posix=escaped_posix, host_posix=host_posix, root_relative=root_relative,
-        file_url=file_url, space_chunk=space_chunk, root_guard=root_guard,
+        file_url=file_url,
+        windows=(drive, unc, slash_unc, root_relative, file_url), space_chunk=space_chunk,
+        root_guard=root_guard,
         host=(drive, unc, slash_unc, host_posix, root_relative, file_url),
         default=(drive, unc, slash_unc, host_posix, posix, file_url, root_relative,
                  escaped_posix, colon_posix),
@@ -368,10 +389,32 @@ HOST_PATH_PATTERNS = _RAW_READING.host
 DEFAULT_PATH_PATTERNS = _RAW_READING.default
 
 
+HASHED_PATH_TOKEN_PREFIX = "path-sha256:"
+# A recorded literal's bytes can hold a raw Windows spelling only where a single
+# backslash - not one of an escaped pair - is followed by one of the escapes that hides
+# a location from the decoded reading: `\n`, `\r`, `\t`, `\f` and `\b` decode into a
+# control character, and an `u` escape's character can break a location just as well.
+# Every other backslash the JSON grammar spells is `\\`, `\/` or `\"`, which the decoded
+# reading reads as a path byte, a separator or a boundary, so a literal carrying none of
+# those escapes carries no raw spelling to look for. The guard is also what keeps a long
+# non-matching backslash run - `file:` plus thousands of separators - from being scanned
+# a second time: the UNC family's doubled-run leader is superlinear over one run, and the
+# recorded bytes are the longer of the two texts.
+_RAW_SPELLING_ESCAPE = re.compile(r"(?<!\\)\\[nrtbfu]")
+# A rendered token's own text: the `--root` token, or the hashed spelling above. A raw
+# Windows match that overlaps one is text behind a render rather than a spelling of its
+# own - binding it would write a digest over a token's own text, the
+# `path-sha256:<A>:<B>` corruption the decoded reading's inert token alphabet prevents
+# for free.
+_TOKEN_SPELLING = re.compile(
+    re.escape(DISPOSABLE_ROOT_TOKEN) + r"|" + re.escape(HASHED_PATH_TOKEN_PREFIX) + r"[0-9a-f]{64}"
+)
+
+
 def hashed_path_token(path: str) -> str:
     """Return the stable hashed token for one absolute path."""
 
-    return "path-sha256:" + hashlib.sha256(path.encode("utf-8")).hexdigest()
+    return HASHED_PATH_TOKEN_PREFIX + hashlib.sha256(path.encode("utf-8")).hexdigest()
 
 
 def _render_record_span(raw: str, start: int, end: int) -> str:
@@ -646,6 +689,80 @@ def _apply_replacements(raw: str, replacements: list[tuple[int, int, str]]) -> s
     return "".join(pieces)
 
 
+def _merged_spans(spans: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Union every overlapping group of spans into one span, ordered by start.
+
+    Every caller renders each returned span once, from its own bytes, so overlapping
+    matches must merge: a span left separate would nest one token inside another or
+    split one location across two tokens.
+    """
+
+    merged: list[list[int]] = []
+    for start, end in sorted(spans):
+        if merged and start < merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    return [(start, end) for start, end in merged]
+
+
+def _raw_literal_spans(content: str, claimed: list[tuple[int, int, str]]) -> list[tuple[int, int]]:
+    """The raw Windows spellings a JSON string literal's recorded bytes carry.
+
+    The decoded reading stays primary: wherever it reads a location, its own render
+    governs - the escape and the evidence line behind a location stay the recorded
+    bytes the decoded text spells (``...run\\nFAILED`` keeps the escape outside the
+    token), a ``--root`` token stays the root token it is, and a spelling the decoded
+    reading's boundaries deliberately spare (a name character glued in front) is spared.
+    ``claimed`` are exactly those spans, in the same raw offsets as ``content``.
+
+    The Windows-shaped raw families run over the recorded bytes for the one location
+    the decoded reading cannot see: a *raw* spelling, whose separators are single
+    backslashes that decode into control characters, so ``C:\\temp`` reads as ``C:``,
+    a tab and ``emp`` - no location - while the recorded bytes spell one. Every span
+    returned here renders whole, and no claim touches it, so no token can nest inside
+    or overlap another. A span overlapping a rendered token's own text is not a
+    spelling either: it is the tail behind a token (``//r\\bpath-sha256:<digest>``),
+    and rendering it would write a digest over the token's text.
+
+    A match whose span carries no backslash at all is left to the decoded reading,
+    which reads those bytes as written: the two readings agree there, and the decoded
+    reading's boundary decisions are the governing ones.
+    """
+
+    if not _RAW_SPELLING_ESCAPE.search(content):
+        return []
+    tokens = [match.span() for match in _TOKEN_SPELLING.finditer(content)]
+    return _merged_spans([
+        match.span()
+        for pattern in _RAW_READING.windows
+        for match in pattern.finditer(content)
+        if "\\" in match.group()
+        and not any(claim[0] < match.end() and match.start() < claim[1] for claim in claimed)
+        and not any(token[0] < match.end() and match.start() < token[1] for token in tokens)
+    ])
+
+
+def _literal_replacements(
+    raw: str, replacements: list[tuple[int, int, str]], extra: list[tuple[int, int]]
+) -> list[tuple[int, int, str]]:
+    """Union the raw look's spans with the spans the decoded reading claimed.
+
+    A replacement no raw span touches keeps its own text, so a ``--root`` token stays
+    the root token it is; a span that merged renders once from its own raw bytes, so no
+    token nests inside another and no digest binds a token's own text.
+    """
+
+    texts = {(start, end): text for start, end, text in replacements}
+    return [
+        (start, end, texts[(start, end)] if (start, end) in texts
+         else _render_record_span(raw, start, end))
+        for start, end in _merged_spans(
+            [(start, end) for start, end, _text in replacements] + extra
+        )
+    ]
+
+
 def _render_literal(content: str, roots: list[str], root_only: bool) -> str:
     """Render host locations in one JSON string literal, as decoded text and raw bytes.
 
@@ -656,6 +773,12 @@ def _render_literal(content: str, roots: list[str], root_only: bool) -> str:
     exactly the recorded bytes it bound and the digest binds the recorded spelling.
     The passes run in the same order as the raw reading (the root matchers first, then
     the host or default path family).
+
+    The literal's recorded bytes are read a second time by the Windows-shaped raw
+    families (`_raw_literal_spans`), because a raw Windows spelling is the one location
+    the decoded reading cannot see: the caller merges those spans with the decoded ones
+    before rendering, so a raw spelling renders whole and a raw span overlapping a
+    decoded span is one token, never two.
     """
 
     decoded, cells = _decode_literal(content)
@@ -671,7 +794,10 @@ def _render_literal(content: str, roots: list[str], root_only: bool) -> str:
         passes.append((bounded, True))
     for pattern in (_DECODED_READING.host if root_only else _DECODED_READING.default):
         passes.append((pattern, False))
-    return _apply_replacements(content, _render_passes(decoded, cells, passes, content))
+    replacements = _render_passes(decoded, cells, passes, content)
+    return _apply_replacements(content, _literal_replacements(
+        content, replacements, _raw_literal_spans(content, replacements),
+    ))
 
 
 def _is_json_structured(text: str) -> bool:
@@ -766,10 +892,15 @@ def sanitize_text(text: str, roots: list[str], root_only: bool = False) -> str:
     a location never splits at one, while the escape a quoted line ends with
     (``\\n``) stays a boundary and the line behind it stays outside the token. A
     match replaces the raw bytes it covered, so the digest still binds the recorded
-    spelling. Prose keeps the base tool's raw reading, with one addition: the
-    shared leading boundary reads the character an escape ends with as a boundary,
-    so a location behind a recorded escape still renders. The module docstring
-    names both readings and the boundary each one keeps.
+    spelling. The Windows families also run over the literal's recorded bytes, so a
+    *raw* spelling - whose separators are single backslashes that decode into control
+    characters, leaving the decoded reading no location to read - renders whole; a
+    span the decoded reading reads a location in keeps the decoded reading's own
+    render, so the escape and the line behind a location stay outside the token.
+    Prose keeps the base tool's raw reading, with one addition: the shared leading
+    boundary reads the character an escape ends with as a boundary, so a location
+    behind a recorded escape still renders. The module docstring names both readings
+    and the boundary each one keeps.
     """
 
     if _is_json_structured(text):

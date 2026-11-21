@@ -263,12 +263,31 @@ class JsonReadingTests(unittest.TestCase):
         self.assertEqual(
             MODULE.sanitize_text(once, ["/srv/store"], root_only=True), once,
         )
+        # A drive root spelled with forward slashes is the decoded reading's own span:
+        # it carries no single backslash, so the raw look leaves it alone and the root
+        # token keeps its trailing structure.
+        self.assertEqual(
+            MODULE.sanitize_text('{"p":"C:/a/b"}', ["C:/a"], root_only=True),
+            '{"p":"<disposable-root>/b"}',
+        )
+        # A drive root spelled with single backslashes is a raw pronunciation the decoded
+        # reading cannot see, and the drive family renders it - the root's own bytes are
+        # removed, as a hashed token binding the raw spelling rather than the root token
+        # (the raw look runs the path families, not the decoded root matchers).
+        raw_root = "C:" + _BS + "repo"
+        self.assertEqual(
+            MODULE.sanitize_text('{"p":"' + raw_root + '"}', ["C:/repo"], root_only=True),
+            '{"p":"' + digest_of(raw_root) + '"}',
+        )
 
     def test_a_token_never_binds_another_tokens_text(self):
         # A later matcher must not touch bytes an earlier replacement wrote: the pre-fix
         # render took `//r` + the escape spelling up to the just-written token's own
         # `path-sha256` text into a second digest and left the first token as an
-        # orphaned `:<hex>` fragment. Every digest here binds recorded bytes alone.
+        # orphaned `:<hex>` fragment. Every digest here binds recorded bytes alone, and
+        # the span is also where the r2 raw look could bind the token's own text on the
+        # next render (`//r\b` reads as a slash-UNC whose tail is the token): the token
+        # guard keeps the second render the same bytes as the first.
         text = '{"out":"' + _BS + 'u0008//r' + _BS + 'bfile:C:/"}'
         expected = '{"out":"' + _BS + 'u0008//r' + _BS + 'b' + digest_of("file:C:/") + '"}'
         for root_only in (True, False):
@@ -329,23 +348,44 @@ class JsonReadingTests(unittest.TestCase):
             '## Run\n\n```json\n{"p":"' + digest_of(ESCAPED_DRIVE_RUN) + '"}\n```\n',
         )
 
-    def test_a_raw_single_backslash_spelling_inside_json_is_read_as_decoded(self):
-        # The replaced design's D2b carve-out, pinned as the behavior it was replaced
-        # with: a valid JSON literal whose separators are spelled with one backslash
-        # decodes them into control characters (`C:\repo\tmp` is `C:`, a carriage
-        # return, `epo`, a tab, `mp`), so the decoded value carries no location and the
-        # record renders unchanged. The raw reading does not re-read a JSON document's
-        # literals, so this is a deliberate, visible boundary: the pre-fix tools
-        # rendered these bytes (they hashed the raw spelling), and a later design
-        # change must change this case visibly.
-        for text in (
-            '{"note":"see C:' + _BS + 'temp' + _BS + 'nFAILED"}',
-            '{"note":"see C:' + _BS + 'repo' + _BS + 'tmp"}',
-        ):
-            json.loads(text)  # the document parses: the decoded reading owns it
+    def test_a_raw_single_backslash_spelling_inside_json_is_rendered(self):
+        # The r2 rule, on the pin the replaced D2b carve-out used to carry: the decoded
+        # reading stays primary, and the Windows-shaped families run over the literal's
+        # recorded bytes as well, because a raw spelling's separators are the JSON
+        # escapes `\r`, `\t`, `\n`, `\f` and `\b` - `C:\repo\tmp` decodes to `C:`, a
+        # carriage return, `epo`, a tab and `mp`, so the decoded value names no location
+        # while the recorded bytes spell one. A span the decoded reading reads no
+        # location in is such a raw spelling and renders whole: the pre-r2 bytes left
+        # every record here unchanged (fail-open on the recorded bytes).
+        cases = (
+            "C:" + _BS + "repo" + _BS + "tmp",    # `\r` then `\t`
+            "C:" + _BS + "temp" + _BS + "run",    # `\t` then `\r`
+            "C:" + _BS + "name" + _BS + "foo",    # `\n` then `\f`
+            "C:" + _BS + "foo" + _BS + "bar",     # `\f` then `\b`
+            "C:" + _BS + "bar" + _BS + "run",     # `\b` then `\r`
+        )
+        for path in cases:
+            text = '{"p":"' + path + '"}'
+            json.loads(text)  # the document parses: the decoded reading owns the span
             for root_only in (True, False):
-                with self.subTest(text=text, root_only=root_only):
-                    self.assertEqual(MODULE.sanitize_text(text, [], root_only=root_only), text)
+                with self.subTest(path=path, root_only=root_only):
+                    rendered = MODULE.sanitize_text(text, [], root_only=root_only)
+                    self.assertEqual(rendered, '{"p":"' + digest_of(path) + '"}')
+                    self.assertEqual(MODULE.sanitize_text(rendered, [], root_only=root_only), rendered)
+        # A raw spelling followed by an escaped newline: to the decoded reading the
+        # escape is a boundary and the line behind it is text, but the decoded reading
+        # reads no location at all here, so the raw reading's own match - the location
+        # plus the escape plus the line, because a recorded `\n` reads as a separator and
+        # a name - renders whole. That is the prose reading's disclosed
+        # over-approximation, and the visible opposite of the entry's properly escaped
+        # case above, where the decoded reading reads the location and keeps the escape
+        # and `FAILED` outside the token.
+        sealed = "C:" + _BS + "temp" + _BS + "nFAILED"
+        for root_only in (True, False):
+            with self.subTest(shape="escape-followed", root_only=root_only):
+                rendered = MODULE.sanitize_text('{"p":"' + sealed + '"}', [], root_only=root_only)
+                self.assertEqual(rendered, '{"p":"' + digest_of(sealed) + '"}')
+                self.assertEqual(MODULE.sanitize_text(rendered, [], root_only=root_only), rendered)
 
     def test_a_host_path_after_a_json_escape_is_caught(self):
         # The #119 round-5 follow-up: the POSIX families' leading boundary read the
@@ -395,7 +435,8 @@ class JsonReadingTests(unittest.TestCase):
         # space, NBSP, U+3000 and an escaped apostrophe), the space fail-open shapes,
         # the token-prefix shape, the stray-quote document, the root-metacharacter
         # shapes, the entry's own input, the round-5 POSIX path after an escape, a
-        # surrogate pair and a doubled escaped backslash.
+        # surrogate pair, a doubled escaped backslash, and the r2 raw Windows spellings
+        # (drive, both UNC dialects, root-relative and `file:` URL).
         cases = (
             ("escaped-space", '{"p":"C:' + _BS * 2 + "Users" + _BS * 2 + "my" + _BS + 'u0020project"}',
              [], ("Users", "project"), True),
@@ -432,6 +473,46 @@ class JsonReadingTests(unittest.TestCase):
             ("doubled-backslash",
              '{"p":"C:' + _BS * 2 + "Users" + _BS * 2 + "op" + _BS * 2 + "run" + _BS * 4 + 'n"}',
              [], ("Users", "run"), True),
+            # The r2 raw look: a Windows spelling whose separators are the escapes `\r`,
+            # `\t`, `\n`, `\f` and `\b` decodes into control characters, so the decoded
+            # value names no location and only the raw reading sees the one the recorded
+            # bytes spell. Each span renders whole - the escape and the evidence line
+            # behind a raw spelling included, where the raw tail cannot tell them apart.
+            ("raw-repo-tmp", '{"p":"C:' + _BS + "repo" + _BS + 'tmp"}', [], ("repo", "tmp"), True),
+            ("raw-temp-run", '{"p":"C:' + _BS + "temp" + _BS + 'run"}', [], ("temp", "run"), True),
+            ("raw-name-foo", '{"p":"C:' + _BS + "name" + _BS + 'foo"}', [], ("name", "foo"), True),
+            ("raw-foo-bar", '{"p":"C:' + _BS + "foo" + _BS + 'bar"}', [], ("foo", "bar"), True),
+            ("raw-bar-run", '{"p":"C:' + _BS + "bar" + _BS + 'run"}', [], ("bar", "run"), True),
+            ("raw-escape-followed", '{"p":"C:' + _BS + "temp" + _BS + 'nFAILED"}',
+             [], ("temp", "FAILED"), True),
+            # A raw UNC spelling: no single backslash spells a UNC leader in a valid
+            # literal, so its leader is a pair and its separator raw - the decoded value
+            # is `\server`, a tab and `mp`, and the recorded bytes are the location's
+            # only spelling. Both dialects render, the escape and the line included.
+            ("unc-raw-separator",
+             '{"p":"' + _BS * 2 + "server" + _BS * 2 + "share" + _BS + 'nFAILED"}',
+             [], ("server", "share", "FAILED"), True),
+            ("slash-unc-raw-separator", '{"p":"//server' + _BS + 'tmp"}',
+             [], ("server", "tmp"), True),
+            # The other side of the rule, through the same property: where the decoded
+            # reading reads the location (`//server/share/run` is spelled with forward
+            # slashes), its render governs and the raw look does not re-absorb the
+            # escape behind it.
+            ("slash-unc-escape-followed", '{"p":"//server/share/run' + _BS + 'nFAILED"}',
+             [], ("server", "share", "run"), True),
+            # The remaining Windows-shaped families whose separators the decoded reading
+            # can mis-read the same way: a raw root-relative spelling and a raw `file:`
+            # URL.
+            ("raw-root-relative", '{"p":"' + _BS + "root" + _BS + 'run"}',
+             [], ("root", "run"), True),
+            ("raw-file-url", '{"p":"file:' + _BS + "temp" + _BS + 'run"}',
+             [], ("temp", "run"), True),
+            # A mixed literal: one properly escaped location (the decoded reading reads
+            # it and renders its recorded bytes) beside one raw spelling the raw look
+            # renders - one token each, no fragment of either.
+            ("mixed-literal",
+             '{"p":"C:' + _BS * 2 + "Users" + _BS * 2 + "op and D:" + _BS + 'repo"}',
+             [], ("Users", "repo"), True),
         )
         for name, text, roots, fragments, json_expected in cases:
             with self.subTest(name=name):

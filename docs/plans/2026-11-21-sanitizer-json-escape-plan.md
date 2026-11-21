@@ -39,6 +39,25 @@ verified by reading both revisions
      earlier replacement merges into one span rendered once from its own raw bytes, so a later
      matcher can never bind an earlier token's text. Text outside string literals is never
      scanned in this reading: a JSON document carries numbers, literals and punctuation there.
+   - **The decoded reading stays primary inside a literal, and the Windows families close
+     its fail-open side** (the fix round's r2 rule). A *raw* Windows spelling is the one
+     location the decoded reading cannot see: its separators are single backslashes, which
+     decode into control characters, so the decoded value of the entry's own raw shape names
+     no location while the recorded bytes spell one, and the record used to render unchanged.
+     `_raw_literal_spans` therefore runs `_RAW_READING.windows` (drive, UNC, slash-UNC,
+     root-relative and `file:` URL - the families whose separators a record may spell with
+     single backslashes) over the literal's recorded bytes, and every match the decoded
+     reading reads no location in renders whole, merged with any decoded span it overlaps into
+     one token (`_literal_replacements`), so no token nests in or overlaps another. Three
+     boundaries keep the rule fail-closed and idempotent without re-opening the entry's own
+     defect: a match whose span carries no backslash is left to the decoded reading, which
+     reads those bytes as written (the two readings agree there, so a `--root` token and a
+     spelling the decoded reading's name boundary deliberately spares both govern); a match
+     overlapping a rendered token's own text (`path-sha256:<64 hex>`, `<disposable-root>`) is
+     the tail behind a render, not a spelling; and the scan itself runs only where a literal's
+     bytes can hold such a spelling at all - a single backslash, not one of an escaped pair,
+     followed by `n`, `r`, `t`, `f`, `b` or `u` (`_RAW_SPELLING_ESCAPE`) - which is what keeps
+     a long non-matching backslash run from being scanned a second time.
    - **Two byte-class profiles, one pattern compiler.** `_compile_patterns(classes, guard)`
      builds each reading's matcher set from a `_ByteClasses` record: the raw reading keeps the
      base tool's recorded-syntax set, and the decoded reading refuses the control characters and
@@ -56,9 +75,12 @@ verified by reading both revisions
    escape, the escaped space / NBSP / apostrophe locations, the escaped-quote parity, surrogate
    pairs, token opacity (no composite digest, no orphaned `:<hex>` fragment), the
    root-metacharacter roots, the document-level decision, the decoded-control-spelling boundary,
-   the `--check --root-only` round trip, and the fail-closed property corpus over every repro
-   shape; each pin's discrimination (pre-fix bytes or a named mutation) is measured and recorded
-   in the closure.
+   the `--check --root-only` round trip, the r2 raw-spelling pins (the drive, both UNC dialects,
+   root-relative and `file:` URL raw shapes render whole, the escape behind a decoded-read
+   location stays outside the token, a forward-slash drive root keeps its `<disposable-root>`
+   structure and a raw one renders as the family's token), and the fail-closed property corpus
+   over every repro shape (twenty-seven cases after the r2 extension); each pin's discrimination
+   (pre-fix bytes or a named mutation) is measured and recorded in the closure.
 3. `docs/TODO.md` → `docs/archive/CLOSED-TODO.md`: the entry "Stop the Windows-family path tail
    from absorbing a JSON escape that follows the path" moves with a closure statement naming the
    branch (`fix/sanitizer-json-escape`), the decision, the pins and the #119 round-5 follow-up
@@ -137,17 +159,33 @@ slash-UNC, root-relative and `file:` URL spellings.
   (linearity cases) stay. One superlinear shape survives from the previous round and is reported
   rather than hidden: a `file:` URL followed by a long backslash run inside a literal still
   grows superlinearly (about 4x per doubling; 0.55 s at 16,000 backslashes, against 5.9 s for
-  the previous design at the same size and under 3 ms for the base tool).
+  the previous design at the same size and under 3 ms for the base tool). The r2 raw look does
+  not change it: its scan is guarded by `_RAW_SPELLING_ESCAPE`, so a run the decoded reading
+  cannot read a location in is never scanned a second time, and the residual's wall-clock at
+  16,000 backslashes re-measures at the pre-r2 tool's level (1.04 s against 1.02 s, the same
+  4x-per-doubling slope).
+- **Rejected: rendering every raw match the decoded reading also reads** (the brief's
+  single-condition rule, "no escaped backslash pair in the span"). A location whose separators
+  are forward slashes and which is followed by an escape - the entry's own
+  `//server/share/run\nFAILED` shape - is *one* match to the raw reading, so that rule would
+  absorb the escape and the evidence line into the token and re-open the defect this entry
+  closes. The discriminator has to be whether the decoded reading reads the location at all,
+  which is what `_raw_literal_spans` tests against the decoded reading's own claimed spans.
 - **Accepted boundaries (pinned, not silent)**: in a JSON literal, an escape whose spelling
   *also* reads as a Windows separator is an escape (`\repo` is CR + `epo`), so a *mixed*
   spelling such as `C:\\a\repo` — valid JSON, because `\r` is a grammar escape, but no correct
   producer writes a path that way — renders `C:\\a` and leaves the escape's own two characters
-  plus `epo`; and a *raw* single
-  backslash spelling inside a valid literal decodes into control characters (`{"note":"see
-  C:\repo\tmp"}` places a carriage return and a tab in the value), so the decoded value carries
-  no location and the record renders unchanged — the raw reading no longer re-reads a JSON
-  document's literals, where the replaced design hashed the spelling. Both cases are pinned in
-  the JSON module so a later narrowing is a visible decision.
+  plus `epo`; a *raw* single backslash spelling inside a valid literal decodes into control
+  characters (`{"note":"see C:\repo\tmp"}` places a carriage return and a tab in the value), and
+  the decoded reading reads no location there, so the Windows families render the recorded bytes
+  whole — the shape the entry's own evidence used to leave literal (the r2 rule); a mixed
+  spelling whose decoded reading *does* read a location keeps that reading's render, so a raw
+  separator behind it can stay literal as a fragment (`...\repo`, `...\tmp`), which is the same
+  boundary the mixed case above pins; and a raw spelling of a `--root` is rendered by the
+  Windows family it belongs to, as a hashed token binding the raw bytes rather than
+  `<disposable-root>` (the raw look runs the path families, not the decoded root matchers), so
+  the root's bytes are removed either way. All four cases are pinned in the JSON module so a
+  later narrowing is a visible decision.
 
 ## Evidence plan
 
