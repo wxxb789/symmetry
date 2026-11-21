@@ -329,9 +329,11 @@ Postgres cap); no measurement harness runs concurrently with it.
   --warnings-as-errors` 0, targeted 13 (9 passed + 4 env-gated skips), controller 79 passed, broker
   e2e the CI way 4 passed, credo `--strict` file count 40 with the issue set identical modulo
   coordinates.
-- **P3-4 (live tracker gap) escalated, not fixed here.** The review places the `docs/TODO.md`
-  entries for the lock-order oracle and the `lock_goal_claim_scope/1` fold-in with the conductor;
-  `docs/TODO.md` is owned for closures only, so this slice reports it instead of editing that file.
+- **P3-4 (live tracker gap), added under the conductor's 2026-11-21 authorization.** A new
+  "Deferred review findings (PR #189, provider access lock order)" section in `docs/TODO.md` tracks
+  both open follow-ups: pinning `IntentContext`'s lock order with an oracle (review STD-A02,
+  report-only per E8) and folding `lock_goal_claim_scope/1`'s third goal-order encoding into
+  `IntentContext`.
 
 ## Appendix — clause-2 judging artifact (fix stage, 2026-11-21)
 
