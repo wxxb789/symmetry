@@ -167,18 +167,19 @@ appears once (the constructor) and the 11-tuple once (the two constructors toget
 The move-only text comparison and the control-flow audit are both blind to a by-value parameter or
 local turning into a live shared field, so every base value that crosses the handover is recorded
 with its base passing mode and its head write/read sites. Read site = the recovery loop unless
-noted; line numbers are `supervisor_session.go` lines at the post-merge head `3c711bce`.
+noted; line numbers are `supervisor_session.go` lines at the current head (post-merge, after the
+2026-11-22 comment compression).
 
 | Base name | Base passing mode | Head writes | Freeze / equivalence argument |
 | --- | --- | --- | --- |
 | `launch`, `listener`, `target`, `ownerRecoveryMarker` | by value (struct / pointers) | constructor only | never reassigned; pointer identity kept |
 | `receipt **authority.StopReceipt` | by value (pointer to the helper loop's `receipt` local) | `runStop` sets `session.receipt` (`:389`) | the base's `&receipt` aliased that same storage, so the field is the same alias, not a copy |
 | `boundSecret` | by value (string) | helper-loop hello only (`session.boundSecret = request.Secret`, `:173`) | no write after handover |
-| `ownerLost` | by value (channel) | `enterRecovery` (`watchdog.ownerLost()`, the base argument expression, `:423`) | the helper loop's `= nil` disarm (`:128`) is local to it and precedes the handover; no write after |
+| `ownerLost` | by value (channel) | `enterRecovery` (`watchdog.ownerLost()`, the base argument expression, `:398`) | the helper loop's `= nil` disarm (`:128`) is local to it and precedes the handover; no write after |
 | `stop func() error` | by value (closure) | constructors | injection point preserved; never reassigned |
-| `allowAbort` | by value (bool) | `enterRecovery` (`!committed && !resumed`, the base argument expression, `:424`); pre-hello `true` | no write after handover |
-| `scanSealSequence` | by value (func) | `enterRecovery` (`group.descendantScanSealSequence`, the base argument expression, `:425`); pre-hello nil | no write after handover |
-| `ownerLossProofResultCategory` | by value (string), frozen at the handover call (`supervisor_linux_helper.go:928` → read `:1157`) | `runStop` (write-once latch, `:364`; may run from inside the recovery loop) | `runRecoveryLoop`'s first statement copies the field into a local (`:430-433`) and the marker write reads the local (`:482`): a stop latched from inside the loop cannot change the reported category |
+| `allowAbort` | by value (bool) | `enterRecovery` (`!committed && !resumed`, the base argument expression, `:399`); pre-hello `true` | no write after handover |
+| `scanSealSequence` | by value (func) | `enterRecovery` (`group.descendantScanSealSequence`, the base argument expression, `:400`); pre-hello nil | no write after handover |
+| `ownerLossProofResultCategory` | by value (string), frozen at the handover call (`supervisor_linux_helper.go:928` → read `:1157`) | `runStop` (write-once latch, `:364`; may run from inside the recovery loop) | `runRecoveryLoop`'s first statement copies the field into a local (`:405-408`) and the marker write reads the local (`:457`): a stop latched from inside the loop cannot change the reported category |
 
 The helper loop's mutable locals (the `:805-817` block) were closure-captured in base — shared by
 reference between the loop, `stop`, `startWait` and `enterRecovery` — so the fields preserve that
@@ -220,8 +221,8 @@ consumer across the handover took a copy, which is why only its read is frozen.
    expression, at the same point, as the base argument — and stays `true` for the pre-hello
    sessions. The base's `ownerLost = nil` select-disarm becomes `session.ownerLost = nil`.
    `ownerLossProofResultCategory` is the one recovery value the base passed by value into a loop:
-   `runRecoveryLoop` copies the field into a loop-entry local (`:430-433`) and the owner-recovery
-   marker write reads that local (`:482`), so a stop latched from inside the recovery loop cannot
+   `runRecoveryLoop` copies the field into a loop-entry local (`:405-408`) and the owner-recovery
+   marker write reads that local (`:457`), so a stop latched from inside the recovery loop cannot
    change the reported category.
 7. **Failure control (clause 3).** No accept/reject set, timeout class, FD count, response field,
    status, error text or test name/assertion changes; a session field that is not equivalent to the
@@ -331,8 +332,9 @@ chain of both sides is compared; the chains below are the audit's rows. `guard` 
 `supervisor_linux_helper.go` / `anchor_server.go` at the slice base (transformed-base coordinates —
 see below); head numbers are those of
 `anchor_session.go`, `supervisor_session.go` or the new `anchor_server.go` `serveConnection` span,
-as the row states, and are post-merge (`3c711bce`: the #185 merge inserted 25 lines into
-`enterRecovery`, so every `supervisor_session.go` coordinate after :393 carries that shift).
+as the row states, and are at the current head: the #185 merge inserted 25 lines into
+`enterRecovery` and the 2026-11-22 comment compression removed them again, so post-:393
+coordinates were re-derived by grep at both heads and match the pre-merge frame.
 
 Coordinate provenance (added while applying review finding F5/PD-1): a **base** line number is a
 *transformed-base* coordinate — the line of that event in the extracted base slice *after* the
@@ -449,13 +451,13 @@ this slice's owned region. All terminal `return`s in the moved paths are explici
   - note: `waitOnce`/`waitDone`/status+stdio files -> session fields
 - **`enterRecovery <- base `enterRecovery` closure`** — events 1 -> 1, preserved: yes
   - base: return@928
-  - head: return@426
-  - note: base `return runLinuxSupervisorRecoveryLoop(...)` replaced by 3 field assignments + `return session.runRecoveryLoop()` (same argument order, after `stop()`); the by-value `ownerLossProofResultCategory` argument stays a session-field read, frozen in `runRecoveryLoop`'s first statement (F-A1 fix). Post-#185 merge the head additionally carries the latch comment and unconditional `session.ownerLostLatched = true` (`:394-421`) in place of the base's conditional latch expression — still one return on each side
+  - head: return@401
+  - note: base `return runLinuxSupervisorRecoveryLoop(...)` replaced by 3 field assignments + `return session.runRecoveryLoop()` (same argument order, after `stop()`); the by-value `ownerLossProofResultCategory` argument stays a session-field read, frozen in `runRecoveryLoop`'s first statement (F-A1 fix). Post-#185 merge the head additionally carries the latch comment and unconditional `session.ownerLostLatched = true` (`:394-396`) in place of the base's conditional latch expression — still one return on each side
 - **`runRecoveryLoop <- base recovery loop`** — events 44 -> 44, preserved: yes
   - base: loop@1111; guard@1112; guard@1114; guard@1118; guard@1122; guard@1124; continue@1126; return@1128; guard@1131; continue@1133; guard@1137; continue@1139; guard@1146; else@1148; guard@1150; else@1152; guard@1156; guard@1157; return@1159; guard@1164; else@1166; guard@1167; guard@1168; else@1170; else@1172; else@1175; else@1178; guard@1179; else@1181; else@1183; else@1186; else@1188; guard@1189
     else@1191; else@1193; else@1196; else@1198; guard@1203; guard@1216; continue@1218; guard@1221; return@1222; guard@1224; return@1225
-  - head: loop@436; guard@437; guard@439; guard@443; guard@447; guard@449; continue@451; return@453; guard@456; continue@458; guard@462; continue@464; guard@471; else@473; guard@475; else@477; guard@481; guard@482; return@484; guard@489; else@491; guard@492; guard@493; else@495; else@497; else@500; else@503; guard@504; else@506; else@508; else@511; else@513; guard@514; else@516; else@518; else@521; else@523
-    guard@528; guard@541; continue@543; guard@546; return@547; guard@549; return@550
+  - head: loop@411; guard@412; guard@414; guard@418; guard@422; guard@424; continue@426; return@428; guard@431; continue@433; guard@437; continue@439; guard@446; else@448; guard@450; else@452; guard@456; guard@457; return@459; guard@464; else@466; guard@467; guard@468; else@470; else@472; else@475; else@478; guard@479; else@481; else@483; else@486; else@488; guard@489; else@491; else@493; else@496; else@498
+    guard@503; guard@516; continue@518; guard@521; return@522; guard@524; return@525
   - note: `receipt == nil || *receipt == nil` -> `session.receipt == nil` (parameter indirection removed); `ownerLossProofResultCategory` is frozen into a loop-entry local (the loop's first statement), the base's by-value parameter semantics, so a stop latched from inside the loop cannot change the marker category; locals stay locals
 - **`runHelperLoop`** — events 117 -> 82, preserved: yes (container reshape)
   - base: 117 control-flow lines in the base loop body (local declarations plus the three closures)
@@ -546,7 +548,7 @@ and `runRecoveryLoop()` take 0 parameters.
   `runLinuxSupervisorRecoveryLoop` (`supervisor_linux_helper.go:928` → read `:1157`): a stop
   latched from inside the recovery loop could change the category the marker reported, which the
   base could not. `runRecoveryLoop` now copies the field into a loop-entry local
-  (`supervisor_session.go:430-433`) and the marker write reads that local (`:482`) — the base's
+  (`supervisor_session.go:405-408`) and the marker write reads that local (`:457`) — the base's
   handover-time freeze, restored without adding session state or changing the parameter counts
   (clause 1). The move-only script models the copy as one documented stripped statement and
   re-runs `RESULT: PASS` (22/22); the regenerated audit row shows the same 44-event chain with the
@@ -591,18 +593,18 @@ The slice merged `origin/main` `f70553bf` (which carries #185 `4b034f50`) into `
 `git diff e07b575f 3c711bce -- daemon/internal/platform/supervisor_session.go` is the single
 `@@ -393,7 +393,32 @@`, the #185 port into `(*linuxSupervisorSession).enterRecovery`.
 
-- **The port.** #185's comment and unconditional `session.ownerLostLatched = true` (`:394-421`)
+- **The port.** #185's comment and unconditional `session.ownerLostLatched = true` (`:394-396`)
   replace the pre-#185 conditional latch
   `session.ownerLostLatched = session.ownerLostLatched || channelClosedV2(session.watchdog.ownerLost())`;
   `_ = session.stop()`, the three field assignments and `return session.runRecoveryLoop()` are
   unchanged. All 9 `enterRecovery` call sites route through the method, and the owner-lost select
   arm keeps its own latch before the call (`:128-130`).
-- **Body identity.** `enterRecovery` `:394-426` equals `origin/main`'s closure
+- **Body identity.** At the merge, `enterRecovery` (then `:394-426`) equaled `origin/main`'s closure
   `supervisor_linux_helper.go:924-952` after stripping `session.` (comment, latch, `stop()`, the
-  three argument assignments and the recovery call), so no other #185 behavior was lost. The delta
-  is the upstream fix itself, not a move artifact; the 22/22 move-only comparisons and the audit
-  chains above were established at the pre-merge head and cover every other moved body, whose
-  bytes the merge did not touch.
+  three argument assignments and the recovery call), so no other #185 behavior was lost; only the
+  2026-11-22 comment compression has touched it since. The delta is the upstream fix itself, not a
+  move artifact; the 22/22 move-only comparisons and the audit chains above were established at the
+  pre-merge head and cover every other moved body, whose bytes the merge did not touch.
 - **Red/green.** Both #185 tests — `TestLinuxSupervisorControlEOFWithDeadOwnerMetadataUsesOwnerLossSeal`
   and `TestLinuxSupervisorLiveOwnerControlCloseInProcessStopFailsClosed` — pass at the merge head
   (`go test -count=3 -run '<the two names>'` → `ok`), and both fail with the latch reverted via
@@ -614,9 +616,12 @@ The slice merged `origin/main` `f70553bf` (which carries #185 `4b034f50`) into `
   pre-existing `TestLinuxOwnerAnchorRunReaperRejectsForeignChildBeforeAdoptingIt` skip the only
   skip. The six name-skipped tests are the documented WSL mirrored-loopback limitation, not slice
   regressions.
-- **Coordinates.** The merge inserted 25 lines into `enterRecovery` at `:393`, so every
-  `supervisor_session.go` citation after :393 in this plan was re-derived by grep at `3c711bce`
-  (handover reads `:423`/`:424`/`:425`, loop-entry category copy `:430-433`, marker read `:482`,
-  audit heads `return@426`, `loop@436`…`return@550`). `origin/main` has since moved to `9a01686d`
-  (#179, #181), neither touching `daemon/internal/platform/`, so `git diff origin/main...HEAD`
-  still equals the PR's diff.
+- **Coordinates.** The #185 merge inserted 25 lines into `enterRecovery` at `:393`, pushing every
+  later citation +25; the 2026-11-22 comment compression removed exactly those 25 lines again, so
+  the citations in this plan were re-derived by grep a second time and match the pre-merge frame
+  (handover reads `:398`/`:399`/`:400`, loop-entry category copy `:405-408`, marker read `:457`,
+  audit heads `return@401`, `loop@411`…`return@525`). `origin/main` has since moved to `9a01686d`
+  (#179, #181), neither touching `daemon/internal/platform/`, so the PR range (merge-base
+  `f70553bf`) is unchanged.
+- Comment compressed to two why-lines per the 2026-11-22 owner comment policy; the test name that
+  pins the live-owner case remains `TestLinuxSupervisorLiveOwnerControlCloseInProcessStopFailsClosed`.
