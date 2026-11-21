@@ -150,6 +150,13 @@ defmodule SymmetryControlWeb.Protocol do
     end
   end
 
+  def authenticate(conn, credential_fun) do
+    case machine_token(conn) do
+      {:ok, token} -> credential_fun.(token)
+      {:error, :unauthenticated} -> conn |> error(:unauthenticated) |> halt()
+    end
+  end
+
   def configured_token(kind),
     do: Application.fetch_env!(:symmetry_control, :orchestration) |> Keyword.fetch!(kind)
 
@@ -396,32 +403,33 @@ defmodule SymmetryControlWeb.Protocol do
   def normalize_map(value), do: value
 
   def parse_event_times(events) when is_list(events) do
-    Enum.reduce_while(events, {:ok, []}, fn
-      event, {:ok, parsed} when is_map(event) ->
-        case Map.fetch(event, "occurred_at") do
-          {:ok, value} when is_binary(value) ->
-            case DateTime.from_iso8601(value) do
-              {:ok, datetime, _offset} ->
-                {:cont, {:ok, [Map.put(event, "occurred_at", datetime) | parsed]}}
-
-              _ ->
-                {:halt, {:error, :invalid_request}}
-            end
-
-          _ ->
-            {:halt, {:error, :invalid_request}}
-        end
-
-      _, _ ->
-        {:halt, {:error, :invalid_request}}
-    end)
-    |> case do
+    case parse_events(events) do
       {:ok, parsed} -> {:ok, Enum.reverse(parsed)}
       error -> error
     end
   end
 
   def parse_event_times(_), do: {:error, :invalid_request}
+
+  defp parse_events(events) do
+    Enum.reduce_while(events, {:ok, []}, fn event, {:ok, parsed} ->
+      case parse_event_time(event) do
+        {:ok, event} -> {:cont, {:ok, [event | parsed]}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp parse_event_time(%{} = event) do
+    with {:ok, value} when is_binary(value) <- Map.fetch(event, "occurred_at"),
+         {:ok, datetime, _offset} <- DateTime.from_iso8601(value) do
+      {:ok, Map.put(event, "occurred_at", datetime)}
+    else
+      _ -> {:error, :invalid_request}
+    end
+  end
+
+  defp parse_event_time(_event), do: {:error, :invalid_request}
 
   defp runtime_registration(%Runtime{} = runtime),
     do: %{
