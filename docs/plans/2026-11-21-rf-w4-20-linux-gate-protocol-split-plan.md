@@ -4,18 +4,18 @@ Contract: `goal-rf-w4-20-linux-gate-protocol-split.md` (GDD, 2026-11-21). Base r
 `79548368` = `origin/main` = this worktree's HEAD. The subject file
 `daemon/native/linux-gate/protocol/launcher_linux.go` (3,303 lines) held 230 top-level
 declarations fusing four concerns; every one of them is relocated, none is edited, split,
-renamed or merged. `launcher_linux.go` is deleted; the package is compiled from five files.
+renamed or merged. `launcher_linux.go` is deleted; its content is compiled from five files.
 
 ## Deliverable shape
 
 | file | build constraint | lines | units | composition |
 |---|---|---:|---:|---|
-| `wire.go` | none | 680 | 111 | 58 const, 12 type, 3 method, 38 func |
-| `wire_linux.go` | `linux && amd64` | 766 | 30 | 2 type, 3 method, 25 func |
+| `wire.go` | none | 724 | 112 | 58 const, 12 type, 3 method, 39 func |
+| `wire_linux.go` | `linux && amd64` | 723 | 29 | 2 type, 3 method, 24 func |
 | `owner_config_linux.go` | `linux && amd64` | 138 | 8 | 4 const, 1 method, 3 func |
 | `proc_identity_linux.go` | `linux && amd64` | 530 | 29 | 5 type, 4 method, 20 func |
 | `gate_lifecycle_linux.go` | `linux && amd64` | 1,251 | 52 | 11 const, 4 var, 5 type, 24 method, 8 func |
-| total | | 3,365 | 230 | |
+| total | | 3,366 | 230 | |
 
 `launcher_linux.go` (3,303 lines) is gone; the largest of the five split targets is 1,251
 lines (limit 1,500). The limit is scoped to the five split targets: the pre-existing
@@ -30,10 +30,12 @@ Concern boundaries:
   constants, sizes and limits; the wire payload types (`OwnerConfig`, `ProcessIdentity`,
   `LauncherIdentity`, `LauncherReady`, `LaunchRequest`, `LaunchResult`, `NativeCommand`, the
   two stage enums and their error carriers); every `Encode*`/`Decode*`/validator that only
-  transforms bytes ↔ structs with no fd and no syscall. No build constraint: it compiles and
-  is tested on every GOOS.
-- **`wire_linux.go` — the fd-bearing half of the same concern.** The guarded RELEASE v2/v3
-  codec and its payload validators, the seqpacket/SCM_RIGHTS send/receive paths, the
+  transforms bytes ↔ structs with no fd and no syscall — including the guarded RELEASE v2/v3
+  encoder `encodeGuardedRelease`, which the fix stage moved here from the linux half per
+  amendment 1. No build constraint: it compiles and is tested on every GOOS.
+- **`wire_linux.go` — the fd-bearing half of the same concern.** The `EncodeRelease`/
+  `DecodeRelease` wrappers and the guarded RELEASE v2/v3 decode path with its payload
+  validators, the seqpacket/SCM_RIGHTS send/receive paths, the
   launcher-result/ready readers, the clone-status channel readers, `parseRights`,
   `closeFDs` and the shared poll primitive (`waitForStatus`). These cannot be portable: they
   call `unix.Recvmsg`/`SendmsgN`/`Poll`/`Fstat` or depend on `OwnerConfig.Validate`, which
@@ -78,18 +80,35 @@ Concern boundaries:
 5. **A type's methods stay with the type.** `PreparedGate.verifyIdentity`/`verifyNativeImage`
    are methods of the state machine and stay in the lifecycle file even though they call the
    /proc verifiers; the free `/proc` and pinning functions are in `proc_identity_linux.go`.
-6. **No existing test is moved.** None of the 11 tests in the package exercises only the
+6. **No existing test is moved.** None of the 11 launcher-integration tests exercises only the
    portable codec: the codec-only release test
    (`TestLinuxOwnerReleaseV2RejectsLegacyAndWrongDescriptorCount`) needs real FIFO pipes and
    `unix`, so it stays in `launcher_integration_linux_test.go` unchanged.
 7. **Two new test files.** `wire_test.go` (no constraint, runs on Windows) covers the
-   portable frames and decoders; `wire_linux_test.go` (`linux && amd64`) covers the RELEASE
-   frame and the bootstrap-request decoder, which have no portable entry point (decision 2).
+   portable frames and decoders and, since the fix stage, the portable guarded-RELEASE
+   encoder; `wire_linux_test.go` (`linux && amd64`) covers the descriptor-validating RELEASE
+   paths and the bootstrap-request decoder, which have no portable entry point (decision 2).
 8. **Exported API unchanged.** Every exported declaration (`Encode*`, `Decode*`, `Validate*`,
    `Prepare`, `PreparedGate` and its methods, `OwnerConfig`, `NativeCommand`, `LaunchRequest`,
    `LaunchResult`, `LauncherIdentity`, `LauncherReady`, `CaptureLauncherIdentity`, the error
    types, `LaunchRequestSize`, `OwnerConfigMaxBytes`, …) keeps its exact name, signature and
    receiver; only its file changed. `go doc -all` output is compared before/after.
+
+### Fix stage (2026-11-21, review r1)
+
+- **R01 — the pure RELEASE encoder joins the untagged file.** `encodeGuardedRelease` (pure
+  bytes: no fd, no syscall, no Linux-only symbol) moved verbatim from `wire_linux.go` to
+  `wire.go`; `EncodeRelease` stays the `linux && amd64` wrapper that keeps the descriptor
+  validation and `monotonicDeadlineNS` read in the same order. `wire.go` is now 724 lines /
+  112 units, `wire_linux.go` 723 lines / 29 units, total 3,366 (the move adds one blank
+  separator); the moved text is byte-verified against the base function. `wire_test.go` pins
+  the portable v2 frame (`TestWireGuardedReleaseV2Encode`, also green against the base
+  revision's encoders; mutant M16 covers its zero-deadline refusal) and
+  `FuzzEncodeGuardedRelease` fuzzes the pure encoder on the host.
+- **R02 — both RELEASE-family size bounds now have killing cases.** `DecodeLauncherReady`
+  refuses a frame one full `maxLauncherReadySize` past its bound and `decodeReleaseFrame`
+  refuses one a full `maxReleaseSize` past its bound (exercised through both RELEASE entry
+  points); mutants M13-M15 die on exactly those cases.
 
 ## Exact semantics the contract demands (and how they are preserved)
 
@@ -104,10 +123,12 @@ Concern boundaries:
   text. No unit's token stream, comment text or literal changed.
 - **Wire frame bytes.** A scratch dump test (`.agents`-external, in the run scratch dir)
   encodes every frame type from fixed fixtures with the base revision and with the split
-  revision: 100/100 lines identical, covering the 15 frame encoders (including RELEASE v2 and
-  a v3 frame carrying a clone grant, encoded through `encodeGuardedRelease` with an explicit
-  monotonic deadline so the bytes cannot depend on host clock state), the decoded form of
-  each decodable frame, 70 decode-refusal strings and 5 encoder-refusal strings.
+  revision: 100/100 lines identical — 16 frame encodes (the 15 kinds, with RELEASE v2 and a
+  v3 frame carrying a clone grant encoded through `encodeGuardedRelease` with an explicit
+  monotonic deadline so the bytes cannot depend on host clock state), 7 successful decodes
+  (the exec-attempt, ack and clone-request frames have no successful decode line), 72
+  refusal lines (70 uniform mutations across 12 frames plus a labelled v2-packet and
+  stale-token probe) and 5 encoder refusals.
 - **Refusal/error strings.** Byte-identical by the same 100-line comparison; the new refusal
   tests additionally pin them (exact `err.Error()` equality) for truncated, oversized,
   unknown-tag and frame-specific mutations.
@@ -129,14 +150,16 @@ Concern boundaries:
 5. WSL `wsl -d Ubuntu-24.04 -u accept` in `daemon/`:
    `go test -count=1 -race ./native/linux-gate/... ./internal/platform/...` with the SKIP
    list recorded.
-6. `go test -run=^$ -fuzz=FuzzDecode<one> -fuzztime=30s` per fuzz target, on the platform
-   where the target compiles.
-7. Declaration-set comparison with `--moves` per-unit table and the 11 whitespace deltas
+6. `go test -run=^$ -fuzz='^FuzzDecode<one>$' -fuzztime=30s` per fuzz target, on the
+   platform where the target compiles. The anchor is required: an unanchored name also
+   matches its longer sibling (`FuzzDecodeLauncherReady` selects
+   `FuzzDecodeLauncherReadyFailure` too) and the run aborts.
+7. Declaration-set comparison with `--moves` per-unit table and the 9 whitespace deltas
    (scratch tool `psplit`, `go/ast` byte-range extraction, stdlib only); plus
    `git diff --color-moved=dimmed-zebra` over the base file against a concatenation of the
    five targets.
 8. Frame-bytes golden comparison base vs HEAD (the 100-line dump).
-9. Control-flow audit: the token streams of all 230 units are identical, and the 51 lifecycle
+9. Control-flow audit: the token streams of all 230 units are identical, and the 52 lifecycle
    units (including `Prepare`, `Release`, `WaitLeader`, `Close`) carry the same statement
    sequence; `PreparedGate`'s call sites and lock order are unchanged because no body changed.
 10. Red mutants: for each new refusal test function, the corresponding guard in a
@@ -145,6 +168,10 @@ Concern boundaries:
 11. `python3 scripts/ci/check-citation-existence.py` over the changed documents; no host path
     containing a user profile name and no backslash-letter-u escape sequence in any written
     file (the conductor's DLP filter rule).
+12. Contract arch-decision-2 R9 record: no `SOURCE_PATHS` entry of
+    `scripts/ci/omo-control-native-evidence.py` is touched — the 28 listed paths have no
+    intersection with the five split targets, the two new test files or this plan (checked
+    against the branch diff at the fix revision).
 
 ## Design trade-offs
 
@@ -153,7 +180,7 @@ Concern boundaries:
   its inputs are the ordered rule list in the plan (below) and the base file. Cost: the tool
   is not committed; the durable outputs are the per-unit move table, the deltas file and this
   plan's rule list, and the split re-runs from the same two commands after a rebase.
-- **Whitespace-only reflow accepted in 11 specs** instead of forcing byte identity by putting
+- **Whitespace-only reflow accepted in 9 specs** instead of forcing byte identity by putting
   a concern's constants in the wrong file or keeping a fused block. The alternative would
   either duplicate constants or move lifecycle paths into the codec module; both are worse
   than a gofmt alignment delta that is provably token-free.
@@ -181,7 +208,7 @@ Targets: `W`=`wire.go`, `WL`=`wire_linux.go`, `OC`=`owner_config_linux.go`,
 | `^method\|(LauncherReadyFailureStage\|LauncherReadyFailureError\|CloneBootstrapFailureError)\|` | W |
 | the 38 portable frame functions (`encodeLaunchRequest`, `EncodeLauncherReady`, …, `DecodeCloneBootstrapFailure`) | W |
 | `^type\|(ReleaseGuard\|execStatus)$`, `^method\|(NativeCommand\|GateProductionAuth)\|` | WL |
-| the 25 fd/SCM functions (`sendPacket`, `receiveLauncherResult`, `parseRights`, `waitForStatus`, `EncodeRelease`, `DecodeRelease`, `decodeReleaseFrame`, `EncodeGateMap`, `DecodeGateMap`, `receiveExecStatus`, `closeFDs`, …) | WL |
+| the 24 fd/SCM functions (`sendPacket`, `receiveLauncherResult`, `parseRights`, `waitForStatus`, `EncodeRelease`, `DecodeRelease`, `decodeReleaseFrame`, `EncodeGateMap`, `DecodeGateMap`, `receiveExecStatus`, `closeFDs`, …; the fix stage moved the pure `encodeGuardedRelease` from this set to `W`) | WL |
 | `^const\|(OwnerConfigMaxBytes\|maxOwnerConfigBytes\|maxOwnerStateDirBytes\|ownerConfigPath)$`, `^method\|OwnerConfig\|`, `^func\|\|(ReadInstalledOwnerConfig\|parseOwnerConfig\|validateOwnerStateDir)$` | OC |
 | `^type\|(InaccessibleUserNamespaceError\|nativeImageIdentity\|pinnedNativeImage\|procStatus\|namespaceStat)$`, `^method\|(InaccessibleUserNamespaceError\|pinnedNativeImage)\|`, the 20 `/proc`+pinning functions | PI |
 | `^const\|(launcherPath\|cloneBootstrapPath\|bootstrapTimeout\|execAckTimeout\|cloneBootstrapTimeout)$`, `^var\|(ErrOutcomeUnknown\|ErrReleaseUsed\|ErrGateNeverProduced\|ErrInaccessibleUserNamespace)$`, `^const\|gate[A-Z]`, `^type\|(GateNeverProducedError\|LauncherOutcomeError\|PreparedGate\|gateState\|LauncherStartHook)$`, `^method\|(GateNeverProducedError\|LauncherOutcomeError\|PreparedGate)\|`, `^func\|\|(launcherExitProof\|Prepare\|validateCloneCheckoutReceipt\|validateReleaseGuardLive\|waitProcessFD\|stopLauncher\|closeFiles\|errOr)$` | GL |
@@ -199,7 +226,7 @@ Block exception (same mechanism as decision 4): the `var ( … )` block holding
   `cmd/symmetry-linux-launcher` (W6-06) — untouched.
 - Any behaviour change: no error string, frame byte, syscall order, fd ownership, validation
   rule, timeout, test name or test assertion is modified.
-- Any test move: none of the existing 11 tests qualifies (decision 6).
+- Any test move: none of the existing launcher-integration tests qualifies (decision 6).
 - The arm64 `go vet` gap recorded in `docs/TODO.md` ("Build-tag parity (arm64 oracle)") is in
   `internal/state`, not this package; this slice only adds the arm64 `go build` target.
 
@@ -210,15 +237,15 @@ run's scratch directory holds the whole artifacts. Summary of what the delivered
 
 | check | result |
 |---|---|
-| file sizes | `wire.go` 680, `wire_linux.go` 766, `owner_config_linux.go` 138, `proc_identity_linux.go` 530, `gate_lifecycle_linux.go` 1,251; `launcher_linux.go` deleted |
+| file sizes | `wire.go` 724, `wire_linux.go` 723, `owner_config_linux.go` 138, `proc_identity_linux.go` 530, `gate_lifecycle_linux.go` 1,251; `launcher_linux.go` deleted |
 | declaration set | 230/230 units, 0 missing, 0 extra, 221 byte-identical, 9 whitespace-only (gofmt `=` alignment in the two `const` blocks whose longest name changed), 0 token differences, import set 21 = 21 |
 | `go doc -all` | byte-identical base vs HEAD (508 lines) |
-| frame/refusal golden | base vs HEAD dump identical, 100/100 lines: 16 frame encodes (all 15 kinds incl. RELEASE v2 and a v3 clone frame), 14 decoded forms, 70 decode-refusal strings, 5 encoder-refusal strings |
+| frame/refusal golden | base vs HEAD dump identical (fix-stage re-run), 100/100 lines: 16 frame encodes (all 15 kinds incl. RELEASE v2 and a v3 clone frame), 7 decoded forms, 72 decode-refusal lines (70 uniform mutations + 2 labelled probes), 5 encoder-refusal strings |
 | builds | `GOOS=linux`, `GOOS=windows`, `GOOS=linux GOARCH=arm64`: exit 0 each |
 | vet | `go vet ./...` (host) and `GOOS=linux go vet ./native/linux-gate/protocol/`: exit 0 |
 | gofmt | `gofmt -l ./native/linux-gate/protocol/`: empty |
-| host tests | `go test -count=1 ./native/linux-gate/protocol/...`: ok (portable codec off-Linux) |
-| WSL tests | `go test -count=1 -race -v ./native/linux-gate/... ./internal/platform/...`: `native/linux-gate/protocol` ok (4.196 s, 243 pass, 0 fail); `internal/platform` fails 4 loopback-TCP tests and its 600 s package budget, identically at the base revision (4 failures, 600.097 s) — a loopback-dial environment limit of this WSL instance, not this slice; 12 skips, all declared in files this slice did not touch |
-| fuzzing | 14 fuzz targets, `-fuzztime=30s` each: 11 portable on the host (4.6M-8.2M execs each) and 3 linux-only in WSL (28k-1.4M execs each); 0 failures |
-| red mutants | 11 flipped guards across the 8 new refusal test functions (5 portable + 3 linux; `TestWireLauncherReadyRefusals` and `TestWireCloneStatusRefusals` carry two each), each control-green, mutant-red on the intended test function, and the file restored byte-identically. The apply stage re-ran all 11 against the simplified tests (each still control-green and mutant-red) and verified one further guard for the newly covered oversized checkout-status bound: 12/12 |
-| citation gate | `python3 scripts/ci/check-citation-existence.py --base 79548368 --head HEAD`: nothing to check (no committed range) |
+| host tests | `go test -count=1 -v ./native/linux-gate/protocol/...`: ok 0.121 s; 19 top-level PASS (7 Test + 12 fuzz seed), 114 subtest PASS, 0 FAIL — the portable codec and the portable RELEASE encoder run off-Linux |
+| WSL tests | `go test -count=1 -race -v ./native/linux-gate/...`: ok 3.680 s; 236 RUN / 225 `--- PASS` (36 top-level, 171 subtest) / 11 SKIP / 0 FAIL at the fix revision; the 11 skips are the pre-existing integration scratch helpers declared in files this slice did not touch. The full pair run `... ./internal/platform/...` additionally records `internal/platform` failing its 4 pre-existing loopback-TCP tests and its 600 s package budget, identically at the base revision (impl/apply stage artifacts) |
+| fuzzing | 15 fuzz targets, anchored (`-fuzz='^Name$'`), `-fuzztime=30s` each: 12 portable on the host (2.24M-4.89M execs each) and 3 linux-only in WSL (7,981-66,959 execs each); 0 failures (fix-stage run). The impl stage's unanchored host sweep aborted on two name matches (`portable_fuzz_failures=2`, two prefixes selecting two targets each); this anchored rerun supersedes it |
+| red mutants | 16/16 caught (control-green, mutant-red on the intended test function, file restored byte-identically): the 12 mutants of the applied revision (M1-M12, covering 8 refusal test functions, 5 portable + 3 linux) re-run at the fix revision, plus M13 (`maxLauncherReadySize` bound, portable), M14 and M15 (`maxReleaseSize` bound through `TestWireLinuxReleaseRefusals` and `TestWireLinuxCloneBootstrapRefusals`, WSL) and M16 (zero-deadline encoder guard, portable) |
+| citation gate | `python3 scripts/ci/check-citation-existence.py --base 79548368 --head HEAD`: exit 0, 1 changed document passes the path and symbol check (453 path citations); the audited corpus is `docs/runbooks/**`, `docs/design/quality.md` and `docs/archive/CLOSED-TODO.md`, so this plan is outside its scope |

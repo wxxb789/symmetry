@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
@@ -11,10 +12,11 @@ import (
 )
 
 // Golden bytes for every portable frame whose bytes are fully determined by the
-// deterministic fixtures below and the fixed header layout. They were taken from
-// the base revision's encoders in the base-vs-HEAD frame dump (identical on both
-// sides) and are pinned here so a layout change fails even when the round trip
-// still holds.
+// deterministic fixtures below and the fixed header layout. Each value was
+// captured with these fixtures from the base revision's encoders and is pinned
+// here so a layout change fails even when the round trip still holds; the
+// separate base-vs-HEAD 100-line dump uses its own fixture set and shows the
+// same frame kinds byte-identical on both sides.
 const (
 	wireTestLaunchRequestGoldenHex         = "53594d4c41303031010001000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20ababababababababababababababababcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
 	wireTestLaunchResultGoldenHex          = "53594d4c413030310100020000000000000000000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f2069100000e9030000ea0300006a1000000000000075f3c8f4e500000004000000000000001300000000000000a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf"
@@ -26,6 +28,13 @@ const (
 	wireTestBootstrapExecAttemptGoldenHex  = "53594d4c413030310300140007000000000000001300000000000000"
 	wireTestNativeExecAttemptGoldenHex     = "53594d4c41303031030017000b000000000000001700000000000000"
 	wireTestCloneBootstrapFailureGoldenHex = "53594d4c41303031030018000200000005000000"
+	// wireTestReleaseGoldenDeadlineNS is the explicit lease cutoff which makes
+	// the guarded RELEASE bytes independent of CLOCK_MONOTONIC.
+	wireTestReleaseGoldenDeadlineNS = uint64(123456789)
+	// wireTestReleaseV2GoldenHex is the v2 scratch RELEASE frame. Its encoder
+	// (encodeGuardedRelease) is portable, so the pinned bytes run on every GOOS;
+	// the fd-bearing decoder and the v3 clone frame stay in wire_linux_test.go.
+	wireTestReleaseV2GoldenHex = "53594d4c41303031020006000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20310000000400000015cd5b0700000000090000002f62696e2f7472756501000000090000002f62696e2f7472756501000000060000004c414e473d43010000002f"
 )
 
 const (
@@ -180,6 +189,30 @@ func TestWireFrameRoundTrips(t *testing.T) {
 				t.Errorf("%s round trip = %s, want %s", testCase.name, got, testCase.want)
 			}
 		})
+	}
+}
+
+// TestWireGuardedReleaseV2Encode pins the portable v2 RELEASE bytes and header
+// fields with the scratch fixture of the linux golden test. encodeGuardedRelease
+// has no fd or syscall dependency, so its layout is checked on every GOOS; the
+// fd-validating EncodeRelease wrapper and the descriptor-checking decoder stay
+// in wire_linux_test.go.
+func TestWireGuardedReleaseV2Encode(t *testing.T) {
+	command := NativeCommand{Path: "/bin/true", Args: []string{"/bin/true"}, Env: []string{"LANG=C"}, Dir: "/"}
+	packet, err := encodeGuardedRelease(wireTestToken(), command, wireTestReleaseGoldenDeadlineNS)
+	if err != nil {
+		t.Fatalf("encode portable v2 RELEASE: %v", err)
+	}
+	if version := binary.LittleEndian.Uint16(packet[8:10]); version != releaseWireVersion ||
+		binary.LittleEndian.Uint64(packet[52:60]) != wireTestReleaseGoldenDeadlineNS {
+		t.Fatalf("portable v2 RELEASE header = %x", packet[:releaseHeaderSize])
+	}
+	if got := hex.EncodeToString(packet); got != wireTestReleaseV2GoldenHex {
+		t.Errorf("portable v2 RELEASE golden bytes = %s, want %s", got, wireTestReleaseV2GoldenHex)
+	}
+	if _, err := encodeGuardedRelease(wireTestToken(), command, 0); err == nil ||
+		err.Error() != "Linux RELEASE requires a nonzero monotonic lease cutoff" {
+		t.Errorf("zero-deadline encode refusal = %v", err)
 	}
 }
 
@@ -482,6 +515,14 @@ func wireTestAppendOversizedCloneStatus() func([]byte) []byte {
 	}
 }
 
+// wireTestAppendOversizedLauncherReady appends one full fixed bound so the
+// decoder must refuse the frame on its size guard, not on trailing bytes.
+func wireTestAppendOversizedLauncherReady() func([]byte) []byte {
+	return func(packet []byte) []byte {
+		return append(wireTestCopy(packet), make([]byte, maxLauncherReadySize)...)
+	}
+}
+
 // TestWireLaunchRequestRefusals covers the prepare request guards.
 func TestWireLaunchRequestRefusals(t *testing.T) {
 	token, auth, request := wireTestLaunchRequestFixture(t)
@@ -559,8 +600,12 @@ func TestWireLauncherReadyRefusals(t *testing.T) {
 			want: "transient launcher readiness identity is invalid or has trailing bytes",
 		},
 		{
-			name: "oversized", mutate: wireTestAppendZero(),
+			name: "one trailing byte", mutate: wireTestAppendZero(),
 			want: "transient launcher readiness identity is invalid or has trailing bytes",
+		},
+		{
+			name: "oversized beyond the fixed bound", mutate: wireTestAppendOversizedLauncherReady(),
+			want: "transient launcher readiness magic, version, type, or size is invalid",
 		},
 		{
 			name: "unknown tag", mutate: wireTestSetUint16(10, wireTestUnknownFrameKind),
@@ -818,6 +863,58 @@ func wireTestFuzzValidate(t *testing.T, candidate []byte, validate func(packet [
 type wireTestExecProof struct {
 	device uint64
 	inode  uint64
+}
+
+// wireTestFuzzReleaseCommand derives a deterministic pure command from fuzz
+// bytes: the first NUL-separated field is the path, the second the directory,
+// and the remaining fields alternate between argv and environment entries.
+func wireTestFuzzReleaseCommand(raw []byte) NativeCommand {
+	fields := bytes.SplitN(raw, []byte{0}, 2*maxCommandVector+2)
+	for len(fields) < 2 {
+		fields = append(fields, nil)
+	}
+	command := NativeCommand{Path: string(fields[0]), Dir: string(fields[1])}
+	for index, field := range fields[2:] {
+		if index%2 == 0 {
+			command.Args = append(command.Args, string(field))
+		} else {
+			command.Env = append(command.Env, string(field))
+		}
+	}
+	return command
+}
+
+// FuzzEncodeGuardedRelease drives the portable guarded-RELEASE encoder with
+// NUL-separated command fields. The decoder needs the four descriptors and
+// stays linux-only, so the invariants pinned here are portable: encoding is
+// deterministic, refusals repeat the same error, and every accepted frame
+// carries the fixed header, the declared body size and a bounded length.
+func FuzzEncodeGuardedRelease(f *testing.F) {
+	f.Add([]byte("/bin/true\x00/\x00--scratch\x00LANG=C"), wireTestReleaseGoldenDeadlineNS)
+	f.Fuzz(func(t *testing.T, raw []byte, deadlineNS uint64) {
+		command := wireTestFuzzReleaseCommand(raw)
+		packet, err := encodeGuardedRelease(wireTestToken(), command, deadlineNS)
+		if err != nil {
+			again, againErr := encodeGuardedRelease(wireTestToken(), command, deadlineNS)
+			if againErr == nil || againErr.Error() != err.Error() || again != nil {
+				t.Fatalf("encoder refusal is not deterministic: %v then %v", err, againErr)
+			}
+			return
+		}
+		again, againErr := encodeGuardedRelease(wireTestToken(), command, deadlineNS)
+		if againErr != nil || !bytes.Equal(packet, again) {
+			t.Fatalf("encoder is not deterministic: %v then %v", err, againErr)
+		}
+		if len(packet) < releaseHeaderSize || len(packet) > maxReleaseSize ||
+			string(packet[:8]) != launchMagic ||
+			binary.LittleEndian.Uint16(packet[8:10]) != releaseWireVersion ||
+			binary.LittleEndian.Uint16(packet[10:12]) != frameRelease ||
+			binary.LittleEndian.Uint32(packet[44:48]) != uint32(len(packet)-releaseHeaderSize) ||
+			binary.LittleEndian.Uint32(packet[48:52]) != releaseFDCount ||
+			binary.LittleEndian.Uint64(packet[52:60]) != deadlineNS {
+			t.Fatalf("portable RELEASE frame is malformed: len=%d", len(packet))
+		}
+	})
 }
 
 func FuzzDecodeLaunchRequest(f *testing.F) {

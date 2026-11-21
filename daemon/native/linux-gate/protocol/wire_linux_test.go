@@ -17,16 +17,14 @@ import (
 )
 
 const (
-	// wireTestReleaseGoldenDeadlineNS is the explicit lease cutoff which makes
-	// the guarded RELEASE bytes independent of CLOCK_MONOTONIC.
-	wireTestReleaseGoldenDeadlineNS = uint64(123456789)
-	// The gate map, scratch RELEASE and clone RELEASE golden bytes below were
-	// produced by composing the same fixtures with the production portable
-	// helpers (fixedFrame/appendWire*, json.Marshal) on the host where these
-	// tests were authored; the linux-only encoders cannot run there. The tests
-	// below re-derive the same bytes through the production encoders.
+	// The gate map and clone RELEASE golden bytes below were produced by
+	// composing the same fixtures with the production portable helpers
+	// (fixedFrame/appendWire*, json.Marshal) on the host where these tests were
+	// authored; the fd-bearing RELEASE encoders cannot run there. The tests
+	// below re-derive the same bytes through the production encoders. The
+	// scratch v2 RELEASE golden and its explicit deadline live in wire_test.go
+	// next to the portable encoder test that pins them.
 	wireTestGateMapGoldenHex   = "53594d4c4130303101000400e9030000ea030000d1070000d20700000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
-	wireTestReleaseV2GoldenHex = "53594d4c41303031020006000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20310000000400000015cd5b0700000000090000002f62696e2f7472756501000000090000002f62696e2f7472756501000000060000004c414e473d43010000002f"
 	wireTestReleaseV3GoldenHex = "53594d4c41303031030006000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20480300000400000015cd5b0700000000090000002f62696e2f7472756501000000090000002f62696e2f7472756501000000060000004c414e473d43420000002f746d702f73796d6d657472792d776972652d676f6c64656e2f62696e64696e672d62696e64696e672d312f72756e2d72756e2d312f67656e65726174696f6e2d31d20200007b22696e74656e74223a7b2276657273696f6e223a322c2272756e5f6964223a2272756e2d31222c2267656e65726174696f6e223a312c2262696e64696e675f6b6579223a2262696e64696e672d31222c227265736f757263655f6964223a2230303030303030302d303030302d343030302d383030302d303030303030303030303031222c22626173655f636f6d6d6974223a2261616161616161616161616161616161616161616161616161616161616161616161616161616161222c22626173655f747265655f646967657374223a227368613235363a62626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262222c226e6f6e6365223a2263636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363222c22736565645f70617468223a222f746d702f73796d6d657472792d776972652d676f6c64656e2d736565642f62696e64696e672d62696e64696e672d312f72756e2d72756e2d312f67656e65726174696f6e2d312e62756e646c65222c22746172676574223a222f746d702f73796d6d657472792d776972652d676f6c64656e2f62696e64696e672d62696e64696e672d312f72756e2d72756e2d312f67656e65726174696f6e2d31227d2c2273656564223a7b2276657273696f6e223a322c22626173655f636f6d6d6974223a2261616161616161616161616161616161616161616161616161616161616161616161616161616161222c22646967657374223a227368613235363a64646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464222c2273697a65223a312c22646576696365223a312c22696e6f6465223a327d7d"
 )
 
@@ -250,6 +248,14 @@ func wireTestXorByte(index int, mask byte) func([]byte) []byte {
 	}
 }
 
+// wireTestAppendOversizedRelease appends one full release bound so the decoder
+// must refuse the frame on its top-level size guard, not on the body size.
+func wireTestAppendOversizedRelease() func([]byte) []byte {
+	return func(packet []byte) []byte {
+		return append(wireTestCopy(packet), make([]byte, maxReleaseSize)...)
+	}
+}
+
 // TestWireLinuxReleaseRefusals covers the guarded v2/v3 RELEASE guards.
 func TestWireLinuxReleaseRefusals(t *testing.T) {
 	pipes := newScratchNativePipes(t)
@@ -270,8 +276,12 @@ func TestWireLinuxReleaseRefusals(t *testing.T) {
 			want: "Linux owner RELEASE body size is invalid",
 		},
 		{
-			name: "oversized appended zero", mutate: wireTestAppendZero(),
+			name: "one appended byte without a body size update", mutate: wireTestAppendZero(),
 			want: "Linux owner RELEASE body size is invalid",
+		},
+		{
+			name: "oversized beyond the release bound", mutate: wireTestAppendOversizedRelease(),
+			want: "Linux owner RELEASE v2/v3 header version or type is invalid",
 		},
 		{
 			name: "unknown tag", mutate: wireTestSetUint16(10, wireTestUnknownFrameKind),
@@ -379,8 +389,12 @@ func TestWireLinuxCloneBootstrapRefusals(t *testing.T) {
 			want: "Linux owner RELEASE body size is invalid",
 		},
 		{
-			name: "oversized appended zero", mutate: wireTestAppendZero(),
+			name: "one appended byte without a body size update", mutate: wireTestAppendZero(),
 			want: "Linux owner RELEASE body size is invalid",
+		},
+		{
+			name: "oversized beyond the release bound", mutate: wireTestAppendOversizedRelease(),
+			want: "Linux owner RELEASE v2/v3 header version or type is invalid",
 		},
 		{
 			name: "unknown tag", mutate: wireTestSetUint16(10, wireTestUnknownFrameKind),

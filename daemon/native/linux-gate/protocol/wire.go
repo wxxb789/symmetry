@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -677,4 +678,47 @@ func DecodeCloneBootstrapFailure(packet []byte) (*CloneBootstrapFailureError, er
 		return nil, errors.New("Linux clone bootstrap failure frame code is invalid")
 	}
 	return &CloneBootstrapFailureError{Stage: stage, Errno: errno}, nil
+}
+
+func encodeGuardedRelease(token [32]byte, command NativeCommand, deadlineNS uint64) ([]byte, error) {
+	if deadlineNS == 0 {
+		return nil, errors.New("Linux RELEASE requires a nonzero monotonic lease cutoff")
+	}
+	body := make([]byte, 0, 24+len(command.Path)+len(command.Dir))
+	body = appendWireString(body, command.Path)
+	body = appendWireUint32(body, uint32(len(command.Args)))
+	for _, value := range command.Args {
+		body = appendWireString(body, value)
+	}
+	body = appendWireUint32(body, uint32(len(command.Env)))
+	for _, value := range command.Env {
+		body = appendWireString(body, value)
+	}
+	body = appendWireString(body, command.Dir)
+	version := releaseWireVersion
+	if command.Clone != nil {
+		cloneGrant, err := json.Marshal(command.Clone)
+		if err != nil {
+			return nil, fmt.Errorf("encode A-authorized Linux clone grant: %w", err)
+		}
+		if len(cloneGrant) == 0 || len(cloneGrant) > maxReleaseSize-releaseHeaderSize-len(body)-4 {
+			clear(cloneGrant)
+			return nil, errors.New("Linux clone grant exceeds the guarded RELEASE bound")
+		}
+		body = appendWireUint32(body, uint32(len(cloneGrant)))
+		body = append(body, cloneGrant...)
+		clear(cloneGrant)
+		version = releaseCloneWireVersion
+	}
+	if len(body) > maxReleaseSize-releaseHeaderSize {
+		return nil, errors.New("Linux owner native command exceeds the release bound")
+	}
+	packet := fixedFrame(frameRelease, releaseHeaderSize+len(body))
+	binary.LittleEndian.PutUint16(packet[8:10], version)
+	copy(packet[12:44], token[:])
+	binary.LittleEndian.PutUint32(packet[44:48], uint32(len(body)))
+	binary.LittleEndian.PutUint32(packet[48:52], releaseFDCount)
+	binary.LittleEndian.PutUint64(packet[52:60], deadlineNS)
+	copy(packet[releaseHeaderSize:], body)
+	return packet, nil
 }
