@@ -301,7 +301,7 @@ base already executed 524 (W3-12's recorded 522 predates its own round-1 fix com
 | `git grep -nE "^\s*function refusal\(\|^\s*const refusal =\|\brefusal\(" -- frontend/src/services/api.ts` | 0 lines (exit 1); other files' own `refusal` fixtures are unrelated |
 | `git grep -n "TextDecoder" -- frontend/src` | 1 (`api.ts:562`, `decodeBodyText`) |
 | `git grep -n "response\.text()" -- frontend/src` | 1 (the comment at `api.ts:559`); 0 code uses |
-| `git grep -n "new AbortController" -- frontend/src/services` | 0 |
+| `git grep -n "new AbortController" -- frontend/src/services` | 31 at the review tree, all in `api.test.ts` — the `0` was false (0 only for `-- frontend/src/services/api.ts`); see the F2 erratum and the PR-review stage note below |
 | `git grep -nE "\bServerError\b\|\bCommandErrorBody\b\|\bpostPortalCommand\b" -- frontend/src` | 0 lines (exit 1) |
 | api.ts line count | 1,044 → 1,042 |
 
@@ -435,7 +435,10 @@ profile-directory path.
 scope contains `api.test.ts` (29 such lines at the base, 31 at that stage's tree), so the row's
 exit code and count are false; only `-- frontend/src/services/api.ts` yields exit 1. Its other
 counts (`api.ts` 1,042, `api.test.ts` 472, 34 cases, focused 159, full 528) were true of that
-stage's tree and are stage-scoped; the live values are the table below.
+stage's tree and are stage-scoped; the live values are the table below. The erratum also covers
+the identical false row in this plan's implement-stage census (`:304`), which now carries the
+re-measured 31 (all `api.test.ts`); the PR-#204 review round's P2-1 pin raises the live count to
+32 (the stage note appended at the end of this plan is the current single source).
 
 ### Counts after the fix (single source; supersedes the apply note's refreshed table)
 
@@ -474,3 +477,58 @@ attributed to a named test.
 | (j) | mutation (b) re-run: `parseRefusal` passes `{}` as `MutationRefused.details` | `api.test.ts -t "carries a described command refusal"`; `goal-attention.test.tsx -t "sends the served expected version and revision"` | exit 1 — 1 failed (`expected {} to deeply equal { current_version: 9, …(3) }`, the second witness) and 1 failed (`Unable to find … /version 9, revision 3/` at `:322`) |
 
 `sha256sum -c` over `frontend/src/services/api.ts` printed OK after every revert.
+
+## Fix-stage note (2026-11-21, PR #204 review r1: P2-1/P3-1/P3-2)
+
+Conductor brief: clear the Opus review's `CHANGES REQUESTED` inside this contract's owned set —
+P2-1 (a request cancelled during the body read no longer aborted its fetch), P3-1 (PR-body
+staleness; no repo edit beyond this record) and P3-2 (the false `new AbortController` row at
+`:304`). Files touched: `frontend/src/services/api.ts`, `frontend/src/services/api.test.ts` and
+this plan.
+
+| # | disposition | what changed / why valid |
+| --- | --- | --- |
+| P2-1 | FIXED | `request()` (`api.ts:639-671`) fetches, classifies `expired` (`opaqueredirect`/302/303/401) and reads the body — only when `!expired && (response.ok \|\| method !== "GET")` — inside one signalled `Effect.tryPromise` again, so a caller cancel during the body read aborts the fetch signal (the base layout; the split second step had no controller). D11/D12 unchanged: the expiry classification still precedes any read, and a body-read rejection still maps through `unreachable` → `Network` (all pinned cases stay green). |
+| P2-1 pin | ADDED | `api.test.ts` `"aborts the in-flight body download when the consumer cancels during the read"` (new `request cancellation` describe, `:198-226`): a hand-built 200 whose `arrayBuffer` never settles (`Response` in the test environment pulls a stream body at construction, so a stream probe would fire before the boundary reads); the consumer aborts once the read has been called and the captured `init.signal` must be aborted. |
+| P3-1 | FIXED (no repo edit) | the PR body now carries the delivered counts, the `api.ts` LOC delta and the D1/D11/D12 user-visible changes; "Nothing committed" is gone. |
+| P3-2 | FIXED (record) | the implement-stage census row at `:304` carries the re-measured scope (31 at the review tree, all `api.test.ts`); the F2 erratum covers it. |
+
+### P2-1 pin: red and green (the unfixed bytes restored with `git stash push/pop` over `api.ts`)
+
+| run | `api.ts` under test | command | exit | result |
+| --- | --- | --- | ---: | --- |
+| red | HEAD `833423f9` | `vitest run src/services/api.test.ts -t "aborts the in-flight body download"` | 1 | 1 failed / 45 skipped (46) — `expected false to be true` at `api.test.ts:224` (the fetch signal was not aborted) |
+| green | the fix | the same filter | 0 | 1 passed / 45 skipped (46) |
+
+### Counts after this round (single source; supersedes the fix-r1 table above)
+
+| value | fix r1 | now |
+| --- | --- | --- |
+| `frontend/src/services/api.ts` LOC | 1,039 | **1,042** (+3) |
+| `api.ts` numstat vs the base | +128/−133 (−5) | **+119/−121 (−2)** |
+| `api.test.ts` LOC | 549 | **579** (+30) |
+| `api.test.ts` declared cases | 39 | **40** |
+| focused suites (3 files) | 164 tests | **165 tests** |
+| full suite | 21 files / 533 tests | **21 files / 534 tests** |
+| `new AbortController` in `frontend/src/services` | 31 | **32** (all `api.test.ts`) |
+
+### Gates (PR-review r1 stage; foreground, serialized; no suite beside another)
+
+| gate | command | exit | counts |
+| --- | --- | ---: | --- |
+| typecheck | `pnpm exec tsc --noEmit -p .` (in `frontend/`) | 0 | no output |
+| lint | `pnpm lint` (in `frontend/`) | 0 | 227 problems (0 errors, 227 warnings); ceiling 229 untouched |
+| focused suites | `pnpm exec vitest run src/services/api.test.ts src/features/goals/goal-attention.test.tsx src/app/application.test.ts` | 0 | 3 files / 165 tests passed |
+| full suite | `pnpm exec vitest run --maxWorkers=2` (in `frontend/`) | 0 | 21 files / 534 tests passed (240.65 s) |
+| diff hygiene | `git diff --check`; case-insensitive profile-directory grep over the diff | 0 / 1 | clean; 0 matches |
+
+Full-suite disclosure: this stage's full suite needed bounded workers because the host was shared
+with other agent worktrees and ran up to ~4× slower than the fix-r1 runs (16 cores, 15 forked
+vitest workers by default). The two default-worker runs exited 1 with 7 and 9 load-induced
+TestingLibrary ready-timeouts (e.g. `Unable to find role="heading" and name "Subject work item"`,
+one `Test timed out in 5000ms`); the eight files run 2 flagged all pass together in one
+invocation (8 files / 241 tests, exit 0). A 4-worker run then passed (21 files / 534 tests,
+64.46 s) on a tree differing from the delivered bytes only in the P2-1 pin's readiness mechanism,
+and a second 4-worker run under heavier load exited 1 (9 timeouts across 5 files, 339.12 s; the
+delivered `api.test.ts` passed inside it). The delivered-bytes gate above (2 workers) is green
+with no failures; the attribution to host contention is the same the fix-r1 disclosure records.

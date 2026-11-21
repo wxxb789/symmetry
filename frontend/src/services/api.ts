@@ -636,36 +636,39 @@ function request<A>(
   surface: RefusalSurface = "server",
 ): Effect.Effect<A, ApiError> {
   return Effect.gen(function* () {
-    const response = yield* Effect.tryPromise({
-      try: async (signal) => fetcher(path, {
-        method: init.method,
-        credentials: "same-origin",
-        headers: {
-          Accept: "application/json",
-          ...(init.body === undefined ? {} : { "content-type": "application/json" }),
-          ...(init.csrf === undefined ? {} : { "x-csrf-token": init.csrf }),
-        },
-        cache: "no-store",
-        redirect: "manual",
-        ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
-        signal,
-      }),
+    // The fetch and the body read share one signalled step: the signal handed
+    // to `fetcher` is the step's own, so the caller's cancellation aborts an
+    // in-flight body download with the request (the base behaviour; a second,
+    // controller-free step would leave the response stream running).
+    const { response, expired, body } = yield* Effect.tryPromise({
+      try: async (signal) => {
+        const response = await fetcher(path, {
+          method: init.method,
+          credentials: "same-origin",
+          headers: {
+            Accept: "application/json",
+            ...(init.body === undefined ? {} : { "content-type": "application/json" }),
+            ...(init.csrf === undefined ? {} : { "x-csrf-token": init.csrf }),
+          },
+          cache: "no-store",
+          redirect: "manual",
+          ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
+          signal,
+        });
+        // An expiry answer is classified from its status alone: its body is
+        // never the refusal envelope, so it stays unread and an unreadable one
+        // cannot turn the session failure into a transport failure.
+        const expired = response.type === "opaqueredirect" || response.status === 302 || response.status === 303 || response.status === 401;
+        // Read the body only when the boundary consumes it: an accepted
+        // answer's decoded body, or a failed write's refusal. A failed GET
+        // reads none, so its unreadable body cannot mask its status-derived
+        // error with a Network.
+        const reads = !expired && (response.ok || init.method !== "GET");
+        return { response, expired, body: reads ? new Uint8Array(await response.arrayBuffer()) : new Uint8Array(0) };
+      },
       catch: unreachable,
     });
-    // An expiry answer is classified from its status alone: its body is never
-    // the refusal envelope, so it stays unread and an unreadable one cannot
-    // turn the session failure into a transport failure.
-    if (response.type === "opaqueredirect" || response.status === 302 || response.status === 303) {
-      return yield* Effect.fail(statusError(401));
-    }
-    if (response.status === 401) return yield* Effect.fail(statusError(401));
-    // Read the body only when the boundary consumes it: an accepted answer's
-    // decoded body, or a failed write's refusal. A failed GET reads none, so
-    // its unreadable body cannot mask its status-derived error with a Network.
-    const body = yield* Effect.tryPromise({
-      try: async () => (response.ok || init.method !== "GET" ? new Uint8Array(await response.arrayBuffer()) : new Uint8Array(0)),
-      catch: unreachable,
-    });
+    if (expired) return yield* Effect.fail(statusError(401));
     if (!response.ok) {
       if (init.method !== "GET") {
         const refused = parseRefusal(response.status, body, surface);

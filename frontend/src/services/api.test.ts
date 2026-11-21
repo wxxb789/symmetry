@@ -195,6 +195,36 @@ describe("read boundary", () => {
   });
 });
 
+describe("request cancellation", () => {
+  it("aborts the in-flight body download when the consumer cancels during the read", async () => {
+    // Fetch and body read share one signalled step, so a cancel that lands
+    // after the fetch resolved still aborts the fetch signal (and, in a
+    // browser, the response stream with it). A controller-free second step
+    // would leave the body downloading. The response is hand-built because the
+    // test environment's `Response` starts pulling its stream at construction,
+    // which would fire before the boundary is actually reading.
+    let requestSignal: AbortSignal | null | undefined;
+    const download = Promise.withResolvers<ArrayBuffer>(); // never settles: the read is still in flight
+    const read = vi.fn(() => download.promise);
+    const fetcher = vi.fn<typeof fetch>().mockImplementation((_input, init) => {
+      requestSignal = init?.signal;
+      const response = {
+        type: "basic",
+        status: 200,
+        ok: true,
+        arrayBuffer: read,
+      } as unknown as Response;
+      return Promise.resolve(response);
+    });
+    const controller = new AbortController();
+    const pending = createApi(fetcher).workspace(null, controller.signal);
+    await vi.waitFor(() => { expect(read).toHaveBeenCalledTimes(1); });
+    controller.abort();
+    await expect(pending).rejects.toBeDefined();
+    expect(requestSignal?.aborted).toBe(true);
+  });
+});
+
 describe("work-item receipts", () => {
   it("sends the create draft verbatim and decodes the server's disposition", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ disposition: "replayed", work_item: { id: workItemId } })));
