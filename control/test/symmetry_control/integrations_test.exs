@@ -1,68 +1,3 @@
-defmodule SymmetryControl.Integrations.CredentialLeakProviderStub do
-  @moduledoc false
-  @behaviour SymmetryControl.Integrations.Provider
-
-  alias SymmetryControl.Integrations.ProviderStub
-
-  def respond_with(kind, value), do: Process.put({__MODULE__, kind}, value)
-
-  @impl true
-  def authenticate(connection), do: ProviderStub.authenticate(connection)
-
-  @impl true
-  def validate_resource_reference(connection, kind, reference),
-    do: ProviderStub.validate_resource_reference(connection, kind, reference)
-
-  @impl true
-  def check(%{name: "Blocking failure"}, _auth) do
-    controller =
-      Application.fetch_env!(:symmetry_control, :integration_provider_test_controller)
-
-    send(controller, {:integration_connection_check_waiting, self()})
-
-    receive do
-      :continue_failure -> {:error, {:transport, :forced_failure}}
-    after
-      5_000 -> {:error, {:transport, :test_timeout}}
-    end
-  end
-
-  def check(connection, auth) do
-    case Process.get({__MODULE__, :check}) do
-      nil -> ProviderStub.check(connection, auth)
-      metadata -> {:ok, metadata}
-    end
-  end
-
-  @impl true
-  def sync_resource(connection, resource, auth) do
-    case Process.get({__MODULE__, :sync_resource}) do
-      nil -> ProviderStub.sync_resource(connection, resource, auth)
-      result -> {:ok, result}
-    end
-  end
-
-  @impl true
-  def sync_delivery(connection, resource, work_item, auth) do
-    case Process.get({__MODULE__, :sync_delivery}) do
-      nil -> ProviderStub.sync_delivery(connection, resource, work_item, auth)
-      delivery -> {:ok, delivery}
-    end
-  end
-
-  @impl true
-  def sync_ci(connection, resource, work_item, auth),
-    do: ProviderStub.sync_ci(connection, resource, work_item, auth)
-
-  @impl true
-  def execute(connection, resource, work_item, operation, input, auth) do
-    case Process.get({__MODULE__, :execute}) do
-      nil -> ProviderStub.execute(connection, resource, work_item, operation, input, auth)
-      result -> result
-    end
-  end
-end
-
 defmodule SymmetryControl.IntegrationsTest do
   use SymmetryControl.DataCase, async: false
 
@@ -71,11 +6,9 @@ defmodule SymmetryControl.IntegrationsTest do
   import SymmetryControl.IntegrationFixtures,
     only: [
       assert_sync_waiting_on_work_item: 3,
-      format_sync_wait_sample: 1,
       provider_snapshot: 5,
       provider_work_item: 1,
       sync_lock_order_task: 4,
-      sync_wait_sample: 2,
       use_blocking_connection_check_provider: 0,
       use_credential_leak_provider: 0,
       work_item_row_locked?: 1

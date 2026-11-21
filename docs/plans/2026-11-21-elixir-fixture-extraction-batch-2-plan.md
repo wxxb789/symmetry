@@ -30,6 +30,7 @@ converted tree. Counts are name+arity scoped.
 | `bearer/1` → `TestConn.operator_conn/1` | 1 | 0 (`operator_conn/1` is the pre-existing operator path) | operator_read | body identical to task_goal_guard's local `operator_conn/1` |
 | `operator_conn/1` | 1 (task_goal_guard, header-only) | 0 (`TestConn.operator_conn/1`) | task_goal_guard | task_goal_guard's copy is body-identical to operator_read's `bearer/1` |
 | `enforce_csrf/1` | 1 | 1 (`TestConn`, new) | portal_workflow | byte-identical to `portal_session_test.exs:415` (non-owned, keeps its copy) |
+| `create_resource/5` | 2 | 1 (`TestConn`, new) | portal_resources, portal_workflow | the two copies byte-identical (round-1 fix; `api_conn/0` + `POST …/resources` + `json_response(201)`) |
 | `command_current/4` | 2 (+1 support definition) | 1 (`TestFixtures.__using__/1`) | goal_machine, task_goal_guard | the two copies are a byte-identical 19-line clone |
 | `subject/1` | 2 | 1 (`TestFixtures`, new) | goal_machine, task_goal_guard | the two copies byte-identical |
 | `validation_profiles/0` | 3 (`/0`; one of them a default-arg clause) | 2 (`TestFixtures`, new + `portal_workflow`'s pinned copy — Left local — reason) | task_goal_guard (imports `/0`), goal_machine (its clause becomes the arity-1 variant, which imports the shared `/0` for its default path) | task_goal_guard's copy byte-identical to `goals/workers_test.exs:178` (non-owned, keeps its copy); `portal_workflow`'s copy pins its own `allowed_runtime_ids` and is not interchangeable |
@@ -47,7 +48,7 @@ converted tree. Counts are name+arity scoped.
 | `declared_members/2` | 2 | 1 (`ServedDocument`, new) | portal_resources, portal_workflow | the two copies byte-identical |
 | `definition_variants/2` (2 clauses) | 4 clauses | 2 clauses (`ServedDocument`, new) | portal_resources, portal_workflow | both clause pairs byte-identical |
 | `contract_bundle/0` | 2 | 1 (`ServedDocument`, new) | portal_resources, portal_workflow | the two copies byte-identical |
-| integrations sync fixtures (9 helpers) | 9 (all in `integrations_test.exs`) | 9 (`IntegrationFixtures`, new public functions) | integrations_test | single-source move, bodies unchanged; see Edge cases §6 |
+| integrations sync fixtures (9 helpers) | 9 `defp` (all in `integrations_test.exs`) | 9 (`IntegrationFixtures`: 7 public + 2 module-private `defp`) | integrations_test | single-source move, bodies unchanged; the stub module moves with them and the two samplers stay private; see Edge cases §6 |
 
 The served-document move also deletes both `@schema_bundle` attributes
 (`portal_resources_test.exs:220`, `portal_workflow_test.exs:23`) — each was referenced only by
@@ -84,14 +85,13 @@ the contract's Failure control reads against the converted families.
 | `create_project/0` | goal_controller:623, portal_controller:437, portal_goal_attention:587, portal_integrations:940 (default-arg clause) | per-file HTTP adapters over `PortalFixtures.create_context_project/2` (`"Goal API project"`/`"G"`, `"SYM"`/`"Symmetry"`, …); same fence |
 | `register_runtime/3` | goal_machine:1327 | HTTP-layer helper (`conn`, `machine_id`, `token` → `POST /api/v1/machines/:id/sessions/:sid`); same name+arity as the shared fence builder but a different layer |
 | `claim/3` | protocol_controller:1316 | HTTP-layer helper (`conn`, `machine_token`, `runtime_id` → dispatch + `POST /runs/:id/claims/:claim_id`); same name+arity as `TestFixtures.claim/3` but a different layer |
-| `create_resource/5` | portal_resources:1557, portal_workflow:1498 | the two are byte-identical HTTP helpers (`api_conn/0` + `POST …/resources` + `json_response(201)`); same fence as `create_project/1` — `PortalFixtures` is not owned, and `TestFixtures` hosts pure data builders only (contract P1-3: not converted — different layer) |
 | `create_resource/2`, `create_work_item/3`, `create_work_item/1` | portal_resource_identity:129, portal_resources:1575, portal_workflow:1521, portal_controller:439 | HTTP-layer helpers; the `create_work_item` bodies differ (the workflow copy injects `status`/`priority`) |
 | `enforce_csrf/1` | portal_workflow converted; `portal_session_test.exs:415` keeps its byte-identical copy | non-owned survivor. Re-derivation of the contract clause's paths: `portal_session_controller_test.exs` and `channels/portal_realtime_test.exs` do not exist in the tree — the actual files are `portal_session_test.exs` and `portal_realtime_test.exs` (its `operator_conn/0` at `:17` matches no converted helper by name+arity) — so the conditional extension does not reach the byte-identical sibling, which stays outside the re-derived owned set |
 | `validation_profiles/0` | portal_workflow:1634 (kept) | the kept body pins `allowed_runtime_ids: ["00000000-0000-4000-8000-000000000001"]` for the `:goals` app-config registry write in `enable_goal_rollout/0`; it is not byte-identical to the shared fresh-id builder, so Change (1)'s conversion scope leaves it local — converting it would change the registered profile value |
 | `sync_ci/4`, `sync_delivery/4`, `sync_resource/3`, `check/2`, `authenticate/1`, `validate_resource_reference/3`, `execute/6`, `github_headers/1`, `azure_devops_headers/1`, `request/4`, `respond_with/2` | inline stub modules in integrations_test, portal_integrations_test, portal_resources_test, provider_action_controller_test, resource_sync_*_test, router_invalidation_coverage_test | module-level `def` behaviour implementations (provider stubs), not per-suite fixtures; the shared `IntegrationProviderStub`/`IntegrationAuthStub`/`IntegrationHTTPStub` support modules are the existing mechanism for the common path, and each stub exists to inject a file-local failure that the shared stub does not model |
 | `goal_command/4` | goal_controller:643 | HTTP-layer envelope reader (GET the goal, POST the command); same name as `TestFixtures.goal_command/3,4` but a different layer and different arity semantics (batch-1 plan already records the name collision) |
 | `goal_fixture/1`, `goal_fixture/2`, `work_item_fixture/3`, `history_fixture/0`, `runtime_fixture/0,1`, `transition/4,5`, `baseline_subject/1`, `evidence_attrs/2`, `plan_proposal/2`, `usage_attrs/1`, `task_result/3`, `errors_on/1`, … | the owned files above | every cross-file pair either differs in body (checked by the same grouping) or has no owned support home; they were already recorded as out of scope by the batch-1 plan ("other duplicated helper names inside the owned set … not among the contract's converted names") and stay recorded for the follow-up extraction slice |
-| e2e host plumbing: `git_output_bytes!/2`, `unix_signal/1` (2 clauses each) | pi_control, provider_broker (byte-identical pairs) | host plumbing (`System.cmd` git, `:os` signals), not data builders or conn helpers; this slice's owned support modules have no host-plumbing home, and `pi_control_e2e_test.exs` is serialized with W3-15 (one writer at a time) |
+| e2e host plumbing: `git_output_bytes!/2`, `unix_signal/1` (2 clauses each) | pi_control, provider_broker (byte-identical pairs) | round-1 fix re-checked consolidation: `git_output_bytes!/2` cannot move alone (it delegates to the file-local `git_output!/2`, which the standalone support-tree compile under `--warnings-as-errors` cannot call from `.exs` files) and its family is not interchangeable (pi_control routes `git_output!/2` through `system_cmd_options/1`'s Windows `use_stdio` path; provider_broker does not), so a shared body changes one file's `System.cmd/3` options; `unix_signal/1` is pure but none of the four owned support modules is a host-plumbing home and a new `control/test/support/*.ex` module is outside the STRICT owned set. Escalated in the Round-1 review fix subsection |
 | remaining e2e helpers (`await!/4`, `await_loop!/5`, `command_current/3,4` in the two e2e files, `daemon_command/2`, `start_daemon!/*`, `git_output!/2`, `run_git!/2`, `subject_hash!/1`, `digest!/1`, `os_process_alive?/1`, …) | pi_control, provider_broker | the two files' copies are **not** byte-identical (different ports, build dirs, operator refs, option lists, clocks), so they are not interchangeable; the batch-1 plan already lists the e2e copies for this slice and the grouping shows only the two plumbing pairs above are clones |
 
 ## Public shape
@@ -112,6 +112,7 @@ uuid()                          # Ecto.UUID.generate/0 — the converted suites'
 ```elixir
 bearer(conn, token)   # header-only: authorization "Bearer <caller's own token>"
 enforce_csrf(conn)    # drops the CSRF skip api_conn/0 installs
+create_resource(project, connection, kind, name, external_ref)  # POST …/resources + json_response(201)
 ```
 
 `SymmetryControlWeb.ServedDocument` (extended; the module keeps `validate_served_document!/2`):
@@ -120,19 +121,21 @@ enforce_csrf(conn)    # drops the CSRF skip api_conn/0 installs
 `defp`; they become `def` with the comments they carried as `@doc`s. `definition_variants/2` keeps
 both clauses.
 
-`SymmetryControl.IntegrationFixtures` (extended, public):
+`SymmetryControl.IntegrationFixtures` (extended; seven public functions, the two samplers stay private):
 
 ```elixir
 sync_lock_order_task(resource, provider_items, owner, ref)   # unboxed sandbox Task at the prelock barrier
 work_item_row_locked?(id)                                    # FOR UPDATE SKIP LOCKED probe
 assert_sync_waiting_on_work_item(backend, blocker, deadline)  # pg_stat_activity/pg_locks sampler
-sync_wait_sample(backend, blocker)
-format_sync_wait_sample(sample)
 use_credential_leak_provider()
 use_blocking_connection_check_provider()
 provider_work_item(provider_data)
 provider_snapshot(provider, updated_at, title, external_state, provider_data)
 ```
+
+`sync_wait_sample/2` and `format_sync_wait_sample/1` are `defp`: their only caller,
+`assert_sync_waiting_on_work_item/3`, is in the same module. The file also defines
+`SymmetryControl.Integrations.CredentialLeakProviderStub` (moved out of `integrations_test.exs`).
 
 `tracked_resource!/1` stays untouched (three other suites import it).
 
@@ -171,8 +174,11 @@ provider_snapshot(provider, updated_at, title, external_state, provider_data)
 6. **Move-only for the integration fixtures.** The nine helpers move with their bodies and
    comments; their `alias`/`import` surface (`Sandbox`, `Repo`, `Integrations`,
    `CredentialLeakProviderStub`, `ExUnit.Callbacks.on_exit/1`) is added to the support module. The
-   `CredentialLeakProviderStub` module stays defined in `integrations_test.exs` (it is that file's
-   private stub) and the support module references it by alias at run time.
+   `CredentialLeakProviderStub` module moves into the same support file (round-1 fix), so
+   `sync_lock_order_task/4` calls it statically and the support tree compiles the stub it drives —
+   no `apply/3`, and no `respond_with/2 is undefined` warning. `sync_wait_sample/2` and
+   `format_sync_wait_sample/1` stay module-private: their only caller,
+   `assert_sync_waiting_on_work_item/3`, moved with them.
 7. **`docs/TODO.md` closure.** The PR #145 item moves into `docs/archive/CLOSED-TODO.md` (an
    audited document) with a closure statement; its symbol bindings are repointed to
    `control/test/support/served_document.ex` (both old web files would make the binding false), and
@@ -211,8 +217,12 @@ suite + provider-broker e2e + goal-receipt e2e steps.
   (`acceptance_contract`, `execution_policy`, the HTTP builders) stay there per P1-2/P1-3.
 - Production code, new fixtures for behaviour not already asserted, giant-test splitting (W3-15),
   and `async` conversion.
-- The e2e host-plumbing pairs (`git_output_bytes!/2`, `unix_signal/1`) — no owned host-plumbing
-  module; recorded above.
+- The e2e host-plumbing pairs (`git_output_bytes!/2`, `unix_signal/1`) — the round-1 review fix
+  re-checked consolidation against the conductor decision and kept them local: `git_output_bytes!/2`
+  cannot move without its non-interchangeable `git_output!/2` family (standalone support-tree
+  compile boundary, and a shared body changes one file's `System.cmd/3` options on Windows), and
+  `unix_signal/1` has no home inside the STRICT owned set. Both are recorded in "Left local —
+  reason" and escalated in the Round-1 review fix subsection.
 - Pre-existing dead code found while re-deriving: none added to `docs/TODO.md` because the
   contract fences `docs/TODO.md` edits to the closure; anything found is reported in the answer.
 
@@ -231,6 +241,11 @@ suite + provider-broker e2e + goal-receipt e2e steps.
   and move cleanly.
 - **`uuid/0` is converted** (three byte-identical owned copies) rather than left local: it is an
   interchangeable duplicated builder, and `TestFixtures` is the only owned fixtures home.
+- **`create_resource/5` is consolidated into `TestConn`** (round-1 fix). The two owned copies were
+  byte-identical HTTP clones and the conductor decision requires a single home; `TestConn` is the
+  owned module that already carries the connector mechanics, and it takes the
+  `@endpoint SymmetryControlWeb.Endpoint` dispatch attribute the `Phoenix.ConnTest` request macro
+  needs, exactly as `PortalFixtures` does. Call sites keep their shape through the import.
 - **`operator_conn/1` is converted in task_goal_guard** although the contract's Change (4) names
   only the operator_read arity-1 copy: it is the same name+arity as `TestConn.operator_conn/1` and
   the operator-token path the contract designates; the `accept` header is inert (§4).
@@ -254,8 +269,10 @@ The converted tree holds one shared definition per name+arity for every helper t
 table converts; families left local keep their file-local copies, recorded in "Left local —
 reason". The definitions live at:
 
-* `control/test/support/test_conn.ex` — `bearer/2` at `:40`, `enforce_csrf/1` at `:43`
-  (`assert_error/3` at `:47` is the pre-existing body the five web copies carried).
+* `control/test/support/test_conn.ex` — `bearer/2` at `:43`, `enforce_csrf/1` at `:46`,
+  `create_resource/5` at `:50` (round-1 fix; it dispatches through the `@endpoint
+  SymmetryControlWeb.Endpoint` attribute at `:20`), and `assert_error/3` at `:65` is the
+  pre-existing body the five web copies carried.
 * `control/test/support/test_fixtures.ex` — `uuid/0` at `:75`, `subject/1` at `:170`,
   `check_contract/0` at `:179`, `validation_profiles/0` at `:192`, `repository_fixture/1` at `:204`
   (the injected command surface stays in `__using__/1`).
@@ -264,13 +281,14 @@ reason". The definitions live at:
   `:108`, `declared_members/2` at `:122`, `definition_variants/2` at `:132`, `contract_bundle/0` at
   `:140`.
 * `control/test/support/integration_fixtures.ex` — `sync_lock_order_task/4` at `:59`,
-  `work_item_row_locked?/1` at `:88`, `assert_sync_waiting_on_work_item/3` at `:106`,
-  `sync_wait_sample/2` at `:125`, `format_sync_wait_sample/1` at `:180`,
-  `use_credential_leak_provider/0` at `:197`, `use_blocking_connection_check_provider/0` at `:208`,
-  `provider_work_item/1` at `:223`, `provider_snapshot/5` at `:240`.
+  `work_item_row_locked?/1` at `:84`, `assert_sync_waiting_on_work_item/3` at `:102`,
+  `sync_wait_sample/2` at `:120` (`defp`), `format_sync_wait_sample/1` at `:172` (`defp`),
+  `use_credential_leak_provider/0` at `:189`, `use_blocking_connection_check_provider/0` at `:200`,
+  `provider_work_item/1` at `:215`, `provider_snapshot/5` at `:232`, plus the moved
+  `CredentialLeakProviderStub` module at `:260`.
 
 Move-only proof: per-function body sha256 (dedented body, header line excluded) before and after —
-recorded in the answer — shows every moved body byte-identical in its new home, with exactly three
+recorded in the answer — shows every moved body byte-identical in its new home, with exactly two
 documented exceptions, all text-only and value-identical:
 
 1. `command_current/3,4` in goal_machine and task_goal_guard: the shared definition is the
@@ -278,11 +296,11 @@ documented exceptions, all text-only and value-identical:
    construction.
 2. `task_attrs/1` in operator_read: the shared definition merges over the `@task_base` attribute
    instead of restating the same four keys.
-3. `sync_lock_order_task/4`: its `CredentialLeakProviderStub.respond_with/2` call became an
-   `apply/3` dispatch, because the stub module is defined by the suite that drives it and a static
-   remote call fails `MIX_ENV=test mix compile --warnings-as-errors` when the support tree compiles
-   alone (measured: `warning: SymmetryControl.Integrations.CredentialLeakProviderStub.respond_with/2
-   is undefined`). The arguments and the process-dictionary key are unchanged.
+
+The first revision's third exception is gone with the round-1 fix: the `CredentialLeakProviderStub`
+module now compiles in the same support file, `sync_lock_order_task/4` calls
+`CredentialLeakProviderStub.respond_with/2` statically again, and its normalized-clause sha256
+matches its source copy (`6480dc27…`).
 
 Two ordering details the converted files had to respect: the `use SymmetryControl.TestFixtures,
 command_opts: [...]` option list is expanded where the `use` sits, so the
@@ -308,12 +326,13 @@ home share; a row whose counts changed keeps the hash of the copy that stayed un
 | `assert_error` | TestConn | 1 | 1 | `55ab7565a6d006a3cf787ad35ae2c215e44b73a364439887821d42eba78b2021` |
 | `bearer` | TestConn | 2 | 1 | `efab688ead7687fde9d98739a6476b46182e384e4881001e087349f972c26a52` (the `/2` one-liner; the `/1` copy is the operator-token path, Edge cases §4) |
 | `enforce_csrf` | TestConn | 1 | 1 | `d9a18eb25fab2e3b64e7b5a76fed86f7c77f755c84850f984fda48c912aa39d6` |
+| `create_resource` | TestConn | 2 | 1 | `c1a41089412ed1ec26bc72b8275a1e90f3a175328fe75f3f57081adf5b2a4ac6` (round-1 fix; both source copies byte-identical to the new home) |
 | `subject` | TestFixtures | 1 | 1 | `151c2069c6967ba7bd7faf6c53cc8bf3c6b84f709fd408e645acb9208d71c456` |
 | `check_contract` | TestFixtures | 1 | 1 | `cad03c430dda8ae70c1d6a7428751a256841e152948608c285202ea72a4fd458` |
 | `repository_fixture` | TestFixtures | 1 | 1 | `44618a9ecc4a2bce8a17e4a360fb9d5ece145656c3cbbfa6c24cb4f1260c931b` |
 | `validation_profiles` | TestFixtures | 1 | 1 | `5402eb80fd29e54ae713bf6a453bc4cec8a2ec9fcb86402c9e87ad9e6700c3a1` |
 | `uuid` | ServedDocument (`/1`) + TestFixtures (`/0`) | 2 | 2 | `b0cd259a37f0a5dbe81250472c14204f3041bceb73d6ddc120abdc82b96f3e10` (`/1`; three `/0` copies share the empty-body hash of the one-liner `def uuid, do: Ecto.UUID.generate()`) |
-| `sync_lock_order_task` | IntegrationFixtures | 1 | 1 | none — the `apply/3` dispatch above |
+| `sync_lock_order_task` | IntegrationFixtures | 1 | 1 | `6480dc2750194adfcb4b90e4be1b7b6eae5ad59ba4d945fb8a9acd4336af5c36` (round-1 fix: static stub call restored; the earlier `apply/3` revision had no shared hash) |
 | `work_item_row_locked?` | IntegrationFixtures | 1 | 1 | `ab92dfa6c43d781feafd82f964789040003d10bc463a4fd30663cb9cd941386e` |
 | `assert_sync_waiting_on_work_item` | IntegrationFixtures | 1 | 1 | `fde389e2d60cb14209313218e19629316d04e56359ce670b7fb46145b3cc24ad` |
 | `sync_wait_sample` | IntegrationFixtures | 1 | 1 | `6524c963377c1f472cf70d4af80c8b21989db04c3014d4605a010eb120b835a8` |
@@ -347,3 +366,30 @@ unaffected by this change and covered by the CI control job).
 | test names | static declaration set (`test "..."` heads) HEAD vs converted tree; runtime `(module, name)` sets of both full runs | 936 literal declarations identical (every loop-generated name sits in untouched generator code); runtime sets identical: 1001 names each, 0 missing, 0 added, same 21 skipped / 4 excluded. The 7 state differences are baseline-side host load: one 100 ms mailbox window in the pre-change `integrations_test.exs` run and six `goal_0006_migration_test.exs` cases that hit a 4000 ms `DBConnection` queue drop — all seven pass on the converted tree, and migrations are outside this change. |
 | diff hygiene | `git diff --check`; branch-diff scan for a user-profile path prefix | exit 0; 0 matches |
 | citation gate | `python3 scripts/ci/check-citation-existence.py --base a503eab7 --head <worktree snapshot>` | exit 0 (after repointing the archived item's bindings; the first run refused one stale symbol binding, recorded in the answer) |
+
+### Round-1 review fix (opus review round 1)
+
+The round-1 review's P2-1 (two dead imports and their compiler warnings), P3-1 (runtime `apply/3`
+dispatch to a stub defined in a test file) and P3-2 (stale shipping-revision note) are fixed on the
+revision named in `docs/archive/CLOSED-TODO.md`'s revision note:
+
+- **P2-1:** `format_sync_wait_sample: 1` and `sync_wait_sample: 2` were dead entries in
+  `integrations_test.exs`'s `only:` import list (their only caller,
+  `assert_sync_waiting_on_work_item/3`, moved into the support module with them); the entries are
+  removed and both helpers are `defp` in `IntegrationFixtures` again, byte-identical to their
+  source text.
+- **P3-1:** `CredentialLeakProviderStub` moved from `integrations_test.exs` into
+  `control/test/support/integration_fixtures.ex` (`:260`) and `sync_lock_order_task/4` calls it
+  statically again (no `apply/3`); the support tree compiles the stub, so the static call cannot
+  warn.
+- **`create_resource/5`:** consolidated into `TestConn` (`:50`) per the conductor decision for the
+  round-1 duplicates; both source copies and the new home share the normalized-clause sha256 in the
+  per-function table above.
+
+Escalations carried from the fix report:
+
+- `git_output_bytes!/2` and `unix_signal/1` stay local — exact reasons in "Left local — reason"
+  (support compile boundary plus the non-interchangeable `git_output!/2` family; no owned
+  host-plumbing home). The conductor decision asks for consolidation unless a provable exception
+  applies, and these need either the record's acceptance or a widened owned set for a
+  host-plumbing support module.

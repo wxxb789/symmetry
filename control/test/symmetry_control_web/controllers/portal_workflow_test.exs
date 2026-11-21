@@ -5,7 +5,7 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
 
   import SymmetryControlWeb.PortalFixtures, only: [create_connection: 4, create_project: 2]
   import SymmetryControlWeb.ServedDocument
-  import SymmetryControlWeb.TestConn, only: [api_conn: 0, enforce_csrf: 1]
+  import SymmetryControlWeb.TestConn, only: [api_conn: 0, create_resource: 5, enforce_csrf: 1]
 
   alias SymmetryControl.Goals
   alias SymmetryControl.{Orchestration, Repo}
@@ -1489,20 +1489,6 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
   end
 
   defp create_project(key), do: create_project(key, "Project #{key}")
-
-  defp create_resource(project, connection, kind, name, external_ref) do
-    %{"resource" => resource} =
-      api_conn()
-      |> post("/portal/api/projects/#{project["id"]}/resources", %{
-        "connection_id" => connection["id"],
-        "kind" => kind,
-        "name" => name,
-        "external_ref" => external_ref
-      })
-      |> json_response(201)
-
-    resource
-  end
 
   defp served_work_item(work_item_id) do
     assert %{"work_item" => work_item} =

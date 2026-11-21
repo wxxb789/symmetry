@@ -113,7 +113,7 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
   import Ecto.Query
   import SymmetryControlWeb.PortalFixtures, only: [create_connection: 4, create_project: 2]
   import SymmetryControlWeb.ServedDocument
-  import SymmetryControlWeb.TestConn, only: [api_conn: 0]
+  import SymmetryControlWeb.TestConn, only: [api_conn: 0, create_resource: 5]
 
   alias SymmetryControl.Orchestration
   alias SymmetryControl.Repo
@@ -1548,20 +1548,6 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
   end
 
   defp create_project(key), do: create_project(key, "Resource project #{key}")
-
-  defp create_resource(project, connection, kind, name, external_ref) do
-    %{"resource" => resource} =
-      api_conn()
-      |> post("/portal/api/projects/#{project["id"]}/resources", %{
-        "connection_id" => connection["id"],
-        "kind" => kind,
-        "name" => name,
-        "external_ref" => external_ref
-      })
-      |> json_response(201)
-
-    resource
-  end
 
   defp create_tracker(project, connection, name, external_ref) do
     create_resource(project, connection, "work_tracking", name, external_ref)

@@ -64,14 +64,10 @@ defmodule SymmetryControl.IntegrationFixtures do
 
         receive do
           {:start_sync, ^ref} ->
-            # The stub module is defined by the suite that drives it, so the
-            # response is installed through a runtime dispatch: a static remote
-            # call would warn (and fail `--warnings-as-errors`) when the
-            # support tree compiles on its own.
-            apply(CredentialLeakProviderStub, :respond_with, [
-              :sync_resource,
-              %{resource: %{metadata: %{}}, work_items: provider_items}
-            ])
+            CredentialLeakProviderStub.respond_with(:sync_resource, %{
+              resource: %{metadata: %{}},
+              work_items: provider_items
+            })
 
             Integrations.sync_resource(resource.id)
         after
@@ -121,8 +117,7 @@ defmodule SymmetryControl.IntegrationFixtures do
     end
   end
 
-  @doc "One lock-manager sample for the two backends the sync pair runs on."
-  def sync_wait_sample(backend, blocker) do
+  defp sync_wait_sample(backend, blocker) do
     result =
       Repo.query!(
         """
@@ -172,12 +167,9 @@ defmodule SymmetryControl.IntegrationFixtures do
     end
   end
 
-  @doc """
-  Renders a sample for an assertion message. The query can be NULL (or held by
-  another backend's activity slot) while the backend still waits, so the
-  sample always names the wait event too.
-  """
-  def format_sync_wait_sample(sample) do
+  # The query can be NULL (or held by another backend's activity slot) while the
+  # backend still waits, so the sample always names the wait event too.
+  defp format_sync_wait_sample(sample) do
     query =
       case sample.query do
         nil -> ""
@@ -191,8 +183,8 @@ defmodule SymmetryControl.IntegrationFixtures do
   end
 
   @doc """
-  Points both providers at the suite's credential-leak stub: the module it
-  answers through stays defined in the suite that drives it.
+  Points both providers at `CredentialLeakProviderStub`, the credential-leak
+  stub this module defines.
   """
   def use_credential_leak_provider do
     Application.put_env(:symmetry_control, :integration_providers,
@@ -262,5 +254,70 @@ defmodule SymmetryControl.IntegrationFixtures do
         }
       ]
     }
+  end
+end
+
+defmodule SymmetryControl.Integrations.CredentialLeakProviderStub do
+  @moduledoc false
+  @behaviour SymmetryControl.Integrations.Provider
+
+  alias SymmetryControl.Integrations.ProviderStub
+
+  def respond_with(kind, value), do: Process.put({__MODULE__, kind}, value)
+
+  @impl true
+  def authenticate(connection), do: ProviderStub.authenticate(connection)
+
+  @impl true
+  def validate_resource_reference(connection, kind, reference),
+    do: ProviderStub.validate_resource_reference(connection, kind, reference)
+
+  @impl true
+  def check(%{name: "Blocking failure"}, _auth) do
+    controller =
+      Application.fetch_env!(:symmetry_control, :integration_provider_test_controller)
+
+    send(controller, {:integration_connection_check_waiting, self()})
+
+    receive do
+      :continue_failure -> {:error, {:transport, :forced_failure}}
+    after
+      5_000 -> {:error, {:transport, :test_timeout}}
+    end
+  end
+
+  def check(connection, auth) do
+    case Process.get({__MODULE__, :check}) do
+      nil -> ProviderStub.check(connection, auth)
+      metadata -> {:ok, metadata}
+    end
+  end
+
+  @impl true
+  def sync_resource(connection, resource, auth) do
+    case Process.get({__MODULE__, :sync_resource}) do
+      nil -> ProviderStub.sync_resource(connection, resource, auth)
+      result -> {:ok, result}
+    end
+  end
+
+  @impl true
+  def sync_delivery(connection, resource, work_item, auth) do
+    case Process.get({__MODULE__, :sync_delivery}) do
+      nil -> ProviderStub.sync_delivery(connection, resource, work_item, auth)
+      delivery -> {:ok, delivery}
+    end
+  end
+
+  @impl true
+  def sync_ci(connection, resource, work_item, auth),
+    do: ProviderStub.sync_ci(connection, resource, work_item, auth)
+
+  @impl true
+  def execute(connection, resource, work_item, operation, input, auth) do
+    case Process.get({__MODULE__, :execute}) do
+      nil -> ProviderStub.execute(connection, resource, work_item, operation, input, auth)
+      result -> result
+    end
   end
 end
