@@ -91,7 +91,8 @@ clause (acceptance requires exit 0 from the same command).
   `multipart/form-data` on a mutation route: it is no longer parsed at all — the body is left to
   `Plug.Parsers`' `pass: ["*/*"]` arm, so no multipart part framing is charged against a length
   limit anywhere in the stack (the CVE's own surface). The probe records the post-change class per
-  route: `body_params` stays `%Plug.Conn.Unfetched{aspect: :body_params}` and the route refuses in
+  route, pinned by the committed case (`strict_evidence_json_test.exs:155-183`): `body_params`
+  stays `%Plug.Conn.Unfetched{aspect: :body_params}` and the route refuses in
   its own terms (`401` for the three authenticated mutation routes, `422` for the login form).
 - **Dependency surface**: `plug ~> 1.20` resolves to 1.20.4; `telemetry_metrics` and
   `telemetry_poller` are no longer resolvable names in this project's lock; `:telemetry` (base) stays
@@ -106,8 +107,9 @@ clause (acceptance requires exit 0 from the same command).
   strict-JSON plug only inspects `application/*+json` bodies, and every controller on a mutation
   route reads its body through that plug or through the JSON decoder. The deleted parser therefore
   removes a parse surface nothing in the repository exercised; no controller gained or lost a branch.
-  This is verified by probe, not assumed: a throwaway script drives a multipart POST through the
-  endpoint and records the refusal status (see *Evidence plan*, step 7).
+  This is verified by probe and pinned by the committed case, not assumed: a throwaway script drives
+  a multipart POST through the endpoint and records the refusal status (see *Evidence plan*, step 7),
+  and `strict_evidence_json_test.exs:155-183` asserts the same refusal class in-repo.
 - **`urlencoded` stays.** Its producer is a tracked CI script (owner-claim enrolment), and the plug
   test pins urlencoded delegation (`strict_evidence_json_test.exs:135-139`). Removing it would
   weaken a live input path, so the contract's "remove `:multipart`" is read exactly: one parser
@@ -155,8 +157,9 @@ the harness-owned families).
    mutation routes and the login form, beside an `application/json` and an
    `application/x-www-form-urlencoded` control; records that the multipart body stays
    `%Plug.Conn.Unfetched{aspect: :body_params}` on every route while both configured parsers still
-   claim their bodies. The script and its output stay in the scratch evidence directory; nothing is
-   added to the repository.
+   claim their bodies. The script and its output stay in the scratch evidence directory, so no probe
+   artifact is added to the repository; the refusal class it observes is permanently pinned by the
+   committed case at `strict_evidence_json_test.exs:155-183` (conductor amendment RFW102S-3).
 8. `git diff --check` — expected exit 0.
 9. Full `mix test` is **not** run here: the contract assigns it to the conductor's gate-runner
    (one full suite per host at a time, shared Postgres with a 100-connection cap). The targeted set
