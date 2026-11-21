@@ -102,11 +102,12 @@ defp dispatch_result(goal, task, run, kind, blocker_wake_at, subject_hash, evide
 end
 ```
 
-`item` and `blocker` are dropped from the parameter list and from the `:3042` call site (dead in all
-13 base clauses: `_item` in 13/13, `_blocker` in 13/13; the returned map reads the enclosing scope's
-`blocker`, so nothing changes for the response). Arity 9 is the floor (P1-2): the terminal rows read
-`%WorkOutcome{}` and `progress_has_new_verification?/6` must stay behind R3's arm — hoisting it would
-add a `Repo.all` to every settlement.
+`item` and `blocker` are dropped from the parameter list and from the `:3042` call site (dead in
+12/13 base clauses: `_item`/`_blocker` are underscored and unused; the 13th head (R13, `:3397`)
+binds both bare only to forward them into `dispatch_task_result/10`, whose heads all ignore them;
+the returned map reads the enclosing scope's `blocker`, so nothing changes for the response). Arity 9
+is the floor (P1-2): the terminal rows read `%WorkOutcome{}` and `progress_has_new_verification?/6`
+must stay behind R3's arm — hoisting it would add a `Repo.all` to every settlement.
 
 ### Unknown `kind`
 
