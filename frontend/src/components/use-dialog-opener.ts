@@ -2,11 +2,11 @@ import { useRef, type RefObject } from "react";
 import { restoreFocus } from "./focus";
 
 /**
- * The opener capture and close-time restore every portal dialog shares. Radix
- * restores focus on close only to a `Dialog.Trigger`, and none of these dialogs
- * has one: the invoking control is captured before Radix moves keyboard focus
- * inside, and focused again when the dialog closes (the disabled-control rule
- * lives in `restoreFocus`).
+ * The opener capture and close-time restore the shared dialog frame and the
+ * planning editors use. Radix restores focus on close only to a
+ * `Dialog.Trigger`, and none of these dialogs has one: the invoking control is
+ * captured before Radix moves keyboard focus inside, and focused again when the
+ * dialog closes (the disabled-control rule lives in `restoreFocus`).
  *
  * A caller that already holds the invoking control passes its ref and the
  * fallback its surface keeps; a caller that does not gets `document.activeElement`

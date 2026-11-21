@@ -39,8 +39,9 @@ LOC baseline: `components/focus.ts` 15, `components/workspace.tsx` 63,
 `features/connections/resources.tsx` 668, `features/planning/editors.tsx` 583,
 `features/connections/connections.tsx` 503, `app/shell.tsx` 280.
 
-Test pins: `connections.test.tsx` 1,535 L / 56 cases, `planning.test.tsx` 1,012 L / 35,
-`work/control.test.tsx` 516 L / 10; 20 test files in `src/`. The suites select by
+Test pins: `connections.test.tsx` 1,535 L / 57 `it` cases, `planning.test.tsx` 1,012 L / 35,
+`work/control.test.tsx` 516 L / 10 `it` sites + one `it.each` (13 executed); 20 test files in
+`src/`. The suites select by
 `getByRole`/`getByLabelText`/visible text; the resource dialogs' names ("Bind resource",
 "Update resource", `Unbind <name>?`), close labels ("Close bind dialog", …), field labels
 ("Type", "Provider connection", "Name", "Reference"), button text ("Bind", "Save",
@@ -62,8 +63,8 @@ contract's `:142-158`/`:37-50` are the pre-#161 numbers):
    one definition and a policy comment:
    - `formatLabel(value)` — moved out of `resources.tsx` (`_` → space), the transform the
      resource-scope badge capitalizes;
-   - `knownWorkspaceStatuses` (Set), `knownResourceStatuses`, `knownSyncStatuses` (own-key
-     records) — moved with their badges;
+   - `knownWorkspaceStatuses` (own-key record, Set-equivalent), `knownResourceStatuses`,
+     `knownSyncStatuses` (own-key records) — moved with their badges;
    - `statusLabel(status)` — moved from `workspace.tsx` (exported: `projects/work-surface.tsx`
      is its only other consumer);
    - `StatusBadge({ status, scope = "workspace" })` with
@@ -77,7 +78,7 @@ contract's `:142-158`/`:37-50` are the pre-#161 numbers):
 2. **`frontend/src/components/use-dialog-opener.ts` (new)** — `useDialogOpener(openerRef?,
    fallbackFocus?)`: captures `document.activeElement` at first render when the caller owns no
    ref, adopts a caller-owned opener ref and fallback ref when passed, and returns
-   `{ openerRef, restore }` where `restore(event)` clears the opener and **delegates** to
+   `{ restore }` where `restore(event)` clears the opener and **delegates** to
    `restoreFocus/3` from `./focus`.
 3. **`frontend/src/components/workspace.tsx`** — keeps `PageHeading`, `LoadingState`,
    `EmptyState`, `ErrorState`, `RefreshButton`; loses `knownStatuses`, `statusLabel`,
@@ -98,7 +99,7 @@ contract's `:142-158`/`:37-50` are the pre-#161 numbers):
      (mutation, `onMutate`/`onSettled` subject counts, `onError: onRefresh`, the freeze rule,
      the notice, the actions row) exists once;
    - `ProjectResourcesReady` computes the intent from the existing `editor`/`editorTarget`
-     state via `resourceIntent/3` (a row removed by a background refresh still closes the
+     state via `dialogIntentOf` (a row removed by a background refresh still closes the
      dialog through the existing `editorSubjectRemoved` path) and mounts one `ResourceDialog`
      with the same `key={editor.id}`.
 6. **`frontend/src/features/planning/editors.tsx`** — local `FieldErrors`, `useOpenerRef`,
@@ -138,7 +139,7 @@ historical plans/evidence (grep over `docs/**/*.md`).
 // frontend/src/components/primitives.tsx
 export const formatLabel: (value: string) => string;                       // `_` -> space
 export function statusLabel(status: string): string;                       // workspace policy
-export type StatusScope = "workspace" | "connection" | "resource" | "sync";
+type StatusScope = "workspace" | "connection" | "resource" | "sync";        // module-local
 export function StatusBadge({ status, scope }: { status: string; scope?: StatusScope }): ReactElement;
 export function FieldErrors({ error, field }: { error: unknown; field: string }): ReactElement | null;
 export function Field({ id, label, error, field, children }: {
@@ -149,7 +150,7 @@ export function Field({ id, label, error, field, children }: {
 export function useDialogOpener(
   openerRef?: RefObject<HTMLElement | null>,
   fallbackFocus?: RefObject<HTMLElement | null>,
-): { openerRef: RefObject<HTMLElement | null>; restore: (event: Event) => void };
+): { restore: (event: Event) => void };
 
 // frontend/src/features/connections/resources.tsx (module-local)
 type ResourceIntent =
@@ -157,9 +158,9 @@ type ResourceIntent =
   | { kind: "update"; resource: ResourceRow }
   | { kind: "unbind"; resource: ResourceRow };
 type ResourceSubmission =
-  | { kind: "bind"; draft: ResourceDraft }
-  | { kind: "update"; update: { name: string; connection_id: string | null; external_ref: string | null } }
-  | { kind: "unbind"; name: string };
+  | { kind: "bind"; projectId: string; draft: ResourceDraft }
+  | { kind: "update"; resourceId: string; version: number; update: { name: string; connection_id: string | null; external_ref: string | null } }
+  | { kind: "unbind"; resourceId: string; version: number; name: string };
 ```
 
 `DialogFrame`'s exported props are unchanged (`{ title, closeLabel, descriptionId, description,
@@ -168,7 +169,7 @@ its call shape apart from the import line. Nothing is re-exported anywhere.
 
 ## Exact edge-case semantics the contract demands
 
-- **Workspace badge scope** (default): `knownStatuses` Set membership decides
+- **Workspace badge scope** (default): `knownWorkspaceStatuses` own-key membership decides
   `statusLabel` (`done` → `done`; `unknown_thing` → `Unknown status: unknown_thing`; `""` →
   `Unknown status`); `done` adds `status-complete` **and** the `CircleCheck` icon (both
   together, as today); no `data-status`; the class stays
@@ -347,7 +348,7 @@ for that reason. All gates foreground, serialized; no measurement harness ran be
 | typecheck | `pnpm --pm-on-fail=ignore --filter @symmetry/frontend typecheck` | 0 | no output |
 | lint | `pnpm --pm-on-fail=ignore --filter @symmetry/frontend lint` | 0 | `227 problems (0 errors, 227 warnings)` — 2 below the `--max-warnings 229` ceiling, which was **not** touched (see the ratchet note) |
 | three DOM suites + the new primitive test | `pnpm --pm-on-fail=ignore exec vitest run src/features/connections/connections.test.tsx src/features/planning/planning.test.tsx src/features/work/control.test.tsx src/components/primitives.test.tsx` | 0 | 4 files / 117 tests passed, 76.97 s and 79.81 s on two runs |
-| per-file counts of that run | same run, `--reporter=json` | 0 | `connections` 57, `planning` 35, `control` 13, `primitives` 12 (declared at head: 56/35/10) |
+| per-file counts of that run | same run, `--reporter=json` | 0 | `connections` 57, `planning` 35, `control` 13, `primitives` 12 (declared `it` sites at head: 57/35/10, plus one `it.each` → the 13 executed in `control`) |
 | full suite (default invocation) | `pnpm --pm-on-fail=ignore --filter @symmetry/frontend test` | 0 | **21 files / 522 tests passed**, 120.84 s, on the final tree (`frontend/`'s `vitest run`, the package script's own command); the same suite was green at 94.17 s before the export trims. Three earlier attempts of this exact command returned 17 / 27 / 30 **timeout** failures in suites outside the diff while the host was loaded — jsdom environment creation 575 s in the failing runs against 364 s here and 250 s in the fastest green one; a `--maxWorkers=2` diagnostic on the same tree was green (exit 0, 522 passed, 353.25 s). No failing case was in a file this slice changed, and the three DOM suites plus the new test file passed together (4 files / 117) in the same session |
 | knip (report-only) | `pnpm --pm-on-fail=ignore knip` | 0 | no findings; one pre-existing config hint (`coverage/**` ignoreFiles), as at #164 |
 | diff hygiene | `git diff --check` | 0 | no whitespace damage |
@@ -486,3 +487,53 @@ on a doc-comment line, the function is at base `:412` / now `:413`; the `:381-38
 `:626-627`. Three of the four citations were already stale at the base revision (that is, before
 this range); the +1 shift adds one more to each. PD2 (plain index for a served refusal code in
 `planning/write-policy.ts:135`) stays W4-10's.
+
+## Fix-stage note (2026-11-21, review findings r1)
+
+Conductor brief `rf-w3-12-ui-primitives-fix1.md` (findings from
+`<HOST-PATH>/.local/state/gdd/runs/2026-11-21/symmetry-rf-w3-12-ui-primitives-review/answer.md`)
+plus the conductor's STD-A10 decision extending the owned set by one comment-only refresh of
+`docs/TODO.md:130-134`. All ten findings (STD-A01…STD-A10) addressed; none judged invalid; no
+test, type, validation or permission weakened — `primitives.test.tsx` gained assertions and two
+cases (14, was 12).
+
+- **STD-A01** — the deliverable shape and the API block now state the shipped interfaces: the
+  hook returns `{ restore }` only (`:81`, `:153`), `StatusScope` is module-local (`:142`), and
+  `ResourceSubmission` carries `projectId`/`resourceId`/`version` (`:161-163`).
+- **STD-A02** — `resourceIntent/3` → `dialogIntentOf` (`:102`).
+- **STD-A03** — `knownWorkspaceStatuses` is an own-key record, Set-equivalent (deliverable `:66`;
+  edge-case list `:172`). The measured-basis row `:22` keeps "(`knownStatuses` Set)" because it
+  records the base revision, where the workspace badge did use a `Set`.
+- **STD-A04** — `connections.test.tsx` is 57 `it` cases at base and head, not 56 (`:42`), and
+  the declared-vs-executed metric is labelled (`:351`: 57/35/10 `it` sites, `control`'s one
+  `it.each` → 13 executed).
+- **STD-A05** — the hook header now names its actual callers (the shared dialog frame and the
+  planning editors); the connection-removal and assignment dialogs keep their own `restoreFocus`
+  calls.
+- **STD-A06/A07/A08/A09** — `primitives.test.tsx`: `data-status` pinned on every resource scope
+  (including `""` → `unspecified` and `constructor`) and its absence pinned on the workspace
+  badge; the two cross-scope pairs (`healthy`@`sync`, `synced`@`resource`) pinned as unknown; the
+  `FieldErrors` join compared as exact `textContent`; added the both-enabled case (opener wins)
+  and the both-disabled case, and renamed the no-fallback case to what it renders.
+- **STD-A10** — `docs/TODO.md` citations re-derived by content at head: `:408 → :413` (the
+  function) and `:408 → :414` (the citation's second occurrence, "the `open?` gate"), the
+  `PlanApproval` render `:381-382 → :388` (the apply note's `:382-383` reading was a blind +1),
+  `:533 → :539`, `:626-627 → :632-633`, and `:218 → :224` (the frozen-attempt release this range
+  moved; the apply note did not list that occurrence). No prose or status change.
+
+Superseded numbers (single source, re-derived on this tree): `primitives.test.tsx` 196 → 253 L,
+12 → 14 cases; the four-file run 117 → 119; the full-suite total 522 → 524 (arithmetic; the full
+suite is conductor-owned and was not re-run at this stage). `primitives.tsx` stays 64 L and
+`use-dialog-opener.ts` stays 25 L.
+
+Gates on this tree (all foreground, serialized):
+
+| gate | command | exit | counts |
+| --- | --- | ---: | --- |
+| typecheck | `pnpm --pm-on-fail=ignore --filter @symmetry/frontend typecheck` | 0 | `tsc --noEmit`, no output |
+| lint | `pnpm --pm-on-fail=ignore --filter @symmetry/frontend lint` | 0 | `227 problems (0 errors, 227 warnings)`; `--max-warnings 229` untouched |
+| four DOM suites (default invocation) | `pnpm --pm-on-fail=ignore exec vitest run …/connections.test.tsx …/planning.test.tsx …/work/control.test.tsx …/components/primitives.test.tsx` | 0 | **4 files / 119 tests passed**, 92.26 s; the first attempt of the same command returned 2 failed / 117 passed (119), whose visible stack was `control.test.tsx:157` `openDetail`'s 1 s heading find-wait (the recorded host-load signature), and `control.test.tsx` alone (13/13) and `primitives.test.tsx` alone (14/14) were both green immediately after |
+| definition census | the clause-2 greps | — | `StatusBadge` 1, `FieldErrors` 1, `useDialogOpener` 1, `restoreFocus` 1 (`focus.ts` untouched, byte-identical), the three dialect names 0, `data-status` one writer (`primitives.tsx:42`), `<Field ` rows 21 + 7 |
+| citation proof | every `file:line` in the refreshed TODO block printed at this tree | — | `detail.tsx:413/388/539/632-633/224/414` each read what the prose claims; both `.exs` comment blocks are untouched and no frontend line they cite moved at this stage |
+| diff hygiene | `git diff --check` | 0 | clean |
+| host-path check | profile-directory grep over `git diff origin/main...HEAD` and over the working tree | 1 | no host path in either |

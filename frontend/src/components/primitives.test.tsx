@@ -34,10 +34,12 @@ describe("StatusBadge", () => {
     const done = screen.getByText("done");
     expect(done).toHaveClass("status-badge", "status-complete");
     expect(done.querySelector("svg")).not.toBeNull();
+    expect(done).not.toHaveAttribute("data-status");
     const review = screen.getByText("in review");
     expect(review).toHaveClass("status-badge");
     expect(review).not.toHaveClass("status-complete");
     expect(review.querySelector("svg")).toBeNull();
+    expect(review).not.toHaveAttribute("data-status");
   });
 
   it("names an unknown workspace status instead of rendering it bare", () => {
@@ -63,24 +65,43 @@ describe("StatusBadge", () => {
     const healthy = screen.getByText("Healthy");
     expect(healthy).toHaveClass("status-badge", "status-complete");
     expect(healthy).toHaveAttribute("data-status", "healthy");
-    expect(screen.getByText("Degraded")).toHaveClass("status-badge", "status-attention");
-    expect(screen.getByText("Synced")).toHaveClass("status-badge", "status-complete");
-    expect(screen.getByText("Failed")).toHaveClass("status-badge", "status-attention");
-    expect(screen.getByText("Offline")).toHaveClass("status-badge", "status-attention");
+    const degraded = screen.getByText("Degraded");
+    expect(degraded).toHaveClass("status-badge", "status-attention");
+    expect(degraded).toHaveAttribute("data-status", "degraded");
+    const synced = screen.getByText("Synced");
+    expect(synced).toHaveClass("status-badge", "status-complete");
+    expect(synced).toHaveAttribute("data-status", "synced");
+    const failed = screen.getByText("Failed");
+    expect(failed).toHaveClass("status-badge", "status-attention");
+    expect(failed).toHaveAttribute("data-status", "failed");
+    const offline = screen.getByText("Offline");
+    expect(offline).toHaveClass("status-badge", "status-attention");
+    expect(offline).toHaveAttribute("data-status", "offline");
   });
 
   it("names an unknown resource status with its scope, never as a known word", () => {
     render(<>
       <StatusBadge status="future_kind" scope="resource" />
+      <StatusBadge status="synced" scope="resource" />
       <StatusBadge status="" scope="sync" />
+      <StatusBadge status="healthy" scope="sync" />
       <StatusBadge status="constructor" scope="connection" />
       <StatusBadge status="constructor" scope="sync" />
     </>);
-    expect(screen.getByText("Unknown resource status: future_kind")).toHaveAttribute("data-status", "future_kind");
-    expect(screen.getByText("Unknown sync status: unspecified")).toBeVisible();
+    const future = screen.getByText("Unknown resource status: future_kind");
+    expect(future).toBeVisible();
+    expect(future).toHaveAttribute("data-status", "future_kind");
+    // Each resource scope reads its own table: the other scope's members are unknown here.
+    expect(screen.getByText("Unknown resource status: synced")).toHaveAttribute("data-status", "synced");
+    expect(screen.getByText("Unknown sync status: healthy")).toHaveAttribute("data-status", "healthy");
+    const unspecified = screen.getByText("Unknown sync status: unspecified");
+    expect(unspecified).toBeVisible();
+    expect(unspecified).toHaveAttribute("data-status", "");
     // `constructor` is a prototype member, not a status these scopes know.
-    expect(screen.getByText("Unknown connection status: constructor")).toBeVisible();
-    expect(screen.getByText("Unknown sync status: constructor")).toBeVisible();
+    const connectionConstructor = screen.getByText("Unknown connection status: constructor");
+    expect(connectionConstructor).toBeVisible();
+    expect(connectionConstructor).toHaveAttribute("data-status", "constructor");
+    expect(screen.getByText("Unknown sync status: constructor")).toHaveAttribute("data-status", "constructor");
   });
 });
 
@@ -88,7 +109,8 @@ describe("FieldErrors", () => {
   it("joins the server's messages for the field into one alert", () => {
     render(<FieldErrors error={refusal({ name: ["must be present", "is too long"] })} field="name" />);
     const alert = screen.getByRole("alert");
-    expect(alert).toHaveTextContent("must be present is too long");
+    // Exact text: substring matching would accept a prefix or a double-space join.
+    expect(alert.textContent).toBe("must be present is too long");
     expect(alert).toHaveClass("field-error");
   });
 
@@ -137,6 +159,23 @@ describe("useDialogOpener", () => {
     expect(opener).toHaveFocus();
   });
 
+  it("prefers the opener over the fallback when both can take focus", async () => {
+    const user = userEvent.setup();
+    const openerRef: RefObject<HTMLElement | null> = { current: null };
+    const fallbackRef: RefObject<HTMLElement | null> = { current: null };
+    const prevented: boolean[] = [];
+    render(<>
+      <button type="button">Update checkout service</button>
+      <h2 ref={(node) => { fallbackRef.current = node; }} tabIndex={-1}>Project resources</h2>
+      <RestoreOnClick openerRef={openerRef} fallbackRef={fallbackRef} onRestored={(value) => { prevented.push(value); }} />
+    </>);
+    openerRef.current = screen.getByRole("button", { name: "Update checkout service" });
+    await user.click(screen.getByRole("button", { name: "Close dialog" }));
+    expect(screen.getByRole("button", { name: "Update checkout service" })).toHaveFocus();
+    expect(screen.getByRole("heading", { name: "Project resources" })).not.toHaveFocus();
+    expect(prevented).toEqual([true]);
+  });
+
   it("falls back to the caller's fallback control when the opener is disabled", async () => {
     const user = userEvent.setup();
     const openerRef: RefObject<HTMLElement | null> = { current: null };
@@ -167,7 +206,7 @@ describe("useDialogOpener", () => {
     expect(prevented).toEqual([true]);
   });
 
-  it("leaves focus where it was when neither the opener nor the fallback can take it", async () => {
+  it("leaves focus where it was when the opener cannot take it and no fallback is given", async () => {
     const user = userEvent.setup();
     const openerRef: RefObject<HTMLElement | null> = { current: null };
     const prevented: boolean[] = [];
@@ -180,6 +219,24 @@ describe("useDialogOpener", () => {
     await user.click(close);
     expect(prevented).toEqual([false]);
     expect(close).toHaveFocus();
+  });
+
+  it("leaves focus where it was when the opener and the fallback are both disabled", async () => {
+    const user = userEvent.setup();
+    const openerRef: RefObject<HTMLElement | null> = { current: null };
+    const fallbackRef: RefObject<HTMLElement | null> = { current: null };
+    const prevented: boolean[] = [];
+    render(<>
+      <button type="button" disabled>Update checkout service</button>
+      <button type="button" ref={(node) => { fallbackRef.current = node; }} disabled>Project resources</button>
+      <RestoreOnClick openerRef={openerRef} fallbackRef={fallbackRef} onRestored={(value) => { prevented.push(value); }} />
+    </>);
+    openerRef.current = screen.getByRole("button", { name: "Update checkout service" });
+    const close = screen.getByRole("button", { name: "Close dialog" });
+    await user.click(close);
+    expect(prevented).toEqual([false]);
+    expect(close).toHaveFocus();
+    expect(screen.getByRole("button", { name: "Project resources" })).not.toHaveFocus();
   });
 
   it("captures the active element at mount when the caller owns no ref", async () => {
