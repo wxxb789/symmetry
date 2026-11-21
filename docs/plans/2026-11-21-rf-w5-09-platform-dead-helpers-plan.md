@@ -27,7 +27,7 @@ entry points and W1-06's state surfaces), so neither TODO file is edited.
 
 | helper | base production site | span | lines | callers (all test-only) | call target kept |
 | --- | --- | ---: | ---: | --- | --- |
-| `installLinuxSupervisorScanFailureInjection` | `containment_supervisor_linux.go:476` | 476-478 | 3 | `containment_supervisor_linux_test.go:2864,2926,3008` | `installLinuxSupervisorScanInjection` (`:488`, production, env-gated, now `:485`) |
+| `installLinuxSupervisorScanFailureInjection` | `containment_supervisor_linux.go:476` | 476-478 | 3 | `containment_supervisor_linux_test.go:2864,2926,3008` | `installLinuxSupervisorScanInjection` (`:488`, production, env-gated, now `:484`) |
 | `containmentEndpointForIdentity` | `containment_supervisor_windows.go:688` | 688-722 | 35 | `containment_supervisor_windows_test.go:396,446,473,834,1031,1035` | `parseWindowsProcessIdentity`, `randomContainmentToken`, `randomContainmentSecret`, `validateSupervisorEndpoint` |
 | `readLinuxOwnerChildPIDs` | `helper_v2_run.go:197` | 197-200 | 4 | `linux_owner_helper_v2_linux_test.go:77,189` | `readLinuxOwnerChildPIDsBounded` (`:202`, base; now `:197`) |
 | `nativeHandleInformation` | `native_launch_windows.go:274` | 274-284 | 11 | `native_launch_windows_test.go:141,157,403,427` | `getNativeHandleInformation` (`native_launch_windows.go:29`) |
@@ -53,9 +53,9 @@ two revisions and only its file attribution changes.
 
 Not moved, deliberately:
 
-- `installLinuxSupervisorScanFailureInjectionAfterInitial` (`containment_supervisor_linux.go:480`)
+- `installLinuxSupervisorScanFailureInjectionAfterInitial` (`containment_supervisor_linux.go:480`, base; now `:476`)
   has a **live production call site** (`supervisor_linux_helper.go:615`) and stays;
-- `installLinuxSupervisorScanInjection` (`:488`), `readLinuxOwnerChildPIDsBounded`
+- `installLinuxSupervisorScanInjection` (`:488`, base; now `:484`), `readLinuxOwnerChildPIDsBounded`
   (`helper_v2_run.go:202`, base; now `:197`) and the env parser are production and stay (W5-01's
   territory);
 - `getNativeHandleInformation` (`native_launch_windows.go:29`) stays in production: it is the
@@ -101,10 +101,12 @@ least as strict as the source file's (`linux` → `linux`; `linux && amd64` → 
   assertion, table case, name or skip is added, removed or reworded, so the mutation clause is
   inapplicable by construction (contract, W5 review reconcile).
 - **Control-flow preservation (lesson 32).** Moving a body across files is the move-proof case:
-  every early return and short-circuit is enumerated base-vs-HEAD per helper in the evidence
-  section below, and the wrapper's no-op-when-unset behaviour is asserted to come from the
-  production callee (the moved wrapper only forwards 6 arguments), so a witness hook can never be
-  armed outside witness mode.
+  every early return and short-circuit is enumerated base-vs-HEAD per helper in the implement-stage
+  record (`answer.md`, the clause-2 artifact) and re-confirmed at HEAD on the moved bodies:
+  `containmentEndpointForIdentity` 6 `if` guards + 7 `return`s, `nativeHandleInformation` 1 + 2,
+  the scan-injection wrapper 1 forwarding `return`, `readLinuxOwnerChildPIDs` 1 `return`; the
+  wrapper's no-op-when-unset behaviour is asserted to come from the production callee (the moved
+  wrapper only forwards 6 arguments), so a witness hook can never be armed outside witness mode.
 - **No new suppression.** Zero `//nolint`/`credo:disable` added; no test file loses a declaration.
 
 ## Evidence plan (exact commands, run on the final tree)
@@ -133,14 +135,15 @@ least as strict as the source file's (`linux` → `linux`; `linux && amd64` → 
 | vet (consumer) | `go vet ./cmd/...` | 0 | 0 diagnostics |
 | builds | `GOOS=windows GOARCH=amd64 go build ./...`, `GOOS=linux GOARCH=amd64 go build ./...`, `GOOS=linux GOARCH=arm64 go build ./...` | 0 | 0 diagnostics each |
 | package tests (Windows) | `go test -count=1 ./internal/platform/...` | 0 | `ok … 6.969s`; `-v`: 132 RUN, 93 top-level PASS, 0 FAIL, 1 SKIP (`TestProductionContainmentSupervisorReplaysReceiptAfterLostRecoverResponse`, env gate `SYMMETRY_PRODUCTION_CONTAINMENT_WITNESS`) |
-| package tests (Linux, contract command) | `go test -count=1 ./internal/platform/...` (WSL Ubuntu-24.04, go1.27.0) | 1 | 5 named `tcp_peer*` loopback failures (`dial tcp4 127.0.0.1:<port>: connect: connection timed out`) then `panic: test timed out after 10m0s`; this host's documented loopback limitation (`docs/archive/CLOSED-TODO.md:3391-3393`), the failing files are untouched by this slice |
-| package tests (Linux, host pattern) | `go test -count=1 -skip 'Loopback\|TCPPeer' ./internal/platform/...` (WSL) | 0 | `ok … 19.467s`/`19.915s`; `-v`: 206 top-level PASS, 171 subtest PASS, 0 FAIL, 1 SKIP (`TestLinuxOwnerAnchorRunReaperRejectsForeignChildBeforeAdoptingIt`, requires the installed A UID/GID) |
+| package tests (Linux, contract command) | `go test -count=1 ./internal/platform/...` (WSL Ubuntu-24.04, go1.27.0) | 1 | 4 completed `tcp_peer*` dial-timeout failures (`dial tcp4 127.0.0.1:<port>: connect: connection timed out`) plus `TestVerifyLoopbackTCPPeerV2WaitsForPendingAcceptOnSameConnectionWithoutWriting` still hung in `running tests:` when `panic: test timed out after 10m0s` fired; this host's documented loopback limitation (`docs/archive/CLOSED-TODO.md:3391-3393`), the failing files are untouched by this slice |
+| package tests (Linux, host pattern) | `go test -count=1 -skip "Loopback\|TCPPeer" ./internal/platform/...` (WSL) | 0 | `ok … 19.467s`/`19.915s`; `-v`: 206 top-level PASS, 171 subtest PASS, 0 FAIL, 1 SKIP (`TestLinuxOwnerAnchorRunReaperRejectsForeignChildBeforeAdoptingIt`, requires the installed A UID/GID) |
 | move proof (primary) | `pfs declset internal/platform/*.go` before vs after | 0 | 1987 = 1987 lines, `diff` empty, identical sha256 `9a9e8ed0ff4bf2a50709f5c3ba291e63c7a24c7b3f02aee60c08d3ea06d1442d` |
 | move proof (attribution) | `pfs declset -f` over the eight owned files, base vs head | n/a (diff shown) | exactly 4 `decl` re-attributions + `containmentEndpointForIdentity`'s inner comment group; raw and printer digests identical in every moved record |
 | move proof (negative control) | operand flip inside the moved wrapper, scratch copy | 1 | `pfs declset -f` diff = 1 record, digest changes (`4c7f05c3…` → `33a2b158…`); copy outside the repo, tree untouched |
 | body identity | per-helper sha256 of the base span vs the test-file span | 0 | 4/4 identical; 53 lines total |
 | call sites | argument-text multisets of each helper's callers, base vs head | 0 | identical: 3 / 7 / 2 / 6 occurrences |
-| reference scan | `git grep -nw <helper>` (from `daemon/`) | 1 (no non-test hit) | zero non-test Go references; every hit is a `_test.go` file; a repo-root run also hits `docs/plans/**` prose |
+| reference scan (unfiltered) | `git grep -nw <helper> -- '*.go'` (from `daemon/`) | 0 | 22 hits, every one in a `_test.go` file (4 / 8 / 3 / 7 per helper); a repo-root run without a pathspec also hits `docs/plans/**` prose |
+| reference scan (non-test) | `git grep -nw <helper> -- '*.go' ':!*_test.go'` (from `daemon/`) | 1 (no hit) | zero non-test Go references (expected empty) |
 | hunk audit | `git diff -U0` hunk starts | 0 | 8 hunks: 4 deletions inside the four base spans, 4 EOF insertions in the consuming test files |
 | prod shrink | `wc -l` on the four production files | 0 | 968→964, 876→840, 375→370, 642→630 = **−57** (53 declaration lines + 4 blank separators); test side +57 |
 | build constraints | `git diff -U0 \| grep '^[+-]//go:build'` | 1 (no hit) | no file added, removed or re-gated |
@@ -148,6 +151,19 @@ least as strict as the source file's (`linux` → `linux`; `linux && amd64` → 
 | whitespace | `git diff --check` | 0 | — |
 | host path leak | account-name / profile-directory / drive-letter grep over the diff and the new plan | 1 (no hit) | 0 hits; no backslash followed by the letter u in any written text |
 | race | not run locally (`-race` needs cgo, absent on this host) | — | CI daemon race job is the oracle, per contract |
+
+In the executed-gate rows above, `\|` is GFM table-cell escaping, not part of any command: the
+host-pattern gate as executed is `go test -count=1 -skip 'Loopback|TCPPeer' ./internal/platform/...`
+in WSL (the pattern is a Go alternation). That skip excludes 10 tests — wider than the loopback
+limitation the contract command shows: the four completed dial timeouts
+(`TestVerifyLoopbackTCPPeerWaitsForDeferredAcceptWithoutWriting`,
+`TestVerifyLoopbackTCPPeerDoesNotExtendCallerDeadlineDuringDeferredAccept`,
+`TestLinuxTCPPeerV2RejectsDifferentNetworkCookie`,
+`TestVerifyLoopbackTCPPeerV2UsesRetainedPIDFDAndPinnedNamespace`), the hang
+(`TestVerifyLoopbackTCPPeerV2WaitsForPendingAcceptOnSameConnectionWithoutWriting`), the env-gated
+owned-helper entry point (`TestVerifyLoopbackTCPPeerWithOwnedHelperProcess`), and four tests with no
+dial call (`TestReadLinuxTCPPeerInode`, `TestReadLinuxTCPPeerInodeBoundsTable`,
+`TestLinuxTCPPeerV2RejectsDatagramSocket`, `TestVerifyLoopbackTCPPeerRejectsInvalidInputs`).
 
 The SKIP list of both platform test runs is recorded verbatim in the evidence section; the
 contract requires 0 new skips (the diff adds none). CI-only oracle: the daemon race job (`-race`
