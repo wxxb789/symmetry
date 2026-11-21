@@ -1,0 +1,206 @@
+# rf-w3-09-errcheck-app errcheck triage part 1: app recovery paths — evidence record (2026-11-22)
+
+Subject: contract `goal-rf-w3-09-errcheck-app.md` (GDD, 2026-11-21 + conductor decision
+2026-11-21 + comment policy 2026-11-22), base revision
+`261e84a42313cf1580a06df11b6062305cdf53d5` (`refactor(state): wrap state errors with their causes
+(#200)`; W3-07 merged, #197 W4-19 merged). Deliverable: the uncommitted working tree of
+`Q:/repos/wt-w3-09-errcheck-app/symmetry` described below.
+
+Subject identity (sha256 of the delivered files):
+
+| file | sha256 |
+|---|---|
+| `daemon/internal/app/goal_admission.go` | `a93543dcac19ad1b3ccf9061050c9875a48592d54a3cc025b006aa41d2e95021` |
+| `daemon/internal/app/terminate_linux.go` | `8afdbac5c8c17a7fd4bda1e538909e6f5272caf262cc19d4787dcfd174892f52` |
+| `daemon/internal/app/abandon_error_join_test.go` | `c809a2b1f071e58ce3a0d85b677a22bc2546e6d8ef6fd3a72f1b2d23b67c0ac1` |
+| `docs/plans/2026-11-22-rf-w3-09-errcheck-app-plan.md` | `79315beb0e02f4185c0c74c14bb11f170b3b95066f01ad6fcbdc8305f4b63a4e` |
+| `docs/evidence/rf-w3-09-errcheck-app-2026-11-22.md` | this record (hash not self-referential) |
+
+## 1. Deliverable shape
+
+| file | status | change |
+|---|---|---|
+| `daemon/internal/app/goal_admission.go` | edited | 9 statements gain `abandonErr :=`; the 9 following returns fold it in via `errors.Join`. `git diff -U0` = exactly 9 hunks / 36 changed lines. |
+| `daemon/internal/app/terminate_linux.go` | edited | `defer process.Release()` → stated-reason `defer func() { _ = process.Release() }()` (2-line why comment) |
+| `daemon/internal/app/abandon_error_join_test.go` | new (67 L) | `TestAbandonGoalSessionErrorJoinsIntoAdmissionReturn` |
+| `docs/plans/2026-11-22-rf-w3-09-errcheck-app-plan.md` | new | plan |
+| `docs/evidence/rf-w3-09-errcheck-app-2026-11-22.md` | new | this record |
+
+No exported symbol changed; no new `//nolint` (`grep -c nolint` = 0 in all three Go files).
+
+## 2. The nine sites and the prefix identity
+
+`git grep -n -E '^\s+daemon\.abandonGoalSession\(' HEAD -- daemon/internal/app/goal_admission.go`
+matches exactly the nine dropped calls `:1088, :1099, :1103, :1113, :1117, :1122, :1129, :1143,
+:1156`; the same grep on the worktree matches zero lines (all nine are captured).
+
+| line | pre-change return | post-change return |
+|---|---|---|
+| 1088 | `fmt.Errorf("load native run fence: %w", err)` | `fmt.Errorf("load native run fence: %w", errors.Join(err, abandonErr))` |
+| 1099 | `fmt.Errorf("attach native Goal session: %w", err)` | `fmt.Errorf("attach native Goal session: %w", errors.Join(err, abandonErr))` |
+| 1103 | `errors.New("native Goal session attach receipt is unavailable")` | `errors.Join(errors.New("native Goal session attach receipt is unavailable"), abandonErr)` |
+| 1113 | `fmt.Errorf("fetch Goal run context: %w", err)` | `fmt.Errorf("fetch Goal run context: %w", errors.Join(err, abandonErr))` |
+| 1117 | `err` | `errors.Join(err, abandonErr)` |
+| 1122 | `fmt.Errorf("encode canonical Goal context: %w", err)` | `fmt.Errorf("encode canonical Goal context: %w", errors.Join(err, abandonErr))` |
+| 1129 | `fmt.Errorf("mark native Goal run running: %w", err)` | `fmt.Errorf("mark native Goal run running: %w", errors.Join(err, abandonErr))` |
+| 1143 | `errors.New("Goal run ended before native turn start")` | `errors.Join(errors.New("Goal run ended before native turn start"), abandonErr)` |
+| 1156 | `ctx.Err()` | `errors.Join(ctx.Err(), abandonErr)` |
+
+Prefix identity: `errors.Join(a, b)` with two non-nil operands renders `a.Error() + "\n" +
+b.Error()`, so for every site the pre-change text is a byte-prefix of the post-change text (the six
+`fmt.Errorf` sites keep their wrapper and wrapped cause, the `:1103`/`:1143` sites keep their exact
+literal, `:1117` keeps the primary `err`, `:1156` keeps `ctx.Err()`). With a nil abandon result the
+joined term is the primary operand itself (Go 1.20+ `errors.Join` returns the single non-nil error
+unchanged), so a successful abandon adds nothing. The two abandons' cause arguments are byte-identical
+to the pre-change statements, including the `:1143` pair of distinct literals.
+`git grep -n` for the seven message strings outside `goal_admission.go` (tests included) matches
+nothing, so no pre-existing test pins them by text; the new test pins `:1088`'s rendered text exactly.
+
+## 3. Invariants
+
+- **Retry arming unchanged.** `git grep -n requireNativeSessionCloseRetry HEAD -- …/goal_admission.go`
+  and the worktree grep are identical: definition `:1273` plus call sites `:1080`, `:1422`, `:1439`,
+  `:1478`, `:1494` — the same five as the contract's reconciled set (`:1080/:1406/:1423/:1462/:1478`
+  at `a1142d4e`, four shifted by the intervening app commits). The diff adds or removes none.
+- **No edit inside `abandonGoalSession`.** `git diff -U0` shows 9 hunks, all at `:1087-1157`;
+  `abandonGoalSession` (`:1370`) and `abandonGoalSessionUncertain` (`:1446`) bodies are untouched, so
+  the durable-write order and the internal `errors.Join(closeErr, retentionErr, uncertainErr)` chain
+  do not move.
+- **Durable text is a declared change.** The joined tail reaches `payload["error"]` (D1/P2-1); the
+  primary prefix and `reason` (`errors.As`) semantics are unchanged; `:1088`'s exact rendered text is
+  pinned by the new test.
+
+## 4. The new test and its mutant
+
+`TestAbandonGoalSessionErrorJoinsIntoAdmissionReturn` drives site `:1088` through
+`startGoalAdmission` with two composed seams in one `store.SetAtomicWriterForTesting` writer:
+
+1. run-journal write carrying `"kind":"session_attach"` + `"ready":true` (the
+   `markGoalSessionAttachDeliveryReady` write at `:1073`) is committed and then the journal bytes are
+   replaced with `{` → the next fence read is `store.LoadJournal` at `:1086`, the owned site;
+2. goal-session write carrying `"launch_state":"uncertain"` (the `MarkGoalSessionUncertain` write
+   inside `abandonGoalSession`) returns the injected sentinel, which W3-07's
+   `writeJSONWithLimit` wraps as `write goal session journal: %w`.
+
+Assertions: `errors.Is(returned, sentinel)`; the rendered text equals the composed exact string
+(first line `load native run fence: ` + the re-read primary error, then `recordStoppedGoalSession`'s
+primary, `persist workspace retention: ` + primary, and the sentinel write line); the journal no
+longer decodes; the session was closed and no turn started.
+
+- head, green: `go test -count=1 ./internal/app/ -run
+  'TestAbandonGoalSessionErrorJoinsIntoAdmissionReturn|TestFreshCodexPreNativeLaunchWriteFailuresReadBackAndCompensate'`
+  → rc 0; `-v` shows `--- PASS: TestAbandonGoalSessionErrorJoinsIntoAdmissionReturn (0.23s)` plus the
+  4/4 subtests of the shape-reference test.
+- mutant, red: site `:1088` reverted to the pre-change dropped call →
+  `go test -count=1 ./internal/app/ -run '^TestAbandonGoalSessionErrorJoinsIntoAdmissionReturn$' -v`
+  exit 1, `--- FAIL: TestAbandonGoalSessionErrorJoinsIntoAdmissionReturn (0.27s)`,
+  `admission error = load native run fence: decode run journal: unexpected end of JSON input, want the
+  abandon-internal sentinel joined` (`<run-dir>/gates/mutation-red.txt`). The join was restored:
+  `sha256sum -c <run-dir>/gates/delivered-hashes.txt` → all three files OK, the focused gate re-ran
+  green (rc 0, `<run-dir>/gates/focused-after-restore.txt`) and `gofmt -l` lists no file.
+
+## 5. Errcheck measurements
+
+Pinned commands, from `daemon/`, per GOOS; raw = `--no-config --default=none --enable=errcheck
+--max-issues-per-linter=0 --max-same-issues=0 ./internal/app/... ./internal/state/...`; gate = the
+same flags plus `-c <run-dir>/errcheck/errcheck-gate.yml` (a minimal config carrying exactly the
+contract's §10.2 `linters.exclusions`: `presets: [comments, common-false-positives, legacy,
+std-error-handling]` and `rules: [{path: _test\.go, linters: [errcheck]}]`; `check-blank` default
+`false`). Raw outputs also include `./internal/linuxpreflight/...` for the arch-decision §G
+retargeting. Before = a detached pristine worktree at `261e84a4`; after = the delivered tree.
+Raw totals include `_test.go` findings; the prod (non-test) counts are given separately.
+
+```yaml
+version: "2"
+linters:
+  exclusions:
+    presets: [comments, common-false-positives, legacy, std-error-handling]
+    rules:
+      - path: _test\.go
+        linters: [errcheck]
+```
+
+| run | before | after |
+|---|---|---|
+| raw linux, total | 467 | 458 |
+| raw linux, prod | 23 = app 17 (abandon 9, recovery 3, witness 4, terminate 1) + state 6 | 13 = app 7 (recovery 3, witness 4) + state 6 |
+| raw windows, total | 408 | 400 |
+| raw windows, prod | 12 = abandon 9 + state 3 | 3 (state only) |
+| raw linux `./internal/linuxpreflight/...` | 9 (7 prod + 2 test) | 9 (untouched) |
+| **gate linux** | **10, every finding one of the owned sites** | **0** |
+| **gate windows** | **9, every finding one of the owned sites** | **0** |
+
+Raw deltas reconcile exactly: −9 abandon −1 `process.Release` +1 new test file's `defer store.Close()`
+(test-file findings are raw-only; the gate config's `_test.go` errcheck rule excludes them).
+The retargeted prod ledger at base is 23 (app+state) + 7 (linuxpreflight prod: `cgroup_linux.go` 2,
+`preflight_linux.go` 5) = 30, reproducing the contract's F11 baseline with the preflight family at
+its post-W4-19 path. Owned-file filter (`grep -E 'goal_admission\.go|terminate_linux\.go'`) on the
+four after runs: 0 matches each.
+
+Measurement hygiene: the first "before" attempt ran in the edited worktree and overlapped with the
+implementation edits; its windows outputs are inconsistent with the pristine tree (e.g. gate-windows
+1 finding quoting an already-checked line). It was discarded (`*-unreliable.txt`) and replaced by the
+pristine-worktree run after `golangci-lint cache clean`; the before/after pairs above all come from
+post-clean runs of the unmodified/graded tree respectively.
+
+## 6. Gates
+
+| gate | command | exit | observation |
+|---|---|---:|---|
+| format | `gofmt -l` on the three Go files | 0 | no files listed |
+| vet | `go vet ./...` (daemon, windows-local) | 0 | no output |
+| linux build | `GOOS=linux go build ./...` | 0 | no output |
+| windows build | `GOOS=windows go build ./...` | 0 | no output |
+| focused tests | `go test -count=1 ./internal/app/ -run 'TestAbandonGoalSessionErrorJoinsIntoAdmissionReturn\|TestFreshCodexPreNativeLaunchWriteFailuresReadBackAndCompensate'` | 0 | `ok … 0.815s`; `-v`: 1 + 4/4 subtests PASS |
+| package suite (Windows) | `go test -count=1 ./internal/app/...` | 0 | `ok … 119.454s` (`<run-dir>/gates/windows-app-suite.txt`) |
+| linux lane (WSL Ubuntu-24.04) | full suite in a fresh network namespace, §6.1 | 0 | `ok … 132.853s` (`<run-dir>/gates/wsl-app-suite-netns.txt`); targeted run `ok … 0.419s` (`…/wsl-targeted-netns.txt`) |
+| whitespace | `git diff --check` | 0 | clean |
+| host paths | `git diff origin/main...HEAD \| grep -ci 'users/'` and worktree-diff scan | 1 / 0 matches | no profile paths in the change |
+| errcheck | §5 table | 1 before / 0 after (gate-config) | acceptance 10→0 linux, 9→0 windows |
+| mutation | §4 entry | 1 (mutant) / 0 (restored) | red exactly at the driven site |
+
+Suite logs: `<run-dir>/gates/windows-app-suite.txt`, `<run-dir>/gates/wsl-app-suite-netns.txt`
+(plus the environment-hung first attempt `<run-dir>/gates/wsl-app-suite.txt`, §6.1); errcheck
+logs: `<run-dir>/errcheck/{before,after}-{raw,gate}-{linux,windows}.txt` and
+`…-raw-linux-preflight.txt` (run dir: `<HOST-PATH>/.local/state/gdd/runs/2026-11-22/
+symmetry-rf-w3-09-errcheck-app-implement`).
+
+### 6.1 Linux lane: pre-existing WSL IPv4-loopback defect and the netns workaround
+
+The contract's literal WSL command hangs in this VM **before the change is involved**: in the
+`Ubuntu-24.04` distro's shared network namespace, IPv4 loopback connects hang (`net.DialTimeout
+"tcp" 127.0.0.1:port` → `i/o timeout`; `ss` shows the client stuck in `SYN-SENT` while the listener
+stays `LISTEN`), while `::1` and the eth0 address work; `.wslconfig` sets
+`networkingMode=mirrored` (WSL 2.x mirrored networking, VM uptime 10 days). Reproduced at the
+pristine base `261e84a4` with the same single test under `-timeout 150s` (exit 1, `panic: test timed
+out`, dump in `…/wsl-single-test-pristine.txt`) and in the `symmetry-race` distro (same dial
+timeout), so it is environmental and not caused by this slice. The first full-suite attempt
+(`…/wsl-app-suite.txt`) died at 600 s on
+`TestClaimAdmissionInputFailsClosedBeforeWorkspaceOrProcessStart/mixed_null_marker_survives_replay_and_restart`,
+whose `httptest` listener dials `127.0.0.1`.
+
+The lane was therefore run in a **fresh network namespace** (`sudo unshare -n`, `ip link set lo up`,
+as user `accept`) whose loopback is kernel-local and unaffected by the mirrored-networking proxy:
+the full `go test -count=1 -timeout 2400s ./internal/app/...` passes there in 132.853 s with the same
+Go toolchain (go1.27.0 linux/amd64) and the same tree, which also exercises the owned
+`//go:build linux` `terminate_linux.go`. Wrapper scripts: `Q:/repos/wt-w3-09-errcheck-app/lane/`
+(`run-linux-lane.sh`, `run-linux-go-test.sh`). The CI Linux/race jobs remain the standing oracle;
+repairing the VM's shared loopback (e.g. `wsl --shutdown`) was deliberately not attempted in this
+run because it would terminate the user's other WSL sessions and processes.
+
+## 7. Residual limits
+
+- Eight of the nine sites are not individually driven: they share the one mechanical shape
+  (capture + join) and are covered by the gate-config errcheck 0 plus the byte-prefix identity; each
+  additional drive needs an unrelated fault injection (marshal, `markRunning`, context fetch, receipt
+  mismatch) whose only new coverage is the same joining line.
+- The raw Close-family ledgers stay as recorded: `linux_owner_recovery_linux.go` 3,
+  `linux_owner_witness_linux.go` 4, `internal/state` 6 (linux) / 3 (windows), `internal/linuxpreflight`
+  7 — out of scope here (the gate preset excludes them; no recovery meaning).
+- The Linux lane ran in WSL `Ubuntu-24.04` (go1.27.0 linux/amd64) inside a fresh network namespace
+  because the VM's shared IPv4 loopback is broken (pre-existing, §6.1); the CI daemon race job
+  remains the race oracle (no `-race` in this lane). The preflight `internal/linuxpreflight` raw run
+  is a linux-only measurement (its files are `//go:build linux`).
+- The gate-config run uses a minimal standalone config file (run-dir path recorded above) rather than
+  the repo `.golangci.yml`; the repo file's additional test relaxations are no-ops under
+  `--default=none --enable=errcheck`, and both measurements are recorded.
