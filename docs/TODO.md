@@ -19,6 +19,84 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       card renders on the repository page. The image is 1280×640 and mirrors the
       README banner (`docs/assets/symmetry-banner.png`).
 
+- [ ] Revalidate and remove three daemon surfaces the re-scoped dead-code sweep left in
+      `internal/state` (2026-11-21, branch `refactor/rf-w1-06-daemon-deadcode`; plan
+      `docs/plans/2026-11-21-w1-06-daemon-deadcode-plan.md`). `Store.AttachGoalSession`
+      (`daemon/internal/state/goal_session.go:1044`), `Store.EnsureGoalSessionLineageAvailable`
+      (`:592`) and `Store.FailUnresolvedProvideInput` (`daemon/internal/state/state.go:4175`) are
+      unreachable from `deadcode -test ./cmd/...` on windows/amd64, linux/amd64 and linux/arm64
+      alike, and at the baseline revision `a3039f0` `git grep -nw <symbol>` matches only each
+      definition plus its doc comment — no call site, no test, no doc citation anywhere; this
+      entry and the plan are the only matches added since. They were outside that sweep's owned
+      file set; reproduction is the three `deadcode` runs plus the baseline-scoped grep, as
+      recorded in the plan.
+
+- [ ] Revalidate and remove the daemon surfaces that are unreachable from both mains but still
+      referenced, so no deletion is possible without retargeting a caller (2026-11-21, same
+      branch and plan). Three groups were surveyed; only the first, below, is dead-code material
+      — the other two are live — do not remove (decision note below).
+      **In the three-target `deadcode -test` intersection and referenced:**
+      `control.NewOperatorClient` (`client.go:485`) with `SubmitTask`/`GetTask`/
+      `CreateTaskCommand`/`operatorRequest`/`operatorRequestWithStatus` and
+      `control.WithMaxResponseBytes` (`:99`) — callers `daemon/e2e/core_test.go:696`,
+      `e2e/production_linux_containment_witness_test.go:2046`, the control tests, and
+      `app/pi_provider_bridge_test.go:409` (the oversized-response case of the live `NewClient`);
+      the seven legacy task validators in `daemon/internal/control/validation.go`
+      (`:209/:281/:302/:334/:441/:611/:629`) — reached from
+      `daemon/internal/control/client.go:992,:1007,:1022,:1034` (inside the dead operator client),
+      from sibling validators (`validation.go:230,:239,:253,:306`), and from
+      `daemon/internal/control/supervisory_validation_test.go:39,:48,:55,:125,:129,:148,:152`;
+      the `protocol.Task`/`TaskWaiting` v1 decoders (65 and 8 references, 37 in
+      `e2e/core_test.go`); and `harness.NewClaudeAdapterWithRunner` (`registry.go:245`, three test
+      files). Removing any of them needs an owner for `daemon/e2e/**` and the app/control test
+      seams — the W2-12 follow-up is that owner (program plan §4).
+
+- live — do not remove (decision note, 2026-11-21, same branch and plan): the two remaining
+      groups of that survey are production-live surfaces that no deletion pass may touch.
+      **In the same `validation.go:209-629` range but in no target's `deadcode` findings (live
+      code, not candidates):** `validateTerminalPayloads` (`:265`),
+      `validateAcknowledgementResponse` (`:318`, caller `client.go:980`),
+      `validateTaskCommandResource` (`:352`), `sameJSONObject/Value/Number` (`:448/:460/:501`),
+      `validateSnapshotParts` (`:507`), `validateCommands` (`:519`), `isSupervisoryCommand`
+      (`:544`), `ValidateSupervisoryPayload` (`:549`), `validateWork` (`:568`),
+      `validateNullableJSONObject` (`:584`), `validateJSONObject` (`:595`), `isJSONNull` (`:607`)
+      and `isTransitionState` (`:620`).
+      **Not dead-code at all:** the shadowed root probe paths `probeCodexExecutableWithRunner`
+      (`:379`) and `probeClaudeExecutable` (`:299`) are main-reachable through
+      `NewCodexAdapter`/`NewClaudeAdapter` and appear in none of the three baseline `deadcode`
+      reports; they belong to the probe/registry dedup (W3-04), not to a deletion pass.
+
+## Build-tag parity (arm64 oracle)
+
+- [ ] `GOOS=linux GOARCH=arm64 go vet ./...` cannot pass until
+      `daemon/internal/state/linux_clone_journal_test.go` stops calling an amd64-only method
+      (found 2026-11-21 while running the re-scoped W1-06 oracle). The test file is
+      `//go:build linux` and calls `reader.verify(...)` at `:1077` and `:1091`, whose only
+      definition is `daemon/internal/state/linux_clone_cleanup_reader_linux_amd64.go:154` under
+      `//go:build linux && amd64`; the arm64 vet therefore reports
+      `reader.verify undefined (type *LinuxCloneCleanupReader has no field or method verify, but
+      does have method Verify)`. Pre-existing: both files are at the same lines in the baseline
+      revision `a3039f0`, and CI's `go vet ./...` runs on the amd64 host, so nothing in the
+      pipeline sees it. Fix by moving `TestLinuxCloneCleanupBeginCompleteRequiresExactReadbacks`
+      (`:723-1150`) into an amd64-tagged test file, keeping both assertions; do not delete them,
+      do not narrow the whole test file's tag (its other 13 tests would leave the arm64 oracle),
+      and do not widen only the reader's tag — the reader's file name pins GOOS/GOARCH, so a tag
+      widening there needs a rename plus an arm64-compilability proof. The four packages W1-06
+      touched vet clean on all three targets.
+
+- [ ] Revalidate and remove three pre-existing dead stores of the class the daemon-app/state hygiene
+      slice fixed, found while applying it. Evidence: the slice's `golangci-lint v2.15.0` run
+      (`GOOS=linux`, `--default=none -E staticcheck,ineffassign,gocritic`, `./internal/app/...`) at
+      `a3039f0` reports them among its `ineffassign` findings; after this slice they are the only
+      remaining ones in `internal/app/`:
+      `daemon/internal/app/app_test.go:4881` (`journal, err := store.LoadJournal(key)`),
+      `daemon/internal/app/stale_ack_settlement_test.go:32` and `:125`
+      (`journal, err := store.SetLocalState(key, "stale")`). Each binds `journal` and overwrites it on
+      the next statement (`journal = expireLeaseBeforeCleanup(t, store, key)`) with no read in between,
+      so the first value is dead; each needs its own review before removal, because the intermediate
+      journal may be the value an intended assertion would read, and the daemon test split (W3-15)
+      owns those files.
+
 ## Retro review follow-ups
 
 - [ ] Investigate the intermittent Control failure class behind the provider-action cases at

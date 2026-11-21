@@ -1799,7 +1799,7 @@ func verifyLinuxMountAllowsSetID(path string) error {
 func unescapeLinuxMountPath(value string) (string, error) {
 	var result strings.Builder
 	result.Grow(len(value))
-	for i := range len(value) {
+	for i := 0; i < len(value); i++ {
 		if value[i] != '\\' {
 			result.WriteByte(value[i])
 			continue
@@ -1819,7 +1819,7 @@ func unescapeLinuxMountPath(value string) (string, error) {
 		default:
 			return "", errors.New("unknown mount path escape")
 		}
-		i += 3
+		i += 3 // The escape is four bytes: the backslash plus three octal digits.
 	}
 	return result.String(), nil
 }
@@ -1874,8 +1874,8 @@ type linuxSystemdUnitPolicy struct {
 
 func verifyLinuxSystemdUnit(policy linuxSystemdUnitPolicy, a, b linuxACLSubject) error {
 	path := filepath.Join("/etc/systemd/system", policy.unit)
-	transientDirectory := filepath.Join("/run/systemd/transient")
-	if err := verifyLinuxSystemdDirectory(filepath.Join("/run/systemd"), a, b); err != nil {
+	transientDirectory := "/run/systemd/transient"
+	if err := verifyLinuxSystemdDirectory("/run/systemd", a, b); err != nil {
 		return fmt.Errorf("verify transient-unit ancestor: %w", err)
 	}
 	if _, err := lstatCanonicalLinuxPath(transientDirectory); err == nil {
