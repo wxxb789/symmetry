@@ -127,20 +127,20 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 - [ ] The Goal surface offers no admission path for a resolved plan decision whose admission was
       never accepted.
       `PlanApproval` renders only for an open plan decision: `planApprovalOption`
-      (`frontend/src/features/goals/detail.tsx:408`) returns null unless `decision["open?"] === true`,
-      the render (`:381-382`) mounts no other admission affordance, and the resolved card shows
+      (`frontend/src/features/goals/detail.tsx:413`) returns null unless `decision["open?"] === true`,
+      the render (`:388`) mounts no other admission affordance, and the resolved card shows
       "Resolved: …" only. `NextAction` has no `accept_plan` payload path: its `accept_plan` branch
-      renders a note only ("Approve the open plan decision above first …", `:533`), `actionPayload`
-      returns null for every kind it does not build (`:626-627`), and the send button returns without
+      renders a note only ("Approve the open plan decision above first …", `:539`), `actionPayload`
+      returns null for every kind it does not build (`:632-633`), and the send button returns without
       sending anything. The dead end is reachable through the press's own two commands by two paths.
-      (a) An answered admission refusal releases the whole attempt (`:218`), so a re-press re-resolves
+      (a) An answered admission refusal releases the whole attempt (`:224`), so a re-press re-resolves
       a decision the server serves `resolved` and is refused `invalid_decision` (`apply_command!`
       requires `decision.state == "open"`, `control/lib/symmetry_control/goals.ex:6491-6495`), while
       the server would accept a fresh `accept_plan` built from a current read (`goals.ex:6395-6414`).
       (b) A lost resolution acknowledgement keeps the attempt, but the goal invalidation the committed
       resolution published before its response
       (`control/lib/symmetry_control_web/plugs/portal_invalidations.ex:28-32`) refetches the card and
-      the `open?` gate (`:408`) unmounts the control; the server would replay the frozen resolution
+      the `open?` gate (`:414`) unmounts the control; the server would replay the frozen resolution
       bytes, and the admission would still need a fresh read. Pre-existing (the pre-fix press also
       applied the resolution and could not admit) and outside `fix/resolve-decision-submit-read`'s
       contract scope; that branch records the frozen attempt's release rule and the precondition of

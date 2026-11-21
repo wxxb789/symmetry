@@ -7,7 +7,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { getRouteApi, useRouteContext } from "@tanstack/react-router";
 import { runtimesOptions } from "../../app/application";
-import { EmptyState, ErrorState, LoadingState, PageHeading, RefreshButton, StatusBadge } from "../../components/workspace";
+import { StatusBadge } from "../../components/primitives";
+import { EmptyState, ErrorState, LoadingState, PageHeading, RefreshButton } from "../../components/workspace";
 import type { Runtime } from "../../services/api";
 import { timestamp } from "../work/presentation";
 import { capacityLabel, operationRows, runtimesEmptyState } from "./presentation";
