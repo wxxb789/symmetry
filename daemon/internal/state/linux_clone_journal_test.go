@@ -18,6 +18,7 @@ import (
 )
 
 func TestLegacyJournalDecodeDoesNotInventCloneEvidence(t *testing.T) {
+	t.Parallel()
 	legacy := testJournal("legacy-no-clone", 1)
 	encoded, err := json.Marshal(legacy)
 	if err != nil {
@@ -37,6 +38,7 @@ func TestLegacyJournalDecodeDoesNotInventCloneEvidence(t *testing.T) {
 }
 
 func TestLegacyPromotedLinuxCloneJournalRestartsWithoutInventingIntent(t *testing.T) {
+	t.Parallel()
 	requireLinuxCloneAMD64(t)
 	for _, test := range []struct {
 		name       string
@@ -46,6 +48,7 @@ func TestLegacyPromotedLinuxCloneJournalRestartsWithoutInventingIntent(t *testin
 		{name: "current target layout", legacyPath: false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			directory := t.TempDir()
 			store, err := New(directory)
 			if err != nil {
@@ -100,6 +103,7 @@ func TestLegacyPromotedLinuxCloneJournalRestartsWithoutInventingIntent(t *testin
 }
 
 func TestSaveJournalCannotClearLinuxCloneRetentionFromStaleSnapshot(t *testing.T) {
+	t.Parallel()
 	requireLinuxCloneAMD64(t)
 	store := mustStore(t)
 	journal, intent := newLinuxCloneJournal(t, "clone-retain-stale-snapshot")
@@ -127,6 +131,7 @@ func TestSaveJournalCannotClearLinuxCloneRetentionFromStaleSnapshot(t *testing.T
 }
 
 func TestLinuxCloneAbortFencesLaunchAndRetiresOnlyAfterAbsenceProof(t *testing.T) {
+	t.Parallel()
 	requireLinuxCloneAMD64(t)
 	store := mustStore(t)
 	journal, intent := newLinuxCloneJournal(t, "clone-abort-run")
@@ -243,6 +248,7 @@ func TestLinuxCloneAbortFencesLaunchAndRetiresOnlyAfterAbsenceProof(t *testing.T
 }
 
 func TestAbortNeverCreatedLinuxCgroupReservationUsesOnlyUnstartedFence(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	journal := stoppedTestJournal("clone-test-never-created", 1)
 	journal.LeaseExpiresAt = time.Now().UTC().Add(time.Hour)
@@ -304,6 +310,7 @@ func TestAbortNeverCreatedLinuxCgroupReservationUsesOnlyUnstartedFence(t *testin
 }
 
 func TestLinuxCloneAbortAcceptsOnlyExactCgroupNoTargetTombstones(t *testing.T) {
+	t.Parallel()
 	requireLinuxCloneAMD64(t)
 	for _, createStarted := range []bool{false, true} {
 		name := "before-create"
@@ -311,6 +318,7 @@ func TestLinuxCloneAbortAcceptsOnlyExactCgroupNoTargetTombstones(t *testing.T) {
 			name = "removed-empty-leaf"
 		}
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			store := mustStore(t)
 			journal, intent := newLinuxCloneJournal(t, "clone-cgroup-abort-"+name)
 			if err := store.SaveJournal(journal); err != nil {
@@ -381,6 +389,7 @@ func TestLinuxCloneAbortAcceptsOnlyExactCgroupNoTargetTombstones(t *testing.T) {
 }
 
 func TestLinuxCloneAbortCannotUseNormalReleaseAsNoTargetProof(t *testing.T) {
+	t.Parallel()
 	requireLinuxCloneAMD64(t)
 	store := mustStore(t)
 	journal, intent := newLinuxCloneJournal(t, "clone-normal-release-abort")
@@ -470,6 +479,7 @@ func TestLinuxCloneAbortCannotUseNormalReleaseAsNoTargetProof(t *testing.T) {
 }
 
 func TestLinuxCloneJournalCASRejectsStaleOrChangedEvidence(t *testing.T) {
+	t.Parallel()
 	requireLinuxCloneAMD64(t)
 	store := mustStore(t)
 	journal, intent := newLinuxCloneJournal(t, "clone-cas-run")
@@ -574,6 +584,7 @@ func TestLinuxCloneJournalCASRejectsStaleOrChangedEvidence(t *testing.T) {
 }
 
 func TestLinuxCloneIntentFreezesFenceAndReservesUniquePaths(t *testing.T) {
+	t.Parallel()
 	requireLinuxCloneAMD64(t)
 	store := mustStore(t)
 	firstJournal, firstIntent := newLinuxCloneJournal(t, "clone-path-first")
@@ -644,6 +655,7 @@ func TestLinuxCloneIntentFreezesFenceAndReservesUniquePaths(t *testing.T) {
 }
 
 func TestLinuxCloneCleanupRequiresDeliveredCandidateArtifact(t *testing.T) {
+	t.Parallel()
 	journal, intent := newLinuxCloneJournal(t, "00000000-0000-4000-8000-000000000041")
 	journal.Work.Input = linuxCloneAdmissionInput(t, protocol.Subject{
 		ResourceID: intent.ResourceID, Commit: intent.BaseCommit, TreeDigest: intent.BaseTreeDigest,
@@ -672,6 +684,7 @@ func TestLinuxCloneCleanupRequiresDeliveredCandidateArtifact(t *testing.T) {
 }
 
 func TestDeleteJournalKeepsCandidateCloneWithoutDeliveredArtifact(t *testing.T) {
+	t.Parallel()
 	requireLinuxCloneAMD64(t)
 	store := mustStore(t)
 	journal, intent := newLinuxCloneJournal(t, "clone-candidate-artifact-gate")
@@ -721,6 +734,7 @@ func TestDeleteJournalKeepsCandidateCloneWithoutDeliveredArtifact(t *testing.T) 
 }
 
 func TestLinuxCloneCleanupBeginCompleteRequiresExactReadbacks(t *testing.T) {
+	t.Parallel()
 	requireLinuxCloneAMD64(t)
 	store := mustStore(t)
 	runID := "00000000-0000-4000-8000-000000000077"
@@ -1150,6 +1164,7 @@ func TestLinuxCloneCleanupBeginCompleteRequiresExactReadbacks(t *testing.T) {
 }
 
 func TestLinuxCloneCheckoutAndPromotionPreserveContainmentAndReplayExactly(t *testing.T) {
+	t.Parallel()
 	requireLinuxCloneAMD64(t)
 	store := mustStore(t)
 	journal, intent := newLinuxCloneJournal(t, "clone-staged-run")
@@ -1436,6 +1451,7 @@ func requireLinuxCloneAMD64(t *testing.T) {
 }
 
 func TestLinuxCloneReuseAliasRetiresOnlyAfterStableStop(t *testing.T) {
+	t.Parallel()
 	_, intent := newLinuxCloneJournal(t, "reuse-source")
 	seed := authority.LinuxCloneSeedReceipt{
 		Version: authority.LinuxCloneVersion, BaseCommit: intent.BaseCommit,
