@@ -699,8 +699,10 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 - [ ] Revalidate the pre-existing host-load flake in
       `TestProviderBridgeCloseRetryClearsUnprovenAfterExecutorExits`
       (`daemon/internal/harness/pi/provider_bridge_test.go:941`): it failed once in 26
-      executions of the PR #155 round-2 review's full parallel harness runs (2026-11-21, branch
-      `refactor/rf-w2-13-harness-scaffolding-5a`; plan
+      executions during the PR #155 round-2 review — 1 of 3 full parallel
+      `./internal/harness/...` runs, 0 of 20 isolated `-count=20 -run` runs and 0 of 3
+      package-only `./internal/harness/pi/` runs, so reproduction needs full-suite load
+      (2026-11-21, branch `refactor/rf-w2-13-harness-scaffolding-5a`; plan
       `docs/plans/2026-11-21-rf-w2-13-harness-scaffolding-5a-plan.md`). The test's first `Close`
       runs under a 25 ms `context.WithTimeout` (`:968-969`) and must return
       `errProviderBridgeExecutionUnproven` (`:971`); the failure is consistent with the deadline
