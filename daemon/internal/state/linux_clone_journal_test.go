@@ -2047,3 +2047,65 @@ func TestLinuxCloneValidatorFirstErrorStringsArePinned(t *testing.T) {
 		}
 	}
 }
+
+// TestLinuxCloneReuseRetiredJournalsStayLoadable pins the positive verdict of
+// the reuse-grant branch: a reuse journal retired while stably stopped, and one
+// aborted before any native start, must both save and load back cleanly. The
+// first-error group above proves only rejected mutations, so without these
+// readbacks a lost early return after the reuse branch turns every persisted
+// retired or aborted reuse journal into a load error.
+func TestLinuxCloneReuseRetiredJournalsStayLoadable(t *testing.T) {
+	t.Parallel()
+	requireLinuxCloneAMD64(t)
+
+	t.Run("retired alias", func(t *testing.T) {
+		t.Parallel()
+		base := newPinnedLinuxCloneReuse(t, "reuse-retired-consumer")
+		saved, err := base.store.mutateJournal(base.key, func(journal *RunJournal) error {
+			journal.LinuxCloneReuseRetired = true
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("save retired reuse journal: %v", err)
+		}
+		if !saved.LinuxCloneReuseRetired {
+			t.Fatal("saved reuse journal lost its retirement marker")
+		}
+		readback, err := base.store.LoadJournal(base.key)
+		if err != nil {
+			t.Fatalf("load retired reuse journal: %v", err)
+		}
+		if !readback.LinuxCloneReuseRetired || readback.LinuxCloneReuseAbortedBeforeNativeStart {
+			t.Fatalf("retired reuse readback flags: retired=%v aborted=%v",
+				readback.LinuxCloneReuseRetired, readback.LinuxCloneReuseAbortedBeforeNativeStart)
+		}
+	})
+
+	t.Run("aborted before native start", func(t *testing.T) {
+		t.Parallel()
+		base := newPinnedLinuxCloneReuse(t, "reuse-aborted-consumer")
+		current, err := base.store.LoadJournal(base.key)
+		if err != nil {
+			t.Fatalf("load reuse consumer journal: %v", err)
+		}
+		if current.LinuxCloneReuseGrant == nil {
+			t.Fatal("reuse consumer journal lost its grant")
+		}
+		aborted, err := base.store.AbortLinuxCloneReuseBeforeNativeStart(base.key, base.fence, *current.LinuxCloneReuseGrant)
+		if err != nil {
+			t.Fatalf("abort reuse journal before native start: %v", err)
+		}
+		if !aborted.LinuxCloneReuseRetired || !aborted.LinuxCloneReuseAbortedBeforeNativeStart {
+			t.Fatalf("aborted reuse flags: retired=%v aborted=%v",
+				aborted.LinuxCloneReuseRetired, aborted.LinuxCloneReuseAbortedBeforeNativeStart)
+		}
+		readback, err := base.store.LoadJournal(base.key)
+		if err != nil {
+			t.Fatalf("load aborted reuse journal: %v", err)
+		}
+		if !readback.LinuxCloneReuseRetired || !readback.LinuxCloneReuseAbortedBeforeNativeStart {
+			t.Fatalf("aborted reuse readback flags: retired=%v aborted=%v",
+				readback.LinuxCloneReuseRetired, readback.LinuxCloneReuseAbortedBeforeNativeStart)
+		}
+	})
+}

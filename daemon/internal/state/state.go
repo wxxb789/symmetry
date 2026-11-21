@@ -4942,8 +4942,11 @@ func linuxCloneStopProven(journal RunJournal) bool {
 }
 
 func validateLinuxCloneJournal(journal RunJournal) error {
-	if err := validateLinuxCloneReuseBranch(journal); err != nil {
-		return err
+	if reuse := journal.LinuxCloneReuseGrant; reuse != nil {
+		if err := validateLinuxCloneReuseBranch(journal, reuse); err != nil {
+			return err
+		}
+		return nil
 	}
 	intent := journal.LinuxCloneIntent
 	if intent == nil {
@@ -4975,20 +4978,18 @@ func validateLinuxCloneJournal(journal RunJournal) error {
 }
 
 // validateLinuxCloneReuseBranch runs the reuse-grant branch of the clone
-// journal validator: the three reuse helpers in the base order, skipped when
-// the journal carries no reuse grant.
-func validateLinuxCloneReuseBranch(journal RunJournal) error {
-	if reuse := journal.LinuxCloneReuseGrant; reuse != nil {
-		if err := validateLinuxCloneReuseGrant(journal, reuse); err != nil {
-			return err
-		}
-		if err := validateLinuxCloneReuseAbortState(journal); err != nil {
-			return err
-		}
-		if err := validateLinuxCloneReuseRetainedTarget(journal, reuse); err != nil {
-			return err
-		}
-		return nil
+// journal validator: the three reuse helpers in the base order, returning to
+// a parent that exits immediately on success (the base block's trailing
+// return nil).
+func validateLinuxCloneReuseBranch(journal RunJournal, reuse *authority.LinuxCloneReuseGrant) error {
+	if err := validateLinuxCloneReuseGrant(journal, reuse); err != nil {
+		return err
+	}
+	if err := validateLinuxCloneReuseAbortState(journal); err != nil {
+		return err
+	}
+	if err := validateLinuxCloneReuseRetainedTarget(journal, reuse); err != nil {
+		return err
 	}
 	return nil
 }
