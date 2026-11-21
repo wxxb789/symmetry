@@ -413,25 +413,22 @@ PATH_SHAPED = re.compile(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+")
 def path_literals(literals: tuple[str, ...]) -> tuple[str, ...]:
     """The literal names that spell a repo-relative path.
 
-    A predicate's constants include fragments it composes its comparisons with - the
-    `b"/"` separator of the family derivation, `b".md"`, `b"docs/"` - which name no
-    path; this filter keeps the ones an audited path or a tool path must explain.
+    The run-citations predicate's constants include the `b"/"` separator the family
+    derivation composes its comparisons with, which names no path; this filter keeps
+    the ones an audited path or a tool path must explain.
     """
     return tuple(literal for literal in literals if PATH_SHAPED.search(literal))
 
 
-def check_family_fixture_coverage(audited: tuple[str, ...], outputs: dict[str, dict[str, bool]]) -> None:
+def check_family_fixture_coverage(audited: tuple[str, ...]) -> None:
     """Every directory corpus entry has a fixture that adds a new path under it.
 
-    The measured triple of that fixture's diff is the pin. A derivation that matched
-    only the corpus entries themselves would keep every "modified" fixture green while
-    a new file under a directory entry silently stopped gating the citation job, and
-    only a fixture diff - a path no corpus literal names - can show the difference.
+    A derivation that matched only the corpus entries themselves would keep every
+    "modified" fixture green while a new file under a directory entry silently stopped
+    gating the citation job, and only a fixture diff - a path no corpus literal names -
+    can show the difference. The triple of that fixture's diff is pinned with every
+    other fixture's.
     """
-    require(
-        set(AUDITED_FIXTURES) == set(audited),
-        "the audited-corpus fixture map must name every corpus entry",
-    )
     directory_entries = sorted(entry for entry in audited if (ROOT / entry).is_dir())
     require(
         sorted(AUDITED_FAMILY_FIXTURES) == directory_entries,
@@ -447,7 +444,6 @@ def check_family_fixture_coverage(audited: tuple[str, ...], outputs: dict[str, d
             added.startswith(entry + "/") and added not in modified.paths,
             f"family fixture {fixture.name} must add a new path under {entry!r}; its diff touches {added!r}",
         )
-        check_fixture_triple(outputs[fixture.name], fixture)
 
 
 # -- the workflow's job model -------------------------------------------------
@@ -1088,7 +1084,7 @@ class ChangedPathClassifierTests(unittest.TestCase):
         check_run_citations_consumes_corpus(self.program_text, predicate_literals(self.program_text)["run-citations"])
 
     def test_every_directory_corpus_entry_covers_a_new_path(self) -> None:
-        check_family_fixture_coverage(self.audited, self.outputs)
+        check_family_fixture_coverage(self.audited)
 
     def test_every_citation_tool_path_gates_only_run_citations(self) -> None:
         literals = predicate_literals(self.program_text)

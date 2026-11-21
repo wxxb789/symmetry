@@ -4,9 +4,9 @@
 This program lived in the `Classify changed paths` step's `python3 - <<'PY'` heredoc in
 `.github/workflows/ci.yml` until refactor slice W3-01 moved it here; the step runs it in
 the checkout root, exactly as the heredoc ran in it. It appends `run-heavy`,
-`run-records` and `run-citations` to `$GITHUB_OUTPUT`; the job folds each of them for
-every non-pull-request event, so a run of this program only ever classifies a pull
-request's `HEAD^1..HEAD` diff.
+`run-records` and `run-citations` to `$GITHUB_OUTPUT`; the step, and only it, runs for
+pull requests - the job folds each output true for every other event - so a run of
+this program always classifies a pull request's `HEAD^1..HEAD` diff.
 """
 
 import os

@@ -126,7 +126,7 @@ present" to:
   `Name` load of `AUDITED_PATHS` and mention the four tool-path literals; an inlined copy has no such
   load and reddens;
 - `check_family_fixture_coverage()` — every corpus entry that is a directory in this tree has a
-  fixture adding a *new* path under it, and that fixture's measured triple is pinned, so the
+  fixture adding a *new* path under it (its triple pinned with every other fixture's), so the
   derivation is exercised against a path the corpus literals never named;
 - the per-entry "explained literal" loop keeps refusing a path literal in `run-citations` that no
   corpus entry or tool path explains. The loop filters its literals to path-shaped ones, because the
