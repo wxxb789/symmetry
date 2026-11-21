@@ -98,7 +98,10 @@ def resolve_commit(repository: pathlib.Path, revision: str) -> str | None:
 
 
 def resolve_base(
-    repository: pathlib.Path, requested: str | None, head: str, label: str,
+    repository: pathlib.Path,
+    requested: str | None,
+    head: str,
+    label: str,
 ) -> tuple[str | None, bool]:
     """The commit to compare ``head`` against, plus whether it came from the fallback.
 
@@ -152,7 +155,10 @@ def narrow_to_merge_base(repository: pathlib.Path, base: str, head: str) -> str:
 
 
 def changed_paths(
-    repository: pathlib.Path, base: str, head: str, pathspecs: tuple[str, ...],
+    repository: pathlib.Path,
+    base: str,
+    head: str,
+    pathspecs: tuple[str, ...],
 ) -> list[str]:
     """Paths added, modified or retyped between ``base`` and ``head``, sorted.
 
@@ -161,13 +167,18 @@ def changed_paths(
     are ``SELECTED_STATUSES``; the pathspecs are the caller's audited surface.
     """
     completed = run_git(
-        repository, "diff", "--name-status", "--no-renames", "-z", base, head, "--", *pathspecs,
+        repository,
+        "diff",
+        "--name-status",
+        "--no-renames",
+        "-z",
+        base,
+        head,
+        "--",
+        *pathspecs,
     )
     if completed.returncode != 0:
-        raise DiffRefused(
-            "cannot diff "
-            f"{base}..{head}: {completed.stderr.decode('utf-8', 'replace').strip()}"
-        )
+        raise DiffRefused(f"cannot diff {base}..{head}: {completed.stderr.decode('utf-8', 'replace').strip()}")
     fields = [field.decode("utf-8", "surrogateescape") for field in completed.stdout.split(b"\0") if field]
     if len(fields) % 2 != 0:
         raise DiffRefused("unexpected git diff output shape")
@@ -191,9 +202,7 @@ def head_blob(repository: pathlib.Path, head: str, relative: str) -> tuple[str, 
     """
     listed = run_git(repository, "ls-tree", "-z", head, "--", f":(top,literal){relative}")
     if listed.returncode != 0:
-        raise DiffRefused(
-            f"cannot read {relative} at {head}: {listed.stderr.decode('utf-8', 'replace').strip()}"
-        )
+        raise DiffRefused(f"cannot read {relative} at {head}: {listed.stderr.decode('utf-8', 'replace').strip()}")
     entries = [entry for entry in listed.stdout.split(b"\0") if entry]
     if len(entries) != 1:
         raise DiffRefused(f"the head revision {head} does not hold exactly one entry for {relative}")
@@ -210,7 +219,6 @@ def head_blob(repository: pathlib.Path, head: str, relative: str) -> tuple[str, 
     blob = run_git(repository, "cat-file", "blob", object_id)
     if blob.returncode != 0:
         raise DiffRefused(
-            f"cannot read the blob of {relative} at {head}: "
-            f"{blob.stderr.decode('utf-8', 'replace').strip()}"
+            f"cannot read the blob of {relative} at {head}: {blob.stderr.decode('utf-8', 'replace').strip()}"
         )
     return mode, blob.stdout

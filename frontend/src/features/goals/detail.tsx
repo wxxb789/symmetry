@@ -42,7 +42,7 @@ function outcomeUnknown(error: unknown): boolean {
   return error instanceof Network || error instanceof UnexpectedResponse;
 }
 
-type PlanApprovalAttempt = { key: string; resolve: GoalCommandEnvelope; admit: GoalCommandEnvelope | null };
+interface PlanApprovalAttempt { key: string; resolve: GoalCommandEnvelope; admit: GoalCommandEnvelope | null }
 
 export function GoalDetailPage() {
   const { application } = useRouteContext({ from: "__root__" });
@@ -264,7 +264,7 @@ function RefusalNotice({ refusal, refresh }: { refusal: MutationRefused; refresh
     <div>
       <h2>{stale ? "The goal changed since this page loaded" : "The server refused this action"}</h2>
       <p>{refusal.message}</p>
-      {stale && <p className="text-small">Server state: version {servedText(refusal.details["current_version"], "unknown")}, revision {servedText(refusal.details["current_revision"], "unknown")}. Nothing was overwritten.</p>}
+      {stale && <p className="text-small">Server state: version {servedText(refusal.details.current_version, "unknown")}, revision {servedText(refusal.details.current_revision, "unknown")}. Nothing was overwritten.</p>}
       <p className="text-small">Code: <code>{refusal.code}</code></p>
       <button className="button" type="button" onClick={refresh}>Reload the current state</button>
     </div>
@@ -290,11 +290,11 @@ function Objective({ goal }: { goal: GoalProjection }) {
 
 function acceptancePredicates(contract: unknown): string {
   if (!contract || typeof contract !== "object") return "not recorded";
-  const predicates = (contract as Record<string, unknown>)["predicates"];
+  const predicates = (contract as Record<string, unknown>).predicates;
   if (!Array.isArray(predicates) || predicates.length === 0) return "none recorded";
   return predicates.map((predicate) => {
     if (!predicate || typeof predicate !== "object") return String(predicate);
-    const kind = (predicate as Record<string, unknown>)["kind"];
+    const kind = (predicate as Record<string, unknown>).kind;
     return typeof kind === "string" ? kind : "unrecognised predicate";
   }).join(", ");
 }
@@ -318,7 +318,7 @@ function AcceptedProgress({ goal }: { goal: GoalProjection }) {
         </tr>)}</tbody>
       </table>
     </div>}
-    {completion["ready?"] === true && <p className="goal-ready"><CircleCheck size={16} aria-hidden="true" />The server reports this goal ready to achieve; the achieve action below carries its expected versions.</p>}
+    {completion["ready?"] && <p className="goal-ready"><CircleCheck size={16} aria-hidden="true" />The server reports this goal ready to achieve; the achieve action below carries its expected versions.</p>}
   </section>;
 }
 
@@ -328,8 +328,8 @@ function RowBody({ item }: { item: GoalWorkItem }) {
       <span className="item-key">{item.number === null || item.number === undefined ? "item" : `#${item.number}`}</span>
       <span className="goal-row-title">{item.title}</span>
       <StatusBadge status={item.status} />
-      {item["required?"] === false && <span className="status-badge">optional</span>}
-      {item["integration"] === true && <span className="status-badge">integration</span>}
+      {!item["required?"] && <span className="status-badge">optional</span>}
+      {item.integration && <span className="status-badge">integration</span>}
       <span className={item["accepted?"] ? "status-badge status-complete" : "status-badge"}>{item["accepted?"] ? "accepted" : "not accepted"}</span>
     </div>
     <p className="text-small muted">{item["accepted?"] ? `Accepted outcome ${item.accepted_outcome?.subject_hash ?? "recorded"}` : "No accepted outcome bound to this item"}{item.blockers && item.blockers.length > 0 ? ` · blocked: ${item.blockers.join(", ")}` : ""}</p>
@@ -375,18 +375,18 @@ function Decisions({ goal, busy, onApprovePlan }: { goal: GoalProjection; busy: 
           <p className="text-small muted">Revision {decision.goal_revision ?? "not recorded"} · version {decision.version}</p>
           <ul className="decision-options">{decision.options?.map((option, index) => {
             const row = option as Record<string, unknown>;
-            const recommended = row["recommended"] === true;
-            return <li key={servedText(row["id"], String(index))}>
-              <span className="option-id">{servedText(row["id"], "option")}</span>
-              <span>{servedText(row["label"], "")}</span>
-              {recommended && <span className="recommendation">Recommendation (advisory): {servedText(row["consequence"] ?? row["consequences"], "")}</span>}
-              {!recommended && row["consequence"] !== undefined && <span className="muted text-small"> {servedText(row["consequence"], "")}</span>}
+            const recommended = row.recommended === true;
+            return <li key={servedText(row.id, String(index))}>
+              <span className="option-id">{servedText(row.id, "option")}</span>
+              <span>{servedText(row.label, "")}</span>
+              {recommended && <span className="recommendation">Recommendation (advisory): {servedText(row.consequence ?? row.consequences, "")}</span>}
+              {!recommended && row.consequence !== undefined && <span className="muted text-small"> {servedText(row.consequence, "")}</span>}
             </li>;
           })}</ul>
           {approvalOption
-            ? <PlanApproval decision={decision} optionId={String(approvalOption["id"])} busy={busy} onApprove={onApprovePlan} />
-            : decision["open?"] === true && <p className="text-small muted">{decision.kind === "plan" ? "The served plan decision carries no acceptance option; this surface offers no resolution for it." : "This decision type has no surface action; the server still lists the action it permits, if any."}</p>}
-          {decision["open?"] !== true && <p className="text-small muted">{decision.state === "open"
+            ? <PlanApproval decision={decision} optionId={String(approvalOption.id)} busy={busy} onApprove={onApprovePlan} />
+            : decision["open?"] && <p className="text-small muted">{decision.kind === "plan" ? "The served plan decision carries no acceptance option; this surface offers no resolution for it." : "This decision type has no surface action; the server still lists the action it permits, if any."}</p>}
+          {!decision["open?"] && <p className="text-small muted">{decision.state === "open"
             // The server's `open?` is "open at the served revision": an open
             // decision left at an older revision is stale, not resolved.
             ? "This decision is no longer open at the served revision."
@@ -410,10 +410,10 @@ function Decisions({ goal, busy, onApprovePlan }: { goal: GoalProjection; busy: 
  * plan admission and refuses both with its own code.
  */
 function planApprovalOption(decision: GoalDecision): Record<string, unknown> | null {
-  if (decision["open?"] !== true || decision.kind !== "plan") return null;
+  if (!decision["open?"] || decision.kind !== "plan") return null;
   return (decision.options ?? [])
     .map((option) => option as Record<string, unknown>)
-    .find((option) => option["id"] === "accept") ?? null;
+    .find((option) => option.id === "accept") ?? null;
 }
 
 /**
@@ -455,7 +455,7 @@ function PlanApproval({ decision, optionId, busy, onApprove }: { decision: GoalD
 
   return <div className="plan-approval">
     <label className="fact-label" htmlFor={`plan-${decision.id}`}>Plan proposal</label>
-    <textarea id={`plan-${decision.id}`} className="plan-input" value={proposalText} rows={4} onChange={(event) => setProposalText(event.currentTarget.value)} placeholder="Paste the plan proposal JSON the decision bound" />
+    <textarea id={`plan-${decision.id}`} className="plan-input" value={proposalText} rows={4} onChange={(event) => { setProposalText(event.currentTarget.value); }} placeholder="Paste the plan proposal JSON the decision bound" />
     <p className="text-small muted">This surface is not served the proposal, so paste the document the plan decision was authored with. It is hashed here exactly as the server does — the same per-item defaults and canonical encoding — and sent back with those defaults applied; the server re-checks the hash and refuses a mismatch. A proposal the server does not already hold cannot be approved from this page.</p>
     {parseError && <p className="form-error" role="alert">{parseError}</p>}
     {digest && <p className="text-small mono">canonical digest {digest}</p>}
@@ -515,23 +515,23 @@ function NextAction({ goal, busy, onCommand, identityEpoch, resources }: { goal:
     <div className="section-heading"><h2 id="next-action-heading">Next authorized action</h2><span className="muted text-small">Version {goal.version} · revision {goal.current_revision} · mutation identity per action</span></div>
     <ul className="goal-actions">{allowed.map((kind) => <li key={kind}>
       {/* The action list is exactly what the server allows; no client rule adds to it. */}
-      <button className="button action-button" type="button" disabled={busy} aria-expanded={openAction === kind} onClick={() => setOpenAction(openAction === kind ? null : kind)}>{actionLabel(kind)}</button>
-      {openAction === kind && <form className="action-form" onSubmit={(event) => event.preventDefault()}>
+      <button className="button action-button" type="button" disabled={busy} aria-expanded={openAction === kind} onClick={() => { setOpenAction(openAction === kind ? null : kind); }}>{actionLabel(kind)}</button>
+      {openAction === kind && <form className="action-form" onSubmit={(event) => { event.preventDefault(); }}>
         {openIdentity !== null && <p className="text-small muted">Carries mutation identity {openIdentity}; this attempt freezes the version and revision the server serves at its first send, so a re-send after a lost acknowledgement repeats the same bytes and the server replays the recorded command instead of applying it twice.</p>}
-        {(kind === "pause" || kind === "resume" || kind === "cancel") && <label className="field">Reason<input value={reason} onChange={(event) => setReason(event.currentTarget.value)} required /></label>}
+        {(kind === "pause" || kind === "resume" || kind === "cancel") && <label className="field">Reason<input value={reason} onChange={(event) => { setReason(event.currentTarget.value); }} required /></label>}
         {kind === "activate" && <p>The current revision {goal.current_revision} is the approved revision this command presents.</p>}
         {kind === "request_plan" && <>
-          <label className="field">Repository resource<select value={resourceId} onChange={(event) => setResourceId(event.currentTarget.value)} required>
+          <label className="field">Repository resource<select value={resourceId} onChange={(event) => { setResourceId(event.currentTarget.value); }} required>
             <option value="">Select a repository</option>
             {repositories.map((resource, index) => <option key={resource.id ?? index} value={resource.id ?? ""}>{servedText(resource.name ?? resource.id, "repository")}</option>)}
           </select></label>
-          <label className="field">Subject commit<input value={commit} onChange={(event) => setCommit(event.currentTarget.value)} placeholder="40-character commit" required /></label>
-          <label className="field">Tree digest<input value={treeDigest} onChange={(event) => setTreeDigest(event.currentTarget.value)} placeholder="sha256:…" required /></label>
-          <label className="field">Model profile<input value={modelProfile} onChange={(event) => setModelProfile(event.currentTarget.value)} required /></label>
+          <label className="field">Subject commit<input value={commit} onChange={(event) => { setCommit(event.currentTarget.value); }} placeholder="40-character commit" required /></label>
+          <label className="field">Tree digest<input value={treeDigest} onChange={(event) => { setTreeDigest(event.currentTarget.value); }} placeholder="sha256:…" required /></label>
+          <label className="field">Model profile<input value={modelProfile} onChange={(event) => { setModelProfile(event.currentTarget.value); }} required /></label>
         </>}
         {kind === "amend" && <>
-          <label className="field">Objective<input value={objective} onChange={(event) => setObjective(event.currentTarget.value)} required /></label>
-          <label className="field">Reason<input value={reason} onChange={(event) => setReason(event.currentTarget.value)} required /></label>
+          <label className="field">Objective<input value={objective} onChange={(event) => { setObjective(event.currentTarget.value); }} required /></label>
+          <label className="field">Reason<input value={reason} onChange={(event) => { setReason(event.currentTarget.value); }} required /></label>
           <p className="text-small muted">An amendment opens a new revision and pauses the goal; the accepted authority and execution policy of the current revision are carried unchanged into the new revision.</p>
         </>}
         {kind === "achieve" && <AchieveForm goal={goal} />}
@@ -569,7 +569,7 @@ function actionInputs(kind: string): boolean {
  * preview cannot drift from what is submitted.
  */
 function achieveContext(goal: GoalProjection) {
-  const integrationItem = goal.work_items.find((item) => item["integration"] === true);
+  const integrationItem = goal.work_items.find((item) => item.integration);
   const outcome = integrationItem?.accepted_outcome ?? (goal.accepted_outcomes ?? [])[0];
   const subjectHash = outcome?.subject_hash ?? null;
   return {
@@ -683,7 +683,7 @@ function DependencyGraph({ graph }: { graph: GoalGraph }) {
     {graph.nodes.length === 0
       ? <p className="muted">No admitted work item carries a dependency in the current revision.</p>
       : <>
-        {graph["cycle_detected?"] === true && <p className="form-error" role="alert">The server reports a dependency cycle in the current revision.</p>}
+        {graph["cycle_detected?"] && <p className="form-error" role="alert">The server reports a dependency cycle in the current revision.</p>}
         <ul className="graph-nodes">{graph.nodes.map((node) => <li key={node.id}>
           <span className="item-key">{node.number === null || node.number === undefined ? "item" : `#${node.number}`}</span>
           <span className="goal-row-title">{node.title}</span>
@@ -754,7 +754,7 @@ function Receipts({ goalId }: { goalId: string }) {
     </li>)}</ul>}
     {/* The served `after` page ascends from sequence 0, so the first page is the
         oldest slice and this boundary loads newer receipts, never older ones. */}
-    {loadedTail !== null && loadedTail > 0 && <button className="button" type="button" disabled={fetching} onClick={() => setBoundaries([...boundaries, loadedTail])}>{fetching ? "Loading…" : "Load newer receipts"}</button>}
+    {loadedTail !== null && loadedTail > 0 && <button className="button" type="button" disabled={fetching} onClick={() => { setBoundaries([...boundaries, loadedTail]); }}>{fetching ? "Loading…" : "Load newer receipts"}</button>}
     {loadedTail === null && loaded.length > 0 && <p className="text-small muted"><Inbox size={14} aria-hidden="true" /> All recorded receipts are loaded.</p>}
     {fetching && loaded.length > 0 && <p className="sr-only" role="status">Refreshing receipts</p>}
   </section>;

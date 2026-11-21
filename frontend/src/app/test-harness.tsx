@@ -32,22 +32,18 @@ export function requestPath(input: RequestInfo | URL): string {
   return input instanceof Request ? input.url : String(input);
 }
 
-export type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
-export type ResponseHandler = (path: string, init?: RequestInit) => Response | Promise<Response>;
+type ResponseHandler = (path: string, init?: RequestInit) => Response | Promise<Response>;
 
 export function recordingFetcher(handler: ResponseHandler) {
-  const calls: Array<{ path: string; init: RequestInit | undefined }> = [];
+  const calls: { path: string; init: RequestInit | undefined }[] = [];
   const fetcher = vi.fn<Fetcher>(async (input, init) => {
     const path = requestPath(input);
     calls.push({ path, init });
     return handler(path, init);
   });
   return { fetcher, calls };
-}
-
-export function applicationOf(rendered: { application: Application }): Application {
-  return rendered.application;
 }
 
 /**

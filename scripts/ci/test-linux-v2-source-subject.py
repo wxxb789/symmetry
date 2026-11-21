@@ -9,7 +9,6 @@ import sys
 import tempfile
 import unittest
 
-
 SCRIPT = pathlib.Path(__file__).with_name("linux-v2-source-subject.py")
 
 
@@ -29,14 +28,14 @@ class SourceSubjectTests(unittest.TestCase):
         self.commit = self.git("rev-parse", "HEAD").decode("ascii").strip()
 
     def git(self, *arguments: str) -> bytes:
-        return subprocess.check_output(
-            ["git", "-C", str(self.repository), *arguments], stderr=subprocess.PIPE
-        )
+        return subprocess.check_output(["git", "-C", str(self.repository), *arguments], stderr=subprocess.PIPE)
 
     def invoke(self, commit: str | None = None) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [sys.executable, str(SCRIPT), str(self.repository), commit or self.commit],
-            capture_output=True, text=True, check=False,
+            capture_output=True,
+            text=True,
+            check=False,
         )
 
     def test_clean_source_emits_the_known_subject(self) -> None:
@@ -44,9 +43,13 @@ class SourceSubjectTests(unittest.TestCase):
         blob = b"sha256:" + hashlib.sha256(b"reviewed source\n").hexdigest().encode("ascii")
         digest = hashlib.sha256(b"100644\0blob\0source.txt\0" + blob + b"\0").hexdigest()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(result.stdout), {
-            "commit": self.commit, "tree_digest": "sha256:" + digest,
-        })
+        self.assertEqual(
+            json.loads(result.stdout),
+            {
+                "commit": self.commit,
+                "tree_digest": "sha256:" + digest,
+            },
+        )
 
     def test_wrong_commit_emits_no_subject(self) -> None:
         result = self.invoke("0" * 40)
@@ -75,7 +78,9 @@ class SourceSubjectTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="symmetry-not-git-") as directory:
             result = subprocess.run(
                 [sys.executable, str(SCRIPT), directory, self.commit],
-                capture_output=True, text=True, check=False,
+                capture_output=True,
+                text=True,
+                check=False,
             )
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(result.stdout, "")

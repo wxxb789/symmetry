@@ -106,6 +106,7 @@ link text alone.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import fnmatch
 import hashlib
 import importlib.util
@@ -120,7 +121,8 @@ import signal
 import stat
 import subprocess
 import sys
-from typing import Any, Callable, Iterable
+from collections.abc import Callable, Iterable
+from typing import Any
 
 SCHEMA = "symmetry-model-routing-evaluation/v1"
 SUBJECT_NAMESPACE = b"symmetry-acceptance-subject/v1"
@@ -175,9 +177,7 @@ MEASURED_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
 # that name in full; declaring tests at module level is the frozen convention, not a
 # parser rule.
 EXUNIT_ANSI_PATTERN = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
-EXUNIT_OBSERVATION_PATTERN = re.compile(
-    r"^  \* test (?P<name>.+?) \((?P<descriptor>[^()]*)\) \[L#[0-9]+\]$"
-)
+EXUNIT_OBSERVATION_PATTERN = re.compile(r"^  \* test (?P<name>.+?) \((?P<descriptor>[^()]*)\) \[L#[0-9]+\]$")
 EXUNIT_FINISHED_PATTERN = re.compile(r"^[0-9]+(?:\.[0-9]+)?ms$")
 # `mix test` owns the summary, not ExUnit: the measured shapes are `Result: 3 passed`,
 # `Result: 2 passed, 1 skipped`, `Result: 1/2 passed` (with a following `Failed: 1 test`)
@@ -199,56 +199,124 @@ PROTECTED_PREFIXES = (".github/", "contracts/", ".agents/skills/")
 PROTECTED_BASENAMES = {"AGENTS.md", "CLAUDE.md"}
 
 TASK_KEYS = {
-    "task_id", "base", "language", "risk_class", "workflow", "outcome",
-    "explanations", "allowed_paths", "protected_paths", "gates",
+    "task_id",
+    "base",
+    "language",
+    "risk_class",
+    "workflow",
+    "outcome",
+    "explanations",
+    "allowed_paths",
+    "protected_paths",
+    "gates",
 }
 GATE_KEYS = {
-    "id", "cwd", "argv", "go_tests", "go_package", "exunit_tests", "exunit_files",
-    "vitest_tests", "vitest_files", "env",
+    "id",
+    "cwd",
+    "argv",
+    "go_tests",
+    "go_package",
+    "exunit_tests",
+    "exunit_files",
+    "vitest_tests",
+    "vitest_files",
+    "env",
 }
 REQUIRED_GATE_KEYS = {"id", "cwd", "argv"}
 ROUTES_KEYS = {"worker", "reviewer"}
 ROLE_KEYS = {"model_id", "provenance", "credential_route", "authorization_ref"}
 RUN_KEYS = {
-    "schema", "task_id", "base", "source", "head", "base_tree_digest",
-    "task_sha256", "routes_sha256", "environment", "review_sha256", "usage_sha256",
+    "schema",
+    "task_id",
+    "base",
+    "source",
+    "head",
+    "base_tree_digest",
+    "task_sha256",
+    "routes_sha256",
+    "environment",
+    "review_sha256",
+    "usage_sha256",
 }
 REQUIRED_RUN_KEYS = {
-    "schema", "task_id", "base", "source", "head", "base_tree_digest",
-    "task_sha256", "routes_sha256", "environment",
+    "schema",
+    "task_id",
+    "base",
+    "source",
+    "head",
+    "base_tree_digest",
+    "task_sha256",
+    "routes_sha256",
+    "environment",
 }
 ENVIRONMENT_KEYS = {"platform", "machine", "python_version", "git_version"}
 PROVISIONING_KEYS = {
-    "tree", "tree_digest", "tree_entries", "install_log", "install_log_source",
-    "install_log_sha256", "install_log_bytes",
+    "tree",
+    "tree_digest",
+    "tree_entries",
+    "install_log",
+    "install_log_source",
+    "install_log_sha256",
+    "install_log_bytes",
 }
 SEALED_KEYS = {
-    "schema", "task_id", "base", "head", "manifest_digest", "content_revision",
-    "subject_hash", "file_count", "changed_paths",
+    "schema",
+    "task_id",
+    "base",
+    "head",
+    "manifest_digest",
+    "content_revision",
+    "subject_hash",
+    "file_count",
+    "changed_paths",
 }
 CHANGE_KEYS = {"path", "status"}
 REVIEW_KEYS = {
-    "subject_hash", "routes_sha256", "check_attempt_id", "check_evidence_sha256",
-    "reviewer", "worker", "verdict", "gate_weakening", "findings", "explanations",
+    "subject_hash",
+    "routes_sha256",
+    "check_attempt_id",
+    "check_evidence_sha256",
+    "reviewer",
+    "worker",
+    "verdict",
+    "gate_weakening",
+    "findings",
+    "explanations",
 }
 REVIEWER_KEYS = {"model_id", "session_ref"}
 WORKER_KEYS = {"model_id", "session_refs"}
 FINDING_KEYS = {"id", "severity", "status", "description"}
 USAGE_KEYS = {"phases", "repair_count", "wall_time"}
 PHASE_KEYS = {
-    "stage", "session_ref", "non_model_reason", "model_ids", "prompt_hashes",
-    "tokens", "reported_cost", "estimated_cost", "cost_provenance",
-    "price_version", "wall_time",
+    "stage",
+    "session_ref",
+    "non_model_reason",
+    "model_ids",
+    "prompt_hashes",
+    "tokens",
+    "reported_cost",
+    "estimated_cost",
+    "cost_provenance",
+    "price_version",
+    "wall_time",
 }
 TOKEN_KEYS = {"input", "output", "cached"}
 # The extractor in model-routing-omp-usage.py emits these per-field observed
 # subtotals for partial sessions; keep both lists in sync with its TOKEN_FIELDS,
 # COST_FIELDS and assistant-message counters.
 KNOWN_SUBTOTAL_MESSAGE_KEYS = (
-    "assistant_messages", "assistant_messages_with_usage", "assistant_messages_with_cost_total",
+    "assistant_messages",
+    "assistant_messages_with_usage",
+    "assistant_messages_with_cost_total",
 )
 KNOWN_SUBTOTAL_TOKEN_FIELDS = (
-    "input", "output", "cacheRead", "cacheWrite", "cached", "totalTokens", "reasoningTokens",
+    "input",
+    "output",
+    "cacheRead",
+    "cacheWrite",
+    "cached",
+    "totalTokens",
+    "reasoningTokens",
 )
 KNOWN_SUBTOTAL_COST_FIELDS = ("input", "output", "cacheRead", "cacheWrite", "total")
 KNOWN_SUBTOTAL_ENTRY_KEYS = {"sum", "messages"}
@@ -258,30 +326,77 @@ PROMPT_HASH_KEYS = {"kind", "sha256", "index"}
 PROMPT_HASH_REQUIRED_KEYS = {"kind", "sha256"}
 SHA256_FIELD_PATTERN = re.compile(r"^(sha256:)?[0-9a-f]{64}$")
 ATTEMPT_KEYS = {
-    "schema", "attempt_id", "task_id", "task_sha256", "routes_sha256",
-    "subject_hash", "complete", "passed", "gates", "dependency_provisioning",
+    "schema",
+    "attempt_id",
+    "task_id",
+    "task_sha256",
+    "routes_sha256",
+    "subject_hash",
+    "complete",
+    "passed",
+    "gates",
+    "dependency_provisioning",
 }
 # The provisioning view is optional on read so an attempt written before this member
 # existed still parses (its `None` then refuses any run that binds a later tree).
 REQUIRED_ATTEMPT_KEYS = ATTEMPT_KEYS - {"dependency_provisioning"}
 ATTEMPT_ENTRY_KEYS = {
-    "id", "passed", "result_sha256", "stdout_sha256", "stderr_sha256",
-    "validator_exit_code", "validator_stdout_sha256", "validator_stderr_sha256",
+    "id",
+    "passed",
+    "result_sha256",
+    "stdout_sha256",
+    "stderr_sha256",
+    "validator_exit_code",
+    "validator_stdout_sha256",
+    "validator_stderr_sha256",
 }
 RESULT_KEYS = {
-    "gate_id", "cwd", "argv", "go_tests", "go_package", "exit_code", "timed_out",
-    "error", "stdout_sha256", "stderr_sha256", "stdout_bytes", "stderr_bytes",
+    "gate_id",
+    "cwd",
+    "argv",
+    "go_tests",
+    "go_package",
+    "exit_code",
+    "timed_out",
+    "error",
+    "stdout_sha256",
+    "stderr_sha256",
+    "stdout_bytes",
+    "stderr_bytes",
     "tool_state_dir",
-    "go_list_argv", "go_list_exit_code", "go_list_stdout_sha256", "go_list_stderr_sha256",
-    "go_list_stdout_bytes", "go_list_stderr_bytes",
-    "env", "exunit_tests", "exunit_files", "exunit_argv", "exunit_exit_code",
-    "exunit_timed_out", "exunit_stdout_sha256", "exunit_stderr_sha256",
-    "exunit_stdout_bytes", "exunit_stderr_bytes", "exunit_error",
-    "vitest_tests", "vitest_files", "vitest_argv", "vitest_exit_code",
-    "vitest_timed_out", "vitest_stdout_sha256", "vitest_stderr_sha256",
-    "vitest_stdout_bytes", "vitest_stderr_bytes", "vitest_report_sha256",
-    "vitest_report_bytes", "vitest_error",
-    "validator", "subject_hash_before", "subject_hash_after", "passed",
+    "go_list_argv",
+    "go_list_exit_code",
+    "go_list_stdout_sha256",
+    "go_list_stderr_sha256",
+    "go_list_stdout_bytes",
+    "go_list_stderr_bytes",
+    "env",
+    "exunit_tests",
+    "exunit_files",
+    "exunit_argv",
+    "exunit_exit_code",
+    "exunit_timed_out",
+    "exunit_stdout_sha256",
+    "exunit_stderr_sha256",
+    "exunit_stdout_bytes",
+    "exunit_stderr_bytes",
+    "exunit_error",
+    "vitest_tests",
+    "vitest_files",
+    "vitest_argv",
+    "vitest_exit_code",
+    "vitest_timed_out",
+    "vitest_stdout_sha256",
+    "vitest_stderr_sha256",
+    "vitest_stdout_bytes",
+    "vitest_stderr_bytes",
+    "vitest_report_sha256",
+    "vitest_report_bytes",
+    "vitest_error",
+    "validator",
+    "subject_hash_before",
+    "subject_hash_after",
+    "passed",
 }
 VALIDATOR_KEYS = {"argv", "exit_code", "stdout_sha256", "stderr_sha256", "stdout_bytes", "stderr_bytes"}
 
@@ -323,7 +438,9 @@ def host_path_patterns() -> tuple[re.Pattern[str], ...]:
         try:
             spec.loader.exec_module(module)
         except (OSError, SyntaxError, re.error, AttributeError) as error:
-            raise Refused(f"cannot load model-routing-record-sanitize.py for the shared host-path patterns: {error}")
+            raise Refused(
+                f"cannot load model-routing-record-sanitize.py for the shared host-path patterns: {error}"
+            ) from error
         patterns = getattr(module, "HOST_PATH_PATTERNS", None)
         if patterns is None:
             raise Refused(
@@ -348,7 +465,7 @@ def strict_json(raw: bytes, source: str, limit: int) -> Any:
     try:
         text = raw.decode("utf-8", errors="strict")
     except UnicodeDecodeError:
-        raise Refused(f"{source} is not valid UTF-8")
+        raise Refused(f"{source} is not valid UTF-8") from None
 
     def object_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
         value: dict[str, Any] = {}
@@ -375,14 +492,14 @@ def strict_json(raw: bytes, source: str, limit: int) -> Any:
             parse_constant=parse_constant,
         )
     except json.JSONDecodeError as error:
-        raise Refused(f"{source} is not valid JSON: {error}")
+        raise Refused(f"{source} is not valid JSON: {error}") from error
     except ValueError:
         # `json.loads` refuses an integer literal past its conversion-digit limit
         # with a plain ValueError; that is a refusal about the document's numbers,
         # not a crash.
-        raise Refused(f"{source} carries an integer outside the supported range")
+        raise Refused(f"{source} carries an integer outside the supported range") from None
     except RecursionError:
-        raise Refused(f"{source} nests too deeply")
+        raise Refused(f"{source} nests too deeply") from None
 
 
 def contains_non_finite(value: Any) -> bool:
@@ -409,18 +526,18 @@ def canonical_json(value: Any) -> bytes:
             raise Refused("value contains a non-finite number")
         text = json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False, allow_nan=False)
     except RecursionError:
-        raise Refused("value nests too deeply to serialize")
+        raise Refused("value nests too deeply to serialize") from None
     except UnicodeEncodeError:
-        raise Refused("value contains text that is not valid UTF-8")
+        raise Refused("value contains text that is not valid UTF-8") from None
     except ValueError:
         # `allow_nan=False` would report a nan or inf float here, and every one was
         # checked above; what remains is a value Python cannot serialize - an integer
         # past its conversion-digit limit - which must not be called non-finite.
-        raise Refused("value contains a number outside the serializable range")
+        raise Refused("value contains a number outside the serializable range") from None
     try:
         return text.encode("utf-8") + b"\n"
     except UnicodeEncodeError:
-        raise Refused("value contains text that is not valid UTF-8")
+        raise Refused("value contains text that is not valid UTF-8") from None
 
 
 def read_bytes(path: pathlib.Path, limit: int, source: str) -> bytes:
@@ -428,7 +545,7 @@ def read_bytes(path: pathlib.Path, limit: int, source: str) -> bytes:
         with open(path, "rb") as stream:
             raw = stream.read(limit + 1)
     except OSError as error:
-        raise Refused(f"cannot read {source} at {path}: {error}")
+        raise Refused(f"cannot read {source} at {path}: {error}") from error
     if len(raw) > limit:
         raise Refused(f"{source} at {path} exceeds {limit} bytes")
     return raw
@@ -440,7 +557,7 @@ def write_bytes(path: pathlib.Path, raw: bytes) -> None:
         with open(path, "wb") as stream:
             stream.write(raw)
     except OSError as error:
-        raise Refused(f"cannot write {path}: {error}")
+        raise Refused(f"cannot write {path}: {error}") from error
 
 
 def write_json(path: pathlib.Path, value: Any) -> bytes:
@@ -540,7 +657,7 @@ def require_number(value: Any, source: str, minimum: float = 0.0) -> float | int
     except OverflowError:
         # A JSON integer beyond float range must refuse as a value: converting it for
         # the finiteness check must not escape validation as an uncaught traceback.
-        raise Refused(f"{source} must be a finite number >= {minimum}")
+        raise Refused(f"{source} must be a finite number >= {minimum}") from None
     if not math.isfinite(number) or number < minimum:
         raise Refused(f"{source} must be a finite number >= {minimum}")
     return value
@@ -567,7 +684,7 @@ def number_sum(values: Iterable[int | float], source: str) -> int | float:
     try:
         return sum(values)
     except OverflowError:
-        raise Refused(f"{source} exceeds the finite number range")
+        raise Refused(f"{source} exceeds the finite number range") from None
 
 
 def require_value_in(value: Any, source: str, allowed: Iterable[str]) -> str:
@@ -577,9 +694,7 @@ def require_value_in(value: Any, source: str, allowed: Iterable[str]) -> str:
     return value
 
 
-def require_text_list(
-    value: Any, source: str, minimum: int, unique: bool, max_length: int = 4096
-) -> list[str]:
+def require_text_list(value: Any, source: str, minimum: int, unique: bool, max_length: int = 4096) -> list[str]:
     if not isinstance(value, list) or len(value) < minimum:
         raise Refused(f"{source} must be a list with at least {minimum} entries")
     items = [require_text(item, f"{source} entry", max_length) for item in value]
@@ -654,7 +769,7 @@ class PathMatcher:
         for pattern in patterns:
             parts = tuple(pattern.split("/"))
             if "/" not in pattern:
-                parts = ("**",) + parts
+                parts = ("**", *parts)
             self.patterns.append(parts)
 
     def matches(self, path: str) -> bool:
@@ -687,7 +802,7 @@ def git_output(repository: str, *arguments: str) -> bytes:
     try:
         completed = subprocess.run(command, capture_output=True, check=False)
     except OSError as error:
-        raise Refused(f"could not run git: {error}")
+        raise Refused(f"could not run git: {error}") from error
     if completed.returncode != 0:
         detail = completed.stderr.decode("utf-8", "replace").strip()
         raise Refused(f"git {' '.join(arguments)} failed ({completed.returncode}): {detail}")
@@ -698,14 +813,14 @@ def git_text(repository: str, *arguments: str) -> str:
     try:
         return git_output(repository, *arguments).decode("utf-8", errors="strict").strip()
     except UnicodeDecodeError:
-        raise Refused(f"git {' '.join(arguments)} did not return UTF-8 text")
+        raise Refused(f"git {' '.join(arguments)} did not return UTF-8 text") from None
 
 
 def decode_path(raw: bytes) -> str:
     try:
         return raw.decode("utf-8", errors="strict")
     except UnicodeDecodeError:
-        raise Refused("the checkout contains a path that is not valid UTF-8")
+        raise Refused("the checkout contains a path that is not valid UTF-8") from None
 
 
 def utf8_path_key(path: str) -> bytes:
@@ -713,7 +828,7 @@ def utf8_path_key(path: str) -> bytes:
     try:
         return path.encode("utf-8")
     except UnicodeEncodeError:
-        raise Refused("the checkout contains a path that is not valid UTF-8")
+        raise Refused("the checkout contains a path that is not valid UTF-8") from None
 
 
 def executable_bits_tracked(checkout: pathlib.Path) -> bool:
@@ -728,7 +843,7 @@ def executable_bits_tracked(checkout: pathlib.Path) -> bool:
     try:
         completed = subprocess.run(command, capture_output=True, check=False)
     except OSError as error:
-        raise Refused(f"could not read git config core.filemode: {error}")
+        raise Refused(f"could not read git config core.filemode: {error}") from error
     if completed.returncode != 0:
         return True  # git's own default for core.filemode is true
     return completed.stdout.decode("utf-8", "replace").strip() != "false"
@@ -757,11 +872,12 @@ def iter_source_paths(checkout: pathlib.Path) -> list[str]:
             try:
                 info = candidate.lstat()
             except OSError as error:
-                raise Refused(f"cannot read source entry {candidate.relative_to(checkout).as_posix()}: {error}")
+                raise Refused(
+                    f"cannot read source entry {candidate.relative_to(checkout).as_posix()}: {error}"
+                ) from error
             if getattr(info, "st_reparse_tag", 0):
                 raise Refused(
-                    "unsupported reparse-point directory in the checkout: "
-                    + candidate.relative_to(checkout).as_posix()
+                    "unsupported reparse-point directory in the checkout: " + candidate.relative_to(checkout).as_posix()
                 )
         for name in filenames:
             if name == ".git":
@@ -783,22 +899,16 @@ def refuse_escaping_symlink(checkout: pathlib.Path, path: str, raw_target: bytes
     try:
         resolved = os.path.realpath(pathlib.Path(checkout, *path.split("/")))
     except (OSError, RuntimeError) as error:
-        raise Refused(f"cannot resolve the bound symlink {path}: {error}")
+        raise Refused(f"cannot resolve the bound symlink {path}: {error}") from error
     try:
         relative = os.path.relpath(resolved, os.path.realpath(checkout))
     except ValueError:  # a Windows target on another drive is never in-tree
         relative = os.pardir
     display = raw_target.decode("utf-8", "replace")[:200]
     if relative == os.pardir or relative.startswith(os.pardir + os.sep):
-        raise Refused(
-            f"the bound symlink {path} escapes the checkout; the gates read its real target:"
-            f" -> {display!r}"
-        )
+        raise Refused(f"the bound symlink {path} escapes the checkout; the gates read its real target: -> {display!r}")
     if ".git" in pathlib.PurePath(relative).parts:
-        raise Refused(
-            f"the bound symlink {path} points into .git, which the Source manifest excludes:"
-            f" -> {display!r}"
-        )
+        raise Refused(f"the bound symlink {path} points into .git, which the Source manifest excludes: -> {display!r}")
 
 
 def read_worktree_entries(checkout: pathlib.Path) -> dict[str, tuple[str, str, str]]:
@@ -810,13 +920,13 @@ def read_worktree_entries(checkout: pathlib.Path) -> dict[str, tuple[str, str, s
         try:
             info = target.lstat()
         except OSError as error:
-            raise Refused(f"cannot read source entry {path}: {error}")
+            raise Refused(f"cannot read source entry {path}: {error}") from error
         if stat.S_ISLNK(info.st_mode):
             mode, kind = "120000", "symlink"
             try:
                 data = os.fsencode(os.readlink(target))
             except OSError as error:
-                raise Refused(f"cannot read symlink {path}: {error}")
+                raise Refused(f"cannot read symlink {path}: {error}") from error
             refuse_escaping_symlink(checkout, path, data)
             digest = hashlib.sha256(data)
         elif stat.S_ISREG(info.st_mode):
@@ -831,7 +941,7 @@ def read_worktree_entries(checkout: pathlib.Path) -> dict[str, tuple[str, str, s
                             break
                         digest.update(chunk)
             except OSError as error:
-                raise Refused(f"cannot read source entry {path}: {error}")
+                raise Refused(f"cannot read source entry {path}: {error}") from error
         else:
             raise Refused(f"unsupported source entry (not a regular file or symlink): {path}")
         entries[path] = (mode, kind, "sha256:" + digest.hexdigest())
@@ -867,7 +977,7 @@ def read_base_tree(checkout: pathlib.Path, base: str) -> dict[str, tuple[str, st
             mode_text = mode.decode("ascii")
             object_text = object_id.decode("ascii")
         except UnicodeDecodeError:
-            raise Refused(f"unexpected git ls-tree output for {path}")
+            raise Refused(f"unexpected git ls-tree output for {path}") from None
         if not re.fullmatch(r"[0-7]{6}", mode_text) or not re.fullmatch(r"[0-9a-f]{40,64}", object_text):
             raise Refused(f"unexpected git ls-tree output for {path}")
         entries[path] = (mode_text, object_text)
@@ -916,8 +1026,7 @@ def refuse_object_substitution(checkout: pathlib.Path) -> None:
         grafts = checkout / grafts
     if grafts.exists():
         raise Refused(
-            "the checkout rewrites Git ancestry with .git/info/grafts; remove it and re-create the "
-            "isolated checkout"
+            "the checkout rewrites Git ancestry with .git/info/grafts; remove it and re-create the isolated checkout"
         )
 
 
@@ -933,13 +1042,19 @@ def read_base_blob_digests(checkout: pathlib.Path, objects: Iterable[str]) -> di
         return {}
     request = "".join(object_id + "\n" for object_id in ordered).encode("ascii")
     command = [
-        "git", "--no-replace-objects", "-c", f"safe.directory={checkout}", "-C", str(checkout),
-        "cat-file", "--batch",
+        "git",
+        "--no-replace-objects",
+        "-c",
+        f"safe.directory={checkout}",
+        "-C",
+        str(checkout),
+        "cat-file",
+        "--batch",
     ]
     try:
         completed = subprocess.run(command, input=request, capture_output=True, check=False)
     except OSError as error:
-        raise Refused(f"could not run git cat-file: {error}")
+        raise Refused(f"could not run git cat-file: {error}") from error
     if completed.returncode != 0:
         detail = completed.stderr.decode("utf-8", "replace").strip()
         raise Refused(f"git cat-file --batch failed ({completed.returncode}): {detail}")
@@ -956,7 +1071,7 @@ def read_base_blob_digests(checkout: pathlib.Path, objects: Iterable[str]) -> di
         try:
             size = int(header[2])
         except ValueError:
-            raise Refused(f"unexpected git cat-file size for the base blob {object_id}")
+            raise Refused(f"unexpected git cat-file size for the base blob {object_id}") from None
         start = newline + 1
         end = start + size
         if size < 0 or end >= len(payload) or payload[end] != 0x0A:
@@ -977,7 +1092,7 @@ def config_origin_inside_checkout(checkout: pathlib.Path, origin: str) -> bool:
     """
     if not origin.startswith("file:"):
         return True
-    candidate = pathlib.Path(origin[len("file:"):])
+    candidate = pathlib.Path(origin[len("file:") :])
     if not candidate.is_absolute():
         candidate = checkout / candidate
     # Normalize lexically instead of resolving: a symlinked config file inside the
@@ -1001,7 +1116,7 @@ def refuse_filter_machinery(checkout: pathlib.Path, bound_paths: list[str]) -> N
         try:
             return subprocess.run(command, input=stdin, capture_output=True, check=False)
         except OSError as error:
-            raise Refused(f"could not run git {arguments[0]}: {error}")
+            raise Refused(f"could not run git {arguments[0]}: {error}") from error
 
     configured = run("config", "--show-origin", "--get-regexp", r"^filter\.")
     if configured.returncode not in (0, 1):
@@ -1061,7 +1176,7 @@ def symlink_blob_entry(path: str, target: pathlib.Path, object_format: str) -> t
     try:
         payload = os.fsencode(os.readlink(target))
     except OSError as error:
-        raise Refused(f"cannot read symlink {path}: {error}")
+        raise Refused(f"cannot read symlink {path}: {error}") from error
     return "120000", blob_object_id(payload, object_format)
 
 
@@ -1080,8 +1195,13 @@ def compute_subject(checkout: pathlib.Path, task_id: str, base: str, head: str) 
     if git_text(str(checkout), "rev-parse", "HEAD") != head:
         raise Refused("checkout HEAD changed while binding its subject")
     hasher = hashlib.sha256()
-    for field in (SUBJECT_NAMESPACE, task_id.encode("utf-8"), base.encode("ascii"),
-                  head.encode("ascii"), manifest_hash.encode("ascii")):
+    for field in (
+        SUBJECT_NAMESPACE,
+        task_id.encode("utf-8"),
+        base.encode("ascii"),
+        head.encode("ascii"),
+        manifest_hash.encode("ascii"),
+    ):
         hasher.update(field + b"\0")
     return {
         "base": base,
@@ -1173,14 +1293,10 @@ def current_subject(run_dir: pathlib.Path, task: dict[str, Any]) -> dict[str, An
     return compute_subject(checkout, task["task_id"], task["base"], head)
 
 
-def require_current_subject(
-    run_dir: pathlib.Path, task: dict[str, Any], sealed: dict[str, Any]
-) -> dict[str, Any]:
+def require_current_subject(run_dir: pathlib.Path, task: dict[str, Any], sealed: dict[str, Any]) -> dict[str, Any]:
     subject = current_subject(run_dir, task)
     if any(sealed[field] != value for field, value in subject.items()):
-        raise Refused(
-            "current source does not match the sealed subject; re-run seal and its checks before continuing"
-        )
+        raise Refused("current source does not match the sealed subject; re-run seal and its checks before continuing")
     checkout = run_dir / "checkout"
     recomputed = validate_changes(
         checkout, task, list_base_paths(checkout, task["base"]), collect_changes(checkout, task["base"])
@@ -1274,7 +1390,10 @@ def validate_gate(value: Any, index: int) -> dict[str, Any]:
             raise Refused(f"{source} go_package requires go_tests")
     exunit_tests, exunit_files = validate_engine_test_fields(value, source, "exunit")
     if exunit_tests is not None and pathlib.PurePath(argv[0]).name.lower() not in (
-        "mix", "mix.exe", "mix.bat", "mix.cmd"
+        "mix",
+        "mix.exe",
+        "mix.bat",
+        "mix.cmd",
     ):
         raise Refused(f"{source} exunit_tests requires a mix gate command")
     vitest_tests, vitest_files = validate_engine_test_fields(value, source, "vitest")
@@ -1403,13 +1522,8 @@ def validate_measured_mapping(value: Any, source: str, redact: bool = False) -> 
             raise Refused(f"{source} names must match {MEASURED_NAME_PATTERN.pattern}")
         if SECRET_KEY_PATTERN.search(name):
             raise Refused(f"{source} name {name!r} looks like a secret")
-        if (
-            not isinstance(item, str) or not item or len(item) > 300
-            or "\0" in item or "\r" in item or "\n" in item
-        ):
-            raise Refused(
-                f"{source} {name} must be a non-empty single-line string without NUL, at most 300 characters"
-            )
+        if not isinstance(item, str) or not item or len(item) > 300 or "\0" in item or "\r" in item or "\n" in item:
+            raise Refused(f"{source} {name} must be a non-empty single-line string without NUL, at most 300 characters")
         measured[name] = redact_host_paths(item) if redact else item
     return {name: measured[name] for name in sorted(measured)}
 
@@ -1424,9 +1538,7 @@ def validate_provisioning(value: Any, source: str) -> dict[str, Any]:
         "tree_digest": require_digest(block["tree_digest"], source + " tree_digest"),
         "tree_entries": require_integer(block["tree_entries"], source + " tree_entries", 1),
         "install_log": require_text(block["install_log"], source + " install_log", max_length=300),
-        "install_log_source": require_text(
-            block["install_log_source"], source + " install_log_source", max_length=300
-        ),
+        "install_log_source": require_text(block["install_log_source"], source + " install_log_source", max_length=300),
         "install_log_sha256": require_digest(block["install_log_sha256"], source + " install_log_sha256"),
         "install_log_bytes": require_integer(block["install_log_bytes"], source + " install_log_bytes", 1),
     }
@@ -1440,7 +1552,9 @@ def validate_provisioning(value: Any, source: str) -> dict[str, Any]:
         raise Refused(f"{source} install_log must be {PROVISIONING_LOG_PATH!r}")
     route = provisioning["tree"]
     if (
-        route.startswith("/") or "\\" in route or re.match(r"^[A-Za-z]:", route)
+        route.startswith("/")
+        or "\\" in route
+        or re.match(r"^[A-Za-z]:", route)
         or any(part == "" for part in route.split("/"))
     ):
         raise Refused(
@@ -1506,9 +1620,7 @@ def requires_dependency_provisioning(task: dict[str, Any]) -> bool:
     )
 
 
-def require_dependency_provisioning(
-    run_dir: pathlib.Path, run: dict[str, Any], task: dict[str, Any]
-) -> None:
+def require_dependency_provisioning(run_dir: pathlib.Path, run: dict[str, Any], task: dict[str, Any]) -> None:
     """Require the recorded dependency provisioning to still be the executed tree.
 
     The module's gates resolve their dependencies from the checkout at execution
@@ -1532,8 +1644,8 @@ def require_dependency_provisioning(
     try:
         bound_resolved = bound.resolve()
     except (OSError, RuntimeError) as error:
-        raise Refused(f"the recorded dependency tree {provisioning['tree']!r} does not resolve: {error}")
-    require_resolved_dependency_tree(run_dir, run, task, bound_resolved)
+        raise Refused(f"the recorded dependency tree {provisioning['tree']!r} does not resolve: {error}") from error
+    require_resolved_dependency_tree(run_dir, task, bound_resolved)
 
 
 def validate_environment(value: Any) -> dict[str, Any]:
@@ -1548,9 +1660,7 @@ def validate_environment(value: Any) -> dict[str, Any]:
         for key in sorted(ENVIRONMENT_KEYS)
     }
     if "measured" in block:
-        environment["measured"] = validate_measured_mapping(
-            block["measured"], "run record environment measured"
-        )
+        environment["measured"] = validate_measured_mapping(block["measured"], "run record environment measured")
     if "measured_sanitizer_sha256" in block:
         # The bytes that rendered `measured` at the prepare moment, additive: a run
         # recorded before this binding carries none.
@@ -1586,7 +1696,8 @@ def load_run(run_dir: pathlib.Path) -> dict[str, Any]:
         # rewritten or truncated provisioning log is refused before it reaches a receipt.
         stored_log = read_bytes(
             run_dir / run["environment"]["provisioning"]["install_log"],
-            MAX_PROVISIONING_LOG_BYTES, "stored provisioning log",
+            MAX_PROVISIONING_LOG_BYTES,
+            "stored provisioning log",
         )
         provisioning = run["environment"]["provisioning"]
         if (
@@ -1690,12 +1801,14 @@ def validate_review_structure(value: Any) -> dict[str, Any]:
         if finding_id in identifiers:
             raise Refused("review record finding ids must be unique")
         identifiers.add(finding_id)
-        findings.append({
-            "id": finding_id,
-            "severity": require_value_in(entry["severity"], source + " severity", SEVERITIES),
-            "status": require_value_in(entry["status"], source + " status", FINDING_STATUSES),
-            "description": require_text(entry["description"], source + " description", max_length=2000),
-        })
+        findings.append(
+            {
+                "id": finding_id,
+                "severity": require_value_in(entry["severity"], source + " severity", SEVERITIES),
+                "status": require_value_in(entry["status"], source + " status", FINDING_STATUSES),
+                "description": require_text(entry["description"], source + " description", max_length=2000),
+            }
+        )
     return {
         "subject_hash": require_digest(value["subject_hash"], "review record subject_hash"),
         "routes_sha256": require_digest(value["routes_sha256"], "review record routes_sha256"),
@@ -1703,13 +1816,18 @@ def validate_review_structure(value: Any) -> dict[str, Any]:
         "check_evidence_sha256": require_digest(value["check_evidence_sha256"], "review record check_evidence_sha256"),
         "reviewer": {
             "model_id": require_text(reviewer_block["model_id"], "review record reviewer model_id", max_length=300),
-            "session_ref": require_text(reviewer_block["session_ref"], "review record reviewer session_ref", max_length=300),
+            "session_ref": require_text(
+                reviewer_block["session_ref"], "review record reviewer session_ref", max_length=300
+            ),
         },
         "worker": {
             "model_id": require_text(worker_block["model_id"], "review record worker model_id", max_length=300),
             "session_refs": require_text_list(
-                worker_block["session_refs"], "review record worker session_refs",
-                minimum=1, unique=True, max_length=300,
+                worker_block["session_refs"],
+                "review record worker session_refs",
+                minimum=1,
+                unique=True,
+                max_length=300,
             ),
         },
         "verdict": require_value_in(value["verdict"], "review record verdict", ("pass", "fail")),
@@ -1738,7 +1856,8 @@ def review_semantic_blockers(
     else:
         if review["check_attempt_id"] != attempt_id:
             blockers.append(
-                f"the review record binds {review['check_attempt_id']} but the latest sealed-subject attempt is {attempt_id}"
+                f"the review record binds {review['check_attempt_id']} but the latest sealed-subject "
+                f"attempt is {attempt_id}"
             )
         if review["check_evidence_sha256"] != attempt_sha256:
             blockers.append("the review record does not match the stored check attempt evidence")
@@ -1860,7 +1979,7 @@ def vitest_report_argv(gate: dict[str, Any], gate_dir: pathlib.Path) -> list[str
             "vitest entry point, so the derived report command cannot be built"
         )
     return [
-        *gate["argv"][:entry_index + 1],
+        *gate["argv"][: entry_index + 1],
         "run",
         "--reporter=json",
         "--outputFile",
@@ -1959,10 +2078,7 @@ def exunit_trace_observations(expected: list[str], stdout_raw: bytes) -> list[di
         match = EXUNIT_OBSERVATION_PATTERN.fullmatch(line)
         if match and EXUNIT_FINISHED_PATTERN.fullmatch(match.group("descriptor")):
             observed.append(match.group("name"))
-    return [
-        {"name": name, "count": observed.count(name.replace("\n", " "))}
-        for name in expected
-    ]
+    return [{"name": name, "count": observed.count(name.replace("\n", " "))} for name in expected]
 
 
 def exunit_trace_failures(stdout_raw: bytes) -> int | None:
@@ -1979,7 +2095,7 @@ def exunit_trace_failures(stdout_raw: bytes) -> int | None:
     tail = EXUNIT_TAIL_FAILED_PATTERN.search(last.group("tail"))
     if tail is not None:
         return int(tail.group(1))
-    failed_lines = EXUNIT_FAILED_LINE_PATTERN.findall(text[last.end():])
+    failed_lines = EXUNIT_FAILED_LINE_PATTERN.findall(text[last.end() :])
     return int(failed_lines[-1]) if failed_lines else 0
 
 
@@ -2010,14 +2126,12 @@ def validator_argv(gate_dir: pathlib.Path, gate: dict[str, Any]) -> list[str]:
     return argv
 
 
-def run_validator(
-    gate_dir: pathlib.Path, gate: dict[str, Any], env: dict[str, str] | None = None
-) -> dict[str, Any]:
+def run_validator(gate_dir: pathlib.Path, gate: dict[str, Any], env: dict[str, str] | None = None) -> dict[str, Any]:
     argv = validator_argv(gate_dir, gate)
     try:
         completed = subprocess.run(argv, capture_output=True, check=False, env=env)
     except OSError as error:
-        raise Refused(f"could not run the Go event validator: {error}")
+        raise Refused(f"could not run the Go event validator: {error}") from error
     write_bytes(gate_dir / "validator.stdout.bin", completed.stdout)
     write_bytes(gate_dir / "validator.stderr.bin", completed.stderr)
     return {
@@ -2039,9 +2153,7 @@ def terminate_owned_process_tree(process: subprocess.Popen) -> None:
     surviving gate process can still mutate the checkout or hold resources.
     """
     if os.name == "nt":
-        killed = subprocess.run(
-            ["taskkill", "/F", "/T", "/PID", str(process.pid)], capture_output=True, check=False
-        )
+        killed = subprocess.run(["taskkill", "/F", "/T", "/PID", str(process.pid)], capture_output=True, check=False)
         if killed.returncode != 0 and process.poll() is None:
             raise Refused(f"could not terminate the gate process tree (taskkill exit {killed.returncode})")
         return
@@ -2071,9 +2183,7 @@ def run_owned_command(
         created["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
     else:
         created["start_new_session"] = True
-    process = subprocess.Popen(
-        argv, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, **created
-    )
+    process = subprocess.Popen(argv, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, **created)
     try:
         stdout, stderr = process.communicate(timeout=timeout)
         return process.returncode, stdout, stderr, False
@@ -2099,20 +2209,14 @@ def run_owned_command(
             # a close there queues behind the reader thread parked in the pipe, and
             # that thread closes the stream once the survivor releases the write
             # ends, or process exit does.
-            try:
+            with contextlib.suppress(OSError):
                 process.kill()
-            except OSError:
-                pass
-            try:
+            with contextlib.suppress(subprocess.TimeoutExpired):
                 process.wait(timeout=PROCESS_TREE_REAP_SECONDS)
-            except subprocess.TimeoutExpired:
-                pass
             if os.name != "nt":
                 for stream in (process.stdout, process.stderr):
-                    try:
+                    with contextlib.suppress(OSError):
                         stream.close()
-                    except OSError:
-                        pass
         return None, stdout, stderr, True
 
 
@@ -2126,7 +2230,10 @@ def tool_state_relative(gate_dir: pathlib.Path) -> str:
 
 
 def execute_gate(
-    checkout: pathlib.Path, gate: dict[str, Any], gate_dir: pathlib.Path, timeout: float | None,
+    checkout: pathlib.Path,
+    gate: dict[str, Any],
+    gate_dir: pathlib.Path,
+    timeout: float | None,
     run_dir: pathlib.Path,
 ) -> dict[str, Any]:
     gate_dir.mkdir(parents=True, exist_ok=True)
@@ -2152,9 +2259,7 @@ def execute_gate(
         error = f"gate cwd {gate['cwd']!r} is missing in the checkout"
     else:
         try:
-            exit_code, stdout_raw, stderr_raw, timed_out = run_owned_command(
-                gate["argv"], str(cwd), timeout, gate_env
-            )
+            exit_code, stdout_raw, stderr_raw, timed_out = run_owned_command(gate["argv"], str(cwd), timeout, gate_env)
         except OSError as failure:
             error = f"could not execute gate argv: {failure}"
     # The derived cross-checks below run exactly when the gate command itself ran and
@@ -2181,16 +2286,14 @@ def execute_gate(
                 list_argv, str(cwd), timeout, gate_env
             )
         except OSError as failure:
-            raise Refused(f"could not run the Go package test list for gate {gate['id']}: {failure}")
+            raise Refused(f"could not run the Go package test list for gate {gate['id']}: {failure}") from failure
         write_bytes(gate_dir / "go-list.stdout.bin", list_stdout_raw)
         write_bytes(gate_dir / "go-list.stderr.bin", list_stderr_raw)
         list_detail = go_list_detail(gate["go_tests"], list_exit_code, list_stdout_raw)
         if list_detail is not None:
             error = (error + "; " if error else "") + GO_LIST_FAILURE_PREFIX + list_detail
     exunit_argv = exunit_trace_argv(gate)
-    exunit_ran = (
-        exunit_argv is not None and gate_command_error is None and not timed_out and exit_code == 0
-    )
+    exunit_ran = exunit_argv is not None and gate_command_error is None and not timed_out and exit_code == 0
     exunit_exit_code: int | None = None
     exunit_timed_out = False
     exunit_stdout_raw = b""
@@ -2205,16 +2308,14 @@ def execute_gate(
                 exunit_argv, str(cwd), timeout, gate_env
             )
         except OSError as failure:
-            raise Refused(f"could not run the ExUnit trace for gate {gate['id']}: {failure}")
+            raise Refused(f"could not run the ExUnit trace for gate {gate['id']}: {failure}") from failure
         write_bytes(gate_dir / "exunit.stdout.bin", exunit_stdout_raw)
         write_bytes(gate_dir / "exunit.stderr.bin", exunit_stderr_raw)
         detail = exunit_trace_detail(gate["exunit_tests"], exunit_exit_code, exunit_stdout_raw)
         if detail is not None:
             exunit_error = EXUNIT_FAILURE_PREFIX + detail
     vitest_argv = vitest_report_argv(gate, gate_dir)
-    vitest_ran = (
-        vitest_argv is not None and gate_command_error is None and not timed_out and exit_code == 0
-    )
+    vitest_ran = vitest_argv is not None and gate_command_error is None and not timed_out and exit_code == 0
     vitest_exit_code: int | None = None
     vitest_timed_out = False
     vitest_stdout_raw = b""
@@ -2230,7 +2331,7 @@ def execute_gate(
                 vitest_argv, str(cwd), timeout, gate_env
             )
         except OSError as failure:
-            raise Refused(f"could not run the vitest structured report for gate {gate['id']}: {failure}")
+            raise Refused(f"could not run the vitest structured report for gate {gate['id']}: {failure}") from failure
         write_bytes(gate_dir / "vitest.stdout.bin", vitest_stdout_raw)
         write_bytes(gate_dir / "vitest.stderr.bin", vitest_stderr_raw)
         report_path = gate_dir / "vitest-report.json"
@@ -2240,10 +2341,7 @@ def execute_gate(
         detail = vitest_report_detail(gate["vitest_tests"], vitest_exit_code, vitest_report_raw)
         if detail is not None:
             vitest_error = VITEST_FAILURE_PREFIX + detail
-    if gate["go_tests"] is not None:
-        validator = run_validator(gate_dir, gate, gate_env)
-    else:
-        validator = None
+    validator = run_validator(gate_dir, gate, gate_env) if gate["go_tests"] is not None else None
     passed = (
         error is None
         and not timed_out
@@ -2362,9 +2460,7 @@ def recompute_gate(gate_dir: pathlib.Path, gate: dict[str, Any], sealed_hash: st
     actual_files = sorted(entry.name for entry in gate_dir.iterdir())
     if actual_files != sorted(expected_files):
         raise Refused(f"the stored evidence for gate {gate['id']} contains unexpected files")
-    subject_bound = (
-        result["subject_hash_before"] == sealed_hash and result["subject_hash_after"] == sealed_hash
-    )
+    subject_bound = result["subject_hash_before"] == sealed_hash and result["subject_hash_after"] == sealed_hash
     stdout_raw = read_bytes(gate_dir / "stdout.bin", MAX_CAPTURE_BYTES, f"gate {gate['id']} stdout")
     stderr_raw = read_bytes(gate_dir / "stderr.bin", MAX_CAPTURE_BYTES, f"gate {gate['id']} stderr")
     if result["stdout_bytes"] != len(stdout_raw) or result["stdout_sha256"] != sha256_hex(stdout_raw):
@@ -2391,7 +2487,7 @@ def recompute_gate(gate_dir: pathlib.Path, gate: dict[str, Any], sealed_hash: st
         try:
             rerun = subprocess.run(validator_argv(gate_dir, gate), capture_output=True, check=False, env=gate_env)
         except OSError as failure:
-            raise Refused(f"could not re-run the Go event validator: {failure}")
+            raise Refused(f"could not re-run the Go event validator: {failure}") from failure
         if (
             rerun.returncode != validator["exit_code"]
             or sha256_hex(rerun.stdout) != validator["stdout_sha256"]
@@ -2554,7 +2650,9 @@ def recompute_gate(gate_dir: pathlib.Path, gate: dict[str, Any], sealed_hash: st
         if result["vitest_timed_out"] is not False:
             raise Refused(f"gate {gate['id']} records vitest report evidence without an executed report run")
     if result["passed"] is not passed:
-        raise Refused(f"the stored result for gate {gate['id']} claims passed={result['passed']} but its evidence says {passed}")
+        raise Refused(
+            f"the stored result for gate {gate['id']} claims passed={result['passed']} but its evidence says {passed}"
+        )
     return {
         "id": gate["id"],
         "cwd": gate["cwd"],
@@ -2619,16 +2717,24 @@ def read_attempt(run_dir: pathlib.Path, name: str) -> tuple[bytes, dict[str, Any
         if gate_id in identifiers:
             raise Refused("check attempt record lists a gate twice")
         identifiers.add(gate_id)
-        entries.append({
-            "id": gate_id,
-            "passed": require_bool(item["passed"], source + " passed"),
-            "result_sha256": require_digest(item["result_sha256"], source + " result_sha256"),
-            "stdout_sha256": require_digest(item["stdout_sha256"], source + " stdout_sha256"),
-            "stderr_sha256": require_digest(item["stderr_sha256"], source + " stderr_sha256"),
-            "validator_exit_code": require_optional_integer(item["validator_exit_code"], source + " validator_exit_code", -4096),
-            "validator_stdout_sha256": require_optional_digest(item["validator_stdout_sha256"], source + " validator_stdout_sha256"),
-            "validator_stderr_sha256": require_optional_digest(item["validator_stderr_sha256"], source + " validator_stderr_sha256"),
-        })
+        entries.append(
+            {
+                "id": gate_id,
+                "passed": require_bool(item["passed"], source + " passed"),
+                "result_sha256": require_digest(item["result_sha256"], source + " result_sha256"),
+                "stdout_sha256": require_digest(item["stdout_sha256"], source + " stdout_sha256"),
+                "stderr_sha256": require_digest(item["stderr_sha256"], source + " stderr_sha256"),
+                "validator_exit_code": require_optional_integer(
+                    item["validator_exit_code"], source + " validator_exit_code", -4096
+                ),
+                "validator_stdout_sha256": require_optional_digest(
+                    item["validator_stdout_sha256"], source + " validator_stdout_sha256"
+                ),
+                "validator_stderr_sha256": require_optional_digest(
+                    item["validator_stderr_sha256"], source + " validator_stderr_sha256"
+                ),
+            }
+        )
     return raw, {
         "schema": SCHEMA,
         "attempt_id": name,
@@ -2646,8 +2752,13 @@ def read_attempt(run_dir: pathlib.Path, name: str) -> tuple[bytes, dict[str, Any
 
 
 def verify_attempt_artifacts(
-    run_dir: pathlib.Path, task: dict[str, Any], sealed_hash: str, run: dict[str, Any],
-    name: str, raw: bytes, attempt: dict[str, Any],
+    run_dir: pathlib.Path,
+    task: dict[str, Any],
+    sealed_hash: str,
+    run: dict[str, Any],
+    name: str,
+    raw: bytes,
+    attempt: dict[str, Any],
 ) -> dict[str, Any]:
     if attempt["task_sha256"] != run["task_sha256"] or attempt["routes_sha256"] != run["routes_sha256"]:
         raise Refused("the check attempt is not bound to the frozen task and routes of this run")
@@ -2671,9 +2782,7 @@ def verify_attempt_artifacts(
         raise Refused("the check attempt records gates outside the frozen task: " + ", ".join(unknown))
     if entry_ids != [gate_id for gate_id in known_order if gate_id in set(entry_ids)]:
         raise Refused("the check attempt records gates out of frozen task order")
-    listed = sorted(
-        entry.name for entry in attempt_dir.iterdir() if entry.name != "attempt.json"
-    )
+    listed = sorted(entry.name for entry in attempt_dir.iterdir() if entry.name != "attempt.json")
     if listed != sorted(entry_ids):
         raise Refused("the check attempt directory contents do not match its record")
     verified = []
@@ -2681,8 +2790,14 @@ def verify_attempt_artifacts(
         recomputed = recompute_gate(attempt_dir / entry["id"], gate_lookup[entry["id"]], sealed_hash)
         if entry["result_sha256"] != recomputed["result_sha256"]:
             raise Refused(f"the check attempt record digest for gate {entry['id']} does not match its result")
-        for key in ("passed", "stdout_sha256", "stderr_sha256", "validator_exit_code",
-                    "validator_stdout_sha256", "validator_stderr_sha256"):
+        for key in (
+            "passed",
+            "stdout_sha256",
+            "stderr_sha256",
+            "validator_exit_code",
+            "validator_stdout_sha256",
+            "validator_stderr_sha256",
+        ):
             if entry[key] != recomputed[key]:
                 raise Refused(f"the check attempt record for gate {entry['id']} disagrees with its evidence on {key}")
         verified.append(recomputed)
@@ -2805,8 +2920,7 @@ def validate_known_subtotals(value: Any, source: str) -> dict[str, Any]:
         elif key == "cost":
             block = require_object(entry, f"{source} cost", set(KNOWN_SUBTOTAL_COST_FIELDS), set())
             subtotals["cost"] = {
-                field: validate_known_subtotal_entry(block[field], f"{source} cost.{field}")
-                for field in sorted(block)
+                field: validate_known_subtotal_entry(block[field], f"{source} cost.{field}") for field in sorted(block)
             }
         elif key in KNOWN_SUBTOTAL_TOKEN_FIELDS:
             subtotals[key] = validate_known_subtotal_entry(entry, f"{source} {key}")
@@ -2841,7 +2955,9 @@ def validate_usage(raw: bytes) -> tuple[list[dict[str, Any]], int, float | int]:
         require_object(phase, source, PHASE_KEYS | PHASE_OPTIONAL_KEYS, PHASE_KEYS)
         stage = require_value_in(phase["stage"], source + " stage", STAGES)
         session_ref = require_optional_text(phase["session_ref"], source + " session_ref", max_length=300)
-        non_model_reason = require_optional_text(phase["non_model_reason"], source + " non_model_reason", max_length=1000)
+        non_model_reason = require_optional_text(
+            phase["non_model_reason"], source + " non_model_reason", max_length=1000
+        )
         if (session_ref is None) == (non_model_reason is None):
             raise Refused(f"{source} requires exactly one of session_ref or non_model_reason")
         model_ids = validate_model_ids(phase["model_ids"], source + " model_ids")
@@ -2873,7 +2989,9 @@ def validate_usage(raw: bytes) -> tuple[list[dict[str, Any]], int, float | int]:
             raise Refused(f"{source} must include an observed prompt hash for its model session")
         if session_ref is not None:
             if session_ref in sessions:
-                raise Refused(f"{source} duplicates a model session; duplicate model session costs cannot be counted twice")
+                raise Refused(
+                    f"{source} duplicates a model session; duplicate model session costs cannot be counted twice"
+                )
             sessions.add(session_ref)
         row: dict[str, Any] = {
             "stage": stage,
@@ -2988,21 +3106,22 @@ def build_receipt(
     for field in token_fields:
         values = [row["tokens"][field] for row in model_rows]
         tokens[field] = (
-            None if not values or any(value is None for value in values)
+            None
+            if not values or any(value is None for value in values)
             else number_sum(values, f"the {field} token total")
         )
         tokens["known_" + field + "_subtotal"] = known_token_total(field)
-    unknown_token_rows = sum(
-        1 for row in model_rows if any(row["tokens"][field] is None for field in token_fields)
-    )
+    unknown_token_rows = sum(1 for row in model_rows if any(row["tokens"][field] is None for field in token_fields))
     reported_values = [row["reported_cost"] for row in model_rows]
     estimated_values = [row["estimated_cost"] for row in model_rows]
     reported_total = (
-        None if not model_rows or any(value is None for value in reported_values)
+        None
+        if not model_rows or any(value is None for value in reported_values)
         else number_sum(reported_values, "the reported cost total")
     )
     estimated_total = (
-        None if not model_rows or any(value is None for value in estimated_values)
+        None
+        if not model_rows or any(value is None for value in estimated_values)
         else number_sum(estimated_values, "the estimated cost total")
     )
     # Only observed provider-reported costs feed the reported channel; the extractor's
@@ -3112,19 +3231,19 @@ def build_receipt(
         "routes": {"worker": dict(routes["worker"]), "reviewer": dict(routes["reviewer"])},
         "model_ids": [
             {"model": model, "provider": provider, "api": api}
-            for model, provider, api in sorted({
-                (identity["model"], identity["provider"], identity["api"])
-                for row in rows
-                for identity in row["model_ids"]
-            })
+            for model, provider, api in sorted(
+                {
+                    (identity["model"], identity["provider"], identity["api"])
+                    for row in rows
+                    for identity in row["model_ids"]
+                }
+            )
         ],
         "prompt_hashes": [
             {"kind": kind, "sha256": sha256}
-            for kind, sha256 in sorted({
-                (record["kind"], record["sha256"])
-                for row in rows
-                for record in row["prompt_hashes"]
-            })
+            for kind, sha256 in sorted(
+                {(record["kind"], record["sha256"]) for row in rows for record in row["prompt_hashes"]}
+            )
         ],
         "tokens": tokens,
         "cost": {
@@ -3164,7 +3283,9 @@ def build_receipt(
             "tooling_sources": {
                 path.name: sha256_hex(read_bytes(path, MAX_RECORD_BYTES, "evaluation tooling source"))
                 for path in (
-                    pathlib.Path(__file__).resolve(), VALIDATOR_SCRIPT, SOURCE_SUBJECT_SCRIPT,
+                    pathlib.Path(__file__).resolve(),
+                    VALIDATOR_SCRIPT,
+                    SOURCE_SUBJECT_SCRIPT,
                     SANITIZE_SCRIPT,
                 )
             },
@@ -3227,15 +3348,17 @@ def derive_receipt(run_dir: pathlib.Path, candidate_usage: bytes | None = None) 
         value = strict_json(review_raw, "frozen review record", MAX_RECORD_BYTES)
         scan_no_secret_keys(value, "frozen review record")
         review = validate_review_structure(value)
-        blockers.extend(review_semantic_blockers(
-            review,
-            task,
-            routes,
-            run["routes_sha256"],
-            sealed["subject_hash"],
-            attempt["attempt_id"] if attempt is not None else None,
-            attempt["sha256"] if attempt is not None else None,
-        ))
+        blockers.extend(
+            review_semantic_blockers(
+                review,
+                task,
+                routes,
+                run["routes_sha256"],
+                sealed["subject_hash"],
+                attempt["attempt_id"] if attempt is not None else None,
+                attempt["sha256"] if attempt is not None else None,
+            )
+        )
     else:
         blockers.append("no independent review record was imported")
         if task["explanations"]:
@@ -3331,13 +3454,13 @@ def _link_payload(link: pathlib.Path, root: pathlib.Path, seen: frozenset) -> by
     try:
         target_text = os.readlink(link).encode("utf-8", "surrogateescape")
     except OSError as error:
-        raise Refused(f"cannot read dependency tree link {link}: {error}")
+        raise Refused(f"cannot read dependency tree link {link}: {error}") from error
     try:
         resolved = link.resolve(strict=True)
     except (OSError, RuntimeError) as error:
         # `RuntimeError` is a link (or junction) chain that loops: the target never
         # resolves, so the tree cannot be bound and the run is refused, not crashed.
-        raise Refused(f"the dependency tree link {link} does not resolve: {error}")
+        raise Refused(f"the dependency tree link {link} does not resolve: {error}") from error
     if _within(root, resolved):
         relative = resolved.relative_to(root).as_posix()
         return b"in-tree\0" + target_text + b"\0" + relative.encode("utf-8")
@@ -3357,7 +3480,7 @@ def _target_content_digest(path: pathlib.Path, seen: frozenset) -> bytes:
     try:
         return _file_content_digest(path)
     except OSError as error:
-        raise Refused(f"cannot read the dependency tree link target {path}: {error}")
+        raise Refused(f"cannot read the dependency tree link target {path}: {error}") from error
 
 
 def _tree_entries(root: pathlib.Path, seen: frozenset) -> list[tuple[str, str, bytes]]:
@@ -3374,7 +3497,7 @@ def _tree_entries(root: pathlib.Path, seen: frozenset) -> list[tuple[str, str, b
             try:
                 info = candidate.lstat()
             except OSError as error:
-                raise Refused(f"cannot read dependency tree entry {relative}: {error}")
+                raise Refused(f"cannot read dependency tree entry {relative}: {error}") from error
             if getattr(info, "st_reparse_tag", 0):
                 # A reparse point that is neither a symlink nor a detectable junction
                 # cannot be classified, so it refuses instead of being walked into.
@@ -3388,11 +3511,11 @@ def _tree_entries(root: pathlib.Path, seen: frozenset) -> list[tuple[str, str, b
                 try:
                     entries.append((relative, "file", _file_content_digest(candidate)))
                 except OSError as error:
-                    raise Refused(f"cannot read dependency tree entry {relative}: {error}")
+                    raise Refused(f"cannot read dependency tree entry {relative}: {error}") from error
     try:
         entries.sort(key=lambda entry: entry[0].encode("utf-8"))
     except UnicodeEncodeError:
-        raise Refused("the dependency tree contains a path that is not valid UTF-8")
+        raise Refused("the dependency tree contains a path that is not valid UTF-8") from None
     return entries
 
 
@@ -3412,7 +3535,7 @@ def dependency_tree_digest(tree: pathlib.Path) -> tuple[str, int]:
         resolved_tree = tree.resolve()
     except (OSError, RuntimeError) as error:
         # A tree path that is itself a link loop never resolves: refuse, never crash.
-        raise Refused(f"the dependency tree is not a readable directory: {error}")
+        raise Refused(f"the dependency tree is not a readable directory: {error}") from error
     entries = _tree_entries(resolved_tree, frozenset({resolved_tree}))
     digest = hashlib.sha256()
     digest.update(DEPENDENCY_TREE_NAMESPACE + b"\0")
@@ -3438,11 +3561,10 @@ def command_prepare(arguments: argparse.Namespace) -> int:
     validate_routes(routes_value)
     measured = None
     if arguments.environment_json is not None:
-        environment_raw = read_bytes(
-            pathlib.Path(arguments.environment_json), MAX_RECORD_BYTES, "environment JSON"
-        )
+        environment_raw = read_bytes(pathlib.Path(arguments.environment_json), MAX_RECORD_BYTES, "environment JSON")
         measured = validate_measured_mapping(
-            strict_json(environment_raw, "environment JSON", MAX_RECORD_BYTES), "environment JSON",
+            strict_json(environment_raw, "environment JSON", MAX_RECORD_BYTES),
+            "environment JSON",
             redact=True,
         )
 
@@ -3451,7 +3573,7 @@ def command_prepare(arguments: argparse.Namespace) -> int:
         try:
             run_dir.mkdir(parents=True)
         except OSError as error:
-            raise Refused(f"cannot create the run directory: {error}")
+            raise Refused(f"cannot create the run directory: {error}") from error
     try:
         return finish_prepare(arguments, run_dir, task, task_raw, routes_raw, measured)
     except Refused:
@@ -3461,8 +3583,12 @@ def command_prepare(arguments: argparse.Namespace) -> int:
 
 
 def finish_prepare(
-    arguments: argparse.Namespace, run_dir: pathlib.Path, task: dict[str, Any],
-    task_raw: bytes, routes_raw: bytes, measured: dict[str, str] | None = None,
+    arguments: argparse.Namespace,
+    run_dir: pathlib.Path,
+    task: dict[str, Any],
+    task_raw: bytes,
+    routes_raw: bytes,
+    measured: dict[str, str] | None = None,
 ) -> int:
     source = str(arguments.source)
     checkout = run_dir / "checkout"
@@ -3472,12 +3598,22 @@ def finish_prepare(
     eol_overrides = ["-c", "core.autocrlf=false", "-c", "core.eol=lf"]
     try:
         clone = subprocess.run(
-            ["git", "-c", f"safe.directory={source}", *eol_overrides,
-             "clone", "--quiet", "--no-hardlinks", source, str(checkout)],
-            capture_output=True, check=False,
+            [
+                "git",
+                "-c",
+                f"safe.directory={source}",
+                *eol_overrides,
+                "clone",
+                "--quiet",
+                "--no-hardlinks",
+                source,
+                str(checkout),
+            ],
+            capture_output=True,
+            check=False,
         )
     except OSError as error:
-        raise Refused(f"could not run git clone: {error}")
+        raise Refused(f"could not run git clone: {error}") from error
     if clone.returncode != 0:
         detail = clone.stderr.decode("utf-8", "replace").strip()
         raise Refused(f"could not clone {source}: {detail}")
@@ -3489,9 +3625,9 @@ def finish_prepare(
     try:
         base_subject = load_source_subject()(str(checkout), task["base"])
     except SystemExit as refusal:
-        raise Refused(f"the isolated checkout is not a clean clone at the frozen base: {refusal}")
+        raise Refused(f"the isolated checkout is not a clean clone at the frozen base: {refusal}") from refusal
     except (OSError, subprocess.SubprocessError) as error:
-        raise Refused(f"could not qualify the isolated checkout: {error}")
+        raise Refused(f"could not qualify the isolated checkout: {error}") from error
 
     frozen = run_dir / "frozen"
     write_bytes(frozen / "task.json", task_raw)
@@ -3521,15 +3657,21 @@ def finish_prepare(
         "environment": environment,
     }
     write_json(run_dir / "run.json", run)
-    print(json.dumps({
-        "run_dir": str(run_dir),
-        "task_id": task["task_id"],
-        "base": task["base"],
-        "head": task["base"],
-        "task_sha256": run["task_sha256"],
-        "routes_sha256": run["routes_sha256"],
-        "base_tree_digest": run["base_tree_digest"],
-    }, indent=2, sort_keys=True))
+    print(
+        json.dumps(
+            {
+                "run_dir": str(run_dir),
+                "task_id": task["task_id"],
+                "base": task["base"],
+                "head": task["base"],
+                "task_sha256": run["task_sha256"],
+                "routes_sha256": run["routes_sha256"],
+                "base_tree_digest": run["base_tree_digest"],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
     return 0
 
 
@@ -3539,7 +3681,7 @@ def _dependency_tree(value: str) -> pathlib.Path:
         resolved = tree.resolve(strict=True)
     except (OSError, RuntimeError) as error:
         # A tree whose own path is a link loop never resolves; refuse it as unreadable.
-        raise Refused(f"the dependency tree is not a readable directory: {error}")
+        raise Refused(f"the dependency tree is not a readable directory: {error}") from error
     if not resolved.is_dir():
         raise Refused("--tree must name a directory")
     return resolved
@@ -3565,7 +3707,7 @@ def holds_a_package_entry(node_modules: pathlib.Path) -> bool:
                 if entry.is_dir():
                     return True
     except OSError as error:
-        raise Refused(f"cannot list the dependency-tree candidate {node_modules}: {error}")
+        raise Refused(f"cannot list the dependency-tree candidate {node_modules}: {error}") from error
     return False
 
 
@@ -3587,16 +3729,14 @@ def resolved_dependency_tree(checkout: pathlib.Path, gate_cwd: str) -> pathlib.P
             try:
                 return candidate.resolve()
             except (OSError, RuntimeError) as error:
-                raise Refused(f"the dependency tree at {candidate} does not resolve: {error}")
+                raise Refused(f"the dependency tree at {candidate} does not resolve: {error}") from error
         parent = directory.parent
         if parent == directory:
             return None
         directory = parent
 
 
-def require_resolved_dependency_tree(
-    run_dir: pathlib.Path, run: dict[str, Any], task: dict[str, Any], tree: pathlib.Path
-) -> None:
+def require_resolved_dependency_tree(run_dir: pathlib.Path, task: dict[str, Any], tree: pathlib.Path) -> None:
     """Refuse a bound tree the checkout's gates do not resolve their modules from.
 
     The recorded binding attests the tree the gates executed from, so the tree must
@@ -3638,13 +3778,19 @@ def command_bind_dependencies(arguments: argparse.Namespace) -> int:
                 f"{digest} over {entries} entries != {recorded['tree_digest']} over "
                 f"{recorded['tree_entries']} entries"
             )
-        require_resolved_dependency_tree(run_dir, run, task, tree)
-        print(json.dumps({
-            "verified": True,
-            "tree": recorded["tree"],
-            "tree_digest": digest,
-            "tree_entries": entries,
-        }, indent=2, sort_keys=True))
+        require_resolved_dependency_tree(run_dir, task, tree)
+        print(
+            json.dumps(
+                {
+                    "verified": True,
+                    "tree": recorded["tree"],
+                    "tree_digest": digest,
+                    "tree_entries": entries,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
         return 0
     if recorded is not None:
         raise Refused("the run already records a provisioning step")
@@ -3654,7 +3800,7 @@ def command_bind_dependencies(arguments: argparse.Namespace) -> int:
     checkout = run_dir / "checkout"
     if checkout.exists() and (tree == checkout.resolve() or checkout.resolve() in tree.parents):
         raise Refused("the bound dependency tree must live outside the sealed checkout")
-    require_resolved_dependency_tree(run_dir, run, task, tree)
+    require_resolved_dependency_tree(run_dir, task, tree)
     tree_digest, tree_entries = dependency_tree_digest(tree)
     log_path = pathlib.Path(arguments.log)
     log_raw = read_bytes(log_path, MAX_PROVISIONING_LOG_BYTES, "dependency provisioning log")
@@ -3670,34 +3816,43 @@ def command_bind_dependencies(arguments: argparse.Namespace) -> int:
         raise Refused(
             "the dependency tree must live on the same drive or root as the run directory "
             "so the recorded digest stays recomputable"
-        )
-    provisioning = validate_provisioning({
-        "tree": pathlib.PurePath(relative_tree).as_posix(),
-        "tree_digest": tree_digest,
-        "tree_entries": tree_entries,
-        "install_log": PROVISIONING_LOG_PATH,
-        "install_log_source": redact_host_paths(str(log_path)),
-        # The sanitize tool's bytes rendered `install_log_source` at this moment;
-        # binding the digest here is what lets a later derivation refuse a receipt
-        # that would name other bytes as the producer (STD-A02).
-        "install_log_source_sanitizer_sha256": sanitize_source_digest(),
-        "install_log_sha256": sha256_hex(log_raw),
-        "install_log_bytes": len(log_raw),
-    }, "provisioning step")
+        ) from None
+    provisioning = validate_provisioning(
+        {
+            "tree": pathlib.PurePath(relative_tree).as_posix(),
+            "tree_digest": tree_digest,
+            "tree_entries": tree_entries,
+            "install_log": PROVISIONING_LOG_PATH,
+            "install_log_source": redact_host_paths(str(log_path)),
+            # The sanitize tool's bytes rendered `install_log_source` at this moment;
+            # binding the digest here is what lets a later derivation refuse a receipt
+            # that would name other bytes as the producer (STD-A02).
+            "install_log_source_sanitizer_sha256": sanitize_source_digest(),
+            "install_log_sha256": sha256_hex(log_raw),
+            "install_log_bytes": len(log_raw),
+        },
+        "provisioning step",
+    )
     environment = dict(run["environment"], provisioning=provisioning)
     # The log copy and the run record are both written only after every value that will
     # be recorded has been serialized by validate_provisioning, so a refusal leaves the
     # run unbound to a partial provisioning step.
     write_bytes(run_dir / PROVISIONING_LOG_PATH, log_raw)
     save_run(run_dir, run, environment=environment)
-    print(json.dumps({
-        "tree": provisioning["tree"],
-        "tree_digest": tree_digest,
-        "tree_entries": tree_entries,
-        "install_log": PROVISIONING_LOG_PATH,
-        "install_log_sha256": provisioning["install_log_sha256"],
-        "install_log_bytes": provisioning["install_log_bytes"],
-    }, indent=2, sort_keys=True))
+    print(
+        json.dumps(
+            {
+                "tree": provisioning["tree"],
+                "tree_digest": tree_digest,
+                "tree_entries": tree_entries,
+                "install_log": PROVISIONING_LOG_PATH,
+                "install_log_sha256": provisioning["install_log_sha256"],
+                "install_log_bytes": provisioning["install_log_bytes"],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
     return 0
 
 
@@ -3763,20 +3918,21 @@ def command_check(arguments: argparse.Namespace) -> int:
         result["subject_hash_after"] = after
         if after != sealed["subject_hash"]:
             result["passed"] = False
-            result["error"] = (result["error"] + "; " if result["error"] else "") + \
-                SOURCE_CHANGED_SUFFIX
+            result["error"] = (result["error"] + "; " if result["error"] else "") + SOURCE_CHANGED_SUFFIX
             stopped_early = True
         result_raw = write_json(attempt_dir / gate["id"] / "result.json", result)
-        verified.append({
-            "id": gate["id"],
-            "passed": result["passed"],
-            "result_sha256": sha256_hex(result_raw),
-            "stdout_sha256": result["stdout_sha256"],
-            "stderr_sha256": result["stderr_sha256"],
-            "validator_exit_code": result["validator"]["exit_code"] if result["validator"] else None,
-            "validator_stdout_sha256": result["validator"]["stdout_sha256"] if result["validator"] else None,
-            "validator_stderr_sha256": result["validator"]["stderr_sha256"] if result["validator"] else None,
-        })
+        verified.append(
+            {
+                "id": gate["id"],
+                "passed": result["passed"],
+                "result_sha256": sha256_hex(result_raw),
+                "stdout_sha256": result["stdout_sha256"],
+                "stderr_sha256": result["stderr_sha256"],
+                "validator_exit_code": result["validator"]["exit_code"] if result["validator"] else None,
+                "validator_stdout_sha256": result["validator"]["stdout_sha256"] if result["validator"] else None,
+                "validator_stderr_sha256": result["validator"]["stderr_sha256"] if result["validator"] else None,
+            }
+        )
         if not result["passed"]:
             attempt_passed = False
         if stopped_early:
@@ -3805,13 +3961,19 @@ def command_check(arguments: argparse.Namespace) -> int:
         "gates": verified,
     }
     attempt_raw = write_json(attempt_dir / "attempt.json", attempt)
-    print(json.dumps({
-        "attempt_id": attempt_name,
-        "attempt_sha256": sha256_hex(attempt_raw),
-        "complete": attempt["complete"],
-        "passed": attempt["passed"],
-        "subject_hash": sealed["subject_hash"],
-    }, indent=2, sort_keys=True))
+    print(
+        json.dumps(
+            {
+                "attempt_id": attempt_name,
+                "attempt_sha256": sha256_hex(attempt_raw),
+                "complete": attempt["complete"],
+                "passed": attempt["passed"],
+                "subject_hash": sealed["subject_hash"],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
     if not attempt["passed"]:
         print(f"check attempt {attempt_name} failed; evidence preserved under {attempt_dir}", file=sys.stderr)
         return 1
@@ -3831,19 +3993,30 @@ def command_review(arguments: argparse.Namespace) -> int:
     scan_no_secret_keys(value, "review record")
     review = validate_review_structure(value)
     blockers = review_semantic_blockers(
-        review, task, routes, run["routes_sha256"], sealed["subject_hash"],
-        attempt["attempt_id"], attempt["sha256"],
+        review,
+        task,
+        routes,
+        run["routes_sha256"],
+        sealed["subject_hash"],
+        attempt["attempt_id"],
+        attempt["sha256"],
     )
     if blockers:
         raise Refused("the review record is not acceptable: " + "; ".join(blockers))
     write_bytes(run_dir / "frozen" / "review.json", review_raw)
     save_run(run_dir, run, review_sha256=sha256_hex(review_raw))
-    print(json.dumps({
-        "subject_hash": sealed["subject_hash"],
-        "check_attempt_id": attempt["attempt_id"],
-        "review_sha256": sha256_hex(review_raw),
-        "verdict": review["verdict"],
-    }, indent=2, sort_keys=True))
+    print(
+        json.dumps(
+            {
+                "subject_hash": sealed["subject_hash"],
+                "check_attempt_id": attempt["attempt_id"],
+                "review_sha256": sha256_hex(review_raw),
+                "verdict": review["verdict"],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
     return 0
 
 
@@ -3864,14 +4037,20 @@ def command_receipt(arguments: argparse.Namespace) -> int:
     write_bytes(run_dir / "frozen" / "usage.json", usage_raw)
     write_bytes(run_dir / "run.json", run_raw)
     write_bytes(run_dir / "receipt.json", receipt_raw)
-    print(json.dumps({
-        "accepted": receipt["accepted"],
-        "acceptance_blockers": receipt["acceptance_blockers"],
-        "accounting_complete": receipt["cost"]["accounting_complete"],
-        "receipt_sha256": sha256_hex(receipt_raw),
-        "subject_hash": receipt["subject_hash"],
-        "task_id": receipt["task_id"],
-    }, indent=2, sort_keys=True))
+    print(
+        json.dumps(
+            {
+                "accepted": receipt["accepted"],
+                "acceptance_blockers": receipt["acceptance_blockers"],
+                "accounting_complete": receipt["cost"]["accounting_complete"],
+                "receipt_sha256": sha256_hex(receipt_raw),
+                "subject_hash": receipt["subject_hash"],
+                "task_id": receipt["task_id"],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
     return 0
 
 
@@ -3904,7 +4083,7 @@ def first_difference(left: Any, right: Any, path: str = "$") -> str | None:
     if isinstance(left, list) and isinstance(right, list):
         if len(left) != len(right):
             return f"{path}: length {len(left)} != {len(right)}"
-        for index, (left_item, right_item) in enumerate(zip(left, right)):
+        for index, (left_item, right_item) in enumerate(zip(left, right, strict=True)):
             difference = first_difference(left_item, right_item, f"{path}[{index}]")
             if difference is not None:
                 return difference
@@ -3930,12 +4109,18 @@ def command_accept(arguments: argparse.Namespace) -> int:
         )
     if not expected["accepted"]:
         raise Refused("the submitted receipt is a nonaccepted row: " + "; ".join(expected["acceptance_blockers"]))
-    print(json.dumps({
-        "accepted": True,
-        "receipt_sha256": sha256_hex(submitted_raw),
-        "subject_hash": expected["subject_hash"],
-        "task_id": expected["task_id"],
-    }, indent=2, sort_keys=True))
+    print(
+        json.dumps(
+            {
+                "accepted": True,
+                "receipt_sha256": sha256_hex(submitted_raw),
+                "subject_hash": expected["subject_hash"],
+                "task_id": expected["task_id"],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
     return 0
 
 
@@ -3964,17 +4149,18 @@ def main(argv: list[str] | None = None) -> int:
     bind.add_argument("--run-dir", required=True)
     bind.add_argument("--tree", required=True, help="resolved dependency tree outside every sealed checkout")
     bind.add_argument("--log", help="provisioning install log to copy into the run store and bind")
-    bind.add_argument("--check", action="store_true",
-                      help="recompute the tree digest and compare it with the recorded provisioning step")
+    bind.add_argument(
+        "--check",
+        action="store_true",
+        help="recompute the tree digest and compare it with the recorded provisioning step",
+    )
     bind.set_defaults(handler=command_bind_dependencies)
 
     seal = subparsers.add_parser("seal", help="bind the checkout into one exact evaluation Subject")
     seal.add_argument("--run-dir", required=True)
     seal.set_defaults(handler=command_seal)
 
-    check = subparsers.add_parser(
-        "check", help="execute the frozen gates and require the named Go and ExUnit tests"
-    )
+    check = subparsers.add_parser("check", help="execute the frozen gates and require the named Go and ExUnit tests")
     check.add_argument("--run-dir", required=True)
     check.add_argument("--gate", action="append", help="run only this gate id (repeatable; attempt becomes incomplete)")
     check.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT, help="per-gate timeout seconds; 0 disables")

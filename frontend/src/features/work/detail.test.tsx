@@ -61,7 +61,7 @@ const detailWith = (executionOverride?: Record<string, unknown>) => readWorkDeta
 /** The same detail with the served read naming no project; the contract keeps `project_id` optional. */
 function detailWithoutProject(executionOverride?: Record<string, unknown>) {
   const detail = detailWith(executionOverride);
-  delete (detail["work_item"] as Record<string, unknown>)["project_id"];
+  delete (detail.work_item as Record<string, unknown>).project_id;
   return detail;
 }
 

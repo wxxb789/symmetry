@@ -34,7 +34,7 @@ import { asRecord, asText, timelineItemKey, type TimelineItemLike } from "./pres
 export type ReceiptOutcome = "applied" | "control_applied" | "applied_unacknowledged" | "rejected" | "control_rejected" | "refused" | "failed" | "not_sent" | "queued" | "deferred" | "unknown";
 
 /** What a receipt card renders: a durable outcome, or `requested` while an attempt is unconfirmed. */
-export type ReceiptViewOutcome = ReceiptOutcome | "requested";
+type ReceiptViewOutcome = ReceiptOutcome | "requested";
 
 /** The served command projection members a receipt outcome is derived from. */
 export interface ReceiptCommand {
@@ -119,13 +119,13 @@ export function receiptLabel(outcome: ReceiptOutcome): string {
 }
 
 /** The in-flight receipt text; it is never `Applied` while the server has not answered. */
-export const requestSentLabel = "Request sent…";
-export const requestQueuedLabel = "Request queued…";
+const requestSentLabel = "Request sent…";
+const requestQueuedLabel = "Request queued…";
 
 /** The newest receipts a list renders; older ones are counted instead of dropped silently. */
 export const receiptRowLimit = 8;
 
-export interface ReceiptRow {
+interface ReceiptRow {
   readonly key: string;
   readonly commandId: string | null;
   readonly kind: string;
@@ -134,7 +134,7 @@ export interface ReceiptRow {
   readonly outcome: ReceiptOutcome;
 }
 
-export interface ReceiptHistory {
+interface ReceiptHistory {
   readonly rows: readonly ReceiptRow[];
   readonly hidden: number;
 }
@@ -155,15 +155,15 @@ export function receiptRows(
     if (item.source !== "command") continue;
     const command = asRecord(item.data);
     if (command === null) continue;
-    const commandId = asText(command["command_id"]);
+    const commandId = asText(command.command_id);
     // The same command can be served by the detail read and an older page; the
     // command id is its durable identity, and the timeline key the fallback.
     const key = commandId ?? timelineItemKey(item);
     if (seen.has(key)) continue;
     seen.add(key);
-    const kind = asText(command["kind"]) ?? "command";
-    const state = asText(command["state"]) ?? "unknown";
-    const acknowledgementOutcome = asText(command["acknowledgement_outcome"]);
+    const kind = asText(command.kind) ?? "command";
+    const state = asText(command.state) ?? "unknown";
+    const acknowledgementOutcome = asText(command.acknowledgement_outcome);
     rows.push({
       key,
       commandId,
@@ -174,8 +174,8 @@ export function receiptRows(
         kind,
         state,
         acknowledgement_outcome: acknowledgementOutcome,
-        acknowledgement_id: asText(command["acknowledgement_id"]),
-        applied_at: asText(command["applied_at"]),
+        acknowledgement_id: asText(command.acknowledgement_id),
+        applied_at: asText(command.applied_at),
       }),
     });
   }
@@ -183,7 +183,7 @@ export function receiptRows(
 }
 
 /** A local failure of one attempt: a definitive server refusal, or an unconfirmed one. */
-export interface AttemptFailure {
+interface AttemptFailure {
   readonly outcome: ReceiptOutcome;
   readonly message: string | null;
 }
@@ -234,7 +234,7 @@ export interface AttemptContext {
   readonly paused: boolean;
 }
 
-export interface AttemptView {
+interface AttemptView {
   readonly outcome: ReceiptViewOutcome;
   readonly headline: string;
   readonly message: string | null;
