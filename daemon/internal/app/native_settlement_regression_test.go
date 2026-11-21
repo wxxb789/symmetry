@@ -1327,6 +1327,7 @@ func TestOrphanedNativeUsageRetryCannotReleaseCancellationOwner(t *testing.T) {
 }
 
 func TestPersistentTerminalJournalFailureAfterUsageRetryDoesNotBlockOtherRunOutbox(t *testing.T) {
+	verifyNoLeakedGoroutines(t)
 	store, blockedKey := claimedGoalDeliveryStore(t)
 	otherKey := state.RunKey{RunID: "00000000-0000-4000-8000-000000000002", Generation: 1}
 	saveClaimedGoalRun(t, store, otherKey)
@@ -1387,10 +1388,9 @@ func TestPersistentTerminalJournalFailureAfterUsageRetryDoesNotBlockOtherRunOutb
 	}
 	t.Cleanup(func() {
 		cancel()
-		select {
-		case <-flushDone:
-		case <-time.After(time.Second):
-		}
+		// A silent bound here would only delay the later backgroundWG.Wait
+		// hang; give the flush its verdict instead.
+		awaitNativeSettlementSignal(t, flushDone, "outbox flush did not stop after cancellation")
 		app.backgroundWG.Wait()
 		_ = store.Close()
 	})
@@ -1464,6 +1464,7 @@ func TestPersistentTerminalJournalFailureAfterUsageRetryDoesNotBlockOtherRunOutb
 }
 
 func TestFlushRunDefersNativeUsageRecoveryToLiveTerminalOwner(t *testing.T) {
+	verifyNoLeakedGoroutines(t)
 	store, key := claimedGoalDeliveryStore(t)
 	t.Cleanup(func() { _ = store.Close() })
 	usage := protocol.Usage{

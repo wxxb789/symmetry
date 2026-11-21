@@ -4,8 +4,8 @@ defmodule SymmetryControlWeb.Plugs.PortalAuth do
   import Plug.Conn
   import Phoenix.Controller
 
-  alias SymmetryControlWeb.Protocol
   alias SymmetryControlWeb.PortalSession
+  alias SymmetryControlWeb.Protocol
 
   def init(options), do: options
 

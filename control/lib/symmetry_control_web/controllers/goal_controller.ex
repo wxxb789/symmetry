@@ -7,8 +7,8 @@ defmodule SymmetryControlWeb.GoalController do
   alias SymmetryControl.Goals
   alias SymmetryControl.Repo
   alias SymmetryControl.Workspaces.Project
-  alias SymmetryControlWeb.Protocol
   alias SymmetryControlWeb.PortalJSON
+  alias SymmetryControlWeb.Protocol
 
   @max_bigint 9_223_372_036_854_775_807
 

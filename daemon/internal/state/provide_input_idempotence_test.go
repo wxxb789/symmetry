@@ -7,6 +7,7 @@ import (
 )
 
 func TestPrepareProvideInputRejectsChangedPayloadForConfirmedCommandID(t *testing.T) {
+	t.Parallel()
 	store := mustStore(t)
 	j := testJournal("provide-input-idempotence", 1)
 	j.LocalState = "waiting_for_input"
