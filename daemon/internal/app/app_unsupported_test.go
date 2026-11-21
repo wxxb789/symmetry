@@ -11,7 +11,7 @@ import (
 func TestRunFailsBeforeEnrollmentWithoutProcessIdentity(t *testing.T) {
 	enrollment := &fakeEnrollment{}
 
-	err := Run(context.Background(), testConfig(t), WithEnrollment(enrollment))
+	err := Run(context.Background(), testConfig(t), withEnrollment(enrollment))
 	if err == nil || !strings.Contains(err.Error(), "process identity") {
 		t.Fatalf("Run() error = %v, want process identity failure", err)
 	}

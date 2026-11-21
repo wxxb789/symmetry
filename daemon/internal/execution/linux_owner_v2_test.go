@@ -476,7 +476,7 @@ func TestLinuxV2HandoffCarriesReservationSecretAndRecoveryEndpoint(t *testing.T)
 
 func TestLinuxV2MutationAckLostIsNotReplayed(t *testing.T) {
 	calls := 0
-	err := runLinuxV2MutationRetry(func() error {
+	err := retryMutation(func() error {
 		calls++
 		return errors.Join(errors.New("StageReplay dropped ACK after readback"), ErrLinuxV2MutationAckLost)
 	})
