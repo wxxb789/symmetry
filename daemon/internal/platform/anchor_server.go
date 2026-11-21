@@ -302,7 +302,8 @@ func (anchor *linuxOwnerAnchor) serve(ctx context.Context) (result error) {
 		}
 		connection, err := anchor.listener.AcceptUnix()
 		if err != nil {
-			if networkError, ok := err.(net.Error); ok && networkError.Timeout() {
+			var networkError net.Error
+			if errors.As(err, &networkError) && networkError.Timeout() {
 				continue
 			}
 			anchor.stopping = true

@@ -691,3 +691,48 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       (exit 2, `Required version … does not match the running version …`) instead of reporting a
       different finding set than the one the 2026-11-21 baseline fixed (373 findings at
       `a3039f0`, of which 220 E501 at `line-length = 120`).
+
+## Daemon platform: anchor socket-error sanitation keeps its outermost-only type switch
+
+- [ ] Follow-up error-sanitation slice: resolve the remaining `errorlint` finding in
+      `daemon/internal/platform/anchor_wire.go:346`
+      (`sanitizeLinuxOwnerAnchorSocketError`'s `switch typed := err.(type)`). The slice
+      `rf-w2-11-typed-errors` fixed the other owned-file finding
+      (`daemon/internal/platform/anchor_server.go:305`, the direct `AcceptUnix` error) by
+      converting it to `errors.As` — behaviour-neutral because `net.(*UnixListener).AcceptUnix`
+      returns either a bare `syscall.EINVAL` (`!l.ok()`, `Timeout() == false`) or an
+      `&net.OpError{...}` that is already the outermost `net.Error` — but deliberately left this
+      one. The sanitizer rebuilds only the **outermost**
+      `*net.OpError`/`*os.PathError`/`*os.SyscallError` and returns a nested or joined error
+      untouched, which `errors.As` cannot express without an identity check (`asErr == err`)
+      that obscures the sanitizer's shape; a `//nolint` is forbidden by the refactor program's
+      rules. Measured with `GOOS=linux GOARCH=amd64 golangci-lint run --no-config --default=none
+      --enable=errorlint ./internal/platform/...` (v2.15.0) on 2026-11-21: 8 findings at the
+      merge base `c87c9918` (this one and `anchor_server.go:305:27`, which the slice then
+      fixed, plus six outside the owned set), and 7 after the fix, of which exactly this one is
+      in the owned files (`:346:18`). The follow-up should either restructure the
+      sanitizer so the "outermost only" rule is explicit in a form errorlint accepts and get the
+      count to zero, or record the accepted shape in the plan that owns error sanitation.
+
+## Daemon platform: mismatch-sentinel granularity and anonymous synonym sites
+
+- [ ] W3-02 (or a dedicated follow-up over the same files): collapse the near-synonym sentinel
+      families and adopt the anonymous synonyms left by `rf-w2-11-typed-errors`. At the 2026-11-21
+      revision the slice had to keep every `Error()` byte identical (C3), so one predicate is now
+      split four ways for process identity (`ErrLinuxOwnerCreationIdentityChanged`,
+      `ErrLinuxOwnerCreationIdentityDiffers`, `ErrLinuxOwnerIdentityChanged`,
+      `ErrLinuxOwnerIdentityDiffers`), two ways for nsfs device/inode
+      (`ErrLinuxOwnerDeviceOrInodeChanged`, `ErrLinuxOwnerDeviceOrInodeDiffers`), and two ways
+      for the parent check (`ErrLinuxOwnerParentPIDDiffers`,
+      `ErrLinuxOwnerParentDiffersFromHelper`); a caller that wants "process identity changed,
+      not transport loss" must OR four values and still cannot see the anonymous sites. Those
+      synonym sites, verified at this revision: `linux_owner_helper_v2_linux.go:785`
+      (`daemon creation identity changed`), `:799` (`helper identity differs`), `:887`
+      (`namespace identity differs`), `helper_v2_protocol.go:361`
+      (`PID or creation identity differs`); the parent-class synonyms are
+      `anchor_gate.go:380`, `:417`, `anchor_run.go:278`, `helper_v2_run.go:122`, and
+      `helper_v2_recovery.go:830`. The PR #160 review's suggested fix keeps every byte: one
+      exported class sentinel per semantic class, backed by an unexported
+      `type linuxOwnerMismatch struct { text string; class error }` whose `Error()` returns
+      `text` and whose `Is(target)` reports `target == class`, so each phrasing keeps its exact
+      wire text and joins its class.
