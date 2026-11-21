@@ -3,7 +3,7 @@
 Subject: `daemon/internal/app/app.go` at `a3039f0d17fc7c7905b63bdf247cac5bf339b213` (12,048 lines,
 475 top-level declarations) split move-only into ten concern sibling files in the same package.
 Contract: `goal-rf-w1-05-app-go-split.md`. Gates below ran foreground in
-`Q:/repos/wt-w1-05-app-go-split/symmetry` on 2026-11-21; no `-race` run (no cgo on this Windows
+the repository root of this worktree on 2026-11-21; no `-race` run (no cgo on this Windows
 host — CI is the race oracle).
 
 ## 1. Move-only proof
@@ -145,8 +145,9 @@ base-revision range).
   revision fails identically (55 failures + 5 errors both before and after), so the changed comment
   block is covered by inspection plus the Linux-only suite in CI.
 - **Line numbers in prose rot with the next edit anywhere above them.** The re-pointed citations
-  above are correct at this revision; the new `app.go`/siblings are the owner files named by the
-  refactor program's wave-2 accounting. This round exercised that: removing the blank line above
+  above are correct at this revision; the new `app.go` and its sibling files are the owner files
+  named by the refactor program's wave-2 accounting. This round exercised that: removing the blank
+  line above
   `systemTimer.Stop` lowered every later `app.go` line number by one, and §4's table plus the move
   manifest were re-pointed accordingly.
 - **File sizes are uneven** (`probe.go` 356 lines vs `native_run.go` 2417). Accepted: the contract
