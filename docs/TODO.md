@@ -113,7 +113,7 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       leader-absent path, `:1237` on the post-readback final scan), where they become sticky
       `descendantScanLost` (`:1248-1252`) or an unproven containment return (`:1205-1207`), and the
       same manufactured errors also reach the supervisor mirror path —
-      `supervisor_linux_client.go:1216` (`verifyMirrorObservation`, returned as-is) and `:1430`
+      `supervisor_linux_client.go:1223` (`verifyMirrorObservation`, returned as-is) and `:1448`
       (`sealInitialMirrorScanForWitness`, whose pre-resume witness scan wraps the error). Same shape
       as the barrier join `:665-688` (fixed, with pins, by PR #105 `e64f8c0`) and
       `stopDescendantMonitor` (fixed, with pins, on branch `fix/stop-descendant-recheck`). Apply the

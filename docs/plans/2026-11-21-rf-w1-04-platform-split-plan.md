@@ -85,12 +85,13 @@ declaration unassigned or names a file outside the contract's sibling set.
   (qualified selectors only, so a parameter named `path` cannot keep an unused import). This is
   the only non-move edit, and it is forced by Go's per-file import scope. `gofmt` then only
   collapses now-redundant blank lines between declarations.
-- **Doc citations.** The four `docs/TODO.md` coordinates into `containment_supervisor_linux.go`
-  (`verifyMirrorObservation`, `sealInitialMirrorScanForWitness`, `waitForScanEvents`,
-  `serveScanEvents`) are re-pointed to `supervisor_linux_client.go` and their line numbers
-  re-derived from the new bytes, with one added sentence naming the split. The move of four
-  declarations into one file with a regenerated header shifts all four by the same −578 lines;
-  each new coordinate was read back from the file.
+- **Doc citations.** The five `docs/TODO.md` coordinates into `containment_supervisor_linux.go`
+  (`verifyMirrorObservation` and `sealInitialMirrorScanForWitness` at their call sites, the
+  `sealInitialMirrorScanForWitness` and `waitForScanEvents` timer arms, and the `serveScanEvents`
+  close) are re-pointed to `supervisor_linux_client.go` and their line numbers re-derived from the
+  new bytes, with one added sentence naming the split. The move of four declarations into one file
+  with a regenerated header shifts all five by the same −578 lines; each new coordinate was read
+  back from the file.
 
 ## Evidence plan (exact commands, run at the final tree)
 
