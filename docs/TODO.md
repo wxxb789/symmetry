@@ -762,8 +762,8 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       process's pipe, so the goroutine outlives the call, belongs to no WaitGroup, and contradicts
       `daemon/AGENTS.md` ("Every goroutine has an owner and exit path"). Found by the 2026-11-21
       daemon audit (finding F15). Fix direction: prefer the context-aware write path the runner
-      already implements -- `internal/execution/runner.go:1378` `WriteInputContext` closes the stdin
-      write end when its context is cancelled (`:1408-1412`) -- which `internal/app` cannot reach
+      already implements -- `internal/execution/runner.go:1380` `WriteInputContext` closes the stdin
+      write end when its context is cancelled (`:1410-1414`) -- which `internal/app` cannot reach
       today only because its `Process` interface (`app.go:232-233`) declares `WriteInput([]byte)
       error` alone; otherwise close the pipe's write end on timeout (the runner owns the pipe), or
       track the goroutine in `daemon.workers` with a documented bound and assert its exit at
