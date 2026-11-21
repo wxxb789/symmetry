@@ -27,6 +27,7 @@ Test files this slice edits (all owned by W2-03, none by W2-04):
 | `control/test/symmetry_control_web/controllers/goal_controller_test.exs` | C2 pins, CW-10 assertions, CW-6 after/limit table |
 | `control/test/symmetry_control_web/controllers/protocol_controller_test.exs` | CW-6/CW-7 fence (body/query) and work-epoch tables |
 | `control/test/symmetry_control_web/controllers/operator_read_controller_test.exs` | CW-6 `Protocol.history_limit/1` table through the task-history routes |
+| `control/test/symmetry_control_web/controllers/chat_controller_test.exs` | the route-level CW-4 pin for a refused chat `start_work` changeset (fix round r1) |
 
 Read-only oracles (run, never edited here; the four portal/attention files stay with W2-04):
 `portal_controller_test.exs`, `portal_resource_identity_test.exs`, `goal_machine_controller_test.exs`,
@@ -90,6 +91,15 @@ created-status from the call site. The alternative (two named entry points `acti
 builder and one status policy; the pair keeps exactly one definition and one expression of the
 policy.
 
+Recorded, not a behaviour change (review STD-A03): the replayed `create_work_item` receipt now takes
+a plain 200 from `action_receipt/3` where the baseline's `json(conn, …)` kept whatever status the
+conn already carried. It was the baseline's only disposition receipt that inherited the conn's
+status (the work-item actions computed `put_status(if disposition == :created …)` at the call site,
+the connection receipts went through `connection_receipt/4`), the conn's default is 200, and no
+mounted route pre-sets a status on that path — so every reachable response is unchanged. The
+narrowing is kept rather than re-opening the builder to a `nil` status for a caller no route
+produces.
+
 ### CW-4 — one validation-error envelope
 
 `chat_controller.ex` and `portal_api_controller.ex` each carry the same 422
@@ -104,7 +114,13 @@ which rolls back `Workspaces.launch_work_item/3`'s `{:error, Ecto.Changeset.t()}
 `workspaces.ex:302-311`, `Repo.rollback(reason)` from `Repo.update(WorkItem.execution_changeset(…))`
 at `:612-627`). An earlier draft of this plan called the chat copy unreachable; the independent
 second opinion measured the rollback chain and disproved it, and the shared clause is byte-identical
-to both deleted copies. `PortalJSON` is only called, never moved (C7).
+to both deleted copies. `PortalJSON` is only called, never moved (C7). The chat copy is reachable
+from the HTTP surface (a `start_work` message whose `work.title` trims to empty), and since fix
+round r1 each controller's *delegation* to the shared function is pinned at the route level: the
+portal by the two cases above, the chat by `chat_controller_test.exs` → "a refused chat work
+changeset serves the validation envelope". Before that pin, replacing the chat clause with
+`Protocol.error/2` (400 `invalid_request`) left every gate green while the helper-level test name
+claimed the wider coverage.
 
 The envelope is deliberately **not** a `Protocol.error/2` clause (the first draft made it one, and
 the gpt-6.2-sol audit rejected that draft): `ProviderAccess.record_intent/1` rolls back a
@@ -151,12 +167,17 @@ QueryParams.optional_wire_integer(value, {1, :infinity})   # event/attention `li
 
 `optional_wire_integer/2` is the nil-passthrough member; `max_integer/0` publishes the bigint
 maximum the durable goal columns accept (`@max_bigint` moves out of `goal_controller.ex`). Measured
-accept sets, pinned green at the baseline and unchanged after (C4): `"+1"` accepted everywhere
-(`Integer.parse/1` keeps the sign); `" 1"`, `"1.5"`, `""`, `"0"`, `"-1"` refused wherever the site
-is positive-only; the bigint maximum accepted by the unbounded sites, refused by `after` only at
-max+1; the history limit refuses 501 and up; the body fence refuses the string form a query fence
-accepts; and a JSON number reaches the version parameter and the work epoch exactly as the text
-does. `history_limit/1` keeps its own default clause and its 1..500 bound.
+accept sets, pinned green at the baseline and unchanged after (the C4 tables below plus the
+existing portal oracle suites that drive the version parameter), stated per carrier: the text
+carriers — `query_integer/2`, `optional_wire_integer/2`, and `wire_integer/2` where its value comes
+from the query string — accept `"+1"` (`Integer.parse/1` keeps the sign) and refuse `" 1"`,
+`"1.5"`, `""`; the JSON-body carrier (`json_integer/2`) refuses the string form, so a body fence
+accepts a JSON number only; `"0"`/`"-1"` are refused wherever the site is positive-only; the bigint
+maximum is accepted by the unbounded sites and refused by `after` only at max+1; the history limit
+refuses 501 and up; and a JSON number reaches the version parameter exactly as its text does
+(`conn.params` at `portal_api_controller.ex:520`), while the work epoch is read from the query
+string alone (`daemon_controller.ex:92` `query_value/1`), so no body spelling reaches it.
+`history_limit/1` keeps its own default clause and its 1..500 bound.
 
 ### CW-7 — one fence spec
 
@@ -224,10 +245,12 @@ both revisions, but the baseline's `String.starts_with?(conn.request_path, "/por
 there and it served the *operator* projection and recorded the *operator* actor on a portal route;
 the pipeline assign serves the portal projection and `"portal_operator"`. The gpt-6.2-sol audit
 measured the divergence by reading both dependencies. It is accepted, named and pinned rather than
-reverted: the contract's byte-identity object is the controller suites (which never send an encoded
-path, so the differential oracle is empty over them), failure control names 401/403 and error
-envelopes (neither changes), and CW-10's mandate is exactly that authority follow the matched
-pipeline instead of the path text. The delta removes a wrong-authority attribution; the new
+reverted: the contract's byte-identity object is the controller suites **as they stood before this
+increment** (those pre-increment tests never sent an encoded path, so the differential oracle is
+empty over them; the encoded-path case added here is one of the two CW-10 records the capture does
+show, below), failure control names 401/403 and error envelopes (neither changes), and CW-10's
+mandate is exactly that authority follow the matched pipeline instead of the path text. The delta
+removes a wrong-authority attribution; the new
 assertion `goal_controller_test.exs` → "an encoded portal path keeps the portal surface the router
 matched" pins it, and it is red on the baseline (the path check fails there).
 
@@ -248,10 +271,15 @@ matched" pins it, and it is red on the baseline (the path check fails there).
   masks are applied by the recorder itself, identically to every capture.
 * Capture protocol (as executed): the scratch tree at partition `rf-w2-03d`, always
   `--seed 1234 --exclude portal_assets` over the contract's six files plus the C5 oracle extension
-  (14 files). The load-bearing captures are `base7`/`base8` (baseline lib, pre-review tests;
-  225/226 passed — the one failure is the CW-4 head-only pin), `base10`/`base11`/`base12`
-  (baseline lib, final tests; 225/227 — the two head-only pins red), `head3`/`head4` (final head;
-  227 passed each), and eight `iso-base-*` runs of `portal_workflow_test.exs` alone. Earlier
+  (14 files). Each load-bearing capture binds to a named revision: every `base*` run served the
+  `65869a78` baseline lib, and the two head runs served the twelve blobs the *reviewer verdict
+  condition 2* row below pins as unchanged at the head captures — the apply-stage and fix-round r1
+  rows list the blobs that changed afterwards, and in both rows the lib changes are comment/doc
+  text only (no code path, no served byte). The captures are `base7`/`base8` (baseline lib,
+  pre-review tests; 225/226 passed — the one failure is the CW-4 head-only pin),
+  `base10`/`base11`/`base12` (baseline lib, final tests; 225/227 — the two head-only pins red),
+  `head3`/`head4` (the head blobs at capture time; 227 passed each), and eight `iso-base-*` runs of
+  `portal_workflow_test.exs` alone. Earlier
   captures (`base1`–`base6`, `base9`, `head2`) were superseded by a mask-version or a test-set
   change and are kept as history only. Noise floor `base10`↔`base11`: 44 unmatched records over 37
   tests; `head3`↔`head4` (identical code): 40/39 over 35 tests. The
@@ -267,6 +295,11 @@ matched" pins it, and it is red on the baseline (the path check fails there).
   is a per-run provider capability token that also differs between the two identical-code head
   runs. The full-corpus base↔head diff (45 vs 43 unmatched over the same 37 churn tests plus the
   encoded-path test) introduces no difference class the floor does not already contain.
+  The claim that carries is therefore a normalised one, and the masks above are its boundary: over
+  the stable corpus the served bytes agree except for the two CW-10 encoded-path records, which are
+  named and pinned; the remaining two records are noise classes the identical-code runs produce on
+  their own. Nothing here claims literal byte equality of raw captures — identical code does not
+  reproduce them without the masks, measured above.
 * C2 pins, green at the baseline: durable `goal_revisions`/`goal_events` `actor_ref` for the portal
   and operator create and command routes; all 13 Goal routes on their own pipeline resolving a
   surface without a 500; the operator read never carrying the portal projection members.
@@ -300,10 +333,11 @@ the reviewers): `reviewer` (adversarial audit, frozen at `git diff` b2sum
 | gpt-6.2-sol #4 / consultant F2 — the reviewers' diff snapshot was stale (it cited an obsolete `docs/TODO.md` comment) | **fixed**: the live code points at this plan, the snapshot was regenerated at the freeze, and both later reviewers pinned blob hashes instead |
 | consultant F1 — the plan called the chat changeset copy unreachable | **fixed**: the plan now carries the measured rollback chain (`workspaces.ex:302-311`, `:612-627`) |
 | consultant F3 — `chat_controller.ex` keeps its own inline 201/200 status expression | **recorded, not changed**: it is a create status, not a receipt envelope, and CW-3 names the portal sites; the chat envelope's disposition member is served unchanged |
-| consultant F4 — `optional_wire_integer/2` is a union carrier | **recorded**: all five present sites are query-only; a future optional *body* site must add the matching carrier wrapper instead of reusing the union |
+| consultant F4 — `optional_wire_integer/2` is a union carrier | **recorded**: all four present sites (`goal_controller.ex:114`, `:115`, `:128`, `portal_api_controller.ex:72`) are query-only; a future optional *body* site must add the matching carrier wrapper instead of reusing the union |
 | consultant F5 / reviewer P3 — `Keyword.fetch!(options, …)` and the fail-loud clauses raise generic exceptions | **accepted**: all mounts pass their options (proven by the 13-route test) and a missing surface is a programming error; a named raise was rejected as error handling for an unreachable scenario |
 | reviewer verdict condition 2 — gates must run at a frozen revision | **met**: the 12 code/test blob hashes in the audit (chat `120654a3`, daemon `151517dc`, goal `b81f05e6`, portal_api `7f87d198`, task `af06ef97`, auth `789e2174`, protocol `3283e6c9`, query_params `9f500a3f`, router `a43257d4`, goal test `31776283`, operator_read test `2f439d03`, protocol test `0f132ed2`) are unchanged at the gate runs and at the head captures |
 | apply stage (simplify F1–F4, 2026-11-21) — fence comment reword, `idempotency_key/1` docstring reword, one `goal_command/5` test envelope (`post_goal_command/4` and `amend_goal/4` stay as wrappers), one `machine_id` query-fence pin | **appended, review result unchanged**: four of the twelve audited blobs re-hash (daemon `1dd0d6a1`, query_params `07f9af15`, goal test `70dcab76`, protocol test `e361c004`); the two lib blobs differ in comment/doc text only (no code path, no served byte), the other eight are byte-identical to the row above. The new pin freezes the disclosed CW-7 `WithClauseError` until the one-line fix increment (it is that increment's red→green anchor). Gates at this head: format, compile `--warnings-as-errors`, targeted 136 passed, oracle extension 91 passed/1 skipped/4 excluded, `git diff --check` — all exit 0. Credo default set + `--strict` with the parse timeout raised (the bare 5 s default silently drops files on this host: three bare runs gave 197/313/460 over 33/41/42 files) → 460 project-wide over 42 files, 0 in the four edited files, 0 `DuplicatedCode` |
+| fix round r1 (review findings, 2026-11-21) — route-level chat CW-4 pin (`chat_controller_test.exs`), goal-test rename and `after` comment, `action_receipt/3` comment, plan corrections (STD-A01, A02, A04, A05, A06; STD-A03 recorded under CW-3) | **appended**: two of the twelve audited blobs re-hash — portal_api `52dc8ca1` (comment text only: the `git diff` is one hunk with no code line) and goal test `3683634f` (one test renamed, one comment) — and the remaining ten are byte-identical to the apply row. The chat test file, outside the audited twelve and byte-identical to the baseline until now, is `277b63b9`. Gates at this head, all exit 0: `mix format --check-formatted`, `mix compile --warnings-as-errors`, `git diff --check` over `65869a78..HEAD` and `origin/main...HEAD`, targeted **137 passed** (the +1 over the apply row's 136 is the added route-level chat case), oracle extension **91 passed/1 skipped/4 excluded**. Two host prerequisites for those counts: the oracle brace list must spell `goal_machine_controller` (`goal_machine` alone expands to a path that does not exist, and mix then silently runs the other seven files — 81 passed), and `POSTGRES_PORT` must be unset because this host's exported 55442 has no server while the local PostgreSQL listens on 5432; `SYMMETRY_CONTRACTS_DIR=<repo>/contracts` is required. Flip check on the new pin: replacing `chat_controller.ex`'s changeset clause with `Protocol.error/2` answers 400 `invalid_request` and turns that case red. This round changes no served byte (the only lib edit is comment text), and the differential instrument's scratch tree no longer exists on this host, so the capture rows above were not re-run and still bind to the blobs they name. |
 | reviewer verdict condition 3 — the plan file is untracked | **reported**: the commit must include `docs/plans/2026-11-21-rf-w2-03-controller-plumbing-plan.md` (this stage does not commit) |
 
 ## Out of scope, with reasons
@@ -325,9 +359,10 @@ the reviewers): `reviewer` (adversarial audit, frozen at `git diff` b2sum
 
 * CW-3's status pair makes the create/action distinction explicit at each call site; a wrong pair
   changes a wire status, which the differential oracle and the existing portal suites both pin.
-* CW-6/KW-7 change parsing internals that only HTTP-level tests can see (the parsers are private);
-  the C4 tables plus the differential capture are the acceptance evidence, and the unbounded sites
-  keep `:infinity` so no accepted input narrows.
+* CW-6/KW-7 change parsing internals that only HTTP-level tests can see (the parsers are
+  `QueryParams` functions, not a controller-facing surface); the C4 tables plus the differential
+  capture are the acceptance evidence, and the unbounded sites keep `:infinity` so no accepted
+  input narrows.
 * CW-10 is authority-adjacent: a missing `:surface` assign now fails loudly instead of guessing;
   the 13-route test proves each route's pipeline carries it.
 * The scratch noise floor is proven by the base↔base capture; if that diff is not empty, the

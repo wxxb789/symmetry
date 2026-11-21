@@ -356,7 +356,7 @@ defmodule SymmetryControlWeb.GoalControllerTest do
     assert event_actor(goal_id) == "portal_operator"
   end
 
-  test "every Goal route resolves the surface of its pipeline", %{conn: conn} do
+  test "no Goal route 500s on its pipeline", %{conn: conn} do
     project = create_project()
     initial_revision = goal_payload()["initial_revision"]
 
@@ -399,7 +399,8 @@ defmodule SymmetryControlWeb.GoalControllerTest do
     events = "/api/v1/goals/#{goal_id}/events"
 
     # `after` is the last rendered sequence: non-negative, at most the durable
-    # bigint maximum, and only in its canonical decimal text.
+    # bigint maximum, and only as decimal text — `Integer.parse/1` keeps the
+    # explicit `+` sign the table below accepts.
     for {value, status} <- [
           {"0", 200},
           {"+1", 200},
