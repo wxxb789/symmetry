@@ -189,7 +189,7 @@ ExUnit.start(max_cases: 28)                       # sandbox mode line unchanged 
 Ecto.Adapters.SQL.Sandbox.mode(SymmetryControl.Repo, :manual)
 ```
 
-`28` is pinned rather than left at ExUnit's default because 26 modules are async after the
+`28` is pinned rather than left at ExUnit's default because 27 modules are async after the
 conversion: the default on this host (32) already exceeds the pool coupling below, and on the
 4-scheduler CI runner it is 8, below the module count. The effective ceiling each gate run printed
 (`Running ExUnit with seed: N, max_cases: 28`) is recorded in the answer, together with the
@@ -217,8 +217,8 @@ coupling explicit.
    `portal_controller_test.exs` fail here by design (`PortalBundle.require_staged!/1`). The same flag
    is applied to the pre-slice and post-slice runs; CI stages the artifact in the `portal-assets`
    download step of the `control` job and runs the bare `mix test`.
-3. **`max_cases` bounds modules.** With 15 existing + 11 converted = 26 async modules, a ceiling
-   below 26 serializes the pool; the pinned value must be ≥ 26 and satisfy the pool coupling, and the
+3. **`max_cases` bounds modules.** With 16 existing + 11 converted = 27 async modules, a ceiling
+   below 27 serializes the pool; the pinned value must be ≥ 27 and satisfy the pool coupling, and the
    pre/post wall time is reported with the effective ceiling each run printed.
 4. **The mutation check is the lock-contention probe** (amended F2): two converted files take the
    same two advisory keys (41, 42) in opposite order, each waiting for the peer's first key, and the

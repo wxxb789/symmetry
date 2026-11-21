@@ -1,6 +1,6 @@
 # Each concurrent async module holds one sandbox owner connection, so this ceiling is
 # coupled to the Repo pool in config/test.exs: max_cases + 2 <= pool_size (the +2 is the
-# sync module's connection and the app's own pool user). 28 leaves headroom over the 26
+# sync module's connection and the app's own pool user). 28 leaves headroom over the 27
 # async modules the suite declares (one lives in the sync pi_control_e2e file); ExUnit's
 # default (schedulers_online() * 2) is 32 here - over the coupling - and 8 on the CI runner.
 ExUnit.start(max_cases: 28)
