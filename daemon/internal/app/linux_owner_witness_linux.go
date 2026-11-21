@@ -2843,7 +2843,7 @@ func (witness *linuxV2NativeWitnessRun) runFresh(ctx context.Context, store *sta
 	key := state.RunKey{RunID: witness.request.RunKey.RunID, Generation: witness.request.RunKey.Generation}
 	witnessDaemon.mu.Lock()
 	witnessDaemon.running[key] = &runningRun{
-		claimed:              true,
+		runLifecycle:         runLifecycle{claimed: true},
 		localLeaseDeadlineAt: witness.request.Claim.LeaseExpiresAt,
 	}
 	witnessDaemon.mu.Unlock()

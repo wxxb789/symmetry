@@ -2282,8 +2282,11 @@ func TestLinuxV2AdmissionAllowsOnlyCurrentLiveForeignOwners(t *testing.T) {
 	}
 	process := &linuxV2AdmissionStatusFakeProcess{status: status}
 	active := &runningRun{
-		process: process, nativeSession: &fakeNativeGoalSession{}, claimed: true,
-		starting: true, nativeStartInFlight: true,
+		process: process, nativeSession: &fakeNativeGoalSession{}, runLifecycle: runLifecycle{
+			claimed:             true,
+			starting:            true,
+			nativeStartInFlight: true,
+		},
 		localLeaseDeadlineAt: time.Now().Add(time.Minute), leaseSequence: 1,
 	}
 	app := &daemon{
@@ -2994,7 +2997,7 @@ func linuxV2AppTestDaemon(t *testing.T, store *state.Store, key state.RunKey, re
 	return &daemon{
 		store: store, runtimeID: journal.RuntimeID, runtimeEpoch: journal.ClaimedRuntimeEpoch,
 		running: map[state.RunKey]*runningRun{
-			key: {claimed: true, localLeaseDeadlineAt: time.Now().Add(time.Minute)},
+			key: {runLifecycle: runLifecycle{claimed: true}, localLeaseDeadlineAt: time.Now().Add(time.Minute)},
 		},
 		options: options{clock: time.Now, localClock: time.Now}, recoveryOnly: recoveryOnly,
 	}

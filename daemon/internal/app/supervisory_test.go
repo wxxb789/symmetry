@@ -28,7 +28,7 @@ func supervisoryDaemon(t *testing.T) (*daemon, state.RunKey, *recordingProcess) 
 		config: config.Config{Runtime: config.Runtime{AgentProfile: "supervised"}, AgentProfiles: map[string]config.AgentProfile{"supervised": {SupervisoryControl: true, Interactive: true, InputMode: config.InputModeJSON, EventFormat: config.EventFormatJSONL}}},
 		store:  store, options: options{newID: ids()}, control: &orderingControl{recordEvents: true}, workspace: &fakeWorkspace{},
 		log:     slog.New(slog.NewJSONHandler(io.Discard, nil)),
-		running: map[state.RunKey]*runningRun{key: {process: process, claimed: true, cleanupBlocked: true}},
+		running: map[state.RunKey]*runningRun{key: {process: process, runLifecycle: runLifecycle{claimed: true}, cleanupBlocked: true}},
 	}
 	return app, key, process
 }

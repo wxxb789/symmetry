@@ -1194,9 +1194,7 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 	if terminalObserved && daemon.isCancelled(key) && daemon.transferNativeStartTerminal(key, active, session) {
 		daemon.mu.Lock()
 		if daemon.running[key] == active && nativeTerminalOwnedBy(active, active.nativeTerminalOwnerClaim) {
-			active.nativeCancelCommandID = active.cancelCommandID
-			active.nativeCancelTerminalObserved = true
-			active.nativeCancelRejected = true
+			active.recordNativeCancelObserved(active.cancelCommandID, true, true)
 		}
 		daemon.mu.Unlock()
 		daemon.waitForNativeRun(daemon.failedStartFinalizationContext(), key, active, session)
@@ -1277,18 +1275,13 @@ func (daemon *daemon) requireNativeSessionCloseRetry(key state.RunKey, session h
 	var published func()
 	daemon.mu.Lock()
 	if active := daemon.running[key]; active != nil && active.nativeSession == session {
-		active.nativeCloseRetryRequired = true
-		active.cleanupBlocked = nativeCleanupBlocked(active)
+		active.requireCloseRetry()
 		published = daemon.options.nativeCloseRetryPublished
 	}
 	daemon.mu.Unlock()
 	if published != nil {
 		published()
 	}
-}
-
-func nativeCleanupBlocked(active *runningRun) bool {
-	return active.nativeTerminalOwner || active.nativeCloseRetryRequired || active.nativeCloseRetrying || active.nativeUsageRetryPending || active.nativeUsageRetryInFlight || active.nativeUsageRetryExhausted
 }
 
 func (daemon *daemon) abortGoalSessionLaunchBeforeNativeStart(key state.GoalSessionKey) error {
@@ -1330,7 +1323,7 @@ func (daemon *daemon) retryBlockedNativeSessionCloses() {
 		if active.nativeSession == nil || active.goalSession == nil || !active.nativeCloseRetryRequired || active.nativeCloseRetrying {
 			continue
 		}
-		active.nativeCloseRetrying = true
+		active.beginCloseRetry()
 		blocked = append(blocked, blockedNativeSession{key: key, active: active, session: active.nativeSession})
 	}
 	daemon.mu.Unlock()
@@ -1345,7 +1338,7 @@ func (daemon *daemon) retryBlockedNativeSessionCloses() {
 		}
 		daemon.mu.Lock()
 		if daemon.running[candidate.key] == candidate.active {
-			candidate.active.nativeCloseRetrying = false
+			candidate.active.endCloseRetry()
 		}
 		daemon.mu.Unlock()
 	}

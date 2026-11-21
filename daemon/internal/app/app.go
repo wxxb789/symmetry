@@ -1308,7 +1308,7 @@ func (daemon *daemon) startAssignment(ctx context.Context, assignment protocol.A
 		return
 	}
 	runContext, cancel := context.WithCancel(ctx)
-	daemon.running[key] = &runningRun{starting: true, cancel: cancel, slotHeld: true, cleanupBlocked: true}
+	daemon.running[key] = &runningRun{runLifecycle: runLifecycle{starting: true, cancel: cancel, slotHeld: true}, cleanupBlocked: true}
 	daemon.mu.Unlock()
 	daemon.workers.Add(1)
 	go func() {
@@ -1414,7 +1414,7 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 	stale := active == nil
 	contextCancelled := ctx.Err() != nil
 	if active != nil {
-		active.claimed = true
+		active.attachClaim()
 		cancelCommandID = active.cancelCommandID
 		stale = active.stale
 	}
@@ -1723,22 +1723,7 @@ func (daemon *daemon) releaseRun(key state.RunKey) {
 	renewCancel := context.CancelFunc(nil)
 	terminalCancel := context.CancelFunc(nil)
 	if active != nil {
-		active.slotHeld = false
-		active.leaseRenewalClosed = true
-		if active.nativeTerminalOwner {
-			active.nativeTerminalOwner = false
-			active.nativeTerminalOwnerClaim = 0
-			active.nativeStartTerminalOwner = false
-			if active.terminalizing > 0 {
-				active.terminalizing--
-			}
-		}
-		active.nativeUsageRetryOwnerClaim = 0
-		renewCancel = active.renewCancel
-		active.renewCancel = nil
-		active.renewCancelID++
-		terminalCancel = active.terminalCancel
-		active.terminalCancel = nil
+		renewCancel, terminalCancel = active.retireRun()
 	}
 	daemon.mu.Unlock()
 	if active != nil && active.cancel != nil {
@@ -1769,9 +1754,7 @@ func (daemon *daemon) releaseSlotOnce(key state.RunKey) {
 	releaseSlot := active != nil && active.slotHeld
 	terminalCancel := context.CancelFunc(nil)
 	if active != nil {
-		active.slotHeld = false
-		terminalCancel = active.terminalCancel
-		active.terminalCancel = nil
+		terminalCancel = active.releaseSlotOnce()
 	}
 	daemon.mu.Unlock()
 	if terminalCancel != nil {
@@ -1792,7 +1775,7 @@ func (daemon *daemon) scheduleTerminalSlotRelease(key state.RunKey, pendingAt ti
 	}
 	previousCancel := active.terminalCancel
 	timerContext, cancel := context.WithCancel(background)
-	active.terminalCancel = cancel
+	active.reserveTerminalSlotRelease(cancel)
 	daemon.terminalReleaseWG.Add(1)
 	daemon.mu.Unlock()
 	if previousCancel != nil {
@@ -1836,10 +1819,7 @@ func (daemon *daemon) beginTerminal(key state.RunKey) func(bool) {
 		daemon.mu.Unlock()
 		return func(bool) {}
 	}
-	active.terminalizing++
-	renewCancel := active.renewCancel
-	active.renewCancel = nil
-	active.renewCancelID++
+	renewCancel := active.reserveTerminal()
 	daemon.mu.Unlock()
 	if renewCancel != nil {
 		renewCancel()
@@ -1851,12 +1831,9 @@ func (daemon *daemon) beginTerminal(key state.RunKey) func(bool) {
 		if active == nil {
 			return
 		}
-		if active.terminalizing > 0 {
-			active.terminalizing--
-		}
+		active.releaseTerminalReservation()
 		if entered {
-			active.terminal = true
-			active.leaseRenewalClosed = true
+			active.publishTerminal()
 		}
 	}
 }
@@ -2017,7 +1994,7 @@ func (daemon *daemon) releaseTerminalReservation(key state.RunKey) {
 	daemon.mu.Lock()
 	defer daemon.mu.Unlock()
 	if active := daemon.running[key]; active != nil && active.terminalizing > 0 {
-		active.terminalizing--
+		active.releaseTerminalReservation()
 	}
 }
 
@@ -2057,8 +2034,7 @@ func (daemon *daemon) clearCancellationReservation(key state.RunKey, commandID s
 	if active == nil || active.cancelCommandID != commandID || active.terminal {
 		return
 	}
-	active.cancelled = false
-	active.cancelCommandID = ""
+	active.clearCancel()
 }
 
 func (daemon *daemon) rejectCancellationIfTerminalDurable(ctx context.Context, key state.RunKey, commandID string, journal state.RunJournal) bool {
@@ -2132,11 +2108,7 @@ func (daemon *daemon) finishStarting(key state.RunKey, cleanupReady bool) bool {
 	if active == nil {
 		return false
 	}
-	active.starting = false
-	if cleanupReady && active.process == nil && active.nativeSession == nil {
-		active.cleanupBlocked = nativeCleanupBlocked(active)
-	}
-	return active.terminal
+	return active.finishStarting(cleanupReady)
 }
 
 func (daemon *daemon) finishAttachedStart(key state.RunKey) bool {
@@ -2146,13 +2118,9 @@ func (daemon *daemon) finishAttachedStart(key state.RunKey) bool {
 	if active == nil {
 		return false
 	}
-	active.starting = false
-	if active.process == nil && active.nativeSession == nil {
-		active.cleanupBlocked = nativeCleanupBlocked(active)
-	}
 	// Cancellation accepted during native publication is replayed only after
 	// the start owner has settled the returned session.
-	return active.terminal || active.cancelled
+	return active.finishAttachedStart()
 }
 
 func (daemon *daemon) persistWorkspacePath(runContext context.Context, key state.RunKey, path string) bool {

@@ -93,6 +93,10 @@ var defaultLinuxV2NativeOwnerFactory linuxV2NativeOwnerFactory = func(config.Con
 }
 
 type runningRun struct {
+	// runLifecycle owns the run's lifecycle state. runningRun embeds it so every
+	// existing reader keeps its field path; every write to it lives in
+	// run_lifecycle.go.
+	runLifecycle
 	// inputMu serializes stdin delivery with input-related lifecycle mutations.
 	// Never wait for it while holding daemon.mu.
 	inputMu sync.Mutex
@@ -117,67 +121,26 @@ type runningRun struct {
 	nativeDeadline        time.Time
 	prepared              workspace.Prepared
 	output                *agentOutput
-	starting              bool
-	// nativeStartInFlight closes the publication window from Adapter.Start
-	// through the returned StartTurn result. Cancellation and lease expiry may
-	// request stop, but cannot settle until the returned session is visible.
-	nativeStartInFlight         bool
-	nativeStartTerminalObserved bool
-	nativeStartLeaseExpired     bool
-	nativeStartLeaseReason      string
-	claimed                     bool
-	cancel                      context.CancelFunc
-	cancelled                   bool
-	cancelCommandID             string
-	stale                       bool
-	terminal                    bool
-	terminalizing               int
-	nativeTerminalOwner         bool
-	nativeTerminalOwnerClaim    uint64
-	nativeTerminalOwnerSequence uint64
-	nativeStartTerminalOwner    bool
+	startFailure          error
+	// The cleanup memo is the latched value of runLifecycle.cleanupBlocked(),
+	// forced true where a process exit or a retained accounting barrier owes
+	// cleanup regardless of the predicate. It stays declared here because the
+	// predicate method carries the same name; every write to it lives in
+	// run_lifecycle.go.
+	//
 	// A close retry may release the terminal owner only when that retry is the
 	// continuation of cancelled-start compensation, never for another owner.
-	slotHeld                 bool
-	cleanupBlocked           bool
-	processStopWitness       Process
-	processStopPID           int
-	processStopIdentity      string
-	processExited            bool
-	processFinalizeOwner     Process
-	processFinalizeAttempts  int
-	processFinalizeExhausted bool
-	startFailure             error
-	nativeCloseRetryRequired bool
-	nativeCloseRetrying      bool
+	cleanupBlocked bool
 	// Native completion is retained locally until accounting is durably queued.
-	nativeFinalResult            *harness.TaskResult
-	nativeFinalWaitErr           error
-	nativeFinalCloseErr          error
-	nativeFinalAdmission         *protocol.Admission
-	nativeFinalUsage             *protocol.Usage
-	nativeUsageRetryAt           time.Time
-	nativeUsageRetryDeadline     time.Time
-	nativeUsageRetryAttempts     int
-	nativeUsageRetryPending      bool
-	nativeUsageRetryInFlight     bool
-	nativeUsageRetryOwnerClaim   uint64
-	nativeUsageRetryNeedsPrepare bool
-	nativeUsageRenewalBlocked    bool
-	nativeUsageRetryExhausted    bool
-	nativeUsageFinalized         bool
-	nativeCancelCommandID        string
-	nativeCancelTerminalObserved bool
-	nativeCancelRejected         bool
-	nativeCancelTerminateErr     error
-	outputDropWarned             bool
-	stopExecution                context.CancelCauseFunc
-	renewCancel                  context.CancelFunc
-	renewCancelID                uint64
-	localLeaseDeadlineAt         time.Time
-	leaseSequence                uint64
-	leaseRenewalClosed           bool
-	terminalCancel               context.CancelFunc
+	nativeFinalResult    *harness.TaskResult
+	nativeFinalWaitErr   error
+	nativeFinalCloseErr  error
+	nativeFinalAdmission *protocol.Admission
+	nativeFinalUsage     *protocol.Usage
+	outputDropWarned     bool
+	stopExecution        context.CancelCauseFunc
+	localLeaseDeadlineAt time.Time
+	leaseSequence        uint64
 }
 
 type linuxCloneRun struct {
@@ -331,28 +294,6 @@ func (daemon *daemon) withLinuxV2NativeAdmission(
 	return apply(liveOwners)
 }
 
-func claimNativeTerminalOwner(active *runningRun, startOwner bool) uint64 {
-	if !active.nativeTerminalOwner && (active.nativeUsageRetryPending || active.nativeUsageRetryInFlight || active.nativeUsageRetryExhausted || active.nativeUsageRetryOwnerClaim != 0) {
-		// A retry without its originating terminal claim cannot publish or
-		// release anything. A later legitimate owner supersedes that orphaned
-		// in-memory work while retaining the durable usage evidence.
-		active.nativeUsageRetryPending = false
-		active.nativeUsageRetryInFlight = false
-		active.nativeUsageRetryExhausted = false
-		active.nativeUsageRetryOwnerClaim = 0
-	}
-	active.nativeTerminalOwnerSequence++
-	if active.nativeTerminalOwnerSequence == 0 {
-		active.nativeTerminalOwnerSequence++
-	}
-	active.nativeTerminalOwner = true
-	active.nativeTerminalOwnerClaim = active.nativeTerminalOwnerSequence
-	active.nativeStartTerminalOwner = startOwner
-	active.terminalizing++
-	active.cleanupBlocked = nativeCleanupBlocked(active)
-	return active.nativeTerminalOwnerClaim
-}
-
 func nativeTerminalOwnedBy(active *runningRun, ownerClaim uint64) bool {
 	return active != nil && active.nativeTerminalOwner && active.nativeTerminalOwnerClaim == ownerClaim
 }
@@ -366,10 +307,7 @@ func (daemon *daemon) reserveNativeTerminalClaim(key state.RunKey, expected *run
 		daemon.mu.Unlock()
 		return 0, false
 	}
-	ownerClaim := claimNativeTerminalOwner(expected, false)
-	renewCancel := expected.renewCancel
-	expected.renewCancel = nil
-	expected.renewCancelID++
+	ownerClaim, renewCancel := expected.reserveSettlementOwner()
 	daemon.mu.Unlock()
 	if renewCancel != nil {
 		renewCancel()
@@ -389,12 +327,7 @@ func (daemon *daemon) reserveNativeObservedTerminalClaim(key state.RunKey, expec
 		daemon.eventReceiptMu.Unlock()
 		return 0, false
 	}
-	ownerClaim := claimNativeTerminalOwner(expected, true)
-	expected.nativeStartTerminalObserved = true
-	expected.nativeUsageRenewalBlocked = true
-	renewCancel := expected.renewCancel
-	expected.renewCancel = nil
-	expected.renewCancelID++
+	ownerClaim, renewCancel := expected.claimObservedSettlementOwner()
 	daemon.mu.Unlock()
 	daemon.eventReceiptMu.Unlock()
 	if renewCancel != nil {
@@ -420,7 +353,7 @@ func (daemon *daemon) beginNativeStart(key state.RunKey) bool {
 		(!active.localLeaseDeadlineAt.IsZero() && !now.Before(active.localLeaseDeadlineAt)) {
 		return false
 	}
-	active.nativeStartInFlight = true
+	active.beginNativeStartPublication()
 	return true
 }
 
@@ -437,19 +370,14 @@ func (daemon *daemon) publishNativeStartResult(key state.RunKey, session harness
 	if active == nil || session == nil {
 		return
 	}
-	admissionCopy := admission
-	active.nativeSession = session
-	active.goalSession = &sessionKey
-	active.goalAdmission = &admissionCopy
-	active.prepared = prepared
-	active.cleanupBlocked = true
+	active.publishNativeStartResult(session, sessionKey, admission, prepared)
 }
 
 func (daemon *daemon) finishNativeStartPublication(key state.RunKey) {
 	daemon.mu.Lock()
 	defer daemon.mu.Unlock()
 	if active := daemon.running[key]; active != nil {
-		active.nativeStartInFlight = false
+		active.endNativeStartPublication()
 	}
 }
 
@@ -470,14 +398,8 @@ func (daemon *daemon) transferNativeStartTerminal(key state.RunKey, expected *ru
 	if !terminalObserved && !usageObserved {
 		return false
 	}
-	active.nativeStartInFlight = false
-	if terminalObserved {
-		active.stale = false
-		active.nativeDeadline = time.Time{}
-	}
-	claimNativeTerminalOwner(active, true)
-	active.nativeUsageRenewalBlocked = true
-	active.cleanupBlocked = nativeCleanupBlocked(active)
+	active.transferNativeStartTerminal(terminalObserved)
+	active.claimStartedSettlementOwner()
 	return true
 }
 
@@ -499,13 +421,7 @@ func (daemon *daemon) releaseNativeTerminalOwner(key state.RunKey, expected *run
 	if active != expected || !nativeTerminalOwnedBy(active, ownerClaim) {
 		return
 	}
-	active.nativeTerminalOwner = false
-	active.nativeTerminalOwnerClaim = 0
-	active.nativeStartTerminalOwner = false
-	if active.terminalizing > 0 {
-		active.terminalizing--
-	}
-	active.cleanupBlocked = nativeCleanupBlocked(active)
+	active.releaseSettlementOwner()
 }
 
 func (daemon *daemon) finalizeConclusiveNativeTerminalOwner(key state.RunKey, expected *runningRun, ownerClaim uint64) {
@@ -515,18 +431,7 @@ func (daemon *daemon) finalizeConclusiveNativeTerminalOwner(key state.RunKey, ex
 	if active != expected || !nativeTerminalOwnedBy(active, ownerClaim) {
 		return
 	}
-	active.nativeUsageFinalized = true
-	active.nativeUsageRetryPending = false
-	active.nativeUsageRetryInFlight = false
-	active.nativeUsageRetryExhausted = false
-	active.nativeUsageRetryOwnerClaim = 0
-	active.nativeTerminalOwner = false
-	active.nativeTerminalOwnerClaim = 0
-	active.nativeStartTerminalOwner = false
-	if active.terminalizing > 0 {
-		active.terminalizing--
-	}
-	active.cleanupBlocked = nativeCleanupBlocked(active)
+	active.finalizeConclusiveSettlement()
 }
 
 func processDetails(process Process) (int, string, error) {
@@ -718,16 +623,7 @@ func (daemon *daemon) settleCancelledNativeStart(ctx context.Context, key state.
 	}
 	commandID := active.cancelCommandID
 	if active.nativeStartTerminalObserved {
-		claimNativeTerminalOwner(active, true)
-		active.nativeStartInFlight = false
-		active.nativeCancelCommandID = commandID
-		active.nativeCancelTerminalObserved = true
-		active.nativeCancelRejected = true
-		active.nativeUsageRenewalBlocked = true
-		active.cleanupBlocked = nativeCleanupBlocked(active)
-		renewCancel := active.renewCancel
-		active.renewCancel = nil
-		active.renewCancelID++
+		renewCancel := active.settleCancelledStartWithObservedTerminal(commandID)
 		daemon.mu.Unlock()
 		daemon.eventReceiptMu.Unlock()
 		if renewCancel != nil {
@@ -736,11 +632,8 @@ func (daemon *daemon) settleCancelledNativeStart(ctx context.Context, key state.
 		daemon.waitForNativeRun(daemon.failedStartFinalizationContext(), key, active, session)
 		return true, nil
 	}
-	ownerClaim := claimNativeTerminalOwner(active, false)
-	active.nativeStartInFlight = false
-	renewCancel := active.renewCancel
-	active.renewCancel = nil
-	active.renewCancelID++
+	ownerClaim := active.claimSettlementOwner(false)
+	renewCancel := active.endNativeStartPublicationWithRenewal()
 	daemon.mu.Unlock()
 	daemon.eventReceiptMu.Unlock()
 	if renewCancel != nil {
@@ -783,10 +676,8 @@ func (daemon *daemon) settleCancelledNativeStart(ctx context.Context, key state.
 		}
 		daemon.mu.Lock()
 		if daemon.running[key] == active {
-			active.nativeCancelCommandID = commandID
-			active.nativeCancelTerminalObserved = false
-			active.nativeCancelRejected = false
-			active.nativeCancelTerminateErr = terminalDiagnosticErr
+			active.recordNativeCancelObserved(commandID, false, false)
+			active.recordNativeCancelTerminateErr(terminalDiagnosticErr)
 		}
 		daemon.mu.Unlock()
 		var usageResult *harness.TaskResult
@@ -834,13 +725,7 @@ func (daemon *daemon) publishNativeCloseRetrySuccess(key state.RunKey, expected 
 	if active != expected || active.nativeSession != session {
 		return
 	}
-	active.nativeSession = nil
-	active.goalSession = nil
-	active.goalAdmission = nil
-	active.nativeDeadline = time.Time{}
-	active.nativeCloseRetryRequired = false
-	active.nativeCloseRetrying = false
-	active.cleanupBlocked = nativeCleanupBlocked(active)
+	active.publishCloseRetrySuccess()
 }
 
 func (daemon *daemon) publishNativeCloseRetryAfterEvidence(key state.RunKey, active *runningRun, session harness.Session, goalSession state.GoalSessionKey, reason string, markUncertain bool) error {
@@ -1294,25 +1179,11 @@ func (daemon *daemon) recordGenericProcessExit(key state.RunKey, expected *runni
 		daemon.mu.Unlock()
 		return false
 	}
-	expected.cleanupBlocked = true
-	expected.processExited = true
-	if expected.processFinalizeOwner != process {
-		expected.processFinalizeOwner = process
-		expected.processFinalizeAttempts = 0
-		expected.processFinalizeExhausted = false
+	if expected.markProcessExited(process) {
 		delete(daemon.cleanupRetry, key)
 	}
-	if stopped {
-		expected.processStopWitness = process
-		expected.processStopPID = pid
-		expected.processStopIdentity = identity
-		expected.processFinalizeAttempts = 0
-		expected.processFinalizeExhausted = false
+	if expected.recordProcessStop(process, pid, identity, stopped) {
 		delete(daemon.cleanupRetry, key)
-	} else {
-		expected.processStopWitness = nil
-		expected.processStopPID = 0
-		expected.processStopIdentity = ""
 	}
 	daemon.mu.Unlock()
 	if !stopped {
@@ -1486,14 +1357,7 @@ func (daemon *daemon) completeNativeRunAfterUsageOwned(ctx context.Context, key 
 			daemon.mu.Lock()
 			if daemon.running[key] == active && active.nativeUsageRetryOwnerClaim == ownerClaim && (settlementDone || nativeTerminalOwnedBy(active, ownerClaim)) {
 				retryCurrent = true
-				active.nativeUsageRetryInFlight = false
-				if !settlementDone && !active.nativeUsageFinalized {
-					active.nativeUsageRetryPending = true
-					active.nativeUsageRetryAt = time.Time{}
-				} else {
-					active.nativeUsageRetryOwnerClaim = 0
-				}
-				active.cleanupBlocked = nativeCleanupBlocked(active)
+				active.finishUsageRetryInFlight(settlementDone)
 				cleanupReady = settlementDone && !active.cleanupBlocked
 				staleCleanup = cleanupReady && active.stale
 			}
@@ -1544,19 +1408,12 @@ func (daemon *daemon) completeNativeRunAfterUsageOwned(ctx context.Context, key 
 	nativeCancelTerminalObserved := active.nativeCancelTerminalObserved
 	nativeCancelRejected := active.nativeCancelRejected
 	nativeCancelTerminateErr := active.nativeCancelTerminateErr
-	active.nativeUsageRetryPending = false
-	if !usageRetryCompletion {
-		active.nativeUsageRetryInFlight = false
-	}
 	// The native session has reached its final turn barrier. Keep renewal
 	// disabled until releaseRun, even if terminal transition persistence later
 	// needs another recovery pass.
-	active.nativeUsageRenewalBlocked = true
-	active.nativeCancelTerminalObserved = false
-	active.nativeCancelRejected = false
 	// closeErr is terminal diagnosis from this observation. The current retry
 	// and accounting flags, rather than that historical error, own cleanup.
-	active.cleanupBlocked = nativeCleanupBlocked(active)
+	active.clearUsageRetryBeforePublication(usageRetryCompletion)
 	daemon.mu.Unlock()
 	if stale {
 		active.inputMu.Unlock()
@@ -1599,7 +1456,7 @@ func (daemon *daemon) completeNativeRunAfterUsageOwned(ctx context.Context, key 
 			settlementDone = true
 			daemon.mu.Lock()
 			if daemon.running[key] == active {
-				active.nativeUsageFinalized = true
+				active.markUsageFinalized()
 			}
 			daemon.mu.Unlock()
 			if err := daemon.clearNativeUsageRecoveryBarrier(key); err != nil && daemon.log != nil {
@@ -1640,7 +1497,7 @@ func (daemon *daemon) completeNativeRunAfterUsageOwned(ctx context.Context, key 
 			settlementDone = true
 			daemon.mu.Lock()
 			if daemon.running[key] == active {
-				active.nativeUsageFinalized = true
+				active.markUsageFinalized()
 			}
 			daemon.mu.Unlock()
 			if err := daemon.clearNativeUsageRecoveryBarrier(key); err != nil && daemon.log != nil {
@@ -1672,7 +1529,7 @@ func (daemon *daemon) completeNativeRunAfterUsageOwned(ctx context.Context, key 
 		settlementDone = true
 		daemon.mu.Lock()
 		if daemon.running[key] == active {
-			active.nativeUsageFinalized = true
+			active.markUsageFinalized()
 		}
 		daemon.mu.Unlock()
 		if err := daemon.clearNativeUsageRecoveryBarrier(key); err != nil && daemon.log != nil {
@@ -1713,16 +1570,7 @@ func (daemon *daemon) deferNativeUsageRetry(key state.RunKey, active *runningRun
 		finalUsage := cloneNativeUsage(*usage)
 		active.nativeFinalUsage = &finalUsage
 	}
-	active.nativeUsageRetryAttempts = 1
-	active.nativeUsageRetryAt = now.Add(minimumInterval)
-	active.nativeUsageRetryDeadline = now.Add(nativeUsageRetryWindow)
-	active.nativeUsageRetryPending = true
-	active.nativeUsageRetryInFlight = false
-	active.nativeUsageRetryOwnerClaim = ownerClaim
-	active.nativeUsageRetryNeedsPrepare = needsPrepare
-	active.nativeUsageRenewalBlocked = true
-	active.nativeUsageRetryExhausted = false
-	active.cleanupBlocked = true
+	active.scheduleUsageRetry(ownerClaim, needsPrepare, now)
 	finalAdmission := active.nativeFinalAdmission
 	cancelCommandID := active.nativeCancelCommandID
 	cancelTerminalObserved := active.nativeCancelTerminalObserved
@@ -1776,15 +1624,10 @@ func (daemon *daemon) flushPendingNativeUsage(ctx context.Context) {
 			usage := cloneNativeUsage(*active.nativeFinalUsage)
 			work.usage = &usage
 		}
-		if active.nativeUsageRetryAttempts >= nativeUsageRetryLimit || (!active.nativeUsageRetryDeadline.IsZero() && !now.Before(active.nativeUsageRetryDeadline)) {
-			active.nativeUsageRetryPending = false
-			active.nativeUsageRetryInFlight = false
-			active.nativeUsageRetryExhausted = true
-			active.nativeUsageRenewalBlocked = true
+		if !active.startUsageRetryAttempt(now) {
 			exhausted = append(exhausted, work)
 			continue
 		}
-		active.nativeUsageRetryInFlight = true
 		retries = append(retries, work)
 	}
 	daemon.mu.Unlock()
@@ -1829,18 +1672,7 @@ func (daemon *daemon) noteNativeUsageRetryFailure(ctx context.Context, key state
 		daemon.mu.Unlock()
 		return
 	}
-	active.nativeUsageRetryInFlight = false
-	active.nativeUsageRetryAttempts++
-	attempt = active.nativeUsageRetryAttempts
-	if active.nativeUsageRetryAttempts >= nativeUsageRetryLimit || (!active.nativeUsageRetryDeadline.IsZero() && !now.Before(active.nativeUsageRetryDeadline)) {
-		active.nativeUsageRetryPending = false
-		active.nativeUsageRetryExhausted = true
-		active.nativeUsageRenewalBlocked = true
-		exhausted = true
-	} else {
-		active.nativeUsageRetryPending = true
-		active.nativeUsageRetryAt = now.Add(nativeUsageRetryDelay(active.nativeUsageRetryAttempts))
-	}
+	attempt, exhausted = active.recordUsageRetryFailure(now)
 	daemon.mu.Unlock()
 
 	if exhausted {
@@ -1873,7 +1705,7 @@ func (daemon *daemon) exhaustNativeUsageRetry(ctx context.Context, key state.Run
 		daemon.mu.Unlock()
 		return
 	}
-	active.nativeUsageRetryOwnerClaim = ownerClaim
+	active.ownUsageRetry(ownerClaim)
 	daemon.mu.Unlock()
 	daemon.exhaustNativeUsageRetryOwned(ctx, key, active, ownerClaim, cause)
 }
@@ -1884,12 +1716,7 @@ func (daemon *daemon) exhaustNativeUsageRetryOwned(ctx context.Context, key stat
 		daemon.mu.Unlock()
 		return
 	}
-	active.nativeUsageRetryPending = false
-	active.nativeUsageRetryInFlight = false
-	active.nativeUsageRetryExhausted = true
-	active.nativeUsageRenewalBlocked = true
-	active.stale = true
-	active.cleanupBlocked = true
+	active.exhaustUsageRetryForCleanup()
 	cancelCommandID := active.nativeCancelCommandID
 	cancelTerminalObserved := active.nativeCancelTerminalObserved
 	cancelRejected := cancelTerminalObserved && active.nativeCancelRejected
@@ -2035,9 +1862,7 @@ func (daemon *daemon) rememberNativeFinalUsage(key state.RunKey, active *running
 	if daemon.running[key] != active {
 		return
 	}
-	copy := cloneNativeUsage(usage)
-	active.nativeFinalUsage = &copy
-	active.nativeUsageRetryNeedsPrepare = false
+	active.rememberFinalUsage(usage)
 }
 
 func cloneNativeUsage(usage protocol.Usage) protocol.Usage {
@@ -2378,7 +2203,7 @@ func (daemon *daemon) stopAll() {
 	daemon.mu.Lock()
 	processes := make([]Process, 0, len(daemon.running))
 	for _, run := range daemon.running {
-		run.cancelled = true
+		run.markCancelled()
 		if run.cancel != nil {
 			run.cancel()
 		}

@@ -459,15 +459,10 @@ func (daemon *daemon) queueEvent(key state.RunKey, kind string, payload json.Raw
 		daemon.mu.Lock()
 		if active := daemon.running[key]; active != nil {
 			if active.nativeStartInFlight {
-				active.nativeStartTerminalObserved = true
+				active.markNativeStartTerminalObserved()
 			}
 			if active.nativeSession != nil && !active.nativeTerminalOwner && !active.cancelled && !active.stale && !active.terminal && active.terminalizing == 0 {
-				claimNativeTerminalOwner(active, true)
-				active.nativeStartTerminalObserved = true
-				active.nativeUsageRenewalBlocked = true
-				renewCancel = active.renewCancel
-				active.renewCancel = nil
-				active.renewCancelID++
+				_, renewCancel = active.claimObservedSettlementOwner()
 			}
 		}
 		daemon.mu.Unlock()

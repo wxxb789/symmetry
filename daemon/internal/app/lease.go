@@ -451,9 +451,7 @@ func (daemon *daemon) renewLeaseWithTimingAndStart(ctx context.Context, journal 
 		requestLimit = controlRequestLimit
 	}
 	renewalContext, cancel := context.WithTimeout(ctx, requestLimit)
-	active.renewCancelID++
-	renewalID = active.renewCancelID
-	active.renewCancel = cancel
+	renewalID = active.beginRenewal(cancel)
 	daemon.mu.Unlock()
 	requestID := daemon.beginCommandRequest()
 	response, err := daemon.control.RenewLease(renewalContext, journal.RunID, protocol.LeaseHeartbeatRequest{Fence: journal.Fence()})
@@ -464,7 +462,7 @@ func (daemon *daemon) renewLeaseWithTimingAndStart(ctx context.Context, journal 
 	}
 	daemon.mu.Lock()
 	if active := daemon.running[journal.Key()]; active != nil && active.renewCancelID == renewalID {
-		active.renewCancel = nil
+		active.clearRenewal()
 	}
 	daemon.mu.Unlock()
 	elapsed := daemon.localNow().Sub(requestStarted)
@@ -511,17 +509,7 @@ func (daemon *daemon) terminateForLease(journal state.RunJournal, reason string)
 		return
 	}
 	if active != nil && active.nativeStartInFlight {
-		if !active.nativeStartLeaseExpired {
-			active.nativeStartLeaseExpired = true
-			active.nativeStartLeaseReason = reason
-		}
-		active.stale = true
-		active.leaseRenewalClosed = true
-		startCancel := active.cancel
-		active.cancel = nil
-		renewCancel := active.renewCancel
-		active.renewCancel = nil
-		active.renewCancelID++
+		startCancel, renewCancel := active.markLeaseLostDuringStart(reason)
 		daemon.mu.Unlock()
 		daemon.eventReceiptMu.Unlock()
 		if startCancel != nil {
@@ -541,18 +529,8 @@ func (daemon *daemon) terminateForLease(journal state.RunJournal, reason string)
 	nativeSettlementOwned := false
 	var renewCancel context.CancelFunc
 	if active != nil {
-		active.cancelled = true
-		active.stale = true
 		process = active.process
-		if active.nativeSession != nil {
-			claimNativeTerminalOwner(active, true)
-			active.nativeUsageRenewalBlocked = true
-			active.leaseRenewalClosed = true
-			renewCancel = active.renewCancel
-			active.renewCancel = nil
-			active.renewCancelID++
-			nativeSettlementOwned = true
-		}
+		renewCancel, nativeSettlementOwned = active.markLeaseLostWithSettlement()
 		if active.cancel != nil {
 			active.cancel()
 		}
