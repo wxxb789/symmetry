@@ -1,6 +1,8 @@
 defmodule SymmetryControlWeb.DaemonController do
   use SymmetryControlWeb, :controller
 
+  import SymmetryControlWeb.QueryParams
+
   alias SymmetryControl.Goals
   alias SymmetryControl.Goals.ContractValidation
   alias SymmetryControl.Integrations.ProviderAccess
@@ -31,13 +33,6 @@ defmodule SymmetryControlWeb.DaemonController do
     else
       _ ->
         Protocol.error(conn, :invalid_request)
-    end
-  end
-
-  defp idempotency_key(conn) do
-    case get_req_header(conn, "idempotency-key") do
-      [key] when byte_size(key) > 0 -> {:ok, key}
-      _ -> {:error, :invalid_request}
     end
   end
 
@@ -94,7 +89,7 @@ defmodule SymmetryControlWeb.DaemonController do
 
     with {:ok, runtime_epoch} <- query_value(conn, "runtime_epoch"),
          :ok <- owns_runtime(conn, runtime_id),
-         {:ok, epoch} <- integer(runtime_epoch),
+         {:ok, epoch} <- wire_integer(runtime_epoch, {1, :infinity}),
          {:ok, snapshot} <- Orchestration.work_snapshot(runtime_id, epoch) do
       json(conn, Protocol.snapshot(snapshot))
     else
@@ -481,13 +476,25 @@ defmodule SymmetryControlWeb.DaemonController do
 
   defp acknowledgement_body(_body), do: {:error, :invalid_request}
 
-  @fence_fields ["runtime_id", "runtime_epoch", "generation", "claim_id", "lease_token"]
+  # The one fence rule: the daemon presents these five fields, in this order, on
+  # every fenced request. `:string` is a non-empty string; the integers are any
+  # positive integer (no upper bound; the baseline accepted the same set). Only
+  # the carrier differs — a JSON body carries the number, a query string the
+  # decimal text.
+  @fence_spec [
+    {"runtime_id", :string},
+    {"runtime_epoch", :integer},
+    {"generation", :integer},
+    {"claim_id", :string},
+    {"lease_token", :string}
+  ]
+  @fence_keys Enum.map(@fence_spec, &elem(&1, 0))
 
   defp fenced_body(body, run_id, run_id_mode) when is_map(body) do
-    with {:ok, fence} <- fence(body),
+    with {:ok, fence} <- fence(body, :body),
          false <- Map.has_key?(body, "machine_id"),
          :ok <- run_id_matches?(body, run_id, run_id_mode) do
-      {:ok, fence, body |> Map.drop(@fence_fields) |> Protocol.normalize_map()}
+      {:ok, fence, body |> Map.drop(@fence_keys) |> Protocol.normalize_map()}
     else
       true -> {:error, :invalid_request}
       {:error, reason} -> {:error, reason}
@@ -497,9 +504,16 @@ defmodule SymmetryControlWeb.DaemonController do
   defp query_fence(conn) do
     query = fetch_query_params(conn).query_params
 
-    with {:ok, fence} <- query_fence_values(query),
+    # `machine_id` is already outside the accepted key set the subset check
+    # below enforces, so this explicit check never refuses anything on its own
+    # and its failure path is a `with`-clause error. It keeps the pre-merge
+    # branch shape deliberately: turning it into a served 400 would change an
+    # error response outside this slice's byte-identical wire contract. The
+    # defect and its one-line fix are recorded in
+    # docs/plans/2026-11-21-rf-w2-03-controller-plumbing-plan.md (CW-7).
+    with {:ok, fence} <- fence(query, :query),
          false <- Map.has_key?(query, "machine_id"),
-         true <- MapSet.subset?(MapSet.new(Map.keys(query)), MapSet.new(@fence_fields)) do
+         true <- MapSet.subset?(MapSet.new(Map.keys(query)), MapSet.new(@fence_keys)) do
       {:ok, fence}
     else
       false -> {:error, :invalid_request}
@@ -507,39 +521,22 @@ defmodule SymmetryControlWeb.DaemonController do
     end
   end
 
-  defp fence(params) do
-    with {:ok, runtime_id} <- nonempty_string(params, "runtime_id"),
-         {:ok, runtime_epoch} <- positive_integer(params, "runtime_epoch"),
-         {:ok, generation} <- positive_integer(params, "generation"),
-         {:ok, claim_id} <- nonempty_string(params, "claim_id"),
-         {:ok, lease_token} <- nonempty_string(params, "lease_token") do
-      {:ok,
-       %{
-         "runtime_id" => runtime_id,
-         "runtime_epoch" => runtime_epoch,
-         "generation" => generation,
-         "claim_id" => claim_id,
-         "lease_token" => lease_token
-       }}
-    end
+  defp fence(params, carrier) when is_map(params) do
+    Enum.reduce_while(@fence_spec, {:ok, %{}}, fn {key, kind}, {:ok, fence} ->
+      case fence_value(kind, carrier, params, key) do
+        {:ok, value} -> {:cont, {:ok, Map.put(fence, key, value)}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
   end
 
-  defp query_fence_values(params) do
-    with {:ok, runtime_id} <- nonempty_string(params, "runtime_id"),
-         {:ok, runtime_epoch} <- query_positive_integer(params, "runtime_epoch"),
-         {:ok, generation} <- query_positive_integer(params, "generation"),
-         {:ok, claim_id} <- nonempty_string(params, "claim_id"),
-         {:ok, lease_token} <- nonempty_string(params, "lease_token") do
-      {:ok,
-       %{
-         "runtime_id" => runtime_id,
-         "runtime_epoch" => runtime_epoch,
-         "generation" => generation,
-         "claim_id" => claim_id,
-         "lease_token" => lease_token
-       }}
-    end
-  end
+  defp fence_value(:string, _carrier, params, key), do: nonempty_string(params, key)
+
+  defp fence_value(:integer, :body, params, key),
+    do: json_integer(Map.get(params, key), {1, :infinity})
+
+  defp fence_value(:integer, :query, params, key),
+    do: query_integer(Map.get(params, key), {1, :infinity})
 
   defp run_id_matches?(body, _run_id, :absent) do
     if Map.has_key?(body, "run_id"), do: {:error, :invalid_request}, else: :ok
@@ -555,26 +552,6 @@ defmodule SymmetryControlWeb.DaemonController do
     end
   end
 
-  defp positive_integer(params, key) do
-    case Map.get(params, key) do
-      value when is_integer(value) and value > 0 -> {:ok, value}
-      _ -> {:error, :invalid_request}
-    end
-  end
-
-  defp query_positive_integer(params, key) do
-    case Map.get(params, key) do
-      value when is_binary(value) ->
-        case Integer.parse(value) do
-          {parsed, ""} when parsed > 0 -> {:ok, parsed}
-          _ -> {:error, :invalid_request}
-        end
-
-      _ ->
-        {:error, :invalid_request}
-    end
-  end
-
   defp receipt(conn, response, :created), do: conn |> put_status(:created) |> json(response)
   defp receipt(conn, response, :replayed), do: json(conn, response)
 
@@ -585,9 +562,6 @@ defmodule SymmetryControlWeb.DaemonController do
     do: conn |> body_params() |> Map.drop(path_keys)
 
   defp mutation_params(params, path_keys) when is_map(params), do: Map.drop(params, path_keys)
-
-  defp body_params(conn) when is_map(conn.body_params), do: conn.body_params
-  defp body_params(_conn), do: %{}
 
   defp body_value(body, key) do
     case Map.fetch(body, key) do
@@ -604,17 +578,6 @@ defmodule SymmetryControlWeb.DaemonController do
   end
 
   defp path_param(conn, key), do: Map.fetch!(conn.path_params, key)
-
-  defp integer(value) when is_integer(value) and value > 0, do: {:ok, value}
-
-  defp integer(value) when is_binary(value) do
-    case Integer.parse(value) do
-      {parsed, ""} when parsed > 0 -> {:ok, parsed}
-      _ -> {:error, :invalid_request}
-    end
-  end
-
-  defp integer(_), do: {:error, :invalid_request}
 
   defp config(key),
     do: Application.fetch_env!(:symmetry_control, :orchestration) |> Keyword.fetch!(key)
