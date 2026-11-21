@@ -42,7 +42,7 @@ jobs:
       run-records: ${{ github.event_name != 'pull_request' || steps.paths.outputs.run-records == 'true' }}
       run-citations: ${{ github.event_name != 'pull_request' || steps.paths.outputs.run-citations == 'true' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         if: github.event_name == 'pull_request'
         with:
           fetch-depth: 2
@@ -73,7 +73,7 @@ jobs:
     if: needs.changes.outputs.run-records == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -99,7 +99,7 @@ jobs:
     if: needs.changes.outputs.run-citations == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -113,7 +113,7 @@ jobs:
     if: needs.changes.outputs.run-heavy == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
         with:
           version: 12.17.0
@@ -194,8 +194,8 @@ jobs:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: symmetry_control_test
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           name: portal-assets
           path: control/priv/static/portal
@@ -203,9 +203,9 @@ jobs:
         with:
           elixir-version: 1.20.4
           otp-version: 29.0.6
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
-          go-version: 1.27.0
+          go-version: 1.27.4
           cache-dependency-path: daemon/go.sum
       - run: mix deps.get
       - name: Measure Credo strict findings (advisory)
@@ -670,7 +670,7 @@ jobs:
             "Upload Linux Pi E2E log and provenance=$UPLOAD_OUTCOME"
           )
           python3 ../scripts/ci/assert-folded-gates.py --job control "${gates[@]}"
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: control-release-linux
           path: ${{ runner.temp }}
@@ -850,8 +850,8 @@ jobs:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: symmetry_control_test
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           name: portal-assets
           path: control/priv/static/portal
@@ -883,10 +883,10 @@ jobs:
       run:
         working-directory: daemon
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
-          go-version: 1.27.0
+          go-version: 1.27.4
           cache-dependency-path: daemon/go.sum
       - name: Prepare ordinary private user and PID namespaces
         working-directory: ${{ github.workspace }}
@@ -917,7 +917,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v4
         with:
           version: 12.17.0
@@ -952,7 +952,7 @@ jobs:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: symmetry_control_test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Initialize Windows Pi E2E workspace
         shell: pwsh
         run: |
@@ -1015,9 +1015,9 @@ jobs:
         with:
           elixir-version: 1.20.4
           otp-version: 29.0.6
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
-          go-version: 1.27.0
+          go-version: 1.27.4
           cache-dependency-path: daemon/go.sum
       - name: Start isolated PostgreSQL loopback
         id: windows_postgres
@@ -1458,10 +1458,10 @@ jobs:
       run:
         working-directory: daemon
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
-          go-version: 1.27.0
+          go-version: 1.27.4
           cache-dependency-path: daemon/go.sum
       # Build tags change `unused`, `gocyclo` and errcheck results, so this `GOOS=linux` pass and
       # its `daemon-windows` twin may not stand in for each other.
@@ -1712,7 +1712,7 @@ jobs:
   legacy-route-audit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: scripts/audit-no-legacy-routes.sh
       # The audit derives its target list from `git ls-files`, so this test proves
       # the derivation covers the placements the retired hand-written list missed
@@ -1853,10 +1853,10 @@ jobs:
       run:
         working-directory: daemon
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
-          go-version: 1.27.0
+          go-version: 1.27.4
           cache-dependency-path: daemon/go.sum
       # The 20-minute job budget leaves room for the pinned release download plus one analysis; the
       # step bounds itself so a hung analysis can only redden itself.
@@ -2039,10 +2039,10 @@ jobs:
       SYMMETRY_CONTRACTS_DIR: ${{ github.workspace }}/contracts
       SYMMETRY_GOALS_ROLLOUT_ENABLED: "true"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # contracts builds this production release once; the archive already
       # carries the portal assets.
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: control-release-linux
           path: ${{ runner.temp }}
@@ -2050,9 +2050,9 @@ jobs:
         with:
           elixir-version: 1.20.4
           otp-version: 29.0.6
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
-          go-version: 1.27.0
+          go-version: 1.27.4
           cache-dependency-path: daemon/go.sum
       - name: Prepare ordinary private user and PID namespaces
         shell: bash
@@ -2330,10 +2330,10 @@ jobs:
     if: needs.changes.outputs.run-heavy == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
-          go-version: '1.27.0'
+          go-version: '1.27.4'
           cache-dependency-path: daemon/go.sum
       # The Compose stack builds docker/control.Dockerfile, which runs
       # `pnpm install --frozen-lockfile` inside the image, so this job installs
