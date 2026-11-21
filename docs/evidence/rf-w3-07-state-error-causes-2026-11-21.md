@@ -14,11 +14,11 @@ Delivered tree: the base commit plus the uncommitted working-tree changes listed
 |---|---|---|
 | `daemon/internal/state/state.go` | modified | +34 / −19 (21 of 46 swept rows) |
 | `daemon/internal/state/provider_action.go` | modified | +47 / −33 (11 of 11 swept rows) |
-| `daemon/internal/state/state_wrap_test.go` | new | 96 |
+| `daemon/internal/state/state_wrap_test.go` | new | 98 |
 | `daemon/internal/state/provider_action_test.go` | modified | +86 (one new test) |
 | `docs/plans/2026-11-21-rf-w3-07-state-error-causes-plan.md` | new | — |
 | `docs/evidence/rf-w3-07-state-error-causes-2026-11-21.md` | new | this record |
-| `docs/TODO.md` | modified | +18 (one dead-code candidate) |
+| `docs/TODO.md` | modified | +19 (one dead-code candidate) |
 
 No exported symbol was added, removed, renamed or moved. No new `//nolint` or
 `credo:disable` suppression. No condition order, limit value or verdict changed except the two
@@ -41,8 +41,9 @@ error variable (`X.Validate() != nil`, `protocol.RejectDuplicateJSONMembers(v) !
 pointer/field presence); typed classification returns (`&NotFoundError{…}`); bare propagation
 (`return err`). Function-literal bodies are swept as fresh scopes. Switch
 `case errors.Is(err, …)` arms are not error branches; `grep -nE 'case .*errors\.(Is|As)\('
-state.go provider_action.go goal_session.go` returns nothing, and the `-all` accounting below
-enumerates every other static return with its enclosing condition.
+state.go provider_action.go goal_session.go` returns nothing; the `-all` accounting below
+classifies every other static return by class (counts only), and the rows listings in Appendix B
+carry each row's condition and returned expression.
 
 **Command** (tool source verbatim in Appendix A; `-selfcheck` validates the tool against a fixture
 with a known classification and exits non-zero if the rule drifts):
@@ -106,7 +107,7 @@ Appendices A/B, so a reviewer can re-run and re-derive them.
 | `state.go:5364` | `:5366` | `decoder.Decode != io.EOF` (guarded arm) — `decode %s` |
 | `state.go:5384` | `:5389` | `decoder.Decode != io.EOF` (guarded arm) — `trailing JSON data` |
 | `state.go:5486` | `:5498` | `store.atomicWrite`/`writeAtomic` — `write %s` |
-| `state.go:5514` | `:5520` | `os.Remove` — `remove run journal temporary file` |
+| `state.go:5514` | `:5526` | `os.Remove` — `remove run journal temporary file` |
 | `state.go:6363` | `:6375` | `json.Unmarshal` — `completed terminal payload is invalid` |
 | `provider_action.go:288` | `:295` | `decoder.Token` — `provider action result has trailing data` |
 | `provider_action.go:290` | `:300`-block | `decoder.Token` — `provider action result has trailing data` |
@@ -115,7 +116,7 @@ Appendices A/B, so a reviewer can re-run and re-derive them.
 
 | base | head | wrapped arm | unchanged arm |
 |---|---|---|---|
-| `state.go:5479` | `:5482`/`:5485` | `encode %s: %w` | `errors.New("encode " + resource)` |
+| `state.go:5479` | `:5488`/`:5491` | `encode %s: %w` | `errors.New("encode " + resource)` |
 | `state.go:6373` | `:6385`/`:6388` | `completed terminal task result kind is invalid: %w` | same message, no cause |
 | `provider_action.go:284` | `:288`/`:291` | `provider action result must be a JSON object: %w` | same message, no cause |
 | `provider_action.go:358` | `:368`/`:371` | `provider action result array is invalid: %w` | same message, no cause |
@@ -148,9 +149,12 @@ control state and the message is that stage's verdict: `:1241`, `:1289`, `:1422`
 `:1539`, `:1707`, `:1796`, `:1800`, `:1960`, `:2014`, `:2045`, `:2397`, `:2666`, `:3035`, `:3046`,
 `:4860`, `:4904`, `:5030`, `:5052`, `:5157`, `:5181`, `:5196`, `:5294`, `:6073`, `:6096`. Four of
 them are additionally pinned byte-exactly by W2-09's first-error pins, with the pin's case
-reaching the error arm: `:6073`/`:6096` (`state_test.go:2532`, `:2540`, `:2548` construct
-`&authority.Supervisor{}` / `&authority.SupervisorHandoff{}` whose `Validate()` is the failing
-condition; the pins compare with `err.Error() != test.want` at `:2914`) and `:5030`/`:5196`
+reaching the error arm: `:6073`/`:6096` (containment-authority wants `state_test.go:2532`, `:2540`,
+`:2548` — `&authority.Supervisor{}` at `:2530`, then `testSupervisorAuthority(...)` with a
+TargetPID / target-identity mismatch at `:2538`/`:2546`; containment-handoff want `:2573` —
+`&authority.SupervisorHandoff{}` at `:2571` — whose case is the one reaching `:6096`, while the
+want at `:2585` takes the byte-identical `:6093` sibling; the pins compare with
+`err.Error() != test.want` at `:2914`) and `:5030`/`:5196`
 (`linux_clone_journal_test.go:2043`, cases "reuse subject mismatch" / "cleanup intent invalid").
 Wrapping those four would change a byte-pinned verdict, which clause 1 forbids; the other 21 have
 the same shape (validation/derivation call + state predicates → stage verdict).
@@ -172,7 +176,7 @@ path maps to a head path with the same outcome and the same message prefix.
 | `state.go:5303-5309` | `err != nil \|\| len(data) > maxJournalFileBytes` → sentinel | `err != nil` → wrapped; `len(data) > …` → sentinel | yes — `err` first, as in `\|\|`; size arm byte-identical |
 | `state.go:5365-5371` | `Decode(&extra) != io.EOF` → static | same condition; `err != nil` → wrapped, else static | yes — condition unchanged, one nested arm added |
 | `state.go:5388-5394` | `Decode(&extra) != io.EOF` → static | same condition; `err != nil` → wrapped, else static | yes |
-| `state.go:5481-5486` | `err != nil \|\| len(data) > limit` → static | `err != nil` → wrapped; `len(data) > limit` → static | yes — limit arm byte-identical |
+| `state.go:5486-5492` | `err != nil \|\| len(data) > limit` → static | `err != nil` → wrapped; `len(data) > limit` → static | yes — limit arm byte-identical |
 | `state.go:6384-6389` | `err != nil \|\| !validTaskResultKind(kind)` → static | `err != nil` → wrapped; `!valid(kind)` → static | yes — kind arm byte-identical |
 | `provider_action.go:267-272` | `err != nil \|\| len(persisted) > maxProviderActionResultBytes` → sentinel | `err != nil` → wrapped; size → sentinel | yes |
 | `provider_action.go:287-292` | `err != nil \|\| value.kind != object` → static | `err != nil` → wrapped; kind → static | yes |
@@ -202,13 +206,15 @@ conditions are byte-identical to base (`git diff` shows no hunk touching them).
 - Every prefix and every other message stays byte-identical; the two test-visible Contains
   assertions (`daemon/internal/state/goal_session_test.go:281` `decode goal session journal`,
   `daemon/internal/app/harness_test.go:3830` `write run journal`) stay green because only a
-  `: <cause>` suffix is appended. A repo-wide literal scan of all 21 wrapped messages found no
-  test asserting any of them by equality (the only test literals are those two `strings.Contains`
-  calls).
+  `: <cause>` suffix is appended. A repo-wide literal scan of all 21 wrapped messages against the
+  pre-increment test corpus found no test asserting any of them by equality (the only pre-existing
+  test literals are those two `strings.Contains` calls); the increment's own `state_wrap_test.go`
+  does assert `write run journal: <cause>` and `write goal session journal: <cause>` by equality.
 - `state_wrap_test.go` pins the exact wrapped strings for the deterministic lanes:
   `write run journal: <cause>` and `write goal session journal: <cause>` (injected sentinel), the
-  decode lane as prefix + non-bare assertion, and the serialize lanes as prefix + `errors.Unwrap
-  != nil` (the `%w` chain, since the cause text belongs to `encoding/json`).
+  decode lane as prefix + chain assertion (`errors.Unwrap != nil`, added at apply so the `%v` flip
+  at `state.go:5363` is visible — §6.2), and the serialize lanes as prefix + `errors.Unwrap != nil`
+  (the `%w` chain, since the cause text belongs to `encoding/json`).
 
 ## 5. Gates (all foreground, exact commands)
 
@@ -229,6 +235,26 @@ conditions are byte-identical to base (`git diff` shows no hunk touching them).
 
 No `-race` locally: this Windows host has no cgo toolchain, as the contract records; the CI race
 job is the oracle for that lane. No measurement harness ran concurrently with the suites.
+
+**Apply-stage re-run (the delivered tree plus the apply-stage simplification edits: the decode
+lane's `errors.Unwrap` assertion in `state_wrap_test.go`, 98 lines, and record-only
+wording/citation fixes — no production file changed).** All contract gates re-run sequentially at
+that revision, no harness concurrent with a suite:
+
+| command (cwd `daemon/`) | exit | observed |
+|---|---:|---|
+| `gofmt -l .` | 0 | no output |
+| `go vet ./...` | 0 | no output |
+| `GOOS=windows go build ./...` | 0 | — |
+| `GOOS=linux go build ./...` | 0 | — |
+| `GOOS=linux GOARCH=amd64 go vet ./internal/state/` | 0 | — |
+| `go test -count=1 ./internal/state/...` (Windows) | 0 | `ok … 34.362s` |
+| WSL `Ubuntu-24.04` `accept` — `go test -count=1 ./internal/state/...` at `/mnt/q/repos/wt-w3-07-state-error-causes/symmetry/daemon` (go1.27.0 linux/amd64) | 0 | `ok … 20.386s` (the `//go:build linux` clone/cgroup suites run) |
+| `go test -count=1 ./internal/app/ -run '^TestFreshCodexGoalAttachQueueFailureReportsAbortCompensationFailure$'` | 0 | `ok … 0.563s` |
+| `go test -count=1 ./internal/app/ -run 'PiProviderBridge\|DurablePiProviderBridge\|ProviderAction'` | 0 | `ok … 4.678s` |
+| `git diff --check` | 0 | no whitespace errors |
+| host-path scan of the apply diff | 1 | no matches (grep exit 1 = no match) |
+| sweep rebuilt from Appendix A and re-run at this revision (`-selfcheck`, rows, `-predicates`, `-all`) | 0 | `{"other-branch":2,"pred":1,"row":2}`; `rows 29 (static-new 29, sentinel-return 0)`; `pred-class 197`; `row 29 / pred 197 / other-branch 39 / no-branch 267` (532) — every number in §0/§1/§2.4/Appendix B reproduces, and `git diff --numstat` vs `52bdffd2` is still `state.go` +34/−19, `provider_action.go` +47/−33, `provider_action_test.go` +86, `docs/TODO.md` +19 |
 
 ## 6. Mutation checks (judging)
 
@@ -264,6 +290,19 @@ flip:  state.go `write run journal: %w` → `%v`
        --- FAIL: TestSaveJournalWrapsAtomicWriteCause/run_journal
            SaveJournal() error = write run journal: injected atomic writer failure,
            want the injected writer cause in its chain          (exit 1)
+revert: %w restored → ok (exit 0); `grep -n '%v", err)' state.go provider_action.go` finds nothing
+```
+
+Decode seam (`state_wrap_test.go` decode lane, added at apply): the same flip at the other lane's
+site, `state.go:5363` (`decode %s: %w`), leaves the message byte-identical, so only the new chain
+assertion catches it:
+
+```
+flip:  state.go:5363 `decode %s: %w` → `%v`
+       --- FAIL: TestLoadJournalWrapsDecodeCause
+           state_wrap_test.go:93: LoadJournal() error = "decode run journal: json: cannot unmarshal
+           array into Go value of type state.RunJournal", want the decoder cause in its error chain
+                                                                                              (exit 1)
 revert: %w restored → ok (exit 0); `grep -n '%v", err)' state.go provider_action.go` finds nothing
 ```
 
@@ -331,8 +370,8 @@ finds nothing, so no mutation residue remains.
 - **The verdict-cascade boundary is a judgment call**, defined by the source of the error value
   (validation/derivation call over control state → stage verdict) and corroborated by four
   byte-exact W2-09 pins whose cases reach the error arm. It is mechanical and re-derivable from the
-  `-all` listing (Appendix B/§1), but a reviewer who prefers wrapping `X.Validate()` cascades would
-  have to relax clause 1's "no message … changed" for those pins.
+  `-all` class counts (§1) and the rows listings (Appendix B), but a reviewer who prefers wrapping
+  `X.Validate()` cascades would have to relax clause 1's "no message … changed" for those pins.
 - **The `pred` class (197 static returns) is untouched by contract decision** (Change 1 declares
   "proven no-cause predicates (`X.Validate() != nil` cascades)" residual). The class contains the
   drafting-time `provider_action.go:278` row; all of them are enumerated by `sweep -predicates`.
@@ -873,7 +912,7 @@ func classKind(rows []row, class, kind string) int {
 
 ## Appendix B — sweep listings (verbatim)
 
-Before (base 52bdffd2), rows mode, columns: file:line, class, kind, function, condition, returned expression
+Before (base 52bdffd2), rows mode, columns: file:line, kind, function, condition, returned expression (the tool prints a constant `row` class column first; it is omitted here because this listing is rows-mode only)
 
 ```
 provider_action.go:267	sentinel-return	ValidateNewProviderActionResult	err != nil || len(persisted) > maxProviderActionResultBytes	ErrProviderActionCapacity
@@ -935,7 +974,7 @@ state.go:6363	static-new	terminalTaskResultKind	err != nil	errors.New("completed
 state.go:6373	static-new	terminalTaskResultKind	err != nil || !validTaskResultKind(result.Kind)	errors.New("completed terminal task result kind is invalid")
 ```
 
-After (delivered tree), rows mode
+After (delivered tree), rows mode (same column layout; the constant `row` class column is omitted)
 
 ```
 provider_action.go:298	static-new	normalizeProviderActionResult	tokenErr != io.EOF	errors.New("provider action result has trailing data")

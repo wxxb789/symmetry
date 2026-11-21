@@ -14,8 +14,8 @@ Two prod files changed; one new test file; one existing test file gains one test
 |---|---|
 | `daemon/internal/state/state.go` | 21 of 46 swept rows carry the treatment (18 wraps, 2 condition splits, 1 capacity split); 25 rows stay untouched as verdict cascades |
 | `daemon/internal/state/provider_action.go` | all 11 swept rows: 6 static rows (2 wraps, 4 condition splits) and 5 `ErrProviderActionCapacity` conflations split; the two ~25-line reservation loops become one `reserveWorstCaseCompletions` helper |
-| `daemon/internal/state/state_wrap_test.go` | **new**: pins the exact wrapped strings, the `%w` chain (`errors.Is` through the writer seam), the decode wrap, and that genuine capacity still returns the sentinel value itself |
-| `daemon/internal/state/provider_action_test.go` | **+1 test** (contract Change 2): the serialize-failure reclassification out of `ErrProviderActionCapacity` |
+| `daemon/internal/state/state_wrap_test.go` | **new**: pins the exact wrapped strings, the `%w` chain (`errors.Is` through the writer seam; `errors.Unwrap` for the decode lane) and the decode wrap |
+| `daemon/internal/state/provider_action_test.go` | **+1 test** (contract Change 2): the serialize-failure reclassification out of `ErrProviderActionCapacity`, and that the size arm still returns the sentinel value itself |
 
 No exported symbol is added, removed, renamed or moved. `reserveWorstCaseCompletions` is
 unexported (package `state`), takes and returns `RunJournal`, and allocates exactly what the two
@@ -195,9 +195,11 @@ an operation failure: `state.go:1241`, `1289`, `1422`, `1464`, `1539`, `1707`, `
 predicates (`X.Validate() != nil` cascades)"). Four of them are additionally pinned byte-exactly by
 W2-09's first-error pins, and their cases *reach the error arm*, so wrapping them would break a
 pinning test (proved by reading the pin case and by running it):
-`state.go:6061`/`6084` in `TestJournalValidatorFirstErrorStringsArePinned` (`state_test.go:2532`,
-`:2540`, `:2548` set `&authority.Supervisor{}` / `&authority.SupervisorHandoff{}`, whose
-`Validate()` is the failing condition; the pins assert `err.Error() != test.want` at `:2914`),
+`state.go:6061`/`6084` in `TestJournalValidatorFirstErrorStringsArePinned` (containment-authority
+wants `state_test.go:2532`, `:2540`, `:2548` build on `&authority.Supervisor{}` at `:2530` and on
+`testSupervisorAuthority(...)` with a TargetPID / target-identity mismatch at `:2538`/`:2546`;
+the containment-handoff want `:2573` builds on `&authority.SupervisorHandoff{}` at `:2571`; the
+pins assert `err.Error() != test.want` at `:2914`),
 `state.go:5030`/`5196` in `linux_clone_journal_test.go` (assertion `err.Error() != test.want` at
 `:2043`; the "reuse subject mismatch" case reaches the `requireLinuxCloneJournalFenceSubject`
 error arm). The remaining 21 are the same shape: a validation/derivation call plus state
@@ -234,9 +236,10 @@ droppable error variable. After the change the `row` output is the residual 25-r
 
 1. **Prefixes are byte-identical.** Every wrapped message is `<existing message>: <cause>`; the two
    test-visible Contains assertions (`goal_session_test.go:281` `decode goal session journal`,
-   `app/harness_test.go:3830` `write run journal`) match on the prefix and stay green. No test in
-   the repository asserts any wrapped message by equality (checked repo-wide for all 21 messages:
-   the only test literals are the two Contains calls above).
+   `app/harness_test.go:3830` `write run journal`) match on the prefix and stay green. No
+   pre-existing test asserts any wrapped message by equality (checked repo-wide for all 21 messages:
+   the only pre-existing test literals are the two Contains calls above); the increment's own
+   `state_wrap_test.go` pins two of the wrapped strings by equality on purpose.
 2. **Verdicts unchanged.** Capacity arms still return `ErrProviderActionCapacity` itself; every
    other untouched/static message is byte-identical; a wrapped cause is appended, never substituted.
 3. **The capacity split does not reorder or retune guards.** The size comparisons, their limits
@@ -316,12 +319,14 @@ class (pointer/`Validate()` predicates) and the `no-branch`/`other-branch` verdi
    Never concurrently with the sweep/measurement tool.
 2. Sweep before/after (rows, predicates, all) + `-selfcheck`.
 3. Mutation checks: (a) `TestSaveJournalWrapsAtomicWriteCause` red on base, green on head, red
-   again with `%w` → `%v`; (b) dropping the reservation call from the dispatch guard reddens
-   `provider_action_test.go:479`/`:615`, dropping it from the save guard reddens `:1257`
-   (reservation-sensitive set as reconciled; `:528`/`:590` are budget/encoding assertions).
+   again with `%w` → `%v` (the decode lane's `errors.Unwrap` assertion catches the same flip at
+   `state.go:5363`; recorded in evidence §6.2); (b) dropping the reservation call from the dispatch
+   guard reddens `provider_action_test.go:479`/`:615`, dropping it from the save guard reddens
+   `:1257` (reservation-sensitive set as reconciled; `:528`/`:590` are budget/encoding assertions).
 4. Evidence record `docs/evidence/rf-w3-07-state-error-causes-2026-11-21.md`: sweep listings, the
    57-row classification table with before/after, control-flow audit, gate exit codes, mutation
-   outputs, Appendix A (sweep tool source), Appendix B (`-all` accounting).
+   outputs, Appendix A (sweep tool source), Appendix B (rows-mode before/after listings; the
+   `-all` class counts are in the record's §1).
 5. `docs/TODO.md`: record the pre-existing dead-code candidate found while auditing the
    trailing-data block (the `tokenErr == nil || token != nil` disjunct cannot change the outcome).
 

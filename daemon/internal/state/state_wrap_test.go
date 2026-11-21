@@ -89,6 +89,9 @@ func TestLoadJournalWrapsDecodeCause(t *testing.T) {
 	if !strings.Contains(err.Error(), "decode run journal: ") {
 		t.Fatalf("LoadJournal() error = %q, want the decode prefix plus cause", err)
 	}
+	if errors.Unwrap(err) == nil {
+		t.Fatalf("LoadJournal() error = %q, want the decoder cause in its error chain", err)
+	}
 	if err.Error() == "decode run journal" {
 		t.Fatalf("LoadJournal() error = %q, want the concrete decode cause", err)
 	}
