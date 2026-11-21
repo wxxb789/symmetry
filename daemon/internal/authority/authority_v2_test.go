@@ -827,6 +827,86 @@ func TestReleaseProofValidForComparesExactIdentity(t *testing.T) {
 	}
 }
 
+// TestValidatePinsV2HelperBindingAndMirrorOnlyV1Records pins the validator
+// call sites the supervisorCore unification rewrote: the requireHelper
+// argument of Supervisor.Validate and SupervisorHandoffReleaseProof.Validate
+// (both true) and the Mirror term of hasV2Fields. A v2 record with an unbound
+// helper is an invalid shape, and a v1 record carrying only the v2-only
+// Mirror field must not pass the legacy shape gate.
+//
+// The v2 cases assert the exact shape error rather than only non-nil: the
+// release-proof validator's trailing receipt check rejects an unbound proof
+// independently (no v2 receipt can validate against a zero helper), so the
+// error identity is what pins the validateV2(true) call site there.
+func TestValidatePinsV2HelperBindingAndMirrorOnlyV1Records(t *testing.T) {
+	bound := durableValidHandoff(t)
+	value, err := bound.ToSupervisor()
+	if err != nil {
+		t.Fatalf("ToSupervisor() error = %v", err)
+	}
+	proof := releaseProofForHandoff(bound)
+
+	legacyHandoff := testAuthoritySupervisorHandoffFixture()
+	legacyHandoff.SupervisorPID = 21
+	legacyHandoff.SupervisorIdentity = "legacy-helper:21:start"
+	legacyValue, err := legacyHandoff.ToSupervisor()
+	if err != nil {
+		t.Fatalf("legacy ToSupervisor() error = %v", err)
+	}
+	legacyProof := legacyHandoff.ReleaseProof()
+
+	// Positive controls: every fixture validates until the one field under
+	// test is touched, so each rejection below is caused by that field.
+	if err := value.Validate(); err != nil {
+		t.Fatalf("bound v2 authority failed Validate(): %v", err)
+	}
+	if err := proof.Validate(); err != nil {
+		t.Fatalf("bound v2 release proof failed Validate(): %v", err)
+	}
+	if err := legacyValue.Validate(); err != nil {
+		t.Fatalf("bound v1 authority failed Validate(): %v", err)
+	}
+	if err := legacyHandoff.Validate(); err != nil {
+		t.Fatalf("bound v1 handoff failed Validate(): %v", err)
+	}
+	if err := legacyProof.Validate(); err != nil {
+		t.Fatalf("bound v1 release proof failed Validate(): %v", err)
+	}
+
+	unboundValue := value
+	unboundValue.SupervisorPID, unboundValue.SupervisorIdentity, unboundValue.Mirror, unboundValue.StopReceipt = 0, "", nil, nil
+	unboundProof := proof
+	unboundProof.SupervisorPID, unboundProof.SupervisorIdentity, unboundProof.Mirror, unboundProof.StopReceipt = 0, "", nil, nil
+
+	mirrorOnly := LinuxCgroupProcessIdentity{PID: 51, Identity: "daemon:51:start"}
+	legacyValue.Mirror = &mirrorOnly
+	legacyHandoff.Mirror = &mirrorOnly
+	legacyProof.Mirror = &mirrorOnly
+
+	cases := []struct {
+		name     string
+		validate func() error
+		want     string
+	}{
+		{"v2 supervisor without a bound helper", unboundValue.Validate, "supervisor authority is invalid"},
+		{"v2 release proof without a bound helper", unboundProof.Validate, "supervisor handoff release proof is invalid"},
+		{"v1 supervisor carrying only Mirror", legacyValue.Validate, "supervisor authority is invalid"},
+		{"v1 handoff carrying only Mirror", legacyHandoff.Validate, "supervisor handoff is invalid"},
+		{"v1 release proof carrying only Mirror", legacyProof.Validate, "supervisor handoff release proof is invalid"},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			err := testCase.validate()
+			if err == nil {
+				t.Fatalf("Validate() accepted %s", testCase.name)
+			}
+			if err.Error() != testCase.want {
+				t.Fatalf("Validate() error = %q, want %q", err, testCase.want)
+			}
+		})
+	}
+}
+
 // durableFieldPaths returns the dot-separated path of every exported field of
 // value, recursing through structs and non-nil pointers. A field tagged
 // json:"-" is a path but is never recursed into: it is request-only, not

@@ -5,7 +5,10 @@ state root) plus its binding review amendments (`refactor/w2-contract-review-opu
 P1-5/P2-6/P3, `refactor/w2-contract-review-ds-1.md` GO + note N3). Baseline for every
 coordinate in this plan: HEAD `4dd374bdcdbe09a05287e77ad90faaa949fcddcd` (= `origin/main`,
 = the commit that landed W1-04/#143). Area: `daemon/internal/authority` only, plus this
-plan file.
+plan file. The GDD state paths this plan names are provenance for how the slice was
+produced: they do not resolve under the repository root, and every reproduction step
+that can run in the repository is listed in the evidence section below; the tools that
+stay outside it are labelled as such there and in the "Role rules" section.
 
 The slice moves the 165 top-level declarations of the 2173-line `authority.go` into three
 contract-named family files (`linux_clone.go`, `cgroup.go`, `supervisor.go`), then
@@ -22,11 +25,12 @@ behind one unexported `supervisorCore` value and one conversion builder.
 | `supervisor.go` (none) | 42 (6/19/16/1) | 913 |
 | `authority.go` (deleted) | 165 | 2173 |
 
-`apply` + `gofmt` change no declaration byte: the declaration-multiset check
-(`pfs declset`, W1-04's proof) compares raw and go/printer-normalized digests per
-declaration and per comment group, base `authority.go` vs the three new files —
-248 = 248 lines, `diff` exit 0. The only line delta is the regenerated per-file header
-(package line, recomputed import block and its blank lines): 2187 = 2173 + 14.
+`apply` + `gofmt` change no declaration byte. The exhaustive declaration-multiset check
+(raw and go/printer-normalized digests per declaration and per comment group, base
+`authority.go` vs the three new files — 248 = 248 lines, `diff` exit 0) ran outside this
+repository (the W1-04 `pfs declset` proof in the GDD state root; the reviewer re-ran it
+independently with an own `go/ast` tool). The only line delta is the regenerated
+per-file header (package line, recomputed import block and its blank lines): 2187 = 2173 + 14.
 
 The logic stage then brings `supervisor.go` to 875 lines; the apply stage's accepted
 simplify finding R1 replaces the `Supervisor.core()` field literal with a struct
@@ -60,15 +64,34 @@ same exact symbols appear in Go files 184 non-test / 119 test (`SupervisorHandof
 154 / 126 (`StopReceipt`) times. Nothing in the slice renames, re-signs or deletes an
 exported symbol.
 
-## Role rules (the mechanically re-runnable part)
+## Role rules (the classification that produced the split)
 
-`refactor/tools/w2-14-authority-split/classify.py` holds the ordered rule table and emits
-`map.json` consumed by the W1-04 splitter (`pfs apply -src <pristine> -dst <package>`),
-extended with one flag: `preludeFile` names the single target that receives the source
-prelude (the package doc comment), because the split has no residual file to inherit it
-and duplicating the package doc into three files would also break the comment multiset.
-`pfs apply` refuses to run if any declaration is unassigned or assigned twice; all 165
-declarations are assigned.
+The split was produced by the W1-04 declaration splitter driven by an ordered rule table.
+The rule table (`classify.py`) and the splitter (`pfs apply -src <pristine> -dst
+<package>`) live in the GDD state root, outside this repository; they are provenance for
+how the split was made, not a reproduction step a repo reader can run. The rule table
+extended the splitter with one flag: `preludeFile` names the single target that receives
+the source prelude (the package doc comment), because the split has no residual file to
+inherit it and duplicating the package doc into three files would also break the comment
+multiset. The splitter refuses to run if any declaration is unassigned or assigned twice;
+all 165 declarations were assigned.
+
+The move-only claim is reproduced from this repository by declaration identity and the
+exported API, not by re-running the splitter:
+
+- `git show 4dd374bd:daemon/internal/authority/authority.go` recovers the whole 2173-line
+  base file; a reviewer compares it declaration by declaration against the three head
+  files.
+- The exhaustive per-declaration byte-identity comparison (raw text, doc comment
+  included, keyed by kind+receiver+name) ran reviewer-side with a `go/ast` tool that is
+  not in this repository; its result — 146 of the 165 base declarations byte-identical —
+  is recorded in the PR #158 description section "Pure-move evidence".
+- `go doc -all ./internal/authority` at base and head prints the same 834 lines (`diff`
+  empty); the exact command is in the evidence section.
+- `git diff --color-moved=zebra 4dd374bd..HEAD -- daemon/internal/authority` is a
+  reviewer aid only: it shows moved lines, but cannot see an edit inside a moved block.
+
+The ordered rules that classified the 165 declarations:
 
 1. **Type and method declarations follow their subject**: `LinuxClone*` →
    `linux_clone.go`; `LinuxCgroup*` → `cgroup.go`; `Supervisor*`/`StopReceipt` →
@@ -126,8 +149,12 @@ LOC deltas are reported, not gated (opus P3 amendment).
 
 - **Durable bytes.** Representative `Supervisor`/`SupervisorHandoff`/`ReleaseProof`/
   `StopReceipt`/clone/cgroup values marshal byte-identically before and after, including
-  a fixed-JSON unmarshal→marshal round-trip arm per family
-  (`run-durable-bytes.sh`: base = `git archive HEAD`, head = this worktree).
+  a fixed-JSON unmarshal→marshal round-trip arm per family. The base-vs-head marshal
+  harness (`run-durable-bytes.sh`) lives in the GDD state root, outside this repository;
+  the in-repo oracles are the legacy JSON byte-shape pins
+  (`TestAddingLinuxCgroupV2KeepsLegacyAuthorityJSONByteShape`,
+  `TestStopReceiptBindsOwnerAndPreservesLegacyJSON`) plus the 29 byte-identical type
+  declarations, which leave JSON field order and tags literal by construction.
 - **Type-declaration identity.** Every pre-existing `type` is textually identical; the
   only added type is `supervisorCore`.
 - **Pins land first** (review amendment): per-field `Equal` sensitivity for the four
@@ -137,55 +164,108 @@ LOC deltas are reported, not gated (opus P3 amendment).
   pointer in the original, clone unchanged and sharing no pointer), and conversion
   parity (`ToSupervisor`, `supervisorFromHandoff`, `supervisorFromReleaseProof` against
   the base result field by field).
-- **Move-only proof.** Declaration-multiset equality (above) is the primary proof;
-  `git diff --color-moved=zebra` over a scratch commit is the reviewer aid.
+- **Move-only proof.** Declaration-multiset equality (reviewer-side, above) is the
+  primary proof; the empty `go doc -all` diff and `git diff --color-moved=zebra`
+  between `4dd374bd` and HEAD are the in-repo checks.
 - **No local `-race`** (no cgo on this host); the daemon race job is the CI-only oracle.
 
-### Delivery decomposition without committing
+### Delivery decomposition (conductor waiver, 2026-11-21)
 
-The dispatch forbids commits, while the review amendment asks for a pins commit, a
-move-only commit and a logic commit. Chosen reading: the tree advances through those
-three states in exactly that order, and each state is preserved outside the repository as
-a patch plus the git tree object id it was captured from
-(`refactor/tools/w2-14-authority-split/snapshot.sh` writes `stage-<name>.diff` and
-`stage-<name>.tree`):
-
-| State | Tree id sidecar | Patch (incremental step from the previous captured tree) |
-| --- | --- | --- |
-| pins + plan | `stage-0-pins.tree` | `stage-0-pins.diff` (HEAD → pins + plan; the pins commit carries the complete pin set, including the one assertion added after the first pin run) |
-| move-only split | `stage-A-move-only.tree` | `stage-A-move-only.diff` (pins → move-only; production files only) |
-| unification | `stage-B-unification.tree` | `stage-B-unification.diff` (move-only → unification; production files only) |
-| apply (accepted simplify findings R1–R4, T1–T3) | `stage-apply.tree` | `stage-apply.diff` (unification → apply; production and test files plus this plan) |
-
-`git apply` in that order on a clean checkout of HEAD reproduces the tree the simplify
-stage reviewed exactly; the replayed tree was verified equal to the tree id in
-`stage-B-unification.tree`. The apply stage then lands the accepted simplify findings as
-the fourth step (`stage-apply.tree` / `stage-apply.diff`). The cumulative views of the
-last two steps are kept beside the series as `stage-*-cumulative.diff` (base → that
-state) for reviewers. The tree ids live in the sidecar files rather than in this plan,
-so each captured code state stays reviewable independently of later edits to this
-document. Option rejected: committing here, which the dispatch explicitly forbids; also
-rejected: a single undifferentiated diff, which would make the move-only claim
-unverifiable.
+The dispatch forbade commits, while the binding review amendment asked for a pins commit,
+a move-only commit and a logic commit. The tree advanced through exactly those states in
+order, but the states were captured outside git as a patch series plus tree-id sidecars
+in the GDD state root (`refactor/tools/w2-14-authority-split/...`); no ref reaches the
+captured trees, so a `git gc` can prune them. The conductor waived the three-commit
+sequencing on 2026-11-21 instead of rebuilding the branch history: the PR is
+squash-merged, so intermediate commits would not survive on main, and a restructured push
+needs conductor authority. The pure-move evidence that replaces the commit split — the
+reviewer-side top-level declaration comparison (146 of the 165 base declarations
+byte-identical, 2 removed and 12 added unexported, 17 supervisor-family declarations
+rewritten) plus the empty `go doc -all` diff — is recorded in the PR #158 description
+section "Pure-move evidence". The sidecar patches are provenance, not reproduction steps:
+this repository carries the pinned tests, the declaration-identity evidence and the API
+diff a reviewer checks.
 
 ## Evidence plan and measured results (exact commands, run at the final tree)
+
+Runnable from this repository (from the repo root unless a `cd daemon` is shown;
+`daemon/` is its own Go module):
 
 | Gate | Command | Result |
 | --- | --- | --- |
 | format | `gofmt -l daemon/internal/authority` | empty, exit 0 |
 | vet | `cd daemon && go vet ./...` | exit 0 |
+| vet (linux target) | `cd daemon && GOOS=linux go vet ./...` | exit 0 |
 | builds | `cd daemon && GOOS=linux go build ./...`; `GOOS=windows go build ./...` | exit 0 each |
-| package suites | `cd daemon && go test -count=1 ./internal/authority/...` | `ok ... 0.244s`, exit 0 (re-measured after the apply stage's test additions); the same command is green at the pins-only and move-only states (`stage0-suite.log`, `stageA-suite.log`) |
-| movement | `pfs declset` base `authority.go` vs the three files (multiset) | 248 = 248 lines, `diff` exit 0 |
-| movement (aid) | scratch `git diff --color-moved=zebra -M` HEAD vs the move-only tree over the four production files | 2187 insertions / 2173 deletions: 2172 deleted and 2179 added lines recognized as moved; the 8 added and 1 removed unmatched lines are import-block lines only |
-| durable bytes | `run-durable-bytes.sh <repo> <outdir>` | 52 output lines incl. 10 frozen-literal round-trips, identical `sha256 62f437f5…` on both sides, exit 0 |
-| behaviour differential (extra oracle) | `run-differential.sh <repo> <outdir>`: 3000 randomized v2 records/receipts/proofs through the exported API, base vs head | 3001 lines each side, identical `sha256 139d7cca…`, `differential.diff` 0 bytes, exit 0 |
-| API | `go doc -all ./internal/authority` base vs final | 834 lines, `diff` empty |
-| type declarations | `pfs declset` type-decl digests base vs final | all 29 pre-existing types identical; exactly one added type (`supervisorCore`) |
-| citations | `run-citation-gate.sh` with `CONTROL=none` / `positive` / `negative` | gate exit 0 / 0 / 1 (negative control caught as designed), script expectation met in all three runs |
-| pins' sensitivity | three planted defects (Equal field drop, clone pointer share, conversion field drop) | each caught by its own pin (`planted-red*.log`) |
+| package suites | `cd daemon && go test -count=1 ./internal/authority/... ./internal/state/...` | `ok` for both, exit 0 |
+| exported API | `base=$(mktemp -d); git archive 4dd374bd daemon \| tar -x -C "$base"; (cd daemon && go doc -all ./internal/authority) > "$base/head.doc"; (cd "$base/daemon" && go doc -all ./internal/authority) > "$base/base.doc"; wc -l "$base/base.doc" "$base/head.doc"; diff "$base/base.doc" "$base/head.doc"` | 834 lines each; `diff` empty, exit 0 |
+| base file | `git show 4dd374bd:daemon/internal/authority/authority.go` | the 2173-line base file for declaration-level comparison |
+| move aid | `git diff --color-moved=zebra 4dd374bd..HEAD -- daemon/internal/authority` | reviewer aid only (cannot see edits inside a moved block) |
+| validation pins | overlay recipe under "Validation call-site pins (P3-1)" below | M9/M10/M11 red; green without overlay |
+| citations | `python scripts/ci/check-citation-existence.py --base 4dd374bd --head HEAD` | exit 0 (the one changed audited document passes; ignore-rule notices only) |
 | whitespace | `git diff --check` | exit 0 |
-| host-path hygiene | `git diff 6117e198..3d484899 \| grep -icE "users[/][a-z]"` | 0 (the earlier bare pattern matched this row's own text; the bracket form cannot self-match, so the slice range and the committed branch diff are 0; the bare string survives only as a removed line in the apply-stage worktree diff) |
+| host-path hygiene | `git diff 4dd374bd..HEAD \| grep -icE "users[/][a-z]"` | 0 (the bracket form cannot self-match the rows that name it) |
+
+External or reviewer-side evidence (GDD state root or reviewer scratch; not in this
+repository):
+
+| Oracle | Result |
+| --- | --- |
+| per-declaration byte identity (`pfs declset` multiset, re-run reviewer-side with an own `go/ast` tool) | base 165 / head 175: 146 byte-identical (all of `linux_clone.go`, `cgroup.go` and the 29 type declarations), 2 removed (`hasV2SupervisorFields`, `validateV2SupervisorFields`), 12 added unexported, 17 supervisor-family declarations rewritten (the 15 methods plus the `supervisorFromHandoff` and `supervisorFromReleaseProof` functions); recorded in PR #158 "Pure-move evidence" |
+| durable-bytes harness (`run-durable-bytes.sh <repo> <outdir>`) | 52 output lines incl. 10 frozen-literal round-trips, identical `sha256 62f437f5…` on both sides; superseded in-repo by the legacy-JSON pins plus type identity |
+| behaviour differential (`run-differential.sh`, 3000 randomized v2 records/receipts/proofs through the exported API) | 3001 lines each side, identical `sha256 139d7cca…`, `differential.diff` 0 bytes; superseded in-repo by the pins plus the suites |
+| citation-gate controls (`run-citation-gate.sh` with `CONTROL=none` / `positive` / `negative`) | gate exit 0 / 0 / 1 (negative control caught as designed); the in-repo gate command is the row above |
+| pins' sensitivity planted defects (`planted-red*.log`) | three planted defects (Equal field drop, clone pointer share, conversion field drop) each caught by its own pin; superseded in-repo for the validation call sites by the P3-1 overlay table below |
+| split rule table (`classify.py`) and splitter (`pfs apply`) | produced the split; the in-repo reproduction is the declaration-identity block under "Role rules" |
+
+## Validation call-site pins (P3-1, added after review 1)
+
+Review 1 found four rewritten validation call sites unpinned (mutants M9–M12). The pin
+`TestValidatePinsV2HelperBindingAndMirrorOnlyV1Records`
+(`daemon/internal/authority/authority_v2_test.go`) covers three of them with five cases:
+a v2 `Supervisor` and a v2 release proof with the helper binding cleared
+(`SupervisorPID=0`, `SupervisorIdentity=""`, `Mirror=nil`, `StopReceipt=nil`), and a v1
+`Supervisor`, a v1 `SupervisorHandoff` and a v1 release proof carrying only the v2-only
+`Mirror` field. Every fixture validates before the one field under test is touched, and
+each case asserts its exact rejection message.
+
+Mutation recipe (runnable from the repository root; any POSIX shell):
+
+```sh
+mut=$(mktemp -d)
+cp daemon/internal/authority/supervisor.go "$mut/supervisor.go"
+# apply the one-line edit from the table below
+printf '{"Replace": {"%s/daemon/internal/authority/supervisor.go": "%s/supervisor.go"}}\n' "$PWD" "$mut" > "$mut/overlay.json"
+(cd daemon && go test -overlay="$mut/overlay.json" -count=1 \
+    -run TestValidatePinsV2HelperBindingAndMirrorOnlyV1Records ./internal/authority/)
+```
+
+| Mutant | One-line edit in `supervisor.go` | Observed |
+| --- | --- | --- |
+| M9 | `hasV2Fields` drops the `\|\| core.Mirror != nil` term | FAIL: the three v1 "carrying only Mirror" cases are accepted |
+| M10 | `Supervisor.Validate`: `validateV2(true)` becomes `validateV2(false)` | FAIL: `Validate() accepted v2 supervisor without a bound helper` |
+| M11 | `SupervisorHandoffReleaseProof.Validate`: `validateV2(true)` becomes `validateV2(false)` | FAIL: error is `supervisor handoff release proof lacks its exact durable stop receipt`, want `supervisor handoff release proof is invalid` |
+| M12 | `ToSupervisor`: delete the trailing `result.Validate()` block | green: the full `./internal/authority/...` and `./internal/state/...` suites pass |
+
+M11 is observable only through the error identity: the release-proof validator's
+trailing receipt check rejects an unbound proof anyway (no v2 stop receipt can validate
+against a zero helper, because its issuer identity must carry a positive PID), so the
+mutation changes which rejection the proof gets, not whether it is rejected. The pin
+asserts the exact error, which is the observable the mutation changes.
+
+M12 is an equivalent mutant for the current code, so it has no killing test: every
+handoff that passes `SupervisorHandoff.Validate()`, the scan-update rejection and the
+bound-helper check converts to a `Supervisor` whose `Validate()` passes.
+`supervisorFromCore` copies all 23 shared fields (pinned by
+`TestSupervisorConversionParityAgainstBaseFieldSet`), so the converted result's
+`validateV2(true)` differs from the handoff's `validateV2(false)` only in the
+`requireHelper && SupervisorPID == 0` term, which the bound-helper check excludes; the v1
+supervisor checks are the handoff's own checks — the handoff's predicates are equal or
+stronger (`LaunchToken` must be valid hex, identity boundedness follows from
+`validOptionalBounded` plus the non-empty bound identity, and `SupervisorPID > 0` comes
+from the bound-helper check) — and `StopReceipt.ValidFor(result)` reads the same
+projection `StopReceipt.ValidForHandoff(handoff)` does. The trailing `result.Validate()`
+stays as the commit-boundary belt, but no input distinguishes it from the earlier guards.
 
 ## Design trade-offs
 
