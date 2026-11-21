@@ -12,10 +12,11 @@ keep process-global-seam tests serial; the wave-1 go.mod owner).
 
 1. `daemon/go.mod`, `daemon/go.sum`: `go.uber.org/goleak v1.3.0` (test-only, MIT; `go mod tidy`
    form: one direct require plus the checksum lines tidy records).
-2. `daemon/internal/app/main_test.go` (new): `verifyNoLeakedGoroutines(t)`, a `t.Cleanup` wrapper
-   around `goleak.VerifyNone(t)` with no ignore options, plus `TestLeakOracleDetectsLeakedGoroutine`,
-   the self-check that fails if the oracle stops detecting a parked goroutine. No `TestMain`
-   (binding amendment; see trade-off 1).
+2. `daemon/internal/app/main_test.go` (new): `verifyNoLeakedGoroutines(tb)`, a `t.Cleanup` wrapper
+   that snapshots `goleak.IgnoreCurrent()` at the test's entry and passes it to `goleak.VerifyNone`
+   with no other options, plus `TestLeakOracleDetectsLeakedGoroutine`, the self-check that drives
+   that wrapper through a recording TB and fails if the oracle stops naming the goroutine parked by
+   the test. No `TestMain` (binding amendment; see trade-off 1).
 3. `daemon/internal/app/app_test.go`: the helper on 11 tests, the four short waits folded.
 4. `daemon/internal/app/native_settlement_regression_test.go`: the helper on two tests, the 1 s
    cleanup wait folded.
@@ -30,11 +31,18 @@ keep process-global-seam tests serial; the wave-1 go.mod owner).
 
 ### Per-test goleak
 
-`verifyNoLeakedGoroutines(t)` registers `goleak.VerifyNone(t)` as the test's *first* cleanup, so it
-runs last: after the test's own cleanups (`stopTestDaemon`, store closes) have joined the workers
-the test started. Semantics: the test fails iff a goroutine that is not testing/runtime
-infrastructure is still alive after the retry window (goleak's 20 retries, ≤100 ms sleeps, ~1 s
-total), so a released-but-scheduling writer does not flake. This is deliberately a *named subset*:
+`verifyNoLeakedGoroutines(tb)` snapshots the goroutines alive at the test's entry
+(`goleak.IgnoreCurrent()`) and registers `goleak.VerifyNone(tb, baseline)` as the test's *first*
+cleanup, so it runs last: after the test's own cleanups (`stopTestDaemon`, store closes) have
+joined the workers the test started. The baseline is what keeps a failure attributable: `VerifyNone`
+scans every goroutine in the process, so without it a goroutine stranded by an earlier test in the
+package (for example `writeInputBounded`'s writer) would fail whichever test runs next and blame
+the wrong test. Semantics: the test fails iff a goroutine that is not testing/runtime
+infrastructure is still alive after the retry window (goleak v1.3.0's 20 retries with exponential
+sleeps capped at 100 ms, ≈0.43 s total), so a released-but-scheduling writer does not flake. The
+form is also incompatible with `t.Parallel` (`VerifyNone` cannot associate goroutines with a test;
+goleak's parallel form is `VerifyTestMain`), so W3-15's `app_test.go` split must keep it out of
+parallel tests. This is deliberately a *named subset*:
 the package cannot carry `goleak.TestMain` while `writeInputBounded` can strand its 60 s writer
 (F15, now filed in `docs/TODO.md`), because the package-wide form would need wildcard ignores.
 
@@ -53,18 +61,20 @@ settlement lifecycles): `TestCancelPreemptsBlockedInputInSameSnapshot`,
 (native_settlement_regression_test.go). The planted-leak red run (contract acceptance) is recorded
 below. Tests that leave a goroutine today (F15-adjacent input-timeout fakes and any worker the test
 never joins) are *not* in the set; the oracle stays honest rather than filtered.
-The oracle's own liveness is pinned by `TestLeakOracleDetectsLeakedGoroutine`: it parks one
-goroutine, requires `goleak.Find` to report it, and joins it before returning, so an oracle that
-stops detecting leaks reddens a permanent test instead of only the mutation record.
+The oracle's own liveness is pinned by `TestLeakOracleDetectsLeakedGoroutine`: it drives
+`verifyNoLeakedGoroutines` itself with a recording TB while a goroutine is parked, requires the
+recorded failure to name that goroutine's test, and joins the goroutine before returning — so an
+oracle that becomes a no-op or ignores everything reddens a permanent test instead of only the
+mutation record.
 
 ### The five folded waits
 
 | # | site | before | after | guarded verdict |
 | --- | --- | --- | --- | --- |
-| 1 | `app_test.go:5588` TestCancelPreemptsBlockedInputInSameSnapshot | `select { <-terminated / time.After(500ms) }` then a bool into the final `Fatalf` | `select { <-input.terminated / time.After(testHangGuard) }` → `t.Fatal("cancel did not preempt blocked input")` | cancel preemption of a blocked input |
-| 2 | `app_test.go:5694` TestScheduledSnapshotCancelPreemptsBlockedInputAndJoins | 10 ms poll loop with a 30 s deadline for `terminal_pending` + settled input | direct assertion at the existing `cancelPersisted` fence (the receipt is persisted under the run's input lock, which the preempted input command held until it recorded outcome + acknowledgement) | the preempted input is durably settled when the cancellation receipt lands |
-| 3 | `app_test.go:6911` TestScheduledCancelDuringClaimCompletesAfterDurableReceipt | `select { <-completion / time.After(100ms) }` | deterministic parked-state checks: completion channel open, command still in `daemon.queuedCommands`, no durable acknowledgement for `cancel-1` | no early completion before the durable acknowledgement |
-| 4 | `app_test.go:7103` TestRenewLeasesJoinsWorkersAfterShutdown | `select { <-done / time.After(200ms) }` plus post-release join wait | positive fence: wait until run-1's in-flight request barrier is released *by the drain loop* (2 → 1) while run-2 is parked; each poll probes `done`; then the post-release join wait stays | the loop joins cancelled workers before returning |
+| 1 | `app_test.go:5588` TestCancelPreemptsBlockedInputInSameSnapshot | `select { <-terminated / time.After(500ms) }` then a bool into the final `Fatalf` | `select { <-input.terminated / time.After(testHangGuard) }` → `t.Fatal("cancel did not preempt blocked input")`; the blocked write is then released, so a preempted handler that won the race for `inputMu` cannot sit out `inputWriteTimeout` | cancel preemption of a blocked input |
+| 2 | `app_test.go:5698` TestScheduledSnapshotCancelPreemptsBlockedInputAndJoins | 10 ms poll loop with a 30 s deadline for `terminal_pending` + settled input | direct assertion at the existing `cancelPersisted` fence (the receipt is persisted under the run's input lock, which the preempted input command held until it recorded outcome + acknowledgement) | the preempted input is durably settled when the cancellation receipt lands |
+| 3 | `app_test.go:6915` TestScheduledCancelDuringClaimCompletesAfterDurableReceipt | `select { <-completion / time.After(100ms) }` | deterministic parked-state checks: completion channel open, command still in `daemon.queuedCommands`, no durable acknowledgement for `cancel-1` | no early completion before the durable acknowledgement |
+| 4 | `app_test.go:7107` TestRenewLeasesJoinsWorkersAfterShutdown | `select { <-done / time.After(200ms) }` plus post-release join wait | positive fence: wait until run-1's in-flight request barrier is released *by the drain loop* (2 → 1) while run-2 is parked; each poll probes `done`; then the post-release join wait stays | the loop joins cancelled workers before returning |
 | 5 | `native_settlement_regression_test.go:1393` cleanup | silent `time.After(time.Second)` then `backgroundWG.Wait()` | `awaitNativeSettlementSignal(t, flushDone, "outbox flush did not stop after cancellation")` | the outbox flush stops after cancellation |
 
 Site 4's fence needs run-1's renewal to *return* rather than return an error, so that its request
@@ -108,7 +118,9 @@ the seam) is what the serial rule requires.
 ## Evidence plan (exact commands; results recorded)
 
 All Windows runs from `daemon/` on this worktree; all Linux runs in WSL Ubuntu-24.04 (go1.27.0,
-16 vCPU) against `/mnt/q/.../daemon`. No measurement runs concurrently with the full suite.
+16 vCPU) under `/mnt/q`: this worktree's `daemon/`, plus the pre-conversion baseline extracted with
+`git archive 6099f26 daemon | tar -x -C <dir>` under `/mnt/q/tmp` for the matched before/after pair.
+No measurement runs concurrently with the full suite.
 
 Mutations (each applied, run, reverted; `git diff` clean for the mutated file afterwards):
 
@@ -119,34 +131,51 @@ Mutations (each applied, run, reverted; `git diff` clean for the mutated file af
    store's terminal transition settles the unresolved input in the same journal write
    (`settleUnresolvedInputCommand`, `state.go:4625`). `settleUnresolvedInputCommand` returns early
    → green (0.50 s): the input handler's own write covers it. Both together → FAIL
-   `app_test.go:5762: scheduled cancellation journal = …LocalState:"terminal_pending"…` (0.51 s),
+   `app_test.go:5766: scheduled cancellation journal = …LocalState:"terminal_pending"…` (0.51 s),
    exit 1 — the assertion pins the observable, and both settle paths are load-bearing.
 3. site 3: dispatch completes the unclaimed cancel command (`finishQueuedCommandLocked` before the
-   return) → FAIL `app_test.go:6952: cancel command completed before its durable acknowledgement`
+   return) → FAIL `app_test.go:6956: cancel command completed before its durable acknowledgement`
    (0.50 s), exit 1.
 4. site 4: the drain loop returns on cancellation instead of draining results → FAIL
-   `app_test.go:7157: renewal loop returned before cancelled workers joined` (0.61 s), exit 1.
+   `app_test.go:7164: renewal loop returned before cancelled workers joined` (0.61 s), exit 1.
 5. site 5: the test's flush goroutine stops signalling `flushDone` → FAIL
-   `native_settlement_regression_test.go:1420` and `:1393: outbox flush did not stop after
+   `native_settlement_regression_test.go:1421` and `:1393: outbox flush did not stop after
    cancellation` (60.14 s), exit 1 — the folded cleanup wait reddens on its own path too.
 6. planted goroutine leak in `TestCancelDuringClaimDefersUntilGrantAndNeverLaunchesAgent` →
-   `main_test.go:22: found unexpected goroutines: [Goroutine 19 … ]`, FAIL (0.61 s), exit 1.
+   `main_test.go:46: found unexpected goroutines: [Goroutine 9 in state select (no cases), with
+   … TestCancelDuringClaimDefersUntilGrantAndNeverLaunchesAgent.func1 on top of the stack … ]`,
+   FAIL (0.51 s), exit 1 (re-run 2026-11-21 against the wrapper with its baseline snapshot).
+7. wrapper without the baseline snapshot (`goleak.VerifyNone(tb)`), with a residue goroutine parked
+   by an earlier test in the package (temporary probe test, removed afterwards) → FAIL
+   `main_test.go:46: found unexpected goroutines: … TestTempResidueLeakProbe.func1 on top of the
+   stack …`, reported on
+   `TestPersistentTerminalJournalFailureAfterUsageRetryDoesNotBlockOtherRunOutbox` (0.69 s), exit 1:
+   the leak is attributed to a test that did not create it. With the baseline restored the same pair
+   is green (both directions re-run 2026-11-21).
+8. `verifyNoLeakedGoroutines` reduced to a no-op → FAIL `main_test.go:69: verifyNoLeakedGoroutines
+   reported no failure while a goroutine was parked in this test; the per-test leak oracle is inert`,
+   exit 1: the in-tree self-test, not a mutation record, is what pins the oracle.
 
 ### Measurements (WSL Ubuntu-24.04, go1.27.0, 16 vCPU; package wall from the `ok` line)
 
 | tree | command | wall |
 | --- | --- | --- |
-| baseline (pre-conversion) | `go test -count=1 -v ./internal/state/` | `ok 40.838s` |
-| converted | `go test -count=1 -parallel 1 ./internal/state/` (serial-equivalent) | `ok 37.596s` |
-| converted, top-level tests only | `go test -count=1 ./internal/state/` | `ok 21.953s` |
-| converted (final) | `go test -count=1 ./internal/state/` (default `-parallel` 16) | `ok 17.957s` |
-| converted (final) | `go test -count=1 -parallel 4 ./internal/state/` (CI-shape proxy, 4 runs) | `ok 24.487s`, `36.112s`, `37.297s`, `24.082s` |
-| converted (final) | `go test -race -count=1 ./internal/state/` (2 runs) | `ok 70.618s`, `ok 79.019s` |
-| converted (final) | `go test -count=1 ./internal/state/` on Windows | `ok 13.350s` |
+| baseline (pre-conversion, `6099f26`) | `go test -count=1 -v ./internal/state/` | `ok 30.440s`, `ok 38.204s` |
+| converted (serial-equivalent: `-parallel 1`, same flags as the baseline row) | `go test -count=1 -v -parallel 1 ./internal/state/` | `ok 35.102s`, `ok 41.023s` |
+| converted (intermediate tree: `t.Parallel()` on top-level tests only) | `go test -count=1 ./internal/state/` | `ok 21.953s` |
+| converted (final tree: top-level + own-store subtests) | `go test -count=1 ./internal/state/` (default `-parallel` 16, 2 runs) | `ok 17.238s`, `ok 20.828s` |
+| converted (final tree) | `go test -count=1 -parallel 4 ./internal/state/` (scheduler-width proxy, 4 runs) | `ok 24.487s`, `36.112s`, `37.297s`, `24.082s` |
+| converted (final tree) | `go test -race -count=1 ./internal/state/` (2 runs) | `ok 70.618s`, `ok 79.019s` |
+| converted (final tree) | `go test -count=1 ./internal/state/` on Windows | `ok 13.350s` |
 
+The baseline/serial-equivalent pair and the acceptance row were re-measured 2026-11-21 with matched
+flags (the earlier record compared a `-v` baseline against converted rows without `-v`). The pair is
+the concurrency control, not the acceptance number — with every test serial the converted tree is no
+faster than its baseline on this host (the remaining wall is fsync-heavy store setup either way), so
+the contract's ≤25 s comes from running the tests in parallel, and the default-`-parallel` row above
+is its evidence (both fresh runs inside the bound).
 The `-parallel 4` spread is fsync-contention variance on the WSL VM, not test flakiness (all runs
-green); the acceptance number in the contract is met by the host-default run and near the bound
-under the 4-way proxy — see risk 3.
+green) — see risk 3.
 
 ### Gates run on the final tree (all foreground, one at a time)
 
@@ -156,20 +185,23 @@ under the 4-way proxy — see risk 3.
 | `go vet ./...` (Windows) | exit 0 |
 | `GOOS=linux go build ./...` | exit 0 |
 | `GOOS=windows go build ./...` | exit 0 |
-| `go test -count=1 -timeout 1200s ./internal/state/... ./internal/app/...` (Windows) | exit 0; `ok internal/state 21.629s`, `ok internal/app 265.221s` |
-| `go test -count=3 -timeout 900s ./internal/state/` (Windows, repeat stability) | exit 0; `ok 25.914s` |
+| `go test -count=1 -timeout 1200s ./internal/state/... ./internal/app/...` (Windows) | exit 0; `ok internal/state 14.214s`, `ok internal/app 225.434s` |
+| `go test -count=3 -timeout 900s ./internal/state/` (Windows, repeat stability) | exit 0; `ok 28.027s` |
 | `go test -race -count=1 ./internal/state/` (WSL, twice) | exit 0 |
-| `go test -race -count=1 -run '<13 goleak tests>' ./internal/app/` (WSL, twice) | exit 0; 13/13 PASS, `ok 170.732s` / `ok 167.238s` |
+| `go test -race -count=1 -run '<13 goleak tests + the oracle self-test>' ./internal/app/` (WSL) | exit 0; 14/14 PASS, `ok 167.690s` |
 | `git diff --check` | exit 0 |
 | `go mod verify` | `all modules verified` |
 
 The full `go test -race ./...` step stays the conductor's CI oracle (it needs the network-cached
 dependency set and privileged witness jobs); the WSL race runs above cover the changed surfaces.
+Every row except the two WSL `internal/state` race runs (untouched files) was re-run 2026-11-21
+after the review fixes (STD-01…STD-07); the WSL `-race` runs need goleak in the distro's module
+cache, which was seeded from the host cache because the distro has no egress.
 
 ## Design trade-offs
 
 1. **Per-test goleak instead of `TestMain`** (binding amendment; F15 confirmed at
-   `app.go:7240-7273`: the writer goroutine is unowned on both bounded arms). A package-wide check
+   `app.go:7240-7272`: the writer goroutine is unowned on both bounded arms). A package-wide check
    today can only pass with wildcard ignores, which is the failure mode the finding names. Cost:
    coverage is a named 13-test subset; the TODO entry records the complete form.
 2. **Site 2 becomes an assertion, not a shorter poll.** The input-command handler writes its
@@ -198,7 +230,7 @@ dependency set and privileged witness jobs); the WSL race runs above cover the c
 
 ## Out of scope (with reasons)
 
-- The other pinned waits in `internal/app` tests: `app_test.go:5491` (3 s) and `:7067` (1 s),
+- The other pinned waits in `internal/app` tests: `app_test.go:5492` (3 s) and `:7094` (1 s),
   `atomic_terminal_ack_interleaving_test.go:48` (2 s), `cleanup_test.go:655` (1 ms poll),
   `harness_test.go:4780` (5 ms poll). None is in the contract's enumerated five
   (`plan-review-ds-1.md` P3-7) and the wall-clock burn-down is W4-13's slice; touching them here
@@ -212,15 +244,20 @@ dependency set and privileged witness jobs); the WSL race runs above cover the c
 
 - The Linux-only state files (`linux_cgroup_v2_test.go`, `linux_clone_journal_test.go`) cannot
   compile on the Windows host; their parallel verdicts are exercised by the WSL `-race` runs.
-- The CI acceptance number (state ≤25 s) is measured on the CI runner, not here; the WSL
-  before/after numbers are the same-host comparison the contract asks for (16 vCPU vs the runner's
-  4, so the local number is optimistic).
-- The 4-way (`-parallel 4`) proxy, the CI runner's shape, spans 24.1–37.3 s on this host: the
-  remaining wall time is fsync-heavy store setup whose cost inflates under concurrent writers, so
-  on a CI runner with a slow fsync path the ≤25 s bound could be missed even though the conversion
+- The state ≤25 s acceptance has no CI measurement site: the Linux daemon job's ordinary pass is
+  scoped to `./internal/harness/pi ./internal/harness/opencode`
+  (`.github/workflows/ci.yml:1364`), and `internal/state` runs on Linux only inside that job's race
+  pass (`go test -race -count=1 -timeout 600s ./...`, `ci.yml:1374`), whose own 16-vCPU wall is
+  70.6–79.0 s. The number is therefore measured on host Linux (WSL, 16 vCPU); CI's race pass
+  arbitrates correctness, not the bound, and "CI race green" and "host ≤25 s" are two separate
+  acceptance statements.
+- The `-parallel 4` row is a scheduler-width proxy, not a CI-shape proxy: `GOMAXPROCS` stays 16 on
+  this host, so it exercises 4-way test parallelism on a 16-CPU machine, not a 4-vCPU runner. Its
+  spread, 24.1–37.3 s, is fsync-heavy store setup whose cost inflates under concurrent writers, so
+  on a runner with a slow fsync path the ≤25 s bound could be missed even though the conversion
   removes the serial `sum-of-all-tests` bound (the 30-case Linux table is no longer the critical
-  path). Mitigations outside this slice: the CI run is the arbiter; if it lands high, the next lever
-  is the store-setup cost (`New()` per test), not more test parallelism.
+  path). Mitigation outside this slice: if a future Linux job lands high, the next lever is the
+  store-setup cost (`New()` per test), not more test parallelism.
 - Per-test goleak covers 13 named tests; a leak introduced in another test is not caught until the
   F15 fix enables the package-wide form.
 - Two mutation classes for site 4 remain scheduling-dependent by construction (trade-off 3).

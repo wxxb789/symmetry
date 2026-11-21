@@ -5620,6 +5620,11 @@ func TestCancelPreemptsBlockedInputInSameSnapshot(t *testing.T) {
 	case <-time.After(testHangGuard):
 		t.Fatal("cancel did not preempt blocked input")
 	}
+	// The cancel path has terminated the process, and a terminated process
+	// cannot accept more input: release the blocked write here instead of
+	// waiting out inputWriteTimeout when the input handler won the race for
+	// inputMu and the cancel receipt is queued behind it.
+	close(input.release)
 	<-completions[1].done
 	journal, err := store.LoadJournal(key)
 	if err != nil {
@@ -5632,7 +5637,6 @@ func TestCancelPreemptsBlockedInputInSameSnapshot(t *testing.T) {
 			cancelAcknowledged = true
 		}
 	}
-	close(input.release)
 	<-snapshotDone
 	cancel()
 	<-executorDone
@@ -7151,6 +7155,9 @@ func TestRenewLeasesJoinsWorkersAfterShutdown(t *testing.T) {
 	// The fence is positive -- run-1's in-flight request barrier is released by the
 	// drain loop, not by its worker -- so waiting for the count to drop replaces a
 	// fixed window; every poll also probes that the loop has not returned.
+	// The failure message reports the last sampled count, never a re-read: the
+	// count can change between the final poll and the message.
+	observedRequestBarriers := 0
 	drained := awaitTestCondition(func() bool {
 		select {
 		case <-done:
@@ -7158,11 +7165,11 @@ func TestRenewLeasesJoinsWorkersAfterShutdown(t *testing.T) {
 		default:
 		}
 		requests, _ := commandRequestCounts(daemon)
+		observedRequestBarriers = requests
 		return requests == 1
 	})
 	if !drained {
-		requests, _ := commandRequestCounts(daemon)
-		t.Fatalf("renewal loop did not drain the completed renewal while a worker was parked, request barriers = %d, want 1", requests)
+		t.Fatalf("renewal loop did not drain the completed renewal while a worker was parked, request barriers = %d, want 1", observedRequestBarriers)
 	}
 	close(api.releaseSecond)
 	select {
