@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Unit tests for the shared Go test JSON gate runner."""
 
-import importlib.util
 import json
 import os
 import pathlib
@@ -10,10 +9,10 @@ import sys
 import tempfile
 import unittest
 
+import citest
+
 SCRIPT = pathlib.Path(__file__).with_name("go-test-json-gate.py")
-SPEC = importlib.util.spec_from_file_location("go_test_json_gate", SCRIPT)
-GATE = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(GATE)
+GATE = citest.load_gate(SCRIPT, "go_test_json_gate")
 
 PACKAGE = "github.com/wxxb789/symmetry/daemon/internal/harness/pi"
 TEST = "TestProviderBridgeCloseReleasesBoundPeerFD"
@@ -85,12 +84,7 @@ class GateTestCase(unittest.TestCase):
         self.provenance_path = self.root / "provenance.txt"
 
     def run_gate(self, options, command):
-        return subprocess.run(
-            [sys.executable, str(SCRIPT), *options, "--", *command],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        return citest.run_gate(SCRIPT, *options, "--", *command)
 
     def group(self, package, *tests):
         return ["--assert", package, *tests]
@@ -350,12 +344,7 @@ class StdioBoundaryScriptTests(unittest.TestCase):
     """The caller boundary the gate runner and the daemon race pass both use."""
 
     def run_boundary(self, command):
-        return subprocess.run(
-            [sys.executable, str(GATE.BOUNDARY_SCRIPT), *command],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        return citest.run_gate(GATE.BOUNDARY_SCRIPT, *command)
 
     def test_boundary_preserves_the_command_status_and_output(self):
         result = self.run_boundary([sys.executable, "-c", "import sys; print('streamed'); sys.exit(4)"])

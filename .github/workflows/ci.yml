@@ -1606,6 +1606,8 @@ jobs:
           # fixture suite pins both, and the job that runs the gate itself is gated on
           # the classifier's `run-citations` output.
           python3 ../scripts/ci/test-check-citation-existence.py
+          python3 ../scripts/ci/test-citest.py
+          python3 ../scripts/ci/test-gitfixture.py
       - name: Check auditable model-routing workflow
         run: |
           python3 ../scripts/ci/test-model-routing-evaluation.py

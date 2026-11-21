@@ -4,16 +4,16 @@
 from __future__ import annotations
 
 import hashlib
-import importlib.util
 import itertools
 import json
 import os
 import pathlib
 import re
 import subprocess
-import sys
 import tempfile
 import unittest
+
+import citest
 
 SCRIPT = pathlib.Path(__file__).with_name("export-linux-v2-redacted-evidence.py")
 DAEMON_LOG_SCAN_DIRECTORIES = ("daemon/internal/app", "daemon/internal/platform", "daemon/cmd")
@@ -49,10 +49,7 @@ LEGACY_NAMES = (
 
 
 def load_exporter():
-    specification = importlib.util.spec_from_file_location("export_linux_v2_redacted_evidence", SCRIPT)
-    module = importlib.util.module_from_spec(specification)
-    specification.loader.exec_module(module)
-    return module
+    return citest.load_gate(SCRIPT, "export_linux_v2_redacted_evidence")
 
 
 def go_call_argument_lists(text: str, call_pattern: str) -> list[list[str]]:
@@ -361,21 +358,13 @@ class ExporterTest(unittest.TestCase):
         return path
 
     def write_json(self, path: pathlib.Path, value: dict) -> bytes:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        data = json.dumps(value, indent=2).encode() + b"\n"
-        path.write_bytes(data)
-        os.chmod(path, 0o600)
-        return data
+        return citest.write_json(path, value, mode=0o600)
 
     def write_log(self, path: pathlib.Path, lines: list[bytes]) -> bytes:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        data = b"\n".join(lines) + b"\n"
-        path.write_bytes(data)
-        os.chmod(path, 0o600)
-        return data
+        return citest.write_bytes(path, b"\n".join(lines) + b"\n", mode=0o600)
 
     def run_export(self, *arguments: str) -> subprocess.CompletedProcess[str]:
-        return subprocess.run([sys.executable, str(SCRIPT), *arguments], text=True, capture_output=True, check=False)
+        return citest.run_gate(SCRIPT, *arguments)
 
     def populate_legacy(
         self, source: pathlib.Path, raw_secret: str = "RAW-PRIVATE-SECRET"

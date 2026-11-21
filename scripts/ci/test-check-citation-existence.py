@@ -16,8 +16,10 @@ import os
 import pathlib
 import subprocess
 import sys
-import tempfile
 import unittest
+
+import citest
+from testsupport.gitfixture import FixtureRepo
 
 SCRIPT = pathlib.Path(__file__).with_name("check-citation-existence.py")
 ZERO = "0" * 40
@@ -29,17 +31,11 @@ The projection lives in `control/lib/thing.ex`'s `health/4`.
 """
 
 
-class CitationExistenceTests(unittest.TestCase):
+class CitationExistenceTests(FixtureRepo, unittest.TestCase):
+    REPOSITORY_PREFIX = "citation-existence-"
+
     def setUp(self) -> None:
-        self.temporary = tempfile.TemporaryDirectory(prefix="citation-existence-")
-        self.addCleanup(self.temporary.cleanup)
-        self.root = pathlib.Path(self.temporary.name)
-        self.repo = self.root / "repository"
-        self.repo.mkdir()
-        self.git("init", "--quiet")
-        self.git("config", "user.name", "Fixture")
-        self.git("config", "user.email", "fixture@example.invalid")
-        self.git("config", "commit.gpgsign", "false")
+        super().setUp()
         self.write("docs/runbooks/portal.md", CLEAN_RUNBOOK)
         self.write("docs/design/quality.md", "# Quality\n")
         self.write("docs/archive/CLOSED-TODO.md", "# CLOSED TODO\n")
@@ -49,42 +45,14 @@ class CitationExistenceTests(unittest.TestCase):
         self.write("scripts/ci/test-a.py", "# Stand-in bytes: a member of the fixture family.\n")
         self.write("README.md", "# Fixture\n")
         self.write("daemon/main.go", "package main\n")
-        self.git("add", "-A")
-        self.git("commit", "--quiet", "-m", "fixture base")
-        self.base = self.git_text("rev-parse", "HEAD")
-
-    # -- helpers -------------------------------------------------------------
-
-    def git(self, *arguments: str, input: bytes | None = None) -> bytes:
-        return subprocess.check_output(["git", "-C", str(self.repo), *arguments], input=input, stderr=subprocess.PIPE)
-
-    def git_text(self, *arguments: str) -> str:
-        return self.git(*arguments).decode("ascii").strip()
-
-    def write(self, relative: str, content: str) -> pathlib.Path:
-        path = self.repo / relative
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8")
-        return path
-
-    def commit(self, message: str) -> str:
-        self.git("add", "-A")
-        self.git("commit", "--quiet", "-m", message)
-        return self.git_text("rev-parse", "HEAD")
+        self.base = self.commit("fixture base")
 
     def run_gate(self, *arguments: str) -> subprocess.CompletedProcess:
-        return subprocess.run(
-            [sys.executable, str(SCRIPT), "--repo", str(self.repo), *arguments],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        return citest.run_gate(SCRIPT, "--repo", str(self.repo), *arguments)
 
     def cite_in_runbook(self, citation: str, message: str = "cite") -> str:
         self.write("docs/runbooks/portal.md", f"# Portal runbook\n\nSee {citation} for the shape.\n")
         return self.commit(message)
-
-    # -- tests ---------------------------------------------------------------
 
     def test_a_cited_path_the_head_does_not_hold_is_refused(self) -> None:
         head = self.cite_in_runbook("`docs/runbooks/moved.md:12`", "cite a moved path")
