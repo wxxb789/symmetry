@@ -24,9 +24,15 @@ Definition census over the in-scope set (the four CI-run specs that carry copies
 the shared module). Command, run from `browser/`:
 
 ```sh
-grep -nE "^(export )?(async )?function (login|api|capture|createProject|recordHistoryWrites|executionPolicy|acceptance|authorityPolicy|contextManifest|deviceContextOptions|historyWrites)\b|^(export )?const (historyWrites|FALLBACK_READ_GUARD_MS|deviceContextOptions|login|api|capture|createProject)\b" \
+grep -nE "^(export )?(async )?function (login|api|capture|createProject|recordHistoryWrites|executionPolicy|acceptance|authorityPolicy|contextManifest|deviceContextOptions|historyWrites)\b|^(export )?const (acceptance|acceptanceContract|authorityPolicy|executionPolicy|contextManifest|planProposal|historyWrites|FALLBACK_READ_GUARD_MS|deviceContextOptions|login|api|capture|createProject)\b" \
   tests/workspace-shell.spec.mjs tests/portal-goal-attention.spec.mjs tests/portal-cutover.spec.mjs tests/portal-work-views.spec.mjs tests/readable-fixtures.mjs
 ```
+
+The `const` branch names the payload builders explicitly: `acceptance` is the
+base's const-form definition, `acceptanceContract` its final-tree name, and
+`authorityPolicy`/`executionPolicy`/`contextManifest`/`planProposal` are const
+both before and after. This returns **24** lines at `7654f32a` and **13** at the
+final tree (all in the shared module; the per-helper table below splits them).
 
 | helper | copies at base | classification |
 | --- | --- | --- |
@@ -48,7 +54,8 @@ Excluded remainder recorded by E6 (untouched in this slice, owned by W6-02):
 `portal-connections.spec.mjs` (`login:109`, `api(page, path, {method, body}):117`,
 `createProject:132`, `deviceContextOptions:233`), `portal-work-planning.spec.mjs`
 (`columnOf:92`, `moveByKeyboard:98`), `portal-compose-daemon.spec.mjs`
-(`uniqueProject:20`, `fixtureDescription:27`, `workUrl:35`, `columnOf:40`,
+(`uniqueProject:20`, `fixtureDescription:27`, `projectUrl:31` (a byte-identical
+copy of `readable-fixtures.mjs:74-77` modulo `export`), `workUrl:35`, `columnOf:40`,
 `servedColumnTitles:51`, `moveByKeyboard:60`, `itemDetail:65`, `openWork:70`),
 `portal-compose-restart.spec.mjs` (`workUrl:8`, `columnOf:9`,
 `workItemDetail:14`), plus the two live-daemon specs.
@@ -60,9 +67,15 @@ options object, `attachResource`, `capture`, `uniqueKey`),
 `portal-chat-live`, `portal-execution-control`, `portal-goal-managed`,
 `portal-live-daemon`, `portal-work-planning`, `portal-work-views`,
 `portal-compose-{daemon,restart}`, `portal-connections` (`capture` only). Verified
-call shapes at base: no caller passes a third positional `login` argument except
-the in-scope goal-attention spec; every `createProject` caller passes the options
-object; `capture` is never called with a fifth argument.
+call shapes at base: no caller of the shared `login` passes a third positional
+argument (the only three-argument call is the in-scope `goal-attention:512`,
+against that suite's own local copy, migrated here to the `base` option); every
+caller of the shared `createProject` passes the options object
+(`portal-goal-attention` and `portal-connections` call their own local copies —
+`(page, suffix, {blocked})` and a single argument); `capture`'s fifth `options`
+argument is already in use outside this slice's set (`work-planning:821` passes
+`{ fullPage: false }`), so the shared `options.fullPage ?? true` default is a live
+contract, not dead code.
 
 CI pins (frozen): the render gate (`.github/workflows/ci.yml:752-825`) runs seven
 specs, `--expect-file` names exactly those seven, and three test titles are pinned
@@ -164,8 +177,10 @@ helpers, and four of the seven helper families already live here.
   `./readable-fixtures.mjs`. Both call sites (`:707`, `:777`) stay byte-identical.
 
 No other file changes. `docs/TODO.md`/`docs/archive/CLOSED-TODO.md` do not move:
-the two TODO mentions of this area (`:393`, `:556-560`) are closed entries of
-other goals whose text documents past inventories/budgets, not open items about
+the two TODO mentions of this area (`:393`, `:556-560`) sit inside entries of
+other goals that are themselves still open at the base revision (`- [ ]`: the
+browser-suite re-measurement under host load and the live-daemon pagination
+residual) and their text documents past inventories/budgets, not open items about
 the helper copies — checked with
 `grep -n "browser/tests\|readable-fixtures\|T5:" docs/TODO.md`. The evidence record
 is written into this plan file and the run's `answer.md` because the contract's
@@ -301,19 +316,24 @@ render-gate run + its executed-set assertion + the render-gate mutations are
 | diff hygiene | `git diff --check`; case-insensitive profile-directory grep over the diff | no whitespace damage, no user-profile host path |
 | LOC delta (D2, reported) | `git diff --stat`/`--numstat` over the owned set | the `−200…−250` prediction is reported, never gated |
 
-Mutation checks (contract gates row): one per consolidated helper *family*, each a
-CI render-gate run on a throwaway commit, named here so the conductor can run them:
+Mutation checks (contract gates row): one per consolidated helper *family whose
+removal is observable by a consuming case*, each a CI render-gate run on a
+throwaway commit, named here so the conductor can run them:
 
 | family | mutant | expected red source |
 | --- | --- | --- |
-| `login` | drop the `assert` loop (or the `base` prefix) | `workspace-shell`'s palette-dependent case / `portal-goal-attention`'s rollout-off case fails to reach its own first assertion |
+| `login` | drop the `base` prefix | `portal-goal-attention`'s rollout-off case: without the prefix the entry lands on the goals-on instance and `expect(refused.response.status).toBe(409)` / `error.code === "goal_admission_disabled"` (`:486-487`) fails. The render gate sets `SYMMETRY_GOALS_OFF_URL` and `SYMMETRY_RENDER_GATE_REQUIRED=1`, so the case executes rather than skipping green. Dropping the `assert` loop is not a red mutant: it removes a satisfied wait that no case observes |
 | `api` | return `body: null` instead of `{}` for an empty body, or drop the `x-csrf-token` header | every POST case in the four specs (403/parse failure) |
-| `capture` | drop the `expect.poll(scrollWidth <= innerWidth)` overflow guard | any capturing case on a surface that overflows |
+| `capture` | — no deterministic mutant | the deleted `workspace-shell:86` copy was the shared body with `fullPage: true` fixed: it carried no assertion the shared copy lacks. The `expect.poll(scrollWidth <= innerWidth)` guard came *from* the shared copy, and removing a satisfied read-only assertion is observed by no case, so this family's cutover has nothing the render gate can redden on. Recorded as unmutable, not claimed as a passing pin |
 | `recordHistoryWrites`/`historyWrites` | record `String(args[0])` or stop filtering the empty URL | `workspace-shell`'s legacy-hash-repair case, `portal-cutover`'s hash-route case |
 | `createProject`/`blocked` | skip the blocked work item | `portal-goal-attention`'s attention-merge and rollout-off cases (they assert `Blocked work <key>`) |
 | policy literals + `planProposal` | change one field of the built proposal (e.g. `expected_revision: 2`) | `portal-goal-attention`'s plan-approval case / `portal-cutover`'s reconnect case (server refuses the command) |
 | `deviceContextOptions` | drop `isMobile`/`hasTouch` | `portal-work-views`' fresh-context deep-link cases at the mobile project |
 | `acceptanceContract` | drop a field or alter `description` | the plan-admission cases (server-side contract validation) |
+
+Seven runs, not eight: `capture`'s deleted copy differs from the shared body only
+in the `fullPage` default, which changes an attached screenshot's bytes and
+nothing any case asserts.
 
 ## Out of scope (with reasons)
 
@@ -366,13 +386,18 @@ driven through the identical recording carrier.
 
 ## Per-helper table (deleted copy -> shared helper + parameters -> call sites)
 
-Definition census: at the base revision the in-scope set held **25 definitions**
-of the consolidated names (3 `login`, 3 `api`, 2 `capture`, 2 `createProject`,
-2 `recordHistoryWrites`, 2 `historyWrites`, 2 `executionPolicy`, 2
-`authorityPolicy`, 2 `acceptance`, 2 `contextManifest`, 2 `deviceContextOptions`,
-1 `FALLBACK_READ_GUARD_MS`, 2 proposal literals) with 4 of them already in
-`readable-fixtures.mjs`. At the final tree the same grep finds **13 definitions,
-all in `browser/tests/readable-fixtures.mjs` (lines 43, 52, 96, 223, 229, 236,
+Definition census: at the base revision the in-scope set (the four CI-run specs +
+the shared module, the command's own file set) held **24 definitions** of the
+consolidated names — 3 `login`, 3 `api`, 2 `capture`, 2 `createProject`, 2
+`recordHistoryWrites`, 2 `historyWrites`, 2 `executionPolicy`, 2 `authorityPolicy`,
+2 `acceptance`, 2 `contextManifest`, 1 `deviceContextOptions` (the in-scope
+`portal-work-views:91` copy; the `portal-connections:233` copy is E6-excluded and
+outside the command's file set), 1 `FALLBACK_READ_GUARD_MS` — with 4 of them
+already in `readable-fixtures.mjs`. The two `symmetry.plan.v1` proposal literals
+(`cutover:115`, `goal-attention:156`) are inline object literals at the base, so
+the census command has no definition line to match; the table below counts them.
+At the final tree the same grep finds **13 definitions, all in
+`browser/tests/readable-fixtures.mjs` (lines 43, 52, 96, 223, 229, 236,
 252, 266, 294, 303, 321, 349, 360)**, and **zero** in the four CI-run specs. The
 E6-excluded `portal-connections.spec.mjs` still carries its own `login:109`,
 `api:117`, `createProject:132` and `deviceContextOptions:233` — the recorded
@@ -381,7 +406,7 @@ remainder for W6-02.
 | helper | base copies deleted here | shared definition | call sites at the final tree | assertions moved |
 | --- | --- | --- | --- | --- |
 | `login` | `workspace-shell:43`, `goal-attention:25` | `readable-fixtures.mjs:43` (`{base, assert}`) | `shellLogin` 8 (workspace-shell), `login` 9 (goal-attention, one with `base`), 8 (cutover, unchanged), 11 (work-views, unchanged) | the palette wait became the `assert` entry |
-| `api` | `workspace-shell:52`, `goal-attention:32` | `:52` (signature unchanged) | 3 migrated in workspace-shell to the 3-argument form, 3 in its `project` helper; goal-attention 25, cutover 7, work-views 2 unchanged | none |
+| `api` | `workspace-shell:52`, `goal-attention:32` | `:52` (signature unchanged) | 3 migrated in workspace-shell to the 3-argument form — 2 in its `project` helper (`:34`, `:38`), 1 in the Attention-scope case (`:177`); goal-attention 25, cutover 7, work-views 2 unchanged | none |
 | `capture` | `workspace-shell:86` | `:321` (unchanged) | 11 + 10 + 6 + 13, unchanged | the overflow poll guard came from the shared copy |
 | `recordHistoryWrites` / `historyWrites` | `workspace-shell:30/41`, `cutover:40/51` | `:349` / `:360` | 1 + 1 each, unchanged | none |
 | `createProject` | `goal-attention:76` | `:96` (`blocked`) | `goalProject` 9 (goal-attention), cutover 5 unchanged, other importers unchanged | the blocked work item's 201 assertion |
@@ -391,7 +416,7 @@ remainder for W6-02.
 | `deviceContextOptions` | `portal-work-views:91` | `:303` (`baseURL`) | 2, unchanged | none |
 | `FALLBACK_READ_GUARD_MS` | `cutover:60` | `:294` | 1, unchanged | none |
 
-## Gate results (implement stage, 2026-11-21, final tree, foreground)
+## Gate results (implement stage + fix r1, 2026-11-21, final tree, foreground)
 
 | gate | command (from the repo root unless noted) | exit | counts / output |
 | --- | --- | ---: | --- |
@@ -401,9 +426,9 @@ remainder for W6-02.
 | every importer still links | `pnpm --pm-on-fail=ignore --filter symmetry-browser-acceptance exec playwright test --list` (all 13 specs) | 0 | `Total: 168 tests in 13 files` — all nine non-owned importers of `readable-fixtures.mjs` (13 importers at this tree, 12 at base) collect against the new module |
 | importer signature compatibility | scripted check: every name each spec imported from `readable-fixtures.mjs` at HEAD is still exported | 0 | 13 importers, 31 exported names at the final tree, no missing name (the aliased `seedProject as seedFixtureProject` form included); no imported name is left unreferenced |
 | definition census | the `grep -nE` command in "Measured basis" | 0 | 13 definitions, all shared; 0 in the four specs |
-| migration completeness | greps for a 2-argument `api`, a positional `createProject`, a local definition outside the shared module | 0/1 | no 2-argument `api`; no positional `createProject`; the only remaining local definitions are `portal-connections`' four (E6 remainder); the single 3-argument `login` line is the migrated `{ base: goalsOffUrl }` call |
+| migration completeness | greps for a 2-argument `api`, a positional `createProject`, a local definition outside the shared module | 0/1 | no 2-argument `api`; no positional `createProject`; the only remaining local definitions are `portal-connections`' four (E6 remainder); the two 3-argument `login` lines at the final tree are the migrated `{ base: goalsOffUrl }` call (`portal-goal-attention:445`) and the `{ assert }` option inside `workspace-shell`'s local `shellLogin` preset (`:29`) |
 | browser suite inventory | `python3 scripts/ci/assert-browser-suite-coverage.py` | 0 | `suites=16 wired=7 manual=9 unclassified=0`; `PASS` |
-| citation existence | `python3 scripts/ci/check-citation-existence.py` | 0 | `no audited document added or modified between 7954836892f3 and 7654f32a1f72; nothing to check` |
+| citation existence | `python3 scripts/ci/check-citation-existence.py` | 0 | `no audited document added or modified between 4d465119546d and 6d0b2c8fabb9; nothing to check` (fix-stage run on the final tree; the audited set is `docs/runbooks`, `docs/design/quality.md`, `docs/archive/CLOSED-TODO.md`, so this plan file is not audited either way) |
 | diff hygiene | `git diff --check` | 0 | no whitespace errors |
 | DLP | case-insensitive grep over the diff for the profile-directory fragment, a backslash immediately before the letter u, and the profile name (patterns described, never embedded); `git diff origin/main` for the branch's own commits | 1 (no match) | the working diff carries no user-profile path, no JSON-escape sequence, no profile name; the `origin/main` hits are other slices' committed fixture text |
 | moved bytes | `diff` of each verbatim block against `git show HEAD:<file>` | 0 | `executionPolicy` (both copies), `authorityPolicy`, `contextManifest`, `recordHistoryWrites`, `historyWrites` differ only by the added `export`; `capture` differs only in `options.fullPage ?? true`; `deviceContextOptions` only in the `baseURL` parameter |
@@ -418,8 +443,9 @@ Not run on this host (recorded as missing, not passed):
   and the contract's gates row makes the PR's CI run the primary oracle. The local
   collection evidence above proves the four specs still link and register the same
   70 cases; it does not execute a case.
-- the eight render-gate mutations named in the Evidence plan: each is a CI run on a
-  throwaway commit (the contract limits them to one per helper family). The local
+- the seven render-gate mutations named in the Evidence plan (`capture` has no
+  observable removal to mutate — recorded there): each is a CI run on a throwaway
+  commit (the contract limits them to one per helper family). The local
   carrier-level probe (9/9 detected) proves the comparison evidence is mutant
   sensitive; it is not a substitute for the spec-level red.
 - the six E6-excluded manual families: untouched, no oracle (E8); their helper
@@ -429,7 +455,9 @@ Not run on this host (recorded as missing, not passed):
 
 Local (throwaway carrier, `<HOST-PATH>/_w4-14-evidence/mutation-probe.txt`): each
 mutant is one line of the shared module; "detected" means the old-vs-new
-comparison above reports it.
+comparison above reports it. A carrier-level detection is not a spec-level red:
+the `login` `assert`-loop mutant is reported here while no consuming case observes
+that wait, which is why the CI table names only the `base` prefix for that family.
 
 | family | mutant | result |
 | --- | --- | --- |
@@ -443,6 +471,7 @@ comparison above reports it.
 | `capture` | `fullPage` forced false | detected |
 | `acceptanceContract` | `description` dropped | detected |
 
-CI-owned (spec level, one per family, throwaway commits): the eight mutations in
-the Evidence plan table, each expected to redden the named consuming spec in the
-render gate. The conductor runs them on the PR; this slice does not commit.
+CI-owned (spec level, one per family that has an observable removal, throwaway
+commits): the seven mutations in the Evidence plan table, each expected to redden
+the named consuming spec in the render gate. The conductor runs them on the PR;
+this slice does not commit.
