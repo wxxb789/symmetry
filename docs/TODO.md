@@ -1169,3 +1169,44 @@ instead of appended.
       outside the rf-w4-19 owned set (plan
       `docs/plans/2026-11-21-rf-w4-19-linuxpreflight-package-plan.md`, "The runtime-selection
       vocabulary"), so the slice kept the copy and recorded this entry instead.
+
+## Daemon state: decorative trailing-data disjunct in the provider-action decoder (rf-w3-07 survey)
+
+- [ ] Revalidate and merge the redundant trailing-data arms of
+      `normalizeProviderActionResult` (`daemon/internal/state/provider_action.go`). At the
+      rf-w3-07 base `52bdffd2` the block was
+      `if token, tokenErr := decoder.Token(); tokenErr != io.EOF { if tokenErr == nil || token !=
+      nil { return errors.New("provider action result has trailing data") }; return
+      errors.New("provider action result has trailing data") }`: both arms returned the identical
+      static error, so the disjunct could not change any outcome, and `json.Decoder.Token`
+      returns a nil token whenever it returns an error. rf-w3-07 (2026-11-21) split the block to
+      wrap the decoder cause (`if tokenErr != nil { wrapped }`, `if token != nil { static }`,
+      final `static`) and kept the third arm because that slice's contract requires base-vs-head
+      control-flow preservation for every early return; the last two arms still return the same
+      bytes. No test asserts the message by equality (`grep -rn --include=*_test.go '"provider
+      action result has trailing data"' daemon/` matches nothing). A follow-up maintenance task
+      can collapse the arms to one static return after re-running the state suite on the Linux
+      lane; the sweep and the classification table live in
+      `docs/evidence/rf-w3-07-state-error-causes-2026-11-21.md` §1/§2.
+
+## Deferred review findings (PR #200)
+
+- [ ] Harden the goal-session uncertain-reason budget against invalid UTF-8 at the store
+      boundary (`daemon/internal/state/goal_session.go:1052` write check vs `:1688` read
+      validation; 2026-11-21, branch `refactor/rf-w3-07-state-error-causes`, PR #200 review
+      P2-1). A within-budget reason containing invalid UTF-8 bytes passes the write check
+      (`validRequiredString` is length-only), but the journal's JSON round trip replaces each
+      invalid byte with U+FFFD (3 bytes), so the reloaded `UncertainReason` can exceed the
+      4096-byte budget and `LoadGoalSession` then rejects the whole journal
+      (`invalid goal session journal`), making the session unreadable after a mark that was
+      accepted — e.g. a 4096-byte reason with one invalid byte reloads at 4098 bytes. The same
+      hazard exists on base `52bdffd2`; PR #200 fixed only the reason strings the app composes
+      (`boundedGoalSessionUncertainReason` now runs `strings.ToValidUTF8` over the over-budget
+      prefix), because the W307-R1 decision forbids changing the sink. Owner: state store. Fix
+      direction: reject or normalize non-UTF-8 reasons in
+      `MarkGoalSessionUncertain`/`validateGoalSessionStates` the way the app bound does.
+      Reproduction: `MarkGoalSessionUncertain(key, strings.Repeat("r", 4095)+"\xff")` succeeds,
+      then `LoadGoalSession(key)` returns `invalid goal session journal`; the app-side callers
+      are pinned by `daemon/internal/app/goal_delivery_test.go`:
+      `TestAbandonGoalSessionBoundsOversizedUncertainReason` (the interior-invalid-byte case)
+      and `TestBoundedGoalSessionUncertainReason` (the within-budget invalid-byte case).
