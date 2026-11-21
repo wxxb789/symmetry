@@ -25,31 +25,34 @@ defmodule SymmetryControlWeb.StrictJSONDecoder do
   @spec decode!(binary()) :: term()
   def decode!(body) when is_binary(body) do
     case decode_ordered(body) do
-      {:ok, value} -> value
-      {:error, :duplicate_json_key} -> raise DuplicateJSONKeyError
-      {:error, error} -> raise error
+      {:ok, value} ->
+        case materialize(value) do
+          {:ok, value} -> value
+          {:error, :duplicate_json_key} -> raise DuplicateJSONKeyError
+        end
+
+      {:error, error} ->
+        raise error
     end
   end
 
   @doc """
   Decodes one evidence body as a top-level JSON object without duplicates.
+
+  The root shape is checked before the duplicate walk, so a non-object root
+  keeps its `:expected_json_object` error even when it contains repeated
+  members.
   """
   @spec decode_object(binary()) :: {:ok, map()} | {:error, decode_error()}
   def decode_object(body) when is_binary(body) do
     case decode_ordered(body) do
-      {:ok, object} when is_map(object) -> {:ok, object}
+      {:ok, %Jason.OrderedObject{} = object} -> materialize(object)
       {:ok, _value} -> {:error, :expected_json_object}
-      {:error, :duplicate_json_key} -> {:error, :duplicate_json_key}
       {:error, _error} -> {:error, :malformed_json}
     end
   end
 
-  defp decode_ordered(body) do
-    case Jason.decode(body, objects: :ordered_objects) do
-      {:ok, value} -> materialize(value)
-      {:error, error} -> {:error, error}
-    end
-  end
+  defp decode_ordered(body), do: Jason.decode(body, objects: :ordered_objects)
 
   defp materialize(%Jason.OrderedObject{values: values}) do
     materialize_pairs(values, %{})

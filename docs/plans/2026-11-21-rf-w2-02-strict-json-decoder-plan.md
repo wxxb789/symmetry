@@ -2,11 +2,13 @@
 
 Contract: `goal-rf-w2-02-strict-json-decoder.md` (GDD, 2026-11-21; reconciled conductor decision
 in the same file, C1-C7), the Elixir half of program-plan §2 M11 / §5 W2-02, from finding CW-1
-(`<gdd-state>/refactor/findings/control-web.md:166-196`). Coordinate baseline: this worktree's
-HEAD `27486cbc5410bfa311b1646d1d67fad9abefaba2` (`27486cbc`, #147 merged) — every base line
-below was read at that revision. Shape reference: the Go half of the same finding, W1-09
-(#140, `daemon/internal/contracts/schema.go`), whose increment deleted a duplicate traversal
-between an entry point and its validator while keeping every verdict and message.
+(`<gdd-state>/refactor/findings/control-web.md:166-196`). Coordinate baseline: the diff base
+`12a94c79` (#147 merged); every base line below was read at that revision. (`27486cbc`, this
+worktree's HEAD when the plan was written, is an ancestor of `12a94c79`, and the base plug
+file is byte-identical at both revisions — verified.) Shape reference: the Go half of the same
+finding, W1-09 (#140, `daemon/internal/contracts/schema.go`), whose increment deleted a
+duplicate traversal between an entry point and its validator while keeping every verdict and
+message.
 
 ## Pass inventory at the baseline (why 2 decodes + 1 discarded walk)
 
@@ -18,7 +20,7 @@ A strict-scope JSON mutation (`POST|PUT|PATCH|DELETE` on `/api/v1/**` or `/porta
 | 1 | `Plug.Conn.read_body` via the wrapped body reader `read_json_body/3` | raw bytes | `strict_evidence_json.ex:188-199` | **remove** the wrapper (the body reader stays `{Plug.Conn, :read_body, []}`) |
 | 2 | `Jason.decode(..., objects: :ordered_objects)` duplicate scan | whole document | `:201-213` (`validate_duplicate_json_members/1`) | keep once, inside the decoder |
 | 3 | materialize walk building plain maps, result discarded | decoded tree | `:225-259` | keep once, same walk, result *kept* as `body_params` |
-| 4 | `Plug.Parsers.JSON` → plain `Jason.decode!/1` | raw bytes | `deps/plug/lib/plug/parsers/json.ex:79-96`; decoder set at `endpoint.ex:70-73` | **remove** (the strict options install the ordered decoder instead) |
+| 4 | `Plug.Parsers.JSON` → plain `Jason.decode!/1` | raw bytes | `deps/plug/lib/plug/parsers/json.ex:89-103`; decoder set at `endpoint.ex:70-73` | **remove** (the strict options install the ordered decoder instead) |
 
 So one mutation today decodes the same bytes twice and walks the first result only to throw it
 away; the second parse is the one whose result is used. The deferred evidence route
@@ -35,7 +37,10 @@ single-pass by design and keeps its shape (C2); `daemon_controller.ex:401` stays
      re-raises the `Jason.DecodeError` the parser returned (so Plug wraps it exactly as it
      wraps the plain decoder's). `decode_object/1` is the same ordered decode restricted to a
      top-level object with the current tagged errors (`:malformed_json`,
-     `:expected_json_object`, `:duplicate_json_key`), and is what `materialize/1` now calls;
+     `:expected_json_object`, `:duplicate_json_key`); it checks the root shape before the
+     duplicate walk, so a non-object root answers `:expected_json_object` even when it contains
+     repeated members (base `decode_object/1` semantics), and it is what `materialize/1` now
+     calls;
    - `init/1` builds the strict options by swapping only the JSON parser's decoder for
      `{StrictJSONDecoder, :decode!, []}`; the plain options keep `Phoenix.json_library()`
      (C1). `endpoint.ex` therefore needs no edit — `json_decoder: Phoenix.json_library()`
@@ -53,10 +58,11 @@ single-pass by design and keeps its shape (C2); `daemon_controller.ex:401` stays
 2. `control/test/symmetry_control_web/plugs/strict_evidence_json_test.exs`: characterization
    tests that are green on the base bytes (endpoint-level duplicate envelope byte-for-byte,
    malformed-body parser rendering, `+json` on a mutation route, top-level array `_json`,
-   empty body, `/portal/login` first-wins) plus one wiring pin that is red on base: the strict
-   options hold `{StrictJSONDecoder, :decode!, []}` with the untouched body reader while the
-   plain options keep `{Jason, :decode!, []}`. No existing test is renamed, deleted or
-   weakened.
+   empty body, `/portal/login` first-wins, non-object-root duplicate precedence) plus one
+   wiring pin that is red on base: the strict options hold `{StrictJSONDecoder, :decode!, []}`
+   with the untouched body reader while the plain options keep `{Jason, :decode!, []}`. No
+   existing test is deleted or weakened; two test names that said "before parsing" (accurate
+   only for the base body-reader wrapper) now say "during the ordered decode".
 3. This plan file.
 
 No in-repo document describes the double parse or the wiring (checked: `docs/design/**`,
@@ -72,8 +78,8 @@ outside the owned set goes stale. `docs/TODO.md` holds no `W2-02` entry, so no T
 | duplicate member, top level or nested, incl. `\uXXXX` aliases | 400 `Protocol.error(:invalid_request)` + halt | identical, byte-for-byte (`{"error":{"code":"invalid_request","message":"request payload is invalid"}}`) |
 | duplicate member inside a top-level array | rejected (walk recurses into lists) | identical |
 | equal member names in distinct objects | accepted | identical |
-| empty body, JSON content type | `body_params` `%{}`, decoder not invoked (`json.ex:77-78`) | identical |
-| top-level array / scalar | accepted, `body_params` `%{"_json" => value}` (`json.ex:82-86`) | identical |
+| empty body, JSON content type | `body_params` `%{}`, decoder not invoked (`json.ex:85-87`) | identical |
+| top-level array / scalar | accepted, `body_params` `%{"_json" => value}` (`json.ex:100-101`) | identical |
 | malformed JSON | `Plug.Parsers.ParseError` propagates, 400 rendered by `ErrorJSON` fallback ("request is invalid") | identical class and rendering |
 | malformed *and* duplicate | malformed wins (decode fails before the walk) | identical precedence |
 | `application/vnd.*+json` | strict decoder applies | identical |
@@ -144,12 +150,13 @@ outside the owned set goes stale. `docs/TODO.md` holds no `W2-02` entry, so no T
    `ParseError` would be wrapped a second time and malformed bodies would change their
    exception shape; matching on the inner exception keeps malformed bytes on exactly the base
    rendering. The plug-level match is also where `Protocol.error/2` already lives.
-4. **One walk, shared by `decode!/1` and `materialize/1`.** The deferred evidence path needs
+4. **One walk, shared by `decode!/1` and `decode_object/1`.** The deferred evidence path needs
    the same duplicate check and materialization; keeping the base's two copies would leave
    `materialize/1` on its own decoder and re-open the same asymmetry. The walk's error tags
-   (`:malformed_json`, `:expected_json_object`, `:duplicate_json_key`) are unchanged, pinned by
-   the existing tests; the empty-capture clause (`{:ok, ""}` → `{:ok, %{}}`) is pinned by the new
-   plug-level empty-evidence-capture test.
+   (`:malformed_json`, `:expected_json_object`, `:duplicate_json_key`) and the root-shape
+   precedence are unchanged, pinned by the existing tests plus the non-object-root duplicate
+   pin; the empty-capture clause (`{:ok, ""}` → `{:ok, %{}}`) is pinned by the new plug-level
+   empty-evidence-capture test.
 5. **Not endpoint-wide.** CW-1's proposal installed the decoder in `endpoint.ex`; the
    conductor ruled strict scope stays the strict route set (C1), so non-strict routes keep the
    plain decoder. Cheaper and narrower than the finding.

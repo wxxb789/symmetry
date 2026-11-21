@@ -72,7 +72,7 @@ defmodule SymmetryControlWeb.Plugs.StrictEvidenceJSONTest do
     assert {:error, :duplicate_json_key} = StrictEvidenceJSON.materialize(conn)
   end
 
-  test "rejects duplicate JSON members on protocol v1 mutation routes before parsing" do
+  test "rejects duplicate JSON members on protocol v1 mutation routes during the ordered decode" do
     conn =
       :post
       |> conn("/%61pi/v1/projects/project-1/goals", ~S({"items":[{"name":1,"\u006eame":2}]}))
@@ -84,7 +84,7 @@ defmodule SymmetryControlWeb.Plugs.StrictEvidenceJSONTest do
     assert %{"error" => %{"code" => "invalid_request"}} = Jason.decode!(conn.resp_body)
   end
 
-  test "rejects duplicate JSON members on portal API mutation routes before parsing" do
+  test "rejects duplicate JSON members on portal API mutation routes during the ordered decode" do
     conn =
       :post
       |> conn(
@@ -254,6 +254,16 @@ defmodule SymmetryControlWeb.Plugs.StrictEvidenceJSONTest do
       |> StrictEvidenceJSON.call(@parser_options)
 
     assert {:error, :expected_json_object} = StrictEvidenceJSON.materialize(scalar)
+  end
+
+  test "prefers the root-shape error over nested duplicates for an evidence body" do
+    conn =
+      :post
+      |> conn("/api/v1/runs/run-1/evidence", ~s([{"name":1,"name":2}]))
+      |> put_req_header("content-type", "application/json")
+      |> StrictEvidenceJSON.call(@parser_options)
+
+    assert {:error, :expected_json_object} = StrictEvidenceJSON.materialize(conn)
   end
 
   test "delegates non-evidence requests to Plug.Parsers unchanged" do
