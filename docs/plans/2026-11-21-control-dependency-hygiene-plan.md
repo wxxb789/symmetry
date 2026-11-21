@@ -1,9 +1,10 @@
 # control-dependency-hygiene plan — Credo dep, inert telemetry removal, plug 1.20.4, no `:multipart`
 
 Contract: `goal-rf-w1-02-control-dep-hygiene.md` (GDD, 2026-11-21), slice W1-02 of
-`program-plan.md` §4, plus the binding review amendment P3-8 of `plan-review-ds-1.md`. Baseline for
-every coordinate in this plan and in the delivered change: `origin/main` at
-`a3039f0d17fc7c7905b63bdf247cac5bf339b213` (`a3039f0`, the worktree's HEAD).
+`program-plan.md` §4, plus the binding review amendment P3-8 of `plan-review-ds-1.md`. Pre-change
+coordinates are at `a3039f0d17fc7c7905b63bdf247cac5bf339b213` (`a3039f0`, `origin/main`, the
+worktree's baseline HEAD); the added test case and the remaining `:multipart` replica in
+`strict_evidence_json_test.exs` are at delivered HEAD bytes.
 
 Source evidence: `findings/control-web.md` CW-14 (plug advisory, `:multipart` enabled with no
 producer) and CW-11 (telemetry scaffolding inert), re-derived here rather than trusted.
@@ -178,7 +179,7 @@ full suite is started while any other suite runs.
    the CI step; W1-02 supplies only the dependency the plan pins (`~> 1.7`, `runtime: false`). No
    second convention, and nothing in this slice can make a gate blocking.
 3. **Remove exactly one parser from the endpoint list.** The plug's own local option replica in
-   `strict_evidence_json_test.exs:10,169` still names `:multipart`; the conductor amendment
+   `strict_evidence_json_test.exs:10,199` still names `:multipart`; the conductor amendment
    (simplify RFW102S-3) extends the owned set to that file for one added regression case that pins
    "the endpoint no longer parses multipart bodies" at the endpoint. The replica spelling stays
    recorded drift for the file's owner (RFW102-1), not silently "fixed" — and not a reason to touch
