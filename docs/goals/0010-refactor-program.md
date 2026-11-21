@@ -157,7 +157,7 @@ this program.
 ## Status
 
 State re-derived on 2026-11-21 from `gh`, the contracts and the live branches at `origin/main`
-`7954836`, gh snapshot 11:51Z (the round-4 T1 refresh logged below). "Pipeline" = dispatched work
+`7954836`, gh snapshot 11:56Z (the round-5 T1 refresh logged below). "Pipeline" = dispatched work
 with no PR yet: W3-02 has a pushed branch. "Gated on X" lists the merge-first set at this
 snapshot; the contracts are the authority and every gate is re-derived at dispatch. The W4
 and W5 reconciles under independent two-model review are recorded (reconcile reports, parts a
@@ -167,9 +167,10 @@ decisions are now folded into the contracts: W6-03 stays HOLD (capability suppli
 W4-12 reshape — pending arch-decision-1 review, T2 unreviewed; contract re-drafted after W4-12),
 W6-06 stays HOLD for an owner re-scope plus a 06a/06b split, and W6-12 splits into 12a/12b.
 Architecture decision arch-decision-1 (T2, pending independent review — logged below) is not yet
-binding: it proposes the W4-07 and W4-12 reshapes, queues W4-17a/W4-17b/W4-19/W4-20 and
-A4/A5/W5-14, and holds W4-01/W4-07/W4-12/W4-13/W4-15b; the tables below mark the arch-derived
-parts held or pending.
+binding: it proposes the W4-07 and W4-12 reshapes, adds W4-17a/W4-17b/W4-19/W4-20 and
+A4/A5/W5-14 (W4-17a/W4-19/W4-20 sit in pre-review implementation; no arch-derived PR merges
+before the review is bound), and holds W4-01/W4-07/W4-12/W4-13/W4-15b; the tables below mark the
+arch-derived parts held or pending.
 
 ### Wave 1 — low-risk enablers (14 slices) — complete
 
@@ -257,10 +258,10 @@ parts held or pending.
 | W4-15a | Harness JSONL decoder leaf (`internal/harness/linejson`) | — | gated on W3-04 (#187) + W3-15 |
 | W4-15b | Harness staged driver 5b (DR S5b) | — | held (arch-decision-1 pending review); gated on W4-15a |
 | W4-16 | Python test harness: git fixture + citest (SC S5 + T8) | — | gated on W3-16, W3-01 |
-| W4-17a | Command-queue module out of `daemon` (A1a) | — | in flight; landing gated on arch-decision-1 review |
+| W4-17a | Command-queue module out of `daemon` (A1a) | — | in flight (pre-review implementation); landing gated on arch-decision-1 review |
 | W4-17b | Run-lifecycle state machine with guarded transitions (A1b) | — | queued (after W4-17a); landing gated on arch-decision-1 review |
-| W4-19 | Linux host verifiers extracted to `internal/linuxpreflight` | — | in flight; landing gated on arch-decision-1 review |
-| W4-20 | linux-gate protocol split: wire codec + /proc identity vs gate lifecycle | — | in flight; landing gated on arch-decision-1 review |
+| W4-19 | Linux host verifiers extracted to `internal/linuxpreflight` | — | in flight (pre-review implementation); landing gated on arch-decision-1 review |
+| W4-20 | linux-gate protocol split: wire codec + /proc identity vs gate lifecycle | — | in flight (pre-review implementation); landing gated on arch-decision-1 review |
 
 ### Wave 5 — high-risk programs (13 planned; W5-07 and W5-13 dropped)
 
@@ -356,7 +357,12 @@ amendments fall into three tiers, and every one is appended to the [Amendment lo
   change.** The conductor may amend under the owner's standing authorization (2026-11-21), but
   the amendment takes effect only after an independent review by a different model than the
   writer; the log entry records the authority, the review by reference, the date, and the revision
-  the amendment's evidence binds. Scope and acceptance are never rewritten to fit delivered work.
+  the amendment's evidence binds. Pre-review implementation is allowed (workers may be dispatched
+  speculatively before the review), but no PR carrying such a change merges until the review is
+  reconciled and the decision is marked bound; each such PR's evidence must bind the SHA-256 of
+  the reviewed (possibly amended) contract, and a contract amended in review requires the
+  implementation to be re-verified against it. Scope and acceptance are never rewritten to fit
+  delivered work.
 - **T3 — closure and archive.** The closure evidence record is independently reviewed and the
   owner's verdict is recorded before this goal archives; no model declares completion, and the
   conductor cannot close this goal on its own authority.
@@ -472,21 +478,49 @@ stays verbatim apart from its provenance header and one placeholder normalizatio
 - **2026-11-21 — T2: arch-decision-1 recorded; pending independent review.** Conductor
   architecture decision `refactor/arch-decision-1.md` (conductor-authored 2026-11-21 under the
   owner's authorization for the giant-file splits) is recorded as a Tier-2 amendment that is
-  **pending independent review**: a dual review (Opus + DeepSeek) is dispatched and has not
-  landed; the split-pattern review `gemini-split-pattern-review-1.md` covers the split pattern
-  only. Until the review lands and is cited here, nothing in the decision binds and no
-  arch-derived contract dispatches. What it proposes: the W4-07 reshape (its Conductor decision
-  supersedes W4-07's Change, Owned files and clauses 1-3 — the Payload bucket is dropped; the new
-  scope is DbLocks/EventsReceipts/PayloadContracts/RunFence); the W4-12 reshape (real seams plus
-  one RunJournalRecorder interface), whose contract is not yet drafted; new queued slices W4-17a,
-  W4-17b, W4-19, W4-20, A5 and W5-14, plus A4 — core work-item eligibility (proposed; no
-  binding contract yet) — all dispatching only after this entry's review; a C1 relaxation for
-  deepening slices (internal interfaces may change where a contract labels the slice deepening;
-  wire, persisted, error/log text and CI-pinned test names stay frozen); and dispatch holds on
-  W4-01, W4-07, W4-12, W4-13 and W4-15b until their contracts are rewritten. The tables above
-  mark the arch-derived parts accordingly: the five held rows, W4-17a/W4-19/W4-20 in flight with
-  landing gated, and the W6-03/W6-06/W6-09 arch-dependent parts pending. Authority: the owner's
-  standing authorization (2026-11-21); review by reference: pending (dual review dispatched).
+  **pending independent review**: a dual review (Opus + DeepSeek) is dispatched and the decision
+  has not been reconciled or marked bound (the Opus side has begun appending review items); the
+  split-pattern review `gemini-split-pattern-review-1.md` covers the split pattern only. Until
+  the review is reconciled and cited here, nothing in the decision binds. W4-17a, W4-19 and
+  W4-20 were dispatched before the review (pre-review implementation: their worktrees hold
+  implementation work under the queued contracts); under the T2 rule above that is allowed, but
+  no arch-derived PR merges until the review is reconciled and the decision is marked bound, and
+  each such PR's evidence binds the SHA-256 of the reviewed contract — a review-amended contract
+  requires the implementation to be re-verified against it. What it proposes: the W4-07 reshape
+  (its Conductor decision supersedes W4-07's Change, Owned files and clauses 1-3 — the Payload
+  bucket is dropped; the new scope is DbLocks/EventsReceipts/PayloadContracts/RunFence); the
+  W4-12 reshape (real seams plus one RunJournalRecorder interface), whose contract is not yet
+  drafted; new slices W4-17a, W4-17b, W4-19, W4-20, A5 and W5-14, plus A4 — core work-item
+  eligibility (proposed; no binding contract yet) — with every arch-derived PR's merge gated on
+  this entry's review; a C1 relaxation for deepening slices (internal interfaces may change where
+  a contract labels the slice deepening; wire, persisted, error/log text and CI-pinned test names
+  stay frozen); and dispatch holds on W4-01, W4-07, W4-12, W4-13 and W4-15b until their contracts
+  are rewritten. Every contract drafted from arch-decision-1 — including W4-18, W4-21, A4 and
+  any §G proposal such as W4-15c, W5-15, W5-16, W5-17, whether drafted before or after this
+  entry — is under the same pending review. The tables above mark the arch-derived parts
+  accordingly: the five held rows, W4-17a/W4-19/W4-20 in flight with landing gated, and the
+  W6-03/W6-06/W6-09 arch-dependent parts pending. Authority: the owner's standing authorization
+  (2026-11-21); review by reference: pending (dual review dispatched).
+- **2026-11-21 — T1 status refresh (round 5).** Status rows and facts re-derived from `gh` and
+  the live branches at `origin/main` `7954836`, gh snapshot 11:56Z: the gh facts are unchanged
+  since the round-4 snapshot — #192 (W3-03) and #193 (W4-03) remain open, W3-02 is still the only
+  no-PR branch, and there are no merges since #166 (08:58:51Z). The W4/W6 arch marks (including
+  W4-17a/W4-19/W4-20 as pre-review implementation) are the T2 entry below, not this refresh.
+- **2026-11-21 — T2: round-5 review applied; the pre-review rule recorded.** The independent
+  Opus review of PR #182 round 5 (`182-opus-review-5.md`, 2026-11-21, bound to `4e5e02bb`) is
+  recorded as the independent review of the round-4 amendment text (the Credo-ratchet wording and
+  the round-4 fixes); it accepts them, so those entries are now effective. Its P2-1 finding is
+  applied: the arch entry above no longer denies pre-review dispatch — it records that W4-17a,
+  W4-19 and W4-20 were dispatched before the review (pre-review implementation) — and the T2
+  rules now carry the adopted rule: pre-review implementation is allowed, but no arch-derived PR
+  merges until the arch-decision review is reconciled and the decision is marked bound; each
+  such PR's evidence must bind the SHA-256 of the reviewed (possibly amended) contract, and an
+  amended contract requires the implementation to be re-verified against it. Its P3-1 finding is
+  applied: a catch-all sentence covers every contract
+  drafted from arch-decision-1 — including W4-18, W4-21, A4 and any §G proposal (W4-15c, W5-15,
+  W5-16, W5-17), drafted before or after the entry. This rules addition and this entry take
+  effect with the independent review of this entry. Authority: the owner's standing authorization
+  (2026-11-21); review by reference as cited.
 
 ## Known follow-ups
 
