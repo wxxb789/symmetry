@@ -1068,3 +1068,31 @@ instead of appended.
       (pre-existing gap: base had the same untested order). Behaviour is correct at HEAD; this is
       test coverage only, no code change. Found by the opus round-1 review of PR #193. Owner:
       W4-12/W4-13 test work.
+
+## Deferred review findings (PR #189, provider access lock order)
+
+- [ ] Pin `IntentContext`'s intent-context lock order with an oracle (2026-11-21, branch
+      `refactor/rf-w4-06-provider-access-intent`; plan
+      `docs/plans/2026-11-21-rf-w4-06-provider-access-intent-plan.md`; found by the Opus review of
+      PR #189 (P3-4) as review STD-A02, report-only per conductor decision E8).
+      `IntentContext.legacy_lock/1`
+      (`control/lib/symmetry_control/integrations/provider_access.ex:1147-1150` with
+      `lock_scope_rows/2` `:1168-1184`) and `IntentContext.goal_lock/2` (`:1152-1164`) hold the
+      merged lock order, but no test drives them: the only order assertion is the controller case
+      "Goal provider claim scope locks Project before Goal"
+      (`control/test/symmetry_control_web/controllers/provider_action_controller_test.exs:400`, its
+      `FOR SHARE` telemetry probe at `:431`), and it drives `ProviderAccess.lock_claim_scope/1`
+      (`:442`) instead. Measured during the slice: swapping Project and Goal in `goal_lock/2`, or
+      reversing `lock_scope_rows/2`'s rows, keeps the 13 targeted tests and the 79 controller tests
+      green. Add a controller or `ProviderAccess` test that pins the `goal_lock/2` and
+      `legacy_lock/1` order with telemetry, mirroring `:400`, and record its red mutation.
+
+- [ ] Fold `lock_goal_claim_scope/1`'s third Goal-order encoding into `IntentContext` (2026-11-21,
+      same branch and plan; the plan's "Out of scope" section records it).
+      `lock_goal_claim_scope/1`
+      (`control/lib/symmetry_control/integrations/provider_access.ex:379-400`, comment `:375-377`)
+      walks Project `FOR SHARE` -> Goal -> resources/connections (`lock_claim_resources/1`
+      `:412-437`) -> WorkItem -> Task -> revision inline — the same order
+      `IntentContext.goal_lock/2` (`:1152-1164`) now encodes once — but returns the claim-scope
+      shape rather than the intent-context map, so the slice left it; folding it must keep the
+      lock-order case `:400` and the advisory-lock case `:2092` green.
