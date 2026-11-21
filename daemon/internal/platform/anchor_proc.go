@@ -162,7 +162,7 @@ func (anchor *linuxOwnerAnchor) verifyNoForeignRunProcessInLeaf(ctx context.Cont
 		if actual, err := ProcessIdentity(pid); err != nil || actual != process.Identity {
 			_ = unix.Close(pidfd)
 			run.migrationObserved = true
-			return fmt.Errorf("recheck pinned-leaf process identity before cgroup.kill: %w", errOr(err, errors.New("creation identity differs")))
+			return fmt.Errorf("recheck pinned-leaf process identity before cgroup.kill: %w", errOr(err, ErrLinuxOwnerCreationIdentityDiffers))
 		}
 		cgroupPath, err := readLinuxOwnerProcessCgroupPath(pid)
 		_ = unix.Close(pidfd)
@@ -304,7 +304,7 @@ func verifyLinuxOwnerAProcess(pid int, expectedIdentity string, uid, gid uint32,
 	}
 	actualIdentity, err := ProcessIdentity(pid)
 	if err != nil || actualIdentity != expectedIdentity {
-		return fmt.Errorf("Linux owner A process creation identity mismatch: %w", errOr(err, errors.New("identity differs")))
+		return fmt.Errorf("Linux owner A process creation identity mismatch: %w", errOr(err, ErrLinuxOwnerIdentityDiffers))
 	}
 	credentials, err := readLinuxOwnerProcessCredentials(pid)
 	if err != nil {
@@ -327,7 +327,7 @@ func verifyLinuxOwnerAProcess(pid int, expectedIdentity string, uid, gid uint32,
 	}
 	actualIdentity, err = ProcessIdentity(pid)
 	if err != nil || actualIdentity != expectedIdentity {
-		return fmt.Errorf("Linux owner A process identity changed during credential check: %w", errOr(err, errors.New("creation identity differs")))
+		return fmt.Errorf("Linux owner A process identity changed during credential check: %w", errOr(err, ErrLinuxOwnerCreationIdentityDiffers))
 	}
 	return nil
 }
@@ -525,7 +525,7 @@ func verifyLinuxOwnerAnchorPIDFDIdentity(fd int, expected authority.LinuxCgroupP
 	}
 	identity, err := ProcessIdentity(expected.PID)
 	if err != nil || identity != expected.Identity {
-		return fmt.Errorf("Linux owner anchor pidfd creation identity mismatch: %w", errOr(err, errors.New("identity differs")))
+		return fmt.Errorf("Linux owner anchor pidfd creation identity mismatch: %w", errOr(err, ErrLinuxOwnerIdentityDiffers))
 	}
 	return nil
 }
@@ -610,7 +610,7 @@ func linuxOwnerAnchorWaitPIDFD(ctx context.Context, pidfd *os.File, expected aut
 			}
 			identity, identityErr := ProcessIdentity(expected.PID)
 			if identityErr != nil || identity != expected.Identity {
-				return fmt.Errorf("verify exact Linux owner child identity before reap: %w", errOr(identityErr, errors.New("creation identity changed")))
+				return fmt.Errorf("verify exact Linux owner child identity before reap: %w", errOr(identityErr, ErrLinuxOwnerCreationIdentityChanged))
 			}
 			for {
 				var reaped unix.Siginfo
