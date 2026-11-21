@@ -117,7 +117,7 @@ func TestNativeHandlePersistenceAndDiscardFailureStillClosesOwner(t *testing.T) 
 	defer store.Close()
 	key := state.RunKey{RunID: "run-1", Generation: 1}
 	saveClaimedGoalRun(t, store, key)
-	app.running[key] = &runningRun{starting: true, claimed: true}
+	app.running[key] = &runningRun{runLifecycle: runLifecycle{starting: true, claimed: true}}
 	// The native Open reply cannot be persisted as a valid handle. Failing
 	// its separate outbox compensation must still leave the Session closable.
 	session.handle = harness.NativeSessionHandle{}
@@ -161,8 +161,12 @@ func TestCancelledNativeStartDiscardFailureStillSettlesAfterClose(t *testing.T) 
 	}
 	session := &stopProofSession{pid: 71, identity: "native:71", result: execution.Result{}}
 	active := &runningRun{
-		starting: true, claimed: true, nativeSession: session, goalSession: &sessionKey, goalAdmission: &admission,
-		cancelled: true, cancelCommandID: "cancel-1",
+		runLifecycle: runLifecycle{
+			starting:        true,
+			claimed:         true,
+			cancelled:       true,
+			cancelCommandID: "cancel-1",
+		}, nativeSession: session, goalSession: &sessionKey, goalAdmission: &admission,
 	}
 	discardFailure := errors.New("discard write failed")
 	discardCalls := 0
@@ -221,8 +225,12 @@ func TestCancelledNativeStartDiscardAndCloseFailuresJoinAndRetainRetry(t *testin
 	closeFailure := errors.New("close failed")
 	session := &closeFailureGoalSession{err: closeFailure}
 	active := &runningRun{
-		starting: true, claimed: true, nativeSession: session, goalSession: &sessionKey, goalAdmission: &admission,
-		cancelled: true, cancelCommandID: "cancel-1",
+		runLifecycle: runLifecycle{
+			starting:        true,
+			claimed:         true,
+			cancelled:       true,
+			cancelCommandID: "cancel-1",
+		}, nativeSession: session, goalSession: &sessionKey, goalAdmission: &admission,
 	}
 	discardFailure := errors.New("discard write failed")
 	daemon := &daemon{
