@@ -5,9 +5,10 @@ conductor decisions (Wave-4 draft; W4 review reconcile) and the program-wide rul
 control-flow preservation, host-path hygiene, and the DLP escape-sequence rule).
 
 Baseline for every coordinate: `daemon/internal/execution/runner.go` at contract re-derivation
-`origin/main 0fa9b705`, unchanged at this worktree's HEAD `c9ed23b4`
-(`git log 0fa9b705..HEAD -- daemon/internal/execution/` is empty, so every line number below is
-valid at both revisions): **2,738 L**; `Start` `:547-944` (**398 L**);
+`origin/main 0fa9b705`, unchanged through the slice commit `2ada4f45^` (`c9ed23b4`); no commit
+between `0fa9b705` and `c9ed23b4` touches the package and the range-head merge `91e3ab74`
+changes nothing there, so every line number below is valid at both revisions: **2,738 L**;
+`Start` `:547-944` (**398 L**);
 `closeContainmentAttempt` `:2092-2339` (**248 L**); `closeContainmentOwnerLocked` `:2353-2376`;
 `cleanupFailedStartStarted` `:1335`; `closeFiles` `:2732`.
 
@@ -100,10 +101,11 @@ persist } else { legacy persist }`, and the pre-branch setup
 
 ### B. `startPipes`: one `Close()` for ten sites, but the child-end site closes three
 
-- Option 1 (chosen): `Close()` closes all six ends it owns and is nil-tolerant, so the nine
-  bootstrap sites (`:583` two ends, `:588` four ends, `:593/:605/:614/:624/:636/:642/:646` six
-  ends) all read `pipes.Close()` with identical effect; the child-end site keeps its own named
-  `closeChildEnds()` (stdinRead, stdoutWrite, stderrWrite) with the base comment unchanged.
+- Option 1 (chosen): `Close()` closes all six ends it owns and tolerates nil ends (the
+  not-yet-created ends of a partial value), so the nine bootstrap sites (`:583` two ends, `:588`
+  four ends, `:593/:605/:614/:624/:636/:642/:646` six ends) all read `pipes.Close()` with
+  identical effect; the child-end site keeps its own named `closeChildEnds()` (stdinRead,
+  stdoutWrite, stderrWrite) with the base comment unchanged.
 - Option 2 (rejected): make the child-end site `pipes.Close()` too — it would close
   `stdinWrite`, `stdoutRead`, `stderrRead` in the parent while the parent readers still need them
   **and** before the child's stdio handoff is complete: a functional change to the child-end rule
@@ -177,10 +179,12 @@ reviewer re-runs the comparison independently.
    memory rule).
 4. `python scripts/ci/check-citation-existence.py --base <contract base> --head HEAD`;
    `git diff --check`; host-path hygiene `git diff origin/main...HEAD | grep -i "users/"`.
-5. Added checks (not tests, no new test names): overlay mutation runs that prove the oracles
-   actually pin the two new seams — drop one end from `startPipes.closeChildEnds` and from
-   `Close` (`-overlay` copy of `runner_pipes.go`), and drop one join wrapper from
-   `failContainmentWith`; each must turn the package red, reverted by discarding the overlay.
+5. Added checks (not tests, no new test names): overlay mutation runs against the new seams,
+   reverted by discarding the overlay. The `startPipes.closeChildEnds` probe (drop one end) is
+   the contract's example class and must turn the package red; the other probes (drop one end
+   from `Close`; drop one join wrapper from `failContainmentWith`) are sensitivity measurements
+   whose observed outcomes are recorded in the evidence record §8, which is authoritative
+   wherever no oracle observes a seam.
 6. LOC/function-length table reported, never gated (D2).
 
 ## Out of scope (with reasons)
@@ -198,11 +202,12 @@ reviewer re-runs the comparison independently.
 
 ## Measured results (filled at delivery)
 
-`runner.go` 2738 → 2758 lines plus the 63-line `runner_pipes.go`; `Start` 398 → 81 lines
-(decision points 85 → 27); `closeContainmentAttempt` 248 → 143 lines (64 → 41); 21 cleanup sites
+`runner.go` 2738 → 2756 lines plus the 57-line `runner_pipes.go`; `Start` 398 → 81 lines
+(decision points 85 → 27); `closeContainmentAttempt` 248 → 141 lines (64 → 41); 21 cleanup sites
 → 21 `run.fail` sites, 10 `closeFiles` sites → 9 `Close()` + 1 `closeChildEnds()`, 16 join sites
-+ 3 sentinel constructions → named helpers + one value. Both targets met (81 ≤ 180, 143 ≤ 150);
-the row's −200…−300 dLOC estimate is not met (+20 net, report-only per contract D2).
++ 3 sentinel constructions → named helpers + one value. Both targets met (81 ≤ 180, 141 ≤ 150);
+the row's −200…−300 dLOC estimate is not met (+18 net, report-only per contract D2). All numbers
+refreshed at the rf-w4-03 apply revision (findings #1/#2 applied on top of `91e3ab74`).
 
 Full evidence — function-length table, the cleanup/closeFiles/join bootstrap tables, the 55-row
 base-vs-HEAD control-flow audit, the ordered-text comparison, every gate command with its exit

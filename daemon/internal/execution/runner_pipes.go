@@ -40,24 +40,18 @@ func createStartPipes() (*startPipes, error) {
 }
 
 // Close closes every pipe end this value owns. It is safe on a partially
-// created value and on nil. Close and closeChildEnds are the two terminal
+// created value. Close and closeChildEnds are the two terminal
 // dispositions of a value: every Close caller returns from Start immediately
 // (or abandons the value on creation failure), and closeChildEnds runs only on
 // the success path, so no end is closed twice. A Close after closeChildEnds
 // would also close the reader/write ends a live Process owns — do not add such
 // a caller.
 func (pipes *startPipes) Close() {
-	if pipes == nil {
-		return
-	}
 	closeFiles(pipes.stdinRead, pipes.stdinWrite, pipes.stdoutRead, pipes.stdoutWrite, pipes.stderrRead, pipes.stderrWrite)
 }
 
 // closeChildEnds closes the three ends that belong only to the child after
 // launch.
 func (pipes *startPipes) closeChildEnds() {
-	if pipes == nil {
-		return
-	}
 	closeFiles(pipes.stdinRead, pipes.stdoutWrite, pipes.stderrWrite)
 }

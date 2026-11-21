@@ -1,18 +1,25 @@
 # rf-w4-03 runner decomposition — evidence record (2026-11-21)
 
 Subject: `daemon/internal/execution/runner.go` plus the new sibling
-`daemon/internal/execution/runner_pipes.go`, in the worktree
-`wt-w4-03-runner-decomposition` at git HEAD `c9ed23b4` (contract re-derivation base
-`0fa9b705`; `git log 0fa9b705..HEAD -- daemon/internal/execution/` is empty, so every base
-line number below is valid at both revisions).
+`daemon/internal/execution/runner_pipes.go`, delivered by slice commit `2ada4f45` (parent
+`c9ed23b4`); the range head `91e3ab74` merges `origin/main` and changes nothing in
+`daemon/internal/execution/`. Contract re-derivation base `0fa9b705`; no commit between
+`0fa9b705` and `c9ed23b4` touches the package, so every base line number below is valid at
+both revisions.
 
-Evidence subject hashes (sha256, delivered tree):
+Evidence subject hashes (sha256; apply-stage tree, findings #1/#2 applied, uncommitted on
+`91e3ab74`):
 
 | file | sha256 |
 | --- | --- |
-| `daemon/internal/execution/runner.go` | `aaec2c1095513b67a938a2235adde9c473bad775fa116c6a0a1d2ba8fa964ae5` |
-| `daemon/internal/execution/runner_pipes.go` | `d649334f12dba0909dc2a906317bfcd0289655e596e34e9929007ace30402f66` |
+| `daemon/internal/execution/runner.go` | `fa52e049a3c546664058f5094da1c07c987dfc1e81a4036de78f58669bdb5d2e` |
+| `daemon/internal/execution/runner_pipes.go` | `d9b1ac966ea8dcf9c44a14268401a057157cee12ce7b073fedec19bb402a621e` |
 | base `runner.go` (at `0fa9b705`) | `0b9e6a9862f6e5c3b0aaae6aefdf1241bc432d110abb0725af96068be7c461a5` |
+
+Apply-stage note: finding #1 (the unreachable `startPipes` nil-receiver guards are removed)
+and finding #2 (the v2 success tail calls the shared `finalizeContainment()`) are applied on
+top of `91e3ab74`; every number they touch was re-derived at the apply-stage tree (§1, §2,
+§3, §4, §5, §7, §10), and the apply-stage gate re-runs are recorded in §13.
 
 Contract: `goal-rf-w4-03-runner-decomposition.md` (GDD state root) with its two conductor
 decisions (Wave-4 draft, W4 review reconcile) and the program-wide rules (lesson 32,
@@ -20,8 +27,8 @@ host-path hygiene). Plan: `docs/plans/2026-11-21-rf-w4-03-runner-decomposition-p
 
 ## 1. Shape delivered
 
-`daemon/internal/execution/runner_pipes.go` (new, 63 lines) adds `startPipes` with
-`createStartPipes`, `Close` and `closeChildEnds`. `runner.go` (2738 → 2758 lines) rewrites
+`daemon/internal/execution/runner_pipes.go` (new, 57 lines) adds `startPipes` with
+`createStartPipes`, `Close` and `closeChildEnds`. `runner.go` (2738 → 2756 lines) rewrites
 `Start`, adds the `startRun` phase carrier and its nine phase methods, rewrites
 `closeContainmentAttempt` and `closeContainmentOwnerLocked` in terms of six new
 `*Process` close-path helpers plus one shared sentinel. Nothing else changes (see §7).
@@ -42,23 +49,24 @@ magnitude for `Start`):
 | `startRun.armInitialLease` | — | 32 | — | 14 |
 | `startRun.resumeTarget` | — | 12 | — | 4 |
 | `startRun.deliverInitialInput` | — | 21 | — | 5 |
-| `closeContainmentAttempt` | 248 | **143** | 64 | 41 |
+| `closeContainmentAttempt` | 248 | **141** | 64 | 41 |
 | `closeOwnerOnce` (new) | — | 44 | — | 14 |
 | `persistReceiptOrAbort` (new) | — | 30 | — | 9 |
 | `persistUncertainAuthority` (new) | — | 18 | — | 6 |
 | `finalizeContainment` (new) | — | 6 | — | 1 |
 | `failContainment` / `failContainmentWith` (new) | — | 4 / 4 | — | 1 / 1 |
 | `closeContainmentOwnerLocked` | 24 | 6 | 9 | 3 |
-| close family total (`closeContainmentAttempt` + `closeContainmentOwnerLocked` vs head `closeContainmentAttempt` + the six helpers + `closeContainmentOwnerLocked`) | 272 L / 73 decisions | 255 L / 76 decisions | | |
+| close family total (`closeContainmentAttempt` + `closeContainmentOwnerLocked` vs head `closeContainmentAttempt` + the six helpers + `closeContainmentOwnerLocked`) | 272 L / 73 decisions | 253 L / 76 decisions | | |
 
-Targets met: `Start` 81 L ≤ 180; `closeContainmentAttempt` 143 L ≤ 150. The family total is
+Targets met: `Start` 81 L ≤ 180; `closeContainmentAttempt` 141 L ≤ 150. The family total is
 report-only and near-flat (−17 L, +3 decisions) by construction: the same decisions now live in
 named helpers, each counted with its own function constant. Statement counts under the
 advisory `funlen` thresholds (`daemon/.golangci.yml`, 120 lines / 60 statements, not gating):
-`Start` 310 → 54 statements, `closeContainmentAttempt` 186 → 103.
+`Start` 310 → 54 statements, `closeContainmentAttempt` 186 → 101.
 
 Advisory lint measurement (`golangci-lint v2.15.0` with the repo's `daemon/.golangci.yml`,
-`--enable=funlen,gocyclo,dupl ./internal/execution/...`): **9 issues, none new** — errcheck 2
+`--enable=funlen,gocyclo,dupl ./internal/execution/...`): **9 issues, none new** (re-run at the
+apply-stage tree: the identical nine, same distribution) — errcheck 2
 (the untouched `process.closeContainment` call sites), funlen 1
 (`finalizeSupervisorHandoffLocked`, 63 statements > 60, untouched), gocritic 1 (the
 `if/else if/else` persist chain at `:737`, the same chain shape base had), gocyclo 2 (`Start`
@@ -67,8 +75,8 @@ Advisory lint measurement (`golangci-lint v2.15.0` with the repo's `daemon/.gola
 `launchLinuxV2Process` stub). The two complexity findings name the two decomposed functions and
 fell by 3.3× and 1.6×; the metric does not gate in CI.
 
-LOC delta: `runner.go` +20 lines net (`git diff --numstat`: 449 insertions, 429 deletions in
-the two changed tracked files, `runner.go` alone 447/427) plus the new 63-line sibling. The
+LOC delta: `runner.go` +18 lines net (`git diff --numstat` vs the range base: `runner.go`
+448/430, `runner_pipes.go` 57/0, `docs/TODO.md` 2/2) plus the new 57-line sibling. The
 plan row's `-200..-300` dLOC estimate is not met and is report-only (contract D2): the phase
 functions carry doc comments and signatures, and the deleted boilerplate was ten-line call
 sites rather than logic.
@@ -129,8 +137,8 @@ containmentFinalizationBaseError(), <x>)`):
 | base site | base recorded / returned | head site |
 | --- | --- | --- |
 | 2154 | `finalizeErr` / `finalizeErr` | 2297 `failContainment(finalizeErr)` |
-| 2195 | `errors.New("containment stop receipt provider is missing")` | 2336 |
-| 2200 | sentinel | 2339 (`errContainmentAuthorityUncertain`) |
+| 2195 | `errors.New("containment stop receipt provider is missing")` | 2334 |
+| 2200 | sentinel | 2337 (`errContainmentAuthorityUncertain`) |
 | 2237 | `errors.Join(containmentInitialError, err)` | `closeOwnerOnce` 2217 (unchanged shape) |
 | 2253 | `errors.New("containment authority persistence callback is unavailable")` | `persistUncertainAuthority` 2116 |
 | 2265 | `fmt.Errorf("retry process containment authority persistence: %w")` / returns `persistErr` | 2127 `failContainmentWith(wrapped, persistErr)` |
@@ -140,15 +148,15 @@ containmentFinalizationBaseError(), <x>)`):
 | 2291 | `errors.New("pre-authority containment abort capability is missing")` | 2154 |
 | 2296 | `errors.New("durable containment stop receipt callback is missing")` (required) | 2150 |
 | 2302 | `fmt.Errorf("persist containment stop receipt: %w")` / returns `err` | 2163 `failContainmentWith(wrapped, err)` |
-| 2311 | sentinel | 2361 |
-| 2322 | `fmt.Errorf("release containment authority: %w")` / returns `err` | 2368 `failContainmentWith(wrapped, err)` |
-| 2327 | `errors.New("containment stop receipt releaser is missing")` | 2371 |
-| 2332 | `errors.New("containment stop receipt is unavailable")` | 2374 |
+| 2311 | sentinel | 2359 |
+| 2322 | `fmt.Errorf("release containment authority: %w")` / returns `err` | 2366 `failContainmentWith(wrapped, err)` |
+| 2327 | `errors.New("containment stop receipt releaser is missing")` | 2369 |
+| 2332 | `errors.New("containment stop receipt is unavailable")` | 2372 |
 
 Sentinel constructions: base `errors.New("containment authority persistence is uncertain")`
 at 2199, 2273, 2310 (3) → one package value `errContainmentAuthorityUncertain` (line 2092)
 referenced by the same three logical sites (`failContainment(errContainmentAuthorityUncertain)`
-at `persistReceiptOrAbort` 2144, 2339 and 2361). Text identical.
+at `persistReceiptOrAbort` 2144, 2337 and 2359). Text identical.
 
 ## 3. Control-flow audit (lesson 32)
 
@@ -202,27 +210,28 @@ line's text survives verbatim at the head line.
 | base | construct | head | preserved | note |
 | --- | --- | --- | --- | --- |
 | 2093-2095 | nil-process guard | 2236-2238 | yes | unchanged bytes |
-| 2096-2185 | v2 finalizer branch: lock/unlock defer, clone-finalization reservation, clone-outcome publication, finalization-start snapshot, finalized guard, `closeLinuxV2Containment` with the deferred clone-finalization signal, peer close | 2239-2314 | yes | unchanged bytes except the `finalizeErr` site |
+| 2096-2185 | v2 finalizer branch: lock/unlock defer, clone-finalization reservation, clone-outcome publication, finalization-start snapshot, finalized guard, `closeLinuxV2Containment` with the deferred clone-finalization signal, peer close | 2239-2312 | yes | unchanged bytes except the two finalize sites: `failContainment(finalizeErr)` at 2297 and the shared `finalizeContainment()` call at 2299 |
 | 2154 | finalize error → record join + return `finalizeErr` | 2297 | yes | `failContainment(finalizeErr)`: same recorded text, same returned value |
 | 2178-2184 / 2186-2188 | finalized early returns | 2245-2249 / 2264-2266 | yes | unchanged bytes |
-| 2190-2198 | pending-handoff delegation (owner close, then handoff finalizer) | 2327-2333 | yes | unchanged bytes |
-| 2194-2197 | receipt-provider-required exit | 2335-2337 | yes | same text |
-| 2199-2201 | uncertain-authority exit (sentinel) | 2338-2340 | yes | shared sentinel value, identical text |
+| 2190-2198 | pending-handoff delegation (owner close, then handoff finalizer) | 2325-2331 | yes | unchanged bytes |
+| 2194-2197 | receipt-provider-required exit | 2333-2335 | yes | same text |
+| 2199-2201 | uncertain-authority exit (sentinel) | 2336-2338 | yes | shared sentinel value, identical text |
 | 2202-2206 | retryable probe + one-shot attempt guard | `closeOwnerOnce` 2177-2183 | yes | guard inverted to an early return; same predicate |
 | 2210-2241 | close + uncertainty-persistence + retryable re-probe + stable/containment error bookkeeping + return `err` | `closeOwnerOnce` 2184-2218 | yes | plain path passes `persistUnproven=true`; `containmentInitialError` join preserved |
-| 2207 (handoff caller) | `closeContainmentOwnerLocked` nil guard + same close skeleton without marker persistence | 2391-2396, delegation at 2395 | yes | flag `false` reproduces the handoff contract |
-| 2243-2247 | no-provider finalize | 2346-2348 | yes | `finalizeContainment()` |
-| 2248-2270 | uncertain-authority retry (callback availability, double clone, callback selection, error exit, flag clear) | `persistUncertainAuthority` 2114-2131, called 2351-2355 | yes | same clone count, same selection, same wrapped-record/raw-return exit |
-| 2271-2307 | receipt persistence or pre-authority abort, in the base guard order | `persistReceiptOrAbort` 2138-2167, called 2356-2358 | yes | `!saved` guard first; required-receipt branch inverted to an early return; same four texts |
-| 2308-2313 | post-abort early finalize (+ sentinel guard) | 2359-2365 | yes | same order: sentinel guard, then finalize |
-| 2314-2324 | release or releaser-missing | 2366-2372 | yes | wrapped record, raw `err` return via `failContainmentWith` |
-| 2330-2333 | receipt-unavailable exit | 2373-2375 | yes | same text |
-| 2334-2338 | final finalize | 2376 | yes | `finalizeContainment()` |
+| 2207 (handoff caller) | `closeContainmentOwnerLocked` nil guard + same close skeleton without marker persistence | 2389-2394, delegation at 2393 | yes | flag `false` reproduces the handoff contract |
+| 2243-2247 | no-provider finalize | 2344-2346 | yes | `finalizeContainment()` |
+| 2248-2270 | uncertain-authority retry (callback availability, double clone, callback selection, error exit, flag clear) | `persistUncertainAuthority` 2114-2131, called 2349-2353 | yes | same clone count, same selection, same wrapped-record/raw-return exit |
+| 2271-2307 | receipt persistence or pre-authority abort, in the base guard order | `persistReceiptOrAbort` 2138-2167, called 2354-2356 | yes | `!saved` guard first; required-receipt branch inverted to an early return; same four texts |
+| 2308-2313 | post-abort early finalize (+ sentinel guard) | 2357-2363 | yes | same order: sentinel guard, then finalize |
+| 2314-2324 | release or releaser-missing | 2364-2370 | yes | wrapped record, raw `err` return via `failContainmentWith` |
+| 2330-2333 | receipt-unavailable exit | 2371-2373 | yes | same text |
+| 2334-2338 | final finalize | 2374 | yes | `finalizeContainment()` |
 
 No row is "changed": every base exit is reachable in head under the same predicate, records
-the same text and returns the same error value. The three shape transforms (early return
-instead of guard-inversion, a boolean parameter instead of a duplicated body, one shared
-sentinel value) are the only structural differences, and each is listed above.
+the same text and returns the same error value. The shape transforms (early return instead of
+guard-inversion, a boolean parameter instead of a duplicated body, one shared sentinel value,
+and — at the apply stage — the v2 success tail calling the shared `finalizeContainment()`) are
+the only structural differences, and each is listed above.
 
 ## 4. Ordered-text comparison (mechanical)
 
@@ -249,7 +258,9 @@ type-assertion artifact and are excluded from the adjusted figures shown in pare
 `Start` base 139 calls/48 names (134/47) → head 159/60 (155/59) — `closeFiles` 10 → 0,
 `cleanupFailedStartStarted` 21 → 1 (inside `run.fail`), `fail` 0 → 21 call sites (+1
 definition), `Close` 0 → 9, `closeChildEnds` 0 → 1, `setStopReceiptPersistence` 3 → 0,
-`bindStopReceiptPersistence` 0 → 3; `closeContainmentAttempt` base 125/34 → head 98/40 —
+`bindStopReceiptPersistence` 0 → 3; `closeContainmentAttempt` base 125/34 → head 97/40
+(apply stage: the v2 success tail's two inline calls are now the shared `finalizeContainment()`
+helper's fourth call site, −2 sites +1; both names remain in the span) —
 sixteen inline join sites become 12 `failContainment` + 3 `failContainmentWith` call sites
 plus the helpers' two `errors.Join` calls, `containmentFinalizationBaseError` 19 → 2 (the
 family's two joins), `New` 10 → 7 (three sentinel constructions collapse).
@@ -270,10 +281,15 @@ Independent confirmation (auditor A, read-only, 2026-11-21): direct `diff` of wh
 shows base 1-576 == head 1-576 (ack table, callback struct, `ErrLinuxV2MutationAckLost`),
 base 946-2086 == head 948-2088 (`configureStartedHandoff` … `isUnsupportedOnly`, including
 `publishResumeBarrierMarker` and the resume-barrier machinery), and base 2376-2738 == head
-2396-2758 (retry twins, handoff finalizer, `closeFiles`), each exit 0; that is the same
-conclusion reached here by per-function extraction, from the opposite direction.
+2394-2756 (retry twins, handoff finalizer, `closeFiles`), each exit 0; auditor A ran the same
+three diffs at the pre-apply head offsets (… 2396-2758) and they were re-run identically at
+the apply-stage tree. That is the same conclusion reached here by per-function extraction,
+from the opposite direction.
 
 ## 6. Gates (all foreground; exact commands, exit codes, counts)
+
+This section records the implement-stage run at `2ada4f45`; the apply-stage gate re-run at the
+apply-stage tree is in §13.
 
 | gate | command (cwd) | result |
 | --- | --- | --- |
@@ -294,38 +310,45 @@ conclusion reached here by per-function extraction, from the opposite direction.
 
 ## 7. Changed-hunk classification
 
-`git diff -U0 -- daemon/internal/execution/runner.go` yields 49 hunks: 33 inside base
-`Start` (547-944), 15 inside base `closeContainmentAttempt` (2092-2339), 1 inside
-`closeContainmentOwnerLocked` (2353-2376), and 1 pure insertion after base line 2088 that
-adds the six close-path helpers plus the shared sentinel (the contract's "new shared
-close-path helpers they gain"). No hunk touches the ack-stage constants, the callback
-struct, `ErrLinuxV2MutationAckLost`, the handoff twins, the barrier publisher, the
-handoff finalizer, or `closeFiles`/`cleanupFailedStartStarted`.
+`git diff -U0 -- daemon/internal/execution/runner.go` yields 50 hunks: 33 inside base
+`Start` (547-944), 15 inside base `closeContainmentAttempt` (2092-2339; 14 from the
+decomposition plus the apply-stage v2-tail consolidation), 1 inside
+`closeContainmentOwnerLocked` (2353-2376), and 1 pure insertion after base line 2087
+(`@@ -2087,0 +2090,141 @@`) that adds the six close-path helpers plus the shared sentinel (the
+contract's "new shared close-path helpers they gain"). No hunk touches the ack-stage
+constants, the callback struct, `ErrLinuxV2MutationAckLost`, the handoff twins, the barrier
+publisher, the handoff finalizer, or `closeFiles`/`cleanupFailedStartStarted`.
 
 ## 8. Media/suite results and mutation battery
 
 Suite results are in §6; the host-load flake story is in §12. This slice adds no test, so the
 mutation battery below exists to show which oracles are sensitive to the new seams. Each mutant
 is applied to a scratch copy through `go test -overlay` (the repository tree is never modified);
-`M1`/`M2` are the contract's own example class ("drop one end from `startPipes.Close` -> red").
+`M1` is the contract's own example class ("drop one end from `startPipes.Close`" -> red); `M2`
+is the same shape with no observed red (below). Apply stage (rf-w4-03): `M1`, `M2` and the new
+`M9` were re-run at the apply-stage tree; `M3`/`M4`/`M6`/`M7` are the implement-stage
+measurements and were not re-run (their edits do not touch the lines findings #1/#2 changed).
 
 | mutant | one-line edit | observed (Windows / WSL Linux) |
 | --- | --- | --- |
-| M1 | `closeChildEnds` drops `stdoutWrite` | **RED both** — Windows: `TestProcessPersistsContainmentStopReceiptBeforeRelease`, `TestProcessRetriesReceiptPersistenceAfterWaitWithoutRestopping`, `TestProcessRetriesDurableHandleReleaseBeforeReceiptAndHelperRelease` (30 s guards each); WSL: the same three plus `TestLinuxCloneStopRunsWhileOutputDrainsAndPromotionWaitsForResult` |
-| M2 | `Close()` drops `stderrWrite` | green both (`ok … 12.918s` / `ok … 2.158s`) — no oracle observes a leaked failure-path end |
+| M1 | `closeChildEnds` drops `stdoutWrite` | **RED both** (apply-stage re-run) — Windows: `TestProcessPersistsContainmentStopReceiptBeforeRelease`, `TestProcessRetriesReceiptPersistenceAfterWaitWithoutRestopping`, `TestProcessRetriesDurableHandleReleaseBeforeReceiptAndHelperRelease` (30 s guards each), then the package blocks until the go-test timeout (`-timeout 180s`: panic at 180.3 s; the default 600 s run ended identically); WSL: the same three plus `TestLinuxCloneStopRunsWhileOutputDrainsAndPromotionWaitsForResult` and `TestLinuxCloneTerminateDeadlineDuringFinalizerDoesNotBlock` (5.0 s each), then the same timeout block (180.2 s). The timeout dump shows a `Process.Wait` goroutine stuck in `RunBoundedCommand` (`probe.go:62`): the leaked write end keeps a reader from EOF |
+| M2 | `Close()` drops `stderrWrite` | green both (apply-stage re-run: `ok … 47.396s` / `ok … 2.485s` under host load) — no oracle observes a leaked failure-path end |
 | M3 | the plain close path calls `closeOwnerOnce(false)` (drops the ContainmentUnproven marker) | green both (`ok … 11.639s` / `ok … 3.091s`) — the marker persistence is not asserted by any current test |
 | M4 | `persistReceiptOrAbort` drops the receipt callback call | **RED both** — five receipt/authority tests fail immediately (`TestProcessPersistsContainmentStopReceiptBeforeRelease`, `TestProcessRetriesReceiptPersistenceAfterWaitWithoutRestopping`, `TestProcessRetriesDurableHandleReleaseBeforeReceiptAndHelperRelease`, `TestAuthorityPersistenceRetryPrecedesReceiptAndRelease`, `TestAtomicAuthorityPersistenceUnknownOutcomeRetriesBeforeReceiptAndRelease`) |
 | M6 | the launcher-error `run.fail` passes `nil` containment error | green both — that exit's recorded containment error is not asserted |
 | M7 | the shared sentinel text changes | green both — no test asserts the sentinel string |
+| M9 | `failContainmentWith` records `recorded` without the `containmentFinalizationBaseError()` join (apply-stage probe for plan §5's third mutation) | green both (`ok … 36.389s` / `ok … 2.445s`) — no test asserts the recorded wrapper text or the base join |
 | M5, M8 | `finalizeContainment` not setting the flag; `commitHandoff` dropping `markerPersisted.Store(true)` | not run (the focused battery above already answered the sensitivity question; both are reproduced at head by the shipped code paths and covered by the §3 audit rows) |
 
 Reading: the two seams the contract calls out (the child-end close rule and the receipt
 persistence) are pinned red on both platforms; the failure-path `Close()` end set, the
 ContainmentUnproven marker, the launcher-error containment tuple and the sentinel text are not
-pinned by any current test, so their preservation rests on the §3 audit rows and the §4
-ordered-text comparison rather than on a failing oracle.
+pinned by any current test, and neither is the `failContainmentWith` recorded wrapper (M9), so
+their preservation rests on the §3 audit rows and the §4 ordered-text comparison rather than on
+a failing oracle.
 
-Overlay recipe (identical shape to the W2-14 mutation recipe):
+Overlay recipe (identical shape to the W2-14 mutation recipe; the apply-stage re-runs used the
+same mechanism directly, with the JSON mapping each target file to its mutated scratch copy):
 
 ```sh
 python <scratch>/mutants.py <repo>/daemon <scratch>/mut all
@@ -351,10 +374,10 @@ snapshot with no consumer (no script or test reads it) and keeps its recorded ha
 - **Two audits run in parallel with this record** (§11): their findings are reconciled in
   the answer artifact; a finding accepted after this record was written would appear there
   with its fix.
-- **The `-200..-300` dLOC estimate is not met** (+19 net in `runner.go`); report-only per
+- **The `-200..-300` dLOC estimate is not met** (+18 net in `runner.go`, 2738 → 2756); report-only per
   contract D2. The decomposition's win is per-function shape (§1), not line count.
-- **`closeContainmentAttempt` remains above the advisory `funlen` thresholds** (143 lines /
-  103 statements vs 120/60) exactly as in base (248/186); the advisory lint metric is not
+- **`closeContainmentAttempt` remains above the advisory `funlen` thresholds** (141 lines /
+  101 statements vs 120/60) exactly as in base (248/186); the advisory lint metric is not
   gated, and three of the four finalization blocks it still carries are mutually exclusive
   exit paths.
 - **Text-only close-path mutants are not pinned by the in-repo oracles** where no test
@@ -471,3 +494,26 @@ the base-overlay build while the delivered revision passes it in the same minute
 full suite passes in a quieter window at 784.920 s. Known limit: only that one interleaved pair
 completed (the battery was stopped once the differential was decisive), and CI's daemon job on a
 dedicated runner remains the oracle for the timing-sensitive tests.
+
+## 13. Apply-stage gate re-run (rf-w4-03 apply: findings #1/#2, uncommitted on `91e3ab74`)
+
+Every contract gate was re-run foreground and sequentially at the apply-stage tree (never
+concurrent with a second suite); the focused set is the whole package, Windows subset locally
+plus the full set via `wsl -d Ubuntu-24.04 -u accept`.
+
+| gate | result |
+| --- | --- |
+| `gofmt -l ./internal/execution/` | no output, exit 0 |
+| `go vet ./...` | exit 0 |
+| `GOOS=windows go build ./...` / `GOOS=linux go build ./...` / `GOOS=linux GOARCH=arm64 go build ./...` | exit 0 / exit 0 / exit 0 |
+| `go test -count=1 ./internal/execution/` (Windows subset) | `ok` 21.117 s, exit 0 |
+| full set in WSL: `go test -count=1 ./internal/execution/` | `ok` 2.295 s, exit 0 |
+| `go test -count=1 ./internal/harness/...` | 8 packages `ok` (root 16.428 s), exit 0 |
+| `go test -count=1 -timeout 20m ./internal/app/...` | `ok` 228.706 s, exit 0 — the run needed 228.7 s, so the default 600 s bound would have sufficed; this is the first recorded exit-0 app run at the post-apply bytes (the host was ~95 % busy at launch: a sibling Rust build's `rustc`/`link`); C1's dedicated-host re-run remains for the verify stage |
+| test inventory (`go test -list '^Test'`) | Windows subset 85, Linux 104 (unchanged); `internal/app` 567 |
+| citation gate: `python scripts/ci/check-citation-existence.py --base 0fa9b705 --head HEAD` | exit 0 — "no audited document added or modified between 0fa9b705cb6a and 91e3ab74ad8c; nothing to check" |
+| `git diff --check` | exit 0 |
+| host-path hygiene (`git diff origin/main...HEAD \| grep -icE "users[/][a-z]"`, plus the uncommitted diff) | 0 |
+| advisory `golangci-lint run` (v2.15.0, repo config) | exit 1 — the same nine issues, same distribution as §1 |
+| overlay mutation battery | see §8: M1 RED both, M2/M9 green both (M3/M4/M6/M7 not re-run; their edits do not touch the lines findings #1/#2 changed) |
+| `-race` | not run (no cgo on this host); CI's daemon job remains the race oracle |

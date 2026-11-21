@@ -2296,9 +2296,7 @@ func (process *Process) closeContainmentAttempt(expectedCloneFinalization <-chan
 		if finalizeErr != nil {
 			return process.failContainment(finalizeErr)
 		}
-		process.containmentFinalized = true
-		finalErr := process.containmentFinalizationBaseError()
-		process.setContainmentError(finalErr)
+		finalErr := process.finalizeContainment()
 		process.backend.peerMutex.Lock()
 		var closeErr error
 		if process.backend.close != nil {
