@@ -36,7 +36,7 @@ strategies agree); `plan-review-opus-1.md` P2-5; `plan-review-ds-1.md` P2-1/P2-2
 6. **Dead-surface trim in `frontend/src/**`** — delete the three knip-proven exports
    (`api.fixtures.ts:249 readGoalEvents`, `api.ts:121 ExecutionReceipt`, `:122 WaitingInput`) plus
    `app/test-harness.tsx:applicationOf` (declared, zero references anywhere, in-file included);
-   un-export the 79 module-internal exports whose only references are inside their own file
+   un-export the 80 module-internal exports whose only references are inside their own file
    (mechanical scan at HEAD; test-only seams stay, see decision D3).
 7. **`frontend/src/tool-cache-config.test.ts`** — the base-red case (A6): both cases get an
    explicit per-test ceiling sized from the recorded cold measurement, with the measurement chain
@@ -148,7 +148,7 @@ those resolved URLs equal the registry default and are omitted).
   with no exemptions, and the `--max-warnings` ceiling makes any NEW oversized function fail
   `pnpm lint` exactly as an error severity would (any new finding of any rule exceeds the ceiling).
   Recommendation and choice: **(C)** — the ratchet is the enforcement channel the contract names,
-  and it avoids a 19-entry allowlist that the contract never requires. Rejected: (A) allowlist
+  and it avoids a 21-file allowlist that the contract never requires. Rejected: (A) allowlist
   bloat + false "CI fails on any new allowance" claim; (B) same, narrower; (D) loses the caps.
 - **D2 — `applicationOf` is deleted with the three knip exports.** It is the only other export in
   `frontend/src/**` with zero references anywhere (declaration-only; `git grep -nw applicationOf`
@@ -247,10 +247,17 @@ mutation check for the gate itself.
   errors; the ratchet makes their enforcement identical (decision D1).
 - The cold-import red is host-dependent (8.2 s cold on the audit host, ~0.5 s warm here); the
   30 s ceiling is sized for the recorded cold case, not for a benchmark of this host.
-- knip's two documented false positives (`@symmetry/contracts` workspace exports layout,
-  `tailwindcss` peer of the Vite plugin) are ignored with reasons; if knip learns the exports
-  layout, the ignore should be removed (recorded in `knip.json` comments are not supported, so the
-  reasons live here and in the answer).
+- knip's one documented false positive (`@symmetry/contracts` workspace exports layout) is ignored
+  with a reason; if knip learns the exports layout, the ignore should be removed. The `tailwindcss`
+  ignore the plan proposed is no longer needed: the plugin resolves the peer itself (the apply note
+  below records the drop). `ignoreFiles: ["coverage/**"]` excludes the default-path coverage report:
+  with `SYMMETRY_TOOL_CACHE_DIR` unset, `vitest run --coverage` writes `coverage/lcov-report/` into
+  the package and knip's project globs would report its six asset files as unused (reproduced:
+  exit 1, `Unused files (6)`). Before the first coverage run knip reports the entry as a
+  configuration hint (`coverage/** … Remove from ignoreFiles`, exit 0) — advisory, and gone once the
+  directory exists. That directory still needs a `/frontend/coverage/` entry in the root
+  `.gitignore`, which is outside this slice's owned set (routed to the owning change). (`knip.json`
+  supports no comments, so the reasons live here and in the answer.)
 
 ## Apply-stage note (2026-11-21, final tree)
 
@@ -258,7 +265,8 @@ mutation check for the gate itself.
   the deleted `ExecutionReceipt`/`WaitingInput`, so after the trim it had no reference anywhere;
   knip's first post-trim run flagged it and it was deleted (`Execution` was not in the original
   scan's zero-external list because it was used in-file at HEAD). Final deletions: `readGoalEvents`,
-  `ExecutionReceipt`, `WaitingInput`, `Execution`, `applicationOf`; un-exports: 79.
+  `ExecutionReceipt`, `WaitingInput`, `Execution`, `applicationOf`; un-exports: 80 (the 80th is
+  `features/planning/editors.tsx`'s `FieldErrors`, un-exported in the simplify apply).
 - **One autofix hunk was not type-preserving and was fixed, not reverted.** In
   `goal-attention.test.tsx` the `dot-notation` fixer rewrote `payload["subject"]` to
   `payload.subject`, which fails `tsc` because the payload capture narrows to `never` (the
@@ -271,7 +279,7 @@ mutation check for the gate itself.
 - **The mechanical un-export pass over-reached on three exports** (`Connection`,
   `ConnectionProvider`, `ConnectionResource`, all used by the connections surfaces) and
   `tsc --noEmit` caught it; they were restored and a tree-wide diff audit confirmed no other
-  out-of-list removal (every remaining `-export …` pair is one of the 79 list members or one of the
+  out-of-list removal (every remaining `-export …` pair is one of the 80 list members or one of the
   five deletions).
 - **Out-of-set autofix reverted.** `frontend/vite.config.ts` (not in this slice's owned set) had its
   two `dot-notation` fixes reverted; those two findings join the ratchet (see the table).
