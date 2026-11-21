@@ -84,20 +84,23 @@ returning `error`, and 1 in `crashPreAuthorityWitnessWithEvidence` (`:510-520`).
 - Local e2e attempt (allowed, not the gate):
   `SYMMETRY_PRODUCTION_PREAUTHORITY_WITNESS=1 go test -count=1 -run '^TestProductionPreAuthority' ./e2e/`
   — the CI `daemon-windows` matrix is the gate of record.
-- **Unit test** (`preauthority_witness_report_windows_test.go`): (a) publish success — one file in the
-  directory, decodes to the exact report fields, no `.preauthority-report-*` leftover; (b) result path
-  blocked by an existing file (`MkdirAll` `ENOTDIR`) — non-nil error whose text contains
+- **Unit test** (`preauthority_witness_report_windows_test.go`; six tests): (a) publish success — one
+  file in the directory, decodes to the exact report fields, no `.preauthority-report-*` leftover;
+  (b) result path blocked by an existing file (`MkdirAll` `ENOTDIR`) — non-nil error whose text contains
   `result directory`, no report, no temp leftover; (c) result path is an existing directory — the
   reachable `Rename` failure, error text contains `publish`, the directory survives, no temp leftover;
   (d) `resultFile == ""` — `nil`; (e) recovery reaches the writer through `runPreAuthorityWitness`
   itself: seeded journal via `ensurePreAuthorityWitnessJournal` + blocked result path → non-nil error
   through the entry function; the same invocation with a writable path → `nil` and a decodable
-  `recover`/`already-clear` report.
+  `recover`/`already-clear` report; (f) `TestPreAuthorityWitnessCommandExitsOneWhenReportMissing`
+  re-executes the test binary through `-preauthority-witness -mode recover … -result-file <blocked>`
+  and asserts exit `1` plus `result directory` on stderr — the process-observable form of the
+  entrypoint's error → exit 1 mapping.
 - **Mutation checks** (in place, restored by reverse patch with a `sha256` identity check):
-  M1 all-swallowing writer restored (every failure path back to `return nil`) → (b) and (e) red;
+  M1 all-swallowing writer restored (every failure path back to `return nil`) → (b), (c), (e) and (f) red;
   M2 only `MkdirAll` swallowed → red by text (`create pre-authority witness report temporary file` is
   reported instead of `result directory`); M3 the recovery call site `:406` discards the error
-  (`_ = writePreAuthorityWitnessReport(...)`) → (e) red. M3 is the call-site discrimination the unit
+  (`_ = writePreAuthorityWitnessReport(...)`) → (e) and (f) red. M3 is the call-site discrimination the unit
   test can reach; the other 14 sites are proven by the diff and the call-site table in `answer.md`.
 - **Call-site table**: `grep -n "writePreAuthorityWitnessReport"` on the final tree, each of the 16
   lines showing its check (15 `if err := …; err != nil` + the crash-path check).
