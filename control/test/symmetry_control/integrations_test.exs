@@ -1,72 +1,18 @@
-defmodule SymmetryControl.Integrations.CredentialLeakProviderStub do
-  @moduledoc false
-  @behaviour SymmetryControl.Integrations.Provider
-
-  alias SymmetryControl.Integrations.ProviderStub
-
-  def respond_with(kind, value), do: Process.put({__MODULE__, kind}, value)
-
-  @impl true
-  def authenticate(connection), do: ProviderStub.authenticate(connection)
-
-  @impl true
-  def validate_resource_reference(connection, kind, reference),
-    do: ProviderStub.validate_resource_reference(connection, kind, reference)
-
-  @impl true
-  def check(%{name: "Blocking failure"}, _auth) do
-    controller =
-      Application.fetch_env!(:symmetry_control, :integration_provider_test_controller)
-
-    send(controller, {:integration_connection_check_waiting, self()})
-
-    receive do
-      :continue_failure -> {:error, {:transport, :forced_failure}}
-    after
-      5_000 -> {:error, {:transport, :test_timeout}}
-    end
-  end
-
-  def check(connection, auth) do
-    case Process.get({__MODULE__, :check}) do
-      nil -> ProviderStub.check(connection, auth)
-      metadata -> {:ok, metadata}
-    end
-  end
-
-  @impl true
-  def sync_resource(connection, resource, auth) do
-    case Process.get({__MODULE__, :sync_resource}) do
-      nil -> ProviderStub.sync_resource(connection, resource, auth)
-      result -> {:ok, result}
-    end
-  end
-
-  @impl true
-  def sync_delivery(connection, resource, work_item, auth) do
-    case Process.get({__MODULE__, :sync_delivery}) do
-      nil -> ProviderStub.sync_delivery(connection, resource, work_item, auth)
-      delivery -> {:ok, delivery}
-    end
-  end
-
-  @impl true
-  def sync_ci(connection, resource, work_item, auth),
-    do: ProviderStub.sync_ci(connection, resource, work_item, auth)
-
-  @impl true
-  def execute(connection, resource, work_item, operation, input, auth) do
-    case Process.get({__MODULE__, :execute}) do
-      nil -> ProviderStub.execute(connection, resource, work_item, operation, input, auth)
-      result -> result
-    end
-  end
-end
-
 defmodule SymmetryControl.IntegrationsTest do
   use SymmetryControl.DataCase, async: false
 
   import Ecto.Query
+
+  import SymmetryControl.IntegrationFixtures,
+    only: [
+      assert_sync_waiting_on_work_item: 3,
+      provider_snapshot: 5,
+      provider_work_item: 1,
+      sync_lock_order_task: 4,
+      use_blocking_connection_check_provider: 0,
+      use_credential_leak_provider: 0,
+      work_item_row_locked?: 1
+    ]
 
   alias Ecto.Adapters.SQL.Sandbox
   alias SymmetryControl.Integrations
@@ -1201,6 +1147,102 @@ defmodule SymmetryControl.IntegrationsTest do
     assert unchanged.status_message == nil
   end
 
+  test "a resource deleted before the sync lock stays stale instead of invalid" do
+    project = project_fixture()
+    connection = connection_fixture("github", "gh_cli")
+
+    assert {:ok, resource} =
+             Workspaces.create_resource(project.id, %{
+               connection_id: connection.id,
+               kind: "work_tracking",
+               name: "Delete before lock",
+               external_ref: "acme/symmetry"
+             })
+
+    ref = make_ref()
+    handler_id = {__MODULE__, ref}
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:symmetry_control, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if String.contains?(metadata.query, "\"projects\"") and
+               String.contains?(metadata.query, "FOR SHARE") do
+            {deleted, _} =
+              Repo.delete_all(
+                from current in SymmetryControl.Workspaces.ProjectResource,
+                  where: current.id == ^resource.id
+              )
+
+            send(self(), {:resource_deleted_before_lock, ref, deleted})
+          end
+        end,
+        nil
+      )
+
+    try do
+      # `mark_resource_syncing/1` locks the project and then re-reads the resource under FOR
+      # UPDATE; with the row already deleted, that locked re-read is `nil` and the sync must
+      # answer the base `:stale` (409) verdict instead of `:invalid_request` (400).
+      assert {:error, :stale} = Integrations.sync_resource(resource.id)
+    after
+      :telemetry.detach(handler_id)
+    end
+
+    assert_received {:resource_deleted_before_lock, ^ref, 1}
+    # The stale rollback restores the row the sync transaction deleted.
+    assert Repo.get(SymmetryControl.Workspaces.ProjectResource, resource.id)
+  end
+
+  test "a resource deleted during the provider call stays stale instead of invalid" do
+    project = project_fixture()
+
+    # The stub's only sync branch that waits for the test and then fails the provider call.
+    assert {:ok, connection} =
+             Integrations.create_connection(%{
+               provider: "github",
+               name: "Fail after archive",
+               account_ref: "acme",
+               capabilities: ["work_items"]
+             })
+
+    assert {:ok, resource} =
+             Workspaces.create_resource(project.id, %{
+               connection_id: connection.id,
+               kind: "work_tracking",
+               name: "Delete during provider call",
+               external_ref: "acme/symmetry"
+             })
+
+    Application.put_env(
+      :symmetry_control,
+      :integration_provider_test_controller,
+      self()
+    )
+
+    on_exit(fn ->
+      Application.delete_env(:symmetry_control, :integration_provider_test_controller)
+    end)
+
+    sync_task = Task.async(fn -> Integrations.sync_resource(resource.id) end)
+    # The send follows the sync lock transaction and provider auth, so wait 5 000 ms —
+    # the same window the stub holds :continue for.
+    assert_receive {:integration_provider_waiting, provider_pid}, 5_000
+
+    assert {1, _} =
+             Repo.delete_all(
+               from current in SymmetryControl.Workspaces.ProjectResource,
+                 where: current.id == ^resource.id
+             )
+
+    send(provider_pid, :continue)
+
+    # `record_resource_failure/3` re-reads the row under FOR UPDATE to store the failure; a
+    # missing row must stay `:stale`, the verdict the base integrations lock helper gave it.
+    assert {:error, :stale} = Task.await(sync_task)
+  end
+
   test "reversed import and delivery updates lock WorkItems in UUID order without deadlocking" do
     use_credential_leak_provider()
 
@@ -1784,190 +1826,20 @@ defmodule SymmetryControl.IntegrationsTest do
     assert function_exported?(Integrations, :execute_unprojected_provider_action, 6)
   end
 
-  defp sync_lock_order_task(resource, provider_items, owner, ref) do
-    Task.async(fn ->
-      Sandbox.unboxed_run(Repo, fn ->
-        [[backend]] = Repo.query!("SELECT pg_backend_pid()").rows
-        send(owner, {:sync_backend, ref, self(), backend})
+  test "delete_connection refuses a non-integer expected version as an invalid request" do
+    connection = connection_fixture("github", "gh_cli")
 
-        receive do
-          {:start_sync, ^ref} ->
-            CredentialLeakProviderStub.respond_with(:sync_resource, %{
-              resource: %{metadata: %{}},
-              work_items: provider_items
-            })
+    # One version rule for both portal contexts: a malformed expected version is
+    # `:invalid_request` (the verdict `Schemas.VersionedChangeset.expected_version/1`
+    # gives the same input; the HTTP route normalizes integer strings to integers and
+    # answers 400 for unparsable values, so the context never receives a non-integer
+    # version), not a stale row. This function answered `:stale` before the shared
+    # clause landed; the assertion pins the unified verdict.
+    assert {:error, :invalid_request} = Integrations.delete_connection(connection.id, "1")
+    assert {:error, :invalid_request} = Integrations.delete_connection(connection.id, nil)
 
-            Integrations.sync_resource(resource.id)
-        after
-          15_000 -> {:error, :sync_barrier_timeout}
-        end
-      end)
-    end)
-  end
-
-  # `FOR UPDATE SKIP LOCKED` reports a row locked by an in-progress transaction
-  # without waiting; the lock a free row takes is released with the statement.
-  defp work_item_row_locked?(id) do
-    Repo.query!(
-      "SELECT 1 FROM work_items WHERE id = $1::uuid FOR UPDATE SKIP LOCKED",
-      [Ecto.UUID.dump!(id)]
-    ).rows == []
-  end
-
-  # The sync's wait is read from the lock manager, not from the statement text:
-  # run 43891279765 job 133383740181 put `pg_stat_activity.query` on the import's
-  # repository lookup while the import was in a delivery-attributed lock wait, so
-  # the query field is not usable evidence here. A sample is accepted once the
-  # import's own backend holds an ungranted lock and the delivery backend blocks
-  # it; the accepted sample then asserts that the delivery backend holds a
-  # granted lock on `work_items`, the lock the import's ordered prelock waits
-  # for. Anything else keeps polling until the deadline, which reports the raw
-  # sample.
-  defp assert_sync_waiting_on_work_item(backend, blocker, deadline) do
-    sample = sync_wait_sample(backend, blocker)
-
-    if sample.ungranted_lock? and sample.blocked_by_delivery? do
-      assert sample.waiter_on_delivery_xid? and sample.blocker_holds_work_item_lock?,
-             "import sync did not wait on the delivery transaction's WorkItem locks" <>
-               " (#{format_sync_wait_sample(sample)})"
-
-      :ok
-    else
-      assert System.monotonic_time(:millisecond) < deadline,
-             "import sync did not wait for the delivery WorkItem locks" <>
-               " (last sample: #{format_sync_wait_sample(sample)})"
-
-      assert_sync_waiting_on_work_item(backend, blocker, deadline)
-    end
-  end
-
-  defp sync_wait_sample(backend, blocker) do
-    result =
-      Repo.query!(
-        """
-        SELECT activity.query,
-               coalesce(activity.wait_event_type, '-'),
-               coalesce(activity.wait_event, '-'),
-               $2::integer = ANY(pg_blocking_pids($1)),
-               EXISTS (SELECT 1 FROM pg_locks WHERE pid = $1 AND NOT granted),
-               EXISTS (
-                 SELECT 1 FROM pg_locks held
-                 WHERE held.pid = $2 AND held.granted AND held.relation = 'work_items'::regclass
-               ),
-               EXISTS (
-                 SELECT 1 FROM pg_locks waiter
-                 WHERE waiter.pid = $1 AND NOT waiter.granted
-                   AND waiter.transactionid =
-                         (SELECT backend_xid FROM pg_stat_activity WHERE pid = $2)
-               )
-        FROM pg_stat_activity AS activity
-        WHERE activity.pid = $1
-        """,
-        [backend, blocker]
-      )
-
-    case result.rows do
-      [[query, wait_event_type, wait_event, blocked_by_delivery?, ungranted?, holds?, on_xid?]] ->
-        %{
-          query: query,
-          wait_event_type: wait_event_type,
-          wait_event: wait_event,
-          blocked_by_delivery?: blocked_by_delivery?,
-          ungranted_lock?: ungranted?,
-          blocker_holds_work_item_lock?: holds?,
-          waiter_on_delivery_xid?: on_xid?
-        }
-
-      [] ->
-        %{
-          query: nil,
-          wait_event_type: "absent",
-          wait_event: "absent",
-          blocked_by_delivery?: false,
-          ungranted_lock?: false,
-          blocker_holds_work_item_lock?: false,
-          waiter_on_delivery_xid?: false
-        }
-    end
-  end
-
-  # The query can be NULL (or held by another backend's activity slot) while the
-  # backend still waits, so the sample always names the wait event too.
-  defp format_sync_wait_sample(sample) do
-    query =
-      case sample.query do
-        nil -> ""
-        value -> " query=" <> String.slice(to_string(value), 0, 160)
-      end
-
-    "#{sample.wait_event_type}/#{sample.wait_event}" <>
-      " ungranted=#{sample.ungranted_lock?}" <>
-      " waiter_on_delivery_xid=#{sample.waiter_on_delivery_xid?}" <>
-      " blocker_holds_work_items=#{sample.blocker_holds_work_item_lock?}" <> query
-  end
-
-  defp use_credential_leak_provider do
-    Application.put_env(:symmetry_control, :integration_providers,
-      github: CredentialLeakProviderStub,
-      azure_devops: CredentialLeakProviderStub
-    )
-  end
-
-  defp use_blocking_connection_check_provider do
-    use_credential_leak_provider()
-    previous = Application.get_env(:symmetry_control, :integration_provider_test_controller)
-    Application.put_env(:symmetry_control, :integration_provider_test_controller, self())
-
-    on_exit(fn ->
-      if previous do
-        Application.put_env(:symmetry_control, :integration_provider_test_controller, previous)
-      else
-        Application.delete_env(:symmetry_control, :integration_provider_test_controller)
-      end
-    end)
-  end
-
-  defp provider_work_item(provider_data) do
-    %{
-      external_id: Ecto.UUID.generate(),
-      external_url: "https://github.com/acme/symmetry/issues/credential-check",
-      external_state: "open",
-      external_updated_at: ~U[2026-09-05 09:30:00.000000Z],
-      title: "Provider credential validation",
-      description: "Provider data must remain credential-free.",
-      labels: ["security"],
-      external_assignee_name: nil,
-      status: "ready",
-      priority: "high",
-      provider_data: provider_data
-    }
-  end
-
-  defp provider_snapshot(provider, updated_at, title, external_state, provider_data) do
-    base_url =
-      case provider do
-        "github" -> "https://github.com/acme/symmetry/issues/101"
-        "azure_devops" -> "https://dev.azure.com/acme/symmetry/_workitems/edit/101"
-      end
-
-    %{
-      resource: %{metadata: %{}},
-      work_items: [
-        %{
-          external_id: "101",
-          external_url: base_url,
-          external_state: external_state,
-          external_updated_at: updated_at,
-          title: title,
-          description: title <> " description",
-          labels: [String.downcase(title)],
-          external_assignee_name: title <> " owner",
-          status: "ready",
-          priority: "high",
-          provider_data: provider_data
-        }
-      ]
-    }
+    assert {:ok, deleted} = Integrations.delete_connection(connection.id, connection.lock_version)
+    assert deleted.id == connection.id
   end
 
   defp connection_fixture(provider, auth_type) do

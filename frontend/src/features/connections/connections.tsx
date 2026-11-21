@@ -15,8 +15,9 @@ import {
   type ConnectionResource,
 } from "../../services/api";
 import { restoreFocus } from "../../components/focus";
+import { FieldErrors, StatusBadge, formatLabel } from "../../components/primitives";
 import { EmptyState, ErrorState, LoadingState, PageHeading, RefreshButton } from "../../components/workspace";
-import { DialogFrame, FieldErrors, ProjectResources, StatusBadge, formatLabel, providerLabel, refusalNotice } from "./resources";
+import { DialogFrame, ProjectResources, providerLabel, refusalNotice } from "./resources";
 
 const authTypes: Record<string, string> = { gh_cli: "GitHub CLI · HTTPS", entra_id: "Microsoft Entra ID" };
 const capabilityLabels: Record<string, string> = { repositories: "Repositories", work_items: "Work items", changes: "Changes", ci: "CI" };

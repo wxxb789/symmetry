@@ -4,7 +4,8 @@ defmodule SymmetryControlWeb.GoalControllerTest do
   import SymmetryControlWeb.PortalFixtures,
     only: [acceptance_contract: 1, create_context_project: 2, goal_create_payload: 3]
 
-  import SymmetryControlWeb.TestConn, only: [api_conn: 0, operator_conn: 1, assert_error: 3]
+  import SymmetryControlWeb.TestConn,
+    only: [api_conn: 0, operator_conn: 1, assert_error: 3, bearer: 2]
 
   import Ecto.Query
 
@@ -702,6 +703,4 @@ defmodule SymmetryControlWeb.GoalControllerTest do
 
     {response["machine_id"], response["machine_token"]}
   end
-
-  defp bearer(conn, token), do: put_req_header(conn, "authorization", "Bearer " <> token)
 end
