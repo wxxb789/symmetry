@@ -559,3 +559,15 @@ func TestNativeLaunchHelper(t *testing.T) {
 		os.Exit(6)
 	}
 }
+
+func nativeHandleInformation(handle windows.Handle) (uint32, error) {
+	var flags uint32
+	result, _, callError := getNativeHandleInformation.Call(
+		uintptr(handle),
+		uintptr(unsafe.Pointer(&flags)),
+	)
+	if result == 0 {
+		return 0, callError
+	}
+	return flags, nil
+}
