@@ -20,7 +20,8 @@ go.mod owner).
    with no other options, plus `TestLeakOracleDetectsLeakedGoroutine`, the self-check that drives
    that wrapper through a recording TB and fails if the oracle stops naming the goroutine parked by
    the test. No `TestMain` (binding amendment; see trade-off 1).
-3. `daemon/internal/app/app_test.go`: the helper on 11 tests, the four short waits folded.
+3. `daemon/internal/app/app_test.go`: the helper on 11 tests, three short waits folded (site 3's
+   fold was withdrawn in round 2 and its original wait restored; see the site table).
 4. `daemon/internal/app/native_settlement_regression_test.go`: the helper on two tests, the 1 s
    cleanup wait folded.
 5. `daemon/internal/state/*_test.go`: 287 `t.Parallel()` insertions (12 files): 236 top-level
@@ -70,15 +71,27 @@ recorded failure to name that goroutine's test, and joins the goroutine before r
 oracle that becomes a no-op or ignores everything reddens a permanent test instead of only the
 mutation record.
 
-### The five folded waits
+### The four folded waits
 
 | # | site | before | after | guarded verdict |
 | --- | --- | --- | --- | --- |
 | 1 | `app_test.go:5588` TestCancelPreemptsBlockedInputInSameSnapshot | `select { <-terminated / time.After(500ms) }` then a bool into the final `Fatalf` | `select { <-input.terminated / time.After(testHangGuard) }` → `t.Fatal("cancel did not preempt blocked input")`; the blocked write is then released, so a preempted handler that won the race for `inputMu` cannot sit out `inputWriteTimeout` | cancel preemption of a blocked input |
 | 2 | `app_test.go:5698` TestScheduledSnapshotCancelPreemptsBlockedInputAndJoins | 10 ms poll loop with a 30 s deadline for `terminal_pending` + settled input | direct assertion at the existing `cancelPersisted` fence (the receipt is persisted under the run's input lock, which the preempted input command held until it recorded outcome + acknowledgement) | the preempted input is durably settled when the cancellation receipt lands |
-| 3 | `app_test.go:6915` TestScheduledCancelDuringClaimCompletesAfterDurableReceipt | `select { <-completion / time.After(100ms) }` | `commandWG` join fence bounded by `testHangGuard` (a worker started for the unclaimed run reddens here), then the parked-state checks: completion channel open, command still in `daemon.queuedCommands`, no durable acknowledgement for `cancel-1` | no early completion before the durable acknowledgement, including one handed to a goroutine |
 | 4 | `app_test.go:7120` TestRenewLeasesJoinsWorkersAfterShutdown | `select { <-done / time.After(200ms) }` plus post-release join wait | positive fence: wait until run-1's in-flight request barrier is released *by the drain loop* (2 → 1) while run-2 is parked; each poll probes `done`; then the post-release join wait stays | the loop joins cancelled workers before returning |
 | 5 | `native_settlement_regression_test.go:1393` cleanup | silent `time.After(time.Second)` then `backgroundWG.Wait()` | `awaitNativeSettlementSignal(t, flushDone, "outbox flush did not stop after cancellation")` | the outbox flush stops after cancellation |
+
+Site 3, `app_test.go:6915` TestScheduledCancelDuringClaimCompletesAfterDurableReceipt, is **kept
+as-is**: its round-1 fold — a `commandWG` join bounded by `testHangGuard` before the parked-state
+checks — was withdrawn after the round-2 review (P2-1), because the join only covers workers
+registered with `commandWG`: a regression that hands the unclaimed cancel to a goroutine outside
+it (`go daemon.executeQueuedCommand(ctx, queued)`) completed the command after `Wait` had already
+returned, and the parked-state checks then sampled before it ran — that mutation escaped the
+fenced `fe2b713` tree 10/10 while the original 100 ms window caught it 9/10, so the fold lost a
+verdict (contract clause 3). The wait therefore stays exactly as on `origin/main`
+(`select { <-completion / time.After(100ms) }`) with the three parked-state checks after it:
+completion channel open, command still in `daemon.queuedCommands`, no durable acknowledgement for
+`cancel-1`. Both mutation classes re-verified red on the restored test (mutation 3 below); the
+round-2 alternative (a `goleak.Find` fence around dispatch) was not adopted.
 
 Site 4's fence needs run-1's renewal to *return* rather than return an error, so that its request
 barrier survives until the drain loop processes it: `shutdownRenewControl.RenewLease` returns
@@ -136,16 +149,21 @@ Mutations (each applied, run, reverted; `git diff` clean for the mutated file af
    → green (0.50 s): the input handler's own write covers it. Both together → FAIL
    `app_test.go:5766: scheduled cancellation journal = …LocalState:"terminal_pending"…` (0.51 s),
    exit 1 — the assertion pins the observable, and both settle paths are load-bearing.
-3. site 3: dispatch completes the unclaimed cancel command (`finishQueuedCommandLocked` before the
-   return) → FAIL `app_test.go:6956: cancel command completed before its durable acknowledgement`
-   (0.50 s), exit 1.
-3b. site 3, asynchronous class: dispatch falls through the unclaimed-cancel branch to
-   `commandWG.Add(1); go executeQueuedCommand`, which completes the command before any durable
-   receipt exists → `go test -count=5 -run '^TestScheduledCancelDuringClaimCompletesAfterDurableReceipt$' ./internal/app/`
-   → 5/5 FAIL `app_test.go:6969: cancel command completed before its durable acknowledgement`,
-   exit 1. The same mutation against the checks without the join fence was 5/5 green (round-1
-   review, scratch tree): the parked-state checks raced ahead of the unscheduled worker. The fence
-   keeps the old 100 ms window's verdict by joining the worker before sampling.
+3. site 3 (kept as-is; fold withdrawn): the round-2 review's two mutation classes, applied to
+   `dispatchQueuedCommand`'s unclaimed-cancel branch and run with
+   `go test -count=10 -run '^TestScheduledCancelDuringClaimCompletesAfterDurableReceipt$' ./internal/app/`
+   on the restored test:
+   - registered worker (mA): the branch falls through to
+     `commandWG.Add(1); go func() { defer commandWG.Done(); executeQueuedCommand }` (the
+     `daemon.mu.Unlock(); return` pair removed) → 9/10 FAIL
+     `app_test.go:6952: cancel command completed before its durable acknowledgement`, exit 1. The
+     one green iteration is the window's scheduling dependence — the worker had not completed the
+     command within 100 ms.
+   - unregistered (mB): the same branch runs
+     `daemon.mu.Unlock(); go daemon.executeQueuedCommand(ctx, queued); return` → 10/10 FAIL, same
+     message and line, exit 1.
+   Pristine restored test: 10/10 PASS, exit 0. Round-2 review on the fenced `fe2b713`: mA 10/10
+   FAIL, mB 10/10 **green** — the escape that withdrew the fold (P2-1).
 4. site 4: the drain loop returns on cancellation instead of draining results → FAIL
    `app_test.go:7164: renewal loop returned before cancelled workers joined` (0.61 s), exit 1.
 5. site 5: the test's flush goroutine stops signalling `flushDone` → FAIL
@@ -221,17 +239,21 @@ cache, which was seeded from the host cache because the distro has no egress.
    `cancelPersisted` fires — waiting longer could only observe the same journal. The old loop was
    a 30 s *tolerance* for a state that is atomic with the fence; the assertion is strictly
    stronger (it fails if that atomicity regresses).
-3. **Site 3 joins `commandWG` before its parked-state checks; site 4 uses parked-state checks.**
-   Site 3's old `time.After(100ms)` asserted "the bad thing has not happened yet"; a synchronous
-   check cannot prove that once completion can be handed to a goroutine. The replacement first
-   joins any command worker that dispatch started (bounded by `testHangGuard`), so the completion
-   channel, queue and journal checks run after that worker has finished and are a verdict rather
-   than a sample (mutation 3b: 5/5 red with the fence; the same mutation was 5/5 green against the
-   checks alone). Site 4 asserts the *state* that makes the bad thing impossible at that instant
-   (worker parked, loop alive) and keeps the positive waits that pin the good thing. Residual: a
-   regression that returns *after* releasing the barriers but before the other worker returns is
-   caught only if it closes `done` before the next poll's probe — the same scheduling-dependent
-   detection the old window had, now anchored to a causal event instead of a wall clock.
+3. **Site 3's fold was withdrawn (the `commandWG` join only reached registered workers); site 4
+   uses parked-state checks.** Site 3's old `time.After(100ms)` asserted "the bad thing has not
+   happened yet", and the round-1 replacement joined `commandWG` before the parked-state checks so
+   they ran after any *registered* worker had finished. The round-2 review showed a regression
+   that hands the unclaimed cancel to a goroutine outside `commandWG` escapes the join — the
+   parked-state checks sample before that goroutine runs (mB: 10/10 green on fenced `fe2b713`,
+   while the original window caught the same mutation 9/10) — so the fold lost a verdict and was
+   withdrawn: site 3 keeps its `origin/main` wait unchanged with the parked-state checks after it
+   (mutation 3: mA 9/10 and mB 10/10 red on the restored test; pristine 10/10 green). The four
+   remaining folds keep their fences. Site 4 asserts the *state* that makes the bad thing
+   impossible at that instant (worker parked, loop alive) and keeps the positive waits that pin
+   the good thing. Residual: a regression that returns *after* releasing the barriers but before
+   the other worker returns is caught only if it closes `done` before the next poll's probe — the
+   same scheduling-dependent detection the old window had, now anchored to a causal event instead
+   of a wall clock.
 4. **Own-store subtests are parallel; parent-store and seam subtests stay sequential.** The 51
    subtests that open their own store in their first lines are isolated by construction (own
    `t.TempDir()` store, no parent state, no process-global seam), the same rule the top-level tests
@@ -280,7 +302,8 @@ cache, which was seeded from the host cache because the distro has no egress.
   store-setup cost (`New()` per test), not more test parallelism.
 - Per-test goleak covers 13 named tests; a leak introduced in another test is not caught until the
   F15 fix enables the package-wide form.
-- Two mutation classes for site 4 remain scheduling-dependent by construction (trade-off 3).
+- Site 4's mutation classes stay scheduling-dependent by construction, as does site 3's restored
+  wall-clock window (round-2 re-run: mA 9/10, mB 10/10; trade-off 3).
 
 ## Increment closure
 

@@ -6947,27 +6947,10 @@ func TestScheduledCancelDuringClaimCompletesAfterDurableReceipt(t *testing.T) {
 		t.Fatal("cancel command was not queued")
 	}
 	daemon.dispatchQueuedCommand(ctx, queued)
-	// The run is unclaimed, so dispatch must record the deferred cancellation and
-	// return without starting a command worker. commandWG is the join fence for
-	// that claim: on this path no worker exists and Wait returns at once, while a
-	// regression that hands the unclaimed cancel to a goroutine
-	// (executeQueuedCommand) blocks Wait until that goroutine has completed the
-	// command. Sampling the parked state after the join is therefore a verdict,
-	// not a sample: the command must still be queued and unacknowledged.
-	joinedDispatch := make(chan struct{})
-	go func() {
-		daemon.commandWG.Wait()
-		close(joinedDispatch)
-	}()
-	select {
-	case <-joinedDispatch:
-	case <-time.After(testHangGuard):
-		t.Fatal("dispatch started a command worker for an unclaimed run")
-	}
 	select {
 	case <-completion:
 		t.Fatal("cancel command completed before its durable acknowledgement")
-	default:
+	case <-time.After(100 * time.Millisecond):
 	}
 	daemon.mu.Lock()
 	parked := daemon.queuedCommands[commandKey{run: key, id: "cancel-1"}] == queued
