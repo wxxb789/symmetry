@@ -184,42 +184,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 
 ## Retro review follow-ups (second pass, 2026-11-20)
 
-- [ ] Stop the Windows-family path tail from absorbing a JSON escape that follows the path.
-      `_WINDOWS_TAIL` (`scripts/ci/model-routing-record-sanitize.py:110`) admits a bare backslash
-      as a path byte — deliberate, per its comment at `:104-107`, because in raw recorded text the
-      backslash is the separator — and the four Windows-family patterns listed here end in it (or
-      in its require-a-byte variant `_WINDOWS_TAIL_PLUS` `:115`): `_DRIVE_PATH` `:133-135`,
-      `_UNC_PATH` `:142-145` (`_PLUS`), `_SLASH_UNC_PATH` `:167-169` (`_PLUS`),
-      `_FILE_URL_PATH` `:204-212`
-      (the root-relative `_ROOT_RELATIVE_PATH` `:191-194` and the file-URL host-root arm `:209` do
-      not), so a recorded `\n` escape that follows a Windows path is consumed into the rendered
-      token together with the text behind it. The POSIX family already fixed exactly this
-      shape (`_POSIX_BYTE` `:122`, whose comment at `:116-121` names the failure — "consuming it would
-      swallow a JSON escape sequence together with the text behind it" — and
-      `scripts/ci/test-model-routing-record-sanitize.py:282-295`,
-      `test_a_json_escape_after_a_path_survives_the_render`, STD-A07); the Windows family has no
-      such case. Reproduced at `978abba` with the tool on two scratch inputs of one shape (a JSON
-      string recording a path, then the two-character `\n` escape, then the word `FAILED`; the
-      Windows input's path is drive-rooted and carries the JSON-escaped doubled separators). The
-      inputs, one JSONL line each, are built in Python with `BS = chr(0x5C)`: Windows
-      `'{"output":"wrote C:' + BS*2 + 'Users' + BS*2 + 'op' + BS*2 + 'run' + BS + 'nFAILED"}'`,
-      POSIX `'{"output":"wrote /' + 'tmp/run' + BS + 'nFAILED"}'`. The Windows input renders to a
-      single token whose digest is
-      `path-sha256:a3a19f2b70d9c277fa8b2ef0f62c217841c3f41ed7e6a78b689045338e4ad1e5`, and that
-      digest is the recomputed sha256 of the raw span the token bound — the path text *plus* the
-      escape *plus* `FAILED` — where a path-only render of the same input would carry
-      `26e7b5b4…` (the sha256 of the path text alone); the POSIX input of the same shape keeps the
-      escape and the word outside its token (`…path-sha256:91525b09…` followed by the escape and
-      `FAILED`). Consequence in a record: an evidence line behind the escape disappears from the
-      rendered bytes while the record stays valid JSON — the loss STD-A07 fixed on the POSIX side.
-      Fix direction: the POSIX rule is not directly portable (a raw Windows spelling uses one
-      backslash per separator, so a separator run can be shaped exactly like a JSON escape —
-      `\run` starts with `\r`), so the reading must be decided — either a JSON-aware pass that
-      respects string escapes (the tool's input is recorded JSON text), or a tail that stops
-      before an escape-shaped backslash run once at least one separator has been consumed — and
-      both the escaped-escape case and the raw single-backslash spelling must be pinned in the
-      tester. Suggested owner area: `scripts/ci` record tooling.
-
 - Repo-wide `actionlint` with ShellCheck enabled does not terminate on this Windows host, so the
   workflows have no local shellcheck-enabled `actionlint` verdict; the substitute is a
   shellcheck-disabled repo-wide `actionlint -shellcheck= -pyflakes=` run plus a direct
@@ -712,6 +676,52 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       `invalid_request`. Behaviour is unchanged from base; the fix belongs to its own increment
       (plan CW-7 in `docs/plans/2026-11-21-rf-w2-03-controller-plumbing-plan.md`). Found by the
       adversarial review of PR #163 (P3-1).
+
+## Deferred review findings (PR #137)
+
+- [ ] Close the default-scope non-fixpoint the round-4 review of PR #137 found on
+      U+002F-escape plus escaped-backslash literals, disclosed rather than fixed in that PR's
+      round 5: re-rendering a literal whose decoded text puts a separator directly in front of a
+      rendered token reads the separator and the token's text as a POSIX path and binds the
+      token's own text into a new digest. Input (Python, `BS = chr(0x5C)`):
+      `'{"k":"' + BS + 'u002F' + BS*2 + 'opx' + BS*2 + BS + 'u002faop"}'` renders to the escape
+      plus `path-sha256:ef6452<...>` on the first render and to `path-sha256:50df1a<...>` plus
+      `:` plus the first token's own hex on the second; the first render's claim starts at the
+      escaped backslash run, so the decoded `/` the escape spells stays outside it. Neither
+      render leaks a host byte, and the `record-cleanliness` gate runs `--check --root-only`
+      (a fixpoint over the committed corpus), so both effects fail closed; the boundary is
+      disclosed in the sanitizer's docstrings and `docs/evaluations/model-routing/README.md`
+      (Explicit local limits). Fix direction: a token-text guard on the POSIX families' leading
+      positions (the raw look already keeps rendered token text out of its digests) or extending
+      a claim to the separator a raw match's start left outside it - whichever closes the shape
+      without narrowing a real path out of the patterns, pinned by a second-render fixpoint test.
+- [ ] Close the second disclosed non-fixpoint the round-5 review of PR #137 found: a record
+      that already spells a rendered token can bind that token's own text on a later render, in
+      either scope, because a separator run directly in front of the token is a location's start
+      and the union binds the token text the match covers. Shape (Python, `BS = chr(0x5C)`):
+      `'{"k":"//<disposable-root>' + BS + 'n<disposable-root>' + BS*2 + '"}'` renders to
+      `//<disposable-root>` plus the newline escape plus `<disposable-root>` plus
+      `path-sha256:b11b4c<...>` and re-renders to `path-sha256:a2c233<...>` plus
+      `<disposable-root>` plus `path-sha256:a80e51<...>` plus the rest. The input carries no host
+      byte, so the render over-redacts a token rather than leaking; the boundary is disclosed in
+      the sanitizer's docstrings and `docs/evaluations/model-routing/README.md` (Explicit local
+      limits). The round-6 review found two further residual shapes of the same fail-closed
+      kind, confined to a `--root` render on a record that carries no token text of its own. In
+      one a `file:` scheme, a control escape and then the root
+      (`'{"k":"file:' + BS + 'r' + root + BS + 'n"}'`, where `root` is the synthetic drive-root
+      spelling `'C:' + BS*2 + 'W'`) render as `file:` + the escape + `<disposable-root>` + the
+      newline escape. In the other a space-continued chunk reaches the root
+      (`'{"k":"store' + root + 'x/ ' + root + BS + 'n"}'`). Both are the fail-closed direction:
+      nothing leaks (the residue is scheme text, an escape or a name glued to a word), the
+      gate's `--check --root-only` refuses that first render (exit 1), and a second render
+      converges - the third render is byte-identical - and passes the gate. Masked spellings
+      only: `root` is synthetic and no digest is reproduced. Fix direction: the raw look's
+      token-text filter keeps that text out of its own
+      digests, but a separator run in front of a token is still a location's start; closing the
+      shape must not narrow a real path out of the patterns, pinned by a second-render fixpoint
+      test. The same closing options cover the two `--root` residue shapes: an anchored match
+      that crosses a claim (starts before it, ends after it), under the same no-narrowing rule
+      and the same second-render pin.
 
 ## Production Linux containment witness: stop-receipt barrier stall awaiting a diagnosable occurrence
 
