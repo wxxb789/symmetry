@@ -5,7 +5,7 @@ Contract: `goal-rf-w3-10-result-dispatch.md` (GDD, 2026-11-21), including the bi
 the lesson-32 control-flow audit rule. Program-plan row: §6 W3-10 (area control-core, dLOC
 −100…−150, report-only per D2); findings `refactor/findings/control-core.md` F6:279-297.
 
-Coordinate baseline: this worktree's HEAD `5f28b728c3f8752fdb8313f121f85c1ba3063911` (W2-07's branch,
+Coordinate baseline (at dispatch, before #184 merged): this worktree's HEAD `5f28b728c3f8752fdb8313f121f85c1ba3063911` (W2-07's branch,
 already merged with `origin/main` at `79548368`), i.e. W2-07's `goals.ex` mutation-id work is present
 and #149 (`b89e14d7`, `test(control): share Elixir test fixtures`) is in the base. Every line number,
 count and test name below was read or measured at that revision.
@@ -43,7 +43,7 @@ scratch, and the load-bearing numbers are repeated in the plan's evidence sectio
 | other callers of the two dispatch functions | none (only the terminal catch-all at `:3410`) | `grep -n 'dispatch_task_result\|dispatch_terminal_result'` |
 | test files exercising the dispatch | `goals_test.exs` (direct), `goals/workers_test.exs` (`SettleTaskWorker`/`WakeupWorker`), `symmetry_control_web/controllers/goal_machine_controller_test.exs` (`Goals.settle_task/4` at `:178,:287,:839`); skipped by default: `goals/dispatch_notification_test.exs` (`SYMMETRY_GOAL_DISPATCH_E2E`), `pi_control_e2e_test.exs`, `provider_broker_e2e_test.exs` (`SYMMETRY_PROVIDER_BROKER_E2E`) | `grep -rln 'settle_task\|reconcile_validation_outcome' control/test` |
 
-The diff of this slice against `origin/main` is **only** the uncommitted working tree (`git status`
+At dispatch (before #184 merged), the diff of this slice against `origin/main` was **only** the uncommitted working tree (`git status`
 clean at dispatch): W2-07's `goals.ex` diff against `origin/main` is confined to `:10519+`
 (verified: `git diff origin/main...HEAD -- control/lib/symmetry_control/goals.ex` shows hunks in the
 mutation-id region only), so the dispatch region is byte-identical to `origin/main` `f4e4ace6`.

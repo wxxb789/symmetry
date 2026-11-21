@@ -3217,7 +3217,7 @@ defmodule SymmetryControl.Goals do
 
   # One dispatch over the live settlement inputs: the derived validation outcome
   # (validation Tasks) first, then the revision guard, then the TaskResult kind.
-  # The arm order is the base clause order and there is no catch-all, so a `kind`
+  # The arm order is the base evaluation order and there is no catch-all, so a `kind`
   # outside the admitted set raises here instead of silently picking a settlement.
   defp dispatch_result(
          goal,
