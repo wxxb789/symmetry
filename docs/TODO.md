@@ -237,9 +237,17 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
   run of that shape is recorded on this host — while the same binary over the same file with
   `-color -shellcheck= -pyflakes=` finished in 0.6 s at exit 0 with no findings, and the
   2026-11-15 trim record already carries a 120 s sample of the same shape
-  (`docs/evidence/ci-process-trim-2026-11-15.md:228-234`). No CI job invokes `actionlint` (a
-  repository search for the name matches `docs/` only), so this is a local-lint gap only: nothing
-  in a hosted run is skipped by it. Owner area: CI tooling.
+  (`docs/evidence/ci-process-trim-2026-11-15.md:228-234`). When this entry was written no CI job
+  invoked `actionlint` (a repository search for the name matched `docs/` only); refactor slice
+  W1-01 added the shellcheck-disabled shape to the `legacy-route-audit` job as the advisory step
+  `Measure actionlint findings for the workflows (advisory)` (pinned upstream actionlint 1.7.12,
+  `actionlint -shellcheck= -pyflakes=` over every `.github/workflows/*.yml`) beside
+  `Measure shellcheck findings in scripts/ci (advisory)`
+  (`shellcheck --severity=warning scripts/ci/*.sh`); both are `continue-on-error: true`. The
+  shellcheck-*enabled* shape still runs nowhere: not on this host (the observed non-termination
+  above) and not in CI, where the hosted step disables the integration deliberately so the
+  verdict stays the shellcheck-disabled one. This entry therefore stays open as the local-lint
+  gap it describes, with its substitute recipe unchanged. Owner area: CI tooling.
 
 ## CI consolidation owner decisions (2026-11-17)
 
@@ -590,6 +598,52 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       the bundle-derived pair too) and have both gate files import them. Found by the adversarial
       review of PR #145 (P3-2).
 
+## Deferred review findings (rf-w2-16 clone-aliasing gate)
+
+- [ ] Deep-copy the nested helper exits that the platform stop-evidence clones still share or
+      truncate, then remove the matching per-case skip paths from the aliasing harness.
+      `cloneLinuxCgroupStopReceipt`
+      (`daemon/internal/platform/linux_cgroup_v2_linux.go:1443-1457`) copies `LinuxProof` by
+      value (`:1449`) and deep-copies only the stored `LinuxProof.HelperExit` (`:1451-1452`), so
+      `LinuxProof.GateExit.HelperExit` and `LinuxProof.LauncherExit.HelperExit` stay shared with
+      the caller's receipt; that stored `HelperExit` copy shares its own nested exit in turn.
+      The `GateExit`/`LauncherExit` alias is live on a valid shape: a mirror stop proof demands
+      `proof.HelperExit != nil` and a `GateExit` anchored on that same exit
+      (`daemon/internal/authority/authority.go:1470-1474` via `ValidForOwnedDescendant`,
+      `:1174-1184`), every v2 removal receipt must carry such a proof
+      (`StopReceipt.ValidForHandoff`, `authority.go:1822-1833`), and the platform constructs it
+      (`daemon/internal/platform/anchor_run.go:1531`; validated at
+      `daemon/internal/execution/linux_owner_v2_linux.go:1338` and sealed into the mirror proof
+      at `:1360`); `authority.go:2027` also accepts a non-nil `LauncherExit.HelperExit`.
+      `cloneLinuxOwnerHelperV2StopEvidence` (`helper_v2_stop.go:1540-1573`) instead drops every
+      nested exit it copies through `cloneLinuxOwnerAnchorExitProof`
+      (`anchor_server.go:44-49` nils `HelperExit`): `Proof.LauncherExit.HelperExit`,
+      `Proof.GateExit.HelperExit`, `Proof.HelperExit.HelperExit`,
+      `PreGate.LauncherExit.HelperExit`, `PreGate.Proof.HelperExit.HelperExit` and the
+      `AnchorStop` helper exits are nil in the clone, and
+      `PreGate.Proof.LauncherExit.HelperExit` stays shared through the `PreGate.Proof` struct
+      copy (`:1563-1567`). The drop is latent for today's producers because both evidence
+      producers build helper-kind proofs whose exits are witnessed by the helper, so the
+      nested `HelperExit` is nil: the pre-gate proof at `:861-869` and the full stop proof at
+      `:983-990`. The receipt-ack copies at `:1173-1179` and `:1282-1288` are a separate path
+      that truncates a possibly mirror-kind `StopReceipt` the same way. The clone would
+      silently lose data if a producer ever starts carrying the single-level nested exit that
+      the receipt shape allows. The review of branch `refactor/rf-w2-16-clone-aliasing-test`
+      (2026-11-21) confirmed the `GateExit`/`LauncherExit` alias with a probe against the
+      shipped clone - mutating the original's `LinuxProof.GateExit.HelperExit` changed the
+      clone while the stored `HelperExit` copy stayed independent - and that goal's contract
+      forbids production changes. The gate files
+      `daemon/internal/platform/clone_aliasing_linux_test.go` and
+      `clone_aliasing_linux_amd64_test.go` list every path above as an explicit
+      `skipExitProofs` entry next to its reason; the driver fails a case whose listed path
+      population never reaches, and it re-runs each case with every skip removed, failing any
+      skip that no longer changes the outcome. Removing one of those entries before the
+      matching production fix turns the covering subtest red:
+      `TestCloneAliasingLinuxAMD64Evidence` for the helper-v2 and anchor paths,
+      `TestCloneAliasingLinuxCgroupEvidence` for the StopReceipt paths.
+      `TestCloneAliasingWindowsContainmentSessionID` does not share the Linux harness and is
+      unaffected.
+
 ## Production Linux containment witness: stop-receipt barrier stall awaiting a diagnosable occurrence
 
 - [ ] Diagnose the next occurrence of the `daemon_sigkill_after_lease_arm_before_resume` barrier
@@ -767,3 +821,19 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       `TestProviderBridgeCloseReportsIgnoringExecutorAsUnproven` (`:904`) uses the same 25 ms
       first-`Close` window (`:924`). Revalidate against a recovered failure before changing the
       window or the assertion.
+
+## CI Go toolchain: bump past the stdlib advisories
+
+- [ ] Bump the CI-pinned Go toolchain past the 12 standard-library vulnerabilities the advisory
+      govulncheck step reports. `go-version: 1.27.0` is pinned in six places in
+      `.github/workflows/ci.yml` and once in `.github/workflows/linux-native-v2-acceptance.yml`;
+      hosted CI run 44862556617's `daemon` job shows `Go: go1.27.0`,
+      `govulncheck_exit_status=3`, `govulncheck_vulnerabilities=12`, every finding fixed in
+      go1.27.2-go1.27.4 (for example GO-2026-6859 `net/http@go1.27.4`, GO-2026-6809
+      `crypto/x509@go1.27.3`), while the same command on a go1.27.4 host reports none.
+      Found 2026-11-21 by refactor slice W1-01 (branch `refactor/rf-w1-01-ci-quality-plane`,
+      plan `docs/plans/2026-11-21-ci-quality-plane-plan.md`), which records the 12 as the
+      advisory baseline and leaves the pin alone: changing it alters pre-existing steps, which
+      the slice's contract (clause 3) rules out. Fix direction: raise `go-version` in every
+      workflow that sets it, re-run the advisory step and record the patched-toolchain count.
+      Owner area: CI tooling.

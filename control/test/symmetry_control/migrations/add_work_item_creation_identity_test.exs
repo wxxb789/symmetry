@@ -8,7 +8,7 @@ defmodule SymmetryControl.Migrations.AddWorkItemCreationIdentityMigrationTest do
   @index_name "work_items_project_creation_id_index"
 
   test "the migrations directory applies end to end and records the creation identity version" do
-    with_schema(fn ->
+    with_schema("add_work_item_creation_identity", fn ->
       migrate_all_up!()
 
       assert %{rows: [[@migration_version]]} =
@@ -20,7 +20,7 @@ defmodule SymmetryControl.Migrations.AddWorkItemCreationIdentityMigrationTest do
   end
 
   test "the creation identity index admits one row per project and identity" do
-    with_schema(fn ->
+    with_schema("add_work_item_creation_identity", fn ->
       migrate_all_up!()
 
       project_id = insert_project!()
@@ -45,7 +45,7 @@ defmodule SymmetryControl.Migrations.AddWorkItemCreationIdentityMigrationTest do
   end
 
   test "rolling the creation identity back drops the identity and its guarantee" do
-    with_schema(fn ->
+    with_schema("add_work_item_creation_identity", fn ->
       migrate_all_up!()
 
       project_id = insert_project!()
@@ -92,10 +92,6 @@ defmodule SymmetryControl.Migrations.AddWorkItemCreationIdentityMigrationTest do
 
       assert %{rows: [[3]]} = Repo.query!("SELECT count(*) FROM work_items")
     end)
-  end
-
-  defp with_schema(test) do
-    with_schema("add_work_item_creation_identity", test)
   end
 
   defp migrate_all_up! do

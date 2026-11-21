@@ -1,5 +1,5 @@
 defmodule SymmetryControl.OrchestrationRetryTest do
-  use SymmetryControl.DataCase, async: false
+  use SymmetryControl.OrchestrationCase, async: false
 
   alias SymmetryControl.Orchestration
 
@@ -7,13 +7,19 @@ defmodule SymmetryControl.OrchestrationRetryTest do
 
   test "failed work retries idempotently on the same task with refreshed intent" do
     %{machine: machine} = enroll_machine()
-    runtime = register_runtime(machine)
+
+    runtime =
+      register_runtime(machine, @now,
+        runtime_key: "retry-runtime",
+        name: "retry-runtime",
+        daemon_instance_id: Ecto.UUID.generate()
+      )
 
     assert {:ok, task, :created} =
              Orchestration.submit_task(task_attrs(), "retry-task", now: @now)
 
     assert {:ok, run} = Orchestration.assign_one(now: @now)
-    fence = claim(run, runtime)
+    fence = claim(run, runtime, @now)
     transition(run.id, fence, "running", 1)
 
     assert {:ok, _failed} =
@@ -125,7 +131,14 @@ defmodule SymmetryControl.OrchestrationRetryTest do
     assert third_retry_command.generation == nil
 
     %{machine: machine} = enroll_machine("completed-machine")
-    runtime = register_runtime(machine, "completed-runtime")
+
+    runtime =
+      register_runtime(machine, @now,
+        runtime_key: "completed-runtime",
+        name: "completed-runtime",
+        agent_profile: "completed-profile",
+        daemon_instance_id: Ecto.UUID.generate()
+      )
 
     assert {:ok, completed_task, :created} =
              Orchestration.submit_task(
@@ -135,7 +148,7 @@ defmodule SymmetryControl.OrchestrationRetryTest do
              )
 
     assert {:ok, completed_run} = Orchestration.assign_one(now: @now)
-    completed_fence = claim(completed_run, runtime)
+    completed_fence = claim(completed_run, runtime, @now)
     transition(completed_run.id, completed_fence, "running", 3)
     transition(completed_run.id, completed_fence, "completed", 4)
 
@@ -161,58 +174,6 @@ defmodule SymmetryControl.OrchestrationRetryTest do
              )
 
     enrolled
-  end
-
-  defp register_runtime(machine, runtime_key \\ "retry-runtime") do
-    agent_profile = if runtime_key == "completed-runtime", do: "completed-profile", else: "codex"
-
-    assert {:ok, [runtime]} =
-             Orchestration.register_runtimes(
-               machine.id,
-               Ecto.UUID.generate(),
-               [
-                 %{
-                   runtime_key: runtime_key,
-                   name: runtime_key,
-                   capacity: 1,
-                   agent_profile: agent_profile,
-                   workspace: "primary",
-                   capabilities: %{}
-                 }
-               ],
-               now: @now
-             )
-
-    runtime
-  end
-
-  defp task_attrs(overrides \\ []) do
-    Map.merge(
-      %{goal: "Run tests", agent_profile: "codex", workspace: "primary", input: %{}},
-      Map.new(overrides)
-    )
-  end
-
-  defp claim(run, runtime) do
-    assert {:ok, claimed} =
-             Orchestration.claim(
-               run.id,
-               %{
-                 runtime_id: runtime.id,
-                 runtime_epoch: runtime.connection_epoch,
-                 generation: run.generation,
-                 claim_id: uuid(10)
-               },
-               now: @now
-             )
-
-    %{
-      runtime_id: runtime.id,
-      runtime_epoch: runtime.connection_epoch,
-      generation: run.generation,
-      claim_id: claimed.claim_id,
-      lease_token: claimed.lease_token
-    }
   end
 
   defp transition(run_id, fence, state, number) do
