@@ -154,7 +154,7 @@ defmodule SymmetryControl.Goals.ChangesetValidatorsTest do
            %{}
          )
        end, :response, ["must be an object"]},
-      {"WorkOutcome.candidate_subject (inline call-site validator)",
+      {"WorkOutcome.candidate_subject (shared validate_map)",
        fn -> WorkOutcome.changeset(%WorkOutcome{}, %{candidate_subject: []}) end,
        :candidate_subject, ["must be an object"]},
       {"GoalDecision.resolution (inline call-site validator)",
@@ -164,11 +164,11 @@ defmodule SymmetryControl.Goals.ChangesetValidatorsTest do
            %{state: "resolved"}
          )
        end, :resolution, ["must be an object"]},
-      {"GoalExternalWait.source_ref (single-copy helper)",
+      {"GoalExternalWait.source_ref (shared validate_map)",
        fn ->
          GoalExternalWait.changeset(seeded(%GoalExternalWait{}, :source_ref, :not_a_map), %{})
        end, :source_ref, ["must be an object"]},
-      {"GoalExternalWait.result (single-copy helper)",
+      {"GoalExternalWait.result (shared validate_map)",
        fn ->
          GoalExternalWait.changeset(seeded(%GoalExternalWait{}, :result, :not_a_map), %{})
        end, :result, ["must be an object"]}
