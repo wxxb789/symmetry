@@ -487,7 +487,8 @@ Recorded in "Recorded decisions where the contract was silent" as
 
 ### Gates re-run on the round-1 tree
 
-`gofmt -l` on the three touched Go files is empty; WSL
+`gofmt -l` is empty for every Go file this pass touched (the two in the commit, plus the
+mutation-reverted `preflight_linux.go`); WSL
 `go test -count=1 -v -run TestRunNormalizesLinuxV2NativeOwnerStateDir ./internal/app/` exit 0 with
 4/4 subtests pass (0.23 s); WSL `go test -count=1 ./internal/linuxpreflight/...` exit 0; WSL
 `go vet ./internal/linuxpreflight/... ./internal/app/...` and
