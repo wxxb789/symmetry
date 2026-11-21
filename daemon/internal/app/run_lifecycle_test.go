@@ -111,6 +111,69 @@ func TestRunLifecycleTransitionSequences(t *testing.T) {
 			},
 		},
 		{
+			name: "admission/finish_starting_reports_terminal",
+			initial: func() *runningRun {
+				return &runningRun{runLifecycle: runLifecycle{starting: true, terminal: true}}
+			},
+			steps: []func(*runningRun){
+				func(run *runningRun) {
+					if !run.finishStarting(true) {
+						t.Fatalf("finishStarting did not report the terminal run")
+					}
+					if run.starting {
+						t.Fatalf("finishStarting left the starting window open")
+					}
+				},
+			},
+			check: func(t *testing.T, run *runningRun) {
+				if run.cleanupBlocked {
+					t.Fatalf("finishStarting blocked cleanup for a terminal run with no obligation")
+				}
+			},
+		},
+		{
+			name: "admission/finish_starting_skips_refresh_when_not_cleanup_ready",
+			initial: func() *runningRun {
+				return &runningRun{runLifecycle: runLifecycle{starting: true, nativeTerminalOwner: true}}
+			},
+			steps: []func(*runningRun){
+				func(run *runningRun) {
+					if run.finishStarting(false) {
+						t.Fatalf("finishStarting reported a terminal run that is not terminal")
+					}
+					if run.cleanupBlocked {
+						t.Fatalf("finishStarting refreshed the memo despite cleanupReady=false")
+					}
+				},
+			},
+			check: func(t *testing.T, run *runningRun) {
+				if !run.runLifecycle.cleanupBlocked() {
+					t.Fatalf("the open settlement claim stopped blocking cleanup")
+				}
+			},
+		},
+		{
+			name: "admission/finish_starting_skips_refresh_for_attached_process",
+			initial: func() *runningRun {
+				return &runningRun{runLifecycle: runLifecycle{starting: true, nativeTerminalOwner: true}, process: lifecycleTestProcess}
+			},
+			steps: []func(*runningRun){
+				func(run *runningRun) {
+					if run.finishStarting(true) {
+						t.Fatalf("finishStarting reported a terminal run that is not terminal")
+					}
+					if run.cleanupBlocked {
+						t.Fatalf("finishStarting refreshed the memo while a process is attached")
+					}
+				},
+			},
+			check: func(t *testing.T, run *runningRun) {
+				if !run.runLifecycle.cleanupBlocked() {
+					t.Fatalf("the open settlement claim stopped blocking cleanup")
+				}
+			},
+		},
+		{
 			name:    "native_start_publication/publish_and_end",
 			initial: func() *runningRun { return &runningRun{runLifecycle: runLifecycle{slotHeld: true}} },
 			steps: []func(*runningRun){
@@ -171,14 +234,14 @@ func TestRunLifecycleTransitionSequences(t *testing.T) {
 						t.Fatalf("requestCancel = (cancelled=%t, id=%q), want (true, command-1)", run.cancelled, run.cancelCommandID)
 					}
 				},
-				func(run *runningRun) { run.recordNativeCancelObserved("command-1", true, true) },
+				func(run *runningRun) { run.recordNativeCancelObserved("command-1", true, false) },
 				(*runningRun).clearCancel,
 			},
 			check: func(t *testing.T, run *runningRun) {
 				if run.cancelled || run.cancelCommandID != "" {
 					t.Fatalf("clearCancel kept the reservation: cancelled=%t id=%q", run.cancelled, run.cancelCommandID)
 				}
-				if run.nativeCancelCommandID != "command-1" || !run.nativeCancelTerminalObserved || !run.nativeCancelRejected {
+				if run.nativeCancelCommandID != "command-1" || !run.nativeCancelTerminalObserved || run.nativeCancelRejected {
 					t.Fatalf("recordNativeCancelObserved lost the outcome: id=%q observed=%t rejected=%t", run.nativeCancelCommandID, run.nativeCancelTerminalObserved, run.nativeCancelRejected)
 				}
 			},
@@ -333,8 +396,8 @@ func TestRunLifecycleTransitionSequences(t *testing.T) {
 				},
 			},
 			check: func(t *testing.T, run *runningRun) {
-				if run.nativeTerminalOwner || run.nativeStartTerminalOwner {
-					t.Fatalf("releaseSettlementOwner kept ownership: owner=%t startOwner=%t", run.nativeTerminalOwner, run.nativeStartTerminalOwner)
+				if run.nativeTerminalOwner || run.nativeStartTerminalOwner || run.nativeTerminalOwnerClaim != 0 {
+					t.Fatalf("releaseSettlementOwner kept ownership: owner=%t startOwner=%t claim=%d", run.nativeTerminalOwner, run.nativeStartTerminalOwner, run.nativeTerminalOwnerClaim)
 				}
 				if run.terminalizing != 0 {
 					t.Fatalf("terminalizing = %d after both claims released, want 0", run.terminalizing)
@@ -351,17 +414,42 @@ func TestRunLifecycleTransitionSequences(t *testing.T) {
 			},
 			steps: []func(*runningRun){
 				func(run *runningRun) {
-					now := time.Now().UTC()
-					run.scheduleUsageRetry(run.nativeTerminalOwnerClaim, true, now)
-					if !run.startUsageRetryAttempt(now) {
+					run.scheduleUsageRetry(run.nativeTerminalOwnerClaim, true, time.Now().UTC())
+					if !run.nativeUsageRetryPending || run.nativeUsageRetryInFlight || run.nativeUsageRetryExhausted || run.nativeUsageRetryAttempts != 1 || !run.nativeUsageRetryNeedsPrepare || run.nativeUsageRetryOwnerClaim != 1 || !run.nativeUsageRenewalBlocked || run.nativeUsageRetryAt.IsZero() || run.nativeUsageRetryDeadline.IsZero() || !run.cleanupBlocked {
+						t.Fatalf("scheduleUsageRetry did not arm the barrier: pending=%t inFlight=%t exhausted=%t attempts=%d needsPrepare=%t ownerClaim=%d renewalBlocked=%t atZero=%t deadlineZero=%t cleanupBlocked=%t", run.nativeUsageRetryPending, run.nativeUsageRetryInFlight, run.nativeUsageRetryExhausted, run.nativeUsageRetryAttempts, run.nativeUsageRetryNeedsPrepare, run.nativeUsageRetryOwnerClaim, run.nativeUsageRenewalBlocked, run.nativeUsageRetryAt.IsZero(), run.nativeUsageRetryDeadline.IsZero(), run.cleanupBlocked)
+					}
+				},
+				func(run *runningRun) {
+					if !run.startUsageRetryAttempt(time.Now().UTC()) {
 						t.Fatalf("startUsageRetryAttempt refused a fresh retry budget")
 					}
-					attempt, exhausted := run.recordUsageRetryFailure(now)
+					if !run.nativeUsageRetryInFlight {
+						t.Fatalf("startUsageRetryAttempt did not open the attempt")
+					}
+				},
+				func(run *runningRun) {
+					run.nativeUsageRetryPending = false
+					run.finishUsageRetryInFlight(false)
+					if run.nativeUsageRetryInFlight || !run.nativeUsageRetryPending || !run.nativeUsageRetryAt.IsZero() || run.nativeUsageRetryOwnerClaim != 1 {
+						t.Fatalf("finishUsageRetryInFlight = (inFlight=%t pending=%t atZero=%t ownerClaim=%d), want (false, true, true, 1)", run.nativeUsageRetryInFlight, run.nativeUsageRetryPending, run.nativeUsageRetryAt.IsZero(), run.nativeUsageRetryOwnerClaim)
+					}
+				},
+				func(run *runningRun) {
+					attempt, exhausted := run.recordUsageRetryFailure(time.Now().UTC())
 					if attempt != 2 || exhausted {
 						t.Fatalf("recordUsageRetryFailure = (%d, %t), want (2, false)", attempt, exhausted)
 					}
-					run.finishUsageRetryInFlight(false)
+					if run.nativeUsageRetryInFlight || !run.nativeUsageRetryPending || run.nativeUsageRetryAt.IsZero() {
+						t.Fatalf("recordUsageRetryFailure did not re-arm the retry: inFlight=%t pending=%t atZero=%t", run.nativeUsageRetryInFlight, run.nativeUsageRetryPending, run.nativeUsageRetryAt.IsZero())
+					}
+				},
+				func(run *runningRun) {
+					run.nativeUsageRetryInFlight = true
+					run.nativeUsageRenewalBlocked = false
 					run.clearUsageRetryBeforePublication(false)
+					if run.nativeUsageRetryPending || run.nativeUsageRetryInFlight || !run.nativeUsageRenewalBlocked {
+						t.Fatalf("clearUsageRetryBeforePublication = (pending=%t inFlight=%t renewalBlocked=%t), want (false, false, true)", run.nativeUsageRetryPending, run.nativeUsageRetryInFlight, run.nativeUsageRenewalBlocked)
+					}
 				},
 			},
 			check: func(t *testing.T, run *runningRun) {
@@ -405,7 +493,17 @@ func TestRunLifecycleTransitionSequences(t *testing.T) {
 				return &runningRun{runLifecycle: runLifecycle{slotHeld: true, nativeUsageRetryNeedsPrepare: true}}
 			},
 			steps: []func(*runningRun){
-				func(run *runningRun) { run.rememberFinalUsage(protocol.Usage{UsageID: "usage-1"}) },
+				func(run *runningRun) {
+					usage := protocol.Usage{UsageID: "usage-1"}
+					run.rememberFinalUsage(usage)
+					usage.UsageID = "mutated-after-remember"
+					if run.nativeFinalUsage == nil || run.nativeFinalUsage.UsageID != "usage-1" {
+						t.Fatalf("rememberFinalUsage did not retain an isolated copy of the usage body: %v", run.nativeFinalUsage)
+					}
+					if run.nativeUsageRetryNeedsPrepare {
+						t.Fatalf("rememberFinalUsage kept the prepare flag set")
+					}
+				},
 			},
 			check: func(t *testing.T, run *runningRun) {
 				if run.nativeFinalUsage == nil || run.nativeFinalUsage.UsageID != "usage-1" {
@@ -422,9 +520,24 @@ func TestRunLifecycleTransitionSequences(t *testing.T) {
 				return &runningRun{runLifecycle: runLifecycle{slotHeld: true}, nativeSession: lifecycleTestSession, goalSession: &state.GoalSessionKey{}, goalAdmission: &protocol.Admission{}}
 			},
 			steps: []func(*runningRun){
-				(*runningRun).requireCloseRetry,
-				(*runningRun).beginCloseRetry,
-				(*runningRun).endCloseRetry,
+				func(run *runningRun) {
+					run.requireCloseRetry()
+					if !run.nativeCloseRetryRequired || !run.cleanupBlocked {
+						t.Fatalf("requireCloseRetry = (required=%t cleanupBlocked=%t), want (true, true)", run.nativeCloseRetryRequired, run.cleanupBlocked)
+					}
+				},
+				func(run *runningRun) {
+					run.beginCloseRetry()
+					if !run.nativeCloseRetrying || !run.nativeCloseRetryRequired {
+						t.Fatalf("beginCloseRetry = (retrying=%t required=%t), want (true, true)", run.nativeCloseRetrying, run.nativeCloseRetryRequired)
+					}
+				},
+				func(run *runningRun) {
+					run.endCloseRetry()
+					if run.nativeCloseRetrying || !run.nativeCloseRetryRequired {
+						t.Fatalf("endCloseRetry = (retrying=%t required=%t), want (false, true)", run.nativeCloseRetrying, run.nativeCloseRetryRequired)
+					}
+				},
 				(*runningRun).publishCloseRetrySuccess,
 			},
 			check: func(t *testing.T, run *runningRun) {
@@ -449,11 +562,23 @@ func TestRunLifecycleTransitionSequences(t *testing.T) {
 					if !run.markProcessExited(lifecycleTestProcess) {
 						t.Fatalf("markProcessExited did not take finalization ownership")
 					}
+					if !run.processExited || !run.cleanupBlocked {
+						t.Fatalf("markProcessExited = (exited=%t cleanupBlocked=%t), want (true, true)", run.processExited, run.cleanupBlocked)
+					}
 					if !run.recordProcessStop(lifecycleTestProcess, 71, "native:71", true) {
 						t.Fatalf("recordProcessStop did not record the stop witness")
 					}
 					run.takeFinalizeOwnership(lifecycleTestProcess)
 					run.recordFinalizeAttempt()
+					if run.processFinalizeAttempts != 1 {
+						t.Fatalf("recordFinalizeAttempt counted %d attempts, want 1", run.processFinalizeAttempts)
+					}
+					if run.markProcessExited(lifecycleTestProcess) {
+						t.Fatalf("markProcessExited re-took finalization ownership from the current owner")
+					}
+					if run.processFinalizeAttempts != 1 {
+						t.Fatalf("markProcessExited reset the attempt budget of the current owner")
+					}
 					run.markFinalizeExhausted()
 					if !run.processFinalizeExhausted {
 						t.Fatalf("markFinalizeExhausted did not exhaust the finalization budget")
@@ -505,16 +630,10 @@ func TestRunLifecycleTransitionSequences(t *testing.T) {
 	for _, test := range tests {
 		t.Logf("row %s", test.name)
 		run := test.initial()
-		for index, step := range test.steps {
+		for _, step := range test.steps {
 			step(run)
-			if t.Failed() {
-				t.Fatalf("row %s step %d failed its own precondition check", test.name, index)
-			}
 		}
 		test.check(t, run)
-		if t.Failed() {
-			t.Fatalf("row %s failed its final state check", test.name)
-		}
 	}
 }
 
@@ -536,8 +655,8 @@ func TestRunLifecycleUnmodelledStatesStayWritableAndDetectable(t *testing.T) {
 		if run.nativeUsageRetryPending || run.nativeUsageRetryInFlight || run.nativeUsageRetryExhausted || run.nativeUsageRetryOwnerClaim != 0 {
 			t.Fatalf("the orphaned retry survived the claim: pending=%t inFlight=%t exhausted=%t ownerClaim=%d", run.nativeUsageRetryPending, run.nativeUsageRetryInFlight, run.nativeUsageRetryExhausted, run.nativeUsageRetryOwnerClaim)
 		}
-		if run.runLifecycle.cleanupBlocked() != run.cleanupBlocked {
-			t.Fatalf("the memo diverged from the predicate after the claim: memo=%t predicate=%t", run.cleanupBlocked, run.runLifecycle.cleanupBlocked())
+		if !run.runLifecycle.cleanupBlocked() || !run.cleanupBlocked {
+			t.Fatalf("the claim did not leave cleanup blocked: memo=%t predicate=%t", run.cleanupBlocked, run.runLifecycle.cleanupBlocked())
 		}
 	})
 
@@ -658,8 +777,21 @@ func TestRunLifecyclePhaseTable(t *testing.T) {
 	}
 }
 
+// The two construction points of a runLifecycle value in the package's
+// non-test source: the run registration in app.go and the witness constructor
+// in linux_owner_witness_linux.go. A new construction site must be added here
+// deliberately; the gate keys on the enclosing function so unrelated edits
+// above a site do not move it.
+var lifecycleConstructors = map[string]bool{
+	"app.go:startAssignment":                true,
+	"linux_owner_witness_linux.go:runFresh": true,
+}
+
 // Committed write-site gate (contract design clause 4, K1 scanner): every
-// lifecycle field write in the package's non-test source resolves to this module.
+// lifecycle write in the package's non-test source resolves to this module.
+// The scanned shapes are field-selector assignment targets, whole-value
+// `runLifecycle` replacements, `&field` escapes, and `runLifecycle:`
+// composite-literal keys (restricted to the lifecycleConstructors allowlist).
 func TestRunLifecycleWritesStayInTheModule(t *testing.T) {
 	fset := token.NewFileSet()
 	modulePath := "run_lifecycle.go"
@@ -713,6 +845,7 @@ func TestRunLifecycleWritesStayInTheModule(t *testing.T) {
 	}
 	sort.Strings(files)
 	embeddingChecked := false
+	runningRunHandles := map[string]bool{}
 	var sites []string
 	for _, path := range files {
 		if path == modulePath || strings.HasSuffix(path, "_test.go") {
@@ -724,32 +857,24 @@ func TestRunLifecycleWritesStayInTheModule(t *testing.T) {
 		}
 		if path == "native_run.go" {
 			embeddingChecked = checkRunLifecycleEmbedding(t, path, parsed)
+			runningRunHandles = funcFieldsOf(parsed, "runningRun")
 		}
-		ast.Inspect(parsed, func(node ast.Node) bool {
-			var targets []ast.Expr
-			switch typed := node.(type) {
-			case *ast.AssignStmt:
-				targets = typed.Lhs
-			case *ast.IncDecStmt:
-				targets = []ast.Expr{typed.X}
-			default:
-				return true
-			}
-			for _, target := range targets {
-				if selector, ok := target.(*ast.SelectorExpr); ok && wantWrites[selector.Sel.Name] {
-					sites = append(sites, fmt.Sprintf("%s:%d writes %s", path, fset.Position(selector.Pos()).Line, selector.Sel.Name))
-				}
-			}
-			return true
-		})
+		sites = append(sites, lifecycleWriteSites(path, fset, parsed, wantWrites)...)
 	}
 	if len(sites) > 0 {
-		t.Fatalf("lifecycle fields written outside %s:\n%s", modulePath, strings.Join(sites, "\n"))
+		t.Fatalf("lifecycle writes outside %s:\n%s", modulePath, strings.Join(sites, "\n"))
 	}
 	if !embeddingChecked {
 		t.Fatalf("runningRun does not embed runLifecycle in native_run.go")
 	}
 
+	handleNames := map[string]bool{"Lock": true, "Unlock": true, "RLock": true, "TryLock": true}
+	for name := range funcFieldsOf(module, "runLifecycle") {
+		handleNames[name] = true
+	}
+	for name := range runningRunHandles {
+		handleNames[name] = true
+	}
 	var calls []string
 	ast.Inspect(module, func(node ast.Node) bool {
 		call, ok := node.(*ast.CallExpr)
@@ -760,8 +885,7 @@ func TestRunLifecycleWritesStayInTheModule(t *testing.T) {
 		if !ok {
 			return true
 		}
-		switch selector.Sel.Name {
-		case "Lock", "Unlock", "RLock", "TryLock", "cancel", "renewCancel", "terminalCancel":
+		if handleNames[selector.Sel.Name] {
 			calls = append(calls, fmt.Sprintf("%s:%d calls %s", modulePath, fset.Position(call.Pos()).Line, selector.Sel.Name))
 		}
 		return true
@@ -769,6 +893,106 @@ func TestRunLifecycleWritesStayInTheModule(t *testing.T) {
 	if len(calls) > 0 {
 		t.Fatalf("the module takes a lock or invokes a captured handle:\n%s", strings.Join(calls, "\n"))
 	}
+}
+
+// lifecycleWriteSites reports every non-module write the syntactic scan can
+// name: selector assignment and inc/dec targets, whole-runLifecycle
+// replacements, address-of escapes of a lifecycle field or the whole value,
+// and runLifecycle composite-literal keys outside the constructor allowlist.
+func lifecycleWriteSites(path string, fset *token.FileSet, parsed *ast.File, wantWrites map[string]bool) []string {
+	var sites []string
+	add := func(pos token.Pos, message string) {
+		sites = append(sites, fmt.Sprintf("%s:%d %s", path, fset.Position(pos).Line, message))
+	}
+	isLifecycleName := func(name string) bool {
+		return name == "runLifecycle" || wantWrites[name]
+	}
+	ast.Inspect(parsed, func(node ast.Node) bool {
+		switch typed := node.(type) {
+		case *ast.AssignStmt:
+			for _, target := range typed.Lhs {
+				recordLifecycleTarget(target, add, isLifecycleName)
+			}
+		case *ast.IncDecStmt:
+			recordLifecycleTarget(typed.X, add, isLifecycleName)
+		case *ast.UnaryExpr:
+			if typed.Op != token.AND {
+				return true
+			}
+			if selector, ok := typed.X.(*ast.SelectorExpr); ok && isLifecycleName(selector.Sel.Name) {
+				add(typed.Pos(), fmt.Sprintf("escapes &%s", selector.Sel.Name))
+			}
+		case *ast.KeyValueExpr:
+			ident, ok := typed.Key.(*ast.Ident)
+			if !ok || ident.Name != "runLifecycle" {
+				return true
+			}
+			if owner := enclosingFunc(parsed, typed.Pos()); owner == "" || !lifecycleConstructors[path+":"+owner] {
+				add(typed.Pos(), fmt.Sprintf("constructs a runLifecycle value outside the allowlist (owner %q)", owner))
+			}
+		}
+		return true
+	})
+	return sites
+}
+
+func recordLifecycleTarget(target ast.Expr, add func(token.Pos, string), isLifecycleName func(string) bool) {
+	selector, ok := target.(*ast.SelectorExpr)
+	if !ok {
+		return
+	}
+	if selector.Sel.Name == "runLifecycle" {
+		add(selector.Pos(), "replaces the whole runLifecycle value")
+		return
+	}
+	if isLifecycleName(selector.Sel.Name) {
+		add(selector.Pos(), fmt.Sprintf("writes %s", selector.Sel.Name))
+	}
+}
+
+// enclosingFunc names the top-level function or method that contains pos.
+func enclosingFunc(parsed *ast.File, pos token.Pos) string {
+	name := ""
+	for _, decl := range parsed.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Pos() > pos || pos > fn.End() {
+			continue
+		}
+		name = fn.Name.Name
+	}
+	return name
+}
+
+// funcFieldsOf returns the function-typed field names of a declared struct:
+// the captured handles the module must never invoke by itself.
+func funcFieldsOf(parsed *ast.File, typeName string) map[string]bool {
+	fields := map[string]bool{}
+	ast.Inspect(parsed, func(node ast.Node) bool {
+		spec, ok := node.(*ast.TypeSpec)
+		if !ok || spec.Name.Name != typeName {
+			return true
+		}
+		structType, ok := spec.Type.(*ast.StructType)
+		if !ok {
+			return true
+		}
+		for _, field := range structType.Fields.List {
+			switch typed := field.Type.(type) {
+			case *ast.FuncType:
+			case *ast.SelectorExpr:
+				if !strings.Contains(typed.Sel.Name, "Func") {
+					continue
+				}
+			default:
+				continue
+			}
+			for _, name := range field.Names {
+				fields[name.Name] = true
+			}
+		}
+		return false
+	})
+	return fields
 }
 
 func checkRunLifecycleEmbedding(t *testing.T, path string, parsed *ast.File) bool {

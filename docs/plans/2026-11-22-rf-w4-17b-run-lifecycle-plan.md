@@ -30,7 +30,7 @@ name is a field of `runningRun`). Raw events: `.../w4-17b/events-head.tsv`.
 | test files whose literals set lifecycle fields | 15 of 23 | scan, `kind=literal` |
 | `runningRun{` literals in tests | 267 | `grep -rho 'runningRun{' *_test.go \| wc -l` |
 | of those, literals setting ≥1 lifecycle field | 87 (193 lifecycle-field keys; 346 keys counted against the full 71-field struct) | scan, `kind=literal` |
-| test-side direct writes to lifecycle fields (assignments inside test bodies) | 26 (3 of which are same-named fields of other test types) | scan, test files |
+| test-side direct writes to lifecycle fields (assignments inside test bodies) | 25 of the 28 raw scan hits (the other 3 are same-named fields of other test types) | scan, test files |
 | false positives of the name-based scan (non-test) | 0 with the 45-name set | scan of the 45-name set over non-test files |
 | false positives of the name-based scan (test) | 3: `control.cancel` (`app_test.go:71`), `client.terminal` (`app_test.go:8777`), `session.cancelled` (`native_settlement_final_regression_test.go:593`) | scan, test files |
 
@@ -137,7 +137,7 @@ its own lock sites unchanged.
 | 20 | `clearRenewal()` | `renewCancel=nil` | `lease.go:467` |
 | 21 | `beginTerminalReservation()` | `terminalizing++` | `commands.go:444` |
 | 22 | `reserveTerminal() context.CancelFunc` | `terminalizing++`; `renewCancel` capture, `renewCancel=nil`, `renewCancelID++` | `app.go:1839-1842` |
-| 23 | `releaseTerminalReservation()` | if `terminalizing>0` → `terminalizing--` | `app.go:1855`, `:2020`, `native_run.go:506`, `:527` |
+| 23 | `releaseTerminalReservation()` | if `terminalizing>0` → `terminalizing--` | `app.go:1855`, `:2020` (the guarded decrements in `releaseNativeTerminalOwner`/`finalizeConclusiveNativeTerminalOwner` are rows 29/30, not this transition) |
 | 24 | `publishTerminal()` | `terminal=true`; `leaseRenewalClosed=true` | `app.go:1858-1859` |
 | 25 | `reserveTerminalSlotRelease(cancel context.CancelFunc)` | `terminalCancel=cancel` | `app.go:1795` |
 | 26 | `releaseSlotOnce() context.CancelFunc` | `slotHeld=false`; `terminalCancel` capture, `terminalCancel=nil` | `app.go:1771-1775` |
@@ -168,7 +168,7 @@ its own lock sites unchanged.
 | 52 | `recordFinalizeAttempt()` | `processFinalizeAttempts++` | `cleanup.go:453` |
 | 53 | `recordFinalizedStop(process Process, pid int, identity string)` | `processStopWitness=process`; `processStopPID=pid`; `processStopIdentity=identity`; `cleanupBlocked=true`; `processFinalizeExhausted=false` | `cleanup.go:484-488` |
 | 54 | `clearCleanupBlock()` | `cleanupBlocked=false` | `cleanup.go:495` |
-| 55 | `refreshCleanupBlocked()` | `cleanupBlocked=cleanupBlocked()` | the 12 memo sites (inside transitions 2,3,9,28,29,30,33,34,38,39,44,47) |
+| 55 | `refreshCleanupBlocked()` | `cleanupBlocked=cleanupBlocked()` | the 11 derived-memo recomputations at base: `app.go:2137` (2), `app.go:2151` (3), `native_run.go:352` (28), `:480` (9), `:508` (29), `:529` (30), `:727` (9b), `:843` (47), `:1496` (38), `:1559` (39), `goal_admission.go:1281` (44) |
 | 56 | `phase() runPhase` | none (query) | — |
 | 57 | `cleanupBlocked() bool` on `runLifecycle` | none (query) | replaces `nativeCleanupBlocked` (`goal_admission.go:1290-1292`) |
 
@@ -197,7 +197,7 @@ its single base site).
 | `cleanup.go:clearCleanupBlockedAfterStop` | `:495` → 54 (caller guard unchanged) |
 | `commands.go:dispatchQueuedCommand` | `:84-86` → 12 |
 | `commands.go:handleCommand` | `:371-373` → 15; `:394-395`, `:414-415`, `:419-420` → 12; `:408` → 13; `:441-442` → 32-part (`renewCancel`/`renewCancelID`) — the `claimNativeTerminalOwner` at `:439` → 28; `:444` → 21; `:558-560` → 15; `:562/564/566` → 16 |
-| `events.go:queueEvent` | `:462`, `:466` → 10; `:465-470` → 34 |
+| `events.go:queueEvent` | `:462`, `:466` → 10; `:465-470` → 33 |
 | `goal_admission.go:startGoalAdmission` | `:1197-1199` → 15 |
 | `goal_admission.go:requireNativeSessionCloseRetry` | `:1280-1281` → 44 |
 | `goal_admission.go:retryBlockedNativeSessionCloses` | `:1333` → 45; `:1348` → 46 |
@@ -269,15 +269,24 @@ return them, exactly as the base functions did, so no new goroutine, channel or 
 no cancellation is delivered earlier or later than at base.
 
 **D5 — the write-site scan gate covers the package's non-test source.** K1's scanner excluded
-`*_test.go`; the contract's design clause 4 says "reuse the K1 scanner idea", and 26 of the 29
-test-side lifecycle writes are fixture state construction (e.g.
+`*_test.go`; the contract's design clause 4 says "reuse the K1 scanner idea", and 25 of the 28 raw
+test-side scan hits are fixture state construction (e.g.
 `fixture.daemon.running[key].stale = true`), which no transition expresses without inventing
-test-only setters. Options: (a) non-test scope (K1 parity) + the 29 test-side writes enumerated in
+test-only setters. Options: (a) non-test scope (K1 parity) + the 28 test-side hits enumerated in
 the evidence; (b) all-files scope with 3 pinned false-positive exclusions, which needs 23 test
 rewrites into setter calls the module should not own. **Recommendation adopted: (a)**, with the
 enumerated test-side list as the visibility complement, so nothing is hidden. The gate's field set
 is the 45 names of §"Field map" (the memo included), and the test asserts the field set itself, so
-a field leaving the module turns the gate red.
+a field leaving the module turns the gate red. The gate's syntactic reach (widened in the fix
+round for review finding F1): field-selector assignment and inc/dec targets, whole-`runLifecycle`
+replacement targets, `&field`/`&runLifecycle` escapes, and non-test `runLifecycle:`
+composite-literal keys restricted to the two construction points (allowlist keyed by
+`file:enclosing-function`: `app.go:startAssignment`, `linux_owner_witness_linux.go:runFresh`); the
+module-side check refuses any call to a function-typed field of `runLifecycle`/`runningRun`, not a
+fixed name list. Outside the gate by construction: writes through a copied value (`v := *active`
+mutates the copy, not the run; no such shape exists in the tree), and handle *reads* for
+caller-side invocation, which are legal — callers invoke captured handles at their base positions
+by design (D4).
 
 **D6 — the fixture rewrite is the nested-literal form** `runLifecycle: runLifecycle{…}` (D1 keeps
 `cleanupBlocked` outside it). 87 of the 267 fixtures change; the O6 proof compares each rewritten
@@ -303,12 +312,14 @@ resets four usage-barrier flags, `settleCancelledNativeStart`/`transferNativeSta
 outside" for a field subset while its module already wrote the subset b-2 owns; and clause 1's
 `cleanupBlocked()` replacement plus clause 3's per-function write-order control bind all 49
 functions; (b) deliver the whole slice and report the measured diff. **Recommendation adopted:
-(b)**: measured on the delivered tree at the apply revision, `git diff --numstat bced8d36` (the
+(b)**: measured on the fix-round tree, `git diff --numstat bced8d36` (the
 slice's merge base) over the tracked files gives `+371 / -588 = 959` changed lines (production
 edits and the script 470, the mechanical test-fixture rewrite 489) and the new files add
-`run_lifecycle.go` 585 + `run_lifecycle_test.go` 816 = 1,401, so the code diff is 2,360 lines and
-the two mandated records add 849 (this plan 376 + the evidence record 473). Under option (a) b-1
-would carry the module file (~430 of its 585 lines), its tests (~480 of 816), **all 87 fixture literals** (the fields are mixed across groups, so the rewrite is
+`run_lifecycle.go` 585 + `run_lifecycle_test.go` 1,040 = 1,625 (816 at the apply revision), so the
+code diff is 2,584 lines (2,360 at the apply revision) and
+the two mandated records add 920 (this plan 387 + the evidence record 533; 849 at the apply
+revision). Under option (a) b-1
+would carry the module file (~430 of its 585 lines), its tests (~480 of the 1,040-line file), **all 87 fixture literals** (the fields are mixed across groups, so the rewrite is
 not divisible) and its own write/lock/flow tables — measured against the same files that is
 >1,800 lines, so the split does not produce a ≤1,500-line increment either; the plan and the
 evidence record follow the program rule C2 (LOC is report-only). If the conductor prefers (a),

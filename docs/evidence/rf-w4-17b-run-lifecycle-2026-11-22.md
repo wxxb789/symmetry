@@ -7,19 +7,27 @@ non-test source resolves there, one derived `cleanupBlocked()` predicate replace
 `goal-rf-w4-17b-run-lifecycle.md` (GDD, 2026-11-21, with the arch-decision-2 `## Conductor
 decision` sections and amendments V1-V10). Base revision `f70553bf` (the dispatch HEAD), which is
 also the revision of every base coordinate below. Plan:
-`docs/plans/2026-11-22-rf-w4-17b-run-lifecycle-plan.md`. Nothing is committed; this record
-describes the working tree the gates ran on.
+`docs/plans/2026-11-22-rf-w4-17b-run-lifecycle-plan.md`.
+
+Revisions: the reviewed slice was committed as `e69f6566` (branch) and merged with `origin/main` as
+`c5b4a0a9`; the fix round for that review's findings F1-F6 re-opened the working tree on top of
+`c5b4a0a9`. The identity table below binds the fix-round tree: the fix round changed
+`run_lifecycle_test.go` and the two records (this one included); of the identity rows,
+`run_lifecycle_test.go` and the plan carry their new hashes, while every other
+row is byte-identical to the committed revision (no production file changed in the fix round, so
+§5-§7's write-order, lock-site and control-flow measurements still bind the committed bytes), and
+§10's fix-round table names the gates re-run on the fix tree.
 
 Subject identity (sha256 of the delivered files):
 
 The apply revision re-hashed `run_lifecycle.go`, `run_lifecycle_test.go`, `native_run.go` and this
-slice's plan (the files its accepted simplify findings changed); the other rows are byte-identical
-to the pre-apply revision and keep their hashes.
+slice's plan (the files its accepted simplify findings changed); the fix round then re-hashed
+`run_lifecycle_test.go` and the plan again.
 
 | file | sha256 |
 | --- | --- |
 | `daemon/internal/app/run_lifecycle.go` | `89a15f45115710dfc63381f76e48812b320c0bf12b57e4a6273b94c86f882392` |
-| `daemon/internal/app/run_lifecycle_test.go` | `f803de6e012f123d65fc57936c564af5d41d92e529a868c5c0df8e0558a32171` |
+| `daemon/internal/app/run_lifecycle_test.go` | `293ee5ba0bc58ef8d32d0f7e1e93414320907fb1f763cd9be6da00bd003fb372` |
 | `daemon/internal/app/native_run.go` | `600a367c6f1f5c97f6dfe9719342d62f8ce178add7f3c721bb19f5c538a4a7e7` |
 | `daemon/internal/app/app.go` | `efc3c46887497a4f9c5dfda391585fe7316b26efcdb7f0243b8de947232fbfef` |
 | `daemon/internal/app/cleanup.go` | `6f54a16546ad109a5e45c825543f4773c0c773ab14450af82b0ee147b62da388` |
@@ -29,7 +37,7 @@ to the pre-apply revision and keep their hashes.
 | `daemon/internal/app/goal_admission.go` | `a1ebf94855bd007503704d675c939d71088e58d4a73335856f4befc03c3bff51` |
 | `daemon/internal/app/recovery_glue.go` | `d4b51969697a892865319d2ba628302914b9a57f26175fbc39bb440e85992386` |
 | `daemon/internal/app/linux_owner_witness_linux.go` | `c131b3ef60de447ec2189003e4d205a43115ff6285d92cb570a426dcf42050d1` |
-| `docs/plans/2026-11-22-rf-w4-17b-run-lifecycle-plan.md` | `7048fcc2d81c31875fd64fda4e80b613bf06ddf53484a49c60fc6d2dce0dc849` |
+| `docs/plans/2026-11-22-rf-w4-17b-run-lifecycle-plan.md` | `f3ed2312eba7c6c174e1a7a00300188736174c3885e73636fb92f7af32ea4209` |
 | `scripts/ci/omo-control-native-evidence.py` | `d55163b436a44df43817bd27623a608a5a72b782eb9445c384bdf21580159ead` |
 
 Scratch tools and raw outputs (outside the repository, host state directory):
@@ -44,7 +52,7 @@ seq-report.txt}` (per-function write and lock sequences), `…/flow/{main.go, fl
 | file | status | lines (base → head) | note |
 | --- | --- | ---: | --- |
 | `daemon/internal/app/run_lifecycle.go` | new | — → 585 | `runLifecycle` (44 fields), `cleanupBlocked()`, `phase()`, 63 transition/query methods |
-| `daemon/internal/app/run_lifecycle_test.go` | new | — → 816 | 5 tests at the module interface, no `&daemon{}`; the committed write-site scan gate |
+| `daemon/internal/app/run_lifecycle_test.go` | new | — → 1040 (816 at the apply revision) | 5 tests at the module interface, no `&daemon{}`; the committed write-site scan gate |
 | `daemon/internal/app/native_run.go` | edited | 2417 → 2232 | `runningRun` embeds `runLifecycle`; 44 declarations left; 127 write statements became transition calls; `claimNativeTerminalOwner` deleted (its body is `claimSettlementOwner`) |
 | `daemon/internal/app/app.go` | edited | 2221 → 2189 | startAssigned, releaseRun, releaseSlotOnce, scheduleTerminalSlotRelease, beginTerminal, releaseTerminalReservation, clearCancellationReservation, finishStarting, finishAttachedStart, the constructor literal |
 | `daemon/internal/app/cleanup.go` | edited | 1047 → 1039 | finalizeExitedProcess, clearCleanupBlockedAfterStop |
@@ -55,22 +63,24 @@ seq-report.txt}` (per-function write and lock sequences), `…/flow/{main.go, fl
 | `daemon/internal/app/recovery_glue.go` | edited | 894 → 880 | retryNativeUsageRecoveryPersistence |
 | `daemon/internal/app/linux_owner_witness_linux.go` | edited | 3843 → 3843 | witness constructor literal |
 | `daemon/internal/app/*_test.go` (19 files) | edited | — | 87 fixture literals rewritten into nested `runLifecycle: runLifecycle{…}`; 193 keys moved; assertions unchanged |
-| `docs/plans/2026-11-22-rf-w4-17b-run-lifecycle-plan.md` | new | — → 376 | plan with decisions D1-D8 |
+| `docs/plans/2026-11-22-rf-w4-17b-run-lifecycle-plan.md` | new | — → 387 (376 at the apply revision) | plan with decisions D1-D8 |
 | `docs/evidence/rf-w4-17b-run-lifecycle-2026-11-22.md` | new | — | this record |
 | `scripts/ci/omo-control-native-evidence.py` | edited | 1812 → 1813 | `SOURCE_PATHS` gains `daemon/internal/app/run_lifecycle.go` (R9) |
 
 Line budget (contract clause 1's "no file > 1500 L"): `run_lifecycle.go` 585 and
-`run_lifecycle_test.go` 816 are the only files this slice pushes past 400 lines; every file that
+`run_lifecycle_test.go` 1040 are the only files this slice pushes past 400 lines; every file that
 already exceeded 1500 lines at base (`native_run.go`, `app.go`, `goal_admission.go`,
 `linux_owner_recovery_linux.go`, `linux_owner_v2_linux.go`, `linux_owner_preflight_linux.go`,
 `linux_owner_witness_linux.go`, the test files) shrinks or stays equal — `native_run.go`
 2417 → 2232 as the contract requires. No file crosses 1500 lines.
 
-Diff size (measured at the apply revision, for the plan's decision D8): tracked files
+Diff size (measured at the fix round, for the plan's decision D8; the apply-revision figures in
+parentheses): tracked files
 `+371 / -588 = 959` lines (`git diff --numstat bced8d36`, the slice's merge base: production edits
 and the script 470, mechanical test-fixture rewrite 489), plus the new files `run_lifecycle.go`
-585 and `run_lifecycle_test.go` 816 — a code diff of 2,360 lines — and the two mandated records
-(plan 376 + this record 473). That total is over
+585 and `run_lifecycle_test.go` 1040 (816) — a code diff of 2,584 lines (2,360) — and the two
+mandated records
+(plan 387 + this record 533; 849 at the apply revision). That total is over
 the conductor's 1,500-line size rule. D8 in the plan records the measurement
 and the disposition: the split into W4-17b-1/W4-17b-2 does not bound the diff either (the module
 file, the fixture rewrite and the evidence tables are fixed costs of both halves: a b-1 that keeps
@@ -135,8 +145,8 @@ the apply stage inlined its two writes there and deleted the method (simplify S9
 | transition | callers (file:function) |
 | --- | --- |
 | `attachClaim` | app.go:startAssigned |
-| `finishStarting` | app.go:finishStarting, app.go:startAssigned, goal_admission.go:startGoalAdmission |
-| `finishAttachedStart` | app.go:finishAttachedStart, native_run.go:settleCancelledNativeStart, app.go:startAssigned (5 sites), goal_admission.go:startGoalAdmission (2) |
+| `finishStarting` | transition callers: app.go:finishStarting (wrapper, `:2111`), run_lifecycle.go:finishAttachedStart (S7 composition, `:159`); wrapper call sites: app.go:startAssigned (`:1332`), goal_admission.go:startGoalAdmission (`:335`) |
+| `finishAttachedStart` | transition caller: app.go:finishAttachedStart (wrapper, `:2123`); wrapper call sites: app.go:startAssigned (`:1450`, `:1598`, `:1642`, `:1664`, `:1674`), goal_admission.go:startGoalAdmission (`:795`, `:1218`), native_run.go:settleCancelledNativeStart (`:659`) |
 | `beginNativeStartPublication` | native_run.go:beginNativeStart |
 | `publishNativeStartResult` | native_run.go:publishNativeStartResult |
 | `endNativeStartPublication` | native_run.go:finishNativeStartPublication |
@@ -327,10 +337,10 @@ cleanup_test.go 1/1/0, generic_process_stop_test.go 1/1/0, process_finalization_
 recovery_isolation_test.go 1/2/0, stale_ack_settlement_test.go 1/2/0, supervisory_test.go 1/1/0,
 terminal_settlement_race_test.go 1/7/1.
 
-Test-side fixture **state construction by direct field writes** (26 sites, e.g.
+Test-side fixture **state construction by direct field writes** (25 of the 28 raw scan hits, e.g.
 `fixture.daemon.running[key].stale = true`) is unchanged: the gate's scope is the package's
 non-test source (plan decision D5, K1 scanner parity), and no transition expresses those writes
-without inventing test-only setters. The 29 scan hits include 3 same-named fields of other test
+without inventing test-only setters. The 28 scan hits include 3 same-named fields of other test
 types (`control.cancel`, `client.terminal`, `session.cancelled`); the site list is
 `…/events-head4.tsv`.
 
@@ -363,6 +373,29 @@ mutant is red in the delivered test. All mutants were reverted; the tree carries
 stage added: the four module-test rows whose fixtures left the probed field at its zero value
 (M6-M9, simplify S12), the two discarded transition returns (M10-M11, S13), and the scan gate's
 captured-handle scope (M12, S10; the pre-apply gate, which matched lock calls only, passed M12).
+
+### Fix-round mutants (review fix r1)
+
+Run in the `%TEMP%/w4fix/daemon` copy of the fix-round tree; each mutant applied alone, the module
+tests or the scan gate run, then reverted. M13-M16 are the step-level assertions review F2 asked
+for (the mutants the apply-stage rows let through); M17-M21 verify the widened gate's new shapes
+(review F1), with M21 re-running M5's plain-field write against the rewritten scanner:
+
+| # | test | mutant | observed failure |
+| --- | --- | --- | --- |
+| M13 | `…TransitionSequences` (`usage_barrier/schedule_attempt_fail_republish`) | empty `finishUsageRetryInFlight` body | `run_lifecycle_test.go:434: finishUsageRetryInFlight = (inFlight=true pending=false atZero=false ownerClaim=1), want (false, true, true, 1)` |
+| M14 | `…TransitionSequences` (`close_retry/require_begin_end_publish`) | empty `requireCloseRetry` body | `run_lifecycle_test.go:526: requireCloseRetry = (required=false cleanupBlocked=false), want (true, true)` |
+| M15 | same row | empty `endCloseRetry` body | `run_lifecycle_test.go:538: endCloseRetry = (retrying=true required=true), want (false, true)` |
+| M16 | same row | empty `beginCloseRetry` body | `run_lifecycle_test.go:532: beginCloseRetry = (retrying=false required=true), want (true, true)` |
+| M17 | `TestRunLifecycleWritesStayInTheModule` | `active.runLifecycle = runLifecycle{}` in `daemon.isStale` | `app.go:1853 replaces the whole runLifecycle value` |
+| M18 | same test | `pointer := &active.stale; *pointer = false` in `daemon.isStale` | `app.go:1853 escapes &stale` |
+| M19 | same test | `_ = &runningRun{runLifecycle: runLifecycle{}}` in `daemon.isStale` | `app.go:1852 constructs a runLifecycle value outside the allowlist (owner "isStale")` |
+| M20 | same test | `run.stopExecution(nil)` in `runLifecycle.beginTerminalReservation` | `run_lifecycle.go:282 calls stopExecution` |
+| M21 | same test | re-run of M5's `active.stale = false` in `daemon.isStale` | `app.go:1853 writes stale` |
+
+Every mutant is red in the fix-round tree and none was left applied (`git status --short` after the
+battery: only `daemon/internal/app/run_lifecycle_test.go` modified; the temp copy is
+`diff -rq`-identical to the repository afterwards).
 
 ## 10. Gate results (exact commands, counts, exit codes)
 
@@ -420,7 +453,27 @@ subject hashes bind); command strings are the rows above unless noted.
 | whitespace | `git diff --check`: exit 0 |
 | host-path / DLP | `git diff bced8d36 \| grep '^+' \| grep -ci "us[e]rs/"` → 0; `… \| grep -Pc '\\[u]'` → 0 |
 | line budget | every changed file that already exceeded 1500 lines at base shrinks or stays equal (`native_run.go` 2417 → 2232; `scripts/ci/omo-control-native-evidence.py` 1812 → 1813 for the R9 `SOURCE_PATHS` line); `run_lifecycle.go` 585 and `run_lifecycle_test.go` 816 are the only files this slice pushes past 400 lines, and no file crosses the 1500-line limit |
-| mutant battery | §9 M1-M5 (re-run) and M6-M12 (new): each red as quoted, each reverted; `git status` shows only the three intended files modified and their sha256 match the subject table |
+| mutant battery | §9 M1-M5 (re-run) and M6-M12 (new): each red as quoted, each reverted; the mutant edits themselves were all reverted (the tree carries none), and the apply-stage changes stayed on the three intended files (`run_lifecycle.go`, `run_lifecycle_test.go`, `native_run.go`), whose bytes the subject table binds |
+
+### Fix-round re-run (review fix r1, findings F1-F6)
+
+Run in the repository's `daemon/` on the fix-round tree (working tree on top of `c5b4a0a9`); the
+full package suite is the conductor's gate and was not re-run here. The fix round changed no
+production file, so only the gates whose subject changed (the module tests and the scan gate) plus
+the cheap front-of-line gates were re-run.
+
+| gate | fix-round result |
+| --- | --- |
+| gofmt | `gofmt -l internal/app/`: no output, exit 0 |
+| vet | `go vet ./...`: exit 0 |
+| builds | `GOOS=linux go build ./...`, `GOOS=windows go build ./...`: exit 0 each |
+| focused module tests | `go test -count=1 -run 'TestRunLifecycle' ./internal/app/`: `ok … 0.584s`, exit 0; 5 tests (21 transition rows, 4 unmodelled-state cases, the 64-row truth table, the 16-row phase table, the scan gate), 0 failures |
+| write-site scan (committed) | the rewritten `TestRunLifecycleWritesStayInTheModule` in the same run: 0 sites outside `run_lifecycle.go`; the two `runLifecycle:` construction keys resolve to their allowlisted owners (`app.go:startAssignment`, `linux_owner_witness_linux.go:runFresh`); the module invokes none of the function-typed handles |
+| native-evidence identity (R9) | `python scripts/ci/test-omo-control-native-evidence.py` (repo root): `Ran 10 tests in 5.878s`, `OK`, exit 0 |
+| fix-round mutants | §9 fix-round table M13-M21: each red as quoted, each reverted; `git status --short` afterwards shows only `daemon/internal/app/run_lifecycle_test.go` modified |
+| line budget | the fix round grows `run_lifecycle_test.go` 816 → 1,040 and the plan 376 → 387 (this record 473 → 533); `run_lifecycle.go` 585 and every production file unchanged; no file crosses the 1,500-line limit |
+| whitespace | `git diff --check`: exit 0 |
+| host-path / DLP | `git diff c5b4a0a9 \| grep -i "us[e]rs/"` → 0; `… \| grep -P '\\[u]'` → 0 |
 
 ## 11. Scoped simplification review (repo AGENTS.md, before completion)
 
@@ -451,15 +504,22 @@ findings: the comment deletions S1-S6 (179 → 41 comment lines in `run_lifecycl
 compositions S7 (`finishAttachedStart` calls `finishStarting`), S8 (`markProcessExited` calls
 `takeFinalizeOwnership`) and S9 (inlined `releaseStartCancel`), the widened scan gate S10, the
 wording fix S11, and the module-test strengths S12/S13 (seeded fixtures, asserted returns). S14
-(removing the two unreachable `t.Failed()` guards) was skipped; `phase()` is recorded as test-only
+(removing the two unreachable `t.Failed()` guards) was skipped at apply time; the fix round applied
+it (review F6: every step and check reports through `t.Fatalf`, so the guards could never fire).
+`phase()` is recorded as test-only
 in §12 (S18). The write-order, lock-site and control-flow comparisons, the fixture proof and the
 scan gate were re-run at the apply revision with the same results (§5-§8); the mutants are §9.
 
 ## 12. Known limits
 
 - The Windows host cannot run `-race` (no cgo toolchain); the race evidence is the WSL run.
-- The write-site scan gate covers the package's non-test source (D5, K1 parity); the 26 test-side
+- The write-site scan gate covers the package's non-test source (D5, K1 parity); the 25 test-side
   fixture-state writes and the 3 same-named fields of other test types are enumerated, not gated.
+  The gate's reach is syntactic (fix round, F1): field-selector assignment/inc-dec targets,
+  whole-`runLifecycle` replacements, `&field` escapes, `runLifecycle:` construction keys (two
+  allowlisted owners) and calls to function-typed fields; a write through a copied value
+  (`v := *active` mutates the copy, not the run) and handle reads for caller-side invocation
+  (legal by design, D4) stay outside it.
 - Test-side rows in §8 were produced by a parser-only tool; it proves field→value equality per
   rewritten literal and byte-equality outside the rewritten spans, not type correctness (the
   compiler plus the full suite cover that).
