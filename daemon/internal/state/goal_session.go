@@ -585,24 +585,6 @@ func (store *Store) CheckGoalSessionLineage(lineage GoalSessionLineageKey) (Goal
 	return store.checkGoalSessionLineageLocked(lineage)
 }
 
-// EnsureGoalSessionLineageAvailable is the admission guard for a new local
-// session. It maps the indexed status to the same typed errors used by launch
-// intent persistence, while callers that need diagnostics can use
-// CheckGoalSessionLineage directly.
-func (store *Store) EnsureGoalSessionLineageAvailable(lineage GoalSessionLineageKey) error {
-	status, err := store.CheckGoalSessionLineage(lineage)
-	if err != nil {
-		return err
-	}
-	if !status.BlocksNewLaunch() {
-		return nil
-	}
-	if status.State == GoalSessionLineageStateUncertain || status.State == GoalSessionLineageStateLaunching {
-		return ErrGoalSessionUncertain
-	}
-	return ErrGoalSessionConflict
-}
-
 // MarkGoalSessionLaunchStarted records the point after which a crash may have
 // left a native session alive without a persisted native handle.
 func (store *Store) MarkGoalSessionLaunchStarted(key GoalSessionKey, at ...time.Time) (GoalSessionJournal, error) {

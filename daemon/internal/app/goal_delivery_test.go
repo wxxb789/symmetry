@@ -773,6 +773,57 @@ func TestAbandonGoalSessionBoundsOversizedUncertainReason(t *testing.T) {
 	}
 }
 
+// TestAbandonGoalSessionUncertainBoundsOversizedCloseReason pins that an
+// over-budget native-close cause cannot divert the session off the uncertain path.
+func TestAbandonGoalSessionUncertainBoundsOversizedCloseReason(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		closeErr     error
+		wantContains string
+	}{
+		{
+			name:         "multibyte close cause is cut on a rune boundary",
+			closeErr:     errors.New(strings.Repeat("é", 2100)),
+			wantContains: strings.Repeat("é", 64),
+		},
+		{
+			name:         "close cause with an interior invalid byte stays loadable",
+			closeErr:     errors.New("bad\xffbyte: " + strings.Repeat("a", 5000)),
+			wantContains: strings.Repeat("a", 64),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store, key := claimedGoalDeliveryStore(t)
+			defer store.Close()
+			sessionKey, _, _ := saveRetainedGoalSession(t, store, key)
+			daemon := &daemon{store: store, options: options{clock: time.Now}}
+			if err := daemon.abandonGoalSessionUncertain(sessionKey, &closeFailureGoalSession{err: test.closeErr}, errors.New("turn start outcome lost")); err == nil {
+				t.Fatal("abandonGoalSessionUncertain() with a failed native close reported success")
+			}
+			session, err := store.LoadGoalSession(sessionKey)
+			if err != nil {
+				t.Fatalf("LoadGoalSession() error = %v", err)
+			}
+			if session.LaunchState != state.GoalSessionLaunchStateUncertain || session.SessionState != state.GoalSessionStateUnavailable || !session.NeedsReconciliation() {
+				t.Fatalf("oversized uncertain reason left the session off the uncertain path: %#v", session)
+			}
+			reason := session.UncertainReason
+			if !strings.HasPrefix(reason, "native Goal turn start outcome is unknown: ") {
+				t.Fatalf("durable uncertain reason = %q, want the composed prefix", reason)
+			}
+			if !strings.Contains(reason, test.wantContains) {
+				t.Fatalf("durable uncertain reason dropped the close cause text: %q", reason)
+			}
+			if !utf8.ValidString(reason) {
+				t.Fatalf("durable uncertain reason is not valid UTF-8 (%d bytes)", len(reason))
+			}
+			if len(reason) > state.GoalSessionUncertainReasonBytes {
+				t.Fatalf("durable uncertain reason = %d bytes, over the %d-byte store budget", len(reason), state.GoalSessionUncertainReasonBytes)
+			}
+		})
+	}
+}
+
 func TestNativeWaitUsesFinalProcessFailureSnapshotForTerminalTransition(t *testing.T) {
 	admission, present, err := parseAdmissionInput(validAdmissionInput())
 	if err != nil || !present {

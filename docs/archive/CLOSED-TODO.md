@@ -60,6 +60,11 @@ The server-side follow-up appended to the closed `resolve_decision` page-version
 `## Retro review follow-ups` section below was moved on 2026-11-21 from branch
 `fix/goal-command-stale-race`.
 
+The collapsed trailing-data decoder item and the removed `EnsureGoalSessionLineageAvailable`
+dead-code fragment appended to the sections at the end of this file were carried by the rf-w3-08
+apply stage (2026-11-21) and moved on 2026-11-22 to the W3-07 follow-up branch
+`refactor/rf-w3-07b-state-error-followups`, which the closure lines below name.
+
 The served-read class closure appended to the `## Deferred review findings (0007h)` section below was
 moved on 2026-11-21 from branch `fix/served-read-closeout`.
 
@@ -4222,6 +4227,49 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
       full suite and the `(module, name)` comparison above were measured on the implementation
       revision `0f97a3e9`; the full suite on `d556d26c04` remains with the conductor
       gate-runner.
+
+## Daemon state: decorative trailing-data disjunct in the provider-action decoder (rf-w3-07 survey)
+
+- [ ] Revalidate and merge the redundant trailing-data arms of
+      `normalizeProviderActionResult` (`daemon/internal/state/provider_action.go`). At the
+      rf-w3-07 base `52bdffd2` the block was
+      `if token, tokenErr := decoder.Token(); tokenErr != io.EOF { if tokenErr == nil || token !=
+      nil { return errors.New("provider action result has trailing data") }; return
+      errors.New("provider action result has trailing data") }`: both arms returned the identical
+      static error, so the disjunct could not change any outcome, and `json.Decoder.Token`
+      returns a nil token whenever it returns an error. rf-w3-07 (2026-11-21) split the block to
+      wrap the decoder cause (`if tokenErr != nil { wrapped }`, `if token != nil { static }`,
+      final `static`) and kept the third arm because that slice's contract requires base-vs-head
+      control-flow preservation for every early return; the last two arms still return the same
+      bytes. No test asserts the message by equality (`grep -rn --include=*_test.go '"provider
+      action result has trailing data"' daemon/` matches nothing). A follow-up maintenance task
+      can collapse the arms to one static return after re-running the state suite on the Linux
+      lane; the sweep and the classification table live in
+      `docs/evidence/rf-w3-07-state-error-causes-2026-11-21.md` §1/§2.
+      **Closed (2026-11-21, rf-w3-08 apply stage; landed on the W3-07 follow-up branch
+      `refactor/rf-w3-07b-state-error-followups`, 2026-11-22):** the two identical static arms are
+      collapsed to one `return nil, errors.New("provider action result has trailing data")` after
+      the `tokenErr != nil` wrap, with the token value discarded (`if _, tokenErr :=
+      decoder.Token(); tokenErr != io.EOF`); the wrap arm is unchanged, so the decoder cause still
+      reaches callers and the static message stays byte-identical. The stale head cells are
+      refreshed in the same evidence file (§2.1, §3) and the apply-stage record is its `## 12`
+      section.
+
+## Dead-code candidates (rf-w1-06 re-scoped sweep)
+
+- [ ] `Store.EnsureGoalSessionLineageAvailable` (`daemon/internal/state/goal_session.go:592`), one
+      of the three surfaces recorded in `docs/TODO.md` from the rf-w1-06 re-scoped dead-code sweep:
+      unreachable from `deadcode -test ./cmd/...` on windows/amd64, linux/amd64 and linux/arm64
+      alike, and at the baseline revision `a3039f0` `git grep -nw <symbol>` matched only the
+      definition plus its doc comment — no call site, no test, no doc citation anywhere.
+      **Closed (2026-11-21, rf-w3-08 apply stage; landed on the W3-07 follow-up branch
+      `refactor/rf-w3-07b-state-error-followups`, 2026-11-22):** revalidated at the branch head
+      (`git grep -nw EnsureGoalSessionLineageAvailable -- daemon` matches nothing) and deleted; no
+      caller, test or document cited it at the sweep's baseline revision either, so the deletion
+      is call-site-free in every tree. Its uncertain/conflict classification remains in
+      `RebindGoalSessionForResume` and `ensureLocalHandleAvailableLocked`. The other two surfaces
+      (`Store.AttachGoalSession`, `Store.FailUnresolvedProvideInput`) stay open in `docs/TODO.md`
+      under the same section, with a residual line pointing here.
 
 ## Production Linux containment witness: stop-receipt barrier stall awaiting a diagnosable occurrence
 
