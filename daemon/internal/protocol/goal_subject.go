@@ -288,31 +288,94 @@ func decodeStrictObject(data []byte, target any, required ...string) error {
 	return ensureDecoderEOF(decoder)
 }
 
-func validateUUID(value, field string) error {
-	if len(value) != 36 {
-		return fmt.Errorf("%s must be a canonical UUID", field)
+// UUIDMessagePolicy selects the rejection message body a UUID validator prints
+// after the call site's field name. Bodies are stored without the field prefix,
+// so a policy cannot change the "<field> " shape of the error text.
+type UUIDMessagePolicy struct {
+	Malformed string // wrong length or a dash away from 8/13/18/23
+	Uppercase string // hexadecimal digit in [A-F]
+	NonHex    string // any other character outside [0-9a-f]
+	Version   string // version nibble outside 1..5
+	Variant   string // variant nibble outside 89ab
+}
+
+var (
+	// CanonicalUUIDPolicy reports every rejection class with one message; the
+	// registration and configuration UUID fields pin that single string.
+	CanonicalUUIDPolicy = UUIDMessagePolicy{
+		Malformed: "must be a canonical UUID",
+		Uppercase: "must be a canonical UUID",
+		NonHex:    "must be a canonical UUID",
+		Version:   "must be a canonical UUID",
+		Variant:   "must be a canonical UUID",
 	}
-	for index, character := range value {
+	// GoalMachineUUIDPolicy is the control package's wire policy: uppercase and
+	// other non-hex characters share the lowercase-hexadecimal message, and the
+	// version and variant nibbles share one message.
+	GoalMachineUUIDPolicy = UUIDMessagePolicy{
+		Malformed: "must be a canonical UUID",
+		Uppercase: "must use lowercase hexadecimal UUID digits",
+		NonHex:    "must use lowercase hexadecimal UUID digits",
+		Version:   "must use a supported UUID version and variant",
+		Variant:   "must use a supported UUID version and variant",
+	}
+	// protocolUUIDPolicy is this package's policy for goal DTO naming fields: a
+	// non-hex character reads as a malformed canonical UUID, and the version
+	// and variant nibbles have distinct messages.
+	protocolUUIDPolicy = UUIDMessagePolicy{
+		Malformed: "must be a canonical UUID",
+		Uppercase: "must use lowercase hexadecimal UUID digits",
+		NonHex:    "must be a canonical UUID",
+		Version:   "must use a supported UUID version",
+		Variant:   "must use a supported UUID variant",
+	}
+)
+
+// ValidateUUID rejects a value that is not a canonical lowercase UUID — length
+// 36, dashes at 8/13/18/23, version nibble 1..5, variant nibble 89ab — with the
+// call site's message policy. The scan is byte-based because the length, dash
+// positions, version nibble and variant nibble are byte coordinates in every
+// copy this replaces; a multi-byte character fails at the same byte index and
+// message class as those rune scans.
+func ValidateUUID(value, field string, policy UUIDMessagePolicy) error {
+	if len(value) != 36 {
+		return fmt.Errorf("%s %s", field, policy.Malformed)
+	}
+	for index := range len(value) {
+		character := value[index]
 		if index == 8 || index == 13 || index == 18 || index == 23 {
 			if character != '-' {
-				return fmt.Errorf("%s must be a canonical UUID", field)
+				return fmt.Errorf("%s %s", field, policy.Malformed)
 			}
 			continue
 		}
-		if character >= 'A' && character <= 'F' {
-			return fmt.Errorf("%s must use lowercase hexadecimal UUID digits", field)
-		}
-		if !isHex(character) {
-			return fmt.Errorf("%s must be a canonical UUID", field)
+		switch {
+		case character >= '0' && character <= '9' || character >= 'a' && character <= 'f':
+		case character >= 'A' && character <= 'F':
+			return fmt.Errorf("%s %s", field, policy.Uppercase)
+		default:
+			return fmt.Errorf("%s %s", field, policy.NonHex)
 		}
 	}
 	if value[14] < '1' || value[14] > '5' {
-		return fmt.Errorf("%s must use a supported UUID version", field)
+		return fmt.Errorf("%s %s", field, policy.Version)
 	}
 	if !strings.ContainsRune("89ab", rune(value[19])) {
-		return fmt.Errorf("%s must use a supported UUID variant", field)
+		return fmt.Errorf("%s %s", field, policy.Variant)
 	}
 	return nil
+}
+
+// validateUUID is this package's default policy for goal DTO naming fields.
+func validateUUID(value, field string) error {
+	return ValidateUUID(value, field, protocolUUIDPolicy)
+}
+
+// ValidateShortIdentifier validates the identifier shape shared by the
+// protocol, configuration and control-package copies: 1..128 characters, an
+// ASCII alphanumeric first character, then ASCII alphanumerics or "._:-".
+func ValidateShortIdentifier(value, field string) error {
+	return validateShortIdentifier(value, field)
 }
 
 func validateGitObjectID(value string) error {
@@ -337,8 +400,4 @@ func validateSHA256(value, field string) error {
 		}
 	}
 	return nil
-}
-
-func isHex(value rune) bool {
-	return value >= '0' && value <= '9' || value >= 'a' && value <= 'f' || value >= 'A' && value <= 'F'
 }
