@@ -9,7 +9,7 @@ defmodule SymmetryControl.Migrations.GoalExternalWaitMigrationTest do
   @unsupported_migration_version 20_260_909_100_000
 
   test "creates the external wait table, identity fences and reconciliation indexes" do
-    with_schema(fn ->
+    with_schema("goal_external_wait_migration", fn ->
       migrate_all_up!()
 
       assert %{rows: [[@migration_version]]} =
@@ -72,7 +72,7 @@ defmodule SymmetryControl.Migrations.GoalExternalWaitMigrationTest do
   end
 
   test "the migration down removes only the new external-wait structures" do
-    with_schema(fn ->
+    with_schema("goal_external_wait_migration", fn ->
       migrate_all_up!()
 
       Ecto.Migrator.run(Repo, [{@migration_version, AddGoalExternalWaits}], :down,
@@ -101,7 +101,7 @@ defmodule SymmetryControl.Migrations.GoalExternalWaitMigrationTest do
   end
 
   test "the unsupported-state migration makes unsupported terminal and reversible without history" do
-    with_schema(fn ->
+    with_schema("goal_external_wait_migration", fn ->
       migrate_all_up!()
 
       assert %{rows: [[definition]]} =
@@ -167,7 +167,7 @@ defmodule SymmetryControl.Migrations.GoalExternalWaitMigrationTest do
   end
 
   test "preserves an inserted terminal receipt and rejects every later wait mutation" do
-    with_schema(fn ->
+    with_schema("goal_external_wait_migration", fn ->
       migrate_all_up!()
 
       %{wait_id: wait_id, goal_id: goal_id, receipt_event_id: receipt_event_id} =
@@ -218,10 +218,6 @@ defmodule SymmetryControl.Migrations.GoalExternalWaitMigrationTest do
                  [wait_id]
                )
     end)
-  end
-
-  defp with_schema(test) do
-    with_schema("goal_external_wait_migration", test)
   end
 
   defp migrate_all_up! do

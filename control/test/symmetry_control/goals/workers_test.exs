@@ -1,5 +1,5 @@
 defmodule SymmetryControl.Goals.WorkersTest do
-  use SymmetryControl.DataCase, async: false
+  use SymmetryControl.OrchestrationCase, async: false
 
   alias Oban.Job
   alias SymmetryControl.{Goals, Repo, Workspaces}
@@ -136,21 +136,31 @@ defmodule SymmetryControl.Goals.WorkersTest do
     }
 
     {:ok, decision, :created} =
-      command_current(created.goal.id, "request_decision", %{
-        kind: "plan",
-        work_item_id: nil,
-        subject_hash: nil,
-        proposal: proposal
-      })
+      command_current(
+        created.goal.id,
+        "request_decision",
+        %{
+          kind: "plan",
+          work_item_id: nil,
+          subject_hash: nil,
+          proposal: proposal
+        },
+        command_opts()
+      )
 
     decision_id = decision.response["decision"]["id"]
 
     {:ok, _resolved, :created} =
-      command_current(created.goal.id, "resolve_decision", %{
-        decision_id: decision_id,
-        expected_decision_version: Repo.get!(GoalDecision, decision_id).lock_version,
-        option_id: "accept"
-      })
+      command_current(
+        created.goal.id,
+        "resolve_decision",
+        %{
+          decision_id: decision_id,
+          expected_decision_version: Repo.get!(GoalDecision, decision_id).lock_version,
+          option_id: "accept"
+        },
+        command_opts()
+      )
 
     {:ok, _planned, :created} =
       command_current(
@@ -163,35 +173,24 @@ defmodule SymmetryControl.Goals.WorkersTest do
               Base.encode16(SymmetryControl.RequestHash.canonical(proposal), case: :lower),
           decision_id: decision_id
         },
+        command_opts(),
         rollout_enabled: true
       )
 
     assert {:ok, activated, :created} =
-             command_current(created.goal.id, "activate", %{
-               approved_revision: created.goal.current_revision
-             })
+             command_current(
+               created.goal.id,
+               "activate",
+               %{
+                 approved_revision: created.goal.current_revision
+               },
+               command_opts()
+             )
 
     activated.goal
   end
 
-  defp command_current(goal_id, kind, payload, opts \\ []) do
-    {:ok, goal} = Goals.fetch_goal(goal_id)
-    opts = Keyword.put_new(opts, :validation_profiles, validation_profiles())
-
-    Goals.command(
-      goal_id,
-      %{
-        schema_version: "symmetry.goal_command.v1",
-        mutation_id: Ecto.UUID.generate(),
-        expected_version: goal.version,
-        expected_revision: goal.current_revision,
-        kind: kind,
-        payload: payload
-      },
-      "operator:test",
-      opts
-    )
-  end
+  defp command_opts, do: [validation_profiles: validation_profiles()]
 
   defp validation_profiles do
     [
