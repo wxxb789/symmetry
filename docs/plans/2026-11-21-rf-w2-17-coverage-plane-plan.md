@@ -19,7 +19,7 @@ this tree can satisfy now.
 | `.github/workflows/ci.yml` | modified | three new `continue-on-error` coverage jobs, one contiguous block; no pre-existing step touched |
 | `control/mix.exs` | modified | `test_coverage: [summary: [threshold: 0]]` in the `project/1` keyword list |
 | `frontend/vitest.config.ts` | unchanged | owned because the plane reads it; W1-10 already landed the provider, the reporters and the report path (see below) |
-| `scripts/ci/test-ci-changed-path-classifier.py` | modified | the added jobs pinned by name against `run-heavy` across every fixture diff, with a mutation case |
+| `scripts/ci/test-ci-changed-path-classifier.py` | modified | the added jobs pinned by name against `run-heavy` across every fixture diff, with mutation cases |
 | `docs/plans/2026-11-21-rf-w2-17-coverage-plane-plan.md` | new | this plan |
 
 `docs/TODO.md` and `docs/archive/CLOSED-TODO.md` are untouched: no open entry names this slice's
@@ -122,9 +122,14 @@ message. This change adds:
   job-level `continue-on-error: true` line, so dropping the advisory flag — the contract's
   "a coverage job without `continue-on-error` = not achieved" failure mode — reddens the suite
   instead of waiting for review.
-- `test_the_coverage_jobs_follow_the_heavy_matrix_across_every_fixture`, which runs both checks
-  against all 16 fixture diffs (the fixtures are the added jobs' routing evidence: a docs-only
-  fixture must run none of them, a code fixture must run all three).
+- `check_coverage_artifacts(workflow_text)`: each coverage job's own block must carry its pinned
+  upload step (`actions/upload-artifact@v4` with the pinned artifact name and report path) and
+  the command line(s) that produce the report, so a deleted upload step, a renamed artifact, a
+  moved path or a dropped command reddens locally instead of only in the draft-PR run.
+- `test_the_coverage_jobs_follow_the_heavy_matrix_across_every_fixture`, which runs the routing
+  and advisory checks against all 16 fixture diffs and the artifact pin against the workflow
+  text (the fixtures are the added jobs' routing evidence: a docs-only fixture must run none of
+  them, a code fixture must run all three).
 - `test_mutation_regating_a_coverage_job_off_the_heavy_output_breaks_its_routing` and
   `test_mutation_dropping_a_coverage_jobs_advisory_flag_breaks_the_advisory_check`, which re-gate
   `coverage-daemon` on `run-citations` and strip its advisory line in in-memory copies, asserting
@@ -176,7 +181,7 @@ suite's existing parsers (`job_blocks`, `parse_model`, `ran_jobs`, `require`).
 Contract gates, all foreground and serialized (never a measurement harness beside the suite):
 
 1. `python3 scripts/ci/test-ci-changed-path-classifier.py` — the classifier suite with the added
-   jobs, including the new coverage pin and its mutation case. Run before and after the suite edit.
+   jobs, including the new coverage pins and their mutation cases. Run before and after the suite edit.
 2. `python3 -c "import ast,sys; ast.parse(...)"`-style parse checks are not enough for the workflow:
    the suite's `parse_model` is the YAML-shape oracle it already uses, plus
    `actionlint -shellcheck= -pyflakes=` over `.github/workflows/ci.yml` (the shape this host can
