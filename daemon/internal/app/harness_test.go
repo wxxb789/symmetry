@@ -823,7 +823,7 @@ func TestOpenCodeLegacyAssignmentFailsBeforeRunningWorkspaceAndProcess(t *testin
 				options:      options{newID: ids(), clock: time.Now},
 				runtimeID:    "runtime-1",
 				runtimeEpoch: 1,
-				running:      map[state.RunKey]*runningRun{key: {starting: true, cancel: func() {}, slotHeld: true, cleanupBlocked: true}},
+				running:      map[state.RunKey]*runningRun{key: {runLifecycle: runLifecycle{starting: true, cancel: func() {}, slotHeld: true}, cleanupBlocked: true}},
 				slots:        make(chan struct{}, 1),
 			}
 			if err := app.ensureHarnessProbe(context.Background()); err != nil {
@@ -915,7 +915,7 @@ func TestOpenCodeGoalAssignmentFailsBeforeWorkspaceProcessSessionAndEventSideEff
 		options:      options{newID: ids(), clock: func() time.Time { return now }, localClock: func() time.Time { return now }},
 		runtimeID:    "runtime-1",
 		runtimeEpoch: 7,
-		running:      map[state.RunKey]*runningRun{key: {starting: true, cancel: func() {}, slotHeld: true, cleanupBlocked: true}},
+		running:      map[state.RunKey]*runningRun{key: {runLifecycle: runLifecycle{starting: true, cancel: func() {}, slotHeld: true}, cleanupBlocked: true}},
 		slots:        make(chan struct{}, 1),
 	}
 	if err := app.ensureHarnessProbe(context.Background()); err != nil {
@@ -1000,7 +1000,7 @@ func TestOpenCodeLegacyClaimBarrierPreservesCancellationPrecedence(t *testing.T)
 				options:      options{newID: ids(), clock: time.Now},
 				runtimeID:    "runtime-1",
 				runtimeEpoch: 7,
-				running:      map[state.RunKey]*runningRun{key: {starting: true, cancel: cancel, slotHeld: true, cleanupBlocked: true}},
+				running:      map[state.RunKey]*runningRun{key: {runLifecycle: runLifecycle{starting: true, cancel: cancel, slotHeld: true}, cleanupBlocked: true}},
 				slots:        make(chan struct{}, 1),
 			}
 			if err := app.ensureHarnessProbe(context.Background()); err != nil {
@@ -3334,7 +3334,7 @@ func TestNativeCloseDurableWriteFailuresRetryWithoutLeakingRecoveryBarrier(t *te
 				t.Fatal(err)
 			}
 			session := &fakeNativeGoalSession{turnStarted: make(chan struct{}), processPID: 71, processIdentity: "native:71"}
-			active := &runningRun{nativeSession: session, goalSession: &sessionKey, slotHeld: true}
+			active := &runningRun{nativeSession: session, goalSession: &sessionKey, runLifecycle: runLifecycle{slotHeld: true}}
 			app := &daemon{
 				store:   store,
 				log:     slog.New(slog.NewJSONHandler(io.Discard, nil)),
@@ -3388,12 +3388,14 @@ func TestNativeCloseRetrySuccessDoesNotEraseUsageRecoveryBarrier(t *testing.T) {
 	sessionKey := state.GoalSessionKey{GoalID: admission.GoalID, LocalHandleID: "00000000-0000-4000-8000-000000000023"}
 	session := &fakeNativeGoalSession{turnStarted: make(chan struct{})}
 	active := &runningRun{
-		nativeSession:            session,
-		goalSession:              &sessionKey,
-		nativeCloseRetryRequired: true,
-		nativeCloseRetrying:      true,
-		nativeUsageRetryPending:  true,
-		cleanupBlocked:           true,
+		nativeSession: session,
+		goalSession:   &sessionKey,
+		runLifecycle: runLifecycle{
+			nativeCloseRetryRequired: true,
+			nativeCloseRetrying:      true,
+			nativeUsageRetryPending:  true,
+		},
+		cleanupBlocked: true,
 	}
 	app := &daemon{store: store, running: map[state.RunKey]*runningRun{key: active}}
 
@@ -3429,9 +3431,11 @@ func TestCommandRunSnapshotRetainsNativeRouteAcrossCloseRecovery(t *testing.T) {
 func TestOriginalNativeCompletionDoesNotEraseUsageRetryBarrier(t *testing.T) {
 	store, key := claimedGoalDeliveryStore(t)
 	active := &runningRun{
-		nativeUsageRetryPending:  true,
-		nativeUsageRetryInFlight: true,
-		cleanupBlocked:           true,
+		runLifecycle: runLifecycle{
+			nativeUsageRetryPending:  true,
+			nativeUsageRetryInFlight: true,
+		},
+		cleanupBlocked: true,
 	}
 	app := &daemon{store: store, running: map[state.RunKey]*runningRun{key: active}}
 
@@ -3478,7 +3482,7 @@ func TestNativeCloseRetrySuccessDoesNotLeaveStaleCloseErrorAsCleanupBarrier(t *t
 		goalSession:    &sessionKey,
 		goalAdmission:  &admission,
 		prepared:       workspace.Prepared{Path: "C:\\workspace"},
-		slotHeld:       true,
+		runLifecycle:   runLifecycle{slotHeld: true},
 		cleanupBlocked: true,
 	}
 	app := &daemon{
@@ -4323,7 +4327,7 @@ func TestGoalCancellationPersistsFinalUsageBeforeCancelledReceipt(t *testing.T) 
 		control: &fakeControl{},
 		log:     slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		running: map[state.RunKey]*runningRun{key: {
-			claimed:       true,
+			runLifecycle:  runLifecycle{claimed: true},
 			nativeSession: session,
 			goalSession:   &sessionKey,
 		}},
@@ -6299,7 +6303,7 @@ func TestGoalCancellationRetriesNativeUsageBeforeReceipt(t *testing.T) {
 		store:   store,
 		control: &fakeControl{},
 		log:     slog.New(slog.NewJSONHandler(io.Discard, nil)),
-		running: map[state.RunKey]*runningRun{key: {claimed: true, nativeSession: session, goalSession: &sessionKey}},
+		running: map[state.RunKey]*runningRun{key: {runLifecycle: runLifecycle{claimed: true}, nativeSession: session, goalSession: &sessionKey}},
 		slots:   make(chan struct{}, 1),
 		options: options{newID: ids(), clock: time.Now, queueGoalUsage: func(got state.RunKey, usage protocol.Usage) (state.RunJournal, error) {
 			usageAttempts++

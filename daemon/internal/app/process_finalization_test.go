@@ -101,7 +101,7 @@ func TestCleanupFinalizationDoesNotAuthorizeReplacementOwner(t *testing.T) {
 	}
 	old := &finalizingProcess{pid: 44, identity: "finalize:44"}
 	newOwner := &runningRun{process: &finalizingProcess{pid: 45, identity: "finalize:45"}}
-	active := &runningRun{process: old, processExited: true}
+	active := &runningRun{process: old, runLifecycle: runLifecycle{processExited: true}}
 	daemon := &daemon{
 		store:   store,
 		running: map[state.RunKey]*runningRun{key: active},
