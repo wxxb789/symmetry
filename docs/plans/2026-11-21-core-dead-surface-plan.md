@@ -3,7 +3,7 @@
 Contract: `goal-rf-w1-14-core-dead-surface.md` (GDD, 2026-11-21), including its binding review
 amendment (P3-9). Baseline for every coordinate in this plan: `a3039f0` (the worktree's HEAD,
 branch `refactor/rf-w1-14-core-dead-surface`, `origin/main`). Source entries:
-`C:/Users/lhan/.local/state/gdd/refactor/findings/control-core.md` F11 and the open
+`<HOST-PATH>/.local/state/gdd/refactor/findings/control-core.md` F11 and the open
 `docs/TODO.md` entry under `## Dead-code candidates` ("Revalidate and remove two pre-existing dead
 surfaces found while applying the provider-action-chain-removal simplify findings").
 
