@@ -1230,3 +1230,29 @@ instead of appended.
       are pinned by `daemon/internal/app/goal_delivery_test.go`:
       `TestAbandonGoalSessionBoundsOversizedUncertainReason` (the interior-invalid-byte case)
       and `TestBoundedGoalSessionUncertainReason` (the within-budget invalid-byte case).
+
+## Daemon: the durable terminal-transition payload has no capacity policy (rf-w3-09 review W309-R2)
+
+- [ ] Decide and implement a capacity policy for the durable terminal-transition payload. Chain:
+      `queueFailure` (`daemon/internal/app/events.go:530-541`) puts `cause.Error()` into
+      `payload["error"]`; `queueTerminalTransitionWithRetry` (`daemon/internal/app/outbox.go:124-168`)
+      retries `state.ErrProviderActionCapacity` forever (`minimumInterval`, log
+      `queue_terminal_transition_failed`); the capacity error comes from
+      `saveJournalWithCapacityGuardLocked` (`daemon/internal/state/state.go:5326`) →
+      `validateJournalSaveCapacity` (`daemon/internal/state/provider_action.go:594-606`, 4 MiB check
+      at `:599`) and `saveJournalLocked` (`state.go:5305`, size check at `:5311`;
+      `maxJournalFileBytes = 4<<20`). rf-w3-09 (2026-11-22, drop-errcheck slice) joined the abandon
+      result into the nine `startGoalAdmission` returns, and `daemon/internal/app/app.go:1447` passes
+      that value to `queueFailure` unchanged (read from source, not driven): a run whose pre-change
+      payload fit by fewer bytes than the joined tail can now exceed the guard and never persist its
+      terminal state, where base `261e84a4` persisted the same input. Review probe at the state
+      boundary: a 4,194,116-byte journal accepts the transition and a +298-byte tail returns
+      `ErrProviderActionCapacity`; re-verified here: `json.Marshal`'s HTML escaping makes each `<` in
+      an error string cost 5 payload bytes (`json.Marshal(map[string]string{"error": strings.Repeat("<", 1000)})`
+      = 6,012 B vs 1,012 B for `a`), and `APIError.Error()` embeds the Control message up to the 1 MiB
+      read cap (`daemon/internal/control/client.go:22` `defaultMaxResponseBytes = 1 << 20`). Fix
+      direction: either a capacity policy for `payload["error"]` (bounded durable copy with a marker,
+      returned chain keeps the full text) or an explicit degraded outcome for capacity errors instead
+      of the unbounded retry. The sink files are outside the rf-w3-09 owned set (`events.go`,
+      `outbox.go`, `state.go`), which is why that slice recorded this entry instead of changing them;
+      owner: daemon outbox/state.

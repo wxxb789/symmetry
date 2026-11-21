@@ -7,17 +7,21 @@ Subject: contract `goal-rf-w3-09-errcheck-app.md` (GDD, 2026-11-21 + conductor d
 `Q:/repos/wt-w3-09-errcheck-app/symmetry` described below.
 
 Apply revision (2026-11-22, stage `apply`): simplify findings 1 and 2 applied, record corrections
-D1, D2, D3 and one measured count fix applied in place, and the gates re-run — see §8. The sha256
-table binds the apply revision; the implement-revision run observations in §4–§6 stand as recorded.
+D1, D2, D3 and one measured count fix applied in place, and the gates re-run — see §8. Fix revision
+(2026-11-22, stage `fix`, review findings `W309-R1`/`R3`/`R4`): record statements restated against
+the frozen revision `519b6bb9`, the new test made calendar-independent and its primary-cause pin
+tightened, and the gates re-run — see §9. The sha256 table binds the fix revision; the
+implement-revision run observations in §4–§6 stand as recorded where §8/§9 does not restate them.
 
-Subject identity (sha256 of the delivered files):
+Subject identity (sha256 of the delivered files at the fix revision; the two unchanged Go files carry
+their apply-revision values):
 
 | file | sha256 |
 |---|---|
-| `daemon/internal/app/goal_admission.go` | `e9e7494a507d9872d52316633f1411f4eafcfe345fe2d3ca6cb73c56f7a20ad9` |
-| `daemon/internal/app/terminate_linux.go` | `d3f853250cdd006e2f0c8b0bc4d648ee16deceb8de1157fc4b401f6f47c79947` |
-| `daemon/internal/app/abandon_error_join_test.go` | `c809a2b1f071e58ce3a0d85b677a22bc2546e6d8ef6fd3a72f1b2d23b67c0ac1` |
-| `docs/plans/2026-11-22-rf-w3-09-errcheck-app-plan.md` | `3d2ed6ece3cbf6dfe8231bb1e23054a5e9f0bb9814d7bc9c9ab68161afacb489` |
+| `daemon/internal/app/goal_admission.go` | `e9e7494a507d9872d52316633f1411f4eafcfe345fe2d3ca6cb73c56f7a20ad9` (unchanged since apply) |
+| `daemon/internal/app/terminate_linux.go` | `d3f853250cdd006e2f0c8b0bc4d648ee16deceb8de1157fc4b401f6f47c79947` (unchanged since apply) |
+| `daemon/internal/app/abandon_error_join_test.go` | `9cdb84b942354e0fc5b4f5547fdfd92f369355c88e2822cd1e58ef243beb4624` (fix revision; apply revision `c809a2b1…`) |
+| `docs/plans/2026-11-22-rf-w3-09-errcheck-app-plan.md` | `fda10bab272dd936828275fbbe879ed5e138398d1dcf0521d313839f77653b68` (fix revision; apply revision `3d2ed6ec…`) |
 | `docs/evidence/rf-w3-09-errcheck-app-2026-11-22.md` | this record (hash not self-referential) |
 
 ## 1. Deliverable shape
@@ -34,9 +38,11 @@ No exported symbol changed; no new `//nolint` (`grep -c nolint` = 0 in all three
 
 ## 2. The nine sites and the prefix identity
 
-`git grep -n -E '^\s+daemon\.abandonGoalSession\(' HEAD -- daemon/internal/app/goal_admission.go`
+`git grep -n -E '^\s+daemon\.abandonGoalSession\(' <rev> -- daemon/internal/app/goal_admission.go`
 matches exactly the nine dropped calls `:1088, :1099, :1103, :1113, :1117, :1122, :1129, :1143,
-:1156`; the same grep on the worktree matches zero lines (all nine are captured).
+:1156` at the pre-change revision `261e84a4`; at the delivered revision `519b6bb9` (and on the
+worktree) the same grep matches zero lines — eight sites capture into `abandonErr :=` and `:1103`
+folds the call into `errors.Join(...)` inline.
 
 | line | pre-change return | post-change return |
 |---|---|---|
@@ -60,10 +66,18 @@ text and `errors.Is`/`errors.As` are preserved, identity and dynamic type are no
 no single-operand special case; go1.27.4 `errors/join.go`; simplify probe: identity=false, Is=true,
 text-equal=true, `errors.Unwrap`=nil; no daemon production caller unwraps these returns) — so a
 successful abandon adds nothing observable. The `:1143` pair of distinct literals is unchanged.
-`git grep -n` for the seven message strings outside `goal_admission.go` on the pre-change tree
-(`dc0aa35`, tests included) matches nothing, so no pre-existing test pinned them by text; on the
-delivered tree the same grep additionally matches the new test (`abandon_error_join_test.go:57`) and
-the plan/record tables that quote the sites, and the new test pins `:1088`'s rendered text exactly.
+`git grep -n -E '"(load native run fence|attach native Goal session|native Goal session attach
+receipt|fetch Goal run context|encode canonical Goal context|mark native Goal run running|Goal run
+ended before native turn start)' <rev> -- daemon` (the `-E` is required: the same pattern as a
+BRE, with `|` literal, matches nothing) matches nothing outside `goal_admission.go` on the
+pre-change tree (`dc0aa35`, tests included), so no pre-existing test pinned the seven strings by
+text; on the delivered tree it matches those seven in `goal_admission.go` (`:1089`, `:1100`,
+`:1103`, `:1114`, `:1123`, `:1130`, `:1144` — seven matching lines, seven distinct strings), the new
+test (`abandon_error_join_test.go:57`) and the plan/record tables that quote the sites; the same
+file-scoped grep matches eight lines at `261e84a4` (the `:1103` literal appears both as the abandon
+argument and in the return) and seven at the delivered revision, where it is bound once as `cause`.
+The new test pins `:1088`'s rendered text exactly, and (fix revision) the join frame's first
+operand's decode-error chain.
 
 ## 3. Invariants
 
@@ -94,7 +108,11 @@ the plan/record tables that quote the sites, and the new test pins `:1088`'s ren
 Assertions: `errors.Is(returned, sentinel)`; the rendered text equals the composed exact string
 (first line `load native run fence: ` + the re-read primary error, then `recordStoppedGoalSession`'s
 primary, `persist workspace retention: ` + primary, and the sentinel write line); the journal no
-longer decodes; the session was closed and no turn started.
+longer decodes; the session was closed and no turn started. Fix revision: the admission deadline is
+overridden to `time.Now().UTC().Add(time.Hour)` before the fixture helper runs, and the returned
+error's first join frame must carry exactly two terms whose first still reaches the decode chain
+(`errors.As` to `*json.SyntaxError`, with the same assertion first made on the re-read journal error
+so the fixture stays honest).
 
 - head, green: `go test -count=1 ./internal/app/ -run
   'TestAbandonGoalSessionErrorJoinsIntoAdmissionReturn|TestFreshCodexPreNativeLaunchWriteFailuresReadBackAndCompensate'`
@@ -112,11 +130,13 @@ longer decodes; the session was closed and no turn started.
 
 Pinned commands, from `daemon/`, per GOOS; raw = `--no-config --default=none --enable=errcheck
 --max-issues-per-linter=0 --max-same-issues=0 ./internal/app/... ./internal/state/...`; gate = the
-same flags plus `-c <run-dir>/errcheck/errcheck-gate.yml` (a minimal config carrying exactly the
-contract's §10.2 `linters.exclusions`: `presets: [comments, common-false-positives, legacy,
-std-error-handling]` and `rules: [{path: _test\.go, linters: [errcheck]}]`; `check-blank` default
-`false`). Raw outputs also include `./internal/linuxpreflight/...` for the arch-decision §G
-retargeting. Before = a detached pristine worktree at `261e84a4`; after = the delivered tree.
+same arguments with `--no-config` **replaced** by `-c <run-dir>/errcheck/errcheck-gate.yml` (the two
+options cannot be combined: `golangci-lint` answers `can't combine option --config and --no-config`)
+— the config is a minimal file carrying exactly the contract's §10.2 `linters.exclusions`:
+`presets: [comments, common-false-positives, legacy, std-error-handling]` and
+`rules: [{path: _test\.go, linters: [errcheck]}]`; `check-blank` default `false`. Raw outputs also
+include `./internal/linuxpreflight/...` for the arch-decision §G retargeting. Before = a detached
+pristine worktree at `261e84a4`; after = the delivered tree.
 Raw totals include `_test.go` findings; the prod (non-test) counts are given separately.
 
 ```yaml
@@ -164,7 +184,7 @@ post-clean runs of the unmodified/graded tree respectively.
 | package suite (Windows) | `go test -count=1 ./internal/app/...` | 0 | `ok … 119.454s` (`<run-dir>/gates/windows-app-suite.txt`) |
 | linux lane (WSL Ubuntu-24.04) | full suite in a fresh network namespace, §6.1 | 0 | `ok … 132.853s` (`<run-dir>/gates/wsl-app-suite-netns.txt`); targeted run `ok … 0.419s` (`…/wsl-targeted-netns.txt`) |
 | whitespace | `git diff --check` | 0 | clean |
-| host paths | `git diff origin/main...HEAD \| grep -ci 'users/'` | 0 matches before commit; 2 after | both post-commit hits are this command's own quoted text (plan and evidence; at HEAD `2490c088` these are plan:160 / evidence:158); `grep -nE '[:][/\\]Users[/\\]\|[/]home[/]'` over the same diff → 0 hits; the only drive-path text is the `Q:/repos/wt-w3-09-errcheck-app/{symmetry,lane}` worktree references |
+| host paths | `git diff origin/main...HEAD -- . ':(exclude)docs' \| grep -ci 'users/'` | 0 | zero in the code/docs-independent scan; without `:(exclude)docs` the count is 3 at `519b6bb9` (`evidence:187`, `evidence:249`, `plan:177` — all three the scan's own quoted text in this record and the plan, which is where the restated counts live); `grep -nE '[:][/\\]Users[/\\]\|[/]home[/]'` over the same diff → 0 hits; the only drive-path text is the `Q:/repos/wt-w3-09-errcheck-app/{symmetry,lane}` worktree references |
 | errcheck | §5 table | 1 before / 0 after (gate-config) | acceptance 10→0 linux, 9→0 windows |
 | mutation | §4 entry | 1 (mutant) / 0 (restored) | red exactly at the driven site |
 
@@ -226,7 +246,7 @@ this stage (conductor-owned); its `terminate_linux.go:50` citation is the pre-ch
 | 2 | `daemon/internal/app/terminate_linux.go:50-51` | the stated-reason comment reworded to "A released handle cannot change this helper's stop-proof verdict, so its release error is unactionable." (the previous "failures above" mis-scoped the stop-proof arm below the defer; line count unchanged) |
 | D1 | record (§2, plan) | the single-nil-operand `errors.Join` invariant corrected: `*joinError` wrap, text and `errors.Is`/`errors.As` preserved, identity and dynamic type not, `errors.Unwrap` nil |
 | D2 | record (§1, plan) | the contract's `:50` citation is the pre-change line; delivered comment `:50-51`, defer `:52` |
-| D3 | record (§2, §6, plan gates row) | the two re-check one-liners self-match after commit: the contract's `users/` scan returns 2 (its own quoted text), the seven-string grep returns the new test `:57` plus the tables quoting the sites; the pre-change runs (0 matches each) stand as recorded |
+| D3 | record (§2, §6, plan gates row) | restated at the frozen revision `519b6bb9` (fix revision): the `users/` scan returns 3 — its own quoted text twice in this record plus once in the plan, 0 with `-- . ':(exclude)docs'` — and the seven-string `-E` grep returns the new test `:57`, the seven site literals in `goal_admission.go` and the tables quoting the sites; the original "2" was the count at the intermediate HEAD `2490c088`, the pre-change runs (0 matches each) stand as recorded |
 | count fix | record (§2) | measured while republishing: the prefix-identity sentence said "six `fmt.Errorf` sites"; the nine delivered returns carry five (`:1088`, `:1099`, `:1113`, `:1122`, `:1129`), plus `:1117`, `:1103`, `:1143`, `:1156` — 5 + 4 = 9, matching the 9 hunks |
 
 Re-runs at the apply revision (logs in
@@ -249,8 +269,63 @@ Re-runs at the apply revision (logs in
   abandon-internal sentinel joined`); restored from a byte backup — sha256 back to `e9e7494a…`,
   `gofmt -l` clean — and the focused gate re-ran rc 0 (`gates/focused-after-restore-apply.txt`).
 - static: `gofmt -l` 0 files, `go vet ./...` rc 0, `GOOS=linux` and `GOOS=windows` builds rc 0,
-  `git diff --check` clean including the uncommitted apply edits (`gates/quick-rc.txt`).
+  `git diff --check` clean including the uncommitted apply edits (`gates/gofmt.txt`,
+  `gates/vet.txt`, `gates/build-linux.txt`, `gates/build-windows.txt`; `git diff --check` is in
+  `gates/apply-measurements.txt`).
 - re-measured record inputs (`gates/apply-measurements.txt`): `requireNativeSessionCloseRetry`
   worktree grep identical to `dc0aa35` (definition `:1273`, sites
   `:1080`/`:1422`/`:1439`/`:1478`/`:1494`); dropped-call grep on the worktree 0 lines; `git diff
   -U0` 9 hunks / 36 changed lines; no `//nolint` in the three Go files.
+
+## 9. Fix revision (2026-11-22, stage `fix`)
+
+Review findings fixed in this stage: `W309-R1` (record statements restated against the frozen
+revision), `W309-R3` (the new test no longer inherits the fixture's hardcoded deadline) and `W309-R4`
+(the join's primary-cause pin). `W309-R2` (the durable terminal-transition capacity interaction) needs
+`events.go`/`outbox.go`/`state.go`, all outside this slice's owned set: it is recorded as debt in
+`docs/TODO.md` ("Daemon: the durable terminal-transition payload has no capacity policy") and reported
+as unmet rather than patched here.
+
+Test changes (`daemon/internal/app/abandon_error_join_test.go`): the admission deadline is overridden
+to `time.Now().UTC().Add(time.Hour)` before the fixture helper runs; after the exact-text assertion,
+the returned error's outermost join frame must carry exactly two terms and `terms[0]` must still reach
+the re-read journal's `*json.SyntaxError` chain (that assertion is first made on the re-read error, so
+a fixture type change fails loudly). Mutation evidence (scratch copies + `go test -overlay`, saved in
+`gates/mutants/` with `run-mutants.sh`):
+
+| mutant | overlay | result |
+|---|---|---|
+| `:1089` joined primary flattened to `errors.New(err.Error())` | `mutants/overlay-A.json` | rc 1, FAIL `joined primary = decode run journal: unexpected end of JSON input, want the run-journal decode error chain` — the new pin, red (`gates/mutant-A.txt`) |
+| fixture `deadline_at` moved to `2025-12-31` (expired-deadline calendar) | `mutants/overlay-B.json` | rc 0, `ok … 0.475s` — the test is calendar-independent now; the pre-fix tree failed red on this mutant (`gates/mutant-B.txt`) |
+| site `:1088` reverted to the pre-change dropped call | `mutants/overlay-C.json` | rc 1, FAIL `admission error = load native run fence: …, want the abandon-internal sentinel joined` — red-on-flip preserved (`gates/mutant-C.txt`) |
+
+Re-run gates at the fix revision (logs in
+`<HOST-PATH>/.local/state/gdd/runs/2026-11-22/symmetry-rf-w3-09-errcheck-app-fix/gates/`):
+
+| gate | command | exit | observation |
+|---|---|---:|---|
+| format | `gofmt -l` on the three Go files | 0 | no files listed (`gofmt.txt`) |
+| vet | `go vet ./...` (daemon) | 0 | no output (`vet.txt`) |
+| builds | `GOOS=linux` / `GOOS=windows go build ./...` | 0 / 0 | no output (`build-linux.txt`, `build-windows.txt`) |
+| focused tests | `go test -count=1 -v ./internal/app/ -run 'TestAbandonGoalSessionErrorJoinsIntoAdmissionReturn\|TestFreshCodexPreNativeLaunchWriteFailuresReadBackAndCompensate'` | 0 | abandon PASS 0.25s + 4/4 subtests PASS, `ok … 0.663s` (`focused.txt`) |
+| errcheck, gate config | §5 gate command, linux / windows | 0 / 0 | 0 findings each; owned-file filter 0 (`after-gate-linux.txt`, `after-gate-windows.txt`) |
+| errcheck, raw | §5 raw command, linux / windows | 1 / 1 | 458 / 400; owned-file filter 0; prod 13 (recovery 3, witness 4, state 6) / 3 (state) — identical to §5 (`after-raw-linux.txt`, `after-raw-windows.txt`) |
+| combine check | `golangci-lint run --no-config -c errcheck-gate.yml …` | 3 | `can't combine option --config and --no-config` — verifies §5's corrected wording (`errcheck-combine-check.txt`) |
+| package suite (Windows) | `go test -count=1 ./internal/app/...` | 0 | `ok … 117.535s` (`windows-app-suite.txt`) |
+| linux lane (WSL netns) | `run-linux-lane.sh` full / targeted | 0 / 0 | `ok … 143.582s` / `ok … 0.429s` (abandon PASS 0.22s, 4/4 subtests) (`wsl-app-suite-netns.txt`, `wsl-targeted-netns.txt`) |
+| whitespace | `git diff --check` | 0 | clean |
+| host paths | §6 scan row | 0 | 3 unrestricted, all the scan's own quoted text (`evidence:187`, `evidence:249`, `plan:177`); 0 with `:(exclude)docs`; 0 profile paths |
+
+Record corrections (`W309-R1`): §2's dropped-call grep is revision-bound (`261e84a4` → nine,
+`519b6bb9` → zero) and its seven-string grep carries `-E` and the measured 7/8 line counts; §5 states
+that the gate run **replaces** `--no-config` with `-c` (rc 3 verified); §6 and the plan's gates row
+name the discriminating host-path scan and the frozen-revision anchors; §8's D3 row and static-gate
+list are restated against the actual files (`gates/gofmt.txt`, `vet.txt`, `build-*.txt`,
+`apply-measurements.txt`). The plan's invariant 1/2 greps now carry `-E`, their file scope and the
+measured counts, and the plan's gates row points at the corrected scan. Finding (f) — the implement
+stage's claim that the prefix diff lives in its own `answer.md:36` — concerns a file outside this
+repository (the implement run's record); it is reported as unmet with that exact path instead of being
+edited, and the prefix table stays in the plan (`:48-58`) and §2 of this record.
+
+The fix run dir keeps the gate config at `errcheck/errcheck-gate.yml` (copy in `gates/`), so §5's
+`<run-dir>/errcheck/errcheck-gate.yml` path holds for this stage too.

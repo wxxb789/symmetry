@@ -2,11 +2,13 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 	"github.com/wxxb789/symmetry/daemon/internal/state"
@@ -17,6 +19,7 @@ func TestAbandonGoalSessionErrorJoinsIntoAdmissionReturn(t *testing.T) {
 	if err != nil || !present {
 		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
 	}
+	admission.Limits.DeadlineAt = time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
 	app, store, session, controlClient := nativeAdmissionDaemon(t, admission, validNativeTaskResult(t, admission), nil)
 	defer store.Close()
 	key := state.RunKey{RunID: "run-1", Generation: 1}
@@ -59,6 +62,26 @@ func TestAbandonGoalSessionErrorJoinsIntoAdmissionReturn(t *testing.T) {
 		"\nwrite goal session journal: " + sentinel.Error()
 	if err.Error() != want {
 		t.Fatalf("admission error = %q, want %q", err.Error(), want)
+	}
+	var syntaxErr *json.SyntaxError
+	if !errors.As(reloadErr, &syntaxErr) {
+		t.Fatalf("re-read journal error = %v, want a JSON syntax error", reloadErr)
+	}
+	var joined interface{ Unwrap() []error }
+	for frame := err; joined == nil; {
+		frame = errors.Unwrap(frame)
+		if frame == nil {
+			t.Fatalf("admission error = %v (%T), want a joined frame", err, err)
+		}
+		joined, _ = frame.(interface{ Unwrap() []error })
+	}
+	terms := joined.Unwrap()
+	if len(terms) != 2 {
+		t.Fatalf("joined terms = %d, want the fence error and the abandon error", len(terms))
+	}
+	var primaryErr *json.SyntaxError
+	if !errors.As(terms[0], &primaryErr) {
+		t.Fatalf("joined primary = %v, want the run-journal decode error chain", terms[0])
 	}
 	calls := session.callsSnapshot()
 	if !slices.Contains(calls, "close") || slices.Contains(calls, "start_turn") {

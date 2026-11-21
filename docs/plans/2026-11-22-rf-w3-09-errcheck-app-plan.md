@@ -82,14 +82,19 @@ Exact semantics of the joins, verified against `errors.Join`:
 
 ## Invariants that must not move
 
-1. First line of every one of the 9 returned errors is byte-identical to the pre-change `err.Error()`
-   (`git grep -n '"(load native run fence|attach native Goal session|native Goal session
-   attach receipt|fetch Goal run context|encode canonical Goal context|mark native Goal run running|
-   Goal run ended before native turn start)'` before/after resolves to the same seven message
-   strings — at `:1103` the literal feeds `errors.Join` from the binding line — and the full diff).
+1. First line of every one of the 9 returned errors is byte-identical to the pre-change `err.Error()`.
+   Check (the `-E` is required — as a BRE the `|` is literal and the pattern matches nothing):
+   `git grep -n -E '"(load native run fence|attach native Goal session|native Goal session attach
+   receipt|fetch Goal run context|encode canonical Goal context|mark native Goal run running|Goal run
+   ended before native turn start)' <rev> -- daemon/internal/app/goal_admission.go` resolves to the
+   same seven message strings before and after (eight matching lines at `261e84a4`, where the
+   `:1103` literal is both the abandon argument and the return; seven at the delivered revision,
+   where it is bound once as `cause`) — and the full diff.
 2. `requireNativeSessionCloseRetry` call set unchanged: `:1080`, `:1422`, `:1439`, `:1478`, `:1494`
-   (`git grep -n requireNativeSessionCloseRetry` before/after shows only the definition plus those
-   five; the diff adds none). The 9 sites neither gain nor lose arming: arming happens inside
+   (`git grep -n requireNativeSessionCloseRetry <rev> -- daemon/internal/app/goal_admission.go`
+   before/after shows only the definition plus those five; the diff adds none — the unrestricted
+   grep also matches `harness_test.go:6126`, `native_run.go:854` and docs text, an identical set
+   before and after). The 9 sites neither gain nor lose arming: arming happens inside
    `abandonGoalSession`/`abandonGoalSessionUncertain`, whose bodies are untouched.
 3. No hunk inside `abandonGoalSession` (`:1370-1444`) or `abandonGoalSessionUncertain`;
    `git diff -U0 -- daemon/internal/app/goal_admission.go` must show exactly the 9 two-line hunks.
@@ -119,6 +124,8 @@ site `:1088` (`load native run fence`) through `startGoalAdmission` with two sea
 
 Assertions (all exact, none is a bare `err != nil`):
 
+- the admission deadline is overridden to `time.Now().UTC().Add(time.Hour)` before the fixture helper
+  runs, so the test does not depend on the shared fixture's hardcoded `2026-12-31` deadline;
 - `errors.Is(returnedErr, sentinel)` — the join (fails red at the pre-change tree, which drops the
   abandon result);
 - `returnedErr.Error()` equals the composed exact text: first line `load native run fence: ` plus the
@@ -126,6 +133,9 @@ Assertions (all exact, none is a bare `err != nil`):
   `persist workspace retention: <primary>`, `write goal session journal: <sentinel>`); the primary
   text is obtained by re-reading the still-corrupt journal after the call, so the assertion pins the
   prefix and the joined tail against observed values; it fails if any prefix or term moves;
+- the returned error's first join frame carries exactly two terms and its first term still reaches
+  the run-journal decode chain (`errors.As` to `*json.SyntaxError`, the type the re-read journal
+  error is checked to have), so a joined-but-flattened primary fails (fix revision);
 - the journal no longer decodes (`store.LoadJournal` after the call returns an error);
 - the native session was closed and no turn started (`close` in `session.callsSnapshot()`,
   `start_turn` absent).
@@ -164,7 +174,7 @@ reported as the wider F11 ledger (they include the Close family outside this sli
 | package suite | `go test -count=1 ./internal/app/...` (Windows) |
 | linux lane | `wsl -d Ubuntu-24.04 -u accept -- bash -lc 'cd /mnt/q/repos/wt-w3-09-errcheck-app/symmetry/daemon && go test -count=1 ./internal/app/...'` (worktree path; the contract's `/mnt/q/repos/symmetry` is the main clone) |
 | errcheck | the four pinned runs above, filtered to the owned files |
-| whitespace | `git diff --check`, plus a host-path scan of the diff (`grep -i "users/"`; after commit the scan matches its own quoted text — see the evidence record §6) |
+| whitespace | `git diff --check`, plus a host-path scan of the diff: `git diff origin/main...HEAD -- . ':(exclude)docs' \| grep -ci 'users/'` → 0 (the unrestricted scan counts 3 at `519b6bb9`, all its own quoted text in this plan and the evidence record; `grep -nE '[:][/\\]Users[/\\]\|[/]home[/]'` → 0 hits) |
 | mutation | revert site `:1088` to the dropped call, show the new test red, restore |
 
 Execution note (2026-11-22): the WSL lane could not run the literal command — this VM's shared
