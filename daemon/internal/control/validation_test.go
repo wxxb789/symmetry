@@ -47,13 +47,16 @@ func TestValidateGoalUUIDPinsRejectionMessages(t *testing.T) {
 	}{
 		{name: "valid", value: uuid},
 		{name: "too short", value: uuid[:35], want: canonical},
+		{name: "36 bytes 35 runes", value: uuid[:15] + "é" + uuid[17:], want: lowerHex},
 		{name: "36 runes 37 bytes", value: uuid[:35] + "\u00e9", want: canonical},
 		{name: "misplaced dash", value: uuid[:8] + "0" + uuid[9:], want: canonical},
 		{name: "uppercase hex digit", value: uuid[:15] + "A" + uuid[16:], want: lowerHex},
 		{name: "non-hex lowercase", value: uuid[:16] + "g" + uuid[17:], want: lowerHex},
 		{name: "non-hex uppercase outside A-F", value: uuid[:16] + "Z" + uuid[17:], want: lowerHex},
 		{name: "unsupported version", value: uuid[:14] + "0" + uuid[15:], want: combined},
+		{name: "version six above the supported range", value: uuid[:14] + "6" + uuid[15:], want: combined},
 		{name: "unsupported variant", value: uuid[:19] + "0" + uuid[20:], want: combined},
+		{name: "variant c above the supported range", value: uuid[:19] + "c" + uuid[20:], want: combined},
 		{name: "version and variant both unsupported", value: uuid[:14] + "0" + uuid[15:19] + "0" + uuid[20:], want: combined},
 		{name: "length beats uppercase", value: uuid[:15] + "A" + uuid[16:35], want: canonical},
 	} {
