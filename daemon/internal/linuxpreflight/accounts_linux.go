@@ -20,8 +20,8 @@ import (
 )
 
 type OwnerAccounts struct {
-	A        *user.User
-	B        *user.User
+	a        *user.User
+	b        *user.User
 	ASubject ACLSubject
 	BSubject ACLSubject
 }
@@ -77,7 +77,7 @@ func VerifyOwnerAccounts(owner linuxgate.OwnerConfig) (OwnerAccounts, error) {
 	if err := verifyLinuxDedicatedGroupMembership(a, owner.AGID, aSubject, bSubject); err != nil {
 		return OwnerAccounts{}, err
 	}
-	return OwnerAccounts{A: a, B: b, ASubject: aSubject, BSubject: bSubject}, nil
+	return OwnerAccounts{a: a, b: b, ASubject: aSubject, BSubject: bSubject}, nil
 }
 
 func verifyLinuxDedicatedGroupMembership(a *user.User, aGID uint32, aSubject, bSubject ACLSubject) error {
@@ -224,22 +224,22 @@ func ACLSubjectForAccount(account *user.User) (ACLSubject, error) {
 		}
 		groups = append(groups, uint32(parsed))
 	}
-	return ACLSubject{UID: uint32(uid), GID: uint32(gid), Groups: groups}, nil
+	return ACLSubject{UID: uint32(uid), GID: uint32(gid), groups: groups}, nil
 }
 
 func verifyLinuxOwnerAccountHome(accounts OwnerAccounts, harnessKind string, excludedPaths ...string) error {
-	if accounts.A == nil || accounts.B == nil {
+	if accounts.a == nil || accounts.b == nil {
 		return errors.New("fixed A/B account metadata is unavailable")
 	}
-	aUID, err := strconv.ParseUint(accounts.A.Uid, 10, 32)
+	aUID, err := strconv.ParseUint(accounts.a.Uid, 10, 32)
 	if err != nil {
 		return errors.New("configured A account has an invalid UID")
 	}
-	aGID, err := strconv.ParseUint(accounts.A.Gid, 10, 32)
+	aGID, err := strconv.ParseUint(accounts.a.Gid, 10, 32)
 	if err != nil {
 		return errors.New("configured A account has an invalid primary GID")
 	}
-	aHome, err := LstatCanonicalPath(accounts.A.HomeDir)
+	aHome, err := LstatCanonicalPath(accounts.a.HomeDir)
 	if err != nil {
 		return fmt.Errorf("inspect configured A HOME: %w", err)
 	}
@@ -247,38 +247,38 @@ func verifyLinuxOwnerAccountHome(accounts OwnerAccounts, harnessKind string, exc
 	if err != nil || !aHome.IsDir() || aHomeIdentity.UID != uint32(aUID) || aHomeIdentity.GID != uint32(aGID) {
 		return errors.New("configured A HOME must be a canonical A-owned directory")
 	}
-	if err := VerifyEffectiveAccess(accounts.A.HomeDir, accounts.ASubject, 7, 0); err != nil {
+	if err := VerifyEffectiveAccess(accounts.a.HomeDir, accounts.ASubject, 7, 0); err != nil {
 		return fmt.Errorf("A cannot read/search/update its HOME: %w", err)
 	}
-	if err := VerifyEffectiveAccess(accounts.A.HomeDir, accounts.BSubject, 0, 7); err != nil {
+	if err := VerifyEffectiveAccess(accounts.a.HomeDir, accounts.BSubject, 0, 7); err != nil {
 		return fmt.Errorf("B can access A HOME or credentials: %w", err)
 	}
-	if err := VerifyNoUntrustedACLWrite(accounts.A.HomeDir, []uint32{0, uint32(aUID)}, []uint32{uint32(aGID)}, true); err != nil {
+	if err := VerifyNoUntrustedACLWrite(accounts.a.HomeDir, []uint32{0, uint32(aUID)}, []uint32{uint32(aGID)}, true); err != nil {
 		return fmt.Errorf("A HOME is changeable by an untrusted identity: %w", err)
 	}
-	if err := VerifyDefaultAccess(accounts.A.HomeDir, accounts.BSubject, 0, 7); err != nil {
+	if err := VerifyDefaultAccess(accounts.a.HomeDir, accounts.BSubject, 0, 7); err != nil {
 		return fmt.Errorf("future A HOME entries are accessible to B: %w", err)
 	}
-	if err := verifyLinuxParentsNotWritable(accounts.A.HomeDir, accounts.BSubject); err != nil {
+	if err := verifyLinuxParentsNotWritable(accounts.a.HomeDir, accounts.BSubject); err != nil {
 		return fmt.Errorf("B can replace A HOME: %w", err)
 	}
-	bUID, err := strconv.ParseUint(accounts.B.Uid, 10, 32)
+	bUID, err := strconv.ParseUint(accounts.b.Uid, 10, 32)
 	if err != nil {
 		return errors.New("fixed B account has an invalid UID")
 	}
-	bGID, err := strconv.ParseUint(accounts.B.Gid, 10, 32)
+	bGID, err := strconv.ParseUint(accounts.b.Gid, 10, 32)
 	if err != nil {
 		return errors.New("fixed B account has an invalid primary GID")
 	}
-	if accounts.B.HomeDir == "" || !filepath.IsAbs(accounts.B.HomeDir) || filepath.Clean(accounts.B.HomeDir) != accounts.B.HomeDir || accounts.B.HomeDir == "/" {
+	if accounts.b.HomeDir == "" || !filepath.IsAbs(accounts.b.HomeDir) || filepath.Clean(accounts.b.HomeDir) != accounts.b.HomeDir || accounts.b.HomeDir == "/" {
 		return errors.New("fixed B account lacks a canonical operator-provisioned HOME")
 	}
 	for _, excluded := range excludedPaths {
-		if excluded != "" && pathsOverlapLinux(accounts.B.HomeDir, excluded) {
+		if excluded != "" && pathsOverlapLinux(accounts.b.HomeDir, excluded) {
 			return fmt.Errorf("fixed B HOME must remain outside StateDir and managed workspace paths: %s", excluded)
 		}
 	}
-	home, err := LstatCanonicalPath(accounts.B.HomeDir)
+	home, err := LstatCanonicalPath(accounts.b.HomeDir)
 	if err != nil {
 		return fmt.Errorf("inspect fixed B HOME: %w", err)
 	}
@@ -288,23 +288,23 @@ func verifyLinuxOwnerAccountHome(accounts OwnerAccounts, harnessKind string, exc
 	}
 	b := accounts.BSubject
 	a := accounts.ASubject
-	if err := VerifyPathTraversal(accounts.B.HomeDir, b); err != nil {
+	if err := VerifyPathTraversal(accounts.b.HomeDir, b); err != nil {
 		return fmt.Errorf("B cannot traverse the path to its HOME: %w", err)
 	}
-	if err := VerifyPathTraversal(accounts.B.HomeDir, a); err != nil {
+	if err := VerifyPathTraversal(accounts.b.HomeDir, a); err != nil {
 		return fmt.Errorf("A cannot stat known B HOME credential/session paths: %w", err)
 	}
-	if err := VerifyEffectiveAccess(accounts.B.HomeDir, b, 7, 0); err != nil {
+	if err := VerifyEffectiveAccess(accounts.b.HomeDir, b, 7, 0); err != nil {
 		return fmt.Errorf("fixed B cannot read, search, and update its HOME: %w", err)
 	}
-	if err := VerifyEffectiveAccess(accounts.B.HomeDir, a, 1, 6); err != nil {
+	if err := VerifyEffectiveAccess(accounts.b.HomeDir, a, 1, 6); err != nil {
 		return fmt.Errorf("A must be able to stat known B credential/session paths without listing or reading B HOME: %w", err)
 	}
-	credential, err := linuxNativeCredentialPath(accounts.B.HomeDir, harnessKind)
+	credential, err := linuxNativeCredentialPath(accounts.b.HomeDir, harnessKind)
 	if err != nil {
 		return err
 	}
-	for path := filepath.Dir(credential); path != accounts.B.HomeDir; path = filepath.Dir(path) {
+	for path := filepath.Dir(credential); path != accounts.b.HomeDir; path = filepath.Dir(path) {
 		info, err := LstatCanonicalPath(path)
 		if err != nil {
 			return fmt.Errorf("inspect B credential directory %s: %w", path, err)

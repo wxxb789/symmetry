@@ -879,7 +879,7 @@ func TestLinuxOwnerAclRejectsUnsafeBWriteAccess(t *testing.T) {
 		{tag: linuxACLMask, perm: 7, id: linuxACLNoID},
 		{tag: linuxACLOther, perm: 0, id: linuxACLNoID},
 	}
-	permissions, err = permissionsFromLinuxACL(otherGroup, StatIdentity{UID: aUID, GID: aGID}, ACLSubject{UID: bUID, GID: bGID, Groups: []uint32{bGID}})
+	permissions, err = permissionsFromLinuxACL(otherGroup, StatIdentity{UID: aUID, GID: aGID}, ACLSubject{UID: bUID, GID: bGID, groups: []uint32{bGID}})
 	if err != nil {
 		t.Fatal(err)
 	}

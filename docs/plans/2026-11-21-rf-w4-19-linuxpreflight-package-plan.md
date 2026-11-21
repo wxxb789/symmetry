@@ -16,7 +16,8 @@ daemon run loop, they inflate `app`, and they are only reachable through `app`.
 ## Step 0 — premise audit (measured on the baseline tree)
 
 **Inventory of `daemon/internal/app/linux_owner_preflight_linux.go` (3380 L).** 133 top-level
-declarations: 119 functions, 1 method (`(*boundedLinuxOutput).Write`), `init`, 8 types
+declarations: 118 functions, 2 methods (`(*boundedLinuxOutput).Write`,
+`(linuxACLSubject).hasGroup`), `init`, 8 types
 (`linuxOwnerAccounts`, `trustedLinuxAsset`, `linuxStatIdentity`, `boundedLinuxOutput`,
 `linuxSystemdUnitPolicy`, `linuxSystemdExecProperty`, `linuxACLSubject`, `linuxACLEntry`), 3 const
 blocks (bounds/names; `LinuxOwnerPreflightRuntimeBoundary`; the POSIX-ACL tag block) and 1 var block
@@ -126,7 +127,8 @@ this slice's owned set, so it is left to a separate increment.
 
 ## Public / API shape
 
-Three config-valued entry points, matching the contract's 2-4 target, plus exactly the primitives
+Three entry points — the two config-valued verifiers plus the `NormalizeOwnerStateDir` state-dir
+normalizer — matching the contract's 2-4 target, plus exactly the primitives
 that existing external callers use today (contract: "no exported per-check helpers unless an existing
 external caller needs them"). Every exported symbol below is listed with its external call sites; no
 other declaration of the moved file becomes exported.
@@ -139,9 +141,9 @@ other declaration of the moved file becomes exported.
 | `LinuxOwnerPreflightRuntimeBoundary` (const) | same | `cmd/symmetry-daemon/main.go:264` |
 | `VerifyOwnerIdentity(linuxgate.OwnerConfig, uid, euid, gid, egid uint32) error` | `verifyLinuxOwnerIdentity` | `internal/app/linux_owner_v2_linux.go:56`, `linux_owner_witness_linux.go:2312` |
 | `VerifyOwnerAccounts(linuxgate.OwnerConfig) (OwnerAccounts, error)` | `verifyLinuxOwnerAccounts` | `linux_owner_witness_linux.go:2566,2905` |
-| `OwnerAccounts` (type; fields `A`, `B *user.User`, `ASubject`, `BSubject ACLSubject`) | `linuxOwnerAccounts` | `linux_owner_witness_linux.go:2566,2570,2573,2576,2579,2905,2909,2912,2915` |
+| `OwnerAccounts` (type; exported fields `ASubject`, `BSubject ACLSubject`; `a`, `b *user.User` unexported) | `linuxOwnerAccounts` | `linux_owner_witness_linux.go:2566,2570,2573,2576,2579,2905,2909,2912,2915` |
 | `ACLSubjectForAccount(*user.User) (ACLSubject, error)` | `linuxACLSubjectForAccount` | `linux_owner_witness_linux.go:1201` |
-| `ACLSubject` (type; fields `UID`, `GID uint32`, `Groups []uint32`) | `linuxACLSubject` | `linux_owner_v2_linux.go:282,283,305,310`, `linux_owner_witness_linux.go:1202,2570,2573,2576,2579,2909,2912,2915` |
+| `ACLSubject` (type; exported fields `UID`, `GID uint32`; `groups []uint32` unexported) | `linuxACLSubject` | `linux_owner_v2_linux.go:282,283,305,310`, `linux_owner_witness_linux.go:1202,2570,2573,2576,2579,2909,2912,2915` |
 | `StatIdentity` (type; fields `UID`, `GID`, `Mode uint32`, `Links uint64`) | `linuxStatIdentity` | `internal/app/linux_owner_witness_linux_test.go:593` |
 | `LstatCanonicalPath(string) (os.FileInfo, error)` | `lstatCanonicalLinuxPath` | `linux_owner_v2_linux.go:274,297`, `linux_owner_witness_linux.go:1232,1784,2206,2216,2555,2888` |
 | `FileIdentity(os.FileInfo) (StatIdentity, error)` | `linuxFileIdentity` | `linux_owner_v2_linux.go:278,301`, `linux_owner_witness_linux.go:1192,1236,1356,1788,2210,2220,2559,2892` |
@@ -155,9 +157,10 @@ other declaration of the moved file becomes exported.
 
 Naming rule applied: the exported name drops the `linux` platform qualifier where the package name
 already carries it (`linuxpreflight.VerifyEffectiveAccess`) and keeps the subsystem qualifier
-(`VerifyOwnerStateDirBinding`, `ACLSubjectForAccount`). Types keep their noun; their fields are
-exported because the external callers read them. `hasGroup`, `linuxACLEntry`, the ACL tag constants,
-the copied vocabulary and every other declaration stay unexported.
+(`VerifyOwnerStateDirBinding`, `ACLSubjectForAccount`). Types keep their noun, and only the fields
+external callers use are exported (`OwnerAccounts.ASubject`/`BSubject`, `ACLSubject.UID`/`GID`,
+`StatIdentity`'s four): `OwnerAccounts.a`/`b`, `ACLSubject.groups`, `hasGroup`, `linuxACLEntry`, the
+ACL tag constants, the copied vocabulary and every other declaration stay unexported.
 
 The package builds on every GOOS the daemon builds on:
 
@@ -197,8 +200,9 @@ appear in the table above; the declaration-set table in the evidence section acc
 ## Edge-case semantics the contract demands
 
 - **Error strings byte-identical.** Every string literal of the moved file is compared base vs head as
-  a multiset: **0 base literals removed or changed** (1093 base literals, 1098 head literals across
-  the six implementation files). The 5 head-side additions are enumerated in the evidence section.
+  a multiset: **0 base literals removed or changed** (1093 base literals, 1095 head literals across
+  the six implementation files — 1098 including the stub's three). The 5 head-side additions (2 in
+  the implementation files, 3 in the stub) are enumerated in the evidence section.
   The three stub literals and the copied vocabulary message are byte-identical to their owners.
 - **Check order byte-identical.** A base-vs-HEAD comparison of every declaration's full text (doc
   comment, signature, body and statement skeleton) after the documented rename map: 132 of 132
@@ -240,7 +244,7 @@ appear in the table above; the declaration-set table in the evidence section acc
 - **Two drain tests move with a local fixture.** `TestLegacyOwnerDrainUsesExclusiveStoreAndDoesNotWriteJournals`
   drives the unexported `verifyDrainedLinuxStore` (a lock-conflict re-entry cannot reach the scan
   path), so it moves with the code. The two drain tests need a claimed-store journal fixture that
-  `app_test.go` owns; the moved test file carries a package-local copy of that 22-line helper
+  `app_test.go` owns; the moved test file carries a package-local copy of that 20-line helper
   (`claimedStoreAt`) rather than keeping the tests in `app` or exporting a store-scan entry point.
   `app`'s own helper stays for the app suite; the fixture is test-only duplication, recorded here
   because two packages can no longer share test helpers.
@@ -302,7 +306,7 @@ Runnable from `daemon/` unless noted; the linux runs go through
 | host-path hygiene | `git diff a4be4e26 <snapshot> \| grep -icE "users[/][a-z]"` (bracket form, so the row cannot match itself; `a4be4e26` is `origin/main` at the apply dispatch, so the range holds this slice's own bytes) | 0 matches; no committed path carries a user-profile name. The wider `79548368` range also traverses later-merged main commits whose own escape-fixture files spell host-shaped test data under a generic two-letter user (`f4e4ace6`, #137); those bytes are not this slice's |
 | whitespace | `git diff --check 79548368 <snapshot>` | exit 0 (no whitespace errors across the slice, new files included) |
 | declaration set | base file vs head package, per-declaration text + statement skeleton, after the rename map; re-derived after the apply pass for the one touched declaration | 132/132 identical after the rename map, 0 changed, 1 deleted (`init`), 2 added (vocabulary copies); the apply pass adds one signature delta (`verifyTrustedLinuxConfig` drops the unused `owner` parameter, finding 1) plus its rewritten call argument in `verifyInstalledLinuxOwnerAssets` — body and statement skeleton byte-identical, reconstruction proof in the apply section |
-| error strings | base file vs head package, string-literal multiset | 1093 base literals, 0 removed or changed; 5 enumerated additions |
+| error strings | base file vs head package, string-literal multiset | 1093 base literals, 0 removed or changed; 1095 head literals across the six implementation files (1098 including the stub's three); 5 enumerated additions (2 in-implementation, 3 stub) |
 | control flow | the same per-declaration skeleton comparison (see declaration set) | 0 differences |
 
 Declaration-set accounting (`go run` audit tool, described below):
@@ -316,7 +320,8 @@ Declaration-set accounting (`go run` audit tool, described below):
 | added unexported | 2 | `configuredHarnessKind`, `nativeGoalHarnessKind` (verbatim vocabulary copies) |
 | total baseline declarations | 133 | 64 + 17 + 51 + 1 |
 
-Error-string additions on the head side (all accounted for):
+Error-string additions on the head side (all accounted for; two in the implementation files, three
+in the stub):
 
 | Added literal | Why | Identity check |
 | --- | --- | --- |
@@ -383,6 +388,36 @@ max file is still the moved test file at 973 L, max implementation file 902 L. T
 `internal/app`. The affected-surface differential row above was measured on the move-only revision; the
 apply pass edits no app production file, so its production result stands, while a re-run of its head-side
 count would now include the four new subtest events.
+
+## Fix pass (2026-11-21, GDD fix stage — review findings STD-A01..A05 applied)
+
+The review of `fc8e95a2..1352b156` (dual-axis, dual-model, spec axis APPROVE) returned five P3
+standards findings, all against this plan's counts/wording; all five are applied — four as text
+corrections, one (STD-A03) also as a code change.
+
+| Finding | Decision | Change | Evidence |
+| --- | --- | --- | --- |
+| STD-A01 literal totals (`:200`, `:305`) | applied | the six implementation files carry 1095 head literals against 1093 base (1098 including the stub's three); the additions table now marks the 2-implementation/3-stub split | per-file `go/parser` literal count: 177+85+72+26+241+494 = 1095, stub 3, base 1093 |
+| STD-A02 step-0 inventory (`:19`) | applied | corrected to 118 functions, 2 methods (`(*boundedLinuxOutput).Write`, `(linuxACLSubject).hasGroup`), `init`, 8 types, 3 const blocks, 1 var block = 133 | baseline AST recount on `79548368`: funcs 119 (including `init`), methods 2, types 8, consts 3, vars 1 |
+| STD-A03 exported fields (`:159`) | applied | `OwnerAccounts.A`/`.B` and `ACLSubject.Groups` unexported, back to their baseline names `a`/`b`/`groups`; external reads are zero — callers outside the package read only `ASubject`/`BSubject` and construct `ACLSubject{UID, GID}`; the exported-fields sentence and the two interface rows now state the actual rule | selector grep over `daemon/internal/**`, `daemon/cmd/**`, `daemon/e2e/**` outside the package: no reference to the moved structs' `A`/`B`/`Groups` fields; WSL package suite 55/55 pass |
+| STD-A04 entry-point wording (`:129`) | applied | restated as three entry points: the two config-valued verifiers plus the `NormalizeOwnerStateDir` state-dir normalizer | signatures: `VerifyLegacyLinuxOwnersDrained(config.Config)`, `VerifyLinuxOwnerInstallation(config.Config)`, `NormalizeOwnerStateDir(string)` |
+| STD-A05 helper size (`:243`) | applied | `claimedStoreAt` restated as a 20-line helper (24 including the package copy's 4-line doc comment) | both copies measured `func` line to closing brace: `preflight_linux_test.go:954-973`, `app_test.go:7373-7392` |
+
+The field unexports are the only code change; no line counts move (the file table, 4557 L total, and
+the 19-symbol surface above are unchanged) and the declaration-set partition still holds: every
+declaration that used `a`/`b`/`groups` also carries other documented renames
+(`accounts.ASubject`/`BSubject` etc.), so none moves between the 64/51 rows. Re-run gates on the
+fix-pass tree: `gofmt -l` empty; `go vet ./...` and `GOOS=linux go vet ./...` exit 0;
+linux/windows/darwin/linux-arm64 builds exit 0; WSL `go test -count=1 -json
+./internal/linuxpreflight/...` exit 0 with 55/55 test events, 0 skips; Windows host
+`go test -count=1 ./internal/linuxpreflight/...` exit 0 (stub pins); WSL
+`-run TestRunNormalizesLinuxV2NativeOwnerStateDir ./internal/app/` exit 0; `go list -deps`
+app-import count 0; `python3 scripts/ci/test-omo-control-native-evidence.py` exit 0 (10 tests,
+`OK`); `check-citation-existence.py --base 79548368 --head HEAD` exit 0 (453 path citations, 3
+ignore-rule notes); `check-record-cleanliness.py` same range exit 0; fixture suites
+`test-check-citation-existence.py` (49 tests) and `test-check-record-cleanliness.py` (19 tests)
+exit 0 each; `git diff --check` exit 0;
+host-path and backslash-u greps over `origin/main...HEAD` and the worktree diff 0 matches.
 
 ## Out of scope (with reasons)
 

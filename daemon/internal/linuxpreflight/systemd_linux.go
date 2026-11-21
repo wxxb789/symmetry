@@ -20,18 +20,18 @@ import (
 )
 
 func verifyLinuxSystemdUnits(value config.Config, accounts OwnerAccounts) error {
-	group, err := user.LookupGroupId(accounts.A.Gid)
+	group, err := user.LookupGroupId(accounts.a.Gid)
 	if err != nil {
 		return fmt.Errorf("lookup A systemd service group: %w", err)
 	}
 	delegatedSubgroup := filepath.Base(value.LinuxOwnerDelegatedPath)
 	daemonPolicy := linuxSystemdUnitPolicy{
-		unit: "symmetry-daemon.service", user: accounts.A.Username, group: group.Name, home: accounts.A.HomeDir,
+		unit: "symmetry-daemon.service", user: accounts.a.Username, group: group.Name, home: accounts.a.HomeDir,
 		execStart:    []string{"/usr/libexec/symmetry/symmetry-daemon", "-config", "/etc/symmetry/daemon.json"},
 		execStartPre: []string{"/usr/libexec/symmetry/symmetry-daemon", "-verify-linux-owner-install", "-config", "/etc/symmetry/daemon.json"},
 	}
 	ownerPolicy := linuxSystemdUnitPolicy{
-		unit: "symmetry-owner.service", user: accounts.A.Username, group: group.Name, home: accounts.A.HomeDir,
+		unit: "symmetry-owner.service", user: accounts.a.Username, group: group.Name, home: accounts.a.HomeDir,
 		owner: true, delegate: "yes", delegatedSubgroup: delegatedSubgroup,
 		execStart: []string{"/usr/libexec/symmetry/symmetry-daemon", "-linux-owner-anchor", "-cgroup-mount", value.LinuxOwnerCgroupMount,
 			"-delegated-path", value.LinuxOwnerDelegatedPath, "-socket", value.LinuxOwnerSocket},

@@ -14,14 +14,14 @@ import (
 type ACLSubject struct {
 	UID    uint32
 	GID    uint32
-	Groups []uint32
+	groups []uint32
 }
 
 func (subject ACLSubject) hasGroup(gid uint32) bool {
 	if subject.GID == gid {
 		return true
 	}
-	for _, group := range subject.Groups {
+	for _, group := range subject.groups {
 		if group == gid {
 			return true
 		}

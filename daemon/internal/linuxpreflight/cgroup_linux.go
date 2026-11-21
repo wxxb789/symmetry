@@ -248,7 +248,7 @@ func verifyLinuxOwnerAnchorProcessContext(expected authority.LinuxCgroupProcessI
 		if strings.HasPrefix(upper, "GIT_") || linuxCredentialEnvironmentName(upper) {
 			return fmt.Errorf("live owner service inherits unsafe Git or credential environment %q", key)
 		}
-		if key == "HOME" && value != accounts.A.HomeDir {
+		if key == "HOME" && value != accounts.a.HomeDir {
 			return errors.New("live owner service HOME differs from the configured A home")
 		}
 		if key == "PATH" {
