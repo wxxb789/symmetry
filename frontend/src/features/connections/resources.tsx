@@ -16,8 +16,10 @@ import {
 } from "../../services/api";
 import { safeUrl } from "../../services/served";
 
-// The connection surface imports the frame so the import direction stays one-way
-// and there is exactly one refusal map.
+// This module owns the project-resource surface on `/portal/connections` and the
+// provider labels, refusal notice and dialog frame the connection surface
+// shares; the connection surface imports them so the import direction stays
+// one-way and there is exactly one refusal map.
 
 const providerLabels: Record<string, string> = { github: "GitHub", azure_devops: "Azure DevOps" };
 const kindLabels: Record<string, string> = { repository: "Repository", work_tracking: "Work tracking", ci: "CI", agent: "Agent", runtime: "Runtime", connection: "Connection" };
@@ -322,7 +324,11 @@ function BindResourceFields({ kind, draft, connections, references, pending, err
   return <>
       <Field id="resource-kind" label="Type" error={error} field="kind">
         <select id="resource-kind" name="kind" value={kind} disabled={pending}
-          onChange={(event) => { onKind(event.currentTarget.value); }}>
+          onChange={(event) => {
+            // Read the DOM value before the deferred updater runs: React resets
+            // currentTarget once the event handler returns.
+            onKind(event.currentTarget.value);
+          }}>
           {bindableKinds.map((value) => <option key={value} value={value}>{kindLabel(value)}</option>)}
         </select>
       </Field>
@@ -457,8 +463,6 @@ function ResourceDialog(props: ResourceDialogProps) {
   const bindReferences = intent.kind === "bind" ? referenceOptions(kind, runtimes) : [];
   const set = (patch: Partial<ResourceDraftState>) => { setDraft((current) => ({ ...current, ...patch })); };
   const chooseKind = (next: string) => {
-    // Read the DOM value before the deferred updater runs: React resets
-    // currentTarget once the event handler returns.
     setKind(next);
     set({ connectionId: isLocalKind(next) ? "" : eligibleConnections(next, connections)[0]?.id ?? "", reference: isLocalKind(next) ? referenceOptions(next, runtimes)[0]?.value ?? "" : "" });
   };
