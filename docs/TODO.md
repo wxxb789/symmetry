@@ -582,13 +582,49 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       `control/test/support/**` (W1-12) has landed. `assert_served_members!/3`, `assert_served_rows!/3`,
       `waiting_decision_payload/0`, the deterministic version-4 `uuid/1` and the bundle-derived
       `gate_members/3`/`declared_members/2` are duplicated between
-      `control/test/symmetry_control_web/controllers/portal_resources_test.exs:1373-1426` and
-      `control/test/symmetry_control_web/controllers/portal_workflow_test.exs:1891-1943`. Each file
+      `control/test/symmetry_control_web/controllers/portal_resources_test.exs`
+      (`assert_served_members!/3` at `:1665`, `assert_served_rows!/3` at `:1672`,
+      `gate_members/3` at `:1683`, `declared_members/2` at `:1695`,
+      `waiting_decision_payload/0` at `:1749`, `uuid/1` at `:1797`) and the same six
+      in `control/test/symmetry_control_web/controllers/portal_workflow_test.exs`
+      (`:1896`, `:1903`, `:1914`, `:1926`, `:1949`, `:1975`). Each file
       keeps its own copy because `control/test/support/**` was outside the gate increment's owned
       files and a module defined in one test file would break a single-file run of the others, but
       the copies can drift. Move them into `SymmetryControlWeb.ServedDocument` (the natural home for
       the bundle-derived pair too) and have both gate files import them. Found by the adversarial
       review of PR #145 (P3-2).
+
+## Deferred review findings (PR #161)
+
+- [ ] Retire the `effective_delivery/6` references left after PR #161 deleted the helper, and
+      revalidate two callerless `@evidence_keys` entries as dead code (2026-11-21, branch
+      `refactor/rf-w2-04-portal-json`). PR #161 deleted `effective_delivery/6`,
+      `effective_delivery/4` and `delivery_context/3` from
+      `control/lib/symmetry_control_web/portal_json.ex` (the work they did is now the private
+      `resolve_delivery/1`), but `git grep -n effective_delivery` at the reviewed revision
+      `c459b6a0` still finds the symbol in three schema descriptions —
+      `contracts/v1/workspace-read.schema.json:225`,
+      `contracts/v1/work-detail-read.schema.json:86`, `contracts/v1/chat-read.schema.json:168` —
+      in their generated copies (`contracts/generated/ts/workspace-read.ts:122`,
+      `contracts/generated/ts/work-detail-read.ts:96`, `contracts/generated/ts/chat-read.ts:144`;
+      `daemon/internal/contracts/generated.go:238`, `:1510`, `:1888`;
+      `daemon/internal/contracts/schema_bundle.json:8389`, `:39339`, `:44347`), in two frontend
+      comments (`frontend/src/features/planning/write-policy.ts:251`,
+      `frontend/src/services/api.fixtures.ts:44`) and in two plan files
+      (`docs/plans/2026-11-21-portal-json-plan.md`,
+      `docs/plans/2026-11-21-served-doc-gates-plan.md`), which are historical and stay. Reword the
+      three descriptions and the two comments to drop the deleted symbol (or to describe the
+      projection without naming the private `resolve_delivery/1`), then regenerate
+      the DTOs with `pnpm contracts:generate` (`contracts/README.md:208`) and verify with
+      `pnpm contracts:check`. Separately, `message` and `question` in `@evidence_keys`
+      (`control/lib/symmetry_control_web/portal_json.ex:722`) are callerless: the getter's only
+      call sites ask for `summary` (`:470`), `findings` (`:471`),
+      `changed_artifacts`/`changed_files` (`:476`) and `tests` (`:478`), and
+      `git grep -n '"message"\|"question"'` over
+      `control/lib/symmetry_control_web/portal_json.ex` finds nothing, so treat both as dead-code
+      candidates for a separate authorized cleanup. RV-11 was judged valid but out of scope by the
+      fix stage (`docs/plans/2026-11-21-portal-json-plan.md:373-374`); found by the adversarial
+      review of PR #161 (P3-1).
 
 ## Tolerated duplication: URL-state allowlists (refactor findings, 2026-11-21)
 
