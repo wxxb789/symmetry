@@ -61,6 +61,12 @@ PREDICATE_NAMES = {"run-heavy": "run_heavy", "run-records": "run_records", "run-
 PINNED_GATES = {"record-cleanliness": "run-records", "citation-existence": "run-citations"}
 DEFAULT_GATE = "run-heavy"
 UNCONDITIONAL_JOBS = ("legacy-route-audit",)
+# The coverage plane's advisory artifact jobs (refactor slice W2-17). They are
+# routed like the heavy matrix on purpose - a coverage run is only worth its
+# runner time beside the matrix - so each is gated `run-heavy`, and
+# `check_coverage_plane_routing` below binds the three names to that output
+# against every fixture diff, not only against the workflow text.
+COVERAGE_JOBS = ("coverage-control", "coverage-daemon", "coverage-frontend")
 
 # The audited corpus the citation gate keeps in
 # scripts/ci/check-citation-existence.py, mapped to the fixture whose diff
@@ -436,6 +442,49 @@ def pinned_ran_jobs(job_names: collections.abc.Iterable[str], outputs: dict[str,
         if outputs[PINNED_GATES.get(name, DEFAULT_GATE)]:
             ran.add(name)
     return ran
+
+
+def check_coverage_plane_routing(
+    model: WorkflowModel,
+    outputs_by_fixture: collections.abc.Mapping[str, dict[str, bool]],
+) -> None:
+    """Every coverage job exists and runs exactly when its fixture's run-heavy does.
+
+    ``check_job_gating`` already refuses an unconditional job and an unrecognized
+    gate, but its message names the routing rule, not the plane. This check binds
+    the three jobs the coverage plane adds (refactor slice W2-17) to the heavy
+    output by name and measures that binding against every fixture diff, so a
+    renamed, regated or deleted coverage job reddens here as well.
+    """
+    for name in COVERAGE_JOBS:
+        require(name in model.jobs, f"the workflow has no coverage job {name!r}")
+    for fixture_name, outputs in outputs_by_fixture.items():
+        ran = ran_jobs(model, "pull_request", outputs)
+        heavy = outputs["run-heavy"]
+        for name in COVERAGE_JOBS:
+            require(
+                (name in ran) == heavy,
+                f"fixture {fixture_name}: coverage job {name} must run exactly when run-heavy is "
+                f"true (run-heavy={heavy}); it {'did not run' if heavy else 'ran'}",
+            )
+
+
+def check_coverage_jobs_are_advisory(workflow_text: str) -> None:
+    """Every coverage job carries the job-level ``continue-on-error: true``.
+
+    The gate alone would still let a coverage failure gate a pull request and the
+    heavy matrix's conclusions: the contract's failure control names a coverage
+    job without the advisory flag as not-achieved, so it is pinned here rather
+    than left to review.
+    """
+    blocks = job_blocks(workflow_text)
+    for name in COVERAGE_JOBS:
+        require(name in blocks, f"the workflow has no coverage job {name!r}")
+        require(
+            any(line == "    continue-on-error: true" for line in blocks[name]),
+            f"coverage job {name} must carry the job-level `continue-on-error: true`: a coverage "
+            "failure must not be able to gate a pull request",
+        )
 
 
 STEP_HEADER = re.compile(r"^      - ")
@@ -855,6 +904,10 @@ class ChangedPathClassifierTests(unittest.TestCase):
                 with self.subTest(event=event, fixture=fixture.name):
                     self.assertEqual(ran_jobs(self.model, event, self.outputs[fixture.name]), everything)
 
+    def test_the_coverage_jobs_follow_the_heavy_matrix_across_every_fixture(self) -> None:
+        check_coverage_plane_routing(self.model, self.outputs)
+        check_coverage_jobs_are_advisory(self.workflow_text)
+
     # -- mutations: the assertions must fail when a routing is changed --------
 
     def test_mutation_dropping_the_evaluations_clause_breaks_the_records_fixture(self) -> None:
@@ -894,6 +947,43 @@ class ChangedPathClassifierTests(unittest.TestCase):
         self.assertEqual(model.jobs["citation-existence"].condition, "needs.changes.outputs.run-heavy == 'true'")
         with self.assertRaises(AssertionError):
             check_job_gating(model)
+
+    def test_mutation_regating_a_coverage_job_off_the_heavy_output_breaks_its_routing(self) -> None:
+        coverage_daemon_header = (
+            "  coverage-daemon:\n    needs: changes\n    if: needs.changes.outputs.run-heavy == 'true'\n"
+        )
+        self.assertIn(
+            coverage_daemon_header,
+            self.workflow_text,
+            "the mutation's anchor must be the coverage job's own gated header",
+        )
+        mutated = self.workflow_text.replace(
+            coverage_daemon_header,
+            coverage_daemon_header.replace(
+                "needs.changes.outputs.run-heavy == 'true'",
+                "needs.changes.outputs.run-citations == 'true'",
+            ),
+        )
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        model = parse_model(mutated)
+        self.assertEqual(model.jobs["coverage-daemon"].condition, "needs.changes.outputs.run-citations == 'true'")
+        with self.assertRaises(AssertionError):
+            check_coverage_plane_routing(model, self.outputs)
+
+    def test_mutation_dropping_a_coverage_jobs_advisory_flag_breaks_the_advisory_check(self) -> None:
+        coverage_daemon_header = (
+            "  coverage-daemon:\n    needs: changes\n    if: needs.changes.outputs.run-heavy == 'true'\n"
+        )
+        advisory_line = "    continue-on-error: true\n"
+        self.assertIn(
+            coverage_daemon_header + advisory_line,
+            self.workflow_text,
+            "the mutation's anchor must be the coverage job's gated, advisory header",
+        )
+        mutated = self.workflow_text.replace(coverage_daemon_header + advisory_line, coverage_daemon_header)
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaises(AssertionError):
+            check_coverage_jobs_are_advisory(mutated)
 
     def test_mutation_conditioning_legacy_route_audit_breaks_its_unconditional_assertion(self) -> None:
         mutated = self.workflow_text.replace(
