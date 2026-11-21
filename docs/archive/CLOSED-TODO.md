@@ -1574,7 +1574,9 @@ moved on 2026-11-21 from branch `refactor/rf-w1-14-core-dead-surface`.
       (`provider_module/1`, `provider_call/1`, `delivery_updates/4`, `delivery_resource/2`,
       `persist_sync/4`, `accepted_sync_result/3`, `provider_action_error/1` through
       `mutation_failure_outcome/1`, `record_resource_failure/2,3`). No test file was edited, added or
-      deleted (`git diff --stat` reports only the three source files: 55 deletions); the compiler is
+      deleted (`git diff --stat a3039f0..f479247 -- control/` reports only the three source files:
+      55 deletions; the unscoped `git diff --stat a3039f0..f479247` adds this increment's three docs
+      and no test path); the compiler is
       the mechanical backstop, shown red in a real mutation run — removing the two call sites while
       keeping the `defp` fails `MIX_ENV=test mix compile --warnings-as-errors` with exit 1 and
       `warning: function record_provider_action_failure/2 is unused` (`integrations.ex:1084`), the
@@ -1584,8 +1586,11 @@ moved on 2026-11-21 from branch `refactor/rf-w1-14-core-dead-surface`.
       (`elixir-1.20.4/lib/mix/lib/mix/tasks/xref.ex:479-483`), so the "26 lines" figure that gate
       recorded is not reproducible by that command; the compile-level substitute (a scratch tracer
       compiling every `control/lib/**/*.ex` source and listing exports with zero call sites) shows
-      the F11 public surfaces leaving the zero-call list and the app-wide count dropping 517 → 514, and
-      `mix xref callers` on the three owned modules stays exit 0 before and after. Recorded gates:
+      the F11 public surfaces leaving the zero-call list and the app-wide count dropping 517 → 514.
+      After the deletion `mix xref callers` exits 0 for each owned module
+      (`SymmetryControl.Integrations`, `SymmetryControl.Goals.ContractValidation`,
+      `SymmetryControl.Integrations.ProviderAccess`); the retained `Integrations` before/after
+      outputs are byte-identical, the other two modules have only an after-state log. Recorded gates:
       `mix format --check-formatted` exit 0 before and after;
       `MIX_ENV=test mix compile --warnings-as-errors` exit 0 before and after plus the red mutation above;
       `mix test test/symmetry_control/integrations*` 89 passed exit 0;

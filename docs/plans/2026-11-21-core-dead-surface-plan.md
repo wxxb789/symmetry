@@ -53,11 +53,14 @@ $ git grep -n "record_provider_action_failure" -- . ':!docs'
 …integrations.ex:572 / :575 (calls inside the deleted clauses), :1111 (the defp)
 
 $ git grep -n "validate_adapter\b" -- . ':!docs'
-…contract_validation.ex:26 (a call to validate_adapter_capabilities), :138-140 (the live name), :142-143 (the alias)
+…contract_validation.ex:142-143 only (the @spec and def being deleted; the word boundary
+excludes the live `validate_adapter_capabilities/2`)
 
-$ git grep -n -e "apply(Integrations" -e "&Integrations\." -e "function_exported?(Integrations" a3039f0 -- .
+$ git grep -n -e "apply(Integrations" -e "&Integrations\." -e "function_exported?(Integrations" a3039f0 -- . ':!docs'
   (only the pre-existing surface pin of the provider-action chain at integrations_test.exs:1782-1784;
-   no dynamic-dispatch escape names any F11 surface)
+   no dynamic-dispatch escape names any F11 surface. Without `':!docs'` the same command returns six
+   more lines at docs/plans/2026-11-20-provider-action-chain-removal-plan.md:50-52,149-151, which
+   quote this pattern as prose)
 ```
 
 Reading: the unanchored form matches the live `_unprojected` sibling
