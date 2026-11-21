@@ -9,7 +9,9 @@ defmodule SymmetryControl.Migrations.VersionRequestHashesTest do
   @version 20_260_907_000_000
 
   test "rolls back canonical hash version support when all history is legacy" do
-    with_schema(fn ->
+    load_migration_modules!()
+
+    with_schema("version_request_hashes", fn ->
       migrate_up!()
 
       Repo.query!(
@@ -33,7 +35,9 @@ defmodule SymmetryControl.Migrations.VersionRequestHashesTest do
   end
 
   test "refuses rollback when canonical hash history exists" do
-    with_schema(fn ->
+    load_migration_modules!()
+
+    with_schema("version_request_hashes", fn ->
       migrate_up!()
 
       Repo.query!(
@@ -46,12 +50,6 @@ defmodule SymmetryControl.Migrations.VersionRequestHashesTest do
 
       assert_raise Postgrex.Error, ~r/cannot remove request hash versions/i, &migrate_down!/0
     end)
-  end
-
-  defp with_schema(test) do
-    load_migration_modules!()
-
-    with_schema("version_request_hashes", test)
   end
 
   defp migrate_up! do
