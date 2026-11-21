@@ -172,7 +172,7 @@ func verifyInstalledLinuxOwnerAssets(owner linuxgate.OwnerConfig, a, b ACLSubjec
 			return fmt.Errorf("verify fixed B cannot modify trusted directory %s: %w", path, err)
 		}
 	}
-	if err := verifyTrustedLinuxConfig(owner, a, b); err != nil {
+	if err := verifyTrustedLinuxConfig(a, b); err != nil {
 		return err
 	}
 	if err := verifyTrustedLinuxAsset("/usr/libexec/symmetry/symmetry-linux-launcher", trustedLinuxAsset{uid: 0, gid: owner.AGID, mode: 0o4750, links: 1, denyBAll: true}, a, b); err != nil {
@@ -192,7 +192,7 @@ func verifyInstalledLinuxOwnerAssets(owner linuxgate.OwnerConfig, a, b ACLSubjec
 	return nil
 }
 
-func verifyTrustedLinuxConfig(owner linuxgate.OwnerConfig, a, b ACLSubject) error {
+func verifyTrustedLinuxConfig(a, b ACLSubject) error {
 	const path = "/etc/symmetry/linux-owner.conf"
 	info, err := LstatCanonicalPath(path)
 	if err != nil {

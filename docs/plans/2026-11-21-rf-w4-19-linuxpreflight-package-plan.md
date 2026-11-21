@@ -184,6 +184,7 @@ entry-point file, and nothing was assigned twice. Line counts are `wc -l` on the
 | `systemd_linux.go` | 31 | 878 | systemd directive/drop-in parser, candidate/override validation, `systemctl show` effective-state verification, service-path checks |
 | `preflight_unsupported.go` | 4 exports | 41 | non-linux/non-amd64 stub of the public surface |
 | `preflight_linux_test.go` | 25 tests | 973 | the moved test file (`linux_owner_preflight_linux_test.go`) plus the vocabulary pin test |
+| `preflight_unsupported_test.go` | 2 tests | 34 | apply-pass pins for the non-linux/non-amd64 stub: identity passthrough and both refusal strings (finding 5) |
 
 Each of the six implementation files stays under 1000 L and no file in the result exceeds 1500 L
 (largest: the test file at 973). `init` (4 L) is deleted: its only statement wired the app var that
@@ -202,7 +203,10 @@ appear in the table above; the declaration-set table in the evidence section acc
 - **Check order byte-identical.** A base-vs-HEAD comparison of every declaration's full text (doc
   comment, signature, body and statement skeleton) after the documented rename map: 132 of 132
   comparable declarations identical, 0 changed. This is the lesson-32 audit (dropped early returns /
-  branches), run per extracted helper rather than only per entry point.
+  branches), run per extracted helper rather than only per entry point. The apply pass drops one unused
+  parameter (`owner`, finding 1): the reconstruction check in the apply section shows the two touched
+  declarations differ only in the signature line and the rewritten call argument, with every payload
+  line and the statement skeleton byte-identical.
 - **No app state in the package.** `go list -deps ./internal/linuxpreflight | grep internal/app` is
   empty; the package imports only `config`, `authority`, `harness`, `platform`, `state`, `linuxgate`
   protocol and `golang.org/x/sys/unix`.
@@ -213,8 +217,9 @@ appear in the table above; the declaration-set table in the evidence section acc
   moved suite runs `go test -count=1 ./internal/linuxpreflight/... ./internal/app/...` on linux/amd64
   with no new SKIPs against the baseline `./internal/app/...` run.
 - **No weakened validation.** No predicate, permission mask, bound constant or ownership rule is
-  edited; the only edits to moved text are identifier renames, the deleted `init`, and the new file
-  headers. The two added helpers are copies, not reimplementations.
+  edited; the only edits to moved text are identifier renames, the deleted `init`, the dropped unused
+  parameter of the apply pass (finding 1), and the new file headers. The two added helpers are copies,
+  not reimplementations.
 - **No new suppressions.** No `//nolint`, no lint-config change, no test deletion. The moved test file
   gains one pin test; nothing is removed.
 
@@ -273,7 +278,7 @@ appear in the table above; the declaration-set table in the evidence section acc
   this file, so nothing moves. W3-09's contract names the old path: retargeting it to
   `internal/linuxpreflight` is that slice's edit, as the contract's sequencing note records.
 
-## Evidence plan and measured results (final tree)
+## Evidence plan and measured results (move-only revision; the apply pass below re-derives the rows it touched)
 
 Runnable from `daemon/` unless noted; the linux runs go through
 `wsl -d Ubuntu-24.04 -u accept`.
@@ -293,10 +298,10 @@ Runnable from `daemon/` unless noted; the linux runs go through
 | vocabulary pin sensitivity | `go test -overlay` against `cgroup_linux.go` (WSL, worktree path) | M1 (drop the `config.RuntimeHarnessOpenCode` arm) red: `configuredHarnessKind("opencode") = ("", runtime.harness_kind "opencode" is unsupported), want "opencode"`, exit 1; M3 (map codex to the generic kind) red: `configuredHarnessKind("codex") = ("generic", <nil>), want "codex"`, exit 1; M2 (drop the `|| kind == "generic"` disjunct) green, exit 0 — an equivalent mutant, as recorded under the step-6 note; clean-tree control exit 0 |
 | no app import | `go list -deps ./internal/linuxpreflight \| grep internal/app` | empty (count 0), exit 1 as expected |
 | file size | `wc -l daemon/internal/linuxpreflight/*.go` | max 973 (test file), max implementation file 902; all < 1000 |
-| citations | `python3 scripts/ci/check-citation-existence.py --base 79548368 --head <snapshot>` (a temp-index commit of the working tree: the slice is deliberately uncommitted) | exit 0: no runbook, `docs/design/quality.md` or `docs/archive/CLOSED-TODO.md` entry added or modified. The fixture suite `python3 scripts/ci/test-check-citation-existence.py` passes (49 tests, exit 0) |
-| host-path hygiene | `git diff 79548368 <snapshot> \| grep -icE "users[/][a-z]"` (bracket form, so the row cannot match itself) | 0 matches; no committed path carries a user-profile name |
+| citations | `python3 scripts/ci/check-citation-existence.py --base 79548368 --head <snapshot>` (a temp-index commit of the working tree: the slice is deliberately uncommitted) | exit 0 on the apply snapshot: the only changed document in the range is `docs/archive/CLOSED-TODO.md` (landed by the merged `f4e4ace6`, #137 — not this slice), passing with 453 path citations and 3 ignore-rule notes. The fixture suite `python3 scripts/ci/test-check-citation-existence.py` re-run on the apply snapshot: 49 tests, exit 0 |
+| host-path hygiene | `git diff a4be4e26 <snapshot> \| grep -icE "users[/][a-z]"` (bracket form, so the row cannot match itself; `a4be4e26` is `origin/main` at the apply dispatch, so the range holds this slice's own bytes) | 0 matches; no committed path carries a user-profile name. The wider `79548368` range also traverses later-merged main commits whose own escape-fixture files spell host-shaped test data under a generic two-letter user (`f4e4ace6`, #137); those bytes are not this slice's |
 | whitespace | `git diff --check 79548368 <snapshot>` | exit 0 (no whitespace errors across the slice, new files included) |
-| declaration set | base file vs head package, per-declaration text + statement skeleton, after the rename map | 132/132 identical, 0 changed, 1 deleted (`init`), 2 added (vocabulary copies) |
+| declaration set | base file vs head package, per-declaration text + statement skeleton, after the rename map; re-derived after the apply pass for the one touched declaration | 132/132 identical after the rename map, 0 changed, 1 deleted (`init`), 2 added (vocabulary copies); the apply pass adds one signature delta (`verifyTrustedLinuxConfig` drops the unused `owner` parameter, finding 1) plus its rewritten call argument in `verifyInstalledLinuxOwnerAssets` — body and statement skeleton byte-identical, reconstruction proof in the apply section |
 | error strings | base file vs head package, string-literal multiset | 1093 base literals, 0 removed or changed; 5 enumerated additions |
 | control flow | the same per-declaration skeleton comparison (see declaration set) | 0 differences |
 
@@ -332,6 +337,52 @@ the W2-14 splitter), and the plan records its algorithm and its outputs above.
 The moved test file's literal delta is separately accounted: 1 changed literal
 (`canonicalLinuxOwnerStateDir(%q)…` → `NormalizeOwnerStateDir(%q)…`, a test failure message), plus the
 new pin test's messages and the copied `claimedStoreAt` fixture's 10 literals.
+
+## Apply pass (2026-11-21, GDD apply stage — findings 1, 4, 5 and D2 applied; findings 2, 3 retained)
+
+The simplify review recommended findings 1 + 4 (+5) and the conductor's apply brief accepts every finding
+inside the owned set or covered by a conductor amendment, rejecting only for weakened tests/types/validation/
+permissions or out-of-set files. D2 is applied under the BOUND arch-decision-2 R9 instruction
+(`refactor/arch-decision-2.md` §R9 applies to in-flight W4-19 and directs SOURCE_PATHS updates per slice).
+
+| Finding | Decision | Change / reason | Gate |
+| --- | --- | --- | --- |
+| 1 `verifyTrustedLinuxConfig` unused `owner` (`unparam`) | applied | parameter and its call argument dropped (`preflight_linux.go:175,195`); no other text touched | reconstruction check below; advisory lint 33→32 with the default caps and `unparam` 1→0; the CI-flag run reports 0 `unparam` |
+| 2 `claimedStoreAt` fixture copy | retained (SKIP) | removal needs a shared test-helper package outside the owned set and would replace test support that pins the drain contract | unchanged |
+| 3 configured-kind vocabulary copy | retained (SKIP) | the one-vocabulary fix needs `internal/harness`, `internal/app/probe.go` and `internal/app/goal_admission.go` (outside the owned set); recorded follow-up, drift fail-closed and pinned | unchanged |
+| 4 no test binds the rewired `app.Run` normalization (amendment 1, D1) | applied | new `daemon/internal/app/linux_owner_preflight_state_dir_app_test.go` (`linux && amd64`, 65 L): four subtests pin the branch, the exact wrapped refusals of `app.go:282`, the normalize-before-validate order and the non-branch for other kinds | WSL `-run` exit 0, 4/4 subtests pass, 0.067 s |
+| 5 non-linux/non-amd64 stub unpinned | applied | new `daemon/internal/linuxpreflight/preflight_unsupported_test.go` (`!linux \|\| !amd64`, 34 L): identity passthrough for five paths and both refusal strings byte-pinned | Windows host `go test ./internal/linuxpreflight/...` exit 0, 2/2 pass |
+| D1 (amendment-1 test missing) | closed | by findings 4 + 5: the linux/amd64 branch wiring and the non-linux no-op are both pinned now | the two rows above |
+| D2 (R9 SOURCE_PATHS) | applied, R9 branch 1 | `daemon/internal/linuxpreflight/preflight_linux.go` and `preflight_unsupported.go` added to `SOURCE_PATHS` (`scripts/ci/omo-control-native-evidence.py:69-100`, entries at `:95-96`): the `init()` rewiring moved the `normalizeLinuxNativeStateDir` identity default out of the listed `daemon/internal/app/lease.go` into the package, so the freeze must cover the receiving pair (linux implementation plus the cross-GOOS stub) | `python3 scripts/ci/test-omo-control-native-evidence.py` exit 0, `Ran 10 tests in 9.5s`, `OK` |
+
+Re-derived parity evidence for finding 1 (reproducible: extract the two declarations from
+`79548368:daemon/internal/app/linux_owner_preflight_linux.go` and from the head package file, apply the
+documented inverse rename map — `ACLSubject`, the exported verifier names, the `StatIdentity` field
+selectors — then the two documented deltas): `verifyTrustedLinuxConfig` (21 L) and
+`verifyInstalledLinuxOwnerAssets` (41 L) both reconstruct byte-identical, so the apply-pass delta is
+exactly the dropped parameter and its argument; the other 130 comparable declarations are untouched and
+statement skeletons are unchanged, which is why the control-flow row above still reads 0 differences.
+
+Re-measured numbers (single source: this plan; the implement-stage answer is stage history for the
+move-only revision, and this section rebinds the rows the apply pass touched):
+
+| Gate | Command | Result |
+| --- | --- | --- |
+| format / vet / builds | `gofmt -l .`; `go vet ./...`; `GOOS=linux go vet ./...`; `GOOS=linux\|windows\|darwin go build ./...`; `GOOS=linux GOARCH=arm64 go build ./...` | exit 0 each, `gofmt -l` empty |
+| moved suite | WSL `go test -count=1 -json ./internal/linuxpreflight/...` | exit 0; 25 test functions, 55/55 test events, 0 skips — unchanged from the implement measurement |
+| stub pins | Windows host `go test -count=1 -v ./internal/linuxpreflight/...` | exit 0; 2/2 pass |
+| `app.Run` wiring (amendment 1) | WSL `go test -count=1 -run TestRunNormalizesLinuxV2NativeOwnerStateDir ./internal/app/` | exit 0; 4/4 subtests pass |
+| advisory lint | `GOOS=linux golangci-lint run --config .golangci.yml ./internal/linuxpreflight/...`, default caps and with `--max-issues-per-linter=0 --max-same-issues=0` (CI flags) | exit 1 both (advisory, as before): default caps 33→32 issues and `unparam` 1→0; CI flags 37 issues, 0 `unparam` |
+| no app import | `GOOS=linux go list -deps ./internal/linuxpreflight \| grep internal/app` | 0 matches, exit 1 as expected |
+| evidence freeze | `python3 scripts/ci/test-omo-control-native-evidence.py` | exit 0, `Ran 10 tests in 9.5s`, `OK` |
+| citations / records / hygiene | `check-citation-existence.py --base 79548368 --head <snapshot>`, `check-record-cleanliness.py` same range, `git diff --check`, host-path and backslash-u greps over the apply snapshot (ranges `a4be4e26..` and `dee3f4ae..`) | exit 0 (1 changed document, 453 path citations, 3 ignore-rule notes) / exit 0 (2 changed records) / exit 0 / 0 matches each |
+
+Package totals after the apply pass: 9 files, 4557 L (was 8 files / 4523 L; +34 the stub test file) and 27
+test functions across the two test files (25 linux, 2 elsewhere). `wc -l` per file is in the file table;
+max file is still the moved test file at 973 L, max implementation file 902 L. The 65-L app test lives in
+`internal/app`. The affected-surface differential row above was measured on the move-only revision; the
+apply pass edits no app production file, so its production result stands, while a re-run of its head-side
+count would now include the four new subtest events.
 
 ## Out of scope (with reasons)
 
