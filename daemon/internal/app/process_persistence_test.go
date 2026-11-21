@@ -504,7 +504,8 @@ func TestStoreCallbackObserversFollowTheOverride(t *testing.T) {
 	pins := []struct {
 		name string
 		// wantWrites is the number of override invocations a failed call makes:
-		// persistProcessAuthorityCallback resubmits its indeterminate write.
+		// persistProcessAuthorityCallback retries the write once after a failed
+		// attempt.
 		wantWrites int
 		// wantObserved is the event the observer records after a successful
 		// write; commitSupervisorHandoffCallback commits a helper process that
@@ -627,8 +628,8 @@ type storeCallbackObservations struct {
 type storeCallbackPin struct {
 	name string
 	// wantCalls is the number of override invocations one pinned call makes:
-	// persistProcessAuthorityCallback resubmits its indeterminate write twice,
-	// every other factory once.
+	// persistProcessAuthorityCallback retries a failed write once, every other
+	// factory once.
 	wantCalls       int
 	installOverride func(app *daemon, observed *storeCallbackObservations)
 	invoke          func(app *daemon) error

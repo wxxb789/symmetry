@@ -63,7 +63,7 @@ func selectStoreWrite[Fn storeCallbackWrite](daemon *daemon, override, fromStore
 func (daemon *daemon) persistProcessAuthorityCallback(key state.RunKey) func(int, string, *authority.Supervisor) error {
 	return func(pid int, identity string, value *authority.Supervisor) error {
 		// persistProcessAuthority owns this callback's write selection and its
-		// indeterminate-write retry because recovery shares them, so the refusal
+		// unconditional single retry because recovery shares them, so the refusal
 		// stays here with the same predicate selectStoreWrite applies.
 		daemon.storeLifetimeMu.RLock()
 		defer daemon.storeLifetimeMu.RUnlock()
