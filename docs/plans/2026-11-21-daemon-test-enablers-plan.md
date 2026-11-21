@@ -13,8 +13,9 @@ keep process-global-seam tests serial; the wave-1 go.mod owner).
 1. `daemon/go.mod`, `daemon/go.sum`: `go.uber.org/goleak v1.3.0` (test-only, MIT; `go mod tidy`
    form: one direct require plus the checksum lines tidy records).
 2. `daemon/internal/app/main_test.go` (new): `verifyNoLeakedGoroutines(t)`, a `t.Cleanup` wrapper
-   around `goleak.VerifyNone(t)` with no ignore options. No `TestMain` (binding amendment; see
-   trade-off 1).
+   around `goleak.VerifyNone(t)` with no ignore options, plus `TestLeakOracleDetectsLeakedGoroutine`,
+   the self-check that fails if the oracle stops detecting a parked goroutine. No `TestMain`
+   (binding amendment; see trade-off 1).
 3. `daemon/internal/app/app_test.go`: the helper on 11 tests, the four short waits folded.
 4. `daemon/internal/app/native_settlement_regression_test.go`: the helper on two tests, the 1 s
    cleanup wait folded.
@@ -52,6 +53,9 @@ settlement lifecycles): `TestCancelPreemptsBlockedInputInSameSnapshot`,
 (native_settlement_regression_test.go). The planted-leak red run (contract acceptance) is recorded
 below. Tests that leave a goroutine today (F15-adjacent input-timeout fakes and any worker the test
 never joins) are *not* in the set; the oracle stays honest rather than filtered.
+The oracle's own liveness is pinned by `TestLeakOracleDetectsLeakedGoroutine`: it parks one
+goroutine, requires `goleak.Find` to report it, and joins it before returning, so an oracle that
+stops detecting leaks reddens a permanent test instead of only the mutation record.
 
 ### The five folded waits
 
@@ -152,7 +156,7 @@ under the 4-way proxy — see risk 3.
 | `go vet ./...` (Windows) | exit 0 |
 | `GOOS=linux go build ./...` | exit 0 |
 | `GOOS=windows go build ./...` | exit 0 |
-| `go test -count=1 -timeout 1200s ./internal/state/... ./internal/app/...` (Windows) | exit 0; `ok internal/state 8.048s`, `ok internal/app 262.691s` |
+| `go test -count=1 -timeout 1200s ./internal/state/... ./internal/app/...` (Windows) | exit 0; `ok internal/state 21.629s`, `ok internal/app 265.221s` |
 | `go test -count=3 -timeout 900s ./internal/state/` (Windows, repeat stability) | exit 0; `ok 25.914s` |
 | `go test -race -count=1 ./internal/state/` (WSL, twice) | exit 0 |
 | `go test -race -count=1 -run '<13 goleak tests>' ./internal/app/` (WSL, twice) | exit 0; 13/13 PASS, `ok 170.732s` / `ok 167.238s` |

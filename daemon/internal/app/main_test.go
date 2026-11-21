@@ -22,3 +22,28 @@ func verifyNoLeakedGoroutines(t *testing.T) {
 		goleak.VerifyNone(t)
 	})
 }
+
+// TestLeakOracleDetectsLeakedGoroutine pins the liveness of
+// verifyNoLeakedGoroutines: if the oracle ever becomes a no-op, or starts
+// ignoring everything, this test fails while the 13 verifying tests would
+// stay green. It parks one goroutine, requires goleak.Find to report it, and
+// joins it before returning so no later test's VerifyNone sees residue. It
+// asserts against goleak.Find directly instead of verifyNoLeakedGoroutines,
+// because a reported leak is this test's expected outcome, not a failure.
+func TestLeakOracleDetectsLeakedGoroutine(t *testing.T) {
+	release := make(chan struct{})
+	started := make(chan struct{})
+	exited := make(chan struct{})
+	go func() {
+		defer close(exited)
+		close(started)
+		<-release
+	}()
+	<-started
+	err := goleak.Find()
+	close(release)
+	<-exited
+	if err == nil {
+		t.Error("goleak.Find() found no leaked goroutine while one was parked in this test; the per-test leak oracle is inert")
+	}
+}
