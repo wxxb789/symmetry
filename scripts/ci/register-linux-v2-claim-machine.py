@@ -11,7 +11,9 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 
-def call_json(url: str, method: str, token: str, payload: dict, expected_status: int, extra_headers: dict | None = None) -> dict:
+def call_json(
+    url: str, method: str, token: str, payload: dict, expected_status: int, extra_headers: dict | None = None
+) -> dict:
     body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
     headers = {
         "Authorization": "Bearer " + token,
@@ -31,17 +33,18 @@ def call_json(url: str, method: str, token: str, payload: dict, expected_status:
                 raise SystemExit(f"Control claim fixture endpoint returned HTTP {response.status}")
             return json.loads(response.read().decode("utf-8", errors="strict"))
     except HTTPError as error:
-        raise SystemExit(f"Control claim fixture endpoint refused setup (HTTP {error.code})")
+        raise SystemExit(f"Control claim fixture endpoint refused setup (HTTP {error.code})") from error
     except URLError:
-        raise SystemExit("Control claim fixture endpoint was unavailable")
+        raise SystemExit("Control claim fixture endpoint was unavailable") from None
     except (json.JSONDecodeError, UnicodeError):
-        raise SystemExit("Control claim fixture endpoint returned invalid JSON")
+        raise SystemExit("Control claim fixture endpoint returned invalid JSON") from None
 
 
 def main() -> int:
     if len(sys.argv) != 8:
         print(
-            "usage: register-linux-v2-claim-machine.py CONTROL_FIXTURE.json CONTROL_URL MACHINE_NAME MACHINE_TOKEN_FILE RESULT.json SERVICE_MACHINE_NAME SERVICE_IDENTITY.json",
+            "usage: register-linux-v2-claim-machine.py CONTROL_FIXTURE.json CONTROL_URL MACHINE_NAME "
+            "MACHINE_TOKEN_FILE RESULT.json SERVICE_MACHINE_NAME SERVICE_IDENTITY.json",
             file=sys.stderr,
         )
         return 2
@@ -107,9 +110,7 @@ def main() -> int:
         200,
     )
     runtimes = {
-        runtime.get("runtime_key"): runtime
-        for runtime in response.get("runtimes", [])
-        if isinstance(runtime, dict)
+        runtime.get("runtime_key"): runtime for runtime in response.get("runtimes", []) if isinstance(runtime, dict)
     }
     result = {"machine_id": machine_id, "session_id": session_id, "runtimes": {}}
     for runtime_key in ("owner-witness-control-pi-generic", "owner-witness-control-opencode-generic"):

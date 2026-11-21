@@ -108,7 +108,9 @@ def portal_client(base_url: str, operator_token: str, ca_file: str):
     form_token = single_token(csrf_tokens(login_page).input_tokens, "login page")
     form = urllib.parse.urlencode({"_csrf_token": form_token, "operator_token": operator_token}).encode("utf-8")
     request = urllib.request.Request(
-        base_url + "/portal/login", data=form, method="POST",
+        base_url + "/portal/login",
+        data=form,
+        method="POST",
         headers={
             "Content-Type": "application/x-www-form-urlencoded",
             "Accept": "text/html",
@@ -129,10 +131,21 @@ def portal_client(base_url: str, operator_token: str, ca_file: str):
 
 def main() -> int:
     if len(sys.argv) != 11:
-        fail("expected Control URL, operator/enrollment tokens, machine name, two output files, repository, commit, tree digest, and fixture CA file")
+        fail(
+            "expected Control URL, operator/enrollment tokens, machine name, two output files, repository, "
+            "commit, tree digest, and fixture CA file"
+        )
     (
-        control_url, operator_token, enrollment_token, machine_name,
-        run_output, machine_token_output, repository, commit, tree_digest, ca_file,
+        control_url,
+        operator_token,
+        enrollment_token,
+        machine_name,
+        run_output,
+        machine_token_output,
+        repository,
+        commit,
+        tree_digest,
+        ca_file,
     ) = sys.argv[1:]
     parsed = urllib.parse.urlparse(control_url)
     if parsed.scheme != "https" or not parsed.netloc or parsed.path not in ("", "/"):
@@ -148,73 +161,140 @@ def main() -> int:
         fail("repository tree digest is invalid")
 
     client, csrf = portal_client(base_url, operator_token, ca_file)
-    api_client = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ssl.create_default_context(cafile=ca_file)))
+    api_client = urllib.request.build_opener(
+        urllib.request.HTTPSHandler(context=ssl.create_default_context(cafile=ca_file))
+    )
     suffix = secrets.token_hex(6).upper()
-    project = json_request(client, base_url, "POST", "/portal/api/projects", {
-        "name": "Rootless Compose hidden owner witness " + suffix,
-        "key": "RCH" + suffix[:5],
-        "description": "Isolated non-Goal hidden owner-config refusal fixture.",
-        "default_agent_profile": "opencode-native",
-        "default_workspace": "native",
-    }, csrf=csrf)["project"]
+    project = json_request(
+        client,
+        base_url,
+        "POST",
+        "/portal/api/projects",
+        {
+            "name": "Rootless Compose hidden owner witness " + suffix,
+            "key": "RCH" + suffix[:5],
+            "description": "Isolated non-Goal hidden owner-config refusal fixture.",
+            "default_agent_profile": "opencode-native",
+            "default_workspace": "native",
+        },
+        csrf=csrf,
+    )["project"]
     project_id = project.get("id")
     if not project_id:
         fail("Control did not return the hidden-witness project ID")
-    resource = json_request(client, base_url, "POST", f"/portal/api/projects/{project_id}/resources", {
-        "kind": "repository",
-        "name": "Rootless Compose hidden owner witness repository " + suffix,
-    }, csrf=csrf)["resource"]
+    resource = json_request(
+        client,
+        base_url,
+        "POST",
+        f"/portal/api/projects/{project_id}/resources",
+        {
+            "kind": "repository",
+            "name": "Rootless Compose hidden owner witness repository " + suffix,
+        },
+        csrf=csrf,
+    )["resource"]
     resource_id = resource.get("id")
     if not resource_id:
         fail("Control did not return the hidden-witness repository resource ID")
 
     machine_token = secrets.token_hex(32)
-    machine = json_request(api_client, base_url, "POST", "/api/v1/machines", {
-        "machine": {"name": machine_name}, "machine_token": machine_token,
-    }, token=enrollment_token, idempotency=str(uuid.uuid4()))
+    machine = json_request(
+        api_client,
+        base_url,
+        "POST",
+        "/api/v1/machines",
+        {
+            "machine": {"name": machine_name},
+            "machine_token": machine_token,
+        },
+        token=enrollment_token,
+        idempotency=str(uuid.uuid4()),
+    )
     machine_id = machine.get("machine_id")
     if not machine_id or machine.get("machine_token") != machine_token:
         fail("Control did not enroll the exact generic owner-claim fixture machine")
     session_id = str(uuid.uuid4())
-    session = json_request(api_client, base_url, "PUT", f"/api/v1/machines/{machine_id}/sessions/{session_id}", {
-        "runtimes": [{
-            "runtime_key": "rootless-compose-unprovisioned-opencode-claim",
-            "name": "Rootless Compose hidden owner claim fixture; no native adapter",
-            "capacity": 1,
+    session = json_request(
+        api_client,
+        base_url,
+        "PUT",
+        f"/api/v1/machines/{machine_id}/sessions/{session_id}",
+        {
+            "runtimes": [
+                {
+                    "runtime_key": "rootless-compose-unprovisioned-opencode-claim",
+                    "name": "Rootless Compose hidden owner claim fixture; no native adapter",
+                    "capacity": 1,
+                    "agent_profile": "opencode-native",
+                    "workspace": "native",
+                    "repository_resource_id": resource_id,
+                    "capabilities": {"structured_input": True},
+                }
+            ],
+        },
+        token=machine_token,
+    )
+    runtimes = [runtime for runtime in session.get("runtimes", []) if isinstance(runtime, dict)]
+    runtime = next(
+        (
+            runtime
+            for runtime in runtimes
+            if runtime.get("runtime_key") == "rootless-compose-unprovisioned-opencode-claim"
+        ),
+        None,
+    )
+    if (
+        not runtime
+        or not runtime.get("runtime_id")
+        or not isinstance(runtime.get("runtime_epoch"), int)
+        or runtime["runtime_epoch"] <= 0
+    ):
+        fail("Control did not register the generic hidden-witness OpenCode runtime")
+
+    work_item = json_request(
+        client,
+        base_url,
+        "POST",
+        f"/portal/api/projects/{project_id}/work-items",
+        {
+            "title": "Rootless Compose hidden owner refusal " + suffix,
+            "description": (
+                "Use the real OpenCode runtime for the rootless Compose hidden owner-config refusal witness. "
+                "Do not publish."
+            ),
+            "status": "ready",
+            "priority": "high",
+            "assignee_type": "agent",
             "agent_profile": "opencode-native",
             "workspace": "native",
             "repository_resource_id": resource_id,
-            "capabilities": {"structured_input": True},
-        }],
-    }, token=machine_token)
-    runtimes = [runtime for runtime in session.get("runtimes", []) if isinstance(runtime, dict)]
-    runtime = next((runtime for runtime in runtimes if runtime.get("runtime_key") == "rootless-compose-unprovisioned-opencode-claim"), None)
-    if not runtime or not runtime.get("runtime_id") or not isinstance(runtime.get("runtime_epoch"), int) or runtime["runtime_epoch"] <= 0:
-        fail("Control did not register the generic hidden-witness OpenCode runtime")
-
-    work_item = json_request(client, base_url, "POST", f"/portal/api/projects/{project_id}/work-items", {
-        "title": "Rootless Compose hidden owner refusal " + suffix,
-        "description": "Use the real OpenCode runtime for the rootless Compose hidden owner-config refusal witness. Do not publish.",
-        "status": "ready",
-        "priority": "high",
-        "assignee_type": "agent",
-        "agent_profile": "opencode-native",
-        "workspace": "native",
-        "repository_resource_id": resource_id,
-    }, csrf=csrf)["work_item"]
+        },
+        csrf=csrf,
+    )["work_item"]
     work_item_id = work_item.get("id")
     if not work_item_id:
         fail("Control did not return the hidden-witness WorkItem ID")
-    json_request(client, base_url, "POST", f"/portal/api/work-items/{work_item_id}/run", {
-        "action_id": str(uuid.uuid4()),
-    }, csrf=csrf)
+    json_request(
+        client,
+        base_url,
+        "POST",
+        f"/portal/api/work-items/{work_item_id}/run",
+        {
+            "action_id": str(uuid.uuid4()),
+        },
+        csrf=csrf,
+    )
 
     deadline = time.monotonic() + 60
     execution = None
     while time.monotonic() < deadline:
         detail = json_request(client, base_url, "GET", f"/portal/api/work-items/{work_item_id}", None)
         current = detail.get("work_item", {}).get("execution")
-        if isinstance(current, dict) and all(current.get(key) for key in ("task_id", "run_id", "runtime_id")) and current.get("generation", 0) > 0:
+        if (
+            isinstance(current, dict)
+            and all(current.get(key) for key in ("task_id", "run_id", "runtime_id"))
+            and current.get("generation", 0) > 0
+        ):
             execution = current
             break
         time.sleep(0.1)
@@ -241,7 +321,9 @@ def main() -> int:
     }
     for path, value in ((run_output, run_metadata), (machine_token_output, machine_token)):
         output = pathlib.Path(path)
-        output.write_text(json.dumps(value, separators=(",", ":")) if isinstance(value, dict) else value, encoding="utf-8")
+        output.write_text(
+            json.dumps(value, separators=(",", ":")) if isinstance(value, dict) else value, encoding="utf-8"
+        )
         output.chmod(0o600)
     print("prepared separate authentic rootless Compose OpenCode WorkItem/Run/Claim fixture")
     return 0

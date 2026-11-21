@@ -12,13 +12,12 @@ import hashlib
 import importlib.util
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
-
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location(
@@ -38,37 +37,54 @@ class WitnessLauncherTests(unittest.TestCase):
         self.module = self.root / "control/lib/witness_build.ex"
         self.module.write_text('defmodule WitnessBuild do\n  def value, do: "stale"\nend\n')
         (self.root / "control/mix.exs").write_text(
-            'defmodule WitnessBuild.MixProject do\n'
-            '  use Mix.Project\n'
+            "defmodule WitnessBuild.MixProject do\n"
+            "  use Mix.Project\n"
             '  def project, do: [app: :witness_build, version: "0.1.0", deps: []]\n'
-            'end\n'
+            "end\n"
         )
         self.git("init", "--quiet")
         self.git("add", ".")
-        self.git("-c", "user.name=Witness", "-c", "user.email=witness@example.invalid",
-                 "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "local fixture")
+        self.git(
+            "-c",
+            "user.name=Witness",
+            "-c",
+            "user.email=witness@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--quiet",
+            "-m",
+            "local fixture",
+        )
         self.environment = os.environ.copy()
-        self.environment.update({"MIX_ENV": "test", "MIX_BUILD_PATH": str(self.root / "build"),
-                                 "MIX_DEPS_PATH": str(self.root / "deps")})
+        self.environment.update(
+            {"MIX_ENV": "test", "MIX_BUILD_PATH": str(self.root / "build"), "MIX_DEPS_PATH": str(self.root / "deps")}
+        )
         self.config = {
-            "namespace": "local-negative-controls", "resource_id": "unused-by-launcher",
-            "base_branch": "main", "code_base_sha": WITNESS.BASE,
+            "namespace": "local-negative-controls",
+            "resource_id": "unused-by-launcher",
+            "base_branch": "main",
+            "code_base_sha": WITNESS.BASE,
             "code_head_sha": self.git("rev-parse", "HEAD").decode().strip(),
-            "changed_source_manifest": [], "allow_manifest_bound_dirty": True,
+            "changed_source_manifest": [],
+            "allow_manifest_bound_dirty": True,
         }
 
     def git(self, *args):
         return subprocess.check_output(["git", *args], cwd=self.root, stderr=subprocess.PIPE)
 
     def manifest(self):
-        self.config["changed_source_manifest"] = [{
-            "path": "control/lib/witness_build.ex",
-            "sha256": hashlib.sha256(self.module.read_bytes()).hexdigest(),
-        }]
+        self.config["changed_source_manifest"] = [
+            {
+                "path": "control/lib/witness_build.ex",
+                "sha256": hashlib.sha256(self.module.read_bytes()).hexdigest(),
+            }
+        ]
 
     def mix(self, *args):
-        return subprocess.run(["mix", *args], cwd=self.root / "control", env=self.environment,
-                              capture_output=True, check=True).stdout
+        return subprocess.run(
+            ["mix", *args], cwd=self.root / "control", env=self.environment, capture_output=True, check=True
+        ).stdout
 
     def test_launcher_force_compiles_stale_beam_before_first_phase(self):
         self.mix("compile")
@@ -76,8 +92,7 @@ class WitnessLauncherTests(unittest.TestCase):
         self.module.write_text('defmodule WitnessBuild do\n  def value, do: "reviewed"\nend\n')
         os.utime(self.module, ns=(timestamp, timestamp))
         self.manifest()
-        self.assertIn(b"stale", self.mix("run", "--no-start", "--no-compile", "-e",
-                                       "IO.puts(WitnessBuild.value())"))
+        self.assertIn(b"stale", self.mix("run", "--no-start", "--no-compile", "-e", "IO.puts(WitnessBuild.value())"))
         evidence = self.root / "evidence"
         config_path = self.root / "config.json"
         config_path.write_text(json.dumps(self.config))
@@ -89,24 +104,35 @@ class WitnessLauncherTests(unittest.TestCase):
             if command[:2] != ["mix", "run"]:
                 return real_run(command, **kwargs)
             # Inspect the actual compiled fixture at the launcher's phase boundary.
-            compiled = real_run(["mix", "run", "--no-start", "--no-compile", "-e",
-                                 "IO.puts(WitnessBuild.value())"],
-                                cwd=kwargs["cwd"], env=kwargs["env"], capture_output=True, check=True)
+            compiled = real_run(
+                ["mix", "run", "--no-start", "--no-compile", "-e", "IO.puts(WitnessBuild.value())"],
+                cwd=kwargs["cwd"],
+                env=kwargs["env"],
+                capture_output=True,
+                check=True,
+            )
             self.assertEqual(compiled.stdout.strip(), b"reviewed")
             phase = command[-2]
             receipt = "barrier-crash.json" if phase == "crash" else "phase-" + phase + ".json"
             WITNESS.safe_write(evidence / receipt, {"local_test_phase": phase})
             return subprocess.CompletedProcess(command, 86 if phase == "crash" else 0, b"", b"")
 
-        environment = dict(self.environment, POSTGRES_HOST="127.0.0.1", POSTGRES_PORT="55436",
-                           POSTGRES_DB="symmetry_0006h_test", GH_TOKEN="", GITHUB_TOKEN="")
-        argv = ["witness", "--config", str(config_path), "--evidence-dir", str(evidence),
-                "--allow-live-fixture"]
-        with mock.patch.object(WITNESS, "__file__", str(self.root / "scripts/ci/witness.py")), \
-                mock.patch.dict(os.environ, environment, clear=True), \
-                mock.patch.object(sys, "argv", argv), \
-                mock.patch.object(WITNESS.subprocess, "run", side_effect=local_run), \
-                mock.patch("builtins.print"):
+        environment = dict(
+            self.environment,
+            POSTGRES_HOST="127.0.0.1",
+            POSTGRES_PORT="55436",
+            POSTGRES_DB="symmetry_0006h_test",
+            GH_TOKEN="",
+            GITHUB_TOKEN="",
+        )
+        argv = ["witness", "--config", str(config_path), "--evidence-dir", str(evidence), "--allow-live-fixture"]
+        with (
+            mock.patch.object(WITNESS, "__file__", str(self.root / "scripts/ci/witness.py")),
+            mock.patch.dict(os.environ, environment, clear=True),
+            mock.patch.object(sys, "argv", argv),
+            mock.patch.object(WITNESS.subprocess, "run", side_effect=local_run),
+            mock.patch("builtins.print"),
+        ):
             WITNESS.main()
         compile_index = commands.index(["mix", "compile", "--force"])
         first_phase = next(i for i, command in enumerate(commands) if command[:2] == ["mix", "run"])
@@ -129,15 +155,26 @@ class WitnessLauncherTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 1, b"", b"private compiler diagnostic")
             return real_run(command, **kwargs)
 
-        environment = dict(self.environment, POSTGRES_HOST="127.0.0.1", POSTGRES_PORT="55436",
-                           POSTGRES_DB="symmetry_0006h_test", GH_TOKEN="", GITHUB_TOKEN="")
-        with mock.patch.object(WITNESS, "__file__", str(self.root / "scripts/ci/witness.py")), \
-                mock.patch.dict(os.environ, environment, clear=True), \
-                mock.patch.object(sys, "argv", ["witness", "--config", str(config_path),
-                    "--evidence-dir", str(evidence), "--allow-live-fixture"]), \
-                mock.patch.object(WITNESS.subprocess, "run", side_effect=local_run):
-            with self.assertRaisesRegex(RuntimeError, "validated_source_compile_failed"):
-                WITNESS.main()
+        environment = dict(
+            self.environment,
+            POSTGRES_HOST="127.0.0.1",
+            POSTGRES_PORT="55436",
+            POSTGRES_DB="symmetry_0006h_test",
+            GH_TOKEN="",
+            GITHUB_TOKEN="",
+        )
+        with (
+            mock.patch.object(WITNESS, "__file__", str(self.root / "scripts/ci/witness.py")),
+            mock.patch.dict(os.environ, environment, clear=True),
+            mock.patch.object(
+                sys,
+                "argv",
+                ["witness", "--config", str(config_path), "--evidence-dir", str(evidence), "--allow-live-fixture"],
+            ),
+            mock.patch.object(WITNESS.subprocess, "run", side_effect=local_run),
+            self.assertRaisesRegex(RuntimeError, "validated_source_compile_failed"),
+        ):
+            WITNESS.main()
         self.assertEqual(commands, [["mix", "compile", "--force"]])
         receipt = (evidence / "compile.json").read_text()
         self.assertEqual(json.loads(receipt)["exit_code"], 1)
@@ -156,10 +193,11 @@ class WitnessLauncherTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0, b"", b"")
             return real_run(command, **kwargs)
 
-        with mock.patch.object(WITNESS.subprocess, "run", side_effect=changed_during_compile):
-            with self.assertRaisesRegex(RuntimeError, "changed_source_digest_mismatch"):
-                WITNESS.compile_validated_source(self.root, self.config, observed, evidence,
-                                                 self.environment, False)
+        with (
+            mock.patch.object(WITNESS.subprocess, "run", side_effect=changed_during_compile),
+            self.assertRaisesRegex(RuntimeError, "changed_source_digest_mismatch"),
+        ):
+            WITNESS.compile_validated_source(self.root, self.config, observed, evidence, self.environment, False)
 
     def test_manifest_still_rejects_unlisted_dirty_production_source(self):
         self.manifest()
@@ -168,7 +206,8 @@ class WitnessLauncherTests(unittest.TestCase):
             WITNESS.source(self.root, self.config)
 
 
-ELIXIR_CONTROLS = r'''
+ELIXIR_CONTROLS = (
+    r"""
 file = Path.expand("../scripts/ci/credentialed-provider-witness.exs")
 {:__block__, _, expressions} = file |> File.read!() |> Code.string_to_quoted!()
 # Load the real policy modules, never the script's live entrypoint.
@@ -206,7 +245,8 @@ defmodule CredentialedProviderWitness.LocalNegativeControls do
       "operation" => "change.upsert", "input" => input, "target" => authorization["target"],
       "title" => authorization["input"]["title"], "body" => authorization["input"]["body"]
     }
-    intent = authorization |> Map.take(~w(action_id resource_id connection_id project_id run_id task_id runtime_id work_item_id operation))
+    intent = authorization |> Map.take(~w(action_id resource_id connection_id project_id """
+    r"""run_id task_id runtime_id work_item_id operation))
              |> Map.new(fn {key, value} -> {String.to_existing_atom(key), value} end)
              |> Map.merge(%{id: Ecto.UUID.generate(), provider: "github", resource_kind: "repository",
                             resource_external_ref: "wxxb789/symmetry-provider-sandbox",
@@ -222,7 +262,8 @@ defmodule CredentialedProviderWitness.LocalNegativeControls do
 
   defp pull_request(binding) do
     %{"number" => 18, "html_url" => "https://github.com/wxxb789/symmetry-provider-sandbox/pull/18",
-      "head" => %{"sha" => binding["subject"]["commit"], "ref" => binding["target"]["source_branch"], "repo" => binding["repository"]},
+      "head" => %{"sha" => binding["subject"]["commit"], "ref" => binding["target"]["source_branch"]"""
+    r""", "repo" => binding["repository"]},
       "base" => %{"ref" => "main", "repo" => binding["repository"]}}
   end
 
@@ -284,7 +325,8 @@ defmodule CredentialedProviderWitness.LocalNegativeControls do
       end
     end
     assert_raise Failure, fn ->
-      Witness.authorize_intent!(%{data.intent | input: Map.put(data.intent.input, "title", "foreign")}, data.authorization)
+      Witness.authorize_intent!(%{data.intent | input: Map.put(data.intent.input, "title", "foreign")}, data."""
+    r"""authorization)
     end
   end
 
@@ -338,7 +380,8 @@ defmodule CredentialedProviderWitness.LocalNegativeControls do
                                      name: CredentialedProviderWitness.State)
       try do
         for method <- [:post, :patch] do
-          destination = if method == :post, do: String.replace_suffix(URI.to_string(uri), "/18", ""), else: URI.to_string(uri)
+          destination = if method == :post, do: String.replace_suffix(URI.to_string(uri), "/18", ""), """
+    r"""else: URI.to_string(uri)
           assert_raise RuntimeError, "provider_phase_read_only", fn ->
             HTTP.request(method, destination, [], payload(binding))
           end
@@ -353,16 +396,23 @@ end
 
 result = ExUnit.run()
 System.halt(if result.failures == 0, do: 0, else: 1)
-'''
+"""
+)
 
 
 class WitnessHTTPPolicyTests(unittest.TestCase):
     def test_actual_elixir_http_policy_and_pending_intent_negative_controls(self):
         environment = os.environ.copy()
         environment["MIX_ENV"] = "test"
-        result = subprocess.run(["mix", "run", "--no-start", "--no-compile", "--eval", ELIXIR_CONTROLS],
-                                cwd=ROOT / "control", env=environment,
-                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, check=False)
+        result = subprocess.run(
+            ["mix", "run", "--no-start", "--no-compile", "--eval", ELIXIR_CONTROLS],
+            cwd=ROOT / "control",
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=False,
+        )
         self.assertEqual(result.returncode, 0, result.stdout)
 
 

@@ -8,6 +8,7 @@ failure. This is native-process evidence, not daemon or Control evidence.
 
 import argparse
 import configparser
+import contextlib
 import ctypes
 import hashlib
 import json
@@ -26,7 +27,6 @@ import time
 import urllib.parse
 import uuid
 
-
 PINS = {
     "Windows": {
         "path": "C:/Users/lhan/.local/bin/omo.exe",
@@ -40,8 +40,7 @@ PINS = {
     },
 }
 ORIGIN = "https://github.com/wxxb789/symmetry-0006h-provider-fixture.git"
-SCENARIOS = ("metadata", "fresh_identity", "durable_replay", "process_restart",
-             "fresh_handoff", "cancellation")
+SCENARIOS = ("metadata", "fresh_identity", "durable_replay", "process_restart", "fresh_handoff", "cancellation")
 MAX_LINE = 1024 * 1024
 MAX_RECORDS = 30000
 MAX_BYTES = 48 * 1024 * 1024
@@ -113,16 +112,27 @@ def private_root(root):
     security = ctypes.WinDLL("advapi32", use_last_error=True)
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)
     security.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = [
-        wintypes.LPCWSTR, wintypes.DWORD, ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p]
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.c_void_p,
+    ]
     security.SetFileSecurityW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, ctypes.c_void_p]
     kernel.LocalFree.argtypes = [ctypes.c_void_p]
     descriptor = ctypes.c_void_p()
-    require(bool(security.ConvertStringSecurityDescriptorToSecurityDescriptorW(
-        "D:P(A;OICI;FA;;;OW)(A;OICI;FA;;;SY)", 1, ctypes.byref(descriptor), None)),
-        "private Windows root security descriptor creation failed")
+    require(
+        bool(
+            security.ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                "D:P(A;OICI;FA;;;OW)(A;OICI;FA;;;SY)", 1, ctypes.byref(descriptor), None
+            )
+        ),
+        "private Windows root security descriptor creation failed",
+    )
     try:
-        require(bool(security.SetFileSecurityW(str(root), 0x80000004, descriptor)),
-                "private Windows root ACL application failed")
+        require(
+            bool(security.SetFileSecurityW(str(root), 0x80000004, descriptor)),
+            "private Windows root ACL application failed",
+        )
     finally:
         kernel.LocalFree(descriptor)
     return "protected inheritable Windows owner-rights and SYSTEM DACL"
@@ -164,8 +174,9 @@ def redact_url_userinfo(text):
 
 class Receipt:
     def __init__(self, secret):
-        self.secret_forms = tuple(set((secret, json.dumps(secret)[1:-1],
-                                       urllib.parse.quote(secret, safe="")))) if secret else ()
+        self.secret_forms = (
+            tuple({secret, json.dumps(secret)[1:-1], urllib.parse.quote(secret, safe="")}) if secret else ()
+        )
         self.lock = threading.Lock()
         self.failure = threading.Event()
         self.failure_reason = None
@@ -173,16 +184,23 @@ class Receipt:
         self.value = {
             "schemaVersion": 1,
             "evidenceScope": "direct native RPC with a local authorized fixture",
-            "testedProfile": {"tools": ["read", "write"], "permissionPreset": "workspace",
-                              "cancellation": "model streaming only; no child-tool cancellation"},
-            "notProven": ["Symmetry daemon restart", "Control integration", "adapter capabilities",
-                          "bash/terminal child-tool cancellation", "arbitrary detached-tool containment"],
+            "testedProfile": {
+                "tools": ["read", "write"],
+                "permissionPreset": "workspace",
+                "cancellation": "model streaming only; no child-tool cancellation",
+            },
+            "notProven": [
+                "Symmetry daemon restart",
+                "Control integration",
+                "adapter capabilities",
+                "bash/terminal child-tool cancellation",
+                "arbitrary detached-tool containment",
+            ],
             "capabilityPromotion": "none; operator acceptance required",
             "startedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "classification": "unavailable",
             "activeScenario": "metadata",
-            "scenarios": {name: {"classification": "unavailable", "reason": "not reached"}
-                          for name in SCENARIOS},
+            "scenarios": {name: {"classification": "unavailable", "reason": "not reached"} for name in SCENARIOS},
             "observations": [],
         }
 
@@ -212,9 +230,13 @@ class Receipt:
                 self.failure_reason = self.failure_reason or "evidence record bound exceeded"
                 self.failure.set()
                 return None
-            observation = {"index": len(self.value["observations"]),
-                           "elapsedMonotonic": time.monotonic(), "operation": operation,
-                           "classification": classification, **json.loads(sanitized)}
+            observation = {
+                "index": len(self.value["observations"]),
+                "elapsedMonotonic": time.monotonic(),
+                "operation": operation,
+                "classification": classification,
+                **json.loads(sanitized),
+            }
             self.value["observations"].append(observation)
             self.size += len(sanitized)
         if not clean:
@@ -244,32 +266,45 @@ class WindowsJob:
         from ctypes import wintypes
 
         class BasicLimit(ctypes.Structure):
-            _fields_ = [("PerProcessUserTimeLimit", ctypes.c_longlong),
-                        ("PerJobUserTimeLimit", ctypes.c_longlong),
-                        ("LimitFlags", wintypes.DWORD),
-                        ("MinimumWorkingSetSize", ctypes.c_size_t),
-                        ("MaximumWorkingSetSize", ctypes.c_size_t),
-                        ("ActiveProcessLimit", wintypes.DWORD),
-                        ("Affinity", ctypes.c_size_t),
-                        ("PriorityClass", wintypes.DWORD),
-                        ("SchedulingClass", wintypes.DWORD)]
+            _fields_ = [
+                ("PerProcessUserTimeLimit", ctypes.c_longlong),
+                ("PerJobUserTimeLimit", ctypes.c_longlong),
+                ("LimitFlags", wintypes.DWORD),
+                ("MinimumWorkingSetSize", ctypes.c_size_t),
+                ("MaximumWorkingSetSize", ctypes.c_size_t),
+                ("ActiveProcessLimit", wintypes.DWORD),
+                ("Affinity", ctypes.c_size_t),
+                ("PriorityClass", wintypes.DWORD),
+                ("SchedulingClass", wintypes.DWORD),
+            ]
 
         class IoCounters(ctypes.Structure):
-            _fields_ = [(name, ctypes.c_ulonglong) for name in
-                        ("ReadOperationCount", "WriteOperationCount", "OtherOperationCount",
-                         "ReadTransferCount", "WriteTransferCount", "OtherTransferCount")]
+            _fields_ = [
+                (name, ctypes.c_ulonglong)
+                for name in (
+                    "ReadOperationCount",
+                    "WriteOperationCount",
+                    "OtherOperationCount",
+                    "ReadTransferCount",
+                    "WriteTransferCount",
+                    "OtherTransferCount",
+                )
+            ]
 
         class ExtendedLimit(ctypes.Structure):
-            _fields_ = [("BasicLimitInformation", BasicLimit), ("IoInfo", IoCounters),
-                        ("ProcessMemoryLimit", ctypes.c_size_t), ("JobMemoryLimit", ctypes.c_size_t),
-                        ("PeakProcessMemoryUsed", ctypes.c_size_t),
-                        ("PeakJobMemoryUsed", ctypes.c_size_t)]
+            _fields_ = [
+                ("BasicLimitInformation", BasicLimit),
+                ("IoInfo", IoCounters),
+                ("ProcessMemoryLimit", ctypes.c_size_t),
+                ("JobMemoryLimit", ctypes.c_size_t),
+                ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                ("PeakJobMemoryUsed", ctypes.c_size_t),
+            ]
 
         self.kernel = ctypes.WinDLL("kernel32", use_last_error=True)
         self.kernel.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
         self.kernel.CreateJobObjectW.restype = wintypes.HANDLE
-        self.kernel.SetInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int,
-                                                        ctypes.c_void_p, wintypes.DWORD]
+        self.kernel.SetInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
         self.kernel.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
         self.kernel.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
         self.kernel.CloseHandle.argtypes = [wintypes.HANDLE]
@@ -284,14 +319,21 @@ class WindowsJob:
     def attach_and_resume(self, process):
         from ctypes import wintypes
 
-        require(bool(self.kernel.AssignProcessToJobObject(self.handle, int(process._handle))),
-                "Windows child job assignment failed")
+        require(
+            bool(self.kernel.AssignProcessToJobObject(self.handle, int(process._handle))),
+            "Windows child job assignment failed",
+        )
 
         class ThreadEntry(ctypes.Structure):
-            _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD),
-                        ("th32ThreadID", wintypes.DWORD), ("th32OwnerProcessID", wintypes.DWORD),
-                        ("tpBasePri", wintypes.LONG), ("tpDeltaPri", wintypes.LONG),
-                        ("dwFlags", wintypes.DWORD)]
+            _fields_ = [
+                ("dwSize", wintypes.DWORD),
+                ("cntUsage", wintypes.DWORD),
+                ("th32ThreadID", wintypes.DWORD),
+                ("th32OwnerProcessID", wintypes.DWORD),
+                ("tpBasePri", wintypes.LONG),
+                ("tpDeltaPri", wintypes.LONG),
+                ("dwFlags", wintypes.DWORD),
+            ]
 
         self.kernel.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
         self.kernel.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
@@ -315,15 +357,16 @@ class WindowsJob:
                     try:
                         previous_count = self.kernel.ResumeThread(thread)
                         require(previous_count != 0xFFFFFFFF, "Windows owned thread resume failed")
-                        resumed.append({"threadId": entry.th32ThreadID,
-                                        "previousSuspendCount": previous_count})
+                        resumed.append({"threadId": entry.th32ThreadID, "previousSuspendCount": previous_count})
                     finally:
                         self.kernel.CloseHandle(thread)
                 present = self.kernel.Thread32Next(snapshot, ctypes.byref(entry))
         finally:
             self.kernel.CloseHandle(snapshot)
-        require(any(item["previousSuspendCount"] == 1 for item in resumed),
-                "Windows suspended child primary thread was not resumed")
+        require(
+            any(item["previousSuspendCount"] == 1 for item in resumed),
+            "Windows suspended child primary thread was not resumed",
+        )
         return resumed
 
     def terminate(self):
@@ -346,20 +389,33 @@ class NativeProcess:
         self.job = None
         self.threads = []
         self.closed = False
-        receipt.record("launch", process=name, argv=argv, cwd=str(cwd),
-                       environmentKeys=sorted(env), shell=False,
-                       cleanup="Windows owned job" if os.name == "nt" else "owned process group")
+        receipt.record(
+            "launch",
+            process=name,
+            argv=argv,
+            cwd=str(cwd),
+            environmentKeys=sorted(env),
+            shell=False,
+            cleanup="Windows owned job" if os.name == "nt" else "owned process group",
+        )
         try:
             self.job = WindowsJob() if os.name == "nt" else None
             self.process = subprocess.Popen(
-                argv, cwd=cwd, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE, shell=False,
+                argv,
+                cwd=cwd,
+                env=env,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                shell=False,
                 creationflags=0x4 if os.name == "nt" else 0,  # CREATE_SUSPENDED
-                start_new_session=os.name != "nt")
+                start_new_session=os.name != "nt",
+            )
             if self.job:
                 resumed_threads = self.job.attach_and_resume(self.process)
-                receipt.record("windows_owned_threads_resumed", process=name, pid=self.process.pid,
-                               threads=resumed_threads)
+                receipt.record(
+                    "windows_owned_threads_resumed", process=name, pid=self.process.pid, threads=resumed_threads
+                )
             receipt.record("process_identity", process=name, pid=self.process.pid)
             for label, stream in (("stdout", self.process.stdout), ("stderr", self.process.stderr)):
                 thread = threading.Thread(target=self.consume, args=(label, stream), daemon=True)
@@ -388,8 +444,9 @@ class NativeProcess:
                     text = line.decode("utf-8").rstrip("\r\n")
                 except UnicodeDecodeError:
                     self.receipt.fail_capture("native " + label + " output is not valid UTF-8")
-                    self.receipt.record("native_output", "failed", process=self.name,
-                                        stream=label, error="invalid UTF-8")
+                    self.receipt.record(
+                        "native_output", "failed", process=self.name, stream=label, error="invalid UTF-8"
+                    )
                     continue
                 if not self.receipt.check_raw(text):
                     self.receipt.fail_capture("credential detected in native output; redacted before persistence")
@@ -398,15 +455,17 @@ class NativeProcess:
                 if label == "stdout" and self.rpc:
                     try:
                         frame = strict_json(text)
-                        require(isinstance(frame, dict) and isinstance(frame.get("type"), str),
-                                "malformed native frame identity")
+                        require(
+                            isinstance(frame, dict) and isinstance(frame.get("type"), str),
+                            "malformed native frame identity",
+                        )
                     except (ValueError, WitnessError):
-                        self.receipt.record("native_output", "failed", process=self.name,
-                                            stream=label, raw=text)
+                        self.receipt.record("native_output", "failed", process=self.name, stream=label, raw=text)
                         self.receipt.fail_capture("invalid native JSON frame")
                         continue
-                observation = self.receipt.record("native_output", process=self.name,
-                                                  stream=label, raw=text, frame=frame)
+                observation = self.receipt.record(
+                    "native_output", process=self.name, stream=label, raw=text, frame=frame
+                )
                 if observation is None:
                     continue
                 if label == "stdout":
@@ -443,15 +502,25 @@ class NativeProcess:
                 continue
             self.frames.append((index, frame))
             if frame["type"] == "extension_ui_request":
-                require(frame.get("method") in ("setWidget", "setStatus", "notify"),
-                        "actionable native UI request refused unattended evidence")
+                require(
+                    frame.get("method") in ("setWidget", "setStatus", "notify"),
+                    "actionable native UI request refused unattended evidence",
+                )
             if frame["type"] == "response":
-                require(isinstance(frame.get("id"), str) and isinstance(frame.get("command"), str)
-                        and isinstance(frame.get("success"), bool), "malformed native response identity")
+                require(
+                    isinstance(frame.get("id"), str)
+                    and isinstance(frame.get("command"), str)
+                    and isinstance(frame.get("success"), bool),
+                    "malformed native response identity",
+                )
                 if frame["id"] in self.discarded:
-                    self.receipt.record("discard_prompt_ack", process=self.name,
-                                        transportId=frame["id"], nativeObservation=index,
-                                        ownership="not delivered to witness request owner")
+                    self.receipt.record(
+                        "discard_prompt_ack",
+                        process=self.name,
+                        transportId=frame["id"],
+                        nativeObservation=index,
+                        ownership="not delivered to witness request owner",
+                    )
                     self.discarded.remove(frame["id"])
                     continue
             if frame["type"] == "tool_execution_end":
@@ -466,8 +535,9 @@ class NativeProcess:
         while True:
             _, frame = self.next(deadline)
             if frame["type"] == "response":
-                require(frame["id"] == request_id and frame["command"] == command,
-                        "unexpected native response identity")
+                require(
+                    frame["id"] == request_id and frame["command"] == command, "unexpected native response identity"
+                )
                 require(frame["success"] is expected_success, "native command refused or unexpectedly accepted")
                 return frame
 
@@ -486,8 +556,13 @@ class NativeProcess:
         kinds = [frame["type"] for _, frame in self.frames[start:]]
         require("agent_start" in kinds, "no native agent_start observed")
         require("agent_end" in kinds and "agent_settled" in kinds, "native settlement events missing")
-        require(kinds.index("agent_start") < kinds.index("agent_end") < kinds.index("agent_settled")
-                < kinds.index("agent_idle"), "native settlement order invalid")
+        require(
+            kinds.index("agent_start")
+            < kinds.index("agent_end")
+            < kinds.index("agent_settled")
+            < kinds.index("agent_idle"),
+            "native settlement order invalid",
+        )
 
     def finish_cli(self):
         try:
@@ -508,10 +583,8 @@ class NativeProcess:
             if self.job:
                 self.job.terminate()
             else:
-                try:
+                with contextlib.suppress(ProcessLookupError):
                     os.killpg(self.process.pid, signal.SIGTERM)
-                except ProcessLookupError:
-                    pass
             try:
                 self.process.wait(timeout=10)
             except subprocess.TimeoutExpired:
@@ -521,10 +594,8 @@ class NativeProcess:
                     os.killpg(self.process.pid, signal.SIGKILL)
                 self.process.wait(timeout=10)
             if not self.job:
-                try:
+                with contextlib.suppress(ProcessLookupError):
                     os.killpg(self.process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
         except Exception:
             error = "native process cleanup failed"
         finally:
@@ -545,9 +616,14 @@ class NativeProcess:
             else:
                 self.process.stdout.close()
                 self.process.stderr.close()
-            self.receipt.record("process_stop", "failed" if error else "passed", process=self.name,
-                                pid=self.process.pid, exitCode=self.process.poll(),
-                                readersDrained=not any(thread.is_alive() for thread in self.threads))
+            self.receipt.record(
+                "process_stop",
+                "failed" if error else "passed",
+                process=self.name,
+                pid=self.process.pid,
+                exitCode=self.process.poll(),
+                readersDrained=not any(thread.is_alive() for thread in self.threads),
+            )
         if error:
             raise WitnessError(error)
 
@@ -558,18 +634,38 @@ def isolated_environment(root):
     allowed = {"SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT"} if os.name == "nt" else set()
     env = {key: value for key, value in os.environ.items() if key.upper() in allowed}
     home, temp = root / "home", root / "temp"
-    env.update(HOME=str(home), USERPROFILE=str(home), APPDATA=str(home / "AppData/Roaming"),
-               LOCALAPPDATA=str(home / "AppData/Local"), XDG_CONFIG_HOME=str(home / ".config"),
-               XDG_CACHE_HOME=str(home / ".cache"), XDG_DATA_HOME=str(home / ".local/share"),
-               TEMP=str(temp), TMP=str(temp), TMPDIR=str(temp),
-               OMO_CODING_AGENT_DIR=str(root / "agent"), DO_NOT_TRACK="1",
-               OMO_DISABLE_POSTHOG="1", LANG="C.UTF-8", LC_ALL="C.UTF-8")
+    env.update(
+        HOME=str(home),
+        USERPROFILE=str(home),
+        APPDATA=str(home / "AppData/Roaming"),
+        LOCALAPPDATA=str(home / "AppData/Local"),
+        XDG_CONFIG_HOME=str(home / ".config"),
+        XDG_CACHE_HOME=str(home / ".cache"),
+        XDG_DATA_HOME=str(home / ".local/share"),
+        TEMP=str(temp),
+        TMP=str(temp),
+        TMPDIR=str(temp),
+        OMO_CODING_AGENT_DIR=str(root / "agent"),
+        DO_NOT_TRACK="1",
+        OMO_DISABLE_POSTHOG="1",
+        LANG="C.UTF-8",
+        LC_ALL="C.UTF-8",
+    )
     if os.name == "nt":
         env["PATH"] = str(pathlib.Path(env.get("SystemRoot", env.get("SYSTEMROOT", "C:/Windows"))) / "System32")
     else:
         env["PATH"] = "/usr/bin:/bin"
-    for path in (home, temp, root / "agent", root / "sessions", home / "AppData/Roaming",
-                 home / "AppData/Local", home / ".config", home / ".cache", home / ".local/share"):
+    for path in (
+        home,
+        temp,
+        root / "agent",
+        root / "sessions",
+        home / "AppData/Roaming",
+        home / "AppData/Local",
+        home / ".config",
+        home / ".cache",
+        home / ".local/share",
+    ):
         path.mkdir(mode=0o700, parents=True, exist_ok=True)
     return env
 
@@ -583,16 +679,25 @@ def copy_fixture(repository, workspace, receipt):
     remotes = [section for section in config.sections() if section.startswith('remote "')]
     require(remotes == ['remote "origin"'], "fixture has unauthorized remote configuration")
     origin = config.get('remote "origin"', "url", fallback="")
-    require(origin in (ORIGIN, ORIGIN[:-4], "git@github.com:wxxb789/symmetry-0006h-provider-fixture.git",
-                       "ssh://git@github.com/wxxb789/symmetry-0006h-provider-fixture.git"),
-            "fixture origin does not match the authorized target")
+    require(
+        origin
+        in (
+            ORIGIN,
+            ORIGIN[:-4],
+            "git@github.com:wxxb789/symmetry-0006h-provider-fixture.git",
+            "ssh://git@github.com/wxxb789/symmetry-0006h-provider-fixture.git",
+        ),
+        "fixture origin does not match the authorized target",
+    )
     total, count = 0, 0
     for directory, dirs, files in os.walk(repository, followlinks=False):
         dirs[:] = [name for name in dirs if name != ".git"]
         for name in dirs + files:
             child = pathlib.Path(directory) / name
-            require(not child.is_symlink() and not getattr(child, "is_junction", lambda: False)(),
-                    "fixture symlinks and junctions are not allowed")
+            require(
+                not child.is_symlink() and not getattr(child, "is_junction", lambda: False)(),
+                "fixture symlinks and junctions are not allowed",
+            )
         for name in files:
             path = pathlib.Path(directory) / name
             require(path.is_file(), "fixture special file is not allowed")
@@ -602,9 +707,17 @@ def copy_fixture(repository, workspace, receipt):
     # Copy the repository's working files, not its hooks/config/auth-bearing .git.
     # No git process, remote access, .git mutation, or commit is needed for evidence.
     shutil.copytree(repository, workspace, ignore=shutil.ignore_patterns(".git"))
-    receipt.record("copy_authorized_fixture", repository=str(repository), workspace=str(workspace),
-                   authorizedOrigin=ORIGIN, workingFiles=count, workingBytes=total,
-                   gitMetadataCopied=False, sourceMutated=False, remoteOperations=[])
+    receipt.record(
+        "copy_authorized_fixture",
+        repository=str(repository),
+        workspace=str(workspace),
+        authorizedOrigin=ORIGIN,
+        workingFiles=count,
+        workingBytes=total,
+        gitMetadataCopied=False,
+        sourceMutated=False,
+        remoteOperations=[],
+    )
 
 
 def native_identity(process, sessions, workspace, expected=None, persisted=False):
@@ -613,19 +726,31 @@ def native_identity(process, sessions, workspace, expected=None, persisted=False
     identity, filename = state.get("sessionId"), state.get("sessionFile")
     require(isinstance(identity, str) and identity.strip(), "native session id missing")
     require(isinstance(filename, str) and pathlib.Path(filename).is_absolute(), "native session filename invalid")
-    require(contained(filename, sessions) and pathlib.Path(filename).suffix == ".jsonl",
-            "native session filename escapes pinned directory")
+    require(
+        contained(filename, sessions) and pathlib.Path(filename).suffix == ".jsonl",
+        "native session filename escapes pinned directory",
+    )
     require(same_path(state.get("cwd", ""), workspace), "native state cwd differs from fixture workspace")
     if expected:
         require(identity == expected[0] and same_path(filename, expected[1]), "native retained identity changed")
-    require(state.get("isStreaming") is False and state.get("isCompacting") is False,
-            "native session not explicitly idle")
-    require(state.get("steering") == [] and state.get("followUp") == [] and state.get("ordered") == []
-            and state.get("pendingMessageCount") == 0, "native idle state retains queued work")
-    require(state.get("pendingQuestions") == [] and state.get("pendingDialogs") == [],
-            "native session needs actionable input")
-    require(state.get("effectivePermissionPreset") == "workspace"
-            and state.get("permissionPresetStatus") == "applied", "native workspace permissions not applied")
+    require(
+        state.get("isStreaming") is False and state.get("isCompacting") is False, "native session not explicitly idle"
+    )
+    require(
+        state.get("steering") == []
+        and state.get("followUp") == []
+        and state.get("ordered") == []
+        and state.get("pendingMessageCount") == 0,
+        "native idle state retains queued work",
+    )
+    require(
+        state.get("pendingQuestions") == [] and state.get("pendingDialogs") == [],
+        "native session needs actionable input",
+    )
+    require(
+        state.get("effectivePermissionPreset") == "workspace" and state.get("permissionPresetStatus") == "applied",
+        "native workspace permissions not applied",
+    )
     if persisted:
         require(pathlib.Path(filename).is_file(), "native retained session file missing")
         with pathlib.Path(filename).open("rb") as stream:
@@ -633,49 +758,82 @@ def native_identity(process, sessions, workspace, expected=None, persisted=False
         require(len(line) <= MAX_LINE, "native session header exceeds bound")
         require(process.receipt.check_raw(line.decode("utf-8")), "credential found in native session header")
         header = strict_json(line)
-        require(isinstance(header, dict) and header.get("type") == "session"
-                and header.get("id") == identity and same_path(header.get("cwd", ""), workspace),
-                "native first header does not bind id and fixture workspace")
-        process.receipt.record("session_header", process=process.name, filename=filename, header=header,
-                               provenance="first line of exact get_state.sessionFile only")
+        require(
+            isinstance(header, dict)
+            and header.get("type") == "session"
+            and header.get("id") == identity
+            and same_path(header.get("cwd", ""), workspace),
+            "native first header does not bind id and fixture workspace",
+        )
+        process.receipt.record(
+            "session_header",
+            process=process.name,
+            filename=filename,
+            header=header,
+            provenance="first line of exact get_state.sessionFile only",
+        )
     stats = process.request("get_session_stats")
-    require(stats.get("sessionId") == identity and same_path(stats.get("sessionFile", ""), filename),
-            "native stats identity differs from state")
-    require(isinstance(stats.get("toolCalls"), int) and not isinstance(stats["toolCalls"], bool),
-            "native tool call statistics missing")
-    process.receipt.record("identity_readback", process=process.name, state=state, stats=stats,
-                           nativeHandle=identity, nativeSessionFile=filename,
-                           pinnedSessionDirectory=str(sessions), sessionRealpath=os.path.realpath(filename),
-                           sessionDirectoryRealpath=os.path.realpath(sessions))
+    require(
+        stats.get("sessionId") == identity and same_path(stats.get("sessionFile", ""), filename),
+        "native stats identity differs from state",
+    )
+    require(
+        isinstance(stats.get("toolCalls"), int) and not isinstance(stats["toolCalls"], bool),
+        "native tool call statistics missing",
+    )
+    process.receipt.record(
+        "identity_readback",
+        process=process.name,
+        state=state,
+        stats=stats,
+        nativeHandle=identity,
+        nativeSessionFile=filename,
+        pinnedSessionDirectory=str(sessions),
+        sessionRealpath=os.path.realpath(filename),
+        sessionDirectoryRealpath=os.path.realpath(sessions),
+    )
     return (identity, filename), stats
 
 
 def protocol_gate(process, agent_dir):
     data = process.request("get_protocol_info")
-    require(data.get("protocolVersion") == 1 and data.get("mode") == "classic"
-            and data.get("engineVersion") == "5.1.69" and data.get("serverVersion") == "5.1.69",
-            "native protocol or pinned engine version mismatch")
-    require(set(("durable_client_message_id", "effect_ledger", "session_lifecycle")).issubset(
-        data.get("capabilities", [])), "required native durable/effect capabilities absent")
+    require(
+        data.get("protocolVersion") == 1
+        and data.get("mode") == "classic"
+        and data.get("engineVersion") == "5.1.69"
+        and data.get("serverVersion") == "5.1.69",
+        "native protocol or pinned engine version mismatch",
+    )
+    require(
+        {"durable_client_message_id", "effect_ledger", "session_lifecycle"}.issubset(data.get("capabilities", [])),
+        "required native durable/effect capabilities absent",
+    )
     require(same_path(data.get("agentDir", ""), agent_dir), "native agent directory is not isolated")
 
 
 def action(name, message):
-    return {"message": message, "clientMessageId": str(uuid.uuid5(NAMESPACE, name + ":message")),
-            "clientTurnId": str(uuid.uuid5(NAMESPACE, name + ":turn"))}
+    return {
+        "message": message,
+        "clientMessageId": str(uuid.uuid5(NAMESPACE, name + ":message")),
+        "clientTurnId": str(uuid.uuid5(NAMESPACE, name + ":turn")),
+    }
 
 
 def write_prompt(kind, context=""):
     filename, content = ARTIFACTS[kind]
-    final = {"ok": True, "artifact": filename, "bytes": len(content),
-             "sha256": hashlib.sha256(content).hexdigest()}
-    prompt = ("Perform this bounded repository evidence task. " + context +
-              "Use only the read and write tools. Do not delegate, run commands, access credentials, "
-              "make network calls, or change any other file. Write exactly these UTF-8 bytes to " +
-              filename + ": " + json.dumps(content.decode("utf-8")) +
-              ". The JSON string specifies the literal file content, including its final newline. "
-              "After the tool succeeds, your final assistant response must be only this strict JSON "
-              "object, without markdown, extra keys, or protocol/event frames: " + json.dumps(final))
+    final = {"ok": True, "artifact": filename, "bytes": len(content), "sha256": hashlib.sha256(content).hexdigest()}
+    prompt = (
+        "Perform this bounded repository evidence task. "
+        + context
+        + "Use only the read and write tools. Do not delegate, run commands, access credentials, "
+        "make network calls, or change any other file. Write exactly these UTF-8 bytes to "
+        + filename
+        + ": "
+        + json.dumps(content.decode("utf-8"))
+        + ". The JSON string specifies the literal file content, including its final newline. "
+        "After the tool succeeds, your final assistant response must be only this strict JSON "
+        "object, without markdown, extra keys, or protocol/event frames: " + json.dumps(final)
+    )
     return action(kind, prompt), final
 
 
@@ -684,17 +842,25 @@ def verify_artifact(workspace, kind, receipt):
     path = workspace / filename
     require(not path.is_symlink() and contained(path, workspace), "artifact escapes workspace")
     actual = bounded_read(path, 4096)
-    receipt.record("artifact_readback", path=str(path), byteLength=len(actual),
-                   sha256=hashlib.sha256(actual).hexdigest(), expectedBytes=expected.decode("utf-8"),
-                   exactBytes=actual == expected)
+    receipt.record(
+        "artifact_readback",
+        path=str(path),
+        byteLength=len(actual),
+        sha256=hashlib.sha256(actual).hexdigest(),
+        expectedBytes=expected.decode("utf-8"),
+        exactBytes=actual == expected,
+    )
     require(actual == expected, "native artifact bytes do not match exact expected content")
 
 
 def verify_turn(process, start, expected_final, read_original=False):
     process.idle_event(start)
     frames = [frame for _, frame in process.frames[start:]]
-    messages = [frame["message"] for frame in frames if frame["type"] == "message_end"
-                and frame.get("message", {}).get("role") == "assistant"]
+    messages = [
+        frame["message"]
+        for frame in frames
+        if frame["type"] == "message_end" and frame.get("message", {}).get("role") == "assistant"
+    ]
     require(messages, "native assistant completion missing")
     final_message = messages[-1]
     require(final_message.get("stopReason") == "stop", "native final response did not complete successfully")
@@ -706,76 +872,115 @@ def verify_turn(process, start, expected_final, read_original=False):
         parsed = strict_json(final_text)
     except ValueError:
         raise WitnessError("native final response is not strict JSON") from None
-    require(json.dumps(parsed, sort_keys=True) == json.dumps(expected_final, sort_keys=True),
-            "native final JSON does not match bounded task")
+    require(
+        json.dumps(parsed, sort_keys=True) == json.dumps(expected_final, sort_keys=True),
+        "native final JSON does not match bounded task",
+    )
     tools = [frame for frame in frames if frame["type"] == "tool_execution_start"]
-    require(tools and all(frame.get("toolName") in ("read", "write") for frame in tools),
-            "native tools absent or outside allowlist")
-    require(sum(frame.get("toolName") == "write" for frame in tools) == 1,
-            "native turn did not perform exactly one write")
+    require(
+        tools and all(frame.get("toolName") in ("read", "write") for frame in tools),
+        "native tools absent or outside allowlist",
+    )
+    require(
+        sum(frame.get("toolName") == "write" for frame in tools) == 1, "native turn did not perform exactly one write"
+    )
     if read_original:
         original = ARTIFACTS["original"][0]
-        reads = [index for index, frame in enumerate(tools) if frame.get("toolName") == "read"
-                 and pathlib.Path(frame.get("args", {}).get("path", "")).name == original]
+        reads = [
+            index
+            for index, frame in enumerate(tools)
+            if frame.get("toolName") == "read" and pathlib.Path(frame.get("args", {}).get("path", "")).name == original
+        ]
         writes = [index for index, frame in enumerate(tools) if frame.get("toolName") == "write"]
         require(reads and min(reads) < min(writes), "native turn did not read original before writing")
     usage = [message["usage"] for message in messages if isinstance(message.get("usage"), dict)]
     require(usage, "native assistant usage missing")
-    unknown = any(value.get("costUnknown") is True or value.get("cost", {}).get("unknown") is True
-                  for value in usage)
-    process.receipt.record("turn_readback", process=process.name, final=parsed,
-                           usage=usage, costClassification="unknown" if unknown else "reported",
-                           costNote="zero is not free when costUnknown is true")
+    unknown = any(value.get("costUnknown") is True or value.get("cost", {}).get("unknown") is True for value in usage)
+    process.receipt.record(
+        "turn_readback",
+        process=process.name,
+        final=parsed,
+        usage=usage,
+        costClassification="unknown" if unknown else "reported",
+        costNote="zero is not free when costUnknown is true",
+    )
 
 
 def completed_effect(process, stable_action, identity, kind="input"):
     effect_id = stable_action["clientMessageId"] if kind == "input" else stable_action["effectId"]
     data = process.request("get_effect_status", effectId=effect_id)
     effect = data.get("effect", {})
-    require(data.get("found") is True and effect.get("effectId") == effect_id
-            and effect.get("durableSessionId") == identity[0] and effect.get("kind") == kind
-            and effect.get("state") == "done", "native completed effect not found or identity mismatched")
+    require(
+        data.get("found") is True
+        and effect.get("effectId") == effect_id
+        and effect.get("durableSessionId") == identity[0]
+        and effect.get("kind") == kind
+        and effect.get("state") == "done",
+        "native completed effect not found or identity mismatched",
+    )
     if kind == "input":
         outcome = effect.get("outcome")
-        require(outcome == "completed" or isinstance(outcome, dict) and outcome.get("kind") == "completed",
-                "native input effect did not complete successfully")
+        require(
+            outcome == "completed" or (isinstance(outcome, dict) and outcome.get("kind") == "completed"),
+            "native input effect did not complete successfully",
+        )
     return effect
 
 
-def replay_without_work(process, stable_action, identity, sessions, workspace, stats, command="prompt",
-                        expected_admission=None):
+def replay_without_work(
+    process, stable_action, identity, sessions, workspace, stats, command="prompt", expected_admission=None
+):
     start = len(process.frames)
     response = process.response(process.send(command, **stable_action), command)
     data = response.get("data", {})
     if command == "prompt":
         admission = data.get("admission", {})
-        require(admission.get("state") == "completed" and admission.get("durableSessionId") == identity[0]
-                and admission.get("clientMessageId") == stable_action["clientMessageId"]
-                and admission.get("clientTurnId") == stable_action["clientTurnId"],
-                "native replay did not return completed durable admission")
-        require(data.get("clientMessageId") == stable_action["clientMessageId"]
-                and data.get("clientTurnId") == stable_action["clientTurnId"]
-                and data.get("disposition") == admission.get("disposition") == "started"
-                and isinstance(admission.get("turnId"), str) and bool(admission["turnId"])
-                and data.get("turnId") == admission["turnId"]
-                and admission.get("outcome", {}).get("kind") == "completed",
-                "native replay completed outcome or original turn identity mismatched")
+        require(
+            admission.get("state") == "completed"
+            and admission.get("durableSessionId") == identity[0]
+            and admission.get("clientMessageId") == stable_action["clientMessageId"]
+            and admission.get("clientTurnId") == stable_action["clientTurnId"],
+            "native replay did not return completed durable admission",
+        )
+        require(
+            data.get("clientMessageId") == stable_action["clientMessageId"]
+            and data.get("clientTurnId") == stable_action["clientTurnId"]
+            and data.get("disposition") == admission.get("disposition") == "started"
+            and isinstance(admission.get("turnId"), str)
+            and bool(admission["turnId"])
+            and data.get("turnId") == admission["turnId"]
+            and admission.get("outcome", {}).get("kind") == "completed",
+            "native replay completed outcome or original turn identity mismatched",
+        )
         if expected_admission is not None:
-            require(admission == expected_admission,
-                    "native retained replay changed the completed original admission")
+            require(admission == expected_admission, "native retained replay changed the completed original admission")
     else:
-        require(data.get("replayed") is True and data.get("effect", {}).get("state") == "done",
-                "native abort replay did not return recorded effect")
+        require(
+            data.get("replayed") is True and data.get("effect", {}).get("state") == "done",
+            "native abort replay did not return recorded effect",
+        )
     _, after = native_identity(process, sessions, workspace, identity, persisted=True)
     require(after["toolCalls"] == stats["toolCalls"], "native replay changed tool call statistics")
-    require(after.get("userMessages") == stats.get("userMessages")
-            and after.get("assistantMessages") == stats.get("assistantMessages"),
-            "native replay appended conversation messages")
-    require(not any(frame["type"] in ("agent_start", "tool_execution_start", "tool_execution_end")
-                    for _, frame in process.frames[start:]), "native replay started new work")
-    process.receipt.record("replay_no_work", process=process.name, command=command,
-                           durableId=stable_action.get("clientMessageId", stable_action.get("effectId")),
-                           beforeStats=stats, afterStats=after)
+    require(
+        after.get("userMessages") == stats.get("userMessages")
+        and after.get("assistantMessages") == stats.get("assistantMessages"),
+        "native replay appended conversation messages",
+    )
+    require(
+        not any(
+            frame["type"] in ("agent_start", "tool_execution_start", "tool_execution_end")
+            for _, frame in process.frames[start:]
+        ),
+        "native replay started new work",
+    )
+    process.receipt.record(
+        "replay_no_work",
+        process=process.name,
+        command=command,
+        durableId=stable_action.get("clientMessageId", stable_action.get("effectId")),
+        beforeStats=stats,
+        afterStats=after,
+    )
     return data.get("admission")
 
 
@@ -783,7 +988,11 @@ def run(args, receipt, active):
     binary = pathlib.Path(args.binary).resolve()
     repository = pathlib.Path(args.repository).resolve()
     out = pathlib.Path(args.out).resolve()
-    root = pathlib.Path(args.root).absolute() if args.root else pathlib.Path(tempfile.mkdtemp(prefix="symmetry-omo-native-"))
+    root = (
+        pathlib.Path(args.root).absolute()
+        if args.root
+        else pathlib.Path(tempfile.mkdtemp(prefix="symmetry-omo-native-"))
+    )
     receipt.value.update(root=str(root), output=str(out))
     require(not contained(root, repository) and not contained(repository, root), "evidence root overlaps fixture")
     if args.root:
@@ -793,21 +1002,37 @@ def run(args, receipt, active):
     system = platform.system()
     pin = PINS.get(system)
     require(pin is not None, "unsupported operating system")
-    receipt.value["platform"] = {"system": system, "platform": platform.platform(),
-                                  "kernel": platform.release(), "kernelVersion": platform.version(),
-                                  "machine": platform.machine(),
-                                  "distribution": platform.win32_ver() if os.name == "nt" else
-                                  bounded_read(pathlib.Path("/etc/os-release"), 65536).decode("utf-8"),
-                                  "wslDistribution": os.environ.get("WSL_DISTRO_NAME") if system == "Linux" else None}
-    receipt.value["binary"] = {"path": str(binary), "size": binary.stat().st_size, "sha256": digest(binary),
-                                "independentPlatformPin": pin}
-    require(same_path(binary, pin["path"]) and binary.stat().st_size == pin["size"]
-            and receipt.value["binary"]["sha256"] == pin["sha256"], "exact platform binary pin mismatch")
+    receipt.value["platform"] = {
+        "system": system,
+        "platform": platform.platform(),
+        "kernel": platform.release(),
+        "kernelVersion": platform.version(),
+        "machine": platform.machine(),
+        "distribution": platform.win32_ver()
+        if os.name == "nt"
+        else bounded_read(pathlib.Path("/etc/os-release"), 65536).decode("utf-8"),
+        "wslDistribution": os.environ.get("WSL_DISTRO_NAME") if system == "Linux" else None,
+    }
+    receipt.value["binary"] = {
+        "path": str(binary),
+        "size": binary.stat().st_size,
+        "sha256": digest(binary),
+        "independentPlatformPin": pin,
+    }
+    require(
+        same_path(binary, pin["path"])
+        and binary.stat().st_size == pin["size"]
+        and receipt.value["binary"]["sha256"] == pin["sha256"],
+        "exact platform binary pin mismatch",
+    )
     if system == "Linux":
         distribution = receipt.value["platform"]["distribution"]
-        require('ID=ubuntu' in distribution and 'VERSION_ID="24.04"' in distribution
-                and receipt.value["platform"]["wslDistribution"] == "Ubuntu-24.04",
-                "Linux witness requires the exact Ubuntu-24.04 WSL distribution")
+        require(
+            "ID=ubuntu" in distribution
+            and 'VERSION_ID="24.04"' in distribution
+            and receipt.value["platform"]["wslDistribution"] == "Ubuntu-24.04",
+            "Linux witness requires the exact Ubuntu-24.04 WSL distribution",
+        )
     env = isolated_environment(root)
     for command in ("--version", "--help"):
         cli = NativeProcess(receipt, command, [str(binary), command], root, env, rpc=False)
@@ -820,8 +1045,10 @@ def run(args, receipt, active):
             require("--mode" in text and "--session" in text, "native CLI help lacks required launch flags")
     workspace, sessions = root / "workspace", root / "sessions"
     copy_fixture(repository, workspace, receipt)
-    require(all(not (workspace / name).exists() for name, _ in ARTIFACTS.values()),
-            "fixture already contains a witness artifact")
+    require(
+        all(not (workspace / name).exists() for name, _ in ARTIFACTS.values()),
+        "fixture already contains a witness artifact",
+    )
     receipt.value["scenarios"]["metadata"] = {"classification": "passed"}
     receipt.value["activeScenario"] = "fresh_identity"
 
@@ -829,24 +1056,61 @@ def run(args, receipt, active):
     url = os.environ.get("SYMMETRY_OMO_PROBE_URL", "")
     require(bool(key) and bool(url), "approved relay environment is missing")
     endpoint = urllib.parse.urlsplit(url)
-    require(endpoint.scheme == "https" and endpoint.hostname and endpoint.username is None
-            and endpoint.password is None and not endpoint.query and not endpoint.fragment,
-            "relay URL must be HTTPS without credentials, query, or fragment")
+    require(
+        endpoint.scheme == "https"
+        and endpoint.hostname
+        and endpoint.username is None
+        and endpoint.password is None
+        and not endpoint.query
+        and not endpoint.fragment,
+        "relay URL must be HTTPS without credentials, query, or fragment",
+    )
     env["SYMMETRY_OMO_PROBE_KEY"] = key
-    config = {"providers": {"tencent-litellm": {
-        "api": "openai-completions", "baseUrl": url, "apiKey": "$SYMMETRY_OMO_PROBE_KEY",
-        "models": [{"id": "deepseek-v4.1-flash-fast", "reasoning": False,
-                    "contextWindow": 1000000, "maxTokens": 4096}]}}}
+    config = {
+        "providers": {
+            "tencent-litellm": {
+                "api": "openai-completions",
+                "baseUrl": url,
+                "apiKey": "$SYMMETRY_OMO_PROBE_KEY",
+                "models": [
+                    {"id": "deepseek-v4.1-flash-fast", "reasoning": False, "contextWindow": 1000000, "maxTokens": 4096}
+                ],
+            }
+        }
+    }
     encoded = json.dumps(config, indent=2)
     require(receipt.check_raw(encoded), "model configuration unexpectedly contains credential value")
     config_path = root / "agent" / "models.json"
     config_path.write_text(encoded + "\n", encoding="utf-8")
-    receipt.record("model_configuration", path=str(config_path), config=config,
-                   credentialSource="environment only", ambientCredentialInheritance=False)
-    base = [str(binary), "--mode", "rpc", "--no-extensions", "--no-skills", "--no-context-files",
-            "--no-prompt-templates", "--no-themes", "--permission-preset", "workspace",
-            "--tools", "read,write", "--session-dir", str(sessions), "--provider", "tencent-litellm",
-            "--model", "deepseek-v4.1-flash-fast", "--thinking", "off"]
+    receipt.record(
+        "model_configuration",
+        path=str(config_path),
+        config=config,
+        credentialSource="environment only",
+        ambientCredentialInheritance=False,
+    )
+    base = [
+        str(binary),
+        "--mode",
+        "rpc",
+        "--no-extensions",
+        "--no-skills",
+        "--no-context-files",
+        "--no-prompt-templates",
+        "--no-themes",
+        "--permission-preset",
+        "workspace",
+        "--tools",
+        "read,write",
+        "--session-dir",
+        str(sessions),
+        "--provider",
+        "tencent-litellm",
+        "--model",
+        "deepseek-v4.1-flash-fast",
+        "--thinking",
+        "off",
+    ]
 
     def launch(name, retained=None):
         argv = base + (["--session", retained] if retained else [])
@@ -863,12 +1127,19 @@ def run(args, receipt, active):
     receipt.value["sentinel"] = {"path": str(sentinel), "expectedSha256": hashlib.sha256(sentinel_bytes).hexdigest()}
     receipt.record("sentinel_created", path=str(sentinel), sha256=digest(sentinel))
     receipt.value["scenarios"]["fresh_identity"] = {
-        "classification": "unavailable", "identity": identity, "reason": "awaiting first persisted native header"}
+        "classification": "unavailable",
+        "identity": identity,
+        "reason": "awaiting first persisted native header",
+    }
 
     receipt.value["activeScenario"] = "durable_replay"
     original, expected = write_prompt("original")
-    receipt.record("stable_action", name="original", action=original,
-                   ackLoss="native prompt acknowledgement deliberately discarded by witness owner")
+    receipt.record(
+        "stable_action",
+        name="original",
+        action=original,
+        ackLoss="native prompt acknowledgement deliberately discarded by witness owner",
+    )
     start = len(process.frames)
     transport = process.send("prompt", **original)
     process.discarded.add(transport)
@@ -876,7 +1147,10 @@ def run(args, receipt, active):
     require(not process.discarded, "discarded prompt ACK never arrived")
     identity, stats = native_identity(process, sessions, workspace, identity, persisted=True)
     receipt.value["scenarios"]["fresh_identity"] = {
-        "classification": "passed", "identity": identity, "headerVerification": "first persisted line verified"}
+        "classification": "passed",
+        "identity": identity,
+        "headerVerification": "first persisted line verified",
+    }
     verify_artifact(workspace, "original", receipt)
     completed_effect(process, original, identity)
     original_admission = replay_without_work(process, original, identity, sessions, workspace, stats)
@@ -885,9 +1159,13 @@ def run(args, receipt, active):
     conflict = process.response(process.send("prompt", **changed), "prompt", expected_success=False)
     require(conflict.get("errorCode") == "client_message_id_conflict", "native changed-payload conflict not rejected")
     _, after_conflict = native_identity(process, sessions, workspace, identity, persisted=True)
-    require(after_conflict["toolCalls"] == stats["toolCalls"] and not any(
-        frame["type"] in ("agent_start", "tool_execution_start") for _, frame in process.frames[conflict_start:]),
-        "native conflicting input started work")
+    require(
+        after_conflict["toolCalls"] == stats["toolCalls"]
+        and not any(
+            frame["type"] in ("agent_start", "tool_execution_start") for _, frame in process.frames[conflict_start:]
+        ),
+        "native conflicting input started work",
+    )
     receipt.value["scenarios"]["durable_replay"] = {"classification": "passed"}
 
     receipt.value["activeScenario"] = "process_restart"
@@ -896,40 +1174,60 @@ def run(args, receipt, active):
     _, restored_stats = native_identity(process, sessions, workspace, identity, persisted=True)
     require(restored_stats["toolCalls"] == stats["toolCalls"], "native restart changed historical tool calls")
     completed_effect(process, original, identity)
-    replay_without_work(process, original, identity, sessions, workspace, restored_stats,
-                        expected_admission=original_admission)
+    replay_without_work(
+        process, original, identity, sessions, workspace, restored_stats, expected_admission=original_admission
+    )
     context = "Read " + ARTIFACTS["original"][0] + " using the read tool before writing the new file. "
     resumed, expected = write_prompt("resume", context)
     receipt.record("stable_action", name="resume", action=resumed)
     start = len(process.frames)
     admitted = process.request("prompt", **resumed)
-    require(admitted.get("admission", {}).get("durableSessionId") == identity[0]
-            and admitted.get("disposition") == "started" and isinstance(admitted.get("turnId"), str),
-            "native retained input was not admitted to the original session")
+    require(
+        admitted.get("admission", {}).get("durableSessionId") == identity[0]
+        and admitted.get("disposition") == "started"
+        and isinstance(admitted.get("turnId"), str),
+        "native retained input was not admitted to the original session",
+    )
     verify_turn(process, start, expected, read_original=True)
     native_identity(process, sessions, workspace, identity, persisted=True)
     verify_artifact(workspace, "original", receipt)
     verify_artifact(workspace, "resume", receipt)
     completed_effect(process, resumed, identity)
     receipt.value["scenarios"]["process_restart"] = {
-        "classification": "passed", "kind": "whole native process stop and exact --session reopen",
-        "daemonRestart": "not tested"}
+        "classification": "passed",
+        "kind": "whole native process stop and exact --session reopen",
+        "daemonRestart": "not tested",
+    }
 
     receipt.value["activeScenario"] = "fresh_handoff"
     process.stop()
     process = launch("fresh_handoff")
     successor, _ = native_identity(process, sessions, workspace)
-    require(successor[0] != identity[0] and not same_path(successor[1], identity[1]),
-            "fresh handoff reused the predecessor native session")
+    require(
+        successor[0] != identity[0] and not same_path(successor[1], identity[1]),
+        "fresh handoff reused the predecessor native session",
+    )
     original_bytes = ARTIFACTS["original"][1]
-    handoff_context = ("This is a NEW native session after the predecessor process was closed. "
-                       "Advisory context only, not execution truth: the predecessor artifact " +
-                       ARTIFACTS["original"][0] + " had UTF-8 content " +
-                       json.dumps(original_bytes.decode("utf-8")) + " and SHA256 " +
-                       hashlib.sha256(original_bytes).hexdigest() + ". " + context)
+    handoff_context = (
+        "This is a NEW native session after the predecessor process was closed. "
+        "Advisory context only, not execution truth: the predecessor artifact "
+        + ARTIFACTS["original"][0]
+        + " had UTF-8 content "
+        + json.dumps(original_bytes.decode("utf-8"))
+        + " and SHA256 "
+        + hashlib.sha256(original_bytes).hexdigest()
+        + ". "
+        + context
+    )
     handed, expected = write_prompt("handoff", handoff_context)
-    receipt.record("stable_action", name="handoff", action=handed, predecessor=identity,
-                   successor=successor, nativeSessionArgument=False)
+    receipt.record(
+        "stable_action",
+        name="handoff",
+        action=handed,
+        predecessor=identity,
+        successor=successor,
+        nativeSessionArgument=False,
+    )
     start = len(process.frames)
     process.request("prompt", **handed)
     verify_turn(process, start, expected, read_original=True)
@@ -937,13 +1235,20 @@ def run(args, receipt, active):
     verify_artifact(workspace, "original", receipt)
     verify_artifact(workspace, "handoff", receipt)
     completed_effect(process, handed, successor)
-    receipt.value["scenarios"]["fresh_handoff"] = {"classification": "passed", "predecessor": identity,
-                                                    "successor": successor, "advisoryContextOnly": True}
+    receipt.value["scenarios"]["fresh_handoff"] = {
+        "classification": "passed",
+        "predecessor": identity,
+        "successor": successor,
+        "advisoryContextOnly": True,
+    }
 
     receipt.value["activeScenario"] = "cancellation"
-    cancellation = action("cancellation", "Do not read, write, or mutate any file, and do not call any tools. "
-                          "Produce a long plain-text stream of the integers 1 through 20000, one per line. "
-                          "Continue until explicitly stopped; do not emit protocol frames or event JSON.")
+    cancellation = action(
+        "cancellation",
+        "Do not read, write, or mutate any file, and do not call any tools. "
+        "Produce a long plain-text stream of the integers 1 through 20000, one per line. "
+        "Continue until explicitly stopped; do not emit protocol frames or event JSON.",
+    )
     receipt.record("stable_action", name="cancellation", action=cancellation)
     start = len(process.frames)
     process.request("prompt", **cancellation)
@@ -954,17 +1259,28 @@ def run(args, receipt, active):
     if streaming.get("isStreaming") is False:
         process.idle_event(start)
         receipt.value["scenarios"]["cancellation"] = {
-            "classification": "unavailable", "reason": "native turn already idle before abort; not tested"}
+            "classification": "unavailable",
+            "reason": "native turn already idle before abort; not tested",
+        }
     else:
-        require(streaming.get("isStreaming") is True and streaming.get("sessionId") == successor[0]
-                and same_path(streaming.get("sessionFile", ""), successor[1]),
-                "native cancellation streaming identity invalid")
-        abort = {"effectId": str(uuid.uuid5(NAMESPACE, "cancellation:abort")),
-                 "awaitIdle": True, "clearQueue": True, "graceMs": 5000}
+        require(
+            streaming.get("isStreaming") is True
+            and streaming.get("sessionId") == successor[0]
+            and same_path(streaming.get("sessionFile", ""), successor[1]),
+            "native cancellation streaming identity invalid",
+        )
+        abort = {
+            "effectId": str(uuid.uuid5(NAMESPACE, "cancellation:abort")),
+            "awaitIdle": True,
+            "clearQueue": True,
+            "graceMs": 5000,
+        }
         receipt.record("stable_action", name="abort", action=abort, streamingReadback=streaming)
         stopped = process.request("abort", timeout=30, **abort)
-        require(stopped.get("stopped") is True and stopped.get("idle") is True,
-                "native cancellation did not quiesce within grace")
+        require(
+            stopped.get("stopped") is True and stopped.get("idle") is True,
+            "native cancellation did not quiesce within grace",
+        )
         process.idle_event(start, timeout=30)
         _, stopped_stats = native_identity(process, sessions, workspace, successor, persisted=True)
         effect = completed_effect(process, abort, successor, "abort")
@@ -972,14 +1288,22 @@ def run(args, receipt, active):
         ended = [frame for _, frame in process.frames[start:] if frame["type"] == "agent_end"]
         if effect.get("disposition") == "no_active_turn":
             receipt.value["scenarios"]["cancellation"] = {
-                "classification": "unavailable", "reason": "native turn became idle before abort dispatch; not tested"}
+                "classification": "unavailable",
+                "reason": "native turn became idle before abort dispatch; not tested",
+            }
         else:
-            require(any(frame.get("aborted") is True and
-                        frame.get("abortedBy", {}).get("effectId") == abort["effectId"] for frame in ended),
-                    "native abort did not identify this command as the run stop owner")
+            require(
+                any(
+                    frame.get("aborted") is True and frame.get("abortedBy", {}).get("effectId") == abort["effectId"]
+                    for frame in ended
+                ),
+                "native abort did not identify this command as the run stop owner",
+            )
             receipt.value["scenarios"]["cancellation"] = {"classification": "passed"}
-    require(not any(frame["type"].startswith("tool_execution_") for _, frame in process.frames[start:]),
-            "native cancellation prompt unexpectedly performed a tool effect")
+    require(
+        not any(frame["type"].startswith("tool_execution_") for _, frame in process.frames[start:]),
+        "native cancellation prompt unexpectedly performed a tool effect",
+    )
     process.stop()
     receipt.check()
     receipt.value["activeScenario"] = None
@@ -993,9 +1317,16 @@ def main():
     parser.add_argument("--root", help="New private evidence directory; retained on failure and success")
     args = parser.parse_args()
     receipt = Receipt(os.environ.get("SYMMETRY_OMO_PROBE_KEY", ""))
-    receipt.value["invocation"] = [sys.executable, str(pathlib.Path(__file__).resolve()),
-                                    "--binary", args.binary, "--repository", args.repository,
-                                    "--out", args.out] + (["--root", args.root] if args.root else [])
+    receipt.value["invocation"] = [
+        sys.executable,
+        str(pathlib.Path(__file__).resolve()),
+        "--binary",
+        args.binary,
+        "--repository",
+        args.repository,
+        "--out",
+        args.out,
+    ] + (["--root", args.root] if args.root else [])
     active = []
     exit_code = 1
     try:
@@ -1028,9 +1359,14 @@ def main():
             try:
                 actual = hashlib.sha256(bounded_read(pathlib.Path(sentinel["path"]), 4096)).hexdigest()
                 preserved = actual == sentinel["expectedSha256"]
-                receipt.record("sentinel_preserved", "passed" if preserved else "failed",
-                               path=sentinel["path"], sha256=actual, exactBytes=preserved,
-                               nativeDirectoriesSearched=False)
+                receipt.record(
+                    "sentinel_preserved",
+                    "passed" if preserved else "failed",
+                    path=sentinel["path"],
+                    sha256=actual,
+                    exactBytes=preserved,
+                    nativeDirectoriesSearched=False,
+                )
                 require(preserved, "unrelated session sentinel changed")
             except Exception:
                 receipt.value["classification"] = "failed"
@@ -1043,9 +1379,16 @@ def main():
         except Exception:
             print('{"classification":"failed","reason":"sanitized receipt could not be saved"}')
             return 1
-    print(json.dumps({"classification": receipt.value["classification"],
-                      "out": receipt.sanitize(str(pathlib.Path(args.out).resolve())),
-                      "root": receipt.sanitize(receipt.value.get("root", "")), "exitCode": exit_code}))
+    print(
+        json.dumps(
+            {
+                "classification": receipt.value["classification"],
+                "out": receipt.sanitize(str(pathlib.Path(args.out).resolve())),
+                "root": receipt.sanitize(receipt.value.get("root", "")),
+                "exitCode": exit_code,
+            }
+        )
+    )
     return exit_code
 
 

@@ -44,12 +44,12 @@ const blockedParam = (value: unknown): "1" | undefined =>
   value === "1" || value === 1 || value === true ? "1" : undefined;
 
 export function workSearch(search: Record<string, unknown>): WorkSearch {
-  const view = search["view"];
-  const q = queryParam(search["q"]);
-  const state = textParam(search["state"]);
-  const ownerParam = textParam(search["owner"]);
+  const view = search.view;
+  const q = queryParam(search.q);
+  const state = textParam(search.state);
+  const ownerParam = textParam(search.owner);
   const owner = ownerParam === undefined ? undefined : ownerKeyFilter(ownerParam);
-  const blocked = blockedParam(search["blocked"]);
+  const blocked = blockedParam(search.blocked);
   return {
     ...(view === "board" || view === "list" ? { view } : {}),
     ...(q !== undefined ? { q } : {}),
@@ -60,7 +60,7 @@ export function workSearch(search: Record<string, unknown>): WorkSearch {
 }
 
 export function workItemSearch(search: Record<string, unknown>): WorkItemSearch {
-  const projectId = textParam(search["projectId"]);
+  const projectId = textParam(search.projectId);
   return { ...workSearch(search), ...(projectId !== undefined ? { projectId } : {}) };
 }
 
@@ -71,7 +71,7 @@ export const sameWorkSearch = (left: WorkSearch, right: WorkSearch): boolean =>
   (left.owner ?? "") === (right.owner ?? "") &&
   (left.blocked ?? "") === (right.blocked ?? "");
 
-export interface WorkFilters {
+interface WorkFilters {
   q: string;
   state: string;
   owner: string;
@@ -106,7 +106,7 @@ const stateRank = (state: string): number => {
   return index === -1 ? workStateOrder.length : index;
 };
 
-export interface BoardColumn {
+interface BoardColumn {
   state: string;
   items: WorkItem[];
 }
@@ -135,7 +135,7 @@ export function stateOptions(items: readonly WorkItem[]): string[] {
     .sort((left, right) => stateRank(left) - stateRank(right) || left.localeCompare(right));
 }
 
-export interface OwnerOption {
+interface OwnerOption {
   value: string;
   label: string;
 }
@@ -149,7 +149,7 @@ export function ownerOptions(items: readonly WorkItem[]): OwnerOption[] {
   return [...options.entries()].map(([value, label]) => ({ value, label })).sort((left, right) => left.label.localeCompare(right.label));
 }
 
-export interface WorkSummary {
+interface WorkSummary {
   total: number;
   blocked: number;
 }
