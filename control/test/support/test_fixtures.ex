@@ -4,10 +4,11 @@ defmodule SymmetryControl.TestFixtures do
 
   Each builder below replaces a helper that had been copy-pasted into every
   suite that needed it (5-11 copies per name). The values stay identical to the
-  copies': every knob is an explicit option at the call site, and the
-  documented defaults are the deterministic fixture values the copies already
-  pinned. Suite-specific values (the suite clock, the schema base, a fresh
-  daemon or claim id) are arguments at the call site, never hidden defaults.
+  copies': a knob the converted call sites set differently from the documented
+  default is an explicit option, and the defaults are the deterministic fixture
+  values most of those call sites rely on. Suite-specific values (the suite
+  clock, the schema base, a fresh daemon or claim id) are arguments at the call
+  site, never hidden defaults.
   """
 
   import ExUnit.Assertions
@@ -15,9 +16,9 @@ defmodule SymmetryControl.TestFixtures do
   alias SymmetryControl.Goals
   alias SymmetryControl.Orchestration
 
-  # Deterministic fixture ids: the daemon instance and claim id the first
-  # orchestration suites pinned, matched by `uuid(1)`/`uuid(10)` in the review
-  # and retry suites. A suite that needs a fresh id passes one explicitly; a
+  # Deterministic fixture ids: the daemon instance the review suite pinned
+  # (`uuid(1)` there) and the claim id the review and retry suites pinned
+  # (`uuid(10)` in both). A suite that needs a fresh id passes one explicitly; a
   # fresh id is the deliberate choice in the tests that use it (replay and
   # duplicate-claim semantics), so it never arrives by default.
   @daemon_instance_id "00000000-0000-0000-0000-000000000001"

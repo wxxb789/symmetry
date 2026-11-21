@@ -48,9 +48,11 @@ goal_command(goal, kind, payload, mutation_id \\ Ecto.UUID.generate())
 Semantics that keep every converted call site byte-equivalent:
 
 - `register_runtime/3` registers exactly one runtime through `Orchestration.register_runtimes/4`,
-  at `now`, and returns it. Resource defaults are the values the majority of the copy-pasted bodies
-  used: `runtime_key: "default"`, `name: "Local Codex"`, `capacity: 1`, `agent_profile: "codex"`,
-  `workspace: "primary"`, `capabilities: %{}`, `daemon_instance_id: "00000000-0000-0000-0000-000000000001"`.
+  at `now`, and returns it. Resource defaults are the deterministic values the converted call sites
+  rely on unless they pass the knob (41 of the 63 `register_runtime` sites take the default
+  `runtime_key`, 39 the default `daemon_instance_id`): `runtime_key: "default"`,
+  `name: "Local Codex"`, `capacity: 1`, `agent_profile: "codex"`, `workspace: "primary"`,
+  `capabilities: %{}`, `daemon_instance_id: "00000000-0000-0000-0000-000000000001"`.
   Every knob the converted copies set differently is an explicit option at the call site:
   `:runtime_key`, `:name`, `:capacity`, `:agent_profile`, `:workspace`, `:capabilities`,
   `:daemon_instance_id` (accepts a literal; the files that generated a fresh id pass
@@ -86,10 +88,12 @@ Semantics that keep every converted call site byte-equivalent:
   canonicalisation is only observable for `"request_decision"` payloads, and every
   `request_decision` payload passed from `dispatch_notification`/`workers` is already exactly the
   canonical key set (`%{kind:, work_item_id:, subject_hash:, proposal:}`) — re-verified by reading
-  each of those 14 call sites.
+  both call sites (one in each file).
 
 `SymmetryControl.OrchestrationCase` (new, `control/test/support/orchestration_case.ex`) is the case
-template the converted files `use` in place of `SymmetryControl.DataCase`:
+template the eleven non-migration converted suites `use` in place of `SymmetryControl.DataCase` (the
+seven migration files use `MigrationCase`; `dispatch_notification_test.exs` keeps `use ExUnit.Case`
+with a direct fixtures import):
 
 ```elixir
 use SymmetryControl.OrchestrationCase, async: false
@@ -112,7 +116,11 @@ converted file would then need two lines where ConnCase's pattern needs one, wit
 1. Test names are unchanged. Measured by running the suite with
    `--formatter SymmetryControl.ExUnitJsonFormatter` (one `test_finished` line per test) on the
    baseline tree and on the converted tree; the sorted `module<TAB>name` lists must be identical,
-   and so must the per-test states.
+   and so must the per-test states. The raw baseline artifact still contains the temporary probe
+   `tmp_nest_probe_test.exs` (`SymmetryControl.TmpNestProbeTest`): 963 `test_finished` rows against
+   the converted tree's 962, the extra row being the probe's failed test (`:already_shared` in the
+   second `Sandbox.start_owner!/2` setup). Excluding that row the name and state lists are
+   identical, so the raw baseline run itself is not green (937/938 passed, `Failed: 1`).
 2. Converted helpers are pure fixtures: the acceptance bar is identical SQL/HTTP traffic. Every
    value a converted body passed stays identical — argument values, literal ids, clocks, option
    precedence, and the `Orchestration`/`Goals` entry points are preserved at the call sites. The
@@ -128,13 +136,18 @@ converted file would then need two lines where ConnCase's pattern needs one, wit
 Portable-toolchain recipe `<HOST-PATH>/gdd/scratch/rf-w1-12-mix.sh` (adapted from `retro-g2-mix.sh`
 for this worktree): Elixir 1.20.4 / OTP 29.0.6 via `erl.exe`, `MIX_TEST_PARTITION=rf-w1-12`,
 `POSTGRES_PORT`/`PHX_SERVER`/`SYMMETRY_CONTRACTS_DIR` unset, deps read from the main checkout. This
-worktree's `control/mix.lock` is unmodified. A sibling worktree later ran `deps.get` into that shared
-deps directory (`plug` 1.20.4 vs the locked 1.20.3), so the tail of the gate run used the local-deps
-variant `rf-w1-12-mix-local.sh` (`MIX_DEPS_PATH=<worktree>/control/.deps-local`), which fetches the
-locked versions; see the answer's residual risks.
+worktree's `control/mix.lock` was unmodified at the time of the runs. A sibling worktree later ran
+`deps.get` into that shared deps directory (`plug` 1.20.4 there vs the lock's 1.20.3 then), so the
+tail of the gate run used the local-deps variant `rf-w1-12-mix-local.sh`
+(`MIX_DEPS_PATH=<worktree>/control/.deps-local`), which fetched the then-locked versions; see the
+answer's residual risks. Historical narrative: the merged revision's `control/mix.lock` pins `plug`
+1.20.4 (bumped on `main`), so the local green run used a different lock than the merged revision,
+which is bound by the PR's CI control job.
 
 1. Baseline: `ERL_SCHEDULERS=4 mix test --seed 0 --exclude portal_assets` on HEAD (`a3039f0`) with
-   the JSON formatter → test-name list + states.
+   the JSON formatter → test-name list + states. The raw baseline artifact still contains the
+   temporary probe's failing row (963 `test_finished` rows vs 962 on the converted tree); the
+   name/state comparison excludes it, as Edge-case §1 records.
 2. Per converted file, a targeted `mix test <file>` as it converts.
 3. Converted tree: the same full-suite command as the baseline; compare name lists and states.
 4. `mix format --check-formatted`; `MIX_ENV=test mix compile --warnings-as-errors` (forced
@@ -178,8 +191,8 @@ recipe), `ERL_SCHEDULERS=4` to match CI's 4-CPU pool arithmetic.
 ## Design trade-offs
 
 - Passing per-file constants (clock, defaults, schema base) at each call site rather than keeping a
-  thin local wrapper: matches the merged #114 idiom (`with_schema("add_history_lookup_indexes", …)`,
-  `command_opts()`); keeps one definition per name, which the contract's acceptance measures.
+  thin local wrapper: matches the merged #114 idiom of passing the schema base at the call site
+  (next bullet); keeps one definition per name, which the contract's acceptance measures.
   Cost: mechanically larger diffs in `goals_test.exs` (~200 call sites gain `command_opts()`) and
   `orchestration_goal_admission_test.exs` (24 claim sites gain `claim_id:`/`via:`).
 - Migration files whose local helper was a pure delegation pass the schema base at the call site
@@ -191,8 +204,9 @@ recipe), `ERL_SCHEDULERS=4` to match CI's 4-CPU pool arithmetic.
   (`with_base_schema/1`) because inlining `migrate_base_up!()`/`load_migration_modules!()` into its
   60 call sites moves more lines than it removes and weakens reviewability; the composer is not a
   copy of `MigrationCase.with_schema/2`, it calls it.
-- Defaults for `daemon_instance_id`/`claim_id` were chosen to be the deterministic values the
-  majority of copies already pinned, so the common call site stays terse and the files that need a
+- Defaults for `daemon_instance_id`/`claim_id` were chosen to be the deterministic values most
+  converted call sites rely on (39 of the 63 `register_runtime` sites and 40 of the 73 `claim` sites
+  take the defaults), so the common call site stays terse and the files that need a
   fresh id say so explicitly — the safe direction, because a fresh id is the deliberate choice in
   the tests that use it (idempotency/replay semantics).
 

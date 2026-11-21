@@ -17,7 +17,8 @@ defmodule SymmetryControl.OrchestrationCase do
   file): every case template injects `use ExUnit.Case`, and the second
   injection runs the sandbox setup twice. Measured on this tree with a
   throwaway probe (`use SymmetryControl.DataCase, async: false` twice): exit 2,
-  `Ecto.Adapters.SQL.Sandbox.start_owner!/2` failure, 0/1 passed.
+  `:already_shared` failure in `Ecto.Adapters.SQL.Sandbox.start_owner!/2`,
+  `0/1 passed`.
   `SymmetryControlWeb.ConnCase` is the same pattern over DataCase.
   """
 

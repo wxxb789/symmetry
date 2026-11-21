@@ -3831,7 +3831,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   defp with_base_schema(test) do
     load_migration_modules!()
 
-    with_schema("goal_0006_migration", fn ->
+    with_schema("goal_0006_migration_#{System.system_time(:microsecond)}", fn ->
       migrate_base_up!()
       test.()
     end)
