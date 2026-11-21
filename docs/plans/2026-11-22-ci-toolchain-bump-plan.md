@@ -96,7 +96,7 @@ Floating major tags as resolved on 2026-11-22: `actions/checkout@v7` →
 major tag (Dependabot's `github-actions` ecosystem in `.github/dependabot.yml` maintains it), so the
 bump stays at the major tag.
 
-### Two corrections to the contract's evidence bullet (recorded, not silently fixed)
+### Correction to the contract's evidence bullet (recorded, not silently fixed)
 
 - The bullet's "`actions/upload-artifact` is already `@v7`" holds for nine jobs (seven in `ci.yml`,
   two in the acceptance workflow; 16 `uses:` sites) but not all:

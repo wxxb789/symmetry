@@ -4417,8 +4417,7 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
       `govulncheck_vulnerabilities=12`, reproducing the hosted baseline of run 44862556617's `daemon`
       job (GO-2026-6859 `net/http` fixed in go1.27.4, GO-2026-6809 `crypto/x509` fixed in go1.27.3,
       the other ten fixed in go1.27.2); at go1.27.4 exit 0 with `govulncheck_vulnerabilities=0`
-      (`No vulnerabilities found.`). The hosted end-to-end confirmation is the PR's own CI run: its
-      `daemon` job must log `Go: go1.27.4` and `govulncheck_vulnerabilities=0` (run id
-      `<PR run id -- filled from that run>`); if the hosted count is not 0 this entry reopens and
-      records the remaining advisory IDs instead. Dependabot #168 (`actions/setup-go` 5 to 7) and
-      #171 (`actions/checkout` 4 to 7) are superseded by this change and are closed as such.
+      (`No vulnerabilities found.`). Hosted confirmation: PR #218 run `44959141686`, `daemon` job
+      logged `Go: go1.27.4`, `No vulnerabilities found.` and `govulncheck_vulnerabilities=0`.
+      Dependabot #168 (`actions/setup-go` 5 to 7) and #171 (`actions/checkout` 4 to 7) are
+      superseded by this change and are closed when it merges.
