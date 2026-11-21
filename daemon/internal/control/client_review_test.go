@@ -61,6 +61,28 @@ func TestClaimRejectsUntrustedResponses(t *testing.T) {
 	}
 }
 
+func TestClaimRequiresWorkInputPresenceAndObjectShape(t *testing.T) {
+	tests := []struct {
+		name      string
+		response  string
+		wantError string
+	}{
+		{name: "missing work input", response: claimResponse(`"work":{"goal":"work","agent_profile":"codex","workspace":"primary"}`), wantError: "work input is required"},
+		{name: "non-object work input", response: claimResponse(`"work":{"goal":"work","agent_profile":"codex","workspace":"primary","input":[]}`), wantError: "work input must be a JSON object"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := jsonServer(t, http.StatusOK, test.response, nil)
+			defer server.Close()
+			_, err := mustMachineClient(t, server).Claim(context.Background(), "run-1", protocol.ClaimRequest{RuntimeID: "runtime-1", RuntimeEpoch: 3, Generation: 2, ClaimID: "claim-1"})
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("error = %v, want containing %q", err, test.wantError)
+			}
+		})
+	}
+}
+
 func TestClaimLeavesAdmissionAndReservationSemanticsToApp(t *testing.T) {
 	const validFreshAdmission = `{"schema_version":"symmetry.admission.v1","admission_id":"11111111-1111-4111-8111-111111111111","goal_id":"22222222-2222-4222-8222-222222222222","goal_revision":1,"work_item_id":"33333333-3333-4333-8333-333333333333","purpose":"implement","context_snapshot_id":"44444444-4444-4444-8444-444444444444","context_hash":"sha256:0000000000000000000000000000000000000000000000000000000000000000","model_profile":"implementation-default","session_mode":"fresh","requested_session_id":null,"subject":{"resource_id":"55555555-5555-4555-8555-555555555555","commit":"0000000000000000000000000000000000000000","tree_digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"},"limits":{"max_turns":1,"deadline_at":"2026-12-31T00:00:00Z","max_cost_microusd":null},"validation_of_task_id":null,"provider_scope":null}`
 	validResumeAdmission := strings.Replace(
@@ -235,6 +257,13 @@ func TestClientRejectsIncompleteSuccessResponses(t *testing.T) {
 				return machine.AcknowledgeCommand(context.Background(), "command-1", protocol.CommandAcknowledgement{Fence: fence(), RunID: "run-1", CommandID: "command-1", Outcome: "applied", AckID: "ack-1"})
 			},
 		},
+		{
+			name: "trailing value", body: `{} {}`, wantError: "one JSON value",
+			invoke: func(machine *Client, enrollment *EnrollmentClient) error {
+				_, err := machine.RegisterSession(context.Background(), "machine-1", "daemon-1", protocol.SessionRegistrationRequest{Runtimes: []protocol.RuntimeRegistration{{RuntimeKey: "default"}}})
+				return err
+			},
+		},
 	}
 
 	for _, test := range tests {
@@ -284,6 +313,65 @@ func TestMachineClientOversizedErrorResponseKeepsTypedFallback(t *testing.T) {
 				t.Fatalf("APIError = %#v", apiError)
 			}
 		})
+	}
+}
+
+// The operator client's test rows that used to drive these machine-client
+// guards moved to daemon/e2e/internal/operator with the client, so the
+// production transport and validation keep their own cases here.
+func TestMachineClientRejectsOversizedSuccessResponse(t *testing.T) {
+	body := `{"runtimes":[{"runtime_key":"default"}],"heartbeat_interval_ms":1,"poll_interval_ms":1,"lease_duration_ms":1,"websocket_path":"/socket","padding":"` + strings.Repeat("x", 64) + `"}`
+	server := jsonServer(t, http.StatusOK, body, nil)
+	defer server.Close()
+	client, err := NewClient(server.URL+"/api", machineToken, server.Client(), WithMaxResponseBytes(32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.RegisterSession(context.Background(), "machine-1", "daemon-1", protocol.SessionRegistrationRequest{Runtimes: []protocol.RuntimeRegistration{{RuntimeKey: "default"}}})
+	if err == nil || !strings.Contains(err.Error(), "response body exceeds") {
+		t.Fatalf("error = %v, want oversized success response rejection", err)
+	}
+}
+
+func TestMachineClientTypedErrorPredicatesMatchCodes(t *testing.T) {
+	tests := []struct {
+		name      string
+		status    int
+		code      string
+		wantOwned bool
+		wantGrace bool
+	}{
+		{name: "ownership lost", status: http.StatusConflict, code: "ownership_lost", wantOwned: true},
+		{name: "terminal grace expired", status: http.StatusConflict, code: "terminal_grace_expired", wantGrace: true},
+		{name: "unrelated typed error", status: http.StatusTooManyRequests, code: "rate_limited"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := jsonServer(t, test.status, `{"error":{"code":"`+test.code+`","message":"rejected"}}`, nil)
+			defer server.Close()
+			_, err := mustMachineClient(t, server).Dispatch(context.Background(), "runtime-1", 3)
+			if err == nil {
+				t.Fatal("Dispatch() error = nil, want typed API error")
+			}
+			if got := IsOwnershipLost(err); got != test.wantOwned {
+				t.Errorf("IsOwnershipLost(%v) = %t, want %t", err, got, test.wantOwned)
+			}
+			if got := IsTerminalGraceExpired(err); got != test.wantGrace {
+				t.Errorf("IsTerminalGraceExpired(%v) = %t, want %t", err, got, test.wantGrace)
+			}
+		})
+	}
+}
+
+func TestMachineClientRetryDelayHonorsExplicitZeroRetryAfter(t *testing.T) {
+	server := jsonServer(t, http.StatusTooManyRequests, `{"error":{"code":"rate_limited"}}`, map[string]string{"Retry-After": "0"})
+	defer server.Close()
+
+	_, err := mustMachineClient(t, server).Dispatch(context.Background(), "runtime-1", 3)
+	delay, retry := RetryDelay(context.Background(), err, 3*time.Second)
+	if delay != 0 || !retry {
+		t.Fatalf("RetryDelay() = (%s, %t), want (0s, true)", delay, retry)
 	}
 }
 
@@ -527,6 +615,7 @@ func TestAcknowledgeCommandRequiresMatchingCommandResource(t *testing.T) {
 		{name: "mismatched run", status: http.StatusOK, body: strings.Replace(valid, `"run_id":"run-1"`, `"run_id":"run-2"`, 1), wantErr: "command_id, run_id, or generation does not match the request"},
 		{name: "mismatched generation", status: http.StatusOK, body: strings.Replace(valid, `"generation":2`, `"generation":3`, 1), wantErr: "command_id, run_id, or generation does not match the request"},
 		{name: "mismatched state", status: http.StatusOK, body: strings.Replace(valid, `"state":"acknowledged"`, `"state":"pending"`, 1), wantErr: "pending command must be run-bound without applied_at or acknowledgement"},
+		{name: "unpaired run", status: http.StatusOK, body: strings.Replace(valid, `"generation":2`, `"generation":null`, 1), wantErr: "run_id and generation must be null together"},
 		{name: "mismatched acknowledgement", status: http.StatusOK, body: strings.Replace(valid, `"acknowledgement_id":"ack-1"`, `"acknowledgement_id":"ack-2"`, 1), wantErr: "acknowledgement_id or outcome does not match the request"},
 		{name: "mismatched outcome", status: http.StatusOK, body: strings.Replace(valid, `"acknowledgement_outcome":"applied"`, `"acknowledgement_outcome":"rejected"`, 1), wantErr: "acknowledgement_id or outcome does not match the request"},
 	}

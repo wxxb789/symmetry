@@ -1614,7 +1614,7 @@ moved on 2026-11-21 from branch `refactor/rf-w1-14-core-dead-surface`.
       281, 302, 334, 441, 611 and 629 at the baseline) and the v1 task decoders of
       `daemon/internal/protocol/protocol.go` now live in the e2e-owned
       `daemon/e2e/internal/operator/` package beside their only callers, with the transport, error
-      and decode substrate copied verbatim and every retained declaration unchanged. The
+      and decode substrate copied verbatim and every retained production declaration unchanged. The
       declaration-set proof at this revision: 106 placed declarations — 99 byte-identical to their
       control or protocol original, 6 differing by the sanctioned package qualifier only (each
       diff printed), and 1 deliberate apply-stage conversion: the machine-client guard in
@@ -1622,11 +1622,13 @@ moved on 2026-11-21 from branch `refactor/rf-w1-14-core-dead-surface`.
       so could never match the machine client, restored as a name-level check by the accepted
       simplify finding (its go/printer diff printed, mutation-checked red); 315 retained
       declarations across the base↔head counterparts of all six `control`/`protocol` files
-      (`client_test.go` included in the comparison), 311 byte-identical, 4 deliberately changed —
+      (`client_test.go` included in the comparison), 310 byte-identical, 5 deliberately changed —
       the two mixed-table splits `TestClientProtocolRequests` and
-      `TestClientRejectsIncompleteSuccessResponses` (operator rows re-homed) and the two retargets
+      `TestClientRejectsIncompleteSuccessResponses` (operator rows re-homed), the two retargets
       `TestNewClientRejectsInvalidConfiguration` and
-      `TestSupervisoryCommandRequestAndDispatchPayloads`. The removal
+      `TestSupervisoryCommandRequestAndDispatchPayloads`, and the `unpaired run` row the
+      review-round-1 fix adds to `TestAcknowledgeCommandRequiresMatchingCommandResource`. The
+      removal
       evidence: `deadcode -test ./cmd/...` reports every moved symbol unreachable on all three
       targets (GOOS=windows amd64, GOOS=linux amd64, GOOS=linux arm64; 140, 250 and 158 findings
       at the baseline), and the tree-wide `git grep` leaves no reference outside `daemon/e2e/**`.
@@ -1636,7 +1638,12 @@ moved on 2026-11-21 from branch `refactor/rf-w1-14-core-dead-surface`.
       assertions still fail when the guarded behaviour is flipped (six artificial flips, six red
       runs — the sixth re-adds a task API to the machine `Client` and reddens the restored guard).
       `control.WithMaxResponseBytes` stays in `control` by the same contract's binding
-      amendment. The full suite and CI remain the pull request's verification.
+      amendment. The review-round-1 fix then restored the production guards the moved rows had
+      carried, with nine further artificial flips and nine red runs (production trailing-JSON
+      rejection, oversized success response, `IsOwnershipLost`/`IsTerminalGraceExpired`,
+      explicit-zero `Retry-After`, work-input presence and shape, paired `run_id`/`generation` on
+      the ack path, `expectedTaskID`, and the retained numeric comparator). The full suite and CI
+      remain the pull request's verification.
 
 ## Deferred review findings (0007f)
 

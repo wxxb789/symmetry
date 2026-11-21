@@ -182,6 +182,47 @@ use them (A5). The six base-URL rows of the moved configuration test exercise th
 production `parseBaseURL` keeps its own coverage through `NewClient`'s rejection rows and the
 `/api` default-path assertions of `TestOmOReviewRegressionClientRegistersNativeRuntime`.
 
+**Review fix (P2-1/P3-1, 2026-11-21).** Opus round 1 found that the production
+`decodeJSONUnchecked` trailing-value rejection (`daemon/internal/control/client.go:1172-1177`) lost
+its only failing arm when the operator rows moved, and that the same sweep had not been run over
+the rest of the moved tests. The fix adds the missing production-side cases and proves each one
+red under a flipped guard (`-overlay` copies outside the worktree, repository untouched):
+
+- `TestClientRejectsIncompleteSuccessResponses` gains the `trailing value` row (`{} {}` through
+  `RegisterSession` → `decodeJSONUnchecked`); mutation `return errors.New(...)` → `return nil` at
+  `client.go:1175` reddens `trailing_value`.
+- `TestMachineClientRejectsOversizedSuccessResponse` (200 + body over `WithMaxResponseBytes`
+  → `requestWithStatus` oversized arm); `if oversized` → `if oversized && false` at
+  `client.go:1059` reddens it.
+- `TestMachineClientTypedErrorPredicatesMatchCodes` (ownership-lost / terminal-grace / unrelated
+  codes through `Dispatch` → `IsOwnershipLost`/`IsTerminalGraceExpired`); flipping either predicate
+  to `RateLimited` reddens it.
+- `TestMachineClientRetryDelayHonorsExplicitZeroRetryAfter` (`Retry-After: 0` → `RetryDelay` stays
+  `(0s, true)`); `seconds >= 0` → `seconds > 0` at `client.go:1267` reddens it.
+- `TestClaimRequiresWorkInputPresenceAndObjectShape` (`validateWork` input presence and object
+  shape through `Claim`); dropping the `HasField("input")` guard reddens it.
+- `TestAcknowledgeCommandRequiresMatchingCommandResource` gains the `unpaired run` row
+  (`validateTaskCommandResource`'s paired run_id/generation check on the retained ack path);
+  `return errors.New("run_id and generation must be null together")` → `return nil` reddens it.
+- `TestValidateTaskCommandResourceRejectsMismatchedExpectedTask` (the `expectedTaskID` branch the
+  relocated operator caller used to reach; production callers pass `""`); neutralising the branch
+  reddens it.
+- `TestSameJSONObjectPreservesNumericPrecision` (retained `sameJSONObject`/`sameJSONValue`/
+  `sameJSONNumber` numeric spellings, large-integer separation, nested members); inverting the
+  `big.Rat` comparison reddens it, and this closes the residual risk below.
+
+Audit method for the sweep: per-moved-test `-covermode=count` profiles at the base revision versus
+one profile of every remaining `control` test at head, keyed by declaration and offset, so a
+production block covered only by moved tests is visible. That method found the seven declarations
+behind the eight cases above; P2-1's trailing-value arm was still covered at head but no longer
+asserted anywhere, so only the mutation exposed it. Every other moved test's production substrate
+is covered and asserted by a retained `control` case (transport and redirect policy by
+`TestClientExecuteProviderActionRedirectAndCancellationAreSingleAttempt` and
+`TestOmOReviewRegressionClientRegistersNativeRuntime`, decode/limit/envelope by the machine and
+provider-action tables, `ValidateSupervisoryPayload`/`validateCommands` by
+`TestSupervisoryCommandRequestAndDispatchPayloads`, `validateTransitionResponse` by
+`TestPausedTransitionValidation`).
+
 ## Evidence plan
 
 Every gate is foreground and sequential; no deadcode run or measurement runs beside a test suite on
@@ -206,11 +247,17 @@ this host.
    As implemented, the qualifier normalization covers the `protocol.`, `contracts.` and `control.`
    token prefixes (the third is the machine `Client` type a moved test helper must qualify), prints
    the go/printer diff of every declaration that is not byte-identical, and compares every
-   base↔head counterpart of the six `control`/`protocol` files, `client_test.go` included: of 315
-   retained declarations, 311 are byte-identical and 4 deliberately changed — the two mixed-table
-   splits (`TestClientProtocolRequests`, `TestClientRejectsIncompleteSuccessResponses`) whose
-   operator rows re-home, and the two retargets (`TestNewClientRejectsInvalidConfiguration`,
-   `TestSupervisoryCommandRequestAndDispatchPayloads`).
+   base↔head counterpart of the six `control`/`protocol` files, `client_test.go` included:
+   re-measured at the review-fix revision, of 315 retained declarations 310 are byte-identical and
+   5 deliberately changed — the two mixed-table splits (`TestClientProtocolRequests`,
+   `TestClientRejectsIncompleteSuccessResponses`) whose operator rows re-home, the two retargets
+   (`TestNewClientRejectsInvalidConfiguration`,
+   `TestSupervisoryCommandRequestAndDispatchPayloads`), and the `unpaired run` row this fix adds to
+   `TestAcknowledgeCommandRequiresMatchingCommandResource`. That set gains 6 declarations
+   (`TestMachineClientOversizedErrorResponseKeepsTypedFallback` and
+   `TestPausedTransitionValidation` from the relocation, four from this fix), and this fix adds two
+   more in `control/validation_test.go` (`TestSameJSONObjectPreservesNumericPrecision`,
+   `TestValidateTaskCommandResourceRejectsMismatchedExpectedTask`).
 4. **Witness-diff proof**: for the five e2e files, every changed line must reproduce the baseline
    line after the qualifier mapping is applied; imports may be added/removed only as the relocation
    requires. Reported as per-file counts of qualifier-only changed lines and the exact import deltas.
@@ -262,5 +309,8 @@ byte-identical); the goal-envelope family (D5/W6-08); ack stages (W3); W2-13's `
   production after the move: both retained call sites (head `validation.go:270`, `:408`) compare a
   payload against the literal `{}`, so no number-bearing value reaches the comparator, and the
   numeric-precision cases moved with `sameCommandPayload` into the e2e package. The helper stays
-  because the contract's opus P0-1 requires the retained chain byte-identical; its semantics are
-  pinned only by the moved cases, not by a retained failing arm.
+  because the contract's opus P0-1 requires the retained chain byte-identical. The review fix pins
+  its semantics with `TestSameJSONObjectPreservesNumericPrecision`, a retained in-package case over
+  `sameJSONObject` (number spellings, `-0`, large-integer separation, nested members), so a future
+  change to the retained helper now fails in `control` even though the operator cases still cover
+  the moved caller.
