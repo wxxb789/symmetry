@@ -111,15 +111,6 @@ defmodule SymmetryControlWeb.Plugs.StrictEvidenceJSON do
   @mutation_methods ~w(POST PUT PATCH DELETE)
 
   @doc """
-  Returns the private connection key used for a captured evidence body.
-
-  The key is public so a caller that needs to inspect the capture does not
-  duplicate an implementation detail as a bare atom.
-  """
-  @spec raw_body_private_key() :: atom()
-  def raw_body_private_key, do: @raw_body_private_key
-
-  @doc """
   Materializes a captured evidence body after authorization has completed.
 
   The decoder retains object order while decoding so duplicate keys can be

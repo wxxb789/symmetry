@@ -1,5 +1,5 @@
 defmodule SymmetryControlWeb.HealthControllerTest do
-  use SymmetryControlWeb.ConnCase, async: false
+  use SymmetryControlWeb.ConnCase, async: true
 
   test "GET /healthz returns an ok status" do
     response = build_conn() |> get("/healthz") |> json_response(200)

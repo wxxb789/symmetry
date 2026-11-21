@@ -1125,13 +1125,7 @@ func (daemon *daemon) markCommandAcknowledgementDelivered(key state.RunKey, ackn
 	keyForCommand := commandKey{run: key, id: acknowledgement.CommandID}
 	daemon.commandReceiptMu.Lock()
 	daemon.mu.Lock()
-	for requestID, tombstones := range daemon.commandRequests {
-		if tombstones == nil {
-			tombstones = make(map[commandKey]struct{})
-		}
-		tombstones[keyForCommand] = struct{}{}
-		daemon.commandRequests[requestID] = tombstones
-	}
+	daemon.commands.receipts.suppress(keyForCommand)
 	daemon.mu.Unlock()
 	daemon.commandReceiptMu.Unlock()
 	var (
@@ -1149,12 +1143,7 @@ func (daemon *daemon) markCommandAcknowledgementDelivered(key state.RunKey, ackn
 	daemon.commandReceiptMu.Lock()
 	defer daemon.commandReceiptMu.Unlock()
 	daemon.mu.Lock()
-	if queued := daemon.queuedCommands[keyForCommand]; queued != nil {
-		queued.delivered = true
-		if queued.completed {
-			delete(daemon.queuedCommands, keyForCommand)
-		}
-	}
+	daemon.commands.markDelivered(keyForCommand)
 	daemon.mu.Unlock()
 	return updated, nil
 }

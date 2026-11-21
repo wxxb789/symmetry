@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	operatorclient "github.com/wxxb789/symmetry/daemon/e2e/internal/operator"
 	"github.com/wxxb789/symmetry/daemon/internal/platform"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 	"github.com/wxxb789/symmetry/daemon/internal/state"
@@ -93,7 +94,7 @@ func TestProductionDaemonCrashResponseLossAndReconnect(t *testing.T) {
 	})
 
 	task := submit(t, operator, daemonRun{profile: profile, workspace: workspace}, "production-crash", "slow")
-	running := waitForTask(t, operator, task.TaskID, 30*time.Second, func(value protocol.Task) bool {
+	running := waitForTask(t, operator, task.TaskID, 30*time.Second, func(value operatorclient.Task) bool {
 		return value.State == "running"
 	})
 	runKey := state.RunKey{RunID: taskRunID(t, running), Generation: taskGeneration(t, running)}
@@ -128,7 +129,7 @@ func TestProductionDaemonCrashResponseLossAndReconnect(t *testing.T) {
 
 	proxy.waitForSecondRegistration(t, 30*time.Second)
 	proxy.waitForReplay(t, 45*time.Second)
-	cancelled := waitForTask(t, operator, task.TaskID, 45*time.Second, func(value protocol.Task) bool {
+	cancelled := waitForTask(t, operator, task.TaskID, 45*time.Second, func(value operatorclient.Task) bool {
 		return value.State == "cancelled" && taskRunID(t, value) == runKey.RunID && taskGeneration(t, value) == runKey.Generation
 	})
 	if taskGeneration(t, cancelled) != runKey.Generation {

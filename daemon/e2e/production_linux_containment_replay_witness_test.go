@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	operatorclient "github.com/wxxb789/symmetry/daemon/e2e/internal/operator"
 	"github.com/wxxb789/symmetry/daemon/internal/authority"
 	"github.com/wxxb789/symmetry/daemon/internal/platform"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
@@ -440,7 +441,7 @@ func runLinuxStopResponseLostCase(t *testing.T, environment e2eEnvironment, daem
 			t.Fatalf("helper after stop receipt replay: %v", err)
 		}
 	}
-	waitForTask(t, operator, task.TaskID, 45*time.Second, func(value protocol.Task) bool { return value.State == "cancelled" })
+	waitForTask(t, operator, task.TaskID, 45*time.Second, func(value operatorclient.Task) bool { return value.State == "cancelled" })
 	evidence.Stage = "stop_receipt_replayed_release_clear"
 	finalSnapshots, finalAbsent := linuxReplayReleasedSnapshot(t, target.StateDir, file.Journal.Key())
 	evidence.JournalSnapshots = append(evidence.JournalSnapshots, finalSnapshots...)
@@ -490,7 +491,7 @@ func runLinuxReleaseResponseLostCase(t *testing.T, environment e2eEnvironment, d
 
 	var (
 		first, second, third           *productionDaemonWitnessProcess
-		task                           protocol.Task
+		task                           operatorclient.Task
 		key                            state.RunKey
 		targetPID, helperPID           int
 		targetIdentity, helperIdentity string
@@ -734,7 +735,7 @@ func runLinuxReleaseResponseLostCase(t *testing.T, environment e2eEnvironment, d
 			t.Fatalf("helper after release replay: %v", err)
 		}
 	}
-	waitForTask(t, operator, task.TaskID, 45*time.Second, func(value protocol.Task) bool { return value.State == "cancelled" })
+	waitForTask(t, operator, task.TaskID, 45*time.Second, func(value operatorclient.Task) bool { return value.State == "cancelled" })
 	evidence.Stage = "release_replayed_clear"
 	finalSnapshots, finalAbsent := linuxReplayReleasedSnapshot(t, target.StateDir, key)
 	evidence.JournalSnapshots = append(evidence.JournalSnapshots, finalSnapshots...)
@@ -1206,7 +1207,7 @@ func runLinuxHelperCrashReplayWitness(t *testing.T, environment e2eEnvironment, 
 			t.Fatalf("helper after receipt replay: %v", err)
 		}
 	}
-	waitForTask(t, operator, task.TaskID, 45*time.Second, func(value protocol.Task) bool { return value.State == "cancelled" })
+	waitForTask(t, operator, task.TaskID, 45*time.Second, func(value operatorclient.Task) bool { return value.State == "cancelled" })
 	evidence.Stage = "replayed_receipt_released_and_cleared"
 	finalSnapshots, finalAbsent := linuxReplayReleasedSnapshot(t, target.StateDir, key)
 	evidence.JournalSnapshots = append(evidence.JournalSnapshots, finalSnapshots...)

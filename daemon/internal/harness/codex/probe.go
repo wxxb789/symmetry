@@ -5,12 +5,8 @@ package codex
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -50,109 +46,25 @@ type osCommandRunner struct {
 	boundedCommand boundedCommand
 }
 
-func (runner osCommandRunner) runBoundedCommand(ctx context.Context, invocation execution.Invocation) ([]byte, error) {
+// invokeBoundedCommand is the runner seam the shared probe helpers call back
+// into: an injected boundedCommand keeps a probe fixture deterministic, and the
+// zero value falls back to the production bounded command.
+func (runner osCommandRunner) invokeBoundedCommand(ctx context.Context, invocation execution.Invocation, limit int) ([]byte, error) {
 	if runner.boundedCommand != nil {
-		return runner.boundedCommand(ctx, invocation, probeOutputLimitBytes)
+		return runner.boundedCommand(ctx, invocation, limit)
 	}
-	return execution.RunBoundedCommand(ctx, invocation, probeOutputLimitBytes)
-}
-
-func runProbe(ctx context.Context, run func(context.Context) ([]byte, error)) ([]byte, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	probeContext, cancel := context.WithTimeout(ctx, probeTimeout)
-	defer cancel()
-	output, err := run(probeContext)
-	if contextErr := ctx.Err(); contextErr != nil {
-		return nil, contextErr
-	}
-	if contextErr := probeContext.Err(); contextErr != nil {
-		return nil, contextErr
-	}
-	return output, err
-}
-
-func runSchemaProbe(ctx context.Context, run func(context.Context) (string, error)) (string, error) {
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	probeContext, cancel := context.WithTimeout(ctx, probeTimeout)
-	defer cancel()
-	digest, err := run(probeContext)
-	if contextErr := ctx.Err(); contextErr != nil {
-		return "", contextErr
-	}
-	if contextErr := probeContext.Err(); contextErr != nil {
-		return "", contextErr
-	}
-	return digest, err
+	return execution.RunBoundedCommand(ctx, invocation, limit)
 }
 
 func (runner osCommandRunner) Run(ctx context.Context, executable string, args ...string) ([]byte, error) {
-	environment, err := execution.BuildEnvironment()
-	if err != nil {
-		return nil, err
-	}
-	return runner.runBoundedCommand(ctx, execution.Invocation{
+	return harness.RunProbeCommand(ctx, execution.Invocation{
 		Program: executable,
 		Args:    args,
-		Env:     environment,
-	})
+	}, probeOutputLimitBytes, runner.invokeBoundedCommand)
 }
 
-func (runner osCommandRunner) SchemaDigest(ctx context.Context, executable string) (digest string, resultErr error) {
-	if ctx == nil {
-		return "", errors.New("codex schema probe context must not be nil")
-	}
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	directory, err := os.MkdirTemp("", "symmetry-codex-schema-")
-	if err != nil {
-		if contextErr := ctx.Err(); contextErr != nil {
-			return "", contextErr
-		}
-		return "", fmt.Errorf("create Codex schema temp directory: %w", err)
-	}
-	defer func() {
-		if cleanupErr := os.RemoveAll(directory); cleanupErr != nil {
-			resultErr = errors.Join(resultErr, fmt.Errorf("remove Codex schema temp directory: %w", cleanupErr))
-		}
-	}()
-	environment, err := execution.BuildEnvironment()
-	if err != nil {
-		return "", err
-	}
-	output, err := runner.runBoundedCommand(ctx, execution.Invocation{
-		Program: executable,
-		Args:    []string{"app-server", "generate-json-schema", "--out", directory},
-		Env:     environment,
-	})
-	if contextErr := ctx.Err(); contextErr != nil {
-		return "", contextErr
-	}
-	if err != nil {
-		return "", fmt.Errorf("generate Codex app-server schema: %w: %s", err, strings.TrimSpace(string(output)))
-	}
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	bundle, err := os.ReadFile(filepath.Join(directory, "codex_app_server_protocol.v2.schemas.json"))
-	if contextErr := ctx.Err(); contextErr != nil {
-		return "", contextErr
-	}
-	if err != nil {
-		return "", fmt.Errorf("read generated Codex v2 schema: %w", err)
-	}
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	digestBytes := sha256.Sum256(bundle)
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	return "sha256:" + hex.EncodeToString(digestBytes[:]), nil
+func (runner osCommandRunner) SchemaDigest(ctx context.Context, executable string) (string, error) {
+	return harness.CodexSchemaDigest(ctx, executable, probeOutputLimitBytes, runner.invokeBoundedCommand)
 }
 
 // ExecutableDigest returns the SHA-256 of the exact executable bytes. The
@@ -216,7 +128,7 @@ func Probe(ctx context.Context, executable string, runners ...CommandRunner) (Pr
 			"Codex app-server native session behavior is unverified",
 		),
 	}
-	versionOutput, err := runProbe(ctx, func(probeContext context.Context) ([]byte, error) {
+	versionOutput, err := harness.RunBoundedProbe(ctx, probeTimeout, func(probeContext context.Context) ([]byte, error) {
 		return runner.Run(probeContext, executable, "--version")
 	})
 	if err != nil {
@@ -237,7 +149,7 @@ func Probe(ctx context.Context, executable string, runners ...CommandRunner) (Pr
 	if versionErr != nil {
 		return result, versionErr
 	}
-	helpOutput, err := runProbe(ctx, func(probeContext context.Context) ([]byte, error) {
+	helpOutput, err := harness.RunBoundedProbe(ctx, probeTimeout, func(probeContext context.Context) ([]byte, error) {
 		return runner.Run(probeContext, executable, "app-server", "--help")
 	})
 	if err != nil {
@@ -257,7 +169,7 @@ func Probe(ctx context.Context, executable string, runners ...CommandRunner) (Pr
 	schemaRunner, schemaCaptured := runner.(SchemaRunner)
 	digest := ""
 	if schemaCaptured {
-		digest, err = runSchemaProbe(ctx, func(probeContext context.Context) (string, error) {
+		digest, err = harness.RunBoundedProbe(ctx, probeTimeout, func(probeContext context.Context) (string, error) {
 			return schemaRunner.SchemaDigest(probeContext, executable)
 		})
 		if err != nil {
