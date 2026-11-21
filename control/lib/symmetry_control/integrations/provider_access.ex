@@ -22,9 +22,6 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
   @max_recovery_jobs 4
   @default_recovery_interval_ms 5_000
   @default_dispatch_timeout_ms 60_000
-  # Expected rows a fresh claim re-verifies after locking: the lock itself
-  # derived the resource and its connection, so those two are not re-compared.
-  @claim_expected [:project_id, :work_item_id, :task_id, :run_id, :runtime_id]
 
   # One lock-order authority for the intent contexts. The documented order
   # (docs/design/data.md:347) is Project -> Goal -> WorkItems -> Tasks -> Runs
@@ -1286,7 +1283,7 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
       %{goal_id: goal_id} when is_binary(goal_id) ->
         IntentContext.goal_lock(
           %{expected | goal_id: goal_id},
-          Map.take(expected, @claim_expected)
+          Map.drop(expected, [:resource_id, :connection_id])
         )
 
       _legacy ->
@@ -2085,8 +2082,8 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
     ])
   end
 
-  # The Goal authority a claim, a recovery and a fresh intent re-run against the
-  # rows they locked, in one order.
+  # The Goal authority a claim and an unstarted-intent recovery re-run against
+  # the rows they locked, in one order.
   defp validate_goal_dispatch!(intent, context) do
     validate_persisted_intent_execution!(intent, context)
     validate_bound_resource!(context)

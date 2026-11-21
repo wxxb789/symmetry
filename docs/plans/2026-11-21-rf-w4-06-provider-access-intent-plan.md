@@ -96,7 +96,8 @@ defp lock_intent_context(intent) do
 
   case intent_goal_id(intent) do
     goal_id when is_binary(goal_id) ->
-      IntentContext.goal_lock(%{ids | goal_id: goal_id, project_id: goal_project_id(goal_id)}, ids)
+      goal_ids = %{ids | goal_id: goal_id, project_id: goal_project_id(goal_id)}
+      IntentContext.goal_lock(goal_ids, ids)
 
     _legacy ->
       IntentContext.legacy_lock(ids)
@@ -105,14 +106,17 @@ end
 
 defp lock_new_intent_context(claims, resource_id) do
   ids = locate_intent_context(claims) || Repo.rollback(:ownership_lost)
-  claim_ids = claim_ids(ids, claims, resource_id)
+  expected = claim_ids(ids, claims, resource_id)
 
   case ids do
     %{goal_id: goal_id} when is_binary(goal_id) ->
-      IntentContext.goal_lock(%{claim_ids | goal_id: goal_id}, Map.take(claim_ids, @claim_expected))
+      IntentContext.goal_lock(
+        %{expected | goal_id: goal_id},
+        Map.drop(expected, [:resource_id, :connection_id])
+      )
 
     _legacy ->
-      IntentContext.legacy_lock(claim_ids)
+      IntentContext.legacy_lock(expected)
   end
 end
 ```
@@ -256,3 +260,40 @@ Postgres cap); no measurement harness runs concurrently with it.
   family and the recovery policy stay out) bound the collapse well above the program plan's
   −150…−250 estimate; per D2 that number is report-only.
 - The env-gated broker e2e and its environmental analysis are recorded in the stage answer.
+
+### Apply-stage hygiene + gate refresh (2026-11-21, apply stage; conductor-accepted simplify F1–F3)
+
+- Tree change on top of the bytes above: `@claim_expected` deleted (its five keys are exactly the
+  first five `IntentContext.@link_fields` entries, so the subset it expressed was unchecked; the
+  fresh-claim goal branch now passes `Map.drop(expected, [:resource_id, :connection_id])`, which
+  skips the two rows the lock derived itself), the `validate_goal_dispatch!/2` comment now names its
+  two call sites, and the API sketch above was aligned with the shipped names. No test, assertion,
+  evidence row or documented boundary changed.
+- Equivalence evidence for the deleted attribute (no assertion changed, so per the gates clause no
+  mutation run was needed): the comparison sequence `validate_links!/3` derives from the two maps is
+  identical for the `claim_ids/3` shape, that same map after `%{expected | goal_id: goal_id}`, the
+  `intent_ids/1` shape, an all-nil-links map and a sparse map — project/work_item/task/run/runtime
+  compared, resource/connection skipped, nil values still compared; the dropped map's extra
+  `goal_id` key is never read (`@link_fields` drives the loop). No lock, branch or comparison value
+  changed, so the lock-path coverage probe counts above still stand.
+- Superseding numbers for this tree: sha256
+  `342634d6ecfa9a8e9ba5fd5b01c6ea1022c1e8e4b5dbbeccd4d6e5bac4650990`; the file is 2,825 L; the
+  file's slice diff vs `3ccc62f5` is +198/−219 (−21 net). The `031c579c…` hash, 2,828 L and −18 net
+  above describe the pre-hygiene bytes.
+- Gates re-run on the hygiene bytes: `format --check-formatted` 0 (0 bytes), `MIX_ENV=test compile
+  --warnings-as-errors` 0, targeted 13 (9 passed + 4 env-gated skips) with the test-name/state set
+  identical to the pre-hygiene run (`diff` empty), controller 79 passed (same `diff` empty), credo
+  `--strict` file count 40 (pre-hygiene 40, base 42 — no rise; the project totals moved with the
+  merged #162 `read_model.ex` rewrite and are not comparable across the merge), `git diff --check`
+  0, citation gate 0 ("nothing to check").
+- Broker e2e (CI way, prebuilt daemon/agent): the first run gave 3 passed + 1 failed on "Azure
+  Boards work item reaches Azure Repos, review, and Pipelines projection" (3.1 s versus 7.8–22.1 s
+  for its siblings, in the same loaded window where the first credo run lost three files to parse
+  timeouts); re-run alone on the same bytes: 4 passed (34.6 s). Classified a load flake, not a
+  regression.
+- Not applied (recorded, not silently dropped): the proposed controller case pinning
+  `IntentContext` lock order. It needs
+  `control/test/symmetry_control_web/controllers/provider_action_controller_test.exs`, outside the
+  owned set (a new focused case lands in one of the four named oracle files; E8's disposition for a
+  lock path the oracles do not reach is "reported, not fixed here"). The gap stays a reported
+  finding.
