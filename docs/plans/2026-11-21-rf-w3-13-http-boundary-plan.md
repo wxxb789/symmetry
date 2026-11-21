@@ -42,7 +42,8 @@ Census at the base (whole frontend tree, `git grep`): `postPortalCommand` 2 in `
 (`:940`, `:944`) + 2 in `attention.tsx` (`:8`, `:178`) + 2 in `api.test.ts` (`:3`, `:213`);
 `CommandErrorBody` 2 in `api.ts` (`:906`, `:995`); `function refusal` 1 (`:994`);
 `function parseRefusal` 1 (`:568`); `TextDecoder` 2 (`:533`, `:570`); `response.text()` 1 code
-use (`:975`) + 1 comment (`:530`); `decodeBody` 23 call sites; no `AbortController` in
+use (`:975`) + 1 comment (`:530`); `decodeBody` 22 call sites + its own definition (`:531`);
+no `AbortController` in
 `api.ts`. Callers: `goals/detail.tsx:147`, `:198`, `:205` (`postGoalCommand`);
 `attention.tsx:178` (`postPortalCommand` → `/portal/api/projects/{id}/goals`). The contract's
 `attention.tsx:177`/`detail.tsx:146,197,204` are the pre-W3-12 coordinates (W3-12 added one
@@ -58,7 +59,9 @@ Oracle pins that must not move (all re-read at the base):
   `postPortalCommand` creation call at `:213`), redirect as expiry `:217-222`, 200 without a
   receipt `:225-229`, receipt members `:230-234`, guidance map `:236-243`; control-command
   described refusal `:270-275`; undescribed control 403 `:277-285`; chat replay refusal `:401-408`.
-  `api.test.ts` constructs no `MutationRefused` and pins no `details` (verified: no match).
+  At the base `api.test.ts` constructs no `MutationRefused` and pins no `details` (verified: no
+  match); the final tree adds one `details` assertion at `:306`, a second witness for
+  mutation (b) beside `goal-attention.test.tsx:322`.
 - `goal-attention.test.tsx` 29 cases: stale conflict witnesses `:285-328` (`/version 9,
   revision 3/` at `:322`, rendered from `refusal.details.current_version/current_revision`),
   goal-creation refusal `:156-187` (described 422 → "goal contract is invalid
@@ -154,14 +157,15 @@ moves.
 | D1 | undescribed 403 on a command POST (body that is not the refusal envelope, e.g. `{}`) | `mutationStatusError(403)` → `Forbidden` "This change was refused. If you signed in elsewhere, refresh the page and try again." for **both** command functions (was: "You do not have access to this workspace." on the goal path). Authorized change. | new `api.test.ts` case (both functions); mutation (e) |
 | D2 | described refusal | one parser: reads/control → `ServerRefusal{status, code, message, fields}`; Goal commands → `MutationRefused(status, code, message, details)`, same members as today | existing control `:270`, chat `:401`, creation `goal-attention.test.tsx:156`; new `details` case |
 | D3 | empty `code`/`message` | `NonEmptyString` rejects → `null` → status mapping (`mutationStatusError` for writes). For a command 403 that is the D1 message, i.e. an empty-code refusal now degrades instead of rendering an empty code | new `api.test.ts` case |
-| D4 | `fields` sent on a command refusal | ignored by the command path exactly as today; `ServerRefusal.fields` keeps the read member | new `details` case asserts `fields` is absent from `details` |
+| D4 | a type-conforming `fields` sent on a command refusal | ignored by the command path exactly as today; `ServerRefusal.fields` keeps the read member. A *wrong-typed* cross-surface member is stricter than either half: the whole decode fails and the status mapping answers — unreachable from the current server (`goal_error_fields/1` takes only the command members; read `fields` come from `changeset_errors`) | new `details` case asserts `fields` is absent from `details` |
 | D5 | body decode | fatal UTF-8 on every path (one `TextDecoder` site): an OK write whose body is invalid UTF-8 raises the unreadable-body `UnexpectedResponse`, never a U+FFFD success | new invalid-UTF-8 write case; mutation (a) |
 | D6 | 2xx without a receipt | non-transient `UnexpectedResponse` (message unchanged) | existing `:225-229` |
 | D7 | 401 / 302 / 303 / `opaqueredirect` | `Unauthenticated` "Your session has ended. Sign in to continue." on every path | existing `:208-223`, `goal-attention.test.tsx:447`; mutation (c) |
 | D8 | other statuses | `statusError`/`mutationStatusError` mapping unchanged (D1 excepted) | existing control 403 `:277`; mutation (d) |
-| D9 | fetch/body-read rejection | `Network` "Cannot reach the server. Check your connection and try again." in both paths; the frozen envelope is untouched (the same `JSON.stringify(init.body)` bytes) | existing `Network` cases; `detail.tsx` frozen-envelope tests |
+| D9 | fetch/body-read rejection | `Network` "Cannot reach the server. Check your connection and try again." in both paths; the frozen envelope is untouched (the same `JSON.stringify(init.body)` bytes). The fetch half was identical at the base; the Goal path's *body-read* half is new (the base escaped it uncaught — recorded as D12), and the contract's "verified identical at `:614` and `:964-966`" cites the fetch catch only, so D9's premise needs that caveat when the contract is archived | existing `Network` cases; `detail.tsx` frozen-envelope tests; the D12 erroring-body write case |
 | D10 | failed GET | reads no body (the GET branch reads `arrayBuffer()` only when `ok`) | existing `:100-105` body-read failure case |
-| D11 | expiry answer whose body cannot be read (apply-stage record 2026-11-21, not a contract row) | the 302/303/`opaqueredirect`/401 classification runs before the body read on every path, so an expiry answer is classified from its status alone and its body is never read: an unreadable one cannot produce `Network`, and a body-read failure under any other status keeps the D9 mapping | new `api.test.ts` case "classifies a 401 write's expiry from its status when its body cannot be read" |
+| D11 | expiry answer whose body cannot be read (apply-stage record 2026-11-21, not a contract row) | the 302/303/`opaqueredirect`/401 classification runs before the body read on every path, so an expiry answer is classified from its status alone and its body is never read: an unreadable one cannot produce `Network`, and a body-read failure under any other status keeps the D9 mapping | `api.test.ts` cases "classifies a 401 write's expiry from its status when its body cannot be read", "classifies a redirect write's expiry from its status when its body cannot be read" (302) and "classifies an opaqueredirect write's expiry from its type before the body" (fix r1). Conductor decision outstanding: ratify D11 as a contract row (amend D7/D9) when archiving, or reject it |
+| D12 | a Goal command/creation whose response body cannot be read (fix r1, not a contract row) | `Network` "Cannot reach the server. Check your connection and try again." from the same catch a failed fetch uses, and the frozen envelope keeps its `mutation_id` (`detail.tsx`'s `outcomeUnknown` keeps the attempt for a replay; at the base the stream error escaped `postPortalCommand` uncaught at `:975`, outside its fetch-only try at `:951-966`, and released the attempt) | new `api.test.ts` case "keeps a goal write's unreadable body a transport failure that preserves the attempt" (409 refusal status + 200 accepted status); mutation (h) |
 
 Additional invariants: the write request sends the same method, headers (`Accept`,
 `content-type`, `x-csrf-token`), `credentials: "same-origin"`, `cache: "no-store"`,
@@ -179,8 +183,9 @@ today, so `detail.tsx:198`'s truthiness check and `attention.tsx`'s notice logic
   construct positionally (`new ServerRefusal({status, code, message, fields})`, 8 sites). (C)
   forces the parser's result to survive as data through the Effect and moves the "exactly the
   old members" mapping out of the boundary. (A) keeps one parser and one mapping, costs one
-  argument at exactly the two command call sites, and leaves the 24 other call sites
-  byte-identical. Chosen: **(A)**.
+  argument at exactly one new call site — the shared `goalCommand` body both command functions
+  delegate to (`api.ts:975`) — and leaves the base's 29 read/control/chat `request()` call
+  sites byte-identical (30 total at the final tree). Chosen: **(A)**.
 - **D2 — the new named creation function is `postGoalCreation(fetcher, csrfToken, projectId,
   envelope)`.** It mirrors `postGoalCommand`'s shape and the server path
   (`/portal/api/projects/{id}/goals`), and matches the two callers' vocabulary ("Goal
@@ -228,7 +233,7 @@ host).
 | full suite | `pnpm --pm-on-fail=ignore --filter @symmetry/frontend test` | the whole frontend suite |
 | deletion greps | `git grep -nE "CommandErrorBody\|postPortalCommand" frontend/src` → 0; `git grep -nE "\brefusal\(" frontend/src` → 0; `git grep -n "TextDecoder" frontend/src/services/api.ts` → 1; `git grep -n "response\.text()" frontend/src` → comment only | clause 1's "gone" set and "one fatal body decode" |
 | mutation (a) | `goalReceipt` decodes with a non-fatal `TextDecoder`, run `api.test.ts` | red: the new invalid-UTF-8 write case |
-| mutation (b) | drop the command members from `MutationRefused.details`, run `goal-attention.test.tsx` | red: `:322` (`/version 9, revision 3/`) |
+| mutation (b) | drop the command members from `MutationRefused.details`, run `goal-attention.test.tsx` | red: `goal-attention.test.tsx:322` (`/version 9, revision 3/`); `api.test.ts:306` (the `details` `toEqual`) reddens on the same flip (fix-stage re-run below) |
 | mutation (c) | replace the 302/303 branch with `statusError(status)`, run `api.test.ts` | red: the redirect-as-expiry case `:217-222` |
 | mutation (d) | make `mutationStatusError(403)` return `statusError(403)`, run `api.test.ts` | red: the control-command 403 case `:277` |
 | mutation (e) | make the Goal command surface use the server 403 mapping, run `api.test.ts` | red: the new undescribed-command-403 pin |
@@ -341,9 +346,12 @@ carries strictly more members than either of the two it replaces. Reported, not 
 ### Closeout state
 
 Three tracked files changed (the owned set) plus this plan file (new). `docs/TODO.md` has no
-entry naming this slice, the deleted names or `api.ts` line numbers, so it is unchanged; no
-other document cites `api.ts` by line number (the only `api.ts:` citations in the tree live in
-historical `docs/evaluations/model-routing/*` and `docs/evidence/goal-0007c-*` records). The
+entry naming this slice, the deleted names or `api.ts` line numbers, so it is unchanged. No
+other document cites a *moved* `api.ts` line: the fix-stage census found
+`docs/plans/2026-11-21-rf-w1-10-frontend-eslint-plan.md:37` citing `api.ts:121`/`:122`, both
+before this slice's first hunk at `:289`, so it is unaffected; the remaining `api.ts:`
+citations live in historical `docs/evaluations/model-routing/*` and
+`docs/evidence/goal-0007c-*` records. The
 contract file is left unchanged for the conductor to archive. Nothing is committed.
 
 ## Apply-stage note (2026-11-21, simplify apply)
@@ -404,3 +412,65 @@ suite passed again on the restored bytes.
 | --- | --- | --- | --- |
 | (f) | `postGoalCreation` drops `encodeURIComponent(projectId)` | `vitest run src/services/api.test.ts -t "carries an accepted write's receipt on both command paths"` | exit 1, 1 failed / 41 skipped — `expected '/portal/api/projects/p x/goals' to be '/portal/api/projects/p%20x/goals'` |
 | (g) | the early `status === 401` classification removed (the option-(b) shape) | `vitest run src/services/api.test.ts -t "classifies a 401 write's expiry from its status"` | exit 1, 1 failed / 41 skipped — `expected Network: Cannot reach the server… to be an instance of Unauthenticated` |
+
+## Fix-stage note (2026-11-21, review r1)
+
+Conductor brief: the review's findings, fixed inside this contract's owned set. This stage
+touched only `frontend/src/services/api.test.ts` (three new pins) and this plan; no production
+file moved, so every production coordinate above stands. `git diff origin/main` carries no
+profile-directory path.
+
+| # | disposition | what changed / why valid |
+| --- | --- | --- |
+| F1 | FIXED (record + pin) | the new **D12** row records the base divergence (the Goal path's body-read rejection was an uncaught stream error) and the D9 row now carries its caveat; the goal path is pinned by the new erroring-body case (409 + 200 → `Network`, exact message). The contract file is outside the owned set, so D9's wording there (`verified identical at :614 and :964-966`) is left for the conductor to amend at archiving. The finding's optional detail-level `mutation_id` assertion was not added (scope). |
+| F2 | FIXED (erratum) | the implement answer is outside the owned set; the erratum below records the false grep row and the stage-scoping its counts need. |
+| F3 | FIXED (pin) + conductor decision outstanding | the D11 pin now covers 302 and a hand-built `opaqueredirect` write (unreadable/absent body → `Unauthenticated`); ratifying D11 as a contract row (amending D7/D9) remains the conductor's archiving decision, restated in the D11 row. |
+| F4 | FIXED (record) | `decodeBody` count corrected (22 call sites + its definition); the "24 other call sites" claim corrected (one new call site at `api.ts:975`, the base's 29 unchanged); the `api.ts` line-citation claim corrected with the W1-10 citation (`:121`/`:122`, before the first hunk at `:289`); the `api.test.ts:306` second witness for mutation (b) cross-referenced (its flip was re-run). |
+| F5 | FIXED (record) | D4 now reads "a type-conforming `fields`" and records the wrong-typed cross-surface strictness with its unreachability (`goal_error_fields/1`; read `fields` come from `changeset_errors`). |
+
+### Erratum for the implement-stage artifact (F2)
+
+`symmetry-rf-w3-13-http-boundary-implement/answer.md:24` (and its JSON gate row) records
+`git grep -n 'new AbortController' -- frontend/src/services` as exit 1 with 0 matches. That
+scope contains `api.test.ts` (29 such lines at the base, 31 at that stage's tree), so the row's
+exit code and count are false; only `-- frontend/src/services/api.ts` yields exit 1. Its other
+counts (`api.ts` 1,042, `api.test.ts` 472, 34 cases, focused 159, full 528) were true of that
+stage's tree and are stage-scoped; the live values are the table below.
+
+### Counts after the fix (single source; supersedes the apply note's refreshed table)
+
+| value | apply note | now |
+| --- | --- | --- |
+| `api.test.ts` LOC | 503 | **549** (three new cases) |
+| `api.test.ts` declared cases | 36 | **39** |
+| focused suites | 3 files / 161 tests | **3 files / 164 tests** |
+| full suite | 21 files / 530 tests | **21 files / 533 tests** |
+| `frontend/src/services/api.ts` | 1,039 | **1,039** (untouched by this stage) |
+| `new AbortController` in `frontend/src/services` | 31 (all `api.test.ts`) | **31** (all `api.test.ts`; the three pins add none) |
+
+### Gates (fix r1, foreground, serialized; no suite beside another)
+
+| gate | command | exit | counts |
+| --- | --- | ---: | --- |
+| typecheck | `pnpm --pm-on-fail=ignore typecheck` (in `frontend/`) | 0 | `tsc --noEmit`, no output |
+| lint | `pnpm --pm-on-fail=ignore lint` (in `frontend/`) | 0 | 227 problems (0 errors, 227 warnings); `--max-warnings 229` untouched |
+| focused suites | `pnpm --pm-on-fail=ignore exec vitest run src/services/api.test.ts src/features/goals/goal-attention.test.tsx src/app/application.test.ts` | 0 | 3 files / 164 tests passed, 44.22 s |
+| full suite | `pnpm --pm-on-fail=ignore test` (in `frontend/`) | 0 | 21 files / 533 tests passed, 64.34 s (captured re-run; see the disclosure below) |
+| touched suite alone | `… exec vitest run src/services/api.test.ts` | 0 | 45 passed |
+
+Gate-hygiene disclosure: the first post-fix full-suite run exited 1 while the host ran ~6×
+slower than the greens (136 s wall, jsdom init 411 s tracked); that run's output was truncated
+by this stage's own `tail` before capture, so the failing test is unnamed. Two subsequent full
+runs exited 0 (the fix's three new tests pass in the focused and `api.test.ts` runs), and the
+red was not reproduced. Flagged for the conductor's CI as a possible contention flake, not
+attributed to a named test.
+
+### New-pin flips (fix r1; each applied alone, run, reverted; sha256 restored)
+
+| flip | applied mutation | witness | result |
+| --- | --- | --- | --- |
+| (h) | the body-read catch answers `unreadableBody(response.status)` instead of `unreachable` | `api.test.ts -t "keeps a goal write's unreadable body a transport failure"` | exit 1, 1 failed / 44 skipped — `expected UnexpectedResponse … { …(3) } to be an instance of Network` |
+| (i) | the 302/303/`opaqueredirect` expiry branch removed (the option-(b) shape for redirects) | `api.test.ts -t "classifies a redirect"` and `-t "classifies an opaqueredirect"` | exit 1 — 2 failed (existing redirect-as-expiry → `UnexpectedResponse`; the new 302 pin → `Network`) and 1 failed (the new `opaqueredirect` pin → `Network`) |
+| (j) | mutation (b) re-run: `parseRefusal` passes `{}` as `MutationRefused.details` | `api.test.ts -t "carries a described command refusal"`; `goal-attention.test.tsx -t "sends the served expected version and revision"` | exit 1 — 1 failed (`expected {} to deeply equal { current_version: 9, …(3) }`, the second witness) and 1 failed (`Unable to find … /version 9, revision 3/` at `:322`) |
+
+`sha256sum -c` over `frontend/src/services/api.ts` printed OK after every revert.

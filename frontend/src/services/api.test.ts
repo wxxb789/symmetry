@@ -334,6 +334,52 @@ describe("goal command boundary", () => {
     const prototype = new ServerRefusal({ status: 409, code: "constructor", message: "resource changed", fields: null });
     expect(refusalNotice(prototype, guidance)).toBe("resource changed (constructor)");
   });
+
+  it("keeps a goal write's unreadable body a transport failure that preserves the attempt", async () => {
+    // The write path reads its refusal from the body, so a body that never
+    // arrives describes nothing: the attempt's fate stays unknown through the
+    // same catch a failed fetch uses. At the base this rejection escaped
+    // `postPortalCommand` uncaught, so only the shared boundary answers Network
+    // (D12); `detail.tsx`'s `outcomeUnknown` therefore keeps the frozen
+    // envelope for a replay instead of releasing it.
+    const refusalFetcher = vi.fn<typeof fetch>().mockImplementation(() => Promise.resolve(new Response(
+      new ReadableStream({ start(controller) { controller.error(new Error("body read failed")); } }),
+      { status: 409 },
+    )));
+    const refused = await postGoalCommand(refusalFetcher, "csrf", goalId, envelope).then(() => null, (error: unknown) => error);
+    expect(refused).toBeInstanceOf(Network);
+    expect(refused).toMatchObject({ message: "Cannot reach the server. Check your connection and try again." });
+    expect(refused).not.toBeInstanceOf(MutationRefused);
+    // The accepted answer's body rejects through the same catch.
+    const acceptedFetcher = vi.fn<typeof fetch>().mockImplementation(() => Promise.resolve(new Response(
+      new ReadableStream({ start(controller) { controller.error(new Error("body read failed")); } }),
+      { status: 200 },
+    )));
+    const lost = await postGoalCreation(acceptedFetcher, "csrf", "p1", { schema_version: "symmetry.goal_create.v1" }).then(() => null, (error: unknown) => error);
+    expect(lost).toBeInstanceOf(Network);
+    expect(lost).toMatchObject({ message: "Cannot reach the server. Check your connection and try again." });
+  });
+
+  it("classifies a redirect write's expiry from its status when its body cannot be read", async () => {
+    // D11's 302 half: the expiry classification runs before the body read, so
+    // an unreadable redirect body cannot become a transport failure.
+    const body = new ReadableStream({ start(controller) { controller.error(new Error("body read failed")); } });
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(body, { status: 302 }));
+    const failure = await postGoalCommand(fetcher, "csrf", goalId, envelope).then(() => null, (error: unknown) => error);
+    expect(failure).toBeInstanceOf(Unauthenticated);
+    expect(failure).toMatchObject({ message: "Your session has ended. Sign in to continue." });
+    expect(failure).not.toBeInstanceOf(Network);
+  });
+
+  it("classifies an opaqueredirect write's expiry from its type before the body", async () => {
+    // A hand-built opaqueredirect carries no readable body at all: the type
+    // check must answer from the type alone, or this input surfaces as Network.
+    const opaque = { type: "opaqueredirect", status: 0, ok: false } as unknown as Response;
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(opaque);
+    const failure = await postGoalCommand(fetcher, "csrf", goalId, envelope).then(() => null, (error: unknown) => error);
+    expect(failure).toBeInstanceOf(Unauthenticated);
+    expect(failure).toMatchObject({ message: "Your session has ended. Sign in to continue." });
+  });
 });
 
 describe("control command boundary", () => {
