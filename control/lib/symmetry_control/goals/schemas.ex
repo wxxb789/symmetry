@@ -798,9 +798,7 @@ defmodule SymmetryControl.Goals.WorkOutcome do
     |> validate_number(:goal_revision, greater_than: 0)
     |> validate_length(:reason, min: 1, max: 4_000)
     |> validate_inclusion(:disposition, @dispositions)
-    |> validate_change(:candidate_subject, fn :candidate_subject, value ->
-      if is_map(value), do: [], else: [candidate_subject: "must be an object"]
-    end)
+    |> ChangesetValidators.validate_map(:candidate_subject)
     |> ChangesetValidators.validate_digest(:subject_hash)
     |> validate_evidence_ids()
     |> foreign_key_constraint(:goal_id, name: :work_outcomes_goal_revision_fkey)
@@ -1366,8 +1364,8 @@ defmodule SymmetryControl.Goals.GoalExternalWait do
     |> validate_number(:check_seq, greater_than_or_equal_to: 0)
     |> validate_length(:external_ref, min: 1, max: 1_000)
     |> validate_inclusion(:state, @states)
-    |> validate_source_ref()
-    |> validate_result()
+    |> ChangesetValidators.validate_map(:source_ref)
+    |> ChangesetValidators.validate_map(:result)
     |> validate_subject()
     |> ChangesetValidators.validate_digest(:subject_hash)
     |> validate_schedule()
@@ -1424,18 +1422,6 @@ defmodule SymmetryControl.Goals.GoalExternalWait do
     |> change()
     |> cast(attrs, @identity_fields ++ [:next_check_at, :state, :receipt_event_id, :check_seq])
     |> ChangesetValidators.reject_changes("external wait history")
-  end
-
-  defp validate_source_ref(changeset) do
-    validate_change(changeset, :source_ref, fn :source_ref, value ->
-      if is_map(value), do: [], else: [source_ref: "must be an object"]
-    end)
-  end
-
-  defp validate_result(changeset) do
-    validate_change(changeset, :result, fn :result, value ->
-      if is_map(value), do: [], else: [result: "must be an object"]
-    end)
   end
 
   defp validate_subject(changeset) do

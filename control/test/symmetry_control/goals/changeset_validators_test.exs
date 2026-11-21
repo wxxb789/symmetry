@@ -1,15 +1,14 @@
 defmodule SymmetryControl.Goals.ChangesetValidatorsTest do
   @moduledoc """
-  Byte-exact pins for the validation messages the goal schema modules produce.
-
-  Written before rf-w2-05 extracts the shared validators
-  (`SymmetryControl.Goals.ChangesetValidators`): every message asserted here must
-  be byte-identical on the base revision and after the extraction, and the
-  accept/reject outcome per drive must not change. Each drive calls the schema
-  module's own public changeset function (`changeset/2`, `resolve_changeset/2` or
-  `immutable_changeset/2`); where `cast/3` rejects the malformed value first (the
-  `:map` fields), the drive pre-seeds the change on the changeset so the pin
-  records the validator's own message rather than Ecto's `"is invalid"`.
+  Byte-exact pins for the validation messages the goal schema modules produce
+  and the accept/reject outcome of each drive: the digest, object and
+  immutability tables assert the exact message bytes on rejection, the
+  valid-digest drive asserts acceptance, and the no-change drive asserts
+  silence. Each drive calls the schema module's own public changeset function
+  (`changeset/2`, `resolve_changeset/2` or `immutable_changeset/2`); where
+  `cast/3` rejects the malformed value first (the `:map` fields), the drive
+  pre-seeds the change on the changeset so the pin records the validator's own
+  message rather than Ecto's `"is invalid"`.
   """
   use ExUnit.Case, async: true
 

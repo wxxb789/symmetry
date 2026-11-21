@@ -73,12 +73,14 @@ ds-review baseline exactly — plus `reject_changes/2` 1 and
 | `valid_uuid?/1` | 4 | 4 | unchanged (see boundary 3) |
 | `trim/1` | 4 | 4 | unchanged (see boundary 3) |
 | `validate_optional_digest/2` | 1 | 1 | unchanged (nil-tolerant, single copy) |
-| **tracked total** | **55** | **36** | 22 definitions deleted, 3 created |
+| **tracked total** | **55** | **36** | 22 tracked definitions deleted, 3 created |
 
-Measured on the delivered tree: 22 clause definitions deleted (21 bodies plus
-the `reject_changes/2` body, which moves), 3 created; `schemas.ex` 1622 → 1476
-lines (`git diff --stat` −184/+38), the new module 25 lines, net dLOC **−121**
-on the owned lib set — inside the plan row's −120..−150. The tracked total is
+Measured on the delivered tree: 24 clause definitions deleted (22 tracked
+signatures plus the two untracked `GoalExternalWait` map helpers folded in
+boundary 4; one of the 24 is the `reject_changes/2` body, which moves), 3
+created; `schemas.ex` 1622 → 1462 lines (`git diff --stat` −201/+41), the new
+module 25 lines, net dLOC **−135** on the owned lib set — inside the plan
+row's −120..−150. The tracked total is
 `55 → 36` because `changeset/2` (14), `immutable_changeset/2` (8),
 `reject_terminal_authority_mutation/1` (2), `valid_uuid?/1` (4) and `trim/1` (4)
 stay by contract or by the boundary reasons below.
@@ -162,22 +164,26 @@ owned set.
    vs `"… after decision terminalization"`) and the guarded field list, so
    sharing it would change bytes or add a parameter that hides two different
    policies. Out of the shared set by both the finding and the contract.
-4. **Single-copy validators and inline call-site lambdas keep their literals.**
-   They are not duplicate definitions by the finding's own criterion (a
-   signature defined in more than one module), so folding them would rewrite
-   changeset bodies with zero duplicate-definition reduction. All of them stay
-   byte-identical and are pinned by the new table test: the
-   `GoalRevision.execution_policy` non-map fallback (`schemas.ex:314`), the
-   `WorkOutcome` `candidate_subject` lambda (`:802`, reachable — `JsonDocument`
-   casts lists), the `GoalDecision.resolve_changeset` `resolution` lambda
-   (`:959`), the `GoalExternalWait` `validate_source_ref/1` (`:1431`) and
-   `validate_result/1` (`:1437`) helpers, and the nil-tolerant
-   `validate_optional_digest/2` (`:976`). The residual literal census of the
-   owned set is `"must be an object"` 5 + 1 (shared), `"must be a 32-byte
-   digest"` 1 + 1 (shared) and `"is immutable"` 1 + 1 (shared, and that one
+4. **Single-copy validators and inline call-site lambdas (base coordinates).**
+   Wrapper-free single-copy validators keep their literals: the
+   `GoalRevision.execution_policy` non-map fallback (`schemas.ex:320`), the
+   `GoalDecision.resolve_changeset` `resolution` lambda (`:1058`) and the
+   nil-tolerant `validate_optional_digest/2` (`:1083`; the review's `:1075` is
+   the literal of the deleted sixth `validate_digest/2` copy). They are not
+   duplicate definitions by the finding's own criterion (a signature defined in
+   more than one module), stay byte-identical and are pinned by the new table
+   test. The `WorkOutcome` `candidate_subject` lambda (`:887`, reachable —
+   `JsonDocument` casts lists) and the `GoalExternalWait` `validate_source_ref/1`
+   (`:1563`) and `validate_result/1` (`:1569`) helpers are fixed-field
+   specialisations of the shared `validate_map/2` — same check, same message
+   bytes — so, per review P3-2, their call sites use
+   `ChangesetValidators.validate_map(:candidate_subject | :source_ref | :result)`
+   and the two helpers are deleted. The residual literal census of the owned
+   set is `"must be an object"` 2 (plus 1 shared), `"must be a 32-byte digest"`
+   1 (plus 1 shared) and `"is immutable"` 1 (plus 1 shared, and that one
    remaining module literal is the different `"terminal external wait is
-   immutable"` message), all enumerated here and recorded in the stage report
-   against the base counts 11 / 9 / 9.
+   immutable"` message); the head-side census was re-measured at 2 / 1 / 1
+   plus one each in the shared module, against the base counts 11 / 9 / 9.
 5. **Test placement and `goals_test.exs`**: `goals_test.exs` is read-only (opus
    P2-1 + ds A4 + the contract's binding amendment name open W1-12 as its
    writer). The opus P1-3 amendment asks for the pin table; the contract's own
@@ -191,11 +197,14 @@ owned set.
    and the new pin file.
 6. **Mutation check** (program rule: converted assertions need a red-on-flip
    demonstration): the *new* pins are the tests this slice adds, and the code
-   they guard is moved. Red-on-flip is demonstrated twice on the delivered
-   bytes — flip one message literal in the shared module (expect the digest and
-   map table tests red), flip one label argument at a call site (expect the
-   immutability table red) — each reverted and re-run green. Output recorded in
-   the stage report.
+   they guard is moved. Red-on-flip is demonstrated four ways on the delivered
+   bytes, each reverted and re-run green: flip the shared digest message
+   literal (digest table red, `mutation-a-digest-message.log`), flip the shared
+   map message literal (map table red, `mutation-b-map-message.log`), flip one
+   label argument at a call site (immutability table red,
+   `mutation-c-label.log`) and flip the valid-digest acceptance (the
+   acceptance drive red, `mutation-d-outcome.log`). Output recorded in the
+   stage report.
 
 ## Evidence plan
 
@@ -232,8 +241,8 @@ behaviour change beyond the extraction, no documentation change outside
 
 - The extraction's only real risk is a silently changed message or ordering; it
   is bounded by the new 32-drive pin table (green on base first) plus the
-  existing suites, and by the two mutation runs.
-- dLOC lands slightly above the plan row's estimate (the shared module head and
+  existing suites, and by the four mutation runs.
+- dLOC lands inside the plan row's −120..−150 (the shared module head and
   alias lines are new lines). Reported as measured, not adjusted.
 - `validate_map`'s message is reachable mainly through a seeded changeset today
   (boundary 3). That is a pre-existing reachability property of the base code;
