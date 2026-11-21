@@ -22,7 +22,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wxxb789/symmetry/daemon/internal/control"
+	operatorclient "github.com/wxxb789/symmetry/daemon/e2e/internal/operator"
 	"github.com/wxxb789/symmetry/daemon/internal/platform"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 	"github.com/wxxb789/symmetry/daemon/internal/state"
@@ -1971,8 +1971,8 @@ func runLinuxHelperScanCrashWitness(t *testing.T, environment e2eEnvironment, da
 	evidence.Stage = "cancel_request"
 	if _, err := operator.CreateTaskCommand(context.Background(), task.TaskID, unique("cancel"), protocol.TaskCommandRequest{Kind: "cancel"}); err != nil {
 		evidence.Stage = "cancel_other_error"
-		var apiError *control.APIError
-		var responseError *control.ResponseError
+		var apiError *operatorclient.APIError
+		var responseError *operatorclient.ResponseError
 		var transportError net.Error
 		// The helper death may already have driven the mirror force-stop and
 		// published the failed run before this cancel request lands, in which
@@ -1987,7 +1987,7 @@ func runLinuxHelperScanCrashWitness(t *testing.T, environment e2eEnvironment, da
 			evidence.Stage = "cancel_api_other"
 			if apiError.StatusCode == http.StatusConflict {
 				evidence.Stage = "cancel_api_409_other"
-				if apiError.Code == control.StateConflict {
+				if apiError.Code == operatorclient.StateConflict {
 					// The client also uses StateConflict as its fallback for HTTP 409.
 					evidence.Stage = "cancel_api_409_state_conflict"
 					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

@@ -36,6 +36,9 @@ The closed unused-parameter attention-test warning appended to the second `## De
 section below and the closed pinned-`can_retry` entry appended to `## Retro review follow-ups` below
 were moved on 2026-11-20 from branch `fix/control-test-pins`.
 
+The closed W2-12b operator-client relocation appended to the second `## Dead-code candidates`
+section below was moved on 2026-11-21 from branch `refactor/rf-w2-12b-operator-client-relocation`.
+
 The closed Control-row annotation item appended to the `## Model-routing evaluation records`
 section below was moved on 2026-11-20 from branch `fix/ablation-control-row-annotate`.
 
@@ -1612,6 +1615,49 @@ occurrence` section at the end of this file was moved on 2026-11-21 from branch
       4 passed exit 0; `git diff --check` exit 0. Residual: a future producer of the 3-tuple shape
       would now classify through the fallback `{:provider_failure, :ambiguous}`; none exists
       in-tree at this revision. The full suite and CI are the pull request's verification.
+
+- [ ] Revalidate and remove the daemon surfaces that are unreachable from both mains but still
+      referenced — the W2-12b part is closed (2026-11-21, branch
+      `refactor/rf-w2-12b-operator-client-relocation`, plan
+      `docs/plans/2026-11-21-rf-w2-12b-operator-client-relocation-plan.md`); the residual
+      `harness.NewClaudeAdapterWithRunner` stays in `docs/TODO.md`. The review at `4dd374b`
+      (opus P0-2, ds-1 A6) pinned relocation over deletion for the operator driver, so the
+      three-target `deadcode -test` intersection members this item listed were dispositioned as a
+      move-only slice, not a removal: the operator client with its five task methods, the seven
+      operator-exclusive task validators of `daemon/internal/control/validation.go` (lines 209,
+      281, 302, 334, 441, 611 and 629 at the baseline) and the v1 task decoders of
+      `daemon/internal/protocol/protocol.go` now live in the e2e-owned
+      `daemon/e2e/internal/operator/` package beside their only callers, with the transport, error
+      and decode substrate copied verbatim and every retained production declaration unchanged. The
+      declaration-set proof at this revision: 106 placed declarations — 99 byte-identical to their
+      control or protocol original, 6 differing by the sanctioned package qualifier only (each
+      diff printed), and 1 deliberate apply-stage conversion: the machine-client guard in
+      `client_review_test.go`, whose relocation interface could only name the relocated `Task` and
+      so could never match the machine client, restored as a name-level check by the accepted
+      simplify finding (its go/printer diff printed, mutation-checked red); 315 retained
+      declarations across the base↔head counterparts of all six `control`/`protocol` files
+      (`client_test.go` included in the comparison), 310 byte-identical, 5 deliberately changed —
+      the two mixed-table splits `TestClientProtocolRequests` and
+      `TestClientRejectsIncompleteSuccessResponses` (operator rows re-homed), the two retargets
+      `TestNewClientRejectsInvalidConfiguration` and
+      `TestSupervisoryCommandRequestAndDispatchPayloads`, and the `unpaired run` row the
+      review-round-1 fix adds to `TestAcknowledgeCommandRequiresMatchingCommandResource` plus the
+      `partial acknowledgement` row the review-round-2 fix adds to the same test. The removal
+      evidence: `deadcode -test ./cmd/...` reports every moved symbol unreachable on all three
+      targets (GOOS=windows amd64, GOOS=linux amd64, GOOS=linux arm64; 140, 250 and 158 findings
+      at the baseline), and the tree-wide `git grep` leaves no reference outside `daemon/e2e/**`.
+      The five witness files carry 66 qualifier-only changed lines and 5 added plus 2 removed
+      import lines, with zero other changed lines, so no witness body, name, assertion, timeout or
+      `--assert` name moved with the code. Mutation checks show the retargeted and moved
+      assertions still fail when the guarded behaviour is flipped (six artificial flips, six red
+      runs — the sixth re-adds a task API to the machine `Client` and reddens the restored guard).
+      `control.WithMaxResponseBytes` stays in `control` by the same contract's binding
+      amendment. The review fixes then restored the production guards the moved rows had
+      carried, with ten further artificial flips and ten red runs (production trailing-JSON
+      rejection, oversized success response, `IsOwnershipLost`/`IsTerminalGraceExpired`,
+      explicit-zero `Retry-After`, work-input presence and shape, paired `run_id`/`generation` and
+      all-or-nothing acknowledgement fields on the ack path, `expectedTaskID`, and the retained
+      numeric comparator). The full suite and CI remain the pull request's verification.
 
 ## Deferred review findings (0007f)
 
