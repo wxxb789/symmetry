@@ -1201,6 +1201,102 @@ defmodule SymmetryControl.IntegrationsTest do
     assert unchanged.status_message == nil
   end
 
+  test "a resource deleted before the sync lock stays stale instead of invalid" do
+    project = project_fixture()
+    connection = connection_fixture("github", "gh_cli")
+
+    assert {:ok, resource} =
+             Workspaces.create_resource(project.id, %{
+               connection_id: connection.id,
+               kind: "work_tracking",
+               name: "Delete before lock",
+               external_ref: "acme/symmetry"
+             })
+
+    ref = make_ref()
+    handler_id = {__MODULE__, ref}
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:symmetry_control, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if String.contains?(metadata.query, "\"projects\"") and
+               String.contains?(metadata.query, "FOR SHARE") do
+            {deleted, _} =
+              Repo.delete_all(
+                from current in SymmetryControl.Workspaces.ProjectResource,
+                  where: current.id == ^resource.id
+              )
+
+            send(self(), {:resource_deleted_before_lock, ref, deleted})
+          end
+        end,
+        nil
+      )
+
+    try do
+      # `mark_resource_syncing/1` locks the project and then re-reads the resource under FOR
+      # UPDATE; with the row already deleted, that locked re-read is `nil` and the sync must
+      # answer the base `:stale` (409) verdict instead of `:invalid_request` (400).
+      assert {:error, :stale} = Integrations.sync_resource(resource.id)
+    after
+      :telemetry.detach(handler_id)
+    end
+
+    assert_received {:resource_deleted_before_lock, ^ref, 1}
+    # The stale rollback restores the row the sync transaction deleted.
+    assert Repo.get(SymmetryControl.Workspaces.ProjectResource, resource.id)
+  end
+
+  test "a resource deleted during the provider call stays stale instead of invalid" do
+    project = project_fixture()
+
+    # The stub's only sync branch that waits for the test and then fails the provider call.
+    assert {:ok, connection} =
+             Integrations.create_connection(%{
+               provider: "github",
+               name: "Fail after archive",
+               account_ref: "acme",
+               capabilities: ["work_items"]
+             })
+
+    assert {:ok, resource} =
+             Workspaces.create_resource(project.id, %{
+               connection_id: connection.id,
+               kind: "work_tracking",
+               name: "Delete during provider call",
+               external_ref: "acme/symmetry"
+             })
+
+    Application.put_env(
+      :symmetry_control,
+      :integration_provider_test_controller,
+      self()
+    )
+
+    on_exit(fn ->
+      Application.delete_env(:symmetry_control, :integration_provider_test_controller)
+    end)
+
+    sync_task = Task.async(fn -> Integrations.sync_resource(resource.id) end)
+    # The send follows the sync lock transaction and provider auth, so wait 5 000 ms —
+    # the same window the stub holds :continue for.
+    assert_receive {:integration_provider_waiting, provider_pid}, 5_000
+
+    assert {1, _} =
+             Repo.delete_all(
+               from current in SymmetryControl.Workspaces.ProjectResource,
+                 where: current.id == ^resource.id
+             )
+
+    send(provider_pid, :continue)
+
+    # `record_resource_failure/3` re-reads the row under FOR UPDATE to store the failure; a
+    # missing row must stay `:stale`, the verdict the base integrations lock helper gave it.
+    assert {:error, :stale} = Task.await(sync_task)
+  end
+
   test "reversed import and delivery updates lock WorkItems in UUID order without deadlocking" do
     use_credential_leak_provider()
 
@@ -1782,6 +1878,22 @@ defmodule SymmetryControl.IntegrationsTest do
     refute function_exported?(Integrations, :execute_provider_action, 5)
     assert function_exported?(Integrations, :execute_unprojected_provider_action, 5)
     assert function_exported?(Integrations, :execute_unprojected_provider_action, 6)
+  end
+
+  test "delete_connection refuses a non-integer expected version as an invalid request" do
+    connection = connection_fixture("github", "gh_cli")
+
+    # One version rule for both portal contexts: a malformed expected version is
+    # `:invalid_request` (the verdict `Schemas.VersionedChangeset.expected_version/1`
+    # gives the same input; the HTTP route normalizes integer strings to integers and
+    # answers 400 for unparsable values, so the context never receives a non-integer
+    # version), not a stale row. This function answered `:stale` before the shared
+    # clause landed; the assertion pins the unified verdict.
+    assert {:error, :invalid_request} = Integrations.delete_connection(connection.id, "1")
+    assert {:error, :invalid_request} = Integrations.delete_connection(connection.id, nil)
+
+    assert {:ok, deleted} = Integrations.delete_connection(connection.id, connection.lock_version)
+    assert deleted.id == connection.id
   end
 
   defp sync_lock_order_task(resource, provider_items, owner, ref) do
