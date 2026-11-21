@@ -1,4 +1,6 @@
 defmodule SymmetryControlWeb.DaemonChannel do
+  @moduledoc false
+
   use SymmetryControlWeb, :channel
 
   @impl true

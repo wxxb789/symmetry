@@ -37,6 +37,24 @@ defmodule SymmetryControlWeb.DaemonChannelTest do
              )
   end
 
+  test "accepts a mixed-case X-Symmetry-Token header and ignores other header names" do
+    %{machine: machine, token: token} = assert_enrolled("socket-header-case")
+
+    assert {:ok, socket} =
+             connect(SymmetryControlWeb.UserSocket, %{},
+               connect_info: %{
+                 "x_headers" => [{"x-other-header", token}, {"X-Symmetry-Token", token}]
+               }
+             )
+
+    assert {:ok, _, _socket} = subscribe_and_join(socket, "daemon:#{machine.id}")
+
+    assert :error =
+             connect(SymmetryControlWeb.UserSocket, %{},
+               connect_info: %{"x_headers" => [{"x-symmetry-token-extra", token}]}
+             )
+  end
+
   defp assert_enrolled(name) do
     key = Ecto.UUID.generate()
     token = "machine-token-#{key}"
