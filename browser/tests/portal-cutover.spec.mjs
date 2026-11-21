@@ -8,77 +8,31 @@
 // may connect; every message the browser receives is the server's own.
 import { allowBrowserError, expect, test } from "./fixtures.mjs";
 import {
+  acceptanceContract,
   api,
+  authorityPolicy,
   capture,
+  contextManifest,
   controlSocket,
   createProject,
   createWorkItem,
+  executionPolicy,
+  FALLBACK_READ_GUARD_MS,
+  historyWrites,
   login,
+  planProposal,
   readsStatus,
+  recordHistoryWrites,
   uniqueKey
 } from "./readable-fixtures.mjs";
 
-const acceptance = () => ({
-  schema_version: "symmetry.acceptance.v1",
-  description: "Operator verifies the cutover boundary.",
-  predicates: [{ id: "operator", kind: "operator_acceptance" }]
-});
-
-const authorityPolicy = () => ({
-  operator_required_for_scope_change: true,
-  operator_required_for_completion: true,
-  publication_allowed: false,
-  allowed_actions: []
-});
-
-// Records the application's own history writes before its module runs. The
-// one-time repair replaces the location once per legacy document; the router
-// then writes its own entry state with an empty URL, which names no location and
-// is not a navigation. Counting the writes that do name a location is how the
-// loop below states "exactly once, no second redirect" from the app's own
-// behaviour instead of from a sleep that a returning redirect would satisfy.
-function recordHistoryWrites() {
-  window.__historyWrites = [];
-  for (const name of ["replaceState", "pushState"]) {
-    const original = window.history[name].bind(window.history);
-    window.history[name] = (...args) => {
-      window.__historyWrites.push({ name, url: String(args[2] ?? "") });
-      return original(...args);
-    };
-  }
-}
-
-const historyWrites = (page) => page.evaluate(() => window.__historyWrites);
+// This suite's frozen acceptance description, passed to the shared revision and
+// plan builders; every other payload literal is shared.
+const acceptanceDescription = "Operator verifies the cutover boundary.";
 // The socket's own reconnect backoff is the subject of the catch-up case, so its
 // wait is a backstop over the client's retry schedule rather than a tighter
 // observation.
 const RECONNECT_GUARD_MS = 30_000;
-// The polling fallback's cadence is five seconds, so four of them is the backstop
-// over the client's own pass and the state it renders. A maximum, never a verdict:
-// the case below decides on the pass the shell records and on the state that pass
-// served, and this guard only says when a missing pass is a missing pass.
-const FALLBACK_READ_GUARD_MS = 20_000;
-const executionPolicy = () => ({
-  automatic_execution: false,
-  max_parallel_tasks: 1,
-  max_task_admissions: 4,
-  max_run_attempts_per_task: 2,
-  budget_limit_microusd: null,
-  per_run_cost_limit_microusd: null,
-  budget_mode: "soft",
-  hard_cost_limit_required: false,
-  allowed_runtime_ids: [],
-  allowed_model_profiles: [],
-  final_acceptance: "operator",
-  allowed_actions: [],
-  allowed_resource_ids: []
-});
-
-const contextManifest = () => ({
-  byte_budget: 32768,
-  required_source_kinds: ["repository"],
-  include_advisory_recall: false
-});
 
 async function attachRepository(page, projectId) {
   const response = await api(page, "POST", `/portal/api/projects/${projectId}/resources`, {
@@ -102,7 +56,7 @@ async function createGoalWithPlan(page, projectId, repositoryId, title) {
     initial_revision: {
       objective: `Expose ${title} through the portal Goal surface.`,
       non_goals: [],
-      acceptance_contract: acceptance(),
+      acceptance_contract: acceptanceContract(acceptanceDescription),
       authority_policy: authorityPolicy(),
       execution_policy: executionPolicy(),
       context_manifest: contextManifest(),
@@ -112,34 +66,7 @@ async function createGoalWithPlan(page, projectId, repositoryId, title) {
   expect(created.status, JSON.stringify(created.body)).toBe(201);
   const goalId = created.body.goal.id;
 
-  const proposal = {
-    schema_version: "symmetry.plan.v1",
-    proposal_id: crypto.randomUUID(),
-    goal_id: goalId,
-    expected_revision: 1,
-    items: [
-      {
-        key: "implement",
-        title: `Implement ${title}`,
-        description: "Bounded goal work",
-        required: true,
-        integration: true,
-        repository_resource_id: repositoryId,
-        acceptance: acceptance(),
-        depends_on_keys: [],
-        model_profile: "codex",
-        change_target: null,
-        baseline: {
-          kind: "subject",
-          subject: {
-            resource_id: repositoryId,
-            commit: "a".repeat(40),
-            tree_digest: `sha256:${"b".repeat(64)}`
-          }
-        }
-      }
-    ]
-  };
+  const proposal = planProposal({ goalId, title, repositoryId, acceptanceDescription });
 
   const read = await api(page, "GET", `/portal/api/goals/${goalId}`);
   const decision = await api(page, "POST", `/portal/api/goals/${goalId}/commands`, {
