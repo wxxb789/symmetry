@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { chatConversationOptions, createApplication, type Application } from "../../app/application";
 import { createAppRouter } from "../../app/router";
 import { readWorkDetail, readWorkItem } from "../../services/api.fixtures";
-import { asRecord } from "../work/presentation";
+import { asRecord } from "../../services/served";
 
 /**
  * `/portal/chat`: one scope key keeps its own draft, intent, start-work
