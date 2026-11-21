@@ -53,7 +53,7 @@ func TestRunNormalizesLinuxV2NativeOwnerStateDir(t *testing.T) {
 			value := testConfig(t)
 			value.Runtime.HarnessKind = test.kind
 			value.StateDir = test.stateDir
-			err = Run(context.Background(), value, WithStore(store))
+			err = Run(context.Background(), value, withStore(store))
 			if err == nil || err.Error() != test.want {
 				t.Fatalf("Run() error = %v, want %q", err, test.want)
 			}

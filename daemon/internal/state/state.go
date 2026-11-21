@@ -738,7 +738,7 @@ type RunJournal struct {
 	PendingCommandAcknowledgements []protocol.CommandAcknowledgement `json:"pending_command_acknowledgements"`
 	PendingGoalDeliveries          []GoalDelivery                    `json:"pending_goal_deliveries,omitempty"`
 	DeliveredGoalDeliveries        []GoalDelivery                    `json:"delivered_goal_deliveries,omitempty"`
-	RetiredGoalDeliveries          []GoalDeliveryRetirement          `json:"retired_goal_deliveries,omitempty"`
+	RetiredGoalDeliveries          []goalDeliveryRetirement          `json:"retired_goal_deliveries,omitempty"`
 	GoalDeliveryEnabled            bool                              `json:"goal_delivery_enabled,omitempty"`
 	NativeUsageObservation         *NativeUsageObservation           `json:"native_usage_observation,omitempty"`
 	NativeUsageRecoveryRequired    bool                              `json:"native_usage_recovery_required,omitempty"`
@@ -1133,18 +1133,18 @@ func CommandAcknowledgementRetired(journal RunJournal) bool {
 	return journal.LocalState == "cleanup_pending" || (journal.LocalState == "terminal_pending" && IsConclusiveTerminalVerdict(journal.TerminalVerdict))
 }
 
-// NotFoundError distinguishes absent local durable state from malformed state.
-type NotFoundError struct {
+// notFoundError distinguishes absent local durable state from malformed state.
+type notFoundError struct {
 	Resource string
 }
 
-func (err *NotFoundError) Error() string {
+func (err *notFoundError) Error() string {
 	return err.Resource + " not found"
 }
 
 // IsNotFound reports whether err represents an absent state record.
 func IsNotFound(err error) bool {
-	var target *NotFoundError
+	var target *notFoundError
 	return errors.As(err, &target)
 }
 
@@ -1276,7 +1276,7 @@ func (store *Store) DeleteEnrollmentIntent() error {
 }
 
 // LoadIdentity returns the enrolled machine credentials. An absent enrollment
-// returns a typed NotFoundError.
+// returns a typed not-found error.
 func (store *Store) LoadIdentity() (MachineIdentity, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -2314,7 +2314,7 @@ func (store *Store) DeleteJournal(key RunKey) error {
 	}
 	if err := os.Remove(store.journalPath(key)); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return &NotFoundError{Resource: "run journal"}
+			return &notFoundError{Resource: "run journal"}
 		}
 		return fmt.Errorf("delete run journal: %w", err)
 	}
@@ -5340,7 +5340,7 @@ func (store *Store) readJSONWithLimitAndTags(path string, resource string, desti
 	data, err := readLimited(path, limit)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return &NotFoundError{Resource: resource}
+			return &notFoundError{Resource: resource}
 		}
 		return fmt.Errorf("read %s: %w", resource, err)
 	}
