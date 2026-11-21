@@ -703,3 +703,8 @@ func TestLinuxOwnerHelperV2ReleaseUnresolvedErrorCarriesStopEvidence(t *testing.
 		t.Fatalf("unresolved release error lost stop evidence: %v", err)
 	}
 }
+
+func readLinuxOwnerChildPIDs(path string) ([]int, error) {
+	pids, _, err := readLinuxOwnerChildPIDsBounded(path, linuxOwnerAnchorMaxChildrenBytes, linuxOwnerHelperV2MaxMembershipProcesses)
+	return pids, err
+}

@@ -92,9 +92,12 @@ SOURCE_PATHS = [
     "daemon/internal/harness/omo/rpc.go",
     "daemon/internal/harness/omo/profile.go",
     "daemon/internal/harness/omo/validator.go",
+    "daemon/internal/linuxpreflight/preflight_linux.go",
+    "daemon/internal/linuxpreflight/preflight_unsupported.go",
     "daemon/internal/workspace/subject.go",
     "control/lib/symmetry_control/goals.ex",
     "contracts/v1/task-result.schema.json",
+    "daemon/internal/app/command_queue.go",
 ]
 
 
