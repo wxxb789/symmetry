@@ -473,10 +473,6 @@ func writeLinuxSupervisorTestMarker(path, contents string) error {
 	return publishLinuxSupervisorWitnessFile(path, []byte(contents))
 }
 
-func installLinuxSupervisorScanFailureInjection(group *processGroup, targetPID int, targetIdentity string) func() {
-	return installLinuxSupervisorScanInjection(group, targetPID, targetIdentity, false, authority.SupervisorScanOwnerHelper, false)
-}
-
 func installLinuxSupervisorScanFailureInjectionAfterInitial(group *processGroup, targetPID int, targetIdentity string) func() {
 	return installLinuxSupervisorScanInjection(group, targetPID, targetIdentity, true, authority.SupervisorScanOwnerHelper, false)
 }

@@ -271,18 +271,6 @@ func prepareNativeStandardHandles(spec NativeLaunchSpec) ([]windows.Handle, func
 	return handles, cleanup, nil
 }
 
-func nativeHandleInformation(handle windows.Handle) (uint32, error) {
-	var flags uint32
-	result, _, callError := getNativeHandleInformation.Call(
-		uintptr(handle),
-		uintptr(unsafe.Pointer(&flags)),
-	)
-	if result == 0 {
-		return 0, callError
-	}
-	return flags, nil
-}
-
 func prepareNativeLaunch(spec NativeLaunchSpec) (*uint16, *uint16, *uint16, *uint16, error) {
 	if spec.CommandLine != "" && len(spec.Argv) != 0 {
 		return nil, nil, nil, nil, errors.New("native launch command line and argv are mutually exclusive")
