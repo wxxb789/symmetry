@@ -3039,13 +3039,11 @@ defmodule SymmetryControl.Goals do
                opts
              ),
            {:ok, settlement, wake_at} <-
-             dispatch_terminal_result(
+             dispatch_result(
                goal,
-               item,
                task,
                run,
                kind,
-               blocker,
                blocker_wake_at,
                subject_hash,
                evidence_refs,
@@ -3217,208 +3215,61 @@ defmodule SymmetryControl.Goals do
     end
   end
 
-  defp dispatch_task_result(
+  # One dispatch over the live settlement inputs: the derived validation outcome
+  # (validation Tasks) first, then the revision guard, then the TaskResult kind.
+  # The arm order is the base evaluation order and there is no catch-all, so a `kind`
+  # outside the admitted set raises here instead of silently picking a settlement.
+  defp dispatch_result(
          goal,
-         _item,
-         task,
-         _run,
-         _kind,
-         _blocker,
-         _blocker_wake_at,
-         _subject_hash,
-         _evidence_refs,
-         _opts
-       )
-       when task.goal_revision != goal.current_revision or goal.state != "active",
-       do: {:ok, "historical_result", nil}
-
-  defp dispatch_task_result(
-         _goal,
-         _item,
-         _task,
-         _run,
-         "candidate_completion",
-         _blocker,
-         _blocker_wake_at,
-         _subject_hash,
-         _evidence_refs,
-         _opts
-       ),
-       do: {:ok, "awaiting_validation", :immediate}
-
-  defp dispatch_task_result(
-         goal,
-         _item,
-         task,
-         run,
-         "progress",
-         _blocker,
-         _blocker_wake_at,
-         subject_hash,
-         evidence_refs,
-         opts
-       ) do
-    if progress_has_new_verification?(goal, task, run, subject_hash, evidence_refs, opts),
-      do: {:ok, "progress", :immediate},
-      else: {:ok, "no_verified_progress", nil}
-  end
-
-  defp dispatch_task_result(
-         _goal,
-         _item,
-         _task,
-         _run,
-         "blocked",
-         _blocker,
-         blocker_wake_at,
-         _subject_hash,
-         _evidence_refs,
-         _opts
-       ),
-       do: {:ok, "blocked", blocker_wake_at}
-
-  defp dispatch_task_result(
-         _goal,
-         _item,
-         _task,
-         _run,
-         "repair_required",
-         _blocker,
-         _blocker_wake_at,
-         _subject_hash,
-         _evidence_refs,
-         _opts
-       ),
-       do: {:ok, "repair_required", :immediate}
-
-  defp dispatch_task_result(
-         _goal,
-         _item,
-         _task,
-         _run,
-         "replan_required",
-         _blocker,
-         _blocker_wake_at,
-         _subject_hash,
-         _evidence_refs,
-         _opts
-       ),
-       do: {:ok, "replan_required", nil}
-
-  defp dispatch_task_result(
-         _goal,
-         _item,
-         _task,
-         _run,
-         "failed",
-         _blocker,
-         _blocker_wake_at,
-         _subject_hash,
-         _evidence_refs,
-         _opts
-       ),
-       do: {:ok, "failed", nil}
-
-  defp dispatch_terminal_result(
-         _goal,
-         _item,
-         _task,
-         _run,
-         _kind,
-         _blocker,
-         _blocker_wake_at,
-         _subject_hash,
-         _evidence_refs,
-         %WorkOutcome{disposition: "rejected", reason: "historical_result"},
-         _opts
-       ),
-       do: {:ok, "historical_result", nil}
-
-  defp dispatch_terminal_result(
-         %Goal{state: "active"},
-         _item,
-         _task,
-         _run,
-         _kind,
-         _blocker,
-         _blocker_wake_at,
-         _subject_hash,
-         _evidence_refs,
-         %WorkOutcome{disposition: "rejected"},
-         _opts
-       ),
-       do: {:ok, "validation_failed", nil}
-
-  defp dispatch_terminal_result(
-         %Goal{state: "paused"},
-         _item,
-         _task,
-         _run,
-         _kind,
-         _blocker,
-         _blocker_wake_at,
-         _subject_hash,
-         _evidence_refs,
-         %WorkOutcome{disposition: "rejected"},
-         _opts
-       ),
-       do: {:ok, "historical_result", nil}
-
-  defp dispatch_terminal_result(
-         %Goal{state: "active"},
-         _item,
-         _task,
-         _run,
-         _kind,
-         _blocker,
-         _blocker_wake_at,
-         _subject_hash,
-         _evidence_refs,
-         %WorkOutcome{disposition: "accepted"},
-         _opts
-       ),
-       do: {:ok, "accepted", :immediate}
-
-  defp dispatch_terminal_result(
-         %Goal{state: "paused"},
-         _item,
-         _task,
-         _run,
-         _kind,
-         _blocker,
-         _blocker_wake_at,
-         _subject_hash,
-         _evidence_refs,
-         %WorkOutcome{disposition: "accepted"},
-         _opts
-       ),
-       do: {:ok, "accepted", nil}
-
-  defp dispatch_terminal_result(
-         goal,
-         item,
          task,
          run,
          kind,
-         blocker,
          blocker_wake_at,
          subject_hash,
          evidence_refs,
-         _rejected_outcome,
+         outcome,
          opts
        ) do
-    dispatch_task_result(
-      goal,
-      item,
-      task,
-      run,
-      kind,
-      blocker,
-      blocker_wake_at,
-      subject_hash,
-      evidence_refs,
-      opts
-    )
+    case {outcome, goal.state, kind} do
+      {%WorkOutcome{disposition: "rejected", reason: "historical_result"}, _state, _kind} ->
+        {:ok, "historical_result", nil}
+
+      {%WorkOutcome{disposition: "rejected"}, "active", _kind} ->
+        {:ok, "validation_failed", nil}
+
+      {%WorkOutcome{disposition: "rejected"}, "paused", _kind} ->
+        {:ok, "historical_result", nil}
+
+      {%WorkOutcome{disposition: "accepted"}, "active", _kind} ->
+        {:ok, "accepted", :immediate}
+
+      {%WorkOutcome{disposition: "accepted"}, "paused", _kind} ->
+        {:ok, "accepted", nil}
+
+      {_outcome, _state, _kind}
+      when task.goal_revision != goal.current_revision or goal.state != "active" ->
+        {:ok, "historical_result", nil}
+
+      {_outcome, _state, "candidate_completion"} ->
+        {:ok, "awaiting_validation", :immediate}
+
+      {_outcome, _state, "progress"} ->
+        if progress_has_new_verification?(goal, task, run, subject_hash, evidence_refs, opts),
+          do: {:ok, "progress", :immediate},
+          else: {:ok, "no_verified_progress", nil}
+
+      {_outcome, _state, "blocked"} ->
+        {:ok, "blocked", blocker_wake_at}
+
+      {_outcome, _state, "repair_required"} ->
+        {:ok, "repair_required", :immediate}
+
+      {_outcome, _state, "replan_required"} ->
+        {:ok, "replan_required", nil}
+
+      {_outcome, _state, "failed"} ->
+        {:ok, "failed", nil}
+    end
   end
 
   defp validation_outcome_reason(
