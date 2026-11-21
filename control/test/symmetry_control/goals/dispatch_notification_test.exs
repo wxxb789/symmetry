@@ -1,7 +1,12 @@
 defmodule SymmetryControl.Goals.DispatchNotificationTest do
   use ExUnit.Case, async: false
 
+  use SymmetryControl.TestFixtures,
+    command_opts: [now: now(), rollout_enabled: true, validation_profiles: validation_profiles()]
+
   import Ecto.Query
+
+  import SymmetryControl.TestFixtures, only: [goal_command: 3, goal_command: 4]
 
   alias Ecto.Adapters.SQL.Sandbox
   alias Oban.Job
@@ -183,7 +188,7 @@ defmodule SymmetryControl.Goals.DispatchNotificationTest do
       assert {:ok, _receipt, :created} =
                Goals.command(
                  fixture.goal.id,
-                 command(
+                 goal_command(
                    fixture.goal,
                    "admit_task",
                    admission_payload(fixture.item),
@@ -378,10 +383,6 @@ defmodule SymmetryControl.Goals.DispatchNotificationTest do
     assert :ok = Phoenix.PubSub.subscribe(SymmetryControl.PubSub, "daemon:" <> machine_id)
   end
 
-  defp command_opts do
-    [now: now(), rollout_enabled: true, validation_profiles: validation_profiles()]
-  end
-
   defp with_scheduler_disabled(fun) when is_function(fun, 0) do
     orchestration = Application.fetch_env!(:symmetry_control, :orchestration)
 
@@ -401,35 +402,13 @@ defmodule SymmetryControl.Goals.DispatchNotificationTest do
   defp now, do: DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
   defp request_plan_command(fixture) do
-    command(fixture.goal, "request_plan", %{
+    goal_command(fixture.goal, "request_plan", %{
       model_profile: "codex",
       repository_resource_id: fixture.repository.id,
       subject: baseline_subject(fixture.repository.id).subject,
       session_mode: "fresh",
       requested_session_id: nil
     })
-  end
-
-  defp command_current(goal_id, kind, payload, opts \\ []) do
-    {:ok, goal} = Goals.fetch_goal(goal_id)
-
-    Goals.command(
-      goal_id,
-      command(goal, kind, payload),
-      "operator:test",
-      Keyword.merge(command_opts(), opts)
-    )
-  end
-
-  defp command(goal, kind, payload, mutation_id \\ Ecto.UUID.generate()) do
-    %{
-      schema_version: "symmetry.goal_command.v1",
-      mutation_id: mutation_id,
-      expected_version: goal.version,
-      expected_revision: goal.current_revision,
-      kind: kind,
-      payload: payload
-    }
   end
 
   defp goal_fixture(policy_overrides \\ %{}) do

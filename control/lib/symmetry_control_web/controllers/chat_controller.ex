@@ -2,7 +2,7 @@ defmodule SymmetryControlWeb.ChatController do
   use SymmetryControlWeb, :controller
 
   alias SymmetryControl.Chat
-  alias SymmetryControlWeb.{PortalJSON, Protocol}
+  alias SymmetryControlWeb.Protocol
 
   def index(conn, params) do
     case Chat.conversation(params) do
@@ -21,17 +21,8 @@ defmodule SymmetryControlWeb.ChatController do
     end
   end
 
-  defp error(conn, %Ecto.Changeset{} = changeset) do
-    conn
-    |> put_status(:unprocessable_entity)
-    |> json(%{
-      error: %{
-        code: "validation_failed",
-        message: "request contains invalid fields",
-        fields: PortalJSON.changeset_errors(changeset)
-      }
-    })
-  end
-
+  # A chat write can roll back a workspace changeset (`start_work`); those are
+  # served with the field errors, every other refusal with its protocol status.
+  defp error(conn, %Ecto.Changeset{} = changeset), do: Protocol.validation_error(conn, changeset)
   defp error(conn, reason), do: Protocol.error(conn, reason)
 end

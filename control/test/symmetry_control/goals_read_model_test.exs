@@ -1092,6 +1092,65 @@ defmodule SymmetryControl.GoalsReadModelTest do
     refute "achieve" in projection.allowed_actions
   end
 
+  test "a nonterminal Task from a prior revision splits the two readiness gates by task scope" do
+    subject = subject()
+    subject_hash = SymmetryControl.RequestHash.canonical(subject)
+
+    stale_task = %{
+      id: "stale-task",
+      work_item_id: "old-item",
+      goal_id: @final_acceptance_goal_id,
+      goal_revision: 0,
+      purpose: "implement",
+      current_generation: 0,
+      state: "running"
+    }
+
+    # `completion_readiness_candidates` gates on every loaded task, so the stale
+    # nonterminal task suppresses the predicate blocker this revision raises
+    # once its own tasks are terminal.
+    deterministic =
+      final_acceptance_related(subject_hash,
+        authority_policy: %{"operator_required_for_completion" => false},
+        acceptance_contract: %{
+          "predicates" => [
+            %{"id" => "goal-check", "kind" => "check", "validator_profile" => "test"}
+          ]
+        },
+        decisions: [],
+        tasks: [stale_task]
+      )
+      |> put_in([:revisions, Access.at(0), :execution_policy], %{
+        "final_acceptance" => "deterministic"
+      })
+
+    projection = ReadModel.project(final_acceptance_project_input(), deterministic)
+
+    refute projection.completion.no_nonterminal_tasks?
+    refute "required_predicates_unmet" in projection.blocker_reasons
+
+    # `integration_outcome_required_blocker` gates on the current-revision tasks
+    # only, so the same stale task does not hide the missing integration outcome.
+    missing_outcome =
+      final_acceptance_related(subject_hash,
+        outcomes: [],
+        decisions: [],
+        tasks: [stale_task]
+      )
+
+    projection =
+      ReadModel.project(
+        %{id: "goal-missing-integration", state: "active", current_revision: 1},
+        missing_outcome
+      )
+
+    assert [%{reason: "integration_outcome_required", ids: ["integration-item"]}] =
+             projection.blockers
+
+    refute projection.completion.ready?
+    refute "required_predicates_unmet" in projection.blocker_reasons
+  end
+
   test "completion is not advertised without a subject-bound decision and eligible Goal evidence" do
     subject_hash = :crypto.hash(:sha256, "integration-subject")
 

@@ -1,6 +1,8 @@
 defmodule SymmetryControlWeb.TaskController do
   use SymmetryControlWeb, :controller
 
+  import SymmetryControlWeb.QueryParams
+
   alias SymmetryControl.Goals
   alias SymmetryControl.Orchestration
   alias SymmetryControl.Orchestration.{Notifier, Scheduler}
@@ -94,13 +96,6 @@ defmodule SymmetryControlWeb.TaskController do
 
   defp provide_input_command(_payload, _generation, _waiting_id), do: {:error, :invalid_request}
 
-  defp idempotency_key(conn) do
-    case get_req_header(conn, "idempotency-key") do
-      [key] when byte_size(key) > 0 -> {:ok, key}
-      _ -> {:error, :invalid_request}
-    end
-  end
-
   defp public_work(work) do
     work = Protocol.normalize_map(work)
 
@@ -111,7 +106,4 @@ defmodule SymmetryControlWeb.TaskController do
 
   defp created_or_ok(:created), do: :created
   defp created_or_ok(_disposition), do: :ok
-
-  defp body_params(conn) when is_map(conn.body_params), do: conn.body_params
-  defp body_params(_conn), do: %{}
 end
