@@ -2460,8 +2460,6 @@ func TestJournalValidatorFirstErrorStringsArePinned(t *testing.T) {
 
 	t.Run("validateJournal", func(t *testing.T) {
 		t.Parallel()
-		// launchToken is the LaunchToken used by this group's scan and v1
-		// authority fixtures; the same literal plays the JobID role in others.
 		launchToken := strings.Repeat("d", authority.TokenBytes*2)
 		if err := pinnedJournalV2Authority(42, "windows:42:created-at").Validate(); err != nil {
 			t.Fatalf("V2 authority fixture Validate() error = %v, want nil", err)

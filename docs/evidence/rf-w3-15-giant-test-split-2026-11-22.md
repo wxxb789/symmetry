@@ -259,9 +259,9 @@ probe restore, not a new state):
   `app_test.go` but not at `:4881`, and `stale_ack_settlement_test.go` is not in the owned set.
   `docs/TODO.md` / `docs/archive/CLOSED-TODO.md` are therefore untouched.
 - Retained comments: the 5-line doc comment above `TestJournalValidatorFirstErrorStringsArePinned`
-  (why the cases call the exported validator — outside the touched hunks) and the 2-line
-  `launchToken` fixture note (a magic literal with its role). No comment was added; the touched
-  hunks carry no banners/step labels.
+  (why the cases call the exported validator — outside the touched hunks). The 2-line
+  `launchToken` fixture note inside a touched hunk was deleted in §12 (comment policy). No comment
+  was added; the touched hunks carry no banners/step labels.
 - The plan row's `dLOC ≈0` is report-only (D2); this slice's diffstat is +978/−889 (test text
   re-indentation dominates).
 - `linux_clone_journal_test.go` (395/336 L) is W2-09's file and is explicitly out of scope; the
@@ -378,3 +378,21 @@ Fix-stage re-runs (foreground, serial; logs under `gdd/…/w3-15-runs/fix1/`):
 | `w3-15-generate.py` (app/state/goals) + `cmp` | 0 | candidates byte-identical to the worktree |
 | `w3-15-audit.py … --out control-flow-audit.txt` | 0 | four helpers, `order+count preserved: True` |
 | `bash -c '(exec 3<>/dev/tcp/127.0.0.1/5432)'` | 1 | closed — the `mix test` rows are not re-runnable on this host (bound by blob hash) |
+
+## 12. Conductor round (PR review round 1, P3-1/P3-2)
+
+The §11 binding predates the `origin/main` merge `e80f0877`, which brought main's own
+`app_test.go` edits into this branch. Blobs at `e80f0877`: `app_test.go`
+`fee41f480f8d99ed6dd610c664a6b1d69c21b222`, `state_test.go`
+`f957cf06a90cbd6c08430c1e95487479b2dab5ed`, `goals_test.exs`
+`cd4d7e0fdbc24da5bbd39c21c547a6dbb3905634`. Re-runs on those bytes:
+
+| command | exit | observed |
+| --- | --- | --- |
+| independent review: `go test -json ./internal/app/ ./internal/state/` on `git archive` of `394859a9` (main) and `e80f0877` | 0 | 1666 test names on both sides, set difference empty; app 1200 pass / 1 skip, state 465 pass |
+| full Control `mix test` (Postgres-backed, merged with `e80f0877`) | 0 | 990 passed, 21 skipped, 4 excluded (`portal_assets`) |
+
+This round then deletes the 2-line `launchToken` fixture note in `state_test.go` (comment policy:
+not a hazard, magic-value source, or external quirk). New `state_test.go` blob
+`ebeb7cb150835e756d4e2d02530820350aba49fc`; `gofmt -l`, `go vet` and `go test -count=1
+./internal/state/` (Windows) exit 0. No other file content changes.
