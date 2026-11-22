@@ -90,7 +90,7 @@ Routing proof: `TestResponseDecodeRoutesEveryPathThroughTheEntry`
 
 Both revisions run the same 13 rows through their real paths with `map[string]any` targets:
 base `decodeJSON` / `decodeStrictJSON` / `contracts.DecodeSchema` (the probe `TestZZA6CorpusProbe`
-in a detached worktree at `333c572c`, `Q:/repos/tmp-a6-base`, driving the real base functions), head
+in a detached worktree at `333c572c`, `<worktree>`, driving the real base functions), head
 the entry at the three levels (the same probe shape in this worktree). Re-run at the final tree on
 2026-11-22; 39 lines, `diff` empty:
 
@@ -183,7 +183,7 @@ artifact).
 | Linux build | `GOOS=linux go build ./...` (`daemon/`) | 0 | no output |
 | Windows build | `GOOS=windows go build ./...` (`daemon/`) | 0 | no output |
 | Go tests | `go test -count=1 ./internal/protocol/... ./internal/control/... ./internal/contracts/...` (`daemon/`) | 0 | `ok` ×3 (2.806s / 1.232s / 1.824s at the settled tree); `-v` run over the same sources: RUN=1100, top-level PASS=164, FAIL=0 |
-| Go tests, WSL `-race` | `wsl -d Ubuntu-24.04 -u accept bash -c 'cd /mnt/q/repos/wt-a6-contracts-strictness/symmetry/daemon && go test -count=1 -race -timeout 25m ./internal/protocol/... ./internal/control/... ./internal/contracts/...'` | 0 | `ok` ×3 (10.545s / 10.221s / 5.164s), no `DATA RACE` |
+| Go tests, WSL `-race` | `wsl -d Ubuntu-24.04 -u accept bash -c 'cd <worktree>/daemon && go test -count=1 -race -timeout 25m ./internal/protocol/... ./internal/control/... ./internal/contracts/...'` | 0 | `ok` ×3 (10.545s / 10.221s / 5.164s), no `DATA RACE` |
 | Elixir | `sh <HOST-PATH>/.local/state/gdd/scratch/rf-a6-mix.sh test test/symmetry_control/goals/contract_fixture_manifest_test.exs test/symmetry_control_web/plugs/strict_evidence_json_test.exs` (portable Elixir 1.20.4 / OTP 29.0.6, `MIX_TEST_PARTITION=rf-a6`, foreground, no concurrent mix run) | 0 | `Result: 25 passed`; re-run at the settled tree: 25 passed (2.4s) |
 | citation existence | `python scripts/ci/check-citation-existence.py --repo . --base <snap>^ --head <snap>` over synthetic snapshots built with `GIT_INDEX_FILE` + `git commit-tree` (real refs untouched), last `9c9ce10c` | 0 | `no audited document added or modified between 333c572c1cd4 and 9c9ce10c4515; nothing to check` (same result for the earlier passes `b890ce6c`, `be12078f`) |
 | whitespace | `git diff --check` (repo root) | 0 | no output |
@@ -267,7 +267,7 @@ original sha256 restored (`client.go` `e5fab880844d…`, `manifest.json` `ad63ba
 | Linux build | `GOOS=linux go build ./...` (`daemon/`) | 0 | no output |
 | Windows build | `GOOS=windows go build ./...` (`daemon/`) | 0 | no output |
 | Go tests | `go test -count=1 ./internal/protocol/... ./internal/control/... ./internal/contracts/...` (`daemon/`) | 0 | `ok` ×3 (5.322s / 2.835s / 2.835s); `-v`: RUN=1102 (RUN=1100 at `1dfdb1d6`; the two new subtests are the delta), top-level PASS=164, FAIL=0 |
-| Go tests, WSL `-race` | `wsl -d Ubuntu-24.04 -u accept bash -c 'cd /mnt/q/repos/wt-a6-contracts-strictness/symmetry/daemon && go test -count=1 -race -timeout 25m ./internal/protocol/... ./internal/control/... ./internal/contracts/...'` | 0 | `ok` ×3 (13.239s / 10.248s / 5.263s), 0 `DATA RACE` lines |
+| Go tests, WSL `-race` | `wsl -d Ubuntu-24.04 -u accept bash -c 'cd <worktree>/daemon && go test -count=1 -race -timeout 25m ./internal/protocol/... ./internal/control/... ./internal/contracts/...'` | 0 | `ok` ×3 (13.239s / 10.248s / 5.263s), 0 `DATA RACE` lines |
 | Elixir | `sh <HOST-PATH>/.local/state/gdd/scratch/rf-a6-mix.sh test test/symmetry_control/goals/contract_fixture_manifest_test.exs test/symmetry_control_web/plugs/strict_evidence_json_test.exs` (`control/` via the recipe) | 0 | `Result: 25 passed` (2.7s) |
 | citation existence | `python scripts/ci/check-citation-existence.py --repo . --base 1dfdb1d6e7ff --head 599da9d62a83` (synthetic snapshot via `GIT_INDEX_FILE` + `git commit-tree`; real refs untouched) | 0 | `no audited document added or modified between 1dfdb1d6e7ff and 599da9d62a83; nothing to check` |
 | whitespace | `git diff --check` (repo root) | 0 | no output |

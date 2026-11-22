@@ -135,8 +135,8 @@ out of scope (owner ruling) and is recorded in `docs/TODO.md` with the rows that
 2. `daemon/`: `gofmt -l`, `go vet ./...`, `GOOS=linux go build ./...`, `GOOS=windows go build ./...`,
    `go test -count=1 ./internal/protocol/... ./internal/control/... ./internal/contracts/...`; the same
    packages via WSL with `-race` (`wsl -d Ubuntu-24.04 -u accept`). The contract names
-   `/mnt/q/repos/symmetry/daemon`, which is the main clone; the Linux lane therefore uses this worktree's
-   path, `/mnt/q/repos/wt-a6-contracts-strictness/symmetry/daemon`, and the evidence record says so.
+   `<main-clone>/daemon`, which is the main clone; the Linux lane therefore uses this worktree's
+   path, `<worktree>/daemon`, and the evidence record says so.
 3. Elixir via the portable-toolchain recipe (`<HOST-PATH>/.codex/tools/symmetry/elixir-1.20.4` +
    `erlang-29.0.6`, `MIX_TEST_PARTITION=rf-a6`, deps from the main checkout, `+S 2`): the fixture-manifest
    test and the strict-decoder plug test.
@@ -163,5 +163,5 @@ out of scope (owner ruling) and is recorded in `docs/TODO.md` with the rows that
   rejection; the TODO entry names them.
 - The Elixir reader asserts acceptance end to end (decode plus the schema's validator), so a post-decode
   rejection and a raw rejection are not distinguished in the row; the evidence record separates them.
-- The `-race` pass runs in WSL against this worktree's Linux path (`/mnt/q/repos/wt-a6-contracts-strictness/symmetry/daemon`);
-  the contract's literal `/mnt/q/repos/symmetry/daemon` is the main clone and is not tested.
+- The `-race` pass runs in WSL against this worktree's Linux path (`<worktree>/daemon`);
+  the contract's literal `<main-clone>/daemon` is the main clone and is not tested.
