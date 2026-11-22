@@ -63,7 +63,8 @@ func TestStorelessDaemonTakesEveryLinuxStoreNilBranch(t *testing.T) {
 	key := state.RunKey{RunID: "run", Generation: 1}
 	probes := []storelessProbe{
 		{"linux_owner_v2_linux.go:1180 loadLinuxCloneRunJournal", func(t *testing.T, daemon *daemon) {
-			_, err := daemon.loadLinuxCloneRunJournal(key, protocol.Fence{}, authority.LinuxCloneGrant{}, nil)
+			grant, _, _ := journalStoreValidCloneEvidence(t)
+			_, err := daemon.loadLinuxCloneRunJournal(key, protocol.Fence{}, grant, nil)
 			requireErrorMessage(t, err, "Linux clone Store readback is incomplete")
 		}},
 		{"linux_owner_v2_linux.go:1209 reconcileLinuxClonePromotion", func(t *testing.T, daemon *daemon) {
@@ -71,7 +72,12 @@ func TestStorelessDaemonTakesEveryLinuxStoreNilBranch(t *testing.T) {
 			requireErrorMessage(t, err, "Linux clone promotion reconciliation is incomplete")
 		}},
 		{"linux_owner_v2_linux.go:1549 linuxCloneAbortHasRetentionOwner", func(t *testing.T, daemon *daemon) {
-			retained, err := daemon.linuxCloneAbortHasRetentionOwner(state.RunJournal{})
+			journal := state.RunJournal{
+				RunID: key.RunID, Generation: key.Generation,
+				LinuxCloneIntent:       &authority.LinuxCloneIntent{Version: authority.LinuxCloneVersion},
+				LinuxCloneAbortPending: true,
+			}
+			retained, err := daemon.linuxCloneAbortHasRetentionOwner(journal)
 			if retained || err == nil || err.Error() != "Linux clone retention check lacks the exact stopped no-checkout journal" {
 				t.Fatalf("storeless retention check = %v, %v", retained, err)
 			}
@@ -89,8 +95,17 @@ func TestStorelessDaemonTakesEveryLinuxStoreNilBranch(t *testing.T) {
 			}
 		}},
 		{"linux_owner_witness_linux.go:2599 recoverLinuxV2NativeWitnessRunKey", func(t *testing.T, daemon *daemon) {
-			err := recoverLinuxV2NativeWitnessRunKey(context.Background(), config.Config{}, daemon.store, state.RunJournal{})
+			journal := state.RunJournal{RunID: key.RunID, Generation: key.Generation}
+			err := recoverLinuxV2NativeWitnessRunKey(context.Background(), config.Config{}, daemon.store, journal)
 			requireErrorMessage(t, err, "exact owner-witness recovery requires its live context, locked Store, and selected RunJournal")
+		}},
+		{"linux_owner_v2_linux.go:1837 persistLinuxV2Mutation refuses a missing Store", func(t *testing.T, daemon *daemon) {
+			err := daemon.persistLinuxV2Mutation(nil, key, protocol.Fence{}, "storeless probe", func() (state.RunJournal, error) {
+				return state.RunJournal{}, nil
+			}, func(state.RunJournal) bool { return true })
+			if !errors.Is(err, errDaemonStoreClosing) {
+				t.Fatalf("storeless v2 mutation = %v, want %v", err, errDaemonStoreClosing)
+			}
 		}},
 	}
 	runStorelessProbes(t, probes)

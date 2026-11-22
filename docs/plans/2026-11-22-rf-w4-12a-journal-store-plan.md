@@ -65,9 +65,10 @@ Method-set census (one statement, reproducible; the throwaway tool is deleted be
      (23 probes), each asserting that branch's outcome for a daemon built without a Store
      (`&daemon{}`), so a typed nil or a flipped guard reddens.
 5. New `daemon/internal/app/journal_store_linux_test.go`: the three linux-only `daemon.store == nil`
-   branches (`linux_owner_v2_linux.go:1180/1209/1549`) plus the witness-parameter nil checks
-   (`linux_owner_witness_linux.go:1416/2479/2599`), which only compile on linux, plus the
-   linux/amd64 member-set pin (`TestJournalStoreMethodSetIsExactOnLinuxAMD64`, 123 names).
+branches (`linux_owner_v2_linux.go:1180/1209/1549`), the `persistLinuxV2Mutation` parameter guard
+(`:1837`, added in the fix round) plus the witness-parameter nil checks
+(`linux_owner_witness_linux.go:1416/2479/2599`), which only compile on linux, plus the
+linux/amd64 member-set pin (`TestJournalStoreMethodSetIsExactOnLinuxAMD64`, 123 names).
 
 ## Contract-preserving decisions (recorded, not guessed)
 
@@ -117,8 +118,12 @@ call.
 
 ### D4 — untouched machinery
 
-The 25 mirrors, `storeCallbackWrite`/`selectStoreWrite` (`cleanup_glue.go:27-58`) and their reads stay as
-they are (W4-12b deletes them). No lint config, no `//nolint`, no production wrapper.
+The 25 mirrors (`cleanup_glue.go` and their reads) stay as they are (W4-12b deletes them).
+`selectStoreWrite` is the one recorded exception: D5 rebuilds it to bind the store fallback lazily,
+because a method value taken from a nil `journalStore` panics before the guard (conductor amendment
+2026-11-22, whole-increment review SPEC-A04, ratified as the smallest in-scope correction); its call
+sites, lock site and refusal identity are unchanged. No lint config, no `//nolint`, no production
+wrapper.
 
 ### D5 — `selectStoreWrite` binds its fallback lazily (required by the typed-nil clause)
 
@@ -156,9 +161,12 @@ would change meaning). It now writes `nil` for a nil argument; the probe
 - `go build ./...`, `go vet ./...`; `GOOS=linux|windows|darwin` builds and `GOOS=linux GOARCH=arm64`;
   `GOOS=linux GOARCH=amd64 go vet ./internal/app/` (linux-only test files compile).
 - Windows `go test -count=1 ./internal/app/...`; WSL `wsl -d Ubuntu-24.04 -u accept`
-  `cd /mnt/q/repos/symmetry/daemon && go test -count=1 -race ./internal/app/...`.
+  `cd /mnt/q/repos/wt-w4-12-go-test-doubles/symmetry/daemon && go test -count=1 -race ./internal/app/...`
+  (the worktree checkout; `/mnt/q/repos/symmetry` is the main checkout without this slice, where the
+  scoped selection silently matches no tests).
 - Red mutants recorded on the delivered bytes: the reflection list (drop one method name / add one),
-  a flipped nil guard, and a typed-nil store field.
+  a flipped nil guard, a typed-nil store field, and (fix round) one store-term deletion per corrected
+  storeless probe (evidence record §11 M2/M3 and M6–M10).
 - R2: line coverage of the touched files must not drop (`go test -cover` for `internal/app` before/after).
 - R9: `python3 scripts/ci/test-omo-control-native-evidence.py`.
 - Census re-run at HEAD over `windows/amd64`, `linux/amd64`, `linux/arm64`, `darwin/amd64` (union), with
@@ -176,9 +184,13 @@ alias); `docs/TODO.md` (PR #234 amendment); this plan and
 
 Measured sets: 97 production methods on every target, 121 on linux/amd64, +2 test-only
 (`SaveJournal`, `QueueTerminalTransition`); declared `journalStore` = 99 / 123. The base-vs-HEAD
-storeless-branch audit ran the same 30 probes in a throwaway base copy and at HEAD: both green (the
-delivered set is 29 probes after the apply-stage drop of the inert `app.go:189` probe — evidence
-record §8).
+storeless-branch audit ran the probe set of that stage (30 probes, 24 cross-target pre-drop and 6
+linux) in a throwaway base copy and at HEAD: both green. The delivered set is 30 probes — 23
+cross-target after the apply-stage drop of the inert `app.go:189` probe, plus 7 linux after the fix
+round added the `persistLinuxV2Mutation` probe (evidence record §8/§11 M6–M10); the fix round also
+gave the four sibling-masked probes valid inputs. The conductor ratified D1, D5 and the three
+build-split files as in-scope minimal corrections (2026-11-22, whole-increment review SPEC-A04) and
+directed the STD-A01..A03 / SPEC-A01..A03 fixes carried by this revision.
 Gate commands, exit codes and mutants: evidence record §10–§12.
 
 ## Out of scope (with reasons)
