@@ -1385,7 +1385,7 @@ func TestProviderActionCompletionRejectsOverLimitWorstCaseUnknownWithoutMutation
 }
 
 // Pins the capacity split: a serialize failure leaves ErrProviderActionCapacity (the bridge classifies it as
-// local_persistence_unknown, not local_action_rejected), while a genuine over-budget journal returns the sentinel itself.
+// local_persistence_unknown, not local_action_rejected), while a genuine over-budget journal returns the sentinel.
 func TestProviderActionCapacitySplitSeparatesSerializationFromSize(t *testing.T) {
 	t.Parallel()
 	unencodable := testJournal("run-provider-serialize-capacity", 1)

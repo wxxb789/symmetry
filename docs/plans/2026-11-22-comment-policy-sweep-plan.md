@@ -3,10 +3,11 @@
 Contract: `goal-comment-policy-sweep.md` (GDD, 2026-11-22; held until the pre-policy land queue
 merged — it has: `origin/main` is `f1fe1e59`, and the sweep is dispatched as a program slice of goal
 0010). Base revision for every coordinate in this plan: `f1fe1e59`. Delivered revision: the shipped
-head `465ffd1b` (`f1fe1e59` plus the sweep commits `16a7e7d3` and `0399d5f1` and the `origin/main`
-merges, the last bringing `origin/main` to `cca92284`) plus the apply-stage and fix-stage
-working-tree changes; when a line number is cited it resolves at the base unless a stage note says
-otherwise.
+head `bcdc5d94` (`f1fe1e59` plus the sweep commits `16a7e7d3` and `0399d5f1`, the apply stage and
+the fix stage §11.6) merged with `origin/main` `e84973a7` (#220; merge base `b25e34ae`) plus the
+round-2 working-tree changes of this plan's §11.7 (merge commit `refactor: correct sweep comments
+and merge main`; the exact sha is in `findings/223-fix-r1.md`). When a line number is cited it
+resolves at the base unless a stage note says otherwise.
 
 Plans consulted as the shape reference: `2026-11-21-core-dead-surface-plan.md` (definition of the
 judging artifact and the failure controls), `2026-11-21-rf-w3-13-http-boundary-plan.md` (stage
@@ -47,6 +48,12 @@ updates and per-file proof carriers), `2026-11-21-rf-program-plan.md` (slice/wor
   mis-locate. Program *moves* are candidates under both methods: a move-only split re-adds the
   lines in a new file, and blame attributes them to the split commit (verified: `4dd374bd`, the
   platform split, owns 506 of the 1,126 platform candidate lines).
+- **Moved pre-program text is in scope (conductor ruling, review #223 F3)**: comment text that
+  existed at the program base `a3039f0` but was moved by a program split slice is in scope — the
+  owner's comment policy grants no waiver for moved comments, and a moved comment sits in a hunk
+  the program wrote. Clause 4's "pre-program comments" exclusion covers only comments the program
+  never touched. Recorded here per the repo rule that a fixed design decision is not changed
+  silently.
 - **Excluded by the contract's file rules**: `docs/**` (77 changed files), lockfiles/generated
   (`mix.lock`/`go.sum`/`pnpm-lock.yaml`: 3), data formats (`.json`/`.tsv`/`.snap`: 3), and the 6
   files the program deleted (no HEAD lines to attribute). No candidate exists in any file class the
@@ -98,14 +105,20 @@ Mechanical acceptance of the three dispositions (checked by the verifier in §5)
    `//go:generate`, `//nolint`, `# noqa`, `# shellcheck`, `#!` shebangs, `// eslint-disable`,
    `# yaml-language-server`, `# renovate:`, `# dependabot`, `-*- mode -*-` — 41 candidate lines, all
    `kept`/`K5`. A build constraint is code semantics, not a comment.
-2. **Consumed docstrings stay as ≤2 lines.** Five candidate files build their CLI description from
-   the module docstring (`argparse.ArgumentParser(description=__doc__)`):
+2. **Consumed docstrings are runtime contract text.** Five candidate files build their CLI
+   description from the module docstring (`argparse.ArgumentParser(description=__doc__)`):
    `scripts/ci/assert-browser-suite-coverage.py`, `scripts/ci/go-test-durations.py`,
    `scripts/ci/omo-control-native-evidence.py`, `scripts/ci/omo-native-evidence.py`,
-   `scripts/ci/opencode-v2-support-witness.py`. Deleting the docstring there removes CLI help text,
-   so the first line of the module docstring stays (compressed to ≤2 lines); the rest of the
-   narration goes under `D6`. No test asserts `--help` output (checked by grep over
-   `scripts/ci/test-*.py`), and no other candidate file reads `__doc__`.
+   `scripts/ci/opencode-v2-support-witness.py`. Deleting or trimming the docstring removes CLI
+   help text. Round 1 kept only the first line as ≤2 lines and sent the rest of the narration
+   under `D6`; the conductor amendment ("comments consumed at runtime ... are user-facing
+   contract text: keep or restore their content") and review #223 F5 supersede that: round 2
+   restored all four changed docstrings to their `f1fe1e59` text, so `--help` output equals base
+   byte-for-byte, and the ceiling checker carries the amendment as a named exemption (§10.4
+   item 5, §11.7). `omo-control-native-evidence.py` is identical to `origin/main`, so its help
+   text never changed. No test asserts `--help` output (checked by grep over
+   `scripts/ci/test-*.py`); the round-2 comparison runs both revisions' copies, and no other
+   candidate file reads `__doc__`.
 3. **`@doc false` / `@moduledoc false` stay.** They are machine-consumed doc pragmas; deleting them
    changes generated docs. Internal `@doc` prose goes under `D6`.
 4. **Hazards are never deleted silently** (contract clause 3): a `K1` hazard statement may only be
@@ -251,7 +264,9 @@ run here, not as passes.
 6. **No new committed harness.** The derivation, verifier and carriers are scratch tools recorded
    in the evidence file with their commands (repo precedent: the W1-05 move manifest and the W3-08
    proof scripts).
-7. **Consumed docstrings win over the 2-line ceiling only for the CLI description line** (§3.2).
+7. **Consumed docstrings are runtime contract text and win over the 2-line ceiling** (§3.2):
+   round 1 kept only the CLI description line; review #223 F5 restored the four changed module
+   docstrings in full (declared exemption, §10.4 item 5, §11.7).
 
 ## 8. Failure controls and risks
 
@@ -536,7 +551,10 @@ Deviations from this plan's assumptions, all recorded rather than silently absor
    verifier's `pre_program_removed` stat: 5 against the sweep base after the fix stage added
    `provider_action.go`'s mid-sentence tail (§11.6); 39 against the merged delivered revision,
    where 34 of the counted lines belong to main-side rewrites in `ci.yml`,
-   `test-ci-changed-path-classifier.py` and `goal_session.go` (§11).
+   `test-ci-changed-path-classifier.py` and `goal_session.go` (§11). Round 2 (review #223 F2)
+   adds three: the self-contained `host_posix` line and the two pre-program `file_url` comment
+   lines its rewrite replaces; against the round-2 merge head the stat reads 68 = 8 sweep-side
+   (7 + `provider_action.go`) + 60 main-side rewrites (§11.7).
 5. **No block exceeds the two-line ceiling in the fixed tree.** The apply stage left two blocks
    larger than two lines under a claimed exemption (`daemon/internal/state/provider_action.go`
    568-571 and `scripts/ci/export-linux-v2-redacted-evidence.py` 535-560, described there as a
@@ -546,7 +564,12 @@ Deviations from this plan's assumptions, all recorded rather than silently absor
    `DAEMON_LOG_MESSAGES` code frozenset, not the comment text. The fix stage compressed both
    blocks to ≤2 lines (§11.6), so every candidate block in the fixed tree is zero, one or two
    lines. The docstring-aware ceiling check over all 1,651 blocks reports 0 blocks over two lines
-   and no block using the exemption (§11.3).
+   and no block using the exemption (§11.3). Round 2 (review #223 F5) restored the four
+   runtime-consumed module docstrings verbatim (`argparse` `description=__doc__`; the conductor
+   amendment makes their `--help` text a user-facing contract), so the round-2 ceiling run carries
+   that amendment as a named exemption for docstring/directive row blocks in those four files and
+   reports `0 blocks over two lines (non-exempt); 17 exempt runtime module-docstring blocks`
+   (§11.7).
 6. **Moved module intent lives in the owning slice plans.** The 16 workstream sections of the sweep
    record (353 `M1` rows) were appended verbatim to the owning slice plans' "Comment-policy sweep"
    notes at the apply stage (conductor amendment, §11): 30 slice plans in all — the 22 that already
@@ -567,13 +590,14 @@ Run artifacts directory (`<HOST-PATH>` = the GDD state root, under this stage's 
 
 | artifact | sha256 | content |
 |---|---|---|
-| `comment-policy-sweep-2026-11-22-inventory.tsv` | `cb5ee753c206ae0b445a746fec7bdfd8fce59aa476ea86ba2d177e127014c583` | 6,074 rows, one per candidate; the per-line dispositions re-bound to the delivered revision, including the fix stage's 8 row moves (§11.6) (the judging artifact) |
+| `comment-policy-sweep-2026-11-22-inventory.tsv` | `a6ebf1de5686125c36f10b82ff5b76861fb6bc87ff3a6a2e22ed8c865afb3441` | 6,074 rows, one per candidate; dispositions at the delivered revision (the fix stage's 8 row moves, §11.6; the round-2 flips of 68 restored runtime-docstring rows, §11.7) and replacement notes re-bound to the round-2 merge head (§11.7: 174 rows at the first rebind, 11 rows repaired directly, 75 rows' stale parts pruned) (the judging artifact) |
 | `comment-policy-sweep-2026-11-22-inventory-as-committed.tsv` | `3229361201f369f3a52e6ff6cd8396fdf685c20839428786b59f98400f6605e0` | the implement-stage record as committed, kept so the §11.2 diff is reproducible |
 | `comment-policy-sweep-2026-11-22-moved-intent.md` | `45092a12744ab8da103b186a4e43edddc3c3f125ce87b08c25367c8de6f29c41` | the 492-line workstream record as committed; its content now lives in the owning slice plans (§10.6) |
 
-Regeneration of the inventory from `git` history (scratch tools under `<HOST-PATH>/scratch/sweep/`;
-`$ART` = the artifact path; the worker disposition sheets are the recorded decisions of the merged
-14-workstream run):
+Regeneration of the inventory from `git` history plus the recorded off-repo worker sheets (scratch
+tools under `<HOST-PATH>/scratch/sweep/`; `$ART` = the artifact path; the 14 worker disposition
+sheets are the recorded decisions of the merged 14-workstream run and are inputs, so `git` alone
+does not reconstruct it):
 
 ```
 python extract3.py                             # blame-derived candidates at f1fe1e59
@@ -585,7 +609,8 @@ python build-tsv.py                            # write $ART ($ART is also the in
 ```
 
 The derivation steps ran at implement (2026-11-22 05:29–06:12) and are unchanged; the last two ran
-at the apply stage and reproduce the §11.2 diff on the delivered revision.
+at the apply stage and reproduce the §11.2 diff on the delivered revision; the round-2 pass
+re-bound replacement notes only (§11.7).
 
 ### 11.2 Record repairs against the delivered revision
 
@@ -616,9 +641,11 @@ refreshes. The defects they close:
    text removed from `strict_evidence_json.ex` (two lines at :3-4 and one at :80),
    `work_item_eligibility.ex` (the four `@doc` restating clauses) and `go-test-durations.py` (the
    module docstring trimmed to its one consumed first line); the TSV replacement join rule is
-   documented in the evidence record §2. The `--help`-pin and repo-hosted-harness findings stay
-   unapplied: both would add committed test/harness files, which the contract's failure control
-   ("any test edit beyond comments") and the plan §7.6 no-new-harness decision exclude.
+   documented in the evidence record §2. The repo-hosted-harness finding stays unapplied: it
+   would add committed test/harness files, which the contract's failure control ("any test edit
+   beyond comments") and the plan §7.6 no-new-harness decision exclude. The `--help`-pin finding
+   was superseded by review #223 F5, which restores the four module docstrings to their base
+   text instead of adding a test (§11.7).
 
 ### 11.3 Checks on the delivered revision
 
@@ -752,6 +779,22 @@ problems (0 errors, 227 warnings)` (ceiling 229, unchanged); `actionlint -shellc
 .github/workflows/ci.yml` (direct 1.7.12 binary) → exit 0; `git diff --check` → 0 lines; host
 scan (gate 13) → 0 added-side matches (below). Verbatim table: evidence record §8.
 
+**Round-2 re-runs (PR #223 review r1, at the merge head `e84973a7` plus the round-2 working-tree
+changes, §11.7).** Strip-proof `proof.py --rev e84973a7 --files-from <the 207-file workstream
+union>` → `--- 207 files: 207 PASS, 0 not-PASS (none)`; `gofmt -l .` → 0 lines; `go vet ./...`,
+`GOOS=linux go vet ./...` → exit 0, no output; `mix format --check-formatted`, `MIX_ENV=test mix
+compile --warnings-as-errors` → exit 0; `ruff check scripts/ci` + `ruff format --check scripts/ci`
+(0.17.5) → `All checks passed!` / `53 files already formatted`; `pnpm --pm-on-fail=ignore exec
+tsc --noEmit -p .` → exit 0; `pnpm --pm-on-fail=ignore lint` → `223 problems (0 errors, 223
+warnings)` (the count moved from 227 through #220's merged frontend changes; the `--max-warnings
+229` ceiling is unchanged); `actionlint -shellcheck= -pyflakes= .github/workflows/ci.yml` (direct
+1.7.12 binary; the mise shim is unversioned on this host) → exit 0; the six touched
+`scripts/ci/test-*.py` suites → exit 0; the `--help` comparison for the four runtime-docstring
+scripts → identical output on base and head; `git diff --check` → 0 lines; added-side host-path
+scans → 0 (`users/`, `/Users/` and case-sensitive profile name; the case-insensitive
+profile-name pattern matches only `localHandleID` identifiers). Verbatim table: evidence record
+§9.
+
 ### 11.6 Fix-stage record (review r1, 2026-11-22)
 
 All eight review findings are applied; the two source edits are comment-only (strip-proof passes,
@@ -803,3 +846,64 @@ All eight review findings are applied; the two source edits are comment-only (st
    `file:` URL spelling, both already present at `origin/main` `cca92284` — plus
    `localHandleID`-style identifiers; no host path with a real profile name exists in the diff:
    case-sensitive profile-name scan → 0).
+
+### 11.7 Round-2 record (PR #223 review r1, 2026-11-22)
+
+All eight review findings of `223-opus-review-1.md` are applied (F3 is a recorded ruling; F4 is
+delivered as the replacement PR body in `findings/223-fix-r1.md`, off-repo like the other
+findings).
+
+1. **F1 (P1) — merged `origin/main` `e84973a7` (#220; merge base `b25e34ae`).** `git merge
+   origin/main` conflicted in `frontend/src/features/connections/connections.test.tsx` (#220
+   changed the call under one swept comment block to `() => undefined`) and
+   `frontend/src/features/goals/goal-attention.test.tsx` (#220 replaced the swept
+   `let achievePayload`/`portalFetcher` block with its `sent`/`portal.serve` double). Resolution
+   takes #220's code and re-applies only the sweep edits that still apply: the connections
+   block's deletion stands (the guarded lines remain; the file differs from `origin/main` by that
+   comment alone), and the goal-attention compression is dropped (its target line is gone; the
+   file is byte-identical to `origin/main`). The other three swept files in #220's set
+   (`planning.test.tsx`, `vitest.config.ts`, `docs/TODO.md`) auto-merged with the sweep's comment
+   deletions intact; no other swept file intersects #220. The commit is the merge commit
+   `refactor: correct sweep comments and merge main`.
+2. **F2 (P2) — `scripts/ci/model-routing-record-sanitize.py` comment accuracy.** The host-root
+   arm now says it needs no segment after the root (oracle:
+   `test_root_only_catches_a_file_url_with_no_segment_after_the_root`); `_render_record_span`'s
+   truncated docstring is completed with the idempotency clause and the decoded-reading
+   invariant; `_LITERAL_ESCAPES` names the backslash/slash escapes as separators that continue a
+   match; the module docstring carries a one-line non-fixpoint pointer (so `docs/TODO.md`
+   `:680`/`:694` stay true); both dangling references are retargeted — the host_posix lookbehind
+   sentence stands alone, and the JSON module's anchored-pass comment no longer cites the deleted
+   `_raw_literal_spans` docstring. The rewritten host_posix line and the two pre-program
+   `file_url` lines are mid-sentence/referent repairs, counted in `pre_program_removed` below.
+3. **F3 (P2) — moved pre-program text ruled in scope**; recorded in §1. No lines restored.
+4. **F4 (P3) — the PR body was rewritten** against the delivered tree (off-repo:
+   `findings/223-fix-r1.md`, for the conductor).
+5. **F5 (P3) — runtime-consumed docstrings restored.** The four `description=__doc__` scripts
+   carry their `f1fe1e59` module docstrings byte-identically, so `--help` output equals
+   `origin/main`'s for all four (compared by running both revisions' copies; `cmp` clean). The
+   conductor amendment's user-facing-contract carve-out is the named ceiling exemption in §10.4
+   item 5; the 68 rows whose text the restore brings back flip `compressed`→`kept` in the
+   artifact.
+6. **F6 (P3) — the pidfd-across-exec quirk is back** beside `PreparedGate.PIDFD`:
+   `// Borrowed pidfd: it stays valid across the leader's exec and must be retained` /
+   `// until the caller completes its stop and reap proof.`
+7. **F7 (P3) — record and line-length repairs.** `ci.yml`'s `--slowest` comment drops the false
+   causal link (`; separately,`); §11.1's regeneration wording names the off-repo worker sheets
+   as inputs; and every program-added comment line over 120 characters (31, max 183) is now ≤120
+   — 22 as two-line rewrites and 9 more by re-balancing the whole two-line block, so no block
+   exceeds the two-line ceiling (the round-2 `verify.py` BLOCK>2 check stays empty; ceiling run
+   in §11.5).
+8. **Artifact rebinding.** Replacement notes were re-bound to the round-2 tree (174 rows at the
+   first rebind, 11 rows repaired directly in the two files where `git diff` folded a surviving
+   line into an unchanged pair, 75 rows' stale parts pruned), and the 68 restored
+   runtime-docstring rows flipped to `kept` (the delivered tree is the authority; the census
+   reports `FALSE-DELETED: 0 (non-empty text: 0)`, `FALSE-KEPT: 0`). New sha256 in §11.1.
+   Verifier on the round-2 tree: `deleted 2,609 · compressed 3,067 · kept 354 · excluded 44`;
+   `pre_program_removed: 68` = 8 sweep-side (7 in `model-routing-record-sanitize.py` — the fix
+   stage's four plus the round-2 host_posix and `file_url` lines — and 1 `provider_action.go`)
+   plus 60 main-side rewrites in the merged tree (`ci.yml` 19, `planning.test.tsx` 19,
+   `test-ci-changed-path-classifier.py` 11, `connections.test.tsx` 4, `goal_session.go` 4,
+   `goal-attention.test.tsx` 3); `relocated_lines: 8`. The verifier's one pre-commit problem is
+   the SCOPE report for the eleven #220 files the uncommitted merge brings in (outside the
+   candidate set by construction); on the committed clean tree it reports `--- verify: 0
+   problems`.

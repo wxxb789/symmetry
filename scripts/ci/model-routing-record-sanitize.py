@@ -18,6 +18,8 @@ Relative paths, URLs and ``sha256:`` digests pass through unchanged, and
 rendering is idempotent - except that a ``file:`` URL or a doubled-slash
 authority spelling is an absolute location, not a URL to spare.
 
+Two render boundaries are disclosed non-fixpoints; `docs/evaluations/model-routing/README.md` names both.
+
 With ``--root-only`` the renderer flags only host absolute paths: Windows drive
 and UNC roots, a root-relative Windows spelling (``\\Users\\op\\run``, which
 classic Windows semantics resolve against the current drive root - a profile
@@ -186,7 +188,7 @@ def _compile_patterns(classes: _ByteClasses, root_guard: str) -> _Patterns:
         + _SEPARATOR + windows_tail_plus
     )
     # The segment class allows an empty segment, so a naive concatenation (`/tmp//run`)
-    # is still a host path; a preceding `:` is accepted for the same reason as above,
+    # is still a host path; a preceding `:` is accepted so a location spelled after a colon is still caught,
     # while a preceding separator is not: that spelling is an authority path or a URL,
     # handled by their own patterns, and it keeps `https://tmp/vendor/doc` literal.
     host_posix = re.compile(
@@ -201,9 +203,8 @@ def _compile_patterns(classes: _ByteClasses, root_guard: str) -> _Patterns:
         leading_boundary(r"A-Za-z0-9_>./\\") + r"(?:\\{2})*\\" + _HOST_ROOT
         + r"(?:\\[^" + no_backslash + r"]*|" + space_chunk + r")+"
     )
-    # A segment after the root is required (`file:///tmp` names an absolute location too).
-    # An authority followed by a drive location (`file://localhost/C:/x`) is one
-    # location: the authority's own separator is not where the path ends.
+    # The host-root arm needs no segment after the root (`file:///tmp` is a location too);
+    # an authority followed by a drive location (`file://localhost/C:/x`) is one location.
     file_url = re.compile(
         leading_boundary(r"A-Za-z0-9_") + _FILE_SCHEME + r"[\\/]*(?:"
         + _DEVICE_PREFIX + r"[A-Za-z]:[\\/]" + windows_tail
@@ -264,6 +265,8 @@ def _render_record_span(raw: str, start: int, end: int) -> str:
     (a Markdown code span, say): the token binds the path minus the backslash
     the rule treats as the escape - the trailing separator, for a
     single-backslash run - and that backslash survives outside it, keeping the
+    render idempotent. In the decoded reading the rule cannot fire: a match ends at
+    a decoded-character boundary, so a span never ends inside the ``\\"`` pair.
     """
 
     matched = raw[start:end]
@@ -359,8 +362,8 @@ def _decode_literal(content: str) -> tuple[str, list[tuple[int, int]]]:
     return "".join(characters), spans
 
 
-# The single-letter escapes the JSON grammar spells: ``\b`` is the control byte U+0008,
-# the rest the control characters the decoded reading refuses, so a match ends in front of them.
+# The single-letter escapes the JSON grammar spells: ``\\`` and ``\/`` decode to separators
+# that continue a match; every other escape decodes to a byte the decoded reading refuses.
 _LITERAL_ESCAPES = {'"': '"', "\\": "\\", "/": "/", "b": "\b", "f": "\f",
                     "n": "\n", "r": "\r", "t": "\t"}
 

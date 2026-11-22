@@ -577,8 +577,8 @@ class JsonReadingTests(unittest.TestCase):
                 return match
 
             def match(self, *arguments):
-                # The anchored pass (`_raw_literal_spans`' docstring): one bounded attempt per
-                # claim end per family, counted apart from the scan's own searches.
+                # The anchored pass: one bounded attempt per claim end per family,
+                # counted apart from the scan's own searches.
                 match = self.pattern.match(*arguments)
                 self.anchor_calls += 1
                 if match is not None:

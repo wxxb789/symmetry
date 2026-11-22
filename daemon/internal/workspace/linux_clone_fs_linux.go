@@ -103,9 +103,11 @@ func openLinuxCloneOPathDirPath(path string) (int, unix.Stat_t, error) {
 }
 
 const (
-	// The walk origin (not a named component), so no O_NOFOLLOW; O_DIRECTORY|O_CLOEXEC keeps the descriptor out of child processes.
+	// The walk origin (not a named component), so no O_NOFOLLOW; O_DIRECTORY|O_CLOEXEC
+	// keeps the descriptor out of child processes.
 	linuxCloneConfiguredPathRootFlags = unix.O_DIRECTORY | unix.O_CLOEXEC
-	// A named component adds O_NOFOLLOW so it cannot be swapped for a symlink between the walker's name check and its open.
+	// A named component adds O_NOFOLLOW so it cannot be swapped for a symlink between
+	// the walker's name check and its open.
 	linuxCloneConfiguredPathComponentFlags = linuxCloneConfiguredPathRootFlags | unix.O_NOFOLLOW
 )
 

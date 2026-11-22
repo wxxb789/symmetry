@@ -7,14 +7,16 @@ Judging artifacts: the per-line inventory (6,074 rows; kept as an off-repo run a
 conductor amendment — path, sha256 and regeneration commands in plan §11.1) and the moved module
 intent, now recorded in the owning slice plans (plan §10.6).
 
-Delivered revision: the shipped head `465ffd1b` (`f1fe1e59` plus the sweep commits `16a7e7d3` and
-`0399d5f1` and the `origin/main` merges, the last bringing `origin/main` to `cca92284`) plus the
-apply-stage and fix-stage working-tree changes. The implement-stage measurements cite the
-pre-merge tree they ran on; the apply-stage re-runs (§4, §5, §7) were measured on the
-`b942030e`-era delivered revision, and the fix-stage re-runs (§8) on the shipped head plus the
-review fixes. All commands ran foreground on 2026-11-22 in this
-worktree (Windows/amd64, go1.27.4, portable Elixir 1.20.4/OTP 29, ruff 0.17.5, pnpm 12.17.0); exit
-codes and outputs are verbatim.
+Delivered revision: the round-2 head — `bcdc5d94` (`f1fe1e59` plus the sweep commits `16a7e7d3`
+and `0399d5f1`, the apply stage and the fix stage §8) merged with `origin/main` `e84973a7` (#220;
+merge base `b25e34ae`) plus the round-2 working-tree changes (§9), committed as the merge commit
+`refactor: correct sweep comments and merge main` (exact sha in `findings/223-fix-r1.md`; plan
+§11.7). The implement-stage measurements cite the pre-merge tree they ran on; the apply-stage
+re-runs (§4, §5, §7) were measured on the `b942030e`-era delivered revision, the fix-stage
+re-runs (§8) on the shipped head plus the review fixes, and the round-2 re-runs (§9) on the
+merge head plus the round-2 changes. All commands ran foreground on 2026-11-22 in this worktree
+(Windows/amd64, go1.27.4, portable Elixir 1.20.4/OTP 29, ruff 0.17.5, pnpm 12.17.0); exit codes
+and outputs are verbatim.
 
 ## 0. Change inventory
 
@@ -24,7 +26,7 @@ codes and outputs are verbatim.
 | `git diff --shortstat` | see §5 gate 12; comment lines only, no code token, no string, no directive |
 | candidate files | 212 |
 | candidate lines | 6,074 inventory rows = 6,030 refined candidates + 44 classifier false positives (`excluded`) |
-| dispositions | deleted 2,609 · compressed 3,135 · kept 286 · excluded 44 (re-bound to the delivered revision at the apply stage and to the fix stage's R1 compression, plan §11.2/§11.6) |
+| dispositions | deleted 2,609 · compressed 3,067 · kept 354 · excluded 44 (re-bound to the delivered revision at the apply stage, the fix stage's R1 compression and the round-2 restores, plan §11.2/§11.6/§11.7; round 2 flipped the 68 restored runtime-docstring rows to `kept`) |
 | rules | `K1` 2,318 · `D1` 1,481 · `D2` 415 · `D6` 406 · `K4` 385 · `M1` 353 · `K3` 255 · `K2` 228 · `D3` 71 · `K5` 63 · `M2` 30 · `D5` 25 · `CODELINE` 44 |
 | new files | this record and the sweep's plan; the inventory TSV and the moved-intent record were removed from the repo by the conductor amendment and are kept as off-repo run artifacts (plan §11.1) |
 | source files outside the 212 | `docs/plans/*`: slice plans with a "Comment-policy sweep" note — 22 at implement, 30 after the apply stage appended the moved-intent content (plan §10.6); `docs/TODO.md`; `docs/goals/0010-refactor-program.md` |
@@ -73,6 +75,10 @@ holds for every block: the two blocks over two lines the apply stage had named (
 `daemon/internal/state/provider_action.go` 568-571 and
 `scripts/ci/export-linux-v2-redacted-evidence.py` 535-538) were compressed to ≤2 lines, and the
 docstring-aware ceiling check reports 0 violations with no block using the exemption.
+Round 2 (§9) re-bound the replacement notes to the merge head and flipped 68 rows to `kept` (the
+four restored runtime-docstring module docstrings; the conductor amendment makes their `--help`
+text user-facing contract text, plan §11.7); the verifier and the census agree on the round-2
+tree.
 
 ## 3. Strip-proof (zero code-token change)
 
@@ -242,10 +248,13 @@ Not run, with reasons:
 ## 7. Deviations and limits
 
 1. Per-line dispositions are block-derived (§2); 44 rows are classifier false positives, untouched.
-2. 8 relocated why-lines + 5 rewritten pre-program fragment sentences (§4; the fifth is the fix
-   stage's, plan §11.6) — the only edits outside the candidate set, all declared and counted.
+2. 8 relocated why-lines + 8 rewritten pre-program fragment/referent sentences (§4; the fifth is
+   the fix stage's, plan §11.6, and the last three are round 2's, plan §11.7) — the only edits
+   outside the candidate set, all declared and counted (`pre_program_removed: 68`, of which 60
+   are main-side rewrites in the merged tree).
 3. No candidate block exceeds two lines: the two the apply stage had exempted were compressed by
-   the fix stage (review R1; plan §11.6).
+   the fix stage (review R1; plan §11.6); round 2's restored module docstrings use the conductor
+   amendment's named runtime-contract exemption (plan §11.7).
 4. The three `extend-exclude` Python files stay base-red for `ruff check`/`ruff format --check`
    (unchanged from base, counts identical).
 5. `pnpm-lock.yaml`-driven installs require `--trust-lockfile` in this environment; the supply-chain
@@ -296,3 +305,51 @@ The working set this stage leaves beside the two comment-only source edits: this
 `docs/TODO.md` and `docs/goals/0010-refactor-program.md`. The fix does not commit; the operator's
 landing step commits it and re-derives the diff against `origin/main`, at which point the branch's
 added side of the host-path gate is empty (the rows that matched were this record's own quoting).
+
+## 9. Round 2 (PR #223 review r1, 2026-11-22)
+
+Findings F1–F7 applied; stage record in plan §11.7. Stage head: the merge of `origin/main`
+`e84973a7` (#220) into `bcdc5d94` plus the round-2 working-tree changes, committed as the merge
+commit `refactor: correct sweep comments and merge main`.
+
+- **F1**: the two merge conflicts resolved per plan §11.7 item 1 (take #220's code; keep only the
+  sweep edits whose target lines survive). Strip proof re-run against the new base:
+  `python proof.py --rev e84973a7 --files-from all_files.txt --json proof-final.json` →
+  `--- 207 files: 207 PASS, 0 not-PASS (none)`.
+- **F2/F6/F7**: the sanitizer comment repairs, the pidfd-across-exec quirk and the 31 >120-char
+  compressions per plan §11.7.
+- **F5**: `--help` compared by running `origin/main`'s copies and the head copies of the four
+  `description=__doc__` scripts: identical for all four (`cmp` exit 0), after the base module
+  docstrings are restored byte-identically.
+- **Judging artifacts**: the inventory's new sha256 is
+  `a6ebf1de5686125c36f10b82ff5b76861fb6bc87ff3a6a2e22ed8c865afb3441` (plan §11.1); the census on
+  the round-2 tree reads `FALSE-DELETED: 0 (non-empty text: 0)`, `FALSE-KEPT: 0`; the policy
+  verifier on the committed clean tree reads `--- verify: 0 problems` with
+  `deleted 2,609 · compressed 3,067 · kept 354 · excluded 44`, `pre_program_removed: 68`,
+  `relocated_lines: 8`; the ceiling run reads
+  `0 blocks over two lines (non-exempt); 17 exempt runtime module-docstring blocks`.
+
+| gate (cwd) | exit | observed |
+|---|---:|---|
+| `gofmt -l .` (`daemon/`) | 0 | 0 lines |
+| `go vet ./...` (`daemon/`) | 0 | no output |
+| `GOOS=linux go vet ./...` (`daemon/`) | 0 | no output |
+| `mix format --check-formatted` (`control/`, portable Elixir 1.20.4/OTP 29) | 0 | no output |
+| `MIX_ENV=test mix compile --warnings-as-errors` (`control/`, portable) | 0 | no output |
+| `ruff check scripts/ci` (0.17.5) | 0 | `All checks passed!` |
+| `ruff format --check scripts/ci` | 0 | `53 files already formatted` |
+| `pnpm --pm-on-fail=ignore install --frozen-lockfile --trust-lockfile` (`frontend/`) | 0 | no output |
+| `pnpm --pm-on-fail=ignore exec tsc --noEmit -p .` (`frontend/`) | 0 | no output |
+| `pnpm --pm-on-fail=ignore lint` (`frontend/`) | 0 | `223 problems (0 errors, 223 warnings)` — the count moved from 227 through #220's merged changes; `--max-warnings 229` unchanged |
+| `actionlint -shellcheck= -pyflakes= .github/workflows/ci.yml` (direct 1.7.12 binary) | 0 | no output |
+| strip-proof (§above) | 0 | `--- 207 files: 207 PASS, 0 not-PASS (none)` |
+| `scripts/ci/test-check-lockfile-registry.py` | 0 | `Ran 25 tests in 8.397s` / `OK` |
+| `scripts/ci/test-ci-changed-path-classifier.py` | 0 | fixture routing printed; `OK` |
+| `scripts/ci/test-model-routing-record-sanitize.py` | 0 | `OK` |
+| `scripts/ci/test-model-routing-record-sanitize-json.py` | 0 | `OK` |
+| `scripts/ci/test-omo-native-evidence.py` | 0 | `Ran 15 tests in 2.479s` / `OK` |
+| `scripts/ci/test-opencode-v2-support-witness.py` | 0 | `Ran 16 tests in 0.162s` / `OK` |
+| `scripts/ci/test-check-record-cleanliness.py` | 0 | `Ran 19 tests in 70.890s` / `OK` |
+| `--help` comparison, four runtime-docstring scripts | 0 | identical on base and head |
+| `git diff --check` | 0 | 0 lines |
+| added-side host scans | — | `users/` 0, `/Users/` 0, case-sensitive profile name 0; the case-insensitive profile-name pattern matches only `localHandleID` identifiers (present at base) |

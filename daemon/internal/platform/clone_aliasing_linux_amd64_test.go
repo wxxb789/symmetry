@@ -23,8 +23,8 @@ func TestCloneAliasingLinuxAMD64Evidence(t *testing.T) {
 		cloneAliasingCaseFor("LinuxOwnerAnchorStopEvidence.Clone", func(value *LinuxOwnerAnchorStopEvidence) any {
 			return value.Clone()
 		},
-			// The evidence's HelperExit and its producer fence's LauncherExit
-			// both pass through cloneLinuxOwnerAnchorExitProof, which truncates the nested HelperExit (anchor_types.go:118, :252).
+			// The evidence's HelperExit and its producer fence's LauncherExit both pass through
+			// cloneLinuxOwnerAnchorExitProof, which truncates the nested HelperExit (anchor_types.go:118, :252).
 			"HelperExit.HelperExit",
 			"ProducerFence.LauncherExit.HelperExit"),
 		cloneAliasingCaseFor("cloneLinuxOwnerProcessIdentity", func(value *authority.LinuxCgroupProcessIdentity) any {
@@ -39,8 +39,8 @@ func TestCloneAliasingLinuxAMD64Evidence(t *testing.T) {
 		cloneAliasingCaseFor("cloneLinuxOwnerHelperV2StopEvidence", func(value *LinuxOwnerHelperV2StopEvidence) any {
 			return cloneLinuxOwnerHelperV2StopEvidence(*value)
 		},
-			// The listed paths reach cloneLinuxOwnerAnchorExitProof (nested HelperExit truncated) or the
-			// PreGate.Proof struct copy (helper_v2_stop.go:1564); the RunReapEvidence exits stay unlisted, kept independent by the loop at :1547-1550.
+			// The listed paths reach cloneLinuxOwnerAnchorExitProof (HelperExit truncated) or the PreGate.Proof struct
+			// copy (helper_v2_stop.go:1564); the RunReapEvidence exits stay unlisted, kept independent by the loop (:1547-1550).
 			"AnchorStop.HelperExit.HelperExit",
 			"AnchorStop.ProducerFence.LauncherExit.HelperExit",
 			"PreGate.AnchorStop.HelperExit.HelperExit",

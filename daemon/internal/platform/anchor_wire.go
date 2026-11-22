@@ -585,7 +585,8 @@ var linuxOwnerAnchorOperationShapes = []linuxOwnerAnchorOperationShape{
 	},
 }
 
-// linuxOwnerAnchorOperationShapeFor returns the shape row of one operation; an absent row is refused without a response.
+// linuxOwnerAnchorOperationShapeFor returns the shape row of one operation; an absent row
+// is refused without a response.
 func linuxOwnerAnchorOperationShapeFor(operation string) (linuxOwnerAnchorOperationShape, bool) {
 	for _, row := range linuxOwnerAnchorOperationShapes {
 		if row.operation == operation {

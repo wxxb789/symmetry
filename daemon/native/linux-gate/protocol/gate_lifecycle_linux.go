@@ -606,7 +606,8 @@ func (gate *PreparedGate) Identity() ProcessIdentity {
 	return gate.identity
 }
 
-// Borrowed, and retained until the caller completes its stop and reap proof.
+// Borrowed pidfd: it stays valid across the leader's exec and must be retained
+// until the caller completes its stop and reap proof.
 func (gate *PreparedGate) PIDFD() *os.File {
 	if gate == nil {
 		return nil

@@ -4,8 +4,8 @@ package platform
 
 import "errors"
 
-// Each message is the exact literal the mismatch sites used while the class was
-// anonymous, so produced and serialized error text is unchanged; sites wrap with %w so errors.Is separates a mismatch from a failed read.
+// Each message is the exact literal the mismatch sites used while the class was anonymous, so produced and
+// serialized error text is unchanged; sites wrap with %w so errors.Is separates a mismatch from a failed read.
 var (
 	ErrLinuxOwnerCgroupPathChanged = errors.New("cgroup path changed")
 

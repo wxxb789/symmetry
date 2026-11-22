@@ -2,7 +2,10 @@
 """Characterize the pinned OmO executable directly; never promote adapter support.
 
 Run only with an authorized local fixture and relay credentials supplied by the
-operator's environment. Evidence roots are deliberately retained.
+operator's environment. Evidence roots are deliberately retained, including on
+failure. The pinned executable's host path comes from SYMMETRY_OMO_BINARY; the
+committed size and digest remain the authority. This is native-process evidence,
+not daemon or Control evidence.
 """
 
 import argparse

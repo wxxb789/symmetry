@@ -1,10 +1,9 @@
-import { QueryClientProvider } from "@tanstack/react-query";
-import { createMemoryHistory, RouterProvider, type RouterHistory } from "@tanstack/react-router";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createApplication, type Application } from "../../app/application";
-import { createAppRouter } from "../../app/router";
+import { HttpResponse } from "msw";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { jsonResponse, portal } from "../../app/portal-double";
+import { renderRoute, trackApplications } from "../../app/test-harness";
 import { readWorkDetail } from "../../services/api.fixtures";
 
 /**
@@ -20,28 +19,6 @@ const projectId = "10000000-0000-4000-8000-000000000001";
 const subjectId = "20000000-0000-4000-8000-000000000001";
 const taskId = "55555555-5555-4555-8555-555555555555";
 const cancelCommand = { command_id: "77777777-7777-4777-8777-777777777777", task_id: taskId, kind: "cancel", state: "pending", acknowledgement_outcome: null };
-
-function workspaceBody() {
-  return {
-    selected_project_id: projectId,
-    projects: [
-      {
-        id: projectId,
-        key: "ONE",
-        name: "Project One",
-        description: null,
-        status: "active",
-        default_agent_profile: "codex-default",
-        default_workspace: "primary",
-        resources: [],
-        work_items: [],
-      },
-    ],
-    health: { status: "unknown" },
-    runtimes: [],
-    registered_runtimes: [],
-  };
-}
 
 function detailBody(options: {
   execution?: Record<string, unknown>;
@@ -64,30 +41,17 @@ const runningDetail = () => detailBody({ execution: { task_id: taskId, run_id: n
 const idleDetail = () => detailBody({ item: { can_start: true } });
 const queuedDetail = () => detailBody({ execution: { task_id: taskId, run_id: null, generation: 1, state: "queued", can_cancel: false } });
 
-interface RecordedRequest {
-  method: string;
-  path: string;
-  headers: Record<string, string>;
-  body: unknown;
-}
-
-/** The status the harness answers each date-bearing call with. */
-const accepted = (body: Record<string, unknown>) => new Response(JSON.stringify(body), { status: 202 });
+const accepted = (body: Record<string, unknown>) => jsonResponse(body, 202);
 
 interface HarnessOptions {
-  /** The detail read, by 1-based read index. */
-  detail?: (readIndex: number) => Response | Promise<Response>;
-  /** A write POST: return the answer, a refusal, or reject with a transport failure. */
-  command?: (path: string, body: unknown) => Response | Promise<Response>;
+  detail?: Record<string, unknown>;
+  detailReads?: (readIndex: number) => Response | Promise<Response>;
+  command?: (path: string, body: Record<string, unknown> | null) => Response | Promise<Response>;
   /** The session read; `readIndex` starts at 1 so a rotation can be sequenced. */
-  session?: (readIndex: number) => Response;
+  session?: (readIndex: number) => Record<string, unknown>;
 }
 
-const applications: Application[] = [];
-afterEach(() => {
-  for (const application of applications) application.queryClient.clear();
-  applications.length = 0;
-});
+const applications = trackApplications();
 
 /** jsdom has no matchMedia; the detail is a drawer above 1024px and a page below it. */
 function stubMatchMedia(desktop: boolean) {
@@ -105,52 +69,54 @@ function stubMatchMedia(desktop: boolean) {
 
 beforeEach(() => { stubMatchMedia(false); });
 
-/** The reads neither harness scripts: the workspace snapshot, or the routeless 404. */
-function unscriptedResponse(pathname: string) {
-  if (pathname === "/portal/api/workspace") return new Response(JSON.stringify(workspaceBody()));
-  return new Response("{}", { status: 404 });
-}
-
-/** Mounts the work detail against a scripted fetcher: both harnesses share this skeleton. */
-function renderDetail(fetcher: typeof fetch) {
-  const path = `/portal/work/${subjectId}`;
-  const application = createApplication({ fetcher, location: { href: `http://localhost${path}`, replace: vi.fn() } });
-  applications.push(application);
-  const history: RouterHistory = createMemoryHistory({ initialEntries: [path] });
-  const router = createAppRouter(application, history);
-  render(<QueryClientProvider client={application.queryClient}><RouterProvider router={router} /></QueryClientProvider>);
-  return { application, history };
+function seedPortal(detail: Record<string, unknown> = runningDetail()) {
+  portal.seed({
+    workspace: {
+      selectedProjectId: projectId,
+      projects: [{
+        id: projectId,
+        key: "ONE",
+        name: "Project One",
+        description: null,
+        status: "active",
+        default_agent_profile: "codex-default",
+        default_workspace: "primary",
+        resources: [],
+        work_items: [],
+      }],
+      runtimes: [],
+      registeredRuntimes: [],
+      health: { status: "unknown" },
+    },
+    details: { [subjectId]: detail },
+  });
 }
 
 function renderWorkDetail(options: HarnessOptions = {}) {
   let detailReads = 0;
   let sessionReads = 0;
-  const requests: RecordedRequest[] = [];
-  const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
-    const url = new URL(input instanceof Request ? input.url : String(input), "http://localhost");
-    const method = init?.method ?? "GET";
-    const headers = (init?.headers ?? {}) as Record<string, string>;
-    const body: unknown = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
-    requests.push({ method, path: url.pathname + url.search, headers, body });
-    if (url.pathname === "/portal/api/session") {
+  seedPortal(options.detail);
+  portal.serve((request) => {
+    if (options.session !== undefined && request.method === "GET" && request.url.pathname === "/portal/api/session") {
       sessionReads += 1;
-      return options.session === undefined
-        ? new Response(JSON.stringify({ csrf_token: "session-token" }))
-        : options.session(sessionReads);
+      return jsonResponse(options.session(sessionReads));
     }
-    if (url.pathname.startsWith("/portal/api/work-items/")) {
-      if (method === "POST") {
-        const respond = options.command ?? (() => new Response("{}", { status: 500 }));
-        return respond(url.pathname, body);
-      }
+    if (options.detailReads !== undefined && request.method === "GET" && request.url.pathname === `/portal/api/work-items/${subjectId}`) {
       detailReads += 1;
-      return (options.detail ?? (() => new Response(JSON.stringify(runningDetail()))))(detailReads);
+      return options.detailReads(detailReads);
     }
-    return unscriptedResponse(url.pathname);
+    if (request.method === "POST" && request.url.pathname.startsWith("/portal/api/work-items/")) {
+      const respond = options.command ?? (() => jsonResponse({}, 500));
+      return respond(request.url.pathname, request.body);
+    }
+    return undefined;
   });
-  const { application, history } = renderDetail(fetcher);
-  const posts = () => requests.filter((request) => request.method === "POST");
-  return { application, history, requests, posts };
+  const { application } = renderRoute(`/portal/work/${subjectId}`);
+  applications.push(application);
+  return {
+    application,
+    posts: () => portal.requests.filter((request) => request.method === "POST"),
+  };
 }
 
 async function openDetail() {
@@ -166,7 +132,7 @@ describe("control mutation boundary", () => {
   it("renders the server's typed refusal as a server refusal, never as a runtime rejection", async () => {
     const user = userEvent.setup();
     const refusal = { error: { code: "stale_generation", message: "The attempt has already moved on." } };
-    renderWorkDetail({ command: () => new Response(JSON.stringify(refusal), { status: 409 }) });
+    renderWorkDetail({ command: () => jsonResponse(refusal, 409) });
     await openDetail();
     await user.click(screen.getByRole("button", { name: "Cancel run" }));
     const receipt = await screen.findByText("Refused by the server");
@@ -211,7 +177,7 @@ describe("control mutation boundary", () => {
   it.each(mutations)("sends the $control control with the session's CSRF token", async ({ control, path, served, answer }) => {
     const user = userEvent.setup();
     const harness = renderWorkDetail({
-      detail: () => new Response(JSON.stringify(served())),
+      detail: served(),
       command: () => accepted(answer()),
     });
     await openDetail();
@@ -219,13 +185,13 @@ describe("control mutation boundary", () => {
     await waitFor(() => { expect(harness.posts()).toHaveLength(1); });
     expect(harness.posts()[0]?.path).toBe(`/portal/api/work-items/${subjectId}/${path}`);
     expect(harness.posts()[0]?.headers["x-csrf-token"]).toBe("session-token");
-    expect(harness.posts()[0]?.headers["x-csrfToken"]).toBeUndefined();
+    expect(harness.posts()[0]?.headers["x-csrftoken"]).toBeUndefined();
   });
 
   it("uses the rotated session token after another tab renews the shared cookie", async () => {
     const user = userEvent.setup();
     const harness = renderWorkDetail({
-      session: (readIndex) => new Response(JSON.stringify({ csrf_token: readIndex === 1 ? "initial-session-token" : "rotated-session-token" })),
+      session: (readIndex) => ({ csrf_token: readIndex === 1 ? "initial-session-token" : "rotated-session-token" }),
       command: () => accepted({
         disposition: "created",
         command: cancelCommand,
@@ -236,7 +202,7 @@ describe("control mutation boundary", () => {
     await act(async () => {
       await harness.application.queryClient.invalidateQueries({ queryKey: ["session"] });
     });
-    await waitFor(() => { expect(harness.requests.filter((request) => request.path === "/portal/api/session")).toHaveLength(2); });
+    await waitFor(() => { expect(portal.requests.filter((request) => request.path === "/portal/api/session")).toHaveLength(2); });
     await user.click(screen.getByRole("button", { name: "Cancel run" }));
     await waitFor(() => { expect(harness.posts()).toHaveLength(1); });
     expect(harness.posts()[0]?.headers["x-csrf-token"]).toBe("rotated-session-token");
@@ -244,7 +210,7 @@ describe("control mutation boundary", () => {
 
   it("keeps an undescribed 403 a session-protection refusal instead of a workspace denial", async () => {
     const user = userEvent.setup();
-    renderWorkDetail({ command: () => new Response("{}", { status: 403 }) });
+    renderWorkDetail({ command: () => jsonResponse({}, 403) });
     await openDetail();
     await user.click(screen.getByRole("button", { name: "Cancel run" }));
     const card = await waitFor(() => {
@@ -257,9 +223,7 @@ describe("control mutation boundary", () => {
 
   it("refuses a control whose attempt has no storable identity instead of sending it unidentified", async () => {
     const user = userEvent.setup();
-    const harness = renderWorkDetail({
-      command: () => { throw new Error("a control without an attempt identity must not reach the server"); }
-    });
+    const harness = renderWorkDetail();
     await openDetail();
     // A browser whose session storage refuses every access: the attempt has no
     // durable identity, and a request without one could be applied twice by a
@@ -292,10 +256,10 @@ describe("capability-bound controls", () => {
   it("renders cancel and retry only from the served signals, never from the live state", async () => {
     const user = userEvent.setup();
     renderWorkDetail({
-      detail: (readIndex) => new Response(JSON.stringify(detailBody({
+      detailReads: (readIndex) => jsonResponse(detailBody({
         // The same live state both reads; only the server's own signals change.
         execution: { task_id: taskId, run_id: null, generation: 1, state: "running", can_cancel: readIndex === 1, can_retry: readIndex === 1 },
-      }))),
+      })),
     });
     await openDetail();
     expect(await screen.findByRole("button", { name: "Cancel run" })).toBeInTheDocument();
@@ -316,7 +280,7 @@ describe("control receipts", () => {
   it("renders an accepted start on a queued run with its own headline, never an acknowledgement", async () => {
     const user = userEvent.setup();
     renderWorkDetail({
-      detail: (readIndex) => new Response(JSON.stringify(readIndex === 1 ? idleDetail() : queuedDetail())),
+      detailReads: (readIndex) => jsonResponse(readIndex === 1 ? idleDetail() : queuedDetail()),
       command: () => accepted({
         disposition: "created",
         execution: { task_id: taskId, run_id: null, generation: 1, state: "queued" },
@@ -333,8 +297,8 @@ describe("control receipts", () => {
     const user = userEvent.setup();
     const held = Promise.withResolvers<Response>();
     renderWorkDetail({
-      detail: (readIndex) => (readIndex === 1 ? new Response(JSON.stringify(runningDetail())) : held.promise),
-      command: () => Promise.reject(new TypeError("offline")),
+      detailReads: (readIndex) => (readIndex === 1 ? jsonResponse(runningDetail()) : held.promise),
+      command: () => HttpResponse.error(),
     });
     await openDetail();
     await user.click(screen.getByRole("button", { name: "Cancel run" }));
@@ -354,7 +318,7 @@ describe("control receipts", () => {
       // Read 1 serves the live cancel control; read 2 serves the snapshot that
       // names the command as `latest_command` while the rendered timeline page
       // does not carry its entry.
-      detail: (readIndex) => new Response(JSON.stringify(readIndex === 1
+      detailReads: (readIndex) => jsonResponse(readIndex === 1
         ? runningDetail()
         : detailBody({
           execution: {
@@ -378,7 +342,7 @@ describe("control receipts", () => {
             },
           },
           timeline: [commandEntry("bbbbbbb2-0000-4000-8000-000000000002", "2026-11-16T09:00:00Z", "guidance", "acknowledged", "applied")],
-        }))),
+        })),
       command: () => accepted({
         disposition: "created",
         command: { command_id: commandId, task_id: taskId, kind: "cancel", state: "pending", acknowledgement_outcome: null },
@@ -496,21 +460,22 @@ function renderTimelineHarness(options: {
 }) {
   let detailReads = 0;
   const cursors: string[] = [];
-  const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => {
-    const url = new URL(input instanceof Request ? input.url : String(input), "http://localhost");
-    if (url.pathname === `/portal/api/work-items/${subjectId}/timeline`) {
-      const before = url.searchParams.get("before");
+  seedPortal();
+  portal.serve((request) => {
+    if (request.method !== "GET") return undefined;
+    if (request.url.pathname === `/portal/api/work-items/${subjectId}`) {
+      detailReads += 1;
+      return jsonResponse(options.detail(detailReads));
+    }
+    if (request.url.pathname === `/portal/api/work-items/${subjectId}/timeline`) {
+      const before = request.url.searchParams.get("before");
       expect(before).toBeTruthy();
       cursors.push(before ?? "");
-      return Promise.resolve(new Response(JSON.stringify(options.timeline(before ?? ""))));
+      return jsonResponse(options.timeline(before ?? ""));
     }
-    if (url.pathname === `/portal/api/work-items/${subjectId}`) {
-      detailReads += 1;
-      return Promise.resolve(new Response(JSON.stringify(options.detail(detailReads))));
-    }
-    if (url.pathname === "/portal/api/session") return Promise.resolve(new Response(JSON.stringify({ csrf_token: "session-token" })));
-    return Promise.resolve(unscriptedResponse(url.pathname));
+    return undefined;
   });
-  renderDetail(fetcher);
+  const { application } = renderRoute(`/portal/work/${subjectId}`);
+  applications.push(application);
   return { cursors, detailReads: () => detailReads };
 }

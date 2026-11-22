@@ -1,9 +1,12 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { HttpResponse } from "msw";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import omittedProposal from "../../../../contracts/fixtures/valid/plan-proposal.integration-omitted.json";
-import { jsonResponse, recordingFetcher, renderRoute } from "../../app/test-harness";
+import { jsonResponse, portal } from "../../app/portal-double";
+import { renderRoute } from "../../app/test-harness";
 import { readAttention, readGoalProjection } from "../../services/api.fixtures";
+import { asRecord } from "../../services/served";
 
 const projectId = "11111111-1111-4111-8111-111111111111";
 const secondProjectId = "22222222-2222-4222-8222-222222222222";
@@ -17,22 +20,9 @@ const projects = [
 
 afterEach(() => { localStorage.clear(); });
 
-// The routes every case in this file shares: the session stub and the workspace
-// read for the first project. Each case's handler names only the routes it
-// exercises; anything it leaves unanswered is answered here.
-function portalFetcher(handler: (path: string, init?: RequestInit) => Response | undefined) {
-  return recordingFetcher((path, init) => {
-    const answered = handler(path, init);
-    if (answered !== undefined) return answered;
-    const url = new URL(path, "http://localhost");
-    if (url.pathname === "/portal/api/session") return jsonResponse({ csrf_token: "session-token" });
-    return jsonResponse(workspaceResponse(projectId));
-  });
-}
-
-function workspaceResponse(selected: string) {
-  return { selected_project_id: selected, projects };
-}
+beforeEach(() => {
+  portal.seed({ workspace: { selectedProjectId: projectId, projects } });
+});
 
 // The mutation identity the open action form displays: the identity the send
 // carries with it.
@@ -43,8 +33,8 @@ function displayedIdentity() {
 
 describe("attention entry point", () => {
   it("lists Goal attention and the project blocked work together", async () => {
-    const { fetcher } = portalFetcher((path) => {
-      const url = new URL(path, "http://localhost");
+    portal.serve((request) => {
+      const url = request.url;
       if (url.pathname === "/portal/api/attention") {
         return jsonResponse(readAttention({
           selectedProjectId: projectId,
@@ -57,7 +47,7 @@ describe("attention entry point", () => {
       }
     });
 
-    renderRoute("/portal/attention", fetcher);
+    renderRoute("/portal/attention");
     expect(await screen.findByRole("link", { name: "Deliver the attention entry point" })).toHaveAttribute("href", `/portal/goals/${goalId}`);
     expect(screen.getByText("waiting_dependency")).toBeVisible();
     expect(screen.getByText("Settlement attention: awaiting_validation")).toBeVisible();
@@ -71,8 +61,8 @@ describe("attention entry point", () => {
   });
 
   it("renders a served Goal-feed refusal statement while keeping the project blocked work", async () => {
-    const { fetcher } = portalFetcher((path) => {
-      const url = new URL(path, "http://localhost");
+    portal.serve((request) => {
+      const url = request.url;
       if (url.pathname === "/portal/api/attention") {
         return jsonResponse(readAttention({
           selectedProjectId: projectId,
@@ -83,7 +73,7 @@ describe("attention entry point", () => {
       }
     });
 
-    renderRoute("/portal/attention", fetcher);
+    renderRoute("/portal/attention");
     expect(await screen.findByRole("heading", { name: "Goal attention is unavailable on this server" })).toBeVisible();
     expect(screen.getByText(/goal admission is disabled/)).toBeVisible();
     expect(screen.getByText("goal_admission_disabled")).toBeVisible();
@@ -93,8 +83,8 @@ describe("attention entry point", () => {
 
   it("loads the Goal feed's older page with the served cursor and never repeats an entry", async () => {
     const olderGoalId = "55555555-5555-4555-8555-555555555555";
-    const { fetcher, calls } = portalFetcher((path) => {
-      const url = new URL(path, "http://localhost");
+    portal.serve((request) => {
+      const url = request.url;
       if (url.pathname === "/portal/api/attention") {
         const cursor = url.searchParams.get("cursor");
         return jsonResponse(cursor === "cursor-one"
@@ -104,20 +94,20 @@ describe("attention entry point", () => {
     });
 
     const user = userEvent.setup();
-    renderRoute("/portal/attention", fetcher);
+    renderRoute("/portal/attention");
     expect(await screen.findByRole("link", { name: "Newest goal attention" })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Load more Goal attention" }));
     expect(await screen.findByRole("link", { name: "Older goal attention" })).toBeVisible();
     expect(screen.getByRole("link", { name: "Newest goal attention" })).toBeVisible();
-    expect(calls.some((call) => call.path.includes("cursor=cursor-one"))).toBe(true);
+    expect(portal.requests.some((call) => call.path.includes("cursor=cursor-one"))).toBe(true);
   });
 
   it("does not render the feed pages a replaced first-page cursor did not serve", async () => {
     const olderGoalId = "55555555-5555-4555-8555-555555555555";
     const replacedChainGoalId = "66666666-6666-4666-8666-666666666666";
     let firstPageReads = 0;
-    const { fetcher } = portalFetcher((path) => {
-      const url = new URL(path, "http://localhost");
+    portal.serve((request) => {
+      const url = request.url;
       if (url.pathname === "/portal/api/attention") {
         const cursor = url.searchParams.get("cursor");
         if (cursor === "cursor-one") {
@@ -138,7 +128,7 @@ describe("attention entry point", () => {
     });
 
     const user = userEvent.setup();
-    const route = renderRoute("/portal/attention", fetcher);
+    const route = renderRoute("/portal/attention");
     expect(await screen.findByRole("link", { name: "Newest goal attention" })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Load more Goal attention" }));
     expect(await screen.findByRole("link", { name: "Older goal attention" })).toBeVisible();
@@ -154,41 +144,40 @@ describe("attention entry point", () => {
   });
 
   it("offers goal creation only against a selected project and keeps the server's refusal", async () => {
-    const { fetcher, calls } = portalFetcher((path, init) => {
-      const url = new URL(path, "http://localhost");
+    portal.serve((request) => {
+      const url = request.url;
       if (url.pathname === "/portal/api/attention") {
         return jsonResponse(readAttention({ selectedProjectId: projectId, blocked: [] }));
       }
       if (url.pathname === `/portal/api/projects/${projectId}/goals`) {
-        expect(init?.headers).toMatchObject({ "x-csrf-token": "session-token" });
-        const rawBody = typeof init?.body === "string" ? init.body : "{}";
-        const body = JSON.parse(rawBody) as { schema_version: string; initial_revision: { objective: string } };
+        expect(request.headers).toMatchObject({ "x-csrf-token": "session-token" });
+        const body: Record<string, unknown> = request.body ?? {};
         expect(body.schema_version).toBe("symmetry.goal_create.v1");
-        expect(body.initial_revision.objective).toBe("Expose the attention entry point");
+        expect(asRecord(body.initial_revision)?.objective).toBe("Expose the attention entry point");
         return jsonResponse({ error: { code: "invalid_contract", message: "goal contract is invalid" } }, 422);
       }
     });
 
     const user = userEvent.setup();
-    renderRoute("/portal/attention", fetcher);
+    renderRoute("/portal/attention");
     await screen.findByRole("heading", { name: "Attention" });
     await user.click(await screen.findByRole("button", { name: /New goal/ }));
     await user.type(screen.getByLabelText("Title"), "Goal from the attention page");
     await user.type(screen.getByLabelText("Objective"), "Expose the attention entry point");
     await user.click(screen.getByRole("button", { name: "Create goal" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("goal contract is invalid (invalid_contract)");
-    expect(calls.some((call) => call.path.includes("/portal/api/projects/") && call.path.endsWith("/goals"))).toBe(true);
+    expect(portal.requests.some((call) => call.path.includes("/portal/api/projects/") && call.path.endsWith("/goals"))).toBe(true);
   });
 
   it("offers no goal creation when the served attention read selects no project", async () => {
-    const { fetcher } = portalFetcher((path) => {
-      const url = new URL(path, "http://localhost");
+    portal.serve((request) => {
+      const url = request.url;
       if (url.pathname === "/portal/api/attention") {
         return jsonResponse(readAttention({ selectedProjectId: null, blocked: [] }));
       }
     });
 
-    renderRoute("/portal/attention", fetcher);
+    renderRoute("/portal/attention");
     await screen.findByRole("heading", { name: "Attention" });
     expect(await screen.findByText("No Goal needs attention")).toBeVisible();
     // The create control is driven by the served project scope; without a
@@ -201,8 +190,8 @@ describe("attention entry point", () => {
 describe("goal detail surface", () => {
   it("renders the objective, accepted progress, budget truth and the read-only dependency projection", async () => {
     const acceptedSubject = { resource_id: "88888888-8888-4888-8888-888888888888", commit: "a".repeat(40), tree_digest: `sha256:${"b".repeat(64)}` };
-    const { fetcher } = portalFetcher((path) => {
-      const url = new URL(path, "http://localhost");
+    portal.serve((request) => {
+      const url = request.url;
       if (url.pathname === `/portal/api/goals/${goalId}`) {
         return jsonResponse(readGoalProjection({
           id: goalId,
@@ -242,7 +231,7 @@ describe("goal detail surface", () => {
       }
     });
 
-    renderRoute(`/portal/goals/${goalId}`, fetcher);
+    renderRoute(`/portal/goals/${goalId}`);
     expect(await screen.findByRole("heading", { level: 1, name: "Deliver the attention entry point" })).toBeVisible();
     expect(screen.getByText("Merge Goal attention with the project blocked items")).toBeVisible();
     expect(screen.getByText("1 of 2 required items accepted")).toBeVisible();
@@ -284,8 +273,8 @@ describe("goal detail surface", () => {
 
   it("sends the served expected version and revision, and renders the stale conflict without overwriting", async () => {
     let commandCalls = 0;
-    const { fetcher, calls } = portalFetcher((path, init) => {
-      const url = new URL(path, "http://localhost");
+    portal.serve((request) => {
+      const url = request.url;
       if (url.pathname === `/portal/api/goals/${goalId}`) {
         return jsonResponse(readGoalProjection({
           id: goalId,
@@ -300,8 +289,7 @@ describe("goal detail surface", () => {
       }
       if (url.pathname === `/portal/api/goals/${goalId}/commands`) {
         commandCalls += 1;
-        const rawBody = typeof init?.body === "string" ? init.body : "{}";
-        const body = JSON.parse(rawBody) as { mutation_id: string; expected_version: number; expected_revision: number; kind: string; payload: Record<string, unknown> };
+        const body: Record<string, unknown> = request.body ?? {};
         expect(body.expected_version).toBe(7);
         expect(body.expected_revision).toBe(2);
         expect(body.kind).toBe("pause");
@@ -313,7 +301,7 @@ describe("goal detail surface", () => {
     });
 
     const user = userEvent.setup();
-    renderRoute(`/portal/goals/${goalId}`, fetcher);
+    renderRoute(`/portal/goals/${goalId}`);
     await screen.findByRole("heading", { level: 1, name: "Stale conflict goal" });
     await user.click(screen.getByRole("button", { name: "Pause" }));
     await user.type(screen.getByLabelText("Reason"), "Hold while the operator reviews");
@@ -324,7 +312,7 @@ describe("goal detail surface", () => {
     expect(commandCalls).toBe(1);
     // The surface requires a reload instead of silently retrying the refused command.
     expect(screen.getByRole("button", { name: "Reload the current state" })).toBeVisible();
-    expect(calls.filter((call) => call.path.includes("/commands")).length).toBe(1);
+    expect(portal.requests.filter((call) => call.path.includes("/commands")).length).toBe(1);
   });
 
   // The acceptance notice waits for the served goal to settle on the applied
@@ -336,15 +324,14 @@ describe("goal detail surface", () => {
     // version the server serves at submit, not the settled one, or the server
     // refuses it as stale.
     let advanced = false;
-    const commands: { expected_version: number; expected_revision: number }[] = [];
-    const { fetcher } = portalFetcher((path, init) => {
-      const url = new URL(path, "http://localhost");
+    const commands: Record<string, unknown>[] = [];
+    portal.serve((request) => {
+      const url = request.url;
       if (url.pathname === `/portal/api/goals/${goalId}`) {
         return jsonResponse(readGoalProjection({ id: goalId, projectId, projectName: "Project One", title: "Concurrently advanced goal", state: "active", currentRevision: 1, version: advanced ? 9 : 8, allowedActions: ["pause", "amend", "cancel"] }));
       }
       if (url.pathname === `/portal/api/goals/${goalId}/commands`) {
-        const rawBody = typeof init?.body === "string" ? init.body : "{}";
-        const envelope = JSON.parse(rawBody) as { expected_version: number; expected_revision: number; kind: string };
+        const envelope: Record<string, unknown> = request.body ?? {};
         commands.push(envelope);
         if (envelope.expected_version !== 9) {
           return jsonResponse({ error: { code: "stale", message: "resource changed since it was loaded", current_version: 9, current_revision: 1, allowed_actions: ["pause", "amend", "cancel"] } }, 409);
@@ -355,7 +342,7 @@ describe("goal detail surface", () => {
     });
 
     const user = userEvent.setup();
-    renderRoute(`/portal/goals/${goalId}`, fetcher);
+    renderRoute(`/portal/goals/${goalId}`);
     await screen.findByRole("heading", { level: 1, name: "Concurrently advanced goal" });
     // The settled page still shows version 8: the concurrent advance is not read yet.
     expect(screen.getByText(/· revision 1 · version 8$/)).toBeVisible();
@@ -378,22 +365,22 @@ describe("goal detail surface", () => {
     const bodies: string[] = [];
     let attempted = 0;
     let servedVersion = 3;
-    const { fetcher } = portalFetcher((path, init) => {
-      const url = new URL(path, "http://localhost");
+    portal.serve((request) => {
+      const url = request.url;
       if (url.pathname === `/portal/api/goals/${goalId}`) {
         return jsonResponse(readGoalProjection({ id: goalId, projectId, projectName: "Project One", title: "Replay goal", state: "active", version: servedVersion, allowedActions: ["pause", "amend", "cancel"] }));
       }
       if (url.pathname === `/portal/api/goals/${goalId}/commands`) {
-        const rawBody = typeof init?.body === "string" ? init.body : "{}";
-        const body = JSON.parse(rawBody) as { mutation_id: string };
-        identities.push(body.mutation_id);
-        bodies.push(rawBody);
+        const body: Record<string, unknown> = request.body ?? {};
+        const mutationId = body.mutation_id;
+        identities.push(typeof mutationId === "string" ? mutationId : "");
+        bodies.push(request.rawBody ?? "{}");
         // The first attempt's acknowledgement is lost at the transport layer:
         // the server may still have applied it, so the intent must replay.
         if (attempted++ === 0) {
           // The applied command advanced the goal before the operator re-sends.
           servedVersion = 4;
-          throw new TypeError("network down");
+          return HttpResponse.error();
         }
         return jsonResponse({ goal_id: goalId, mutation_id: body.mutation_id, event: { id: body.mutation_id, sequence: 2, kind: "pause", revision: 1 } });
       }
@@ -401,7 +388,7 @@ describe("goal detail surface", () => {
     });
 
     const user = userEvent.setup();
-    renderRoute(`/portal/goals/${goalId}`, fetcher);
+    renderRoute(`/portal/goals/${goalId}`);
     await screen.findByRole("heading", { level: 1, name: "Replay goal" });
     await user.click(screen.getByRole("button", { name: "Pause" }));
     await user.type(screen.getByLabelText("Reason"), "Operator pause");
@@ -426,8 +413,8 @@ describe("goal detail surface", () => {
     // refuses the reused identity as different input otherwise.
     expect(bodies).toHaveLength(2);
     expect(bodies[1]).toBe(bodies[0]);
-    const resent = JSON.parse(bodies[1] ?? "{}") as { expected_version?: number };
-    expect(resent.expected_version).toBe(3);
+    const resent = portal.sent("POST", `/portal/api/goals/${goalId}/commands`)[1]?.body;
+    expect(resent?.expected_version).toBe(3);
     // The settled attempt releases its identity: the next intent mints a new one.
     await user.click(screen.getByRole("button", { name: "Pause" }));
     const renewed = displayedIdentity();
@@ -446,8 +433,8 @@ describe("goal detail surface", () => {
 
   it("expires the session when a command answers 401 instead of rendering it as a refusal", async () => {
     const replace = vi.fn();
-    const { fetcher } = portalFetcher((path) => {
-      const url = new URL(path, "http://localhost");
+    portal.serve((request) => {
+      const url = request.url;
       if (url.pathname === `/portal/api/goals/${goalId}`) {
         return jsonResponse(readGoalProjection({ id: goalId, projectId, projectName: "Project One", title: "Expired session goal", state: "active", allowedActions: ["pause", "amend", "cancel"] }));
       }
@@ -460,7 +447,7 @@ describe("goal detail surface", () => {
     });
 
     const user = userEvent.setup();
-    const { application } = renderRoute(`/portal/goals/${goalId}`, fetcher, {
+    const { application } = renderRoute(`/portal/goals/${goalId}`, {
       location: { href: `http://localhost/portal/goals/${goalId}`, replace },
     });
     await screen.findByRole("heading", { level: 1, name: "Expired session goal" });
@@ -476,24 +463,24 @@ describe("goal detail surface", () => {
 
   it("never announces success from an undecodable receipt", async () => {
     const identities: string[] = [];
-    const { fetcher } = portalFetcher((path, init) => {
-      const url = new URL(path, "http://localhost");
+    portal.serve((request) => {
+      const url = request.url;
       if (url.pathname === `/portal/api/goals/${goalId}`) {
         return jsonResponse(readGoalProjection({ id: goalId, projectId, projectName: "Project One", title: "Empty receipt goal", state: "active", allowedActions: ["pause", "amend", "cancel"] }));
       }
       // A 200 without the receipt the accepted command answers with is a
       // response the surface cannot read safely, never a success.
       if (url.pathname === `/portal/api/goals/${goalId}/commands`) {
-        const rawBody = typeof init?.body === "string" ? init.body : "{}";
-        const body = JSON.parse(rawBody) as { mutation_id: string };
-        identities.push(body.mutation_id);
+        const body: Record<string, unknown> = request.body ?? {};
+        const mutationId = body.mutation_id;
+        identities.push(typeof mutationId === "string" ? mutationId : "");
         return jsonResponse({});
       }
       if (url.pathname === `/portal/api/goals/${goalId}/events`) return jsonResponse({ entries: [], next_after: null });
     });
 
     const user = userEvent.setup();
-    renderRoute(`/portal/goals/${goalId}`, fetcher);
+    renderRoute(`/portal/goals/${goalId}`);
     await screen.findByRole("heading", { level: 1, name: "Empty receipt goal" });
     await user.click(screen.getByRole("button", { name: "Pause" }));
     await user.type(screen.getByLabelText("Reason"), "Operator pause");
@@ -513,15 +500,15 @@ describe("goal detail surface", () => {
   });
 
   it("renders a prototype-name served action as an unknown label instead of a function", async () => {
-    const { fetcher } = portalFetcher((path) => {
-      const url = new URL(path, "http://localhost");
+    portal.serve((request) => {
+      const url = request.url;
       if (url.pathname === `/portal/api/goals/${goalId}`) {
         return jsonResponse(readGoalProjection({ id: goalId, projectId, projectName: "Project One", title: "Prototype action goal", state: "active", allowedActions: ["constructor", "pause"] }));
       }
       if (url.pathname === `/portal/api/goals/${goalId}/events`) return jsonResponse({ entries: [], next_after: null });
     });
 
-    renderRoute(`/portal/goals/${goalId}`, fetcher);
+    renderRoute(`/portal/goals/${goalId}`);
     await screen.findByRole("heading", { level: 1, name: "Prototype action goal" });
     // The served action list is free-form strings: an own-key lookup renders
     // `constructor` as an unknown label, never Object's own function.
@@ -538,11 +525,9 @@ describe("goal detail surface", () => {
     const integrationSubject = { resource_id: "88888888-8888-4888-8888-888888888888", commit: "c".repeat(40), tree_digest: `sha256:${"d".repeat(64)}` };
     const implementationEvidence = "99999999-9999-4999-8999-999999999999";
     const integrationEvidence = "99999999-9999-4999-8999-999999999998";
-    // `undefined`, not `null`: a `= null` initializer would narrow the variable to
-    // `null` for the checker and leave everything after the guard unreachable.
-    let achievePayload: Record<string, unknown> | undefined;
-    const { fetcher } = portalFetcher((path, init) => {
-      const url = new URL(path, "http://localhost");
+    const sent: Record<string, unknown>[] = [];
+    portal.serve((request) => {
+      const url = request.url;
       if (url.pathname === `/portal/api/goals/${goalId}`) {
         return jsonResponse(readGoalProjection({
           id: goalId,
@@ -565,22 +550,20 @@ describe("goal detail surface", () => {
         }));
       }
       if (url.pathname === `/portal/api/goals/${goalId}/commands`) {
-        const rawBody = typeof init?.body === "string" ? init.body : "{}";
-        const envelope = JSON.parse(rawBody) as { payload?: Record<string, unknown> };
-        achievePayload = envelope.payload ?? {};
+        sent.push(asRecord(request.body?.payload) ?? {});
         return jsonResponse({ goal_id: goalId, mutation_id: "m", event: { id: "m", sequence: 3, kind: "achieve", revision: 1 }, response: { state: "achieved" } });
       }
       if (url.pathname === `/portal/api/goals/${goalId}/events`) return jsonResponse({ entries: [], next_after: null });
     });
 
     const user = userEvent.setup();
-    renderRoute(`/portal/goals/${goalId}`, fetcher);
+    renderRoute(`/portal/goals/${goalId}`);
     await screen.findByRole("heading", { level: 1, name: "Ready goal" });
     await user.click(screen.getByRole("button", { name: "Achieve" }));
     await user.click(screen.getByRole("button", { name: "Send Achieve" }));
-    await waitFor(() => { expect(achievePayload).toBeDefined(); });
-    if (achievePayload === undefined) throw new Error("the achieve command was not sent");
-    const payload = achievePayload;
+    await waitFor(() => { expect(sent[0]).toBeDefined(); });
+    const [payload] = sent;
+    if (payload === undefined) throw new Error("the achieve command was not sent");
     expect(payload.subject).toEqual(integrationSubject);
     expect(payload.evidence_ids).toEqual([integrationEvidence]);
     expect(payload.integration_work_item_id).toBe("55555555-5555-4555-8555-555555555555");
@@ -588,8 +571,8 @@ describe("goal detail surface", () => {
   });
 
   it("renders the served refusal when the server does not allow an action", async () => {
-    const { fetcher } = portalFetcher((path: string) => {
-      const url = new URL(path, "http://localhost");
+    portal.serve((request) => {
+      const url = request.url;
       if (url.pathname === `/portal/api/goals/${goalId}`) {
         return jsonResponse(readGoalProjection({ id: goalId, projectId, projectName: "Project One", title: "Draft goal", state: "draft", allowedActions: ["request_plan", "amend", "cancel"] }));
       }
@@ -600,7 +583,7 @@ describe("goal detail surface", () => {
     });
 
     const user = userEvent.setup();
-    renderRoute(`/portal/goals/${goalId}`, fetcher);
+    renderRoute(`/portal/goals/${goalId}`);
     await screen.findByRole("heading", { level: 1, name: "Draft goal" });
     expect(screen.getByRole("button", { name: "Request a plan" })).toBeVisible();
     expect(screen.queryByRole("button", { name: "Activate" })).not.toBeInTheDocument();
@@ -617,19 +600,19 @@ describe("goal detail surface", () => {
   });
 
   it("recovers a refused command transport with a retryable error and never claims success", async () => {
-    const { fetcher } = portalFetcher((path: string) => {
-      const url = new URL(path, "http://localhost");
+    portal.serve((request) => {
+      const url = request.url;
       if (url.pathname === `/portal/api/goals/${goalId}`) {
         return jsonResponse(readGoalProjection({ id: goalId, projectId, projectName: "Project One", title: "Offline goal", state: "active", allowedActions: ["pause", "amend", "cancel"] }));
       }
       if (url.pathname === `/portal/api/goals/${goalId}/commands`) {
-        throw new TypeError("network down");
+        return HttpResponse.error();
       }
       if (url.pathname === `/portal/api/goals/${goalId}/events`) return jsonResponse({ entries: [], next_after: null });
     });
 
     const user = userEvent.setup();
-    renderRoute(`/portal/goals/${goalId}`, fetcher);
+    renderRoute(`/portal/goals/${goalId}`);
     await screen.findByRole("heading", { level: 1, name: "Offline goal" });
     await user.click(screen.getByRole("button", { name: "Pause" }));
     await user.type(screen.getByLabelText("Reason"), "Operator pause");
@@ -639,15 +622,15 @@ describe("goal detail surface", () => {
   });
 
   it("renders the empty receipts state when the event read answers without an error", async () => {
-    const { fetcher } = portalFetcher((path: string) => {
-      const url = new URL(path, "http://localhost");
+    portal.serve((request) => {
+      const url = request.url;
       if (url.pathname === `/portal/api/goals/${goalId}`) {
         return jsonResponse(readGoalProjection({ id: goalId, projectId, projectName: "Project One", title: "Quiet goal", state: "active", allowedActions: [] }));
       }
       if (url.pathname === `/portal/api/goals/${goalId}/events`) return jsonResponse({ entries: [], next_after: null });
     });
 
-    renderRoute(`/portal/goals/${goalId}`, fetcher);
+    renderRoute(`/portal/goals/${goalId}`);
     await screen.findByRole("heading", { level: 1, name: "Quiet goal" });
     // react-query starts `error` at null, not undefined: a successful empty page
     // must render the empty state, never a failure panel.
@@ -671,21 +654,21 @@ describe("goal detail surface", () => {
       resolution: null,
     };
     const commands: Record<string, unknown>[] = [];
-    const { fetcher } = portalFetcher((path: string, init?: RequestInit) => {
-      const url = new URL(path, "http://localhost");
+    portal.serve((request) => {
+      const url = request.url;
       if (url.pathname === `/portal/api/goals/${goalId}`) {
         return jsonResponse(readGoalProjection({ id: goalId, projectId, projectName: "Project One", title: "Plan goal", state: "draft", allowedActions: ["amend", "cancel"], decisions: [decision] }));
       }
       if (url.pathname === `/portal/api/goals/${goalId}/commands`) {
-        const rawBody = typeof init?.body === "string" ? init.body : "{}";
-        commands.push(JSON.parse(rawBody) as Record<string, unknown>);
+        const envelope: Record<string, unknown> = request.body ?? {};
+        commands.push(envelope);
         return jsonResponse({ goal_id: goalId, mutation_id: "m", event: { id: "m", sequence: 2, kind: "resolve_decision", revision: 1 } });
       }
       if (url.pathname === `/portal/api/goals/${goalId}/events`) return jsonResponse({ entries: [], next_after: null });
     });
 
     const user = userEvent.setup();
-    renderRoute(`/portal/goals/${goalId}`, fetcher);
+    renderRoute(`/portal/goals/${goalId}`);
     await screen.findByRole("heading", { level: 1, name: "Plan goal" });
     // A JSON document contains braces that user-event's keyboard parser reads as
     // key descriptors; set the controlled textarea value directly instead.
@@ -735,9 +718,9 @@ describe("goal detail surface", () => {
     let advanced = false;
     let applied = false;
     const servedPair = () => (applied ? { goal: 6, decision: 5 } : advanced ? { goal: 5, decision: 4 } : { goal: 4, decision: 3 });
-    const commands: { kind: string; expected_version: number; expected_revision: number; payload: Record<string, unknown> }[] = [];
-    const { fetcher } = portalFetcher((path: string, init?: RequestInit) => {
-      const url = new URL(path, "http://localhost");
+    const commands: Record<string, unknown>[] = [];
+    portal.serve((request) => {
+      const url = request.url;
       if (url.pathname === `/portal/api/goals/${goalId}`) {
         const pair = servedPair();
         return jsonResponse(readGoalProjection({
@@ -755,8 +738,7 @@ describe("goal detail surface", () => {
         }));
       }
       if (url.pathname === `/portal/api/goals/${goalId}/commands`) {
-        const rawBody = typeof init?.body === "string" ? init.body : "{}";
-        const envelope = JSON.parse(rawBody) as { kind: string; expected_version: number; expected_revision: number; payload: Record<string, unknown> };
+        const envelope: Record<string, unknown> = request.body ?? {};
         commands.push(envelope);
         const pair = servedPair();
         // The server validates the envelope pair first (ensure_preconditions!),
@@ -765,7 +747,8 @@ describe("goal detail surface", () => {
           return jsonResponse({ error: { code: "stale", message: "resource changed since it was loaded", current_version: pair.goal, current_revision: 1, allowed_actions: ["amend", "cancel"] } }, 409);
         }
         if (envelope.kind === "resolve_decision") {
-          if (envelope.payload.expected_decision_version !== pair.decision || envelope.payload.decision_id !== decision.id || envelope.payload.option_id !== "accept") {
+          const payload = asRecord(envelope.payload);
+          if (payload?.expected_decision_version !== pair.decision || payload?.decision_id !== decision.id || payload?.option_id !== "accept") {
             return jsonResponse({ error: { code: "invalid_decision", message: "decision is no longer valid for this Goal" } }, 409);
           }
           applied = true;
@@ -777,7 +760,7 @@ describe("goal detail surface", () => {
     });
 
     const user = userEvent.setup();
-    renderRoute(`/portal/goals/${goalId}`, fetcher);
+    renderRoute(`/portal/goals/${goalId}`);
     await screen.findByRole("heading", { level: 1, name: "Plan approval advance goal" });
     // The settled page still shows version 4 and decision version 3.
     expect(screen.getByText(/· revision 1 · version 4$/)).toBeVisible();
@@ -796,9 +779,9 @@ describe("goal detail surface", () => {
     // settled 4/3 pair and the server answers the 409 stale conflict instead.
     expect(resolve.expected_version).toBe(5);
     expect(resolve.expected_revision).toBe(1);
-    expect(resolve.payload.decision_id).toBe(decision.id);
-    expect(resolve.payload.expected_decision_version).toBe(4);
-    expect(resolve.payload.option_id).toBe("accept");
+    expect(asRecord(resolve.payload)?.decision_id).toBe(decision.id);
+    expect(asRecord(resolve.payload)?.expected_decision_version).toBe(4);
+    expect(asRecord(resolve.payload)?.option_id).toBe("accept");
     // The admission follows the applied resolution's own read (the goal moved
     // to 6), exactly as the two-step contract states.
     expect(admit.kind).toBe("accept_plan");
@@ -825,8 +808,8 @@ describe("goal detail surface", () => {
     let applied = false;
     const resolveBodies: string[] = [];
     let recorded: string | null = null;
-    const { fetcher } = portalFetcher((path: string, init?: RequestInit) => {
-      const url = new URL(path, "http://localhost");
+    portal.serve((request) => {
+      const url = request.url;
       if (url.pathname === `/portal/api/goals/${goalId}`) {
         const pair = applied ? { goal: 6, decision: 5 } : advanced ? { goal: 5, decision: 4 } : { goal: 4, decision: 3 };
         return jsonResponse(readGoalProjection({
@@ -844,8 +827,8 @@ describe("goal detail surface", () => {
         }));
       }
       if (url.pathname === `/portal/api/goals/${goalId}/commands`) {
-        const rawBody = typeof init?.body === "string" ? init.body : "{}";
-        const envelope = JSON.parse(rawBody) as { kind: string; expected_version: number; payload: Record<string, unknown> };
+        const rawBody = request.rawBody ?? "{}";
+        const envelope: Record<string, unknown> = request.body ?? {};
         if (envelope.kind === "resolve_decision") {
           resolveBodies.push(rawBody);
           if (recorded === null) {
@@ -854,7 +837,7 @@ describe("goal detail surface", () => {
             // resolution moved the goal to 6 and resolved the decision (5).
             recorded = rawBody;
             applied = true;
-            throw new TypeError("network down");
+            return HttpResponse.error();
           }
           if (rawBody !== recorded) {
             // A body rebuilt from a fresh read is not the recorded request: the
@@ -869,7 +852,7 @@ describe("goal detail surface", () => {
     });
 
     const user = userEvent.setup();
-    renderRoute(`/portal/goals/${goalId}`, fetcher);
+    renderRoute(`/portal/goals/${goalId}`);
     await screen.findByRole("heading", { level: 1, name: "Replay plan approval goal" });
     // A JSON document contains braces that user-event's keyboard parser reads as
     // key descriptors; set the controlled textarea value directly instead.
@@ -879,9 +862,9 @@ describe("goal detail surface", () => {
     expect(await screen.findByText(/Cannot reach the server/)).toBeVisible();
     expect(resolveBodies).toHaveLength(1);
     // The first attempt read at submit: it carries the served 5/4 pair.
-    const first = JSON.parse(resolveBodies[0] ?? "{}") as { expected_version: number; payload: Record<string, unknown> };
-    expect(first.expected_version).toBe(5);
-    expect(first.payload.expected_decision_version).toBe(4);
+    const first = portal.sent("POST", `/portal/api/goals/${goalId}/commands`)[0]?.body;
+    expect(first?.expected_version).toBe(5);
+    expect(asRecord(first?.payload)?.expected_decision_version).toBe(4);
     // Re-pressing the same intent resends the recorded bytes, so the server
     // replays the applied resolution instead of refusing the resolved decision;
     // a body rebuilt from a fresh read (6/5, resolved) is not the recorded
@@ -918,8 +901,8 @@ describe("goal detail surface", () => {
     const admitBodies: string[] = [];
     let recordedResolve: string | null = null;
     let recordedAdmit: string | null = null;
-    const { fetcher } = portalFetcher((path: string, init?: RequestInit) => {
-      const url = new URL(path, "http://localhost");
+    portal.serve((request) => {
+      const url = request.url;
       if (url.pathname === `/portal/api/goals/${goalId}`) {
         // The resolution moves the goal to 6 (revision unchanged) and bumps the
         // decision's lock version to 4; the admission moves the goal to 7 with
@@ -941,8 +924,8 @@ describe("goal detail surface", () => {
         }));
       }
       if (url.pathname === `/portal/api/goals/${goalId}/commands`) {
-        const rawBody = typeof init?.body === "string" ? init.body : "{}";
-        const envelope = JSON.parse(rawBody) as { kind: string };
+        const rawBody = request.rawBody ?? "{}";
+        const envelope: Record<string, unknown> = request.body ?? {};
         if (envelope.kind === "resolve_decision") {
           resolveBodies.push(rawBody);
           if (rawBody !== recordedResolve) {
@@ -967,7 +950,7 @@ describe("goal detail surface", () => {
           }
           recordedAdmit = rawBody;
           admissionApplied = true;
-          throw new TypeError("network down");
+          return HttpResponse.error();
         }
         return jsonResponse({ goal_id: goalId, mutation_id: "m", event: { id: "m", sequence: 3, kind: "accept_plan", revision: 1 } });
       }
@@ -975,7 +958,7 @@ describe("goal detail surface", () => {
     });
 
     const user = userEvent.setup();
-    renderRoute(`/portal/goals/${goalId}`, fetcher);
+    renderRoute(`/portal/goals/${goalId}`);
     await screen.findByRole("heading", { level: 1, name: "Frozen plan admission goal" });
     // A JSON document contains braces that user-event's keyboard parser reads as
     // key descriptors; set the controlled textarea value directly instead.
@@ -986,8 +969,8 @@ describe("goal detail surface", () => {
     expect(admitBodies).toHaveLength(1);
     // The admission of the first press carries the resolution's own read (the
     // goal moved to 6), which is the version the server recorded for it.
-    const first = JSON.parse(admitBodies[0] ?? "{}") as { expected_version: number };
-    expect(first.expected_version).toBe(6);
+    const first = portal.sent("POST", `/portal/api/goals/${goalId}/commands`).filter((request) => request.body?.kind === "accept_plan")[0]?.body;
+    expect(first?.expected_version).toBe(6);
     // Re-pressing the same intent resends the recorded admission bytes, so the
     // server replays the applied admission; a body rebuilt from the post-admission
     // read (7/1) is not the recorded request and would be refused.
@@ -1020,9 +1003,9 @@ describe("goal detail surface", () => {
     let servedVersion = 5;
     let concurrentlyAdvanced = false;
     let decisionResolved = false;
-    const resolveBodies: { mutation_id: string; expected_version: number; expected_revision: number; payload: Record<string, unknown> }[] = [];
-    const { fetcher } = portalFetcher((path: string, init?: RequestInit) => {
-      const url = new URL(path, "http://localhost");
+    const resolveBodies: Record<string, unknown>[] = [];
+    portal.serve((request) => {
+      const url = request.url;
       if (url.pathname === `/portal/api/goals/${goalId}`) {
         return jsonResponse(readGoalProjection({
           id: goalId,
@@ -1039,8 +1022,7 @@ describe("goal detail surface", () => {
         }));
       }
       if (url.pathname === `/portal/api/goals/${goalId}/commands`) {
-        const rawBody = typeof init?.body === "string" ? init.body : "{}";
-        const envelope = JSON.parse(rawBody) as { kind: string; mutation_id: string; expected_version: number; expected_revision: number; payload: Record<string, unknown> };
+        const envelope: Record<string, unknown> = request.body ?? {};
         if (envelope.kind === "resolve_decision") {
           resolveBodies.push(envelope);
           // A concurrent operator command advances the goal between the press's
@@ -1068,7 +1050,7 @@ describe("goal detail surface", () => {
     });
 
     const user = userEvent.setup();
-    renderRoute(`/portal/goals/${goalId}`, fetcher);
+    renderRoute(`/portal/goals/${goalId}`);
     await screen.findByRole("heading", { level: 1, name: "Answered refusal plan goal" });
     // A JSON document contains braces that user-event's keyboard parser reads as
     // key descriptors; set the controlled textarea value directly instead.
@@ -1085,7 +1067,7 @@ describe("goal detail surface", () => {
     expect(resolveBodies[1]?.mutation_id).not.toBe(resolveBodies[0]?.mutation_id);
     expect(resolveBodies[1]?.expected_version).toBe(6);
     expect(resolveBodies[1]?.expected_revision).toBe(1);
-    expect(resolveBodies[1]?.payload.expected_decision_version).toBe(3);
+    expect(asRecord(resolveBodies[1]?.payload)?.expected_decision_version).toBe(3);
     // The acceptance notice waits for the served goal to settle (bounded), so
     // this wait allows for that bound.
     expect(await screen.findByText("The server admitted the plan.", {}, { timeout: 5_000 })).toBeVisible();
@@ -1111,10 +1093,10 @@ describe("goal detail surface", () => {
     let resolveAttempts = 0;
     let decisionResolved = false;
     let servedVersion = 5;
-    const resolveBodies: { mutation_id: string }[] = [];
-    const admitBodies: { mutation_id: string; payload: Record<string, unknown> }[] = [];
-    const { fetcher } = portalFetcher((path: string, init?: RequestInit) => {
-      const url = new URL(path, "http://localhost");
+    const resolveBodies: Record<string, unknown>[] = [];
+    const admitBodies: Record<string, unknown>[] = [];
+    portal.serve((request) => {
+      const url = request.url;
       if (url.pathname === `/portal/api/goals/${goalId}`) {
         return jsonResponse(readGoalProjection({
           id: goalId,
@@ -1131,13 +1113,12 @@ describe("goal detail surface", () => {
         }));
       }
       if (url.pathname === `/portal/api/goals/${goalId}/commands`) {
-        const rawBody = typeof init?.body === "string" ? init.body : "{}";
-        const envelope = JSON.parse(rawBody) as { kind: string; mutation_id: string; payload: Record<string, unknown> };
+        const envelope: Record<string, unknown> = request.body ?? {};
         if (envelope.kind === "resolve_decision") {
           resolveBodies.push(envelope);
           // The attempted resolution never applied: the response is lost before
           // the outcome is known, and the fixture does not record the request.
-          if (resolveAttempts++ === 0) throw new TypeError("network down");
+          if (resolveAttempts++ === 0) return HttpResponse.error();
           decisionResolved = true;
           servedVersion += 1;
           return jsonResponse({ goal_id: goalId, mutation_id: envelope.mutation_id, event: { id: envelope.mutation_id, sequence: 2, kind: "resolve_decision", revision: 1 } });
@@ -1150,7 +1131,7 @@ describe("goal detail surface", () => {
     });
 
     const user = userEvent.setup();
-    renderRoute(`/portal/goals/${goalId}`, fetcher);
+    renderRoute(`/portal/goals/${goalId}`);
     await screen.findByRole("heading", { level: 1, name: "Changed proposal plan goal" });
     // A JSON document contains braces that user-event's keyboard parser reads as
     // key descriptors; set the controlled textarea value directly instead.
@@ -1173,28 +1154,28 @@ describe("goal detail surface", () => {
     //   mix run --no-start -e 'IO.puts("sha256:" <> Base.encode16(SymmetryControl.RequestHash.canonical(%{"schema_version" => "symmetry.plan.v1", "items" => [%{"title" => "Admit the corrected plan", "integration" => false, "change_target" => nil}]}), case: :lower))'
     // i.e. sha256 over
     // {"items":[{"change_target":null,"integration":false,"title":"Admit the corrected plan"}],"schema_version":"symmetry.plan.v1"}.
-    expect(admitBodies[0]?.payload.proposal_hash).toBe("sha256:749eb3c4bb07d2d9ef09496c0472b11a3e1384b527a5e63ac0b1dfa5e9712afd");
+    expect(asRecord(admitBodies[0]?.payload)?.proposal_hash).toBe("sha256:749eb3c4bb07d2d9ef09496c0472b11a3e1384b527a5e63ac0b1dfa5e9712afd");
     expect(await screen.findByText("The server admitted the plan.", {}, { timeout: 5_000 })).toBeVisible();
   }, 15_000);
 
   it("hashes the plan proposal the server validates, with the per-item defaults applied", async () => {
     const decision = { id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", kind: "plan", state: "open", "open?": true, version: 2, goal_revision: 1, question: "Accept the proposed plan?", options: [{ id: "accept", label: "Accept", consequence: "Apply the approved action." }], resolution: null };
     const commands: Record<string, unknown>[] = [];
-    const { fetcher } = portalFetcher((path: string, init?: RequestInit) => {
-      const url = new URL(path, "http://localhost");
+    portal.serve((request) => {
+      const url = request.url;
       if (url.pathname === `/portal/api/goals/${goalId}`) {
         return jsonResponse(readGoalProjection({ id: goalId, projectId, projectName: "Project One", title: "Omitted-default plan goal", state: "draft", allowedActions: ["amend", "cancel"], decisions: [decision] }));
       }
       if (url.pathname === `/portal/api/goals/${goalId}/commands`) {
-        const rawBody = typeof init?.body === "string" ? init.body : "{}";
-        commands.push(JSON.parse(rawBody) as Record<string, unknown>);
+        const envelope: Record<string, unknown> = request.body ?? {};
+        commands.push(envelope);
         return jsonResponse({ goal_id: goalId, mutation_id: "m", event: { id: "m", sequence: 2, kind: "resolve_decision", revision: 1 } });
       }
       if (url.pathname === `/portal/api/goals/${goalId}/events`) return jsonResponse({ entries: [], next_after: null });
     });
 
     const user = userEvent.setup();
-    renderRoute(`/portal/goals/${goalId}`, fetcher);
+    renderRoute(`/portal/goals/${goalId}`);
     await screen.findByRole("heading", { level: 1, name: "Omitted-default plan goal" });
     // The repo's own valid plan-proposal fixture omits the per-item defaults
     // (`integration`) the server injects before it hashes and validates.
@@ -1219,21 +1200,21 @@ describe("goal detail surface", () => {
   it("escapes C0 controls in the canonical digest exactly as the server's Jason does", async () => {
     const decision = { id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", kind: "plan", state: "open", "open?": true, version: 2, goal_revision: 1, question: "Accept the proposed plan?", options: [{ id: "accept", label: "Accept", consequence: "Apply the approved action." }], resolution: null };
     const commands: Record<string, unknown>[] = [];
-    const { fetcher } = portalFetcher((path: string, init?: RequestInit) => {
-      const url = new URL(path, "http://localhost");
+    portal.serve((request) => {
+      const url = request.url;
       if (url.pathname === `/portal/api/goals/${goalId}`) {
         return jsonResponse(readGoalProjection({ id: goalId, projectId, projectName: "Project One", title: "Control-character plan goal", state: "draft", allowedActions: ["amend", "cancel"], decisions: [decision] }));
       }
       if (url.pathname === `/portal/api/goals/${goalId}/commands`) {
-        const rawBody = typeof init?.body === "string" ? init.body : "{}";
-        commands.push(JSON.parse(rawBody) as Record<string, unknown>);
+        const envelope: Record<string, unknown> = request.body ?? {};
+        commands.push(envelope);
         return jsonResponse({ goal_id: goalId, mutation_id: "m", event: { id: "m", sequence: 2, kind: "resolve_decision", revision: 1 } });
       }
       if (url.pathname === `/portal/api/goals/${goalId}/events`) return jsonResponse({ entries: [], next_after: null });
     });
 
     const user = userEvent.setup();
-    renderRoute(`/portal/goals/${goalId}`, fetcher);
+    renderRoute(`/portal/goals/${goalId}`);
     await screen.findByRole("heading", { level: 1, name: "Control-character plan goal" });
     // A LongText description admits U+000B and U+001B (the contract bans only
     // U+0000), and the control plane's Jason escapes them with uppercase hex
@@ -1259,15 +1240,15 @@ describe("goal detail surface", () => {
 
   it("offers no plan approval when the served plan decision carries no acceptance option", async () => {
     const decision = { id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", goal_revision: 1, kind: "plan", state: "open", "open?": true, version: 3, question: "Accept the proposed plan?", options: [{ id: "reject", label: "Reject", consequence: "Keep the current approved state." }], resolution: null };
-    const { fetcher } = portalFetcher((path: string) => {
-      const url = new URL(path, "http://localhost");
+    portal.serve((request) => {
+      const url = request.url;
       if (url.pathname === `/portal/api/goals/${goalId}`) {
         return jsonResponse(readGoalProjection({ id: goalId, projectId, projectName: "Project One", title: "No option goal", state: "draft", allowedActions: ["amend", "cancel"], decisions: [decision] }));
       }
       if (url.pathname === `/portal/api/goals/${goalId}/events`) return jsonResponse({ entries: [], next_after: null });
     });
 
-    renderRoute(`/portal/goals/${goalId}`, fetcher);
+    renderRoute(`/portal/goals/${goalId}`);
     await screen.findByRole("heading", { level: 1, name: "No option goal" });
     expect(screen.queryByRole("button", { name: "Resolve the decision with accept" })).not.toBeInTheDocument();
     expect(screen.getByText("The served plan decision carries no acceptance option; this surface offers no resolution for it.")).toBeVisible();
@@ -1275,15 +1256,15 @@ describe("goal detail surface", () => {
 
   it("offers no plan approval for a resolved plan decision", async () => {
     const decision = { id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", goal_revision: 1, kind: "plan", state: "resolved", "open?": false, version: 4, question: "Accept the proposed plan?", options: [{ id: "accept", label: "Accept", consequence: "Apply the approved action." }], resolution: { option_id: "accept" } };
-    const { fetcher } = portalFetcher((path: string) => {
-      const url = new URL(path, "http://localhost");
+    portal.serve((request) => {
+      const url = request.url;
       if (url.pathname === `/portal/api/goals/${goalId}`) {
         return jsonResponse(readGoalProjection({ id: goalId, projectId, projectName: "Project One", title: "Resolved plan goal", state: "draft", allowedActions: ["activate", "amend", "cancel"], decisions: [decision] }));
       }
       if (url.pathname === `/portal/api/goals/${goalId}/events`) return jsonResponse({ entries: [], next_after: null });
     });
 
-    renderRoute(`/portal/goals/${goalId}`, fetcher);
+    renderRoute(`/portal/goals/${goalId}`);
     await screen.findByRole("heading", { level: 1, name: "Resolved plan goal" });
     expect(screen.queryByRole("button", { name: "Resolve the decision with accept" })).not.toBeInTheDocument();
     expect(screen.getByText(/Resolved: \{"option_id":"accept"\}/)).toBeVisible();
@@ -1295,15 +1276,15 @@ describe("goal detail surface", () => {
     // while the goal moved to revision 2 still serves `state: "open"`, so a
     // state-based gate would offer the approval control the server refuses.
     const decision = { id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", goal_revision: 1, kind: "plan", state: "open", "open?": false, version: 5, question: "Accept the proposed plan?", options: [{ id: "accept", label: "Accept", consequence: "Apply the approved action." }], resolution: null };
-    const { fetcher } = portalFetcher((path: string) => {
-      const url = new URL(path, "http://localhost");
+    portal.serve((request) => {
+      const url = request.url;
       if (url.pathname === `/portal/api/goals/${goalId}`) {
         return jsonResponse(readGoalProjection({ id: goalId, projectId, projectName: "Project One", title: "Stale plan decision goal", state: "draft", currentRevision: 2, allowedActions: ["amend", "cancel"], decisions: [decision] }));
       }
       if (url.pathname === `/portal/api/goals/${goalId}/events`) return jsonResponse({ entries: [], next_after: null });
     });
 
-    renderRoute(`/portal/goals/${goalId}`, fetcher);
+    renderRoute(`/portal/goals/${goalId}`);
     await screen.findByRole("heading", { level: 1, name: "Stale plan decision goal" });
     expect(screen.queryByRole("button", { name: "Resolve the decision with accept" })).not.toBeInTheDocument();
     // It is not resolved either: the served revision no longer carries it open.
@@ -1312,8 +1293,8 @@ describe("goal detail surface", () => {
   });
 
   it("renders the explicit absence text for a served non-scalar member", async () => {
-    const { fetcher } = portalFetcher((path) => {
-      const url = new URL(path, "http://localhost");
+    portal.serve((request) => {
+      const url = request.url;
       if (url.pathname === `/portal/api/goals/${goalId}`) {
         return jsonResponse(readGoalProjection({
           id: goalId,
@@ -1332,7 +1313,7 @@ describe("goal detail surface", () => {
       if (url.pathname === `/portal/api/goals/${goalId}/events`) return jsonResponse({ entries: [], next_after: null });
     });
 
-    renderRoute(`/portal/goals/${goalId}`, fetcher);
+    renderRoute(`/portal/goals/${goalId}`);
     await screen.findByRole("heading", { level: 1, name: "Open-member goal" });
     expect(screen.getByText("Execution: unknown state")).toBeVisible();
     expect(screen.queryByText(/\[object Object\]/)).not.toBeInTheDocument();

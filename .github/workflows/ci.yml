@@ -278,7 +278,7 @@ jobs:
       # support tree is compiled too, and a warning there now fails this gate.
       - run: MIX_ENV=test mix compile --warnings-as-errors
       # `--slowest` stays out: it forces ExUnit trace mode (`max_cases: 1`, every test timeout
-      # `:infinity`), so `ExUnit.CLIFormatter` stays listed and the run keeps its normal output and status.
+      # `:infinity`); separately, `ExUnit.CLIFormatter` stays listed and the run keeps its normal output and status.
       - run: mix test --formatter ExUnit.CLIFormatter --formatter SymmetryControl.SlowestFormatter
       - name: Run provider broker end-to-end tests
         timeout-minutes: 10
@@ -894,8 +894,8 @@ jobs:
         env:
           SYMMETRY_CI_RUNNER_ENVIRONMENT: ${{ runner.environment }}
         run: bash scripts/ci/prepare-private-namespace-tests.sh
-      # `-timeout` doubles the per-package budget: coverage instrumentation slows every package, and the
-      # race step keeps its `600s`. No env here: `go test` sets `GOCOVERDIR` for the exact-output cases (run 44887419717).
+      # `-timeout` doubles the per-package budget: coverage instrumentation slows every package, and the race step
+      # keeps its `600s`. No env here: `go test` sets `GOCOVERDIR` for the exact-output cases (run 44887419717).
       - name: Run the Go suite with a coverage profile (advisory)
         shell: bash
         run: |

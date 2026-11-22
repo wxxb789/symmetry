@@ -1,5 +1,38 @@
 #!/usr/bin/env python3
-"""Summarize a `go test -json` event stream: durations, cap and p95 ratchet."""
+"""Summarize a `go test -json` event stream: durations, cap and p95 ratchet.
+
+One deterministic consumer of a captured `go test -json` stream (the daemon
+job's race pass writes `$RUNNER_TEMP/daemon-go-race.json` through
+`go-test-json-gate.py`; any other capture can be fed the same way):
+
+* the slowest per-test durations are printed as a table, so a green run states
+  where the job's time goes instead of leaving it to be felt as "today the
+  daemon job is slow";
+* the slowest package totals are printed from the stream's package-level
+  terminal events, for the same attribution;
+* the captured output of every failed test, and of every failed package no
+  named test explains, is replayed, so the diagnostics a red run needs are
+  readable in this step's log and not only inside the gate's buffered event
+  echo;
+* a test whose elapsed time exceeds `MAX_TEST_SECONDS` fails the summary, and
+  the per-test p95 (nearest-rank over the tests that ran) fails it when it
+  exceeds `P95_LIMIT_FACTOR` times the committed baseline below.
+
+The distribution is the stream's terminal `pass`/`fail` events with a `Test`
+field, keyed by `(Package, Test)`; a repeated key keeps its largest observed
+elapsed. `skip` events are excluded - a skipped test performed no work, and the
+skip share differs by host - but they are counted and printed. A malformed
+line, a missing file, a stream without outcome events, or a package-level
+failure no named test explains (a build failure, a timeout panic: the package
+was cut off, so its durations are incomplete) is an error (exit 2), never a
+silent green; the tables still print whenever the stream carries per-test
+outcomes, labelled partial when the stream is refused - a red race pass cut off
+by its timeout is exactly when the slow tests need naming.
+
+The thresholds are advisory until refactor slice W6-12 flips them to blocking
+(program plan section 10.5); the exit status is the verdict either way, and the
+step that runs this tool owns whether that verdict gates the job.
+"""
 
 import argparse
 import json

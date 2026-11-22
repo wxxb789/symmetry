@@ -2219,7 +2219,8 @@ func TestGoalSessionValidatorFirstErrorStringsArePinned(t *testing.T) {
 	}
 }
 
-// Pins the top-level JSON key set of the durable journal documents against literal lists: the Elixir Pi e2e harness and the native-evidence CI script read these keys by literal name.
+// Pins the top-level JSON key set of the durable journal documents against literal lists:
+// the Elixir Pi e2e harness and the native-evidence CI script read these keys by literal name.
 func TestJournalWireShape(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

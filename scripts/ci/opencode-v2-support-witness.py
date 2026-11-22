@@ -2,7 +2,10 @@
 """Observe the owner-pinned Windows OpenCode blob; never promote capabilities.
 
 The operator credential is inherited only through TENCENT_GLM_API_KEY. Native
-HTTP payloads, logs and state are checked before evidence is written.
+HTTP payloads, logs and state are checked before evidence is written. No proxy,
+synthetic provider, credential endpoint or remote mutation is used. The blob's
+host path comes from SYMMETRY_OPENCODE_BINARY; only its exact size and digest are
+committed, and an unset variable, a missing file or a different blob refuses the run.
 """
 
 import argparse

@@ -70,7 +70,8 @@ func defaultClientOptions() clientOptions {
 // Only this package can construct an Option, so the option set stays known.
 type Option func(*clientOptions)
 
-// Reports retried dial and dropped-connection failures before the retry backoff; Run's only terminal error is ctx.Err(), never reported.
+// Reports retried dial and dropped-connection failures before the retry backoff; Run's
+// only terminal error is ctx.Err(), never reported.
 // The handler runs on Run's goroutine, so it must not block the connection loop.
 func WithConnectionErrorHandler(handler func(error)) Option {
 	return func(options *clientOptions) {
@@ -196,7 +197,8 @@ func (client *Client) Run(ctx context.Context, hints chan<- Hint) error {
 	}
 }
 
-// Run's terminal contract is ctx.Err(): a failure observed after the context ended is the caller's cancellation or deadline, not a connection failure, and is never reported.
+// Run's terminal contract is ctx.Err(): a failure observed after the context ended is the
+// caller's cancellation or deadline, not a connection failure, and is never reported.
 func (client *Client) reportConnectionError(ctx context.Context, err error) {
 	if err != nil && ctx.Err() == nil && client.options.connectionErrorHandler != nil {
 		client.options.connectionErrorHandler(err)

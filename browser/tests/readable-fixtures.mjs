@@ -228,7 +228,8 @@ export const contextManifest = () => ({
   include_advisory_recall: false
 });
 
-/** The 40-hex commit and `sha256:` tree digest are the frozen placeholders the server admits for a repository-subject plan. */
+/** The 40-hex commit and `sha256:` tree digest are the frozen placeholders the server
+ * admits for a repository-subject plan. */
 export const planProposal = ({ goalId, title, repositoryId, acceptanceDescription }) => ({
   schema_version: "symmetry.plan.v1",
   proposal_id: crypto.randomUUID(),

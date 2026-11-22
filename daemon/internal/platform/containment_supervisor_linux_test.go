@@ -3130,8 +3130,8 @@ func TestLinuxSupervisorControlEOFFailsClosedBeforeOwnerLoss(t *testing.T) {
 	_ = stderrWrite.Close()
 }
 
-// With the metadata transport closed first, a live-owner-branch stop would fail its fence
-// write, latch sticky uncertainty and refuse every later stop; the owner writer stays open, so control EOF alone carries owner loss.
+// With the metadata transport closed first, a live-owner-branch stop would fail its fence write, latch sticky
+// uncertainty and refuse every later stop; the owner writer stays open, so control EOF alone carries owner loss.
 func TestLinuxSupervisorControlEOFWithDeadOwnerMetadataUsesOwnerLossSeal(t *testing.T) {
 	stdinRead, stdinWrite, err := os.Pipe()
 	if err != nil {
@@ -3238,7 +3238,8 @@ func TestLinuxSupervisorControlEOFWithDeadOwnerMetadataUsesOwnerLossSeal(t *test
 	if err := ReleasePersistedLinuxSupervisor(*value); err != nil {
 		t.Fatal(err)
 	}
-	// Close the still-open owner writer after the recovery release so the watchdog's deferred shutdown cannot extend the helper exit fence.
+	// Close the still-open owner writer after the recovery release so the watchdog's
+	// deferred shutdown cannot extend the helper exit fence.
 	_ = supervisor.ownerWrite.Close()
 	select {
 	case <-supervisor.helperDone:
@@ -3445,7 +3446,8 @@ func TestLinuxSupervisorLiveOwnerControlCloseInProcessStopFailsClosed(t *testing
 	if err := ReleasePersistedLinuxSupervisor(*value); err != nil {
 		t.Fatal(err)
 	}
-	// Close the still-open owner writer after the release so the watchdog's deferred shutdown cannot extend the helper exit fence.
+	// Close the still-open owner writer after the release so the watchdog's deferred
+	// shutdown cannot extend the helper exit fence.
 	_ = supervisor.ownerWrite.Close()
 	select {
 	case <-supervisor.helperDone:

@@ -45,14 +45,16 @@ type LinuxCgroupProcessIdentity struct {
 	Identity string `json:"identity"`
 }
 
-// Structural caller attestation of an exact wait/reap: State validates shape and identity, it cannot observe kernel wait state.
+// Structural caller attestation of an exact wait/reap: State validates shape and identity,
+// it cannot observe kernel wait state.
 type LinuxCgroupExitProof struct {
 	Version int                        `json:"version"`
 	Process LinuxCgroupProcessIdentity `json:"process"`
 	Witness LinuxCgroupProcessIdentity `json:"witness"`
 	Waited  bool                       `json:"waited"`
 	Reaped  bool                       `json:"reaped"`
-	// Present only when the anchor adopted this child after the helper was independently waited/reaped; a helper-owned wait leaves it nil.
+	// Present only when the anchor adopted this child after the helper was independently
+	// waited/reaped; a helper-owned wait leaves it nil.
 	HelperExit *LinuxCgroupExitProof `json:"helper_exit,omitempty"`
 }
 
@@ -97,14 +99,16 @@ type LinuxCgroupPreGateStopReceipt struct {
 	Proof          LinuxCgroupPreGateStopProof `json:"proof"`
 }
 
-// The Linux platform seals this only after a pinned exact rmdir or a receipt-backed absence check under the same parent pin.
+// The Linux platform seals this only after a pinned exact rmdir or a receipt-backed
+// absence check under the same parent pin.
 type LinuxCgroupPreGateReleaseProof struct {
 	Version         int                           `json:"version"`
 	Receipt         LinuxCgroupPreGateStopReceipt `json:"receipt"`
 	LeafDisposition string                        `json:"leaf_disposition"`
 }
 
-// Platform attestations (not facts proved by this package) binding the trusted A gate at clone birth to the measured run leaf.
+// Platform attestations (not facts proved by this package) binding the trusted A gate at
+// clone birth to the measured run leaf.
 type LinuxCgroupGateIdentity struct {
 	Process      LinuxCgroupProcessIdentity `json:"process"`
 	HostUID      uint32                     `json:"host_uid"`
@@ -115,8 +119,8 @@ type LinuxCgroupGateIdentity struct {
 	TrustedImage bool                       `json:"trusted_image"`
 }
 
-// Issuer names the helper or mirror that issues the receipt, not the kill writer;
-// the caller validates the anchor's kill acknowledgement, empty-leaf evidence, wait/reap and producer fencing against pinned FDs.
+// Issuer names the helper or mirror that issues the receipt, not the kill writer; the caller validates the
+// anchor's kill acknowledgement, empty-leaf evidence, wait/reap and producer fencing against pinned FDs.
 type LinuxCgroupStopProof struct {
 	Version                int                        `json:"version"`
 	Kind                   string                     `json:"kind"`

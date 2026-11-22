@@ -9,8 +9,8 @@ import (
 	"strings"
 )
 
-// Immutable RunKey-bound authority for one B-owned clone: SeedPath is an A-owned, B-readable bundle,
-// Target the disposable B-writable checkout. A source ref (not B-owned Git metadata) pins BaseCommit before the bundle is published.
+// Immutable RunKey-bound authority for one B-owned clone: SeedPath is an A-owned, B-readable bundle, Target the
+// disposable B-writable checkout. A source ref (not B-owned Git metadata) pins BaseCommit before the bundle publishes.
 type LinuxCloneIntent struct {
 	Version        int    `json:"version"`
 	RunID          string `json:"run_id"`
@@ -243,7 +243,8 @@ func (value LinuxClonePromotionReceipt) Equal(other LinuxClonePromotionReceipt) 
 
 func (value LinuxClonePromotionReceipt) Clone() LinuxClonePromotionReceipt { return value }
 
-// Reserves the candidate subject before A imports; the Ref is derived from the enclosing RunKey, never supplied by the caller.
+// Reserves the candidate subject before A imports; the Ref is derived from the
+// enclosing RunKey, never supplied by the caller.
 type LinuxClonePromotionIntent struct {
 	Version    int    `json:"version"`
 	ResourceID string `json:"resource_id"`
@@ -288,7 +289,8 @@ func (proof LinuxCloneAbortProof) Validate() error {
 	return proof.validate(false)
 }
 
-// Strictly read-only compatibility while loading existing tombstones: new proof writes and filesystem effects must call Validate.
+// Strictly read-only compatibility while loading existing tombstones: new proof writes
+// and filesystem effects must call Validate.
 func (proof LinuxCloneAbortProof) ValidateForJournal() error {
 	return proof.validate(true)
 }
@@ -407,7 +409,8 @@ func linuxCloneWorkspaceRootFromIntent(intent LinuxCloneIntent) (string, error) 
 	return root, nil
 }
 
-// FenceDigest is a non-secret SHA-256 binding of the complete current protocol.Fence; the raw lease token is never sent to the root cleanup worker.
+// FenceDigest is a non-secret SHA-256 binding of the complete current protocol.Fence;
+// the raw lease token is never sent to the root cleanup worker.
 type LinuxCloneCleanupIntent struct {
 	Version                int                           `json:"version"`
 	Intent                 LinuxCloneIntent              `json:"intent"`

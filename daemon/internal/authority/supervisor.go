@@ -189,7 +189,8 @@ type SupervisorHandoffAbortProof struct {
 	CreatorSessionID   *uint32 `json:"creator_session_id,omitempty"`
 }
 
-// Exact, replayable terminal witness; it intentionally carries no Secret, which only the enclosing Supervisor record holds.
+// Exact, replayable terminal witness; it intentionally carries no Secret, which only the
+// enclosing Supervisor record holds.
 type StopReceipt struct {
 	Version            int                   `json:"version"`
 	Status             string                `json:"status"`
@@ -293,7 +294,8 @@ func (core supervisorCore) equal(other supervisorCore) bool {
 	return equalStopReceiptPointer(core.StopReceipt, other.StopReceipt)
 }
 
-// Immutable launch binding: the helper binding, mirror identity and terminal receipt are cleared because later phases may add them.
+// Immutable launch binding: the helper binding, mirror identity and terminal receipt are
+// cleared because later phases may add them.
 func (core supervisorCore) sameLaunch(other supervisorCore) bool {
 	core.SupervisorPID, core.SupervisorIdentity, core.Mirror, core.StopReceipt = 0, "", nil, nil
 	other.SupervisorPID, other.SupervisorIdentity, other.Mirror, other.StopReceipt = 0, "", nil, nil
@@ -310,7 +312,8 @@ func (core supervisorCore) matchesStoppedReceipt(receipt StopReceipt) bool {
 		receipt.TargetBirthKind == core.TargetBirthKind && equalLinuxCgroupIdentity(receipt.CgroupIdentity, core.CgroupIdentity)
 }
 
-// CreatorSessionID is deliberately outside the release identity: v2 validation rejects a non-nil session on both records.
+// CreatorSessionID is deliberately outside the release identity: v2 validation rejects
+// a non-nil session on both records.
 func (core supervisorCore) matchesReleaseProof(proof SupervisorHandoffReleaseProof) bool {
 	return proof.Version == SupervisorHandoffVersionV2 && proof.Status == "released" &&
 		proof.LaunchToken == core.LaunchToken && proof.OwnerKind == core.OwnerKind && proof.OwnerContext == core.OwnerContext &&
@@ -473,7 +476,8 @@ func (value Supervisor) Equal(other Supervisor) bool {
 	return value.core().equal(other.core())
 }
 
-// The helper identity is either completely absent or completely present; partial state cannot identify the retained helper after a restart.
+// The helper identity is either completely absent or completely present; partial state
+// cannot identify the retained helper after a restart.
 func (value SupervisorHandoff) Validate() error {
 	if value.Version == SupervisorHandoffVersionV2 {
 		if value.ScanUpdate != nil || value.core().validateV2(false) != nil {
@@ -666,7 +670,8 @@ func (proof SupervisorHandoffReleaseProof) ValidForSupervisor(value Supervisor) 
 	return value.Version == SupervisorVersionV2 && value.core().matchesReleaseProof(proof)
 }
 
-// Windows legacy proofs require CreatorSessionID; Linux helper proofs bind owner kind/context and must not synthesize a Windows session.
+// Windows legacy proofs require CreatorSessionID; Linux helper proofs bind owner
+// kind/context and must not synthesize a Windows session.
 func (proof SupervisorHandoffAbortProof) Validate() error {
 	if proof.Version != SupervisorHandoffAbortProofVersion || proof.Disposition != SupervisorHandoffAbortDisposition || !validHex(proof.LaunchToken, TokenBytes*2) || !validHex(proof.JobID, TokenBytes*2) || proof.TargetPID <= 0 || proof.SupervisorPID < 0 || !validOwner(proof.OwnerKind, proof.OwnerContext) {
 		return errors.New("supervisor handoff abort proof is invalid")
@@ -691,14 +696,16 @@ func (proof SupervisorHandoffAbortProof) ValidFor(value SupervisorHandoff) bool 
 		(proof.OwnerKind == OwnerKindLinuxHelper || (proof.CreatorSessionID != nil && value.CreatorSessionID != nil)) && equalUint32(proof.CreatorSessionID, value.CreatorSessionID)
 }
 
-// Compare-only projection: it carries no terminal receipt, which is not part of the launch identity these checks resolve.
+// Compare-only projection: it carries no terminal receipt, which is not part of the
+// launch identity these checks resolve.
 func supervisorFromHandoff(value SupervisorHandoff) Supervisor {
 	core := value.core()
 	core.StopReceipt = nil
 	return supervisorFromCore(core)
 }
 
-// V2 comparison subject: forces the supervisor schema and omits the creator session, which v2 validation rejects and the release comparison never reads.
+// V2 comparison subject: forces the supervisor schema and omits the creator session, which
+// v2 validation rejects and the release comparison never reads.
 func supervisorFromReleaseProof(proof SupervisorHandoffReleaseProof) Supervisor {
 	core := proof.core()
 	core.Version = SupervisorVersionV2

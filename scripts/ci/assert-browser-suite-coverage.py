@@ -1,5 +1,32 @@
 #!/usr/bin/env python3
-"""Require every browser suite to be wired into a workflow or listed as manual."""
+"""Require every browser suite to be wired into a workflow or listed as manual.
+
+Findings T4 and F4: thirteen Playwright specs and three node test files live
+under `browser/`, and six of the specs plus all three node tests are reachable
+only through local driver scripts - roughly 4,600 lines of test code with no CI
+verdict and no explicit label. This gate makes the classification total:
+
+* every `<root>/browser/tests/**/*.spec.mjs` and
+  `<root>/browser/scripts/**/*.test.mjs` must be **wired** - some
+  `.github/workflows/*.yml`/`*.yaml` names the file's
+  browser-relative (`tests/foo.spec.mjs`) or repository-relative
+  (`browser/tests/foo.spec.mjs`) path as a token outside its YAML comments (a
+  comment is not a step and runs nothing) - or **manual** - named by a
+  backticked path in the suite column of a table row of the
+  `## Manual-only suite matrix` section of `browser/README.md`. Only the first
+  cell of a table row in that one section counts, so a row's explanation may
+  mention sibling suites freely; the README's prose throughout is not consulted;
+* a file in both classes, an unclassified file, and a matrix entry with no file
+  on disk are each a failure, so wiring a spec (refactor slice W6-02) must also
+  drop its matrix row, and a rename cannot leave a stale label behind;
+* the classification table and counts print on every run.
+
+For a wired file this gate proves it is *named*, not that the naming step runs
+it: for the render family, `assert-playwright-json.py`'s executed-set assertion
+is the execution proof and is deliberately not duplicated here. `--root`
+overrides the repository root so the gate itself can be exercised against
+synthetic fixture trees.
+"""
 
 import argparse
 import pathlib
