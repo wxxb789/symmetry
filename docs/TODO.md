@@ -1566,3 +1566,25 @@ is fixed here; each bullet names what a follow-up has to re-derive.
       the four members, the `grant()` fallback, and their population in
       `daemon/internal/app/goal_admission_tx.go` and
       `daemon/internal/app/linux_owner_witness_linux.go`.
+
+## Orchestration concept split (rf-w5-18, 2026-11-22)
+
+- [ ] Remove the duplicated `ContextSnapshot` read in the goal runtime match. The split moved the
+      read into `control/lib/symmetry_control/goals/eligibility.ex:129-139` (validation runtime ids
+      from the admitted snapshot); the admission and claim paths load the same row in
+      `control/lib/symmetry_control/goals.ex:881` and `:6139`. The contract declared the removal out
+      of scope, so the duplicate survives the split unchanged.
+
+- [ ] Fold the four compile-time constant copies the split created, or assert them against each
+      other. Attributes cannot be imported, so each module that reads one declares it:
+      `@terminal_states` (`control/lib/symmetry_control/orchestration/registry.ex:6`,
+      `.../transitions.ex:4`), `@supervisory_commands` (`.../registry.ex:5`,
+      `.../commands.ex`, `.../transitions.ex:7`), `@capacity_bearing_states`
+      (`.../assignment.ex`, `.../task_reads.ex`), `@native_harness_kinds`
+      (`.../registry.ex:4`, `.../assignment.ex`). A drift between two copies changes eligibility
+      silently; a shared module or a compile-time assertion removes the risk.
+
+- [ ] Fold the `retry_binding` type copy: `@type retry_binding` (with its `@typedoc`) is declared in
+      `control/lib/symmetry_control/orchestration.ex:18-28` for the facade's public specs and again
+      in `control/lib/symmetry_control/orchestration/task_reads.ex:339-349` for the moved specs. A
+      drifted copy would mis-document the retry projection without failing a test.
