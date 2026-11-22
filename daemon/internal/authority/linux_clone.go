@@ -9,11 +9,8 @@ import (
 	"strings"
 )
 
-// LinuxCloneIntent is the immutable, RunKey-bound authority for one B-owned
-// standalone clone. SeedPath is an A-owned, B-readable bundle; Target is the
-// disposable B-writable checkout path. A source ref, not B-owned Git metadata,
-// pins BaseCommit before the bundle is published. ResourceID, BaseCommit and
-// BaseTreeDigest together preserve the complete admitted Subject identity.
+// Immutable RunKey-bound authority for one B-owned clone: SeedPath is an A-owned, B-readable bundle, Target the
+// disposable B-writable checkout. A source ref (not B-owned Git metadata) pins BaseCommit before the bundle publishes.
 type LinuxCloneIntent struct {
 	Version        int    `json:"version"`
 	RunID          string `json:"run_id"`
@@ -31,10 +28,7 @@ func (value LinuxCloneIntent) Validate() error {
 	return value.validate(true)
 }
 
-// ValidateForJournal permits structurally valid target paths recorded by the
-// original clone-v2 journal schema, which did not enforce the deterministic
-// RunRef suffix. It is only for reading existing durable records; new grants
-// and filesystem effects must continue to use Validate.
+// Read-only compatibility for original clone-v2 journals: new grants and filesystem effects must use Validate.
 func (value LinuxCloneIntent) ValidateForJournal() error {
 	return value.validate(false)
 }
@@ -65,8 +59,6 @@ func (value LinuxCloneIntent) Equal(other LinuxCloneIntent) bool {
 
 func (value LinuxCloneIntent) Clone() LinuxCloneIntent { return value }
 
-// LinuxCloneSeedReceipt is A's measured receipt for the immutable bundle
-// published at LinuxCloneIntent.SeedPath.
 type LinuxCloneSeedReceipt struct {
 	Version    int    `json:"version"`
 	BaseCommit string `json:"base_commit"`
@@ -91,8 +83,6 @@ func (value LinuxCloneSeedReceipt) Equal(other LinuxCloneSeedReceipt) bool {
 
 func (value LinuxCloneSeedReceipt) Clone() LinuxCloneSeedReceipt { return value }
 
-// LinuxCloneGrant is the exact reserved intent plus its durable A-measured
-// seed receipt. It is the only clone authority delivered to the gate.
 type LinuxCloneGrant struct {
 	Intent LinuxCloneIntent      `json:"intent"`
 	Seed   LinuxCloneSeedReceipt `json:"seed"`
@@ -113,10 +103,6 @@ func (value LinuxCloneGrant) Clone() LinuxCloneGrant {
 	return LinuxCloneGrant{Intent: value.Intent.Clone(), Seed: value.Seed.Clone()}
 }
 
-// LinuxCloneReuseStop mirrors the exact stopped native execution whose
-// retained session is being resumed. It is deliberately independent of the
-// state package so the RunJournal can persist the authority without an import
-// cycle.
 type LinuxCloneReuseStop struct {
 	RunID          string `json:"run_id"`
 	Generation     int64  `json:"generation"`
@@ -145,10 +131,7 @@ func (value LinuxCloneReuseStop) Equal(other LinuxCloneReuseStop) bool {
 
 func (value LinuxCloneReuseStop) Clone() LinuxCloneReuseStop { return value }
 
-// LinuxCloneReuseGrant authorizes a new RunKey to consume the exact retained
-// target of a stopped predecessor. The source clone records remain owned by
-// the source RunJournal; this grant never transfers deletion or promotion
-// ownership.
+// Never transfers deletion or promotion ownership: the source clone records stay owned by the source RunJournal.
 type LinuxCloneReuseGrant struct {
 	Version              int                       `json:"version"`
 	Source               LinuxCloneGrant           `json:"source"`
@@ -204,9 +187,7 @@ func validRequiredAuthorityString(value string, limit int) bool {
 	return value != "" && len(value) <= limit && !strings.ContainsRune(value, '\x00')
 }
 
-// LinuxCloneCheckoutReceipt binds the B-created checkout to the reserved run,
-// binding, resource, target, seed, base commit and observed target inode. It is
-// not source-Git ownership evidence and cannot clear process containment.
+// Not source-Git ownership evidence and cannot clear process containment.
 type LinuxCloneCheckoutReceipt struct {
 	Version      int    `json:"version"`
 	RunID        string `json:"run_id"`
@@ -240,9 +221,6 @@ func (value LinuxCloneCheckoutReceipt) Equal(other LinuxCloneCheckoutReceipt) bo
 
 func (value LinuxCloneCheckoutReceipt) Clone() LinuxCloneCheckoutReceipt { return value }
 
-// LinuxClonePromotionReceipt records the A-validated commit after its object
-// graph and full tree have been checked in A-owned storage and promoted under
-// the deterministic source ref for this RunKey.
 type LinuxClonePromotionReceipt struct {
 	Version    int    `json:"version"`
 	Commit     string `json:"commit"`
@@ -265,9 +243,8 @@ func (value LinuxClonePromotionReceipt) Equal(other LinuxClonePromotionReceipt) 
 
 func (value LinuxClonePromotionReceipt) Clone() LinuxClonePromotionReceipt { return value }
 
-// LinuxClonePromotionIntent is the immutable candidate subject reserved in
-// State before A imports or compare-creates the run-keyed promotion ref.
-// Ref is deliberately derived from the enclosing RunKey, not supplied here.
+// Reserves the candidate subject before A imports; the Ref is derived from the
+// enclosing RunKey, never supplied by the caller.
 type LinuxClonePromotionIntent struct {
 	Version    int    `json:"version"`
 	ResourceID string `json:"resource_id"`
@@ -290,20 +267,15 @@ func (intent LinuxClonePromotionIntent) Equal(other LinuxClonePromotionIntent) b
 
 func (intent LinuxClonePromotionIntent) Clone() LinuxClonePromotionIntent { return intent }
 
-// LinuxCloneAbortProof certifies A-side cleanup of an intent without a durable
-// checkout receipt: the exact target, seed path and run-keyed refs are
-// independently verified absent. A new proof may bind only no-gate evidence;
-// a normal release can have exposed the clone to B before checkout-ready was
-// persisted, so it cannot establish that the target tree is absent.
+// A new proof may bind only no-gate evidence: a normal release can have exposed the clone to B before
+// checkout-ready persisted, so it cannot establish that the target tree is absent.
 type LinuxCloneAbortProof struct {
 	Version             int                               `json:"version"`
 	Intent              LinuxCloneIntent                  `json:"intent"`
 	SeedReceipt         *LinuxCloneSeedReceipt            `json:"seed_receipt,omitempty"`
 	PreGateReleaseProof *LinuxCgroupPreGateReleaseProof   `json:"pre_gate_release_proof,omitempty"`
 	CgroupAbortProof    *LinuxCgroupReservationAbortProof `json:"cgroup_abort_proof,omitempty"`
-	// NormalReleaseProof is decode-only compatibility for old unresolved
-	// journals. Validate rejects it; a normal release cannot authorize no-target
-	// cleanup because B may already have cloned or renamed the target.
+	// Decode-only compatibility for old unresolved journals; Validate rejects it.
 	NormalReleaseProof *SupervisorHandoffReleaseProof `json:"normal_release_proof,omitempty"`
 	BaseRef            string                         `json:"base_ref"`
 	PromotionRef       string                         `json:"promotion_ref"`
@@ -317,10 +289,8 @@ func (proof LinuxCloneAbortProof) Validate() error {
 	return proof.validate(false)
 }
 
-// ValidateForJournal accepts pre-layout target paths and legacy normal-release
-// proof fields only while loading existing durable tombstones. It is strictly
-// read-only compatibility: new proof writes and filesystem effects must call
-// Validate, which rejects normal-release no-target authority.
+// Strictly read-only compatibility while loading existing tombstones: new proof writes
+// and filesystem effects must call Validate.
 func (proof LinuxCloneAbortProof) ValidateForJournal() error {
 	return proof.validate(true)
 }
@@ -399,10 +369,7 @@ func equalLinuxCloneSeedReceipt(left, right *LinuxCloneSeedReceipt) bool {
 	return left.Equal(*right)
 }
 
-// LinuxCloneBaseRef returns the A-owned branch ref that pins the exact base
-// commit for one run and can be named by git clone --branch. The hash avoids
-// putting arbitrary run IDs into Git ref components; it is lowercase hex
-// SHA-256 of runID + NUL + the base-10 generation.
+// The hex component avoids raw run IDs in Git ref components: SHA-256 of runID + NUL + the base-10 generation.
 func LinuxCloneBaseRef(runID string, generation int64) (string, error) {
 	keyHash, err := LinuxCloneRunKeyHash(runID, generation)
 	if err != nil {
@@ -411,8 +378,6 @@ func LinuxCloneBaseRef(runID string, generation int64) (string, error) {
 	return "refs/heads/symmetry/clone-v2/base/" + keyHash, nil
 }
 
-// LinuxClonePromotionRef returns the A-owned branch ref for the verified
-// candidate promoted from one run's B-owned clone.
 func LinuxClonePromotionRef(runID string, generation int64) (string, error) {
 	keyHash, err := LinuxCloneRunKeyHash(runID, generation)
 	if err != nil {
@@ -421,9 +386,7 @@ func LinuxClonePromotionRef(runID string, generation int64) (string, error) {
 	return "refs/heads/symmetry/clone-v2/promoted/" + keyHash, nil
 }
 
-// LinuxCloneWorkspaceRoot derives the configured B-writable root from the
-// deterministic binding/RunKey Target layout. It does not resolve or open the
-// path; Workspace preflight remains responsible for filesystem identity and ACLs.
+// Does not resolve or open the path: Workspace preflight owns filesystem identity and ACLs.
 func LinuxCloneWorkspaceRoot(intent LinuxCloneIntent) (string, error) {
 	if err := intent.Validate(); err != nil {
 		return "", err
@@ -446,10 +409,8 @@ func linuxCloneWorkspaceRootFromIntent(intent LinuxCloneIntent) (string, error) 
 	return root, nil
 }
 
-// LinuxCloneCleanupIntent freezes every immutable authority and measured
-// identity needed by the normal, post-promotion cleanup effect. FenceDigest is
-// a non-secret SHA-256 binding of the complete current protocol.Fence; the raw
-// lease token is never sent to the root cleanup worker.
+// FenceDigest is a non-secret SHA-256 binding of the complete current protocol.Fence;
+// the raw lease token is never sent to the root cleanup worker.
 type LinuxCloneCleanupIntent struct {
 	Version                int                           `json:"version"`
 	Intent                 LinuxCloneIntent              `json:"intent"`
@@ -517,10 +478,7 @@ func (intent LinuxCloneCleanupIntent) Equal(other LinuxCloneCleanupIntent) bool 
 		intent.ArtifactDeliveryDigest == other.ArtifactDeliveryDigest
 }
 
-// LinuxCloneTargetRemovalProof is the trusted root worker's receipt for one
-// exact B target inode. It includes a full direct-child wait/reap proof and
-// independently rewalked root/target identities; it does not assert that a
-// same-UID B process cannot race a rename elsewhere in the owned root.
+// Does not assert that a same-UID B process cannot race a rename elsewhere in the owned root.
 type LinuxCloneTargetRemovalProof struct {
 	Version             int                        `json:"version"`
 	Intent              LinuxCloneCleanupIntent    `json:"intent"`
@@ -570,9 +528,6 @@ func (proof LinuxCloneTargetRemovalProof) Equal(other LinuxCloneTargetRemovalPro
 		proof.RootDeleter.Equal(other.RootDeleter) && proof.RootDeleterExit.Equal(other.RootDeleterExit)
 }
 
-// LinuxCloneCleanupProof is the final A-side readback for all normal clone
-// cleanup effects. It preserves the promoted ref while proving the disposable
-// B target, seed, base ref and owned scratch are absent.
 type LinuxCloneCleanupProof struct {
 	Version             int                          `json:"version"`
 	Intent              LinuxCloneCleanupIntent      `json:"intent"`

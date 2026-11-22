@@ -518,10 +518,8 @@ func helperInvocation(mode string, arguments ...string) Invocation {
 }
 
 func minimalEnvironment() []string {
-	// GOCOVERDIR is forwarded for coverage-instrumented runs: a helper child is
-	// this test binary re-executed (`os.Args[0]`), and without the variable the
-	// coverage runtime prints "warning: GOCOVERDIR not set, no coverage data
-	// emitted" on the child's exit, which exact-output assertions capture.
+	// GOCOVERDIR is forwarded because the helper child is this test binary
+	// re-executed, and the coverage runtime's "not set" warning breaks assertions.
 	keys := []string{"SystemRoot", "SYSTEMROOT", "WINDIR", "ComSpec", "PATHEXT", "TMP", "TEMP", "GOCOVERDIR"}
 	values := make([]string, 0, len(keys))
 	for _, key := range keys {

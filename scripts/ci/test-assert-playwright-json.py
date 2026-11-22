@@ -3,10 +3,10 @@
 
 import json
 import pathlib
-import subprocess
-import sys
 import tempfile
 import unittest
+
+import citest
 
 SCRIPT = pathlib.Path(__file__).with_name("assert-playwright-json.py")
 
@@ -57,13 +57,13 @@ def passing_report(*titles, skipped=1, nested=False):
 
 
 class GateTestCase(unittest.TestCase):
-    def gate_command(self, path, files):
-        command = [sys.executable, str(SCRIPT), str(path)]
+    def gate_arguments(self, path, files):
+        arguments = [str(path)]
         for project in PROJECTS:
-            command += ["--expect-project", project]
+            arguments += ["--expect-project", project]
         for file in files:
-            command += ["--expect-file", file]
-        return command
+            arguments += ["--expect-file", file]
+        return arguments
 
     def run_gate(self, report, *arguments, files=(SPEC_FILE,)):
         with tempfile.TemporaryDirectory() as directory:
@@ -72,20 +72,10 @@ class GateTestCase(unittest.TestCase):
                 path.write_text(report, encoding="utf-8")
             else:
                 path.write_text(json.dumps(report), encoding="utf-8")
-            return subprocess.run(
-                [*self.gate_command(path, files), *arguments],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
+            return citest.run_gate(SCRIPT, *self.gate_arguments(path, files), *arguments)
 
     def run_gate_path(self, path, *arguments):
-        return subprocess.run(
-            [*self.gate_command(path, (SPEC_FILE,)), *arguments],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        return citest.run_gate(SCRIPT, *self.gate_arguments(path, (SPEC_FILE,)), *arguments)
 
 
 class PositiveTests(GateTestCase):

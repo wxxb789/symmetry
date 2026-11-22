@@ -3,10 +3,10 @@
 
 import json
 import pathlib
-import subprocess
-import sys
 import tempfile
 import unittest
+
+import citest
 
 SCRIPT = pathlib.Path(__file__).with_name("assert-go-test-json.py")
 
@@ -16,12 +16,7 @@ class GoEventGateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = pathlib.Path(directory) / "events.jsonl"
             path.write_text("".join(json.dumps(event) + "\n" for event in events), encoding="utf-8")
-            return subprocess.run(
-                [sys.executable, str(SCRIPT), str(path), *arguments],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
+            return citest.run_gate(SCRIPT, str(path), *arguments)
 
     def test_gate_requires_exact_run_and_pass_without_skips(self) -> None:
         run = {"Action": "run", "Test": "TestWitness"}
@@ -86,12 +81,7 @@ class GoEventGateTests(unittest.TestCase):
                 '{"Action":"run","Test":"TestWitness"}\nnot a Go event\n{"Action":"pass","Test":"TestWitness"}\n',
                 encoding="utf-8",
             )
-            result = subprocess.run(
-                [sys.executable, str(SCRIPT), str(path), "TestWitness"],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
+            result = citest.run_gate(SCRIPT, str(path), "TestWitness")
         self.assertNotEqual(result.returncode, 0)
 
 

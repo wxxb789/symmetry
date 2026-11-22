@@ -12,14 +12,8 @@ const TOOL_CACHE_DIR = "SYMMETRY_TOOL_CACHE_DIR";
 const DISABLE_TOOL_CACHES = "SYMMETRY_DISABLE_TOOL_CACHES";
 const SEALED_CACHE = "/sealed/tool-cache";
 
-// Both cases import module-fresh configs via `vi.resetModules()` in one worker, and
-// the first import pays the process's cold `vite.config` module graph (vite plus
-// @vitejs/plugin-react and @tailwindcss/vite). The 2026-11-21 audit measured that
-// cold import at 8.2 s against vitest's 5 s default — the suite's one red test at
-// base — while this host measures ~0.5 s warm (`node` import 477 ms; vitest case
-// 678 ms). The ceiling is sized from the cold measurement: 30 s is 3.7x it and
-// still finite for a genuinely hung import. A filtered run can start at either
-// case, so both carry it.
+// The first import pays the process's cold `vite.config` module graph: the 2026-11-21
+// audit measured 8.2 s against vitest's 5 s default (30 s is 3.7x it).
 const CONFIG_IMPORT_TIMEOUT_MS = 30_000;
 
 // A filtered run can start at the 'unset' case alone, and the ambient environment

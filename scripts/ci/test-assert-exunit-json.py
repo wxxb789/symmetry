@@ -1,18 +1,15 @@
 #!/usr/bin/env python3
 """Unit tests for the shared ExUnit JSON event gate."""
 
-import importlib.util
 import json
 import pathlib
-import subprocess
-import sys
 import tempfile
 import unittest
 
+import citest
+
 SCRIPT = pathlib.Path(__file__).with_name("assert-exunit-json.py")
-SPEC = importlib.util.spec_from_file_location("assert_exunit_json", SCRIPT)
-GATE = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(GATE)
+GATE = citest.load_gate(SCRIPT, "assert_exunit_json")
 
 NATIVE_POSITIVE = "real Pi committed candidate is independently validated and achieves the Goal"
 NATIVE_OTHER = "real Pi repository work crosses Control receipts without accepting the Goal"
@@ -54,12 +51,7 @@ class GateTestCase(unittest.TestCase):
             return self.run_gate_file(events, *arguments)
 
     def run_gate_file(self, events, *arguments):
-        return subprocess.run(
-            [sys.executable, str(SCRIPT), str(events), *arguments],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        return citest.run_gate(SCRIPT, str(events), *arguments)
 
     def run_stream(self, stream, *arguments):
         result = self.run_gate(stream, "--runner-status", "0", *arguments)

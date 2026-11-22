@@ -426,3 +426,24 @@ input (the nil-id row is unreachable, audit 9). Sites outside the collapsed fami
 | 9 | WorkItem lock | legacy: :1134/:1172 `lock_record(WorkItem, nil)` raised `ArgumentError` from Ecto's nil-comparison guard (`not_nil!/2`), no query reached Postgres; goal bodies: :1326 rolled back `:ownership_lost` for a nil id without a query | `lock_work_item/1` :1194-1197 returns nil for a non-binary id, :1171 rolls back `:ownership_lost` without the query | yes on reachable rows; the nil id is unreachable (`null: false` + `validate_required`), where base legacy raised and HEAD refuses |
 | 10 | primitives | `lock_project_for_goal/1` :2815-2817, `lock_record/2` :2819-2821, `lock_goal_revision/1` :638-643 | moved verbatim into `IntentContext` :1232-1245; the outer one-line forwards :638 (`__MODULE__.`-qualified, see the round-1 section), :2798, :2800 keep every other call site byte-identical | yes |
 | 11 | transaction boundary | every path above runs inside the caller's `Repo.transaction/1`; `Repo.rollback/1` unwinds to that boundary | the same callers, one transaction per claim/recover/finalize call, no new transaction and no lock taken outside a transaction | yes |
+
+## Comment-policy sweep (2026-11-22)
+
+Module intent removed from `control/lib/symmetry_control/integrations/provider_access.ex` by the
+2026-11-22 comment-policy sweep is recorded below (workstream record "ws8-control-lib").
+
+- `control/.credo.exs` (header, lines 1-23): *Credo configuration for the Control
+  application, added with the advisory `mix credo --strict` CI step (refactor slice
+  W1-01); the step does not gate — the strict issue count is a metric and the count
+  recorded on the PR is the ratchet baseline the burn-down slices measure against. The
+  check list is `mix credo gen.config` output (Credo 1.7.19) with two contract changes;
+  measured 459 strict issues with `checks: %{}` at 1.7.19 vs 403 from a Credo that dropped
+  AliasOrder/AliasUsage/PreferImplicitTry/StringSigils/Apply (their findings sum to 67).*
+  (The `%{}`-fallback why is retained in-file as a 2-line K3 note above `checks: %{`; the
+  two per-check whys are retained beside their entries — see below.)
+- `control/lib/symmetry_control/integrations/provider_access.ex` (1230-1231): ownership
+  boundary — *The intent-context lock primitives; other locks in this file keep their own
+  queries.*
+
+The sweep's plan is
+[`docs/plans/2026-11-22-comment-policy-sweep-plan.md`](2026-11-22-comment-policy-sweep-plan.md).

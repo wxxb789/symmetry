@@ -3345,9 +3345,8 @@ defmodule SymmetryControl.GoalsTest do
     assert late_receipt["event_sequence"] == late_outcome_event.sequence
     refute late_receipt["mutation_id"] == original_settlement_receipt["mutation_id"]
 
-    # These ids are durable idempotency keys (settlement events and admission keys); freeze the
-    # delivered bytes here so a formatter change (prefix, version nibble, layout) fails in this
-    # test instead of silently rewriting stored keys.
+    # Durable idempotency keys (settlement events, admission keys): freeze the delivered
+    # bytes so a formatter change fails here instead of silently rewriting stored keys.
     assert original_settlement_receipt["mutation_id"] ==
              frozen_mutation_id("settlement", [validation.id, validation_run.id, "1"])
 
@@ -5049,8 +5048,6 @@ defmodule SymmetryControl.GoalsTest do
     assert blocked_event.response["candidate_identity"] ==
              blocked_event.payload["candidate_identity"]
 
-    # Frozen durable-key bytes for the two automatic families this scenario stores (see
-    # `frozen_mutation_id/2`): the blocked event id and the admission key its payload carries.
     assert blocked_event.id ==
              frozen_mutation_id("automatic-admission-blocked", [
                goal.id,
@@ -5306,7 +5303,6 @@ defmodule SymmetryControl.GoalsTest do
              "invalid_validation_profile"
            ]
 
-    # The deferred event id is the durable key; freeze it like the settlement pins above.
     assert Enum.map(deferred_events, & &1.id) ==
              Enum.map(deferred_events, fn event ->
                frozen_mutation_id("automatic-reconciliation-deferred", [
@@ -7500,7 +7496,6 @@ defmodule SymmetryControl.GoalsTest do
     assert {:ok, ^receipt} =
              Goals.settle_unstarted_task(controlled_task.id, "cancelled", now: @now)
 
-    # The receipt names the durable key only by sequence; freeze the settlement event id.
     settlement_event =
       Repo.one!(
         from(event in SymmetryControl.Goals.GoalEvent,
@@ -9322,10 +9317,8 @@ defmodule SymmetryControl.GoalsTest do
     "sha256:" <> Base.encode16(SymmetryControl.RequestHash.canonical(subject), case: :lower)
   end
 
-  # The frozen bytes `Goals.mutation_id/2` renders for the six named part vectors: sha256 over
-  # "<prefix>:<part>:<part>…" with the version-5 and "a" variant nibbles these durable keys have
-  # always carried (not RFC 9562 name hashing). Deliberately independent of the production
-  # helper, so the ids the receipts serve cannot change bytes without a red test.
+  # By design independent of `Goals.mutation_id/2` so served ids cannot change bytes without
+  # a red test: sha256 over "<prefix>:<part>:…", version-5/"a" nibbles, not RFC 9562 name hashing.
   defp frozen_mutation_id(prefix, parts) do
     hex =
       :crypto.hash(:sha256, prefix <> ":" <> Enum.join(parts, ":"))

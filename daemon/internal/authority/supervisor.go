@@ -1,7 +1,3 @@
-// Package authority contains the small durable binding used to recover a
-// machine-local process containment boundary. It is deliberately independent
-// of platform and state packages so the journal can store the exact authority
-// without making either package own the other's policy.
 package authority
 
 import (
@@ -11,51 +7,41 @@ import (
 )
 
 const (
-	// SupervisorVersion is the first durable supervisor-authority schema.
 	SupervisorVersion = 1
-	// SupervisorHandoffVersion is the first durable pre-authority handoff schema.
+
 	SupervisorHandoffVersion = 1
-	// SupervisorHandoffAbortProofVersion is the first pre-authority abort-proof
-	// schema. It is independent from both the handoff and stop-receipt schemas.
+
 	SupervisorHandoffAbortProofVersion = 1
-	// SupervisorVersionV2 is the exact-cgroup Linux supervisor schema. Version 1
-	// remains the authority for existing Linux process-group and Windows owners.
+
 	SupervisorVersionV2 = 2
-	// SupervisorHandoffVersionV2 is the pre-authority schema for a new Linux
-	// cgroup-v2 owner.
+
 	SupervisorHandoffVersionV2 = 2
-	// LinuxCgroupIdentityVersion identifies the immutable cgroup identity shape.
+
 	LinuxCgroupIdentityVersion = 2
-	// SupervisorHandoffAbortDisposition identifies a proof that the launch was
-	// definitively aborted before supervisor authority was committed.
+	// Durable disposition for a launch definitively aborted before authority commit.
 	SupervisorHandoffAbortDisposition = "preauth_aborted"
-	// LinuxCgroupTargetBirthTrustedAGate identifies the same-PID trusted A gate
-	// that exists before the one-shot release to native UID B.
+	// The same-PID trusted A gate that exists before the one-shot release to native UID B.
 	LinuxCgroupTargetBirthTrustedAGate = "trusted_a_gate"
-	// LinuxCgroupStopProofHelper and LinuxCgroupStopProofMirror bound the two
-	// supported v2 stop-proof issuers.
+
 	LinuxCgroupStopProofHelper = "helper"
 	LinuxCgroupStopProofMirror = "mirror"
-	// LinuxCgroupGateOutcomeNeverCreated is emitted by the authenticated root
-	// launcher only when clone3 did not create an A gate.
+	// Emitted by the authenticated root launcher only when clone3 created no A gate.
 	LinuxCgroupGateOutcomeNeverCreated = "never_created"
-	// LinuxCgroupLeafRemoved and LinuxCgroupLeafAbsentAfterReceipt distinguish a
-	// verified removal from completing a prior, receipt-authorized removal.
+	// Distinguishes a verified removal from completing a prior, receipt-authorized removal.
 	LinuxCgroupLeafRemoved            = "removed"
 	LinuxCgroupLeafAbsentAfterReceipt = "absent_after_receipt"
-	// LinuxCgroupAbortProofVersion identifies structural no-target abort evidence.
+
 	LinuxCgroupAbortProofVersion         = 2
 	LinuxCgroupAbortLeafNeverCreated     = "never_created"
 	LinuxCgroupAbortLeafRemovedEmpty     = "removed_empty"
 	LinuxCgroupAbortLeafAbsentAfterRmdir = "absent_after_rmdir"
-	// SecretBytes is the entropy carried by a supervisor authority secret.
+
 	SecretBytes = 32
-	// TokenBytes is the entropy used for a pipe address and Job label.
+
 	TokenBytes = 16
-	// OwnerKindLinuxHelper identifies the platform-neutral Linux helper owner.
+
 	OwnerKindLinuxHelper = "linux_helper"
-	// OwnerKindLegacyWindows identifies the existing Windows owner/session
-	// binding. Empty owner fields remain valid for legacy v1 records.
+
 	OwnerKindLegacyWindows             = "legacy_windows"
 	SupervisorScanOwnerHelper          = "helper"
 	SupervisorScanOwnerMirror          = "mirror"
@@ -68,15 +54,13 @@ const (
 	SupervisorScanPhaseAssertClean     = "assert_clean"
 	SupervisorScanPhaseAssertSealed    = "assert_sealed"
 	SupervisorScanPhaseAssertAllSealed = "assert_all_sealed"
-	// LinuxCloneVersion is the additive authority version for a B-owned Linux
-	// standalone clone and its A-owned seed/promotion evidence.
+
 	LinuxCloneVersion = 2
-	// LinuxCloneNonceBytes is the entropy reserved for one run's clone intent.
+
 	LinuxCloneNonceBytes = 32
-	// LinuxCloneMaxSeedBytes bounds the exact self-contained seed bundle size.
+
 	LinuxCloneMaxSeedBytes int64 = 512 << 20
-	// LinuxCloneTargetDispositionRemoved and AlreadyAbsent identify the exact
-	// authorized target-tree deletion outcome returned by the trusted root worker.
+
 	LinuxCloneTargetDispositionRemoved       = "removed"
 	LinuxCloneTargetDispositionAlreadyAbsent = "already_absent"
 )
@@ -88,9 +72,8 @@ func equalSupervisorHandoffReleaseProof(left, right *SupervisorHandoffReleasePro
 	return left.Equal(*right)
 }
 
-// SupervisorScanUpdate is an in-process mutation envelope carried only by the
-// existing handoff callback. It is never serialized into the handoff or sent
-// as authority by itself; the Store binds it to the run key and exact helper.
+// SupervisorScanUpdate is a request-only in-process envelope carried by the handoff callback:
+// never serialized and never authority by itself; the Store binds it to the run key and exact helper.
 type SupervisorScanUpdate struct {
 	SupervisorPID      int
 	SupervisorIdentity string
@@ -101,15 +84,11 @@ type SupervisorScanUpdate struct {
 	FailureKind        string
 }
 
-// Supervisor binds one launched target to the exact helper that owns its
-// inherited containment handle. Secret is machine-local durable authority; it
-// must never be placed in argv, environment, pipe names, or logs.
+// Secret is machine-local durable authority: never place it in argv, environment, pipe names, or logs.
 type Supervisor struct {
 	Version int    `json:"version"`
 	Secret  string `json:"secret"`
-	// LaunchToken binds the committed authority to the helper's exact durable
-	// bootstrap endpoint. It is optional only for legacy records created before
-	// committed handoff recovery carried this identity.
+
 	LaunchToken        string `json:"launch_token,omitempty"`
 	OwnerKind          string `json:"owner_kind,omitempty"`
 	OwnerContext       string `json:"owner_context,omitempty"`
@@ -121,8 +100,7 @@ type Supervisor struct {
 	JobID              string `json:"job_id"`
 	SupervisorPID      int    `json:"supervisor_pid"`
 	SupervisorIdentity string `json:"supervisor_identity"`
-	// The following exact-subject fields are present only for v2 Linux cgroup
-	// authority. Version 1 records retain their original encoded shape.
+
 	TargetBirthKind  string                      `json:"target_birth_kind,omitempty"`
 	CgroupIdentity   *LinuxCgroupIdentity        `json:"cgroup_identity,omitempty"`
 	AnchorPID        int                         `json:"anchor_pid,omitempty"`
@@ -131,17 +109,13 @@ type Supervisor struct {
 	LauncherIdentity string                      `json:"launcher_identity,omitempty"`
 	LauncherExit     *LinuxCgroupExitProof       `json:"launcher_exit,omitempty"`
 	Mirror           *LinuxCgroupProcessIdentity `json:"mirror,omitempty"`
-	// CreatorSessionID is optional for legacy authority records. A present
-	// pointer distinguishes Windows session 0 from an unavailable field.
+	// A present pointer distinguishes Windows session 0 from an unavailable legacy field.
 	CreatorSessionID *uint32      `json:"creator_session_id,omitempty"`
 	StopReceipt      *StopReceipt `json:"stop_receipt,omitempty"`
 }
 
-// SupervisorHandoff is the durable launch record written before an
-// independent containment helper can outlive the daemon that launched it.
-// SupervisorPID and SupervisorIdentity are an optional pair until the helper
-// creation identity has been observed. StopReceipt is written only by the
-// dedicated receipt mutation after a positive stop witness exists.
+// Durable launch record written before an independent containment helper can outlive the daemon:
+// SupervisorPID/Identity are an optional pair until observed, and StopReceipt only follows a positive stop witness.
 type SupervisorHandoff struct {
 	Version            int    `json:"version"`
 	LaunchToken        string `json:"launch_token"`
@@ -156,8 +130,7 @@ type SupervisorHandoff struct {
 	JobID              string `json:"job_id"`
 	SupervisorPID      int    `json:"supervisor_pid,omitempty"`
 	SupervisorIdentity string `json:"supervisor_identity,omitempty"`
-	// Version 2 binds an A-born gate, its cgroup leaf and every producer. These
-	// fields are omitted from all existing v1 records.
+
 	TargetBirthKind  string                      `json:"target_birth_kind,omitempty"`
 	CgroupIdentity   *LinuxCgroupIdentity        `json:"cgroup_identity,omitempty"`
 	AnchorPID        int                         `json:"anchor_pid,omitempty"`
@@ -166,20 +139,14 @@ type SupervisorHandoff struct {
 	LauncherIdentity string                      `json:"launcher_identity,omitempty"`
 	LauncherExit     *LinuxCgroupExitProof       `json:"launcher_exit,omitempty"`
 	Mirror           *LinuxCgroupProcessIdentity `json:"mirror,omitempty"`
-	// CreatorSessionID is optional only for legacy handoffs. A present pointer
-	// distinguishes Windows session 0 from a missing legacy field.
+	// A present pointer distinguishes Windows session 0 from a missing legacy field.
 	CreatorSessionID *uint32      `json:"creator_session_id,omitempty"`
 	StopReceipt      *StopReceipt `json:"stop_receipt,omitempty"`
-	// ScanUpdate is a request-only envelope for the existing Store callback.
-	// It is intentionally excluded from journal encoding and handoff equality.
+	// Request-only envelope for the Store callback: excluded from journal encoding and handoff equality.
 	ScanUpdate *SupervisorScanUpdate `json:"-"`
 }
 
-// SupervisorHandoffReleaseProof is a narrow, non-durable proof supplied by
-// the platform after it has released the helper. It deliberately carries the
-// exact handoff identity instead of allowing a caller to clear by PID alone.
-// The platform may adopt this shape later; this package does not implement
-// platform release behavior.
+// Non-durable platform proof carrying the exact handoff identity: a caller cannot clear by PID alone.
 type SupervisorHandoffReleaseProof struct {
 	Version            int                         `json:"version"`
 	Status             string                      `json:"status"`
@@ -207,11 +174,7 @@ type SupervisorHandoffReleaseProof struct {
 	CreatorSessionID   *uint32                     `json:"creator_session_id,omitempty"`
 }
 
-// SupervisorHandoffAbortProof is a non-durable platform proof that a prepared
-// handoff was definitively aborted before authority commit. It deliberately
-// contains no StopReceipt: an abort proof cannot be used as evidence that a
-// target or Job was stopped. The optional helper identity is retained when a
-// helper was created so the release boundary remains identity-bound.
+// Non-durable abort proof: it carries no StopReceipt and can never serve as evidence that a target or Job was stopped.
 type SupervisorHandoffAbortProof struct {
 	Version            int     `json:"version"`
 	Disposition        string  `json:"disposition"`
@@ -226,9 +189,8 @@ type SupervisorHandoffAbortProof struct {
 	CreatorSessionID   *uint32 `json:"creator_session_id,omitempty"`
 }
 
-// StopReceipt is an exact, replayable terminal witness. It intentionally does
-// not contain Secret: the authority binding is supplied by the enclosing
-// Supervisor record and remains the only credential-bearing value.
+// Exact, replayable terminal witness; it intentionally carries no Secret, which only the
+// enclosing Supervisor record holds.
 type StopReceipt struct {
 	Version            int                   `json:"version"`
 	Status             string                `json:"status"`
@@ -248,12 +210,6 @@ type StopReceipt struct {
 	LinuxProof         *LinuxCgroupStopProof `json:"linux_proof,omitempty"`
 }
 
-// supervisorCore is the durable field set shared by Supervisor,
-// SupervisorHandoff and SupervisorHandoffReleaseProof. It is not a wire shape:
-// every record keeps its own literal field order and JSON tags, and this value
-// only carries the shared cloning, equality, compare-and-set and conversion
-// policy in one place. The request-only SupervisorScanUpdate envelope and the
-// record-specific fields (Status, LeafDisposition) stay on their records.
 type supervisorCore struct {
 	Version            int
 	Secret             string
@@ -280,11 +236,6 @@ type supervisorCore struct {
 	StopReceipt        *StopReceipt
 }
 
-// core converts to the shared core directly: Supervisor's field names, types
-// and order are identical to supervisorCore's, and a struct conversion ignores
-// tags, so the compiler checks this mapping. The handoff and the release proof
-// carry different field orders and non-core fields, so their extractors stay
-// explicit literals.
 func (value Supervisor) core() supervisorCore {
 	return supervisorCore(value)
 }
@@ -300,8 +251,6 @@ func (value SupervisorHandoff) core() supervisorCore {
 	}
 }
 
-// core projects a release proof onto the shared field set. A release proof
-// carries no secret, so that field stays zero.
 func (proof SupervisorHandoffReleaseProof) core() supervisorCore {
 	return supervisorCore{
 		Version: proof.Version, LaunchToken: proof.LaunchToken, OwnerKind: proof.OwnerKind, OwnerContext: proof.OwnerContext,
@@ -313,9 +262,6 @@ func (proof SupervisorHandoffReleaseProof) core() supervisorCore {
 	}
 }
 
-// supervisorFromCore is the one conversion builder: every shared field travels
-// under its own name and every shared pointer is deep-copied, so the result
-// shares no mutable state with its source.
 func supervisorFromCore(core supervisorCore) Supervisor {
 	return Supervisor{
 		Version: core.Version, Secret: core.Secret, LaunchToken: core.LaunchToken, OwnerKind: core.OwnerKind, OwnerContext: core.OwnerContext,
@@ -328,17 +274,11 @@ func supervisorFromCore(core supervisorCore) Supervisor {
 	}
 }
 
-// cloneCorePointers returns deep copies of the five shared mutable fields in
-// the assignment order every record's Clone uses, so the copy list lives in one
-// place; the reflection pin, not this signature, is what fails when a new
-// pointer field is added without a copy.
 func cloneCorePointers(core supervisorCore) (*LinuxCgroupIdentity, *LinuxCgroupExitProof, *LinuxCgroupProcessIdentity, *uint32, *StopReceipt) {
 	return cloneLinuxCgroupIdentity(core.CgroupIdentity), cloneLinuxCgroupExitProof(core.LauncherExit),
 		cloneLinuxCgroupProcessIdentity(core.Mirror), cloneUint32(core.CreatorSessionID), cloneStopReceipt(core.StopReceipt)
 }
 
-// equal compares every shared durable field, including the secret and any
-// terminal receipt. The request-only ScanUpdate envelope is not part of it.
 func (core supervisorCore) equal(other supervisorCore) bool {
 	if core.Version != other.Version || core.Secret != other.Secret || core.LaunchToken != other.LaunchToken || core.OwnerKind != other.OwnerKind || core.OwnerContext != other.OwnerContext || core.TargetPID != other.TargetPID ||
 		core.TargetIdentity != other.TargetIdentity || core.PipeToken != other.PipeToken || core.JobID != other.JobID ||
@@ -354,17 +294,14 @@ func (core supervisorCore) equal(other supervisorCore) bool {
 	return equalStopReceiptPointer(core.StopReceipt, other.StopReceipt)
 }
 
-// sameLaunch compares the immutable launch binding: the helper binding, the
-// mirror identity and the terminal receipt are cleared first, because later
-// dedicated phases may add them to the same handoff.
+// Immutable launch binding: the helper binding, mirror identity and terminal receipt are
+// cleared because later phases may add them.
 func (core supervisorCore) sameLaunch(other supervisorCore) bool {
 	core.SupervisorPID, core.SupervisorIdentity, core.Mirror, core.StopReceipt = 0, "", nil, nil
 	other.SupervisorPID, other.SupervisorIdentity, other.Mirror, other.StopReceipt = 0, "", nil, nil
 	return core.equal(other)
 }
 
-// matchesStoppedReceipt reports whether a positive v2 stop witness names this
-// exact launch: its disposition plus the complete producer and leaf identity.
 func (core supervisorCore) matchesStoppedReceipt(receipt StopReceipt) bool {
 	return receipt.Version == SupervisorVersionV2 && receipt.Status == "stopped" && receipt.ActiveProcesses == 0 &&
 		receipt.OwnerKind == core.OwnerKind && receipt.OwnerContext == core.OwnerContext &&
@@ -375,10 +312,8 @@ func (core supervisorCore) matchesStoppedReceipt(receipt StopReceipt) bool {
 		receipt.TargetBirthKind == core.TargetBirthKind && equalLinuxCgroupIdentity(receipt.CgroupIdentity, core.CgroupIdentity)
 }
 
-// matchesReleaseProof reports whether a v2 release proof names this exact
-// launch and carries the same terminal receipt. CreatorSessionID is
-// deliberately not part of the release identity: v2 validation rejects a
-// non-nil session on both records.
+// CreatorSessionID is deliberately outside the release identity: v2 validation rejects
+// a non-nil session on both records.
 func (core supervisorCore) matchesReleaseProof(proof SupervisorHandoffReleaseProof) bool {
 	return proof.Version == SupervisorHandoffVersionV2 && proof.Status == "released" &&
 		proof.LaunchToken == core.LaunchToken && proof.OwnerKind == core.OwnerKind && proof.OwnerContext == core.OwnerContext &&
@@ -395,8 +330,6 @@ func (core supervisorCore) matchesReleaseProof(proof SupervisorHandoffReleasePro
 		proof.StopReceipt != nil && core.StopReceipt != nil && proof.StopReceipt.Equal(*core.StopReceipt)
 }
 
-// validateV2 is the exact-cgroup identity predicate every v2 record shares;
-// requireHelper binds the helper identity at the commit boundary.
 func (core supervisorCore) validateV2(requireHelper bool) error {
 	if !validLowerHex(core.LaunchToken, TokenBytes*2) || core.OwnerKind != OwnerKindLinuxHelper || !validBounded(core.OwnerContext, 4096) ||
 		core.TargetPID <= 0 || !validBounded(core.TargetIdentity, 4096) || core.TargetBirthKind != LinuxCgroupTargetBirthTrustedAGate ||
@@ -448,7 +381,6 @@ func (core supervisorCore) validateV2(requireHelper bool) error {
 	return nil
 }
 
-// hasV2Fields reports whether a legacy record carries any v2-only field.
 func (core supervisorCore) hasV2Fields() bool {
 	return core.TargetBirthKind != "" || core.CgroupIdentity != nil || core.AnchorPID != 0 || core.AnchorIdentity != "" ||
 		core.LauncherPID != 0 || core.LauncherIdentity != "" || core.LauncherExit != nil || core.Mirror != nil
@@ -481,8 +413,6 @@ func equalStopReceiptPointer(left, right *StopReceipt) bool {
 	return equalStopReceipt(*left, *right)
 }
 
-// Validate checks the durable authority shape without interpreting a target's
-// platform-specific process identity.
 func (value Supervisor) Validate() error {
 	if value.Version == SupervisorVersionV2 {
 		if err := value.core().validateV2(true); err != nil {
@@ -517,7 +447,6 @@ func (value Supervisor) Validate() error {
 	return nil
 }
 
-// ValidFor reports whether a receipt is a positive stop witness for value.
 func (receipt StopReceipt) ValidFor(value Supervisor) bool {
 	if value.Version == SupervisorVersionV2 {
 		return value.core().matchesStoppedReceipt(receipt) &&
@@ -532,28 +461,23 @@ func (receipt StopReceipt) ValidFor(value Supervisor) bool {
 		receipt.TargetBirthKind == "" && receipt.CgroupIdentity == nil && receipt.LinuxProof == nil
 }
 
-// Equal compares a receipt's complete nested cgroup evidence by value.
 func (receipt StopReceipt) Equal(other StopReceipt) bool {
 	return equalStopReceipt(receipt, other)
 }
 
-// Clone returns an independent copy suitable for handing across a callback
-// boundary. Secret is copied as an ordinary string and is never formatted.
+// Secret is copied as an ordinary string and is never formatted.
 func (value Supervisor) Clone() Supervisor {
 	cloned := value
 	cloned.CgroupIdentity, cloned.LauncherExit, cloned.Mirror, cloned.CreatorSessionID, cloned.StopReceipt = cloneCorePointers(value.core())
 	return cloned
 }
 
-// Equal compares all durable authority fields, including the secret and any
-// terminal receipt. It is used by compare-and-set journal mutations.
 func (value Supervisor) Equal(other Supervisor) bool {
 	return value.core().equal(other.core())
 }
 
-// Validate checks the durable pre-authority handoff shape. A helper identity
-// is either completely absent or completely present; partial state is unsafe
-// because it cannot identify the retained helper after a daemon restart.
+// The helper identity is either completely absent or completely present; partial state
+// cannot identify the retained helper after a restart.
 func (value SupervisorHandoff) Validate() error {
 	if value.Version == SupervisorHandoffVersionV2 {
 		if value.ScanUpdate != nil || value.core().validateV2(false) != nil {
@@ -626,8 +550,6 @@ func (value SupervisorHandoff) Validate() error {
 	return nil
 }
 
-// ToSupervisor converts a fully bound handoff into the existing durable
-// authority type. The helper identity is required at the commit boundary.
 func (value SupervisorHandoff) ToSupervisor() (Supervisor, error) {
 	if err := value.Validate(); err != nil {
 		return Supervisor{}, err
@@ -645,7 +567,6 @@ func (value SupervisorHandoff) ToSupervisor() (Supervisor, error) {
 	return result, nil
 }
 
-// Clone returns an independent copy suitable for a journal mutation.
 func (value SupervisorHandoff) Clone() SupervisorHandoff {
 	cloned := value
 	cloned.CgroupIdentity, cloned.LauncherExit, cloned.Mirror, cloned.CreatorSessionID, cloned.StopReceipt = cloneCorePointers(value.core())
@@ -656,21 +577,14 @@ func (value SupervisorHandoff) Clone() SupervisorHandoff {
 	return cloned
 }
 
-// Equal compares every durable handoff field, including helper identity and
-// stop receipt. It is used by exact compare-and-set mutations.
 func (value SupervisorHandoff) Equal(other SupervisorHandoff) bool {
 	return value.core().equal(other.core())
 }
 
-// SameLaunch compares the immutable launch binding while ignoring the helper
-// binding and terminal receipt, which may be added by later dedicated phases.
 func (value SupervisorHandoff) SameLaunch(other SupervisorHandoff) bool {
 	return value.core().sameLaunch(other.core())
 }
 
-// ValidForHandoff reports whether a stop receipt exactly identifies a bound
-// handoff. The receipt schema remains shared with the existing Supervisor
-// authority for backwards compatibility.
 func (receipt StopReceipt) ValidForHandoff(value SupervisorHandoff) bool {
 	if value.Version == SupervisorHandoffVersionV2 {
 		return value.SupervisorPID > 0 && value.Mirror != nil && value.core().matchesStoppedReceipt(receipt) &&
@@ -685,10 +599,8 @@ func (receipt StopReceipt) ValidForHandoff(value SupervisorHandoff) bool {
 		receipt.TargetBirthKind == "" && receipt.CgroupIdentity == nil && receipt.LinuxProof == nil
 }
 
-// ReleaseProof preserves the legacy v1 proof constructor. V2 Linux release
-// evidence is minted only by the platform after pinned cgroup removal; this
-// method returns a zero value for v2. CreatorSessionID is copied so a v1 proof
-// cannot mutate the handoff through its optional session pointer.
+// Legacy v1 constructor: v2 Linux release evidence is minted only by the platform after pinned cgroup removal,
+// so this returns a zero value for v2. CreatorSessionID is copied so a v1 proof cannot mutate the handoff.
 func (value SupervisorHandoff) ReleaseProof() SupervisorHandoffReleaseProof {
 	if value.Version != SupervisorHandoffVersion {
 		return SupervisorHandoffReleaseProof{}
@@ -712,7 +624,6 @@ func (value SupervisorHandoff) ReleaseProof() SupervisorHandoffReleaseProof {
 	return proof
 }
 
-// Validate checks a release proof before it can clear a pending handoff.
 func (proof SupervisorHandoffReleaseProof) Validate() error {
 	if proof.Version == SupervisorHandoffVersionV2 {
 		if proof.Status != "released" || !validLowerHex(proof.LaunchToken, TokenBytes*2) ||
@@ -743,8 +654,6 @@ func (proof SupervisorHandoffReleaseProof) Validate() error {
 	return nil
 }
 
-// ValidFor reports whether proof identifies the exact handoff it claims to
-// release.
 func (proof SupervisorHandoffReleaseProof) ValidFor(value SupervisorHandoff) bool {
 	if value.Version == SupervisorHandoffVersionV2 {
 		return value.core().matchesReleaseProof(proof)
@@ -757,15 +666,12 @@ func (proof SupervisorHandoffReleaseProof) ValidFor(value SupervisorHandoff) boo
 		!proof.core().hasV2Fields()
 }
 
-// ValidForSupervisor reports whether a v2 release proof identifies the exact
-// committed authority whose process marker and cgroup reservation it clears.
 func (proof SupervisorHandoffReleaseProof) ValidForSupervisor(value Supervisor) bool {
 	return value.Version == SupervisorVersionV2 && value.core().matchesReleaseProof(proof)
 }
 
-// Validate checks the exact pre-authority abort proof shape. Windows legacy
-// proofs retain the CreatorSessionID requirement; Linux helper proofs bind
-// owner kind/context instead and must not synthesize a Windows session.
+// Windows legacy proofs require CreatorSessionID; Linux helper proofs bind owner
+// kind/context and must not synthesize a Windows session.
 func (proof SupervisorHandoffAbortProof) Validate() error {
 	if proof.Version != SupervisorHandoffAbortProofVersion || proof.Disposition != SupervisorHandoffAbortDisposition || !validHex(proof.LaunchToken, TokenBytes*2) || !validHex(proof.JobID, TokenBytes*2) || proof.TargetPID <= 0 || proof.SupervisorPID < 0 || !validOwner(proof.OwnerKind, proof.OwnerContext) {
 		return errors.New("supervisor handoff abort proof is invalid")
@@ -782,8 +688,6 @@ func (proof SupervisorHandoffAbortProof) Validate() error {
 	return nil
 }
 
-// ValidFor reports whether proof identifies the exact launch that was
-// definitively aborted before authority commit.
 func (proof SupervisorHandoffAbortProof) ValidFor(value SupervisorHandoff) bool {
 	return value.Version == SupervisorHandoffVersion && proof.Version == SupervisorHandoffAbortProofVersion && proof.Disposition == SupervisorHandoffAbortDisposition &&
 		proof.LaunchToken == value.LaunchToken && proof.JobID == value.JobID && proof.OwnerKind == value.OwnerKind && proof.OwnerContext == value.OwnerContext &&
@@ -792,19 +696,16 @@ func (proof SupervisorHandoffAbortProof) ValidFor(value SupervisorHandoff) bool 
 		(proof.OwnerKind == OwnerKindLinuxHelper || (proof.CreatorSessionID != nil && value.CreatorSessionID != nil)) && equalUint32(proof.CreatorSessionID, value.CreatorSessionID)
 }
 
-// supervisorFromHandoff builds the compare-only projection used by receipt
-// checks: it deliberately carries no terminal receipt, which is not part of
-// the launch identity those checks resolve.
+// Compare-only projection: it carries no terminal receipt, which is not part of the
+// launch identity these checks resolve.
 func supervisorFromHandoff(value SupervisorHandoff) Supervisor {
 	core := value.core()
 	core.StopReceipt = nil
 	return supervisorFromCore(core)
 }
 
-// supervisorFromReleaseProof builds the v2 comparison subject for a release
-// proof: it forces the supervisor schema and deliberately omits the creator
-// session, which v2 validation rejects on every v2 record and which the
-// release comparison never reads.
+// V2 comparison subject: forces the supervisor schema and omits the creator session, which
+// v2 validation rejects and the release comparison never reads.
 func supervisorFromReleaseProof(proof SupervisorHandoffReleaseProof) Supervisor {
 	core := proof.core()
 	core.Version = SupervisorVersionV2

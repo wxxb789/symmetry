@@ -293,3 +293,20 @@ host). Measurement harnesses are not part of this slice, so the sequencing rule 
   (its `git grep` command reproduces the 78 rows); any later conversion of a one-off literal to
   a sentinel should extend it in the same change rather than re-derive counts from a scratch
   tool.
+
+## Comment-policy sweep (2026-11-22)
+
+Module intent removed from this slice's files (`daemon/internal/platform/containment_errors.go`,
+`containment_errors_linux.go`) by the 2026-11-22 comment-policy sweep is recorded below (workstream record "ws2b-platform-containment").
+
+- `daemon/internal/platform/containment_errors.go` (head lines 10–12): "This value stays in an
+  unconstrained file because execution/runner.go consumes it on every platform; the ErrLinuxOwner*
+  mismatch sentinels live in containment_errors_linux.go next to their linux && amd64 producing
+  sites." (the pre-program contract paragraph at lines 5–8 was kept byte-identical).
+- `daemon/internal/platform/containment_errors_linux.go` (head lines 14–17): "All 78 producing
+  sites are in linux && amd64 files, so the values live in this linux && amd64 file rather than in an
+  unconstrained one, where they would be exported dead API on windows and darwin. The cross-platform
+  ErrLinuxSupervisorResponseLost stays in containment_errors.go."
+
+The sweep's plan is
+[`docs/plans/2026-11-22-comment-policy-sweep-plan.md`](2026-11-22-comment-policy-sweep-plan.md).

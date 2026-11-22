@@ -4,21 +4,20 @@
 import gzip
 import http.client
 import http.server
-import importlib.util
 import json
 import pathlib
 import threading
 import unittest
 import urllib.parse
 
+import citest
+
 SCRIPT = pathlib.Path(__file__).with_name("rootless-compose-transition-proxy.py")
 
 
 class TransitionProxyRegistrationTest(unittest.TestCase):
     def test_gzip_registration_arms_observed_runtime_epoch(self):
-        spec = importlib.util.spec_from_file_location("transition_proxy_gzip_test", SCRIPT)
-        proxy = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(proxy)
+        proxy = citest.load_gate(SCRIPT, "transition_proxy_gzip_test")
         runtime_id = "c3b94e16-f802-489e-8653-6c0427551e37"
         nonce = "gzip-registration-fixture"
         registration_path = "/api/v1/machines/fixture-machine/sessions/fixture-session"

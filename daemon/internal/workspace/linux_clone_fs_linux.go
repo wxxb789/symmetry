@@ -103,33 +103,20 @@ func openLinuxCloneOPathDirPath(path string) (int, unix.Stat_t, error) {
 }
 
 const (
-	// linuxCloneConfiguredPathRootFlags pins the filesystem-root descriptor of a
-	// configured-path walk: a real directory whose descriptor cannot leak into
-	// child processes. The root is the walk's origin and not a named component
-	// of the configured path, so it carries no O_NOFOLLOW.
+	// The walk origin (not a named component), so no O_NOFOLLOW; O_DIRECTORY|O_CLOEXEC
+	// keeps the descriptor out of child processes.
 	linuxCloneConfiguredPathRootFlags = unix.O_DIRECTORY | unix.O_CLOEXEC
-	// linuxCloneConfiguredPathComponentFlags pins one named component of a
-	// configured path with the same descriptor guarantees plus O_NOFOLLOW, so a
-	// component cannot be swapped for a symlink between the walker's own name
-	// check and its open.
+	// A named component adds O_NOFOLLOW so it cannot be swapped for a symlink between
+	// the walker's name check and its open.
 	linuxCloneConfiguredPathComponentFlags = linuxCloneConfiguredPathRootFlags | unix.O_NOFOLLOW
 )
 
-// openLinuxClonePinnedChild is the fd-stepping core shared by the two
-// configured-path walkers: it opens one component beneath parentFD with the
-// caller's access flags and the shared component flags, and releases the parent
-// descriptor whether or not the open succeeded. The caller owns the returned
-// descriptor. Each walker keeps its own syscall order, mode/ownership policy,
-// refusal strings and error wrapping around this step.
 func openLinuxClonePinnedChild(parentFD int, component string, accessFlags int) (int, error) {
 	next, err := unix.Openat(parentFD, component, accessFlags|linuxCloneConfiguredPathComponentFlags, 0)
 	_ = unix.Close(parentFD)
 	return next, err
 }
 
-// readLinuxClonePinnedDirectory reads the live identity of a descriptor pinned
-// by a configured-path walk and releases it when the read fails. The caller
-// owns the descriptor on success and applies its own kind and policy checks.
 func readLinuxClonePinnedDirectory(fd int) (unix.Stat_t, error) {
 	var info unix.Stat_t
 	if err := unix.Fstat(fd, &info); err != nil {
@@ -237,12 +224,6 @@ func verifyLinuxCloneTrustedRootAncestor(info *unix.Stat_t) error {
 	return nil
 }
 
-// linuxCloneDirOpenHow is the openat2 request for one directory entry beneath a
-// pinned parent descriptor: a real directory that resolves without symlinks,
-// magic links or mount crossings, and a descriptor that cannot leak into child
-// processes. The caller's access flag is the only difference between the two
-// directory openers this file used to carry: O_PATH for a descriptor kept only
-// as a parent, O_RDONLY when the entry's own content is read.
 func linuxCloneDirOpenHow(accessFlags int) *unix.OpenHow {
 	return &unix.OpenHow{
 		Flags:   uint64(accessFlags | unix.O_DIRECTORY | unix.O_CLOEXEC | unix.O_NOFOLLOW),
@@ -250,11 +231,6 @@ func linuxCloneDirOpenHow(accessFlags int) *unix.OpenHow {
 	}
 }
 
-// openLinuxCloneDirAtFlags pins one directory entry beneath parentFD with the
-// caller's access flag and refuses anything that resolved to something other
-// than a real directory. It is this file's only directory opener; the file
-// opener openLinuxCloneFileAt stays separate because its callers own the access
-// flags of a regular file.
 func openLinuxCloneDirAtFlags(parentFD int, name string, accessFlags int) (int, error) {
 	fd, err := unix.Openat2(parentFD, name, linuxCloneDirOpenHow(accessFlags))
 	if err != nil {

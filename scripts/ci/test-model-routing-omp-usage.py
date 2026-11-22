@@ -8,14 +8,14 @@ evidence, not live acceptance evidence for any real session or route.
 
 import contextlib
 import hashlib
-import importlib.util
 import io
 import json
 import pathlib
-import subprocess
 import sys
 import tempfile
 import unittest
+
+import citest
 
 SCRIPT = pathlib.Path(__file__).with_name("model-routing-omp-usage.py")
 CANARY = "CANARY-SECRET-9f3a"
@@ -75,19 +75,12 @@ def surrogatepass_digest(value):
 
 def load_runner_module():
     """Import the acceptance runner so exported rows can be validated in-process."""
-    path = pathlib.Path(__file__).with_name("model-routing-evaluation.py")
-    spec = importlib.util.spec_from_file_location("model_routing_evaluation", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return citest.load_gate(pathlib.Path(__file__).with_name("model-routing-evaluation.py"), "model_routing_evaluation")
 
 
 def load_usage_module():
     """Import the extractor so its exported constants can be compared in-process."""
-    spec = importlib.util.spec_from_file_location("model_routing_omp_usage", SCRIPT)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return citest.load_gate(SCRIPT, "model_routing_omp_usage")
 
 
 # The runner's STAGES and this literal must describe the same six accountable
@@ -97,7 +90,7 @@ ACCOUNTABLE_STAGES = ("exploration", "implementation", "verification", "review",
 
 class OmpUsageExtractionTest(unittest.TestCase):
     def run_arguments(self, arguments):
-        return subprocess.run([sys.executable, str(SCRIPT), *arguments], capture_output=True, encoding="utf-8")
+        return citest.run_gate(SCRIPT, *arguments, encoding="utf-8")
 
     def run_cli(
         self,

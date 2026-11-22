@@ -8,7 +8,6 @@ defmodule SymmetryControl.Orchestration.CapabilitySchedulingTest do
 
   @now ~U[2026-09-06 09:00:00.000000Z]
 
-  # The registration fields every runtime in this suite pinned.
   @runtime_extra %{
     harness_kind: "codex",
     harness_version: "0.153.4",

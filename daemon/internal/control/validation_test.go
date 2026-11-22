@@ -33,9 +33,6 @@ func TestValidateGoalCommitPathUsesUTF8RuneLength(t *testing.T) {
 	}
 }
 
-// TestValidateGoalUUIDPinsRejectionMessages pins the exact rejection message
-// for every run ID rejection class. Version and variant share one combined
-// message at this boundary, so all three bad-nibble rows pin that string.
 func TestValidateGoalUUIDPinsRejectionMessages(t *testing.T) {
 	const field = "run ID"
 	const uuid = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
@@ -81,11 +78,6 @@ func TestValidateGoalUUIDPinsRejectionMessages(t *testing.T) {
 	}
 }
 
-// TestValidateGoalShortIdentifierPinsRejectionMessages pins the exact
-// rejection message for every control call-site rejection class, using the
-// `evidence.evidence_key` field string (validation.go:962). The length check
-// precedes the identifier scan, so an over-length value pins the length body
-// even when it also carries an invalid first rune.
 func TestValidateGoalShortIdentifierPinsRejectionMessages(t *testing.T) {
 	const field = "evidence.evidence_key"
 	length := fmt.Sprintf("%s must contain 1..128 characters", field)
@@ -133,9 +125,6 @@ func TestValidateGoalShortIdentifierPinsRejectionMessages(t *testing.T) {
 	}
 }
 
-// TestSameJSONObjectPreservesNumericPrecision keeps the retained
-// sameJSONValue/sameJSONNumber declarations guarded after the operator client's
-// payload-comparison tests moved to daemon/e2e/internal/operator.
 func TestSameJSONObjectPreservesNumericPrecision(t *testing.T) {
 	for _, test := range []struct {
 		name  string
@@ -158,9 +147,6 @@ func TestSameJSONObjectPreservesNumericPrecision(t *testing.T) {
 	}
 }
 
-// TestValidateTaskCommandResourceRejectsMismatchedExpectedTask guards the
-// expectedTaskID branch that the relocated operator caller used to exercise;
-// production callers pass an empty id and only reach the remaining checks.
 func TestValidateTaskCommandResourceRejectsMismatchedExpectedTask(t *testing.T) {
 	var command protocol.TaskCommand
 	if err := json.Unmarshal([]byte(acknowledgedCommandForGeneration(2)), &command); err != nil {

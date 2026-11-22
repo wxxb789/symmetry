@@ -3,13 +3,6 @@
 // Every fixture here is created through the authenticated Portal API with the
 // session CSRF token; the read-only shell provides no mutation controls. No
 // helper substitutes a synthetic payload for a response the browser exercises.
-//
-// The module is also the single home for what the four CI-run spec families
-// share: the login/API pair, `capture`, the history-write record and the
-// device-context options, plus the Goal revision/plan payload vocabulary the
-// cutover and attention suites author decisions with. The payload literals live
-// here once; each suite's own fixture identity (its keys, names, acceptance
-// descriptions and plan titles) stays at its call sites as parameters.
 import fs from "node:fs/promises";
 import { expect } from "./fixtures.mjs";
 
@@ -29,17 +22,6 @@ export function uniqueKey(prefix = "RW") {
   return `${prefix}${suffix}`.slice(0, 8);
 }
 
-/**
- * Signs in on one release and waits for the shell's own readiness markers.
- *
- * `base` addresses another origin serving the same release (the Goal suite's
- * rollout-off instance); `assert` carries a caller's own extra readiness
- * markers, for a suite that needed more than the Refresh and Project controls
- * before its first assertion. Both are additive options: every existing caller
- * keeps its `login(page)` / `login(page, "/portal/chat")` shape, and a caller
- * that passes markers gets them waited on under the same backstop as the two
- * built-in ones.
- */
 export async function login(page, path = "/portal/attention", { base = "", assert = [] } = {}) {
   await page.goto(`${base}/portal/login?return_to=${encodeURIComponent(path)}`);
   await page.getByLabel("Operator token").fill(operatorToken);
@@ -105,9 +87,6 @@ export async function createProject(page, { key, name, description = "Readable w
   });
   expect(response.status, JSON.stringify(response.body)).toBe(201);
   const project = { id: response.body.project.id, key, name };
-  // `blocked` is additive too: the Goal suites' attention cases render the
-  // board's blocked row by this title, created through the same authenticated
-  // API as every other fixture and asserted 201 by `createWorkItem`.
   if (blocked) {
     await createWorkItem(page, project.id, {
       title: `Blocked work ${key}`,
@@ -213,13 +192,7 @@ export async function snapshotMetrics(page, projectId) {
   }, projectId);
 }
 
-// Goal revision and plan payloads. The cutover and attention suites author
-// revisions and plan proposals through these literals; the field sets are what
-// the accepted contracts validate, so they are frozen payloads, not fixtures a
-// refactor may reshape. Each suite passes its own acceptance description and
-// plan title, so its bytes stay its own.
-
-/** The `symmetry.acceptance.v1` contract a suite authors its revisions with. */
+// The accepted contracts validate these field sets, so they are frozen payloads, not fixtures.
 export const acceptanceContract = (description) => ({
   schema_version: "symmetry.acceptance.v1",
   description,
@@ -255,14 +228,8 @@ export const contextManifest = () => ({
   include_advisory_recall: false
 });
 
-/**
- * The one-item `symmetry.plan.v1` proposal both Goal suites author their plan
- * decision with: one integration item on the suite's repository baseline, with
- * the suite's own acceptance contract inside it. `expected_revision: 1` and
- * `change_target: null` are the draft Goal's shape both suites proposed, and
- * the baseline's 40-hex commit / `sha256:` tree digest are the frozen placeholders
- * the server admits for a plan whose subject is the repository itself.
- */
+/** The 40-hex commit and `sha256:` tree digest are the frozen placeholders the server
+ * admits for a repository-subject plan. */
 export const planProposal = ({ goalId, title, repositoryId, acceptanceDescription }) => ({
   schema_version: "symmetry.plan.v1",
   proposal_id: crypto.randomUUID(),
@@ -286,20 +253,12 @@ export const planProposal = ({ goalId, title, repositoryId, acceptanceDescriptio
   }]
 });
 
-// The polling fallback's cadence is five seconds, so four of them is the backstop
-// over the client's own pass and the state it renders. A maximum, never a verdict:
-// the cutover suite's polling-fallback case decides on the pass the shell records
-// through `readsStatus` and on the state that pass served, and this guard only says
-// when a missing pass is a missing pass.
+// Four polling-fallback periods (5 s cadence) as a maximum, never a verdict: the cutover case
+// decides on the recorded pass and the state it served; this guard only says when a pass is missing.
 export const FALLBACK_READ_GUARD_MS = 20_000;
 
-// `browser.newContext` does not inherit the project's use options, so a fresh
-// signed-out context copies only the supported BrowserContextOptions fields from
-// the running project (exact viewport, plus mobile/touch/scale/agent semantics).
-// No storageState is passed: the context stays signed out. A caller that
-// addresses another origin passes `baseURL` and receives it inside the options;
-// a caller whose pages already run under the release's origin keeps spreading
-// its own, so both compositions stay available.
+// `browser.newContext` does not inherit the project's use options: copy the supported
+// BrowserContextOptions fields from the running project and stay signed out (no storageState).
 export const deviceContextOptions = (testInfo, { baseURL } = {}) => {
   const use = testInfo.project.use ?? {};
   return {
@@ -338,14 +297,8 @@ export function recordKeys() {
   return { actions, press };
 }
 
-// Records the application's own history writes before its module runs, installed
-// with `page.addInitScript(recordHistoryWrites)` and read back with
-// `historyWrites(page)`. The one-time legacy repair replaces the location once
-// per legacy document; the router then writes its own entry state with an empty
-// URL, which names no location and is not a navigation. Counting the writes that
-// do name a location is how a case states "exactly once, no second redirect"
-// from the app's own behaviour instead of from a sleep that a returning redirect
-// would satisfy.
+// The router writes entry state with an empty URL (no location, not a navigation), so count only
+// writes that name a location to state "exactly once, no second redirect" from app behaviour.
 export function recordHistoryWrites() {
   window.__historyWrites = [];
   for (const name of ["replaceState", "pushState"]) {

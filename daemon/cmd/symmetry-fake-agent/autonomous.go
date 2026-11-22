@@ -80,22 +80,12 @@ func autonomousSettings(input json.RawMessage, getenv func(string) string) (auto
 	return config, nil
 }
 
-// readerJoinTimeout bounds how long the end of a run waits for the input reader
-// goroutine to observe the closed input. Closing the read side unblocks a
-// parked read only through the Go runtime's poller (io.Pipe and pipes this
-// process created); an inherited stdio pipe is not polled, so on this host a
-// parked read stayed blocked after the close on Linux and returned in 0 ms on
-// Windows. The join is therefore bounded: it never delays the agent by more
-// than this and never turns an unblockable carrier into a hang.
+// Inherited stdio pipes are not polled: a parked read may stay blocked after
+// Close (seen on Linux; 0 ms on Windows), so the reader join is bounded.
 const readerJoinTimeout = 50 * time.Millisecond
 
-// runAutonomous runs the autonomous fixture mode. reader must be the buffered
-// reader that consumed the initial input record, so the record's read-ahead
-// bytes are not lost; input is the stream behind it and is closed on return
-// when it is an io.Closer, releasing the reader goroutine on carriers whose
-// Close unblocks a parked read. On a carrier whose Close cannot do that, the
-// bounded join below caps the wait and the goroutine then exits with the
-// process, as before this change; a non-closable input is left untouched.
+// reader must be the buffered reader that consumed the initial input record, so
+// the record's read-ahead bytes are not lost.
 func runAutonomous(reader *bufio.Reader, input io.Reader, output io.Writer, envelope protocol.AgentInputRecord) error {
 	config, err := autonomousSettings(envelope.Input, os.Getenv)
 	if err != nil {
@@ -120,8 +110,8 @@ func runAutonomous(reader *bufio.Reader, input io.Reader, output io.Writer, enve
 		}
 	}()
 	defer func() {
-		// done first: a reader between records leaves through its send select
-		// instead of blocking on a channel nobody reads any more.
+		// done first: a reader between records leaves through its send select instead
+		// of blocking on a channel that is no longer read.
 		close(done)
 		closer, ok := input.(io.Closer)
 		if !ok {

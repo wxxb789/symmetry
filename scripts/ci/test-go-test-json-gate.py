@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Unit tests for the shared Go test JSON gate runner."""
 
-import importlib.util
 import json
 import os
 import pathlib
@@ -10,10 +9,10 @@ import sys
 import tempfile
 import unittest
 
+import citest
+
 SCRIPT = pathlib.Path(__file__).with_name("go-test-json-gate.py")
-SPEC = importlib.util.spec_from_file_location("go_test_json_gate", SCRIPT)
-GATE = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(GATE)
+GATE = citest.load_gate(SCRIPT, "go_test_json_gate")
 
 PACKAGE = "github.com/wxxb789/symmetry/daemon/internal/harness/pi"
 TEST = "TestProviderBridgeCloseReleasesBoundPeerFD"
@@ -85,12 +84,7 @@ class GateTestCase(unittest.TestCase):
         self.provenance_path = self.root / "provenance.txt"
 
     def run_gate(self, options, command):
-        return subprocess.run(
-            [sys.executable, str(SCRIPT), *options, "--", *command],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        return citest.run_gate(SCRIPT, *options, "--", *command)
 
     def group(self, package, *tests):
         return ["--assert", package, *tests]
@@ -214,19 +208,13 @@ class RunAndAssertTests(GateTestCase):
         self.assertIn("verified TestProviderBridgeCloseReleasesBoundPeerFD", result.stdout)
 
     def test_powershell_command_separator_is_accepted(self):
-        result = subprocess.run(
-            [
-                sys.executable,
-                str(SCRIPT),
-                "--events",
-                str(self.events_path),
-                *self.group(PACKAGE, TEST),
-                "--command",
-                *fake_command(passing_events()),
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
+        result = citest.run_gate(
+            SCRIPT,
+            "--events",
+            str(self.events_path),
+            *self.group(PACKAGE, TEST),
+            "--command",
+            *fake_command(passing_events()),
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.events_path.read_text(encoding="utf-8"), passing_events())
@@ -315,26 +303,18 @@ class StdioBoundaryTests(GateTestCase):
 
 
 class ArgumentTests(unittest.TestCase):
-    def run_script(self, arguments):
-        return subprocess.run(
-            [sys.executable, str(SCRIPT), *arguments],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-
     def test_command_separator_is_required(self):
-        result = self.run_script(["--events", "events.json", TEST])
+        result = citest.run_gate(SCRIPT, "--events", "events.json", TEST)
         self.assertEqual(result.returncode, 1)
         self.assertIn("requires `--`", result.stderr)
 
     def test_command_is_required(self):
-        result = self.run_script(["--events", "events.json", "--assert", PACKAGE, TEST, "--"])
+        result = citest.run_gate(SCRIPT, "--events", "events.json", "--assert", PACKAGE, TEST, "--")
         self.assertEqual(result.returncode, 1)
         self.assertIn("requires a command", result.stderr)
 
     def test_assertion_group_is_required(self):
-        result = self.run_script(["--events", "events.json", "--", "true"])
+        result = citest.run_gate(SCRIPT, "--events", "events.json", "--", "true")
         self.assertEqual(result.returncode, 1)
         self.assertIn("requires at least one --assert group", result.stderr)
 
@@ -350,12 +330,7 @@ class StdioBoundaryScriptTests(unittest.TestCase):
     """The caller boundary the gate runner and the daemon race pass both use."""
 
     def run_boundary(self, command):
-        return subprocess.run(
-            [sys.executable, str(GATE.BOUNDARY_SCRIPT), *command],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        return citest.run_gate(GATE.BOUNDARY_SCRIPT, *command)
 
     def test_boundary_preserves_the_command_status_and_output(self):
         result = self.run_boundary([sys.executable, "-c", "import sys; print('streamed'); sys.exit(4)"])

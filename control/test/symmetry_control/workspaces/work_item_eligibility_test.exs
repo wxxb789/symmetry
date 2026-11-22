@@ -11,25 +11,6 @@ defmodule SymmetryControl.Workspaces.WorkItemEligibilityTest do
   @goal_id "4f3a3f38-9a3a-4c9a-8a3a-4f3a3f38d0a4"
   @resource_id "4f3a3f38-9a3a-4c9a-8a3a-4f3a3f38d0a5"
 
-  # The start/cancel/retry work-item gates as one truth table: every combination
-  # of the six inputs the three verdicts read, with the verdict, the served
-  # projection boolean and the work-item refusal each combination answers at the
-  # baseline revision `c0784952`. The rows are literals — a table computed by the
-  # module would be tautological — and `verdict/1` maps the three codes to the
-  # refusal atoms the commands answer with:
-  #
-  #   :ok = :ok,
-  #   :s = {:error, :state_conflict},
-  #   :g = {:error, :goal_authority_required}
-  #
-  # Columns: goal_managed, launched, assignee, status, project, external_available
-  #          | start, can_start, cancel_gate, can_cancel, retry_gate, retry_allowed?
-  #
-  # The refusal atom of every row is the work-item answer the commands make at
-  # the baseline (the differential harness recorded in
-  # `docs/plans/2026-11-21-rf-a4-core-work-item-eligibility-plan.md` drives the
-  # real `launch_work_item/3`, `cancel_work_item/3` and `retry_work_item/3` over
-  # the same matrix), and the oracle suites pin the command endpoints.
   @rows [
     {false, false, :human, :backlog, :archived, false, :s, false, :ok, true, :s, false},
     {false, false, :human, :backlog, :archived, true, :s, false, :ok, true, :s, false},

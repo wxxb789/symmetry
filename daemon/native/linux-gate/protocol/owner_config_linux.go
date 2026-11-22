@@ -19,8 +19,6 @@ const (
 	maxOwnerStateDirBytes = 4095
 )
 
-// ReadInstalledOwnerConfig reads the strict, root-owned, non-writable
-// operator configuration. Its IDs and optional canonical StateDir are not secrets.
 func ReadInstalledOwnerConfig() (OwnerConfig, error) {
 	for _, path := range []string{"/etc", "/etc/symmetry"} {
 		fd, err := unix.Open(path, unix.O_PATH|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
@@ -102,8 +100,7 @@ func parseOwnerConfig(data []byte) (OwnerConfig, error) {
 	return config, nil
 }
 
-// Validate rejects identities which would collapse the host-UID or primary
-// group boundary.
+// Rejects identities which would collapse the host-UID or primary-group boundary.
 func (config OwnerConfig) Validate() error {
 	if config.AUID == 0 || config.BUID == 0 || config.AUID == config.BUID {
 		return errors.New("Linux owner A and fixed native B must be distinct non-root UIDs")

@@ -566,10 +566,8 @@ func validConfigObject(t *testing.T) map[string]any {
 	return value
 }
 
-// TestValidateCanonicalUUIDPinsRejectionMessages pins the exact rejection
-// message for every runtime.repository_resource_id rejection class. This
-// boundary folds every class into the canonical-UUID body, so every rejection
-// row pins that one string.
+// Every runtime.repository_resource_id rejection class folds into the canonical-UUID body,
+// so every rejection row pins that one string.
 func TestValidateCanonicalUUIDPinsRejectionMessages(t *testing.T) {
 	const field = "runtime.repository_resource_id"
 	const uuid = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
@@ -612,10 +610,8 @@ func TestValidateCanonicalUUIDPinsRejectionMessages(t *testing.T) {
 	}
 }
 
-// TestValidateNativeModelPinsRejectionMessages pins the exact rejection
-// message for every agent_profiles.builder.native_model rejection class. The
-// length check precedes the identifier scan, so an over-length value pins the
-// length body even when it also carries an invalid first rune.
+// The length check precedes the identifier scan, so an over-length
+// agent_profiles.builder.native_model value pins the length body.
 func TestValidateNativeModelPinsRejectionMessages(t *testing.T) {
 	const field = "agent_profiles.builder.native_model"
 	length := fmt.Sprintf("%s must contain 1..128 characters", field)

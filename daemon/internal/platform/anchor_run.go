@@ -19,23 +19,17 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// LinuxOwnerAnchorRunKey duplicates only the platform-neutral durable RunKey
-// shape. The platform package cannot import state because state consumes this
-// package's cgroup release capability.
 type LinuxOwnerAnchorRunKey struct {
 	RunID      string `json:"run_id"`
 	Generation int64  `json:"generation"`
 }
 
-// linuxOwnerAnchorRunChildOrigin is an Anchor-RPC-only process attribution
-// result. It is never a State receipt and does not assert a creator edge for
-// an adopted process whose original parent was not observed.
+// linuxOwnerAnchorRunChildOrigin is an Anchor-RPC-only process attribution result, never a State
+// receipt, and it asserts no creator edge for an adopted process whose original parent was not observed.
 type linuxOwnerAnchorRunChildOrigin string
 
-// linuxOwnerAnchorRunChildClassification binds an origin result to both the
-// requested RunKey and, when known, the RunKey whose gate user namespace
-// proves the process origin. This type travels only on the authenticated
-// Anchor control socket; it is not persisted in the RunJournal.
+// linuxOwnerAnchorRunChildClassification binds an origin result to the requested RunKey and, when
+// known, the RunKey whose gate user namespace proves the origin; it travels only on the control socket.
 type linuxOwnerAnchorRunChildClassification struct {
 	Version      int                                  `json:"version"`
 	RunKey       LinuxOwnerAnchorRunKey               `json:"run_key"`
@@ -104,9 +98,8 @@ func (classification linuxOwnerAnchorRunChildClassification) Equal(other linuxOw
 		classification.Process.Equal(other.Process) && classification.Role == other.Role && classification.Origin == other.Origin
 }
 
-// LinuxOwnerAnchorReapEvidence proves one exact wait/reap. It is not a
-// physical-stop receipt: it says nothing about other members of the cgroup
-// subtree and cannot authorize leaf release or journal clearing.
+// LinuxOwnerAnchorReapEvidence proves one exact wait/reap only: it cannot authorize leaf release or
+// journal clearing and says nothing about other members of the cgroup subtree.
 type LinuxOwnerAnchorReapEvidence struct {
 	Version     int                                  `json:"version"`
 	RunKey      LinuxOwnerAnchorRunKey               `json:"run_key"`
@@ -121,9 +114,8 @@ type LinuxOwnerAnchorReapEvidence struct {
 	ProcessExit authority.LinuxCgroupExitProof       `json:"process_exit"`
 }
 
-// LinuxOwnerAnchorProducerFence is the helper's authenticated stop latch.
-// It reports only that lease renewal, preparation and release have quiesced;
-// it never attests to cgroup.kill or to the subsequent populated=0 observation.
+// LinuxOwnerAnchorProducerFence is the helper's authenticated stop latch: lease renewal, preparation
+// and release have quiesced, and it never attests to cgroup.kill or populated=0.
 type LinuxOwnerAnchorProducerFence struct {
 	Version                int                                        `json:"version"`
 	RunKey                 LinuxOwnerAnchorRunKey                     `json:"run_key"`
@@ -146,12 +138,8 @@ type LinuxOwnerAnchorProducerFence struct {
 	GateOutcome            *authority.LinuxCgroupGateProductionResult `json:"gate_outcome,omitempty"`
 }
 
-// LinuxOwnerAnchorStopEvidence is the anchor's ephemeral physical-kill and
-// empty-leaf observation. Anchor identifies the cgroup.kill writer; durable
-// LinuxCgroupStopProof.Issuer remains the helper or mirror that coordinates
-// receipt creation, and Reaper remains the owner of the reported waitid calls.
-// This is not a State receipt; callers combine it with the durable reservation
-// and exact wait/reap evidence before issuing one.
+// LinuxOwnerAnchorStopEvidence is the anchor's ephemeral physical-kill and empty-leaf observation,
+// never a State receipt; Anchor only identifies the cgroup.kill writer.
 type LinuxOwnerAnchorStopEvidence struct {
 	Version               int                                        `json:"version"`
 	RunKey                LinuxOwnerAnchorRunKey                     `json:"run_key"`
@@ -180,8 +168,6 @@ type LinuxOwnerAnchorStopEvidence struct {
 	ReapDigest            string                                     `json:"reap_digest,omitempty"`
 }
 
-// LinuxOwnerAnchorRunReapResult pairs the anchor's physical stop witness with
-// its complete, sorted per-process P_PIDFD wait/reap evidence.
 type LinuxOwnerAnchorRunReapResult struct {
 	Processes []LinuxOwnerAnchorReapEvidence `json:"processes"`
 	Stop      LinuxOwnerAnchorStopEvidence   `json:"stop"`
@@ -509,8 +495,7 @@ func (run *linuxOwnerAnchorRun) cachedStopLeaf(fence *LinuxOwnerAnchorProducerFe
 		if run.leafKillCallStarted {
 			return nil, errors.New("anchor cgroup.kill write attempt is still unresolved")
 		}
-		// No syscall was attempted. The caller must repeat the exact producer
-		// fence or takeover scan before the first physical write.
+		// No syscall was attempted: repeat the exact producer fence or takeover scan before the first physical write.
 		return nil, nil
 	}
 	return nil, nil
@@ -538,9 +523,7 @@ func (anchor *linuxOwnerAnchor) remeasureStopLeaf(ctx context.Context, run *linu
 			return fmt.Errorf("remeasure recursive empty leaf on StopLeaf replay: %w", err)
 		}
 	}
-	// linuxOwnerAnchorPinnedLeafPresent treats exact absence under the retained
-	// parent FD as rmdir-backed emptiness; it also checks the detached FD's
-	// populated state when that kernel observation remains available.
+
 	return nil
 }
 
@@ -628,10 +611,8 @@ func linuxOwnerAnchorUnknownChildClassification(run *linuxOwnerAnchorRun, proces
 	}
 }
 
-// linuxOwnerAnchorRun contains ephemeral process ownership only. It is not a
-// journal: the existing Store remains the sole durable authority. A run entry
-// can be populated only after an authenticated helper/daemon handoff has
-// pinned the exact leaf and identities.
+// linuxOwnerAnchorRun is ephemeral process ownership, never a journal: Store stays the sole durable
+// authority, and an entry is added only after the authenticated handoff pinned the exact leaf.
 type linuxOwnerAnchorRun struct {
 	grant                  LinuxOwnerAnchorGrant
 	owner                  linuxgate.OwnerConfig
@@ -649,13 +630,11 @@ type linuxOwnerAnchorRun struct {
 	stopLeafAttempted      bool
 	stopFence              *LinuxOwnerAnchorProducerFence
 	stopEvidence           *LinuxOwnerAnchorStopEvidence
-	// migrationObserved is sticky: a foreign, escaped, or unattributable
-	// process observation permanently prevents this ephemeral run from claiming
-	// NoMigrationObserved, even if that process later exits or leaves the leaf.
+	// migrationObserved is sticky: a foreign, escaped or unattributable process permanently prevents
+	// this run from claiming NoMigrationObserved even if that process later exits or leaves the leaf.
 	migrationObserved bool
-	// noMigrationProven is set only after the authenticated GateReady/image,
-	// B-only namespace/credential and complete pinned-leaf membership checks.
-	// It is not copied into durable State independently of AnchorStop.
+	// noMigrationProven is set only after the authenticated GateReady/image, B-only namespace and
+	// complete pinned-leaf membership checks; it never reaches durable State independently of AnchorStop.
 	noMigrationProven bool
 	// These observations are ephemeral emergency-stop state only; none can
 	// authorize State receipt creation or journal clearing.
@@ -688,10 +667,8 @@ type linuxOwnerAnchorTrackedProcess struct {
 	pidfd          *os.File
 }
 
-// linuxOwnerAnchorPhysicalOnlyChild pins a pre-RegisterGate A gate solely so
-// the subreaper can wait/reap its exact PIDFD after whole-leaf containment. It
-// is deliberately separate from RunKey children and never contributes durable
-// ReapEvidence, StopEvidence, or receipt authority.
+// linuxOwnerAnchorPhysicalOnlyChild pins a pre-RegisterGate A gate only so the subreaper can
+// wait/reap its exact PIDFD after containment; it contributes no durable receipt authority.
 type linuxOwnerAnchorPhysicalOnlyChild struct {
 	identity       authority.LinuxCgroupProcessIdentity
 	classification linuxOwnerAnchorRunChildClassification
@@ -840,10 +817,8 @@ func (run *linuxOwnerAnchorRun) registerChild(process authority.LinuxCgroupProce
 	return nil
 }
 
-// trackNamespaceProvenChild retains an exact PIDFD and Anchor-classified
-// run-origin result for a process whose creator edge was lost at subreaper
-// adoption. It deliberately leaves creator zero; only the exact namespace
-// ancestry and RunKey-bound classification supply its origin.
+// trackNamespaceProvenChild keeps an exact PIDFD and Anchor-classified run-origin result for a
+// process whose creator edge was lost at subreaper adoption; only namespace ancestry proves the origin.
 func (run *linuxOwnerAnchorRun) trackNamespaceProvenChild(
 	process authority.LinuxCgroupProcessIdentity,
 	pidfd int,
@@ -1431,9 +1406,8 @@ func (run *linuxOwnerAnchorRun) waitForAdoptedChild(ctx context.Context, anchor 
 				if err := verifyLinuxOwnerAnchorPIDFDIdentity(int(tracked.pidfd.Fd()), target); err != nil {
 					return fmt.Errorf("recheck retained empty-leaf child pidfd: %w", err)
 				}
-				// The exact process and its in-leaf origin were retained before
-				// cgroup.kill. Empty plus this PIDFD now permits P_PIDFD to prove
-				// adoption/reap without depending on dead-task procfs entries.
+				// The exact process and its in-leaf origin were retained before cgroup.kill, so empty
+				// plus this PIDFD proves adoption/reap without depending on dead-task procfs entries.
 				return nil
 			}
 		}

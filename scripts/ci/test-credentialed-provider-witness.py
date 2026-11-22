@@ -9,29 +9,27 @@ The stale-BEAM fixture is a temporary, dependency-free Mix project.
 """
 
 import hashlib
-import importlib.util
 import json
 import os
 import subprocess
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
+import citest
+from testsupport.gitfixture import FixtureRepo
+
 ROOT = Path(__file__).resolve().parents[2]
-SPEC = importlib.util.spec_from_file_location(
-    "credentialed_provider_witness", ROOT / "scripts/ci/credentialed-provider-witness.py"
-)
-WITNESS = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(WITNESS)
+WITNESS = citest.load_gate(ROOT / "scripts/ci/credentialed-provider-witness.py", "credentialed_provider_witness")
 
 
-class WitnessLauncherTests(unittest.TestCase):
+class WitnessLauncherTests(FixtureRepo, unittest.TestCase):
+    REPOSITORY_PREFIX = "symmetry-witness-negative-"
+    REPOSITORY_DIRECTORY = None
+
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory(prefix="symmetry-witness-negative-")
-        self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name)
+        super().setUp()
         (self.root / "control/lib").mkdir(parents=True)
         (self.root / "scripts/ci").mkdir(parents=True)
         self.module = self.root / "control/lib/witness_build.ex"
@@ -42,20 +40,7 @@ class WitnessLauncherTests(unittest.TestCase):
             '  def project, do: [app: :witness_build, version: "0.1.0", deps: []]\n'
             "end\n"
         )
-        self.git("init", "--quiet")
-        self.git("add", ".")
-        self.git(
-            "-c",
-            "user.name=Witness",
-            "-c",
-            "user.email=witness@example.invalid",
-            "-c",
-            "commit.gpgsign=false",
-            "commit",
-            "--quiet",
-            "-m",
-            "local fixture",
-        )
+        head = self.commit("local fixture")
         self.environment = os.environ.copy()
         self.environment.update(
             {"MIX_ENV": "test", "MIX_BUILD_PATH": str(self.root / "build"), "MIX_DEPS_PATH": str(self.root / "deps")}
@@ -65,13 +50,10 @@ class WitnessLauncherTests(unittest.TestCase):
             "resource_id": "unused-by-launcher",
             "base_branch": "main",
             "code_base_sha": WITNESS.BASE,
-            "code_head_sha": self.git("rev-parse", "HEAD").decode().strip(),
+            "code_head_sha": head,
             "changed_source_manifest": [],
             "allow_manifest_bound_dirty": True,
         }
-
-    def git(self, *args):
-        return subprocess.check_output(["git", *args], cwd=self.root, stderr=subprocess.PIPE)
 
     def manifest(self):
         self.config["changed_source_manifest"] = [

@@ -24,14 +24,8 @@ defmodule SymmetryControlWeb.QueryParams do
   @doc "The largest integer the durable integer columns accept."
   def max_integer, do: @max_integer
 
-  # One integer family for every numeric wire parameter. `bounds` is the closed
-  # range the call site accepts — `{min, max}` or `{min, :infinity}` for the
-  # sites that never had an upper bound — and the carrier the site reads is the
-  # function: a JSON body carries an integer (`json_integer/2`), a query string
-  # carries decimal text (`query_integer/2`; `Integer.parse/1` accepts the
-  # `"+1"` sign exactly as every baseline query parser did), and the two sites that
-  # already accepted either form keep `wire_integer/2`. `optional_wire_integer/2`
-  # additionally passes an absent parameter through as `nil`.
+  # One integer family per wire carrier: JSON bodies carry integers, query strings
+  # decimal text — `Integer.parse/1` accepts the `"+1"` sign, so these do too.
   def json_integer(value, bounds) when is_integer(value), do: in_bounds(value, bounds)
   def json_integer(_value, _bounds), do: {:error, :invalid_request}
 
@@ -56,10 +50,6 @@ defmodule SymmetryControlWeb.QueryParams do
   defp in_bounds(value, {min, max}) when value >= min and value <= max, do: {:ok, value}
   defp in_bounds(_value, _bounds), do: {:error, :invalid_request}
 
-  @doc """
-  The body a controller parses: the decoded JSON map, or the empty map a request
-  without a parseable body carries.
-  """
   def body_params(conn) when is_map(conn.body_params), do: conn.body_params
   def body_params(_conn), do: %{}
 
