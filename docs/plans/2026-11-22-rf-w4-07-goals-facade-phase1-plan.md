@@ -21,7 +21,7 @@ Slice shape: the slice moves three move-only regions out of `goals.ex` behind th
 `SymmetryControl.Goals` facade — the shared kernel (`Goals.Internal`, 63 functions), the run-fence
 lifecycle (`Goals.RunFence`, 75 functions) and the event/receipt kernel (`Goals.EventsReceipts`, 19
 functions) — plus `validate_contract/3` into the existing `Goals.ContractValidation`. **158
-functions / 2,442 block lines move**; the apply stage records every non-verbatim deviation
+functions / 2,456 block lines move**; the apply stage records every non-verbatim deviation
 (7 comment-policy trims, one `@max_safe_integer` spelling, one qualifier rewrite and the nine
 contract-mandated `!` renames) and re-proves the move with the same AST tool.
 
@@ -69,7 +69,7 @@ contract-mandated `!` renames) and re-proves the move with the same AST tool.
       import SymmetryControl.Goals.Internal,
       import SymmetryControl.Goals.RunFence,
 
-  `goals/run_fence.ex` carries 
+  `goals/run_fence.ex` carries
   import SymmetryControl.Goals.ContractValidation, only: [validate_contract: 3]; import SymmetryControl.Goals.EventsReceipts, only: [enqueue_wakeup!: 2]; import SymmetryControl.Goals.Internal,
 
   `goals/events_receipts.ex` carries the EventsReceipts-side kernel import
@@ -329,12 +329,12 @@ Totals:
 
 | destination | functions | block LOC | contiguous runs | first–last HEAD line |
 | --- | --- | --- | --- | --- |
-| `Goals.RunFence` | 75 | 1687 | 75 | 131–10286 |
+| `Goals.RunFence` | 75 | 1697 | 75 | 131–10286 |
 | `Goals.EventsReceipts` | 19 | 322 | 19 | 8143–8482 |
-| `Goals.Internal` | 63 | 383 | 60 | 1948–10606 |
+| `Goals.Internal` | 63 | 387 | 60 | 1948–10606 |
 | `Goals.ContractValidation` | 1 | 50 | 1 | 10050–10099 |
-| stay in `goals.ex` | 19 | 158 | 18 | 2609–10601 |
-| **moved total** | **158** | **2442** | | (goals.ex 10,607 → ~8165 lines before facades/imports) |
+| stay in `goals.ex` | 19 | 153 | 18 | 2609–10601 |
+| **moved total** | **158** | **2456** | | (row sums of the three move-set tables above; base `b25e34ae` `goals.ex` 10,606 lines → 8,119 at the shipped head) |
 ## R9 evidence-freeze mapping (moved declaration → `SOURCE_PATHS` path)
 
 `scripts/ci/omo-control-native-evidence.py` `SOURCE_PATHS` gains the four files that receive
@@ -758,13 +758,13 @@ unset, one mix run at a time (the full suite alone).
 | G1 format | `mix format --check-formatted` | exit 0 |
 | G2 compile | `MIX_ENV=test mix compile --warnings-as-errors` | exit 0, no warnings |
 | G3 xref | `MIX_ENV=test mix xref graph --format cycles` and `--label compile-connected` | plain cycles recorded; no new compile-connected cycle versus base |
-| G4 move-only | canonical per-function AST comparison base ↔ slice (`dump_fns.exs` + `compare3.py`) | 454 identical + 7 with exactly the recorded `Goals.` insertions, 0 missing |
+| G4 move-only | canonical per-function AST comparison base ↔ slice (`dump_fns.exs` + `compare3.py`) | superseded by the Results run below: 418 byte-identical + 77 unchanged `ContractValidation` + 43 under recorded edits, 0 missing |
 | G5 targeted suites | `mix test test/symmetry_control/goals_test.exs test/symmetry_control/orchestration_goal_admission_test.exs test/symmetry_control/goals_read_model_test.exs` | exit 0; 147 + 77 + 51 = 275 tests |
-| G6 new module tests | `mix test test/symmetry_control/goals/run_fence_test.exs test/symmetry_control/goals/events_receipts_test.exs` | exit 0; 6 cases; 6 recorded red mutants |
+| G6 new module tests | `mix test test/symmetry_control/goals/run_fence_test.exs test/symmetry_control/goals/events_receipts_test.exs` | exit 0; 6 cases; 6 recorded red mutants (the fix stage adds `goals/internal_test.exs`: 2 cases, 2 recorded red mutants) |
 | G7 credo | `mix credo --strict` at the base blob and at the slice head | total count does not rise; no new `credo:disable` |
 | G8 evidence freeze | `python scripts/ci/test-omo-control-native-evidence.py` | exit 0 with the four new `SOURCE_PATHS` entries |
 | G9 citations | `python scripts/ci/check-citation-existence.py` | exit 0 (path-level; the CLOSED-TODO citations into the unmoved context region stay valid) |
-| G10 whitespace / host paths | `git diff --check`; host-path scan | exit 0; 0 hits |
+| G10 whitespace / host paths | `git diff --check` over the committed range; host-path scan | exit 0; 0 hits |
 | G11 full control suite | `mix test` (own partition, alone) | exit 0; counts recorded |
 
 Caller coverage: the three oracle suites cover the facade-level behaviour; the two new focused files
@@ -827,13 +827,13 @@ recorded, and the file was restored (all six runs exit 2; the restored tree re-r
 
 ### File-size cap (contract gate "new modules ≤ 1,500 L")
 
-| file | `wc -l` | moved block LOC | note |
+| file | `wc -l` at the shipped head `0f80b4ac` | moved block LOC | note |
 | --- | --- | --- | --- |
-| `control/lib/symmetry_control/goals.ex` | 10,606 → **8,121** | — | shrinks by 2,485 (gate: "must not grow" ✓) |
-| `control/lib/symmetry_control/goals/run_fence.ex` | **1,828** | 1,697 | **over the 1,500 cap by 328** |
-| `control/lib/symmetry_control/goals/internal.ex` | 480 | 383 | under |
-| `control/lib/symmetry_control/goals/events_receipts.ex` | 366 | 322 | under |
-| `control/lib/symmetry_control/goals/contract_validation.ex` | 1,103 → 1,157 | +50 | under |
+| `control/lib/symmetry_control/goals.ex` | 10,606 → **8,119** | — | shrinks by 2,487 (gate: "must not grow" ✓); 8,121 at the apply head `936cbde7`, −2 after the final main merge took origin/main's `dispatch_result` comment rewrite |
+| `control/lib/symmetry_control/goals/run_fence.ex` | **1,823** (1,828 before apply) | 1,697 | **over the 1,500 cap by 323** |
+| `control/lib/symmetry_control/goals/internal.ex` | 477 (480 before apply) | 387 | under |
+| `control/lib/symmetry_control/goals/events_receipts.ex` | 362 (366 before apply) | 322 | under |
+| `control/lib/symmetry_control/goals/contract_validation.ex` | 1,103 → 1,155 | +50 | under |
 
 **This is the one gate this slice cannot satisfy as written, and it is recorded rather than
 silently resolved.** The bound RunFence membership is the k2 RunFence cluster (74 functions) plus
@@ -893,15 +893,26 @@ receipt/row locks through inline `lock: "FOR UPDATE"` selects whose text is part
 | revision | warnings | refactoring | readability | design | total |
 | --- | --- | --- | --- | --- | --- |
 | base `b25e34ae` (fresh worktree of the base blob, dev env, 163 files) | 5 | 357 | 77 | 53 | **492** |
-| slice head (168 files: the 5 new files) | 5 | 357 | 74 | 54 | **490** |
+| slice head `936cbde7` (168 files: the 5 new files) | 5 | 357 | 74 | 54 | **490** |
+| shipped head `0f80b4ac` (168 files; 169 with the fix-stage `internal_test.exs`, which adds 0 issues) | 5 | 357 | 82 | 54 | **498** |
 
-Credo's own exit code saturates (30 on both sides); the summary line is the count, and the count
-**drops by 2**. The per-message delta is fully enumerated by the two runs:
+The three rows are measured runs on fresh worktrees of those revisions (base and slice head re-run in
+the fix stage). Credo's own exit code saturates (30 on all three revisions); the summary line is the
+count. The slice-attributable delta is base → slice head: **−2** (77 → 74 readability). The shipped
+head is 8 higher than the slice head in readability (net of +9 in merged-in files and −1 in
+`portal_resources_test.exs`), all of it in non-slice files the final main merge brought in —
+`+1` `test/support/slowest_formatter.ex`, `+1`
+`test/support/test_fixtures.ex`, `+1` `goals/changeset_validators_test.exs`, `+2`
+`integrations_test.exs`, `+1` `provider_broker_e2e_test.exs`, `+3`
+`goal_controller_test.exs`, `−1` `portal_resources_test.exs`; none of those files is in the slice
+diff, so the shipped-head change is merge-attributable, not slice-attributable. The per-message delta
+for base → slice head is fully enumerated by the two runs:
 
 - `[R]` 77 → 74: three `Credo.Check.Readability.AliasOrder` findings that lived in `goals.ex`'s alias
   block disappear (`SymmetryControl.Goals.GoalExternalWait`, one of five
   `SymmetryControl.Orchestration.RunTransition`, `SymmetryControl.Orchestration.Scheduler`) because the
-  rebuilt alias list is sorted case-insensitively; no new `[R]` finding appears.
+  rebuilt alias list is sorted case-insensitively; no new `[R]` finding appears in that step (the
+  shipped-head additions are the merge-attributable files listed above).
 - `[D]` 53 → 54: `Credo.Check.Design.DuplicateCode` re-attributes one pair location
   (`goals.ex:210`/`10416`/`7358`/`8560` → `goals.ex:3363`/`5754`, `internal.ex:123`/`392`,
   `run_fence.ex:159`; re-run in the apply stage: same pairs and counts). The duplicated text is the
@@ -924,7 +935,10 @@ No `credo:disable` or any other suppression is added: the diff contains no new s
 
 ### Whitespace and host paths (G10)
 
-- `git diff --check` → exit 0.
+- `git diff --check 403142114..0f80b4ac` → exit 2 at review time: `plan:72` trailing whitespace and
+  a blank line at EOF (`plan:1103`); both deleted in the fix stage, so `git diff --check 403142114`
+  (base ↔ fix-stage tree) → exit 0. The argument-less form recorded by the apply stage ran on a
+  clean committed worktree and was vacuously empty.
 - host-path scan of every changed and new file (drive-letter Users-directory spellings, per the
   program rule; re-run in the apply stage on the working tree) → 0 hits; the plan and the slice
   files use `<HOST-PATH>` for toolchain coordinates.
@@ -971,25 +985,27 @@ host artifact recorded for rf-w2-08 (`docs/plans/2026-11-21-rf-w2-08-read-model-
 ### Apply stage (2026-11-22): accepted simplifications, refreshed numbers
 
 The apply stage executed the simplify review's accepted findings: F1 (7 comment blocks trimmed to the
-owner's ≤2-line policy; −11 lines), F2/F3/F4 (71 functions / 97 clause heads restored to their base
+owner's ≤2-line policy; −12 lines), F2/F3/F4 (77 functions / 97 clause heads restored to their base
 `defp` visibility — 64 in `run_fence.ex`, 6 in `internal.ex`, 7 in `events_receipts.ex`; a
 name+arity census over `control/lib` + `control/test` finds no caller outside each file), F5
 (`nullable_safe_integer/2` spells `@max_safe_integer`), F6 (`validate_contract/3`: `alias __MODULE__`
 and its 12 qualifiers removed) and D3 (the nine contract-mandated `!` lock-helper renames — name-only,
 across 77 lines: 9 heads, 14 `import …, only:` entries, 54 call sites) plus the record corrections
-D2/D5 (this file) / D6 (Out of scope). Not applied and still recorded: F7 (a new `internal_test.exs`
-is outside the owned set) and D1 (needs a conductor ruling or a fourth module). Sizes after apply:
-`goals.ex` **8,121**; `run_fence.ex` **1,823**; `internal.ex` **477**; `events_receipts.ex` **362**;
-`contract_validation.ex` **1,155**.
+D2/D5 (this file) / D6 (Out of scope). Not applied at the apply stage: F7 (then outside the owned
+set; applied in the fix stage under the conductor's 2026-11-22 amendment, see the fix-stage section)
+and D1 (needs a conductor ruling or a fourth module). Sizes at the apply head `936cbde7`:
+`goals.ex` **8,121** (8,119 at the shipped head, −2 from the final main merge); `run_fence.ex`
+**1,823**; `internal.ex` **477**; `events_receipts.ex` **362**; `contract_validation.ex` **1,155**.
 
 Re-run gates at the apply tree (all foreground, serialized): format exit 0; `compile
 --warnings-as-errors` exit 0 (0 warnings); xref plain exit 0 (same 3 cycles) and compile-connected
 `No cycles found`; targeted suites **275 passed**; new module tests **6 passed**; `credo --strict`
-**490** (5W/357F/74R/54D) versus base 492, no new issue
-kinds; R9 evidence test `OK`; citation check `nothing to check`; `git diff --check` 0; host-path
-scan 0 hits (the G10 row's literal drive-path spelling is replaced by a descriptive one); `\u` scan
-0; per-function AST comparison with recorded-edit normalisation: **418 byte-identical + 43 under
-recorded edits, 0 missing, 0 duplicated**.
+**490** (5W/357F/74R/54D) at `936cbde7` versus base 492, no new issue
+kinds (shipped head `0f80b4ac`: **498** = 5W/357F/82R/54D — see Credo (G7)); R9 evidence test `OK`;
+citation check `nothing to check`; `git diff --check` 0 on the worktree; host-path
+scan 0 hits (the G10 row's literal drive-path spelling is replaced by a descriptive one);
+backslash-u scan 0; per-function AST comparison with recorded-edit normalisation: **418
+byte-identical + 43 under recorded edits, 0 missing, 0 duplicated**.
 
 R2 per-file line coverage (`mix test --cover`, full suite, base worktree `4fdea989` vs the apply
 tree; the CI coverage plane is advisory by construction, `ci.yml`):
@@ -1008,13 +1024,45 @@ moved spans; the three new modules cover **834** of their 2,662 relevant net lin
 relevant lines are each module's own header/import scaffolding), and `validate_contract/3` is
 15-covered on both sides (base span 10050–10099: 15/50; head: 15/52). `contract_validation.ex`
 closes exactly (276 base-covered + 15 = 291); `goals.ex` itself moves 86.49% → 86.32% (−0.17 pt) —
-a denominator/attribution effect of the 2,442 moved block lines, not a lost test (the oracle suites
+a denominator/attribution effect of the 2,456 moved block lines, not a lost test (the oracle suites
 are unchanged and green, and the suite total is identical at 87.17% on both sides). This is the
 per-file R2 measurement the implement stage left unimplemented.
 
 Full suite with cover on the apply tree: **996/1000 passed, 21 skipped** (exit 2; the same
 four documented `:portal_assets` host-prerequisite cases). Base `4fdea989`:
 990/994 passed, 21 skipped (exit 2, the same four cases).
+
+### Fix stage (2026-11-22, review r1 findings)
+
+All ten review findings on the plan/records are applied: sizes and totals re-derived at the shipped
+tree (STD-A01/A02/A03), the G4 row replaced by the measured counts (STD-A04), the committed-range
+whitespace errors deleted with G10 recorded as a range check (STD-A05), the apply-stage records
+corrected to −12 comment lines and 77 restored functions (STD-A06/A07), the literal backslash-u
+phrase removed (STD-A08), the D6 line references refreshed and `docs/TODO.md:1237` dropped
+(STD-A09), and the credo table re-measured on fresh worktrees of base, slice head and shipped head
+(STD-A10).
+
+F7 (conductor amendment 2026-11-22) is applied: `control/test/symmetry_control/goals/internal_test.exs`
+pins the `has_key?/2` vs `map_has_key?/2` direction asymmetry in `Goals.Internal`; each case carries
+its red mutant in the case name, and every mutant was applied alone and reverted (`internal.ex` is
+byte-identical to `936cbde7` afterwards):
+
+| case | red mutant | observed |
+| --- | --- | --- |
+| `has_key?/2 resolves an atom key against a string-keyed map` | the two bodies swapped | both cases fail, exit 2 |
+| `map_has_key?/2 resolves a string key against an atom-keyed map` | the two bodies swapped | both cases fail, exit 2 |
+| both | merged (both bodies = `has_key?/2`'s) | the second case fails, exit 2 |
+
+Fix-stage gates (all foreground, serialized, shipped tree): `mix format --check-formatted` exit 0;
+`MIX_ENV=test mix compile --warnings-as-errors` exit 0 (0 warnings); `MIX_ENV=test mix xref graph
+--format cycles` exit 0 (same 3 cycles, same members) and `--label compile-connected` exit 0
+(`No cycles found`); targeted suites **275 passed** exit 0; new-module tests (the two files above
+plus `internal_test.exs`) **8 passed** exit 0; `mix credo --strict` **498** (5W/357F/82R/54D) exit
+30, no new `credo:disable`; `python scripts/ci/test-omo-control-native-evidence.py` exit 0 (10 tests,
+`OK`); `python scripts/ci/check-citation-existence.py --base 403142114 --head 0f80b4ac` exit 0
+(`nothing to check`); `git diff --check 403142114` exit 0; host-path scan of the branch diff 0 hits;
+backslash-u scan of the added lines 0 hits. The full control suite (G11) is the conductor's gate and
+was not re-run here (documentation/records fix plus one unit test file).
 
 ## Design trade-offs (ambiguity resolution)
 
@@ -1087,17 +1135,17 @@ four documented `:portal_assets` host-prerequisite cases). Base `4fdea989`:
 - No behaviour change, no new feature, no test rewrite, no `credo:disable`, no `SOURCE_PATHS` entry
   beyond the four files R9 lists.
 - Known residual rot (recorded, not fixed because the owned set is strict): `docs/TODO.md` lines
-  141–142, 1231 and 1237 cite `goals.ex` line numbers that shift with this move (path-level citations
+  141–142 and 1231 cite `goals.ex` line numbers that shift with this move (path-level citations
   stay valid; the archived `docs/archive/CLOSED-TODO.md` citations are path-level by the citation
   gate's own rule and stay valid too).
 - Cross-module duplicates reachable from the moved code (recorded, not fixed — outside the owned
-  set; apply-stage finding D6): `same_uuid?/2` (`run_fence.ex:1808-1817` vs `read_model.ex:2206-2213`
+  set; apply-stage finding D6): `same_uuid?/2` (`run_fence.ex:1803-1812` vs `read_model.ex:2200-2207`
   vs `schemas.ex:1283-1292`; the `run_fence` copy's extra `nil` clause is equivalent),
-  `microusd_wire_value/1` (`run_fence.ex:1633-1634` — `nil → nil` — vs `read_model.ex:2584-2585`,
+  `microusd_wire_value/1` (`run_fence.ex:1628-1629` — `nil → nil` — vs `read_model.ex:2578-2579`,
   value-passthrough fallback), `claim/3` (`orchestration.ex:1948`) and `valid_fence?/1`
   (`orchestration.ex:4264`) as orchestration-side twins. The simplify review's claim that the
   `schemas.ex` `same_uuid?/2` copy and the `orchestration.ex` `valid_fence?/1` twin do not exist is
-  itself wrong — both were re-verified present. No test pins the `has_key?/2` vs `map_has_key?/2`
-  direction asymmetry (finding F7 not applied: a new `internal_test.exs` is outside the owned set);
-  do not merge the two predicates.
-
+  itself wrong — both were re-verified present. The `has_key?/2` vs `map_has_key?/2` direction
+  asymmetry is pinned by `control/test/symmetry_control/goals/internal_test.exs` (fix stage, the
+  conductor's 2026-11-22 F7 amendment; each case records its red mutant); do not merge the two
+  predicates.
