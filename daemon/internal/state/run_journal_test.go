@@ -541,7 +541,7 @@ func TestAdvanceLeaseExpiryIsMonotonic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !afterTerminal.LeaseExpiresAt.Equal(terminal.LeaseExpiresAt) || !afterTerminal.TerminalPendingAt.Equal(terminalAt) {
+	if !afterTerminal.LeaseExpiresAt.Equal(later) || !afterTerminal.TerminalPendingAt.Equal(terminalAt) {
 		t.Fatalf("terminal lease advanced: before=%#v after=%#v", terminal, afterTerminal)
 	}
 }

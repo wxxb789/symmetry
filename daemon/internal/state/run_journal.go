@@ -151,8 +151,7 @@ func (journal RunJournal) LinuxCloneCleanupBeginEligible(key RunKey, fence proto
 		journal.TerminalState != "completed" || !validTerminalVerdict(journal.TerminalVerdict) ||
 		journal.TerminalTaskResultKind != protocol.TaskResultCandidateCompletion || !journal.GoalDeliveryEnabled ||
 		journal.RetainWorkspace || journal.LinuxCloneAbortPending || journal.LinuxCloneAbortProof != nil ||
-		journal.HasProcessDetails() || journal.HasPendingContainment() || journal.ContainmentAuthority != nil ||
-		journal.ContainmentHandoff != nil || journal.ContainmentCgroup != nil || journal.ContainmentScans != nil ||
+		journal.HasProcessDetails() || journal.HasPendingContainment() || journal.ContainmentCgroup != nil ||
 		journal.ContainmentUnproven || journal.ContainmentCgroupPreGateReleaseProof != nil ||
 		journal.ContainmentCgroupReleaseProof == nil || journal.ContainmentCgroupReleaseProof.Validate() != nil ||
 		journal.ContainmentCgroupReleaseProof.Version != authority.SupervisorHandoffVersionV2 ||
@@ -354,7 +353,7 @@ func (store *Store) SaveJournal(journal RunJournal) error {
 		return err
 	}
 	// SaveJournal is the explicit recovery/import replacement seam. Normal
-	// lossless mutations use saveJournalWithCapacityGuardLocked below; this
+	// lossless mutations use saveJournalWithCapacityGuardLocked (state.go); this
 	// seam must remain able to import an already-existing unresolved journal so
 	// recovery can classify it before ordinary mutations resume.
 	return store.saveJournalLocked(journal)

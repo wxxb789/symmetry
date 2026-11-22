@@ -25,7 +25,7 @@ lines at `2db5ed0c`.
 | `RunOutboxState` | `last_event_sequence`, `pending_events`, `dropped_output_chunks`, `dropped_output_bytes`, `pending_transitions`, `attempted_transition_ids`, `pending_command_acknowledgements` (7) | `state.go:743-749` |
 | `RunGoalDeliveryState` | `pending_goal_deliveries`, `delivered_goal_deliveries`, `retired_goal_deliveries`, `goal_delivery_enabled` (4) | `state.go:750-753` |
 
-Remaining `RunJournal` fields (25) stay direct: run identity/lease/terminal
+Remaining `RunJournal` fields (24) stay direct: run identity/lease/terminal
 block, `work`, native-usage block, input/control/provider intents. JSON
 byte-identity is proved by the golden suite (§5) and by the JSON key-order table
 in the evidence record.
@@ -55,11 +55,12 @@ reads compile unchanged.
   `validateLinuxCloneAbortPending`, `validateLinuxCloneCleanupPending`,
   `validateLinuxCloneCleanupProof`, `linuxCloneStageCanAdvance(localState string)`,
   `linuxV2ReleasedCloneStateSafe(localState string)`.
-* `RunOutboxState`: `hasPendingTransition` (method form of the slice helper),
-  `validatePendingEntries(fence protocol.Fence)` (split of
-  `validatePendingJournalEntriesAndDeliveries`, which keeps the
+* `RunOutboxState`: `validatePendingEntries(runID string, fence protocol.Fence)`
+  (split of `validatePendingJournalEntriesAndDeliveries`, which keeps the
   `validateGoalDeliveries` tail because that validator lives in
-  `goal_delivery.go`, outside this slice's owned set).
+  `goal_delivery.go`, outside this slice's owned set); the transition helper
+  stays the free function `hasPendingTransition(transitions, transitionID)`
+  (`run_outbox.go:872`) with `RunJournal.HasPendingTransition` delegating to it.
 * `RunGoalDeliveryState`: `hasExactUsageDelivery(runID string, fence protocol.Fence, usage protocol.Usage)`.
 
 Exported predicates (`HasProcessDetails`, `HasPendingContainment`,
@@ -85,9 +86,10 @@ func (store *Store) mutateJournalCAS(key RunKey, fence protocol.Fence, stale err
 ```
 
 It owns exactly the CAS premise the folded sites duplicate: under the Store lock
-after `loadJournalLocked`, `journal.Key() != key || journal.Fence() != fence`
-returns the site's own `stale` error, then `mutate` runs and the existing
-capacity-guarded write follows. Folded sites (base → helper, base lines):
+after `loadJournalLocked`, `journal.Fence() != fence` returns the site's own
+`stale` error (the requested RunKey already matched in `loadJournalLocked`),
+then `mutate` runs and the existing capacity-guarded write follows. Folded sites
+(base → helper, base lines):
 
 | # | Site (base) | Base fence check | Folded shape | Base mutant (hunks) | Killing test |
 |---|---|---|---|---|---|
@@ -96,14 +98,18 @@ capacity-guarded write follows. Folded sites (base → helper, base lines):
 | 3 | `RecordLinuxCloneTargetRemoval` `:2007` | `:2017` | helper only | `:2017` + `:956` | `TestLinuxCloneCleanupBeginCompleteRequiresExactReadbacks` `:919` |
 | 4 | `CompleteLinuxCloneCleanup` `:2040` | `:2048` | helper only | `:2048` | new `TestLinuxCloneCleanupCompleteReplayRejectsStaleFence` |
 | 5 | `ReserveLinuxCgroup` `:2686` | `:2703` fence + admission fence, **after** the `:2700` claim-grant check | **retained inline** — the helper's comparand runs before the closure, so folding moves the fence check ahead of `journal.hasClaimGrant()` and turns the `journal has no claim grant` error into a stale-fence error for a grantless journal (`Linux cgroup reservation RunKey/fence is stale`); the frozen error-identity/order set forbids that. The mutant therefore edits this site's own comparand (`linux_cgroup_journal.go:562` at HEAD) plus the `:415`/`:464` scan duplicates | `:2703` fence comparand + `:415` `checkLinuxV2NativeAdmissionLocked` comparand + `:464` `targetFound` proof | `TestLinuxV2AdmissionAllowsLiveFencedAndPhysicallyReleasedOwners` `:737` |
-| 6 | `MarkLinuxCgroupCreateStarted` `:2736` | `:2749` | as 5 | `:2749` + `:415` | same test, `:780` |
-| 7 | `ArmLinuxCgroupLauncherGrant` `:2871` | `:2883` | as 5 | `:2883` + `:415` | new `TestLinuxCgroupLauncherGrantRejectsStaleFence` |
+| 6 | `MarkLinuxCgroupCreateStarted` `:2736` | `:2749` | helper + `validLinuxV2AdmissionFence` in closure (no grant check to reorder) | `:2749` + `:415` | same test, `:780` |
+| 7 | `ArmLinuxCgroupLauncherGrant` `:2871` | `:2883` | helper + `validLinuxV2AdmissionFence` in closure, reusing the site's stale error | `:2883` + `:415` | new `TestLinuxCgroupLauncherGrantRejectsStaleFence` |
 | 8 | `AbortNeverCreatedLinuxCgroupReservation` `:3030` | `:3049` fence + grant | helper + `hasClaimGrant` in closure | `:3049` fence comparand | `TestAbortNeverCreatedLinuxCgroupReservationUsesOnlyUnstartedFence` `:266` |
+| 9 | `BindLinuxCloneReuse` `:1534` | `:1546` fence + grant + effect-ready | helper + grant and effect-ready checks in closure | `:1546` fence comparand | new `TestLinuxCloneReuseBindRejectsStaleFence` |
 
-Sites 2/3/5/6/7 carry a duplicate of the same comparand on the same path; the
-base mutant removes both copies, which is the state the fold leaves (one copy,
-in the helper). Every mutant is run red at base and re-run at HEAD with the
-helper's comparand removed (evidence record). Clone mutations whose fence proof
+Sites 2/3/5/6/7 carry a duplicate of the same comparand on the same path. The
+fold keeps those duplicates for their non-CAS callers (`LinuxCloneCleanupBeginEligible`
+keeps its own comparison; the admission scan keeps `target.Fence() != fence` and
+its `targetFound` proof), so each per-site mutant must remove both the helper's
+comparand and the site's remaining copy; the base mutant removes both copies the
+same way. Every mutant is run red at base and re-run at HEAD with those
+comparands removed (evidence record). Clone mutations whose fence proof
 is not a bare key/fence compare (`requireLinuxCloneJournalFence`: intent,
 binding key, admitted subject) keep their own proof; they are not folded and the
 table above is the complete folded set.
@@ -131,6 +137,11 @@ verbatim, shared helpers stay in the family file that uses them or in
 `state_helpers_test.go` when ≥2 files use them (recorded: `mustStore`,
 `testJournal`, `stoppedTestJournal`, `pinnedJournalLauncherBoundCgroupReservation`,
 `pinnedJournalAbortedCgroupReservation`, `pinnedJournalPreGateStopReceipt`);
+the three primitives those `pinnedJournal*` fixtures call
+(`pinnedJournalCgroupLauncher`, `pinnedJournalMinimalCgroupReservation`,
+`pinnedJournalHelperBoundCgroupReservation`) stay in `journal_validation_test.go`
+even though two files use them: moving them would churn about 20 call sites in
+the validator pin suite for no behaviour change (recorded exception);
 `go test -list` stays a superset of base on Windows and WSL. New files this
 slice adds to the package: `state_fence_test.go` (fence-pin tests,
 `//go:build linux`), `golden_test.go` and `testdata/goldens/*.json`.

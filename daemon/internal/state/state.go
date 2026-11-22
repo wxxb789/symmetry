@@ -197,10 +197,11 @@ func (store *Store) mutateJournalIfChanged(key RunKey, mutate func(*RunJournal) 
 }
 
 // mutateJournalCAS applies mutate only while the loaded journal still carries
-// the exact RunKey and fence; stale stays each folded site's own base error.
+// the exact fence; stale stays each folded site's own base error. The key was
+// already matched in loadJournalLocked.
 func (store *Store) mutateJournalCAS(key RunKey, fence protocol.Fence, stale error, mutate func(*RunJournal) error) (RunJournal, error) {
 	return store.mutateJournal(key, func(journal *RunJournal) error {
-		if journal.Key() != key || journal.Fence() != fence {
+		if journal.Fence() != fence {
 			return stale
 		}
 		return mutate(journal)
@@ -241,11 +242,7 @@ func (store *Store) saveJournalLocked(journal RunJournal) error {
 	if err != nil {
 		return err
 	}
-	writer := store.atomicWrite
-	if writer == nil {
-		writer = writeAtomic
-	}
-	if err := writer(store.journalPath(journal.Key()), data); err != nil {
+	if err := store.atomicWrite(store.journalPath(journal.Key()), data); err != nil {
 		return fmt.Errorf("write run journal: %w", err)
 	}
 	return nil
@@ -426,11 +423,7 @@ func (store *Store) writeJSONWithLimit(path string, value any, resource string, 
 	if len(data) > limit {
 		return errors.New("encode " + resource)
 	}
-	writer := store.atomicWrite
-	if writer == nil {
-		writer = writeAtomic
-	}
-	if err := writer(path, data); err != nil {
+	if err := store.atomicWrite(path, data); err != nil {
 		return fmt.Errorf("write %s: %w", resource, err)
 	}
 	return nil

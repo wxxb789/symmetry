@@ -404,7 +404,7 @@ func (store *Store) ResolveTerminal(key RunKey, verdict string, resolvedAt time.
 // retires unreachable delivery state, and makes local cleanup eligible only
 // after the process-ownership marker has been cleared by a verified stop.
 func (store *Store) ResolveTerminalForCleanup(key RunKey, verdict string, resolvedAt time.Time) (RunJournal, error) {
-	if !validConclusiveTerminalVerdict(verdict) || resolvedAt.IsZero() {
+	if !IsConclusiveTerminalVerdict(verdict) || resolvedAt.IsZero() {
 		return RunJournal{}, errors.New("terminal cleanup verdict is invalid")
 	}
 	return store.mutateJournal(key, func(journal *RunJournal) error {

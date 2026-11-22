@@ -23,7 +23,7 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       in `internal/state` (2026-11-21, branch `refactor/rf-w1-06-daemon-deadcode`; plan
       `docs/plans/2026-11-21-w1-06-daemon-deadcode-plan.md`). `Store.AttachGoalSession`
       (`daemon/internal/state/goal_session.go:1026`) and `Store.FailUnresolvedProvideInput`
-      (`daemon/internal/state/run_journal.go:674`) are
+      (`daemon/internal/state/run_journal.go:673`) are
       unreachable from `deadcode -test ./cmd/...` on windows/amd64, linux/amd64 and linux/arm64
       alike, and at the baseline revision `a3039f0` `git grep -nw <symbol>` matches only each
       definition plus its doc comment — no call site, no test, no doc citation anywhere; this
@@ -61,6 +61,21 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       the subject hashes, deleted-declaration list and mutant record are in
       `docs/evidence/rf-w4-15c-claude-candidate-relocation-2026-11-22.md`. The sentence above is
       kept as recorded.
+
+- Dead-surface candidates (decision note, 2026-11-22, rf-w4-21 state domain journals): the split
+      left two exported `*Store` methods with no non-test caller — `QueueEvent`
+      (`daemon/internal/state/run_outbox.go:58`) and
+      `QueueCancelledTransitionAndAcknowledgementAt`
+      (`daemon/internal/state/run_outbox.go:288`). The app-side cancel path that would call the
+      second one sits behind `options.queueCancelledTransitionAndAcknowledgement`
+      (`daemon/internal/app/outbox.go:214-215`), and that field is assigned only in tests
+      (`daemon/internal/app/app_test.go:2474,2653,4374,5723`,
+      `daemon/internal/app/retention_failure_test.go:148`); production falls back to
+      `QueueTerminalTransitionAndAcknowledgementAt`. Both methods predate this slice and are
+      exported, so unexporting them belongs to a W3-08-style surface slice rather than to the
+      apply stage of a same-package split; revalidate with `deadcode -test ./cmd/...` on the
+      three CI platforms plus a repo-wide `git grep -nw <symbol>` before deleting. Owner area:
+      daemon state unexport sweep.
 
 - [ ] Reconcile the `harness/claude` package comment with the package's contents: the header of
       `daemon/internal/harness/claude/stream.go` still states that the package "intentionally does
@@ -1270,9 +1285,9 @@ version pinned` section of `docs/archive/CLOSED-TODO.md`.
       `payload["error"]`; `queueTerminalTransitionWithRetry` (`daemon/internal/app/outbox.go:124-168`)
       retries `state.ErrProviderActionCapacity` forever (`minimumInterval`, log
       `queue_terminal_transition_failed`); the capacity error comes from
-      `saveJournalWithCapacityGuardLocked` (`daemon/internal/state/state.go:254`) →
+      `saveJournalWithCapacityGuardLocked` (`daemon/internal/state/state.go:251`) →
       `validateJournalSaveCapacity` (`daemon/internal/state/provider_action.go:594-606`, 4 MiB check
-      at `:599`) and `saveJournalLocked` (`state.go:236`, size check at `:240`;
+      at `:599`) and `saveJournalLocked` (`state.go:237`, size check at `:241`;
       `maxJournalFileBytes = 4<<20`). rf-w3-09 (2026-11-22, drop-errcheck slice) joined the abandon
       result into the nine `startGoalAdmission` returns, and the `goal_admission` `queueFailure`
       call in `daemon/internal/app/app.go` passes that value through unchanged (read from source,

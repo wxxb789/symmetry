@@ -333,8 +333,8 @@ func (store *Store) BindLinuxCloneReuse(key RunKey, fence protocol.Fence, grant 
 	if sourceKey == key {
 		return RunJournal{}, errors.New("Linux clone reuse cannot bind the source RunKey")
 	}
-	return store.mutateJournal(key, func(journal *RunJournal) error {
-		if journal.Fence() != fence || !journal.hasClaimGrant() || !linuxV2TargetCanStartNativeEffects(*journal, time.Now()) {
+	return store.mutateJournalCAS(key, fence, errors.New("Linux clone reuse target lease or lifecycle is not effect-ready"), func(journal *RunJournal) error {
+		if !journal.hasClaimGrant() || !linuxV2TargetCanStartNativeEffects(*journal, time.Now()) {
 			return errors.New("Linux clone reuse target lease or lifecycle is not effect-ready")
 		}
 		if journal.LinuxCloneReuseGrant != nil {

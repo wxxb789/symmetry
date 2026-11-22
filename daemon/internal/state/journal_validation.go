@@ -220,7 +220,3 @@ func validTerminalVerdict(verdict string) bool {
 		return false
 	}
 }
-
-func validConclusiveTerminalVerdict(verdict string) bool {
-	return IsConclusiveTerminalVerdict(verdict)
-}

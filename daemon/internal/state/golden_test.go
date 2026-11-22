@@ -323,20 +323,24 @@ func TestRunJournalGoldensDecodeAndReencodeIdentically(t *testing.T) {
 
 func TestPersistedJournalFamilyGoldensRoundTrip(t *testing.T) {
 	t.Parallel()
-	for name, value := range map[string]any{
-		"goal-session-journal.json": goldenGoalSessionJournal(),
-		"late-goal-usage.json":      goldenLateGoalUsage(),
-		"machine-identity.json":     goldenMachineIdentity(),
-		"enrollment-intent.json":    goldenEnrollmentIntent(),
+	for name, family := range map[string]struct {
+		value    any
+		resource string
+		limit    int
+	}{
+		"goal-session-journal.json": {value: goldenGoalSessionJournal(), resource: "goal session journal", limit: maxJournalFileBytes},
+		"late-goal-usage.json":      {value: goldenLateGoalUsage(), resource: "late Goal usage ledger", limit: maxJournalFileBytes},
+		"machine-identity.json":     {value: goldenMachineIdentity(), resource: "identity", limit: maxStateFileBytes},
+		"enrollment-intent.json":    {value: goldenEnrollmentIntent(), resource: "enrollment intent", limit: maxStateFileBytes},
 	} {
 		want := goldenFile(t, name)
-		encoded, err := json.Marshal(value)
+		encoded, err := json.Marshal(family.value)
 		if err != nil {
 			t.Fatalf("encode %s: %v", name, err)
 		}
 		assertGoldenBytes(t, name, encoded)
-		decoded := reflect.New(reflect.TypeOf(value))
-		if err := json.Unmarshal(want, decoded.Interface()); err != nil {
+		decoded := reflect.New(reflect.TypeOf(family.value))
+		if err := decodeJSONWithLimitAndTags(want, family.resource, decoded.Interface(), family.limit, nil); err != nil {
 			t.Fatalf("decode %s: %v", name, err)
 		}
 		reencoded, err := json.Marshal(decoded.Elem().Interface())

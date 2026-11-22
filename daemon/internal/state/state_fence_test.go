@@ -14,8 +14,9 @@ func TestLinuxCloneCleanupBeginRejectsStaleFence(t *testing.T) {
 	base := newPinnedLinuxCloneCleanupReady(t, "00000000-0000-4000-8000-000000000101", "pinned-clone-cleanup-completed")
 	staleFence := base.fence
 	staleFence.LeaseToken += "-stale"
-	if _, err := base.store.BeginLinuxCloneCleanup(base.key, staleFence); err == nil {
-		t.Fatal("BeginLinuxCloneCleanup() accepted a stale fence")
+	if _, err := base.store.BeginLinuxCloneCleanup(base.key, staleFence); err == nil ||
+		err.Error() != "Linux clone cleanup RunKey fence is stale" {
+		t.Fatalf("BeginLinuxCloneCleanup() stale fence error = %v", err)
 	}
 }
 
@@ -65,8 +66,9 @@ func TestLinuxCloneCleanupCompleteReplayRejectsStaleFence(t *testing.T) {
 	}
 	staleFence := base.fence
 	staleFence.LeaseToken += "-stale"
-	if _, err := store.CompleteLinuxCloneCleanup(base.key, staleFence, cleanupIntent, proof); err == nil {
-		t.Fatal("CompleteLinuxCloneCleanup() replayed a completed cleanup under a stale fence")
+	if _, err := store.CompleteLinuxCloneCleanup(base.key, staleFence, cleanupIntent, proof); err == nil ||
+		err.Error() != "Linux clone cleanup completion fence is stale" {
+		t.Fatalf("CompleteLinuxCloneCleanup() stale fence error = %v", err)
 	}
 }
 
@@ -77,8 +79,25 @@ func TestLinuxCloneReuseAbortRejectsStaleFence(t *testing.T) {
 	grant := *loadStateJournal(t, base.store, base.key).LinuxCloneReuseGrant
 	staleFence := base.fence
 	staleFence.LeaseToken += "-stale"
-	if _, err := base.store.AbortLinuxCloneReuseBeforeNativeStart(base.key, staleFence, grant); err == nil {
-		t.Fatal("AbortLinuxCloneReuseBeforeNativeStart() accepted a stale fence")
+	if _, err := base.store.AbortLinuxCloneReuseBeforeNativeStart(base.key, staleFence, grant); err == nil ||
+		err.Error() != "Linux clone reuse abort has no exact consuming grant" {
+		t.Fatalf("AbortLinuxCloneReuseBeforeNativeStart() stale fence error = %v", err)
+	}
+}
+
+func TestLinuxCloneReuseBindRejectsStaleFence(t *testing.T) {
+	t.Parallel()
+	requireLinuxCloneAMD64(t)
+	base := newPinnedLinuxCloneReuse(t, "00000000-0000-4000-8000-000000000105")
+	grant := *loadStateJournal(t, base.store, base.key).LinuxCloneReuseGrant
+	if _, err := base.store.BindLinuxCloneReuse(base.key, base.fence, grant, nil); err != nil {
+		t.Fatalf("BindLinuxCloneReuse() exact-fence replay error = %v", err)
+	}
+	staleFence := base.fence
+	staleFence.LeaseToken += "-stale"
+	if _, err := base.store.BindLinuxCloneReuse(base.key, staleFence, grant, nil); err == nil ||
+		err.Error() != "Linux clone reuse target lease or lifecycle is not effect-ready" {
+		t.Fatalf("BindLinuxCloneReuse() stale fence error = %v", err)
 	}
 }
 
@@ -89,7 +108,8 @@ func TestLinuxCgroupLauncherGrantRejectsStaleFence(t *testing.T) {
 	key, fence, _, reservation := setupLinuxV2AdmissionStage(t, store, "00000000-0000-4000-8000-000000000104", "launcher-grant")
 	staleFence := fence
 	staleFence.LeaseToken += "-stale"
-	if _, err := store.ArmLinuxCgroupLauncherGrant(key, staleFence, reservation, nil); err == nil {
-		t.Fatal("ArmLinuxCgroupLauncherGrant() accepted a stale fence")
+	if _, err := store.ArmLinuxCgroupLauncherGrant(key, staleFence, reservation, nil); err == nil ||
+		err.Error() != "Linux cgroup launcher grant RunKey/fence is stale" {
+		t.Fatalf("ArmLinuxCgroupLauncherGrant() stale fence error = %v", err)
 	}
 }
