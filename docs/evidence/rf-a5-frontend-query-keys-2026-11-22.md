@@ -242,7 +242,7 @@ rows) are pinned by the table test's rows of the same names.
 - `realtime.ts` loses the map's two-line doc comment with the moved function; the module states
   the contract in one line ("an empty list means every read, never a drop"), and the "empty list
   refetches broadly" wording survives in the test row names.
-- The three per-kind why comments move with their cases verbatim (attention carries blocked work;
+- The three per-kind why comments move with their cases, each compressed to one line (attention carries blocked work;
   run changes are work-item-keyed; the catch-up continuation reads the same served log). No other
   comment is added anywhere: the new module, the new test and every touched hunk carry zero new
   prose beyond those carried why-comments.

@@ -30,7 +30,7 @@ export function workItemReadKey(workItemId?: string): readonly unknown[] {
 export function attentionReadKey(): readonly ["attention"];
 export function attentionReadKey(projectId: string | null, cursor: string | null): readonly ["attention", { projectId: string | null; cursor: string | null }];
 export function attentionReadKey(projectId?: string | null, cursor?: string | null): readonly unknown[] {
-  return projectId === undefined ? ["attention"] : ["attention", { projectId, cursor: cursor ?? null }];
+  return projectId === undefined ? ["attention"] : ["attention", { projectId, cursor }];
 }
 
 export function goalReadKey(): readonly ["goal"];
@@ -50,7 +50,7 @@ export function goalEventsReadKey(goalId?: string, after?: number): readonly unk
 export function goalEventsCatchUpReadKey(): readonly ["goal-events-catch-up"];
 export function goalEventsCatchUpReadKey(goalId: string, epoch: number): readonly ["goal-events-catch-up", { goalId: string; epoch: number }];
 export function goalEventsCatchUpReadKey(goalId?: string, epoch?: number): readonly unknown[] {
-  if (goalId === undefined || epoch === undefined) return ["goal-events-catch-up"];
+  if (goalId === undefined) return ["goal-events-catch-up"];
   return ["goal-events-catch-up", { goalId, epoch }];
 }
 
@@ -82,19 +82,13 @@ export function invalidationKeys(payload: InvalidationPayload): readonly (readon
   const identity = payload.id ?? payload.work_item_id;
   switch (payload.kind) {
     case "work_item":
-      // The attention read merges the Goal feed with the project's blocked work
-      // items, so a work item's own change (a blocker resolving, a status move)
-      // changes that read too: without this key a focused Attention page keeps
-      // the blocked rows it read before the change until a refocus or reload.
+      // Attention merges the Goal feed with blocked work items, so a work item's change changes it too.
       return [...(identity === undefined ? [workItemReadKey()] : [workItemReadKey(identity)]), workItemTimelineReadKey(), workspaceReadKey(), attentionReadKey()];
     case "run":
-      // A run-scoped change is a change to its work item's execution truth; the
-      // payload names the run, and the surfaces key by work item.
+      // The payload names the run, but surfaces key by work item.
       return [workItemReadKey(), workItemTimelineReadKey(), workspaceReadKey()];
     case "goal":
-      // The receipts list reads its loaded pages under `goal-events` and its
-      // reconnect continuation under `goal-events-catch-up`; both are reads of
-      // the same served log, so both are invalidated.
+      // `goal-events` pages and the `goal-events-catch-up` continuation read the same served log.
       return [...(identity === undefined ? [goalReadKey()] : [goalReadKey(identity)]), goalEventsReadKey(), goalEventsCatchUpReadKey(), attentionReadKey()];
     case "chat":
       return [chatReadKey()];
