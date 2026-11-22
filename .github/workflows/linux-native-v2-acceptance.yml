@@ -154,8 +154,10 @@ jobs:
             ${{ runner.temp }}/linux-v2-native-evidence-${{ github.run_id }}-${{ github.run_attempt }}/stale_journal_subject/*.json
 
   # Prerequisite for the native acceptance job: the frontend/contracts build and
-  # its portal-assets upload. This copy intentionally omits ci.yml's shared
-  # release producer because the native job builds its own release once.
+  # its portal-assets upload, from the composite action ci.yml's contracts job also uses.
+  # Both boolean inputs are false: this copy intentionally omits ci.yml's shared release
+  # producer (the native job builds its own release once) and the advisory production-
+  # dependency audit.
   contracts:
     runs-on: ubuntu-latest
     steps:
@@ -167,15 +169,7 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
-      - name: Check lockfile registry provenance
-        run: python3 scripts/ci/check-lockfile-registry.py
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm contracts:check
-      - run: pnpm --filter @symmetry/frontend typecheck
-      - run: pnpm --filter @symmetry/frontend lint
-      - run: pnpm --filter @symmetry/frontend test
-      - run: pnpm --filter @symmetry/frontend build
-      - uses: actions/upload-artifact@v7
+      - uses: ./.github/actions/contracts-build
         with:
-          name: portal-assets
-          path: control/priv/static/portal
+          audit-prod: "false"
+          build-control-release: "false"

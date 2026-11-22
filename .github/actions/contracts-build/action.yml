@@ -1,0 +1,75 @@
+name: Contracts build
+description: >-
+  The frontend and contracts build both `contracts` jobs spell: the lockfile registry provenance
+  check, the frozen install, `pnpm contracts:check`, the `@symmetry/frontend`
+  typecheck/lint/test/build and the `portal-assets` upload, plus the two halves the callers select
+  with boolean inputs.
+inputs:
+  audit-prod:
+    description: >-
+      Run the advisory `pnpm audit --prod` metric beside the provenance check, before the install:
+      it resolves the locked versions against the registry.
+    required: true
+  build-control-release:
+    description: >-
+      Build the production Control release and upload `control-release-linux`, the shared release
+      producer. The native acceptance workflow passes false because its own job builds the release
+      once.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Check lockfile registry provenance
+      shell: bash
+      run: python3 scripts/ci/check-lockfile-registry.py
+    - name: Measure production dependency advisories (advisory)
+      if: always() && inputs.audit-prod == 'true'
+      continue-on-error: true
+      shell: bash
+      run: |
+        set -Eeuo pipefail
+        if [ ! -f pnpm-lock.yaml ]; then
+          echo "note: the repository has no pnpm-lock.yaml; skipping the advisory production-dependency audit"
+          exit 0
+        fi
+        set +e
+        pnpm audit --prod
+        pnpm_audit_status=$?
+        set -e
+        echo "pnpm_audit_prod_exit_status=$pnpm_audit_status"
+        exit "$pnpm_audit_status"
+    - run: pnpm install --frozen-lockfile
+      shell: bash
+    - run: pnpm contracts:check
+      shell: bash
+    - run: pnpm --filter @symmetry/frontend typecheck
+      shell: bash
+    - run: pnpm --filter @symmetry/frontend lint
+      shell: bash
+    - run: pnpm --filter @symmetry/frontend test
+      shell: bash
+    - run: pnpm --filter @symmetry/frontend build
+      shell: bash
+    - uses: actions/upload-artifact@v7
+      with:
+        name: portal-assets
+        path: control/priv/static/portal
+    - uses: erlef/setup-beam@v1
+      if: inputs.build-control-release == 'true'
+      with:
+        elixir-version: 1.20.4
+        otp-version: 29.0.6
+    - name: Build production Control release
+      if: inputs.build-control-release == 'true'
+      shell: bash
+      working-directory: control
+      run: |
+        MIX_ENV=prod mix deps.get
+        MIX_ENV=prod mix release --overwrite
+        tar --create --gzip --file "$RUNNER_TEMP/control-release-linux.tar.gz" --directory _build/prod/rel symmetry_control
+    - uses: actions/upload-artifact@v7
+      if: inputs.build-control-release == 'true'
+      with:
+        name: control-release-linux
+        path: ${{ runner.temp }}/control-release-linux.tar.gz
+        if-no-files-found: error
