@@ -58,7 +58,7 @@ Method-set census (one statement, reproducible; the throwaway tool is deleted be
    `pi_provider_bridge.go:49`, the 16 `linux_owner_witness_linux.go` parameters.
    Callers that pass a concrete `*state.Store` (tests, `state.New`) keep compiling unchanged.
 4. New `daemon/internal/app/journal_store_test.go`:
-   - `TestJournalStoreBaseMethodSetIsExact` pins the 99 base method names (reflection) against a
+   - `TestJournalStoreBaseMembersMatchRecordedList` pins the 99 base method names (reflection) against a
      literal list,
      so widening or narrowing the seam reddens; the compile-time assertion pins the signatures.
    - `TestStorelessDaemonTakesEveryStoreNilBranch` runs one probe per `store == nil` branch above
@@ -68,7 +68,7 @@ Method-set census (one statement, reproducible; the throwaway tool is deleted be
 branches (`linux_owner_v2_linux.go:1180/1209/1549`), the `persistLinuxV2Mutation` parameter guard
 (`:1837`, added in the fix round) plus the witness-parameter nil checks
 (`linux_owner_witness_linux.go:1416/2479/2599`), which only compile on linux, plus the
-linux/amd64 member-set pin (`TestJournalStoreMethodSetIsExactOnLinuxAMD64`, 123 names).
+linux/amd64 member-set pin (`TestJournalStoreMembersMatchRecordedListOnLinuxAMD64`, 123 names).
 
 ## Contract-preserving decisions (recorded, not guessed)
 
@@ -140,7 +140,7 @@ unchanged for every non-nil path (evidence table in the record, §6).
 `withStore(store *state.Store)` assigned its argument straight into the interface field, which turns
 an absent store into a typed nil (`options.store != nil` would be true and `store == nil` checks
 would change meaning). It now writes `nil` for a nil argument; the probe
-`app.go:524 injected absent store stays untyped nil` pins it (mutant M4).
+`withStore injected absent store stays untyped nil` pins it (mutant M4).
 
 ## Preserved semantics
 

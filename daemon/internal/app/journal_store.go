@@ -8,8 +8,7 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/state"
 )
 
-// journalStoreBase is the store seam of this package on every build target: the *state.Store
-// methods app selects, plus SaveJournal and QueueTerminalTransition, selected only by its tests.
+// journalStoreBase includes SaveJournal and QueueTerminalTransition because app tests select them.
 type journalStoreBase interface {
 	AbortGoalSessionLaunchBeforeNativeStart(key state.GoalSessionKey) (state.GoalSessionJournal, error)
 	AbortLinuxCloneReuseBeforeNativeStart(key state.RunKey, fence protocol.Fence, grant authority.LinuxCloneReuseGrant) (state.RunJournal, error)

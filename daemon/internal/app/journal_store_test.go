@@ -115,7 +115,7 @@ SetProcessDetails
 SetProcessDetailsWithAuthority
 SetWorkspacePath`
 
-func TestJournalStoreBaseMethodSetIsExact(t *testing.T) {
+func TestJournalStoreBaseMembersMatchRecordedList(t *testing.T) {
 	assertMethodSet(t, "journalStoreBase",
 		interfaceMethodNames(reflect.TypeOf((*journalStoreBase)(nil)).Elem()),
 		strings.Split(journalStoreBaseMethods, "\n"))
@@ -146,33 +146,31 @@ func difference(left, right []string) []string {
 	return only
 }
 
-// TestStorelessDaemonTakesEveryStoreNilBranch pins every daemon.store == nil branch to its
-// base-revision outcome for a daemon built without a Store: a typed nil must not skip a branch.
 func TestStorelessDaemonTakesEveryStoreNilBranch(t *testing.T) {
 	key := state.RunKey{RunID: "run", Generation: 1}
 	probes := []storelessProbe{
-		{"app.go:524 injected absent store stays untyped nil", func(t *testing.T, daemon *daemon) {
+		{"withStore injected absent store stays untyped nil", func(t *testing.T, daemon *daemon) {
 			settings := options{}
 			withStore(nil)(&settings)
 			if settings.store != nil {
 				t.Fatalf("injected absent store = %#v, want an untyped nil", settings.store)
 			}
 		}},
-		{"app.go:708 close skips the store Close", func(t *testing.T, daemon *daemon) {
+		{"close skips the store Close", func(t *testing.T, daemon *daemon) {
 			daemon.close()
 			if !daemon.storeClosing {
 				t.Fatal("close did not mark the store lifetime closed")
 			}
 		}},
-		{"app.go:801 withLinuxV2EffectReadyTarget", func(t *testing.T, daemon *daemon) {
+		{"withLinuxV2EffectReadyTarget", func(t *testing.T, daemon *daemon) {
 			err := daemon.withLinuxV2EffectReadyTarget(context.Background(), key, protocol.Fence{}, func() error { return nil })
 			requireErrorMessage(t, err, "Linux v2 effect boundary requires a context and effect")
 		}},
-		{"cleanup.go:545 cleanupLinuxCloneWorkspace", func(t *testing.T, daemon *daemon) {
+		{"cleanupLinuxCloneWorkspace", func(t *testing.T, daemon *daemon) {
 			err := daemon.cleanupLinuxCloneWorkspace(context.Background(), state.RunJournal{})
 			requireErrorMessage(t, err, "Linux clone cleanup lacks its exact context, daemon, or Store")
 		}},
-		{"cleanup.go:769 persistLinuxCloneTargetRemoval", func(t *testing.T, daemon *daemon) {
+		{"persistLinuxCloneTargetRemoval", func(t *testing.T, daemon *daemon) {
 			_, cleanup, proof := journalStoreValidCloneEvidence(t)
 			err := daemon.persistLinuxCloneTargetRemoval(key, protocol.Fence{}, cleanup, proof)
 			requireErrorMessage(t, err, "Linux clone target-removal proof is incomplete or differs from its cleanup intent")
@@ -235,53 +233,53 @@ func TestStorelessDaemonTakesEveryStoreNilBranch(t *testing.T) {
 				t.Fatalf("storeless process-detail clear = journal:%#v calls:%d err:%v", journal, cleared, err)
 			}
 		}},
-		{"deterministic_validation.go:90 artifact validation", func(t *testing.T, daemon *daemon) {
+		{"tryDeterministicArtifactValidation", func(t *testing.T, daemon *daemon) {
 			_, err := daemon.tryDeterministicArtifactValidation(context.Background(), key, protocol.ClaimResponse{}, protocol.Admission{Purpose: protocol.AdmissionPurposeValidate})
 			if err == nil || !strings.Contains(err.Error(), "state store is unavailable") {
 				t.Fatalf("storeless artifact validation = %v, want the state-store refusal", err)
 			}
 		}},
-		{"native_run.go:217 bindLinuxCloneReuse", func(t *testing.T, daemon *daemon) {
+		{"bindLinuxCloneReuse", func(t *testing.T, daemon *daemon) {
 			err := daemon.bindLinuxCloneReuse(context.Background(), key, protocol.Fence{}, authority.LinuxCloneReuseGrant{})
 			requireErrorMessage(t, err, "Linux clone reuse requires the App Store")
 		}},
-		{"native_run.go:227 abortLinuxCloneReuseBeforeNativeStart", func(t *testing.T, daemon *daemon) {
+		{"abortLinuxCloneReuseBeforeNativeStart", func(t *testing.T, daemon *daemon) {
 			err := daemon.abortLinuxCloneReuseBeforeNativeStart(context.Background(), key, protocol.Fence{}, authority.LinuxCloneReuseGrant{})
 			requireErrorMessage(t, err, "Linux clone reuse abort requires the App Store")
 		}},
-		{"native_run.go:246 withLinuxV2NativeAdmission", func(t *testing.T, daemon *daemon) {
+		{"withLinuxV2NativeAdmission", func(t *testing.T, daemon *daemon) {
 			err := daemon.withLinuxV2NativeAdmission(context.Background(), key, func(map[state.RunKey]protocol.Fence) error { return nil })
 			requireErrorMessage(t, err, "Linux v2 admission requires the App Store and check")
 		}},
-		{"native_run.go:428 processDetailsAlreadyRecorded", func(t *testing.T, daemon *daemon) {
+		{"processDetailsAlreadyRecorded", func(t *testing.T, daemon *daemon) {
 			recorded, err := daemon.processDetailsAlreadyRecorded(key, 81, "windows:81:0000000000000001")
 			if recorded || err != nil {
 				t.Fatalf("storeless process-detail probe = %v, %v, want false, nil", recorded, err)
 			}
 		}},
-		{"pi_provider_bridge.go:50 durable provider bridge", func(t *testing.T, daemon *daemon) {
+		{"newDurablePiProviderBridgeExecutor", func(t *testing.T, daemon *daemon) {
 			_, err := newDurablePiProviderBridgeExecutor(nil, daemon.store, key, protocol.ProviderAccess{})
 			if !errors.Is(err, errPiProviderActionStoreUnavailable) {
 				t.Fatalf("storeless provider bridge = %v, want %v", err, errPiProviderActionStoreUnavailable)
 			}
 		}},
-		{"pi_provider_bridge.go:180 preparePiProviderBridge", func(t *testing.T, daemon *daemon) {
+		{"preparePiProviderBridge", func(t *testing.T, daemon *daemon) {
 			_, err := daemon.preparePiProviderBridge(context.Background(), key, harness.KindPi, &protocol.ProviderAccess{})
 			requireErrorMessage(t, err, "pi provider bridge prerequisites are unavailable")
 		}},
-		{"recovery.go:619 persistSupervisorRecoveryScanSeal", func(t *testing.T, daemon *daemon) {
+		{"persistSupervisorRecoveryScanSeal", func(t *testing.T, daemon *daemon) {
 			err := daemon.persistSupervisorRecoveryScanSeal(key, authority.Supervisor{}, 1)
 			requireErrorMessage(t, err, "state store is unavailable")
 		}},
-		{"recovery.go:635 persistContainmentStopReceipt", func(t *testing.T, daemon *daemon) {
+		{"persistContainmentStopReceipt", func(t *testing.T, daemon *daemon) {
 			err := daemon.persistContainmentStopReceipt(key, 81, "windows:81:0000000000000001", authority.StopReceipt{})
 			requireErrorMessage(t, err, "state store is unavailable")
 		}},
-		{"recovery.go:705 queueRecoveryTerminalTransition", func(t *testing.T, daemon *daemon) {
+		{"queueRecoveryTerminalTransition", func(t *testing.T, daemon *daemon) {
 			err := daemon.queueRecoveryTerminalTransition(context.Background(), key, "failed", nil)
 			requireErrorMessage(t, err, "state store is unavailable")
 		}},
-		{"recovery_glue.go:33 persistSupervisorHandoffStopReceipt", func(t *testing.T, daemon *daemon) {
+		{"persistSupervisorHandoffStopReceipt", func(t *testing.T, daemon *daemon) {
 			handoff := testAppHandoffFixture(81, "windows:81:0000000000000001")
 			receipt := authority.StopReceipt{
 				Version: authority.SupervisorVersion, Status: "stopped",

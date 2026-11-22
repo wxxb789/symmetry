@@ -18,8 +18,6 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/state"
 )
 
-// journalStoreLinuxAndAMD64Methods is what the linux/amd64 owner path adds to journalStoreBase:
-// the cgroup-v2 and clone-abort Store methods this target alone selects.
 const journalStoreLinuxAndAMD64Methods = `AbortLinuxCgroupReservation
 AbortNeverCreatedLinuxCgroupReservation
 ArmLinuxCgroupLauncherGrant
@@ -45,7 +43,7 @@ ReserveLinuxCgroup
 ReserveLinuxCloneIntent
 ReserveLinuxClonePromotion`
 
-func TestJournalStoreMethodSetIsExactOnLinuxAMD64(t *testing.T) {
+func TestJournalStoreMembersMatchRecordedListOnLinuxAMD64(t *testing.T) {
 	want := append(strings.Split(journalStoreBaseMethods, "\n"), strings.Split(journalStoreLinuxAndAMD64Methods, "\n")...)
 	slices.Sort(want)
 	assertMethodSet(t, "journalStore", interfaceMethodNames(reflect.TypeOf((*journalStore)(nil)).Elem()), want)
@@ -62,16 +60,16 @@ func (*journalStoreDropProbeProcess) LinuxV2WitnessDropStatus(context.Context) (
 func TestStorelessDaemonTakesEveryLinuxStoreNilBranch(t *testing.T) {
 	key := state.RunKey{RunID: "run", Generation: 1}
 	probes := []storelessProbe{
-		{"linux_owner_v2_linux.go:1180 loadLinuxCloneRunJournal", func(t *testing.T, daemon *daemon) {
+		{"loadLinuxCloneRunJournal", func(t *testing.T, daemon *daemon) {
 			grant, _, _ := journalStoreValidCloneEvidence(t)
 			_, err := daemon.loadLinuxCloneRunJournal(key, protocol.Fence{}, grant, nil)
 			requireErrorMessage(t, err, "Linux clone Store readback is incomplete")
 		}},
-		{"linux_owner_v2_linux.go:1209 reconcileLinuxClonePromotion", func(t *testing.T, daemon *daemon) {
+		{"reconcileLinuxClonePromotion", func(t *testing.T, daemon *daemon) {
 			err := daemon.reconcileLinuxClonePromotion(context.Background(), state.RunJournal{}, platform.LinuxCgroupV2Release{})
 			requireErrorMessage(t, err, "Linux clone promotion reconciliation is incomplete")
 		}},
-		{"linux_owner_v2_linux.go:1549 linuxCloneAbortHasRetentionOwner", func(t *testing.T, daemon *daemon) {
+		{"linuxCloneAbortHasRetentionOwner", func(t *testing.T, daemon *daemon) {
 			journal := state.RunJournal{
 				RunID: key.RunID, Generation: key.Generation,
 				LinuxCloneIntent:       &authority.LinuxCloneIntent{Version: authority.LinuxCloneVersion},
@@ -82,24 +80,24 @@ func TestStorelessDaemonTakesEveryLinuxStoreNilBranch(t *testing.T) {
 				t.Fatalf("storeless retention check = %v, %v", retained, err)
 			}
 		}},
-		{"linux_owner_witness_linux.go:1416 summarizeResponseLost", func(t *testing.T, daemon *daemon) {
+		{"summarizeResponseLost", func(t *testing.T, daemon *daemon) {
 			witness := &linuxV2NativeWitnessRun{request: linuxV2NativeWitnessRequest{Case: "stage_replay"}}
 			err := witness.summarizeResponseLost(daemon.store, "")
 			requireErrorMessage(t, err, "response-loss summary requires an exact StageReplay Store")
 		}},
-		{"linux_owner_witness_linux.go:2479 captureHelperDropStatus", func(t *testing.T, daemon *daemon) {
+		{"captureHelperDropStatus", func(t *testing.T, daemon *daemon) {
 			process := &journalStoreDropProbeProcess{}
 			witness := &linuxV2NativeWitnessRun{}
 			if err := witness.captureHelperDropStatus(daemon.store, process); err != nil {
 				t.Fatalf("storeless drop-status capture = %v, want nil", err)
 			}
 		}},
-		{"linux_owner_witness_linux.go:2599 recoverLinuxV2NativeWitnessRunKey", func(t *testing.T, daemon *daemon) {
+		{"recoverLinuxV2NativeWitnessRunKey", func(t *testing.T, daemon *daemon) {
 			journal := state.RunJournal{RunID: key.RunID, Generation: key.Generation}
 			err := recoverLinuxV2NativeWitnessRunKey(context.Background(), config.Config{}, daemon.store, journal)
 			requireErrorMessage(t, err, "exact owner-witness recovery requires its live context, locked Store, and selected RunJournal")
 		}},
-		{"linux_owner_v2_linux.go:1837 persistLinuxV2Mutation refuses a missing Store", func(t *testing.T, daemon *daemon) {
+		{"persistLinuxV2Mutation refuses a missing Store", func(t *testing.T, daemon *daemon) {
 			err := daemon.persistLinuxV2Mutation(nil, key, protocol.Fence{}, "storeless probe", func() (state.RunJournal, error) {
 				return state.RunJournal{}, nil
 			}, func(state.RunJournal) bool { return true })

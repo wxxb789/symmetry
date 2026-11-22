@@ -14,11 +14,11 @@ W3-08 `6d428d8f` (`refactor(state): unexport the test-only state surface (#214)`
 
 | File | Kind | Size |
 | --- | --- | --- |
-| `daemon/internal/app/journal_store.go` | new: `journalStoreBase` (99 methods) + `var _ journalStore = (*state.Store)(nil)` | 115 L |
+| `daemon/internal/app/journal_store.go` | new: `journalStoreBase` (99 methods) + `var _ journalStore = (*state.Store)(nil)` | 114 L |
 | `daemon/internal/app/journal_store_linux_amd64.go` | new: `journalStore` = base + 24 linux/amd64-only methods | 38 L |
 | `daemon/internal/app/journal_store_other_targets.go` | new: `journalStore` alias on every other target | 5 L |
-| `daemon/internal/app/journal_store_test.go` | new: member-set pin + 23 storeless-branch probes + the shared valid-authority fixture | 433 L |
-| `daemon/internal/app/journal_store_linux_test.go` | new: linux/amd64 member-set pin + 7 storeless-branch probes | 112 L |
+| `daemon/internal/app/journal_store_test.go` | new: member-set pin + 23 storeless-branch probes + the shared valid-authority fixture | 431 L |
+| `daemon/internal/app/journal_store_linux_test.go` | new: linux/amd64 member-set pin + 7 storeless-branch probes | 110 L |
 | `daemon/internal/app/app.go` | field-type edits (`options.store`, `daemon.store`) | 2 lines |
 | `daemon/internal/app/{lease.go,linux_owner_recovery_linux.go,linux_owner_v2_linux.go,linux_owner_witness_linux.go,pi_provider_bridge.go}` | same-value retype of the declarations that carry the field | 18 lines |
 | `daemon/internal/app/cleanup_glue.go` | lazy store fallback in `selectStoreWrite` + its 8 call sites (§6) | 38 lines changed |
@@ -31,23 +31,25 @@ W3-08 `6d428d8f` (`refactor(state): unexport the test-only state surface (#214)`
 Loc delta on tracked files: the 11 files this slice modified are **+72 / −34**
 (`git diff --stat adfe7d6a..99acb371` over those paths; the commit's 18-file total adds the five new
 `journal_store*.go` files and this record's plan/evidence files). The five new `journal_store*.go`
-files = **703 L** including tests — the sizes in the table above, re-derived with `wc -l` on the
-fix-round tree (the pre-apply tree measured 594 L; the apply stage removed the redundant
+files = **698 L** including tests — the sizes in the table above, re-derived with `wc -l` on the
+opus-review-1 tree (the pre-apply tree measured 594 L; the apply stage removed the redundant
 drop-status counter and the inert `app.go:189` probe and shared the two probe runners; the fix round
-added the shared valid-authority fixture and the `persistLinuxV2Mutation` probe). D2 (LOC) is
-report-only.
+added the shared valid-authority fixture and the `persistLinuxV2Mutation` probe; the opus-review-1
+round removed three comments). D2 (LOC) is report-only.
 
 Revision identity of the delivered bytes: slice commit `f9735123` over the merge `8af47444` (its
 pre-rewrite twin is `99acb371`), merged with `origin/main` as tree `e49d374a`; the fix-round edits
-are uncommitted over `e49d374a`. Five files (`sha256sum`, re-derived on the fix-round tree):
-`journal_store.go` `306a7a13760caf86c2d617acbbe558816bb01ac09e202387ee5cf81770c872f9`,
+are committed as `298ee880` and the host-path placeholder pass as `3f78b00e`; the opus-review-1
+fix round (review findings P2-1, P3-1..P3-3) is uncommitted over `3f78b00e`. Five files
+(`sha256sum`, re-derived on the opus-review-1 tree; the two target-only seam files are unchanged):
+`journal_store.go` `31dd53e5819c262445759e902707a84a55d2cda87a4975eefe59ceb7e7242bff`,
 `journal_store_linux_amd64.go` `2bc8575db4b87ed083e84f7738785457dee0a0f91aafd60e4969d2e1c2e49f1e`,
 `journal_store_other_targets.go` `d4a6a7ea421ded4c5953b77c68875e05afcc6e9cc00cf63480c450fb7a18be37`,
-`journal_store_test.go` `95218ca3763cf2b15ab885c879dc838fc7563906981bf88ef1a4f3ce912e6734`,
-`journal_store_linux_test.go` `83c9900f1cb2d866af9391315e4e42aed0a68b0ea77fcd7fb10675ea2e246ba5`.
+`journal_store_test.go` `c93ee2b6e8129ab7828f3e810ced846636c3b0cea7e558c9b8304c4d73586ba6`,
+`journal_store_linux_test.go` `08af728b46053fb8fd65662ed2bba31f1c3373640775a41da6f157ec3a362807`.
 
 No production wrapper, adapter or forwarding type: the only `journalStore` implementer assertion in
-the tree is `daemon/internal/app/journal_store.go:115` (`var _ journalStore = (*state.Store)(nil)`).
+the tree is `daemon/internal/app/journal_store.go:114` (`var _ journalStore = (*state.Store)(nil)`).
 
 The apply stage (2026-11-22) changed no production executable line: the three `journal_store*.go`
 seam files differ from `99acb371` by comments only (the four seam comments became the two-line
@@ -62,6 +64,14 @@ from the shared `journalStoreValidCloneEvidence` fixture, seven `cleanup_glue.go
 symbol-anchored (their base line numbers had drifted), and one linux probe pins
 `persistLinuxV2Mutation`'s parameter guard (§11 M6–M10); the plan and this record carry the
 documentation corrections.
+
+The opus-review-1 fix round (2026-11-22, review findings P2-1 and P3-1..P3-3) also changes no
+production executable line: `journal_store.go` keeps only the one-line `journalStoreBase` why
+comment, the two "what" comments on the test files are deleted, every storeless probe subtest is
+renamed to a symbol anchor with no base line number, and the two member-set pins are renamed
+`TestJournalStoreBaseMembersMatchRecordedList` /
+`TestJournalStoreMembersMatchRecordedListOnLinuxAMD64`. §8 and §14 carry the P2-1 control-flow
+correction.
 
 ## 2. Method-set census (the gate table)
 
@@ -218,10 +228,14 @@ targets. Call-site counts are from the linux/amd64 census.
 | `SetProcessDetailsWithAuthority` | 1 | `recovery.go:678` | all targets |
 | `SetWorkspacePath` | 1 | `app.go:2121` | all targets |
 
-Member-set pins (executable): `TestJournalStoreBaseMethodSetIsExact` (99 names, every target) and
-`TestJournalStoreMethodSetIsExactOnLinuxAMD64` (123 names = base ∪ 24) fail on any widening or
-narrowing of the declared set, which the compile-time assertion cannot catch (an added method
-`*state.Store` already has passes it). Mutant M1 in §11 exercises exactly that.
+Member-set pins (executable change detectors): `TestJournalStoreBaseMembersMatchRecordedList`
+(99 names, every target) and `TestJournalStoreMembersMatchRecordedListOnLinuxAMD64` (123 names =
+base ∪ 24) compare the declared interface against a recorded name list, so any widening or
+narrowing of the declared set reddens them, including the widening the compile-time assertion
+cannot catch (an added method `*state.Store` already has passes it). They are change detectors, not
+minimality proofs: a caller that stops selecting a method leaves interface and list in agreement,
+and the selector census above is the minimality evidence. Mutant M1 in §11 exercises the widening
+direction.
 
 ## 3. Split of the interface across build targets (derived, not in the contract text)
 
@@ -314,7 +328,7 @@ stays byte-equivalent (§6 table) and the plan's D4 wording is reconciled (plan 
 `withStore(store *state.Store)` assigned a possibly nil `*state.Store` to the interface field, which
 would turn an absent store into a **typed** nil (`options.store != nil` would then be true and every
 `store == nil` check would change meaning). It now assigns `nil` when its argument is nil
-(`export_test.go:9-17`), and the probe `app.go:524 injected absent store stays untyped nil` pins it
+(`export_test.go:9-17`), and the probe `withStore injected absent store stays untyped nil` pins it
 (mutant M4).
 
 ## 8. Storeless-daemon branch audit (base vs HEAD)
@@ -346,8 +360,9 @@ added `:1837` probe has no base-copy run: its base twin is the byte-identical gu
 (verified with `git show adfe7d6a:…/linux_owner_v2_linux.go`), so a base-copy run takes the same
 `errDaemonStoreClosing` refusal.
 
-Probe sites: base-revision line references, except the `cleanup_glue.go` probes, which are
-symbol-anchored because D5 shifted that file's lines: `app.go:524`, `app.go:708`, `app.go:801`,
+Probe sites (base-revision line references, except the `cleanup_glue.go` probes, which are
+symbol-anchored because D5 shifted that file's lines; the subtest names themselves carry symbols
+only, no line numbers — opus review 1, P3-1): `app.go:524`, `app.go:708`, `app.go:801`,
 `cleanup.go:545`, `cleanup.go:769`, `cleanup_glue.go selectStoreWrite` (guard),
 `cleanup_glue.go selectStoreWrite override` (override), `cleanup_glue.go
 persistProcessAuthorityCallback`, `cleanup_glue.go persistProcessMarker`, `cleanup_glue.go
@@ -366,15 +381,23 @@ base revision (a throwaway copy of `adfe7d6a` with a two-line shim mapping `jour
 | --- | --- | --- |
 | base, windows probes | `go test -count=1 -run TestStorelessDaemon ./internal/app/` in the base copy | `ok … 0.271s` |
 | base, linux/amd64 probes | same, under WSL `Ubuntu-24.04` | `ok … 0.020s` |
-| fix round, windows probes | `go test -count=1 -run 'TestJournalStore\|TestStorelessDaemon' -v ./internal/app/` | `ok … 0.294s`, exit 0; 23 subtests pass (row 15 of §10) |
-| fix round, linux/amd64 probes | WSL: `go test -count=1 -run 'TestJournalStore\|TestStorelessDaemon' -v ./internal/app/` | `ok … 0.116s`, exit 0 (row 19 of §10); the run prints `--- PASS: TestJournalStoreMethodSetIsExactOnLinuxAMD64` (123 members), `--- PASS: TestJournalStoreBaseMethodSetIsExact`, `--- PASS: TestStorelessDaemonTakesEveryLinuxStoreNilBranch` with all 7 subtests passing, and the 23 untagged probes |
+| opus-review-1 round, windows probes | `go test -count=1 -run 'TestJournalStore\|TestStorelessDaemon' -v ./internal/app/` | `ok … 0.296s`, exit 0; 23 subtests pass (row 15 of §10) |
+| opus-review-1 round, linux/amd64 probes | WSL: `go test -count=1 -run 'TestJournalStore\|TestStorelessDaemon' -v ./internal/app/` | `ok … 0.041s`, exit 0 (row 19 of §10); the run prints `--- PASS: TestJournalStoreMembersMatchRecordedListOnLinuxAMD64` (123 members), `--- PASS: TestJournalStoreBaseMembersMatchRecordedList`, and both storeless tests with all 30 subtests passing (23 cross-target + 7 linux) |
 
 Branches **not** probed, with the reason: the 10 unguarded mirror fallbacks
 (`cleanup_glue.go:433`, `goal_admission.go:323/345/601/609`, `goal_delivery.go:32/58`,
-`native_run.go:729/1042`, `supervisory.go:232`; `recovery_glue.go:36` is guarded at :33) accept a
-store call on a nil receiver at base too (the nil `*state.Store` method call panics inside `state`),
-so they are not `store == nil` branches and have no base outcome to preserve; the storeless
-behaviour of those paths is a panic at base and at HEAD.
+`native_run.go:729/1042`, `supervisory.go:232`; `recovery_glue.go:36` is guarded at :33) are not
+`store == nil` branches: at base the nil `*state.Store` call proceeds into `state`, where several of
+those methods validate their arguments before touching the receiver, so invalid input returns the
+`state` validation error and valid input panics on the nil receiver; at HEAD the method value is
+taken from the nil interface, so both inputs panic before validation can run. A scratch divergence
+probe (opus review 1, not kept in the tree) observed base (`c5d0a4a8`) return `goal session key is
+invalid` for `abortGoalSessionLaunchBeforeNativeStart(state.GoalSessionKey{})` and `process details
+are invalid` for `clearPersistedProcessDetails` with pid 0, and HEAD return `panic: runtime error:
+invalid memory address or nil pointer dereference` for both. Only tests can reach these paths:
+production sets the store in `initialize` (`app.go:523-531`) before any worker starts, and every
+recovery and witness constructor builds from `state.New`, so no production daemon runs a mirror
+fallback storeless.
 
 ## 9. Preserved semantics
 
@@ -395,7 +418,8 @@ Assertions in pre-existing tests: none changed, none deleted, no pre-existing `t
 (the slice's diffs to the two pre-existing test files are `export_test.go` +9/−1 and
 `lease_stale_persistence_test.go` 1 line: a helper parameter type and the `withStore` nil guard).
 The fix round renames seven of the slice's own probe subtests (STD-A02) and adds one linux probe
-(STD-A03); no CI-pinned name is involved. The app suite's CI-pinned name
+(STD-A03); no CI-pinned name is involved (the opus-review-1 round renames all probe subtests and
+both pins to symbol anchors, also without touching a CI-pinned name). The app suite's CI-pinned name
 `TestOpenCodeLegacyAssignmentFailsBeforeRunningWorkspaceAndProcess` still resolves
 (`harness_test.go:783`, file untouched), and the CI `--assert` rows that name it are unchanged.
 
@@ -409,7 +433,7 @@ Exit codes are the command's own (captured without a pipe where the row reports 
 | 1 | `gofmt -l daemon/internal/app` | no output, exit 0 |
 | 2 | `git diff --check` | no output, exit 0 |
 | 3 | `rg -n 'store +\*state\.Store' daemon/internal/app --glob '!*_test.go'` | 0 rows (21 at base for this pattern; 22 under the broader `\*state\.Store` count, which adds `lease.go:43`) |
-| 4 | `rg -n 'var _ journalStore' daemon/internal/app/*.go` | 1 row: `journal_store.go:115` with `(*state.Store)(nil)` |
+| 4 | `rg -n 'var _ journalStore' daemon/internal/app/*.go` | 1 row: `journal_store.go:114` with `(*state.Store)(nil)` |
 | 5 | `go build ./...` (windows/amd64) | exit 0 |
 | 6 | `GOOS=windows GOARCH=arm64 go build ./...` | exit 0 |
 | 7 | `GOOS=linux GOARCH=amd64 go build ./...` | exit 0 |
@@ -420,11 +444,11 @@ Exit codes are the command's own (captured without a pipe where the row reports 
 | 12 | `go vet ./...` | exit 0 |
 | 13 | `go test -count=1 ./internal/app/...` (Windows) | `ok … 491.915s`, exit 0 (harness exit code captured without a pipe) |
 | 14 | `go test -count=1 -coverprofile=… ./internal/app/...` (Windows) | `ok … 554.041s`, coverage 75.3% of statements, exit 0 |
-| 15 | `go test -count=1 -run 'TestJournalStore\|TestStorelessDaemon' -v ./internal/app/` | exit 0; `ok … 0.294s`, 23 probe subtests + 1 member-set test pass |
+| 15 | `go test -count=1 -run 'TestJournalStore\|TestStorelessDaemon' -v ./internal/app/` | exit 0; `ok … 0.296s`, 23 probe subtests + 1 member-set test pass |
 | 16 | `python3 scripts/ci/test-omo-control-native-evidence.py` (R9) | `Ran 15 tests in 36.015s … OK`, exit 0 |
 | 17 | WSL `Ubuntu-24.04` in this slice's worktree (`<worktree>/daemon`): the contract's `go test -count=1 -race ./internal/app/...`, run as `go test -race -c -o <scratch>/app.race.test ./internal/app/` then `cd daemon/internal/app && <scratch>/app.race.test -test.timeout=55m -test.count=1` (binary form keeps the 55-minute timeout inside the harness limit) | `PASS`, exit 0, wall 683 s; the race binary's `-test.list '.*'` is identical to `go test -list '.*' ./internal/app/` on the same tree (682 tests), so the full linux test set ran |
 | 18 | `go test -count=1 ./internal/state/...` (the one touched package outside `app`) | `ok … 14.868s`, exit 0 |
-| 19 | WSL (this slice's worktree, `<worktree>/daemon`): `go test -count=1 -run 'TestJournalStore\|TestStorelessDaemon' -v ./internal/app/` (linux/amd64 probes and both pins) | `ok … 0.116s`, exit 0; 23 cross-target subtests + all 7 linux subtests + both member-set pins pass |
+| 19 | WSL (this slice's worktree, `<worktree>/daemon`): `go test -count=1 -run 'TestJournalStore\|TestStorelessDaemon' -v ./internal/app/` (linux/amd64 probes and both pins) | `ok … 0.041s`, exit 0; 23 cross-target subtests + all 7 linux subtests + both member-set pins pass |
 
 Rows 1–12, 15, 16, 18 and 19 were re-run in the fix round (2026-11-22) on the fix-round tree; rows
 13, 14 and 17 are the apply-stage runs of the full Windows suite, its coverage-instrumented twin and
@@ -436,6 +460,13 @@ Windows-drive mount out of the timed window (build vs run and host load are not 
 is the contract's exact command, captured without a pipe so its exit code is the command's own; row
 14 is the identical test set, coverage instrumented. Rows 15 and 19 are the fix round's scoped runs
 of the changed test set on both platforms and back §11's fix-round mutant runs.
+
+The opus-review-1 round re-ran rows 15 and 19 after the renames (the values in those cells) and the
+acceptance set — `gofmt -l ./internal/app` (row 1), `go vet ./internal/app/`,
+`GOOS=linux GOARCH=amd64 go vet ./internal/app/` (row 11's command), the scoped test command above
+without `-v`, and `git diff --check` (row 2) — all green, exit 0; rows 16 and 18 are unaffected
+because no `state` file or `SOURCE_PATHS` entry changed, and rows 13/14/17 remain the apply-stage
+runs (the rename edits are test-file and document-only, no production line changed).
 
 Row 17 is the contract's slow oracle in this environment, and it does not fit the harness defaults:
 
@@ -469,16 +500,16 @@ go test -overlay=<mutant>.json -count=1 -run '<killing test>' ./internal/app/ 2>
 
 | Mutant | Production change | Killing test | Observed (final bytes) |
 | --- | --- | --- | --- |
-| M1 (widening) | `journalStoreBase` gains `LoadLateGoalUsage(key state.RunKey) (state.LateGoalUsageLedger, error)`, a method `*state.Store` has and app never selects | `TestJournalStoreBaseMethodSetIsExact` | `--- FAIL: TestJournalStoreBaseMethodSetIsExact`, `added [LoadLateGoalUsage]`, `removed []`, `FAIL … 0.710s`, exit 1 (reported at the shared `assertMethodSet`, `journal_store_test.go:126`) |
+| M1 (widening) | `journalStoreBase` gains `LoadLateGoalUsage(key state.RunKey) (state.LateGoalUsageLedger, error)`, a method `*state.Store` has and app never selects | `TestJournalStoreBaseMembersMatchRecordedList` | `--- FAIL: TestJournalStoreBaseMethodSetIsExact`, `added [LoadLateGoalUsage]`, `removed []`, `FAIL … 0.710s`, exit 1 (reported at the shared `assertMethodSet`, `journal_store_test.go:126`) |
 | M2 (nil guard) | `verifyDurableContainmentStopReceipt`'s `if daemon.store == nil` → `!= nil` | `…/cleanup_glue.go_verifyDurableContainmentStopReceipt` | `--- FAIL: …/cleanup_glue.go_verifyDurableContainmentStopReceipt` then `panic: runtime error: invalid memory address or nil pointer dereference [recovered, repanicked]`, `FAIL … 0.392s`, exit 1 |
 | M3 (D5 reverted) | `selectStoreWrite` binds `fromStore(daemon.store)` before the guard, as base did | `…/cleanup_glue.go_selectStoreWrite_refuses` | `--- FAIL: …/cleanup_glue.go_selectStoreWrite_refuses` plus the same panic, `FAIL … 0.306s`, exit 1 |
-| M4 (typed nil) | `withStore` assigns its `*state.Store` argument directly into the interface field | `…/app.go:524_injected_absent_store_stays_untyped_nil` | `journal_store_test.go:158: injected absent store = (*state.Store)(nil), want an untyped nil`, `FAIL … 0.638s`, exit 1 |
-| M5 (apply-stage redundancy proof) | `captureHelperDropStatus` guard drops `store == nil`, so the drop-status reader is consulted with a nil store | `…/linux_owner_witness_linux.go:2479_captureHelperDropStatus` (WSL) | `storeless drop-status capture = storeless probe must not consult the drop-status reader, want nil`, exit 1 — the pruned probe still reddens through its retained error tripwire |
-| M6 (STD-A01, cross-target) | `persistLinuxCloneTargetRemoval` guard drops `daemon.store == nil` | `…/cleanup.go:769_persistLinuxCloneTargetRemoval` (Windows) | `--- FAIL: …/cleanup.go:769_…`, `journal_store_test.go:178: error = persist exact B target-removal receipt: Linux clone cleanup persistence is supported only by the Linux v2 App, want "Linux clone target-removal proof is incomplete or differs from its cleanup intent"`, `FAIL … 0.376s`, exit 1 |
-| M7 (STD-A01) | `loadLinuxCloneRunJournal` guard drops `daemon.store == nil` | `…/linux_owner_v2_linux.go:1180_loadLinuxCloneRunJournal` (WSL) | `--- FAIL: …:1180_…` then `panic: runtime error: invalid memory address or nil pointer dereference [recovered, repanicked]`, `FAIL … 0.025s`, exit 1 |
-| M8 (STD-A01) | `linuxCloneAbortHasRetentionOwner` guard drops `daemon.store == nil` | `…/linux_owner_v2_linux.go:1549_linuxCloneAbortHasRetentionOwner` (WSL) | `--- FAIL: …:1549_…` then the same panic, `FAIL … 0.026s`, exit 1 |
-| M9 (STD-A01) | `recoverLinuxV2NativeWitnessRunKey` guard drops `store == nil` | `…/linux_owner_witness_linux.go:2599_recoverLinuxV2NativeWitnessRunKey` (WSL) | `--- FAIL: …:2599_…`, `journal_store_linux_test.go:100: error = <nil>, want "exact owner-witness recovery requires its live context, locked Store, and selected RunJournal"`, `FAIL … 0.026s`, exit 1 |
-| M10 (STD-A03) | `persistLinuxV2Mutation` guard drops `store == nil` | `…/linux_owner_v2_linux.go:1837_persistLinuxV2Mutation_refuses_a_missing_Store` (WSL) | `--- FAIL: …:1837_…` then a panic inside `persistLinuxV2Mutation` (nil store read), `FAIL … 0.024s`, exit 1 |
+| M4 (typed nil) | `withStore` assigns its `*state.Store` argument directly into the interface field | `…/withStore_injected_absent_store_stays_untyped_nil` | `journal_store_test.go:158: injected absent store = (*state.Store)(nil), want an untyped nil`, `FAIL … 0.638s`, exit 1 |
+| M5 (apply-stage redundancy proof) | `captureHelperDropStatus` guard drops `store == nil`, so the drop-status reader is consulted with a nil store | `…/captureHelperDropStatus` (WSL) | `storeless drop-status capture = storeless probe must not consult the drop-status reader, want nil`, exit 1 — the pruned probe still reddens through its retained error tripwire |
+| M6 (STD-A01, cross-target) | `persistLinuxCloneTargetRemoval` guard drops `daemon.store == nil` | `…/persistLinuxCloneTargetRemoval` (Windows) | `--- FAIL: …/cleanup.go:769_…`, `journal_store_test.go:178: error = persist exact B target-removal receipt: Linux clone cleanup persistence is supported only by the Linux v2 App, want "Linux clone target-removal proof is incomplete or differs from its cleanup intent"`, `FAIL … 0.376s`, exit 1 |
+| M7 (STD-A01) | `loadLinuxCloneRunJournal` guard drops `daemon.store == nil` | `…/loadLinuxCloneRunJournal` (WSL) | `--- FAIL: …:1180_…` then `panic: runtime error: invalid memory address or nil pointer dereference [recovered, repanicked]`, `FAIL … 0.025s`, exit 1 |
+| M8 (STD-A01) | `linuxCloneAbortHasRetentionOwner` guard drops `daemon.store == nil` | `…/linuxCloneAbortHasRetentionOwner` (WSL) | `--- FAIL: …:1549_…` then the same panic, `FAIL … 0.026s`, exit 1 |
+| M9 (STD-A01) | `recoverLinuxV2NativeWitnessRunKey` guard drops `store == nil` | `…/recoverLinuxV2NativeWitnessRunKey` (WSL) | `--- FAIL: …:2599_…`, `journal_store_linux_test.go:100: error = <nil>, want "exact owner-witness recovery requires its live context, locked Store, and selected RunJournal"`, `FAIL … 0.026s`, exit 1 |
+| M10 (STD-A03) | `persistLinuxV2Mutation` guard drops `store == nil` | `…/persistLinuxV2Mutation_refuses_a_missing_Store` (WSL) | `--- FAIL: …:1837_…` then a panic inside `persistLinuxV2Mutation` (nil store read), `FAIL … 0.024s`, exit 1 |
 
 Each mutant kills exactly one test and leaves the others green (M2/M3 fail at the subtest that owns
 their branch; M1 only the member-set pin), so every new test is load-bearing and no test is a
@@ -492,6 +523,14 @@ corrected probes and the added `:1837` probe: each deletion of a probe's store t
 that probe (M7/M8/M10 panic inside the store call the guard was refusing, M6 takes the platform
 stub's refusal path, M9 returns nil instead of the refusal), and M2/M3 are the re-runs after the
 STD-A02 renames.
+
+The opus-review-1 fix round renamed every probe subtest and both pins to symbol anchors (P3-1,
+P3-3) and removed the two test-file comments above the probe tests; the observed lines above were
+recorded before that rename and quote the pre-rename subtest spellings and
+`journal_store_test.go:`/`journal_store_linux_test.go:` positions (each renamed locator maps to its
+quoted spelling by dropping the `file:line ` prefix — M4's is now
+`…/withStore_injected_absent_store_stays_untyped_nil` — and the quoted positions in M4/M6/M9 are
+two lines higher on the current tree).
 
 ## 12. R2 coverage of touched files
 
@@ -517,7 +556,7 @@ under the existing tests, and `goal_delivery.go` re-measures 0.13 pp higher than
 (neither file is touched by the apply stage). `journal_store*.go` declares no statements (types and
 one interface assertion), and the `state` alias adds none, so neither can move a line-coverage
 number. The fix round's edits are test-file and document-only, so the per-file figures above still
-bind the fix-round tree.
+bind the fix-round tree; the opus-review-1 round's edits are likewise test-file and document-only.
 
 ## 13. R9 / `SOURCE_PATHS`
 
@@ -551,15 +590,20 @@ exit 0 (row 16 of §10; the fix-round re-run).
   in-scope correction (conductor amendment 2026-11-22, SPEC-A04).
 - linux/arm64 uses the base set (97 methods; the callers of the 24 are `linux && amd64`), so the
   composite interface exists only on linux/amd64.
-- Latent divergence left in place, by analysis rather than probe (none of these sites is a
-  `store == nil` branch, so they have no branch outcome to preserve): the 10 unguarded mirror
-  fallbacks (`cleanup_glue.go:433`, `goal_admission.go:323/345/601/609`, `goal_delivery.go:32/58`,
+- Latent divergence, corrected after opus review 1 (none of these sites is a `store == nil` branch,
+  so they have no branch outcome to preserve): the 10 unguarded mirror fallbacks
+  (`cleanup_glue.go:433`, `goal_admission.go:323/345/601/609`, `goal_delivery.go:32/58`,
   `native_run.go:729/1042`, `supervisory.go:232`; `recovery_glue.go:36` is guarded at :33) take a
-  store method value that a nil store then calls. `daemon/internal/state` has no
-  `if store == nil` guard (`rg -n "if store == nil" daemon/internal/state/*.go` = 0 rows), so at
-  base the nil receiver is dereferenced and panics; at HEAD the method value itself panics before
-  the call. Both fail with a runtime panic on a nil store; no store method, argument or order is
-  involved in either.
+  store method value that a nil store then calls. `daemon/internal/state` has no `if store == nil`
+  guard (`rg -n "if store == nil" daemon/internal/state/*.go` = 0 rows), and several of those
+  methods validate their arguments before touching the receiver (`ClearProcessDetails`'s
+  pid/identity check, the `validateKey`/`validateGoalSessionKey` paths), so with a nil store base
+  returns that validation error for invalid input (`goal session key is invalid` for
+  `abortGoalSessionLaunchBeforeNativeStart` with a zero key; `process details are invalid` for
+  `clearPersistedProcessDetails` with pid 0 — scratch probe, opus review 1, §8) and panics on valid
+  input, while HEAD takes the method value from the nil interface and panics on both. Reachable
+  from tests only: production sets the store in `initialize` (`app.go:523-531`) before any worker
+  starts, and every recovery and witness constructor builds from `state.New`.
 - Environment limit (not this slice's): the WSL `-race` app suite passes. The implement-stage
   `go test` form needed 2349.759s with `-timeout=55m` (so it exceeds the Go default of 10 min and the
   harness default); the apply-stage binary form measured the suite itself at 683 s wall (§10 row 17)
