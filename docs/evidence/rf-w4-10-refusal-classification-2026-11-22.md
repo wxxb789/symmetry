@@ -19,7 +19,7 @@ import-line diff and the LOC delta).
 | file | status | lines (base → head) | note |
 | --- | --- | ---: | --- |
 | `frontend/src/services/refusals.ts` | new | 0 → 77 | the five predicates, `failureMode` + its `FailureMode` type, the three guidance tables, one `refusalNotice` |
-| `frontend/src/services/refusals.test.ts` | new | 0 → 212 | 12 cases: five truth tables, `failureMode`'s 5-way table, the 21 joined-output pins, the default-table pin, the fallback pins |
+| `frontend/src/services/refusals.test.ts` | new | 0 → 215 | 12 cases: five truth tables, `failureMode`'s 5-way table, the 21 joined-output pins (each table case also pins its table's key set), the default-table pin, the fallback pins |
 | `frontend/src/services/api.ts` | edited | 1,003 → 989 | the `refusalNotice` fold deleted (`:991-1003` incl. its doc comment); `ownValue` `:987-989` and `errorMessage` `:971-977` stay, untouched |
 | `frontend/src/services/api.test.ts` | edited | 631 → 631 | import lines only (`:2` `failureMode`+`refusalNotice` → `./refusals`; `:3` drops `refusalNotice`) |
 | `frontend/src/features/chat/use-chat-scope-state.ts` | edited | 252 → 248 | local `definitiveRefusal` deleted, `isDefinitive` imported, call site `:168` |
@@ -34,8 +34,8 @@ import-line diff and the LOC delta).
 | `frontend/src/features/projects/work-surface.tsx` | edited | 360 → 361 | import line split only |
 | `frontend/src/features/work/assignment.tsx` | edited | 334 → 324 | local map deleted; 2 calls pass `assignmentRefusalGuidance`; `:235` → `isStaleRefusal` |
 | `frontend/src/features/work/control.tsx` | edited | 478 → 468 | local `definitiveRefusal` deleted, `isDefinitive` imported, 5 call sites (`:199`, `:216`, `:233`, `:251`, `:463`) |
-| `docs/plans/2026-11-22-rf-w4-10-refusal-classification-plan.md` | new | 316 | the plan |
-| `docs/evidence/rf-w4-10-refusal-classification-2026-11-22.md` | new | 332 | this record |
+| `docs/plans/2026-11-22-rf-w4-10-refusal-classification-plan.md` | new | 323 | the plan |
+| `docs/evidence/rf-w4-10-refusal-classification-2026-11-22.md` | new | 358 | this record |
 
 Not edited: `frontend/src/features/chat/chat.tsx` (W4-08 moved both predicates into the two hooks;
 the file holds no refusal classification at HEAD), `services/commands.ts` (the `MutationRefused`
@@ -281,16 +281,22 @@ Per-file line counts (`git show 7f34d40d:<file> | wc -l` vs `wc -l`): production
 `write-policy.ts` −38, `editors.tsx` −1, `resources.tsx` −17, `connections.tsx` ±0,
 `projects.tsx` +1, `work-surface.tsx` +1, `assignment.tsx` −10, `control.tsx` −10; plus the new
 `refusals.ts` +77. Tracked diff: +45/−146; tests: `planning.test.tsx` +1, `api.test.ts` ±0, new
-`refusals.test.ts` +212.
+`refusals.test.ts` +215.
 
 - **Production net: −25 LOC** (143 removed, 118 added: 41 edits + the 77-line module).
-- **Tests net: +213 LOC** (the new suite is the contract's E8 witness gap closure; D1 froze the
+- **Tests net: +216 LOC** (the new suite is the contract's E8 witness gap closure; D1 froze the
   oracles, so the pins had to land somewhere).
 - The plan row's `−60…−100` is **not met as a net figure**, and D2 makes that report-only. The
   binding W4-review decision removed the mechanism the estimate assumed ("one shared guidance map
   with per-surface extensions" → no base map is legal while shared codes carry different steps), so
   the three tables' 21 step lines survive as module data; the removed duplication is the predicate,
   wrapper and map *implementations*, not the step text.
+- **Apply stage (2026-11-22, GDD apply, findings `simplify-1`/`simplify-3`).** `refusals.test.ts`
+  gains the three tables' key-set assertions (12 cases unchanged); the mutant run —
+  `provider_owned` restored to `resourceRefusalGuidance` — reddens `refusals.test.ts:190`
+  (1 failed / 11 passed) and was reverted byte-identically (`refusals.ts` `949748bf…` before and
+  after). No production byte changed. §1's `refusals.test.ts` row, the test counts above and
+  §11.2's comment-deletion list carry the post-apply measurements.
 
 ## 11. D1 hygiene delta list (base → HEAD, the only observable-effect classes)
 
@@ -304,8 +310,10 @@ Per-file line counts (`git show 7f34d40d:<file> | wc -l` vs `wc -l`): production
 2. **Deletions of superseded comments** (comment policy item 4, in touched hunks only):
    `write-policy.ts`'s three-line `FailureMode` docstring and its in-body reference to
    `definitiveRefusal`, the two maps' "The server owns the reason; …" headers, the assignment map's
-   two-line header, and the fold's `api.ts` docstring (its content moved into the module's structure
-   and this record). `control.tsx`'s one-line predicate docstring went with the predicate.
+   two-line header, `goals/detail.tsx`'s three-line `outcomeUnknown` rationale (an interpretable
+   answer settles a command attempt; a transport failure or uninterpretable answer keeps the frozen
+   bytes), and the fold's `api.ts` docstring (its content moved into the module's structure and this
+   record). `control.tsx`'s one-line predicate docstring went with the predicate.
 3. Nothing else: no rendered sentence, joiner, `(code)` suffix, tone class, role, or appended
    per-dialog text changed — the pinned suites (§12) pass byte-identically, and the three surface
    tables were verified entry-by-entry against base by script.

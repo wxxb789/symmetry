@@ -186,15 +186,18 @@ const assignmentSteps: readonly StepRow[] = [
 ];
 
 describe("refusalNotice rendering", () => {
-  it("renders every resource refusal sentence as base did (mutants: a dropped step; a changed joiner or code suffix)", () => {
+  it("renders every resource refusal sentence as base did (mutants: a dropped step; a changed joiner or code suffix; an extra table entry)", () => {
+    expect(Object.keys(resourceRefusalGuidance).sort()).toEqual(resourceSteps.map(([code]) => code).sort());
     expect(steps(resourceSteps, resourceRefusalGuidance)).toEqual(sentences(resourceSteps));
   });
 
-  it("renders every planning refusal sentence as base did (mutants: a dropped step; a changed joiner or code suffix)", () => {
+  it("renders every planning refusal sentence as base did (mutants: a dropped step; a changed joiner or code suffix; an extra table entry)", () => {
+    expect(Object.keys(planningRefusalGuidance).sort()).toEqual(planningSteps.map(([code]) => code).sort());
     expect(steps(planningSteps, planningRefusalGuidance)).toEqual(sentences(planningSteps));
   });
 
-  it("renders every assignment refusal sentence as base did (mutants: a dropped step; a changed joiner or code suffix)", () => {
+  it("renders every assignment refusal sentence as base did (mutants: a dropped step; a changed joiner or code suffix; an extra table entry)", () => {
+    expect(Object.keys(assignmentRefusalGuidance).sort()).toEqual(assignmentSteps.map(([code]) => code).sort());
     expect(steps(assignmentSteps, assignmentRefusalGuidance)).toEqual(sentences(assignmentSteps));
   });
 
