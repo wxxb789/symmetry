@@ -1549,3 +1549,87 @@ func TestOmOReviewRegressionAbsoluteResolutionFailureHasOnlyAvailabilityLeaf(t *
 		requireOmOReviewUnavailableProjection(t, capabilities, err)
 	}
 }
+
+func TestStartTurnBeforeOpenRefusesWithTheOmONotOpenedText(t *testing.T) {
+	process := newTestProcess()
+	started, err := NewAdapter("recorded-omo").start(context.Background(), candidateRequest(t, process), &testSink{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := started.(*nativeSession)
+	t.Cleanup(func() {
+		process.finish(execution.Result{PID: 42, ExitCode: 0})
+		cleanup, cancel := context.WithTimeout(context.Background(), testHangGuard)
+		defer cancel()
+		_, _ = session.Wait(cleanup)
+		_ = session.Close(cleanup)
+	})
+	if err := session.StartTurn(context.Background(), harness.TurnRequest{Goal: "Change artifact", Context: json.RawMessage(`{}`)}); err == nil || err.Error() != "OmO native handle has not opened" {
+		t.Fatalf("StartTurn before Open = %v, want the handle barrier text", err)
+	}
+}
+
+func TestStartTurnBeforeOpenKeepsTheBaseValidationPrecedence(t *testing.T) {
+	process := newTestProcess()
+	started, err := NewAdapter("recorded-omo").start(context.Background(), candidateRequest(t, process), &testSink{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := started.(*nativeSession)
+	t.Cleanup(func() {
+		process.finish(execution.Result{PID: 42, ExitCode: 0})
+		cleanup, cancel := context.WithTimeout(context.Background(), testHangGuard)
+		defer cancel()
+		_, _ = session.Wait(cleanup)
+		_ = session.Close(cleanup)
+	})
+	if err := session.StartTurn(context.Background(), harness.TurnRequest{Context: json.RawMessage(`{}`)}); err == nil || err.Error() != "OmO turn requires a goal" {
+		t.Fatalf("StartTurn with an empty goal before Open = %v, want the goal validation text", err)
+	}
+	if err := session.StartTurn(context.Background(), harness.TurnRequest{Goal: "Change artifact", Context: json.RawMessage(`null`)}); err == nil || err.Error() != "OmO turn requires complete JSON object context" {
+		t.Fatalf("StartTurn with a non-object context before Open = %v, want the context validation text", err)
+	}
+}
+
+func TestOpenRefusesAConcurrentOpenWithTheFrozenText(t *testing.T) {
+	process, sink := newTestProcess(), &testSink{}
+	request := candidateRequest(t, process)
+	filename := filepath.Join(profileSessionDirectory(request.Invocation.Args), "native-1.jsonl")
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	process.onWrite = func(command Request) {
+		switch command.Type {
+		case CommandProtocol:
+			close(entered)
+			<-release
+			_ = process.reply(t, command, protocolData())
+		case CommandGetState:
+			_ = process.reply(t, command, stateData(filename))
+		}
+	}
+	started, err := NewAdapter("recorded-omo").start(context.Background(), request, sink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := started.(*nativeSession)
+	t.Cleanup(func() {
+		process.finish(execution.Result{PID: 42, ExitCode: 0})
+		cleanup, cancel := context.WithTimeout(context.Background(), testHangGuard)
+		defer cancel()
+		_, _ = session.Wait(cleanup)
+		_ = session.Close(cleanup)
+	})
+	opened := make(chan error, 1)
+	go func() {
+		_, err := session.Open(context.Background())
+		opened <- err
+	}()
+	<-entered
+	if _, err := session.Open(context.Background()); err == nil || err.Error() != "OmO session is already opening" {
+		t.Fatalf("concurrent Open() error = %v, want the frozen already-opening text", err)
+	}
+	close(release)
+	if err := <-opened; err != nil {
+		t.Fatalf("first Open() error = %v", err)
+	}
+}

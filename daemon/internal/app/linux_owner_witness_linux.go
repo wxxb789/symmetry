@@ -3168,14 +3168,22 @@ func (witness *linuxV2NativeWitnessRun) launchNative(
 		}
 		return eventContext.Err()
 	})
+	persistProcess := func(pid int, identity string) error {
+		return daemon.persistProcessMarker(key, pid, identity, time.Now().UTC())
+	}
+	persistAuthority := daemon.persistProcessAuthorityCallback(key)
+	persistStopReceipt := daemon.persistContainmentStopReceiptCallback(key)
+	grantInvocation := invocation
+	grantInvocation.PersistProcess = persistProcess
+	grantInvocation.PersistProcessAuthority = persistAuthority
+	grantInvocation.PersistContainmentStopReceipt = persistStopReceipt
 	startRequest := harness.StartRequest{
 		Workspace: prepared.Path, Goal: witness.request.Claim.Work.Goal,
 		ProviderAccess: providerAccess, ProviderBridge: providerBridge, Invocation: invocation,
-		PersistProcess: func(pid int, identity string) error {
-			return daemon.persistProcessMarker(key, pid, identity, time.Now().UTC())
-		},
-		PersistProcessAuthority:       daemon.persistProcessAuthorityCallback(key),
-		PersistContainmentStopReceipt: daemon.persistContainmentStopReceiptCallback(key),
+		Grant:                         harness.NewLaunchGrant(grantInvocation),
+		PersistProcess:                persistProcess,
+		PersistProcessAuthority:       persistAuthority,
+		PersistContainmentStopReceipt: persistStopReceipt,
 	}
 	if kind == harness.KindPi {
 		startRequest.Context = witness.nativeContext()

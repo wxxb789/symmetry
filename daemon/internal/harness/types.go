@@ -323,6 +323,7 @@ type StartRequest struct {
 	Resume         *ResumeHandle
 	ProviderAccess *protocol.ProviderAccess
 	ProviderBridge *ProviderBridgeLaunch
+	Grant          LaunchGrant
 	Invocation     execution.Invocation
 	// StartProcess is an optional owner-supplied launch seam. A witness or
 	// test can wrap the exact execution.Process before the adapter observes
