@@ -139,8 +139,9 @@ export const isSessionReadKey = (key: readonly unknown[]): boolean;
 
 Callers (final list): the eleven builders — `application.ts` (the ten option builders) and the
 thirty post-mutation sites in §2.2/§2.3, plus `realtime.ts`'s map; `invalidationKeys` —
-`realtime.ts:231` `flush()` only; `isSessionReadKey` — `realtime.ts:218` `invalidateReads`'s
-predicate only; `InvalidationPayload` — `realtime.ts` (`pending`, `receive`, `flush`).
+`realtime.ts:221` `flush()` only (base `:231`); `isSessionReadKey` — `realtime.ts:208`
+`invalidateReads`'s predicate only (base `:218`); `InvalidationPayload` — `realtime.ts`
+(`pending`, `receive`, `flush`).
 `invalidationKeys` + `isSessionReadKey` are the two exported invalidation functions: within the
 contract's "at most 4" budget (D8).
 
@@ -265,7 +266,7 @@ need a stated equivalence rather than a mechanical one:
 | D5 | `InvalidationPayload` moves into the module (exported) with the map | the map's parameter contract belongs with the map; `realtime.ts` imports the type. Alternative: keep it in realtime and type-import back — leaves one signature across two modules |
 | D6 | `isSessionReadKey` joins the invalidation exports | the `"session"` root literal at `realtime.ts:218` must leave non-test source under clause 3; the predicate keeps the exact comparison |
 | D7 | delete `realtime.test.ts`'s map-restatement case per clause 4 | the case's 11 assertions only restate `invalidationKeys`; the table test supersedes it with the recorded red mutants (§10); every other case in the file, including those exercising `flush()` through `keys()`, stays unedited |
-| D8 | no named post-mutation set exports; the sets stay composed of builders at their existing call sites | the contract caps invalidation exports at 4 and the 12 write families carry distinct multi-key sequences interleaved with awaits/branches (e.g. the goal settle between the first and second key); restructuring them into set iterations would alter the lesson-32 sequences. The evidence record carries the per-success-path table instead |
+| D8 | no named post-mutation set exports; the sets stay composed of builders at their existing call sites | the contract caps invalidation exports at 4 and the 12 write families carry distinct multi-key sequences interleaved with awaits/branches (e.g. the goal settle between the first and second key); restructuring them into set iterations would alter the lesson-32 sequences. The evidence record carries the per-success-path table instead. Conductor amendment 2026-11-22 (review REV-A02): design clause 1(c) is amended to this builders-only shape — a success path composes its reads from the module's exported builders at the call site, the module exports no named set where the sequence interleaves awaits, notices, conditional spreads or `isFetching` guards, and no follow-up slice is scheduled |
 | D9 | no `docs/design/*.md` amendment | no design document names the key roots or the invalidation map (`grep -rn "queryKey\|invalidationKeys" docs/design/` finds nothing); this is code hygiene inside frozen presentation behaviour |
 | D10 | `docs/TODO.md` unchanged | no open entry covers the key vocabulary (grep for `read-cache`, `query key`, `A5`, `chat-older` finds none); the `chat-older` assessment lands in §5.5 and the evidence record, not as new debt |
 

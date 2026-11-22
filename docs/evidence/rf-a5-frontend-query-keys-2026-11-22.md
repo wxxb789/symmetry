@@ -91,13 +91,18 @@ names the key vocabulary), `contracts/**`, `browser/**`, `pnpm-lock.yaml`, `pnpm
 | `connectionsReadKey()` | `["connections"]` | `application.ts` (`connectionsOptions`), `connections.tsx:122,210,423,441`, the map |
 | `chatReadKey(scope)` / `chatReadKey()` | `["chat", scope]` / `["chat"]` | `application.ts` (`chatConversationOptions`), `use-chat-scope-state.ts:166`, the map |
 | `chatOlderReadKey(scope, before)` | `["chat-older", { ...scope, before }]` | `application.ts` (`chatOlderPageOptions`) |
-| `invalidationKeys(payload)` | the change→reads map (8 kinds + `default → []`) | `realtime.ts` `flush():229-232` |
+| `invalidationKeys(payload)` | the change→reads map (8 kinds + `default → []`) | `realtime.ts` `flush():214-230`, call `:221` (base `:231`) |
 | `isSessionReadKey(key)` | `key[0] === "session"` | `realtime.ts` `invalidateReads():208` |
 | `InvalidationPayload` (type) | the pushed change's members | `realtime.ts` (`pending`, `receive`, `flush`) |
 
 Interface budget: 11 builders + 2 invalidation functions + 1 moved type — within the contract's
 "11 + at most 4" (D8 records why the post-mutation sets stay composed of builders at their
-existing call sites instead of extra exports). `ChatScopeKey` stays in `application.ts`;
+existing call sites instead of extra exports). The conductor amendment of 2026-11-22 (review
+REV-A02) amends design clause 1(c) to this builders-only shape: a success path composes its
+"reads affected by write X" from the module's exported builders at the call site, and the module
+exports no named set where the sequence interleaves awaits, notices, conditional spreads or
+`isFetching` guards. The delivered shape satisfies the amended clause; no follow-up slice.
+`ChatScopeKey` stays in `application.ts`;
 `read-cache.ts` takes it with `import type` (erased by `verbatimModuleSyntax`; the value edge is
 application → read-cache only, so no runtime cycle — D4). `realtime.ts` imports the map instead
 of defining it; the map has one owner.
