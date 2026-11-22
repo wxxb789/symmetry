@@ -13,16 +13,16 @@ import { MutationRefused, newMutationId } from "../../services/commands";
 export function AttentionPage() {
   const { application } = useRouteContext({ from: "__root__" });
   const search = useSearch({ from: "/attention" });
-  const selectedProjectId = useSelectedProject();
+  const selectedProjectId = useSelectedProject() ?? null;
   // The chain the reader expanded: the served cursor the feed's first page ended
   // at when the first older page was loaded, and the cursors of the pages loaded
   // from it. The cursor IS the boundary (it encodes the last Goal's position and
   // is not re-minted per read), so the served value is the identity to compare.
   const [expanded, setExpanded] = useState<{ readonly start: string | null; readonly cursors: readonly string[] }>({ start: null, cursors: [] });
-  const workspace = useQuery(workspaceOptions(application.api, selectedProjectId ?? null));
+  const workspace = useQuery(workspaceOptions(application.api, selectedProjectId));
   // The first page is its own read; the feed's chain starts at the cursor it
   // serves, so only its own read can name that start.
-  const first = useQuery(attentionOptions(application.api, selectedProjectId ?? null, null));
+  const first = useQuery(attentionOptions(application.api, selectedProjectId, null));
   const servedStart = first.data?.goal_attention.next_cursor ?? null;
   // The reader's pages belong to the chain they were fetched for: a re-read that
   // ends somewhere else does not serve them, because the entries between its
@@ -31,7 +31,7 @@ export function AttentionPage() {
   // as the reader loads more and hooks must not be called in a loop over it.
   const cursors = expanded.start !== null && expanded.start === servedStart ? expanded.cursors : [];
   const older = useQueries({
-    queries: cursors.map((cursor) => attentionOptions(application.api, selectedProjectId ?? null, cursor)),
+    queries: cursors.map((cursor) => attentionOptions(application.api, selectedProjectId, cursor)),
   });
   const queries = [first, ...older];
   const goalEntries = queries.flatMap((query) => query.data?.goal_attention.entries ?? []);

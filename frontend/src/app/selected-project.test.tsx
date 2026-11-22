@@ -9,13 +9,6 @@ import { createApplication, type Application } from "./application";
 import { portal } from "./portal-double";
 import { createAppRouter } from "./router";
 
-/**
- * `useSelectedProject`'s resolution, measured through the shell that provides it:
- * the navigation links and the project picker read the same context value every
- * page scopes its reads by, and the request log proves the hook adds no read.
- * Each case names the mutant it reddens.
- */
-
 const firstProjectId = "11111111-1111-4111-8111-111111111111";
 const secondProjectId = "22222222-2222-4222-8222-222222222222";
 const subjectId = "77777777-7777-4777-8777-777777777777";

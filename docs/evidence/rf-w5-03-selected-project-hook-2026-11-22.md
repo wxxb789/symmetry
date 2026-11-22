@@ -18,7 +18,7 @@ flips and the gate rows).
 | file | status | lines (base → head) | note |
 | --- | --- | ---: | --- |
 | `frontend/src/app/selected-project.tsx` | new | 0 → 30 | context + `SelectedProjectProvider` + `useSelectedProject()`; the chain expression moved verbatim from `shell.tsx:68-81` |
-| `frontend/src/app/selected-project.test.tsx` | new | 0 → 131 | 6 cases, each naming its mutant |
+| `frontend/src/app/selected-project.test.tsx` | new | 0 → 124 | 6 cases, each naming its mutant |
 | `frontend/src/app/shell.tsx` | edited | 281 → 267 | `useProjectScope` deleted; the signed-in tree wrapped in the provider; 4 consumers read the hook |
 | `frontend/src/features/attention/attention.tsx` | edited | 202 → 203 | `search.projectId` scope reads → hook |
 | `frontend/src/features/runtimes/runtimes.tsx` | edited | 99 → 98 | `getRouteApi`/`useSearch` scope → hook (`scoped` stays `!== undefined`) |
@@ -37,7 +37,7 @@ one hook call. D2 makes this report-only; recorded here and §11.
 Not edited: `frontend/src/app/router.test.tsx`, `app/test-harness.tsx`, `app/portal-double.ts`,
 `app/application.ts`, `app/read-cache.ts`, `services/api.ts`, `features/chat/use-chat-scope-state.ts`
 (not owned), `features/connections/resources.tsx`, `presentation.ts`/`scopes.ts`,
-`test-setup.ts`, `vitest.config.ts`, `eslint.config.js`, `presentation`/`scopes`, `browser/**`,
+`test-setup.ts`, `vitest.config.ts`, `eslint.config.js`, `browser/**`,
 `contracts/**`, `docs/TODO.md` (no open entry covers this slice: grep for `useSelectedProject`,
 `scope hook`, `project picker`, `W5-03` finds none) and every oracle suite.
 
@@ -54,17 +54,17 @@ the serialization and is already merged here.
 | surface | base chain (site) | HEAD call | order preserved |
 | --- | --- | --- | --- |
 | shell directory / nav / picker / palette | `useProjectScope()` (`shell.tsx:68-81`): `useMatch("/projects/$projectId").params.projectId ?? servedWork.data?.work_item.project_id ?? workScope?.claimedProjectId ?? searchProjectId(attention) ?? chatProjectId ?? connectionsProjectId ?? runtimesProjectId` | provider value (the same expression moved to `selected-project.tsx:10-20`) | yes, byte-identical |
-| picker highlight | `projectId ?? (isAttention \|\| isConnections ? directory.data?.selected_project_id ?? "" : "")` (`shell.tsx:108`) | unchanged, fed by the hook | yes |
-| attention reads | `search.projectId ?? null` → `workspaceOptions`, `attentionOptions(…, null)`, older cursors (`attention.tsx:15,21,24,33`) | `selectedProjectId ?? null` | yes |
-| attention goal button / name | `projectId ?? first?.data?.selected_project_id` (`:38,:55`) | `selectedProjectId ?? first?.data?.selected_project_id` | yes |
+| picker highlight | `projectId ?? (isAttention \|\| isConnections ? directory.data?.selected_project_id ?? "" : "")` (`shell.tsx:109`) | unchanged, fed by the hook | yes |
+| attention reads | `search.projectId ?? null` → `workspaceOptions`, `attentionOptions(…, null)`, older cursors (`attention.tsx:15,21,24,33`) | `selectedProjectId` (normalized once at the declaration) | yes |
+| attention goal button / name | `projectId ?? first?.data?.selected_project_id` (`:38,:57`) | `selectedProjectId ?? first?.data?.selected_project_id` | yes |
 | runtimes read + empty state | `route.useSearch().projectId` → `?? null`, `scoped: projectId !== undefined` (`:79,:84`) | `selectedProjectId ?? null`, `scoped: selectedProjectId !== undefined` | yes (search-only; no served fallback) |
 | connections read | `search.projectId ?? null` (`:302`) | `scopeProjectId ?? null` | yes |
 | connections resolved scope | `search.projectId ?? workspace.data?.selected_project_id ?? null` (`:303`) | `scopeProjectId ?? workspace.data?.selected_project_id ?? null` | yes (served fallback kept) |
 | work detail scope | `itemProjectId ?? queryProjectId` (`detail.tsx:75`) | `selectedProjectId` (served projection ?? URL claim) | yes |
-| work detail `foreignScope` + canonical redirect | `queryProjectId !== undefined && itemProjectId !== undefined && queryProjectId !== itemProjectId` → `navigate({…, projectId: itemProjectId, replace: true})` (`:74,:108-112`) | unchanged | yes |
+| work detail `foreignScope` + canonical redirect | `queryProjectId !== undefined && itemProjectId !== undefined && queryProjectId !== itemProjectId` → `navigate({…, projectId: itemProjectId, replace: true})` (`:74,:109-113`) | unchanged | yes |
 | work detail editor fetch / cached snapshot | `item.project_id ?? scopedProjectId`; `workspaceOptions(api, scopedProjectId ?? "")` (`:81,:135`) | `item.project_id ?? selectedProjectId`; same read | yes |
-| work detail close | `itemProjectId ?? queryProjectId` (`:143`) | `selectedProjectId` | yes |
-| work detail body args | `detailBody(queryProjectId ?? itemProjectId ?? null, …)` / `detailBody(queryProjectId ?? null)` (`:164,:170`) | unchanged (the body's own `item?.project_id ?? scopedProjectId` hop is unchanged) | yes |
+| work detail close | `itemProjectId ?? queryProjectId` (`:157`) | `selectedProjectId` | yes |
+| work detail body args | `detailBody(queryProjectId ?? itemProjectId ?? null, …)` / `detailBody(queryProjectId ?? null)` (`:187,:193`) | unchanged (the body's own `item?.project_id ?? scopedProjectId` hop is unchanged) | yes |
 | chat directory read | `chatScopeParams(search).projectId` (`:117`) | `selectedProjectId ?? null` | yes (the URL-scope identity stays with `chatScopeParams`) |
 | projects read | `useParams({ from: "/projects/$projectId" })` (`:84`) | `selectedProjectId ?? null` | yes (the param is the chain's first hop) |
 
@@ -78,11 +78,11 @@ function name substituted) against `selected-project.tsx:8-21` is **empty**.
 | `shell.tsx:68-81` `useProjectScope` | `selected-project.tsx` provider value |
 | `shell.tsx:85,92,106,127` `useProjectScope()` | `useSelectedProject()` |
 | `shell.tsx:3` `useMatch` import, `:9` `workDetailOptions` import | deleted (unused) |
-| `attention.tsx:15` `const projectId = search.projectId ?? null` | `const selectedProjectId = useSelectedProject()` |
-| `runtimes.tsx:3` `getRouteApi` import, `:69` route const, `:79` `route.useSearch()` | `const selectedProjectId = useSelectedProject()` |
+| `attention.tsx:15` `const projectId = search.projectId ?? null` | `const selectedProjectId = useSelectedProject() ?? null` |
+| `runtimes.tsx:8` `getRouteApi` import, `:69` route const, `:79` `route.useSearch()` | `const selectedProjectId = useSelectedProject()` |
 | `connections.tsx:302` `search.projectId ?? null` | `scopeProjectId ?? null` |
 | `work/detail.tsx:75` `scopedProjectId = itemProjectId ?? queryProjectId` | `scopedProjectId` = hook value |
-| `work/detail.tsx:143` `itemProjectId ?? queryProjectId` (close) | `selectedProjectId` |
+| `work/detail.tsx:157` `itemProjectId ?? queryProjectId` (close) | `selectedProjectId` |
 | `chat.tsx:117` `workspaceOptions(api, params.projectId)` | `workspaceOptions(api, selectedProjectId ?? null)` |
 | `projects.tsx:84` `workspaceOptions(api, projectId)` | `workspaceOptions(api, selectedProjectId ?? null)` |
 
@@ -102,10 +102,10 @@ live in `SelectedProjectProvider`. Row-by-row:
 | four search hops (attention/chat/connections/runtimes) | same selectors | yes |
 | picker `""` empty-string branch (`isAttention \|\| isConnections` guard) | unchanged in `shell.tsx:94-95` | yes |
 | `useProjectDirectory` recovery read `enabled: !!projectId && query.isError` | unchanged, fed by the hook | yes |
-| attention `expanded`/older-page cursors keyed by `projectId` | same `selectedProjectId ?? null` | yes |
+| attention `expanded`/older-page cursors keyed by `projectId` | same `selectedProjectId` (normalized once at the declaration) | yes |
 | runtimes `scoped` gate (`projectId !== undefined`) | `selectedProjectId !== undefined` | yes |
 | connections `projectRef` live-scope latch (`:368-369`) | unchanged, fed by the resolved value | yes |
-| work detail `foreignScope` predicate and the canonical redirect (`:108-112`) | unchanged | yes |
+| work detail `foreignScope` predicate and the canonical redirect (`:109-113`) | unchanged | yes |
 | work detail body-scope args and `backgroundProjectId = foreignScope ? undefined : itemProjectId` | unchanged | yes |
 | chat `params.complete`/`identity`/`key` from `chatScopeParams(search)` | unchanged | yes |
 | projects `useParams` navigation identity (`Link`/`navigate` params, `project.id === projectId`) | unchanged | yes |
@@ -115,7 +115,7 @@ Two equivalences that a test cannot isolate are stated instead of asserted:
 1. **Chain order is unobservable by construction.** The router matches one route at a time, so at
    most one search hop and one path hop are defined; hops 1 and 2-3 can never coexist. The only
    pair that can both resolve is the work route's served projection and URL claim, and the foreign
-   scope window (`detail.tsx:108-112`) rewrites the claim to the served project, so only the
+   scope window (`detail.tsx:109-113`) rewrites the claim to the served project, so only the
    transient window would separate them. That is why the contract's mutant (a) is "drop the served
    hop" (testable, §8 M-a) and not "reorder hops" (unobservable); the moved expression keeps the
    order byte-identically (§3).
@@ -128,7 +128,7 @@ Two equivalences that a test cannot isolate are stated instead of asserted:
 
 Method: a throwaway vitest config (`frontend/vitest.capture.config.ts`, 13 L) extending the project
 config with one extra setup file (`frontend/capture-requests.ts`, 60 L) that overrides
-`portal.requests.push` (the double's own live log array, `portal-double.ts:434`) and, per case,
+`portal.requests.push` (the double's own live log array, `portal-double.ts:432`) and, per case,
 records the `method + path` sequence and the settled `document.body.innerHTML`; both files were
 deleted before the final tree (contents preserved with the run artifacts). Commands (frontend cwd,
 pinned pnpm 12.17.0, `--config.verify-deps-before-run=false`):
@@ -138,17 +138,22 @@ vitest run --config vitest.capture.config.ts src/app/router.test.tsx      # capt
 ```
 
 Base side: `git archive 42afb56c` extracted to a scratch checkout, installed from the same store,
-same scaffold, same command. Captures: base settled ×2, HEAD settled ×1, plus base/HEAD with the
-pre-settle scaffold and the mutant-(d) run (§8).
+same scaffold, same command. Captures: base settled ×2, HEAD settled ×1, post-apply settled ×2
+(apply stage, §7), plus base/HEAD with the pre-settle scaffold and the mutant-(d) run (§8).
 
 | comparison | cases with a differing **key set** | cases with a differing **sequence** | cases with differing **DOM** |
 | --- | ---: | ---: | ---: |
 | base run 1 vs base run 2 (settled) | 0 | 2 | 0 |
 | base run 1 vs HEAD (settled) | 0 | 11 | 0 |
+| pre-apply HEAD vs post-apply (settled, runs 1–2) | 0 | 0 | 0 |
 | base/HEAD (unsettled, 5 runs pooled) | 0 | — | — |
 
-Per-case request **key sets are identical in every one of the 42 cases across all five captures**
-(4 runs, both trees) — the hook issues no query a page did not issue at base. What varies is not
+Per-case request **key sets are identical in every one of the 42 cases across all captures**
+(4 implementation-stage runs on both trees, plus the 2 apply-stage post-apply runs) — the hook
+issues no query a page did not issue at base, and the accepted simplifications added none. Against
+the pre-apply HEAD captures the post-apply runs also match in **sequence and settled DOM (0/42
+each)**; against the base captures they show only the same scheduling noise as base-vs-base (key
+sets 0/42, DOM 0/42, one sequence diff in the repeated-key case below). What varies is not
 the key set: (a) concurrent fetches log in a different order (2/42 between two *base* runs; 11/42
 base-vs-HEAD), and (b) one case, `readable work views > counts an unrecognised structured outcome
 value as reported output, not as an absence`, sometimes repeats an existing key (`GET
@@ -166,10 +171,11 @@ base vs HEAD.
 
 ### 6.1 D1 rendered-surface comparison
 
-The settled per-case DOM dumps are **identical in all 42 cases**, base-vs-base and base-vs-HEAD,
+The settled per-case DOM dumps are **identical in all 42 cases**, base-vs-base, base-vs-HEAD and
+pre-apply-HEAD vs post-apply,
 after normalising exactly three run-dependent rendered values: the shell's wall-clock freshness
 (`data-refresh-issued-at`, `data-refresh-settled-at`, `refreshed <time>`, `shell.tsx:49-65`) and the
-`it.each` CI fixtures' `new Date().toISOString()` timestamps (`router.test.tsx:695`). No other
+`it.each` CI fixtures' `new Date().toISOString()` timestamps (`router.test.tsx:693`). No other
 difference exists: no text, ARIA/label, selector, data-attribute or navigation change. Without the
 settle wait the same comparison flagged one transient state difference (a still-pending picker read
 in the non-deterministic ordering case above); with pending reads settled the states are equal, and
@@ -197,6 +203,20 @@ Every HEAD row above was re-run on the settled final tree; the raw outputs (and 
 artifacts of §6) are kept outside the repo in the throwaway dir `Q:/tmp/w5-03-capture/` as
 `verify-typecheck.txt`, `verify-lint.txt`, `verify-router.txt`, `verify-scope.txt`,
 `verify-pages.txt`, `verify-full.txt`, `verify-hook-post-revert.txt` and the settled capture JSONs.
+
+Apply-stage re-run (2026-11-22; accepted simplify findings S1, S2, S4–S7 applied on the HEAD tree —
+S3 rejected for the owned-set/coverage reasons in the apply report, S8 no action): the same gates
+re-ran on the post-apply tree — typecheck exit 0; lint exit 0, 218 warnings; `router.test.tsx`
+42/42; the scope suites (`selected-project`, chat, goal-attention) 3 files / 83 passed; the page
+suites (runtimes, connections, work/detail) 3 files / 68 passed; the full suite 25 files / 611
+passed; `git diff --check` clean; and the settled capture of §6 re-ran twice post-apply (scaffold
+restored from the preserved copies, deleted again), matching the pre-apply HEAD captures in key
+set, sequence and settled DOM in all 42 cases. The apply-stage edit set is exactly four files: the
+new hook test file (its file-header comment deleted, 131 → 124 lines), `attention.tsx` (the scope
+normalized once at the declaration, value-identical), this record (the accepted record
+corrections) and the plan. Raw outputs: `apply-typecheck.txt`, `apply-lint.txt`, `apply-router.txt`,
+`apply-scope.txt`, `apply-pages.txt`, `apply-full.txt`, `apply-capture-1.txt`, `apply-capture-2.txt`,
+`postapply-settled-1.json`, `postapply-settled-2.json` in the same throwaway dir.
 
 ## 8. Mutation flips (contract judging mutants; each applied alone, run, reverted, hash-verified)
 
@@ -232,7 +252,7 @@ files: no match) and no backslash-u sequence. `git diff --check` clean.
 
 ## 11. LOC delta (D2 — reported, never a gate)
 
-Tracked production: +38/−46 (net −8); new module +30; new test +131; plan +278; this record. The
+Tracked production: +38/−46 (net −8); new module +30; new test +124; plan +278; this record. The
 plan's −60..−100 estimate assumed page-side deletions larger than the chain move allows; the
 delivered shape deletes one chain definition, one 2-line re-derivation per page and two imports,
 and adds one hook call per consumer. Report-only per D2.

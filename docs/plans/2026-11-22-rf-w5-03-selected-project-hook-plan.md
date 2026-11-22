@@ -49,8 +49,8 @@ coordinates of every site this slice edits (all verified by `nl -ba` at the base
 | `app/shell.tsx:68-81` | contract `:67-80` | `useProjectScope`: six `useMatch` selectors + the work-detail read; fallback return at `:80` |
 | `app/shell.tsx:83-89` | `:84-88` | `useProjectDirectory` (hook consumer + workspace reads) |
 | `app/shell.tsx:91-99` | `:91-` | `NavigationLinks` (`:92` hook consumer) |
-| `app/shell.tsx:102-124` | `:105` | `ProjectPicker`: `:103` directory, `:106` hook, `:108` highlight expression |
-| `app/shell.tsx:126-176` | `:126` | `CommandPalette`: `:126` directory, `:127` hook |
+| `app/shell.tsx:102-124` | `:105` | `ProjectPicker`: `:103` directory, `:106` hook, `:109` highlight expression |
+| `app/shell.tsx:125-176` | `:126` | `CommandPalette`: `:126` directory, `:127` hook |
 | `features/attention/attention.tsx:14-15` | `:10-40` block | `search.projectId ?? null` for the workspace/attention reads (`:21`, `:24`, `:33`), the NewGoalButton scope and `selectedProjectName` (`:38`) |
 | `features/runtimes/runtimes.tsx:69,79-87` | `:68-80` | `getRouteApi("/runtimes")` + `route.useSearch()` scope and `scoped: projectId !== undefined` |
 | `features/connections/connections.tsx:302-303` | `:298-330` | workspace read scope + `selectedProjectId` served fallback |
@@ -70,11 +70,11 @@ A5/`#146` — the table above is the dispatch-time measurement; (d) `#164` leads
 | artifact | measurement |
 | --- | --- |
 | `app/shell.tsx` | 281 L; `useProjectScope` `:68-81` (6 selectors `:70-79`, chain return `:80`), 4 consumers (`:85`, `:92`, `:106`, `:127`) |
-| `workDetailOptions` subscriptions at base | 4: shell `useProjectScope` `shell.tsx:75`; `work/detail.tsx:69` (page), `:238` (`WorkDetailBody`) — same key `workItemReadKey(workItemId)`, one request |
+| `workDetailOptions` subscriptions at base | 3: shell `useProjectScope` `shell.tsx:75`; `work/detail.tsx:69` (page), `:238` (`WorkDetailBody`) — same key `workItemReadKey(workItemId)`, one request |
 | workspace read sites in the owned set | shell `:86` scope, `:87` recovery; attention `:21`; runtimes `:80`; connections `:302`; chat `:117`; projects `:84`; work detail `:81` (disabled cache probe), `:207` (background), `:137` (editor fetch) |
-| page chains | attention `search.projectId ?? null` (`:15`) + served fallback (`:38`, NewGoalButton); runtimes search-only (`:79`, `:84`); connections `search.projectId ?? workspace.data?.selected_project_id ?? null` (`:303`); work detail `itemProjectId ?? queryProjectId` (`:75`) + `foreignScope` (`:74`) + body args (`:118`, `:130`); chat `chatScopeParams(search).projectId` (`:114`, `:117`); projects route param (`:78`, `:84`) |
+| page chains | attention `search.projectId ?? null` (`:15`) + served fallback (`:38`, NewGoalButton); runtimes search-only (`:79`, `:84`); connections `search.projectId ?? workspace.data?.selected_project_id ?? null` (`:303`); work detail `itemProjectId ?? queryProjectId` (`:75`) + `foreignScope` (`:74`) + body args (`:187`, `:193`); chat `chatScopeParams(search).projectId` (`:114`, `:117`); projects route param (`:78`, `:84`) |
 | `router.test.tsx` | 1,215 L, 41 declared cases (40 `it(` + one `it.each` over 2 paths = 42 executed); no request-log assertion today (the log is a capability of the double) |
-| `portal-double.ts` request log | `requests: PortalRequest[]` (`:90`), live array reference (`:434`), cleared per case by `resetPortalDouble` (`:444-449`) |
+| `portal-double.ts` request log | `requests: PortalRequest[]` (`:89`), live array reference (`:432`), cleared per case by `resetPortalDouble` (`:450-455`) |
 | page suites' mount path | every suite that renders an owned page goes through `renderRoute` → `createAppRouter` → `WorkspaceRoot` (chat, connections, runtimes, goal-attention, planning, assignment, control, work/detail; `chat-hooks.test.tsx` renders hooks only) |
 
 ## 4. Deliverable shape
@@ -123,7 +123,7 @@ every per-surface decision this slice must preserve (see §6, D3).
 | --- | --- | --- | --- |
 | shell directory / navigation / picker / palette | `useProjectScope()` (6 selectors + served work read) | provider value (same expression, moved verbatim) | yes |
 | picker highlight | `projectId ?? (isAttention \|\| isConnections ? directory.data?.selected_project_id ?? "" : "")` | unchanged, fed by the hook | yes |
-| attention reads/`NewGoalButton`/`selectedProjectName` | `search.projectId ?? null`, `projectId ?? first?.data?.selected_project_id` | `selectedProjectId ?? null`, `selectedProjectId ?? first?.data?.selected_project_id` | yes |
+| attention reads/`NewGoalButton`/`selectedProjectName` | `search.projectId ?? null`, `projectId ?? first?.data?.selected_project_id` | `selectedProjectId` (normalized once at the declaration), `selectedProjectId ?? first?.data?.selected_project_id` | yes |
 | runtimes read + `scoped` | `route.useSearch().projectId` → `?? null`, `!== undefined` | `selectedProjectId ?? null`, `!== undefined` | yes (search-only, no served fallback) |
 | connections read/key/`projectRef`/detail | `search.projectId ?? null`; `search.projectId ?? workspace.data?.selected_project_id ?? null` | `selectedProjectId ?? null`; `selectedProjectId ?? workspace.data?.selected_project_id ?? null` | yes (served fallback kept) |
 | work detail scope | `itemProjectId ?? queryProjectId` (`:75`) | `selectedProjectId` (served projection ?? URL claim) | yes |
@@ -142,15 +142,15 @@ chain is the route-local slice of the shell chain). §7 lists what that means ob
 | --- | --- |
 | `shell.tsx:68-81` `useProjectScope` (chain) | `selected-project.tsx` provider value |
 | `shell.tsx:85`, `:92`, `:106`, `:127` `useProjectScope()` | `useSelectedProject()` |
-| `attention.tsx:15` `const projectId = search.projectId ?? null` | `const selectedProjectId = useSelectedProject()` |
+| `attention.tsx:15` `const projectId = search.projectId ?? null` | `const selectedProjectId = useSelectedProject() ?? null` |
 | `runtimes.tsx:69,79` `getRouteApi("/runtimes")` + `route.useSearch()` | `const selectedProjectId = useSelectedProject()` |
 | `connections.tsx:302-303` `search.projectId` scope + fallback | hook value + same fallback |
 | `work/detail.tsx:75` `scopedProjectId = itemProjectId ?? queryProjectId` | `scopedProjectId = useSelectedProject()` |
-| `work/detail.tsx:140` `close()`'s `itemProjectId ?? queryProjectId` | `selectedProjectId` |
+| `work/detail.tsx:157` `close()`'s `itemProjectId ?? queryProjectId` | `selectedProjectId` |
 | `chat.tsx:117` `workspaceOptions(api, params.projectId)` | `workspaceOptions(api, selectedProjectId ?? null)` |
 | `projects.tsx:84` `workspaceOptions(api, projectId)` | `workspaceOptions(api, selectedProjectId ?? null)` |
 | `shell.tsx:9` `workDetailOptions` import, `:3` `useMatch` import | deleted (unused) |
-| `runtimes.tsx:3` `getRouteApi` import, `:79` route const | deleted (unused) |
+| `runtimes.tsx:8` `getRouteApi` import, `:69` route const, `:79` `route.useSearch()` | deleted (unused) |
 
 ## 7. Control-flow audit (lesson 32) — what is observable and what is not
 
@@ -163,7 +163,7 @@ rather than a mechanical one:
    one of the two path hops (projects param / work item) is ever defined; on the work route hops
    2-3 (`servedWork.data?.work_item.project_id` then `workScope.claimedProjectId`) are the only
    pair that can both resolve. The order between them is observable only inside the foreign-scope
-   window (`work/detail.tsx:108-112` rewrites the claim to the served project), which is why the
+   window (`work/detail.tsx:109-113` rewrites the claim to the served project), which is why the
    contract's mutant (a) is "drop the served hop" (testable) rather than "reorder hops"
    (unobservable). The moved expression keeps the order byte-identically; the evidence record
    states this instead of claiming a reorder mutant.
@@ -205,7 +205,7 @@ requests per route) whose mutant is the extra-query flip.
 | D3 | hook value is the chain (`string \| undefined`), not `{ selectedProjectId, scopeSource }` | no consumer needs the source: runtimes' `scoped` check is `!== undefined` on a route whose only hop is its own search member; the pages' second hops stay page-local. A source field would add an unused branch (no-unrequested-flexibility) |
 | D4 | the picker, navigation, palette and `useProjectDirectory` keep their bodies; only the chain's source changes | they are already correct; the contract freezes their rendered/ARIA/navigation surfaces (D1) |
 | D5 | pages keep reading their own route search where it is *identity*, not scope: chat's `chatScopeParams`, projects' `useParams` for links, work detail's `search.projectId` for `foreignScope`/`setSearch`/body args, attention's `unavailable`, connections' `connectionId` | contract change item 2 lists these as deliberate asymmetries; `use-chat-scope-state.ts` is not in the owned set, so the chat identity cannot move |
-| D6 | the hook test file mounts through the app router (`renderRoute`) and asserts existing observables (picker value, nav hrefs, request log) | every page suite already mounts this way; a test-local router would need its own route tree for `useMatch({ from })`. No new selector or data attribute is added (D1) |
+| D6 | the hook test file mounts through the app-router mount path (its local `renderScope` fixture) and asserts existing observables (picker value, nav hrefs, request log) | every page suite already mounts this way; a test-local router would need its own route tree for `useMatch({ from })`. No new selector or data attribute is added (D1) |
 | D7 | `getRouteApi("/runtimes")` is deleted from `runtimes.tsx` | after the conversion the route object has no remaining use; leaving it would be dead weight |
 | D8 | no `docs/design/*.md` amendment | no design document names the scope chain or `useProjectScope` (`grep -rn "useProjectScope\|project scope" docs/design/` finds only unrelated prose) |
 | D9 | `docs/TODO.md` unchanged | no open entry covers this slice's scope (grep above); nothing is deferred |
