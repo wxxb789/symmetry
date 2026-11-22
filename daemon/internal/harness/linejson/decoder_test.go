@@ -169,24 +169,28 @@ func TestFeedReturnsRecordsCompletedBeforeTheBoundFailure(t *testing.T) {
 }
 
 func TestFeedFatalRecordIsReturnedAndFailsTheStream(t *testing.T) {
-	policy := policyFor(8)
-	policy.Latch = true
-	policy.Decode = func(sequence uint64, line []byte) lineRecord {
-		record := lineRecord{Sequence: sequence, Line: string(line)}
-		if record.Line == "bad" {
-			record.Failure = errFatal
-		}
-		return record
-	}
-	policy.Fatal = func(record lineRecord) error { return record.Failure }
-	decoder := New(policy)
-	records, err := decoder.Feed([]byte("bad\nlater\n"))
-	wantLines(t, records, "1:bad")
-	if !errors.Is(err, errFatal) {
-		t.Fatalf("Feed() error = %v, want %v", err, errFatal)
-	}
-	if records, err = decoder.Feed([]byte("x\n")); !errors.Is(err, errFatal) || len(records) != 0 {
-		t.Fatalf("Feed() after a fatal record = %#v, %v; want the same error", records, err)
+	for _, latch := range []bool{false, true} {
+		t.Run(fmt.Sprintf("latch=%t", latch), func(t *testing.T) {
+			policy := policyFor(8)
+			policy.Latch = latch
+			policy.Decode = func(sequence uint64, line []byte) lineRecord {
+				record := lineRecord{Sequence: sequence, Line: string(line)}
+				if record.Line == "bad" {
+					record.Failure = errFatal
+				}
+				return record
+			}
+			policy.Fatal = func(record lineRecord) error { return record.Failure }
+			decoder := New(policy)
+			records, err := decoder.Feed([]byte("bad\nlater\n"))
+			wantLines(t, records, "1:bad")
+			if !errors.Is(err, errFatal) {
+				t.Fatalf("Feed() error = %v, want %v", err, errFatal)
+			}
+			if records, err = decoder.Feed([]byte("x\n")); !errors.Is(err, errFatal) || len(records) != 0 {
+				t.Fatalf("Feed() after a fatal record = %#v, %v; want the same error", records, err)
+			}
+		})
 	}
 }
 

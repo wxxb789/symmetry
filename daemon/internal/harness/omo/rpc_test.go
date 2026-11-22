@@ -123,6 +123,8 @@ func TestDecoderRejectsAmbiguousOrUnboundedJSONL(t *testing.T) {
 	}
 }
 
+const boundErrorText = "invalid OmO RPC record: JSONL record exceeds limit"
+
 func TestDecoderCountsTrailingCRTowardTheLimit(t *testing.T) {
 	record := `{"type":"notice"}`
 	decoder := NewDecoder(len(record))
@@ -130,7 +132,7 @@ func TestDecoderCountsTrailingCRTowardTheLimit(t *testing.T) {
 	if !errors.Is(err, ErrInvalidRecord) || len(records) != 0 {
 		t.Fatalf("CRLF record at the limit = %+v, %v; want the bound error", records, err)
 	}
-	if err.Error() != "invalid OmO RPC record: JSONL record exceeds limit" {
+	if err.Error() != boundErrorText {
 		t.Fatalf("CRLF record error = %q, want the bound text", err)
 	}
 	decoder = NewDecoder(len(record) + 1)
@@ -149,13 +151,13 @@ func TestDecoderTreatsBlankLinesAsRecords(t *testing.T) {
 
 func TestDecoderRetainsTheBoundFailureAcrossCalls(t *testing.T) {
 	decoder := NewDecoder(8)
-	if _, err := decoder.Feed([]byte("123456789")); err == nil || err.Error() != "invalid OmO RPC record: JSONL record exceeds limit" {
+	if _, err := decoder.Feed([]byte("123456789")); err == nil || err.Error() != boundErrorText {
 		t.Fatalf("oversize Feed() error = %v, want the bound error", err)
 	}
-	if _, err := decoder.Feed(nil); err == nil || err.Error() != "invalid OmO RPC record: JSONL record exceeds limit" {
+	if _, err := decoder.Feed(nil); err == nil || err.Error() != boundErrorText {
 		t.Fatalf("Feed after overflow error = %v, want the retained bound error", err)
 	}
-	if err := decoder.Close(); err == nil || err.Error() != "invalid OmO RPC record: JSONL record exceeds limit" {
+	if err := decoder.Close(); err == nil || err.Error() != boundErrorText {
 		t.Fatalf("Close after overflow error = %v, want the retained bound error", err)
 	}
 }

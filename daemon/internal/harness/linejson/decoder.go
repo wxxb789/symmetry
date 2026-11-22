@@ -154,8 +154,6 @@ func (decoder *Decoder[R]) fail(err error) error {
 	return err
 }
 
-// overBound reports whether a line of lineBytes bytes breaks the bound and the
-// policy's CR allowance.
 func (decoder *Decoder[R]) overBound(lineBytes int, trailer byte) bool {
 	if lineBytes <= decoder.policy.MaxBytes {
 		return false
@@ -163,8 +161,6 @@ func (decoder *Decoder[R]) overBound(lineBytes int, trailer byte) bool {
 	return !(decoder.policy.CRAllowance && lineBytes == decoder.policy.MaxBytes+1 && trailer == '\r')
 }
 
-// trailerBeforeLF reads the byte before a line's LF, where the line is the
-// concatenation of prefix and chunk and the LF sits at lineEnd in chunk.
 func trailerBeforeLF(prefix, chunk []byte, lineEnd int) byte {
 	if lineEnd > 0 {
 		return chunk[lineEnd-1]

@@ -24,10 +24,11 @@ Non-test sources only; coordinates are at `de526861`.
 | trailing-CR detection before LF | 1 | `pi:238,281-286` | 1 (`linejson`), parameter `CRAllowance` + `TrimCR` |
 | close-with-buffer handling | 4 | `pi:258-273`, `omo:147-156`, `claude:137-149`, `codex:106-117` | 1 (`linejson.Decoder.Close`), the wrapper builds its own trailing record |
 
-Grep counts at the baseline (re-run and recorded in the evidence file):
-`grep -c "IndexByte(.*'..')" ` → `pi/rpc.go` 1, `omo/rpc.go` 1, `claude/stream.go` 1,
-`codex/framing.go` 1, `linejson` 0; after → 0/0/0/0/1.
-`grep -c "buffer = append(buffer"` → 1/1/1/1/0; after → 0/0/0/0/1.
+Grep counts at the baseline and on the final tree (re-run and recorded in the evidence file):
+`grep -c "IndexByte"` → `pi/rpc.go` 1, `omo/rpc.go` 1, `claude/stream.go` 1, `codex/framing.go` 1,
+`linejson` 0; after → 0/0/0/0/2 (`linejson`: the buffer scan and the incoming-chunk scan).
+`grep -c "buffer = append"` → 2/1/1/1/0; after → 0/0/0/0/4 (`linejson`: the chunk-first copy, the
+unterminated tail, the retained suffix, the pull-arm line copy).
 
 ## 2. Public / API shape
 

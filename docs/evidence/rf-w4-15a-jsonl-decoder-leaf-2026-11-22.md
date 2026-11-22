@@ -1,16 +1,20 @@
-# rf-w4-15a JSONL decoder leaf — evidence record (2026-11-22, fix round r1)
+# rf-w4-15a JSONL decoder leaf — evidence record (2026-11-22, fix round r1 + simplify apply)
 
 Contract: `goal-rf-w4-15a-jsonl-decoder-leaf.md` (GDD state root). Plan:
 `docs/plans/2026-11-22-rf-w4-15a-jsonl-decoder-leaf-plan.md`.
 Base revision: `de526861313b05908c95d21dc1902a516c7ef15a` (origin/main after #217 W3-15; the
-#187 W3-04 gate is merged too, so no rebase was needed). Nothing is committed: the tree stays
-dirty for the verify stage.
+#187 W3-04 gate is merged too, so no rebase was needed). The slice is committed on
+`refactor/rf-w4-15a-jsonl-decoder-leaf` (`166e3a05`); this revision's apply edits stay uncommitted
+for the conductor.
 
 An independent read-only review ran at the first freeze; its P1-1 (bound-before-copy ordering),
 P2-1 (missing row for records returned before a bound failure) and P3-1 (`Fatal` without `Latch`
 forgot a failure) findings are fixed in this revision, and the review's missing-evidence findings
-(no WSL/mutation record, stale hashes) are closed by this file. Every number below was produced on
-the revision these hashes bind; the throwaway differential harness is kept at
+(no WSL/mutation record, stale hashes) are closed by this file. A report-only simplify review then
+ran on `cc0469df`; its accepted findings are applied in this revision (two comment deletions in
+the leaf, the `omo` bound-text const, the `Fatal`/`Latch` row) and the record rows were re-measured
+at these bytes. Every number below was produced on the revision these hashes bind (the §9 rows
+(a1)–(g) name their pre-apply revision); the throwaway differential harness is kept at
 `Q:/tmp/w4-15a-diff/decoderdiff-dump_test.go` with its dumps beside it.
 
 Subject hashes (this record binds exactly these bytes; every mutation run was reverted and the
@@ -18,19 +22,20 @@ hashes re-verified afterwards):
 
 | File | sha256 |
 | --- | --- |
-| `daemon/internal/harness/linejson/decoder.go` | `8070def6478542b67a01bad8773a9c0e4855a95f78da9f5b1d7d1681b4a6a960` |
-| `daemon/internal/harness/linejson/decoder_test.go` | `fe6d429e2802805208ca49a8078b713ec2e288494408613db8c6e3008c9712d5` |
+| `daemon/internal/harness/linejson/decoder.go` | `f8611caafd78ab2938bc37258e6929f5b47bf6e96e0d4d4273b3725d00f40cb6` |
+| `daemon/internal/harness/linejson/decoder_test.go` | `90b2b8a81dc56c9fb40c69f57e04ad958da13e743b860bd639a17df50b95a15a` |
 | `daemon/internal/harness/pi/rpc.go` | `4c98a01f76db8cf0e4b6d1543471fe11dd63beb803e27d98168bc3a8755e7394` |
 | `daemon/internal/harness/omo/rpc.go` | `0cba5a64c08d6609dfd6ce64d0ff50bd4608471828f38e10ddc61e97673cee1d` |
 | `daemon/internal/harness/claude/stream.go` | `c4092e1c6023f1b5607fa3f48b2f273d1565ec9a85223d5287495e1d0dc5387a` |
 | `daemon/internal/harness/codex/framing.go` | `5d60421b8fe5356a5770a9131fc8d0a25917b97b34048aa6f609f4a335ce550c` |
 | `daemon/internal/harness/pi/rpc_test.go` | `8001d5945e87782c82800204c90ced3ef16178c836b329a84716e4a4856db5ed` |
-| `daemon/internal/harness/omo/rpc_test.go` | `610218a812c998be74ca7e88bc4dc45db981632b2971cbdaade3fbdd778255ef` |
+| `daemon/internal/harness/omo/rpc_test.go` | `8226bb912814dd106af26599f9336ee2e9d8135a2dbc432ba26598a4ecf0feaa` |
 | `daemon/internal/harness/claude/stream_test.go` | `c994c5a76540edaf929ee8367ff871f0a1a2c41c5b537a3850e4ab429399b795` |
 | `daemon/internal/harness/codex/framing_test.go` | `8148de13306ef47c97d1a836871776635927432f001f1cb0d6997fcdd89f3b52` |
 
-`git diff | sha256sum` (tracked changes only; the two docs in this slice are untracked):
-`7b6eb2f1d3c81dce3ead109658db165d15bf4e06a8f9ba874c3b3c8c978df33c`.
+`git diff -- daemon | sha256sum` (the uncommitted apply-stage Go delta over `166e3a05`; the frozen
+slice bytes are the table above):
+`b9be21abd81beeb927393db8631a6035375fd29167b99ea534dec520b2b4111f`.
 
 ## 1. Definition counts (clause 1)
 
@@ -39,10 +44,14 @@ working tree (`grep -c <pattern> <path>`), non-test sources only:
 
 | grep | pi/rpc.go | omo/rpc.go | claude/stream.go | codex/framing.go | linejson/decoder.go |
 | --- | --- | --- | --- | --- | --- |
-| `IndexByte` (the LF scan) | 1 → 0 | 1 → 0 | 1 → 0 | 1 → 0 | 0 → **1** |
-| `buffer = append` (buffering) | 2 → 0 | 1 → 0 | 1 → 0 | 1 → 0 | 0 → **1** |
+| `IndexByte` (the LF scan) | 1 → 0 | 1 → 0 | 1 → 0 | 1 → 0 | 0 → **2** |
+| `buffer = append` (buffering) | 2 → 0 | 1 → 0 | 1 → 0 | 1 → 0 | 0 → **4** |
 | `> (decoder.max\|decoder.limit\|framer.max)` (bound checks) | 2 → 0 | 1 → 0 | 2 → 0 | 2 → 0 | — |
-| bound decisions in the leaf | — | — | — | — | `decoder.go:77` (`> MaxBytes`), `:85`/`:97` (`overBound` calls), predicate at `:159` |
+| bound decisions in the leaf | — | — | — | — | `decoder.go:78` (`> MaxBytes`), `:86`/`:98` (`overBound` calls), predicate at `:158` |
+
+The leaf's two `IndexByte` sites scan the buffer and the incoming chunk; its four
+`buffer = append` sites are the `ChunkFirst` copy, the unterminated tail, the non-latching suffix
+retention and the pull-arm line copy.
 
 Files containing a bounded-line framing loop (LF scan + bound + blank policy + close): **4 → 1**
 (`linejson/decoder.go`). The four wrappers keep `NewDecoder`/`NewFramer`/`Feed`/`Close` and the
@@ -66,6 +75,12 @@ omo:158→128; `decodeEvent` claude:151→133; `decodeFrame` codex:120→100 —
 | close blank rule | whitespace-only suffix empty | any suffix byte is unterminated | whitespace-only suffix empty | whitespace-only suffix empty |
 | sentinels | `ErrRecordTooLarge`, `ErrIncompleteRecord` | wrapped `ErrInvalidRecord` (2 texts) | `ErrRecordTooLarge`, `ErrIncompleteRecord` | `ErrFrameTooLarge`, `ErrIncompleteFrame` |
 | nil receiver | `pi rpc decoder is nil` | panics (nil deref) | `Claude stream-json decoder is nil` | `codex framer is nil` |
+| zero-value construction | `Feed` → the zero-bound error, `Close` → the same latched error; now panics (nil `reader`) | `Feed` → `invalid OmO RPC record: JSONL record exceeds limit` (latched through `Close`); now panics | `Feed` → `Claude stream-json record exceeds limit`, `Close` → nil; now panics | `Feed` → `codex app-server frame exceeds limit`, `Close` → nil; now panics |
+
+Zero-value construction is the only base→apply difference outside the parameter mapping: the base
+framed with a zero bound (errors above), the apply revision panics on the nil `reader` field that
+every constructor sets. No in-tree caller constructs a zero-value decoder (0 composite-literal
+sites) and the dump corpus covers nil receivers only, so the row is recorded, not patched.
 
 Parameter that reproduces each base difference: CR → `CRAllowance`/`TrimCR`; blank policy (lines
 and close) → `SkipBlank`; copy ordering → `ChunkFirst`; failure policy → `Latch` + `Fatal`; bound
@@ -171,7 +186,9 @@ and four samples otherwise; limits 8, 1024 and 1 MiB.
 | base `de526861` | 864 | 3 755 579 | 26 588 | `e9342871a5c989395c20452c5929df86cca4d775bed6ee1692f3fa5011915cea` |
 | working tree | 864 | 3 755 579 | 26 588 | `e9342871a5c989395c20452c5929df86cca4d775bed6ee1692f3fa5011915cea` |
 
-`cmp` reports no difference. Three arms worth naming explicitly, all byte-identical on both sides:
+`cmp` reports no difference, and the working-tree dump was re-run at the simplify-apply revision
+with the same harness and corpus: same sha256, still no difference. Three arms worth naming
+explicitly, all byte-identical on both sides:
 
 - records completed before the bound failure are returned with the error
   (`pi|claude edge/good-then-over-bound-lf/split1`, limit 17: one record plus
@@ -205,66 +222,66 @@ The longest fixture line is 3 734 bytes (`testdata/pi/1.5.2/lifecycle.jsonl`) ag
 default bound, so the fixture replays cannot exercise the bound arms; the synthetic corpus above
 does.
 
-## 7. Gates (all foreground; exit codes as printed)
+## 7. Gates (all foreground; exit codes as printed; re-run at the simplify-apply revision)
 
 | Gate | Command | Result |
 | --- | --- | --- |
-| format | `gofmt -l` over the nine changed Go files | empty, exit 0 |
+| format | `gofmt -l` over the ten changed Go files | empty, exit 0 |
 | vet | `cd daemon && go vet ./...` | exit 0 |
 | build windows | `GOOS=windows go build ./...` | exit 0 |
 | build linux | `GOOS=linux go build ./...` | exit 0 |
 | cross vet | `GOOS=linux GOARCH=amd64 go vet ./internal/harness/...` | exit 0 |
 | cycle proof | `go build ./internal/harness/...` | exit 0 |
 | import invariant | `go list -deps ./internal/harness/claude \| grep internal/harness` | `…/harness/linejson`, `…/harness/claude` only — no root `harness` |
-| windows suite | `cd daemon && go test -count=1 -timeout 900s ./internal/harness/...` | 9/9 packages `ok` (root 13.752s, claude 0.144s, codex 13.765s, linejson 0.112s, omo 2.539s, omp 3.186s, opencode 0.448s, pi 4.438s, probeconformance 7.194s), exit 0 |
+| windows suite | `cd daemon && go test -count=1 -timeout 900s ./internal/harness/...` | 9/9 packages `ok` (root 15.278s, claude 0.315s, codex 13.762s, linejson 0.246s, omo 6.978s, omp 5.358s, opencode 0.622s, pi 8.506s, probeconformance 7.249s), exit 0 |
 | whitespace | `git diff --check` | exit 0 |
-| host path | tracked diff + the four untracked docs/files filtered for a profile-directory separator | 0 hits |
-| suppressions | new `//nolint`/`credo:disable` in the diff | 0 |
+| host path | the slice diff (`cca92284..HEAD`) + the uncommitted apply diff filtered for a profile-directory separator | 0 hits |
+| suppressions | new `//nolint`/`credo:disable` directives in the slice Go diff + the apply Go diff | 0 |
 
 ## 8. WSL Linux run
 
 `wsl -d Ubuntu-24.04 -u accept`, tree under test = this worktree
-(`/mnt/q/repos/wt-w4-15a-jsonl-decoder-leaf/symmetry/daemon`), one whole-tree invocation
-`go test -count=1 -timeout 1200s ./internal/harness/...` (log at `Q:/tmp/w4-15a-diff/wsl-harness.txt`):
+(`/mnt/q/repos/wt-w4-15a-jsonl-decoder-leaf/symmetry/daemon`), re-run at the simplify-apply
+revision. Whole-tree invocation `go test -count=1 -timeout 150s ./internal/harness/...` (log at
+`Q:/tmp/w4-15a-apply/scratch/wsl-tree-150.txt`; the 150 s package timeout bounds the loopback
+stalls):
 
 | Package | Result |
 | --- | --- |
-| root `harness` | `ok 12.125s` |
-| `claude` | `ok 0.093s` |
-| `codex` | `ok 13.822s` |
-| `linejson` | `ok 0.014s` |
-| `omo` | `ok 1.702s` |
-| `probeconformance` | `ok 7.048s` |
-| `omp` | `FAIL 33.200s` — one test, `TestNativeAcceptanceCancelToolOracle` |
-| `opencode` | `FAIL 1200.061s` — the package hit the 20-minute Go test timeout (`panic: test timed out after 20m0s`) inside its `TestClient*`/`TestNativeOpenCode*` loopback families |
-| `pi` | `FAIL 427.482s` — 11 `TestProviderBridge*` tests, every failure a `dial tcp 127.0.0.1:<port>: i/o timeout` |
+| root `harness` | `ok 11.724s` |
+| `claude` | `ok 0.254s` |
+| `codex` | `ok 13.815s` |
+| `linejson` | `ok 0.035s` |
+| `omo` | `ok 1.805s` |
+| `probeconformance` | `ok 7.045s` |
+| `omp` | `FAIL 33.215s` — `TestNativeAcceptanceCancelToolOracle` |
+| `opencode` | `FAIL 150.081s` — `TestNativeOpenCodeRealConfigUsesLoopbackObserverEndpoint` and nine `TestClient*` tests, then the package timeout |
+| `pi` | `FAIL 150.047s` — `TestProviderBridgeRejectsMissingOrWrongNonceBeforeExecutor` and the remaining `TestProviderBridge*` family at the package timeout |
 
-Observed exit status for a whole-tree invocation: **1**. Re-run with `-timeout 150s` (so the
-loopback stalls cannot consume 20 minutes) reproduces the structure —
-`ok` root 11.351s / claude 0.181s / codex 13.150s / linejson 0.016s / omo 1.354s /
-probeconformance 7.033s, `FAIL` omp 32.036s / opencode 150.067s / pi 150.043s, 12 `--- FAIL` test
-lines, 2 package-timeout panics — and the status is captured in the WSL shell as `tree_rc=1`
-(log `wsl-tree-150.txt`).
+12 `--- FAIL` test lines, 2 package-timeout panics, 4 visible `dial tcp 127.0.0.1:<port>: i/o
+timeout` lines (the r1 default-timeout run showed the same structure at `opencode 1200.061s` /
+`pi 427.482s`). Observed exit status: **1** (`tree_rc=1`, captured outside the distro).
 
 Every failing test is loopback/IPC-dependent and cannot be caused by this slice: the distro cannot
-complete a loopback TCP connect at all (`python3` connect to `127.0.0.1` times out), the failing
-tests are HTTP tests that never touch a decoder (`pi/provider_bridge_test.go`'s only `.Close()` /
+complete a loopback TCP connect at all (a `python3` bind/listen/connect probe on `127.0.0.1` times
+out on `connect`, `Q:/tmp/w4-15a-apply/scratch/loopback_probe.py`), the failing tests are HTTP
+tests that never touch a decoder (`pi/provider_bridge_test.go`'s only `.Close()` /
 `json.NewDecoder` matches are HTTP bodies), and a representative failing pi test fails identically
 at the base revision in a `de526861` worktree in the same distro (`FAIL …/pi 150.227s`, the same
-30 s dial timeouts).
+30 s dial timeouts; r1 run).
 
 Decoder-relevant WSL surface with an exact exit code: `go test -count=1 ./internal/harness
 ./internal/harness/claude ./internal/harness/codex ./internal/harness/linejson ./internal/harness/omo
-./internal/harness/probeconformance` → 6/6 `ok` (11.009s / 0.076s / 12.770s / 0.015s / 0.948s /
-7.046s), `core_rc=0` (captured inside the WSL shell as `echo "core_rc=\$?"` after writing the log).
-`pi` without its provider-bridge tests (`-skip "TestProviderBridge"`) → `ok 0.784s`, `pi_rc=0`
-(the package line itself is the decoder suite plus the validator/state tests).
+./internal/harness/probeconformance` → 6/6 `ok` (11.730s / 0.129s / 13.644s / 0.022s / 1.729s /
+7.048s), `core_rc=0`. `pi` without its provider-bridge tests (`-skip "TestProviderBridge"`) →
+`ok 1.294s`, `pi_rc=0` (the package line itself is the decoder suite plus the validator/state
+tests).
 
 `omp`, `opencode` and `pi` with the loopback families skipped (`-skip
 "TestProviderBridge|TestNativeAcceptanceCancelToolOracle|TestClient|TestNativeOpenCode"`):
-`omp ok 2.270s`, `pi ok 0.938s`, `opencode FAIL 600.051s` — one further loopback test
-(`TestOpenCodeHealthRejectsWrongLinuxV2PeerBindingsBeforeRequest`) stalls in
-`net/http.(*Transport).startDialConnForLocked` and hits the default package timeout. `opencode` is
+`omp ok 1.803s`, `pi ok 0.954s`, `opencode FAIL 150.042s` —
+`TestOpenCodeHealthRejectsWrongLinuxV2PeerBindingsBeforeRequest` plus
+`TestOpenCodeAdapterWithoutV2OwnerFailsBeforeHealthRequest` at the package timeout. `opencode` is
 outside this slice (E3/D1) and its failure is the same dial stall.
 
 ## 9. Mutation runs
@@ -274,7 +291,9 @@ Each mutant was applied to the frozen tree, the named suites were run, and the m
 Mutants (a1), (a2) and (b) were re-applied and re-run after the final comment-only clarification in
 `linejson/decoder.go`, so every leaf mutation is bound to the §0 bytes; (c), (d) and (e) ran before
 the latch rows were appended to the adapter suites, and each reddened a row that is byte-identical
-in the frozen files.
+in the frozen files. Rows (a1)–(g) ran at the pre-apply revision (the fix-round-r1 bytes);
+`decoder.go` since differs from the §0 bytes only by the two deleted helper comments, which no
+mutant touches. Mutant (h) ran at the apply revision and its new row is in the §0 bytes.
 
 | Mutant | Change | Result |
 | --- | --- | --- |
@@ -287,16 +306,18 @@ in the frozen files.
 | (f1) `pi` loses its latch | `pi` `Latch: false` | red: `pi TestDecoderRetainsTheBoundFailureAcrossCalls` (and *not* the pre-existing oversize row, whose second probe input is itself over-bound — recorded as the reason the new row exists) |
 | (f2) latch wiring flipped | `omo` `Latch: false`; `claude`/`codex` `Latch: true` | red: `omo TestDecoderRetainsTheBoundFailureAcrossCalls`; `claude TestDecoderAcceptsTheNextRecordAfterABoundFailure`; `codex TestFramerAcceptsTheNextFrameAfterABoundFailure`; `pi` green (its latch unchanged) |
 | (g) copy-ordering axis flipped | `pi` `ChunkFirst: true` | **green**, as predicted and documented: the axis is a copy-ordering property, not an acceptance one (plan §4, evidence §2) |
+| (h) `Fatal` latch re-gated on `Latch` | `decoder.failed = err` moved under `if decoder.policy.Latch` in the `Fatal` arm | red: `linejson TestFeedFatalRecordIsReturnedAndFailsTheStream/latch=false` (the new arm); `omo` stays green because it sets `Latch: true`, and (e)/(f1) do not cover this case |
 | duplicate-walk row (base-pinned, unchanged code) | — | `pi TestDecoderTreatsCRLFAs…` already reddens when the walk is dropped (reviewer-verified); `omo TestDecoderRejectsAmbiguousOrUnboundedJSONL` likewise |
 
 ## 10. LOC delta (report-only, D2)
 
-`git diff --numstat` (tracked): non-test sources 61 insertions / 169 deletions across the four
-wrappers (`pi` −42, `omo` −30, `claude` −17, `codex` −16 by net line count), plus the new
-`linejson/decoder.go` (176 lines including the policy documentation) = **net +68 non-test lines**.
-Tests: 89 added lines in the four adapter suites (0 deleted) + `linejson/decoder_test.go` (243
-lines). Docs: the plan (304 lines) and this record. The contract's `−600…−800` figure covers the
-whole 5b (driver half included) and is report-only (D2).
+`git diff --numstat de526861 -- daemon/internal/harness`: non-test sources 61 insertions /
+169 deletions across the four wrappers (`pi` −42, `omo` −30, `claude` −17, `codex` −19 by net line
+count), plus the new `linejson/decoder.go` (172 lines including the policy documentation) =
+**net +64 non-test lines**. Tests: 91 added lines in the four adapter suites (0 deleted) +
+`linejson/decoder_test.go` (247 lines). Docs: the plan (305 lines) and this record (337 lines).
+The contract's `−600…−800` figure covers the whole 5b (driver half included) and is report-only
+(D2).
 
 ## 11. Residual risks and known limits
 
@@ -305,8 +326,9 @@ whole 5b (driver half included) and is report-only (D2).
 - The leaf's `Decode` callback receives a view into the decoder buffer and must not retain it; all
   four adapters copy what they keep (verified by reading `decodeRecord`, `decodeEvent`,
   `decodeFrame`, and `omo`'s `json.Unmarshal` into `json.RawMessage`).
-- `omo`'s `Close` no longer advances the sequence number; unobservable (latched, no record
-  returned), recorded in §2.
+- `omo`'s `Close` never exposes the sequence number: the leaf advances it whenever a pending suffix
+  exists, but `omo` latches the failure and returns no record, so the difference is unobservable,
+  recorded in §2.
 - `ChunkFirst` cannot be shown red by any behavioural row; its acceptance is the §3 branch mapping
   plus the dump (mutation (g) documents the green result and why).
 - The differential dump compares the decoder surface, not the adapters above it; the adapter
