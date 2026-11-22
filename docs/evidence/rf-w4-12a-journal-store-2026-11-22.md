@@ -422,9 +422,9 @@ Exit codes are the command's own (captured without a pipe where the row reports 
 | 14 | `go test -count=1 -coverprofile=… ./internal/app/...` (Windows) | `ok … 554.041s`, coverage 75.3% of statements, exit 0 |
 | 15 | `go test -count=1 -run 'TestJournalStore\|TestStorelessDaemon' -v ./internal/app/` | exit 0; `ok … 0.294s`, 23 probe subtests + 1 member-set test pass |
 | 16 | `python3 scripts/ci/test-omo-control-native-evidence.py` (R9) | `Ran 15 tests in 36.015s … OK`, exit 0 |
-| 17 | WSL `Ubuntu-24.04` in the worktree `/mnt/q/repos/wt-w4-12-go-test-doubles/symmetry/daemon`: the contract's `go test -count=1 -race ./internal/app/...`, run as `go test -race -c -o /tmp/app.race.test ./internal/app/` then `cd daemon/internal/app && /tmp/app.race.test -test.timeout=55m -test.count=1` (binary form keeps the 55-minute timeout inside the harness limit) | `PASS`, exit 0, wall 683 s; the race binary's `-test.list '.*'` is identical to `go test -list '.*' ./internal/app/` on the same tree (682 tests), so the full linux test set ran |
+| 17 | WSL `Ubuntu-24.04` in this slice's worktree (`<worktree>/daemon`): the contract's `go test -count=1 -race ./internal/app/...`, run as `go test -race -c -o <scratch>/app.race.test ./internal/app/` then `cd daemon/internal/app && <scratch>/app.race.test -test.timeout=55m -test.count=1` (binary form keeps the 55-minute timeout inside the harness limit) | `PASS`, exit 0, wall 683 s; the race binary's `-test.list '.*'` is identical to `go test -list '.*' ./internal/app/` on the same tree (682 tests), so the full linux test set ran |
 | 18 | `go test -count=1 ./internal/state/...` (the one touched package outside `app`) | `ok … 14.868s`, exit 0 |
-| 19 | WSL (`/mnt/q/repos/wt-w4-12-go-test-doubles/symmetry/daemon`): `go test -count=1 -run 'TestJournalStore\|TestStorelessDaemon' -v ./internal/app/` (linux/amd64 probes and both pins) | `ok … 0.116s`, exit 0; 23 cross-target subtests + all 7 linux subtests + both member-set pins pass |
+| 19 | WSL (this slice's worktree, `<worktree>/daemon`): `go test -count=1 -run 'TestJournalStore\|TestStorelessDaemon' -v ./internal/app/` (linux/amd64 probes and both pins) | `ok … 0.116s`, exit 0; 23 cross-target subtests + all 7 linux subtests + both member-set pins pass |
 
 Rows 1–12, 15, 16, 18 and 19 were re-run in the fix round (2026-11-22) on the fix-round tree; rows
 13, 14 and 17 are the apply-stage runs of the full Windows suite, its coverage-instrumented twin and
@@ -432,7 +432,7 @@ the WSL `-race` suite (conductor-owned full suites; the fix round's edits are te
 document-only, with no production line changed, so those rows are not re-run). Rows 13/14 are
 slower than the implement-stage measurement (491.9 s vs 141.4 s for the same set); row 17 came in
 faster than the recorded 2349.759 s because the binary form takes the `go test` build step over the
-`/mnt/q` mount out of the timed window (build vs run and host load are not separated here). Row 13
+Windows-drive mount out of the timed window (build vs run and host load are not separated here). Row 13
 is the contract's exact command, captured without a pipe so its exit code is the command's own; row
 14 is the identical test set, coverage instrumented. Rows 15 and 19 are the fix round's scoped runs
 of the changed test set on both platforms and back §11's fix-round mutant runs.
@@ -563,7 +563,7 @@ exit 0 (row 16 of §10; the fix-round re-run).
 - Environment limit (not this slice's): the WSL `-race` app suite passes. The implement-stage
   `go test` form needed 2349.759s with `-timeout=55m` (so it exceeds the Go default of 10 min and the
   harness default); the apply-stage binary form measured the suite itself at 683 s wall (§10 row 17)
-  — the difference is the `go test` build step over the `/mnt/q` mount plus host load, not separated
+  — the difference is the `go test` build step over the Windows-drive mount plus host load, not separated
   here. The slowest single test is `TestRawOutputBudgetDropsWithoutFailingSemanticEvents` through
   the pre-existing `protocol.scanJSONValue` path (§10's attempt-2 dump; 125.79 s without race in
   `docs/plans/2026-11-21-rf-w2-01-ci-test-observability-plan.md:310`). Anyone re-running the

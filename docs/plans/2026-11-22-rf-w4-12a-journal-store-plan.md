@@ -161,8 +161,8 @@ would change meaning). It now writes `nil` for a nil argument; the probe
 - `go build ./...`, `go vet ./...`; `GOOS=linux|windows|darwin` builds and `GOOS=linux GOARCH=arm64`;
   `GOOS=linux GOARCH=amd64 go vet ./internal/app/` (linux-only test files compile).
 - Windows `go test -count=1 ./internal/app/...`; WSL `wsl -d Ubuntu-24.04 -u accept`
-  `cd /mnt/q/repos/wt-w4-12-go-test-doubles/symmetry/daemon && go test -count=1 -race ./internal/app/...`
-  (the worktree checkout; `/mnt/q/repos/symmetry` is the main checkout without this slice, where the
+  `cd <worktree>/daemon && go test -count=1 -race ./internal/app/...`
+  (this slice's worktree checkout; the main checkout does not contain this slice, and there the
   scoped selection silently matches no tests).
 - Red mutants recorded on the delivered bytes: the reflection list (drop one method name / add one),
   a flipped nil guard, a typed-nil store field, and (fix round) one store-term deletion per corrected
