@@ -128,6 +128,7 @@ from model_routing_gates import (
 )
 from model_routing_receipts import (
     ENTRY_SCRIPT,
+    SPLIT_SCRIPTS,
     attempt_names,
     derive_receipt,
     load_frozen_routes,
@@ -182,7 +183,7 @@ from model_routing_subject import (
 )
 
 _TOOL_DIRECTORY = pathlib.Path(__file__).resolve().parent
-_TOOL_MODULES = ("model_routing_gates", "model_routing_records", "model_routing_receipts", "model_routing_subject")
+_TOOL_MODULES = tuple(path.stem for path in SPLIT_SCRIPTS)
 
 
 def executed_matches_source(module: Any) -> bool:

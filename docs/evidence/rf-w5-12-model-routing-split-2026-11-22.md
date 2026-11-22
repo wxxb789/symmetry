@@ -17,24 +17,28 @@ dispatch HEAD: `refactor(ci): one source-subject implementation with named varia
 
 | file | status | lines | sha256 |
 | --- | --- | ---: | --- |
-| `scripts/ci/model-routing-evaluation.py` | rewritten entry | 4,199 → 797 | `0936e51e05a2e2bc73f4a9eadc4717693360c36fc36a827d45af97fd3d0437fb` |
+| `scripts/ci/model-routing-evaluation.py` | rewritten entry | 4,199 → 798 | `ac5b24f72c678cae512a7306739be0263e9582904291df9e08a7b4adb6b870c4` |
 | `scripts/ci/model_routing_records.py` | new | 1,236 | `f80a835ce3d7e04d944d684d2b658a137ca6ffe2da078cc27bc7c36658d72642` |
 | `scripts/ci/model_routing_subject.py` | new | 539 | `e18dadb062d7590d80ba040db4e05f3e0173d876652097f6319c2613017edce8` |
 | `scripts/ci/model_routing_gates.py` | new | 1,119 | `f84c93b79039e15cdae8f3b48a87bd44a4a196b1dcb763e4b1c3f223aa22d20f` |
 | `scripts/ci/model_routing_receipts.py` | new | 699 | `37d8b351212ec44db7819405b39ca8196ea97cf1bd9edd5a6a6dd41d54f825eb` |
-| `scripts/ci/test-model-routing-evaluation.py` | edited (repoints + the tooling pins) | 3,748 → 3,875 | `0f48ac81d87f57d55cd1aa08e72388f48b0bd684625c2e48997a399470aedaae` |
-| `scripts/ci/test-model-routing-omp-usage.py` | edited (loaders + constant reads repointed to the defining module) | 1,286 → 1,288 | `1e9876686d77d2addd70c64d4fc94536013cc53c2fafdaf914da028f252151f5` |
+| `scripts/ci/test-model-routing-evaluation.py` | edited (repoints + the tooling pins) | 3,748 → 3,851 | `589837525d7bbca860770e48cff7ce438374a0b62fb1c0db40fd60566a1c1a7c` |
+| `scripts/ci/test-model-routing-omp-usage.py` | edited (constant reads repointed to the defining module) | 1,286 → 1,283 | `f92854f1f84d76c6132aff0049874e869785dd6f27d573a3f44a572d9333648a` |
 | `scripts/ci/model-routing-omp-usage.py` | edited (copy comment names `model_routing_records.py`) | 738 → 738 | `eb331a2138e7d06cea92d97ba3049bb3602a323c0ecadf83e62776ac6afe60f5` |
 | `scripts/ci/model-routing-source-subject.py` | edited (`DELIVERED_TOOL_PATHS` + docstring) | 71 → 75 | `6312f154a2ed97e9111ba9e56a0c46802ec4817a569e5c8881ae7c58c1ad6648` |
-| `scripts/ci/test-model-routing-source-subject.py` | edited (new pin test + closure arm) | 130 → 170 | `c8601b4609f67c6b5bd40f8c666a58544f345789ebeb08dc3d42a3ac8fbed374` |
-| `docs/plans/2026-11-22-rf-w5-12-model-routing-split-plan.md` | new | 312 | `b0df8b9b18ae351aa53268e76b45ea2cb9441886258bdadc7bc3d052d48e2ccd` |
+| `scripts/ci/test-model-routing-source-subject.py` | edited (new pin test + closure arm) | 130 → 150 | `9ebb5ea3aad1a948e9307b88290c55501884f46d9021fc95152f5e4744add73f` |
+| `scripts/ci/citest.py` | edited (P3 closeout: the shared `runner_module_closure`) | 120 → 139 | `67bd8c3edd26c3c7a24c0def22d5506744a7a5a69efc9c4a6c8922a924ffb879` |
+| `docs/evaluations/model-routing/README.md` | edited (P3 closeout: post-split re-verification note) | 369 → 369 | `c975fead5d8919dc5d3c475d54b9c334a852410fec6481daefa11239be32f2a5` |
+| `docs/plans/2026-11-22-rf-w5-12-model-routing-split-plan.md` | new | 357 | `50acb748215c3e54c14fa0e9dc09651e17254654c8d741d2725d7b509de4cb2f` |
 | `docs/evidence/rf-w5-12-model-routing-split-2026-11-22.md` | new | this record | — |
 
 Counts and digests are measured on the delivered revision after the accepted simplify findings were
 applied (S1-S3): `model_routing_records.py`, the two suites and the plan carry their
 post-simplification figures, and `model-routing-omp-usage.py` gains the row the earlier table lost.
 The rows Review fix r1 (§10) changed carry their post-fix figures (the entry, the evaluation suite,
-the source-subject suite, the plan); every other row is unchanged by the fix.
+the source-subject suite, the plan); every other row is unchanged by the fix. The rows the P3
+closeout (§11) changed carry their post-closeout figures (the entry, the evaluation suite, the
+extractor suite, the source-subject suite, `citest.py`, the README, the plan).
 
 Untouched: `.github/workflows/**` (the "Check auditable model-routing workflow" step at
 `.github/workflows/ci.yml:1078-1090` still runs the same six suite paths),
@@ -129,9 +133,10 @@ byte-identical too. No fixture directory is created (the `prepare` refusal prece
 
 `test-model-routing-evaluation.py`:
 
-- one loader `defining_module(name)` — plain `importlib.import_module(name)` — returns the module
-  object the entry itself binds (the same `sys.modules` instance), the object a module-global patch
-  must hit; it does not load the entry first;
+- the defining module is imported directly with `importlib.import_module(name)` — the module object
+  the entry itself binds (the same `sys.modules` instance), the object a module-global patch must
+  hit; it does not load the entry first (at r1 this was the one-line `defining_module` helper; the
+  P3 closeout inlined it);
 - monkeypatch repoints: `records.SANITIZE_SCRIPT`/`records._HOST_PATH_PATTERNS` +
   `records.host_path_patterns()`; `gates.terminate_owned_process_tree` (+ cleanup),
   `gates.subprocess` (+ cleanup), `gates.run_owned_command`, `gates.PROCESS_TREE_REAP_SECONDS`;
@@ -149,10 +154,11 @@ byte-identical too. No fixture directory is created (the `prepare` refusal prece
 - no test renamed, none removed; every needle, count, subTest and fixture byte stays; the
   coverage pin `(17, 15, 2)` stays.
 
-`test-model-routing-omp-usage.py`: two loaders, `load_records_module()` and `load_usage_module()`;
-the six `load_records_module()` sites (`module.validate_usage`, `module.Refused`, and
-`test_shared_constants_match_the_runner` reading `records.STAGES`/`records.SECRET_KEY_PATTERN`) read
-the defining module, and the suite no longer loads the entry at all; the extractor's copy comment
+`test-model-routing-omp-usage.py`: the six records sites (`module.validate_usage`,
+`module.Refused`, and `test_shared_constants_match_the_runner` reading
+`records.STAGES`/`records.SECRET_KEY_PATTERN`) call `importlib.import_module("model_routing_records")`
+directly (the P3 closeout inlined the r1 `load_records_module` helper), `load_usage_module()` stays
+for the extractor, and the suite no longer loads the entry at all; the extractor's copy comment
 names `model_routing_records.py`.
 
 ## 6. Binding extensions (contract changes (4) and (5))
@@ -255,8 +261,9 @@ pins, the receipt pin's closure arm, the F6 comment removed),
 `scripts/ci/test-model-routing-source-subject.py` (closure arm), the plan (F3 + the fix record) and
 this record (F4 + the re-measured §1 rows). `model_routing_records.py`,
 `model_routing_subject.py`, `model_routing_gates.py` and `model_routing_receipts.py` are
-byte-identical to the reviewed revision (their §1 digests assert it). No workflow, `pyproject.toml`
-or `citest.py` edit; no new suppression.
+byte-identical to the reviewed revision (their §1 digests assert it). No workflow or `pyproject.toml`
+edit at r1 (the P3 closeout §11 moves the shared closure helper into `citest.py`); no new
+suppression.
 
 Gates re-run in the foreground on the fix revision (host interpreter `python` 3.12.10; the
 byte-diff harness invokes `python3`, the same build):
@@ -298,3 +305,50 @@ Not re-run here: the full main suite — the conductor-owned phase-5 gate (the a
 81 → 84 (three new pins), verified with `grep -c "    def test_"` on the delivered bytes and by the
 `Ran 4`/`Ran 6` targeted runs above; both targeted runs cover every test the fix touches, and the
 byte-diff plus the two other suites ran complete.
+
+## 11. P3 closeout (2026-11-22)
+
+The Opus review of `4f75e937` (findings file outside the repository: four P3 findings) is closed.
+Files changed in this closeout beyond §10: `scripts/ci/model-routing-evaluation.py` (P3-1), the
+three suite files (P3-2), `scripts/ci/citest.py` (P3-2, the shared closure helper; added to the §1
+table), `docs/evaluations/model-routing/README.md` (P3-4), the plan (P3-3, the D1 amendment) and
+this record. The four `model_routing_*.py` modules keep their bytes: the receipts module was
+mutated for P3-1 and restored byte-identically (`sha256sum -c` `OK`, the file's `git diff` empty).
+
+- **P3-1 (one source for the tool set).** `_TOOL_MODULES = tuple(path.stem for path in
+  SPLIT_SCRIPTS)` replaces the hand-written four-name copy, so the guard's stale-bytecode list and
+  the receipt's `tooling_sources` set derive from the same `SPLIT_SCRIPTS`. Mutation: remove
+  `"model_routing_subject.py"` from `SPLIT_SCRIPTS` →
+  `python scripts/ci/test-model-routing-evaluation.py EvaluationTests.test_receipt_binds_every_tooling_source`
+  → `FAILED (failures=1)`, `AssertionError: Items in the second set but not the first:
+  'model_routing_subject.py'`; the baseline for the same command is `Ran 1 test in 28.012s` with
+  `OK`.
+- **P3-2 (test hunks).** The four name-restating docstrings are gone; `defining_module` and
+  `load_records_module` are inlined as `importlib.import_module(...)` at their call sites; both
+  suites call `citest.runner_module_closure(script)`, one copy in `citest.py`.
+- **P3-3 (records).** The plan's "Conductor decisions (D1/D2) and amendments" section records the
+  r1 startup guard — the own-directory `sys.path` insertion and the three refusals (siblings not
+  beside the entry / entry not the receipt-bound file / bytecode not matching source) — as a
+  documented amendment to D1. The entry is 798 lines (797 at r1 plus the `SPLIT_SCRIPTS` import
+  line) and the evaluation suite stands at 84 tests (`grep -c "    def test_"`); the PR body
+  replacement text is written outside the repository, to the review findings directory.
+- **P3-4 (README).** "Receipt verification and the bound tooling revision" now states that a
+  post-split revision needs the entry plus the four sibling `model_routing_*.py` modules from the
+  same revision (`git archive <revision> scripts/ci | tar -x` into a temporary directory), not
+  `git show` of the entry alone.
+
+Gate runs on the closeout revision (from the worktree root; host interpreter `python` 3.12.10):
+
+| gate | command | exit | result |
+| --- | --- | ---: | --- |
+| targeted pin, baseline | `python scripts/ci/test-model-routing-evaluation.py EvaluationTests.test_receipt_binds_every_tooling_source` | 0 | `Ran 1 test in 28.012s` → `OK` |
+| targeted pin, mutant | the same command with `SPLIT_SCRIPTS` minus `"model_routing_subject.py"` | 1 | `Ran 1 test in 35.588s` → `FAILED (failures=1)`; the assertion diff names `model_routing_subject.py` (restored after the run) |
+| CLI byte-diff | `bash C:/…/scratch/w5-12/cli-byte-diff.sh C:/…/scratch/w5-12/cli-closeout`, then `diff -r cli-before cli-closeout` and `diff -r cli-fix cli-closeout` | 0 | 21/21 files identical against both the base-revision and the r1 runs (case exit codes 0/2/1/1/1/1/1) |
+| isolated-mode start | `python -I scripts/ci/model-routing-evaluation.py --help` | 0 | usage printed |
+| ruff check | `python -m ruff check scripts/ci` | 0 | `All checks passed!` |
+| ruff format | `python -m ruff format --check scripts/ci` | 0 | `63 files already formatted` |
+| main suite | `python scripts/ci/test-model-routing-evaluation.py` | 0 | `Ran 84 tests in 2172.133s` → `OK (skipped=2)`; printed `17 returns, 15 reached …, 2 unreached` (gates lines 212/241) |
+| extractor suite | `python scripts/ci/test-model-routing-omp-usage.py` | 0 | `Ran 40 tests in 14.883s` → `OK` |
+| source-subject suite | `python scripts/ci/test-model-routing-source-subject.py` | 0 | `Ran 8 tests in 0.311s` → `OK (skipped=1)` |
+| literal acceptance discovery | `python -m unittest discover -s scripts/ci -p "test_model_routing*.py"` | 5 | `Ran 0 tests` → `NO TESTS RAN`: the pattern matches no file (every suite filename uses dashes); the acceptance fallback (the evidence-named suites) is the three suite rows in this table |
+| whitespace | `git diff --check` | 0 | clean |

@@ -40,11 +40,6 @@ def load_runner_module():
     return citest.load_gate(pathlib.Path(__file__).with_name("model-routing-evaluation.py"), "model_routing_evaluation")
 
 
-def defining_module(name):
-    """Import the module that owns a split rule, so its own globals can be read or patched."""
-    return importlib.import_module(name)
-
-
 def refusal_returns(source_text, function):
     """Parse every refusal `return` of one moved function out of the module that defines it.
 
@@ -74,25 +69,6 @@ def refusal_returns(source_text, function):
                 rows.append((statement.lineno, kind, ast.get_source_segment(source_text, value)))
             return sorted(rows)
     raise AssertionError(f"the module no longer defines {function}")
-
-
-def runner_module_closure() -> set[str]:
-    """Every `model_routing_*` module the entry imports, walked transitively."""
-    pending = [SCRIPT]
-    collected: set[str] = set()
-    while pending:
-        for node in ast.walk(ast.parse(pending.pop().read_text(encoding="utf-8"))):
-            if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("model_routing_"):
-                names = [node.module]
-            elif isinstance(node, ast.Import):
-                names = [alias.name for alias in node.names if alias.name.startswith("model_routing_")]
-            else:
-                continue
-            for name in names:
-                if name not in collected:
-                    collected.add(name)
-                    pending.append(SCRIPT.with_name(f"{name}.py"))
-    return collected
 
 
 def exercise(function, call):
@@ -564,7 +540,7 @@ class EvaluationTests(FixtureRepo, unittest.TestCase):
         run_path = run or self.run_dir()
         self.assert_ok(self.prepare(task=task, run=run_path, environment_json=environment_json))
         frozen_task = task if task is not None else self.task()
-        if defining_module("model_routing_records").requires_dependency_provisioning(frozen_task):
+        if importlib.import_module("model_routing_records").requires_dependency_provisioning(frozen_task):
             self.bind_tree(run_path)
         self.edit("app/main.go", EDITED_MAIN_GO, run=run_path)
         self.edit(
@@ -703,7 +679,7 @@ class EvaluationTests(FixtureRepo, unittest.TestCase):
         # STD-B06: replacing the built-in `sum` with `+=` dropped its compensated
         # float path, so `[1e16, 1.0, 1.0]` stopped rounding the way `sum` does.
         runner = load_runner_module()
-        records = defining_module("model_routing_records")
+        records = importlib.import_module("model_routing_records")
         self.assertEqual(records.number_sum([1e16, 1.0, 1.0], "fixture"), sum([1e16, 1.0, 1.0]))
         self.assertNotEqual(records.number_sum([1e16, 1.0, 1.0], "fixture"), 1e16)
         with self.assertRaisesRegex(runner.Refused, "finite number range"):
@@ -1148,7 +1124,7 @@ class EvaluationTests(FixtureRepo, unittest.TestCase):
                 "model-routing-record-sanitize.py",
             },
         )
-        imported = {f"{name}.py" for name in runner_module_closure()}
+        imported = {f"{name}.py" for name in citest.runner_module_closure(SCRIPT)}
         self.assertLessEqual(imported, set(sources), imported - set(sources))
         for name, digest in sources.items():
             self.assertEqual(digest, "sha256:" + hashlib.sha256(SCRIPT.with_name(name).read_bytes()).hexdigest(), name)
@@ -1229,7 +1205,7 @@ class EvaluationTests(FixtureRepo, unittest.TestCase):
         # one (F20, Sol F1), never an uncaught traceback: the refusal is what keeps a
         # damaged definition from reaching a recorded value.
         runner = load_runner_module()
-        records = defining_module("model_routing_records")
+        records = importlib.import_module("model_routing_records")
         # The repointed patch target is the shared module the runner executes, so the
         # broken-sibling values must be restored for every later test in this process.
         original_script = records.SANITIZE_SCRIPT
@@ -1489,7 +1465,7 @@ class EvaluationTests(FixtureRepo, unittest.TestCase):
         witness = self.checkout(run) / "late-descendant.txt"
         # The bound matches the runner's own reap window: a survivor the kill missed
         # writes as soon as the release lands, so the poll only has to outlast that.
-        guard = defining_module("model_routing_gates").PROCESS_TREE_REAP_SECONDS
+        guard = importlib.import_module("model_routing_gates").PROCESS_TREE_REAP_SECONDS
         deadline = time.monotonic() + guard
         while not witness.exists() and time.monotonic() < deadline:
             time.sleep(0.02)
@@ -1516,7 +1492,7 @@ class EvaluationTests(FixtureRepo, unittest.TestCase):
         # window and its documented worst case, checks the lingering branch waited on
         # the direct child within its own timeout, and on POSIX closes both read ends
         # and keeps exactly the output already captured before the kill.
-        gates = defining_module("model_routing_gates")
+        gates = importlib.import_module("model_routing_gates")
         handshake = self.root / "lingering-handshake"
         handshake.mkdir()
         pid_path = handshake / "survivor.pid"
@@ -2459,7 +2435,7 @@ class EvaluationTests(FixtureRepo, unittest.TestCase):
 
     def test_prepare_validates_exunit_gate_and_environment_fields(self) -> None:
         runner = load_runner_module()
-        records = defining_module("model_routing_records")
+        records = importlib.import_module("model_routing_records")
         plain = {"id": "gate", "cwd": ".", "argv": ["mix", "test"]}
         cases = (
             ("tests-without-files", {**plain, "exunit_tests": ["test one"]}, "exunit_tests requires exunit_files"),
@@ -3059,7 +3035,7 @@ class EvaluationTests(FixtureRepo, unittest.TestCase):
         published count cannot go stale quietly. The printed line is the recomputable
         figure the records quote.
         """
-        gates = defining_module("model_routing_gates")
+        gates = importlib.import_module("model_routing_gates")
         inventory = refusal_returns(pathlib.Path(gates.__file__).read_text(encoding="utf-8"), "vitest_report_detail")
         inventory_lines = {line for line, _kind, _text in inventory}
         self.assertEqual(len(inventory_lines), len(inventory), "two refusals share a source line")
@@ -3138,7 +3114,7 @@ class EvaluationTests(FixtureRepo, unittest.TestCase):
 
     def test_prepare_validates_vitest_gate_fields(self) -> None:
         runner = load_runner_module()
-        records = defining_module("model_routing_records")
+        records = importlib.import_module("model_routing_records")
         plain = {"id": "gate", "cwd": ".", "argv": ["node", "vitest.mjs", "run"]}
         cases = (
             ("tests-without-files", {**plain, "vitest_tests": ["one"]}, "vitest_tests requires vitest_files"),
@@ -3539,7 +3515,7 @@ class EvaluationTests(FixtureRepo, unittest.TestCase):
         # Both gate-level arms are claims on their own: a task whose gate declares
         # vitest tests, or whose argv runs a vitest entry point, resolves the dependency
         # tree whatever its language field says.
-        records = defining_module("model_routing_records")
+        records = importlib.import_module("model_routing_records")
         cases = (
             ({"language": "typescript", "gates": [{"id": "gate", "argv": ["go", "test", "./..."]}]}, True),
             (
@@ -3596,8 +3572,8 @@ class EvaluationTests(FixtureRepo, unittest.TestCase):
         # F09: the entry point is the first non-flag argument, so a flagged spelling is
         # a vitest gate for validation, for the provisioning requirement and for the
         # derived report command alike.
-        records = defining_module("model_routing_records")
-        gates = defining_module("model_routing_gates")
+        records = importlib.import_module("model_routing_records")
+        gates = importlib.import_module("model_routing_gates")
         cases = (
             (["node", "vitest.mjs", "run"], True),
             (["node", "--no-warnings", "x/vitest.mjs", "run"], True),

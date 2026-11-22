@@ -74,11 +74,6 @@ def surrogatepass_digest(value):
     return "sha256:" + hashlib.sha256(value.encode("utf-8", "surrogatepass")).hexdigest()
 
 
-def load_records_module():
-    """Import the runner's records module, the split home of the shared constants."""
-    return importlib.import_module("model_routing_records")
-
-
 def load_usage_module():
     """Import the extractor so its exported constants can be compared in-process."""
     return citest.load_gate(SCRIPT, "model_routing_omp_usage")
@@ -315,7 +310,7 @@ class OmpUsageExtractionTest(unittest.TestCase):
         duplicates both; this test pins the pair per constant against this suite's
         stage literal too.
         """
-        records = load_records_module()
+        records = importlib.import_module("model_routing_records")
         usage = load_usage_module()
         self.assertEqual(usage.STAGES, ACCOUNTABLE_STAGES)
         self.assertEqual(records.STAGES, ACCOUNTABLE_STAGES)
@@ -888,7 +883,7 @@ class OmpUsageExtractionTest(unittest.TestCase):
         self.assertEqual(first["session_ref"], second["session_ref"])
 
         # The runner must refuse to count the same evidence twice.
-        module = load_records_module()
+        module = importlib.import_module("model_routing_records")
         usage = self.phases_with(first, second)
         with self.assertRaises(module.Refused) as refusal:
             module.validate_usage(json.dumps(usage).encode("utf-8"))
@@ -903,7 +898,7 @@ class OmpUsageExtractionTest(unittest.TestCase):
         self.assertNotEqual(first["metadata"]["source_sha256"], second["metadata"]["source_sha256"])
         self.assertNotEqual(first["session_ref"], second["session_ref"])
 
-        module = load_records_module()
+        module = importlib.import_module("model_routing_records")
         rows, repair_count, task_wall_time = module.validate_usage(
             json.dumps(self.phases_with(first, second)).encode("utf-8")
         )
@@ -1112,7 +1107,7 @@ class OmpUsageExtractionTest(unittest.TestCase):
                 self.non_model_phase("failed_attempt"),
             ],
         }
-        module = load_records_module()
+        module = importlib.import_module("model_routing_records")
         rows, repair_count, task_wall_time = module.validate_usage(json.dumps(usage).encode("utf-8"))
         self.assertEqual(len(rows), 6)
         self.assertEqual(repair_count, 0)
@@ -1151,7 +1146,7 @@ class OmpUsageExtractionTest(unittest.TestCase):
                 self.non_model_phase("failed_attempt"),
             ],
         }
-        module = load_records_module()
+        module = importlib.import_module("model_routing_records")
         rows, repair_count, task_wall_time = module.validate_usage(json.dumps(usage).encode("utf-8"))
         self.assertEqual(len(rows), 6)
         self.assertEqual(repair_count, 0)
@@ -1190,7 +1185,7 @@ class OmpUsageExtractionTest(unittest.TestCase):
                         self.non_model_phase("failed_attempt"),
                     ],
                 }
-                module = load_records_module()
+                module = importlib.import_module("model_routing_records")
                 rows, repair_count, task_wall_time = module.validate_usage(json.dumps(usage).encode("utf-8"))
                 self.assertEqual(len(rows), 6)
                 self.assertEqual(repair_count, 0)

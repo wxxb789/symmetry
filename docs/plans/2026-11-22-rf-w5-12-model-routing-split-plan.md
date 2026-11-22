@@ -24,6 +24,23 @@ citations below resolve at the base revision.
 | "the plan row lists only `test imports`" | the real coupling is four-way, not three: the two by-path loaders, the `refusal_returns` AST walk, the two module-global monkeypatch targets (`SANITIZE_SCRIPT`; `_HOST_PATH_PATTERNS`; `subprocess`; `terminate_owned_process_tree`), and the materialized-tool copies of two tests (`:1075-1085`, `:3700-3712`) that must now carry the new modules or the copies cannot import |
 | "the refusal-coverage test prints line numbers that historical records quote" | confirmed: base run prints `17 returns, 15 reached …, 2 unreached: "the derived vitest run timed out" (line 2015), "the derived vitest report carries a malformed assertion" (line 2044)`; after the move the *counts* are the pin, the line numbers stay historical |
 
+## Conductor decisions (D1/D2) and amendments
+
+- **D1 (binding).** The `DELIVERED_TOOL_PATHS` extension (change (4)) and the `tooling_sources`
+  extension (change (5)) are the sole authorized output-shape changes.
+- **D2 (binding).** Module sizes are report-only; the gates are the module map, the refusal
+  inventory, the CLI byte-diff and the two binding pins.
+
+**Amendment to D1 (review fix r1, 2026-11-22).** The entry's startup tool-set binding is
+authorized in addition: the own-directory `sys.path` insertion resolves the four sibling modules
+beside the executing entry, and the guard refuses before argparse (tool stderr shape, exit 1) with
+one of three messages — `the sibling modules did not resolve beside the entry: …`, `the entry is …
+but the receipt binds …`, `<module> was executed from bytecode that does not match its source`.
+Each fires only in a state the single-file base could not be in (a tool copy missing its siblings,
+a renamed entry, a bytecode cache that no longer matches its source); the recorded 21-file CLI
+byte-diff (evidence §4, §10, §11) is byte-identical, so no rule, refusal or output of the seven
+subcommands changes. Details: "Review fix r1" below; behaviour evidence: the record's §10.
+
 ## Deliverable shape
 
 | file | state | content |
@@ -92,8 +109,9 @@ constant can only ever name files that executed.
 The entry imports exactly what its own code uses; it re-exports nothing it does not use. Contract
 Change (1)'s recorded alternative is taken for every name the suites do not get from the entry's
 own namespace: each `runner.<rule>` read and every module-global patch site is repointed to the
-module that defines the rule (`defining_module("model_routing_records" | "model_routing_gates")`,
-the same object the entry imports). Reasons, recorded as the decision the contract asked to state:
+module that defines the rule (`importlib.import_module("model_routing_records" |
+"model_routing_gates")`, the same object the entry imports). Reasons, recorded as the decision the
+contract asked to state:
 
 - a module-global patch only reaches code that executes in that module's namespace, so
   `SANITIZE_SCRIPT`/`_HOST_PATH_PATTERNS`, `subprocess` and `terminate_owned_process_tree` *must*
@@ -125,14 +143,15 @@ executes in that module's namespace, so these must name the defining module (con
 | `:2933` `refusal_returns(SCRIPT.read_text(…), "vitest_report_detail")` | the gates module file's text (AST walk is line-number-relative to the defining file; the counted set stays identical) |
 | `:1075-1085` and `:3700-3712` tool-materialization loops | the one `MATERIALIZED_TOOL_NAMES` tuple gains the four new module file names, or the materialized entry cannot import |
 
-The new helper is one loader, `defining_module(name)`: plain `importlib.import_module(name)` returns
-the `sys.modules` instance the entry itself binds, so the suite reads and patches the defining
-module's own globals, and the helper does not load the entry first. Every assertion, needle, count
-and fixture byte stays; the re-exported `runner.*` reads stay as they are.
+The suites read the defining module with `importlib.import_module(name)`: it returns the
+`sys.modules` instance the entry itself binds, so the suite reads and patches the defining module's
+own globals, and it does not load the entry first. Every assertion, needle, count and fixture byte
+stays; the re-exported `runner.*` reads stay as they are. (At r1 this was a named one-line helper,
+`defining_module`; the P3 closeout below inlined it.)
 
-`test-model-routing-omp-usage.py` gets its own two loaders — `load_records_module()` for the six
-validator/constant sites (`validate_usage`, `Refused`, the `STAGES`/`SECRET_KEY_PATTERN` pin) and
-`load_usage_module()` for the extractor — and it does not load the entry. Reads of rules the entry
+`test-model-routing-omp-usage.py` loads `model_routing_records` at its six validator/constant sites
+(`validate_usage`, `Refused`, the `STAGES`/`SECRET_KEY_PATTERN` pin) and keeps the
+`load_usage_module()` loader for the extractor; it does not load the entry. Reads of rules the entry
 keeps (`Refused`, `canonical_json`, `dependency_tree_digest`, `first_difference`,
 `redact_host_paths`, `_dependency_tree`) stay spelled against the loaded runner.
 
@@ -140,12 +159,12 @@ keeps (`Refused`, `canonical_json`, `dependency_tree_digest`, `first_difference`
 
 | file | base | delivered |
 | --- | ---: | ---: |
-| `scripts/ci/model-routing-evaluation.py` | 4,199 L / 200,035 B | 797 L / 36,646 B |
+| `scripts/ci/model-routing-evaluation.py` | 4,199 L / 200,035 B | 798 L / 36,608 B |
 | `scripts/ci/model_routing_records.py` | — | 1,236 L / 53,672 B |
 | `scripts/ci/model_routing_subject.py` | — | 539 L / 25,517 B |
 | `scripts/ci/model_routing_gates.py` | — | 1,119 L / 55,535 B |
 | `scripts/ci/model_routing_receipts.py` | — | 699 L / 32,272 B |
-| total source | 4,199 L | 4,390 L (+191: four module import headers, the bound-tooling constants, the review-fix startup statements, minus dropped comment lines) |
+| total source | 4,199 L | 4,391 L (+192: four module import headers, the bound-tooling constants, the review-fix startup statements, the P3 closeout's `SPLIT_SCRIPTS` import, minus dropped comment lines) |
 
 215 base top-level units: 214 delivered byte-identical, 1 (`build_receipt`) delivered with the
 recorded `tooling_sources` patch and nothing else.
@@ -251,8 +270,10 @@ its pin, the `tooling_sources` key set, and the LOC delta (report-only, D2) — 
 
 - `docs/evaluations/model-routing/README.md`'s "Tooling-source growth" paragraph (dated
   verification section, 2026-11-20) states the current block has four entries; after this slice it
-  has eight. The paragraph is a dated observation, the README is not in the owned set, and the
-  evaluations' `accept` rows there stay historical.
+  has eight. The paragraph is a dated observation and the evaluations' `accept` rows there stay
+  historical. The same section's re-verification procedure named a lone `git show` of the entry;
+  the P3 closeout below refreshed it for post-split revisions (whole-set extraction), so only the
+  four-entries paragraph remains stale.
 - The contract's own `<file>:<line>` references re-derive above; the record carries the re-derived
   coordinates.
 
@@ -299,8 +320,9 @@ produced six changes, all inside the owned set (no workflow, no `citest.py`, no 
   the output).
 - **F5 (advisory).** Both binding pins gain an ast-derived closure arm: `runner_module_closure()`
   walks every `model_routing_*` import from the entry transitively, and the closure must be inside
-  the receipt key set / `DELIVERED_TOOL_PATHS`; the literal arms stay. The walk is duplicated in
-  the two standalone suites because `citest.py` is outside the owned set.
+  the receipt key set / `DELIVERED_TOOL_PATHS`; the literal arms stay. At r1 the walk was duplicated
+  in the two standalone suites because `citest.py` was outside the owned set; the P3 closeout moved
+  the one copy both suites call into `citest.py` (`citest.runner_module_closure(script)`).
 - **F6 (advisory).** The two-line comment on `test_receipt_binds_every_tooling_source` is removed;
   the invariant lives in the test name, the closure arm and the digest assertions.
 - **F3/F4.** The layering list above now names the subject's and gates' actual `records` imports,
@@ -310,3 +332,26 @@ produced six changes, all inside the owned set (no workflow, no `citest.py`, no 
 `model_routing_receipts.py` keep their reviewed bytes; the refusal inventory, every existing
 refusal message and the seven byte-diff invocations are unchanged, and the fix's new refusals fire
 only where the tool set cannot be bound to what executes.
+
+## P3 closeout (2026-11-22)
+
+The PR review's four P3 findings (findings file outside the repository) are closed; `citest.py`
+and the evaluations README join the changed set here:
+
+- **P3-1 (derived tool set).** The entry no longer copies the four module names by hand:
+  `_TOOL_MODULES = tuple(path.stem for path in SPLIT_SCRIPTS)` derives the guard's stale-bytecode
+  list from the receipts module's one binding set. Mutation: drop `"model_routing_subject.py"` from
+  `SPLIT_SCRIPTS` → `test_receipt_binds_every_tooling_source` reddens (`Items in the second set but
+  not the first: 'model_routing_subject.py'`); the name is restored byte-identically (`sha256sum -c`
+  OK, empty diff).
+- **P3-2 (test hunks).** The name-restating docstrings are gone; `defining_module` and
+  `load_records_module` are inlined as direct `importlib.import_module` calls; the duplicated
+  `runner_module_closure` walk now lives once in `citest.py`.
+- **P3-3 (records).** This closeout plus the D1 amendment above state the guard's refusal surface;
+  the PR body replacement text (798-line entry, 84 tests, the r1 additions) is written to the
+  review findings directory outside the repository.
+- **P3-4 (README).** The "Receipt verification and the bound tooling revision" procedure now names
+  the post-split whole-set extraction (`git archive <revision> scripts/ci | tar -x`); the
+  "Tooling-source growth" paragraph stays a dated observation (see known staleness above).
+
+Gate runs and re-measured figures: the evidence record's §11.
