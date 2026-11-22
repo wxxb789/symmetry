@@ -18,26 +18,28 @@ worktree's dispatch HEAD, all base coordinates below; tree clean). Plan:
 
 | file | status | lines (base → head) | note |
 | --- | --- | ---: | --- |
-| `frontend/src/services/api.ts` | edited | 1005 → 1004 | `Reads` `:487-502`, `Writes` `:504-541`, `Api` `:543`; `request()` `:611-660`; 9 read bodies, 20 write bodies |
+| `frontend/src/services/api.ts` | edited | 1005 → 1002 | `Reads` `:487-502`, `Writes` `:504-541`, `Api` `:543`; `request()` `:611-658`; 9 read bodies, 20 write bodies; −2 from the apply stage's note deletion (§12) |
 | `frontend/src/services/api.test.ts` | edited | 556 → 581 | 14 write calls lose their signal; the control table's `send` loses its parameter; 3 new guarding clauses |
 | `frontend/src/app/application.ts` | edited | 355 → 355 | 5 write mutations lose `new AbortController().signal`; `:181` (`api.session`, a read) keeps its controller |
-| `frontend/src/app/application.test.ts` | edited | 109 → 109 | the `createConnection` call loses its signal |
-| `frontend/src/features/connections/connections.tsx` | edited | 504 → 504 | 4 write sites |
-| `frontend/src/features/connections/resources.tsx` | edited | 690 → 690 | 5 write sites |
+| `frontend/src/app/application.test.ts` | edited | 109 → 105 | the `createConnection` call loses its signal; −4 from the apply stage's note deletion (§12) |
+| `frontend/src/features/connections/connections.tsx` | edited | 504 → 496 | 4 write sites; −8 from the apply stage's note deletion (§12) |
+| `frontend/src/features/connections/resources.tsx` | edited | 690 → 688 | 5 write sites; −2 from the apply stage's note deletion (§12) |
 | `frontend/src/features/planning/editors.tsx` | edited | 559 → 559 | 4 write sites |
 | `frontend/src/features/projects/projects.tsx` | edited | 143 → 143 | 1 write site |
 | `frontend/src/features/projects/work-surface.tsx` | edited | 360 → 360 | 1 write site |
 | `frontend/src/features/work/assignment.tsx` | edited | 334 → 334 | 1 write site |
 | `docs/plans/2026-11-22-rf-w4-09-api-reads-writes-split-plan.md` | new | 211 | plan with decisions P1-P9 |
 | `docs/evidence/rf-w4-09-api-reads-writes-split-2026-11-22.md` | new | — | this record |
-| `docs/TODO.md` | edited | 1411 → 1407 | the goal-write cancellation entry moved out (§10) |
+| `docs/TODO.md` | edited | 1411 → 1429 | the goal-write cancellation entry moved out (§10); this slice's own delta is −4 lines, and the merge with main's later edits (`9e360586`) leaves the delivered file at 1429 L |
 | `docs/archive/CLOSED-TODO.md` | edited | 4423 → 4442 | that entry, closed by decision (a) |
 
 Not edited: `frontend/src/features/goals/detail.tsx` (its two constructions are reads),
 `attention.tsx`, `services/commands.ts`, `services/realtime.ts`, `features/chat/chat.tsx`,
 `frontend/vitest.config.ts`, every DOM suite, `contracts/**`, `browser/**` and every non-frontend
-package. `git status --porcelain` lists exactly the twelve modified files above plus the new plan;
-the frontend files' sha256 (final tree) are in §10.
+package. The delivery is committed as the branch merge `a159f0c0` (branch tip `54c7a3d1`, main's
+tip `9e360586`); the apply stage's four comment deletions and this record's refresh are the working
+tree's only modifications (`git status --porcelain` lists exactly those four frontend files and
+this record, §12), and the frontend files' sha256 (final tree) are in §10.
 
 ## 2. The split (`Api`: 29 methods → 9 + 20)
 
@@ -68,7 +70,7 @@ function request<A>(
   `request(fetcher, path, { method: "POST", body: envelope, csrf: csrfToken }, goalReceipt, "mutation")`
   is byte-identical (decision P2); reads pass `"server"` explicitly, writes call `run(request(…))`.
 - Reads keep both arms: `run(request(…, decode, "server", signal), signal)` (9 sites).
-- `run()` is byte-identical to W3-13's shape: `:662`, `runtime.runPromise(Effect.either(effect), signal === undefined ? undefined : { signal })` — zero diff hunks.
+- `run()` is byte-identical to W3-13's shape: `:660`, `runtime.runPromise(Effect.either(effect), signal === undefined ? undefined : { signal })` — zero diff hunks.
 - The fetch init's last member is now `...(signal === undefined ? {} : { signal })`, and the
   `Effect.tryPromise` thunk no longer names the interruption parameter (`try: async () => {}`).
   A write's init therefore has exactly `method`, `credentials`, `headers`, `cache`, `redirect`,
@@ -99,10 +101,14 @@ read-side ones retained.
 
 ## 5. Control-flow audit (lesson 32)
 
-Base → HEAD, write path. The audit is mechanical where it can be: `git diff -U0` over
-`frontend/src/services/api.ts` yields 45 hunks, all inside the interface region `:487-543`,
-`request()` `:611-660` and `createApi` `:736-908`; `function request`'s three changed lines are
-exactly the parameter, the thunk's parameter list, and the init spread.
+Base → HEAD, write path. The audit is mechanical where it can be:
+`git diff -U0 d5b14b85 -- frontend/src/services/api.ts | grep -c '^@@'` yields **48** hunks on the
+delivered tree (47 at the implementation revision; the apply stage's two-line note deletion, §12,
+is the `+622,0` hunk). Every hunk lies in one of three regions — the interface split `:487-543`,
+`request()` `:611-658` and `createApi`'s bodies `:733-905` — and no hunk touches the W3-13
+boundary: `parseRefusal` `:594`, `goalReceipt` `:679`, `goalCommand` `:935`, `postGoalCommand`
+`:946` and `postGoalCreation` `:957` are untouched. `function request`'s code changes are exactly
+the parameter, the thunk's parameter list and the init spread, plus that note deletion.
 
 | # | decision point | base | head | preserved |
 | --- | --- | --- | --- | --- |
@@ -152,15 +158,21 @@ path expression, body construction, `csrf` carrier or decoder. Per body:
 
 Base: a read's fetch init carried `Effect.tryPromise`'s interruption signal, which `run()`'s
 `runPromise(effect, { signal })` aborts when the caller's signal aborts. HEAD: the fetch init
-carries the caller's signal itself. Both signals abort on the same caller event; the interruption
-path is unchanged, so a read still fails the same way. The two runnable pins are the focused
-suite's cancellation cases (`aborts the underlying request when the consuming query is cancelled`,
+carries the caller's signal itself, and the thunk no longer receives the step's interruption signal
+— this increment deliberately removed that step-signal-to-fetch link as part of the same change
+that re-sourced the init. A caller cancel still aborts the transfer, now through the caller's
+signal, and both signals abort on the same caller event, so a read still fails the same way; a
+fiber interruption that is not the caller's signal no longer aborts the transport, which today
+reaches no different state (the `runtime` at `:385` is created once and never disposed, and `run()`
+supplies the only signal). The two runnable pins are the focused suite's cancellation cases
+(`aborts the underlying request when the consuming query is cancelled`,
 `aborts the in-flight body download when the consumer cancels during the read`), both green (§6
 row 3). This is an argument plus the HEAD-side tests, not an A/B measurement — see §11.
 
 ## 6. Gates (all foreground, serialized)
 
-Baseline rows at `d5b14b85` before any edit; head rows on the delivered tree. Host note: every
+Baseline rows at `d5b14b85` before any edit; head rows on the implementation revision's tree, re-run
+with identical counts on the apply stage's delivered tree (§12). Host note: every
 `pnpm` invocation runs as `mise x pnpm@12.17.0 -- pnpm --trust-lockfile …` (the workspace pins pnpm
 12.17.0; the lockfile policy feed is unreachable on this host, the same bypass W4-08/W4-11
 recorded). No measurement harness ran beside a suite.
@@ -188,7 +200,9 @@ Final-tree re-run (after the mutation round and the documentation edits, seriali
 against the §10 hashes): `typecheck` exit 0; `lint` exit 0, 218 warnings; the focused pair exit 0 at
 139 tests; the full suite exit 0 at 22 files / 546 tests (46.01 s this run against 30.87 s for the
 first run — same counts, host-load variance); `git diff --check` exit 0; `sha256sum -c` `OK` for all
-ten frontend files. No frontend file changed after the mutation round.
+ten frontend files. No frontend file changed after the mutation round. The apply stage re-ran rows
+1-7 and 11 on the comment-deleted tree (§12): same counts, all green, and the §10 hashes are the
+delivered tree's.
 
 ## 7. Mutation flips (each applied alone, run, reverted; hash-verified revert)
 
@@ -196,9 +210,9 @@ ten frontend files. No frontend file changed after the mutation round.
 | --- | --- | --- |
 | M1 write signal re-added (write pin's mutant) | `Writes.createConnection` regains `signal?: AbortSignal` | `typecheck` exit 1: `src/services/api.test.ts(570,5): error TS2578: Unused '@ts-expect-error' directive.` |
 | M2 read signal dropped at a call site (contract mutation b) | `application.ts` `sessionOptions`'s `api.session(signal)` → `api.session()` | `typecheck` exit 1: `src/app/application.ts(212,22): error TS2554: Expected 1 arguments, but got 0.` |
-| M3 read signal made optional (read pin's mutant) | `Reads.session` drops its `signal` parameter | `typecheck` exit 1: `api.test.ts(577,5): error TS2578: Unused '@ts-expect-error' directive.` **and** `api.ts(765,5): error TS2322` (the implementation still requires the signal) |
+| M3 read signal made optional (read pin's mutant) | `Reads.session` drops its `signal` parameter | `typecheck` exit 1, re-measured on the delivered tree: `api.test.ts(577,5): error TS2578: Unused '@ts-expect-error' directive.` **and** `api.ts(763,5): error TS2322` (the implementation still requires the signal), plus `TS2554` at the four read call sites that lose their argument (`application.ts:181`, `:212`, `api.test.ts:71`, `:171`) |
 | M4 csrf header dropped (contract mutation c) | `request()`'s init drops the `x-csrf-token` header spread | `vitest run src/services/api.test.ts src/features/chat/chat.test.tsx` exit 1: `Tests 5 failed \| 92 passed (97)` — the four control rows and the chat row (`sends the frozen request verbatim with the caller's CSRF token and never retries`); `chat.test.tsx` passed (its write assertions pin path/method/body, not the header) |
-| M5a undefined-valued signal member, faithful form (init-shape pin's mutant / contract mutation d) | init always spreads `signal` (`signal,`) | `typecheck` exit 1: `api.ts(627,46): error TS2769` — under `exactOptionalPropertyTypes: true`, `signal: AbortSignal \| undefined` is not assignable to the DOM `RequestInit`'s `signal: AbortSignal \| null`; **and** `vitest run src/services/api.test.ts` exit 1: `Tests 1 failed \| 48 passed (49)` at `expect(Object.hasOwn(init ?? {}, "signal")).toBe(false)` |
+| M5a undefined-valued signal member, faithful form (init-shape pin's mutant / contract mutation d) | init always spreads `signal` (`signal,`) | `typecheck` exit 1, re-measured on the delivered tree: `api.ts(625,46): error TS2769` — under `exactOptionalPropertyTypes: true`, `signal: AbortSignal \| undefined` is not assignable to the DOM `RequestInit`'s `signal: AbortSignal \| null`; **and** `vitest run src/services/api.test.ts` exit 1: `Tests 1 failed \| 48 passed (49)` at `expect(Object.hasOwn(init ?? {}, "signal")).toBe(false)` |
 | M5b undefined-valued member, compiling form | init spreads `{ signal: null }` when absent | `vitest run src/services/api.test.ts` exit 1: `Tests 1 failed \| 48 passed (49)`, `AssertionError: expected true to be false` at the same own-member assertion |
 
 Revert proof: after the flip round, `sha256sum -c` over all ten delivered frontend files printed `OK`
@@ -230,41 +244,55 @@ receipt/refusal assertions are untouched (`git diff` shows only the signal argum
 
 ## 9. Comment policy (owner, 2026-11-22)
 
-Nothing was added except the two `@ts-expect-error` directives (machine-consumed) and the tests'
-mutant-naming titles. The touched regions' existing why-only notes were left as they are: the
-one-signalled-step note inside `request()`, the opaque-`before`-cursor note in the read bodies, the
-control quartet's contract note, and the per-file notes in the seven feature files (their diffs
-touch single call lines only). No test step labels, no commented-out code, no suppression, no
-`eslint-disable`.
+Implementation revision: nothing was added except the two `@ts-expect-error` directives
+(machine-consumed) and the tests' mutant-naming titles; the touched regions' existing why-only
+notes were left in place (the opaque-`before`-cursor note in the read bodies, the control quartet's
+contract note, and the per-file notes in the seven feature files, whose diffs touch single call
+lines). No test step labels, no commented-out code, no suppression, no `eslint-disable`.
+
+Apply stage (2026-11-22, §12): four comment blocks were deleted under the accepted simplify
+findings (S1-S4) — `request()`'s stale one-signalled-step note (this increment removed the step
+signal it named), `application.test.ts`'s false handler-precedence note (`application.ts:153-156`
+documents the cache-level `onError` as running for every mutation, including the ones that supply
+their own, and `@tanstack/query-core@5.107.1` chains rather than replaces), `connections.tsx`'s
+eight-line rationale duplicating the note beside `noticeFor`, and `resources.tsx`'s two-line
+receipt note. 16 comment lines in four files; no test, type, assertion or runtime line was touched.
 
 ## 10. Boundary checks
 
-- **Owned set exactly.** `git status --porcelain`: 12 modified files (the ten owned frontend files,
-  `docs/TODO.md`, `docs/archive/CLOSED-TODO.md`) plus the new plan; the evidence file is this one.
+- **Owned set exactly.** The delivery's whole diff — `git diff --name-status 9e360586..HEAD` (main's
+  tip → the merged branch) plus the apply stage's uncommitted comment deletions (§12) — is exactly
+  the ten owned frontend files, `docs/TODO.md`, `docs/archive/CLOSED-TODO.md`, the plan and this
+  record; `git status --porcelain` lists the four frontend files the apply stage edited plus this
+  record, and nothing else.
   `goals/detail.tsx`, `attention.tsx`, `commands.ts`, `realtime.ts`, `chat.tsx`, `vitest.config.ts`,
-  every DOM suite, `contracts/**` and `browser/**` are untouched (the four frontend of these appear
-  in no diff, and rows 4/5/6 re-run their suites unmodified).
-- **Identities** (sha256, final tree):
+  every DOM suite, `contracts/**` and `browser/**` are untouched (each appears in no diff of either
+  revision, and rows 4/5/6 re-run those suites as byte-identical files).
+- **Identities** (sha256, delivered tree; the apply stage's four deletions are included — §12):
 
 | file | sha256 |
 | --- | --- |
-| `frontend/src/services/api.ts` | `011fcd4b712f6d4d614e2654193b945f86b60c9d4ba77fef287336b4ebd106e2` |
+| `frontend/src/services/api.ts` | `2156ab727bacdfb151b3397f8cdac391ef33a12e787ce5747f6d5ee89caecf80` |
 | `frontend/src/services/api.test.ts` | `e4f0b4888183fdbed4c8ce25430c5dbd40a5a1b17205f9f2096f02814a1fe11a` |
 | `frontend/src/app/application.ts` | `9ed8c691b80394fe04b81ff30c4905fffe40a19e9c166479741e83f5318ed677` |
-| `frontend/src/app/application.test.ts` | `db9a3262235f5ede87c543dcaa0c93aa1a7b4459aeb25671b3bba88bdf08ebda` |
-| `frontend/src/features/connections/connections.tsx` | `440f707634f6a86c255f3a85142c61ee2d8177f9651ff68aba52e64de5551eaf` |
-| `frontend/src/features/connections/resources.tsx` | `c9b657b46130ffe453171a8206f1990bbe0a5c6a9fb897fb5c9989109278a80d` |
+| `frontend/src/app/application.test.ts` | `d93a2210805c331de7b806696a2e8506d905f69b094a965ce83ee77cfe23b883` |
+| `frontend/src/features/connections/connections.tsx` | `f448401f92791b701f1258016a3549b68ba1d0eb3772075f28cffaafdcf86c66` |
+| `frontend/src/features/connections/resources.tsx` | `86c496356d8ea32de16d7e12f74f8878d467287e6618feaefd9926d73f071ff0` |
 | `frontend/src/features/planning/editors.tsx` | `1bf4205ad503a2fd696c148e7dbdf6f43ffba38cffb88a0d272015dc36eb28f9` |
 | `frontend/src/features/projects/projects.tsx` | `d628e83e46828e22fb31f70eb47253c1d35ef7f04edf48f165bce347d208b49f` |
 | `frontend/src/features/projects/work-surface.tsx` | `7f2ccf74ccbf8a8dda74f5b7df261bc062dfe1cac710ba3ad8f3c53ecc26907a` |
 | `frontend/src/features/work/assignment.tsx` | `d72a69aabcf3a54d601f525b088e0c2ba9ea76c6713b3753e51bc22d42c84423` |
 
-- **LOC delta (report-only, D2).** `git diff --numstat`: `api.ts` +76/−77 (net −1 line),
-  `api.test.ts` +44/−19 (net +25), the five-feature/app set +1/−1 each (net 0), `docs/TODO.md` −4,
-  `docs/archive/CLOSED-TODO.md` +19. Non-test source LOC: −1; write-site constructions removed: 21;
-  `signal` tokens deleted in `api.ts`: 20 interface rows, 20 implementation signatures, 20 `run(…)`
-  arguments; added: one optional parameter, one conditional init spread, nine `"server"` read
-  arguments.
+- **LOC delta (report-only, D2).** `git diff --numstat d5b14b85` over the delivered tree: `api.ts`
+  +76/−79 (net −3), `api.test.ts` +44/−19 (net +25), `application.ts` +5/−5, `application.test.ts`
+  +1/−5 (net −4), `connections.tsx` +4/−12 (net −8), `resources.tsx` +5/−7 (net −2), `editors.tsx`
+  +4/−4, `projects.tsx` +1/−1, `work-surface.tsx` +1/−1, `assignment.tsx` +1/−1 (net 0 each),
+  `docs/TODO.md` +22/−4 (this slice −4; the merge with main's edits +22),
+  `docs/archive/CLOSED-TODO.md` +19/−0. Net, delivered: non-test source −13 (implementation
+  revision −1; −12 is the apply stage's comment deletions — 16 comment lines, 12 in non-test source
+  and 4 in the test file), test files +21; write-site constructions removed: 21; `signal` tokens
+  deleted in `api.ts`: 20 interface rows, 20 implementation signatures, 20 `run(…)` arguments;
+  added: one optional parameter, one conditional init spread, nine `"server"` read arguments.
 - **Frozen bytes (D1).** No changed line in the seven app/feature files differs from its base line
   once the `, new AbortController().signal` token is deleted (mechanical check over
   `git diff -U0 -- frontend/src/app/application.ts frontend/src/features`); the header/body/
@@ -300,3 +328,38 @@ touch single call lines only). No test step labels, no commented-out code, no su
   the DOM suites in §6 rows 4-5 are the local write-path proxies.
 - **Lint ceiling:** the count stays at 218 against the pinned 229; if a later slice adds warnings the
   headroom is 11.
+
+## 12. Apply stage (2026-11-22, accepted simplify findings S1-S4, PD1-PD2)
+
+Comment-only deletions on top of the implementation revision; no test, type, assertion or runtime
+line changed. Pre-apply coordinates and what was deleted:
+
+| # | file:lines (pre-apply) | deleted | why it was safe |
+| --- | --- | --- | --- |
+| S1 | `frontend/src/services/api.ts:623-624` | `request()`'s one-signalled-step note (2 lines) | the mechanism it named — the step's interruption signal feeding the fetch — was removed by this increment's own `init.signal` re-sourcing (R10/§5.2); a caller cancel now travels through the caller's signal, and `api.test.ts:153`/`:196` (green, row 3) pin the cancellation |
+| S2 | `frontend/src/app/application.test.ts:83-86` | the handler-precedence note (4 lines) | its premise was false: `application.ts:153-156` documents and implements the cache-level `onError` for every mutation, including the ones that supply their own; `defaultOptions.mutations` carries no handler to be replaced; and `@tanstack/query-core@5.107.1` (`build/modern/mutation.js` `:205`/`:210`) awaits the cache-level `onError` and then the mutation's own. The test's title and assertions carry the rule |
+| S3 | `frontend/src/features/connections/connections.tsx:210-217` | the remount/rationale block (8 lines; the finding cites `:210-216`) | it duplicated the note beside `noticeFor` (`:403-409` on the delivered tree), and the invariant is pinned by `connections.test.tsx:522` and `:554`, both green (row 5) |
+| S4 | `frontend/src/features/connections/resources.tsx:453-454` | the receipt note (2 lines) | the first clause restated what the types already say (`mutationFn …: Promise<unknown>` `:453`, `onSuccess: (_receipt, submission)` `:464`); the residue was design rationale, outside the comment policy's keep classes |
+
+16 comment lines in four files; `git diff --numstat` deltas: `api.ts` −2, `application.test.ts` −4,
+`connections.tsx` −8, `resources.tsx` −2 (§1 and §10 are refreshed in place). PD1: §5's hunk count
+is corrected and now carries its counting command (48 on the delivered tree; 47 at the
+implementation revision). PD2: §5.2 no longer claims the whole interruption path is unchanged — it
+states the deliberately removed step-signal-to-fetch link and the consequence that today reaches no
+different state. The plan's "Exact edge-case semantics" item 6 records the implementation decision
+that the touched regions' 1-2 line why-only notes stay; the owner comment policy's keep list
+governs what stays, and the four blocks deleted here are recorded in this section and §9.
+
+Gates re-run on the frozen delivered frontend tree (serialized; the §10 hashes were re-verified
+after the run): `typecheck` exit 0; `lint` exit 0 at the same 218 warnings / 0 errors (ceiling 229
+untouched); the focused pair exit 0 at 2 files / 139 tests; `chat.test.tsx` exit 0 at 48 tests; the
+four remaining DOM write-path suites exit 0 at 4 files / 115 tests (163 with chat); the full suite
+exit 0 at 22 files / 546 tests (37.77 s); `pnpm build` exit 0 (`✓ built in 1.31s`); `git diff
+--check` exit 0; `sha256sum -c` `OK` for all ten frontend files; §4's `AbortController` grep is
+re-measured identically (3 non-test / 19 test), and the DLP greps over the delivered range's 796
+added lines have no match (profile-path pattern, backslash-u and the profile name; grep exit 1).
+Mutation rows M3 and M5a were re-measured on the
+delivered tree (§7); M1/M2/M4/M5b were not re-run because their files are byte-identical
+(`api.test.ts` `e4f0b488…`, `application.ts` `9ed8c691…`, §10) and their transcripts carry no
+delivered-tree coordinate. No measurement harness exists for this goal; the counts above are its
+measurements.

@@ -450,8 +450,6 @@ function ResourceDialog(props: ResourceDialogProps) {
   };
   const pendingSubject = intent.kind === "bind" ? projectSubject(intent.projectId) : resourceSubject(intent.resource.id);
   const save = useMutation({
-    // The receipt is not read: the notice names the submission, and the project read
-    // the surface already holds shows the applied state.
     mutationFn: (submission: ResourceSubmission): Promise<unknown> => {
       switch (submission.kind) {
         case "bind": return api.createResource(submission.projectId, submission.draft, csrf);

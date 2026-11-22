@@ -620,8 +620,6 @@ function request<A>(
   signal?: AbortSignal,
 ): Effect.Effect<A, ApiError> {
   return Effect.gen(function* () {
-    // Fetch and body read share one signalled step, so a caller cancel aborts an
-    // in-flight body download; a controller-free second step would leave it running.
     const { response, expired, body } = yield* Effect.tryPromise({
       try: async () => {
         const response = await fetcher(path, {

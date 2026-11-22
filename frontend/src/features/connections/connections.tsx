@@ -207,14 +207,6 @@ function ConnectionDetail({ connection, api, csrf, writePending, requests, close
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; version: number } | null>(null);
   const deleteOpener = useRef<HTMLElement | null>(null);
   const refresh = () => queryClient.invalidateQueries({ queryKey: ["connections"] });
-  // This detail belongs to exactly one connection (the list keys it by
-  // connection id), and its requests belong to that connection, not to the
-  // instance: the page holds the pending state by connection id so a remount
-  // while the operator inspects another connection cannot forget a running
-  // check or removal. A continuation that settles for a connection the
-  // operator has left neither navigates nor reopens anything — only its own
-  // notice is stated (an empty selection still counts as the operator's own
-  // request, see `noticeFor`).
   const check = useMutation({
     mutationFn: () => api.checkConnection(connection.id, csrf),
     onMutate: () => { onRequest(connection.id, "check", true); },
