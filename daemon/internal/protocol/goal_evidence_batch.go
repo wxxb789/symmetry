@@ -4,14 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-
-	contractdto "github.com/wxxb789/symmetry/daemon/internal/contracts"
 )
 
-const (
-	EvidenceBatchSchemaVersion = "symmetry.evidence_batch.v1"
-	evidenceBatchMaxItems      = 256
-)
+const EvidenceBatchSchemaVersion = "symmetry.evidence_batch.v1"
 
 // EvidenceBatch is the machine-only batch transport for normalized evidence.
 // Each item remains a complete symmetry.evidence.v1 envelope; the batch adds
@@ -20,75 +15,6 @@ type EvidenceBatch struct {
 	SchemaVersion string     `json:"schema_version"`
 	RunID         string     `json:"run_id"`
 	Items         []Evidence `json:"items"`
-}
-
-type evidenceBatchWire struct {
-	SchemaVersion string            `json:"schema_version"`
-	RunID         string            `json:"run_id"`
-	Items         []json.RawMessage `json:"items"`
-}
-
-func (batch *EvidenceBatch) UnmarshalJSON(data []byte) error {
-	var decoded evidenceBatchWire
-	if err := decodeStrictObject(data, &decoded, "schema_version", "run_id", "items"); err != nil {
-		return err
-	}
-
-	value := EvidenceBatch{
-		SchemaVersion: decoded.SchemaVersion,
-		RunID:         decoded.RunID,
-		Items:         make([]Evidence, 0, len(decoded.Items)),
-	}
-	if value.SchemaVersion != EvidenceBatchSchemaVersion {
-		return fmt.Errorf("schema_version must be %q", EvidenceBatchSchemaVersion)
-	}
-	if err := validateUUID(value.RunID, "run_id"); err != nil {
-		return err
-	}
-	if len(decoded.Items) == 0 {
-		return fmt.Errorf("items must contain at least one evidence item")
-	}
-	if len(decoded.Items) > evidenceBatchMaxItems {
-		return fmt.Errorf("items must contain at most %d evidence items", evidenceBatchMaxItems)
-	}
-
-	seenIDs := make(map[string]struct{}, len(decoded.Items))
-	seenKeys := make(map[string]struct{}, len(decoded.Items))
-	for index, rawItem := range decoded.Items {
-		evidence, err := ParseEvidence(rawItem)
-		if err != nil {
-			return fmt.Errorf("items[%d]: %w", index, err)
-		}
-		if evidence.RunID != value.RunID {
-			return fmt.Errorf("items[%d].run_id must match batch run_id", index)
-		}
-		if _, exists := seenKeys[evidence.EvidenceKey]; exists {
-			return fmt.Errorf("items[%d] duplicates evidence_key %q", index, evidence.EvidenceKey)
-		}
-		if _, exists := seenIDs[evidence.EvidenceID]; exists {
-			return fmt.Errorf("items[%d] duplicates evidence_id %q", index, evidence.EvidenceID)
-		}
-		seenKeys[evidence.EvidenceKey] = struct{}{}
-		seenIDs[evidence.EvidenceID] = struct{}{}
-		value.Items = append(value.Items, evidence)
-	}
-
-	*batch = value
-	return nil
-}
-
-// ParseEvidenceBatch validates the canonical batch schema and all item-level
-// evidence semantics, then applies the batch-only identity invariants.
-func ParseEvidenceBatch(data []byte) (EvidenceBatch, error) {
-	if err := RejectDuplicateJSONMembers(data); err != nil {
-		return EvidenceBatch{}, fmt.Errorf("decode evidence-batch JSON: %w", err)
-	}
-	var wire contractdto.SymmetryEvidenceBatchV1
-	var batch EvidenceBatch
-	if err := decodeGoalEnvelope(data, contractdto.EnvelopeEvidenceBatch, &wire, &batch); err != nil {
-		return EvidenceBatch{}, err
-	}
-	return batch, nil
 }
 
 // RejectDuplicateJSONMembers rejects duplicate keys before any Go object

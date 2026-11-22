@@ -174,18 +174,9 @@ func TestCanonicalizeJSONEscapesControlCharactersLikeTheControlPlane(t *testing.
 	}
 }
 
-// The reachable seam: the daemon recomputes this canonical text before it
-// accepts a plan proposal and refuses it when the digest differs from the one
-// the control plane stamped with Jason
-// (goal_contract_semantics.go canonicalPlanProposalSHA256, "proposal_hash does
-// not match canonical proposal"; the same rule for control-bearing free text
-// in a context snapshot at goal_schema.go validateContextSnapshotContentHash
-// and control/validation.go validateGoalContextContentHash). The expectation is
-// the control plane's digest already recorded by the frontend pin
+// The control plane digests plan-proposal canonical JSON with Jason; the
+// expectation is the digest the frontend pin records
 // (frontend/src/features/goals/goal-attention.test.tsx:751-790).
-// The second half calls canonicalPlanProposalSHA256 itself on the same proposal
-// with the optional integration member omitted, so normalizePlanProposal's
-// defaulting is part of what this test pins.
 func TestCanonicalizeJSONPlanProposalHashMatchesTheControlPlaneDigest(t *testing.T) {
 	canonical, err := CanonicalizeJSON([]byte(`{"schema_version":"symmetry.plan.v1","items":[{"description":"before\u000Bafter\u001Bend","integration":false,"change_target":null}]}`))
 	if err != nil {
@@ -199,25 +190,6 @@ func TestCanonicalizeJSONPlanProposalHashMatchesTheControlPlaneDigest(t *testing
 	const wantHash = "sha256:6a41b487e2e260e048b11ea7e3221f53aa9705fc5a9d943a353e6b8c39d202e5"
 	if gotHash := "sha256:" + hex.EncodeToString(digest[:]); gotHash != wantHash {
 		t.Fatalf("canonical plan proposal hash = %s, want %s", gotHash, wantHash)
-	}
-
-	// The daemon's own seam over the same proposal: normalizePlanProposal
-	// defaults the omitted integration member to false before hashing, so this
-	// must land on the bytes and digest pinned above.
-	proposalDigest, err := canonicalPlanProposalSHA256(map[string]any{
-		"schema_version": "symmetry.plan.v1",
-		"items": []any{
-			map[string]any{
-				"description":   "before\x0bafter\x1bend",
-				"change_target": nil,
-			},
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if proposalDigest != wantHash {
-		t.Fatalf("canonicalPlanProposalSHA256 = %s, want %s", proposalDigest, wantHash)
 	}
 }
 

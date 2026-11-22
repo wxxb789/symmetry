@@ -87,15 +87,6 @@ func (subject Subject) Hash() (string, error) {
 	return "sha256:" + hex.EncodeToString(digest[:]), nil
 }
 
-// ParseSubject decodes and validates a complete Subject.
-func ParseSubject(data []byte) (Subject, error) {
-	var subject Subject
-	if err := json.Unmarshal(data, &subject); err != nil {
-		return Subject{}, err
-	}
-	return subject, nil
-}
-
 // CanonicalizeJSON sorts object keys recursively while preserving array order.
 // It is deliberately limited to the standard JSON data model and has no schema
 // or behavior semantics; callers must validate their DTO before hashing it.

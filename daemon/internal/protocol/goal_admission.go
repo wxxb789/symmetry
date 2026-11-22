@@ -775,15 +775,3 @@ func (adapter *Adapter) UnmarshalJSON(data []byte) error {
 }
 
 type adapterWire Adapter
-
-// ParseAdapterCapabilities decodes the exact capabilities object embedded in a
-// runtime registration. It preserves the legacy boolean fields and adds the
-// versioned adapter object without inventing a parallel envelope.
-func ParseAdapterCapabilities(data []byte) (RuntimeCapabilities, error) {
-	var wire contractdto.SymmetryAdapterCapabilitiesV1
-	var capabilities RuntimeCapabilities
-	if err := decodeGoalEnvelope(data, contractdto.EnvelopeAdapterCapabilities, &wire, &capabilities); err != nil {
-		return RuntimeCapabilities{}, err
-	}
-	return capabilities, nil
-}

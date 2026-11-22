@@ -66,8 +66,29 @@ func TestGoalTransportParsesContractFixtures(t *testing.T) {
 			case contractdto.EnvelopeAttentionRead, contractdto.EnvelopeChatRead, contractdto.EnvelopeGoalRead, contractdto.EnvelopeWorkspaceRead, contractdto.EnvelopeWorkDetailRead, contractdto.EnvelopeWorkTimelineRead:
 				var presentation map[string]any
 				semanticErr = contractdto.DecodeSchema(contractdto.Envelope(fixture.Schema), data, &presentation)
+			case contractdto.EnvelopeAdmission:
+				_, _, semanticErr = ParseAdmissionInput(data)
+			case contractdto.EnvelopeTaskResult:
+				_, semanticErr = ParseTaskResult(data)
+			case contractdto.EnvelopeContextSnapshot:
+				_, semanticErr = DecodeContextSnapshot(data)
+			case contractdto.EnvelopeAdapterCapabilities:
+				var capabilities RuntimeCapabilities
+				semanticErr = json.Unmarshal(data, &capabilities)
+			case contractdto.EnvelopeEvidence:
+				var evidence Evidence
+				semanticErr = json.Unmarshal(data, &evidence)
+			case contractdto.EnvelopeUsage:
+				var usage Usage
+				semanticErr = json.Unmarshal(data, &usage)
+			case contractdto.EnvelopeDecision, contractdto.EnvelopeEvidenceBatch, contractdto.EnvelopeEvidenceBatchConflictDetails,
+				contractdto.EnvelopeEvidenceBatchResponse, contractdto.EnvelopeGoalCommand, contractdto.EnvelopeGoalCreate,
+				contractdto.EnvelopeGoalRevision, contractdto.EnvelopePlanProposal:
+				// No daemon-side decoder remains for these envelopes; the control-plane
+				// validators pin their fixtures (control/test/symmetry_control/goals/contract_fixture_manifest_test.exs).
+				return
 			default:
-				semanticErr = ValidateGoalEnvelope(contractdto.Envelope(fixture.Schema), data)
+				t.Fatalf("no daemon-side oracle for fixture schema %q", fixture.Schema)
 			}
 			if got, want := semanticErr == nil, fixture.expectedSemanticValidity(); got != want {
 				t.Fatalf("semantic validity = %t, want %t: %v", got, want, semanticErr)
@@ -108,11 +129,11 @@ func TestEvidenceReviewPayloadVerdictMustMatchEvidenceVerdict(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ParseEvidence(data); err != nil {
+	if err := json.Unmarshal(data, &Evidence{}); err != nil {
 		t.Fatalf("valid review evidence rejected: %v", err)
 	}
 	mismatched := strings.Replace(string(data), `"verdict": "passed"`, `"verdict": "failed"`, 1)
-	if _, err := ParseEvidence([]byte(mismatched)); err == nil {
+	if err := json.Unmarshal([]byte(mismatched), &Evidence{}); err == nil {
 		t.Fatal("accepted review evidence with a payload verdict different from evidence verdict")
 	}
 }
