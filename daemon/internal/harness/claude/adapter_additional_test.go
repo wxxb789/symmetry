@@ -2,6 +2,7 @@ package claude
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -41,7 +42,7 @@ func TestClaudeCandidateProcessExitAfterTerminalBindsFinalOutcome(t *testing.T) 
 			cleanupCandidateSession(t, session)
 			staged := session.(harness.StagedSession)
 			openCandidateSession(t, staged, process)
-			if err := staged.StartTurn(context.Background(), harness.TurnRequest{Goal: "bind process evidence", Context: jsonObjectForCandidateAdditionalTest()}); err != nil {
+			if err := staged.StartTurn(context.Background(), harness.TurnRequest{Goal: "bind process evidence", Context: json.RawMessage(`{"snapshot":"canonical"}`)}); err != nil {
 				t.Fatalf("StartTurn() error = %v", err)
 			}
 			if err := process.emitJSON(candidateResultEnvelope(t, validCandidateTaskResultJSON(t))); err != nil {
@@ -102,7 +103,7 @@ func TestClaudeCandidateRejectsDuplicateAndLateRecordsAfterTerminal(t *testing.T
 			cleanupCandidateSession(t, session)
 			staged := session.(harness.StagedSession)
 			openCandidateSession(t, staged, process)
-			if err := staged.StartTurn(context.Background(), harness.TurnRequest{Goal: "reject late native output", Context: jsonObjectForCandidateAdditionalTest()}); err != nil {
+			if err := staged.StartTurn(context.Background(), harness.TurnRequest{Goal: "reject late native output", Context: json.RawMessage(`{"snapshot":"canonical"}`)}); err != nil {
 				t.Fatalf("StartTurn() error = %v", err)
 			}
 			first := candidateResultEnvelope(t, validCandidateTaskResultJSON(t))
@@ -149,7 +150,7 @@ func TestClaudeCandidateEventSinkFailureAfterTerminalIsNotSuccess(t *testing.T) 
 	cleanupCandidateSession(t, session)
 	staged := session.(harness.StagedSession)
 	openCandidateSession(t, staged, process)
-	if err := staged.StartTurn(context.Background(), harness.TurnRequest{Goal: "persist terminal evidence", Context: jsonObjectForCandidateAdditionalTest()}); err != nil {
+	if err := staged.StartTurn(context.Background(), harness.TurnRequest{Goal: "persist terminal evidence", Context: json.RawMessage(`{"snapshot":"canonical"}`)}); err != nil {
 		t.Fatalf("StartTurn() error = %v", err)
 	}
 	if err := process.emitJSON(candidateResultEnvelope(t, validCandidateTaskResultJSON(t))); err != nil {
@@ -189,7 +190,7 @@ func TestClaudeCandidateMalformedRecordPreservesDiagnosticSinkFailure(t *testing
 	cleanupCandidateSession(t, session)
 	staged := session.(harness.StagedSession)
 	openCandidateSession(t, staged, process)
-	if err := staged.StartTurn(context.Background(), harness.TurnRequest{Goal: "preserve malformed record evidence", Context: jsonObjectForCandidateAdditionalTest()}); err != nil {
+	if err := staged.StartTurn(context.Background(), harness.TurnRequest{Goal: "preserve malformed record evidence", Context: json.RawMessage(`{"snapshot":"canonical"}`)}); err != nil {
 		t.Fatalf("StartTurn() error = %v", err)
 	}
 
@@ -216,7 +217,7 @@ func TestClaudeCandidateIncompleteTrailingRecordAfterTerminalIsNotSuccess(t *tes
 	cleanupCandidateSession(t, session)
 	staged := session.(harness.StagedSession)
 	openCandidateSession(t, staged, process)
-	if err := staged.StartTurn(context.Background(), harness.TurnRequest{Goal: "reject truncated trailing output", Context: jsonObjectForCandidateAdditionalTest()}); err != nil {
+	if err := staged.StartTurn(context.Background(), harness.TurnRequest{Goal: "reject truncated trailing output", Context: json.RawMessage(`{"snapshot":"canonical"}`)}); err != nil {
 		t.Fatalf("StartTurn() error = %v", err)
 	}
 	if err := process.emitJSON(candidateResultEnvelope(t, validCandidateTaskResultJSON(t))); err != nil {
@@ -283,8 +284,4 @@ func TestClaudeCandidateOpenAndCloseAreIdempotent(t *testing.T) {
 	if _, err := session.Wait(context.Background()); err != nil {
 		t.Fatalf("Wait() after idempotent Close() error = %v", err)
 	}
-}
-
-func jsonObjectForCandidateAdditionalTest() []byte {
-	return []byte(`{"snapshot":"canonical"}`)
 }

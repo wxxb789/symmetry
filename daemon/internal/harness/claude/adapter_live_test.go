@@ -356,7 +356,7 @@ func claudeLiveAdapter(t *testing.T) (*CandidateAdapter, string) {
 	}
 	executable := strings.TrimSpace(os.Getenv(claudeLiveSmokeExecutableEnv))
 	if executable == "" || !filepath.IsAbs(executable) {
-		t.Fatalf("%s must name the absolute Claude Code %s executable", claudeLiveSmokeExecutableEnv, TestedVersion)
+		t.Fatalf("%s must name the absolute Claude Code %s executable", claudeLiveSmokeExecutableEnv, testedVersion)
 	}
 	// Every credentialed smoke proves the pinned client, so the executable
 	// identity is verified before any turn is launched: same version, same
@@ -367,15 +367,15 @@ func claudeLiveAdapter(t *testing.T) (*CandidateAdapter, string) {
 	if err != nil {
 		t.Fatalf("probe %s before the credentialed run: %v", executable, err)
 	}
-	if capabilities.NativeVersion != TestedVersion || !capabilities.TransportVerified {
-		t.Fatalf("capabilities = %+v, want the tested %s client with verified transport", capabilities, TestedVersion)
+	if capabilities.NativeVersion != testedVersion || !capabilities.TransportVerified {
+		t.Fatalf("capabilities = %+v, want the tested %s client with verified transport", capabilities, testedVersion)
 	}
 	digest, err := harness.HashExecutableFile(context.Background(), executable)
 	if err != nil {
 		t.Fatalf("hash %s before the credentialed run: %v", executable, err)
 	}
-	if digest != TestedExecutableHash {
-		t.Fatalf("resolved executable digest = %q, want the tested blob %q", digest, TestedExecutableHash)
+	if digest != testedExecutableHash {
+		t.Fatalf("resolved executable digest = %q, want the tested blob %q", digest, testedExecutableHash)
 	}
 	if runtime.GOOS == "windows" && (!capabilities.Verified || !capabilities.Start || !capabilities.Events || !capabilities.Cancel) {
 		t.Fatalf("capabilities = %+v, want the promoted Windows lifecycle before a credentialed run", capabilities)
@@ -596,14 +596,14 @@ func TestClaudeCandidateLiveProbePromotesTheTestedBlob(t *testing.T) {
 		t.Fatalf("hash resolved executable: %v", err)
 	}
 	t.Logf("resolved executable digest: %s", digest)
-	if digest != TestedExecutableHash {
-		t.Fatalf("resolved executable digest = %q, want the tested blob %q", digest, TestedExecutableHash)
+	if digest != testedExecutableHash {
+		t.Fatalf("resolved executable digest = %q, want the tested blob %q", digest, testedExecutableHash)
 	}
 	capabilities, err := adapter.Probe(context.Background())
 	if err != nil {
 		t.Fatalf("probe exact tested blob: %v", err)
 	}
-	if capabilities.NativeVersion != TestedVersion || !capabilities.VersionKnown || !capabilities.TransportVerified {
+	if capabilities.NativeVersion != testedVersion || !capabilities.VersionKnown || !capabilities.TransportVerified {
 		t.Fatalf("capabilities = %+v, want the tested version with verified transport", capabilities)
 	}
 	if capabilities.Resume || capabilities.Handoff || capabilities.ApprovalResponse || capabilities.ProviderAccess || capabilities.HardCostLimit ||
@@ -638,8 +638,8 @@ func TestClaudeCandidateLiveProbeRejectsDifferentBlob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("hash shim executable: %v", err)
 	}
-	t.Logf("shim %s digest %s (tested blob %s at %s)", shim, shimDigest, TestedExecutableHash, executable)
-	if shimDigest == TestedExecutableHash {
+	t.Logf("shim %s digest %s (tested blob %s at %s)", shim, shimDigest, testedExecutableHash, executable)
+	if shimDigest == testedExecutableHash {
 		t.Fatalf("shim digest equals the tested blob; the control needs different bytes")
 	}
 	capabilities, err := NewCandidateAdapter(shim).Probe(context.Background())

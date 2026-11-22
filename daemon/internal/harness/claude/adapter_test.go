@@ -1080,7 +1080,7 @@ func TestClaudeCandidateUnsupportedOperationsAndResumeFailClosed(t *testing.T) {
 	// pins the projection rather than a hand-built capability value.
 	adapter.probe = func(ctx context.Context) (harness.Capabilities, error) {
 		return probeCapabilities(ctx, "claude", &fixtureRunner{responses: map[string][]byte{
-			"--version": []byte(TestedVersion + " (Claude Code)\n"),
+			"--version": []byte(testedVersion + " (Claude Code)\n"),
 			"--help":    []byte("--print --output-format stream-json --json-schema"),
 		}, digest: "sha256:" + strings.Repeat("0", 64)})
 	}

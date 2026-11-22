@@ -14,16 +14,16 @@ import (
 )
 
 const (
-	// TestedVersion and TestedExecutableHash identify the only
+	// testedVersion and testedExecutableHash identify the only
 	// Claude Code bundle whose probe evidence is accepted by this build.
-	TestedVersion = "2.1.323"
-	// TestedExecutableHash is the SHA-256 of the exact Claude Code
+	testedVersion = "2.1.323"
+	// testedExecutableHash is the SHA-256 of the exact Claude Code
 	// 2.1.323 executable observed on the verified Windows host. Native
 	// capability promotion requires the resolved executable bytes to match this
 	// blob: a matching version string or help text alone must never promote a
 	// capability that was proved against different binary bytes. A PATH shim
 	// that forwards to another file is a different blob and fails closed.
-	TestedExecutableHash = "sha256:5064e6e0572dca86257363ca04d48653eef20ef27f1bd04b504ed7199ed3fd13"
+	testedExecutableHash = "sha256:5064e6e0572dca86257363ca04d48653eef20ef27f1bd04b504ed7199ed3fd13"
 )
 
 const (
@@ -40,10 +40,10 @@ const (
 	probeOutputLimitBytes = 64 << 10
 )
 
-// CommandRunner is the narrow command boundary used by the Claude Code
+// commandRunner is the narrow command boundary used by the Claude Code
 // capability probe. Keeping it injectable makes version/help evidence
 // deterministic without introducing a fake native session implementation.
-type CommandRunner interface {
+type commandRunner interface {
 	Run(context.Context, string, ...string) ([]byte, error)
 }
 
@@ -102,7 +102,7 @@ func hasTransportHelp(output string) bool {
 // never starts a session and never treats help text as lifecycle evidence. A
 // failed probe returns the evidence gathered so far so the caller can report a
 // truthful partial identity.
-func probeNativeEvidence(ctx context.Context, executable string, runner CommandRunner) (probeEvidence, error) {
+func probeNativeEvidence(ctx context.Context, executable string, runner commandRunner) (probeEvidence, error) {
 	evidence := probeEvidence{}
 	if ctx == nil {
 		return evidence, errors.New("Claude probe context must not be nil")
@@ -137,7 +137,7 @@ func probeNativeEvidence(ctx context.Context, executable string, runner CommandR
 	if evidence.Version == "" {
 		return evidence, fmt.Errorf("%w: unable to parse Claude Code version from %q", harness.ErrUnsupportedVersion, strings.TrimSpace(string(versionOutput)))
 	}
-	if evidence.Version != TestedVersion {
+	if evidence.Version != testedVersion {
 		return evidence, fmt.Errorf("%w: Claude Code %s is not in the tested version set", harness.ErrUnsupportedVersion, evidence.Version)
 	}
 
@@ -163,7 +163,7 @@ func probeNativeEvidence(ctx context.Context, executable string, runner CommandR
 // executableDigest returns the SHA-256 of the exact executable bytes, or
 // false when the bytes cannot be verified. Blob resolution is shared with the
 // Codex probe; only the runner type is local.
-func executableDigest(ctx context.Context, executable string, runner CommandRunner) (string, bool) {
+func executableDigest(ctx context.Context, executable string, runner commandRunner) (string, bool) {
 	return harness.ResolveExecutableDigest(ctx, executable, runner)
 }
 
@@ -183,7 +183,7 @@ func reject(capabilities harness.Capabilities, reason string) (harness.Capabilit
 // capabilitiesForPlatform projects only operations proved against the
 // exact tested executable blob. Version and transport agreement are necessary
 // but never sufficient: the resolved executable SHA-256 must equal
-// TestedExecutableHash, and the platform must be the one the evidence was
+// testedExecutableHash, and the platform must be the one the evidence was
 // taken on. Linux admission stays fail-closed because the Linux v2 owner path
 // requires an installed A/B systemd runtime with a delegated cgroup-v2 parent
 // and cross-UID peer inspection, which the recorded host evidence does not
@@ -252,7 +252,7 @@ func evidenceCapabilities(evidence probeEvidence, probeErr error) harness.Capabi
 // probeCapabilities is the promotion gate used by the composed
 // Claude adapter: probe the exact executable and project only the operations the
 // evidence supports on this platform.
-func probeCapabilities(ctx context.Context, executable string, runner CommandRunner) (harness.Capabilities, error) {
+func probeCapabilities(ctx context.Context, executable string, runner commandRunner) (harness.Capabilities, error) {
 	evidence, probeErr := probeNativeEvidence(ctx, executable, runner)
 	if probeErr != nil {
 		capabilities := evidenceCapabilities(evidence, probeErr)
@@ -268,6 +268,6 @@ func probeCapabilities(ctx context.Context, executable string, runner CommandRun
 	return capabilitiesForPlatform(
 		runtime.GOOS,
 		evidence,
-		digestKnown && digest == TestedExecutableHash,
+		digestKnown && digest == testedExecutableHash,
 	)
 }

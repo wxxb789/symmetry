@@ -34,7 +34,7 @@ func TestNativeClaudeCandidateStructuredOutput(t *testing.T) {
 	}
 	executable := strings.TrimSpace(os.Getenv(nativeClaudeSmokeExecutableEnv))
 	if executable == "" || !filepath.IsAbs(executable) {
-		t.Fatalf("%s must name the absolute Claude Code %s executable", nativeClaudeSmokeExecutableEnv, TestedVersion)
+		t.Fatalf("%s must name the absolute Claude Code %s executable", nativeClaudeSmokeExecutableEnv, testedVersion)
 	}
 
 	gateway := &nativeClaudeMessagesGateway{taskResult: json.RawMessage(validCandidateTaskResultJSON(t))}

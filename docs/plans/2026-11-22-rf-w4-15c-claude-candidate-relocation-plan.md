@@ -250,3 +250,18 @@ The live Claude smoke tests (`adapter_live_test.go`, `adapter_native_test.go`) s
 verdicts are proven by the fixture-based promotion tests instead. `go test -race` stays the CI job's
 oracle (no cgo on this host for the local Windows run). WSL runs Go 1.27.0 against the Windows
 toolchain's 1.27.4; both are the versions the sibling slices recorded.
+
+## 9. Apply-stage amendments (2026-11-22)
+
+The apply stage (record §13) amended four implement-stage statements. For these names and bodies the
+tree is authoritative; the tables above record the implement-time state.
+
+- §1's `CommandRunner` seam and the identifier table's `CommandRunner`, `TestedVersion` and
+  `TestedExecutableHash` rows are unexported in the tree (`commandRunner`, `testedVersion`,
+  `testedExecutableHash`); no call site changed, because the package had no external consumer.
+- §4's `assertKnownVersionProjection`/`knownVersionProjection` copies are gone: the projection
+  assertion is inlined into its only caller, `TestClaudeProbeKnownVersionAndHelpFailsClosed`.
+- `jsonObjectForCandidateAdditionalTest` is gone; the fixture is the
+  `` json.RawMessage(`{"snapshot":"canonical"}`) `` literal the package's other fixture sites use.
+- The `Start` half of `TestClaudeAdapterStartRemainsFailClosedAfterProbeEvidence` pins the exact
+  workspace-refusal text, not merely a non-nil error.

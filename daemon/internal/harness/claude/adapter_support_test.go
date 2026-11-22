@@ -385,7 +385,7 @@ func TestClaudeCandidateCancellationOwnsIncompleteTrailingRecord(t *testing.T) {
 	cleanupCandidateSession(t, session)
 	staged := session.(harness.StagedSession)
 	openCandidateSession(t, staged, process)
-	if err := staged.StartTurn(context.Background(), harness.TurnRequest{Goal: "settle the cancelled turn", Context: jsonObjectForCandidateAdditionalTest()}); err != nil {
+	if err := staged.StartTurn(context.Background(), harness.TurnRequest{Goal: "settle the cancelled turn", Context: json.RawMessage(`{"snapshot":"canonical"}`)}); err != nil {
 		t.Fatalf("StartTurn() error = %v", err)
 	}
 	// The fake keeps running after the bounded termination request so the test

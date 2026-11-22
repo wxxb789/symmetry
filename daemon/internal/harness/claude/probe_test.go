@@ -19,21 +19,25 @@ import (
 
 func TestClaudeProbeKnownVersionAndHelpFailsClosed(t *testing.T) {
 	runner := &fixtureRunner{responses: map[string][]byte{
-		"--version": []byte(TestedVersion + " (Claude Code)\n"),
+		"--version": []byte(testedVersion + " (Claude Code)\n"),
 		"--help":    []byte("claude --print --output-format <format> text, json, or stream-json\n  --json-schema <schema>  JSON Schema for structured output validation.\n"),
 	}}
 
 	capabilities, err := probeCapabilities(context.Background(), `C:\Users\runneradmin\.local\bin\claude.exe`, runner)
-	assertKnownVersionProjection(t, capabilities, err, knownVersionProjection{
-		provider:  "Claude",
-		kind:      harness.KindClaude,
-		version:   TestedVersion,
-		wantError: harness.ErrNativeUnverified,
-		calls:     runner.calls,
-		wantCalls: []string{"--version", "--help"},
-	})
+	if !errors.Is(err, harness.ErrNativeUnverified) {
+		t.Fatalf("Claude probe error = %v, want %v", err, harness.ErrNativeUnverified)
+	}
+	if capabilities.Kind != harness.KindClaude || capabilities.NativeVersion != testedVersion || !capabilities.VersionKnown {
+		t.Fatalf("Claude capabilities identity = %+v, want %s %s with known version", capabilities, harness.KindClaude, testedVersion)
+	}
+	if !capabilities.TransportVerified || capabilities.Verified || capabilities.Start || capabilities.Events || capabilities.Cancel {
+		t.Fatalf("Claude capabilities = %+v, want help-only transport evidence and no operations", capabilities)
+	}
+	if !sameStrings(runner.calls, []string{"--version", "--help"}) {
+		t.Fatalf("Claude runner calls = %#v, want %#v", runner.calls, []string{"--version", "--help"})
+	}
 	// Resume and the interactive controls are this provider's own surface: the
-	// shared projection above cannot speak for them.
+	// projection asserted above cannot speak for them.
 	if capabilities.Resume || capabilities.Guidance != harness.GuidanceUnsupported || capabilities.Pause != harness.PauseUnsupported || capabilities.ApprovalResponse || capabilities.Usage != harness.UsageUnknown || capabilities.HardCostLimit {
 		t.Fatalf("unsupported controls = %+v, want resume and every interactive control unsupported", capabilities)
 	}
@@ -41,7 +45,7 @@ func TestClaudeProbeKnownVersionAndHelpFailsClosed(t *testing.T) {
 
 func TestClaudeProbeHelpWithoutJSONSchemaFailsClosed(t *testing.T) {
 	runner := &fixtureRunner{responses: map[string][]byte{
-		"--version": []byte(TestedVersion + " (Claude Code)\n"),
+		"--version": []byte(testedVersion + " (Claude Code)\n"),
 		"--help":    []byte("claude --print --output-format <format> text, json, or stream-json\n"),
 	}}
 
@@ -91,7 +95,7 @@ func TestClaudeProbeAbsentExecutableIsUnavailable(t *testing.T) {
 
 func TestClaudeAdapterStartRemainsFailClosedAfterProbeEvidence(t *testing.T) {
 	runner := &fixtureRunner{responses: map[string][]byte{
-		"--version": []byte(TestedVersion + " (Claude Code)\n"),
+		"--version": []byte(testedVersion + " (Claude Code)\n"),
 		"--help":    []byte("--print --output-format stream-json --json-schema"),
 	}}
 	adapter := NewCandidateAdapter("claude")
@@ -107,8 +111,8 @@ func TestClaudeAdapterStartRemainsFailClosedAfterProbeEvidence(t *testing.T) {
 	if session != nil {
 		t.Fatalf("Start() session = %T, want nil", session)
 	}
-	if err == nil {
-		t.Fatalf("Start() error = nil, want a refusal from unpromoted evidence")
+	if err == nil || err.Error() != "Claude Code native adapter workspace must be an absolute path" {
+		t.Fatalf("Start() error = %v, want the absolute-path workspace refusal", err)
 	}
 }
 
@@ -191,7 +195,7 @@ func TestClaudeProbeDoesNotParseFailedCommandOutput(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			runner := &fixtureRunner{results: map[string]fixtureResult{
-				"--version": {output: []byte(TestedVersion + " (Claude Code)\n"), err: test.err},
+				"--version": {output: []byte(testedVersion + " (Claude Code)\n"), err: test.err},
 			}}
 			capabilities, err := probeCapabilities(context.Background(), "claude", runner)
 			if err == nil {
@@ -231,7 +235,7 @@ type successAfterDeadlineRunner struct{}
 
 func (successAfterDeadlineRunner) Run(ctx context.Context, _ string, _ ...string) ([]byte, error) {
 	<-ctx.Done()
-	return []byte(TestedVersion + " (Claude Code)\n"), nil
+	return []byte(testedVersion + " (Claude Code)\n"), nil
 }
 
 func (runner *fixtureRunner) Run(_ context.Context, _ string, args ...string) ([]byte, error) {
@@ -279,50 +283,17 @@ func sameStrings(got, want []string) bool {
 	return true
 }
 
-// knownVersionProjection is one provider's expected probe projection once the
-// exact tested version and transport help were recorded. The provider supplies
-// its own fixture, expected constants, and error expectation, so the shared
-// assertion below cannot drift between providers.
-type knownVersionProjection struct {
-	provider  string
-	kind      harness.Kind
-	version   string
-	wantError error
-	calls     []string
-	wantCalls []string
-}
-
-// assertKnownVersionProjection asserts the projection every provider probe must
-// report for that evidence: a known version, verified transport, no native
-// operation, and only the commands that provider's probe issues. Control-surface
-// expectations a provider does not share stay asserted in that provider's test.
-func assertKnownVersionProjection(t *testing.T, capabilities harness.Capabilities, err error, want knownVersionProjection) {
-	t.Helper()
-	if !errors.Is(err, want.wantError) {
-		t.Fatalf("%s probe error = %v, want %v", want.provider, err, want.wantError)
-	}
-	if capabilities.Kind != want.kind || capabilities.NativeVersion != want.version || !capabilities.VersionKnown {
-		t.Fatalf("%s capabilities identity = %+v, want %s %s with known version", want.provider, capabilities, want.kind, want.version)
-	}
-	if !capabilities.TransportVerified || capabilities.Verified || capabilities.Start || capabilities.Events || capabilities.Cancel {
-		t.Fatalf("%s capabilities = %+v, want help-only transport evidence and no operations", want.provider, capabilities)
-	}
-	if !sameStrings(want.calls, want.wantCalls) {
-		t.Fatalf("%s runner calls = %#v, want %#v", want.provider, want.calls, want.wantCalls)
-	}
-}
-
 func TestClaudeVersionGateAnchorsTheExactClientLine(t *testing.T) {
 	for _, test := range []struct {
 		name    string
 		output  string
 		version string
 	}{
-		{name: "exact client line", output: TestedVersion + " (Claude Code)\n", version: TestedVersion},
-		{name: "shim banner first", output: "mise: installing claude\n" + TestedVersion + " (Claude Code)\n"},
-		{name: "trailing token", output: TestedVersion + " (Claude Code) extra\n"},
-		{name: "other client", output: "claude-code " + TestedVersion + "\n"},
-		{name: "prerelease suffix", output: TestedVersion + "-beta.1 (Claude Code)\n"},
+		{name: "exact client line", output: testedVersion + " (Claude Code)\n", version: testedVersion},
+		{name: "shim banner first", output: "mise: installing claude\n" + testedVersion + " (Claude Code)\n"},
+		{name: "trailing token", output: testedVersion + " (Claude Code) extra\n"},
+		{name: "other client", output: "claude-code " + testedVersion + "\n"},
+		{name: "prerelease suffix", output: testedVersion + "-beta.1 (Claude Code)\n"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if got := parseVersion(test.output); got != test.version {
@@ -333,7 +304,7 @@ func TestClaudeVersionGateAnchorsTheExactClientLine(t *testing.T) {
 }
 
 func TestClaudeCapabilitiesForPlatformPromotesOnlyTheTestedBlobOnWindows(t *testing.T) {
-	complete := probeEvidence{Version: TestedVersion, VersionKnown: true, TransportVerified: true}
+	complete := probeEvidence{Version: testedVersion, VersionKnown: true, TransportVerified: true}
 	for _, test := range []struct {
 		name          string
 		platform      string
@@ -349,7 +320,7 @@ func TestClaudeCapabilitiesForPlatformPromotesOnlyTheTestedBlobOnWindows(t *test
 		{
 			name:          "windows without transport evidence",
 			platform:      "windows",
-			evidence:      probeEvidence{Version: TestedVersion, VersionKnown: true},
+			evidence:      probeEvidence{Version: testedVersion, VersionKnown: true},
 			hashMatched:   true,
 			wantReasonSub: "probe evidence is incomplete",
 		},
@@ -392,17 +363,16 @@ func TestClaudeCapabilitiesForPlatformPromotesOnlyTheTestedBlobOnWindows(t *test
 
 func TestClaudeAdapterProbePromotesOnlyTheResolvedTestedBlob(t *testing.T) {
 	help := []byte("--print --output-format stream-json --json-schema")
-	version := []byte(TestedVersion + " (Claude Code)\n")
+	version := []byte(testedVersion + " (Claude Code)\n")
 	for _, test := range []struct {
-		name            string
-		runner          *fixtureRunner
-		wantVerified    bool
-		wantError       error
-		wantDigestKnown bool
+		name         string
+		runner       *fixtureRunner
+		wantVerified bool
+		wantError    error
 	}{
 		{
 			name:         "recorded tested blob",
-			runner:       &fixtureRunner{responses: map[string][]byte{"--version": version, "--help": help}, digest: TestedExecutableHash},
+			runner:       &fixtureRunner{responses: map[string][]byte{"--version": version, "--help": help}, digest: testedExecutableHash},
 			wantVerified: true,
 		},
 		{
@@ -415,12 +385,12 @@ func TestClaudeAdapterProbePromotesOnlyTheResolvedTestedBlob(t *testing.T) {
 		},
 		{
 			name:      "untested version",
-			runner:    &fixtureRunner{responses: map[string][]byte{"--version": []byte("2.1.322 (Claude Code)\n"), "--help": help}, digest: TestedExecutableHash},
+			runner:    &fixtureRunner{responses: map[string][]byte{"--version": []byte("2.1.322 (Claude Code)\n"), "--help": help}, digest: testedExecutableHash},
 			wantError: harness.ErrUnsupportedVersion,
 		},
 		{
 			name:      "transport without json schema",
-			runner:    &fixtureRunner{responses: map[string][]byte{"--version": version, "--help": []byte("--print --output-format stream-json")}, digest: TestedExecutableHash},
+			runner:    &fixtureRunner{responses: map[string][]byte{"--version": version, "--help": []byte("--print --output-format stream-json")}, digest: testedExecutableHash},
 			wantError: harness.ErrNativeUnverified,
 		},
 	} {
@@ -437,8 +407,8 @@ func TestClaudeAdapterProbePromotesOnlyTheResolvedTestedBlob(t *testing.T) {
 			if !promoted && (capabilities.Start || capabilities.Events || capabilities.Cancel) {
 				t.Fatalf("capabilities = %+v, want no operation promoted", capabilities)
 			}
-			if test.wantVerified && capabilities.NativeVersion != TestedVersion {
-				t.Fatalf("native version = %q, want %q", capabilities.NativeVersion, TestedVersion)
+			if test.wantVerified && capabilities.NativeVersion != testedVersion {
+				t.Fatalf("native version = %q, want %q", capabilities.NativeVersion, testedVersion)
 			}
 		})
 	}
@@ -447,7 +417,7 @@ func TestClaudeAdapterProbePromotesOnlyTheResolvedTestedBlob(t *testing.T) {
 // The committed fixtures are promotion evidence, so their digests must still
 // describe the bytes in the tree and must bind the exact tested executable blob.
 func TestClaudeTestdataManifestBindsRecordedDigests(t *testing.T) {
-	directory := filepath.Join("..", "testdata", "claude", TestedVersion)
+	directory := filepath.Join("..", "testdata", "claude", testedVersion)
 	encoded, err := os.ReadFile(filepath.Join(directory, "fixture-manifest.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -459,8 +429,8 @@ func TestClaudeTestdataManifestBindsRecordedDigests(t *testing.T) {
 	if err := json.Unmarshal(encoded, &manifest); err != nil {
 		t.Fatalf("fixture manifest: %v", err)
 	}
-	if manifest.Executable != TestedExecutableHash {
-		t.Fatalf("manifest executable = %q, want %q", manifest.Executable, TestedExecutableHash)
+	if manifest.Executable != testedExecutableHash {
+		t.Fatalf("manifest executable = %q, want %q", manifest.Executable, testedExecutableHash)
 	}
 	// The committed evidence set is part of the promotion binding, so a removed
 	// fixture record must fail rather than silently shrink what the manifest
