@@ -5,7 +5,6 @@ import ast
 import contextlib
 import functools
 import hashlib
-import importlib.util
 import json
 import os
 import pathlib
@@ -13,21 +12,19 @@ import shutil
 import signal
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 import unittest
+
+import citest
+from testsupport.gitfixture import FixtureRepo
 
 SCRIPT = pathlib.Path(__file__).with_name("model-routing-evaluation.py")
 
 
 def load_runner_module():
     """Import the acceptance runner so gate validation rules can be asserted directly."""
-    path = pathlib.Path(__file__).with_name("model-routing-evaluation.py")
-    spec = importlib.util.spec_from_file_location("model_routing_evaluation", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return citest.load_gate(pathlib.Path(__file__).with_name("model-routing-evaluation.py"), "model_routing_evaluation")
 
 
 def refusal_returns(source_text, function):
@@ -143,52 +140,24 @@ FILES = {
 EDITED_MAIN_GO = "package app\n\nfunc Main() int { return 2 }\n"
 
 
-class EvaluationTests(unittest.TestCase):
+class EvaluationTests(FixtureRepo, unittest.TestCase):
+    REPOSITORY_PREFIX = "model-routing-eval-"
+
     def setUp(self) -> None:
-        self.temporary = tempfile.TemporaryDirectory(prefix="model-routing-eval-")
-        self.addCleanup(self.temporary.cleanup)
-        self.root = pathlib.Path(self.temporary.name)
-        self.repo = self.root / "repository"
-        self.repo.mkdir()
-        self.git("init", "--quiet")
-        self.git("config", "user.name", "Fixture")
-        self.git("config", "user.email", "fixture@example.invalid")
-        self.git("config", "commit.gpgsign", "false")
-        self.git("config", "core.autocrlf", "false")
+        super().setUp()
         for name, content in FILES.items():
             self.write(self.repo / name, content)
-        self.git("add", "-A")
-        self.git("commit", "--quiet", "-m", "fixture base")
-        self.base = self.git_text("rev-parse", "HEAD")
-
-    # -- environment helpers -------------------------------------------------
-
-    def git(self, *arguments: str, cwd: pathlib.Path | None = None) -> bytes:
-        return subprocess.check_output(["git", "-C", str(cwd or self.repo), *arguments], stderr=subprocess.PIPE)
-
-    def git_text(self, *arguments: str, cwd: pathlib.Path | None = None) -> str:
-        return self.git(*arguments, cwd=cwd).decode("ascii").strip()
-
-    def write(self, path: pathlib.Path, content: str) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(content.encode("utf-8"))
+        self.base = self.commit("fixture base")
 
     def write_json(self, path: pathlib.Path, value) -> pathlib.Path:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes((json.dumps(value, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+        citest.write_json(path, value, sort_keys=True)
         return path
 
     def read(self, path: pathlib.Path) -> bytes:
         return path.read_bytes()
 
     def cli(self, *arguments: str) -> subprocess.CompletedProcess:
-        return subprocess.run(
-            [sys.executable, str(SCRIPT), *arguments],
-            capture_output=True,
-            text=True,
-            cwd=str(self.root),
-            check=False,
-        )
+        return citest.run_gate(SCRIPT, *arguments, cwd=self.root)
 
     def assert_ok(self, result: subprocess.CompletedProcess):
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
@@ -1116,12 +1085,7 @@ class EvaluationTests(unittest.TestCase):
             shutil.copyfile(SCRIPT.with_name(name), tools / name)
         # The pristine copies reproduce the accepted receipt, so each mutation below is
         # what makes the evidence differ.
-        pristine = subprocess.run(
-            [sys.executable, str(tools / SCRIPT.name), "accept", "--run-dir", str(self.run_dir())],
-            text=True,
-            capture_output=True,
-            check=False,
-        )
+        pristine = citest.run_gate(tools / SCRIPT.name, "accept", "--run-dir", str(self.run_dir()))
         self.assertTrue(json.loads(pristine.stdout)["accepted"], pristine.stdout + pristine.stderr)
         # F21: the sanitize tool is bound into evidence.tooling_sources (its patterns
         # render recorded measured values), so a changed sanitize tool must invalidate
@@ -1131,12 +1095,7 @@ class EvaluationTests(unittest.TestCase):
                 changed = tools / name
                 original = changed.read_bytes()
                 changed.write_bytes(original + b"\n# Tooling revision control.\n")
-                result = subprocess.run(
-                    [sys.executable, str(tools / SCRIPT.name), "accept", "--run-dir", str(self.run_dir())],
-                    text=True,
-                    capture_output=True,
-                    check=False,
-                )
+                result = citest.run_gate(tools / SCRIPT.name, "accept", "--run-dir", str(self.run_dir()))
                 self.assert_refused(result, "does not match")
                 changed.write_bytes(original)
 
@@ -3749,16 +3708,8 @@ class EvaluationTests(unittest.TestCase):
         ):
             shutil.copyfile(SCRIPT.with_name(name), tools / name)
 
-        def run_copy(*arguments: str) -> subprocess.CompletedProcess:
-            return subprocess.run(
-                [sys.executable, str(tools / SCRIPT.name), *arguments],
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-
         for run in (measured_run, bound_run):
-            pristine = run_copy("accept", "--run-dir", str(run))
+            pristine = citest.run_gate(tools / SCRIPT.name, "accept", "--run-dir", str(run))
             self.assertTrue(json.loads(pristine.stdout)["accepted"], pristine.stdout + pristine.stderr)
         changed = tools / "model-routing-record-sanitize.py"
         original = changed.read_bytes()
@@ -3767,10 +3718,12 @@ class EvaluationTests(unittest.TestCase):
         try:
             for run in (measured_run, bound_run):
                 with self.subTest(run=run.name):
-                    derived = run_copy("receipt", "--run-dir", str(run), "--usage", str(usage))
+                    derived = citest.run_gate(
+                        tools / SCRIPT.name, "receipt", "--run-dir", str(run), "--usage", str(usage)
+                    )
                     self.assert_refused(derived, "does not match")
                     self.assertIn("recorded redaction", derived.stderr)
-                    accepted = run_copy("accept", "--run-dir", str(run))
+                    accepted = citest.run_gate(tools / SCRIPT.name, "accept", "--run-dir", str(run))
                     self.assert_refused(accepted, "does not match")
         finally:
             changed.write_bytes(original)
