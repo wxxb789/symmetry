@@ -1409,3 +1409,20 @@ is fixed here; each bullet names what a follow-up has to re-derive.
 - [ ] `daemon/native/linux-gate/protocol/wire_test.go`: the dedicated "start time is truncated"
       decode guard is unreachable (the size guard already refuses those packets), so no test can
       cover that branch.
+
+## Goals state-set duplication after the rf-w4-07 facade split (2026-11-22)
+
+- [ ] Consolidate the duplicated Task/Run state sets behind one compile-time owner. After
+      `refactor/rf-w4-07-goals-facade-phase1` (PR #233) the same literals are re-declared per
+      module: `@nonterminal_task_states` in `SymmetryControl.Goals` (`goals.ex`),
+      `SymmetryControl.Goals.RunFence`, `SymmetryControl.Goals.Internal` and
+      `SymmetryControl.Goals.ReadModel`; `@terminal_run_states` in `SymmetryControl.Goals` and
+      `SymmetryControl.Goals.HarnessSessions`; `@accounting_terminal_run_states` in those two plus
+      `SymmetryControl.Goals.ReadModel`, which derives it from that module's own
+      `@terminal_task_states`. The split mandated per-module copies ("module attributes travel
+      with their users") because the values feed compile-time query literals, so the SQL text
+      stays frozen; the drift risk is real: a state added to one copy only silently splits
+      transition policy from the read model. Next step (W5-14, the following goals.ex phase): a
+      `@moduledoc false` owner module exposing the sets as functions the others read at compile
+      time (`@x Owner.state_set()`), keeping every SQL literal byte-identical, plus one pinning
+      test that fails on divergence.

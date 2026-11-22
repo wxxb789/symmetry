@@ -19,7 +19,8 @@ edited.
 
 Slice shape: the slice moves three move-only regions out of `goals.ex` behind the unchanged
 `SymmetryControl.Goals` facade — the shared kernel (`Goals.Internal`, 63 functions), the run-fence
-lifecycle (`Goals.RunFence`, 75 functions) and the event/receipt kernel (`Goals.EventsReceipts`, 19
+lifecycle (`Goals.RunFence`, 75 functions at the slice head; the review round 1 moves 26 of them
+into `Goals.HarnessSessions`) and the event/receipt kernel (`Goals.EventsReceipts`, 19
 functions) — plus `validate_contract/3` into the existing `Goals.ContractValidation`. **158
 functions / 2,456 block lines move**; the apply stage records every non-verbatim deviation
 (7 comment-policy trims, one `@max_safe_integer` spelling, one qualifier rewrite and the nine
@@ -41,12 +42,20 @@ contract-mandated `!` renames) and re-proves the move with the same AST tool.
   facade and the movers import are `def`, the other six keep their base `defp` visibility (apply stage).
 - **`SymmetryControl.Goals.RunFence`** (`@moduledoc false`): the k2 RunFence cluster plus
   `context_wire_envelope!/4`, the one ContextSnapshot-region function the contract lifts (body
-  unchanged). Its 11 public functions — the nine facade-delegated entries plus
-  `context_wire_envelope!/4` and `mark_harness_session_unavailable!/2`, which the facade imports —
-  are public here; every other moved function is `defp`, as at base. The implement stage's uniform
-  `defp` → `def` transform rested on a claim the simplify review measured false (that goals.ex and
-  the other moved modules call them): a name+arity census over `control/lib` + `control/test` finds
-  no caller outside the file for the other 64, and the apply stage restored `defp` (finding F2).
+  unchanged), minus the 26 harness-session functions the round-1 split moves to
+  `Goals.HarnessSessions`. Its public functions are the six facade-delegated run entries (the three
+  harness ones now delegate to `Goals.HarnessSessions`), `context_wire_envelope!/4` and the six
+  `@doc false` cross-edge widenings HarnessSessions imports; every other moved function is `defp`,
+  as at base. The implement stage's uniform `defp` → `def` transform rested on a claim the simplify
+  review measured false (that goals.ex and the other moved modules call them): a name+arity census
+  over `control/lib` + `control/test` finds no caller outside the file for the other 64, and the
+  apply stage restored `defp` (finding F2).
+- **`SymmetryControl.Goals.HarnessSessions`** (`@moduledoc false`, round 1): the 26 functions of the
+  harness-session attach/fetch/stop path (`attach_harness_session/5`,
+  `fetch_harness_session_attachment/3`, `mark_harness_session_stopped/5`,
+  `mark_harness_session_unavailable!/2` and their 22 private helpers), moved out of RunFence
+  verbatim under the 2026-11-22 review-round-1 amendment. `Goals` keeps the same three
+  `defdelegate`s (retargeted) and imports `mark_harness_session_unavailable!/2` from here.
 - **`SymmetryControl.Goals.EventsReceipts`** (`@moduledoc false`): the k2 EventsReceipts cluster
   (event append, receipt snapshot encode/decode/validate, RequestHash replay, wakeup/control
   enqueue).
@@ -58,7 +67,7 @@ contract-mandated `!` renames) and re-proves the move with the same AST tool.
   `@doc false def`s on the facade — the recorded internal interface the contract asks for, not part
   of the frozen 31-function API. No `Goals.ContextSnapshot` schema is involved, and no module named
   `Goals.DbLocks` or `Goals.PayloadContracts` is created.
-- **Interface lines.** `goals.ex` gains exactly four `import …, only:` lines next to its existing
+- **Interface lines.** `goals.ex` gains exactly five `import …, only:` lines next to its existing
   `import Ecto.Query`; unlisted names resolve through them so no existing call site changes text
   (E2). The new modules carry their own kernel imports. Verbatim (line-wrapped by the formatter):
 
@@ -66,11 +75,16 @@ contract-mandated `!` renames) and re-proves the move with the same AST tool.
       import Ecto.Query
       import SymmetryControl.Goals.ContractValidation, only: [validate_contract: 3]
       import SymmetryControl.Goals.EventsReceipts,
+      import SymmetryControl.Goals.HarnessSessions,
       import SymmetryControl.Goals.Internal,
       import SymmetryControl.Goals.RunFence,
 
   `goals/run_fence.ex` carries
-  import SymmetryControl.Goals.ContractValidation, only: [validate_contract: 3]; import SymmetryControl.Goals.EventsReceipts, only: [enqueue_wakeup!: 2]; import SymmetryControl.Goals.Internal,
+  import SymmetryControl.Goals.ContractValidation, only: [validate_contract: 3]; import SymmetryControl.Goals.EventsReceipts, only: [enqueue_wakeup!: 2]; import SymmetryControl.Goals.Internal,;
+
+  `goals/harness_sessions.ex` carries `import Ecto.Query`, the same kernel import shape for its 13
+  Internal names (14 pairs) and `import SymmetryControl.Goals.RunFence, only:` for its six
+  cross-edge names (all `@doc false def`s on RunFence);
 
   `goals/events_receipts.ex` carries the EventsReceipts-side kernel import
   (`normalize_map/1`, `now/1`, `rollback/1`, `stamp_insert/2`, `stamp_update/2`, `valid_uuid?/1`,
@@ -83,8 +97,10 @@ contract-mandated `!` renames) and re-proves the move with the same AST tool.
   are ordered case-insensitively (Credo's `AliasOrder`), which also removes the base's
   `GoalExternalWait` ordering finding. No other top-matter line changes.
 - **Module attributes travel with their users** (compile-time constants, contract-sanctioned):
-  RunFence carries `@nonterminal_task_states`, `@terminal_run_states`,
-  `@accounting_terminal_run_states` and `@max_evidence_batch_items`; Internal carries
+  RunFence carries `@nonterminal_task_states` and `@max_evidence_batch_items`; HarnessSessions
+  carries `@terminal_run_states` and `@accounting_terminal_run_states` (the only staying users of
+  the latter two, so the round-1 split moves both definitions out of RunFence —
+  `--warnings-as-errors`; the copies' drift risk is recorded in `docs/TODO.md`); Internal carries
   `@nonterminal_task_states` and `@max_safe_integer`; EventsReceipts needs none. All of them are
   still used by the staying code, so they remain defined in `goals.ex` as well —
   `@max_evidence_batch_items` is the one that is *not* used by the staying code any more and is
@@ -121,6 +137,9 @@ contract-mandated `!` renames) and re-proves the move with the same AST tool.
 
 
 ### RunFence move set (75 functions)
+
+At the round-1 head 26 of these rows live in `Goals.HarnessSessions` (see "Fix round 1" below);
+their base line map is unchanged.
 
 | function | HEAD lines | LOC | kind |
 | --- | --- | --- | --- |
@@ -329,16 +348,18 @@ Totals:
 
 | destination | functions | block LOC | contiguous runs | first–last HEAD line |
 | --- | --- | --- | --- | --- |
-| `Goals.RunFence` | 75 | 1697 | 75 | 131–10286 |
+| `Goals.RunFence` | 49 | 1149 | 49 | 131–10286 |
+| `Goals.HarnessSessions` | 26 | 548 | 26 | 462–1488 |
 | `Goals.EventsReceipts` | 19 | 322 | 19 | 8143–8482 |
 | `Goals.Internal` | 63 | 387 | 60 | 1948–10606 |
 | `Goals.ContractValidation` | 1 | 50 | 1 | 10050–10099 |
 | stay in `goals.ex` | 19 | 153 | 18 | 2609–10601 |
-| **moved total** | **158** | **2456** | | (row sums of the three move-set tables above; base `b25e34ae` `goals.ex` 10,606 lines → 8,119 at the shipped head) |
+| **moved total** | **158** | **2456** | | (row sums of the three move-set tables above; base `b25e34ae` `goals.ex` 10,606 lines → 8,121 at the round-1 head; `Goals.HarnessSessions` is the review-round-1 sub-split of the RunFence rows, so the two rows sum to the pre-round-1 RunFence figure 1,697) |
 ## R9 evidence-freeze mapping (moved declaration → `SOURCE_PATHS` path)
 
-`scripts/ci/omo-control-native-evidence.py` `SOURCE_PATHS` gains the four files that receive
-`goals.ex` code; every one of the 158 moved declarations maps to exactly one of them, and a
+`scripts/ci/omo-control-native-evidence.py` `SOURCE_PATHS` gains the five files that receive
+`goals.ex` code (`harness_sessions.ex` in review round 1); every one of the 158 moved declarations maps
+to exactly one of them, and a
 definition census over the slice tree shows each moved function defined exactly once, with **0**
 moved functions still defined in `goals.ex`:
 
@@ -347,14 +368,14 @@ moved functions still defined in `goals.ex`:
 | --- | --- |
 | `append_evidence/5` | `control/lib/symmetry_control/goals/run_fence.ex` |
 | `append_evidence_batch/5` | `control/lib/symmetry_control/goals/run_fence.ex` |
-| `attach_fresh_session!/7` | `control/lib/symmetry_control/goals/run_fence.ex` |
-| `attach_handoff_session!/7` | `control/lib/symmetry_control/goals/run_fence.ex` |
-| `attach_harness_session/5` | `control/lib/symmetry_control/goals/run_fence.ex` |
-| `attach_receipt_fence_matches?/3` | `control/lib/symmetry_control/goals/run_fence.ex` |
-| `attach_receipt_matches?/4` | `control/lib/symmetry_control/goals/run_fence.ex` |
-| `attach_reserved_session!/6` | `control/lib/symmetry_control/goals/run_fence.ex` |
-| `attach_session_to_run!/3` | `control/lib/symmetry_control/goals/run_fence.ex` |
-| `attachment_receipt_response/1` | `control/lib/symmetry_control/goals/run_fence.ex` |
+| `attach_fresh_session!/7` | `control/lib/symmetry_control/goals/harness_sessions.ex` |
+| `attach_handoff_session!/7` | `control/lib/symmetry_control/goals/harness_sessions.ex` |
+| `attach_harness_session/5` | `control/lib/symmetry_control/goals/harness_sessions.ex` |
+| `attach_receipt_fence_matches?/3` | `control/lib/symmetry_control/goals/harness_sessions.ex` |
+| `attach_receipt_matches?/4` | `control/lib/symmetry_control/goals/harness_sessions.ex` |
+| `attach_reserved_session!/6` | `control/lib/symmetry_control/goals/harness_sessions.ex` |
+| `attach_session_to_run!/3` | `control/lib/symmetry_control/goals/harness_sessions.ex` |
+| `attachment_receipt_response/1` | `control/lib/symmetry_control/goals/harness_sessions.ex` |
 | `binding_matches_evidence?/6` | `control/lib/symmetry_control/goals/run_fence.ex` |
 | `claim/3` | `control/lib/symmetry_control/goals/run_fence.ex` |
 | `claim_identity_current?/3` | `control/lib/symmetry_control/goals/run_fence.ex` |
@@ -365,14 +386,14 @@ moved functions still defined in `goals.ex`:
 | `claim_work_item_owned?/4` | `control/lib/symmetry_control/goals/run_fence.ex` |
 | `classify_and_insert_evidence_batch!/7` | `control/lib/symmetry_control/goals/run_fence.ex` |
 | `context_wire_envelope!/4` | `control/lib/symmetry_control/goals/run_fence.ex` |
-| `create_attach_receipt!/8` | `control/lib/symmetry_control/goals/run_fence.ex` |
-| `create_fresh_harness_session!/7` | `control/lib/symmetry_control/goals/run_fence.ex` |
-| `ensure_attachment_binding_shape!/3` | `control/lib/symmetry_control/goals/run_fence.ex` |
-| `ensure_current_attachment!/7` | `control/lib/symmetry_control/goals/run_fence.ex` |
+| `create_attach_receipt!/8` | `control/lib/symmetry_control/goals/harness_sessions.ex` |
+| `create_fresh_harness_session!/7` | `control/lib/symmetry_control/goals/harness_sessions.ex` |
+| `ensure_attachment_binding_shape!/3` | `control/lib/symmetry_control/goals/harness_sessions.ex` |
+| `ensure_current_attachment!/7` | `control/lib/symmetry_control/goals/harness_sessions.ex` |
 | `ensure_evidence_identity!/6` | `control/lib/symmetry_control/goals/run_fence.ex` |
 | `ensure_machine_fence!/7` | `control/lib/symmetry_control/goals/run_fence.ex` |
-| `ensure_session_scope!/6` | `control/lib/symmetry_control/goals/run_fence.ex` |
-| `ensure_stoppable_session!/5` | `control/lib/symmetry_control/goals/run_fence.ex` |
+| `ensure_session_scope!/6` | `control/lib/symmetry_control/goals/harness_sessions.ex` |
+| `ensure_stoppable_session!/5` | `control/lib/symmetry_control/goals/harness_sessions.ex` |
 | `ensure_usage_supersedes_run!/2` | `control/lib/symmetry_control/goals/run_fence.ex` |
 | `ensure_validation_binding!/6` | `control/lib/symmetry_control/goals/run_fence.ex` |
 | `evidence_attrs/2` | `control/lib/symmetry_control/goals/run_fence.ex` |
@@ -382,33 +403,33 @@ moved functions still defined in `goals.ex`:
 | `evidence_matches?/2` | `control/lib/symmetry_control/goals/run_fence.ex` |
 | `evidence_receipt/1` | `control/lib/symmetry_control/goals/run_fence.ex` |
 | `evidence_validator_profile/2` | `control/lib/symmetry_control/goals/run_fence.ex` |
-| `fetch_harness_session_attachment/3` | `control/lib/symmetry_control/goals/run_fence.ex` |
+| `fetch_harness_session_attachment/3` | `control/lib/symmetry_control/goals/harness_sessions.ex` |
 | `fetch_run_context/3` | `control/lib/symmetry_control/goals/run_fence.ex` |
-| `lock_attach_receipt/1` | `control/lib/symmetry_control/goals/run_fence.ex` |
+| `lock_attach_receipt/1` | `control/lib/symmetry_control/goals/harness_sessions.ex` |
 | `lock_goal_run!/5` | `control/lib/symmetry_control/goals/run_fence.ex` |
 | `machine_session_stop_result/1` | `control/lib/symmetry_control/goals/run_fence.ex` |
 | `machine_write_result/1` | `control/lib/symmetry_control/goals/run_fence.ex` |
-| `mark_harness_session_stopped/5` | `control/lib/symmetry_control/goals/run_fence.ex` |
-| `mark_harness_session_unavailable!/2` | `control/lib/symmetry_control/goals/run_fence.ex` |
+| `mark_harness_session_stopped/5` | `control/lib/symmetry_control/goals/harness_sessions.ex` |
+| `mark_harness_session_unavailable!/2` | `control/lib/symmetry_control/goals/harness_sessions.ex` |
 | `microusd_wire_value/1` | `control/lib/symmetry_control/goals/run_fence.ex` |
 | `new_claim_authority/1` | `control/lib/symmetry_control/goals/run_fence.ex` |
 | `notify_claim_authority_routed/2` | `control/lib/symmetry_control/goals/run_fence.ex` |
 | `reconcile_reservation_and_arm!/3` | `control/lib/symmetry_control/goals/run_fence.ex` |
 | `record_usage/5` | `control/lib/symmetry_control/goals/run_fence.ex` |
-| `reject_existing_handle!/3` | `control/lib/symmetry_control/goals/run_fence.ex` |
+| `reject_existing_handle!/3` | `control/lib/symmetry_control/goals/harness_sessions.ex` |
 | `required_datetime/2` | `control/lib/symmetry_control/goals/run_fence.ex` |
 | `required_sha256_digest/2` | `control/lib/symmetry_control/goals/run_fence.ex` |
 | `same_uuid?/2` | `control/lib/symmetry_control/goals/run_fence.ex` |
-| `session_attach_request/2` | `control/lib/symmetry_control/goals/run_fence.ex` |
-| `session_attrs/1` | `control/lib/symmetry_control/goals/run_fence.ex` |
-| `session_receipt/5` | `control/lib/symmetry_control/goals/run_fence.ex` |
-| `session_stop_attrs/1` | `control/lib/symmetry_control/goals/run_fence.ex` |
-| `session_stop_receipt/4` | `control/lib/symmetry_control/goals/run_fence.ex` |
-| `session_stop_request/2` | `control/lib/symmetry_control/goals/run_fence.ex` |
+| `session_attach_request/2` | `control/lib/symmetry_control/goals/harness_sessions.ex` |
+| `session_attrs/1` | `control/lib/symmetry_control/goals/harness_sessions.ex` |
+| `session_receipt/5` | `control/lib/symmetry_control/goals/harness_sessions.ex` |
+| `session_stop_attrs/1` | `control/lib/symmetry_control/goals/harness_sessions.ex` |
+| `session_stop_receipt/4` | `control/lib/symmetry_control/goals/harness_sessions.ex` |
+| `session_stop_request/2` | `control/lib/symmetry_control/goals/harness_sessions.ex` |
 | `snapshot_acceptance_contract!/1` | `control/lib/symmetry_control/goals/run_fence.ex` |
 | `source_matches_evidence?/4` | `control/lib/symmetry_control/goals/run_fence.ex` |
 | `source_matches_evidence_kind?/5` | `control/lib/symmetry_control/goals/run_fence.ex` |
-| `stop_receipt_matches?/4` | `control/lib/symmetry_control/goals/run_fence.ex` |
+| `stop_receipt_matches?/4` | `control/lib/symmetry_control/goals/harness_sessions.ex` |
 | `task_repository_resource_id!/2` | `control/lib/symmetry_control/goals/run_fence.ex` |
 | `usage_attrs/2` | `control/lib/symmetry_control/goals/run_fence.ex` |
 | `usage_matches?/2` | `control/lib/symmetry_control/goals/run_fence.ex` |
@@ -518,21 +539,24 @@ else leaves a moved module:
 
 ### Facade widenings: `defp` → `@doc false def` in goals.ex (called from a moved module)
 
-| function | HEAD lines | caller functions in the moved modules | call sites |
-| --- | --- | --- | --- |
-| `reconcile_reservation!/3` | 1902–1930 | reconcile_reservation_and_arm!/3 | 1 |
-| `safe_document?/1` | 2039–2053 | evidence_attrs/2 | 2 |
-| `safe_evidence_document/1` | 2055–2057 | append_evidence/5, append_evidence_batch/5 | 2 |
-| `context_wire_envelope/4` | 2107–2131 | context_wire_envelope!/4 | 1 |
-| `context_digest/1` | 2609–2616 | evidence_receipt/1 | 1 |
-| `settlement_task_owned_by_goal?/3` | 8772–8778 | lock_goal_run!/5 | 1 |
+| function (widened on the facade) | caller functions in the moved modules | call sites |
+| --- | --- | --- |
+| `reconcile_reservation!/3` | reconcile_reservation_and_arm!/3 | 1 |
+| `safe_document?/1` | evidence_attrs/2 | 2 |
+| `safe_evidence_document/1` | append_evidence/5, append_evidence_batch/5 | 2 |
+| `context_wire_envelope/4` | context_wire_envelope!/4 | 1 |
+| `context_digest/1` | evidence_receipt/1 | 1 |
+| `settlement_task_owned_by_goal?/3` | lock_goal_run!/5 | 1 |
 
 | edge | functions (name/arity pairs as emitted) | mechanism |
 | --- | --- | --- |
-| RunFence/EventsReceipts → `Goals.Internal` | RunFence 30 names / 31 pairs (`value: 2` + `value: 3`); EventsReceipts 7 | kernel `import …, only:` in each module |
+| RunFence/EventsReceipts → `Goals.Internal` | RunFence 29 names / 30 pairs (`value: 2` + `value: 3`); EventsReceipts 7 | kernel `import …, only:` in each module |
+| HarnessSessions → `Goals.Internal` | 13 names / 14 pairs (`value: 2` + `value: 3`) | kernel `import …, only:` in HarnessSessions |
+| HarnessSessions → `Goals.RunFence` | 6 names / 6 pairs (`ensure_machine_fence!: 7`, `lock_goal_run!: 5`, `machine_session_stop_result: 1`, `machine_write_result: 1`, `task_repository_resource_id!: 2`, `valid_fence: 1`) | `import …, only:` in HarnessSessions; the six are `@doc false def`s in RunFence |
 | remaining `goals.ex` → `Goals.Internal` | 52 names / 54 pairs (`value` and `policy_integer` each at two arities) | kernel `import …, only:` in the facade |
 | remaining `goals.ex` → `Goals.EventsReceipts` | 11 | `import …, only:` in the facade |
-| remaining `goals.ex` → `Goals.RunFence` | 2 (`context_wire_envelope!/4` for the staying `fetch_context/2`, `mark_harness_session_unavailable!/2` for `settle_task/4`) | `import …, only:` in the facade |
+| remaining `goals.ex` → `Goals.RunFence` | 1 (`context_wire_envelope!/4` for the staying `fetch_context/2`) | `import …, only:` in the facade |
+| remaining `goals.ex` → `Goals.HarnessSessions` | 1 (`mark_harness_session_unavailable!/2` for `settle_task/4`) | `import …, only:` in the facade |
 | remaining `goals.ex` → `Goals.ContractValidation` | 1 (`validate_contract/3`) | `import …, only:` in the facade |
 | RunFence → `Goals.EventsReceipts` | 1 (`enqueue_wakeup!/2`) | `import …, only:` in RunFence |
 | movers → `Goals.ContractValidation` | 1 (`validate_contract/3`) | `import …, only:` in RunFence |
@@ -687,7 +711,7 @@ eight `Goals.` insertions as the only differences between base and head inside m
   `validate_contract/3` (the 12-qualifier rewrite, finding F6). No message, atom, digest, SQL
   text or ordering token changes anywhere.
 - **No function lost or duplicated.** Base census 461 functions + the existing ContractValidation
-  module's 77 = 538; slice census `goals.ex` 303 + RunFence 75 + EventsReceipts 19 + Internal 63 +
+  module's 77 = 538; slice census `goals.ex` 303 + RunFence 49 + HarnessSessions 26 + EventsReceipts 19 + Internal 63 +
   ContractValidation 78 (its 77 plus the moved `validate_contract/3`) = 538. The ContractValidation
   comparison is `added ['validate_contract/3'] changed [] gone []`. Three names exist twice across
   the tree (`canonical_plan_proposal/1`, `valid_commit_path?/1`, `value/3`) — all three already exist
@@ -787,7 +811,7 @@ Canonical per-function AST comparison, base blob `6ad78e29…` ↔ slice tree (l
 | identical under a recorded edit | **43** — 7 with the `Goals.` prefixes (8 insertions), 9 contract-mandated `!` renames (bodies identical under the base name), 25 callers retargeted by those renames (identical under the `!` tokens), `nullable_safe_integer/2` (`@max_safe_integer` spelling, F5), `validate_contract/3` (qualifier rewrite, F6) |
 | missing moved functions | **0** |
 | ContractValidation diff | `added ['validate_contract/3']` (its recorded qualifier rewrite); base 77 unchanged, `changed []`, `gone []` |
-| slice census | `goals.ex` 303 + RunFence 75 + EventsReceipts 19 + Internal 63 + ContractValidation 78 = 538 = 461 + 77 |
+| slice census | `goals.ex` 303 + RunFence 49 + HarnessSessions 26 + EventsReceipts 19 + Internal 63 + ContractValidation 78 = 538 = 461 + 77 |
 | definition census | 158 moved declarations, 157 single-site, `value/3` two-site (pre-existing ContractValidation helper), **0** moved functions left in `goals.ex` |
 
 ### Control-flow audit (lesson 32)
@@ -827,25 +851,28 @@ recorded, and the file was restored (all six runs exit 2; the restored tree re-r
 
 ### File-size cap (contract gate "new modules ≤ 1,500 L")
 
-| file | `wc -l` at the shipped head `0f80b4ac` | moved block LOC | note |
-| --- | --- | --- | --- |
-| `control/lib/symmetry_control/goals.ex` | 10,606 → **8,119** | — | shrinks by 2,487 (gate: "must not grow" ✓); 8,121 at the apply head `936cbde7`, −2 after the final main merge took origin/main's `dispatch_result` comment rewrite |
-| `control/lib/symmetry_control/goals/run_fence.ex` | **1,823** (1,828 before apply) | 1,697 | **over the 1,500 cap by 323** |
-| `control/lib/symmetry_control/goals/internal.ex` | 477 (480 before apply) | 387 | under |
-| `control/lib/symmetry_control/goals/events_receipts.ex` | 362 (366 before apply) | 322 | under |
-| `control/lib/symmetry_control/goals/contract_validation.ex` | 1,103 → 1,155 | +50 | under |
+Met at the round-1 head (`83a924d4` + the review-round-1 split recorded below). Sizes as `wc -l`
+of the delivered files:
 
-**This is the one gate this slice cannot satisfy as written, and it is recorded rather than
-silently resolved.** The bound RunFence membership is the k2 RunFence cluster (74 functions) plus
-`context_wire_envelope!/4`; measured on block spans that is 1,697 lines before the module header,
-imports, aliases and inter-function blanks — 197 lines over the cap *before* any scaffolding, so no
-formatting or comment trim can close the gap, and the contract's k2 estimate ("~1,461 L") was a
-clause-span count that excludes the attached `@spec`/comment headers and blank lines. The bound
-owned-files list names exactly three new module files, so the cap cannot be met without adding a
-fourth module, which "Concept modules (binding): `Goals.RunFence` and `Goals.EventsReceipts` only"
-and the STRICT owned-files list do not authorise.
+| file | pre-round-1 head `83a924d4` | round-1 head | moved block LOC | note |
+| --- | --- | --- | --- | --- |
+| `control/lib/symmetry_control/goals.ex` | 8,119 | **8,121** | — | shrinks from base 10,606 by 2,485 (gate: "must not grow" ✓); +2 at the round-1 head from the split's import/alias/delegate lines |
+| `control/lib/symmetry_control/goals/run_fence.ex` | 1,823 (1,828 before apply) | **1,257** | 1,149 | harness-session split (round 1): 563 lines out; the six `@doc false` widenings in |
+| `control/lib/symmetry_control/goals/harness_sessions.ex` | — | **610** | 548 | new in round 1: the 26 harness-session functions, 15 blank separators, 47 header lines |
+| `control/lib/symmetry_control/goals/internal.ex` | 477 (480 before apply) | 477 | 387 | under |
+| `control/lib/symmetry_control/goals/events_receipts.ex` | 362 (366 before apply) | 362 | 322 | under |
+| `control/lib/symmetry_control/goals/contract_validation.ex` | 1,103 → 1,155 | 1,155 | +50 | under |
 
-Smallest proposed amendment (not applied): split the harness-session family of RunFence into
+History: at `83a924d4` `run_fence.ex` was 1,823 lines — 323 over the cap. The bound RunFence
+membership is the k2 RunFence cluster (74 functions) plus `context_wire_envelope!/4`; measured on
+block spans that is 1,697 lines before the module header, imports, aliases and inter-function
+blanks, so no formatting or comment trim could close the gap, and the contract's k2 estimate
+("~1,461 L") was a clause-span count that excludes the attached `@spec`/comment headers and blank
+lines. The pre-round-1 owned-files list named exactly three new module files, so the cap could not
+be met without a fourth module; the slice recorded the conflict instead of resolving it silently.
+
+The conductor's `Conductor amendment (2026-11-22, PR #233 review round 1)` authorises the recorded
+split: the harness-session family of RunFence becomes
 `SymmetryControl.Goals.HarnessSessions` — the 26 functions
 `attach_harness_session/5`, `fetch_harness_session_attachment/3`,
 `mark_harness_session_stopped/5`, `session_attrs/1`, `session_stop_attrs/1`, `session_stop_request/2`,
@@ -855,14 +882,11 @@ Smallest proposed amendment (not applied): split the harness-session family of R
 `create_fresh_harness_session!/7`, `attach_reserved_session!/6`, `attach_session_to_run!/3`,
 `lock_attach_receipt/1`, `attach_receipt_matches?/4`, `attach_receipt_fence_matches?/3`,
 `create_attach_receipt!/8`, `attachment_receipt_response/1`, `mark_harness_session_unavailable!/2`,
-`session_receipt/5`, `session_stop_receipt/4` (548 block lines plus their 26 blank separators, a named k2 sub-group: everything the
-session attach/stop receipt path owns). Resulting sizes: `run_fence.ex` ≈ 1,250, `harness_sessions.ex`
-≈ 570, both under the cap; the new module would need three more recorded cross edges
-(`RunFence → HarnessSessions`) plus its `Internal` kernel import, and `goals.ex` would import the two
-facade-delegated entries from it. Under W5-14's own clause ("if one still exceeds, split it along a
-named k2 sub-group … and record — never a helper bucket") this is the sanctioned shape; under
-W4-07's binding owned-files list it is out of scope, so the slice keeps the bound shape and records
-the conflict for the conductor.
+`session_receipt/5`, `session_stop_receipt/4` (548 block lines plus their blank separators, a named
+k2 sub-group: everything the session attach/stop receipt path owns), move-only, with its
+`HarnessSessions → Goals.RunFence` interface recorded in the cross-edge table. Measured sizes
+1,257 / 610 both sit under the cap; see "Fix round 1 (2026-11-22, PR #233 review) — the
+HarnessSessions split" below for the move proof.
 
 ### Row-lock sequence (static, base ↔ head)
 
@@ -895,10 +919,18 @@ receipt/row locks through inline `lock: "FOR UPDATE"` selects whose text is part
 | base `b25e34ae` (fresh worktree of the base blob, dev env, 163 files) | 5 | 357 | 77 | 53 | **492** |
 | slice head `936cbde7` (168 files: the 5 new files) | 5 | 357 | 74 | 54 | **490** |
 | shipped head `0f80b4ac` (168 files; 169 with the fix-stage `internal_test.exs`, which adds 0 issues) | 5 | 357 | 82 | 54 | **498** |
+| pre-round-1 head `83a924d4` (fresh worktree of the commit, dev env, 170 files) | 5 | 357 | 82 | 56 | **500** |
+| round-1 head (this tree, 171 files: `harness_sessions.ex` added) | 5 | 357 | 82 | 56 | **500** |
 
-The three rows are measured runs on fresh worktrees of those revisions (base and slice head re-run in
-the fix stage). Credo's own exit code saturates (30 on all three revisions); the summary line is the
-count. The slice-attributable delta is base → slice head: **−2** (77 → 74 readability). The shipped
+The last four rows are measured runs on fresh worktrees of those revisions (base and slice head
+re-run in the fix stage); the round-1 head is measured in the delivered tree. Credo's own exit code
+saturates (30 on every revision); the summary line is the count. The slice-attributable delta is
+base → slice head: **−2** (77 → 74 readability). The review-round-1 split's own delta is **0**:
+`83a924d4` and the round-1 head both report 500 (5W/357F/82R/56D), with the same 24 `DuplicateCode`
+pairs and the same 32 nested-alias findings; only three reported `DuplicateCode` locations shift
+(`goals.ex` 3361→3363 and 5752→5754 from the +2 facade import lines, `run_fence.ex` 159→152 from the
+−7 lines above the site). The +2 design between the 498 at `0f80b4ac` and the 500 at `83a924d4` is
+merge-attributable (main commits in between). The shipped
 head is 8 higher than the slice head in readability (net of +9 in merged-in files and −1 in
 `portal_resources_test.exs`), all of it in non-slice files the final main merge brought in —
 `+1` `test/support/slowest_formatter.ex`, `+1`
@@ -1063,6 +1095,104 @@ plus `internal_test.exs`) **8 passed** exit 0; `mix credo --strict` **498** (5W/
 (`nothing to check`); `git diff --check 403142114` exit 0; host-path scan of the branch diff 0 hits;
 backslash-u scan of the added lines 0 hits. The full control suite (G11) is the conductor's gate and
 was not re-run here (documentation/records fix plus one unit test file).
+
+### Fix round 1 (2026-11-22, PR #233 review) — the HarnessSessions split
+
+Applied per the conductor's `Conductor amendment (2026-11-22, PR #233 review round 1)`: the review's
+P1-1 (the `run_fence.ex` 1,823 > 1,500 cap), P2-1 (this record and the PR body regenerated from the
+delivered bytes), P2-2 (R2 coverage judged over the moved code's union), P3-1 (the cross-edge table
+above now cites symbols, not base line numbers), P3-2 (the `reconcile_reservation!/3` comment is two
+lines) and P3-3 (the state-set duplication is recorded in `docs/TODO.md`). No behavioural change, no
+test change, no public `Goals` API change; the three new test files, the oracle files and the
+`SOURCE_PATHS` gate are untouched apart from the new `harness_sessions.ex` path.
+
+**The split (move-only).** `Control/lib/symmetry_control/goals/harness_sessions.ex` (610 lines)
+receives the 26 harness-session attach/fetch/stop functions and their private helpers from
+`run_fence.ex` (1,823 → 1,257 lines), verbatim. Base-source spans 223–390 (the three public
+entries) and 837–1231 (the 23 helpers) move; the two new blank-line junctions are the only line
+edits. Interface the new module needs:
+
+| edge | functions (name/arity pairs as emitted) | mechanism |
+| --- | --- | --- |
+| `HarnessSessions` → `Goals.RunFence` | 6 (`ensure_machine_fence!: 7`, `lock_goal_run!: 5`, `machine_session_stop_result: 1`, `machine_write_result: 1`, `task_repository_resource_id!: 2`, `valid_fence: 1`) | `import …, only:` in HarnessSessions; the six are `@doc false def`s in RunFence |
+| `HarnessSessions` → `Goals.Internal` | 13 names / 14 pairs (`value: 2` + `value: 3`) | kernel `import …, only:` |
+| `goals.ex` → `Goals.HarnessSessions` | 1 (`mark_harness_session_unavailable!/2` for `settle_task/4`) | `import …, only:` in the facade |
+| `goals.ex` → `Goals.HarnessSessions` (public) | 3 `defdelegate`s retargeted (`attach_harness_session/5`, `fetch_harness_session_attachment/3`, `mark_harness_session_stopped/5`) | facade delegates unchanged in name/arity/defaults |
+| `Goals.RunFence` → `Goals.HarnessSessions` | none | no staying RunFence function calls into the new module |
+
+The plan's pre-round-1 estimate ("three more recorded cross edges, `RunFence → HarnessSessions`")
+was direction-inverted and undercounted; the measured interface is the six `HarnessSessions →
+RunFence` names above, and the review's own P3-3 note (attributes travelling) applies:
+`@terminal_run_states` / `@accounting_terminal_run_states` travel into HarnessSessions and are
+removed from RunFence (they had no staying user there), forced by `--warnings-as-errors`.
+
+**Census (same tool/method as G4, re-run at the round-1 tree).** `parse_defs.exs` (clause spans) plus
+the canonical per-function AST dump (`dump_fns.exs`, line metadata stripped, `defp` folded to
+`def`) over the base blob `6ad78e29…` (`b25e34ae` `goals.ex`, 461 functions) + the base
+`ContractValidation` (77) and the six head files:
+
+| check | result |
+| --- | --- |
+| head file census | `goals.ex` 303 + `run_fence.ex` 49 + `harness_sessions.ex` 26 + `events_receipts.ex` 19 + `internal.ex` 63 + `contract_validation.ex` 78 = **538 = 461 + 77** |
+| base functions accounted for | **418 byte-identical + 43 identical under a recorded edit = 461**; 0 missing after the rename map, 0 moved functions duplicated |
+| the 43 | 7 `Goals.`-prefix widenings (8 insertions), 9 contract-mandated `!` lock renames, 25 callers retargeted by those renames, `nullable_safe_integer/2` (`@max_safe_integer` spelling), `validate_contract/3` (qualifier rewrite) |
+| moved declarations | **158** (157 single-site; `value/3` two-site — the pre-existing `ContractValidation` private helper, byte-identical base ↔ head); destinations 63 Internal / 49 RunFence / 26 HarnessSessions / 19 EventsReceipts / 1 ContractValidation |
+| the 26 harness functions | **26/26 byte-identical to their base blobs**; the set removed from `run_fence.ex` equals the set present in `harness_sessions.ex` exactly |
+| ContractValidation | base 77: `changed []`, `gone []`, `added ['validate_contract/3']` |
+
+**Control-flow audit (lesson 32), entries whose body text changed.** None: the 26 moved bodies are
+AST-identical to base (the six cross-edge callees resolve through `import`, so not one call site
+changes text), and the six `@doc false` widenings only change visibility. Every early return,
+fall-through, `Repo.rollback` short-circuit and default clause therefore carries over 1:1; the
+pre-round-1 per-entry table above stays the audit for the other entries.
+
+**File sizes.** `goals.ex` 8,119 → 8,121; `run_fence.ex` 1,823 → **1,257**; new
+`harness_sessions.ex` **610**; `internal.ex` 477; `events_receipts.ex` 362; `contract_validation.ex`
+1,155. All new modules ≤ 1,500 lines (P1-1 closed).
+
+**R2 coverage union (P2-2).** `mix test --cover` (full suite, own partition), base worktree at
+`108b2d2b` (the merge-base with origin/main) vs the round-1 tree; the union is `goals.ex` plus every
+`goals/*.ex` module that receives `goals.ex` code (`contract_validation.ex` exists at base; the four
+new modules do not, so their base share is the goals.ex lines they later receive):
+
+| module (file) | base `108b2d2b` | round-1 head |
+| --- | --- | --- |
+| `SymmetryControl.Goals` (`goals.ex`) | 86.47% (3,233/3,739) | 86.32% (2,392/2,771) |
+| `SymmetryControl.Goals.RunFence` (`run_fence.ex`) | — (new file) | 84.84% (414/488) |
+| `SymmetryControl.Goals.HarnessSessions` (`harness_sessions.ex`) | — (new file) | 92.92% (197/212) |
+| `SymmetryControl.Goals.EventsReceipts` (`events_receipts.ex`) | — (new file) | 93.58% (102/109) |
+| `SymmetryControl.Goals.Internal` (`internal.ex`) | — (new file) | 79.61% (121/152) |
+| `SymmetryControl.Goals.ContractValidation` (`contract_validation.ex`) | 84.15% (276/328) | 84.59% (291/344) |
+| **union** | **86.28% (3,509/4,067)** | **86.29% (3,517/4,076)** |
+| suite total | 87.15% (999/1003 passed, 21 skipped, the 4 documented `:portal_assets` host-prerequisite failures) | 87.19% (1,007/1,011 passed, 21 skipped, the same 4 failures) |
+
+Moved-code subset, counted over the same 158 declarations' own clause spans (base
+`goals.ex` vs their head modules): 850/977 → 849/977 covered. Nine lines across seven functions
+flip class — eight `def` clause-header lines (the default-argument header and terminal fallback
+clauses of `append_evidence/5`, `append_evidence_batch/5`, `attach_harness_session/5`,
+`claim_with_disposition/3`, `mark_harness_session_stopped/5`, `record_usage/5`) and one `_ -> false`
+case arm of `valid_receipt_utc?/1` — while the relevant-line sets are identical (977 = 977) and every
+moved *body* line keeps its class: a cover line-marker attribution artefact of the module move, not
+lost coverage. The union does not drop, so no test was added (R2 met); the four new modules' scaffold
+lines (module header, imports, aliases) are the only new uncovered lines in the union.
+
+
+**Round-1 gates (all foreground, serialized; the full suite is the conductor's).** format exit 0;
+`MIX_ENV=test mix compile --warnings-as-errors --force` exit 0 (0 warnings); `mix xref graph
+--format cycles` exit 0 (same three cycles, HarnessSessions joins the expected runtime cycle) and
+`--label compile-connected` exit 0 (`No cycles found`; plain run: the expected runtime cycle is
+now 11 modules / 3 export edges with `harness_sessions.ex` joining it, the 25-module web cycle and
+the 4-module schemas cycle unchanged); targeted oracle suites
+`goals_test.exs`+`orchestration_goal_admission_test.exs`+`goals_read_model_test.exs` **275 passed**
+exit 0; the three new test files **8 passed** exit 0; `mix credo --strict` **500** (5W/357F/82R/56D) exit 30; the pre-round-1 commit `83a924d4` measures
+the same 500 with the same 24 `DuplicateCode` pairs, so the split's own credo delta is 0 and no new
+`credo:disable` appears; `python scripts/ci/test-omo-control-native-evidence.py` 10 tests `OK` exit 0
+with the `harness_sessions.ex` path added; `python scripts/ci/check-record-cleanliness.py --base
+108b2d2b… --head <round-1 head>` exit 0; `git diff --check` exit 0; host-path and backslash-u scans
+of the branch diff 0 hits; full `mix test` 1,007/1,011 passed, 21 skipped, exit 2 — the same four documented `:portal_assets` cases
+(no staged portal bundle on this host; CI stages it in the `control` job); the `mix test --exclude
+portal_assets` host remedy (and the base-worktree cover run, 999/1003) is recorded in the round-1
+findings report.
 
 ## Design trade-offs (ambiguity resolution)
 
