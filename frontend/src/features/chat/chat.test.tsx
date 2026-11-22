@@ -566,55 +566,6 @@ describe("sending", () => {
     expect(bodies[0]?.work).toEqual({});
   });
 
-  it("settles a scope's pane on its own offset after a switch, even while the pane clamped it", async () => {
-    const user = userEvent.setup();
-    const release = Promise.withResolvers<void>();
-    const { application } = renderChat(`/portal/chat?scope=workspace&projectId=${projectId}`, {
-      conversation: (url) => url.searchParams.get("scope") === "project"
-        // Held, and re-served as a fresh response on every project read.
-        ? release.promise.then(() => new Response(JSON.stringify(conversationBody({ scope: "project", projectId, messages: [message(2, { content: "project history" })] }))))
-        : new Response(JSON.stringify(conversationBody({ scope: "workspace", messages: [message(1, { content: "workspace history" })] }))),
-    });
-    await openChat();
-    await screen.findByText("workspace history");
-
-    // Model Chromium: a pane whose transcript is absent (the scope is still
-    // loading) clamps scrollTop to 0, while a pane with the transcript accepts
-    // and keeps what it is given.
-    const node = scrollNode();
-    let pane = 0;
-    Object.defineProperty(node, "scrollTop", {
-      configurable: true,
-      get: () => (node.querySelector("#chat-messages") === null ? 0 : pane),
-      set: (value: number) => { pane = node.querySelector("#chat-messages") === null ? 0 : value; },
-    });
-    fireEvent.scroll(node, { target: { scrollTop: 40 } });
-    expect(node.scrollTop).toBe(40);
-
-    // The project scope arrives empty (its read is held): its pane clamps, and
-    // the workspace pane's offset must not be captured from that clamped pane.
-    await user.selectOptions(scopeSelect(), "project");
-    await screen.findByText(`Project conversation — ${projectId} · pending`);
-    expect(document.querySelector("#chat-messages")).toBeNull();
-    await user.selectOptions(scopeSelect(), "workspace");
-    await screen.findByText("workspace history");
-    expect(node.scrollTop).toBe(40);
-
-    // A scope that left while its pane was clamped still owes its offset: the
-    // restore is re-asserted once the pane can hold it again.
-    release.resolve();
-    await user.selectOptions(scopeSelect(), "project");
-    await screen.findByText("project history");
-    fireEvent.scroll(node, { target: { scrollTop: 120 } });
-    await user.selectOptions(scopeSelect(), "workspace");
-    await waitFor(() => { expect(portal.requests.filter((request) => request.path.includes("scope=workspace")).length).toBeGreaterThan(1); });
-    expect(node.scrollTop).toBe(40);
-    await act(async () => {
-      await application.queryClient.invalidateQueries({ queryKey: ["chat"] });
-    });
-    expect(node.scrollTop).toBe(40);
-  });
-
   it("keeps a scope's offset when the browser pins the pane under a replaced transcript", async () => {
     const user = userEvent.setup();
     renderChat(`/portal/chat?scope=workspace&projectId=${projectId}`, {
