@@ -625,21 +625,24 @@ stays verbatim apart from its provenance header and one placeholder normalizatio
 - **2026-11-22 — T1 status refresh: comment-policy sweep dispatched, delivered and record-bound.**
   The owner's 2026-11-22 comment policy (`refactor/comment-policy.md`) was appended to every
   in-flight slice's prompt; the program-wide sweep slice (`goal-comment-policy-sweep`, held until
-  the pre-policy land queue merged) then ran against `origin/main` `f1fe1e59`. It dispositioned the
-  6,074 candidate comment lines the 68 program commits after `a3039f0` added on `main` across 212
-  files: deleted 2,607 · compressed 3,129 · kept 294, plus 44 classifier false positives left
-  byte-identical (totals re-bound to the delivered revision at the apply stage; 194 of the 212
-  candidate files changed, 18 byte-identical). The per-file table is in
+  the pre-policy land queue merged) then ran against `origin/main` `f1fe1e59` with the candidate
+  set frozen there (the eight later slices `9f82fd8e`–`cca92284` are post-dispatch and own their
+  comments; plan §1). It dispositioned the 6,074 candidate comment lines the 68 program commits
+  after `a3039f0` added on `main` across 212 files: deleted 2,609 · compressed 3,135 · kept 286,
+  plus 44 classifier false positives left byte-identical (totals re-bound to the delivered revision
+  at the apply stage and to the review-fix compression, plan §11.6; 195 of the 212 candidate files
+  changed by the sweep, 14 byte-identical to `f1fe1e59`, three more differing only through merged
+  `main` content). The per-file table is in
   `docs/plans/2026-11-22-comment-policy-sweep-plan.md` (§9/§10/§11); the per-line inventory and the
   workstream record are kept as off-repo run artifacts (row count, sha256 and regeneration commands
   in plan §11.1); the moved module intent is recorded in the owning slice plans (§10.6); and the
-  gate evidence — including per-file language-parser strip-proofs (207 files PASS against
-  `origin/main` on the delivered revision) — is in
+  gate evidence — including per-file language-parser strip-proofs (212 candidate files PASS
+  against `origin/main` `cca92284` at the shipped head, plan §11.5) — is in
   `docs/evidence/comment-policy-sweep-2026-11-22.md`. The debt the deleted comments recorded is
   filed under `docs/TODO.md` ("Comment-policy sweep: debt the deleted comments recorded").
-  Delivered as branch `refactor/comment-policy-sweep` (sweep commit `16a7e7d3` + `origin/main`
-  merges + the apply-stage record changes): committed on the branch, not yet merged, so no status
-  row above moves on this entry's account.
+  Delivered as branch `refactor/comment-policy-sweep` (sweep commits `16a7e7d3`/`0399d5f1` +
+  `origin/main` merges + the apply-stage and review-fix record changes): committed on the branch,
+  not yet merged, so no status row above moves on this entry's account.
 
 ## Known follow-ups
 

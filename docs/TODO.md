@@ -1345,8 +1345,11 @@ is fixed here; each bullet names what a follow-up has to re-derive.
 
 - [ ] `pyproject.toml`: the three `scripts/ci/*model-routing-record-sanitize*` files stay in
       `extend-exclude`; the entry's premise (see "scripts/ci ruff baseline: drop the #137 exclude")
-      no longer holds after #137 — the landed files carry 2 `PERF401` findings and 18 `ruff format`
-      hunks, so dropping the exclude now reformats them rather than leaving them clean.
+      no longer holds after #137 — the landed files carry 2 `PERF401` findings and 67 `ruff format`
+      hunks across the three (`model-routing-record-sanitize.py` 18,
+      `test-model-routing-record-sanitize.py` 24, `test-model-routing-record-sanitize-json.py` 25;
+      re-measured with ruff 0.17.5), so dropping the exclude now reformats them rather than leaving
+      them clean.
 
 - [ ] `.github/workflows/ci.yml`: shellcheck-enabled `actionlint` still does not terminate on the
       Windows development host (reproduced while running this sweep's gate), and Credo still prints

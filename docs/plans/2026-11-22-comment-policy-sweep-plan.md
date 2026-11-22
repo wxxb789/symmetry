@@ -2,10 +2,11 @@
 
 Contract: `goal-comment-policy-sweep.md` (GDD, 2026-11-22; held until the pre-policy land queue
 merged — it has: `origin/main` is `f1fe1e59`, and the sweep is dispatched as a program slice of goal
-0010). Base revision for every coordinate in this plan: `f1fe1e59`. Delivered revision: `b942030e`
-(`f1fe1e59` plus the sweep commit `16a7e7d3` and the `origin/main` merges) plus this plan's
-apply-stage working-tree changes; when a line number is cited it resolves at the base unless a stage
-note says otherwise.
+0010). Base revision for every coordinate in this plan: `f1fe1e59`. Delivered revision: the shipped
+head `465ffd1b` (`f1fe1e59` plus the sweep commits `16a7e7d3` and `0399d5f1` and the `origin/main`
+merges, the last bringing `origin/main` to `cca92284`) plus the apply-stage and fix-stage
+working-tree changes; when a line number is cited it resolves at the base unless a stage note says
+otherwise.
 
 Plans consulted as the shape reference: `2026-11-21-core-dead-surface-plan.md` (definition of the
 judging artifact and the failure controls), `2026-11-21-rf-w3-13-http-boundary-plan.md` (stage
@@ -16,9 +17,22 @@ updates and per-file proof carriers), `2026-11-21-rf-program-plan.md` (slice/wor
 - **Program commits** = the 68 first-parent commits on `main` after the program's base revision
   `a3039f0` (`git log --first-parent --pretty=%H a3039f0..f1fe1e59`), i.e. the land queue's slices
   (`rf-*` 138-214, `fix/*` 137/180/185/194/195, `docs/*` 182/207/208) plus the queue's dependabot
-  and npm bumps. The contract's own baseline statement ("subjects/PRs of slices … merged on or after
-  2026-11-21") selects exactly this set: `a3039f0` is the plan's base revision and the first program
-  landing after it is `6099f26f` (#138, 2026-11-21 08:20).
+  and npm bumps: `a3039f0` is the plan's base revision and the first program landing after it is
+  `6099f26f` (#138, 2026-11-21 08:20).
+- **Cutoff** (fix stage, review R2): the candidate set is frozen at the dispatch base `f1fe1e59` —
+  the contract's "dispatch after the land queue has merged" premise. Eight further program slices
+  landed on `main` after the freeze and reached the branch through its `origin/main` merges
+  (`9f82fd8e` #210, `12de9428` #212, `3f73cc73` #213, `394859a9` #215, `e3864c1e` #216, `de526861`
+  #217, `e0782105` #218, `cca92284` #219; 2026-11-22 05:39–08:03). Read without an upper bound, the
+  contract's "still present at HEAD" rule also selects the comment/docstring lines these slices
+  added: 88 lines still present at `465ffd1b` (5 directives; per slice `9f82fd8e` 21, `12de9428`
+  33, `3f73cc73` 25, `cca92284` 9; re-computed at the fix stage as each slice's `git diff <slice>^
+  <slice>` added lines ∩ present at HEAD, classified per language), of which 31 are in files §9
+  lists and 57 in post-base files, including 4 contiguous runs longer than two lines (24 lines:
+  `.github/workflows/ci.yml` 32–34, 92–96 and 1722–1724, `daemon/internal/app/run_lifecycle.go`
+  76–88). Those slices are post-dispatch and post-policy and own their comments; the sweep owns
+  only the frozen set. (An earlier revision of this bullet claimed the 68-commit set was selected
+  "exactly"; that claim was false at the shipped head and this cutoff replaces it.)
 - **Per-file attribution** = `git blame --line-porcelain -w HEAD -- <file>` over every file the
   program changed (`git diff --name-only a3039f0..f1fe1e59`, 462 files). A line is a **candidate**
   when its blame commit is one of the 68 program commits; the line's class is decided at HEAD:
@@ -96,8 +110,12 @@ Mechanical acceptance of the three dispositions (checked by the verifier in §5)
    changes generated docs. Internal `@doc` prose goes under `D6`.
 4. **Hazards are never deleted silently** (contract clause 3): a `K1` hazard statement may only be
    deleted when a test or a `docs/` record states the same hazard; otherwise it is compressed to
-   ≤2 lines and kept beside the guarded line. The second-pass review in §5 re-derives this for every
-   non-test file.
+   ≤2 lines and kept beside the guarded line. The controls that re-check this are named and real:
+   the strip-proof carriers (§5.1) hold the code side fixed, the policy verifier (§5.2) re-derives
+   every disposition against the delivered tree, and the fix stage's hazard re-review (§11.6)
+   re-read every deleted hazard-flavoured row (112 rows, 0 without coverage). This paragraph
+   previously cited a "second-pass review in §5" that no stage record described; the fix stage
+   removed that claim (review R3).
 5. **Pre-program comments in touched files stay byte-identical** (contract scope rule). Only
    candidate lines (and the blank lines that disappear with them) are edited. Where a candidate
    line is adjacent to a pre-program comment line, the pre-program line survives untouched.
@@ -158,7 +176,7 @@ marked per-worker:
 | 10 | YAML | `actionlint` on `.github/workflows/ci.yml` |
 | 11 | Strip-proof | `proof.py --rev f1fe1e59` over all 212 files, all PASS (§5.1) |
 | 12 | Whitespace | `git diff --check` |
-| 13 | Host paths | `git diff origin/main...HEAD` and the worktree diff grep `-i users/` (and the general profile-path scan) |
+| 13 | Host paths | `git diff origin/main...HEAD` and the worktree diff, scanned case-insensitively for user-profile path components (contract gate 13; the exact pattern lives in the contract file) |
 | 14 | Policy verifier | every candidate's disposition re-checked against the delivered tree, kept blocks ≤2 lines, directives intact (§5.2) |
 
 ### 5.1 Strip-proof carriers (contract: "the file with comments stripped is byte-identical")
@@ -240,9 +258,11 @@ run here, not as passes.
 - **Code-token change**: contractual failure; caught per file by §5.1 carriers, by `go vet`
   (every Go file including tests), by `mix compile --warnings-as-errors`, and by the Elixir carrier
   parsing every touched `.ex`/`.exs`.
-- **Deleted hazard whose hazard is not covered elsewhere**: contractual failure; §5.1's second-pass
-  review re-reads every `D`-classified block in non-test files and every `K1`/`K4`/`K5` keep, and
-  the plan notes carry the moved intent that has a plan home.
+- **Deleted hazard whose hazard is not covered elsewhere**: contractual failure; `K1`/`K2`/`K3`
+  candidates are compressed rather than deleted (§2/§3.4), the policy verifier re-derives every
+  disposition (§5.2), and the fix stage's hazard re-review re-read every deleted hazard-flavoured
+  row — 112 rows (`K1` 64, `K2` 14, `K3` 7, `K4` 5, `M2` 22), 0 without a test or `docs/` record
+  (§11.6); the moved intent lives in the owning slice plans (§10.6).
 - **Directive removal**: excluded by rule and re-checked by the verifier (§5.2).
 - **Pre-program comment churn**: the verifier asserts no non-candidate comment line changed.
 - **Docstring consumed by a test or CLI**: §3.2 lists the five `__doc__` consumers; the bounded
@@ -424,7 +444,7 @@ rule — and every kept block longer than one line is listed in §11.
 | `daemon/internal/state/goal_session.go` | 8 | 8 | 0 | 0 | 0 | 0 | 8 | 0 |
 | `daemon/internal/state/goal_session_test.go` | 12 | 12 | 0 | 0 | 9 | 3 | 0 | 0 |
 | `daemon/internal/state/linux_clone_journal_test.go` | 55 | 55 | 0 | 0 | 55 | 0 | 0 | 0 |
-| `daemon/internal/state/provider_action.go` | 4 | 4 | 0 | 0 | 0 | 0 | 4 | 0 |
+| `daemon/internal/state/provider_action.go` | 4 | 4 | 0 | 0 | 2 | 2 | 0 | 0 |
 | `daemon/internal/state/provider_action_test.go` | 7 | 7 | 0 | 0 | 0 | 7 | 0 | 0 |
 | `daemon/internal/state/state.go` | 10 | 10 | 0 | 0 | 5 | 4 | 1 | 0 |
 | `daemon/internal/state/state_test.go` | 16 | 16 | 0 | 0 | 16 | 0 | 0 | 0 |
@@ -459,7 +479,7 @@ rule — and every kept block longer than one line is listed in §11.
 | `frontend/vitest.config.ts` | 4 | 4 | 0 | 0 | 4 | 0 | 0 | 0 |
 | `pyproject.toml` | 6 | 6 | 0 | 0 | 0 | 4 | 2 | 0 |
 | `scripts/ci/assert-browser-suite-coverage.py` | 60 | 6 | 53 | 1 | 15 | 44 | 1 | 0 |
-| `scripts/ci/export-linux-v2-redacted-evidence.py` | 20 | 18 | 0 | 0 | 10 | 0 | 8 | 2 |
+| `scripts/ci/export-linux-v2-redacted-evidence.py` | 20 | 18 | 0 | 0 | 10 | 4 | 4 | 2 |
 | `scripts/ci/go-test-durations.py` | 72 | 18 | 53 | 1 | 7 | 64 | 1 | 0 |
 | `scripts/ci/model-routing-evaluation.py` | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 1 |
 | `scripts/ci/model-routing-record-sanitize.py` | 535 | 171 | 364 | 0 | 369 | 141 | 25 | 0 |
@@ -483,10 +503,11 @@ place inside a comment token or docstring — e.g. `*events = append(...)`, `*ru
 
 ## 10. Delivered record (stage update, 2026-11-22)
 
-Disposition totals over the 6,074 inventory rows: **deleted 2,607 · compressed 3,129 · kept 294 ·
-excluded 44**; rules `K1` 2,316, `D1` 1,479, `D2` 415, `D6` 406, `K4` 393, `M1` 353, `K3` 255,
-`K2` 224, `D3` 71, `K5` 63, `M2` 30, `D5` 25, `CODELINE` 44 (per-line rows: the off-repo inventory
-artifact, §11).
+Disposition totals over the 6,074 inventory rows: **deleted 2,609 · compressed 3,135 · kept 286 ·
+excluded 44**; rules `K1` 2,318, `D1` 1,481, `D2` 415, `D6` 406, `K4` 385, `M1` 353, `K3` 255,
+`K2` 228, `D3` 71, `K5` 63, `M2` 30, `D5` 25, `CODELINE` 44 (per-line rows: the off-repo inventory
+artifact, §11; the fix stage moved 8 rows — the two blocks review R1 compressed — from `kept`,
+§11.6).
 
 Deviations from this plan's assumptions, all recorded rather than silently absorbed:
 
@@ -503,7 +524,8 @@ Deviations from this plan's assumptions, all recorded rather than silently absor
 3. **8 relocated why-lines** (declared): four in `control/.credo.exs` moved from the deleted header
    to their config entries, four are minimal completions of pre-program fragments in
    `scripts/ci/model-routing-record-sanitize.py` (see §10.4).
-4. **4 pre-program comment lines were rewritten** to close sentences whose program-added
+4. **5 pre-program comment lines were rewritten** (4 at the apply stage, `provider_action.go`'s at
+   the fix stage, §11.6) to close sentences whose program-added
    continuation was deleted (`scripts/ci/model-routing-record-sanitize.py`: `_SEPARATOR`,
    `_FILE_PREFIX`, `root_relative`, `file_url`; plus two docstring tails and one fragment each in
    `control/test/support/integration_fixtures.ex`, `control/test/support/test_conn.ex`,
@@ -511,15 +533,20 @@ Deviations from this plan's assumptions, all recorded rather than silently absor
    `scripts/ci/test-check-lockfile-registry.py`). The contract's scope rule protects standalone
    pre-program comments; these are fragments *inside* blocks whose candidate lines were removed, and
    completing them is the smallest edit that leaves no mid-sentence comment. Counted by the
-   verifier's `pre_program_removed` stat: 4 against the sweep base; 38 against the merged delivered
-   revision, where 34 of the counted lines belong to main-side rewrites in `ci.yml`,
+   verifier's `pre_program_removed` stat: 5 against the sweep base after the fix stage added
+   `provider_action.go`'s mid-sentence tail (§11.6); 39 against the merged delivered revision,
+   where 34 of the counted lines belong to main-side rewrites in `ci.yml`,
    `test-ci-changed-path-classifier.py` and `goal_session.go` (§11).
-5. **Two blocks larger than two lines survive under the published-contract exemption**:
-   `daemon/internal/state/provider_action.go` 568-571 and `scripts/ci/export-linux-v2-redacted-evidence.py`
-   535-560 (the published-record allowlist whose membership a CI scan enforces). Every other
-   candidate block in the delivered tree is zero, one or two candidate lines. Re-derived at the
-   apply stage with a docstring-aware ceiling check over all 1,651 blocks: 0 non-exempt blocks over
-   two lines (§11).
+5. **No block exceeds the two-line ceiling in the fixed tree.** The apply stage left two blocks
+   larger than two lines under a claimed exemption (`daemon/internal/state/provider_action.go`
+   568-571 and `scripts/ci/export-linux-v2-redacted-evidence.py` 535-560, described there as a
+   published-record allowlist a CI scan enforces). Review R1 showed neither qualifies: the
+   provider_action block is the doc comment of an unexported helper with no scan or consumer, and
+   the export script's scan (`scripts/ci/test-linux-v2-evidence.py`) enforces the
+   `DAEMON_LOG_MESSAGES` code frozenset, not the comment text. The fix stage compressed both
+   blocks to ≤2 lines (§11.6), so every candidate block in the fixed tree is zero, one or two
+   lines. The docstring-aware ceiling check over all 1,651 blocks reports 0 blocks over two lines
+   and no block using the exemption (§11.3).
 6. **Moved module intent lives in the owning slice plans.** The 16 workstream sections of the sweep
    record (353 `M1` rows) were appended verbatim to the owning slice plans' "Comment-policy sweep"
    notes at the apply stage (conductor amendment, §11): 30 slice plans in all — the 22 that already
@@ -540,7 +567,7 @@ Run artifacts directory (`<HOST-PATH>` = the GDD state root, under this stage's 
 
 | artifact | sha256 | content |
 |---|---|---|
-| `comment-policy-sweep-2026-11-22-inventory.tsv` | `7fb6072112ce51b3e0223eb8d41bf3f8c7a6718c38d5991b54630c19ae588c7e` | 6,074 rows, one per candidate; the per-line dispositions re-bound to the delivered revision (the judging artifact) |
+| `comment-policy-sweep-2026-11-22-inventory.tsv` | `cb5ee753c206ae0b445a746fec7bdfd8fce59aa476ea86ba2d177e127014c583` | 6,074 rows, one per candidate; the per-line dispositions re-bound to the delivered revision, including the fix stage's 8 row moves (§11.6) (the judging artifact) |
 | `comment-policy-sweep-2026-11-22-inventory-as-committed.tsv` | `3229361201f369f3a52e6ff6cd8396fdf685c20839428786b59f98400f6605e0` | the implement-stage record as committed, kept so the §11.2 diff is reproducible |
 | `comment-policy-sweep-2026-11-22-moved-intent.md` | `45092a12744ab8da103b186a4e43edddc3c3f125ce87b08c25367c8de6f29c41` | the 492-line workstream record as committed; its content now lives in the owning slice plans (§10.6) |
 
@@ -568,11 +595,13 @@ refreshes. The defects they close:
 
 1. **`@moduledoc` pragma and structural survivor rows** (`@moduledoc false`, `@moduledoc """`,
    `"""`, `@doc """`) that are byte-identical in the delivered tree are `kept`; the eleven pragma
-   rows the review named now carry `kept`/`K5`. `changeset_validators.ex` and `daemon_channel.ex`
-   are byte-identical to `f1fe1e59`, so the changed-file count is 194 of 212 (18 byte-identical);
-   four further candidate files differ from `f1fe1e59` only through content merged from `main`
-   after the sweep base (`native_settlement_regression_test.go`, `goal_session.go`,
-   `provider_action.go`, `omo-control-native-evidence.py`).
+   rows the review named now carry `kept`/`K5`. Fourteen candidate files are byte-identical to
+   `f1fe1e59` (the apply stage fixed the two the implement record counted, `changeset_validators.ex`
+   and `daemon_channel.ex`), so the sweep changed 195 of the 212 candidate files — 194 from the
+   sweep commits, plus `provider_action.go` from the fix stage's compression (§11.6); three
+   further candidate files differ from `f1fe1e59` only through content merged from `main` after the
+   sweep base (`native_settlement_regression_test.go`, `goal_session.go`,
+   `omo-control-native-evidence.py`).
 2. **Surviving docstring/comment blocks** whose base text is gone are `compressed` with the
    delivered replacement text recorded — the delivered lines not present anywhere in the base
    revision — instead of the blanket `deleted` the implement record carried; the same recompute
@@ -600,21 +629,28 @@ tree required it:
   rows (6,030 candidates + 44 `excluded`), 0 duplicate keys, `--- verify: 0 problems`.
   `--also-base` treats `origin/main` content as base text so main-side rewrites after the sweep
   base are not unexplained new comments; a bare-trivia arm (`//`, `///`, `////`, `#`, `/*`, `*/`,
-  `/**`, `*`) keeps the removal check occurrence-wise for separator-only rows. `pre_program_removed` reads 38
-  on this revision: the 4 sweep-side sentence repairs plus 34 lines main-side PRs rewrote after
-  the sweep base (`ci.yml` 19, `test-ci-changed-path-classifier.py` 11, `goal_session.go` 4 —
-  merged-main content, not sweep edits).
+  `/**`, `*`) keeps the removal check occurrence-wise for separator-only rows. On the fixed tree
+  its stats read `deleted 2,609 / compressed 3,135 / kept 286 / excluded 44`,
+  `pre_program_removed: 39`, `relocated_lines: 8`, `exempt_blocks_over_2: 1`; the one counted
+  "exempt" entry is the verifier's anchor-walk artefact, not a delivered >2-line block — the walk
+  above the two-line `K4` block `export-linux-v2-redacted-evidence.py` 559-560 also counts the
+  fix-stage replacement line at 535 against it, and every candidate block in the tree is ≤2 lines
+  (§10.5; ceiling check below). `pre_program_removed` reads 39: the 5 sweep-side mid-sentence
+  repairs (the fix stage added `provider_action.go`'s, §11.6) plus 34 lines main-side PRs rewrote
+  after the sweep base (`ci.yml` 19, `test-ci-changed-path-classifier.py` 11, `goal_session.go`
+  4 — merged-main content, not sweep edits).
 - **rows-vs-tree census** (occurrence-keyed, scratch `census-final.py`):
   `FALSE-DELETED: 0 (non-empty text: 0)`, `FALSE-KEPT: 0` — every row's disposition matches the
   delivered tree.
 - **block-ceiling check** (docstring-aware, scratch `ceiling.py`; shebang and `"""` framing
-  exempt): `--- ceiling: 0 blocks over two lines (non-exempt)`; the two published-contract blocks
-  stay named and exempt (§10.5).
+  exempt): `--- ceiling: 0 blocks over two lines (non-exempt)` — no block uses the exemption
+  (§10.5).
 
 ### 11.4 Kept blocks longer than one line
 
-Every kept block longer than one line — 74 groups, 72 of two lines and two of four — from the
-delivered-revision inventory, complete:
+Every kept block longer than one line — 72 groups, all of two lines — from the delivered-revision
+inventory, complete (the two four-line groups the apply stage listed here were compressed to ≤2
+lines by the fix stage, §11.6):
 
 - `.github/dependabot.yml` lines 7–8 (K1) — "# No update groups: each pull request stays one reviewable bump, and the weekly" / "# cadence with a small open-pull-requests ceiling bounds the noise."
 - `.github/workflows/ci.yml` lines 167–168 (K1) — "# It resolves the locked versions against the registry, so it belongs" / "# beside the provenance check, before the install."
@@ -680,10 +716,8 @@ delivered-revision inventory, complete:
 - `daemon/internal/platform/supervisor_windows_client.go` lines 341–342 (K1) — "// ReleasePreparedSupervisor releases the helper only after the exact stop" / "// receipt has been durably recorded by the caller."
 - `daemon/internal/platform/supervisor_windows_helper.go` lines 607–608 (K1) — "// Keep the helper alive after a proven owner-loss stop so a restarted" / "// daemon can obtain and persist the exact stop receipt through recover."
 - `daemon/internal/platform/supervisor_windows_helper.go` lines 820–821 (K1) — "// Keep a proven or unresolved Job authority alive for a retry. A" / "// lost response must not turn an unknown stop into a success."
-- `daemon/internal/state/provider_action.go` lines 568–571 (K4) — "// reserveWorstCaseCompletions returns a copy of the journal with the complete" / "// serialized shape of the largest legal completion reserved for every" / "// unresolved intent. Completed provider data may already exceed the" / "// provider-only budget, but a mutation must leave enough journal space to"
 - `daemon/native/linux-gate/protocol/wire_linux_test.go` lines 160–161 (K3) — "// The C gate zeroes the one-use token before it seals the request memfd" / "// (gate.c exec_as_b), so the bootstrap decodes the scrubbed frame."
 - `pyproject.toml` lines 4–5 (K2) — "# Fail closed instead of reporting a different finding set: the baseline this" / "# config was fixed against was measured with ruff 0.17.5."
-- `scripts/ci/export-linux-v2-redacted-evidence.py` lines 535–538 (K4) — "#           daemon/internal/app (the twelve files that carry daemon.log call" / "#           sites: app.go, cleanup.go, commands.go, events.go, goal_admission.go," / "#           goal_delivery.go, lease.go, native_run.go, outbox.go, recovery.go," / "#           recovery_glue.go, supervisory.go)."
 - `scripts/ci/export-linux-v2-redacted-evidence.py` lines 559–560 (K4) — "# assigned from a literal at native_run.go:1584-1620, 2180-2210; commands.go:721" / "# and supervisory.go:140) are covered by this rule, not by that scan."
 - `scripts/ci/test-model-routing-record-sanitize-json.py` lines 765–766 (K2) — "# 8x the matches, the same number of rebuilds: one per matching pass (the pass" / "# sequence is at most the nine families plus two matchers per `--root`)."
 - `scripts/ci/test-model-routing-record-sanitize-json.py` lines 840–841 (K2) — "# The scan finds the listing's first location and re-enters only its own last" / "# bytes: a handful of searches for the whole listing, not one per line."
@@ -702,3 +736,70 @@ and for the apply-stage delta against `b942030e` (207 PASS); the verifier, censu
 `git diff --check` and the host scans exit 0. No result of the accepted findings' application is
 outside the re-run gate set; the full Go/Elixir/frontend suites were not re-run (contract's
 comment-only carrier proof; CI stays their oracle).
+
+**Fix-stage re-runs (review r1, at the shipped head `465ffd1b` plus the fix-stage working-tree
+changes).** Review R6: the shipped revision (`465ffd1b`, which merged `cca92284`/#219 over two
+swept files and `docs/TODO.md`) had no recorded run bound to it; this stage re-ran the checks and
+the results are part of the record now. Strip-proof `proof.py --rev cca92284 --files-from <212
+candidates>` → `--- 212 files: 212 PASS, 0 not-PASS (none)`; policy verifier on the fixed
+artifact → `--- verify: 0 problems` (stats in §11.3); `census-final.py` → `FALSE-DELETED: 0
+(non-empty text: 0)`, `FALSE-KEPT: 0`; `ceiling.py --rev f1fe1e59` → `--- ceiling: 0 blocks over
+two lines (non-exempt)`; `gofmt -l .` → 0 lines; `go vet ./...`, `GOOS=linux go vet ./...`, `go
+build ./...` → exit 0, no output; `mix format --check-formatted`, `MIX_ENV=test mix compile
+--warnings-as-errors` → exit 0; `ruff check scripts/ci` + `ruff format --check scripts/ci` →
+`All checks passed!` / `53 files already formatted`; `tsc --noEmit` → exit 0; `pnpm lint` → `227
+problems (0 errors, 227 warnings)` (ceiling 229, unchanged); `actionlint -shellcheck= -pyflakes=
+.github/workflows/ci.yml` (direct 1.7.12 binary) → exit 0; `git diff --check` → 0 lines; host
+scan (gate 13) → 0 added-side matches (below). Verbatim table: evidence record §8.
+
+### 11.6 Fix-stage record (review r1, 2026-11-22)
+
+All eight review findings are applied; the two source edits are comment-only (strip-proof passes,
+§11.5) and nothing outside the candidate set changed.
+
+1. **R1 (P1) — the last two >2-line blocks compressed.** `provider_action.go` 568-571 (4
+   candidate lines `kept`/`K4`) becomes a 2-line why: the signature-restating lines are
+   `deleted`/`D1`, the rationale lines `compressed`/`K1`
+   (`// Completed provider data may already exceed the provider-only budget, so a` / `// mutation
+   must leave space to classify every outstanding effect without loss.`);
+   `export-linux-v2-redacted-evidence.py` 535-538 (the twelve-file list) becomes one
+   `compressed`/`K2` line that closes the pre-program `msg` entry (`#           daemon/internal/app
+   (the files that carry daemon.log call sites).`). Neither survived as a published-contract
+   exemption (§10.5). The artifact moved 8 rows: `deleted` 2,607→2,609, `compressed` 3,129→3,135,
+   `kept` 294→286; the rules moved `K4` 393→385, `K1` 2,316→2,318, `D1` 1,479→1,481, `K2`
+   224→228; the artifact's new sha256 is in §11.1 and its rows re-check clean (§11.3). The
+   `provider_action.go` rewrite removes one pre-program line (its sentence tail), counted as a
+   declared `pre_program_removed` deviation (§10.4): the stat reads 39 (§11.3).
+2. **R2 (P2) — candidate boundary stated.** §1 no longer claims the 68-commit set was selected
+   "exactly": it carries the cutoff bullet (frozen at the dispatch base `f1fe1e59`; the eight
+   post-freeze slices `9f82fd8e`–`cca92284` and their 88 still-present comment/docstring lines —
+   5 directives, 31 in §9 files, 57 in post-base files, 4 runs >2 lines totalling 24 lines — are
+   post-dispatch, post-policy and owned by their own slices).
+3. **R3 (P2) — hazard control named, not invented.** §3.4/§8 no longer cite the nonexistent
+   "second-pass review in §5"; they name the real controls (carriers, policy verifier) and this
+   record. The hazard re-review actually performed is the review stage's row-by-row triage
+   (off-repo review report, its "Hazard / test triage" item): every deleted hazard-flavoured row
+   and sampled `D`-class blocks were re-read against tests and `docs/` records with 0 uncovered.
+   The row set is re-derivable from the fixed artifact: disposition `deleted` with rule `K1` 64,
+   `K2` 14, `K3` 7, `K4` 5, `M2` 22 — 112 rows.
+4. **R4 (P2) — exemption wording removed.** §10.5, §11.3 and the evidence record no longer
+   describe the two blocks as a "published-record allowlist whose membership a CI scan enforces":
+   the provider_action block has no consumer or scan, and the export scan
+   (`scripts/ci/test-linux-v2-evidence.py`) enforces the `DAEMON_LOG_MESSAGES` code frozenset, not
+   the comment; both blocks are compressed, so no exemption is in use.
+5. **R5 (P3) — byte-identical decomposition fixed.** §11.2 item 1, evidence §0 and the goal 0010
+   entry now say 14 byte-identical to `f1fe1e59` + the main-merge-only files, with the counts the
+   fix stage re-derived from the tree (14 identical; 195 sweep-changed; 3 main-merge-only).
+6. **R6 (P3) — shipped-head re-runs folded in** (§11.5 above; evidence §0/§5/§8).
+7. **R7 (P3) — TODO debt count fixed.** `docs/TODO.md` no longer says the three
+   `model-routing-record-sanitize` files carry "18 `ruff format` hunks" as a set: it names the
+   67-hunk three-file total (18/24/25, re-measured with ruff 0.17.5).
+8. **R8 (P3) — host-path gate resolved.** The three added-side profile-path pattern matches the review
+   replayed were the record's own gate rows quoting the command; they are reworded to describe
+   the scan without embedding the pattern, so the contract gate's added side is empty (verified
+   on the worktree diff: `git diff origin/main` added-side scan → 0 matches; the only remaining
+   full-output matches are two context lines of base-revision placeholder fixtures in
+   `scripts/ci/test-model-routing-record-sanitize-json.py` — a `Users`/`op` run path and its
+   `file:` URL spelling, both already present at `origin/main` `cca92284` — plus
+   `localHandleID`-style identifiers; no host path with a real profile name exists in the diff:
+   case-sensitive profile-name scan → 0).

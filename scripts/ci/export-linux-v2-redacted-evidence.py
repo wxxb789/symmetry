@@ -532,10 +532,7 @@ LEGACY_DAEMON_LOG_STREAMS = ("stdout", "stderr")
 # the daemon code can write into that field, so a credential-shaped value in
 # one of these generic keys is dropped before publication, not masked:
 #   msg   -- every daemon.log.<Level>("...") message literal under
-#           daemon/internal/app (the twelve files that carry daemon.log call
-#           sites: app.go, cleanup.go, commands.go, events.go, goal_admission.go,
-#           goal_delivery.go, lease.go, native_run.go, outbox.go, recovery.go,
-#           recovery_glue.go, supervisory.go).
+#           daemon/internal/app (the files that carry daemon.log call sites).
 #   state -- the terminal transition states (daemon/internal/state/state.go
 #           isTerminalTransitionState) logged as stateName by
 #           queueTerminalTransitionWithRetry / queueTerminalTransitionAndAcknowledgement
