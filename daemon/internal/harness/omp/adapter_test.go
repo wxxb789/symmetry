@@ -878,6 +878,48 @@ func TestCloseRetainsOwnerAfterFailedPhysicalStop(t *testing.T) {
 	}
 }
 
+func TestStartTurnRefusesAfterCloseSetsTheStoppingLatch(t *testing.T) {
+	session, _ := testSession(t, nil, nil, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
+	defer cancel()
+	_, err := session.Open(ctx)
+	mustSettle(t, "Open", err)
+	mustSettle(t, "Close", session.Close(ctx))
+	err = session.StartTurn(ctx, harness.TurnRequest{Goal: "after close", Context: json.RawMessage(`{}`)})
+	if err == nil || err.Error() != "OMP session does not admit another prompt" {
+		t.Fatalf("StartTurn after Close = %v, want the stopping refusal", err)
+	}
+}
+
+func TestOpenRefusesAConcurrentOpenWithTheFrozenText(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseOpen := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(releaseOpen)
+	session, _ := testSession(t, func(request map[string]any) []any {
+		if request["type"] == "negotiate_protocol" {
+			close(entered)
+			<-release
+		}
+		return nil
+	}, nil, nil)
+	opened := make(chan error, 1)
+	go func() {
+		_, err := session.Open(context.Background())
+		opened <- err
+	}()
+	<-entered
+	_, concurrentErr := session.Open(context.Background())
+	releaseOpen()
+	if err := <-opened; err != nil {
+		t.Fatalf("first Open() error = %v", err)
+	}
+	if concurrentErr == nil || concurrentErr.Error() != "OMP session cannot open" {
+		t.Fatalf("concurrent Open() error = %v, want the frozen cannot-open text", concurrentErr)
+	}
+}
+
 func TestCancelFallsBackToPhysicalStopAfterUncertainAbort(t *testing.T) {
 	session, process := testSession(t, func(request map[string]any) []any {
 		if request["type"] == "prompt" {
@@ -1004,5 +1046,12 @@ func TestObservedWindowsAndLinuxFailedAndAbortedTurns(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestStartTurnBeforeOpenRefusesWithTheOMPAdmissionText(t *testing.T) {
+	session, _ := testSession(t, nil, nil, nil)
+	if err := session.StartTurn(context.Background(), harness.TurnRequest{Goal: "before open", Context: json.RawMessage(`{}`)}); err == nil || err.Error() != "OMP session does not admit another prompt" {
+		t.Fatalf("StartTurn before Open = %v, want the admission refusal", err)
 	}
 }

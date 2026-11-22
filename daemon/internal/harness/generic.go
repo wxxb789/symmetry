@@ -129,10 +129,7 @@ func (adapter *GenericAdapter) Start(ctx context.Context, request StartRequest, 
 	if sink == nil {
 		sink = EventSinkFunc(func(context.Context, Event) error { return nil })
 	}
-	invocation := request.Invocation
-	invocation.PersistProcess = request.PersistProcess
-	invocation.PersistProcessAuthority = request.PersistProcessAuthority
-	invocation.PersistContainmentStopReceipt = request.PersistContainmentStopReceipt
+	invocation := request.grant().invocation
 	process, err := adapter.runner.Start(ctx, invocation, execution.SinkFunc(func(eventContext context.Context, event execution.Event) error {
 		return sink.Handle(eventContext, Event{
 			Kind:     EventOutput,

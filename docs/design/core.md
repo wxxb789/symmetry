@@ -15,12 +15,13 @@ execution daemon, one durable authority. No generic workflow engine.
 | `daemon/internal/harness` | Native protocol translation | Shared scheduling |
 | `daemon/internal/{execution,state,platform}` | Process trees, journal, credentials, local session handles and workspace retention | Goal truth |
 
-Goals may call the public orchestration submission/read APIs; orchestration does
-not depend on goal policy. An application-level completion job reads a terminal
-run and calls Goals. It is enqueued durably in the transition transaction;
-the transition code knows the job envelope, not goal rules. Workspaces commands
-for goal-managed items delegate admission/completion to Goals; imports may
-update provider-owned fields but cannot assert accepted work.
+Goals may call the public orchestration submission/read APIs; orchestration
+consumes the goal-eligibility query and claim delegation that Goals publishes;
+it does not derive goal policy itself. An application-level completion job reads
+a terminal run and calls Goals. It is enqueued durably in the transition
+transaction; the transition code knows the job envelope, not goal rules.
+Workspaces commands for goal-managed items delegate admission/completion to
+Goals; imports may update provider-owned fields but cannot assert accepted work.
 
 Extract orchestration read models and command/lease internals only along these
 ownership boundaries, retaining the public facade and characterization tests.

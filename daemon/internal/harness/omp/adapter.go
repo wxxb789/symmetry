@@ -19,6 +19,9 @@ import (
 const operationTimeout = 10 * time.Second
 const shutdownTimeout = 5 * time.Second
 
+var errOMPSessionCannotOpen = errors.New("OMP session cannot open")
+var errOMPPromptRefused = errors.New("OMP session does not admit another prompt")
+
 type processStarter func(context.Context, execution.Invocation, execution.Sink) (harness.NativeProcess, error)
 
 // Adapter owns one native OMP RPC process per admitted session, without a
@@ -93,18 +96,6 @@ func (adapter *Adapter) Start(ctx context.Context, request harness.StartRequest,
 	}
 	processContext, cancel := context.WithCancel(ctx)
 	session := newSession(processContext, cancel, sink, directory, request.Resume)
-	invocation := request.Invocation // Preserve every owner callback and lease grant.
-	invocation.Program, invocation.Dir = probedAdapter.executable, request.Workspace
-	invocation.Args = rpcArgs(request.Invocation.Args, retained)
-	if request.PersistProcess != nil {
-		invocation.PersistProcess = request.PersistProcess
-	}
-	if request.PersistProcessAuthority != nil {
-		invocation.PersistProcessAuthority = request.PersistProcessAuthority
-	}
-	if request.PersistContainmentStopReceipt != nil {
-		invocation.PersistContainmentStopReceipt = request.PersistContainmentStopReceipt
-	}
 	starter := adapter.start
 	if request.StartProcess != nil {
 		starter = request.StartProcess
@@ -112,10 +103,24 @@ func (adapter *Adapter) Start(ctx context.Context, request harness.StartRequest,
 	if starter == nil {
 		starter = startProcess
 	}
-	process, startErr := starter(processContext, invocation, execution.SinkFunc(session.output))
+	session.launchProcess = starter
+	launchErr := session.staged.Launch(processContext, request, harness.ProcessDescription{
+		Program: probedAdapter.executable, Args: rpcArgs(request.Invocation.Args, retained), Dir: request.Workspace, Env: request.Invocation.Env,
+	})
+	session.mu.Lock()
+	installed := session.process != nil
+	session.mu.Unlock()
+	if launchErr != nil && !installed {
+		return nil, launchErr
+	}
+	return session, launchErr
+}
+
+func (session *nativeSession) LaunchTransport(ctx context.Context, invocation execution.Invocation) error {
+	process, startErr := session.launchProcess(ctx, invocation, execution.SinkFunc(session.output))
 	if process == nil {
-		cancel()
-		return nil, errors.Join(startErr, errors.New("OMP process launch returned no owner"))
+		session.cancel()
+		return errors.Join(startErr, errors.New("OMP process launch returned no owner"))
 	}
 	session.process = process
 	if startErr != nil {
@@ -123,7 +128,7 @@ func (adapter *Adapter) Start(ctx context.Context, request harness.StartRequest,
 	}
 	close(session.launchReady) // Runner persisted identity before any output exposure.
 	go session.watchProcess()
-	return session, startErr
+	return startErr
 }
 
 func unsupported(capability harness.Capability) error {
@@ -136,31 +141,32 @@ type pendingCall struct {
 }
 
 type nativeSession struct {
-	ctx                                                             context.Context
-	cancel                                                          context.CancelFunc
-	process                                                         harness.NativeProcess
-	forwarder                                                       harness.ProcessForwarder[harness.NativeProcess]
-	sink                                                            harness.EventSink
-	directory                                                       string
-	resume                                                          *harness.ResumeHandle
-	launchReady, ready, turnDone, physicalDone                      chan struct{}
-	mu                                                              sync.Mutex
-	decoder                                                         frameDecoder // Execution delivers output serially; Wait joins delivery.
-	pending                                                         map[string]pendingCall
-	nextID, sequence                                                uint64
-	failure                                                         error
-	readySeen, negotiated, opening, opened, started, promptAccepted bool
-	promptID, promptStatus                                          string
-	promptFailureReason                                             *protocol.TaskResultReason
-	promptResult, promptInvoked                                     bool
-	agentActive, agentEnded, settled                                bool
-	finalMessage                                                    json.RawMessage
-	handle                                                          harness.NativeSessionHandle
-	turnFinished, nativeTerminal                                    bool
-	result                                                          harness.TaskResult
-	physical                                                        execution.Result
-	closeGate                                                       harness.CloseGate
-	stopping, cancelFallback                                        bool
+	ctx                                            context.Context
+	cancel                                         context.CancelFunc
+	process                                        harness.NativeProcess
+	forwarder                                      harness.ProcessForwarder[harness.NativeProcess]
+	staged                                         *harness.StagedDriver
+	launchProcess                                  processStarter
+	sink                                           harness.EventSink
+	directory                                      string
+	resume                                         *harness.ResumeHandle
+	launchReady, ready, turnDone, physicalDone     chan struct{}
+	mu                                             sync.Mutex
+	decoder                                        frameDecoder // Execution delivers output serially; Wait joins delivery.
+	pending                                        map[string]pendingCall
+	nextID, sequence                               uint64
+	failure                                        error
+	readySeen, negotiated, started, promptAccepted bool
+	promptID, promptStatus                         string
+	promptFailureReason                            *protocol.TaskResultReason
+	promptResult, promptInvoked                    bool
+	agentActive, agentEnded, settled               bool
+	finalMessage                                   json.RawMessage
+	handle                                         harness.NativeSessionHandle
+	turnFinished, nativeTerminal                   bool
+	result                                         harness.TaskResult
+	physical                                       execution.Result
+	stopping, cancelFallback                       bool
 }
 
 func newSession(ctx context.Context, cancel context.CancelFunc, sink harness.EventSink, directory string, resume *harness.ResumeHandle) *nativeSession {
@@ -169,6 +175,7 @@ func newSession(ctx context.Context, cancel context.CancelFunc, sink harness.Eve
 		pending: make(map[string]pendingCall),
 		result:  harness.TaskResult{Kind: harness.ResultUnknown, Usage: harness.Usage{State: harness.UsageUnknown}}}
 	session.forwarder = harness.NewProcessForwarder(&session.mu, &session.process)
+	session.staged = harness.NewStagedDriver(session, &session.mu)
 	return session
 }
 
@@ -192,23 +199,25 @@ func (session *nativeSession) Open(ctx context.Context) (handle harness.NativeSe
 	if ctx == nil {
 		return handle, errors.New("OMP open requires context")
 	}
-	session.mu.Lock()
-	if session.opened {
-		handle = session.handle
+	handle, err = session.staged.Open(ctx)
+	if errors.Is(err, harness.ErrStagedSessionOpening) {
+		session.mu.Lock()
+		failure := session.failure
 		session.mu.Unlock()
-		return handle, nil
+		return handle, errors.Join(failure, errOMPSessionCannotOpen)
 	}
-	if session.opening || session.stopping || session.failure != nil {
-		err = errors.Join(session.failure, errors.New("OMP session cannot open"))
+	return handle, err
+}
+
+func (session *nativeSession) OpenNativeSession(ctx context.Context) (handle harness.NativeSessionHandle, err error) {
+	session.mu.Lock()
+	if session.stopping || session.failure != nil {
+		err = errors.Join(session.failure, errOMPSessionCannotOpen)
 		session.mu.Unlock()
 		return handle, err
 	}
-	session.opening = true
 	session.mu.Unlock()
 	defer func() {
-		session.mu.Lock()
-		session.opening = false
-		session.mu.Unlock()
 		if err != nil {
 			session.fail(err)
 			if session.resume != nil {
@@ -241,7 +250,6 @@ func (session *nativeSession) Open(ctx context.Context) (handle harness.NativeSe
 	if session.handle.ID == "" {
 		return handle, fmt.Errorf("%w: missing native session identity", errProtocol)
 	}
-	session.opened = true
 	return session.handle, nil
 }
 
@@ -252,10 +260,18 @@ func (session *nativeSession) StartTurn(ctx context.Context, request harness.Tur
 	if strings.TrimSpace(request.Goal) == "" || !json.Valid(request.Context) || len(bytes.TrimSpace(request.Context)) == 0 || bytes.TrimSpace(request.Context)[0] != '{' {
 		return errors.New("OMP turn requires goal and JSON object context")
 	}
+	err := session.staged.Admit(ctx, request)
+	if errors.Is(err, harness.ErrStagedSessionNotOpened) {
+		return errOMPPromptRefused
+	}
+	return err
+}
+
+func (session *nativeSession) AdmitNativeTurn(ctx context.Context, request harness.TurnRequest) error {
 	session.mu.Lock()
-	if !session.opened || session.started || session.stopping || session.failure != nil {
+	if session.started || session.stopping || session.failure != nil {
 		session.mu.Unlock()
-		return errors.New("OMP session does not admit another prompt")
+		return errOMPPromptRefused
 	}
 	session.started = true
 	session.mu.Unlock()
@@ -463,7 +479,7 @@ func (session *nativeSession) applyFrame(value frame) (*pendingCall, error) {
 				return nil, err
 			}
 		case "prompt":
-			if id != session.promptID || !session.opened {
+			if id != session.promptID || !session.staged.OpenedLocked() {
 				return bad("unexpected prompt acknowledgement")
 			}
 			if raw, ok := data["agentInvoked"]; ok {
@@ -810,14 +826,16 @@ func (session *nativeSession) Close(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("OMP close requires context")
 	}
-	return session.closeGate.Run(ctx, func(attemptContext context.Context) error {
-		bounded, cancel := context.WithTimeout(attemptContext, shutdownTimeout)
-		defer cancel()
-		session.mu.Lock()
-		session.stopping = true
-		session.mu.Unlock()
-		return session.stop(bounded)
-	})
+	return session.staged.Close(ctx)
+}
+
+func (session *nativeSession) CloseNativeSession(ctx context.Context) error {
+	bounded, cancel := context.WithTimeout(ctx, shutdownTimeout)
+	defer cancel()
+	session.mu.Lock()
+	session.stopping = true
+	session.mu.Unlock()
+	return session.stop(bounded)
 }
 
 func (session *nativeSession) stop(ctx context.Context) error {
