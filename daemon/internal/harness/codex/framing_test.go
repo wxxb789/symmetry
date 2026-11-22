@@ -125,16 +125,30 @@ func TestFramerAcceptsTheNextFrameAfterABoundFailure(t *testing.T) {
 	}
 }
 
+func TestFramerKeepsThePendingChunkOnRetainedOverflow(t *testing.T) {
+	framer := NewFramer(8)
+	if _, err := framer.Feed([]byte("123456789\n123456789\n")); !errors.Is(err, ErrFrameTooLarge) {
+		t.Fatalf("oversized Feed() error = %v, want ErrFrameTooLarge", err)
+	}
+	if frames, err := framer.Feed([]byte("{}\n")); !errors.Is(err, ErrFrameTooLarge) || len(frames) != 0 {
+		t.Fatalf("Feed() during the retained overflow = %+v, %v; want no frames and ErrFrameTooLarge", frames, err)
+	}
+	frames, err := framer.Feed(nil)
+	if err != nil || len(frames) != 1 || frames[0].Sequence != 1 || frames[0].DiagnosticCode != "unknown_native_event" || string(frames[0].Raw) != "{}" {
+		t.Fatalf("Feed(nil) after the retained overflow = %+v, %v; want exactly the {} diagnostic", frames, err)
+	}
+}
+
 func TestFramerZeroValueKeepsTheZeroBound(t *testing.T) {
 	var framer Framer
 	if frames, err := framer.Feed([]byte("\n")); err != nil || len(frames) != 0 {
-		t.Fatalf("blank Feed() = %+v, %v; want the base blank-line skip", frames, err)
+		t.Fatalf("blank Feed() = %+v, %v; want the blank line skipped", frames, err)
 	}
 	if _, err := framer.Feed([]byte("123456789")); !errors.Is(err, ErrFrameTooLarge) {
 		t.Fatalf("zero-bound Feed() error = %v, want ErrFrameTooLarge", err)
 	}
 	if frames, err := framer.Close(); err != nil || len(frames) != 0 {
-		t.Fatalf("zero-bound Close() = %+v, %v; want the base clean close", frames, err)
+		t.Fatalf("zero-bound Close() = %+v, %v; want an empty close", frames, err)
 	}
 }
 

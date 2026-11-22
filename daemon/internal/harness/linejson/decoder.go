@@ -1,52 +1,20 @@
-// Package linejson implements the bounded LF-delimited line framing shared by
-// the harness adapter transports. It owns the buffer, the byte bound, line
-// splitting, sequencing and close semantics; each adapter owns what a line
-// means and which errors it reports.
 package linejson
 
 import "bytes"
 
-// Policy selects one adapter's framing behaviour.
 type Policy[R any] struct {
-	// MaxBytes bounds one raw line, counted before any CR trim. Required.
-	MaxBytes int
-
-	// CRAllowance admits a line of MaxBytes+1 bytes when its last byte is CR.
+	MaxBytes    int
 	CRAllowance bool
-
-	// TrimCR removes one trailing CR before Decode sees the line.
-	TrimCR bool
-
-	// SkipBlank drops whitespace-only lines, and treats a whitespace-only
-	// close suffix as empty.
-	SkipBlank bool
-
-	// ChunkFirst copies the whole incoming chunk into the buffer before the
-	// bound decides; otherwise the bound is applied to each line before its
-	// bytes are copied.
-	ChunkFirst bool
-
-	// Latch reports the first bound or incomplete failure from every later
-	// call.
-	Latch bool
-
-	// TooLarge builds the error reported for a line over the bound.
-	TooLarge func() error
-
-	// Incomplete builds the error reported for an unterminated suffix.
-	Incomplete func() error
-
-	// Decode builds the record for one framed line. The line is a view into
-	// the decoder buffer and must not be retained.
+	TrimCR      bool
+	SkipBlank   bool
+	Latch       bool
+	TooLarge    func() error
+	Incomplete  func() error
+	// The line is a view into the decoder buffer and must not be retained.
 	Decode func(sequence uint64, line []byte) R
-
-	// Fatal reports a decoded record that must fail the stream; the record is
-	// still returned and the failure is permanent.
-	Fatal func(record R) error
+	Fatal  func(record R) error
 }
 
-// Decoder buffers one transport's output into bounded LF-delimited lines and
-// hands each line to the policy's Decode callback.
 type Decoder[R any] struct {
 	policy   Policy[R]
 	buffer   []byte
@@ -54,21 +22,13 @@ type Decoder[R any] struct {
 	failed   error
 }
 
-// New binds one policy. A zero MaxBytes still frames: every non-empty line is
-// over bound unless the CR allowance admits it.
 func New[R any](policy Policy[R]) *Decoder[R] {
 	return &Decoder[R]{policy: policy}
 }
 
-// Feed appends one transport chunk and returns the records it completed. On a
-// failure it returns the records completed so far with the policy's error.
 func (decoder *Decoder[R]) Feed(chunk []byte) ([]R, error) {
 	if decoder.failed != nil {
 		return nil, decoder.failed
-	}
-	if decoder.policy.ChunkFirst {
-		decoder.buffer = append(decoder.buffer, chunk...)
-		chunk = nil
 	}
 	var records []R
 	for {
@@ -98,7 +58,7 @@ func (decoder *Decoder[R]) Feed(chunk []byte) ([]R, error) {
 		}
 		if decoder.overBound(lineEnd, trailerBeforeLF(nil, decoder.buffer, lineEnd)) {
 			if !decoder.policy.Latch {
-				decoder.buffer = decoder.buffer[lineEnd+1:]
+				decoder.buffer = append(decoder.buffer[lineEnd+1:], chunk...)
 			} else {
 				decoder.buffer = nil
 			}
@@ -126,9 +86,6 @@ func (decoder *Decoder[R]) Feed(chunk []byte) ([]R, error) {
 	return records, nil
 }
 
-// Close reports an unterminated suffix as its sequence number and raw bytes.
-// pending is nil when the suffix is empty under SkipBlank; err is a latched
-// earlier failure or the policy's Incomplete error.
 func (decoder *Decoder[R]) Close() (sequence uint64, pending []byte, err error) {
 	if decoder.failed != nil {
 		return 0, nil, decoder.failed
@@ -159,7 +116,7 @@ func (decoder *Decoder[R]) overBound(lineBytes int, trailer byte) bool {
 	if lineBytes <= decoder.policy.MaxBytes {
 		return false
 	}
-	return !(decoder.policy.CRAllowance && lineBytes == decoder.policy.MaxBytes+1 && trailer == '\r')
+	return !decoder.policy.CRAllowance || lineBytes != decoder.policy.MaxBytes+1 || trailer != '\r'
 }
 
 func trailerBeforeLF(prefix, chunk []byte, lineEnd int) byte {

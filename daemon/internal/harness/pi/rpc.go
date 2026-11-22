@@ -247,8 +247,6 @@ func (decoder *Decoder) Close() ([]Record, error) {
 	return []Record{{Sequence: sequence, Raw: pending, DecodeError: ErrIncompleteRecord}}, err
 }
 
-// readerOrZeroBound keeps a zero-value decoder framing with the base's zero
-// bound instead of dereferencing the nil reader.
 func (decoder *Decoder) readerOrZeroBound() *linejson.Decoder[Record] {
 	if decoder.reader == nil {
 		decoder.reader = newReader(0)

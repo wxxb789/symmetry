@@ -28,38 +28,29 @@ Grep counts at the baseline and on the final tree (re-run and recorded in the ev
 `grep -c "IndexByte"` → `pi/rpc.go` 1, `omo/rpc.go` 1, `claude/stream.go` 1, `codex/framing.go` 1,
 `linejson` 0; after → 0/0/0/0/2 (`linejson`: the buffer scan and the incoming-chunk scan).
 `grep -c "buffer = append"` → 2/1/1/1/0; after → 0/0/0/0/4 (`linejson`: the chunk-first copy, the
-unterminated tail, the retained suffix, the pull-arm line copy).
+unterminated tail, the chunk-arm and buffer-arm retained suffixes, the pull-arm line copy).
 
 ## 2. Public / API shape
 
 New package `daemon/internal/harness/linejson` (files `decoder.go`, `decoder_test.go`). It imports
-`bytes` only. Every exported symbol is documented.
+`bytes` only. Source carries no explanatory comments (owner comment policy 2026-11-22, applied in
+r3): only the `Decode` buffer-view hazard line remains; behaviours are pinned by the tests.
 
 ```go
-// Policy selects one adapter's framing behaviour.
 type Policy[R any] struct {
-	MaxBytes    int                          // bound on one raw line, before any CR trim
-	CRAllowance bool                         // admit MaxBytes+1 bytes when the last byte is CR
-	TrimCR      bool                         // strip one trailing CR before Decode
-	SkipBlank   bool                         // drop whitespace-only lines and a whitespace-only close suffix
-	ChunkFirst  bool                         // buffer the whole chunk before the bound decides
-	Latch       bool                         // report the first failure from every later call
-	TooLarge    func() error                 // error for a line over the bound
-	Incomplete  func() error                 // error for a non-blank unterminated suffix
-	Decode      func(sequence uint64, line []byte) R  // the adapter's decode* function
-	Fatal       func(record R) error         // record that must fail the stream; nil keeps records in-band
+	MaxBytes    int                                  // bound on one raw line, before any CR trim
+	CRAllowance bool                                 // admit MaxBytes+1 bytes when the last byte is CR
+	TrimCR      bool                                 // strip one trailing CR before Decode
+	SkipBlank   bool                                 // drop whitespace-only lines and a whitespace-only close suffix
+	Latch       bool                                 // report the first failure from every later call
+	TooLarge    func() error                         // error for a line over the bound
+	Incomplete  func() error                         // error for a non-blank unterminated suffix
+	Decode      func(sequence uint64, line []byte) R // the adapter's decode* function; line is a buffer view
+	Fatal       func(record R) error                 // record that must fail the stream; nil keeps records in-band
 }
 
-// New binds one policy. A zero MaxBytes still frames: every non-empty line is
-// over bound unless the CR allowance admits it.
 func New[R any](policy Policy[R]) *Decoder[R]
-
-// Feed appends one transport chunk and returns the records it completed; on
-// failure it returns the records completed so far with the policy's error.
 func (decoder *Decoder[R]) Feed(chunk []byte) ([]R, error)
-
-// Close reports an unterminated suffix as its sequence number and raw bytes.
-// pending is nil when the suffix is empty under SkipBlank.
 func (decoder *Decoder[R]) Close() (sequence uint64, pending []byte, err error)
 ```
 
@@ -77,9 +68,10 @@ Consumers after the change — no public signature changes, `NewDecoder`/`Feed`/
 | `claude/stream.go` | `Decoder` holds `reader *linejson.Decoder[Event]`; `NewDecoder` keeps the non-positive default; policy `SkipBlank: true`, `Decode: decodeEvent`, `TooLarge`/`Incomplete` → `ErrRecordTooLarge`/`ErrIncompleteRecord`; `Feed`/`Close` keep their nil-receiver errors and delegate; `Close` builds the trailing `Event` with `invalidEvent`. Delete the local fields and the loop. `decodeEvent` unchanged. |
 | `codex/framing.go` | `Framer` holds `reader *linejson.Decoder[Frame]`; `NewFramer` keeps the non-positive default; policy `SkipBlank: true`, `Decode: decodeFrame`, `TooLarge`/`Incomplete` → `ErrFrameTooLarge`/`ErrIncompleteFrame`; `Feed`/`Close` keep their nil-receiver errors and delegate; `Close` builds the trailing diagnostic (raw bytes passed through untrimmed, as today). Delete the local fields and the loop. `decodeFrame` unchanged. |
 
-`claude` and `codex` also set `ChunkFirst: true` (their bases buffer the whole chunk before the
-bound decides); `pi` and `omo` leave it false, so the bound is applied to each line before its
-bytes are copied.
+The leaf applies the bound to each line before its bytes are copied; the `claude`/`codex` bases
+buffered the whole chunk first. The r1/r2 interim `ChunkFirst` axis was deleted in r3, once the
+non-latch overflow arm kept the pending chunk (`append(buffer[lineEnd+1:], chunk...)`) and the
+differential stayed byte-identical (§9.9).
 
 The policy is built by a per-adapter `newReader(maxBytes)` helper that `NewDecoder`/`NewFramer`
 call, and the `reader` field is built on demand: a zero-value wrapper (or framer) that never ran
@@ -98,7 +90,7 @@ Per-adapter table (binding, verified by reading the base code at `de526861`):
 | --- | --- | --- | --- | --- |
 | duplicate-key policy | explicit walk, `ErrDuplicateField` with the key (`strictObject` → `rejectDuplicateFields`) | explicit walk, `%w: duplicate JSON member` on `ErrInvalidRecord` | none of its own; `jsontext.Value.IsValid` rejects duplicates as `ErrMalformedJSON` | none of its own; `jsontext.Value.IsValid` rejects duplicates as `malformed_json` |
 | non-finite numbers | accepted (`json.Valid`, no number parsing) | accepted (`json.Valid`) | accepted (`jsontext` accepts `1e1000`; `usage`/`result` stay raw) | accepted (same) |
-| bound timing | checked from the pending bytes before they are copied (`ChunkFirst: false`) | same (`ChunkFirst: false`) | the whole chunk is copied first (`ChunkFirst: true`), so the bound decides on the buffered line | same as claude |
+| bound timing | checked on each line before its bytes are copied | same | same (the base copied the whole chunk first; r3 keeps the pending chunk on overflow) | same |
 | CR | LF-only framing: `MaxBytes+1` admitted when the byte before LF is CR; one trailing CR is stripped before `decodeRecord` | CR is an ordinary byte: it counts toward the bound and reaches `decodeRecord` | CR is an ordinary byte; the line is `TrimSpace`d by `decodeEvent` | CR is an ordinary byte; `decodeFrame` trims |
 | blank lines | skipped (no record, no sequence) | delivered to `decodeRecord` (an empty/whitespace line is `ErrInvalidRecord` and fails the feed) | skipped | skipped |
 | record-decode failure | in-band (`Record.DecodeError`), feed continues | fatal: the bad record is returned **and** the feed fails with it, latched | in-band (`Event.DecodeError`) | in-band (diagnostic frame) |
@@ -130,7 +122,7 @@ G: guard, S: select/branch, L: loop, T: tail.
 | --- | --- | --- | --- |
 | `pi:222` G nil receiver | `errors.New("pi rpc decoder is nil")` | `pi.Decoder.Feed` guard, unchanged text | yes |
 | `pi:224-227` G latched failure | `nil, failed` | `linejson.Decoder.Feed` failed check | yes |
-| `pi:228-235` L/S no-LF guard and bound | `for len(chunk) > 0`; `len(buffer)+len(chunk) > max` → `fail(ErrRecordTooLarge)` | leaf pull arm (`ChunkFirst: false`): the same length is compared before the bytes are copied; `Latch: true` clears the buffer | yes |
+| `pi:228-235` L/S no-LF guard and bound | `for len(chunk) > 0`; `len(buffer)+len(chunk) > max` → `fail(ErrRecordTooLarge)` | leaf pull arm: the same length is compared before the bytes are copied; `Latch: true` clears the buffer | yes |
 | `pi:237-240` S complete-line bound + CR allowance | `recordBytes > max+1 \|\| (recordBytes > max && !trailingCR)` | `CRAllowance` arm (`MaxBytes+1`, last byte CR) | yes |
 | `pi:241-244` S append/split/CR strip | `append`, slice, drop one trailing CR | `TrimCR: true` | yes |
 | `pi:246-248` S blank line | `TrimSpace` empty → continue, no sequence | `SkipBlank: true` | yes |
@@ -138,9 +130,9 @@ G: guard, S: select/branch, L: loop, T: tail.
 | `pi:258-273` T close | nil guard, latched check, blank rule, sequence++, record + `fail` | `Close` + wrapper record build, `Latch: true` | yes |
 | `pi:275-279` — `fail` | clears buffer, latches | `linejson` failure arm (`Latch`) + per-arm buffer handling | yes |
 | `pi:281-286` — `hasTrailingCRBeforeLF` | byte before LF, buffer tail when `lineEnd == 0` | `CRAllowance` predicate | yes |
-| `omo:114-145` L feed | bound before append, `Latch`, first-decode-error fatal, `buffer[:0]` reuse | loop + `ChunkFirst: false` + `Latch: true` + `Fatal` | yes |
+| `omo:114-145` L feed | bound before append, `Latch`, first-decode-error fatal, `buffer[:0]` reuse | loop + `Latch: true` + `Fatal` + bound before copy | yes |
 | `omo:147-156` T close | latched check, any non-empty buffer is incomplete, no record | `Close`, `SkipBlank: false` | yes |
-| `claude:106-135` L feed | append whole chunk first, no-LF bound clears buffer, complete-line bound keeps the suffix, blank skip, no latch | loop, `ChunkFirst: true`, `Latch: false` (suffix retained), `SkipBlank: true` | yes |
+| `claude:106-135` L feed | append whole chunk first, no-LF bound clears buffer, complete-line bound keeps the suffix, blank skip, no latch | loop, `Latch: false` (suffix and pending chunk retained), `SkipBlank: true` | yes |
 | `claude:137-149` T close | nil guard, blank rule, `invalidEvent` + error, no latch | `Close` + wrapper record build | yes |
 | `codex:75-104` L feed | as claude; diagnostics in-band | loop, `Decode: decodeFrame` | yes |
 | `codex:106-117` T close | nil guard, blank rule, `decodeDiagnosticFrame(..., "incomplete_frame", ...)` | `Close` + wrapper diagnostic build | yes |
@@ -173,17 +165,14 @@ code switch, all untouched.
 - **`SkipBlank` also carries the close rule.** Whitespace-only suffixes are empty for the three
   adapters that skip blank lines and are unterminated records for `omo`; one flag keeps those two
   facts equal to the base, which is exactly how the base composes them.
-- **One loop, two input shapes (`ChunkFirst`).** The single `Feed` first drains complete buffered
-  lines and, when none is buffered, pulls the next line's bytes from the chunk. A policy that
-  buffers the chunk first (`claude`, `codex`) reaches the drain arm with the whole chunk in the
-  buffer, exactly as its base did, and keeps the post-LF suffix on a bound failure; a policy that
-  checks first (`pi`, `omo`) reaches the pull arm, which compares the pending length before
-  copying, exactly as its base did. Two shapes in one loop were needed because the chunk-scan
-  shape cannot rescan a retained suffix (base `claude`/`codex` re-scan their buffer on the next
-  call, including an empty one) and the buffer-first shape cannot avoid copying a chunk that
-  `pi`/`omo` never copied. `ChunkFirst` is a copy-ordering property, not an acceptance one: no
-  returned record, error or state differs when it is flipped, so it is pinned by this branch
-  mapping and by the differential dump, not by a behavioural row (recorded in the evidence).
+- **One loop, bound before copy.** `Feed` drains complete buffered lines and, when none is
+  buffered, pulls the next line's bytes from the chunk: the length is compared before the bytes
+  are copied, exactly as `pi`/`omo` did, and a bound failure keeps the post-LF suffix and the
+  pending chunk, exactly as the `claude`/`codex` bases did by copying the whole chunk first (r3).
+  The single ordering is observationally identical on the 60 000-case differential for all four
+  adapters (evidence §6.1). The r1/r2 interim `ChunkFirst` axis was removed in r3; the branch it
+  guarded is pinned by the two retained-overflow adapter rows and mutations m5/m6 (evidence §9
+  (j)/(k), §11).
 - **Rejected: a `Policy` of named presets (`Pi()`, `Omo()`, …).** It would put adapter names into
   the leaf package and hide the per-adapter table behind constructors; the evidence file has to show
   the parameter for every base branch, so the table stays explicit at the call site.
@@ -210,7 +199,7 @@ file with `git diff --numstat`. Report-only: the contract's dLOC figure is not a
 | host path | diff filtered for a profile-directory separator (expect none) |
 | definition counts | the greps of §1, before (recorded above) and after |
 | declaration set | per file: the deleted framing declarations against the wrapper + leaf declarations, and `git diff --color-moved=plain` as an aid only |
-| differential corpus | throwaway harness over the four wrappers (fixtures + synthetic edge corpus, every chunk split, close arms), dumped at `de526861` and at the final tree, byte-compared, then deleted |
+| differential corpus | throwaway harness over the four wrappers, dumped at origin/main `e84973a7` and at the final tree, byte-compared: 60 000 random cases per adapter in r3 (evidence §6.1; the r2 864-case corpus is historical §6.2) |
 | mutation (a) | drop the leaf's CR allowance → `pi`'s CRLF row reddens; add the allowance to `omo` → `omo`'s CR-bound row reddens |
 | mutation (b) | remove the bound check → the four oversize rows and the affected fixture replays redden |
 | mutation (c) | add non-finite rejection to `claude`/`codex` → their new acceptance rows redden |
@@ -219,7 +208,9 @@ file with `git diff --numstat`. Report-only: the contract's dLOC figure is not a
 | mutation (f) | drop `pi`'s duplicate walk (`pi` side) → the duplicate row reddens |
 | mutation (f1) | `pi` `Latch: false` → `TestDecoderRetainsTheBoundFailureAcrossCalls` reddens |
 | mutation (f2) | `omo` `Latch: false`, `claude`/`codex` `Latch: true` → each new resume/retain row reddens |
-| mutation (g) | flip `pi`'s `ChunkFirst` to true → reported green: the parameter is not behaviourally separable (see §4) |
+| mutation (g) (r1/r2) | flip `pi`'s interim `ChunkFirst` axis → reported green; the axis was deleted in r3 (see §4) |
+| mutation (j)/(k) (r3) | r3 overflow arm → `buffer = nil` / reverted `buffer[lineEnd+1:]` → the two retained-overflow adapter rows redden and the differential changes for `claude`/`codex` only |
+| mutation (l) (r3) | disable the complete-line bound predicate (`overBound` → false), keep the unterminated guard → the new `pi`/`claude` complete-line rows redden (plus the pre-existing bound rows) |
 | WSL pre-existence | for every WSL failure, the same test at the base revision in a `de526861` worktree, plus a loopback connect probe (bind/listen/connect on 127.0.0.1) as the distro-level cause |
 
 No measurement or benchmark harness runs concurrently with the suite. Native acceptance suites that
@@ -235,6 +226,11 @@ New test rows (contract-pinning, additive; no existing assertion is weakened or 
 - the r2 zero-value rows: `TestDecoderZeroValueKeepsTheZeroBound` in `pi`/`omo`/`claude`,
   `TestFramerZeroValueKeepsTheZeroBound` in `codex` and `TestFeedZeroBoundAdmitsOnlyAnEmptyLine` in
   the leaf pin the base's zero-bound framing for a zero-value decoder (mutation (i)).
+- the r3 retained-overflow rows: `claude`/`codex` receive a retained over-bound suffix, then `{}`,
+  then `Feed(nil)`, and must return exactly the `{}` record — the overflow arm that keeps the
+  pending chunk (mutations (j)/(k)).
+- the r3 terminated-line bound rows: `pi` `NewDecoder(4).Feed("12345\r\n")` and `claude`
+  `NewDecoder(8).Feed("123456789\n")` must be rejected (mutation (l)).
 
 ## 7. Which moved strings are already asserted
 
@@ -310,13 +306,31 @@ New test rows (contract-pinning, additive; no existing assertion is weakened or 
    `git diff 166e3a05 4443791d -- daemon` (REV-03); the `decode*` and bound-check coordinates are
    corrected (REV-04).
 
+9. **Fix round r3 (2026-11-22, review round 2).** The second review's findings are closed. P2-1:
+   the non-latch buffer-arm overflow dropped the pending chunk, and the interim `ChunkFirst` axis
+   was the only thing hiding it (with `ChunkFirst: false` the chunk vanished); the arm now appends
+   the pending chunk (`append(buffer[lineEnd+1:], chunk...)`), the axis is deleted from the policy
+   and both wrappers stop setting it, and the branch is pinned by the new `claude`/`codex`
+   retained-overflow rows (mutations (j)/(k); the §6.1 differential is byte-identical). P3-1: the
+   comment-policy cleanup (leaf header/field/method prose, the four `readerOrZeroBound` comments,
+   the "want the base …" messages — only the `Decode` buffer-view hazard line remains). P3-2: the
+   plan and the evidence record are restated as committed revisions with symbol citations. P3-3:
+   the `pi`/`claude` terminated-line bound rows (mutation (l)). P3-4: the advisory lint findings
+   are fixed — the QF1001 de Morgan rewrite, the `pi` errorlint rows and the additional
+   `linejson` `err !=` comparison the `--new-from-rev=origin/main` run flags become `errors.Is`
+   checks (no coverage lost: the sentinels are returned by construction and the differential
+   records `%T`/text/`errors.Is`/`==` for every error), and `GOOS=linux golangci-lint run
+   --new-from-rev=origin/main ./internal/harness/...` reports `0 issues.` (evidence §7).
+
 ## 10. Files this slice writes
 
 Source: `daemon/internal/harness/linejson/decoder.go` (new), `pi/rpc.go`, `omo/rpc.go`,
 `claude/stream.go`, `codex/framing.go` (framing blocks only).
 Tests: `daemon/internal/harness/linejson/decoder_test.go` (new), and the additive rows of §6 in
-`pi/rpc_test.go` (latch retention), `omo/rpc_test.go` (CR bound, blank lines, latch retention),
-`claude/stream_test.go` and `codex/framing_test.go` (non-finite acceptance, resume after a bound
-failure). No existing assertion is weakened, deleted or converted; the pre-existing CR-allowance
-and duplicate-walk rows are unchanged.
+`pi/rpc_test.go` (latch retention, CR-over row), `omo/rpc_test.go` (CR bound, blank lines, latch
+retention), `claude/stream_test.go` and `codex/framing_test.go` (non-finite acceptance, resume
+after a bound failure, r3 retained-overflow row). No existing assertion is deleted; the r3 lint
+fix converts four `err != sentinel` comparisons to `errors.Is` (identity is still pinned by the
+sentinels' construction and the differential), and the pre-existing CR-allowance and
+duplicate-walk rows are unchanged.
 Docs: this plan, `docs/evidence/rf-w4-15a-jsonl-decoder-leaf-2026-11-22.md` (the judging artifact).

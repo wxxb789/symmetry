@@ -142,7 +142,7 @@ func TestFeedLatchKeepsTheFirstFailureAndTheRetainedSuffix(t *testing.T) {
 	if !errors.Is(err, errTooLarge) || len(records) != 0 {
 		t.Fatalf("Feed() = %#v, %v; want no records and the bound error", records, err)
 	}
-	if records, err = decoder.Feed([]byte("1234\n")); err != errTooLarge || len(records) != 0 {
+	if records, err = decoder.Feed([]byte("1234\n")); !errors.Is(err, errTooLarge) || len(records) != 0 {
 		t.Fatalf("Feed() after failure = %#v, %v; want the same bound error", records, err)
 	}
 
@@ -165,15 +165,11 @@ func TestFeedLatchKeepsTheFirstFailureAndTheRetainedSuffix(t *testing.T) {
 }
 
 func TestFeedReturnsRecordsCompletedBeforeTheBoundFailure(t *testing.T) {
-	for _, chunkFirst := range []bool{false, true} {
-		policy := policyFor(4)
-		policy.ChunkFirst = chunkFirst
-		records, err := New(policy).Feed([]byte("ab\ncdefgh\n"))
-		if !errors.Is(err, errTooLarge) {
-			t.Fatalf("ChunkFirst=%t: Feed() error = %v, want %v", chunkFirst, err, errTooLarge)
-		}
-		wantLines(t, records, "1:ab")
+	records, err := New(policyFor(4)).Feed([]byte("ab\ncdefgh\n"))
+	if !errors.Is(err, errTooLarge) {
+		t.Fatalf("Feed() error = %v, want %v", err, errTooLarge)
 	}
+	wantLines(t, records, "1:ab")
 }
 
 func TestFeedFatalRecordIsReturnedAndFailsTheStream(t *testing.T) {

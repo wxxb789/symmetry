@@ -166,7 +166,7 @@ func TestDecoderZeroValueKeepsTheZeroBound(t *testing.T) {
 	var decoder Decoder
 	records, err := decoder.Feed([]byte("\n"))
 	if !errors.Is(err, ErrInvalidRecord) || err.Error() == boundErrorText || len(records) != 1 {
-		t.Fatalf("blank-line Feed() = %+v, %v; want the base decode error", records, err)
+		t.Fatalf("blank-line Feed() = %+v, %v; want the blank line delivered as a decode error", records, err)
 	}
 	if err := decoder.Close(); !errors.Is(err, ErrInvalidRecord) {
 		t.Fatalf("Close after the decode failure error = %v, want the retained error", err)

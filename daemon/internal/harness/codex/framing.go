@@ -73,7 +73,6 @@ func newReader(maxBytes int) *linejson.Decoder[Frame] {
 	return linejson.New(linejson.Policy[Frame]{
 		MaxBytes:   maxBytes,
 		SkipBlank:  true,
-		ChunkFirst: true,
 		TooLarge:   func() error { return ErrFrameTooLarge },
 		Incomplete: func() error { return ErrIncompleteFrame },
 		Decode:     decodeFrame,
@@ -102,8 +101,6 @@ func (framer *Framer) Close() ([]Frame, error) {
 	return []Frame{decodeDiagnosticFrame(sequence, pending, "incomplete_frame", "stream ended before newline")}, err
 }
 
-// readerOrZeroBound keeps a zero-value framer framing with the base's zero
-// bound instead of dereferencing the nil reader.
 func (framer *Framer) readerOrZeroBound() *linejson.Decoder[Frame] {
 	if framer.reader == nil {
 		framer.reader = newReader(0)

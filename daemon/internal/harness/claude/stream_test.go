@@ -309,6 +309,9 @@ func TestDecoderRejectsOversizeAndTruncatedRecords(t *testing.T) {
 	if _, err := decoder.Feed([]byte("123456789")); !errors.Is(err, ErrRecordTooLarge) {
 		t.Fatalf("oversized Feed() error = %v, want ErrRecordTooLarge", err)
 	}
+	if _, err := decoder.Feed([]byte("123456789\n")); !errors.Is(err, ErrRecordTooLarge) {
+		t.Fatalf("complete oversized Feed() error = %v, want ErrRecordTooLarge", err)
+	}
 	decoder = NewDecoder(1024)
 	if _, err := decoder.Feed([]byte("{\"type\":\"system\"}")); err != nil {
 		t.Fatalf("partial Feed() error = %v", err)
@@ -334,6 +337,20 @@ func TestDecoderAcceptsTheNextRecordAfterABoundFailure(t *testing.T) {
 	}
 }
 
+func TestDecoderKeepsThePendingChunkOnRetainedOverflow(t *testing.T) {
+	decoder := NewDecoder(8)
+	if _, err := decoder.Feed([]byte("123456789\n123456789\n")); !errors.Is(err, ErrRecordTooLarge) {
+		t.Fatalf("oversized Feed() error = %v, want ErrRecordTooLarge", err)
+	}
+	if events, err := decoder.Feed([]byte("{}\n")); !errors.Is(err, ErrRecordTooLarge) || len(events) != 0 {
+		t.Fatalf("Feed() during the retained overflow = %#v, %v; want no events and ErrRecordTooLarge", events, err)
+	}
+	events, err := decoder.Feed(nil)
+	if err != nil || len(events) != 1 || events[0].Sequence != 1 || string(events[0].Raw) != "{}" {
+		t.Fatalf("Feed(nil) after the retained overflow = %#v, %v; want exactly the {} event", events, err)
+	}
+}
+
 func TestDecoderKeepsNumbersBeyondFloat64Range(t *testing.T) {
 	events, err := NewDecoder(1024).Feed([]byte(`{"type":"result","subtype":"success","is_error":false,"session_id":"s","result":"done","usage":{"input_tokens":1e1000}}` + "\n"))
 	if err != nil || len(events) != 1 || events[0].DecodeError != nil || events[0].Result == nil {
@@ -347,12 +364,12 @@ func TestDecoderKeepsNumbersBeyondFloat64Range(t *testing.T) {
 func TestDecoderZeroValueKeepsTheZeroBound(t *testing.T) {
 	var decoder Decoder
 	if events, err := decoder.Feed([]byte("\n")); err != nil || len(events) != 0 {
-		t.Fatalf("blank Feed() = %#v, %v; want the base blank-line skip", events, err)
+		t.Fatalf("blank Feed() = %#v, %v; want the blank line skipped", events, err)
 	}
 	if _, err := decoder.Feed([]byte("123456789")); !errors.Is(err, ErrRecordTooLarge) {
 		t.Fatalf("zero-bound Feed() error = %v, want ErrRecordTooLarge", err)
 	}
 	if events, err := decoder.Close(); err != nil || len(events) != 0 {
-		t.Fatalf("zero-bound Close() = %#v, %v; want the base clean close", events, err)
+		t.Fatalf("zero-bound Close() = %#v, %v; want an empty close", events, err)
 	}
 }

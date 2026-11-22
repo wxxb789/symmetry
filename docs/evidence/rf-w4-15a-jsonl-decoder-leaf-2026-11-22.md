@@ -1,11 +1,13 @@
-# rf-w4-15a JSONL decoder leaf — evidence record (2026-11-22, r1 fix + simplify apply, r2 review fix)
+# rf-w4-15a JSONL decoder leaf — evidence record (2026-11-22, r1 fix + simplify apply, r2 review fix, r3 review-round-2 fix)
 
 Contract: `goal-rf-w4-15a-jsonl-decoder-leaf.md` (GDD state root). Plan:
 `docs/plans/2026-11-22-rf-w4-15a-jsonl-decoder-leaf-plan.md`.
-Base revision: `de526861313b05908c95d21dc1902a516c7ef15a` (origin/main after #217 W3-15; the
+Baseline revision: `de526861313b05908c95d21dc1902a516c7ef15a` (origin/main after #217 W3-15; the
 #187 W3-04 gate is merged too, so no rebase was needed). The slice is committed on
-`refactor/rf-w4-15a-jsonl-decoder-leaf` (`166e3a05`); this revision's apply edits stay uncommitted
-for the conductor.
+`refactor/rf-w4-15a-jsonl-decoder-leaf`: apply `7f825a3f`, main merge `d81d6e80`, DLP scrub
+`5a67e341`; the r3 fix round is the `fix(harness): keep the pending chunk on decoder overflow`
+revision on top of `5a67e341` (this revision, committed). The differential baseline is origin/main
+`e84973a7`; the four wrapper files are byte-identical at `de526861`, `b25e34ae` and `e84973a7`.
 
 An independent read-only review ran at the first freeze; its P1-1 (bound-before-copy ordering),
 P2-1 (missing row for records returned before a bound failure) and P3-1 (`Fatal` without `Latch`
@@ -18,33 +20,49 @@ its four findings (REV-01 count scoping, REV-02 zero-value parity, REV-03 aggreg
 reproducibility, REV-04 anchor numbers) are fixed in the r2 bytes below, the zero-value arm was
 added to the differential harness (`<HOST-PATH>/tmp/w4-15a-fix2/zerodiff_test.go`, dumps beside it), and
 every measured row was re-measured here. Every number below was produced on the revision these
-hashes bind (the §9 rows
-(a1)–(g) name their pre-apply revision); the throwaway differential harness is kept at
-`<HOST-PATH>/tmp/w4-15a-diff/decoderdiff-dump_test.go` with its dumps beside it.
+hashes bind (the §9 rows (a1)–(i) name their earlier revision); the r1/r2 throwaway harnesses were
+kept at `<HOST-PATH>/tmp/w4-15a-diff/decoderdiff-dump_test.go` and
+`<HOST-PATH>/tmp/w4-15a-fix2/zerodiff_test.go` with their dumps beside them.
+
+A second independent review ran on `5a67e341` (range `origin/main...5a67e341`); its findings are
+fixed in this r3 revision. P2-1: the non-latch buffer-arm overflow dropped the pending chunk
+(observable with `ChunkFirst: false`, and no test pinned the branch) — the arm is now
+`decoder.buffer = append(decoder.buffer[lineEnd+1:], chunk...)` and the interim `ChunkFirst` axis
+is deleted, with the 60 000-case differential byte-identical (§6) and two new adapter rows
+(mutations (j)/(k)). P3-1: the package header, `Policy`/`Decoder`/`New`/`Feed`/`Close` doc prose,
+the four `readerOrZeroBound` comments and the "want the base …" test messages are removed or
+reworded to the behaviour (only the `Decode` buffer-view hazard line remains). P3-2: the
+revision-state and §1 anchor claims are corrected (symbol citations). P3-3: `pi` and `claude`
+gain the terminated-line bound rows (mutation (l)). P3-4: the lint findings are fixed, including
+the `linejson` `err !=` comparison the `--new-from-rev` run flags, and the advisory run reports
+0 issues (§7).
 
 Subject hashes (this record binds exactly these bytes; every mutation run was reverted and the
 hashes re-verified afterwards):
 
 | File | sha256 |
 | --- | --- |
-| `daemon/internal/harness/linejson/decoder.go` | `5a0ec3bd058ebe2fb87678b8c4d9a4416b1a5611435a221356ed2c9ffe9b9e9b` |
-| `daemon/internal/harness/linejson/decoder_test.go` | `6e4958efc36ec06f4a4e28048e2e791dbcba4d378a829af045f64b951717d9d2` |
-| `daemon/internal/harness/pi/rpc.go` | `8a59fe8dd9ba8bf5433fcb0b1674bb4f87547b63c71db99b0769f95ee3fb00b7` |
-| `daemon/internal/harness/omo/rpc.go` | `1b4ed8f04981089ebf37cbaaf460acfc7ea17a46ccf9a8fb03a4d41e51210fa1` |
-| `daemon/internal/harness/claude/stream.go` | `71e3fb0ba91ec43699f2430b961dc9432f6c0100da5db4dd889def8c499522c0` |
-| `daemon/internal/harness/codex/framing.go` | `b1cc9158646eb75823b8b9ca8259967a8d2683773d7828e5ab54119b69b46e22` |
-| `daemon/internal/harness/pi/rpc_test.go` | `833d57e2ed5ac77723c7250197b664d4446cd45480f9dcd6c7ac9b21eba253bf` |
-| `daemon/internal/harness/omo/rpc_test.go` | `295a11020ec827d7b2533cfe4abb31eecdc6f2f354208706deae6bf941123f2f` |
-| `daemon/internal/harness/claude/stream_test.go` | `879e5f5c4cd852517105cf6e1821ead40d335c247dd1132a2b015cf4ba38caa7` |
-| `daemon/internal/harness/codex/framing_test.go` | `00d4c550cd100b9a4b753fcbddeed52cbadc94ec3316b534240488967ea053a5` |
+| `daemon/internal/harness/linejson/decoder.go` | `611a65ca21242ca419887df3650699be097217103e82380fdbb118d14767a859` |
+| `daemon/internal/harness/linejson/decoder_test.go` | `865d11a28e89a6a6715336271e9ed859e14bbcb6f8ec78ee5aa5d1f9d7d8c0d7` |
+| `daemon/internal/harness/pi/rpc.go` | `c9236dac36a9bcc19bf8cd3742bce068589bcee4c5cd62c80cfbb8a05df60066` |
+| `daemon/internal/harness/omo/rpc.go` | `1e706bb27c87a3dd424eed0473518806d5a6d1f001747a238ea8b539ad0d45c1` |
+| `daemon/internal/harness/claude/stream.go` | `8c3267ec8ecf1d1eaf74a016c6849abd51748827a3388ef791caf4de6602145a` |
+| `daemon/internal/harness/codex/framing.go` | `1dbd89868fc7c4ef9e2d44fc192a536e2f4f4bc904e70af4c4b0584854d10b0e` |
+| `daemon/internal/harness/pi/rpc_test.go` | `af4fb8efd2416350f854c8665e41d0e6b95aeae770952a6f7b67a14a7ecdbb94` |
+| `daemon/internal/harness/omo/rpc_test.go` | `67f20a7538dc49cf6bf34fdd01889d1866bdc5bc9d5c9de64d4b62ff24ff231f` |
+| `daemon/internal/harness/claude/stream_test.go` | `9c2ec2fcfa5814ad147e13438f8d423b2891bd2b4a3d222d7299535fe67f5616` |
+| `daemon/internal/harness/codex/framing_test.go` | `4ac13587e07d7fb3a5acbbb81d609c59b6502c992714d855e93af7c16edefac4` |
 
-The frozen slice bytes are the table above. The committed apply-stage Go delta over `166e3a05` is
-reproducible (`git diff 166e3a05 4443791d -- daemon | sha256sum`, verified twice on the committed
-revisions):
-`f3dc3c0f5dbfadfbb996188327bb3b40eb74067012433366f189ede8fbc3c4cf`. The pre-commit worktree hash
-of the first draft bound a transient state that no command can re-derive after the commit, so it is
-withdrawn; the r2 fix-round delta is the uncommitted worktree on top of `4443791d`, and its subject
-bytes are this table.
+The subject bytes are the table above. The committed apply-stage Go delta over `166e3a05`
+(`git diff 166e3a05 4443791d -- daemon | sha256sum` =
+`f3dc3c0f5dbfadfbb996188327bb3b40eb74067012433366f189ede8fbc3c4cf`) and the r1/r2 revisions are
+history; the r2 fix-round delta was committed as `4443791d`. The r3 fix delta on top of `5a67e341`
+is reproducible at this revision as `git diff 5a67e341 HEAD -- daemon | sha256sum` =
+`a22c773881035af6bf049f51c501f9307d42818b9186e22817e4481c5232a0d1` (commit-to-commit, `a/`/`b/`
+prefixes). The worktree comparison `git diff 5a67e341 -- daemon` prints `c/`/`w/` prefixes under a
+`diff.mnemonicPrefix` config and hashes
+`32baa5e2b893426f7a99c36e7a02b0b187a57da05d86ad25faf437ee18ce1ba8`; the subject bytes of both
+comparisons are this table.
 
 ## 1. Definition counts (clause 1)
 
@@ -56,11 +74,12 @@ working tree (`grep -c <pattern> <path>`), non-test sources only:
 | `IndexByte` (the LF scan) | 1 → 0 | 1 → 0 | 1 → 0 | 1 → 0 | 0 → **2** |
 | `buffer = append` (buffering) | 2 → 0 | 1 → 0 | 1 → 0 | 1 → 0 | 0 → **4** |
 | `> (decoder.max\|decoder.limit\|framer.max)` (bound checks) | 2 → 0 | 1 → 0 | 2 → 0 | 2 → 0 | — |
-| bound decisions in the leaf | — | — | — | — | `decoder.go:78` (`> MaxBytes`), `:86`/`:98` (`overBound` calls), predicate at `:158` |
+| bound decisions in the leaf | — | — | — | — | `Feed`'s no-LF guard (`len(buffer)+len(chunk) > MaxBytes`), the two `overBound` calls in `Feed`, and the `overBound` predicate |
 
 The leaf's two `IndexByte` sites scan the buffer and the incoming chunk; its four
-`buffer = append` sites are the `ChunkFirst` copy, the unterminated tail, the non-latching suffix
-retention and the pull-arm line copy.
+`buffer = append` sites are the unterminated tail, the two non-latching suffix retentions (the
+incoming-chunk arm and the buffered-line arm, the latter added by the r3 fix) and the pull-arm
+line copy.
 
 Files containing a bounded-line framing loop (LF scan + bound + blank policy + close): **4 → 1**
 within the contract's scope — the four wrapper decoders plus the leaf (`linejson/decoder.go`).
@@ -79,12 +98,12 @@ functions are untouched (`decodeRecord` pi:288→246, omo:158→128; `decodeEven
 | --- | --- | --- | --- | --- |
 | duplicate-key policy | explicit walk, `ErrDuplicateField` + key | explicit walk, `invalid OmO RPC record: duplicate JSON member` | none of its own; `jsontext.Value.IsValid` rejects duplicates (`ErrMalformedJSON`) | none of its own; `jsontext.Value.IsValid` (`malformed_json` diagnostic) |
 | non-finite numbers | accepted | accepted | accepted (`usage` stays raw) | accepted |
-| bound timing | pending length compared before its bytes are copied (`ChunkFirst: false`) | same | whole chunk buffered first (`ChunkFirst: true`) | same as claude |
+| bound timing | pending length compared before its bytes are copied | same | same (the base copied the whole chunk first; r3 keeps the pending chunk on overflow) | same |
 | CR | `CRAllowance` (MaxBytes+1 when the byte before LF is CR) + `TrimCR` | ordinary byte, counts toward the bound, reaches `decodeRecord` | ordinary byte | ordinary byte |
 | blank lines | `SkipBlank`: skipped, no sequence | delivered (a blank line is `ErrInvalidRecord` and fails the feed) | skipped | skipped |
 | record-decode failure | in-band `Record.DecodeError` | `Fatal`: the bad record is returned and the feed fails permanently | in-band `Event.DecodeError` | in-band diagnostic frame |
 | latch | `Latch`: the bound failure is reported from every later call | latched | none | none |
-| overflow state | latched, suffix dropped | latched, suffix dropped | post-LF suffix retained for the next call | post-LF suffix retained |
+| overflow state | latched, suffix dropped | latched, suffix dropped | post-LF suffix and pending chunk retained for the next call | post-LF suffix and pending chunk retained |
 | no-LF overflow | buffer dropped | buffer dropped | buffer dropped | buffer dropped |
 | close shape | `([]Record, error)`: one `Record{DecodeError: ErrIncompleteRecord}` + error | `error` only | `([]Event, error)`: one `invalidEvent` + error | `([]Frame, error)`: one `incomplete_frame` diagnostic + error |
 | close blank rule | whitespace-only suffix empty | any suffix byte is unterminated | whitespace-only suffix empty | whitespace-only suffix empty |
@@ -100,10 +119,14 @@ base vs HEAD (the same harness panicked at `4443791d` before the fix), and mutat
 four new adapter rows.
 
 Parameter that reproduces each base difference: CR → `CRAllowance`/`TrimCR`; blank policy (lines
-and close) → `SkipBlank`; copy ordering → `ChunkFirst`; failure policy → `Latch` + `Fatal`; bound
-value → `MaxBytes`; error identity → the `TooLarge`/`Incomplete` constructors; close record → built
-by each wrapper from `Close`'s `(sequence, pending, err)`. The duplicate-key and non-finite policies
-remain inside each adapter's `Decode` callback (`decode*` bodies unchanged); the leaf adds neither.
+and close) → `SkipBlank`; failure policy → `Latch` + `Fatal`; bound value → `MaxBytes`; error
+identity → the `TooLarge`/`Incomplete` constructors; close record → built by each wrapper from
+`Close`'s `(sequence, pending, err)`. The `claude`/`codex` bases copied the whole chunk before the
+bound decided; the leaf compares each line's length before its bytes are copied and keeps the
+pending chunk on overflow (r3), which the 60 000-case differential cannot distinguish from the
+base (§6); the r1/r2 interim `ChunkFirst` axis was deleted in r3 (§9 (j)/(k), §11). The
+duplicate-key and non-finite policies remain inside each adapter's `Decode` callback (`decode*`
+bodies unchanged); the leaf adds neither.
 
 Two deliberate, unobservable differences:
 
@@ -111,9 +134,11 @@ Two deliberate, unobservable differences:
   `Close` advanced nothing and returned no record; the difference is invisible (`omo` latches the
   failure and never emits that record or a later sequence), and the dump's `close`/`post` arms
   confirm it (both sides byte-identical).
-- `ChunkFirst` is a copy-ordering property, not an acceptance one: flipping it on `pi` leaves every
-  suite green (mutation (g)), because no returned record, error or state differs. It is pinned by
-  the §3 branch mapping and by the dump, not by a behavioural row.
+- Copy ordering: the leaf checks each line's bound before copying its bytes, while the
+  `claude`/`codex` bases buffered the whole chunk first. With the r3 overflow arm keeping the
+  pending chunk, no returned record, error or state differs — the 60 000-case differential is
+  byte-identical for all four adapters (§6) — and the rewritten arm is pinned by the two
+  retained-overflow adapter rows (mutations (j)/(k), §9).
 
 ## 3. Base→HEAD control-flow audit (conductor decision 2026-11-21, lesson 32)
 
@@ -125,7 +150,7 @@ Every base branch of the four deleted framing blocks, against the statement that
 | --- | --- | --- | --- |
 | 221-223 | nil receiver → `pi rpc decoder is nil` | `pi.Decoder.Feed` guard (unchanged text) | yes |
 | 224-227 | latched failure → `nil, failed` | `linejson.Decoder.Feed` failed check | yes |
-| 228-235 | loop guard + no-LF bound `len(buffer)+len(chunk) > max` → `fail(ErrRecordTooLarge)` **before** `append` | leaf pull arm (`ChunkFirst: false`): the same length is compared before the bytes are copied; `Latch: true` clears the buffer | yes |
+| 228-235 | loop guard + no-LF bound `len(buffer)+len(chunk) > max` → `fail(ErrRecordTooLarge)` **before** `append` | leaf pull arm: the same length is compared before the bytes are copied; `Latch: true` clears the buffer | yes |
 | 237-240 | complete-line bound + CR allowance, before the line bytes are appended | leaf pull arm `overBound(lineBytes, trailerBeforeLF(buffer, chunk, chunkEnd))` | yes |
 | 241-249 | append, split, `buffer = nil`, CR strip, blank skip | leaf line consumption + `TrimCR` + `SkipBlank` | yes |
 | 250-253 | sequence++, `decodeRecord` | leaf `Decode: decodeRecord` | yes |
@@ -135,18 +160,18 @@ Every base branch of the four deleted framing blocks, against the statement that
 
 `omo/rpc.go`: 114-125 bound before append + latch; 126-139 decode, record append, first decode
 error fatal; 147-156 close (any non-empty buffer unterminated, no record). HEAD: leaf loop with
-`ChunkFirst: false`, `Latch: true`, `Fatal: record.DecodeError`, `SkipBlank: false`; wrapper
-`Close` returns the leaf's error only.
+`Latch: true`, `Fatal: record.DecodeError`, `SkipBlank: false` and the bound compared before the
+copy; wrapper `Close` returns the leaf's error only.
 
 `claude/stream.go`: 106-135 (`buffer = append` first, no-LF bound clears the buffer, complete-line
 bound keeps the suffix, blank skip, no latch); 137-149 close builds `invalidEvent`. HEAD: leaf loop
-with `ChunkFirst: true` (drain arm, suffix retained), `SkipBlank: true`, no latch; wrapper builds
-the same `invalidEvent`.
+with `SkipBlank: true` and no latch; the non-latch overflow arms keep the post-LF suffix and the
+pending chunk (r3 — the base kept them by appending the whole chunk first); wrapper builds the
+same `invalidEvent`.
 
 `codex/framing.go`: 75-104 as claude, diagnostics in-band; 106-117 close builds
 `decodeDiagnosticFrame(..., "incomplete_frame", "stream ended before newline")`. HEAD: leaf loop
-with `ChunkFirst: true` and `Decode: decodeFrame`; wrapper builds the same diagnostic from
-`pending`.
+as claude with `Decode: decodeFrame`; wrapper builds the same diagnostic from `pending`.
 
 No deleted block contains a `switch`/`default` clause. The `switch` statements in the touched
 region (claude `supportedEventType`/`decodeEvent` record switch, codex `Frame.IsFramingError`
@@ -180,15 +205,53 @@ lists (`grep -nE "^(func|type)"`):
 because the four bases differ in the arms above); the acceptance is the per-branch table of §3 plus
 the differential dump of §6. `decode*` bodies are byte-identical (no `-` line falls inside them in
 `git diff`). The r2 fix adds two unexported helpers to each wrapper (`newReader`, which builds the
-policy, and `readerOrZeroBound`); no exported declaration or signature changed.
+policy, and `readerOrZeroBound`); no exported declaration or signature changed. The r3 fix changes
+the leaf's non-latch overflow arm and deletes the `ChunkFirst` policy field; no wrapper surface
+changes.
 
 ## 6. Differential corpus dump (base vs head)
 
-Throwaway harness `daemon/internal/harness/decoderdiff` (deleted from the tree after the run, kept
-at `<HOST-PATH>/tmp/w4-15a-diff/decoderdiff-dump_test.go`; a copy ran in a `git worktree` of `de526861`):
-for each of 864 cases it feeds one or more chunks to all four decoders, then `Close`, then a
-post-close `Feed("z\n")`, and writes every record (sequence, raw bytes, type/envelope fields,
-decode error text) and every error text.
+### 6.1 r3 random differential (this revision)
+
+Throwaway harness `<HOST-PATH>/tmp/w4-15a-r3/harness/main.go` (outside the repo), compiled into a
+scratch copy of the differential baseline (`git archive origin/main daemon` → `e84973a7`) and one
+of the r3 worktree (`git ls-files -z daemon | tar -T -`), each with the harness under
+`daemon/cmd/w4decoderdiff`. `DIFF_OUT=<dir> go run ./cmd/w4decoderdiff` writes one dump per
+adapter; `cmp` byte-compares base against head.
+
+Corpus: 60 000 deterministic cases per adapter (`math/rand/v2` PCG seed `0x20261122`/`0x15a`; 19
+bounds — 0, 1…17, 32, 64, 1024, 1 MiB, -1, -7 — plus a 1-in-16 zero-value-wrapper arm; 1–8 pieces
+per case from an alphabet including CR/LF/CRLF, blank/whitespace lines, JSON envelopes, duplicate
+keys, `1e1000`, invalid UTF-8, `\u2028`, bare `{`/`}`/`"`/`\`; random splits into 1–4 chunks; a
+1-in-5 nil chunk; a 1-in-3 mid-stream `Close`), then `Close`, post-close `Feed("z\n")` and
+post-close `Close`. Every call dumps each returned record field-wise (pointers dereferenced — no
+addresses) plus the `%T`, text, `errors.Is` and `==` of every returned error and `DecodeError`
+against all exported sentinels of the adapter.
+
+| Adapter | Cases | Dump bytes | Dump lines | sha256 (base = head) |
+| --- | --- | --- | --- | --- |
+| `pi` | 60 000 | 62 687 083 | 505 160 | `c675aedda32866c746dd00c57926ebda6f4fba36fc2963601b6a7c85b1f913dd` |
+| `omo` | 60 000 | 52 883 936 | 466 474 | `cdffce581a0957db23cd0e4b198c68a120f4ec7bf3589fe3bc804764fd7838de` |
+| `claude` | 60 000 | 69 399 593 | 579 676 | `084a5e4f5d1709f318886715c6f047ebbbbaa58828c5791b3d20091ed158fa51` |
+| `codex` | 60 000 | 49 837 805 | 579 300 | `a0055ff14ab7ef3b6b9b19aa32594e18db200c2eed89c2f0aeb8f5404f9aa41c` |
+
+`cmp` reports no difference for any adapter. The same harness on a scratch tree with the r3 mutant
+m5 (non-latch overflow arm → `buffer = nil`) changes only the `claude`/`codex` hashes
+(`6fda750fc7fb408eb6df57b46c0f3bc0229b0325b57cb2ee2401d7b635603bed` /
+`95f404841c2e450a1e3a83aaeb9f5abe32cae2df8f00f354b631b99647b8752e`), and with the fix reverted
+(m6, arm → `buffer = buffer[lineEnd+1:]`) only those two change
+(`c7ad084d3c728dd3669d8dd8c7b560b88c476d58d56f504075a2a275a66f9c0c` /
+`fbe20d1690017f204d11ccfa4e66b85fb0f565480c06e960376d19b917f56836`); `pi`/`omo` latch and drop
+the suffix, so the corpus exercises the rewritten arm and notices when it is wrong.
+
+### 6.2 r2 dumps (history; bind the r2 revision)
+
+The r2 harness `daemon/internal/harness/decoderdiff` (deleted from the tree after the run; was kept
+at `<HOST-PATH>/tmp/w4-15a-diff/decoderdiff-dump_test.go`, no longer present on the host at r3) ran
+against a `git worktree` of `de526861`: for each of 864 cases it feeds one or more chunks to all
+four decoders, then `Close`, then a post-close `Feed("z\n")`, and writes every record (sequence,
+raw bytes, type/envelope fields, decode error text) and every error text. The rows below bind the
+r2 bytes.
 
 Corpus: 32 fixture files under `daemon/internal/harness/testdata/**/*.jsonl` (whole file plus four
 sampled two-way splits each) plus 34 synthetic edge inputs in `-no-lf`/`-lf` variants (empty, blank
@@ -247,7 +310,7 @@ The longest fixture line is 3 734 bytes (`testdata/pi/1.5.2/lifecycle.jsonl`) ag
 default bound, so the fixture replays cannot exercise the bound arms; the synthetic corpus above
 does.
 
-## 7. Gates (all foreground; exit codes as printed; re-run at the r2 fix revision)
+## 7. Gates (all foreground; exit codes as printed; re-run at the r3 fix revision)
 
 | Gate | Command | Result |
 | --- | --- | --- |
@@ -258,12 +321,22 @@ does.
 | cross vet | `GOOS=linux GOARCH=amd64 go vet ./internal/harness/...` | exit 0 |
 | cycle proof | `go build ./internal/harness/...` | exit 0 |
 | import invariant | `go list -deps ./internal/harness/claude \| grep internal/harness` | `…/harness/linejson`, `…/harness/claude` only — no root `harness` |
-| windows suite | `cd daemon && go test -count=1 -timeout 900s ./internal/harness/...` | 9/9 packages `ok` (root 13.535s, claude 0.167s, codex 13.160s, linejson 0.144s, omo 2.529s, omp 2.851s, opencode 0.436s, pi 4.583s, probeconformance 7.178s), exit 0 |
+| windows suite | `cd daemon && go test -count=1 -timeout 900s ./internal/harness/...` | 9/9 packages `ok` (root 13.498s, claude 0.108s, codex 13.434s, linejson 0.089s, omo 1.990s, omp 2.747s, opencode 0.499s, pi 4.751s, probeconformance 7.169s), exit 0 |
+| lint (advisory) | `GOOS=linux golangci-lint run --new-from-rev=origin/main ./internal/harness/...` | `0 issues.`, exit 0 |
 | whitespace | `git diff --check` | exit 0 |
-| host path | the slice diff (`cca92284..HEAD`) + the uncommitted apply diff filtered for a profile-directory separator | 0 hits |
-| suppressions | new `//nolint`/`credo:disable` directives in the slice Go diff + the apply Go diff | 0 |
+| host path | the r3 diff (`5a67e341..HEAD`, code + docs) filtered for a profile-directory separator | 0 hits |
+| suppressions | new `//nolint`/`credo:disable` directives in the r3 Go diff | 0 |
 
 ## 8. WSL Linux run
+
+Re-run at the r3 bytes (`wsl -d Ubuntu-24.04`, tree under test =
+`/mnt/q/repos/wt-w4-15a-jsonl-decoder-leaf/symmetry/daemon`): `go test -count=1
+./internal/harness/linejson ./internal/harness/omo ./internal/harness/claude
+./internal/harness/codex ./internal/harness/probeconformance` → 5/5 `ok` (0.016s / 1.203s /
+0.139s / 13.089s / 7.047s), `CORE5_OK`; `go test -count=1 -skip "TestProviderBridge"
+./internal/harness/pi` → `ok 0.944s`, `PI_OK`. The whole-tree invocation below was run at the
+r1/r2 revisions; its loopback failures are distro-level (no failing test touches a decoder) and
+were not re-run at r3.
 
 `wsl -d Ubuntu-24.04 -u accept`, tree under test = this worktree
 (`<WORKTREE>/daemon`), re-run at the simplify-apply
@@ -318,10 +391,10 @@ Each mutant was applied to the frozen tree, the named suites were run, and the m
 Mutants (a1), (a2) and (b) were re-applied and re-run after the final comment-only clarification in
 `linejson/decoder.go`, so every leaf mutation is bound to the §0 bytes; (c), (d) and (e) ran before
 the latch rows were appended to the adapter suites, and each reddened a row that is byte-identical
-in the frozen files. Rows (a1)–(g) ran at the pre-apply revision (the fix-round-r1 bytes);
-`decoder.go` since differs from the §0 bytes only by the two deleted helper comments and the `New`
-doc line, which no mutant touches. Mutant (h) ran at the apply revision and its new row is in the
-§0 bytes; (i) ran at the r2 fix revision and its new rows are in the §0 bytes too.
+in the frozen files. Rows (a1)–(g) ran at the pre-apply revision (the fix-round-r1 bytes) and
+remain red rows; the leaf was rewritten again in r3 but the rows they reddened are unchanged.
+Mutant (h) ran at the apply revision and (i) at the r2 fix revision; rows (j)–(l) ran at the r3
+bytes, and every mutant was reverted before the §0 hashes were re-verified.
 
 | Mutant | Change | Result |
 | --- | --- | --- |
@@ -333,20 +406,23 @@ doc line, which no mutant touches. Mutant (h) ran at the apply revision and its 
 | (e) drop `omo`'s fatal record policy | remove `Fatal` from `omo`'s policy | red: `omo TestDecoderRejectsAmbiguousOrUnboundedJSONL` (5 subtests) + `TestDecoderTreatsBlankLinesAsRecords` |
 | (f1) `pi` loses its latch | `pi` `Latch: false` | red: `pi TestDecoderRetainsTheBoundFailureAcrossCalls` (and *not* the pre-existing oversize row, whose second probe input is itself over-bound — recorded as the reason the new row exists) |
 | (f2) latch wiring flipped | `omo` `Latch: false`; `claude`/`codex` `Latch: true` | red: `omo TestDecoderRetainsTheBoundFailureAcrossCalls`; `claude TestDecoderAcceptsTheNextRecordAfterABoundFailure`; `codex TestFramerAcceptsTheNextFrameAfterABoundFailure`; `pi` green (its latch unchanged) |
-| (g) copy-ordering axis flipped | `pi` `ChunkFirst: true` | **green**, as predicted and documented: the axis is a copy-ordering property, not an acceptance one (plan §4, evidence §2) |
+| (g) copy-ordering axis flipped (r1/r2) | `pi` `ChunkFirst: true` | **green** at the r1/r2 bytes, as predicted and documented: the axis had no behavioural row. The axis was deleted in r3; the branch it guarded is now pinned by (j)/(k) |
 | (h) `Fatal` latch re-gated on `Latch` | `decoder.failed = err` moved under `if decoder.policy.Latch` in the `Fatal` arm | red: `linejson TestFeedFatalRecordIsReturnedAndFailsTheStream/latch=false` (the new arm); `omo` stays green because it sets `Latch: true`, and (e)/(f1) do not cover this case |
 | (i) drop the zero-value fallback | each wrapper's `readerOrZeroBound` returns the nil `reader` without building the zero-bound leaf | red: the four new rows — `pi`/`omo`/`claude` `TestDecoderZeroValueKeepsTheZeroBound` and `codex` `TestFramerZeroValueKeepsTheZeroBound` (nil-pointer panic in `linejson.(*Decoder).Feed`); the leaf's `TestFeedZeroBoundAdmitsOnlyAnEmptyLine` stays green (no wrapper involved) |
+| (j) r3: drop the retained suffix on overflow | buffer-arm non-latch `append(decoder.buffer[lineEnd+1:], chunk...)` → `decoder.buffer = nil` | red: `claude TestDecoderKeepsThePendingChunkOnRetainedOverflow` and `codex TestFramerKeepsThePendingChunkOnRetainedOverflow` (only these two); the §6.1 dump changes for `claude`/`codex` only |
+| (k) r3: drop the pending chunk (revert of the fix) | buffer-arm non-latch → `decoder.buffer = decoder.buffer[lineEnd+1:]` | red: the same two rows only; the §6.1 dump changes for `claude`/`codex` only |
+| (l) r3: disable the complete-line length check | `overBound` → `return false`, the unterminated `len(buffer)+len(chunk) > MaxBytes` guard kept | red: `pi TestDecoderTreatsCRLFAsTheSameBoundedRecordAndRejectsNestedDuplicateFields` (the new CR-over row), `claude TestDecoderRejectsOversizeAndTruncatedRecords` (the new complete-line row), both r3 retained-overflow rows, and the pre-existing `linejson`/`omo`/`claude`/`codex` bound rows |
 | duplicate-walk row (base-pinned, unchanged code) | — | `pi TestDecoderTreatsCRLFAs…` already reddens when the walk is dropped (reviewer-verified); `omo TestDecoderRejectsAmbiguousOrUnboundedJSONL` likewise |
 
 ## 10. LOC delta (report-only, D2)
 
-`git diff --numstat de526861 -- daemon/internal/harness` at the r2 bytes: non-test sources 282
-insertions / 165 deletions — the four wrappers at 109/165 (`pi` 27/56, `omo` 25/42, `claude`
-29/33, `codex` 28/34) plus the new `linejson/decoder.go` (173 lines including the policy
-documentation) = **net +117 non-test lines**. Tests: 152 added lines in the four adapter suites
-(0 deleted: `pi` 29, `omo` 58, `claude` 34, `codex` 31) + `linejson/decoder_test.go` (255 lines).
-Docs: the plan (322 lines) and this record (366 lines). The contract's `−600…−800` figure covers
-the whole 5b (driver half included) and is report-only (D2).
+`git diff --numstat de526861 -- daemon/internal/harness` at the r3 bytes: non-test sources 229
+insertions / 165 deletions — the four wrappers at 99/165 (`pi` 25/56, `omo` 23/42, `claude`
+26/33, `codex` 25/34) plus the new `linejson/decoder.go` (130 lines) = **net +64 non-test lines**.
+Tests: 439 added lines, 0 deleted — the four adapter suites (`pi` 34, `omo` 58, `claude` 51,
+`codex` 45) + `linejson/decoder_test.go` (251 lines). Docs: the plan (336 lines) and this record
+(443 lines). The contract's `−600…−800` figure covers the whole 5b (driver half included) and is
+report-only (D2).
 
 ## 11. Residual risks and known limits
 
@@ -358,8 +434,12 @@ the whole 5b (driver half included) and is report-only (D2).
 - `omo`'s `Close` never exposes the sequence number: the leaf advances it whenever a pending suffix
   exists, but `omo` latches the failure and returns no record, so the difference is unobservable,
   recorded in §2.
-- `ChunkFirst` cannot be shown red by any behavioural row; its acceptance is the §3 branch mapping
-  plus the dump (mutation (g) documents the green result and why).
+- The `claude`/`codex` bases copied the whole chunk before the bound decided; the leaf checks each
+  line before copying and keeps the pending chunk on overflow (r3). That branch is pinned by the
+  two retained-overflow adapter rows (mutations (j)/(k) redden exactly those and nothing else) and
+  by the §6.1 differential, which changes only for `claude`/`codex` under those mutants. The
+  r1/r2 interim `ChunkFirst` axis had no behavioural row (mutation (g) was green) and was deleted
+  in r3.
 - The differential dump compares the decoder surface, not the adapters above it; the adapter
   suites and the fixture replays are the oracle for those layers.
 - Native acceptance suites that `t.Skip` without credentials are reported as skipped in the run

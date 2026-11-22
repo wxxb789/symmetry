@@ -104,7 +104,6 @@ func newReader(maxBytes int) *linejson.Decoder[Event] {
 	return linejson.New(linejson.Policy[Event]{
 		MaxBytes:   maxBytes,
 		SkipBlank:  true,
-		ChunkFirst: true,
 		TooLarge:   func() error { return ErrRecordTooLarge },
 		Incomplete: func() error { return ErrIncompleteRecord },
 		Decode:     decodeEvent,
@@ -135,8 +134,6 @@ func (decoder *Decoder) Close() ([]Event, error) {
 	return []Event{invalidEvent(sequence, pending, ErrIncompleteRecord)}, err
 }
 
-// readerOrZeroBound keeps a zero-value decoder framing with the base's zero
-// bound instead of dereferencing the nil reader.
 func (decoder *Decoder) readerOrZeroBound() *linejson.Decoder[Event] {
 	if decoder.reader == nil {
 		decoder.reader = newReader(0)
