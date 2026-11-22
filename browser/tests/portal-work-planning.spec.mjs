@@ -102,7 +102,7 @@ async function moveByKeyboard(page, title, key) {
 }
 
 test.describe("planning project mutations", () => {
-  test("creates, edits, archives and restores a project on real data", async ({ page, isMobile }, testInfo) => {
+  test("creates, edits, archives and restores a project on real data", async ({ page }, testInfo) => {
     await login(page);
     await page.goto("/portal/projects");
     const project = { key: uniqueKey("PC"), name: `Planning created ${uniqueKey("P")}` };
