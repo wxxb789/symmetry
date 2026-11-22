@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { useSessionToken } from "../../app/session";
 import { workDetailOptions, workspaceOptions } from "../../app/application";
 import { workItemReadKey, workspaceReadKey } from "../../app/read-cache";
+import { useSelectedProject } from "../../app/selected-project";
 import { StatusBadge } from "../../components/primitives";
 import { EmptyState, ErrorState, LoadingState, PageHeading, RefreshButton } from "../../components/workspace";
 import { errorMessage, type Api, type Project, type WorkDetail } from "../../services/api";
@@ -64,6 +65,7 @@ export function WorkDetailPage() {
   const desktop = useDesktopDrawer();
   const csrf = useSessionToken();
   const queryClient = useQueryClient();
+  const selectedProjectId = useSelectedProject();
   // Shares the detail cache with the body below: no second request, and the
   // query's project scope stays a hint until the served projection confirms it.
   const detail = useQuery(workDetailOptions(application.api, workItemId)).data;
@@ -72,15 +74,14 @@ export function WorkDetailPage() {
   const queryProjectId = search.projectId;
   const itemProjectId = item?.project_id;
   const foreignScope = queryProjectId !== undefined && itemProjectId !== undefined && queryProjectId !== itemProjectId;
-  const scopedProjectId = itemProjectId ?? queryProjectId;
   // The project snapshot drives the editor's resource selects and the archived
   // read-only gate. It is read from the cache the drawer background already
   // fills on desktop; a cold deep link fetches it only when the operator opens
   // the editor (see openEditor), so no read path pays for it.
   const cachedProject = useQuery({
-    ...workspaceOptions(application.api, scopedProjectId ?? ""),
+    ...workspaceOptions(application.api, selectedProjectId ?? ""),
     enabled: false,
-  }).data?.projects.find((candidate) => candidate.id === scopedProjectId);
+  }).data?.projects.find((candidate) => candidate.id === selectedProjectId);
   const editable = item !== undefined && workItemEditable(cachedProject?.status, item);
   const versionedItem = item !== undefined && hasServedRevision(item) ? item : null;
   // The editor and its draft owner live above the responsive branches: the
@@ -126,7 +127,7 @@ export function WorkDetailPage() {
   // actually opens the editor.
   const openEditor = async () => {
     if (item === undefined || opening) return;
-    const projectId = item.project_id ?? scopedProjectId;
+    const projectId = item.project_id ?? selectedProjectId;
     if (projectId === null || projectId === undefined) {
       setNotice({ tone: "alert", text: "This work item's project was not served, so its editor cannot load the project's resources." });
       return;
@@ -154,12 +155,11 @@ export function WorkDetailPage() {
     }
   };
   const close = () => {
-    const projectId = itemProjectId ?? queryProjectId;
-    if (projectId === undefined) {
+    if (selectedProjectId === undefined) {
       void navigate({ to: "/projects", replace: true });
       return;
     }
-    void navigate({ to: "/projects/$projectId", params: { projectId }, search: foreignScope ? {} : listState, replace: true });
+    void navigate({ to: "/projects/$projectId", params: { projectId: selectedProjectId }, search: foreignScope ? {} : listState, replace: true });
   };
   const backgroundProjectId = foreignScope ? undefined : itemProjectId;
   const detailBody = (bodyScopedProjectId: string | null, drawer = false) =>

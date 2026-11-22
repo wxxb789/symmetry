@@ -903,6 +903,11 @@ func (tx *goalAdmissionTx) handOffLaunchToNativeOwner() {
 }
 
 func (tx *goalAdmissionTx) launchNativeProcess(ctx context.Context) error {
+	persistStopReceipt := tx.daemon.persistContainmentStopReceiptCallback(tx.key)
+	grantInvocation := tx.nativeInvocation
+	grantInvocation.PersistProcess = tx.persistNativeProcess
+	grantInvocation.PersistProcessAuthority = tx.persistNativeProcessAuthority
+	grantInvocation.PersistContainmentStopReceipt = persistStopReceipt
 	session, err := tx.adapter.Start(ctx, harness.StartRequest{
 		AdmissionID:   tx.admission.AdmissionID,
 		LocalHandleID: tx.localHandleID,
@@ -917,10 +922,11 @@ func (tx *goalAdmissionTx) launchNativeProcess(ctx context.Context) error {
 		},
 		ProviderAccess:                tx.providerAccess,
 		ProviderBridge:                tx.providerBridge,
+		Grant:                         harness.NewLaunchGrant(grantInvocation),
 		Invocation:                    tx.nativeInvocation,
 		PersistProcess:                tx.persistNativeProcess,
 		PersistProcessAuthority:       tx.persistNativeProcessAuthority,
-		PersistContainmentStopReceipt: tx.daemon.persistContainmentStopReceiptCallback(tx.key),
+		PersistContainmentStopReceipt: persistStopReceipt,
 	}, tx.sink)
 	tx.session = session
 	tx.nativeOutcomeCompensation.armed = true
