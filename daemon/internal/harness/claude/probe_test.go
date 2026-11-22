@@ -93,7 +93,7 @@ func TestClaudeProbeAbsentExecutableIsUnavailable(t *testing.T) {
 	}
 }
 
-func TestClaudeAdapterStartRemainsFailClosedAfterProbeEvidence(t *testing.T) {
+func TestClaudeAdapterProbeFailsClosedWhenExecutableBlobIsUnverified(t *testing.T) {
 	runner := &fixtureRunner{responses: map[string][]byte{
 		"--version": []byte(testedVersion + " (Claude Code)\n"),
 		"--help":    []byte("--print --output-format stream-json --json-schema"),
@@ -106,13 +106,6 @@ func TestClaudeAdapterStartRemainsFailClosedAfterProbeEvidence(t *testing.T) {
 	capabilities, err := adapter.Probe(context.Background())
 	if !errors.Is(err, harness.ErrNativeUnverified) || capabilities.Verified || capabilities.Start || capabilities.Events || capabilities.Cancel || capabilities.ImplementationVersion != "" {
 		t.Fatalf("Probe() = capabilities=%+v error=%v, want unverified no-operation projection", capabilities, err)
-	}
-	session, err := adapter.Start(context.Background(), harness.StartRequest{}, nil)
-	if session != nil {
-		t.Fatalf("Start() session = %T, want nil", session)
-	}
-	if err == nil || err.Error() != "Claude Code native adapter workspace must be an absolute path" {
-		t.Fatalf("Start() error = %v, want the absolute-path workspace refusal", err)
 	}
 }
 

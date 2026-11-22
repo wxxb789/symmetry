@@ -8,9 +8,7 @@ import (
 	"sync"
 )
 
-// Registry is a concrete, process-local adapter registry. It is intentionally
-// not a dynamic plugin loader: every native kind has an explicit constructor
-// and unsupported kinds remain visible as unsupported.
+// Registry is a concrete, process-local adapter registry; it is not a dynamic plugin loader.
 type Registry struct {
 	mu       sync.RWMutex
 	adapters map[Kind]Adapter

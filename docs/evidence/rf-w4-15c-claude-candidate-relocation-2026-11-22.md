@@ -1,4 +1,4 @@
-# rf-w4-15c Claude candidate relocation — evidence record (2026-11-22, implement stage + apply-stage refresh)
+# rf-w4-15c Claude candidate relocation — evidence record (2026-11-22, implement + apply + fix round R1)
 
 Contract: `goal-rf-w4-15c-claude-candidate-relocation.md` (GDD state root). Plan:
 `docs/plans/2026-11-22-rf-w4-15c-claude-candidate-relocation-plan.md`.
@@ -16,18 +16,22 @@ An apply stage then ran on the branch after the two origin/main merges `d25bc33a
 re-bound every number in §1, §2, §8 and §10 to the apply worktree's bytes (the implement-stage
 numbers bound `f738ef43`, before the merges), applied the conductor-accepted simplify findings and
 re-ran the gates. §13 records the old→new bindings, the merge comment-only audit, the changed
-functions, the two new mutant runs and the apply-stage gate table. Nothing is committed.
+functions, the two new mutant runs and the apply-stage gate table. Nothing is committed there.
+
+A fix round (R1) then applied the PR #236 review round 1 findings (P2-1/D2, P3-1..P3-4) on top of
+the apply revision `de9cce07` and re-ran the gates; §14 records the changes, the delivered hashes and
+the fix-stage gate table. R1's bytes are committed as the branch head that carries this record.
 
 ## 1. Subject bytes
 
-Source files at this revision (sha256):
+Source files at the delivered revision (sha256; fix round R1 rebound the four changed files, §14):
 
 | File | sha256 |
 | --- | --- |
-| `daemon/internal/harness/claude/adapter.go` | `ea4af145f29a636061267465b8c65c5fe6e3fbd386cf973d272b3eac06f95ef3` |
-| `daemon/internal/harness/claude/probe.go` | `767e331057add4f2b7f8d3d0ab30dd6b08eef83a896c00e6b75797debfc846b8` |
-| `daemon/internal/harness/registry.go` | `efd6473a769bdb154637388734924ca9c43f7be6aad233c9a1e4fdb0bf6b3c11` |
-| `daemon/internal/harness/close_gate.go` | `a77b2bd9da6ac6706359440ec3fea5f486aafa98983d6c3c34d99c6ff8566e53` |
+| `daemon/internal/harness/claude/adapter.go` | `22561e5db8197afe93c5ee246dc77b0754ceef4fa564bd4cd141ada0e4dd6747` |
+| `daemon/internal/harness/claude/probe.go` | `c55c38b2bb0531444da0ddae25ffbd8c1e58c4858db7463b0525a06cacbda80a` |
+| `daemon/internal/harness/registry.go` | `3d931a3eea0aebebdd63eb6c412f33bbdf9575490a4e68e5c40787e579af7596` |
+| `daemon/internal/harness/close_gate.go` | `95a503ac91fc2c317484c4c5b4ca1ab34161745d0e91ba5e29631fa756471d20` |
 | `daemon/internal/app/probe.go` | `98934f764704f906ad92897f1919dac8310a7ec54c38361360414c8d3419cecc` |
 
 Unchanged by this slice, re-hashed to bind the claim: `daemon/internal/harness/codex_probe.go`
@@ -163,12 +167,15 @@ imports root exactly like the other five adapter packages.
 
 ## 5. Close permanence
 
-`close_gate.go` gains (the only new comment in the slice):
+`close_gate.go` gains the exported constructor; the bare-only rule stays documented once, on the
+marker type (fix round R1 dropped the duplicate function doc the move had added, §14):
 
 ```go
-// PermanentCloseFailure builds the bare marker a close attempt returns when its
-// failure must stay sticky. A wrapped marker stays retryable.
 func PermanentCloseFailure(err error) error { return permanentCloseFailure{Err: err} }
+
+// Classified as permanent only when returned bare: a wrapped or joined marker stays a
+// retryable failure, and a nil Err is retryable too.
+type permanentCloseFailure struct{ Err error }
 ```
 
 `finish` keeps its bare type assertion and `permanentCloseFailure` keeps its name, methods and
@@ -257,10 +264,10 @@ qualification and the `../testdata/…` prefix differ):
 | `claude_candidate_live_test.go` (689) | `claude/adapter_live_test.go` | 690 |
 | `claude_candidate_native_test.go` (281) | `claude/adapter_native_test.go` | 282 |
 | `claude_candidate_structured_output_test.go` (99) | `claude/adapter_structured_output_test.go` | 100 |
-| the promotion half of `claude_probe_test.go` + the eight probe cases | `claude/probe_test.go` | 457 |
+| the promotion half of `claude_probe_test.go` + the eight probe cases | `claude/probe_test.go` | 450 |
 | trimmed `claude_probe_test.go` | `TestBoundedProbeRejectsSuccessAfterDeadline` only | 21 |
 
-Final hashes of the moved/edited test files (sha256, refreshed at the apply revision, §13):
+Final hashes of the moved/edited test files (sha256, refreshed at the fix revision, §14):
 `claude/adapter_test.go` `a3ff7e7373d73cbf7b0be793954801ce64e93e97a1c6f5895e75be7488dcf067`,
 `claude/adapter_support_test.go` `9d1ff1d68b16453699329da9a4d27f431f41c6d2caf9dea7144cacf3cffbc207`,
 `claude/adapter_additional_test.go` `6ac6e0add18a1119a8804b8fb6594f2c82885f3f8955b631141ab0debc0489e5`,
@@ -268,10 +275,10 @@ Final hashes of the moved/edited test files (sha256, refreshed at the apply revi
 `claude/adapter_live_test.go` `a01b3717440941bcc52d11e851eb4b1c81f42a92ee52d040eb5d44b81f4a7d0e`,
 `claude/adapter_native_test.go` `f8660db30cfb195c62fddd833ef28e6782ff9a92c9bc5a655319a4944f71e227`,
 `claude/adapter_structured_output_test.go` `070faa821d6bd1a8c7220dcd4ffd8b6074036605695901f9d6933b50ce880250`,
-`claude/probe_test.go` `011bef5ee97bbcb7ee390ae573a7613908553967e6a96b92567722887e957711`,
+`claude/probe_test.go` `baf16c3bfa1ee4cd7e522495be1898dbceac5b95ca1488cf87aa327b84f4ead8`,
 `claude/stream_test.go` `9c2ec2fcfa5814ad147e13438f8d423b2891bd2b4a3d222d7299535fe67f5616` (unchanged),
 `harness_test.go` `3162f8f5431ece5fdcd9037375a14be423ff2323d2a6161476d1aed3f9c732f1`,
-`codex_probe_test.go` `5a6c5130be4a033c81131b0ccbd9a20a6e646f62ac649819268f5ba500cb296c`,
+`codex_probe_test.go` `db1aec275069b656b82dbd682211081f518cbd21c3b0dba45602c59452530f18`,
 `claude_probe_test.go` `8864f434e14fbdd365042033bc43c3be4c3f6b26ca94459e40523310a9ba698a`,
 `app/harness_test.go` `c3347d5d318e2b7e78732f3d865f978ea493449ae1323a964f3ef15a327d54fc`.
 
@@ -282,9 +289,11 @@ missing. The apply revision supersedes those totals for the touched functions (�
 `TestClaudeAdapterProbePromotesOnlyTheResolvedTestedBlob` (F2), the two already-differing retargets
 below (F5, F8) and six fixture call sites in `claude/adapter_additional_test.go` /
 `claude/adapter_support_test.go` (F6) differ from base additionally, and the two helpers named
-below are deleted; every other function is unchanged.
+below are deleted; every other function is unchanged. Fix round R1 removes the F8 half and renames
+its test (§14/P3-1), so the delivered retarget set is F2, F5, F6 and the renamed `Probe` half.
 
-- `TestClaudeAdapterStartRemainsFailClosedAfterProbeEvidence` — the §8 retarget.
+- `TestClaudeAdapterProbeFailsClosedWhenExecutableBlobIsUnverified` — the §8 retarget, renamed in
+  fix round R1 from `TestClaudeAdapterStartRemainsFailClosedAfterProbeEvidence` (§14/P3-1).
 - `TestClaudeProbeKnownVersionAndHelpFailsClosed` — one fixture argument, scrubbed from the base's
   `<HOST-PATH>`-shaped Windows executable carrying the operator profile name to the `runneradmin`
   user-directory shape under the conductor's program-wide rule that no committed file carries a
@@ -309,7 +318,7 @@ noted, the sentinel that the new production path carries):
 | `TestClaudeProbeHelpWithoutJSONSchemaFailsClosed` | `probeCapabilities` | the help gate moved with the probe |
 | `TestClaudeProbeUnknownVersionFailsClosed` | `probeCapabilities` | the version gate moved with the probe |
 | `TestClaudeProbeAbsentExecutableIsUnavailable` | `probeCapabilities` | the availability projection moved with the probe |
-| `TestClaudeAdapterStartRemainsFailClosedAfterProbeEvidence` | `adapter.Probe` over the same fixture + `Start` refusal | sentinel assertion preserved on the added `Probe` half (`ErrNativeUnverified` + unverified no-operation projection); the `Start` half is an assertion replacement pinning the exact workspace-refusal text (`CandidateAdapter.Start` validates the request before any probe use), and the app composition's refusal is pinned by the app suite (§10) |
+| `TestClaudeAdapterProbeFailsClosedWhenExecutableBlobIsUnverified` (fix round R1 rename of `TestClaudeAdapterStartRemainsFailClosedAfterProbeEvidence`, §14/P3-1) | `adapter.Probe` over the same fixture | the sentinel assertion (`ErrNativeUnverified` + unverified no-operation projection) survives on the `Probe` half; the `Start` half is dropped because `CandidateAdapter.Start` never consults probe evidence, so it pinned the request-validation refusal rather than the fail-closed probe claim |
 | `TestClaudeProbeBoundsHangingRunnerAndPreservesCallerCancellation` | `probeCapabilities` | unchanged timing path |
 | `TestClaudeProbeRejectsSuccessAfterProbeDeadline` | `probeCapabilities` | the post-bound check is in the shared probe helper |
 | `TestClaudeProbeRejectsNilContextBeforeTheSharedGuard` | `probeCapabilities` | the entry-level guard moved with the probe |
@@ -329,16 +338,19 @@ Deleted cases (subject deleted, with the reason and the mutant record in §9):
 | `TestCodexProbeDoesNotParseFailedCommandOutput` | subject is the deleted seam; the production equivalent is pinned by the pre-existing `TestProbeMapsBoundedCommandErrorsToFailClosedResults` |
 
 Test-name before/after (`go test -list '.*'`, base list captured before the first edit; the HEAD list
-in §10): every base test name except the five deleted ones is present exactly once, and the retargeted
-names keep their spellings; no name was added.
+in §10): every base test name except the five deleted ones and the one fix-round rename (§14/P3-1) is
+present exactly once, and the other retargeted names keep their spellings; no name was added.
 
-The 60 moved names, as the intersection of the base root-`harness` name set and the HEAD
-`internal/harness/claude` name set (each appears exactly once in the HEAD list; the base list holds
-each once too):
+The moved corpus is 60 names: the intersection of the base root-`harness` name set and the HEAD
+`internal/harness/claude` name set holds 59 of them, each appearing exactly once in both lists (the
+base list held the 60th once too). Fix round R1 renamed
+`TestClaudeAdapterStartRemainsFailClosedAfterProbeEvidence` to
+`TestClaudeAdapterProbeFailsClosedWhenExecutableBlobIsUnverified` (§14, P3-1); all 60 HEAD
+spellings, each exactly once:
 
 ```
 TestClaudeAdapterProbePromotesOnlyTheResolvedTestedBlob,
-TestClaudeAdapterStartRemainsFailClosedAfterProbeEvidence,
+TestClaudeAdapterProbeFailsClosedWhenExecutableBlobIsUnverified,
 TestClaudeCandidateAcceptsAdmittedModelProfile,
 TestClaudeCandidateAcceptsVerifiedTaskResultAndPublishesEvent,
 TestClaudeCandidateCancelBeforeDeferredInitSettlesCancelled,
@@ -421,7 +433,7 @@ treated as retryable exactly as `session_scaffolding_test.go`'s unowned wrapped-
 | `TestClaudeProbeHelpWithoutJSONSchemaFailsClosed` | `hasClaudeTransportHelp` forced true | red, `claude_probe_test.go:49: … want ErrNativeUnverified naming --json-schema` | `hasTransportHelp` forced true | retargeted test red (`probe_test.go:50`); pre-existing `TestClaudeAdapterProbePromotesOnlyTheResolvedTestedBlob/transport_without_json_schema` red |
 | `TestClaudeProbeUnknownVersionFailsClosed` | tested-version equality check dead | red, `claude_probe_test.go:64: … want ErrUnsupportedVersion` | same check dead | retargeted test red (`probe_test.go:65`); pre-existing promotion row `untested_version` red |
 | `TestClaudeProbeAbsentExecutableIsUnavailable` | `claudeEvidenceCapabilities`'s `ErrHarnessUnavailable` reason branch dead | red, `claude_probe_test.go:87: start reason = "Claude Code native session lifecycle is unverified", want unavailable reason` | same branch dead | retargeted test red (`probe_test.go:88`, same message) |
-| `TestClaudeAdapterStartRemainsFailClosedAfterProbeEvidence` | `UnavailableAdapter.Start` swallows the probe error | red, `claude_probe_test.go:103: Start() error = …, want ErrNativeUnverified` | `probeCapabilities`'s fail-closed tail (`reject`) returns `nil` | retargeted test red on its `Probe` half (`probe_test.go:104: Probe() … want unverified no-operation projection`); the `Start` refusal half had no mutant at the implement revision — `CandidateAdapter.Start` never consults `probe` (§8) — and the apply stage pins that refusal on its exact workspace text (F8), reddened by the weakened-guard mutant at `probe_test.go:115` (§13) |
+| `TestClaudeAdapterProbeFailsClosedWhenExecutableBlobIsUnverified` (fix round R1 rename of `TestClaudeAdapterStartRemainsFailClosedAfterProbeEvidence`, §14) | `UnavailableAdapter.Start` swallows the probe error | red, `claude_probe_test.go:103: Start() error = …, want ErrNativeUnverified` | `probeCapabilities`'s fail-closed tail (`reject`) returns `nil` | the renamed test red on its unchanged `Probe` half at the fix revision (`probe_test.go:108: Probe() = capabilities=…, want unverified no-operation projection`); the `Start` refusal half had no mutant at the implement revision — `CandidateAdapter.Start` never consults `probe` (§8) — and fix round R1 dropped it under the conductor's P3-1 ruling instead of keeping the apply-stage exact-text pin (F8, §13) |
 | `TestClaudeProbeBoundsHangingRunnerAndPreservesCallerCancellation` | shared bounded-probe timeout removed | red, 30 s guard, `claude_probe_test.go:146: probeClaudeExecutable() did not return after local timeout` | same | pre-existing `TestRunBoundedProbeBoundsHangingDelegate` red (`bounded_probe_test.go:83`) and retargeted test red (`probe_test.go:154`) |
 | `TestClaudeProbeRejectsSuccessAfterProbeDeadline` | post-bound value/error check dead | red, `claude_probe_test.go:168: … want context.DeadlineExceeded` | same | retargeted test red (`probe_test.go:163`, 10.02 s); pre-existing `TestRunBoundedProbeRejectsSuccessAfterCallerCancellation` stays green because it exercises the caller-context arm, which the mutation leaves intact |
 | `TestClaudeProbeRejectsNilContextBeforeTheSharedGuard` | Claude entry-level nil guard dead | red, exit 1 | same guard dead | retargeted test red (panic on the nil `ctx.Err()`); the shared-guard variant is killed by pre-existing `TestRunBoundedProbeRejectsNilContext` (red, panic) |
@@ -455,7 +467,10 @@ exceptions are named above: under the post-bound mutation the caller-cancellatio
 `TestClaudeAdapterStartRemainsFailClosedAfterProbeEvidence` has no mutant at the implement revision
 because the production `Start` never consults the probe. The apply stage adds two mutant runs on the
 apply revision (§13): the `reject`-returns-`nil` re-run reddens the inlined F5 assertion at
-`probe_test.go:28`, and the weakened workspace-guard mutant reddens the F8 pin at `probe_test.go:115`.
+`probe_test.go:28`, and the weakened workspace-guard mutant reddens the F8 pin at `probe_test.go:115`
+(that pin was removed in fix round R1, §14/P3-1). Fix round R1 re-ran the `reject`-returns-`nil`
+mutant against the delivered `claude/probe.go` bytes through a `go test -overlay` replacement (the
+worktree was not mutated): the renamed test reddens at `probe_test.go:108`, exit 1.
 
 ## 10. Gates on the final bytes (implement-stage run)
 
@@ -477,13 +492,14 @@ apply-stage re-run on the refreshed bytes (§1/§8) is §13.
 | citation gate | `python3 scripts/ci/check-citation-existence.py --base 4fdea989 --head HEAD` in the mirrored clone | exit 0, §11 |
 
 Test-name bookkeeping (`go test -list '.*'` over `./internal/harness/... ./internal/app/...`):
-base 1,124 names → HEAD 1,119. Exactly 65 root `harness` names disappear: 60 reappear once each in
-`internal/harness/claude` (47 adapter + 13 probe/promotion, no duplicates), and the five codex cases
-of §8 are deleted. `TestBoundedProbeRejectsSuccessAfterDeadline` and the retargeted
-`TestProbeRejectsNonExactVersionOutput` keep their names in root `harness`. No name was added.
-Re-derived at the apply revision: the same command lists 1,119 `Test*` names over the same two
-package trees, and the apply stage added, renamed or deleted no test — its two deleted helpers are
-not tests (§13).
+base 1,124 names → fix revision 1,119. Exactly 65 root `harness` names disappear: 60 reappear once
+each in `internal/harness/claude` (47 adapter + 13 probe/promotion, no duplicates) — 59 with their
+base spellings and one renamed in fix round R1 (§14/P3-1) — and the five codex cases of §8 are
+deleted. `TestBoundedProbeRejectsSuccessAfterDeadline` and the retargeted
+`TestProbeRejectsNonExactVersionOutput` keep their names in root `harness`. No name was added; the
+R1 rename is the only spelling change. Re-derived at the apply revision: the same command lists
+1,119 `Test*` names over the same two package trees, and the apply stage added, renamed or deleted
+no test — its two deleted helpers are not tests (§13).
 
 ### 10.1 WSL / linux suite and the SKIP list
 
@@ -567,8 +583,9 @@ none introduced by this slice. The new citations the slice writes
 Citation refresh inside the repository: `docs/design/harness.md` — the only design document that
 narrates the moved behaviour — names no moved file path or package (`claude_candidate`,
 `claude_probe`, `registry.go` and `harness/claude` have no hit in it, checked before the move), so
-the slice cites nothing stale and refreshes nothing. The runbook corpus and
-`docs/design/quality.md` are untouched.
+the slice cites nothing stale. Fix round R1 adds to its Claude paragraph the probe-bound rationale
+cut from `claude/probe.go` (P3-2), still without naming a moved path; the document stays outside the
+citation gate's corpus. The runbook corpus and `docs/design/quality.md` are untouched.
 
 ## 12. Residuals and limits
 
@@ -589,19 +606,21 @@ contract's `<HOST-PATH>` main-checkout mount, which does not contain this increm
   `TestCodexProbeRejectsNilContextWithoutCallingTheRunner` is deleted (the shared guard is pinned by
   `TestRunBoundedProbeRejectsNilContext`); the wrapper's guard text was explicitly not asserted by
   the deleted case, so the loss is unobservable there but the guard is unpinned. W5-16 owns the codex
-  adapter and should re-pin it.
-- Resolved at the apply stage: the `Start`-refusal half of
-  `TestClaudeAdapterStartRemainsFailClosedAfterProbeEvidence` now asserts the exact workspace-refusal
-  text and reddens under the weakened-guard mutant (§9.2, F8, §13); the implement revision recorded
-  it as an unpinned new assertion.
+  adapter and should re-pin it; fix round R1 records it as a `docs/TODO.md` entry (§14/P3-3).
+- Superseded in fix round R1: the `Start`-refusal half of the retargeted test asserted the exact
+  workspace-refusal text at the apply stage and reddened under the weakened-guard mutant (§9.2, F8,
+  §13), but the conductor's P3-1 ruling drops it — `CandidateAdapter.Start` never reads probe
+  evidence, so the half did not pin the fail-closed probe claim — and renames the remaining `Probe`
+  half to `TestClaudeAdapterProbeFailsClosedWhenExecutableBlobIsUnverified` (§14). The exact
+  refusal text therefore loses its only HEAD pin; fail-closed native admission stays owned by the
+  app-layer admission tests.
 - Deliberate deviation from "test bodies change only by package clause, imports, identifier
-  qualification and the testdata prefix": one fixture argument in
-  `claude/probe_test.go` was scrubbed of a host path carrying the operator's profile name (§8), under
-  the conductor's program-wide rule. The retained `codex_probe_test.go` warning-fixture string that
-  contains the same shape is base bytes this slice does not touch (it is unchanged context, and that
-  file is owned only for the deleted cases), recorded here so the next slice that opens the file can
-  scrub it. The apply stage declined to scrub it: the hunk sits in a retained case, outside that
-  file's owned set (finding D2 rejected, §13).
+  qualification and the testdata prefix": two fixture strings were scrubbed of host paths carrying
+  the operator's profile name under the conductor's program-wide rule — the `claude/probe_test.go`
+  fixture argument (§8) and, in fix round R1, the retained `codex_probe_test.go` warning fixture the
+  conductor amendment (review D2) added to the owned set (§14). Both replacements use the neutral
+  `runneradmin` user-directory shape the Windows cmdline test already used; both keep their escaping
+  and quoting, and every assertion is unchanged.
 - Stale comment left in an unowned file, recorded in `docs/TODO.md`: `claude/stream.go`'s package
   comment still claims the package does not expose a `harness.Adapter`. The apply stage added two
   more `docs/TODO.md` entries: the `controlCapability` copy (`claude/adapter.go:576`) versus the
@@ -652,7 +671,7 @@ Applied, each inside the contract's owned file set:
 | 5 | `claude/probe_test.go` | `assertKnownVersionProjection` (one call site) inlined into `TestClaudeProbeKnownVersionAndHelpFailsClosed`; the `knownVersionProjection` type and the stale "cannot drift between providers" comment deleted; rendered failure texts unchanged |
 | 6 | `claude/adapter_additional_test.go`, `claude/adapter_support_test.go` | `jsonObjectForCandidateAdditionalTest` (name bound to its origin file, called cross-file) replaced by the `` json.RawMessage(`{"snapshot":"canonical"}`) `` literal the package's other 17 `Context:` fixture sites and the sibling adapter packages already use; fixture bytes unchanged |
 | 7 | `docs/TODO.md` | deferred item for the two stale `testdata/claude/**` README identifiers (`claudeCandidateStructuredOutputSchema` → `candidateStructuredOutputSchema`, `ClaudeTestedExecutableHash` → `testedExecutableHash`); testdata is frozen for this slice and W5-10 owns it |
-| 8 | `claude/probe_test.go` | the `Start` half of `TestClaudeAdapterStartRemainsFailClosedAfterProbeEvidence` now asserts the exact workspace-refusal text; the old `err != nil` passed on the request-validation error while claiming a probe-evidence refusal |
+| 8 | `claude/probe_test.go` | the `Start` half of `TestClaudeAdapterStartRemainsFailClosedAfterProbeEvidence` now asserts the exact workspace-refusal text; the old `err != nil` passed on the request-validation error while claiming a probe-evidence refusal. Superseded in fix round R1: the half was dropped under the conductor's P3-1 ruling (§14) |
 | D1 | this record | the rebinding in §13.1 |
 
 Rejected, bytes unchanged:
@@ -661,7 +680,7 @@ Rejected, bytes unchanged:
 | --- | --- |
 | 1 | the fix needs `bounded_probe_test.go`, a 5a helper file outside the owned set; deleting `claude_probe_test.go` without moving its test would delete a test |
 | 3 | the fix needs `generic.go` (explicitly not owned); the `controlCapability` copy is the recorded compiler-forced consequence, now also tracked in `docs/TODO.md` |
-| D2 | the fix needs a hunk in a retained case of `codex_probe_test.go`; the owned entry covers only deleted-subject cases, so the §12 deferral stands |
+| D2 | **applied in fix round R1** under the conductor amendment (2026-11-22, review D2): the amendment added the retained-case hunk to the owned set, so the §12 deferral no longer stands; the scrub is recorded in §14 |
 
 ### 13.3 Applied-revision mutants
 
@@ -673,7 +692,7 @@ re-hash to the §1/§8 values):
 | Mutant | Test | Result |
 | --- | --- | --- |
 | `claude/probe.go` `reject` returns `nil` instead of `harness.ErrNativeUnverified` (the implement-revision killer, re-run against the inlined assertions) | `TestClaudeProbeKnownVersionAndHelpFailsClosed` | red, exit 1 — `probe_test.go:28: Claude probe error = <nil>, want native harness behavior is unverified` |
-| `claude/adapter.go` workspace guard weakened (`\|\|` + `!filepath.IsAbs` → `&&` + `filepath.IsAbs`), so an empty workspace no longer refuses | `TestClaudeAdapterStartRemainsFailClosedAfterProbeEvidence` | red, exit 1 — `probe_test.go:115: Start() error = Claude Code native adapter event sink must not be nil, want the absolute-path workspace refusal` |
+| `claude/adapter.go` workspace guard weakened (`\|\|` + `!filepath.IsAbs` → `&&` + `filepath.IsAbs`), so an empty workspace no longer refuses | `TestClaudeAdapterStartRemainsFailClosedAfterProbeEvidence` | red, exit 1 — `probe_test.go:115: Start() error = Claude Code native adapter event sink must not be nil, want the absolute-path workspace refusal`. Superseded in fix round R1: the assertion was removed with the `Start` half (§14/P3-1), so this mutant no longer has a named killer; fail-closed native admission stays owned by the app-layer admission tests |
 
 An equivalent-mutant variant that kept `!filepath.IsAbs` under `&&` stayed green: the empty path
 satisfies both disjuncts, so that mutation changes no behaviour for this request; the mutant above
@@ -694,10 +713,80 @@ suite and the WSL runs never overlapped.
 | Windows suite | `go test -count=1 ./internal/harness/... ./internal/app/...` | exit 0; 10/10 packages `ok` (app 183.9 s) |
 | WSL bounded | `wsl -d Ubuntu-24.04 -u accept` (Go 1.27.0): `go test -count=1` over the six moved/edited harness packages, then `-run 'TestNewHarnessRegistry\|TestComposedClaudeProbe\|TestStartupProbe' ./internal/app/` | 6/6 packages `ok` — harness 0.063 s, claude 11.570 s, codex 13.068 s, linejson 0.019 s, omo 1.510 s, probeconformance 7.034 s — exit 0; app subset `ok` 1.287 s, exit 0 |
 | WSL whole tree | `go test -count=1 -timeout 150s ./internal/harness/... ./internal/app/...` | exit 1; 6 packages `ok` — root `harness` 0.061 s, claude 11.251 s, codex 13.017 s, linejson 0.025 s, omo 1.180 s, probeconformance 7.037 s — and 4 `FAIL` at the 150 s bound: `omp` 31.831 s, `opencode` 150.047 s, `pi` 150.037 s, `app` 150.094 s — the same loopback-dependent packages as the implement-stage run (§10.1), reproduced by a second identical invocation. The exit code was captured by a script file (`<HOST-PATH>/.local/tmp/w4-15c-apply-mutant/wsl-tree.sh`) executed through the distro, so it comes from the outer process. The claude package's five environment-gated moved tests still skip (`-v` count 5; provenance unchanged, §10.1) |
-| test-name bookkeeping | `go test -list '.*'` over `./internal/harness/... ./internal/app/...` | 1,119 `Test*` names, unchanged; nothing added, renamed or deleted |
+| test-name bookkeeping | `go test -list '.*'` over `./internal/harness/... ./internal/app/...` | 1,119 `Test*` names, unchanged; nothing added, renamed or deleted (fix round R1 then renamed one name in place, §14) |
 | line cap | `wc -l` over every file this slice creates, moves or splits | maximum `claude/adapter.go` 1,180 and `claude/adapter_test.go` 1,162; all < 1,500. The touched pre-existing over-cap `daemon/internal/app/harness_test.go` (6,331 L) is outside this corpus (§10 row) |
 | whitespace | `git diff --check 9e36058` (frozen range base → final bytes) | exit 0; the two `space before tab in indent` lines the frozen tip carried are re-indented |
 | record cleanliness | `python3 scripts/ci/model-routing-record-sanitize.py --check --root-only` on this record | exit 0; the implement bytes exited 1 (four lines carried host absolute paths) and now use `<HOST-PATH>` tokens |
-| profile-name scan | `git diff` piped through a case-insensitive host-root/profile-name scan (patterns spelled with a character class so this diff does not match itself) | no operator profile name in any added line; the retained `runneradmin` fixture shapes and the untouched `codex_probe_test.go` context are as recorded |
+| profile-name scan | `git diff` piped through a case-insensitive host-root/profile-name scan (patterns spelled with a character class so this diff does not match itself) | no operator profile name in any added line; the retained `runneradmin` fixture shapes and the then-untouched `codex_probe_test.go` context are as recorded (fix round R1 then scrubbed that context, §14) |
 | citation gate | corpus `docs/runbooks/**`, `docs/design/quality.md`, `docs/archive/CLOSED-TODO.md` (`scripts/ci/audited_paths.py`) | the apply diff names none of them, so the gate's selected set is empty; the implement-stage run of §11 stands |
 | frozen surfaces | `git diff --name-only` plus a name filter | no `opencode/**`, `pi/**`, `claude/stream*.go`, `testdata/**` or `generic.go` entry |
+
+## 14. Fix round R1 (2026-11-22, PR #236 review round 1)
+
+Review: `236-opus-review-1.md` (P2-1/D2, P3-1..P3-4) against the reviewed apply revision `de9cce07`.
+R1 applied every finding, re-ran the gates and rebound §1, §8 and the §10 name accounting to the
+delivered bytes. The work is committed on top of `de9cce07`, and the branch also merges
+`origin/main` (`837dd974`, the rf-w6-01 CI-structure commit, docs/CI-only) so the pushed head
+carries both; a record-update commit after the merge adds the revision-scoped gate exits below.
+
+### 14.1 Findings
+
+| Finding | Change |
+| --- | --- |
+| P2-1 / D2 | `codex_probe_test.go` warning fixture: the operator-profile segment replaced by the neutral `runneradmin` shape the Claude fixture uses, keeping the doubled-backslash escaping and the quoting, so the warning still parses as one line and the assertion is unchanged. §13.2's D2 row now records the amendment's owned-set change instead of the rejection |
+| P3-1 | `TestClaudeAdapterStartRemainsFailClosedAfterProbeEvidence` lost its `Start` half and was renamed `TestClaudeAdapterProbeFailsClosedWhenExecutableBlobIsUnverified`: the conductor ruling holds because `CandidateAdapter.Start` never reads probe evidence, so the half pinned the request-validation refusal rather than the fail-closed probe claim; fail-closed native admission stays owned by app-layer admission tests. The remaining `Probe` half is unchanged |
+| P3-2 | comment-policy fixes: dropped the duplicate `PermanentCloseFailure` doc in `close_gate.go`; deleted the `// The exact version gate has one owner.` what-comment in `codex_probe_test.go`; cut the `probeTimeout`, `testedExecutableHash` and `capabilitiesForPlatform` rationales in `claude/probe.go` to 1-2 line why notes and moved the rationale into `docs/design/harness.md`; cut the `Registry` comment in `registry.go` to its true clause (the "every native kind has an explicit constructor" claim was false for `NewRegistry`, which registers Generic and OpenCode) |
+| P3-3 | `docs/TODO.md` gains the `codex.Probe` nil-context guard entry (owner W5-16) with the unpinned string, beside the other rf-w4-15c deferrals |
+| P3-4 | `claude/adapter.go` local `expectedCancelled` renamed `cancelExpected`; after the package rename it shadowed `func expectedCancelled` |
+
+Removal/rename accounting: one test name changes spelling in place (the §10 total stays 1,119); the
+removed `Start` half is one `Start()` call plus two assertions; the exact workspace-refusal text
+loses its only HEAD pin, accepted by the P3-1 ruling (§12, §13.3).
+
+### 14.2 Delivered hashes (rebound in §1/§8; §13.1's apply values in parentheses)
+
+| File | apply revision (§13.1) | fix revision R1 (delivered) |
+| --- | --- | --- |
+| `claude/adapter.go` | `ea4af145…` | `22561e5d…` |
+| `claude/probe.go` | `767e3310…` | `c55c38b2…` |
+| `registry.go` | `efd6473a…` | `3d931a3e…` |
+| `close_gate.go` | `a77b2bd9…` | `95a503ac…` |
+| `claude/probe_test.go` | `011bef5e…` (457 L) | `baf16c3b…` (450 L) |
+| `codex_probe_test.go` | `5a6c5130…` | `db1aec27…` |
+
+Every other §1/§8 hash is byte-identical at R1: `app/probe.go` `98934f76…`, `codex_probe.go`
+`a34e04e2…`, `bounded_probe.go` `34243f53…`, `claude/stream.go` `8c3267ec…`, and the eleven
+unchanged test files (`claude/adapter_test.go` `a3ff7e73…`, `claude/adapter_support_test.go`
+`9d1ff1d6…`, `claude/adapter_additional_test.go` `6ac6e0ad…`,
+`claude/adapter_cmdline_windows_test.go` `dba7f7cc…`, `claude/adapter_live_test.go` `a01b3717…`,
+`claude/adapter_native_test.go` `f8660db3…`, `claude/adapter_structured_output_test.go` `070faa82…`,
+`claude/stream_test.go` `9c2ec2fc…`, `harness_test.go` `3162f8f5…`, `claude_probe_test.go`
+`8864f434…`, `app/harness_test.go` `c3347d5d…`). Line cap unchanged: the maximum is still
+`claude/adapter.go` 1,180.
+
+### 14.3 Fix-revision mutant re-run
+
+The `reject`-returns-`nil` mutant was re-applied to the delivered `claude/probe.go` bytes through a
+`go test -overlay` replacement (the worktree was not mutated): the renamed
+`TestClaudeAdapterProbeFailsClosedWhenExecutableBlobIsUnverified` reddens — exit 1,
+`probe_test.go:108: Probe() = capabilities=…, want unverified no-operation projection`. The
+weakened workspace-guard mutant's pin was removed with the `Start` half (§13.3, §12).
+
+### 14.4 Fix-stage gates
+
+All commands ran in `daemon/` foreground, on the fix worktree, except the revision-scoped gates,
+which run on the pushed commit (their exit codes are in the fix report
+`236-fix-r1.md`).
+
+| Gate | Command | Result |
+| --- | --- | --- |
+| formatting | `gofmt -l internal/harness internal/app` | no output, exit 0 |
+| vet | `go vet ./...` | exit 0 |
+| build matrix | `GOOS=linux|windows|darwin go build ./...` and `GOOS=linux GOARCH=arm64 go build ./...` | exit 0 ×4 |
+| harness suite | `go test -count=1 ./internal/harness/...` | exit 0; 9/9 packages `ok` (claude 20.1 s) |
+| app suite | `go test -timeout 20m -count=1 ./internal/app/` | exit 0; `ok … internal/app` 965.1 s (host-load run) |
+| test-name bookkeeping | `go test -list '.*'` over `./internal/harness/... ./internal/app/...` | 1,119 `Test*` names; the rename holds the total, the new spelling appears exactly once, the old spelling zero times |
+| whitespace | `git diff --check` on the worktree | exit 0; the range form at the pushed head is added by the R1 record-update commit |
+| record cleanliness | `python scripts/ci/model-routing-record-sanitize.py --check --root-only` on this record | exit 0; the contract's revision-scoped gate at the pushed head is added by the R1 record-update commit |
+| profile / DLP scan | added lines of `git diff origin/main` grepped for the operator profile name and for a backslash directly before a lowercase `u` | no match on either; the only `Users\`-shaped added lines are the three neutral `runneradmin` fixtures, and the two `-`-line profile matches are the base bytes this round scrubs |
+| frozen surfaces | `git diff --name-only origin/main` plus a name filter | no `opencode/**`, `pi/**`, `claude/stream*.go`, `testdata/**` or `generic.go` entry |

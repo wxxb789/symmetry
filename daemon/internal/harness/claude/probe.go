@@ -14,28 +14,16 @@ import (
 )
 
 const (
-	// testedVersion and testedExecutableHash identify the only
-	// Claude Code bundle whose probe evidence is accepted by this build.
 	testedVersion = "2.1.323"
-	// testedExecutableHash is the SHA-256 of the exact Claude Code
-	// 2.1.323 executable observed on the verified Windows host. Native
-	// capability promotion requires the resolved executable bytes to match this
-	// blob: a matching version string or help text alone must never promote a
-	// capability that was proved against different binary bytes. A PATH shim
-	// that forwards to another file is a different blob and fails closed.
+	// testedExecutableHash is the SHA-256 of the exact tested 2.1.323 Windows blob; version or
+	// help text alone never promotes, and a PATH shim is a different blob that fails closed.
 	testedExecutableHash = "sha256:5064e6e0572dca86257363ca04d48653eef20ef27f1bd04b504ed7199ed3fd13"
 )
 
 const (
 	defaultExecutable = "claude"
-	// probeTimeout bounds one Claude Code probe command. The pinned client
-	// answers version and help in well under a second on an idle host, but the
-	// 367 MB Windows executable has been observed to exceed one second while the
-	// host is loaded; a spurious deadline is not a capability verdict and, because
-	// a deadline is not a tolerated sentinel, it would fail a daemon startup
-	// instead of reporting an unavailable client. Five seconds keeps the probe
-	// bounded while tolerating host contention: a broken, slow or hanging
-	// executable still fails closed inside this bound.
+	// probeTimeout is 5 s because the pinned 367 MB Windows client exceeds 1 s on a loaded host,
+	// and a spurious deadline would fail daemon startup instead of reporting an unavailable client.
 	probeTimeout          = 5 * time.Second
 	probeOutputLimitBytes = 64 << 10
 )
@@ -180,14 +168,8 @@ func reject(capabilities harness.Capabilities, reason string) (harness.Capabilit
 	return capabilities, harness.ErrNativeUnverified
 }
 
-// capabilitiesForPlatform projects only operations proved against the
-// exact tested executable blob. Version and transport agreement are necessary
-// but never sufficient: the resolved executable SHA-256 must equal
-// testedExecutableHash, and the platform must be the one the evidence was
-// taken on. Linux admission stays fail-closed because the Linux v2 owner path
-// requires an installed A/B systemd runtime with a delegated cgroup-v2 parent
-// and cross-UID peer inspection, which the recorded host evidence does not
-// provide; Windows evidence is never promoted as Linux support.
+// capabilitiesForPlatform projects operations only against the exact tested executable blob;
+// Linux stays fail-closed because this build has no cgroup-v2 owner-path evidence for it.
 func capabilitiesForPlatform(platform string, evidence probeEvidence, executableHashMatched bool) (harness.Capabilities, error) {
 	capabilities := harness.Capabilities{
 		Kind:              harness.KindClaude,

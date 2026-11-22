@@ -6,8 +6,6 @@ import (
 	"time"
 )
 
-// PermanentCloseFailure builds the bare marker a close attempt returns when its
-// failure must stay sticky. A wrapped marker stays retryable.
 func PermanentCloseFailure(err error) error { return permanentCloseFailure{Err: err} }
 
 // Classified as permanent only when returned bare: a wrapped or joined marker stays a

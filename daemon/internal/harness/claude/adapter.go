@@ -1018,9 +1018,9 @@ func (session *candidateSession) watchProcess() {
 		final.EventCount = session.eventCount
 		final.LastSequence = session.lastSequence
 		session.mutex.Unlock()
-		expectedCancelled := expectedCancelled(processResult, cancelRequested)
-		if (!processResult.Success() && !expectedNormalClose(processResult, normalClose) && !expectedCancelled) ||
-			(final.Kind == harness.ResultCancelled && !expectedCancelled) {
+		cancelExpected := expectedCancelled(processResult, cancelRequested)
+		if (!processResult.Success() && !expectedNormalClose(processResult, normalClose) && !cancelExpected) ||
+			(final.Kind == harness.ResultCancelled && !cancelExpected) {
 			reason := protocol.TaskResultReasonProcessFailure
 			final.Kind = harness.ResultFailed
 			final.Reason = &reason

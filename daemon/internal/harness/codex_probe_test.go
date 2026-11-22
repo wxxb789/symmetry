@@ -9,7 +9,7 @@ import (
 func TestCodexParseVersionToleratesBoundedLeadingWarnings(t *testing.T) {
 	version := CodexTestedVersion
 	warning := "WARNING: proceeding, even though we could not create PATH aliases: " +
-		"Refusing to create helper binaries under temporary dir \"C:\\\\Users\\\\lhan\\\\\""
+		"Refusing to create helper binaries under temporary dir \"C:\\\\Users\\\\runneradmin\\\\\""
 	for _, output := range []string{
 		"codex-cli " + version + "\n",
 		warning + "\ncodex-cli " + version + "\n",
@@ -39,7 +39,6 @@ func TestCodexParseVersionRejectsExcessOrForeignLeadingLines(t *testing.T) {
 	}
 }
 
-// The exact version gate has one owner.
 func TestProbeRejectsNonExactVersionOutput(t *testing.T) {
 	for _, versionOutput := range []string{
 		"codex-cli " + CodexTestedVersion + "-alpha.1\n",

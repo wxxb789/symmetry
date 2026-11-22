@@ -86,6 +86,13 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       names `ClaudeTestedExecutableHash` (now `testedExecutableHash` in `claude/probe.go`). Owner
       area: W5-10 fixture pruning.
 
+- [ ] Re-pin `codex.Probe`'s own nil-context guard: `daemon/internal/harness/codex/probe.go`
+      rejects a nil context with `"codex probe context must not be nil"`, and after the rf-w4-15c
+      relocation deleted the root registry-seam case that exercised a nil context end to end, no
+      HEAD test covers that guard text — the shared entry guard stays pinned by
+      `TestRunBoundedProbeRejectsNilContext`
+      (`daemon/internal/harness/bounded_probe_test.go`). Owner: W5-16 (codex adapter concepts).
+
 ## Build-tag parity (arm64 oracle)
 
 - [ ] `GOOS=linux GOARCH=arm64 go vet ./...` cannot pass until
