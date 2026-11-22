@@ -1546,3 +1546,24 @@ is fixed here; each bullet names what a follow-up has to re-derive.
       full app suite, so no test reaches the retained-resume path that reads the mark. It only
       matters when a retained resume is cancelled after launch or its lease expires after `Open`.
       The gap exists at base; owner: the next daemon app-test slice.
+
+## Contracts: A6 tightening — owner sign-off required (rf-a6-contracts-strictness-corpus, 2026-11-22)
+
+- [ ] Unify the Control response decode levels on `responseDecodeSchema`
+      (`daemon/internal/control/client.go`). The single entry `decodeResponseJSON` takes the level
+      explicitly (owner ruling L2=b, `goal-rf-a6-contracts-strictness-corpus.md`): the legacy and
+      typed levels reject duplicate members plus their typed checks, while the schema level also
+      applies the contracts raw-byte checks (UTF-8, escaped surrogates, number lexemes for the
+      envelope class) and the v1 envelope schema. Moving the legacy and typed callers to the schema
+      level needs recorded owner sign-off because it changes acceptance, fail-closed, for these raw
+      corpus rows (`contracts/fixtures/raw/`, `contracts/fixtures/manifest.json`):
+      `goal-command.raw-number-fractional`, `goal-command.raw-number-exponent`,
+      `goal-command.raw-number-unsafe-integer` and `goal-command.raw-invalid-utf8` are accepted by
+      the legacy and typed levels today and rejected by the schema level. The tightening artifact
+      must re-derive that set from a base-vs-head corpus run rather than from this list. Runtime
+      divergences the corpus records and this slice deliberately does not fix:
+      `goal-command.raw-duplicate-member-top-level` (Elixir's Jason keeps the last member),
+      `goal-command.raw-number-fractional` and `goal-command.raw-number-exponent` (Elixir accepts the
+      lexeme and its validator accepts the value), `goal-command.raw-bom-prefix` (the JS
+      `JSON.parse` strips a leading BOM) and `goal-command.raw-number-negative-zero` (accepted by Go,
+      JS and Elixir; no runtime enforces the canonical `-0` to `0` form).

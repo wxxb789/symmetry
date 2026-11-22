@@ -77,6 +77,22 @@ finite presentation numbers in existing additive metadata; their consumed fields
 still pass the generated schema. UTF-8, duplicate-key and Unicode checks remain
 in force for both policies.
 
+The manifest also carries the raw-byte corpus: rows under `raw/` name a
+`wire_error` class (`duplicate_json_member`, `noncanonical_number`,
+`unsafe_integer`, `negative_zero`, `leading_zero`, `nonfinite_number`,
+`invalid_utf8`, `bom`, `trailing_value`, `trailing_garbage`) plus
+`wire_levels`, the Go control-response decode levels that reject the bytes
+today (`legacy`, `typed`, `schema`). The files are marked binary in
+`.gitattributes`, so the bytes judged are the bytes committed: duplicate
+members at the top level and nested, fractional, exponent, negative-zero,
+leading-zero and unsafe-integer lexemes, non-finite presentation numbers, an
+invalid UTF-8 byte, a UTF-8 BOM prefix, a trailing second value and trailing
+garbage — each wrapped in a document of a real schema so only the raw property
+fails. A row's `runtime_divergence` map names a runtime that accepts the bytes
+today (for example the BOM, which `JSON.parse` strips, or `-0`); every reader
+asserts today's behavior instead of adding a rejection, and the agreement work
+that remains is recorded in `docs/TODO.md`.
+
 Not every cross-stack fixture is a wire payload. `fixtures/shell-return-targets.json`
 is a shell-URL acceptance corpus consumed directly by the Control and frontend test
 suites (`control/test/symmetry_control_web/portal_session_test.exs`,

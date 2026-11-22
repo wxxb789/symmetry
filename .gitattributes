@@ -17,3 +17,6 @@ Dockerfile.* text eol=lf
 *.md text eol=lf
 *.txt text eol=lf
 *.jsonl text eol=lf
+
+# Raw-byte strictness fixtures ship the exact bytes a runtime must judge.
+contracts/fixtures/raw/** -text

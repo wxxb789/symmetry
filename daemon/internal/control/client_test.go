@@ -543,18 +543,18 @@ func TestDecodeJSONRejectsDuplicateMembers(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var decoded map[string]any
-			err := decodeJSON([]byte(test.body), &decoded)
+			err := decodeResponseJSON(responseDecodeLegacy, "", []byte(test.body), &decoded)
 			if test.want == "" {
 				if err != nil {
-					t.Fatalf("decodeJSON(%q) error = %v, want accept", test.body, err)
+					t.Fatalf("decodeResponseJSON(%q) error = %v, want accept", test.body, err)
 				}
 				if decoded["a"] != float64(1) {
-					t.Fatalf("decodeJSON(%q) decoded = %#v, want a=1", test.body, decoded)
+					t.Fatalf("decodeResponseJSON(%q) decoded = %#v, want a=1", test.body, decoded)
 				}
 				return
 			}
 			if err == nil || err.Error() != test.want {
-				t.Fatalf("decodeJSON(%q) error = %v, want %q", test.body, err, test.want)
+				t.Fatalf("decodeResponseJSON(%q) error = %v, want %q", test.body, err, test.want)
 			}
 		})
 	}

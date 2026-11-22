@@ -16,12 +16,26 @@ type goalContractFixtureManifest struct {
 }
 
 type goalContractFixture struct {
-	ID            string `json:"id"`
-	Schema        string `json:"schema"`
-	Path          string `json:"path"`
-	Valid         bool   `json:"valid"`
-	SchemaValid   *bool  `json:"schema_valid"`
-	SemanticValid *bool  `json:"semantic_valid"`
+	ID                string            `json:"id"`
+	Schema            string            `json:"schema"`
+	Path              string            `json:"path"`
+	Valid             bool              `json:"valid"`
+	WireError         string            `json:"wire_error"`
+	RuntimeDivergence map[string]string `json:"runtime_divergence"`
+	SchemaValid       *bool             `json:"schema_valid"`
+	SemanticValid     *bool             `json:"semantic_valid"`
+}
+
+var rawWireErrorTexts = map[string]string{
+	"duplicate_json_member": "duplicate JSON object member",
+	"noncanonical_number":   "fractional or exponent number is not canonical",
+	"unsafe_integer":        "integer exceeds the JSON safe-integer range",
+	"leading_zero":          "invalid character",
+	"nonfinite_number":      "number is not finite",
+	"invalid_utf8":          "JSON input is not valid UTF-8",
+	"bom":                   "invalid character",
+	"trailing_value":        "multiple JSON values",
+	"trailing_garbage":      "invalid character",
 }
 
 func TestGoalTransportParsesContractFixtures(t *testing.T) {
@@ -44,6 +58,11 @@ func TestGoalTransportParsesContractFixtures(t *testing.T) {
 			data, err := os.ReadFile(filepath.Join(root, "contracts", "fixtures", filepath.FromSlash(fixture.Path)))
 			if err != nil {
 				t.Fatal(err)
+			}
+
+			if fixture.WireError != "" {
+				assertRawWireFixture(t, fixture, data)
+				return
 			}
 
 			schemaErr := validateFixtureSchema(fixture.Schema, data)
@@ -156,6 +175,24 @@ func (fixture goalContractFixture) expectedSemanticValidity() bool {
 
 func validateFixtureSchema(schema string, data []byte) error {
 	return contractdto.ValidateSchema(contractdto.Envelope(schema), data)
+}
+
+func assertRawWireFixture(t *testing.T, fixture goalContractFixture, data []byte) {
+	t.Helper()
+	var decoded map[string]any
+	err := contractdto.DecodeSchema(contractdto.Envelope(fixture.Schema), data, &decoded)
+	if fixture.RuntimeDivergence["go"] == "accepts" {
+		if err != nil {
+			t.Fatalf("raw fixture is accepted by Go today but was rejected: %v", err)
+		}
+		return
+	}
+	if err == nil {
+		t.Fatalf("raw fixture class %s was accepted by DecodeSchema", fixture.WireError)
+	}
+	if want := rawWireErrorTexts[fixture.WireError]; !strings.Contains(err.Error(), want) {
+		t.Fatalf("rejection %q does not carry %q", err, want)
+	}
 }
 
 func contractRepositoryRoot(t *testing.T) string {
