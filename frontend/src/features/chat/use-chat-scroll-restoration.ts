@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, type RefObject, type UIEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, type RefObject, type UIEvent } from "react";
 import type { ChatScopeStore } from "./scopes";
 
 export type ChatScopeScroll = Pick<ChatScopeStore, "scrollOffsetOf" | "recordScrollOffset" | "scrollRestoreOf" | "markScrollRestore" | "settleScrollRestore">;
@@ -25,49 +25,44 @@ export function useChatScrollRestoration(key: string, scroll: ChatScopeScroll, r
     if (node.scrollTop === owedScroll) settleScrollRestore(key);
   });
 
-  useLayoutEffect(() => {
+  const assertRecordedOffset = useCallback(() => {
     const node = scrollRef.current;
     if (node === null) return;
     const restored = scrollOffsetOf(key);
     node.scrollTop = restored;
     if (node.scrollTop !== restored) markScrollRestore(key, restored);
-  }, [key, scrollRef, markScrollRestore, scrollOffsetOf]);
+  }, [key, markScrollRestore, scrollOffsetOf, scrollRef]);
 
-  // The router restores element scroll positions across navigations; this
-  // surface's own per-scope offsets are the authority, so they are re-asserted
-  // once the router's restore for the new location has run.
-  useEffect(() => router.subscribe("onRendered", () => {
-    const node = scrollRef.current;
-    if (node === null) return;
-    const restored = scrollOffsetOf(key);
-    node.scrollTop = restored;
-    if (node.scrollTop !== restored) markScrollRestore(key, restored);
-  }), [key, scrollRef, markScrollRestore, router, scrollOffsetOf]);
+  useLayoutEffect(assertRecordedOffset, [assertRecordedOffset]);
 
-  // A transcript that replaced this pane's own pins `scrollTop` at the pane's
-  // maximum and raises a scroll event exactly like a reader's move: pinned
-  // below this scope's offset it keeps the offset owed, below that it is the
-  // reader's own position.
+  // The router repositions elements across navigations after this pane commits;
+  // this surface's own per-scope offsets are the authority, re-asserted after it.
+  useEffect(() => router.subscribe("onRendered", assertRecordedOffset), [assertRecordedOffset, router]);
+
+  // A transcript replacement pins `scrollTop` at the pane's maximum and fires a
+  // reader-like scroll event; pinned below the offset it stays owed, unrecorded.
+  const wantedOffset = () => Math.max(scrollOffsetOf(key), owedScroll ?? 0);
+  const recordReaderPosition = (offset: number) => {
+    recordScrollOffset(key, offset);
+    // A live position that is not the owed offset is the reader taking over.
+    if (owedScroll !== null && offset !== owedScroll) settleScrollRestore(key);
+  };
+
   const onScroll = (event: UIEvent<HTMLDivElement>) => {
     const node = event.currentTarget;
-    const shown = node.scrollTop;
-    const wanted = Math.max(scrollOffsetOf(key), owedScroll ?? 0);
+    const wanted = wantedOffset();
     if (panePinnedBelowOffset(node, wanted)) {
       markScrollRestore(key, wanted);
       return;
     }
-    recordScrollOffset(key, shown);
-    // A live position that is not the owed offset is the reader taking over.
-    if (owedScroll !== null && shown !== owedScroll) settleScrollRestore(key);
+    recordReaderPosition(node.scrollTop);
   };
 
   const rememberLeavingScope = () => {
     const node = scrollRef.current;
     if (node === null) return;
-    if (panePinnedBelowOffset(node, Math.max(scrollOffsetOf(key), owedScroll ?? 0))) return;
-    recordScrollOffset(key, node.scrollTop);
-    // A live position that is not the owed offset is the reader taking over.
-    if (owedScroll !== null && node.scrollTop !== owedScroll) settleScrollRestore(key);
+    if (panePinnedBelowOffset(node, wantedOffset())) return;
+    recordReaderPosition(node.scrollTop);
   };
 
   return { onScroll, rememberLeavingScope };

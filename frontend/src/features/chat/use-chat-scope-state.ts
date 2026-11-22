@@ -14,7 +14,7 @@ export interface ChatScopeSearch {
   readonly runId?: string | null;
 }
 
-export interface ChatScopeWrites {
+export interface ChatScopeInputs {
   readonly api: Api;
   readonly intents: readonly ChatIntent[];
   readonly runItem: WorkItem | null;
@@ -121,8 +121,8 @@ export function chatScopeParams(search: ChatScopeSearch): ChatScopeParams {
   };
 }
 
-export function useChatScopeState(search: ChatScopeSearch, writes: ChatScopeWrites) {
-  const { scope, projectId, runId, identity, key, complete } = chatScopeParams(search);
+export function useChatScopeState(params: ChatScopeParams, inputs: ChatScopeInputs) {
+  const { scope, projectId, runId, identity, key, complete } = params;
 
   const store = useChatScopeStore();
   const {
@@ -143,7 +143,7 @@ export function useChatScopeState(search: ChatScopeSearch, writes: ChatScopeWrit
   const edit = (patch: Parameters<typeof updateStored>[1]) => {
     updateStoredWith(key, (current) => ({ ...current, ...patch, status: current.status.kind === "unconfirmed" ? { kind: "idle" } : current.status }));
   };
-  const intent: ChatIntent = writes.intents.includes(state.intent) ? state.intent : writes.intents[0] ?? "discuss";
+  const intent: ChatIntent = inputs.intents.includes(state.intent) ? state.intent : inputs.intents[0] ?? "discuss";
   const startFields = (scope === "workspace" || scope === "project") && intent === "start_work";
   const targetProjectId = scope === "project" ? projectId ?? "" : state.targetProjectId;
   const resourcesProjectId = scope === "workspace" && state.targetProjectId !== "" ? state.targetProjectId : projectId;
@@ -151,7 +151,7 @@ export function useChatScopeState(search: ChatScopeSearch, writes: ChatScopeWrit
 
   const queryClient = useQueryClient();
   const csrf = useSessionToken();
-  const mutation = useMutation(chatMessageMutation(writes.api));
+  const mutation = useMutation(chatMessageMutation(inputs.api));
 
   const send = (request: ChatMessageRequest) => {
     const sendIdentity = identity;
@@ -197,8 +197,8 @@ export function useChatScopeState(search: ChatScopeSearch, writes: ChatScopeWrit
       workTitle: state.workTitle,
       repositoryId: state.repositoryId,
       ciId: state.ciId,
-      runItem: writes.runItem,
-      runGeneration: writes.runGeneration,
+      runItem: inputs.runItem,
+      runGeneration: inputs.runGeneration,
     });
     if (outcome.kind === "notice") {
       updateStored(key, { status: { kind: "notice", message: outcome.message } });
@@ -210,18 +210,18 @@ export function useChatScopeState(search: ChatScopeSearch, writes: ChatScopeWrit
 
   const sendDecision = (option: ChatDecisionOption) => {
     if (state.status.kind === "sending") return;
-    if (writes.runItem === null || writes.runGeneration === null || writes.waitingTransitionId === null || runId === null) return;
+    if (inputs.runItem === null || inputs.runGeneration === null || inputs.waitingTransitionId === null || runId === null) return;
     const request: ChatMessageRequest = {
       scope,
       run_id: runId,
       intent: "decision",
       content: option.label ?? option.id,
       action_id: crypto.randomUUID(),
-      work_item_id: writes.runItem.id,
-      generation: writes.runGeneration,
+      work_item_id: inputs.runItem.id,
+      generation: inputs.runGeneration,
       // Both identities come from the same served snapshot that rendered the
       // buttons, so a stale packet is the server's refusal to give.
-      waiting_transition_id: writes.waitingTransitionId,
+      waiting_transition_id: inputs.waitingTransitionId,
       option_id: option.id,
     };
     const frozen = state.frozen;
@@ -229,12 +229,6 @@ export function useChatScopeState(search: ChatScopeSearch, writes: ChatScopeWrit
   };
 
   return {
-    scope,
-    projectId,
-    runId,
-    identity,
-    key,
-    complete,
     state,
     latestStateOf,
     targetProjectId,

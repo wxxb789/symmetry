@@ -120,10 +120,10 @@ export function ChatPage() {
   const intents = applicableChatIntents({ scope: params.scope, run: served.runSignals, hasProjects: directoryProjects.length > 0 });
 
   const {
-    scope, projectId, runId, identity, key, complete, state, latestStateOf,
+    state, latestStateOf,
     targetProjectId, resourcesProjectId, intent, startFields, sending,
     update, updateWith, edit, submit, sendDecision, scroll,
-  } = useChatScopeState(search, {
+  } = useChatScopeState(params, {
     api: application.api,
     intents,
     runItem: served.servedRunItem,
@@ -131,11 +131,11 @@ export function ChatPage() {
     waitingTransitionId: served.waitingTransitionId,
   });
 
-  const resources = useQuery({ ...workspaceOptions(application.api, resourcesProjectId), enabled: scope !== "run" });
+  const resources = useQuery({ ...workspaceOptions(application.api, resourcesProjectId), enabled: params.scope !== "run" });
   const resourceRows = resources.data?.projects.find((project) => project.id === resourcesProjectId)?.resources ?? [];
   const repositories = resourceRows.filter((resource) => resource.kind === "repository");
   const ciResources = resourceRows.filter((resource) => resource.kind === "ci");
-  const scopeProject = scopeProjectOf(directoryProjects, projectId);
+  const scopeProject = scopeProjectOf(directoryProjects, params.projectId);
 
   const history = chatHistoryView(state.pages, state.nextCursor);
   const historyNote = chatHistoryNote(history, conversation.data !== undefined, conversation.isError);
@@ -143,12 +143,12 @@ export function ChatPage() {
   useEffect(() => {
     const servedPage = conversation.data;
     if (servedPage === undefined) return;
-    updateWith(key, (previous) => retainServedPage(previous, { messages: servedPage.messages, nextBefore: servedPage.next_before }, servedPage));
-  }, [conversation.data, key, updateWith]);
+    updateWith(params.key, (previous) => retainServedPage(previous, { messages: servedPage.messages, nextBefore: servedPage.next_before }, servedPage));
+  }, [conversation.data, params.key, updateWith]);
 
   const older = useOlderPageLoading({
-    key,
-    identity,
+    key: params.key,
+    identity: params.identity,
     cursor: history.loadCursor,
     boundaryId: state.nextBoundaryId,
     latestStateOf,
@@ -157,37 +157,37 @@ export function ChatPage() {
     updateWith,
   });
   const paneRef = useRef<HTMLDivElement | null>(null);
-  const scrollRestoration = useChatScrollRestoration(key, scroll, router, paneRef);
+  const scrollRestoration = useChatScrollRestoration(params.key, scroll, router, paneRef);
 
   const refresh = () => {
     if (!conversation.isFetching) void conversation.refetch();
   };
 
   const changeScope = (next: ChatScope) => {
-    if (next === scope) return;
-    if (next === "project" && projectId === null) {
-      update(key, { status: { kind: "notice", message: "No project is selected, so the scope was unchanged. Open Chat from a project to hold a project conversation." } });
+    if (next === params.scope) return;
+    if (next === "project" && params.projectId === null) {
+      update(params.key, { status: { kind: "notice", message: "No project is selected, so the scope was unchanged. Open Chat from a project to hold a project conversation." } });
       return;
     }
     scrollRestoration.rememberLeavingScope();
     // The current project/run members are carried so a round trip through
     // another scope returns to the same conversation.
-    void navigate({ to: "/chat", search: { scope: next, ...(projectId === null ? {} : { projectId }), ...(runId === null ? {} : { runId }) } });
+    void navigate({ to: "/chat", search: { scope: next, ...(params.projectId === null ? {} : { projectId: params.projectId }), ...(params.runId === null ? {} : { runId: params.runId }) } });
   };
 
   const changeRun = (next: string) => {
     scrollRestoration.rememberLeavingScope();
-    void navigate({ to: "/chat", search: { scope: "run", ...(projectId === null ? {} : { projectId }), ...(next === "" ? {} : { runId: next }) } });
+    void navigate({ to: "/chat", search: { scope: "run", ...(params.projectId === null ? {} : { projectId: params.projectId }), ...(next === "" ? {} : { runId: next }) } });
   };
 
-  const pending = complete && conversation.isPending;
-  const contextLabel = chatContextLabel(scope, projectId, runId, conversation.data, pending, directoryProjects, served.servedRunItem, served.servedRunExecution);
+  const pending = params.complete && conversation.isPending;
+  const contextLabel = chatContextLabel(params.scope, params.projectId, params.runId, conversation.data, pending, directoryProjects, served.servedRunItem, served.servedRunExecution);
   const runLinks = chatRunLinks(served.servedRunItem);
-  const emptyScope = scope === "project"
+  const emptyScope = params.scope === "project"
     ? { title: "No project selected", body: "Open Chat from a project to hold a project conversation." }
     : { title: "No run selected", body: "Select a run to hold a run-scoped conversation." };
   const transcript = {
-    complete,
+    complete: params.complete,
     pending,
     empty: emptyScope,
     history,
@@ -198,12 +198,12 @@ export function ChatPage() {
     onScroll: scrollRestoration.onScroll,
   };
   const composer = {
-    scope,
-    complete,
+    scope: params.scope,
+    complete: params.complete,
     intent,
     intents,
     startFields,
-    projectId,
+    projectId: params.projectId,
     scopeProject,
     projects: directoryProjects,
     targetProjectId,
@@ -224,11 +224,11 @@ export function ChatPage() {
       <RefreshButton fetching={conversation.isFetching} refresh={refresh} />
     </PageHeading>
 
-    <ChatScopeBar scope={scope} runId={runId} runRows={served.runRows} runSelectVisible={served.runSelectVisible} onScope={changeScope} onRun={changeRun} />
+    <ChatScopeBar scope={params.scope} runId={params.runId} runRows={served.runRows} runSelectVisible={served.runSelectVisible} onScope={changeScope} onRun={changeRun} />
 
     <section id="chat-scope-context" className="chat-scope-context" aria-label="Conversation scope">
       <p className="chat-context-heading">{contextLabel}</p>
-      {served.servedRunItem !== null && scope === "run" && <div className="chat-run-context">
+      {served.servedRunItem !== null && params.scope === "run" && <div className="chat-run-context">
         <p className="muted text-small">{served.servedRunItem.key} · {served.servedRunItem.title}{served.servedRunExecution === null ? "" : ` · Attempt ${served.servedRunExecution.generation} · ${served.runState}`}</p>
         {runLinks.length > 0 && <p className="chat-run-links">{runLinks.map(({ label, link }) => <span key={label}>
           <span className="muted text-small">{label}:</span>{" "}
@@ -239,12 +239,12 @@ export function ChatPage() {
       </div>}
     </section>
 
-    {scope === "run" && <ChatDecisionSection decision={served.decision} sending={sending} onChoose={sendDecision} />}
+    {params.scope === "run" && <ChatDecisionSection decision={served.decision} sending={sending} onChoose={sendDecision} />}
 
     <ChatEvidenceList rows={served.evidence} />
 
-    {scope === "run" && <p id="chat-guidance-delivery" className="chat-delivery muted text-small">{guidanceDeliveryLabel(served.adapter)}</p>}
-    {scope === "run" && served.pauseIsUnsupported && <p id="chat-pause-support" className="chat-pause-support muted text-small">{pauseUnsupportedLabel}</p>}
+    {params.scope === "run" && <p id="chat-guidance-delivery" className="chat-delivery muted text-small">{guidanceDeliveryLabel(served.adapter)}</p>}
+    {params.scope === "run" && served.pauseIsUnsupported && <p id="chat-pause-support" className="chat-pause-support muted text-small">{pauseUnsupportedLabel}</p>}
 
     {conversation.isError && <ErrorState error={conversation.error} retry={refresh} stale={conversation.data !== undefined} />}
 

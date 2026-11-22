@@ -61,12 +61,12 @@ evidence record §10).
 // use-chat-scope-state.ts
 export interface ChatScopeSearch { scope?: ChatScope; projectId?: string | null; runId?: string | null }
 export interface ChatScopeParams { scope; projectId; runId; identity: ChatScopeKey; key: string; complete: boolean }
-export function chatScopeParams(search: ChatScopeSearch): ChatScopeParams; // the pure scope math, called by ChatPage before the reads and by the hook
+export function chatScopeParams(search: ChatScopeSearch): ChatScopeParams; // the pure scope math, called by ChatPage; the hook receives the derived params
 
 export function useChatScopeState(
-  search: ChatScopeSearch,
-  writes: { api: Api; intents: readonly ChatIntent[]; runItem: WorkItem | null; runGeneration: number | null; waitingTransitionId: string | null },
-): ChatScopeParams & {
+  params: ChatScopeParams,
+  inputs: { api: Api; intents: readonly ChatIntent[]; runItem: WorkItem | null; runGeneration: number | null; waitingTransitionId: string | null },
+): {
   state: ChatScopeState; latestStateOf: RefObject<(key: string) => ChatScopeState>;
   targetProjectId: string; resourcesProjectId: string | null;
   intent: ChatIntent; startFields: boolean; sending: boolean;
@@ -102,13 +102,13 @@ export interface ChatDecisionView { question: string | null; context: string | n
 export function ChatDecisionSection(props: { decision: ChatDecisionView | null; sending: boolean; onChoose(option: ChatDecisionOption): void });
 export interface ChatEvidenceView { key: string; source: "event" | "transition" | "command"; kind: string; summary: string | null }
 export function ChatEvidenceList(props: { rows: readonly ChatEvidenceView[] });
-export interface ChatHistoryView { messages: readonly ChatConversationMessage[]; currentIds: ReadonlySet<string>; gap: { current: string; retained: string } | null; loadCursor: string | null }
-export function ChatTranscript(props: { complete; pending; empty: EmptyScopeView; history: ChatHistoryView; historyNote: string | null; olderPending: boolean; onOlderLoad(): void; scrollRef: RefObject<HTMLDivElement | null>; onScroll(event): void });
+export interface ChatTranscriptHistory { messages: readonly ChatConversationMessage[]; currentIds: ReadonlySet<string>; gap: { current: string; retained: string } | null; loadCursor: string | null }
+export function ChatTranscript(props: { complete; pending; empty: EmptyScopeView; history: ChatTranscriptHistory; historyNote: string | null; olderPending: boolean; onOlderLoad(): void; scrollRef: RefObject<HTMLDivElement | null>; onScroll(event): void });
 export interface ChatComposerEdit { intent?; draft?; workTitle?; repositoryId?; ciId?; targetProjectId? }
 export function ChatComposer(props: { scope; complete; intent; intents; startFields; projectId; scopeProject; projects; targetProjectId; draft; workTitle; repositoryId; ciId; repositories; ciResources; sending; status; onEdit(patch: ChatComposerEdit): void; onSubmit(event): void });
 ```
 
-The section view types (`ChatDecisionView`, `ChatEvidenceView`, `ChatHistoryView`,
+The section view types (`ChatDecisionView`, `ChatEvidenceView`, `ChatTranscriptHistory`,
 `EmptyScopeView`, `ResourceOption`, `ProjectOption`) name what each section renders; the
 presentation module's own interfaces stay internal, so `presentation.ts` needs no change.
 
@@ -144,9 +144,11 @@ is preserved.
    refused -> pointer falls back to `pages[0]`'s token/oldest id and notice; otherwise notice
    only, or no write at all when a superseded refusal arrives).
 5. **Scroll ordering.** Owed-offset `useLayoutEffect` (no dependency array, re-runs every
-   commit) precedes the `[key, mark, offsetOf]` recorded-offset `useLayoutEffect`; the
-   `onRendered` subscription's callback re-asserts the *recorded* offset and marks it owed
-   when the pane cannot hold it. The pane's own scroll rule keeps the pinned-below test
+   commit) precedes the recorded-offset `useLayoutEffect`, which runs one memoized re-assert
+   callback (identity per `[key, markScrollRestore, scrollOffsetOf, scrollRef]`; the stable ref
+   keeps the base effect's trigger set); the `onRendered` subscription uses the same callback,
+   so it re-asserts the *recorded* offset and marks it owed when the pane cannot hold it. The
+   pane's own scroll rule keeps the pinned-below test
    `node.scrollTop < max(recorded, owed) && range < max(recorded, owed) && node.scrollTop === max(0, range)`.
 6. **Send path.** Guard order unchanged: `submit` -> `!complete` -> `sending` -> build (byte
    bound -> start_work target -> run control) -> frozen-body reuse. `sendDecision` guard:

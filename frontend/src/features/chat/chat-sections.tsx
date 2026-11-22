@@ -105,7 +105,7 @@ export interface EmptyScopeView {
   readonly body: string;
 }
 
-export interface ChatHistoryView {
+export interface ChatTranscriptHistory {
   readonly messages: readonly ChatConversationMessage[];
   readonly currentIds: ReadonlySet<string>;
   readonly gap: { readonly current: string; readonly retained: string } | null;
@@ -133,7 +133,7 @@ export function ChatTranscript({ complete, pending, empty, history, historyNote,
   readonly complete: boolean;
   readonly pending: boolean;
   readonly empty: EmptyScopeView;
-  readonly history: ChatHistoryView;
+  readonly history: ChatTranscriptHistory;
   readonly historyNote: string | null;
   readonly olderPending: boolean;
   readonly onOlderLoad: () => void;

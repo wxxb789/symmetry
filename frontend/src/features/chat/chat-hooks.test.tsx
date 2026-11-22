@@ -7,7 +7,7 @@ import { trackApplications } from "../../app/test-harness";
 import type { ChatConversationMessage } from "../../services/api";
 import { ChatComposer, type ChatComposerEdit } from "./chat-sections";
 import { useChatScopeStore, type ChatHistoryPage, type ChatScopeStore } from "./scopes";
-import { chatScopeParams } from "./use-chat-scope-state";
+import { buildChatRequest, chatScopeParams } from "./use-chat-scope-state";
 import { useChatScrollRestoration, type RouterRenderedEvents } from "./use-chat-scroll-restoration";
 import { useOlderPageLoading } from "./use-older-page-loading";
 
@@ -75,7 +75,6 @@ describe("older-page presses", () => {
     await waitFor(() => { expect(requested).toEqual(["cursor-a"]); });
     expect(result.current.older.pending).toBe(true);
 
-    // The surface re-signs its cursor at the same boundary while the press is in flight.
     rerender({ cursor: "cursor-b", boundaryId: boundaryUuid(1) });
     expect(result.current.older.pending).toBe(true);
     act(() => { result.current.older.load(); });
@@ -134,7 +133,6 @@ describe("older-page presses", () => {
     act(() => { result.current.store.update(key, { pages: [servedPage], nextCursor: "cursor-a", nextBoundaryId: boundaryUuid(1) }); });
 
     act(() => { result.current.older.load(); });
-    // The served page re-signs its token at the same boundary while the press is in flight.
     act(() => { result.current.store.update(key, { nextCursor: "served-token-2" }); });
     await act(async () => {
       held.resolve(jsonResponse({ error: { code: "invalid_request", message: "request payload is invalid" } }, 400));
@@ -310,5 +308,32 @@ describe("composer section", () => {
     render(<ChatComposer {...composerProps({ onEdit: (patch) => { patches.push(patch); } })} />);
     fireEvent.change(screen.getByLabelText("Target project"), { target: { value: secondProjectId } });
     expect(patches).toEqual([{ targetProjectId: secondProjectId, repositoryId: "", ciId: "" }]);
+  });
+});
+
+const requestBase = {
+  scope: "project",
+  projectId,
+  runId: null,
+  intent: "discuss",
+  draft: "question",
+  targetProjectId: "",
+  workTitle: "",
+  repositoryId: "",
+  ciId: "",
+  runItem: null,
+  runGeneration: null,
+} as const;
+
+describe("chat request builder", () => {
+  it("returns the two notice outcomes and a request carrying the scope members (mutant: dropped guard)", () => {
+    expect(buildChatRequest({ ...requestBase, intent: "start_work" })).toEqual({ kind: "notice", message: "Select a target project before starting work." });
+    expect(buildChatRequest({ ...requestBase, scope: "run", runId: "70000000-0000-4000-8000-000000000001", intent: "pause", runGeneration: 3 })).toEqual({ kind: "notice", message: "No run is selected, so no control can be dispatched." });
+    const built = buildChatRequest(requestBase);
+    if (built.kind !== "request") throw new Error("expected a request outcome");
+    expect(built.request.scope).toBe("project");
+    expect(built.request.project_id).toBe(projectId);
+    expect(built.request.intent).toBe("discuss");
+    expect(built.request.content).toBe("question");
   });
 });

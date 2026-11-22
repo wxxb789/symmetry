@@ -13,6 +13,14 @@ HEAD, all base coordinates below). Plan:
 `docs/plans/2026-11-22-rf-w4-08-chatpage-decomposition-plan.md`. Judging artifact (contract
 clause 2, "answer.md"): this record plus the implement-stage report.
 
+Apply stage (2026-11-22): the accepted simplify findings were applied on this tree — the
+`useChatScopeState` signature takes the derived `params` (one `chatScopeParams` call per
+render) and `ChatScopeInputs` names its input record; the scroll re-assert is one memoized
+callback; the section-local `ChatHistoryView` became `ChatTranscriptHistory`; two comment
+blocks were compressed to the policy's two lines and two test step labels were removed; the
+two `buildChatRequest` notice guards gained a direct unit test. Every count, gate row and
+hash below was re-derived on the applied tree, and §7's mutants were re-shown red on it.
+
 Dispatch gates re-checked at `e84973a7`: W4-11 (`#220`, the same commit: `app/portal-double.ts`,
 `app/test-harness.tsx`, the pool split) and `#164` (W2-15) are merged — `chat.test.tsx` measures
 2062 L / 48 cases and `presentation.ts` 455 L at the base, so the pre-dispatch numbers (2086 /
@@ -23,11 +31,11 @@ Dispatch gates re-checked at `e84973a7`: W4-11 (`#220`, the same commit: `app/po
 | file | status | lines (raw) | note |
 | --- | --- | ---: | --- |
 | `frontend/src/features/chat/chat.tsx` | rewritten | 734 → 255 | `ChatPage` `:108-255` (148 raw lines; 127 eslint-counted) + module helpers `conversationRunOf`, `servedRunOf`, `runSignalsOf`, `chatRunFacts`, `chatHistoryNote`, `scopeProjectOf`, `chatContextLabel` |
-| `frontend/src/features/chat/use-chat-scope-state.ts` | new | 258 | `chatScopeParams`, `buildChatRequest`, `definitiveRefusal`, `sameRequestBody`, `useChatScopeState` |
-| `frontend/src/features/chat/use-chat-scroll-restoration.ts` | new | 74 | `ChatScopeScroll`, `RouterRenderedEvents`, `panePinnedBelowOffset`, `useChatScrollRestoration` |
+| `frontend/src/features/chat/use-chat-scope-state.ts` | new | 252 | `chatScopeParams`, `buildChatRequest`, `definitiveRefusal`, `sameRequestBody`, `useChatScopeState` |
+| `frontend/src/features/chat/use-chat-scroll-restoration.ts` | new | 69 | `ChatScopeScroll`, `RouterRenderedEvents`, `panePinnedBelowOffset`, `useChatScrollRestoration` |
 | `frontend/src/features/chat/use-older-page-loading.ts` | new | 58 | `definitiveReadRefusal`, `useOlderPageLoading` |
-| `frontend/src/features/chat/chat-sections.tsx` | new | 286 | `servedRuns`, `runOptionLabel`, `ServedRun`, `ChatScopeBar`, `ChatDecisionView`, `ChatDecisionSection`, `ChatEvidenceView`, `ChatEvidenceList`, `EmptyScopeView`, `ChatHistoryView`, `ChatMessageRow`, `ChatTranscript`, `ChatComposerEdit`, `ChatComposer` |
-| `frontend/src/features/chat/chat-hooks.test.tsx` | new | 314 | 8 tests (see §8) |
+| `frontend/src/features/chat/chat-sections.tsx` | new | 286 | `servedRuns`, `runOptionLabel`, `ServedRun`, `ChatScopeBar`, `ChatDecisionView`, `ChatDecisionSection`, `ChatEvidenceView`, `ChatEvidenceList`, `EmptyScopeView`, `ChatTranscriptHistory`, `ChatMessageRow`, `ChatTranscript`, `ChatComposerEdit`, `ChatComposer` |
+| `frontend/src/features/chat/chat-hooks.test.tsx` | new | 339 | 9 tests (see §8) |
 | `frontend/src/features/chat/scopes.ts` | edited | 268 → 268 | two `export` keywords only: `interface ChatScopeState` and `interface ChatScopeStore` become exported (type-only; see §10) |
 | `docs/plans/2026-11-22-rf-w4-08-chatpage-decomposition-plan.md` | new | — | plan with decisions P1-P9 |
 | `docs/evidence/rf-w4-08-chatpage-decomposition-2026-11-22.md` | new | — | this record |
@@ -51,15 +59,15 @@ and `complexity: 0` probe so every function reports its count; blank lines and c
 | `ChatEvidenceList` | inline | 13 L / cx 2 |
 | `ChatTranscript` | inline | 46 L / cx 7 |
 | `ChatComposer` | inline | 85 L / cx 9 |
-| `useChatScopeState` | — | 121 L / cx 9 (`send` 25 L/cx 1, `submit` 24 L/cx 6, `sendDecision` 17 L/cx 9, `edit` 3 L/cx 1, `onSuccess` 6 L/cx 3, `onError` 7 L/cx 4) |
+| `useChatScopeState` | — | 115 L / cx 9 (`send` 25 L/cx 1, `submit` 24 L/cx 6, `sendDecision` 17 L/cx 9, `edit` 3 L/cx 1, `onSuccess` 6 L/cx 3, `onError` 7 L/cx 4) |
 | `buildChatRequest` | inline `buildRequest` (inside the 446 L `ChatPage`) | 48 L / cx 18 |
 | `chatScopeParams` | inline (the URL parse, 6 lines) | 13 L / cx 6 |
-| `useChatScrollRestoration` | — | 43 L / cx 1 (effects 6 L/cx 4, 7 L/cx 3, callback 7 L/cx 3; `onScroll` 11 L/cx 5; `rememberLeavingScope` 7 L/cx 6) |
+| `useChatScrollRestoration` | — | 40 L / cx 1 (owed effect 6 L/cx 4; re-assert callback 7 L/cx 3; `onRendered` wrapper 1 L/cx 1; `wantedOffset` 1 L/cx 2; `recordReaderPosition` 4 L/cx 3; `onScroll` 9 L/cx 2; `rememberLeavingScope` 6 L/cx 3) |
 | `panePinnedBelowOffset` | 4 L / cx 3 | 4 L / cx 3 |
 | `useOlderPageLoading` | — | 45 L / cx 2 (`load` 30 L/cx 3, error callback 16 L/cx 4, retain callback 3 L/cx 1) |
 
 Every delivered function is inside the caps (the largest are `ChatPage` 127/20 and
-`useChatScopeState` 121/9; the most complex is `ChatPage` cx 20, then `buildChatRequest` cx 18),
+`useChatScopeState` 115/9; the most complex is `ChatPage` cx 20, then `buildChatRequest` cx 18),
 and the base's `ChatPage` pair (`max-lines-per-function` 446, `complexity` 96) is gone — which is
 exactly the two-warning drop the repo-wide count shows (§6). The moved closures kept their base
 sizes (`load` 30 vs 31, the refusal error callback 16, the retain callback 7, `send` 25 vs 26).
@@ -69,7 +77,7 @@ The plan's "cx <20 per unit" is report-only per the contract.
 
 | base span | responsibility | delivered unit |
 | --- | --- | --- |
-| `:79-86` | URL search → `urlScope`/`urlProjectId`/`urlRunId`/`identity`/`key`/`scopeComplete` | `chatScopeParams` (`use-chat-scope-state.ts`), called by `ChatPage` before the reads and again inside the hook |
+| `:79-86` | URL search → `urlScope`/`urlProjectId`/`urlRunId`/`identity`/`key`/`scopeComplete` | `chatScopeParams` (`use-chat-scope-state.ts`), called once by `ChatPage` per render; the hook receives the derived `params` |
 | `:91-104` | one `useChatScopeStore` binding, keyed `stateOf`, `latestStateOf` ref + layout effect | `useChatScopeState` (same call sites; the store's own `update`/`updateWith` are returned raw and called with the key, as at base) |
 | `:106-124` | conversation read, directory read, `runRows` | `ChatPage` + `servedRuns` (`chat-sections.tsx`) |
 | `:122-141` | conversation/directory run projection, adapter/pause, `runSignals` | `conversationRunOf`/`servedRunOf`/`runSignalsOf`/`chatRunFacts` (helpers in `chat.tsx`; the inline expressions are unchanged) |
@@ -112,10 +120,10 @@ outcome, not merely the same statement text.
 | A6 | `send` success writes `saved-question`/`saved-command`, clears `frozen`, clears the draft iff it is the sent content, then invalidates `["chat", sendIdentity]`; error writes `refused` (and clears `frozen`) or `unconfirmed` with `source` from `request.intent` | identical, same expressions | yes |
 | A7 | `buildRequest` returns the exact request object or writes a notice and returns null | `buildChatRequest` returns `{kind:"request"}` or `{kind:"notice"}`; `submit` writes the notice patch then returns (same three messages, same branch order) | yes |
 | B1 | owed layout effect (no deps): return when node null or owed null; set `scrollTop`; settle iff it stuck | identical | yes |
-| B2 | recorded layout effect: return when node null; set `scrollTop`; mark owed iff it did not stick; deps `[key, markScrollRestore, scrollOffsetOf]` | identical (same dep identities) | yes |
-| B3 | `router.subscribe("onRendered", …)`: return when node null; set the recorded offset; mark owed iff it did not stick; deps `[key, markScrollRestore, router, scrollOffsetOf]` | identical | yes |
-| B4 | pane `onScroll`: pinned-below → `markScrollRestore(max(recorded, owed ?? 0))` and return; else record the shown offset; settle iff owed existed and differs | identical order and expressions | yes |
-| B5 | `rememberLeavingScope`: return when node null; return when pinned below; record `node.scrollTop`; settle iff owed existed and differs | identical | yes |
+| B2 | recorded layout effect: return when node null; set `scrollTop`; mark owed iff it did not stick; deps `[key, markScrollRestore, scrollOffsetOf]` | one memoized re-assert callback, identity per `[key, markScrollRestore, scrollOffsetOf, scrollRef]`; the effect depends on the callback and re-runs on exactly base's trigger set (the ref identity is stable, and `react-hooks/exhaustive-deps` requires the ref where it is read) | yes |
+| B3 | `router.subscribe("onRendered", …)`: return when node null; set the recorded offset; mark owed iff it did not stick; deps `[key, markScrollRestore, router, scrollOffsetOf]` | identical body via the same callback; deps `[callback, router]` = base's trigger set plus the stable router identity | yes |
+| B4 | pane `onScroll`: pinned-below → `markScrollRestore(max(recorded, owed ?? 0))` and return; else record the shown offset; settle iff owed existed and differs | identical order and live reads, now `wantedOffset()` + `recordReaderPosition` (a render-scope constant would freeze the `scrollOffsets` ref between renders, so both reads stay inside the handlers) | yes |
+| B5 | `rememberLeavingScope`: return when node null; return when pinned below; record `node.scrollTop`; settle iff owed existed and differs | identical, same helpers | yes |
 | B6 | `panePinnedBelowOffset`: `scrollTop < wanted && range < wanted && scrollTop === max(0, range)` | identical | yes |
 | C1 | `loadOlder`: return when the cursor is null; press = `{key, cursor, nextBoundaryId}`; return when `pendingOlderLoadFor(olderLoads, press)`; admit; `fetchQuery(chatOlderPageOptions(api, identity, cursor))` | identical (the fetch uses `press.cursor`, the same value the closure captured) | yes |
 | C2 | success: `retainOlderPage(previous, cursor, press.boundaryId, page)` | `retainOlderPage(previous, press.cursor, press.boundaryId, page)` — same value | yes |
@@ -126,7 +134,11 @@ outcome, not merely the same statement text.
 | D3 | decision section rendered iff `urlScope === "run" && decision !== null` | `scope === "run" && <ChatDecisionSection>` with `decision === null` → `null` | yes |
 | D4 | evidence section rendered iff `evidence.length > 0` | `<ChatEvidenceList>` with empty rows → `null` | yes |
 
-No early return, dependency array, error short-circuit or default clause changed. The two
+No early return, error short-circuit or default clause changed. The scroll re-assert sits behind
+one memoized callback whose identity tracks base's dependency set (B2/B3); `scrollRef` is the
+only entry the callback carries beyond base's list — trimming it back to the base lists was
+attempted and `react-hooks/exhaustive-deps` rejects it (`useCallback has a missing dependency:
+'scrollRef'`, warn), and the ref identity is stable so the trigger set is unchanged. The two
 deliberate call-site changes are A5's value guards and D2's optional chain (both recorded above);
 everything else is a move.
 
@@ -135,6 +147,10 @@ everything else is a move.
 Method: the multiset of double-quoted string literals of base `chat.tsx` compared against the
 union of the five delivered source files (`grep -o '"[^"]*"' | sort | uniq -c`, diff). Every
 difference is one of:
+
+(Re-verified at the apply stage on the applied tree: the same difference set as the
+simplify-stage replication, and the five files' literal multiset equals their committed-HEAD
+multiset — the applied edits touch no double-quoted literal.)
 
 - import specifiers of the new modules (`./chat-sections`, `./use-chat-scope-state`,
   `./use-chat-scroll-restoration`, `./use-older-page-loading`) and the moved imports
@@ -165,14 +181,16 @@ bypass W4-11 recorded).
 | 2 | `pnpm --filter @symmetry/frontend lint` (`--max-warnings 229`) | exit 0, **223** warnings | exit 0, **218** warnings, 0 errors |
 | 3 | `… exec vitest run src/features/chat/chat.test.tsx` | 48 passed, exit 0 | 48 passed, exit 0 (unmodified file) |
 | 4 | `… exec vitest run src/features/chat/presentation.test.ts` | 39 passed, exit 0 | 39 passed, exit 0 (unmodified file) |
-| 5 | `… exec vitest run src/features/chat/chat-hooks.test.tsx` | — | 8 passed, exit 0 |
-| 6 | `pnpm --filter @symmetry/frontend test` | 21 files / 534 tests, exit 0 | 22 files / **542** tests, exit 0 |
+| 5 | `… exec vitest run src/features/chat/chat-hooks.test.tsx` | — | 9 passed, exit 0 |
+| 6 | `pnpm --filter @symmetry/frontend test` | 21 files / 534 tests, exit 0 | 22 files / **543** tests, exit 0 |
 | 7 | `git diff --check` | — | exit 0 |
 | 8 | DLP greps (profile-path token, backslash-u) over the changed/new files | — | no match (exit 1 from `grep`) |
+| 9 | `./node_modules/.bin/knip --no-progress` | — | exit 1, 2 unused exported types, both `app/portal-double.ts` (W4-11, out of range); the pre-apply in-range `buildChatRequest` hit is closed by §8's direct test |
 
 Suite-count reconciliation (contract clause 1): base 534 executed = 411 declaration sites + 7
-`.each` sites expanded; head 542 = base 534 + this slice's 8 new tests in the one new file (all
-`it()` sites, no `.each`). Lint per-rule counts (base → head): `no-unnecessary-condition`
+`.each` sites expanded; head 543 = base 534 + this slice's 9 new tests (8 at the implement stage
+plus the apply-stage `buildChatRequest` test) in the one new file (all `it()` sites, no `.each`).
+Lint per-rule counts (base → head, re-measured identical at apply): `no-unnecessary-condition`
 70 → 69, `restrict-template-expressions` 40 → 40, `no-invalid-void-type` 27 → 27,
 `max-lines-per-function` 16 → 15, `no-non-null-assertion` 14 → 14, `no-deprecated` 13 → 12,
 `complexity` 12 → 11, `prefer-nullish-coalescing` 7 → 7, `no-dynamic-delete` 6 → 6,
@@ -182,22 +200,25 @@ removed `ChatPage` `max-lines-per-function` + `complexity` pair, the removed `Fo
 deprecation and the two `no-empty-function` findings kept out of the new test file (its
 default callbacks are `vi.fn()`).
 
-## 7. Mutation flips (each applied alone, run, then reverted)
+## 7. Mutation flips (each applied alone, run, then reverted; all rows re-shown red at the
+apply stage on the applied tree)
 
 | mutant | flip | reddened test (measured) |
 | --- | --- | --- |
-| M1 press capture | retention reads a live "latest arguments" ref instead of the press's captured cursor/boundary | press-capture test: `fetchBefore` `"cursor-b"` instead of `"cursor-a"` |
+| M1 press capture | retention reads a live "latest arguments" ref instead of the press's captured cursor/boundary | press-capture test (`expected 'cursor-b' to be 'cursor-a'`) + same-cursor/different-boundary test |
 | M2 admission predicate | `pendingOlderLoadFor` compares cursor bytes only | press-capture test + same-cursor/different-boundary test: 2 failed |
-| M3 ownership predicate | `ownsChainPointer` compares cursor bytes only | refusal-ownership test red (no notice, no reset) |
-| M3b supersession guard | the committed refusal write drops the `!ownsChainPointer` early return | superseded-refusal test red (notice written, chain reset) |
-| M4 effect order | the owed and recorded layout effects swapped | ordering test red (final pane position) |
-| M5 settle condition | the owed effect settles when the pane did **not** accept the offset | owed-until-accepted test red (restore settled) |
-| M6 owed-mark | the `onRendered` re-assertion drops the owed-mark | re-assertion test red (owed stays 90 instead of 40) |
-| M7 composer patch | the target-project change stops clearing repository/CI | composer test red (patch without the cleared members) |
+| M3 ownership predicate | `ownsChainPointer` compares cursor bytes only | refusal-ownership test: 1 failed |
+| M3b supersession guard | the committed refusal write drops the `!ownsChainPointer` early return | superseded-refusal test: 1 failed |
+| M4 effect order | the owed and recorded layout effects swapped | ordering test (`expected 120 to be 40`) + clamp test (`expected 60 to be 40`): 2 failed |
+| M5 settle condition | the owed effect settles when the pane did **not** accept the offset | clamp test + ordering test + re-assertion test: 3 failed |
+| M6 owed-mark | the `onRendered` re-assertion drops the owed-mark | re-assertion test: 1 failed |
+| M7 composer patch | the target-project change stops clearing repository/CI | composer test: 1 failed |
+| M8a start_work guard | `buildChatRequest` drops the empty-target notice | builder test: `expected {kind:'request',…} to deeply equal {kind:'notice',…}` |
+| M8b run-control guard | `buildChatRequest` drops the `runItem` check | builder test: `TypeError: Cannot read properties of null (reading 'id')` |
 
-Each mutant was reverted immediately; `scopes.ts` was re-diffed after the M2/M3 round trips and
-carries only its two `export` keywords (§10), and the post-mutation runs of §6 are the delivered
-tree's rows.
+Each mutant was reverted immediately; after the apply-stage flip round the seven code files'
+sha256 equals their pre-flip set, `scopes.ts` carries only its two `export` keywords (§10), and
+the §6 rows were re-run after the flips on the reverted tree.
 
 ## 8. New tests (each names the mutant in its title)
 
@@ -222,6 +243,10 @@ tree's rows.
    dropped owed-mark)" — the `onRendered` listener marks the recorded offset owed.
 8. "emits the target-project change with the cleared resource selections in one patch (mutant:
    dropped cleared members)" — the composer section's emitted patch.
+9. "returns the two notice outcomes and a request carrying the scope members (mutant: dropped
+   guard)" — the direct `buildChatRequest` unit test: the empty-target `start_work` notice, the
+   run-scope control notice without a run item, and the project-scope request's members
+   (`scope`/`project_id`/`intent`/`content`).
 
 Harness: the older-page tests drive the real `useChatScopeStore` through `useOlderPageLoading`
 with a real `Application` (`createApplication`, tracked by `app/test-harness.tsx`'s
@@ -245,34 +270,40 @@ unconsumed at base (they stay in `scopes.ts`, which this slice does not otherwis
 
 Kept (one to two lines, why-only, beside the hazard): the settle-time-store note in
 `useChatScopeState`; the owe-until-accepted note and the pane-pinning note in
-`useChatScrollRestoration`; the "reader taking over" line (twice); the router re-assertion note;
+`useChatScrollRestoration`; the "reader taking over" line (once, inside `recordReaderPosition`);
+the router re-assertion note;
 the incomplete-scope guard note in `submit`; the same-snapshot identity note in `sendDecision`;
 the durable-message invalidation note in `send`; the scope-round-trip note in `changeScope`.
 
+Apply stage: the router and pane blocks were compressed to two lines each and the two test step
+labels (the implement revision's `chat-hooks.test.tsx` `:78`/`:137`) were deleted per policy 4.
+
 ## 10. Boundary checks
 
-- **Frozen files**: `git status --porcelain` lists `chat.tsx` and `scopes.ts` as the only modified
-  tracked files; `chat.test.tsx`, `presentation.test.ts`, `presentation.ts`, `router.tsx`,
-  `app/*` and `vitest.config.ts` are untouched (the oracle run in §6 proves the same 48/39 cases
-  by name and count).
+- **Frozen files**: the slice's edits sit in `chat.tsx` and the four new siblings; the apply-stage
+  diff is exactly `chat.tsx`, `use-chat-scope-state.ts`, `use-chat-scroll-restoration.ts`,
+  `chat-sections.tsx`, `chat-hooks.test.tsx`, this record and the plan (the implement revision of
+  `use-older-page-loading.ts` and `scopes.ts` carries through unchanged); `chat.test.tsx`,
+  `presentation.test.ts`, `presentation.ts`, `router.tsx`, `app/*` and `vitest.config.ts` are
+  untouched (the oracle run in §6 proves the same 48/39 cases by name and count).
 - **`scopes.ts`**: the only change is `export` on two existing interfaces
   (`ChatScopeState`, `ChatScopeStore`), which the hooks must name for their params; it is
   type-only (no runtime surface, nothing to mutation-check) and the file's line count is
   unchanged. Both predicates the held tests mutate are byte-identical to base.
 - **`presentation.ts`**: unchanged; the sections declare their own view types instead
-  (`ChatDecisionView`, `ChatEvidenceView`, `ChatHistoryView`), so `presentation.ts` keeps its
-  internal interfaces.
+  (`ChatDecisionView`, `ChatEvidenceView`, `ChatTranscriptHistory`), so `presentation.ts` keeps
+  its internal interfaces (its own `ChatHistoryView` stays module-internal).
 - **Harness**: no harness file changed and no fifth fetch double was added.
 - **Identities** (sha256 of the delivered code files, final tree):
 
 | file | sha256 |
 | --- | --- |
-| `frontend/src/features/chat/chat.tsx` | `5ea497a892b6c3ca810b37996f3514d8cb703d1f2c092bf8f6814917bafa01fb` |
-| `frontend/src/features/chat/chat-sections.tsx` | `1cd2ce729d4ce46c27324bb49faf3b29d9387c971b088a439e7e371784ab27a0` |
-| `frontend/src/features/chat/use-chat-scope-state.ts` | `882f4c95aca21831d1ac75f0c06bf16b5766c4922a5e6c3774895612e782f813` |
-| `frontend/src/features/chat/use-chat-scroll-restoration.ts` | `637125cd30a429f657087bf601f6d58d063f15073795faa1a24291730339a602` |
+| `frontend/src/features/chat/chat.tsx` | `53750bbf80d84489b56dd3820d6ff6776babe5002a69c3ed65101924af764272` |
+| `frontend/src/features/chat/chat-sections.tsx` | `88032b50d05017f2976509c069b57fb5cf7152f0406dcda76849e5ad2ef07642` |
+| `frontend/src/features/chat/use-chat-scope-state.ts` | `f9b76206488b5fd77ba4ac5c9ff6bab243698ed335ab83bf0b2c03fc62b258e0` |
+| `frontend/src/features/chat/use-chat-scroll-restoration.ts` | `ae29170156ec8df04a694212b4132f995a6062db8dfed909688b6ccfa5cc30f2` |
 | `frontend/src/features/chat/use-older-page-loading.ts` | `a3b36832e6faa649f3bad69d83c15ee32464a067c0b1fbdc68fb49179ddaf333` |
-| `frontend/src/features/chat/chat-hooks.test.tsx` | `d87b91ef2a06c8e03978c86a1c9750f660d8883937649f222f03326b4631bb1e` |
+| `frontend/src/features/chat/chat-hooks.test.tsx` | `79c5575044fd83ebde2886482cc2e7267f2d22bc89bd6fc4f4c9bd3f8fbcb8cf` |
 | `frontend/src/features/chat/scopes.ts` | `fb01f7906dd039727ee1c8d03a027c3e3f8619ddbdeeb0575c25e564f93001d7` |
 
   (`scopes.ts`'s hash covers the base file plus the two `export` keywords; the frozen oracle
@@ -292,3 +323,8 @@ the durable-message invalidation note in `send`; the scope-round-trip note in `c
   contract's clause 1 caps are the binding measurements.
 - `fetchQuery` still carries the repo's existing deprecation warning (TanStack v5); the quantity
   moved with the code and the count did not grow.
+- The scroll re-assert callback carries `scrollRef` in its dependency list because
+  `react-hooks/exhaustive-deps` requires the ref wherever it is read (`useCallback has a missing
+  dependency: 'scrollRef'`, warn); trimming it back to base's literal lists would either add a
+  new lint finding or a suppression the contract forbids. The ref identity is stable, so the
+  effect trigger set equals the base effect's (B2/B3).
