@@ -3,6 +3,7 @@ defmodule SymmetryControl.Goals.ContractFixtureManifestTest do
 
   alias SymmetryControl.ContractSchema
   alias SymmetryControl.Goals.ContractValidation
+  alias SymmetryControlWeb.StrictJSONDecoder
 
   @manifest_path Path.expand("../../../../contracts/fixtures/manifest.json", __DIR__)
   @schema_root Path.expand("../../../../contracts/v1", __DIR__)
@@ -16,6 +17,9 @@ defmodule SymmetryControl.Goals.ContractFixtureManifestTest do
     "work-detail-read",
     "work-timeline-read"
   ]
+  # Raw-corpus acceptance is measured on the decode each row's schema selects:
+  # the strict duplicate-member walk for machine requests, Jason otherwise.
+  @machine_request_schemas ["evidence", "evidence-batch"]
 
   @validators %{
     "adapter-capabilities" => &ContractValidation.validate_adapter_capabilities/2,
@@ -63,27 +67,59 @@ defmodule SymmetryControl.Goals.ContractFixtureManifestTest do
       end)
 
     Enum.each(fixtures, fn fixture ->
-      expected = Map.get(fixture, "semantic_valid", Map.fetch!(fixture, "valid"))
       path = Path.join(@fixture_root, fixture["path"])
 
-      case Jason.decode(File.read!(path)) do
-        {:ok, data} ->
-          result = validate_fixture(fixture["schema"], data, read_schemas)
-          actual = result == :ok
+      if fixture["wire_error"] do
+        assert_raw_wire_read(fixture, read_schemas)
+      else
+        expected = Map.get(fixture, "semantic_valid", Map.fetch!(fixture, "valid"))
 
-          assert actual == expected,
-                 "#{fixture["id"]} expected semantic_valid=#{expected}, got #{inspect(result)}"
+        case Jason.decode(File.read!(path)) do
+          {:ok, data} ->
+            result = validate_fixture(fixture["schema"], data, read_schemas)
+            actual = result == :ok
 
-          assert_expected_semantic_error(fixture, result)
+            assert actual == expected,
+                   "#{fixture["id"]} expected semantic_valid=#{expected}, got #{inspect(result)}"
 
-        {:error, error} ->
-          assert fixture["id"] == "goal-command.unpaired-surrogate",
-                 "unexpected fixture decode failure for #{fixture["id"]}: #{inspect(error)}"
+            assert_expected_semantic_error(fixture, result)
 
-          assert fixture["schema_valid"] == true
-          refute expected
+          {:error, error} ->
+            assert fixture["id"] == "goal-command.unpaired-surrogate",
+                   "unexpected fixture decode failure for #{fixture["id"]}: #{inspect(error)}"
+
+            assert fixture["schema_valid"] == true
+            refute expected
+        end
       end
     end)
+  end
+
+  defp assert_raw_wire_read(fixture, read_schemas) do
+    body = @fixture_root |> Path.join(fixture["path"]) |> File.read!()
+    accepts = get_in(fixture, ["runtime_divergence", "elixir"]) == "accepts"
+
+    actual =
+      case raw_wire_decode(fixture["schema"], body) do
+        {:ok, data} -> validate_fixture(fixture["schema"], data, read_schemas) == :ok
+        :error -> false
+      end
+
+    assert actual == accepts,
+           "#{fixture["id"]} expected elixir wire acceptance=#{accepts}, got #{actual}"
+  end
+
+  defp raw_wire_decode(schema, body) when schema in @machine_request_schemas do
+    {:ok, StrictJSONDecoder.decode!(body)}
+  rescue
+    _error in [Jason.DecodeError, StrictJSONDecoder.DuplicateJSONKeyError] -> :error
+  end
+
+  defp raw_wire_decode(_schema, body) do
+    case Jason.decode(body) do
+      {:ok, value} -> {:ok, value}
+      {:error, _error} -> :error
+    end
   end
 
   defp validate_fixture(schema, data, read_schemas) when schema in @presentation_reads do
