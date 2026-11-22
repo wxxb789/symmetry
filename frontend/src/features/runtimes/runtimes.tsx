@@ -5,8 +5,9 @@
  */
 
 import { useQuery } from "@tanstack/react-query";
-import { getRouteApi, useRouteContext } from "@tanstack/react-router";
+import { useRouteContext } from "@tanstack/react-router";
 import { runtimesOptions } from "../../app/application";
+import { useSelectedProject } from "../../app/selected-project";
 import { StatusBadge } from "../../components/primitives";
 import { EmptyState, ErrorState, LoadingState, PageHeading, RefreshButton } from "../../components/workspace";
 import type { Runtime } from "../../services/api";
@@ -66,8 +67,6 @@ function RuntimeCard({ runtime }: { runtime: Runtime }) {
   </article>;
 }
 
-const route = getRouteApi("/runtimes");
-
 export function RuntimesPage() {
   const { application } = useRouteContext({ from: "__root__" });
   // The project scope selects which runtimes are compatible with this
@@ -76,12 +75,12 @@ export function RuntimesPage() {
   // A registered runtime that no project binds is therefore not listed here,
   // and the empty state cites the served registered count instead of claiming
   // the deployment's registry is empty.
-  const { projectId } = route.useSearch();
-  const query = useQuery({ ...runtimesOptions(application.api, projectId ?? null) });
+  const selectedProjectId = useSelectedProject();
+  const query = useQuery({ ...runtimesOptions(application.api, selectedProjectId ?? null) });
   const refresh = () => { if (!query.isFetching) void query.refetch(); };
   const runtimes = query.data?.runtimes ?? [];
   const empty = runtimesEmptyState({
-    scoped: projectId !== undefined,
+    scoped: selectedProjectId !== undefined,
     selectedProjectId: query.data?.selected_project_id ?? null,
     registeredCount: query.data?.registered_runtimes?.length ?? 0,
   });
