@@ -546,6 +546,16 @@ func checkHostPrerequisites(result *report) string {
 	}
 	result.usernsEnabled = true
 
+	// Ubuntu's userns restriction transitions an unconfined creator into the capability-denying
+	// unprivileged_userns profile; the exact probe binary must carry the per-program userns exception.
+	if restriction, err := os.ReadFile("/proc/sys/kernel/apparmor_restrict_unprivileged_userns"); err == nil &&
+		strings.TrimSpace(string(restriction)) == "1" {
+		if err := usernsExceptionAttached(); err != nil {
+			result.failureDetail = err.Error()
+			return "apparmor-unprivileged-userns-restricted"
+		}
+	}
+
 	capEff, err := statusValue(os.Getpid(), "CapEff")
 	if err != nil {
 		result.failureDetail = err.Error()
@@ -585,6 +595,21 @@ func checkHostPrerequisites(result *report) string {
 	}
 	result.usernsCreated = true
 	return ""
+}
+
+func usernsExceptionAttached() error {
+	for _, label := range []string{"/proc/self/attr/current", "/proc/self/attr/apparmor/current"} {
+		contents, err := os.ReadFile(label)
+		if err != nil {
+			continue
+		}
+		value := strings.TrimSpace(string(contents))
+		if value == "" || value == "unconfined" {
+			return fmt.Errorf("AppArmor userns restriction is active and the process label is %q; attach a per-program userns exception to the probe binary", value)
+		}
+		return nil
+	}
+	return fmt.Errorf("AppArmor userns restriction is active but no AppArmor process label was readable")
 }
 
 func exactIDMap(pid int, name string, expectedID int) error {
@@ -964,6 +989,12 @@ func namespaceWorker(leafDirectory string, parentUserNS string, input *bufio.Rea
 	}
 	if currentUserNS == parentUserNS {
 		return peerFailure("worker-userns-not-child", fmt.Errorf("worker remained in A's parent user namespace"))
+	}
+
+	// The B-only uid map leaves in-namespace 0 unmapped, so B's setuid(1) is no root transition and
+	// cap_emulate_setxuid would not clear the worker's ambient capabilities before B's exec (capabilities(7)).
+	if err := unix.Prctl(unix.PR_CAP_AMBIENT, unix.PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0); err != nil {
+		return peerFailure("worker-ambient-caps-clear", err)
 	}
 
 	peer := exec.Command("/proc/self/exe", "--socket-peer", leafDirectory)
@@ -1398,6 +1429,8 @@ func runCrossUIDProbe(result *report, leafFD *os.File, leafDirectory string) (fa
 		!strings.Contains(string(proof), "pidfd_getfd=passed") {
 		return "cross-uid-namespace-pidfd-proof", strings.TrimSpace(string(proof))
 	}
+	// The worker's proof travels A's private pipe; re-echo the validated line so the unit log carries it.
+	fmt.Println(strings.TrimSpace(string(proof)))
 	return "", ""
 }
 

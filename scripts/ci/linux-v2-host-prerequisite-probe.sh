@@ -21,6 +21,9 @@ cleanup_failed=0
 unit_cleanup_proven=0
 peer_unit_cleanup_proven=0
 cross_uid_capability=not-proven
+apparmor_exception=not_needed
+apparmor_profile=
+apparmor_parser=
 systemd_pid1=0
 unified_cgroup_v2=0
 failure_stage=not_started
@@ -58,7 +61,8 @@ write_evidence() {
   local status=$1
   python3 - "$output" "$GITHUB_SHA" "$(uname -m)" "$failure_stage" \
     "$systemd_pid1" "$unified_cgroup_v2" "$probe_passed" "$unit_cleanup_proven" \
-    "$peer_probe_passed" "$peer_unit_cleanup_proven" "$cross_uid_capability" "$status" <<'PY'
+    "$peer_probe_passed" "$peer_unit_cleanup_proven" "$cross_uid_capability" \
+    "$apparmor_exception" "$status" <<'PY'
 import json
 import os
 import sys
@@ -67,7 +71,7 @@ import tempfile
 (
     path, commit, architecture, failure_stage, systemd_pid1, cgroup_v2,
     probe_passed, unit_cleanup_proven, peer_probe_passed, peer_unit_cleanup_proven,
-    cross_uid_capability, exit_status,
+    cross_uid_capability, apparmor_exception, exit_status,
 ) = sys.argv[1:]
 evidence = {
     "version": 1,
@@ -82,6 +86,7 @@ evidence = {
     "transient_unit_stop_proven": unit_cleanup_proven == "1",
     "cross_uid_peer_probe_passed": peer_probe_passed == "1",
     "cross_uid_capability": cross_uid_capability,
+    "apparmor_userns_exception": apparmor_exception,
     "host_a_pidfd_getfd": "passed" if peer_probe_passed == "1" else "not-proven",
     "peer_transient_unit_stop_proven": peer_unit_cleanup_proven == "1",
     "status": "passed" if exit_status == "0" else "failed",
@@ -149,6 +154,12 @@ cleanup() {
       printf 'Credential-free prerequisite unit stop could not be proven; unit=%s\n' "$target_unit" >&2
     fi
   done
+  if [[ -n "$apparmor_profile" ]]; then
+    if ! sudo -n "$apparmor_parser" -R "$apparmor_profile" >/dev/null 2>&1; then
+      printf 'AppArmor userns exception unload failed; profile=%s\n' "$apparmor_profile" >&2
+    fi
+    rm -f -- "$apparmor_profile"
+  fi
   if (( cleanup_failed )) && (( status == 0 )); then
     status=1
   fi
@@ -255,6 +266,30 @@ install -m 0600 "$GITHUB_WORKSPACE/scripts/ci/linux-v2-host-peer-probe.go" "$pee
       go build -trimpath -o "$peer_binary" "$peer_source"
 )
 chmod 0555 "$peer_binary"
+
+restriction=0
+if [[ -r /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+  read -r restriction < /proc/sys/kernel/apparmor_restrict_unprivileged_userns
+fi
+if [[ "$restriction" == 1 ]]; then
+  failure_stage=apparmor_userns_exception
+  apparmor_parser=$(command -v apparmor_parser) || {
+    printf 'AppArmor unprivileged user-namespace restriction is active but apparmor_parser is unavailable.\n' >&2
+    exit 1
+  }
+  apparmor_profile="$RUNNER_TEMP/symmetry-ci-v2-host-probe-userns-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.profile"
+  cat > "$apparmor_profile" <<EOF
+abi <abi/4.0>,
+include <tunables/global>
+profile symmetry-ci-v2-host-probe-userns-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT} "$peer_binary" flags=(unconfined) {
+  userns,
+}
+EOF
+  # This per-program userns exception is not a sandbox and never touches the global restriction.
+  sudo -n "$apparmor_parser" --replace "$apparmor_profile"
+  apparmor_exception=per_program
+fi
+printf 'apparmor_userns_exception=%s\n' "$apparmor_exception"
 
 failure_stage=cross_uid_userns_fdinfo_pidfd_getfd
 peer_unit_attempted=1
