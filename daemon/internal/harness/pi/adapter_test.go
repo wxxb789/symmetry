@@ -314,6 +314,35 @@ func TestOpenRejectsKnownCompletedProcessBeforeRegisteringRequest(t *testing.T) 
 	}
 }
 
+func TestOpenRefusesAConcurrentOpenWithTheFrozenText(t *testing.T) {
+	process := newFakeNativeProcess()
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	process.onWrite = func(request Request) {
+		if request.Type != CommandGetState {
+			return
+		}
+		close(entered)
+		<-release
+		process.emitJSON(t, map[string]any{"type": "response", "id": request.ID, "command": "get_state", "success": true, "data": map[string]any{"sessionId": "pi-1", "sessionFile": "C:/sessions/pi-1.jsonl"}})
+	}
+	session := startPiSession(t, fakePiAdapter(process), harness.StartRequest{Workspace: t.TempDir()}, &recordingHarnessSink{})
+	t.Cleanup(func() { closePiSession(t, session) })
+	opened := make(chan error, 1)
+	go func() {
+		_, err := session.Open(context.Background())
+		opened <- err
+	}()
+	<-entered
+	if _, err := session.Open(context.Background()); err == nil || err.Error() != "pi native session is already opening" {
+		t.Fatalf("concurrent Open() error = %v, want the frozen already-opening text", err)
+	}
+	close(release)
+	if err := <-opened; err != nil {
+		t.Fatalf("first Open() error = %v", err)
+	}
+}
+
 func TestStartTurnReturnsPromptlyWhenCleanProcessExitLeavesPromptUnacknowledged(t *testing.T) {
 	process := newFakeNativeProcess()
 	process.onWrite = func(request Request) {
@@ -1402,4 +1431,13 @@ func (runner fakeCommandRunner) Run(_ context.Context, _ string, args ...string)
 		return nil, runner.err
 	}
 	return runner.outputs[strings.Join(args, " ")], nil
+}
+
+func TestStartTurnBeforeOpenRefusesWithThePiNotOpenedText(t *testing.T) {
+	process := newFakeNativeProcess()
+	session := startPiSession(t, fakePiAdapter(process), harness.StartRequest{Workspace: t.TempDir()}, &recordingHarnessSink{})
+	t.Cleanup(func() { closePiSession(t, session) })
+	if err := session.StartTurn(context.Background(), harness.TurnRequest{Goal: "before open", Context: json.RawMessage(`{"snapshot":"canonical"}`)}); err == nil || err.Error() != "pi native session has not opened" {
+		t.Fatalf("StartTurn before Open = %v, want the pi not-opened text", err)
+	}
 }
