@@ -1504,15 +1504,15 @@ is fixed here; each bullet names what a follow-up has to re-derive.
 
 - [ ] Consolidate the duplicated Task/Run state sets behind one compile-time owner. After
       `refactor/rf-w4-07-goals-facade-phase1` (PR #233) the same literals are re-declared per
-      module: `@nonterminal_task_states` in `SymmetryControl.Goals` (`goals.ex`),
-      `SymmetryControl.Goals.RunFence`, `SymmetryControl.Goals.Internal` and
-      `SymmetryControl.Goals.ReadModel`; `@terminal_run_states` in `SymmetryControl.Goals` and
-      `SymmetryControl.Goals.HarnessSessions`; `@accounting_terminal_run_states` in those two plus
-      `SymmetryControl.Goals.ReadModel`, which derives it from that module's own
-      `@terminal_task_states`. The split mandated per-module copies ("module attributes travel
-      with their users") because the values feed compile-time query literals, so the SQL text
-      stays frozen; the drift risk is real: a state added to one copy only silently splits
-      transition policy from the read model. Next step (W5-14, the following goals.ex phase): a
-      `@moduledoc false` owner module exposing the sets as functions the others read at compile
-      time (`@x Owner.state_set()`), keeping every SQL literal byte-identical, plus one pinning
-      test that fails on divergence.
+      module. `refactor/rf-w5-14-goals-concepts-phase2` (2026-11-22) moved the copies into the
+      concept modules that use them and left the duplication in place, so the current homes are:
+      `@nonterminal_task_states` in `Goals.Admission`, `Goals.Budget`, `Goals.ContextAssembly`,
+      `Goals.Decisions`, `Goals.Internal` and `Goals.ReadModel`; `@terminal_run_states` and
+      `@accounting_terminal_run_states` in `Goals.Budget`, `Goals.HarnessSessions` and
+      `Goals.ReadModel` (the last deriving them from its own `@terminal_task_states`). The split
+      mandated per-module copies ("module attributes travel with their users") because the values
+      feed compile-time query literals, so the SQL text stays frozen; the drift risk is real: a
+      state added to one copy only silently splits transition policy from the read model.
+      Consolidation remains undone and is the next owner's item: a `@moduledoc false` owner module
+      exposing the sets as functions the others read at compile time (`@x Owner.state_set()`),
+      keeping every SQL literal byte-identical, plus one pinning test that fails on divergence.
