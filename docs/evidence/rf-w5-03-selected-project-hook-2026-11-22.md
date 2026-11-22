@@ -200,7 +200,7 @@ pnpm 12.17.0 with `--config.verify-deps-before-run=false` (without it pnpm runs 
 dependency verification that stalls ~6 minutes on this host and failed its registry fetch on
 `@oxc-parser/binding-win32-ia32-msvc`; the script itself, `tsc --noEmit` / `eslint .`, is the gate).
 Every HEAD row above was re-run on the settled final tree; the raw outputs (and the capture
-artifacts of §6) are kept outside the repo in the throwaway dir `Q:/tmp/w5-03-capture/` as
+artifacts of §6) are kept outside the repo in the throwaway dir `<scratch>/w5-03-capture/` as
 `verify-typecheck.txt`, `verify-lint.txt`, `verify-router.txt`, `verify-scope.txt`,
 `verify-pages.txt`, `verify-full.txt`, `verify-hook-post-revert.txt` and the settled capture JSONs.
 
