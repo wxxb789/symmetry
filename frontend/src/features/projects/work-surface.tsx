@@ -220,7 +220,7 @@ function WorkBoard({ items, search, resources, projectStatus }: { items: readonl
   const [moveFailure, setMoveFailure] = useState<string | null>(null);
   const columns = boardColumns(items);
   const move = useMutation({
-    mutationFn: (request: { itemId: string; intent: MoveIntent; announcement: string }) => application.api.moveWorkItem(request.itemId, request.intent, csrf, new AbortController().signal),
+    mutationFn: (request: { itemId: string; intent: MoveIntent; announcement: string }) => application.api.moveWorkItem(request.itemId, request.intent, csrf),
     // The move is applied by the server; the board re-reads it and announces the
     // confirmed position. Focus follows the work item id through the regroup.
     onSuccess: async (_receipt, request) => {

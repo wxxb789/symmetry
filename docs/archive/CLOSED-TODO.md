@@ -83,6 +83,10 @@ The accepted colon-owner-keys item appended to the `## Retro review follow-ups (
 The closed `stopDescendantMonitor` post-timer recheck appended to the `## Retro review follow-ups`
 section below was moved on 2026-11-21 from branch `fix/stop-descendant-recheck`.
 
+The declined goal-write cancellation signal appended to the `## Comment-policy sweep: debt the
+deleted comments recorded (2026-11-22)` section at the end of this file was moved on 2026-11-22
+from branch `refactor/rf-w4-09-api-reads-writes-split`.
+
 The two closed chat-history-chain items appended to `## Paginated reads must be bound to the cursor
 that served their pages` below were moved on 2026-11-21 from branch `fix/chat-history-chain`.
 
@@ -4526,3 +4530,19 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
       scripts/ci/test-check-lockfile-registry.py` → exit 1, `FAILED (failures=1)` on
       `SYMMETRY_REQUIRE_PYYAML=1 requires the PyYAML differential oracle, and it is not importable`.
       The pinned download itself runs only on the CI runner, recorded as such.
+
+## Comment-policy sweep: debt the deleted comments recorded (2026-11-22)
+
+- [ ] `frontend/src/services/api.ts`: Goal command/creation writes have no caller-cancellation
+      signal — the W4-09 reads/writes split owns adding one; `run()` accepts an optional `signal`
+      the write path never supplies.
+
+      **Closed (2026-11-22, branch `refactor/rf-w4-09-api-reads-writes-split`, plan
+      `docs/plans/2026-11-22-rf-w4-09-api-reads-writes-split-plan.md`):** declined, not added, by
+      the slice's binding conductor decision option (a). A write keeps no signal: a hidden write
+      deadline would be new production behaviour with no accepted requirement, and D1 freezes the
+      wire bytes, so the split states the decision in the type surface instead — `Writes` has no
+      signal parameter, and a caller cannot believe a command write is cancellable. The Goal
+      command/creation path's source (`postGoalCommand`/`postGoalCreation` through `goalCommand`)
+      is unchanged; like every write, its fetch init no longer carries the runtime's
+      never-aborted step signal, and `run()`'s optional `signal` remains for the read half only.
