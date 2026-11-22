@@ -26,16 +26,28 @@ unified_cgroup_v2=0
 failure_stage=not_started
 unit_log="$RUNNER_TEMP/linux-v2-host-prerequisite-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.log"
 peer_log="$RUNNER_TEMP/linux-v2-host-peer-prerequisite-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.log"
+unit_cgroup=
+peer_unit_cgroup=
+
+# systemd reports an empty ControlGroup after unit exit; the payload records its live cgroup path.
+recorded_unit_cgroup() {
+  sed -n 's/^cgroup_path=//p' "$1" | tail -n1
+}
 
 unit_stopped_proven() {
-  local unit_name=$1
-  local active_state main_pid cgroup cgroup_dir
+  local unit_name=$1 recorded_cgroup=$2
+  local load_state active_state main_pid recorded_directory cgroup_dir
+  load_state=$(sudo systemctl show --property=LoadState --value "$unit_name" 2>/dev/null) || return 1
   active_state=$(sudo systemctl show --property=ActiveState --value "$unit_name" 2>/dev/null) || return 1
   main_pid=$(sudo systemctl show --property=MainPID --value "$unit_name" 2>/dev/null) || return 1
-  cgroup=$(sudo systemctl show --property=ControlGroup --value "$unit_name" 2>/dev/null) || return 1
-  [[ "$active_state" == inactive || "$active_state" == failed ]] || return 1
-  [[ "$main_pid" == 0 && "$cgroup" == /* && "$cgroup" != / ]] || return 1
-  cgroup_dir="/sys/fs/cgroup$cgroup"
+  if [[ "$load_state" != not-found ]]; then
+    [[ "$active_state" == inactive || "$active_state" == failed ]] || return 1
+  fi
+  [[ "$main_pid" == 0 ]] || return 1
+  recorded_directory=${recorded_cgroup%/*}
+  [[ "$recorded_cgroup" == /* && "$recorded_cgroup" != *..* && "${recorded_cgroup##*/}" == "$unit_name" ]] || return 1
+  [[ "$recorded_directory" == /* && "${recorded_directory##*/}" == *.slice ]] || return 1
+  cgroup_dir="/sys/fs/cgroup$recorded_cgroup"
   if [[ -d "$cgroup_dir" ]]; then
     sudo grep --fixed-strings --line-regexp --quiet 'populated 0' "$cgroup_dir/cgroup.events" || return 1
   fi
@@ -99,27 +111,32 @@ cleanup() {
   local status=$?
   trap - EXIT INT TERM
   set +e
-  local target_unit
+  local target_unit target_cgroup
   for target_unit in "$unit" "$peer_unit"; do
+    if [[ "$target_unit" == "$unit" ]]; then
+      target_cgroup=$unit_cgroup
+    else
+      target_cgroup=$peer_unit_cgroup
+    fi
     if [[ "$target_unit" == "$unit" && $unit_attempted -eq 0 ]] ||
        [[ "$target_unit" == "$peer_unit" && $peer_unit_attempted -eq 0 ]]; then
       continue
     fi
-    if ! unit_stopped_proven "$target_unit"; then
+    if ! unit_stopped_proven "$target_unit" "$target_cgroup"; then
       sudo systemctl --no-block stop "$target_unit" >/dev/null 2>&1
       for _ in {1..30}; do
-        unit_stopped_proven "$target_unit" && break
+        unit_stopped_proven "$target_unit" "$target_cgroup" && break
         sleep 1
       done
-      if ! unit_stopped_proven "$target_unit"; then
+      if ! unit_stopped_proven "$target_unit" "$target_cgroup"; then
         sudo systemctl kill --signal=SIGKILL --kill-whom=all "$target_unit" >/dev/null 2>&1
         for _ in {1..30}; do
-          unit_stopped_proven "$target_unit" && break
+          unit_stopped_proven "$target_unit" "$target_cgroup" && break
           sleep 1
         done
       fi
     fi
-    if unit_stopped_proven "$target_unit"; then
+    if unit_stopped_proven "$target_unit" "$target_cgroup"; then
       if [[ "$target_unit" == "$unit" ]]; then
         unit_cleanup_proven=1
       else
@@ -145,7 +162,9 @@ failure_stage=host_systemd_cgroup_v2_precondition
 [[ "$(uname -m)" == x86_64 ]] || exit 1
 [[ "$(ps -p 1 -o comm= | tr -d '[:space:]')" == systemd ]] || exit 1
 systemd_pid1=1
-[[ -d /run/systemd/system && -f /sys/fs/cgroup/cgroup.controllers && -f /sys/fs/cgroup/cgroup.events ]] || exit 1
+# The root cgroup may lack cgroup.events (cgroup-v2.rst); cgroup2fs mount type plus cgroup.controllers prove unification.
+[[ -d /run/systemd/system && -f /sys/fs/cgroup/cgroup.controllers ]] || exit 1
+[[ "$(stat -fc %T /sys/fs/cgroup)" == cgroup2fs ]] || exit 1
 unified_cgroup_v2=1
 command -v systemd-run >/dev/null || exit 1
 command -v systemctl >/dev/null || exit 1
@@ -168,6 +187,8 @@ def require(condition, stage):
 require(os.geteuid() == 65534 and os.getegid() == 65534, "fixed unprivileged service identity")
 entries = [line.rstrip("\n").split(":", 2)[2] for line in open("/proc/self/cgroup", encoding="ascii") if line.startswith("0::")]
 require(len(entries) == 1, "unified cgroup-v2 membership")
+# Recorded while the unit runs; systemd reports an empty ControlGroup after exit.
+print("cgroup_path=" + entries[0], flush=True)
 parent = pathlib.Path("/sys/fs/cgroup") / entries[0].lstrip("/")
 require(parent.is_dir() and os.access(parent / "cgroup.procs", os.W_OK), "delegated parent cgroup access")
 require((parent / "cgroup.kill").is_file(), "cgroup.kill availability")
@@ -211,7 +232,8 @@ if timeout 90s sudo systemd-run --system --quiet --wait --pipe --unit="$unit" \
   --property=Delegate=yes --property=KillMode=mixed --property=TimeoutStopSec=30s \
   --uid=65534 --gid=65534 --setenv=PATH=/usr/bin:/bin \
   -- /usr/bin/python3 -c "$probe_code" >"$unit_log" 2>&1; then
-  if unit_stopped_proven "$unit"; then
+  unit_cgroup=$(recorded_unit_cgroup "$unit_log") || unit_cgroup=
+  if unit_stopped_proven "$unit" "$unit_cgroup"; then
     probe_passed=1
     unit_cleanup_proven=1
   else
@@ -219,6 +241,7 @@ if timeout 90s sudo systemd-run --system --quiet --wait --pipe --unit="$unit" \
     exit 1
   fi
 else
+  unit_cgroup=$(recorded_unit_cgroup "$unit_log") || unit_cgroup=
   failure_stage=unprivileged_delegated_leaf_and_cgroup_kill
   exit 1
 fi
@@ -241,7 +264,8 @@ if timeout --signal=TERM --kill-after=5s 120s sudo -n systemd-run \
   --property=RuntimeMaxSec=90s --property="User=$(id -un)" \
   --property="WorkingDirectory=$GITHUB_WORKSPACE/daemon" --setenv=PATH=/usr/bin:/bin \
   "$peer_binary" >"$peer_log" 2>&1; then
-  if ! unit_stopped_proven "$peer_unit"; then
+  peer_unit_cgroup=$(recorded_unit_cgroup "$peer_log") || peer_unit_cgroup=
+  if ! unit_stopped_proven "$peer_unit" "$peer_unit_cgroup"; then
     cat "$peer_log" >&2 || true
     failure_stage=peer_probe_unit_cleanup
     exit 1
@@ -249,6 +273,7 @@ if timeout --signal=TERM --kill-after=5s 120s sudo -n systemd-run \
   peer_unit_cleanup_proven=1
 else
   cat "$peer_log" >&2 || true
+  peer_unit_cgroup=$(recorded_unit_cgroup "$peer_log") || peer_unit_cgroup=
   failure_stage=cross_uid_userns_fdinfo_pidfd_getfd
   exit 1
 fi
