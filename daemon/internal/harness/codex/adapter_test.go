@@ -661,6 +661,40 @@ func TestOpenUsesOnlyExplicitNativeModelAndChecksReturnedIdentity(t *testing.T) 
 	}
 }
 
+func TestOpenRefusesAConcurrentOpenWithTheFrozenText(t *testing.T) {
+	process := newFakeNativeProcess()
+	session := startNativeSession(t, fakeAdapter(process), &recordingHarnessSink{})
+	opened := make(chan error, 1)
+	go func() {
+		_, err := session.Open(context.Background())
+		opened <- err
+	}()
+	initialize := process.nextRequest(t)
+	if initialize.Method != appServerMethodInitialize {
+		t.Fatalf("first request = %+v, want initialize", initialize)
+	}
+	if _, err := session.Open(context.Background()); err == nil || err.Error() != "codex native session is already opening" {
+		t.Fatalf("concurrent Open() error = %v, want the frozen already-opening text", err)
+	}
+	process.emitJSON(t, map[string]any{"jsonrpc": "2.0", "method": "remoteControl/status/changed", "params": map[string]any{"status": "idle"}})
+	process.reply(t, initialize.ID, map[string]any{"userAgent": "codex-test", "codexHome": "C:/redacted", "platformFamily": "windows", "platformOs": "windows"})
+	_ = process.nextNotification(t)
+	thread := process.nextRequest(t)
+	process.reply(t, thread.ID, map[string]any{
+		"approvalPolicy":    nativeApprovalOnRequest,
+		"approvalsReviewer": "user",
+		"cwd":               thread.Params.CWD,
+		"model":             "gpt-6-astra",
+		"modelProvider":     "openai",
+		"sandbox":           map[string]any{"type": "workspaceWrite", "networkAccess": false, "writableRoots": []string{}, "excludeTmpdirEnvVar": true, "excludeSlashTmp": true},
+		"thread":            map[string]any{"id": "thread-1", "cwd": thread.Params.CWD, "ephemeral": false},
+	})
+	if err := <-opened; err != nil {
+		t.Fatalf("first Open() error = %v", err)
+	}
+	_ = session.Close(context.Background())
+}
+
 func TestOpenRejectsSandboxDowngrade(t *testing.T) {
 	process := newFakeNativeProcess()
 	adapter := &Adapter{
@@ -1307,7 +1341,6 @@ func TestTerminalSuccessIsOverriddenByNonzeroProcessExit(t *testing.T) {
 	native := newNativeSession(context.Background(), func() {}, &recordingHarnessSink{}, t.TempDir())
 	native.process = process
 	native.processReady = true
-	native.opened = true
 	native.turnStarted = true
 	native.threadID = "thread-1"
 	native.turnID = "turn-1"
@@ -3141,4 +3174,33 @@ func (sink *recordingHarnessSink) payload(kind harness.EventKind) json.RawMessag
 		}
 	}
 	return nil
+}
+
+func TestStartTurnBeforeOpenRefusesWithTheCodexThreadBarrierText(t *testing.T) {
+	process := newFakeNativeProcess()
+	adapter := &Adapter{
+		executable: "codex-test",
+		startProcess: func(_ context.Context, invocation execution.Invocation, sink execution.Sink) (nativeProcess, error) {
+			process.sink = sink
+			if invocation.PersistProcess != nil {
+				pid, identity := process.ProcessDetails()
+				if err := invocation.PersistProcess(pid, identity); err != nil {
+					return nil, err
+				}
+			}
+			return process, nil
+		},
+	}
+	started, err := adapter.Start(context.Background(), harness.StartRequest{
+		Workspace:      t.TempDir(),
+		PersistProcess: func(int, string) error { return nil },
+	}, &recordingHarnessSink{})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	session := started.(harness.StagedSession)
+	if err := session.StartTurn(context.Background(), harness.TurnRequest{Goal: "before open", Context: json.RawMessage(`{"snapshot":"canonical"}`)}); err == nil || err.Error() != "codex native session has not opened a thread" {
+		t.Fatalf("StartTurn before Open = %v, want the thread barrier text", err)
+	}
+	_ = process.Terminate(context.Background(), 0)
 }
