@@ -4,71 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os/exec"
 	"strings"
 	"sync"
-	"time"
-
-	"github.com/wxxb789/symmetry/daemon/internal/execution"
 )
 
-const (
-	defaultClaudeExecutable = "claude"
-	// claudeProbeTimeout bounds one Claude Code probe command. The pinned client
-	// answers version and help in well under a second on an idle host, but the
-	// 367 MB Windows executable has been observed to exceed one second while the
-	// host is loaded; a spurious deadline is not a capability verdict and, because
-	// a deadline is not a tolerated sentinel, it would fail a daemon startup
-	// instead of reporting an unavailable client. Five seconds keeps the probe
-	// bounded while tolerating host contention: a broken, slow or hanging
-	// executable still fails closed inside this bound.
-	claudeProbeTimeout        = 5 * time.Second
-	claudeProbeMaxOutputBytes = 64 << 10
-	defaultCodexExecutable    = "codex"
-	testedCodexVersion        = CodexTestedVersion
-	codexProbeTimeout         = time.Second
-	codexProbeMaxOutputBytes  = 64 << 10
-)
-
-// ClaudeCommandRunner is the narrow command boundary used by the Claude Code
-// capability probe. Keeping it injectable makes version/help evidence
-// deterministic without introducing a fake native session implementation.
-type ClaudeCommandRunner interface {
-	Run(context.Context, string, ...string) ([]byte, error)
-}
-
-type osClaudeCommandRunner struct{}
-
-func (osClaudeCommandRunner) Run(ctx context.Context, executable string, args ...string) ([]byte, error) {
-	return RunProbeCommand(ctx, execution.Invocation{
-		Program: executable,
-		Args:    args,
-	}, claudeProbeMaxOutputBytes, execution.RunBoundedCommand)
-}
-
-// CodexCommandRunner is the narrow command boundary used by the root Codex
-// capability probe. Keeping it injectable makes version/help evidence
-// deterministic without introducing a fake native session implementation.
-type CodexCommandRunner interface {
-	Run(context.Context, string, ...string) ([]byte, error)
-}
-
-type osCodexCommandRunner struct{}
-
-func (osCodexCommandRunner) Run(ctx context.Context, executable string, args ...string) ([]byte, error) {
-	return RunProbeCommand(ctx, execution.Invocation{
-		Program: executable,
-		Args:    args,
-	}, codexProbeMaxOutputBytes, execution.RunBoundedCommand)
-}
-
-func (osCodexCommandRunner) SchemaDigest(ctx context.Context, executable string) (string, error) {
-	return CodexSchemaDigest(ctx, executable, codexProbeMaxOutputBytes, execution.RunBoundedCommand)
-}
-
-// Registry is a concrete, process-local adapter registry. It is intentionally
-// not a dynamic plugin loader: every native kind has an explicit constructor
-// and unsupported kinds remain visible as unsupported.
+// Registry is a concrete, process-local adapter registry; it is not a dynamic plugin loader.
 type Registry struct {
 	mu       sync.RWMutex
 	adapters map[Kind]Adapter
@@ -82,11 +22,6 @@ type Registry struct {
 func NewRegistry() *Registry {
 	registry := &Registry{adapters: make(map[Kind]Adapter)}
 	_ = registry.Register(KindGeneric, NewGenericAdapter())
-	_ = registry.Register(KindCodex, NewCodexAdapter())
-	_ = registry.Register(KindClaude, NewClaudeAdapter())
-	_ = registry.Register(KindPi, NewPiAdapter())
-	_ = registry.Register(KindOMP, newUnavailableAdapter(KindOMP, "OMP executable or verified native bridge is unavailable"))
-	_ = registry.Register(KindOmO, newUnavailableAdapter(KindOmO, "OmO executable or verified native RPC bridge is unavailable"))
 	_ = registry.Register(KindOpenCode, NewOpenCodeAdapter())
 	return registry
 }
@@ -161,53 +96,6 @@ func newUnavailableAdapter(kind Kind, reason string) *UnavailableAdapter {
 	return &UnavailableAdapter{kind: kind, capabilities: capabilities}
 }
 
-// NewClaudeAdapter returns the conservative Claude Code adapter using the
-// executable resolved from PATH. No fake JSON protocol is substituted for its
-// native stream.
-func NewClaudeAdapter() *UnavailableAdapter {
-	return NewClaudeAdapterWithExecutable(defaultClaudeExecutable)
-}
-
-// NewClaudeAdapterWithExecutable returns the conservative Claude Code adapter
-// bound to one explicit local executable path or command name. An empty value
-// preserves the default PATH lookup behavior; this constructor never discovers
-// or silently falls back to another executable.
-func NewClaudeAdapterWithExecutable(executable string) *UnavailableAdapter {
-	return newClaudeAdapterWithRunner(executable, osClaudeCommandRunner{})
-}
-
-// NewClaudeAdapterWithRunner is the deterministic command-probe seam used by
-// tests and local callers that already own executable selection.
-func NewClaudeAdapterWithRunner(executable string, runner ClaudeCommandRunner) *UnavailableAdapter {
-	return newClaudeAdapterWithRunner(executable, runner)
-}
-
-func newClaudeAdapterWithRunner(executable string, runner ClaudeCommandRunner) *UnavailableAdapter {
-	adapter := newUnavailableAdapter(KindClaude, "Claude Code native session lifecycle is unverified")
-	adapter.probe = func(ctx context.Context) (Capabilities, error) {
-		return probeClaudeExecutable(ctx, executable, runner)
-	}
-	return adapter
-}
-
-func probeClaudeExecutable(ctx context.Context, executable string, runner ClaudeCommandRunner) (Capabilities, error) {
-	evidence, probeErr := probeClaudeNativeEvidence(ctx, executable, runner)
-	capabilities := claudeEvidenceCapabilities(evidence, probeErr)
-	if probeErr != nil {
-		return capabilities, probeErr
-	}
-	// Version and help evidence alone never proves a native session lifecycle.
-	// The composed Claude adapter owns the exact-blob promotion; this registry
-	// projection stays fail-closed so a caller that does not compose it cannot
-	// mistake transport evidence for native support.
-	return capabilities, ErrNativeUnverified
-}
-
-// NewPiAdapter returns the explicit unsupported pi adapter.
-func NewPiAdapter() *UnavailableAdapter {
-	return newUnavailableAdapter(KindPi, "pi executable or verified native bridge is unavailable")
-}
-
 // NewOpenCodeAdapter returns the explicit unsupported OpenCode V2 adapter.
 // Version/help observations do not make the private transport production-ready.
 func NewOpenCodeAdapter() *UnavailableAdapter {
@@ -251,108 +139,6 @@ func (adapter *UnavailableAdapter) reason() string {
 		return "native harness unavailable"
 	}
 	return adapter.capabilities.Unsupported[string(CapabilityStart)]
-}
-
-// NewCodexAdapter returns a conservative adapter for the installed Codex CLI.
-// Even the tested version remains unverified here: app-server help and
-// JSON framing do not prove native session lifecycle or control semantics.
-func NewCodexAdapter() *UnavailableAdapter {
-	return NewCodexAdapterWithRunner(defaultCodexExecutable, osCodexCommandRunner{})
-}
-
-// NewCodexAdapterWithRunner is the deterministic command-probe seam used by
-// tests and local callers that already own executable selection.
-func NewCodexAdapterWithRunner(executable string, runner CodexCommandRunner) *UnavailableAdapter {
-	adapter := newUnavailableAdapter(KindCodex, "Codex app-server native session behavior is unverified")
-	adapter.probe = func(ctx context.Context) (Capabilities, error) {
-		return probeCodexExecutableWithRunner(ctx, executable, runner)
-	}
-	return adapter
-}
-
-func probeCodexExecutableWithRunner(ctx context.Context, executable string, runner CodexCommandRunner) (Capabilities, error) {
-	if ctx == nil {
-		return Capabilities{}, errors.New("harness probe context must not be nil")
-	}
-	if err := ctx.Err(); err != nil {
-		return Capabilities{}, err
-	}
-	if strings.TrimSpace(executable) == "" {
-		executable = defaultCodexExecutable
-	}
-	if runner == nil {
-		runner = osCodexCommandRunner{}
-	}
-	if _, productionRunner := runner.(osCodexCommandRunner); productionRunner {
-		path, err := exec.LookPath(executable)
-		if err != nil {
-			unavailable := UnsupportedCapabilities(KindCodex, "codex executable is unavailable")
-			return unavailable, &AvailabilityError{Kind: KindCodex, Reason: err.Error()}
-		}
-		executable = path
-	}
-
-	capabilities := UnsupportedCapabilities(KindCodex, "Codex app-server native session behavior is unverified")
-	output, err := RunBoundedProbe(ctx, codexProbeTimeout, func(probeContext context.Context) ([]byte, error) {
-		return runner.Run(probeContext, executable, "--version")
-	})
-	if err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return Capabilities{}, err
-		}
-		if contextErr := ctx.Err(); contextErr != nil {
-			return Capabilities{}, contextErr
-		}
-		capabilities.Unsupported[string(CapabilityStart)] = "codex version probe failed"
-		return capabilities, fmt.Errorf("%w: codex --version: %v", ErrHarnessUnavailable, err)
-	}
-	version, versionErr := ValidateCodexVersionOutput(string(output))
-	capabilities.NativeVersion = version
-	capabilities.VersionKnown = version != ""
-	if versionErr != nil {
-		return capabilities, versionErr
-	}
-	helpOutput, err := RunBoundedProbe(ctx, codexProbeTimeout, func(probeContext context.Context) ([]byte, error) {
-		return runner.Run(probeContext, executable, "app-server", "--help")
-	})
-	if err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return capabilities, err
-		}
-		if contextErr := ctx.Err(); contextErr != nil {
-			return capabilities, contextErr
-		}
-		return capabilities, fmt.Errorf("%w: codex app-server help probe failed: %v", ErrNativeUnverified, err)
-	}
-	if err := ValidateCodexHelpOutput(string(helpOutput)); err != nil {
-		return capabilities, err
-	}
-	capabilities.TransportVerified = true
-
-	schemaRunner, schemaCaptured := runner.(interface {
-		SchemaDigest(context.Context, string) (string, error)
-	})
-	schemaDigest := ""
-	if schemaCaptured {
-		schemaDigest, err = RunBoundedProbe(ctx, codexProbeTimeout, func(probeContext context.Context) (string, error) {
-			return schemaRunner.SchemaDigest(probeContext, executable)
-		})
-		if err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				return capabilities, err
-			}
-			if contextErr := ctx.Err(); contextErr != nil {
-				return capabilities, contextErr
-			}
-			return capabilities, fmt.Errorf("%w: Codex app-server schema probe failed: %v", ErrNativeUnverified, err)
-		}
-	}
-
-	evidence, verifyErr := ValidateCodexProbeEvidence(string(output), string(helpOutput), schemaDigest, schemaCaptured)
-	capabilities.NativeVersion = evidence.Version
-	capabilities.VersionKnown = evidence.VersionKnown
-	capabilities.TransportVerified = evidence.TransportVerified
-	return capabilities, verifyErr
 }
 
 // AvailabilityError distinguishes an absent/unverified native adapter from a

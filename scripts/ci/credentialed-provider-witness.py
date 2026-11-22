@@ -17,7 +17,8 @@ base_branch (main), failure_branch (same commit as main), code_base_sha,
 code_head_sha, changed_source_manifest (list of {path, sha256}), and
 allow_manifest_bound_dirty:true when using an uncommitted reviewed patch. The
 manifest must include every dirty production file under control/lib, control/priv,
-control/config, control/mix.exs, control/mix.lock and these two scripts.
+control/config, control/mix.exs, control/mix.lock and the witness scripts plus the
+shared scripts/ci/source_subject.py module.
 Parent/operator creates the authorized branches/commit and exact Subjects first.
 Optional subject_preparation_evidence links the parent's independently generated
 GitHub tree/blob digest evidence; this runner verifies the exact provider refs.
@@ -39,7 +40,6 @@ Native harness/daemon behavior and monetary billing are not proved by this scrip
 """
 
 import argparse
-import hashlib
 import json
 import os
 import re
@@ -48,8 +48,42 @@ import sys
 import time
 from pathlib import Path
 
+import source_subject
+
 FIXTURE = "wxxb789/symmetry-provider-sandbox"
 BASE = "551e0057e4829816587eaa8efb39f0b18eaa6445"
+SOURCE_SCOPE = source_subject.DirtyScope(
+    pathspecs=(
+        "control/lib",
+        "control/priv",
+        "control/config",
+        "control/mix.exs",
+        "control/mix.lock",
+        "scripts/ci/credentialed-provider-witness.py",
+        "scripts/ci/credentialed-provider-witness.exs",
+        "scripts/ci/source_subject.py",
+    ),
+    prefixes=("control/lib/", "control/priv/", "control/config/"),
+    names=frozenset(
+        {
+            "control/mix.exs",
+            "control/mix.lock",
+            "scripts/ci/credentialed-provider-witness.py",
+            "scripts/ci/credentialed-provider-witness.exs",
+            "scripts/ci/source_subject.py",
+        }
+    ),
+)
+SOURCE_REFUSALS = {
+    "head_mismatch": "code_head_mismatch",
+    "base_mismatch": "code_base_mismatch",
+    "manifest_required": "source_manifest_required",
+    "manifest_path_invalid": "invalid_source_manifest_path",
+    "manifest_digest_mismatch": "changed_source_digest_mismatch",
+    "dirty_source_not_declared": "dirty_source_missing_from_manifest",
+    "dirty_source_not_consented": "dirty_source_requires_explicit_manifest_consent",
+}
+
 # The credential shapes this witness can recognise, and only these:
 #   * GitHub tokens        `gh[pousr]_` followed by 8+ word characters
 #   * GitHub fine-grained  `github_pat_` followed by word characters
@@ -67,8 +101,7 @@ def require(value, code):
         raise RuntimeError(code)
 
 
-def encoded(value):
-    return (json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode()
+encoded = source_subject.canonical_bytes
 
 
 def safe_write(path, value):
@@ -88,64 +121,12 @@ def git(root, *args):
 
 
 def source(root, config):
-    require(git(root, "rev-parse", "HEAD").decode().strip() == config["code_head_sha"], "code_head_mismatch")
-    require(config["code_base_sha"] == BASE, "code_base_mismatch")
-    entries = config["changed_source_manifest"]
-    require(isinstance(entries, list) and entries, "source_manifest_required")
-    paths = set()
-    for entry in entries:
-        rel = entry["path"]
-        path = (root / rel).resolve()
-        require(path.is_relative_to(root) and path.is_file() and rel not in paths, "invalid_source_manifest_path")
-        paths.add(rel)
-        require(
-            hashlib.sha256(path.read_bytes()).hexdigest() == entry["sha256"].removeprefix("sha256:"),
-            "changed_source_digest_mismatch",
+    try:
+        return source_subject.head_with_manifest(
+            root, config, lambda *arguments: git(root, *arguments), base_sha=BASE, scope=SOURCE_SCOPE
         )
-    dirty = git(
-        root,
-        "status",
-        "--porcelain=v1",
-        "-z",
-        "--untracked-files=all",
-        "--",
-        "control/lib",
-        "control/priv",
-        "control/config",
-        "control/mix.exs",
-        "control/mix.lock",
-        "scripts/ci/credentialed-provider-witness.py",
-        "scripts/ci/credentialed-provider-witness.exs",
-    ).split(b"\0")
-    relevant = set()
-    i = 0
-    while i < len(dirty):
-        record = dirty[i]
-        i += 1
-        if not record:
-            continue
-        status, name = record[:2], record[3:].decode()
-        if b"R" in status or b"C" in status:
-            i += 1
-        if name.startswith(("control/lib/", "control/priv/", "control/config/")) or name in {
-            "control/mix.exs",
-            "control/mix.lock",
-            "scripts/ci/credentialed-provider-witness.py",
-            "scripts/ci/credentialed-provider-witness.exs",
-        }:
-            relevant.add(name)
-    require(relevant <= paths, "dirty_source_missing_from_manifest")
-    require(
-        not relevant or config.get("allow_manifest_bound_dirty") is True,
-        "dirty_source_requires_explicit_manifest_consent",
-    )
-    return {
-        "head_sha": config["code_head_sha"],
-        "base_sha": BASE,
-        "changed_source_manifest": entries,
-        "manifest_bound_dirty_paths": sorted(relevant),
-        "manifest_sha256": hashlib.sha256(encoded(entries)).hexdigest(),
-    }
+    except source_subject.Refused as refusal:
+        raise RuntimeError(SOURCE_REFUSALS[refusal.code]) from refusal
 
 
 def scan_evidence(directory):
