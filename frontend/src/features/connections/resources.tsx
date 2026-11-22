@@ -454,9 +454,9 @@ function ResourceDialog(props: ResourceDialogProps) {
     // the surface already holds shows the applied state.
     mutationFn: (submission: ResourceSubmission): Promise<unknown> => {
       switch (submission.kind) {
-        case "bind": return api.createResource(submission.projectId, submission.draft, csrf, new AbortController().signal);
-        case "update": return api.updateResource(submission.resourceId, { version: submission.version, ...submission.update }, csrf, new AbortController().signal);
-        case "unbind": return api.deleteResource(submission.resourceId, submission.version, csrf, new AbortController().signal);
+        case "bind": return api.createResource(submission.projectId, submission.draft, csrf);
+        case "update": return api.updateResource(submission.resourceId, { version: submission.version, ...submission.update }, csrf);
+        case "unbind": return api.deleteResource(submission.resourceId, submission.version, csrf);
       }
     },
     // The pending counts live on the page, so the exclusion holds after this dialog
@@ -621,7 +621,7 @@ function ProjectResourcesReady({ api, csrf, project, headingRef, workspace, work
     if (live()) setNotice(message);
   };
   const syncResource = useMutation({
-    mutationFn: (resourceId: string) => api.syncResource(resourceId, csrf, new AbortController().signal),
+    mutationFn: (resourceId: string) => api.syncResource(resourceId, csrf),
     onMutate: (resourceId) => { onWriteStart(); onSubjectPending(resourceSubject(resourceId), true); },
     onSettled: (_receipt, _error, resourceId) => { onWriteSettled(); onSubjectPending(resourceSubject(resourceId), false); },
     onSuccess: (receipt, resourceId) => {
@@ -639,7 +639,7 @@ function ProjectResourcesReady({ api, csrf, project, headingRef, workspace, work
     },
   });
   const syncProject = useMutation({
-    mutationFn: () => api.syncProject(projectId, csrf, new AbortController().signal),
+    mutationFn: () => api.syncProject(projectId, csrf),
     onMutate: () => { onWriteStart(); onSubjectPending(projectSubject(projectId), true); },
     onSettled: () => { onWriteSettled(); onSubjectPending(projectSubject(projectId), false); },
     onSuccess: (receipt) => {

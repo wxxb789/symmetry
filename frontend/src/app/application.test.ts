@@ -85,7 +85,7 @@ describe("private query lifecycle", () => {
     // not depend on the command's own callback or on a later read also
     // answering 401.
     const mutation = app.queryClient.getMutationCache().build(app.queryClient, {
-      mutationFn: (draft: ConnectionDraft) => app.api.createConnection(draft, "csrf", new AbortController().signal),
+      mutationFn: (draft: ConnectionDraft) => app.api.createConnection(draft, "csrf"),
       onError: (error) => {
         localHandler(error);
         void app.queryClient.invalidateQueries({ queryKey: ["connections"] });
