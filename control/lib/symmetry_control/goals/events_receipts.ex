@@ -80,12 +80,8 @@ defmodule SymmetryControl.Goals.EventsReceipts do
     current = now(opts)
     next_wake_at = event_next_wake_at(goal, kind, opts)
     event_revision = Keyword.get(opts, :event_revision, goal.current_revision)
-    # Only an operator command advances the version a command must carry. The
-    # advance authority is this explicit argument, not a caller option: the
-    # internal settlement, admission and reconcile appends pass false, so they
-    # leave the version where the operator's last read left it and an
-    # asynchronous advance cannot refuse a command whose own predicates still
-    # hold.
+    # Version advance authority is the explicit operator_advance argument, not a
+    # caller option: settlement, admission and reconcile appends pass false.
     next_operator_version = goal.operator_version + if(operator_advance, do: 1, else: 0)
 
     response = normalize_map(response)
@@ -179,17 +175,17 @@ defmodule SymmetryControl.Goals.EventsReceipts do
     end
   end
 
-  def immutable_receipt_snapshot(
-        goal,
-        mutation_id,
-        kind,
-        sequence,
-        event_revision,
-        response,
-        next_wake_at,
-        current,
-        next_operator_version
-      ) do
+  defp immutable_receipt_snapshot(
+         goal,
+         mutation_id,
+         kind,
+         sequence,
+         event_revision,
+         response,
+         next_wake_at,
+         current,
+         next_operator_version
+       ) do
     %{
       "schema_version" => "symmetry.goal_receipt.v1",
       "goal" => %{
@@ -210,10 +206,10 @@ defmodule SymmetryControl.Goals.EventsReceipts do
     }
   end
 
-  def encode_receipt_snapshot(receipt), do: normalize_map(receipt)
+  defp encode_receipt_snapshot(receipt), do: normalize_map(receipt)
 
-  def decode_receipt_snapshot(response, %Goal{} = goal, %GoalEvent{} = event)
-      when is_map(response) do
+  defp decode_receipt_snapshot(response, %Goal{} = goal, %GoalEvent{} = event)
+       when is_map(response) do
     response = normalize_map(response)
     snapshot = value(response, "_receipt_v1")
 
@@ -255,9 +251,9 @@ defmodule SymmetryControl.Goals.EventsReceipts do
     end
   end
 
-  def decode_receipt_snapshot(_response, _goal, _event), do: :error
+  defp decode_receipt_snapshot(_response, _goal, _event), do: :error
 
-  def validate_receipt_goal_snapshot(snapshot, goal) when is_map(snapshot) do
+  defp validate_receipt_goal_snapshot(snapshot, goal) when is_map(snapshot) do
     with true <-
            Map.keys(snapshot) |> Enum.sort() ==
              ["current_revision", "id", "next_wake_at", "state", "updated_at", "version"],
@@ -271,9 +267,9 @@ defmodule SymmetryControl.Goals.EventsReceipts do
     end
   end
 
-  def validate_receipt_goal_snapshot(_snapshot, _goal), do: :error
+  defp validate_receipt_goal_snapshot(_snapshot, _goal), do: :error
 
-  def validate_receipt_event_snapshot(snapshot, event) when is_map(snapshot) do
+  defp validate_receipt_event_snapshot(snapshot, event) when is_map(snapshot) do
     with true <- Map.keys(snapshot) |> Enum.sort() == ["id", "kind", "revision", "sequence"],
          true <- valid_uuid?(snapshot["id"]) and snapshot["id"] == event.id,
          true <- is_integer(snapshot["sequence"]) and snapshot["sequence"] > 0,
@@ -289,9 +285,9 @@ defmodule SymmetryControl.Goals.EventsReceipts do
     end
   end
 
-  def validate_receipt_event_snapshot(_snapshot, _event), do: :error
+  defp validate_receipt_event_snapshot(_snapshot, _event), do: :error
 
-  def receipt_timestamps(snapshot, event) do
+  defp receipt_timestamps(snapshot, event) do
     with true <- valid_receipt_utc?(snapshot["updated_at"]),
          true <-
            is_nil(snapshot["next_wake_at"]) or valid_receipt_utc?(snapshot["next_wake_at"]),
@@ -327,7 +323,7 @@ defmodule SymmetryControl.Goals.EventsReceipts do
     )
   end
 
-  def event_next_wake_at(goal, kind, opts) do
+  defp event_next_wake_at(goal, kind, opts) do
     case Keyword.fetch(opts, :settlement_next_wake_at) do
       {:ok, next_wake_at} ->
         next_wake_at

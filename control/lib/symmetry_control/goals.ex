@@ -37,18 +37,18 @@ defmodule SymmetryControl.Goals do
       ensure_project_active!: 1,
       goal_project_id!: 1,
       is_short_identifier?: 1,
-      lock_command_goal: 2,
-      lock_context_snapshot: 2,
-      lock_decision: 1,
-      lock_external_wait: 1,
-      lock_goal: 1,
+      lock_command_goal!: 2,
+      lock_context_snapshot!: 2,
+      lock_decision!: 1,
+      lock_external_wait!: 1,
+      lock_goal!: 1,
       lock_project!: 1,
       lock_repository_resource!: 1,
       lock_repository_resources!: 1,
-      lock_run: 1,
-      lock_task: 1,
-      lock_work_item: 1,
-      lock_work_items: 1,
+      lock_run!: 1,
+      lock_task!: 1,
+      lock_work_item!: 1,
+      lock_work_items!: 1,
       map_has_key?: 2,
       mutation_id: 2,
       normalize_map: 1,
@@ -364,9 +364,9 @@ defmodule SymmetryControl.Goals do
   def fetch_context(goal_id, snapshot_id) when is_binary(goal_id) and is_binary(snapshot_id) do
     with :ok <- valid_uuid(goal_id), :ok <- valid_uuid(snapshot_id) do
       Repo.transaction(fn ->
-        goal = lock_goal(goal_id)
-        snapshot = lock_context_snapshot(goal.id, snapshot_id)
-        item = if snapshot.work_item_id, do: lock_work_item(snapshot.work_item_id)
+        goal = lock_goal!(goal_id)
+        snapshot = lock_context_snapshot!(goal.id, snapshot_id)
+        item = if snapshot.work_item_id, do: lock_work_item!(snapshot.work_item_id)
 
         if item && (item.goal_id != goal.id or item.admitted_revision != snapshot.goal_revision) do
           rollback(:ownership_lost)
@@ -1156,13 +1156,13 @@ defmodule SymmetryControl.Goals do
             {:ignored, %{task_id: task_id, run_id: run_id, generation: generation}}
 
           true ->
-            goal = lock_goal(task_locator.goal_id)
+            goal = lock_goal!(task_locator.goal_id)
 
             # Keep settlement compatible with commands that take a WorkItem
             # lock: Goal -> WorkItem -> Tasks (sorted) -> Runs (sorted).
             item =
               if task_locator.work_item_id,
-                do: lock_work_item(task_locator.work_item_id)
+                do: lock_work_item!(task_locator.work_item_id)
 
             {task, producer} =
               lock_settlement_tasks!(task_id, task_locator.validation_of_task_id)
@@ -1305,11 +1305,11 @@ defmodule SymmetryControl.Goals do
             %{task_id: task_id, run_id: run_id, generation: generation}
 
           true ->
-            goal = lock_goal(task_locator.goal_id)
+            goal = lock_goal!(task_locator.goal_id)
 
             item =
               if task_locator.work_item_id,
-                do: lock_work_item(task_locator.work_item_id)
+                do: lock_work_item!(task_locator.work_item_id)
 
             {task, producer} =
               lock_settlement_tasks!(task_id, task_locator.validation_of_task_id)
@@ -2226,7 +2226,7 @@ defmodule SymmetryControl.Goals do
   defp settle_unstarted_cancelled(task_id, reason, opts) do
     Repo.transaction(fn ->
       untrusted_task = Repo.get(Task, task_id) || rollback(:not_found)
-      goal = lock_goal(untrusted_task.goal_id || rollback(:not_found))
+      goal = lock_goal!(untrusted_task.goal_id || rollback(:not_found))
       mutation_id = unstarted_settlement_mutation_id(task_id, reason)
 
       body = %{
@@ -2241,8 +2241,8 @@ defmodule SymmetryControl.Goals do
           {:replayed, receipt.response}
 
         :missing ->
-          item = if untrusted_task.work_item_id, do: lock_work_item(untrusted_task.work_item_id)
-          task = lock_task(task_id)
+          item = if untrusted_task.work_item_id, do: lock_work_item!(untrusted_task.work_item_id)
+          task = lock_task!(task_id)
 
           unless settlement_task_owned_by_goal?(task, goal, item) and task.state == "cancelled" and
                    not Repo.exists?(from(run in Run, where: run.task_id == ^task.id)) do
@@ -2638,8 +2638,8 @@ defmodule SymmetryControl.Goals do
   end
 
   defp automatic_admission_payload(goal, {:validate, work_item_id, producer_id}, _opts) do
-    item = lock_work_item(work_item_id)
-    producer = lock_task(producer_id)
+    item = lock_work_item!(work_item_id)
+    producer = lock_task!(producer_id)
     model_profile = producer.agent_profile
 
     if is_short_identifier?(model_profile) do
@@ -2654,9 +2654,9 @@ defmodule SymmetryControl.Goals do
   end
 
   defp automatic_admission_payload(goal, {:observe, wait_id}, _opts) do
-    wait = lock_external_wait(wait_id)
-    item = lock_work_item(wait.work_item_id)
-    source_task = lock_task(wait.task_id)
+    wait = lock_external_wait!(wait_id)
+    item = lock_work_item!(wait.work_item_id)
+    source_task = lock_task!(wait.task_id)
 
     with true <- wait.goal_id == goal.id,
          true <- wait.goal_revision == goal.current_revision,
@@ -2683,8 +2683,8 @@ defmodule SymmetryControl.Goals do
   end
 
   defp automatic_admission_payload(goal, {:repair, work_item_id, source_task_id}, opts) do
-    item = lock_work_item(work_item_id)
-    source_task = lock_task(source_task_id)
+    item = lock_work_item!(work_item_id)
+    source_task = lock_task!(source_task_id)
 
     with true <- source_task.goal_id == goal.id,
          true <- source_task.goal_revision == goal.current_revision,
@@ -2706,7 +2706,7 @@ defmodule SymmetryControl.Goals do
   end
 
   defp automatic_admission_payload(goal, {:implement, work_item_id, :baseline}, _opts) do
-    item = lock_work_item(work_item_id)
+    item = lock_work_item!(work_item_id)
     model_profile = item.agent_profile
 
     with true <- is_short_identifier?(model_profile),
@@ -2722,8 +2722,8 @@ defmodule SymmetryControl.Goals do
   end
 
   defp automatic_admission_payload(goal, {:implement, work_item_id, source_task_id}, opts) do
-    item = lock_work_item(work_item_id)
-    source_task = lock_task(source_task_id)
+    item = lock_work_item!(work_item_id)
+    source_task = lock_task!(source_task_id)
 
     with true <- source_task.goal_id == goal.id,
          true <- source_task.goal_revision == goal.current_revision,
@@ -3175,7 +3175,7 @@ defmodule SymmetryControl.Goals do
 
         project = lock_project!(project_id)
         ensure_project_active!(project)
-        goal = lock_goal(goal_id)
+        goal = lock_goal!(goal_id)
 
         case lock_current_goal_control_action(goal, revision, action_id, nil) do
           {:ok, event} -> control_descriptors(goal, event.kind, action_id)
@@ -3263,7 +3263,7 @@ defmodule SymmetryControl.Goals do
 
           project = lock_project!(project_id)
           ensure_project_active!(project)
-          goal = lock_goal(goal_id)
+          goal = lock_goal!(goal_id)
 
           case lock_current_goal_control_action(goal, revision, action_id, kind) do
             :superseded ->
@@ -3380,10 +3380,10 @@ defmodule SymmetryControl.Goals do
         if is_nil(ownership.goal_id), do: rollback(:goal_authority_required)
 
         lock_project!(ownership.project_id)
-        goal = lock_goal(ownership.goal_id)
-        item = if ownership.work_item_id, do: lock_work_item(ownership.work_item_id)
-        task = lock_task(ownership.task_id)
-        run = lock_run(run_id)
+        goal = lock_goal!(ownership.goal_id)
+        item = if ownership.work_item_id, do: lock_work_item!(ownership.work_item_id)
+        task = lock_task!(ownership.task_id)
+        run = lock_run!(run_id)
 
         ensure_goal_pause_task_ownership!(goal, item, task, run)
 
@@ -3585,7 +3585,7 @@ defmodule SymmetryControl.Goals do
   def recover_pending_unstarted_cancellations(goal_id) when is_binary(goal_id) do
     if valid_uuid(goal_id) == :ok do
       Repo.transaction(fn ->
-        goal = lock_goal(goal_id)
+        goal = lock_goal!(goal_id)
 
         task_ids =
           Repo.all(
@@ -3888,7 +3888,7 @@ defmodule SymmetryControl.Goals do
 
   defp recover_pending_goal_control_action(goal_id) do
     Repo.transaction(fn ->
-      goal = lock_goal(goal_id)
+      goal = lock_goal!(goal_id)
 
       event =
         Repo.one(
@@ -4159,7 +4159,7 @@ defmodule SymmetryControl.Goals do
   defp attempt_automatic_candidate(goal_id, current, opts, candidate) do
     Repo.transaction(fn ->
       with %Project{status: "active"} <- try_lock_active_goal_project(goal_id),
-           %Goal{} = goal <- lock_goal(goal_id),
+           %Goal{} = goal <- lock_goal!(goal_id),
            true <- goal.state == "active" and goal.current_revision == candidate.revision,
            {:admit, item, purpose, model_profile, payload, source_identity} <-
              automatic_next_admission(goal, opts),
@@ -4184,7 +4184,7 @@ defmodule SymmetryControl.Goals do
   defp record_automatic_admission_blocker(goal_id, current, opts, candidate, blocker_reason) do
     Repo.transaction(fn ->
       with %Project{status: "active"} <- try_lock_active_goal_project(goal_id),
-           %Goal{} = goal <- lock_goal(goal_id),
+           %Goal{} = goal <- lock_goal!(goal_id),
            true <- goal.state == "active" and goal.current_revision == candidate.revision,
            {:admit, item, purpose, _model_profile, _payload, source_identity} <-
              automatic_next_admission(goal, opts),
@@ -4288,7 +4288,7 @@ defmodule SymmetryControl.Goals do
   defp defer_automatic_candidate(goal_id, current, opts, candidate, deferred_reason) do
     Repo.transaction(fn ->
       with %Project{status: "active"} <- try_lock_active_goal_project(goal_id),
-           %Goal{} = goal <- lock_goal(goal_id),
+           %Goal{} = goal <- lock_goal!(goal_id),
            true <- goal.state == "active" and goal.current_revision == candidate.revision,
            {:admit, item, purpose, _model_profile, _payload, source_identity} <-
              automatic_next_admission(goal, opts),
@@ -4304,7 +4304,7 @@ defmodule SymmetryControl.Goals do
   defp reconcile_due_goal_once(goal_id, current, opts, require_due?) do
     Repo.transaction(fn ->
       with %Project{status: "active"} <- try_lock_active_goal_project(goal_id),
-           %Goal{} = goal <- lock_goal(goal_id) do
+           %Goal{} = goal <- lock_goal!(goal_id) do
         due? =
           goal.state == "active" and not is_nil(goal.next_wake_at) and
             goal.next_wake_at <= current
@@ -4446,7 +4446,7 @@ defmodule SymmetryControl.Goals do
 
           :missing ->
             ensure_project_active!(project)
-            goal = lock_command_goal(goal_id, parsed.mutation_id)
+            goal = lock_command_goal!(goal_id, parsed.mutation_id)
 
             case replay_command(goal.id, parsed.mutation_id, body) do
               {:ok, receipt} ->
@@ -4664,7 +4664,7 @@ defmodule SymmetryControl.Goals do
 
     unless valid_plan_proposal?(proposal, goal, opts), do: rollback(:invalid_plan)
     if RequestHash.canonical(proposal) != proposal_hash, do: rollback(:invalid_request)
-    decision = lock_decision(decision_id)
+    decision = lock_decision!(decision_id)
 
     unless decision.goal_id == goal.id and decision.goal_revision == goal.current_revision and
              decision.kind == "plan" and
@@ -4749,7 +4749,7 @@ defmodule SymmetryControl.Goals do
     decision_id = required_uuid!(payload, :decision_id)
     expected_version = required_safe_positive_integer!(payload, :expected_decision_version)
     option_id = required_string!(payload, :option_id)
-    decision = lock_decision(decision_id)
+    decision = lock_decision!(decision_id)
 
     unless decision.goal_id == goal.id and decision.goal_revision == goal.current_revision and
              decision.state == "open" and
@@ -4793,7 +4793,7 @@ defmodule SymmetryControl.Goals do
     purpose = required_string!(payload, :purpose)
     model_profile = required_string!(payload, :model_profile)
     unless purpose in @task_purposes, do: rollback(:invalid_request)
-    item = lock_work_item(work_item_id)
+    item = lock_work_item!(work_item_id)
     ensure_admissible_item!(goal, item)
     ensure_unaccepted_item!(goal, item)
 
@@ -4814,7 +4814,7 @@ defmodule SymmetryControl.Goals do
     work_item_id = required_uuid!(payload, :work_item_id)
     depends_on_id = required_uuid!(payload, :depends_on_id)
     decision_id = required_uuid!(payload, :decision_id)
-    [item, dependency] = lock_work_items([work_item_id, depends_on_id])
+    [item, dependency] = lock_work_items!([work_item_id, depends_on_id])
     ensure_admissible_item!(goal, item)
     ensure_admissible_item!(goal, dependency)
     if active_task_for_item?(item.id), do: rollback(:active_task)
@@ -5645,7 +5645,7 @@ defmodule SymmetryControl.Goals do
 
     if purpose == "validate" do
       producer_id = optional_uuid!(payload, :validation_of_task_id) || rollback(:invalid_request)
-      producer = lock_task(producer_id)
+      producer = lock_task!(producer_id)
 
       unless producer.goal_id == goal.id and producer.work_item_id == item.id and
                producer.goal_revision == goal.current_revision and
@@ -6686,12 +6686,12 @@ defmodule SymmetryControl.Goals do
   end
 
   defp ensure_decision_work_item!(goal, work_item_id) do
-    item = lock_work_item(work_item_id)
+    item = lock_work_item!(work_item_id)
     ensure_admissible_item!(goal, item)
   end
 
   defp ensure_resolved_scope_decision!(goal, item, decision_id, operation, dependency_id) do
-    decision = lock_decision(decision_id)
+    decision = lock_decision!(decision_id)
 
     unless decision.goal_id == goal.id and decision.goal_revision == goal.current_revision and
              decision.state == "resolved" and decision.kind == "scope" and
@@ -6703,7 +6703,7 @@ defmodule SymmetryControl.Goals do
   end
 
   defp ensure_resolved_completion_decision!(goal, decision_id, subject_hash) do
-    decision = lock_decision(decision_id)
+    decision = lock_decision!(decision_id)
 
     expected_action_hash =
       ContractValidation.completion_action_hash(goal.id, goal.current_revision, subject_hash)
@@ -7186,7 +7186,7 @@ defmodule SymmetryControl.Goals do
       do: rollback(:invalid_validation)
 
     producer_id = optional_uuid!(payload, :validation_of_task_id) || rollback(:invalid_request)
-    producer = lock_task(producer_id)
+    producer = lock_task!(producer_id)
 
     unless producer.goal_id == goal.id and producer.work_item_id == item.id and
              producer.goal_revision == goal.current_revision and producer.state == "completed" and
@@ -7259,8 +7259,8 @@ defmodule SymmetryControl.Goals do
       Repo.one(from(source in Run, where: source.id == ^source_run_id, select: source.task_id)) ||
         rollback(:handoff_source_not_found)
 
-    source_task = lock_task(source_task_id)
-    source_run = lock_run(source_run_id)
+    source_task = lock_task!(source_task_id)
+    source_run = lock_run!(source_run_id)
 
     if Repo.one(
          from(target in Task,

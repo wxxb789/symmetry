@@ -21,7 +21,9 @@ Slice shape: the slice moves three move-only regions out of `goals.ex` behind th
 `SymmetryControl.Goals` facade — the shared kernel (`Goals.Internal`, 63 functions), the run-fence
 lifecycle (`Goals.RunFence`, 75 functions) and the event/receipt kernel (`Goals.EventsReceipts`, 19
 functions) — plus `validate_contract/3` into the existing `Goals.ContractValidation`. **158
-functions / 2,442 block lines move**; no moved body is edited.
+functions / 2,442 block lines move**; the apply stage records every non-verbatim deviation
+(7 comment-policy trims, one `@max_safe_integer` spelling, one qualifier rewrite and the nine
+contract-mandated `!` renames) and re-proves the move with the same AST tool.
 
 ## Public / API shape
 
@@ -35,17 +37,23 @@ functions / 2,442 block lines move**; no moved body is edited.
 - **`SymmetryControl.Goals.Internal`** (`@moduledoc false`): row-lock helpers, the map/value/
   timestamp primitives, the validators, the admission/subject predicates and the mutation-id
   builders that a moving module calls or that two or more non-moving clusters call; membership is
-  the fixpoint described in "Design trade-offs" §1. Every body is the base body with `defp` → `def`.
+  the fixpoint described in "Design trade-offs" §1. Every body is the base body; the 56 names the
+  facade and the movers import are `def`, the other six keep their base `defp` visibility (apply stage).
 - **`SymmetryControl.Goals.RunFence`** (`@moduledoc false`): the k2 RunFence cluster plus
   `context_wire_envelope!/4`, the one ContextSnapshot-region function the contract lifts (body
-  unchanged). Its 9 public functions are public here so the facade can delegate; every other moved
-  function is `def` too, because goals.ex and the other moved modules call them.
+  unchanged). Its 11 public functions — the nine facade-delegated entries plus
+  `context_wire_envelope!/4` and `mark_harness_session_unavailable!/2`, which the facade imports —
+  are public here; every other moved function is `defp`, as at base. The implement stage's uniform
+  `defp` → `def` transform rested on a claim the simplify review measured false (that goals.ex and
+  the other moved modules call them): a name+arity census over `control/lib` + `control/test` finds
+  no caller outside the file for the other 64, and the apply stage restored `defp` (finding F2).
 - **`SymmetryControl.Goals.EventsReceipts`** (`@moduledoc false`): the k2 EventsReceipts cluster
   (event append, receipt snapshot encode/decode/validate, RequestHash replay, wakeup/control
   enqueue).
 - **`SymmetryControl.Goals.ContractValidation`** (existing module): receives `validate_contract/3`
-  (the 50-line envelope validator, whose body already calls only `ContractValidation.*`), with
-  `@doc false` and an `alias __MODULE__` so its qualified calls resolve unchanged.
+  (the 50-line envelope validator, `@doc false`); the apply stage replaced its 12
+  `ContractValidation.`-qualified calls with direct local calls and dropped the `alias __MODULE__`
+  (recorded body edit, Design trade-offs §10).
 - **No new public `SymmetryControl.Goals.*` surface.** The six widened helpers below are
   `@doc false def`s on the facade — the recorded internal interface the contract asks for, not part
   of the frozen 31-function API. No `Goals.ContextSnapshot` schema is involved, and no module named
@@ -284,6 +292,11 @@ functions / 2,442 block lines move**; no moved body is edited.
 | `unwrap!/1` | 10603–10604 | 2 | defp |
 | `rollback/1` | 10605–10605 | 1 | defp |
 
+Nine of the DbLocks rows carry the contract's `!`-suffix rename at the slice head (apply stage,
+finding D3): `lock_goal!`, `lock_command_goal!`, `lock_work_item!`, `lock_external_wait!`,
+`lock_context_snapshot!`, `lock_work_items!`, `lock_task!`, `lock_run!`, `lock_decision!`. Spans,
+bodies and calls are otherwise unchanged (name-only, recorded).
+
 ### ContractValidation move set (1) and stay-in-goals.ex set (19)
 
 | function | HEAD lines | LOC | kind |
@@ -435,18 +448,18 @@ moved functions still defined in `goals.ex`:
 | `goal_project_id!/1` | `control/lib/symmetry_control/goals/internal.ex` |
 | `has_key?/2` | `control/lib/symmetry_control/goals/internal.ex` |
 | `is_short_identifier?/1` | `control/lib/symmetry_control/goals/internal.ex` |
-| `lock_command_goal/2` | `control/lib/symmetry_control/goals/internal.ex` |
-| `lock_context_snapshot/2` | `control/lib/symmetry_control/goals/internal.ex` |
-| `lock_decision/1` | `control/lib/symmetry_control/goals/internal.ex` |
-| `lock_external_wait/1` | `control/lib/symmetry_control/goals/internal.ex` |
-| `lock_goal/1` | `control/lib/symmetry_control/goals/internal.ex` |
+| `lock_command_goal!/2` | `control/lib/symmetry_control/goals/internal.ex` |
+| `lock_context_snapshot!/2` | `control/lib/symmetry_control/goals/internal.ex` |
+| `lock_decision!/1` | `control/lib/symmetry_control/goals/internal.ex` |
+| `lock_external_wait!/1` | `control/lib/symmetry_control/goals/internal.ex` |
+| `lock_goal!/1` | `control/lib/symmetry_control/goals/internal.ex` |
 | `lock_project!/1` | `control/lib/symmetry_control/goals/internal.ex` |
 | `lock_repository_resource!/1` | `control/lib/symmetry_control/goals/internal.ex` |
 | `lock_repository_resources!/1` | `control/lib/symmetry_control/goals/internal.ex` |
-| `lock_run/1` | `control/lib/symmetry_control/goals/internal.ex` |
-| `lock_task/1` | `control/lib/symmetry_control/goals/internal.ex` |
-| `lock_work_item/1` | `control/lib/symmetry_control/goals/internal.ex` |
-| `lock_work_items/1` | `control/lib/symmetry_control/goals/internal.ex` |
+| `lock_run!/1` | `control/lib/symmetry_control/goals/internal.ex` |
+| `lock_task!/1` | `control/lib/symmetry_control/goals/internal.ex` |
+| `lock_work_item!/1` | `control/lib/symmetry_control/goals/internal.ex` |
+| `lock_work_items!/1` | `control/lib/symmetry_control/goals/internal.ex` |
 | `map_has_key?/2` | `control/lib/symmetry_control/goals/internal.ex` |
 | `maybe_put_timestamp/3` | `control/lib/symmetry_control/goals/internal.ex` |
 | `mutation_id/2` | `control/lib/symmetry_control/goals/internal.ex` |
@@ -538,12 +551,12 @@ eight `Goals.` insertions as the only differences between base and head inside m
 | --- | --- |
 | `has_key?/2` | 2 |
 | `is_short_identifier?/1` | 1 |
-| `lock_context_snapshot/2` | 2 |
-| `lock_goal/1` | 1 |
+| `lock_context_snapshot!/2` | 2 |
+| `lock_goal!/1` | 1 |
 | `lock_project!/1` | 1 |
-| `lock_run/1` | 1 |
-| `lock_task/1` | 1 |
-| `lock_work_item/1` | 1 |
+| `lock_run!/1` | 1 |
+| `lock_task!/1` | 1 |
+| `lock_work_item!/1` | 1 |
 | `normalize_map/1` | 1 |
 | `now/1` | 1 |
 | `nullable_microusd/2` | 2 |
@@ -578,18 +591,18 @@ eight `Goals.` insertions as the only differences between base and head inside m
 | `ensure_project_active!/1` | 1 |
 | `goal_project_id!/1` | 1 |
 | `is_short_identifier?/1` | 1 |
-| `lock_command_goal/2` | 2 |
-| `lock_context_snapshot/2` | 2 |
-| `lock_decision/1` | 1 |
-| `lock_external_wait/1` | 1 |
-| `lock_goal/1` | 1 |
+| `lock_command_goal!/2` | 2 |
+| `lock_context_snapshot!/2` | 2 |
+| `lock_decision!/1` | 1 |
+| `lock_external_wait!/1` | 1 |
+| `lock_goal!/1` | 1 |
 | `lock_project!/1` | 1 |
 | `lock_repository_resource!/1` | 1 |
 | `lock_repository_resources!/1` | 1 |
-| `lock_run/1` | 1 |
-| `lock_task/1` | 1 |
-| `lock_work_item/1` | 1 |
-| `lock_work_items/1` | 1 |
+| `lock_run!/1` | 1 |
+| `lock_task!/1` | 1 |
+| `lock_work_item!/1` | 1 |
+| `lock_work_items!/1` | 1 |
 | `map_has_key?/2` | 2 |
 | `mutation_id/2` | 2 |
 | `normalize_map/1` | 1 |
@@ -664,11 +677,15 @@ eight `Goals.` insertions as the only differences between base and head inside m
 - **Move-only with one definition site.** Every moved function keeps its base body text; the only
   transformation is `defp` → `def` (plus the eight recorded `Goals.` prefixes). Proof: a canonical
   per-function AST comparison (line metadata stripped, `defp` folded to `def`) of the base blob
-  against the slice tree — **454 base functions identical, 7 different, 0 missing**, and each of the
-  7 differences is the single `Goals.` insertion recorded above. The 7 are
-  `append_evidence/5`, `append_evidence_batch/5`, `context_wire_envelope!/4`, `evidence_attrs/2`,
-  `evidence_receipt/1`, `lock_goal_run!/5`, `reconcile_reservation_and_arm!/3`. No message, atom,
-  digest, SQL text or ordering token changes anywhere.
+  against the slice tree (re-run in the apply stage after the recorded edits) — **418 base
+  functions byte-identical, 43 identical under a recorded edit, 0 missing**. The 43: the 7
+  `Goals.`-prefix functions (`append_evidence/5`, `append_evidence_batch/5`,
+  `context_wire_envelope!/4`, `evidence_attrs/2`, `evidence_receipt/1`, `lock_goal_run!/5`,
+  `reconcile_reservation_and_arm!/3`), the 9 contract-mandated `!` renames (bodies identical with
+  the base name restored), the 25 callers those renames retarget (bodies identical with the `!`
+  tokens restored), `nullable_safe_integer/2` (the `@max_safe_integer` spelling, finding F5) and
+  `validate_contract/3` (the 12-qualifier rewrite, finding F6). No message, atom, digest, SQL
+  text or ordering token changes anywhere.
 - **No function lost or duplicated.** Base census 461 functions + the existing ContractValidation
   module's 77 = 538; slice census `goals.ex` 303 + RunFence 75 + EventsReceipts 19 + Internal 63 +
   ContractValidation 78 (its 77 plus the moved `validate_contract/3`) = 538. The ContractValidation
@@ -678,8 +695,9 @@ eight `Goals.` insertions as the only differences between base and head inside m
   ContractValidation copies are unchanged; no *moved* function is duplicated.
 - **Control flow** (conductor lesson 32). The per-entry audit below is generated from the same AST
   comparison, so every `case`/`cond`/`with`/`if` arm, guard, default-argument head, fall-through
-  clause and `rollback/1` short-circuit is preserved by construction; the two entries marked "no" are
-  the ones carrying the recorded `Goals.` rewrite, and their base/head structural counts are equal.
+  clause and `rollback/1` short-circuit is preserved by construction; the entries marked "no" are the
+  ones carrying a recorded rewrite — the `Goals.` prefixes, `lock_context_snapshot!` retargets and
+  `validate_contract/3`'s qualifier rewrite — and their base/head structural counts are equal.
 - **`Repo.rollback` stays inside the same function.** `Repo.rollback/1` is called in exactly one
   place — `rollback/1`, which moves to `Goals.Internal` (in `internal.ex`, body unchanged). Every
   moved function that aborts a transaction calls `rollback/…` at the same point inside its own body;
@@ -691,10 +709,13 @@ eight `Goals.` insertions as the only differences between base and head inside m
   `append_evidence/5`, `append_evidence_batch/5`, `record_usage/5`, `fetch_run_context/3`,
   `append_event!/8`, `replay_command/3`, `validate_contract/3` callers) keep their
   `Repo.transaction`/`Repo.in_transaction?` call sites verbatim (AST-identical); the row-lock
-  helpers (`lock_goal/1`, `lock_project!/1`, `lock_work_item/1`, `lock_task/1`, `lock_run/1`,
-  `lock_context_snapshot/2`) keep their bodies and are still called in the same imperative order
-  inside `lock_goal_run!/5` (`lock_goal` → `lock_work_item` → `lock_task` → `lock_run`) — that
-  function is AST-identical except for the recorded widening. `enqueue_wakeup!/2`,
+  helpers (`lock_goal!/1`, `lock_project!/1`, `lock_work_item!/1`, `lock_task!/1`, `lock_run!/1`,
+  `lock_context_snapshot!/2`) keep their bodies and are still called in the same imperative order
+  inside `lock_goal_run!/5` (`lock_goal!` → `lock_work_item!` → `lock_task!` → `lock_run!`) — that
+  function is AST-identical except for the recorded widening. The `!` suffixes on the nine DbLocks
+  helpers (`lock_command_goal!`, `lock_external_wait!`, `lock_work_items!` and `lock_decision!`
+  included) are the contract's arch-decision-2 rename clause, applied in the apply stage (finding
+  D3) as a recorded name-only change. `enqueue_wakeup!/2`,
   `enqueue_goal_control!/2`, `append_event!/8` keep their bodies and their relative order inside
   each entry.
 - **The two ContextSnapshot-region widenings.** `context_wire_envelope/4` and `context_digest/1`
@@ -713,11 +734,11 @@ eight `Goals.` insertions as the only differences between base and head inside m
 | `attach_harness_session/5` → RunFence | 2/0/1/1 | 2 | 2/0/1/1 | 2 | yes |
 | `fetch_harness_session_attachment/3` → RunFence | 1/0/1/1 | 2 | 1/0/1/1 | 2 | yes |
 | `mark_harness_session_stopped/5` → RunFence | 1/0/1/1 | 3 | 1/0/1/1 | 3 | yes |
-| `append_evidence/5` → RunFence | 2/0/1/3 | 6 | 2/0/1/3 | 6 | no — the recorded `Goals.` rewrite only |
+| `append_evidence/5` → RunFence | 2/0/1/3 | 6 | 2/0/1/3 | 6 | no — the recorded `Goals.` + `lock_context_snapshot!` rewrites only |
 | `append_evidence_batch/5` → RunFence | 0/0/1/0 | 0 | 0/0/1/0 | 0 | no — the recorded `Goals.` rewrite only |
 | `record_usage/5` → RunFence | 2/0/1/2 | 3 | 2/0/1/2 | 3 | yes |
-| `fetch_run_context/3` → RunFence | 2/0/1/1 | 2 | 2/0/1/1 | 2 | yes |
-| `validate_contract/3` → ContractValidation | 1/0/0/0 | 0 | 1/0/0/0 | 0 | yes |
+| `fetch_run_context/3` → RunFence | 2/0/1/1 | 2 | 2/0/1/1 | 2 | no — the recorded `lock_context_snapshot!` rename only |
+| `validate_contract/3` → ContractValidation | 1/0/0/0 | 0 | 1/0/0/0 | 0 | no — the recorded qualifier rewrite only |
 | `safe_document?/1` → Goals (widened) | 1/0/0/0 | 0 | 1/0/0/0 | 0 | yes |
 | `safe_evidence_document/1` → Goals (widened) | 0/0/0/1 | 0 | 0/0/0/1 | 0 | yes |
 | `context_wire_envelope/4` → Goals (widened) | 0/0/1/1 | 0 | 0/0/1/1 | 0 | yes |
@@ -762,11 +783,10 @@ Canonical per-function AST comparison, base blob `6ad78e29…` ↔ slice tree (l
 | check | result |
 | --- | --- |
 | base functions compared | 461 (`goals.ex`) + 77 (existing `ContractValidation`) |
-| identical at the slice head | **454 + 77** |
-| different | **7** — `append_evidence/5`, `append_evidence_batch/5`, `context_wire_envelope!/4`, `evidence_attrs/2`, `evidence_receipt/1`, `lock_goal_run!/5`, `reconcile_reservation_and_arm!/3` |
-| nature of each difference | one or two inserted `Goals.` prefixes (8 insertions total) — the recorded widenings; no other token differs |
+| byte-identical at the slice head (apply stage) | **418 + 77** |
+| identical under a recorded edit | **43** — 7 with the `Goals.` prefixes (8 insertions), 9 contract-mandated `!` renames (bodies identical under the base name), 25 callers retargeted by those renames (identical under the `!` tokens), `nullable_safe_integer/2` (`@max_safe_integer` spelling, F5), `validate_contract/3` (qualifier rewrite, F6) |
 | missing moved functions | **0** |
-| ContractValidation diff | `added ['validate_contract/3']`, `changed []`, `gone []` |
+| ContractValidation diff | `added ['validate_contract/3']` (its recorded qualifier rewrite); base 77 unchanged, `changed []`, `gone []` |
 | slice census | `goals.ex` 303 + RunFence 75 + EventsReceipts 19 + Internal 63 + ContractValidation 78 = 538 = 461 + 77 |
 | definition census | 158 moved declarations, 157 single-site, `value/3` two-site (pre-existing ContractValidation helper), **0** moved functions left in `goals.ex` |
 
@@ -779,11 +799,11 @@ Canonical per-function AST comparison, base blob `6ad78e29…` ↔ slice tree (l
 | `attach_harness_session/5` → RunFence | 2/0/1/1 | 2 | 2/0/1/1 | 2 | yes |
 | `fetch_harness_session_attachment/3` → RunFence | 1/0/1/1 | 2 | 1/0/1/1 | 2 | yes |
 | `mark_harness_session_stopped/5` → RunFence | 1/0/1/1 | 3 | 1/0/1/1 | 3 | yes |
-| `append_evidence/5` → RunFence | 2/0/1/3 | 6 | 2/0/1/3 | 6 | no — the recorded `Goals.` rewrite only |
+| `append_evidence/5` → RunFence | 2/0/1/3 | 6 | 2/0/1/3 | 6 | no — the recorded `Goals.` + `lock_context_snapshot!` rewrites only |
 | `append_evidence_batch/5` → RunFence | 0/0/1/0 | 0 | 0/0/1/0 | 0 | no — the recorded `Goals.` rewrite only |
 | `record_usage/5` → RunFence | 2/0/1/2 | 3 | 2/0/1/2 | 3 | yes |
-| `fetch_run_context/3` → RunFence | 2/0/1/1 | 2 | 2/0/1/1 | 2 | yes |
-| `validate_contract/3` → ContractValidation | 1/0/0/0 | 0 | 1/0/0/0 | 0 | yes |
+| `fetch_run_context/3` → RunFence | 2/0/1/1 | 2 | 2/0/1/1 | 2 | no — the recorded `lock_context_snapshot!` rename only |
+| `validate_contract/3` → ContractValidation | 1/0/0/0 | 0 | 1/0/0/0 | 0 | no — the recorded qualifier rewrite only |
 | `safe_document?/1` → Goals (widened) | 1/0/0/0 | 0 | 1/0/0/0 | 0 | yes |
 | `safe_evidence_document/1` → Goals (widened) | 0/0/0/1 | 0 | 0/0/0/1 | 0 | yes |
 | `context_wire_envelope/4` → Goals (widened) | 0/0/1/1 | 0 | 0/0/1/1 | 0 | yes |
@@ -853,15 +873,15 @@ the conflict for the conductor.
 | `attach_harness_session/5` | — | — | yes |
 | `fetch_harness_session_attachment/3` | — | — | yes |
 | `mark_harness_session_stopped/5` | — | — | yes |
-| `append_evidence/5` | lock_context_snapshot | lock_context_snapshot | yes |
+| `append_evidence/5` | lock_context_snapshot! | lock_context_snapshot! | yes |
 | `append_evidence_batch/5` | — | — | yes |
 | `record_usage/5` | — | — | yes |
-| `fetch_run_context/3` | lock_context_snapshot | lock_context_snapshot | yes |
+| `fetch_run_context/3` | lock_context_snapshot! | lock_context_snapshot! | yes |
 | `settlement_task_owned_by_goal?/3` | — | — | yes |
 | `reconcile_reservation!/3` | — | — | yes |
 | `context_wire_envelope/4` | — | — | yes |
 | `context_digest/1` | — | — | yes |
-| `lock_goal_run!/5` (the acquisition choreographer the entries call) | lock_goal → lock_work_item → lock_task → lock_run | lock_goal → lock_work_item → lock_task → lock_run | yes |
+| `lock_goal_run!/5` (the acquisition choreographer the entries call) | lock_goal! → lock_work_item! → lock_task! → lock_run! | lock_goal! → lock_work_item! → lock_task! → lock_run! | yes |
 
 The ordered acquisition of `docs/design/data.md` (`Project → Goal → WorkItem → Task → Run`) is owned by
 `lock_goal_run!/5`, whose body is AST-identical base vs head apart from the recorded widening; every moved
@@ -883,9 +903,10 @@ Credo's own exit code saturates (30 on both sides); the summary line is the coun
   `SymmetryControl.Orchestration.RunTransition`, `SymmetryControl.Orchestration.Scheduler`) because the
   rebuilt alias list is sorted case-insensitively; no new `[R]` finding appears.
 - `[D]` 53 → 54: `Credo.Check.Design.DuplicateCode` re-attributes one pair location
-  (`goals.ex:210`/`10416`/`7358`/`8560` → `goals.ex:3363`/`5754`, `internal.ex:123`/`395`,
-  `run_fence.ex:159`). The duplicated text is the same base text — every moved body is AST-identical —
-  so the extra location is a report artifact of the pair now spanning two files, not new duplication.
+  (`goals.ex:210`/`10416`/`7358`/`8560` → `goals.ex:3363`/`5754`, `internal.ex:123`/`392`,
+  `run_fence.ex:159`; re-run in the apply stage: same pairs and counts). The duplicated text is the
+  same base text — every moved body is AST-identical — so the extra location is a report artifact
+  of the pair now spanning two files, not new duplication.
 - `[W]` and `[F]` are unchanged at 5 and 357.
 
 No `credo:disable` or any other suppression is added: the diff contains no new suppression comment
@@ -897,15 +918,16 @@ No `credo:disable` or any other suppression is added: the diff contains no new s
   `control/lib/symmetry_control/goals/{run_fence,events_receipts,internal,contract_validation}.ex`
   added to `SOURCE_PATHS`.
 - `python scripts/ci/check-citation-existence.py` → exit 0 with the printed notice
-  `no audited document added or modified between b25e34aeed13 and b25e34aeed13; nothing to check`
-  (the slice is uncommitted, so the tool's committed-range corpus is empty; the citations it would
-  audit are path-level and `control/lib/symmetry_control/goals.ex` still exists).
+  `no audited document added or modified between 4fdea989a698 and 2a3fb894b124; nothing to check`
+  (the audit is path-level and `control/lib/symmetry_control/goals.ex` exists at the slice head;
+  the notice above is the apply-stage re-run at the committed range).
 
 ### Whitespace and host paths (G10)
 
 - `git diff --check` → exit 0.
-- host-path scan of every changed and new file (`C:/Users`, drive-letter spellings) → 0 hits; the
-  plan and the slice files use `<HOST-PATH>` for toolchain coordinates.
+- host-path scan of every changed and new file (drive-letter Users-directory spellings, per the
+  program rule; re-run in the apply stage on the working tree) → 0 hits; the plan and the slice
+  files use `<HOST-PATH>` for toolchain coordinates.
 ### Format, compile and xref (G1, G2, G3)
 
 | gate | command | result |
@@ -914,6 +936,7 @@ No `credo:disable` or any other suppression is added: the diff contains no new s
 | G2 | `MIX_ENV=test mix compile --warnings-as-errors` | exit 0, no warnings |
 | G3 plain | `MIX_ENV=test mix xref graph --format cycles` | exit 0, 3 cycles: the pre-existing 25-module web cycle, the 4-module schemas cycle, and the expected runtime cycle `goals.ex ↔ goals/{run_fence,events_receipts}.ex ↔ goals/workers/* ↔ orchestration* ↔ portal/invalidations.ex` (10 modules, 2 export edges) |
 | G3 compile-connected | `MIX_ENV=test mix xref graph --format cycles --label compile-connected` | exit 0, **No cycles found** at the slice head and at a fresh base worktree of `b25e34ae` (both `No cycles found`) — no new compile-connected cycle |
+| apply re-run | G1–G3 re-ran green after the apply-stage edits: format exit 0, compile `--warnings-as-errors` exit 0 (0 warnings), plain xref cycles unchanged (3, same members), compile-connected `No cycles found` |
 
 The runtime cycle is the one the contract anticipates: `goals.ex` imports `Internal`/`EventsReceipts`/
 `RunFence`, and those modules call back through the facade only at the six recorded widenings, so the
@@ -925,6 +948,7 @@ cycle exists at runtime (exports) but not at compile time.
 | --- | --- | --- |
 | G5 targeted | `mix test test/symmetry_control/goals_test.exs test/symmetry_control/orchestration_goal_admission_test.exs test/symmetry_control/goals_read_model_test.exs` | exit 0, **275 passed** (147 + 77 + 51; the contract's "273 at head / 274 post-#162" baseline is stale at this HEAD — measured 275) |
 | G6 new tests | `mix test test/symmetry_control/goals/run_fence_test.exs test/symmetry_control/goals/events_receipts_test.exs` | exit 0, **6 passed** |
+| apply re-run | G5 and G6 re-ran after the apply-stage edits: **275 passed** and **6 passed**, exit 0 |
 
 The oracle files are byte-identical to the base blob (no test was edited, moved, renamed or
 weakened): `git diff` shows no change to `goals_test.exs`, `orchestration_goal_admission_test.exs` or
@@ -943,6 +967,54 @@ host artifact recorded for rf-w2-08 (`docs/plans/2026-11-21-rf-w2-08-read-model-
 `mix test --exclude portal_assets` (the prescribed host remedy, run alone): **996 passed, 21 skipped,
 4 excluded**, exit 0 — no failure outside the four documented `:portal_assets` prerequisite cases.
 
+
+### Apply stage (2026-11-22): accepted simplifications, refreshed numbers
+
+The apply stage executed the simplify review's accepted findings: F1 (7 comment blocks trimmed to the
+owner's ≤2-line policy; −11 lines), F2/F3/F4 (71 functions / 97 clause heads restored to their base
+`defp` visibility — 64 in `run_fence.ex`, 6 in `internal.ex`, 7 in `events_receipts.ex`; a
+name+arity census over `control/lib` + `control/test` finds no caller outside each file), F5
+(`nullable_safe_integer/2` spells `@max_safe_integer`), F6 (`validate_contract/3`: `alias __MODULE__`
+and its 12 qualifiers removed) and D3 (the nine contract-mandated `!` lock-helper renames — name-only,
+across 77 lines: 9 heads, 14 `import …, only:` entries, 54 call sites) plus the record corrections
+D2/D5 (this file) / D6 (Out of scope). Not applied and still recorded: F7 (a new `internal_test.exs`
+is outside the owned set) and D1 (needs a conductor ruling or a fourth module). Sizes after apply:
+`goals.ex` **8,121**; `run_fence.ex` **1,823**; `internal.ex` **477**; `events_receipts.ex` **362**;
+`contract_validation.ex` **1,155**.
+
+Re-run gates at the apply tree (all foreground, serialized): format exit 0; `compile
+--warnings-as-errors` exit 0 (0 warnings); xref plain exit 0 (same 3 cycles) and compile-connected
+`No cycles found`; targeted suites **275 passed**; new module tests **6 passed**; `credo --strict`
+**490** (5W/357F/74R/54D) versus base 492, no new issue
+kinds; R9 evidence test `OK`; citation check `nothing to check`; `git diff --check` 0; host-path
+scan 0 hits (the G10 row's literal drive-path spelling is replaced by a descriptive one); `\u` scan
+0; per-function AST comparison with recorded-edit normalisation: **418 byte-identical + 43 under
+recorded edits, 0 missing, 0 duplicated**.
+
+R2 per-file line coverage (`mix test --cover`, full suite, base worktree `4fdea989` vs the apply
+tree; the CI coverage plane is advisory by construction, `ci.yml`):
+
+| module (file) | base `4fdea989` | apply tree |
+| --- | --- | --- |
+| `SymmetryControl.Goals` (`goals.ex`) | 86.49% (3,234/3,739) | **86.32% (2,392/2,771)** |
+| `SymmetryControl.Goals.RunFence` (`run_fence.ex`) | — (new file) | **87.29% (611/700)** |
+| `SymmetryControl.Goals.EventsReceipts` (`events_receipts.ex`) | — (new file) | **93.58% (102/109)** |
+| `SymmetryControl.Goals.Internal` (`internal.ex`) | — (new file) | **79.61% (121/152)** |
+| `SymmetryControl.Goals.ContractValidation` (`contract_validation.ex`) | 84.15% (276/328) | **84.59% (291/344)** |
+| suite total | 87.17% | **87.17%** |
+
+Moved-code accounting: the base `goals.ex` covered **817** of the 2,406 relevant net lines inside the
+moved spans; the three new modules cover **834** of their 2,662 relevant net lines (the extra
+relevant lines are each module's own header/import scaffolding), and `validate_contract/3` is
+15-covered on both sides (base span 10050–10099: 15/50; head: 15/52). `contract_validation.ex`
+closes exactly (276 base-covered + 15 = 291); `goals.ex` itself moves 86.49% → 86.32% (−0.17 pt) —
+a denominator/attribution effect of the 2,442 moved block lines, not a lost test (the oracle suites
+are unchanged and green, and the suite total is identical at 87.17% on both sides). This is the
+per-file R2 measurement the implement stage left unimplemented.
+
+Full suite with cover on the apply tree: **996/1000 passed, 21 skipped** (exit 2; the same
+four documented `:portal_assets` host-prerequisite cases). Base `4fdea989`:
+990/994 passed, 21 skipped (exit 2, the same four cases).
 
 ## Design trade-offs (ambiguity resolution)
 
@@ -996,10 +1068,11 @@ host artifact recorded for rf-w2-08 (`docs/plans/2026-11-21-rf-w2-08-read-model-
 9. **W5-14 boundary.** W5-14 consumes `Goals.Internal`, `Goals.EventsReceipts` and `Goals.RunFence`;
    the widenings and the STAY set are its own to re-derive when it moves the remaining regions. Its
    `defp` → `@doc false def` widening allowance applies to the three new modules.
-10. **`validate_contract/3` self-alias.** Inside `ContractValidation`, the moved body's
-    `ContractValidation.validate_*` calls need the name to resolve; `alias __MODULE__` supplies it
-    without touching a body byte. The alternative (rewriting the 12 call sites to bare names) is a
-    body edit.
+10. **`validate_contract/3` qualifier rewrite (superseded in the apply stage).** The moved body
+    originally kept its `ContractValidation.validate_*` text and resolved it with `alias __MODULE__`.
+    The apply stage accepted the simplify finding (F6): the alias and the 12 qualifiers are replaced
+    by direct local calls (−2 lines, −12 qualifiers), recorded as a body edit like the `Goals.`
+    insertions; all 12 callees are defined in the same module, so resolution is unchanged.
 
 ## Out of scope (with reasons)
 
@@ -1017,4 +1090,14 @@ host artifact recorded for rf-w2-08 (`docs/plans/2026-11-21-rf-w2-08-read-model-
   141–142, 1231 and 1237 cite `goals.ex` line numbers that shift with this move (path-level citations
   stay valid; the archived `docs/archive/CLOSED-TODO.md` citations are path-level by the citation
   gate's own rule and stay valid too).
+- Cross-module duplicates reachable from the moved code (recorded, not fixed — outside the owned
+  set; apply-stage finding D6): `same_uuid?/2` (`run_fence.ex:1808-1817` vs `read_model.ex:2206-2213`
+  vs `schemas.ex:1283-1292`; the `run_fence` copy's extra `nil` clause is equivalent),
+  `microusd_wire_value/1` (`run_fence.ex:1633-1634` — `nil → nil` — vs `read_model.ex:2584-2585`,
+  value-passthrough fallback), `claim/3` (`orchestration.ex:1948`) and `valid_fence?/1`
+  (`orchestration.ex:4264`) as orchestration-side twins. The simplify review's claim that the
+  `schemas.ex` `same_uuid?/2` copy and the `orchestration.ex` `valid_fence?/1` twin do not exist is
+  itself wrong — both were re-verified present. No test pins the `has_key?/2` vs `map_has_key?/2`
+  direction asymmetry (finding F7 not applied: a new `internal_test.exs` is outside the owned set);
+  do not merge the two predicates.
 

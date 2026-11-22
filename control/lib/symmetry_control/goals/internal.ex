@@ -47,7 +47,7 @@ defmodule SymmetryControl.Goals.Internal do
       nil ->
         {:ok, nil}
 
-      value when is_integer(value) and value >= 0 and value <= 9_007_199_254_740_991 ->
+      value when is_integer(value) and value >= 0 and value <= @max_safe_integer ->
         {:ok, value}
 
       _ ->
@@ -84,19 +84,19 @@ defmodule SymmetryControl.Goals.Internal do
     end)
   end
 
-  def lock_goal(goal_id) do
+  def lock_goal!(goal_id) do
     Repo.one(from(goal in Goal, where: goal.id == ^goal_id, lock: "FOR UPDATE")) ||
       rollback(:not_found)
   end
 
-  def lock_command_goal(goal_id, mutation_id) do
+  def lock_command_goal!(goal_id, mutation_id) do
     command_goal_lock_telemetry(:attempt, goal_id, mutation_id)
-    goal = lock_goal(goal_id)
+    goal = lock_goal!(goal_id)
     command_goal_lock_telemetry(:acquired, goal.id, mutation_id)
     goal
   end
 
-  def command_goal_lock_telemetry(phase, goal_id, mutation_id) do
+  defp command_goal_lock_telemetry(phase, goal_id, mutation_id) do
     :telemetry.execute(
       [:symmetry_control, :goals, :command, :goal_lock],
       %{},
@@ -131,17 +131,17 @@ defmodule SymmetryControl.Goals.Internal do
     end
   end
 
-  def lock_work_item(id) do
+  def lock_work_item!(id) do
     Repo.one(from(item in WorkItem, where: item.id == ^id, lock: "FOR UPDATE")) ||
       rollback(:not_found)
   end
 
-  def lock_external_wait(id) do
+  def lock_external_wait!(id) do
     Repo.one(from(wait in GoalExternalWait, where: wait.id == ^id, lock: "FOR UPDATE")) ||
       rollback(:not_found)
   end
 
-  def lock_context_snapshot(goal_id, snapshot_id) do
+  def lock_context_snapshot!(goal_id, snapshot_id) do
     Repo.one(
       from(snapshot in ContextSnapshot,
         where: snapshot.goal_id == ^goal_id and snapshot.id == ^snapshot_id,
@@ -159,9 +159,8 @@ defmodule SymmetryControl.Goals.Internal do
     resource
   end
 
-  # A plan may refer to several repositories in arbitrary proposal order.
-  # Take every resource lock once in canonical UUID order, then use the map to
-  # preserve the proposal's original business ordering during admission.
+  # Lock order is canonical UUID order (ABBA-deadlock blast radius); the map
+  # preserves the proposal's original business ordering for admission.
   def lock_repository_resources!(ids) do
     ids = ids |> Enum.uniq() |> Enum.sort()
 
@@ -180,7 +179,7 @@ defmodule SymmetryControl.Goals.Internal do
     Map.new(resources, &{&1.id, &1})
   end
 
-  def lock_work_items(ids) do
+  def lock_work_items!(ids) do
     rows =
       Repo.all(
         from(item in WorkItem,
@@ -194,16 +193,16 @@ defmodule SymmetryControl.Goals.Internal do
     Map.new(rows, &{&1.id, &1}) |> then(fn found -> Enum.map(ids, &Map.fetch!(found, &1)) end)
   end
 
-  def lock_task(id),
+  def lock_task!(id),
     do:
       Repo.one(from(task in Task, where: task.id == ^id, lock: "FOR UPDATE")) ||
         rollback(:not_found)
 
-  def lock_run(id),
+  def lock_run!(id),
     do:
       Repo.one(from(run in Run, where: run.id == ^id, lock: "FOR UPDATE")) || rollback(:not_found)
 
-  def lock_decision(id),
+  def lock_decision!(id),
     do:
       Repo.one(from(decision in GoalDecision, where: decision.id == ^id, lock: "FOR UPDATE")) ||
         rollback(:not_found)
@@ -248,10 +247,10 @@ defmodule SymmetryControl.Goals.Internal do
 
   def parse_subject(_), do: {:error, :invalid_subject}
 
-  def valid_commit?(value),
+  defp valid_commit?(value),
     do: is_binary(value) and Regex.match?(~r/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/, value)
 
-  def required_sha256(map, key) do
+  defp required_sha256(map, key) do
     case value(map, key) do
       value when is_binary(value) ->
         if Regex.match?(~r/^sha256:[0-9a-f]{64}$/, value),
@@ -333,7 +332,7 @@ defmodule SymmetryControl.Goals.Internal do
     end
   end
 
-  def required_positive_integer(map, key) do
+  defp required_positive_integer(map, key) do
     case value(map, key) do
       value when is_integer(value) and value > 0 -> {:ok, value}
       _ -> {:error, :invalid_request}
@@ -387,10 +386,8 @@ defmodule SymmetryControl.Goals.Internal do
     mutation_id("settlement", [task_id, run_id, Integer.to_string(generation)])
   end
 
-  # One deterministic UUID-shaped id for the durable mutation keys: sha256 over
-  # "<prefix>:<part>:<part>…" rendered with the version-5 and "a" variant nibbles these
-  # keys have always carried (not RFC 9562 name hashing). Settlement events and automatic
-  # admissions are keyed by it, so a change to these bytes is a durable-key change.
+  # Durable mutation keys: sha256("<prefix>:<part>…") rendered with version-5/"a"
+  # nibbles (not RFC 9562 name hashing); changing these bytes changes persisted keys.
   def mutation_id(prefix, parts) do
     hex =
       :crypto.hash(:sha256, prefix <> ":" <> Enum.join(parts, ":"))
@@ -441,9 +438,9 @@ defmodule SymmetryControl.Goals.Internal do
   def normalize_map(map) when is_map(map),
     do: Map.new(map, fn {key, value} -> {to_string(key), normalize_value(value)} end)
 
-  def normalize_value(value) when is_map(value), do: normalize_map(value)
-  def normalize_value(value) when is_list(value), do: Enum.map(value, &normalize_value/1)
-  def normalize_value(value), do: value
+  defp normalize_value(value) when is_map(value), do: normalize_map(value)
+  defp normalize_value(value) when is_list(value), do: Enum.map(value, &normalize_value/1)
+  defp normalize_value(value), do: value
 
   def stamp_insert(changeset, current) do
     changeset
@@ -451,7 +448,7 @@ defmodule SymmetryControl.Goals.Internal do
     |> maybe_put_timestamp(:updated_at, current)
   end
 
-  def maybe_put_timestamp(changeset, field, value) do
+  defp maybe_put_timestamp(changeset, field, value) do
     if Map.has_key?(changeset.types, field),
       do: Changeset.put_change(changeset, field, value),
       else: changeset

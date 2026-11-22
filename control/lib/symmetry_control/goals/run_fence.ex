@@ -22,12 +22,12 @@ defmodule SymmetryControl.Goals.RunFence do
     only: [
       has_key?: 2,
       is_short_identifier?: 1,
-      lock_context_snapshot: 2,
-      lock_goal: 1,
+      lock_context_snapshot!: 2,
+      lock_goal!: 1,
       lock_project!: 1,
-      lock_run: 1,
-      lock_task: 1,
-      lock_work_item: 1,
+      lock_run!: 1,
+      lock_task!: 1,
+      lock_work_item!: 1,
       normalize_map: 1,
       now: 1,
       nullable_microusd: 2,
@@ -84,14 +84,14 @@ defmodule SymmetryControl.Goals.RunFence do
 
   @spec new_claim_authority(new_claim_authority_envelope()) ::
           :ok | {:error, :state_conflict | :ownership_lost}
-  def new_claim_authority(%{
-        project: %Project{id: project_id, status: status},
-        goal: %Goal{project_id: goal_project_id} = goal,
-        work_item: work_item,
-        task: %Task{} = task,
-        run: %Run{} = run,
-        ownership: ownership
-      }) do
+  defp new_claim_authority(%{
+         project: %Project{id: project_id, status: status},
+         goal: %Goal{project_id: goal_project_id} = goal,
+         work_item: work_item,
+         task: %Task{} = task,
+         run: %Run{} = run,
+         ownership: ownership
+       }) do
     cond do
       status != "active" ->
         {:error, :state_conflict}
@@ -113,7 +113,7 @@ defmodule SymmetryControl.Goals.RunFence do
     end
   end
 
-  def new_claim_authority(_), do: {:error, :ownership_lost}
+  defp new_claim_authority(_), do: {:error, :ownership_lost}
 
   def claim(run_id, request, opts \\ []) do
     notify? = not Repo.in_transaction?()
@@ -155,7 +155,7 @@ defmodule SymmetryControl.Goals.RunFence do
 
   def claim_with_disposition(_, _, _), do: {:error, :invalid_request}
 
-  def claim_with_disposition_in_transaction(run_id, request, opts) do
+  defp claim_with_disposition_in_transaction(run_id, request, opts) do
     ownership =
       Repo.one(
         from run in Run,
@@ -177,8 +177,8 @@ defmodule SymmetryControl.Goals.RunFence do
     if is_nil(ownership.goal_id), do: rollback(:goal_authority_required)
 
     project = lock_project!(ownership.project_id)
-    goal = lock_goal(ownership.goal_id)
-    item = if ownership.work_item_id, do: lock_work_item(ownership.work_item_id)
+    goal = lock_goal!(ownership.goal_id)
+    item = if ownership.work_item_id, do: lock_work_item!(ownership.work_item_id)
 
     case SymmetryControl.Orchestration.prepare_claim_in_transaction(
            run_id,
@@ -414,7 +414,7 @@ defmodule SymmetryControl.Goals.RunFence do
             validate_evidence_contract!(evidence, opts)
 
             snapshot =
-              lock_context_snapshot(goal.id, task.context_snapshot_id || rollback(:not_found))
+              lock_context_snapshot!(goal.id, task.context_snapshot_id || rollback(:not_found))
 
             unless snapshot.goal_revision == task.goal_revision and
                      snapshot.work_item_id == task.work_item_id do
@@ -496,7 +496,7 @@ defmodule SymmetryControl.Goals.RunFence do
 
   def append_evidence_batch(_, _, _, _, _), do: {:error, :invalid_request}
 
-  def classify_and_insert_evidence_batch!(goal, task, item, run, runtime, evidence_items, opts) do
+  defp classify_and_insert_evidence_batch!(goal, task, item, run, runtime, evidence_items, opts) do
     keys = Enum.map(evidence_items, & &1.attrs.evidence_key)
     ids = Enum.map(evidence_items, & &1.attrs.id)
 
@@ -552,7 +552,7 @@ defmodule SymmetryControl.Goals.RunFence do
           validate_new_evidence_batch!(run.id, new_items, opts)
 
           snapshot =
-            lock_context_snapshot(goal.id, task.context_snapshot_id || rollback(:not_found))
+            lock_context_snapshot!(goal.id, task.context_snapshot_id || rollback(:not_found))
 
           unless snapshot.goal_revision == task.goal_revision and
                    snapshot.work_item_id == task.work_item_id do
@@ -628,14 +628,14 @@ defmodule SymmetryControl.Goals.RunFence do
     end
   end
 
-  def evidence_batch_receipt({disposition, row}) do
+  defp evidence_batch_receipt({disposition, row}) do
     row
     |> evidence_receipt()
     |> Map.fetch!(:evidence)
     |> Map.put(:disposition, Atom.to_string(disposition))
   end
 
-  def evidence_batch_conflict!(index, attrs) do
+  defp evidence_batch_conflict!(index, attrs) do
     rollback(
       {:idempotency_conflict,
        %{
@@ -726,9 +726,7 @@ defmodule SymmetryControl.Goals.RunFence do
         session_id =
           if task.purpose == "validate" and not is_nil(task.validation_of_task_id) and
                is_nil(run.harness_session_id) do
-            # Deterministic validation is daemon-owned work, not a retained native
-            # session. Its claimed fence remains mandatory, but no opaque handle is
-            # required to obtain the immutable context snapshot.
+            # Deterministic validation is daemon-owned: fence required, no handle.
             nil
           else
             Repo.one(
@@ -747,7 +745,7 @@ defmodule SymmetryControl.Goals.RunFence do
           end
 
         snapshot_id = task.context_snapshot_id || rollback(:not_found)
-        snapshot = lock_context_snapshot(goal.id, snapshot_id)
+        snapshot = lock_context_snapshot!(goal.id, snapshot_id)
 
         %{
           goal_id: goal.id,
@@ -767,7 +765,7 @@ defmodule SymmetryControl.Goals.RunFence do
 
   def fetch_run_context(_, _, _), do: {:error, :invalid_request}
 
-  def lock_goal_run!(machine_id, run_id, fence, opts, mode) do
+  defp lock_goal_run!(machine_id, run_id, fence, opts, mode) do
     task_id =
       Repo.one(from(run in Run, where: run.id == ^run_id, select: run.task_id)) ||
         rollback(:not_found)
@@ -775,10 +773,10 @@ defmodule SymmetryControl.Goals.RunFence do
     untrusted_task = Repo.get(Task, task_id) || rollback(:not_found)
     goal_id = untrusted_task.goal_id || rollback(:not_found)
 
-    goal = lock_goal(goal_id)
-    item = if untrusted_task.work_item_id, do: lock_work_item(untrusted_task.work_item_id)
-    task = lock_task(task_id)
-    run = lock_run(run_id)
+    goal = lock_goal!(goal_id)
+    item = if untrusted_task.work_item_id, do: lock_work_item!(untrusted_task.work_item_id)
+    task = lock_task!(task_id)
+    run = lock_run!(run_id)
 
     runtime =
       Repo.one(from(runtime in Runtime, where: runtime.id == ^run.runtime_id, lock: "FOR UPDATE")) ||
@@ -799,7 +797,7 @@ defmodule SymmetryControl.Goals.RunFence do
     {goal, task, item, run, runtime}
   end
 
-  def ensure_machine_fence!(machine_id, task, run, runtime, fence, mode, current) do
+  defp ensure_machine_fence!(machine_id, task, run, runtime, fence, mode, current) do
     static? =
       runtime.machine_id == machine_id and
         run.runtime_id == value(fence, :runtime_id) and
@@ -824,7 +822,7 @@ defmodule SymmetryControl.Goals.RunFence do
     end
   end
 
-  def valid_fence(fence) do
+  defp valid_fence(fence) do
     fields = [:runtime_id, :claim_id, :lease_token]
 
     if Enum.all?(fields, &valid_uuid?(value(fence, &1))) and
@@ -836,7 +834,7 @@ defmodule SymmetryControl.Goals.RunFence do
     end
   end
 
-  def session_attrs(attrs) do
+  defp session_attrs(attrs) do
     allowed = [
       "local_handle_id",
       "binding_id",
@@ -875,7 +873,7 @@ defmodule SymmetryControl.Goals.RunFence do
     end
   end
 
-  def session_stop_attrs(attrs) do
+  defp session_stop_attrs(attrs) do
     allowed = ["session_id", "local_handle_id", "binding_id"]
 
     with true <- only_known_keys?(attrs, allowed),
@@ -893,7 +891,7 @@ defmodule SymmetryControl.Goals.RunFence do
     end
   end
 
-  def session_stop_request(fence, attrs) do
+  defp session_stop_request(fence, attrs) do
     %{
       "runtime_id" => value(fence, :runtime_id),
       "runtime_epoch" => value(fence, :runtime_epoch),
@@ -906,7 +904,7 @@ defmodule SymmetryControl.Goals.RunFence do
     }
   end
 
-  def session_attach_request(fence, attrs) do
+  defp session_attach_request(fence, attrs) do
     request = %{
       "runtime_id" => value(fence, :runtime_id),
       "runtime_epoch" => value(fence, :runtime_epoch),
@@ -927,7 +925,7 @@ defmodule SymmetryControl.Goals.RunFence do
       else: request
   end
 
-  def ensure_stoppable_session!(session, run, runtime, machine_id, attrs) do
+  defp ensure_stoppable_session!(session, run, runtime, machine_id, attrs) do
     stoppable? =
       session.machine_id == machine_id and session.runtime_id == runtime.id and
         session.id == run.harness_session_id and run.harness_binding_id == attrs.binding_id and
@@ -939,12 +937,12 @@ defmodule SymmetryControl.Goals.RunFence do
     unless stoppable?, do: rollback(:ownership_lost)
   end
 
-  def stop_receipt_matches?(receipt, machine_id, run, request_hash) do
+  defp stop_receipt_matches?(receipt, machine_id, run, request_hash) do
     receipt.machine_id == machine_id and receipt.run_id == run.id and
       receipt.request_hash == request_hash
   end
 
-  def ensure_session_scope!(attrs, task, item, run, runtime, machine_id) do
+  defp ensure_session_scope!(attrs, task, item, run, runtime, machine_id) do
     repository_resource_id = task_repository_resource_id!(task, item)
 
     unless attrs.workspace == task.workspace and
@@ -959,7 +957,7 @@ defmodule SymmetryControl.Goals.RunFence do
     end
   end
 
-  def ensure_current_attachment!(goal, task, run, runtime, machine_id, fence, opts) do
+  defp ensure_current_attachment!(goal, task, run, runtime, machine_id, fence, opts) do
     unless task.goal_revision == goal.current_revision and
              ((goal.state == "draft" and plan_task?(task)) or
                 (goal.state == "active" and task.purpose != "plan")),
@@ -968,10 +966,9 @@ defmodule SymmetryControl.Goals.RunFence do
     ensure_machine_fence!(machine_id, task, run, runtime, fence, :current, now(opts))
   end
 
-  # The admission mode decides binding authority. A fresh or handoff native
-  # process has no server-issued attachment identity yet; a resumed process can
-  # only echo the pair atomically reserved by the scheduler.
-  def ensure_attachment_binding_shape!("resume", run, attrs) do
+  # The admission mode, not the caller, decides binding authority: fresh/handoff
+  # carry no server-issued identity; resume may only echo the reserved pair.
+  defp ensure_attachment_binding_shape!("resume", run, attrs) do
     unless attrs.binding_supplied?, do: rollback(:invalid_request)
 
     unless is_binary(run.harness_session_id) and attrs.binding_id == run.harness_binding_id do
@@ -979,7 +976,7 @@ defmodule SymmetryControl.Goals.RunFence do
     end
   end
 
-  def ensure_attachment_binding_shape!(mode, run, attrs) when mode in ["fresh", "handoff"] do
+  defp ensure_attachment_binding_shape!(mode, run, attrs) when mode in ["fresh", "handoff"] do
     if attrs.binding_supplied?, do: rollback(:invalid_request)
 
     if not is_nil(run.harness_session_id) or not is_nil(run.harness_binding_id) do
@@ -987,19 +984,19 @@ defmodule SymmetryControl.Goals.RunFence do
     end
   end
 
-  def ensure_attachment_binding_shape!(_, _run, _attrs), do: rollback(:invalid_request)
+  defp ensure_attachment_binding_shape!(_, _run, _attrs), do: rollback(:invalid_request)
 
-  def attach_fresh_session!(task, item, run, runtime, machine_id, attrs, opts) do
+  defp attach_fresh_session!(task, item, run, runtime, machine_id, attrs, opts) do
     reject_existing_handle!(machine_id, attrs.local_handle_id, :idempotency_conflict)
     create_fresh_harness_session!(task, item, run, runtime, machine_id, attrs, opts)
   end
 
-  def attach_handoff_session!(task, item, run, runtime, machine_id, attrs, opts) do
+  defp attach_handoff_session!(task, item, run, runtime, machine_id, attrs, opts) do
     reject_existing_handle!(machine_id, attrs.local_handle_id, :handoff_session_reuse)
     create_fresh_harness_session!(task, item, run, runtime, machine_id, attrs, opts)
   end
 
-  def reject_existing_handle!(machine_id, local_handle_id, reason) do
+  defp reject_existing_handle!(machine_id, local_handle_id, reason) do
     if Repo.exists?(
          from(session in HarnessSession,
            where:
@@ -1010,7 +1007,7 @@ defmodule SymmetryControl.Goals.RunFence do
        do: rollback(reason)
   end
 
-  def create_fresh_harness_session!(task, item, run, runtime, machine_id, attrs, opts) do
+  defp create_fresh_harness_session!(task, item, run, runtime, machine_id, attrs, opts) do
     binding_id = Ecto.UUID.generate()
 
     changeset =
@@ -1043,7 +1040,7 @@ defmodule SymmetryControl.Goals.RunFence do
     end
   end
 
-  def attach_reserved_session!(task, run, runtime, item, machine_id, attrs) do
+  defp attach_reserved_session!(task, run, runtime, item, machine_id, attrs) do
     session =
       Repo.one(
         from(session in HarnessSession,
@@ -1067,7 +1064,7 @@ defmodule SymmetryControl.Goals.RunFence do
     session
   end
 
-  def attach_session_to_run!(run, session, opts) do
+  defp attach_session_to_run!(run, session, opts) do
     cond do
       is_nil(run.harness_session_id) and is_nil(run.harness_binding_id) ->
         run
@@ -1086,7 +1083,7 @@ defmodule SymmetryControl.Goals.RunFence do
     end
   end
 
-  def lock_attach_receipt(run_id) do
+  defp lock_attach_receipt(run_id) do
     Repo.one(
       from(receipt in HarnessSessionAttachReceipt,
         where: receipt.run_id == ^run_id,
@@ -1095,12 +1092,12 @@ defmodule SymmetryControl.Goals.RunFence do
     )
   end
 
-  def attach_receipt_matches?(receipt, machine_id, fence, request_hash) do
+  defp attach_receipt_matches?(receipt, machine_id, fence, request_hash) do
     receipt.request_hash == request_hash and
       attach_receipt_fence_matches?(receipt, machine_id, fence)
   end
 
-  def attach_receipt_fence_matches?(receipt, machine_id, fence) do
+  defp attach_receipt_fence_matches?(receipt, machine_id, fence) do
     receipt.machine_id == machine_id and
       receipt.runtime_id == value(fence, :runtime_id) and
       receipt.runtime_epoch == value(fence, :runtime_epoch) and
@@ -1109,7 +1106,7 @@ defmodule SymmetryControl.Goals.RunFence do
       receipt.lease_token == value(fence, :lease_token)
   end
 
-  def create_attach_receipt!(goal, task, run, session, machine_id, fence, request_hash, opts) do
+  defp create_attach_receipt!(goal, task, run, session, machine_id, fence, request_hash, opts) do
     receipt_id = Ecto.UUID.generate()
     response = session_receipt(receipt_id, goal, task, run, session)
 
@@ -1132,13 +1129,12 @@ defmodule SymmetryControl.Goals.RunFence do
     response
   end
 
-  # The receipt remains JSONB with string keys, but the Goals context has
-  # historically returned atom-keyed session receipts to its direct callers.
-  # Decode only the fixed envelope; never reflect arbitrary persisted keys.
-  def attachment_receipt_response(%HarnessSessionAttachReceipt{
-        response: %{"session" => session}
-      })
-      when is_map(session) do
+  # Receipt storage stays JSONB string-keyed while direct callers expect atoms:
+  # decode only the fixed envelope, never arbitrary persisted keys.
+  defp attachment_receipt_response(%HarnessSessionAttachReceipt{
+         response: %{"session" => session}
+       })
+       when is_map(session) do
     fields = [
       {:attachment_receipt_id, "attachment_receipt_id"},
       {:id, "id"},
@@ -1168,11 +1164,10 @@ defmodule SymmetryControl.Goals.RunFence do
     %{session: receipt_session}
   end
 
-  def attachment_receipt_response(_receipt), do: rollback(:ownership_lost)
+  defp attachment_receipt_response(_receipt), do: rollback(:ownership_lost)
 
-  # A terminal Run does not prove that a retained native session stopped.
-  # Until a durable session_stopped receipt exists, preserve the session as
-  # unavailable rather than letting a later admission reuse it.
+  # A terminal Run does not prove the retained session stopped, so without a
+  # durable session_stopped receipt keep it unavailable against reuse.
   def mark_harness_session_unavailable!(%Run{harness_session_id: nil}, _opts), do: :ok
 
   def mark_harness_session_unavailable!(run, opts) do
@@ -1195,7 +1190,7 @@ defmodule SymmetryControl.Goals.RunFence do
     end
   end
 
-  def session_receipt(receipt_id, goal, task, run, session) do
+  defp session_receipt(receipt_id, goal, task, run, session) do
     %{
       session: %{
         attachment_receipt_id: receipt_id,
@@ -1220,7 +1215,7 @@ defmodule SymmetryControl.Goals.RunFence do
     }
   end
 
-  def session_stop_receipt(receipt_id, session, run, binding_id) do
+  defp session_stop_receipt(receipt_id, session, run, binding_id) do
     %{
       session_stopped: %{
         receipt_id: receipt_id,
@@ -1235,7 +1230,7 @@ defmodule SymmetryControl.Goals.RunFence do
     }
   end
 
-  def evidence_attrs(evidence, run_id) do
+  defp evidence_attrs(evidence, run_id) do
     allowed = [
       "schema_version",
       "evidence_id",
@@ -1290,7 +1285,7 @@ defmodule SymmetryControl.Goals.RunFence do
     end
   end
 
-  def evidence_batch_attrs(batch, run_id) do
+  defp evidence_batch_attrs(batch, run_id) do
     with true <- only_known_keys?(batch, ["schema_version", "run_id", "items"]),
          "symmetry.evidence_batch.v1" <- value(batch, :schema_version),
          ^run_id <- value(batch, :run_id),
@@ -1338,7 +1333,7 @@ defmodule SymmetryControl.Goals.RunFence do
 
   # RunEvidence stores only the canonical Subject digest. Recompute it from
   # the outer request Subject before treating an old row as an exact replay.
-  def evidence_matches?(row, attrs) do
+  defp evidence_matches?(row, attrs) do
     row.id == attrs.id and row.kind == attrs.kind and row.subject_hash == attrs.subject_hash and
       row.subject_hash == RequestHash.canonical(attrs.subject) and
       value(row.payload, "subject") == normalize_map(attrs.subject) and
@@ -1347,7 +1342,7 @@ defmodule SymmetryControl.Goals.RunFence do
       row.payload == attrs.payload and row.inserted_at == attrs.observed_at
   end
 
-  def validation_evidence_closed?(goal, task, run, evidence) do
+  defp validation_evidence_closed?(goal, task, run, evidence) do
     task.purpose == "validate" and not is_nil(task.validation_of_task_id) and
       evidence.kind != "observation" and
       Repo.exists?(
@@ -1360,7 +1355,7 @@ defmodule SymmetryControl.Goals.RunFence do
       )
   end
 
-  def ensure_evidence_identity!(task, item, run, runtime, snapshot, evidence) do
+  defp ensure_evidence_identity!(task, item, run, runtime, snapshot, evidence) do
     subject = value(task.input || %{}, "subject")
     predicate_id = value(evidence.payload, "predicate_id")
 
@@ -1408,7 +1403,7 @@ defmodule SymmetryControl.Goals.RunFence do
     end
   end
 
-  def snapshot_acceptance_contract!(snapshot) do
+  defp snapshot_acceptance_contract!(snapshot) do
     snapshot.payload
     |> value("work_contract", %{})
     |> value("acceptance")
@@ -1418,7 +1413,7 @@ defmodule SymmetryControl.Goals.RunFence do
     end
   end
 
-  def ensure_validation_binding!(snapshot, evidence, expected_profile, task, run, runtime) do
+  defp ensure_validation_binding!(snapshot, evidence, expected_profile, task, run, runtime) do
     bindings =
       snapshot.payload
       |> value("work_contract", %{})
@@ -1438,7 +1433,7 @@ defmodule SymmetryControl.Goals.RunFence do
     end
   end
 
-  def binding_matches_evidence?(binding, evidence, expected_profile, task, run, runtime) do
+  defp binding_matches_evidence?(binding, evidence, expected_profile, task, run, runtime) do
     allowed_runtime_ids = value(binding, "allowed_runtime_ids")
     digest = value(binding, "profile_digest")
 
@@ -1466,7 +1461,7 @@ defmodule SymmetryControl.Goals.RunFence do
     end
   end
 
-  def validator_profile_for!(predicate, kind) do
+  defp validator_profile_for!(predicate, kind) do
     case kind do
       "check" -> required_string!(predicate, :validator_profile)
       "review" -> required_string!(predicate, :reviewer_profile)
@@ -1475,7 +1470,7 @@ defmodule SymmetryControl.Goals.RunFence do
     end
   end
 
-  def source_matches_evidence?(evidence, subject, item, predicate) do
+  defp source_matches_evidence?(evidence, subject, item, predicate) do
     source = evidence.source_ref
 
     payload_subject = value(evidence.payload, "subject")
@@ -1489,7 +1484,7 @@ defmodule SymmetryControl.Goals.RunFence do
     end
   end
 
-  def source_matches_evidence_kind?(evidence, subject, item, predicate, source) do
+  defp source_matches_evidence_kind?(evidence, subject, item, predicate, source) do
     source_hash = "sha256:" <> Base.encode16(evidence.subject_hash, case: :lower)
 
     case evidence.kind do
@@ -1538,7 +1533,7 @@ defmodule SymmetryControl.Goals.RunFence do
     end
   end
 
-  def evidence_receipt(row) do
+  defp evidence_receipt(row) do
     %{
       evidence: %{
         id: row.id,
@@ -1552,7 +1547,7 @@ defmodule SymmetryControl.Goals.RunFence do
     }
   end
 
-  def usage_attrs(usage, run_id) do
+  defp usage_attrs(usage, run_id) do
     allowed = [
       "schema_version",
       "usage_id",
@@ -1609,7 +1604,7 @@ defmodule SymmetryControl.Goals.RunFence do
     end
   end
 
-  def usage_matches?(row, attrs) do
+  defp usage_matches?(row, attrs) do
     row.id == attrs.id and row.provider == attrs.provider and row.model == attrs.model and
       row.input_tokens == attrs.input_tokens and row.output_tokens == attrs.output_tokens and
       row.cached_input_tokens == attrs.cached_input_tokens and
@@ -1618,7 +1613,7 @@ defmodule SymmetryControl.Goals.RunFence do
       row.supersedes_id == attrs.supersedes_id and row.inserted_at == attrs.observed_at
   end
 
-  def usage_receipt(row) do
+  defp usage_receipt(row) do
     %{
       usage: %{
         id: row.id,
@@ -1630,12 +1625,12 @@ defmodule SymmetryControl.Goals.RunFence do
     }
   end
 
-  def microusd_wire_value(nil), do: nil
-  def microusd_wire_value(value) when is_integer(value), do: Integer.to_string(value)
+  defp microusd_wire_value(nil), do: nil
+  defp microusd_wire_value(value) when is_integer(value), do: Integer.to_string(value)
 
-  def ensure_usage_supersedes_run!(%{supersedes_id: nil}, _run), do: :ok
+  defp ensure_usage_supersedes_run!(%{supersedes_id: nil}, _run), do: :ok
 
-  def ensure_usage_supersedes_run!(%{supersedes_id: supersedes_id}, run) do
+  defp ensure_usage_supersedes_run!(%{supersedes_id: supersedes_id}, run) do
     parent =
       Repo.one(
         from(usage in RunUsage,
@@ -1647,7 +1642,7 @@ defmodule SymmetryControl.Goals.RunFence do
     unless parent, do: rollback(:invalid_request)
   end
 
-  def reconcile_reservation_and_arm!(goal, task, opts) do
+  defp reconcile_reservation_and_arm!(goal, task, opts) do
     Goals.reconcile_reservation!(goal, task, opts)
 
     if goal.state == "active" do
@@ -1663,20 +1658,20 @@ defmodule SymmetryControl.Goals.RunFence do
     end
   end
 
-  def evidence_validator_profile(evidence, "observation"),
+  defp evidence_validator_profile(evidence, "observation"),
     do: nullable_string(evidence, :validator_profile)
 
-  def evidence_validator_profile(evidence, _kind),
+  defp evidence_validator_profile(evidence, _kind),
     do: required_string(evidence, :validator_profile)
 
-  def valid_usage_cost?("unknown", nil), do: true
+  defp valid_usage_cost?("unknown", nil), do: true
 
-  def valid_usage_cost?(basis, amount)
-      when basis in ["reported", "estimated"] and is_integer(amount), do: true
+  defp valid_usage_cost?(basis, amount)
+       when basis in ["reported", "estimated"] and is_integer(amount), do: true
 
-  def valid_usage_cost?(_, _), do: false
+  defp valid_usage_cost?(_, _), do: false
 
-  def required_datetime(map, key) do
+  defp required_datetime(map, key) do
     case value(map, key) do
       %DateTime{} = datetime ->
         {:ok, DateTime.truncate(datetime, :microsecond)}
@@ -1702,7 +1697,7 @@ defmodule SymmetryControl.Goals.RunFence do
     end
   end
 
-  def machine_write_result(result) do
+  defp machine_write_result(result) do
     case result do
       {:ok, {disposition, receipt}} when disposition in [:created, :replayed] ->
         {:ok, receipt, disposition}
@@ -1712,7 +1707,7 @@ defmodule SymmetryControl.Goals.RunFence do
     end
   end
 
-  def machine_session_stop_result(result) do
+  defp machine_session_stop_result(result) do
     case machine_write_result(result) do
       {:ok, _receipt, :created} = created ->
         Scheduler.wake()
@@ -1723,47 +1718,47 @@ defmodule SymmetryControl.Goals.RunFence do
     end
   end
 
-  def claim_task_current?(goal, task) do
+  defp claim_task_current?(goal, task) do
     task.goal_id == goal.id and task.goal_revision == goal.current_revision and
       ((goal.state == "draft" and claim_planning_task?(task)) or
          (goal.state == "active" and task.purpose != "plan"))
   end
 
-  def claim_planning_task?(%Task{
-        purpose: "plan",
-        work_item_id: nil,
-        validation_of_task_id: nil
-      }),
-      do: true
+  defp claim_planning_task?(%Task{
+         purpose: "plan",
+         work_item_id: nil,
+         validation_of_task_id: nil
+       }),
+       do: true
 
-  def claim_planning_task?(_task), do: false
+  defp claim_planning_task?(_task), do: false
 
-  def claim_identity_current?(ownership, %Task{} = task, %Run{} = run) do
+  defp claim_identity_current?(ownership, %Task{} = task, %Run{} = run) do
     task.id == ownership.task_id and run.task_id == task.id and
       task.goal_id == ownership.goal_id and task.work_item_id == ownership.work_item_id and
       task.current_generation == run.generation
   end
 
-  def notify_claim_authority_routed(opts, ownership) do
+  defp notify_claim_authority_routed(opts, ownership) do
     case Keyword.get(opts, :on_goal_claim_routed) do
       hook when is_function(hook, 1) -> hook.(ownership)
       _ -> :ok
     end
   end
 
-  def claim_work_item_owned?(project_id, goal, nil, %Task{} = task) do
+  defp claim_work_item_owned?(project_id, goal, nil, %Task{} = task) do
     claim_planning_task?(task) and task.goal_id == goal.id and goal.project_id == project_id
   end
 
-  def claim_work_item_owned?(project_id, goal, %WorkItem{} = work_item, %Task{} = task) do
+  defp claim_work_item_owned?(project_id, goal, %WorkItem{} = work_item, %Task{} = task) do
     task.goal_id == goal.id and task.work_item_id == work_item.id and
       work_item.project_id == project_id and work_item.goal_id == goal.id and
       work_item.admitted_revision == task.goal_revision
   end
 
-  def claim_work_item_owned?(_project_id, _goal, _work_item, _task), do: false
+  defp claim_work_item_owned?(_project_id, _goal, _work_item, _task), do: false
 
-  def task_repository_resource_id!(%Task{} = task, nil) do
+  defp task_repository_resource_id!(%Task{} = task, nil) do
     if plan_task?(task) do
       task.input
       |> value("subject")
@@ -1774,17 +1769,17 @@ defmodule SymmetryControl.Goals.RunFence do
     end
   end
 
-  def task_repository_resource_id!(_task, item) when not is_nil(item),
+  defp task_repository_resource_id!(_task, item) when not is_nil(item),
     do: item.repository_resource_id
 
-  def validate_evidence_batch_contract(batch, opts) do
+  defp validate_evidence_batch_contract(batch, opts) do
     case validate_contract(:evidence_batch, batch, opts) do
       :ok -> :ok
       {:error, reason} -> {:error, {:invalid_contract, reason}}
     end
   end
 
-  def validate_evidence_contract!(evidence, opts) do
+  defp validate_evidence_contract!(evidence, opts) do
     case validate_contract(:evidence, evidence, opts) do
       :ok -> :ok
       {:error, :invalid_commit_path} -> rollback({:invalid_contract, :invalid_commit_path})
@@ -1792,7 +1787,7 @@ defmodule SymmetryControl.Goals.RunFence do
     end
   end
 
-  def validate_new_evidence_batch!(run_id, evidence_items, opts) do
+  defp validate_new_evidence_batch!(run_id, evidence_items, opts) do
     batch = %{
       "schema_version" => "symmetry.evidence_batch.v1",
       "run_id" => run_id,
@@ -1805,18 +1800,18 @@ defmodule SymmetryControl.Goals.RunFence do
     end
   end
 
-  def same_uuid?(_left, nil), do: false
+  defp same_uuid?(_left, nil), do: false
 
-  def same_uuid?(left, right) when is_binary(left) and is_binary(right) do
+  defp same_uuid?(left, right) when is_binary(left) and is_binary(right) do
     case {Ecto.UUID.dump(left), Ecto.UUID.dump(right)} do
       {{:ok, left}, {:ok, right}} -> left == right
       _ -> false
     end
   end
 
-  def same_uuid?(_left, _right), do: false
+  defp same_uuid?(_left, _right), do: false
 
-  def required_sha256_digest(map, key) do
+  defp required_sha256_digest(map, key) do
     value = value(map, key)
 
     if is_binary(value) and Regex.match?(~r/^sha256:[0-9a-f]{64}$/, value) do

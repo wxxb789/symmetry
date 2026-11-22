@@ -34,8 +34,6 @@ defmodule SymmetryControl.Goals.ContractValidation do
   schema.
   """
 
-  alias __MODULE__
-
   @type validation_result :: :ok | {:error, term()}
 
   @schema_files %{
@@ -1118,40 +1116,40 @@ defmodule SymmetryControl.Goals.ContractValidation do
 
     case kind do
       :goal_create ->
-        ContractValidation.validate_goal_create(document, schema_root: schema_root)
+        validate_goal_create(document, schema_root: schema_root)
 
       :goal_command ->
-        ContractValidation.validate_goal_command(document, schema_root: schema_root)
+        validate_goal_command(document, schema_root: schema_root)
 
       :plan_proposal ->
-        ContractValidation.validate_plan_proposal(document, schema_root: schema_root)
+        validate_plan_proposal(document, schema_root: schema_root)
 
       :admission ->
-        ContractValidation.validate_admission(document, schema_root: schema_root)
+        validate_admission(document, schema_root: schema_root)
 
       :context_snapshot ->
-        ContractValidation.validate_context_snapshot(document, schema_root: schema_root)
+        validate_context_snapshot(document, schema_root: schema_root)
 
       :task_result ->
-        ContractValidation.validate_task_result(document, schema_root: schema_root)
+        validate_task_result(document, schema_root: schema_root)
 
       :evidence ->
-        ContractValidation.validate_evidence(document, schema_root: schema_root)
+        validate_evidence(document, schema_root: schema_root)
 
       :evidence_batch ->
-        ContractValidation.validate_evidence_batch(document, schema_root: schema_root)
+        validate_evidence_batch(document, schema_root: schema_root)
 
       :evidence_batch_response ->
-        ContractValidation.validate_evidence_batch_response(document, schema_root: schema_root)
+        validate_evidence_batch_response(document, schema_root: schema_root)
 
       :usage ->
-        ContractValidation.validate_usage(document, schema_root: schema_root)
+        validate_usage(document, schema_root: schema_root)
 
       :decision ->
-        ContractValidation.validate_decision(document, schema_root: schema_root)
+        validate_decision(document, schema_root: schema_root)
 
       :goal_revision ->
-        ContractValidation.validate_goal_revision(document, schema_root: schema_root)
+        validate_goal_revision(document, schema_root: schema_root)
     end
   end
 end
