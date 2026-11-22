@@ -125,7 +125,7 @@ lines / funlen statements / gocyclo of the range. The bound is 120 / 60 / 25.
 | 16 | `:579-607` | `prepareSubjectWorkspace(ctx)` | 29/21/9 | |
 | 17 | `:609-629` | `recordGoalSessionLaunchIntent()` | 21/10/4 | |
 | 18 | `:630-638` | (inline in 12) | 2x(3/2/2) | two `abortFreshLaunchIfCancelled` sites |
-| 19 | `:640-642` | `publishPreparedWorkspace()` | 3/2/2 | |
+| 19 | `:640-642` | (inline in `prepareGoalSessionForLaunch` at the apply revision; `publishPreparedWorkspace()` before it) | 3/2/2 | |
 | 20 | `:643-661` | `queueGoalSessionAttach(ctx)` | 19/7/5 | |
 | 21 | `:662-664` | (inline in P2) | 3/2/2 | |
 | 22 | `:665-667` | `queueNativeEventSink` method + field | ~3 | former `sink` closure |
@@ -145,7 +145,7 @@ lines / funlen statements / gocyclo of the range. The bound is 120 / 60 / 25.
 | 36 | `:829` | (inline in 33) | 1 | arms entry 4 |
 | 37 | `:850-860` | `settlePublishedCancellation(ctx, stage, cause, discardAttach) (bool, error)` | 11/8/5 | former closure, 6 call sites |
 | 38 | `:863-895` | `settleExpiredNativeStartFailure(ctx, stage, stageErr, attached, discardAttach) (bool, error)` | 33/25/10 | former closure |
-| 39 | `:897-905` | `settleCancelledPublishedStart(ctx) (bool, error)` | 9/7/5 | |
+| 39 | `:897-905` | `settleStartCancelledAfterLaunch(ctx) (bool, error)` (renamed at the apply revision) | 9/7/5 | |
 | 40 | `:906-914` | `settleCancelledProcessStart(ctx, startErr) (bool, error)` | 9/7/5 | |
 | 41 | `:915-917` | (inline in P3) | 3/2/2 | expired window |
 | 42 | `:918-958` | `failNativeStart(ctx, startErr) error` | 41/22/12 | |
@@ -257,8 +257,8 @@ delivered revision missed this in three phases and the Windows suite caught it a
 staged session had never been assigned); the fix is recorded in the evidence record.
 
 **D8 — method granularity is bound-driven, not stylistic.** 277 base decision points at a 25
-per-method cap force at least 12 methods; the delivered set has 68 tx methods plus the constructor
-and the residual entry, measured max 19 gocyclo (mean 6.0), max 42 lines, max 29 statements (evidence §2). The
+per-method cap force at least 12 methods; the delivered set has 67 tx methods plus the constructor
+and the residual entry, measured max 19 gocyclo (mean 6.1), max 42 lines, max 29 statements (evidence §2). The
 alternative (fewer, larger methods near 25) reduces the audit margin without reducing owned
 complexity, and the contract asks for the bound with no new finding.
 
@@ -325,12 +325,13 @@ complexity, and the contract asks for the bound with no new finding.
 
 ## Delivered revision (2026-11-22)
 
-Measured at the working tree (`goal_admission_tx.go` 1,473 lines, `goal_admission.go` 635 lines):
+Measured at the working tree (`goal_admission_tx.go` 1,460 lines, `goal_admission.go` 612 lines at
+the apply revision on top of `a5d9bd88`, post-merge and after the accepted simplify findings):
 
-- **Per-method bound.** 68 `*goalAdmissionTx` methods + the `newGoalAdmissionTx` constructor + the
+- **Per-method bound.** 67 `*goalAdmissionTx` methods + the `newGoalAdmissionTx` constructor + the
   7-line residual entry: max gocyclo 19
   (`startGoalNativeSession` 40/29/19, `attachPublishedNativeSession` 34/23/19), max 42 lines
-  (`launchNativeProcess`), max 29 statements; mean gocyclo 6.0. No method over 120 lines / 60
+  (`launchNativeProcess`), max 29 statements; mean gocyclo 6.1. No method over 120 lines / 60
   statements / 25 gocyclo (scanner, evidence §2-§3). `openGoalNativeSession` (36/28/18) stayed one
   method; the invocation build is three methods (`requireLinuxV2CloneGrant`,
   `applyLinuxV2Invocation`, `attachLinuxCloneGrant`), as the plan's rows 26-28 anticipated. The
@@ -352,8 +353,9 @@ Measured at the working tree (`goal_admission_tx.go` 1,473 lines, `goal_admissio
   revision's dropped settle was caught by the Windows suite as a nil-`tx.staged` panic.
 - **Citation.** `goimports` removed five imports that only the moved code used, so the entry
   declaration moved from `:263` to **`:258`**; `docs/design/harness.md:288` was refreshed
-  citation-only under O23 (it was not stale at the pre-goimports revision). The `startGoalAdmission`
-  span is now `:258-264`.
+  citation-only under O23 (it was not stale at the pre-goimports revision). The `origin/main` merge
+  then brought #223's comment trims in, moving the declaration to **`:249`**; the citation was
+  refreshed to `:249` at the apply revision. The `startGoalAdmission` span is now `:249-255`.
 - **Settled-return convention names.** `typeNativeStartOutcome` ignores the context (blank
   parameter) so no new `unparam` finding appears. Independent review then found the same class in
   seven extracted phases whose bodies make no context-dependent call
@@ -363,11 +365,19 @@ Measured at the working tree (`goal_admission_tx.go` 1,473 lines, `goal_admissio
   always-nil error result): the six keep `_ context.Context` for the same reason —
   the dispatch shape stays uniform, the T3 call-shape audit stays valid, and `unparam` stays
   silent (a dropped parameter would have changed the audited call shapes instead).
-- **File sizes (contract gate "no file > 1,500 L").** `goal_admission.go` 1,593 -> 635 L;
-  `goal_admission_tx.go` 1,473 L; `goal_admission_tx_test.go` 313 L (6 tests).
-- **Lint (primary/secondary).** Primary merged-config run: base 147 findings -> delivered 146; the
-  normalised per-linter diff adds no finding (base's own `gocritic ifElseChain` moved with its code
-  from `goal_admission.go` into the tx file, and `gocyclo` drops 64 -> 63 by resolving the 277).
-  Secondary `--no-config --default=none --enable=funlen,gocyclo,ineffassign` at the default
-  60/40/25 bounds: 0 findings in the new files. Both commands exit 1 (pre-existing findings exist),
-  as at base; evidence §8.
+- **File sizes (contract gate "no file > 1,500 L").** `goal_admission.go` 1,593 -> 612 L;
+  `goal_admission_tx.go` 1,460 L; `goal_admission_tx_test.go` 319 L (6 tests).
+- **Lint (primary/secondary).** Primary merged-config run: base 147 findings -> 147 at the apply
+  revision; the `startGoalAdmission` gocyclo 277 row is resolved (`gocyclo` 64 -> 63), base's own
+  `gocritic ifElseChain` moved with its code from `goal_admission.go` into the tx file, and the
+  only added row is the post-merge `whitespace` finding at `process_persistence_test.go:775`
+  (brought in on main by #223, outside this slice). Secondary `--no-config
+  --default=none --enable=funlen,gocyclo,ineffassign` at the default 60/40/25 bounds: 0 findings in
+  the new files. Both commands exit 1 (pre-existing findings exist), as at base; evidence §8.
+- **Apply-stage simplification (2026-11-22).** Accepted simplify findings applied: the
+  `publishPreparedWorkspace` pass-through body inlined back at its single call site
+  (`prepareGoalSessionForLaunch` 17/11/7 -> 19/12/8, inside the bound); `settleCancelledPublishedStart`
+  renamed `settleStartCancelledAfterLaunch`; the seam-test probe's name/entry pairing built from one
+  constructor literal (no test assertion changed). Finding 2 (clone-abort cleanup-context dedup)
+  kept unapplied — D5 defers dedup to a later slice; the rename landed together with the record
+  updates. Evidence §8, apply subsection.

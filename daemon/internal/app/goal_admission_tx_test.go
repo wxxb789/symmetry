@@ -14,27 +14,33 @@ import (
 )
 
 type goalAdmissionCompensationProbe struct {
-	names    []string
+	names    map[*goalAdmissionCompensation]string
 	entries  []*goalAdmissionCompensation
 	executed []string
 }
 
 func newGoalAdmissionCompensationProbe(tx *goalAdmissionTx) *goalAdmissionCompensationProbe {
-	return &goalAdmissionCompensationProbe{
-		names: []string{"provider-bridge", "clone-refusal", "clone-reuse-refusal", "native-start-outcome", "linux-v2-launch-phase"},
-		entries: []*goalAdmissionCompensation{
-			&tx.bridgeCompensation,
-			&tx.cloneCompensation,
-			&tx.reuseCompensation,
-			&tx.nativeOutcomeCompensation,
-			&tx.launchPhaseCompensation,
-		},
+	named := []struct {
+		name  string
+		entry *goalAdmissionCompensation
+	}{
+		{"provider-bridge", &tx.bridgeCompensation},
+		{"clone-refusal", &tx.cloneCompensation},
+		{"clone-reuse-refusal", &tx.reuseCompensation},
+		{"native-start-outcome", &tx.nativeOutcomeCompensation},
+		{"linux-v2-launch-phase", &tx.launchPhaseCompensation},
 	}
+	probe := &goalAdmissionCompensationProbe{names: make(map[*goalAdmissionCompensation]string, len(named))}
+	for _, row := range named {
+		probe.entries = append(probe.entries, row.entry)
+		probe.names[row.entry] = row.name
+	}
+	return probe
 }
 
 func (probe *goalAdmissionCompensationProbe) observe(joinErrors bool) {
-	for index, entry := range probe.entries {
-		name := probe.names[index]
+	for _, entry := range probe.entries {
+		name := probe.names[entry]
 		entry.run = func(_ context.Context, returnErr error) error {
 			probe.executed = append(probe.executed, name)
 			if joinErrors {
@@ -46,8 +52,8 @@ func (probe *goalAdmissionCompensationProbe) observe(joinErrors bool) {
 }
 
 func (probe *goalAdmissionCompensationProbe) observeDelegate() {
-	for index, entry := range probe.entries {
-		name := probe.names[index]
+	for _, entry := range probe.entries {
+		name := probe.names[entry]
 		original := entry.run
 		entry.run = func(ctx context.Context, returnErr error) error {
 			probe.executed = append(probe.executed, name)

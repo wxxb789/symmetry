@@ -8,11 +8,11 @@ base coordinate: `b25e34ae` (the dispatch HEAD). Shape reference: `docs/evidence
 
 | file | change | measure |
 |---|---|---|
-| `daemon/internal/app/goal_admission_tx.go` | new | 1,473 L: transaction object, 68 methods + the constructor, compensation stack, phases |
-| `daemon/internal/app/goal_admission.go` | `startGoalAdmission` region replaced by the thin entry | 1,593 -> 635 lines; entry at `:258-264` (7 lines); `abandonGoalSession` and everything from `:265` byte-identical (checked below) |
-| `daemon/internal/app/goal_admission_tx_test.go` | new | 313 L, 6 seam tests (2 order/join, 4 driven through `tx.run`); each has a red mutant (§7) |
+| `daemon/internal/app/goal_admission_tx.go` | new | 1,460 L: transaction object, 67 methods + the constructor, compensation stack, phases |
+| `daemon/internal/app/goal_admission.go` | `startGoalAdmission` region replaced by the thin entry | 1,593 -> 612 lines; entry at `:249-255` (7 lines); `abandonGoalSession` and everything from `:256` code-identical (checked below) |
+| `daemon/internal/app/goal_admission_tx_test.go` | new | 319 L, 6 seam tests (2 order/join, 4 driven through `tx.run`); each has a red mutant (§7) |
 | `scripts/ci/omo-control-native-evidence.py` | `SOURCE_PATHS` line only (R9) | +`daemon/internal/app/goal_admission_tx.go` |
-| `docs/design/harness.md` | citation-only (O23) | `goal_admission.go:263` -> `:258` |
+| `docs/design/harness.md` | citation-only (O23) | `goal_admission.go:263` -> `:258`; -> `:249` at the apply revision (post-merge #223 comment trims) |
 | `docs/plans/…-rf-w4-01-goal-admission-tx-plan.md` | new plan + delivered-revision section | |
 | `docs/TODO.md` | unchanged | no slice TODO entry existed; none closed |
 
@@ -20,11 +20,25 @@ base coordinate: `b25e34ae` (the dispatch HEAD). Shape reference: `docs/evidence
 signature and the caller at `app.go:1443` compiles unchanged.
 
 Byte-identity of the untouched region: the base file from line 1223 on (371 lines, starting at
-`attachPartialNativeSession`) is byte-identical to the delivered file from line 265 on (`diff`
-empty). The head region differs only by five imports that `goimports` removed because only the
-moved code used them (`reflect`, `execution`, `harness/omo`, `harness/omp`, `harness/pi`), which is
-why the entry sits at `:258` instead of `:263`; every other head line is unchanged
-(`diff` of the two 25-line import blocks shows only those five deletions).
+`attachPartialNativeSession`) is code-identical to the delivered file from line 256 on (357 lines;
+`diff` empty after stripping comment and blank lines — the 14-line difference is the comment trims
+that #223 brought in on main). The head region differs by those same trims plus five imports that
+`goimports` removed because only the moved code used them (`reflect`, `execution`, `harness/omo`,
+`harness/omp`, `harness/pi`); the entry moved `:263` -> `:258` (imports) -> `:249` (the merge).
+
+### 1.1 Native-evidence source mapping (arch-decision-2 R9)
+
+`daemon/internal/app/goal_admission_tx.go` is appended to `SOURCE_PATHS` of
+`scripts/ci/omo-control-native-evidence.py`, so the native-evidence identity set covers the file
+this slice's behaviour moved into. Moved declarations → their listed base home:
+
+| moved declaration (now in `goal_admission_tx.go`) | base home (listed source path) |
+|---|---|
+| `goalAdmissionTx` + `newGoalAdmissionTx` + `abort` | `goal_admission.go:263-307` (the subscriber locals + the three anonymous defers) |
+| the five compensation entry methods | `goal_admission.go:272-274`, `:277-288`, `:289-300`, `:301-306`, `:442-450` |
+| the phase methods (plan seam rows 1-61) | `goal_admission.go:308-1222` |
+| the former closures (`abortFreshLaunchIfCancelled`, `queueNativeEventSink`, `persistNativeProcess`, `persistNativeProcessAuthority`, `settlePublishedCancellation`, `settleExpiredNativeStartFailure`) | `goal_admission.go:462-476`, `:665`, `:817`, `:824`, `:849`, `:862` |
+| `startGoalAdmission` (entry) | stays at `goal_admission.go` (listed source path) |
 
 Evidence tooling (all outside the repository, `<HOST-PATH>/.local/state/gdd/scratch/w4-01/`):
 `measure` (go/ast: per-function lines/statements/gocyclo, `flow` control-flow points, `seq` call
@@ -36,12 +50,12 @@ reproduced exactly.
 
 ## 2. Per-method bound (clause: funlen 120/60, gocyclo 25)
 
-Scanner over the delivered tx file plus the entry: **68 tx methods + `newGoalAdmissionTx` +
-`startGoalAdmission`** (69 `func` declarations in the tx file);
+Scanner over the delivered tx file plus the entry: **67 tx methods + `newGoalAdmissionTx`** (68
+`func` declarations in the tx file) plus the `startGoalAdmission` entry;
 max gocyclo **19** (`startGoalNativeSession` 40/29/19, `attachPublishedNativeSession` 34/23/19),
-mean 6.0; max 42 lines (`launchNativeProcess`); max 29 statements; **0 over any bound**
+mean 6.1; max 42 lines (`launchNativeProcess`); max 29 statements; **0 over any bound**
 (`l/s/c` = lines / funlen statements / gocyclo). Entry: 7 lines, 4 statements, gocyclo 1.
-The phase methods: `validateGoalAdmissionInputs` 22/15/9, `prepareGoalSessionForLaunch` 17/11/7,
+The phase methods: `validateGoalAdmissionInputs` 22/15/9, `prepareGoalSessionForLaunch` 19/12/8,
 `startGoalNativeSession` 40/29/19, `attachGoalNativeSession` 15/12/5 + `openGoalNativeSession`
 36/28/18 (the F2 attach+open phase split at the `operationCancel` seam),
 `openGoalTurnAndSettleTerminalOwnership` 5/4/3 + `attachPublishedNativeSession` 34/23/19 +
@@ -55,6 +69,7 @@ Merged-config finding set (`GOOS=linux golangci-lint run --config .golangci.yml
 |---|---:|---:|---|
 | base `b25e34ae` | 147 | 66 (64 gocyclo + 2 funlen) | — |
 | head | 146 | 65 | `-1`: the `startGoalAdmission` gocyclo 277 finding is gone; the normalised per-linter diff (message + file) adds **no** finding — the only head-only row is base's own `gocritic ifElseChain`, moved with its code into the tx file; `unparam` 19/19 and `errorlint` 6/6 unchanged (§8 lists every linter) |
+| apply revision (`a5d9bd88` + the accepted simplify findings) | 147 | 65 (63 gocyclo + 2 funlen) | the 277 row stays resolved; the +1 is one post-merge `whitespace` finding at `process_persistence_test.go:775` (brought in on main by #223, outside this slice); the normalised diff adds no other row |
 
 ## 3. Seam table (base range -> HEAD method, measured)
 
@@ -74,14 +89,14 @@ method (`funcs`); every delivered value is inside 120/60/25.
 | 477-553 | `prepareGoalSessionForLaunch` + `prepareRetainedGoalSessionForLaunch` | n/a (composite) | 17/11/7 + 11/8/4 |
 | 479-495 | `recoverRetainedGoalSession` | 17/13/5 | 23/18/6 |
 | 497-507 | `markRetainedWorkspaceRecovery` | 11/6/4 | 12/7/4 |
-| 509-521 | `queueRetainedSessionAttach` | 13/3/2 | 15/4/2 |
+| 509-521 | `queueRetainedSessionAttach` | 13/3/2 | 13/4/2 |
 | 522-552 | `rebindRetainedGoalSession` | 31/15/16 | 32/16/16 |
 | 554-638 | `prepareFreshGoalSessionForLaunch` | 85/54/23 | 30/19/13 |
 | 554-558 / 559-561 / 630-638 | (inline: owner recheck, recovery-required write, two abort checks) | 5/3/3 + 3/2/2 + 2x3/2/2 | — |
 | 563-577 | `prepareLinuxCloneWorkspace` | 15/11/5 | 21/16/6 |
 | 579-607 | `prepareGoalSubjectWorkspace` | 29/21/9 | 30/22/9 |
 | 609-629 | `recordGoalSessionLaunchIntent` | 21/10/4 | 23/12/4 |
-| 640-642 | `publishPreparedWorkspace` | 3/2/2 | 3/2/2 |
+| 640-642 | (inline in `prepareGoalSessionForLaunch`; `publishPreparedWorkspace` inlined at the apply revision) | 3/2/2 | 3/2/2 |
 | 643-661 | `queueGoalSessionAttach` | 19/7/5 | 21/9/5 |
 | 662-664 | (inline abort check) | 3/2/2 | — |
 | 665-667 | `queueNativeEventSink` (former `sink` closure) | 3/1/1 | 1/1/1 |
@@ -90,15 +105,15 @@ method (`funcs`); every delivered value is inside 120/60/25.
 | 701-708 | `requireLinuxV2CloneGrant` | 8/6/5 | 9/7/5 |
 | 709-740 | `applyLinuxV2Invocation` | 32/24/14 | 34/26/14 |
 | 741-755 | `attachLinuxCloneGrant` | 15/12/6 | 16/13/6 |
-| 757-771 | `publishRetainedNativeStartBoundary` | 15/8/4 | 17/10/4 |
+| 757-771 | `publishRetainedNativeStartBoundary` | 15/8/4 | 15/10/4 |
 | 772-780 | `armNativeLeaseSequence` | 9/5/3 | 10/6/3 |
 | 781-799 | `acquireNativeStartOwnership` | 19/14/7 | 20/15/7 |
 | 800-801 | `handOffLaunchToNativeOwner` | 2/2/1 | 6/4/3 |
 | 802-848 | `launchNativeProcess` + `persistNativeProcess` + `persistNativeProcessAuthority` | 47/13/10 | 42/16/8 |
 | 850-860 | `settlePublishedCancellation` (former closure) | 11/8/5 | 11/8/5 |
 | 863-895 | `settleExpiredNativeStartFailure` (former closure) | 33/25/10 | 33/25/10 |
-| 897-917 | `settleCancelledPublishedStart` + `settleCancelledProcessStart` + (inline expired window) | n/a (composite) | 8/6/4 |
-| 918-958 | `failNativeStart` | 41/22/12 | 39/21/11 |
+| 897-917 | `settleStartCancelledAfterLaunch` (renamed at the apply revision) + `settleCancelledProcessStart` + (inline expired window) | n/a (composite) | 8/6/4 |
+| 918-958 | `failNativeStart` | 41/22/12 | 35/21/11 |
 | 959-975 | `settleLeaseExpiredProcessStart` | 17/13/6 | 19/15/6 |
 | 976-987 | `requireStagedSession` | 12/10/3 | 14/12/3 |
 | 988-1001 | `attachGoalNativeSession` | 14/11/5 | 15/12/5 |
@@ -177,9 +192,12 @@ them, so `errors.Join` argument order is the base order (`settle` test
 
 Base main body (263-1222, closure bodies excluded by the scanner, as at base): **322** flow points.
 HEAD: the 56-method execution-order concatenation (phases, sub-methods, spines, `run`), closure
-methods excluded: **473** flow points. Alignment (`audit/align.txt`): `base-only = 114`,
-`head-only = 265`; every difference belongs to one of six transformation classes, verified by
-relaxed-multiset comparison (`audit/flow-classify-v2-final.txt`): unexplained terms = 15 (21
+methods excluded: **473** flow points. Alignment (`audit/align-apply.txt` at the apply revision;
+the pre-apply run measured 114/265): `base-only = 115`, `head-only = 266` — the +1/+1 is the apply
+revision's `publishPreparedWorkspace` inline, which moved the `if workspacePersisted != nil` term into `prepareGoalSessionForLaunch` at
+its true execution position (the flow totals 322/473 are unchanged); every difference belongs to
+one of six transformation classes, verified by
+relaxed-multiset comparison (`audit/flow-classify-v2.txt`): unexplained terms = 15 (21
 instances), each mapped by inspection to a class below; addition classes: dispatch and moved guard
 forms 15 terms / 60 instances, phase return adaptations 19 / 63, settled returns 1 / 25,
 fall-through markers 1 / 24 (all enumerated in the artifact).
@@ -197,9 +215,9 @@ The 15 unexplained terms are each an instance of T1/T2/T4 with the scanner's pol
 canonicalization not applying (e.g. base `if ctx.Err() != nil` vs HEAD `if ctx.Err() == nil`; base
 `if linuxClone == nil && linuxCloneReuse == nil` vs HEAD `if linuxClone != nil || linuxCloneReuse != nil`;
 the six base `if settled {` short-circuits converted into the helpers' returned `settled` values);
-the list is `audit/flow-classify-v2-final.txt`.
+the list is `audit/flow-classify-v2.txt`.
 
-Former-closure rows (`audit/closures.txt`): `settlePublishedCancellation` and
+Former-closure rows (`audit/closures-apply.txt`; the rows are identical to the implement run): `settlePublishedCancellation` and
 `settleExpiredNativeStartFailure` map **IDENTICAL** (7 and 12 flow points); the four entry-guard
 rows differ by exactly the guard replacement (T5) plus `return returnErr`; `abortFreshLaunchIfCancelled`
 differs by the `(bool, error)` returns and the tx field substitutions, with the same three
@@ -299,6 +317,33 @@ Two P3 findings were fixed in response:
    `typeNativeStartOutcome`/`releaseNativeLaunchPhase`, keeping the dispatch shape the T3 audit
    reads), the fixture drops its unused result, and the assertion uses `errors.Is` plus
    `Error()`-text equality. The re-run below records the resulting per-linter diff.
+
+### Apply-stage re-verification (2026-11-22, apply revision on top of `a5d9bd88`)
+
+The gate table above was produced before the `origin/main` merge; the apply stage re-ran the
+contract gates on the merged tree plus the accepted simplify findings (§1-§3 and §6 carry the
+republished numbers). Commands are the rows above unless stated.
+
+| gate | result |
+|---|---|
+| gofmt / `go vet ./...` / `git diff --check` | empty, exit 0 / exit 0 / exit 0 |
+| builds: windows, linux, linux/arm64 | exit 0, exit 0, exit 0 |
+| lint primary (merged config) | 147 findings, exit 1: gocyclo 63, gocritic 22, unparam 19, staticcheck 15, exhaustive 9, errorlint 6, nilerr 4, ineffassign 3, funlen 2, copyloopvar 2, unconvert 1, whitespace 1; normalised diff vs base = the resolved 277 row plus one added post-merge `whitespace` row (`process_persistence_test.go:775`, main's #223 — not this slice's file) |
+| lint secondary (`--no-config --default=none --enable=funlen,gocyclo,ineffassign`) | exit 1; 0 findings in `goal_admission.go`, `goal_admission_tx.go` or the seam test (240 package-wide rows at the default 60/40/25 bounds) |
+| per-method scanner | 67 tx methods + constructor: max 19 gocyclo / 42 lines / 29 statements, mean 6.1, 0 over bound; entry 7 lines, 4 statements, 1 gocyclo |
+| focused tests (six contract + six seam + `TestRunLifecycleWritesStayInTheModule`) | exit 0, `ok … 2.096s`, 12 funcs + 7 subtests PASS; the W4-17b write-site scan is part of this run |
+| full package suite (Windows) | exit 0, `ok … 225.655s` |
+| `-race` (Windows) | exit 2, refused (`-race requires cgo`), as recorded |
+| WSL race oracle (touched path, the same `-run` set as the pre-merge run) | exit 0, 22 PASS / 0 FAIL / 0 `DATA RACE`, `ok … 5.678s` |
+| R9 native-evidence gate | exit 0, `Ran 10 tests … OK` |
+| §11 citation gate | exit 0 (`no audited document added or modified …; nothing to check` — the work is uncommitted) |
+| audits re-run (`flow` / classifiers / `guards2.py`) | align 322/473 points, base-only 115 / head-only 266, unexplained 15 (21 instances); guards 12 methods / 63 call sites / 0 violations |
+| red mutants rebuilt from the apply file (M1-M8, `-overlay`) | control exit 0; M1-M8 each exit 1 with the §7 failure classes (seam-test line numbers shifted by the probe edit) |
+
+The diff carries no user-profile path and no backslash-u sequence (2 scans, 0 hits). The full WSL
+race oracle (all tests) was not re-attempted: the pre-existing stall at
+`TestClaimAdmissionInputFailsClosedBeforeWorkspaceOrProcessStart` recorded above blocks it; the
+touched-path run is the race evidence.
 
 ## 9. Scoped simplification review (repo AGENTS.md, before completion)
 

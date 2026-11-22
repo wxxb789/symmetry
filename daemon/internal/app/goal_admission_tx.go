@@ -405,7 +405,9 @@ func (tx *goalAdmissionTx) prepareGoalSessionForLaunch(ctx context.Context) (boo
 			return settled, err
 		}
 	}
-	tx.publishPreparedWorkspace()
+	if tx.workspacePersisted != nil {
+		tx.workspacePersisted(tx.prepared)
+	}
 	if err := tx.queueGoalSessionAttach(ctx); err != nil {
 		return false, err
 	}
@@ -653,12 +655,6 @@ func (tx *goalAdmissionTx) recordGoalSessionLaunchIntent() error {
 	return nil
 }
 
-func (tx *goalAdmissionTx) publishPreparedWorkspace() {
-	if tx.workspacePersisted != nil {
-		tx.workspacePersisted(tx.prepared)
-	}
-}
-
 func (tx *goalAdmissionTx) queueGoalSessionAttach(_ context.Context) error {
 	if tx.attachQueued {
 		return nil
@@ -705,7 +701,7 @@ func (tx *goalAdmissionTx) startGoalNativeSession(ctx context.Context) (bool, er
 	}
 	tx.handOffLaunchToNativeOwner()
 	startErr := tx.launchNativeProcess(ctx)
-	if settled, err := tx.settleCancelledPublishedStart(ctx); err != nil || settled {
+	if settled, err := tx.settleStartCancelledAfterLaunch(ctx); err != nil || settled {
 		return settled, err
 	}
 	if settled, err := tx.settleCancelledProcessStart(ctx, startErr); err != nil || settled {
@@ -1012,7 +1008,7 @@ func (tx *goalAdmissionTx) settleExpiredNativeStartFailure(ctx context.Context, 
 	return true, taskResultFailure(protocol.TaskResultReasonProcessFailure, errors.Join(cause, discardErr))
 }
 
-func (tx *goalAdmissionTx) settleCancelledPublishedStart(ctx context.Context) (bool, error) {
+func (tx *goalAdmissionTx) settleStartCancelledAfterLaunch(ctx context.Context) (bool, error) {
 	if tx.session == nil {
 		return false, nil
 	}
