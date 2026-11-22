@@ -1,6 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { failureMode } from "../features/planning/write-policy";
-import { createApi, Forbidden, Network, postGoalCommand, postGoalCreation, readRetry, refusalNotice, ServerRefusal, Unauthenticated, UnexpectedResponse, Validation, type ActionId, type Api, type ExecutionGeneration } from "./api";
+import { createApi, Forbidden, Network, postGoalCommand, postGoalCreation, readRetry, refusalNotice, ServerRefusal, Unauthenticated, UnexpectedResponse, Validation, type ActionId, type Api, type ExecutionGeneration, type Writes } from "./api";
 import { MutationRefused } from "./commands";
 import { readWorkDetail } from "./api.fixtures";
 
@@ -117,7 +117,7 @@ describe("read boundary", () => {
     const body = new ReadableStream({ start(controller) { controller.error(new Error("body read failed")); } });
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(body, { status: 401 }));
     const failure = await createApi(fetcher)
-      .updateWorkItem(workItemId, { version: 1, title: "Expiry probe" }, "csrf-token", new AbortController().signal)
+      .updateWorkItem(workItemId, { version: 1, title: "Expiry probe" }, "csrf-token")
       .then(() => null, (error: unknown) => error);
     expect(failure).toBeInstanceOf(Unauthenticated);
     expect(failure).toMatchObject({ message: "Your session has ended. Sign in to continue." });
@@ -128,7 +128,7 @@ describe("read boundary", () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response("{}", { status: 500 }));
     const api = createApi(fetcher);
     const failure = await api
-      .updateWorkItem(workItemId, { version: 1, title: "Fault probe" }, "csrf-token", new AbortController().signal)
+      .updateWorkItem(workItemId, { version: 1, title: "Fault probe" }, "csrf-token")
       .then(() => null, (error: unknown) => error);
     expect(failure).toBeInstanceOf(UnexpectedResponse);
     expect(failure).toMatchObject({ status: 500, transient: true });
@@ -143,7 +143,7 @@ describe("read boundary", () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify(fault), { status: 500 }));
     const api = createApi(fetcher);
     const failure = await api
-      .updateWorkItem(workItemId, { version: 1, title: "Fault probe" }, "csrf-token", new AbortController().signal)
+      .updateWorkItem(workItemId, { version: 1, title: "Fault probe" }, "csrf-token")
       .then(() => null, (error: unknown) => error);
     expect(failure).toBeInstanceOf(ServerRefusal);
     expect(failure).toMatchObject({ status: 500, code: "internal_error", message: "internal server error" });
@@ -223,7 +223,7 @@ describe("work-item receipts", () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ disposition: "replayed", work_item: { id: workItemId } })));
     const api = createApi(fetcher);
     const draft = { title: "Retry me", creation_id: "11111111-2222-4333-8444-555555555555" };
-    const receipt = await api.createWorkItem("11111111-1111-4111-8111-111111111111", draft, "csrf", new AbortController().signal);
+    const receipt = await api.createWorkItem("11111111-1111-4111-8111-111111111111", draft, "csrf");
     expect(receipt).toEqual({ id: workItemId, disposition: "replayed" });
     const [path, init] = fetcher.mock.calls[0] ?? [];
     expect(path).toBe("/portal/api/projects/11111111-1111-4111-8111-111111111111/work-items");
@@ -234,7 +234,7 @@ describe("work-item receipts", () => {
   it("treats an update receipt without a disposition as not replayed", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ work_item: { id: workItemId } })));
     const api = createApi(fetcher);
-    const receipt = await api.updateWorkItem(workItemId, { version: 2, title: "Edited" }, "csrf", new AbortController().signal);
+    const receipt = await api.updateWorkItem(workItemId, { version: 2, title: "Edited" }, "csrf");
     expect(receipt).toEqual({ id: workItemId, disposition: "" });
   });
 });
@@ -321,7 +321,7 @@ describe("goal command boundary", () => {
     expect((refused as MutationRefused).details).toEqual({ current_version: 9, current_revision: 3, allowed_actions: ["resume"], details: { reason: "stale" } });
     expect((refused as MutationRefused).stale).toBe(true);
     const control = await createApi(fetcher)
-      .cancelWork(workItemId, 2 as ExecutionGeneration, "action-1" as ActionId, "csrf", new AbortController().signal)
+      .cancelWork(workItemId, 2 as ExecutionGeneration, "action-1" as ActionId, "csrf")
       .then(() => null, (error: unknown) => error);
     expect(control).toBeInstanceOf(ServerRefusal);
     expect(control).toMatchObject({ status: 409, code: "stale", fields: { title: ["stale"] } });
@@ -394,16 +394,16 @@ describe("control command boundary", () => {
   const command = { command_id: "77777777-7777-4777-8777-777777777777", task_id: execution.task_id, kind: "cancel", state: "pending", acknowledgement_outcome: null };
   const actionId = "action-1" as ActionId;
   const generation = 2 as ExecutionGeneration;
-  const calls: readonly { name: string; segment: string; answer: Record<string, unknown>; send: (api: Api, csrf: string, signal: AbortSignal) => Promise<unknown> }[] = [
-    { name: "start", segment: "run", answer: { disposition: "created", execution }, send: (api, csrf, signal) => api.startWork(workItemId, actionId, csrf, signal) },
-    { name: "cancel", segment: "cancel", answer: { disposition: "created", command, execution }, send: (api, csrf, signal) => api.cancelWork(workItemId, generation, actionId, csrf, signal) },
-    { name: "retry", segment: "retry", answer: { disposition: "replayed", command, work_item: { id: workItemId }, execution }, send: (api, csrf, signal) => api.retryWork(workItemId, generation, actionId, csrf, signal) },
-    { name: "waiting input", segment: "input", answer: { disposition: "created", command, execution }, send: (api, csrf, signal) => api.provideInput(workItemId, { answer: "continue" }, "transition-1", actionId, csrf, signal) },
+  const calls: readonly { name: string; segment: string; answer: Record<string, unknown>; send: (api: Api, csrf: string) => Promise<unknown> }[] = [
+    { name: "start", segment: "run", answer: { disposition: "created", execution }, send: (api, csrf) => api.startWork(workItemId, actionId, csrf) },
+    { name: "cancel", segment: "cancel", answer: { disposition: "created", command, execution }, send: (api, csrf) => api.cancelWork(workItemId, generation, actionId, csrf) },
+    { name: "retry", segment: "retry", answer: { disposition: "replayed", command, work_item: { id: workItemId }, execution }, send: (api, csrf) => api.retryWork(workItemId, generation, actionId, csrf) },
+    { name: "waiting input", segment: "input", answer: { disposition: "created", command, execution }, send: (api, csrf) => api.provideInput(workItemId, { answer: "continue" }, "transition-1", actionId, csrf) },
   ];
 
   it.each(calls)("sends the $name control with the caller's live CSRF token", async ({ segment, answer, send }) => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify(answer), { status: 202 }));
-    await send(createApi(fetcher), "rotated-token", new AbortController().signal);
+    await send(createApi(fetcher), "rotated-token");
     const [path, init] = fetcher.mock.calls[0] ?? [];
     expect(path).toBe(`/portal/api/work-items/${workItemId}/${segment}`);
     expect(init?.method).toBe("POST");
@@ -414,7 +414,7 @@ describe("control command boundary", () => {
     const refusal = { error: { code: "stale_generation", message: "The attempt has already moved on." } };
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify(refusal), { status: 409 }));
     const failure = await createApi(fetcher)
-      .cancelWork(workItemId, generation, actionId, "csrf", new AbortController().signal)
+      .cancelWork(workItemId, generation, actionId, "csrf")
       .then(() => null, (error: unknown) => error);
     expect(failure).toBeInstanceOf(ServerRefusal);
     expect(failure).toMatchObject({ status: 409, code: "stale_generation", message: "The attempt has already moved on." });
@@ -423,7 +423,7 @@ describe("control command boundary", () => {
   it("keeps an undescribed control refusal a session-protection 403, not a role denial", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response("{}", { status: 403 }));
     const failure = await createApi(fetcher)
-      .startWork(workItemId, actionId, "csrf", new AbortController().signal)
+      .startWork(workItemId, actionId, "csrf")
       .then(() => null, (error: unknown) => error);
     expect(failure).toBeInstanceOf(Forbidden);
     expect(failure).toMatchObject({ message: "This change was refused. If you signed in elsewhere, refresh the page and try again." });
@@ -503,11 +503,11 @@ describe("chat boundary", () => {
     };
     const payload = { scope: "workspace", intent: "discuss", content: "A question", action_id: "action-1" } as const;
     const created = await createApi(vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify(body), { status: 201 })))
-      .chatMessage(payload, "csrf", new AbortController().signal);
+      .chatMessage(payload, "csrf");
     expect(created.disposition).toBe("created");
     expect(created.command).toBeNull();
     const replayed = await createApi(vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify(body), { status: 200 })))
-      .chatMessage(payload, "csrf", new AbortController().signal);
+      .chatMessage(payload, "csrf");
     expect(replayed.disposition).toBe("replayed");
     expect(replayed.message.id).toBe("33333333-3333-4333-8333-333333333333");
   });
@@ -520,7 +520,7 @@ describe("chat boundary", () => {
       command: { command_id: "66666666-6666-4666-8666-666666666666", kind: "guidance", state: "pending", acknowledgement_outcome: null, applied_at: null },
     };
     const outcome = await createApi(vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify(body), { status: 201 })))
-      .chatMessage({ scope: "workspace", intent: "discuss", content: "A question", action_id: "action-1" }, "csrf", new AbortController().signal);
+      .chatMessage({ scope: "workspace", intent: "discuss", content: "A question", action_id: "action-1" }, "csrf");
     expect(outcome.command?.acknowledgement_id).toBeNull();
   });
 
@@ -532,7 +532,7 @@ describe("chat boundary", () => {
       command: { command_id: "66666666-6666-4666-8666-666666666666", kind: "guidance", state: "pending", acknowledgement_outcome: null, acknowledgement_id: "88888888-8888-4888-8888-888888888888", applied_at: null },
     }), { status: 201 }));
     const payload = { scope: "run" as const, run_id: runId, intent: "guidance", content: "Steer", action_id: "action-1", work_item_id: "55555555-5555-4555-8555-555555555555", generation: 1 };
-    const outcome = await createApi(fetcher).chatMessage(payload, "rotated-token", new AbortController().signal);
+    const outcome = await createApi(fetcher).chatMessage(payload, "rotated-token");
     expect(outcome.command?.state).toBe("pending");
     expect(outcome.command?.acknowledgement_id).toBe("88888888-8888-4888-8888-888888888888");
     expect(outcome.workItemId).toBe("55555555-5555-4555-8555-555555555555");
@@ -548,9 +548,84 @@ describe("chat boundary", () => {
     const refusal = { error: { code: "idempotency_conflict", message: "This action id was already used with a different request." } };
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify(refusal), { status: 409 }));
     const failure = await createApi(fetcher)
-      .chatMessage({ scope: "workspace", intent: "discuss", content: "changed", action_id: "action-1" }, "csrf", new AbortController().signal)
+      .chatMessage({ scope: "workspace", intent: "discuss", content: "changed", action_id: "action-1" }, "csrf")
       .then(() => null, (error: unknown) => error);
     expect(failure).toBeInstanceOf(ServerRefusal);
     expect(failure).toMatchObject({ status: 409, code: "idempotency_conflict" });
+  });
+});
+
+describe("read/write split", () => {
+  type ParametersOf<F> = F extends (...args: infer A) => unknown ? A : never;
+  type SignalTakers<M> = { [K in keyof M]: Extract<ParametersOf<M[K]>[number], AbortSignal> extends never ? never : K }[keyof M];
+
+  const goalId = "33333333-3333-4333-8333-333333333333";
+  const reads: readonly { name: string; call: (api: Api, signal: AbortSignal) => Promise<unknown> }[] = [
+    { name: "workspace", call: (api, signal) => api.workspace(null, signal) },
+    { name: "workDetail", call: (api, signal) => api.workDetail(workItemId, signal) },
+    { name: "workTimeline", call: (api, signal) => api.workTimeline(workItemId, null, signal) },
+    { name: "attention", call: (api, signal) => api.attention(null, null, signal) },
+    { name: "goal", call: (api, signal) => api.goal(goalId, signal) },
+    { name: "goalEvents", call: (api, signal) => api.goalEvents(goalId, 0, signal) },
+    { name: "session", call: (api, signal) => api.session(signal) },
+    { name: "connections", call: (api, signal) => api.connections(signal) },
+    { name: "chatConversation", call: (api, signal) => api.chatConversation({ scope: "workspace" }, signal) },
+  ];
+
+  it.each(reads)("carries the caller's own signal into the $name read's fetch init (mutant: the transport signal dropped from one read)", async ({ call }) => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response("{}", { status: 500 }));
+    const controller = new AbortController();
+    await call(createApi(fetcher), controller.signal).catch(() => undefined);
+    const init = fetcher.mock.calls[0]?.[1];
+    expect(init?.signal).toBe(controller.signal);
+  });
+
+  it("sends a bodyed write with the boundary's own init values and no signal (mutants: a changed credentials value; an undefined-valued signal member)", async () => {
+    const draft = { provider: "github", name: "draft", account_ref: "acme", capabilities: [] };
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ disposition: "created", connection: { id: "c1" } })));
+    await createApi(fetcher).createConnection(draft, "csrf");
+    const [path, init] = fetcher.mock.calls[0] ?? [];
+    expect(path).toBe("/portal/api/connections");
+    expect(Object.hasOwn(init ?? {}, "signal")).toBe(false);
+    expect(Reflect.ownKeys(init ?? {}).map(String).sort()).toEqual(["body", "cache", "credentials", "headers", "method", "redirect"]);
+    expect(init).toEqual({
+      method: "POST",
+      credentials: "same-origin",
+      headers: { Accept: "application/json", "content-type": "application/json", "x-csrf-token": "csrf" },
+      cache: "no-store",
+      redirect: "manual",
+      body: JSON.stringify(draft),
+    });
+  });
+
+  it("keeps a bodyless write to the five init members it carries in base (mutant: a body member added to a bodyless write)", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ disposition: "created", connection: { id: "c1" } })));
+    await createApi(fetcher).checkConnection("c1", "csrf");
+    const [path, init] = fetcher.mock.calls[0] ?? [];
+    expect(path).toBe("/portal/api/connections/c1/check");
+    expect(Object.hasOwn(init ?? {}, "signal")).toBe(false);
+    expect(Reflect.ownKeys(init ?? {}).map(String).sort()).toEqual(["cache", "credentials", "headers", "method", "redirect"]);
+    expect(init).toEqual({
+      method: "POST",
+      credentials: "same-origin",
+      headers: { Accept: "application/json", "x-csrf-token": "csrf" },
+      cache: "no-store",
+      redirect: "manual",
+    });
+  });
+
+  it("keeps every write from accepting a caller signal (mutant: a write signal re-added)", () => {
+    const api = createApi(vi.fn<typeof fetch>());
+    expectTypeOf<SignalTakers<Writes>>().toBeNever();
+    // @ts-expect-error write paths must not accept a signal
+    const writeWithSignal = () => api.createConnection({ provider: "github", name: "draft", account_ref: "acme", capabilities: [] }, "csrf", new AbortController().signal);
+    expect(writeWithSignal).toBeTypeOf("function");
+  });
+
+  it("keeps a read requiring a caller signal (mutant: a read signal made optional)", () => {
+    const api = createApi(vi.fn<typeof fetch>());
+    // @ts-expect-error reads require a signal
+    const readWithoutSignal = () => api.session();
+    expect(readWithoutSignal).toBeTypeOf("function");
   });
 });

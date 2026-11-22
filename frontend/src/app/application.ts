@@ -286,19 +286,19 @@ export const runtimesOptions = (api: Api, projectId: string | null) => workspace
 export const startWorkMutation = (api: Api) => mutationOptions({
   mutationKey: ["work-control", "start"],
   mutationFn: ({ workItemId, actionId, csrf }: { workItemId: string; actionId: ActionId; csrf: string }) =>
-    api.startWork(workItemId, actionId, csrf, new AbortController().signal),
+    api.startWork(workItemId, actionId, csrf),
 });
 
 export const cancelWorkMutation = (api: Api) => mutationOptions({
   mutationKey: ["work-control", "cancel"],
   mutationFn: ({ workItemId, generation, actionId, csrf }: { workItemId: string; generation: ExecutionGeneration; actionId: ActionId; csrf: string }) =>
-    api.cancelWork(workItemId, generation, actionId, csrf, new AbortController().signal),
+    api.cancelWork(workItemId, generation, actionId, csrf),
 });
 
 export const retryWorkMutation = (api: Api) => mutationOptions({
   mutationKey: ["work-control", "retry"],
   mutationFn: ({ workItemId, generation, actionId, csrf }: { workItemId: string; generation: ExecutionGeneration; actionId: ActionId; csrf: string }) =>
-    api.retryWork(workItemId, generation, actionId, csrf, new AbortController().signal),
+    api.retryWork(workItemId, generation, actionId, csrf),
 });
 
 export const provideInputMutation = (api: Api) => mutationOptions({
@@ -309,7 +309,7 @@ export const provideInputMutation = (api: Api) => mutationOptions({
     waitingTransitionId: string;
     actionId: ActionId;
     csrf: string;
-  }) => api.provideInput(workItemId, input, waitingTransitionId, actionId, csrf, new AbortController().signal),
+  }) => api.provideInput(workItemId, input, waitingTransitionId, actionId, csrf),
 });
 
 /** The scope members one conversation query is keyed and read by. */
@@ -351,5 +351,5 @@ export const chatOlderPageOptions = (api: Api, key: ChatScopeKey, before: string
 export const chatMessageMutation = (api: Api) => mutationOptions({
   mutationKey: ["chat-message"],
   mutationFn: ({ payload, csrf }: { payload: ChatMessageRequest; csrf: string }) =>
-    api.chatMessage(payload, csrf, new AbortController().signal),
+    api.chatMessage(payload, csrf),
 });

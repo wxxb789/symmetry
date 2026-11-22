@@ -1,50 +1,51 @@
-package harness
+package claude
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
-	claudeprotocol "github.com/wxxb789/symmetry/daemon/internal/harness/claude"
+	"github.com/wxxb789/symmetry/daemon/internal/harness"
 )
 
 func TestClaudeCandidateProcessExitAfterTerminalBindsFinalOutcome(t *testing.T) {
 	tests := []struct {
 		name       string
 		process    execution.Result
-		wantKind   ResultKind
+		wantKind   harness.ResultKind
 		wantReason string
 	}{
 		{
 			name:     "clean exit preserves verified result",
 			process:  execution.Result{PID: 42, ExitCode: 0},
-			wantKind: ResultSucceeded,
+			wantKind: harness.ResultSucceeded,
 		},
 		{
 			name:       "failed exit rejects verified result",
 			process:    execution.Result{PID: 42, ExitCode: 1, WaitError: errors.New("exit status 1")},
-			wantKind:   ResultFailed,
+			wantKind:   harness.ResultFailed,
 			wantReason: "process_failure",
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			process := newClaudeCandidateFakeProcess()
-			adapter := newClaudeCandidateTestAdapter(process, nil)
-			session, err := adapter.Start(context.Background(), claudeCandidateStartRequest(t), &recordingClaudeCandidateSink{})
+			process := newCandidateFakeProcess()
+			adapter := newCandidateTestAdapter(process, nil)
+			session, err := adapter.Start(context.Background(), candidateStartRequest(t), &recordingCandidateSink{})
 			if err != nil {
 				t.Fatalf("Start() error = %v", err)
 			}
-			cleanupClaudeCandidateSession(t, session)
-			staged := session.(StagedSession)
-			openClaudeCandidateSession(t, staged, process)
-			if err := staged.StartTurn(context.Background(), TurnRequest{Goal: "bind process evidence", Context: jsonObjectForClaudeCandidateAdditionalTest()}); err != nil {
+			cleanupCandidateSession(t, session)
+			staged := session.(harness.StagedSession)
+			openCandidateSession(t, staged, process)
+			if err := staged.StartTurn(context.Background(), harness.TurnRequest{Goal: "bind process evidence", Context: json.RawMessage(`{"snapshot":"canonical"}`)}); err != nil {
 				t.Fatalf("StartTurn() error = %v", err)
 			}
-			if err := process.emitJSON(claudeCandidateResultEnvelope(t, validClaudeCandidateTaskResultJSON(t))); err != nil {
+			if err := process.emitJSON(candidateResultEnvelope(t, validCandidateTaskResultJSON(t))); err != nil {
 				t.Fatalf("emit terminal result: %v", err)
 			}
 			if err := staged.WaitTurn(context.Background()); err != nil {
@@ -59,10 +60,10 @@ func TestClaudeCandidateProcessExitAfterTerminalBindsFinalOutcome(t *testing.T) 
 			if result.Kind != test.wantKind {
 				t.Fatalf("result kind = %q, want %q; result=%+v", result.Kind, test.wantKind, result)
 			}
-			if test.wantKind == ResultSucceeded && result.Semantic == nil {
+			if test.wantKind == harness.ResultSucceeded && result.Semantic == nil {
 				t.Fatalf("result = %+v, want retained semantic TaskResult", result)
 			}
-			if test.wantKind == ResultFailed {
+			if test.wantKind == harness.ResultFailed {
 				if result.Semantic != nil {
 					t.Fatalf("result = %+v, failed process must not retain semantic success", result)
 				}
@@ -82,30 +83,30 @@ func TestClaudeCandidateRejectsDuplicateAndLateRecordsAfterTerminal(t *testing.T
 	}{
 		{
 			name:      "duplicate result",
-			record:    claudeCandidateResultEnvelope(t, validClaudeCandidateTaskResultJSON(t)),
-			wantError: claudeprotocol.ErrRepeatedResult,
+			record:    candidateResultEnvelope(t, validCandidateTaskResultJSON(t)),
+			wantError: ErrRepeatedResult,
 		},
 		{
 			name:      "late event",
-			record:    `{"type":"system","subtype":"late","session_id":"` + claudeCandidateTestSessionID + `"}`,
-			wantError: claudeprotocol.ErrEventAfterResult,
+			record:    `{"type":"system","subtype":"late","session_id":"` + candidateTestSessionID + `"}`,
+			wantError: ErrEventAfterResult,
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			process := newClaudeCandidateFakeProcess()
-			adapter := newClaudeCandidateTestAdapter(process, nil)
-			session, err := adapter.Start(context.Background(), claudeCandidateStartRequest(t), &recordingClaudeCandidateSink{})
+			process := newCandidateFakeProcess()
+			adapter := newCandidateTestAdapter(process, nil)
+			session, err := adapter.Start(context.Background(), candidateStartRequest(t), &recordingCandidateSink{})
 			if err != nil {
 				t.Fatalf("Start() error = %v", err)
 			}
-			cleanupClaudeCandidateSession(t, session)
-			staged := session.(StagedSession)
-			openClaudeCandidateSession(t, staged, process)
-			if err := staged.StartTurn(context.Background(), TurnRequest{Goal: "reject late native output", Context: jsonObjectForClaudeCandidateAdditionalTest()}); err != nil {
+			cleanupCandidateSession(t, session)
+			staged := session.(harness.StagedSession)
+			openCandidateSession(t, staged, process)
+			if err := staged.StartTurn(context.Background(), harness.TurnRequest{Goal: "reject late native output", Context: json.RawMessage(`{"snapshot":"canonical"}`)}); err != nil {
 				t.Fatalf("StartTurn() error = %v", err)
 			}
-			first := claudeCandidateResultEnvelope(t, validClaudeCandidateTaskResultJSON(t))
+			first := candidateResultEnvelope(t, validCandidateTaskResultJSON(t))
 			if err := process.emitJSON(first); err != nil {
 				t.Fatalf("emit first terminal result: %v", err)
 			}
@@ -125,7 +126,7 @@ func TestClaudeCandidateRejectsDuplicateAndLateRecordsAfterTerminal(t *testing.T
 			if err != nil {
 				t.Fatalf("Wait() error = %v", err)
 			}
-			if result.Kind != ResultFailed || result.Semantic != nil {
+			if result.Kind != harness.ResultFailed || result.Semantic != nil {
 				t.Fatalf("result = %+v, want failed non-semantic result", result)
 			}
 		})
@@ -133,26 +134,26 @@ func TestClaudeCandidateRejectsDuplicateAndLateRecordsAfterTerminal(t *testing.T
 }
 
 func TestClaudeCandidateEventSinkFailureAfterTerminalIsNotSuccess(t *testing.T) {
-	process := newClaudeCandidateFakeProcess()
+	process := newCandidateFakeProcess()
 	wantSinkError := errors.New("task result journal unavailable")
-	sink := EventSinkFunc(func(_ context.Context, event Event) error {
-		if event.Kind == EventTaskResult {
+	sink := harness.EventSinkFunc(func(_ context.Context, event harness.Event) error {
+		if event.Kind == harness.EventTaskResult {
 			return wantSinkError
 		}
 		return nil
 	})
-	adapter := newClaudeCandidateTestAdapter(process, nil)
-	session, err := adapter.Start(context.Background(), claudeCandidateStartRequest(t), sink)
+	adapter := newCandidateTestAdapter(process, nil)
+	session, err := adapter.Start(context.Background(), candidateStartRequest(t), sink)
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	cleanupClaudeCandidateSession(t, session)
-	staged := session.(StagedSession)
-	openClaudeCandidateSession(t, staged, process)
-	if err := staged.StartTurn(context.Background(), TurnRequest{Goal: "persist terminal evidence", Context: jsonObjectForClaudeCandidateAdditionalTest()}); err != nil {
+	cleanupCandidateSession(t, session)
+	staged := session.(harness.StagedSession)
+	openCandidateSession(t, staged, process)
+	if err := staged.StartTurn(context.Background(), harness.TurnRequest{Goal: "persist terminal evidence", Context: json.RawMessage(`{"snapshot":"canonical"}`)}); err != nil {
 		t.Fatalf("StartTurn() error = %v", err)
 	}
-	if err := process.emitJSON(claudeCandidateResultEnvelope(t, validClaudeCandidateTaskResultJSON(t))); err != nil {
+	if err := process.emitJSON(candidateResultEnvelope(t, validCandidateTaskResultJSON(t))); err != nil {
 		t.Fatalf("emit terminal result = %v, want lifecycle failure retained for WaitTurn", err)
 	}
 	if err := staged.WaitTurn(context.Background()); !errors.Is(err, wantSinkError) {
@@ -164,7 +165,7 @@ func TestClaudeCandidateEventSinkFailureAfterTerminalIsNotSuccess(t *testing.T) 
 	if err != nil {
 		t.Fatalf("Wait() error = %v", err)
 	}
-	if result.Kind != ResultFailed || result.Semantic != nil {
+	if result.Kind != harness.ResultFailed || result.Semantic != nil {
 		t.Fatalf("result = %+v, sink failure must not claim semantic success", result)
 	}
 	if !strings.Contains(result.Summary, wantSinkError.Error()) {
@@ -173,23 +174,23 @@ func TestClaudeCandidateEventSinkFailureAfterTerminalIsNotSuccess(t *testing.T) 
 }
 
 func TestClaudeCandidateMalformedRecordPreservesDiagnosticSinkFailure(t *testing.T) {
-	process := newClaudeCandidateFakeProcess()
+	process := newCandidateFakeProcess()
 	wantSinkError := errors.New("diagnostic journal unavailable")
-	sink := EventSinkFunc(func(_ context.Context, event Event) error {
-		if event.Kind == EventDiagnostic {
+	sink := harness.EventSinkFunc(func(_ context.Context, event harness.Event) error {
+		if event.Kind == harness.EventDiagnostic {
 			return wantSinkError
 		}
 		return nil
 	})
-	adapter := newClaudeCandidateTestAdapter(process, nil)
-	session, err := adapter.Start(context.Background(), claudeCandidateStartRequest(t), sink)
+	adapter := newCandidateTestAdapter(process, nil)
+	session, err := adapter.Start(context.Background(), candidateStartRequest(t), sink)
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	cleanupClaudeCandidateSession(t, session)
-	staged := session.(StagedSession)
-	openClaudeCandidateSession(t, staged, process)
-	if err := staged.StartTurn(context.Background(), TurnRequest{Goal: "preserve malformed record evidence", Context: jsonObjectForClaudeCandidateAdditionalTest()}); err != nil {
+	cleanupCandidateSession(t, session)
+	staged := session.(harness.StagedSession)
+	openCandidateSession(t, staged, process)
+	if err := staged.StartTurn(context.Background(), harness.TurnRequest{Goal: "preserve malformed record evidence", Context: json.RawMessage(`{"snapshot":"canonical"}`)}); err != nil {
 		t.Fatalf("StartTurn() error = %v", err)
 	}
 
@@ -201,25 +202,25 @@ func TestClaudeCandidateMalformedRecordPreservesDiagnosticSinkFailure(t *testing
 	if err != nil {
 		t.Fatalf("Wait() error = %v", err)
 	}
-	if result.Kind != ResultFailed || result.Semantic != nil || !strings.Contains(result.Summary, wantSinkError.Error()) {
+	if result.Kind != harness.ResultFailed || result.Semantic != nil || !strings.Contains(result.Summary, wantSinkError.Error()) {
 		t.Fatalf("result = %+v, want failed result retaining diagnostic sink failure", result)
 	}
 }
 
 func TestClaudeCandidateIncompleteTrailingRecordAfterTerminalIsNotSuccess(t *testing.T) {
-	process := newClaudeCandidateFakeProcess()
-	adapter := newClaudeCandidateTestAdapter(process, nil)
-	session, err := adapter.Start(context.Background(), claudeCandidateStartRequest(t), &recordingClaudeCandidateSink{})
+	process := newCandidateFakeProcess()
+	adapter := newCandidateTestAdapter(process, nil)
+	session, err := adapter.Start(context.Background(), candidateStartRequest(t), &recordingCandidateSink{})
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	cleanupClaudeCandidateSession(t, session)
-	staged := session.(StagedSession)
-	openClaudeCandidateSession(t, staged, process)
-	if err := staged.StartTurn(context.Background(), TurnRequest{Goal: "reject truncated trailing output", Context: jsonObjectForClaudeCandidateAdditionalTest()}); err != nil {
+	cleanupCandidateSession(t, session)
+	staged := session.(harness.StagedSession)
+	openCandidateSession(t, staged, process)
+	if err := staged.StartTurn(context.Background(), harness.TurnRequest{Goal: "reject truncated trailing output", Context: json.RawMessage(`{"snapshot":"canonical"}`)}); err != nil {
 		t.Fatalf("StartTurn() error = %v", err)
 	}
-	if err := process.emitJSON(claudeCandidateResultEnvelope(t, validClaudeCandidateTaskResultJSON(t))); err != nil {
+	if err := process.emitJSON(candidateResultEnvelope(t, validCandidateTaskResultJSON(t))); err != nil {
 		t.Fatalf("emit terminal result = %v", err)
 	}
 	if err := staged.WaitTurn(context.Background()); err != nil {
@@ -235,7 +236,7 @@ func TestClaudeCandidateIncompleteTrailingRecordAfterTerminalIsNotSuccess(t *tes
 	if err := sink.Handle(context.Background(), execution.Event{
 		Stream: execution.Stdout,
 		At:     time.Now().UTC(),
-		Data:   []byte(`{"type":"system","subtype":"late","session_id":"` + claudeCandidateTestSessionID + `"}`),
+		Data:   []byte(`{"type":"system","subtype":"late","session_id":"` + candidateTestSessionID + `"}`),
 	}); err != nil {
 		t.Fatalf("deliver incomplete trailing record = %v, want decoder to defer it until process close", err)
 	}
@@ -245,24 +246,24 @@ func TestClaudeCandidateIncompleteTrailingRecordAfterTerminalIsNotSuccess(t *tes
 	if err != nil {
 		t.Fatalf("Wait() error = %v", err)
 	}
-	if result.Kind != ResultFailed || result.Semantic != nil {
+	if result.Kind != harness.ResultFailed || result.Semantic != nil {
 		t.Fatalf("result = %+v, truncated trailing output must not claim semantic success", result)
 	}
-	if !strings.Contains(result.Summary, claudeprotocol.ErrIncompleteRecord.Error()) {
-		t.Fatalf("result summary = %q, want %q", result.Summary, claudeprotocol.ErrIncompleteRecord.Error())
+	if !strings.Contains(result.Summary, ErrIncompleteRecord.Error()) {
+		t.Fatalf("result summary = %q, want %q", result.Summary, ErrIncompleteRecord.Error())
 	}
 }
 
 func TestClaudeCandidateOpenAndCloseAreIdempotent(t *testing.T) {
-	process := newClaudeCandidateFakeProcess()
-	adapter := newClaudeCandidateTestAdapter(process, nil)
-	session, err := adapter.Start(context.Background(), claudeCandidateStartRequest(t), &recordingClaudeCandidateSink{})
+	process := newCandidateFakeProcess()
+	adapter := newCandidateTestAdapter(process, nil)
+	session, err := adapter.Start(context.Background(), candidateStartRequest(t), &recordingCandidateSink{})
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	cleanupClaudeCandidateSession(t, session)
-	staged := session.(StagedSession)
-	first := openClaudeCandidateSession(t, staged, process)
+	cleanupCandidateSession(t, session)
+	staged := session.(harness.StagedSession)
+	first := openCandidateSession(t, staged, process)
 	second, err := staged.Open(context.Background())
 	if err != nil {
 		t.Fatalf("second Open() error = %v", err)
@@ -283,8 +284,4 @@ func TestClaudeCandidateOpenAndCloseAreIdempotent(t *testing.T) {
 	if _, err := session.Wait(context.Background()); err != nil {
 		t.Fatalf("Wait() after idempotent Close() error = %v", err)
 	}
-}
-
-func jsonObjectForClaudeCandidateAdditionalTest() []byte {
-	return []byte(`{"snapshot":"canonical"}`)
 }

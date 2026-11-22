@@ -228,7 +228,7 @@ function AssignmentEditor({ api, csrf, item, project, blockedReason, fallbackFoc
         repository_resource_id: payload.draft.repository === "" ? null : payload.draft.repository,
         ci_resource_id: payload.draft.ci === "" ? null : payload.draft.ci,
       };
-      return api.assignWorkItem(target.id, assignment, csrf, new AbortController().signal);
+      return api.assignWorkItem(target.id, assignment, csrf);
     },
     onSuccess: (receipt) => { onSaved(receipt.workItemId, receipt.version); },
     // A settled write re-reads both reads this surface steers from — the work

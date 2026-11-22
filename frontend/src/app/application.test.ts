@@ -80,12 +80,8 @@ describe("private query lifecycle", () => {
     const app = createApplication({ fetcher, location: { href: "http://localhost/portal/projects/p1", replace } });
     app.queryClient.setQueryData(["private", "old"], { title: "Private title" });
     const localHandler = vi.fn();
-    // Every connection mutation supplies its own onError, which replaces the
-    // default mutation handler instead of chaining to it; expiry recovery must
-    // not depend on the command's own callback or on a later read also
-    // answering 401.
     const mutation = app.queryClient.getMutationCache().build(app.queryClient, {
-      mutationFn: (draft: ConnectionDraft) => app.api.createConnection(draft, "csrf", new AbortController().signal),
+      mutationFn: (draft: ConnectionDraft) => app.api.createConnection(draft, "csrf"),
       onError: (error) => {
         localHandler(error);
         void app.queryClient.invalidateQueries({ queryKey: ["connections"] });
