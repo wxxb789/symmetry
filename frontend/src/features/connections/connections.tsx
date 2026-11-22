@@ -5,6 +5,7 @@ import { AlertCircle, Cable, Plus, Trash2, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { connectionsOptions, workspaceOptions } from "../../app/application";
 import { connectionsReadKey } from "../../app/read-cache";
+import { useSelectedProject } from "../../app/selected-project";
 import { useSessionToken } from "../../app/session";
 import {
   ownValue,
@@ -299,8 +300,9 @@ export function ConnectionsPage() {
   // The project directory and the selected project's resources + registered
   // runtimes. The shell's project picker issues exactly this key, so the page
   // adds no request; an absent URL scope falls back to the served selection.
-  const workspace = useQuery(workspaceOptions(application.api, search.projectId ?? null));
-  const selectedProjectId = search.projectId ?? workspace.data?.selected_project_id ?? null;
+  const scopeProjectId = useSelectedProject();
+  const workspace = useQuery(workspaceOptions(application.api, scopeProjectId ?? null));
+  const selectedProjectId = scopeProjectId ?? workspace.data?.selected_project_id ?? null;
   const [creating, setCreating] = useState(false);
   // The connection an open edit dialog belongs to: a background refresh that
   // removes that connection must close the dialog, and a stale subject must not
