@@ -46,16 +46,37 @@ class RepositoryAtRootTests(FixtureRepo, unittest.TestCase):
         other.mkdir()
         citest.git(other, "init", "--quiet")
         with mock.patch.dict(os.environ, {"GIT_DIR": str(other / ".git")}):
-            toplevel = pathlib.Path(self.git_text("rev-parse", "--show-toplevel")).resolve()
-        self.assertEqual(toplevel, self.repo.resolve())
+            git_dir = pathlib.Path(self.git_text("rev-parse", "--absolute-git-dir")).resolve()
+        self.assertEqual(git_dir, (self.repo / ".git").resolve())
 
     def test_cwd_reads_another_repository_through_the_same_isolation(self):
         other = self.root / "other"
         other.mkdir()
         citest.git(other, "init", "--quiet")
         with mock.patch.dict(os.environ, {"GIT_DIR": str(self.repo / ".git")}):
-            toplevel = pathlib.Path(self.git_text("rev-parse", "--show-toplevel", cwd=other)).resolve()
-        self.assertEqual(toplevel, other.resolve())
+            git_dir = pathlib.Path(self.git_text("rev-parse", "--absolute-git-dir", cwd=other)).resolve()
+        self.assertEqual(git_dir, (other / ".git").resolve())
+
+    def test_the_fixture_identity_survives_a_redirected_config_file(self):
+        class _Probe(FixtureRepo, unittest.TestCase):
+            REPOSITORY_PREFIX = "gitfixture-redirect-"
+            REPOSITORY_DIRECTORY = None
+
+            def runTest(self):
+                pass
+
+        redirected = self.root / "redirected-config"
+        probe = _Probe()
+        with mock.patch.dict(os.environ, {"GIT_CONFIG": str(redirected)}):
+            try:
+                probe.setUp()
+                probe.write("tracked.txt", "content\n")
+                head = probe.commit("redirected fixture")
+                email = citest.git_text(probe.repo, "log", "-1", "--format=%ae", head)
+            finally:
+                probe.doCleanups()
+        self.assertEqual(email, "fixture@example.invalid")
+        self.assertFalse(redirected.exists())
 
 
 class RepositoryInSubdirectoryTests(FixtureRepo, unittest.TestCase):

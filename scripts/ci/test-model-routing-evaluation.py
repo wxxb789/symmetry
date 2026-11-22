@@ -149,8 +149,6 @@ class EvaluationTests(FixtureRepo, unittest.TestCase):
             self.write(self.repo / name, content)
         self.base = self.commit("fixture base")
 
-    # -- environment helpers -------------------------------------------------
-
     def write_json(self, path: pathlib.Path, value) -> pathlib.Path:
         citest.write_json(path, value, sort_keys=True)
         return path

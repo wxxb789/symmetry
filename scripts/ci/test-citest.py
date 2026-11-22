@@ -1,8 +1,12 @@
+import contextlib
+import hashlib
+import io
 import json
 import os
 import pathlib
 import stat
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -117,30 +121,38 @@ class RunGateTests(unittest.TestCase):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.root = pathlib.Path(directory.name)
+        self.environment = {
+            name: value for name, value in os.environ.items() if name not in ("GATE_MARKER", "GATE_SCRUBBED")
+        }
         self.script = self.root / "fixture-gate.py"
         self.script.write_text(
             "import json, os, pathlib, sys\n"
-            "print(json.dumps({'argv': sys.argv[1:], 'cwd': pathlib.Path.cwd().name}))\n"
+            "print(json.dumps({'argv': sys.argv[1:], 'cwd': str(pathlib.Path.cwd())}))\n"
             "print('marker=' + os.environ.get('GATE_MARKER', 'unset'), file=sys.stderr)\n"
+            "print('scrubbed=' + os.environ.get('GATE_SCRUBBED', 'unset'), file=sys.stderr)\n"
             "raise SystemExit(3)\n",
             encoding="utf-8",
         )
 
     def test_the_child_status_and_streams_are_returned_unchanged(self):
-        result = citest.run_gate(self.script)
+        result = citest.run_gate(self.script, env=self.environment)
         self.assertEqual(result.returncode, 3)
-        self.assertEqual(json.loads(result.stdout), {"argv": [], "cwd": pathlib.Path.cwd().name})
-        self.assertEqual(result.stderr, "marker=unset\n")
+        report = json.loads(result.stdout)
+        self.assertEqual(report["argv"], [])
+        self.assertEqual(pathlib.Path(report["cwd"]).resolve(), pathlib.Path.cwd().resolve())
+        self.assertEqual(result.stderr, "marker=unset\nscrubbed=unset\n")
 
     def test_arguments_reach_the_child_in_order(self):
         result = citest.run_gate(self.script, "--repo", "r", "positional")
         self.assertEqual(json.loads(result.stdout)["argv"], ["--repo", "r", "positional"])
 
     def test_cwd_and_env_replace_the_inherited_ones(self):
-        environment = dict(os.environ, GATE_MARKER=str(self.root / "marker"))
-        result = citest.run_gate(self.script, cwd=self.root.parent, env=environment)
-        self.assertEqual(json.loads(result.stdout)["cwd"], self.root.parent.name)
-        self.assertEqual(result.stderr, f"marker={self.root / 'marker'}\n")
+        with mock.patch.dict(os.environ, {"GATE_SCRUBBED": "inherited"}):
+            environment = {name: value for name, value in os.environ.items() if name != "GATE_SCRUBBED"}
+            environment["GATE_MARKER"] = str(self.root / "marker")
+            result = citest.run_gate(self.script, cwd=self.root.parent, env=environment)
+        self.assertEqual(pathlib.Path(json.loads(result.stdout)["cwd"]).resolve(), self.root.parent.resolve())
+        self.assertEqual(result.stderr, f"marker={self.root / 'marker'}\nscrubbed=unset\n")
 
     def test_a_timeout_raises_instead_of_returning_a_default(self):
         script = self.root / "slow-gate.py"
@@ -174,12 +186,58 @@ class GitTests(unittest.TestCase):
         other.mkdir()
         citest.git(other, "init", "--quiet")
         with mock.patch.dict(os.environ, {"GIT_DIR": str(other / ".git")}):
-            toplevel = pathlib.Path(citest.git_text(self.repo, "rev-parse", "--show-toplevel")).resolve()
-        self.assertEqual(toplevel, self.repo.resolve())
+            git_dir = pathlib.Path(citest.git_text(self.repo, "rev-parse", "--absolute-git-dir")).resolve()
+        self.assertEqual(git_dir, (self.repo / ".git").resolve())
 
     def test_an_input_is_written_to_the_child(self):
         completed = citest.git(self.repo, "hash-object", "--stdin", input=b"content\n")
-        self.assertEqual(len(completed.stdout.strip()), 40)
+        self.assertEqual(completed.stdout.decode("ascii").strip(), hashlib.sha1(b"blob 8\0content\n").hexdigest())
+
+    def test_an_absent_input_runs_the_child_with_empty_stdin(self):
+        program = "\n".join(
+            [
+                "import pathlib, sys",
+                f"sys.path.insert(0, {str(SCRIPT.parent)!r})",
+                "import citest",
+                "print(citest.git_text(pathlib.Path(sys.argv[1]), 'hash-object', '--stdin'))",
+            ]
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", program, str(self.repo)],
+            input=b"content that must not reach the child\n",
+            capture_output=True,
+            check=True,
+        )
+        self.assertEqual(result.stdout.decode("ascii").strip(), hashlib.sha1(b"blob 0\0").hexdigest())
+
+    def test_a_failing_command_prints_the_captured_stderr(self):
+        with (
+            contextlib.redirect_stderr(io.StringIO()) as printed,
+            self.assertRaises(subprocess.CalledProcessError) as refusal,
+        ):
+            citest.git(self.repo, "rev-parse", "HEAD")
+        self.assertEqual(printed.getvalue(), refusal.exception.stderr.decode("utf-8", "replace"))
+
+    def test_an_inherited_config_file_redirect_is_dropped(self):
+        redirected = self.root / "redirected-config"
+        redirected.write_text("[citest]\n\tmarker = redirected\n", encoding="utf-8")
+        with mock.patch.dict(os.environ, {"GIT_CONFIG": str(redirected)}):
+            citest.git(self.repo, "config", "citest.marker", "local")
+        self.assertEqual(citest.git_text(self.repo, "config", "citest.marker"), "local")
+        self.assertNotIn("local", redirected.read_text(encoding="utf-8"))
+
+    def test_an_inherited_config_injection_is_dropped(self):
+        empty = self.root / "empty-config"
+        empty.write_text("", encoding="utf-8")
+        injected = {
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "user.email",
+            "GIT_CONFIG_VALUE_0": "injected@example.invalid",
+            "GIT_CONFIG_GLOBAL": str(empty),
+            "GIT_CONFIG_SYSTEM": str(empty),
+        }
+        with mock.patch.dict(os.environ, injected), self.assertRaises(subprocess.CalledProcessError):
+            citest.git(self.repo, "config", "--get", "user.email")
 
     def test_every_inherited_repository_variable_is_dropped(self):
         self.assertEqual(set(PROBES), set(citest.GIT_REPOSITORY_VARIABLES))
@@ -218,6 +276,8 @@ class WriteJsonTests(unittest.TestCase):
 
     @unittest.skipUnless(os.name == "posix", "the private mode is a POSIX permission bit")
     def test_mode_is_applied_after_the_write(self):
+        previous = os.umask(0o022)
+        self.addCleanup(os.umask, previous)
         path = self.root / "private.json"
         citest.write_json(path, {"a": 1}, mode=0o600)
         self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)

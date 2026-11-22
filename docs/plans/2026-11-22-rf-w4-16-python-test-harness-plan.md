@@ -2,7 +2,8 @@
 
 Contract: `goal-rf-w4-16-python-test-harness.md` (GDD refactor wave 4, 2026-11-21). Baseline revision:
 this worktree's HEAD `12de9428a4db5cbe67461ed8511c08978ea3364e` (`12de9428`, identical to
-`origin/main` at dispatch, carrying W3-01's #212, W3-16's #180 plan and W1-11's #151 ruff
+`origin/main` at dispatch, carrying W3-01's #212, W3-16's #180 (`fc8e95a2`, the merged
+`fix(scripts): repair CI script defects` PR) and W1-11's #151 ruff
 configuration). Branch `refactor/rf-w4-16-python-test-harness`. Binding inputs: the contract's
 Change (1)-(6), Gates, Six clauses; conductor decisions D1 (frozen bytes), D2 (LOC report-only),
 D11 (unittest stays), E7 (a suite that is not wired is not created), lesson 32 (control-flow
@@ -14,8 +15,8 @@ preservation audit), and the owner comment policy of 2026-11-22.
 | --- | --- | --- |
 | `scripts/ci/citest.py` | new | `load_gate`, `run_gate`, `git`, `git_text`, `write_bytes`, `write_json`, `strict_json`, `GateImportRefused`, `StrictJsonRefused`. |
 | `scripts/ci/testsupport/gitfixture.py` | new | `FixtureRepo`: the `setUp`-mixable throwaway repository (`root`/`repo`/`git`/`git_text`/`write`/`commit`) with the repo-local identity, `commit.gpgsign=false`, `core.autocrlf=false` and the `GIT_DIR`-family environment isolation. A namespace package directory (no `__init__.py`; `import testsupport.gitfixture` resolves through the suite's own directory on `sys.path[0]`). |
-| `scripts/ci/test-citest.py` | new | `citest`'s own suite: 25 tests, one POSIX-only skip; the mutant killers for `run_gate` (synthesized success), `write_json` (non-canonical bytes) and `strict_json` (duplicate keys, non-finite numbers), plus the six-variable `GIT_REPOSITORY_VARIABLES` isolation table and the `GIT_CONFIG_GLOBAL` / `run_gate(timeout=)` pins (apply stage, findings F6/F7). |
-| `scripts/ci/test-gitfixture.py` | new | `FixtureRepo`'s own suite: 11 tests; the mutant killer for the identity/signing/eol isolation (runs a fixture commit under `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` pointed at `os.devnull` plus `GIT_CONFIG_NOSYSTEM=1`). The vacuous auto-collected `_Probe.runTest` case is gone: the probe class lives inside its only test (apply stage, finding F2). |
+| `scripts/ci/test-citest.py` | new | `citest`'s own suite: 29 tests, one POSIX-only skip; the mutant killers for `run_gate` (synthesized success), `write_json` (non-canonical bytes) and `strict_json` (duplicate keys, non-finite numbers), plus the six-variable `GIT_REPOSITORY_VARIABLES` isolation table and the `GIT_CONFIG_GLOBAL` / `run_gate(timeout=)` pins (apply stage, findings F6/F7) and the fix stage's pins: empty stdin by default, the stderr echo on failure, the config redirect/injection drop and the umask-controlled mode assertion. |
+| `scripts/ci/test-gitfixture.py` | new | `FixtureRepo`'s own suite: 12 tests; the mutant killer for the identity/signing/eol isolation (runs a fixture commit under `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` pointed at `os.devnull` plus `GIT_CONFIG_NOSYSTEM=1`), plus the fix stage's `GIT_CONFIG`-redirect probe (the fixture identity survives a redirected config file). The vacuous auto-collected `_Probe.runTest` case is gone: the probe class lives inside its only test (apply stage, finding F2). |
 | `.github/workflows/ci.yml` | modified | the daemon job's "Check CI gate helper scripts" step gains the two new suite invocations (E7). Nothing else in the file. |
 | 22 test suites under `scripts/ci/` | modified | harness plumbing only: loader blocks, `run_gate`/`run_check` bodies, git-fixture `setUp` bodies, `write_json`/`write_log` bodies. Every assertion, message and fixture byte stays. |
 | `docs/plans/2026-11-22-rf-w4-16-python-test-harness-plan.md` | new | this plan. |
@@ -48,10 +49,16 @@ Both defaults reproduce the untouched `subprocess.run` defaults, so no consumer'
 
 `citest.git(repository, *arguments, input=None)` runs `git -C <repository>` with
 `capture_output=True`, `check=True` (a failing command raises `subprocess.CalledProcessError`, the
-same refusal class the replaced `subprocess.check_output` calls raised) and the
+same refusal class the replaced `subprocess.check_output` calls raised), `b""` as the default stdin
+(the semantics `check_output(input=None)` had) and the
 `GIT_DIR`/`GIT_WORK_TREE`/`GIT_INDEX_FILE`/`GIT_OBJECT_DIRECTORY`/`GIT_COMMON_DIR`/
 `GIT_ALTERNATE_OBJECT_DIRECTORIES` variables dropped, mirroring `revision_scope.run_git`; the
-`GIT_CONFIG_*` variables are deliberately kept because suites pin configuration through them.
+config-redirect family (`GIT_CONFIG`, `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_*`,
+`GIT_CONFIG_VALUE_*`) is dropped as well, while `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM`/
+`GIT_CONFIG_NOSYSTEM` are deliberately kept because suites pin configuration through them (fix
+stage, findings STD-A03/STD-A04). A failing command's captured stderr is written to the suite's
+stderr before the exception is re-raised, restoring the diagnostics the converted `check_call`
+sites used to stream.
 
 `citest.git_text` is that call plus `decode("ascii").strip()`. `citest.write_bytes(path, data, *,
 mode=None)` creates the parent, writes the bytes and returns them, applying `mode` after the write;
@@ -92,9 +99,9 @@ those). (b) is `FixtureRepo.commit`/`git`. The reading is recorded here instead 
 
 | Measure | Command (repository root, HEAD `12de9428`) | Before |
 | --- | --- | --- |
-| loader blocks in `scripts/ci` | `grep -h spec_from_file_location scripts/ci/*.py \| wc -l` | 23 (16 of them in the 15 owned suites, 2 in the unowned evaluation tool, 2+1+1+1 in the W3-01/#137-excluded files, 1 in the new helper) |
+| loader blocks in `scripts/ci` | `grep -h spec_from_file_location scripts/ci/*.py \| wc -l` | 22 across 19 files (16 in the 15 owned suites, 2 in the unowned evaluation tool, 2 in W3-01's `test-ci-changed-path-classifier.py`, and 1 in each of the two #137-excluded files) |
 | `def run_gate`/`def run_check` in the owned suites | `grep -c "def run_gate\|def run_check" scripts/ci/test-*.py` | 10 definitions in 8 files |
-| git-fixture `setUp` bodies | `grep -ln "def git(" scripts/ci/*.py` | 6 (citation, record-cleanliness, evaluation, source-subject, credentialed provider witness, no-legacy routes); `test-ci-changed-path-classifier.py` is a seventh but W3-01's |
+| git-fixture `setUp` bodies | `grep -l "def git(" scripts/ci/test-*.py` | 8 (the six migrated consumers: citation, record-cleanliness, evaluation, source-subject, credentialed provider witness, no-legacy routes; plus W3-01's `test-ci-changed-path-classifier.py` and `test-omo-control-native-evidence.py`'s recorded exclusion) |
 | `write_json`/`write_log` bodies | `grep -n "def write_json\|def write_log" scripts/ci/*.py` | 3 (evaluation suite, exporter suite's `write_json` and `write_log`) |
 | suite files | `ls scripts/ci/test-*.py \| wc -l` | 25 at this HEAD (24 at the contract's `0fa9b705`; W3-01 added `test-ci-changed-path-classifier.py`), becoming 27 with this slice's two new suites |
 | CI python-suite steps | `grep -cE "(sudo )?python3? (\.\./)?scripts/ci/test-" .github/workflows/ci.yml` | 25 steps at this HEAD (the contract re-measured the plan's "37 suites" as steps, not files; no comment in `ci.yml` claims a count this slice changes) |
@@ -127,7 +134,7 @@ delegate stayed; every other wrapper was deleted and its call sites now call `ci
 | `test-linux-v2-evidence.py` | `load_exporter` L52-55; `write_json` L363-368; `write_log` L370-375; `run_export` L377-378 | `load_exporter` -> `citest.load_gate(SCRIPT, "export_linux_v2_redacted_evidence")`; `write_json`/`write_log` -> `citest.write_json(..., mode=0o600)` / `citest.write_bytes(..., mode=0o600)`; `run_export` -> `citest.run_gate(SCRIPT, *arguments)` | `0o600` mode + returned bytes |
 | `test-no-legacy-routes-audit.py` | `setUp` L62-72; `tearDown` L74-75; `git` L77-83; `write` L85-89 | `FixtureRepo` mixin (`REPOSITORY_PREFIX = "legacy-route-audit-"`, `REPOSITORY_DIRECTORY = None`); `plant`/`copy_from_repo`/`track_everything`/`audit` kept | audit is a `bash` invocation |
 | `test-linux-v2-control-receipt.py` | `publish` def L70 and its body L71-77 | `citest.run_gate(SCRIPT, str(self.source), str(self.directory), self.name, str(uid), str(gid), timeout=10)` | `timeout=` |
-| `test-credentialed-provider-witness.py` | loader L23-27; `setUp` L31-58 (fixture repo and the inline `-c` commit); `git` L73-74 | loader -> `citest.load_gate(ROOT / "scripts/ci/credentialed-provider-witness.py", "credentialed_provider_witness")`; `FixtureRepo` mixin (`"symmetry-witness-negative-"`, `REPOSITORY_DIRECTORY = None`); the commit -> `self.commit("local fixture")` | identity config is repo-local now |
+| `test-credentialed-provider-witness.py` | loader L23-27; `setUp` L31-58 (fixture repo and the inline `-c` commit); `git` L73-74 | loader -> `citest.load_gate(ROOT / "scripts/ci/credentialed-provider-witness.py", "credentialed_provider_witness")`; `FixtureRepo` mixin (`"symmetry-witness-negative-"`, `REPOSITORY_DIRECTORY = None`); the commit -> `self.commit("local fixture")` | identity config is repo-local now, with the values changing from the inline `-c` `Witness <witness@example.invalid>` to `Fixture <fixture@example.invalid>` |
 
 ## Control-flow preservation audit (contract lesson 32)
 
@@ -138,7 +145,7 @@ Every `check=True/False`, `returncode` comparison, `assertIn`/`assertNotIn` on a
 | --- | --- | --- |
 | the loader-only suites (`test-model-routing-source-subject.py`, `test-omo-native-evidence.py`, `test-omo-control-native-evidence.py`, `test-opencode-v2-support-witness.py`, `test-rootless-compose-owner-claim.py`, `test-rootless-compose-transition-proxy.py`, `test-model-routing-omp-usage.py`'s two loaders) | nothing but the `spec_from_file_location`/`module_from_spec`/`exec_module` sequence and the module name | same name, same module object; the only new path is `GateImportRefused` where the old code would have raised `AttributeError` on a `None` spec (unreachable for a `.py` path) |
 | the gate-CLI bodies (`assert-exunit-json`, `assert-folded-gates`, `assert-playwright-json`, `assert-runner-matches-target`, `go-test-json-gate`, `linux-v2-go-events`, `lockfile-registry`, `record-cleanliness`, `citation-existence`, and `model-routing-evaluation`'s `cli`/`run_copy`/copied-runner runs) | `check=False` in every deleted body; `env=environment` in `run_guard`; `cwd=str(self.root)` in `cli`; `--`/`--target`/`--repo`/events-path argument order; `capture_output=True, text=True` | `run_gate` hard-codes `capture_output=True, text=True, check=False` and takes `cwd`/`env`/`timeout`/`encoding` through; argument order is rebuilt identically (`[sys.executable, str(script), *arguments]`) |
-| the git-fixture bodies (`citation`, `record-cleanliness`, `evaluation`, `source-subject`, `no-legacy`, witness) | `subprocess.check_output(..., stderr=subprocess.PIPE)` (raises on failure, keeps stderr out of the suite's stream); `git add -A` + `commit --quiet -m` + `rev-parse HEAD`; `write_text` parent creation; `tearDown` cleanup | `citest.git` uses `capture_output=True, check=True` (same `CalledProcessError`); `FixtureRepo.commit` is the same three commands; `write` creates parents; `addCleanup` replaces `tearDown`. Known, plan-recorded deltas: fixture bytes are UTF-8/LF instead of host-translated, and the repository-selecting `GIT_*` variables are dropped |
+| the git-fixture bodies (`citation`, `record-cleanliness`, `evaluation`, `source-subject`, `no-legacy`, witness) | `subprocess.check_output(..., stderr=subprocess.PIPE)` (raises on failure, keeps stderr out of the suite's stream; citation and record-cleanliness forward an explicit `input=None`); per-consumer commit sequences (`git add -A` + `commit --quiet -m` + `rev-parse HEAD` in citation, record-cleanliness and evaluation; `git add source.txt` + commit + `rev-parse` in source-subject; `git add .` plus an inline `-c user.name/... commit` in the witness suite; no commit in no-legacy, which stages through `track_everything`'s `add --all --force`); `write_text` parent creation; `tearDown` cleanup | `citest.git` uses `capture_output=True, check=True` (same `CalledProcessError`), an empty-stdin default and a stderr echo on failure; `FixtureRepo.commit` stages `-A`, commits quietly and returns the head (equivalent for the single-file fixtures - source-subject's `add source.txt` becomes `add -A`); `write` creates parents; `addCleanup` replaces `tearDown`. Known, plan-recorded deltas: fixture bytes are UTF-8/LF instead of host-translated, the repository-selecting and config-redirect environment variables are dropped, and the witness identity values change from `Witness <witness@example.invalid>` to `Fixture <fixture@example.invalid>` |
 | `test-model-routing-omp-usage.py` (`run_arguments`) | `encoding="utf-8"` with `check` omitted | `run_gate(..., encoding="utf-8")` sets `text=False, encoding="utf-8"` (subprocess enables text mode), the same object the original produced |
 | `test-linux-v2-control-receipt.py` (`publish`) | `text/capture/check=False` plus `timeout=10` | `run_gate(..., timeout=10)` |
 
@@ -160,6 +167,12 @@ reproducible):
    appear in the diff;
 4. the same pass runs on the pre-change tree (captured before the first edit) and on the post-change
    tree; `diff` over the normalized records is the D1 table.
+
+Comparison scope: the recorded streams are decoded text (`text=True`, universal newlines), so the
+diff binds equality of decoded stdout/stderr, exit code, argv, `cwd` and the recorded fields - not
+of raw bytes; `env` is compared through the recorded markers, and `check`/`capture_output`/
+`encoding`/`timeout` are not among the compared fields. The one class this leaves open - CRLF vs LF
+in fixture bytes - is decision 1's recorded trade-off, and the gate oracle is Linux.
 
 Children are *not* patched (the driver never sets `PYTHONPATH`), so a gate's own environment and
 argv are what a plain run would give it. The driver's only behavioural difference from
@@ -235,11 +248,13 @@ limit, not as the contract's gate.
    two-line why beside the dropped `GIT_*` variables in `citest.git` - both are the "line-level
    blast-radius hazard" class the policy allows. In the migrated files the `# -- helpers ---`
    dividers go with the sections they label.
-   The migrated files lose exactly two comment runs: the `# -- helpers ---`/`# -- tests ---`
-   dividers in the citation and record-cleanliness suites, which bracketed the deleted block. No
-   docstring is removed: the ones that survive on the loader shims (`load_runner_module`,
-   `load_tool`, `load_usage_module`) state why the module is imported in-process rather than
-   restating the call, which the policy keeps.
+   The migrated files lose the dividers that bracketed deleted blocks: the helpers/tests pairs in
+   the citation and record-cleanliness suites and the environment-helpers divider inside the
+   evaluation suite's migrated hunk (fix stage, finding STD-A06); the evaluation suite's
+   fixture-builders and tests dividers sit outside the touched hunks and stay. No docstring is
+   removed: the two that survive on the loader shims (`load_runner_module`, `load_usage_module`)
+   state why the module is imported in-process rather than restating the call, which the policy
+   keeps; `test-model-routing-source-subject.py`'s `load_tool` shim has no docstring and had none.
 
 ## Evidence plan (contract Gates, all foreground and serialized)
 
@@ -284,14 +299,14 @@ Platform routing: `test-linux-v2-control-receipt.py`, `test-linux-v2-evidence.py
 
 | Measure | Command | Before | After |
 | --- | --- | --- | --- |
-| loader blocks, whole directory | `grep -h spec_from_file_location scripts/ci/*.py \| wc -l` | 23 | 7 - one inside `citest.load_gate` itself, two in the unowned evaluation tool, two in W3-01's `test-ci-changed-path-classifier.py`, one in each of the two #137-excluded files. **Zero in the 22 owned suites.** |
-| `def run_gate`/`def run_check` in the owned suites | `grep -c ... scripts/ci/test-*.py` | 10 definitions in 8 files | 8 one-line delegates in 6 files (`test-assert-exunit-json.py` two: temp file + events path; `test-assert-playwright-json.py` two: temp report + explicit path; `test-check-citation-existence.py` and `test-check-record-cleanliness.py`: `--repo`; `test-go-test-json-gate.py`: `--` separator; `test-linux-v2-go-events.py`: temp jsonl). No delegate body contains `subprocess.run` (`grep -A4 "def run_gate" ... \| grep -c subprocess.run` -> 0). `test-linux-v2-evidence.py` has no local delegate left: its 33 `run_export` call sites call `citest.run_gate(SCRIPT, ...)` directly (apply stage, finding F3). |
-| raw `subprocess.run` gate invocations in the 22 owned suites | `rg -U 'subprocess\.run\(\s*\[[^]]*str\((SCRIPT\|GATE\.BOUNDARY_SCRIPT)\)' scripts/ci/test-*.py` | 8 (citation 3, record-cleanliness 2, go-test-json-gate 3) | 1 - `test-go-test-json-gate.py`'s `pass_fds` descriptor-boundary probe, which must stay raw (apply stage, finding F4); the two #137-excluded suites keep their own runs and are untouched. |
-| files defining a git fixture | `grep -l "def git(" scripts/ci/test-*.py` | 7 | 2 - `test-ci-changed-path-classifier.py` (W3-01's) and `test-omo-control-native-evidence.py` (recorded exclusion); the six migrated consumers use `FixtureRepo` (`grep -l FixtureRepo scripts/ci/test-*.py` -> citation, record-cleanliness, evaluation, source-subject, no-legacy, witness, test-gitfixture). |
+| loader blocks, whole directory | `grep -h spec_from_file_location scripts/ci/*.py \| wc -l` | 22 | 7 - one inside `citest.load_gate` itself, two in the unowned evaluation tool, two in W3-01's `test-ci-changed-path-classifier.py`, one in each of the two #137-excluded files. **Zero in the 22 owned suites.** |
+| `def run_gate`/`def run_check` in the owned suites | `grep -c ... scripts/ci/test-*.py` | 10 definitions in 8 files | 8 thin local delegates in 6 files (`test-assert-exunit-json.py` two: temp file + events path; `test-assert-playwright-json.py` two: temp report + explicit path; `test-check-citation-existence.py` and `test-check-record-cleanliness.py`: `--repo`; `test-go-test-json-gate.py`: `--` separator; `test-linux-v2-go-events.py`: temp jsonl; the three temp-file wrappers are multi-line, the other five are one-line calls). No delegate body contains `subprocess.run` (`grep -A4 "def run_gate" ... \| grep -c subprocess.run` -> 0). `test-linux-v2-evidence.py` has no local delegate left: its 33 `run_export` call sites call `citest.run_gate(SCRIPT, ...)` directly (apply stage, finding F3). |
+| raw `subprocess.run` gate invocations | `rg -U 'subprocess\.run\(\s*\[[^]]*str\((SCRIPT\|GATE\.BOUNDARY_SCRIPT)\)' scripts/ci/test-*.py` | 24 matching lines in 13 of the 22 owned suites at `b25e34ae` (every deleted delegate body plus every raw call site; 30 lines in 15 files including the W3-01/#137 files). The apply stage's F4 subset is 8 raw call sites - citation 3, record-cleanliness 2, go-test-json-gate 3 - seven converted and the `pass_fds` probe kept | 1 - `test-go-test-json-gate.py`'s `pass_fds` descriptor-boundary probe, which must stay raw (apply stage, finding F4); the two #137-excluded suites keep their own runs and are untouched. |
+| files defining a git fixture | `grep -l "def git(" scripts/ci/test-*.py` | 8 | 2 - `test-ci-changed-path-classifier.py` (W3-01's) and `test-omo-control-native-evidence.py` (recorded exclusion); the six migrated consumers use `FixtureRepo` (`grep -l FixtureRepo scripts/ci/test-*.py` -> citation, record-cleanliness, evaluation, source-subject, no-legacy, witness, test-gitfixture). |
 | `write_json`/`write_log` bodies | `grep -n "def write_json\|def write_log" scripts/ci/test-*.py` | 3 bodies (evaluation, exporter x2) with their own mkdir/dumps/encode/chmod | 3 one-line adapters: `citest.write_json(path, value, sort_keys=True)` (returns the `Path`), `citest.write_json(path, value, mode=0o600)`, `citest.write_bytes(path, ..., mode=0o600)`. |
 | suites | `ls scripts/ci/test-*.py \| wc -l` | 25 at this HEAD | 27 (+`test-citest.py`, `test-gitfixture.py`, both wired into `ci.yml`'s daemon step next to the other suite invocations) |
 | CI python-suite steps | `grep -cE "(sudo )?python3? (\.\./)?scripts/ci/test-" .github/workflows/ci.yml` | 25 | 27 (`ci.yml:1609-1610` are the two new suite invocations) |
-| LOC | `wc -l` over the 22 suites the migration table names, `e0782105` vs the delivered tree | 11,185 | 10,903 (-282); the two new modules and their two suites add 509 (`citest.py` 110, `testsupport/gitfixture.py` 45, `test-citest.py` 257, `test-gitfixture.py` 97), so `scripts/ci` nets +227 (`git diff --numstat e0782105 -- scripts/ci` -> +751/-524). Re-measured at the delivered revision in the apply stage (finding F8): the figures first recorded here (10,747 -> 10,548, net +211) were taken on an intermediate working tree and do not reproduce on a committed revision (`10b03cc0` measures 11,185 -> 10,929 over the same set, `+567/-413` plus the 410 new-file lines). D2 makes LOC report-only; the -282 is the duplication the contract asked to remove plus the apply-stage plumbing removals, and the +509 is the helper plus the suites that kill its mutants. |
+| LOC | `wc -l` over the 22 suites the migration table names, `e0782105` vs the delivered tree | 11,185 | 10,901 (-284) on the fix-stage tree; the two new modules and their two suites add 601 (`citest.py` 122, `testsupport/gitfixture.py` 45, `test-citest.py` 316, `test-gitfixture.py` 118), so `scripts/ci` nets +317 (`git diff --numstat b25e34ae -- scripts/ci` -> +843/-526). At the reviewed revision `89c68e05` the same measures were 10,903 (-282), 509 and +227 (`git diff --numstat b25e34ae..89c68e05 -- scripts/ci` -> +751/-524); naming `e0782105` as the numstat base does not reproduce the slice delta because it also contains #221's two `scripts/ci` files (fix stage, finding SPEC-A04). The figures first recorded here (10,747 -> 10,548, net +211) were taken on an intermediate working tree and do not reproduce on a committed revision (`10b03cc0` measures 11,185 -> 10,929 over the same set, `+567/-413` plus the 410 new-file lines). D2 makes LOC report-only; the -284 is the duplication the contract asked to remove plus the apply-stage plumbing removals and the fix-stage test hardening, and the +601 is the helper plus the suites that kill its mutants. |
 
 ### Byte-frozen gate outputs (D1)
 
@@ -327,11 +342,21 @@ by field.
 | `test-rootless-compose-transition-proxy.py` | 0 = 0 | 0 -> 0 | 0 | 0 -> 0 | 0 |
 | `test-model-routing-evaluation.py` | 0 = 0 | 686 -> 686 | 0 | 718 -> 718 | 320 |
 
-The "other children" deltas are exactly the fixture configuration `FixtureRepo` now pins: one
+The "other children" deltas are the fixture configuration `FixtureRepo` now pins: one
 `git config core.autocrlf false` line per created fixture repository (+49 for 49 tests, +19, +24 for
-the six-test audit suite) plus the witness suite's four config lines per test in place of its inline
-`git -c user.name=… commit`, and the three commands per fixture repository that moved inside the
-helper. No other child invocation changed; in particular every `git` argv is otherwise identical.
+the six-test audit suite), the witness suite's four repo-local config lines per test in place of its
+inline `git -c user.name=… commit` (whose recorded identity values change from `Witness
+<witness@example.invalid>` to `Fixture <fixture@example.invalid>`), and the three commands per
+fixture repository that moved inside the helper. The apply stage's F5 conversions also changed
+three git argv shapes without touching any gate child: the source-subject setUp's `git add
+source.txt` became `FixtureRepo.commit`'s `git add -A` (equivalent on that single-file fixture),
+citation's `git clone` gained the helper's `-C <root>` prefix, and the orphan/other-repository
+setups moved from `check_call([...], cwd=X)` to `git -C X …` (the child's cwd is inherited instead
+of `X`, equivalent because every one of those commands is repository-relative or given absolute
+arguments). Apart from those shapes and the fixture-configuration lines, no child invocation
+changed; gate children are identical by construction, and the fix stage's `citest.git` changes
+(empty stdin by default, the config-redirect family dropped, captured stderr echoed on failure)
+reach git children only.
 The two new suites have no pre-change counterpart - they did not exist before this slice - so they
 are evidence through their own green runs and the mutants they kill, not through a byte diff.
 
@@ -363,14 +388,17 @@ suites run foreground, the file restored from a byte-identical backup and verifi
 copies of `scripts/ci` whose bytes equal the delivered files (`md5sum` equal, so the delivered files
 were never mutated): production `citest.py` `59819427474a22dae5e2d03c4da57abc`,
 `testsupport/gitfixture.py` `2b35736d5360c6bf8bfe7b821983d087`; every red below reproduced, and the
-one count that moved is noted in its row)
+one count that moved is noted in its row. Fix stage: every red below was re-run against copies of
+the fixed tree - (a), (c) and (d) reproduce, (b) moves to `failures=3, errors=1` because the new
+redirect probe fails too, and the fix-stage pins' own mutants are recorded in the fix-stage section
+below)
 
 | Mutation | Target suite(s) | Observed |
 | --- | --- | --- |
 | (a) `run_gate` returns `subprocess.CompletedProcess(argv, 0, "", "")` instead of the child's result | `test-citest.py`, `test-assert-folded-gates.py`, `test-linux-v2-go-events.py`, `test-assert-exunit-json.py` | **exit 1 / 1 / 1 / 1**: `test-citest.py` `FAILED (failures=2, errors=2, skipped=1)` (`test_the_child_status_and_streams_are_returned_unchanged`, `test_arguments_reach_the_child_in_order`, `test_cwd_and_env_replace_the_inherited_ones`, and the apply stage's `test_a_timeout_raises_instead_of_returning_a_default` - the added pin also kills this mutant); `test-assert-folded-gates.py` `FAILED (failures=4)`; `test-linux-v2-go-events.py` `FAILED (failures=13)`, failing every refusal sub-test; `test-assert-exunit-json.py` `FAILED (failures=21, errors=1)`, failing its refusal set |
-| (b) `FixtureRepo` drops the repo-local `user.name`/`user.email`/`commit.gpgsign`/`core.autocrlf` block, run with `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` pointed at an empty file and `GIT_CONFIG_NOSYSTEM=1` (`git config --global --get user.email` -> exit 1, so the host identity was masked) | `test-gitfixture.py`, `test-linux-v2-source-subject.py`, `test-check-record-cleanliness.py` | **`test-gitfixture.py` exit 1, `FAILED (failures=2, errors=1)`**: `test_the_identity_signing_and_eol_configuration_is_the_fixture_s` errors (`git config --get user.name` fails), `test_commit_stages_every_change_and_returns_the_head` and `test_a_commit_needs_no_host_identity_or_signing_configuration` fail on the recorded author email. The two consumer suites stay green and are recorded: they make no identity claim, and git still commits with its *implicit* identity derived from the host user name when `user.email` is unset - so the mutant's red is carried by the fixture suite's explicit identity pin, not by every consumer. |
-| (c) `strict_json`'s `object_pairs` hook stops refusing a repeated key | `test-citest.py` | **exit 1, `FAILED (failures=2)`**: `test_a_repeated_key_is_refused` and `test_a_repeated_key_inside_a_nested_object_is_refused` (`AssertionError: StrictJsonRefused not raised`) |
-| (d) `write_json` writes `separators=(",", ":")` instead of `indent=2` | `test-citest.py` | **exit 1, `FAILED (failures=2)`**: `test_the_written_bytes_are_canonical_and_returned` shows `b'{"b":1,"a":[2,{"c":3}]}\n' != b'{\n  "b": 1,\n  "a": [\n    2,\n    {\n      "c": 3\n    }\n  ]\n}\n'`; `test_sort_keys_orders_the_members_by_key` fails on the same reflow |
+| (b) `FixtureRepo` drops the repo-local `user.name`/`user.email`/`commit.gpgsign`/`core.autocrlf` block, run with `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` pointed at an empty file and `GIT_CONFIG_NOSYSTEM=1` (`git config --global --get user.email` -> exit 1, so the host identity was masked) | `test-gitfixture.py`, `test-linux-v2-source-subject.py`, `test-check-record-cleanliness.py` | **`test-gitfixture.py` exit 1, `FAILED (failures=3, errors=1)`** (fix stage; was `failures=2, errors=1` at 11 tests): `test_the_identity_signing_and_eol_configuration_is_the_fixture_s` errors (`git config --get user.name` fails), `test_commit_stages_every_change_and_returns_the_head` and `test_a_commit_needs_no_host_identity_or_signing_configuration` fail on the recorded author email, and the fix-stage `test_the_fixture_identity_survives_a_redirected_config_file` fails on the missing fixture identity. The two consumer suites stay green and are recorded: they make no identity claim, and git still commits with its *implicit* identity derived from the host user name when `user.email` is unset - so the mutant's red is carried by the fixture suite's explicit identity pin, not by every consumer. |
+| (c) `strict_json`'s `object_pairs` hook stops refusing a repeated key | `test-citest.py` | **exit 1, `FAILED (failures=2, skipped=1)`**: `test_a_repeated_key_is_refused` and `test_a_repeated_key_inside_a_nested_object_is_refused` (`AssertionError: StrictJsonRefused not raised`) |
+| (d) `write_json` writes `separators=(",", ":")` instead of `indent=2` | `test-citest.py` | **exit 1, `FAILED (failures=2, skipped=1)`**: `test_the_written_bytes_are_canonical_and_returned` shows `b'{"b":1,"a":[2,{"c":3}]}\n' != b'{\n  "b": 1,\n  "a": [\n    2,\n    {\n      "c": 3\n    }\n  ]\n}\n'`; `test_sort_keys_orders_the_members_by_key` fails on the same reflow |
 
 ### Plain gate runs (post-change, foreground, one suite at a time)
 
@@ -395,8 +423,8 @@ the numbers below are the clean-environment runs.
 | `python3 scripts/ci/test-opencode-v2-support-witness.py` | 0 | `Ran 16 tests`, `OK` (pre 16) |
 | `python3 scripts/ci/test-check-lockfile-registry.py` | 0 | `Ran 25 tests`, `OK` (pre 25) |
 | `python3 scripts/ci/test-go-test-json-gate.py` | 0 | `Ran 28 tests`, `OK (skipped=5)` (pre 28, same 5 POSIX skips) |
-| `python3 scripts/ci/test-citest.py` | 0 | `Ran 25 tests`, `OK (skipped=1)` (new suite; the skip is the POSIX-only `0o600` assertion; the three added tests are the apply stage's F6/F7 pins) |
-| `python3 scripts/ci/test-gitfixture.py` | 0 | `Ran 11 tests`, `OK` (new suite; the apply stage removed the vacuous auto-collected `_Probe.runTest` case, finding F2) |
+| `python3 scripts/ci/test-citest.py` | 0 | `Ran 29 tests`, `OK (skipped=1)` (new suite; the skip is the POSIX-only `0o600` assertion; three of the added tests are the apply stage's F6/F7 pins, and the four fix-stage pins are the empty-stdin default, the stderr echo, the config redirect and the config injection) |
+| `python3 scripts/ci/test-gitfixture.py` | 0 | `Ran 12 tests`, `OK` (new suite; the apply stage removed the vacuous auto-collected `_Probe.runTest` case, finding F2; the fix stage added the redirected-config identity probe) |
 | `python3 scripts/ci/test-check-record-cleanliness.py` | 0 | `Ran 19 tests`, `OK` (pre 19) |
 | `python3 scripts/ci/test-check-citation-existence.py` | 0 | `Ran 49 tests`, `OK` (pre 49) |
 | `python3 scripts/ci/test-linux-v2-source-subject.py` | 0 | `Ran 4 tests`, `OK` (pre 4) |
@@ -424,9 +452,9 @@ The four Linux-only suites, run in WSL Ubuntu-24.04 as root from the repository 
 | `ruff format --check scripts/ci` (0.17.5) | **exit 0**, `57 files already formatted` |
 | `python3 scripts/ci/check-lockfile-registry.py` | **exit 0**, `verified every recorded tarball URL in pnpm-lock.yaml sits on registry.npmjs.org: 263 entries checked` |
 | `git diff --check` | **exit 0**, no output |
-| scan of the working-tree diff and the new files for a user-profile path (`grep -inE "users/\|\\\\u"`) | no matches |
+| scan of the working-tree diff and the new files for a user-profile path (case-insensitive scan for the Windows profile directory segment, and for a backslash immediately before the letter u) | no matches - the scan pattern is described instead of embedded, so the contract-mandated host-path check over `git diff origin/main...HEAD` is clean (fix stage, findings STD-A06/SPEC-A06) |
 | `pyproject.toml` | unchanged: the new modules need no per-file ignore, and the two new suites' POSIX-only skip is a `unittest.skipUnless`, not a lint suppression |
-| the CI step's invocation form, run from `daemon/` (`python3 ../scripts/ci/test-citest.py`, `… test-gitfixture.py`, `… test-check-citation-existence.py`, `… test-model-routing-evaluation.py <one test>`) | the two new suites report `Ran 25 tests`/`OK (skipped=1)` and `Ran 11 tests`/`OK`; `import citest` and `import testsupport.gitfixture` resolve through the script's own directory on `sys.path[0]`, which is what the daemon job's `../scripts/ci/…` form relies on |
+| the CI step's invocation form, run from `daemon/` (`python3 ../scripts/ci/test-citest.py`, `… test-gitfixture.py`, `… test-check-citation-existence.py`, `… test-model-routing-evaluation.py <one test>`) | the two new suites report `Ran 29 tests`/`OK (skipped=1)` and `Ran 12 tests`/`OK`; `import citest` and `import testsupport.gitfixture` resolve through the script's own directory on `sys.path[0]`, which is what the daemon job's `../scripts/ci/…` form relies on |
 
 ### Citation gate at the slice head
 
@@ -475,6 +503,67 @@ suite exit codes unchanged:
 
 Every plain gate run at the delivered revision is in the tables above (Windows host and WSL), and the
 platform limits, decisions and residual risks below are unchanged by the apply stage.
+
+## Fix stage (2026-11-22, review r1: STD-A01-A06, SPEC-A01-A10)
+
+The dual-axis review of `b25e34ae..89c68e05` reported 16 findings and no production-behaviour
+defect. The fix stage changed the helpers, the two new suites and this plan; every migrated suite's
+logic, assertions, messages and gate invocations are unchanged, and the D1 gate children are
+untouched by construction (`citest.run_gate` is not edited; the evaluation suite loses one divider
+comment).
+
+- STD-A03: `citest.git` defaults to `input=b""` (the semantics the replaced
+  `check_output(input=None)` calls had) and writes a failing command's captured stderr to the
+  suite's stderr before re-raising. New pins:
+  `test_an_absent_input_runs_the_child_with_empty_stdin` and
+  `test_a_failing_command_prints_the_captured_stderr`.
+- STD-A04: `git_environment` drops `GIT_CONFIG` and the
+  `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_*`/`GIT_CONFIG_VALUE_*` family and keeps
+  `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM`/`GIT_CONFIG_NOSYSTEM` for the callers that pin
+  configuration. The reviewer's `git config --local` suggestion does not work on this host: with
+  `GIT_CONFIG` set, git 2.56.0 answers `error: only one config file at a time`; dropping the
+  redirect fixes the write and the read side at once. New pins:
+  `test_an_inherited_config_file_redirect_is_dropped`,
+  `test_an_inherited_config_injection_is_dropped`, and the fixture-level
+  `test_the_fixture_identity_survives_a_redirected_config_file`.
+- STD-A01/A02/A05: the input assertion pins the `b"blob 8\0content\n"` digest; the three `GIT_DIR`
+  isolation tests assert `rev-parse --absolute-git-dir` against the expected `.git` directory; the
+  env-replacement test scrubs a patched `GATE_SCRUBBED` variable from the passed environment; the
+  child reports its full `cwd`; the POSIX mode test sets `os.umask(0o022)` for its duration.
+- STD-A06: the evaluation suite's `# -- environment helpers` divider (inside the migrated hunk) is
+  removed; decision 7 records the corrected count.
+- SPEC-A01-A10: corrections applied above - the baseline counts (22 loaders across 19 files; 8
+  test-side `def git(` files), the raw-gate baseline (24 matching lines in 13 owned suites at
+  `b25e34ae`, F4 subset named), the LOC row's numstat base, the falsified "no other child
+  invocation changed" sentence, the DLP row, the witness identity values, the `#180` reference,
+  decision 7's docstring list and the D1 comparison scope. SPEC-A08 needs a conductor-side
+  contract amendment (two migrated files outside the STRICT list) and changes no code; it is
+  recorded in the fix-stage answer.
+
+Fix-stage re-run (foreground, fixed tree; every host suite except the conductor-owned full
+`test-model-routing-evaluation.py` run, plus both toolchain checks, the citation gate and WSL):
+
+- Host suites: every summary line equals the apply-stage table above except the two new suites (29
+  and 12 tests); the four Windows platform-limit suites repeat their recorded outcomes; the daemon
+  form re-run reports `Ran 29 tests`/`OK (skipped=1)`, `Ran 12 tests`/`OK` and `Ran 1 test`/`OK`
+  for one evaluation test. WSL: evidence 36 `OK`, no-legacy 6 `OK`, control-receipt 9 `OK`,
+  witness 5 `FAILED (failures=1)` (the pre-existing Hex refusal).
+- Toolchain: `ruff check`/`ruff format --check` exit 0; `git diff --check` exit 0; the lockfile
+  gate exit 0; the contract-mandated host-path check over the working-tree diff is clean.
+- Citation gate at the fix-stage snapshot (tree `0ad7ed5770727d8c78f92f979ef60673c2e07a26`, commit
+  `f8838085c6f485fa86b5bc071018e9e921115b45`, parent `89c68e05`; a dangling commit from the
+  scratch `GIT_INDEX_FILE` index, no ref moved): `--base HEAD` exit 0, nothing to check; `--base
+  e309077c4c4e` exit 0, `10 changed document(s) pass the path and symbol check (561 path
+  citation(s))`.
+- Mutants (copies of the fixed `scripts/ci`): (a) reproduces (`failures=2, errors=2, skipped=1` in
+  `test-citest.py`; folded 4; go-events 13; exunit `failures=21, errors=1`); (b) `test-gitfixture.py`
+  `FAILED (failures=3, errors=1)` with both consumers green; (c) and (d) `FAILED (failures=2,
+  skipped=1)` each. The new pins' mutants: always-empty input `failures=2` (the digest pin plus the
+  alternates probe), inherited-stdin default `failures=1` (the empty-stdin pin), config family kept
+  `errors=1, failures=1` in `test-citest.py` plus `failures=1` in `test-gitfixture.py`, only
+  `GIT_CONFIG` dropped `failures=1` (the injection pin alone), stderr echo removed `failures=1`,
+  env merged instead of replaced `failures=1`, chmod removed (WSL) `failures=1` at `420 != 384`
+  with the unmutated control green.
 
 ## Residual risks and known limits
 

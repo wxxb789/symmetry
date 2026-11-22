@@ -5,8 +5,10 @@ import os
 import subprocess
 import sys
 
-# An inherited value redirects `-C <repository>` to another repository, worktree, index
-# or object store; the GIT_CONFIG_* variables are kept because callers pin config through them.
+# An inherited value redirects `-C <repository>` to another repository, worktree, index or
+# object store, points the local configuration at another file, or injects configuration
+# at command scope; the pinned GIT_CONFIG variables are kept because callers pin
+# configuration through them.
 GIT_REPOSITORY_VARIABLES = (
     "GIT_DIR",
     "GIT_WORK_TREE",
@@ -15,6 +17,8 @@ GIT_REPOSITORY_VARIABLES = (
     "GIT_COMMON_DIR",
     "GIT_ALTERNATE_OBJECT_DIRECTORIES",
 )
+GIT_CONFIG_REDIRECT_VARIABLE = "GIT_CONFIG"
+GIT_CONFIG_PINNED_VARIABLES = ("GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_NOSYSTEM")
 
 
 class GateImportRefused(Exception):
@@ -49,19 +53,27 @@ def run_gate(script, *arguments, cwd=None, env=None, timeout=None, encoding=None
 
 def git_environment():
     environment = dict(os.environ)
+    for name in list(environment):
+        if name.startswith(GIT_CONFIG_REDIRECT_VARIABLE) and name not in GIT_CONFIG_PINNED_VARIABLES:
+            environment.pop(name)
     for name in GIT_REPOSITORY_VARIABLES:
         environment.pop(name, None)
     return environment
 
 
 def git(repository, *arguments, input=None):
-    return subprocess.run(
-        ["git", "-C", str(repository), *arguments],
-        input=input,
-        capture_output=True,
-        check=True,
-        env=git_environment(),
-    )
+    try:
+        return subprocess.run(
+            ["git", "-C", str(repository), *arguments],
+            input=b"" if input is None else input,
+            capture_output=True,
+            check=True,
+            env=git_environment(),
+        )
+    except subprocess.CalledProcessError as refusal:
+        if refusal.stderr:
+            sys.stderr.write(refusal.stderr.decode("utf-8", "replace"))
+        raise
 
 
 def git_text(repository, *arguments):
