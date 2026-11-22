@@ -222,6 +222,11 @@ defmodule SymmetryControlWeb.ProtocolReasonCoverageTest do
     end
   end
 
+  test "the served table has exactly the pinned keys" do
+    assert served_table_keys() ==
+             @table |> Map.keys() |> Enum.map(&Atom.to_string/1) |> Enum.sort()
+  end
+
   test "the tuple-shaped contract and stale clauses keep their entries" do
     assert Protocol.error_details({:invalid_contract, %{details: %{}}}) == @table.invalid_contract
     assert Protocol.error_details({:stale, %{current_version: 2}}) == @table.stale
@@ -229,25 +234,18 @@ defmodule SymmetryControlWeb.ProtocolReasonCoverageTest do
 
   test "an unmapped reason emits the fallback counter once and keeps the response bytes" do
     probe_reason = :rf_w5_05_unmapped_probe
-    handler_id = {__MODULE__, :unmapped_probe, make_ref()}
-    test_pid = self()
-
-    :ok =
-      :telemetry.attach(
-        handler_id,
-        @event,
-        fn event, measurements, metadata, _config ->
-          send(test_pid, {:unmapped_reason, event, measurements, metadata})
-        end,
-        nil
-      )
-
-    on_exit(fn -> :telemetry.detach(handler_id) end)
+    attach_counter!(:unmapped_probe)
 
     assert Protocol.error_details(probe_reason) == @table.invalid_request
 
     assert_receive {:unmapped_reason, @event, %{count: 1}, %{reason: ^probe_reason}}
     refute_receive {:unmapped_reason, _, _, %{reason: ^probe_reason}}
+
+    tuple_probe = {:rf_w5_05_unmapped_probe, %{}}
+
+    assert Protocol.error_details(tuple_probe) == @table.invalid_request
+    assert_receive {:unmapped_reason, @event, %{count: 1}, %{reason: ^tuple_probe}}
+    refute_receive {:unmapped_reason, _, _, %{reason: ^tuple_probe}}
 
     response = Protocol.error(Plug.Test.conn(:get, "/"), probe_reason)
     assert response.status == 400
@@ -257,7 +255,48 @@ defmodule SymmetryControlWeb.ProtocolReasonCoverageTest do
   end
 
   test "a mapped reason does not emit the fallback counter" do
-    handler_id = {__MODULE__, :mapped_probe, make_ref()}
+    attach_counter!(:mapped_probe)
+
+    assert Protocol.error_details(:not_found) == @table.not_found
+    refute_receive {:unmapped_reason, _, _, %{reason: :not_found}}
+  end
+
+  test "a raising counter handler cannot change the response bytes" do
+    probe_reason = :rf_w5_05_raising_handler_probe
+    handler_id = {__MODULE__, :raising_probe, make_ref()}
+    test_pid = self()
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        @event,
+        fn
+          _event, _measurements, %{reason: ^probe_reason}, _config ->
+            send(test_pid, :raising_handler_ran)
+            raise "rf_w5_05 raising handler probe"
+
+          _event, _measurements, _metadata, _config ->
+            :ok
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    {response, _log} =
+      ExUnit.CaptureLog.with_log(fn ->
+        Protocol.error(Plug.Test.conn(:get, "/"), probe_reason)
+      end)
+
+    assert_receive :raising_handler_ran
+    assert response.status == 400
+
+    assert response.resp_body ==
+             ~s({"error":{"code":"invalid_request","message":"request payload is invalid"}})
+  end
+
+  defp attach_counter!(tag) do
+    handler_id = {__MODULE__, tag, make_ref()}
     test_pid = self()
 
     :ok =
@@ -271,9 +310,15 @@ defmodule SymmetryControlWeb.ProtocolReasonCoverageTest do
       )
 
     on_exit(fn -> :telemetry.detach(handler_id) end)
+  end
 
-    assert Protocol.error_details(:not_found) == @table.not_found
-    refute_receive {:unmapped_reason, _, _, %{reason: :not_found}}
+  defp served_table_keys do
+    source = File.read!(Path.join(@lib_dir, "symmetry_control_web/protocol.ex"))
+    [_, block] = Regex.run(~r/@error_statuses %\{(.*?)\n  \}/s, source)
+
+    Regex.scan(~r/^    ([a-z][a-z0-9_]*):/m, block, capture: :all_but_first)
+    |> List.flatten()
+    |> Enum.sort()
   end
 
   defp scanned_reasons do

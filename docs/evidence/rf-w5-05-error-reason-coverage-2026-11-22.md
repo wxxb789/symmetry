@@ -14,24 +14,34 @@ Delivered files (sha256 of the delivered bytes):
 | file | sha256 |
 | --- | --- |
 | `control/lib/symmetry_control_web/protocol.ex` | `d2968799c0e3b59a44e826ce3633e49a6779e8e810c6049412dfb38f156c5976` |
-| `control/test/symmetry_control_web/protocol_reason_coverage_test.exs` | `87c8690fe2e0507599e1944b24116f697ce441c2fb1114e490fdf31cca15b8d1` |
+| `control/test/symmetry_control_web/protocol_reason_coverage_test.exs` | `76143b9f1153e861783640c45f4ea7ac31a3f6f880894d62fd4cd0732f60d660` |
 | `docs/plans/2026-11-22-rf-w5-05-error-reason-coverage-plan.md` | `38bb0948c8089b480a7ad443b138d24c3ec59cd7f83bf9dbea6c78ddcd4ad4ce` |
 
 `control/mix.exs` and `control/mix.lock` are untouched (sha256 of `mix.lock`
 `60e0d7fa420951e413f04b01bfccaa678689c552f4a742fa3d621a65b8813758`, identical to the main
 checkout that supplied `MIX_DEPS_PATH`); the two controller suites
 (`protocol_controller_test.exs`, `goal_controller_test.exs`) are oracles and are unmodified.
+Apply stage (simplify findings 1–4, brief
+`<HOST-PATH>/.local/state/gdd/findings/rf-w5-05-error-reason-coverage-apply.md`): the test file
+gained the served-table key-set cross-check, the non-atom fallback probe and a raising-handler
+response-safety case, and the two counter tests share `attach_counter!/1`; `protocol.ex`, the plan
+and `mix.lock` are untouched, and the counts and mutation logs below are re-bound to the new test
+bytes.
 Scratch tools and raw outputs (outside the repository, GDD state scratch
 `<HOST-PATH>/.local/state/gdd/scratch/w5-05/`): `scan.py`, `inventory-head.json`,
-`reasons.txt` (127 reasons), `dump.exs`, `base.txt`, `head.txt`, `base-head.diff`,
-`observe.exs`, `counter-observation.txt`, `muta.log`, `mutb.log`, `mutc.log`, `mutd.log`,
+`inventory-apply.json`, `reasons.txt` (127 reasons), `dump.exs`, `base.txt`, `head.txt`,
+`head-apply.txt` / `head-apply-clean.txt`, `base-head.diff`, `observe.exs`,
+`counter-observation.txt`, `muta.log`–`mutd.log` (pre-apply bytes) and
+`muta-apply.log`–`mutd-apply.log`, `webtree-apply.log`, `webtree-apply-excl.log`,
 `orig/` (pre-mutation file copies + `sha256.txt`); runner `../rf-w5-05-mix.sh`.
 
 ## 1. Re-measured inventory (HEAD `e84973a7`)
 
 Scan method: for every `control/lib/**/*.ex` file read whole,
 `re.finditer(r"\{:error,\s*:([a-z][a-zA-Z0-9_]*)\}")`; table read from `@error_statuses %{`
-through its closing brace in `protocol.ex`. Raw: `scan.py` output `inventory-head.json`.
+through its closing brace in `protocol.ex`. Raw: `scan.py` output `inventory-head.json`;
+re-run at the applied bytes → `inventory-apply.json`, identical (72 files, 86/23/63/64, span
+`:18-112`).
 
 | measure | contract (re-verified at `c9ed23b4`) | HEAD | delta |
 | --- | ---: | ---: | --- |
@@ -62,6 +72,16 @@ reachability** — a reason returned on a path that never reaches `Protocol.erro
 string inside a comment, is scanned and asserted against the same tuples. No call-graph
 restriction in this slice; the pins, not the scan, are the freeze.
 
+Apply-stage additions (same contract, findings 1–4): `served_table_keys/0` reads
+`control/lib/symmetry_control_web/protocol.ex`, extracts the `@error_statuses` key lines
+(wrap-safe) and asserts key-set equality with `@table` — an extra or stray served key now reddens
+(mutation (b)); the unmapped counter case also probes a non-atom reason
+(`{:rf_w5_05_unmapped_probe, %{}}`; `Map.fetch/2` misses for any term); and a raising-handler
+case attaches a handler that raises for its unique probe reason, with the response read under
+`ExUnit.CaptureLog.with_log/1` (the telemetry failure report is absorbed and the 400 body stays
+byte-identical; the handler-invoked signal is asserted directly, so the raise path cannot pass
+unexercised).
+
 ## 3. Byte-unchanged response evidence
 
 `dump.exs` prints, for each of the 127 input reasons (64 table keys ∪ 86 scanned; `reasons.txt`),
@@ -72,11 +92,15 @@ tuple-shaped clause forms. Run before the `protocol.ex` edit and after it:
 | --- | --- | ---: | --- |
 | base (pre-edit) | `mix run --no-start …/dump.exs` | `base.txt` (256 lines: 127 details + 127 render + 2 tuple) | `e7f3b7e96edf7bfa92adb0557adc85b452010cbf393ed67b131f18cfd0c9e7c3` |
 | HEAD | same command | `head.txt` (256 lines) | `e7f3b7e96edf7bfa92adb0557adc85b452010cbf393ed67b131f18cfd0c9e7c3` |
+| apply re-run (same `protocol.ex` bytes) | same command | `head-apply-clean.txt` (256 lines) | `e7f3b7e96edf7bfa92adb0557adc85b452010cbf393ed67b131f18cfd0c9e7c3` |
 
 `diff base.txt head.txt` → exit 0, 0 bytes (`base-head.diff`). Every reason's status, code, message
 and rendered JSON body is byte-identical; the only observable delta in the slice is the telemetry
 event. The counter test also pins the probe reason's rendered body byte-exactly
-(`{"error":{"code":"invalid_request","message":"request payload is invalid"}}`).
+(`{"error":{"code":"invalid_request","message":"request payload is invalid"}}`). The apply-stage
+re-run of the dump is byte-identical too: `cmp head-apply-clean.txt base.txt` → exit 0;
+`head-apply.txt` is that payload plus one leading `Compiling 1 file (.ex)` line from the
+post-mutation recompile.
 
 ## 4. Counter observation (raw output)
 
@@ -101,15 +125,16 @@ unique to the test file, race-free under `async: true`) and no event for `:not_f
 
 | # | mutant | command | exit | red |
 | --- | --- | ---: | ---: | --- |
-| a | `defp rf_w5_05_mutant, do: {:error, :brand_new_reason}` appended to `portal_api_controller.ex` | `mix test test/symmetry_control_web/protocol_reason_coverage_test.exs` | 2 (6/7) | "every control/lib error reason is pinned as mapped or known-unmapped" — actual set gained `"brand_new_reason"` (`muta.log:19`) |
-| b | `timeout: {504, "timeout", "request timeout"},` added to `@error_statuses` | same | 2 (6/7) | "a scanned reason without a table entry returns the invalid_request fallback" — `left: {504, "timeout", "request timeout"}` vs `right: {400, "invalid_request", …}` (`mutb.log`) |
-| c | counter emission deleted from the `:error` branch | same | 2 (6/7) | "an unmapped reason emits the fallback counter once and keeps the response bytes" — `assert_receive`: no matching message after 100ms, mailbox empty (`mutc.log`) |
-| d | emission moved to the clause head (fires for every reason; the fallback emission also stayed, so an unmapped reason emits twice) | same | 2 (5/7) | "a mapped reason does not emit the fallback counter" — unexpected `%{reason: :not_found}` message; and the unmapped case's "exactly once" `refute_receive` caught the second emission (`mutd.log`) |
+| a | `defp rf_w5_05_mutant, do: {:error, :brand_new_reason}` appended to `portal_api_controller.ex` | `mix test test/symmetry_control_web/protocol_reason_coverage_test.exs` | 2 (8/9) | "every control/lib error reason is pinned as mapped or known-unmapped" — actual set gained `"brand_new_reason"` (`muta-apply.log:20`) |
+| b | `timeout: {504, "timeout", "request timeout"},` added to `@error_statuses` | same | 2 (7/9) | two reds: "the served table has exactly the pinned keys" (served key set gained `"timeout"`) and "a scanned reason without a table entry returns the invalid_request fallback" — `left: {504, "timeout", "request timeout"}` vs `right: {400, "invalid_request", …}` (`mutb-apply.log:6,81`) |
+| c | counter emission deleted from the `:error` branch | same | 2 (7/9) | two reds: "an unmapped reason emits the fallback counter once and keeps the response bytes" — `assert_receive`: no matching message after 100ms, mailbox empty; and "a raising counter handler cannot change the response bytes" — the raising handler was never invoked (`mutc-apply.log:6,30`) |
+| d | emission moved to the clause head (fires for every reason; the fallback emission also stayed, so an unmapped reason emits twice) | same | 2 (7/9) | "a mapped reason does not emit the fallback counter" — unexpected `%{reason: :not_found}` message; and the unmapped case's "exactly once" `refute_receive` caught the second emission (`mutd-apply.log:6,15`) |
 
 Restores, verified by sha256: `protocol.ex` back to
 `d2968799c0e3b59a44e826ce3633e49a6779e8e810c6049412dfb38f156c5976` after mutations b, c and d;
 `portal_api_controller.ex` back to
-`13b9676a1cf46b73ce91d561e2fb4fba02984ed163df0dd247d161b816f18772` after mutation a.
+`13b9676a1cf46b73ce91d561e2fb4fba02984ed163df0dd247d161b816f18772` after mutation a (re-run at
+the applied test bytes `76143b9f…`; the earlier `muta.log`–`mutd.log` bind the pre-apply bytes).
 
 ## 6. Base-vs-HEAD control-flow audit (lesson-32 decision)
 
@@ -138,12 +163,17 @@ identical), shared PostgreSQL on 5432.
 | --- | --- | ---: | --- |
 | format | `mix format --check-formatted` | 0 | whole project |
 | compile | `mix compile --warnings-as-errors` | 0 | 1 file |
-| new tests | `mix test test/symmetry_control_web/protocol_reason_coverage_test.exs` | 0 | 7 passed |
+| new tests | `mix test test/symmetry_control_web/protocol_reason_coverage_test.exs` | 0 | 9 passed |
 | oracles | `mix test test/…/protocol_controller_test.exs test/…/goal_controller_test.exs` | 0 | 45 passed |
-| web tree | `mix test test/symmetry_control_web/` | 2 | 282/286 passed, 1 skipped; 4 failed — all four are `PortalControllerTest`'s `:portal_assets` cases, each failing in `ConnCase` setup at `PortalBundle.require_staged!/1` |
-| web tree, bundle-dependent cases excluded | `mix test test/symmetry_control_web/ --exclude portal_assets` | 0 | 282 passed, 1 skipped, 4 excluded |
+| web tree | `mix test test/symmetry_control_web/` | 2 | 284/288 passed, 1 skipped; 4 failed — all four are `PortalControllerTest`'s `:portal_assets` cases, each failing in `ConnCase` setup at `PortalBundle.require_staged!/1` |
+| web tree, bundle-dependent cases excluded | `mix test test/symmetry_control_web/ --exclude portal_assets` | 0 | 284 passed, 1 skipped, 4 excluded |
+| whitespace | `git diff --check` | 0 | no errors |
+| host-path scan | `git diff` piped through the program rule's profile-directory grep | 0 | 0 matches |
 
 Full `mix test` is the conductor's gate-runner (contract), not run here.
+The apply stage re-ran every row against the applied test bytes (`webtree-apply.log`,
+`webtree-apply-excl.log`); the exit-2 web-tree row is the recorded environmental `:portal_assets`
+limit, unchanged from the implement run.
 
 ## 8. Residual risks and known limits
 
@@ -162,9 +192,14 @@ Full `mix test` is the conductor's gate-runner (contract), not run here.
   substantive web-tree gate here.
 - The scan over-approximates reachability (option (b)); a scanned atom that never reaches
   `Protocol.error/1` is pinned to the fallback tuple like a wire-reachable one.
-- The test pins the served table from the outside (each of the 64 keys → its tuple); an extra
-  `@error_statuses` entry for an atom no `control/lib` site returns is not observable from outside
-  and changes no wire byte for any scanned reason.
+- The test pins the served table's values from the outside (each of the 64 keys → its tuple) and
+  now also cross-checks the served key set against the source `@error_statuses` block, so an
+  extra or stray entry reddens (mutation (b)); an entry for an atom no `control/lib` site returns
+  still changes no wire byte for any scanned reason (over-approximation caveat above).
+- The raising-handler case pins telemetry 1.4.3's handler-failure isolation (catch → detach →
+  `[telemetry, handler, failure]` → log) as a response-safety property; a substrate change that
+  let handler exceptions reach the response would redden it — the contract's "counter with a
+  response side effect" failure control.
 - `refactor/comment-policy-sweep` (unmerged) rewrites the `validation_error/2` comment at
   `protocol.ex:131-135`; this slice's only hunk is `:151-165` — line-disjoint, same file.
 - No `docs/TODO.md` entry is added or closed: CW-9's second step (the `:internal_error` default
