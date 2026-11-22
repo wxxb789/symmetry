@@ -263,7 +263,53 @@ zero occurrences of the bare identifier `failureText` and zero importers of
 
 Module intent removed from this slice's files
 (`control/test/symmetry_control_web/controllers/portal_workflow_test.exs`,
-`frontend/src/services/served.ts`) by the 2026-11-22 comment-policy sweep is recorded in
-[`docs/evidence/comment-policy-sweep-2026-11-22-moved-intent.md`](../evidence/comment-policy-sweep-2026-11-22-moved-intent.md)
-("ws9b-control-test", "ws10-frontend"); the sweep's plan is
+`frontend/src/services/served.ts`) by the 2026-11-22 comment-policy sweep is recorded below (workstream record "ws9b-control-test", "ws10-frontend").
+
+Quotes are the load-bearing sentences of the deleted blocks; the TSV marks every line `deleted`/`M1`.
+Authoring commits from the inventory's blame attribution:
+
+4. `control/test/symmetry_control_web/controllers/portal_workflow_test.exs`:
+   - 20-45 (`857e763b8` #145, `c6b2c352c` #164, `c07849521` #190). "The members of `work-detail-read`
+     and `work-timeline-read` the surfaces read and the bundle comparison cannot refuse on its own.
+     The work row's names are absent from `WorkspaceWorkItem`'s `required` array, and the waiting
+     packet's names are absent from `WorkItemWaitingDecision`'s, so a serving-side rename of one of
+     those passes the bundle; the timeline item's five names are required inside each `oneOf` variant
+     of `WorkItemTimelineItem`, so the bundle refuses their renames and the pin restates them. The
+     presence assertions in 'the real served work detail and timeline carry every member the surfaces
+     read' are what fails red for the first two classes, and every assertion also walks the
+     definition's own declared members read from the contract bundle (`declared_members/2`), so a
+     schema-side rename ... fails red as well." (The per-list `features/**.tsx:line` citations were
+     dropped as stale-prone.)
+   - 1284-1291 (#145). "The work-detail and work-timeline gates: both reads are served from the same
+     durable rows, so one scenario drives them and each pin names its own read. The bundle comparison
+     refuses a renamed member only where the schema requires it, so the member lists above carry the
+     optional-but-consumed names, the class a serving-side rename would otherwise leave green. The
+     scenario syncs its own provider repository and imports a tracker row, so the shared row's nested
+     consumed members are served and pinned here too, not only through the workspace gate's scenario
+     on the shared `PortalJSON.work_item/2` body."
+### `frontend/src/services/served.ts` (lines 1–19)
+
+```
+/**
+ * The one home for turning a served value into a rendered one.
+ *
+ * The read schemas keep open-JSON members `unknown`, so a surface that renders
+ * one narrows it here rather than re-deriving a local rule. The module holds two
+ * policies that answer different questions and must not be merged:
+ *
+ * - `asText`/`asRecord`/`asRecords`/`safeUrl` — the work surface's narrowing
+ *   primitives: whitespace-only text is absent, and only http(s) URLs are links.
+ * - `servedText`/`servedMember` — the goals surface's scalar policy: scalars
+ *   render as themselves and the caller names the absence.
+ *
+ * A surface whose rule genuinely differs keeps a named function beside this
+ * module instead of a second copy of these: `presentText`
+ * (`features/connections/resources.tsx`, a served field is present when it is
+ * not empty), `workFailureText` (`features/work/presentation.ts`, `reason` →
+ * `message` → `summary` with the `"Failed: "` prefix) and `chatFailureText`
+ * (`features/chat/presentation.ts`, `message` → `summary` → `error`, verbatim).
+ */
+```
+
+The sweep's plan is
 [`docs/plans/2026-11-22-comment-policy-sweep-plan.md`](2026-11-22-comment-policy-sweep-plan.md).

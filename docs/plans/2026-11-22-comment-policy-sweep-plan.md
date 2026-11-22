@@ -2,9 +2,10 @@
 
 Contract: `goal-comment-policy-sweep.md` (GDD, 2026-11-22; held until the pre-policy land queue
 merged — it has: `origin/main` is `f1fe1e59`, and the sweep is dispatched as a program slice of goal
-0010). Base revision for every coordinate in this plan: `f1fe1e59` (the delivered tree is that
-revision plus uncommitted working-tree changes; when a line number is cited it resolves at the base
-unless a stage note says otherwise).
+0010). Base revision for every coordinate in this plan: `f1fe1e59`. Delivered revision: `b942030e`
+(`f1fe1e59` plus the sweep commit `16a7e7d3` and the `origin/main` merges) plus this plan's
+apply-stage working-tree changes; when a line number is cited it resolves at the base unless a stage
+note says otherwise.
 
 Plans consulted as the shape reference: `2026-11-21-core-dead-surface-plan.md` (definition of the
 judging artifact and the failure controls), `2026-11-21-rf-w3-13-http-boundary-plan.md` (stage
@@ -37,13 +38,15 @@ updates and per-file proof carriers), `2026-11-21-rf-program-plan.md` (slice/wor
   files the program deleted (no HEAD lines to attribute). No candidate exists in any file class the
   contract forbids.
 
-Result: **6,074 candidate lines in 212 files** — 5,165 `comment`, 868 `docstring`, 41 `directive` —
-forming 1,651 contiguous blocks (938 of them longer than 2 lines, 4,961 lines in those blocks).
+Result: **6,074 candidate lines in 212 files** — 5,111 `comment`, 878 `docstring`, 41 `directive`;
+the remaining 44 rows are code lines the prefix classifier read as comments but the real lexers do
+not (`excluded`, §9). They form 1,651 contiguous blocks (938 of them longer than 2 lines, 4,961
+lines in those blocks).
 
-Per-file candidate counts (§9) and the per-line inventory with dispositions
-(`docs/evidence/comment-policy-sweep-2026-11-22-inventory.tsv`, one row per candidate) are the
-judging artifacts; the inventory is generated from this derivation and re-checked against the
-delivered tree by the verifier named in §5.
+Per-file candidate counts (§9) and the per-line inventory with dispositions (one row per candidate;
+kept off-repo per the conductor amendment, §11) are the judging artifacts; the inventory is
+generated from this derivation and re-checked against the delivered revision by the verifier named
+in §5 and §11.
 
 ## 2. Disposition rules (the slice's "API")
 
@@ -71,8 +74,9 @@ Mechanical acceptance of the three dispositions (checked by the verifier in §5)
 - `deleted`: the candidate's text no longer occurs at that location; the delivered tree's comment
   count for the file drops by the deleted lines.
 - `compressed`: the candidate text is gone and the replacement block at the same anchor is ≤2 lines.
-- `kept`: the line is byte-identical, and it is a `K4`/`K5` line (a `directive`, or a
-  published-public-contract comment — the only class the contract exempts from the 2-line ceiling).
+- `kept`: the line's text is byte-identical in the delivered tree (survivors include `K4`/`K5`
+  lines, `@moduledoc false` pragmas and `@doc`/`@moduledoc`/docstring boundary lines); only `K4`/`K5`
+  blocks are exempt from the 2-line ceiling. Every kept block longer than one line is listed in §11.
 
 ## 3. Edge-case semantics
 
@@ -218,9 +222,10 @@ run here, not as passes.
 2. **Compress, do not delete, when a hazard is real but uncovered** — the contract's failure
    control makes an uncovered deleted hazard a failure, and compressing to two lines of *why* is
    the policy's own remedy.
-3. **Per-line dispositions live in one committed TSV**, not in the plan's prose: 6,074 rows in the
-   plan would bury the rules; the plan carries the per-file table (§9) and the TSV carries the
-   per-line detail. Both are named as the judging artifact.
+3. **Per-line dispositions live in one TSV, kept off-repo** (conductor amendment, §11): 6,074 rows
+   in the plan would bury the rules; the plan carries the per-file table (§9) plus every kept block
+   longer than one line (§11), and the off-repo artifact carries the per-line detail. Both are the
+   judging artifact.
 4. **One dispositions TSV per workstream**, merged by the integration owner, so a worker can be
    re-run or audited alone, and the merge is a pure concatenation.
 5. **Module intent goes to the owning slice plan**, keyed by the authoring commit's slice; this
@@ -250,59 +255,60 @@ run here, not as passes.
 
 ## 9. Candidate inventory (per file, at `f1fe1e59`)
 
-`cand` = candidate lines from §1; `blocks` = contiguous candidate runs; the per-line dispositions
-are in the inventory TSV. The final disposition counts per file are appended in the stage update
-below the table.
+`cand` = candidate lines from §1; `blocks` = contiguous candidate runs. The counts are the
+delivered-revision record, re-derived at the 2026-11-22 apply stage (§11); the per-line dispositions
+are in the off-repo inventory artifact (§11). `kept` is kept-with-reason — every kept row carries its
+rule — and every kept block longer than one line is listed in §11.
 
 <!-- FILE-TABLE -->
 | file | cand | comment | docstring | directive | deleted | compressed | kept | excluded |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| `.github/dependabot.yml` | 11 | 11 | 0 | 0 | 0 | 9 | 2 | 0 |
+| `.github/dependabot.yml` | 11 | 11 | 0 | 0 | 6 | 3 | 2 | 0 |
 | `.github/workflows/ci.yml` | 111 | 111 | 0 | 0 | 9 | 100 | 2 | 0 |
 | `.gitignore` | 1 | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
 | `browser/tests/portal-cutover.spec.mjs` | 2 | 2 | 0 | 0 | 2 | 0 | 0 | 0 |
 | `browser/tests/portal-goal-attention.spec.mjs` | 6 | 6 | 0 | 0 | 6 | 0 | 0 | 0 |
-| `browser/tests/readable-fixtures.mjs` | 55 | 55 | 0 | 0 | 19 | 35 | 1 | 0 |
+| `browser/tests/readable-fixtures.mjs` | 55 | 55 | 0 | 0 | 22 | 33 | 0 | 0 |
 | `browser/tests/workspace-shell.spec.mjs` | 4 | 4 | 0 | 0 | 4 | 0 | 0 | 0 |
 | `control/.credo.exs` | 55 | 55 | 0 | 0 | 41 | 14 | 0 | 0 |
 | `control/config/test.exs` | 1 | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | `control/lib/symmetry_control/goals.ex` | 8 | 8 | 0 | 0 | 0 | 8 | 0 | 0 |
-| `control/lib/symmetry_control/goals/changeset_validators.ex` | 1 | 0 | 1 | 0 | 1 | 0 | 0 | 0 |
-| `control/lib/symmetry_control/goals/read_model.ex` | 13 | 12 | 1 | 0 | 3 | 10 | 0 | 0 |
+| `control/lib/symmetry_control/goals/changeset_validators.ex` | 1 | 0 | 1 | 0 | 0 | 0 | 1 | 0 |
+| `control/lib/symmetry_control/goals/read_model.ex` | 13 | 12 | 1 | 0 | 2 | 10 | 1 | 0 |
 | `control/lib/symmetry_control/integrations/http.ex` | 3 | 3 | 0 | 0 | 0 | 3 | 0 | 0 |
-| `control/lib/symmetry_control/integrations/provider_access.ex` | 28 | 27 | 1 | 0 | 14 | 8 | 6 | 0 |
-| `control/lib/symmetry_control/integrations/providers/support.ex` | 13 | 6 | 7 | 0 | 13 | 0 | 0 | 0 |
-| `control/lib/symmetry_control/schemas/versioned_changeset.ex` | 10 | 9 | 1 | 0 | 1 | 9 | 0 | 0 |
-| `control/lib/symmetry_control/workspaces/work_item_eligibility.ex` | 58 | 0 | 58 | 0 | 58 | 0 | 0 | 0 |
-| `control/lib/symmetry_control_web/channels/daemon_channel.ex` | 1 | 0 | 1 | 0 | 1 | 0 | 0 | 0 |
+| `control/lib/symmetry_control/integrations/provider_access.ex` | 28 | 27 | 1 | 0 | 13 | 8 | 7 | 0 |
+| `control/lib/symmetry_control/integrations/providers/support.ex` | 13 | 6 | 7 | 0 | 12 | 0 | 1 | 0 |
+| `control/lib/symmetry_control/schemas/versioned_changeset.ex` | 10 | 9 | 1 | 0 | 0 | 9 | 1 | 0 |
+| `control/lib/symmetry_control/workspaces/work_item_eligibility.ex` | 58 | 0 | 58 | 0 | 7 | 41 | 10 | 0 |
+| `control/lib/symmetry_control_web/channels/daemon_channel.ex` | 1 | 0 | 1 | 0 | 0 | 0 | 1 | 0 |
 | `control/lib/symmetry_control_web/controllers/chat_controller.ex` | 2 | 2 | 0 | 0 | 0 | 0 | 2 | 0 |
 | `control/lib/symmetry_control_web/controllers/daemon_controller.ex` | 15 | 15 | 0 | 0 | 0 | 15 | 0 | 0 |
 | `control/lib/symmetry_control_web/controllers/goal_controller.ex` | 3 | 3 | 0 | 0 | 0 | 3 | 0 | 0 |
 | `control/lib/symmetry_control_web/controllers/portal_api_controller.ex` | 7 | 7 | 0 | 0 | 0 | 7 | 0 | 0 |
 | `control/lib/symmetry_control_web/plugs/auth.ex` | 3 | 3 | 0 | 0 | 0 | 3 | 0 | 0 |
-| `control/lib/symmetry_control_web/plugs/strict_evidence_json.ex` | 30 | 0 | 30 | 0 | 30 | 0 | 0 | 0 |
+| `control/lib/symmetry_control_web/plugs/strict_evidence_json.ex` | 30 | 0 | 30 | 0 | 4 | 24 | 2 | 0 |
 | `control/lib/symmetry_control_web/portal_json.ex` | 32 | 32 | 0 | 0 | 2 | 25 | 5 | 0 |
 | `control/lib/symmetry_control_web/protocol.ex` | 5 | 5 | 0 | 0 | 0 | 5 | 0 | 0 |
-| `control/lib/symmetry_control_web/query_params.ex` | 14 | 8 | 6 | 0 | 6 | 8 | 0 | 0 |
+| `control/lib/symmetry_control_web/query_params.ex` | 14 | 8 | 6 | 0 | 4 | 8 | 2 | 0 |
 | `control/lib/symmetry_control_web/router.ex` | 3 | 3 | 0 | 0 | 0 | 3 | 0 | 0 |
 | `control/mix.exs` | 5 | 5 | 0 | 0 | 0 | 5 | 0 | 0 |
-| `control/test/support/integration_fixtures.ex` | 39 | 2 | 37 | 0 | 39 | 0 | 0 | 0 |
-| `control/test/support/migration_case.ex` | 3 | 0 | 3 | 0 | 3 | 0 | 0 | 0 |
-| `control/test/support/orchestration_case.ex` | 28 | 0 | 28 | 0 | 28 | 0 | 0 | 0 |
-| `control/test/support/served_document.ex` | 48 | 0 | 48 | 0 | 48 | 0 | 0 | 0 |
+| `control/test/support/integration_fixtures.ex` | 39 | 2 | 37 | 0 | 20 | 16 | 3 | 0 |
+| `control/test/support/migration_case.ex` | 3 | 0 | 3 | 0 | 0 | 3 | 0 | 0 |
+| `control/test/support/orchestration_case.ex` | 28 | 0 | 28 | 0 | 0 | 26 | 2 | 0 |
+| `control/test/support/served_document.ex` | 48 | 0 | 48 | 0 | 37 | 7 | 4 | 0 |
 | `control/test/support/slowest_formatter.ex` | 16 | 0 | 16 | 0 | 16 | 0 | 0 | 0 |
-| `control/test/support/test_conn.ex` | 9 | 0 | 9 | 0 | 9 | 0 | 0 | 0 |
-| `control/test/support/test_fixtures.ex` | 87 | 11 | 76 | 0 | 87 | 0 | 0 | 0 |
+| `control/test/support/test_conn.ex` | 9 | 0 | 9 | 0 | 3 | 6 | 0 | 0 |
+| `control/test/support/test_fixtures.ex` | 87 | 11 | 76 | 0 | 74 | 9 | 4 | 0 |
 | `control/test/symmetry_control/goals/changeset_validators_test.exs` | 18 | 7 | 11 | 0 | 13 | 5 | 0 | 0 |
 | `control/test/symmetry_control/goals_read_model_test.exs` | 5 | 5 | 0 | 0 | 5 | 0 | 0 | 0 |
 | `control/test/symmetry_control/goals_test.exs` | 11 | 11 | 0 | 0 | 4 | 7 | 0 | 0 |
-| `control/test/symmetry_control/integrations/azure_devops_test.exs` | 3 | 2 | 1 | 0 | 3 | 0 | 0 | 0 |
-| `control/test/symmetry_control/integrations/github_test.exs` | 3 | 2 | 1 | 0 | 3 | 0 | 0 | 0 |
+| `control/test/symmetry_control/integrations/azure_devops_test.exs` | 3 | 2 | 1 | 0 | 2 | 0 | 1 | 0 |
+| `control/test/symmetry_control/integrations/github_test.exs` | 3 | 2 | 1 | 0 | 2 | 0 | 1 | 0 |
 | `control/test/symmetry_control/integrations/http_test.exs` | 2 | 2 | 0 | 0 | 0 | 2 | 0 | 0 |
 | `control/test/symmetry_control/integrations_test.exs` | 15 | 15 | 0 | 0 | 2 | 13 | 0 | 0 |
 | `control/test/symmetry_control/orchestration/capability_scheduling_test.exs` | 1 | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
 | `control/test/symmetry_control/provider_broker_e2e_test.exs` | 5 | 5 | 0 | 0 | 0 | 5 | 0 | 0 |
-| `control/test/symmetry_control/workspaces/work_item_eligibility_test.exs` | 20 | 19 | 1 | 0 | 20 | 0 | 0 | 0 |
+| `control/test/symmetry_control/workspaces/work_item_eligibility_test.exs` | 20 | 19 | 1 | 0 | 19 | 0 | 1 | 0 |
 | `control/test/symmetry_control/workspaces_test.exs` | 5 | 5 | 0 | 0 | 0 | 5 | 0 | 0 |
 | `control/test/symmetry_control_web/controllers/chat_controller_test.exs` | 4 | 4 | 0 | 0 | 4 | 0 | 0 | 0 |
 | `control/test/symmetry_control_web/controllers/goal_controller_test.exs` | 18 | 18 | 0 | 0 | 9 | 9 | 0 | 0 |
@@ -333,7 +339,7 @@ below the table.
 | `daemon/internal/app/lease.go` | 27 | 24 | 0 | 0 | 0 | 21 | 3 | 3 |
 | `daemon/internal/app/linux_owner_preflight_state_dir_app_test.go` | 12 | 11 | 0 | 1 | 11 | 0 | 1 | 0 |
 | `daemon/internal/app/linux_owner_witness_linux.go` | 3 | 3 | 0 | 0 | 0 | 3 | 0 | 0 |
-| `daemon/internal/app/native_run.go` | 139 | 137 | 0 | 0 | 0 | 102 | 35 | 2 |
+| `daemon/internal/app/native_run.go` | 139 | 137 | 0 | 0 | 10 | 96 | 31 | 2 |
 | `daemon/internal/app/native_settlement_regression_test.go` | 2 | 2 | 0 | 0 | 0 | 0 | 2 | 0 |
 | `daemon/internal/app/outbox.go` | 32 | 32 | 0 | 0 | 0 | 24 | 8 | 0 |
 | `daemon/internal/app/probe.go` | 16 | 16 | 0 | 0 | 0 | 16 | 0 | 0 |
@@ -407,7 +413,7 @@ below the table.
 | `daemon/internal/platform/helper_v2_stop.go` | 16 | 15 | 0 | 1 | 0 | 11 | 5 | 0 |
 | `daemon/internal/platform/linux_owner_helper_v2_linux.go` | 3 | 3 | 0 | 0 | 0 | 3 | 0 | 0 |
 | `daemon/internal/platform/supervisor_linux_client.go` | 75 | 74 | 0 | 1 | 0 | 68 | 7 | 0 |
-| `daemon/internal/platform/supervisor_linux_helper.go` | 93 | 91 | 0 | 1 | 1 | 82 | 9 | 1 |
+| `daemon/internal/platform/supervisor_linux_helper.go` | 93 | 91 | 0 | 1 | 52 | 35 | 5 | 1 |
 | `daemon/internal/platform/supervisor_windows_client.go` | 106 | 105 | 0 | 1 | 2 | 97 | 7 | 0 |
 | `daemon/internal/platform/supervisor_windows_helper.go` | 46 | 45 | 0 | 1 | 0 | 40 | 6 | 0 |
 | `daemon/internal/protocol/goal_subject.go` | 21 | 21 | 0 | 0 | 9 | 12 | 0 | 0 |
@@ -422,7 +428,7 @@ below the table.
 | `daemon/internal/state/provider_action_test.go` | 7 | 7 | 0 | 0 | 0 | 7 | 0 | 0 |
 | `daemon/internal/state/state.go` | 10 | 10 | 0 | 0 | 5 | 4 | 1 | 0 |
 | `daemon/internal/state/state_test.go` | 16 | 16 | 0 | 0 | 16 | 0 | 0 | 0 |
-| `daemon/internal/state/state_wrap_test.go` | 18 | 18 | 0 | 0 | 12 | 6 | 0 | 0 |
+| `daemon/internal/state/state_wrap_test.go` | 18 | 18 | 0 | 0 | 18 | 0 | 0 | 0 |
 | `daemon/internal/workspace/fingerprint_test.go` | 6 | 6 | 0 | 0 | 6 | 0 | 0 | 0 |
 | `daemon/internal/workspace/linux_clone_fs_linux.go` | 28 | 28 | 0 | 0 | 20 | 8 | 0 | 0 |
 | `daemon/internal/workspace/linux_clone_linux_test.go` | 13 | 13 | 0 | 0 | 6 | 7 | 0 | 0 |
@@ -432,13 +438,13 @@ below the table.
 | `daemon/native/linux-gate/protocol/gate_lifecycle_linux.go` | 75 | 74 | 0 | 1 | 16 | 58 | 1 | 0 |
 | `daemon/native/linux-gate/protocol/owner_config_linux.go` | 5 | 4 | 0 | 1 | 2 | 2 | 1 | 0 |
 | `daemon/native/linux-gate/protocol/proc_identity_linux.go` | 13 | 12 | 0 | 1 | 0 | 12 | 1 | 0 |
-| `daemon/native/linux-gate/protocol/wire.go` | 75 | 72 | 0 | 0 | 34 | 37 | 1 | 3 |
+| `daemon/native/linux-gate/protocol/wire.go` | 75 | 72 | 0 | 0 | 35 | 36 | 1 | 3 |
 | `daemon/native/linux-gate/protocol/wire_linux.go` | 18 | 17 | 0 | 1 | 3 | 14 | 1 | 0 |
 | `daemon/native/linux-gate/protocol/wire_linux_test.go` | 51 | 50 | 0 | 1 | 40 | 8 | 3 | 0 |
 | `daemon/native/linux-gate/protocol/wire_test.go` | 75 | 75 | 0 | 0 | 60 | 15 | 0 | 0 |
 | `frontend/eslint.config.js` | 29 | 29 | 0 | 0 | 22 | 7 | 0 | 0 |
 | `frontend/src/components/primitives.test.tsx` | 11 | 11 | 0 | 0 | 8 | 3 | 0 | 0 |
-| `frontend/src/components/primitives.tsx` | 18 | 18 | 0 | 0 | 9 | 9 | 0 | 0 |
+| `frontend/src/components/primitives.tsx` | 18 | 18 | 0 | 0 | 6 | 12 | 0 | 0 |
 | `frontend/src/components/use-dialog-opener.ts` | 12 | 12 | 0 | 0 | 0 | 12 | 0 | 0 |
 | `frontend/src/features/chat/presentation.ts` | 8 | 8 | 0 | 0 | 0 | 8 | 0 | 0 |
 | `frontend/src/features/connections/connections.test.tsx` | 5 | 5 | 0 | 0 | 5 | 0 | 0 | 0 |
@@ -452,23 +458,23 @@ below the table.
 | `frontend/src/tool-cache-config.test.ts` | 8 | 8 | 0 | 0 | 0 | 8 | 0 | 0 |
 | `frontend/vitest.config.ts` | 4 | 4 | 0 | 0 | 4 | 0 | 0 | 0 |
 | `pyproject.toml` | 6 | 6 | 0 | 0 | 0 | 4 | 2 | 0 |
-| `scripts/ci/assert-browser-suite-coverage.py` | 60 | 6 | 53 | 1 | 53 | 6 | 1 | 0 |
+| `scripts/ci/assert-browser-suite-coverage.py` | 60 | 6 | 53 | 1 | 15 | 44 | 1 | 0 |
 | `scripts/ci/export-linux-v2-redacted-evidence.py` | 20 | 18 | 0 | 0 | 10 | 0 | 8 | 2 |
-| `scripts/ci/go-test-durations.py` | 72 | 18 | 53 | 1 | 53 | 18 | 1 | 0 |
+| `scripts/ci/go-test-durations.py` | 72 | 18 | 53 | 1 | 7 | 64 | 1 | 0 |
 | `scripts/ci/model-routing-evaluation.py` | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 1 |
-| `scripts/ci/model-routing-record-sanitize.py` | 535 | 171 | 364 | 0 | 530 | 5 | 0 | 0 |
+| `scripts/ci/model-routing-record-sanitize.py` | 535 | 171 | 364 | 0 | 369 | 141 | 25 | 0 |
 | `scripts/ci/omo-control-native-evidence.py` | 4 | 0 | 0 | 0 | 0 | 0 | 0 | 4 |
-| `scripts/ci/omo-native-evidence.py` | 12 | 3 | 8 | 0 | 8 | 3 | 0 | 1 |
-| `scripts/ci/opencode-v2-support-witness.py` | 4 | 0 | 4 | 0 | 4 | 0 | 0 | 0 |
+| `scripts/ci/omo-native-evidence.py` | 12 | 3 | 8 | 0 | 5 | 6 | 0 | 1 |
+| `scripts/ci/opencode-v2-support-witness.py` | 4 | 0 | 4 | 0 | 1 | 3 | 0 | 0 |
 | `scripts/ci/revision_scope.py` | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 1 |
-| `scripts/ci/test-check-lockfile-registry.py` | 21 | 7 | 14 | 0 | 14 | 7 | 0 | 0 |
+| `scripts/ci/test-check-lockfile-registry.py` | 21 | 7 | 14 | 0 | 2 | 18 | 1 | 0 |
 | `scripts/ci/test-ci-changed-path-classifier.py` | 55 | 28 | 27 | 0 | 34 | 21 | 0 | 0 |
 | `scripts/ci/test-model-routing-evaluation.py` | 4 | 0 | 0 | 0 | 0 | 0 | 0 | 4 |
 | `scripts/ci/test-model-routing-omp-usage.py` | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 1 |
-| `scripts/ci/test-model-routing-record-sanitize-json.py` | 339 | 329 | 9 | 1 | 89 | 238 | 12 | 0 |
-| `scripts/ci/test-model-routing-record-sanitize.py` | 56 | 51 | 5 | 0 | 6 | 48 | 2 | 0 |
-| `scripts/ci/test-omo-native-evidence.py` | 4 | 2 | 2 | 0 | 2 | 2 | 0 | 0 |
-| `scripts/ci/test-opencode-v2-support-witness.py` | 2 | 0 | 2 | 0 | 2 | 0 | 0 | 0 |
+| `scripts/ci/test-model-routing-record-sanitize-json.py` | 339 | 329 | 9 | 1 | 96 | 230 | 13 | 0 |
+| `scripts/ci/test-model-routing-record-sanitize.py` | 56 | 51 | 5 | 0 | 1 | 53 | 2 | 0 |
+| `scripts/ci/test-omo-native-evidence.py` | 4 | 2 | 2 | 0 | 1 | 2 | 1 | 0 |
+| `scripts/ci/test-opencode-v2-support-witness.py` | 2 | 0 | 2 | 0 | 1 | 0 | 1 | 0 |
 
 `excluded` rows are code lines the prefix classifier read as comments (44 rows, all `kind=code`
 after the real lexers ran: `git blame`-derived candidates whose line the Go/Python/TS lexers do not
@@ -477,10 +483,10 @@ place inside a comment token or docstring — e.g. `*events = append(...)`, `*ru
 
 ## 10. Delivered record (stage update, 2026-11-22)
 
-Disposition totals over the 6,074 inventory rows: **deleted 2,956 · compressed 2,836 · kept 238 ·
+Disposition totals over the 6,074 inventory rows: **deleted 2,607 · compressed 3,129 · kept 294 ·
 excluded 44**; rules `K1` 2,316, `D1` 1,479, `D2` 415, `D6` 406, `K4` 393, `M1` 353, `K3` 255,
-`K2` 224, `D3` 71, `K5` 63, `M2` 30, `D5` 25, `CODELINE` 44 (per-line rows:
-[`docs/evidence/comment-policy-sweep-2026-11-22-inventory.tsv`](../evidence/comment-policy-sweep-2026-11-22-inventory.tsv)).
+`K2` 224, `D3` 71, `K5` 63, `M2` 30, `D5` 25, `CODELINE` 44 (per-line rows: the off-repo inventory
+artifact, §11).
 
 Deviations from this plan's assumptions, all recorded rather than silently absorbed:
 
@@ -488,7 +494,10 @@ Deviations from this plan's assumptions, all recorded rather than silently absor
    whose line survives verbatim is `kept`, a row whose text is gone while its block survives as a
    ≤2-line why is `compressed`, and a row whose block is gone is `deleted`. Worker-stage labels that
    attributed a block-level change to individual lines are therefore recomputed; rules and
-   replacement notes are preserved.
+   replacement notes are preserved. Re-run at the apply stage against the delivered revision: 553
+   rows moved or were re-replaced (376 `deleted`→`compressed`, 64 `deleted`→`kept`, 82
+   `compressed`→`deleted`, 9 `kept`→`deleted`, 1 `compressed`→`kept`, 21 replacement-text
+   refreshes), each with the delivered replacement text where a block survives (§11).
 2. **44 classifier false positives** (`CODELINE`): lines whose text starts with `*`/`**` but which
    real lexers do not place inside comments. No such line was edited.
 3. **8 relocated why-lines** (declared): four in `control/.credo.exs` moved from the deleted header
@@ -501,13 +510,195 @@ Deviations from this plan's assumptions, all recorded rather than silently absor
    `scripts/ci/omo-native-evidence.py`, `scripts/ci/opencode-v2-support-witness.py`,
    `scripts/ci/test-check-lockfile-registry.py`). The contract's scope rule protects standalone
    pre-program comments; these are fragments *inside* blocks whose candidate lines were removed, and
-   completing them is the smallest edit that leaves no mid-sentence comment. Counted exactly by the
-   verifier's `pre_program_removed` stat.
+   completing them is the smallest edit that leaves no mid-sentence comment. Counted by the
+   verifier's `pre_program_removed` stat: 4 against the sweep base; 38 against the merged delivered
+   revision, where 34 of the counted lines belong to main-side rewrites in `ci.yml`,
+   `test-ci-changed-path-classifier.py` and `goal_session.go` (§11).
 5. **Two blocks larger than two lines survive under the published-contract exemption**:
    `daemon/internal/state/provider_action.go` 568-571 and `scripts/ci/export-linux-v2-redacted-evidence.py`
    535-560 (the published-record allowlist whose membership a CI scan enforces). Every other
-   candidate block in the delivered tree is zero, one or two candidate lines.
-6. **Moved module intent** is recorded in
-   [`docs/evidence/comment-policy-sweep-2026-11-22-moved-intent.md`](../evidence/comment-policy-sweep-2026-11-22-moved-intent.md)
-   (353 `M1` rows, 16 workstream sections); each owning slice plan carries a short
-   "Comment-policy sweep" note pointing at it instead of duplicating the text.
+   candidate block in the delivered tree is zero, one or two candidate lines. Re-derived at the
+   apply stage with a docstring-aware ceiling check over all 1,651 blocks: 0 non-exempt blocks over
+   two lines (§11).
+6. **Moved module intent lives in the owning slice plans.** The 16 workstream sections of the sweep
+   record (353 `M1` rows) were appended verbatim to the owning slice plans' "Comment-policy sweep"
+   notes at the apply stage (conductor amendment, §11): 30 slice plans in all — the 22 that already
+   carried a pointer note plus 8 that received one because their files' intent had no other in-repo
+   home. The record file itself is kept off-repo (§11), and no slice-plan note references it.
+
+## 11. Apply-stage record (2026-11-22) — re-bound to the delivered revision (conductor amendment)
+
+The amendment "inventory size" is applied as this section records: the full per-line inventory and
+the moved-intent record left the repository and are kept as off-repo run artifacts; the plan keeps
+the compact per-file summary (§9), every kept-with-reason block longer than one line (§11.4) and
+this record. The stage also applied the accepted simplify findings: the three residual
+docstring/why trims (§11.2 item 5).
+
+### 11.1 Off-repo judging artifacts
+
+Run artifacts directory (`<HOST-PATH>` = the GDD state root, under this stage's run directory):
+
+| artifact | sha256 | content |
+|---|---|---|
+| `comment-policy-sweep-2026-11-22-inventory.tsv` | `7fb6072112ce51b3e0223eb8d41bf3f8c7a6718c38d5991b54630c19ae588c7e` | 6,074 rows, one per candidate; the per-line dispositions re-bound to the delivered revision (the judging artifact) |
+| `comment-policy-sweep-2026-11-22-inventory-as-committed.tsv` | `3229361201f369f3a52e6ff6cd8396fdf685c20839428786b59f98400f6605e0` | the implement-stage record as committed, kept so the §11.2 diff is reproducible |
+| `comment-policy-sweep-2026-11-22-moved-intent.md` | `45092a12744ab8da103b186a4e43edddc3c3f125ce87b08c25367c8de6f29c41` | the 492-line workstream record as committed; its content now lives in the owning slice plans (§10.6) |
+
+Regeneration of the inventory from `git` history (scratch tools under `<HOST-PATH>/scratch/sweep/`;
+`$ART` = the artifact path; the worker disposition sheets are the recorded decisions of the merged
+14-workstream run):
+
+```
+python extract3.py                             # blame-derived candidates at f1fe1e59
+python inventory.py                            # per-file inventory and block context
+python refine2.py                              # real lexers -> inventory3-refined/-excluded.jsonl
+python merge_dispositions.py --out-tsv $ART    # 14 worker sheets -> the merged rows
+python redisp.py                               # recompute rows against the delivered tree
+python build-tsv.py                            # write $ART ($ART is also the input; copy it aside first when re-running)
+```
+
+The derivation steps ran at implement (2026-11-22 05:29–06:12) and are unchanged; the last two ran
+at the apply stage and reproduce the §11.2 diff on the delivered revision.
+
+### 11.2 Record repairs against the delivered revision
+
+553 rows differ from the implement record: 376 `deleted`→`compressed`, 64 `deleted`→`kept`, 82
+`compressed`→`deleted`, 9 `kept`→`deleted`, 1 `compressed`→`kept`, and 21 replacement-text-only
+refreshes. The defects they close:
+
+1. **`@moduledoc` pragma and structural survivor rows** (`@moduledoc false`, `@moduledoc """`,
+   `"""`, `@doc """`) that are byte-identical in the delivered tree are `kept`; the eleven pragma
+   rows the review named now carry `kept`/`K5`. `changeset_validators.ex` and `daemon_channel.ex`
+   are byte-identical to `f1fe1e59`, so the changed-file count is 194 of 212 (18 byte-identical);
+   four further candidate files differ from `f1fe1e59` only through content merged from `main`
+   after the sweep base (`native_settlement_regression_test.go`, `goal_session.go`,
+   `provider_action.go`, `omo-control-native-evidence.py`).
+2. **Surviving docstring/comment blocks** whose base text is gone are `compressed` with the
+   delivered replacement text recorded — the delivered lines not present anywhere in the base
+   revision — instead of the blanket `deleted` the implement record carried; the same recompute
+   caught the block replacements the `main` merges removed (`compressed`→`deleted` rows).
+3. **Nine kept rows the merged `main` removed** (`native_run.go` 139/140/1557/1558,
+   `supervisor_linux_helper.go` 853/854/1166/1167, `readable-fixtures.mjs:6` — the last an
+   occurrence-drift `//`) are restated against the delivered revision; the re-run's kept/removed
+   checks are occurrence-keyed (§11.3).
+4. **Counts and claims refreshed in one pass**: this plan (§1, §9, §10, §11), the evidence record
+   (§0–§2, §4–§7) and the goal 0010 T1 entry.
+5. **Accepted simplify findings applied** (from the stage's findings brief): residual restating
+   text removed from `strict_evidence_json.ex` (two lines at :3-4 and one at :80),
+   `work_item_eligibility.ex` (the four `@doc` restating clauses) and `go-test-durations.py` (the
+   module docstring trimmed to its one consumed first line); the TSV replacement join rule is
+   documented in the evidence record §2. The `--help`-pin and repo-hosted-harness findings stay
+   unapplied: both would add committed test/harness files, which the contract's failure control
+   ("any test edit beyond comments") and the plan §7.6 no-new-harness decision exclude.
+
+### 11.3 Checks on the delivered revision
+
+The three scratch checkers were re-bound to the delivered revision and extended where the merged
+tree required it:
+
+- **policy verifier** (`verify.py --base f1fe1e59 --also-base origin/main --artifact $ART`): 6,074
+  rows (6,030 candidates + 44 `excluded`), 0 duplicate keys, `--- verify: 0 problems`.
+  `--also-base` treats `origin/main` content as base text so main-side rewrites after the sweep
+  base are not unexplained new comments; a bare-trivia arm (`//`, `///`, `////`, `#`, `/*`, `*/`,
+  `/**`, `*`) keeps the removal check occurrence-wise for separator-only rows. `pre_program_removed` reads 38
+  on this revision: the 4 sweep-side sentence repairs plus 34 lines main-side PRs rewrote after
+  the sweep base (`ci.yml` 19, `test-ci-changed-path-classifier.py` 11, `goal_session.go` 4 —
+  merged-main content, not sweep edits).
+- **rows-vs-tree census** (occurrence-keyed, scratch `census-final.py`):
+  `FALSE-DELETED: 0 (non-empty text: 0)`, `FALSE-KEPT: 0` — every row's disposition matches the
+  delivered tree.
+- **block-ceiling check** (docstring-aware, scratch `ceiling.py`; shebang and `"""` framing
+  exempt): `--- ceiling: 0 blocks over two lines (non-exempt)`; the two published-contract blocks
+  stay named and exempt (§10.5).
+
+### 11.4 Kept blocks longer than one line
+
+Every kept block longer than one line — 74 groups, 72 of two lines and two of four — from the
+delivered-revision inventory, complete:
+
+- `.github/dependabot.yml` lines 7–8 (K1) — "# No update groups: each pull request stays one reviewable bump, and the weekly" / "# cadence with a small open-pull-requests ceiling bounds the noise."
+- `.github/workflows/ci.yml` lines 167–168 (K1) — "# It resolves the locked versions against the registry, so it belongs" / "# beside the provenance check, before the install."
+- `control/lib/symmetry_control/integrations/provider_access.ex` lines 1166–1167 (K1) — "# resource -> connection -> work_item -> task -> run -> runtime: the rows" / "# both scopes lock in this order and with `FOR UPDATE`."
+- `control/lib/symmetry_control/integrations/provider_access.ex` lines 2085–2086 (K1) — "# The Goal authority a claim and an unstarted-intent recovery re-run against" / "# the rows they locked, in one order."
+- `control/lib/symmetry_control_web/controllers/chat_controller.ex` lines 24–25 (K1) — "# A chat write can roll back a workspace changeset (`start_work`); those are" / "# served with the field errors, every other refusal with its protocol status."
+- `control/lib/symmetry_control_web/portal_json.ex` lines 539–540 (K1) — "# An empty provider value means "never synchronized", so it falls through to" / "# the manual value exactly as an absent one does."
+- `control/lib/symmetry_control_web/portal_json.ex` lines 554–555 (K1) — "# The manual branch serves neither `provider` nor `recorded_at`: those members" / "# exist only where a provider owns the value."
+- `daemon/internal/app/command_queue.go` lines 84–85 (K3) — "// next pops the head of the arrival FIFO. The slot is cleared before the slice" / "// is re-headed so a popped entry is not retained by the backing array."
+- `daemon/internal/app/command_queue.go` lines 231–232 (K1) — "// finish closes a window. Closing is how a response stops fencing: a delivery" / "// that happens afterwards is invisible to it."
+- `daemon/internal/app/commands.go` lines 465–466 (K1) — "// The terminal owner is still responsible for completing its durable" / "// write. No cancellation acknowledgement is safe yet."
+- `daemon/internal/app/commands.go` lines 605–606 (K1) — "// Do not acknowledge cancellation or allow terminal cleanup to" / "// proceed while a terminal native outcome has no durable accounting."
+- `daemon/internal/app/goal_admission.go` lines 77–78 (K1) — "// Retained resume requires an implemented transport as well as a" / "// verified capability; other adapters cannot consume a reservation."
+- `daemon/internal/app/goal_admission.go` lines 330–331 (K1) — "// Control derives validation_failed from persisted failed validator" / "// evidence; a local read/integrity failure has no such receipt."
+- `daemon/internal/app/goal_admission.go` lines 497–498 (K1) — "// The new Run refers to the retained workspace but never owns its" / "// deletion. Persist that fact before consuming the predecessor receipt."
+- `daemon/internal/app/goal_admission.go` lines 649–650 (K4) — "// Control owns a logical workspace key. The absolute local worktree path" / "// remains in the daemon journal and must not become control-plane identity."
+- `daemon/internal/app/goal_admission.go` lines 831–832 (K3) — "// An adapter can return a typed-nil harness.Session through an interface." / "// Treat it as no transferred cleanup owner."
+- `daemon/internal/app/goal_admission.go` lines 838–839 (K1) — "// Publish even a nil result so the Adapter.Start barrier cannot strand a" / "// cancellation when start fails without returning a session."
+- `daemon/internal/app/goal_delivery.go` lines 200–201 (K1) — "// The stop outbox is the durable stopped witness. Write it before changing" / "// the local projection so recovery can repair either cross-file window."
+- `daemon/internal/app/goal_delivery.go` lines 497–498 (K1) — "// deliverGoalDelivery sends one exact durable body and deletes it only after" / "// the control client has verified its typed receipt."
+- `daemon/internal/app/lease.go` lines 271–272 (K1) — "// Do not persist the absolute field from a relative response: a" / "// replayed wall-clock expiry must not outlive this local authority."
+- `daemon/internal/app/native_run.go` lines 27–28 (K1) — "// taskResultReasonError keeps a canonical terminal reason through local" / "// preflight failures without asking string matching to recover domain state."
+- `daemon/internal/app/native_run.go` lines 96–97 (K1) — "// inputMu serializes stdin delivery with input-related lifecycle mutations." / "// Never wait for it while holding daemon.mu."
+- `daemon/internal/app/native_run.go` lines 293–294 (K1) — "// withLinuxV2NativeAdmission keeps App admission snapshots ordered with the" / "// Store CAS while never holding daemon.mu across status RPCs or State access."
+- `daemon/internal/app/native_run.go` lines 414–415 (K1) — "// Focused admission tests may call startGoalAdmission without a runningRun;" / "// production assignment paths always install one."
+- `daemon/internal/app/native_run.go` lines 493–494 (K1) — "// releaseNativeTerminalOwner is idempotent because terminal delivery, stale" / "// recovery, and run release can converge on the same native completion."
+- `daemon/internal/app/native_run.go` lines 694–695 (K1) — "// acknowledgeExpiredNativeStartCancellation preserves a cancellation command" / "// accepted before the lease watchdog won the native-start race."
+- `daemon/internal/app/native_run.go` lines 852–853 (K1) — "// Publish retry only after all recovery evidence has been attempted. A" / "// concurrent final waiter then observes the actual close/accounting flags."
+- `daemon/internal/app/native_run.go` lines 858–859 (K1) — "// retainUnknownGoalLaunchWorkspace prevents cleanup from deleting a worktree" / "// that an unconfirmed native transport may still be modifying."
+- `daemon/internal/app/native_run.go` lines 1389–1390 (K1) — "// A retained app-server stays alive after turn/completed. WaitTurn is the" / "// close permission only; it must never expose an early TaskResult."
+- `daemon/internal/app/native_run.go` lines 1425–1426 (K1) — "// Close joins the adapter watcher, but retain a bounded final Wait as a" / "// second barrier for deferred interrupt classification and process truth."
+- `daemon/internal/app/native_run.go` lines 1529–1530 (K1) — "// A newer accounting retry owns terminal publication. An older completion" / "// must not clear its durable recovery barrier or publish stale close state."
+- `daemon/internal/app/native_run.go` lines 1665–1666 (K1) — "// A queue conflict can mean another terminal writer won. Read back the" / "// durable terminal before retaining this owner forever."
+- `daemon/internal/app/native_run.go` lines 2142–2143 (K1) — "// A sticky turn/protocol failure remains authoritative for the terminal" / "// result, but cannot negate a separately joined physical stop barrier."
+- `daemon/internal/app/native_run.go` lines 2390–2391 (K1) — "// Failed Ready-barrier cleanup has no worker waiting on the native session." / "// Give it one bounded in-process retry before the store becomes unavailable."
+- `daemon/internal/app/native_settlement_regression_test.go` lines 1391–1392 (K1) — "// A silent bound here would only delay the later backgroundWG.Wait" / "// hang; give the flush its verdict instead."
+- `daemon/internal/app/outbox.go` lines 36–37 (K1) — "// restartOutboxRecoveryContextKey suppresses ordinary ownership-loss cleanup" / "// until restart recovery has converted the journal into a terminal fallback."
+- `daemon/internal/app/outbox.go` lines 405–406 (K1) — "// A stale run cannot recreate an acknowledgement after cleanup. Keep the" / "// exact fenced body retryable until delivery or an explicit retirement."
+- `daemon/internal/app/outbox.go` lines 603–604 (K1) — "// A nil return here defers rather than succeeds: the outbox retries on" / "// its wake signal and 1s interval; journal readers must wait for !isStarting."
+- `daemon/internal/app/outbox.go` lines 1021–1022 (K1) — "// A delivered or retired acknowledgement no longer carries enough local" / "// data to prove an exact replay. Keep the authority barrier fail-closed."
+- `daemon/internal/execution/linux_owner_v2_finalize_pipeline_test.go` lines 750–751 (K1) — "// The capability is not issued yet: a pipeline that claimed it before the" / "// durable clear would stop on the claim error instead of the clear failure."
+- `daemon/internal/notification/client.go` lines 87–88 (K4) — "// Phoenix path, such as /socket/websocket?vsn=2.0.0. A client without a" / "// connection error handler discards the retried connection failures of Run."
+- `daemon/internal/platform/anchor_run.go` lines 660–661 (K1) — "// These observations are ephemeral emergency-stop state only; none can" / "// authorize State receipt creation or journal clearing."
+- `daemon/internal/platform/anchor_run.go` lines 674–675 (K1) — "// reaped retains exact responses only while this anchor process lives. It" / "// is not durable and cannot recover proof after correlated anchor loss."
+- `daemon/internal/platform/anchor_server.go` lines 153–154 (K1) — "// Strict v1 owner configs remain usable for launch/recovery, but v2 clone" / "// cleanup stays closed because no fixed StateDir is present."
+- `daemon/internal/platform/anchor_server.go` lines 328–329 (K1) — "// Keep the State reader pinned until every worker exits. Its own" / "// context and the owner unit's bounded stop timeout bound this wait."
+- `daemon/internal/platform/anchor_server.go` lines 1522–1523 (K1) — "// This callback runs immediately before cmd.Start. Any later uncertain" / "// outcome keeps the tombstone; pre-fork validation failures stay retryable."
+- `daemon/internal/platform/anchor_types.go` lines 48–49 (K2) — "// DefaultLinuxOwnerAnchorSocketPath is the systemd-provisioned A-private" / "// endpoint used by the daemon preflight and the per-run v2 helper."
+- `daemon/internal/platform/anchor_wire.go` lines 214–215 (K1) — "// stoppingAnswer records whether a stopping anchor answers this operation" / "// with anchor_stopping before the per-operation shape gate runs."
+- `daemon/internal/platform/anchor_wire.go` lines 222–223 (K1) — "// shape carries the relational rules a presence set cannot express; it may" / "// assume every required field is present."
+- `daemon/internal/platform/anchor_wire_shape_test.go` lines 408–409 (K1) — "// A stopping anchor answers before the per-operation shape gate runs:" / "// a wrong descriptor count must still produce the same frame."
+- `daemon/internal/platform/anchor_wire_shape_test.go` lines 524–525 (K1) — "// linuxOwnerAnchorShapeGoldenFrame resolves the one host-dependent value of a" / "// pinned frame: the harness anchor's A UID is the test process uid."
+- `daemon/internal/platform/helper_v2_recovery.go` lines 263–264 (K1) — "// An unresolved helper cannot keep detached B alive by staying resident;" / "// its anchor owns the independent pidfd watcher and pinned-leaf fallback."
+- `daemon/internal/platform/helper_v2_server.go` lines 251–252 (K1) — "// peekStatus reports lease liveness without latching expiry or waking the" / "// owner-loss watcher. Status is an observation; effectful paths own expiry."
+- `daemon/internal/platform/helper_v2_server.go` lines 859–860 (K1) — "// A failed Prepare may retain an exact A child for emergency stop," / "// but must never establish gate-release transition authority."
+- `daemon/internal/platform/helper_v2_stop.go` lines 26–27 (K1) — "// LinuxOwnerHelperV2StopEvidence contains only measured v2 stop observations;" / "// it is not a State receipt and cannot clear a journal or release a cgroup."
+- `daemon/internal/platform/helper_v2_stop.go` lines 351–352 (K1) — "// The operation's measured state is already cached. Closing only this" / "// response channel creates a lost-ACK witness without forging evidence."
+- `daemon/internal/platform/supervisor_linux_client.go` lines 1566–1567 (K1) — "// closeControlAfterResponseLossRequestLocked preserves pipe ordering: callers" / "// hold requestMu, while mu protects detaching the writer from other cleanup."
+- `daemon/internal/platform/supervisor_linux_client.go` lines 1815–1816 (K1) — "// retireLinuxSupervisorEndpoint removes only a stale socket that no longer" / "// accepts connections. A live or replacement listener remains unresolved."
+- `daemon/internal/platform/supervisor_linux_helper.go` lines 144–145 (K1) — "// renew accepts a strictly newer sequence, or an exact replay of the current" / "// sequence/deadline. The bool reports an idempotent replay."
+- `daemon/internal/platform/supervisor_linux_helper.go` lines 517–518 (K1) — "// Keep the helper's ptrace owner on one OS thread from target launch through" / "// the later Resume/detach boundary."
+- `daemon/internal/platform/supervisor_windows_client.go` lines 301–302 (K1) — "// RecoverPreparedSupervisor obtains the exact replayable empty-Job witness" / "// after owner loss or an uncertain commit boundary."
+- `daemon/internal/platform/supervisor_windows_client.go` lines 341–342 (K1) — "// ReleasePreparedSupervisor releases the helper only after the exact stop" / "// receipt has been durably recorded by the caller."
+- `daemon/internal/platform/supervisor_windows_helper.go` lines 607–608 (K1) — "// Keep the helper alive after a proven owner-loss stop so a restarted" / "// daemon can obtain and persist the exact stop receipt through recover."
+- `daemon/internal/platform/supervisor_windows_helper.go` lines 820–821 (K1) — "// Keep a proven or unresolved Job authority alive for a retry. A" / "// lost response must not turn an unknown stop into a success."
+- `daemon/internal/state/provider_action.go` lines 568–571 (K4) — "// reserveWorstCaseCompletions returns a copy of the journal with the complete" / "// serialized shape of the largest legal completion reserved for every" / "// unresolved intent. Completed provider data may already exceed the" / "// provider-only budget, but a mutation must leave enough journal space to"
+- `daemon/native/linux-gate/protocol/wire_linux_test.go` lines 160–161 (K3) — "// The C gate zeroes the one-use token before it seals the request memfd" / "// (gate.c exec_as_b), so the bootstrap decodes the scrubbed frame."
+- `pyproject.toml` lines 4–5 (K2) — "# Fail closed instead of reporting a different finding set: the baseline this" / "# config was fixed against was measured with ruff 0.17.5."
+- `scripts/ci/export-linux-v2-redacted-evidence.py` lines 535–538 (K4) — "#           daemon/internal/app (the twelve files that carry daemon.log call" / "#           sites: app.go, cleanup.go, commands.go, events.go, goal_admission.go," / "#           goal_delivery.go, lease.go, native_run.go, outbox.go, recovery.go," / "#           recovery_glue.go, supervisory.go)."
+- `scripts/ci/export-linux-v2-redacted-evidence.py` lines 559–560 (K4) — "# assigned from a literal at native_run.go:1584-1620, 2180-2210; commands.go:721" / "# and supervisory.go:140) are covered by this rule, not by that scan."
+- `scripts/ci/test-model-routing-record-sanitize-json.py` lines 765–766 (K2) — "# 8x the matches, the same number of rebuilds: one per matching pass (the pass" / "# sequence is at most the nine families plus two matchers per `--root`)."
+- `scripts/ci/test-model-routing-record-sanitize-json.py` lines 840–841 (K2) — "# The scan finds the listing's first location and re-enters only its own last" / "# bytes: a handful of searches for the whole listing, not one per line."
+- `scripts/ci/test-model-routing-record-sanitize-json.py` lines 884–885 (K1) — "# Boundary negative: a literal name character glued in front is still not" / "# this root."
+- `scripts/ci/test-model-routing-record-sanitize-json.py` lines 923–924 (K1) — "# Boundary negative: the escape allowance does not weaken the name rejection, so" / "# a literal name character glued in front still passes."
+- `scripts/ci/test-model-routing-record-sanitize.py` lines 508–509 (K1) — "# The escape allowance does not weaken the name rejection, so a literal name" / "# character glued in front is still not this location."
+
+### 11.5 Gate re-runs (delivered revision)
+
+The verbatim apply-stage gate table (rounds 1 and 2, exit codes and outputs) is in the evidence
+record §5. Summary: Go/Elixir build, format, vet (native and `GOOS=linux`) and compile exit 0;
+`ruff check`/`ruff format --check` exit 0 on the touched file and on `scripts/ci` under the
+config; `tsc` and `pnpm lint` exit 0 (227 warnings, ceiling 229); `actionlint` exit 0 via its
+direct binary; the strip-proof exits 0 both against `origin/main` `e0782105` (207 files, 207 PASS)
+and for the apply-stage delta against `b942030e` (207 PASS); the verifier, census, ceiling,
+`git diff --check` and the host scans exit 0. No result of the accepted findings' application is
+outside the re-run gate set; the full Go/Elixir/frontend suites were not re-run (contract's
+comment-only carrier proof; CI stays their oracle).

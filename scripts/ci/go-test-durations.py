@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""Summarize a `go test -json` event stream: durations, cap and p95 ratchet.
-
-A malformed line, a missing file, a stream without outcome events, or a package-level failure no
-named test explains is an error (exit 2), never a silent green.
-"""
+"""Summarize a `go test -json` event stream: durations, cap and p95 ratchet."""
 
 import argparse
 import json

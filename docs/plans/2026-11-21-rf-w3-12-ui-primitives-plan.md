@@ -556,7 +556,78 @@ the W2-15 and served-doc-gates plans, and `docs/archive/CLOSED-TODO.md`. Product
 Module intent removed from this slice's files
 (`control/test/symmetry_control_web/controllers/portal_resources_test.exs`,
 `frontend/src/components/primitives.tsx`, `frontend/src/features/connections/resources.tsx`) by the
-2026-11-22 comment-policy sweep is recorded in
-[`docs/evidence/comment-policy-sweep-2026-11-22-moved-intent.md`](../evidence/comment-policy-sweep-2026-11-22-moved-intent.md)
-("ws9b-control-test", "ws10-frontend"); the sweep's plan is
+2026-11-22 comment-policy sweep is recorded below (workstream record "ws9b-control-test", "ws10-frontend").
+
+Quotes are the load-bearing sentences of the deleted blocks; the TSV marks every line `deleted`/`M1`.
+Authoring commits from the inventory's blame attribution:
+
+3. `control/test/symmetry_control_web/controllers/portal_resources_test.exs`:
+   - 132-134 (`c9ed23b40`, #161). "The delivery precedence matrix's inputs. The provider and manual
+     values are distinguishable per member, and the CI provider timestamp differs from the change one
+     so a member fed the wrong provider context fails its row."
+   - 149-155 (#161). "The read model's evidence entries (`workspaces/read_model.ex`): `source/1`
+     contributes source/generation/event_id/recorded_at, the kind's own event members are merged over
+     it, and `url`/`state` (pull_request) or `status`/`url`/`summary` (ci, review) exist only when the
+     payload carried them. `@delivery_bare_agent` is the map the read model does not write (an entry
+     without its kind's required member is never recorded), so it pins the `Map.put_new(field, value)`
+     half of the agent branch."
+   - 189-216 (`857e763b8` #145, `c6b2c352c` #164, `c07849521` #190). "The optional-but-consumed
+     members of `workspace-read` (`contracts/v1/workspace-read.schema.json`): each name is read by
+     `frontend/src` feature code and absent from its definition's `required` array, so the bundle
+     comparison alone cannot refuse a serving-side rename of it. Every presence assertion in 'the real
+     served workspace read carries every member the surface reads' walks these lists *plus* the
+     definition's own declared members read from the contract bundle (`declared_members/2`): the bundle
+     side makes a schema-side rename of a declared member fail red, and the hand lists keep every
+     member a consumed surface reads pinned by name even if a schema edit stops declaring it." (The
+     per-list `features/**.tsx:line` read-site citations were dropped as stale-prone.)
+   - 258-262 (#145). "The runtime row the workspace gate serves: registered with every
+     `RuntimeCapabilities` member the surface reads — `adapter` plus the four booleans — so the
+     registered map's pass-through is exercised whole, and advertising the adapter `start` operation
+     the item's launch needs a selectable runtime for."
+   - 951-958 (#161). "The delivery member is the wire's one place where a provider-owned value, an
+     operator's manual value and the attempt's agent evidence compete. Only the provider branch adds
+     `provider`/`recorded_at`, only the agent branch carries the evidence map's own members; manual
+     and none serve the same five, and the pull request's `status` is overridden after resolution
+     (`provider_pull_request_state/2`). This matrix pins the full served map — exact member set and
+     values — of every branch for every member, on the projection every delivery-serving read shares
+     (`PortalJSON.work_item/2`)."
+   - 1356-1365 (#145). "The workspace-read gate: a real served document — never a fixture — is
+     validated against the canonical bundle AND every member the surface reads is asserted present.
+     The bundle comparison refuses a renamed member only where the schema requires it, so the member
+     lists above carry the optional-but-consumed names, the class a serving-side rename would
+     otherwise leave green. `WorkspaceWorkItem` is one definition body across `workspace-read`,
+     `work-detail-read` and `chat-read`, and `PortalJSON.work_item/2` is the one body that serves it:
+     the provider-sourced delivery values, the external row and the waiting packet pinned here are
+     that shared row's own shape."
+   - 1748-1754 (#161). "The delivery precedence matrix: one row per (member, branch). Each row is the
+     inputs the four branches switch on plus the *full* served map the branch must produce, so an
+     added, dropped or revalued member fails the row. Rows that reach the same branch through a
+     different input spelling are kept separately on purpose: \"\" and an absent value are both 'not
+     set' (the empty-string fall-through), and an agent map with and without the member's own field
+     pins the `Map.put_new(field, value)` half of that branch."
+   - 2020-2024 (#161). "One matrix row's served row: the work item carrying the row's provider and
+     manual inputs, with the row's evidence attached to its attempt projection — the shape
+     `PortalJSON.activity_entry/1` builds — projected by the same `PortalJSON.work_item/2` the workspace
+     read, the work detail read, the chat outcome and the activity feed serve their delivery from."
+
+### `frontend/src/components/primitives.tsx` (lines 5–9)
+
+```
+// The display primitives the workspace, connection, resource and planning
+// surfaces share: one status badge, one field-error line, and the field row the
+// planning forms are laid out from. The badge carries both status policies, so a
+// surface selects one by scope instead of by which of two definitions it
+// imported.
+```
+
+### `frontend/src/features/connections/resources.tsx` (lines 19–22)
+
+```
+// This module owns the project-resource surface on `/portal/connections` and the
+// provider labels, refusal notice and dialog frame the connection surface
+// shares; the connection surface imports them so the import direction stays
+// one-way and there is exactly one refusal map.
+```
+
+The sweep's plan is
 [`docs/plans/2026-11-22-comment-policy-sweep-plan.md`](2026-11-22-comment-policy-sweep-plan.md).

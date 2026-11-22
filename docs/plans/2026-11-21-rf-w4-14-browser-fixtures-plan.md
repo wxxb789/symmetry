@@ -475,3 +475,13 @@ CI-owned (spec level, one per family that has an observable removal, throwaway
 commits): the seven mutations in the Evidence plan table, each expected to redden
 the named consuming spec in the render gate. The conductor runs them on the PR;
 this slice does not commit.
+
+## Comment-policy sweep (2026-11-22)
+
+Module intent removed from `browser/tests/readable-fixtures.mjs` by the 2026-11-22 comment-policy sweep is recorded below (workstream record "ws11-infra-misc").
+
+- `browser/tests/readable-fixtures.mjs` module header (head 6-12): "The payload literals live here
+  once; each suite's own fixture identity (its keys, names, acceptance descriptions and plan titles)
+  stays at its call sites as parameters" — shared-fixture module design choice.
+
+The sweep's plan is [`docs/plans/2026-11-22-comment-policy-sweep-plan.md`](2026-11-22-comment-policy-sweep-plan.md).

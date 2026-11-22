@@ -276,8 +276,15 @@ change (the before-state was measured the same way: `Ran 28 tests in 21.096s`, `
 ## Comment-policy sweep (2026-11-22)
 
 Module intent removed from `scripts/ci/omo-native-evidence.py` and
-`scripts/ci/opencode-v2-support-witness.py` by the 2026-11-22 comment-policy sweep is recorded in
-[`docs/evidence/comment-policy-sweep-2026-11-22-moved-intent.md`](../evidence/comment-policy-sweep-2026-11-22-moved-intent.md)
-("ws7b-ci-scripts"); those two files' only candidate rows outside their docstrings are code-style
+`scripts/ci/opencode-v2-support-witness.py` by the 2026-11-22 comment-policy sweep is recorded below (workstream record "ws7b-ci-scripts").
+
+7. `omo-native-evidence.py:6-8` — the pinned executable's host path comes from
+   `SYMMETRY_OMO_BINARY`; the committed size and digest remain the authority; this is
+   native-process evidence, not daemon or Control evidence.
+8. `opencode-v2-support-witness.py:6-8` — the blob's host path comes from
+   `SYMMETRY_OPENCODE_BINARY`; only its exact size and digest are committed; an unset variable, a
+   missing file or a different blob refuses the run.
+
+Those two files' only candidate rows outside their docstrings are code-style
 split lines. The sweep's plan is
 [`docs/plans/2026-11-22-comment-policy-sweep-plan.md`](2026-11-22-comment-policy-sweep-plan.md).

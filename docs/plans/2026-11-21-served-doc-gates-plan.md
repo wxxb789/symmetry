@@ -293,7 +293,19 @@ Evidence (`MIX_TEST_PARTITION=w113fix`, every probe reverted before the final ru
 
 Module intent removed from
 `control/test/symmetry_control_web/controllers/portal_integrations_test.exs` by the 2026-11-22
-comment-policy sweep is recorded in
-[`docs/evidence/comment-policy-sweep-2026-11-22-moved-intent.md`](../evidence/comment-policy-sweep-2026-11-22-moved-intent.md)
-("ws9b-control-test"); the sweep's plan is
+comment-policy sweep is recorded below (workstream record "ws9b-control-test").
+
+Quotes are the load-bearing sentences of the deleted blocks; the TSV marks every line `deleted`/`M1`.
+Authoring commits from the inventory's blame attribution:
+
+2. `control/test/symmetry_control_web/controllers/portal_integrations_test.exs` 113-124
+   (`857e763b8`, #145). "The connections-read gate: this real served document is compared with the
+   canonical bundle. Every declared member sits in its definition's `required` array — `Connection`
+   12, `ConnectionResource` 17, `ConnectionProvider` 3 — so the bundle comparison refuses a serving
+   rename of every member the surface reads and no member needs a hand-written presence pin. The
+   resource projection also emits one member the definition does not declare (`connection_id`, from
+   `PortalJSON.resource/1` under `connection_resource/1`): no connections surface reads it, and the
+   workspace gate pins the same serving member in its `WorkspaceResource` row."
+
+The sweep's plan is
 [`docs/plans/2026-11-22-comment-policy-sweep-plan.md`](2026-11-22-comment-policy-sweep-plan.md).

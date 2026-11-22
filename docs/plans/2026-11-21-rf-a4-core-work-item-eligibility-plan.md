@@ -496,7 +496,34 @@ mutants as above; E12 14 issues, all `workspaces.ex` (the re-run test file: 0); 
 
 Module intent removed from
 `control/test/symmetry_control/workspaces/work_item_eligibility_test.exs` by the 2026-11-22
-comment-policy sweep is recorded in
-[`docs/evidence/comment-policy-sweep-2026-11-22-moved-intent.md`](../evidence/comment-policy-sweep-2026-11-22-moved-intent.md)
-("ws9b-control-test"); the sweep's plan is
+comment-policy sweep is recorded below (workstream record "ws9b-control-test").
+
+- `control/lib/symmetry_control/workspaces/work_item_eligibility.ex` (moduledoc, deleted
+  prose): dropped nuance — *`SymmetryControl.Workspaces` enforces the verdicts — the
+  launch transaction (`launch_work_item/3` and `launch_locked_work_item/2`'s fresh-start
+  clause), `cancel_work_item/3` through `ensure_legacy_work_item/1`, and
+  `retry_work_item/3` — and `PortalJSON` projects the boolean helpers, so one transition
+  policy answers both the command and the read instead of two spellings kept in agreement
+  by comments*; also *`cancel_gate/1` reads only the item's own membership columns* (the
+  portal member names and the preload/fails-closed hazard are kept in the compressed
+  moduledoc).
+- `control/lib/symmetry_control_web/portal_json.ex` (407-412): dropped half of the
+  sentence — *`can_cancel` is withheld from every Goal-managed item in every state: the
+  legacy cancel path refuses that item (`ensure_legacy_work_item/1` applies
+  `WorkItemEligibility.cancel_gate/1`), and a Goal is the authority that stops its work.*
+Quotes are the load-bearing sentences of the deleted blocks; the TSV marks every line `deleted`/`M1`.
+Authoring commits from the inventory's blame attribution:
+
+1. `control/test/symmetry_control/workspaces/work_item_eligibility_test.exs` 14-32
+   (`6d21e7346`, #209). "The start/cancel/retry work-item gates as one truth table: every
+   combination of the six inputs the three verdicts read, with the verdict, the served projection
+   boolean and the work-item refusal each combination answers at the baseline revision
+   `c0784952`. The rows are literals — a table computed by the module would be tautological. The
+   refusal atom of every row is the work-item answer the commands make at the baseline (the
+   differential harness recorded in `docs/plans/2026-11-21-rf-a4-core-work-item-eligibility-plan.md`
+   drives the real `launch_work_item/3`, `cancel_work_item/3` and `retry_work_item/3` over the same
+   matrix), and the oracle suites pin the command endpoints." (Column legend and the `verdict/1`
+   code mapping were dropped as duplicates of `assert_row/1`'s destructuring and `verdict/1`.)
+
+The sweep's plan is
 [`docs/plans/2026-11-22-comment-policy-sweep-plan.md`](2026-11-22-comment-policy-sweep-plan.md).

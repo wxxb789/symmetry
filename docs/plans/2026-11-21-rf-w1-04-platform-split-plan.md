@@ -204,7 +204,36 @@ this tree:
 ## Comment-policy sweep (2026-11-22)
 
 Module intent removed from this slice's files (`daemon/internal/platform/anchor_gate.go`,
-`anchor_proc.go`, `anchor_run.go`, `helper_v2_protocol.go`) by the 2026-11-22 comment-policy sweep is
-recorded in [`docs/evidence/comment-policy-sweep-2026-11-22-moved-intent.md`](../evidence/comment-policy-sweep-2026-11-22-moved-intent.md)
-("ws1-platform-anchor"); the sweep's plan is
+`anchor_proc.go`, `anchor_run.go`, `helper_v2_protocol.go`) by the 2026-11-22 comment-policy sweep is recorded below (workstream record "ws1-platform-anchor").
+
+- `daemon/internal/platform/anchor_gate.go:39-40` (grant doc) — "The anchor keeps no journal copy and
+  makes no scheduling or lease decisions." (ownership boundary; the surviving 2-line compression keeps
+  only the secret-material hazard.)
+- `daemon/internal/platform/anchor_proc.go:23-24` (`LinuxOwnerAnchorCleanupVerifier` doc) — "The
+  implementation is supplied by cmd/symmetry-daemon to avoid a platform→State import cycle."
+- `daemon/internal/platform/anchor_run.go:22-24` (`LinuxOwnerAnchorRunKey` doc) — "LinuxOwnerAnchorRunKey
+  duplicates only the platform-neutral durable RunKey shape. The platform package cannot import state
+  because state consumes this package's cgroup release capability."
+- `daemon/internal/platform/helper_v2_protocol.go:46-47` (`protocolFence` alias doc) — "protocolFence is
+  a local alias which keeps the v2 IPC's exported evidence independent of the state package while
+  retaining the exact durable fence."
+
+Secondary rationale dropped while compressing (no M1 row; flagging so it is not silently lost):
+
+- `anchor_server.go:844-851` — the enumeration of the pinned trusted gate's checks (inherited-FD census,
+  four-rights RELEASE allowlist, B-only maps, no-new-privileges, zero caps). The surviving 2 lines keep
+  the placement-contract dependency and the future-migration requirement.
+- `supervisor_linux_helper.go` block 924–950 → 2 lines: dropped detail — the two paths that reach
+  `enterRecovery` while the owner is still alive (daemon closes its own control writer on
+  response-transport loss via `closeControlAfterResponseLossRequestLocked`; a response write can fail
+  before any pipe I/O, e.g. a frame above the 16 KiB limit), and the seal-recording asymmetry
+  (restarted-daemon path records the seal before the receipt via `RecordSupervisorRecoveryScanSeal`,
+  Completed+1; in-process `recoverResponseLossStop` does not — see debt).
+- `supervisor_linux_helper.go:515`: "RunContainmentSupervisor is the hidden production helper
+  entrypoint." — deleted as a name-labels-nothing doc line; hidden-mode dispatch lives outside this slice.
+- `supervisor_windows_client.go:908-909`: "AttachSuspendedProcessWithSupervisorHandoff is the
+  descriptive alias kept for callers that use the full authority terminology." — deleted (provenance only;
+  the alias function itself remains).
+
+The sweep's plan is
 [`docs/plans/2026-11-22-comment-policy-sweep-plan.md`](2026-11-22-comment-policy-sweep-plan.md).

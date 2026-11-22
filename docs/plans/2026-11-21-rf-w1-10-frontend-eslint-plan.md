@@ -312,8 +312,33 @@ mutation check for the gate itself.
 ## Comment-policy sweep (2026-11-22)
 
 Module intent removed from `frontend/eslint.config.js` by the 2026-11-22 comment-policy sweep
-(strict-config baseline, measured 743 → 229 findings, the two size caps counted in the ratchet) is
-recorded in
-[`docs/evidence/comment-policy-sweep-2026-11-22-moved-intent.md`](../evidence/comment-policy-sweep-2026-11-22-moved-intent.md)
-("ws10-frontend"); the sweep's plan is
+(strict-config baseline, measured 743 → 229 findings, the two size caps counted in the ratchet) is recorded below (workstream record "ws10-frontend").
+
+### `frontend/eslint.config.js` (lines 6–24; provenance tag dropped)
+
+```
+// Strict static-quality baseline (rf-w1-10-frontend-eslint, 2026-11-21):
+// `strictTypeChecked` + `stylisticTypeChecked` + the react-hooks
+// `recommended-latest` preset (which adds exactly `react-hooks/void-use-memo`
+// over the `recommended` preset used before).
+//
+// The 515 mechanical findings these configs reported on the pre-change tree were
+// applied with one `eslint --fix` pass; the strict configs reported 743 errors
+// before and 229 after (42 files, `.ts`/`.tsx`), and every rule that still
+// reports is downgraded to `warn` in the residual block below, each with its
+// measured count. `pnpm lint` runs `eslint . --max-warnings 229`, so any NEW
+// finding of ANY rule — including the two size caps and the design-deferred
+// `no-unnecessary-condition` — fails the gate; the counts below sum to that
+// ceiling and a burn-down slice lowers both together. No rule is set to `off`.
+//
+// The two size caps are counted in the ratchet rather than exempted per file:
+// measured, an allowlist would need 21 file-level exemptions (14 production
+// files + 7 test files; two files carry both rules) for 30 cap findings whose
+// enforcement ESLint cannot shrink, while the `--max-warnings` ceiling already
+// fails any new oversized function everywhere.
+```
+
+Kept in place instead (compressed, line 29–30): the ratchet entry / `--max-warnings 229` / plan §10.3 pointer (K2).
+
+The sweep's plan is
 [`docs/plans/2026-11-22-comment-policy-sweep-plan.md`](2026-11-22-comment-policy-sweep-plan.md).

@@ -407,7 +407,56 @@ inventory step under `version`-shaped routing; the conductor verifies them on th
 
 Module intent removed from this slice's files (`control/test/support/slowest_formatter.ex`,
 `scripts/ci/assert-browser-suite-coverage.py`, `scripts/ci/go-test-durations.py`) by the 2026-11-22
-comment-policy sweep is recorded in
-[`docs/evidence/comment-policy-sweep-2026-11-22-moved-intent.md`](../evidence/comment-policy-sweep-2026-11-22-moved-intent.md)
-("ws9a-control-test-support", "ws7b-ci-scripts"); the sweep's plan is
+comment-policy sweep is recorded below (workstream record "ws9a-control-test-support", "ws7b-ci-scripts").
+
+1. `assert-browser-suite-coverage.py:4-7` — why the gate exists: "Findings T4 and F4: thirteen
+   Playwright specs and three node test files live under `browser/`, and six of the specs plus all
+   three node tests are reachable only through local driver scripts - roughly 4,600 lines of test
+   code with no CI verdict and no explicit label."
+2. `assert-browser-suite-coverage.py:24-28` — ownership boundary: "For a wired file this gate proves
+   it is *named*, not that the naming step runs it: for the render family,
+   `assert-playwright-json.py`'s executed-set assertion is the execution proof and is deliberately
+   not duplicated here. `--root` overrides the repository root so the gate itself can be exercised
+   against synthetic fixture trees."
+3. `assert-browser-suite-coverage.py:16-17,142-144` (deleted as D1/D6) — the manual-matrix reading
+   rule the module docstring stated: only the first cell of a table row in `## Manual-only suite
+   matrix` counts, so a row's reason/driver columns may name sibling suites freely.
+4. `go-test-durations.py:4-6` — wiring: the daemon job's race pass writes
+   `$RUNNER_TEMP/daemon-go-race.json` through `go-test-json-gate.py`; any other capture can be fed
+   the same way.
+5. `go-test-durations.py:32-34,57-60` — budget/ownership: the thresholds are advisory until refactor
+   slice W6-12 flips them to blocking (program plan section 10.5); the exit status is the verdict
+   either way and the step that runs the tool owns whether it gates the job; the runner's timings
+   swing run to run (why the step is `continue-on-error`); re-deriving the band from more than one
+   runner run is W6-12's call.
+6. `go-test-durations.py:55-56` (deleted as D2) — history: an earlier host-measured non-race proxy
+   landed 19x away from the runner's p95 and could not fire.
+- `control/mix.exs` (13-17): the step is *the advisory `mix test --cover` step of the
+  coverage plane (refactor slice W2-17, `.github/workflows/ci.yml`)*; *coverage floors
+  become blocking at W6-10/W6-12, not here, so the report is the artifact and the suite's
+  own status is the step's status* (the in-file note keeps only the threshold-0 why).
+2. `slowest_formatter.ex` (HEAD 5-13) — the module's whole rationale: CI registers this formatter
+   as a second `--formatter` so durations reach the log; `--slowest` is forbidden because
+   `ExUnit.configure/1` turns `:slowest` into trace mode, `:max_cases` drops to 1 and every test
+   timeout becomes `:infinity`; the formatter reads the same `test_finished` events and leaves
+   `ExUnit.CLIFormatter` in place. Recorded in the owning slice plan
+   `docs/plans/2026-11-21-rf-w2-01-ci-test-observability-plan.md` ("The duration plane", and the
+   probe records), and still stated in `.github/workflows/ci.yml:328-329` (owned by ws11).
+- `.github/workflows/ci.yml` coverage plane (head 872-880): the full ownership/budget rationale —
+  "Floors stay advisory here (blocking coverage belongs to W6-10/W6-12), so the uploaded report - not
+  the exit status - is what this plane produces" and "the `mix test` step is the Control job's
+  canonical suite". Only the 2-line advisory + separate-runner why survives.
+- `.github/workflows/ci.yml` ruff-metrics job (head 1836-1842): "No new job is added: the
+  changed-path classifier test gates the named jobs' routing, and `ci.yml` has one owner per wave" —
+  job-addition/ownership boundary.
+- `.github/workflows/ci.yml` race tests (head 1684-1690): "Its named witness is a test the ordinary
+  pass above already requires to run and pass, so the race configuration enforces one of the same
+  names rather than inventing a new requirement" — witness-selection trade-off; only the `-json`
+  coupling survives.
+- `.github/workflows/ci.yml` browser-suite inventory (head 1825-1833): the inventory contract itself
+  ("every `browser/tests/**/*.spec.mjs` and `browser/scripts/**/*.test.mjs` must be named by a
+  workflow file outside its YAML comments ... or listed in the `browser/README.md` manual matrix").
+  The enforcing script `scripts/ci/assert-browser-suite-coverage.py` and the README remain the record.
+
+The sweep's plan is
 [`docs/plans/2026-11-22-comment-policy-sweep-plan.md`](2026-11-22-comment-policy-sweep-plan.md).

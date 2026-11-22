@@ -349,8 +349,42 @@ slash-UNC, root-relative and `file:` URL spellings.
 
 Module intent removed from `scripts/ci/model-routing-record-sanitize.py` by the 2026-11-22
 comment-policy sweep — the JSON/prose reading contract, the escape grammar with its source, and the
-fail-closed property — is recorded in
-[`docs/evidence/comment-policy-sweep-2026-11-22-moved-intent.md`](../evidence/comment-policy-sweep-2026-11-22-moved-intent.md)
-("ws6-sanitizer"); the surviving in-file whys are the input contract, the escape grammar and the
+fail-closed property — is recorded below (workstream record "ws6-sanitizer").
+
+Linear-time/invariant design rationale for a matcher suite pinned by the two test modules:
+
+- `_render_passes` docstring (rows 606-627): *"One pass is one rebuild. … `_rebuild_with_groups` then
+  writes the union back in one join of slices. Rendering k matches over a text of n characters is
+  therefore O(n + k) per pass, where the per-match rebuild was O(k*n); `_rebuild_with_groups` is that
+  one rebuild, and the wide-record pin counts its calls."* (`_pass_groups` added: *"This union is the
+  per-match growth the first version ran, done once per pass, so a match can still never bind a
+  replacement's own text."*)
+- `_RAW_SPELLING_ESCAPE` guard (rows 424-436): the raw look runs only when a literal's bytes can
+  carry a raw Windows spelling at all — *"a backslash run is odd … and that backslash is followed by
+  one of the escapes that hides a location from the decoded reading: `\n`, `\r`, `\t`, `\f` and
+  `\b`"* — and the guard is also the cost guard: *"keeps a long non-matching backslash run - `file:`
+  plus thousands of separators - from being scanned a second time: the UNC family's doubled-run
+  leader is superlinear over one run"*.
+- `_CONTAINED_RESUME` (rows 802-812): the scan re-enters a kept match, so the window is *"wide enough
+  to expose the starts whose own prefix straddles that end: the widest such prefix is a drive
+  location's device namespace … plus the drive letter behind it, ten bytes"*, derived from
+  `_DEVICE_PREFIX`'s text so widening the pattern widens the window; *"a narrower window hides a
+  second location whose start crossed that far behind the stop"*.
+- `_raw_literal_spans` scan (rows 975-985): *"`finditer` would resume at a match's end, so a location
+  whose tail swallowed the next location's first bytes was hidden from this render and found by the
+  next one - the non-idempotence the union exists to close"*; with the bounded re-entry, *"a listing
+  whose lines are one run no longer walks that run once per line (the review's P1: 99 KB in 49 s)"*.
+- `scripts/ci/test-model-routing-record-sanitize.py` — module docstring sentence (candidate lines 7–10), deleted:
+  "This module owns the raw reading's pattern, quoted, URL, space-continuation and CLI battery; the JSON
+  reading's escapes, mapping, token opacity and fail-closed property live in
+  ``test-model-routing-record-sanitize-json.py``, which loads this module by path for the fixtures above."
+- `scripts/ci/test-model-routing-record-sanitize-json.py` — deleted module docstring (candidate lines 2–9):
+  "Regression tests for the record sanitizer's JSON reading. These tests are the JSON half of the
+  sanitizer's regression evidence: a record whose document parses as JSON is read through its string
+  literals (decoded, matched, and re-spelled), and this module pins that reading's escapes, offsets,
+  digests, token opacity and fail-closed property. The raw/prose reading lives in
+  ``test-model-routing-record-sanitize.py``, whose fixtures this module shares."
+
+The surviving in-file whys are the input contract, the escape grammar and the
 fail-closed direction. The sweep's plan is
 [`docs/plans/2026-11-22-comment-policy-sweep-plan.md`](2026-11-22-comment-policy-sweep-plan.md).

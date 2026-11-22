@@ -430,7 +430,20 @@ input (the nil-id row is unreachable, audit 9). Sites outside the collapsed fami
 ## Comment-policy sweep (2026-11-22)
 
 Module intent removed from `control/lib/symmetry_control/integrations/provider_access.ex` by the
-2026-11-22 comment-policy sweep is recorded in
-[`docs/evidence/comment-policy-sweep-2026-11-22-moved-intent.md`](../evidence/comment-policy-sweep-2026-11-22-moved-intent.md)
-("ws8-control-lib"); the sweep's plan is
+2026-11-22 comment-policy sweep is recorded below (workstream record "ws8-control-lib").
+
+- `control/.credo.exs` (header, lines 1-23): *Credo configuration for the Control
+  application, added with the advisory `mix credo --strict` CI step (refactor slice
+  W1-01); the step does not gate — the strict issue count is a metric and the count
+  recorded on the PR is the ratchet baseline the burn-down slices measure against. The
+  check list is `mix credo gen.config` output (Credo 1.7.19) with two contract changes;
+  measured 459 strict issues with `checks: %{}` at 1.7.19 vs 403 from a Credo that dropped
+  AliasOrder/AliasUsage/PreferImplicitTry/StringSigils/Apply (their findings sum to 67).*
+  (The `%{}`-fallback why is retained in-file as a 2-line K3 note above `checks: %{`; the
+  two per-check whys are retained beside their entries — see below.)
+- `control/lib/symmetry_control/integrations/provider_access.ex` (1230-1231): ownership
+  boundary — *The intent-context lock primitives; other locks in this file keep their own
+  queries.*
+
+The sweep's plan is
 [`docs/plans/2026-11-22-comment-policy-sweep-plan.md`](2026-11-22-comment-policy-sweep-plan.md).

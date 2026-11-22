@@ -238,7 +238,24 @@ counts; an independent read-only review follows in the review stage.
 ## Comment-policy sweep (2026-11-22)
 
 Module intent removed from `control/test/support/test_fixtures.ex` by the 2026-11-22 comment-policy
-sweep is recorded in
-[`docs/evidence/comment-policy-sweep-2026-11-22-moved-intent.md`](../evidence/comment-policy-sweep-2026-11-22-moved-intent.md)
-("ws9a-control-test-support"); the sweep's plan is
+sweep is recorded below (workstream record "ws9a-control-test-support").
+
+5. `test_fixtures.ex` (HEAD 8-12) — the builder contract: knobs that converted call sites set
+   differently are explicit options; the defaults are the deterministic fixture values the call
+   sites rely on; suite-specific values (suite clock, schema base, fresh daemon/claim id) are
+   arguments at the call site, never hidden defaults. Partly in
+   `docs/plans/2026-11-21-elixir-fixture-extraction-batch-2-plan.md` ("operator_read's converted
+   builders keep their fresh ids", :151-155).
+6. `test_fixtures.ex` (HEAD 31-36) — `__using__/1` injects `command_opts/0` (rebuilt on every
+   call, so lazily-generated `Ecto.UUID.generate()` / `DateTime.utc_now/0` values stay per-call)
+   and `command_current/3,4`; a call's `opts` are merged over the defaults so the caller's `:now`,
+   `:rollout_enabled`, `:validation_profiles` win; no `:command_opts` injects nothing. The
+   one-source injection decision is in the batch-2 plan ("Design trade-offs"); the per-call
+   laziness is only in this removed text.
+7. `test_fixtures.ex` (HEAD 64-65) — a fresh id is the deliberate choice at the tests that need
+   one (replay and duplicate-claim semantics), so it never arrives by default (paired with the
+   pinned `@daemon_instance_id` / `@claim_id` values; HEAD 61-63 provenance/`uuid(10)` citation is
+   D2/D5 — the literal no longer appears in the converted suites).
+
+The sweep's plan is
 [`docs/plans/2026-11-22-comment-policy-sweep-plan.md`](2026-11-22-comment-policy-sweep-plan.md).

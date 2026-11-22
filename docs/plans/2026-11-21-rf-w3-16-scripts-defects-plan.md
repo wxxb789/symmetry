@@ -232,7 +232,14 @@ The notice text and the env-var name are the machine-checkable handles: the noti
 ## Comment-policy sweep (2026-11-22)
 
 Module intent removed from `scripts/ci/test-check-lockfile-registry.py` by the 2026-11-22
-comment-policy sweep is recorded in
-[`docs/evidence/comment-policy-sweep-2026-11-22-moved-intent.md`](../evidence/comment-policy-sweep-2026-11-22-moved-intent.md)
-("ws7b-ci-scripts"); the sweep's plan is
+comment-policy sweep is recorded below (workstream record "ws7b-ci-scripts").
+
+9. `test-check-lockfile-registry.py:13` — the suite's contract boundary: "the contract is the golden
+   assertions, which always run", PyYAML being an extra oracle.
+10. `test-check-lockfile-registry.py:131-134` — why the stderr stand-in exists: the suite has to
+    assert what a run without PyYAML prints and a process cannot read back its own stderr, so the
+    module-level probe writes through the wrapper (the notice still reaches the job log and the
+    assertion reads the same bytes).
+
+The sweep's plan is
 [`docs/plans/2026-11-22-comment-policy-sweep-plan.md`](2026-11-22-comment-policy-sweep-plan.md).

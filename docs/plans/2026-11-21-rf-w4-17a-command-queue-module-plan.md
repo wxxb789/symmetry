@@ -267,7 +267,14 @@ guard) is red.
 ## Comment-policy sweep (2026-11-22)
 
 Module intent removed from `daemon/internal/app/command_queue_test.go` by the 2026-11-22
-comment-policy sweep is recorded in
-[`docs/evidence/comment-policy-sweep-2026-11-22-moved-intent.md`](../evidence/comment-policy-sweep-2026-11-22-moved-intent.md)
-("ws3b-app-tests"); the sweep's plan is
+comment-policy sweep is recorded below (workstream record "ws3b-app-tests").
+
+- `daemon/internal/app/command_queue.go` — module ownership and budget contract, removed from the `commandQueue`/`commandReceipts` docs (the lock-contract and lock-order lines stayed under K1):
+  - "commandQueue owns the daemon's command queue: the arrival FIFO, the dedupe index keyed by command key, and the per-run serialization lanes, together with the acknowledgement-receipt bookkeeping (commandReceipts) that fences late control-plane responses against delivered acknowledgements."
+  - "A commandQueue may be used as a zero value: every map it reads is created on first use."
+  - "It is a value inside commandQueue rather than more queue methods because it keeps its own ordering: every write to it happens inside a queue call under the caller's locks, but markCommandAcknowledgementDelivered orders the tombstone against a journal write with daemon.commandReceiptMu. … commandReceiptMu is held across a journal write only by the terminal-acknowledgement persistence loop (outbox.go:210-241), which never touches this bookkeeping. One intent per type, every write to the bookkeeping inside this file, and the module stays at the contract's binding budget (at most 12 methods: the 8 queue methods above plus the 4 receipt methods below). Lock contract and zero-value tolerance are commandQueue's."
+  - "newCommandQueue returns an empty queue. startBackground constructs one per background lifetime, replacing the fields the daemon used to reset there." (`D2` narration; folded into the zero-value item)
+- `daemon/internal/app/command_queue_test.go` (header block, pre-sweep lines 10–15): "This file exercises the command-queue module (command_queue.go) without a daemon: every invariant the queue and its receipt bookkeeping own is asserted at their own interface. The daemon-level behaviour oracle stays the existing app tests, which drive the same invariants through the executor." The trailing red-mutant/slice-evidence sentence was provenance, not moved.
+
+The sweep's plan is
 [`docs/plans/2026-11-22-comment-policy-sweep-plan.md`](2026-11-22-comment-policy-sweep-plan.md).

@@ -1,8 +1,5 @@
 defmodule SymmetryControlWeb.StrictJSONDecoder do
   @moduledoc """
-  Ordered JSON decoder; `StrictEvidenceJSON` installs it as the `:json` decoder for the
-  strict routes.
-
   One ordered walk rejects duplicate members and yields `body_params`.
   """
 
@@ -76,8 +73,6 @@ defmodule SymmetryControlWeb.Plugs.StrictEvidenceJSON do
   @moduledoc """
   Strict JSON for the control-plane mutation routes: the machine evidence endpoint keeps
   its raw body (deferred materialization until the controller has authenticated the claim).
-
-  `/api/v1` and `/portal/api` use `StrictJSONDecoder`; other routes keep the plain decoder.
   """
 
   @behaviour Plug

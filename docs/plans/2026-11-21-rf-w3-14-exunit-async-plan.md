@@ -353,7 +353,15 @@ All clauses of the amendment are met on the delivered tree:
 ## Comment-policy sweep (2026-11-22)
 
 Module intent removed from `control/test/support/migration_case.ex` by the 2026-11-22 comment-policy
-sweep is recorded in
-[`docs/evidence/comment-policy-sweep-2026-11-22-moved-intent.md`](../evidence/comment-policy-sweep-2026-11-22-moved-intent.md)
-("ws9a-control-test-support"); the sweep's plan is
+sweep is recorded below (workstream record "ws9a-control-test-support").
+
+1. `migration_case.ex` (HEAD 33-34) — "afterwards; a failure while starting the Repo still drops
+   the schema, and a failure while pointing the dynamic repo at it still stops the Repo." The
+   same guarantee is already recorded in `docs/plans/2026-11-21-elixir-fixture-extraction-plan.md`
+   ("two failure-path edits are recorded … so a Repo-start failure still drops the schema … a
+   failure while pointing the dynamic repo at the private schema still stops the Repo"), which is
+   what licensed the deletion. Row 33 is `compressed` because the surviving `afterwards.` is the
+   same line with the clause removed; row 34 is `deleted`.
+
+The sweep's plan is
 [`docs/plans/2026-11-22-comment-policy-sweep-plan.md`](2026-11-22-comment-policy-sweep-plan.md).
