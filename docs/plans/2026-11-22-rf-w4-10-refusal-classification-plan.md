@@ -51,14 +51,14 @@ that revision, and one contract item is already satisfied. Re-derived per site:
    `:220`, `:237`, `:255` (via `clearActionId`) and `:473` (via `failurePatch`). Clause 1's
    observable condition — "exactly one implementation of each predicate ... exists under `src/`"
    — is not satisfiable while that copy stands, so `control.tsx` is added to the owned set for
-   that one deletion plus the import line and the six call sites that reference it. Findings F3
+   that one deletion plus the import line and the five call sites that reference it. Findings F3
    enumerated four predicates but not this copy; the contract's own grep criterion is the
-   authority here (decision P8).
+   authority here (decision P6).
 3. **Two more inline staleness sites.** Beyond the contract's `resources.tsx` pair,
    `connections.tsx:138` and `assignment.tsx:245` each derive `stale` as
    `failure instanceof ServerRefusal && failure.code === "stale"` — the same policy as the
    contract's `resources.tsx:390` site (same file pair the contract already owns for its five
-   wrapper calls and its call sites). Both migrate to the module predicate (decision P9); no new
+   wrapper calls and its call sites). Both migrate to the module predicate (decision P7); no new
    policy is invented and no set is merged.
 4. **The Elixir citation blocks are already gone.** The contract's comment-only item (the two
    `portal_*_test.exs` comment blocks citing `write-policy.ts` lines) was removed by `ae4b345f`
@@ -174,7 +174,7 @@ So the three tables stay, with their entries byte-identical to base:
 Callers after cutover: `resources.tsx` (3 calls) and `connections.tsx` (5 calls) pass
 `resourceRefusalGuidance`; `assignment.tsx` (2 calls) passes `assignmentRefusalGuidance`;
 `editors.tsx` (4 calls), `projects.tsx` (1), `work-surface.tsx` (1) and `planning.test.tsx` (1)
-keep one-argument calls served by the `planningRefusalGuidance` default (decision P4).
+keep one-argument calls served by the `planningRefusalGuidance` default (decision P3).
 `refusals.test.ts` pins the joined output of **every** entry of every table — all 21 steps —
 plus the fallback rows (an unlisted code, a prototype-named code, a non-`ServerRefusal`, a bare
 `Error`), closing the 13-step witness gap.
@@ -197,7 +197,7 @@ plus the fallback rows (an unlisted code, a prototype-named code, a non-`ServerR
    `MutationRefused` arm is the getter's own 409 rule. No status condition is added to a base
    predicate that had none, and none is dropped.
 3. **No silent merge, no silent default.** The three tables are separate exports; the fold's
-   default parameter is the planning table only (decision P4); `api.ts` keeps no shim, and no
+   default parameter is the planning table only (decision P3); `api.ts` keeps no shim, and no
    `export { ... } from "./refusals"` re-export exists anywhere.
 4. **One owner per rule.** `MutationRefused.stale`'s rule stays in `commands.ts` (class member,
    not owned); the module delegates. Every other rule text appears exactly once under `src/`.
