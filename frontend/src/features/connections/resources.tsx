@@ -7,13 +7,12 @@ import { useDialogOpener } from "../../components/use-dialog-opener";
 import { EmptyState, ErrorState, LoadingState } from "../../components/workspace";
 import {
   ownValue,
-  refusalNotice as sharedRefusalNotice,
-  ServerRefusal,
   type Api,
   type Connection,
   type ResourceDraft,
   type Workspace,
 } from "../../services/api";
+import { isStaleRefusal, isTerminalStateRefusal, refusalNotice, resourceRefusalGuidance } from "../../services/refusals";
 import { safeUrl } from "../../services/served";
 
 const providerLabels: Record<string, string> = { github: "GitHub", azure_devops: "Azure DevOps" };
@@ -27,24 +26,9 @@ const bindableKinds: readonly string[] = ["repository", "work_tracking", "ci", "
 // when it grants that capability, and the server re-checks every write.
 const kindCapabilities: Record<string, string> = { repository: "repositories", work_tracking: "work_items", ci: "ci" };
 const localKinds: Record<string, true> = { agent: true, runtime: true };
-// The server owns the reason; the console adds the operator's next step.
-const refusalGuidance: Record<string, string> = {
-  stale: "Reload to see the server's current values.",
-  state_conflict: "Reload and resolve the changed state.",
-  not_found: "Reload the page to see the server's current state.",
-  forbidden: "Grant the required provider permissions, then test the connection again.",
-  not_connected: "Bind the resource to a connection first.",
-  capability_not_granted: "Grant the connection the capability this resource kind needs, then try again.",
-  provider_unauthorized: "Reauthenticate the provider session on this server, then test the connection again.",
-  provider_failure: "Check provider availability, then test the connection again.",
-  validation_failed: "The server rejected this submission; re-read the current values and try again.",
-};
-
 export const providerLabel = (value: string) => ownValue(providerLabels, value) ?? `Unknown provider: ${value || "unspecified"}`;
 const kindLabel = (value: string) => ownValue(kindLabels, value) ?? `Unknown kind: ${value}`;
 const isLocalKind = (kind: string) => ownValue(localKinds, kind) === true;
-
-export const refusalNotice = (error: unknown) => sharedRefusalNotice(error, refusalGuidance);
 
 // Declared policy: a served member is present when non-empty (no trim), unlike the shared `asText`.
 const presentText = (value: unknown): string | null => typeof value === "string" && value !== "" ? value : null;
@@ -287,7 +271,7 @@ function resourceSavedNotice(submission: ResourceSubmission): string {
 }
 
 function resourceRefusalNotice(intent: ResourceIntent, error: unknown, frozen: boolean): string {
-  const notice = refusalNotice(error);
+  const notice = refusalNotice(error, resourceRefusalGuidance);
   if (intent.kind === "update" && frozen) return `${notice} This resource changed elsewhere; close and reopen it to edit the server's current values.`;
   if (intent.kind === "unbind" && frozen) return `${notice} Close and reopen this dialog to act on the server's current state.`;
   return notice;
@@ -468,9 +452,8 @@ function ResourceDialog(props: ResourceDialogProps) {
   });
   const pending = save.isPending;
   const failure = save.error;
-  const stale = failure instanceof ServerRefusal && failure.code === "stale";
-  const terminal = failure instanceof ServerRefusal &&
-    (failure.code === "stale" || failure.code === "state_conflict" || failure.code === "not_found");
+  const stale = isStaleRefusal(failure);
+  const terminal = isTerminalStateRefusal(failure);
   // A versioned subject freezes on the refusal that invalidates the version it opened
   // with — update `stale`, unbind terminal; a bind draft carries no version.
   const frozen = intent.kind === "update" ? stale : intent.kind === "unbind" && terminal;
@@ -633,7 +616,7 @@ function ProjectResourcesReady({ api, csrf, project, headingRef, workspace, work
     onError: (error) => {
       reconcile();
       if (!live()) return;
-      setNotice(refusalNotice(error));
+      setNotice(refusalNotice(error, resourceRefusalGuidance));
     },
   });
   const syncProject = useMutation({
@@ -649,7 +632,7 @@ function ProjectResourcesReady({ api, csrf, project, headingRef, workspace, work
     onError: (error) => {
       reconcile();
       if (!live()) return;
-      setNotice(refusalNotice(error));
+      setNotice(refusalNotice(error, resourceRefusalGuidance));
     },
   });
   const projectSyncPending = (pendingSubjects[projectSubject(projectId)] ?? 0) > 0;
