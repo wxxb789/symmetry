@@ -876,7 +876,7 @@ test.describe("Readable work views", () => {
     const item = project.items.get(title);
 
     const payload = {
-      markup: '\"><img src=x onerror=alert(1)>',
+      markup: '"><img src=x onerror=alert(1)>',
       svg: "<svg/onload=alert(1)>",
       scheme: "javascript:alert(1)"
     };

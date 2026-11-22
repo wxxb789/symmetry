@@ -121,8 +121,6 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
-      - name: Check lockfile registry provenance
-        run: python3 scripts/ci/check-lockfile-registry.py
       # It resolves the locked versions against the registry, so it belongs
       # beside the provenance check, before the install.
       - name: Measure production dependency advisories (advisory)
@@ -140,31 +138,9 @@ jobs:
           set -e
           echo "pnpm_audit_prod_exit_status=$pnpm_audit_status"
           exit "$pnpm_audit_status"
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm contracts:check
-      - run: pnpm --filter @symmetry/frontend typecheck
-      - run: pnpm --filter @symmetry/frontend lint
-      - run: pnpm --filter @symmetry/frontend test
-      - run: pnpm --filter @symmetry/frontend build
-      - uses: actions/upload-artifact@v7
+      - uses: ./.github/actions/contracts-build
         with:
-          name: portal-assets
-          path: control/priv/static/portal
-      - uses: erlef/setup-beam@v1
-        with:
-          elixir-version: 1.20.4
-          otp-version: 29.0.6
-      - name: Build production Control release
-        working-directory: control
-        run: |
-          MIX_ENV=prod mix deps.get
-          MIX_ENV=prod mix release --overwrite
-          tar --create --gzip --file "$RUNNER_TEMP/control-release-linux.tar.gz" --directory _build/prod/rel symmetry_control
-      - uses: actions/upload-artifact@v7
-        with:
-          name: control-release-linux
-          path: ${{ runner.temp }}/control-release-linux.tar.gz
-          if-no-files-found: error
+          build-control-release: "true"
 
   control:
     needs: [changes, contracts]
@@ -388,208 +364,8 @@ jobs:
         id: linux_pi_pidfd_cleanup
         if: always()
         shell: bash
-        run: |
-          set -Eeuo pipefail
-          fixture_root="$RUNNER_TEMP/pi-pidfd-cleanup-fixture"
-          mkdir -p "$fixture_root/runner-temp" "$fixture_root/tmp"
-          export RUNNER_TEMP="$fixture_root/runner-temp"
-          export TMPDIR="$fixture_root/tmp"
-          python3 - ../scripts/cleanup-linux-pi-processes.sh <<'PY'
-          import json
-          import os
-          import pathlib
-          import platform
-          import signal
-          import subprocess
-          import sys
-          import tempfile
-          import threading
-
-          cleanup_script = sys.argv[1]
-          groups = []
-
-          def process_stat(pid):
-              with open(f"/proc/{pid}/stat", encoding="ascii") as stream:
-                  _, fields = stream.read().rsplit(") ", 1)
-              values = fields.split()
-              return {
-                  "state": values[0],
-                  "pgrp": int(values[2]),
-                  "session": int(values[3]),
-                  "start": values[19],
-              }
-
-          def launch_group(label):
-              marker_dir = pathlib.Path(
-                  tempfile.mkdtemp(
-                      prefix=f"symmetry-pi-control-run-{label}-",
-                      dir=os.environ["TMPDIR"],
-                  )
-              )
-              group = {
-                  "label": label,
-                  "marker": marker_dir / "process-marker.json",
-                  "processes": [],
-                  "pidfds": [],
-                  "reaped": [],
-              }
-              groups.append(group)
-
-              leader = subprocess.Popen(
-                  [sys.executable, "-c", "import signal; signal.pause()"],
-                  process_group=0,
-                  stdin=subprocess.DEVNULL,
-                  stdout=subprocess.DEVNULL,
-                  stderr=subprocess.DEVNULL,
-              )
-              group["processes"].append(leader)
-              group["pidfds"].append(None)
-              leader_reaped = threading.Event()
-              group["reaped"].append(leader_reaped)
-              threading.Thread(
-                  target=lambda: (leader.wait(), leader_reaped.set()),
-                  daemon=True,
-              ).start()
-              group["pidfds"][-1] = os.pidfd_open(leader.pid, 0)
-
-              child = subprocess.Popen(
-                  [sys.executable, "-c", "import signal; signal.pause()"],
-                  process_group=leader.pid,
-                  stdin=subprocess.DEVNULL,
-                  stdout=subprocess.DEVNULL,
-                  stderr=subprocess.DEVNULL,
-              )
-              group["processes"].append(child)
-              group["pidfds"].append(None)
-              child_reaped = threading.Event()
-              group["reaped"].append(child_reaped)
-              threading.Thread(
-                  target=lambda: (child.wait(), child_reaped.set()),
-                  daemon=True,
-              ).start()
-              group["pidfds"][-1] = os.pidfd_open(child.pid, 0)
-
-              leader_stat = process_stat(leader.pid)
-              child_stat = process_stat(child.pid)
-              if (
-                  leader_stat["state"] in ("Z", "X", "x")
-                  or child_stat["state"] in ("Z", "X", "x")
-                  or leader_stat["pgrp"] != leader.pid
-                  or leader_stat["session"] == leader.pid
-                  or child_stat["pgrp"] != leader.pid
-                  or child_stat["session"] != leader_stat["session"]
-              ):
-                  raise RuntimeError("fixture processes are not a live same-session process group")
-
-              with open("/proc/sys/kernel/random/boot_id", encoding="ascii") as stream:
-                  boot_id = stream.read().strip()
-              namespace_link = os.readlink(f"/proc/{leader.pid}/ns/pid")
-              namespace_inode = os.stat(f"/proc/{leader.pid}/ns/pid").st_ino
-              if namespace_link != f"pid:[{namespace_inode}]":
-                  raise RuntimeError("fixture PID namespace identity did not match its proc link")
-              group["identity"] = (
-                  f"linux:v2:{boot_id}:{namespace_inode}:{leader.pid}:{leader_stat['start']}"
-              )
-              return group
-
-          def write_marker(group, identity):
-              group["marker"].write_text(
-                  json.dumps({"pid": group["processes"][0].pid, "process_identity": identity}),
-                  encoding="utf-8",
-              )
-
-          def run_cleanup():
-              result = subprocess.run(
-                  ["bash", cleanup_script],
-                  capture_output=True,
-                  check=False,
-                  text=True,
-              )
-              sys.stdout.write(result.stdout)
-              sys.stderr.write(result.stderr)
-              return result
-
-          def wait_for_stopped_group(group):
-              for reaped in group["reaped"]:
-                  if not reaped.wait(timeout=5):
-                      raise RuntimeError(f"{group['label']} fixture process did not exit")
-
-          def assert_group_live(group):
-              if any(process.poll() is not None for process in group["processes"]):
-                  raise RuntimeError(f"{group['label']} fixture process was signalled")
-
-          def signal_fixture_process(group, index, signal_number):
-              process = group["processes"][index]
-              pidfd = group["pidfds"][index]
-              if pidfd is None:
-                  if process.poll() is None:
-                      process.send_signal(signal_number)
-              else:
-                  try:
-                      signal.pidfd_send_signal(pidfd, signal_number)
-                  except ProcessLookupError:
-                      pass
-
-          def stop_fixture_group(group):
-              for index in range(len(group["processes"])):
-                  signal_fixture_process(group, index, signal.SIGTERM)
-              if not all(reaped.wait(timeout=5) for reaped in group["reaped"]):
-                  for index in range(len(group["processes"])):
-                      signal_fixture_process(group, index, signal.SIGKILL)
-                  if not all(reaped.wait(timeout=5) for reaped in group["reaped"]):
-                      raise RuntimeError(f"could not stop {group['label']} fixture processes")
-
-          try:
-              if platform.machine() not in ("x86_64", "amd64"):
-                  raise RuntimeError(f"fixture requires x86_64, got {platform.machine()!r}")
-
-              matching = launch_group("matching")
-              write_marker(matching, matching["identity"])
-              matching_result = run_cleanup()
-              if matching_result.returncode != 0:
-                  raise RuntimeError(
-                      f"matching identity cleanup failed with status {matching_result.returncode}"
-                  )
-              if f"cleanup stopped process group={matching['processes'][0].pid}" not in matching_result.stdout:
-                  raise RuntimeError("matching identity cleanup did not report stopped process group")
-              wait_for_stopped_group(matching)
-              matching["marker"].unlink()
-              print("verified matching v2 identity stopped and proved leader plus same-group child")
-
-              mismatched = launch_group("wrong-start")
-              _, _, boot_id, namespace, pid, start = mismatched["identity"].split(":")
-              wrong_identity = (
-                  f"linux:v2:{boot_id}:{namespace}:{pid}:{int(start) + 1}"
-              )
-              write_marker(mismatched, wrong_identity)
-              mismatch_result = run_cleanup()
-              if mismatch_result.returncode == 0:
-                  raise RuntimeError("wrong-start identity was accepted")
-              if "exact process identity is not live" not in mismatch_result.stdout:
-                  raise RuntimeError("wrong-start identity was not refused for the identity mismatch")
-              assert_group_live(mismatched)
-              mismatched["marker"].unlink()
-              print("verified wrong-start identity was refused without signalling either process")
-          finally:
-              cleanup_errors = []
-              for group in groups:
-                  try:
-                      group["marker"].unlink(missing_ok=True)
-                      stop_fixture_group(group)
-                  except Exception as error:
-                      cleanup_errors.append(f"{group['label']}: {error}")
-                  finally:
-                      for pidfd in group["pidfds"]:
-                          if pidfd is not None:
-                              os.close(pidfd)
-                      for process in group["processes"]:
-                          if process.stdout is not None:
-                              process.stdout.close()
-                          if process.stderr is not None:
-                              process.stderr.close()
-              if cleanup_errors:
-                  raise RuntimeError("fixture cleanup failed: " + "; ".join(cleanup_errors))
-          PY
+        working-directory: control
+        run: bash ../scripts/ci/verify-linux-pi-pidfd-cleanup.sh
       - name: Run Linux Pi Control E2E
         id: linux_pi_e2e
         if: always()
@@ -689,6 +465,8 @@ jobs:
       - name: Check lockfile registry provenance
         run: python3 ../scripts/ci/check-lockfile-registry.py
       - run: pnpm install --frozen-lockfile
+        working-directory: .
+      - run: pnpm --filter symmetry-browser-acceptance lint
         working-directory: .
       - run: pnpm --filter symmetry-browser-acceptance exec playwright install --with-deps chromium
         working-directory: .
@@ -1022,186 +800,8 @@ jobs:
       - name: Start isolated PostgreSQL loopback
         id: windows_postgres
         shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $ready = $false
-
-          try {
-            function Add-PostgresCandidate(
-              [System.Collections.Generic.List[object]] $Candidates,
-              [System.Collections.Generic.HashSet[string]] $Seen,
-              [string] $Path,
-              [string] $Source
-            ) {
-              if ([string]::IsNullOrWhiteSpace($Path)) { return }
-
-              try {
-                $normalized = [System.IO.Path]::GetFullPath($Path.Trim().Trim('"')).TrimEnd('\')
-              }
-              catch {
-                return
-              }
-
-              if (-not (Test-Path -LiteralPath $normalized -PathType Container)) { return }
-              if ($Seen.Add($normalized)) {
-                $Candidates.Add([pscustomobject]@{ Path = $normalized; Source = $Source }) | Out-Null
-              }
-            }
-
-            $candidates = [System.Collections.Generic.List[object]]::new()
-            $seenCandidates = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-
-            Add-PostgresCandidate $candidates $seenCandidates $env:PGBIN 'PGBIN'
-
-            foreach ($toolName in @('pg_ctl', 'initdb', 'createdb')) {
-              foreach ($command in @(Get-Command "$toolName.exe" -All -ErrorAction SilentlyContinue)) {
-                if (-not [string]::IsNullOrWhiteSpace([string]$command.Source)) {
-                  Add-PostgresCandidate $candidates $seenCandidates ([System.IO.Path]::GetDirectoryName($command.Source)) "PATH:$toolName"
-                }
-              }
-            }
-
-            foreach ($registryPattern in @(
-              'HKLM:\SOFTWARE\PostgreSQL\Installations\*'
-              'HKLM:\SOFTWARE\WOW6432Node\PostgreSQL\Installations\*'
-              'HKCU:\SOFTWARE\PostgreSQL\Installations\*'
-              'HKCU:\SOFTWARE\WOW6432Node\PostgreSQL\Installations\*'
-            )) {
-              foreach ($registryKey in @(Get-Item -Path $registryPattern -ErrorAction SilentlyContinue)) {
-                $properties = Get-ItemProperty -LiteralPath $registryKey.PSPath -ErrorAction SilentlyContinue
-                if ($null -ne $properties -and -not [string]::IsNullOrWhiteSpace([string]$properties.'Base Directory')) {
-                  Add-PostgresCandidate $candidates $seenCandidates (Join-Path ([string]$properties.'Base Directory') 'bin') "registry:$registryPattern"
-                }
-              }
-            }
-
-            foreach ($programFiles in @(
-              [Environment]::GetEnvironmentVariable('ProgramFiles')
-              [Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
-              [Environment]::GetEnvironmentVariable('ProgramW6432')
-            )) {
-              if ([string]::IsNullOrWhiteSpace($programFiles)) { continue }
-
-              $postgresRoot = Join-Path $programFiles 'PostgreSQL'
-              foreach ($versionDirectory in @(Get-ChildItem -LiteralPath $postgresRoot -Directory -ErrorAction SilentlyContinue | Sort-Object -Property Name -Descending)) {
-                Add-PostgresCandidate $candidates $seenCandidates (Join-Path $versionDirectory.FullName 'bin') "program-files:$postgresRoot"
-              }
-            }
-
-            $selected = $null
-            $candidateRecords = [System.Collections.Generic.List[string]]::new()
-            foreach ($candidate in $candidates) {
-              $candidateTools = @{
-                pg_ctl = Join-Path $candidate.Path 'pg_ctl.exe'
-                initdb = Join-Path $candidate.Path 'initdb.exe'
-                createdb = Join-Path $candidate.Path 'createdb.exe'
-              }
-              $missing = @(
-                foreach ($toolName in @('pg_ctl', 'initdb', 'createdb')) {
-                  if (-not (Test-Path -LiteralPath $candidateTools[$toolName] -PathType Leaf)) {
-                    "$toolName.exe"
-                  }
-                }
-              )
-              $candidateRecords.Add("$($candidate.Path);source=$($candidate.Source);missing=$($missing -join ',')") | Out-Null
-              if ($null -eq $selected -and $missing.Count -eq 0) {
-                $selected = [pscustomobject]@{
-                  Bin = $candidate.Path
-                  Source = $candidate.Source
-                  PgCtl = $candidateTools.pg_ctl
-                  InitDb = $candidateTools.initdb
-                  CreateDb = $candidateTools.createdb
-                }
-              }
-            }
-
-            $candidateSummary = if ($candidateRecords.Count -gt 0) { $candidateRecords -join ' | ' } else { 'none' }
-            Add-Content -LiteralPath $env:PI_E2E_LOG -Value "postgres_candidate_bins=$candidateSummary"
-            Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value "postgres_candidate_bins=$candidateSummary"
-
-            if ($null -eq $selected) {
-              $message = 'Windows runner lacks a complete PostgreSQL toolset (pg_ctl.exe, initdb.exe, createdb.exe) in one discovered bin directory'
-              Add-Content -LiteralPath $env:PI_E2E_LOG -Value "postgres_status=unavailable; $message"
-              Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value "postgres_status=unavailable; $message"
-              throw $message
-            }
-            else {
-              $pgCtl = $selected.PgCtl
-              $initDb = $selected.InitDb
-              $createDb = $selected.CreateDb
-              if ($env:POSTGRES_PORT -notmatch '^[0-9]+$') {
-                throw "POSTGRES_PORT is not a decimal port: $env:POSTGRES_PORT"
-              }
-              $postgresPort = [int]$env:POSTGRES_PORT
-              if ($postgresPort -lt 1024 -or $postgresPort -gt 65535) {
-                throw "POSTGRES_PORT is outside the valid TCP range: $postgresPort"
-              }
-              $env:PI_E2E_POSTGRES_BIN = $selected.Bin
-              $env:PI_E2E_POSTGRES_PGCTL = $selected.PgCtl
-              "PI_E2E_POSTGRES_BIN=$($selected.Bin)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-              "PI_E2E_POSTGRES_PGCTL=$($selected.PgCtl)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-              Add-Content -LiteralPath $env:PI_E2E_LOG -Value "postgres_bin=$($selected.Bin);source=$($selected.Source)"
-              Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value "postgres_bin=$($selected.Bin);source=$($selected.Source)"
-              Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value "postgres_pg_ctl=$($selected.PgCtl)"
-              Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value "postgres_initdb=$($selected.InitDb)"
-              Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value "postgres_createdb=$($selected.CreateDb)"
-
-              $versionOutput = & $pgCtl --version 2>&1
-              $versionStatus = $LASTEXITCODE
-              $version = ($versionOutput -join "`n").Trim()
-              if ($versionStatus -ne 0 -or [string]::IsNullOrWhiteSpace($version)) {
-                throw "pg_ctl.exe --version failed with status $versionStatus"
-              }
-              Add-Content -LiteralPath $env:PI_E2E_LOG -Value "postgres_version=$version"
-              Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value "postgres_version=$version"
-
-              $env:PGPASSWORD = $env:POSTGRES_PASSWORD
-
-              $initOutput = & $initDb -D $env:PI_E2E_POSTGRES_DATA -U $env:POSTGRES_USER --auth=trust --no-locale --encoding=UTF8 2>&1
-              $initStatus = $LASTEXITCODE
-              $initOutput | Tee-Object -FilePath $env:PI_E2E_LOG -Append | Out-Host
-              if ($initStatus -ne 0) {
-                throw "initdb.exe failed with status $initStatus"
-              }
-
-              # The postmaster inherits pg_ctl's stdout/stderr. Capturing them
-              # with & ... 2>&1 keeps the pipe open and never returns, so wait
-              # on pg_ctl alone and read its redirected output afterwards.
-              $startOut = Join-Path $env:RUNNER_TEMP 'pg_ctl-start.out'
-              $startErr = Join-Path $env:RUNNER_TEMP 'pg_ctl-start.err'
-              $startProcess = Start-Process -FilePath $pgCtl -NoNewWindow -PassThru `
-                -ArgumentList @('-D', "`"$env:PI_E2E_POSTGRES_DATA`"", '-o', "`"-h $env:POSTGRES_HOST -p $env:POSTGRES_PORT`"", '-l', "`"$env:PI_E2E_POSTGRES_LOG`"", '-w', '-t', '30', 'start') `
-                -RedirectStandardOutput $startOut -RedirectStandardError $startErr
-              if (-not $startProcess.WaitForExit(60000)) {
-                throw 'pg_ctl.exe start did not exit within 60 seconds'
-              }
-              $startStatus = $startProcess.ExitCode
-              Get-Content -LiteralPath $startOut, $startErr -ErrorAction SilentlyContinue | Tee-Object -FilePath $env:PI_E2E_LOG -Append | Out-Host
-              if ($startStatus -ne 0) {
-                throw "pg_ctl.exe start failed with status $startStatus"
-              }
-
-              $createOutput = & $createDb -h $env:POSTGRES_HOST -p $env:POSTGRES_PORT -U $env:POSTGRES_USER $env:POSTGRES_DB 2>&1
-              $createStatus = $LASTEXITCODE
-              $createOutput | Tee-Object -FilePath $env:PI_E2E_LOG -Append | Out-Host
-              if ($createStatus -ne 0) {
-                throw "createdb.exe failed with status $createStatus"
-              }
-
-              Add-Content -LiteralPath $env:PI_E2E_LOG -Value "postgres_status=ready on $env:POSTGRES_HOST`:$env:POSTGRES_PORT"
-              Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value "postgres_status=ready on $env:POSTGRES_HOST`:$env:POSTGRES_PORT"
-              $ready = $true
-            }
-          }
-          catch {
-            $message = "Windows PostgreSQL preflight failed: $($_.Exception.Message)"
-            Add-Content -LiteralPath $env:PI_E2E_LOG -Value $message
-            Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value "postgres_status=unavailable; $message"
-            Write-Output "::error::$message; Pi Control E2E acceptance gate failed"
-            throw
-          }
-
-          "ready=$($ready.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+        working-directory: control
+        run: pwsh -NoProfile -File ../scripts/ci/pi-windows-postgres-loopback.ps1
       - run: mix deps.get
       - name: Prepare pinned Windows Pi release
         uses: ./.github/actions/prepare-pi-release
@@ -1301,101 +901,8 @@ jobs:
         shell: pwsh
         env:
           PI_E2E_OUTCOME: ${{ steps.windows_pi_e2e.outcome }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $cleanupFailed = $false
-
-          function Write-CleanupLog([string] $Message) {
-            Add-Content -LiteralPath $env:PI_E2E_LOG -Value $Message
-            Write-Output $Message
-          }
-
-          $e2eOutcome = [string]$env:PI_E2E_OUTCOME
-          Write-CleanupLog "cleanup verification e2e_outcome=$e2eOutcome"
-          if ($e2eOutcome -ne 'success') {
-            if ([string]::IsNullOrWhiteSpace($e2eOutcome)) {
-              Write-CleanupLog 'cleanup verification failed: Windows Pi E2E outcome was unavailable'
-            }
-            else {
-              Write-CleanupLog "cleanup verification failed: Windows Pi E2E outcome was $e2eOutcome"
-            }
-            $cleanupFailed = $true
-          }
-
-          $markerPattern = Join-Path $env:PI_E2E_TEMP 'symmetry-pi-control-run-*\process-marker.json'
-          $markers = $null
-          try {
-            $markers = @(Get-ChildItem -Path $markerPattern -File -ErrorAction Stop)
-          }
-          catch {
-            Write-CleanupLog "cleanup verification could not enumerate markers: $($_.Exception.Message)"
-            $cleanupFailed = $true
-          }
-
-          if ($null -ne $markers) {
-            foreach ($marker in $markers) {
-              $markerState = 'unreadable'
-              $markerLength = 'unknown'
-              try {
-                $contents = (Get-Content -LiteralPath $marker.FullName -Raw -ErrorAction Stop).Trim()
-                $markerLength = $contents.Length
-              }
-              catch {
-                Write-CleanupLog "cleanup verification residual marker path=$($marker.FullName) chars=$markerLength state=$markerState"
-                $cleanupFailed = $true
-                continue
-              }
-
-              if ($contents -eq 'not_started') {
-                $markerState = 'not_started'
-              }
-              elseif ($contents -eq 'starting') {
-                $markerState = 'starting'
-              }
-              else {
-                try {
-                  $record = $contents | ConvertFrom-Json -ErrorAction Stop
-                  $pidProperty = $record.PSObject.Properties['pid']
-                  $identityProperty = $record.PSObject.Properties['process_identity']
-                  $pidValue = if ($null -eq $pidProperty) { $null } else { $pidProperty.Value }
-                  $identityValue = if ($null -eq $identityProperty) { $null } else { $identityProperty.Value }
-                  if (($pidValue -is [int] -or $pidValue -is [long]) -and
-                    [int64]$pidValue -gt 0 -and [int64]$pidValue -le [int]::MaxValue -and
-                    $identityValue -is [string] -and
-                    ([string]$identityValue -match ("^windows:{0}:[0-9a-fA-F]{{16}}$" -f [int64]$pidValue))) {
-                    $markerState = 'json_valid'
-                    $validatedPid = [int64]$pidValue
-                    $validatedIdentity = [string]$identityValue
-                  }
-                  else {
-                    $markerState = 'json_invalid'
-                  }
-                }
-                catch {
-                  $markerState = 'json_invalid'
-                }
-              }
-              Write-CleanupLog "cleanup verification residual marker path=$($marker.FullName) chars=$markerLength state=$markerState"
-              if ($markerState -eq 'json_valid') {
-                Write-CleanupLog "cleanup verification residual marker validated pid=$validatedPid process_identity=$validatedIdentity"
-              }
-              $cleanupFailed = $true
-            }
-
-            if ($e2eOutcome -eq 'success' -and $markers.Count -eq 0) {
-              Write-CleanupLog 'cleanup verification accepted: successful Windows Pi E2E suite-level test/on_exit containment cleanup and applicable stop-receipt assertions removed every run root; no process markers remain'
-            }
-            elseif ($markers.Count -gt 0) {
-              Write-CleanupLog "cleanup verification failed: $($markers.Count) residual process marker(s) remain"
-            }
-          }
-
-          $markerCount = if ($null -eq $markers) { 'unknown' } else { [string]$markers.Count }
-          Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value 'orphan_cleanup_verification_mode=successful_e2e_outcome_and_zero_markers;numeric_termination=disabled'
-          Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value "orphan_cleanup_e2e_outcome=$e2eOutcome"
-          Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value "orphan_cleanup_marker_count=$markerCount"
-          Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value "orphan_cleanup_status=$(if ($cleanupFailed) { 'failed' } else { 'passed' })"
-          if ($cleanupFailed) { exit 1 }
+        working-directory: control
+        run: pwsh -NoProfile -File ../scripts/ci/pi-windows-cleanup-evidence.ps1
       - name: Stop isolated PostgreSQL
         if: always()
         shell: pwsh
@@ -1550,7 +1057,12 @@ jobs:
           # had no fixture of their own while they decided what evidence means.
           python3 ../scripts/ci/test-omo-control-native-evidence.py
       - name: Check CI gate helper scripts
+        env:
+          SYMMETRY_REQUIRE_PYYAML: "1"
         run: |
+          pyyaml_version='6.0.3'
+          python3 -m pip install --user --break-system-packages --disable-pip-version-check --quiet "PyYAML==$pyyaml_version"
+          test "$(python3 -c 'import yaml; print(yaml.__version__)')" = "$pyyaml_version"
           python3 ../scripts/ci/test-assert-exunit-json.py
           python3 ../scripts/ci/test-go-test-json-gate.py
           python3 ../scripts/ci/test-assert-folded-gates.py
@@ -1615,6 +1127,8 @@ jobs:
         run: |
           python3 ../scripts/ci/go-test-durations.py "$RUNNER_TEMP/daemon-go-race.json"
       - run: GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ./...
+      - name: Vet the Linux v2 host prerequisite peer probe (GOOS=linux)
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOFLAGS=-mod=readonly go vet ../scripts/ci/linux-v2-host-peer-probe.go
       - name: Upload ordinary namespace prerequisite evidence
         if: always()
         uses: actions/upload-artifact@v7
@@ -1725,6 +1239,7 @@ jobs:
       # the classifier program that step invokes (`scripts/ci/classify-changed-paths.py`),
       # routes fixture diffs through it and pins the routing those outputs gate.
       - run: python3 scripts/ci/test-ci-changed-path-classifier.py
+      - run: python3 scripts/ci/test-ci-structure-extraction.py
 
       # Runs here because the manual matrix lives in `browser/README.md`: a README-only pull request
       # would never reach a `run-heavy`-gated step; unlike the lint metrics below, this step is blocking.
@@ -1744,9 +1259,9 @@ jobs:
             echo "note: the repository root has no pyproject.toml yet (refactor slice W1-11 owns the ruff configuration); skipping the advisory ruff metrics"
             exit 0
           fi
-          ruff_version='0.17.6'
+          ruff_version='0.17.5'
           ruff_archive='ruff-x86_64-unknown-linux-gnu.tar.gz'
-          ruff_archive_sha256='94b33791f48cd54ab35ad673a443a5c001d3e6d87effeaba9899070b700d45f3'
+          ruff_archive_sha256='7d261fc981a784668e19e9fa6ad437bfd95b67f2dc263fc1eab87d54d72fcc90'
           ruff_dir="$RUNNER_TEMP/ruff-$ruff_version"
           ruff_bin="$ruff_dir/ruff-x86_64-unknown-linux-gnu/ruff"
           if [ ! -x "$ruff_bin" ]; then
@@ -2154,95 +1669,7 @@ jobs:
           SYMMETRY_E2E_URL: http://127.0.0.1:4000
           SYMMETRY_E2E_AGENT: /tmp/symmetry-fake-agent
           SYMMETRY_E2E_RESTART_MARKER: /tmp/symmetry-control-restart.marker
-        run: |
-          set -Eeuo pipefail
-
-          control_log=/tmp/symmetry-control.log
-          control_pid_file=/tmp/symmetry-control.pid
-          control_bin=../control/_build/prod/rel/symmetry_control/bin/symmetry_control
-          marker=$SYMMETRY_E2E_RESTART_MARKER
-          restarter_pid=
-          rm -f "$marker"
-
-          cleanup() {
-            status=$?
-            if [[ -n "$restarter_pid" ]] && kill -0 "$restarter_pid" 2>/dev/null; then
-              kill "$restarter_pid" 2>/dev/null || true
-              wait "$restarter_pid" 2>/dev/null || true
-            fi
-            if (( status != 0 )); then
-              echo 'Control release log:' >&2
-              cat "$control_log" >&2 || true
-            fi
-            exit "$status"
-          }
-          trap cleanup EXIT
-
-          wait_for_marker() {
-            for ((attempt = 1; attempt <= 60; attempt++)); do
-              [[ -e "$marker" ]] && return 0
-              sleep 1
-            done
-            echo "Timed out waiting for restart marker $marker" >&2
-            return 1
-          }
-
-          wait_for_control_down() {
-            for ((attempt = 1; attempt <= 60; attempt++)); do
-              if ! curl --fail --silent --show-error http://127.0.0.1:4000/healthz >/dev/null 2>&1; then
-                return 0
-              fi
-              sleep 1
-            done
-            echo 'Timed out waiting for control health endpoint to stop' >&2
-            return 1
-          }
-
-          wait_for_control_up() {
-            for ((attempt = 1; attempt <= 60; attempt++)); do
-              if curl --fail --silent --show-error http://127.0.0.1:4000/healthz >/dev/null 2>&1; then
-                return 0
-              fi
-              sleep 1
-            done
-            echo 'Timed out waiting for control health endpoint to recover' >&2
-            return 1
-          }
-
-          restart_control() {
-            wait_for_marker
-            control_pid=$(<"$control_pid_file")
-            kill -TERM "$control_pid"
-            wait_for_control_down
-            sleep 1
-            "$control_bin" start >> "$control_log" 2>&1 &
-            echo "$!" > "$control_pid_file"
-            wait_for_control_up
-          }
-
-          restart_control &
-          restarter_pid=$!
-          set +e
-          python3 ../scripts/ci/go-test-json-gate.py \
-            --events "$RUNNER_TEMP/daemon-control-restart.json" \
-            --assert '*' TestDaemonSurvivesControlRestart \
-            -- "$(command -v go)" test -count=1 -timeout 150s -json ./e2e \
-              -run '^TestDaemonSurvivesControlRestart$'
-          gate_status=$?
-          set -e
-
-          set +e
-          wait "$restarter_pid"
-          restart_status=$?
-          set -e
-          restarter_pid=
-
-          if (( gate_status != 0 )); then
-            exit "$gate_status"
-          fi
-          if (( restart_status != 0 )); then
-            exit "$restart_status"
-          fi
+        run: bash ../scripts/ci/daemon-recovery-after-control-restart.sh
 
       - name: Run production Linux containment witness matrix
         if: ${{ always() }}
@@ -2344,232 +1771,8 @@ jobs:
         run: python3 scripts/ci/check-lockfile-registry.py
       - name: Smoke-test local HTTP and production HTTPS Compose stacks
         shell: bash
-        run: |
-          set -Eeuo pipefail
-
-          local_project="symmetry-local-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          production_project="symmetry-production-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          temporary_dir=$(mktemp -d)
-          local_compose=(docker compose --project-name "$local_project" --file compose.yaml)
-          production_compose=(docker compose --project-name "$production_project" --file compose.production.yaml)
-          production_override="$temporary_dir/compose.postgres.yaml"
-          production_env="$temporary_dir/production.env"
-          rendered_production="$temporary_dir/production.rendered.json"
-          redirect_headers="$temporary_dir/http-redirect.headers"
-          runtime_nginx="$temporary_dir/nginx.runtime.conf"
-
-          cleanup() {
-            status=$?
-            "${local_compose[@]}" ps || true
-            "${local_compose[@]}" logs --no-color || true
-            "${local_compose[@]}" down --volumes --remove-orphans || true
-            "${production_compose[@]}" --file "$production_override" --env-file "$production_env" ps || true
-            "${production_compose[@]}" --file "$production_override" --env-file "$production_env" logs --no-color || true
-            "${production_compose[@]}" --file "$production_override" --env-file "$production_env" down --volumes --remove-orphans || true
-            rm -rf "$temporary_dir"
-            exit "$status"
-          }
-          trap cleanup EXIT
-
-          wait_for() {
-            local description=$1
-            local attempts=$2
-            shift 2
-
-            for ((attempt = 1; attempt <= attempts; attempt++)); do
-              if "$@"; then
-                return 0
-              fi
-              sleep 1
-            done
-
-            echo "Timed out waiting for ${description}" >&2
-            return 1
-          }
-
-          http_redirect_is_ready() {
-            redirect_status=$(curl --silent --output /dev/null --dump-header "$redirect_headers" --write-out '%{http_code}' --header 'Host: localhost' http://127.0.0.1:8080/healthz || true)
-            [[ "$redirect_status" == '308' ]] || return 1
-            tr -d '\r' < "$redirect_headers" | grep --ignore-case --fixed-strings --line-regexp 'location: https://localhost/healthz' >/dev/null
-          }
-
-          forged_host_is_rejected() {
-            forged_http_status=$(curl --silent --output /dev/null --write-out '%{http_code}' --header 'Host: forged.example' http://127.0.0.1:8080/healthz || true)
-            [[ "$forged_http_status" == '421' ]] || return 1
-
-            forged_https_status=$(curl --silent --output /dev/null --write-out '%{http_code}' --cacert "$cert_dir/tls.crt" --header 'Host: forged.example' https://localhost:8443/healthz || true)
-            [[ "$forged_https_status" == '421' ]]
-          }
-
-          forged_sni_is_rejected() {
-            ! curl --silent --show-error --insecure \
-              --resolve forged.example:8443:127.0.0.1 \
-              --header 'Host: localhost' \
-              https://forged.example:8443/healthz >/dev/null 2>&1
-          }
-
-          "${local_compose[@]}" config --quiet
-          "${local_compose[@]}" up --build --detach
-
-          wait_for "local control health endpoint" 60 \
-            curl --fail --silent --show-error http://127.0.0.1:4000/healthz
-          wait_for "daemon service to remain running" 30 \
-            bash -c 'docker compose --project-name "$0" --file compose.yaml ps --status running --services | grep --fixed-strings --line-regexp daemon >/dev/null' "$local_project"
-
-          task_json=$(curl --fail --silent --show-error \
-            --request POST \
-            --header 'Authorization: Bearer development-operator-token' \
-            --header 'Idempotency-Key: compose-smoke-task' \
-            --header 'Content-Type: application/json' \
-            --data '{"work":{"goal":"compose smoke test","agent_profile":"default","workspace":"primary","input":{"mode":"success"}}}' \
-            http://127.0.0.1:4000/api/v1/tasks)
-          task_id=$(jq --exit-status --raw-output '.task_id' <<<"$task_json")
-          test -n "$task_id"
-
-          task_url="http://127.0.0.1:4000/api/v1/tasks/${task_id}"
-          wait_for "fake-agent task ${task_id} to complete" 60 \
-            bash -c 'task=$(curl --fail --silent --show-error --header "Authorization: Bearer development-operator-token" "$0"); jq --exit-status -e '\''.state == "completed"'\'' <<<"$task" >/dev/null' "$task_url"
-
-          cert_dir="$temporary_dir/tls"
-          mkdir -p "$cert_dir"
-          chmod 700 "$cert_dir"
-          openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 1 \
-            -subj '/CN=localhost' \
-            -addext 'subjectAltName=DNS:localhost,IP:127.0.0.1' \
-            -keyout "$cert_dir/tls.key" \
-            -out "$cert_dir/tls.crt" >/dev/null 2>&1
-          chmod 600 "$cert_dir/tls.key"
-
-          database_url='postgresql://symmetry:edge-postgres-password@postgres:5432/symmetry_edge'
-          secret_key_base=$(openssl rand -hex 48)
-          enrollment_token=$(openssl rand -hex 32)
-          operator_token=$(openssl rand -hex 32)
-          cat > "$production_env" <<EOF
-          DATABASE_URL=$database_url
-          SECRET_KEY_BASE=$secret_key_base
-          SYMMETRY_ENROLLMENT_TOKEN=$enrollment_token
-          SYMMETRY_OPERATOR_TOKEN=$operator_token
-          SYMMETRY_TLS_CERT_FILE=$cert_dir/tls.crt
-          SYMMETRY_TLS_KEY_FILE=$cert_dir/tls.key
-          PHX_HOST=localhost
-          EOF
-          chmod 600 "$production_env"
-
-          cat > "$production_override" <<'EOF'
-          services:
-            postgres:
-              image: postgres:18.6-alpine
-              environment:
-                POSTGRES_DB: symmetry_edge
-                POSTGRES_USER: symmetry
-                POSTGRES_PASSWORD: edge-postgres-password
-              healthcheck:
-                test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
-                interval: 5s
-                timeout: 5s
-                retries: 12
-              networks:
-                - database
-            control-migrate:
-              depends_on:
-                postgres:
-                  condition: service_healthy
-          EOF
-
-          required_variables=(
-            DATABASE_URL
-            PHX_HOST
-            SECRET_KEY_BASE
-            SYMMETRY_ENROLLMENT_TOKEN
-            SYMMETRY_OPERATOR_TOKEN
-            SYMMETRY_TLS_CERT_FILE
-            SYMMETRY_TLS_KEY_FILE
-          )
-          for required_variable in "${required_variables[@]}"; do
-            missing_env="$temporary_dir/missing-${required_variable}.env"
-            grep --invert-match --fixed-strings "${required_variable}=" "$production_env" > "$missing_env"
-            if env -u "$required_variable" \
-              "${production_compose[@]}" --env-file "$missing_env" config --quiet >/dev/null 2>&1; then
-              echo "production Compose accepted missing ${required_variable}" >&2
-              exit 1
-            fi
-          done
-
-          "${production_compose[@]}" --env-file "$production_env" config --quiet
-          "${production_compose[@]}" --env-file "$production_env" config --format json > "$rendered_production"
-          if grep --fixed-strings --quiet \
-            -e 'development-enrollment-token' \
-            -e 'development-operator-token' \
-            -e 'development-only-secret-key-base-change-before-production-0123456789' \
-            -e 'symmetry_dev' \
-            "$rendered_production"; then
-            echo 'production Compose rendered a development credential' >&2
-            exit 1
-          fi
-          jq --exit-status '
-            (.services.control.ports // [] | length == 0) and
-            (.services["control-migrate"].ports // [] | length == 0) and
-            (.services.edge.ports | length == 2) and
-            ([.services.edge.ports[] | .target] | sort == [80, 443]) and
-            ([.services.edge.ports[] | .published | tonumber] | sort == [80, 443]) and
-            ([.services.edge.volumes[] | select(.target == "/run/symmetry/tls.crt" or .target == "/run/symmetry/tls.key") | select(.read_only == true)] | length == 2)
-          ' "$rendered_production" >/dev/null
-
-          SYMMETRY_HTTP_PORT=8080 SYMMETRY_HTTPS_PORT=8443 \
-            "${production_compose[@]}" --file "$production_override" --env-file "$production_env" up --build --detach
-          wait_for "production HTTP to HTTPS redirect" 60 http_redirect_is_ready
-          wait_for "production edge to reject forged Host headers" 10 forged_host_is_rejected
-          wait_for "production edge to reject forged TLS SNI" 10 forged_sni_is_rejected
-
-          "${production_compose[@]}" --file "$production_override" --env-file "$production_env" exec --no-TTY edge nginx -T > "$runtime_nginx" 2>&1
-          required_forwarded_headers=(
-            'proxy_set_header Host localhost;'
-            'proxy_set_header Forwarded "";'
-            'proxy_set_header X-Real-IP $remote_addr;'
-            'proxy_set_header X-Forwarded-For $remote_addr;'
-            'proxy_set_header X-Forwarded-Host localhost;'
-            'proxy_set_header X-Forwarded-Port 443;'
-            'proxy_set_header X-Forwarded-Proto https;'
-            'proxy_set_header X-Forwarded-Server localhost;'
-          )
-          for required_header in "${required_forwarded_headers[@]}"; do
-            grep --fixed-strings --quiet -- "$required_header" "$runtime_nginx"
-          done
-
-          wait_for "production HTTPS control health endpoint" 60 \
-            bash -c 'curl --fail --silent --show-error --cacert "$0" --header "Forwarded: proto=http" --header "X-Forwarded-Proto: http" https://localhost:8443/healthz | jq --exit-status -e '\''.status == "ok"'\'' >/dev/null' "$cert_dir/tls.crt"
-
-          machine_token=$(openssl rand -hex 32)
-          enrollment=$(curl --fail --silent --show-error --cacert "$cert_dir/tls.crt" \
-            --request POST \
-            --header "Authorization: Bearer $enrollment_token" \
-            --header 'Idempotency-Key: edge-websocket-enrollment' \
-            --header 'Content-Type: application/json' \
-            --data "{\"machine\":{\"name\":\"edge-websocket-machine\"},\"machine_token\":\"$machine_token\"}" \
-            https://localhost:8443/api/v1/machines)
-          machine_id=$(jq --exit-status --raw-output '.machine_id' <<<"$enrollment")
-          test -n "$machine_id"
-          test "$(jq --raw-output '.machine_token' <<<"$enrollment")" = "$machine_token"
-
-          websocket_headers="$temporary_dir/websocket.headers"
-          websocket_key=$(openssl rand -base64 16)
-          set +e
-          websocket_status=$(curl --silent --show-error --http1.1 --max-time 3 \
-            --output /dev/null --dump-header "$websocket_headers" --write-out '%{http_code}' \
-            --cacert "$cert_dir/tls.crt" \
-            --header 'Connection: Upgrade' \
-            --header 'Upgrade: websocket' \
-            --header 'Origin: https://localhost' \
-            --header 'Sec-WebSocket-Version: 13' \
-            --header "Sec-WebSocket-Key: $websocket_key" \
-            --header "X-Symmetry-Token: $machine_token" \
-            'https://localhost:8443/socket/websocket?vsn=2.0.0')
-          websocket_exit=$?
-          set -e
-          if [[ "$websocket_exit" -ne 0 && "$websocket_exit" -ne 28 ]]; then
-            exit "$websocket_exit"
-          fi
-          test "$websocket_status" = '101'
+        working-directory: ${{ github.workspace }}
+        run: bash scripts/ci/compose-stack-smoke.sh
 
       - name: Run rootless Compose native refusal witnesses
         timeout-minutes: 35
