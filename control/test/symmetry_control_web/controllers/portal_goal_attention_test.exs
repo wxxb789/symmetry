@@ -866,10 +866,11 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
   # An accepted outcome over an admitted work item: the served projection must
   # carry the consumed outcome members (`candidate_subject`, `subject_hash`,
   # `evidence_ids`) for the document gate. The row carries the columns
-  # `Goals.insert_validation_outcome!/13` writes, over a completed producer run
-  # and a bound evidence row; the acceptance pipeline's validate task and its
-  # run are not built here, so `validation_task_id` stays null and the gate
-  # mints the producing result id the writer takes from the producer run.
+  # `SymmetryControl.Goals.ValidationOutcome.insert_validation_outcome!/13`
+  # writes, over a completed producer run and a bound evidence row; the
+  # acceptance pipeline's validate task and its run are not built here, so
+  # `validation_task_id` stays null and the gate mints the producing result id
+  # the writer takes from the producer run.
   defp insert_accepted_outcome!(goal_id, revision, item) do
     subject = item["baseline"]["subject"]
     subject_hash = RequestHash.canonical(subject)
@@ -915,7 +916,8 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
   # A recorded terminal external wait over the item whose completed run reported
   # a blocked-external result: the served projection must carry `state`,
   # `reason`, `external_ref`, `next_check_at` and `check_seq` for the document
-  # gate. The row follows what `Goals.create_external_wait!/8` writes, and the
+  # gate. The row follows what
+  # `SymmetryControl.Goals.Settlement.create_external_wait!/8` writes, and the
   # identity trigger requires exactly this shape (completed task and run, the
   # run's `task_result` equal to the wait's `result`, the item's repository
   # resource in the subject), so the row cannot be invented more loosely. The

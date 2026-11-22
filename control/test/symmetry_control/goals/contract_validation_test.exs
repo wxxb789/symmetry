@@ -133,6 +133,31 @@ defmodule SymmetryControl.Goals.ContractValidationTest do
              ContractValidation.validate_evidence_batch(invalid, opts)
   end
 
+  test "the request schemas describe the fence-stripped evidence, batch and usage documents" do
+    opts = [schema_root: @schema_root]
+    fence = fence_document()
+
+    for {filename, validate} <- [
+          {"evidence.artifact.json", &ContractValidation.validate_evidence/2},
+          {"evidence-batch.basic.json", &ContractValidation.validate_evidence_batch/2},
+          {"usage.nullable.json", &ContractValidation.validate_usage/2}
+        ] do
+      document = fixture(@valid_root, filename)
+
+      assert :ok == validate.(document, opts)
+
+      assert {:error, {:validation_failed, errors}} =
+               validate.(Map.merge(document, fence), opts)
+
+      refusal_paths = additional_property_paths(errors)
+
+      for member <- Map.keys(fence) do
+        assert Enum.any?(refusal_paths, &String.ends_with?(&1, "/#{member}")),
+               "no additionalProperties refusal for #{member} in #{inspect(refusal_paths)}"
+      end
+    end
+  end
+
   test "validates pure decision and GoalRevision semantics after schema validation" do
     opts = [schema_root: @schema_root]
 
@@ -391,6 +416,31 @@ defmodule SymmetryControl.Goals.ContractValidationTest do
     |> File.read!()
     |> Jason.decode!()
   end
+
+  defp fence_document do
+    %{
+      "runtime_id" => "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "runtime_epoch" => 3,
+      "generation" => 2,
+      "claim_id" => "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      "lease_token" => "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+    }
+  end
+
+  defp additional_property_paths(errors) when is_list(errors),
+    do: Enum.flat_map(errors, &additional_property_paths/1)
+
+  defp additional_property_paths(%{
+         error: %{__struct__: ExJsonSchema.Validator.Error.AdditionalProperties},
+         path: path
+       }),
+       do: [path]
+
+  defp additional_property_paths(%{error: %{invalid: branches}}),
+    do: additional_property_paths(branches)
+
+  defp additional_property_paths(%{errors: errors}), do: additional_property_paths(errors)
+  defp additional_property_paths(_other), do: []
 
   defp canonical_plan_proposal(proposal) do
     Map.update!(proposal, "items", fn items ->

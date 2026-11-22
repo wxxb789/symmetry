@@ -52,6 +52,20 @@ unconsumed presentation member remains additive. Consume it as `ChatRead`.
 schema-valid snapshot with its top-level `content_hash` omitted; keys sort
 recursively and arrays retain order.
 
+`evidence.schema.json`, `evidence-batch.schema.json` and `usage.schema.json`
+describe the fence-stripped machine request document, not the HTTP body a daemon
+sends. The daemon flattens the five fence members — `runtime_id`,
+`runtime_epoch`, `generation`, `claim_id` and `lease_token` — beside that
+document at the top level by embedding `protocol.Fence` at the `AppendEvidence`,
+`AppendEvidenceBatch` and `RecordUsage` call sites, and keeps `run_id`
+path-authoritative rather than body-authoritative. Control validates and drops
+exactly those five members in one place, the `DaemonController` fence rule
+(`@fence_spec` / `fenced_body/3`), before `ContractValidation` sees the
+document; the fence members and their stripping are specified and tested at that
+controller boundary. A body that still carries the fence is therefore expected
+to fail these schemas' `additionalProperties: false`, and the document validated
+on its own is the same document Control validates after stripping.
+
 The fixture manifest at `fixtures/manifest.json` is the shared positive and
 negative corpus. It covers the presentation reads as well: workspace rows,
 work detail and timeline bodies with null, active, paginated and
@@ -76,6 +90,37 @@ safe-integer range before `JSON.parse` or Ajv can round them. The `WorkspaceRead
 finite presentation numbers in existing additive metadata; their consumed fields
 still pass the generated schema. UTF-8, duplicate-key and Unicode checks remain
 in force for both policies.
+
+The manifest also carries the raw-byte corpus: rows under `raw/` name a
+`wire_error` class (`duplicate_json_member`, `noncanonical_number`,
+`unsafe_integer`, `negative_zero`, `leading_zero`, `nonfinite_number`,
+`invalid_utf8`, `bom`, `trailing_value`, `trailing_garbage`) plus
+`wire_levels`, the Go control-response decode levels that reject the bytes
+today for a `map[string]any` decode target (`legacy`, `typed`, `schema`); a
+production typed DTO applies its own field decode after the entry and can
+reject the same bytes at levels the tag does not name. The files
+are marked binary in
+`.gitattributes`, so the bytes judged are the bytes committed: duplicate
+members at the top level and nested, fractional, exponent, negative-zero,
+leading-zero and unsafe-integer lexemes, non-finite presentation numbers, an
+invalid UTF-8 byte, a UTF-8 BOM prefix, a trailing second value and trailing
+garbage — each wrapped in a document that satisfies its schema once the raw
+defect is repaired, so only the raw property fails; the readers stop at the
+raw rejection, so this isolation is a property of the fixtures, not a gate
+assertion. The unsafe-integer row is the one exception, because
+`9007199254740992` also exceeds the envelope's `expected_revision` maximum
+once parsed. A row's
+`runtime_divergence` map names a runtime that accepts the bytes
+today (for example the BOM, which the TS reader's UTF-8 `TextDecoder` strips
+before `JSON.parse`, or `-0`); every reader asserts today's behavior instead
+of adding a rejection, and the agreement work
+that remains is recorded in `docs/TODO.md`. Elixir acceptance is measured on
+the decode the row's schema selects (Jason outside the machine-request
+schemas, `StrictJSONDecoder` for them), not on the HTTP ingress: the
+`StrictJSONDecoder` mutation boundary under `/api/v1/**` and `/portal/api/**`
+already rejects the top-level duplicate member of
+`goal-command.raw-duplicate-member-top-level`, while the Jason path the row
+models accepts it.
 
 Not every cross-stack fixture is a wire payload. `fixtures/shell-return-targets.json`
 is a shell-URL acceptance corpus consumed directly by the Control and frontend test
