@@ -133,6 +133,20 @@ with `bash -n` exit 0, `shellcheck --severity=style` 0.11.0 silent, `gofmt -l` e
 `GOOS=linux ... go build`/`go vet` clean on the probe file. The AppArmor branch cannot run on this WSL
 kernel (no userns mediation), so it is exercised only by the hosted-runner run.
 
+### Hosted-runner verification (round 2)
+
+GitHub Actions run `45030128797` on branch `scratch/linux-v2-host-probe` ran this branch's probe at commit
+`67619892b26f758d91cd1fc832d580c9da2ea7de` unchanged on `ubuntu-latest` (Ubuntu 26.04, systemd 259) and
+`ubuntu-24.04`. Both jobs logged `apparmor_userns_exception=per_program` and wrote evidence with
+`status=passed`, `failure_stage` empty, `unified_cgroup_v2_mounted`, `delegated_leaf_probe_passed`,
+`transient_unit_stop_proven`, `cross_uid_peer_probe_passed`, and `peer_transient_unit_stop_proven` all true,
+`cross_uid_capability=fixed-b-child-userns-fdinfo-pidfd-getfd`, and `host_a_pidfd_getfd=passed`.
+
+The scratch branch adds only a workflow file that runs the probe on push (its head,
+`61900f54cd5fc4aea5fd73414e196fa96e785271`, is recorded as the evidence `source_commit`); it is not part of
+this change. Earlier diagnostic runs on the same scratch branch: `45007136962`, `45007333006`,
+`45010498354`, `45027997457`, `45028149850`.
+
 **Production consequence:** the AppArmor restriction is a real host property, not a CI artifact. A
 production Linux v2 owner host with the restriction enabled and an unconfined launcher/gate would fail the
 same way (`unshare(CLONE_NEWUSER)` followed by `drop_to_b`), so `scripts/install-linux-owner.sh` needs its
