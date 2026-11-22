@@ -17,7 +17,7 @@ their revision's coordinates.
 |---|---|---|
 | `daemon/internal/app/goal_admission_tx.go` | new | 1,465 L (`fix2`): transaction object, 67 methods + the constructor + the `deferredCompensation` helper, compensation stack, phases |
 | `daemon/internal/app/goal_admission.go` | `startGoalAdmission` region replaced by the thin entry | 1,593 -> 612 lines; entry at `:249-255` (7 lines); `abandonGoalSession` and everything from `:256` code-identical (checked below) |
-| `daemon/internal/app/goal_admission_tx_test.go` | new | 907 L (`fix2`), 19 seam tests: 2 order/join probes at `abort` level, 13 driven through `tx.run` (fresh cancellation, pre-native write failure, post-handover outcome, whole-launch success, lease-expired process start, refused Pi bridge, native Open failure, attach failure, model-profile refusal, retained resume success, retained Open failure, post-launch cancellation, post-Open lease expiry), 4 unit-level tx seams (queued-attach abort, clone/reuse arm+abort, native-owner handover, launch-phase arm/release); each has a red mutant (§7, §11) |
+| `daemon/internal/app/goal_admission_tx_test.go` | new | 969 L (`fix2`), 20 seam tests: 2 order/join probes at `abort` level, 14 driven through `tx.run` (fresh cancellation, pre-native write failure, post-handover outcome, whole-launch success, lease-expired process start, refused Pi bridge, native Open failure, attach failure, model-profile refusal, retained resume success, retained Open failure, post-launch cancellation, post-Open lease expiry, session-owned provider bridge), 4 unit-level tx seams (queued-attach abort, clone/reuse arm+abort, native-owner handover, launch-phase arm/release); each has a red mutant (§7, §11) |
 | `scripts/ci/omo-control-native-evidence.py` | `SOURCE_PATHS` line only (R9) | +`daemon/internal/app/goal_admission_tx.go` |
 | `docs/design/harness.md` | citation-only (O23) | `goal_admission.go:263` -> `:249` (the delivered entry declaration) |
 | `docs/plans/…-rf-w4-01-goal-admission-tx-plan.md` | new plan + delivered-revision section | |
@@ -487,7 +487,7 @@ Input: `234-opus-review-1.md` (read-only whole-increment review of `ca4927fa`), 
 citations). All four are fixed; none was judged invalid. Every number and gate below is measured on
 the `fix2` tree.
 
-### 11.1 P2-1 — seam matrix completed (7 cases, 19 tests total)
+### 11.1 P2-1 — seam matrix completed (8 cases, 20 tests total)
 
 Each case drives `tx.run` with the shared doubles only (`fakeNativeGoalSession.onOpen`,
 `fakeNativeGoalAdapter.onStart`, `nativeAdmissionControl`) and adds no fake type:
@@ -501,6 +501,7 @@ Each case drives `tx.run` with the shared doubles only (`fakeNativeGoalSession.o
 | 5 | `…SettlesRetainedOpenFailureWithoutDiscardingItsReadyAttach` | retained (resume) + open failure | exact wrapper text (no discard error joined), `close`, ready attach barrier survives, session uncertain, `abort` types `unknown_outcome` |
 | 6 | `…SettlesPostLaunchCancellationBeforeTheTurn` | post-launch cancellation (settled `settlePublishedCancellation`) | `tx.run` returns nil, session closed, no `start_turn`, unready attach discarded, `abort` no-op |
 | 7 | `…SettlesLeaseExpiryAfterTheNativeOpen` | post-Open lease expiry (`settleLeaseExpiredAttachedStart`) | typed `process_failure` with the watchdog reason, `open` + compensation `close`, no `start_turn`, session uncertain (not closed), the settled failure is preserved |
+| 8 | `…HandsTheProviderBridgeToTheNativeOwner` | ownership transfer (Pi provider bridge + open failure) | bridge armed *and* released after the handover, `close`, `abort` sequence exactly `native-start-outcome` (the released bridge entry does not run), error preserved |
 
 Seam-only coverage (`go test -count=1 -coverprofile=… -run '^TestGoalAdmissionTx' ./internal/app/`
 then `go tool cover -func`; `fix2/logs/cover-seam-func.txt`), the review's measure -> `fix2`:
@@ -523,8 +524,8 @@ surface (§10).
 ### 11.2 Red mutants at `fix2`
 
 M1-M15 were rebuilt from the delivered bytes (their recorded replacement recovered by diffing the
-`fix1/mutants/` copies against `ca4927fa`'s file) and re-run; M16-M22 are this round's mutants,
-including the reviewer's mA as M16. Every run is `go test -count=1 -overlay
+`fix1/mutants/` copies against `ca4927fa`'s file) and re-run; M16-M23 are this round's mutants,
+including the reviewer's mA as M16 and the reviewer's mB as M23. Every run is `go test -count=1 -overlay
 fix2/mutants/<name>.json -run <owning test> ./internal/app/` (nothing in the worktree is modified);
 raw outputs `fix2/mutants/<name>.out.txt` and `M*-r2.out.txt`, summary
 `fix2/logs/mutants-r2.txt`.
@@ -538,6 +539,7 @@ raw outputs `fix2/mutants/<name>.out.txt` and `M*-r2.out.txt`, summary
 | M20 | `…SettlesRetainedOpenFailureWithoutDiscardingItsReadyAttach` | discard unconditionally in the Open error branch | `:727: retained Open failure = open native Goal session: retained native Goal session Open refused` / `goal delivery conflicts with pending receipt, want only the open-phase wrapper` |
 | M21 | `…SettlesPostLaunchCancellationBeforeTheTurn` | invert the `isCancelled` guard in `settlePublishedCancellation` | `:777: post-launch cancellation error = open native Goal session: native Goal session Open refused after the cancellation, want the settled cancellation` |
 | M22 | `…SettlesLeaseExpiryAfterTheNativeOpen` | claim `attached = true` in `settleLeaseExpiredAttachedStart` | `:834: post-Open lease expiry Goal session = []state.GoalSessionJournal{{…HarnessKind:"codex"…}}, error = <nil>; want one uncertain launch` |
+| M23 (reviewer mB) | `…HandsTheProviderBridgeToTheNativeOwner` | leave `bridgeCompensation.released = false` after the session takes the bridge | `:890: provider bridge compensation = armed true, released false; want a bridge the session owns` |
 | M1-M14 | as §7 | review-fix-round mutants, rebuilt and re-run on the delivered bytes | §7 rows, all exit 1 (lines +2 from the round-2 import block) |
 | M15 | `…SettlesFreshCancellationWithoutCompensation` call site | review-fix-round masked candidate, re-run | **exit 0 (survivor, expected)**: `ok … 33.603s` (33.603 s = the 19-test overlay run) |
 
@@ -545,7 +547,9 @@ M20 is a store-enforced invariant rather than a tx invariant:
 `state.DiscardUnreadyGoalSessionAttachDelivery` returns `ErrGoalDeliveryConflict` and keeps a
 *ready* delivery, so only the joined error text shows the mutant; the case therefore pins the
 exact wrapper text (`goal delivery conflicts with pending receipt`). M15 remains the one masked
-mutant of the series (§7, §10).
+mutant of the series (§7, §10). M23 is the reviewer's mB, which survived the `fix1` seam set
+because no case had a *returned* session with an armed bridge (the refused-Pi case fails before the
+handover and the Codex fixtures never arm the bridge entry); with case 8 it goes red.
 
 ### 11.3 P3-1 / P3-2 / P3-3
 
@@ -560,8 +564,8 @@ mutant of the series (§7, §10).
 - **P3-2** — the PR body, this record and the plan were regenerated from the delivered bytes:
   `goal_admission_tx.go` 1,465 L with 67 tx methods + constructor + the `deferredCompensation`
   helper (max 19 gocyclo / 42 lines / 29 statements), the entry 7 lines at
-  `goal_admission.go:249-255` (`goal_admission.go` 612 L), `goal_admission_tx_test.go` 907 L / 19
-  tests, 22 named mutants (M1-M22).
+  `goal_admission.go:249-255` (`goal_admission.go` 612 L), `goal_admission_tx_test.go` 969 L / 20
+  tests, 23 named mutants (M1-M23).
 - **P3-3** — `docs/TODO.md`'s rf-w4-19 entry cites `validateConfiguredHarness`
   (`goal_admission_tx.go`) for the `nativeGoalHarnessKind` consumer and the #217 flake entry cites
   `resolveGoalAdapter` (`goal_admission_tx.go`) for the deadline refusal; symbols only, no line
@@ -590,12 +594,12 @@ hunk alone), so the oracle covers the delivered behaviour (§10).
 | build linux | `GOOS=linux go build ./...` (`daemon/`) | no output, exit 0 |
 | build linux/arm64 | `GOOS=linux GOARCH=arm64 go build ./...` (`daemon/`) | no output, exit 0 |
 | build windows | `GOOS=windows go build ./...` (`daemon/`) | no output, exit 0 |
-| seam tests + write-site scan | `go test -count=1 -timeout 10m -v -run '^TestGoalAdmissionTx\|^TestRunLifecycleWritesStayInTheModule$' ./internal/app/` | `ok … 21.733s`, exit 0: 19 seam tests PASS + `TestRunLifecycleWritesStayInTheModule` PASS |
-| full package suite (Windows) | `go test -count=1 -timeout 25m ./internal/app/` (`daemon/`) | `ok github.com/wxxb789/symmetry/daemon/internal/app 339.544s`, exit 0 |
+| seam tests + write-site scan | `go test -count=1 -timeout 10m -v -run '^TestGoalAdmissionTx\|^TestRunLifecycleWritesStayInTheModule$' ./internal/app/` | `ok … 28.218s`, exit 0: 20 seam tests PASS + `TestRunLifecycleWritesStayInTheModule` PASS |
+| full package suite (Windows) | `go test -count=1 -timeout 25m ./internal/app/` (`daemon/`) | `ok github.com/wxxb789/symmetry/daemon/internal/app <SUITE>s`, exit 0 |
 | lint primary | `cd daemon && GOOS=linux golangci-lint run --config .golangci.yml --max-issues-per-linter=0 --max-same-issues=0 ./internal/app/...` (pinned 2.15.0) | exit 1 (findings exist, as at base), **147 rows** with the `fix1` per-linter set (copyloopvar 2, errorlint 6, exhaustive 9, funlen 2, gocritic 22, gocyclo 63, ineffassign 3, nilerr 4, staticcheck 15, unconvert 1, unparam 19, whitespace 1); the normalised per-row diff (message + file, line/column stripped) against `fix1/logs/lint-primary.txt` is **empty**; the only tx-file row is the moved `gocritic ifElseChain` (`goal_admission_tx.go:999`); `fix2/logs/lint-primary-r2.txt` |
 | whitespace | `git diff --check` (working tree and `$BASE...HEAD`) | no output, exit 0 both |
 | record cleanliness | `python scripts/ci/check-record-cleanliness.py --base $(git merge-base HEAD origin/main) --head HEAD` | exit 0 at the pushed head: `1 changed record(s) pass the root-only check` |
 | citation gate (§11) | `python scripts/ci/check-citation-existence.py --base $(git merge-base HEAD origin/main) --head HEAD` | exit 0: `no audited document added or modified …; nothing to check` (the audited corpus is `docs/runbooks/**`, `docs/design/quality.md`, `docs/archive/CLOSED-TODO.md`; §8's row records the same basis) |
 | R9 native-evidence gate | `python scripts/ci/test-omo-control-native-evidence.py` | `Ran 10 tests in 5.901s … OK`, exit 0 |
-| mutant set | `python <HOST-PATH>/…/fix2/mutate2.py` | exit 0: M1-M14 and M16-M22 red on their owning cases, M15 green (documented survivor); `fix2/logs/mutants-r2.txt` |
+| mutant set | `python <HOST-PATH>/…/fix2/mutate2.py` and `…/mutate-m23.py` | exit 0: M1-M14 and M16-M23 red on their owning cases, M15 green (documented survivor); `fix2/logs/mutants-r2.txt` |
 | expected-red gates | as at base: lint exits 1 (pre-existing findings exist); the `-race` gate is conductor-owned (§11.4) and Windows `-race` is refused (`-race requires cgo`, §8) | — |

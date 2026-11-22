@@ -370,7 +370,7 @@ review-fix round edits and the PR #234 review-round-1 fix):
   silent (a dropped parameter would have changed the audited call shapes instead).
 - **File sizes (contract gate "no file > 1,500 L").** `goal_admission.go` 1,593 -> 612 L;
   `goal_admission_tx.go` 1,465 L; `goal_admission_tx_test.go` 319 L (6 tests) at the delivered
-  revision, 12 tests after the review-fix round and 19 tests / 907 L after the review-round-1 fix
+  revision, 12 tests after the review-fix round and 20 tests / 969 L after the review-round-1 fix
   (evidence §1, §7, §11).
 - **Lint (primary/secondary).** Primary merged-config run: base 147 findings -> 147 at the apply
   revision; the `startGoalAdmission` gocyclo 277 row is resolved (`gocyclo` 64 -> 63), base's own
@@ -398,14 +398,14 @@ did not have, and §4/§9 still described a slice-and-loop `abort`), P3-2 (stale
 (`docs/TODO.md` citations pointing at `goal_admission.go` for code now in `goal_admission_tx.go`)
 were all fixed:
 
-- 7 new seam cases (`goal_admission_tx_test.go`, 19 tests total) drive `tx.run` through the
+- 8 new seam cases (`goal_admission_tx_test.go`, 20 tests total) drive `tx.run` through the
   validate, attach and open phase boundaries, a retained (resume) admission, post-launch
-  cancellation and post-Open lease expiry; mutants M16-M22 (plus the reviewer's mA as M16) each go
-  red on their owning case, and M1-M15 were rebuilt from the delivered bytes and re-run (evidence
-  §7, §11).
+  cancellation, post-Open lease expiry and the provider-bridge ownership transfer; mutants M16-M23
+  (the reviewer's mA as M16, mB as M23) each go red on their owning case, and M1-M15 were rebuilt
+  from the delivered bytes and re-run (evidence §7, §11).
 - `abort`'s comment is the 2-line hazard statement only; evidence §4/§9 and the F2 row now describe
   the per-entry deferred calls and record the panic-isolation difference from base as harmless.
 - the PR body numbers, this plan and the evidence record were regenerated from the delivered bytes
-  (1,465 L / 67 methods + constructor / 7-line entry / 907 L / 19 tests / 22 mutants).
+  (1,465 L / 67 methods + constructor / 7-line entry / 969 L / 20 tests / 23 mutants).
 - `docs/TODO.md`'s two entries cite `validateConfiguredHarness` and `resolveGoalAdapter` instead of
   `goal_admission.go` (symbols, no line numbers).

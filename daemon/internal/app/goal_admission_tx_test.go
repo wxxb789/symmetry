@@ -841,6 +841,68 @@ func TestGoalAdmissionTxSettlesLeaseExpiryAfterTheNativeOpen(t *testing.T) {
 	}
 }
 
+func TestGoalAdmissionTxHandsTheProviderBridgeToTheNativeOwner(t *testing.T) {
+	if requiresLinuxV2NativeOwner(harness.KindPi) {
+		t.Skip("Linux Pi admission requires the Linux v2 native owner and a Pi provider-extension share; no shared non-Linux fixture drives that path")
+	}
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	admission.ProviderScope = &protocol.ProviderScope{
+		ResourceIDs: []string{admission.Subject.ResourceID},
+		OperationsByResource: map[string][]protocol.ProviderOperation{
+			admission.Subject.ResourceID: {protocol.ProviderOperationResourceSync},
+		},
+	}
+	capabilities := testVerifiedNativeCapabilities(harness.KindPi)
+	capabilities.ProviderAccess = true
+	app, store, session, controlClient := nativeAdmissionDaemonForHarness(t, admission, validNativeTaskResult(t, admission), nil, harness.KindPi, config.RuntimeHarnessPi, capabilities)
+	t.Cleanup(func() { _ = store.Close() })
+	profile := app.config.AgentProfiles[app.config.Runtime.AgentProfile]
+	profile.ProviderAccess = true
+	app.config.AgentProfiles[app.config.Runtime.AgentProfile] = profile
+	controlClient.providerAccess = &protocol.ProviderAccess{
+		Path:  "/api/v1/provider-actions",
+		Token: "provider-token-do-not-persist",
+		Grants: []protocol.ProviderGrant{{
+			ResourceID: admission.Subject.ResourceID,
+			Provider:   "github",
+			Kind:       "repository",
+			Operations: []string{"resource.sync"},
+		}},
+	}
+	key := state.RunKey{RunID: "run-1", Generation: 1}
+	saveClaimedGoalRun(t, store, key)
+	claim := protocol.ClaimResponse{RunID: key.RunID, Generation: key.Generation, TaskID: "task-1", Work: controlClient.work, ProviderAccess: controlClient.providerAccess}
+	app.running[key] = &runningRun{runLifecycle: runLifecycle{starting: true, claimed: true}}
+	openFailure := errors.New("pi native session Open refused after the provider bridge transfer")
+	session.onOpen = func() error { return openFailure }
+
+	tx := newGoalAdmissionTx(app, key, claim, admission, nil)
+	probe := newGoalAdmissionCompensationProbe(tx)
+	probe.observeDelegate()
+	runErr := tx.run(context.Background())
+	if runErr == nil || !errors.Is(runErr, openFailure) {
+		t.Fatalf("session-owned bridge Open failure = %v, want %v", runErr, openFailure)
+	}
+	if !tx.bridgeCompensation.armed || !tx.bridgeCompensation.released {
+		t.Fatalf("provider bridge compensation = armed %t, released %t; want a bridge the session owns",
+			tx.bridgeCompensation.armed, tx.bridgeCompensation.released)
+	}
+	calls := session.callsSnapshot()
+	if !slices.Contains(calls, "close") {
+		t.Fatalf("session-owned bridge Open failure did not close the native session: %#v", calls)
+	}
+	returnErr := tx.abort(context.Background(), runErr)
+	if want := "native-start-outcome"; probe.sequence() != want {
+		t.Fatalf("session-owned bridge compensation sequence = %q, want only the no-op %q", probe.sequence(), want)
+	}
+	if !errors.Is(returnErr, runErr) || returnErr.Error() != runErr.Error() {
+		t.Fatalf("abort() changed the session-owned bridge failure: %v", returnErr)
+	}
+}
+
 func retainedResumeFixture(t *testing.T) (*daemon, *state.Store, *fakeNativeGoalSession, state.RunKey, protocol.ClaimResponse, protocol.Admission, state.GoalSessionJournal) {
 	t.Helper()
 	controlSessionID := "00000000-0000-4000-8000-000000000090"
