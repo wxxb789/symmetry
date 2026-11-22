@@ -23,7 +23,7 @@ persisted bytes do not change. No production code edit.
 | schemas | `contracts/v1/evidence.schema.json` (4 top-level `oneOf` branches, 13 properties each, each `additionalProperties: false`, plus one nested 2-branch `oneOf` under the observation branch's `validator_profile`), `contracts/v1/evidence-batch.schema.json:6`, `contracts/v1/usage.schema.json:6` |
 | manifest | `contracts/fixtures/manifest.json` — `manifest_version` 1, **248** rows (`jq '.fixtures \| length'`) |
 | valid request fixtures (fence-free) | `valid/evidence.artifact.json` 13 members, `valid/evidence-batch.basic.json` 3, `valid/usage.nullable.json` 14 |
-| existing pins | `daemon/internal/control/goal_client_test.go:105-200` (per-endpoint fence spot fields), `:244-272` (batch spot fields); `control/test/symmetry_control_web/controllers/goal_machine_controller_test.exs:448` and `:477` (batch posts `Map.merge(fence, batch)` → 201; also `:621`/`:632`), `:421` (fence-merged usage → 201); `control/test/symmetry_control/goals/contract_fixture_manifest_test.exs:41` and `contract_validation_test.exs` validate fence-free fixtures |
+| existing pins | `daemon/internal/control/goal_client_test.go:105-200` (per-endpoint fence spot fields), `:244-272` (batch spot fields); `control/test/symmetry_control_web/controllers/goal_machine_controller_test.exs` (controller-test coordinates at HEAD): `:448` created → 201, `:477` replayed → 200, `:661` refused → 400 `invalid_request`, `:672` created → 201 (four batch posts of `Map.merge(fence, batch)`; at `b6c7c383` the last two are `:621`/`:632`), `:421` fence-merged usage → 201; `control/test/symmetry_control/goals/contract_fixture_manifest_test.exs:41` and `contract_validation_test.exs` validate fence-free fixtures |
 | nothing pins the relationship | no test asserts the wire member set, that Control's tolerated top-level extras are exactly the five fence members, or that the fenced body fails the schema by design |
 
 Wire member sets this slice pins (measured in K4's capture, re-derived here from the three call
@@ -42,26 +42,31 @@ paragraph (`:51-53`). It qualifies the file's opening statement that `v1/*.schem
 canonical JSON Schema Draft 7 source for the new control envelopes and operator requests" (`:3-6`).
 Text added (one blank-line-separated paragraph, no other edit in the file):
 
-> `evidence.schema.json`, `evidence-batch.schema.json` and `usage.schema.json` describe the
-> fence-stripped machine request document, not the HTTP body a daemon sends. The daemon flattens the
-> five fence members — `runtime_id`, `runtime_epoch`, `generation`, `claim_id`, `lease_token` — at
-> the top level beside that document by embedding `protocol.Fence` at the `AppendEvidence`,
-> `AppendEvidenceBatch` and `RecordUsage` call sites, and keeps `run_id` path-authoritative. Control
-> validates and drops exactly those five members in one place, the `DaemonController` fence rule
-> (`@fence_spec` / `fenced_body/3`), before `ContractValidation` sees the document; the fence itself
-> and its stripping are specified and tested at that controller boundary. A body that still carries
-> the fence is therefore expected to fail these schemas' `additionalProperties: false`, and a request
-> document validated on its own is the same document Control validates after stripping.
+> `evidence.schema.json`, `evidence-batch.schema.json` and `usage.schema.json`
+> describe the fence-stripped machine request document, not the HTTP body a daemon
+> sends. The daemon flattens the five fence members — `runtime_id`,
+> `runtime_epoch`, `generation`, `claim_id` and `lease_token` — beside that
+> document at the top level by embedding `protocol.Fence` at the `AppendEvidence`,
+> `AppendEvidenceBatch` and `RecordUsage` call sites, and keeps `run_id`
+> path-authoritative rather than body-authoritative. Control validates and drops
+> exactly those five members in one place, the `DaemonController` fence rule
+> (`@fence_spec` / `fenced_body/3`), before `ContractValidation` sees the
+> document; the fence members and their stripping are specified and tested at that
+> controller boundary. A body that still carries the fence is therefore expected
+> to fail these schemas' `additionalProperties: false`, and the document validated
+> on its own is the same document Control validates after stripping.
 
 ## Change 2 — `docs/design/protocol.md`, one qualifying sentence
 
 Appended to the "Contract source and evolution" paragraph, directly after "These are the single wire
 authority, separate from Ecto persistence structs." Sentence added:
 
-> For the fenced machine requests the daemon sends (`evidence`, `evidence-batch`, `usage`), that
-> authority covers the fence-stripped request document: the five-member fence is carried beside it,
-> enforced and stripped by the controller boundary before validation, and the fence itself remains
-> owned by [protocol v1](../protocol-v1.md).
+> For the fenced machine
+> requests the daemon sends (`evidence`, `evidence-batch` and `usage`), that
+> authority covers the fence-stripped request document: the five-member fence is
+> carried beside it, enforced and stripped by the controller boundary before
+> validation, and the fence itself remains owned by
+> [protocol v1](../protocol-v1.md).
 
 No other protocol text changes; the sentence adds no protocol meaning.
 
