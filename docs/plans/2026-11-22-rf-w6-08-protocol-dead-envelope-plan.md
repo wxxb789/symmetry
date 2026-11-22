@@ -69,6 +69,20 @@ each one is dispositioned by this slice.
 | 25 | `ValidateGoalEnvelope` (`:208`) | `goal_contract_fixture_test.go:70`, `goal_contract_semantics_test.go` ×7 (retargeted/dropped), `contracts/README.md:217` (prose citation; rewritten by the fix stage under the conductor's REV-01 owned-set amendment) | deleted |
 | 26 | `ParseSubject` (`goal_subject.go:91`) | `goal_transport_test.go:71` (retargeted) | deleted |
 
+Exported declarations with zero references, deleted under the same two-proof discipline (conductor
+amendment for review round 1, P3-3):
+
+| symbol (file) | references beyond the definition | disposition |
+| --- | --- | --- |
+| `EvidenceBatchSchemaVersion`, `EvidenceBatch` (`goal_evidence_batch.go`) | none in Go; `contracts.*`/TS hold homonyms of `EvidenceBatch` | deleted |
+| `EvidenceReceiptDisposition`, `EvidenceReceiptCreated`, `EvidenceReceiptReplayed`, `EvidenceBatchResponse`, `EvidenceBatchReceiptSet`, `EvidenceBatchReceipt`, `EvidenceBatchConflictDetails`, `EvidenceBatchConflictItem` (`goal_evidence_batch_response.go`) | none in Go; the `control`/`e2e` `EvidenceBatchConflictDetails` is a `*contracts.SymmetryEvidenceBatchConflictDetailsV1` field, the `contracts/ts` exports are other symbols | deleted |
+
+Proof: `git grep -nw` over the whole repository hits only the declaring files, the docs corrected
+by this round, and the homonyms above; `git grep -nE 'protocol\.EvidenceBatch\b'` is empty; `go
+build` and `go vet` pass on windows, linux/amd64 and linux/arm64 before and after the deletion.
+`deadcode` reports functions, not declarations, so these ten never appeared in its output — the
+func-level delta below is unchanged by their removal.
+
 Every non-test reference of the 26 is either inside the defining file or inside a caller this slice
 deletes (rows 1-18, 21-25) — measured: `git grep -nw` finds **0** production callers outside
 `daemon/internal/protocol/` for all 26. Both proofs therefore hold for the whole set, and the
@@ -86,6 +100,10 @@ Two of the contract's file coordinates do not match `e84973a7`:
    to the retarget set (6 references, one case).
 2. **`goal_admission_input_test.go` carries no reference to a deleted symbol** (it exercises the live
    `ParseAdmissionInput`); nothing in it changes. It stays in the owned set unused.
+3. **Review round 1's P3-3 amendment adds the unreferenced exported declarations of the batch
+   family to the owned set** (`EvidenceBatchSchemaVersion`, `EvidenceBatch`, the response DTOs,
+   `EvidenceReceiptDisposition` and its constants); they are deleted here with the two-proof
+   discipline recorded above.
 
 Likewise `daemon/e2e/internal/operator/**` is untouched (grep above), and `goal_validation.go` is
 expected to need no edit: every helper there is reached from a retained validator; the post-deletion
@@ -94,7 +112,8 @@ own row.
 
 ## Resulting API shape (public surface)
 
-Removed from package `protocol` (26 functions): the five envelope decoders/validators
+Removed from package `protocol` (26 functions, and the ten unreferenced exported declarations of
+the batch family recorded above): the five envelope decoders/validators
 (`DecodeGoalRevision`, `ValidateGoalCommand`, `DecodeDecision`, `ValidateGoalCreate`,
 `ValidateGoalEnvelope`), the two normalised-payload parsers (`ParseEvidence`, `ParseUsage`), the
 subject parser (`ParseSubject`), the adapter-capabilities parser (`ParseAdapterCapabilities`), the
@@ -105,8 +124,10 @@ response DTOs), and the six private contract-semantics helpers of `goal_contract
 Retained byte-identically (the contract's live list, re-verified): `TaskResult`, `Receipt`,
 `Evidence`, `Admission`, `ParseAdmission`, `ParseAdmissionInput`, `DecodeContextSnapshot`,
 `validateContextSnapshotPredicateIDs`, `validateProviderChangeTarget`,
-`validateAcceptancePredicateIDs`, `ValidateMicroUSD`, every wire DTO struct of the seven files, and
-every `UnmarshalJSON`/`Validate` method they own (`Admission`, `TaskResult`, `Blocker`, `NextAction`,
+`validateAcceptancePredicateIDs`, `ValidateMicroUSD`, every wire DTO struct the production paths
+consume (the batch response DTOs were deleted in review round 1; the live wire DTOs are
+`contracts.*` and `control.GoalEvidenceBatch*`), and every `UnmarshalJSON`/`Validate` method they
+own (`Admission`, `TaskResult`, `Blocker`, `NextAction`,
 `Diagnostic`, `SourceRef`, `OutputRef`, `ReviewFinding`, `Receipt`, `Evidence`, `Usage`,
 `RuntimeCapabilities`, `RuntimeRegistration`, `Subject`, …). `ValidatePlanProposal` also stays: it is
 live through `TaskResult.Validate` (`goal_results.go:343`) — the contract's plan row never listed it
@@ -193,11 +214,11 @@ the **same** manifest by `control/test/symmetry_control/goals/contract_fixture_m
 | --- | --- | --- | --- |
 | D1 | `TestGoalRevisionContractSemanticsStayAtProtocolBoundary` — 3 operator-fence-accepted cases | deterministic acceptance may include `review` only behind the operator fence — acceptance side | control/TS `validateGoalRevisionSemantics`; the three fixtures stay schema-valid in the manifest suite |
 | D2 | same function — 3 `deterministic-review` rejection cases | deterministic acceptance excludes non-machine predicates | deleted only daemon-side; `ControlValidation.validate_goal_{revision,create,command}` + `contracts/ts/semantics.ts:186` enforce it |
-| D3 | `TestParseEvidenceBatchValidatesBatchIdentityAndItemSemantics` | item `run_id` equals batch `run_id`; one item minimum; ≤256 items | `ContractValidation.validate_evidence_batch` (manifest-pinned); `EvidenceBatchSchemaVersion`/count rules deletable daemon-side |
+| D3 | `TestParseEvidenceBatchValidatesBatchIdentityAndItemSemantics` | item `run_id` equals batch `run_id`; one item minimum; ≤256 items | `ContractValidation.validate_evidence_batch` (manifest-pinned); the batch parser's schema-version/count rules have no live daemon consumer |
 | D4 | `TestParseEvidenceBatchRejectsDuplicateKeysAndIDs` | duplicate `evidence_key`/`evidence_id` within a batch | same |
 | D5 | `TestParseEvidenceBatchRejectsItemRunIDMismatch` | item/batch run identity (mutation row) | same |
 | D6 | `TestParseEvidenceBatchResponseValidatesReceipts` | receipt dispositions `created`/`replayed`, ordered receipts | `validate_evidence_batch_response` (schema-only for `minItems`/disposition); the **request-correlated** live counterpart is `control/validation.go:852 validateGoalEvidenceBatchReceipt` (unchanged, receipt count/run-id/disposition/observed-at vs the submitted evidence) |
-| D7 | `TestParseEvidenceBatchResponseRejectsMismatchedRunAndDuplicateIdentities` — 3 subtests | receipt `run_id` equality; duplicate receipt `id`/`evidence_key` | `run_id` equality: `validate_evidence_batch_response` + the live by-index path `control/validation.go:852`; duplicate `id`/`evidence_key`: **no remaining enforcement** — the response schema carries no `uniqueItems` and the Elixir semantic clause checks only `run_id`; recorded in `docs/TODO.md` |
+| D7 | `TestParseEvidenceBatchResponseRejectsMismatchedRunAndDuplicateIdentities` — 3 subtests | receipt `run_id` equality; duplicate receipt `id`/`evidence_key` | `run_id` equality: `validate_evidence_batch_response_semantics` + the live by-index path `validateGoalEvidenceBatchReceipt`; duplicate `id`/`evidence_key`: rejected transitively on the daemon's only consuming path — `validateGoalEvidenceBatch` rejects duplicate request `evidence_id`/`evidence_key` and `validateGoalEvidenceReceipt` compares each receipt `id`/`evidence_key` per index against that uniqueness-validated request. No producer-side or schema enforcement (the Elixir response clause checks only `run_id`; no `uniqueItems`); recorded in `docs/TODO.md` |
 | D8 | `TestParseEvidenceBatchConflictDetailsValidatesItems` | index `0..255`, fixed `conflict` disposition | `validate_evidence_batch_conflict_details` (schema-only: index bounds, `const conflict`, item count) |
 | D9 | `TestParseEvidenceBatchConflictDetailsRejectsDuplicateIndexesAndKeys` — 2 subtests | duplicate index / duplicate evidence key | **no remaining enforcement** — the conflict-details schema carries no `uniqueItems` and the validator has no semantic clause behind it; recorded in `docs/TODO.md` |
 | D10 | `TestCanonicalizeJSONPlanProposalHashMatchesTheControlPlaneDigest` second half | the daemon recomputes `proposal_hash` with the omitted-`integration` default before admitting an `accept_plan` command | deleted with the validator (`"proposal_hash does not match canonical proposal"`); control/TS `validateGoalCommandSemantics` enforces it; the first half (canonical bytes + Jason digest) stays and keeps its name |
@@ -266,11 +287,13 @@ Order matters on this host: the `deadcode` runs and the test suites never run co
    validators alive behind a test-only shim (forbidden: a deleted symbol with a surviving reference,
    and D5's whole point), or to stop asserting the semantic column for those fixtures (chosen, with
    per-fixture rows and the control-plane manifest test as the retained pin).
-4. **Keep exported constants and DTO structs whose only *function* consumers are deleted**
-   (`EvidenceBatchSchemaVersion`, the batch response DTOs, `EvidenceReceiptDisposition`): they are
-   the wire surface clause 3 protects, and `deadcode` reports functions, not declarations. Private
-   orphaned declarations (`evidenceBatchWire`, the five response wire types, `evidenceBatchMaxItems`)
-   are deleted with their functions, applied only where grep shows zero remaining references.
+4. **Delete the unreferenced exported declarations too** (`EvidenceBatchSchemaVersion`,
+   `EvidenceBatch`, the batch response DTOs, `EvidenceReceiptDisposition`; review round 1's P3-3
+   amendment): the "wire surface" rationale was wrong — the live wire DTOs are `contracts.*` and
+   `control.GoalEvidenceBatch*` — and `deadcode` reports functions, not declarations, so the
+   program's gate could never surface them. Private orphaned declarations (`evidenceBatchWire`, the
+   five response wire types, `evidenceBatchMaxItems`) were deleted with their functions in the
+   implement stage, each only where grep showed zero remaining references.
 5. **No new tests.** A deletion has no new behaviour to pin; the retargeted cases are the pins, and
    the mutation runs are the proof that they still catch their guards.
 6. **`goal_subject_test.go` added to the retarget set** (contract enumeration gap, §"Owned-set
@@ -320,8 +343,9 @@ Order matters on this host: the `deadcode` runs and the test suites never run co
 
 - `deadcode` delta, measured after the change: windows/amd64 118 → 92, linux/amd64 227 → 201,
   linux/arm64 179 → 153 — exactly the 26 rows of §2 and nothing else (`diff` of the before/after
-  outputs: 26 removed findings, 0 added, on both GOOS). The fixpoint produced no newly dead helper,
-  so `goal_validation.go` needed no edit.
+  outputs: 26 removed findings, 0 added, on both GOOS; the ten unreferenced declarations review
+  round 1 deleted are invisible to the function-level tool, which is why the counts are unchanged).
+  The fixpoint produced no newly dead helper, so `goal_validation.go` needed no edit.
 - Retargeted surfaces: the 248-fixture dispatch plus every retargeted case is green at HEAD and was
   run green against the pre-deletion bytes (five packages); 7 retargeted-case mutants and 12
   dropped-rule mutants reddened the named cases, with Dm7 measured in both trees (live-path rows red,
@@ -332,14 +356,23 @@ Order matters on this host: the `deadcode` runs and the test suites never run co
 - Gates: `gofmt -l .` clean, `go vet ./...` 0, the four builds 0, the foreground package gate 0
   (13 packages `ok` at the implement run, 14 at the apply-stage re-run — `harness/linejson`),
   WSL `./internal/state/ ./internal/workspace/` ok, `git diff --check` clean, deleted-name grep
-  clean, no live caller lost. LOC delta −935 net (report-only).
+  clean, no live caller lost. LOC delta −935 net (report-only) at the fix stage; −993 at the
+  review-round-1 head (§: evidence §13).
 - `goal_subject_test.go` joined the retarget set as the contract-enumeration correction predicted;
   `goal_admission_input_test.go` needed no edit; `protocol.go` stayed unedited and left the owned set.
 - Fix round (2026-11-22, review REV-01..REV-06): the `contracts/README.md` sentence was rewritten to
-  the retained production entry points (conductor-owned-set amendment); the D7/D9 drop rows now
-  record that the duplicate receipt-id/evidence_key and conflict index/evidence_key rules have no
-  remaining enforcement, with the new `docs/TODO.md` entry (owner: contracts strictness (A6)); the
-  D6/D8 "+ TS" attribution was dropped; `protocol.go`'s 649 L baseline and the D11 row count are
-  restated; the frontend pin coordinate is `goal-attention.test.tsx:1238`; the residual-risk record
-  above holds. Gate re-run and fix-stage delta in
-  `docs/evidence/rf-w6-08-protocol-dead-envelope-2026-11-22.md` §12.
+  the retained production entry points (conductor-owned-set amendment); the D7/D9 drop rows recorded
+  the duplicate-identity rules as unenforced (review round 1 corrected D7's half of that: duplicate
+  receipt `id`/`evidence_key` are rejected transitively on the daemon's only consuming path, and the
+  residual gap is producer-side/schema/TS response semantics and conflict-details; `docs/TODO.md`
+  carries the entry, owner: contracts strictness (A6)); the D6/D8 "+ TS" attribution was dropped;
+  `protocol.go`'s 649 L baseline and the D11 row count are restated; the frontend pin coordinate is
+  `goal-attention.test.tsx:1238`; the residual-risk record above holds. Gate re-run and fix-stage
+  delta in `docs/evidence/rf-w6-08-protocol-dead-envelope-2026-11-22.md` §12.
+- Review round 1 (2026-11-22, opus review P3-1..P3-4): the D7/§12/`docs/TODO.md` duplicate-receipt
+  wording now states the transitive rejection and the narrower producer-side gap (P3-1); the
+  `contracts/README.md` boundary sentence names the retained daemon entry points including
+  `ValidatePlanProposal` and points cross-field validation at Control/TS (P3-2); the ten
+  unreferenced exported declarations of the batch family were deleted under the P3-3 amendment
+  (§2); §10's LOC figures were re-measured against `origin/main` (P3-4). Gates and measurements in
+  `docs/evidence/rf-w6-08-protocol-dead-envelope-2026-11-22.md` §13.

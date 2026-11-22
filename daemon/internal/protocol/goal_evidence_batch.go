@@ -6,17 +6,6 @@ import (
 	"fmt"
 )
 
-const EvidenceBatchSchemaVersion = "symmetry.evidence_batch.v1"
-
-// EvidenceBatch is the machine-only batch transport for normalized evidence.
-// Each item remains a complete symmetry.evidence.v1 envelope; the batch adds
-// only the shared run identity and bounded ordered delivery.
-type EvidenceBatch struct {
-	SchemaVersion string     `json:"schema_version"`
-	RunID         string     `json:"run_id"`
-	Items         []Evidence `json:"items"`
-}
-
 // RejectDuplicateJSONMembers rejects duplicate keys at any depth before any Go
 // object decoder can apply its last-wins behavior.
 func RejectDuplicateJSONMembers(data []byte) error {

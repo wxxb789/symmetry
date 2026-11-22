@@ -114,12 +114,19 @@ references by `git grep`): `evidenceBatchWire`, `evidenceBatchMaxItems`,
 `evidenceBatchConflictDetailsWire`, `evidenceBatchConflictItemWire`. Dead imports removed:
 `contractdto` (batch, batch response), `crypto/sha256` (contract semantics).
 
-Retained on purpose (recorded, not residue to hide): `EvidenceBatchSchemaVersion`, the batch
-response DTO structs and `EvidenceReceiptDisposition` with its constants. They are the exported wire
-surface clause 3 freezes; `deadcode` reports functions, not declarations, and the owned-set rule is
-"the func and its now-orphaned private helpers, nothing else". `EvidenceBatchSchemaVersion` now has
-no in-tree consumer — a future consumer of the retained `EvidenceBatch` DTO is the caller the
-contract's D5 anticipates.
+Deleted exported declarations with zero remaining references (conductor amendment for review
+round 1, P3-3): `EvidenceBatchSchemaVersion` and `EvidenceBatch` (`goal_evidence_batch.go`), and
+`EvidenceReceiptDisposition` with its constants `EvidenceReceiptCreated`/`EvidenceReceiptReplayed`,
+`EvidenceBatchResponse`, `EvidenceBatchReceiptSet`, `EvidenceBatchReceipt`,
+`EvidenceBatchConflictDetails` and `EvidenceBatchConflictItem` (`goal_evidence_batch_response.go`,
+deleted whole). Zero-reference proof before deletion: `git grep -nw` over the whole repository hits
+only the declaring files, the docs corrected here, and homonyms — the TS exports and
+`contracts.EvidenceBatch*` generated DTOs, and the `EvidenceBatchConflictDetails` field in
+`control`/`e2e` whose type is `*contracts.SymmetryEvidenceBatchConflictDetailsV1`; the qualified
+grep for `protocol.EvidenceBatch` is empty. `go build` and `go vet` on windows, linux/amd64 and
+linux/arm64 pass unchanged, and `deadcode` reports functions, not declarations, so these
+declarations never appeared in its output. The live wire DTOs are `contracts.*` and
+`control.GoalEvidenceBatch*`.
 
 ## 5. Base→HEAD audit per deleted function (conductor decision, lesson 32)
 
@@ -136,7 +143,7 @@ contract's D5 anticipates.
 | `ParseAdapterCapabilities` | `ValidateGoalEnvelope`, tests | adapter-capabilities schema + `RuntimeCapabilities.Validate` (adapter cross-field checks) | `RuntimeCapabilities.UnmarshalJSON` (retained, cmd-reachable: the registration decode path, `protocol.go:191`) | as above |
 | `ParseSubject` | tests only | `Subject.UnmarshalJSON` (strict object, required `resource_id`/`commit`/`tree_digest`, `Validate`) | `Subject.UnmarshalJSON` itself | the case calls the retained decoder |
 | `ParseEvidenceBatch` | `ValidateGoalEnvelope`, tests | duplicate-member scan + batch schema + item run-identity/duplicate rules | `RejectDuplicateJSONMembers` (retained, production-used by `ParseAdmissionInput` and `control/validation.go`) for the duplicate-member rule only; the identity rules had no production caller | duplicate-member case retargeted; identity rules dropped with rows (§7 D3-D5) |
-| `ParseEvidenceBatchResponse`, `ParseEvidenceBatchConflictDetails` and the eight DTO methods | `ValidateGoalEnvelope`, tests | response/conflict schemas + receipt run-id/duplicate rules, index bounds, fixed `conflict` disposition | none; the request-correlated live counterpart is `control/validation.go:852 validateGoalEvidenceBatchReceipt` (receipt count, run-id vs path, disposition, observed_at, per-receipt identity against the submitted evidence) — unchanged | rules dropped with rows (§7 D6-D9) |
+| `ParseEvidenceBatchResponse`, `ParseEvidenceBatchConflictDetails` and the eight DTO methods | `ValidateGoalEnvelope`, tests | response/conflict schemas + receipt run-id/duplicate rules, index bounds, fixed `conflict` disposition | no daemon-side response-envelope validator; the request-correlated live counterpart `validateGoalEvidenceBatchReceipt` (receipt count, run-id vs path, disposition, observed_at, per-receipt identity against the submitted evidence) rejects duplicate receipt `id`/`evidence_key` transitively against the uniqueness-validated request — unchanged | rules dropped with rows (§7 D6-D9); the conflict-details duplicate rules have no remaining equivalent |
 
 No deleted function had a caller that silently takes another path afterwards: every non-test caller
 was inside this slice's deleted set, and the build plus the `deadcode` re-run confirm it.
@@ -202,7 +209,7 @@ Each row: base assertion → HEAD equivalent → why the wire property stays cov
 | D4 | `TestParseEvidenceBatchRejectsDuplicateKeysAndIDs` | duplicate `evidence_key`/`evidence_id` within a batch | as D3 | Dm2 |
 | D5 | `TestParseEvidenceBatchRejectsItemRunIDMismatch` | item/batch run identity | as D3 | Dm2 |
 | D6 | `TestParseEvidenceBatchResponseValidatesReceipts` | ≥1 receipt, `created`/`replayed` dispositions, ordered receipts | `validate_evidence_batch_response/2` (manifest-pinned; the response schema pins `minItems` and the disposition enum); request-correlated live path `control/validation.go:852` (unchanged) | Dm3 |
-| D7 | `TestParseEvidenceBatchResponseRejectsMismatchedRunAndDuplicateIdentities` — 3 subtests | receipt `run_id` equality, duplicate receipt `id`/`evidence_key` | receipt `run_id` equality: `validate_evidence_batch_response/2` (`contract_validation.ex:565`) and the live by-index path `control/validation.go:852`; duplicate receipt `id`/`evidence_key`: **no remaining enforcement** — the response schema carries no `uniqueItems` (which would express whole-item, not per-field, uniqueness) and no validator on any plane checks the duplicates; recorded in `docs/TODO.md` | Dm3 |
+| D7 | `TestParseEvidenceBatchResponseRejectsMismatchedRunAndDuplicateIdentities` — 3 subtests | receipt `run_id` equality, duplicate receipt `id`/`evidence_key` | receipt `run_id` equality: `validate_evidence_batch_response_semantics` (Elixir) and the live by-index path `validateGoalEvidenceBatchReceipt`; duplicate receipt `id`/`evidence_key`: rejected transitively on the daemon's only consuming path — `validateGoalEvidenceBatch` rejects duplicate request `evidence_id`/`evidence_key` (its `seenIDs`/`seenKeys` maps) and `validateGoalEvidenceReceipt` compares each receipt `id`/`evidence_key` per index against that uniqueness-validated request, so a duplicate can only match a request the daemon refuses. No producer-side or schema enforcement (the Elixir response clause checks only `run_id`; no `uniqueItems` in the response schema); recorded in `docs/TODO.md` | Dm3 |
 | D8 | `TestParseEvidenceBatchConflictDetailsValidatesItems` | index `0..255`, fixed `conflict` disposition | `validate_evidence_batch_conflict_details/2` (schema-only, manifest-pinned: index bounds, `const conflict`, item count) | Dm4 |
 | D9 | `TestParseEvidenceBatchConflictDetailsRejectsDuplicateIndexesAndKeys` — 2 subtests | duplicate index / duplicate evidence_key | **no remaining enforcement** — the conflict-details schema carries no `uniqueItems` and has no semantic clause behind it (`validate_semantics/2` falls through to `:ok`), and no validator on any plane checks the duplicates; recorded in `docs/TODO.md` | Dm4 |
 | D10 | `TestCanonicalizeJSONPlanProposalHashMatchesTheControlPlaneDigest` — second half | the daemon recomputed `proposal_hash` with the `normalizePlanProposal` default before admitting an `accept_plan` command | deleted with `validateGoalCommandPredicateIDs`; TS `validateGoalCommandSemantics` + `validate_goal_command/2` enforce it; the first half (canonical bytes + Jason digest) stays | Dm5 |
@@ -300,17 +307,20 @@ Retarget equivalence: the retargeted suite was also run unmodified against the p
 
 ## 10. LOC delta (report-only, D2) and residual risks
 
-`git diff --shortstat 4fdea989 -- daemon` (re-measured by the apply stage at the delivered tree):
-19 files changed, 88 insertions(+), 1023 deletions(-) — net **−935**. Per file (`git diff --numstat
-4fdea989 -- daemon`): `goal_evidence_batch_response.go` 0/216, `goal_evidence_batch_response_test.go`
-0/169, `goal_schema.go` 0/148, `goal_contract_semantics.go` 2/150 (0/148 at the deletion; the apply
-stage's finding-3 comment rewrite replaces two lines), `goal_evidence_batch_test.go` 1/83,
-`goal_evidence_batch.go` 3/78 (0/74 at the deletion; the finding-2 comment rewrite drops one line),
-`goal_contract_semantics_test.go` 5/56, `goal_subject_test.go` 2/30, `goal_results.go` 0/20,
-`goal_admission.go` 0/12, `goal_subject.go` 0/9, `goal_transport_test.go` 33/33 (oracle swaps),
-`goal_contract_fixture_test.go` 26/3 (24/3 at the deletion; the finding-1 restored arm adds a case),
-and the six cross-package fixture builders 2-4 lines each on both sides. The contract's −400..−900
-estimate was report-only (D2); the measured net delta is −935.
+`git diff --shortstat origin/main...HEAD -- daemon` (re-measured at the review-round-1 fix head):
+19 files changed, 88 insertions(+), 1081 deletions(-) — net **−993**. Per file (`git diff --numstat
+origin/main...HEAD -- daemon`): `goal_evidence_batch_response.go` 0/263 (deleted whole by the
+review-round-1 fix), `goal_evidence_batch_response_test.go` 0/169, `goal_schema.go` 0/148,
+`goal_contract_semantics.go` 2/150 (0/148 at the deletion; the apply stage's finding-3 comment
+rewrite replaces two lines), `goal_evidence_batch_test.go` 1/83, `goal_evidence_batch.go` 2/88
+(0/74 at the deletion; the fix stages' comment rewrites and the review-round-1 declaration
+deletion), `goal_contract_semantics_test.go` 5/56, `goal_subject_test.go` 3/31, `goal_results.go`
+0/20, `goal_admission.go` 0/12, `goal_subject.go` 0/9, `goal_transport_test.go` 33/33 (oracle
+swaps), `goal_contract_fixture_test.go` 26/3 (24/3 at the deletion; the finding-1 restored arm adds
+a case), and the six cross-package fixture builders 2-4 lines each on both sides. The contract's
+−400..−900 estimate was report-only (D2); the measured net delta is −993, of which the
+review-round-1 deletion contributes 57 deleted lines (10 in `goal_evidence_batch.go`, 47 in
+`goal_evidence_batch_response.go`).
 
 Residual risks and known limits:
 
@@ -329,8 +339,8 @@ Residual risks and known limits:
 - `TestParseEvidenceBatchRejectsDuplicateJSONObjectMembers` keeps the name of the parser it was
   named after (the contract forbids test-name changes); its body now calls
   `RejectDuplicateJSONMembers`.
-- `EvidenceBatchSchemaVersion` has no in-tree consumer; it is kept as part of the retained wire DTO
-  surface (§4).
+- `EvidenceBatchSchemaVersion` and the batch response DTOs had no in-tree consumer; the
+  review-round-1 fix deleted them with the zero-reference proof in §4.
 - `deadcode` reachability is RTA from `./cmd/...` with the tool's documented caveats (no
   `//go:linkname` aliasing, one GOOS/GOARCH per run, generated files excluded); the whole-repo grep
   and the `-test ./...` classification leg are the independent second strategy.
@@ -356,7 +366,7 @@ foreground, one heavy job at a time; from `daemon/` unless noted.
 | `git diff --check` | 0 | clean |
 | DLP probe (added lines, profile-path pattern and backslash-u pattern) | n/a | 0 host-path hits; 0 backslash-u hits |
 | Dm7 and Dm12 mutants re-measured on the retargeted tree (§9) | 1 each | the restored `plan-proposal` rows are red (3 named rows per mutant) |
-| LOC (`git diff --shortstat 4fdea989 -- daemon`) | n/a | 19 files, 88 insertions(+), 1023 deletions(-), net −935 (§10) |
+| LOC (`git diff --shortstat 4fdea989 -- daemon`, measured at the fix stage) | n/a | 19 files, 88 insertions(+), 1023 deletions(-), net −935; superseded by review round 1 (§10, §13) |
 
 The implement gate recorded 13 packages `ok`; the package set now has 14 because `harness/linejson`
 (#222, `4fdea989`) is part of the run.
@@ -388,13 +398,18 @@ What the fix round changed:
 
 - REV-01 (P2): `contracts/README.md`'s boundary sentence named the deleted `protocol.ValidateGoalEnvelope`;
   under the conductor's owned-set amendment it now names the retained production entry points
-  (`ParseAdmissionInput`, `ParseTaskResult`, `ValidateTaskResultForAdmission`, `DecodeContextSnapshot`).
+  (`ParseAdmissionInput`, `ParseTaskResult`, `ValidateTaskResultForAdmission`, `DecodeContextSnapshot`;
+  review round 1 extended the sentence with `ValidatePlanProposal`, the strict `Evidence`/`Usage`/
+  `RuntimeCapabilities` decoders and the Control/TS semantics side — §13).
   No doc citation of a deleted symbol dangles in the delivered tree except the `CLOSED-TODO.md:3640`
   closure, a historical record this revision does not touch.
-- REV-02 (P2): the D7/D9 rows above now state the truth — the duplicate receipt-id/`evidence_key` and
-  conflict index/`evidence_key` rules were not on a production path and have no remaining equivalent;
-  the phantom `validate_evidence_batch_receipt_set` name is gone, and `docs/TODO.md` carries the
-  uniqueness-enforcement entry (owner: contracts strictness (A6)).
+- REV-02 (P2, corrected in review round 1): the D7/D9 rows now state the truth — duplicate receipt
+  `id`/`evidence_key` are rejected transitively on the daemon's only consuming path
+  (`validateGoalEvidenceBatch`'s request-side uniqueness plus `validateGoalEvidenceReceipt`'s
+  per-index identity), so the residual gap is producer-side/schema/TS response semantics and
+  conflict-details; the conflict index/`evidence_key` rules have no remaining equivalent. The
+  phantom `validate_evidence_batch_receipt_set` name is gone, and `docs/TODO.md` carries the
+  residual-enforcement entry (owner: contracts strictness (A6)).
 - REV-03 (P3): the D6/D8 rows no longer attribute their equivalent to TS (`contracts/ts/semantics.ts`
   holds no response or conflict-details validator; the schemas and the Elixir manifest test pin them).
 - REV-04 (P3): the plan's `protocol.go` coordinate is 649 L at the re-derivation baseline (`719` was
@@ -407,4 +422,43 @@ What the fix round changed:
 
 The residual-risk records in this file and in the plan were updated to match. Fix-stage delta
 (`git diff --shortstat`, the reported source): 5 files, 128 insertions(+), 43 deletions(-) — three
-documents, this evidence file, and the one test comment.
+documents, this evidence file, and the one test comment. The review-round-1 fix supersedes that
+delta; its measurements are in §13.
+
+## 13. Review-round-1 fix re-verification (2026-11-22; opus review P3-1..P3-4)
+
+All four review findings were fixed. P3-1: the D7 rows (plan + evidence), the §12 REV-02 bullet and
+the `docs/TODO.md` entry now record that duplicate receipt `id`/`evidence_key` are rejected
+transitively on the daemon's only consuming path — `validateGoalEvidenceBatch`'s request-side
+uniqueness plus `validateGoalEvidenceReceipt`'s per-index identity against that uniqueness-validated
+request — and scope the residual gap to producer-side/schema/TS response semantics and
+conflict-details; D9 keeps "no remaining enforcement" because it remains true there. P3-2:
+`contracts/README.md`'s boundary sentence no longer claims the daemon owns full cross-field
+validation of the deleted envelopes; it names the retained daemon entry points
+(`ParseAdmissionInput`, `ParseTaskResult`, `ValidateTaskResultForAdmission`,
+`DecodeContextSnapshot`, `ValidatePlanProposal`, the strict `Evidence`/`Usage`/`RuntimeCapabilities`
+decoders) and the Control/TS semantics side. P3-3: the ten unreferenced exported declarations were
+deleted (§4). P3-4: §10's LOC figures were re-measured against `origin/main`; §12's older
+measurements are marked superseded. No wire, persisted or error-text change; no test added,
+renamed or weakened. All commands foreground, from `daemon/` unless noted.
+
+| gate | exit | output |
+| --- | --- | --- |
+| zero-reference proof before deletion (`git grep -nw` over the whole repository, ten names) | n/a | hits only in the declaring files, the docs corrected here, and the homonyms recorded in §4; `git grep -nE 'protocol\.EvidenceBatch\b'` → 0 |
+| `gofmt -l .` before and after | 0 | no files listed |
+| `go build ./...` (windows/amd64), `GOOS=windows go build ./...`, `GOOS=linux GOARCH=amd64 go build ./...`, `GOOS=linux GOARCH=arm64 go build ./...` before and after | 0 each | |
+| `go vet ./...` windows/amd64 and `GOOS=linux GOARCH=amd64 go vet ./...` before and after | 0 each | no output |
+| `GOOS=linux GOARCH=arm64 go vet ./...` before and after | 1 | one pre-existing failure: `internal/state/linux_clone_journal_test.go` calls the unexported `LinuxCloneCleanupReader.verify`, defined only in the amd64-gated `linux_clone_cleanup_reader_linux_amd64.go`; both files are unchanged in the failing region (the branch edits the test file only at its evidence-builder retarget, ~`:1307`), so `origin/main` fails identically |
+| `GOOS=linux GOARCH=arm64 go vet ./internal/protocol/ ./internal/control/ ./internal/app/` after | 0 | no output |
+| `deadcode ./cmd/...` windows/amd64, `GOOS=linux GOARCH=amd64`, `GOOS=linux GOARCH=arm64` (the pinned tool on PATH) before → after | 0 each | 92 / 201 / 153 → 92 / 201 / 153; the deleted declarations are invisible to the function-level tool |
+| `go test -count=1 ./internal/protocol/ ./internal/control/ ./internal/app/ ./internal/state/ ./internal/workspace/` | 0 | `ok protocol 1.376s`, `ok control 1.270s`, `ok app 231.510s`, `ok state 7.977s`, `ok workspace 200.960s` |
+| deleted-name grep after deletion (ten names, whole repository) | n/a | no Go reference remains; only the docs corrected here and the homonyms above |
+| `git diff --check` (HEAD↔worktree and merge-base↔worktree) | 0 | clean |
+| DLP probe (added lines: profile-path pattern, backslash-u pattern) | n/a | 0 host-path hits; 0 backslash-u hits |
+| `python scripts/ci/model-routing-record-sanitize.py --check --root-only` on this file | 0 | clean |
+| `git diff --numstat origin/main...HEAD -- daemon` at the final head | n/a | §10 (19 files, 88/1081, net −993) |
+
+Not re-run this round: the WSL linux-only suites (`internal/state`, `internal/workspace`) and the
+slow-oracle/race jobs — the round deletes unreferenced declarations, and the linux/amd64 and
+linux/arm64 compile-level gates above are green apart from the pre-existing arm64 `internal/state`
+vet failure.
