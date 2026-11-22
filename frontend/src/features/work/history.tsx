@@ -2,6 +2,7 @@ import { useInfiniteQuery } from "@tanstack/react-query";
 import { useRouteContext } from "@tanstack/react-router";
 import { UnexpectedResponse, type TimelineItem } from "../../services/api";
 import { workTimelineOptions } from "../../app/application";
+import { workItemReadKey, workItemTimelineReadKey } from "../../app/read-cache";
 import { useControlSurface } from "./control";
 import { timelineItemKey, timelineItemView, timestamp } from "./presentation";
 
@@ -39,8 +40,8 @@ export function WorkHistory({ workItemId, firstPage, cursor }: { workItemId: str
               // The served boundary aged out (cursor max age): a fresh detail read
               // re-issues it, and the disabled timeline query restarts from the
               // newly served cursor through its query key.
-              void application.queryClient.resetQueries({ queryKey: ["work-item-timeline", { workItemId }] });
-              void application.queryClient.invalidateQueries({ queryKey: ["work-item", { workItemId }] });
+              void application.queryClient.resetQueries({ queryKey: workItemTimelineReadKey(workItemId) });
+              void application.queryClient.invalidateQueries({ queryKey: workItemReadKey(workItemId) });
               return;
             }
             void query.refetch().then((result) => { surface.retainTimelinePages(result.data); });

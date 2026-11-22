@@ -3,6 +3,7 @@ import { useParams, useRouteContext } from "@tanstack/react-router";
 import { AlertCircle, CircleCheck, Inbox, ScrollText, ShieldAlert } from "lucide-react";
 import { useRef, useState } from "react";
 import { goalEventsOptions, goalOptions, sessionOptions, workspaceOptions } from "../../app/application";
+import { attentionReadKey, goalEventsCatchUpReadKey, goalEventsReadKey, goalReadKey } from "../../app/read-cache";
 import { useRealtimeEpoch } from "../../app/realtime";
 import { StatusBadge } from "../../components/primitives";
 import { EmptyState, ErrorState, LoadingState, PageHeading, RefreshButton } from "../../components/workspace";
@@ -147,11 +148,11 @@ export function GoalDetailPage() {
       // command's own commit, so the next command's envelope carries the
       // version the server has actually written.
       const acknowledged = query.data;
-      await queryClient.invalidateQueries({ queryKey: ["goal", { goalId }] });
+      await queryClient.invalidateQueries({ queryKey: goalReadKey(goalId) });
       await settleGoalRead(acknowledged);
       setNotice(`${actionLabel(variables.kind)} accepted by the server.`);
-      void queryClient.invalidateQueries({ queryKey: ["goal-events", { goalId }] });
-      void queryClient.invalidateQueries({ queryKey: ["attention"] });
+      void queryClient.invalidateQueries({ queryKey: goalEventsReadKey(goalId) });
+      void queryClient.invalidateQueries({ queryKey: attentionReadKey() });
     },
     onError: (error: unknown) => {
       setNotice(null);
@@ -204,11 +205,11 @@ export function GoalDetailPage() {
       // Same ordering as the generic command: the notice is the page's statement
       // that the served goal now reflects this command.
       const acknowledged = query.data;
-      await queryClient.invalidateQueries({ queryKey: ["goal", { goalId }] });
+      await queryClient.invalidateQueries({ queryKey: goalReadKey(goalId) });
       await settleGoalRead(acknowledged);
       setNotice("The server admitted the plan.");
-      void queryClient.invalidateQueries({ queryKey: ["goal-events", { goalId }] });
-      void queryClient.invalidateQueries({ queryKey: ["attention"] });
+      void queryClient.invalidateQueries({ queryKey: goalEventsReadKey(goalId) });
+      void queryClient.invalidateQueries({ queryKey: attentionReadKey() });
     },
     onError: (error: unknown) => {
       setNotice(null);
@@ -727,7 +728,7 @@ function Receipts({ goalId }: { goalId: string }) {
   const epoch = useRealtimeEpoch();
   const tail = entries.at(-1)?.sequence ?? 0;
   const continuation = useQuery({
-    queryKey: ["goal-events-catch-up", { goalId, epoch }],
+    queryKey: goalEventsCatchUpReadKey(goalId, epoch),
     queryFn: ({ signal }) => application.api.goalEvents(goalId, tail, signal),
     enabled: epoch > 0 && nextAfter === null && tail > 0,
   });
