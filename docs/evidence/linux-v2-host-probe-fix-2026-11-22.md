@@ -239,6 +239,27 @@ scratch workflow file only (`git diff --stat d79c477d 9087178b` lists just
 hosted verification of the AppArmor per-program exception branch and the tightened B-capability assertions
 on both restricted hosted kernels.
 
+## Round 4 (2026-11-22): keep the probe's real failure stage in every early exit and pin the stop-proof guards
+
+- The Go peer probe prints `cgroup_path=` once in its no-argument `main`, before the sudo root prep helper
+  and therefore before the prepared probe's `kernel-version`, `runner-is-root`, and host-prerequisite checks;
+  `runProbe` no longer prints it. A prep-stage failure now keeps the peer phase's real `failure_stage`
+  instead of `transient_unit_cleanup` (WSL root-runner reproduction: the peer log carries the path,
+  `failure_stage=cross_uid_userns_fdinfo_pidfd_getfd`, `peer_transient_unit_stop_proven=true`).
+- `cleanup()` records a failed AppArmor unload as `failure_stage=apparmor_userns_exception_unload` when the
+  stage would otherwise remain the success sentinel `complete`; an earlier real stage is not replaced
+  (`cleanup_failed=1` still turns `status` into `failed`).
+- `scripts/ci/test-linux-v2-host-prerequisite-probe.py` adds four cases (a loaded `active` unit and a
+  `deactivating` unit with `MainPID=0`; failing `ActiveState` and `MainPID` queries) and pins the full
+  `sudo grep --fixed-strings --line-regexp --quiet 'populated 0' "$cgroup_dir/cgroup.events" || return 1`
+  statement; the suite is 17/17 OK. Reverting the ActiveState guard reddens exactly the two new unit-state
+  cases; deleting `|| return 1` reddens the guard pin.
+- Hosted-runner verification: run `45035919158` on branch `scratch/linux-v2-host-probe` at scratch head
+  `188513ebb61b92a52da55c9ba2917b1f5310487f`, which is `deec3b0006dd250c8531b072aca3ca6e5da9cde6` plus the
+  scratch workflow file only (`gh api repos/wxxb789/symmetry/compare/deec3b00...188513eb`); both
+  `ubuntu-latest` and `ubuntu-24.04` jobs succeeded with `status=passed`, `failure_stage` empty, and
+  `apparmor_userns_exception=per_program`.
+
 ## Adjacent code check (no changes made)
 
 - `daemon/internal/linuxpreflight/systemd_linux.go` `verifyEffectiveLinuxSystemdUnit` (line 123) requires
