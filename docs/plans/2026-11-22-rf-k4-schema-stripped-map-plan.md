@@ -15,15 +15,15 @@ persisted bytes do not change. No production code edit.
 | --- | --- |
 | fence definition (five members, one order) | `daemon/internal/protocol/protocol.go:348-354` (`type Fence struct`), members `runtime_id`, `runtime_epoch`, `generation`, `claim_id`, `lease_token` |
 | Control's one fence rule | `control/lib/symmetry_control_web/controllers/daemon_controller.ex:482-489` (`@fence_spec`, `@fence_keys`), `:491-500` (`fenced_body/3` → `body \|> Map.drop(@fence_keys)`) |
-| fenced endpoints in that controller | attach `:301`, session stopped `:326`, evidence `:339`, usage `:418` |
+| fenced endpoints in that controller | `def` at `:302` (attach) / `:328` (session stopped) / `:341` (evidence) / `:421` (usage); the matching `fenced_body/3` calls at `:306` / `:332` / `:346` / `:425` |
 | stripped batch admission | `control/lib/symmetry_control/goals/run_fence.ex:719-724` (`only_known_keys?(batch, ["schema_version", "run_id", "items"])`), `:293-321` (`append_evidence_batch/5`) |
 | Stripped-map validators | `control/lib/symmetry_control/goals/contract_validation.ex:98` (`validate_evidence/2`), `:101-113` (`validate_evidence_batch/2`), `:127` (`validate_usage/2`); schema failure shape `{:error, {:validation_failed, errors}}` at `:454-466` |
 | Go request producers | `daemon/internal/control/client.go:757-780` (`AppendEvidence`, embeds `protocol.Fence` + `protocol.Evidence`), `:785-819` (`AppendEvidenceBatch`, embeds `GoalEvidenceBatch`), `:843-867` (`RecordUsage`, embeds `protocol.Fence` + `protocol.Usage`) |
 | Go request path applies no schema | `client.go:1035-1044` (`requestGoalContractWithStatus` → `contracts.DecodeSchema` on the **response**), `:1231` (conflict details); the request body is plain `json.Marshal` in `transport.perform` |
-| schemas | `contracts/v1/evidence.schema.json` (8 `oneOf` branches, each `additionalProperties: false`), `contracts/v1/evidence-batch.schema.json:6`, `contracts/v1/usage.schema.json:6` |
+| schemas | `contracts/v1/evidence.schema.json` (4 top-level `oneOf` branches, 13 properties each, each `additionalProperties: false`, plus one nested 2-branch `oneOf` under the observation branch's `validator_profile`), `contracts/v1/evidence-batch.schema.json:6`, `contracts/v1/usage.schema.json:6` |
 | manifest | `contracts/fixtures/manifest.json` — `manifest_version` 1, **248** rows (`jq '.fixtures \| length'`) |
 | valid request fixtures (fence-free) | `valid/evidence.artifact.json` 13 members, `valid/evidence-batch.basic.json` 3, `valid/usage.nullable.json` 14 |
-| existing pins | `daemon/internal/control/goal_client_test.go:105-200` (per-endpoint fence spot fields), `:244-272` (batch spot fields); `control/test/symmetry_control_web/controllers/goal_machine_controller_test.exs:425` (batch posts `Map.merge(fence, batch)` → 201), `:345` (fence-merged usage → 201); `control/test/symmetry_control/goals/contract_fixture_manifest_test.exs:41` and `contract_validation_test.exs` validate fence-free fixtures |
+| existing pins | `daemon/internal/control/goal_client_test.go:105-200` (per-endpoint fence spot fields), `:244-272` (batch spot fields); `control/test/symmetry_control_web/controllers/goal_machine_controller_test.exs:448` and `:477` (batch posts `Map.merge(fence, batch)` → 201; also `:621`/`:632`), `:421` (fence-merged usage → 201); `control/test/symmetry_control/goals/contract_fixture_manifest_test.exs:41` and `contract_validation_test.exs` validate fence-free fixtures |
 | nothing pins the relationship | no test asserts the wire member set, that Control's tolerated top-level extras are exactly the five fence members, or that the fenced body fails the schema by design |
 
 Wire member sets this slice pins (measured in K4's capture, re-derived here from the three call
@@ -37,10 +37,10 @@ sites and the three schemas):
 
 ## Change 1 — `contracts/README.md`, one added paragraph
 
-Inserted directly after the opening paragraph (the one that names `v1/*.schema.json` "the canonical
-JSON Schema Draft 7 source for the new control envelopes and operator requests"), because that
-sentence is exactly what the paragraph qualifies. Text added (one blank-line-separated paragraph,
-no other edit in the file):
+Inserted as one new paragraph at `contracts/README.md:55-67`, after the `ContextSnapshot.content_hash`
+paragraph (`:51-53`). It qualifies the file's opening statement that `v1/*.schema.json` is "the
+canonical JSON Schema Draft 7 source for the new control envelopes and operator requests" (`:3-6`).
+Text added (one blank-line-separated paragraph, no other edit in the file):
 
 > `evidence.schema.json`, `evidence-batch.schema.json` and `usage.schema.json` describe the
 > fence-stripped machine request document, not the HTTP body a daemon sends. The daemon flattens the
@@ -74,9 +74,10 @@ validates, and `Map.merge(document, fence)` with the five members of `@fence_spe
 `runtime_id`/`claim_id`/`lease_token`, integer `runtime_epoch`/`generation` ≥ 1) returns
 `{:error, {:validation_failed, …}}`. Assertions:
 `:ok == validate.(document, opts)`; `{:error, {:validation_failed, errors}} = validate.(Map.merge(document, fence), opts)`
-and, to pin the failure **class** rather than one error string, that `errors` names
-`additionalProperties` and each of the five fence members. No fixture bytes change: the fenced
-document is built in the test.
+and, to pin the failure **class** per member rather than one error string, that `errors` carries one
+`AdditionalProperties` refusal for each of the five fence members — an error of that class whose path
+ends in `/<member>`, recursing through `oneOf` branch errors so the evidence row's refusals are
+reached. No fixture bytes change: the fenced document is built in the test.
 
 Failure control for this test: adding the five fence members to any one of the three schemas'
 `properties` (or relaxing `additionalProperties`) reddens it; the run is recorded in the report.
@@ -132,7 +133,7 @@ mix run at a time):
 2. Go: `gofmt -l .`, `go vet ./...`, `GOOS=linux go build ./...`, `GOOS=windows go build ./...`,
    `go test -count=1 ./internal/control/... ./internal/contracts/... ./internal/protocol/...` in
    `daemon/`; then WSL `wsl -d Ubuntu-24.04 -u accept` →
-   `cd /mnt/q/repos/wt-k4-schema-stripped-map/symmetry/daemon && go test -race -count=1 ./internal/control/...`
+   `cd <worktree>/daemon && go test -race -count=1 ./internal/control/...`
    (this slice's worktree, never the main checkout).
 3. Elixir via the portable-toolchain shim (erl.exe + `-elixir_root`, `MIX_ENV=test`,
    `MIX_TEST_PARTITION=rf-k4`, `PHX_SERVER`/`POSTGRES_PORT`/`SYMMETRY_CONTRACTS_DIR` unset):
@@ -142,16 +143,17 @@ mix run at a time):
 4. Mutants, each in a scratch copy outside the worktree (never in the delivered tree):
    Elixir drop-set mutant (Change 4), Go embedded-struct mutant (Change 5), schema mutant
    (`additionalProperties` relaxed on one request schema) for Change 3.
-5. `git diff --check`; `git status --porcelain -uall` scoped to the owned files; the program rule
-   `git diff origin/main...HEAD | grep -i "users/"` empty and no backslash-`u` sequence in any
-   written file.
+5. `git diff --check`; `git status --porcelain -uall` scoped to the owned files; the program's
+   profile-path grep over the branch diff empty (no host path carrying a user profile name) and no
+   backslash-`u` sequence in any written file.
 
 ## Design trade-offs
 
 1. **Assert the failure class, not one error string** (clause 3's failure control). The Elixir tests
-   assert the `{:validation_failed, …}` tuple plus `additionalProperties` naming; the Go test asserts
-   the `additionalProperties` class plus the named members. Wording drift then cannot silently
-   weaken the pin, and a re-worded error keeps the test red only if the class changes.
+   assert the `{:validation_failed, …}` tuple plus, per fence member, an `AdditionalProperties`
+   refusal whose error path ends in that member; the Go test asserts the `additionalProperties` class
+   plus the named members. Wording drift then cannot silently weaken the pin, and a re-worded error
+   keeps the test red only if the class changes.
 2. **Derive the Go member set from the marshaled document** instead of hard-coding 13/3/14: a
    hard-coded list would pass while the DTO quietly disagrees with the schema, which is the property
    under test. The K4 counts stay in the plan and the report as the independent cross-check.
@@ -197,13 +199,13 @@ What the plan's evidence steps did not know when it was written, recorded here s
 what ran:
 
 1. Elixir gates ran against a slice-owned disposable PostgreSQL 18.6 cluster
-   (`~/.local/state/gdd/scratch/k4-pg/data`, port 55433, superuser role `postgres` created) because
-   the shared local instance on 5432 was rejecting connections while six sibling slices were live.
-   The runner is `~/.local/state/gdd/scratch/rf-k4-mix-pg55433.sh` — the program's `retro-k4-mix.sh`
-   with `POSTGRES_PORT` kept, so the suite uses `symmetry_control_testrf-k4` on that cluster.
+   (`<scratch>/k4-pg/data`, port 55433, superuser role `postgres` created) because the shared local
+   instance on 5432 was rejecting connections while six sibling slices were live.
+   The runner is `<scratch>/rf-k4-mix-pg55433.sh` — the program's `retro-k4-mix.sh` with
+   `POSTGRES_PORT` kept, so the suite uses `symmetry_control_testrf-k4` on that cluster.
 2. `pnpm install` cannot run on this host (npm-registry handshake failures; the pnpm offline mirror
    lacks metadata: `ERR_PNPM_NO_OFFLINE_META`), so the contracts gate needs a `node_modules` mirror.
-   It was mirrored from the base checkout `Q:/repos/symmetry` (identical `pnpm-lock.yaml`) by a
+   It was mirrored from the main checkout's own worktree (identical `pnpm-lock.yaml`) by a
    junction-preserving script: pnpm's symlinks become directory junctions that Node resolves;
    plain `rsync`/`robocopy` copies do not preserve them and leave Node unable to resolve.
 3. Mutants ran in this worktree and were reverted with sha256 verification, not in a scratch copy:

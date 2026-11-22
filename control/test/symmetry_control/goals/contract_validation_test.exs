@@ -149,9 +149,12 @@ defmodule SymmetryControl.Goals.ContractValidationTest do
       assert {:error, {:validation_failed, errors}} =
                validate.(Map.merge(document, fence), opts)
 
-      refusal = inspect(errors, limit: :infinity, printable_limit: 100_000)
-      assert refusal =~ ~r/additionalproperties/i
-      for member <- Map.keys(fence), do: assert(refusal =~ member)
+      refusal_paths = additional_property_paths(errors)
+
+      for member <- Map.keys(fence) do
+        assert Enum.any?(refusal_paths, &String.ends_with?(&1, "/#{member}")),
+               "no additionalProperties refusal for #{member} in #{inspect(refusal_paths)}"
+      end
     end
   end
 
@@ -423,6 +426,21 @@ defmodule SymmetryControl.Goals.ContractValidationTest do
       "lease_token" => "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
     }
   end
+
+  defp additional_property_paths(errors) when is_list(errors),
+    do: Enum.flat_map(errors, &additional_property_paths/1)
+
+  defp additional_property_paths(%{
+         error: %{__struct__: ExJsonSchema.Validator.Error.AdditionalProperties},
+         path: path
+       }),
+       do: [path]
+
+  defp additional_property_paths(%{error: %{invalid: branches}}),
+    do: additional_property_paths(branches)
+
+  defp additional_property_paths(%{errors: errors}), do: additional_property_paths(errors)
+  defp additional_property_paths(_other), do: []
 
   defp canonical_plan_proposal(proposal) do
     Map.update!(proposal, "items", fn items ->
