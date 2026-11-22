@@ -45,7 +45,7 @@ export interface ChatHistoryPage {
   readonly fetchBeforeId: string | null;
 }
 
-interface ChatScopeState {
+export interface ChatScopeState {
   readonly draft: string;
   readonly intent: ChatIntent;
   /** The start-work goal title, optional. */
@@ -214,7 +214,7 @@ export function pendingOlderLoadFor(
     : load.cursor === candidate.cursor));
 }
 
-interface ChatScopeStore {
+export interface ChatScopeStore {
   readonly stateOf: (key: string) => ChatScopeState;
   readonly update: (key: string, patch: Partial<ChatScopeState>) => void;
   readonly updateWith: (key: string, change: (state: ChatScopeState) => ChatScopeState) => void;
