@@ -81,7 +81,7 @@ function name substituted) against `selected-project.tsx:8-21` is **empty**.
 | `attention.tsx:15` `const projectId = search.projectId ?? null` | `const selectedProjectId = useSelectedProject() ?? null` |
 | `runtimes.tsx:8` `getRouteApi` import, `:69` route const, `:79` `route.useSearch()` | `const selectedProjectId = useSelectedProject()` |
 | `connections.tsx:302` `search.projectId ?? null` | `scopeProjectId ?? null` |
-| `work/detail.tsx:75` `scopedProjectId = itemProjectId ?? queryProjectId` | `scopedProjectId` = hook value |
+| `work/detail.tsx:75` `scopedProjectId = itemProjectId ?? queryProjectId` | `selectedProjectId` = hook value |
 | `work/detail.tsx:157` `itemProjectId ?? queryProjectId` (close) | `selectedProjectId` |
 | `chat.tsx:117` `workspaceOptions(api, params.projectId)` | `workspaceOptions(api, selectedProjectId ?? null)` |
 | `projects.tsx:84` `workspaceOptions(api, projectId)` | `workspaceOptions(api, selectedProjectId ?? null)` |
@@ -119,7 +119,7 @@ Two equivalences that a test cannot isolate are stated instead of asserted:
    transient window would separate them. That is why the contract's mutant (a) is "drop the served
    hop" (testable, §8 M-a) and not "reorder hops" (unobservable); the moved expression keeps the
    order byte-identically (§3).
-2. **The provider's served hop equals the page's `scopedProjectId` in every render**, because both
+2. **The provider's served hop equals the page's `selectedProjectId` in every render**, because both
    read `workItemReadKey(workItemId)` (the page's `detail.tsx:69` query and the provider's single
    subscription), so `selectedProjectId === itemProjectId ?? queryProjectId`; the page's own
    `detailBody` args therefore keep their base values.
@@ -247,8 +247,9 @@ are unmodified (the temporary install overrides were restored; the final `git st
 
 ## 10. DLP / hygiene
 
-Added lines contain no host profile path (`grep -inE "users/"` over the working diff and the new
-files: no match) and no backslash-u sequence. `git diff --check` clean.
+Added lines contain no host profile path (a case-insensitive search for the profile-directory
+pattern over the working diff and the new files: no match) and no backslash-u sequence.
+`git diff --check` clean.
 
 ## 11. LOC delta (D2 — reported, never a gate)
 
@@ -275,3 +276,7 @@ and adds one hook call per consumer. Report-only per D2.
   recorded rather than defended with a throwing accessor.
 - The two transient-state observations (pending picker read; the repeated existing key in one case)
   are recorded in §6/§6.1 as run-dependent, with the base-vs-base control.
+- A fix-round gate re-run saw one transient red in `goal-attention.test.tsx`
+  (`getByText("Settlement attention: awaiting_validation")`) under the parallel 5-file run; the file
+  passes isolated (29/29) and the 5-file set passed on both later runs (145/145, exit 0), on a
+  diff that touches only markdown — recorded as harness scheduling nondeterminism.

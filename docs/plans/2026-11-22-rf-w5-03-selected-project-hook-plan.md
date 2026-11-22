@@ -61,7 +61,7 @@ coordinates of every site this slice edits (all verified by `nl -ba` at the base
 Contract claims that no longer hold verbatim and are carried into the PR as re-derived: (a) the
 shell hook already existed as `useProjectScope` — this slice's deliverable is the context-fed hook
 and the page conversion, not a first hook; (b) `router.test.tsx` is 1,215 L at this base (not
-1,328) and its executed count is re-measured in §4; (c) the cited line numbers shifted again under
+1,328) and its executed count is re-measured in §3; (c) the cited line numbers shifted again under
 A5/`#146` — the table above is the dispatch-time measurement; (d) `#164` leads the serialization
 (already merged here).
 
@@ -145,7 +145,7 @@ chain is the route-local slice of the shell chain). §7 lists what that means ob
 | `attention.tsx:15` `const projectId = search.projectId ?? null` | `const selectedProjectId = useSelectedProject() ?? null` |
 | `runtimes.tsx:69,79` `getRouteApi("/runtimes")` + `route.useSearch()` | `const selectedProjectId = useSelectedProject()` |
 | `connections.tsx:302-303` `search.projectId` scope + fallback | hook value + same fallback |
-| `work/detail.tsx:75` `scopedProjectId = itemProjectId ?? queryProjectId` | `scopedProjectId = useSelectedProject()` |
+| `work/detail.tsx:75` `scopedProjectId = itemProjectId ?? queryProjectId` | `selectedProjectId = useSelectedProject()` |
 | `work/detail.tsx:157` `close()`'s `itemProjectId ?? queryProjectId` | `selectedProjectId` |
 | `chat.tsx:117` `workspaceOptions(api, params.projectId)` | `workspaceOptions(api, selectedProjectId ?? null)` |
 | `projects.tsx:84` `workspaceOptions(api, projectId)` | `workspaceOptions(api, selectedProjectId ?? null)` |
