@@ -294,7 +294,7 @@ complexity, and the contract asks for the bound with no new finding.
    residual entry; every value inside 120/60/25.
 4. `go test -count=1 ./internal/app/...` (Windows; ~150-500 s). The six focused test functions of
    the contract plus the new seam tests, `-run` recorded. `-race` is refused on this host (no cgo).
-5. WSL oracle: `wsl -d Ubuntu-24.04 -u accept` -> `cd /mnt/q/repos/wt-w4-01-goal-admission-split/symmetry/daemon && go test -count=1 -race ./internal/app/...`
+5. WSL oracle: `wsl -d Ubuntu-24.04 -u accept` -> `cd <WORKTREE>/daemon && go test -count=1 -race ./internal/app/...`
    (the contract's race gate; the pre-existing `TestClaimAdmissionInputFailsClosedBeforeWorkspaceOrProcessStart`
    loopback stall recorded at W4-17a/W4-17b is attributed if it reappears, with the touched-path
    `-race` subset as the complementary run).
