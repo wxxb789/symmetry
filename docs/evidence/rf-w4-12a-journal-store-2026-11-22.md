@@ -40,7 +40,7 @@ round removed three comments). D2 (LOC) is report-only.
 Revision identity of the delivered bytes: slice commit `f9735123` over the merge `8af47444` (its
 pre-rewrite twin is `99acb371`), merged with `origin/main` as tree `e49d374a`; the fix-round edits
 are committed as `298ee880` and the host-path placeholder pass as `3f78b00e`; the opus-review-1
-fix round (review findings P2-1, P3-1..P3-3) is uncommitted over `3f78b00e`. Five files
+fix round (review findings P2-1, P3-1..P3-3) is committed as `5f0c2bf7`. Five files
 (`sha256sum`, re-derived on the opus-review-1 tree; the two target-only seam files are unchanged):
 `journal_store.go` `31dd53e5819c262445759e902707a84a55d2cda87a4975eefe59ceb7e7242bff`,
 `journal_store_linux_amd64.go` `2bc8575db4b87ed083e84f7738785457dee0a0f91aafd60e4969d2e1c2e49f1e`,
