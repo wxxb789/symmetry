@@ -9,6 +9,9 @@ replacements: UUID-validated path segments and the parsed `go version -m`
 records, both against hostile input.
 """
 
+import hashlib
+import json
+import os
 import pathlib
 import shutil
 import subprocess
@@ -18,6 +21,7 @@ import unittest
 from unittest import mock
 
 import citest
+from testsupport.gitfixture import FixtureRepo
 
 SCRIPT = pathlib.Path(__file__).with_name("omo-control-native-evidence.py")
 EVIDENCE = citest.load_gate(SCRIPT, "omo_control_native_evidence")
@@ -198,6 +202,91 @@ class GoBuildSettingsTest(unittest.TestCase):
             self.assertEqual(source["embedded_build_info"]["vcs"], "git")
             self.assertEqual(source["embedded_build_info"]["vcs.revision"], commit)
             self.assertEqual(source["source_revision"], commit)
+
+
+class SourceBindingTest(FixtureRepo, unittest.TestCase):
+    REPOSITORY_PREFIX = "omo-control-binding-"
+
+    def test_the_declared_file_set_covers_the_shared_module(self):
+        for relative in EVIDENCE.SOURCE_PATHS:
+            self.write(relative, f"source of {relative}\n")
+        declared = {}
+        for relative in EVIDENCE.SOURCE_PATHS:
+            raw = (self.repo / relative).read_bytes()
+            declared[relative] = {"bytes": len(raw), "sha256": "sha256:" + hashlib.sha256(raw).hexdigest()}
+        attestation = self.repo / "attestation.json"
+        attestation.write_text(
+            json.dumps(
+                {
+                    "source_revision": MINUS_ZERO_REVISION,
+                    "source_files": declared,
+                    "origin": "parent-observed-Windows-Git-HEAD-and-source-blobs",
+                }
+            )
+        )
+        receipt = EVIDENCE.Receipt(self.root / "receipt.json", [])
+
+        EVIDENCE.source_revision(self.repo, None, dict(os.environ), receipt, attestation)
+
+        self.assertEqual(set(receipt.value["source_files"]), set(EVIDENCE.SOURCE_PATHS))
+        self.assertIn("scripts/ci/source_subject.py", receipt.value["source_files"])
+        self.write("scripts/ci/source_subject.py", "changed shared rules\n")
+        with self.assertRaisesRegex(EVIDENCE.Rejected, "differs from actual source blob: scripts/ci/source_subject.py"):
+            EVIDENCE.source_revision(
+                self.repo, None, dict(os.environ), EVIDENCE.Receipt(self.root / "r.json", []), attestation
+            )
+
+    def test_an_attestation_whose_file_set_is_not_a_mapping_is_refused(self):
+        for relative in EVIDENCE.SOURCE_PATHS:
+            self.write(relative, f"source of {relative}\n")
+        attestation = self.repo / "attestation.json"
+        entry = {"bytes": 0, "sha256": "sha256:" + "0" * 64}
+        for declared in ([*EVIDENCE.SOURCE_PATHS], [entry] * len(EVIDENCE.SOURCE_PATHS)):
+            attestation.write_text(
+                json.dumps(
+                    {
+                        "source_revision": MINUS_ZERO_REVISION,
+                        "source_files": declared,
+                        "origin": "parent-observed-Windows-Git-HEAD-and-source-blobs",
+                    }
+                )
+            )
+            with self.assertRaisesRegex(EVIDENCE.Rejected, "invalid parent source attestation identity or path set"):
+                EVIDENCE.source_revision(
+                    self.repo, None, dict(os.environ), EVIDENCE.Receipt(self.root / "r.json", []), attestation
+                )
+
+    def test_the_committed_tree_variant_agrees_with_the_index_variant(self):
+        self.write("source.txt", "reviewed source\n")
+        self.write("scripts/ci/source_subject.py", "# shared rules\n")
+        commit = self.commit("fixture")
+        receipt = EVIDENCE.Receipt(self.root / "receipt.json", [])
+
+        digest = EVIDENCE.tree_digest(self.repo, commit, shutil.which("git"), dict(os.environ), receipt)
+
+        self.assertEqual(EVIDENCE.source_subject.index_mode_digest(str(self.repo), commit)["tree_digest"], digest)
+
+    def test_a_listing_that_is_not_a_record_is_refused_without_reading_a_blob(self):
+        def fake_command_bytes(argv, _env, _cwd, _receipt):
+            self.assertIn("ls-tree", argv)
+            return b"100644 blob deadbeef"
+
+        with (
+            mock.patch.object(EVIDENCE, "command_bytes", side_effect=fake_command_bytes),
+            self.assertRaisesRegex(EVIDENCE.Rejected, "fixture tree listing is unreadable"),
+        ):
+            EVIDENCE.tree_digest(self.repo, MINUS_ZERO_REVISION, "git", {}, EVIDENCE.Receipt(self.root / "r.json", []))
+
+    def test_a_non_file_entry_is_refused_before_its_blob_is_read(self):
+        def fake_command_bytes(argv, _env, _cwd, _receipt):
+            self.assertIn("ls-tree", argv)
+            return b"120000 blob deadbeef\tlink.txt\0"
+
+        with (
+            mock.patch.object(EVIDENCE, "command_bytes", side_effect=fake_command_bytes),
+            self.assertRaisesRegex(EVIDENCE.Rejected, "fixture tree contains non-file effects"),
+        ):
+            EVIDENCE.tree_digest(self.repo, MINUS_ZERO_REVISION, "git", {}, EVIDENCE.Receipt(self.root / "r.json", []))
 
 
 if __name__ == "__main__":
