@@ -125,6 +125,23 @@ class SourceSubjectTests(unittest.TestCase):
         self.assertEqual(after[0], before[0])
         self.assertNotEqual(after[1], before[1])
 
+    def test_delivered_tool_paths_cover_the_whole_evaluation_tool_set(self) -> None:
+        tool = load_tool()
+        self.assertEqual(
+            tool.DELIVERED_TOOL_PATHS,
+            (
+                "scripts/ci/model-routing-evaluation.py",
+                "scripts/ci/model_routing_gates.py",
+                "scripts/ci/model_routing_receipts.py",
+                "scripts/ci/model_routing_records.py",
+                "scripts/ci/model_routing_subject.py",
+                "scripts/ci/test-model-routing-evaluation.py",
+            ),
+        )
+        root = SCRIPT.resolve().parents[2]
+        for relative in tool.DELIVERED_TOOL_PATHS:
+            self.assertTrue((root / relative).is_file(), relative)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -5,6 +5,7 @@ import ast
 import contextlib
 import functools
 import hashlib
+import importlib
 import json
 import os
 import pathlib
@@ -27,8 +28,14 @@ def load_runner_module():
     return citest.load_gate(pathlib.Path(__file__).with_name("model-routing-evaluation.py"), "model_routing_evaluation")
 
 
+def defining_module(name):
+    """Import the module that owns a split rule, so its own globals can be read or patched."""
+    load_runner_module()
+    return importlib.import_module(name)
+
+
 def refusal_returns(source_text, function):
-    """Parse every refusal `return` of one runner function out of the module's syntax tree.
+    """Parse every refusal `return` of one moved function out of the module that defines it.
 
     The inventory is the function's own `ast`, never a text match: each row is
     `(line, kind, source_segment)` for a `return` whose value is not `None`, where
@@ -55,7 +62,7 @@ def refusal_returns(source_text, function):
                 )
                 rows.append((statement.lineno, kind, ast.get_source_segment(source_text, value)))
             return sorted(rows)
-    raise AssertionError(f"the runner no longer defines {function}")
+    raise AssertionError(f"the module no longer defines {function}")
 
 
 def exercise(function, call):
@@ -527,7 +534,7 @@ class EvaluationTests(FixtureRepo, unittest.TestCase):
         run_path = run or self.run_dir()
         self.assert_ok(self.prepare(task=task, run=run_path, environment_json=environment_json))
         frozen_task = task if task is not None else self.task()
-        if load_runner_module().requires_dependency_provisioning(frozen_task):
+        if defining_module("model_routing_records").requires_dependency_provisioning(frozen_task):
             self.bind_tree(run_path)
         self.edit("app/main.go", EDITED_MAIN_GO, run=run_path)
         self.edit(
@@ -666,10 +673,11 @@ class EvaluationTests(FixtureRepo, unittest.TestCase):
         # STD-B06: replacing the built-in `sum` with `+=` dropped its compensated
         # float path, so `[1e16, 1.0, 1.0]` stopped rounding the way `sum` does.
         runner = load_runner_module()
-        self.assertEqual(runner.number_sum([1e16, 1.0, 1.0], "fixture"), sum([1e16, 1.0, 1.0]))
-        self.assertNotEqual(runner.number_sum([1e16, 1.0, 1.0], "fixture"), 1e16)
+        records = defining_module("model_routing_records")
+        self.assertEqual(records.number_sum([1e16, 1.0, 1.0], "fixture"), sum([1e16, 1.0, 1.0]))
+        self.assertNotEqual(records.number_sum([1e16, 1.0, 1.0], "fixture"), 1e16)
         with self.assertRaisesRegex(runner.Refused, "finite number range"):
-            runner.number_sum([10**400, 0.5], "fixture")
+            records.number_sum([10**400, 0.5], "fixture")
 
     def test_canonical_json_distinguishes_non_finite_from_unserializable(self) -> None:
         # Opus P3: `allow_nan=False` and the integer conversion-digit limit share a
@@ -1078,6 +1086,10 @@ class EvaluationTests(FixtureRepo, unittest.TestCase):
         tools.mkdir()
         for name in (
             SCRIPT.name,
+            "model_routing_records.py",
+            "model_routing_subject.py",
+            "model_routing_gates.py",
+            "model_routing_receipts.py",
             "assert-go-test-json.py",
             "linux-v2-source-subject.py",
             "model-routing-record-sanitize.py",
@@ -1099,6 +1111,27 @@ class EvaluationTests(FixtureRepo, unittest.TestCase):
                 self.assert_refused(result, "does not match")
                 changed.write_bytes(original)
 
+    def test_receipt_binds_every_tooling_source(self) -> None:
+        # The split modules are bound with the entry and the helper tools, so a receipt
+        # names every byte that produced it.
+        self.accepted_run()
+        sources = self.stored_receipt()["evidence"]["tooling_sources"]
+        self.assertEqual(
+            set(sources),
+            {
+                "model-routing-evaluation.py",
+                "model_routing_records.py",
+                "model_routing_subject.py",
+                "model_routing_gates.py",
+                "model_routing_receipts.py",
+                "assert-go-test-json.py",
+                "linux-v2-source-subject.py",
+                "model-routing-record-sanitize.py",
+            },
+        )
+        for name, digest in sources.items():
+            self.assertEqual(digest, "sha256:" + hashlib.sha256(SCRIPT.with_name(name).read_bytes()).hexdigest(), name)
+
     def test_every_broken_sanitize_sibling_refuses_instead_of_raising(self) -> None:
         # host_path_patterns() imports the sanitize tool for the shared host-path
         # definition. Every readable-but-broken sibling - unparseable, a module whose
@@ -1107,6 +1140,13 @@ class EvaluationTests(FixtureRepo, unittest.TestCase):
         # one (F20, Sol F1), never an uncaught traceback: the refusal is what keeps a
         # damaged definition from reaching a recorded value.
         runner = load_runner_module()
+        records = defining_module("model_routing_records")
+        # The repointed patch target is the shared module the runner executes, so the
+        # broken-sibling values must be restored for every later test in this process.
+        original_script = records.SANITIZE_SCRIPT
+        original_patterns = records._HOST_PATH_PATTERNS
+        self.addCleanup(setattr, records, "SANITIZE_SCRIPT", original_script)
+        self.addCleanup(setattr, records, "_HOST_PATH_PATTERNS", original_patterns)
         shapes = {
             "unparseable": "def broken(:\n",
             "pattern-error": "import re\nPATTERN = re.compile('(')\n",
@@ -1117,11 +1157,11 @@ class EvaluationTests(FixtureRepo, unittest.TestCase):
             broken = self.root / "broken-tooling" / shape / "model-routing-record-sanitize.py"
             broken.parent.mkdir(parents=True)
             broken.write_text(content, encoding="utf-8")
-            runner.SANITIZE_SCRIPT = broken
-            runner._HOST_PATH_PATTERNS = None
+            records.SANITIZE_SCRIPT = broken
+            records._HOST_PATH_PATTERNS = None
             with self.subTest(shape=shape):
                 with self.assertRaises(runner.Refused) as refusal:
-                    runner.host_path_patterns()
+                    records.host_path_patterns()
                 self.assertIn("cannot load model-routing-record-sanitize.py", str(refusal.exception))
 
     def test_measured_redaction_keeps_urls_literal(self) -> None:
@@ -1360,7 +1400,7 @@ class EvaluationTests(FixtureRepo, unittest.TestCase):
         witness = self.checkout(run) / "late-descendant.txt"
         # The bound matches the runner's own reap window: a survivor the kill missed
         # writes as soon as the release lands, so the poll only has to outlast that.
-        guard = load_runner_module().PROCESS_TREE_REAP_SECONDS
+        guard = defining_module("model_routing_gates").PROCESS_TREE_REAP_SECONDS
         deadline = time.monotonic() + guard
         while not witness.exists() and time.monotonic() < deadline:
             time.sleep(0.02)
@@ -1387,7 +1427,7 @@ class EvaluationTests(FixtureRepo, unittest.TestCase):
         # window and its documented worst case, checks the lingering branch waited on
         # the direct child within its own timeout, and on POSIX closes both read ends
         # and keeps exactly the output already captured before the kill.
-        runner = load_runner_module()
+        gates = defining_module("model_routing_gates")
         handshake = self.root / "lingering-handshake"
         handshake.mkdir()
         pid_path = handshake / "survivor.pid"
@@ -1446,20 +1486,20 @@ class EvaluationTests(FixtureRepo, unittest.TestCase):
             # a descendant that escaped `taskkill /T` would.
             kill_pid(process.pid)
 
-        original = runner.terminate_owned_process_tree
-        runner.terminate_owned_process_tree = parent_only_kill
-        self.addCleanup(setattr, runner, "terminate_owned_process_tree", original)
+        original = gates.terminate_owned_process_tree
+        gates.terminate_owned_process_tree = parent_only_kill
+        self.addCleanup(setattr, gates, "terminate_owned_process_tree", original)
 
         timeout = 2.0
         # The reap's documented worst case is the initial timeout, one full reap
         # window, then the kill plus its own bounded wait (a platform tree kill such
         # as `taskkill` carries no timeout of its own). The guard sits past that worst
         # case, so a merely slow kill is never reported as a pipe block.
-        bound = timeout + 2.0 * runner.PROCESS_TREE_REAP_SECONDS + 5.0
+        bound = timeout + 2.0 * gates.PROCESS_TREE_REAP_SECONDS + 5.0
         outcome: dict = {}
         recorded: list = []
         waits: list = []
-        real_subprocess = runner.subprocess
+        real_subprocess = gates.subprocess
 
         class RecordingProcess:
             """Delegate to the real Popen, recording every wait the runner asks for.
@@ -1489,13 +1529,13 @@ class EvaluationTests(FixtureRepo, unittest.TestCase):
                 recorded.append(process)
                 return process
 
-        runner.subprocess = RecordingSubprocess()
-        self.addCleanup(setattr, runner, "subprocess", real_subprocess)
+        gates.subprocess = RecordingSubprocess()
+        self.addCleanup(setattr, gates, "subprocess", real_subprocess)
 
         started = time.monotonic()
 
         def reap() -> None:
-            outcome["reaped"] = runner.run_owned_command([sys.executable, "-c", gate_code], str(self.root), timeout)
+            outcome["reaped"] = gates.run_owned_command([sys.executable, "-c", gate_code], str(self.root), timeout)
             outcome["elapsed"] = time.monotonic() - started
 
         thread = threading.Thread(target=reap, daemon=True)
@@ -1542,7 +1582,7 @@ class EvaluationTests(FixtureRepo, unittest.TestCase):
         elapsed = outcome["elapsed"]
         self.assertGreaterEqual(
             elapsed,
-            timeout + runner.PROCESS_TREE_REAP_SECONDS - 2.0,
+            timeout + gates.PROCESS_TREE_REAP_SECONDS - 2.0,
             f"the reap returned in {elapsed:.1f}s without consuming a reap window: the survivor "
             "never held the gate's pipes, so the case proved nothing",
         )
@@ -1553,7 +1593,7 @@ class EvaluationTests(FixtureRepo, unittest.TestCase):
         self.assertEqual(len(recorded), 1, "the reap constructed an unexpected number of processes")
         self.assertEqual(
             waits,
-            [runner.PROCESS_TREE_REAP_SECONDS],
+            [gates.PROCESS_TREE_REAP_SECONDS],
             "the lingering reap must wait once on the direct child within its own reap window",
         )
         self.assertIsNotNone(
@@ -2330,6 +2370,7 @@ class EvaluationTests(FixtureRepo, unittest.TestCase):
 
     def test_prepare_validates_exunit_gate_and_environment_fields(self) -> None:
         runner = load_runner_module()
+        records = defining_module("model_routing_records")
         plain = {"id": "gate", "cwd": ".", "argv": ["mix", "test"]}
         cases = (
             ("tests-without-files", {**plain, "exunit_tests": ["test one"]}, "exunit_tests requires exunit_files"),
@@ -2409,7 +2450,7 @@ class EvaluationTests(FixtureRepo, unittest.TestCase):
         for index, (label, gate, needle) in enumerate(cases):
             with self.subTest(case=label):
                 with self.assertRaises(runner.Refused, msg=f"validate_gate accepted {label}") as refusal:
-                    runner.validate_gate(gate, 0)
+                    records.validate_gate(gate, 0)
                 self.assertIn(needle, str(refusal.exception))
                 run = self.root / f"run-gate-validation-{index}"
                 self.assert_refused(self.prepare(task=self.task(gates=[gate]), run=run), needle)
@@ -2417,7 +2458,7 @@ class EvaluationTests(FixtureRepo, unittest.TestCase):
         # The whole-task secret scan and validate_gate are independent guards: the scan
         # refuses SYMMETRY_OPERATOR_TOKEN even before the gate's own allowlist applies.
         with self.assertRaises(runner.Refused) as refusal:
-            runner.validate_gate({**plain, "env": {"SYMMETRY_OPERATOR_TOKEN": "x"}}, 0)
+            records.validate_gate({**plain, "env": {"SYMMETRY_OPERATOR_TOKEN": "x"}}, 0)
         self.assertIn("looks like a secret", str(refusal.exception))
 
     def test_gate_environment_is_applied_and_recorded(self) -> None:
@@ -2922,15 +2963,15 @@ class EvaluationTests(FixtureRepo, unittest.TestCase):
         The published records quote a classification - how many refusal shapes the
         function has and which of them no case reaches - so this test recomputes it from
         artifacts instead of trusting a hand-written list: the inventory is parsed out of
-        the runner's own syntax tree, and coverage is measured by running the very
+        the gate module's own syntax tree, and coverage is measured by running the very
         documents `vitest_refusal_variants` feeds through the gate test above while
         tracing which of those returns executes. Adding or removing a refusal, or losing
         one of the cases, changes the derived classification and fails here, so a
         published count cannot go stale quietly. The printed line is the recomputable
         figure the records quote.
         """
-        runner = load_runner_module()
-        inventory = refusal_returns(SCRIPT.read_text(encoding="utf-8"), "vitest_report_detail")
+        gates = defining_module("model_routing_gates")
+        inventory = refusal_returns(pathlib.Path(gates.__file__).read_text(encoding="utf-8"), "vitest_report_detail")
         inventory_lines = {line for line, _kind, _text in inventory}
         self.assertEqual(len(inventory_lines), len(inventory), "two refusals share a source line")
         reached = {}
@@ -2938,8 +2979,8 @@ class EvaluationTests(FixtureRepo, unittest.TestCase):
             with self.subTest(case=label):
                 raw = b"" if not write_report else json.dumps(document).encode("utf-8")
                 message, executed = exercise(
-                    runner.vitest_report_detail,
-                    functools.partial(runner.vitest_report_detail, VITEST_NAMED_TESTS, report_exit, raw),
+                    gates.vitest_report_detail,
+                    functools.partial(gates.vitest_report_detail, VITEST_NAMED_TESTS, report_exit, raw),
                 )
                 self.assertIn(needle, message or "", label)
                 hit = sorted(inventory_lines & set(executed))
@@ -3008,6 +3049,7 @@ class EvaluationTests(FixtureRepo, unittest.TestCase):
 
     def test_prepare_validates_vitest_gate_fields(self) -> None:
         runner = load_runner_module()
+        records = defining_module("model_routing_records")
         plain = {"id": "gate", "cwd": ".", "argv": ["node", "vitest.mjs", "run"]}
         cases = (
             ("tests-without-files", {**plain, "vitest_tests": ["one"]}, "vitest_tests requires vitest_files"),
@@ -3057,7 +3099,7 @@ class EvaluationTests(FixtureRepo, unittest.TestCase):
         for index, (label, gate, needle) in enumerate(cases):
             with self.subTest(case=label):
                 with self.assertRaises(runner.Refused, msg=f"validate_gate accepted {label}") as refusal:
-                    runner.validate_gate(gate, 0)
+                    records.validate_gate(gate, 0)
                 self.assertIn(needle, str(refusal.exception))
                 run = self.root / f"run-vitest-gate-validation-{index}"
                 self.assert_refused(self.prepare(task=self.task(gates=[gate]), run=run), needle)
@@ -3408,7 +3450,7 @@ class EvaluationTests(FixtureRepo, unittest.TestCase):
         # Both gate-level arms are claims on their own: a task whose gate declares
         # vitest tests, or whose argv runs a vitest entry point, resolves the dependency
         # tree whatever its language field says.
-        runner = load_runner_module()
+        records = defining_module("model_routing_records")
         cases = (
             ({"language": "typescript", "gates": [{"id": "gate", "argv": ["go", "test", "./..."]}]}, True),
             (
@@ -3459,13 +3501,14 @@ class EvaluationTests(FixtureRepo, unittest.TestCase):
         )
         for task, expected in cases:
             with self.subTest(task=task):
-                self.assertEqual(runner.requires_dependency_provisioning(task), expected)
+                self.assertEqual(records.requires_dependency_provisioning(task), expected)
 
     def test_is_vitest_entry_sees_past_launcher_flags(self) -> None:
         # F09: the entry point is the first non-flag argument, so a flagged spelling is
         # a vitest gate for validation, for the provisioning requirement and for the
         # derived report command alike.
-        runner = load_runner_module()
+        records = defining_module("model_routing_records")
+        gates = defining_module("model_routing_gates")
         cases = (
             (["node", "vitest.mjs", "run"], True),
             (["node", "--no-warnings", "x/vitest.mjs", "run"], True),
@@ -3495,8 +3538,8 @@ class EvaluationTests(FixtureRepo, unittest.TestCase):
         )
         for argv, expected in cases:
             with self.subTest(argv=argv):
-                self.assertEqual(runner.is_vitest_entry(argv), expected)
-        gate = runner.validate_gate(
+                self.assertEqual(records.is_vitest_entry(argv), expected)
+        gate = records.validate_gate(
             {
                 "id": "gate",
                 "cwd": ".",
@@ -3506,13 +3549,13 @@ class EvaluationTests(FixtureRepo, unittest.TestCase):
             },
             0,
         )
-        derived = runner.vitest_report_argv(gate, pathlib.Path("gate-dir"))
+        derived = gates.vitest_report_argv(gate, pathlib.Path("gate-dir"))
         self.assertEqual(derived[:4], ["node", "--no-warnings", "x/vitest.mjs", "run"])
         self.assertIn("--reporter=json", derived)
         self.assertEqual(derived[-1], "src/x.test.tsx")
         # The derived report command reuses the launcher, the value-taking flag and
         # its value up to the entry, so it reruns the declared spelling.
-        flagged = runner.validate_gate(
+        flagged = records.validate_gate(
             {
                 "id": "gate",
                 "cwd": ".",
@@ -3522,7 +3565,7 @@ class EvaluationTests(FixtureRepo, unittest.TestCase):
             },
             0,
         )
-        derived = runner.vitest_report_argv(flagged, pathlib.Path("gate-dir"))
+        derived = gates.vitest_report_argv(flagged, pathlib.Path("gate-dir"))
         self.assertEqual(derived[:5], ["node", "--require", "./setup.cjs", "x/vitest.mjs", "run"])
 
     def test_check_refuses_a_dependency_tree_that_changed_during_the_attempt(self) -> None:
@@ -3702,6 +3745,10 @@ class EvaluationTests(FixtureRepo, unittest.TestCase):
         tools.mkdir()
         for name in (
             SCRIPT.name,
+            "model_routing_records.py",
+            "model_routing_subject.py",
+            "model_routing_gates.py",
+            "model_routing_receipts.py",
             "assert-go-test-json.py",
             "linux-v2-source-subject.py",
             "model-routing-record-sanitize.py",
