@@ -55,7 +55,7 @@ revision; they equal the contract's draft coordinates). "References beyond" list
 | 22 | `ValidateGoalCommand` `:93` | `goal_schema.go:235` (deleted caller) | deleted |
 | 23 | `DecodeDecision` `:146` | `goal_schema.go:220` (deleted caller) | deleted |
 | 24 | `ValidateGoalCreate` `:173` | `goal_schema.go:237` (deleted caller) | deleted |
-| 25 | `ValidateGoalEnvelope` `:208` | `goal_contract_fixture_test.go:70`, `goal_contract_semantics_test.go:49,51,54,61,66,72,89` (retargeted/dropped), `contracts/README.md:217` prose | deleted |
+| 25 | `ValidateGoalEnvelope` `:208` | `goal_contract_fixture_test.go:70`, `goal_contract_semantics_test.go:49,51,54,61,66,72,89` (retargeted/dropped), `contracts/README.md:217` prose (rewritten by the fix stage under the REV-01 amendment, §12) | deleted |
 | 26 | `ParseSubject` `goal_subject.go:91` | `goal_transport_test.go:71` (retargeted) | deleted |
 
 Zero production callers outside `daemon/internal/protocol/` for all 26 (`git grep -nw`, non-test: the
@@ -73,10 +73,12 @@ Citation leg: `git grep -nw` over the audited corpus (`docs/runbooks/**`, `docs/
 `docs/archive/CLOSED-TODO.md`) finds one hit, `docs/archive/CLOSED-TODO.md:3640` (§8). The gate reads
 only documents a revision modifies (`scripts/ci/check-citation-existence.py` →
 `changed_paths(..., AUDITED_PATHS)`), and this revision modifies no audited document, so no citation
-gate reddens. Two prose citations of deleted symbols exist and are recorded, not repaired (clause 4):
-`contracts/README.md:217` (`protocol.ValidateGoalEnvelope`, outside the corpus) and the
-`CLOSED-TODO.md:3640` closure (a historical record of a past fix, in the corpus but unmodified,
-naming `goal_contract_semantics.go` + `canonicalPlanProposalSHA256`).
+gate reddens. Two prose citations of deleted symbols existed at the deletion: `contracts/README.md:217`
+(`protocol.ValidateGoalEnvelope`, outside the corpus) and the `CLOSED-TODO.md:3640` closure (a
+historical record of a past fix, in the corpus but unmodified, naming `goal_contract_semantics.go` +
+`canonicalPlanProposalSHA256`). The fix stage rewrote the `contracts/README.md` sentence to name the
+retained production entry points under the conductor's REV-01 amendment (§12); the archive closure
+stays as the historical record it is.
 
 ## 3. Deadcode before/after (measured, not asserted)
 
@@ -199,21 +201,23 @@ Each row: base assertion → HEAD equivalent → why the wire property stays cov
 | D3 | `TestParseEvidenceBatchValidatesBatchIdentityAndItemSemantics` | batch schema_version, one item minimum, item `run_id` equals batch `run_id` | `validate_evidence_batch/2` (manifest-pinned) | Dm2 |
 | D4 | `TestParseEvidenceBatchRejectsDuplicateKeysAndIDs` | duplicate `evidence_key`/`evidence_id` within a batch | as D3 | Dm2 |
 | D5 | `TestParseEvidenceBatchRejectsItemRunIDMismatch` | item/batch run identity | as D3 | Dm2 |
-| D6 | `TestParseEvidenceBatchResponseValidatesReceipts` | ≥1 receipt, `created`/`replayed` dispositions, ordered receipts | `validate_evidence_batch_response/2` + TS; request-correlated live path `control/validation.go:852` (unchanged) | Dm3 |
-| D7 | `TestParseEvidenceBatchResponseRejectsMismatchedRunAndDuplicateIdentities` — 3 subtests | receipt `run_id` equality, duplicate receipt `id`/`evidence_key` | as D6 | Dm3 |
-| D8 | `TestParseEvidenceBatchConflictDetailsValidatesItems` | index `0..255`, fixed `conflict` disposition | `validate_evidence_batch_conflict_details/2` + TS | Dm4 |
-| D9 | `TestParseEvidenceBatchConflictDetailsRejectsDuplicateIndexesAndKeys` — 2 subtests | duplicate index / duplicate evidence_key | as D8 | Dm4 |
+| D6 | `TestParseEvidenceBatchResponseValidatesReceipts` | ≥1 receipt, `created`/`replayed` dispositions, ordered receipts | `validate_evidence_batch_response/2` (manifest-pinned; the response schema pins `minItems` and the disposition enum); request-correlated live path `control/validation.go:852` (unchanged) | Dm3 |
+| D7 | `TestParseEvidenceBatchResponseRejectsMismatchedRunAndDuplicateIdentities` — 3 subtests | receipt `run_id` equality, duplicate receipt `id`/`evidence_key` | receipt `run_id` equality: `validate_evidence_batch_response/2` (`contract_validation.ex:565`) and the live by-index path `control/validation.go:852`; duplicate receipt `id`/`evidence_key`: **no remaining enforcement** — the response schema carries no `uniqueItems` (which would express whole-item, not per-field, uniqueness) and no validator on any plane checks the duplicates; recorded in `docs/TODO.md` | Dm3 |
+| D8 | `TestParseEvidenceBatchConflictDetailsValidatesItems` | index `0..255`, fixed `conflict` disposition | `validate_evidence_batch_conflict_details/2` (schema-only, manifest-pinned: index bounds, `const conflict`, item count) | Dm4 |
+| D9 | `TestParseEvidenceBatchConflictDetailsRejectsDuplicateIndexesAndKeys` — 2 subtests | duplicate index / duplicate evidence_key | **no remaining enforcement** — the conflict-details schema carries no `uniqueItems` and has no semantic clause behind it (`validate_semantics/2` falls through to `:ok`), and no validator on any plane checks the duplicates; recorded in `docs/TODO.md` | Dm4 |
 | D10 | `TestCanonicalizeJSONPlanProposalHashMatchesTheControlPlaneDigest` — second half | the daemon recomputed `proposal_hash` with the `normalizePlanProposal` default before admitting an `accept_plan` command | deleted with `validateGoalCommandPredicateIDs`; TS `validateGoalCommandSemantics` + `validate_goal_command/2` enforce it; the first half (canonical bytes + Jason digest) stays | Dm5 |
 | D11 | `TestGoalTransportParsesContractFixtures` — the semantic assertion for the 15 fixtures whose manifest `semantic_valid` ≠ `schema_valid` | `decision` 5 (`duplicate-option`, `missing-resolution`, `open-with-resolution`, `unknown-option`, `superseded-with-resolution`), `goal-command` 6 (`amend-deterministic-review`, `plan-same-change-branch`, `decision-plan-same-change-branch`, `proposal-hash-mismatch`, `request-plan-subject-resource-mismatch`, `unpaired-surrogate`), `goal-revision` 2 (`duplicate-predicate-id`, `deterministic-review`), `goal-create` 1 (`deterministic-review`), `evidence-batch` 1 (`duplicate-key`) | schema arm unchanged for all 248; Elixir `contract_fixture_manifest_test.exs` ("public Elixir validators agree with every manifest semantic expectation") pins the semantic column; the proposal rules stay live for a proposal embedded in a TaskResult (`validatePlanProposalPredicateIDs` via `TaskResult.Validate`) | Dm6/Dm7 |
 
 The 2 `plan-proposal` rows left this row when the apply stage restored their oracle (finding 1), so
 D11 now covers 15 fixtures, and both restored rows redden under their mutants (§9 Dm7, Dm12). The
 other 85 fixtures of the seven remaining no-oracle envelopes keep their coverage (100 fixtures in
-those envelopes − the 15 semantic-only rows): their `semantic_valid` equals `schema_valid`, which the
-unchanged schema assertion pins. Test names were kept byte-identical, including
-`TestParseEvidenceBatchRejectsDuplicateJSONObjectMembers` whose name now outlives the parser it was
-named after (contract clause "no test name changes"); the retarget is visible in its body
-(`RejectDuplicateJSONMembers`).
+those envelopes − the 15 semantic-only rows): those 85 rows carry neither `semantic_valid` nor
+`schema_valid`, so both expectations fall back to `valid` (measured over the manifest: all 33 rows
+that carry `semantic_valid` also carry `schema_valid`, and 32 of those 33 differ; the 15 no-oracle
+rows are a subset of the 33), which the unchanged schema assertion pins. Test names were kept
+byte-identical, including `TestParseEvidenceBatchRejectsDuplicateJSONObjectMembers` whose name now
+outlives the parser it was named after (contract clause "no test name changes"); the retarget is
+visible in its body (`RejectDuplicateJSONMembers`).
 
 Test-name inventory (base vs HEAD, `^func Test…` sets per retargeted file): no name was renamed or
 added in any file; the only removals are the fully dropped case sets —
@@ -316,11 +320,12 @@ Residual risks and known limits:
   (`control/lib/symmetry_control/goals/contract_validation.ex` + the Elixir manifest test over all
   248 fixtures, and TS `contracts/ts/semantics.ts`); a future daemon consumer calls the production
   parsers (D5) or re-adds a dropped rule with its own tests.
-- `contracts/README.md:217` still names `protocol.ValidateGoalEnvelope`, and
+- The `contracts/README.md` sentence that named `protocol.ValidateGoalEnvelope` was rewritten to the
+  retained production entry points by the fix stage under the conductor's REV-01 amendment (§12);
   `docs/archive/CLOSED-TODO.md:3640` still names `goal_contract_semantics.go` +
-  `canonicalPlanProposalSHA256`. Both documents are outside this slice's owned set; the citation
-  gate audits only documents a revision modifies, and this revision modifies neither. Carried in the
-  PR body instead of repaired outside the owned set.
+  `canonicalPlanProposalSHA256` — a historical record of a past fix, in a document this revision does
+  not modify. The citation gate audits only documents a revision modifies, so it never reads that
+  closure; carried in the PR body by design.
 - `TestParseEvidenceBatchRejectsDuplicateJSONObjectMembers` keeps the name of the parser it was
   named after (the contract forbids test-name changes); its body now calls
   `RejectDuplicateJSONMembers`.
@@ -355,3 +360,51 @@ foreground, one heavy job at a time; from `daemon/` unless noted.
 
 The implement gate recorded 13 packages `ok`; the package set now has 14 because `harness/linejson`
 (#222, `4fdea989`) is part of the run.
+
+## 12. Fix-stage re-verification (2026-11-22; review REV-01..REV-06)
+
+All six review findings were fixed in place. No Go behaviour changed — the only source edit is a
+comment coordinate in `goal_subject_test.go:179` — so the deletion's gates were re-run to confirm the
+tree, not re-argued. All foreground, one heavy job at a time; from `daemon/` unless noted.
+
+| gate | exit | output |
+| --- | --- | --- |
+| `gofmt -l .` | 0 | no files listed |
+| `go vet ./...` (windows/amd64) | 0 | no output |
+| `go build ./...`, `GOOS=windows go build ./...`, `GOOS=linux GOARCH=amd64 go build ./...`, `GOOS=linux GOARCH=arm64 go build ./...` | 0 each | |
+| `go test -count=1 ./internal/protocol/ ./internal/app/ ./internal/state/ ./internal/control/ ./internal/harness/... ./internal/workspace/` | 0 | 14 packages `ok` (protocol 0.986s, app 192.328s, state 10.410s, control 1.331s, harness 14.618s + 8 sub-packages, workspace 172.769s); 3995 distinct test names executed — 3958 pass, 37 skip, 0 fail |
+| WSL `Ubuntu-24.04` (go1.27.0) `go test -count=1 ./internal/state/ ./internal/workspace/` | 0 | `ok state 15.252s`, `ok workspace 65.516s` |
+| `deadcode ./cmd/...` windows/amd64 / linux-amd64 / linux-arm64 (after) | 0 | 92 / 201 / 153 — unchanged from §3, and none of the deleted 26 names appears in either GOOS output |
+| deleted-name `git grep -nw` over `daemon/**` | n/a | 0 matches; the plain grep matches only the retained test name `TestParseEvidenceBatchRejectsDuplicateJSONObjectMembers` (a compound identifier, not the deleted symbol) |
+| production-entry-point caller sets (`git grep -lw`, pre-fix tree ↔ fix tree) | n/a | unchanged for all five entry points (12 / 6 / 18 / 4 / 7 files) |
+| citation scan over the audited corpus for the 26 names | n/a | 1 hit, `docs/archive/CLOSED-TODO.md:3640` (an unmodified document; the gate reads modified documents only) |
+| `python scripts/ci/test-check-citation-existence.py` | 0 | `Ran 49 tests in 136.602s` … `OK` |
+| static test-function counts (`^func Test` over the six package trees, pre-fix tree ↔ fix tree) | n/a | 1712 ↔ 1712 — no test added, removed, renamed or re-pinned |
+| `git diff --check` | 0 | clean |
+| DLP probe (added lines: profile-path pattern, backslash-u pattern) | n/a | 0 host-path hits; 0 backslash-u hits |
+| host-path scan over `git diff origin/main...HEAD` and the working diff | n/a | 0 hits |
+
+What the fix round changed:
+
+- REV-01 (P2): `contracts/README.md`'s boundary sentence named the deleted `protocol.ValidateGoalEnvelope`;
+  under the conductor's owned-set amendment it now names the retained production entry points
+  (`ParseAdmissionInput`, `ParseTaskResult`, `ValidateTaskResultForAdmission`, `DecodeContextSnapshot`).
+  No doc citation of a deleted symbol dangles in the delivered tree except the `CLOSED-TODO.md:3640`
+  closure, a historical record this revision does not touch.
+- REV-02 (P2): the D7/D9 rows above now state the truth — the duplicate receipt-id/`evidence_key` and
+  conflict index/`evidence_key` rules were not on a production path and have no remaining equivalent;
+  the phantom `validate_evidence_batch_receipt_set` name is gone, and `docs/TODO.md` carries the
+  uniqueness-enforcement entry (owner: contracts strictness (A6)).
+- REV-03 (P3): the D6/D8 rows no longer attribute their equivalent to TS (`contracts/ts/semantics.ts`
+  holds no response or conflict-details validator; the schemas and the Elixir manifest test pin them).
+- REV-04 (P3): the plan's `protocol.go` coordinate is 649 L at the re-derivation baseline (`719` was
+  `0fa9b705`'s).
+- REV-05 (P3): the other-85 sentence now states that those rows carry neither key and both
+  expectations fall back to `valid`; the "17 rows" phrase is scoped to the D11 set (33 manifest rows
+  carry `semantic_valid`, 32 of them differing).
+- REV-06 (P3): the frontend pin coordinate is `goal-attention.test.tsx:1238`, where the digest actually
+  lives (`751-790` was a decision-resolution block).
+
+The residual-risk records in this file and in the plan were updated to match. Fix-stage delta
+(`git diff --shortstat`, the reported source): 5 files, 128 insertions(+), 43 deletions(-) — three
+documents, this evidence file, and the one test comment.

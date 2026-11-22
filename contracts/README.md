@@ -214,7 +214,8 @@ pnpm contracts:generate
 `contracts.ValidateSchema` is the structural Draft 7 oracle; `DecodeSchema`
 adds strict raw JSON checks before decoding a generated DTO. Full cross-field
 envelope validation belongs to `daemon/internal/protocol` and enters through
-`protocol.ValidateGoalEnvelope`.
+the production entry points `ParseAdmissionInput`, `ParseTaskResult`,
+`ValidateTaskResultForAdmission` and `DecodeContextSnapshot`.
 
 Known limitation: the quicktype-generated Go bundle flattens the timeline item
 `oneOf` into a single all-optional struct, so the Go side does not guarantee

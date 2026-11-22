@@ -1352,3 +1352,21 @@ instead of appended.
       scope: both files a fix touches (`frontend/src/test-setup.ts`, `frontend/src/app/portal-double.ts`)
       are in rf-w4-11's owned set; no suite seeds a token yet, and an unexercised `ws` path would be
       unproven behaviour in a slice whose executed-case count is pinned.
+
+## Contracts: the evidence-batch response and conflict-details duplicate identities are unenforced (rf-w6-08 review REV-02)
+
+- [ ] Restore cross-item uniqueness for the evidence-batch response and conflict-details envelopes.
+      The daemon-side parsers that rejected duplicate receipt `id`/`evidence_key` and duplicate
+      conflict index/`evidence_key` were deleted with the dead goal-envelope family
+      (rf-w6-08, 2026-11-22), and no plane enforces the rules now: neither
+      `evidence-batch-response.schema.json` nor `evidence-batch-conflict-details.schema.json` carries
+      `uniqueItems` (which would express whole-item, not per-field, uniqueness); the Elixir semantic
+      clause for a response checks only receipt `run_id` equality
+      (`control/lib/symmetry_control/goals/contract_validation.ex:565-578`) and `validate_semantics/2`
+      falls through to `:ok` for conflict details (`:563`); `contracts/ts/semantics.ts` has no
+      response or conflict-details validator; and the live Go receipt check
+      (`daemon/internal/control/validation.go:852`) correlates receipts to the submitted evidence by
+      index without checking duplicates. The gap is latent — the live client correlates receipts by
+      index and the deleted daemon parsers had no production caller — so the fix is a strictness
+      restore, not an incident: add `uniqueItems` where it can express the rule, or a semantic clause
+      on the Elixir side. Owner: contracts strictness (A6).

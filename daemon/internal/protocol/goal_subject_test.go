@@ -176,7 +176,7 @@ func TestCanonicalizeJSONEscapesControlCharactersLikeTheControlPlane(t *testing.
 
 // The control plane digests plan-proposal canonical JSON with Jason; the
 // expectation is the digest the frontend pin records
-// (frontend/src/features/goals/goal-attention.test.tsx:751-790).
+// (frontend/src/features/goals/goal-attention.test.tsx:1238).
 func TestCanonicalizeJSONPlanProposalHashMatchesTheControlPlaneDigest(t *testing.T) {
 	canonical, err := CanonicalizeJSON([]byte(`{"schema_version":"symmetry.plan.v1","items":[{"description":"before\u000Bafter\u001Bend","integration":false,"change_target":null}]}`))
 	if err != nil {

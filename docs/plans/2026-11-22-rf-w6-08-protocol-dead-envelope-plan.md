@@ -10,7 +10,8 @@ coordinates are from `0fa9b705` (2026-11-21) and are re-derived here as the cont
 
 The contract's dependency gate is satisfied: `#178` (W2-12b) is merged as `c171663b`, the operator
 client and the v1 `Task`/`TaskWaiting` decoders now live in `daemon/e2e/internal/operator/`, and
-`daemon/internal/protocol/protocol.go` (719 L) holds no legacy decoder — its remaining
+`daemon/internal/protocol/protocol.go` (649 L at this baseline; the contract's 719 L coordinate is
+`0fa9b705`'s) holds no legacy decoder — its remaining
 `UnmarshalJSON` set (`RuntimeRegistration`, `RuntimeCapabilities`, `Work`, `ClaimResponse`,
 `LeaseHeartbeatResponse`, `Run`, `TaskCommand`) is unreported by `deadcode` on both GOOS, and the
 file therefore drops out of the owned set entirely (recorded, not edited).
@@ -65,7 +66,7 @@ each one is dispositioned by this slice.
 | 22 | `ValidateGoalCommand` (`:93`) | `goal_schema.go:235` (deleted caller, same file) | deleted |
 | 23 | `DecodeDecision` (`:146`) | `goal_schema.go:220` (deleted caller, same file) | deleted |
 | 24 | `ValidateGoalCreate` (`:173`) | `goal_schema.go:237` (deleted caller, same file) | deleted |
-| 25 | `ValidateGoalEnvelope` (`:208`) | `goal_contract_fixture_test.go:70`, `goal_contract_semantics_test.go` ×7 (retargeted/dropped), `contracts/README.md:217` (prose citation, out of scope — see residual risks) | deleted |
+| 25 | `ValidateGoalEnvelope` (`:208`) | `goal_contract_fixture_test.go:70`, `goal_contract_semantics_test.go` ×7 (retargeted/dropped), `contracts/README.md:217` (prose citation; rewritten by the fix stage under the conductor's REV-01 owned-set amendment) | deleted |
 | 26 | `ParseSubject` (`goal_subject.go:91`) | `goal_transport_test.go:71` (retargeted) | deleted |
 
 Every non-test reference of the 26 is either inside the defining file or inside a caller this slice
@@ -195,17 +196,18 @@ the **same** manifest by `control/test/symmetry_control/goals/contract_fixture_m
 | D3 | `TestParseEvidenceBatchValidatesBatchIdentityAndItemSemantics` | item `run_id` equals batch `run_id`; one item minimum; ≤256 items | `ContractValidation.validate_evidence_batch` (manifest-pinned); `EvidenceBatchSchemaVersion`/count rules deletable daemon-side |
 | D4 | `TestParseEvidenceBatchRejectsDuplicateKeysAndIDs` | duplicate `evidence_key`/`evidence_id` within a batch | same |
 | D5 | `TestParseEvidenceBatchRejectsItemRunIDMismatch` | item/batch run identity (mutation row) | same |
-| D6 | `TestParseEvidenceBatchResponseValidatesReceipts` | receipt dispositions `created`/`replayed`, ordered receipts | `validate_evidence_batch_response`; the **request-correlated** live counterpart is `control/validation.go:852 validateGoalEvidenceBatchReceipt` (unchanged, receipt count/run-id/disposition/observed-at vs the submitted evidence) |
-| D7 | `TestParseEvidenceBatchResponseRejectsMismatchedRunAndDuplicateIdentities` — 3 subtests | receipt `run_id` equality; duplicate receipt `id`/`evidence_key` | same (`validate_evidence_batch_receipt_set` in the control validators) |
-| D8 | `TestParseEvidenceBatchConflictDetailsValidatesItems` | index `0..255`, fixed `conflict` disposition | `validate_evidence_batch_conflict_details` |
-| D9 | `TestParseEvidenceBatchConflictDetailsRejectsDuplicateIndexesAndKeys` — 2 subtests | duplicate index / duplicate evidence key | same |
+| D6 | `TestParseEvidenceBatchResponseValidatesReceipts` | receipt dispositions `created`/`replayed`, ordered receipts | `validate_evidence_batch_response` (schema-only for `minItems`/disposition); the **request-correlated** live counterpart is `control/validation.go:852 validateGoalEvidenceBatchReceipt` (unchanged, receipt count/run-id/disposition/observed-at vs the submitted evidence) |
+| D7 | `TestParseEvidenceBatchResponseRejectsMismatchedRunAndDuplicateIdentities` — 3 subtests | receipt `run_id` equality; duplicate receipt `id`/`evidence_key` | `run_id` equality: `validate_evidence_batch_response` + the live by-index path `control/validation.go:852`; duplicate `id`/`evidence_key`: **no remaining enforcement** — the response schema carries no `uniqueItems` and the Elixir semantic clause checks only `run_id`; recorded in `docs/TODO.md` |
+| D8 | `TestParseEvidenceBatchConflictDetailsValidatesItems` | index `0..255`, fixed `conflict` disposition | `validate_evidence_batch_conflict_details` (schema-only: index bounds, `const conflict`, item count) |
+| D9 | `TestParseEvidenceBatchConflictDetailsRejectsDuplicateIndexesAndKeys` — 2 subtests | duplicate index / duplicate evidence key | **no remaining enforcement** — the conflict-details schema carries no `uniqueItems` and the validator has no semantic clause behind it; recorded in `docs/TODO.md` |
 | D10 | `TestCanonicalizeJSONPlanProposalHashMatchesTheControlPlaneDigest` second half | the daemon recomputes `proposal_hash` with the omitted-`integration` default before admitting an `accept_plan` command | deleted with the validator (`"proposal_hash does not match canonical proposal"`); control/TS `validateGoalCommandSemantics` enforces it; the first half (canonical bytes + Jason digest) stays and keeps its name |
 | D11 | `TestGoalTransportParsesContractFixtures` — semantic assertion for the 15 fixtures whose manifest `semantic_valid` differs from `schema_valid` | `decision` 5, `goal-command` 6, `goal-revision` 2, `goal-create` 1, `evidence-batch` 1 | the schema assertion for the same 248 fixtures is unchanged; the Elixir manifest test pins the semantic column of all 248 |
 
 For D11 the other 85 fixtures of the seven remaining no-oracle envelopes keep coverage (100 fixtures
-in those envelopes − the 15 semantic-only rows): their `semantic_valid` equals `schema_valid`, which
-the unchanged schema assertion already pins (recorded, not silently dropped). The 2 `plan-proposal`
-rows left D11 when the apply stage restored their oracle (finding 1) and are mutation-checked there.
+in those envelopes − the 15 semantic-only rows): those 85 rows carry neither `semantic_valid` nor
+`schema_valid`, so both expectations fall back to `valid`, which the unchanged schema assertion
+already pins (recorded, not silently dropped). The 2 `plan-proposal` rows left D11 when the apply
+stage restored their oracle (finding 1) and are mutation-checked there.
 
 ## Evidence plan (all foreground; one heavy job at a time)
 
@@ -221,9 +223,9 @@ Order matters on this host: the `deadcode` runs and the test suites never run co
    ./internal/harness/... ./internal/workspace/` (Windows-local, no `-race`: no cgo on this host).
 4. WSL `go test -count=1 ./internal/state/` for the linux-tagged retargeted file
    (`linux_clone_journal_test.go`); WSL `go test -count=1 ./internal/workspace/` likewise.
-5. Deleted-name greps both ways: `git grep -nw <name>` for all 26 (no reference left outside
-   `docs/`, `contracts/README.md` prose, and the archived citation) and a caller-loss check for the
-   five production entry points (their caller sets unchanged).
+5. Deleted-name greps both ways: `git grep -nw <name>` for all 26 (no reference left outside this
+   slice's own docs and the archived citation) and a caller-loss check for the five production entry
+   points (their caller sets unchanged).
 6. `git diff --check`; `git diff --numstat` for the report-only LOC delta.
 7. Mutants in throwaway copies outside the worktree (`git worktree add`, removed afterwards): the
    retargeted suites are copied onto the **pre-deletion** bytes and must be green there (the
@@ -238,8 +240,9 @@ Order matters on this host: the `deadcode` runs and the test suites never run co
    Dropped-case mutations (D1-D11) are run on the same pre-deletion tree to record each case's red
    baseline before its oracle is deleted: batch identity/duplicate rules (one mutant of
    `EvidenceBatch.UnmarshalJSON`), receipt-set rules, conflict-item rules, the deterministic-acceptance
-   predicate rule, the proposal-hash rule, and the manifest semantic validators for the 17 rows
-   (15 after the apply stage's finding 1 restored the `plan-proposal` arm).
+   predicate rule, the proposal-hash rule, and the manifest semantic validators for the D11 row set
+   (17 rows at the base, 15 after the apply stage's finding 1 restored the `plan-proposal` arm; the
+   manifest has 33 rows carrying `semantic_valid` in total, 32 of which differ from `schema_valid`).
 8. `python scripts/ci/test-check-citation-existence.py` (the gate script's own unit suite) and a
    citation scan over the audited corpus for the 26 names (measured: one hit,
    `docs/archive/CLOSED-TODO.md:3640` — a document this PR does not modify, and the gate reads only
@@ -278,8 +281,9 @@ Order matters on this host: the `deadcode` runs and the test suites never run co
 
 - **F-06's second half** (`decodeStrictObject` returning the member map once, killing the second
   parse): unchanged, recorded here as an unowned finding, not silently dropped.
-- `contracts/**` (including `contracts/README.md`'s prose citation of `ValidateGoalEnvelope`) and
-  the fixture JSON corpus: clause 4.
+- `contracts/**` and the fixture JSON corpus: clause 4. The conductor's REV-01 amendment extends the
+  owned set by `contracts/README.md`'s one sentence that cited the deleted `ValidateGoalEnvelope`,
+  rewritten by the fix stage toward the retained production entry points.
 - `protocol.go`, `e2e/internal/operator/**`, the app/state/control/harness production files,
   `goal_validation.go`'s live validators, `decodeStrictObject` and the live `UnmarshalJSON` family:
   clause 4; `protocol.go` additionally verified to hold no legacy decoder (it leaves the owned set).
@@ -293,13 +297,14 @@ Order matters on this host: the `deadcode` runs and the test suites never run co
 
 ## Residual risks and limits
 
-- **Two stale doc citations outlive the deletion.** `contracts/README.md:217` names
-  `protocol.ValidateGoalEnvelope` as the boundary entry point, and `docs/archive/CLOSED-TODO.md:3640`
-  names `goal_contract_semantics.go` + `canonicalPlanProposalSHA256` as the pre-admission hash
-  recompute. Both documents are outside this slice's owned set (clause 4; the archive is a
-  historical record of a past fix). The citation gate audits only documents the revision modifies,
-  and this revision modifies neither, so no gate reddens; the prose is carried in the PR body and
-  here rather than silently repaired outside the owned set.
+- **One prose citation of a deleted symbol outlives the deletion, by design.**
+  `docs/archive/CLOSED-TODO.md:3640` names `goal_contract_semantics.go` +
+  `canonicalPlanProposalSHA256` as the pre-admission hash recompute: a historical record of a past
+  fix, in a document outside this slice's owned set (clause 4) that this revision does not modify.
+  The citation gate audits only documents the revision modifies, so no gate reddens; the prose is
+  carried in the PR body rather than rewritten. The other citation, `contracts/README.md:217`'s
+  `protocol.ValidateGoalEnvelope`, was rewritten to the retained production entry points by the fix
+  stage under the conductor's REV-01 amendment.
 - **`deadcode` reachability is RTA from `./cmd/...`** with the tool's documented caveats (no
   `//go:linkname` aliasing, single GOOS/GOARCH per run, generated files excluded); the second
   strategy is the whole-repo grep, and the `-test ./...` leg classifies the residual references as
@@ -330,3 +335,11 @@ Order matters on this host: the `deadcode` runs and the test suites never run co
   clean, no live caller lost. LOC delta −935 net (report-only).
 - `goal_subject_test.go` joined the retarget set as the contract-enumeration correction predicted;
   `goal_admission_input_test.go` needed no edit; `protocol.go` stayed unedited and left the owned set.
+- Fix round (2026-11-22, review REV-01..REV-06): the `contracts/README.md` sentence was rewritten to
+  the retained production entry points (conductor-owned-set amendment); the D7/D9 drop rows now
+  record that the duplicate receipt-id/evidence_key and conflict index/evidence_key rules have no
+  remaining enforcement, with the new `docs/TODO.md` entry (owner: contracts strictness (A6)); the
+  D6/D8 "+ TS" attribution was dropped; `protocol.go`'s 649 L baseline and the D11 row count are
+  restated; the frontend pin coordinate is `goal-attention.test.tsx:1238`; the residual-risk record
+  above holds. Gate re-run and fix-stage delta in
+  `docs/evidence/rf-w6-08-protocol-dead-envelope-2026-11-22.md` §12.
