@@ -30,12 +30,14 @@ Ubuntu 26.04, systemd 259, kernel 7.0; plus `ubuntu-24.04`):
 | Check | Before | After |
 | --- | --- | --- |
 | Unified cgroup v2 precondition | `-d /run/systemd/system`, `-f /sys/fs/cgroup/cgroup.controllers`, **and** `-f /sys/fs/cgroup/cgroup.events` | `-d /run/systemd/system`, `-f /sys/fs/cgroup/cgroup.controllers`, and `stat -fc %T /sys/fs/cgroup` = `cgroup2fs`; root `cgroup.events` is no longer required |
-| Unit stop proof | after exit: `systemctl show --property=ControlGroup` must yield a non-root absolute path, whose directory is gone or reads `populated 0` | the unit payload records its live `/proc/self/cgroup` `0::` path (`cgroup_path=<absolute>` in the unit log; the peer Go probe already prints the same key in its report, the python payload now prints it). After exit the proof requires `LoadState=not-found` or `ActiveState=inactive|failed`, `MainPID=0`, the recorded path absolute, non-root, free of `..`, ending in the exact unit name under a `*.slice`, and the recorded directory either gone or reading `populated 0` in its `cgroup.events` |
-| Evidence JSON | `version/case/source_commit/architecture/scope/not_evidence_of/systemd_is_pid1/unified_cgroup_v2_mounted/delegated_leaf_probe_passed/transient_unit_stop_proven/cross_uid_peer_probe_passed/cross_uid_capability/host_a_pidfd_getfd/peer_transient_unit_stop_proven/status/failure_stage` | identical fields and semantics |
+| Unit stop proof | after exit: `systemctl show --property=ControlGroup` must yield a non-root absolute path, whose directory is gone or reads `populated 0` | the unit payload records its live `/proc/self/cgroup` `0::` path (`cgroup_path=<absolute>` in the unit log; both payloads print it before their first strict check, so failure branches still carry it). After exit the proof requires `LoadState=not-found` or `ActiveState=inactive|failed`, `MainPID=0`, the recorded path absolute, non-root, free of `..`, ending in the exact unit name under a `*.slice`, and the recorded directory either gone or reading `populated 0` in its `cgroup.events` |
+| Evidence JSON | the round-1 field set (`version/case/source_commit/architecture/scope/not_evidence_of/systemd_is_pid1/unified_cgroup_v2_mounted/delegated_leaf_probe_passed/transient_unit_stop_proven/cross_uid_peer_probe_passed/cross_uid_capability/host_a_pidfd_getfd/peer_transient_unit_stop_proven/status/failure_stage`) | those fields plus `apparmor_userns_exception` (`not_needed` when the host has no restriction, `required` from entering the restriction branch, `per_program` only after a successful load); `not_evidence_of` gains "production launcher/gate under the AppArmor unprivileged-userns restriction" whenever the exception was loaded |
 
 A missing or root recorded path fails the proof. The peer unit uses the same proof against the path its own
-report records; the payloads also record the path in unit-failure branches so cleanup can still prove the stop
-and does not overwrite an earlier `failure_stage` with `transient_unit_cleanup`.
+report records. The python payload and the Go peer probe each print `cgroup_path` before their first strict
+check (round 3 moved the Go probe's print from after `checkHostPrerequisites` to before it), so a unit-failure
+branch still proves the stop instead of overwriting the earlier `failure_stage` with `transient_unit_cleanup`;
+only a host whose `/proc/self/cgroup` carries no single `0::` path has nothing to record.
 
 ## Local verification (WSL2 Ubuntu-24.04, systemd 255, kernel 6.18.58.1-microsoft-standard-WSL2)
 
@@ -85,7 +87,8 @@ fixed B-only map (`1 65534 1`) leaves in-namespace ID 0 unmapped, so the worker'
 `cap_emulate_setxuid()` rule (`capabilities(7)`: capabilities are cleared only when a process that is root
 *in its user namespace* changes to a nonzero UID) never fires, B's exec keeps `P'(ambient)`, and B reports
 `CapEff=0x800c0` (bits 6, 7, 19). The fix clears the worker's ambient set with
-`PR_CAP_AMBIENT_CLEAR_ALL` before B's launch; the B-only maps and the `CapEff=0` check are unchanged.
+`PR_CAP_AMBIENT_CLEAR_ALL` before B's launch; the B-only maps and the `CapEff=0` check are unchanged. The
+ambient clear alone still left B at `CapInh=0x800c0`; round 3 below closes that gap.
 
 Production never depended on kernel clearing here: `daemon/native/linux-gate/c-gate/gate.c` `drop_to_b`
 (line 998) clears the sets explicitly and `read_self_status` (line 932) verifies zeros, so this stage said
@@ -105,8 +108,10 @@ with `fork/exec /proc/self/exe: operation not permitted`. Two fixes, in the wrap
   through `apparmor_parser --replace`, unloaded in `cleanup()` with `apparmor_parser -R`. The global sysctl
   is never changed, and the profile grants only `userns` on one ephemeral path (the same pattern as
   `scripts/ci/prepare-private-namespace-tests.sh`). The run records
-  `apparmor_userns_exception=per_program|not_needed` as a log line and as an additive evidence JSON field;
-  a missing parser or a failed load fails at `failure_stage=apparmor_userns_exception`.
+  `apparmor_userns_exception=not_needed|per_program` as a log line and as an additive evidence JSON field;
+  a missing parser or a failed load fails at `failure_stage=apparmor_userns_exception`. Round 3 adds the
+  intermediate `required` state, makes a failed unload set `cleanup_failed`, and names the production
+  launcher/gate caveat in `not_evidence_of` whenever the exception was loaded.
 - The Go probe fails early at `apparmor-unprivileged-userns-restricted` when the sysctl is 1 and
   `/proc/self/attr/current` (or `/proc/self/attr/apparmor/current`) still reads exactly `unconfined`,
   instead of the misleading B-launch EPERM that follows the transition.
@@ -121,11 +126,15 @@ it has already validated in-process (`runCrossUIDProbe`), and the required-marke
 ### Round-2 local verification (WSL2 Ubuntu-24.04, systemd 255, kernel 6.18.58.1-microsoft-standard-WSL2)
 
 Script run from `<worktree>` as user `accept` with `RUNNER_TEMP=<scratch>`, `GITHUB_RUN_ID=1`,
-`GITHUB_RUN_ATTEMPT=1`, `GITHUB_SHA=68b7dbb5a606603fe04bd6c8e79cfbb6f22b1377`. This host has no
-`apparmor_restrict_unprivileged_userns`, so `apparmor_userns_exception=not_needed`:
+`GITHUB_RUN_ATTEMPT=1`. This host has no `apparmor_restrict_unprivileged_userns`, so
+`apparmor_userns_exception=not_needed`. The JSON below is reproduced with one correction: the run recorded
+`source_commit=68b7dbb5a606603fe04bd6c8e79cfbb6f22b1377`, but that revision carried no AppArmor code at all
+(`git show 68b7dbb5:scripts/ci/linux-v2-host-prerequisite-probe.sh` contains no `apparmor`), so the value was
+a stale label. The probe files that produced the JSON are those of
+`67619892b26f758d91cd1fc832d580c9da2ea7de`, which is what it binds here:
 
 ```json
-{"apparmor_userns_exception":"not_needed","architecture":"x86_64","case":"linux_v2_host_prerequisite_probe","cross_uid_capability":"fixed-b-child-userns-fdinfo-pidfd-getfd","cross_uid_peer_probe_passed":true,"delegated_leaf_probe_passed":true,"failure_stage":"","host_a_pidfd_getfd":"passed","not_evidence_of":["production owner installation","native Pi/OpenCode execution","WSL2 positive support"],"peer_transient_unit_stop_proven":true,"scope":"systemd, delegated cgroup-v2 leaf, and credential-free cross-UID userns/fdinfo/pidfd_getfd host prerequisites only","source_commit":"68b7dbb5a606603fe04bd6c8e79cfbb6f22b1377","status":"passed","systemd_is_pid1":true,"transient_unit_stop_proven":true,"unified_cgroup_v2_mounted":true,"version":1}
+{"apparmor_userns_exception":"not_needed","architecture":"x86_64","case":"linux_v2_host_prerequisite_probe","cross_uid_capability":"fixed-b-child-userns-fdinfo-pidfd-getfd","cross_uid_peer_probe_passed":true,"delegated_leaf_probe_passed":true,"failure_stage":"","host_a_pidfd_getfd":"passed","not_evidence_of":["production owner installation","native Pi/OpenCode execution","WSL2 positive support"],"peer_transient_unit_stop_proven":true,"scope":"systemd, delegated cgroup-v2 leaf, and credential-free cross-UID userns/fdinfo/pidfd_getfd host prerequisites only","source_commit":"67619892b26f758d91cd1fc832d580c9da2ea7de","status":"passed","systemd_is_pid1":true,"transient_unit_stop_proven":true,"unified_cgroup_v2_mounted":true,"version":1}
 ```
 
 The probe now passes end to end on this host — including the B `CapEff=0` stage that previously failed —
@@ -154,6 +163,66 @@ own per-program `userns` exception (or the sysctl must be relaxed), to be specif
 amendment / W5-02a; the native acceptance fixture (`scripts/ci/linux-v2-native-acceptance.sh`) needs the
 same exception before its case sets can pass. Tracked in `docs/TODO.md`.
 
+## Round 3 (2026-11-22): fix round for the two independent reviews of this branch
+
+One review approved the branch with P3 items; the other required changes. Round 3 answers them in the probe
+files and in this note's records; every gate keeps its round-2 direction (fail-closed), and none is widened:
+
+- The Go peer probe prints `cgroup_path` right after reading its own `/proc/self/cgroup`, before every
+  `checkHostPrerequisites` branch, and the python payload prints it before its first strict check. An early
+  prerequisite failure therefore still lets `cleanup()` prove the unit stop and keeps the peer phase's
+  `failure_stage` instead of overwriting it with `transient_unit_cleanup`.
+- The namespace worker clears its inheritable capability set (`capset`, effective/permitted preserved, on the
+  thread that forks B) and B must show `CapEff=CapPrm=CapInh=CapAmb=0`; the ambient clear alone left
+  `CapInh=0x800c0`, because `execve` preserves the inheritable set. The root group-preparation helper's
+  credential-drop check now also requires `CapInh=0`.
+- The AppArmor branch records `apparmor_exception=required` from the moment it is entered (`per_program` only
+  after a successful load), a failed unload in `cleanup()` sets `cleanup_failed`, and a run that loaded the
+  exception adds "production launcher/gate under the AppArmor unprivileged-userns restriction" to
+  `not_evidence_of`.
+- `scripts/ci/test-linux-v2-host-prerequisite-probe.py` pins `unit_stopped_proven`'s path validation (empty,
+  relative, `/`, `..`, foreign unit name, non-`.slice` parent, running/activating unit, non-zero `MainPID`,
+  failing `systemctl show`) and the two accepted stopped shapes, with the systemd calls stubbed in-process.
+  It runs beside the other `test-linux-v2-*.py` fixtures in the `daemon` job's "Check Linux v2 fixture
+  contracts" step.
+
+### Round-3 local verification (same WSL2 host)
+
+`bash -n` exits 0; `shellcheck --severity=warning` and `--severity=style` (0.9.0) report nothing; `gofmt -l`
+is empty; `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOFLAGS=-mod=readonly go vet` on the probe exits 0. The new
+suite passes 13/13; reverting its basename guard (`"${recorded_cgroup##*/}" == "$unit_name"`) reddens
+`test_foreign_unit_name_is_rejected` — the foreign path is then accepted — and the guard-extraction
+assertion, after which the guard is restored and the suite passes again.
+
+Full probe run from the final worktree as user `accept` via a temporary copy of the wrapper
+(`wsl.exe -d Ubuntu-24.04 -u accept bash <scratch copy>`) with `RUNNER_TEMP=<scratch>`, `GITHUB_RUN_ID=1`,
+`GITHUB_RUN_ATTEMPT=1` and `GITHUB_SHA=3013ede0fd83b8f5382f2f5cd343065ac018f908`; it used the final probe
+files (`sha256` `2d661805652548c957720ce4cd2e92f8673e25d6052c12f44830793365e540aa` wrapper,
+`fde1238995fcadd4de22964c8bac9f21eea8282c2e2e4a35704617c96ebb772e` peer probe) from a worktree whose HEAD is
+that commit plus this round-3 fix set, which was uncommitted when the run was taken:
+
+```json
+{"apparmor_userns_exception":"not_needed","architecture":"x86_64","case":"linux_v2_host_prerequisite_probe","cross_uid_capability":"fixed-b-child-userns-fdinfo-pidfd-getfd","cross_uid_peer_probe_passed":true,"delegated_leaf_probe_passed":true,"failure_stage":"","host_a_pidfd_getfd":"passed","not_evidence_of":["production owner installation","native Pi/OpenCode execution","WSL2 positive support"],"peer_transient_unit_stop_proven":true,"scope":"systemd, delegated cgroup-v2 leaf, and credential-free cross-UID userns/fdinfo/pidfd_getfd host prerequisites only","source_commit":"3013ede0fd83b8f5382f2f5cd343065ac018f908","status":"passed","systemd_is_pid1":true,"transient_unit_stop_proven":true,"unified_cgroup_v2_mounted":true,"version":1}
+```
+
+Disabling only the inheritable clear and re-running the same wrapper reddens the new assertion exactly as the
+review measured: `status=failed stage=cross-uid-b-capabilities-nonzero detail="B must have CapInh=0"` (peer
+log) with `failure_stage=cross_uid_userns_fdinfo_pidfd_getfd` and `peer_transient_unit_stop_proven=true` in
+the JSON — the ambient clear alone leaves B inheritable-nonzero, and the early `cgroup_path` line is what
+keeps the stop proof and the real stage. The clear is then restored (peer-probe `sha256` back to
+`fde1238995fcadd4de22964c8bac9f21eea8282c2e2e4a35704617c96ebb772e`), and the final run passes again,
+producing the JSON above.
+
+Forcing the probe's first prerequisite branch (`user.max_user_namespaces=0`, restored after the run) shows
+the same stop-proof behaviour on a real early prerequisite failure: the peer log carries
+`status=failed stage=user-namespaces-disabled detail="user.max_user_namespaces must be positive"` after the
+early `cgroup_path` line, and the JSON reports `status=failed` with
+`failure_stage=cross_uid_userns_fdinfo_pidfd_getfd` (the peer phase, *not* `transient_unit_cleanup`) plus
+`transient_unit_stop_proven` and `peer_transient_unit_stop_proven` true.
+
+The AppArmor branch cannot run on this WSL kernel (no userns mediation); its round-3 edits are exercised only
+by code reading and by the hosted runner's next run on this branch.
+
 ## Adjacent code check (no changes made)
 
 - `daemon/internal/linuxpreflight/systemd_linux.go` `verifyEffectiveLinuxSystemdUnit` (line 123) requires
@@ -181,6 +250,16 @@ same exception before its case sets can pass. Tracked in `docs/TODO.md`.
 ## Not evidence of
 
 Production owner installation, native Pi/OpenCode execution, or WSL2 positive support. A passing probe on
-one host (the WSL round-2 run above, or a hosted runner with the AppArmor exception loaded) proves only the
+one host (the WSL round-3 run above, or a hosted runner with the AppArmor exception loaded) proves only the
 listed host prerequisites; a host missing any of them still fails, and the AppArmor exception branch is
-verified only where the kernel enforces the sysctl (the WSL host has none).
+verified only where the kernel enforces the sysctl (the WSL host has none). When that exception was loaded,
+the JSON's `not_evidence_of` names the production launcher/gate under the restriction explicitly, so a
+JSON-only consumer cannot read the pass as production evidence.
+
+## Residual risk
+
+- `unit_stopped_proven` still takes each payload's self-reported cgroup path and shape-checks it without
+  cross-checking the live unit's systemd `ControlGroup`/cgroup identity (the `linux-v2-native-acceptance.sh`
+  `guest_stopped_proven` pattern), so a payload that printed a well-shaped but wrong path would fall back to
+  the systemd-state proof alone. Accepted for this change (review P3-4); narrowing it needs an injection
+  experiment with a misreporting payload.

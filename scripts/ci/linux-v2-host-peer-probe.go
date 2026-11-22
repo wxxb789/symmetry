@@ -250,7 +250,7 @@ try:
         dropped = status(os.getpid())
         if (dropped["Uid"] != [a_uid] * 4 or dropped["Gid"] != [a_gid] * 4 or
             dropped["Groups"] or os.getgroups() or
-            any(capability_mask(name) != 0 for name in ("CapEff", "CapPrm", "CapAmb"))):
+            any(capability_mask(name) != 0 for name in ("CapEff", "CapPrm", "CapInh", "CapAmb"))):
             fail("credential-drop", "root prep did not fully drop to group-free A")
         print("group-preparation=passed initial_supplementary_group_count=%d" % len(groups_before), flush=True)
         if cgroup(os.getpid()) != service_cgroup:
@@ -982,6 +982,19 @@ func namespaceLaunchCapabilities() string {
 	return strings.Join(values, " ")
 }
 
+// B's exec preserves the inheritable set (capabilities(7) P'(inheritable)=P(inheritable)), so the worker
+// clears it alongside the ambient set before B starts.
+func clearInheritableCapabilities() error {
+	header := unix.CapUserHeader{Version: unix.LINUX_CAPABILITY_VERSION_3}
+	var sets [2]unix.CapUserData
+	if err := unix.Capget(&header, &sets[0]); err != nil {
+		return err
+	}
+	sets[0].Inheritable = 0
+	sets[1].Inheritable = 0
+	return unix.Capset(&header, &sets[0])
+}
+
 func namespaceWorker(leafDirectory string, parentUserNS string, input *bufio.Reader) int {
 	currentUserNS, err := os.Readlink("/proc/self/ns/user")
 	if err != nil {
@@ -991,10 +1004,14 @@ func namespaceWorker(leafDirectory string, parentUserNS string, input *bufio.Rea
 		return peerFailure("worker-userns-not-child", fmt.Errorf("worker remained in A's parent user namespace"))
 	}
 
-	// The B-only uid map leaves in-namespace 0 unmapped, so B's setuid(1) is no root transition and
-	// cap_emulate_setxuid would not clear the worker's ambient capabilities before B's exec (capabilities(7)).
+	// The B-only uid map leaves in-namespace 0 unmapped, so cap_emulate_setxuid never fires for B and
+	// its exec keeps the ambient and inheritable sets (capabilities(7)); sets are per-thread, hence the lock.
+	runtime.LockOSThread()
 	if err := unix.Prctl(unix.PR_CAP_AMBIENT, unix.PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0); err != nil {
 		return peerFailure("worker-ambient-caps-clear", err)
+	}
+	if err := clearInheritableCapabilities(); err != nil {
+		return peerFailure("worker-inheritable-caps-clear", err)
 	}
 
 	peer := exec.Command("/proc/self/exe", "--socket-peer", leafDirectory)
@@ -1375,9 +1392,11 @@ func runCrossUIDProbe(result *report, leafFD *os.File, leafDirectory string) (fa
 	if err != nil || strings.TrimSpace(peerGroups) != "" {
 		return "cross-uid-b-groups-not-empty", "B retained supplementary groups"
 	}
-	peerCapEff, err := statusValue(peerPID, "CapEff")
-	if err != nil || strings.TrimSpace(peerCapEff) != "0000000000000000" {
-		return "cross-uid-b-capabilities-nonzero", "B must have CapEff=0"
+	for _, field := range []string{"CapEff", "CapPrm", "CapInh", "CapAmb"} {
+		value, err := statusValue(peerPID, field)
+		if err != nil || strings.TrimSpace(value) != "0000000000000000" {
+			return "cross-uid-b-capabilities-nonzero", fmt.Sprintf("B must have %s=0", field)
+		}
 	}
 	peerUserNS, err := os.Readlink(fmt.Sprintf("/proc/%d/ns/user", peerPID))
 	if err != nil || peerUserNS != childNamespace {
@@ -1447,12 +1466,16 @@ func runProbe() (result report, failure string) {
 	if result.uid == 0 {
 		return result, "runner-is-root"
 	}
-	if failure := checkHostPrerequisites(&result); failure != "" {
-		return result, failure
-	}
+	// The wrapper proves the transient unit's stop from this payload-recorded path, so it is recorded
+	// before the first prerequisite check that can fail the probe.
 	result.cgroup, err = membership()
 	if err != nil {
+		result.failureDetail = err.Error()
 		return result, "parent-membership"
+	}
+	fmt.Printf("cgroup_path=%s\n", result.cgroup)
+	if failure := checkHostPrerequisites(&result); failure != "" {
+		return result, failure
 	}
 	parentDirectory, err := cgroupDirectory(result.cgroup)
 	if err != nil {
@@ -1603,9 +1626,6 @@ func main() {
 	}
 	if result.kernel != "" {
 		fmt.Printf("kernel=%s\n", result.kernel)
-	}
-	if result.cgroup != "" {
-		fmt.Printf("cgroup_path=%s\n", result.cgroup)
 	}
 	if result.leafCgroup != "" {
 		fmt.Printf("leaf_cgroup_path=%s\n", result.leafCgroup)

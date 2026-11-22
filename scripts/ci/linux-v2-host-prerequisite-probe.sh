@@ -73,13 +73,16 @@ import tempfile
     probe_passed, unit_cleanup_proven, peer_probe_passed, peer_unit_cleanup_proven,
     cross_uid_capability, apparmor_exception, exit_status,
 ) = sys.argv[1:]
+not_evidence_of = ["production owner installation", "native Pi/OpenCode execution", "WSL2 positive support"]
+if apparmor_exception == "per_program":
+    not_evidence_of.append("production launcher/gate under the AppArmor unprivileged-userns restriction")
 evidence = {
     "version": 1,
     "case": "linux_v2_host_prerequisite_probe",
     "source_commit": commit,
     "architecture": architecture,
     "scope": "systemd, delegated cgroup-v2 leaf, and credential-free cross-UID userns/fdinfo/pidfd_getfd host prerequisites only",
-    "not_evidence_of": ["production owner installation", "native Pi/OpenCode execution", "WSL2 positive support"],
+    "not_evidence_of": not_evidence_of,
     "systemd_is_pid1": systemd_pid1 == "1",
     "unified_cgroup_v2_mounted": cgroup_v2 == "1",
     "delegated_leaf_probe_passed": probe_passed == "1",
@@ -156,6 +159,7 @@ cleanup() {
   done
   if [[ -n "$apparmor_profile" ]]; then
     if ! sudo -n "$apparmor_parser" -R "$apparmor_profile" >/dev/null 2>&1; then
+      cleanup_failed=1
       printf 'AppArmor userns exception unload failed; profile=%s\n' "$apparmor_profile" >&2
     fi
     rm -f -- "$apparmor_profile"
@@ -195,11 +199,12 @@ def require(condition, stage):
     if not condition:
         raise SystemExit("prerequisite probe failed: " + stage)
 
-require(os.geteuid() == 65534 and os.getegid() == 65534, "fixed unprivileged service identity")
 entries = [line.rstrip("\n").split(":", 2)[2] for line in open("/proc/self/cgroup", encoding="ascii") if line.startswith("0::")]
+# Recorded before the first strict check, while the unit runs; systemd reports an empty ControlGroup after exit.
+if len(entries) == 1:
+    print("cgroup_path=" + entries[0], flush=True)
+require(os.geteuid() == 65534 and os.getegid() == 65534, "fixed unprivileged service identity")
 require(len(entries) == 1, "unified cgroup-v2 membership")
-# Recorded while the unit runs; systemd reports an empty ControlGroup after exit.
-print("cgroup_path=" + entries[0], flush=True)
 parent = pathlib.Path("/sys/fs/cgroup") / entries[0].lstrip("/")
 require(parent.is_dir() and os.access(parent / "cgroup.procs", os.W_OK), "delegated parent cgroup access")
 require((parent / "cgroup.kill").is_file(), "cgroup.kill availability")
@@ -273,6 +278,7 @@ if [[ -r /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
 fi
 if [[ "$restriction" == 1 ]]; then
   failure_stage=apparmor_userns_exception
+  apparmor_exception=required
   apparmor_parser=$(command -v apparmor_parser) || {
     printf 'AppArmor unprivileged user-namespace restriction is active but apparmor_parser is unavailable.\n' >&2
     exit 1
