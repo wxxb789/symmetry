@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/wxxb789/symmetry/daemon/internal/contracts"
@@ -199,9 +200,8 @@ type GoalEvidenceReceipt struct {
 	Disposition string `json:"disposition,omitempty"`
 }
 
-// GoalEvidenceBatch is the local DTO for the additive evidence batch wire
-// shape. The contract package will own the generated version once the schema
-// migration lands; the client keeps this boundary explicit in the meantime.
+// GoalEvidenceBatch is the schema-described batch document; the fence is
+// carried beside it on the wire.
 type GoalEvidenceBatch struct {
 	SchemaVersion string              `json:"schema_version"`
 	RunID         string              `json:"run_id"`
@@ -1026,7 +1026,7 @@ func (client *Client) requestGoalWithStatus(ctx context.Context, method, endpoin
 	if response == nil {
 		return statusCode, nil
 	}
-	if err := decodeStrictJSON(responseBody, response); err != nil {
+	if err := decodeResponseJSON(responseDecodeTyped, "", responseBody, response); err != nil {
 		return 0, responseErrorf("decode strict goal response: %w", err)
 	}
 	return statusCode, nil
@@ -1040,7 +1040,7 @@ func (client *Client) requestGoalContractWithStatus(ctx context.Context, method,
 	if oversized {
 		return 0, responseErrorf("response body exceeds %d bytes", client.maxResponseBytes)
 	}
-	if err := contracts.DecodeSchema(envelope, responseBody, response); err != nil {
+	if err := decodeResponseJSON(responseDecodeSchema, envelope, responseBody, response); err != nil {
 		return 0, responseErrorf("decode strict goal response: %w", err)
 	}
 	return statusCode, nil
@@ -1064,12 +1064,12 @@ func (client *transport) requestWithStatus(ctx context.Context, method, endpoint
 	}
 	if response == nil {
 		var discarded any
-		if err := decodeJSON(responseBody, &discarded); err != nil {
+		if err := decodeResponseJSON(responseDecodeLegacy, "", responseBody, &discarded); err != nil {
 			return 0, responseErrorf("decode response: %w", err)
 		}
 		return statusCode, nil
 	}
-	if err := decodeJSON(responseBody, response); err != nil {
+	if err := decodeResponseJSON(responseDecodeLegacy, "", responseBody, response); err != nil {
 		return 0, responseErrorf("decode response: %w", err)
 	}
 	return statusCode, nil
@@ -1157,18 +1157,56 @@ func rejectDuplicateJSONMembersOnly(value []byte) error {
 	return err
 }
 
-func decodeJSON(value []byte, target any) error {
-	if err := rejectDuplicateJSONMembersOnly(value); err != nil {
-		return err
+// responseDecodeLevel selects a Control response decode's strictness.
+type responseDecodeLevel int
+
+const (
+	responseDecodeLegacy responseDecodeLevel = iota
+	responseDecodeTyped
+	responseDecodeSchema
+	responseDecodeLevelCount
+)
+
+// Counts response decodes per level so a routing test can observe a path that
+// bypasses decodeResponseJSON or runs at the wrong level.
+var responseDecodeCalls [responseDecodeLevelCount]atomic.Int64
+
+// decodeResponseJSON is the single entry for Control response bodies; envelope
+// is read only at responseDecodeSchema.
+func decodeResponseJSON(level responseDecodeLevel, envelope contracts.Envelope, value []byte, target any) error {
+	switch level {
+	case responseDecodeSchema:
+		responseDecodeCalls[level].Add(1)
+		return contracts.DecodeSchema(envelope, value, target)
+	case responseDecodeTyped:
+		responseDecodeCalls[level].Add(1)
+		decoder := json.NewDecoder(bytes.NewReader(value))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(target); err != nil {
+			return err
+		}
+		if err := requireSingleJSONValue(decoder); err != nil {
+			return err
+		}
+		// Duplicate members are rejected only after the value parsed, preserving every
+		// pre-existing rejection message and precedence at every depth.
+		return protocol.RejectDuplicateJSONMembers(value)
+	case responseDecodeLegacy:
+		responseDecodeCalls[level].Add(1)
+		if err := rejectDuplicateJSONMembersOnly(value); err != nil {
+			return err
+		}
+		decoder := json.NewDecoder(bytes.NewReader(value))
+		if err := decoder.Decode(target); err != nil {
+			return err
+		}
+		return requireSingleJSONValue(decoder)
+	default:
+		return fmt.Errorf("unknown response decode level %d", level)
 	}
-	return decodeJSONUnchecked(value, target)
 }
 
-func decodeJSONUnchecked(value []byte, target any) error {
-	decoder := json.NewDecoder(bytes.NewReader(value))
-	if err := decoder.Decode(target); err != nil {
-		return err
-	}
+func requireSingleJSONValue(decoder *json.Decoder) error {
 	var extra any
 	if err := decoder.Decode(&extra); err != io.EOF {
 		if err == nil {
@@ -1195,7 +1233,7 @@ func decodeAPIError(statusCode int, header http.Header, body []byte) error {
 			Detail  json.RawMessage `json:"detail"`
 		} `json:"error"`
 	}
-	if err := decodeJSON(body, &envelope); err == nil {
+	if err := decodeResponseJSON(responseDecodeLegacy, "", body, &envelope); err == nil {
 		if envelope.Error.Code != "" {
 			apiError.Code = ErrorCode(envelope.Error.Code)
 		}
@@ -1228,7 +1266,7 @@ func decodeEvidenceBatchConflictDetails(data json.RawMessage) (*contracts.Symmet
 		return nil, nil
 	}
 	var details contracts.SymmetryEvidenceBatchConflictDetailsV1
-	if err := contracts.DecodeSchema(contracts.EnvelopeEvidenceBatchConflictDetails, trimmed, &details); err != nil {
+	if err := decodeResponseJSON(responseDecodeSchema, contracts.EnvelopeEvidenceBatchConflictDetails, trimmed, &details); err != nil {
 		return nil, err
 	}
 	return &details, nil
@@ -1581,7 +1619,7 @@ func decodeProviderActionObjectJSON(value []byte, target any, required ...string
 			return fmt.Errorf("missing required field %q", field)
 		}
 	}
-	return decodeJSONUnchecked(trimmed, target)
+	return decodeResponseJSON(responseDecodeLegacy, "", trimmed, target)
 }
 
 // rejectProviderActionResponseTagAliases enforces exact case for the typed
@@ -1623,14 +1661,7 @@ func rejectProviderActionResponseTagAliases(value []byte) error {
 	if delimiter, ok := closing.(json.Delim); !ok || delimiter != '}' {
 		return errors.New("response must be a JSON object")
 	}
-	var trailing any
-	if err := decoder.Decode(&trailing); err != io.EOF {
-		if err == nil {
-			return errors.New("response must contain one JSON value")
-		}
-		return err
-	}
-	return nil
+	return requireSingleJSONValue(decoder)
 }
 
 func hasJSONField(fields map[string]json.RawMessage, name string) bool {
