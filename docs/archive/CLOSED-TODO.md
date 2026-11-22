@@ -65,6 +65,11 @@ dead-code fragment appended to the sections at the end of this file were carried
 apply stage (2026-11-21) and moved on 2026-11-22 to the W3-07 follow-up branch
 `refactor/rf-w3-07b-state-error-followups`, which the closure lines below name.
 
+The ruff-pin sub-item appended to the `## scripts/ci ruff baseline: drop the #137 exclude and keep
+the gate's ruff version pinned` section below and the closed `## scripts/ci: install a pinned PyYAML
+for the lockfile differential oracle (W6-01)` section below were moved on 2026-11-22 from branch
+`refactor/rf-w6-01-ci-structure-finalize`.
+
 The served-read class closure appended to the `## Deferred review findings (0007h)` section below was
 moved on 2026-11-21 from branch `fix/served-read-closeout`.
 
@@ -4421,3 +4426,65 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
       logged `Go: go1.27.4`, `No vulnerabilities found.` and `govulncheck_vulnerabilities=0`.
       Dependabot #168 (`actions/setup-go` 5 to 7) and #171 (`actions/checkout` 4 to 7) are
       superseded by this change and are closed when it merges.
+
+## scripts/ci ruff baseline: drop the #137 exclude and keep the gate's ruff version pinned
+
+- [ ] The `ci.yml` ruff step (W1-01) must install ruff 0.17.5 exactly. `pyproject.toml` carries
+      `required-version = "==0.17.5"`, so any other ruff refuses to load the configuration
+      (exit 2, `Required version … does not match the running version …`) instead of reporting a
+      different finding set than the one the 2026-11-21 baseline fixed (373 findings at
+      `a3039f0`, of which 220 E501 at `line-length = 120`).
+
+      **Closed (2026-11-22, branch `refactor/rf-w6-01-ci-structure-finalize`, the wave-6 `ci.yml`
+      owner):** the advisory step in the `legacy-route-audit` job now pins
+      `ruff_version='0.17.5'` with the matching digest
+      `ruff_archive_sha256='7d261fc981a784668e19e9fa6ad437bfd95b67f2dc263fc1eab87d54d72fcc90'`
+      (re-derived from the released `ruff-x86_64-unknown-linux-gnu.tar.gz` on 2026-11-22), so the
+      download guard installs exactly the version the configuration requires and the archive
+      digest, not the version string alone, is what the step verifies. Measured on the changed
+      tree with ruff 0.17.5 itself: `ruff check scripts/ci` → exit 0, `All checks passed!`;
+      `ruff format --check scripts/ci` → exit 0, `58 files already formatted`. The other half of
+      this entry, the `extend-exclude` block, stays open in `docs/TODO.md`.
+
+## scripts/ci: install a pinned PyYAML for the lockfile differential oracle (W6-01)
+
+- [ ] The `ci.yml` `daemon` job's "Check CI gate helper scripts" step
+      (`.github/workflows/ci.yml:1482-1493` as of `6a815c0f`, which runs
+      `python3 ../scripts/ci/test-check-lockfile-registry.py` at `:1489`) must install a pinned
+      PyYAML and export `SYMMETRY_REQUIRE_PYYAML=1` for that step, so the differential cross-check
+      between `check-lockfile-registry.py`'s own YAML reader and PyYAML can never silently vanish
+      again. This is the recorded follow-up of contract `goal-rf-w3-16-scripts-defects` (refactor
+      wave 3, SC S8, branch `refactor/rf-w3-16-scripts-defects`, plan
+      `docs/plans/2026-11-21-rf-w3-16-scripts-defects-plan.md`): the suite now prints the exact
+      notice `PyYAML differential oracle skipped: module not importable` on stderr and asserts
+      that string when the module is not importable, and with `SYMMETRY_REQUIRE_PYYAML=1` set the
+      differential test fails instead of skipping. The repository still declares no Python
+      dependency and no workflow performs a `pip install`, so on a runner without PyYAML the
+      oracle stays skipped. Measured 2026-11-21 at `a7681da4` (this slice's increment commit on top
+      of `36f9a887`): portable Python 3.12.10 on the Windows host has PyYAML 6.0.3 and runs `Ran 24
+      tests`, `OK` with no skip; WSL Ubuntu-24.04 Python 3.12.3 has PyYAML 6.0.1 and is `OK`
+      likewise; `python -S` (site-packages off) and `python3 -S` print the notice and report `OK
+      (skipped=1)`; `SYMMETRY_REQUIRE_PYYAML=1
+      python -S scripts/ci/test-check-lockfile-registry.py` exits 1 with `FAILED (failures=1)` on
+      both platforms. Pin the version next to the other tool pins in `ci.yml` (the W1-01 ruff-pin
+      entry's `required-version = "==0.17.5"` handshake at `docs/TODO.md:744` is the same
+      pattern) and set the environment variable in the same step, so a lost install reddens the
+      job instead of shrinking the oracle. `ci.yml` is untouched by rf-w3-16 because W3-01/#157
+      owned it in wave 3 (that PR has since landed as `6a815c0f`, the revision the line numbers
+      above bind); W6-01 is its wave-6 owner.
+
+      **Closed (2026-11-22, branch `refactor/rf-w6-01-ci-structure-finalize`):** the step now
+      installs the pin itself (`pyyaml_version='6.0.3'`,
+      `python3 -m pip install --user --break-system-packages --disable-pip-version-check --quiet
+      "PyYAML==$pyyaml_version"`), asserts `yaml.__version__` equals it, sets
+      `SYMMETRY_REQUIRE_PYYAML: "1"` as the step's env, and runs the suite in the same step.
+      `--break-system-packages` is what the ubuntu runner's PEP 668 externally-managed Python
+      requires ([actions/runner-images#10897](https://github.com/actions/runner-images/issues/10897));
+      `--user` keeps the install out of the apt-managed `dist-packages`. Measured on the Windows
+      host (PyYAML 6.0.3): `SYMMETRY_REQUIRE_PYYAML=1 python3 scripts/ci/test-check-lockfile-registry.py`
+      → exit 0, `Ran 25 tests`, `OK`, no skip; `python3 -S scripts/ci/test-check-lockfile-registry.py`
+      → exit 0, `OK (skipped=1)` with one `PyYAML differential oracle skipped: module not
+      importable` notice; `SYMMETRY_REQUIRE_PYYAML=1 python3 -S
+      scripts/ci/test-check-lockfile-registry.py` → exit 1, `FAILED (failures=1)` on
+      `SYMMETRY_REQUIRE_PYYAML=1 requires the PyYAML differential oracle, and it is not importable`.
+      The pinned download itself runs only on the CI runner, recorded as such.

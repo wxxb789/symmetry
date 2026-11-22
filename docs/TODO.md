@@ -91,11 +91,15 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       slice fixed, found while applying it. Evidence: the slice's `golangci-lint v2.15.0` run
       (`GOOS=linux`, `--default=none -E staticcheck,ineffassign,gocritic`, `./internal/app/...`) at
       `a3039f0` reports them among its `ineffassign` findings; after this slice they are the only
-      remaining ones in `internal/app/`:
-      `daemon/internal/app/app_test.go:4881` (`journal, err := store.LoadJournal(key)`),
-      `daemon/internal/app/stale_ack_settlement_test.go:32` and `:125`
-      (`journal, err := store.SetLocalState(key, "stale")`). Each binds `journal` and overwrites it on
-      the next statement (`journal = expireLeaseBeforeCleanup(t, store, key)`) with no read in between,
+      remaining ones in `internal/app/`: in `daemon/internal/app/app_test.go`,
+      `TestRecoveredCleanupRulesPreserveOrRemoveJournalSafely` subtest "empty path is no-op"
+      (`journal, err := store.LoadJournal(key)`); and in
+      `daemon/internal/app/stale_ack_settlement_test.go`
+      (`journal, err := store.SetLocalState(key, "stale")`) in
+      `TestStaleCleanupWaitsForCommandAcknowledgementWithoutSendingOrdinaryOutbox` and in
+      `TestStaleAcknowledgementConclusiveErrorRetiresBeforeCleanup` (both of its table subtests).
+      Each binds `journal` and overwrites it on the next statement
+      (`journal = expireLeaseBeforeCleanup(t, store, key)`) with no read in between,
       so the first value is dead; each needs its own review before removal, because the intermediate
       journal may be the value an intended assertion would read, and the daemon test split (W3-15)
       owns those files.
@@ -884,11 +888,9 @@ instead of appended.
       only to ruff's own file discovery: `ruff check scripts/ci` skips the excluded files, while
       `ruff check scripts/ci/model-routing-record-sanitize.py` (an explicitly named path) checks
       them anyway unless `--force-exclude` is passed.
-- [ ] The `ci.yml` ruff step (W1-01) must install ruff 0.17.5 exactly. `pyproject.toml` carries
-      `required-version = "==0.17.5"`, so any other ruff refuses to load the configuration
-      (exit 2, `Required version … does not match the running version …`) instead of reporting a
-      different finding set than the one the 2026-11-21 baseline fixed (373 findings at
-      `a3039f0`, of which 220 E501 at `line-length = 120`).
+The ruff half of this entry, the `ci.yml` ruff step installing ruff 0.17.5 exactly, is closed; the
+closure record is the `## scripts/ci ruff baseline: drop the #137 exclude and keep the gate's ruff
+version pinned` section of `docs/archive/CLOSED-TODO.md`.
 
 ## Deferred review findings (PR #154)
 
@@ -945,11 +947,12 @@ instead of appended.
 - [ ] The merged W2-01 plan (`docs/plans/2026-11-21-rf-w2-01-ci-test-observability-plan.md:363`)
       misstates the run: it records the checks as run "with the pinned ruff 0.17.6", which
       `pyproject.toml:6` `required-version = "==0.17.5"` makes impossible (the config refuses any
-      other version, exit 2). The real conflict (`pyproject.toml` `==0.17.5` vs `ci.yml:1707`
-      `ruff_version='0.17.6'`) is already tracked above
-      (`## scripts/ci ruff baseline: drop the #137 exclude and keep the gate's ruff version pinned`,
-      `docs/TODO.md:901`); this entry only records the misstatement in the merged evidence plan
-      (found by the Opus review of PR #205).
+      other version, exit 2). The real conflict (`pyproject.toml` `==0.17.5` vs `ci.yml`'s
+      `ruff_version`) was resolved by rf-w6-01 (PR #237), which pinned the step to 0.17.5; that
+      tracked entry now lives under
+      `## scripts/ci ruff baseline: drop the #137 exclude and keep the gate's ruff version pinned`
+      in `docs/archive/CLOSED-TODO.md`. This entry only records the misstatement in the merged
+      evidence plan (found by the Opus review of PR #205).
 
 ## Harness shared-scaffolding deferrals (rf-w2-13, PR #155)
 
@@ -1047,33 +1050,6 @@ instead of appended.
       `type linuxOwnerMismatch struct { text string; class error }` whose `Error()` returns
       `text` and whose `Is(target)` reports `target == class`, so each phrasing keeps its exact
       wire text and joins its class.
-
-## scripts/ci: install a pinned PyYAML for the lockfile differential oracle (W6-01)
-
-- [ ] The `ci.yml` `daemon` job's "Check CI gate helper scripts" step
-      (`.github/workflows/ci.yml:1482-1493` as of `6a815c0f`, which runs
-      `python3 ../scripts/ci/test-check-lockfile-registry.py` at `:1489`) must install a pinned
-      PyYAML and export `SYMMETRY_REQUIRE_PYYAML=1` for that step, so the differential cross-check
-      between `check-lockfile-registry.py`'s own YAML reader and PyYAML can never silently vanish
-      again. This is the recorded follow-up of contract `goal-rf-w3-16-scripts-defects` (refactor
-      wave 3, SC S8, branch `refactor/rf-w3-16-scripts-defects`, plan
-      `docs/plans/2026-11-21-rf-w3-16-scripts-defects-plan.md`): the suite now prints the exact
-      notice `PyYAML differential oracle skipped: module not importable` on stderr and asserts
-      that string when the module is not importable, and with `SYMMETRY_REQUIRE_PYYAML=1` set the
-      differential test fails instead of skipping. The repository still declares no Python
-      dependency and no workflow performs a `pip install`, so on a runner without PyYAML the
-      oracle stays skipped. Measured 2026-11-21 at `a7681da4` (this slice's increment commit on top
-      of `36f9a887`): portable Python 3.12.10 on the Windows host has PyYAML 6.0.3 and runs `Ran 24
-      tests`, `OK` with no skip; WSL Ubuntu-24.04 Python 3.12.3 has PyYAML 6.0.1 and is `OK`
-      likewise; `python -S` (site-packages off) and `python3 -S` print the notice and report `OK
-      (skipped=1)`; `SYMMETRY_REQUIRE_PYYAML=1
-      python -S scripts/ci/test-check-lockfile-registry.py` exits 1 with `FAILED (failures=1)` on
-      both platforms. Pin the version next to the other tool pins in `ci.yml` (the W1-01 ruff-pin
-      entry's `required-version = "==0.17.5"` handshake at `docs/TODO.md:744` is the same
-      pattern) and set the environment variable in the same step, so a lost install reddens the
-      job instead of shrinking the oracle. `ci.yml` is untouched by rf-w3-16 because W3-01/#157
-      owned it in wave 3 (that PR has since landed as `6a815c0f`, the revision the line numbers
-      above bind); W6-01 is its wave-6 owner.
 
 ## Deferred review findings (PR #193)
 
@@ -1431,3 +1407,95 @@ is fixed here; each bullet names what a follow-up has to re-derive.
       `contracts/ts/semantics.ts` has no response or conflict-details validator. The gap is latent,
       so the fix is a strictness restore, not an incident: add `uniqueItems` where it can express the
       rule, or a semantic clause on the Elixir side. Owner: contracts strictness (A6).
+
+## Observed flakes, cause unknown: three observations (2026-11-22 CI runs and PR #220 review)
+
+- [ ] `TestAutonomousReturnReleasesItsInputReader` (`daemon/cmd/symmetry-fake-agent/autonomous_test.go`;
+      package `daemon/cmd/symmetry-fake-agent`): failed once in the hosted `daemon` job's race step
+      (`go test -race -count=1 -timeout 600s -json ./...` through `scripts/ci/stdio-only-caller-boundary.py`),
+      run `44976804508`, on PR #225 head `d45dc45f` — a Control-only code change
+      (`control/lib/symmetry_control_web/protocol.ex` plus its reason-coverage test and two docs records;
+      `git diff --name-only origin/main...d45dc45f`), so the daemon tree is untouched by that PR. Observed
+      failure text: the test's own `t.Fatalf("reader goroutine is still alive when runAutonomous returned")`
+      with the goroutine dump it printed — `goroutine 22 [runnable]` in `runAutonomous.func1` (the reader
+      closure in `autonomous.go`, reported at the function's tail, with no `readLine` or select frame),
+      `created by ... runAutonomous in goroutine 50`. Reproduction
+      attempts and outcomes: the same test passed on the PR's previous and next heads (CI reruns), and no
+      other occurrence is recorded in the repository; added 2026-11-22 — Linux (WSL, go1.27.0) `go test
+      -race -count=20 -timeout 600s -v -run '^TestAutonomousReturnReleasesItsInputReader$'
+      ./cmd/symmetry-fake-agent/` → 20/20 `--- PASS`, exit 0. Cause unknown. Most probable mechanism
+      (inference, re-derived from this run's own `-json` record): the input is a closable `io.Pipe` whose
+      `Close` does unblock the parked `readLine`, so the reader's exit is reachable; the record's
+      `"Elapsed":0.01` (`--- FAIL: ... (0.01s)`) is below `runAutonomous`'s `readerJoinTimeout = 50 ms` at
+      that head, so the join's `time.After(readerJoinTimeout)` arm cannot have fired — the run returned
+      through `<-readerDone`, so the reader had already run its deferred `close(readerDone)` and was in its
+      exit epilogue when the scan ran, and `bytes.Contains(stacks, "runAutonomous.func1")` reads that
+      exiting goroutine as a live leak. Next diagnostic step: repeat the `-race -count=N` run under CPU
+      contention, and on a reproduction capture whether the reader's `close(readerDone)` had already run
+      when the scan executed (the goleak oracle in the same file is the existing alternative oracle) rather
+      than touching the assertion or the bound, which the sibling
+      `TestAutonomousReturnBoundsTheJoinOnAnUnblockableCarrier` pins (`--- PASS: ... (0.05s)` in the same
+      run). Proximity, not duplication: the comment-policy-sweep entry above for
+      `daemon/cmd/symmetry-fake-agent/autonomous.go` records the *unblockable* carrier, whose reader is
+      never joined — a different property, not this test's failure.
+
+- [ ] `TestLinuxOwnerAnchorWire*` — the five tests
+      `TestLinuxOwnerAnchorWireShapeRejectsWrongDescriptorCounts`, `TestLinuxOwnerAnchorWireCloneCleanupDescriptorGate`,
+      `TestLinuxOwnerAnchorWireStoppingAnswerPrecedesShape`,
+      `TestLinuxOwnerAnchorWireExclusiveFieldsRefusedBeforeStoppingAnswer` and
+      `TestLinuxOwnerAnchorWireCodecRejectsMalformedFrames` (`daemon/internal/platform/anchor_wire_shape_test.go`,
+      `//go:build linux && amd64`; package `daemon/internal/platform`): failed once in the hosted
+      `coverage-daemon` job (advisory, `continue-on-error: true`; `go test -count=1 -timeout 1200s
+      -coverprofile=coverage.out ./...` through `scripts/ci/stdio-only-caller-boundary.py`), run
+      `44973284689` attempt 1, on PR #223 head `ca173870` — whose own change is records-only
+      (`docs/evidence/comment-policy-sweep-2026-11-22.md` and its plan) over a PR whose code hunks are
+      comment-only, so no `daemon/` behavior changed anywhere in that range. The group drives the real
+      `serveConnection` over a real unixpacket socket, and all five tests failed in the same step of that
+      attempt, each at the wire harness's client read (`linuxOwnerAnchorWirePair` →
+      `linuxOwnerAnchorWireReadFrame` → `ReadMsgUnix`, the stdlib `(*net.UnixConn).ReadMsgUnix` behind the
+      helper's `t.Fatalf("read wire frame: %v", err)`), with the full recorded lines (the `/tmp/Test…`
+      segment elides the run's temp directory, which is named after the test):
+      `--- FAIL: TestLinuxOwnerAnchorWireShapeRejectsWrongDescriptorCounts (0.00s)`
+      `anchor_wire_shape_test.go:295: read wire frame: read unixpacket @->/tmp/Test…/owner.sock: recvmsg: connection reset by peer`
+      `--- FAIL: TestLinuxOwnerAnchorWireCloneCleanupDescriptorGate (0.00s)`
+      `anchor_wire_shape_test.go:308: read wire frame: read unixpacket @->/tmp/Test…/owner.sock: recvmsg: connection reset by peer`
+      `--- FAIL: TestLinuxOwnerAnchorWireStoppingAnswerPrecedesShape (0.00s)`
+      `anchor_wire_shape_test.go:351: read wire frame: read unixpacket @->/tmp/Test…/owner.sock: recvmsg: connection reset by peer`
+      `--- FAIL: TestLinuxOwnerAnchorWireExclusiveFieldsRefusedBeforeStoppingAnswer (0.00s)`
+      `anchor_wire_shape_test.go:392: read wire frame: read unixpacket @->/tmp/Test…/owner.sock: recvmsg: connection reset by peer`
+      `--- FAIL: TestLinuxOwnerAnchorWireCodecRejectsMalformedFrames (0.00s)`
+      `anchor_wire_shape_test.go:434: read wire frame: read unixpacket @->/tmp/Test…/owner.sock: recvmsg: connection reset by peer`
+      In the same attempt the `daemon` job's race step passed the same five tests about four minutes later
+      (`--- PASS` at 01:56:04 against this failure at 01:51:50), and attempt 2 of that run is green at the
+      same head. Reproduction attempts and outcomes: main's last four `coverage-daemon`
+      runs passed; five local WSL `-cover` runs at head and base passed; added 2026-11-22 — WSL Ubuntu-24.04
+      as an unprivileged user, go1.27.0, `go test -count=5 -timeout 1200s -cover -v -run
+      '^TestLinuxOwnerAnchorWire' ./internal/platform/` → 25/25 `--- PASS`, exit 0, `coverage: 2.1% of
+      statements`; the same command with `GOTOOLCHAIN=go1.27.0` in this host's default (root) WSL
+      session refuses all five with
+      `wire harness requires an unprivileged A process: uid=0 euid=0 gid=0 egid=0`, so a revalidation must
+      run as an unprivileged user (the refusal is a host property, not a test failure). Cause unknown. Next
+      diagnostic step: re-run the group well above `-count=5` under CPU contention in the job's own shape
+      (`-coverprofile` through `stdio-only-caller-boundary.py`) and, on a reproduction, capture whether the
+      peer side had already closed the socket at that read. Fresh group, not the closed
+      `daemon/internal/platform` flake class (helper witness / descendant monitor,
+      `docs/archive/CLOSED-TODO.md`), and the file's own cgroup-`/` host trap is a different condition.
+
+- [ ] `frontend/src/features/goals/goal-attention.test.tsx`, the plan-approval replay case: failed once
+      among 13 shuffled vitest runs of a 13-file subset (`--sequence.shuffle --sequence.seed=3`) during the
+      PR #220 review, recorded in that PR's `machine-review-state:v1` review record (comment
+      `#issuecomment-7071789916`), whose reruns are at head `9715ce32` — the failing round's head is not
+      recorded there; reruns with the same seed passed, so the observation is load-dependent, not
+      order-dependent. The PR #220 review record names the case: "Round 1 saw one red run of `replays the
+      plan approval's decision resolution byte for byte after a lost acknowledgement`", and records "1
+      failure in 13 shuffled runs that include this case, and 0 in the last 11. That points to a rare
+      load-sensitive flake in that held-promise case, not an order dependence". The sibling `replays the
+      plan approval's admission byte for byte when its acknowledgement is lost` shares the contract's
+      truncated prefix and is kept here only as that sibling. The case ends in a bounded wait
+      (`findByText("The server admitted the plan.", {}, { timeout: 5_000 })` under a 15 s case timeout),
+      so a starved bounded wait is plausible (inference, not observed; the review record carries no
+      assertion text). Cause unknown. Next diagnostic step: repeat the shuffled 13-file
+      subset with the same seed under CPU load — the rerun that passed is not recorded as loaded, so load is
+      the untested variable — and, on a reproduction, capture the assertion text and whether the failure is
+      the bounded wait or a recorded-request mismatch. The subset's file list is not recoverable from the
+      repository (PR #220's plan records shuffle runs over the full 21-file suite at seed `20261122`).
