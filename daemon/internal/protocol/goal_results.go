@@ -1006,16 +1006,6 @@ func (evidence *Evidence) UnmarshalJSON(data []byte) error {
 
 type evidenceWire Evidence
 
-// ParseEvidence decodes and validates a normalized evidence receipt.
-func ParseEvidence(data []byte) (Evidence, error) {
-	var wire contractdto.SymmetryEvidenceV1
-	var evidence Evidence
-	if err := decodeGoalEnvelope(data, contractdto.EnvelopeEvidence, &wire, &evidence); err != nil {
-		return Evidence{}, err
-	}
-	return evidence, nil
-}
-
 // CostBasis identifies the provenance of a monetary usage amount.
 type CostBasis string
 
@@ -1119,13 +1109,3 @@ func (usage *Usage) UnmarshalJSON(data []byte) error {
 }
 
 type usageWire Usage
-
-// ParseUsage decodes and validates normalized provider usage.
-func ParseUsage(data []byte) (Usage, error) {
-	var wire contractdto.SymmetryUsageV1
-	var usage Usage
-	if err := decodeGoalEnvelope(data, contractdto.EnvelopeUsage, &wire, &usage); err != nil {
-		return Usage{}, err
-	}
-	return usage, nil
-}
