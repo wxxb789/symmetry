@@ -40,7 +40,7 @@ const (
 )
 
 // cloneCleanupLockHold must remain reachable until this one-shot root process
-// exits. Releasing the flock when runCloneCleanup returns would allow a retry
+// exits. Releasing the flock when RunCloneCleanup returns would allow a retry
 // in the interval before the exact child is dead and pidfd-reaped by A.
 var cloneCleanupLockHold *os.File
 
@@ -129,7 +129,7 @@ func RunLaunch() error {
 	return launchAChildGate(controlFD, leafFD, releaseFD, execStatusFD, peer, config, launchRequest)
 }
 
-// runCloneCleanup is the sole root filesystem effect. It accepts only the
+// RunCloneCleanup is the sole root filesystem effect. It accepts only the
 // direct configured A peer, fixed inherited O_PATH descriptors and the exact
 // versioned authority request; it has no B path, argv, shell, Git or daemon
 // service mode. The caller owns the Store Begin CAS; this root core validates

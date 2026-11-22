@@ -62,7 +62,7 @@ func fail(stage linuxgate.CloneBootstrapFailureStage, err error) error {
 
 func StatusFDFromArgs(argv []string) int {
 	// argv[4] is the fixed exec-status descriptor in the C gate ABI. This
-	// best-effort parse is only for a bounded failure frame; runBootstrap
+	// best-effort parse is only for a bounded failure frame; RunBootstrap
 	// validates the complete vector before using any descriptor.
 	if len(argv) <= 4 {
 		return -1

@@ -8,7 +8,8 @@ Base revision: `b6c7c38397f41d99a0a1e4956e9fb8aaa8977a98` (origin/main, 2026-11-
 Goal shape: move-only. `cmd/symmetry-linux-launcher` and `cmd/symmetry-linux-clone-bootstrap`
 become thin process shims; every other declaration moves verbatim into
 `internal/launchercore` and `internal/clonebootstrap` with only the package clause, the recorded
-rename map and one deleted dead comment as deltas. 06a alone does not remove RC-1 (ordering
+rename map, one deleted dead comment and three rename-stale comment corrections (conductor
+ruling 2026-11-22) as deltas. 06a alone does not remove RC-1 (ordering
 policy fused with the host effect surface); it removes RC-2's blocker by creating importable
 homes, and must not be reported as root-cause removal.
 
@@ -16,11 +17,11 @@ homes, and must not be reported as root-cause removal.
 
 | HEAD file | Source | Deltas |
 | --- | --- | --- |
-| `internal/launchercore/main_linux_amd64.go` | `cmd/symmetry-linux-launcher/main.go` minus `main`/`run` | `package launchercore`; `runLaunch`→`RunLaunch`, `runCloneCleanup`→`RunCloneCleanup`; dead trailing comment deleted |
+| `internal/launchercore/main_linux_amd64.go` | `cmd/symmetry-linux-launcher/main.go` minus `main`/`run` | `package launchercore`; `runLaunch`→`RunLaunch`, `runCloneCleanup`→`RunCloneCleanup`; dead trailing comment deleted; the two comment references to `runCloneCleanup` corrected to `RunCloneCleanup` |
 | `cmd/symmetry-linux-launcher/main.go` | new shim | keeps `main()`/`run()` byte-identical except the two calls now read `launchercore.RunLaunch()` / `launchercore.RunCloneCleanup()`; binary-identity package doc comment kept here |
 | `internal/launchercore/main_linux_amd64_test.go` | `cmd/symmetry-linux-launcher/main_test.go` tests 1-5,7 + `openCleanupTestPins`, `newCleanupTestRoot`, `protocolOwnerForCleanupTest` | `package launchercore`; imports trimmed to those the moved tests use |
 | `cmd/symmetry-linux-launcher/main_test.go` | same file, test 6 (`TestInstalledLinuxOwnerCleanupRejectsBCallerScratch`) only | imports trimmed; body verbatim |
-| `internal/clonebootstrap/{main,filesystem,git,guard,exec}_linux_amd64.go` | the five `cmd/symmetry-linux-clone-bootstrap` sources minus `main` | `package clonebootstrap`; `runBootstrap`→`RunBootstrap`, `statusFDFromArgs`→`StatusFDFromArgs`, `sendStatusPacket`→`SendStatusPacket`, `phaseError`→`PhaseError` with `stage`→`Stage`, `errno`→`Errno`, `cause`→`Cause` |
+| `internal/clonebootstrap/{main,filesystem,git,guard,exec}_linux_amd64.go` | the five `cmd/symmetry-linux-clone-bootstrap` sources minus `main` | `package clonebootstrap`; `runBootstrap`→`RunBootstrap`, `statusFDFromArgs`→`StatusFDFromArgs`, `sendStatusPacket`→`SendStatusPacket`, `phaseError`→`PhaseError` with `stage`→`Stage`, `errno`→`Errno`, `cause`→`Cause`; the one comment reference to `runBootstrap` corrected to `RunBootstrap` |
 | `cmd/symmetry-linux-clone-bootstrap/main.go` | new shim | keeps `main()` with base ordering: pre-parse the status FD, call `clonebootstrap.RunBootstrap(os.Args)`, on any return emit the same `EncodeCloneBootstrapFailure` frame on that FD, `os.Exit(1)`. The fallback `&PhaseError{Stage: CloneFailureRequest, Errno: EPROTO, Cause: err}` keeps the base EPROTO semantics. Binary-identity package doc comment kept here |
 | `internal/clonebootstrap/main_linux_amd64_test.go` | `cmd/symmetry-linux-clone-bootstrap/main_linux_amd64_test.go` | `package clonebootstrap` |
 
@@ -36,7 +37,9 @@ Naming decisions (contract leaves these open):
   the contract-named `cmd/symmetry-linux-launcher/main.go`.
 - The `symmetry-linux-*-core`/bootstrap package doc comments describe the installed binaries, so
   they stay on the shim package clauses with unchanged bytes; the internal packages get no new
-  doc comment. No other comment is added, moved or edited.
+  doc comment. No other comment is added, moved or edited; the three comment references the
+  rename made stale (`runCloneCleanup` ×2, `runBootstrap` ×1) are corrected in place per the
+  conductor ruling.
 
 ## 2. Acceptance script
 
@@ -58,8 +61,9 @@ approximated.
 
 - AST declaration-set/comment/import comparison base vs HEAD (go/ast + go/printer; a scratch
   program under the GDD tmp root, never committed): decl multiset equal after the rename map,
-  comment multiset equal except the one deleted dead comment, import/package deltas confined to
-  the two shims and the new internal files. Baseline captured before the move: base vs pre-move
+  comment groups equal except the one deleted dead comment plus the three rename-stale text
+  corrections, import/package deltas confined to the two shims and the new internal files.
+  Baseline captured before the move: base vs pre-move
   tree = 0 differences across 173 decls / 17 comment groups / 8 import sets / 8 package clauses.
 - Per-function control-flow audit table for the contract's function list, backed by the
   normalized per-decl text equality (the same program's decl records).
@@ -78,14 +82,16 @@ approximated.
 
 The 06b syscall/fd seam and any new test; the W6-05 legacy containment deletion;
 `native/linux-gate/protocol/**`; `internal/authority/**`; witness tests and acceptance case sets;
-any comment-policy sweep beyond the one dead comment; `docs/goals/0010-refactor-program.md`'s
+any comment-policy sweep beyond the dead comment and the three rename-stale reference
+corrections; `docs/goals/0010-refactor-program.md`'s
 W6-06 row (conductor-owned; flagged in the report as the document this slice makes stale).
 
 ## 6. TODO bookkeeping
 
-No `docs/TODO.md` entry closes here: the W6-06 lines in `docs/TODO.md` are mechanism/witness
-notes, and no 06a entry is open. The `docs/plans/2026-11-21-refactor-program-plan.md:562` W6-06
-row is the program plan, not this slice's; the conductor reconciles it.
+No `docs/TODO.md` entry closes here: no 06a entry is open, and this slice changes no
+`docs/TODO.md` line. The W6-06 rows in `docs/goals/0010-refactor-program.md:312` and
+`docs/plans/2026-11-21-refactor-program-plan.md:562` are conductor-owned program records, not
+this slice's; the conductor reconciles them.
 
 ## 7. Verification limits
 
