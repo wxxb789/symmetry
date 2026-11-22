@@ -1825,7 +1825,7 @@ func linuxV2JournalHasStopReceipt(journal state.RunJournal, handoff authority.Su
 }
 
 func (daemon *daemon) persistLinuxV2Mutation(
-	store *state.Store,
+	store journalStore,
 	key state.RunKey,
 	fence protocol.Fence,
 	stage string,

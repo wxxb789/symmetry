@@ -186,7 +186,7 @@ func (timer systemTimer) Stop()                  { timer.timer.Stop() }
 
 type options struct {
 	httpClient                                 *http.Client
-	store                                      *state.Store
+	store                                      journalStore
 	control                                    ControlAPI
 	enrollment                                 EnrollmentAPI
 	workspace                                  workspace.Service
@@ -298,7 +298,7 @@ type daemon struct {
 	options options
 	log     *slog.Logger
 
-	store               *state.Store
+	store               journalStore
 	control             ControlAPI
 	workspace           workspace.Service
 	start               StartProcess

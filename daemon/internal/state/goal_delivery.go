@@ -91,6 +91,10 @@ type lateGoalUsageLedger struct {
 	UpdatedAt              time.Time                `json:"updated_at"`
 }
 
+// LateGoalUsageLedger names lateGoalUsageLedger for the packages that must declare the Store
+// methods returning it; the alias adds no runtime or persisted shape.
+type LateGoalUsageLedger = lateGoalUsageLedger
+
 const lateGoalUsageLedgerSchemaVersion = 1
 
 var ErrGoalDeliveryConflict = errors.New("goal delivery conflicts with pending receipt")
