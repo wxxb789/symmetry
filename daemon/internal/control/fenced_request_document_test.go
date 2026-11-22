@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
@@ -71,7 +70,7 @@ func TestGoalMachineRequestBodiesAreFenceBesideTheSchemaDocument(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			var wire []byte
 
-			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			server := jsonServer(t, http.StatusCreated, test.response, func(request *http.Request) {
 				if request.Method != http.MethodPost || request.URL.Path != test.path {
 					t.Errorf("request = %s %s, want POST %s", request.Method, request.URL.Path, test.path)
 				}
@@ -80,10 +79,7 @@ func TestGoalMachineRequestBodiesAreFenceBesideTheSchemaDocument(t *testing.T) {
 					t.Fatal(err)
 				}
 				wire = body
-				writer.Header().Set("Content-Type", "application/json")
-				writer.WriteHeader(http.StatusCreated)
-				_, _ = io.WriteString(writer, test.response)
-			}))
+			})
 			defer server.Close()
 
 			if err := test.call(context.Background(), mustMachineClient(t, server)); err != nil {
@@ -101,6 +97,17 @@ func TestGoalMachineRequestBodiesAreFenceBesideTheSchemaDocument(t *testing.T) {
 			var decoded any
 			if err := contracts.DecodeSchema(test.envelope, mustMarshal(t, test.document), &decoded); err != nil {
 				t.Fatalf("the fence-stripped document must validate: %v", err)
+			}
+
+			var wireObject map[string]json.RawMessage
+			if err := json.Unmarshal(wire, &wireObject); err != nil {
+				t.Fatal(err)
+			}
+			for _, member := range fenceMembers {
+				delete(wireObject, member)
+			}
+			if err := contracts.DecodeSchema(test.envelope, mustMarshal(t, wireObject), &decoded); err != nil {
+				t.Fatalf("the wire body with the fence members removed must validate as the document: %v", err)
 			}
 
 			err := contracts.DecodeSchema(test.envelope, wire, &decoded)

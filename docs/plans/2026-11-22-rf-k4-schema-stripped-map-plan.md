@@ -103,18 +103,23 @@ One table-driven test `TestGoalMachineRequestBodiesAreFenceBesideTheSchemaDocume
 (single evidence, evidence batch, usage). Each row calls the real client method against an
 `httptest` server that captures the exact request bytes, and then asserts, from those bytes:
 
-- the top-level member set equals the five fence members ∪ the member set of `json.Marshal` of the
-  same document value handed to the call (so the count is derived, not hard-coded, and the K4
-  counts above are the cross-check);
+- the top-level member set equals the five fence members ∪ the member set of `json.Marshal` of that
+  endpoint's document value (so the count is derived, not hard-coded, and the K4 counts above are
+  the cross-check; the batch row's value is the reconstruction trade-off 3 describes, not the
+  `[]protocol.Evidence` handed to `AppendEvidenceBatch`);
 - no top-level `fence` member (the wire is flattened, not nested);
-- `contracts.DecodeSchema(envelope, documentBytes, &dto)` accepts the document bytes;
+- `contracts.DecodeSchema(envelope, documentBytes, &dto)` accepts the document bytes — the
+  reconstructed document value and the captured wire bytes with the five fence members removed;
 - `contracts.DecodeSchema(envelope, wireBytes, &dto)` refuses the captured wire bytes with an
   `additionalProperties` error naming the fence members.
 
 Reuses the existing helpers (`goalFence`, `goalEvidence`, `goalUsage`, `mustMachineClient`,
-`goalRunID`, response-stub shapes from `goal_client_test.go`). Failure control: removing one fence
-member from the embedded struct at the batch call site reddens the member-set assertion (and the
-`DecodeSchema` acceptance on the wire bytes); recorded in the report.
+`goalRunID`, `jsonServer` with a request-capturing callback, response-stub shapes from
+`goal_client_test.go`). Failure controls, both recorded in the report: removing one fence member
+from the embedded struct at the batch call site reddens the member-set assertion; a document value
+the schemas refuse (a batch `schema_version` other than the v1 const) reddens the fence-stripped
+acceptance at that row — recorded with the client-side `schema_version` guard relaxed, since in
+production that guard would reject the value before it reaches the wire.
 
 ## Evidence plan (all foreground, one heavy job at a time)
 
@@ -153,7 +158,9 @@ mix run at a time):
 3. **Batch document value reconstructed in the test the way `AppendEvidenceBatch` builds it**
    (`schema_version` const, path `run_id`, the items passed in): the client has no exported accessor
    for the document half, and adding one would be a production-code change this slice may not make.
-   The member-set assertion plus the schema acceptance together still pin the equality.
+   The member-set assertion pins the wire's member set; the schema acceptance of the fence-stripped
+   captured bytes pins the document the client actually sent, so the reconstruction supplies the
+   expected member set and the envelope rather than the validation target.
 4. **`Map.merge(document, fence)` for the Elixir schema pin, not the controller mutant**: the
    contract asks for the fence-free/`fenced` pair at the validator boundary; the controller boundary
    is pinned separately by Change 4, so the two tests fail for distinguishable reasons.
