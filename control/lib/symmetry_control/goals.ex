@@ -28,6 +28,8 @@ defmodule SymmetryControl.Goals do
       response_for: 2
     ]
 
+  import SymmetryControl.Goals.HarnessSessions, only: [mark_harness_session_unavailable!: 2]
+
   import SymmetryControl.Goals.Internal,
     only: [
       active_task_for_item?: 1,
@@ -86,8 +88,7 @@ defmodule SymmetryControl.Goals do
       work_item_acceptance_action_hash: 3
     ]
 
-  import SymmetryControl.Goals.RunFence,
-    only: [context_wire_envelope!: 4, mark_harness_session_unavailable!: 2]
+  import SymmetryControl.Goals.RunFence, only: [context_wire_envelope!: 4]
 
   alias Ecto.Changeset
   alias SymmetryControl.Goals.ContextSnapshot
@@ -99,6 +100,7 @@ defmodule SymmetryControl.Goals do
   alias SymmetryControl.Goals.GoalExternalWait
   alias SymmetryControl.Goals.GoalRevision
   alias SymmetryControl.Goals.HarnessSession
+  alias SymmetryControl.Goals.HarnessSessions
   alias SymmetryControl.Goals.ReadModel
   alias SymmetryControl.Goals.RunEvidence
   alias SymmetryControl.Goals.RunFence
@@ -396,16 +398,17 @@ defmodule SymmetryControl.Goals do
 
   @spec attach_harness_session(Ecto.UUID.t(), Ecto.UUID.t(), map(), map(), keyword()) ::
           {:ok, map(), :created | :replayed} | {:error, term()}
-  defdelegate attach_harness_session(machine_id, run_id, fence, attrs, opts \\ []), to: RunFence
+  defdelegate attach_harness_session(machine_id, run_id, fence, attrs, opts \\ []),
+    to: HarnessSessions
 
   @spec fetch_harness_session_attachment(Ecto.UUID.t(), Ecto.UUID.t(), map()) ::
           {:ok, map()} | {:error, term()}
-  defdelegate fetch_harness_session_attachment(machine_id, run_id, fence), to: RunFence
+  defdelegate fetch_harness_session_attachment(machine_id, run_id, fence), to: HarnessSessions
 
   @spec mark_harness_session_stopped(Ecto.UUID.t(), Ecto.UUID.t(), map(), map(), keyword()) ::
           {:ok, map(), :created | :replayed} | {:error, term()}
   defdelegate mark_harness_session_stopped(machine_id, run_id, fence, attrs, opts \\ []),
-    to: RunFence
+    to: HarnessSessions
 
   @spec append_evidence(Ecto.UUID.t(), Ecto.UUID.t(), map(), map(), keyword()) ::
           {:ok, map(), :created | :replayed} | {:error, term()}
@@ -422,9 +425,8 @@ defmodule SymmetryControl.Goals do
   @spec fetch_run_context(Ecto.UUID.t(), Ecto.UUID.t(), map()) :: {:ok, map()} | {:error, term()}
   defdelegate fetch_run_context(machine_id, run_id, fence), to: RunFence
 
-  # Reservation state is a projection of the complete Task accounting history.
-  # A terminal retry cannot be settled by a known earlier Run while another Run
-  # remains unreported or unknown.
+  # Reservation state projects the whole Task accounting history: a terminal retry cannot
+  # settle on an earlier Run while another Run is unreported or unknown.
   @doc false
   def reconcile_reservation!(goal, task, opts) do
     reservation =

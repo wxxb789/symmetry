@@ -98,6 +98,7 @@ SOURCE_PATHS = [
     "control/lib/symmetry_control/goals.ex",
     "control/lib/symmetry_control/goals/contract_validation.ex",
     "control/lib/symmetry_control/goals/events_receipts.ex",
+    "control/lib/symmetry_control/goals/harness_sessions.ex",
     "control/lib/symmetry_control/goals/internal.ex",
     "control/lib/symmetry_control/goals/run_fence.ex",
     "contracts/v1/task-result.schema.json",
