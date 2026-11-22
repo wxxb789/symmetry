@@ -12,7 +12,6 @@ export default [
       globals: { ...globals.browser, ...globals.node },
     },
     rules: {
-      // Dropping one key through a rest sibling is the intentional shape (`const { DROP: _, ...rest } = env`).
       "no-unused-vars": ["error", { ignoreRestSiblings: true }],
     },
   },

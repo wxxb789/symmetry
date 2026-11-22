@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "test": "playwright test",
-    "lint": "eslint .",
+    "lint": "eslint . --max-warnings 0",
     "test:connection-env": "node --test scripts/connection-spec-env.test.mjs",
     "test:control-isolation": "node --test scripts/control-instance-isolation.test.mjs",
     "test:control": "playwright test tests/portal-execution-control.spec.mjs tests/portal-goal-managed.spec.mjs",

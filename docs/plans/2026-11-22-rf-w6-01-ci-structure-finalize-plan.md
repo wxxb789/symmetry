@@ -170,9 +170,9 @@ run (`linux-v2-host-prerequisite-probe.sh:231`, from `daemon/`), so it can rot s
 
 `browser/eslint.config.mjs` (new flat config: `@eslint/js` recommended + node/browser globals for
 `**/*.mjs`), `browser/package.json` gains an `eslint`/`@eslint/js`/`globals` devDependency trio at
-the frontend's pinned versions and a `lint` script (`eslint . --max-warnings <measured>`), the root
-`pnpm-lock.yaml` is updated with `mise exec pnpm@12.17.0`, and the `control` job (which already
-installs the workspace and drives the browser render gate) gains
+the frontend's pinned versions and a `lint` script (`eslint . --max-warnings 0`, the measured
+warning count), the root `pnpm-lock.yaml` is updated with `mise exec pnpm@12.17.0`, and the
+`control` job (which already installs the workspace and drives the browser render gate) gains
 `- run: pnpm --filter symmetry-browser-acceptance lint` right after its
 `pnpm install --frozen-lockfile`. The finding count and the ratchet value are measured in the
 evidence section; the acceptance workflow is untouched by this gate.
@@ -229,7 +229,7 @@ hunk.
 | shellcheck | `shellcheck --severity=warning scripts/ci/*.sh` before/after | the new programs' dialect/finding delta |
 | ruff | `ruff 0.17.5` `check`/`format --check` over `scripts/ci` | the advisory metric's own verdict on the new file |
 | browser lint | `pnpm --filter symmetry-browser-acceptance lint` (pnpm 12.17.0) | the new gate's own verdict + the ratchet value |
-| lint ratchet bites | the same command with the ceiling one lower | the ceiling is exact |
+| lint ratchet bites | `eslint . --rule '{"no-unused-vars":["warn",{"ignoreRestSiblings":false}]}'`, with and without `--max-warnings 0` | 2 warnings: exit 0 without the ceiling, exit 1 with it; the shipped ceiling equals the measured 0 warnings |
 | PyYAML switch | `SYMMETRY_REQUIRE_PYYAML=1 python3 scripts/ci/test-check-lockfile-registry.py`; and `python3 -S …` | the switch fails instead of skipping |
 | real-script probes | `pwsh -NoProfile -File scripts/ci/pi-windows-cleanup-evidence.ps1` and the postgres program with a fabricated env | StrictMode did not break the moved logic; the fail-closed path still throws |
 | whitespace | `git diff --check` | no whitespace damage |
@@ -319,6 +319,9 @@ ruff pin, the PyYAML install, the pin wiring — was authored with the patch too
 
 ## Executed gates (this tree, 2026-11-22; uncommitted worktree)
 
+This table binds the implement-stage revision; the apply-stage refresh below supersedes the pin,
+browser-lint, ruff, shellcheck and actionlint rows it names.
+
 | Command | Result |
 | --- | --- |
 | `extract_bodies.py --programs` (base `40314211`) | wrote the five programs; five-body total 787 lines |
@@ -348,6 +351,37 @@ ruff pin, the PyYAML install, the pin wiring — was authored with the patch too
 | `git diff --check` | **exit 0** |
 | CI (the PR's full run) | not run here: no commit, no push; conductor-verified on the PR, and it is the only place the composite action's steps, the pinned PyYAML download and the artifact hand-off are exercised |
 
+## Apply-stage refresh (rf-w6-01 simplify-apply, 2026-11-22)
+
+The simplify review's accepted findings changed five surfaces (the pin, the action description, the
+browser flat config, the lint script and the two TODO records); `ci.yml`, the acceptance workflow
+and the five programs are untouched by the apply stage. Gates re-run on the changed tree:
+
+| Command | Result |
+| --- | --- |
+| `python3 scripts/ci/test-ci-structure-extraction.py` | **exit 0**, `Ran 14 tests in 2.183s`, `OK` |
+| `python3 scripts/ci/test-ci-changed-path-classifier.py` | **exit 0**, `Ran 31 tests in 48.778s`, `OK` |
+| `python3 scripts/ci/test-assert-folded-gates.py` | **exit 0**, `Ran 6 tests in 0.589s`, `OK` |
+| `python3 scripts/ci/test-assert-playwright-json.py` | **exit 0**, `Ran 17 tests in 3.502s`, `OK` |
+| `python3 scripts/ci/assert-folded-gates.py --help` | **exit 0** |
+| `SYMMETRY_REQUIRE_PYYAML=1 python3 scripts/ci/test-check-lockfile-registry.py` | **exit 0**, `Ran 25 tests in 5.574s`, `OK`, no skip |
+| `bash -n` on the three bash programs | **exit 0** each |
+| PowerShell parser over the two `.ps1` programs (pwsh 7.7.0) | **exit 0** each, no parse errors |
+| actionlint 1.7.12 `-shellcheck= -pyflakes=`, the two touched workflows and every workflow | **exit 0**, 0 findings |
+| `shellcheck --severity=warning --format=gcc scripts/ci/*.sh` (0.11.0) | exit 1, 10 findings, all in the two pre-existing acceptance programs; the three moved programs add 0 |
+| `ruff check scripts/ci` / `ruff format --check scripts/ci` (0.17.5) | **exit 0** `All checks passed!` / **exit 0** `58 files already formatted` |
+| `eslint . --max-warnings 0`, the shipped script's own command (eslint 10.14.0, `@eslint/js` 10.0.1, globals 17.14.0 from a scratch install, see limits) | **exit 0**, 22 files linted, 0 errors, 0 warnings |
+| the ratchet probe: the same file set with `--rule '{"no-unused-vars":["warn",{"ignoreRestSiblings":false}]}'` | **exit 0** (2 warnings) without the ceiling, **exit 1** with it, so the ceiling is the measured warning count 0 |
+| `git diff --check` | **exit 0** |
+
+The accepted findings: the dead `RUN_BLOCK` constant and the unreachable job-default
+`working-directory` fallback are gone (the exact-keys assertion already freezes each step's
+`working-directory`); the action's two inputs are pinned per input (each block must carry
+`required: true`, with a mutation that drops one flag and reddens the check); the browser config
+comment naming a non-existent identifier is gone; the action description is one sentence.
+Refreshed counts: the pin 637 → 647, `.github/actions/contracts-build/action.yml` 75 → 73, the
+browser flat config 19 → 18.
+
 ## Mutation records (all on the real files, restored and md5-verified)
 
 | Mutation | Observed |
@@ -357,7 +391,7 @@ ruff pin, the PyYAML install, the pin wiring — was authored with the patch too
 | (c) `ci.yml`: the compose step's one-line body replaced by a 60-line inline block | pin **exit 1**, `FAILED (failures=2)`; `AssertionError: scripts/ci/compose-stack-smoke.sh: the step keys changed: {… 'run': '\|'} != {… 'run': 'bash scripts/ci/compose-stack-smoke.sh'}`; restored md5 `8ed1e9743ca3a2b8e753738c00f479ff` |
 | (d) the fail-closed fixture without its propagation line (in-suite, `FailClosedPowerShellTests`) | `pwsh -NoProfile -File` exits **0** on a failing native child; with the line it exits **7** — the reviewer P1-1 hazard and its closure in one run |
 | browser gate: `const unusedProbe = 1;` appended to `browser/tests/readable-fixtures.mjs` | eslint **exit 1**, `'unusedProbe' is assigned a value but never used`; restored |
-| in-suite mutations (`MutationTests`) | the four YAML/action mutations redden the same checkers the tests call; the folded-gate positive control (an advisory flag on a step already named in its job's `assert-folded-gates.py` array) stays green |
+| in-suite mutations (`MutationTests`) | the five YAML/action mutations (the apply stage added the one-flag-dropped input mutation) redden the same checkers the tests call; the folded-gate positive control (an advisory flag on a step already named in its job's `assert-folded-gates.py` array) stays green |
 
 ## dLOC (report-only, D2)
 
@@ -367,8 +401,11 @@ ruff pin, the PyYAML install, the pin wiring — was authored with the patch too
 `run:` reused), and ±1 from the surrounding hunks. The draft's "≈1,780 (≤1,800)" assumed a larger
 action reduction than the measured 39 lines and no reconcile additions; the re-derived number is
 1,831. `linux-native-v2-acceptance.yml` 181 → 175 (−6); new `.github/actions/contracts-build/action.yml`
-75; the five programs 794 lines (787 base + 7 authored prologue/epilogue lines); the pin 637; the
-browser flat config 19; tracked-file diff `+124/−888` plus the new files.
+73 (75 at the implement revision: the apply stage shortened its description); the five programs 794
+lines (787 base + 7 authored prologue/epilogue lines); the pin 647 (637 at the implement revision,
+minus the dead constant and the unreachable fallback, plus the per-input input pin and its
+mutation); the browser flat config 18; modified tracked files `+125/−888` (`git diff --numstat` over
+the files present in both revisions) plus the new files.
 
 ## Simplification review
 
@@ -406,7 +443,13 @@ browser flat config 19; tracked-file diff `+124/−888` plus the new files.
   `pnpm install --frozen-lockfile` on the runner remains the CI oracle, because the corporate
   mirror here cannot resolve the pre-existing `typescript-eslint@8.73.0` and `registry.npmjs.org`
   is unreachable, so no lockfile *regeneration* was possible in this environment.
-- **The composite action's `always()`.** The advisory audit keeps its base `if: always()` semantics
-  inside the action; composite-action step gating is exercised only by CI.
+- **The composite action's `always()` reachability (disclosed delta, D1 escalation).** Inside the
+  action the advisory audit keeps its base `if: always()`, but the base step also ran when an
+  earlier *caller* step (`checkout`, `pnpm/action-setup`, `setup-node`) failed, while the unguarded
+  `uses:` call step is skipped in that case: the advisory metric is lost exactly when the
+  toolchain install fails. Left as a disclosed behaviour delta rather than fixed — giving the call
+  step `if: always()` would run install and build after a failed setup, and hoisting the advisory
+  step back to the callers would drop the dedup this slice exists for. Composite-action step
+  gating is exercised only by CI.
 - **CI-only checks.** The pinned ruff archive, the pinned PyYAML wheel, the composite action's step
   list, the artifact hand-off and the Windows-runner PostgreSQL discovery run only on the runner.

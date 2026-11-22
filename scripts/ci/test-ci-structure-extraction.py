@@ -17,12 +17,10 @@ ACTION = ROOT / ".github" / "actions" / "contracts-build" / "action.yml"
 
 JOB_HEADER = re.compile(r"^  ([a-z][a-z0-9-]*):$")
 KEY = re.compile(r"^(\s*)([A-Za-z_][A-Za-z0-9_-]*):(?: (.*))?$")
-JOB_DEFAULTS_WORKDIR = re.compile(r"^        working-directory: (.+)$")
 GATE_ENTRY = re.compile(r'"([^"=]+)=\$(?:env:)?([A-Za-z_][A-Za-z0-9_]*)"')
 ASSERTION_JOB = re.compile(r"assert-folded-gates\.py --job ([a-z][a-z0-9-]*)")
 NATIVE_CALL = re.compile(r"(^|[^&\w])&\s*\$[A-Za-z_]|\bStart-Process\b")
 STATUS_CHECK = re.compile(r"\$LASTEXITCODE\b|\.ExitCode\b")
-RUN_BLOCK = re.compile(r"^\s*run: \|$")
 
 WORKFLOW_INDENT = (6, 8)
 ACTION_INDENT = (4, 6)
@@ -30,7 +28,7 @@ CLASSIFIER_HEREDOC = "python3 - <<'PY'"
 MAX_INLINE_BODY_LINES = 80
 ACTION_CALL = "uses: ./.github/actions/contracts-build"
 ACTION_JOB = "contracts-build"
-ROOT_WORK_DIRECTORIES = (None, ".", "${{ github.workspace }}")
+ROOT_WORK_DIRECTORIES = (".", "${{ github.workspace }}")
 ABSORBED_BY_THE_ACTION = (
     "Check lockfile registry provenance",
     "pnpm install --frozen-lockfile",
@@ -270,19 +268,6 @@ def inline_run_bodies(workflow_text: str) -> list[tuple[int, list[str]]]:
     return bodies
 
 
-def job_default_work_directory(job_lines: list[str]) -> str | None:
-    for index, line in enumerate(job_lines):
-        if line != "    defaults:":
-            continue
-        for candidate in job_lines[index + 1 :]:
-            match = JOB_DEFAULTS_WORKDIR.match(candidate)
-            if match is not None:
-                return match.group(1)
-            if candidate.strip():
-                break
-    return None
-
-
 def program_of_invocation(run_line: str, program: str) -> str:
     tokens = run_line.split()
     require(bool(tokens), f"{program}: the run line is empty")
@@ -296,7 +281,7 @@ def program_of_invocation(run_line: str, program: str) -> str:
     return tokens[3]
 
 
-def resolved_invocation_target(work_directory: str | None, program: str) -> str:
+def resolved_invocation_target(work_directory: str, program: str) -> str:
     base = "" if work_directory in ROOT_WORK_DIRECTORIES else work_directory
     return posixpath.normpath(posixpath.join(base, program))
 
@@ -382,6 +367,21 @@ def action_artifacts(action_text: str) -> list[tuple[str, str, str | None]]:
     return artifacts
 
 
+def action_input_block(action_text: str, name: str) -> list[str]:
+    """The lines of one `inputs:` child, up to the next key at or left of the child's indent."""
+    lines = action_text.split("\n")
+    for index, line in enumerate(lines):
+        if line != f"  {name}:":
+            continue
+        block: list[str] = []
+        for candidate in lines[index + 1 :]:
+            if candidate.strip() and len(candidate) - len(candidate.lstrip(" ")) <= 2:
+                break
+            block.append(candidate)
+        return block
+    return []
+
+
 def check_extracted_steps(workflow_text: str) -> None:
     jobs = job_blocks(workflow_text)
     for step in EXTRACTED_STEPS:
@@ -395,7 +395,7 @@ def check_extracted_steps(workflow_text: str) -> None:
                 tuple(nested_at(normalized, "env", WORKFLOW_INDENT[1]).items()) == step.env,
                 f"{step.program}: the step env changed",
             )
-        work_directory = scalars.get("working-directory") or job_default_work_directory(jobs[step.job])
+        work_directory = scalars["working-directory"]
         target = resolved_invocation_target(work_directory, program_of_invocation(scalars["run"], step.program))
         require(target == step.program, f"{step.program} resolves to {target} from {work_directory!r}")
 
@@ -441,8 +441,9 @@ def check_inline_bodies(workflow_text: str) -> None:
 def check_action(action_text: str, workflows: dict[str, str]) -> None:
     require("using: composite" in action_text, "the contracts action is not a composite action")
     for name in ACTION_INPUTS:
-        require(f"  {name}:" in action_text, f"the contracts action lost its {name} input")
-    require("    required: true" in action_text, "the contracts action inputs must be required")
+        block = action_input_block(action_text, name)
+        require(block != [], f"the contracts action lost its {name} input")
+        require("    required: true" in block, f"the {name} input must stay required")
     require(
         tuple(action_step_signatures(action_text)) == ACTION_STEPS,
         f"the contracts action step list changed: {action_step_signatures(action_text)!r}",
@@ -557,6 +558,15 @@ class MutationTests(unittest.TestCase):
         self.assertIn(upload, self.action_text, "the mutation's anchor must be the portal-assets upload")
         mutated = self.action_text.replace(upload, "")
         self.assertNotEqual(mutated, self.action_text, "the mutation must edit the action text")
+        with self.assertRaises(AssertionError):
+            check_action(mutated, self.workflows)
+
+    def test_mutation_dropping_one_inputs_required_flag_reddens_the_input_check(self) -> None:
+        flag = "    required: true\n"
+        self.assertEqual(self.action_text.count(flag), 2, "the mutation's anchor must be the two input flags")
+        cut = self.action_text.rindex(flag)
+        mutated = self.action_text[:cut] + self.action_text[cut + len(flag) :]
+        self.assertEqual(mutated.count(flag), 1, "the mutation must leave the first input's flag in place")
         with self.assertRaises(AssertionError):
             check_action(mutated, self.workflows)
 

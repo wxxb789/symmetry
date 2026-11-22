@@ -1,9 +1,7 @@
 name: Contracts build
 description: >-
-  The frontend and contracts build both `contracts` jobs spell: the lockfile registry provenance
-  check, the frozen install, `pnpm contracts:check`, the `@symmetry/frontend`
-  typecheck/lint/test/build and the `portal-assets` upload, plus the two halves the callers select
-  with boolean inputs.
+  The shared `contracts` job build both workflows call, with the caller-selected advisory audit and
+  Control release behind the boolean inputs.
 inputs:
   audit-prod:
     description: >-

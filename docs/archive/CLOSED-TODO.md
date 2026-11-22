@@ -4443,8 +4443,8 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
       download guard installs exactly the version the configuration requires and the archive
       digest, not the version string alone, is what the step verifies. Measured on the changed
       tree with ruff 0.17.5 itself: `ruff check scripts/ci` → exit 0, `All checks passed!`;
-      `ruff format --check scripts/ci` → exit 0, `58 files already formatted`. Sub-item (a), the
-      `extend-exclude` block, stays open in `docs/TODO.md`.
+      `ruff format --check scripts/ci` → exit 0, `58 files already formatted`. The other half of
+      this entry, the `extend-exclude` block, stays open in `docs/TODO.md`.
 
 ## scripts/ci: install a pinned PyYAML for the lockfile differential oracle (W6-01)
 

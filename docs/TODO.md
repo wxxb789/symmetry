@@ -884,8 +884,9 @@ instead of appended.
       only to ruff's own file discovery: `ruff check scripts/ci` skips the excluded files, while
       `ruff check scripts/ci/model-routing-record-sanitize.py` (an explicitly named path) checks
       them anyway unless `--force-exclude` is passed.
-Sub-item (b) of this entry, the `ci.yml` ruff step installing ruff 0.17.5 exactly, is closed:
-see this section's heading in `docs/archive/CLOSED-TODO.md`.
+The ruff half of this entry, the `ci.yml` ruff step installing ruff 0.17.5 exactly, is closed; the
+closure record is the `## scripts/ci ruff baseline: drop the #137 exclude and keep the gate's ruff
+version pinned` section of `docs/archive/CLOSED-TODO.md`.
 
 ## Deferred review findings (PR #154)
 
