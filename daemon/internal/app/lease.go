@@ -40,7 +40,7 @@ var (
 		return nil, errors.New("Linux clone target removal requires the authenticated owner anchor")
 	}
 	linuxCloneCleanupPersistMutation = func(
-		*daemon, *state.Store, state.RunKey, protocol.Fence, string,
+		*daemon, journalStore, state.RunKey, protocol.Fence, string,
 		func() (state.RunJournal, error), func(state.RunJournal) bool,
 	) error {
 		return errors.New("Linux clone cleanup persistence is supported only by the Linux v2 App")

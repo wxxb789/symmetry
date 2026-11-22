@@ -9,15 +9,15 @@ CLI prints them.
     source_paths: <declared path count>
     source_subject: sha256:<digest over the entries sorted by their UTF-8 path bytes>
     executable_paths: <comma-joined paths whose execute bit is set, or `none`>
-    delivered <path>: sha256:<file digest>          the two bound evaluation files
+    delivered <path>: sha256:<file digest>          each bound evaluation tool file
 
 Usage::
 
     python scripts/ci/model-routing-source-subject.py [REPOSITORY]
 
-The repository defaults to the tree this script is delivered in, and the two `delivered`
-lines are the tooling digests the 0008 records bind, so one command re-derives a whole
-subject row.
+The repository defaults to the tree this script is delivered in, and the `delivered`
+lines are the tooling digests the 0008 records bind: the evaluation entry, the modules
+it imports and its suite, so one command re-derives a whole subject row.
 """
 
 from __future__ import annotations
@@ -35,6 +35,10 @@ from source_subject import (
 
 DELIVERED_TOOL_PATHS = (
     "scripts/ci/model-routing-evaluation.py",
+    "scripts/ci/model_routing_gates.py",
+    "scripts/ci/model_routing_receipts.py",
+    "scripts/ci/model_routing_records.py",
+    "scripts/ci/model_routing_subject.py",
     "scripts/ci/test-model-routing-evaluation.py",
 )
 

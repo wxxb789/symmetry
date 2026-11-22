@@ -1,3 +1,4 @@
+import ast
 import importlib.util
 import json
 import math
@@ -34,6 +35,24 @@ def load_gate(path, name):
     module = importlib.util.module_from_spec(specification)
     specification.loader.exec_module(module)
     return module
+
+
+def runner_module_closure(script):
+    pending = [script]
+    collected = set()
+    while pending:
+        for node in ast.walk(ast.parse(pending.pop().read_text(encoding="utf-8"))):
+            if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("model_routing_"):
+                names = [node.module]
+            elif isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names if alias.name.startswith("model_routing_")]
+            else:
+                continue
+            for name in names:
+                if name not in collected:
+                    collected.add(name)
+                    pending.append(script.with_name(f"{name}.py"))
+    return collected
 
 
 def run_gate(script, *arguments, cwd=None, env=None, timeout=None, encoding=None):

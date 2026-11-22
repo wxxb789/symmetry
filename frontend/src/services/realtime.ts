@@ -1,5 +1,6 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { Socket } from "phoenix";
+import { invalidationKeys, isSessionReadKey, type InvalidationPayload } from "../app/read-cache";
 
 /**
  * The operator invalidation client.
@@ -25,17 +26,6 @@ import { Socket } from "phoenix";
  * `socketEndpoint`), so no connect attempt — the client's own reconnects
  * included — reads a global the page no longer has.
  */
-
-interface InvalidationPayload {
-  kind: string;
-  id?: string;
-  project_id?: string;
-  work_item_id?: string;
-  goal_id?: string;
-  run_id?: string;
-  version?: number;
-  cursor?: number;
-}
 
 export type RealtimeStatus = "connecting" | "connected" | "disconnected";
 
@@ -215,7 +205,7 @@ export function createRealtime(options: RealtimeOptions): RealtimeHandle {
     // would restart it on every tick and it would never settle.
     void queryClient
       .invalidateQueries(
-        { predicate: (query) => query.queryKey[0] !== "session" },
+        { predicate: (query) => !isSessionReadKey(query.queryKey) },
         { cancelRefetch: source !== "fallback" },
       )
       .then(settled, settled);
@@ -423,40 +413,4 @@ export function createRealtime(options: RealtimeOptions): RealtimeHandle {
       };
     },
   };
-}
-
-/**
- * The query-key roots one invalidation affects. An empty list means "every
- * read": an unclassified change is refetched broadly instead of being dropped.
- */
-export function invalidationKeys(payload: InvalidationPayload): readonly (readonly unknown[])[] {
-  const identity = payload.id ?? payload.work_item_id;
-  switch (payload.kind) {
-    case "work_item":
-      // The attention read merges the Goal feed with the project's blocked work
-      // items, so a work item's own change (a blocker resolving, a status move)
-      // changes that read too: without this key a focused Attention page keeps
-      // the blocked rows it read before the change until a refocus or reload.
-      return [...(identity === undefined ? [["work-item"]] : [["work-item", { workItemId: identity }]]), ["work-item-timeline"], ["workspace"], ["attention"]];
-    case "run":
-      // A run-scoped change is a change to its work item's execution truth; the
-      // payload names the run, and the surfaces key by work item.
-      return [["work-item"], ["work-item-timeline"], ["workspace"]];
-    case "goal":
-      // The receipts list reads its loaded pages under `goal-events` and its
-      // reconnect continuation under `goal-events-catch-up`; both are reads of
-      // the same served log, so both are invalidated.
-      return [...(identity === undefined ? [["goal"]] : [["goal", { goalId: identity }]]), ["goal-events"], ["goal-events-catch-up"], ["attention"]];
-    case "chat":
-      return [["chat"]];
-    case "connection":
-    case "resource":
-      return [["connections"], ["workspace"]];
-    case "project":
-      return [["workspace"], ["connections"]];
-    case "runtime":
-      return [["workspace"]];
-    default:
-      return [];
-  }
 }

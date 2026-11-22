@@ -1539,6 +1539,14 @@ is fixed here; each bullet names what a follow-up has to re-derive.
       time (`@x Owner.state_set()`), keeping every SQL literal byte-identical, plus one pinning
       test that fails on divergence.
 
+## Daemon app tests: the retained-resume attach-ready mark is unpinned (PR #234 review round 2)
+
+- [ ] Pin the `tx.attachReady = true` assignment in `publishRetainedNativeStartBoundary`
+      (`daemon/internal/app/goal_admission_tx.go`): deleting it survives the tx seam matrix and the
+      full app suite, so no test reaches the retained-resume path that reads the mark. It only
+      matters when a retained resume is cancelled after launch or its lease expires after `Open`.
+      The gap exists at base; owner: the next daemon app-test slice.
+
 ## Harness launch grant: legacy `StartRequest` members (rf-w4-15b, 2026-11-22)
 
 - [ ] Remove the legacy `StartRequest.Invocation`, `StartRequest.PersistProcess`,

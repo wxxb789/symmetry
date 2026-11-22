@@ -3,6 +3,7 @@ import { Link, useRouteContext, useSearch } from "@tanstack/react-router";
 import { AlertCircle, CircleCheck, Plus, Target } from "lucide-react";
 import { useState } from "react";
 import { attentionOptions, sessionOptions, workspaceOptions } from "../../app/application";
+import { attentionReadKey } from "../../app/read-cache";
 import { StatusBadge } from "../../components/primitives";
 import { EmptyState, ErrorState, LoadingState, PageHeading, RefreshButton } from "../../components/workspace";
 import { errorMessage, postGoalCreation, type GoalAttentionEntry, type ProjectBlockedEntry } from "../../services/api";
@@ -179,7 +180,7 @@ function NewGoalButton({ projectId }: { projectId: string | null }) {
     },
     onSuccess: async () => {
       setNotice("The server created the Goal.");
-      await queryClient.invalidateQueries({ queryKey: ["attention"] });
+      await queryClient.invalidateQueries({ queryKey: attentionReadKey() });
       setTitle("");
       setObjective("");
     },
