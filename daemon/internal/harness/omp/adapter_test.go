@@ -891,6 +891,35 @@ func TestStartTurnRefusesAfterCloseSetsTheStoppingLatch(t *testing.T) {
 	}
 }
 
+func TestOpenRefusesAConcurrentOpenWithTheFrozenText(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseOpen := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(releaseOpen)
+	session, _ := testSession(t, func(request map[string]any) []any {
+		if request["type"] == "negotiate_protocol" {
+			close(entered)
+			<-release
+		}
+		return nil
+	}, nil, nil)
+	opened := make(chan error, 1)
+	go func() {
+		_, err := session.Open(context.Background())
+		opened <- err
+	}()
+	<-entered
+	_, concurrentErr := session.Open(context.Background())
+	releaseOpen()
+	if err := <-opened; err != nil {
+		t.Fatalf("first Open() error = %v", err)
+	}
+	if concurrentErr == nil || concurrentErr.Error() != "OMP session cannot open" {
+		t.Fatalf("concurrent Open() error = %v, want the frozen cannot-open text", concurrentErr)
+	}
+}
+
 func TestCancelFallsBackToPhysicalStopAfterUncertainAbort(t *testing.T) {
 	session, process := testSession(t, func(request map[string]any) []any {
 		if request["type"] == "prompt" {

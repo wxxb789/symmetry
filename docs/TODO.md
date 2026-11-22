@@ -1544,11 +1544,17 @@ is fixed here; each bullet names what a follow-up has to re-derive.
 - [ ] Remove the legacy `StartRequest.Invocation`, `StartRequest.PersistProcess`,
       `StartRequest.PersistProcessAuthority` and `StartRequest.PersistContainmentStopReceipt`
       members. `daemon/internal/harness/staged_driver.go` now hands every staged adapter one opaque
-      `harness.LaunchGrant`; the five conforming adapters (`pi`, `codex`, `claude`, `omo`, `omp`)
-      and `generic.go` read the grant only, so the four legacy members are populated and read
-      solely by `daemon/internal/harness/opencode/adapter.go`, which the slice (E3/D1) may not
-      touch. Removal is tied to W6-04 (OpenCode promote-or-drop): once OpenCode adopts the grant or
-      is dropped, delete the four members, the `StartRequest.grant()` fallback in
-      `staged_driver.go` that merges them, and their population in
+      `harness.LaunchGrant`, but the legacy surface still has readers. The five conforming adapters
+      (`pi`, `codex`, `claude`, `omo`, `omp`) still read `request.Invocation`'s process-description
+      members (`Args`, `Env`, `InitialInput`, `CloseInputAfterInitial`), which must move onto a
+      description input before `Invocation` can be deleted. `StartRequest.grant()` in
+      `staged_driver.go` still merges the three request-level persist members over
+      `request.Invocation` for every direct construction that carries no `Grant` (in practice the
+      adapter tests that build `StartRequest{...}` without one); deleting that fallback depends
+      only on migrating those callers to `Grant`, not on W6-04. The member deletion itself is tied
+      to W6-04 (OpenCode promote-or-drop):
+      `daemon/internal/harness/opencode/adapter.go`, which the slice (E3/D1) may not touch, is the
+      only adapter still reading all four members. Once it adopts the grant or is dropped, delete
+      the four members, the `grant()` fallback, and their population in
       `daemon/internal/app/goal_admission_tx.go` and
       `daemon/internal/app/linux_owner_witness_linux.go`.

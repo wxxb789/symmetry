@@ -166,8 +166,8 @@ func TestStagedDriverRequestWithoutGrantIsItsOwnGrant(t *testing.T) {
 	if functionPointer(captured.PersistProcess) != functionPointer(requestPersist) {
 		t.Fatal("request-level persistence callback did not win")
 	}
-	if functionPointer(captured.PersistContainmentStopReceipt) != functionPointer(nestedReceipt) {
-		t.Fatal("a nil request-level callback cleared the nested one")
+	if functionPointer(captured.PersistContainmentStopReceipt) != 0 {
+		t.Fatal("a nil request-level callback must replace the nested one")
 	}
 }
 
@@ -270,6 +270,84 @@ func TestStagedDriverFailedOpenRecordsNoHandleAndStaysRefused(t *testing.T) {
 	}
 	if _, err := driver.Open(ctx); !errors.Is(err, sentinel) || opens != 2 {
 		t.Fatalf("a failed open was not retried: opens=%d err=%v", opens, err)
+	}
+}
+
+func TestStagedDriverOpenWithCanceledContextRecordsNoHandle(t *testing.T) {
+	trace := &stagedTrace{}
+	driver, hooks := newStagedFakeDriver(trace)
+	opens := 0
+	hooks.open = func(ctx context.Context) (NativeSessionHandle, error) {
+		opens++
+		<-ctx.Done()
+		return NativeSessionHandle{}, ctx.Err()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	handle, err := driver.Open(ctx)
+	if !errors.Is(err, context.Canceled) || handle.ID != "" {
+		t.Fatalf("Open() = %+v, %v; want the hook's cancellation", handle, err)
+	}
+	if driver.OpenedLocked() || driver.OpeningLocked() {
+		t.Fatal("a canceled open left a latch behind")
+	}
+	if err := driver.Admit(context.Background(), TurnRequest{}); !errors.Is(err, ErrStagedSessionNotOpened) {
+		t.Fatalf("admission after a canceled open: %v", err)
+	}
+	hooks.open = func(context.Context) (NativeSessionHandle, error) {
+		return NativeSessionHandle{ID: "native"}, nil
+	}
+	handle, err = driver.Open(context.Background())
+	if err != nil || handle.ID != "native" || !driver.OpenedLocked() {
+		t.Fatalf("retry after a canceled open: %+v, %v", handle, err)
+	}
+	if opens != 1 {
+		t.Fatalf("open hook calls = %d, want only the canceled attempt", opens)
+	}
+}
+
+func TestStagedDriverOpenCancellationWhileTheHookIsInFlightLeavesNoHandle(t *testing.T) {
+	trace := &stagedTrace{}
+	driver, hooks := newStagedFakeDriver(trace)
+	entered := make(chan struct{})
+	hooks.open = func(ctx context.Context) (NativeSessionHandle, error) {
+		close(entered)
+		<-ctx.Done()
+		return NativeSessionHandle{}, ctx.Err()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := driver.Open(ctx)
+		result <- err
+	}()
+	<-entered
+	if _, err := driver.Open(context.Background()); !errors.Is(err, ErrStagedSessionOpening) {
+		t.Fatalf("open while a canceling attempt is in flight: %v", err)
+	}
+	cancel()
+	if err := <-result; !errors.Is(err, context.Canceled) {
+		t.Fatalf("in-flight open after cancel: %v", err)
+	}
+	if driver.OpenedLocked() {
+		t.Fatal("a canceled in-flight open recorded a handle")
+	}
+	if err := driver.Admit(context.Background(), TurnRequest{}); !errors.Is(err, ErrStagedSessionNotOpened) {
+		t.Fatalf("admission after a canceled open: %v", err)
+	}
+}
+
+func TestStagedDriverAdmitSurfacesTheHookContextErrorAfterOpen(t *testing.T) {
+	trace := &stagedTrace{}
+	driver, hooks := newStagedFakeDriver(trace)
+	hooks.admit = func(ctx context.Context, _ TurnRequest) error { return ctx.Err() }
+	if _, err := driver.Open(context.Background()); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := driver.Admit(ctx, TurnRequest{Goal: "canceled"}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("admission with a canceled context: %v", err)
 	}
 }
 

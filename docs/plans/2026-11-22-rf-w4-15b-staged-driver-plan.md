@@ -121,7 +121,7 @@ the driver now owns.
 | --- | --- | --- | --- |
 | pi | `opened`→validator handle · `opening` · `usableLocked` · get_state · `usableLocked` · validator+resume | nil-session/nil-ctx text; map `ErrStagedSessionOpening` to `"pi native session is already opening"` | `usableLocked`, request id, `GetStateRequest`, call, re-check, validator state, resume validation; returns the handle (deletes `!opened`, `opening` lines) |
 | codex | `ensureUsable(false)` · `opened`→threadID · `opening` · initialize/notify/thread-start · commit block | nil-session/nil-ctx text + `ensureUsable(false)` before the driver call (preserves base precedence) | handshake; commit block keeps `closed`/`sinkErr`/`terminalSeen` checks and the `threadID`/model fields (deletes `opened`, `opening`, `opening=false`, `cancel`-on-failure stays in the hook) |
-| claude | `opened`→`{expectedSessionID}` · `usableLocked` | nil-session/nil-ctx text | `usableLocked` only |
+| claude | `opened`→`{expectedSessionID}` · `usableLocked` | nil-session/nil-ctx text; on the driver's opening refusal it re-runs `usableLocked` and returns its error, else the requested UUID (base had no latch and ran its own check per caller) | `usableLocked` only |
 | omo | `usableLocked` · `opened`→validator state · `opening` · protocol+get_state+validations | nil-ctx text + `usableLocked` before the driver call | protocol, get_state, `openError` classification, validations (deletes `opening` defer) |
 | omp | `opened`→`session.handle` · `opening\|\|stopping\|\|failure` · ready wait · negotiate+get_state · `handle.ID` | nil-ctx text; map `ErrStagedSessionOpening` to `errors.Join(session.failure, "OMP session cannot open")` | ready wait, protocol calls, `handle` assignment (deletes `opened`, `opening` lines) |
 
@@ -132,7 +132,7 @@ the driver now owns.
 | pi | `opened` | usable, `turnStarted`, request id, emit, prompt RPC, `tryFinalizeTurn` | `usableLocked()` error, else `"pi native session has not opened"` |
 | codex | `opened` | schema load, `turnStarted`/`turnStarting` + deferred rollback, replay branch | `"codex native session has not opened a thread"` (the `threadID == ""` check stays in the hook) |
 | claude | `opened` | frame marshal, write fence, `turnStarted`, emit, write | `"Claude Code native adapter session has not opened"` |
-| omo | `opened` | prompt build, `turnGate`, prepared/recovering machine | `"OmO native handle has not opened"` |
+| omo | `opened` | goal/context validation in the wrapper ahead of the gate (base precedence); hook keeps schema/prompt build, `turnGate`, prepared/recovering machine | `"OmO native handle has not opened"` |
 | omp | `opened` | `started`/`stopping`/`failure`, emit, prompt call | plain `"OMP session does not admit another prompt"` (the shared `errOMPPromptRefused`; only the `Open` refusal joins `session.failure`, §11) |
 
 ### 4.4 close
@@ -167,8 +167,11 @@ effect-free paths:
 5. **`omo`'s deadline-composed cancel** stays in the adapter (it wraps `WithDeadline` around the
    process context before the session exists); the driver owns no context.
 6. **`Admit` runs before prompt construction in `omo`/`codex`**, moving schema/prompt-load and
-   `turnGate` acquisition behind the open gate. Both are effect-free reads that cannot fail for a
-   valid turn; `omo`'s `turnGate` acquisition order is recorded here as the one real reorder.
+   `turnGate` acquisition behind the open gate. `omo`'s goal/context validation stays in the
+   wrapper ahead of the gate, so the base error precedence for an invalid turn is restored; only
+   the schema/prompt build and `turnGate` acquisition follow the gate, and both are effect-free
+   reads that cannot fail for a valid turn. `omo`'s `turnGate` acquisition order is recorded here
+   as the one real reorder.
 7. **`Close` on an already-closed session** returns the gate's recorded outcome exactly as base
    (`CloseGate` semantics unchanged).
 
@@ -183,7 +186,9 @@ effect-free paths:
   left it; close failure stays retryable unless the hook returned the bare marker.
 - **Cancellation before/after Open**: before Open the process context cancels through the adapter's
   own cancel (hook error path); after Open the close path is the only cleanup, and a joined close
-  stays permanent only for a bare marker.
+  stays permanent only for a bare marker. Root tests cover a pre-canceled `Open`, a cancel while
+  the open hook is in flight (no handle recorded either way, `Admit` still refused) and a canceled
+  `Admit` passing the hook's context error through after a successful open.
 - **Close permanence**: through the exported `PermanentCloseFailure` constructor added by W4-15c;
   wrapped or joined markers stay retryable, `nil` Err stays retryable.
 - **No public-interface change**: `Adapter`/`Session`/`StagedSession`/`StopProofSession` stay as
@@ -195,10 +200,16 @@ effect-free paths:
 
 `staged_driver_test.go` (root, fake hooks, no adapter package): the ordered phase trace; the launch
 hook receives the merged invocation (grant durable members + description process members, and the
-description wins); open is single-flight and idempotent; a failed open records no handle and keeps
-`Admit` refused; `Admit` refuses before the handle and is released after; each hook error surfaces
-unchanged; `Close`/`CloseDetached` join one attempt, a bare marker is permanent, a wrapped marker is
-retryable. Each root test carries a recorded red mutant in the evidence record.
+description wins); a no-grant request applies the request-level callbacks unconditionally (the base
+rule of pi/codex/claude/omo/generic); open is single-flight and idempotent; a failed open records no
+handle and keeps `Admit` refused; `Open` with a canceled context and a cancel while the hook is in
+flight both record no handle and keep `Admit` refused; a canceled `Admit` after a successful open
+surfaces the hook's context error verbatim; `Admit` refuses before the handle and is released
+after; each hook error surfaces unchanged; `Close`/`CloseDetached` join one attempt, a bare marker
+is permanent, a wrapped marker is retryable. Each root test carries a recorded red mutant in the
+evidence record. The adapter suites add one already-opening text pin per conforming adapter
+(`claude`'s covers both the rejection and the UUID-success arm), plus the `omo` invalid-turn
+precedence pin.
 
 ## 8. Evidence plan
 
@@ -260,3 +271,11 @@ The tree is authoritative for these; the sections above record the design intent
   revision was +29), the driver is +160 (implement +178) and the root test +381 (implement +380);
   the combined W4-15 target of −600…−800 is not met by either half, as the reshape's ≤4-hook
   constraint replaced absorption. Numbers in the evidence §11.
+- Review-2 amendments (Opus review 1, findings P2-1–P2-5, P3-1–P3-3): the driver's what/excuse
+  docstrings and the two false `StartRequest` comments are deleted (comment policy); `grant()`
+  assigns the three request-level callbacks unconditionally, restoring the base rule of four
+  adapters and generic (production always passes the app-merged `Grant`, so only direct
+  constructions see the fallback); `omo`'s `StartTurn` validation is hoisted ahead of the gate;
+  `claude`'s opening refusal re-runs `usableLocked` (no false UUID success); `docs/TODO.md` names
+  the real readers and the real fallback-removal dependency; new pins in §7 and mutants m12–m20 in
+  the evidence §8.

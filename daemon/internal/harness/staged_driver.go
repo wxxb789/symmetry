@@ -9,36 +9,23 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
 )
 
-// LaunchGrant is one opaque durable launch authority for a staged session. The
-// app merges the invocation members and the request-level persistence callbacks
-// into it; an adapter hands it back to the driver without reading it.
 type LaunchGrant struct {
 	invocation execution.Invocation
 	granted    bool
 }
 
-// NewLaunchGrant records the app's merged launch authority.
 func NewLaunchGrant(invocation execution.Invocation) LaunchGrant {
 	return LaunchGrant{invocation: invocation, granted: true}
 }
 
-// grant resolves one request's launch authority. A request that carries no grant
-// is its own grant: the legacy members stay the frozen OpenCode adapter's input
-// and keep direct-construction callers unchanged.
 func (request StartRequest) grant() LaunchGrant {
 	if request.Grant.granted {
 		return request.Grant
 	}
 	invocation := request.Invocation
-	if request.PersistProcess != nil {
-		invocation.PersistProcess = request.PersistProcess
-	}
-	if request.PersistProcessAuthority != nil {
-		invocation.PersistProcessAuthority = request.PersistProcessAuthority
-	}
-	if request.PersistContainmentStopReceipt != nil {
-		invocation.PersistContainmentStopReceipt = request.PersistContainmentStopReceipt
-	}
+	invocation.PersistProcess = request.PersistProcess
+	invocation.PersistProcessAuthority = request.PersistProcessAuthority
+	invocation.PersistContainmentStopReceipt = request.PersistContainmentStopReceipt
 	return LaunchGrant{invocation: invocation}
 }
 
@@ -53,8 +40,6 @@ func (grant LaunchGrant) merged(description ProcessDescription) execution.Invoca
 	return invocation
 }
 
-// ProcessDescription is everything an adapter decides about the process. Durable
-// launch authority is not part of it.
 type ProcessDescription struct {
 	Program                string
 	Args                   []string
@@ -64,31 +49,22 @@ type ProcessDescription struct {
 	CloseInputAfterInitial bool
 }
 
-// StagedHooks is the one adapter-supplied interface the staged driver calls.
-// Adapter state machines stay behind these methods.
 type StagedHooks interface {
 	// The runner persists the process identity through the invocation callbacks
 	// before it exposes the process.
 	LaunchTransport(ctx context.Context, invocation execution.Invocation) error
-	// OpenNativeSession runs this adapter's native handshake and returns the
-	// handle the driver records only on success.
 	OpenNativeSession(ctx context.Context) (NativeSessionHandle, error)
 	AdmitNativeTurn(ctx context.Context, request TurnRequest) error
-	// CloseNativeSession runs this adapter's bounded cleanup and returns a bare
-	// PermanentCloseFailure result when the failure cannot be retried.
+	// CloseNativeSession returns a bare PermanentCloseFailure result when the
+	// failure cannot be retried; a wrapped marker stays retryable.
 	CloseNativeSession(ctx context.Context) error
 }
 
-// The driver returns these refusals bare; each adapter maps them to its own text.
 var (
 	ErrStagedSessionOpening   = errors.New("staged native session is already opening")
 	ErrStagedSessionNotOpened = errors.New("staged native session has not opened its native handle")
 )
 
-// StagedDriver owns the staged ordering of one session: the launch that persists
-// the process identity inside the runner, the recorded native handle, the
-// admitted turn, and the single-flight close. It takes the session's own mutex,
-// as ProcessForwarder takes the session's process field.
 type StagedDriver struct {
 	hooks StagedHooks
 	mutex *sync.Mutex
@@ -107,8 +83,6 @@ func (driver *StagedDriver) Launch(ctx context.Context, request StartRequest, de
 	return driver.hooks.LaunchTransport(ctx, request.grant().merged(description))
 }
 
-// Open records the opaque handle only after the native handshake succeeded; an
-// opened session returns the recorded handle and a concurrent open is refused.
 func (driver *StagedDriver) Open(ctx context.Context) (NativeSessionHandle, error) {
 	driver.mutex.Lock()
 	if driver.opened {
@@ -135,8 +109,6 @@ func (driver *StagedDriver) Open(ctx context.Context) (NativeSessionHandle, erro
 	return handle, nil
 }
 
-// Admit runs the one turn admission of this session, and only after the native
-// handle was recorded.
 func (driver *StagedDriver) Admit(ctx context.Context, request TurnRequest) error {
 	driver.mutex.Lock()
 	opened := driver.opened

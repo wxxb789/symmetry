@@ -371,12 +371,19 @@ func (session *nativeSession) openError(err error) error {
 	return err
 }
 
-func buildTurnPrompt(goal string, contextJSON json.RawMessage) (string, error) {
+func validateTurnRequest(goal string, contextJSON json.RawMessage) error {
 	if strings.TrimSpace(goal) == "" {
-		return "", errors.New("OmO turn requires a goal")
+		return errors.New("OmO turn requires a goal")
 	}
 	if _, err := strictObject(contextJSON); err != nil {
-		return "", errors.New("OmO turn requires complete JSON object context")
+		return errors.New("OmO turn requires complete JSON object context")
+	}
+	return nil
+}
+
+func buildTurnPrompt(goal string, contextJSON json.RawMessage) (string, error) {
+	if err := validateTurnRequest(goal, contextJSON); err != nil {
+		return "", err
 	}
 	schema, err := contracts.TaskResultSchema()
 	if err != nil {
@@ -392,6 +399,9 @@ func buildTurnPrompt(goal string, contextJSON json.RawMessage) (string, error) {
 func (session *nativeSession) StartTurn(ctx context.Context, request harness.TurnRequest) error {
 	if ctx == nil {
 		return errors.New("OmO StartTurn requires context")
+	}
+	if err := validateTurnRequest(request.Goal, request.Context); err != nil {
+		return err
 	}
 	if err := session.staged.Admit(ctx, request); err != nil {
 		if errors.Is(err, harness.ErrStagedSessionNotOpened) {

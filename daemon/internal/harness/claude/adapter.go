@@ -358,7 +358,12 @@ func (session *candidateSession) Open(ctx context.Context) (harness.NativeSessio
 	}
 	handle, err := session.staged.Open(ctx)
 	if errors.Is(err, harness.ErrStagedSessionOpening) {
-		// This open is idempotent and side-effect free, so an in-flight concurrent open still returns the requested UUID.
+		session.mutex.Lock()
+		usableErr := session.usableLocked()
+		session.mutex.Unlock()
+		if usableErr != nil {
+			return harness.NativeSessionHandle{}, usableErr
+		}
 		return harness.NativeSessionHandle{ID: session.expectedSessionID}, nil
 	}
 	return handle, err

@@ -323,14 +323,8 @@ type StartRequest struct {
 	Resume         *ResumeHandle
 	ProviderAccess *protocol.ProviderAccess
 	ProviderBridge *ProviderBridgeLaunch
-	// Grant is the app's complete durable launch authority for a staged
-	// session. A staged adapter hands it to StagedDriver and never reads it.
-	Grant LaunchGrant
-	// Invocation and the three persistence callbacks below stay readable for
-	// the frozen OpenCode adapter only; a staged adapter describes its process
-	// through ProcessDescription and reads none of them. Their removal is tied
-	// to W6-04 (OpenCode promote-or-drop).
-	Invocation execution.Invocation
+	Grant          LaunchGrant
+	Invocation     execution.Invocation
 	// StartProcess is an optional owner-supplied launch seam. A witness or
 	// test can wrap the exact execution.Process before the adapter observes
 	// it; production adapters use their own Runner when this is nil.

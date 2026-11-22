@@ -221,6 +221,68 @@ func TestClaudeCandidateOpenDefersSystemInitUntilFirstTurn(t *testing.T) {
 	})
 }
 
+type blockedOpenHooks struct {
+	harness.StagedHooks
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (hooks *blockedOpenHooks) OpenNativeSession(ctx context.Context) (harness.NativeSessionHandle, error) {
+	close(hooks.entered)
+	<-hooks.release
+	return hooks.StagedHooks.OpenNativeSession(ctx)
+}
+
+func candidateSessionWithBlockedOpen(t *testing.T) (*candidateSession, *candidateFakeProcess, *blockedOpenHooks) {
+	t.Helper()
+	process := newCandidateFakeProcess()
+	adapter := newCandidateTestAdapter(process, nil)
+	raw, err := adapter.Start(context.Background(), candidateStartRequest(t), &recordingCandidateSink{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanupCandidateSession(t, raw)
+	session := raw.(*candidateSession)
+	hooks := &blockedOpenHooks{StagedHooks: session, entered: make(chan struct{}), release: make(chan struct{})}
+	session.staged = harness.NewStagedDriver(hooks, &session.mutex)
+	return session, process, hooks
+}
+
+func TestClaudeConcurrentOpenObservesTheInFlightOpenOutcome(t *testing.T) {
+	t.Run("in-flight failure rejects instead of returning the UUID", func(t *testing.T) {
+		session, process, hooks := candidateSessionWithBlockedOpen(t)
+		opened := make(chan error, 1)
+		go func() {
+			_, err := session.Open(context.Background())
+			opened <- err
+		}()
+		<-hooks.entered
+		process.finishResult(execution.Result{PID: 42, ExitCode: 1})
+		<-session.resultDone
+		_, concurrentErr := session.Open(context.Background())
+		close(hooks.release)
+		firstErr := <-opened
+		if concurrentErr == nil || firstErr == nil || concurrentErr.Error() != firstErr.Error() {
+			t.Fatalf("concurrent Open() = %v, first Open() = %v; want the in-flight outcome", concurrentErr, firstErr)
+		}
+	})
+	t.Run("usable in-flight open still returns the requested UUID", func(t *testing.T) {
+		session, _, hooks := candidateSessionWithBlockedOpen(t)
+		opened := make(chan error, 1)
+		go func() {
+			_, err := session.Open(context.Background())
+			opened <- err
+		}()
+		<-hooks.entered
+		handle, err := session.Open(context.Background())
+		close(hooks.release)
+		firstErr := <-opened
+		if err != nil || handle.ID != candidateTestSessionID || firstErr != nil {
+			t.Fatalf("concurrent Open() = %+v, %v; first Open() = %v", handle, err, firstErr)
+		}
+	})
+}
+
 func TestClaudeCandidateRejectsProseTerminalAsSuccess(t *testing.T) {
 	process := newCandidateFakeProcess()
 	adapter := newCandidateTestAdapter(process, nil)
