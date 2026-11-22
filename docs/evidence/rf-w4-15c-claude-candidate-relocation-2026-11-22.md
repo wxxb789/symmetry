@@ -727,7 +727,8 @@ Review: `236-opus-review-1.md` (P2-1/D2, P3-1..P3-4) against the reviewed apply 
 R1 applied every finding, re-ran the gates and rebound §1, §8 and the §10 name accounting to the
 delivered bytes. The work is committed on top of `de9cce07`, and the branch also merges
 `origin/main` (`837dd974`, the rf-w6-01 CI-structure commit, docs/CI-only) so the pushed head
-carries both; a record-update commit after the merge adds the revision-scoped gate exits below.
+carries both; the revision-scoped gate exits below were added by the record-update commit after the
+merge, which is the pushed head.
 
 ### 14.1 Findings
 
@@ -786,7 +787,7 @@ which run on the pushed commit (their exit codes are in the fix report
 | harness suite | `go test -count=1 ./internal/harness/...` | exit 0; 9/9 packages `ok` (claude 20.1 s) |
 | app suite | `go test -timeout 20m -count=1 ./internal/app/` | exit 0; `ok … internal/app` 965.1 s (host-load run) |
 | test-name bookkeeping | `go test -list '.*'` over `./internal/harness/... ./internal/app/...` | 1,119 `Test*` names; the rename holds the total, the new spelling appears exactly once, the old spelling zero times |
-| whitespace | `git diff --check` on the worktree | exit 0; the range form at the pushed head is added by the R1 record-update commit |
-| record cleanliness | `python scripts/ci/model-routing-record-sanitize.py --check --root-only` on this record | exit 0; the contract's revision-scoped gate at the pushed head is added by the R1 record-update commit |
-| profile / DLP scan | added lines of `git diff origin/main` grepped for the operator profile name and for a backslash directly before a lowercase `u` | no match on either; the only `Users\`-shaped added lines are the three neutral `runneradmin` fixtures, and the two `-`-line profile matches are the base bytes this round scrubs |
-| frozen surfaces | `git diff --name-only origin/main` plus a name filter | no `opencode/**`, `pi/**`, `claude/stream*.go`, `testdata/**` or `generic.go` entry |
+| whitespace | `git diff --check` on the worktree, then `git diff --check origin/main...HEAD` after the `origin/main` merge (base `837dd974`) | exit 0 both times |
+| record cleanliness | `python scripts/ci/model-routing-record-sanitize.py --check --root-only` on this record; the contract's `check-record-cleanliness.py --base $(git merge-base HEAD origin/main) --head HEAD` at the merge revision `e1ee4f5a` | sanitize exit 0; gate: `1 changed record(s) pass the root-only check`, exit 0; re-run at the pushed record-update commit reproduces exit 0 |
+| profile / DLP scan | added lines of `git diff origin/main...HEAD` grepped for the operator profile name and for a backslash directly before a lowercase `u` | no match on either; the only `Users\`-shaped added lines are the three neutral `runneradmin` fixtures, and the two `-`-line profile matches are the base bytes this round scrubs |
+| frozen surfaces | `git diff --name-only origin/main...HEAD` plus a name filter | no `opencode/**`, `pi/**`, `claude/stream*.go`, `testdata/**` or `generic.go` entry |
