@@ -6,6 +6,34 @@ import * as Contracts from "../ts/index.ts";
 import { parsePresentationJson, parseWireJson, WireJsonError } from "../ts/wire-json.ts";
 
 const fixtureRoot = new URL("../fixtures/", import.meta.url);
+
+// A class this decoder accepts today must be declared in the row's runtime_divergence.
+const wireErrorCodes = new Map([
+  ["duplicate_json_member", "duplicate_json_member"],
+  ["noncanonical_number", "noncanonical_number"],
+  ["unsafe_integer", "noncanonical_number"],
+  ["leading_zero", "invalid_json"],
+  ["nonfinite_number", "nonfinite_number"],
+  ["invalid_utf8", "invalid_utf8"],
+  ["trailing_value", "invalid_json"],
+  ["trailing_garbage", "invalid_json"],
+]);
+
+// The corpus vocabulary, checked before either acceptance branch: an accepted
+// row never consults wireErrorCodes, so an unknown class would pass vacuously.
+const wireErrorClasses = new Set([
+  "duplicate_json_member",
+  "noncanonical_number",
+  "unsafe_integer",
+  "leading_zero",
+  "negative_zero",
+  "nonfinite_number",
+  "invalid_utf8",
+  "bom",
+  "trailing_value",
+  "trailing_garbage",
+]);
+
 const presentationReadSchemas = new Set([
   "attention-read",
   "chat-read",
@@ -74,6 +102,11 @@ for (const fixture of manifest.fixtures) {
   const decoder = decoders[fixture.schema];
   const schema = schemas[fixture.schema];
   assert.ok(decoder && schema, `unknown schema for ${fixture.id}`);
+  if (fixture.wire_error !== undefined)
+    assert.ok(
+      wireErrorClasses.has(fixture.wire_error),
+      `unknown wire_error class for ${fixture.id}: ${fixture.wire_error}`,
+    );
   const bytes = await fs.readFile(new URL(fixture.path, fixtureRoot));
 
   // Every negative fixture reaches the public raw-body decoder, including number lexemes.
@@ -85,6 +118,18 @@ for (const fixture of manifest.fixtures) {
     fixture.semantic_valid ?? fixture.valid,
     `Effect decodeJson semantic validity: ${fixture.id}`,
   );
+  if (fixture.wire_error !== undefined) {
+    const acceptedByTs = fixture.runtime_divergence?.ts === "accepts";
+    assert.equal(semanticValid, acceptedByTs, `Effect raw wire validity: ${fixture.id}`);
+    if (!acceptedByTs) {
+      assert.ok(Either.isLeft(result), `expected a raw rejection for ${fixture.id}`);
+      assert.equal(
+        result.left.code,
+        wireErrorCodes.get(fixture.wire_error),
+        `Effect raw wire code: ${fixture.id}`,
+      );
+    }
+  }
 
   let data;
   let structuralValid = false;

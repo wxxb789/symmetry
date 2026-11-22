@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"math/big"
 	"net/http"
 	"strings"
@@ -516,27 +515,6 @@ func isReconcileDecision(value protocol.ReconcileDecisionKind) bool {
 	}
 }
 
-// decodeStrictJSON is reserved for the additive Goal machine endpoints. The
-// legacy decodeJSON helper intentionally remains tolerant for protocol-v1
-// response evolution.
-func decodeStrictJSON(value []byte, target any) error {
-	decoder := json.NewDecoder(bytes.NewReader(value))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(target); err != nil {
-		return err
-	}
-	var extra any
-	if err := decoder.Decode(&extra); err != io.EOF {
-		if err == nil {
-			return errors.New("response must contain one JSON value")
-		}
-		return err
-	}
-	// Duplicate members are rejected only after the value parsed, preserving every
-	// pre-existing rejection message and precedence at every depth.
-	return protocol.RejectDuplicateJSONMembers(value)
-}
-
 func decodeStrictObjectJSON(value []byte, target any, required ...string) error {
 	trimmed := bytes.TrimSpace(value)
 	if len(trimmed) == 0 || trimmed[0] != '{' {
@@ -551,7 +529,7 @@ func decodeStrictObjectJSON(value []byte, target any, required ...string) error 
 			return fmt.Errorf("missing required field %q", field)
 		}
 	}
-	return decodeStrictJSON(trimmed, target)
+	return decodeResponseJSON(responseDecodeTyped, "", trimmed, target)
 }
 
 func validateGoalFence(runID string, fence protocol.Fence) error {
