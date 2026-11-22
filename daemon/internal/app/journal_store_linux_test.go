@@ -48,28 +48,20 @@ ReserveLinuxClonePromotion`
 func TestJournalStoreMethodSetIsExactOnLinuxAMD64(t *testing.T) {
 	want := append(strings.Split(journalStoreBaseMethods, "\n"), strings.Split(journalStoreLinuxAndAMD64Methods, "\n")...)
 	slices.Sort(want)
-	got := interfaceMethodNames(reflect.TypeOf((*journalStore)(nil)).Elem())
-	if !slices.Equal(got, want) {
-		t.Fatalf("journalStore members = %s\nwant %s\nadded %s\nremoved %s", got, want, difference(got, want), difference(want, got))
-	}
+	assertMethodSet(t, "journalStore", interfaceMethodNames(reflect.TypeOf((*journalStore)(nil)).Elem()), want)
 }
 
 type journalStoreDropProbeProcess struct {
 	linuxV2WitnessDropStatusFakeProcess
-	calls int
 }
 
-func (process *journalStoreDropProbeProcess) LinuxV2WitnessDropStatus(context.Context) (execution.LinuxV2WitnessDropStatus, error) {
-	process.calls++
+func (*journalStoreDropProbeProcess) LinuxV2WitnessDropStatus(context.Context) (execution.LinuxV2WitnessDropStatus, error) {
 	return execution.LinuxV2WitnessDropStatus{}, errors.New("storeless probe must not consult the drop-status reader")
 }
 
 func TestStorelessDaemonTakesEveryLinuxStoreNilBranch(t *testing.T) {
 	key := state.RunKey{RunID: "run", Generation: 1}
-	tests := []struct {
-		site string
-		run  func(t *testing.T, daemon *daemon)
-	}{
+	probes := []storelessProbe{
 		{"linux_owner_v2_linux.go:1180 loadLinuxCloneRunJournal", func(t *testing.T, daemon *daemon) {
 			_, err := daemon.loadLinuxCloneRunJournal(key, protocol.Fence{}, authority.LinuxCloneGrant{}, nil)
 			requireErrorMessage(t, err, "Linux clone Store readback is incomplete")
@@ -95,18 +87,11 @@ func TestStorelessDaemonTakesEveryLinuxStoreNilBranch(t *testing.T) {
 			if err := witness.captureHelperDropStatus(daemon.store, process); err != nil {
 				t.Fatalf("storeless drop-status capture = %v, want nil", err)
 			}
-			if process.calls != 0 {
-				t.Fatalf("drop-status reader calls = %d, want 0", process.calls)
-			}
 		}},
 		{"linux_owner_witness_linux.go:2599 recoverLinuxV2NativeWitnessRunKey", func(t *testing.T, daemon *daemon) {
 			err := recoverLinuxV2NativeWitnessRunKey(context.Background(), config.Config{}, daemon.store, state.RunJournal{})
 			requireErrorMessage(t, err, "exact owner-witness recovery requires its live context, locked Store, and selected RunJournal")
 		}},
 	}
-	for _, test := range tests {
-		t.Run(test.site, func(t *testing.T) {
-			test.run(t, &daemon{})
-		})
-	}
+	runStorelessProbes(t, probes)
 }

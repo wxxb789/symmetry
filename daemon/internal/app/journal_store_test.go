@@ -15,9 +15,6 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/state"
 )
 
-// journalStoreBaseMethods is the measured member set of journalStoreBase: every *state.Store
-// method package app selects on all build targets. The linux/amd64-only additions are declared in
-// journal_store_linux_amd64.go and pinned by journal_store_linux_test.go.
 const journalStoreBaseMethods = `AbortGoalSessionLaunchBeforeNativeStart
 AbortLinuxCloneReuseBeforeNativeStart
 AdvanceLeaseExpiry
@@ -119,10 +116,14 @@ SetProcessDetailsWithAuthority
 SetWorkspacePath`
 
 func TestJournalStoreBaseMethodSetIsExact(t *testing.T) {
-	want := strings.Split(journalStoreBaseMethods, "\n")
-	got := interfaceMethodNames(reflect.TypeOf((*journalStoreBase)(nil)).Elem())
+	assertMethodSet(t, "journalStoreBase",
+		interfaceMethodNames(reflect.TypeOf((*journalStoreBase)(nil)).Elem()),
+		strings.Split(journalStoreBaseMethods, "\n"))
+}
+
+func assertMethodSet(t *testing.T, label string, got, want []string) {
 	if !slices.Equal(got, want) {
-		t.Fatalf("journalStoreBase members = %s\nwant %s\nadded %s\nremoved %s", got, want, difference(got, want), difference(want, got))
+		t.Fatalf("%s members = %s\nwant %s\nadded %s\nremoved %s", label, got, want, difference(got, want), difference(want, got))
 	}
 }
 
@@ -149,15 +150,7 @@ func difference(left, right []string) []string {
 // base-revision outcome for a daemon built without a Store: a typed nil must not skip a branch.
 func TestStorelessDaemonTakesEveryStoreNilBranch(t *testing.T) {
 	key := state.RunKey{RunID: "run", Generation: 1}
-	tests := []struct {
-		site string
-		run  func(t *testing.T, daemon *daemon)
-	}{
-		{"app.go:189 options.store absent", func(t *testing.T, daemon *daemon) {
-			if daemon.options.store != nil || daemon.store != nil {
-				t.Fatalf("store fields = options:%v store:%v, want both absent", daemon.options.store, daemon.store)
-			}
-		}},
+	probes := []storelessProbe{
 		{"app.go:524 injected absent store stays untyped nil", func(t *testing.T, daemon *daemon) {
 			settings := options{}
 			withStore(nil)(&settings)
@@ -304,9 +297,18 @@ func TestStorelessDaemonTakesEveryStoreNilBranch(t *testing.T) {
 			}
 		}},
 	}
-	for _, test := range tests {
-		t.Run(test.site, func(t *testing.T) {
-			test.run(t, &daemon{})
+	runStorelessProbes(t, probes)
+}
+
+type storelessProbe struct {
+	site string
+	run  func(t *testing.T, daemon *daemon)
+}
+
+func runStorelessProbes(t *testing.T, probes []storelessProbe) {
+	for _, probe := range probes {
+		t.Run(probe.site, func(t *testing.T) {
+			probe.run(t, &daemon{})
 		})
 	}
 }

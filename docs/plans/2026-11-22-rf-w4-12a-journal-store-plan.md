@@ -26,7 +26,8 @@ Method-set census (one statement, reproducible; the throwaway tool is deleted be
   `deterministic_validation.go` (90), `linux_owner_v2_linux.go` (1180, 1209, 1549),
   `native_run.go` (217, 227, 246, 428), `pi_provider_bridge.go` (50, 180), `recovery.go` (619, 635, 705),
   `recovery_glue.go` (33), `linux_owner_witness_linux.go` (1416, 2479, 2599).
-- Gate greps at base: `rg -n 'store +\*state\.Store' daemon/internal/app --glob '!*_test.go'` = 22 lines;
+- Gate greps at base: `rg -n 'store +\*state\.Store' daemon/internal/app --glob '!*_test.go'` = 21 lines
+  (the broader `\*state\.Store` count is 22, which adds the unnamed parameter `lease.go:43`);
   `rg -n 'options\.store|daemon\.store' … --glob '!*_test.go'` = the call sites above plus 5 assignments
   and nil checks.
 - No test injects a typed nil: `withStore(nil)`, `store: nil`, `settings.store = nil` have 0 matches
@@ -61,7 +62,7 @@ Method-set census (one statement, reproducible; the throwaway tool is deleted be
      literal list,
      so widening or narrowing the seam reddens; the compile-time assertion pins the signatures.
    - `TestStorelessDaemonTakesEveryStoreNilBranch` runs one probe per `store == nil` branch above
-     (24 probes), each asserting that branch's outcome for a daemon built without a Store
+     (23 probes), each asserting that branch's outcome for a daemon built without a Store
      (`&daemon{}`), so a typed nil or a flipped guard reddens.
 5. New `daemon/internal/app/journal_store_linux_test.go`: the three linux-only `daemon.store == nil`
    branches (`linux_owner_v2_linux.go:1180/1209/1549`) plus the witness-parameter nil checks
@@ -175,7 +176,9 @@ alias); `docs/TODO.md` (PR #234 amendment); this plan and
 
 Measured sets: 97 production methods on every target, 121 on linux/amd64, +2 test-only
 (`SaveJournal`, `QueueTerminalTransition`); declared `journalStore` = 99 / 123. The base-vs-HEAD
-storeless-branch audit ran the same 30 probes in a throwaway base copy and at HEAD: both green.
+storeless-branch audit ran the same 30 probes in a throwaway base copy and at HEAD: both green (the
+delivered set is 29 probes after the apply-stage drop of the inert `app.go:189` probe — evidence
+record §8).
 Gate commands, exit codes and mutants: evidence record §10–§12.
 
 ## Out of scope (with reasons)

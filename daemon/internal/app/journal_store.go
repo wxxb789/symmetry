@@ -8,9 +8,8 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/state"
 )
 
-// journalStoreBase is the durable store seam of this package: exactly the *state.Store methods
-// package app selects on every build target, so a test can substitute a store at this boundary.
-// journalStore is this set plus the target-only methods; the *_test.go pins hold both sets.
+// journalStoreBase is the store seam of this package on every build target: the *state.Store
+// methods app selects, plus SaveJournal and QueueTerminalTransition, selected only by its tests.
 type journalStoreBase interface {
 	AbortGoalSessionLaunchBeforeNativeStart(key state.GoalSessionKey) (state.GoalSessionJournal, error)
 	AbortLinuxCloneReuseBeforeNativeStart(key state.RunKey, fence protocol.Fence, grant authority.LinuxCloneReuseGrant) (state.RunJournal, error)

@@ -9,8 +9,6 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/state"
 )
 
-// journalStore adds the cgroup-v2 and clone-abort Store methods that only the linux/amd64 owner
-// path selects; every other target uses the cross-target set unchanged.
 type journalStore interface {
 	journalStoreBase
 	AbortLinuxCgroupReservation(key state.RunKey, expected state.LinuxCgroupReservation, proof authority.LinuxCgroupReservationAbortProof) (state.RunJournal, error)
