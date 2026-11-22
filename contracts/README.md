@@ -212,9 +212,14 @@ pnpm contracts:generate
 
 `daemon/internal/contracts` owns generated DTOs and the embedded schema bundle.
 `contracts.ValidateSchema` is the structural Draft 7 oracle; `DecodeSchema`
-adds strict raw JSON checks before decoding a generated DTO. Full cross-field
-envelope validation belongs to `daemon/internal/protocol` and enters through
-`protocol.ValidateGoalEnvelope`.
+adds strict raw JSON checks before decoding a generated DTO. Cross-field
+validation of the envelopes the daemon consumes lives in
+`daemon/internal/protocol`: `ParseAdmissionInput`, `ParseTaskResult`,
+`ValidateTaskResultForAdmission`, `DecodeContextSnapshot` and
+`ValidatePlanProposal`, plus the strict decoders of `Evidence`, `Usage` and
+`RuntimeCapabilities`. Every envelope's semantics are validated against the
+fixture manifest by Control's `SymmetryControl.Goals.ContractValidation` and
+`contracts/ts/semantics.ts`.
 
 Known limitation: the quicktype-generated Go bundle flattens the timeline item
 `oneOf` into a single all-optional struct, so the Go side does not guarantee

@@ -68,15 +68,15 @@ func TestSubjectHashUsesCompleteCanonicalSubject(t *testing.T) {
 	}
 
 	withoutTree := `{"resource_id":"` + testUUID + `","commit":"` + testCommit + `"}`
-	if _, err := ParseSubject([]byte(withoutTree)); err == nil {
+	if err := json.Unmarshal([]byte(withoutTree), &Subject{}); err == nil {
 		t.Fatal("accepted Subject without tree_digest")
 	}
 }
 
 func TestAdmissionAndAdapterCapabilitiesRejectUnknownFieldsAndEnums(t *testing.T) {
 	validAdmission := `{"schema_version":"symmetry.admission.v1","admission_id":"` + testUUID + `","goal_id":"` + testUUIDTwo + `","goal_revision":1,"work_item_id":"` + testUUID + `","purpose":"implement","context_snapshot_id":"` + testUUIDTwo + `","context_hash":"` + testTreeDigest + `","model_profile":"implementation-default","session_mode":"fresh","requested_session_id":null,"subject":{"resource_id":"` + testUUID + `","commit":"` + testCommit + `","tree_digest":"` + testTreeDigest + `"},"limits":{"max_turns":1,"deadline_at":"2026-09-09T12:00:00Z","max_cost_microusd":"250000"},"validation_of_task_id":null,"provider_scope":null}`
-	if _, err := ParseAdmission([]byte(validAdmission)); err != nil {
-		t.Fatal(err)
+	if _, present, err := ParseAdmissionInput([]byte(validAdmission)); err != nil || !present {
+		t.Fatalf("ParseAdmissionInput(valid admission) = present %t, err %v", present, err)
 	}
 	for name, mutated := range map[string]string{
 		"missing tree digest":     strings.Replace(validAdmission, `,"tree_digest":"`+testTreeDigest+`"`, "", 1),
@@ -88,14 +88,14 @@ func TestAdmissionAndAdapterCapabilitiesRejectUnknownFieldsAndEnums(t *testing.T
 		"missing provider scope":  strings.Replace(validAdmission, `,"provider_scope":null`, "", 1),
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := ParseAdmission([]byte(mutated)); err == nil {
+			if _, present, err := ParseAdmissionInput([]byte(mutated)); err == nil || !present {
 				t.Fatalf("accepted invalid admission %s", mutated)
 			}
 		})
 	}
 
 	validAdapter := `{"structured_input":true,"provider_access":true,"interactive":false,"supervisory_control":false,"adapter":{"kind":"codex","native_version":"1.2.3","implementation_version":"symmetry-codex-1","protocol_version":1,"operations":{"start":true,"events":true,"cancel":true,"resume":false,"handoff":true,"guidance":"next_turn","pause":"unsupported","approval_response":false,"usage":"unknown","hard_cost_limit":false}}}`
-	if _, err := ParseAdapterCapabilities([]byte(validAdapter)); err != nil {
+	if err := json.Unmarshal([]byte(validAdapter), &RuntimeCapabilities{}); err != nil {
 		t.Fatal(err)
 	}
 	for name, mutated := range map[string]string{
@@ -104,7 +104,7 @@ func TestAdmissionAndAdapterCapabilitiesRejectUnknownFieldsAndEnums(t *testing.T
 		"unknown operation field":  strings.Replace(validAdapter, `"hard_cost_limit":false`, `"hard_cost_limit":false,"extra":true`, 1),
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := ParseAdapterCapabilities([]byte(mutated)); err == nil {
+			if err := json.Unmarshal([]byte(mutated), &RuntimeCapabilities{}); err == nil {
 				t.Fatalf("accepted invalid adapter capabilities %s", mutated)
 			}
 		})
@@ -115,9 +115,9 @@ func TestPlanningAdmissionUsesNullableWorkItemIdentity(t *testing.T) {
 	base := `{"schema_version":"symmetry.admission.v1","admission_id":"` + testUUID + `","goal_id":"` + testUUIDTwo + `","goal_revision":1,"work_item_id":"` + testUUID + `","purpose":"implement","context_snapshot_id":"` + testUUIDTwo + `","context_hash":"` + testTreeDigest + `","model_profile":"implementation-default","session_mode":"fresh","requested_session_id":null,"subject":{"resource_id":"` + testUUID + `","commit":"` + testCommit + `","tree_digest":"` + testTreeDigest + `"},"limits":{"max_turns":1,"deadline_at":"2026-09-09T12:00:00Z","max_cost_microusd":null},"validation_of_task_id":null,"provider_scope":null}`
 
 	planJSON := strings.Replace(strings.Replace(base, `"work_item_id":"`+testUUID+`"`, `"work_item_id":null`, 1), `"purpose":"implement"`, `"purpose":"plan"`, 1)
-	plan, err := ParseAdmission([]byte(planJSON))
-	if err != nil {
-		t.Fatalf("plan admission rejected: %v", err)
+	plan, present, err := ParseAdmissionInput([]byte(planJSON))
+	if err != nil || !present {
+		t.Fatalf("plan admission rejected: present %t, err %v", present, err)
 	}
 	if plan.Purpose != AdmissionPurposePlan || plan.WorkItemID != nil || plan.ValidationOfTaskID != nil || plan.ProviderScope != nil {
 		t.Fatalf("plan admission = %+v, want null work item, validation source, and provider scope", plan)
@@ -129,7 +129,7 @@ func TestPlanningAdmissionUsesNullableWorkItemIdentity(t *testing.T) {
 		"plan with validation source": strings.Replace(planJSON, `"validation_of_task_id":null`, `"validation_of_task_id":"`+testUUIDTwo+`"`, 1),
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := ParseAdmission([]byte(mutated)); err == nil {
+			if _, present, err := ParseAdmissionInput([]byte(mutated)); err == nil || !present {
 				t.Fatalf("accepted invalid planning admission: %s", mutated)
 			}
 		})
@@ -162,9 +162,9 @@ func TestAdmissionSessionModeBindsRequestedSessionID(t *testing.T) {
 	handoffJSON := strings.Replace(
 		strings.Replace(base, `"session_mode":"fresh"`, `"session_mode":"handoff"`, 1),
 		`"requested_session_id":null`, `"requested_session_id":null,"handoff_source_run_id":"`+testUUIDTwo+`"`, 1)
-	handoff, err := ParseAdmission([]byte(handoffJSON))
-	if err != nil {
-		t.Fatalf("handoff admission rejected: %v", err)
+	handoff, present, err := ParseAdmissionInput([]byte(handoffJSON))
+	if err != nil || !present {
+		t.Fatalf("handoff admission rejected: present %t, err %v", present, err)
 	}
 	if handoff.SessionMode != SessionModeHandoff || handoff.RequestedSessionID != nil || handoff.HandoffSourceRunID == nil || *handoff.HandoffSourceRunID != testUUIDTwo {
 		t.Fatalf("handoff admission = %+v, want null requested session", handoff)
@@ -186,35 +186,35 @@ func TestAdmissionSessionModeBindsRequestedSessionID(t *testing.T) {
 	}
 
 	resumeWithoutSession := strings.Replace(base, `"session_mode":"fresh"`, `"session_mode":"resume"`, 1)
-	if _, err := ParseAdmission([]byte(resumeWithoutSession)); err == nil {
+	if _, _, err := ParseAdmissionInput([]byte(resumeWithoutSession)); err == nil {
 		t.Fatal("resume admission without requested_session_id was accepted")
 	}
 	resumeJSON := strings.Replace(resumeWithoutSession, `"requested_session_id":null`, `"requested_session_id":"`+testUUIDTwo+`"`, 1)
-	resume, err := ParseAdmission([]byte(resumeJSON))
-	if err != nil {
-		t.Fatalf("resume admission rejected: %v", err)
+	resume, present, err := ParseAdmissionInput([]byte(resumeJSON))
+	if err != nil || !present {
+		t.Fatalf("resume admission rejected: present %t, err %v", present, err)
 	}
 	if resume.SessionMode != SessionModeResume || resume.RequestedSessionID == nil || *resume.RequestedSessionID != testUUIDTwo {
 		t.Fatalf("resume admission = %+v, want requested session", resume)
 	}
 
 	handoffWithSession := strings.Replace(handoffJSON, `"requested_session_id":null`, `"requested_session_id":"`+testUUIDTwo+`"`, 1)
-	if _, err := ParseAdmission([]byte(handoffWithSession)); err == nil {
+	if _, _, err := ParseAdmissionInput([]byte(handoffWithSession)); err == nil {
 		t.Fatal("handoff admission with requested_session_id was accepted")
 	}
 
 	handoffWithoutSource := strings.Replace(handoffJSON, `,"handoff_source_run_id":"`+testUUIDTwo+`"`, "", 1)
-	if _, err := ParseAdmission([]byte(handoffWithoutSource)); err == nil {
+	if _, _, err := ParseAdmissionInput([]byte(handoffWithoutSource)); err == nil {
 		t.Fatal("handoff admission without handoff_source_run_id was accepted")
 	}
 
 	freshWithSource := strings.Replace(base, `"requested_session_id":null`, `"requested_session_id":null,"handoff_source_run_id":"`+testUUIDTwo+`"`, 1)
-	if _, err := ParseAdmission([]byte(freshWithSource)); err == nil {
+	if _, _, err := ParseAdmissionInput([]byte(freshWithSource)); err == nil {
 		t.Fatal("fresh admission with handoff_source_run_id was accepted")
 	}
 
 	resumeWithSource := strings.Replace(resumeJSON, `"requested_session_id":"`+testUUIDTwo+`"`, `"requested_session_id":"`+testUUIDTwo+`","handoff_source_run_id":"`+testUUID+`"`, 1)
-	if _, err := ParseAdmission([]byte(resumeWithSource)); err == nil {
+	if _, _, err := ParseAdmissionInput([]byte(resumeWithSource)); err == nil {
 		t.Fatal("resume admission with handoff_source_run_id was accepted")
 	}
 }
@@ -253,9 +253,9 @@ func TestAdmissionDirectUnmarshalTracksHandoffSourceRunIDPresence(t *testing.T) 
 
 func TestAdmissionProviderScopeIsFailClosedAndPreservesCanonicalGrants(t *testing.T) {
 	validAdmission := `{"schema_version":"symmetry.admission.v1","admission_id":"` + testUUID + `","goal_id":"` + testUUIDTwo + `","goal_revision":1,"work_item_id":"` + testUUID + `","purpose":"implement","context_snapshot_id":"` + testUUIDTwo + `","context_hash":"` + testTreeDigest + `","model_profile":"implementation-default","session_mode":"fresh","requested_session_id":null,"subject":{"resource_id":"` + testUUID + `","commit":"` + testCommit + `","tree_digest":"` + testTreeDigest + `"},"limits":{"max_turns":1,"deadline_at":"2026-09-09T12:00:00Z","max_cost_microusd":null},"validation_of_task_id":null,"provider_scope":{"resource_ids":["` + testUUID + `","` + testUUIDTwo + `"],"operations_by_resource":{"` + testUUID + `":["change.upsert","change.update"],"` + testUUIDTwo + `":["change.upsert"]},"change_target":{"kind":"branches","source_branch":"codex/goal-0006","target_branch":"main"}}}`
-	admission, err := ParseAdmission([]byte(validAdmission))
-	if err != nil {
-		t.Fatal(err)
+	admission, present, err := ParseAdmissionInput([]byte(validAdmission))
+	if err != nil || !present {
+		t.Fatalf("ParseAdmissionInput(valid provider scope) = present %t, err %v", present, err)
 	}
 	if admission.Limits.MaxCostMicrousd != nil {
 		t.Fatalf("max_cost_microusd = %q, want nil", *admission.Limits.MaxCostMicrousd)
@@ -283,7 +283,7 @@ func TestAdmissionProviderScopeIsFailClosedAndPreservesCanonicalGrants(t *testin
 		"non-implement scope":    strings.Replace(validAdmission, `"purpose":"implement"`, `"purpose":"validate"`, 1),
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := ParseAdmission([]byte(mutated)); err == nil {
+			if _, present, err := ParseAdmissionInput([]byte(mutated)); err == nil || !present {
 				t.Fatalf("accepted invalid provider_scope %s", mutated)
 			}
 		})
@@ -379,11 +379,11 @@ func TestNormalizedResultsRejectUnknownEnumsAndValidateSafeUsage(t *testing.T) {
 	}
 
 	baseUsage := `{"schema_version":"symmetry.usage.v1","usage_id":"` + testUUID + `","run_id":"` + testUUIDTwo + `","usage_key":"turn-1","provider":"provider","model":"model","input_tokens":9007199254740991,"output_tokens":0,"cached_input_tokens":0,"cost_microusd":"9007199254740992","cost_basis":"reported","price_version":null,"supersedes_id":null,"observed_at":"2026-09-09T12:00:00Z"}`
-	parsedUsage, err := ParseUsage([]byte(baseUsage))
-	if err != nil {
+	var parsedUsage Usage
+	if err := json.Unmarshal([]byte(baseUsage), &parsedUsage); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ParseUsage([]byte(strings.Replace(baseUsage, `"cost_basis":"reported"`, `"cost_basis":"estimated"`, 1))); err != nil {
+	if err := json.Unmarshal([]byte(strings.Replace(baseUsage, `"cost_basis":"reported"`, `"cost_basis":"estimated"`, 1)), &Usage{}); err != nil {
 		t.Fatalf("estimated usage rejected: %v", err)
 	}
 	for name, mutate := range map[string]func(*Usage){
@@ -435,7 +435,7 @@ func TestNormalizedResultsRejectUnknownEnumsAndValidateSafeUsage(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			mutated := mutate(baseUsage)
-			if _, err := ParseUsage([]byte(mutated)); err == nil {
+			if err := json.Unmarshal([]byte(mutated), &Usage{}); err == nil {
 				t.Fatalf("accepted invalid usage %s", mutated)
 			}
 		})
@@ -451,10 +451,10 @@ func TestNormalizedResultsRejectUnknownEnumsAndValidateSafeUsage(t *testing.T) {
 	}
 
 	validEvidence := `{"schema_version":"symmetry.evidence.v1","evidence_id":"` + testUUID + `","run_id":"` + testUUIDTwo + `","evidence_key":"tests:default","kind":"check","subject":{"resource_id":"22222222-2222-4222-8222-222222222222","commit":"` + testCommit + `","tree_digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"},"subject_hash":"` + testEvidenceHash + `","source_ref":{"kind":"check","ref":"check-run-1","validator_profile":"default-checks","subject_hash":"` + testEvidenceHash + `"},"source_revision":"profile:default-checks","validator_profile":"default-checks","verdict":"passed","payload":{"predicate_id":"tests","subject":{"resource_id":"22222222-2222-4222-8222-222222222222","commit":"` + testCommit + `","tree_digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"},"profile_digest":"` + testHash + `","command_argv_digest":"` + testHash + `","exit_code":0,"subject_hash":"` + testEvidenceHash + `","started_at":"2026-09-09T12:00:00Z","finished_at":"2026-09-09T12:01:00Z","output_ref":{"kind":"artifact","value":"artifact:check-output-1"}},"observed_at":"2026-09-09T12:01:00Z"}`
-	if _, err := ParseEvidence([]byte(validEvidence)); err != nil {
+	if err := json.Unmarshal([]byte(validEvidence), &Evidence{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ParseEvidence([]byte(strings.Replace(validEvidence, `"verdict":"passed"`, `"verdict":"maybe"`, 1))); err == nil {
+	if err := json.Unmarshal([]byte(strings.Replace(validEvidence, `"verdict":"passed"`, `"verdict":"maybe"`, 1)), &Evidence{}); err == nil {
 		t.Fatal("accepted unknown evidence verdict")
 	}
 }
@@ -520,7 +520,7 @@ func TestTaskResultValidateRejectsOverlongBlockerAndProposalText(t *testing.T) {
 
 func TestEvidenceCanonicalSubjectSourceAndPredicateConsistency(t *testing.T) {
 	valid := `{"schema_version":"symmetry.evidence.v1","evidence_id":"` + testUUID + `","run_id":"` + testUUIDTwo + `","evidence_key":"tests:default","kind":"check","subject":{"resource_id":"22222222-2222-4222-8222-222222222222","commit":"` + testCommit + `","tree_digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"},"subject_hash":"` + testEvidenceHash + `","source_ref":{"kind":"check","ref":"check-run-1","validator_profile":"default-checks","subject_hash":"` + testEvidenceHash + `"},"source_revision":"profile:default-checks","validator_profile":"default-checks","verdict":"passed","payload":{"predicate_id":"tests","subject":{"resource_id":"22222222-2222-4222-8222-222222222222","commit":"` + testCommit + `","tree_digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"},"profile_digest":"` + testHash + `","command_argv_digest":"` + testHash + `","exit_code":0,"subject_hash":"` + testEvidenceHash + `","started_at":"2026-09-09T12:00:00Z","finished_at":"2026-09-09T12:01:00Z","output_ref":{"kind":"artifact","value":"artifact:check-output-1"}},"observed_at":"2026-09-09T12:01:00Z"}`
-	if _, err := ParseEvidence([]byte(valid)); err != nil {
+	if err := json.Unmarshal([]byte(valid), &Evidence{}); err != nil {
 		t.Fatal(err)
 	}
 	for name, mutated := range map[string]string{
@@ -530,7 +530,7 @@ func TestEvidenceCanonicalSubjectSourceAndPredicateConsistency(t *testing.T) {
 		"outer subject mismatch":   strings.Replace(valid, `"tree_digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"},"subject_hash"`, `"tree_digest":"sha256:1111111111111111111111111111111111111111111111111111111111111111"},"subject_hash"`, 1),
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := ParseEvidence([]byte(mutated)); err == nil {
+			if err := json.Unmarshal([]byte(mutated), &Evidence{}); err == nil {
 				t.Fatalf("accepted inconsistent evidence: %s", mutated)
 			}
 		})
