@@ -1,7 +1,7 @@
 import type { RefObject, SyntheticEvent, UIEvent } from "react";
 import { EmptyState, LoadingState } from "../../components/workspace";
 import type { ChatConversationMessage, ChatScope, Project, WorkItem } from "../../services/api";
-import { chatIntentLabel, chatReceiptView, chatSendStatusText, chatStateLabel, type ChatDecisionOption, type ChatReceiptView } from "./presentation";
+import { chatIntentLabel, chatReceiptView, chatSendStatusText, chatStateLabel, type chatDecisionPacket, type chatEvidenceRows, type chatHistoryView, type ChatDecisionOption, type ChatReceiptView } from "./presentation";
 import type { ChatIntent, ChatSendStatus } from "./scopes";
 
 export interface ServedRun {
@@ -52,11 +52,7 @@ export function ChatScopeBar({ scope, runId, runRows, runSelectVisible, onScope,
   </div>;
 }
 
-export interface ChatDecisionView {
-  readonly question: string | null;
-  readonly context: string | null;
-  readonly options: readonly ChatDecisionOption[];
-}
+export type ChatDecisionView = Pick<NonNullable<ReturnType<typeof chatDecisionPacket>>, "question" | "context" | "options">;
 
 export function ChatDecisionSection({ decision, sending, onChoose }: {
   readonly decision: ChatDecisionView | null;
@@ -79,12 +75,7 @@ export function ChatDecisionSection({ decision, sending, onChoose }: {
   </section>;
 }
 
-export interface ChatEvidenceView {
-  readonly key: string;
-  readonly source: "event" | "transition" | "command";
-  readonly kind: string;
-  readonly summary: string | null;
-}
+export type ChatEvidenceView = ReturnType<typeof chatEvidenceRows>[number];
 
 export function ChatEvidenceList({ rows }: { readonly rows: readonly ChatEvidenceView[] }) {
   if (rows.length === 0) return null;
@@ -105,12 +96,7 @@ export interface EmptyScopeView {
   readonly body: string;
 }
 
-export interface ChatTranscriptHistory {
-  readonly messages: readonly ChatConversationMessage[];
-  readonly currentIds: ReadonlySet<string>;
-  readonly gap: { readonly current: string; readonly retained: string } | null;
-  readonly loadCursor: string | null;
-}
+export type ChatTranscriptHistory = ReturnType<typeof chatHistoryView>;
 
 function ChatMessageRow({ message, receipt }: {
   readonly message: ChatConversationMessage;

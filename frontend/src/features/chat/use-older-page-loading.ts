@@ -34,8 +34,12 @@ export function useOlderPageLoading(options: {
           updateWith(key, (previous) => retainOlderPage(previous, press.cursor, press.boundaryId, { messages: fetched.messages, nextBefore: fetched.next_before }));
         },
         (error: unknown) => {
+          // Rejection callback, not a `.catch`: a throwing retain write must
+          // not be reported as a read failure.
           const refused = definitiveReadRefusal(error);
           if (refused) {
+            // The gate reads the last committed store while the write below
+            // judges the queued record: one benign re-read, never a wrong cursor.
             const queryKey = chatConversationOptions(application.api, identity).queryKey;
             if (ownsChainPointer(latestStateOf.current(key), press.cursor, press.boundaryId) && queryClient.isFetching({ queryKey }) === 0) {
               void queryClient.refetchQueries({ queryKey });

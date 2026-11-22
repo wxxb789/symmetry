@@ -21,6 +21,11 @@ blocks were compressed to the policy's two lines and two test step labels were r
 two `buildChatRequest` notice guards gained a direct unit test. Every count, gate row and
 hash below was re-derived on the applied tree, and §7's mutants were re-shown red on it.
 
+Fix round 1 (2026-11-22, review F1/F3): the two `useOlderPageLoading` hazard notes were
+restored to source beside their sites (§9), the three section view types now derive from
+`presentation.ts`'s exported builders (§10), and the fix-round counts and hashes below are
+re-derived on this tree.
+
 Dispatch gates re-checked at `e84973a7`: W4-11 (`#220`, the same commit: `app/portal-double.ts`,
 `app/test-harness.tsx`, the pool split) and `#164` (W2-15) are merged — `chat.test.tsx` measures
 2062 L / 48 cases and `presentation.ts` 455 L at the base, so the pre-dispatch numbers (2086 /
@@ -33,8 +38,8 @@ Dispatch gates re-checked at `e84973a7`: W4-11 (`#220`, the same commit: `app/po
 | `frontend/src/features/chat/chat.tsx` | rewritten | 734 → 255 | `ChatPage` `:108-255` (148 raw lines; 127 eslint-counted) + module helpers `conversationRunOf`, `servedRunOf`, `runSignalsOf`, `chatRunFacts`, `chatHistoryNote`, `scopeProjectOf`, `chatContextLabel` |
 | `frontend/src/features/chat/use-chat-scope-state.ts` | new | 252 | `chatScopeParams`, `buildChatRequest`, `definitiveRefusal`, `sameRequestBody`, `useChatScopeState` |
 | `frontend/src/features/chat/use-chat-scroll-restoration.ts` | new | 69 | `ChatScopeScroll`, `RouterRenderedEvents`, `panePinnedBelowOffset`, `useChatScrollRestoration` |
-| `frontend/src/features/chat/use-older-page-loading.ts` | new | 58 | `definitiveReadRefusal`, `useOlderPageLoading` |
-| `frontend/src/features/chat/chat-sections.tsx` | new | 286 | `servedRuns`, `runOptionLabel`, `ServedRun`, `ChatScopeBar`, `ChatDecisionView`, `ChatDecisionSection`, `ChatEvidenceView`, `ChatEvidenceList`, `EmptyScopeView`, `ChatTranscriptHistory`, `ChatMessageRow`, `ChatTranscript`, `ChatComposerEdit`, `ChatComposer` |
+| `frontend/src/features/chat/use-older-page-loading.ts` | new | 62 | `definitiveReadRefusal`, `useOlderPageLoading` |
+| `frontend/src/features/chat/chat-sections.tsx` | new | 272 | `servedRuns`, `runOptionLabel`, `ServedRun`, `ChatScopeBar`, `ChatDecisionView`, `ChatDecisionSection`, `ChatEvidenceView`, `ChatEvidenceList`, `EmptyScopeView`, `ChatTranscriptHistory`, `ChatMessageRow`, `ChatTranscript`, `ChatComposerEdit`, `ChatComposer` |
 | `frontend/src/features/chat/chat-hooks.test.tsx` | new | 339 | 9 tests (see §8) |
 | `frontend/src/features/chat/scopes.ts` | edited | 268 → 268 | two `export` keywords only: `interface ChatScopeState` and `interface ChatScopeStore` become exported (type-only; see §10) |
 | `docs/plans/2026-11-22-rf-w4-08-chatpage-decomposition-plan.md` | new | — | plan with decisions P1-P9 |
@@ -265,8 +270,9 @@ avoid, so its `trackApplications` helper is the shared piece used here.
 ## 9. Comment policy (owner, 2026-11-22) — what was removed and what stayed
 
 Removed from the moved code (rationale now lives here and in the plan): the module header,
-the `Load older` chain-pointer essay (base `:177-186`, `:195-235`), the served-cursor renewal and
-press-capture paragraphs, the send/retry paragraphs (base `:302`, `:376-390`), the
+the `Load older` chain-pointer essay (base `:177-186`, `:195-235`, except the two hazard
+sentences at base `:206-208`/`:227-231` restored in fix round 1 — see Kept), the served-cursor
+renewal and press-capture paragraphs, the send/retry paragraphs (base `:302`, `:376-390`), the
 history-note/empty-claim paragraph, the intent-fallback note, the pane-clamp paragraph (base
 `:550-557`), the leave-capture paragraph (base `:430-433`), the resource-clearing note in the
 composer, the `Cancel and retry stay on the work detail` JSX comment, the docstrings on
@@ -279,10 +285,17 @@ Kept (one to two lines, why-only, beside the hazard): the settle-time-store note
 `useChatScrollRestoration`; the "reader taking over" line (once, inside `recordReaderPosition`);
 the router re-assertion note;
 the incomplete-scope guard note in `submit`; the same-snapshot identity note in `sendDecision`;
-the durable-message invalidation note in `send`; the scope-round-trip note in `changeScope`.
+the durable-message invalidation note in `send`; the scope-round-trip note in `changeScope`;
+the rejection-callback note and the benign-re-read note in `useOlderPageLoading` (base
+`:206-208`, `:227-231`; restored in fix round 1 per review F1).
 
 Apply stage: the router and pane blocks were compressed to two lines each and the two test step
 labels (the implement revision's `chat-hooks.test.tsx` `:78`/`:137`) were deleted per policy 4.
+
+Fix round 1 (review F1) restored the two notes above beside their sites in
+`use-older-page-loading.ts`; the older records that cite the window (`docs/archive/CLOSED-TODO.md`,
+the 2026-11-20 chat-history-chain plan) resolve to the restored benign-re-read note — their
+`chat.tsx` path is the pre-decomposition location.
 
 ## 10. Boundary checks
 
@@ -296,19 +309,20 @@ labels (the implement revision's `chat-hooks.test.tsx` `:78`/`:137`) were delete
   (`ChatScopeState`, `ChatScopeStore`), which the hooks must name for their params; it is
   type-only (no runtime surface, nothing to mutation-check) and the file's line count is
   unchanged. Both predicates the held tests mutate are byte-identical to base.
-- **`presentation.ts`**: unchanged; the sections declare their own view types instead
-  (`ChatDecisionView`, `ChatEvidenceView`, `ChatTranscriptHistory`), so `presentation.ts` keeps
-  its internal interfaces (its own `ChatHistoryView` stays module-internal).
+- **`presentation.ts`**: unchanged; the three section view types derive from its exported
+  builders (`ReturnType<typeof chatEvidenceRows>[number]`, `ReturnType<typeof chatHistoryView>`,
+  `Pick<NonNullable<ReturnType<typeof chatDecisionPacket>>, "question" | "context" | "options">`),
+  so its internal interfaces stay module-internal.
 - **Harness**: no harness file changed and no fifth fetch double was added.
 - **Identities** (sha256 of the delivered code files, final tree):
 
 | file | sha256 |
 | --- | --- |
 | `frontend/src/features/chat/chat.tsx` | `53750bbf80d84489b56dd3820d6ff6776babe5002a69c3ed65101924af764272` |
-| `frontend/src/features/chat/chat-sections.tsx` | `88032b50d05017f2976509c069b57fb5cf7152f0406dcda76849e5ad2ef07642` |
+| `frontend/src/features/chat/chat-sections.tsx` | `0c1ee5437b40363f0a11187f0a24229ce0366499b165333bc9751937db5fa07b` |
 | `frontend/src/features/chat/use-chat-scope-state.ts` | `f9b76206488b5fd77ba4ac5c9ff6bab243698ed335ab83bf0b2c03fc62b258e0` |
 | `frontend/src/features/chat/use-chat-scroll-restoration.ts` | `ae29170156ec8df04a694212b4132f995a6062db8dfed909688b6ccfa5cc30f2` |
-| `frontend/src/features/chat/use-older-page-loading.ts` | `a3b36832e6faa649f3bad69d83c15ee32464a067c0b1fbdc68fb49179ddaf333` |
+| `frontend/src/features/chat/use-older-page-loading.ts` | `1f4a401305c85aa0fcd283e162f4d185c7085df62e7eb425d8a21b94a7f7f302` |
 | `frontend/src/features/chat/chat-hooks.test.tsx` | `79c5575044fd83ebde2886482cc2e7267f2d22bc89bd6fc4f4c9bd3f8fbcb8cf` |
 | `frontend/src/features/chat/scopes.ts` | `fb01f7906dd039727ee1c8d03a027c3e3f8619ddbdeeb0575c25e564f93001d7` |
 
