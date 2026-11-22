@@ -1526,18 +1526,51 @@ is fixed here; each bullet names what a follow-up has to re-derive.
 
 - [ ] Consolidate the duplicated Task/Run state sets behind one compile-time owner. After
       `refactor/rf-w4-07-goals-facade-phase1` (PR #233) the same literals are re-declared per
-      module: `@nonterminal_task_states` in `SymmetryControl.Goals` (`goals.ex`),
-      `SymmetryControl.Goals.RunFence`, `SymmetryControl.Goals.Internal` and
-      `SymmetryControl.Goals.ReadModel`; `@terminal_run_states` in `SymmetryControl.Goals` and
-      `SymmetryControl.Goals.HarnessSessions`; `@accounting_terminal_run_states` in those two plus
-      `SymmetryControl.Goals.ReadModel`, which derives it from that module's own
-      `@terminal_task_states`. The split mandated per-module copies ("module attributes travel
-      with their users") because the values feed compile-time query literals, so the SQL text
-      stays frozen; the drift risk is real: a state added to one copy only silently splits
-      transition policy from the read model. Next step (W5-14, the following goals.ex phase): a
-      `@moduledoc false` owner module exposing the sets as functions the others read at compile
-      time (`@x Owner.state_set()`), keeping every SQL literal byte-identical, plus one pinning
-      test that fails on divergence.
+      module. `refactor/rf-w5-14-goals-concepts-phase2` (2026-11-22) moved the copies into the
+      concept modules that use them and left the duplication in place, so the current homes are:
+      `@nonterminal_task_states` in `Goals.Admission`, `Goals.Budget`, `Goals.ContextAssembly`,
+      `Goals.Decisions`, `Goals.Internal`, `Goals.ReadModel`, `Goals.Reconciliation`,
+      `Goals.Recovery` and `Goals.RunFence`; `@terminal_run_states` in `Goals.Budget`,
+      `Goals.HarnessSessions`, `Goals.Recovery`, `Goals.Settlement` and `Goals.ValidationOutcome`;
+      `@accounting_terminal_run_states` in `Goals.Budget`, `Goals.HarnessSessions` and
+      `Goals.ReadModel` (the last deriving it from its own `@terminal_task_states`). The split
+      mandated per-module copies ("module attributes travel with their users") because the values
+      feed compile-time query literals, so the SQL text stays frozen; the drift risk is real: a
+      state added to one copy only silently splits transition policy from the read model.
+      Consolidation remains undone and is the next owner's item: a `@moduledoc false` owner module
+      exposing the sets as functions the others read at compile time (`@x Owner.state_set()`),
+      keeping every SQL literal byte-identical, plus one pinning test that fails on divergence.
+
+## rf-w5-14 goals-concepts phase 2 — deferred simplify findings (2026-11-22)
+
+- [ ] Apply the moved-lib simplifications the apply stage deferred (simplify report findings 7, 8,
+      13-28). Deferred because each rewrites a moved function body and would invalidate the recorded
+      per-function AST identity + string/atom control-flow move proof (contract clause 2) without a
+      re-derivation; take them as a dedicated cleanup slice that re-runs the AST comparison. Locations:
+      `goals/admission.ex:909-910` (`item_by_id` values never read; only `Map.keys` is used),
+      `goals/settlement.ex:691` (identity `external_observation_terminal!/3`, called at `:146`),
+      `goals/reconciliation.ex:308-339,345-367,369-389,511-548,644-668,693-702,1042-1190` (candidate
+      queries, blocker `Repo.exists?`, locked current-run lookup, lock+revalidate preambles),
+      `goals/admission.ex:279-304,347-459,474-476,509-613,812-825,1186-1189` (admission-limit gate,
+      snapshot->admission->task->reservation pipeline, model-profile gate, validation-producer chain),
+      `goals/handoff.ex:244-276,283-313`; `goals/budget.ex:73-89,299-308`;
+      `goals/goal_control.ex:36-38,104-106,347-348`;
+      `goals/commands.ex:162-167,226-233,278-283,293,374-379,404-529,900,1010-1030,1032-1037`;
+      `goals/plan_contracts.ex:38-39,55-77,117-126,132-140,286-299,338`;
+      `goals/settlement.ex:514-546,706-726,963,1135-1188`. Cross-module duplicates that would need a
+      new `@doc false` edge (the contract forbids new edges): `goals/settlement.ex:82-111` vs
+      `goals/validation_outcome.ex:50-77`; `goals/goal_control.ex:389-390` vs `goals/recovery.ex:440`
+      (persisted idempotency-key wire format, parsed at `goal_control.ex:358-367`).
+      Also not applied from the same report (F29 subset): the inline resource-keyed session fixture in
+      `test/symmetry_control/goals/commands_flow_test.exs` (no WorkItem exists at that point), the six
+      reconciliation policy maps (non-default `automatic_execution`/budget/parallel values), the run_fence
+      evidence builders (distinct payloads per kind) and the full request→resolve scope pairs (two
+      data-heavy call sites; their resolve halves now share `GoalsTestSupport.resolve_decision!/3`).
+- [ ] Decide the `settle_unstarted_task` replay response shape: `goals/settlement.ex:1069-1071` returns
+      `receipt.response` without `"event_sequence"` while the create path (`:1120`) and sibling replays
+      (`:125`, `goals/validation_outcome.ex:485-487`) add it; the settlement interface test normalizes the
+      difference away with `Map.drop`. Pre-existing asymmetry: either align the shape (observable change) or
+      pin it explicitly.
 
 ## Daemon app tests: the retained-resume attach-ready mark is unpinned (PR #234 review round 2)
 
@@ -1578,6 +1611,28 @@ is fixed here; each bullet names what a follow-up has to re-derive.
       per-program exception for its own ephemeral binary, which does not cover production installs. The
       native acceptance fixture (`scripts/ci/linux-v2-native-acceptance.sh`) needs the same exception
       before its case sets can pass.
+
+## Contracts: A6 tightening — owner sign-off required (rf-a6-contracts-strictness-corpus, 2026-11-22)
+
+- [ ] Unify the Control response decode levels on `responseDecodeSchema`
+      (`daemon/internal/control/client.go`). The single entry `decodeResponseJSON` takes the level
+      explicitly (owner ruling L2=b, `goal-rf-a6-contracts-strictness-corpus.md`): the legacy and
+      typed levels reject duplicate members plus their typed checks, while the schema level also
+      applies the contracts raw-byte checks (UTF-8, escaped surrogates, number lexemes for the
+      envelope class) and the v1 envelope schema. Moving the legacy and typed callers to the schema
+      level needs recorded owner sign-off because it changes acceptance, fail-closed, for these raw
+      corpus rows (`contracts/fixtures/raw/`, `contracts/fixtures/manifest.json`):
+      `goal-command.raw-number-fractional`, `goal-command.raw-number-exponent`,
+      `goal-command.raw-number-unsafe-integer` and `goal-command.raw-invalid-utf8` are accepted by
+      the legacy and typed levels today and rejected by the schema level. The tightening artifact
+      must re-derive that set from a base-vs-head corpus run rather than from this list. Runtime
+      divergences the corpus records and this slice deliberately does not fix:
+      `goal-command.raw-duplicate-member-top-level` (Elixir's Jason keeps the first member),
+      `goal-command.raw-number-fractional` and `goal-command.raw-number-exponent` (Elixir accepts the
+      lexeme and its validator accepts the value), `goal-command.raw-bom-prefix` (the TS reader's
+      UTF-8 `TextDecoder` strips the leading BOM before `JSON.parse`) and
+      `goal-command.raw-number-negative-zero` (accepted by Go,
+      JS and Elixir; no runtime enforces the canonical `-0` to `0` form).
 
 ## Linux v2 codex/claude containment case sets await their first dispatch (rf-w5-02a, 2026-11-22)
 

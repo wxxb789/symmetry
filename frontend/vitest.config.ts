@@ -21,6 +21,8 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     environmentOptions: { jsdom: { pretendToBeVisual: true } },
+    // Explicit per-test budget the suite's waits stay strictly below (goal-rf-w5-04).
+    testTimeout: 15_000,
     setupFiles: ["./src/test-setup.ts"],
     restoreMocks: true,
     clearMocks: true,

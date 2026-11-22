@@ -2678,6 +2678,132 @@
       "path": "invalid/chat-read.messages-not-array.json",
       "valid": false,
       "tags": ["read-projection", "wrong-type"]
+    },
+    {
+      "id": "goal-command.raw-duplicate-member-top-level",
+      "schema": "goal-command",
+      "path": "raw/goal-command.duplicate-member-top-level.json",
+      "valid": false,
+      "tags": ["raw-bytes"],
+      "wire_error": "duplicate_json_member",
+      "wire_levels": ["legacy", "typed", "schema"],
+      "runtime_divergence": {"elixir": "accepts"}
+    },
+    {
+      "id": "evidence-batch.raw-duplicate-member-nested",
+      "schema": "evidence-batch",
+      "path": "raw/evidence-batch.duplicate-member-nested.json",
+      "valid": false,
+      "tags": ["raw-bytes"],
+      "wire_error": "duplicate_json_member",
+      "wire_levels": ["legacy", "typed", "schema"]
+    },
+    {
+      "id": "goal-command.raw-number-fractional",
+      "schema": "goal-command",
+      "path": "raw/goal-command.number-fractional.json",
+      "valid": false,
+      "tags": ["raw-bytes"],
+      "wire_error": "noncanonical_number",
+      "wire_levels": ["schema"],
+      "runtime_divergence": {"elixir": "accepts"}
+    },
+    {
+      "id": "goal-command.raw-number-exponent",
+      "schema": "goal-command",
+      "path": "raw/goal-command.number-exponent.json",
+      "valid": false,
+      "tags": ["raw-bytes"],
+      "wire_error": "noncanonical_number",
+      "wire_levels": ["schema"],
+      "runtime_divergence": {"elixir": "accepts"}
+    },
+    {
+      "id": "goal-command.raw-number-negative-zero",
+      "schema": "goal-command",
+      "path": "raw/goal-command.number-negative-zero.json",
+      "valid": false,
+      "schema_valid": true,
+      "semantic_valid": true,
+      "tags": ["raw-bytes"],
+      "wire_error": "negative_zero",
+      "wire_levels": [],
+      "runtime_divergence": {"ts": "accepts", "go": "accepts", "elixir": "accepts"}
+    },
+    {
+      "id": "goal-command.raw-number-leading-zero",
+      "schema": "goal-command",
+      "path": "raw/goal-command.number-leading-zero.json",
+      "valid": false,
+      "tags": ["raw-bytes"],
+      "wire_error": "leading_zero",
+      "wire_levels": ["legacy", "typed", "schema"]
+    },
+    {
+      "id": "goal-command.raw-number-unsafe-integer",
+      "schema": "goal-command",
+      "path": "raw/goal-command.number-unsafe-integer.json",
+      "valid": false,
+      "tags": ["raw-bytes"],
+      "wire_error": "unsafe_integer",
+      "wire_levels": ["schema"]
+    },
+    {
+      "id": "workspace-read.raw-number-nonfinite",
+      "schema": "workspace-read",
+      "path": "raw/workspace-read.number-nonfinite.json",
+      "valid": false,
+      "tags": ["raw-bytes"],
+      "wire_error": "nonfinite_number",
+      "wire_levels": ["legacy", "typed", "schema"]
+    },
+    {
+      "id": "workspace-read.raw-number-nonfinite-negative",
+      "schema": "workspace-read",
+      "path": "raw/workspace-read.number-nonfinite-negative.json",
+      "valid": false,
+      "tags": ["raw-bytes"],
+      "wire_error": "nonfinite_number",
+      "wire_levels": ["legacy", "typed", "schema"]
+    },
+    {
+      "id": "goal-command.raw-invalid-utf8",
+      "schema": "goal-command",
+      "path": "raw/goal-command.invalid-utf8.json",
+      "valid": false,
+      "tags": ["raw-bytes"],
+      "wire_error": "invalid_utf8",
+      "wire_levels": ["schema"]
+    },
+    {
+      "id": "goal-command.raw-bom-prefix",
+      "schema": "goal-command",
+      "path": "raw/goal-command.bom-prefix.json",
+      "valid": false,
+      "schema_valid": true,
+      "semantic_valid": true,
+      "tags": ["raw-bytes"],
+      "wire_error": "bom",
+      "wire_levels": ["legacy", "typed", "schema"],
+      "runtime_divergence": {"ts": "accepts"}
+    },
+    {
+      "id": "goal-command.raw-trailing-second-value",
+      "schema": "goal-command",
+      "path": "raw/goal-command.trailing-second-value.json",
+      "valid": false,
+      "tags": ["raw-bytes"],
+      "wire_error": "trailing_value",
+      "wire_levels": ["legacy", "typed", "schema"]
+    },
+    {
+      "id": "goal-command.raw-trailing-garbage",
+      "schema": "goal-command",
+      "path": "raw/goal-command.trailing-garbage.json",
+      "valid": false,
+      "tags": ["raw-bytes"],
+      "wire_error": "trailing_garbage",
+      "wire_levels": ["legacy", "typed", "schema"]
     }
   ]
 }
