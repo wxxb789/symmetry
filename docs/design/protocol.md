@@ -11,7 +11,12 @@ Implementation creates `contracts/v1/` JSON Schema Draft 7 documents for
 (`goal-command.schema.json`), `PlanProposal` (`plan-proposal.schema.json`),
 `GoalRevision`, `ContextSnapshot`, `Admission`, `TaskResult`, `Evidence`,
 `Decision`, `Usage` and adapter capabilities. These are the single wire
-authority, separate from Ecto persistence structs. IDs are UUID strings;
+authority, separate from Ecto persistence structs. For the fenced machine
+requests the daemon sends (`evidence`, `evidence-batch` and `usage`), that
+authority covers the fence-stripped request document: the five-member fence is
+carried beside it, enforced and stripped by the controller boundary before
+validation, and the fence itself remains owned by
+[protocol v1](../protocol-v1.md). IDs are UUID strings;
 timestamps RFC3339 UTC;
 hashes lowercase `sha256:<64 hex>` on wire and 32-byte bytea in storage.
 All monetary amounts are decimal-string microusd on wire. Counts and revisions
