@@ -12,6 +12,7 @@ import (
 
 	"github.com/wxxb789/symmetry/daemon/internal/config"
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
+	"github.com/wxxb789/symmetry/daemon/internal/harness/claude"
 	"github.com/wxxb789/symmetry/daemon/internal/harness/codex"
 	"github.com/wxxb789/symmetry/daemon/internal/harness/omo"
 	"github.com/wxxb789/symmetry/daemon/internal/harness/omp"
@@ -100,7 +101,7 @@ func probeErrorContainsOnly(err, expected error) bool {
 func newHarnessRegistry(profile config.AgentProfile) *harness.Registry {
 	registry := harness.NewRegistry()
 	_ = registry.Register(harness.KindCodex, codex.NewAdapterWithNativeIdentity(profile.Command, profile.NativeModel, profile.NativeModelProvider))
-	_ = registry.Register(harness.KindClaude, harness.NewClaudeCandidateAdapter(profile.Command))
+	_ = registry.Register(harness.KindClaude, claude.NewCandidateAdapter(profile.Command))
 	_ = registry.Register(harness.KindPi, pi.NewAdapter(profile.Command))
 	_ = registry.Register(harness.KindOMP, omp.NewAdapter(profile.Command))
 	_ = registry.Register(harness.KindOmO, omo.NewAdapter(profile.Command))

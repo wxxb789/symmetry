@@ -6,6 +6,10 @@ import (
 	"time"
 )
 
+// PermanentCloseFailure builds the bare marker a close attempt returns when its
+// failure must stay sticky. A wrapped marker stays retryable.
+func PermanentCloseFailure(err error) error { return permanentCloseFailure{Err: err} }
+
 // permanentCloseFailure marks a close attempt whose failure must stay sticky:
 // the session stores the inner error and answers every later Close with it
 // because the underlying cleanup is not retryable. CloseGate is its only

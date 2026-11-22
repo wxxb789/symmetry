@@ -1,6 +1,6 @@
 //go:build windows || linux
 
-package harness
+package claude
 
 import (
 	"context"
@@ -20,6 +20,7 @@ import (
 
 	"github.com/wxxb789/symmetry/daemon/internal/config"
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
+	"github.com/wxxb789/symmetry/daemon/internal/harness"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 	"github.com/wxxb789/symmetry/daemon/internal/workspace"
 )
@@ -46,17 +47,17 @@ type claudeLiveRecorder struct {
 	t *testing.T
 
 	mutex            sync.Mutex
-	events           []Event
+	events           []harness.Event
 	initFrames       uint64
 	terminalFrames   uint64
 	frameFile        *os.File
 	frameWriteFailed error
 }
 
-func (recorder *claudeLiveRecorder) Handle(_ context.Context, event Event) error {
+func (recorder *claudeLiveRecorder) Handle(_ context.Context, event harness.Event) error {
 	recorder.mutex.Lock()
 	recorder.events = append(recorder.events, event)
-	if event.Kind == EventNativeFrame {
+	if event.Kind == harness.EventNativeFrame {
 		switch {
 		case claudeFrameIsInit(event.Payload):
 			recorder.initFrames++
@@ -83,7 +84,7 @@ func (recorder *claudeLiveRecorder) identitySnapshot() (events int, frames int, 
 	defer recorder.mutex.Unlock()
 	frames = 0
 	for _, event := range recorder.events {
-		if event.Kind == EventNativeFrame {
+		if event.Kind == harness.EventNativeFrame {
 			frames++
 		}
 	}
@@ -348,33 +349,33 @@ func TestClaudeLiveSmokeSubjectDigestComesFromTheCommit(t *testing.T) {
 	}
 }
 
-func claudeLiveAdapter(t *testing.T) (*ClaudeCandidateAdapter, string) {
+func claudeLiveAdapter(t *testing.T) (*CandidateAdapter, string) {
 	t.Helper()
 	if os.Getenv(claudeLiveSmokeEnv) != "1" {
 		t.Skip("set " + claudeLiveSmokeEnv + "=1 to run the credentialed Claude Code smoke")
 	}
 	executable := strings.TrimSpace(os.Getenv(claudeLiveSmokeExecutableEnv))
 	if executable == "" || !filepath.IsAbs(executable) {
-		t.Fatalf("%s must name the absolute Claude Code %s executable", claudeLiveSmokeExecutableEnv, ClaudeTestedVersion)
+		t.Fatalf("%s must name the absolute Claude Code %s executable", claudeLiveSmokeExecutableEnv, TestedVersion)
 	}
 	// Every credentialed smoke proves the pinned client, so the executable
 	// identity is verified before any turn is launched: same version, same
 	// transport and the exact tested bytes. A different binary would otherwise
 	// spend credentials while claiming exact-client evidence.
-	adapter := NewClaudeCandidateAdapter(executable)
+	adapter := NewCandidateAdapter(executable)
 	capabilities, err := adapter.Probe(context.Background())
 	if err != nil {
 		t.Fatalf("probe %s before the credentialed run: %v", executable, err)
 	}
-	if capabilities.NativeVersion != ClaudeTestedVersion || !capabilities.TransportVerified {
-		t.Fatalf("capabilities = %+v, want the tested %s client with verified transport", capabilities, ClaudeTestedVersion)
+	if capabilities.NativeVersion != TestedVersion || !capabilities.TransportVerified {
+		t.Fatalf("capabilities = %+v, want the tested %s client with verified transport", capabilities, TestedVersion)
 	}
-	digest, err := HashExecutableFile(context.Background(), executable)
+	digest, err := harness.HashExecutableFile(context.Background(), executable)
 	if err != nil {
 		t.Fatalf("hash %s before the credentialed run: %v", executable, err)
 	}
-	if digest != ClaudeTestedExecutableHash {
-		t.Fatalf("resolved executable digest = %q, want the tested blob %q", digest, ClaudeTestedExecutableHash)
+	if digest != TestedExecutableHash {
+		t.Fatalf("resolved executable digest = %q, want the tested blob %q", digest, TestedExecutableHash)
 	}
 	if runtime.GOOS == "windows" && (!capabilities.Verified || !capabilities.Start || !capabilities.Events || !capabilities.Cancel) {
 		t.Fatalf("capabilities = %+v, want the promoted Windows lifecycle before a credentialed run", capabilities)
@@ -382,7 +383,7 @@ func claudeLiveAdapter(t *testing.T) (*ClaudeCandidateAdapter, string) {
 	return adapter, executable
 }
 
-func claudeLiveStart(t *testing.T, adapter *ClaudeCandidateAdapter, workspace, goal string, contextJSON json.RawMessage, recorder *claudeLiveRecorder) (Session, StagedSession) {
+func claudeLiveStart(t *testing.T, adapter *CandidateAdapter, workspace, goal string, contextJSON json.RawMessage, recorder *claudeLiveRecorder) (harness.Session, harness.StagedSession) {
 	t.Helper()
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
@@ -395,7 +396,7 @@ func claudeLiveStart(t *testing.T, adapter *ClaudeCandidateAdapter, workspace, g
 	environment := claudeLiveEnvironment(t, home, configDirectory)
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 	t.Cleanup(cancel)
-	session, err := adapter.Start(ctx, StartRequest{
+	session, err := adapter.Start(ctx, harness.StartRequest{
 		AdmissionID:   "claude-live-smoke",
 		LocalHandleID: "claude-live-smoke",
 		Workspace:     workspace,
@@ -411,7 +412,7 @@ func claudeLiveStart(t *testing.T, adapter *ClaudeCandidateAdapter, workspace, g
 	if err != nil {
 		t.Fatalf("start credentialed Claude session: %v", err)
 	}
-	staged, ok := session.(StagedSession)
+	staged, ok := session.(harness.StagedSession)
 	if !ok {
 		t.Fatalf("session %T does not implement StagedSession", session)
 	}
@@ -470,7 +471,7 @@ Report exactly one JSON object and nothing else, with these exact values:
 		t.Fatalf("open handle = %+v with init observed = %t, want the requested identity and no init before the first user frame", handle, recorder.observedInit())
 	}
 
-	if err := staged.StartTurn(context.Background(), TurnRequest{Goal: goal, Context: json.RawMessage(`{}`)}); err != nil {
+	if err := staged.StartTurn(context.Background(), harness.TurnRequest{Goal: goal, Context: json.RawMessage(`{}`)}); err != nil {
 		t.Fatalf("start credentialed Claude turn: %v", err)
 	}
 	if err := staged.WaitTurn(context.Background()); err != nil {
@@ -493,7 +494,7 @@ Report exactly one JSON object and nothing else, with these exact values:
 	if got, want := string(content), "hello from claude"; got != want {
 		t.Fatalf("artifact hello.txt = %q, want %q", got, want)
 	}
-	if result.Kind != ResultSucceeded || result.Semantic == nil || result.Semantic.Kind != protocol.TaskResultCandidateCompletion {
+	if result.Kind != harness.ResultSucceeded || result.Semantic == nil || result.Semantic.Kind != protocol.TaskResultCandidateCompletion {
 		t.Fatalf("result = %+v, want a canonical candidate_completion TaskResult", result)
 	}
 	// The complete derived Subject, not the prompt text: the production consumer
@@ -547,16 +548,16 @@ func TestClaudeCandidateLiveCancelSmoke(t *testing.T) {
 	if _, err := staged.Open(ctx); err != nil {
 		t.Fatalf("open credentialed Claude session: %v", err)
 	}
-	if err := staged.StartTurn(ctx, TurnRequest{Goal: goal, Context: json.RawMessage(`{}`)}); err != nil {
+	if err := staged.StartTurn(ctx, harness.TurnRequest{Goal: goal, Context: json.RawMessage(`{}`)}); err != nil {
 		t.Fatalf("start credentialed Claude turn: %v", err)
 	}
 	time.Sleep(15 * time.Second)
-	receipt, err := session.Control(ctx, ControlRequest{CommandID: "cancel-1", Kind: ControlCancel})
+	receipt, err := session.Control(ctx, harness.ControlRequest{CommandID: "cancel-1", Kind: harness.ControlCancel})
 	if err != nil {
 		t.Fatalf("cancel control: %v (outcome=%s)", err, receipt.Outcome)
 	}
 	t.Logf("cancel receipt: outcome=%s message=%q", receipt.Outcome, receipt.Message)
-	if receipt.Outcome != ControlApplied {
+	if receipt.Outcome != harness.ControlApplied {
 		t.Fatalf("cancel outcome = %s, want applied", receipt.Outcome)
 	}
 	if err := staged.WaitTurn(ctx); err != nil {
@@ -571,7 +572,7 @@ func TestClaudeCandidateLiveCancelSmoke(t *testing.T) {
 	}
 	encoded, _ := json.MarshalIndent(result, "", " ")
 	t.Logf("cancel result: %s", encoded)
-	if result.Kind != ResultCancelled {
+	if result.Kind != harness.ResultCancelled {
 		t.Fatalf("result kind = %s, want cancelled", result.Kind)
 	}
 	if !result.Process.Terminated || result.Process.ContainmentError != nil || result.Process.TerminationError != nil {
@@ -590,31 +591,31 @@ func TestClaudeCandidateLiveCancelSmoke(t *testing.T) {
 // unproved operation may appear at all.
 func TestClaudeCandidateLiveProbePromotesTheTestedBlob(t *testing.T) {
 	adapter, executable := claudeLiveAdapter(t)
-	digest, err := HashExecutableFile(context.Background(), executable)
+	digest, err := harness.HashExecutableFile(context.Background(), executable)
 	if err != nil {
 		t.Fatalf("hash resolved executable: %v", err)
 	}
 	t.Logf("resolved executable digest: %s", digest)
-	if digest != ClaudeTestedExecutableHash {
-		t.Fatalf("resolved executable digest = %q, want the tested blob %q", digest, ClaudeTestedExecutableHash)
+	if digest != TestedExecutableHash {
+		t.Fatalf("resolved executable digest = %q, want the tested blob %q", digest, TestedExecutableHash)
 	}
 	capabilities, err := adapter.Probe(context.Background())
 	if err != nil {
 		t.Fatalf("probe exact tested blob: %v", err)
 	}
-	if capabilities.NativeVersion != ClaudeTestedVersion || !capabilities.VersionKnown || !capabilities.TransportVerified {
+	if capabilities.NativeVersion != TestedVersion || !capabilities.VersionKnown || !capabilities.TransportVerified {
 		t.Fatalf("capabilities = %+v, want the tested version with verified transport", capabilities)
 	}
 	if capabilities.Resume || capabilities.Handoff || capabilities.ApprovalResponse || capabilities.ProviderAccess || capabilities.HardCostLimit ||
-		capabilities.Guidance != GuidanceUnsupported || capabilities.Pause != PauseUnsupported || capabilities.Usage != UsageUnknown {
+		capabilities.Guidance != harness.GuidanceUnsupported || capabilities.Pause != harness.PauseUnsupported || capabilities.Usage != harness.UsageUnknown {
 		t.Fatalf("capabilities advertised unproved operations: %+v", capabilities)
 	}
 	promoted := capabilities.Verified && capabilities.Start && capabilities.Events && capabilities.Cancel
 	if want := runtime.GOOS == "windows"; promoted != want {
 		t.Fatalf("promoted = %t on %s, want %t: capabilities = %+v", promoted, runtime.GOOS, want, capabilities)
 	}
-	if promoted && capabilities.ImplementationVersion != claudeImplementationVersion {
-		t.Fatalf("implementation version = %q, want %q", capabilities.ImplementationVersion, claudeImplementationVersion)
+	if promoted && capabilities.ImplementationVersion != implementationVersion {
+		t.Fatalf("implementation version = %q, want %q", capabilities.ImplementationVersion, implementationVersion)
 	}
 	t.Logf("promotion projection: %+v", capabilities)
 }
@@ -633,15 +634,15 @@ func TestClaudeCandidateLiveProbeRejectsDifferentBlob(t *testing.T) {
 	if shim == "" || !filepath.IsAbs(shim) {
 		t.Fatalf("%s must name the absolute shim executable used as the blob-mismatch control", claudeLiveSmokeShimEnv)
 	}
-	shimDigest, err := HashExecutableFile(context.Background(), shim)
+	shimDigest, err := harness.HashExecutableFile(context.Background(), shim)
 	if err != nil {
 		t.Fatalf("hash shim executable: %v", err)
 	}
-	t.Logf("shim %s digest %s (tested blob %s at %s)", shim, shimDigest, ClaudeTestedExecutableHash, executable)
-	if shimDigest == ClaudeTestedExecutableHash {
+	t.Logf("shim %s digest %s (tested blob %s at %s)", shim, shimDigest, TestedExecutableHash, executable)
+	if shimDigest == TestedExecutableHash {
 		t.Fatalf("shim digest equals the tested blob; the control needs different bytes")
 	}
-	capabilities, err := NewClaudeCandidateAdapter(shim).Probe(context.Background())
+	capabilities, err := NewCandidateAdapter(shim).Probe(context.Background())
 	if err == nil {
 		t.Fatal("probe of a different blob succeeded, want a fail-closed rejection")
 	}
@@ -649,10 +650,10 @@ func TestClaudeCandidateLiveProbeRejectsDifferentBlob(t *testing.T) {
 	if capabilities.Verified || capabilities.Start || capabilities.Events || capabilities.Cancel {
 		t.Fatalf("capabilities = %+v, want no promoted operation for a different blob", capabilities)
 	}
-	if !errors.Is(err, ErrNativeUnverified) && !errors.Is(err, context.DeadlineExceeded) {
+	if !errors.Is(err, harness.ErrNativeUnverified) && !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("probe error = %v, want a bounded unverified or deadline rejection", err)
 	}
-	for _, capability := range []Capability{CapabilityStart, CapabilityEvents, CapabilityCancel} {
+	for _, capability := range []harness.Capability{harness.CapabilityStart, harness.CapabilityEvents, harness.CapabilityCancel} {
 		if reason := capabilities.Unsupported[string(capability)]; reason == "" {
 			t.Fatalf("%s carries no unsupported reason: %+v", capability, capabilities)
 		}
@@ -661,14 +662,14 @@ func TestClaudeCandidateLiveProbeRejectsDifferentBlob(t *testing.T) {
 	// Isolate the blob gate itself from shim startup cost: the real client
 	// answers version and help, and the resolved digest is the shim's real
 	// digest. Nothing may be promoted.
-	capabilities, err = probeClaudeAdapterCapabilities(context.Background(), executable, claudeLiveForeignBlobRunner{digest: shimDigest})
-	if !errors.Is(err, ErrNativeUnverified) {
+	capabilities, err = probeCapabilities(context.Background(), executable, claudeLiveForeignBlobRunner{digest: shimDigest})
+	if !errors.Is(err, harness.ErrNativeUnverified) {
 		t.Fatalf("blob-gate probe error = %v, want ErrNativeUnverified", err)
 	}
 	if capabilities.Verified || capabilities.Start || capabilities.Events || capabilities.Cancel {
 		t.Fatalf("capabilities = %+v, want no promoted operation for foreign bytes", capabilities)
 	}
-	if reason := capabilities.Unsupported[string(CapabilityStart)]; !strings.Contains(reason, "exact tested executable blob") {
+	if reason := capabilities.Unsupported[string(harness.CapabilityStart)]; !strings.Contains(reason, "exact tested executable blob") {
 		t.Fatalf("start reason = %q, want the exact-blob reason", reason)
 	}
 }
@@ -681,7 +682,7 @@ type claudeLiveForeignBlobRunner struct {
 }
 
 func (runner claudeLiveForeignBlobRunner) Run(ctx context.Context, executable string, args ...string) ([]byte, error) {
-	return osClaudeCommandRunner{}.Run(ctx, executable, args...)
+	return osCommandRunner{}.Run(ctx, executable, args...)
 }
 
 func (runner claudeLiveForeignBlobRunner) ExecutableDigest(context.Context, string) (string, error) {

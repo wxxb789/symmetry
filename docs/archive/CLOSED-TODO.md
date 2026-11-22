@@ -98,6 +98,11 @@ The CI Go toolchain closure appended to its own
 `## CI Go toolchain: bump past the stdlib advisories` section at the end of this file was moved on
 2026-11-22 from branch `refactor/ci-toolchain-bump`.
 
+The revalidated W1-06 `NewClaudeAdapterWithRunner` residual (filed under `## SEO / repository
+metadata` in `docs/TODO.md`) was appended to the `## Dead-code candidates (rf-w1-06 re-scoped
+sweep)` section below and moved on 2026-11-22 from branch
+`refactor/rf-w4-15c-claude-candidate-relocation`.
+
 ## Model-routing evaluation records
 
 - [x] Fixed the half-applied usage-receipt import (serialization gap) reported by the cancelled 0008a round-2
@@ -4274,6 +4279,39 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
       `RebindGoalSessionForResume` and `ensureLocalHandleAvailableLocked`. The other two surfaces
       (`Store.AttachGoalSession`, `Store.FailUnresolvedProvideInput`) stay open in `docs/TODO.md`
       under the same section, with a residual line pointing here.
+
+- [ ] Revalidate and remove `harness.NewClaudeAdapterWithRunner` (three test files), the residual
+      of the 2026-11-21 W1-06 daemon dead-code survey (branch
+      `refactor/rf-w1-06-daemon-deadcode`, plan
+      `docs/plans/2026-11-21-w1-06-daemon-deadcode-plan.md`). The survey's other
+      unreachable-but-referenced, in-intersection surfaces were dispositioned by the W2-12b
+      relocation (branch `refactor/rf-w2-12b-operator-client-relocation`, plan
+      `docs/plans/2026-11-21-rf-w2-12b-operator-client-relocation-plan.md`): the operator client,
+      its five methods, the seven operator-exclusive task validators of
+      `daemon/internal/control/validation.go` and the v1 task decoders now live in
+      the e2e-owned `daemon/e2e/internal/operator/` package beside their only callers; six
+      declarations of the relocated set differ from their originals only by the sanctioned package
+      qualifiers, the rest byte-identical. The closed
+      part is recorded in `docs/archive/CLOSED-TODO.md` under `## Dead-code candidates`.
+      `control.WithMaxResponseBytes` stays in `control` by that slice's binding amendment (its
+      callers are the machine-client and PI-bridge tests). This residual belongs to the
+      probe/registry dedup (W3-04), not to a deletion pass: its shadowed root-probe siblings are
+      main-reachable through `NewCodexAdapter`/`NewClaudeAdapter`. The two live groups of the same
+      survey stay covered by the decision note below.
+
+      **Closed (2026-11-22, branch `refactor/rf-w4-15c-claude-candidate-relocation`, plan
+      `docs/plans/2026-11-22-rf-w4-15c-claude-candidate-relocation-plan.md`):** all three
+      constructor names are gone. The relocation moved the Claude adapter and its promotion probe
+      out of the root package into the adapter package, and the registry trim deleted the
+      Claude runner-seam constructor together with its two siblings, the Codex constructor pair,
+      the Pi constructor and the probe helpers reachable only from them; the registry now
+      registers only the generic and OpenCode adapters, while the daemon composition root still
+      registers Codex, Claude, Pi, OMP and OmO, so the registered-adapter set the daemon sees is
+      unchanged. Reachability is proven, not assumed: the pinned `unused` lint run is clean, and
+      the before/after declaration list records each deletion with its last caller, in
+      `docs/evidence/rf-w4-15c-claude-candidate-relocation-2026-11-22.md`, whose subject hashes
+      bind the exact bytes. The item's "not to a deletion pass" sentence is superseded by the
+      arch-decision-2 ruling O13 (ACCEPT), annotated in `docs/TODO.md`.
 
 ## Production Linux containment witness: stop-receipt barrier stall awaiting a diagnosable occurrence
 

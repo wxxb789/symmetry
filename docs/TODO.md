@@ -33,25 +33,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       revalidated and removed on the W3-07 follow-up branch
       `refactor/rf-w3-07b-state-error-followups` (moved to `docs/archive/CLOSED-TODO.md`).
 
-- [ ] Revalidate and remove `harness.NewClaudeAdapterWithRunner` (three test files), the residual
-      of the 2026-11-21 W1-06 daemon dead-code survey (branch
-      `refactor/rf-w1-06-daemon-deadcode`, plan
-      `docs/plans/2026-11-21-w1-06-daemon-deadcode-plan.md`). The survey's other
-      unreachable-but-referenced, in-intersection surfaces were dispositioned by the W2-12b
-      relocation (branch `refactor/rf-w2-12b-operator-client-relocation`, plan
-      `docs/plans/2026-11-21-rf-w2-12b-operator-client-relocation-plan.md`): the operator client,
-      its five methods, the seven operator-exclusive task validators of
-      `daemon/internal/control/validation.go` and the v1 task decoders now live in
-      the e2e-owned `daemon/e2e/internal/operator/` package beside their only callers; six
-      declarations of the relocated set differ from their originals only by the sanctioned package
-      qualifiers, the rest byte-identical. The closed
-      part is recorded in `docs/archive/CLOSED-TODO.md` under `## Dead-code candidates`.
-      `control.WithMaxResponseBytes` stays in `control` by that slice's binding amendment (its
-      callers are the machine-client and PI-bridge tests). This residual belongs to the
-      probe/registry dedup (W3-04), not to a deletion pass: its shadowed root-probe siblings are
-      main-reachable through `NewCodexAdapter`/`NewClaudeAdapter`. The two live groups of the same
-      survey stay covered by the decision note below.
-
 - live — do not remove (decision note, 2026-11-21, same branch and plan): the two remaining
       groups of that survey are production-live surfaces that no deletion pass may touch.
       **In the same `validation.go:209-629` range but in no target's `deadcode` findings (live
@@ -68,6 +49,26 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       reports; the probe/registry dedup (W3-04, #187) kept them (D4: the root stays fail-closed
       and undelegated — no `harness` → `harness/codex` import), so no deletion pass may remove
       them either.
+
+      **Annotation (2026-11-22, rf-w4-15c):** the "no deletion pass may remove them either"
+      sentence is superseded for the two named probe paths by the arch-decision-2 ruling O13
+      (ACCEPT): the Claude candidate relocation moved the Claude adapter and its promotion probe
+      out of the root package, deleted the Codex, Claude and Pi shadow constructors with their
+      probe helpers, and left the registry registering only the generic and OpenCode adapters,
+      while the daemon composition root keeps registering all five native kinds, so the
+      registered-adapter set the daemon sees is unchanged. The removed W1-06 residual moved to
+      `docs/archive/CLOSED-TODO.md` under `## Dead-code candidates (rf-w1-06 re-scoped sweep)`;
+      the subject hashes, deleted-declaration list and mutant record are in
+      `docs/evidence/rf-w4-15c-claude-candidate-relocation-2026-11-22.md`. The sentence above is
+      kept as recorded.
+
+- [ ] Reconcile the `harness/claude` package comment with the package's contents: the header of
+      `daemon/internal/harness/claude/stream.go` still states that the package "intentionally does
+      not expose a `harness.Adapter` until credentialed native lifecycle evidence proves the
+      required session and control semantics", which the Claude candidate relocation made false —
+      the package now owns the adapter. That file was outside the relocation's owned set (W4-15a's
+      decoder, W4-15b's driver), so the sentence waits for the slice that next opens it. Owner
+      area: daemon harness.
 
 ## Build-tag parity (arm64 oracle)
 
