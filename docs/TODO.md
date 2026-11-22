@@ -246,7 +246,7 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
     as PID 1 and unified cgroup v2 (`/run/systemd/system`, `/sys/fs/cgroup/cgroup.controllers`), a
     stop-provable delegated transient unit, `sudo -n`, `systemd-nspawn`, `debootstrap`, `setfacl`, `gh`, a C
     toolchain and `jq` (the workflow installs `acl build-essential curl debootstrap gh jq python3 sudo
-    systemd-container`); pinned tooling Go 1.27.0, Elixir 1.20.4/OTP 29.0.6 and the `postgres:18.6-alpine`
+    systemd-container`); pinned tooling Go 1.27.4, Elixir 1.20.4/OTP 29.0.6 and the `postgres:18.6-alpine`
     service; the protected Environment `linux-v2-native-acceptance` with its required reviewer and branch
     policy, which the workflow comment requires verifying before dispatch ("Before dispatch, verify the
     Environment requires @wxxb789's separate approval, permits self-review, and admits only the reviewed
@@ -1288,3 +1288,53 @@ instead of appended.
       of the unbounded retry. The sink files are outside the rf-w3-09 owned set (`events.go`,
       `outbox.go`, `state.go`), which is why that slice recorded this entry instead of changing them;
       owner: daemon outbox/state.
+
+## Daemon platform: the Windows witness hooks stay outside the Linux witness config (rf-w5-01)
+
+- [ ] Consolidate the Windows pre-authority witness hooks the way rf-w5-01 (2026-11-22, branch
+      `refactor/rf-w5-01-witness-converge-in-place`) consolidated the Linux surface. The Windows
+      side still reads raw literals with no witness gate —
+      `supervisor_windows_helper.go:554-555` (`SYMMETRY_PREAUTHORITY_DROP_FIRST_HELLO_RESPONSE`,
+      `SYMMETRY_PREAUTHORITY_HELLO_RETRY_MARKER`) and `supervisor_windows_client.go:1080`
+      (`SYMMETRY_PREAUTHORITY_WRONG_SECRET_MARKER`) — and
+      `cmd/symmetry-daemon/preauthority_witness_command_windows.go` enters witness mode from argv
+      (`init()` `:26-36`) while setting the same three names for the helper child (`:142-148`).
+      Conductor decision A (2026-11-21) scoped rf-w5-01 to the Linux family and left these bytes
+      for W6-03, which already owns the same files and dispatches after rf-w5-01; the Linux half
+      now has one per-use witness-config parser
+      (`daemon/internal/platform/supervisor_linux_witness.go`) behind
+      `SYMMETRY_PRODUCTION_LINUX_CONTAINMENT_WITNESS` plus marker-parent validation, so the two
+      conventions coexist until W6-03 lands.
+
+## Daemon platform: two daemon-side barrier markers lack witness parent validation (rf-w5-01 residual)
+
+- [ ] Validate the marker parent directory for the two daemon-side witness writers that still
+      publish env-supplied marker paths unvalidated: the stop-receipt barrier reached marker
+      (`daemon/internal/app/cleanup_glue.go:232-233` reads
+      `SYMMETRY_LINUX_SUPERVISOR_STOP_RECEIPT_BARRIER_{REACHED,RELEASE}_FILE`, written at `:259`)
+      and the shared resume-barrier writer (`daemon/internal/execution/runner.go:1077`
+      `waitForResumeBarrier`, publishing the reached marker at `:1114`), which serves both the
+      commit-resume family (`SYMMETRY_RUNNER_COMMIT_RESUME_BARRIER_{REACHED,RELEASE}_FILE`, caller
+      `:1012`) and the lease-armed family
+      (`SYMMETRY_RUNNER_LEASE_ARMED_RESUME_BARRIER_{REACHED,RELEASE}_FILE`, callers `:909,919` via
+      `waitForLeaseArmedResumeBarrier`).
+      Both are pre-existing and outside rf-w5-01's owned set (rf-w5-01 review CR-06); the platform
+      helper funnels are covered by `validateLinuxSupervisorWitnessMarkerParent`.
+      owner: daemon app/execution.
+
+## Daemon: the `admission_deadline` attach-ack subtest flakes on its wall-clock deadline (PR #217 review)
+
+- [ ] Revalidate and diagnose the pre-existing flake in
+      `TestOmOAttachAckRegressionCancellationAndDeadlineDoNotRenewBudget/admission_deadline`
+      (`daemon/internal/app/omo_attach_ack_test.go`; the `admission_deadline` arm sets a 2 s
+      wall-clock admission `DeadlineAt` and then requires a loopback GET+PUT inside it). The PR #217
+      review observed it fail twice on `394859a9` (once under concurrent load, once alone) with
+      `assertRequests`'s `attachment requests=[] … context deadline exceeded`, then pass 2/2 alone
+      and 3/3 on the PR head. Failures take one of two shapes: the attach GET leg hits the deadline
+      (`native_calls=[start details open details close wait]`), or the admission check fires first
+      (`Goal admission deadline has elapsed before native launch`, `goal_admission.go`); both are
+      recorded under load in `docs/evidence/rf-w4-03-runner-decomposition-2026-11-21.md`
+      (the app-suite failure paragraph). The failure is consistent with the deadline expiring when
+      the suite is starved, but the cause is unconfirmed. The arm's duration is bounded by a
+      production limit, so a fix needs an owner decision on the deadline or the assertion;
+      revalidate against a recovered failure before changing either.
