@@ -87,6 +87,9 @@ function renderWorkspace(path: string) {
 
 const postsOf = (path: string) => portal.requests.filter((request) => request.method === "POST" && request.path === path);
 const patchesOf = (path: string) => portal.requests.filter((request) => request.method === "PATCH" && request.path === path);
+const workspaceReadPaths = () => portal.requests
+  .filter((request) => request.url.pathname === "/portal/api/workspace")
+  .map((request) => request.path);
 
 function formStateOf(item: WorkItem): ReturnType<typeof workItemFormStateOf> {
   const project: Project = { id: firstProjectId, key: "ONE", name: "Project One", description: null, status: "active", work_items: [] };
@@ -404,6 +407,8 @@ describe("project planning", () => {
     seedWorkspace();
     const { router } = renderWorkspace(`/portal/projects/${firstProjectId}?view=board`);
     const card = await screen.findByRole("link", { name: "Legacy item" });
+    expect(workspaceReadPaths()).toContain(`/portal/api/workspace?project_id=${firstProjectId}`);
+    expect(workspaceReadPaths()).not.toContain("/portal/api/workspace");
     const release = portal.holdNextMutation();
     card.focus();
     fireEvent.keyDown(card, { key: "ArrowRight", shiftKey: true });
@@ -416,6 +421,8 @@ describe("project planning", () => {
     await act(async () => { await router.navigate({ to: "/projects/$projectId", params: { projectId: secondProjectId }, search: { view: "board" } }); });
     await screen.findByRole("heading", { level: 1, name: "Project Two" });
     const board = await screen.findByRole("region", { name: "Work board" });
+    expect(workspaceReadPaths()).toContain(`/portal/api/workspace?project_id=${secondProjectId}`);
+    expect(workspaceReadPaths()).not.toContain("/portal/api/workspace");
     expect(within(board).getByRole("link", { name: "Archived item" })).toBeVisible();
     release();
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -545,6 +552,8 @@ describe("work item planning", () => {
     seedWorkspace();
     renderWorkspace(`/portal/projects/${firstProjectId}?view=board`);
     const card = await screen.findByRole("link", { name: "Legacy item" });
+    expect(workspaceReadPaths()).toContain(`/portal/api/workspace?project_id=${firstProjectId}`);
+    expect(workspaceReadPaths()).not.toContain("/portal/api/workspace");
     card.focus();
     fireEvent.keyDown(card, { key: "ArrowRight", shiftKey: true });
     await waitFor(() => { expect(patchesOf(`/portal/api/work-items/${firstItemId}/move`)).toHaveLength(1); });

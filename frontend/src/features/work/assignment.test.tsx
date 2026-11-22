@@ -66,9 +66,7 @@ function detailBody(workItemId: string, overrides: Record<string, unknown> = {},
 interface HarnessOptions {
   desktop?: boolean;
   details?: Record<string, Record<string, unknown>>;
-  /** The workspace read: an answer, or `undefined` to fall through to the seed. */
   workspace?: () => Response | undefined | Promise<Response | undefined>;
-  /** The assignment write: the answer, a refusal, or a transport failure. */
   patch?: (body: Record<string, unknown> | null) => Response | Promise<Response>;
 }
 

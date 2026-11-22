@@ -6,8 +6,6 @@ import type { Application } from "./application";
 import { createApplication } from "./application";
 import { createAppRouter } from "./router";
 
-/** Mounts one workspace route: the intercepted global fetch answers through the
- * shared portal double, and an unhandled path fails instead of answering. */
 export function renderRoute(
   path: string,
   options: { location?: { href: string; replace: (url: string) => void } } = {},

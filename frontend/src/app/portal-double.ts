@@ -4,11 +4,6 @@ import type { WorkItem } from "../services/api";
 import { readAttention, readWorkDetail } from "../services/api.fixtures";
 import { asRecord } from "../services/served";
 
-/**
- * The one in-memory portal double every frontend suite drives. An unscripted path
- * is failed outright — transport error when registered, MSW rejection when absent.
- */
-
 export type PortalWorkItem = WorkItem & {
   goal_managed?: boolean;
 };
@@ -79,7 +74,6 @@ export interface PortalSeed {
 
 export type PortalSeedInput = Partial<Omit<PortalSeed, "mutations" | "workspace">> & {
   workspace?: Partial<Omit<PortalSeed["workspace"], "projects">> & { projects?: PortalProject[] };
-  mutations?: Partial<PortalSeed["mutations"]>;
 };
 
 export type PortalResponder = (request: PortalRequest, state: PortalSeed) => Response;
@@ -126,7 +120,7 @@ const mergedSeed = (seed: PortalSeedInput): PortalSeed => {
     },
     connections: { ...base.connections, ...seed.connections },
     details: { ...seed.details },
-    mutations: { ...base.mutations, ...seed.mutations },
+    mutations: base.mutations,
   };
 };
 
@@ -382,8 +376,7 @@ const decodeBody = (raw: string | null): Record<string, unknown> | null => {
 };
 
 const recorded = async (request: Request): Promise<PortalRequest> => {
-  // The clone keeps the delivered request's body readable for a later resolution.
-  const rawBody = request.method === "GET" || request.method === "HEAD" ? null : await request.clone().text();
+  const rawBody = request.method === "GET" || request.method === "HEAD" ? null : await request.text();
   const url = new URL(request.url);
   return {
     method: request.method.toUpperCase(),
@@ -399,20 +392,13 @@ let seedSnapshot: PortalSeed = defaultSeed();
 let state: PortalSeed = cloneSeed(seedSnapshot);
 const requests: PortalRequest[] = [];
 const layers: PortalResolver[] = [];
-/** MSW resolves a handler twice per request; only the first resolution answers. */
-const answered = new Map<string, Response>();
 
-const dispatch = async (entry: PortalEntry, request: Request, requestId: string): Promise<Response> => {
-  const memo = answered.get(requestId);
-  if (memo !== undefined) return memo;
+const dispatch = async (entry: PortalEntry, request: Request): Promise<Response> => {
   const call = await recorded(request);
   requests.push(call);
   for (const layer of layers) {
     const answer = await layer(call);
-    if (answer !== undefined) {
-      answered.set(requestId, answer);
-      return answer;
-    }
+    if (answer !== undefined) return answer;
   }
   if (call.method !== "GET") {
     if (state.mutations.failNext) {
@@ -421,13 +407,11 @@ const dispatch = async (entry: PortalEntry, request: Request, requestId: string)
     }
     if (state.mutations.hold !== null) await state.mutations.hold;
   }
-  const response = entry.respond?.(call, state) ?? HttpResponse.error();
-  answered.set(requestId, response);
-  return response;
+  return entry.respond?.(call, state) ?? HttpResponse.error();
 };
 
 const handle = (entry: PortalEntry) => {
-  const resolver = ({ request, requestId }: { request: Request; requestId: string }) => dispatch(entry, request, requestId);
+  const resolver = ({ request }: { request: Request }) => dispatch(entry, request);
   switch (entry.method) {
     case "GET":
       return http.get(entry.path, resolver);
@@ -472,6 +456,5 @@ export const portal: PortalDouble = {
 export function resetPortalDouble(): void {
   layers.length = 0;
   requests.length = 0;
-  answered.clear();
   state = cloneSeed(seedSnapshot);
 }

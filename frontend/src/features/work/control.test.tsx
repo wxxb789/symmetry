@@ -45,9 +45,7 @@ const accepted = (body: Record<string, unknown>) => jsonResponse(body, 202);
 
 interface HarnessOptions {
   detail?: Record<string, unknown>;
-  /** The detail read, by 1-based read index, when the served state changes per read. */
   detailReads?: (readIndex: number) => Response | Promise<Response>;
-  /** A write POST: the answer, a refusal, or a transport failure. */
   command?: (path: string, body: Record<string, unknown> | null) => Response | Promise<Response>;
   /** The session read; `readIndex` starts at 1 so a rotation can be sequenced. */
   session?: (readIndex: number) => Record<string, unknown>;
