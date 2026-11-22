@@ -1,14 +1,15 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { useQuery } from "@tanstack/react-query";
-import { Link, Outlet, useMatch, useNavigate, useRouteContext, useRouterState } from "@tanstack/react-router";
+import { Link, Outlet, useNavigate, useRouteContext, useRouterState } from "@tanstack/react-router";
 import { Cable, Command, Folder, Inbox, LogOut, Menu, MessageSquare, MonitorCog, Search, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { errorMessage } from "../services/api";
 import type { RefreshSource, RealtimeStatus } from "../services/realtime";
 import { ErrorState, LoadingState } from "../components/workspace";
-import { sessionOptions, workDetailOptions, workspaceOptions, type Application } from "./application";
+import { sessionOptions, workspaceOptions, type Application } from "./application";
 import { sessionReadKey } from "./read-cache";
 import { useRealtimeRefresh, useRealtimeStatus } from "./realtime";
+import { SelectedProjectProvider, useSelectedProject } from "./selected-project";
 import { SessionTokenProvider } from "./session";
 
 function focusContent() {
@@ -65,31 +66,16 @@ function ReadsStatus() {
   </p>;
 }
 
-function useProjectScope() {
-  const { application } = useRouteContext({ from: "__root__" });
-  const projectId = useMatch({ from: "/projects/$projectId", shouldThrow: false, select: (match) => match.params.projectId });
-  const workScope = useMatch({ from: "/work/$workItemId", shouldThrow: false, select: (match) => ({ workItemId: match.params.workItemId, claimedProjectId: match.search.projectId }) });
-  // The served projection owns a work item's project. This reads the same query key
-  // the work detail page uses, so it adds no request and no second authority; the
-  // URL's claim only covers the window before that projection arrives.
-  const servedWork = useQuery({ ...workDetailOptions(application.api, workScope?.workItemId ?? ""), enabled: workScope !== undefined });
-  const searchProjectId = useMatch({ from: "/attention", shouldThrow: false, select: (match) => match.search.projectId });
-  const chatProjectId = useMatch({ from: "/chat", shouldThrow: false, select: (match) => match.search.projectId });
-  const connectionsProjectId = useMatch({ from: "/connections", shouldThrow: false, select: (match) => match.search.projectId });
-  const runtimesProjectId = useMatch({ from: "/runtimes", shouldThrow: false, select: (match) => match.search.projectId });
-  return projectId ?? servedWork.data?.work_item.project_id ?? workScope?.claimedProjectId ?? searchProjectId ?? chatProjectId ?? connectionsProjectId ?? runtimesProjectId;
-}
-
 function useProjectDirectory() {
   const { application } = useRouteContext({ from: "__root__" });
-  const projectId = useProjectScope();
+  const projectId = useSelectedProject();
   const query = useQuery(workspaceOptions(application.api, projectId ?? null));
   const recovery = useQuery({ ...workspaceOptions(application.api, null), enabled: !!projectId && query.isError });
   return projectId && query.isError ? recovery : query;
 }
 
 function NavigationLinks({ onNavigate }: { onNavigate?: () => void }) {
-  const projectId = useProjectScope();
+  const projectId = useSelectedProject();
   return <nav aria-label="Workspace navigation" className="nav-links">
     <Link to="/attention" search={projectId ? { projectId } : {}} onClick={onNavigate} activeProps={{ className: "nav-link active", "aria-current": "page" }} inactiveProps={{ className: "nav-link" }}><Inbox size={18} aria-hidden="true" />Attention</Link>
     <Link to="/chat" search={projectId ? { projectId } : {}} onClick={onNavigate} activeProps={{ className: "nav-link active", "aria-current": "page" }} inactiveProps={{ className: "nav-link" }}><MessageSquare size={18} aria-hidden="true" />Chat</Link>
@@ -103,7 +89,7 @@ function ProjectPicker() {
   const query = useProjectDirectory();
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
-  const projectId = useProjectScope();
+  const projectId = useSelectedProject();
   const isAttention = pathname.endsWith("/attention");
   const isConnections = pathname.endsWith("/connections");
   const selected = projectId ?? (isAttention || isConnections ? query.data?.selected_project_id ?? "" : "");
@@ -124,7 +110,7 @@ function ProjectPicker() {
 
 function CommandPalette() {
   const query = useProjectDirectory();
-  const projectId = useProjectScope();
+  const projectId = useSelectedProject();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const navigating = useRef(false);
@@ -235,7 +221,7 @@ export function WorkspaceRoot() {
   if (session.isPending) return <main className="session-state"><h1>Symmetry workspace</h1><LoadingState label="Checking your session…" /></main>;
   if (session.isError && !session.data) return <main className="session-state"><h1>Workspace unavailable</h1><ErrorState error={session.error} retry={() => { void session.refetch(); }} /></main>;
   const csrf = session.data?.csrf_token;
-  return <>
+  return <SelectedProjectProvider>
     <a className="skip-link" href="#content-heading">Skip to content</a>
     <div className="workspace-shell">
       <aside className="sidebar"><Link className="brand" to="/attention" search={{}}><span className="brand-mark" aria-hidden="true">S</span>Symmetry</Link><p className="sidebar-label">Workspace</p><NavigationLinks /><div className="sidebar-footer"><span className="state-dot" aria-hidden="true" />Reads and execution control; applied state comes from the server</div></aside>
@@ -244,7 +230,7 @@ export function WorkspaceRoot() {
         <footer className="content-footer">Reads and applied changes come from the server; a refused change shows the server's current state. Work detail carries the execution controls this shell dispatches; guidance and pause are dispatched from Chat.</footer>
       </div>
     </div>
-  </>;
+  </SelectedProjectProvider>;
 }
 
 function LogoutForm({ application, cachedToken }: { application: Application; cachedToken: string }) {

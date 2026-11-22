@@ -4,6 +4,7 @@ import { Folder, ArrowUpRight, Plus } from "lucide-react";
 import { useState } from "react";
 import { workspaceOptions } from "../../app/application";
 import { workspaceReadKey } from "../../app/read-cache";
+import { useSelectedProject } from "../../app/selected-project";
 import { useSessionToken } from "../../app/session";
 import { StatusBadge } from "../../components/primitives";
 import { EmptyState, ErrorState, LoadingState, PageHeading, RefreshButton } from "../../components/workspace";
@@ -77,11 +78,12 @@ export function ProjectsPage() {
 export function ProjectPage() {
   const { projectId } = useParams({ from: "/projects/$projectId" });
   const search = useSearch({ from: "/projects/$projectId" });
+  const selectedProjectId = useSelectedProject();
   const navigate = useNavigate();
   const { application } = useRouteContext({ from: "__root__" });
   const csrf = useSessionToken();
   const queryClient = useQueryClient();
-  const query = useQuery(workspaceOptions(application.api, projectId));
+  const query = useQuery(workspaceOptions(application.api, selectedProjectId ?? null));
   const project = query.data?.projects.find((item) => item.id === projectId);
   const [settings, setSettings] = useState(false);
   const [creatingWork, setCreatingWork] = useState(false);
