@@ -89,7 +89,7 @@ class UnitStoppedProvenPathValidation(unittest.TestCase):
             '"${recorded_cgroup##*/}" == "$unit_name"',
             '"${recorded_directory##*/}" == *.slice',
             '"$main_pid" == 0',
-            "'populated 0'",
+            "sudo grep --fixed-strings --line-regexp --quiet 'populated 0' \"$cgroup_dir/cgroup.events\" || return 1",
         ):
             self.assertIn(guard, function)
 
@@ -117,11 +117,23 @@ class UnitStoppedProvenPathValidation(unittest.TestCase):
     def test_activating_unit_is_rejected(self) -> None:
         self.assert_rejected(VALID_PATH, load_state="loaded", active_state="activating", main_pid="4242")
 
+    def test_active_unit_without_main_pid_is_rejected(self) -> None:
+        self.assert_rejected(VALID_PATH, load_state="loaded", active_state="active", main_pid="0")
+
+    def test_deactivating_unit_without_main_pid_is_rejected(self) -> None:
+        self.assert_rejected(VALID_PATH, load_state="loaded", active_state="deactivating", main_pid="0")
+
     def test_nonzero_main_pid_is_rejected(self) -> None:
         self.assert_rejected(VALID_PATH, main_pid="4242")
 
     def test_failed_systemctl_query_is_rejected(self) -> None:
         self.assert_rejected(VALID_PATH, fail_property="LoadState")
+
+    def test_failed_active_state_query_is_rejected(self) -> None:
+        self.assert_rejected(VALID_PATH, fail_property="ActiveState")
+
+    def test_failed_main_pid_query_is_rejected(self) -> None:
+        self.assert_rejected(VALID_PATH, fail_property="MainPID")
 
     def test_collected_stopped_unit_is_accepted(self) -> None:
         self.assert_accepted(VALID_PATH)

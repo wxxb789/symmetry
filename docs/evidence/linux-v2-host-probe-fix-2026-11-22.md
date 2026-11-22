@@ -30,14 +30,16 @@ Ubuntu 26.04, systemd 259, kernel 7.0; plus `ubuntu-24.04`):
 | Check | Before | After |
 | --- | --- | --- |
 | Unified cgroup v2 precondition | `-d /run/systemd/system`, `-f /sys/fs/cgroup/cgroup.controllers`, **and** `-f /sys/fs/cgroup/cgroup.events` | `-d /run/systemd/system`, `-f /sys/fs/cgroup/cgroup.controllers`, and `stat -fc %T /sys/fs/cgroup` = `cgroup2fs`; root `cgroup.events` is no longer required |
-| Unit stop proof | after exit: `systemctl show --property=ControlGroup` must yield a non-root absolute path, whose directory is gone or reads `populated 0` | the unit payload records its live `/proc/self/cgroup` `0::` path (`cgroup_path=<absolute>` in the unit log; both payloads print it before their first strict check, so failure branches still carry it). After exit the proof requires `LoadState=not-found` or `ActiveState=inactive|failed`, `MainPID=0`, the recorded path absolute, non-root, free of `..`, ending in the exact unit name under a `*.slice`, and the recorded directory either gone or reading `populated 0` in its `cgroup.events` |
+| Unit stop proof | after exit: `systemctl show --property=ControlGroup` must yield a non-root absolute path, whose directory is gone or reads `populated 0` | the unit payload records its live `/proc/self/cgroup` `0::` path (`cgroup_path=<absolute>` in the unit log; both payloads print it as soon as they read the path, before every check that can fail the probe, so failure branches still carry it). After exit the proof requires `LoadState=not-found` or `ActiveState=inactive|failed`, `MainPID=0`, the recorded path absolute, non-root, free of `..`, ending in the exact unit name under a `*.slice`, and the recorded directory either gone or reading `populated 0` in its `cgroup.events` |
 | Evidence JSON | the round-1 field set (`version/case/source_commit/architecture/scope/not_evidence_of/systemd_is_pid1/unified_cgroup_v2_mounted/delegated_leaf_probe_passed/transient_unit_stop_proven/cross_uid_peer_probe_passed/cross_uid_capability/host_a_pidfd_getfd/peer_transient_unit_stop_proven/status/failure_stage`) | those fields plus `apparmor_userns_exception` (`not_needed` when the host has no restriction, `required` from entering the restriction branch, `per_program` only after a successful load); `not_evidence_of` gains "production launcher/gate under the AppArmor unprivileged-userns restriction" whenever the exception was loaded |
 
 A missing or root recorded path fails the proof. The peer unit uses the same proof against the path its own
-report records. The python payload and the Go peer probe each print `cgroup_path` before their first strict
-check (round 3 moved the Go probe's print from after `checkHostPrerequisites` to before it), so a unit-failure
-branch still proves the stop instead of overwriting the earlier `failure_stage` with `transient_unit_cleanup`;
-only a host whose `/proc/self/cgroup` carries no single `0::` path has nothing to record.
+report records. The python payload and the Go peer probe each print `cgroup_path` as soon as they read the
+path, before every check that can fail the probe (the Go probe prints it once in its no-argument `main`,
+before the sudo root prep helper and therefore before the prepared probe's `kernel-version`, `runner-is-root`,
+and host-prerequisite checks), so a unit-failure branch still proves the stop instead of overwriting the
+earlier `failure_stage` with `transient_unit_cleanup`; only a host whose `/proc/self/cgroup` carries no single
+`0::` path has nothing to record.
 
 ## Local verification (WSL2 Ubuntu-24.04, systemd 255, kernel 6.18.58.1-microsoft-standard-WSL2)
 
@@ -220,8 +222,22 @@ early `cgroup_path` line, and the JSON reports `status=failed` with
 `failure_stage=cross_uid_userns_fdinfo_pidfd_getfd` (the peer phase, *not* `transient_unit_cleanup`) plus
 `transient_unit_stop_proven` and `peer_transient_unit_stop_proven` true.
 
-The AppArmor branch cannot run on this WSL kernel (no userns mediation); its round-3 edits are exercised only
-by code reading and by the hosted runner's next run on this branch.
+The AppArmor branch cannot run on this WSL kernel (no userns mediation); its round-3 edits are exercised by
+code reading and by the hosted run recorded below.
+
+### Hosted-runner verification (round 3)
+
+GitHub Actions run `45033478428` on branch `scratch/linux-v2-host-probe` ran this branch's probe at the
+scratch head `9087178b3d226d3e24147d6ab9340a95f2eb862e`, whose tree is this branch's `d79c477d` tree plus the
+scratch workflow file only (`git diff --stat d79c477d 9087178b` lists just
+`.github/workflows/zz-linux-v2-host-probe.yml`; both probe files are identical blobs), on `ubuntu-latest`
+(Ubuntu 26.04, systemd 259) and `ubuntu-24.04`. Both jobs logged
+`apparmor_userns_exception=per_program` and wrote evidence with `status=passed`, `failure_stage` empty,
+`delegated_leaf_probe_passed`, `transient_unit_stop_proven`, `cross_uid_peer_probe_passed`, and
+`peer_transient_unit_stop_proven` true, `cross_uid_capability=fixed-b-child-userns-fdinfo-pidfd-getfd`, and
+`host_a_pidfd_getfd=passed`; the scratch head is recorded as the evidence `source_commit`. This is the
+hosted verification of the AppArmor per-program exception branch and the tightened B-capability assertions
+on both restricted hosted kernels.
 
 ## Adjacent code check (no changes made)
 

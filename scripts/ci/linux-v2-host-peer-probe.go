@@ -1466,14 +1466,11 @@ func runProbe() (result report, failure string) {
 	if result.uid == 0 {
 		return result, "runner-is-root"
 	}
-	// The wrapper proves the transient unit's stop from this payload-recorded path, so it is recorded
-	// before the first prerequisite check that can fail the probe.
 	result.cgroup, err = membership()
 	if err != nil {
 		result.failureDetail = err.Error()
 		return result, "parent-membership"
 	}
-	fmt.Printf("cgroup_path=%s\n", result.cgroup)
 	if failure := checkHostPrerequisites(&result); failure != "" {
 		return result, failure
 	}
@@ -1611,6 +1608,13 @@ func main() {
 		os.Exit(socketPeer())
 	}
 	if len(os.Args) == 1 {
+		// The wrapper proves the unit stop from this path, so print it before anything that can fail.
+		cgroup, err := membership()
+		if err != nil {
+			fmt.Printf("status=failed stage=parent-membership detail=%q\n", err.Error())
+			os.Exit(1)
+		}
+		fmt.Printf("cgroup_path=%s\n", cgroup)
 		os.Exit(runWithRootPreparedGroups())
 	}
 	if len(os.Args) != 2 || os.Args[1] != "--prepared" {

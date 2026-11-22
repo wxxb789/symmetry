@@ -160,6 +160,9 @@ cleanup() {
   if [[ -n "$apparmor_profile" ]]; then
     if ! sudo -n "$apparmor_parser" -R "$apparmor_profile" >/dev/null 2>&1; then
       cleanup_failed=1
+      if [[ "$failure_stage" == complete ]]; then
+        failure_stage=apparmor_userns_exception_unload
+      fi
       printf 'AppArmor userns exception unload failed; profile=%s\n' "$apparmor_profile" >&2
     fi
     rm -f -- "$apparmor_profile"
