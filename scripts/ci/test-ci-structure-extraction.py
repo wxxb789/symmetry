@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Structural pins for the extracted CI programs, the contracts composite action, and the advisory plane."""
 
 import dataclasses
 import hashlib
+import os
 import pathlib
 import posixpath
 import re
@@ -46,7 +46,26 @@ PROPAGATION_GUARD = (
 POWERSHELL_PROLOGUE = ("$ErrorActionPreference = 'Stop'", "Set-StrictMode -Version Latest")
 BASH_PROLOGUE = ("#!/usr/bin/env bash", "set -Eeuo pipefail")
 
-# The four native tool families the Windows PostgreSQL loopback drives; the cleanup-evidence reader calls none.
+POSTGRES_PROGRAM = "scripts/ci/pi-windows-postgres-loopback.ps1"
+REGISTRY_SHIM = (
+    "function Get-Item { param([string] $Path, $ErrorAction) "
+    "[pscustomobject]@{ PSPath = 'HKCU:\\SOFTWARE\\PostgreSQL\\Installations\\shim' } }; "
+    "function Get-ItemProperty { param([string] $LiteralPath, $ErrorAction) "
+    "[pscustomobject]@{ Version = '18' } }; "
+)
+PSOBJECT_REGISTRY_READ = (
+    "      # `Base Directory` is optional on an Installations key; reading it through PSObject keeps\n"
+    "      # Set-StrictMode from turning an absent value into a step failure.\n"
+    "      $baseDirectory = $null\n"
+    "      if ($null -ne $properties) {\n"
+    "        $baseDirectoryProperty = $properties.PSObject.Properties['Base Directory']\n"
+    "        $baseDirectory = if ($null -eq $baseDirectoryProperty) { $null }"
+    " else { [string]$baseDirectoryProperty.Value }\n"
+    "      }\n"
+)
+DIRECT_REGISTRY_READ = "      $baseDirectory = $properties.'Base Directory'\n"
+MISSING_VALUE_ERROR = "cannot be found on this object"
+
 NATIVE_SITE_COUNTS = {
     "pi-windows-postgres-loopback.ps1": 4,
     "pi-windows-cleanup-evidence.ps1": 0,
@@ -222,7 +241,6 @@ def split_steps(lines: list[str], dash_indent: int) -> list[list[str]]:
 
 
 def normalized_step(step_lines: list[str], dash_indent: int, key_indent: int) -> list[str]:
-    """The step with its `- ` head folded away, so every key sits at `key_indent`."""
     prefix = " " * dash_indent + "- "
     head = step_lines[0]
     require(head.startswith(prefix), f"a step does not start with its dash: {head!r}")
@@ -252,7 +270,6 @@ def nested_at(lines: list[str], key: str, key_indent: int) -> dict[str, str]:
 
 
 def block_body(lines: list[str], key_index: int, key_indent: int) -> list[str]:
-    """The dedented block-scalar body of the key at `key_index`; stops at or left of its own indent."""
     body: list[str] = []
     indent = None
     for line in lines[key_index + 1 :]:
@@ -282,11 +299,6 @@ def step_name(step_lines: list[str], indent: tuple[int, int]) -> str:
 
 
 def inline_run_bodies(workflow_text: str) -> list[tuple[int, list[str]]]:
-    """Every `run: |` body in the workflow file, with the line number of its key.
-
-    Scans both the plain key form and a step whose head carries the key (`- run: |`), so no
-    inline body escapes the ceiling by moving to the step head.
-    """
     lines = workflow_text.split("\n")
     bodies = []
     for index, line in enumerate(lines):
@@ -349,7 +361,6 @@ def assertion_gates(job_lines: list[str], job: str) -> set[str]:
 
 
 def advisory_value(line: str, prefix: str, scope: str) -> bool:
-    """Whether an advisory line at `prefix` applies; refuses any value but literal true."""
     if not line.startswith(prefix + "continue-on-error:"):
         return False
     require(line == prefix + "continue-on-error: true", f"{scope}: refusing to guess at the advisory value {line!r}")
@@ -425,7 +436,6 @@ def action_artifacts(action_text: str) -> list[tuple[str, str, str | None]]:
 
 
 def action_input_block(action_text: str, name: str) -> list[str]:
-    """The lines of one `inputs:` child, up to the next key at or left of the child's indent."""
     lines = action_text.split("\n")
     for index, line in enumerate(lines):
         if line != f"  {name}:":
@@ -490,6 +500,46 @@ def check_programs(root: pathlib.Path) -> None:
         require(sites == expected_sites, f"{step.program}: expected {expected_sites} native call sites, found {sites}")
 
 
+def check_registry_key_without_base_directory(program: pathlib.Path) -> None:
+    pwsh = shutil.which("pwsh")
+    if pwsh is None:
+        raise unittest.SkipTest("pwsh is not installed on this host; the reproduction is CI-side")
+    with tempfile.TemporaryDirectory() as temporary:
+        root = pathlib.Path(temporary)
+        log, provenance = root / "log", root / "provenance"
+        output, environment = root / "github-output", root / "github-env"
+        for path in (log, provenance, output, environment):
+            path.write_text("", encoding="utf-8")
+        env = dict(os.environ)
+        env.update(
+            {
+                "PI_E2E_LOG": str(log),
+                "PI_E2E_PROVENANCE": str(provenance),
+                "GITHUB_OUTPUT": str(output),
+                "GITHUB_ENV": str(environment),
+            }
+        )
+        for variable in ("PGBIN", "POSTGRES_PORT"):
+            env.pop(variable, None)
+        subprocess.run(
+            [pwsh, "-NoProfile", "-NonInteractive", "-Command", REGISTRY_SHIM + f"& '{program}'"],
+            capture_output=True,
+            text=True,
+            timeout=300,
+            check=False,
+            env=env,
+        )
+        provenance_text = provenance.read_text(encoding="utf-8")
+    require(
+        "postgres_candidate_bins=" in provenance_text,
+        f"the key without Base Directory aborted the discovery run: {provenance_text!r}",
+    )
+    require(
+        MISSING_VALUE_ERROR not in provenance_text,
+        f"the registry read failed on a missing value: {provenance_text!r}",
+    )
+
+
 def check_inline_bodies(workflow_text: str) -> None:
     bodies = inline_run_bodies(workflow_text)
     require(len(bodies) > 40, f"the workflow only carries {len(bodies)} inline program blocks")
@@ -537,7 +587,6 @@ def check_action(action_text: str, workflows: dict[str, str]) -> None:
 
 
 def check_caller_advisory_step(workflow_text: str) -> None:
-    """The advisory audit must stay with its caller: `always()` is what reaches it after a failed setup."""
     normalized = find_step(job_blocks(workflow_text)["contracts"], CONTRACTS_ADVISORY_STEP["name"])
     scalars = scalars_at(normalized, WORKFLOW_INDENT[1])
     require(scalars == CONTRACTS_ADVISORY_STEP, f"the contracts advisory step changed: {scalars!r}")
@@ -684,6 +733,17 @@ class MutationTests(unittest.TestCase):
             with self.assertRaises(AssertionError):
                 check_programs(root)
 
+    def test_mutation_the_direct_base_directory_read_reddens_the_missing_value_check(self) -> None:
+        text = (ROOT / POSTGRES_PROGRAM).read_text(encoding="utf-8")
+        self.assertIn(PSOBJECT_REGISTRY_READ, text, "the mutation's anchor must be the PSObject read")
+        with tempfile.TemporaryDirectory() as temporary:
+            mutated = pathlib.Path(temporary) / "pi-windows-postgres-loopback.ps1"
+            mutated.write_text(
+                text.replace(PSOBJECT_REGISTRY_READ, DIRECT_REGISTRY_READ), encoding="utf-8", newline="\n"
+            )
+            with self.assertRaises(AssertionError):
+                check_registry_key_without_base_directory(mutated)
+
     def test_mutation_marking_an_unlisted_step_advisory_reddens_the_completeness_check(self) -> None:
         mutated = self.workflow_text.replace(
             "      - run: scripts/audit-no-legacy-routes.sh\n",
@@ -779,6 +839,9 @@ class FailClosedPowerShellTests(unittest.TestCase):
             )
         self.assertEqual(guarded_result.returncode, 7, guarded_result.stderr)
         self.assertEqual(bare_result.returncode, 0, bare_result.stderr)
+
+    def test_a_registry_key_without_base_directory_is_skipped_like_the_base_body(self) -> None:
+        check_registry_key_without_base_directory(ROOT / POSTGRES_PROGRAM)
 
 
 if __name__ == "__main__":

@@ -1239,8 +1239,6 @@ jobs:
       # the classifier program that step invokes (`scripts/ci/classify-changed-paths.py`),
       # routes fixture diffs through it and pins the routing those outputs gate.
       - run: python3 scripts/ci/test-ci-changed-path-classifier.py
-      # The structure pin: the five extracted steps stay one invocation line and no advisory step
-      # escapes its folded-gate assertion. This job runs on every event, so the pin does too.
       - run: python3 scripts/ci/test-ci-structure-extraction.py
 
       # Runs here because the manual matrix lives in `browser/README.md`: a README-only pull request

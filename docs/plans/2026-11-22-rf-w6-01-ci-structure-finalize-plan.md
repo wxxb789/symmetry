@@ -68,6 +68,14 @@ The five programs are the base bodies, byte-identical, plus these enumerated del
    runner-injected `exit $LASTEXITCODE` the base step had (reviewer P1-1). `variable:/LASTEXITCODE`
    is absent in a fresh `-File` process, which the guard handles; that is the runner's own
    mechanism, not a new one.
+4. The registry read the conductor amendment of 2026-11-22 (review R1) authorizes:
+   `pi-windows-postgres-loopback.ps1` reads each discovered `Installations\*` key's optional
+   `Base Directory` value through `$properties.PSObject.Properties['Base Directory']` with a
+   two-line why-comment, so a key without the value is skipped exactly as at base while
+   `Set-StrictMode -Version Latest` stays on. The implement revision's direct
+   `$properties.'Base Directory'` read threw `PropertyNotFoundException` for such a key
+   (reproduced with pwsh 7.7.0); the pin's `check_registry_key_without_base_directory` case runs
+   the shimmed discovery green and reddens the direct read (the second amendment's P2-1).
 
 Per-native-call propagation (reconcile P1) is already present in the moved bytes and is **not**
 re-written: `pi-windows-postgres-loopback.ps1` checks each of its four native families
@@ -78,7 +86,8 @@ on non-zero; `pi-windows-cleanup-evidence.ps1` calls no native command. The audi
 Move proof (machine-checked, judging artifact): `extract_bodies.py` reads
 `git show <base>:.github/workflows/ci.yml`, locates each step by name, dedents the block scalar by
 its own indentation and writes the body to the program path; the base-vs-HEAD diff per program is
-the artifact. Bash programs: empty diff. PowerShell programs: exactly deltas 2 and 3. Mutation (a):
+the artifact. Bash programs: empty diff. PowerShell programs: exactly deltas 2 and 3, plus delta 4
+in `pi-windows-postgres-loopback.ps1`. Mutation (a):
 one character flipped inside a program → the proof reddens.
 
 ## Change 2 — one composite action for the duplicated `contracts` job
@@ -93,6 +102,11 @@ today, in base order: `Check lockfile registry provenance`, `pnpm install --froz
 (fix r1; see the residual-risks bullet): an unguarded `uses:` call step is skipped when an earlier
 caller step fails and an `if: always()` inside the action cannot revive it, so hoisting that one
 step preserves the base reachability while the other eleven keep their dedup.
+
+The caller's step order changes as a result: base ran `Check lockfile registry provenance`, then
+the advisory audit, then the install; HEAD runs the advisory audit first, with the provenance check
+staying before the install inside the action. The swap is inert — the audit never read the
+provenance result, and its `if: always()` keeps it reachable either way (review P3-3 record).
 
 Both call sites keep their own `checkout`, `pnpm/action-setup`, `setup-node`, job name, `needs`,
 `if` and `runs-on`; the step list after those becomes `uses: ./.github/actions/contracts-build` with
@@ -202,11 +216,14 @@ follow-up of merged `goal-rf-w3-16-scripts-defects`, moved by this increment fro
 into `docs/archive/CLOSED-TODO.md`, whose closure paragraph this change records — is closed here
 because this slice owns the wave-6 `ci.yml`: the `daemon` job's `Check CI gate helper scripts` step gains
 `env: SYMMETRY_REQUIRE_PYYAML: "1"` and, before its suites,
-`python3 -m pip install --user --break-system-packages --quiet 'PyYAML==6.0.3'` followed by a
-`test` on `yaml.__version__`, so a lost or drifted install reddens the job instead of silently
-shrinking the oracle. `--break-system-packages` is required on the ubuntu runner's PEP 668
-externally-managed Python; the alternative (a venv, or apt's unpinned PyYAML) is recorded in
-"Ambiguities". The suite-side switch was verified locally (host PyYAML 6.0.3).
+`pyyaml_version='6.0.3'`, `python3 -m pip install --user --break-system-packages
+--disable-pip-version-check --quiet "PyYAML==$pyyaml_version"` and a `test` on `yaml.__version__`,
+so a lost or drifted install reddens the job instead of silently shrinking the oracle.
+`--break-system-packages` is required on the ubuntu runner's PEP 668 externally-managed Python;
+the alternative (a venv, or apt's unpinned PyYAML) is recorded in "Ambiguities". The suite-side
+switch was verified locally (host PyYAML 6.0.3). The conductor amendment of 2026-11-22 (PR #237
+review round 1, P2-3) ratifies this hunk and the matching `docs/design/quality.md` gate-table
+change into the owned set.
 
 ## Frozen surfaces and the base→HEAD key audit
 
@@ -217,7 +234,7 @@ the HEAD program side by side, not from memory:
 | --- | --- | --- | --- | --- |
 | compose smoke | `name`, `shell` | same + explicit `working-directory` (repo root) | `trap cleanup EXIT` (prints both stacks, tears both down, removes temp dir, re-exits with `status`), `|| true` on every teardown command, explicit `exit 1` guards, `set +e` around the websocket probe | byte-identical in `compose-stack-smoke.sh` |
 | pidfd | `name`, `id`, `if: always()`, `shell` | same + explicit `working-directory: control` | `set -Eeuo pipefail`, Python child's `finally` cleanup + non-zero `run_cleanup()` assertions, `sys.exit` via uncaught `RuntimeError` | byte-identical in `verify-linux-pi-pidfd-cleanup.sh` |
-| Windows postgres | `name`, `id`, `shell` | same + explicit `working-directory: control` | `try/catch` that writes `postgres_status=unavailable` and rethrows; per-native status checks (`$versionStatus`, `$initStatus`, `$startStatus`, `$createStatus`); `::error::` annotation | byte-identical + StrictMode prologue + terminal epilogue |
+| Windows postgres | `name`, `id`, `shell` | same + explicit `working-directory: control` | `try/catch` that writes `postgres_status=unavailable` and rethrows; per-native status checks (`$versionStatus`, `$initStatus`, `$startStatus`, `$createStatus`); `::error::` annotation | byte-identical + StrictMode prologue + terminal epilogue + the R1 registry read (delta 4) |
 | Windows cleanup evidence | `name`, `if: always()`, `shell`, `env` | same + explicit `working-directory: control` | `$cleanupFailed` accumulation, `exit 1`, `continue` on an unreadable marker | byte-identical + StrictMode prologue + terminal epilogue |
 | daemon recovery | `name`, `working-directory`, `shell`, `env` | same | `trap cleanup EXIT` (kills the restarter with `|| true` on both the `kill` and the `wait`, prints the control log with `|| true` on the `cat`, re-exits with `status`), `set +e`/`set -e` around the gate and the restarter wait, explicit `exit` of the first failing status | byte-identical in `daemon-recovery-after-control-restart.sh` |
 
@@ -228,7 +245,8 @@ hunk.
 
 ## Tests added
 
-- `scripts/ci/test-ci-structure-extraction.py` — the pin above (checks 1-6), wired into
+- `scripts/ci/test-ci-structure-extraction.py` — the pin above (checks 1-6) plus the R1
+  missing-`Base Directory` registry case (green) and its direct-read mutant (red), wired into
   `legacy-route-audit`.
 - No test pins a clause this slice does not implement; no existing test is renamed, weakened or
   deleted.
@@ -295,13 +313,14 @@ text itself as the guard.
    this plan file plus the stage report, following rf-w5-01/rf-w3-01. Conductor can rule otherwise.
 7. **Two TODO entries point at W6-01.** The ruff entry is in the contract; the PyYAML entry is not,
    but a merged contract (`rf-w3-16`) name W6-01 as its owner and its fix is a `ci.yml` edit only the
-   wave-6 owner can land. Dropping it would be a silent scope narrowing. Taken: implement both.
+   wave-6 owner can land. Dropping it would be a silent scope narrowing. Taken: implement both,
+   ratified after the fact by the conductor amendment of 2026-11-22 (PR #237 review round 1, P2-3).
 
 ## Design trade-offs
 
 - **Move verbatim vs tidy the bodies.** The bodies keep their exact bytes, including their existing
   inline comments, because the empty-diff proof is the contract's primary control-flow artifact;
-  the three deltas above are the entire authored diff inside a program.
+  the four deltas above are the entire authored diff inside a program.
 - **One action vs a reusable workflow.** A composite action keeps the callers' job graph (needs/if/
   runs-on/environment) unchanged and needs no `secrets`/`permissions` re-declaration; a reusable
   workflow would move the jobs and change job names.
@@ -435,7 +454,7 @@ ruff, actionlint and shellcheck rows above it:
 | `cd daemon && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOFLAGS=-mod=readonly go vet ../scripts/ci/linux-v2-host-peer-probe.go` | **exit 0** |
 | `python3 scripts/ci/assert-browser-suite-coverage.py` | **exit 0**, `suites=16 wired=7 manual=9 unclassified=0`, `PASS` |
 | `git diff --check` (base and `origin/main` ranges) | **exit 0** both |
-| host-path scans over the range (user-profile path segments, drive-letter user paths, `\u` escapes) | 0 matches |
+| host-path scans over the range (user-profile path segments, drive-letter user paths, backslash-u escapes) | 0 matches |
 
 Fix-stage mutation probes (each reproduces a review finding's bypass): against the frozen
 implement-revision checkers the dash-first `continue-on-error: true` step head, the commented-out
@@ -445,9 +464,62 @@ name); the fix r1 checkers redden every one of them, in-suite and via these prob
 apply-revision md5s in the mutation-record table above bind that revision: fix r1 changed those
 bytes.
 
-Counts after fix r1: `ci.yml` 1,831 → 1,847, `.github/actions/contracts-build/action.yml` 73 → 52,
+Counts after fix r1 (revision `1e3e3696`; the review pass below supersedes them): `ci.yml`
+1,831 → 1,847, `.github/actions/contracts-build/action.yml` 73 → 52,
 `linux-native-v2-acceptance.yml` 175 → 173, `pi-windows-postgres-loopback.ps1` 181 → 188, the pin
 647 → 785.
+
+## Review-fix refresh (PR #237 independent review round 1, 2026-11-22)
+
+The independent adversarial review of PR #237 (head `1e3e3696`) raised P1-1, P2-1..P2-3 and four
+P3s; this pass closes all of them inside the owned set. Changed surfaces: this plan, the structure
+pin, `ci.yml` and `linux-native-v2-acceptance.yml` (comment strips), `.github/dependabot.yml` and
+`docs/TODO.md`. P2-3's two self-authorized hunks (the pinned PyYAML step and the matching
+`docs/design/quality.md` gate table) are ratified by the conductor amendment of 2026-11-22, recorded
+in Change 8 and Ambiguity 7. `linux-native-v2-acceptance.yml` is W5-02's claimed file; this edit is
+legal only while the D3 deferral blocks W5-02.
+
+- **P1-1.** The fix-stage row's own literal escape text was the range's single backslash-u match, so
+  its "0 matches" record was false and the literal violated the program-wide rule. The row now
+  spells the escape in words; the scan over this revision reports 0 matches.
+- **P2-1.** `check_registry_key_without_base_directory` runs the shipped program under the review's
+  pwsh shim (`Get-Item`/`Get-ItemProperty` return one `Installations` key without `Base Directory`)
+  with temp `PI_E2E_LOG`/`PI_E2E_PROVENANCE`/`GITHUB_OUTPUT`/`GITHUB_ENV` and `PGBIN`/
+  `POSTGRES_PORT` unset, and requires the provenance to carry `postgres_candidate_bins=` and not
+  `cannot be found on this object`. The green case lives in `FailClosedPowerShellTests`, the mutant
+  case (the R1 block replaced by the direct read) in `MutationTests`; both skip without pwsh. The
+  isolated mutant run fails with `the key without Base Directory aborted the discovery run:
+  "postgres_status=unavailable; Windows PostgreSQL preflight failed: The property 'Base Directory'
+  cannot be found on this object. Verify that the property exists."` while the shipped read passes
+  the same case.
+- **P2-2.** The PR body is regenerated from this revision: the R1 delta and its conductor
+  authorization, the pin's 23 tests, the final line counts, the four artifact-consuming jobs with
+  their CI conclusions from run `44983763823`, the W5-02 ownership note, the R2 ruling and the P2-3
+  ratification.
+- **P2-3.** Ratified by the conductor amendment (Change 8, Ambiguity 7); the review's authority
+  finding is closed by that record.
+- **P3-1.** Stripped: the structure-pin banner in `ci.yml`, the acceptance `contracts` comment (the
+  base's three lines and the fix-stage four-line rewrite → one why-line), the dependabot list-form
+  claim, and the pin's module docstring and what-docstrings. The pin's sha256 why-comment and the
+  caller advisory comment stay.
+- **P3-2.** The `docs/TODO.md` W2-01-pointer entry now targets the CLOSED-TODO section and records
+  the resolution; the entry stays open as the misstatement record.
+- **P3-3.** The caller-order swap is recorded in Change 2; the pin does not freeze the order (the
+  review's mutation stayed green there), so this record is the control.
+
+| Command | Result |
+| --- | --- |
+| `python3 scripts/ci/test-ci-structure-extraction.py` | **exit 0**, `Ran 23 tests in 30.035s`, `OK` |
+| the direct-read mutant against the registry case (isolated) | **AssertionError**: the discovery aborted before `postgres_candidate_bins=` (`…The property 'Base Directory' cannot be found on this object…`); the shipped read passes the same case |
+| `python3 scripts/ci/test-assert-folded-gates.py` | **exit 0**, `Ran 6 tests in 2.075s`, `OK` |
+| `python3 scripts/ci/assert-folded-gates.py --help` | **exit 0** |
+| `python3 scripts/ci/test-ci-changed-path-classifier.py` | **exit 0**, `Ran 31 tests in 69.685s`, `OK` |
+| ruff 0.17.5 `check` / `format --check`, the pin | **exit 0** / **exit 0** (`All checks passed!` / `1 file already formatted`) |
+| actionlint 1.7.12 `-shellcheck= -pyflakes=`, the two touched workflows | **exit 0**, 0 findings |
+| `git diff --check origin/main` | **exit 0** |
+| backslash-u scan over the range | 0 matches (worktree range; re-run on the committed range before the push) |
+| user-profile / drive-letter-`Users` / `/mnt` path scans over the range | 0 matches |
+| `python scripts/ci/check-record-cleanliness.py --base <merge-base> --head <commit>` | **exit 0** at `1e3e3696` (`no record added or modified … nothing to check`); the fix range adds no `docs/evaluations`/`docs/evidence` record |
 
 ## Mutation records (all on the real files, restored and md5-verified)
 
@@ -458,30 +530,33 @@ Counts after fix r1: `ci.yml` 1,831 → 1,847, `.github/actions/contracts-build/
 | (c) `ci.yml`: the compose step's one-line body replaced by a 60-line inline block | pin **exit 1**, `FAILED (failures=2)`; `AssertionError: scripts/ci/compose-stack-smoke.sh: the step keys changed: {… 'run': '\|'} != {… 'run': 'bash scripts/ci/compose-stack-smoke.sh'}`; restored md5 `8ed1e9743ca3a2b8e753738c00f479ff` |
 | (d) the fail-closed fixture without its propagation line (in-suite, `FailClosedPowerShellTests`) | `pwsh -NoProfile -File` exits **0** on a failing native child; with the line it exits **7** — the reviewer P1-1 hazard and its closure in one run |
 | browser gate: `const unusedProbe = 1;` appended to `browser/tests/readable-fixtures.mjs` | eslint **exit 1**, `'unusedProbe' is assigned a value but never used`; restored |
-| in-suite mutations (`MutationTests`) | the YAML/action mutations redden the same checkers the tests call; the folded-gate positive control (an advisory flag on a step already named in its job's `assert-folded-gates.py` array) stays green; fix r1 added six (dash-first advisory step head, commented-out gate member, narrowed caller advisory `if:`, flipped release-upload `if:`, 81-line anonymous body, shortened program) and `FailClosedPowerShellTests` now runs the pinned epilogue text itself |
+| in-suite mutations (`MutationTests`) | the YAML/action mutations redden the same checkers the tests call; the folded-gate positive control (an advisory flag on a step already named in its job's `assert-folded-gates.py` array) stays green; fix r1 added six (dash-first advisory step head, commented-out gate member, narrowed caller advisory `if:`, flipped release-upload `if:`, 81-line anonymous body, shortened program) and `FailClosedPowerShellTests` now runs the pinned epilogue text itself; the review pass added the direct-read registry mutant |
 
 ## dLOC (report-only, D2)
 
-`ci.yml` 2,642 → **1,847** lines (net −795; `+25/−820`): −783 the five extractions (−200 compose,
+`ci.yml` 2,642 → **1,845** lines (net −797; `+23/−820`): −783 the five extractions (−200 compose,
 −178 pidfd, −93 daemon recovery, −88 postgres, −224 cleanup) and −24 the `contracts` job's hunks —
 the absorbed step list becoming one `uses:` call and the `audit-prod` removal, net of the fix r1
-advisory-step return — against +12 the four reconcile-added steps (pin wiring 3, browser lint 2,
-peer-probe vet 2, PyYAML install 5). The draft's "≈1,780 (≤1,800)" assumed a larger action
-reduction than the measured contracts hunks and no reconcile additions; the re-derived number is
-1,847. `linux-native-v2-acceptance.yml` 181 → 173 (−8); `.github/actions/contracts-build/action.yml`
-**52** (75 at the implement revision, 73 after the apply stage shortened its description, minus the
-fix r1 removal of the advisory step and the dead `audit-prod` input); the five programs 801 lines
-(787 base + 7 authored prologue/epilogue lines at the implement revision + 7 the fix r1
-StrictMode-safe registry read); the pin 785 (637 at the implement revision, minus the dead constant
-and the unreachable fallback, plus the per-input pin and the apply-stage mutation, plus the fix r1
-conditions/comment/outcome/sha256 checks and their mutations); the browser flat config 18; modified
-tracked files `+122/−871` (`git diff --numstat` over the files present in both revisions) plus the
-new files.
+advisory-step return — against +10 the four reconcile-added steps (pin wiring 1, browser lint 2,
+peer-probe vet 2, PyYAML install 5), the review pass's two comment-line strips included. The
+draft's "≈1,780 (≤1,800)" assumed a larger action reduction than the measured contracts hunks and
+no reconcile additions; the re-derived number is 1,845. `linux-native-v2-acceptance.yml` 181 → 170
+(−11; the base's three-line `contracts` comment becomes the review pass's one why-line);
+`.github/actions/contracts-build/action.yml` **52** (75 at the implement revision, 73 after the
+apply stage shortened its description, minus the fix r1 removal of the advisory step and the dead
+`audit-prod` input); the five programs 801 lines (787 base + 7 authored prologue/epilogue lines at
+the implement revision + 7 the fix r1 StrictMode-safe registry read); the pin 848 (637 at the
+implement revision, minus the dead constant and the unreachable fallback, plus the per-input pin
+and the apply-stage mutation, plus the fix r1 conditions/comment/outcome/sha256 checks and their
+mutations, plus the review pass's R1 missing-value case and its mutant); the browser flat config
+18; modified tracked files `+123/−877` (`git diff --numstat` over the files present in both
+revisions) plus the new files.
 
 ## Simplification review
 
-- The five programs are the workflow's own bytes; nothing was reformatted, renamed or re-commented
-  inside them.
+- The five programs are the workflow's own bytes; the only authored deltas are the three shebangs,
+  the two StrictMode prologues, the two propagation epilogues and the conductor-authorized R1
+  registry read with its two-line why-comment.
 - The composite action replaces two hand-kept copies of one step list with one; the only added
   complexity is the two boolean inputs, which are what keeps the acceptance job's base semantics.
 - The pin is one text-parsing file with module-level checkers; the mutation tests call the same
@@ -500,7 +575,8 @@ new files.
   skips the key exactly like the base body while `Set-StrictMode` stays on. This host has no such
   key (discovery returned `postgres_candidate_bins=none`), so the present-value branch is still
   exercised only on the Windows runner; the `daemon-windows`-independent `pi-control-e2e-windows`
-  job is the oracle.
+  job is the oracle. The missing-value branch is machine-checked on any pwsh host by the pin's
+  registry case (green on the shipped read, red on the direct read, skipped without pwsh).
 - **The browser-lint measurement.** The corporate npm mirror cannot resolve
   `typescript-eslint@8.73.0`, which `frontend/package.json` pins, so no workspace install (and no
   pnpm lockfile regeneration) is possible in this environment; `registry.npmjs.org` is
@@ -525,6 +601,9 @@ new files.
   base keys and `if: always()`, and the pin freezes it (`check_caller_advisory_step` plus a
   narrowing mutation). The action keeps the other eleven steps and `build-control-release`;
   `audit-prod` is gone because no step read it any more. Composite-action step gating is exercised
-  only by CI.
+  only by CI. The conductor's R2 ruling accepted the implement revision's narrowing instead (the
+  advisory audit needs the checkout, pnpm and Node setup it follows, so a failed setup could only
+  have recorded a failure of its own); fix r1's restoration is a superset of that ruling, so the
+  accepted D1 escalation is moot in the delivered bytes.
 - **CI-only checks.** The pinned ruff archive, the pinned PyYAML wheel, the composite action's step
   list, the artifact hand-off and the Windows-runner PostgreSQL discovery run only on the runner.

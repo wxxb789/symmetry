@@ -153,10 +153,7 @@ jobs:
             ${{ runner.temp }}/linux-v2-native-evidence-${{ github.run_id }}-${{ github.run_attempt }}/stale_journal_fence/*.json
             ${{ runner.temp }}/linux-v2-native-evidence-${{ github.run_id }}-${{ github.run_attempt }}/stale_journal_subject/*.json
 
-  # Prerequisite for the native acceptance job: the frontend/contracts build and
-  # its portal-assets upload, from the composite action ci.yml's contracts job also uses.
-  # The boolean input is false: this copy intentionally omits ci.yml's shared release
-  # producer (the native job builds its own release once).
+  # build-control-release is false: the native job builds its own release once.
   contracts:
     runs-on: ubuntu-latest
     steps:

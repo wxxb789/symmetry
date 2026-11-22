@@ -947,11 +947,12 @@ version pinned` section of `docs/archive/CLOSED-TODO.md`.
 - [ ] The merged W2-01 plan (`docs/plans/2026-11-21-rf-w2-01-ci-test-observability-plan.md:363`)
       misstates the run: it records the checks as run "with the pinned ruff 0.17.6", which
       `pyproject.toml:6` `required-version = "==0.17.5"` makes impossible (the config refuses any
-      other version, exit 2). The real conflict (`pyproject.toml` `==0.17.5` vs `ci.yml:1707`
-      `ruff_version='0.17.6'`) is already tracked above
-      (`## scripts/ci ruff baseline: drop the #137 exclude and keep the gate's ruff version pinned`,
-      `docs/TODO.md:901`); this entry only records the misstatement in the merged evidence plan
-      (found by the Opus review of PR #205).
+      other version, exit 2). The real conflict (`pyproject.toml` `==0.17.5` vs `ci.yml`'s
+      `ruff_version`) was resolved by rf-w6-01 (PR #237), which pinned the step to 0.17.5; that
+      tracked entry now lives under
+      `## scripts/ci ruff baseline: drop the #137 exclude and keep the gate's ruff version pinned`
+      in `docs/archive/CLOSED-TODO.md`. This entry only records the misstatement in the merged
+      evidence plan (found by the Opus review of PR #205).
 
 ## Harness shared-scaffolding deferrals (rf-w2-13, PR #155)
 
