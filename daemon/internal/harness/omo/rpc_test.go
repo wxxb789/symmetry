@@ -162,6 +162,25 @@ func TestDecoderRetainsTheBoundFailureAcrossCalls(t *testing.T) {
 	}
 }
 
+func TestDecoderZeroValueKeepsTheZeroBound(t *testing.T) {
+	var decoder Decoder
+	records, err := decoder.Feed([]byte("\n"))
+	if !errors.Is(err, ErrInvalidRecord) || err.Error() == boundErrorText || len(records) != 1 {
+		t.Fatalf("blank-line Feed() = %+v, %v; want the base decode error", records, err)
+	}
+	if err := decoder.Close(); !errors.Is(err, ErrInvalidRecord) {
+		t.Fatalf("Close after the decode failure error = %v, want the retained error", err)
+	}
+
+	var bounded Decoder
+	if _, err := bounded.Feed([]byte("123456789")); err == nil || err.Error() != boundErrorText {
+		t.Fatalf("zero-bound Feed() error = %v, want the bound error", err)
+	}
+	if err := bounded.Close(); err == nil || err.Error() != boundErrorText {
+		t.Fatalf("zero-bound Close() error = %v, want the retained bound error", err)
+	}
+}
+
 func TestProtocolGateRejectsBeforeSessionExposure(t *testing.T) {
 	for _, mutation := range []struct {
 		name, key string

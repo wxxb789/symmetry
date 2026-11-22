@@ -211,8 +211,12 @@ func NewDecoder(maxRecordBytes int) *Decoder {
 	if maxRecordBytes <= 0 {
 		maxRecordBytes = defaultMaxRecordBytes
 	}
-	return &Decoder{reader: linejson.New(linejson.Policy[Record]{
-		MaxBytes:    maxRecordBytes,
+	return &Decoder{reader: newReader(maxRecordBytes)}
+}
+
+func newReader(maxBytes int) *linejson.Decoder[Record] {
+	return linejson.New(linejson.Policy[Record]{
+		MaxBytes:    maxBytes,
 		CRAllowance: true,
 		TrimCR:      true,
 		SkipBlank:   true,
@@ -220,7 +224,7 @@ func NewDecoder(maxRecordBytes int) *Decoder {
 		TooLarge:    func() error { return ErrRecordTooLarge },
 		Incomplete:  func() error { return ErrIncompleteRecord },
 		Decode:      decodeRecord,
-	})}
+	})
 }
 
 // Feed decodes complete records without ever accumulating an unbounded chunk.
@@ -228,7 +232,7 @@ func (decoder *Decoder) Feed(chunk []byte) ([]Record, error) {
 	if decoder == nil {
 		return nil, errors.New("pi rpc decoder is nil")
 	}
-	return decoder.reader.Feed(chunk)
+	return decoder.readerOrZeroBound().Feed(chunk)
 }
 
 // Close rejects a non-empty unterminated suffix, even when it is valid JSON.
@@ -236,11 +240,20 @@ func (decoder *Decoder) Close() ([]Record, error) {
 	if decoder == nil {
 		return nil, errors.New("pi rpc decoder is nil")
 	}
-	sequence, pending, err := decoder.reader.Close()
+	sequence, pending, err := decoder.readerOrZeroBound().Close()
 	if pending == nil {
 		return nil, err
 	}
 	return []Record{{Sequence: sequence, Raw: pending, DecodeError: ErrIncompleteRecord}}, err
+}
+
+// readerOrZeroBound keeps a zero-value decoder framing with the base's zero
+// bound instead of dereferencing the nil reader.
+func (decoder *Decoder) readerOrZeroBound() *linejson.Decoder[Record] {
+	if decoder.reader == nil {
+		decoder.reader = newReader(0)
+	}
+	return decoder.reader
 }
 
 func decodeRecord(sequence uint64, line []byte) Record {

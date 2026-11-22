@@ -20,7 +20,7 @@ Non-test sources only; coordinates are at `de526861`.
 | --- | --- | --- | --- |
 | bounded-line framing loop (chunk/buffer scan, LF split, byte bound, blank policy, sequencing, close) | 4 | `pi/rpc.go:204-286`, `omo/rpc.go:100-156`, `claude/stream.go:88-149`, `codex/framing.go:59-117` | 1 implementation (`linejson.Decoder`), 4 thin wrappers |
 | `bytes.IndexByte(<bytes>, '\n')` line scan | 4 | same four blocks | 1 (`linejson/decoder.go`) |
-| max-byte bound check | 4 | `pi:231,237-240`, `omo:120-124`, `claude:112-114,119-121`, `codex:81-83,88-90` | 1 (`linejson.Decoder.Feed`), parameterised |
+| max-byte bound check | 4 | `pi:231,237-240`, `omo:125`, `claude:115,123`, `codex:84,92` | 1 (`linejson.Decoder.Feed`), parameterised |
 | trailing-CR detection before LF | 1 | `pi:238,281-286` | 1 (`linejson`), parameter `CRAllowance` + `TrimCR` |
 | close-with-buffer handling | 4 | `pi:258-273`, `omo:147-156`, `claude:137-149`, `codex:106-117` | 1 (`linejson.Decoder.Close`), the wrapper builds its own trailing record |
 
@@ -50,7 +50,8 @@ type Policy[R any] struct {
 	Fatal       func(record R) error         // record that must fail the stream; nil keeps records in-band
 }
 
-// New binds one policy. MaxBytes must be positive.
+// New binds one policy. A zero MaxBytes still frames: every non-empty line is
+// over bound unless the CR allowance admits it.
 func New[R any](policy Policy[R]) *Decoder[R]
 
 // Feed appends one transport chunk and returns the records it completed; on
@@ -79,6 +80,11 @@ Consumers after the change — no public signature changes, `NewDecoder`/`Feed`/
 `claude` and `codex` also set `ChunkFirst: true` (their bases buffer the whole chunk before the
 bound decides); `pi` and `omo` leave it false, so the bound is applied to each line before its
 bytes are copied.
+
+The policy is built by a per-adapter `newReader(maxBytes)` helper that `NewDecoder`/`NewFramer`
+call, and the `reader` field is built on demand: a zero-value wrapper (or framer) that never ran
+its constructor gets that same policy with `MaxBytes` 0, so it frames exactly as its base did
+instead of dereferencing a nil field (r2, §9.8).
 
 Import edges: `linejson` → `bytes` only; `pi`/`omo`/`claude`/`codex` → `linejson`; `codex` keeps its
 existing `harness` import (for `Frame.Event`). `claude` gains no import of the root package, and no
@@ -226,6 +232,9 @@ New test rows (contract-pinning, additive; no existing assertion is weakened or 
 - `claude/stream_test.go`, `codex/framing_test.go`: a record carrying `1e1000` must be accepted
   (`claude`: no `Event.DecodeError`; `codex`: an unverified-response diagnostic, not
   `malformed_json`), so adding non-finite rejection reddens the stream suites.
+- the r2 zero-value rows: `TestDecoderZeroValueKeepsTheZeroBound` in `pi`/`omo`/`claude`,
+  `TestFramerZeroValueKeepsTheZeroBound` in `codex` and `TestFeedZeroBoundAdmitsOnlyAnEmptyLine` in
+  the leaf pin the base's zero-bound framing for a zero-value decoder (mutation (i)).
 
 ## 7. Which moved strings are already asserted
 
@@ -292,6 +301,14 @@ New test rows (contract-pinning, additive; no existing assertion is weakened or 
    (P3-1). The review also exposed that no row pinned the *latch wiring*: one new row per wrapper
    (`pi`/`omo` retain the bound error across later `Feed`/`Close`; `claude`/`codex` resume from a
    fresh record), each shown red by its own mutant (mutations f1/f2).
+
+8. **Fix round r2 (2026-11-22, review reconcile).** The four findings of the frozen-increment
+   review are closed: the §1 count sentence is scoped to the four contract decoders with the
+   tree-wide residuals named (REV-01); a zero-value wrapper now frames with the base's zero bound
+   via `newReader(0)` on demand, pinned by four new adapter rows and mutation (i) (REV-02); the
+   evidence's aggregate hash is the reproducible committed delta
+   `git diff 166e3a05 4443791d -- daemon` (REV-03); the `decode*` and bound-check coordinates are
+   corrected (REV-04).
 
 ## 10. Files this slice writes
 

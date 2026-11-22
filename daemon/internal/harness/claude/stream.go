@@ -97,14 +97,18 @@ func NewDecoder(maxRecordBytes int) *Decoder {
 	if maxRecordBytes <= 0 {
 		maxRecordBytes = defaultMaxRecordBytes
 	}
-	return &Decoder{reader: linejson.New(linejson.Policy[Event]{
-		MaxBytes:   maxRecordBytes,
+	return &Decoder{reader: newReader(maxRecordBytes)}
+}
+
+func newReader(maxBytes int) *linejson.Decoder[Event] {
+	return linejson.New(linejson.Policy[Event]{
+		MaxBytes:   maxBytes,
 		SkipBlank:  true,
 		ChunkFirst: true,
 		TooLarge:   func() error { return ErrRecordTooLarge },
 		Incomplete: func() error { return ErrIncompleteRecord },
 		Decode:     decodeEvent,
-	})}
+	})
 }
 
 // Feed appends a native stdout chunk and returns each complete JSONL record.
@@ -114,7 +118,7 @@ func (decoder *Decoder) Feed(chunk []byte) ([]Event, error) {
 	if decoder == nil {
 		return nil, errors.New("Claude stream-json decoder is nil")
 	}
-	return decoder.reader.Feed(chunk)
+	return decoder.readerOrZeroBound().Feed(chunk)
 }
 
 // Close reports a non-whitespace partial record as an invalid event. Native
@@ -124,11 +128,20 @@ func (decoder *Decoder) Close() ([]Event, error) {
 	if decoder == nil {
 		return nil, errors.New("Claude stream-json decoder is nil")
 	}
-	sequence, pending, err := decoder.reader.Close()
+	sequence, pending, err := decoder.readerOrZeroBound().Close()
 	if pending == nil {
 		return nil, err
 	}
 	return []Event{invalidEvent(sequence, pending, ErrIncompleteRecord)}, err
+}
+
+// readerOrZeroBound keeps a zero-value decoder framing with the base's zero
+// bound instead of dereferencing the nil reader.
+func (decoder *Decoder) readerOrZeroBound() *linejson.Decoder[Event] {
+	if decoder.reader == nil {
+		decoder.reader = newReader(0)
+	}
+	return decoder.reader
 }
 
 func decodeEvent(sequence uint64, line []byte) Event {

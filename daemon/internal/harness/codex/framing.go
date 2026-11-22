@@ -66,14 +66,18 @@ func NewFramer(maxBytes int) *Framer {
 	if maxBytes <= 0 {
 		maxBytes = defaultMaxFrameBytes
 	}
-	return &Framer{reader: linejson.New(linejson.Policy[Frame]{
+	return &Framer{reader: newReader(maxBytes)}
+}
+
+func newReader(maxBytes int) *linejson.Decoder[Frame] {
+	return linejson.New(linejson.Policy[Frame]{
 		MaxBytes:   maxBytes,
 		SkipBlank:  true,
 		ChunkFirst: true,
 		TooLarge:   func() error { return ErrFrameTooLarge },
 		Incomplete: func() error { return ErrIncompleteFrame },
 		Decode:     decodeFrame,
-	})}
+	})
 }
 
 // Feed appends one process-output chunk and returns complete frames. Malformed
@@ -82,7 +86,7 @@ func (framer *Framer) Feed(chunk []byte) ([]Frame, error) {
 	if framer == nil {
 		return nil, errors.New("codex framer is nil")
 	}
-	return framer.reader.Feed(chunk)
+	return framer.readerOrZeroBound().Feed(chunk)
 }
 
 // Close flushes no partial frame. A non-whitespace suffix becomes a
@@ -91,11 +95,20 @@ func (framer *Framer) Close() ([]Frame, error) {
 	if framer == nil {
 		return nil, errors.New("codex framer is nil")
 	}
-	sequence, pending, err := framer.reader.Close()
+	sequence, pending, err := framer.readerOrZeroBound().Close()
 	if pending == nil {
 		return nil, err
 	}
 	return []Frame{decodeDiagnosticFrame(sequence, pending, "incomplete_frame", "stream ended before newline")}, err
+}
+
+// readerOrZeroBound keeps a zero-value framer framing with the base's zero
+// bound instead of dereferencing the nil reader.
+func (framer *Framer) readerOrZeroBound() *linejson.Decoder[Frame] {
+	if framer.reader == nil {
+		framer.reader = newReader(0)
+	}
+	return framer.reader
 }
 
 func decodeFrame(sequence uint64, line []byte) Frame {

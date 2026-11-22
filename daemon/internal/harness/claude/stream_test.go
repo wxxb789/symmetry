@@ -343,3 +343,16 @@ func TestDecoderKeepsNumbersBeyondFloat64Range(t *testing.T) {
 		t.Fatalf("usage = %s, want the raw number", events[0].Result.Usage)
 	}
 }
+
+func TestDecoderZeroValueKeepsTheZeroBound(t *testing.T) {
+	var decoder Decoder
+	if events, err := decoder.Feed([]byte("\n")); err != nil || len(events) != 0 {
+		t.Fatalf("blank Feed() = %#v, %v; want the base blank-line skip", events, err)
+	}
+	if _, err := decoder.Feed([]byte("123456789")); !errors.Is(err, ErrRecordTooLarge) {
+		t.Fatalf("zero-bound Feed() error = %v, want ErrRecordTooLarge", err)
+	}
+	if events, err := decoder.Close(); err != nil || len(events) != 0 {
+		t.Fatalf("zero-bound Close() = %#v, %v; want the base clean close", events, err)
+	}
+}

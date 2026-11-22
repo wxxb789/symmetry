@@ -106,23 +106,36 @@ func NewDecoder(limit int) *Decoder {
 	if limit <= 0 {
 		limit = defaultMaxRecordBytes
 	}
-	return &Decoder{reader: linejson.New(linejson.Policy[Record]{
+	return &Decoder{reader: newReader(limit)}
+}
+
+func newReader(limit int) *linejson.Decoder[Record] {
+	return linejson.New(linejson.Policy[Record]{
 		MaxBytes:   limit,
 		Latch:      true,
 		TooLarge:   func() error { return fmt.Errorf("%w: JSONL record exceeds limit", ErrInvalidRecord) },
 		Incomplete: func() error { return fmt.Errorf("%w: unterminated JSONL record", ErrInvalidRecord) },
 		Decode:     decodeRecord,
 		Fatal:      func(record Record) error { return record.DecodeError },
-	})}
+	})
 }
 
 func (decoder *Decoder) Feed(chunk []byte) ([]Record, error) {
-	return decoder.reader.Feed(chunk)
+	return decoder.readerOrZeroBound().Feed(chunk)
 }
 
 func (decoder *Decoder) Close() error {
-	_, _, err := decoder.reader.Close()
+	_, _, err := decoder.readerOrZeroBound().Close()
 	return err
+}
+
+// readerOrZeroBound keeps a zero-value decoder framing with the base's zero
+// bound instead of dereferencing the nil reader.
+func (decoder *Decoder) readerOrZeroBound() *linejson.Decoder[Record] {
+	if decoder.reader == nil {
+		decoder.reader = newReader(0)
+	}
+	return decoder.reader
 }
 
 func decodeRecord(sequence uint64, raw []byte) Record {

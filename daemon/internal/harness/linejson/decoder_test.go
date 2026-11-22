@@ -116,6 +116,14 @@ func TestFeedBoundAdmitsCRLFOnlyUnderTheAllowance(t *testing.T) {
 	}
 }
 
+func TestFeedZeroBoundAdmitsOnlyAnEmptyLine(t *testing.T) {
+	if _, err := New(policyFor(0)).Feed([]byte("x\n")); !errors.Is(err, errTooLarge) {
+		t.Fatalf("zero-bound Feed() error = %v, want errTooLarge", err)
+	}
+	records := feedLines(t, New(policyFor(0)), "\n")
+	wantLines(t, records, "1:")
+}
+
 func TestFeedBlankPolicySkipsOrDeliversLines(t *testing.T) {
 	skipping := policyFor(8)
 	skipping.SkipBlank = true

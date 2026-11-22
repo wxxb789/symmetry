@@ -54,7 +54,8 @@ type Decoder[R any] struct {
 	failed   error
 }
 
-// New binds one policy. MaxBytes must be positive.
+// New binds one policy. A zero MaxBytes still frames: every non-empty line is
+// over bound unless the CR allowance admits it.
 func New[R any](policy Policy[R]) *Decoder[R] {
 	return &Decoder[R]{policy: policy}
 }

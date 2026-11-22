@@ -296,6 +296,22 @@ func TestDecoderRetainsTheBoundFailureAcrossCalls(t *testing.T) {
 	}
 }
 
+func TestDecoderZeroValueKeepsTheZeroBound(t *testing.T) {
+	var decoder Decoder
+	if records, err := decoder.Feed([]byte("\r\n")); err != nil || len(records) != 0 {
+		t.Fatalf("blank CRLF Feed() = %#v, %v; want the base blank-line skip", records, err)
+	}
+	if _, err := decoder.Feed([]byte("123456789")); !errors.Is(err, ErrRecordTooLarge) {
+		t.Fatalf("zero-bound Feed() error = %v, want ErrRecordTooLarge", err)
+	}
+	if _, err := decoder.Feed(nil); !errors.Is(err, ErrRecordTooLarge) {
+		t.Fatalf("Feed after overflow error = %v, want the retained ErrRecordTooLarge", err)
+	}
+	if _, err := decoder.Close(); !errors.Is(err, ErrRecordTooLarge) {
+		t.Fatalf("zero-bound Close() error = %v, want the retained ErrRecordTooLarge", err)
+	}
+}
+
 func TestDecoderUsesLFOnlyAndPreservesUnicodeLineSeparators(t *testing.T) {
 	decoder := NewDecoder(1024)
 	chunk := []byte("{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":\"before\\u2028after\\u2029still one record\",\"stopReason\":\"stop\"}}\n")

@@ -125,6 +125,19 @@ func TestFramerAcceptsTheNextFrameAfterABoundFailure(t *testing.T) {
 	}
 }
 
+func TestFramerZeroValueKeepsTheZeroBound(t *testing.T) {
+	var framer Framer
+	if frames, err := framer.Feed([]byte("\n")); err != nil || len(frames) != 0 {
+		t.Fatalf("blank Feed() = %+v, %v; want the base blank-line skip", frames, err)
+	}
+	if _, err := framer.Feed([]byte("123456789")); !errors.Is(err, ErrFrameTooLarge) {
+		t.Fatalf("zero-bound Feed() error = %v, want ErrFrameTooLarge", err)
+	}
+	if frames, err := framer.Close(); err != nil || len(frames) != 0 {
+		t.Fatalf("zero-bound Close() = %+v, %v; want the base clean close", frames, err)
+	}
+}
+
 func TestFramerAllowsMissingAndRejectsUnsupportedJSONRPCVersion(t *testing.T) {
 	tests := []struct {
 		name           string
