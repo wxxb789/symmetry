@@ -16,11 +16,11 @@ the leaf, the `omo` bound-text const, the `Fatal`/`Latch` row) and the record ro
 at these bytes. A second report-only review then ran on the frozen `cca92284..4443791d` increment;
 its four findings (REV-01 count scoping, REV-02 zero-value parity, REV-03 aggregate-hash
 reproducibility, REV-04 anchor numbers) are fixed in the r2 bytes below, the zero-value arm was
-added to the differential harness (`Q:/tmp/w4-15a-fix2/zerodiff_test.go`, dumps beside it), and
+added to the differential harness (`<HOST-PATH>/tmp/w4-15a-fix2/zerodiff_test.go`, dumps beside it), and
 every measured row was re-measured here. Every number below was produced on the revision these
 hashes bind (the §9 rows
 (a1)–(g) name their pre-apply revision); the throwaway differential harness is kept at
-`Q:/tmp/w4-15a-diff/decoderdiff-dump_test.go` with its dumps beside it.
+`<HOST-PATH>/tmp/w4-15a-diff/decoderdiff-dump_test.go` with its dumps beside it.
 
 Subject hashes (this record binds exactly these bytes; every mutation run was reverted and the
 hashes re-verified afterwards):
@@ -185,7 +185,7 @@ policy, and `readerOrZeroBound`); no exported declaration or signature changed.
 ## 6. Differential corpus dump (base vs head)
 
 Throwaway harness `daemon/internal/harness/decoderdiff` (deleted from the tree after the run, kept
-at `Q:/tmp/w4-15a-diff/decoderdiff-dump_test.go`; a copy ran in a `git worktree` of `de526861`):
+at `<HOST-PATH>/tmp/w4-15a-diff/decoderdiff-dump_test.go`; a copy ran in a `git worktree` of `de526861`):
 for each of 864 cases it feeds one or more chunks to all four decoders, then `Close`, then a
 post-close `Feed("z\n")`, and writes every record (sequence, raw bytes, type/envelope fields,
 decode error text) and every error text.
@@ -266,9 +266,9 @@ does.
 ## 8. WSL Linux run
 
 `wsl -d Ubuntu-24.04 -u accept`, tree under test = this worktree
-(`/mnt/q/repos/wt-w4-15a-jsonl-decoder-leaf/symmetry/daemon`), re-run at the simplify-apply
+(`<WORKTREE>/daemon`), re-run at the simplify-apply
 revision. Whole-tree invocation `go test -count=1 -timeout 150s ./internal/harness/...` (log at
-`Q:/tmp/w4-15a-apply/scratch/wsl-tree-150.txt`; the 150 s package timeout bounds the loopback
+`<HOST-PATH>/tmp/w4-15a-apply/scratch/wsl-tree-150.txt`; the 150 s package timeout bounds the loopback
 stalls):
 
 | Package | Result |
@@ -289,7 +289,7 @@ timeout` lines (the r1 default-timeout run showed the same structure at `opencod
 
 Every failing test is loopback/IPC-dependent and cannot be caused by this slice: the distro cannot
 complete a loopback TCP connect at all (a `python3` bind/listen/connect probe on `127.0.0.1` times
-out on `connect`, `Q:/tmp/w4-15a-apply/scratch/loopback_probe.py`), the failing tests are HTTP
+out on `connect`, `<HOST-PATH>/tmp/w4-15a-apply/scratch/loopback_probe.py`), the failing tests are HTTP
 tests that never touch a decoder (`pi/provider_bridge_test.go`'s only `.Close()` /
 `json.NewDecoder` matches are HTTP bodies), and a representative failing pi test fails identically
 at the base revision in a `de526861` worktree in the same distro (`FAIL …/pi 150.227s`, the same
