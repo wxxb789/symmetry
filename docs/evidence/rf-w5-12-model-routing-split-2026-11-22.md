@@ -17,22 +17,24 @@ dispatch HEAD: `refactor(ci): one source-subject implementation with named varia
 
 | file | status | lines | sha256 |
 | --- | --- | ---: | --- |
-| `scripts/ci/model-routing-evaluation.py` | rewritten entry | 4,199 → 761 | `4a4cff24bd316ab4326b7fc4b062679e337b23cb5eb8022a809c4acf74478fc3` |
+| `scripts/ci/model-routing-evaluation.py` | rewritten entry | 4,199 → 797 | `0936e51e05a2e2bc73f4a9eadc4717693360c36fc36a827d45af97fd3d0437fb` |
 | `scripts/ci/model_routing_records.py` | new | 1,236 | `f80a835ce3d7e04d944d684d2b658a137ca6ffe2da078cc27bc7c36658d72642` |
 | `scripts/ci/model_routing_subject.py` | new | 539 | `e18dadb062d7590d80ba040db4e05f3e0173d876652097f6319c2613017edce8` |
 | `scripts/ci/model_routing_gates.py` | new | 1,119 | `f84c93b79039e15cdae8f3b48a87bd44a4a196b1dcb763e4b1c3f223aa22d20f` |
 | `scripts/ci/model_routing_receipts.py` | new | 699 | `37d8b351212ec44db7819405b39ca8196ea97cf1bd9edd5a6a6dd41d54f825eb` |
-| `scripts/ci/test-model-routing-evaluation.py` | edited (repoints + one pin test) | 3,748 → 3,788 | `8231d8d66c59fc11be7a2e99f217ef902addf8cdf5119e7ed9be0e45047a2777` |
+| `scripts/ci/test-model-routing-evaluation.py` | edited (repoints + the tooling pins) | 3,748 → 3,875 | `0f48ac81d87f57d55cd1aa08e72388f48b0bd684625c2e48997a399470aedaae` |
 | `scripts/ci/test-model-routing-omp-usage.py` | edited (loaders + constant reads repointed to the defining module) | 1,286 → 1,288 | `1e9876686d77d2addd70c64d4fc94536013cc53c2fafdaf914da028f252151f5` |
 | `scripts/ci/model-routing-omp-usage.py` | edited (copy comment names `model_routing_records.py`) | 738 → 738 | `eb331a2138e7d06cea92d97ba3049bb3602a323c0ecadf83e62776ac6afe60f5` |
 | `scripts/ci/model-routing-source-subject.py` | edited (`DELIVERED_TOOL_PATHS` + docstring) | 71 → 75 | `6312f154a2ed97e9111ba9e56a0c46802ec4817a569e5c8881ae7c58c1ad6648` |
-| `scripts/ci/test-model-routing-source-subject.py` | edited (new pin test) | 130 → 147 | `845fa4215d9a427d4fc675d2b57d13d923a312c092b51c4797f3bc0a9530383f` |
-| `docs/plans/2026-11-22-rf-w5-12-model-routing-split-plan.md` | new | 270 | `d48269334ee49f21d204807ae825b4d38502aadb315af7129b5bd8dbc34ad52f` |
+| `scripts/ci/test-model-routing-source-subject.py` | edited (new pin test + closure arm) | 130 → 170 | `c8601b4609f67c6b5bd40f8c666a58544f345789ebeb08dc3d42a3ac8fbed374` |
+| `docs/plans/2026-11-22-rf-w5-12-model-routing-split-plan.md` | new | 312 | `b0df8b9b18ae351aa53268e76b45ea2cb9441886258bdadc7bc3d052d48e2ccd` |
 | `docs/evidence/rf-w5-12-model-routing-split-2026-11-22.md` | new | this record | — |
 
 Counts and digests are measured on the delivered revision after the accepted simplify findings were
 applied (S1-S3): `model_routing_records.py`, the two suites and the plan carry their
 post-simplification figures, and `model-routing-omp-usage.py` gains the row the earlier table lost.
+The rows Review fix r1 (§10) changed carry their post-fix figures (the entry, the evaluation suite,
+the source-subject suite, the plan); every other row is unchanged by the fix.
 
 Untouched: `.github/workflows/**` (the "Check auditable model-routing workflow" step at
 `.github/workflows/ci.yml:1078-1090` still runs the same six suite paths),
@@ -48,8 +50,9 @@ by `check.py`, which re-derives every unit from the git-bound base revision and 
 - `base top-level units: 215`; `delivered units: identical 214, patched 1` (per-module:
   records 111, gates 50, subject 27, receipts 15 + 1 patched, entry 11).
 - every base top-level unit is delivered exactly once; nothing added except the four import
-  headers, the `ENTRY_SCRIPT`/`SPLIT_SCRIPTS` constants (checked by content) and the authored
-  comment lines the plan records.
+  headers, the `ENTRY_SCRIPT`/`SPLIT_SCRIPTS` constants (checked by content), the authored
+  comment lines the plan records, and — after Review fix r1 (§10) — the entry's startup statements
+  (the `sys.path` insert, the binding guard and the cache check).
 - every global name referenced by a delivered module resolves (own defs/constants, its imports,
   stdlib, `__file__`, builtins).
 - the entry's module docstring is byte-identical to base; the `prog` string and the seven
@@ -200,7 +203,7 @@ on the apply-stage revision and reproduced the same four reds; raw logs
 | # | mutation | command | exit | observed red |
 | --- | --- | --- | ---: | --- |
 | a | `model_routing_gates.py:212` `return "the derived vitest run timed out"` → `pass` | `python3 scripts/ci/test-model-routing-evaluation.py EvaluationTests.test_vitest_report_refusal_coverage_is_derived` | 1 | printed `16 returns … 1 unreached`; `AssertionError: Lists differ` on the uncovered-shape list — the AST walk reads the moved module |
-| b | `model_routing_records.py:39` `re.IGNORECASE` → `re.IGNORECASE \| re.MULTILINE` | `python3 scripts/ci/test-model-routing-omp-usage.py OmpUsageExtractionTest.test_shared_constants_match_the_runner` | 1 | `AssertionError: 34 != 42` (flags) at `test-model-routing-omp-usage.py:329` |
+| b | `model_routing_records.py:39` `re.IGNORECASE` → `re.IGNORECASE \| re.MULTILINE` | `python3 scripts/ci/test-model-routing-omp-usage.py OmpUsageExtractionTest.test_shared_constants_match_the_runner` | 1 | `AssertionError: 34 != 42` (flags) at `test-model-routing-omp-usage.py:323` |
 | c | `model-routing-source-subject.py` `DELIVERED_TOOL_PATHS` loses `scripts/ci/model_routing_subject.py` | `python3 scripts/ci/test-model-routing-source-subject.py SourceSubjectTests.test_delivered_tool_paths_cover_the_whole_evaluation_tool_set` | 1 | tuple diff names the missing element |
 | d | `model_routing_receipts.py` `SPLIT_SCRIPTS` loses `"model_routing_receipts.py"` | `python3 scripts/ci/test-model-routing-evaluation.py EvaluationTests.test_receipt_binds_every_tooling_source` | 1 | `Items in the second set but not the first: 'model_routing_receipts.py'` |
 
@@ -236,4 +239,62 @@ figures printed after the split carry the gates module's line numbers; the base 
 2044) stay historical as the plan records. The entry now imports its four sibling modules, so an
 incomplete copy of the tool set (one that carries the entry but not the modules) fails at import
 time instead of running — both materialization lists in the suite carry the full set, CI runs the
-files in place, and the `tooling_sources` pin binds the whole set.
+files in place, and the `tooling_sources` pin binds the whole set. After Review fix r1 (§10), such
+an incomplete copy refuses with the tool's stderr shape whenever an ambient module path answers for
+the missing siblings, and a bytecode cache that no longer matches its source refuses before any
+command runs.
+
+## 10. Review fix r1 (2026-11-22)
+
+The code review of `7f34d40d..8c295b5f` returned `MUST_FIX (4)` (F1-F4; F5/F6 advisory) with four
+reproduced findings. All six are fixed inside the owned set — the plan's "Review fix r1" section
+names each change. Files changed vs the reviewed revision:
+`scripts/ci/model-routing-evaluation.py` (F1/F2: the `sys.path` insert, the `tooling_binding_problem`
+guard, `executed_matches_source`), `scripts/ci/test-model-routing-evaluation.py` (three regression
+pins, the receipt pin's closure arm, the F6 comment removed),
+`scripts/ci/test-model-routing-source-subject.py` (closure arm), the plan (F3 + the fix record) and
+this record (F4 + the re-measured §1 rows). `model_routing_records.py`,
+`model_routing_subject.py`, `model_routing_gates.py` and `model_routing_receipts.py` are
+byte-identical to the reviewed revision (their §1 digests assert it). No workflow, `pyproject.toml`
+or `citest.py` edit; no new suppression.
+
+Gates re-run in the foreground on the fix revision (host interpreter `python` 3.12.10; the
+byte-diff harness invokes `python3`, the same build):
+
+| gate | command | exit | result |
+| --- | --- | ---: | --- |
+| new/updated pins | `python scripts/ci/test-model-routing-evaluation.py EvaluationTests.test_receipt_binds_every_tooling_source EvaluationTests.test_an_ambient_module_path_cannot_rebind_a_tool_copy EvaluationTests.test_an_incomplete_tool_copy_refuses_before_evaluating EvaluationTests.test_a_stale_bytecode_cache_cannot_supply_the_executed_rules` | 0 | `Ran 4 tests in 45.800s` → `OK` |
+| regression pins | `python scripts/ci/test-model-routing-evaluation.py EvaluationTests.test_tooling_revision_change_invalidates_an_earlier_receipt EvaluationTests.test_every_broken_sanitize_sibling_refuses_instead_of_raising EvaluationTests.test_measured_redaction_keeps_urls_literal EvaluationTests.test_redacted_values_bind_the_sanitize_tool_that_rendered_them EvaluationTests.test_positive_flow_accepts_exact_derived_receipt EvaluationTests.test_vitest_report_refusal_coverage_is_derived` | 0 | `Ran 6 tests in 167.121s` → `OK`; printed `17 returns, 15 reached …, 2 unreached` (gates lines 212/241) |
+| source-subject suite | `python scripts/ci/test-model-routing-source-subject.py` | 0 | `Ran 8 tests in 1.490s` → `OK (skipped=1)` |
+| extractor suite | `python scripts/ci/test-model-routing-omp-usage.py` | 0 | `Ran 40 tests in 49.984s` → `OK` |
+| isolated-mode start | `python -I scripts/ci/model-routing-evaluation.py --help` | 0 | usage printed (reviewed revision: exit 1, `ModuleNotFoundError` — F1's reproduction) |
+| mixed-set refusal | entry-only copy in a temporary directory, `PYTHONSAFEPATH=1 PYTHONPATH=<repo>/scripts/ci`, `--help` | 1 | `model-routing-evaluation refused: the sibling modules did not resolve beside the entry: <repo>\\scripts\\ci` (the guard; no command ran) |
+| stale-cache refusal | materialized copy, `import model_routing_receipts` to build `__pycache__`, same-size `"run record"` → `"run ledger"` edit with the mtime restored (`st_mtime_ns`), then `receipt --run-dir missing-run --usage missing.json` | 1 | `model-routing-evaluation refused: model_routing_receipts.py was executed from bytecode that does not match its source`; the restored copy prints the pinned `cannot read run record at missing-run\\run.json` again |
+| CLI byte-diff | `bash <HOST-PATH>/.local/state/gdd/scratch/w5-12/cli-byte-diff.sh …/cli-fix` + `diff -r cli-before cli-fix` + `diff -r cli-apply cli-fix` | 0 | 21/21 files identical against both earlier runs; exit codes 0/2/1/1/1/1/1 |
+| ruff check | `python -m ruff check scripts/ci` | 0 | `All checks passed!` |
+| ruff format | `python -m ruff format --check scripts/ci` | 0 | `63 files already formatted` |
+| whitespace | `git diff --check` and `git diff --check origin/main` | 0 | clean |
+| host path / DLP | the brief's user-profile path scan and the DLP filter sequence scan over `git diff origin/main` | no match | no user-profile path, no DLP filter sequence, no profile name in the whole diff |
+
+Mutation checks (fix revision; every mutated file restored and its digest re-checked with
+`sha256sum -c` against the pre-mutation digests — all `OK`):
+
+| # | mutation | command | exit | observed red |
+| --- | --- | --- | ---: | --- |
+| a | `model_routing_gates.py:212` `return "the derived vitest run timed out"` → `pass` | `… test_vitest_report_refusal_coverage_is_derived` | 1 | `FAILED (failures=1)` (1.665 s) |
+| b | `model_routing_records.py:39` `re.IGNORECASE` → `re.IGNORECASE \| re.MULTILINE` | `python scripts/ci/test-model-routing-omp-usage.py OmpUsageExtractionTest.test_shared_constants_match_the_runner` | 1 | `FAILED (failures=1)` (0.138 s) |
+| c | `model-routing-source-subject.py` `DELIVERED_TOOL_PATHS` loses `scripts/ci/model_routing_subject.py` | `… test_delivered_tool_paths_cover_the_whole_evaluation_tool_set` | 1 | `FAILED (failures=1)`; the assertion diff names the missing element |
+| d | `model_routing_receipts.py` `SPLIT_SCRIPTS` loses `"model_routing_receipts.py"` | `… test_receipt_binds_every_tooling_source` | 1 | `FAILED (failures=1)`; the assertion diff shows `'model_routing_receipts.py'` |
+| e | the entry's `sys.path.insert` line deleted | `… test_an_ambient_module_path_cannot_rebind_a_tool_copy` | 1 | `FAILED (errors=1)`; the pristine copy run was refused by the guard instead of accepting (`JSONDecodeError` on the non-JSON stdout) |
+| f | the entry's `_binding_problem` guard call deleted | `… test_an_incomplete_tool_copy_refuses_before_evaluating` | 1 | `FAILED (failures=1)`; the entry-only copy printed `--help` (exit 0) instead of refusing |
+| g | the entry's cache-check loop deleted | `… test_a_stale_bytecode_cache_cannot_supply_the_executed_rules` | 1 | `FAILED (failures=1)`; `AssertionError: 'model_routing_receipts.py was executed from bytecode' not found in "model-routing-evaluation refused: cannot read run record at missing-run\\run.json…"` — the stale cache served the rules (F2's reproduction) |
+
+The fix-revision gate numbers were taken before the mutation runs; every mutated file was restored
+byte-identically afterwards (`sha256sum -c` shows all five files `OK`, and `git status` shows only
+the five intended modifications), so the green rows above describe the same bytes as this record.
+
+Not re-run here: the full main suite — the conductor-owned phase-5 gate (the apply-stage run took
+3,023.6 s; the fix brief excludes conductor-owned full suites). The suite's test count moves
+81 → 84 (three new pins), verified with `grep -c "    def test_"` on the delivered bytes and by the
+`Ran 4`/`Ran 6` targeted runs above; both targeted runs cover every test the fix touches, and the
+byte-diff plus the two other suites ran complete.

@@ -6,6 +6,7 @@ binding, that the digest carries no host-specific input, and that a change insid
 declared exclusion cannot move it while a change to bound bytes always does.
 """
 
+import ast
 import hashlib
 import os
 import pathlib
@@ -16,10 +17,30 @@ import unittest
 import citest
 
 SCRIPT = pathlib.Path(__file__).with_name("model-routing-source-subject.py")
+RUNNER = SCRIPT.with_name("model-routing-evaluation.py")
 
 
 def load_tool():
     return citest.load_gate(SCRIPT, "model_routing_source_subject")
+
+
+def runner_module_closure() -> set[str]:
+    """Every `model_routing_*` module the evaluation entry imports, walked transitively."""
+    pending = [RUNNER]
+    collected: set[str] = set()
+    while pending:
+        for node in ast.walk(ast.parse(pending.pop().read_text(encoding="utf-8"))):
+            if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("model_routing_"):
+                names = [node.module]
+            elif isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names if alias.name.startswith("model_routing_")]
+            else:
+                continue
+            for name in names:
+                if name not in collected:
+                    collected.add(name)
+                    pending.append(RUNNER.with_name(f"{name}.py"))
+    return collected
 
 
 class SourceSubjectTests(unittest.TestCase):
@@ -138,6 +159,8 @@ class SourceSubjectTests(unittest.TestCase):
                 "scripts/ci/test-model-routing-evaluation.py",
             ),
         )
+        imported = {f"scripts/ci/{name}.py" for name in runner_module_closure()}
+        self.assertLessEqual(imported, set(tool.DELIVERED_TOOL_PATHS), imported - set(tool.DELIVERED_TOOL_PATHS))
         root = SCRIPT.resolve().parents[2]
         for relative in tool.DELIVERED_TOOL_PATHS:
             self.assertTrue((root / relative).is_file(), relative)

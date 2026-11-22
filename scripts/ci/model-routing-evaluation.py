@@ -115,6 +115,8 @@ import subprocess
 import sys
 from typing import Any
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+
 from model_routing_gates import (
     DEFAULT_TIMEOUT,
     SOURCE_CHANGED_SUFFIX,
@@ -125,6 +127,7 @@ from model_routing_gates import (
     verify_dependency_tree,
 )
 from model_routing_receipts import (
+    ENTRY_SCRIPT,
     attempt_names,
     derive_receipt,
     load_frozen_routes,
@@ -177,6 +180,39 @@ from model_routing_subject import (
     validate_changes,
     verify_base_commit,
 )
+
+_TOOL_DIRECTORY = pathlib.Path(__file__).resolve().parent
+_TOOL_MODULES = ("model_routing_gates", "model_routing_records", "model_routing_receipts", "model_routing_subject")
+
+
+def executed_matches_source(module: Any) -> bool:
+    cached = module.__spec__.cached
+    if cached is None or not pathlib.Path(cached).is_file():
+        return True
+    source = pathlib.Path(module.__file__)
+    if source.suffix != ".py":
+        return False
+    executed = module.__spec__.loader.get_code(module.__spec__.name)
+    return executed == compile(source.read_bytes(), module.__file__, "exec", dont_inherit=True)
+
+
+def tooling_binding_problem() -> str | None:
+    directories = sorted({str(pathlib.Path(sys.modules[name].__file__).resolve().parent) for name in _TOOL_MODULES})
+    if [str(_TOOL_DIRECTORY)] != directories:
+        return "the sibling modules did not resolve beside the entry: " + ", ".join(directories)
+    if pathlib.Path(__file__).resolve() != ENTRY_SCRIPT:
+        return f"the entry is {pathlib.Path(__file__).resolve()} but the receipt binds {ENTRY_SCRIPT}"
+    for name in _TOOL_MODULES:
+        module = sys.modules[name]
+        if not executed_matches_source(module):
+            return f"{pathlib.Path(module.__file__).name} was executed from bytecode that does not match its source"
+    return None
+
+
+_binding_problem = tooling_binding_problem()
+if _binding_problem is not None:
+    print(f"model-routing-evaluation refused: {_binding_problem}", file=sys.stderr)
+    raise SystemExit(1)
 
 
 def environment_record() -> dict[str, str]:

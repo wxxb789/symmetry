@@ -76,6 +76,25 @@ def refusal_returns(source_text, function):
     raise AssertionError(f"the module no longer defines {function}")
 
 
+def runner_module_closure() -> set[str]:
+    """Every `model_routing_*` module the entry imports, walked transitively."""
+    pending = [SCRIPT]
+    collected: set[str] = set()
+    while pending:
+        for node in ast.walk(ast.parse(pending.pop().read_text(encoding="utf-8"))):
+            if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("model_routing_"):
+                names = [node.module]
+            elif isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names if alias.name.startswith("model_routing_")]
+            else:
+                continue
+            for name in names:
+                if name not in collected:
+                    collected.add(name)
+                    pending.append(SCRIPT.with_name(f"{name}.py"))
+    return collected
+
+
 def exercise(function, call):
     """Call `function` and report the lines of its own body that ran.
 
@@ -1114,8 +1133,6 @@ class EvaluationTests(FixtureRepo, unittest.TestCase):
                 changed.write_bytes(original)
 
     def test_receipt_binds_every_tooling_source(self) -> None:
-        # The split modules are bound with the entry and the helper tools, so a receipt
-        # names every byte that produced it.
         self.accepted_run()
         sources = self.stored_receipt()["evidence"]["tooling_sources"]
         self.assertEqual(
@@ -1131,8 +1148,78 @@ class EvaluationTests(FixtureRepo, unittest.TestCase):
                 "model-routing-record-sanitize.py",
             },
         )
+        imported = {f"{name}.py" for name in runner_module_closure()}
+        self.assertLessEqual(imported, set(sources), imported - set(sources))
         for name, digest in sources.items():
             self.assertEqual(digest, "sha256:" + hashlib.sha256(SCRIPT.with_name(name).read_bytes()).hexdigest(), name)
+
+    def test_an_ambient_module_path_cannot_rebind_a_tool_copy(self) -> None:
+        self.accepted_run()
+        tools = self.root / "ambient-path-tools"
+        tools.mkdir()
+        for name in MATERIALIZED_TOOL_NAMES:
+            shutil.copyfile(SCRIPT.with_name(name), tools / name)
+        ambient = dict(os.environ)
+        ambient["PYTHONSAFEPATH"] = "1"
+        ambient["PYTHONPATH"] = str(SCRIPT.parent.resolve())
+        pristine = citest.run_gate(tools / SCRIPT.name, "accept", "--run-dir", str(self.run_dir()), env=ambient)
+        self.assertTrue(json.loads(pristine.stdout)["accepted"], pristine.stdout + pristine.stderr)
+        changed = tools / "model_routing_receipts.py"
+        original = changed.read_bytes()
+        changed.write_bytes(original + b"\n# Tooling revision control.\n")
+        mutated = citest.run_gate(tools / SCRIPT.name, "accept", "--run-dir", str(self.run_dir()), env=ambient)
+        self.assert_refused(mutated, "does not match")
+        changed.write_bytes(original)
+
+    def test_an_incomplete_tool_copy_refuses_before_evaluating(self) -> None:
+        tools = self.root / "entry-only-tools"
+        tools.mkdir()
+        shutil.copyfile(SCRIPT, tools / SCRIPT.name)
+        ambient = dict(os.environ)
+        ambient["PYTHONSAFEPATH"] = "1"
+        ambient["PYTHONPATH"] = str(SCRIPT.parent.resolve())
+        result = citest.run_gate(tools / SCRIPT.name, "--help", env=ambient)
+        self.assert_refused(result, "did not resolve beside the entry")
+
+    def test_a_stale_bytecode_cache_cannot_supply_the_executed_rules(self) -> None:
+        tools = self.root / "cached-tools"
+        tools.mkdir()
+        for name in MATERIALIZED_TOOL_NAMES:
+            shutil.copyfile(SCRIPT.with_name(name), tools / name)
+        environment = dict(os.environ)
+        for name in ("PYTHONDONTWRITEBYTECODE", "PYTHONPYCACHEPREFIX"):
+            environment.pop(name, None)
+        built = subprocess.run(
+            [sys.executable, "-c", f"import sys; sys.path.insert(0, {str(tools)!r}); import model_routing_receipts"],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=environment,
+        )
+        self.assertEqual(built.returncode, 0, built.stderr)
+        target = tools / "model_routing_receipts.py"
+        original = target.read_bytes()
+        recorded = target.stat()
+        old, new = b'"run record"', b'"run ledger"'
+        self.assertIn(old, original)
+        changed = original.replace(old, new)
+        self.assertEqual(len(changed), len(original))
+        target.write_bytes(changed)
+        os.utime(target, ns=(recorded.st_atime_ns, recorded.st_mtime_ns))
+        try:
+            result = citest.run_gate(
+                tools / SCRIPT.name,
+                "receipt",
+                "--run-dir",
+                "missing-run",
+                "--usage",
+                "missing-usage.json",
+                env=environment,
+            )
+            self.assert_refused(result, "model_routing_receipts.py was executed from bytecode")
+            self.assertNotIn("run ledger", result.stderr + result.stdout)
+        finally:
+            target.write_bytes(original)
 
     def test_every_broken_sanitize_sibling_refuses_instead_of_raising(self) -> None:
         # host_path_patterns() imports the sanitize tool for the shared host-path

@@ -32,7 +32,7 @@ citations below resolve at the base revision.
 | `scripts/ci/model_routing_subject.py` | new | the git binding and every tree digest: worktree walk, base-tree object reads (`read_base_blob_digests`' `ls-tree` + `cat-file --batch` reader), index/object-substitution and filter-machinery refusals, `compute_subject`/`collect_changes`/`validate_changes`, `current_subject`/`require_current_subject`, `load_source_subject`, `SUBJECT_NAMESPACE`, `SOURCE_SUBJECT_SCRIPT` |
 | `scripts/ci/model_routing_gates.py` | new | gate execution and stored evidence: the go/exunit/vitest derivations, `validator_argv`/`run_validator`, `terminate_owned_process_tree`/`run_owned_command`/`execute_gate`/`recompute_gate`, the dependency-tree walk and digest (`_tree_entries`/`dependency_tree_digest`/`verify_dependency_tree`), the resolved-tree checks, the process/trace constants |
 | `scripts/ci/model_routing_receipts.py` | new | the run-record and receipt layer: `load_run`/`save_run`/`load_frozen_*`/`load_sealed`, attempt reading and verification, `provisioning_view`/`require_dependency_provisioning`, `build_receipt`/`derive_receipt`, `INCOMPLETE_CHECK_DETAIL`, the bound-tooling path constant |
-| `scripts/ci/model-routing-evaluation.py` | edited | thin CLI entry: same path, same `prog="model-routing-evaluation.py"`, same seven subcommands, the module docstring unchanged, the `command_*` handlers and `finish_prepare`/`environment_record`/`first_difference`/`main` stay, plus imports of the four modules it uses (the suites read the defining modules — below) |
+| `scripts/ci/model-routing-evaluation.py` | edited | thin CLI entry: same path, same `prog="model-routing-evaluation.py"`, same seven subcommands, the module docstring unchanged, the `command_*` handlers and `finish_prepare`/`environment_record`/`first_difference`/`main` stay, plus imports of the four modules it uses (the suites read the defining modules — below) and the review-fix startup statements (own-directory `sys.path` insert, tool-set binding guard, bytecode-cache check — see "Review fix r1" below) |
 | `scripts/ci/test-model-routing-evaluation.py` | edited | loader/AST-walk updates only (the four monkeypatch sites and the rule-read sites — `records.number_sum`/`validate_gate`/`is_vitest_entry`/`requires_dependency_provisioning`, `gates.vitest_report_detail`/`vitest_report_argv`/`PROCESS_TREE_REAP_SECONDS` — repointed to the defining modules, the AST walk with them; one `MATERIALIZED_TOOL_NAMES` tuple feeds both tool-materialization loops) plus the `tooling_sources` key-set pin of change (5) |
 | `scripts/ci/model-routing-source-subject.py` | edited | `DELIVERED_TOOL_PATHS` extends to the full delivered set and its docstring sentence names it; W5-11 leaves this tuple untouched, so no rebase conflict |
 | `scripts/ci/test-model-routing-source-subject.py` | edited | the new `DELIVERED_TOOL_PATHS` pin test (decision E) |
@@ -41,7 +41,8 @@ citations below resolve at the base revision.
 | `docs/evidence/rf-w5-12-model-routing-split-2026-11-22.md` | new | the evidence record (contract clause 2's judging artifact) |
 
 No workflow, no `pyproject.toml`, no sanitizer, no `test-check-record-cleanliness.py` edit; no
-`# noqa`/`//nolint`; no test renamed, added (beyond the two authorized pins), removed or retagged.
+`# noqa`/`//nolint`; no test renamed, added (beyond the two authorized pins and the review-fix
+pins of "Review fix r1"), removed or retagged.
 
 ## Module map (def groups → module)
 
@@ -71,8 +72,8 @@ records  ←─ subject ─┐
 records  ←─ gates   ─┴─← receipts ←── entry
 ```
 - records imports nothing local (leaf).
-- subject imports records (`Refused`, `require_commit`, `PathMatcher`).
-- gates imports records (`Refused`, `read_bytes`/`write_bytes`, `sha256_hex`, `strict_json`, the `require_*`/`validate_*` it re-validates with, `MEASURED_NAME_PATTERN`).
+- subject imports records (`Refused`, `require_commit`, `PathMatcher`, `is_test_path`, `is_protected_asset`).
+- gates imports records (`Refused`, `read_bytes`/`write_bytes`, `sha256_hex`, `strict_json`, `vitest_entry_index`, `require_bool`, `require_digest`, `require_integer`, `require_object`, `require_optional_integer`, `require_optional_text`).
 - receipts imports gates, records, subject.
 - the entry imports all four.
 
@@ -82,7 +83,9 @@ constants (`SANITIZE_SCRIPT`, `VALIDATOR_SCRIPT`, `SOURCE_SUBJECT_SCRIPT`) resol
 directory wherever they live; the receipt's own-tool path becomes an explicit
 `ENTRY_SCRIPT = pathlib.Path(__file__).with_name("model-routing-evaluation.py").resolve()` in
 `model_routing_receipts.py` so `tooling_sources` keeps binding the entry the coordinator runs (the
-entry's path is frozen by D1).
+entry's path is frozen by D1). "Review fix r1" below makes the entry refuse whenever the four
+modules did not resolve beside it and the entry is not the file `ENTRY_SCRIPT` names, so the
+constant can only ever name files that executed.
 
 ## Public shape — the suites read the defining module
 
@@ -137,12 +140,12 @@ keeps (`Refused`, `canonical_json`, `dependency_tree_digest`, `first_difference`
 
 | file | base | delivered |
 | --- | ---: | ---: |
-| `scripts/ci/model-routing-evaluation.py` | 4,199 L / 200,035 B | 761 L / 35,056 B |
+| `scripts/ci/model-routing-evaluation.py` | 4,199 L / 200,035 B | 797 L / 36,646 B |
 | `scripts/ci/model_routing_records.py` | — | 1,236 L / 53,672 B |
 | `scripts/ci/model_routing_subject.py` | — | 539 L / 25,517 B |
 | `scripts/ci/model_routing_gates.py` | — | 1,119 L / 55,535 B |
 | `scripts/ci/model_routing_receipts.py` | — | 699 L / 32,272 B |
-| total source | 4,199 L | 4,354 L (+155: four module import headers, the bound-tooling constants, minus dropped comment lines) |
+| total source | 4,199 L | 4,390 L (+191: four module import headers, the bound-tooling constants, the review-fix startup statements, minus dropped comment lines) |
 
 215 base top-level units: 214 delivered byte-identical, 1 (`build_receipt`) delivered with the
 recorded `tooling_sources` patch and nothing else.
@@ -268,3 +271,42 @@ its pin, the `tooling_sources` key set, and the LOC delta (report-only, D2) — 
   (`Refused`, `canonical_json`, `dependency_tree_digest`, `first_difference`, `redact_host_paths`,
   `_dependency_tree`); the entry uses each of them itself, and the resolution check enumerates the
   set, so an edit that drops one fails a machine check rather than a suite.
+
+## Review fix r1 (2026-11-22)
+
+The code review of `7f34d40d..8c295b5f` (verdict `MUST_FIX (4)`: F1-F4, plus advisory F5/F6)
+produced six changes, all inside the owned set (no workflow, no `citest.py`, no new module):
+
+- **F1 (binding).** The entry inserts its own resolved directory at `sys.path[0]` in the single
+  `sys.path` statement between the stdlib imports and the four sibling imports — the form ruff's
+  E402 exemption covers — so the tool set resolves beside the executing entry under
+  `PYTHONSAFEPATH=1`/`-I`/`-P` instead of through an ambient module path. After the imports,
+  `tooling_binding_problem()` refuses (tool stderr shape, exit 1, before any subcommand runs)
+  unless all four modules resolved into the entry's directory and `Path(__file__).resolve()` is
+  exactly `ENTRY_SCRIPT`. The reviewer's second option ("receipts refuses when the imported module
+  directory differs from the executing entry's directory") is implemented in the entry because only
+  the entry knows its own `__file__`; the refusal covers every subcommand, `--help` included.
+  Regression pins: `test_an_ambient_module_path_cannot_rebind_a_tool_copy` (materialized copy under
+  `PYTHONSAFEPATH=1` + `PYTHONPATH=<scripts/ci>`: pristine accepts; a mutated copy module refuses)
+  and `test_an_incomplete_tool_copy_refuses_before_evaluating` (entry-only copy beside an ambient
+  module path refuses with `did not resolve beside the entry`).
+- **F2 (staleness).** The same guard proves source-vs-loaded identity: for every module with an
+  existing bytecode cache file, `executed_matches_source()` requires the loaded code object to
+  equal a fresh `compile` of the module's current bytes (with `dont_inherit=True`, as the loader
+  compiles); a mismatch refuses before any command runs. Regression pin:
+  `test_a_stale_bytecode_cache_cannot_supply_the_executed_rules` (a same-size edit with the mtime
+  restored beside a valid `__pycache__` refuses naming the module; the mutated text never reaches
+  the output).
+- **F5 (advisory).** Both binding pins gain an ast-derived closure arm: `runner_module_closure()`
+  walks every `model_routing_*` import from the entry transitively, and the closure must be inside
+  the receipt key set / `DELIVERED_TOOL_PATHS`; the literal arms stay. The walk is duplicated in
+  the two standalone suites because `citest.py` is outside the owned set.
+- **F6 (advisory).** The two-line comment on `test_receipt_binds_every_tooling_source` is removed;
+  the invariant lives in the test name, the closure arm and the digest assertions.
+- **F3/F4.** The layering list above now names the subject's and gates' actual `records` imports,
+  and the evidence record's mutation (b) row cites `test-model-routing-omp-usage.py:323`.
+
+`model_routing_records.py`, `model_routing_subject.py`, `model_routing_gates.py` and
+`model_routing_receipts.py` keep their reviewed bytes; the refusal inventory, every existing
+refusal message and the seven byte-diff invocations are unchanged, and the fix's new refusals fire
+only where the tool set cannot be bound to what executes.
