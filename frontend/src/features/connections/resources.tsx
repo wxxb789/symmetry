@@ -2,6 +2,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, Plus, X } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { workspaceReadKey } from "../../app/read-cache";
 import { Field, StatusBadge } from "../../components/primitives";
 import { useDialogOpener } from "../../components/use-dialog-opener";
 import { EmptyState, ErrorState, LoadingState } from "../../components/workspace";
@@ -581,7 +582,7 @@ function ProjectResourcesReady({ api, csrf, project, headingRef, workspace, work
   // flight for a key with cached data is cancelled and superseded by the
   // write's own read; a first read holding no data is joined instead
   // (query.js:353-360).
-  const reconcile = () => { void queryClient.invalidateQueries({ queryKey: ["workspace"] }); };
+  const reconcile = () => { void queryClient.invalidateQueries({ queryKey: workspaceReadKey() }); };
   const editorTarget = editor === null || editor.kind === "bind" ? undefined : rows.find((row) => row.id === editor.resourceId);
   const editorSubjectRemoved = editor !== null && editor.kind !== "bind" && workspace !== undefined && editorTarget === undefined;
   const dialogIntent = editor === null ? null : dialogIntentOf(editor, editorTarget, projectId);

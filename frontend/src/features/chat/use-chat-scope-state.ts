@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLayoutEffect, useRef, type SyntheticEvent } from "react";
 import { chatMessageMutation, type ChatScopeKey } from "../../app/application";
+import { chatReadKey } from "../../app/read-cache";
 import { useSessionToken } from "../../app/session";
 import { errorMessage, type Api, type ChatMessageRequest, type ChatScope, type WorkItem } from "../../services/api";
 import { isDefinitive } from "../../services/refusals";
@@ -162,7 +163,7 @@ export function useChatScopeState(params: ChatScopeParams, inputs: ChatScopeInpu
         }));
         // The durable message is the server's own record: a scoped re-read
         // renders it and leaves every other scope's cache untouched.
-        void queryClient.invalidateQueries({ queryKey: ["chat", sendIdentity] });
+        void queryClient.invalidateQueries({ queryKey: chatReadKey(sendIdentity) });
       },
       onError: (error) => {
         const refused = isDefinitive(error);
