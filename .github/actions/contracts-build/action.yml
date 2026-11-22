@@ -1,0 +1,52 @@
+name: Contracts build
+description: >-
+  The shared `contracts` job build both workflows call, with the Control release producer behind
+  the `build-control-release` input.
+inputs:
+  build-control-release:
+    description: >-
+      Build the production Control release and upload `control-release-linux`, the shared release
+      producer. The native acceptance workflow passes false because its own job builds the release
+      once.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Check lockfile registry provenance
+      shell: bash
+      run: python3 scripts/ci/check-lockfile-registry.py
+    - run: pnpm install --frozen-lockfile
+      shell: bash
+    - run: pnpm contracts:check
+      shell: bash
+    - run: pnpm --filter @symmetry/frontend typecheck
+      shell: bash
+    - run: pnpm --filter @symmetry/frontend lint
+      shell: bash
+    - run: pnpm --filter @symmetry/frontend test
+      shell: bash
+    - run: pnpm --filter @symmetry/frontend build
+      shell: bash
+    - uses: actions/upload-artifact@v7
+      with:
+        name: portal-assets
+        path: control/priv/static/portal
+    - uses: erlef/setup-beam@v1
+      if: inputs.build-control-release == 'true'
+      with:
+        elixir-version: 1.20.4
+        otp-version: 29.0.6
+    - name: Build production Control release
+      if: inputs.build-control-release == 'true'
+      shell: bash
+      working-directory: control
+      run: |
+        MIX_ENV=prod mix deps.get
+        MIX_ENV=prod mix release --overwrite
+        tar --create --gzip --file "$RUNNER_TEMP/control-release-linux.tar.gz" --directory _build/prod/rel symmetry_control
+    - uses: actions/upload-artifact@v7
+      if: inputs.build-control-release == 'true'
+      with:
+        name: control-release-linux
+        path: ${{ runner.temp }}/control-release-linux.tar.gz
+        if-no-files-found: error
