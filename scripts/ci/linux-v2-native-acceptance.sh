@@ -2433,7 +2433,7 @@ case "$fixture_case_set" in
     run_go_test "$v2_b_cleanup_denial_events" ./cmd/symmetry-linux-launcher \
       '^TestInstalledLinuxOwnerCleanupRejectsBCallerScratch$' cleanup-root \
       '' '' '' -- TestInstalledLinuxOwnerCleanupRejectsBCallerScratch
-    run_go_test "$v2_cgroup_mount_cleanup_events" ./cmd/symmetry-linux-launcher \
+    run_go_test "$v2_cgroup_mount_cleanup_events" ./internal/launchercore \
       '^TestCloneCleanupRejectsCrossMountEntry$' cleanup-mounts-root \
       '' '' '' -- TestCloneCleanupRejectsCrossMountEntry
     run_unexpected_cgroup_kill_fd_witness "$v2_unexpected_cgroup_kill_fd_events"

@@ -1581,3 +1581,15 @@ is fixed here; each bullet names what a follow-up has to re-derive.
       the four members, the `grant()` fallback, and their population in
       `daemon/internal/app/goal_admission_tx.go` and
       `daemon/internal/app/linux_owner_witness_linux.go`.
+
+## Linux v2 owner hosts under the Ubuntu AppArmor userns restriction (2026-11-22)
+
+- [ ] Production Linux v2 owner hosts with `kernel.apparmor_restrict_unprivileged_userns=1` need a
+      per-program `userns` AppArmor profile for the launcher/gate (`scripts/install-linux-owner.sh`), or
+      the sysctl relaxed, to be specified by the D3 `harness.md` amendment / W5-02a. The Ubuntu default
+      transitions an unconfined `unshare(CLONE_NEWUSER)` caller into the capability-denying
+      `unprivileged_userns` profile, so the launcher/gate's later `drop_to_b`
+      (`daemon/native/linux-gate/c-gate/gate.c`) cannot proceed; the host prerequisite probe carries a
+      per-program exception for its own ephemeral binary, which does not cover production installs. The
+      native acceptance fixture (`scripts/ci/linux-v2-native-acceptance.sh`) needs the same exception
+      before its case sets can pass.
