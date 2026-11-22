@@ -1157,29 +1157,29 @@ func rejectDuplicateJSONMembersOnly(value []byte) error {
 	return err
 }
 
-// responseDecodeLevel selects a Control response decode's strictness; every
-// caller passes the level it had before decodeResponseJSON unified them.
+// responseDecodeLevel selects a Control response decode's strictness.
 type responseDecodeLevel int
 
 const (
 	responseDecodeLegacy responseDecodeLevel = iota
 	responseDecodeTyped
 	responseDecodeSchema
+	responseDecodeLevelCount
 )
 
-// Counts response decodes so a routing test can observe a path that bypasses
-// decodeResponseJSON; a bypass is otherwise unobservable.
-var responseDecodeCalls atomic.Int64
+// Counts response decodes per level so a routing test can observe a path that
+// bypasses decodeResponseJSON or runs at the wrong level.
+var responseDecodeCalls [responseDecodeLevelCount]atomic.Int64
 
 // decodeResponseJSON is the single entry for Control response bodies; envelope
 // is read only at responseDecodeSchema.
 func decodeResponseJSON(level responseDecodeLevel, envelope contracts.Envelope, value []byte, target any) error {
-	responseDecodeCalls.Add(1)
-
 	switch level {
 	case responseDecodeSchema:
+		responseDecodeCalls[level].Add(1)
 		return contracts.DecodeSchema(envelope, value, target)
 	case responseDecodeTyped:
+		responseDecodeCalls[level].Add(1)
 		decoder := json.NewDecoder(bytes.NewReader(value))
 		decoder.DisallowUnknownFields()
 		if err := decoder.Decode(target); err != nil {
@@ -1192,6 +1192,7 @@ func decodeResponseJSON(level responseDecodeLevel, envelope contracts.Envelope, 
 		// pre-existing rejection message and precedence at every depth.
 		return protocol.RejectDuplicateJSONMembers(value)
 	case responseDecodeLegacy:
+		responseDecodeCalls[level].Add(1)
 		if err := rejectDuplicateJSONMembersOnly(value); err != nil {
 			return err
 		}

@@ -1475,18 +1475,18 @@ is fixed here; each bullet names what a follow-up has to re-derive.
       `serveConnection` over a real unixpacket socket, and all five tests failed in the same step of that
       attempt, each at the wire harness's client read (`linuxOwnerAnchorWirePair` →
       `linuxOwnerAnchorWireReadFrame` → `ReadMsgUnix`, the stdlib `(*net.UnixConn).ReadMsgUnix` behind the
-      helper's `t.Fatalf("read wire frame: %v", err)`), with the full recorded lines (the `<scratch>/Test…`
+      helper's `t.Fatalf("read wire frame: %v", err)`), with the full recorded lines (the `/tmp/Test…`
       segment elides the run's temp directory, which is named after the test):
       `--- FAIL: TestLinuxOwnerAnchorWireShapeRejectsWrongDescriptorCounts (0.00s)`
-      `anchor_wire_shape_test.go:295: read wire frame: read unixpacket @-><scratch>/Test…/owner.sock: recvmsg: connection reset by peer`
+      `anchor_wire_shape_test.go:295: read wire frame: read unixpacket @->/tmp/Test…/owner.sock: recvmsg: connection reset by peer`
       `--- FAIL: TestLinuxOwnerAnchorWireCloneCleanupDescriptorGate (0.00s)`
-      `anchor_wire_shape_test.go:308: read wire frame: read unixpacket @-><scratch>/Test…/owner.sock: recvmsg: connection reset by peer`
+      `anchor_wire_shape_test.go:308: read wire frame: read unixpacket @->/tmp/Test…/owner.sock: recvmsg: connection reset by peer`
       `--- FAIL: TestLinuxOwnerAnchorWireStoppingAnswerPrecedesShape (0.00s)`
-      `anchor_wire_shape_test.go:351: read wire frame: read unixpacket @-><scratch>/Test…/owner.sock: recvmsg: connection reset by peer`
+      `anchor_wire_shape_test.go:351: read wire frame: read unixpacket @->/tmp/Test…/owner.sock: recvmsg: connection reset by peer`
       `--- FAIL: TestLinuxOwnerAnchorWireExclusiveFieldsRefusedBeforeStoppingAnswer (0.00s)`
-      `anchor_wire_shape_test.go:392: read wire frame: read unixpacket @-><scratch>/Test…/owner.sock: recvmsg: connection reset by peer`
+      `anchor_wire_shape_test.go:392: read wire frame: read unixpacket @->/tmp/Test…/owner.sock: recvmsg: connection reset by peer`
       `--- FAIL: TestLinuxOwnerAnchorWireCodecRejectsMalformedFrames (0.00s)`
-      `anchor_wire_shape_test.go:434: read wire frame: read unixpacket @-><scratch>/Test…/owner.sock: recvmsg: connection reset by peer`
+      `anchor_wire_shape_test.go:434: read wire frame: read unixpacket @->/tmp/Test…/owner.sock: recvmsg: connection reset by peer`
       In the same attempt the `daemon` job's race step passed the same five tests about four minutes later
       (`--- PASS` at 01:56:04 against this failure at 01:51:50), and attempt 2 of that run is green at the
       same head. Reproduction attempts and outcomes: main's last four `coverage-daemon`
@@ -1584,6 +1584,7 @@ is fixed here; each bullet names what a follow-up has to re-derive.
       divergences the corpus records and this slice deliberately does not fix:
       `goal-command.raw-duplicate-member-top-level` (Elixir's Jason keeps the first member),
       `goal-command.raw-number-fractional` and `goal-command.raw-number-exponent` (Elixir accepts the
-      lexeme and its validator accepts the value), `goal-command.raw-bom-prefix` (the JS
-      `JSON.parse` strips a leading BOM) and `goal-command.raw-number-negative-zero` (accepted by Go,
+      lexeme and its validator accepts the value), `goal-command.raw-bom-prefix` (the TS reader's
+      UTF-8 `TextDecoder` strips the leading BOM before `JSON.parse`) and
+      `goal-command.raw-number-negative-zero` (accepted by Go,
       JS and Elixir; no runtime enforces the canonical `-0` to `0` form).

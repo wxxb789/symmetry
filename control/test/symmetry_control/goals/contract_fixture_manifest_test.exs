@@ -17,8 +17,8 @@ defmodule SymmetryControl.Goals.ContractFixtureManifestTest do
     "work-detail-read",
     "work-timeline-read"
   ]
-  # The machine evidence mutation routes decode their bodies with the strict
-  # duplicate-member walk; every other envelope still decodes with Jason.
+  # Raw-corpus acceptance is measured on the decode each row's schema selects:
+  # the strict duplicate-member walk for machine requests, Jason otherwise.
   @machine_request_schemas ["evidence", "evidence-batch"]
 
   @validators %{
@@ -112,7 +112,7 @@ defmodule SymmetryControl.Goals.ContractFixtureManifestTest do
   defp raw_wire_decode(schema, body) when schema in @machine_request_schemas do
     {:ok, StrictJSONDecoder.decode!(body)}
   rescue
-    _error -> :error
+    _error in [Jason.DecodeError, StrictJSONDecoder.DuplicateJSONKeyError] -> :error
   end
 
   defp raw_wire_decode(_schema, body) do

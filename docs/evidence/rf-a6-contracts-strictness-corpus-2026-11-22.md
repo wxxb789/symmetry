@@ -47,7 +47,7 @@ plus the `unpaired_surrogate` cases in `boundary.test.mjs` and `schema_test.go`.
 | `goal-command.raw-duplicate-member-top-level` | Elixir | accepts | the modelled `Jason` decode keeps the first member; `validate_goal_command/2` then sees the valid document, while the strict mutation ingress rejects the duplicate before any validator |
 | `goal-command.raw-number-fractional` | Elixir | accepts | `Jason` decodes `1.0` as a float and `validate_goal_command/2` accepts the value |
 | `goal-command.raw-number-exponent` | Elixir | accepts | `Jason` decodes `1e0` as a float and `validate_goal_command/2` accepts the value |
-| `goal-command.raw-bom-prefix` | JS | accepts | `JSON.parse` strips a leading BOM |
+| `goal-command.raw-bom-prefix` | JS | accepts | the TS reader's UTF-8 `TextDecoder` strips the leading BOM before `JSON.parse` |
 | `goal-command.raw-number-negative-zero` | Go, JS, Elixir | accepts | no runtime enforces the canonical `-0` to `0` form |
 
 No row adds a rejection in Elixir or JS; every reader asserts the table above.
@@ -82,9 +82,11 @@ duplicate filter); no early return or error wrap changed; the outer `responseErr
 byte-compared in §5.
 
 Routing proof: `TestResponseDecodeRoutesEveryPathThroughTheEntry`
-(`daemon/internal/control/decode_test.go`) asserts the entry counter grows by exactly 1 for
+(`daemon/internal/control/decode_test.go`) asserts the entry's per-level counter grows by
+exactly 1 at the expected level and by 0 at the other two levels for all 8 paths:
 `requestGoalWithStatus`, `requestGoalContractWithStatus`, `requestWithStatus`,
-`decodeStrictObjectJSON`, `decodeProviderActionObjectJSON` and `decodeAPIError`.
+`requestWithStatusNilResponse`, `decodeStrictObjectJSON`, `decodeProviderActionObjectJSON`,
+`decodeAPIError` and `decodeEvidenceBatchConflictDetails`.
 
 ## 4. Base-vs-head corpus enumeration (Go decode paths)
 
@@ -279,3 +281,68 @@ Fix-stage tree: `git status --porcelain` lists exactly 7 paths (`contracts/READM
 `daemon/internal/control/decode_test.go`, `daemon/internal/protocol/goal_contract_fixture_test.go`,
 `docs/TODO.md`, this record). No fixture bytes, schemas or generated files changed; the manifest
 row count stays 261 and the raw fixtures stay byte-identical.
+
+## 9. Review round 2 fixes and re-runs (2026-11-22, PR #250 independent review round 1)
+
+Source: `250-opus-review-1.md` (F1–F8). F6 was the conductor's owned-set acknowledgement and F8
+this round's refreshed PR body; neither changes the tree. The other findings changed only
+`contracts/README.md`, `docs/TODO.md`, the plan, this record,
+`daemon/internal/control/client.go`, `daemon/internal/control/decode_test.go`,
+`control/test/symmetry_control/goals/contract_fixture_manifest_test.exs` and (shrink-only)
+`.gitattributes`.
+
+- F1: the BOM cause is corrected in all four records. The reader's UTF-8 `TextDecoder`
+  (`contracts/ts/wire-json.ts:15`, default `ignoreBOM: false`) removes the leading BOM before
+  `JSON.parse` ever sees the text. Node v26.13.1 probe over the row's bytes: first bytes
+  `ef bb bf 7b`; decoded first code unit U+007B; `JSON.parse` on a U+FEFF-prefixed string throws
+  (`Unexpected token '<BOM>'`); `parseWireJson` accepts the row (first key `schema_version`).
+- F2: the six pre-existing `docs/TODO.md` lines are restored to their base-revision bytes verbatim
+  (the `/tmp`-rooted temp-path spelling the original log carries); `git diff 66bc9dcb -- docs/TODO.md`
+  has 0 deletions and the six lines hash-compare byte-identical to the base revision. The standalone
+  `docs/TODO.md` `--check --root-only` sanitize run exits 1 on those verbatim quotes (host-root-shaped
+  by spelling); `check-record-cleanliness.py` selects only `docs/evaluations/**` and
+  `docs/evidence/**`, so the committed-record gate passes (row below).
+- F3: `responseDecodeCalls` is per level (`[responseDecodeLevelCount]atomic.Int64`) and each of the
+  8 routing subtests asserts +1 at its path's level and 0 at the other two
+  (`requestGoalWithStatus` typed, `requestGoalContractWithStatus` schema, `requestWithStatus`
+  legacy, `requestWithStatusNilResponse` legacy, `decodeStrictObjectJSON` typed,
+  `decodeProviderActionObjectJSON` legacy, `decodeAPIError` legacy,
+  `decodeEvidenceBatchConflictDetails` schema). Mutants, each applied alone and reverted:
+  - `requestGoalContractWithStatus` schema → typed (`client.go:1043`): red, exit 1,
+    `--- FAIL …/requestGoalContractWithStatus … decode_test.go:176: typed entry calls = 1, want 0`.
+  - `decodeAPIError` legacy → typed (`client.go:1237`): red, exit 1,
+    `decode_test.go:220: legacy entry calls = 0, want 1`.
+  - `requestWithStatus` (Enroll) legacy → typed (`client.go:1072`): red, exit 1,
+    `decode_test.go:187: legacy entry calls = 0, want 1`.
+- F4: the machine-request clause rescues only `Jason.DecodeError` and
+  `StrictJSONDecoder.DuplicateJSONKeyError`. Mutant: an unconditional `raise` as the first statement
+  of `StrictJSONDecoder.decode!/1` → red, exit 2, `Result: 0/1 passed`,
+  `** (RuntimeError) mutant: unconditional decoder failure` propagating from
+  `strict_evidence_json.ex:15` through `raw_wire_decode/2`
+  (`contract_fixture_manifest_test.exs:113`) — the blanket rescue stayed green here. The file's
+  sha256 is restored to `d760c3945165…`.
+- F5: §3's routing sentence now names all 8 subtests and the per-level assertion.
+- F7: the stale migration clause is dropped at `client.go`, the reader comment is scoped to this
+  reader's decode selection, and `.gitattributes` carries only `contracts/fixtures/raw/** -text`.
+
+Round-2 gates (foreground, serialized; all executable gates re-run after the last code/test edit):
+
+| Gate | Command (cwd) | Exit | Output |
+|---|---|---:|---|
+| gofmt | `gofmt -l .` (`daemon/`) | 0 | no output |
+| vet | `go vet ./...` (`daemon/`) | 0 | no output |
+| Linux build | `GOOS=linux go build ./...` (`daemon/`) | 0 | no output |
+| Windows build | `GOOS=windows go build ./...` (`daemon/`) | 0 | no output |
+| Go tests | `go test -count=1 ./internal/protocol/... ./internal/control/... ./internal/contracts/...` (`daemon/`) | 0 | `ok` ×3 (6.057s / 7.614s / 6.705s) |
+| contracts:check | `mise x pnpm@12.17.0 -- pnpm --trust-lockfile --config.verify-deps-before-run=false contracts:check` (repo root) | 0 | `node --test` 35/35 fail 0; `Validated 21 Draft 7 schemas and 261 fixtures.`; `Effect decoded all 261 raw fixtures; 246 parsed documents reached Schema validation` |
+| Elixir | `sh <HOST-PATH>/.local/state/gdd/scratch/rf-a6-mix.sh test test/symmetry_control/goals/contract_fixture_manifest_test.exs test/symmetry_control_web/plugs/strict_evidence_json_test.exs` (`control/` via the recipe) | 0 | `Result: 25 passed` (6.3s) |
+| record cleanliness | `python scripts/ci/check-record-cleanliness.py --base 66bc9dcb5bc5 --head <round-2 snapshot>` (synthetic snapshot via `GIT_INDEX_FILE` + `git commit-tree`; real refs untouched) | 0 | `1 changed record(s) pass the root-only check` |
+| whitespace | `git diff --check` (repo root) | 0 | no output |
+| host-path scan | case-insensitive profile-path grep over the round-2 diff (repo root) | 0 | 0 matches |
+| DLP escape scan | round-2 diff additions grepped for the forbidden two-byte escape | 0 | 0 matches |
+
+Round-2 tree: `git status --porcelain` lists exactly 8 modified paths (`.gitattributes`,
+`contracts/README.md`, the Elixir reader test, `daemon/internal/control/client.go`,
+`daemon/internal/control/decode_test.go`, `docs/TODO.md`, this record, the plan). `client.go`
+sha256 `e3a446972b7b…`, `decode_test.go` `970e9239b072…`; the manifest stays at 261 rows and no
+fixture byte changed this round.

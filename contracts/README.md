@@ -97,8 +97,9 @@ assertion. The unsafe-integer row is the one exception, because
 `9007199254740992` also exceeds the envelope's `expected_revision` maximum
 once parsed. A row's
 `runtime_divergence` map names a runtime that accepts the bytes
-today (for example the BOM, which `JSON.parse` strips, or `-0`); every reader
-asserts today's behavior instead of adding a rejection, and the agreement work
+today (for example the BOM, which the TS reader's UTF-8 `TextDecoder` strips
+before `JSON.parse`, or `-0`); every reader asserts today's behavior instead
+of adding a rejection, and the agreement work
 that remains is recorded in `docs/TODO.md`. Elixir acceptance is measured on
 the decode the row's schema selects (Jason outside the machine-request
 schemas, `StrictJSONDecoder` for them), not on the HTTP ingress: the

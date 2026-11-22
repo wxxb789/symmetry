@@ -109,7 +109,8 @@ out of scope (owner ruling) and is recorded in `docs/TODO.md` with the rows that
   head corpus run (the entry at the three levels), 13 rows × 3 levels, identical accept/reject tables; the
   table is in the evidence record. Consequence: the enumerated accepted→rejected list is empty.
 - TS: `parseWireJson`/`parsePresentationJson` outcomes per row (`check.mjs` path) and the Effect `decodeJson`
-  outcomes (`check-effect.mjs` path); TS accepts the BOM (the JS `JSON.parse` strips it) and `-0`.
+  outcomes (`check-effect.mjs` path); TS accepts the BOM (the TS reader's UTF-8 `TextDecoder` strips it
+  before `JSON.parse`) and `-0`.
 - Go: `ValidateSchema` accepts the invalid-UTF-8 row while `DecodeSchema` rejects it, which is why the raw Go
   reader uses `DecodeSchema`; `-0` in `expected_version` is accepted at all levels (in `expected_revision` it
   is rejected by the schema's `minimum`, which would make the row a schema fixture rather than a raw one).

@@ -59,6 +59,12 @@ var rawWireLevels = map[string]responseDecodeLevel{
 	"schema": responseDecodeSchema,
 }
 
+var responseDecodeLevelNames = [responseDecodeLevelCount]string{
+	responseDecodeLegacy: "legacy",
+	responseDecodeTyped:  "typed",
+	responseDecodeSchema: "schema",
+}
+
 func TestResponseDecodeLevelsMatchTheRawCorpus(t *testing.T) {
 	root := controlRepositoryRoot(t)
 	manifestData, err := os.ReadFile(filepath.Join(root, "contracts", "fixtures", "manifest.json"))
@@ -122,13 +128,25 @@ func TestResponseDecodeLevelsMatchTheRawCorpus(t *testing.T) {
 }
 
 func TestResponseDecodeRoutesEveryPathThroughTheEntry(t *testing.T) {
-	entryDelta := func(t *testing.T, run func() error) int64 {
+	assertEntryLevel := func(t *testing.T, expected responseDecodeLevel, run func() error) {
 		t.Helper()
-		before := responseDecodeCalls.Load()
+		var before [responseDecodeLevelCount]int64
+		for level := range before {
+			before[level] = responseDecodeCalls[level].Load()
+		}
 		if err := run(); err != nil {
 			t.Fatalf("decode path failed: %v", err)
 		}
-		return responseDecodeCalls.Load() - before
+		for level := range before {
+			delta := responseDecodeCalls[level].Load() - before[level]
+			want := int64(0)
+			if responseDecodeLevel(level) == expected {
+				want = 1
+			}
+			if delta != want {
+				t.Fatalf("%s entry calls = %d, want %d", responseDecodeLevelNames[level], delta, want)
+			}
+		}
 	}
 	machineResponse := func(t *testing.T, body string) *Client {
 		t.Helper()
@@ -142,13 +160,10 @@ func TestResponseDecodeRoutesEveryPathThroughTheEntry(t *testing.T) {
 		var target struct {
 			Value int `json:"value"`
 		}
-		delta := entryDelta(t, func() error {
+		assertEntryLevel(t, responseDecodeTyped, func() error {
 			_, err := client.requestGoalWithStatus(context.Background(), http.MethodGet, "v1/goal", nil, "", nil, &target)
 			return err
 		})
-		if delta != 1 {
-			t.Fatalf("entry calls = %d, want 1", delta)
-		}
 	})
 
 	t.Run("requestGoalContractWithStatus", func(t *testing.T) {
@@ -158,13 +173,10 @@ func TestResponseDecodeRoutesEveryPathThroughTheEntry(t *testing.T) {
 		}
 		client := machineResponse(t, string(body))
 		var target contracts.SymmetryEvidenceBatchResponseV1
-		delta := entryDelta(t, func() error {
+		assertEntryLevel(t, responseDecodeSchema, func() error {
 			_, err := client.requestGoalContractWithStatus(context.Background(), http.MethodPost, "v1/evidence", nil, "", nil, contracts.EnvelopeEvidenceBatchResponse, &target)
 			return err
 		})
-		if delta != 1 {
-			t.Fatalf("entry calls = %d, want 1", delta)
-		}
 	})
 
 	t.Run("requestWithStatus", func(t *testing.T) {
@@ -172,58 +184,43 @@ func TestResponseDecodeRoutesEveryPathThroughTheEntry(t *testing.T) {
 		var target struct {
 			Value int `json:"value"`
 		}
-		delta := entryDelta(t, func() error {
+		assertEntryLevel(t, responseDecodeLegacy, func() error {
 			_, err := client.requestWithStatus(context.Background(), http.MethodGet, "v1/enroll", nil, "token", "", nil, &target)
 			return err
 		})
-		if delta != 1 {
-			t.Fatalf("entry calls = %d, want 1", delta)
-		}
 	})
 
 	t.Run("requestWithStatusNilResponse", func(t *testing.T) {
 		client := machineResponse(t, `{"value":1}`)
-		delta := entryDelta(t, func() error {
+		assertEntryLevel(t, responseDecodeLegacy, func() error {
 			_, err := client.requestWithStatus(context.Background(), http.MethodGet, "v1/enroll", nil, "token", "", nil, nil)
 			return err
 		})
-		if delta != 1 {
-			t.Fatalf("entry calls = %d, want 1", delta)
-		}
 	})
 
 	t.Run("decodeStrictObjectJSON", func(t *testing.T) {
 		var target struct {
 			GoalID string `json:"goal_id"`
 		}
-		delta := entryDelta(t, func() error {
+		assertEntryLevel(t, responseDecodeTyped, func() error {
 			return decodeStrictObjectJSON([]byte(`{"goal_id":"goal-1"}`), &target, "goal_id")
 		})
-		if delta != 1 {
-			t.Fatalf("entry calls = %d, want 1", delta)
-		}
 	})
 
 	t.Run("decodeProviderActionObjectJSON", func(t *testing.T) {
 		var target struct {
 			Operation string `json:"operation"`
 		}
-		delta := entryDelta(t, func() error {
+		assertEntryLevel(t, responseDecodeLegacy, func() error {
 			return decodeProviderActionObjectJSON([]byte(`{"operation":"probe"}`), &target, "operation")
 		})
-		if delta != 1 {
-			t.Fatalf("entry calls = %d, want 1", delta)
-		}
 	})
 
 	t.Run("decodeAPIError", func(t *testing.T) {
-		delta := entryDelta(t, func() error {
+		assertEntryLevel(t, responseDecodeLegacy, func() error {
 			_ = decodeAPIError(http.StatusBadRequest, http.Header{}, []byte(`{"error":{"code":"invalid_request","message":"bad"}}`))
 			return nil
 		})
-		if delta != 1 {
-			t.Fatalf("entry calls = %d, want 1", delta)
-		}
 	})
 
 	t.Run("decodeEvidenceBatchConflictDetails", func(t *testing.T) {
@@ -231,13 +228,10 @@ func TestResponseDecodeRoutesEveryPathThroughTheEntry(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		delta := entryDelta(t, func() error {
+		assertEntryLevel(t, responseDecodeSchema, func() error {
 			_, err := decodeEvidenceBatchConflictDetails(json.RawMessage(body))
 			return err
 		})
-		if delta != 1 {
-			t.Fatalf("entry calls = %d, want 1", delta)
-		}
 	})
 }
 
