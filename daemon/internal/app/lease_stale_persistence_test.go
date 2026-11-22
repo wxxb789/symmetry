@@ -203,7 +203,7 @@ func cleanupQueued(daemon *daemon, key state.RunKey) bool {
 	return ok
 }
 
-func expireLeaseBeforeCleanup(t *testing.T, store *state.Store, key state.RunKey) state.RunJournal {
+func expireLeaseBeforeCleanup(t *testing.T, store journalStore, key state.RunKey) state.RunJournal {
 	t.Helper()
 	journal, err := store.LoadJournal(key)
 	if err != nil {
