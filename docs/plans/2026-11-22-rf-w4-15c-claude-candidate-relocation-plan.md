@@ -126,7 +126,7 @@ The moved tests exercise the adapter's default `osCommandRunner` only behind the
 
 **`claude_probe_test.go` probe cases (8)** — the subject `probeClaudeExecutable` is deleted; each
 case is retargeted to the production path that carries the same assertion, with the same name and
-fixtures (the sole assertion replacement, case 5's `Start` half, is marked in its row):
+fixtures, except case 5, renamed and narrowed to its `Probe` half (marked in its row):
 
 | Case (base line) | HEAD call | Why the assertion survives |
 | --- | --- | --- |
@@ -134,7 +134,7 @@ fixtures (the sole assertion replacement, case 5's `Start` half, is marked in it
 | `TestClaudeProbeHelpWithoutJSONSchemaFailsClosed` (:41) | `probeCapabilities` | same `ErrNativeUnverified` naming `--json-schema`, from the moved evidence gate |
 | `TestClaudeProbeUnknownVersionFailsClosed` (:56) | `probeCapabilities` | `ErrUnsupportedVersion`, version projection and `["--version"]` call pin unchanged |
 | `TestClaudeProbeAbsentExecutableIsUnavailable` (:74) | `probeCapabilities` | `AvailabilityError` → `ErrHarnessUnavailable`, no `ErrNativeUnverified`, `evidenceCapabilities` start reason text |
-| `TestClaudeAdapterStartRemainsFailClosedAfterProbeEvidence` (:91) | `NewCandidateAdapter("claude")` with `probe` set to the promotion gate over the same fixture | **assertion replacement in the `Start` half**: the `ErrNativeUnverified` sentinel assertion lives on the added `Probe` half; `Start` pins the exact workspace-refusal text instead (`CandidateAdapter.Start` validates the request before any probe use), and the app composition's refusal is pinned by the app suite |
+| `TestClaudeAdapterProbeFailsClosedWhenExecutableBlobIsUnverified` (formerly `TestClaudeAdapterStartRemainsFailClosedAfterProbeEvidence`) | `NewCandidateAdapter("claude")` with `probe` set to the promotion gate over the same fixture | **renamed and narrowed** (PR #236 review round 1, conductor ruling): the `Start` half was dropped because `CandidateAdapter.Start` does not read probe evidence; the `ErrNativeUnverified` sentinel is asserted on `Probe`; fail-closed native admission stays with the app suite |
 | `TestClaudeProbeBoundsHangingRunnerAndPreservesCallerCancellation` (:107) | `probeCapabilities` | local deadline and caller cancellation still surface from `probeNativeEvidence` |
 | `TestClaudeProbeRejectsSuccessAfterProbeDeadline` (:165) | `probeCapabilities` | `DeadlineExceeded`, no capability from success-after-deadline output |
 | `TestClaudeProbeRejectsNilContextBeforeTheSharedGuard` (:178) | `probeCapabilities` | entry-level `"Claude probe context must not be nil"`, runner never called |
@@ -264,6 +264,7 @@ tree is authoritative; the tables above record the implement-time state.
   assertion is inlined into its only caller, `TestClaudeProbeKnownVersionAndHelpFailsClosed`.
 - `jsonObjectForCandidateAdditionalTest` is gone; the fixture is the
   `` json.RawMessage(`{"snapshot":"canonical"}`) `` literal the package's other fixture sites use.
-- The `Start` half of `TestClaudeAdapterStartRemainsFailClosedAfterProbeEvidence` is an assertion
-  replacement: it pins the exact workspace-refusal text while the `ErrNativeUnverified` sentinel
-  assertion moved to the case's added `Probe` half (§4's row is marked accordingly).
+- `TestClaudeAdapterStartRemainsFailClosedAfterProbeEvidence` became
+  `TestClaudeAdapterProbeFailsClosedWhenExecutableBlobIsUnverified`: its `Start` half was dropped
+  (`CandidateAdapter.Start` does not read probe evidence) and the `ErrNativeUnverified` sentinel is
+  asserted on `Probe` (§4's row is marked accordingly).
