@@ -866,7 +866,7 @@ jobs:
         run: mix test --cover
       - name: Upload the Control coverage report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: control-coverage
           path: control/cover
@@ -903,7 +903,7 @@ jobs:
             "$(command -v go)" test -count=1 -timeout 1200s -coverprofile=coverage.out ./...
       - name: Upload the Go coverage profile
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: daemon-coverage
           path: daemon/coverage.out
@@ -918,10 +918,10 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 12.17.0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: pnpm
@@ -931,7 +931,7 @@ jobs:
         run: pnpm --filter @symmetry/frontend exec vitest run --coverage
       - name: Upload the frontend coverage report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: frontend-coverage
           path: frontend/coverage
