@@ -77,9 +77,8 @@ defmodule SymmetryControlWeb.GoalController do
     end
   end
 
-  # The pipeline-assigned surface decides the durable actor, never the request
-  # path shape: a Goal route mounted without one fails loudly instead of
-  # silently acting as the operator.
+  # The pipeline-assigned surface, never the request path shape, decides the durable
+  # actor: a Goal route mounted without one fails loudly instead of acting as operator.
   defp actor_ref(%{assigns: %{surface: :portal}}), do: "portal_operator"
   defp actor_ref(%{assigns: %{surface: :operator}}), do: "operator"
 

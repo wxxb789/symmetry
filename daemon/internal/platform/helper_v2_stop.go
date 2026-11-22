@@ -44,9 +44,8 @@ type LinuxOwnerHelperV2StopEvidence struct {
 	PreGate          *LinuxOwnerHelperV2PreGateStopEvidence `json:"pre_gate,omitempty"`
 }
 
-// LinuxOwnerHelperV2PreGateStopEvidence is the helper's measured no-A-gate
-// stop branch. A State receipt is still created only by the daemon from the
-// exact journal grant and this typed physical evidence.
+// LinuxOwnerHelperV2PreGateStopEvidence is the helper's measured no-A-gate stop branch; only the
+// daemon creates the State receipt, from the exact journal grant and this typed physical evidence.
 type LinuxOwnerHelperV2PreGateStopEvidence struct {
 	Version                int                                        `json:"version"`
 	RunKey                 LinuxOwnerAnchorRunKey                     `json:"run_key"`
@@ -153,10 +152,8 @@ func (evidence LinuxOwnerHelperV2StopEvidence) ValidateFor(grant LinuxOwnerAncho
 	return nil
 }
 
-// ValidateMirrorFor validates the anchor takeover proof used after helper
-// death. Unlike ValidateFor, it requires the anchor's exact helper exit and
-// complete run-wide wait/reap set; it never accepts helper-supplied booleans
-// in place of the cached anchor StopLeaf result.
+// ValidateMirrorFor validates the post-helper-death anchor takeover proof: unlike ValidateFor it
+// requires the anchor's exact helper exit and run-wide wait/reap set, never helper-supplied booleans.
 func (evidence LinuxOwnerHelperV2StopEvidence) ValidateMirrorFor(
 	grant LinuxOwnerAnchorGrant,
 	helper, mirror authority.LinuxCgroupProcessIdentity,
@@ -1499,10 +1496,8 @@ func linuxOwnerHelperV2ExitResult(info unix.Siginfo, process, helper authority.L
 	return result, nil
 }
 
-// linuxOwnerSiginfoStatus reads si_status from the Linux amd64 siginfo_t
-// union written by waitid(P_PIDFD). x/sys exposes the fixed header as fields
-// but intentionally hides the union payload; the offset is the Linux UAPI
-// SIGCHLD layout (si_pid, si_uid, si_status).
+// linuxOwnerSiginfoStatus reads si_status from the siginfo_t union written by waitid(P_PIDFD); x/sys
+// hides the union payload, so the offset is the Linux UAPI SIGCHLD layout (si_pid, si_uid, si_status).
 func linuxOwnerSiginfoStatus(info *unix.Siginfo) (int32, error) {
 	if info == nil || unsafe.Sizeof(*info) != 128 {
 		return 0, errors.New("Linux amd64 siginfo_t layout differs from the wait-status decoder")

@@ -150,7 +150,7 @@ interface ReportedResult {
   kind: string | null;
 }
 
-/** The work surface's failure policy: `reason`, then `message`, then `summary`, prefixed `Failed: `. */
+/** The work surface's failure policy: `reason` → `message` → `summary`, prefixed `Failed: `. */
 export function workFailureText(failure: unknown): string | null {
   const record = asRecord(failure);
   if (record === null) return null;

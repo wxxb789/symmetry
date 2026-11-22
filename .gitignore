@@ -76,5 +76,4 @@ compose.override.yml
 /frontend/dist/
 /control/priv/static/portal/
 
-# Frontend test coverage output
 /frontend/coverage/

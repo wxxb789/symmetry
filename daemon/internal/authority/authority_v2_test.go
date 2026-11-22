@@ -338,18 +338,6 @@ func testLinuxCgroupV2Receipt(value Supervisor) StopReceipt {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// rf-w2-14 durable-record pins. They land before the move-only split and stay
-// green through the supervisorCore unification: per-field Equal sensitivity,
-// SameLaunch coverage, clone independence and conversion parity for the four
-// supervisor-family records, plus the exact compare-and-set surface of
-// StopReceipt.ValidFor / ValidForHandoff and the release-proof ValidFor pair.
-// Every mutation below is derived from the record's real field set by
-// reflection, so a unified clone/equal/conversion helper that starts or stops
-// touching one durable field fails here instead of in the journal.
-// ---------------------------------------------------------------------------
-
-// durableRecord pins one record type's Equal and, when it has one, Clone.
 type durableRecord struct {
 	name  string
 	value any
@@ -388,17 +376,6 @@ func durableSupervisorRecords(t *testing.T) []durableRecord {
 	}
 }
 
-// durableStopReceiptFixture is a fully populated v2 receipt for the record
-// testLinuxCgroupV2Handoff builds: every field v2 permits to be non-zero is
-// set, both nested exit proofs are present and the cgroup identity is
-// independently allocated. ActiveProcesses stays 0 because
-// matchesStoppedReceipt requires a drained leaf, and LauncherUID stays 0
-// because v2 validation rejects a non-zero value.
-//
-// The two record-bound identities are the record's, so a receipt derived here
-// validates for the handoff it is attached to (ValidForHandoff): a mirror-kind
-// stop proof names the record's Mirror as its issuer, and the proof's launcher
-// exit must equal the record's LauncherExit.
 func durableStopReceiptFixture() StopReceipt {
 	anchor := LinuxCgroupProcessIdentity{PID: 10, Identity: "anchor:10:start"}
 	helper := LinuxCgroupProcessIdentity{PID: 20, Identity: "helper:20:start"}
@@ -469,9 +446,6 @@ func durableStopReceiptFixture() StopReceipt {
 	}
 }
 
-// durableValidHandoff is the valid, fully bound v2 handoff the conversion and
-// compare-and-set pins start from. It carries no ScanUpdate: ToSupervisor
-// rejects a handoff that still holds the request-only envelope.
 func durableValidHandoff(t *testing.T) SupervisorHandoff {
 	t.Helper()
 	handoff := testLinuxCgroupV2Handoff()
@@ -487,8 +461,6 @@ func durableValidHandoff(t *testing.T) SupervisorHandoff {
 	return handoff
 }
 
-// durableHandoffFixture is a fully populated v2 handoff, including the
-// request-only ScanUpdate envelope and a populated terminal receipt.
 func durableHandoffFixture(t *testing.T) SupervisorHandoff {
 	t.Helper()
 	handoff := durableValidHandoff(t)
@@ -502,9 +474,6 @@ func durableHandoffFixture(t *testing.T) SupervisorHandoff {
 	return handoff
 }
 
-// durableSupervisorFixture is a fully populated v2 authority derived from the
-// valid handoff. CreatorSessionID is attached because Equal and Clone must
-// handle the optional pointer even though v2 validation rejects it.
 func durableSupervisorFixture(t *testing.T) Supervisor {
 	t.Helper()
 	value, err := durableValidHandoff(t).ToSupervisor()
@@ -516,14 +485,11 @@ func durableSupervisorFixture(t *testing.T) Supervisor {
 	return value
 }
 
-// durableReleaseProofFixture derives the exact v2 release proof for the valid
-// handoff.
 func durableReleaseProofFixture(t *testing.T) SupervisorHandoffReleaseProof {
 	t.Helper()
 	return releaseProofForHandoff(durableValidHandoff(t))
 }
 
-// releaseProofForHandoff builds the exact v2 release proof for a bound handoff.
 func releaseProofForHandoff(handoff SupervisorHandoff) SupervisorHandoffReleaseProof {
 	return SupervisorHandoffReleaseProof{
 		Version: SupervisorHandoffVersionV2, Status: "released",
@@ -598,9 +564,7 @@ func TestSupervisorHandoffScanUpdateIsRequestOnly(t *testing.T) {
 	if cloned.ScanUpdate.Phase != SupervisorScanPhaseClean {
 		t.Fatal("Clone() shared the request-only ScanUpdate envelope")
 	}
-	// The envelope is the only reason this record is not a durable authority:
-	// the stripped copy validates and converts, so the rejections below pin the
-	// request-only boundary rather than an incoherent fixture.
+
 	if err := plain.Validate(); err != nil {
 		t.Fatalf("fixture without the envelope failed Validate(): %v", err)
 	}
@@ -610,11 +574,7 @@ func TestSupervisorHandoffScanUpdateIsRequestOnly(t *testing.T) {
 	if _, err := handoff.ToSupervisor(); err == nil || err.Error() != "supervisor handoff is invalid" {
 		t.Fatalf("ToSupervisor() on a v2 handoff holding the envelope = %v, want the handoff-shape rejection", err)
 	}
-	// A v1 handoff carries the envelope through Validate (the legacy branch
-	// shape-checks it), so ToSupervisor is the boundary that refuses the
-	// conversion there. The rejection is pinned by message because the
-	// helper-bound check behind the guard rejects the same handoff with a
-	// different error.
+
 	legacy := SupervisorHandoff{
 		Version:        SupervisorHandoffVersion,
 		LaunchToken:    strings.Repeat("a", TokenBytes*2),
@@ -637,9 +597,7 @@ func TestSupervisorHandoffScanUpdateIsRequestOnly(t *testing.T) {
 	if _, err := legacy.ToSupervisor(); err == nil || err.Error() != "supervisor scan update is not a durable authority" {
 		t.Fatalf("ToSupervisor() on a v1 request-only envelope = %v, want the scan-update rejection", err)
 	}
-	// Durable JSON never carries the envelope; the marshalled value holds the
-	// envelope, so a dropped `json:"-"` (or a renamed tag) fails here instead of
-	// passing on a nil field.
+
 	encoded, err := json.Marshal(handoff)
 	if err != nil {
 		t.Fatalf("Marshal() error = %v", err)
@@ -654,7 +612,7 @@ func TestSupervisorHandoffSameLaunchCoversLaunchBindingOnly(t *testing.T) {
 	ignored := map[string]bool{"SupervisorPID": true, "SupervisorIdentity": true, "Mirror": true, "StopReceipt": true, "ScanUpdate": true}
 	for _, path := range durableFieldPaths(reflect.ValueOf(handoff)) {
 		mutated := mutateDurablePath(t, handoff, path).(SupervisorHandoff)
-		// True only while the changed field stays outside the launch binding.
+
 		want := ignored[strings.SplitN(path, ".", 2)[0]]
 		if got := handoff.SameLaunch(mutated); got != want {
 			t.Errorf("SameLaunch() after changing %s = %v, want %v", path, got, want)
@@ -673,11 +631,7 @@ func TestSupervisorConversionParityAgainstBaseFieldSet(t *testing.T) {
 	if value.StopReceipt == nil || !value.StopReceipt.Equal(*handoff.StopReceipt) {
 		t.Fatal("ToSupervisor() lost the terminal stop receipt")
 	}
-	// Parity compares the conversion against its source, so a field every
-	// valid record pins to zero is invisible to it: a dropped
-	// `LauncherUID: core.LauncherUID` mapping would still compare 0 against 0.
-	// v2 validation rejects a non-zero LauncherUID, so assert that reserved-zero
-	// mapping on a synthetic core directly.
+
 	if got := supervisorFromCore(supervisorCore{LauncherUID: 7}).LauncherUID; got != 7 {
 		t.Fatalf("supervisorFromCore() dropped the reserved-zero LauncherUID mapping: got %d", got)
 	}
@@ -703,8 +657,7 @@ func TestSupervisorConversionParityAgainstBaseFieldSet(t *testing.T) {
 	if converted.StopReceipt == nil || !converted.StopReceipt.Equal(*proof.StopReceipt) {
 		t.Fatal("supervisorFromReleaseProof() lost the terminal stop receipt")
 	}
-	// The conversion deliberately omits the creator session; a session attached
-	// to a proof must not leak into the comparison subject.
+
 	withSession := proof
 	creatorSessionID := uint32(0)
 	withSession.CreatorSessionID = &creatorSessionID
@@ -744,20 +697,14 @@ func TestStopReceiptValidForComparesExactAuthorityIdentity(t *testing.T) {
 	if !receipt.ValidFor(value) || !receipt.ValidForHandoff(handoff) {
 		t.Fatal("fixture receipt does not validate for its exact authority")
 	}
-	// A stop witness binds the exact owner, target, helper, leaf and launcher
-	// evidence. It carries no secret or launch token, does not bind the Windows
-	// creator session or a receipt attached to the record itself, and - for
-	// this helper-kind stop - is not affected by the mirror identity or the
-	// anchor identity: a helper-witnessed launcher wait names no anchor, while
-	// a mirror-kind proof (or an anchored wait) binds the anchor through
-	// LinuxCgroupStopProof.ValidateFor.
+
 	ignored := map[string]bool{
 		"Secret": true, "LaunchToken": true, "CreatorSessionID": true, "StopReceipt": true,
 		"ScanUpdate": true, "Mirror": true, "AnchorPID": true, "AnchorIdentity": true,
 	}
 	for _, path := range durableFieldPaths(reflect.ValueOf(value)) {
 		mutated := mutateDurablePath(t, value, path).(Supervisor)
-		// True only while the changed field stays outside the stop witness.
+
 		want := ignored[strings.SplitN(path, ".", 2)[0]]
 		if got := receipt.ValidFor(mutated); got != want {
 			t.Errorf("ValidFor() after changing Supervisor.%s = %v, want %v", path, got, want)
@@ -785,12 +732,10 @@ func TestReleaseProofValidForComparesExactIdentity(t *testing.T) {
 	if !proof.ValidFor(handoff) || !proof.ValidForSupervisor(value) {
 		t.Fatal("release proof does not validate for its exact handoff and authority")
 	}
-	// The proof binds every durable identity field; CreatorSessionID is the one
-	// field the v2 comparison omits, because v2 validation rejects a non-nil
-	// session on every v2 record.
+
 	for _, path := range durableFieldPaths(reflect.ValueOf(proof)) {
 		mutated := mutateDurablePath(t, proof, path).(SupervisorHandoffReleaseProof)
-		// True only while the changed field stays outside the release identity.
+
 		want := strings.SplitN(path, ".", 2)[0] == "CreatorSessionID"
 		if got := mutated.ValidFor(handoff); got != want {
 			t.Errorf("ValidFor() after changing SupervisorHandoffReleaseProof.%s = %v, want %v", path, got, want)
@@ -799,12 +744,9 @@ func TestReleaseProofValidForComparesExactIdentity(t *testing.T) {
 			t.Errorf("ValidForSupervisor() after changing SupervisorHandoffReleaseProof.%s = %v, want %v", path, got, want)
 		}
 	}
-	// On the record side the proof also binds the terminal receipt; the secret,
-	// the Windows creator session and the request-only envelope are not part of
-	// the release comparison.
+
 	recordIgnored := map[string]bool{"Secret": true, "CreatorSessionID": true, "ScanUpdate": true}
-	// A non-nil creator session on the proof side is likewise outside the
-	// release identity: base accepts it (only v2 validation rejects it).
+
 	withSession := proof
 	creatorSessionID := uint32(0)
 	withSession.CreatorSessionID = &creatorSessionID
@@ -827,17 +769,6 @@ func TestReleaseProofValidForComparesExactIdentity(t *testing.T) {
 	}
 }
 
-// TestValidatePinsV2HelperBindingAndMirrorOnlyV1Records pins the validator
-// call sites the supervisorCore unification rewrote: the requireHelper
-// argument of Supervisor.Validate and SupervisorHandoffReleaseProof.Validate
-// (both true) and the Mirror term of hasV2Fields. A v2 record with an unbound
-// helper is an invalid shape, and a v1 record carrying only the v2-only
-// Mirror field must not pass the legacy shape gate.
-//
-// The v2 cases assert the exact shape error rather than only non-nil: the
-// release-proof validator's trailing receipt check rejects an unbound proof
-// independently (no v2 receipt can validate against a zero helper), so the
-// error identity is what pins the validateV2(true) call site there.
 func TestValidatePinsV2HelperBindingAndMirrorOnlyV1Records(t *testing.T) {
 	bound := durableValidHandoff(t)
 	value, err := bound.ToSupervisor()
@@ -855,8 +786,6 @@ func TestValidatePinsV2HelperBindingAndMirrorOnlyV1Records(t *testing.T) {
 	}
 	legacyProof := legacyHandoff.ReleaseProof()
 
-	// Positive controls: every fixture validates until the one field under
-	// test is touched, so each rejection below is caused by that field.
 	if err := value.Validate(); err != nil {
 		t.Fatalf("bound v2 authority failed Validate(): %v", err)
 	}
@@ -907,10 +836,6 @@ func TestValidatePinsV2HelperBindingAndMirrorOnlyV1Records(t *testing.T) {
 	}
 }
 
-// durableFieldPaths returns the dot-separated path of every exported field of
-// value, recursing through structs and non-nil pointers. A field tagged
-// json:"-" is a path but is never recursed into: it is request-only, not
-// durable.
 func durableFieldPaths(value reflect.Value) []string {
 	var paths []string
 	collectDurableFieldPaths(value, "", &paths)
@@ -952,10 +877,6 @@ func collectDurableFieldPaths(value reflect.Value, prefix string, paths *[]strin
 	}
 }
 
-// mutateDurablePath returns a deep copy of value with the field at path set to
-// a distinct value: leaves flip within their own kind, pointer fields are
-// replaced by a freshly populated value and struct fields mutate their first
-// settable leaf.
 func mutateDurablePath(t *testing.T, value any, path string) any {
 	t.Helper()
 	copied := deepCopyDurableValue(reflect.ValueOf(value))
@@ -1000,10 +921,6 @@ func mutateDurableField(target reflect.Value, path string) {
 	}
 }
 
-// populateDurableValue fills every leaf of value with a distinct non-zero
-// value derived from its path. A pointer whose element type already appears on
-// the current path stays nil, so the self-referential exit-proof chain
-// terminates.
 func populateDurableValue(value reflect.Value, prefix string, ancestors map[reflect.Type]bool) {
 	switch value.Kind() {
 	case reflect.Pointer:
@@ -1037,8 +954,6 @@ func populateDurableValue(value reflect.Value, prefix string, ancestors map[refl
 	}
 }
 
-// deepCopyDurableValue copies every value field and allocates fresh pointees,
-// so a mutation of the copy cannot reach the original.
 func deepCopyDurableValue(value reflect.Value) reflect.Value {
 	switch value.Kind() {
 	case reflect.Pointer:
@@ -1067,9 +982,6 @@ func deepCopyDurableValue(value reflect.Value) reflect.Value {
 	}
 }
 
-// mutateDurableSharedState mutates every leaf reachable through a pointer of
-// value in place: the record's own value fields stay untouched, and any clone
-// that aliased a pointee sees the change.
 func mutateDurableSharedState(value reflect.Value) {
 	switch value.Kind() {
 	case reflect.Pointer:
@@ -1114,8 +1026,6 @@ func mutateDurablePointerTargets(value reflect.Value) {
 	}
 }
 
-// assertDurablePointersIndependent fails when the clone shares any pointer
-// address with the original, or gains or loses one.
 func assertDurablePointersIndependent(t *testing.T, original, cloned any) {
 	t.Helper()
 	assertPointersIndependent(t, "", reflect.ValueOf(original), reflect.ValueOf(cloned))
@@ -1151,8 +1061,7 @@ func assertPointersIndependent(t *testing.T, path string, original, clone reflec
 			}
 			mirror := clone
 			if original.Type() != clone.Type() {
-				// Conversions compare two record types: pair fields by name and
-				// skip a field with no counterpart (the request-only envelope).
+
 				mirror = clone.FieldByName(name)
 				if !mirror.IsValid() {
 					continue
@@ -1165,8 +1074,6 @@ func assertPointersIndependent(t *testing.T, path string, original, clone reflec
 	}
 }
 
-// assertDurableFieldParityByName compares every field of got with the field of
-// the same name on source.
 func assertDurableFieldParityByName(t *testing.T, label string, got any, source any, skip map[string]bool) {
 	t.Helper()
 	gotValue := reflect.ValueOf(got)

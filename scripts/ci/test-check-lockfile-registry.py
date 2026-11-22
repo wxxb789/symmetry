@@ -9,11 +9,7 @@ fixture and the mirror fixture, so a test that fails for one of them fails on
 registry provenance and nothing else.
 
 The differential test at the end cross-checks the check's own YAML reader against
-PyYAML when that module is importable. PyYAML is an extra oracle, not this suite's
-contract: the contract is the golden assertions, which always run. The oracle's
-availability is reported rather than assumed: a run without PyYAML prints the
-exact `ABSENCE_NOTICE` below on stderr and asserts it, and
-`SYMMETRY_REQUIRE_PYYAML=1` turns that absence into a failure instead of a skip.
+PyYAML when that module is importable. PyYAML is an extra oracle.
 """
 
 import contextlib
@@ -111,13 +107,8 @@ snapshots:
 """
 
 
-# The machine-checkable handles for the differential oracle's availability: the
-# environment switch a job sets once PyYAML is pinned, the exact notice a run
-# without the module prints on stderr, the reason the oracle is skipped when its
-# absence is tolerated, and the phrase the switch-forced failure carries (pinned
-# by the `-S` subprocess test below). `docs/TODO.md` records the pinned install
-# for the `ci.yml` "Check CI gate helper scripts" step; no job greps the notice
-# yet.
+# Availability handles: the switch a job sets once PyYAML is pinned, the exact stderr notice a run
+# without the module prints, and the phrase the switch-forced failure carries (asserted by tests).
 REQUIRE_PYYAML_ENV = "SYMMETRY_REQUIRE_PYYAML"
 ABSENCE_NOTICE = "PyYAML differential oracle skipped: module not importable"
 SKIP_REASON = "PyYAML is the optional cross-check oracle, not the contract"
@@ -125,13 +116,7 @@ REQUIRE_NOTICE = "requires the PyYAML differential oracle"
 
 
 class RecordedStderr:
-    """A stderr stand-in that forwards every write and keeps the exact bytes.
-
-    The suite has to assert what a run without PyYAML prints, and a process
-    cannot read back its own stderr, so the module-level probe writes through
-    this wrapper: the notice still reaches the job log and the assertion reads
-    the same bytes.
-    """
+    """A process cannot read back its own stderr, so the module-level probe writes through this wrapper."""
 
     def __init__(self, stream):
         self.text = ""
@@ -146,7 +131,7 @@ class RecordedStderr:
 
 
 def load_optional_pyyaml():
-    """Return the PyYAML module, or report the missing differential oracle."""
+
     try:
         import yaml
     except ImportError:
@@ -386,7 +371,7 @@ class ReaderTests(unittest.TestCase):
 
 class OracleVisibilityTests(unittest.TestCase):
     def test_the_absence_of_the_differential_oracle_is_reported(self):
-        """A missing PyYAML prints the exact notice; an importable one prints none."""
+
         if PYYAML is None:
             self.assertEqual(ABSENCE_REPORT.text, f"{ABSENCE_NOTICE}\n")
         else:

@@ -4,11 +4,6 @@ package platform
 
 import "testing"
 
-// TestCloneAliasingWindowsContainmentSessionID covers the one clone function
-// compiled under //go:build windows. The clone copies one uint32 behind a
-// pointer, so the case is written directly instead of sharing the Linux-only
-// harness in clone_aliasing_linux_test.go: the clone must copy the pointee, and
-// writing through the original pointer must not be visible through the clone.
 func TestCloneAliasingWindowsContainmentSessionID(t *testing.T) {
 	original := new(uint32)
 	*original = 4242

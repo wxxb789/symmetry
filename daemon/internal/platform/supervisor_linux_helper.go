@@ -67,10 +67,8 @@ type linuxSupervisorHello struct {
 	JobID              string `json:"job_id"`
 }
 
-// linuxSupervisorScanRequest and linuxSupervisorScanResponse use the inherited
-// full-duplex metadata socket. The socket is per launch; the redundant exact
-// owner fields reject stale, cross-launch, or fabricated observations before
-// the run-scoped Store callback is invoked.
+// Uses the inherited full-duplex metadata socket (one per launch); the redundant exact owner
+// fields reject stale, cross-launch, or fabricated observations before the Store callback.
 type linuxSupervisorScanRequest struct {
 	Version            int    `json:"version"`
 	Operation          string `json:"operation"`
@@ -110,18 +108,14 @@ type linuxSupervisorScanResponse struct {
 	Error              string `json:"error,omitempty"`
 }
 
-// linuxSupervisorRecoveryResponse extends the ordinary local response with
-// the helper's exact terminal scan-seal sequence. It is read only after the
-// recovery endpoint has authenticated the peer and full launch identity.
+// Read only after the recovery endpoint has authenticated the peer and full launch identity.
 type linuxSupervisorRecoveryResponse struct {
 	linuxSupervisorResponse
 	ScanSealSequence uint64 `json:"scan_seal_sequence,omitempty"`
 }
 
-// linuxSupervisorLeaseState owns one helper-local lease timer. The timer
-// callback latches expiry and publishes a wake-up; stop/proof remains
-// serialized by the helper loop. Generation fencing makes a stale callback
-// harmless after a newer renewal replaces the deadline.
+// One helper-local lease timer: the callback latches expiry and publishes a wake-up, stop/proof
+// stays serialized by the helper loop, and generation fencing makes a stale callback harmless.
 type linuxSupervisorLeaseState struct {
 	mu sync.Mutex
 
@@ -177,9 +171,8 @@ func (state *linuxSupervisorLeaseState) renew(deadline time.Duration, sequence u
 		state.mu.Lock()
 		if !state.stopped && state.generation == generation {
 			state.expiredGen = generation
-			// Latch expiry before publishing the wake-up. A renewal that
-			// races the timer callback must fail closed even if the helper loop
-			// has not consumed the callback notification yet.
+			// Latch expiry before publishing the wake-up: a renewal racing the timer callback must fail
+			// closed even if the helper loop has not consumed the notification yet.
 			state.stopped = true
 			state.deadlineAt = time.Time{}
 			state.timer = nil
@@ -193,9 +186,8 @@ func (state *linuxSupervisorLeaseState) renew(deadline time.Duration, sequence u
 	return false, nil
 }
 
-// takeExpiry consumes only the current generation's timer event. It latches
-// the stopped state before the external stop/proof attempt begins, so a late
-// renewal can never re-arm a lease after expiry.
+// Latches the stopped state before the external stop/proof attempt begins, so a late renewal
+// can never re-arm a lease after expiry.
 func (state *linuxSupervisorLeaseState) takeExpiry() bool {
 	if state == nil {
 		return false
@@ -239,9 +231,8 @@ func (state *linuxSupervisorLeaseState) wakeup() <-chan struct{} {
 	return state.wake
 }
 
-// latchExpiredLocked closes a lease at its monotonic deadline even when the
-// timer callback has not run yet. The wake-up lets the helper loop perform the
-// physical stop/proof after a request observes the late timer.
+// Closes a lease at its monotonic deadline even when the timer callback has not run; the
+// wake-up lets the helper loop perform the physical stop/proof.
 func (state *linuxSupervisorLeaseState) latchExpiredLocked(now time.Time) bool {
 	if state == nil || state.stopped || !state.armed || state.deadlineAt.IsZero() || now.Before(state.deadlineAt) {
 		return false
@@ -260,10 +251,8 @@ func (state *linuxSupervisorLeaseState) latchExpiredLocked(now time.Time) bool {
 	return true
 }
 
-// latchOwnerLost permanently closes the lease before the watchdog publishes
-// its wake-up. Resume/detach and owner loss therefore have one linearization
-// point: whichever acquires this lock first wins, and the other path fails
-// closed without touching ptrace state.
+// One linearization point for resume/detach and owner loss: whichever acquires this lock first
+// wins, and the other path fails closed without touching ptrace state.
 func (state *linuxSupervisorLeaseState) latchOwnerLost() {
 	if state == nil {
 		return
@@ -451,9 +440,8 @@ func receiveLinuxSupervisorFD(file *os.File) (int, error) {
 		return -1, errors.New("Linux supervisor fd transport is nil")
 	}
 	data := make([]byte, 1)
-	// Linux limits SCM_RIGHTS to 253 descriptors per message. Receive the
-	// complete bounded control payload so every unexpected descriptor can be
-	// closed before rejecting the helper response.
+	// Linux limits SCM_RIGHTS to 253 descriptors per message. Receive the complete bounded
+	// control payload so every unexpected descriptor can be closed before rejecting the helper response.
 	oob := make([]byte, unix.CmsgSpace(253*4))
 	n, oobn, flags, _, err := unix.Recvmsg(int(file.Fd()), data, oob, unix.MSG_CMSG_CLOEXEC)
 	if err != nil {
@@ -512,7 +500,6 @@ func receiveLinuxSupervisorFD(file *os.File) (int, error) {
 	return receivedFD, nil
 }
 
-// RunContainmentSupervisor is the hidden production helper entrypoint.
 func RunContainmentSupervisor(args []string) error {
 	// Keep the helper's ptrace owner on one OS thread from target launch through
 	// the later Resume/detach boundary.
@@ -554,10 +541,8 @@ func RunContainmentSupervisor(args []string) error {
 		files = append(files, file)
 	}
 	defer closeLinuxSupervisorFilesV2(files...)
-	// These descriptors belong exclusively to the helper protocol. Go's
-	// exec_linux child path intentionally preserves inherited fd >= 3 unless
-	// callers mark them close-on-exec, so never expose authority/control pipes
-	// to the target command.
+	// Go's exec_linux child path preserves inherited fd >= 3 unless marked close-on-exec, so never
+	// expose authority/control pipes to the target command.
 	for _, file := range files[:6] {
 		unix.CloseOnExec(int(file.Fd()))
 	}
@@ -768,10 +753,8 @@ func parseLinuxSupervisorFDs(args []string) (linuxSupervisorFDs, error) {
 	return parsed, nil
 }
 
-// waitForLinuxSupervisorTarget waits for target.Wait and its status publication
-// to complete. The status writer is part of waitDone so a blocked status pipe
-// cannot be mistaken for a proven stop; callers retain the recovery authority
-// when this bounded wait expires.
+// The status writer is part of waitDone so a blocked status pipe cannot be mistaken for a
+// proven stop; callers retain the recovery authority when this bounded wait expires.
 func waitForLinuxSupervisorTarget(waitDone <-chan struct{}, deadline time.Time) error {
 	if waitDone == nil {
 		return fmt.Errorf("%w: Linux supervisor target wait is unavailable", ErrLinuxSupervisorStopUnproven)

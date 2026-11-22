@@ -7,12 +7,8 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 )
 
-// CloneTaskResult returns a task result whose semantic payload shares no
-// pointer or slice with the input. It is the union of the clone helpers the
-// native adapters used, so no caller loses isolation: EvidenceRefs, Blockers,
-// ProposedNextAction, Proposal, Reason, Diagnostics and each diagnostic's
-// severity are copied independently. A nil slice stays nil and an empty slice
-// stays non-nil, so a clone marshals to the same JSON bytes as its input.
+// Returns a result sharing no pointer or slice with the input; a nil slice stays nil
+// and an empty slice stays non-nil, so a clone marshals to the same JSON bytes.
 func CloneTaskResult(result TaskResult) TaskResult {
 	cloned := result
 	if result.Semantic != nil {
@@ -26,7 +22,6 @@ func CloneTaskResult(result TaskResult) TaskResult {
 	return cloned
 }
 
-// CloneTaskResultPointer is CloneTaskResult for an optional result.
 func CloneTaskResultPointer(result *TaskResult) *TaskResult {
 	if result == nil {
 		return nil
@@ -76,10 +71,8 @@ func cloneDiagnostics(diagnostics []protocol.Diagnostic) []protocol.Diagnostic {
 	return cloned
 }
 
-// cloneDiagnostic rebuilds a diagnostic through its own JSON form, which
-// restores the protocol package's private parsed-field map (a struct copy would
-// share it) and copies the severity pointer. A diagnostic that cannot be
-// re-decoded falls back to a struct copy with an independent severity.
+// Rebuilds a diagnostic through its own JSON form, which restores the protocol
+// package's private parsed-field map and copies the severity pointer.
 func cloneDiagnostic(diagnostic protocol.Diagnostic) protocol.Diagnostic {
 	encoded, err := json.Marshal(diagnostic)
 	if err == nil {

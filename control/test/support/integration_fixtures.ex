@@ -1,13 +1,7 @@
 defmodule SymmetryControl.IntegrationFixtures do
   @moduledoc """
-  Durable fixtures for the integration sync tests: a fresh project, its
-  GitHub connection and a bound work-tracking resource, plus the provider
-  documents and lock-observation helpers the sync suite drives them with.
-
-  The lock helpers run their own transactions in unboxed sandbox connections,
-  so the two syncs they start really contend on `work_items`; the sampler
-  reads the lock manager (`pg_stat_activity`, `pg_locks`), not the statement
-  text.
+  The lock helpers run in unboxed sandbox connections, so the two syncs really contend on
+  `work_items`; the sampler reads the lock manager, not `pg_stat_activity.query`.
   """
   import ExUnit.Assertions
   import ExUnit.Callbacks, only: [on_exit: 1]
@@ -52,10 +46,6 @@ defmodule SymmetryControl.IntegrationFixtures do
     {project, connection, resource}
   end
 
-  @doc """
-  Starts one sync in its own unboxed sandbox connection, reports the backend
-  and waits at the prelock barrier until the caller sends `{:start_sync, ref}`.
-  """
   def sync_lock_order_task(resource, provider_items, owner, ref) do
     Task.async(fn ->
       Sandbox.unboxed_run(Repo, fn ->
@@ -77,10 +67,6 @@ defmodule SymmetryControl.IntegrationFixtures do
     end)
   end
 
-  @doc """
-  `FOR UPDATE SKIP LOCKED` reports a row locked by an in-progress transaction
-  without waiting; the lock a free row takes is released with the statement.
-  """
   def work_item_row_locked?(id) do
     Repo.query!(
       "SELECT 1 FROM work_items WHERE id = $1::uuid FOR UPDATE SKIP LOCKED",
@@ -89,15 +75,8 @@ defmodule SymmetryControl.IntegrationFixtures do
   end
 
   @doc """
-  Waits until the import's backend holds an ungranted lock the delivery
-  backend blocks, then asserts the delivery backend holds a granted lock on
-  `work_items`, the lock the import's ordered prelock waits for.
-
-  The sync's wait is read from the lock manager, not from the statement text:
-  run 43891279765 job 133383740181 put `pg_stat_activity.query` on the import's
-  repository lookup while the import was in a delivery-attributed lock wait, so
-  the query field is not usable evidence here. Anything else keeps polling
-  until the deadline, which reports the raw sample.
+  Asserts the import's sync waits on the delivery transaction's `work_items` locks; the wait is
+  read from the lock manager, never `pg_stat_activity.query`, which can show another statement.
   """
   def assert_sync_waiting_on_work_item(backend, blocker, deadline) do
     sample = sync_wait_sample(backend, blocker)
@@ -167,8 +146,6 @@ defmodule SymmetryControl.IntegrationFixtures do
     end
   end
 
-  # The query can be NULL (or held by another backend's activity slot) while the
-  # backend still waits, so the sample always names the wait event too.
   defp format_sync_wait_sample(sample) do
     query =
       case sample.query do
@@ -182,10 +159,6 @@ defmodule SymmetryControl.IntegrationFixtures do
       " blocker_holds_work_items=#{sample.blocker_holds_work_item_lock?}" <> query
   end
 
-  @doc """
-  Points both providers at `CredentialLeakProviderStub`, the credential-leak
-  stub this module defines.
-  """
   def use_credential_leak_provider do
     Application.put_env(:symmetry_control, :integration_providers,
       github: CredentialLeakProviderStub,
@@ -193,10 +166,6 @@ defmodule SymmetryControl.IntegrationFixtures do
     )
   end
 
-  @doc """
-  The credential-leak stub plus this process as the connection-check
-  controller, restored on exit.
-  """
   def use_blocking_connection_check_provider do
     use_credential_leak_provider()
     previous = Application.get_env(:symmetry_control, :integration_provider_test_controller)
@@ -211,7 +180,6 @@ defmodule SymmetryControl.IntegrationFixtures do
     end)
   end
 
-  @doc "One provider work item the credential tests sync."
   def provider_work_item(provider_data) do
     %{
       external_id: Ecto.UUID.generate(),
@@ -228,7 +196,6 @@ defmodule SymmetryControl.IntegrationFixtures do
     }
   end
 
-  @doc "One provider sync document for the given provider and work item fields."
   def provider_snapshot(provider, updated_at, title, external_state, provider_data) do
     base_url =
       case provider do

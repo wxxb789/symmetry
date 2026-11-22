@@ -148,12 +148,6 @@ func TestFingerprintPropagatesContextCancellation(t *testing.T) {
 	}
 }
 
-// TestFingerprintRefusesLinuxCloneIdentityMismatch pins the Linux-clone branch of
-// Fingerprint: a reserved clone is fingerprinted only when the Prepared identity
-// is exactly its grant and the recorded fingerprint is a canonical sha256 digest.
-// Every divergence is refused with the branch's exact string instead of
-// consulting Git, an invalid identity refusal precedes an invalid digest, and
-// the matching identity returns the recorded digest.
 func TestFingerprintRefusesLinuxCloneIdentityMismatch(t *testing.T) {
 	const identityRefusal = "Linux clone Prepared identity differs from its reserved grant"
 	const fingerprintRefusal = "Linux clone fingerprint is invalid"

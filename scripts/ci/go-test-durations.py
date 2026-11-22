@@ -39,25 +39,14 @@ import json
 import math
 import sys
 
-# A test over this many seconds fails the summary (program plan section 5,
-# W2-01: "fail a test >30 s").
+# 30 s cap: program plan section 5 (W2-01: "fail a test >30 s").
 MAX_TEST_SECONDS = 30.0
 
-# The per-test p95 fails the summary when it exceeds the committed baseline by
-# more than this factor (W2-01: "p95 +20 % vs the committed baseline").
+# p95 limit: 1.2x the committed baseline (W2-01: "p95 +20 % vs the committed baseline").
 P95_LIMIT_FACTOR = 1.2
 
-# Committed baseline: the nearest-rank p95 of the per-test elapsed times of the
-# daemon module's full `go test -race -count=1 -json ./...` stream on the
-# GitHub ubuntu runner, taken from the CI run whose daemon job first wrote the
-# stream this summarizer reads (run 44892215975): 5,062 pass/fail outcomes, 105
-# skips, 25 packages, p95 = 0.260s. The stream is the same shape the CI step
-# feeds, so the ratchet compares like with like (an earlier host-measured
-# non-race proxy landed 19x away from the runner's p95 and could not fire);
-# the runner's own timings swing run to run, which is why the summary step is
-# advisory (`continue-on-error`) and prints `p95=`, `baseline=` and `ratio=`
-# side by side. Refactor slice W6-12 flips the thresholds to blocking, and any
-# re-derivation of the band from more than one runner run is its call.
+# Committed baseline: nearest-rank p95 (0.260s) of the daemon module's full
+# `go test -race -count=1 -json ./...` stream on the GitHub ubuntu runner (run 44892215975).
 P95_BASELINE_SECONDS = 0.26
 
 TOP_TEST_ROWS = 20
@@ -71,7 +60,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 def load_events(path: str) -> tuple[list[dict], int]:
-    """The parsed events and the count of lines that are not JSON."""
+
     events: list[dict] = []
     invalid = 0
     with open(path, encoding="utf-8", errors="replace") as stream:
@@ -88,12 +77,8 @@ def load_events(path: str) -> tuple[list[dict], int]:
 def collect_outcomes(
     events: list[dict],
 ) -> tuple[dict[tuple[str, str], float], dict[str, float], int, set[tuple[str, str]], list[str]]:
-    """Per-test elapsed times, package totals, skip count, failed tests, failed packages.
-
-    The per-test map is keyed by `(Package, Test)` and keeps the largest elapsed
-    time seen for a key; package totals come from the package-level terminal
-    events (the only events that carry a package's whole elapsed time).
-    """
+    """A package total is read from its package-level terminal event, the only event
+    carrying the whole elapsed time."""
     tests: dict[tuple[str, str], float] = {}
     packages: dict[str, float] = {}
     skipped = 0
@@ -125,11 +110,6 @@ def collect_outcomes(
 
 
 def collect_output(events: list[dict]) -> tuple[dict[tuple[str, str], list[str]], dict[str, list[str]]]:
-    """The captured output lines, keyed by test and by package.
-
-    Test-level output is keyed like the per-test map; output events without a
-    `Test` field (build failures, panics outside a test) are keyed by package.
-    """
     test_output: dict[tuple[str, str], list[str]] = {}
     package_output: dict[str, list[str]] = {}
     for event in events:
@@ -148,7 +128,7 @@ def collect_output(events: list[dict]) -> tuple[dict[tuple[str, str], list[str]]
 
 
 def nearest_rank(values: list[float], fraction: float) -> float:
-    """The nearest-rank percentile: the smallest value covering `fraction`."""
+
     ordered = sorted(values)
     index = max(math.ceil(fraction * len(ordered)) - 1, 0)
     return ordered[index]
@@ -174,12 +154,8 @@ def print_failure_output(
     test_output: dict[tuple[str, str], list[str]],
     package_output: dict[str, list[str]],
 ) -> None:
-    """Replay the captured output of failed tests and of unexplained failed packages.
-
-    The race step's own log carries the whole event stream only once the gate
-    step ends, so this step is where a red run's diagnostics get read; a failed
-    test or package that captured no output is still named.
-    """
+    """The race step's log carries the stream only once the gate step ends, so a red run's
+    diagnostics are read here."""
     for package, test in sorted(failed):
         lines = test_output.get((package, test))
         print(f"go_test_durations: output of failed test {package} {test}:")
@@ -212,9 +188,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     unexplained = [package for package in failed_packages if not any(key[0] == package for key in failed)]
 
-    # The tables print before the refusals below: a refused run is exactly the
-    # one whose slow tests need naming, so it loses the verdict, not the
-    # attribution; the table headings carry the partial label instead.
+    # The tables print before the refusals below: a refused run loses the verdict, not the
+    # attribution, and the headings carry the partial label instead.
     reasons: list[str] = []
     if invalid:
         reasons.append(f"{invalid} unparsable JSON line(s) were skipped")

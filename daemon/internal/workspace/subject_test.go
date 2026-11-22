@@ -215,11 +215,6 @@ func TestVerifySubjectIgnoresDirtyWorktreeForCommittedSubject(t *testing.T) {
 	}
 }
 
-// TestVerifySubjectRefusesUnmanagedWorktree pins the managed/binding refusal of
-// verifyPreparedSubject: a Prepared that is not a daemon-managed Git worktree, or
-// that carries no repository or root, can never be verified. The refusal is the
-// typed workspace_binding error with its exact message and fires before any
-// binding lookup or filesystem work.
 func TestVerifySubjectRefusesUnmanagedWorktree(t *testing.T) {
 	manager := New(nil)
 	expected := protocol.Subject{

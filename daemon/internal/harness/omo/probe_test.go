@@ -220,10 +220,8 @@ func TestProbePinsCompleteVersionTransportAndPlatformBytes(t *testing.T) {
 	}
 }
 
-// TestProbeRejectsOutputAboveTheOmOProbeLimit pins the provider-local probe
-// output guard: the shared bounded probe carries no limit of its own, so an
-// oversized capture must fail here and a capture exactly at the limit must
-// still be parsed.
+// The shared bounded probe carries no limit of its own, so an oversized capture must
+// fail here and a capture exactly at the limit must still be parsed.
 func TestProbeRejectsOutputAboveTheOmOProbeLimit(t *testing.T) {
 	for _, test := range []struct {
 		name      string

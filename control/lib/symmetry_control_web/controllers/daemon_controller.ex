@@ -123,9 +123,8 @@ defmodule SymmetryControlWeb.DaemonController do
     end
   end
 
-  # Test-only clock seam: `protocol_controller_test.exs:644` (the
-  # expired-at-response replay case) puts this private key in the conn, and
-  # production never does, so the fallback below is production's only path.
+  # Test-only clock seam: `protocol_controller_test.exs` (expired-at-response replay)
+  # sets this private key; production takes the fallback below.
   defp claim_response_time(conn) do
     case Map.get(conn.private, :claim_server_time) do
       %DateTime{} = server_time -> server_time
@@ -479,11 +478,7 @@ defmodule SymmetryControlWeb.DaemonController do
 
   defp acknowledgement_body(_body), do: {:error, :invalid_request}
 
-  # The one fence rule: the daemon presents these five fields, in this order, on
-  # every fenced request. `:string` is a non-empty string; the integers are any
-  # positive integer (no upper bound; the baseline accepted the same set). Only
-  # the carrier differs — a JSON body carries the number, a query string the
-  # decimal text.
+  # The one fence rule: these five fields, in this order, on every fenced request.
   @fence_spec [
     {"runtime_id", :string},
     {"runtime_epoch", :integer},
@@ -507,13 +502,8 @@ defmodule SymmetryControlWeb.DaemonController do
   defp query_fence(conn) do
     query = fetch_query_params(conn).query_params
 
-    # `machine_id` is already outside the accepted key set the subset check
-    # below enforces, so this explicit check never refuses anything on its own
-    # and its failure path is a `with`-clause error. It keeps the pre-merge
-    # branch shape deliberately: turning it into a served 400 would change an
-    # error response outside this slice's byte-identical wire contract. The
-    # defect and its one-line fix are recorded in
-    # docs/plans/2026-11-21-rf-w2-03-controller-plumbing-plan.md (CW-7).
+    # `machine_id` is outside the accepted key set below, so this check never refuses on
+    # its own; kept as-is to preserve the pre-merge error shape (defect: plan CW-7).
     with {:ok, fence} <- fence(query, :query),
          false <- Map.has_key?(query, "machine_id"),
          true <- MapSet.subset?(MapSet.new(Map.keys(query)), MapSet.new(@fence_keys)) do

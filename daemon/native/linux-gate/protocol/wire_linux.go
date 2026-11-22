@@ -28,9 +28,8 @@ func (auth GateProductionAuth) Validate() error {
 	return nil
 }
 
-// ReleaseGuard binds the one-use RELEASE to the helper's live owner pipe and
-// the absolute deadline from its acknowledged lease. OwnerPipe remains owned
-// by the caller; Release duplicates it for SCM_RIGHTS transfer.
+// OwnerPipe stays owned by the caller (Release duplicates it for the SCM_RIGHTS
+// transfer), and the one-use RELEASE carries the absolute acknowledged-lease deadline.
 type ReleaseGuard struct {
 	OwnerPipe     *os.File
 	LeaseDeadline time.Time
@@ -191,8 +190,7 @@ func waitForStatus(ctx context.Context, fd int, deadline time.Time) error {
 	}
 }
 
-// EncodeGateMap carries the fixed IDs and one-use token only over the private
-// root-to-static-gate socket. It is never placed in argv or environment.
+// Sent only over the private root-to-gate socket, never via argv or environment.
 func EncodeGateMap(config OwnerConfig, token [32]byte) []byte {
 	packet := fixedFrame(frameGateMap, gateMapSize)
 	binary.LittleEndian.PutUint32(packet[12:16], config.AUID)
@@ -203,7 +201,6 @@ func EncodeGateMap(config OwnerConfig, token [32]byte) []byte {
 	return packet
 }
 
-// DecodeGateMap validates the exact root-to-gate B-only map acknowledgement.
 func DecodeGateMap(packet []byte) (OwnerConfig, [32]byte, error) {
 	var token [32]byte
 	if err := validateFixedFrame(packet, frameGateMap, gateMapSize); err != nil {
@@ -222,10 +219,8 @@ func DecodeGateMap(packet []byte) (OwnerConfig, [32]byte, error) {
 	return config, token, nil
 }
 
-// EncodeRelease creates a one-use guarded RELEASE. Non-clone scratch commands
-// use v2; a clone grant is encoded only in v3 and is never downgraded. The
-// fixed header binds an absolute CLOCK_MONOTONIC cutoff; SCM_RIGHTS always
-// carries three stdio pipes and the owner-pipe read end.
+// A clone grant is encoded only in v3 and never downgraded; the header binds an
+// absolute CLOCK_MONOTONIC cutoff and SCM_RIGHTS always carries four descriptors.
 func EncodeRelease(token [32]byte, command NativeCommand, guard ReleaseGuard) ([]byte, error) {
 	if err := command.Validate(); err != nil {
 		return nil, err
@@ -240,15 +235,12 @@ func EncodeRelease(token [32]byte, command NativeCommand, guard ReleaseGuard) ([
 	return encodeGuardedRelease(token, command, deadlineNS)
 }
 
-// DecodeRelease accepts a direct v2 or clone v3 frame, the exact fresh token,
-// four descriptors, and a bounded complete command.
 func DecodeRelease(packet []byte, expectedToken [32]byte, descriptors [releaseFDCount]*os.File) (NativeCommand, uint64, error) {
 	return decodeReleaseFrame(packet, expectedToken, descriptors, true, false)
 }
 
-// DecodeCloneBootstrapRequest decodes the sealed, token-scrubbed v3 request
-// passed to the trusted B bootstrap. The inherited control descriptors are
-// validated by the C gate before this process is entered.
+// The sealed, token-scrubbed v3 request for the trusted B bootstrap; the C gate
+// validated the inherited control descriptors before this process was entered.
 func DecodeCloneBootstrapRequest(packet []byte) (NativeCommand, uint64, error) {
 	var noToken [32]byte
 	return decodeReleaseFrame(packet, noToken, [releaseFDCount]*os.File{}, false, true)
@@ -363,8 +355,8 @@ func monotonicDeadlineNS(deadline time.Time) (uint64, error) {
 	if err := unix.ClockGettime(unix.CLOCK_MONOTONIC, &now); err != nil {
 		return 0, fmt.Errorf("read CLOCK_MONOTONIC for RELEASE: %w", err)
 	}
-	// Sample Go's monotonic deadline after CLOCK_MONOTONIC so conversion is
-	// conservative: syscall/dispatch delay can shorten, never extend, the lease.
+	// Sampled after CLOCK_MONOTONIC so syscall/dispatch delay can only shorten, never
+	// extend, the lease.
 	remaining := time.Until(deadline)
 	if remaining <= 0 {
 		return 0, errors.New("Linux RELEASE lease deadline has already expired")

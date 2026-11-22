@@ -31,9 +31,8 @@ func linuxOwnerHelperV2Supervisor(grant LinuxOwnerAnchorGrant, helper, launcher 
 	}
 }
 
-// RunLinuxOwnerHelperV2 is the fixed hidden dispatch target. The only startup
-// inputs are the anchor-authenticated bootstrap packet and inherited pinned
-// parent/leaf/owner-pipe descriptors; no RunJournal or Store is opened here.
+// RunLinuxOwnerHelperV2 is the fixed hidden dispatch target: its only startup inputs are the
+// anchor-authenticated bootstrap packet and inherited pinned descriptors, and it opens no Store.
 func RunLinuxOwnerHelperV2(args []string) error {
 	if len(args) != 0 {
 		return errors.New("Linux owner helper v2 accepts no command-line arguments")
@@ -193,9 +192,8 @@ func (lease *linuxOwnerHelperV2Lease) renew(duration time.Duration, sequence uin
 	return false, nil
 }
 
-// latchLocked freezes the lease. notify is true only for deadline expiry; an
-// explicit stop must not be reported to the owner-loss watcher, because the
-// stop owner still needs the accepted stop response on its live connection.
+// latchLocked freezes the lease; notify is true only for deadline expiry, because an explicit stop
+// must still return its accepted stop response on the live connection.
 func (lease *linuxOwnerHelperV2Lease) latchLocked(notify bool) {
 	if lease == nil || lease.stopped {
 		return
@@ -344,9 +342,8 @@ type linuxOwnerHelperV2 struct {
 	untrustedWaitError         error
 }
 
-// linuxOwnerHelperV2Finalization serializes pin retirement for one exact
-// durable proof. The record remains as the in-memory idempotency tombstone
-// after success; it is not a journal and cannot mint State authority.
+// linuxOwnerHelperV2Finalization serializes pin retirement for one exact durable proof and stays as
+// the in-memory idempotency tombstone; it is not a journal and mints no State authority.
 type linuxOwnerHelperV2Finalization struct {
 	kind         string
 	releaseProof *authority.SupervisorHandoffReleaseProof
@@ -408,9 +405,8 @@ func (helper *linuxOwnerHelperV2) serve() (result error) {
 	}()
 	defer func() {
 		_ = helper.listener.Close()
-		// Keep owner/lease watchers alive while active sessions quiesce. A
-		// failed session drain must hand control to the anchor, not strand a
-		// live helper outside its pidfd-death observer.
+		// Keep owner/lease watchers alive while active sessions quiesce: a failed drain must hand
+		// control to the anchor rather than strand a live helper outside its pidfd-death observer.
 		sessionsDone := make(chan struct{})
 		go func() {
 			sessions.Wait()

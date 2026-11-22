@@ -3130,20 +3130,8 @@ func TestLinuxSupervisorControlEOFFailsClosedBeforeOwnerLoss(t *testing.T) {
 	_ = stderrWrite.Close()
 }
 
-// TestLinuxSupervisorControlEOFWithDeadOwnerMetadataUsesOwnerLossSeal pins the
-// deterministic ordering that produced CI run 44876100236's witness-spine
-// stop-receipt stall. The control-pipe EOF reaches the helper before the owner
-// watchdog publishes owner loss, and the helper's next descendant scan write
-// would hit the dead daemon-side metadata transport (the first daemon was
-// SIGKILLed there, here it is closed directly). If the first stop takes the
-// live-owner branch, its final scan persists a fence over that dead transport,
-// the failed persist latches sticky descendant uncertainty, and every later
-// recovery stop is refused as unproven, so no stop receipt can be minted. The
-// owner-loss branch never writes to the owner transport and must mint the
-// receipt from the local seal. The test constructs that ordering itself: the
-// daemon-side metadata connection is closed first and the owner writer stays
-// open, so the control EOF is the only owner-loss boundary, with no scheduler
-// dependence.
+// With the metadata transport closed first, a live-owner-branch stop would fail its fence write, latch sticky
+// uncertainty and refuse every later stop; the owner writer stays open, so control EOF alone carries owner loss.
 func TestLinuxSupervisorControlEOFWithDeadOwnerMetadataUsesOwnerLossSeal(t *testing.T) {
 	stdinRead, stdinWrite, err := os.Pipe()
 	if err != nil {
@@ -3196,9 +3184,7 @@ func TestLinuxSupervisorControlEOFWithDeadOwnerMetadataUsesOwnerLossSeal(t *test
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		// A pre-fix failure leaves the helper holding the poisoned ledger and
-		// an open owner pipe, exactly like the CI occurrence where the helper
-		// had to be force-stopped; kill it so a red run leaks no helpers.
+		// Kill the helper so a red run cannot leak it holding the poisoned ledger.
 		_ = supervisor.helper.Kill()
 		select {
 		case <-supervisor.helperDone:
@@ -3208,14 +3194,13 @@ func TestLinuxSupervisorControlEOFWithDeadOwnerMetadataUsesOwnerLossSeal(t *test
 	if err := supervisor.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	// A long lease keeps the helper's own lease-expiry timer out of the
-	// window: the stop below is driven solely by the control-pipe EOF.
+	// A long lease keeps the helper's own lease-expiry timer out of the window, so
+	// the stop below is driven solely by the control-pipe EOF.
 	if err := supervisor.RenewLease(30*time.Second, 1); err != nil {
 		t.Fatal(err)
 	}
-	// Wait for the helper's initial clean scan to be durably acknowledged
-	// (begin, clean, retire) before removing its transport. The monitor is
-	// paused after this scan, exactly as at the pre-resume crash.
+	// Wait for the helper's initial clean scan to be durably acknowledged before
+	// removing its transport; the monitor is paused after this scan.
 	select {
 	case <-initialScanRetired:
 	case <-time.After(testHangGuard):
@@ -3225,21 +3210,14 @@ func TestLinuxSupervisorControlEOFWithDeadOwnerMetadataUsesOwnerLossSeal(t *test
 	if value == nil {
 		t.Fatal("missing Linux supervisor authority")
 	}
-	// Ordering hook: close the daemon side of the helper metadata transport
-	// before the control pipe, so the helper's next scan persist is guaranteed
-	// to fail on a closed peer. The owner writer stays open, so the owner
-	// watchdog can never publish owner loss and the control EOF below is the
-	// only recovery entry for the whole test.
+	// Close the daemon side of the metadata transport before the control pipe so the next
+	// scan persist fails on a closed peer; the owner writer stays open, making control EOF the only recovery entry.
 	if err := supervisor.closeScanTransport(time.Now().Add(containmentCloseDeadline)); err != nil {
 		t.Fatalf("close daemon metadata transport: %v", err)
 	}
 	_ = supervisor.controlWrite.Close()
 	receipt, sealSequence, stopErr := StopPersistedLinuxSupervisorWithScanSeal(*value)
 	if stopErr != nil {
-		// Pre-fix this is the CI flake's deterministic refusal: the first stop
-		// took the live-owner branch, its final scan fence write failed on the
-		// closed metadata transport, and the sticky descendant uncertainty
-		// latch refused every recovery stop.
 		t.Fatalf("stop after control EOF with a dead owner metadata transport = %v", stopErr)
 	}
 	if sealSequence != 2 {
@@ -3260,8 +3238,8 @@ func TestLinuxSupervisorControlEOFWithDeadOwnerMetadataUsesOwnerLossSeal(t *test
 	if err := ReleasePersistedLinuxSupervisor(*value); err != nil {
 		t.Fatal(err)
 	}
-	// The recovery release has completed; close the still-open owner writer so
-	// the watchdog's deferred shutdown cannot extend the helper exit fence.
+	// Close the still-open owner writer after the recovery release so the watchdog's
+	// deferred shutdown cannot extend the helper exit fence.
 	_ = supervisor.ownerWrite.Close()
 	select {
 	case <-supervisor.helperDone:
@@ -3273,12 +3251,8 @@ func TestLinuxSupervisorControlEOFWithDeadOwnerMetadataUsesOwnerLossSeal(t *test
 	_ = stderrWrite.Close()
 }
 
-// linuxSupervisorScanJournalModel is a test double for the app's durable
-// scan-persistence callback. It models only the scan-journal fields that decide
-// one in-process response-loss outcome: per-owner progress and the two assert
-// phases (state.go's ContainmentScanJournal.sealed()/clean() and the
-// assert_all_sealed case). The store rules remain the authority; this model is
-// deliberately narrower than the store.
+// Test double for the app's durable scan-persistence callback, deliberately
+// narrower than the store; the store rules remain the authority.
 type linuxSupervisorScanJournalModel struct {
 	mutex                 sync.Mutex
 	progress              map[string]linuxSupervisorScanProgressModel
@@ -3355,22 +3329,8 @@ func (model *linuxSupervisorScanJournalModel) prepare(handoff authority.Supervis
 	return nil
 }
 
-// TestLinuxSupervisorLiveOwnerControlCloseInProcessStopFailsClosed pins the
-// in-process outcome for the live-owner entry of the owner-loss latch: the
-// daemon closes its own control writer on response-transport loss
-// (closeControlAfterResponseLossRequestLocked) while the owner process, its
-// owner pipe and the metadata transport stay alive. The helper reaches
-// enterRecovery through the control EOF, latches owner loss, and seals its
-// descendant scans locally with no observer writes, so the daemon's durable
-// helper progress never receives a seal. The in-process response-loss consumer
-// therefore cannot satisfy the durable all-sealed assertion and fails the stop
-// closed: no receipt is adopted and the containment-unproven callback fires
-// once. The helper's terminal owner-loss seal is still available over the
-// authenticated recovery endpoint (the restarted-daemon consumer records it
-// durably); teaching the in-process consumer to record it is the follow-up
-// tracked in docs/TODO.md (PR #185 review round 1, finding F1). The test pins
-// the current fail-closed outcome, so it discriminates: on the pre-latch tree
-// the live-owner branch mints the receipt through observer writes instead.
+// The in-process consumer sees no durable helper seal after the local owner-loss seal,
+// so the stop fails closed: no receipt is adopted and the containment-unproven callback fires once.
 func TestLinuxSupervisorLiveOwnerControlCloseInProcessStopFailsClosed(t *testing.T) {
 	stdinRead, stdinWrite, err := os.Pipe()
 	if err != nil {
@@ -3412,7 +3372,7 @@ func TestLinuxSupervisorLiveOwnerControlCloseInProcessStopFailsClosed(t *testing
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		// A failed assertion must not leak the helper holding the target.
+		// Kill the helper on failure so it cannot leak holding the target.
 		_ = supervisor.helper.Kill()
 		select {
 		case <-supervisor.helperDone:
@@ -3432,8 +3392,8 @@ func TestLinuxSupervisorLiveOwnerControlCloseInProcessStopFailsClosed(t *testing
 	if err := supervisor.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	// A long lease keeps the helper's own lease-expiry timer out of the
-	// window; the stop below is driven solely by the daemon-side control close.
+	// A long lease keeps the helper's own lease-expiry timer out of the window, so
+	// the stop below is driven solely by the daemon-side control close.
 	if err := supervisor.RenewLease(30*time.Second, 1); err != nil {
 		t.Fatal(err)
 	}
@@ -3441,9 +3401,8 @@ func TestLinuxSupervisorLiveOwnerControlCloseInProcessStopFailsClosed(t *testing
 	if value == nil {
 		t.Fatal("missing Linux supervisor authority")
 	}
-	// The production request() paths close the control writer exactly this way
-	// once the response transport is lost; the owner pipe stays open, so the
-	// owner process and its watchdog stay alive for the whole test.
+	// The production request() paths close the control writer exactly this way on
+	// response-transport loss; the owner pipe stays open so the owner and its watchdog stay alive.
 	supervisor.requestMu.Lock()
 	supervisor.closeControlAfterResponseLossRequestLocked()
 	supervisor.requestMu.Unlock()
@@ -3474,8 +3433,8 @@ func TestLinuxSupervisorLiveOwnerControlCloseInProcessStopFailsClosed(t *testing
 	if assertAttempts == 0 || assertRefusals == 0 {
 		t.Fatalf("durable all-sealed assertions = %d attempts / %d refusals, want the assertion attempted and refused", assertAttempts, assertRefusals)
 	}
-	// The helper's own terminal seal is still available over the authenticated
-	// recovery endpoint with the persisted consumer's Completed+1 rule.
+	// The helper's own terminal seal is still available over the authenticated recovery
+	// endpoint, whose persisted consumer applies the Completed+1 rule.
 	receipt, sealSequence, recoveryErr := StopPersistedLinuxSupervisorWithScanSeal(*value)
 	if recoveryErr != nil {
 		t.Fatalf("recovery-endpoint owner-loss seal after the refused in-process stop = %v", recoveryErr)
@@ -3487,8 +3446,8 @@ func TestLinuxSupervisorLiveOwnerControlCloseInProcessStopFailsClosed(t *testing
 	if err := ReleasePersistedLinuxSupervisor(*value); err != nil {
 		t.Fatal(err)
 	}
-	// The release has completed; close the still-open owner writer so the
-	// watchdog's deferred shutdown cannot extend the helper exit fence.
+	// Close the still-open owner writer after the release so the watchdog's deferred
+	// shutdown cannot extend the helper exit fence.
 	_ = supervisor.ownerWrite.Close()
 	select {
 	case <-supervisor.helperDone:
