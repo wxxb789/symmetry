@@ -1,4 +1,4 @@
-import { errorMessage, Network, ServerRefusal, UnexpectedResponse, type MoveIntent, type Project, type ProjectChanges, type ProjectDraft, type WorkItem, type WorkItemChanges, type WorkItemDraft } from "../../services/api";
+import { type MoveIntent, type Project, type ProjectChanges, type ProjectDraft, type WorkItem, type WorkItemChanges, type WorkItemDraft } from "../../services/api";
 
 /**
  * The served external-tracker contract names the fields it owns. A field in
@@ -96,44 +96,6 @@ export function resetPendingWorkItemCreations(): void {
 export function workItemMovePolicy(projectStatus: string | undefined, item: WorkItem): { statusChange: boolean; reorder: boolean } {
   if (isGoalManaged(item) || projectStatus === "archived" || !hasServedRevision(item)) return { statusChange: false, reorder: false };
   return { statusChange: !providerOwnedControlsOf(item).has("status"), reorder: true };
-}
-
-/**
- * How a refusal is presented. `fields` keeps the editor open for correction,
- * `retryable` keeps the frozen intent for an explicit retry, and `authoritative`
- * closes the editor and re-reads the server's current state.
- */
-type FailureMode = "fields" | "retryable" | "authoritative";
-
-export function failureMode(error: unknown): FailureMode {
-  if (error instanceof ServerRefusal) {
-    // A server-side fault is no authoritative answer even when it arrives in
-    // the server's own error envelope: the write may have been applied, so the
-    // frozen intent stays retryable, exactly as `definitiveRefusal` classifies.
-    if (error.status >= 500) return "retryable";
-    return error.code === "validation_failed" ? "fields" : "authoritative";
-  }
-  if (error instanceof Network) return "retryable";
-  if (error instanceof UnexpectedResponse) return error.transient ? "retryable" : "authoritative";
-  return "authoritative";
-}
-
-// The server owns the reason; the console adds the operator's next step.
-const refusalGuidance: Record<string, string> = {
-  stale: "The server's current state is shown instead.",
-  state_conflict: "The server's current state is shown instead.",
-  provider_owned: "Fields owned by the external work tracker are edited in that tracker.",
-  goal_authority_required: "Goal-managed work is changed through Goal admission, not this surface.",
-  not_found: "The server's current state is shown instead.",
-  validation_failed: "Correct the highlighted fields and submit again.",
-  invalid_request: "This request cannot be corrected here; the editor closes and the server's current state is shown.",
-  forbidden: "Refresh the page and sign in again if the session was renewed elsewhere.",
-};
-
-export function refusalNotice(error: unknown): string {
-  if (!(error instanceof ServerRefusal)) return errorMessage(error);
-  const guidance = refusalGuidance[error.code];
-  return `${error.message} (${error.code})${guidance ? ` — ${guidance}` : ""}`;
 }
 
 interface BoardMoveRequest {

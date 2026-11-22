@@ -2,7 +2,8 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLayoutEffect, useRef, type SyntheticEvent } from "react";
 import { chatMessageMutation, type ChatScopeKey } from "../../app/application";
 import { useSessionToken } from "../../app/session";
-import { Conflict, Forbidden, ServerRefusal, Unsupported, Validation, errorMessage, type Api, type ChatMessageRequest, type ChatScope, type WorkItem } from "../../services/api";
+import { errorMessage, type Api, type ChatMessageRequest, type ChatScope, type WorkItem } from "../../services/api";
+import { isDefinitive } from "../../services/refusals";
 import type { ChatDecisionOption } from "./presentation";
 import { chatScopeKey, useChatScopeStore, type ChatIntent } from "./scopes";
 
@@ -89,11 +90,6 @@ export function buildChatRequest(inputs: ChatRequestInputs): ChatRequestOutcome 
   return { kind: "request", request: { ...members, intent: inputs.intent, content, action_id: crypto.randomUUID() } };
 }
 
-function definitiveRefusal(error: unknown): boolean {
-  return error instanceof Conflict || error instanceof Validation || error instanceof Forbidden || error instanceof Unsupported ||
-    (error instanceof ServerRefusal && error.status >= 400 && error.status < 500);
-}
-
 function sameRequestBody(frozen: ChatMessageRequest, rebuilt: ChatMessageRequest): boolean {
   return JSON.stringify({ ...frozen, action_id: "" }) === JSON.stringify({ ...rebuilt, action_id: "" });
 }
@@ -169,7 +165,7 @@ export function useChatScopeState(params: ChatScopeParams, inputs: ChatScopeInpu
         void queryClient.invalidateQueries({ queryKey: ["chat", sendIdentity] });
       },
       onError: (error) => {
-        const refused = definitiveRefusal(error);
+        const refused = isDefinitive(error);
         updateStoredWith(key, (current) => ({
           ...current,
           status: refused
