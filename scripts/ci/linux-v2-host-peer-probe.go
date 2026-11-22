@@ -250,7 +250,7 @@ try:
         dropped = status(os.getpid())
         if (dropped["Uid"] != [a_uid] * 4 or dropped["Gid"] != [a_gid] * 4 or
             dropped["Groups"] or os.getgroups() or
-            any(capability_mask(name) != 0 for name in ("CapEff", "CapPrm", "CapAmb"))):
+            any(capability_mask(name) != 0 for name in ("CapEff", "CapPrm", "CapInh", "CapAmb"))):
             fail("credential-drop", "root prep did not fully drop to group-free A")
         print("group-preparation=passed initial_supplementary_group_count=%d" % len(groups_before), flush=True)
         if cgroup(os.getpid()) != service_cgroup:
@@ -546,6 +546,16 @@ func checkHostPrerequisites(result *report) string {
 	}
 	result.usernsEnabled = true
 
+	// Ubuntu's userns restriction transitions an unconfined creator into the capability-denying
+	// unprivileged_userns profile; the exact probe binary must carry the per-program userns exception.
+	if restriction, err := os.ReadFile("/proc/sys/kernel/apparmor_restrict_unprivileged_userns"); err == nil &&
+		strings.TrimSpace(string(restriction)) == "1" {
+		if err := usernsExceptionAttached(); err != nil {
+			result.failureDetail = err.Error()
+			return "apparmor-unprivileged-userns-restricted"
+		}
+	}
+
 	capEff, err := statusValue(os.Getpid(), "CapEff")
 	if err != nil {
 		result.failureDetail = err.Error()
@@ -585,6 +595,21 @@ func checkHostPrerequisites(result *report) string {
 	}
 	result.usernsCreated = true
 	return ""
+}
+
+func usernsExceptionAttached() error {
+	for _, label := range []string{"/proc/self/attr/current", "/proc/self/attr/apparmor/current"} {
+		contents, err := os.ReadFile(label)
+		if err != nil {
+			continue
+		}
+		value := strings.TrimSpace(string(contents))
+		if value == "" || value == "unconfined" {
+			return fmt.Errorf("AppArmor userns restriction is active and the process label is %q; attach a per-program userns exception to the probe binary", value)
+		}
+		return nil
+	}
+	return fmt.Errorf("AppArmor userns restriction is active but no AppArmor process label was readable")
 }
 
 func exactIDMap(pid int, name string, expectedID int) error {
@@ -957,6 +982,19 @@ func namespaceLaunchCapabilities() string {
 	return strings.Join(values, " ")
 }
 
+// B's exec preserves the inheritable set (capabilities(7) P'(inheritable)=P(inheritable)), so the worker
+// clears it alongside the ambient set before B starts.
+func clearInheritableCapabilities() error {
+	header := unix.CapUserHeader{Version: unix.LINUX_CAPABILITY_VERSION_3}
+	var sets [2]unix.CapUserData
+	if err := unix.Capget(&header, &sets[0]); err != nil {
+		return err
+	}
+	sets[0].Inheritable = 0
+	sets[1].Inheritable = 0
+	return unix.Capset(&header, &sets[0])
+}
+
 func namespaceWorker(leafDirectory string, parentUserNS string, input *bufio.Reader) int {
 	currentUserNS, err := os.Readlink("/proc/self/ns/user")
 	if err != nil {
@@ -964,6 +1002,16 @@ func namespaceWorker(leafDirectory string, parentUserNS string, input *bufio.Rea
 	}
 	if currentUserNS == parentUserNS {
 		return peerFailure("worker-userns-not-child", fmt.Errorf("worker remained in A's parent user namespace"))
+	}
+
+	// The B-only uid map leaves in-namespace 0 unmapped, so cap_emulate_setxuid never fires for B and
+	// its exec keeps the ambient and inheritable sets (capabilities(7)); sets are per-thread, hence the lock.
+	runtime.LockOSThread()
+	if err := unix.Prctl(unix.PR_CAP_AMBIENT, unix.PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0); err != nil {
+		return peerFailure("worker-ambient-caps-clear", err)
+	}
+	if err := clearInheritableCapabilities(); err != nil {
+		return peerFailure("worker-inheritable-caps-clear", err)
 	}
 
 	peer := exec.Command("/proc/self/exe", "--socket-peer", leafDirectory)
@@ -1344,9 +1392,11 @@ func runCrossUIDProbe(result *report, leafFD *os.File, leafDirectory string) (fa
 	if err != nil || strings.TrimSpace(peerGroups) != "" {
 		return "cross-uid-b-groups-not-empty", "B retained supplementary groups"
 	}
-	peerCapEff, err := statusValue(peerPID, "CapEff")
-	if err != nil || strings.TrimSpace(peerCapEff) != "0000000000000000" {
-		return "cross-uid-b-capabilities-nonzero", "B must have CapEff=0"
+	for _, field := range []string{"CapEff", "CapPrm", "CapInh", "CapAmb"} {
+		value, err := statusValue(peerPID, field)
+		if err != nil || strings.TrimSpace(value) != "0000000000000000" {
+			return "cross-uid-b-capabilities-nonzero", fmt.Sprintf("B must have %s=0", field)
+		}
 	}
 	peerUserNS, err := os.Readlink(fmt.Sprintf("/proc/%d/ns/user", peerPID))
 	if err != nil || peerUserNS != childNamespace {
@@ -1398,6 +1448,8 @@ func runCrossUIDProbe(result *report, leafFD *os.File, leafDirectory string) (fa
 		!strings.Contains(string(proof), "pidfd_getfd=passed") {
 		return "cross-uid-namespace-pidfd-proof", strings.TrimSpace(string(proof))
 	}
+	// The worker's proof travels A's private pipe; re-echo the validated line so the unit log carries it.
+	fmt.Println(strings.TrimSpace(string(proof)))
 	return "", ""
 }
 
@@ -1414,12 +1466,13 @@ func runProbe() (result report, failure string) {
 	if result.uid == 0 {
 		return result, "runner-is-root"
 	}
-	if failure := checkHostPrerequisites(&result); failure != "" {
-		return result, failure
-	}
 	result.cgroup, err = membership()
 	if err != nil {
+		result.failureDetail = err.Error()
 		return result, "parent-membership"
+	}
+	if failure := checkHostPrerequisites(&result); failure != "" {
+		return result, failure
 	}
 	parentDirectory, err := cgroupDirectory(result.cgroup)
 	if err != nil {
@@ -1555,6 +1608,13 @@ func main() {
 		os.Exit(socketPeer())
 	}
 	if len(os.Args) == 1 {
+		// The wrapper proves the unit stop from this path, so print it before anything that can fail.
+		cgroup, err := membership()
+		if err != nil {
+			fmt.Printf("status=failed stage=parent-membership detail=%q\n", err.Error())
+			os.Exit(1)
+		}
+		fmt.Printf("cgroup_path=%s\n", cgroup)
 		os.Exit(runWithRootPreparedGroups())
 	}
 	if len(os.Args) != 2 || os.Args[1] != "--prepared" {
@@ -1570,9 +1630,6 @@ func main() {
 	}
 	if result.kernel != "" {
 		fmt.Printf("kernel=%s\n", result.kernel)
-	}
-	if result.cgroup != "" {
-		fmt.Printf("cgroup_path=%s\n", result.cgroup)
 	}
 	if result.leafCgroup != "" {
 		fmt.Printf("leaf_cgroup_path=%s\n", result.leafCgroup)
