@@ -76,16 +76,21 @@ in `pnpm-workspace.yaml` pinning exactly those three to `6.45.1`/`5.1.0`/`3.0.5`
    invalidate-triggered result is already past when the settle subscribes, and the settle
    observes exactly the results delivered while it is pending (two of *its* reads, as at base).
    This is why the design needs no "ignore results from before the settle" bookkeeping.
-4. **`settlePending` is one boolean state.** It is set before the await and cleared in a
-   `finally`, so the interval exists exactly while a settle is outstanding.
+4. **`settlesPending` counts outstanding settles.** It is incremented before the await and
+   decremented in a `finally`, so the interval lives while at least one settle is outstanding: a
+   plan approval and a generic command can overlap (the approval keeps `Decisions` disabled, not
+   `NextAction`), and the first finisher must not clear the interval under the second. The
+   interval is also allowed to read while the document is unfocused
+   (`refetchIntervalInBackground: true`), as base's private loop did.
 5. **Budgets.** `vitest.config.ts` gains `testTimeout: 15_000`; the wait sites need no edit (all
    12 are strictly smaller against it, the three `connections` sites included). The budget guard
-   is one case in the new test file that (i) asserts the runner-resolved effective budget of a
-   case without an explicit budget (`task.timeout === 15_000`) — the option *as the runner
+   is two cases in the new test file: one without an explicit budget that (i) asserts the
+   runner-resolved effective budget (`task.timeout === 15_000`) — the option *as the runner
    applies it*, which is the strongest available oracle and reddens exactly when the option is
    removed — and (ii) asserts every wait budget that file passes is strictly below that runtime
-   number, and (iii) imports `vitest.config` and asserts the parsed
-   `test?.testTimeout === 15_000` in the same case, the style reference's own mechanism
+   number, and one that (iii) imports `vitest.config` and asserts the parsed
+   `test?.testTimeout === 15_000` under its own 30 s import budget (its budget keeps it out of
+   the runtime-budget assertions), the style reference's own mechanism
    (`tool-cache-config.test.ts`). Alternative rejected: a second config-importing file (the cold
    config import measured 8.2 s and is already paid once by `tool-cache-config.test.ts`; a
    separate file risks paying it in another worker for a three-line assertion).
@@ -156,11 +161,12 @@ All commands foreground and serialized; no measurement harness beside a suite. B
 
 ## 7. New settle test cases (each pins a frozen semantic; reds in §8)
 
-1. **Confirmation before the bound** — the double serves the unmoved marker for the two reads
-   after the command's POST and the moved marker from the third on; the notice appears with ≥ 2
-   *moved-marker* reads observed, the elapsed time is well below the bound, the follow-up
-   invalidations were issued, and the goal reads stop after the notice (the interval is cleared
-   on confirmation).
+1. **Confirmation before the bound** — the double serves the unmoved marker for the first three
+   reads after the command's POST and the moved marker from the fourth on, and injects one
+   unrelated cache success the moment the moved projection is cached (a dropped goal-query
+   filter reddens, mutant (i)); the notice appears with ≥ 2 *moved-marker* reads observed, the
+   elapsed time is well below the bound, the follow-up invalidations were issued, and the goal
+   reads stop after the notice (the interval is cleared on confirmation).
 2. **Bound exit** — the served marker never moves; the notice appears at ≥ 2,400 ms and the goal
    query kept reading while the settle was pending (more reads than the command path's two), and
    the goal reads stop after the notice (the interval is cleared on the bound).
@@ -169,8 +175,16 @@ All commands foreground and serialized; no measurement harness beside a suite. B
    counting the moved-marker reads (three: before the second failure, after it, and the
    confirming read).
 4. **Unmount path** — unmount while the settle is pending: no goal read after the unmount (the
-   interval is cleared with the observer) and both follow-up invalidations still run.
-5. **Budget guard** — `task.timeout === 15_000` for a case without an explicit budget, every wait
+   interval is cleared with the observer), neither follow-up invalidation has run while the
+   settle is pending, and both still run after the wait resolves.
+5. **Overlapping settles** — the plan approval's settle is still outstanding when the pause's
+   settle starts (the case waits for the approval's own settled read, then dispatches the pause):
+   both notices appear before the bound and the pause's commit is served to at least one further
+   read; reds on mutant (k) (a single pending flag clears the interval under the second settle).
+6. **Unfocused document** — with `focusManager` reporting the document unfocused, the settle's
+   interval keeps reading (`refetchIntervalInBackground`), so the notice still arrives by
+   confirmation; reds on mutant (l) (the bound releases it instead).
+7. **Budget guard** — `task.timeout === 15_000` for a case without an explicit budget, every wait
    budget this file passes is strictly below it, and the parsed `vitest.config` carries
    `test?.testTimeout === 15_000`.
 
@@ -188,6 +202,10 @@ Each applied alone to the final tree, run, reverted.
 | (f) | stop resetting the chain on a failed result | settle case 3 (moved-read count drops to two) |
 | (g) | resolve the wait on a failed result (confirm on error) | settle case 3 (notice before any moved read) |
 | (h) | the wait resolves without clearing the pending state (the interval stays live) | settle case 2's post-notice window (reads continue past the bound) and case 1's |
+| (i) | drop the goal-query filter on the observed cache events (`event.query !== goalQuery` removed) | settle case 1 (an unrelated cache success confirms in place of the goal query's second read: the moved-read count drops to one) |
+| (j) | move one follow-up invalidation before the settle (the attention key) | settle case 4 (the pre-unmount assertion: the invalidation already ran) |
+| (k) | collapse the pending count to one boolean flag | settle case 5 (the second settle's notice falls to the bound) |
+| (l) | remove `refetchIntervalInBackground` | settle case 6 (no read while unfocused: zero moved reads, the notice at the bound) |
 
 ## 9. Oracles that must pass unmodified
 

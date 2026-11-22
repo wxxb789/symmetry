@@ -24,14 +24,14 @@ in `pnpm-workspace.yaml` pinning exactly those three to `6.45.1`/`5.1.0`/`3.0.5`
 
 | file | status | lines | note |
 | --- | --- | ---: | --- |
-| `frontend/src/features/goals/detail.tsx` | edited | 757 → 777 | the settle conversion only: the goal query's `refetchInterval` while pending (`:79-82`), `goalMarker` (`:47-49`), `waitForGoalSettle` (`:51-73`), `settleGoalRead` (`:89-98`), the two call sites' compressed comments (`:168-169`, `:226`) |
+| `frontend/src/features/goals/detail.tsx` | edited | 757 → 778 | the settle conversion only: the goal query's `refetchInterval` while a settle is outstanding and `refetchIntervalInBackground` (`:82-83`), the outstanding-settle count (`:78-79`, incremented/decremented at `:92`/`:96`), `goalMarker` (`:47-49`), `waitForGoalSettle` (`:51-73`), `settleGoalRead` (`:91-98`), the two call sites' compressed comments (`:171`, `:227`) |
 | `frontend/vitest.config.ts` | edited | 39 → 41 | the explicit `testTimeout: 15_000` (`:24-25`) |
-| `frontend/src/features/goals/goal-settle.test.tsx` | new | 0 → 220 | 6 cases: the four settle cases + the two budget-guard cases |
+| `frontend/src/features/goals/goal-settle.test.tsx` | new | 0 → 337 | 8 cases: the six settle cases + the two budget-guard cases (the apply pass of §12 added the overlapping-settle and unfocused-document cases and extended cases 1 and 4) |
 | `frontend/src/features/goals/goal-attention.test.tsx` | **unedited** | 1,321 | 29 case names, the eight 5,000 ms waits and the seven `}, 15_000)` budgets byte-identical |
 | `frontend/src/tool-cache-config.test.ts` | **unedited** | 71 | oracle; its two cases keep their own 30,000 ms budgets |
 | `frontend/src/features/connections/connections.test.tsx` | **unedited** | — | oracle; its three wait sites keep 5,000 ms under the new 15,000 ms default |
 | `frontend/src/features/chat/chat.test.tsx` | **unedited** | — | oracle; its 8,000 ms wait stays under its `}, 20_000)` case budget |
-| `docs/plans/2026-11-22-rf-w5-04-goal-settle-wait-budgets-plan.md` | new | 223 | the plan |
+| `docs/plans/2026-11-22-rf-w5-04-goal-settle-wait-budgets-plan.md` | new | 243 | the plan |
 | `docs/evidence/rf-w5-04-goal-settle-wait-budgets-2026-11-22.md` | new | — | this record |
 
 Not edited: `app/application.ts` (the options overlay lives at the call site), `app/realtime.tsx`
@@ -59,9 +59,13 @@ inside the `}, 20_000)` case at `:1283`; `tool-cache-config.test.ts` 71 L with i
 
 ## 3. The settle conversion (delivered shape)
 
-- **Drive.** `useQuery({ ...goalOptions(application.api, goalId), refetchInterval: settlePending ? settleReadIntervalMs : false })` (`:79-82`): the goal query keeps its key and its
-  `api.goal` `queryFn`; the interval exists only while `settlePending` (`:78`), so it is cleared on
-  confirmation, on the bound and on unmount (the observer is destroyed with the surface).
+- **Drive.** `useQuery({ ...goalOptions(application.api, goalId), refetchInterval: settlesPending > 0 ? settleReadIntervalMs : false, refetchIntervalInBackground: true })` (`:80-84`): the goal query keeps its key and its
+  `api.goal` `queryFn`; the interval exists while at least one settle is outstanding
+  (`settlesPending`, `:78-79`), so it is cleared on confirmation, on the bound and on unmount
+  (the observer is destroyed with the surface) — and not by the first of two overlapping
+  settles, which the pre-apply single flag did (apply pass, §12; pinned by case 5, mutant (k)).
+  `refetchIntervalInBackground` keeps the reads flowing while the document is unfocused, as
+  base's private loop did (pinned by case 6, mutant (l)).
 - **Observation.** `waitForGoalSettle(queryClient, goalId, before)` (`:51-73`) subscribes to
   `queryClient.getQueryCache()`, keeps only `updated` events of the goal query
   (`event.query === cache.find({ queryKey: goalReadKey(goalId), exact: true })`), treats `success`
@@ -80,17 +84,18 @@ inside the `}, 20_000)` case at `:1283`; `tool-cache-config.test.ts` 71 L with i
 
 | row | base (`:61-74` + callers) | HEAD | preserved |
 | --- | --- | --- | --- |
-| pre-command marker | `acknowledged === undefined ? null : [version, state, current_revision].join("|")` (`:63`) | `goalMarker(acknowledged)` (`:47-49`, called `:92`) — same join, `undefined → null` | yes |
-| per-read fetch | private `application.api.goal(...).catch(() => null)` GET (`:66`) | the goal query's own `api.goal` read, driven by the interval (`:81`) | carrier changed (decision C) |
+| pre-command marker | `acknowledged === undefined ? null : [version, state, current_revision].join("|")` (`:63`) | `goalMarker(acknowledged)` (`:47-49`, called `:94`) — same join, `undefined → null` | yes |
+| per-read fetch | private `application.api.goal(...).catch(() => null)` GET (`:66`) | the goal query's own `api.goal` read, driven by the interval (`:82`) | carrier changed (decision C) |
 | read result observed | each loop iteration's read | each `success` cache result | yes |
-| confirmation | `:68` | `:61` | yes (verbatim) |
-| chain bookkeeping | `previous = marker` (`:69`) | `:62` | yes |
+| confirmation | `:68` | `:62` | yes (verbatim) |
+| chain bookkeeping | `previous = marker` (`:69`) | `:63` | yes |
 | failed read | `catch(() => null)` → `marker = null` → `previous = null`; neither confirms nor aborts (`:66-69`) | `error` result → `previous = null` (`:59`); neither confirms nor aborts; a failed *attempt* inside a retrying fetch is internal to the query's own retry policy (`readRetry`, 500/1,000 ms) | semantics yes; attempt-level retries are the query's carrier |
 | bound exit | `while (Date.now() < deadline)` with the loop's own sleeps (`:62`,`:65`,`:70-72`) | one 2,500 ms `setTimeout` on the wait (`:66`) | yes (the notice at the bound) |
 | unmount during the wait | the private loop kept reading until the bound | the query's interval stops with the observer (no reads); the wait still resolves at the bound | **changed, authorized** ("cleared on unmount"; pinned by test case 4) |
-| notice then follow-ups (generic caller) | `:170-176`: acknowledged → `await invalidate(goalReadKey)` → `await settleGoalRead` → `setNotice` → `void invalidate(goalEvents)` → `void invalidate(attention)` | `:171-176`, byte-identical sequence | yes |
-| notice then follow-ups (plan approval) | `:205-212` | `:227-232`, byte-identical sequence | yes |
-| realtime epoch | not used by the settle | not used by the settle (`useRealtimeEpoch` stays at its receipts use, now `:748`) | yes |
+| overlapping settles (apply pass, §12) | each caller's private loop read and confirmed independently, so two in-flight settles both confirmed promptly | `settlesPending` counts outstanding settles, so the interval outlives the first finisher and each settle keeps its own reads; the pre-apply single flag dropped the second settle to its bound | yes (restored by the apply pass; pinned by test case 5, mutant (k)) |
+| notice then follow-ups (generic caller) | `:150-155`: acknowledged → `await invalidate(goalReadKey)` → `await settleGoalRead` → `setNotice` → `void invalidate(goalEvents)` → `void invalidate(attention)` (comment `:147-149`) | `:172-177`, byte-identical sequence | yes |
+| notice then follow-ups (plan approval) | `:205-212` | `:228-233`, byte-identical sequence | yes |
+| realtime epoch | not used by the settle | not used by the settle (`useRealtimeEpoch` stays at its receipts use, now `:749`) | yes |
 | rendered surface | notice texts | unchanged (both strings byte-identical) | yes |
 
 Accepted consequences of routing the reads through the query (decision C): a *failing* settle read
@@ -104,10 +109,10 @@ transient attempt failures. Neither confirms nor aborts the wait.
 
 | case | pins | base run (before the source change) | head run |
 | --- | --- | --- | --- |
-| announces acceptance only after the moved marker holds across two reads of the goal query | the two-consecutive-reads confirmation, before the bound, with the follow-ups issued and the reads stopped after the notice | pass (frozen semantics) | pass |
+| announces acceptance only after the moved marker holds across two reads of the goal query | the two-consecutive-reads confirmation, before the bound, with the follow-ups issued and the reads stopped after the notice (+ the apply pass's unrelated-cache-success injection, §12) | pass (frozen semantics) | pass |
 | announces acceptance at the bound when the served marker never moves | the bound exit at ≥ 2,400 ms with the pending reads flowing through the query (> 3 reads), and the reads stop after the notice | pass | pass |
 | neither confirms nor aborts on a refused goal read and breaks the consecutive chain | refusals neither confirm nor abort; a failed result breaks the chain (three moved reads needed) | pass | pass |
-| clears the pending reads with the observer on unmount and still runs the follow-up invalidations | "cleared on unmount" + the two follow-up invalidations after a pending settle | **fail** — `expected 16 to be less than 3` (the private poll kept reading after the unmount) | pass |
+| clears the pending reads with the observer on unmount and still runs the follow-up invalidations | "cleared on unmount" + the two follow-up invalidations after a pending settle (+ the apply pass's pre-notice invalidation assertions, §12) | **fail** — `expected 16 to be less than 3` (the private poll kept reading after the unmount) | pass |
 | keeps every wait in this file strictly below the effective per-test budget | the wait budgets vs the runner-resolved budget | **fail** — `expected 5000 to be 15000` | pass |
 | carries the explicit per-test budget in vitest.config | the parsed config option | **fail** — `expected undefined to be 15000` | pass |
 
@@ -115,6 +120,11 @@ Base run of the final artifact (sources restored to `42afb56c`, test file as del
 / 3 passed (6)**, exit 1, run duration 29.36 s. Head run: **6 passed (6)**, exit 0; file duration
 12,061 ms in the full-suite json (isolated runs: 9,111 ms and 14,951 ms warm; 24–35 s when the cold
 config import lands in its worker — the config case's own 30 s budget covers it).
+
+The apply pass (§12) added case 5 (overlapping settles) and case 6 (unfocused document) and
+extended case 1 (the unrelated-cache-success injection) and case 4 (the pre-notice invalidation
+assertions). The head/base columns above are the implement-stage runs of the six cases as then
+delivered; §12 carries the apply-stage runs of all eight.
 
 ## 6. Per-site wait-budget table (site → budget → enclosing budget)
 
@@ -132,15 +142,15 @@ config import lands in its worker — the config case's own 30 s budget covers i
 | 10 | `connections.test.tsx:918` | 5,000 | 15,000 (global; was 5,000) | yes |
 | 11 | `connections.test.tsx:935` | 5,000 | 15,000 (global; was 5,000) | yes |
 | 12 | `chat.test.tsx:1276` | 8,000 | 20,000 (`}, 20_000)` `:1283`) | yes |
-| 13 | `goal-settle.test.tsx` `NOTICE_WAIT_MS` (`:14`) | 5,000 | 15,000 (global; asserted at runtime, `:206`) | yes |
-| 14 | `goal-settle.test.tsx` `FOLLOW_UP_WAIT_MS` (`:15`) | 4,000 | 15,000 (global; asserted at runtime, `:206`) | yes |
+| 13 | `goal-settle.test.tsx` `NOTICE_WAIT_MS` (`:16`; the notice waits and case 4's read wait) | 5,000 | 15,000 (global; asserted at runtime, `:327-328`) | yes |
+| 14 | `goal-settle.test.tsx` `FOLLOW_UP_WAIT_MS` (`:17`) | 4,000 | 15,000 (global; asserted at runtime, `:327-328`) | yes |
 | — | `tool-cache-config.test.ts:48,59` (oracle) | no inner wait | 30,000 per case (sized from the cold import) | n/a |
-| — | `goal-settle.test.tsx:209` config case | no inner wait | 30,000 (`CONFIG_IMPORT_BUDGET_MS`) | n/a |
+| — | `goal-settle.test.tsx:331` config case | no inner wait | 30,000 (`CONFIG_IMPORT_BUDGET_MS`) | n/a |
 
 The budget rule's runnable guards: `task.timeout === 15_000` for a case without an explicit budget
 (reddens when the option is removed, mutation (c)), every wait budget of the new file asserted
-strictly below that runtime number (`:206`), and the parsed `vitest.config.test?.testTimeout`
-(`:213`). The eight `goal-attention` and one `chat` sites keep their numbers and their explicit
+strictly below that runtime number (`:327-328`), and the parsed `vitest.config.test?.testTimeout`
+(`:335`). The eight `goal-attention` and one `chat` sites keep their numbers and their explicit
 case budgets; the three `connections` sites are resolved by the global default with no site edit.
 Not covered by a runnable check: the per-case-budget containment of the eight `goal-attention`
 sites (their case budgets are explicit and this table records them; a source-text scan was
@@ -191,13 +201,13 @@ no converted assertion needs a mutation record.
 
 ## 9. Removed-poll proofs, DLP, inventory
 
-- `grep -n "api\.goal(" frontend/src/features/goals/detail.tsx` → one site, `:115`, inside
+- `grep -n "api\.goal(" frontend/src/features/goals/detail.tsx` → one site, `:117`, inside
   `servedEnvelope` (the submit-time read, unchanged); the settle block has none.
 - `grep -n "setInterval\|setTimeout\|Date\.now\|refetchInterval" frontend/src/features/goals/detail.tsx`
-  → `:51` (comment), `:66` (the single bound `setTimeout`), `:81` (the query's own
-  `refetchInterval`). No `setInterval`, no `Date.now()`, no recursive `setTimeout`, no
-  `2_500` loop.
-- `grep -n "useRealtimeEpoch" frontend/src/features/goals/detail.tsx` → import `:7`, use `:748`
+  → `:66` (the single bound `setTimeout`), `:82` (the query's own `refetchInterval`), `:83`
+  (`refetchIntervalInBackground`). No `setInterval`, no `Date.now()`, no recursive `setTimeout`,
+  no `2_500` loop.
+- `grep -n "useRealtimeEpoch" frontend/src/features/goals/detail.tsx` → import `:7`, use `:749`
   (the receipts catch-up) — untouched; `services/realtime.ts` and `app/realtime.tsx` are not in the
   diff.
 - DLP: a case-insensitive profile-directory-path grep over the diff and over this record's
@@ -205,7 +215,8 @@ no converted assertion needs a mutation record.
   sequence in any added line of the changed/new files (exit 1).
 - Inventory: `git status --porcelain -uall` lists exactly the plan, the evidence record, the new
   test file and the two edited files (`detail.tsx`, `vitest.config.ts`); `git diff --stat` is
-  `detail.tsx` 72 changed lines (+48/−26 across the diff) and `vitest.config.ts` +2.
+  `detail.tsx` 72 changed lines (+46/−26 across the diff, `git diff --numstat`) and
+  `vitest.config.ts` +2. The apply pass's own deltas are in §12.1.
 
 ## 10. Residual risks and known limits
 
@@ -227,6 +238,19 @@ no converted assertion needs a mutation record.
 - **Per-case-budget containment is table-checked, not runtime-checked**, for the eight
   `goal-attention` sites (their budgets are explicit and recorded in §6); the runtime guards cover
   the parsed global option and the new file's own waits.
+- **Cadence pin strength (apply pass, simplify finding 9).** The frozen 120 ms cadence is pinned
+  loosely: a 120 → 240 ms variant passes all eight cases (case 1 confirms in ~0.96 s against its
+  2,000 ms assertion), and only roughly 2× reddens case 1, so the effective pin is "much faster
+  than the 2.5 s bound". No timer-exact test was added (flake-prone); recorded as the residual.
+- **Unfocused document (apply pass, simplify finding 11).** The interval reads while the document
+  is unfocused (`refetchIntervalInBackground: true`), as base's private loop did; jsdom observes
+  it only through `focusManager.setFocused(false)` (case 6, mutant (l)). No browser experiment was
+  run, so real-tab timer throttling is not measured here.
+- **Overlapping settles (apply pass, simplify finding 10).** The pre-apply single pending flag let
+  the first of two overlapping settles clear the interval under the second, which then always
+  resolved at its bound (base's independent loops confirmed both). The counted fix is pinned by
+  case 5 and mutant (k); the overlap trigger itself is a test-only construction (two operator
+  commands inside the first settle's window).
 - **Host contention.** The gate rows record wall times under same-host conditions (other worktrees
   run in parallel); counts and names, not the wall clock, are the gates.
 
@@ -290,3 +314,68 @@ Removed-poll greps re-run at these bytes: `api.goal(` matches only `:115` (the s
 only `:81`; no `setInterval`, no `Date.now()`; `useRealtimeEpoch` import `:7` / use `:748`
 untouched. DLP: no profile path and no backslash-u sequence in the changed/new files (no
 matches). Inventory unchanged: the two edits and the three new files of §1.
+
+The apply pass (§12) then changed these bytes again: `detail.tsx`, `goal-settle.test.tsx` and the
+plan. The hashes, coordinates and greps above bind the implement-stage bytes (they were true of
+them); §12 carries the apply-stage hashes, coordinate re-derivation, gate rows and mutant re-runs.
+
+## 12. Apply-stage re-verification (2026-11-22, third pass on the post-simplify bytes)
+
+Scope: the simplify pass's accepted findings — the `detail.tsx` comment rewrites/deletions
+(`:51-52`, `:171`, `:227`), the settle's outstanding-count fix and `refetchIntervalInBackground`,
+the test file's module-name fix (`vitest.config`), case 4's explicit read-wait budget, the shared
+`expectReadsStopped` probe, case 1's unrelated-cache-success injection, case 4's pre-notice
+invalidation assertions, and the new cases 5 (overlapping settles) and 6 (unfocused document).
+Reported as a per-finding table in the apply-stage answer.
+
+Bytes under verification (final apply bytes; every mutant flip below was applied alone to them,
+run, and reverted under `sha256sum -c` with a byte backup):
+
+| file | lines | sha256 |
+| --- | ---: | --- |
+| `frontend/src/features/goals/detail.tsx` | 778 | `72863f5f358498344c12f422f4f29c68a147791bfe8df9f13162b26b2546cdb0` |
+| `frontend/src/features/goals/goal-settle.test.tsx` | 337 | `9aca7241d3ad75d064f7eebf7e9917b34e5be73f8a071b31fe6168421510a6cc` |
+| `frontend/vitest.config.ts` | 41 | `661cbe330e5c9c16ed088911f81708648abd17935fad2768383765b3d2cbc0df` (unchanged from §11) |
+
+### 12.1 Gate rows (foreground, serialized; exit codes)
+
+| # | command (pnpm via `mise x pnpm@12.17.0 -- ... --filter @symmetry/frontend`) | exit | result |
+| --- | --- | ---: | --- |
+| 1 | `run typecheck` | 0 | `tsc --noEmit`, no output |
+| 2 | `run lint` | 0 | 221 warnings, 0 errors (`--max-warnings 229` unchanged; +2 over §7: the new file's `max-lines-per-function` on the describe callback (232 > 150) and a second `Promise.withResolvers<void>()` under the repo's existing `no-invalid-void-type` pattern) |
+| 3 | `exec vitest run src/features/goals/goal-attention.test.tsx` | 0 | 29 passed (29); 21.73 s isolated (report-only) |
+| 4 | `exec vitest run src/features/goals/goal-settle.test.tsx` | 0 | 8 passed (8); 29.27 s isolated, 11,731 ms in-suite (json) |
+| 5 | `exec vitest run src/tool-cache-config.test.ts` | 0 | 2 passed (2); 2.95 s |
+| 6 | `exec vitest run src/features/chat/chat.test.tsx src/features/connections/connections.test.tsx` | 0 | 105 passed (105); 33.45 s both files |
+| 7 | `run test` (the contract's gate command) | 0 | 25 files / 613 passed (613); 44.44 s |
+| 8 | `exec vitest run --reporter=json --outputFile=…` | 0 | 613 passed (613); `goal-settle` 11,731 ms, `goal-attention` 17,827 ms, `chat` 21,861 ms, `connections` 27,410 ms in-suite (report-only) |
+| 9 | `git diff --check` | 0 | clean; `git diff --numstat`: plan +31/−13, `detail.tsx` +10/−9, `goal-settle.test.tsx` +130/−13 |
+| 10 | DLP: profile-path/users grep over the diff + `git status --porcelain -uall`; backslash-u over added lines | 1 / 1 | no matches (exit 1 = clean) |
+| 11 | removed-poll greps (§9 form) | 0 | `api.goal(` only `:117`; `setTimeout` only `:66`; `refetchInterval` `:82`; `refetchIntervalInBackground` `:83`; no `setInterval`, no `Date.now()`; `useRealtimeEpoch` import `:7` / use `:749` |
+
+### 12.2 Mutation runs (each applied alone, run, reverted; `vitest run src/features/goals/goal-settle.test.tsx`)
+
+| mutant | flip | result (rc 1 in every row) |
+| --- | --- | --- |
+| (a) | `previous === marker` removed | 3 failed / 5 passed: case 1 `expected 1 to be 2`, case 3 `expected 1 to be 3`, case 6 `expected 1 to be 2` |
+| (b) | `marker !== before` removed | 4 failed / 4 passed: case 1 `expected +0 to be 2`, case 2 `expected 607 to be >= 2400`, case 4 the pre-notice invalidation assertion, case 6 `expected +0 to be 2` |
+| (c) | `testTimeout` removed from `vitest.config.ts` | 2 failed / 6 passed: `expected 5000 to be 15000`, `expected undefined to be 15000` |
+| (d) | `refetchInterval: false` | 6 failed / 2 passed: cases 1–4, case 5 (no notice inside its 2,000 ms window), case 6 `expected +0 to be 2` |
+| (e) | private `setInterval` poll reintroduced | 4 failed / 4 passed: case 1 `expected 4 to be 2`, case 3 `expected 2 to be 3`, case 4 `expected 18 to be less than 3`, case 6 `expected 4 to be 2` |
+| (f) | chain not reset on a failed result | 1 failed / 7 passed: case 3 `expected 2 to be 3` |
+| (g) | failed result resolves the wait | 1 failed / 7 passed: case 3 `expected +0 to be 3` |
+| (h) | the wait resolves without clearing the pending state | 2 failed / 6 passed: case 1 and case 2 `expected 3 to be less than 3` (the shared probe still reddens) |
+| (i) | goal-query filter dropped (`event.query !== goalQuery` removed) | 1 failed / 7 passed: case 1 `expected 1 to be 2` (the injected unrelated success confirmed in place of the goal query's second read) |
+| (j) | the attention invalidation moved before the settle | 1 failed / 7 passed: case 4's pre-notice assertion (not-called-with `[{ queryKey: ['attention'] }]` reddened) |
+| (k) | the pending count collapsed to one boolean flag | 1 failed / 7 passed: case 5 — the pause notice did not arrive inside its 2,000 ms window (the second settle fell to its bound) |
+| (l) | `refetchIntervalInBackground` removed | 1 failed / 7 passed: case 6 `expected +0 to be 2` (no read while unfocused; the notice came at the bound) |
+
+### 12.3 Base characterization of the apply-stage artifact
+
+Sources at `42afb56c` (`vitest.config.ts` left at the delivered bytes so the budget guards keep
+their subject), the eight-case test file as delivered: **1 failed / 7 passed (8)**, exit 1, 21.74 s
+— only case 4 reddens (`expected 18 to be less than 3`: the private poll kept reading after the
+unmount). Cases 1–3 stay green, and cases 5 and 6 are green at base too: the two new cases pin the
+pre-existing (frozen) semantics — the base's independent loops confirm an overlapping settle and
+keep reading while the document is unfocused — so the counted flag and
+`refetchIntervalInBackground` restore base behavior rather than adding to it.

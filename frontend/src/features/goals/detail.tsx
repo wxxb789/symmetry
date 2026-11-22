@@ -48,8 +48,8 @@ function goalMarker(goal: GoalProjection | undefined): string | null {
   return goal === undefined ? null : [goal.version, goal.state, goal.current_revision].join("|");
 }
 
-// The settle observes the goal query's own read results (its refetchInterval drives them):
-// two consecutive moved markers confirm, and a failed read neither confirms nor aborts.
+// The wait exists so the notice states the goal the command's own commit serves,
+// observed on the goal query's own reads or at the documented bound.
 function waitForGoalSettle(queryClient: QueryClient, goalId: string, before: string | null): Promise<void> {
   const { promise, resolve } = Promise.withResolvers<void>();
   const goalQuery = queryClient.getQueryCache().find({ queryKey: goalReadKey(goalId), exact: true });
@@ -75,10 +75,12 @@ function waitForGoalSettle(queryClient: QueryClient, goalId: string, before: str
 export function GoalDetailPage() {
   const { application } = useRouteContext({ from: "__root__" });
   const { goalId } = useParams({ from: "/goals/$goalId" });
-  const [settlePending, setSettlePending] = useState(false);
+  // One count per outstanding settle, so a settle that overlaps another keeps the interval.
+  const [settlesPending, setSettlesPending] = useState(0);
   const query = useQuery({
     ...goalOptions(application.api, goalId),
-    refetchInterval: settlePending ? settleReadIntervalMs : false,
+    refetchInterval: settlesPending > 0 ? settleReadIntervalMs : false,
+    refetchIntervalInBackground: true,
   });
   const workspace = useQuery(workspaceOptions(application.api, query.data?.project_id ?? null));
   const session = useQuery(sessionOptions(application.api));
@@ -87,11 +89,11 @@ export function GoalDetailPage() {
   const [notice, setNotice] = useState<string | null>(null);
 
   const settleGoalRead = async (acknowledged: GoalProjection | undefined) => {
-    setSettlePending(true);
+    setSettlesPending((count) => count + 1);
     try {
       await waitForGoalSettle(queryClient, goalId, goalMarker(acknowledged));
     } finally {
-      setSettlePending(false);
+      setSettlesPending((count) => count - 1);
     }
   };
 
@@ -166,8 +168,7 @@ export function GoalDetailPage() {
     onSuccess: async (_body, variables) => {
       setRefusal(null);
       releaseAttempt();
-      // The notice waits for the command's own committed read, so the next
-      // envelope carries the version the server has written.
+      // The notice states the served goal, so it follows the settle (or its bound).
       const acknowledged = query.data;
       await queryClient.invalidateQueries({ queryKey: goalReadKey(goalId) });
       await settleGoalRead(acknowledged);
@@ -223,7 +224,7 @@ export function GoalDetailPage() {
     onSuccess: async () => {
       sentApproval.current = null;
       setRefusal(null);
-      // Same ordering as the generic command: the notice states the served goal.
+      // Same ordering as the generic command.
       const acknowledged = query.data;
       await queryClient.invalidateQueries({ queryKey: goalReadKey(goalId) });
       await settleGoalRead(acknowledged);
