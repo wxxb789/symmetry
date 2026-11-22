@@ -145,8 +145,21 @@ defmodule SymmetryControlWeb.Protocol do
   def error_details({:invalid_contract, _details}), do: @error_statuses.invalid_contract
   def error_details({:stale, _fields}), do: @error_statuses.stale
 
-  def error_details(reason),
-    do: Map.get(@error_statuses, reason, @error_statuses.invalid_request)
+  def error_details(reason) do
+    case Map.fetch(@error_statuses, reason) do
+      {:ok, details} ->
+        details
+
+      :error ->
+        :telemetry.execute(
+          [:symmetry_control_web, :protocol, :unmapped_reason],
+          %{count: 1},
+          %{reason: reason}
+        )
+
+        @error_statuses.invalid_request
+    end
+  end
 
   defp goal_error_fields(fields) do
     fields
