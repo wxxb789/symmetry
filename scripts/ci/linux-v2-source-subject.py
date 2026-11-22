@@ -3,67 +3,30 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import subprocess
 import sys
-from typing import TypedDict
 
+from source_subject import Refused, SourceSubject, index_mode_digest
 
-class SourceSubject(TypedDict):
-    commit: str
-    tree_digest: str
+REFUSALS = {
+    "head_mismatch": "source checkout does not match the exact expected commit",
+    "dirty_checkout": "source checkout has staged, unstaged, or untracked changes",
+    "checkout_changed": "source checkout changed while binding its subject",
+    "tree_entry_not_a_file": "source tree contains a non-blob entry",
+    "invalid_tree_record": "Git returned an invalid source object",
+    "invalid_source_object": "Git returned an invalid source object",
+    "truncated_source_blob": "Git returned a truncated source blob",
+    "batch_unavailable": "Git batch pipes are unavailable",
+    "batch_failed": "Git could not finish reading the source tree",
+}
 
 
 def source_subject(repository: str, expected_commit: str) -> SourceSubject:
-    command = ["git", "-c", f"safe.directory={repository}", "-C", repository]
-
-    def git(*arguments: str) -> bytes:
-        return subprocess.check_output([*command, *arguments], stderr=subprocess.PIPE)
-
-    commit = git("rev-parse", "HEAD").decode("ascii").strip()
-    if commit != expected_commit:
-        raise SystemExit("source checkout does not match the exact expected commit")
-    if git("status", "--porcelain=v1", "--untracked-files=all"):
-        raise SystemExit("source checkout has staged, unstaged, or untracked changes")
-
-    records = git("ls-tree", "--full-tree", "-r", "-z", commit).split(b"\0")
-    tree_hash = hashlib.sha256()
-    with subprocess.Popen(
-        [*command, "cat-file", "--batch"],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-    ) as batch:
-        if batch.stdin is None or batch.stdout is None:
-            raise SystemExit("Git batch pipes are unavailable")
-        for record in sorted(filter(None, records), key=lambda value: value.split(b"\t", 1)[1]):
-            header, path = record.split(b"\t", 1)
-            mode, kind, object_id = header.split(b" ", 2)
-            if kind != b"blob":
-                raise SystemExit("source tree contains a non-blob entry")
-            batch.stdin.write(object_id + b"\n")
-            batch.stdin.flush()
-            object_header = batch.stdout.readline().split()
-            if len(object_header) != 3 or object_header[1] != b"blob":
-                raise SystemExit("Git returned an invalid source object")
-            size = int(object_header[2])
-            blob = batch.stdout.read(size)
-            if len(blob) != size or batch.stdout.read(1) != b"\n":
-                raise SystemExit("Git returned a truncated source blob")
-            blob_digest = b"sha256:" + hashlib.sha256(blob).hexdigest().encode("ascii")
-            for field in (mode, b"\0", kind, b"\0", path, b"\0", blob_digest, b"\0"):
-                tree_hash.update(field)
-        batch.stdin.close()
-        if batch.wait() != 0:
-            raise SystemExit("Git could not finish reading the source tree")
-
-    # A checkout change during hashing must not produce a successful receipt.
-    if git("rev-parse", "HEAD").decode("ascii").strip() != commit or git(
-        "status", "--porcelain=v1", "--untracked-files=all"
-    ):
-        raise SystemExit("source checkout changed while binding its subject")
-    return {"commit": commit, "tree_digest": "sha256:" + tree_hash.hexdigest()}
+    try:
+        return index_mode_digest(repository, expected_commit)
+    except Refused as refusal:
+        raise SystemExit(REFUSALS[refusal.code]) from refusal
 
 
 def main() -> int:

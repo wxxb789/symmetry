@@ -187,6 +187,31 @@ class WitnessLauncherTests(FixtureRepo, unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "dirty_source_missing_from_manifest"):
             WITNESS.source(self.root, self.config)
 
+    def test_the_binding_requires_the_declared_head_and_base(self):
+        self.manifest()
+        for field, reason in (("code_head_sha", "code_head_mismatch"), ("code_base_sha", "code_base_mismatch")):
+            with self.subTest(field=field):
+                original = self.config[field]
+                self.config[field] = "0" * 40
+                try:
+                    with self.assertRaisesRegex(RuntimeError, reason):
+                        WITNESS.source(self.root, self.config)
+                finally:
+                    self.config[field] = original
+
+    def test_the_declared_scope_covers_the_shared_module(self):
+        self.manifest()
+        module = self.root / "scripts/ci/source_subject.py"
+        module.parent.mkdir(parents=True, exist_ok=True)
+        module.write_text("# shared rules\n")
+        with self.assertRaisesRegex(RuntimeError, "dirty_source_missing_from_manifest"):
+            WITNESS.source(self.root, self.config)
+        self.config["changed_source_manifest"].append(
+            {"path": "scripts/ci/source_subject.py", "sha256": hashlib.sha256(module.read_bytes()).hexdigest()}
+        )
+        observed = WITNESS.source(self.root, self.config)
+        self.assertEqual(observed["manifest_bound_dirty_paths"], ["scripts/ci/source_subject.py"])
+
 
 ELIXIR_CONTROLS = (
     r"""

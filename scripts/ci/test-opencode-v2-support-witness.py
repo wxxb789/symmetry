@@ -16,7 +16,9 @@ import unittest
 from unittest import mock
 
 import citest
+from testsupport.gitfixture import FixtureRepo
 
+ROOT = pathlib.Path(__file__).resolve().parents[2]
 witness = citest.load_gate(pathlib.Path(__file__).with_name("opencode-v2-support-witness.py"), "witness")
 
 
@@ -245,6 +247,31 @@ class PinnedBlobTest(unittest.TestCase):
 
     def test_matching_pin_returns_the_declared_blob(self):
         self.assertEqual(self.resolve(str(self.blob)), self.blob.resolve())
+
+
+class BindingTest(FixtureRepo, unittest.TestCase):
+    """The receipt binds both files whose rules decide it, and reads the checkout's HEAD."""
+
+    REPOSITORY_PREFIX = "opencode-witness-binding-"
+    REPOSITORY_DIRECTORY = None
+
+    def test_the_binding_covers_the_tool_and_the_shared_module(self):
+        binding = witness.binding_sha256(ROOT)
+        self.assertEqual(
+            sorted(binding),
+            ["scripts/ci/opencode-v2-support-witness.py", "scripts/ci/source_subject.py"],
+        )
+        for relative, digest in binding.items():
+            self.assertEqual(digest, hashlib.sha256((ROOT / relative).read_bytes()).hexdigest())
+
+    def test_head_revision_reads_the_checkout_head(self):
+        self.write("source.txt", "reviewed source\n")
+        commit = self.commit("fixture")
+        module = citest.load_gate(ROOT / "scripts/ci/source_subject.py", "source_subject")
+        self.assertEqual(
+            module.head_revision(lambda *arguments: subprocess.check_output(["git", *arguments], cwd=self.repo)),
+            commit,
+        )
 
 
 if __name__ == "__main__":
