@@ -70,7 +70,7 @@ A5/`#146` — the table above is the dispatch-time measurement; (d) `#164` leads
 | artifact | measurement |
 | --- | --- |
 | `app/shell.tsx` | 281 L; `useProjectScope` `:68-81` (6 selectors `:70-79`, chain return `:80`), 4 consumers (`:85`, `:92`, `:106`, `:127`) |
-| `workDetailOptions` subscriptions at base | 3: shell `useProjectScope` `shell.tsx:75`; `work/detail.tsx:69` (page), `:238` (`WorkDetailBody`) — same key `workItemReadKey(workItemId)`, one request |
+| `workDetailOptions` text sites / observers at base | text sites 3: shell `useProjectScope` `shell.tsx:75`; page `work/detail.tsx:69`; body `:238`. Observer instances 7: the shell site mounts 5× in a settled render (4 call sites — `useProjectDirectory` ×2 from the picker and the palette, `NavigationLinks`, `ProjectPicker`, `CommandPalette`; the mobile-nav `NavigationLinks` copy mounts only while its dialog is open) plus the page and body; HEAD 1 provider + page + body = 3. Same key `workItemReadKey(workItemId)`, one request |
 | workspace read sites in the owned set | shell `:86` scope, `:87` recovery; attention `:21`; runtimes `:80`; connections `:302`; chat `:117`; projects `:84`; work detail `:81` (disabled cache probe), `:207` (background), `:137` (editor fetch) |
 | page chains | attention `search.projectId ?? null` (`:15`) + served fallback (`:38`, NewGoalButton); runtimes search-only (`:79`, `:84`); connections `search.projectId ?? workspace.data?.selected_project_id ?? null` (`:303`); work detail `itemProjectId ?? queryProjectId` (`:75`) + `foreignScope` (`:74`) + body args (`:187`, `:193`); chat `chatScopeParams(search).projectId` (`:114`, `:117`); projects route param (`:78`, `:84`) |
 | `router.test.tsx` | 1,215 L, 41 declared cases (40 `it(` + one `it.each` over 2 paths = 42 executed); no request-log assertion today (the log is a capability of the double) |
@@ -81,8 +81,9 @@ A5/`#146` — the table above is the dispatch-time measurement; (d) `#164` leads
 
 1. **`frontend/src/app/selected-project.tsx`** (new; the contract's example name): the context,
    the provider that computes the chain from the router match, and `useSelectedProject()`.
-   The chain expression moves **verbatim** (byte-identical selectors, member order and `??`
-   sequence) out of `shell.tsx:68-81`; the only edit inside it is that the `useQuery` call and the
+   The chain expression's executable lines move **verbatim** (byte-identical selectors, member
+   order and `??` sequence) out of `shell.tsx:68-81`, with its `why` comment trimmed to the
+   policy's two lines; the only structural edit inside it is that the `useQuery` call and the
    `useRouteContext` read now live in the provider component.
 2. **`frontend/src/app/shell.tsx`**: `useProjectScope` deleted; `WorkspaceRoot` wraps its
    signed-in tree in `SelectedProjectProvider`; `useProjectDirectory`, `NavigationLinks`,
@@ -201,7 +202,7 @@ requests per route) whose mutant is the extra-query flip.
 | # | decision | rationale / alternative |
 | --- | --- | --- |
 | D1 | module `frontend/src/app/selected-project.tsx` with `SelectedProjectProvider` + `useSelectedProject()` | the contract's example; `app/` owns the shell and the option builders. Alternative: keep the provider inside `shell.tsx` — the contract asks for a sibling, and the shell file would then export two unrelated surfaces |
-| D2 | chain expression moved byte-identically, including the two `why` lines about the served projection | §7.1: the order is unobservable; byte identity is the strongest available proof. The comment policy keeps those 2-3 lines (line-level authority hazard: the projection is read from the page's key) |
+| D2 | chain expression moved byte-identically (executable lines); its `why` comment about the served projection trimmed to the owner policy's two lines | §7.1: the order is unobservable; executable-line byte identity is the strongest available proof. The comment keeps the line-level authority hazard note (the projection is read from the page's key) within the policy's 1-2 line `why` budget |
 | D3 | hook value is the chain (`string \| undefined`), not `{ selectedProjectId, scopeSource }` | no consumer needs the source: runtimes' `scoped` check is `!== undefined` on a route whose only hop is its own search member; the pages' second hops stay page-local. A source field would add an unused branch (no-unrequested-flexibility) |
 | D4 | the picker, navigation, palette and `useProjectDirectory` keep their bodies; only the chain's source changes | they are already correct; the contract freezes their rendered/ARIA/navigation surfaces (D1) |
 | D5 | pages keep reading their own route search where it is *identity*, not scope: chat's `chatScopeParams`, projects' `useParams` for links, work detail's `search.projectId` for `foreignScope`/`setSearch`/body args, attention's `unavailable`, connections' `connectionId` | contract change item 2 lists these as deliberate asymmetries; `use-chat-scope-state.ts` is not in the owned set, so the chat identity cannot move |

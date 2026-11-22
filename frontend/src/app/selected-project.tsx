@@ -9,9 +9,8 @@ function useRouterSelectedProject() {
   const { application } = useRouteContext({ from: "__root__" });
   const projectId = useMatch({ from: "/projects/$projectId", shouldThrow: false, select: (match) => match.params.projectId });
   const workScope = useMatch({ from: "/work/$workItemId", shouldThrow: false, select: (match) => ({ workItemId: match.params.workItemId, claimedProjectId: match.search.projectId }) });
-  // The served projection owns a work item's project. This reads the same query key
-  // the work detail page uses, so it adds no request and no second authority; the
-  // URL's claim only covers the window before that projection arrives.
+  // The served projection owns a work item's project: this reads the same query key the
+  // work detail page reads, so no new request, and the URL claim only covers the gap.
   const servedWork = useQuery({ ...workDetailOptions(application.api, workScope?.workItemId ?? ""), enabled: workScope !== undefined });
   const searchProjectId = useMatch({ from: "/attention", shouldThrow: false, select: (match) => match.search.projectId });
   const chatProjectId = useMatch({ from: "/chat", shouldThrow: false, select: (match) => match.search.projectId });

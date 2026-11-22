@@ -2,7 +2,8 @@
 
 Subject: one `useSelectedProject()` owner in `frontend/src/app/selected-project.tsx` — the context,
 the provider that computes the project-scope chain from the router match, and the hook — with the
-shell's four consumers and the seven listed pages reading it instead of re-deriving scope. Contract:
+shell's four consumers and the six listed pages (`attention.tsx`, `chat.tsx`, `connections.tsx`,
+`projects.tsx`, `runtimes.tsx`, `work/detail.tsx`) reading it instead of re-deriving scope. Contract:
 `goal-rf-w5-03-selected-project-hook.md` (GDD, 2026-11-21/22, binding conductor decisions D1
 byte-identical surfaces, D2 dLOC report-only, the dispatch gates, lesson 32 control-flow
 preservation, the R12/A5 gate and the owner comment policy of 2026-11-22). Base revision
@@ -17,7 +18,7 @@ flips and the gate rows).
 
 | file | status | lines (base → head) | note |
 | --- | --- | ---: | --- |
-| `frontend/src/app/selected-project.tsx` | new | 0 → 30 | context + `SelectedProjectProvider` + `useSelectedProject()`; the chain expression moved verbatim from `shell.tsx:68-81` |
+| `frontend/src/app/selected-project.tsx` | new | 0 → 29 | context + `SelectedProjectProvider` + `useSelectedProject()`; the chain moved from `shell.tsx:68-81` with its executable lines byte-identical (the `why` comment trimmed to the policy's two lines) |
 | `frontend/src/app/selected-project.test.tsx` | new | 0 → 124 | 6 cases, each naming its mutant |
 | `frontend/src/app/shell.tsx` | edited | 281 → 267 | `useProjectScope` deleted; the signed-in tree wrapped in the provider; 4 consumers read the hook |
 | `frontend/src/features/attention/attention.tsx` | edited | 202 → 203 | `search.projectId` scope reads → hook |
@@ -26,10 +27,10 @@ flips and the gate rows).
 | `frontend/src/features/work/detail.tsx` | edited | 457 → 457 | `scopedProjectId` → hook; `close()`'s chain → hook |
 | `frontend/src/features/chat/chat.tsx` | edited | 255 → 257 | `directory` read scope → hook; `chatScopeParams` identity untouched |
 | `frontend/src/features/projects/projects.tsx` | edited | 145 → 147 | project-route read scope → hook; `useParams` keeps navigation identity |
-| `docs/plans/2026-11-22-rf-w5-03-selected-project-hook-plan.md` | new | 0 → 278 | the plan |
+| `docs/plans/2026-11-22-rf-w5-03-selected-project-hook-plan.md` | new | 0 → 279 | the plan |
 | `docs/evidence/rf-w5-03-selected-project-hook-2026-11-22.md` | new | 0 → this file | this record |
 
-Tracked production source: +38/−46 lines (net −8) plus the 30-line new module = **net +22 dLOC**
+Tracked production source: +38/−46 lines (net −8) plus the 29-line new module = **net +21 dLOC**
 against the plan's report-only −60..−100 estimate: the chain *moved* instead of being deleted
 (13 lines), the four shell consumers keep their bodies, and each page swaps one chain expression for
 one hook call. D2 makes this report-only; recorded here and §11.
@@ -53,7 +54,7 @@ the serialization and is already merged here.
 
 | surface | base chain (site) | HEAD call | order preserved |
 | --- | --- | --- | --- |
-| shell directory / nav / picker / palette | `useProjectScope()` (`shell.tsx:68-81`): `useMatch("/projects/$projectId").params.projectId ?? servedWork.data?.work_item.project_id ?? workScope?.claimedProjectId ?? searchProjectId(attention) ?? chatProjectId ?? connectionsProjectId ?? runtimesProjectId` | provider value (the same expression moved to `selected-project.tsx:10-20`) | yes, byte-identical |
+| shell directory / nav / picker / palette | `useProjectScope()` (`shell.tsx:68-81`): `useMatch("/projects/$projectId").params.projectId ?? servedWork.data?.work_item.project_id ?? workScope?.claimedProjectId ?? searchProjectId(attention) ?? chatProjectId ?? connectionsProjectId ?? runtimesProjectId` | provider value (the same executable expression moved to `selected-project.tsx:10-19`; the `why` comment trimmed to two lines) | yes, executable lines byte-identical |
 | picker highlight | `projectId ?? (isAttention \|\| isConnections ? directory.data?.selected_project_id ?? "" : "")` (`shell.tsx:109`) | unchanged, fed by the hook | yes |
 | attention reads | `search.projectId ?? null` → `workspaceOptions`, `attentionOptions(…, null)`, older cursors (`attention.tsx:15,21,24,33`) | `selectedProjectId` (normalized once at the declaration) | yes |
 | attention goal button / name | `projectId ?? first?.data?.selected_project_id` (`:38,:57`) | `selectedProjectId ?? first?.data?.selected_project_id` | yes |
@@ -62,14 +63,16 @@ the serialization and is already merged here.
 | connections resolved scope | `search.projectId ?? workspace.data?.selected_project_id ?? null` (`:303`) | `scopeProjectId ?? workspace.data?.selected_project_id ?? null` | yes (served fallback kept) |
 | work detail scope | `itemProjectId ?? queryProjectId` (`detail.tsx:75`) | `selectedProjectId` (served projection ?? URL claim) | yes |
 | work detail `foreignScope` + canonical redirect | `queryProjectId !== undefined && itemProjectId !== undefined && queryProjectId !== itemProjectId` → `navigate({…, projectId: itemProjectId, replace: true})` (`:74,:109-113`) | unchanged | yes |
-| work detail editor fetch / cached snapshot | `item.project_id ?? scopedProjectId`; `workspaceOptions(api, scopedProjectId ?? "")` (`:81,:135`) | `item.project_id ?? selectedProjectId`; same read | yes |
+| work detail editor fetch / cached snapshot | `item.project_id ?? scopedProjectId`; `workspaceOptions(api, scopedProjectId ?? "")` (`:81,:129`) | `item.project_id ?? selectedProjectId`; same read | yes |
 | work detail close | `itemProjectId ?? queryProjectId` (`:157`) | `selectedProjectId` | yes |
 | work detail body args | `detailBody(queryProjectId ?? itemProjectId ?? null, …)` / `detailBody(queryProjectId ?? null)` (`:187,:193`) | unchanged (the body's own `item?.project_id ?? scopedProjectId` hop is unchanged) | yes |
 | chat directory read | `chatScopeParams(search).projectId` (`:117`) | `selectedProjectId ?? null` | yes (the URL-scope identity stays with `chatScopeParams`) |
 | projects read | `useParams({ from: "/projects/$projectId" })` (`:84`) | `selectedProjectId ?? null` | yes (the param is the chain's first hop) |
 
-The chain expression itself is a verbatim move: `diff` of the base `shell.tsx:68-81` (with only the
-function name substituted) against `selected-project.tsx:8-21` is **empty**.
+The chain expression itself is a verbatim move of its executable lines: `diff` of the base
+`shell.tsx:68-81` (with only the function name substituted) against `selected-project.tsx:8-20`
+is **empty apart from the `why` comment**, trimmed from three lines to the policy's two; every
+executable line is byte-identical.
 
 ## 4. Deleted-definition list (contract clause 2)
 
@@ -218,6 +221,13 @@ corrections) and the plan. Raw outputs: `apply-typecheck.txt`, `apply-lint.txt`,
 `apply-scope.txt`, `apply-pages.txt`, `apply-full.txt`, `apply-capture-1.txt`, `apply-capture-2.txt`,
 `postapply-settled-1.json`, `postapply-settled-2.json` in the same throwaway dir.
 
+Fix-stage record corrections (2026-11-22, review round F1–F5; F4 is the PR-description replacement,
+outside the tree): the page count (corrected to six, listed), the work-detail `:129` coordinate above,
+and the module line-count/byte-identity rows; `selected-project.tsx`'s `why` comment trimmed from
+three lines to the owner policy's two (module 30 → 29 lines, executable lines unchanged), with the
+plan's D2 wording and its `workDetailOptions` text-site/observer row updated to match. Comment- and
+record-only; re-verified on the final tree: `tsc --noEmit` exit 0, the record-sanitizer check clean.
+
 ## 8. Mutation flips (contract judging mutants; each applied alone, run, reverted, hash-verified)
 
 Source hashes were recorded before the mutation set and re-verified after the last revert
@@ -253,7 +263,7 @@ pattern over the working diff and the new files: no match) and no backslash-u se
 
 ## 11. LOC delta (D2 — reported, never a gate)
 
-Tracked production: +38/−46 (net −8); new module +30; new test +124; plan +278; this record. The
+Tracked production: +38/−46 (net −8); new module +29; new test +124; plan +279; this record. The
 plan's −60..−100 estimate assumed page-side deletions larger than the chain move allows; the
 delivered shape deletes one chain definition, one 2-line re-derivation per page and two imports,
 and adds one hook call per consumer. Report-only per D2.
