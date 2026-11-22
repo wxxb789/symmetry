@@ -9,8 +9,9 @@ intent, now recorded in the owning slice plans (plan §10.6).
 
 Delivered revision: the round-2 head — `bcdc5d94` (`f1fe1e59` plus the sweep commits `16a7e7d3`
 and `0399d5f1`, the apply stage and the fix stage §8) merged with `origin/main` `e84973a7` (#220;
-merge base `b25e34ae`) plus the round-2 working-tree changes (§9), committed as the merge commit
-`refactor: correct sweep comments and merge main` (exact sha in `findings/223-fix-r1.md`; plan
+merge base `b25e34ae`) and then `4fdea989` (#222, landed mid-stage), plus the round-2 working-tree
+changes (§9), committed as the merge commit `refactor: correct sweep comments and merge main` for
+the first merge and a completion merge for #222 (exact shas in `findings/223-fix-r1.md`; plan
 §11.7). The implement-stage measurements cite the pre-merge tree they ran on; the apply-stage
 re-runs (§4, §5, §7) were measured on the `b942030e`-era delivered revision, the fix-stage
 re-runs (§8) on the shipped head plus the review fixes, and the round-2 re-runs (§9) on the
@@ -309,13 +310,14 @@ added side of the host-path gate is empty (the rows that matched were this recor
 ## 9. Round 2 (PR #223 review r1, 2026-11-22)
 
 Findings F1–F7 applied; stage record in plan §11.7. Stage head: the merge of `origin/main`
-`e84973a7` (#220) into `bcdc5d94` plus the round-2 working-tree changes, committed as the merge
-commit `refactor: correct sweep comments and merge main`.
+`e84973a7` (#220) into `bcdc5d94`, then `4fdea989` (#222, landed mid-stage and conflict-free),
+plus the round-2 working-tree changes; committed as the merge commit
+`refactor: correct sweep comments and merge main` and a completion merge.
 
 - **F1**: the two merge conflicts resolved per plan §11.7 item 1 (take #220's code; keep only the
-  sweep edits whose target lines survive). Strip proof re-run against the new base:
-  `python proof.py --rev e84973a7 --files-from all_files.txt --json proof-final.json` →
-  `--- 207 files: 207 PASS, 0 not-PASS (none)`.
+  sweep edits whose target lines survive). Strip proof re-run against the final merge base:
+  `python proof.py --rev 4fdea989 --files-from all_files.txt --json proof-final-4fdea989.json` →
+  `--- 207 files: 207 PASS, 0 not-PASS (none)` (the base moved from `e84973a7` when #222 landed).
 - **F2/F6/F7**: the sanitizer comment repairs, the pidfd-across-exec quirk and the 31 >120-char
   compressions per plan §11.7.
 - **F5**: `--help` compared by running `origin/main`'s copies and the head copies of the four

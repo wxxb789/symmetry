@@ -4,9 +4,10 @@ Contract: `goal-comment-policy-sweep.md` (GDD, 2026-11-22; held until the pre-po
 merged — it has: `origin/main` is `f1fe1e59`, and the sweep is dispatched as a program slice of goal
 0010). Base revision for every coordinate in this plan: `f1fe1e59`. Delivered revision: the shipped
 head `bcdc5d94` (`f1fe1e59` plus the sweep commits `16a7e7d3` and `0399d5f1`, the apply stage and
-the fix stage §11.6) merged with `origin/main` `e84973a7` (#220; merge base `b25e34ae`) plus the
-round-2 working-tree changes of this plan's §11.7 (merge commit `refactor: correct sweep comments
-and merge main`; the exact sha is in `findings/223-fix-r1.md`). When a line number is cited it
+the fix stage §11.6) merged with `origin/main` `e84973a7` (#220; merge base `b25e34ae`) and then
+`4fdea989` (#222, landed mid-stage), plus the round-2 working-tree changes of this plan's §11.7
+(merge commit `refactor: correct sweep comments and merge main` for the first merge, a completion
+merge for #222; the exact shas are in `findings/223-fix-r1.md`). When a line number is cited it
 resolves at the base unless a stage note says otherwise.
 
 Plans consulted as the shape reference: `2026-11-21-core-dead-surface-plan.md` (definition of the
@@ -779,9 +780,10 @@ problems (0 errors, 227 warnings)` (ceiling 229, unchanged); `actionlint -shellc
 .github/workflows/ci.yml` (direct 1.7.12 binary) → exit 0; `git diff --check` → 0 lines; host
 scan (gate 13) → 0 added-side matches (below). Verbatim table: evidence record §8.
 
-**Round-2 re-runs (PR #223 review r1, at the merge head `e84973a7` plus the round-2 working-tree
-changes, §11.7).** Strip-proof `proof.py --rev e84973a7 --files-from <the 207-file workstream
-union>` → `--- 207 files: 207 PASS, 0 not-PASS (none)`; `gofmt -l .` → 0 lines; `go vet ./...`,
+**Round-2 re-runs (PR #223 review r1, at the final merge base `4fdea989` plus the round-2
+working-tree changes, §11.7).** Strip-proof `proof.py --rev 4fdea989 --files-from <the 207-file
+workstream union>` (the base moved from `e84973a7` when #222 landed mid-stage) → `--- 207 files:
+207 PASS, 0 not-PASS (none)`; `gofmt -l .` → 0 lines; `go vet ./...`,
 `GOOS=linux go vet ./...` → exit 0, no output; `mix format --check-formatted`, `MIX_ENV=test mix
 compile --warnings-as-errors` → exit 0; `ruff check scripts/ci` + `ruff format --check scripts/ci`
 (0.17.5) → `All checks passed!` / `53 files already formatted`; `pnpm --pm-on-fail=ignore exec
@@ -864,7 +866,10 @@ findings).
    file is byte-identical to `origin/main`). The other three swept files in #220's set
    (`planning.test.tsx`, `vitest.config.ts`, `docs/TODO.md`) auto-merged with the sweep's comment
    deletions intact; no other swept file intersects #220. The commit is the merge commit
-   `refactor: correct sweep comments and merge main`.
+   `refactor: correct sweep comments and merge main`. #222 (`4fdea989`, the bounded JSONL decoder
+   leaf) landed on `main` while this stage was in flight; it is conflict-free against the branch
+   (`git merge-tree --write-tree` exit 0) and was merged as a completion merge, so the pushed
+   branch tip carries `origin/main` through `4fdea989`.
 2. **F2 (P2) — `scripts/ci/model-routing-record-sanitize.py` comment accuracy.** The host-root
    arm now says it needs no segment after the root (oracle:
    `test_root_only_catches_a_file_url_with_no_segment_after_the_root`); `_render_record_span`'s
