@@ -147,14 +147,8 @@ func (fence LinuxOwnerAnchorProducerFence) Equal(other LinuxOwnerAnchorProducerF
 		equalLinuxOwnerAnchorGateOutcomePointer(fence.GateOutcome, other.GateOutcome)
 }
 
-// ValidateFor treats processes as the complete set the anchor itself waited
-// and reaped. When the Anchor still owns the gate's nsfs pin, callers pass it
-// so the serialized UserNamespace is checked against that independent witness.
-// Omitting the pin performs wire-shape validation only; Anchor authority paths
-// must supply the retained FD, while authenticated clients may validate the
-// returned shape after the Anchor has checked its independent witness.
-// It never turns ECHILD or a helper-owned prior wait into anchor reap evidence;
-// callers may separately combine exact helper wait results.
+// ValidateFor treats processes as the complete set the anchor waited and reaped and never turns
+// ECHILD or a helper-owned wait into reap evidence; Anchors pass the nsfs pin (omitting it checks wire shape only).
 func (evidence LinuxOwnerAnchorStopEvidence) ValidateFor(
 	grant LinuxOwnerAnchorGrant,
 	helper, anchor authority.LinuxCgroupProcessIdentity,

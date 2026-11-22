@@ -43,8 +43,6 @@ const (
 	linuxOwnerHelperV2WitnessCrashAfterRelease = "crash_after_release_before_register"
 )
 
-// protocolFence is a local alias which keeps the v2 IPC's exported evidence
-// independent of the state package while retaining the exact durable fence.
 type protocolFence = protocol.Fence
 
 type linuxOwnerHelperV2Bootstrap struct {
@@ -335,8 +333,7 @@ func readLinuxOwnerHelperV2BootstrapReady(file *os.File, timeout time.Duration) 
 	}
 }
 
-// dialLinuxOwnerHelperV2 performs both SO_PEERCRED and exact creation-identity
-// checks before it sends the RunKey-bound control grant.
+// dialLinuxOwnerHelperV2 authenticates SO_PEERCRED and the exact creation identity before it sends the grant.
 func dialLinuxOwnerHelperV2(ctx context.Context, anchorClient *LinuxOwnerAnchorClient, grant LinuxOwnerAnchorGrant, helper authority.LinuxCgroupProcessIdentity) (*LinuxOwnerHelperV2Client, error) {
 	if ctx == nil || anchorClient == nil || grant.Validate() != nil || helper.Validate() != nil {
 		return nil, errors.New("Linux owner helper control connection is incomplete")
@@ -554,9 +551,8 @@ func linuxOwnerHelperV2PreGateReceiptMatches(receipt authority.LinuxCgroupPreGat
 }
 
 func linuxOwnerHelperV2ReceiptMatches(receipt authority.StopReceipt, grant LinuxOwnerAnchorGrant, helper, launcher authority.LinuxCgroupProcessIdentity, gate authority.LinuxCgroupGateIdentity, proof authority.LinuxCgroupStopProof) bool {
-	// StopReceipt intentionally has no launch-token field; the enclosing IPC
-	// request is accepted only after requestMatchesPeer compares the complete
-	// RunKey/fence/token/secret grant. Match every receipt identity it does carry.
+	// StopReceipt intentionally has no launch-token field: the request is accepted only after
+	// requestMatchesPeer checks the full grant, so match every identity the receipt does carry.
 	return receipt.Version == authority.SupervisorVersionV2 && receipt.Status == "stopped" && receipt.ActiveProcesses == 0 &&
 		grant.Validate() == nil && receipt.TargetPID == gate.Process.PID && receipt.TargetIdentity == gate.Process.Identity &&
 		receipt.SupervisorPID == helper.PID && receipt.SupervisorIdentity == helper.Identity &&

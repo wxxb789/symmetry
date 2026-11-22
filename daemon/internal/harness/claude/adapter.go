@@ -660,9 +660,8 @@ func (session *candidateSession) Close(ctx context.Context) error {
 			// later reconciliation can observe watchDone and prove cleanup.
 			return err
 		default:
-			// Process.Terminate is idempotent and retains its first failure.
-			// Preserve that observation instead of issuing another terminate
-			// call that could be mistaken for a fresh cleanup attempt.
+			// Process.Terminate is idempotent and retains its first failure; preserve that
+			// observation instead of issuing another terminate call.
 			return harness.PermanentCloseFailure(err)
 		}
 	})

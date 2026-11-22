@@ -2,10 +2,8 @@ package harness
 
 import "reflect"
 
-// IsNilInterface reports whether value is a nil interface value or holds a
-// typed-nil pointer, map, slice, func, chan or interface. Native adapters use
-// it to reject a process owner that a launcher returned through an interface it
-// still satisfies.
+// A launcher can return a typed-nil owner through an interface it still satisfies;
+// native adapters use this to reject it.
 func IsNilInterface(value any) bool {
 	if value == nil {
 		return true

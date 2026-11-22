@@ -331,3 +331,22 @@ Full evidence — the filled step table, the retry call-site table with base→H
 per-path control-flow audit, the mutation battery with observed output, the ten-name consumer
 census, every gate with its exit code, and the residual limits — is in
 `docs/evidence/rf-w4-05-linux-v2-finalize-2026-11-21.md`.
+
+## Comment-policy sweep (2026-11-22)
+
+Module intent removed from `daemon/internal/execution/linux_owner_v2_linux.go`, `daemon/internal/execution/linux_owner_v2_finalize_pipeline_test.go` by the 2026-11-22 comment-policy sweep is recorded below (workstream record "ws5-execution").
+
+- `linux_owner_v2_linux.go:1561-1566` — "runClosePipeline owns the single order both paths share.
+  The gate path claims the release capability before the promotion hop (base :1527-1535) and the
+  pre-gate path claims after its clear (base :2184-2197), which claimsCapabilityAfterClear selects."
+
+- `linux_owner_v2_linux.go:1580-1587` (runClosePipeline) — "Every step returns its base error
+  unwrapped, exactly as the base close paths returned it, so a failure stops the sequence where the
+  base path stopped." (The arrow step list is deleted; the order is pinned by the finalize tests and
+  by the exit table in `docs/evidence/rf-w4-05-linux-v2-finalize-2026-11-21.md`.)
+
+- `linux_owner_v2_finalize_pipeline_test.go:21-26` — deleted remainder of the file header: these
+  tests execute the real close paths on a hand-built owner; every other guard (issued/valid
+  capability checks, receipt reconcile, durable mutation order) runs for real.
+
+The sweep's plan is [`docs/plans/2026-11-22-comment-policy-sweep-plan.md`](2026-11-22-comment-policy-sweep-plan.md).

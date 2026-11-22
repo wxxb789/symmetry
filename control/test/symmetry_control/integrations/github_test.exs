@@ -1371,8 +1371,6 @@ defmodule SymmetryControl.Integrations.GitHubTest do
     }
   end
 
-  # Fails if called: the nil-work-item short-circuit must return before the
-  # provider authenticates.
   defmodule AuthMustNotBeCalledStub do
     @moduledoc false
 

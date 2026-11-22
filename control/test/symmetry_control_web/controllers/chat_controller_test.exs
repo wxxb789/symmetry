@@ -83,10 +83,6 @@ defmodule SymmetryControlWeb.ChatControllerTest do
              |> json_response(400)
   end
 
-  # A refused `start_work` payload rolls a workspace changeset back, and the
-  # controller's changeset clause delegates to `Protocol.validation_error/2`.
-  # The route-level pin matters: serving the plain protocol error for a
-  # changeset (`Protocol.error/2`, 400 `invalid_request`) fails here.
   test "a refused chat work changeset serves the validation envelope" do
     assert {:ok, project} =
              Workspaces.create_project(%{

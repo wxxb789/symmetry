@@ -22,12 +22,8 @@ const (
 	linuxStopReceiptBarrierPoll       = 25 * time.Millisecond
 )
 
-// storeCallbackWrite is the set of write paths one store callback selects
-// between: a daemon-wide option override and the matching Store method, which
-// share a signature per callback. Go forbids type parameters on methods, so the
-// selector below is a free function that names the signatures it accepts in a
-// constraint; a func value is comparable to nil, which is the only test the
-// selector needs.
+// Go forbids type parameters on methods, so the selector is a free function whose
+// constraint names the callback signatures it accepts; a func value compares to nil.
 type storeCallbackWrite interface {
 	~func(state.RunKey, int, string) (state.RunJournal, error) |
 		~func(state.RunKey, int, string, authority.StopReceipt) (state.RunJournal, error) |
@@ -38,14 +34,8 @@ type storeCallbackWrite interface {
 		~func(state.RunKey, authority.SupervisorHandoff, authority.SupervisorHandoffAbortProof) (state.RunJournal, error)
 }
 
-// selectStoreWrite resolves the write path of one store-callback CAS: the
-// daemon-wide override when the harness set one, otherwise the Store method. It
-// takes the store lifetime read lock and returns it as release, which the caller
-// defers, so the lock spans the complete CAS and daemon shutdown cannot close
-// the Store while a runner still decides whether a write outcome is known. A
-// closing daemon, or a missing Store without an override, refuses with
-// errDaemonStoreClosing and no write path. fromStore is a Store method value, so
-// the caller forms it before the lock; a refused call never invokes it.
+// Takes the store lifetime read lock and returns it as release for the caller to defer: the
+// lock must span the complete CAS, or shutdown could close the Store mid-write-decision.
 func selectStoreWrite[Fn storeCallbackWrite](daemon *daemon, override, fromStore Fn) (Fn, func(), error) {
 	daemon.storeLifetimeMu.RLock()
 	release := daemon.storeLifetimeMu.RUnlock
@@ -62,9 +52,8 @@ func selectStoreWrite[Fn storeCallbackWrite](daemon *daemon, override, fromStore
 
 func (daemon *daemon) persistProcessAuthorityCallback(key state.RunKey) func(int, string, *authority.Supervisor) error {
 	return func(pid int, identity string, value *authority.Supervisor) error {
-		// persistProcessAuthority owns this callback's write selection and its
-		// unconditional single retry because recovery shares them, so the refusal
-		// stays here with the same predicate selectStoreWrite applies.
+		// Write selection and the unconditional single retry live in persistProcessAuthority
+		// because recovery shares them; the refusal predicate must match selectStoreWrite.
 		daemon.storeLifetimeMu.RLock()
 		defer daemon.storeLifetimeMu.RUnlock()
 		if daemon.storeClosing || (daemon.store == nil && daemon.options.recordProcessAuthority == nil) {
@@ -81,9 +70,8 @@ func (daemon *daemon) persistProcessAuthorityCallback(key state.RunKey) func(int
 	}
 }
 
-// persistProcessMarker owns the marker-only CAS boundary. A post-rename
-// persistence error leaves the result unknown; an exact readback is only a
-// reason to replay the same mutation and require a fresh successful barrier.
+// Marker-only CAS boundary: a post-rename persistence error leaves the result unknown, and
+// an exact readback only replays the same mutation under a fresh successful barrier.
 func (daemon *daemon) persistProcessMarker(key state.RunKey, pid int, identity string, startedAt time.Time) error {
 	daemon.storeLifetimeMu.RLock()
 	defer daemon.storeLifetimeMu.RUnlock()
@@ -161,10 +149,8 @@ func (daemon *daemon) persistContainmentStopReceiptCallback(key state.RunKey) fu
 	}
 }
 
-// observeContainmentStop is a test-only external witness boundary. Callers
-// invoke it only after the exact receipt mutation has returned successfully;
-// an observer error therefore keeps the containment authority unreleased so a
-// later recovery pass can retry the same receipt.
+// Test-only external witness boundary: callers invoke it only after the exact receipt
+// mutation returned, so an observer error keeps the containment authority unreleased.
 func (daemon *daemon) observeContainmentStop(key state.RunKey, pid int, identity string, receipt authority.StopReceipt) error {
 	if daemon.options.containmentStopObserver != nil {
 		if err := daemon.options.containmentStopObserver(key, pid, identity, receipt); err != nil {
@@ -174,11 +160,8 @@ func (daemon *daemon) observeContainmentStop(key state.RunKey, pid int, identity
 	return waitForLinuxStopReceiptBarrier(key, pid, identity, receipt)
 }
 
-// assembleLinuxWitnessMarkerFile writes a witness marker document into a
-// temporary file next to its destination and returns the temporary path; the
-// caller publishes it with one rename or link. Witness markers are read by
-// polling harnesses that parse the first document they can see, so the
-// document must never be observable while it is incomplete.
+// The caller publishes the temp file with one rename or link: polling harnesses decode
+// the first document they can see, so it must never be observable incomplete.
 func assembleLinuxWitnessMarkerFile(path string, contents []byte) (string, error) {
 	temporary, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".partial-*")
 	if err != nil {
@@ -202,12 +185,8 @@ func assembleLinuxWitnessMarkerFile(path string, contents []byte) (string, error
 	return temporaryPath, nil
 }
 
-// publishLinuxStopReceiptBarrierMarker publishes the stop-receipt barrier
-// document as a single visible state change: the witness harness polls the
-// reached path, reads the first non-empty document, and decodes it as the
-// barrier JSON, so a create-then-write sequence would expose an empty or
-// truncated marker to that decode. The destination must still be absent, which
-// keeps the create-with-O_EXCL contract the barrier validates before it starts.
+// Publishes the barrier marker as one visible state change (destination still absent):
+// a create-then-write sequence would expose an empty or truncated marker to the decode.
 func publishLinuxStopReceiptBarrierMarker(path string, contents []byte) error {
 	if _, err := os.Lstat(path); err == nil {
 		return fmt.Errorf("witness marker %q already exists", path)
@@ -339,10 +318,8 @@ func (daemon *daemon) verifyDurableContainmentStopReceipt(key state.RunKey, pid 
 	return errors.New("containment stop receipt was not durably retained")
 }
 
-// Supervisor handoff callbacks are the only app-owned bridge from execution's
-// pre-authority lifecycle into the durable Store. Keep the store lifetime read
-// lock across each complete CAS so daemon shutdown cannot close the Store while
-// a runner is still deciding whether a write outcome is known.
+// The only app-owned bridge from execution's pre-authority lifecycle into the Store: keep
+// the store lifetime read lock across each CAS, or shutdown can close it mid-decision.
 func (daemon *daemon) prepareSupervisorHandoffCallback(key state.RunKey) func(authority.SupervisorHandoff) error {
 	return func(handoff authority.SupervisorHandoff) error {
 		prepare, release, err := selectStoreWrite(daemon, daemon.options.prepareSupervisorHandoff, daemon.store.PrepareSupervisorHandoff)

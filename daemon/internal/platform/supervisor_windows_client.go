@@ -37,16 +37,14 @@ func (err *SupervisorOwnerLostError) Unwrap() error {
 	return err.Err
 }
 
-// IsSupervisorOwnerLost reports whether err is the stage-aware post-auth
-// owner-loss result. It is intentionally false for pre-auth transport errors.
+// Owner loss is intentionally false for pre-auth transport errors.
 func IsSupervisorOwnerLost(err error) bool {
 	var ownerLost *SupervisorOwnerLostError
 	return errors.As(err, &ownerLost)
 }
 
-// TargetProcessIdentity validates the existing plain Windows process identity.
-// Supervisor metadata is deliberately not encoded in this field; the typed
-// authority is persisted beside it in the local journal.
+// Supervisor metadata is deliberately not encoded in this field; the typed authority is
+// persisted beside it in the local journal.
 func TargetProcessIdentity(value string) (string, bool) {
 	if _, _, err := parseWindowsProcessIdentity(value); err != nil {
 		return "", false
@@ -54,10 +52,8 @@ func TargetProcessIdentity(value string) (string, bool) {
 	return value, true
 }
 
-// bootstrapContainmentSupervisor performs the authenticated first exchange
-// on the exact pre-auth pipe connection. The secret-bearing bootstrap is
-// written only after the server PID and creation identity have been checked
-// and the caller's durable CAS bind has succeeded.
+// The secret-bearing bootstrap is written only after the server PID and creation identity have
+// been checked and the caller's durable CAS bind has succeeded.
 func bootstrapContainmentSupervisor(ctx context.Context, endpoint containmentSupervisorEndpoint, handoff authority.SupervisorHandoff, bind func(authority.SupervisorHandoff, int, string) error) error {
 	if ctx == nil {
 		return errors.New("durable containment bootstrap context is nil")
@@ -192,10 +188,8 @@ func bootstrapContainmentSupervisor(ctx context.Context, endpoint containmentSup
 	}
 }
 
-// DiscoverPreparedSupervisor reads only the pre-auth pipe server identity. It
-// never sends the secret and therefore cannot authorize a bootstrap by itself.
-// A missing pipe, PID, or Job is returned as an error rather than interpreted
-// as an abort or a successful stop.
+// Never sends the secret and cannot authorize a bootstrap by itself. A missing pipe, PID, or Job
+// is returned as an error rather than interpreted as an abort or a successful stop.
 func DiscoverPreparedSupervisor(handoff authority.SupervisorHandoff) (authority.SupervisorHandoff, error) {
 	if err := handoff.Validate(); err != nil {
 		return authority.SupervisorHandoff{}, err
@@ -252,10 +246,8 @@ func DiscoverPreparedSupervisor(handoff authority.SupervisorHandoff) (authority.
 	}
 }
 
-// BootstrapPreparedSupervisor authenticates a helper discovered through its
-// pre-auth pipe. When the handoff has no helper identity, Bind is invoked after
-// the same-connection server identity check and before the secret-bearing
-// bootstrap is written.
+// When the handoff has no helper identity, Bind is invoked after the same-connection server
+// identity check and before the secret-bearing bootstrap is written.
 func BootstrapPreparedSupervisor(handoff authority.SupervisorHandoff, bind func(authority.SupervisorHandoff, int, string) error) (authority.SupervisorHandoff, error) {
 	if err := handoff.Validate(); err != nil {
 		return authority.SupervisorHandoff{}, err
@@ -291,9 +283,8 @@ func BootstrapPreparedSupervisor(handoff authority.SupervisorHandoff, bind func(
 	return bound, nil
 }
 
-// AbortPreparedSupervisor is an explicit live-daemon pre-authority stop. The
-// helper refuses abort after owner EOF; callers must use Recover and retain
-// the durable stop receipt in that case.
+// The helper refuses abort after owner EOF; callers must use Recover and retain the durable
+// stop receipt in that case.
 func AbortPreparedSupervisor(handoff authority.SupervisorHandoff) (authority.StopReceipt, error) {
 	return stopPreparedSupervisor(handoff, "abort")
 }
@@ -350,10 +341,8 @@ func ReleasePreparedSupervisor(handoff authority.SupervisorHandoff) (authority.S
 	return releasePreparedSupervisor(handoff)
 }
 
-// ReleaseAbortedSupervisor is the explicit pre-authority counterpart to
-// ReleasePreparedSupervisor. It is intentionally separate so a caller cannot
-// accidentally release an uncertain/committed handoff without a durable stop
-// receipt.
+// Explicit pre-authority counterpart to ReleasePreparedSupervisor, intentionally separate so a
+// caller cannot release an uncertain/committed handoff without a durable stop receipt.
 func ReleaseAbortedSupervisor(handoff authority.SupervisorHandoff) (authority.SupervisorHandoffReleaseProof, error) {
 	if err := handoff.Validate(); err != nil {
 		return authority.SupervisorHandoffReleaseProof{}, err
@@ -396,9 +385,7 @@ func releaseProofAfterLostResponse(endpoint containmentSupervisorEndpoint, hando
 	return handoff.ReleaseProof(), nil
 }
 
-// proveSupervisorExitedOrAbsent proves that the exact helper is either gone,
-// replaced by a different process identity, or exited. A matching identity
-// with WAIT_TIMEOUT is deliberately unresolved: a missing pipe is not proof
+// A matching identity with WAIT_TIMEOUT is deliberately unresolved: a missing pipe is not proof
 // that a live helper released its authority.
 func proveSupervisorExitedOrAbsent(pid int, expectedIdentity string) error {
 	handle, err := openSupervisorObservationProcess(pid)
@@ -453,12 +440,8 @@ func processIdentityIsRunning(pid int) (bool, error) {
 	return exitCode == 259, nil // STILL_ACTIVE
 }
 
-// ProvePreparedSupervisorAborted proves a definitive pre-authority abort for
-// an exact prepared handoff. It requires caller-owned old-writer quiescence,
-// an exact creator/recovery Windows session, an absent exact named Job, an
-// absent exact target identity, and (when bound) an absent exact helper
-// identity. PID reuse, a recreated Job, an access error, or any other unproven
-// absence fails closed.
+// Requires caller-owned old-writer quiescence, an exact creator/recovery Windows session, and
+// exact absence of Job/target/helper; PID reuse, a recreated Job, or an access error fails closed.
 func ProvePreparedSupervisorAborted(handoff authority.SupervisorHandoff, verifyOldOwnerQuiesced SupervisorHandoffAbortVerifier) (authority.SupervisorHandoffAbortProof, error) {
 	if verifyOldOwnerQuiesced == nil {
 		return authority.SupervisorHandoffAbortProof{}, errors.New("supervisor handoff abort verifier is required")
@@ -556,17 +539,14 @@ func proveExactProcessAbsent(pid int, expectedIdentity, label string) error {
 	return nil
 }
 
-// RecoverPersistedContainment is retained for legacy callers. A plain process
-// marker has no supervisor authority and therefore cannot prove a Windows Job
+// A plain process marker has no supervisor authority and therefore cannot prove a Windows Job
 // stop after a daemon restart.
 func RecoverPersistedContainment(pid int, value string) error {
 	return fmt.Errorf("%w: persisted supervisor authority is unavailable", errContainmentStopUnproven)
 }
 
-// RecoverPersistedContainmentWithAuthority asks the originally launched
-// supervisor to terminate and release its original Job. It first verifies the
-// persisted helper PID/creation identity and pipe owner, then sends the secret-
-// bearing request. A missing or mismatched authority is always unknown stop.
+// Verifies the persisted helper PID/creation identity and pipe owner before sending the
+// secret-bearing request; a missing or mismatched authority is always unknown stop.
 func RecoverPersistedContainmentWithAuthority(pid int, value string, persisted *authority.Supervisor) (authority.StopReceipt, error) {
 	if persisted == nil {
 		return authority.StopReceipt{}, fmt.Errorf("%w: persisted supervisor authority is unavailable", errContainmentStopUnproven)
@@ -609,12 +589,8 @@ func RecoverPersistedContainmentWithAuthority(pid int, value string, persisted *
 	}, nil
 }
 
-// ReleasePersistedContainmentWithAuthority releases the helper's inherited Job
-// handle after the caller has durably acknowledged the exact stop receipt.
-// The helper refuses this operation until its own stop state contains the same
-// empty-Job proof, so release cannot be used as an active-process stop or lease
-// rearm path. A lost release acknowledgement additionally requires an exact
-// helper exit/absence observation before the authority can be cleared.
+// The helper refuses release until its own stop state contains the same empty-Job proof, and a
+// lost acknowledgement needs an exact helper exit/absence observation before clearing authority.
 func ReleasePersistedContainmentWithAuthority(pid int, value string, persisted *authority.Supervisor) error {
 	if persisted == nil {
 		return fmt.Errorf("%w: persisted supervisor authority is unavailable", errContainmentStopUnproven)
@@ -635,9 +611,8 @@ func ReleasePersistedContainmentWithAuthority(pid int, value string, persisted *
 	}
 	actualIdentity, identityErr := readSupervisorProcessIdentity(endpoint.SupervisorPID)
 	if identityErr != nil {
-		// A durable stop receipt makes a missing helper harmless only after the
-		// exact helper identity has been independently observed absent. Do not
-		// turn one failed identity read into release proof by itself.
+		// A durable stop receipt makes a missing helper harmless only after the exact helper identity is
+		// independently observed absent; never turn one failed identity read into release proof.
 		if supervisorProcessMissing(identityErr) {
 			if observationErr := proveSupervisorExitedOrAbsent(endpoint.SupervisorPID, endpoint.SupervisorIdentity); observationErr == nil {
 				return nil
@@ -653,10 +628,8 @@ func ReleasePersistedContainmentWithAuthority(pid int, value string, persisted *
 	deadline := time.Now().Add(containmentSupervisorConnect)
 	response, err := requestContainmentSupervisor(endpoint, "release", deadline)
 	if err != nil {
-		// A durable empty-Job receipt makes a missing helper pipe an idempotent
-		// release replay only after the exact helper process is independently
-		// proven exited or absent. A live helper, PID reuse, or observation error
-		// must retain the authority as unresolved.
+		// A missing helper pipe is an idempotent release replay only after the exact helper process is
+		// independently proven exited or absent; a live helper or PID reuse stays unresolved.
 		if supervisorPipeMissing(err) {
 			if observationErr := proveSupervisorExitedOrAbsent(endpoint.SupervisorPID, endpoint.SupervisorIdentity); observationErr == nil {
 				return nil
@@ -679,10 +652,8 @@ func launchContainmentSupervisorProcess(job syscall.Handle, targetPID int, targe
 	if job == 0 || targetPID <= 0 || strings.TrimSpace(targetIdentity) == "" {
 		return nil, "", errors.New("containment supervisor requires a Job handle and process identity")
 	}
-	// Go test binaries have their own generated main and cannot dispatch the
-	// daemon's hidden supervisor mode. Keep native process tests deterministic;
-	// the production daemon executable never matches this suffix and therefore
-	// still requires a real independent supervisor.
+	// Go test binaries have their own generated main and cannot dispatch the hidden supervisor mode;
+	// production never matches this suffix and still requires a real independent supervisor.
 	if isGoTestBinary(os.Args[0]) {
 		return noopContainmentSupervisorLease{}, targetIdentity, nil
 	}
@@ -833,12 +804,8 @@ func launchContainmentSupervisorProcess(job syscall.Handle, targetPID int, targe
 	return lease, targetIdentity, nil
 }
 
-// AttachSuspendedProcessWithHandoff is the durable suspended-launch boundary.
-// It records the immutable handoff before starting the helper, binds the
-// helper identity only after same-connection pipe validation, and returns the
-// target's primary-thread resume responsibility to the caller. The caller
-// must commit authority and arm its initial lease before invoking Resume on the
-// returned SuspendedProcess.
+// Records the immutable handoff before starting the helper and binds identity only after
+// same-connection pipe validation; the caller must commit authority and arm its initial lease before Resume.
 func AttachSuspendedProcessWithHandoff(ctx context.Context, process *SuspendedProcess, callbacks SupervisorHandoffCallbacks) (Containment, authority.SupervisorHandoff, string, error) {
 	if ctx == nil {
 		return nil, authority.SupervisorHandoff{}, "", errors.New("suspended process context is nil")
@@ -879,8 +846,7 @@ func AttachSuspendedProcessWithHandoff(ctx context.Context, process *SuspendedPr
 	if err != nil {
 		return nil, authority.SupervisorHandoff{}, targetIdentity, err
 	}
-	// This is the durable fence. No helper process is created before this
-	// callback returns successfully.
+	// Durable fence: no helper process is created before this callback returns successfully.
 	if err := callbacks.Prepare(handoff.Clone()); err != nil {
 		return nil, handoff, targetIdentity, fmt.Errorf("prepare supervisor handoff: %w", err)
 	}
@@ -905,8 +871,6 @@ func AttachSuspendedProcessWithHandoff(ctx context.Context, process *SuspendedPr
 	return contained, bound, helperIdentity, nil
 }
 
-// AttachSuspendedProcessWithSupervisorHandoff is the descriptive alias kept
-// for callers that use the full authority terminology.
 func AttachSuspendedProcessWithSupervisorHandoff(ctx context.Context, process *SuspendedProcess, callbacks SupervisorHandoffCallbacks) (Containment, authority.SupervisorHandoff, string, error) {
 	return AttachSuspendedProcessWithHandoff(ctx, process, callbacks)
 }
@@ -1039,9 +1003,8 @@ func launchContainmentSupervisorProcessWithHandoff(ctx context.Context, job sysc
 		_ = ownerWrite.Close()
 		return newPartialContainmentSupervisorLease(partial), handoff, "", errors.New("durable containment supervisor bind callback is required")
 	}
-	// The inherited anonymous bootstrap channel is the pre-authentication
-	// boundary. Its peer is the exact helper child just started, so a same-user
-	// process cannot race a public named pipe before Bind completes.
+	// The inherited anonymous bootstrap channel is the pre-authentication boundary: its peer is the
+	// exact helper child, so no same-user process can race a public named pipe before Bind completes.
 	if err := bind(handoff.Clone(), command.Process.Pid, helperIdentity); err != nil {
 		_ = bootstrapWrite.Close()
 		_ = ownerWrite.Close()
@@ -1107,9 +1070,7 @@ func launchContainmentSupervisorProcessWithHandoff(ctx context.Context, job sysc
 	return lease, bound, helperIdentity, nil
 }
 
-// DurableSupervisorHandoffAvailable reports whether the current executable can
-// dispatch the daemon's hidden supervisor mode. Test binaries use a generated
-// test main and must retain the legacy local containment path instead.
+// Test binaries use a generated test main and must retain the legacy local containment path instead.
 func DurableSupervisorHandoffAvailable() bool {
 	return !isGoTestBinary(os.Args[0])
 }
@@ -1125,12 +1086,8 @@ type processContainmentSupervisorLease struct {
 	closeErr   error
 }
 
-// processContainmentSupervisorPartialLease owns only pre-authority cleanup.
-// AttachSuspendedProcess may return this lease together with an error after the
-// child has inherited the Job handle, so it must not advertise the durable
-// authority or stop/release capabilities. jobContainment.Close then retains
-// the helper cleanup attempt but still releases the daemon-side Job handle when
-// that attempt is unproven.
+// Owns only pre-authority cleanup: it must not advertise durable authority or stop/release
+// capabilities; jobContainment still releases the daemon-side Job handle when that attempt is unproven.
 type processContainmentSupervisorPartialLease struct {
 	lease *processContainmentSupervisorLease
 }
@@ -1165,11 +1122,8 @@ func (lease *processContainmentSupervisorPartialLease) renew(deadline time.Durat
 	return lease.lease.renew(deadline, sequence)
 }
 
-// closePartial only owns pre-authority cleanup. It deliberately does not send
-// a stop/release request with an incomplete endpoint; it closes the owner
-// channel and retries killing/reaping the helper until that local cleanup is
-// proven. The daemon-side Job remains owned by jobContainment and is released
-// independently even when this helper cleanup is still unproven.
+// Pre-authority cleanup only: never a stop/release request with an incomplete endpoint; retry
+// killing/reaping the helper, while jobContainment releases the daemon-side Job independently.
 func (lease *processContainmentSupervisorLease) closePartial(deadline time.Time) error {
 	if lease == nil {
 		return errors.New("containment supervisor lease is missing")
@@ -1323,9 +1277,8 @@ func (lease *processContainmentSupervisorLease) release(deadline time.Time) erro
 	}
 	response, err := requestContainmentSupervisor(lease.endpoint, "release", deadline)
 	if err != nil {
-		// A response can be lost after the helper has closed its Job handle. If
-		// the helper is already gone, release is safely replayable because the
-		// receipt was persisted before this operation was attempted.
+		// The release response can be lost after the helper closed its Job handle; if the helper is
+		// already gone, replay is safe because the receipt was persisted before this operation.
 		if lease.waiterExitedLocked() {
 			lease.released = true
 			lease.closeOwnerWriterLocked()
@@ -1378,9 +1331,8 @@ func (lease *processContainmentSupervisorLease) close(deadline time.Time) error 
 		lease.closeErr = err
 		lease.closeOwnerWriterLocked()
 		lease.mutex.Unlock()
-		// This path is used only while containment setup is being aborted
-		// before durable authority is exposed. The caller owns the Job handle
-		// and will terminate the target; reap the helper so no orphan remains.
+		// Used only while containment setup is aborted before durable authority: the caller owns the Job
+		// and will terminate the target, so reap the helper so no orphan remains.
 		_ = lease.waiter.killAndWait(deadline)
 		return err
 	}
@@ -1623,12 +1575,8 @@ func openContainmentSupervisorEndpointPipe(name string) (*os.File, error) {
 	return file, nil
 }
 
-// NewSupervisorHandoff creates the immutable authority material for a
-// suspended launch. The caller must durably prepare the returned value before
-// starting an independent supervisor. The named Job identifier is supplied by
-// SuspendedProcess.JobID and is never a credential. CreatorSessionID records
-// the daemon's Windows session so pre-authority abort recovery cannot mistake
-// a cross-session absence for proof.
+// Caller must durably prepare before starting the helper; the named Job identifier is never a
+// credential, and CreatorSessionID keeps a cross-session absence from counting as abort proof.
 func NewSupervisorHandoff(targetPID int, targetIdentity, jobID string) (authority.SupervisorHandoff, error) {
 	if targetPID <= 0 || strings.TrimSpace(targetIdentity) == "" {
 		return authority.SupervisorHandoff{}, errors.New("supervisor handoff target identity is required")
@@ -1675,10 +1623,8 @@ func NewSupervisorHandoff(targetPID int, targetIdentity, jobID string) (authorit
 	return value, nil
 }
 
-// createNamedContainmentJob creates the single named Job Object used by the
-// durable suspended-launch path. The name is intentionally derived only from
-// the public random Job identifier; the authority secret never enters a
-// kernel object name, command line, environment, or log.
+// The name derives only from the public random Job identifier; the authority secret never enters
+// a kernel object name, command line, environment, or log.
 func createNamedContainmentJob() (syscall.Handle, string, error) {
 	jobID, err := randomContainmentToken()
 	if err != nil {

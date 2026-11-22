@@ -19,19 +19,11 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// LinuxOwnerAnchorCleanupVerifier is the read-only State seam used immediately
-// before the anchor delegates an exact clone cleanup to the root worker. The
-// implementation is supplied by cmd/symmetry-daemon to avoid a platform→State
-// import cycle; Close releases its pinned StateDir/runs descriptors.
 type LinuxOwnerAnchorCleanupVerifier interface {
 	Verify(runID string, generation int64, grant authority.LinuxCloneGrant, intent authority.LinuxCloneCleanupIntent, prior *authority.LinuxCloneTargetRemovalProof, targetFDPresent bool) error
 	Close() error
 }
 
-// LinuxOwnerAnchorCleanupVerifierFactory opens the State-owned read-only
-// verifier from the root-installed StateDir. RunLinuxOwnerAnchor requires the
-// factory; v2 config pins its reader before READY, while strict legacy v1 config
-// has no StateDir and therefore keeps clone cleanup disabled.
 type LinuxOwnerAnchorCleanupVerifierFactory func(stateDir string) (LinuxOwnerAnchorCleanupVerifier, error)
 
 type linuxOwnerAnchorCloneCleanupWorker func(
@@ -42,9 +34,8 @@ type linuxOwnerAnchorCloneCleanupWorker func(
 	prior *authority.LinuxCloneTargetRemovalProof,
 ) (authority.LinuxCloneTargetRemovalProof, error)
 
-// LinuxOwnerAnchorIdentity is an authenticated description of the live owner
-// service. Parent is identity data only; Discover does not return a parent FD
-// or re-establish pin authority after the caller loses its own live pin.
+// LinuxOwnerAnchorIdentity is an authenticated description of the live owner service; Parent is
+// identity data only and never re-establishes pin authority after the caller loses its live pin.
 type LinuxOwnerAnchorIdentity struct {
 	Process     authority.LinuxCgroupProcessIdentity
 	Parent      authority.LinuxCgroupParentIdentity
@@ -502,10 +493,8 @@ func verifyLinuxOwnerAnchorPIDFD(fd int, expected authority.LinuxCgroupProcessId
 	return nil
 }
 
-// The root-owned launcher deliberately runs in a PID namespace that A cannot
-// inspect. Its exact pidfd plus the authenticated READY identity bind the
-// process; re-reading /proc/<pid>/ns/pid from A would reject every real
-// launcher on hosts that restrict root namespace access.
+// The root-owned launcher runs in a PID namespace A cannot inspect; re-reading /proc/<pid>/ns/pid
+// would reject every real launcher on hosts that restrict root namespace access.
 func verifyLinuxOwnerAnchorChildPIDFD(fd int, expected authority.LinuxCgroupProcessIdentity, role string) error {
 	if role != "launcher" {
 		return verifyLinuxOwnerAnchorPIDFD(fd, expected)
@@ -575,10 +564,8 @@ func readLinuxOwnerPIDFDTarget(fd int) (int, error) {
 	return pid, nil
 }
 
-// linuxOwnerAnchorWaitPIDFD waits and reaps only a pidfd-bound child. ECHILD,
-// missing procfs identity, a replaced numeric PID, or a different pidfd target
-// is unresolved evidence, never a successful wait. Membership and RunKey
-// binding are checked by linuxOwnerAnchorRun before this kernel wait primitive.
+// linuxOwnerAnchorWaitPIDFD reaps only a pidfd-bound child: ECHILD, missing procfs identity, a
+// replaced numeric PID or a different pidfd target is unresolved evidence, never a successful wait.
 func linuxOwnerAnchorWaitPIDFD(ctx context.Context, pidfd *os.File, expected authority.LinuxCgroupProcessIdentity) error {
 	if ctx == nil || pidfd == nil || expected.Validate() != nil {
 		return errors.New("Linux owner anchor wait requires a context, exact process identity, and pidfd")
@@ -663,10 +650,8 @@ func duplicateLinuxOwnerAnchorLeaf(leaf *LinuxCgroupV2Leaf) (*LinuxCgroupV2Leaf,
 	return &LinuxCgroupV2Leaf{parentFD: parentFD, leafFD: leafFD, identity: leaf.identity, ownerUID: leaf.ownerUID}, nil
 }
 
-// linuxOwnerAnchorPinnedLeafPresent validates both retained FDs before using
-// the pinned parent to distinguish the exact original leaf from absence or a
-// same-name replacement. Exact absence is the kernel's rmdir-backed empty
-// observation; serialized caller booleans never supply it.
+// linuxOwnerAnchorPinnedLeafPresent uses the pinned parent to distinguish the exact original leaf
+// from absence or a same-name replacement; absence is the kernel's rmdir-backed observation.
 func linuxOwnerAnchorPinnedLeafPresent(run *linuxOwnerAnchorRun) (bool, error) {
 	if run == nil || run.leaf == nil || run.grant.Validate() != nil ||
 		run.leaf.OwnerUID() != run.grant.OwnerUID || !run.leaf.Identity().Equal(run.grant.Leaf) {
@@ -698,9 +683,8 @@ func linuxOwnerAnchorPinnedLeafPresent(run *linuxOwnerAnchorRun) (bool, error) {
 	var named unix.Stat_t
 	err = unix.Fstatat(leaf.parentFD, run.grant.Leaf.LeafName, &named, unix.AT_SYMLINK_NOFOLLOW)
 	if errors.Is(err, unix.ENOENT) {
-		// A cgroup2 directory cannot be removed while populated. If the old
-		// directory FD still exposes cgroup.events, reject any contradiction;
-		// path absence itself remains the exact pinned-parent removal result.
+		// A cgroup2 directory cannot be removed while populated, so a detached FD that still reports
+		// populated contradicts ENOENT and is rejected; path absence is the exact pinned-parent result.
 		if populated, readErr := readLinuxCgroupDirectoryPopulated(leaf.leafFD,
 			run.grant.Parent.MountID, run.grant.Parent.Device, run.grant.OwnerUID); readErr == nil && populated {
 			return false, errors.New("exact pinned run leaf is absent but still reports populated")

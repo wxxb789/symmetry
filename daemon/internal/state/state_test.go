@@ -2441,20 +2441,6 @@ func hasTerminalState(transitions []protocol.StateTransitionRequest) bool {
 	return false
 }
 
-// TestJournalValidatorFirstErrorStringsArePinned pins the exact first error of
-// every decomposed validateJournal and (LinuxCgroupReservation).Validate block.
-// The Linux clone blocks are pinned by the Linux-tagged sibling test
-// (linux_clone_journal_test.go), which this lane does not compile.
-//
-// The journal cases drive the production persistence seam: store.mutateJournal
-// loads, mutates, and validates the journal, so the returned error is exactly
-// validateJournal's first error and a rejected mutation is never persisted.
-//
-// The reservation cases call the exported method directly because the journal
-// level collapses every inner reservation string into
-// "run journal v2 cgroup reservation is invalid" and ReserveLinuxCgroup is
-// linux/amd64-gated; the exported method is the production contract for these
-// strings.
 func TestJournalValidatorFirstErrorStringsArePinned(t *testing.T) {
 	t.Parallel()
 

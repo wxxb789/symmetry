@@ -7,7 +7,6 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 )
 
-// TaskWaiting is the current run's waiting-for-input projection.
 type TaskWaiting struct {
 	RunID        string          `json:"run_id"`
 	Generation   int64           `json:"generation"`
@@ -18,7 +17,6 @@ type TaskWaiting struct {
 	present      map[string]struct{}
 }
 
-// UnmarshalJSON retains response-field presence for strict protocol validation.
 func (waiting *TaskWaiting) UnmarshalJSON(value []byte) error {
 	type wire TaskWaiting
 	var decoded wire
@@ -34,14 +32,11 @@ func (waiting *TaskWaiting) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// HasField reports whether a field was present when this value was decoded.
 func (waiting TaskWaiting) HasField(name string) bool {
 	_, ok := waiting.present[name]
 	return ok
 }
 
-// Task is the stable task-control response projection. Generation identifies
-// the current attempt even before its run has been materialized.
 type Task struct {
 	TaskID        string                `json:"task_id"`
 	State         string                `json:"state"`
@@ -55,7 +50,6 @@ type Task struct {
 	present       map[string]struct{}
 }
 
-// UnmarshalJSON retains response-field presence for strict protocol validation.
 func (task *Task) UnmarshalJSON(value []byte) error {
 	type wire Task
 	var decoded wire
@@ -71,7 +65,6 @@ func (task *Task) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// HasField reports whether a field was present when this value was decoded.
 func (task Task) HasField(name string) bool {
 	_, ok := task.present[name]
 	return ok

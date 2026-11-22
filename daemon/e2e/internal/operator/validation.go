@@ -111,8 +111,8 @@ func validateTaskCommandResponse(operation, expectedTaskID string, request proto
 	if response.Kind != request.Kind || !sameCommandPayload(request, response.Payload) {
 		return invalidResponse(operation, "kind or payload does not match the request")
 	}
-	// Cancelling queued work applies to the task without creating a run. The
-	// server validates its generation fence, while the command retains nil run IDs.
+	// Cancelling queued work applies to the task without creating a run: the server
+	// validates its generation fence, while the command retains nil run IDs.
 	runlessCancellation := response.Kind == "cancel" && response.State == "applied" && response.RunID == nil && response.Generation == nil
 	if request.Generation > 0 && !runlessCancellation && (response.Generation == nil || *response.Generation != request.Generation) {
 		return invalidResponse(operation, "generation does not match the request")
@@ -188,8 +188,8 @@ func validateTaskCommandResource(expectedTaskID string, response protocol.TaskCo
 	if response.AcknowledgedAt != nil {
 		acknowledgementCount++
 	}
-	// Cancellation can settle outstanding input/control intents before a daemon
-	// receipt exists. This is historical state, never proof of a matching ack.
+	// Cancellation can settle outstanding input/control intents before any daemon
+	// receipt exists; that is historical state, never proof of a matching ack.
 	serverRejected := (supervisory || response.Kind == "provide_input") && response.State == "acknowledged" &&
 		response.AcknowledgementID == nil && response.AcknowledgementOutcome != nil && *response.AcknowledgementOutcome == "rejected" &&
 		response.AcknowledgedAt != nil && !response.AcknowledgedAt.IsZero() && response.AppliedAt == nil
@@ -297,7 +297,6 @@ func isSupervisoryCommand(kind string) bool {
 	return kind == "guidance" || kind == "pause" || kind == "resume"
 }
 
-// ValidateSupervisoryPayload validates the payload of a recognized supervisory command.
 func ValidateSupervisoryPayload(kind string, payload json.RawMessage) error {
 	if err := validateJSONObject(payload); err != nil {
 		return fmt.Errorf("%s command payload %w", kind, err)

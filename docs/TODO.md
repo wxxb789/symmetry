@@ -1353,3 +1353,60 @@ instead of appended.
       scope: both files a fix touches (`frontend/src/test-setup.ts`, `frontend/src/app/portal-double.ts`)
       are in rf-w4-11's owned set; no suite seeds a token yet, and an unexercised `ws` path would be
       unproven behaviour in a slice whose executed-case count is pinned.
+
+## Comment-policy sweep: debt the deleted comments recorded (2026-11-22)
+
+The comment-policy sweep (plan `docs/plans/2026-11-22-comment-policy-sweep-plan.md`, evidence
+`docs/evidence/comment-policy-sweep-2026-11-22.md`) deleted program-added comments that were the
+only in-source record of the following out-of-scope debt, per the owner policy's rule 2. None of it
+is fixed here; each bullet names what a follow-up has to re-derive.
+
+- [ ] `daemon/.golangci.yml`: the deferred lowercasing of the genuinely capitalized `ST1005` error
+      strings, and the `dupl` threshold pinned at 150 with the intent to drop toward 100 once the
+      dedup slices land (4 module-wide findings motivated the pin). Only the exclusion rationale
+      survives compressed in the file.
+
+- [ ] `frontend/eslint.config.js` / `frontend/vite.config.ts`: the two remaining
+      `@typescript-eslint/dot-notation` findings are `process.env["NAME"]` accesses in
+      `vite.config.ts`; the `warn` entry and its `// 2` note feed the ratchet, so fixing the accesses
+      and dropping the entry must happen together.
+
+- [ ] `frontend/src/services/api.ts`: Goal command/creation writes have no caller-cancellation
+      signal — the W4-09 reads/writes split owns adding one; `run()` accepts an optional `signal`
+      the write path never supplies.
+
+- [ ] `pyproject.toml`: the three `scripts/ci/*model-routing-record-sanitize*` files stay in
+      `extend-exclude`; the entry's premise (see "scripts/ci ruff baseline: drop the #137 exclude")
+      no longer holds after #137 — the landed files carry 2 `PERF401` findings and 67 `ruff format`
+      hunks across the three (`model-routing-record-sanitize.py` 18,
+      `test-model-routing-record-sanitize.py` 24, `test-model-routing-record-sanitize-json.py` 25;
+      re-measured with ruff 0.17.5), so dropping the exclude now reformats them rather than leaving
+      them clean.
+
+- [ ] `.github/workflows/ci.yml`: shellcheck-enabled `actionlint` still does not terminate on the
+      Windows development host (reproduced while running this sweep's gate), and Credo still prints
+      the same numbered list for files skipped over `parse_timeout` and for unparsable files, so the
+      strict baseline can deflate even with the `credo_strict_unparsed_files` guard printing.
+
+- [ ] `daemon/internal/linuxpreflight/cgroup_linux.go`: `configuredHarnessKind` is a verbatim copy
+      of the app-side vocabulary owner (`internal/app/probe.go`) and the config loader's set; the
+      package test pins a literal table, not the app-side copy, so drift is undetected. The package
+      cannot import `internal/app`.
+
+- [ ] `daemon/cmd/symmetry-fake-agent/autonomous.go`: on a carrier whose `Close` cannot unblock a
+      parked read (the inherited stdio pipe), the reader goroutine is not joined before the run
+      returns; the bounded join caps the wait and the goroutine exits with the process.
+
+- [ ] `daemon/internal/platform/supervisor_linux_helper.go`: the in-process consumer of
+      `recoverResponseLossStop` does not record the helper's authenticated recovery scan seal, so
+      such a stop fails closed into a durable containment-unproven mark; only the restarted-daemon
+      path records it (`TestLinuxSupervisorLiveOwnerControlCloseInProcessStopFailsClosed` pins the
+      behaviour, not the missing seal record).
+
+- [ ] `daemon/internal/app/leak_check_test.go`: there is deliberately no package-wide goleak
+      `TestMain` while the "`writeInputBounded` can strand its writer goroutine (audit F15)" entry
+      above stands; per-test leak verification is the interim oracle.
+
+- [ ] `daemon/native/linux-gate/protocol/wire_test.go`: the dedicated "start time is truncated"
+      decode guard is unreachable (the size guard already refuses those packets), so no test can
+      cover that branch.

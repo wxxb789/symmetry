@@ -249,3 +249,25 @@ run's scratch directory holds the whole artifacts. Summary of what the delivered
 | fuzzing | 15 fuzz targets, anchored (`-fuzz='^Name$'`), `-fuzztime=30s` each: 12 portable on the host (2.24M-4.89M execs each) and 3 linux-only in WSL (7,981-66,959 execs each); 0 failures (fix-stage run). The impl stage's unanchored host sweep aborted on two name matches (`portable_fuzz_failures=2`, two prefixes selecting two targets each); this anchored rerun supersedes it |
 | red mutants | 16/16 caught (control-green, mutant-red on the intended test function, file restored byte-identically): the 12 mutants of the applied revision (M1-M12, covering 8 refusal test functions, 5 portable + 3 linux) re-run at the fix revision, plus M13 (`maxLauncherReadySize` bound, portable), M14 and M15 (`maxReleaseSize` bound through `TestWireLinuxReleaseRefusals` and `TestWireLinuxCloneBootstrapRefusals`, WSL) and M16 (zero-deadline encoder guard, portable) |
 | citation gate | `python3 scripts/ci/check-citation-existence.py --base 79548368 --head HEAD`: exit 0, 1 changed document passes the path and symbol check (453 path citations); the audited corpus is `docs/runbooks/**`, `docs/design/quality.md` and `docs/archive/CLOSED-TODO.md`, so this plan is outside its scope |
+
+## Comment-policy sweep (2026-11-22)
+
+Module intent removed from `daemon/native/linux-gate/protocol/gate_lifecycle_linux.go` by the 2026-11-22 comment-policy sweep is recorded below (workstream record "ws5-execution").
+
+- `gate_lifecycle_linux.go:3-6` — "Package protocol implements the fixed-B transient launcher IPC
+  used by the Linux native-run helper." The block's second sentence (callers must durably commit the
+  RunJournal handoff and receive the initial lease acknowledgement before the one `Release`) is
+  retained, compressed, on `PreparedGate`/`Release`.
+
+- `gate_lifecycle_linux.go:212-219` (Prepare) — deleted remainder: Prepare starts only the
+  root-owned static A gate inside the caller's pinned cgroup-v2 leaf; it waits for the root core's
+  authenticated group-cleared READY frame, records the exact producer through the mandatory hook,
+  then waits for the exact launcher exit and verifies A adopted the exact gate child.
+  "No native program runs here."
+
+- `gate_lifecycle_linux.go:663-668` (Release) — deleted remainder: clone commands use the v3
+  bootstrap and require A to durably record B's checkout-ready progress claim before native
+  execution can begin (the B receipt is not an A-certified checkout — that part is retained,
+  compressed, at the `onCheckoutReady` call).
+
+The sweep's plan is [`docs/plans/2026-11-22-comment-policy-sweep-plan.md`](2026-11-22-comment-policy-sweep-plan.md).

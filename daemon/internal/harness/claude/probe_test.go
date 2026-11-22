@@ -167,9 +167,6 @@ func TestClaudeProbeRejectsSuccessAfterProbeDeadline(t *testing.T) {
 	}
 }
 
-// TestClaudeProbeRejectsNilContextBeforeTheSharedGuard pins the entry-level
-// guard: a nil context must be rejected with the Claude-specific text before
-// the shared bounded probe is reached, and the runner must never be called.
 func TestClaudeProbeRejectsNilContextBeforeTheSharedGuard(t *testing.T) {
 	runner := &fixtureRunner{}
 	capabilities, err := probeCapabilities(nil, "claude", runner)

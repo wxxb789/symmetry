@@ -3215,10 +3215,8 @@ defmodule SymmetryControl.Goals do
     end
   end
 
-  # One dispatch over the live settlement inputs: the derived validation outcome
-  # (validation Tasks) first, then the revision guard, then the TaskResult kind.
-  # The arm order is the base evaluation order and there is no catch-all, so a `kind`
-  # outside the admitted set raises here instead of silently picking a settlement.
+  # Arm order = settlement evaluation order: validation outcome, revision guard, then
+  # the TaskResult kind; no catch-all, so an unexpected kind raises instead of settling.
   defp dispatch_result(
          goal,
          task,
@@ -10408,10 +10406,8 @@ defmodule SymmetryControl.Goals do
     ])
   end
 
-  # One deterministic UUID-shaped id for the durable mutation keys: sha256 over
-  # "<prefix>:<part>:<part>…" rendered with the version-5 and "a" variant nibbles these
-  # keys have always carried (not RFC 9562 name hashing). Settlement events and automatic
-  # admissions are keyed by it, so a change to these bytes is a durable-key change.
+  # sha256 over "<prefix>:<part>…" rendered UUID-shaped with the version-5/"a" nibbles
+  # the keys have always carried (not RFC 9562 name hashing); changing these bytes rekeys them.
   defp mutation_id(prefix, parts) do
     hex =
       :crypto.hash(:sha256, prefix <> ":" <> Enum.join(parts, ":"))

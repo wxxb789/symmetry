@@ -207,9 +207,8 @@ func (daemon *daemon) renewLeases(ctx context.Context) {
 			continue
 		}
 		if result.relative || result.response.LeaseRemainingMS > 0 {
-			// A first relative response may upgrade a legacy in-memory run.
-			// Do not let the legacy wall-clock projection reject that response
-			// before its relative authority is evaluated below.
+			// A first relative response may upgrade a legacy in-memory run: do not let the
+			// legacy wall-clock projection reject it before its relative authority is evaluated.
 			if result.relative && (result.localDeadlineAt.IsZero() || !daemon.localNow().Before(result.localDeadlineAt)) {
 				daemon.finishCommandRequest(result.requestID)
 				daemon.terminateForLease(result.journal, "relative lease deadline elapsed during renewal")
@@ -242,9 +241,8 @@ func (daemon *daemon) renewLeases(ctx context.Context) {
 		}
 		if result.relative || result.response.LeaseRemainingMS > 0 {
 			if result.response.LeaseRemainingMS <= 0 {
-				// A legacy response cannot extend a lease whose authority was
-				// previously relative. Keep the existing local deadline and fail
-				// closed instead of falling back to its absolute expiry.
+				// A legacy response cannot extend a lease whose authority was previously
+				// relative: keep the local deadline and fail closed, not its absolute expiry.
 				daemon.finishCommandRequest(result.requestID)
 				continue
 			}
@@ -262,9 +260,8 @@ func (daemon *daemon) renewLeases(ctx context.Context) {
 				continue
 			}
 			if !supported {
-				// Keep the daemon-side deadline even when this platform has no
-				// independent watchdog capability; it still constrains future
-				// renewal decisions.
+				// Keep the daemon-side deadline even without an independent watchdog
+				// capability: it still constrains future renewal decisions.
 				daemon.setLocalLeaseDeadline(result.journal.Key(), deadlineAt)
 			}
 		} else {
@@ -367,18 +364,14 @@ func (daemon *daemon) renewalThreshold() time.Duration {
 	return threshold
 }
 
-// remainingLeaseDeadline converts Control's server-derived relative lease
-// budget into a conservative local duration. The budget is measured from the
-// claim/renewal request start, so workspace preparation, response latency and
-// journaling can only consume authority; they never mint extra time.
+// Control's server-derived relative budget is measured from the claim/renewal request start,
+// so workspace preparation, latency and journaling only consume authority, never mint time.
 func (daemon *daemon) remainingLeaseDeadline(claim protocol.ClaimResponse, requestStarted time.Time) time.Duration {
 	return remainingLeaseDeadlineAt(leaseDeadlineAt(claim, requestStarted), daemon.localNow())
 }
 
-// validateClaimLeaseForStart keeps replayed claims from crossing a local
-// process or native-session boundary after their server lease is already
-// unsafe. Relative responses remain authoritative when present; legacy
-// responses must prove enough absolute wall-clock time for the safety margin.
+// Keeps a replayed claim from crossing a local process or native-session boundary after its
+// server lease is unsafe: relative responses stay authoritative, legacy ones prove the margin.
 func (daemon *daemon) validateClaimLeaseForStart(claim protocol.ClaimResponse, requestStarted time.Time, subject string) error {
 	if claim.LeaseRemainingMS > 0 {
 		if remainingLeaseDeadlineAt(leaseDeadlineAt(claim, requestStarted), daemon.localNow()) <= 0 {
@@ -386,10 +379,8 @@ func (daemon *daemon) validateClaimLeaseForStart(claim protocol.ClaimResponse, r
 		}
 		return nil
 	}
-	// Control validation rejects a missing absolute expiry before a real claim
-	// reaches this boundary. Keep lower-level callers compatible when they
-	// intentionally omit the legacy field, but never accept an unsafe value
-	// when it is present.
+	// Control rejects a missing absolute expiry upstream and lower-level callers may still omit
+	// the legacy field, but a present value must never be unsafe.
 	if claim.LeaseExpiresAt.IsZero() {
 		return nil
 	}
