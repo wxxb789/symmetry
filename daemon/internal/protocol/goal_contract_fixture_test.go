@@ -16,12 +16,41 @@ type goalContractFixtureManifest struct {
 }
 
 type goalContractFixture struct {
-	ID            string `json:"id"`
-	Schema        string `json:"schema"`
-	Path          string `json:"path"`
-	Valid         bool   `json:"valid"`
-	SchemaValid   *bool  `json:"schema_valid"`
-	SemanticValid *bool  `json:"semantic_valid"`
+	ID                string            `json:"id"`
+	Schema            string            `json:"schema"`
+	Path              string            `json:"path"`
+	Valid             bool              `json:"valid"`
+	WireError         string            `json:"wire_error"`
+	RuntimeDivergence map[string]string `json:"runtime_divergence"`
+	SchemaValid       *bool             `json:"schema_valid"`
+	SemanticValid     *bool             `json:"semantic_valid"`
+}
+
+var rawWireErrorTexts = map[string]string{
+	"duplicate_json_member": "duplicate JSON object member",
+	"noncanonical_number":   "fractional or exponent number is not canonical",
+	"unsafe_integer":        "integer exceeds the JSON safe-integer range",
+	"leading_zero":          "invalid character",
+	"nonfinite_number":      "number is not finite",
+	"invalid_utf8":          "JSON input is not valid UTF-8",
+	"bom":                   "invalid character",
+	"trailing_value":        "multiple JSON values",
+	"trailing_garbage":      "invalid character",
+}
+
+// The corpus vocabulary; an accepted row never consults rawWireErrorTexts, so
+// an unknown class must fail before the divergence branch.
+var rawWireErrorClasses = map[string]struct{}{
+	"duplicate_json_member": {},
+	"noncanonical_number":   {},
+	"unsafe_integer":        {},
+	"leading_zero":          {},
+	"negative_zero":         {},
+	"nonfinite_number":      {},
+	"invalid_utf8":          {},
+	"bom":                   {},
+	"trailing_value":        {},
+	"trailing_garbage":      {},
 }
 
 func TestGoalTransportParsesContractFixtures(t *testing.T) {
@@ -44,6 +73,11 @@ func TestGoalTransportParsesContractFixtures(t *testing.T) {
 			data, err := os.ReadFile(filepath.Join(root, "contracts", "fixtures", filepath.FromSlash(fixture.Path)))
 			if err != nil {
 				t.Fatal(err)
+			}
+
+			if fixture.WireError != "" {
+				assertRawWireFixture(t, fixture, data)
+				return
 			}
 
 			schemaErr := validateFixtureSchema(fixture.Schema, data)
@@ -156,6 +190,31 @@ func (fixture goalContractFixture) expectedSemanticValidity() bool {
 
 func validateFixtureSchema(schema string, data []byte) error {
 	return contractdto.ValidateSchema(contractdto.Envelope(schema), data)
+}
+
+func assertRawWireFixture(t *testing.T, fixture goalContractFixture, data []byte) {
+	t.Helper()
+	if _, known := rawWireErrorClasses[fixture.WireError]; !known {
+		t.Fatalf("unknown wire_error class %q", fixture.WireError)
+	}
+	var decoded map[string]any
+	err := contractdto.DecodeSchema(contractdto.Envelope(fixture.Schema), data, &decoded)
+	if fixture.RuntimeDivergence["go"] == "accepts" {
+		if err != nil {
+			t.Fatalf("raw fixture is accepted by Go today but was rejected: %v", err)
+		}
+		return
+	}
+	if err == nil {
+		t.Fatalf("raw fixture class %s was accepted by DecodeSchema", fixture.WireError)
+	}
+	want, known := rawWireErrorTexts[fixture.WireError]
+	if !known {
+		t.Fatalf("wire_error class %q was rejected but this reader has no native text", fixture.WireError)
+	}
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("rejection %q does not carry %q", err, want)
+	}
 }
 
 func contractRepositoryRoot(t *testing.T) string {
