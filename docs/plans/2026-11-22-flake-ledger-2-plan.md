@@ -4,8 +4,10 @@ Contract: `goal-flake-ledger-2.md` (GDD, conductor-authored 2026-11-22, docs-onl
 authorship: this worktree's HEAD `d5b14b8579b708150889c76e765d856b7f8c03af`; `git rev-parse
 origin/main` and `git merge-base origin/main HEAD` both returned that revision, so every coordinate
 was re-derived there. The increment is now committed (`9811a609`, merged as `393bb640` and again as
-`e94c2902`), and the gates below are re-derived on the committed range (`origin/main...HEAD`, the
-diff `9e360586..e94c2902`, which holds only this increment's two files).
+`e94c2902`) and rewritten by the simplify pass as `2b6f048b` — the shipped head, which rewrites both
+owned files — and the gates below are re-derived on the committed range (`origin/main...HEAD`, the
+diff `9e360586..2b6f048b`, which holds only this increment's two files) plus the fix-pass working
+diff.
 
 ## Deliverable shape
 
@@ -84,7 +86,7 @@ decisions and points there instead of restating the entries.
 | # | Command | Expectation |
 | --- | --- | --- |
 | 1 | `git diff --check` | exit 0, no output |
-| 2 | the contract's committed-range gate: `git diff origin/main...HEAD` searched case-insensitively for the profile-directory segment the program rules name | empty (the increment is committed, so the committed range is the effective check; the same search is also run over the working diff while the apply-pass edits are uncommitted) |
+| 2 | the contract's committed-range gate: `git diff origin/main...HEAD` searched case-insensitively for the profile-directory segment the program rules name | empty (the increment is committed, so the committed range is the effective check; the same search is also run over the working diff while the fix-pass edits are uncommitted) |
 | 3 | host-path scan over the increment (the committed range plus the working diff): the profile-directory segment, written `<profile-segment>/` in the convention `docs/plans/2026-11-22-rf-w3-01-classifier-extract-plan.md` uses, and any absolute user-profile directory path in any platform's spelling | empty |
 | 4 | the contract's escape gate: no backslash escape immediately preceding the letter `u`, over the committed range and the working diff | empty |
 | 5 | `python scripts/ci/check-record-cleanliness.py --base $(git merge-base HEAD origin/main) --head HEAD` | exit 0 (the range changes no file under `docs/evaluations/**` or `docs/evidence/**`) |
@@ -95,7 +97,7 @@ No CI-hosted oracle exists for this increment (docs-only, and the stage must not
 test runs below are the only behavioral evidence and they are evidence about *reproduction*, not
 about a fix.
 
-## Evidence (measured 2026-11-22; gates re-derived in the apply pass on the committed range)
+## Evidence (measured 2026-11-22; gates re-derived at the shipped head `2b6f048b`)
 
 ### Gates (contract clause 5, all foreground from the repository root)
 
@@ -105,11 +107,17 @@ about a fix.
 | 2 | the contract's committed-range gate over `git diff origin/main...HEAD` | no match (the search exits 1) |
 | 3 | the same search over the working diff | no match (the search exits 1) |
 | 4 | the contract's escape gate over the committed range and the working diff | no match (the search exits 1) |
-| 5 | `python scripts/ci/check-record-cleanliness.py --base $(git merge-base HEAD origin/main) --head HEAD` | exit 0 — `check-record-cleanliness: no record added or modified between 9e3605861956 and e94c29024c65; nothing to check` |
-| 6 | `git diff --name-only origin/main...HEAD`, `git status --short` | the two increment files committed; the working tree holds only the apply-pass edits to them |
+| 5 | `python scripts/ci/check-record-cleanliness.py --base $(git merge-base HEAD origin/main) --head HEAD` | exit 0 — `check-record-cleanliness: no record added or modified between 9e3605861956 and 2b6f048b106b; nothing to check` |
+| 6 | `git diff --name-only origin/main...HEAD`, `git status --short` | the two increment files committed; the working tree holds only the fix-pass edits to them |
 | 7 | the census grep from "Duplicate and placement check" | `docs/TODO.md:14`, `docs/archive/CLOSED-TODO.md:2` — the 14 are the three entries' own mentions (entry 1 twice: the lead and the `-run` pattern; entry 2 eleven times: the wildcard, its five names, the `-run` pattern and the five verbatim `--- FAIL` lines the entry records; entry 3 once), and the archive's 2 are pre-existing |
 
 Python 3.12.10, as gate 5 ran it.
+
+Fix-pass re-derivation (2026-11-22, after the review): the review findings and the conductor
+amendment were applied as working-tree edits to the two owned files — including the amendment's
+replacement of the dead-store entry's stale line citations with the test names the shipped tree
+verified by `git grep` — and the contract gates re-ran in the foreground at `2b6f048b` and over the
+fix-pass working diff; the rows above carry those results.
 
 ### Reproduction attempts recorded into the entries
 
@@ -117,7 +125,7 @@ Python 3.12.10, as gate 5 ran it.
 | --- | --- | --- |
 | fake-agent race, CI shape | WSL (Linux amd64, go1.27.0), from `daemon/`: `go test -race -count=20 -timeout 600s -v -run '^TestAutonomousReturnReleasesItsInputReader$' ./cmd/symmetry-fake-agent/` | 20/20 `--- PASS`, 0 `--- FAIL`, exit 0 |
 | anchor-wire group, job shape | WSL Ubuntu-24.04 as an unprivileged user, go1.27.0, from `daemon/`: `go test -count=5 -timeout 1200s -cover -v -run '^TestLinuxOwnerAnchorWire' ./internal/platform/` | 25/25 `--- PASS`, 0 `--- FAIL`, exit 0, `coverage: 2.1% of statements` |
-| anchor-wire group, root session | same command in the default (root) WSL session | 5 `--- FAIL` with `wire harness requires an unprivileged A process: uid=0 euid=0 gid=0 egid=0` — recorded as the host limit, not as a test failure |
+| anchor-wire group, root session | same command with `GOTOOLCHAIN=go1.27.0` in the default (root) WSL session | 5 `--- FAIL` with `wire harness requires an unprivileged A process: uid=0 euid=0 gid=0 egid=0` — recorded as the host limit, not as a test failure |
 | local `-race` on the Windows host | `go test -race …` (native) | not run: `go: -race requires cgo; enable cgo by setting CGO_ENABLED=1` and this host has no C toolchain; the WSL runs above stand in, and the limit is recorded |
 
 Re-run in the apply pass on the committed tree: both WSL surfaces returned the counts recorded above
@@ -133,8 +141,9 @@ local toolchain is go1.26.8, and every other part of the two commands is the row
   test and mechanism, and merging would obscure which observation belongs to which PR/run.
 - Cross-references to the nearest look-alikes are written into the entries (not only into this plan),
   because a future dedup sweep reads the entry first.
-- No line-number coordinates, unlike older entries: the contract fixes that, and symbols survive the
-  refactors this program performs.
+- No authored line-number coordinates, unlike older entries: the contract fixes that, and symbols
+  survive the refactors this program performs. Entry 2's `anchor_wire_shape_test.go:<line>` strings
+  are quoted verbatim from the recorded CI output — recorded evidence, not authored coordinates.
 - The plan records the one contract ambiguity the cited artifacts do not resolve (the "13 shuffled
   runs / 13-file subset" pairing); the case-name ambiguity it first recorded was resolved from the
   PR #220 review record, which names the red run, and the entry records that name.

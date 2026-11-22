@@ -91,11 +91,15 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       slice fixed, found while applying it. Evidence: the slice's `golangci-lint v2.15.0` run
       (`GOOS=linux`, `--default=none -E staticcheck,ineffassign,gocritic`, `./internal/app/...`) at
       `a3039f0` reports them among its `ineffassign` findings; after this slice they are the only
-      remaining ones in `internal/app/`:
-      `daemon/internal/app/app_test.go:4881` (`journal, err := store.LoadJournal(key)`),
-      `daemon/internal/app/stale_ack_settlement_test.go:32` and `:125`
-      (`journal, err := store.SetLocalState(key, "stale")`). Each binds `journal` and overwrites it on
-      the next statement (`journal = expireLeaseBeforeCleanup(t, store, key)`) with no read in between,
+      remaining ones in `internal/app/`: in `daemon/internal/app/app_test.go`,
+      `TestRecoveredCleanupRulesPreserveOrRemoveJournalSafely` subtest "empty path is no-op"
+      (`journal, err := store.LoadJournal(key)`); and in
+      `daemon/internal/app/stale_ack_settlement_test.go`
+      (`journal, err := store.SetLocalState(key, "stale")`) in
+      `TestStaleCleanupWaitsForCommandAcknowledgementWithoutSendingOrdinaryOutbox` and in
+      `TestStaleAcknowledgementConclusiveErrorRetiresBeforeCleanup` (both of its table subtests).
+      Each binds `journal` and overwrites it on the next statement
+      (`journal = expireLeaseBeforeCleanup(t, store, key)`) with no read in between,
       so the first value is dead; each needs its own review before removal, because the intermediate
       journal may be the value an intended assertion would read, and the daemon test split (W3-15)
       owns those files.
@@ -1495,7 +1499,8 @@ is fixed here; each bullet names what a follow-up has to re-derive.
       runs passed; five local WSL `-cover` runs at head and base passed; added 2026-11-22 — WSL Ubuntu-24.04
       as an unprivileged user, go1.27.0, `go test -count=5 -timeout 1200s -cover -v -run
       '^TestLinuxOwnerAnchorWire' ./internal/platform/` → 25/25 `--- PASS`, exit 0, `coverage: 2.1% of
-      statements`; the same command in this host's default (root) WSL session refuses all five with
+      statements`; the same command with `GOTOOLCHAIN=go1.27.0` in this host's default (root) WSL
+      session refuses all five with
       `wire harness requires an unprivileged A process: uid=0 euid=0 gid=0 egid=0`, so a revalidation must
       run as an unprivileged user (the refusal is a host property, not a test failure). Cause unknown. Next
       diagnostic step: re-run the group well above `-count=5` under CPU contention in the job's own shape
@@ -1506,7 +1511,9 @@ is fixed here; each bullet names what a follow-up has to re-derive.
 
 - [ ] `frontend/src/features/goals/goal-attention.test.tsx`, the plan-approval replay case: failed once
       among 13 shuffled vitest runs of a 13-file subset (`--sequence.shuffle --sequence.seed=3`) during the
-      PR #220 review; reruns with the same seed passed, so the observation is load-dependent, not
+      PR #220 review, recorded in that PR's `machine-review-state:v1` review record (comment
+      `#issuecomment-7071789916`), whose reruns are at head `9715ce32` — the failing round's head is not
+      recorded there; reruns with the same seed passed, so the observation is load-dependent, not
       order-dependent. The PR #220 review record names the case: "Round 1 saw one red run of `replays the
       plan approval's decision resolution byte for byte after a lost acknowledgement`", and records "1
       failure in 13 shuffled runs that include this case, and 0 in the last 11. That points to a rare
