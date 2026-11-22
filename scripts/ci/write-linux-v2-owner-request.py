@@ -200,7 +200,7 @@ def main() -> int:
         ):
             raise SystemExit("Pi ClaimResponse has no real GitHub resource.sync grant for the exact Subject")
     else:
-        require("provider_access" not in claim, "OpenCode ClaimResponse must omit provider_access")
+        require("provider_access" not in claim, "non-Pi ClaimResponse must omit provider_access")
 
     directory = pathlib.Path(barrier_dir)
     require(

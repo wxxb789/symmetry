@@ -1667,6 +1667,52 @@ class ExporterTest(unittest.TestCase):
                 self.assertIn("containment replay witness", result.stderr)
                 self.assertFalse((output / "manifest.json").exists())
 
+    def test_manual_containment_witness_mutations_refuse_publication(self) -> None:
+        base = containment_witness("codex")
+        mutations = (
+            (
+                "native_binary",
+                base | {"native_binary": "/usr/local/bin/not-the-pinned-codex"},
+                "native_binary does not match --native-binary",
+            ),
+            (
+                "native_version_line",
+                base | {"native_version_line": "0.0.0"},
+                "native_version_line does not match --native-version-line",
+            ),
+            (
+                "subject.tree_digest",
+                base | {"subject": {"tree_digest": "sha256:" + "f" * 64}},
+                "subject.tree_digest does not match --source-tree-digest",
+            ),
+            (
+                "containment absent",
+                {key: value for key, value in base.items() if key != "containment"},
+                "does not record a boolean containment.native_open_reached",
+            ),
+            (
+                "containment empty",
+                base | {"containment": {}},
+                "does not record a boolean containment.native_open_reached",
+            ),
+            (
+                "containment non-boolean",
+                base | {"containment": {"native_open_reached": "true"}},
+                "does not record a boolean containment.native_open_reached",
+            ),
+        )
+        for index, (name, document, expected) in enumerate(mutations):
+            with self.subTest(mutation=name):
+                source = self.private_dir(f"witness-mutation-source-{index}")
+                receipts = self.private_dir(f"witness-mutation-receipts-{index}")
+                output = self.private_dir(f"witness-mutation-output-{index}")
+                self.populate_containment(source, "codex")
+                self.write_json(source / CONTAINMENT_PINS["codex"]["witness"], document)
+                result = self.run_containment_gate("codex", source, receipts, output)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(expected, result.stderr)
+                self.assertFalse((output / "manifest.json").exists())
+
     def test_manual_native_arguments_require_all_five_and_matching_case_set(self) -> None:
         pin = CONTAINMENT_PINS["codex"]
         source = self.private_dir("native-args-source")

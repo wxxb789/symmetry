@@ -11,7 +11,10 @@ the D3 `harness.md` amendment that cites them stays blocked on a dispatched run 
 - Conductor decision of 2026-11-22 **supersedes the contract's kind list**: this increment covers
   `codex` and `claude_code` only. omo/omp/generic kinds move to W5-02b; `daemon/native/`,
   `daemon/internal/config/**` and `scripts/ci/linux-v2-host-prerequisite-probe.sh` are outside the changed
-  set; the `shared` case set's opencode re-pin leg stays frozen on the F2 owner ruling (W6-04/D1).
+  set; the `shared` case set's frozen opencode leg is excluded from the per-kind green gate while W6-04/D1
+  keeps its acceptance-case bytes frozen (Owner ruling F2, 2026-11-22, binding; see the plan §7) — this
+  increment changes neither its bytes nor its case, and a red frozen leg in a dispatch is recorded as the
+  F2-excluded leg.
 - Plan: `docs/plans/2026-11-22-rf-w5-02a-acceptance-matrix-extension-plan.md` (interface freeze §2, semantic
   decisions §3, verification already performed §4, owned-set additions §6).
 - Slice artifacts: the plan above, this record, and the `docs/TODO.md` entry that carries the slice's undone
@@ -69,12 +72,12 @@ All runs on the worktree at HEAD `6148ba6ddb7b9918a5ea5ed40df434a30953c691` plus
 | Go race (WSL) | `go test -count=1 -race ./internal/app/...` re-run on the final bytes (bg_26; the only post-bg_22 source delta was a comment line in `linux_owner_witness_linux.go`, final `sha256` `5897cfe391981d207a964b9ba3ea4acd0bf6b12cab517d7d4b9ee869977e47f3`) | rc=0, `internal/app` 1074.9 s |
 | Workflow lint | `actionlint` 1.7.12 `.github/workflows/linux-native-v2-acceptance.yml` | rc=0 |
 | Shell syntax | `bash -n scripts/ci/linux-v2-native-{tools,acceptance}.sh` | rc=0 |
-| Shell lint | `shellcheck --severity=warning` on both scripts | exit 1 (findings present); `acceptance.sh` findings by code: `SC2174` 1, `SC2154` 8, `SC2043` 1, `SC2024` 1, `SC2276` 2, `SC2289` 1, `SC1078` 1, `SC2288` 1 (counted again at the apply stage; same classes and count before and after it), `tools.sh` 0; the six containment `SC2154`s are `codex_executable`, `claude_executable`, `code_mode_host_executable{,_sha}`, `bwrap_executable{,_sha}` — the same class as the pre-existing `pi_unpack`/`opencode_unpack` globals assigned inside the fetch functions, and after the apply they sit on the `stage_guest_binary` call lines. The CI step is advisory (`continue-on-error: true`, `ci.yml:1297`), so exit 1 does not fail the job |
-| Python fixtures | `python3 scripts/ci/test-linux-v2-evidence.py` (WSL; 39 tests at the implement stage, 41 after the apply added the boundary-copy and replay-binding tests) | 41 tests, `OK`, rc=0 |
+| Shell lint | `shellcheck --severity=warning scripts/ci/linux-v2-native-acceptance.sh scripts/ci/linux-v2-native-tools.sh` (repo root, shellcheck 0.9.0) | exit 1 (findings present, advisory: `continue-on-error: true`, `ci.yml:1297`); by code at the final tree: `SC1078` 2, `SC2024` 1, `SC2043` 1, `SC2174` 1, `SC2276` 3, `SC2288` 1, `SC2289` 2, `SC2154` 0. Measured identically for the pre-fix content under the same command (a `scripts/ci/zz-head-probe.sh` copy plus the real `linux-v2-native-tools.sh` in one invocation), so the fix adds no finding. The `SC2154` class disappears as soon as `tools.sh` is part of the invocation — shellcheck then resolves the `source "$repo/scripts/ci/linux-v2-native-tools.sh"` directive and sees the assignments; single-file invocations that cannot resolve it report 8 (`pi_unpack`, `opencode_unpack`, `codex_executable`, `code_mode_host_executable{,_sha}`, `bwrap_executable{,_sha}`, `claude_executable`), which is the class recorded before |
+| Python fixtures | `python3 scripts/ci/test-linux-v2-evidence.py` (WSL; 39 tests at the implement stage, 41 after the apply added the boundary-copy and replay-binding tests, 42 after the fix r1 mutation tests) | 42 tests at the final tree, `OK`, rc=0 |
 | Python fixtures | `python3 scripts/ci/test-linux-v2-control-receipt.py` (WSL root, bg_25) | 9 tests, `OK`, rc=0 |
 | Python fixtures | `scripts/ci/test-linux-v2-source-subject.py`, `scripts/ci/test-linux-v2-go-events.py`, `scripts/ci/test-ci-structure-extraction.py` | 7 OK / 6 OK / 23 OK, rc=0 |
 | Python lint | `python -m ruff check` + `ruff format --check` on the four changed `scripts/ci/*.py` | `All checks passed!`, `4 files already formatted`, rc=0 |
-| Apply-stage re-verification (2026-11-22, post-apply worktree) | the same off-host commands, re-run on the delivered bytes | every rc=0 row re-established: `gofmt -l` no output, `go vet ./...` rc=0, `GOOS=linux GOARCH=amd64 go build ./...` rc=0, `GOOS=linux go vet ./e2e/... ./internal/app/... ./internal/harness/...` rc=0, `go test -list 'NativeContainment$' ./e2e/` rc=0 (both entries), focused WSL witness pins rc=0 (`SummaryRequiresTheOpenBoundary` now asserts a satisfied fixture and reddens on a synthetic containment gate), `test-linux-v2-evidence.py` 41 tests `OK`, `ruff check`/`format --check` rc=0, `actionlint` rc=0, `bash -n` rc=0; `go test -count=1 ./internal/app/... ./internal/harness/...` (Windows) hit one contention flake — `internal/harness/pi` `TestNativeRepositoryTaskSubjectUsesRepositoryBaseline` deadline under load — which passes in isolation (6.2 s, rc=0) and in the WSL race run; the WSL race suite is green with `-timeout 2400s` (`internal/app` 606.1 s; the only earlier failure was the default 600 s per-package cap under `-race`, no data race) |
+| Apply-stage re-verification (2026-11-22, post-apply worktree) | the same off-host commands, re-run on the delivered bytes | every rc=0 row re-established: `gofmt -l` no output, `go vet ./...` rc=0, `GOOS=linux GOARCH=amd64 go build ./...` rc=0, `GOOS=linux go vet ./e2e/... ./internal/app/... ./internal/harness/...` rc=0, `go test -list 'NativeContainment$' ./e2e/` rc=0 (both entries), focused WSL witness pins rc=0 (`SummaryRequiresTheOpenBoundary` now asserts a satisfied fixture and reddens on a synthetic containment gate), `test-linux-v2-evidence.py` 41 tests `OK` at the apply stage (42 at the fix r1 tree, §Fix r1), `ruff check`/`format --check` rc=0, `actionlint` rc=0, `bash -n` rc=0; `go test -count=1 ./internal/app/... ./internal/harness/...` (Windows) hit one contention flake — `internal/harness/pi` `TestNativeRepositoryTaskSubjectUsesRepositoryBaseline` deadline under load — which passes in isolation (6.2 s, rc=0) and in the WSL race run; the WSL race suite is green with `-timeout 2400s` (`internal/app` 606.1 s; the only earlier failure was the default 600 s per-package cap under `-race`, no data race) |
 | Elixir fixture | row-arithmetic check over `scripts/ci/provision-linux-v2-control-claims.exs` (regex over the `@cases` expression and the two stage lists) | `declared=48`; literal rows 24 + `@stage_replay_holds` 14 + `@ack_loss_stages` 10 = 48, `match=True` (re-derived at the apply stage); no duplicate names; the four new rows are exactly `codex_containment`, `claude_containment`, `stage_replay_native_release_codex`, `stage_replay_native_release_claude`. The fixture itself only executes inside the dispatch (Control release + Postgres), recorded as such |
 
 `test-linux-v2-evidence.py` is a Linux-only fixture (the exporter calls `os.getuid()` at HEAD too), so its
@@ -95,11 +98,79 @@ not part of this change's evidence.
 - **Claude adapter seam.** `daemon/internal/harness/claude/adapter_test.go` drives the new
   `StartProcess` seam; the app-side witness unit pins (`linux_owner_witness_linux_test.go`) pin the case map,
   version equality, containment path selection and the summary digest requirement.
-- **No weakening of pi/opencode.** The config generator's `kind` map and `native_model_keys` produce
-  byte-identical JSON for `pi`/`opencode` (`command`, `args`, `native_model`/`native_model_provider` present
-  and in the same key order); `write-linux-v2-owner-request.py` changes are pure additions; every deleted
-  line in `daemon/e2e/` and `daemon/internal/app/` is a kind-predicate/signature generalization of the same
-  assertion (e.g. the non-Pi profile check keeps `profile.ProviderAccess || len(args) != 0`).
+- **No weakening of pi/opencode.** The config generator keeps the base `command`/`native_model` expression
+  byte-identical and applies the codex/claude overrides after the agent dictionary, so `pi`/`opencode`
+  JSON is unchanged; the fixture probe (see §Fix r1) stages the `shared` B-home tree from the fixed
+  generator and from the pre-fix generator and compares the relative paths and bytes (identical), and
+  compares the generated `pi-provider-action`/`pi-helper-crash`/`pi-daemon-crash`/`opencode-health`/
+  `opencode-wsl2`/`codex-containment`/`claude-containment` config bytes for the `shared`,
+  `codex-containment` and `claude-containment` suffixes (no mismatch);
+  `write-linux-v2-owner-request.py` changes are pure additions plus one refusal-message rename; every
+  deleted line in `daemon/e2e/` and `daemon/internal/app/` is a kind-predicate/signature generalization of
+  the same assertion (e.g. the non-Pi profile check keeps `profile.ProviderAccess || len(args) != 0`).
+
+## Fix r1 (2026-11-22, review findings fixed at the final tree)
+
+The ce-code-review receipt for `540263924e..49361f03` reported `MUST_FIX (7)` (6×P2 + 1×P3). All
+seven are fixed in the worktree (HEAD `49361f03` plus the fix change set); the probes and mutants
+below ran at this final tree. Each finding maps to evidence that would redden without the change:
+
+- **#9 frozen acceptance-case bytes.** Base `:579` (barrier-case loop) and base `:819-841` (config
+  generator head, including the `command` line and its dict shape) are restored byte-identical; the
+  two containment barrier directories get their own loop after the frozen one, and the codex/claude
+  agent overrides run after the frozen agent dictionary. Probe: `check-frozen-ranges.py` (scratch;
+  `git show 540263924e:<script>` contiguous-block compare against the worktree) reports `base:21`,
+  `base:579`, `base:819-841`, `base:894-895` each identical, exit 0.
+- **#8 containment credential scope.** Containment case sets no longer write the real
+  `SYMMETRY_OPENAI_API_KEY` (no `native-api-key` file is created), the fixture generator stages
+  exactly the kind's placeholder, and the guest check fails on any foreign native credential path
+  (`.pi`, `.config/opencode`, `.local/share/opencode`, the other kind) or on an extra entry in the
+  kind directory. Probes at the final tree: the fixture probe extracts the real generator from the
+  script and runs it in a scratch root — codex/claude stage exactly `.codex/auth.json` /
+  `.claude/.credentials.json`, no key sentinel, no foreign directories; the pre-fix generator
+  (the `git show HEAD:` bytes) stages all six files with the sentinel in `.pi/agent/auth.json`
+  and `.local/share/opencode/auth.json` (mutant red). The shell-guard probe extracts the real
+  credential arrays, key-write guard and absence block: containment arrays hold only the kind path,
+  `shared` keeps the five pi/opencode files (and the `shared` staged tree is byte-identical between
+  the final and pre-fix generators), the contained key file stays absent (unguarded pre-fix write:
+  present, mutant red), and the absence block passes clean while reddening on a planted
+  `.pi/agent/auth.json` and on a planted `.codex/extra.json`.
+- **#2 EXIT-trap unbound variable.** `source_commit`/`source_tree_digest` are derived from
+  `$source_subject_json` at the script top (before the `trap cleanup EXIT INT TERM` at `:278`); the
+  later re-derivation from `source-subject.json` is dropped. Probe: the trap probe (bash
+  `set -Eeuo pipefail`, EXIT trap, the same `native_manifest_args` expansion) aborts at
+  `source_tree_digest: unbound variable` in the pre-fix shape and reaches the evidence export plus
+  the retained-fixture diagnostic in the final shape, preserving the original exit status.
+- **#5 exporter refusal branches.** `test_manual_containment_witness_mutations_refuse_publication`
+  mutates the fresh witness document six ways (`native_binary`, `native_version_line`,
+  `subject.tree_digest`, `containment` absent / `{}` / non-boolean) and requires refusal with the
+  matching stderr and no `manifest.json`. Mutant probe on a scratch copy of `scripts/ci`: forcing
+  each guard's condition to `if False:` reddens exactly its subtest(s) (the three containment-shape
+  mutations redden together), and the restored copy is green.
+- **#14 refusal text.** `write-linux-v2-owner-request.py` now refuses non-Pi provider access with
+  `non-Pi ClaimResponse must omit provider_access`, matching the daemon-side wording
+  (`linux_owner_witness_linux.go:2311`); verified by `grep` at the final tree.
+- **#1 plan rows.** The workflow row now states the committed `<evidence root>/*/*.json` upload glob
+  (probe: `git diff 540263924e..HEAD -- .github/workflows/linux-native-v2-acceptance.yml`), and the
+  Go row splits `verifyNativeExecutable` from the sole digest writer `recordNativeExecutableDigest`
+  (probe: `grep -n recordNativeExecutableDigest` → definition `:2964`, call `:2909` inside `runFresh`).
+- **#3 F2 exclusion recorded.** The plan header, plan §7, `docs/TODO.md` and this record state the
+  exclusion, the fail-closed assertion and the F2-excluded leg naming instead of a pending ruling.
+  Probe for the cited assertion:
+  `go test -count=1 ./internal/app -run 'TestNewHarnessRegistryBindsNativeAdaptersAndUnsupportedOpenCode|TestStartupProbeRegistersUnavailableNativeProjections'`
+  → `PASS` (1.7 s), including the opencode subtest that asserts the refused start.
+
+Fix-stage gate re-run (worktree = `49361f03` + the fix change set): `bash -n` on both scripts rc=0
+(WSL bash and Windows bash); `shellcheck` per the Shell lint row; `actionlint` rc=0;
+`test-linux-v2-evidence.py` 42 tests `OK` rc=0 (WSL); `test-linux-v2-source-subject.py` 7 OK,
+`test-linux-v2-go-events.py` 6 OK, `test-ci-structure-extraction.py` 23 OK (3 skipped),
+`test-linux-v2-control-receipt.py` (root) 9 OK; `ruff check` + `ruff format --check` on the changed
+`scripts/ci/*.py` rc=0; `gofmt -l` (Windows and WSL) no output; `GOOS=linux GOARCH=amd64 go build
+./...` rc=0; `go vet ./...` (host) and `GOOS=linux GOARCH=amd64 go vet ./e2e/... ./internal/app/...
+./internal/harness/...` rc=0; `go test -list 'NativeContainment$' ./e2e/` (WSL) rc=0 listing both
+entries; Elixir row arithmetic re-derived (6 + 18 literal rows + `@stage_replay_holds` 14 +
+`@ack_loss_stages` 10 = 48 = `@expected_fixture_runs`, no duplicate names, the four new rows exact).
+The heavy `go test` suites are unchanged (no Go file is touched by the fix) and are not re-run here.
 
 ## Base-vs-HEAD control-flow audit
 
@@ -142,6 +213,11 @@ not run, never as passed.
    `daemon/internal/app/harness_test.go` (claude caps test-enabler), this evidence record.
 5. The dispatch is **not run** (no qualifying host here) and is recorded as not-run in the dispatch section
    above, never as passed.
+6. Contract Change item 6 asked for the new case sets to be added to the workflow's per-case-set artifact
+   allowlist; the commit instead replaced the twelve named entries with one `<evidence root>/*/*.json`
+   upload glob (`.github/workflows/linux-native-v2-acceptance.yml`, upload step). The glob covers the same
+   per-case-set evidence files; the behavioural delta (a wildcard instead of named paths) is recorded here
+   rather than re-litigated, and the plan's workflow row now states the committed bytes.
 
 ## Not evidence of
 
@@ -162,5 +238,6 @@ evidence, not acceptance.
 - `native_open_reached` is the adapter's established Open boundary: for claude that is process readiness
   (`claude/adapter.go` `candidateSession.Open`), not a model round-trip; the witness requires it `true` for
   both containment cases so a regression cannot silently downgrade the proof.
-- The six new `SC2154` shellcheck findings stay unrepaired (advisory step); they are the existing pattern of
-  globals assigned in the sourced fetch functions.
+- The shellcheck advisory step stays at exit 1 (see the Shell lint gate row for the measured per-code counts at
+  the final tree and the invocation the counts depend on); the `SC2154` class is an artifact of single-file
+  invocations that cannot resolve the `source "$repo/scripts/ci/linux-v2-native-tools.sh"` directive.

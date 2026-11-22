@@ -9,20 +9,22 @@ this plan, `docs/TODO.md` and the evidence record `docs/evidence/rf-w5-02a-accep
 Conductor decision (2026-11-22, F3/F9 ruling) SUPERSEDES the five-kind scope: this slice covers
 **codex and claude only**. `validateRuntimeWorkspacePolicy` already accepts `git_clone_v2` for
 both (`daemon/internal/config/config.go:467-483`), so no `daemon/internal/config/**` or
-`daemon/internal/linuxpreflight/**` change is in scope; omo/omp/generic move to W5-02b. The
-opencode leg is untouched pending the F2 owner ruling (D1 froze its bytes).
+`daemon/internal/linuxpreflight/**` change is in scope; omo/omp/generic move to W5-02b. Owner
+ruling F2 (2026-11-22, binding) excludes the frozen opencode leg from the per-kind green gate while
+W6-04/D1 keeps its acceptance-case bytes frozen; this slice leaves those bytes untouched and
+records the exclusion in §7.
 
 ## 1. Delivered shape
 
 | file | change |
 | --- | --- |
 | `scripts/ci/linux-v2-native-tools.sh` | `linux_v2_fetch_codex` (codex package + `bwrap` + `codex-code-mode-host` archives, archive/executable SHA-256 and `codex-cli 0.168.0` asserts) and `linux_v2_fetch_claude` (`claude-linux-x64.tar.gz`, executable SHA-256, `2.1.323 (Claude Code)`); `linux_v2_fetch_native_tools` keeps its pi+opencode contract, new fetches are called per case set |
-| `scripts/ci/linux-v2-native-acceptance.sh` | case-set whitelist +2; codex/claude guest installs (root-owned 0755, staged-digest assert), B-owned placeholder credential trees, per-kind containment configs, request/barrier/marker wiring, `codex_containment`/`claude_containment` dispatch arms, per-kind `native_release` replay leg, per-kind manifest CLI args |
-| `.github/workflows/linux-native-v2-acceptance.yml` | `case_sets` +2 and upload paths +2; trigger/environment/timeout untouched |
+| `scripts/ci/linux-v2-native-acceptance.sh` | case-set whitelist +2; codex/claude guest installs (root-owned 0755, staged-digest assert), a B-owned containment credential tree holding only the kind's placeholder (the W6-04/D1-frozen acceptance-case bytes stay byte-identical; new-kind handling sits after them), per-kind containment configs, request/barrier/marker wiring, `codex_containment`/`claude_containment` dispatch arms, per-kind `native_release` replay leg, per-kind manifest CLI args |
+| `.github/workflows/linux-native-v2-acceptance.yml` | `case_sets` +2; the twelve per-case-set artifact allowlist entries are replaced by one `<evidence root>/*/*.json` upload glob (committed fact, verified with `git diff 540263924e..HEAD -- .github/workflows/linux-native-v2-acceptance.yml`; recorded as a divergence in the evidence record); trigger/environment/timeout untouched |
 | `scripts/ci/provision-linux-v2-control-claims.exs` | `@expected_fixture_runs` 44 → 48; `@cases` +2 containment +2 per-kind `native_release` replay rows; per-kind replay names keep their own `case` |
 | `scripts/ci/register-linux-v2-claim-machine.py` | +2 generic Control claim runtimes (`codex-native`, `claude-native`, capabilities `{structured_input: true}`) — scope addition §6 |
 | `scripts/ci/write-linux-v2-owner-request.py` | `CASES` +4 rows; per-kind `native_release` replay rows write request `case: stage_replay` |
-| `daemon/internal/app/linux_owner_witness_linux.go` | kind whitelist + version equality (codex, `claude_code`); case map +2 + `stage_replay` for codex/claude; credential-free containment path (Open without a turn); codex turn/artifact/usage gates case-scoped to `codex_native_turn`; `verifyNativeExecutable` extended + records path/SHA-256; new summary fields `native_binary`, `native_binary_sha256`, `containment.native_open_reached` |
+| `daemon/internal/app/linux_owner_witness_linux.go` | kind whitelist + version equality (codex, `claude_code`); case map +2 + `stage_replay` for codex/claude; credential-free containment path (Open without a turn); codex turn/artifact/usage gates case-scoped to `codex_native_turn`; `verifyNativeExecutable` extended for claude's release equality; new `recordNativeExecutableDigest` (sole writer, called only from `runFresh`, call-site audit `:2909`/`:2964`) records the new summary fields `native_binary`/`native_binary_sha256`; `containment.native_open_reached` |
 | `daemon/internal/harness/claude/probe.go` | export `TestedVersion = testedVersion` (one line) |
 | `daemon/internal/harness/claude/adapter.go` | optional `StartProcess` launch seam, mirroring `codex/adapter.go:185-195` — scope addition §6 |
 | `daemon/internal/harness/claude/adapter_test.go` | seam test |
@@ -91,6 +93,11 @@ Naming (frozen):
    `containment-placeholder-no-credential` (codex `~/.codex/auth.json`,
    claude `~/.claude/.credentials.json`), which promote nothing and are never sent to a provider
    because no turn exists.
+   A containment case set stages exactly that one placeholder file: the real
+   `SYMMETRY_OPENAI_API_KEY` is never written for it (no `native-api-key` fixture file, no
+   pi/opencode fixture entries), and the guest check proves B's HOME carries no `.pi`,
+   `.config/opencode` or `.local/share/opencode` path and the kind directory holds exactly its
+   placeholder (probes in the evidence record §Fix r1).
 4. **Per-kind replay legs stay** (the conductor did not drop them): each containment set runs the
    fresh case plus one same-RunKey `native_release` crash-replay leg for that kind, so
    launch/stop/replay/recovery is proven per kind. Cost: one extra Control fixture Run and one
@@ -170,7 +177,15 @@ production routing, admission, composition, or any frozen opencode byte.
 
 ## 7. Out of scope (with reasons)
 
-- opencode re-pin/adapter registration (F2; owner ruling pending) — the leg is untouched.
+- opencode re-pin or adapter registration — not authorized by this slice. Owner ruling F2
+  (2026-11-22, binding) excludes the frozen opencode leg from the per-kind green gate of the D3
+  merge train while W6-04/D1 freezes its acceptance-case bytes: this slice changes neither the
+  leg's bytes nor its case, and a red frozen opencode leg in a dispatched run is recorded as the
+  F2-excluded leg instead of being edited. Its fail-closed state is existing production behaviour
+  asserted by `TestNewHarnessRegistryBindsNativeAdaptersAndUnsupportedOpenCode`
+  (`harness.KindOpenCode` resolves to `*harness.UnavailableAdapter`) and
+  `TestStartupProbeRegistersUnavailableNativeProjections` (a start is refused with
+  `ErrHarnessUnavailable`) in `daemon/internal/app/harness_test.go`.
 - omo/omp/generic case sets, `validateRuntimeWorkspacePolicy` changes, linuxpreflight hand-over
   (conductor split → W5-02b).
 - The predicate flip, legacy-unreachable proof, platform reachability test (W5-02); legacy

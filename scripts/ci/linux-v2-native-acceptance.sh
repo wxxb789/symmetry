@@ -24,6 +24,8 @@ fail() {
 
 repo=$GITHUB_WORKSPACE
 source_subject_json=$(python3 "$repo/scripts/ci/linux-v2-source-subject.py" "$repo" "$GITHUB_SHA")
+source_commit=$(jq --raw-output .commit <<<"$source_subject_json")
+source_tree_digest=$(jq --raw-output .tree_digest <<<"$source_subject_json")
 
 fixture_case_set=${SYMMETRY_LINUX_V2_NATIVE_CASE_SET:-}
 case "$fixture_case_set" in
@@ -31,6 +33,11 @@ case "$fixture_case_set" in
   *) fail 'set SYMMETRY_LINUX_V2_NATIVE_CASE_SET to one exact shared or unresolved witness case set' ;;
 esac
 fixture_identity_suffix=${fixture_case_set//_/-}
+native_containment_kind=''
+case "$fixture_case_set" in
+  codex_containment) native_containment_kind=codex ;;
+  claude_containment) native_containment_kind=claude_code ;;
+esac
 
 evidence_directory="${SYMMETRY_LINUX_V2_NATIVE_EVIDENCE_DIR:-$RUNNER_TEMP/linux-v2-native-evidence-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}-$fixture_case_set}"
 [[ "$evidence_directory" == /* && "$(realpath -m "$evidence_directory")" == "$evidence_directory" ]] ||
@@ -270,9 +277,12 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-printf '%s' "$SYMMETRY_OPENAI_API_KEY" > "$native_api_key_file"
+if [[ -z "$native_containment_kind" ]]; then
+  printf '%s' "$SYMMETRY_OPENAI_API_KEY" > "$native_api_key_file"
+  chmod 0600 "$native_api_key_file"
+fi
 printf '%s' "$GH_TOKEN" > "$control_github_token_file"
-chmod 0600 "$native_api_key_file" "$control_github_token_file"
+chmod 0600 "$control_github_token_file"
 unset SYMMETRY_OPENAI_API_KEY GH_TOKEN GITHUB_TOKEN
 mkdir -m 0700 "$control_gh_config_dir"
 GH_CONFIG_DIR="$control_gh_config_dir" gh auth login --hostname github.com --git-protocol https --with-token \
@@ -492,25 +502,32 @@ sudo install -d -o "$A_UID" -g "$B_GID" -m 2750 "$rootfs$PI_SHARE"
 [[ "$(sudo stat -c '%u:%g:%a' "$rootfs/home")" == '0:0:755' ]] || fail 'the shared /home parent must remain root-owned and traversable'
 [[ "$(sudo stat -c '%u:%g:%a' "$rootfs$A_HOME")" == "$A_UID:$A_GID:700" ]] || fail 'A passwd HOME must remain A-owned mode 0700'
 [[ "$(sudo stat -c '%u:%g:%a' "$rootfs$B_HOME")" == "$B_UID:$B_GID:700" ]] || fail 'B passwd HOME must remain B-owned mode 0700'
-sudo install -d -o "$B_UID" -g "$B_GID" -m 0700 \
-  "$rootfs$B_HOME/.pi" "$rootfs$B_HOME/.pi/agent" \
-  "$rootfs$B_HOME/.config" "$rootfs$B_HOME/.config/opencode" \
-  "$rootfs$B_HOME/hooks" "$rootfs$B_HOME/.local" \
-  "$rootfs$B_HOME/.local/share" "$rootfs$B_HOME/.local/share/opencode" \
-  "$rootfs$B_HOME/.codex" "$rootfs$B_HOME/.claude"
-for private_directory in \
-  "$B_HOME" "$B_HOME/.pi" "$B_HOME/.pi/agent" "$B_HOME/.config" \
-  "$B_HOME/.config/opencode" "$B_HOME/.local" "$B_HOME/.local/share" \
-  "$B_HOME/.local/share/opencode" "$B_HOME/hooks" "$B_HOME/.codex" "$B_HOME/.claude"; do
+b_native_credential_directories=("$B_HOME/.codex" "$B_HOME/.claude")
+b_native_credential_files=("$B_HOME/.codex/auth.json" "$B_HOME/.claude/.credentials.json")
+if [[ "$native_containment_kind" == codex ]]; then
+  b_native_credential_directories=("$B_HOME/.codex")
+  b_native_credential_files=("$B_HOME/.codex/auth.json")
+elif [[ "$native_containment_kind" == claude_code ]]; then
+  b_native_credential_directories=("$B_HOME/.claude")
+  b_native_credential_files=("$B_HOME/.claude/.credentials.json")
+else
+  b_native_credential_directories+=(
+    "$B_HOME/.pi" "$B_HOME/.pi/agent" "$B_HOME/.config" "$B_HOME/.config/opencode" \
+    "$B_HOME/.local" "$B_HOME/.local/share" "$B_HOME/.local/share/opencode"
+  )
+  b_native_credential_files+=(
+    "$B_HOME/.pi/agent/settings.json" "$B_HOME/.pi/agent/auth.json" \
+    "$B_HOME/.config/opencode/opencode.json" "$B_HOME/.local/share/opencode/auth.json"
+  )
+fi
+sudo install -d -o "$B_UID" -g "$B_GID" -m 0700 "$rootfs$B_HOME/hooks" \
+  "${b_native_credential_directories[@]/#/$rootfs}"
+for private_directory in "$B_HOME" "$B_HOME/hooks" "${b_native_credential_directories[@]}"; do
   [[ "$(sudo stat -c '%u:%g:%a' "$rootfs$private_directory")" == "$B_UID:$B_GID:700" ]] ||
     fail "B private HOME directory must be B-owned mode 0700 before A search ACLs: $private_directory"
 done
 # A may resolve known B credential paths for installation preflight, but cannot list or modify B's private directories.
-sudo setfacl -m "u:$A_UID:--x" \
-  "$rootfs$B_HOME" "$rootfs$B_HOME/.pi" "$rootfs$B_HOME/.pi/agent" \
-  "$rootfs$B_HOME/.config" "$rootfs$B_HOME/.config/opencode" \
-  "$rootfs$B_HOME/.local" "$rootfs$B_HOME/.local/share" "$rootfs$B_HOME/.local/share/opencode" \
-  "$rootfs$B_HOME/.codex" "$rootfs$B_HOME/.claude"
+sudo setfacl -m "u:$A_UID:--x" "$rootfs$B_HOME" "${b_native_credential_directories[@]/#/$rootfs}"
 sudo setfacl -m "u:$A_UID:r-x,m::r-x,d:u:$A_UID:r-x,d:u:$B_UID:rwx,d:m::rwx" "$rootfs$B_CLONE_ROOT"
 sudo setfacl -m "u:$A_UID:r-x,m::r-x,d:u:$A_UID:r-x,d:u:$B_UID:rwx,d:m::rwx" \
   "$rootfs$DAEMON_SERVICE_WORKSPACE_ROOT"
@@ -627,7 +644,10 @@ for receipt_case in pi_provider_action helper_sigkill_detached_child daemon_sigk
     "$rootfs$OWNER_CONTROL_RECEIPT_CONTEXT_ROOT/$receipt_case"
 done
 sudo install -d -o "$A_UID" -g "$A_GID" -m 0700 "$rootfs$OWNER_BARRIER_ROOT"
-for barrier_case in pi_provider_action opencode_native_health helper_sigkill_detached_child daemon_sigkill_helper_survives_detached_child wsl2_denial codex_containment claude_containment; do
+for barrier_case in pi_provider_action opencode_native_health helper_sigkill_detached_child daemon_sigkill_helper_survives_detached_child wsl2_denial; do
+  sudo install -d -o "$A_UID" -g "$A_GID" -m 0700 "$rootfs$OWNER_BARRIER_ROOT/$barrier_case"
+done
+for barrier_case in codex_containment claude_containment; do
   sudo install -d -o "$A_UID" -g "$A_GID" -m 0700 "$rootfs$OWNER_BARRIER_ROOT/$barrier_case"
 done
 sudo install -d -o "$A_UID" -g "$A_GID" -m 0700 "$rootfs$OWNER_BARRIER_ROOT/stage-replay"
@@ -836,10 +856,7 @@ machine_run /usr/bin/id -u "$A_USER"
 machine_run /usr/bin/id -u "$B_USER"
 machine_run /usr/bin/id -G "$A_USER"
 machine_run /usr/bin/id -G "$B_USER"
-for private_directory in \
-  "$B_HOME" "$B_HOME/.pi" "$B_HOME/.pi/agent" "$B_HOME/.config" \
-  "$B_HOME/.config/opencode" "$B_HOME/.local" "$B_HOME/.local/share" \
-  "$B_HOME/.local/share/opencode" "$B_HOME/.codex" "$B_HOME/.claude"; do
+for private_directory in "$B_HOME" "${b_native_credential_directories[@]}"; do
   machine_run_as "$A_USER" "$A_USER" /usr/bin/test -x "$private_directory"
   if machine_run_as "$A_USER" "$A_USER" /usr/bin/test -r "$private_directory"; then
     fail "A unexpectedly listed B-private native configuration directory: $private_directory"
@@ -866,8 +883,6 @@ fi
 
 printf '%s\n' "$source_subject_json" > "$fixture_root/source-subject.json"
 
-source_commit=$(jq --raw-output .commit "$fixture_root/source-subject.json")
-source_tree_digest=$(jq --raw-output .tree_digest "$fixture_root/source-subject.json")
 [[ "$source_commit" == "$GITHUB_SHA" ]] || fail 'A-owned source checkout differs from the exact CI subject revision'
 control_fixture="$fixture_root/control-fixture.json"
 (
@@ -900,18 +915,11 @@ import sys
 fixture = pathlib.Path(fixture_root)
 
 def config(kind, profile, model, resource_id):
-    native_model_keys = (
-        {} if kind == "claude_code" else {"native_model": model, "native_model_provider": "openai"}
-    )
     agent = {
-        "command": {
-            "pi": "/usr/local/bin/pi",
-            "opencode": "/usr/local/bin/opencode",
-            "codex": "/usr/local/bin/codex",
-            "claude_code": "/usr/local/bin/claude",
-        }[kind],
+        "command": "/usr/local/bin/pi" if kind == "pi" else "/usr/local/bin/opencode",
         "args": ["--provider", "openai", "--model", model] if kind == "pi" else [],
-        **native_model_keys,
+        "native_model": model,
+        "native_model_provider": "openai",
         "input_mode": "json",
         "provider_access": kind == "pi",
         "interactive": True,
@@ -919,6 +927,12 @@ def config(kind, profile, model, resource_id):
         "event_format": "jsonl",
         "env_allowlist": ["SYMMETRY_LINUX_V2_NATIVE_HOOK_MARKER_ROOT"],
     }
+    if kind == "codex":
+        agent["command"] = "/usr/local/bin/codex"
+    elif kind == "claude_code":
+        agent["command"] = "/usr/local/bin/claude"
+        del agent["native_model"]
+        del agent["native_model_provider"]
     value = {
         "control_plane_url": "http://127.0.0.1:4000",
         "allow_insecure_http": True,
@@ -982,44 +996,75 @@ if fixture_identity_suffix == "synthetic-goal-cleanup":
         json.dumps(cleanup_config, separators=(",", ":")), encoding="utf-8"
     )
 
-api_key = pathlib.Path(api_key_file).read_text(encoding="utf-8")
 private_home = fixture / "b-home"
-(private_home / ".pi/agent").mkdir(parents=True, mode=0o700)
-(private_home / ".config/opencode").mkdir(parents=True, mode=0o700)
-(private_home / ".local/share/opencode").mkdir(parents=True, mode=0o700)
-(private_home / ".pi/agent/settings.json").write_text(
-    json.dumps({"defaultProvider": "openai", "defaultModel": pi_model, "defaultThinkingLevel": "minimal"}),
-    encoding="utf-8",
-)
-(private_home / ".pi/agent/auth.json").write_text(
-    json.dumps({"openai": {"type": "api_key", "key": api_key}}), encoding="utf-8"
-)
-(private_home / ".config/opencode/opencode.json").write_text(
-    json.dumps({"$schema": "https://opencode.ai/config.json", "model": f"openai/{opencode_model}", "autoupdate": False}),
-    encoding="utf-8",
-)
-(private_home / ".local/share/opencode/auth.json").write_text(
-    json.dumps({"openai": {"type": "api", "key": api_key}}), encoding="utf-8"
-)
-(private_home / ".codex").mkdir(parents=True, mode=0o700)
-(private_home / ".claude").mkdir(parents=True, mode=0o700)
-(private_home / ".codex/auth.json").write_text(
-    json.dumps({"OPENAI_API_KEY": "containment-placeholder-no-credential"}),
-    encoding="utf-8",
-)
-(private_home / ".claude/.credentials.json").write_text(
-    json.dumps(
-        {
-            "claudeAiOauth": {
-                "accessToken": "containment-placeholder-no-credential",
-                "refreshToken": "containment-placeholder-no-credential",
-                "expiresAt": 4102444800000,
-                "scopes": ["user:inference"],
+containment_kind = {"codex-containment": "codex", "claude-containment": "claude_code"}.get(fixture_identity_suffix)
+if containment_kind is not None:
+    kind_directory = private_home / (".codex" if containment_kind == "codex" else ".claude")
+    kind_directory.mkdir(parents=True, mode=0o700)
+    if containment_kind == "codex":
+        (kind_directory / "auth.json").write_text(
+            json.dumps({"OPENAI_API_KEY": "containment-placeholder-no-credential"}),
+            encoding="utf-8",
+        )
+        staged_files = [".codex/auth.json"]
+    else:
+        (kind_directory / ".credentials.json").write_text(
+            json.dumps(
+                {
+                    "claudeAiOauth": {
+                        "accessToken": "containment-placeholder-no-credential",
+                        "refreshToken": "containment-placeholder-no-credential",
+                        "expiresAt": 4102444800000,
+                        "scopes": ["user:inference"],
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        staged_files = [".claude/.credentials.json"]
+    recorded_files = sorted(
+        path.relative_to(private_home).as_posix() for path in private_home.rglob("*") if path.is_file()
+    )
+    if recorded_files != staged_files:
+        raise SystemExit(f"containment fixture must stage exactly {staged_files}: {recorded_files}")
+else:
+    api_key = pathlib.Path(api_key_file).read_text(encoding="utf-8")
+    (private_home / ".pi/agent").mkdir(parents=True, mode=0o700)
+    (private_home / ".config/opencode").mkdir(parents=True, mode=0o700)
+    (private_home / ".local/share/opencode").mkdir(parents=True, mode=0o700)
+    (private_home / ".pi/agent/settings.json").write_text(
+        json.dumps({"defaultProvider": "openai", "defaultModel": pi_model, "defaultThinkingLevel": "minimal"}),
+        encoding="utf-8",
+    )
+    (private_home / ".pi/agent/auth.json").write_text(
+        json.dumps({"openai": {"type": "api_key", "key": api_key}}), encoding="utf-8"
+    )
+    (private_home / ".config/opencode/opencode.json").write_text(
+        json.dumps({"$schema": "https://opencode.ai/config.json", "model": f"openai/{opencode_model}", "autoupdate": False}),
+        encoding="utf-8",
+    )
+    (private_home / ".local/share/opencode/auth.json").write_text(
+        json.dumps({"openai": {"type": "api", "key": api_key}}), encoding="utf-8"
+    )
+    (private_home / ".codex").mkdir(parents=True, mode=0o700)
+    (private_home / ".claude").mkdir(parents=True, mode=0o700)
+    (private_home / ".codex/auth.json").write_text(
+        json.dumps({"OPENAI_API_KEY": "containment-placeholder-no-credential"}),
+        encoding="utf-8",
+    )
+    (private_home / ".claude/.credentials.json").write_text(
+        json.dumps(
+            {
+                "claudeAiOauth": {
+                    "accessToken": "containment-placeholder-no-credential",
+                    "refreshToken": "containment-placeholder-no-credential",
+                    "expiresAt": 4102444800000,
+                    "scopes": ["user:inference"],
+                }
             }
-        }
-    ),
-    encoding="utf-8",
-)
+        ),
+        encoding="utf-8",
+    )
 PY
 python3 - "$fixture_root/opencode-health.json" "$fixture_root/stage-replay" "$DAEMON_SERVICE_STATE_DIR" \
   "${OWNER_STAGE_REPLAY_HOLDS[@]}" <<'PY'
@@ -1123,16 +1168,10 @@ config["runtime"]["name"] = f"Installed Linux v2 OpenCode daemon service smoke {
 config["runtime"]["workspace"] = "daemon-service"
 pathlib.Path(output_path).write_text(json.dumps(config, separators=(",", ":")), encoding="utf-8")
 PY
-sudo install -o "$B_UID" -g "$B_GID" -m 0600 "$fixture_root/b-home/.pi/agent/settings.json" "$rootfs$B_HOME/.pi/agent/settings.json"
-sudo install -o "$B_UID" -g "$B_GID" -m 0600 "$fixture_root/b-home/.pi/agent/auth.json" "$rootfs$B_HOME/.pi/agent/auth.json"
-sudo install -o "$B_UID" -g "$B_GID" -m 0600 "$fixture_root/b-home/.config/opencode/opencode.json" "$rootfs$B_HOME/.config/opencode/opencode.json"
-sudo install -o "$B_UID" -g "$B_GID" -m 0600 "$fixture_root/b-home/.local/share/opencode/auth.json" "$rootfs$B_HOME/.local/share/opencode/auth.json"
-sudo install -o "$B_UID" -g "$B_GID" -m 0600 "$fixture_root/b-home/.codex/auth.json" "$rootfs$B_HOME/.codex/auth.json"
-sudo install -o "$B_UID" -g "$B_GID" -m 0600 "$fixture_root/b-home/.claude/.credentials.json" "$rootfs$B_HOME/.claude/.credentials.json"
-for private_file in \
-  "$B_HOME/.pi/agent/settings.json" "$B_HOME/.pi/agent/auth.json" \
-  "$B_HOME/.config/opencode/opencode.json" "$B_HOME/.local/share/opencode/auth.json" \
-  "$B_HOME/.codex/auth.json" "$B_HOME/.claude/.credentials.json"; do
+for private_file in "${b_native_credential_files[@]}"; do
+  sudo install -o "$B_UID" -g "$B_GID" -m 0600 "$fixture_root/b-home${private_file#"$B_HOME"}" "$rootfs$private_file"
+done
+for private_file in "${b_native_credential_files[@]}"; do
   machine_run_as "$B_USER" "$B_USER" /usr/bin/test -r "$private_file"
   machine_run_as "$B_USER" "$B_USER" /usr/bin/test -w "$private_file"
   if machine_run_as "$A_USER" "$A_USER" /usr/bin/test -r "$private_file"; then
@@ -1142,23 +1181,32 @@ for private_file in \
     fail "A unexpectedly modified B-private native configuration: $private_file"
   fi
 done
-for private_directory in \
-  "$B_HOME" "$B_HOME/.pi" "$B_HOME/.pi/agent" "$B_HOME/.config" \
-  "$B_HOME/.config/opencode" "$B_HOME/.local" "$B_HOME/.local/share" \
-  "$B_HOME/.local/share/opencode" "$B_HOME/hooks" "$B_HOME/.codex" "$B_HOME/.claude"; do
+for private_directory in "$B_HOME" "$B_HOME/hooks" "${b_native_credential_directories[@]}"; do
   [[ "$(sudo stat -c '%u:%g' "$rootfs$private_directory")" == "$B_UID:$B_GID" ]] ||
     fail "B private HOME directory has unsafe ownership: $private_directory"
 done
-for private_file in \
-  "$B_HOME/.pi/agent/settings.json" "$B_HOME/.pi/agent/auth.json" \
-  "$B_HOME/.config/opencode/opencode.json" "$B_HOME/.local/share/opencode/auth.json" \
-  "$B_HOME/.codex/auth.json" "$B_HOME/.claude/.credentials.json"; do
+for private_file in "${b_native_credential_files[@]}"; do
   if ! sudo test -f "$rootfs$private_file" || ! sudo test ! -L "$rootfs$private_file" ||
      [[ "$(sudo stat -c '%u:%g:%a:%h' "$rootfs$private_file")" != "$B_UID:$B_GID:600:1" ]] ||
      ! sudo test -s "$rootfs$private_file"; then
     fail "B private native configuration must be a nonempty singly-linked B-owned 0600 file: $private_file"
   fi
 done
+if [[ -n "$native_containment_kind" ]]; then
+  foreign_native_paths=("$B_HOME/.pi" "$B_HOME/.config" "$B_HOME/.local")
+  if [[ "$native_containment_kind" == codex ]]; then
+    foreign_native_paths+=("$B_HOME/.claude")
+  else
+    foreign_native_paths+=("$B_HOME/.codex")
+  fi
+  for foreign_path in "${foreign_native_paths[@]}"; do
+    if sudo test -e "$rootfs$foreign_path"; then
+      fail "containment guest B HOME must not carry a non-kind native credential path: $foreign_path"
+    fi
+  done
+  [[ "$(sudo find "$rootfs${b_native_credential_directories[0]}" -mindepth 1 -printf '%P\n')" == "${b_native_credential_files[0]##*/}" ]] ||
+    fail "containment guest B HOME credential directory must hold exactly its placeholder file: ${b_native_credential_directories[0]}"
+fi
 rm -f -- "$native_api_key_file"
 rm -rf -- "$fixture_root/b-home"
 for config in pi-provider-action.json pi-helper-crash.json pi-daemon-crash.json opencode-health.json opencode-wsl2.json codex-containment.json claude-containment.json; do

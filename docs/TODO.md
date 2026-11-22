@@ -1645,7 +1645,9 @@ is fixed here; each bullet names what a follow-up has to re-derive.
       claude until a run is green with each kind's `manifest.json` binding its executable digest,
       archive digest, version line and source tree digest plus the recorded
       `containment.native_open_reached`. The
-      `shared` set additionally waits on the opencode F2 owner ruling (W6-04/D1 froze that leg and
-      its bytes). The fixture's AppArmor-userns question above is unverified for the guest launcher
+      `shared` set's frozen opencode leg is excluded from the per-kind green gate while W6-04/D1
+      keeps its bytes frozen (Owner ruling F2, 2026-11-22, binding): a red frozen leg in a dispatch
+      is recorded as the F2-excluded leg, not edited. The fixture's AppArmor-userns question above
+      is unverified for the guest launcher
       (its userns creation is a privileged root one, unlike the probe's ambient-cap worker): the
       first dispatch records the real behavior before any fixture work is scheduled there.
