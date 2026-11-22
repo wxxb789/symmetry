@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getRouteApi, Link, useNavigate, useRouteContext, useRouter } from "@tanstack/react-router";
 import { useEffect, useRef } from "react";
 import { chatConversationOptions, workspaceOptions } from "../../app/application";
+import { useSelectedProject } from "../../app/selected-project";
 import { ErrorState, PageHeading, RefreshButton } from "../../components/workspace";
 import type { ChatConversationMessage, ChatConversationRun, ChatScope, Project, WorkItem, Workspace } from "../../services/api";
 import { ChatComposer, ChatDecisionSection, ChatEvidenceList, ChatScopeBar, ChatTranscript, servedRuns, type ServedRun } from "./chat-sections";
@@ -112,9 +113,10 @@ export function ChatPage() {
   const queryClient = useQueryClient();
   const search = route.useSearch();
   const params = chatScopeParams(search);
+  const selectedProjectId = useSelectedProject();
 
   const conversation = useQuery({ ...chatConversationOptions(application.api, params.identity), enabled: params.complete });
-  const directory = useQuery(workspaceOptions(application.api, params.projectId));
+  const directory = useQuery(workspaceOptions(application.api, selectedProjectId ?? null));
   const directoryProjects = directory.data?.projects ?? [];
   const served = chatRunFacts(directory.data, conversation.data, params.scope, params.runId);
   const intents = applicableChatIntents({ scope: params.scope, run: served.runSignals, hasProjects: directoryProjects.length > 0 });
