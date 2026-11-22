@@ -1409,3 +1409,70 @@ is fixed here; each bullet names what a follow-up has to re-derive.
 - [ ] `daemon/native/linux-gate/protocol/wire_test.go`: the dedicated "start time is truncated"
       decode guard is unreachable (the size guard already refuses those packets), so no test can
       cover that branch.
+
+## Observed flakes, cause unknown: three tests (2026-11-22 CI runs and PR #220 review)
+
+- [ ] `TestAutonomousReturnReleasesItsInputReader` (`daemon/cmd/symmetry-fake-agent/autonomous_test.go`;
+      package `daemon/cmd/symmetry-fake-agent`): failed once in the hosted `daemon` job's race step
+      (`go test -race -count=1 -timeout 600s -json ./...` through `scripts/ci/stdio-only-caller-boundary.py`),
+      run `44976804508`, on PR #225 head `d45dc45f` — a Control-only code change
+      (`control/lib/symmetry_control_web/protocol.ex` plus its reason-coverage test and two docs records;
+      `git diff --name-only origin/main...d45dc45f`), so the daemon tree is untouched by that PR. Observed
+      failure text: the test's own `t.Fatalf("reader goroutine is still alive when runAutonomous returned")`
+      with the goroutine dump of `runAutonomous.func1`, the reader closure in `autonomous.go`. Reproduction
+      attempts and outcomes: the same test passed on the PR's previous and next heads (CI reruns), and no
+      other occurrence is recorded in the repository; added 2026-11-22 — Linux (WSL, go1.27.0) `go test
+      -race -count=20 -timeout 600s -run '^TestAutonomousReturnReleasesItsInputReader$'
+      ./cmd/symmetry-fake-agent/` → 20/20 `--- PASS`, exit 0. Cause unknown. Most probable mechanism
+      (inference, not observed): the input is a closable `io.Pipe` whose `Close` does unblock the parked
+      `readLine`, so the reader exits through the `done` arm of its send `select`; the only arm that can
+      return the run before the reader reaches its deferred `close(readerDone)` is the bounded join
+      `runAutonomous` defers (`readerJoinTimeout`, 50 ms — introduced for the inherited-stdio carrier and
+      pinned by `TestAutonomousReturnBoundsTheJoinOnAnUnblockableCarrier`), and the failing message records
+      no join-arm outcome. Next diagnostic step: repeat the `-race -count=N` run under CPU contention, and
+      on a reproduction capture which join arm won before touching the bound or the assertion (the bound is
+      pinned). Proximity, not duplication: the comment-policy-sweep entry above for
+      `daemon/cmd/symmetry-fake-agent/autonomous.go` records the *unblockable* carrier, whose reader is
+      never joined — a different property, not this test's failure.
+
+- [ ] `TestLinuxOwnerAnchorWire*` — the five tests
+      `TestLinuxOwnerAnchorWireShapeRejectsWrongDescriptorCounts`, `TestLinuxOwnerAnchorWireCloneCleanupDescriptorGate`,
+      `TestLinuxOwnerAnchorWireStoppingAnswerPrecedesShape`,
+      `TestLinuxOwnerAnchorWireExclusiveFieldsRefusedBeforeStoppingAnswer` and
+      `TestLinuxOwnerAnchorWireCodecRejectsMalformedFrames` (`daemon/internal/platform/anchor_wire_shape_test.go`,
+      `//go:build linux && amd64`; package `daemon/internal/platform`): failed once in the hosted
+      `coverage-daemon` job (advisory, `continue-on-error: true`; `go test -count=1 -timeout 1200s
+      -coverprofile=coverage.out ./...` through `scripts/ci/stdio-only-caller-boundary.py`) with
+      `recvmsg: connection reset by peer`, on PR #223 head `ca173870` — whose own change is records-only
+      (`docs/evidence/comment-policy-sweep-2026-11-22.md` and its plan) over a PR whose code hunks are
+      comment-only, so no `daemon/` behavior changed anywhere in that range. The group drives the real
+      `serveConnection` over a real unixpacket socket (`linuxOwnerAnchorWirePair` →
+      `linuxOwnerAnchorWireReadFrame` → `ReadMsgUnix`), and the recorded fragment is what Go renders for an
+      `ECONNRESET` inside the read's `*net.OpError` (inference: the full failing line and the failing
+      assertion were not captured). Reproduction attempts and outcomes: main's last four `coverage-daemon`
+      runs passed; five local WSL `-cover` runs at head and base passed; added 2026-11-22 — WSL Ubuntu-24.04
+      as an unprivileged user, go1.27.0, `go test -count=5 -timeout 1200s -cover -run
+      '^TestLinuxOwnerAnchorWire' ./internal/platform/` → 25/25 `--- PASS`, exit 0, `coverage: 2.1% of
+      statements`; the same command in this host's default (root) WSL session refuses all five with
+      `wire harness requires an unprivileged A process: uid=0 euid=0 gid=0 egid=0`, so a revalidation must
+      run as an unprivileged user (the refusal is a host property, not a test failure). Cause unknown. Next
+      diagnostic step: re-run the group well above `-count=5` under CPU contention in the job's own shape
+      (`-coverprofile` through `stdio-only-caller-boundary.py`) and, on a reproduction, capture the full
+      failing line and whether the peer side had already closed. Fresh group, not the closed
+      `daemon/internal/platform` flake class (helper witness / descendant monitor,
+      `docs/archive/CLOSED-TODO.md`), and the file's own cgroup-`/` host trap is a different condition.
+
+- [ ] `frontend/src/features/goals/goal-attention.test.tsx`, the plan-approval replay case: failed once
+      among 13 shuffled vitest runs of a 13-file subset (`--sequence.shuffle --sequence.seed=3`) during the
+      PR #220 review; reruns with the same seed passed, so the observation is load-dependent, not
+      order-dependent. The observation names the case as "replays the plan approval's …", the shared prefix
+      of exactly two cases in the file — "replays the plan approval's decision resolution byte for byte after
+      a lost acknowledgement" and "replays the plan approval's admission byte for byte when its
+      acknowledgement is lost" — and does not say which one failed; both names stand here rather than a
+      guess. Both end in bounded waits (`findByText("The server admitted the plan.", {}, { timeout: 5_000 })`
+      under a 15 s case timeout), so a starved bounded wait is plausible (inference, not observed; the
+      failure text was not captured). Cause unknown. Next diagnostic step: repeat the shuffled 13-file
+      subset with the same seed under CPU load — the rerun that passed is not recorded as loaded, so load is
+      the untested variable — and, on a reproduction, capture the assertion text and whether the failure is
+      the bounded wait or a recorded-request mismatch. The subset's file list is not recoverable from the
+      repository (PR #220's plan records shuffle runs over the full 21-file suite at seed `20261122`).
