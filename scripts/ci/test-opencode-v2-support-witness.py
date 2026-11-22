@@ -267,11 +267,10 @@ class BindingTest(FixtureRepo, unittest.TestCase):
     def test_head_revision_reads_the_checkout_head(self):
         self.write("source.txt", "reviewed source\n")
         commit = self.commit("fixture")
-        module = citest.load_gate(ROOT / "scripts/ci/source_subject.py", "source_subject")
-        self.assertEqual(
-            module.head_revision(lambda *arguments: subprocess.check_output(["git", *arguments], cwd=self.repo)),
-            commit,
+        revision = witness.source_subject.head_revision(
+            lambda *arguments: subprocess.check_output(["git", *arguments], cwd=self.repo)
         )
+        self.assertEqual(revision, commit)
 
 
 if __name__ == "__main__":

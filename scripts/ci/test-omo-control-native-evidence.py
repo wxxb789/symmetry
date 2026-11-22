@@ -9,6 +9,7 @@ replacements: UUID-validated path segments and the parsed `go version -m`
 records, both against hostile input.
 """
 
+import hashlib
 import json
 import os
 import pathlib
@@ -207,15 +208,14 @@ class SourceBindingTest(FixtureRepo, unittest.TestCase):
     """The revision binding covers the shared module, and refuses bytes it does not declare."""
 
     REPOSITORY_PREFIX = "omo-control-binding-"
-    REPOSITORY_DIRECTORY = "repository"
 
     def test_the_declared_file_set_covers_the_shared_module(self):
         for relative in EVIDENCE.SOURCE_PATHS:
             self.write(relative, f"source of {relative}\n")
         declared = {}
         for relative in EVIDENCE.SOURCE_PATHS:
-            identity = EVIDENCE.file_identity(self.repo / relative)
-            declared[relative] = {"bytes": identity["bytes"], "sha256": identity["sha256"]}
+            raw = (self.repo / relative).read_bytes()
+            declared[relative] = {"bytes": len(raw), "sha256": "sha256:" + hashlib.sha256(raw).hexdigest()}
         attestation = self.repo / "attestation.json"
         attestation.write_text(
             json.dumps(
@@ -237,6 +237,26 @@ class SourceBindingTest(FixtureRepo, unittest.TestCase):
             EVIDENCE.source_revision(
                 self.repo, None, dict(os.environ), EVIDENCE.Receipt(self.root / "r.json", []), attestation
             )
+
+    def test_an_attestation_whose_file_set_is_not_a_mapping_is_refused(self):
+        for relative in EVIDENCE.SOURCE_PATHS:
+            self.write(relative, f"source of {relative}\n")
+        attestation = self.repo / "attestation.json"
+        entry = {"bytes": 0, "sha256": "sha256:" + "0" * 64}
+        for declared in ([*EVIDENCE.SOURCE_PATHS], [entry] * len(EVIDENCE.SOURCE_PATHS)):
+            attestation.write_text(
+                json.dumps(
+                    {
+                        "source_revision": MINUS_ZERO_REVISION,
+                        "source_files": declared,
+                        "origin": "parent-observed-Windows-Git-HEAD-and-source-blobs",
+                    }
+                )
+            )
+            with self.assertRaisesRegex(EVIDENCE.Rejected, "invalid parent source attestation identity or path set"):
+                EVIDENCE.source_revision(
+                    self.repo, None, dict(os.environ), EVIDENCE.Receipt(self.root / "r.json", []), attestation
+                )
 
     def test_the_committed_tree_variant_agrees_with_the_index_variant(self):
         self.write("source.txt", "reviewed source\n")

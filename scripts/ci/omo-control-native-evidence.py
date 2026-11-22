@@ -693,7 +693,7 @@ def source_revision(source, git, env, receipt, attestation=None):
             "invalid parent source attestation identity or path set",
         )
         try:
-            source_subject.verify_declared_file_set(source, SOURCE_PATHS, value["source_files"])
+            source_subject.verify_declared_file_set(SOURCE_PATHS, value["source_files"], files)
         except source_subject.Refused as refusal:
             raise Rejected(ATTESTATION_REFUSALS[refusal.code].format(detail=refusal.detail)) from refusal
         revision = value["source_revision"]

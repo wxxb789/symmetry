@@ -138,21 +138,19 @@ def declared_file_identities(root: pathlib.Path, paths: Sequence[str]) -> dict[s
 
 
 def verify_declared_file_set(
-    root: pathlib.Path,
     paths: Sequence[str],
     declared: Mapping[str, Mapping[str, object]],
-) -> dict[str, dict[str, object]]:
-    """Return the observed identities, refusing a declaration that decides otherwise."""
-    if set(declared) != set(paths):
+    observed: Mapping[str, Mapping[str, object]],
+) -> None:
+    """Refuse a declaration that disagrees with the observed identities."""
+    if not isinstance(declared, Mapping) or set(declared) != set(paths):
         raise Refused("declared_path_set_mismatch")
-    observed = declared_file_identities(root, paths)
     for name in paths:
         expected = declared[name]
         if not isinstance(expected, dict) or set(expected) != {"bytes", "sha256"} or type(expected["bytes"]) is not int:
             raise Refused("declared_entry_shape", name)
         if expected["bytes"] != observed[name]["bytes"] or expected["sha256"] != observed[name]["sha256"]:
             raise Refused("declared_content_mismatch", name)
-    return observed
 
 
 def tree_records(listing: bytes) -> list[TreeRecord]:
