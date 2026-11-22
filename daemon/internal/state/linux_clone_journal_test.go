@@ -1304,7 +1304,8 @@ func linuxCloneArtifactEvidence(t *testing.T, runID string, subject protocol.Sub
 		t.Fatal(err)
 	}
 	contentDigest := "sha256:" + strings.Repeat("b", 64)
-	evidence, err := protocol.ParseEvidence([]byte(fmt.Sprintf(`{
+	var evidence protocol.Evidence
+	if err := json.Unmarshal([]byte(fmt.Sprintf(`{
 		"schema_version":"symmetry.evidence.v1",
 		"evidence_id":"00000000-0000-4000-8000-000000000011",
 		"run_id":"%s",
@@ -1320,8 +1321,7 @@ func linuxCloneArtifactEvidence(t *testing.T, runID string, subject protocol.Sub
 		"observed_at":"2026-09-10T01:01:00Z"
 	}`, runID, subject.ResourceID, subject.Commit, subject.TreeDigest, subjectHash,
 		subjectHash, subject.ResourceID, subject.Commit,
-		subject.ResourceID, subject.Commit, subject.TreeDigest, subjectHash, subject.ResourceID, subject.Commit, contentDigest)))
-	if err != nil {
+		subject.ResourceID, subject.Commit, subject.TreeDigest, subjectHash, subject.ResourceID, subject.Commit, contentDigest)), &evidence); err != nil {
 		t.Fatalf("parse Linux clone artifact evidence: %v", err)
 	}
 	return evidence

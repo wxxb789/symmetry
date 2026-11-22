@@ -1059,8 +1059,8 @@ func goalSessionReceiptJSON() string {
 
 func goalEvidence(t *testing.T) protocol.Evidence {
 	t.Helper()
-	value, err := protocol.ParseEvidence([]byte(`{"schema_version":"symmetry.evidence.v1","evidence_id":"` + goalEvidenceID + `","run_id":"` + goalRunID + `","evidence_key":"tests:default","kind":"check","subject":{"resource_id":"22222222-2222-4222-8222-222222222222","commit":"` + goalCommit + `","tree_digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"},"subject_hash":"` + goalEvidenceHash + `","source_ref":{"kind":"check","ref":"check-run-1","validator_profile":"default-checks","subject_hash":"` + goalEvidenceHash + `"},"source_revision":"profile:default-checks","validator_profile":"default-checks","verdict":"passed","payload":{"predicate_id":"tests","subject":{"resource_id":"22222222-2222-4222-8222-222222222222","commit":"` + goalCommit + `","tree_digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"},"profile_digest":"` + goalHash + `","command_argv_digest":"` + goalHash + `","exit_code":0,"subject_hash":"` + goalEvidenceHash + `","started_at":"2026-09-09T12:00:00Z","finished_at":"2026-09-09T12:01:00Z","output_ref":{"kind":"artifact","value":"artifact:check-output-1"}},"observed_at":"2026-09-09T12:01:00Z"}`))
-	if err != nil {
+	var value protocol.Evidence
+	if err := json.Unmarshal([]byte(`{"schema_version":"symmetry.evidence.v1","evidence_id":"`+goalEvidenceID+`","run_id":"`+goalRunID+`","evidence_key":"tests:default","kind":"check","subject":{"resource_id":"22222222-2222-4222-8222-222222222222","commit":"`+goalCommit+`","tree_digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"},"subject_hash":"`+goalEvidenceHash+`","source_ref":{"kind":"check","ref":"check-run-1","validator_profile":"default-checks","subject_hash":"`+goalEvidenceHash+`"},"source_revision":"profile:default-checks","validator_profile":"default-checks","verdict":"passed","payload":{"predicate_id":"tests","subject":{"resource_id":"22222222-2222-4222-8222-222222222222","commit":"`+goalCommit+`","tree_digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"},"profile_digest":"`+goalHash+`","command_argv_digest":"`+goalHash+`","exit_code":0,"subject_hash":"`+goalEvidenceHash+`","started_at":"2026-09-09T12:00:00Z","finished_at":"2026-09-09T12:01:00Z","output_ref":{"kind":"artifact","value":"artifact:check-output-1"}},"observed_at":"2026-09-09T12:01:00Z"}`), &value); err != nil {
 		t.Fatal(err)
 	}
 	return value
@@ -1068,8 +1068,8 @@ func goalEvidence(t *testing.T) protocol.Evidence {
 
 func goalUsage(t *testing.T) protocol.Usage {
 	t.Helper()
-	value, err := protocol.ParseUsage([]byte(`{"schema_version":"symmetry.usage.v1","usage_id":"` + goalUsageID + `","run_id":"` + goalRunID + `","usage_key":"final","provider":"codex","model":"implementation-default","input_tokens":128,"output_tokens":0,"cached_input_tokens":0,"cost_microusd":"9007199254740991","cost_basis":"reported","price_version":"price-1","supersedes_id":null,"observed_at":"2026-09-09T12:01:00Z"}`))
-	if err != nil {
+	var value protocol.Usage
+	if err := json.Unmarshal([]byte(`{"schema_version":"symmetry.usage.v1","usage_id":"`+goalUsageID+`","run_id":"`+goalRunID+`","usage_key":"final","provider":"codex","model":"implementation-default","input_tokens":128,"output_tokens":0,"cached_input_tokens":0,"cost_microusd":"9007199254740991","cost_basis":"reported","price_version":"price-1","supersedes_id":null,"observed_at":"2026-09-09T12:01:00Z"}`), &value); err != nil {
 		t.Fatal(err)
 	}
 	return value
