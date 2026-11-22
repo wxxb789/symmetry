@@ -104,7 +104,7 @@ leaving-time clamp guard) reddens a render-gate twin. The full matrix — six mu
 against the jsdom suite and the two `portal-chat` twins — is in
 `docs/evidence/rf-w5-08-jsdom-browser-split-2026-11-22.md` §8; this table is its settled summary.
 
-| # | invariant | jsdom site | named twin (render gate) | mutation | outcome |
+| # | invariant | jsdom site (base 956ff4f6) | named twin (render gate) | mutation | outcome |
 | --- | --- | --- | --- | --- | --- |
 | 1 | a scope's own recorded offset is re-asserted when its pane renders again after a switch | `chat.test.tsx:569` (deleted) | `portal-chat.spec.mjs:114` (`:162`, `:190`, `:197`) | M-A: the `assertRecordedOffset` effects dropped | **deleted**: twin red at `:162` (`Expected: 40, Received: 120`) with the copy gone; both twins green on the settled tree |
 | 2 | a scope left while its pane is clamped does not record the clamped position | `chat.test.tsx:569`'s first half (deleted with it) | none | M1: `rememberLeavingScope`'s pinned guard dropped | recorded as an uncovered guard: 48/48 jsdom cases passed at base under M1 |

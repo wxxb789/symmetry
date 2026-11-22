@@ -119,7 +119,7 @@ nothing that runs in CI. Measured consequences:
 
 ## 6. The pair table (deletion and the kept candidates)
 
-| # | invariant | jsdom site | production carrier | named twin (render gate) | mutation | mutation result | outcome |
+| # | invariant | jsdom site (base 956ff4f6) | production carrier | named twin (render gate) | mutation | mutation result | outcome |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | a scope's own recorded offset is re-asserted when its pane renders again after a switch (the surface's per-scope offsets are the authority, not the pane's last scroll event) | `chat.test.tsx:569` "settles a scope's pane on its own offset after a switch, even while the pane clamped it" | `use-chat-scroll-restoration.ts:28-40` (`assertRecordedOffset` + its two effects); exercised through `chat.tsx:174`/`:181` | `browser/tests/portal-chat.spec.mjs:114` "each scope keeps its own draft, intent and scroll, and a late read never overwrites another scope's draft" (assertions `:162`, `:190`, `:197`) | **M-A**: both `assertRecordedOffset` effects removed | twin red while the deleted copy is gone: `:162` `Expected: 40, Received: 120` (1 failed / 1 passed, exit 1); green on the settled tree (`:114` 35.5 s, `:477` 21.2 s, 2 passed, exit 0) | **deleted** |
 | 2 | a scope left while its pane is clamped does not record the clamped position | `chat.test.tsx:569`'s first half (the same deleted case) | `use-chat-scroll-restoration.ts:61-66` (`rememberLeavingScope`'s pinned guard) | none | **M1**: the pinned guard dropped in `rememberLeavingScope` | jsdom at base: **48 passed (48)** — no case pins it; the twins were not run under M1 (no jsdom case reddened, so no pair could be formed) | recorded as an uncovered guard (unchanged by this slice) |
@@ -200,7 +200,7 @@ attempt.
 ## 11. LOC delta (D2: report-only)
 
 - Deleted-line total at head: **49 lines** (`chat.test.tsx`, one case) — the recorded
-  deleted-and-mutated set. Added: 4 lines in `frontend/AGENTS.md`; the plan (136) and this record
+  deleted-and-mutated set. Added: 4 lines in `frontend/AGENTS.md`; the plan (144) and this record
   are documentation.
 - The plan's `−1,000…−2,000 test` is an audit estimate over both trees and remains report-only;
   the gate is the pair table with its mutations, and the honest outcome of this slice is one
