@@ -24,6 +24,8 @@ export default defineConfig({
     setupFiles: ["./src/test-setup.ts"],
     restoreMocks: true,
     clearMocks: true,
+    pool: "threads",
+    maxWorkers: "50%",
     // `cache` is a test-level option: at the config root it is an unknown Vite key
     // that leaves vitest's results cache on.
     ...(disableToolCaches ? { cache: false, fsModuleCache: false } : {}),

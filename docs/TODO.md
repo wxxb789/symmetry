@@ -1338,3 +1338,17 @@ instead of appended.
       the suite is starved, but the cause is unconfirmed. The arm's duration is bounded by a
       production limit, so a fix needs an owner decision on the deadline or the assertion;
       revalidate against a recovered failure before changing either.
+
+## Frontend test double: the WebSocket interception trap (rf-w4-11)
+
+- [ ] A suite that seeds a `socket_token` in the shared portal double (`frontend/src/app/portal-double.ts`)
+      makes the shell's invalidation client open a real socket, which MSW's node server intercepts as an
+      unhandled **WebSocket** frame: under `listen({ onUnhandledFrame: "error" })` every incidental connect
+      prints an `intercepted a WebSocket connection without a matching event handler` block and can leak the
+      app's token-refresh reads into the next case. `frontend/src/app/router.test.tsx` solves it locally by
+      passing an inert `socketFactory` to `createApplication` by default (`renderWorkspace`). If a later
+      suite needs a token without exercising the socket, do the same, or extend the double's listen options
+      so WebSocket frames stay quiet while HTTP paths keep failing loudly. This is deferred, not out of
+      scope: both files a fix touches (`frontend/src/test-setup.ts`, `frontend/src/app/portal-double.ts`)
+      are in rf-w4-11's owned set; no suite seeds a token yet, and an unexercised `ws` path would be
+      unproven behaviour in a slice whose executed-case count is pinned.
