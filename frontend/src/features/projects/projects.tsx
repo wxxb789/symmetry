@@ -3,11 +3,13 @@ import { Link, useNavigate, useParams, useRouteContext, useSearch } from "@tanst
 import { Folder, ArrowUpRight, Plus } from "lucide-react";
 import { useState } from "react";
 import { workspaceOptions } from "../../app/application";
+import { workspaceReadKey } from "../../app/read-cache";
 import { useSessionToken } from "../../app/session";
 import { StatusBadge } from "../../components/primitives";
 import { EmptyState, ErrorState, LoadingState, PageHeading, RefreshButton } from "../../components/workspace";
-import { hasServedRevision, refusalNotice } from "../planning/write-policy";
+import { hasServedRevision } from "../planning/write-policy";
 import { ProjectEditor, WorkItemEditor } from "../planning/editors";
+import { refusalNotice } from "../../services/refusals";
 import { ProjectWorkSurface } from "./work-surface";
 
 interface SurfaceNotice {
@@ -33,7 +35,7 @@ export function ProjectsPage() {
   // The re-read is what makes the notice truthful: the created project appears
   // in this list from the server's answer, and the operator opens it from here
   // instead of being navigated away before the notice can be read.
-  const reRead = () => queryClient.invalidateQueries({ queryKey: ["workspace"] });
+  const reRead = () => queryClient.invalidateQueries({ queryKey: workspaceReadKey() });
   return <>
     <PageHeading title="Projects" description="Your workspace, organized by project.">
       <button className="button button-primary" type="button" disabled={query.data === undefined}
@@ -89,7 +91,7 @@ export function ProjectPage() {
   // never offered a write the server would refuse as malformed.
   const versioned = project !== undefined && hasServedRevision(project) ? project : null;
   const refresh = () => { if (!query.isFetching) void query.refetch(); };
-  const reRead = () => queryClient.invalidateQueries({ queryKey: ["workspace"] });
+  const reRead = () => queryClient.invalidateQueries({ queryKey: workspaceReadKey() });
   // Archived projects accept exactly one write: the restore. It is versioned
   // like every other update, and the surface re-reads the server's answer.
   const restore = useMutation({

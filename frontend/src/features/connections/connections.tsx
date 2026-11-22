@@ -4,20 +4,21 @@ import { useNavigate, useRouteContext, useRouterState, useSearch } from "@tansta
 import { AlertCircle, Cable, Plus, Trash2, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { connectionsOptions, workspaceOptions } from "../../app/application";
+import { connectionsReadKey } from "../../app/read-cache";
 import { useSessionToken } from "../../app/session";
 import {
   ownValue,
-  ServerRefusal,
   type Api,
   type Connection,
   type ConnectionDraft,
   type ConnectionProvider,
   type ConnectionResource,
 } from "../../services/api";
+import { isStaleRefusal, refusalNotice, resourceRefusalGuidance } from "../../services/refusals";
 import { restoreFocus } from "../../components/focus";
 import { FieldErrors, StatusBadge, formatLabel } from "../../components/primitives";
 import { EmptyState, ErrorState, LoadingState, PageHeading, RefreshButton } from "../../components/workspace";
-import { DialogFrame, ProjectResources, providerLabel, refusalNotice } from "./resources";
+import { DialogFrame, ProjectResources, providerLabel } from "./resources";
 
 const authTypes: Record<string, string> = { gh_cli: "GitHub CLI · HTTPS", entra_id: "Microsoft Entra ID" };
 const capabilityLabels: Record<string, string> = { repositories: "Repositories", work_items: "Work items", changes: "Changes", ci: "CI" };
@@ -118,7 +119,7 @@ function ConnectionEditor({ connection, providers, api, csrf, editorId, fallback
       ); },
     // A refused write is never rendered as success: re-read the server's state
     // so the console shows what the server actually holds.
-    onError: () => { void queryClient.invalidateQueries({ queryKey: ["connections"] }); },
+    onError: () => { void queryClient.invalidateQueries({ queryKey: connectionsReadKey() }); },
     // The page-level pending count drops only when the request settles, so the
     // exclusion holds even after this editor closes while the write is pending.
     onSettled: () => { onWriteSettled(); },
@@ -135,7 +136,7 @@ function ConnectionEditor({ connection, providers, api, csrf, editorId, fallback
       return { ...current, capabilities };
     }); };
   const failure = save.error;
-  const stale = failure instanceof ServerRefusal && failure.code === "stale";
+  const stale = isStaleRefusal(failure);
   const blocked = save.isPending || stale;
   return <DialogFrame title={connection ? "Connection settings" : "New connection"} closeLabel="Close connection dialog" descriptionId="connection-dialog-description" openerRef={opener} fallbackFocus={fallbackFocus} onClose={onClose}
     description="Connections authenticate through this server's provider session. No credential is entered, displayed or stored in the browser.">
@@ -174,8 +175,8 @@ function ConnectionEditor({ connection, providers, api, csrf, editorId, fallback
       <FieldErrors error={failure} field="capabilities" />
 
       {failure && <p className="notice notice-error" role="alert">{stale
-        ? `${refusalNotice(failure)} This connection changed elsewhere; close and reopen it to edit the server's current values.`
-        : refusalNotice(failure)}</p>}
+        ? `${refusalNotice(failure, resourceRefusalGuidance)} This connection changed elsewhere; close and reopen it to edit the server's current values.`
+        : refusalNotice(failure, resourceRefusalGuidance)}</p>}
       <div className="dialog-actions">
         <button className="button" type="submit" disabled={blocked}>{save.isPending ? "Saving…" : connection ? "Save" : "Connect"}</button>
         <button className="button" type="button" onClick={onClose} disabled={save.isPending}>Cancel</button>
@@ -206,7 +207,7 @@ function ConnectionDetail({ connection, api, csrf, writePending, requests, close
   // confirmed intent into a delete of a revision the operator never saw.
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; version: number } | null>(null);
   const deleteOpener = useRef<HTMLElement | null>(null);
-  const refresh = () => queryClient.invalidateQueries({ queryKey: ["connections"] });
+  const refresh = () => queryClient.invalidateQueries({ queryKey: connectionsReadKey() });
   const check = useMutation({
     mutationFn: () => api.checkConnection(connection.id, csrf),
     onMutate: () => { onRequest(connection.id, "check", true); },
@@ -216,7 +217,7 @@ function ConnectionDetail({ connection, api, csrf, writePending, requests, close
     // the operator needs.
     onSuccess: async () => { await refresh(); },
     onError: async (error) => {
-      onNotice(refusalNotice(error));
+      onNotice(refusalNotice(error, resourceRefusalGuidance));
       await refresh();
     },
   });
@@ -231,7 +232,7 @@ function ConnectionDetail({ connection, api, csrf, writePending, requests, close
     },
     onError: async (error) => {
       setConfirmingDelete(false);
-      onNotice(`${refusalNotice(error)} The server's current state is shown instead.`);
+      onNotice(`${refusalNotice(error, resourceRefusalGuidance)} The server's current state is shown instead.`);
       await refresh();
     },
   });
@@ -281,7 +282,7 @@ function ConnectionDetail({ connection, api, csrf, writePending, requests, close
             <button className="button" type="button" disabled={remove.isPending || requests.remove > 0} onClick={() => { if (deleteTarget) remove.mutate(deleteTarget); }}>{remove.isPending || requests.remove > 0 ? "Removing…" : "Remove connection"}</button>
             <button className="button" type="button" onClick={() => { setConfirmingDelete(false); }} disabled={remove.isPending}>Cancel</button>
           </div>
-          {remove.error && <p className="notice notice-error" role="alert">{refusalNotice(remove.error)}</p>}
+          {remove.error && <p className="notice notice-error" role="alert">{refusalNotice(remove.error, resourceRefusalGuidance)}</p>}
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
@@ -419,7 +420,7 @@ export function ConnectionsPage() {
     if (editor !== editorSequence.current) {
       // A late response for an editor that has since closed: the write is real,
       // so re-read the list, but never close or navigate the open editor.
-      void queryClient.invalidateQueries({ queryKey: ["connections"] });
+      void queryClient.invalidateQueries({ queryKey: connectionsReadKey() });
       return;
     }
     closeEditor();
@@ -437,7 +438,7 @@ export function ConnectionsPage() {
     // and only move the operator if neither the selection nor the editor
     // generation changed while the re-read was in flight.
     const selection = selectionRef.current;
-    void queryClient.invalidateQueries({ queryKey: ["connections"] })
+    void queryClient.invalidateQueries({ queryKey: connectionsReadKey() })
       .then(() => {
         if (!mounted.current || editorSequence.current !== generation || selectionRef.current !== selection) return;
         void navigate({ to: "/connections", search: { connectionId } });

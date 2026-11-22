@@ -5,6 +5,7 @@ import { X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useSessionToken } from "../../app/session";
 import { workDetailOptions, workspaceOptions } from "../../app/application";
+import { workItemReadKey, workspaceReadKey } from "../../app/read-cache";
 import { StatusBadge } from "../../components/primitives";
 import { EmptyState, ErrorState, LoadingState, PageHeading, RefreshButton } from "../../components/workspace";
 import { errorMessage, type Api, type Project, type WorkDetail } from "../../services/api";
@@ -102,8 +103,8 @@ export function WorkDetailPage() {
   // keeps the editor visible whichever of the two dialogs mounted first.
   const [drawerHost, setDrawerHost] = useState<HTMLElement | null>(null);
   const reRead = () => Promise.all([
-    queryClient.invalidateQueries({ queryKey: ["work-item", { workItemId }] }),
-    queryClient.invalidateQueries({ queryKey: ["workspace"] }),
+    queryClient.invalidateQueries({ queryKey: workItemReadKey(workItemId) }),
+    queryClient.invalidateQueries({ queryKey: workspaceReadKey() }),
   ]);
   useEffect(() => {
     if (!foreignScope || itemProjectId === undefined) return;
@@ -260,7 +261,7 @@ function WorkDetailBody({ workItemId, scopedProjectId, backSearch, editable, ope
     // workspace read, so the operator's refresh refreshes both: refreshing only
     // the work item would leave the background read's failure on screen after
     // the connection the refresh was meant to recover has already recovered.
-    void queryClient.refetchQueries({ queryKey: ["workspace"], type: "active" });
+    void queryClient.refetchQueries({ queryKey: workspaceReadKey(), type: "active" });
   };
   return <>
     {drawer && <>

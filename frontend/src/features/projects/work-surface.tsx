@@ -2,12 +2,14 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useRouteContext } from "@tanstack/react-router";
 import { AlertCircle } from "lucide-react";
 import { useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { workItemReadKey, workspaceReadKey } from "../../app/read-cache";
 import { useSessionToken } from "../../app/session";
 import type { MoveIntent, Project, WorkItem } from "../../services/api";
 import { StatusBadge, statusLabel } from "../../components/primitives";
 import { EmptyState } from "../../components/workspace";
 import { acceptanceLabel, ciLabel, ciResourcesOf, costHint, costLabel, noBlocker, noReportedResult, ownerKeyLabel, ownerLabel, priorityLabel, reportedResult, type CiResourceLike } from "../work/presentation";
-import { boardMoveRequest, hasServedRevision, isGoalManaged, providerOwnedControlsOf, refusalNotice, workItemMovePolicy } from "../planning/write-policy";
+import { boardMoveRequest, hasServedRevision, isGoalManaged, providerOwnedControlsOf, workItemMovePolicy } from "../planning/write-policy";
+import { refusalNotice } from "../../services/refusals";
 import {
   boardColumns,
   filterWorkItems,
@@ -227,14 +229,14 @@ function WorkBoard({ items, search, resources, projectStatus }: { items: readonl
       setMoveFailure(null);
       setAnnouncement(request.announcement);
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["workspace"] }),
-        queryClient.invalidateQueries({ queryKey: ["work-item", { workItemId: request.itemId }] }),
+        queryClient.invalidateQueries({ queryKey: workspaceReadKey() }),
+        queryClient.invalidateQueries({ queryKey: workItemReadKey(request.itemId) }),
       ]);
     },
     onError: async (error) => {
       setAnnouncement("");
       setMoveFailure(refusalNotice(error));
-      await queryClient.invalidateQueries({ queryKey: ["workspace"] });
+      await queryClient.invalidateQueries({ queryKey: workspaceReadKey() });
     },
   });
   const moveFocusedCard = (event: KeyboardEvent<HTMLElement>, item: WorkItem, direction: "left" | "right" | "up" | "down") => {

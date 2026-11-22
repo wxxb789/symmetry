@@ -3,17 +3,17 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { workspaceOptions } from "../../app/application";
+import { workItemReadKey, workspaceReadKey } from "../../app/read-cache";
 import { useSessionToken } from "../../app/session";
 import { restoreFocus } from "../../components/focus";
 import {
   errorMessage,
-  refusalNotice,
-  ServerRefusal,
   type Api,
   type WorkDetail,
   type WorkItemAssignment,
   type Workspace,
 } from "../../services/api";
+import { assignmentRefusalGuidance, isStaleRefusal, refusalNotice } from "../../services/refusals";
 import { asText } from "../../services/served";
 import { ownerLabel } from "./presentation";
 
@@ -76,15 +76,6 @@ function bindingOptions(resources: readonly AssignmentResource[], current: strin
   const kindLabel = kind === "repository" ? "repository resources" : "CI resources";
   return [{ id: current, label: `${current} · current binding, not among this project's ${kindLabel}` }, ...options];
 }
-
-// The server owns the refusal reason; this surface adds the operator's next step
-// for the codes the assignment endpoint answers with.
-const assignmentGuidance: Record<string, string> = {
-  provider_owned: "The provider keeps the title, description and priority; only the assignment fields here are editable.",
-  stale: "The work item changed elsewhere; close the editor and reopen it from the re-read detail.",
-  state_conflict: "This item or its project is in a state that refuses the write; re-read both, then retry.",
-  validation_failed: "Correct the highlighted fields and submit again.",
-};
 
 /** Empty text means "server default": the field is submitted as null, never as "". */
 function present(value: string): string | null {
@@ -236,13 +227,13 @@ function AssignmentEditor({ api, csrf, item, project, blockedReason, fallbackFoc
     // operator has already left the item and this editor is unmounted.
     onSettled: () => {
       void Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["work-item", { workItemId: target.id }] }),
-        ...(itemProjectId === null ? [] : [queryClient.invalidateQueries({ queryKey: ["workspace", { projectId: itemProjectId }] })]),
+        queryClient.invalidateQueries({ queryKey: workItemReadKey(target.id) }),
+        ...(itemProjectId === null ? [] : [queryClient.invalidateQueries({ queryKey: workspaceReadKey(itemProjectId) })]),
       ]);
     },
   });
   const refusal = save.error;
-  const stale = refusal instanceof ServerRefusal && refusal.code === "stale";
+  const stale = isStaleRefusal(refusal);
   const intentLocked = item.execution?.intent_locked === true;
   const blocked = save.isPending || stale || intentLocked || blockedReason !== null || target.version === null;
   // A small invariant only a broken read could reach; the submit is blocked above,
@@ -321,8 +312,8 @@ function AssignmentEditor({ api, csrf, item, project, blockedReason, fallbackFoc
           {intentLocked && <p className="notice" role="status">A live execution holds this item's intent, so assignment is locked until the execution settles.</p>}
           {blockedReason !== null && <p className="notice" role="status">{blockedReason}</p>}
           {refusal !== null && <p className="notice notice-error" role="alert">{stale
-            ? `${refusalNotice(refusal, assignmentGuidance)} Close and reopen the editor to work from the re-read assignment.`
-            : refusalNotice(refusal, assignmentGuidance)}</p>}
+            ? `${refusalNotice(refusal, assignmentRefusalGuidance)} Close and reopen the editor to work from the re-read assignment.`
+            : refusalNotice(refusal, assignmentRefusalGuidance)}</p>}
           <div className="dialog-actions">
             <button className="button" type="submit" disabled={blocked}>{save.isPending ? "Saving…" : "Save assignment"}</button>
             <button className="button" type="button" onClick={onClose} disabled={save.isPending}>Cancel</button>

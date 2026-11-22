@@ -7,6 +7,7 @@ import { errorMessage } from "../services/api";
 import type { RefreshSource, RealtimeStatus } from "../services/realtime";
 import { ErrorState, LoadingState } from "../components/workspace";
 import { sessionOptions, workDetailOptions, workspaceOptions, type Application } from "./application";
+import { sessionReadKey } from "./read-cache";
 import { useRealtimeRefresh, useRealtimeStatus } from "./realtime";
 import { SessionTokenProvider } from "./session";
 
@@ -259,7 +260,7 @@ function LogoutForm({ application, cachedToken }: { application: Application; ca
     setSubmitting(true);
     setLogoutError(null);
     try {
-      await application.queryClient.invalidateQueries({ queryKey: ["session"] });
+      await application.queryClient.invalidateQueries({ queryKey: sessionReadKey() });
       const session = await application.queryClient.fetchQuery(sessionOptions(application.api));
       const form = formRef.current;
       const tokenInput = form?.querySelector<HTMLInputElement>('input[name="_csrf_token"]');

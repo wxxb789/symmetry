@@ -5,7 +5,8 @@ import { itemOf, portal, projectOf, workItem, type PortalProject } from "../../a
 import { renderRoute, trackApplications } from "../../app/test-harness";
 import { ServerRefusal, type Project, type WorkItem } from "../../services/api";
 import { readWorkDetail } from "../../services/api.fixtures";
-import { boardMoveRequest, executionDefiningWritesRefused, failureMode, ownerDiscardNote, providerOwnedControlsOf, refusalNotice, resetPendingWorkItemCreations, workItemDraftOf, workItemFormStateOf, workItemUpdatePayload, type BoardColumnSnapshot } from "./write-policy";
+import { failureMode, refusalNotice } from "../../services/refusals";
+import { boardMoveRequest, executionDefiningWritesRefused, ownerDiscardNote, providerOwnedControlsOf, resetPendingWorkItemCreations, workItemDraftOf, workItemFormStateOf, workItemUpdatePayload, type BoardColumnSnapshot } from "./write-policy";
 
 const firstProjectId = "11111111-1111-4111-8111-111111111111";
 const secondProjectId = "22222222-2222-4222-8222-222222222222";

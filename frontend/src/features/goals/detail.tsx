@@ -3,11 +3,13 @@ import { useParams, useRouteContext } from "@tanstack/react-router";
 import { AlertCircle, CircleCheck, Inbox, ScrollText, ShieldAlert } from "lucide-react";
 import { useRef, useState } from "react";
 import { goalEventsOptions, goalOptions, sessionOptions, workspaceOptions } from "../../app/application";
+import { attentionReadKey, goalEventsCatchUpReadKey, goalEventsReadKey, goalReadKey } from "../../app/read-cache";
 import { useRealtimeEpoch } from "../../app/realtime";
 import { StatusBadge } from "../../components/primitives";
 import { EmptyState, ErrorState, LoadingState, PageHeading, RefreshButton } from "../../components/workspace";
-import { errorMessage, Network, ownValue, postGoalCommand, UnexpectedResponse, type GoalDecision, type GoalEvent, type GoalGraph, type GoalProjection, type GoalWorkItem, type Workspace } from "../../services/api";
+import { errorMessage, ownValue, postGoalCommand, type GoalDecision, type GoalEvent, type GoalGraph, type GoalProjection, type GoalWorkItem, type Workspace } from "../../services/api";
 import { commandEnvelope, MutationRefused, newMutationId, planApprovalCommand, type CommandKind, type GoalCommandEnvelope } from "../../services/commands";
+import { isStaleRefusal, isUnknownOutcome } from "../../services/refusals";
 import { servedMember, servedText } from "../../services/served";
 
 type ActionPayload = Record<string, unknown>;
@@ -34,13 +36,6 @@ function formatMicroUsd(value: string | null | undefined): string {
   const micro = Number(value);
   if (!Number.isFinite(micro)) return `unknown (${String(value)})`;
   return `$${(micro / 1_000_000).toFixed(4)}`;
-}
-
-// An answer the page can interpret settles a command attempt; a transport
-// failure or an uninterpretable answer leaves its fate unknown, so the frozen
-// bytes are kept for a re-send that replays instead of applying twice.
-function outcomeUnknown(error: unknown): boolean {
-  return error instanceof Network || error instanceof UnexpectedResponse;
 }
 
 interface PlanApprovalAttempt { key: string; resolve: GoalCommandEnvelope; admit: GoalCommandEnvelope | null }
@@ -153,18 +148,18 @@ export function GoalDetailPage() {
       // command's own commit, so the next command's envelope carries the
       // version the server has actually written.
       const acknowledged = query.data;
-      await queryClient.invalidateQueries({ queryKey: ["goal", { goalId }] });
+      await queryClient.invalidateQueries({ queryKey: goalReadKey(goalId) });
       await settleGoalRead(acknowledged);
       setNotice(`${actionLabel(variables.kind)} accepted by the server.`);
-      void queryClient.invalidateQueries({ queryKey: ["goal-events", { goalId }] });
-      void queryClient.invalidateQueries({ queryKey: ["attention"] });
+      void queryClient.invalidateQueries({ queryKey: goalEventsReadKey(goalId) });
+      void queryClient.invalidateQueries({ queryKey: attentionReadKey() });
     },
     onError: (error: unknown) => {
       setNotice(null);
       setRefusal(error instanceof MutationRefused ? error : null);
       if (!(error instanceof MutationRefused)) setNotice(errorMessage(error));
       // An answered attempt is settled and releases its identity and envelope.
-      if (!outcomeUnknown(error)) releaseAttempt();
+      if (!isUnknownOutcome(error)) releaseAttempt();
     },
   });
 
@@ -210,18 +205,18 @@ export function GoalDetailPage() {
       // Same ordering as the generic command: the notice is the page's statement
       // that the served goal now reflects this command.
       const acknowledged = query.data;
-      await queryClient.invalidateQueries({ queryKey: ["goal", { goalId }] });
+      await queryClient.invalidateQueries({ queryKey: goalReadKey(goalId) });
       await settleGoalRead(acknowledged);
       setNotice("The server admitted the plan.");
-      void queryClient.invalidateQueries({ queryKey: ["goal-events", { goalId }] });
-      void queryClient.invalidateQueries({ queryKey: ["attention"] });
+      void queryClient.invalidateQueries({ queryKey: goalEventsReadKey(goalId) });
+      void queryClient.invalidateQueries({ queryKey: attentionReadKey() });
     },
     onError: (error: unknown) => {
       setNotice(null);
       setRefusal(error instanceof MutationRefused ? error : null);
       if (!(error instanceof MutationRefused)) setNotice(errorMessage(error));
       // Same settle rule as the generic command.
-      if (!outcomeUnknown(error)) sentApproval.current = null;
+      if (!isUnknownOutcome(error)) sentApproval.current = null;
     },
   });
 
@@ -259,7 +254,7 @@ export function GoalDetailPage() {
 }
 
 function RefusalNotice({ refusal, refresh }: { refusal: MutationRefused; refresh: () => void }) {
-  const stale = refusal.stale;
+  const stale = isStaleRefusal(refusal);
   return <section className={stale ? "notice notice-conflict" : "notice notice-error"} role="alert">
     <ShieldAlert size={20} aria-hidden="true" />
     <div>
@@ -733,7 +728,7 @@ function Receipts({ goalId }: { goalId: string }) {
   const epoch = useRealtimeEpoch();
   const tail = entries.at(-1)?.sequence ?? 0;
   const continuation = useQuery({
-    queryKey: ["goal-events-catch-up", { goalId, epoch }],
+    queryKey: goalEventsCatchUpReadKey(goalId, epoch),
     queryFn: ({ signal }) => application.api.goalEvents(goalId, tail, signal),
     enabled: epoch > 0 && nextAfter === null && tail > 0,
   });

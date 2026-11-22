@@ -19,14 +19,10 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouteContext } from "@tanstack/react-router";
 import { createContext, useContext, useState, type ReactNode } from "react";
 import { cancelWorkMutation, provideInputMutation, retryWorkMutation, startWorkMutation } from "../../app/application";
+import { workItemReadKey, workItemTimelineReadKey } from "../../app/read-cache";
 import { useSessionToken } from "../../app/session";
 import { clearActionId, readActionId, readOrMintActionId, type ActionKind } from "../../services/control-actions";
 import {
-  Conflict,
-  Forbidden,
-  ServerRefusal,
-  Unsupported,
-  Validation,
   errorMessage,
   type ActionId,
   type ControlReceipt,
@@ -35,6 +31,7 @@ import {
   type WorkDetail,
   type WorkTimeline,
 } from "../../services/api";
+import { isDefinitive } from "../../services/refusals";
 import { asRecord, asText } from "../../services/served";
 import { executionStateLabel, hasDecisionPacket, timelineBoundary, timelineItemKey, timestamp, type TimelineItemLike } from "./presentation";
 import {
@@ -113,7 +110,7 @@ export function WorkControlSurface({ detail, cursor, children }: { detail: WorkD
   const executionRow = item.execution ?? null;
   const goalManaged = asText(item.goal_id) !== null;
 
-  const snapshotVersion = () => queryClient.getQueryState(["work-item", { workItemId }])?.dataUpdatedAt ?? 0;
+  const snapshotVersion = () => queryClient.getQueryState(workItemReadKey(workItemId))?.dataUpdatedAt ?? 0;
   const [attempts, setAttempts] = useState<ControlAttempt[]>(() => (goalManaged ? [] : mountAttempts(item, snapshotVersion())));
   // The boundary this detail read's first page ends at. The pages a reader loads
   // are fetched from exactly this boundary, and the server signs a fresh cursor
@@ -129,7 +126,7 @@ export function WorkControlSurface({ detail, cursor, children }: { detail: WorkD
     workItemId,
     boundary: servedBoundary,
     cursor,
-    entries: queryClient.getQueryData<{ pages: readonly WorkTimeline[] }>(["work-item-timeline", { workItemId, cursor }])?.pages.flatMap((page) => page.items) ?? [],
+    entries: queryClient.getQueryData<{ pages: readonly WorkTimeline[] }>(workItemTimelineReadKey(workItemId, cursor))?.pages.flatMap((page) => page.items) ?? [],
   }));
   // Every older page is served by a reader action, so the merge runs when that
   // fetch resolves, under the boundary the render that issued the fetch served.
@@ -151,11 +148,11 @@ export function WorkControlSurface({ detail, cursor, children }: { detail: WorkD
     setAttempts((previous) => previous.map((attempt) => (attempt.kind === kind ? patch(attempt) : attempt)));
   };
   const invalidate = () => {
-    void queryClient.invalidateQueries({ queryKey: ["work-item", { workItemId }] });
+    void queryClient.invalidateQueries({ queryKey: workItemReadKey(workItemId) });
     // The timeline is only invalidated when no page read is in flight: a
     // settle must never cancel the older page a reader asked for.
-    if (queryClient.isFetching({ queryKey: ["work-item-timeline", { workItemId }] }) === 0) {
-      void queryClient.invalidateQueries({ queryKey: ["work-item-timeline", { workItemId }] });
+    if (queryClient.isFetching({ queryKey: workItemTimelineReadKey(workItemId) }) === 0) {
+      void queryClient.invalidateQueries({ queryKey: workItemTimelineReadKey(workItemId) });
     }
   };
 
@@ -200,7 +197,7 @@ export function WorkControlSurface({ detail, cursor, children }: { detail: WorkD
       },
       onError: (error) => {
         settle("start", (attempt) => ({ ...attempt, baseline: snapshotVersion(), ...failurePatch(error) }));
-        if (definitiveRefusal(error)) clearActionId("start", workItemId, "initial");
+        if (isDefinitive(error)) clearActionId("start", workItemId, "initial");
       },
       onSettled: invalidate,
     });
@@ -217,7 +214,7 @@ export function WorkControlSurface({ detail, cursor, children }: { detail: WorkD
       },
       onError: (error) => {
         settle("cancel", (attempt) => ({ ...attempt, baseline: snapshotVersion(), ...failurePatch(error) }));
-        if (definitiveRefusal(error)) clearActionId("cancel", workItemId, scope);
+        if (isDefinitive(error)) clearActionId("cancel", workItemId, scope);
       },
       onSettled: invalidate,
     });
@@ -234,7 +231,7 @@ export function WorkControlSurface({ detail, cursor, children }: { detail: WorkD
       },
       onError: (error) => {
         settle("retry", (attempt) => ({ ...attempt, baseline: snapshotVersion(), ...failurePatch(error) }));
-        if (definitiveRefusal(error)) clearActionId("retry", workItemId, scope);
+        if (isDefinitive(error)) clearActionId("retry", workItemId, scope);
       },
       onSettled: invalidate,
     });
@@ -252,7 +249,7 @@ export function WorkControlSurface({ detail, cursor, children }: { detail: WorkD
       },
       onError: (error) => {
         settle("input", (attempt) => ({ ...attempt, baseline: snapshotVersion(), ...failurePatch(error) }));
-        if (definitiveRefusal(error)) clearActionId("input", workItemId, waitingTransitionId);
+        if (isDefinitive(error)) clearActionId("input", workItemId, waitingTransitionId);
       },
       onSettled: invalidate,
     });
@@ -460,17 +457,11 @@ function commandRecord(command: ControlReceipt): ReceiptCommand {
   };
 }
 
-/** A definitive server refusal: it is a refusal receipt and its attempt id is dead. */
-function definitiveRefusal(error: unknown): boolean {
-  return error instanceof Conflict || error instanceof Validation || error instanceof Forbidden || error instanceof Unsupported ||
-    (error instanceof ServerRefusal && error.status >= 400 && error.status < 500);
-}
-
 function failurePatch(error: unknown): Pick<ControlAttempt, "refusal" | "unconfirmed"> {
   const message = errorMessage(error);
   // A control-plane refusal is the server's own decision: it renders as a
   // refusal, never as the runtime's rejection or as a local failure.
-  if (definitiveRefusal(error)) return { refusal: { outcome: "refused", message }, unconfirmed: null };
+  if (isDefinitive(error)) return { refusal: { outcome: "refused", message }, unconfirmed: null };
   // A lost response or an unproven fault: the request may have been applied, so
   // it stays unknown until the server's own records place it.
   return { refusal: null, unconfirmed: { outcome: "unknown", message } };
