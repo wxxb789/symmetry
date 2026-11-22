@@ -2842,7 +2842,7 @@ func (witness *linuxV2NativeWitnessRun) runFresh(ctx context.Context, store jour
 	if err != nil {
 		return err
 	}
-	if err := witness.verifyNativeExecutable(ctx, profile, kind); err != nil {
+	if err := witness.verifyNativeExecutable(profile, kind); err != nil {
 		return err
 	}
 	localNow := time.Now
@@ -2903,7 +2903,10 @@ func (witness *linuxV2NativeWitnessRun) runFresh(ctx context.Context, store jour
 	if err != nil || validateLinuxV2NativeWitnessPath(home) != nil {
 		return errors.Join(errors.New("fixed-B native HOME is outside the isolated owner witness root"), err)
 	}
-	if err := witness.verifyNativeExecutable(ctx, profile, kind); err != nil {
+	if err := witness.verifyNativeExecutable(profile, kind); err != nil {
+		return err
+	}
+	if err := witness.recordNativeExecutableDigest(ctx, profile); err != nil {
 		return err
 	}
 	witness.summary.InstalledOwnerVerified = true
@@ -2918,7 +2921,7 @@ func (witness *linuxV2NativeWitnessRun) runFresh(ctx context.Context, store jour
 	return witness.launchNative(ctx, witnessDaemon, store, kind, profile, owner, prepared, grant)
 }
 
-func (witness *linuxV2NativeWitnessRun) verifyNativeExecutable(ctx context.Context, profile config.AgentProfile, kind harness.Kind) error {
+func (witness *linuxV2NativeWitnessRun) verifyNativeExecutable(profile config.AgentProfile, kind harness.Kind) error {
 	if !filepath.IsAbs(profile.Command) || filepath.Clean(profile.Command) != profile.Command {
 		return errors.New("owner witness native executable must be canonical and absolute")
 	}
@@ -2942,12 +2945,6 @@ func (witness *linuxV2NativeWitnessRun) verifyNativeExecutable(ctx context.Conte
 	if kind == harness.KindClaude && witness.config.Runtime.HarnessVersion != claude.TestedVersion {
 		return errors.New("Claude Code owner witness requires the tested release")
 	}
-	digest, err := harness.HashExecutableFile(ctx, profile.Command)
-	if err != nil {
-		return fmt.Errorf("hash pinned native executable: %w", err)
-	}
-	witness.summary.NativeBinary = profile.Command
-	witness.summary.NativeBinarySHA256 = digest
 	accounts, err := linuxpreflight.VerifyOwnerAccounts(witness.ownerConfig)
 	if err != nil {
 		return err
@@ -2962,6 +2959,16 @@ func (witness *linuxV2NativeWitnessRun) verifyNativeExecutable(ctx context.Conte
 		return fmt.Errorf("B cannot execute/read the pinned native binary without modifying it: %w", err)
 	}
 	return linuxpreflight.VerifyNoUntrustedACLWrite(profile.Command, []uint32{0, witness.ownerConfig.AUID}, []uint32{witness.ownerConfig.AGID}, true)
+}
+
+func (witness *linuxV2NativeWitnessRun) recordNativeExecutableDigest(ctx context.Context, profile config.AgentProfile) error {
+	digest, err := harness.HashExecutableFile(ctx, profile.Command)
+	if err != nil {
+		return fmt.Errorf("hash pinned native executable: %w", err)
+	}
+	witness.summary.NativeBinary = profile.Command
+	witness.summary.NativeBinarySHA256 = digest
+	return nil
 }
 
 func (witness *linuxV2NativeWitnessRun) prepareClone(

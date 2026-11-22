@@ -22,6 +22,9 @@ import (
 
 	"github.com/wxxb789/symmetry/daemon/internal/authority"
 	"github.com/wxxb789/symmetry/daemon/internal/config"
+	"github.com/wxxb789/symmetry/daemon/internal/harness"
+	"github.com/wxxb789/symmetry/daemon/internal/harness/claude"
+	"github.com/wxxb789/symmetry/daemon/internal/harness/pi"
 	"github.com/wxxb789/symmetry/daemon/internal/platform"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 	"github.com/wxxb789/symmetry/daemon/internal/state"
@@ -191,7 +194,6 @@ func TestProductionLinuxV2StageCrashReplayMatrix(t *testing.T) {
 				harness: leg.harness, configEnvironment: leg.configEnvironment,
 				requestEnvironment: linuxV2StageReplayRequestEnvironment, requestCase: "stage_replay",
 				barrierStage: "native_release", markerDirectory: leg.markerDirectory,
-				containmentRequired: true,
 			})
 		})
 	}
@@ -1577,7 +1579,7 @@ func linuxV2ReadOwnerWitnessRequestWithBarrierState(
 	switch request.Case {
 	case "pi_provider_action", "helper_sigkill_detached_child", "daemon_sigkill_helper_survives_detached_child":
 		expectedHold = "native_turn_started"
-	case "opencode_native_health":
+	case "opencode_native_health", "codex_containment", "claude_containment":
 		expectedHold = "native_release"
 	case "stage_replay":
 		expectedHold = testCase.barrierStage
@@ -1714,7 +1716,7 @@ func newLinuxV2NativeFixture(t *testing.T, testCase linuxV2NativeWitnessCase) li
 	if value.Runtime.HarnessKind != testCase.harness {
 		t.Fatalf("%s runtime.harness_kind = %q, want %q", testCase.configEnvironment, value.Runtime.HarnessKind, testCase.harness)
 	}
-	expectedVersion := linuxV2PinnedNativeVersion(testCase.harness)
+	expectedVersion, expectedVersionLine := linuxV2PinnedNativeVersions(testCase.harness)
 	if value.Runtime.HarnessVersion != expectedVersion {
 		t.Fatalf("%s runtime.harness_version = %q, want pinned release %q", testCase.configEnvironment, value.Runtime.HarnessVersion, expectedVersion)
 	}
@@ -1728,7 +1730,7 @@ func newLinuxV2NativeFixture(t *testing.T, testCase linuxV2NativeWitnessCase) li
 	if !filepath.IsAbs(profile.Command) || filepath.Clean(profile.Command) != profile.Command {
 		t.Fatalf("%s native executable must be an absolute canonical path", testCase.configEnvironment)
 	}
-	if err := linuxV2VerifyPinnedNativeCLI(profile.Command, linuxV2PinnedNativeVersionLine(testCase.harness)); err != nil {
+	if err := linuxV2VerifyPinnedNativeCLI(profile.Command, expectedVersionLine); err != nil {
 		t.Fatalf("%s does not point to the pinned real CLI release: %v", testCase.configEnvironment, err)
 	}
 	if testCase.providerActionRequired && !profile.ProviderAccess {
@@ -1928,17 +1930,14 @@ func linuxV2RequireActiveOwnerService() error {
 	return nil
 }
 
-func linuxV2PinnedNativeVersion(harnessKind string) string {
-	return map[string]string{"pi": "1.5.2", "opencode": "1.18.32", "codex": "0.168.0", "claude_code": "2.1.323"}[harnessKind]
-}
-
-func linuxV2PinnedNativeVersionLine(harnessKind string) string {
-	return map[string]string{
-		"pi":          "1.5.2",
-		"opencode":    "1.18.32",
-		"codex":       "codex-cli 0.168.0",
-		"claude_code": "2.1.323 (Claude Code)",
+func linuxV2PinnedNativeVersions(harnessKind string) (string, string) {
+	spec := map[string]struct{ version, line string }{
+		"pi":          {pi.TestedVersion, "1.5.2"},
+		"opencode":    {"1.18.32", "1.18.32"},
+		"codex":       {harness.CodexTestedVersion, "codex-cli 0.168.0"},
+		"claude_code": {claude.TestedVersion, "2.1.323 (Claude Code)"},
 	}[harnessKind]
+	return spec.version, spec.line
 }
 
 func linuxV2VerifyPinnedNativeCLI(executable, expectedVersion string) error {

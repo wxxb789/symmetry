@@ -54,14 +54,16 @@ Naming (frozen):
   `case: "stage_replay"` with hold `native_release` (the replay machinery keys on that name).
 - Profiles: `codex-native`, `claude-native`; Control runtimes `owner-witness-control-codex-generic`,
   `owner-witness-control-claude-generic` (repo = the opencode repository resource).
-- Env: `SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_CODEX_CONFIG|_REQUEST|_BINARY_SHA256|_ARCHIVE_SHA256`,
-  `…_CLAUDE_CONFIG|_REQUEST|_BINARY_SHA256|_ARCHIVE_SHA256`.
+- Env: `SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_CODEX_CONFIG|_REQUEST|_BINARY_SHA256`,
+  `…_CLAUDE_CONFIG|_REQUEST|_BINARY_SHA256` (the archive digest reaches the manifest through
+  `--native-archive-sha256`, not through a witness environment variable).
 - Marker dirs: `codex-containment`, `claude-containment`, `stage-replay-native-release-codex`,
   `stage-replay-native-release-claude`; stage-replay bundle dirs
   `$OWNER_STAGE_REPLAY_ROOT/native_release_<kind>`.
 - Witness summary/response additions: `native_binary` (absolute path), `native_binary_sha256`
   (`sha256:`+64 hex, computed by the witness over the pinned executable), `containment`
-  (`{"native_open_reached": true|false}`, present for the containment-capable kinds).
+  (`{"native_open_reached": true}`, present for the containment-capable kinds; only `true` is
+  reachable, see §3.6).
 - Manifest additions for the two per-kind sets: `native_binary` object
   (`kind`, `path`, `sha256`, `archive_sha256`, `version`) and `containment`
   (`native_open_reached`), both cross-checked against the exported witness document, plus
@@ -98,9 +100,10 @@ Naming (frozen):
    `sha256:<pinned>` to the e2e; the e2e requires the daemon-reported `native_binary_sha256` to
    equal it; the exporter requires the manifest's `native_binary.sha256` to equal both the CLI value
    and the witness document's value. A mismatch anywhere fails closed.
-6. **`native_open_reached` is recorded honestly.** If a kind could not reach Open credential-free
-   the boundary would be recorded `false` and the case would be reported as launch-only; for codex
-   and claude the verified result is `true`, and the witness *requires* `true` for these cases so a
+6. **`native_open_reached` cannot be recorded `false`.** `recordContainmentBoundary()`
+   (`linux_owner_witness_linux.go`) is the only writer of the boundary and always records `true`;
+   an unreachable credential-free `Open` fails the case with an error and writes no summary, so
+   there is no launch-only report path. The witness *requires* `true` for these cases so a
    regression cannot silently downgrade the proof.
 
 ## 4. Off-host verification already performed (evidence for §5)

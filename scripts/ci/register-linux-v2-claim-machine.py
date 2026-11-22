@@ -81,62 +81,57 @@ def main() -> int:
         raise SystemExit("Control did not enroll the exact one-time claim fixture machine")
 
     session_id = str(uuid.uuid4())
+    runtime_specs = (
+        {
+            "runtime_key": "owner-witness-control-pi-generic",
+            "name": "Isolated generic Control provider-claim fixture; not a native runtime",
+            "capacity": 64,
+            "agent_profile": "pi-native",
+            "workspace": "native",
+            "repository_resource_id": fixture["pi_repository_resource_id"],
+            "capabilities": {"structured_input": True, "provider_access": True},
+        },
+        {
+            "runtime_key": "owner-witness-control-opencode-generic",
+            "name": "Isolated generic Control health-claim fixture; not a native runtime",
+            "capacity": 64,
+            "agent_profile": "opencode-native",
+            "workspace": "native",
+            "repository_resource_id": fixture["opencode_repository_resource_id"],
+            "capabilities": {"structured_input": True},
+        },
+        {
+            "runtime_key": "owner-witness-control-codex-generic",
+            "name": "Isolated generic Control codex-claim fixture; not a native runtime",
+            "capacity": 64,
+            "agent_profile": "codex-native",
+            "workspace": "native",
+            "repository_resource_id": fixture["opencode_repository_resource_id"],
+            "capabilities": {"structured_input": True},
+        },
+        {
+            "runtime_key": "owner-witness-control-claude-generic",
+            "name": "Isolated generic Control claude-claim fixture; not a native runtime",
+            "capacity": 64,
+            "agent_profile": "claude-native",
+            "workspace": "native",
+            "repository_resource_id": fixture["opencode_repository_resource_id"],
+            "capabilities": {"structured_input": True},
+        },
+    )
     response = call_json(
         control_url.rstrip("/") + f"/api/v1/machines/{machine_id}/sessions/{session_id}",
         "PUT",
         machine_token,
-        {
-            "runtimes": [
-                {
-                    "runtime_key": "owner-witness-control-pi-generic",
-                    "name": "Isolated generic Control provider-claim fixture; not a native runtime",
-                    "capacity": 64,
-                    "agent_profile": "pi-native",
-                    "workspace": "native",
-                    "repository_resource_id": fixture["pi_repository_resource_id"],
-                    "capabilities": {"structured_input": True, "provider_access": True},
-                },
-                {
-                    "runtime_key": "owner-witness-control-opencode-generic",
-                    "name": "Isolated generic Control health-claim fixture; not a native runtime",
-                    "capacity": 64,
-                    "agent_profile": "opencode-native",
-                    "workspace": "native",
-                    "repository_resource_id": fixture["opencode_repository_resource_id"],
-                    "capabilities": {"structured_input": True},
-                },
-                {
-                    "runtime_key": "owner-witness-control-codex-generic",
-                    "name": "Isolated generic Control codex-claim fixture; not a native runtime",
-                    "capacity": 64,
-                    "agent_profile": "codex-native",
-                    "workspace": "native",
-                    "repository_resource_id": fixture["opencode_repository_resource_id"],
-                    "capabilities": {"structured_input": True},
-                },
-                {
-                    "runtime_key": "owner-witness-control-claude-generic",
-                    "name": "Isolated generic Control claude-claim fixture; not a native runtime",
-                    "capacity": 64,
-                    "agent_profile": "claude-native",
-                    "workspace": "native",
-                    "repository_resource_id": fixture["opencode_repository_resource_id"],
-                    "capabilities": {"structured_input": True},
-                },
-            ]
-        },
+        {"runtimes": list(runtime_specs)},
         200,
     )
     runtimes = {
         runtime.get("runtime_key"): runtime for runtime in response.get("runtimes", []) if isinstance(runtime, dict)
     }
     result = {"machine_id": machine_id, "session_id": session_id, "runtimes": {}}
-    for runtime_key in (
-        "owner-witness-control-pi-generic",
-        "owner-witness-control-opencode-generic",
-        "owner-witness-control-codex-generic",
-        "owner-witness-control-claude-generic",
-    ):
+    for spec in runtime_specs:
+        runtime_key = spec["runtime_key"]
         runtime = runtimes.get(runtime_key)
         if (
             not isinstance(runtime, dict)

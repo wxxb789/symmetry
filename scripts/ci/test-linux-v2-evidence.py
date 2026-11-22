@@ -9,6 +9,7 @@ import json
 import os
 import pathlib
 import re
+import subprocess
 import tempfile
 import unittest
 
@@ -372,7 +373,7 @@ CONTAINMENT_PINS = {
 }
 
 
-def containment_witness(kind: str) -> dict:
+def containment_witness(kind: str, native_open_reached: bool = True) -> dict:
     pin = CONTAINMENT_PINS[kind]
     return {
         "version": 1,
@@ -384,7 +385,7 @@ def containment_witness(kind: str) -> dict:
         "native_binary_sha256": "sha256:" + pin["binary_sha256"],
         "native_version_line": pin["native_version_line"],
         "subject": {"tree_digest": pin["tree_digest"]},
-        "containment": {"native_open_reached": True},
+        "containment": {"native_open_reached": native_open_reached},
         "no_native_fallback": False,
         "owner_witness_outcome": "passed",
     }
@@ -419,18 +420,49 @@ class ExporterTest(unittest.TestCase):
             originals[path] = self.write_json(path, legacy_fixture(name, raw_secret))
         return originals
 
-    def populate_containment(self, source: pathlib.Path, kind: str) -> None:
+    def populate_containment(self, source: pathlib.Path, kind: str, native_open_reached: bool = True) -> None:
         pin = CONTAINMENT_PINS[kind]
-        self.write_json(source / pin["witness"], containment_witness(kind))
+        self.write_json(source / pin["witness"], containment_witness(kind, native_open_reached))
         self.write_json(
             source / pin["replay"],
             {
                 "version": 1,
                 "case": "stage_replay",
                 "harness": pin["harness"],
+                "native_version_line": pin["native_version_line"],
                 "stage": "native_release",
                 "status": "passed",
             },
+        )
+
+    def run_containment_gate(
+        self, kind: str, source: pathlib.Path, receipts: pathlib.Path, output: pathlib.Path
+    ) -> subprocess.CompletedProcess:
+        pin = CONTAINMENT_PINS[kind]
+        return citest.run_gate(
+            SCRIPT,
+            "manual",
+            str(output),
+            "1" * 40,
+            "passed",
+            "--witness-root",
+            str(source),
+            "--receipt-root",
+            str(receipts),
+            "--case-set",
+            pin["case_set"],
+            "--native-kind",
+            kind,
+            "--native-binary",
+            pin["binary"],
+            "--native-binary-sha256",
+            "sha256:" + pin["binary_sha256"],
+            "--native-archive-sha256",
+            "sha256:" + pin["archive_sha256"],
+            "--native-version-line",
+            pin["native_version_line"],
+            "--source-tree-digest",
+            pin["tree_digest"],
         )
 
     def test_legacy_projects_actual_shapes_without_mutating_or_leaking_raw_inputs(self) -> None:
@@ -1600,6 +1632,40 @@ class ExporterTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("--native-binary-sha256", result.stderr)
         self.assertFalse((output / "manifest.json").exists())
+
+    def test_manual_containment_manifest_copies_the_witness_boundary_flag(self) -> None:
+        for index, kind in enumerate(("codex", "claude_code")):
+            with self.subTest(kind=kind):
+                source = self.private_dir(f"boundary-source-{index}")
+                receipts = self.private_dir(f"boundary-receipts-{index}")
+                output = self.private_dir(f"boundary-output-{index}")
+                self.populate_containment(source, kind, native_open_reached=False)
+                result = self.run_containment_gate(kind, source, receipts, output)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                manifest = json.loads((output / "manifest.json").read_text())
+                self.assertEqual(manifest["containment"], {"native_open_reached": False})
+
+    def test_manual_containment_replay_witness_must_bind_the_pinned_kind(self) -> None:
+        for index, (kind, mutation) in enumerate(
+            (
+                ("codex", {"harness": "opencode"}),
+                ("claude_code", {"native_version_line": "0.0.0"}),
+            )
+        ):
+            with self.subTest(kind=kind, mutation=mutation):
+                pin = CONTAINMENT_PINS[kind]
+                source = self.private_dir(f"replay-source-{index}")
+                receipts = self.private_dir(f"replay-receipts-{index}")
+                output = self.private_dir(f"replay-output-{index}")
+                self.populate_containment(source, kind)
+                replay_path = source / pin["replay"]
+                replay = json.loads(replay_path.read_text())
+                replay.update(mutation)
+                self.write_json(replay_path, replay)
+                result = self.run_containment_gate(kind, source, receipts, output)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("containment replay witness", result.stderr)
+                self.assertFalse((output / "manifest.json").exists())
 
     def test_manual_native_arguments_require_all_five_and_matching_case_set(self) -> None:
         pin = CONTAINMENT_PINS["codex"]

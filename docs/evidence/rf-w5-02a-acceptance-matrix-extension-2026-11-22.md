@@ -24,10 +24,10 @@ the D3 `harness.md` amendment that cites them stays blocked on a dispatched run 
 | Case sets / Control fixture cases | `codex_containment`, `claude_containment`, plus replay cases `stage_replay_native_release_codex`, `stage_replay_native_release_claude`; `@expected_fixture_runs` 44 → 48 |
 | Request cases | containment cases write their own name; the replay cases write `case: "stage_replay"` with hold `native_release` |
 | Profiles / Control runtimes | `codex-native`, `claude-native`; `owner-witness-control-codex-generic`, `owner-witness-control-claude-generic` |
-| Env | `SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_{CODEX,CLAUDE}_{CONFIG,REQUEST,BINARY_SHA256,ARCHIVE_SHA256}` |
+| Env | `SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_{CODEX,CLAUDE}_{CONFIG,REQUEST,BINARY_SHA256}` |
 | Marker / bundle dirs | `codex-containment`, `claude-containment`, `stage-replay-native-release-{codex,claude}`; `$OWNER_STAGE_REPLAY_ROOT/native_release_<kind>` |
 | Witness summary/response | `native_binary` (absolute path), `native_binary_sha256` (`sha256:`+64 hex over the pinned executable), `containment.native_open_reached` |
-| Evidence JSON | adds `native_version_line` for every native case |
+| Evidence JSON | adds `native_version_line` for every native case (test-authored pin; the fixture verifies the installed CLI's verbatim `--version` against it, so it is not a daemon-observed value) |
 | `manifest.json` (per-kind sets) | `native_binary{kind,path,sha256,archive_sha256,version}`, `containment{native_open_reached}`, `source_tree_digest` |
 
 The exporter names the claude kind **`claude_code`** (matching `config.RuntimeHarnessClaudeCode`), not
@@ -69,12 +69,13 @@ All runs on the worktree at HEAD `6148ba6ddb7b9918a5ea5ed40df434a30953c691` plus
 | Go race (WSL) | `go test -count=1 -race ./internal/app/...` re-run on the final bytes (bg_26; the only post-bg_22 source delta was a comment line in `linux_owner_witness_linux.go`, final `sha256` `5897cfe391981d207a964b9ba3ea4acd0bf6b12cab517d7d4b9ee869977e47f3`) | rc=0, `internal/app` 1074.9 s |
 | Workflow lint | `actionlint` 1.7.12 `.github/workflows/linux-native-v2-acceptance.yml` | rc=0 |
 | Shell syntax | `bash -n scripts/ci/linux-v2-native-{tools,acceptance}.sh` | rc=0 |
-| Shell lint | `shellcheck --severity=warning` on both scripts | exit 1 (findings present); `acceptance.sh` 15 findings (HEAD 9), `tools.sh` 0; the six new ones are `SC2154` "referenced but not assigned" for `codex_executable`, `claude_executable`, `code_mode_host_executable{,_sha}`, `bwrap_executable{,_sha}` — the same class as the pre-existing `pi_unpack`/`opencode_unpack` globals assigned inside the fetch functions. The CI step is advisory (`continue-on-error: true`, `ci.yml:1297`), so exit 1 does not fail the job |
-| Python fixtures | `python3 scripts/ci/test-linux-v2-evidence.py` (WSL, bg_24) | 39 tests, `OK`, rc=0 |
+| Shell lint | `shellcheck --severity=warning` on both scripts | exit 1 (findings present); `acceptance.sh` findings by code: `SC2174` 1, `SC2154` 8, `SC2043` 1, `SC2024` 1, `SC2276` 2, `SC2289` 1, `SC1078` 1, `SC2288` 1 (counted again at the apply stage; same classes and count before and after it), `tools.sh` 0; the six containment `SC2154`s are `codex_executable`, `claude_executable`, `code_mode_host_executable{,_sha}`, `bwrap_executable{,_sha}` — the same class as the pre-existing `pi_unpack`/`opencode_unpack` globals assigned inside the fetch functions, and after the apply they sit on the `stage_guest_binary` call lines. The CI step is advisory (`continue-on-error: true`, `ci.yml:1297`), so exit 1 does not fail the job |
+| Python fixtures | `python3 scripts/ci/test-linux-v2-evidence.py` (WSL; 39 tests at the implement stage, 41 after the apply added the boundary-copy and replay-binding tests) | 41 tests, `OK`, rc=0 |
 | Python fixtures | `python3 scripts/ci/test-linux-v2-control-receipt.py` (WSL root, bg_25) | 9 tests, `OK`, rc=0 |
 | Python fixtures | `scripts/ci/test-linux-v2-source-subject.py`, `scripts/ci/test-linux-v2-go-events.py`, `scripts/ci/test-ci-structure-extraction.py` | 7 OK / 6 OK / 23 OK, rc=0 |
 | Python lint | `python -m ruff check` + `ruff format --check` on the four changed `scripts/ci/*.py` | `All checks passed!`, `4 files already formatted`, rc=0 |
-| Elixir fixture | row-arithmetic check over `scripts/ci/provision-linux-v2-control-claims.exs` (regex over the `@cases` expression and the two stage lists) | `declared=48`; literal rows 24 + 2 rows inside the two `Enum.map` bodies + `@stage_replay_holds` 14 + `@ack_loss_stages` 10 = 48, `match=True`; no duplicate names; the four new rows are exactly `codex_containment`, `claude_containment`, `stage_replay_native_release_codex`, `stage_replay_native_release_claude`. The fixture itself only executes inside the dispatch (Control release + Postgres), recorded as such |
+| Apply-stage re-verification (2026-11-22, post-apply worktree) | the same off-host commands, re-run on the delivered bytes | every rc=0 row re-established: `gofmt -l` no output, `go vet ./...` rc=0, `GOOS=linux GOARCH=amd64 go build ./...` rc=0, `GOOS=linux go vet ./e2e/... ./internal/app/... ./internal/harness/...` rc=0, `go test -list 'NativeContainment$' ./e2e/` rc=0 (both entries), focused WSL witness pins rc=0 (`SummaryRequiresTheOpenBoundary` now asserts a satisfied fixture and reddens on a synthetic containment gate), `test-linux-v2-evidence.py` 41 tests `OK`, `ruff check`/`format --check` rc=0, `actionlint` rc=0, `bash -n` rc=0; `go test -count=1 ./internal/app/... ./internal/harness/...` (Windows) hit one contention flake — `internal/harness/pi` `TestNativeRepositoryTaskSubjectUsesRepositoryBaseline` deadline under load — which passes in isolation (6.2 s, rc=0) and in the WSL race run; the WSL race suite is green with `-timeout 2400s` (`internal/app` 606.1 s; the only earlier failure was the default 600 s per-package cap under `-race`, no data race) |
+| Elixir fixture | row-arithmetic check over `scripts/ci/provision-linux-v2-control-claims.exs` (regex over the `@cases` expression and the two stage lists) | `declared=48`; literal rows 24 + `@stage_replay_holds` 14 + `@ack_loss_stages` 10 = 48, `match=True` (re-derived at the apply stage); no duplicate names; the four new rows are exactly `codex_containment`, `claude_containment`, `stage_replay_native_release_codex`, `stage_replay_native_release_claude`. The fixture itself only executes inside the dispatch (Control release + Postgres), recorded as such |
 
 `test-linux-v2-evidence.py` is a Linux-only fixture (the exporter calls `os.getuid()` at HEAD too), so its
 gate host is WSL; the Windows interpreter fails it wholesale for that pre-existing reason and that failure is
@@ -102,8 +103,9 @@ not part of this change's evidence.
 
 ## Base-vs-HEAD control-flow audit
 
-105 hunks over 18 changed files (`git diff -U0 | grep -c '^@@'`), 974 insertions / 60 deletions
-(`git diff --numstat`, plus two new untracked files: the plan and this record).
+114 hunks over 20 changed files (`git diff -U0 540263924e | grep -c '^@@'`), 1441 insertions / 94 deletions
+(`git diff --numstat 540263924e`, counting the new plan and this record; the figures include the
+2026-11-22 apply-stage change set: +260/−175 over 13 files).
 
 | Decision point | Base | HEAD | Effect on existing kinds |
 | --- | --- | --- | --- |
@@ -115,7 +117,7 @@ not part of this change's evidence.
 | `launchNative` turn arm | `else` ran a Pi-style turn for every non-OpenCode kind | `else if witness.containmentCase()` → `Open` + `recordContainmentBoundary()`; the Pi `else` unchanged | containment and per-kind replay legs never start a turn or request `provider_access` |
 | post-Open codex gates (wait, result, artifact, usage, health) | `kind == KindCodex` | `witness.request.Case == "codex_native_turn"` | `codex_native_turn` keeps every gate; containment skips them |
 | health-peer assert | all non-codex cases | actively excluded for the two containment cases | pi/opencode asserts unchanged |
-| `verifyNativeExecutable` | `(profile, kind)`, 3 versions | `(ctx, profile, kind)` + claude version + executable SHA-256 and path recorded in the summary | adds the digest binding |
+| `verifyNativeExecutable` | `(profile, kind)`, 3 versions | `(profile, kind)` + claude version, both call sites kept; the executable SHA-256 and path are recorded by `recordNativeExecutableDigest` at the post-prepare call site only | adds the digest binding; the digest is hashed once, before clone/launch |
 | `validateFinalSummary` containment block | — | requires `containment.native_open_reached == true`, an absolute `native_binary` and a `sha256:`+64-hex digest for the two cases | a regression cannot downgrade to launch-only |
 | `linuxV2ValidateOwnerWitnessResponse` (e2e) | — | containment + digest + `native_version_line` asserts for the two fresh cases | daemon-reported digest must equal the env-pinned digest |
 | `run_stage_replay_case` (script) | pi/opencode legs | wrapper over `run_stage_replay_leg`; the legacy legs pass identical arguments | pi/opencode replay bytes unchanged |

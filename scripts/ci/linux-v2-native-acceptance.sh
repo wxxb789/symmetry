@@ -135,6 +135,13 @@ wait_for_guest_stop() {
   guest_stopped_proven
 }
 
+stage_guest_binary() {
+  local source=$1 guest=$2 expected_sha=$3 label=$4 release=$5
+  sudo install -o root -g root -m 0755 "$source" "$rootfs$guest"
+  [[ "$(sudo sha256sum "$rootfs$guest" | cut -d' ' -f1)" == "$expected_sha" ]] ||
+    fail "staged $label digest differs from the pinned $release release"
+}
+
 export_native_evidence() {
   local original_status=$1
   local witness_home=${A_HOME:-/home/symmetry-a}
@@ -145,29 +152,34 @@ export_native_evidence() {
     python3 "$repo/scripts/ci/linux-v2-source-subject.py" "$repo" "$GITHUB_SHA" >/dev/null || return 1
     run_status=passed
   fi
-  local -a native_manifest_args=()
+  local native_kind='' native_binary='' native_binary_sha='' native_archive_sha='' native_version_line=''
   case "$fixture_case_set" in
     codex_containment)
-      native_manifest_args=(
-        --native-kind codex
-        --native-binary /usr/local/bin/codex
-        --native-binary-sha256 "sha256:${codex_executable_sha:-}"
-        --native-archive-sha256 "sha256:${codex_archive_sha:-}"
-        --native-version-line "${codex_version_line:-}"
-        --source-tree-digest "$source_tree_digest"
-      )
+      native_kind=codex
+      native_binary=/usr/local/bin/codex
+      native_binary_sha="sha256:${codex_executable_sha:-}"
+      native_archive_sha="sha256:${codex_archive_sha:-}"
+      native_version_line="${codex_version_line:-}"
       ;;
     claude_containment)
-      native_manifest_args=(
-        --native-kind claude_code
-        --native-binary /usr/local/bin/claude
-        --native-binary-sha256 "sha256:${claude_executable_sha:-}"
-        --native-archive-sha256 "sha256:${claude_archive_sha:-}"
-        --native-version-line "${claude_version_line:-}"
-        --source-tree-digest "$source_tree_digest"
-      )
+      native_kind=claude_code
+      native_binary=/usr/local/bin/claude
+      native_binary_sha="sha256:${claude_executable_sha:-}"
+      native_archive_sha="sha256:${claude_archive_sha:-}"
+      native_version_line="${claude_version_line:-}"
       ;;
   esac
+  local -a native_manifest_args=()
+  if [[ -n "$native_kind" ]]; then
+    native_manifest_args=(
+      --native-kind "$native_kind"
+      --native-binary "$native_binary"
+      --native-binary-sha256 "$native_binary_sha"
+      --native-archive-sha256 "$native_archive_sha"
+      --native-version-line "$native_version_line"
+      --source-tree-digest "$source_tree_digest"
+    )
+  fi
   sudo python3 "$repo/scripts/ci/export-linux-v2-redacted-evidence.py" \
     manual "$evidence_directory" "$GITHUB_SHA" "$run_status" \
     --witness-root "$witness_root" --receipt-root "$receipt_root" \
@@ -307,20 +319,12 @@ sudo install -o root -g root -m 0755 "$pi_unpack/pi/pi" "$rootfs/usr/local/bin/p
 sudo install -o root -g root -m 0755 "$opencode_unpack/opencode" "$rootfs/usr/local/bin/opencode"
 if [[ "$fixture_case_set" == codex_containment ]]; then
   linux_v2_fetch_codex "$fixture_root"
-  sudo install -o root -g root -m 0755 "$codex_executable" "$rootfs/usr/local/bin/codex"
-  sudo install -o root -g root -m 0755 "$code_mode_host_executable" "$rootfs/usr/local/bin/codex-code-mode-host"
-  sudo install -o root -g root -m 0755 "$bwrap_executable" "$rootfs/usr/local/bin/bwrap"
-  [[ "$(sudo sha256sum "$rootfs/usr/local/bin/codex" | cut -d' ' -f1)" == "$codex_executable_sha" ]] ||
-    fail 'staged codex executable digest differs from the pinned codex release'
-  [[ "$(sudo sha256sum "$rootfs/usr/local/bin/codex-code-mode-host" | cut -d' ' -f1)" == "$code_mode_host_executable_sha" ]] ||
-    fail 'staged codex code-mode host digest differs from the pinned codex release'
-  [[ "$(sudo sha256sum "$rootfs/usr/local/bin/bwrap" | cut -d' ' -f1)" == "$bwrap_executable_sha" ]] ||
-    fail 'staged bwrap digest differs from the pinned codex release'
+  stage_guest_binary "$codex_executable" /usr/local/bin/codex "$codex_executable_sha" 'codex executable' codex
+  stage_guest_binary "$code_mode_host_executable" /usr/local/bin/codex-code-mode-host "$code_mode_host_executable_sha" 'codex code-mode host' codex
+  stage_guest_binary "$bwrap_executable" /usr/local/bin/bwrap "$bwrap_executable_sha" bwrap codex
 elif [[ "$fixture_case_set" == claude_containment ]]; then
   linux_v2_fetch_claude "$fixture_root"
-  sudo install -o root -g root -m 0755 "$claude_executable" "$rootfs/usr/local/bin/claude"
-  [[ "$(sudo sha256sum "$rootfs/usr/local/bin/claude" | cut -d' ' -f1)" == "$claude_executable_sha" ]] ||
-    fail 'staged claude executable digest differs from the pinned claude release'
+  stage_guest_binary "$claude_executable" /usr/local/bin/claude "$claude_executable_sha" 'claude executable' claude
 fi
 sudo install -o root -g root -m 0755 "$repo/scripts/install-linux-owner.sh" "$rootfs/root/install-linux-owner.sh"
 sudo install -d -o root -g root -m 0700 "$rootfs/root/symmetry-linux-owner-stage"
@@ -1551,13 +1555,11 @@ run_go_test() {
       if [[ -n "${codex_executable_sha:-}" ]]; then
         command+=(
           --setenv="SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_CODEX_BINARY_SHA256=sha256:$codex_executable_sha"
-          --setenv="SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_CODEX_ARCHIVE_SHA256=sha256:$codex_archive_sha"
         )
       fi
       if [[ -n "${claude_executable_sha:-}" ]]; then
         command+=(
           --setenv="SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_CLAUDE_BINARY_SHA256=sha256:$claude_executable_sha"
-          --setenv="SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_CLAUDE_ARCHIVE_SHA256=sha256:$claude_archive_sha"
         )
       fi
       ;;

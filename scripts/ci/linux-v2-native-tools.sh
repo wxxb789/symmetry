@@ -2,6 +2,15 @@
 # Shared fixed-version acquisition for installed-owner and rootless fixtures.
 # Caller owns a private destination and enables errexit, nounset and pipefail.
 
+linux_v2_fetch_archive() {
+  local url=$1 archive=$2 archive_sha=$3 unpack=$4
+  curl --fail --silent --show-error --location --retry 5 --retry-delay 2 --retry-max-time 120 --retry-all-errors \
+    "$url" --output "$archive"
+  printf '%s  %s\n' "$archive_sha" "$archive" | sha256sum --check --strict >/dev/null
+  mkdir "$unpack"
+  tar --extract --file "$archive" --directory "$unpack"
+}
+
 linux_v2_fetch_pi() {
   local destination=$1
   local pi_url='https://github.com/earendil-works/pi/releases/download/v1.5.2/pi-linux-x64.tar.gz'
@@ -58,26 +67,14 @@ linux_v2_fetch_codex() {
   code_mode_host_executable_sha='e1a56831a087bfeb1a91d43b7265fd1c38b898396b09ab357dc751d641ad25bd'
   code_mode_host_unpack="$destination/codex-code-mode-host-release"
   code_mode_host_executable="$code_mode_host_unpack/codex-code-mode-host-x86_64-unknown-linux-musl"
-  curl --fail --silent --show-error --location --retry 5 --retry-delay 2 --retry-max-time 120 --retry-all-errors \
-    "$codex_url" --output "$codex_archive"
-  printf '%s  %s\n' "$codex_archive_sha" "$codex_archive" | sha256sum --check --strict >/dev/null
-  mkdir "$codex_unpack"
-  tar --extract --file "$codex_archive" --directory "$codex_unpack"
+  linux_v2_fetch_archive "$codex_url" "$codex_archive" "$codex_archive_sha" "$codex_unpack"
   test -x "$codex_executable"
   test "$(sha256sum "$codex_executable" | cut -d' ' -f1)" = "$codex_executable_sha"
   test "$(timeout 30s "$codex_executable" --version)" = "$codex_version_line"
-  curl --fail --silent --show-error --location --retry 5 --retry-delay 2 --retry-max-time 120 --retry-all-errors \
-    "$bwrap_url" --output "$bwrap_archive"
-  printf '%s  %s\n' "$bwrap_archive_sha" "$bwrap_archive" | sha256sum --check --strict >/dev/null
-  mkdir "$bwrap_unpack"
-  tar --extract --file "$bwrap_archive" --directory "$bwrap_unpack"
+  linux_v2_fetch_archive "$bwrap_url" "$bwrap_archive" "$bwrap_archive_sha" "$bwrap_unpack"
   test -x "$bwrap_executable"
   test "$(sha256sum "$bwrap_executable" | cut -d' ' -f1)" = "$bwrap_executable_sha"
-  curl --fail --silent --show-error --location --retry 5 --retry-delay 2 --retry-max-time 120 --retry-all-errors \
-    "$code_mode_host_url" --output "$code_mode_host_archive"
-  printf '%s  %s\n' "$code_mode_host_archive_sha" "$code_mode_host_archive" | sha256sum --check --strict >/dev/null
-  mkdir "$code_mode_host_unpack"
-  tar --extract --file "$code_mode_host_archive" --directory "$code_mode_host_unpack"
+  linux_v2_fetch_archive "$code_mode_host_url" "$code_mode_host_archive" "$code_mode_host_archive_sha" "$code_mode_host_unpack"
   test -x "$code_mode_host_executable"
   test "$(sha256sum "$code_mode_host_executable" | cut -d' ' -f1)" = "$code_mode_host_executable_sha"
 }
@@ -91,11 +88,7 @@ linux_v2_fetch_claude() {
   claude_version_line='2.1.323 (Claude Code)'
   claude_unpack="$destination/claude-release"
   claude_executable="$claude_unpack/claude"
-  curl --fail --silent --show-error --location --retry 5 --retry-delay 2 --retry-max-time 120 --retry-all-errors \
-    "$claude_url" --output "$claude_archive"
-  printf '%s  %s\n' "$claude_archive_sha" "$claude_archive" | sha256sum --check --strict >/dev/null
-  mkdir "$claude_unpack"
-  tar --extract --file "$claude_archive" --directory "$claude_unpack"
+  linux_v2_fetch_archive "$claude_url" "$claude_archive" "$claude_archive_sha" "$claude_unpack"
   test -x "$claude_executable"
   test "$(sha256sum "$claude_executable" | cut -d' ' -f1)" = "$claude_executable_sha"
   test "$(timeout 30s "$claude_executable" --version)" = "$claude_version_line"

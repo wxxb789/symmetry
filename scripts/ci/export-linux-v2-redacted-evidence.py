@@ -325,8 +325,8 @@ MANUAL_CASE_SET_FILES = {
     "claude_containment": {"claude-native-containment.json", "claude-stage-crash-replay-native-release.json"},
 }
 CONTAINMENT_KINDS = {
-    "codex": ("codex_containment", "codex_containment/TestProductionLinuxV2CodexNativeContainment.json"),
-    "claude_code": ("claude_containment", "claude_containment/TestProductionLinuxV2ClaudeNativeContainment.json"),
+    "codex": ("codex_containment", "codex-native-containment.json"),
+    "claude_code": ("claude_containment", "claude-native-containment.json"),
 }
 FORBIDDEN_KEYS = (
     "lease_token",
@@ -1468,9 +1468,8 @@ def main() -> int:
         fail(f"--native-kind {native_kind} requires --case-set {CONTAINMENT_KINDS[native_kind][0]}")
     if native_kind is not None and arguments.mode != "manual":
         fail("native containment export is available only in manual mode")
-    if arguments.source_tree_digest is not None and (
-        not arguments.source_tree_digest.startswith("sha256:")
-        or len(arguments.source_tree_digest) != len("sha256:") + 64
+    if arguments.source_tree_digest is not None and not re.fullmatch(
+        r"sha256:[0-9a-f]{64}", arguments.source_tree_digest
     ):
         fail("--source-tree-digest must be a sha256:<64 hex> tree digest")
     if native_kind is not None and arguments.source_tree_digest is None:
@@ -1544,6 +1543,7 @@ def main() -> int:
     missing = []
     incomplete_files = []
     failed_diagnostics = []
+    published_documents = {}
     expected_destinations = {target for _, target in expected}
     for source, target in expected:
         if pathlib.Path(target).name != target or target == "manifest.json":
@@ -1571,7 +1571,9 @@ def main() -> int:
                 data, document = read_regular(source, secret_values)
                 validate_compose_refusal(document, "pi" if target == "rootless-compose-pi.json" else "opencode")
             else:
-                data, _ = read_regular(source, secret_values)
+                data, document = read_regular(source, secret_values)
+                if native_kind is not None:
+                    published_documents[target] = document
         except FileNotFoundError:
             missing.append(target)
             continue
@@ -1582,10 +1584,8 @@ def main() -> int:
         copied.append({"file": target, "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()})
 
     if native_kind is not None:
-        source = witness_root / CONTAINMENT_KINDS[native_kind][1]
-        try:
-            _, document = read_regular(source, secret_values)
-        except FileNotFoundError:
+        document = published_documents.get(CONTAINMENT_KINDS[native_kind][1])
+        if document is None:
             fail("containment witness is unavailable")
         containment = document.get("containment")
         if document.get("native_binary") != native_binary:
@@ -1598,6 +1598,17 @@ def main() -> int:
             fail("containment witness subject.tree_digest does not match --source-tree-digest")
         if not isinstance(containment, dict) or not isinstance(containment.get("native_open_reached"), bool):
             fail("containment witness does not record a boolean containment.native_open_reached")
+        replay_names = MANUAL_CASE_SET_FILES[arguments.case_set] - {CONTAINMENT_KINDS[native_kind][1]}
+        if len(replay_names) != 1:
+            fail("containment case set does not publish exactly one per-kind replay witness")
+        replay_document = published_documents.get(next(iter(replay_names)))
+        if replay_document is None:
+            fail("containment replay witness is unavailable")
+        if (
+            replay_document.get("harness") != native_kind
+            or replay_document.get("native_version_line") != native_version_line
+        ):
+            fail("containment replay witness does not bind the pinned kind and version line")
 
     # A failed witness run is the one case whose daemon-side stall the uploaded
     # evidence must explain, so the restarted daemon's log tails are published

@@ -404,7 +404,7 @@ func linuxV2ValidateOwnerWitnessResponse(fixture linuxV2NativeFixture, response 
 			"claude_code": linuxV2ClaudeBinaryDigestEnvironment,
 		}[request.Harness]
 		expected := strings.TrimSpace(os.Getenv(digestEnvironment))
-		if digestEnvironment == "" || expected == "" || response.NativeBinary != fixture.profile.Command ||
+		if expected == "" || response.NativeBinary != fixture.profile.Command ||
 			response.NativeBinarySHA256 != expected {
 			return errors.New("native containment response does not bind the staged root-owned executable digest")
 		}
@@ -1850,10 +1850,7 @@ func runProductionLinuxV2StageCrashReplayCase(
 	}
 	witness.HealthPeerOK = response.Health != nil && response.Health.Healthy && response.Health.PeerVerified && response.Health.NetworkNamespaceVerified
 	witness.LeafAbsent = response.Release != nil && response.Release.LeafRemoved
-	witness.NativeBinary = response.NativeBinary
-	witness.NativeBinarySHA256 = response.NativeBinarySHA256
-	witness.NativeVersionLine = linuxV2PinnedNativeVersionLine(testCase.harness)
-	witness.Containment = response.Containment
+	_, witness.NativeVersionLine = linuxV2PinnedNativeVersions(testCase.harness)
 	if witness.Clone == nil {
 		witness.Clone = linuxV2CloneSnapshotFromResponse(response.Clone)
 	}
@@ -4507,7 +4504,7 @@ func runProductionLinuxV2NativeOwnerWitness(t *testing.T, testCase linuxV2Native
 	witness.LeafAbsent = response.Release != nil && response.Release.LeafRemoved
 	witness.NativeBinary = response.NativeBinary
 	witness.NativeBinarySHA256 = response.NativeBinarySHA256
-	witness.NativeVersionLine = linuxV2PinnedNativeVersionLine(testCase.harness)
+	_, witness.NativeVersionLine = linuxV2PinnedNativeVersions(testCase.harness)
 	witness.Containment = response.Containment
 	if witness.Process == nil && response.Target != nil {
 		witness.Process = linuxV2ProcessSnapshotFromResponse(response.Target, response.Health)

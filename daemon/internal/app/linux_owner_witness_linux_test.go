@@ -1066,19 +1066,44 @@ func TestLinuxV2NativeWitnessContainmentSelectsTheOpenOnlyPath(t *testing.T) {
 }
 
 func TestLinuxV2NativeWitnessContainmentSummaryRequiresTheOpenBoundary(t *testing.T) {
-	run := &linuxV2NativeWitnessRun{request: linuxV2NativeWitnessRequest{Case: "codex_containment", Harness: config.RuntimeHarnessCodex}}
-	run.summary = linuxV2NativeWitnessSummary{Case: "codex_containment", Harness: config.RuntimeHarnessCodex}
+	run := &linuxV2NativeWitnessRun{
+		request: linuxV2NativeWitnessRequest{Case: "codex_containment", Harness: config.RuntimeHarnessCodex},
+		summary: linuxV2NativeWitnessSummary{
+			Case:    "codex_containment",
+			Harness: config.RuntimeHarnessCodex,
+			Stages: linuxV2NativeWitnessStages{
+				ReservationDurable: true, CreateStarted: true, LeafBound: true, HelperBound: true,
+				LauncherBound: true, GateBound: true, HandoffPrepared: true, HandoffCommitted: true,
+				InitialLeaseAcked: true, CheckoutReady: true, NativeReleased: true,
+			},
+			Owners: linuxV2NativeWitnessOwners{Gate: linuxV2NativeWitnessProcess{PID: 42, Identity: "target"}},
+			Target: linuxV2NativeWitnessTarget{
+				PID: 42, Identity: "target", PIDFDVerified: true, SamePIDExec: true,
+				UserNamespace:    linuxV2NativeWitnessNamespace{Device: 1, Inode: 2},
+				NetworkNamespace: linuxV2NativeWitnessNamespace{Device: 3, Inode: 4},
+			},
+			NativeReleaseState: linuxV2NativeWitnessNativeReleaseReleased,
+			NativeBinary:       "/usr/local/bin/codex",
+			NativeBinarySHA256: "sha256:" + strings.Repeat("a", 64),
+			Stop: linuxV2NativeWitnessStop{
+				ReceiptVersion: authority.SupervisorHandoffVersionV2, KillAcknowledged: true, PopulatedZero: true,
+				NoMigrationObserved: true, ProducerFenced: true, DescendantsReaped: true,
+			},
+			Release: linuxV2NativeWitnessRelease{
+				OpaquePlatformRelease: true, LeafRemoved: true, ClearPersisted: true, AnchorRetired: true,
+			},
+		},
+	}
 	if err := run.validateFinalSummary(); err == nil || !strings.Contains(err.Error(), "credential-free native Open") {
 		t.Fatalf("containment summary without the Open boundary error = %v", err)
 	}
 	run.summary.Containment = &linuxV2NativeWitnessContainment{NativeOpenReached: true}
+	run.summary.NativeBinary = ""
 	if err := run.validateFinalSummary(); err == nil || !strings.Contains(err.Error(), "executable path or digest") {
 		t.Fatalf("containment summary without the binary digest error = %v", err)
 	}
 	run.summary.NativeBinary = "/usr/local/bin/codex"
-	run.summary.NativeBinarySHA256 = "sha256:" + strings.Repeat("a", 64)
-	if err := run.validateFinalSummary(); err != nil &&
-		(strings.Contains(err.Error(), "credential-free native Open") || strings.Contains(err.Error(), "executable path or digest")) {
+	if err := run.validateFinalSummary(); err != nil {
 		t.Fatalf("satisfied containment boundary was rejected: %v", err)
 	}
 }
