@@ -424,7 +424,7 @@ module return `sha256:1831626e62b934f63cf3abd59d3e5ed73e5a21d898eccd6e7d349ae116
 | (h) drop the tab-separator check (review 238 P2-1) | `tree_records`: `if not separator or len(fields) != 3:` loses `not separator` | linux `test_a_listing_that_is_not_a_record_refuses_as_an_invalid_source_object` `FAILED (failures=1)`, exit 1: `AssertionError: a malformed tree record must be refused before any blob read` - the mocked `cat-file` was started, so the strengthened pin discriminates (before it, this mutant survived) |
 | (i) admit only `FILE_MODES` in the index variant (review 238 P3-2) | `index_mode_digest` calls `committed_tree_digest(..., modes=FILE_MODES)` | linux `test_a_symlink_record_is_admitted_by_the_any_mode_rule` `FAILED (failures=1)`, exit 1: `1 != 0 : source tree contains a non-blob entry` (the committed `120000` record is refused); before the pin the mutant survived linux and omo |
 
-| `git diff --numstat` over the five suites is `33/0`, `71/0`, `10/0`, `89/0`, `24/0`
+`git diff --numstat` over the five suites is `33/0`, `71/0`, `10/0`, `89/0`, `24/0`
 (insertions/deletions, alphabetical by path: credentialed-provider-witness, linux-v2-source-subject,
 model-routing-source-subject, omo-control-native-evidence, opencode-v2-support-witness): every hunk
 is an insertion, so no assertion is deleted or re-pinned, and the apply pass's two converted oracles
