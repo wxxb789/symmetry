@@ -7,6 +7,7 @@ import pathlib
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 import citest
 from testsupport.gitfixture import FixtureRepo
@@ -89,6 +90,21 @@ class SourceSubjectTests(FixtureRepo, unittest.TestCase):
                     json.loads(result.stdout),
                     {"commit": commit, "tree_digest": expected(module_bytes)},
                 )
+
+    def test_a_listing_that_is_not_a_record_refuses_as_an_invalid_source_object(self) -> None:
+        tool = citest.load_gate(SCRIPT, "linux_v2_source_subject")
+        real_check_output = subprocess.check_output
+
+        def fake_check_output(argv, **options):
+            if "ls-tree" in argv:
+                return b"100644 blob deadbeef"
+            return real_check_output(argv, **options)
+
+        with (
+            mock.patch.object(subprocess, "check_output", side_effect=fake_check_output),
+            self.assertRaisesRegex(SystemExit, "Git returned an invalid source object"),
+        ):
+            tool.source_subject(str(self.repo), self.commit_sha)
 
 
 if __name__ == "__main__":

@@ -68,6 +68,14 @@ class WitnessLauncherTests(FixtureRepo, unittest.TestCase):
             ["mix", *args], cwd=self.root / "control", env=self.environment, capture_output=True, check=True
         ).stdout
 
+    def test_usage_declares_the_shared_module_in_the_manifest_scope(self):
+        result = citest.run_gate(ROOT / "scripts/ci/credentialed-provider-witness.py", "--help")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            "the witness scripts plus the shared scripts/ci/source_subject.py module",
+            " ".join(result.stdout.split()),
+        )
+
     def test_launcher_force_compiles_stale_beam_before_first_phase(self):
         self.mix("compile")
         timestamp = self.module.stat().st_mtime_ns
