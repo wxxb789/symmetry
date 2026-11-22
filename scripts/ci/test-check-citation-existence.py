@@ -200,13 +200,7 @@ class CitationExistenceTests(FixtureRepo, unittest.TestCase):
             GIT_CONFIG_KEY_0="diff.orderFile",
             GIT_CONFIG_VALUE_0=str(self.root / "missing-order-file"),
         )
-        result = subprocess.run(
-            [sys.executable, str(SCRIPT), "--repo", str(self.repo), "--base", self.base, "--head", head],
-            capture_output=True,
-            text=True,
-            check=False,
-            env=environment,
-        )
+        result = citest.run_gate(SCRIPT, "--repo", str(self.repo), "--base", self.base, "--head", head, env=environment)
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("cannot diff", result.stderr)
 
@@ -218,19 +212,14 @@ class CitationExistenceTests(FixtureRepo, unittest.TestCase):
     def test_a_repository_without_a_base_refuses(self) -> None:
         orphan = self.root / "orphan-repository"
         orphan.mkdir()
-        subprocess.check_call(["git", "init", "--quiet"], cwd=str(orphan))
-        subprocess.check_call(["git", "config", "user.name", "Fixture"], cwd=str(orphan))
-        subprocess.check_call(["git", "config", "user.email", "fixture@example.invalid"], cwd=str(orphan))
+        citest.git(orphan, "init", "--quiet")
+        citest.git(orphan, "config", "user.name", "Fixture")
+        citest.git(orphan, "config", "user.email", "fixture@example.invalid")
         (orphan / "docs" / "runbooks").mkdir(parents=True)
         (orphan / "docs" / "runbooks" / "portal.md").write_text(CLEAN_RUNBOOK, encoding="utf-8")
-        subprocess.check_call(["git", "add", "-A"], cwd=str(orphan))
-        subprocess.check_call(["git", "commit", "--quiet", "-m", "only commit"], cwd=str(orphan))
-        result = subprocess.run(
-            [sys.executable, str(SCRIPT), "--repo", str(orphan), "--base", ZERO],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        citest.git(orphan, "add", "-A")
+        citest.git(orphan, "commit", "--quiet", "-m", "only commit")
+        result = citest.run_gate(SCRIPT, "--repo", str(orphan), "--base", ZERO)
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("cannot resolve a comparison base", result.stderr)
 
@@ -614,22 +603,16 @@ class CitationExistenceTests(FixtureRepo, unittest.TestCase):
         # which audits no document here - and pass vacuously instead of refusing the
         # stale citation this repository's range holds.
         other = self.root / "other-repository"
-        subprocess.check_call(["git", "clone", "--quiet", str(self.repo), str(other)])
-        subprocess.check_call(["git", "config", "user.name", "Fixture"], cwd=str(other))
-        subprocess.check_call(["git", "config", "user.email", "fixture@example.invalid"], cwd=str(other))
+        citest.git(self.root, "clone", "--quiet", str(self.repo), str(other))
+        citest.git(other, "config", "user.name", "Fixture")
+        citest.git(other, "config", "user.email", "fixture@example.invalid")
         (other / "daemon").mkdir(exist_ok=True)
         (other / "daemon" / "main.go").write_text("package main\n\nfunc main() {}\n", encoding="utf-8", newline="\n")
-        subprocess.check_call(["git", "add", "-A"], cwd=str(other))
-        subprocess.check_call(["git", "commit", "--quiet", "-m", "change only unrelated code"], cwd=str(other))
+        citest.git(other, "add", "-A")
+        citest.git(other, "commit", "--quiet", "-m", "change only unrelated code")
         self.cite_in_runbook("`docs/runbooks/moved.md`", "cite a moved path")
         environment = dict(os.environ, GIT_DIR=str(other / ".git"))
-        result = subprocess.run(
-            [sys.executable, str(SCRIPT), "--repo", str(self.repo), "--base", "HEAD^", "--head", "HEAD"],
-            capture_output=True,
-            text=True,
-            check=False,
-            env=environment,
-        )
+        result = citest.run_gate(SCRIPT, "--repo", str(self.repo), "--base", "HEAD^", "--head", "HEAD", env=environment)
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("moved.md", result.stderr)
         self.assertNotIn("nothing to check", result.stdout)

@@ -76,16 +76,15 @@ class RepositoryInSubdirectoryTests(FixtureRepo, unittest.TestCase):
         self.assertEqual(outside.read_bytes(), b"content\n")
 
 
-class _Probe(FixtureRepo, unittest.TestCase):
-    REPOSITORY_PREFIX = "gitfixture-probe-"
-    REPOSITORY_DIRECTORY = None
-
-    def runTest(self):
-        pass
-
-
 class LifecycleTests(unittest.TestCase):
     def test_the_temporary_root_is_removed_when_the_case_finishes(self):
+        class _Probe(FixtureRepo, unittest.TestCase):
+            REPOSITORY_PREFIX = "gitfixture-probe-"
+            REPOSITORY_DIRECTORY = None
+
+            def runTest(self):
+                pass
+
         probe = _Probe()
         probe.setUp()
         root = probe.root

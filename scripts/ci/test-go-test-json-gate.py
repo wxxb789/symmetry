@@ -208,19 +208,13 @@ class RunAndAssertTests(GateTestCase):
         self.assertIn("verified TestProviderBridgeCloseReleasesBoundPeerFD", result.stdout)
 
     def test_powershell_command_separator_is_accepted(self):
-        result = subprocess.run(
-            [
-                sys.executable,
-                str(SCRIPT),
-                "--events",
-                str(self.events_path),
-                *self.group(PACKAGE, TEST),
-                "--command",
-                *fake_command(passing_events()),
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
+        result = citest.run_gate(
+            SCRIPT,
+            "--events",
+            str(self.events_path),
+            *self.group(PACKAGE, TEST),
+            "--command",
+            *fake_command(passing_events()),
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.events_path.read_text(encoding="utf-8"), passing_events())
@@ -309,26 +303,18 @@ class StdioBoundaryTests(GateTestCase):
 
 
 class ArgumentTests(unittest.TestCase):
-    def run_script(self, arguments):
-        return subprocess.run(
-            [sys.executable, str(SCRIPT), *arguments],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-
     def test_command_separator_is_required(self):
-        result = self.run_script(["--events", "events.json", TEST])
+        result = citest.run_gate(SCRIPT, "--events", "events.json", TEST)
         self.assertEqual(result.returncode, 1)
         self.assertIn("requires `--`", result.stderr)
 
     def test_command_is_required(self):
-        result = self.run_script(["--events", "events.json", "--assert", PACKAGE, TEST, "--"])
+        result = citest.run_gate(SCRIPT, "--events", "events.json", "--assert", PACKAGE, TEST, "--")
         self.assertEqual(result.returncode, 1)
         self.assertIn("requires a command", result.stderr)
 
     def test_assertion_group_is_required(self):
-        result = self.run_script(["--events", "events.json", "--", "true"])
+        result = citest.run_gate(SCRIPT, "--events", "events.json", "--", "true")
         self.assertEqual(result.returncode, 1)
         self.assertIn("requires at least one --assert group", result.stderr)
 

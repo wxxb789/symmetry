@@ -11,7 +11,6 @@ stay literal; a real host path is refused).
 import os
 import pathlib
 import subprocess
-import sys
 import unittest
 
 import citest
@@ -175,19 +174,14 @@ class RecordCleanlinessTests(FixtureRepo, unittest.TestCase):
         # against: refusing is the only safe outcome.
         orphan = self.root / "orphan-repository"
         orphan.mkdir()
-        subprocess.check_call(["git", "init", "--quiet"], cwd=str(orphan))
-        subprocess.check_call(["git", "config", "user.name", "Fixture"], cwd=str(orphan))
-        subprocess.check_call(["git", "config", "user.email", "fixture@example.invalid"], cwd=str(orphan))
+        citest.git(orphan, "init", "--quiet")
+        citest.git(orphan, "config", "user.name", "Fixture")
+        citest.git(orphan, "config", "user.email", "fixture@example.invalid")
         (orphan / "docs" / "evidence").mkdir(parents=True)
         (orphan / "docs" / "evidence" / "record.md").write_text("clean\n", encoding="utf-8")
-        subprocess.check_call(["git", "add", "-A"], cwd=str(orphan))
-        subprocess.check_call(["git", "commit", "--quiet", "-m", "only commit"], cwd=str(orphan))
-        result = subprocess.run(
-            [sys.executable, str(SCRIPT), "--repo", str(orphan), "--base", ZERO],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        citest.git(orphan, "add", "-A")
+        citest.git(orphan, "commit", "--quiet", "-m", "only commit")
+        result = citest.run_gate(SCRIPT, "--repo", str(orphan), "--base", ZERO)
         self.assertEqual(result.returncode, 2, result.stdout)
         self.assertIn("cannot resolve a comparison base", result.stderr)
 
@@ -285,13 +279,7 @@ class RecordCleanlinessTests(FixtureRepo, unittest.TestCase):
             GIT_CONFIG_KEY_0="diff.orderFile",
             GIT_CONFIG_VALUE_0=str(self.root / "missing-order-file"),
         )
-        result = subprocess.run(
-            [sys.executable, str(SCRIPT), "--repo", str(self.repo), "--base", self.base, "--head", head],
-            capture_output=True,
-            text=True,
-            check=False,
-            env=environment,
-        )
+        result = citest.run_gate(SCRIPT, "--repo", str(self.repo), "--base", self.base, "--head", head, env=environment)
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("cannot diff", result.stderr)
 

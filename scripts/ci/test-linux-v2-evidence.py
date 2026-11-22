@@ -9,7 +9,6 @@ import json
 import os
 import pathlib
 import re
-import subprocess
 import tempfile
 import unittest
 
@@ -363,9 +362,6 @@ class ExporterTest(unittest.TestCase):
     def write_log(self, path: pathlib.Path, lines: list[bytes]) -> bytes:
         return citest.write_bytes(path, b"\n".join(lines) + b"\n", mode=0o600)
 
-    def run_export(self, *arguments: str) -> subprocess.CompletedProcess[str]:
-        return citest.run_gate(SCRIPT, *arguments)
-
     def populate_legacy(
         self, source: pathlib.Path, raw_secret: str = "RAW-PRIVATE-SECRET"
     ) -> dict[pathlib.Path, bytes]:
@@ -379,7 +375,7 @@ class ExporterTest(unittest.TestCase):
         source = self.private_dir("source")
         output = self.private_dir("output")
         originals = self.populate_legacy(source)
-        result = self.run_export("legacy", str(output), "1" * 40, "passed", "--witness-root", str(source))
+        result = citest.run_gate(SCRIPT, "legacy", str(output), "1" * 40, "passed", "--witness-root", str(source))
         self.assertEqual(result.returncode, 0, result.stderr)
         manifest = json.loads((output / "manifest.json").read_text())
         self.assertEqual((manifest["status"], manifest["complete"], len(manifest["files"])), ("passed", True, 16))
@@ -424,7 +420,7 @@ class ExporterTest(unittest.TestCase):
         snapshot.pop("process_identity")
         snapshot["handoff"].update({"supervisor_pid": 0, "supervisor_identity": "", "has_stop_receipt": False})
         original = self.write_json(path, value)
-        result = self.run_export("legacy", str(output), "1" * 40, "passed", "--witness-root", str(source))
+        result = citest.run_gate(SCRIPT, "legacy", str(output), "1" * 40, "passed", "--witness-root", str(source))
         self.assertEqual(result.returncode, 0, result.stderr)
         handoff = json.loads((output / "prepare-before-bind.json").read_text())["journal_snapshots"][0]["handoff"]
         self.assertEqual(
@@ -452,7 +448,9 @@ class ExporterTest(unittest.TestCase):
                 snapshot["handoff"].update({"supervisor_pid": 0, "supervisor_identity": "", "has_stop_receipt": False})
                 snapshot[contradiction] = bound[contradiction]
                 original = self.write_json(path, value)
-                result = self.run_export("legacy", str(output), "1" * 40, "passed", "--witness-root", str(source))
+                result = citest.run_gate(
+                    SCRIPT, "legacy", str(output), "1" * 40, "passed", "--witness-root", str(source)
+                )
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("unbound handoff contradicts", result.stderr)
                 self.assertEqual(path.read_bytes(), original)
@@ -477,7 +475,9 @@ class ExporterTest(unittest.TestCase):
                     {"supervisor_pid": pid, "supervisor_identity": "", "has_stop_receipt": has_receipt}
                 )
                 self.write_json(path, value)
-                result = self.run_export("legacy", str(output), "1" * 40, "passed", "--witness-root", str(source))
+                result = citest.run_gate(
+                    SCRIPT, "legacy", str(output), "1" * 40, "passed", "--witness-root", str(source)
+                )
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("bounded safe value", result.stderr)
 
@@ -490,7 +490,7 @@ class ExporterTest(unittest.TestCase):
             value["journal_snapshots"] = []
             value["process_snapshots"] = []
             originals[path] = self.write_json(path, value)
-        result = self.run_export("legacy", str(output), "1" * 40, "passed", "--witness-root", str(source))
+        result = citest.run_gate(SCRIPT, "legacy", str(output), "1" * 40, "passed", "--witness-root", str(source))
         self.assertNotEqual(result.returncode, 0)
         manifest = json.loads((output / "manifest.json").read_text())
         self.assertEqual(manifest["status"], "failed")
@@ -508,7 +508,7 @@ class ExporterTest(unittest.TestCase):
         value["journal_snapshots"] = None
         value["process_snapshots"] = None
         self.write_json(path, value)
-        result = self.run_export("legacy", str(output), "1" * 40, "passed", "--witness-root", str(source))
+        result = citest.run_gate(SCRIPT, "legacy", str(output), "1" * 40, "passed", "--witness-root", str(source))
         self.assertNotEqual(result.returncode, 0)
         manifest = json.loads((output / "manifest.json").read_text())
         self.assertEqual(manifest["status"], "failed")
@@ -543,8 +543,8 @@ class ExporterTest(unittest.TestCase):
                         ("failed", "passed") if stage in ("cancel_api_409_failed_run", "complete") else ("failed",)
                     ):
                         output = self.private_dir(f"{name}-output-{index}-{run_status}")
-                        result = self.run_export(
-                            "legacy", str(output), "1" * 40, run_status, "--witness-root", str(source)
+                        result = citest.run_gate(
+                            SCRIPT, "legacy", str(output), "1" * 40, run_status, "--witness-root", str(source)
                         )
                         if run_status == "failed":
                             self.assertEqual(result.returncode, 0, result.stderr)
@@ -603,7 +603,7 @@ class ExporterTest(unittest.TestCase):
                         secret_file = self.root / f"{name}-stage-secrets"
                         secret_file.write_bytes(stage.encode() + b"\0")
                         arguments.extend(("--secret-values-file", str(secret_file)))
-                    result = self.run_export(*arguments)
+                    result = citest.run_gate(SCRIPT, *arguments)
                     self.assertNotEqual(result.returncode, 0)
                     self.assertIn(
                         "configured credential value" if credential else "stage is not allowlisted", result.stderr
@@ -622,7 +622,7 @@ class ExporterTest(unittest.TestCase):
         value = legacy_fixture("scan-failure")
         value["stage"] = "cancel_api_409_failed_run"
         original = self.write_json(path, value)
-        result = self.run_export("legacy", str(output), "1" * 40, "failed", "--witness-root", str(source))
+        result = citest.run_gate(SCRIPT, "legacy", str(output), "1" * 40, "failed", "--witness-root", str(source))
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("negative evidence contains unknown fields: stage", result.stderr)
         self.assertNotIn(value["stage"], result.stdout + result.stderr)
@@ -640,7 +640,9 @@ class ExporterTest(unittest.TestCase):
                 value = json.loads(path.read_text())
                 del value["journal_snapshots"][0][nested][required_field]
                 original = self.write_json(path, value)
-                result = self.run_export("legacy", str(output), "1" * 40, "passed", "--witness-root", str(source))
+                result = citest.run_gate(
+                    SCRIPT, "legacy", str(output), "1" * 40, "passed", "--witness-root", str(source)
+                )
                 self.assertNotEqual(result.returncode, 0)
                 if (output / "manifest.json").exists():
                     self.assertNotEqual(json.loads((output / "manifest.json").read_text())["status"], "passed")
@@ -654,7 +656,7 @@ class ExporterTest(unittest.TestCase):
         value = json.loads(path.read_text())
         value["provider_token"] = "must-not-be-trusted"
         self.write_json(path, value)
-        result = self.run_export("legacy", str(output), "1" * 40, "failed", "--witness-root", str(source))
+        result = citest.run_gate(SCRIPT, "legacy", str(output), "1" * 40, "failed", "--witness-root", str(source))
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("unknown fields", result.stderr)
 
@@ -664,7 +666,8 @@ class ExporterTest(unittest.TestCase):
         self.populate_legacy(source)
         secret_file = self.root / "secrets"
         secret_file.write_bytes(b"recovered_and_cleared\0")
-        result = self.run_export(
+        result = citest.run_gate(
+            SCRIPT,
             "legacy",
             str(output),
             "1" * 40,
@@ -686,7 +689,7 @@ class ExporterTest(unittest.TestCase):
         link = source / LEGACY_NAMES[0] / "witness-evidence.json"
         link.unlink()
         link.symlink_to(victim)
-        result = self.run_export("legacy", str(output), "1" * 40, "failed", "--witness-root", str(source))
+        result = citest.run_gate(SCRIPT, "legacy", str(output), "1" * 40, "failed", "--witness-root", str(source))
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("bounded regular file", result.stderr)
 
@@ -761,7 +764,7 @@ class ExporterTest(unittest.TestCase):
         self.write_log(
             source / case / "second-daemon.stderr.log", [b"run daemon: linux child subreaper: operation not permitted"]
         )
-        result = self.run_export("legacy", str(output), "1" * 40, "failed", "--witness-root", str(source))
+        result = citest.run_gate(SCRIPT, "legacy", str(output), "1" * 40, "failed", "--witness-root", str(source))
         self.assertEqual(result.returncode, 0, result.stderr)
         document = json.loads((output / f"{case}-second-daemon-stdout.json").read_text())
         self.assertEqual(
@@ -852,7 +855,7 @@ class ExporterTest(unittest.TestCase):
             source / case / "second-daemon.stdout.log",
             [json.dumps({"time": "2026-11-20T18:42:24Z", "level": "INFO", "msg": "runtime_registered"}).encode()],
         )
-        result = self.run_export("legacy", str(output), "1" * 40, "passed", "--witness-root", str(source))
+        result = citest.run_gate(SCRIPT, "legacy", str(output), "1" * 40, "passed", "--witness-root", str(source))
         self.assertEqual(result.returncode, 0, result.stderr)
         manifest = json.loads((output / "manifest.json").read_text())
         self.assertEqual(len(manifest["files"]), 16)
@@ -879,7 +882,7 @@ class ExporterTest(unittest.TestCase):
         unterminated.write_bytes(b"x" * (70 << 10))
         os.chmod(unterminated, 0o600)
         self.assertNotIn(b"\n", unterminated.read_bytes())
-        result = self.run_export("legacy", str(output), "1" * 40, "failed", "--witness-root", str(source))
+        result = citest.run_gate(SCRIPT, "legacy", str(output), "1" * 40, "failed", "--witness-root", str(source))
         self.assertEqual(result.returncode, 0, result.stderr)
         document = json.loads((output / f"{case}-second-daemon-stdout.json").read_text())
         self.assertTrue(document["truncated"])
@@ -905,7 +908,7 @@ class ExporterTest(unittest.TestCase):
         path = source / case / "second-daemon.stderr.log"
         path.write_bytes(b"")
         os.chmod(path, 0o600)
-        result = self.run_export("legacy", str(output), "1" * 40, "failed", "--witness-root", str(source))
+        result = citest.run_gate(SCRIPT, "legacy", str(output), "1" * 40, "failed", "--witness-root", str(source))
         self.assertEqual(result.returncode, 0, result.stderr)
         document = json.loads((output / f"{case}-second-daemon-stderr.json").read_text())
         self.assertEqual(
@@ -951,7 +954,7 @@ class ExporterTest(unittest.TestCase):
         ]
         raw = self.write_log(source / case / "second-daemon.stdout.log", lines)
         self.assertGreater(len(raw), 2 << 20)
-        result = self.run_export("legacy", str(output), "1" * 40, "failed", "--witness-root", str(source))
+        result = citest.run_gate(SCRIPT, "legacy", str(output), "1" * 40, "failed", "--witness-root", str(source))
         self.assertEqual(result.returncode, 0, result.stderr)
         document = json.loads((output / f"{case}-second-daemon-stdout.json").read_text())
         self.assertTrue(document["truncated"])
@@ -984,7 +987,9 @@ class ExporterTest(unittest.TestCase):
                 else:
                     path.unlink()
                     path.mkdir()
-                result = self.run_export("legacy", str(output), "1" * 40, "failed", "--witness-root", str(source))
+                result = citest.run_gate(
+                    SCRIPT, "legacy", str(output), "1" * 40, "failed", "--witness-root", str(source)
+                )
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("private regular file", result.stderr)
                 self.assertFalse((output / f"{case}-second-daemon-stdout.json").exists())
@@ -1016,7 +1021,8 @@ class ExporterTest(unittest.TestCase):
         secret_file = self.root / "log-secrets"
         secret_file.write_bytes(secret.encode() + b"\0")
         os.chmod(secret_file, 0o600)
-        result = self.run_export(
+        result = citest.run_gate(
+            SCRIPT,
             "legacy",
             str(output),
             "1" * 40,
@@ -1057,7 +1063,7 @@ class ExporterTest(unittest.TestCase):
                 ).encode()
             ],
         )
-        result = self.run_export("legacy", str(output), "1" * 40, "failed", "--witness-root", str(source))
+        result = citest.run_gate(SCRIPT, "legacy", str(output), "1" * 40, "failed", "--witness-root", str(source))
         self.assertEqual(result.returncode, 0, result.stderr)
         document = json.loads((output / f"{case}-second-daemon-stdout.json").read_text())
         self.assertEqual(document["messages"], [{"time": "2026-11-20T18:42:24Z", "level": "WARN"}])
@@ -1124,7 +1130,7 @@ class ExporterTest(unittest.TestCase):
     def test_missing_legacy_evidence_writes_failed_incomplete_manifest(self) -> None:
         source = self.private_dir("source")
         output = self.private_dir("output")
-        result = self.run_export("legacy", str(output), "1" * 40, "passed", "--witness-root", str(source))
+        result = citest.run_gate(SCRIPT, "legacy", str(output), "1" * 40, "passed", "--witness-root", str(source))
         self.assertNotEqual(result.returncode, 0)
         manifest = json.loads((output / "manifest.json").read_text())
         self.assertEqual(manifest["status"], "failed")
@@ -1145,7 +1151,7 @@ class ExporterTest(unittest.TestCase):
                 source / f"rootless-compose-{case}-diagnostic.json",
                 {"version": 1, "case": case, "outcome": "passed", "stage": "complete"},
             )
-        result = self.run_export("compose", str(output), "1" * 40, "passed", "--witness-root", str(source))
+        result = citest.run_gate(SCRIPT, "compose", str(output), "1" * 40, "passed", "--witness-root", str(source))
         self.assertEqual(result.returncode, 0, result.stderr)
         for name, data in expected.items():
             self.assertEqual((output / name).read_bytes(), data)
@@ -1181,7 +1187,9 @@ class ExporterTest(unittest.TestCase):
                 output = self.private_dir(f"output-{index}")
                 path = source / "rootless-compose-opencode.json"
                 original = self.write_json(path, compose_refusal("opencode") | change)
-                result = self.run_export("compose", str(output), "1" * 40, "failed", "--witness-root", str(source))
+                result = citest.run_gate(
+                    SCRIPT, "compose", str(output), "1" * 40, "failed", "--witness-root", str(source)
+                )
                 self.assertNotEqual(result.returncode, 0)
                 self.assertFalse((output / path.name).exists())
                 self.assertEqual(path.read_bytes(), original)
@@ -1206,7 +1214,9 @@ class ExporterTest(unittest.TestCase):
                     del value[omit]
                 path = source / f"rootless-compose-{harness}.json"
                 self.write_json(path, value)
-                result = self.run_export("compose", str(output), "1" * 40, "failed", "--witness-root", str(source))
+                result = citest.run_gate(
+                    SCRIPT, "compose", str(output), "1" * 40, "failed", "--witness-root", str(source)
+                )
                 self.assertNotEqual(result.returncode, 0)
                 self.assertFalse((output / path.name).exists())
 
@@ -1231,8 +1241,8 @@ class ExporterTest(unittest.TestCase):
                 original = self.write_json(source / name, diagnostic)
                 for run_status in ("failed", "passed"):
                     output = self.private_dir(f"output-{index}-{run_status}")
-                    result = self.run_export(
-                        "compose", str(output), "1" * 40, run_status, "--witness-root", str(source)
+                    result = citest.run_gate(
+                        SCRIPT, "compose", str(output), "1" * 40, run_status, "--witness-root", str(source)
                     )
                     if run_status == "failed":
                         self.assertEqual(result.returncode, 0, result.stderr)
@@ -1254,7 +1264,7 @@ class ExporterTest(unittest.TestCase):
                 source / f"rootless-compose-{case}-diagnostic.json",
                 {"version": 1, "case": case, "outcome": "passed", "stage": "complete"},
             )
-        result = self.run_export("compose", str(output), "1" * 40, "passed", "--witness-root", str(source))
+        result = citest.run_gate(SCRIPT, "compose", str(output), "1" * 40, "passed", "--witness-root", str(source))
         self.assertNotEqual(result.returncode, 0)
         manifest = json.loads((output / "manifest.json").read_text())
         self.assertEqual(manifest["status"], "failed")
@@ -1290,7 +1300,9 @@ class ExporterTest(unittest.TestCase):
                 output = self.private_dir(f"output-{index}")
                 name = f"rootless-compose-{case}-diagnostic.json"
                 original = self.write_json(source / name, base | change)
-                result = self.run_export("compose", str(output), "1" * 40, "failed", "--witness-root", str(source))
+                result = citest.run_gate(
+                    SCRIPT, "compose", str(output), "1" * 40, "failed", "--witness-root", str(source)
+                )
                 self.assertNotEqual(result.returncode, 0)
                 self.assertNotIn("private-error-with-credential", result.stdout + result.stderr)
                 self.assertEqual(list(output.iterdir()), [])
@@ -1308,7 +1320,7 @@ class ExporterTest(unittest.TestCase):
             if case == "pi":
                 value.update({"outcome": "failed", "stage": "claim_binding"})
             self.write_json(source / f"rootless-compose-{case}-diagnostic.json", value)
-        result = self.run_export("compose", str(output), "1" * 40, "passed", "--witness-root", str(source))
+        result = citest.run_gate(SCRIPT, "compose", str(output), "1" * 40, "passed", "--witness-root", str(source))
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(json.loads((output / "manifest.json").read_text())["status"], "failed")
 
@@ -1335,7 +1347,8 @@ class ExporterTest(unittest.TestCase):
                 )
                 secret_file = self.root / f"secrets-{index}"
                 secret_file.write_bytes(observation.encode() + b"\0")
-                result = self.run_export(
+                result = citest.run_gate(
+                    SCRIPT,
                     "compose",
                     str(output),
                     "1" * 40,
@@ -1368,7 +1381,9 @@ class ExporterTest(unittest.TestCase):
                     os.link(path, source / "private.json")
                 else:
                     path.write_bytes(path.read_bytes() + b" " * 2048)
-                result = self.run_export("compose", str(output), "1" * 40, "failed", "--witness-root", str(source))
+                result = citest.run_gate(
+                    SCRIPT, "compose", str(output), "1" * 40, "failed", "--witness-root", str(source)
+                )
                 self.assertNotEqual(result.returncode, 0)
                 self.assertFalse((output / "rootless-compose-pi-diagnostic.json").exists())
 
@@ -1385,7 +1400,8 @@ class ExporterTest(unittest.TestCase):
         secret_file = self.root / "secrets"
         secret_file.write_bytes(secret.encode() + b"\0")
         os.chmod(secret_file, 0o600)
-        result = self.run_export(
+        result = citest.run_gate(
+            SCRIPT,
             "compose",
             str(output),
             "1" * 40,
@@ -1421,7 +1437,8 @@ class ExporterTest(unittest.TestCase):
 
     def test_manual_missing_case_set_remains_rejected(self) -> None:
         output = self.private_dir("output")
-        result = self.run_export(
+        result = citest.run_gate(
+            SCRIPT,
             "manual",
             str(output),
             "1" * 40,

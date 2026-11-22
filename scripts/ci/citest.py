@@ -54,12 +54,11 @@ def git_environment():
     return environment
 
 
-def git(repository, *arguments, input=None, text=False):
+def git(repository, *arguments, input=None):
     return subprocess.run(
         ["git", "-C", str(repository), *arguments],
         input=input,
         capture_output=True,
-        text=text,
         check=True,
         env=git_environment(),
     )

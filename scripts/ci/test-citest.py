@@ -12,6 +12,88 @@ import citest
 SCRIPT = pathlib.Path(__file__).with_name("assert-folded-gates.py")
 
 
+def _absolute_repository_path(repository, printed):
+    path = pathlib.Path(printed)
+    return path.resolve() if path.is_absolute() else (repository / path).resolve()
+
+
+def _assert_git_dir_is_dropped(case):
+    other = case.root / "git-dir-other"
+    other.mkdir()
+    citest.git(other, "init", "--quiet")
+    with mock.patch.dict(os.environ, {"GIT_DIR": str(other / ".git")}):
+        absolute = citest.git_text(case.repo, "rev-parse", "--absolute-git-dir")
+    case.assertEqual(_absolute_repository_path(case.repo, absolute), (case.repo / ".git").resolve())
+
+
+def _assert_git_work_tree_is_dropped(case):
+    sibling = case.root / "work-tree-sibling"
+    sibling.mkdir()
+    with mock.patch.dict(os.environ, {"GIT_WORK_TREE": str(sibling)}):
+        toplevel = citest.git_text(case.repo, "rev-parse", "--show-toplevel")
+    case.assertEqual(_absolute_repository_path(case.repo, toplevel), case.repo.resolve())
+
+
+def _assert_git_index_file_is_dropped(case):
+    sibling = case.root / "index-sibling"
+    sibling.mkdir()
+    alt_index = sibling / "alt-index"
+    (case.repo / "tracked.txt").write_text("tracked\n", encoding="utf-8")
+    with mock.patch.dict(os.environ, {"GIT_INDEX_FILE": str(alt_index)}):
+        citest.git(case.repo, "add", "-A")
+    case.assertFalse(alt_index.exists())
+    case.assertTrue((case.repo / ".git" / "index").exists())
+
+
+def _assert_git_object_directory_is_dropped(case):
+    sibling = case.root / "object-sibling"
+    sibling.mkdir()
+    with mock.patch.dict(os.environ, {"GIT_OBJECT_DIRECTORY": str(sibling / "objects")}):
+        sha = citest.git(case.repo, "hash-object", "-w", "--stdin", input=b"content\n").stdout.decode("ascii").strip()
+    case.assertTrue((case.repo / ".git" / "objects" / sha[:2] / sha[2:]).exists())
+
+
+def _assert_git_common_dir_is_dropped(case):
+    other = case.root / "common-other"
+    other.mkdir()
+    citest.git(other, "init", "--quiet")
+    with mock.patch.dict(os.environ, {"GIT_COMMON_DIR": str(other / ".git")}):
+        common = citest.git_text(case.repo, "rev-parse", "--git-common-dir")
+    case.assertEqual(_absolute_repository_path(case.repo, common), (case.repo / ".git").resolve())
+
+
+def _assert_git_alternate_object_directories_is_dropped(case):
+    donor = case.root / "donor"
+    donor.mkdir()
+    citest.git(donor, "init", "--quiet")
+    sha = citest.git(donor, "hash-object", "-w", "--stdin", input=b"donor\n").stdout.decode("ascii").strip()
+    alternates = str(donor / ".git" / "objects")
+    control = subprocess.run(
+        ["git", "-C", str(case.repo), "cat-file", "-t", sha],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=dict(os.environ, GIT_ALTERNATE_OBJECT_DIRECTORIES=alternates),
+    )
+    case.assertEqual(control.returncode, 0)
+    case.assertEqual(control.stdout.strip(), "blob")
+    with (
+        mock.patch.dict(os.environ, {"GIT_ALTERNATE_OBJECT_DIRECTORIES": alternates}),
+        case.assertRaises(subprocess.CalledProcessError),
+    ):
+        citest.git(case.repo, "cat-file", "-t", sha)
+
+
+PROBES = {
+    "GIT_DIR": _assert_git_dir_is_dropped,
+    "GIT_WORK_TREE": _assert_git_work_tree_is_dropped,
+    "GIT_INDEX_FILE": _assert_git_index_file_is_dropped,
+    "GIT_OBJECT_DIRECTORY": _assert_git_object_directory_is_dropped,
+    "GIT_COMMON_DIR": _assert_git_common_dir_is_dropped,
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES": _assert_git_alternate_object_directories_is_dropped,
+}
+
+
 class LoadGateTests(unittest.TestCase):
     def test_a_gate_loads_under_the_requested_module_name(self):
         module = citest.load_gate(SCRIPT, "folded_gate_under_test")
@@ -60,6 +142,12 @@ class RunGateTests(unittest.TestCase):
         self.assertEqual(json.loads(result.stdout)["cwd"], self.root.parent.name)
         self.assertEqual(result.stderr, f"marker={self.root / 'marker'}\n")
 
+    def test_a_timeout_raises_instead_of_returning_a_default(self):
+        script = self.root / "slow-gate.py"
+        script.write_text("import time\ntime.sleep(5)\n", encoding="utf-8")
+        with self.assertRaises(subprocess.TimeoutExpired):
+            citest.run_gate(script, timeout=0.5)
+
 
 class GitTests(unittest.TestCase):
     def setUp(self):
@@ -92,6 +180,19 @@ class GitTests(unittest.TestCase):
     def test_an_input_is_written_to_the_child(self):
         completed = citest.git(self.repo, "hash-object", "--stdin", input=b"content\n")
         self.assertEqual(len(completed.stdout.strip()), 40)
+
+    def test_every_inherited_repository_variable_is_dropped(self):
+        self.assertEqual(set(PROBES), set(citest.GIT_REPOSITORY_VARIABLES))
+        for name, probe in PROBES.items():
+            with self.subTest(variable=name):
+                probe(self)
+
+    def test_a_caller_pinned_git_config_global_reaches_git(self):
+        config = self.root / "pinned-global-config"
+        config.write_text("[citest]\n\tmarker = pinned\n", encoding="utf-8")
+        with mock.patch.dict(os.environ, {"GIT_CONFIG_GLOBAL": str(config)}):
+            marker = citest.git_text(self.repo, "config", "--get", "citest.marker")
+        self.assertEqual(marker, "pinned")
 
 
 class WriteJsonTests(unittest.TestCase):
