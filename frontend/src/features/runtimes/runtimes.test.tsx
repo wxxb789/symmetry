@@ -1,9 +1,7 @@
-import { QueryClientProvider } from "@tanstack/react-query";
-import { createMemoryHistory, RouterProvider, type RouterHistory } from "@tanstack/react-router";
-import { render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { createApplication, type Application } from "../../app/application";
-import { createAppRouter } from "../../app/router";
+import { screen } from "@testing-library/react";
+import { describe, expect, it } from "vitest";
+import { jsonResponse, portal } from "../../app/portal-double";
+import { renderRoute, trackApplications } from "../../app/test-harness";
 
 /**
  * `/portal/runtimes`: the page renders the workspace read's compatibility
@@ -36,11 +34,7 @@ function runtimeRow(id: string, key: string) {
 const runtimeA = runtimeRow("30000000-0000-4000-8000-000000000001", "alpha");
 const runtimeB = runtimeRow("30000000-0000-4000-8000-000000000002", "beta");
 
-const applications: Application[] = [];
-afterEach(() => {
-  for (const application of applications) application.queryClient.clear();
-  applications.length = 0;
-});
+const applications = trackApplications();
 
 interface ServedRuntimeSet {
   runtimes: unknown[];
@@ -64,24 +58,14 @@ function renderRuntimes(path: string, served: { scoped: ServedRuntimeSet; unscop
     health: { status: "unknown" },
     ...workspace,
   });
-  const fetchResponse = (input: string | Request | URL): Response => {
-    const url = new URL(input instanceof Request ? input.url : String(input), "http://localhost");
-    if (url.pathname === "/portal/api/session") return new Response(JSON.stringify({ csrf_token: "session-token" }));
-    if (url.pathname === "/portal/api/workspace") {
-      // The scoped and unscoped reads serve different rows, so a page that
-      // ignored the URL's project scope cannot pass the scoped assertions.
-      const scoped = url.searchParams.get("project_id") === projectId;
-      return new Response(JSON.stringify(body(scoped ? served.scoped : served.unscoped)));
-    }
-    return new Response("{}", { status: 404 });
-  };
-  const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => Promise.resolve(fetchResponse(input)));
-  const application = createApplication({ fetcher, location: { href: `http://localhost${path}`, replace: vi.fn() } });
-  applications.push(application);
-  const history: RouterHistory = createMemoryHistory({ initialEntries: [path] });
-  const router = createAppRouter(application, history);
-  render(<QueryClientProvider client={application.queryClient}><RouterProvider router={router} /></QueryClientProvider>);
-  return fetcher;
+  portal.serve((request) => {
+    if (request.method !== "GET" || request.url.pathname !== "/portal/api/workspace") return undefined;
+    // The scoped and unscoped reads serve different rows, so a page that
+    // ignored the URL's project scope cannot pass the scoped assertions.
+    const scoped = request.url.searchParams.get("project_id") === projectId;
+    return jsonResponse(body(scoped ? served.scoped : served.unscoped));
+  });
+  applications.push(renderRoute(path).application);
 }
 
 describe("runtimes page", () => {
@@ -110,7 +94,7 @@ describe("runtimes page", () => {
   });
 
   it("renders only the scoped project's compatible rows", async () => {
-    const fetcher = renderRuntimes(`/portal/runtimes?projectId=${projectId}`, { scoped: { runtimes: [runtimeB], registered_runtimes: [runtimeA, runtimeB] }, unscoped: { runtimes: [runtimeA], registered_runtimes: [runtimeA, runtimeB] } });
+    renderRuntimes(`/portal/runtimes?projectId=${projectId}`, { scoped: { runtimes: [runtimeB], registered_runtimes: [runtimeA, runtimeB] }, unscoped: { runtimes: [runtimeA], registered_runtimes: [runtimeA, runtimeB] } });
     await screen.findByRole("heading", { level: 1, name: "Runtimes" });
     const cards = await screen.findAllByRole("article");
     expect(cards).toHaveLength(1);
@@ -118,9 +102,9 @@ describe("runtimes page", () => {
     expect(screen.queryByText("Runtime alpha")).toBeNull();
     // The rows prove which response was rendered; the request proves the page
     // asked for the project's own scope instead of the unscoped read.
-    const workspaceRequests = fetcher.mock.calls
-      .map(([input]) => input instanceof Request ? input.url : String(input))
-      .filter((url) => url.startsWith("/portal/api/workspace"));
+    const workspaceRequests = portal.requests
+      .filter((request) => request.path.startsWith("/portal/api/workspace"))
+      .map((request) => request.path);
     expect(workspaceRequests).toContain(`/portal/api/workspace?project_id=${projectId}`);
     expect(workspaceRequests).not.toContain("/portal/api/workspace");
   });

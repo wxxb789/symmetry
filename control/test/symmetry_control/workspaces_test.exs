@@ -505,11 +505,8 @@ defmodule SymmetryControl.WorkspacesTest do
                status: "healthy"
              })
 
-    # One version rule for both portal contexts: a malformed expected version is
-    # `:invalid_request` (the verdict `Schemas.VersionedChangeset.expected_version/1`
-    # gives the same input; the HTTP route normalizes integer strings to integers and
-    # answers 400 for unparsable values, so the context never receives a non-integer
-    # version), not a stale row. Pinned so the shared clause cannot drift.
+    # One version rule for both portal contexts: a malformed expected version answers
+    # `:invalid_request` (not `:stale`) — pinned so the shared version clause cannot drift.
     assert {:error, :invalid_request} = Workspaces.delete_resource(resource.id, "1")
 
     assert {:ok, deleted} = Workspaces.delete_resource(resource.id, resource.lock_version)

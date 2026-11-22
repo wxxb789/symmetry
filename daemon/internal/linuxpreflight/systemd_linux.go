@@ -187,8 +187,8 @@ func validateEffectiveLinuxSystemdProperties(properties map[string]string, polic
 		"Wants", "PartOf", "Conflicts", "RequiresMountsFor", "Environment", "EnvironmentFiles",
 		"PassEnvironment", "UnsetEnvironment", "SupplementaryGroups"} {
 		if _, ok := properties[key]; !ok {
-			// systemctl omits unset properties. Missing is equivalent to an
-			// empty value; required non-empty values still fail their checks.
+			// systemctl omits unset properties: missing is equivalent to an empty value,
+			// while required non-empty values still fail their checks.
 			properties[key] = ""
 		}
 	}

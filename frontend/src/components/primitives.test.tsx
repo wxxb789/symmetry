@@ -9,7 +9,6 @@ import { useDialogOpener } from "./use-dialog-opener";
 const refusal = (fields: Record<string, readonly string[]> | null) =>
   new ServerRefusal({ status: 422, code: "validation_failed", message: "request contains invalid fields", fields });
 
-/** The smallest caller of the opener hook: a close control that runs the restore and reports whether Radix's default was prevented. */
 function RestoreOnClick({ openerRef, fallbackRef, onRestored }: {
   openerRef?: RefObject<HTMLElement | null>;
   fallbackRef?: RefObject<HTMLElement | null>;
@@ -17,8 +16,8 @@ function RestoreOnClick({ openerRef, fallbackRef, onRestored }: {
 }) {
   const { restore } = useDialogOpener(openerRef, fallbackRef);
   return <button type="button" onClick={() => {
-    // Cancelable, like Radix's own close-auto-focus event: the restore cancels
-    // it only when it has a target to focus.
+    // Cancelable, like Radix's own close-auto-focus event: the restore cancels it
+    // only when it has a target to focus.
     const event = new FocusEvent("focus", { cancelable: true });
     restore(event);
     if (onRestored) onRestored(event.defaultPrevented);
@@ -50,7 +49,6 @@ describe("StatusBadge", () => {
     </>);
     expect(screen.getByText("Unknown status: mystery")).toBeVisible();
     expect(screen.getByText("Unknown status")).toBeVisible();
-    // `constructor` is a prototype member, not a workspace status either.
     expect(screen.getByText("Unknown status: constructor")).toBeVisible();
   });
 
@@ -91,13 +89,11 @@ describe("StatusBadge", () => {
     const future = screen.getByText("Unknown resource status: future_kind");
     expect(future).toBeVisible();
     expect(future).toHaveAttribute("data-status", "future_kind");
-    // Each resource scope reads its own table: the other scope's members are unknown here.
     expect(screen.getByText("Unknown resource status: synced")).toHaveAttribute("data-status", "synced");
     expect(screen.getByText("Unknown sync status: healthy")).toHaveAttribute("data-status", "healthy");
     const unspecified = screen.getByText("Unknown sync status: unspecified");
     expect(unspecified).toBeVisible();
     expect(unspecified).toHaveAttribute("data-status", "");
-    // `constructor` is a prototype member, not a status these scopes know.
     const connectionConstructor = screen.getByText("Unknown connection status: constructor");
     expect(connectionConstructor).toBeVisible();
     expect(connectionConstructor).toHaveAttribute("data-status", "constructor");
@@ -109,7 +105,7 @@ describe("FieldErrors", () => {
   it("joins the server's messages for the field into one alert", () => {
     render(<FieldErrors error={refusal({ name: ["must be present", "is too long"] })} field="name" />);
     const alert = screen.getByRole("alert");
-    // Exact text: substring matching would accept a prefix or a double-space join.
+    // Exact text, not substring matching: a prefix or a double-space join would pass.
     expect(alert.textContent).toBe("must be present is too long");
     expect(alert).toHaveClass("field-error");
   });
@@ -133,8 +129,6 @@ describe("Field", () => {
         <input id="project-name" name="name" defaultValue="Duplicate" />
       </Field>
     </form>);
-    // `.planning-form` is a CSS grid over its direct children: the row must add
-    // no element between the form and the label/control/message it renders.
     const rows = Array.from(container.querySelector("form")?.children ?? []);
     expect(rows.map((child) => child.tagName)).toEqual(["LABEL", "INPUT", "P"]);
     expect(screen.getByLabelText("Name")).toHaveValue("Duplicate");
@@ -244,8 +238,6 @@ describe("useDialogOpener", () => {
     render(<button type="button">Update checkout service</button>);
     const invoking = screen.getByRole("button", { name: "Update checkout service" });
     invoking.focus();
-    // Mounted while the invoking control holds focus: the capture belongs to the
-    // mount, not to the close.
     render(<RestoreOnClick />);
     await user.click(screen.getByRole("button", { name: "Close dialog" }));
     expect(invoking).toHaveFocus();

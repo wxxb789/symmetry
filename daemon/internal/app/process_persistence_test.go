@@ -393,11 +393,6 @@ func TestSupervisorHandoffCallbacksPersistExactFenceAndAbortProof(t *testing.T) 
 	}
 }
 
-// TestStoreCallbackFactoriesRefuseClosingStore pins the refusal semantics of
-// every factory that performs its own Store CAS: a closing daemon refuses
-// before the daemon-wide override runs, a missing Store refuses when no
-// override exists, and an override keeps the factory usable without a Store at
-// all. Every refusal is the errDaemonStoreClosing sentinel itself.
 func TestStoreCallbackFactoriesRefuseClosingStore(t *testing.T) {
 	store, key := claimedStore(t)
 	defer store.Close()
@@ -415,8 +410,6 @@ func TestStoreCallbackFactoriesRefuseClosingStore(t *testing.T) {
 				t.Fatalf("closing store: override calls = %d, want 0", closingObserved.calls)
 			}
 
-			// The production configuration has no override: a closing daemon
-			// with a Store must still refuse before it forms a Store write path.
 			closingStoreOnly := &daemon{store: store}
 			closingStoreOnly.storeClosing = true
 			if err := pin.invoke(closingStoreOnly); !errors.Is(err, errDaemonStoreClosing) || err != errDaemonStoreClosing {
@@ -440,10 +433,6 @@ func TestStoreCallbackFactoriesRefuseClosingStore(t *testing.T) {
 	}
 }
 
-// TestStoreCallbackMarkAndClearFallbackToTheStore pins the selector's Store
-// fallback for the mark/clear twins: with no daemon-wide override the call
-// must reach the matching Store method and flip exactly the journal flag that
-// method owns, which the override-only pins cannot observe.
 func TestStoreCallbackMarkAndClearFallbackToTheStore(t *testing.T) {
 	store, key := claimedStore(t)
 	defer store.Close()
@@ -476,10 +465,6 @@ func TestStoreCallbackMarkAndClearFallbackToTheStore(t *testing.T) {
 	}
 }
 
-// TestStoreCallbackFactoriesHoldStoreLifetimeReadLock pins that the store
-// lifetime read lock spans the override invocation of every factory that
-// performs its own Store CAS, so daemon shutdown cannot close the Store while a
-// runner still decides whether a write outcome is known.
 func TestStoreCallbackFactoriesHoldStoreLifetimeReadLock(t *testing.T) {
 	store, key := claimedStore(t)
 	defer store.Close()
@@ -502,11 +487,6 @@ func TestStoreCallbackFactoriesHoldStoreLifetimeReadLock(t *testing.T) {
 	}
 }
 
-// TestStoreCallbackFactoriesCloneCallerArguments pins that every factory whose
-// authority or handoff argument carries an optional creator session id hands
-// its override an independent copy: the caller mutates its own copy after the
-// call, while the override's copy keeps the original value and never aliases
-// the caller's pointer.
 func TestStoreCallbackFactoriesCloneCallerArguments(t *testing.T) {
 	store, key := claimedStore(t)
 	defer store.Close()
@@ -517,8 +497,7 @@ func TestStoreCallbackFactoriesCloneCallerArguments(t *testing.T) {
 			var received []*uint32
 			invoke, callerSessionID, mutateCaller := pin.buildCaller()
 			pin.installOverride(app, &received, mutateCaller)
-			// Read the original before the call: a pin whose factory retries a
-			// failed write inside one call moves the caller during that call.
+
 			original := sessionIDOf(callerSessionID)
 			if err := invoke(app); !errors.Is(err, errStoreCallbackProbe) {
 				t.Fatalf("override error = %v, want %v", err, errStoreCallbackProbe)
@@ -539,24 +518,15 @@ func TestStoreCallbackFactoriesCloneCallerArguments(t *testing.T) {
 	}
 }
 
-// TestStoreCallbackObserversFollowTheOverride pins the observer order of the
-// two factories that notify a process observer: the successful write happens
-// first and is the only source of the observed process pair, while a failed
-// write notifies nobody.
 func TestStoreCallbackObserversFollowTheOverride(t *testing.T) {
 	store, key := claimedStore(t)
 	defer store.Close()
 
 	pins := []struct {
 		name string
-		// wantWrites is the number of override invocations a failed call makes:
-		// persistProcessAuthorityCallback retries the write once after a failed
-		// attempt.
+
 		wantWrites int
-		// wantObserved is the event the observer records after a successful
-		// write; commitSupervisorHandoffCallback commits a helper process that
-		// differs from the handoff target, so the observer must report the
-		// committed journal rather than the callback's argument.
+
 		wantObserved string
 		install      func(app *daemon, events *[]string, failWrite bool)
 		invoke       func(app *daemon) error
@@ -656,47 +626,29 @@ func testAppHandoffFixture(pid int, identity string) authority.SupervisorHandoff
 	}
 }
 
-// errStoreCallbackProbe is the error every pinned store-callback override
-// returns. A pin asserts by errors.Is that a factory propagated this error,
-// which is how it proves the override ran instead of the Store method.
 var errStoreCallbackProbe = errors.New("store callback override probe")
 
-// storeCallbackObservations is what one pinned override saw while it ran.
 type storeCallbackObservations struct {
 	calls    int
 	lockHeld bool
 }
 
-// storeCallbackPin drives one of the nine factories that perform their own
-// Store CAS. installOverride sets that factory's daemon-wide option on app so
-// the pinned call runs the override instead of the Store, and invoke calls the
-// factory with valid arguments; the overrides never touch the Store.
 type storeCallbackPin struct {
 	name string
-	// wantCalls is the number of override invocations one pinned call makes:
-	// persistProcessAuthorityCallback retries a failed write once, every other
-	// factory once.
+
 	wantCalls       int
 	installOverride func(app *daemon, observed *storeCallbackObservations)
 	invoke          func(app *daemon) error
 }
 
-// storeCallbackClonePin drives one factory whose authority or handoff argument
-// carries an optional creator session id. buildCaller creates the caller-owned
-// fixture and returns the call that hands it to the factory, the session id
-// pointer the caller keeps, and the mutation of the caller's own copy that must
-// not reach the override. installOverride receives that mutation, so a pin
-// whose factory retries a failed write inside one call runs it between the
-// attempts.
 type storeCallbackClonePin struct {
 	name string
-	// wantCalls is the number of override invocations one pinned call makes.
+
 	wantCalls       int
 	installOverride func(app *daemon, received *[]*uint32, mutateCaller func())
 	buildCaller     func() (invoke func(app *daemon) error, callerSessionID *uint32, mutateCaller func())
 }
 
-// storeCallbackPins covers every factory that performs its own Store CAS.
 func storeCallbackPins(key state.RunKey) []storeCallbackPin {
 	return []storeCallbackPin{
 		{
@@ -812,8 +764,6 @@ func storeCallbackPins(key state.RunKey) []storeCallbackPin {
 	}
 }
 
-// storeCallbackClonePins covers every factory that passes an authority or
-// handoff argument to its override.
 func storeCallbackClonePins(key state.RunKey) []storeCallbackClonePin {
 	return []storeCallbackClonePin{
 		{
@@ -823,10 +773,7 @@ func storeCallbackClonePins(key state.RunKey) []storeCallbackClonePin {
 				app.options.recordProcessAuthority = func(_ state.RunKey, _ int, _ string, got authority.Supervisor, _ time.Time) (state.RunJournal, error) {
 					*received = append(*received, got.CreatorSessionID)
 					if len(*received) == 1 {
-						// persistProcessAuthority retries the failed write
-						// inside this call, so the caller must move between the
-						// attempts for the pin to see whether the argument was
-						// copied before the retry.
+
 						mutateCaller()
 					}
 					return state.RunJournal{}, errStoreCallbackProbe
@@ -901,10 +848,6 @@ func storeCallbackClonePins(key state.RunKey) []storeCallbackClonePin {
 	}
 }
 
-// handoffClonePin builds the clone pin of one handoff factory: setOverride
-// installs that factory's daemon-wide option so it records the handoff the
-// factory hands over and returns the probe error, and call hands the
-// caller-owned fixture to the factory.
 func handoffClonePin(name string, setOverride func(app *daemon, override func(authority.SupervisorHandoff) (state.RunJournal, error)), call func(app *daemon, handoff authority.SupervisorHandoff) error) storeCallbackClonePin {
 	handoff := testAppHandoffFixture(54, "windows:54:created-at")
 	return storeCallbackClonePin{
@@ -924,18 +867,12 @@ func handoffClonePin(name string, setOverride func(app *daemon, override func(au
 	}
 }
 
-// observeStoreCallback records one override invocation: it counts the call,
-// notes whether the daemon still held the store lifetime read lock, and returns
-// the probe error.
 func observeStoreCallback(app *daemon, observed *storeCallbackObservations) error {
 	observed.calls++
 	observed.lockHeld = observeStoreLifetimeReadLock(app)
 	return errStoreCallbackProbe
 }
 
-// observeStoreLifetimeReadLock reports whether app still holds the store
-// lifetime read lock: TryLock only succeeds when the caller holds no read lock
-// at that moment.
 func observeStoreLifetimeReadLock(app *daemon) bool {
 	if !app.storeLifetimeMu.TryLock() {
 		return true
@@ -944,8 +881,6 @@ func observeStoreLifetimeReadLock(app *daemon) bool {
 	return false
 }
 
-// sessionIDOf reads the optional creator session id an authority or handoff
-// argument carries.
 func sessionIDOf(sessionID *uint32) uint32 {
 	if sessionID == nil {
 		return 0

@@ -55,11 +55,8 @@ type linuxOwnerAnchorOptions struct {
 	socketPath    string
 }
 
-// RunLinuxOwnerAnchor is the hidden long-lived owner service entrypoint. It
-// verifies the fixed A/B installation, pins the operator-selected cgroup2
-// manager subgroup, installs and reads back its own subreaper flag, then
-// serves one bounded authenticated request at a time. Shutdown closes only
-// local descriptors; it never manufactures a RunJournal receipt.
+// RunLinuxOwnerAnchor is the hidden long-lived owner service entrypoint serving one bounded
+// authenticated request at a time; shutdown never manufactures a RunJournal receipt.
 func RunLinuxOwnerAnchor(args []string, openVerifier LinuxOwnerAnchorCleanupVerifierFactory) (result error) {
 	if openVerifier == nil {
 		return errors.New("Linux owner anchor requires a State cleanup verifier factory")
@@ -365,10 +362,8 @@ func (anchor *linuxOwnerAnchor) forceStopUnretiredRuns(ctx context.Context) erro
 	return result
 }
 
-// superviseExitedHelpers is polled by the anchor's accept loop, independent
-// of daemon requests. A helper death fences the exact run leaf and the anchor
-// reaps its adopted children, but this observer never creates a journal
-// receipt or releases the pinned RunKey.
+// superviseExitedHelpers is polled by the accept loop, independent of daemon requests; a helper death
+// fences the run leaf and reaps adopted children but never creates a receipt or releases the RunKey.
 func (anchor *linuxOwnerAnchor) superviseExitedHelpers() error {
 	if anchor == nil {
 		return errors.New("Linux owner anchor is nil")
@@ -413,9 +408,8 @@ func (anchor *linuxOwnerAnchor) superviseExitedHelpers() error {
 				run.helperDeathContainmentAttempted = false
 				run.supervisionRetryAfter = time.Now().Add(linuxOwnerAnchorSupervisionRetry)
 			} else {
-				// A positive kill/empty observation without a complete run proof is
-				// permanently unresolved in this in-memory Anchor lifetime. Never
-				// retry the write or fail the owner unit and sweep sibling RunKeys.
+				// A positive kill/empty observation without a complete run proof is permanently
+				// unresolved in this Anchor lifetime: never retry the write or sweep sibling RunKeys.
 				run.helperDeathContainmentAttempted = true
 				run.supervisionTerminal = true
 			}
@@ -721,9 +715,8 @@ func (anchor *linuxOwnerAnchor) establishRunNoMigrationProof(
 		return err
 	}
 	if len(run.physicalOnlyChildren) != 0 {
-		// The gate can be physically contained under its exact launcher-birth
-		// premise, but without a registered GateIdentity it cannot participate
-		// in a RunKey-complete StopReceipt.
+		// The gate can be physically contained under its exact launcher-birth premise, but without a
+		// registered GateIdentity it cannot participate in a RunKey-complete StopReceipt.
 		return nil
 	}
 	if run.migrationObserved {
@@ -732,10 +725,8 @@ func (anchor *linuxOwnerAnchor) establishRunNoMigrationProof(
 	if run.gateIdentity == nil {
 		if fence == nil || fence.Launcher == nil || fence.LauncherExit == nil ||
 			fence.Gate != nil || fence.UserNamespace != nil || run.gateUserNamespaceFD != nil || run.gateImageFD != nil {
-			// A helper-death takeover before RegisterGate has no authenticated
-			// no-gate result. It remains physically containable only when the
-			// earlier producer scans show no unknown process; it cannot issue a
-			// run-bound stop receipt.
+			// A takeover before RegisterGate has no authenticated no-gate result: containable only when
+			// the earlier producer scans show no unknown process, and it cannot issue a stop receipt.
 			return nil
 		}
 		if !fence.LauncherExit.ValidForOwnedDescendant(*fence.Launcher, run.helper, anchor.identity, nil) {
@@ -841,14 +832,8 @@ func (anchor *linuxOwnerAnchor) establishRunNoMigrationProof(
 			return errors.New("normal StopLeaf migration premise differs from the exact helper GateReady fence")
 		}
 	}
-	// The pinned trusted static gate passed its inherited-FD census before
-	// GateReady, then enforced the fixed four-rights RELEASE allowlist, B-only
-	// maps, no-new-privileges, and zero host capabilities before exec. The
-	// Anchor rechecks B credentials/namespace and every present leaf member
-	// above. No kernel snapshot can exclude an arbitrary concurrent UID-A
-	// cgroup.procs migration; this proof depends on the provisioned trusted-A
-	// birth-only placement contract. Any future A migration API must serialize
-	// through this Anchor and record source/destination before its effect.
+	// noMigrationProven rests on the pinned trusted gate's checks and the provisioned trusted-A
+	// birth-only placement contract; a future A migration API must serialize through this Anchor.
 	run.noMigrationProven = true
 	return nil
 }
@@ -914,9 +899,8 @@ func validateLinuxOwnerAnchorCreatorChain(ctx context.Context, run *linuxOwnerAn
 				return fmt.Errorf("poll retained RunKey child creator pidfd: %w", err)
 			}
 			if ready {
-				// The retained pidfd and stored creator identity remain the exact
-				// historical edge even if the parent has exited and been reaped
-				// outside the anchor's wait domain.
+				// The retained pidfd and stored creator identity remain the exact historical edge even
+				// if the parent has exited and been reaped outside the anchor's wait domain.
 				flags, err := unix.FcntlInt(parent.pidfd.Fd(), unix.F_GETFD, 0)
 				if err != nil || flags&unix.FD_CLOEXEC == 0 {
 					return errors.Join(errors.New("exited RunKey child creator pidfd is not a retained close-on-exec descriptor"), err)
@@ -1080,11 +1064,8 @@ func (anchor *linuxOwnerAnchor) recordHelperForkMayStart(key LinuxOwnerAnchorRun
 	return nil
 }
 
-// runCloneCleanupAfterStateReadback is called only after the socket request,
-// pinned descriptor, exact intent and optional prior proof pass anchor-side
-// structural checks. State remains authoritative for whether Begin/receipt
-// facts were actually committed; the root worker is unreachable until that
-// pinned readback succeeds.
+// runCloneCleanupAfterStateReadback runs only after the socket request, pinned descriptor, exact
+// intent and prior proof pass anchor-side checks; State stays authoritative for Begin/receipt facts.
 func (anchor *linuxOwnerAnchor) runCloneCleanupAfterStateReadback(
 	ctx context.Context,
 	request linuxOwnerAnchorRequest,
@@ -1127,8 +1108,7 @@ func (anchor *linuxOwnerAnchor) serveCloneCleanup(
 	request linuxOwnerAnchorRequest,
 	receivedFDs []int,
 ) bool {
-	// The per-operation shape gate already enforced this request's presence
-	// rules, descriptor count and cleanup-intent relations.
+
 	if linuxOwnerCgroupPathsOverlap(peer.CgroupPath, anchor.managerPath) {
 		return false
 	}
@@ -1236,10 +1216,6 @@ func (anchor *linuxOwnerAnchor) serveCloneCleanup(
 	return true
 }
 
-// baseResponse stamps the identity fields every anchor response carries. The
-// clone-cleanup key override stays exactly where the base writer had it: a
-// clone-cleanup response reports the durable RunKey and fence digest of the
-// cleanup intent and its normal-release launch token instead of a zero grant.
 func (anchor *linuxOwnerAnchor) baseResponse(request linuxOwnerAnchorRequest, status string) linuxOwnerAnchorResponse {
 	response := linuxOwnerAnchorResponse{
 		Version: linuxOwnerAnchorProtocolVersion, Operation: request.Operation, Status: status,
@@ -1255,10 +1231,8 @@ func (anchor *linuxOwnerAnchor) baseResponse(request linuxOwnerAnchorRequest, st
 	return response
 }
 
-// writeResponse sends one bounded anchor response frame. The frame carries an
-// SCM_RIGHTS message only when the caller passes pin descriptors, so no response
-// can advertise descriptors it does not carry; every pin-carrying call site
-// builds its descriptors immediately before the call.
+// writeResponse sends one bounded anchor response frame carrying an SCM_RIGHTS message only when the
+// caller passes pin descriptors, so no response can advertise descriptors it does not carry.
 func (anchor *linuxOwnerAnchor) writeResponse(connection *net.UnixConn, response linuxOwnerAnchorResponse, fds ...int) {
 	encoded, err := json.Marshal(response)
 	if err != nil || len(encoded) > linuxOwnerAnchorMaxFrame {

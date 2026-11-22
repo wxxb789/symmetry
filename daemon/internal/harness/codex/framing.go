@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
+	"github.com/wxxb789/symmetry/daemon/internal/harness/linejson"
 )
 
 const defaultMaxFrameBytes = 1 << 20
@@ -57,9 +58,7 @@ func (frame Frame) IsFramingError() bool {
 
 // Framer handles stdio JSONL boundaries across arbitrary process chunks.
 type Framer struct {
-	max      int
-	buffer   []byte
-	sequence uint64
+	reader *linejson.Decoder[Frame]
 }
 
 // NewFramer creates a bounded framer. Non-positive limits use the default.
@@ -67,7 +66,17 @@ func NewFramer(maxBytes int) *Framer {
 	if maxBytes <= 0 {
 		maxBytes = defaultMaxFrameBytes
 	}
-	return &Framer{max: maxBytes}
+	return &Framer{reader: newReader(maxBytes)}
+}
+
+func newReader(maxBytes int) *linejson.Decoder[Frame] {
+	return linejson.New(linejson.Policy[Frame]{
+		MaxBytes:   maxBytes,
+		SkipBlank:  true,
+		TooLarge:   func() error { return ErrFrameTooLarge },
+		Incomplete: func() error { return ErrIncompleteFrame },
+		Decode:     decodeFrame,
+	})
 }
 
 // Feed appends one process-output chunk and returns complete frames. Malformed
@@ -76,29 +85,7 @@ func (framer *Framer) Feed(chunk []byte) ([]Frame, error) {
 	if framer == nil {
 		return nil, errors.New("codex framer is nil")
 	}
-	framer.buffer = append(framer.buffer, chunk...)
-	var frames []Frame
-	for {
-		lineEnd := bytes.IndexByte(framer.buffer, '\n')
-		if lineEnd < 0 {
-			if len(framer.buffer) > framer.max {
-				framer.buffer = nil
-				return frames, ErrFrameTooLarge
-			}
-			break
-		}
-		line := append([]byte(nil), framer.buffer[:lineEnd]...)
-		framer.buffer = framer.buffer[lineEnd+1:]
-		if len(line) > framer.max {
-			return frames, ErrFrameTooLarge
-		}
-		if len(bytes.TrimSpace(line)) == 0 {
-			continue
-		}
-		framer.sequence++
-		frames = append(frames, decodeFrame(framer.sequence, line))
-	}
-	return frames, nil
+	return framer.readerOrZeroBound().Feed(chunk)
 }
 
 // Close flushes no partial frame. A non-whitespace suffix becomes a
@@ -107,14 +94,18 @@ func (framer *Framer) Close() ([]Frame, error) {
 	if framer == nil {
 		return nil, errors.New("codex framer is nil")
 	}
-	if len(bytes.TrimSpace(framer.buffer)) == 0 {
-		framer.buffer = nil
-		return nil, nil
+	sequence, pending, err := framer.readerOrZeroBound().Close()
+	if pending == nil {
+		return nil, err
 	}
-	framer.sequence++
-	line := append([]byte(nil), framer.buffer...)
-	framer.buffer = nil
-	return []Frame{decodeDiagnosticFrame(framer.sequence, line, "incomplete_frame", "stream ended before newline")}, ErrIncompleteFrame
+	return []Frame{decodeDiagnosticFrame(sequence, pending, "incomplete_frame", "stream ended before newline")}, err
+}
+
+func (framer *Framer) readerOrZeroBound() *linejson.Decoder[Frame] {
+	if framer.reader == nil {
+		framer.reader = newReader(0)
+	}
+	return framer.reader
 }
 
 func decodeFrame(sequence uint64, line []byte) Frame {

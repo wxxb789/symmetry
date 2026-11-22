@@ -30,8 +30,7 @@ defmodule SymmetryControl.MigrationCase do
   The schema is created first, a dedicated single-connection Repo starts
   against it, and the dynamic repo points there for the duration of `test`.
   The dynamic repo is restored, the Repo stopped and the schema dropped
-  afterwards; a failure while starting the Repo still drops the schema, and a
-  failure while pointing the dynamic repo at it still stops the Repo.
+  afterwards.
 
   Tests that need to observe pre-migration state call `create_schema!/1`,
   `start_schema_repo/1` and `drop_schema!/1` directly instead.
@@ -84,7 +83,7 @@ defmodule SymmetryControl.MigrationCase do
     Path.expand("../../priv/repo/migrations", __DIR__)
   end
 
-  @doc "Runs every migration up through the dynamic repo, i.e. into the suite's private schema, never the shared test schema."
+  @doc "Runs migrations through the dynamic repo: the suite's private schema, never the shared test schema."
   def migrate_all_up! do
     Ecto.Migrator.run(Repo, migrations_path(), :up,
       all: true,

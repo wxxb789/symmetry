@@ -1,19 +1,5 @@
-# golangci-lint configuration for the daemon module, added with the advisory
-# `golangci-lint run` CI steps (refactor slice W1-01). The steps run this file
-# unchanged under GOOS=linux and GOOS=windows and report the uncapped counts
-# (`--max-issues-per-linter=0 --max-same-issues=0`) as a metric; they do not gate.
-#
-# Decisions recorded here rather than as per-line suppressions:
-# - ST1005 (error strings must not be capitalized) stays out of the staticcheck
-#   set (decision D8): 380 of the 514 measured first words are proper nouns or
-#   initialisms, so gating on it would freeze the tree on domain vocabulary. A
-#   later mechanical slice may lowercase the genuine cases.
-# - gocritic runs the `diagnostic` tag only: the style/perf tags add over a
-#   thousand findings in the daemon-app area alone (1,071 measured there) that
-#   duplicate gofmt and review rather than find defects.
-# - The `_test.go` rule relaxes only linters whose test-file findings are not
-#   defects (unchecked test cleanup, long table-driven tests, duplicated
-#   fixtures); it does not weaken any product-code rule.
+# ST1005 stays excluded (measured error strings start with proper nouns/initialisms) and
+# gocritic runs `diagnostic` only: style/perf tags duplicate gofmt and review, not defects.
 version: "2"
 
 run:
@@ -37,10 +23,6 @@ linters:
     - whitespace
   settings:
     dupl:
-      # 4 findings module-wide at this threshold (two clone pairs: the
-      # authority.go:1620/:1788 pair and the control/client.go:775/:861 pair,
-      # both counted once per side; the daemon-app area's figure was 0). Drop
-      # toward 100 once the dedup slices land.
       threshold: 150
     funlen:
       lines: 120

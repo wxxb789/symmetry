@@ -1,29 +1,16 @@
 defmodule SymmetryControl.Integrations.Providers.Support do
   @moduledoc false
 
-  # Shared plumbing for the HTTP-backed provider implementations. Every function
-  # below was AST-identical across GitHub and AzureDevOps before this module
-  # existed (decoded_path_segments/1 differed by whitespace only); the three
-  # authenticate-then-delegate functions take the provider module as their first
-  # argument. Provider-specific URL/body mapping, pagination and error atoms stay
-  # in the provider modules.
-
-  @doc "Authenticates the connection, then delegates to the provider's `check/2`."
   def check(provider, connection) do
     with {:ok, headers} <- provider.authenticate(connection),
          do: provider.check(connection, headers)
   end
 
-  @doc "Authenticates the connection, then delegates to the provider's `sync_resource/3`."
   def sync_resource(provider, connection, resource) do
     with {:ok, headers} <- provider.authenticate(connection),
          do: provider.sync_resource(connection, resource, headers)
   end
 
-  @doc """
-  Short-circuits a work item without a pull request, otherwise authenticates the
-  connection and delegates to the provider's `sync_delivery/4`.
-  """
   def sync_delivery(_provider, _connection, _resource, %{pull_request_url: nil}), do: {:ok, nil}
 
   def sync_delivery(provider, connection, resource, work_item) do

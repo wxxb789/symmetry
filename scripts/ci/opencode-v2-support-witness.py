@@ -31,7 +31,7 @@ PROVIDER = "tencent-litellm"
 
 
 def pinned_binary():
-    """Resolve the operator-named blob; the exact size and digest below still authorize it."""
+
     configured = os.environ.get(BINARY_ENVIRONMENT, "")
     if not configured:
         raise RuntimeError(BINARY_ENVIRONMENT + " must name the owner-pinned Windows executable")

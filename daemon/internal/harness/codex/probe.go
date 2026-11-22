@@ -46,9 +46,8 @@ type osCommandRunner struct {
 	boundedCommand boundedCommand
 }
 
-// invokeBoundedCommand is the runner seam the shared probe helpers call back
-// into: an injected boundedCommand keeps a probe fixture deterministic, and the
-// zero value falls back to the production bounded command.
+// An injected boundedCommand keeps a probe fixture deterministic; the zero value
+// falls back to the production bounded command.
 func (runner osCommandRunner) invokeBoundedCommand(ctx context.Context, invocation execution.Invocation, limit int) ([]byte, error) {
 	if runner.boundedCommand != nil {
 		return runner.boundedCommand(ctx, invocation, limit)

@@ -208,9 +208,8 @@ func ACLSubjectForAccount(account *user.User) (ACLSubject, error) {
 	if err != nil {
 		return ACLSubject{}, errors.New("account primary GID is invalid")
 	}
-	// B's gate clears supplementary groups, but other sessions of the shared B
-	// account may retain them. Host access checks must include the account's
-	// actual supplementary memberships rather than assume the gate's group list.
+	// Other sessions of the shared B account can retain supplementary groups even though
+	// B's gate clears them, so host access checks must include actual memberships.
 	groupIDs, err := account.GroupIds()
 	if err != nil {
 		return ACLSubject{}, fmt.Errorf("read account supplementary groups: %w", err)

@@ -225,13 +225,8 @@ const (
 	LinuxV2AckStageJournalCleared     = "journal_cleared"
 )
 
-// LinuxV2AckStages is the single source of the ack-stage vocabulary an
-// acknowledgement can be dropped after. Every name is live ACK-loss
-// vocabulary: the runner emits lease_armed and native_release through
-// DropAckAfter, and the native witness layer injects the remaining eight
-// through the same seam while the release acceptance consumes them. The stage
-// strings are a durable protocol surface, so App's witness validation derives
-// its membership from this list instead of repeating the names.
+// LinuxV2AckStages is the ACK-loss stage vocabulary (ten stages) shared with
+// App's witness validation, which derives its membership from this list.
 var LinuxV2AckStages = [...]string{
 	LinuxV2AckStageHelperBound,
 	LinuxV2AckStageLauncherBound,
@@ -617,10 +612,6 @@ func (runner Runner) Start(ctx context.Context, invocation Invocation, sink Sink
 		}
 	}
 
-	// The post-launch lifecycle is one ordered composition of named phases:
-	// persist (whose durable write is the handoff commit on that path) →
-	// lease-arm → resume → input. Each phase owns its failure exits and hands the
-	// owned process to cleanupFailedStartStarted through run.fail.
 	run := &startRun{
 		runner:          runner,
 		ctx:             ctx,
@@ -646,10 +637,6 @@ func (runner Runner) Start(ctx context.Context, invocation Invocation, sink Sink
 	return run.deliverInitialInput(sink)
 }
 
-// startRun owns one Start sequence after the pipes exist: the immutable launch
-// inputs, the owned process, and the two flags a phase boundary needs. Phase
-// results are (*Process, error) pairs; (nil, nil) means "continue", and any
-// other pair is Start's terminal result.
 type startRun struct {
 	runner     Runner
 	ctx        context.Context
@@ -663,10 +650,6 @@ type startRun struct {
 	markerPersisted  *atomic.Bool
 }
 
-// launchStarted runs the launch dance and owns its pipe-closing exits. It
-// returns (nil, nil) once a process is owned; otherwise the returned pair is
-// the terminal Start result: (nil, err) for a launch that never owned a
-// process, or cleanupFailedStartStarted's pair for one that did.
 func (run *startRun) launchStarted(command *exec.Cmd, linuxV2Requested bool) (*Process, error) {
 	invocation := run.invocation
 	if linuxV2Requested && run.runner.launchProcess == nil {
@@ -717,9 +700,6 @@ func (run *startRun) launchStarted(command *exec.Cmd, linuxV2Requested bool) (*P
 	return nil, nil
 }
 
-// fail hands the owned process to the shared failed-start cleanup with the
-// exact tuple the inline exits passed: all six pipe ends, the launch timestamp,
-// the wrapper error and the containment error.
 func (run *startRun) fail(startErr, containmentErr error) (*Process, error) {
 	return cleanupFailedStartStarted(
 		run.started,
@@ -735,13 +715,6 @@ func (run *startRun) fail(startErr, containmentErr error) (*Process, error) {
 	)
 }
 
-// persist makes the launched process identity and its containment authority
-// durable before lease arming, resume and input. On the supervisor-handoff path
-// the durable write is the handoff commit, so this phase delegates to
-// commitHandoff; otherwise it drives the atomic or legacy persist callbacks.
-// Its tail re-installs the uncertainty observer once a marker is durable,
-// clears the stop-receipt contract for owners without independently releasable
-// authority, and reports a retained attach failure.
 func (run *startRun) persist() (*Process, error) {
 	started := run.started
 	containment := started.containment
@@ -787,9 +760,6 @@ func (run *startRun) persist() (*Process, error) {
 	return nil, nil
 }
 
-// commitHandoff commits the prepared supervisor handoff and publishes the
-// commit barrier before the target may resume. This is the durable persistence
-// of the handoff path; the pre-branch setup already ran in persist.
 func (run *startRun) commitHandoff() (*Process, error) {
 	started := run.started
 	run.bindStopReceiptPersistence()
@@ -813,9 +783,6 @@ func (run *startRun) commitHandoff() (*Process, error) {
 	return nil, nil
 }
 
-// persistAtomicAuthority freezes the post-authority cleanup contract, then
-// makes the process identity and its containment authority durable in one
-// atomic callback.
 func (run *startRun) persistAtomicAuthority(provider platform.ContainmentAuthorityProvider) (*Process, error) {
 	started := run.started
 	value := provider.ContainmentAuthority()
@@ -825,9 +792,8 @@ func (run *startRun) persistAtomicAuthority(provider platform.ContainmentAuthori
 		started.containmentAuthorityUncertain = true
 		return run.fail(errors.New(message), errors.New(message))
 	}
-	// Freeze the post-authority cleanup contract before invoking the atomic
-	// callback. It may return an error after its durable rename; either
-	// outcome must retain the receipt/release fence and remain retryable.
+	// Freeze the post-authority cleanup contract before the callback: it may return
+	// an error after its durable rename, and both outcomes must stay retryable.
 	cloned := value.Clone()
 	started.containmentAuthorityUncertain = true
 	started.containmentAuthority = &cloned
@@ -841,9 +807,6 @@ func (run *startRun) persistAtomicAuthority(provider platform.ContainmentAuthori
 	return nil, nil
 }
 
-// persistLegacyIdentity drives the pre-authority persist callbacks: the process
-// marker first, then the optional containment authority, each freezing the
-// cleanup contract before its durable rename.
 func (run *startRun) persistLegacyIdentity(provider platform.ContainmentAuthorityProvider, authorityCapable bool) (*Process, error) {
 	started := run.started
 	if run.invocation.PersistProcess != nil {
@@ -855,9 +818,8 @@ func (run *startRun) persistLegacyIdentity(provider platform.ContainmentAuthorit
 	run.bindStopReceiptPersistence()
 	if authorityCapable && run.invocation.PersistProcessAuthority != nil {
 		value := provider.ContainmentAuthority()
-		// Freeze the post-authority cleanup contract before invoking the
-		// legacy callback. The callback may return an error after its atomic
-		// rename; either outcome must retain the receipt/release fence.
+		// Freeze the cleanup contract before the legacy callback: it may error after its
+		// atomic rename, and either outcome must keep the receipt/release fence.
 		started.containmentAuthorityUncertain = true
 		if value == nil {
 			const message = "containment authority is unavailable after process marker persistence"
@@ -876,8 +838,6 @@ func (run *startRun) persistLegacyIdentity(provider platform.ContainmentAuthorit
 	return nil, nil
 }
 
-// bindStopReceiptPersistence binds the caller's receipt callback only for a
-// containment owner that can actually produce or carry a receipt.
 func (run *startRun) bindStopReceiptPersistence() {
 	_, hasStopReceiptProvider := run.started.containment.(platform.ContainmentStopReceiptProvider)
 	_, hasAuthorityProvider := run.started.containment.(platform.ContainmentAuthorityProvider)
@@ -887,9 +847,6 @@ func (run *startRun) bindStopReceiptPersistence() {
 	}
 }
 
-// armInitialLease arms the optional containment lease watchdog and publishes the
-// lease-armed resume barrier. A missing sequence or a renewal failure is a
-// failed start with the exact base wrapper text.
 func (run *startRun) armInitialLease() (*Process, error) {
 	started := run.started
 	initialLeaseDeadline, initialLeaseRequested, deadlineErr := run.runner.initialLeaseDeadline(run.invocation)
@@ -923,9 +880,6 @@ func (run *startRun) armInitialLease() (*Process, error) {
 	return nil, nil
 }
 
-// resumeTarget runs the launcher's resume hook after the lease is armed. A
-// cancelled context or a resume failure is a failed start with the exact base
-// wrapper text.
 func (run *startRun) resumeTarget() (*Process, error) {
 	if run.started.resume == nil {
 		return nil, nil
@@ -939,10 +893,6 @@ func (run *startRun) resumeTarget() (*Process, error) {
 	return nil, nil
 }
 
-// deliverInitialInput closes the child's pipe ends, starts the owned Process on
-// the parent reader ends, and delivers the configured initial input. Input
-// failures use cleanupAfterInputSetupFailure, which retains the started Process
-// for the caller even after bounded termination.
 func (run *startRun) deliverInitialInput(sink Sink) (*Process, error) {
 	// These ends belong only to the child after launch. Closing them here is
 	// essential: otherwise the readers would never observe EOF.
@@ -2107,30 +2057,20 @@ func isUnsupportedOnly(err error) bool {
 	return errors.Is(err, errors.ErrUnsupported)
 }
 
-// errContainmentAuthorityUncertain is the single construction of the
-// uncertain-authority sentinel the close path reports.
 var errContainmentAuthorityUncertain = errors.New("containment authority persistence is uncertain")
 
-// failContainment records the base finalization error joined with err and
-// returns err unchanged, keeping the exact base recorded text, join order and
-// propagated error.
 func (process *Process) failContainment(err error) error {
 	process.setContainmentError(errors.Join(process.containmentFinalizationBaseError(), err))
 	return err
 }
 
-// failContainmentWith records the base finalization error joined with recorded
-// and returns returned, for the sites whose recorded text wraps context the
-// propagated error does not carry.
 func (process *Process) failContainmentWith(recorded, returned error) error {
 	process.setContainmentError(errors.Join(process.containmentFinalizationBaseError(), recorded))
 	return returned
 }
 
-// persistUncertainAuthority retries the frozen containment-authority persist
-// callback after an unknown outcome. A missing callback or a missing frozen
-// authority fails closed: proceeding without the durable authority would drop
-// the receipt/release fence this retry preserves.
+// Fails closed when the callback or the frozen authority is missing: proceeding
+// would drop the receipt/release fence this retry preserves.
 func (process *Process) persistUncertainAuthority() error {
 	if (process.persistProcessWithAuthority == nil && process.persistAuthority == nil) || process.containmentAuthority == nil {
 		return process.failContainment(errors.New("containment authority persistence callback is unavailable"))
@@ -2150,11 +2090,6 @@ func (process *Process) persistUncertainAuthority() error {
 	return nil
 }
 
-// persistReceiptOrAbort makes the containment stop receipt durable once, or
-// performs the pre-authority abort release when the owner has no receipt
-// callback and no receipt is required. The guard order is the base order:
-// authority uncertainty, then an existing authority, then the required-receipt
-// check, then the abort capability.
 func (process *Process) persistReceiptOrAbort(receipt authority.StopReceipt) error {
 	if process.containmentReceiptSaved {
 		return nil
@@ -2186,13 +2121,6 @@ func (process *Process) persistReceiptOrAbort(receipt authority.StopReceipt) err
 	return nil
 }
 
-// closeOwnerOnce performs the one-shot containment-owner close shared by both
-// close paths: probe the retryable contract, close once unless the owner
-// reports itself retryable, then bookkeep the failure. persistUnproven selects
-// the plain path's contract, which first persists the durable descendant
-// observation marker and lets that persistence extend the close error; the
-// pending-handoff path leaves it unset. The recorded containment error keeps the
-// base containmentInitialError join, not the finalization base error.
 func (process *Process) closeOwnerOnce(persistUnproven bool) error {
 	closeRetryable := false
 	if retryer, ok := process.containment.(platform.ContainmentCloseRetryer); ok {
@@ -2207,10 +2135,8 @@ func (process *Process) closeOwnerOnce(persistUnproven bool) error {
 		return nil
 	}
 	if persistUnproven {
-		// ContainmentUnproven is a durable Linux descendant-observation
-		// marker. Platform owners without the explicit observer capability
-		// must retain their own authority for authenticated recovery instead
-		// of being converted into an unrecoverable generic marker.
+		// ContainmentUnproven is a durable descendant-observation marker: an owner
+		// without the explicit observer capability must keep its authority for recovery.
 		_, supportsUnprovenObserver := process.containment.(containmentUnprovenCallbackSetter)
 		responseLost := errors.Is(err, platform.ErrLinuxSupervisorResponseLost)
 		if supportsUnprovenObserver && !responseLost && process.persistContainmentUnproven != nil && !process.containmentUnprovenPersisted {
@@ -2238,9 +2164,6 @@ func (process *Process) closeOwnerOnce(persistUnproven bool) error {
 	return err
 }
 
-// finalizeContainment marks the containment finalized, records the base
-// finalization error and returns it: the shared completion of every close path
-// that has nothing left to persist or release.
 func (process *Process) finalizeContainment() error {
 	process.containmentFinalized = true
 	finalErr := process.containmentFinalizationBaseError()

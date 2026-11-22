@@ -2,32 +2,8 @@
 
 package platform
 
-// Unprivileged wire-shape harness for the anchor control socket (rf-w3-02,
-// DP S-4). It drives the real serveConnection over a real unixpacket socket
-// with an in-package linuxOwnerAnchor, so every assertion below is a frame
-// count, a byte string, or a descriptor count that came off the kernel.
-//
-// Reachability, measured on this host: the anchor's pinned-parent and manager
-// membership checks cannot pass for an unprivileged single-process harness
-// (the peer is the anchor's own cgroup, and a delegated A/B parent pin needs a
-// root-provisioned cgroup), so only the statuses written before those checks
-// are reachable end to end:
-//   - `anchor_stopping` for the seven operations that answer a stopping anchor;
-//   - `request_rejected` for a clone-cleanup request that fails its own
-//     validation after the shape and descriptor gates.
-// Everything else (started/attached/helper_exited/retired/reaped/classified/
-// registered/release_authorized/stopped/ready/run_unavailable/...) is pinned at
-// the writer level by anchor_shape_table_test.go's golden byte strings and its
-// descriptor counts; those statuses stay unpinned end to end here because
-// reaching them requires a spawned helper run and a real delegated cgroup
-// topology, not because the code path is untested. No test in this file skips.
-//
-// Host precondition: the clone-cleanup acceptance cases need the test process
-// not to sit at the host's cgroup root. `linuxOwnerCgroupPathWithin` treats `/`
-// as containing every path, so a test process whose cgroup is `/` overlaps the
-// anchor's manager path and the peer-overlap gate refuses the accepted clone
-// request before the response; on the recorded hosts (WSL uid 1000) the test
-// process sits under /user.slice and the cases pass.
+// Drives the real serveConnection over a real unixpacket socket, so assertions come from the kernel.
+// Host trap: a test process whose cgroup is `/` makes the peer-overlap gate refuse clone cleanup.
 
 import (
 	"encoding/json"
@@ -48,14 +24,12 @@ import (
 
 const linuxOwnerAnchorWireManagerPath = "/system.slice/symmetry-owner.service/manager"
 
-// The pinned frame goldens embed the fixture's anchor process identity and the
-// parent boot ID, so the harness uses literal values instead of this host's own
-// PID and boot ID; the test process only has to differ from the anchor PID.
+// The pinned frame goldens embed the fixture's anchor process identity and the parent boot ID, so
+// the harness uses literal values instead of this host's own; only the anchor PID must differ.
 const (
 	linuxOwnerAnchorWireAnchorPID = 4242
 	linuxOwnerAnchorWireBootID    = "00000000-0000-0000-0000-000000000000"
-	// The identities below are the literal values the capture harness used, so
-	// the pinned goldens stay verbatim.
+
 	linuxOwnerAnchorWireAnchorIdentity  = "linux:v2:capture-anchor"
 	linuxOwnerAnchorWireHelperIdentity  = "linux:v2:capture-helper"
 	linuxOwnerAnchorWireProcessIdentity = "linux:v2:capture-process"
@@ -63,23 +37,16 @@ const (
 	linuxOwnerAnchorWireProcessPID      = 5151
 )
 
-// The three operations below were string literals before this slice. The local
-// names are deliberate: this harness must also keep compiling against the
-// pre-slice base tree, which has no such production constants, so the recorded
-// pre-refactor run stays reproducible. The wire strings are pinned by the
-// goldens below (the `identity` and `register-process` frames of the stopping
-// answers) and for all three operations, including `wait-reap` which no golden
-// frame carries, by TestLinuxOwnerAnchorShapeTableOperationLiterals in
-// anchor_shape_table_test.go (a head-only test, so it cannot live here).
+// The three operation wire strings below are pinned by the goldens and, for `wait-reap` (no golden
+// frame carries it), by TestLinuxOwnerAnchorShapeTableOperationLiterals.
 const (
 	linuxOwnerAnchorWireIdentityOperation        = "identity"
 	linuxOwnerAnchorWireRegisterProcessOperation = "register-process"
 	linuxOwnerAnchorWireWaitReapOperation        = "wait-reap"
 )
 
-// wireDescriptorCounts is the hard-coded per-operation descriptor count a
-// request must carry. It is deliberately not read from the production table:
-// a table mutation must fail this test, not move its expectation.
+// wireDescriptorCounts is the hard-coded per-operation descriptor count a request must carry; it is
+// deliberately not read from the production table, so a table mutation fails instead of moving it.
 var wireDescriptorCounts = map[string]int{
 	linuxOwnerAnchorWireIdentityOperation:        0,
 	linuxOwnerAnchorOperationStart:               2,
@@ -166,8 +133,6 @@ func linuxOwnerAnchorWireFDs(t *testing.T, count int) []int {
 	return fds
 }
 
-// linuxOwnerAnchorWireShapeRequest builds the request one operation's shape
-// requires, with every optional field of the other operations left absent.
 func linuxOwnerAnchorWireShapeRequest(t *testing.T, fixture linuxOwnerAnchorWireFixture, operation string) linuxOwnerAnchorRequest {
 	t.Helper()
 	request := linuxOwnerAnchorRequest{
@@ -227,8 +192,6 @@ func linuxOwnerAnchorWireShapeRequest(t *testing.T, fixture linuxOwnerAnchorWire
 	return request
 }
 
-// linuxOwnerAnchorWirePair opens one unixpacket pair with a 30-second deadline
-// on both ends and returns the client and server sides.
 func linuxOwnerAnchorWirePair(t *testing.T) (*net.UnixConn, *net.UnixConn) {
 	t.Helper()
 	endpoint := filepath.Join(t.TempDir(), "owner.sock")
@@ -257,8 +220,6 @@ func linuxOwnerAnchorWirePair(t *testing.T) (*net.UnixConn, *net.UnixConn) {
 	return client, server
 }
 
-// linuxOwnerAnchorWireReadFrame reads the single frame the server wrote and its
-// descriptors; a closed connection is the silent refusal.
 func linuxOwnerAnchorWireReadFrame(t *testing.T, client *net.UnixConn) ([]byte, []int) {
 	t.Helper()
 	data := make([]byte, linuxOwnerAnchorMaxFrame+1)
@@ -277,11 +238,8 @@ func linuxOwnerAnchorWireReadFrame(t *testing.T, client *net.UnixConn) ([]byte, 
 	return data[:n], received
 }
 
-// linuxOwnerAnchorWireServeRaw sends already-encoded bytes into a fresh
-// unixpacket pair and returns the frame serveConnection wrote, or nil when it
-// refused the request and closed the connection (the anchor closes every
-// non-detached connection). Codec-level rejections use it to send a request
-// that must not be shape-clean.
+// linuxOwnerAnchorWireServeRaw sends already-encoded bytes and returns the frame serveConnection
+// wrote, or nil on refusal: the anchor closes every non-detached connection.
 func linuxOwnerAnchorWireServeRaw(t *testing.T, anchor *linuxOwnerAnchor, encoded []byte, rights []byte) ([]byte, []int) {
 	t.Helper()
 	client, server := linuxOwnerAnchorWirePair(t)
@@ -292,8 +250,6 @@ func linuxOwnerAnchorWireServeRaw(t *testing.T, anchor *linuxOwnerAnchor, encode
 	return linuxOwnerAnchorWireReadFrame(t, client)
 }
 
-// linuxOwnerAnchorWireServe marshals one request and sends it with the given
-// descriptors.
 func linuxOwnerAnchorWireServe(t *testing.T, anchor *linuxOwnerAnchor, request linuxOwnerAnchorRequest, fds []int) ([]byte, []int) {
 	t.Helper()
 	encoded, err := json.Marshal(request)
@@ -307,11 +263,8 @@ func linuxOwnerAnchorWireServe(t *testing.T, anchor *linuxOwnerAnchor, request l
 	return linuxOwnerAnchorWireServeRaw(t, anchor, encoded, rights)
 }
 
-// linuxOwnerAnchorWireReadRequest writes already-encoded bytes into a fresh
-// unixpacket pair and returns the codec's own verdict. It is the discriminating
-// oracle for the malformed-frame cases below: every rejection serveConnection
-// makes after a successful decode is a silent close, so a codec that accepted a
-// malformed frame would look identical end to end.
+// linuxOwnerAnchorWireReadRequest returns the codec's own verdict: post-decode rejections are silent
+// closes end to end, so a codec that accepted a malformed frame would look identical here.
 func linuxOwnerAnchorWireReadRequest(t *testing.T, encoded []byte, rights []byte) error {
 	t.Helper()
 	client, server := linuxOwnerAnchorWirePair(t)
@@ -329,8 +282,7 @@ func TestLinuxOwnerAnchorWireShapeRejectsWrongDescriptorCounts(t *testing.T) {
 	}
 	fixture := newLinuxOwnerAnchorWireFixture(t, false)
 	for operation, required := range wireDescriptorCounts {
-		// remove-b-clone-after-receipt's count is TargetFDPresent-dependent and
-		// is covered in both directions by the clone-cleanup gate test below.
+
 		if operation == linuxOwnerAnchorOperationCloneCleanup {
 			continue
 		}
@@ -350,10 +302,8 @@ func TestLinuxOwnerAnchorWireShapeRejectsWrongDescriptorCounts(t *testing.T) {
 
 func TestLinuxOwnerAnchorWireCloneCleanupDescriptorGate(t *testing.T) {
 	fixture := newLinuxOwnerAnchorWireFixture(t, false)
-	// A clone-cleanup request that satisfies the shape and descriptor gates
-	// reaches its own validation, so the accepted and refused counts are
-	// distinguishable here: exactly the row's count is answered, every other
-	// count is refused silently.
+	// A shape- and descriptor-clean clone-cleanup request reaches its own validation, so exactly the
+	// row's count is answered and every other count is refused silently.
 	request := linuxOwnerAnchorWireShapeRequest(t, fixture, linuxOwnerAnchorOperationCloneCleanup)
 	frame, fds := linuxOwnerAnchorWireServe(t, fixture.anchor, request, linuxOwnerAnchorWireFDs(t, 1))
 	if frame == nil || len(fds) != 0 {
@@ -415,11 +365,8 @@ func TestLinuxOwnerAnchorWireStoppingAnswerPrecedesShape(t *testing.T) {
 	}
 }
 
-// TestLinuxOwnerAnchorWireExclusiveFieldsRefusedBeforeStoppingAnswer pins the
-// phase-1 ordering the plan promises: the six clone/gate/stop-fence fields that
-// only their owning operation group may carry are refused silently even by a
-// stopping anchor, before its anchor_stopping answer. A single hoisted gate (the
-// phase-1 check dropped, or one of its six fields dropped) answers a frame here.
+// TestLinuxOwnerAnchorWireExclusiveFieldsRefusedBeforeStoppingAnswer pins that the six exclusive
+// fields are refused silently before the anchor_stopping answer; hoisting the gate answers a frame.
 func TestLinuxOwnerAnchorWireExclusiveFieldsRefusedBeforeStoppingAnswer(t *testing.T) {
 	fixture := newLinuxOwnerAnchorWireFixture(t, true)
 	cases := []struct {
@@ -479,9 +426,8 @@ func TestLinuxOwnerAnchorWireCodecRejectsMalformedFrames(t *testing.T) {
 		{"descriptor-overflow", encoded, syscall.UnixRights(linuxOwnerAnchorWireFDs(t, 5)...)},
 	}
 	for _, item := range cases {
-		// Direct codec assertion: the codec itself must reject the frame (the
-		// end-to-end check below would pass even if the codec accepted it,
-		// because the later shape and membership gates are silent).
+		// Direct codec assertion: the end-to-end check below would pass even if the codec accepted the
+		// frame, because the later shape and membership gates are silent.
 		if err := linuxOwnerAnchorWireReadRequest(t, item.encoded, item.rights); err == nil {
 			t.Fatalf("%s was accepted by readLinuxOwnerAnchorRequest; want a decode error", item.name)
 		}
@@ -492,33 +438,6 @@ func TestLinuxOwnerAnchorWireCodecRejectsMalformedFrames(t *testing.T) {
 	}
 }
 
-// The goldens below pin the response bytes of the pre-refactor head.
-//
-// Provenance: every literal was captured on the pre-refactor head
-// `3ccc62f5618fdd16b38c2c4b7d6421a95f48bdfb` by the scratch harness archived at
-// <GDD-STATE>/refactor/tools/w3-02-response-table/capture-harness_test.go, whose
-// raw output is `capture-output.txt` in the same directory. The writer cases run
-// through the eight base `writeResponse*` variants; the serve cases run through
-// the real `serveConnection` (the statuses reachable without a delegated A/B
-// cgroup and a spawned helper run). The refactored code re-pins the same bytes
-// through `baseResponse` + the single `writeResponse`, so the goldens prove the
-// response field sets, JSON tags, omitempty behaviour and field order survived
-// the unification byte for byte.
-//
-// The literals live in this file, and not in anchor_shape_table_test.go, because
-// this harness also compiles against the pre-slice base tree (the recorded
-// reproof re-runs the goldens there); the writer cases that consume
-// linuxOwnerAnchorShapeWriterGoldens are asserted by
-// TestLinuxOwnerAnchorShapeWriterGoldens in anchor_shape_table_test.go.
-//
-// The pinned frames embed the harness anchor's A UID, which is the test
-// process's own uid, as `owner_uid` and (clone-removal proofs) as
-// `root_deleter_uid`; `linuxOwnerAnchorShapeGoldenFrame` substitutes that one
-// host-dependent number. Every other byte is pinned verbatim, including the
-// literal anchor process identity, parent boot ID, mount/device/inode and
-// manager path of the harness fixture.
-
-// linuxOwnerAnchorShapeGoldenOwnerUID is the uid the capture ran with.
 const linuxOwnerAnchorShapeGoldenOwnerUID = 1000
 
 // linuxOwnerAnchorShapeGoldenFrame resolves the one host-dependent value of a
@@ -535,11 +454,6 @@ func linuxOwnerAnchorShapeGoldenFrame(t *testing.T, golden string) string {
 	return golden
 }
 
-// linuxOwnerAnchorShapeWriterGoldens pins one frame per former writer variant,
-// each with every stamped field non-zero: plain (`writeResponse`),
-// stop-evidence, clone-removal, descriptors (`...WithFDs`), reap-evidence,
-// child-classification, helper-exit, run-pins, the clone-cleanup key override
-// and the zero-valued identity response.
 var linuxOwnerAnchorShapeWriterGoldens = map[string]string{
 	"plain":                "{\"version\":1,\"operation\":\"stop-leaf-v2\",\"status\":\"stopped\",\"run_key\":{\"run_id\":\"owner-anchor-run-test\",\"generation\":1},\"fence\":{\"runtime_id\":\"runtime-test\",\"runtime_epoch\":1,\"generation\":1,\"claim_id\":\"claim-test\",\"lease_token\":\"lease-test\"},\"launch_token\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"anchor\":{\"pid\":4242,\"identity\":\"linux:v2:capture-anchor\"},\"parent\":{\"boot_id\":\"00000000-0000-0000-0000-000000000000\",\"mount_id\":1,\"device\":1,\"inode\":2,\"path\":\"/system.slice/symmetry-owner.service/manager\"},\"owner_uid\":1000,\"manager_path\":\"/system.slice/symmetry-owner.service/manager\",\"helper\":{\"pid\":5150,\"identity\":\"linux:v2:capture-helper\"},\"evidence\":{\"version\":1,\"run_key\":{\"run_id\":\"owner-anchor-run-test\",\"generation\":1},\"fence\":{\"runtime_id\":\"runtime-test\",\"runtime_epoch\":1,\"generation\":1,\"claim_id\":\"claim-test\",\"lease_token\":\"lease-test\"},\"launch_token\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"parent\":{\"boot_id\":\"00000000-0000-0000-0000-000000000000\",\"mount_id\":1,\"device\":1,\"inode\":2,\"path\":\"/system.slice/symmetry-owner.service/manager\"},\"leaf\":{\"version\":2,\"parent\":{\"boot_id\":\"00000000-0000-0000-0000-000000000000\",\"mount_id\":1,\"device\":1,\"inode\":2,\"path\":\"/system.slice/symmetry-owner.service/manager\"},\"leaf_name\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"leaf_device\":1,\"leaf_inode\":3},\"helper\":{\"pid\":5150,\"identity\":\"linux:v2:capture-helper\"},\"process\":{\"pid\":5151,\"identity\":\"linux:v2:capture-process\"},\"process_role\":\"native\",\"helper_exit\":{\"version\":1,\"process\":{\"pid\":5150,\"identity\":\"linux:v2:capture-helper\"},\"witness\":{\"pid\":5152,\"identity\":\"linux:v2:capture-witness\"},\"waited\":true,\"reaped\":true},\"process_exit\":{\"version\":1,\"process\":{\"pid\":5150,\"identity\":\"linux:v2:capture-helper\"},\"witness\":{\"pid\":5152,\"identity\":\"linux:v2:capture-witness\"},\"waited\":true,\"reaped\":true}}}",
 	"stop-evidence":        "{\"version\":1,\"operation\":\"stop-leaf-v2\",\"status\":\"stopped\",\"run_key\":{\"run_id\":\"owner-anchor-run-test\",\"generation\":1},\"fence\":{\"runtime_id\":\"runtime-test\",\"runtime_epoch\":1,\"generation\":1,\"claim_id\":\"claim-test\",\"lease_token\":\"lease-test\"},\"launch_token\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"anchor\":{\"pid\":4242,\"identity\":\"linux:v2:capture-anchor\"},\"parent\":{\"boot_id\":\"00000000-0000-0000-0000-000000000000\",\"mount_id\":1,\"device\":1,\"inode\":2,\"path\":\"/system.slice/symmetry-owner.service/manager\"},\"owner_uid\":1000,\"manager_path\":\"/system.slice/symmetry-owner.service/manager\",\"stop_evidence\":{\"version\":1,\"run_key\":{\"run_id\":\"owner-anchor-run-test\",\"generation\":1},\"fence\":{\"runtime_id\":\"runtime-test\",\"runtime_epoch\":1,\"generation\":1,\"claim_id\":\"claim-test\",\"lease_token\":\"lease-test\"},\"launch_token\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"parent\":{\"boot_id\":\"00000000-0000-0000-0000-000000000000\",\"mount_id\":1,\"device\":1,\"inode\":2,\"path\":\"/system.slice/symmetry-owner.service/manager\"},\"leaf\":{\"version\":2,\"parent\":{\"boot_id\":\"00000000-0000-0000-0000-000000000000\",\"mount_id\":1,\"device\":1,\"inode\":2,\"path\":\"/system.slice/symmetry-owner.service/manager\"},\"leaf_name\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"leaf_device\":1,\"leaf_inode\":3},\"anchor\":{\"pid\":4242,\"identity\":\"linux:v2:capture-anchor\"},\"helper\":{\"pid\":5150,\"identity\":\"linux:v2:capture-helper\"},\"gate_release_authorized\":false,\"pinned_leaf_fd\":true,\"kill_attempted\":true,\"kill_acknowledged\":true,\"cgroup_populated_zero\":true,\"no_migration_observed\":false,\"producer_fenced\":false,\"descendants_reaped\":false,\"reap_count\":0}}",
@@ -553,16 +467,11 @@ var linuxOwnerAnchorShapeWriterGoldens = map[string]string{
 	"zero-identity":        "{\"version\":1,\"operation\":\"identity\",\"status\":\"ready\",\"run_key\":{\"run_id\":\"\",\"generation\":0},\"fence\":{\"runtime_id\":\"\",\"runtime_epoch\":0,\"generation\":0,\"claim_id\":\"\",\"lease_token\":\"\"},\"launch_token\":\"\",\"anchor\":{\"pid\":4242,\"identity\":\"linux:v2:capture-anchor\"},\"parent\":{\"boot_id\":\"00000000-0000-0000-0000-000000000000\",\"mount_id\":1,\"device\":1,\"inode\":2,\"path\":\"/system.slice/symmetry-owner.service/manager\"},\"owner_uid\":1000,\"manager_path\":\"/system.slice/symmetry-owner.service/manager\"}",
 }
 
-// linuxOwnerAnchorShapeWriterGoldenFDs is the descriptor count each pinned
-// writer frame carries; every case not listed transfers none.
 var linuxOwnerAnchorShapeWriterGoldenFDs = map[string]int{
 	"descriptors": 3,
 	"run-pins":    2,
 }
 
-// linuxOwnerAnchorWireStoppingGoldens pins the `anchor_stopping` answer of every
-// operation whose row answers a stopping anchor, captured through the real
-// serveConnection (keyed by the operation).
 var linuxOwnerAnchorWireStoppingGoldens = map[string]string{
 	"identity":                     "{\"version\":1,\"operation\":\"identity\",\"status\":\"anchor_stopping\",\"run_key\":{\"run_id\":\"\",\"generation\":0},\"fence\":{\"runtime_id\":\"\",\"runtime_epoch\":0,\"generation\":0,\"claim_id\":\"\",\"lease_token\":\"\"},\"launch_token\":\"\",\"anchor\":{\"pid\":4242,\"identity\":\"linux:v2:capture-anchor\"},\"parent\":{\"boot_id\":\"00000000-0000-0000-0000-000000000000\",\"mount_id\":1,\"device\":1,\"inode\":2,\"path\":\"/system.slice/symmetry-owner.service/manager\"},\"owner_uid\":1000,\"manager_path\":\"/system.slice/symmetry-owner.service/manager\"}",
 	"start-helper-v2":              "{\"version\":1,\"operation\":\"start-helper-v2\",\"status\":\"anchor_stopping\",\"run_key\":{\"run_id\":\"owner-anchor-run-test\",\"generation\":1},\"fence\":{\"runtime_id\":\"runtime-test\",\"runtime_epoch\":1,\"generation\":1,\"claim_id\":\"claim-test\",\"lease_token\":\"lease-test\"},\"launch_token\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"anchor\":{\"pid\":4242,\"identity\":\"linux:v2:capture-anchor\"},\"parent\":{\"boot_id\":\"00000000-0000-0000-0000-000000000000\",\"mount_id\":1,\"device\":1,\"inode\":2,\"path\":\"/system.slice/symmetry-owner.service/manager\"},\"owner_uid\":1000,\"manager_path\":\"/system.slice/symmetry-owner.service/manager\"}",
@@ -573,10 +482,6 @@ var linuxOwnerAnchorWireStoppingGoldens = map[string]string{
 	"classify-run-child-origin-v2": "{\"version\":1,\"operation\":\"classify-run-child-origin-v2\",\"status\":\"anchor_stopping\",\"run_key\":{\"run_id\":\"owner-anchor-run-test\",\"generation\":1},\"fence\":{\"runtime_id\":\"runtime-test\",\"runtime_epoch\":1,\"generation\":1,\"claim_id\":\"claim-test\",\"lease_token\":\"lease-test\"},\"launch_token\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"anchor\":{\"pid\":4242,\"identity\":\"linux:v2:capture-anchor\"},\"parent\":{\"boot_id\":\"00000000-0000-0000-0000-000000000000\",\"mount_id\":1,\"device\":1,\"inode\":2,\"path\":\"/system.slice/symmetry-owner.service/manager\"},\"owner_uid\":1000,\"manager_path\":\"/system.slice/symmetry-owner.service/manager\"}",
 }
 
-// linuxOwnerAnchorWireCloneRejectedGolden pins the clone-cleanup rejection
-// frame. Both rejection branches (absent target without a prior-removal proof,
-// live target with one) emit the same base-only fields, so one golden covers
-// both; which branch ran is pinned at the request level by the clone-cleanup
-// shape cases in anchor_shape_table_test.go, because the frame itself carries no
-// branch signal.
+// linuxOwnerAnchorWireCloneRejectedGolden covers both clone-cleanup rejection branches: they emit
+// identical base-only fields, so the frame itself carries no branch signal.
 const linuxOwnerAnchorWireCloneRejectedGolden = "{\"version\":1,\"operation\":\"remove-b-clone-after-receipt\",\"status\":\"request_rejected\",\"run_key\":{\"run_id\":\"\",\"generation\":0},\"fence\":{\"runtime_id\":\"\",\"runtime_epoch\":0,\"generation\":0,\"claim_id\":\"\",\"lease_token\":\"\"},\"launch_token\":\"\",\"anchor\":{\"pid\":4242,\"identity\":\"linux:v2:capture-anchor\"},\"parent\":{\"boot_id\":\"00000000-0000-0000-0000-000000000000\",\"mount_id\":1,\"device\":1,\"inode\":2,\"path\":\"/system.slice/symmetry-owner.service/manager\"},\"owner_uid\":1000,\"manager_path\":\"/system.slice/symmetry-owner.service/manager\"}"

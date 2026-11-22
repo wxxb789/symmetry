@@ -24,14 +24,12 @@ export default defineConfig({
     setupFiles: ["./src/test-setup.ts"],
     restoreMocks: true,
     clearMocks: true,
+    pool: "threads",
+    maxWorkers: "50%",
     // `cache` is a test-level option: at the config root it is an unknown Vite key
     // that leaves vitest's results cache on.
     ...(disableToolCaches ? { cache: false, fsModuleCache: false } : {}),
     ...(toolCacheDir ? { fsModuleCachePath: path.join(toolCacheDir, "vitest-fs") } : {}),
-    // `vitest run --coverage` (the gate step the coverage plane adds) writes its
-    // report like the other run state: into the harness tool cache when the sealed
-    // checkout exports SYMMETRY_TOOL_CACHE_DIR, and into the package's own
-    // `coverage/` directory otherwise.
     coverage: {
       provider: "v8",
       reporter: ["text-summary", "lcov"],

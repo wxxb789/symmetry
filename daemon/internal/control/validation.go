@@ -532,9 +532,8 @@ func decodeStrictJSON(value []byte, target any) error {
 		}
 		return err
 	}
-	// Duplicate members are rejected only after the value parsed, so every
-	// pre-existing rejection keeps its message and precedence; the scan matches
-	// the daemon-side decodeStrictObject strictness at every depth.
+	// Duplicate members are rejected only after the value parsed, preserving every
+	// pre-existing rejection message and precedence at every depth.
 	return protocol.RejectDuplicateJSONMembers(value)
 }
 

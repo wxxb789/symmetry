@@ -289,3 +289,18 @@ any change to the two existing protocol test files.
 W4-02 (`anchorConnection` per-operation handlers) can lift each `switch` case into a handler that
 receives the row from `linuxOwnerAnchorOperationShapeFor`; the table is the per-op contract it must
 preserve. The control-flow audit in the evidence file is the base it must re-derive against.
+
+## Comment-policy sweep (2026-11-22)
+
+Module intent removed from `daemon/internal/platform/anchor_wire_shape_test.go`, `daemon/internal/platform/anchor_shape_table_test.go` by the 2026-11-22 comment-policy sweep is recorded below (workstream record "ws1-platform-anchor").
+
+- `anchor_wire_shape_test.go:495-519` — the golden capture provenance (pre-refactor commit
+  `3ccc62f5618fdd16b38c2c4b7d6421a95f48bdfb`, scratch harness path, `capture-output.txt`). Deleted as
+  D2 history; the surviving `linuxOwnerAnchorShapeGoldenFrame` doc keeps the one host-dependent uid
+  substitution. No `docs/` record carries the capture pointer.
+
+- `anchor_shape_table_test.go:5-15` — the cross-file note that the writer goldens live in
+  `anchor_wire_shape_test.go` (still directly visible from the test) and the "eight former
+  `writeResponse*` variants" provenance id.
+
+The sweep's plan is [`docs/plans/2026-11-22-comment-policy-sweep-plan.md`](2026-11-22-comment-policy-sweep-plan.md).

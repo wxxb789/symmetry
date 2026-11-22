@@ -134,9 +134,8 @@ func (tx *goalAdmissionTx) run(ctx context.Context) error {
 	if settled, err := tx.openGoalNativeSession(ctx); err != nil || settled {
 		return err
 	}
-	// Hold start ownership through the returned StartTurn result. A cancellation
-	// or lease expiry can cancel operationContext meanwhile, but cannot close or
-	// settle the session until this caller observes that result.
+	// Holds start ownership through the returned StartTurn result: cancellation or lease expiry
+	// may cancel operationContext meanwhile, but cannot close or settle before this caller sees it.
 	defer tx.daemon.finishNativeStartPublication(tx.key)
 	return tx.openGoalTurnAndSettleTerminalOwnership(ctx)
 }
@@ -488,10 +487,8 @@ func (tx *goalAdmissionTx) markRetainedWorkspaceRecovery(ctx context.Context) er
 }
 
 func (tx *goalAdmissionTx) queueRetainedSessionAttach(_ context.Context) error {
-	// Persist the unready target attachment before consuming the available
-	// certificate. If this write fails, the predecessor remains available;
-	// if the process dies before the CAS, ordinary unready-delivery recovery
-	// can discard it without referring to a new native effect.
+	// Persist the unready target attachment before consuming the available certificate: a
+	// failed write keeps the predecessor available, and unready-delivery recovery the rest.
 	if _, err := tx.daemon.store.QueueGoalSessionAttach(tx.key, state.GoalSessionAttachDelivery{
 		GoalID: tx.admission.GoalID, LocalHandleID: tx.localHandleID, BindingID: tx.bindingID,
 		ServerIssuedBinding: false,
@@ -845,10 +842,8 @@ func (tx *goalAdmissionTx) publishRetainedNativeStartBoundary(_ context.Context)
 	if tx.resume == nil {
 		return nil
 	}
-	// For a retained session, Ready is also the durable native-start
-	// boundary. Recovery may compensate an unready rebind using the source
-	// stop certificate, but must treat a ready rebind as a possible new native
-	// process and never infer that it stopped from a missing PID alone.
+	// For a retained session, Ready is also the durable native-start boundary: an unready
+	// rebind is compensable, but a ready one may be a new process — never a missing-PID stop.
 	if _, err := tx.daemon.markGoalSessionAttachDeliveryReady(tx.key, tx.localHandleID); err != nil {
 		tx.daemon.retainUnknownGoalLaunchWorkspace(tx.key)
 		return taskResultFailure(protocol.TaskResultReasonUnknownOutcome, fmt.Errorf("persist retained native-start boundary: %w", err))
@@ -867,8 +862,8 @@ func (tx *goalAdmissionTx) armNativeLeaseSequence() {
 	}
 	tx.daemon.mu.Lock()
 	if active := tx.daemon.running[tx.key]; active != nil {
-		// Runner has already consumed sequence 1 while arming the native
-		// watchdog. The first daemon renewal must therefore use sequence 2.
+		// Runner already consumed sequence 1 while arming the native watchdog; the first
+		// daemon renewal must therefore use sequence 2.
 		active.leaseSequence = 1
 	}
 	tx.daemon.mu.Unlock()
@@ -1051,10 +1046,8 @@ func (tx *goalAdmissionTx) failNativeStart(_ context.Context, startErr error) er
 		return taskResultFailure(protocol.TaskResultReasonUnknownOutcome, errors.Join(fmt.Errorf("start native Goal session: %w", startErr), discardErr, abandonErr))
 	}
 	if tx.resume != nil && (errors.Is(startErr, pi.ErrResumeRejected) || errors.Is(startErr, omp.ErrResumeRejected) || errors.Is(startErr, omo.ErrResumeRejected)) {
-		// The adapter rejected the retained handle before returning a session. Persist
-		// known native stop before any Control RPC so an attachment timeout can
-		// be repaired through the ready readback barrier rather than clearing
-		// the current binding as uncertain.
+		// The adapter rejected the retained handle before returning a session: persist the
+		// known native stop before any Control RPC so a timeout stays repairable by readback.
 		if _, stopErr := tx.daemon.store.MarkGoalSessionResumeRejected(tx.sessionKey); stopErr != nil {
 			return taskResultFailure(protocol.TaskResultReasonUnknownOutcome, errors.Join(startErr, fmt.Errorf("persist rejected retained native stop: %w", stopErr)))
 		}
@@ -1062,10 +1055,8 @@ func (tx *goalAdmissionTx) failNativeStart(_ context.Context, startErr error) er
 	}
 	tx.daemon.retainUnknownGoalLaunchWorkspace(tx.key)
 	if tx.resume != nil {
-		// Ready proves that this call was allowed to attempt a native resume.
-		// Do not discard or clear the exact attachment identity on an
-		// ambiguous transport failure; restart recovery must retain this
-		// barrier until process/native termination is proven.
+		// Ready proves this call was allowed to attempt a native resume: on an ambiguous
+		// transport failure keep the exact attachment identity — restart recovery needs it.
 		return taskResultFailure(protocol.TaskResultReasonUnknownOutcome, fmt.Errorf("start retained native session: %w", startErr))
 	}
 	if _, discardErr := tx.daemon.store.DiscardUnreadyGoalSessionAttachDelivery(tx.key, tx.localHandleID); discardErr != nil {
