@@ -530,6 +530,46 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
     assert Repo.aggregate(SymmetryControl.Goals.RunEvidence, :count) == count_before
   end
 
+  test "the evidence endpoint accepts exactly the fence beside the batch document", %{conn: conn} do
+    %{token: token, run: run, fence: fence, subject: subject} = claimed_goal_run_fixture(conn)
+
+    batch = %{
+      schema_version: "symmetry.evidence_batch.v1",
+      run_id: run.id,
+      items: [evidence_attrs(run.id, subject)]
+    }
+
+    wire = Map.merge(fence, batch)
+
+    assert %{
+             "evidence_batch" => %{
+               "run_id" => batch_run_id,
+               "receipts" => [%{"disposition" => "created"}]
+             }
+           } =
+             bearer(conn, token)
+             |> post("/api/v1/runs/#{run.id}/evidence", wire)
+             |> json_response(201)
+
+    assert batch_run_id == run.id
+
+    for member <- Map.keys(fence) do
+      assert_error(
+        bearer(conn, token)
+        |> post("/api/v1/runs/#{run.id}/evidence", Map.delete(wire, member)),
+        400,
+        "invalid_request"
+      )
+    end
+
+    assert_error(
+      bearer(conn, token)
+      |> post("/api/v1/runs/#{run.id}/evidence", Map.put(wire, :unexpected_member, true)),
+      400,
+      "invalid_request"
+    )
+  end
+
   test "raw duplicate evidence JSON is rejected after ownership without a write", %{conn: conn} do
     %{token: owner_token, run: run, fence: fence, subject: subject} =
       claimed_goal_run_fixture(conn)

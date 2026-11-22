@@ -52,6 +52,20 @@ unconsumed presentation member remains additive. Consume it as `ChatRead`.
 schema-valid snapshot with its top-level `content_hash` omitted; keys sort
 recursively and arrays retain order.
 
+`evidence.schema.json`, `evidence-batch.schema.json` and `usage.schema.json`
+describe the fence-stripped machine request document, not the HTTP body a daemon
+sends. The daemon flattens the five fence members — `runtime_id`,
+`runtime_epoch`, `generation`, `claim_id` and `lease_token` — beside that
+document at the top level by embedding `protocol.Fence` at the `AppendEvidence`,
+`AppendEvidenceBatch` and `RecordUsage` call sites, and keeps `run_id`
+path-authoritative rather than body-authoritative. Control validates and drops
+exactly those five members in one place, the `DaemonController` fence rule
+(`@fence_spec` / `fenced_body/3`), before `ContractValidation` sees the
+document; the fence members and their stripping are specified and tested at that
+controller boundary. A body that still carries the fence is therefore expected
+to fail these schemas' `additionalProperties: false`, and the document validated
+on its own is the same document Control validates after stripping.
+
 The fixture manifest at `fixtures/manifest.json` is the shared positive and
 negative corpus. It covers the presentation reads as well: workspace rows,
 work detail and timeline bodies with null, active, paginated and
