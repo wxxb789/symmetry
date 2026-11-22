@@ -1,11 +1,6 @@
 //go:build linux && amd64
 
-// symmetry-linux-clone-bootstrap is the fixed, root-installed B-owned stage
-// entered by the A gate only after its one guarded RELEASE and complete B drop.
-// It creates a standalone checkout from the A-owned immutable bundle, waits
-// for A's durable checkout ACK, then execs the approved native image in this
-// same PID. It never has root or A host credentials.
-package main
+package clonebootstrap
 
 import (
 	"context"
@@ -38,53 +33,36 @@ type bootstrapArgs struct {
 	bGID        uint32
 }
 
-type phaseError struct {
-	stage linuxgate.CloneBootstrapFailureStage
-	errno uint32
-	cause error
+type PhaseError struct {
+	Stage linuxgate.CloneBootstrapFailureStage
+	Errno uint32
+	Cause error
 }
 
-func (failure *phaseError) Error() string {
-	if failure == nil || failure.cause == nil {
+func (failure *PhaseError) Error() string {
+	if failure == nil || failure.Cause == nil {
 		return "Linux clone bootstrap failed"
 	}
-	return failure.cause.Error()
+	return failure.Cause.Error()
 }
 
-func (failure *phaseError) Unwrap() error {
+func (failure *PhaseError) Unwrap() error {
 	if failure == nil {
 		return nil
 	}
-	return failure.cause
+	return failure.Cause
 }
 
 func fail(stage linuxgate.CloneBootstrapFailureStage, err error) error {
 	if err == nil {
 		err = errors.New("Linux clone bootstrap phase failed")
 	}
-	return &phaseError{stage: stage, errno: bootstrapErrno(err), cause: err}
+	return &PhaseError{Stage: stage, Errno: bootstrapErrno(err), Cause: err}
 }
 
-func main() {
-	statusFD := statusFDFromArgs(os.Args)
-	if err := runBootstrap(os.Args); err != nil {
-		var failure *phaseError
-		if !errors.As(err, &failure) {
-			failure = &phaseError{stage: linuxgate.CloneFailureRequest, errno: uint32(unix.EPROTO), cause: err}
-		}
-		if statusFD >= 0 {
-			if packet, encodeErr := linuxgate.EncodeCloneBootstrapFailure(failure.stage, failure.errno); encodeErr == nil {
-				_ = sendStatusPacket(statusFD, packet)
-				clear(packet)
-			}
-		}
-	}
-	os.Exit(1)
-}
-
-func statusFDFromArgs(argv []string) int {
+func StatusFDFromArgs(argv []string) int {
 	// argv[4] is the fixed exec-status descriptor in the C gate ABI. This
-	// best-effort parse is only for a bounded failure frame; runBootstrap
+	// best-effort parse is only for a bounded failure frame; RunBootstrap
 	// validates the complete vector before using any descriptor.
 	if len(argv) <= 4 {
 		return -1
@@ -96,7 +74,7 @@ func statusFDFromArgs(argv []string) int {
 	return fd
 }
 
-func runBootstrap(argv []string) error {
+func RunBootstrap(argv []string) error {
 	if len(argv) != 11 || argv[0] != bootstrapArgv0 {
 		return fail(linuxgate.CloneFailureRequest, errors.New("clone bootstrap argv shape is invalid"))
 	}
@@ -218,7 +196,7 @@ func runBootstrap(argv []string) error {
 		clear(ready)
 		return fail(linuxgate.CloneFailureCheckout, err)
 	}
-	if err := sendStatusPacket(args.statusFD, ready); err != nil {
+	if err := SendStatusPacket(args.statusFD, ready); err != nil {
 		clear(ready)
 		return fail(linuxgate.CloneFailureCheckout, fmt.Errorf("send checkout-ready frame: %w", err))
 	}
@@ -275,7 +253,7 @@ func runBootstrap(argv []string) error {
 	}
 	runtime.LockOSThread()
 	attempt := linuxgate.EncodeNativeExecAttempt(uint64(nativeIdentity.Dev), nativeIdentity.Ino)
-	if err := sendStatusPacket(args.statusFD, attempt); err != nil {
+	if err := SendStatusPacket(args.statusFD, attempt); err != nil {
 		clear(attempt)
 		return fail(linuxgate.CloneFailureExec, fmt.Errorf("send native exec-attempt frame: %w", err))
 	}
@@ -757,7 +735,7 @@ func closeAncillaryRights(oob []byte) {
 	}
 }
 
-func sendStatusPacket(fd int, packet []byte) error {
+func SendStatusPacket(fd int, packet []byte) error {
 	if len(packet) < 12 || len(packet) > 64<<10 {
 		return errors.New("clone status frame is outside its fixed size bound")
 	}
