@@ -26,7 +26,7 @@ in `pnpm-workspace.yaml` pinning exactly those three to `6.45.1`/`5.1.0`/`3.0.5`
 | --- | --- | ---: | --- |
 | `frontend/src/features/goals/detail.tsx` | edited | 757 → 778 | the settle conversion only: the goal query's `refetchInterval` while a settle is outstanding and `refetchIntervalInBackground` (`:82-83`), the outstanding-settle count (`:78-79`, incremented/decremented at `:92`/`:96`), `goalMarker` (`:47-49`), `waitForGoalSettle` (`:51-73`), `settleGoalRead` (`:91-98`), the two call sites' compressed comments (`:171`, `:227`) |
 | `frontend/vitest.config.ts` | edited | 39 → 41 | the explicit `testTimeout: 15_000` (`:24-25`) |
-| `frontend/src/features/goals/goal-settle.test.tsx` | new | 0 → 338 | 8 cases: the six settle cases + the two budget-guard cases (the apply pass of §12 added the overlapping-settle and unfocused-document cases and extended cases 1 and 4; the fix pass of §13 widened the shared reads-stopped probe and unified the before-bound thresholds) |
+| `frontend/src/features/goals/goal-settle.test.tsx` | new | 0 → 339 | 8 cases: the six settle cases + the two budget-guard cases (the apply pass of §12 added the overlapping-settle and unfocused-document cases and extended cases 1 and 4; the fix pass of §13 widened the shared reads-stopped probe and unified the before-bound thresholds; the F1–F4 pass of §14 named the two inline budgets and relaxed the two exact moved-read counts) |
 | `frontend/src/features/goals/goal-attention.test.tsx` | **unedited** | 1,321 | 29 case names, the eight 5,000 ms waits and the seven `}, 15_000)` budgets byte-identical |
 | `frontend/src/tool-cache-config.test.ts` | **unedited** | 71 | oracle; its two cases keep their own 30,000 ms budgets |
 | `frontend/src/features/connections/connections.test.tsx` | **unedited** | — | oracle; its three wait sites keep 5,000 ms under the new 15,000 ms default |
@@ -144,15 +144,18 @@ eight.
 | 10 | `connections.test.tsx:918` | 5,000 | 15,000 (global; was 5,000) | yes |
 | 11 | `connections.test.tsx:935` | 5,000 | 15,000 (global; was 5,000) | yes |
 | 12 | `chat.test.tsx:1276` | 8,000 | 20,000 (`}, 20_000)` `:1283`) | yes |
-| 13 | `goal-settle.test.tsx` `NOTICE_WAIT_MS` (`:16`; the notice waits and case 4's read wait) | 5,000 | 15,000 (global; asserted at runtime, `:328-329`) | yes |
-| 14 | `goal-settle.test.tsx` `FOLLOW_UP_WAIT_MS` (`:17`) | 4,000 | 15,000 (global; asserted at runtime, `:328-329`) | yes |
+| 13 | `goal-settle.test.tsx` `NOTICE_WAIT_MS` (`:16`; the notice waits of cases 1–3 and 6, and case 4's read wait) | 5,000 | 15,000 (global; asserted at runtime, `:329-330`) | yes |
+| 14 | `goal-settle.test.tsx` `FOLLOW_UP_WAIT_MS` (`:17`) | 4,000 | 15,000 (global; asserted at runtime, `:329-330`) | yes |
+| 15 | `goal-settle.test.tsx` `PRE_BOUND_WAIT_MS` (`:19`; case 5's inline notice wait and the elapsed thresholds of all six settle cases) | 2,400 | 15,000 (global; asserted at runtime, `:329-330`) | yes |
+| 16 | `goal-settle.test.tsx` `READS_STOPPED_WINDOW_MS` (`:20`; the shared reads-stopped probe's window) | 800 | 15,000 (global; asserted at runtime, `:329-330`) | yes |
 | — | `tool-cache-config.test.ts:48,59` (oracle) | no inner wait | 30,000 per case (sized from the cold import) | n/a |
-| — | `goal-settle.test.tsx:332` config case | no inner wait | 30,000 (`CONFIG_IMPORT_BUDGET_MS`) | n/a |
+| — | `goal-settle.test.tsx:333` config case | no inner wait | 30,000 (`CONFIG_IMPORT_BUDGET_MS`) | n/a |
 
 The budget rule's runnable guards: `task.timeout === 15_000` for a case without an explicit budget
 (reddens when the option is removed, mutation (c)), every wait budget of the new file asserted
-strictly below that runtime number (`:328-329`), and the parsed `vitest.config.test?.testTimeout`
-(`:336`). The eight `goal-attention` and one `chat` sites keep their numbers and their explicit
+strictly below that runtime number (`:329-330`), and the parsed `vitest.config.test?.testTimeout`
+(`:337`). The guard loops over all four named budgets, so "every wait in this file" holds; the two
+inline ones were named in the F1–F4 pass of §14. The eight `goal-attention` and one `chat` sites keep their numbers and their explicit
 case budgets; the three `connections` sites are resolved by the global default with no site edit.
 Not covered by a runnable check: the per-case-budget containment of the eight `goal-attention`
 sites (their case budgets are explicit and this table records them; a source-text scan was
@@ -438,3 +441,77 @@ window, the zero-margin boundary the finding names (reproducing §12.2 (h)).
 
 Counts: the settle file stays at 8 cases and the full suite at 613 (no case added, renamed or
 removed; no oracle file touched by this pass).
+
+## 14. Fix-stage re-verification (2026-11-22, fifth pass; independent-review findings F1–F4)
+
+Scope: the four P3 findings of the independent adversarial review `251-opus-review-1`. F1 (the
+stale PR description): a refreshed body binding the numbers of *this* pass was written to the
+findings directory; the in-repo §12/§13 numbers were already accurate for their own bytes, and the
+one number that had drifted for the delivered tree is the full-suite count (see 14.1). F2 (the
+budget guard's coverage): case 5's inline 2,400 ms notice wait and the shared reads-stopped probe's
+800 ms window are now module constants `PRE_BOUND_WAIT_MS` (`:19`) and `READS_STOPPED_WINDOW_MS`
+(`:20`), both entries of `WAIT_BUDGETS` (`:21`), so the guard's "every wait in this file" name is
+true; the six elapsed thresholds share `PRE_BOUND_WAIT_MS`, `observeFor` takes the named window
+(`:61`), and §6 gains their rows. F3 (the latent real-timer window): the two moved-read counts at
+`:107` and `:319` are `toBeGreaterThanOrEqual(2)`; case 3's exact chain-break count (`:180`) and
+case 5's `pauseReads` count are kept. F4 (the comment policy): the three-line comment on the
+injected unrelated cache success is trimmed to the one-line trap (`:93`). Only the test file and
+this record changed (`git diff --numstat` vs HEAD: test file +15/−14; `detail.tsx` and
+`vitest.config.ts` byte-unchanged).
+
+Bytes under verification (successor of §13; every mutant flip below was applied alone to a scratch
+mirror outside the repo, run, and reverted under `sha256sum -c` against a byte backup):
+
+| file | lines | sha256 |
+| --- | ---: | --- |
+| `frontend/src/features/goals/detail.tsx` | 778 | `72863f5f358498344c12f422f4f29c68a147791bfe8df9f13162b26b2546cdb0` (unchanged from §13) |
+| `frontend/src/features/goals/goal-settle.test.tsx` | 339 | `258e131a123b788750f05f41e09884646826787ac58b5f2410bcf9ba7a1fa538` |
+| `frontend/vitest.config.ts` | 41 | `661cbe330e5c9c16ed088911f81708648abd17935fad2768383765b3d2cbc0df` (unchanged from §13) |
+
+### 14.1 Gate rows (foreground, serialized; workspace-resolved binaries, cwd `frontend`)
+
+| # | command | exit | result |
+| --- | --- | ---: | --- |
+| 1 | `node ../node_modules/typescript/bin/tsc --noEmit` | 0 | no output; 9.7 s |
+| 2 | `node node_modules/eslint/bin/eslint.js . --max-warnings 229 --no-cache` | 0 | 221 warnings, 0 errors (count unchanged from §12.1); 179 s |
+| 3 | `node node_modules/vitest/vitest.mjs run src/features/goals/goal-attention.test.tsx` | 0 | 29 passed (29); 35.7 s |
+| 4 | `node node_modules/vitest/vitest.mjs run src/features/goals/goal-settle.test.tsx` | 0 | 8 passed (8); 37.0 s |
+| 5 | `node node_modules/vitest/vitest.mjs run src/tool-cache-config.test.ts` | 0 | 2 passed (2); 7.3 s |
+| 6 | `node node_modules/vitest/vitest.mjs run src/features/chat/chat.test.tsx src/features/connections/connections.test.tsx` | 0 | 105 passed (105); 85.2 s |
+| 7 | `node node_modules/vitest/vitest.mjs run` (full suite) | 0 | **26 files / 619 passed (619)**; 51.4 s |
+| 8 | `node node_modules/vitest/vitest.mjs run src/app/selected-project.test.tsx` | 0 | 6 passed (6); 12.6 s |
+| 9 | `git diff --check`; `git status --porcelain -uall` | 0 | clean; exactly this record and the settle test modified |
+
+Full-suite count reconciliation: the delivered HEAD `7aef088e` is a merge of `origin/main` that
+brought #249's `selected-project.test.tsx` (6 cases, outside this slice's owned set) into the
+branch tree. §12.1/§13.2's full-suite rows (25 files / 613) were measured on the pre-merge branch
+bytes; the delivered tree re-measures at **26 files / 619**, rc 0, and the +1 file / +6 cases are
+exactly that file (row 8). The same drift moves the per-file-duration table of §7/§11 (report-only)
+by nothing else: the file set is otherwise the same 25 files.
+
+### 14.2 Mutant re-runs (the rows crossing the relaxed assertions; scratch mirror)
+
+`vitest run src/features/goals/goal-settle.test.tsx` with caches disabled and a scratch cache dir;
+rc 1 in every row.
+
+| mutant | flip | result (this pass's bytes) |
+| --- | --- | --- |
+| (a) | `previous === marker` removed | 3 failed / 5 passed: case 1 `expected 1 to be greater than or equal to 2`, case 3 `expected 1 to be 3`, case 6 `expected 1 to be greater than or equal to 2` — both relaxed cases stay red, so F3 was applied |
+| (b) | `marker !== before` removed | 4 failed / 4 passed: case 1 `expected +0 to be greater than or equal to 2`, case 2 `expected 658 to be >= 2400`, case 4 the pre-notice invalidation assertion, case 6 `expected +0 to be greater than or equal to 2` |
+| (i) | goal-query filter dropped (`event.query !== goalQuery` removed) | 1 failed / 7 passed: case 1 `expected 1 to be greater than or equal to 2` |
+| (l) | `refetchIntervalInBackground` removed | 1 failed / 7 passed: case 6 `expected +0 to be greater than or equal to 2` (the only red rides the relaxed count, and stays red) |
+
+Rows (a), (b) and (i) are the recorded mutants whose red path crosses the two relaxed assertions;
+(l) is the row whose *only* red does. The other rows (c–h, j, k) were demonstrated at §12.2/§13.3
+on their carrying assertions — case 3's exact count, the reads-stopped probes, the elapsed checks,
+the guard's first assertion — all byte-unchanged by this pass, so their reds stand without a
+re-run; (d)/(e) additionally keep reds on unchanged assertions beyond the relaxed cases.
+
+### 14.3 Base characterization of the delivered artifact (re-run)
+
+Base `42afb56c` sources for `detail.tsx` (`sha256 062777db3ab14c5edb3fc35d4dfe8491ebc59736129f949396f65a9cd4f93cab`),
+the delivered test file and the delivered `vitest.config.ts` (so the budget guards keep their
+subject), in the scratch mirror: **1 failed / 7 passed (8)**, rc 1 — only case 4 reddens
+(`expected 17 to be less than 3`: the private poll kept reading after the unmount). Cases 1–3, 5
+and 6 and both budget guards stay green; the count is unchanged from §12.3 and is the F1 body's
+"base characterization" number.
