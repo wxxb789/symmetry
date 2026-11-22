@@ -26,12 +26,12 @@ previous decomposition — evidence record with per-region control-flow audit).
 | --- | --- |
 | `frontend/src/features/chat/chat.tsx` | 734 L; `ChatPage` `:78-670`; eslint `max-lines-per-function` counts it as **446 lines, complexity 96** (comments/blank skipped) |
 | file-local helpers | `runOptionLabel:672`, `panePinnedBelowOffset:681`, `ChatMessageRow:686`, `definitiveRefusal:708`, `sameRequestBody:718`, `definitiveReadRefusal:731` |
-| sub-regions (base lines) | scope/URL parse + store binding `:79-104`; conversation/directory reads `:106-124`; run facts `:122-141`; intent math `:142-146`; resources `:148-156`; history + note `:159-169`; served-page retention effect `:171-175`; older-page machine `:187-247`; scroll restoration `:249-292`; send path `:301-411`; scope switching `:430-454`; view model + JSX `:456-670` |
+| sub-regions (base lines) | scope/URL parse `:85-92` + store binding `:94-104`; conversation/directory reads `:106-124`; run facts `:122-141`; intent math `:142-146`; resources `:148-157`; history + note `:159-169`; served-page retention effect `:171-175`; older-page machine `:187-247`; scroll restoration `:249-282` (+ leave capture `:430-437`, pane scroll rule `:548-566`); send path `:301-421`; scope switching `:430-454`; view model + JSX `:456-670` |
 | `chat.test.tsx` (frozen oracle) | 2062 L, **48** `it()` cases; `vitest run` exit 0 in the baseline |
 | `presentation.test.ts` (frozen oracle) | 559 L, **39** cases; `vitest run` exit 0 |
 | lint ratchet | `--max-warnings 229`; measured at base: **223** warnings (70 no-unnecessary-condition, 40 restrict-template-expressions, 27 no-invalid-void-type, 16 max-lines-per-function, 14 no-non-null-assertion, 13 no-deprecated, 12 complexity, 7 prefer-nullish-coalescing, 6 no-dynamic-delete, 6 prefer-find, 4 no-empty-function, 4 prefer-optional-chain, 2 dot-notation, 2 no-unnecessary-type-conversion); `ChatPage` carries the max-lines + complexity pair |
 | typecheck | `pnpm --filter @symmetry/frontend typecheck` exit 0 |
-| full suite | recorded in the evidence record (count reconciled to 411 declaration sites + 7 `.each` sites + this slice's additions) |
+| full suite | recorded in the evidence record (count reconciled at the fix stage: base 534 = 436 `it()` declaration sites + 7 `it.each` sites expanding to 98 cases; head 543 = 534 + this slice's 9 additions) |
 
 Host note: every `pnpm` invocation runs as `mise x pnpm@12.17.0 -- pnpm --trust-lockfile ...`
 (the pinned 12.17.0; the workspace lockfile policy feed is not reachable on this host, the
@@ -163,7 +163,7 @@ is preserved.
 
 | # | decision | rationale |
 | --- | --- | --- |
-| P1 | The status machine's write side (`send`/`submit`/`sendDecision` + request building) lives inside `useChatScopeState`, not as `ChatPage` closures | the contract names `useChatScopeState` as the "store binding + scope/status/index math" owner; every write that moves `ChatSendStatus` is that status math, and leaving it in `ChatPage` would make the page carry domain guards and miss `≤150 L` (base region `:301-411` is ~110 L). Request building is a module-level pure function `buildChatRequest` returning `{request} | {notice}`; the notice patch is written by the hook. |
+| P1 | The status machine's write side (`send`/`submit`/`sendDecision` + request building) lives inside `useChatScopeState`, not as `ChatPage` closures | the contract names `useChatScopeState` as the "store binding + scope/status/index math" owner; every write that moves `ChatSendStatus` is that status math, and leaving it in `ChatPage` would make the page carry domain guards and miss `≤150 L` (base region `:301-421` is ~120 L). Request building is a module-level pure function `buildChatRequest` returning `{request} | {notice}`; the notice patch is written by the hook. |
 | P2 | `useChatScopeState` takes the resolved `intents` list (not the intent) | the intent fallback rule is stored-state math (`intents.includes(state.intent) ? ... : intents[0] ?? "discuss"`), but `intents` itself comes from the served run facts, so the page passes the list and the hook owns the rule. |
 | P3 | Scroll accessors stay one store binding, and the pane ref is caller-owned | `useChatScopeStore()` holds `useState`/`useRef`; a second call would create a second store. The one binding is returned as `scroll` and passed to `useChatScrollRestoration(key, scroll, router, scrollRef)` — the contract's `useChatScrollRestoration(scopeKey)` signature plus the store slice it acts on. `scrollRef` is a parameter (the page creates it) because React 19's compiler rules reject both reading a hook-returned ref during render and writing it outside render; the delivered shape keeps `<div ref={paneRef}>` canonical in `ChatPage` and the tests. |
 | P4 | `useOlderPageLoading` keeps both clients the base used (`application.queryClient` for `fetchQuery`, `useQueryClient()` for `isFetching`/`refetchQueries`) | under the single `QueryClientProvider` they are the same instance, but the extraction preserves the exact access sites instead of relying on that identity. |
@@ -185,7 +185,7 @@ at `e84973a7` (recorded above), head rows on the final tree.
 | 3 | `pnpm --filter @symmetry/frontend exec vitest run src/features/chat/chat.test.tsx` | 48 cases, unmodified, same names, exit 0 |
 | 4 | `pnpm --filter @symmetry/frontend exec vitest run src/features/chat/presentation.test.ts` | 39 cases, exit 0 |
 | 5 | `pnpm --filter @symmetry/frontend exec vitest run src/features/chat/chat-hooks.test.tsx` | the new units' state transitions |
-| 6 | `pnpm --filter @symmetry/frontend test` | full suite; executed count reconciled to 411 declaration sites + 7 `.each` sites + the new cases |
+| 6 | `pnpm --filter @symmetry/frontend test` | full suite; executed count reconciled: base 534 = 436 declaration sites + 7 `.each` sites expanding to 98 cases; head 543 = 534 + the 9 new cases |
 | 7 | `git diff --check`; a profile-path grep over the diff | hygiene + the DLP rule |
 | 8 | eslint `max-lines-per-function`/`complexity` output per unit | `ChatPage` ≤150/≤25, each new unit ≤150/≤25 |
 | 9 | mutation flips (below), each shown red then reverted | each new test kills its named mutant |

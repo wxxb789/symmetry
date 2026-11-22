@@ -77,19 +77,19 @@ The plan's "cx <20 per unit" is report-only per the contract.
 
 | base span | responsibility | delivered unit |
 | --- | --- | --- |
-| `:79-86` | URL search → `urlScope`/`urlProjectId`/`urlRunId`/`identity`/`key`/`scopeComplete` | `chatScopeParams` (`use-chat-scope-state.ts`), called once by `ChatPage` per render; the hook receives the derived `params` |
-| `:91-104` | one `useChatScopeStore` binding, keyed `stateOf`, `latestStateOf` ref + layout effect | `useChatScopeState` (same call sites; the store's own `update`/`updateWith` are returned raw and called with the key, as at base) |
+| `:85-92` | URL search → `urlScope`/`urlProjectId`/`urlRunId`/`identity`/`key`/`scopeComplete` | `chatScopeParams` (`use-chat-scope-state.ts`), called once by `ChatPage` per render; the hook receives the derived `params` |
+| `:94-104` | one `useChatScopeStore` binding, keyed `stateOf`, `latestStateOf` ref + layout effect | `useChatScopeState` (same call sites; the store's own `update`/`updateWith` are returned raw and called with the key, as at base) |
 | `:106-124` | conversation read, directory read, `runRows` | `ChatPage` + `servedRuns` (`chat-sections.tsx`) |
 | `:122-141` | conversation/directory run projection, adapter/pause, `runSignals` | `conversationRunOf`/`servedRunOf`/`runSignalsOf`/`chatRunFacts` (helpers in `chat.tsx`; the inline expressions are unchanged) |
 | `:142-146` | `intents`, stored-intent fallback, `startFields` | `applicableChatIntents` call in `ChatPage`; fallback + `startFields` inside `useChatScopeState` |
-| `:148-156` | start-work resource read, repository/CI rows, scope project, target project | `resourcesProjectId`/`targetProjectId` in the hook; the read + row filters in `ChatPage`; `scopeProjectOf` helper |
+| `:148-157` | start-work resource read, repository/CI rows, scope project, target project | `resourcesProjectId`/`targetProjectId` in the hook; the read + row filters in `ChatPage`; `scopeProjectOf` helper |
 | `:159-169` | `chatHistoryView` + the empty/failed history note | `ChatPage` + `chatHistoryNote` helper |
-| `:171-175` | served-page retention effect (`retainServedPage`, `servedSource` identity guard) | `ChatPage`, unchanged byte-for-byte |
+| `:171-175` | served-page retention effect (`retainServedPage`, `servedSource` identity guard) | `ChatPage`; same body and deps (identifiers renamed: `served` → `servedPage`, `key` → `params.key`) |
 | `:187-247` | `olderLoads` + `loadOlder` press machine | `useOlderPageLoading` |
-| `:249-292` | scroll ref, owed/recorded layout effects, `onRendered` subscription, pane scroll rule, leave capture | `useChatScrollRestoration` |
-| `:301-411` | mutation, `send`, `buildRequest`, `submit`, `sendDecision` | `useChatScopeState` (`buildChatRequest` is the module-level pure builder) |
+| `:249-282`, `:430-437`, `:548-566` | scroll ref, owed/recorded layout effects, `onRendered` subscription; leave capture (`:430-437`) and the pane's scroll rule (`:548-566`, its JSX kept by `ChatTranscript`) | `useChatScrollRestoration` |
+| `:301-421` | mutation, `send`, `buildRequest`, `submit`, `sendDecision` | `useChatScopeState` (`buildChatRequest` is the module-level pure builder) |
 | `:430-454` | `rememberLeavingScope`, `changeScope`, `changeRun` | `ChatPage` wiring over `scrollRestoration.rememberLeavingScope` + `scope.update` |
-| `:456-474` | decision/evidence/links/empty view model | `chatRunFacts` (decision/failure/evidence/adapter/run state/run-select), `chatRunLinks` call, `emptyScope` literal in `ChatPage` |
+| `:456-474` | `pending` + `contextLabel` (`:457-467`), run links, evidence rows, run-select visibility, run state, empty view model | `chatRunFacts` (decision/failure/evidence/adapter/run state/run-select), `chatRunLinks` call, `chatContextLabel`/`emptyScope` in `ChatPage` |
 | `:478-500` | scope bar DOM | `ChatScopeBar` |
 | `:503-519` | scope-context DOM | `ChatPage` (unchanged DOM, rendered inline) |
 | `:521-533` | decision packet DOM | `ChatDecisionSection` (null decision renders nothing) |
@@ -112,7 +112,7 @@ outcome, not merely the same statement text.
 
 | # | base | head | preserved |
 | --- | --- | --- | --- |
-| A1 | `!!search.scope ?? "workspace"`, `?? null` members, `chatScopeKey`, `scopeComplete` = `workspace \|\| (project ? projectId !== null : runId !== null)` | `chatScopeParams` returns the same six values from the same expressions | yes |
+| A1 | `search.scope ?? "workspace"`, `?? null` members, `chatScopeKey`, `scopeComplete` = `workspace \|\| (project ? projectId !== null : runId !== null)` | `chatScopeParams` returns the same six values from the same expressions | yes |
 | A2 | `stateOf(key)`; `useRef(stateOf)` + `useLayoutEffect(() => { latestStateOf.current = stateOf; })` (no dep array) | same ref/effect, same position (registered before the scroll effects) | yes |
 | A3 | `edit` clears `{kind:"unconfirmed"}` else keeps `status`; spreads patch over the record | same callback body (now created by the hook, still per render) | yes |
 | A4 | stored intent used iff `intents.includes(state.intent)` else `intents[0] ?? "discuss"` | same expression | yes |
@@ -160,6 +160,9 @@ multiset — the applied edits touch no double-quoted literal.)
   `"request"`, `"markScrollRestore"`, `"recordScrollOffset"`, `"scrollOffsetOf"`,
   `"scrollRestoreOf"`, `"settleScrollRestore"`, `"onRendered"`, `"execution"`);
 - moved/duplicated counts of import strings.
+- status-kind literal occurrences: `"sending"` 5 → 4 (the hook's `sending` boolean replaces the
+  two JSX reads in `chat-sections.tsx`) and `"notice"` 5 → 8 (the status union's type member and
+  the consolidated notice writes in `use-chat-scope-state.ts`/`use-older-page-loading.ts`).
 
 No rendered text, label, `id`, `className`, `aria-*`, `data-*`, placeholder, option text or
 required/disabled literal differs — the diff has no such entry. The frozen oracle
@@ -187,18 +190,21 @@ bypass W4-11 recorded).
 | 8 | DLP greps (profile-path token, backslash-u) over the changed/new files | — | no match (exit 1 from `grep`) |
 | 9 | `./node_modules/.bin/knip --no-progress` | — | exit 1, 2 unused exported types, both `app/portal-double.ts` (W4-11, out of range); the pre-apply in-range `buildChatRequest` hit is closed by §8's direct test |
 
-Suite-count reconciliation (contract clause 1): base 534 executed = 411 declaration sites + 7
-`.each` sites expanded; head 543 = base 534 + this slice's 9 new tests (8 at the implement stage
-plus the apply-stage `buildChatRequest` test) in the one new file (all `it()` sites, no `.each`).
+Suite-count reconciliation (contract clause 1, re-derived at the fix stage): base 534 executed =
+436 line-anchored `it()` declaration sites + 7 `it.each` sites expanding to 98 cases
+(`[401,302,303]` 3, `shell-return-targets.json` 68, `shellPaths` 8×2, router 2, `mutations` 3,
+the api error table 2, `calls` 4); head 543 = base 534 + this slice's 9 new tests (8 at the
+implement stage plus the apply-stage `buildChatRequest` test) in the one new file (all `it()`
+sites, no `.each`) = 445 + 98.
 Lint per-rule counts (base → head, re-measured identical at apply): `no-unnecessary-condition`
 70 → 69, `restrict-template-expressions` 40 → 40, `no-invalid-void-type` 27 → 27,
 `max-lines-per-function` 16 → 15, `no-non-null-assertion` 14 → 14, `no-deprecated` 13 → 12,
 `complexity` 12 → 11, `prefer-nullish-coalescing` 7 → 7, `no-dynamic-delete` 6 → 6,
 `prefer-find` 6 → 6, `no-empty-function` 4 → 4, `prefer-optional-chain` 4 → 3,
-`dot-notation` 2 → 2, `no-unnecessary-type-conversion` 2 → 2 — 223 → 218, and the −5 is the
-removed `ChatPage` `max-lines-per-function` + `complexity` pair, the removed `FormEvent`
-deprecation and the two `no-empty-function` findings kept out of the new test file (its
-default callbacks are `vi.fn()`).
+`dot-notation` 2 → 2, `no-unnecessary-type-conversion` 2 → 2 — 223 → 218, and the −5 is the five
+rule-level reductions (`no-unnecessary-condition`, `max-lines-per-function`, `no-deprecated`,
+`complexity`, `prefer-optional-chain`, −1 each); `no-empty-function` stayed at 4 because the new
+test file's default callbacks are `vi.fn()`.
 
 ## 7. Mutation flips (each applied alone, run, then reverted; all rows re-shown red at the
 apply stage on the applied tree)
@@ -242,7 +248,7 @@ the §6 rows were re-run after the flips on the reverted tree.
 7. "re-asserts the recorded offset and marks it owed on the router's own restore (mutant:
    dropped owed-mark)" — the `onRendered` listener marks the recorded offset owed.
 8. "emits the target-project change with the cleared resource selections in one patch (mutant:
-   dropped cleared members)" — the composer section's emitted patch.
+   dropped clearing)" — the composer section's emitted patch.
 9. "returns the two notice outcomes and a request carrying the scope members (mutant: dropped
    guard)" — the direct `buildChatRequest` unit test: the empty-target `start_work` notice, the
    run-scope control notice without a run item, and the project-scope request's members
