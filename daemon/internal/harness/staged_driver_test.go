@@ -283,7 +283,8 @@ func TestStagedDriverHookFailuresSurfaceUnchanged(t *testing.T) {
 			_, err := driver.Open(ctx)
 			return err
 		},
-		"admit": func(driver *StagedDriver, _ *stagedFakeHooks, ctx context.Context) error {
+		"admit": func(driver *StagedDriver, hooks *stagedFakeHooks, ctx context.Context) error {
+			hooks.open = nil
 			if _, err := driver.Open(ctx); err != nil {
 				return err
 			}

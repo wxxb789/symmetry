@@ -3141,3 +3141,32 @@ func (sink *recordingHarnessSink) payload(kind harness.EventKind) json.RawMessag
 	}
 	return nil
 }
+
+func TestStartTurnBeforeOpenRefusesWithTheCodexThreadBarrierText(t *testing.T) {
+	process := newFakeNativeProcess()
+	adapter := &Adapter{
+		executable: "codex-test",
+		startProcess: func(_ context.Context, invocation execution.Invocation, sink execution.Sink) (nativeProcess, error) {
+			process.sink = sink
+			if invocation.PersistProcess != nil {
+				pid, identity := process.ProcessDetails()
+				if err := invocation.PersistProcess(pid, identity); err != nil {
+					return nil, err
+				}
+			}
+			return process, nil
+		},
+	}
+	started, err := adapter.Start(context.Background(), harness.StartRequest{
+		Workspace:      t.TempDir(),
+		PersistProcess: func(int, string) error { return nil },
+	}, &recordingHarnessSink{})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	session := started.(harness.StagedSession)
+	if err := session.StartTurn(context.Background(), harness.TurnRequest{Goal: "before open", Context: json.RawMessage(`{"snapshot":"canonical"}`)}); err == nil || err.Error() != "codex native session has not opened a thread" {
+		t.Fatalf("StartTurn before Open = %v, want the thread barrier text", err)
+	}
+	_ = process.Terminate(context.Background(), 0)
+}

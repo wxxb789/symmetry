@@ -851,9 +851,6 @@ func (session *nativeSession) Close(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("pi close context must not be nil")
 	}
-	// The initiating caller may leave at any time, but a close that has begun
-	// must still attempt bounded process-tree cleanup. WithoutCancel preserves
-	// request values without deriving an unbounded Background operation.
 	return session.staged.CloseDetached(ctx, session.cancelTimeout+processCleanupTimeout+processTerminationGrace, nil)
 }
 

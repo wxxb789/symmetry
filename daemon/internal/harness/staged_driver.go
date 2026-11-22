@@ -67,15 +67,12 @@ type ProcessDescription struct {
 // StagedHooks is the one adapter-supplied interface the staged driver calls.
 // Adapter state machines stay behind these methods.
 type StagedHooks interface {
-	// LaunchTransport starts this adapter's transport process, refuses a
-	// typed-nil owner, and installs the process under the adapter's delivery
-	// lock discipline. The runner persists the process identity through the
-	// invocation callbacks before it exposes the process.
+	// The runner persists the process identity through the invocation callbacks
+	// before it exposes the process.
 	LaunchTransport(ctx context.Context, invocation execution.Invocation) error
 	// OpenNativeSession runs this adapter's native handshake and returns the
 	// handle the driver records only on success.
 	OpenNativeSession(ctx context.Context) (NativeSessionHandle, error)
-	// AdmitNativeTurn writes this adapter's native turn.
 	AdmitNativeTurn(ctx context.Context, request TurnRequest) error
 	// CloseNativeSession runs this adapter's bounded cleanup and returns a bare
 	// PermanentCloseFailure result when the failure cannot be retried.
@@ -106,8 +103,6 @@ func NewStagedDriver(hooks StagedHooks, mutex *sync.Mutex) *StagedDriver {
 	return &StagedDriver{hooks: hooks, mutex: mutex}
 }
 
-// Launch merges the request's grant with the adapter's process description and
-// runs the one transport launch of this session.
 func (driver *StagedDriver) Launch(ctx context.Context, request StartRequest, description ProcessDescription) error {
 	return driver.hooks.LaunchTransport(ctx, request.grant().merged(description))
 }
@@ -152,27 +147,14 @@ func (driver *StagedDriver) Admit(ctx context.Context, request TurnRequest) erro
 	return driver.hooks.AdmitNativeTurn(ctx, request)
 }
 
-// OpenedLocked reports the recorded-handle latch to a caller that already holds
-// the session mutex.
 func (driver *StagedDriver) OpenedLocked() bool { return driver.opened }
 
-// OpeningLocked reports the in-flight open latch to a caller that already holds
-// the session mutex.
 func (driver *StagedDriver) OpeningLocked() bool { return driver.opening }
 
-// Close runs at most one in-flight shutdown on the caller's context.
 func (driver *StagedDriver) Close(ctx context.Context) error {
-	return driver.closeGate.Run(ctx, driver.closeAttempt)
+	return driver.closeGate.Run(ctx, driver.hooks.CloseNativeSession)
 }
 
-// CloseDetached runs the attempt under context.WithoutCancel plus budget, so a
-// caller that leaves cannot abandon it; start runs on the caller before the
-// detached goroutine starts.
 func (driver *StagedDriver) CloseDetached(ctx context.Context, budget time.Duration, start func()) error {
-	return driver.closeGate.RunDetached(ctx, budget, start, driver.closeAttempt)
-}
-
-// Only a bare PermanentCloseFailure is permanent; the gate interprets the marker.
-func (driver *StagedDriver) closeAttempt(ctx context.Context) error {
-	return driver.hooks.CloseNativeSession(ctx)
+	return driver.closeGate.RunDetached(ctx, budget, start, driver.hooks.CloseNativeSession)
 }

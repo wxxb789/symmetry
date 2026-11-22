@@ -19,6 +19,9 @@ import (
 const operationTimeout = 10 * time.Second
 const shutdownTimeout = 5 * time.Second
 
+var errOMPSessionCannotOpen = errors.New("OMP session cannot open")
+var errOMPPromptRefused = errors.New("OMP session does not admit another prompt")
+
 type processStarter func(context.Context, execution.Invocation, execution.Sink) (harness.NativeProcess, error)
 
 // Adapter owns one native OMP RPC process per admitted session, without a
@@ -201,7 +204,7 @@ func (session *nativeSession) Open(ctx context.Context) (handle harness.NativeSe
 		session.mu.Lock()
 		failure := session.failure
 		session.mu.Unlock()
-		return handle, errors.Join(failure, errors.New("OMP session cannot open"))
+		return handle, errors.Join(failure, errOMPSessionCannotOpen)
 	}
 	return handle, err
 }
@@ -209,7 +212,7 @@ func (session *nativeSession) Open(ctx context.Context) (handle harness.NativeSe
 func (session *nativeSession) OpenNativeSession(ctx context.Context) (handle harness.NativeSessionHandle, err error) {
 	session.mu.Lock()
 	if session.stopping || session.failure != nil {
-		err = errors.Join(session.failure, errors.New("OMP session cannot open"))
+		err = errors.Join(session.failure, errOMPSessionCannotOpen)
 		session.mu.Unlock()
 		return handle, err
 	}
@@ -259,7 +262,7 @@ func (session *nativeSession) StartTurn(ctx context.Context, request harness.Tur
 	}
 	err := session.staged.Admit(ctx, request)
 	if errors.Is(err, harness.ErrStagedSessionNotOpened) {
-		return errors.New("OMP session does not admit another prompt")
+		return errOMPPromptRefused
 	}
 	return err
 }
@@ -268,7 +271,7 @@ func (session *nativeSession) AdmitNativeTurn(ctx context.Context, request harne
 	session.mu.Lock()
 	if session.started || session.stopping || session.failure != nil {
 		session.mu.Unlock()
-		return errors.New("OMP session does not admit another prompt")
+		return errOMPPromptRefused
 	}
 	session.started = true
 	session.mu.Unlock()

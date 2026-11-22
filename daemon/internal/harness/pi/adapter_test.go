@@ -1403,3 +1403,12 @@ func (runner fakeCommandRunner) Run(_ context.Context, _ string, args ...string)
 	}
 	return runner.outputs[strings.Join(args, " ")], nil
 }
+
+func TestStartTurnBeforeOpenRefusesWithThePiNotOpenedText(t *testing.T) {
+	process := newFakeNativeProcess()
+	session := startPiSession(t, fakePiAdapter(process), harness.StartRequest{Workspace: t.TempDir()}, &recordingHarnessSink{})
+	t.Cleanup(func() { closePiSession(t, session) })
+	if err := session.StartTurn(context.Background(), harness.TurnRequest{Goal: "before open", Context: json.RawMessage(`{"snapshot":"canonical"}`)}); err == nil || err.Error() != "pi native session has not opened" {
+		t.Fatalf("StartTurn before Open = %v, want the pi not-opened text", err)
+	}
+}

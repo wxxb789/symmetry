@@ -50,6 +50,7 @@ const (
 )
 
 var errNativeSessionClosed = errors.New("codex native session is closed")
+var errNativeThreadNotOpened = errors.New("codex native session has not opened a thread")
 
 var errPendingTurnEventOverflow = errors.New("Codex pending turn notification buffer overflow")
 
@@ -516,7 +517,7 @@ func (session *nativeSession) StartTurn(ctx context.Context, request harness.Tur
 	}
 	err := session.staged.Admit(ctx, request)
 	if errors.Is(err, harness.ErrStagedSessionNotOpened) {
-		return errors.New("codex native session has not opened a thread")
+		return errNativeThreadNotOpened
 	}
 	return err
 }
@@ -530,7 +531,7 @@ func (session *nativeSession) AdmitNativeTurn(ctx context.Context, request harne
 	session.mutex.Lock()
 	if session.threadID == "" {
 		session.mutex.Unlock()
-		return errors.New("codex native session has not opened a thread")
+		return errNativeThreadNotOpened
 	}
 	if session.turnStarted {
 		session.mutex.Unlock()

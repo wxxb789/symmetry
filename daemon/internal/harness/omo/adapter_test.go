@@ -1549,3 +1549,22 @@ func TestOmOReviewRegressionAbsoluteResolutionFailureHasOnlyAvailabilityLeaf(t *
 		requireOmOReviewUnavailableProjection(t, capabilities, err)
 	}
 }
+
+func TestStartTurnBeforeOpenRefusesWithTheOmONotOpenedText(t *testing.T) {
+	process := newTestProcess()
+	started, err := NewAdapter("recorded-omo").start(context.Background(), candidateRequest(t, process), &testSink{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := started.(*nativeSession)
+	t.Cleanup(func() {
+		process.finish(execution.Result{PID: 42, ExitCode: 0})
+		cleanup, cancel := context.WithTimeout(context.Background(), testHangGuard)
+		defer cancel()
+		_, _ = session.Wait(cleanup)
+		_ = session.Close(cleanup)
+	})
+	if err := session.StartTurn(context.Background(), harness.TurnRequest{Goal: "Change artifact", Context: json.RawMessage(`{}`)}); err == nil || err.Error() != "OmO native handle has not opened" {
+		t.Fatalf("StartTurn before Open = %v, want the handle barrier text", err)
+	}
+}

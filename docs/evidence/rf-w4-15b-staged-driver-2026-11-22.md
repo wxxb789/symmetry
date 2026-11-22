@@ -13,22 +13,33 @@ the WSL row runs Ubuntu-24.04 (see §12). Nothing is committed.
 
 | File | sha256 |
 | --- | --- |
-| `daemon/internal/harness/staged_driver.go` (new) | `842f7b28caec43248f0136f6650a5688da79faf4b521e0742513af8f61615233` |
-| `daemon/internal/harness/staged_driver_test.go` (new) | `7a4095aa92741c648ccd134c89257f839f7d879dc1bb76230a7a9448ac02e754` |
+| `daemon/internal/harness/staged_driver.go` (new; apply −18: F1 wrapper + F2 comments) | `5717f897d4bd6bae6193f71efa673fbf5d32f21a4ca3024719ca274b588c259a` |
+| `daemon/internal/harness/staged_driver_test.go` (new; apply +1: F5 admit case) | `2c179987d79fc404c1fa2e7bf056acafacb8249d69e4597bf596439c46ac62b5` |
 | `daemon/internal/harness/types.go` | `88cb75632d03954b94fb8c6d108bec35777b48aa148a097c0e5eb75841f96063` |
 | `daemon/internal/harness/generic.go` | `6ca7fc2dd4244a64febf67410a47e66c2de5880774964229b0e02163bb1a02ec` |
-| `daemon/internal/harness/pi/adapter.go` | `7c89bbf2c4d5515797db4855fefa4bf0f4ca5854e16725528d14cbd7944f5200` |
-| `daemon/internal/harness/codex/adapter.go` | `729ab6bfb651606d5bd48126da17df14abf7e5cf7e47db234dccae1efb2b7bd5` |
+| `daemon/internal/harness/pi/adapter.go` (apply −3: F2 comment) | `f9190c69b77bde20511921a48ae29b0021983dcc4e97ec648367946b9e46d9a5` |
+| `daemon/internal/harness/codex/adapter.go` (apply +1: F3 shared sentinel) | `9e4e3db7b573653159119d645a21d93dcf7e1c2199dc696a5cf014cab82b5f81` |
 | `daemon/internal/harness/claude/adapter.go` | `87f8f89e3c4074d6aa2a2df11b0ed6cee10e8d2ec93f55a17cef1ab711795bf1` |
 | `daemon/internal/harness/omo/adapter.go` | `40366e0c3785bf2f749e8386e572680c120ff560aee5a696c08ac96352a84ddf` |
-| `daemon/internal/harness/omp/adapter.go` | `765ee5c76f8f6f5d4a346026bfba28aa1c7e9b8bbb4dcabccc9f7fe3bb6aba51` |
+| `daemon/internal/harness/omp/adapter.go` (apply +3: F3 shared sentinels) | `324ec02ad9e47d8d1e06de04c390a711a2ba807aae0524d4fa7bda6088e7fa7b` |
 | `daemon/internal/app/goal_admission_tx.go` | `9943daf12b5c69e250d12c52ea4d08c85289d24d04a04a5a8f96e04bdc5de790` |
 | `daemon/internal/app/linux_owner_witness_linux.go` | `acbd355efdf10b331625947a7a9470affc73bdb631067116b2428c43b54aa4ef` |
-| `daemon/internal/harness/omp/adapter_test.go` (+13: one new pin) | `35c4164a3f53cea4b49d45b7f52ae5c1019b5a48f8978f4a3d2f55a063b4d705` |
-| `daemon/internal/harness/codex/adapter_test.go` (−1: one inert line) | `decbd3e418284f477992bf308f6fe09b2f721bc0ba605ebf298188fe4773d0aa` |
+| `daemon/internal/harness/omp/adapter_test.go` (+13: one new pin; apply +7: F4 pin) | `add9f548aaae82730a73eb2666d29f1cb15e4aabd5bb36a413b85c6ad61d4d66` |
+| `daemon/internal/harness/codex/adapter_test.go` (−1: one inert line; apply +28: F4 pin) | `b8fbd163bb0105d22efaaf310f37fd3f4f38e4c4bab0875c963f43a3369ac46b` |
+| `daemon/internal/harness/pi/adapter_test.go` (apply +9: F4 pin) | `e4025812bf2fa141a9e9c2c324236ffd77efe387e28fb2233772264bcd968e7b` |
+| `daemon/internal/harness/omo/adapter_test.go` (apply +19: F4 pin) | `8c8c41dd8980e57bc1286df65124518dfc0436accef0bec4782d3c2ea97bea4e` |
 | `docs/plans/2026-11-22-rf-w4-15b-staged-driver-plan.md` | `dad0228968487b3e058614127f27e7ba90300caf2f03657a44fb01fc949229d2` |
-| `docs/TODO.md` | `d53ca1066668f6307d9288a62768b7bd9f8599d3467dcf571a4a8b462b0d07d9` |
+| `docs/TODO.md` (delivered/merge revision) | `2f762c5fc4dcdf9356dfc19f76ecf483225cc02d967341a49922208d7feea124` |
 | this record | the file you are reading (no self-referential hash) |
+
+Apply stage (2026-11-22, accepted simplify findings F1–F5 and P1): rows marked "apply" were
+re-hashed on the apply revision; the implement-revision values they replace are, in the order
+above, `842f7b28…`, `7a4095aa…`, `7c89bbf2…`, `729ab6bf…`, `765ee5c7…`, `35c4164a…`,
+`decbd3e4…` and `d53ca106…`. `docs/TODO.md`'s recorded implement value `d53ca106…` was the
+pre-merge branch blob (`03fc75b6`); the merge `64703460` took origin/main's four-line deletion of an
+unrelated `frontend/src/services/api.ts` TODO bullet, so the delivered blob is `2f762c5f…`. The
+slice's own TODO delta is unchanged: `git diff --numstat 7f34d40d..64703460 -- docs/TODO.md` =
+`14 0`.
 
 Unchanged and re-hashed to bind the claim: `daemon/internal/harness/close_gate.go`,
 `process_forwarding.go`, `wait_barrier.go`, `nil_value.go`, `result_clone.go`, `event_delivery.go`
@@ -42,10 +53,10 @@ Definition grep (pasted whole):
 
 ```
 $ sed -n '/^type StagedHooks interface/,/^}/p' staged_driver.go | grep -n "^	[A-Z]"
-6:	LaunchTransport(ctx context.Context, invocation execution.Invocation) error
-9:	OpenNativeSession(ctx context.Context) (NativeSessionHandle, error)
-11:	AdmitNativeTurn(ctx context.Context, request TurnRequest) error
-14:	CloseNativeSession(ctx context.Context) error
+4:	LaunchTransport(ctx context.Context, invocation execution.Invocation) error
+7:	OpenNativeSession(ctx context.Context) (NativeSessionHandle, error)
+8:	AdmitNativeTurn(ctx context.Context, request TurnRequest) error
+11:	CloseNativeSession(ctx context.Context) error
 ```
 
 Four methods on one adapter-supplied interface; no second hook interface, no callback struct and no
@@ -56,7 +67,8 @@ holds no adapter callback beyond `hooks`. Its refusal sentinels (`ErrStagedSessi
 own every protocol state machine.
 
 Ownership greps (non-test files): `rg -n "NewStagedDriver\("` → the definition plus exactly five
-adapter constructions (`claude:320`, `codex:300`, `omo:189`, `omp:175`, `pi:565`);
+adapter constructions (`claude:320`, `codex:301`, `omo:189`, `omp:178`, `pi:565`; the apply-stage
+F2/F3 line shifts move `codex` and `omp` only);
 `rg -n "staged\.(Launch|Open|Admit|Close|CloseDetached)\("` → exactly twenty pass-through call
 sites (four phases × five adapters); `rg -n "CloseGate|closeGate|\.opening\b" pi codex claude omo
 omp` → no output, i.e. no adapter keeps a hand-rolled open latch or close gate.
@@ -136,19 +148,22 @@ injected launcher and assert the persisted pid/identity): `pi/adapter_test.go:45
 
 ## 6. Pinned strings
 
-Differential string-literal multiset, base (`git show HEAD:…`) vs HEAD, per touched file. No literal
-was removed anywhere; three literals were re-stated at a second site because the refusal mapping
-needs the same bytes:
+Differential string-literal multiset, base (`git show HEAD:…`) vs the working revision, per touched
+file (`grep -o '"[^"]*"' <file> | wc -l`). The implement revision re-stated three literals at a
+second site because the refusal mapping needs the same bytes; the apply stage (F3) single-sourced
+each of them into one package-level error value per adapter, so the apply head count equals the base
+count again while every emitted byte is unchanged:
 
 ```
 ### internal/harness/pi/adapter.go: base=168 head=168
-### internal/harness/codex/adapter.go: base=263 head=264
-  +1 "codex native session has not opened a thread"
+### internal/harness/codex/adapter.go: base=263 head=263
+  implement head was 264: +1 "codex native session has not opened a thread"; apply folds the
+  wrapper copy into errNativeThreadNotOpened (hook and wrapper share one value)
 ### internal/harness/claude/adapter.go: base=112 head=112
 ### internal/harness/omo/adapter.go: base=99 head=99
-### internal/harness/omp/adapter.go: base=193 head=195
-  +1 "OMP session cannot open"
-  +1 "OMP session does not admit another prompt"
+### internal/harness/omp/adapter.go: base=193 head=193
+  implement head was 195: +1 "OMP session cannot open", +1 "OMP session does not admit another
+  prompt"; apply folds both wrapper copies into errOMPSessionCannotOpen / errOMPPromptRefused
 ### internal/harness/generic.go: base=32 head=32
 ### internal/harness/types.go: base=111 head=111
 ```
@@ -160,13 +175,13 @@ Refusal pins (the only new error-producing sites; each returns the adapter's exi
 | pi | `ErrStagedSessionOpening` | `Open` wrapper | `pi native session is already opening` |
 | pi | `ErrStagedSessionNotOpened` | `StartTurn` wrapper, `usableLocked` first | `pi native session has not opened` |
 | codex | `ErrStagedSessionOpening` | `Open` wrapper | `codex native session is already opening` |
-| codex | `ErrStagedSessionNotOpened` | `StartTurn` wrapper (hook keeps the empty-threadID arm) | `codex native session has not opened a thread` |
+| codex | `ErrStagedSessionNotOpened` | shared `errNativeThreadNotOpened` (hook empty-threadID arm and `StartTurn` wrapper) | `codex native session has not opened a thread` |
 | claude | `ErrStagedSessionNotOpened` | `StartTurn` wrapper, `usableLocked` first | `Claude Code native adapter session has not opened` |
 | claude | `ErrStagedSessionOpening` | `Open` wrapper returns the recorded UUID (base had no latch) | no error |
 | omo | `ErrStagedSessionOpening` | `Open` wrapper | `OmO session is already opening` |
 | omo | `ErrStagedSessionNotOpened` | `StartTurn` wrapper, `usableLocked` first | `OmO native handle has not opened` |
-| omp | `ErrStagedSessionOpening` | `Open` wrapper, joined with `session.failure` | `errors.Join(failure, "OMP session cannot open")` |
-| omp | `ErrStagedSessionNotOpened` | `StartTurn` wrapper | `OMP session does not admit another prompt` |
+| omp | `ErrStagedSessionOpening` | shared `errOMPSessionCannotOpen`, joined with `session.failure` (wrapper and hook) | `errors.Join(failure, "OMP session cannot open")` |
+| omp | `ErrStagedSessionNotOpened` | shared `errOMPPromptRefused` (`StartTurn` wrapper and `AdmitNativeTurn` hook) | `OMP session does not admit another prompt` |
 
 ## 7. Per-adapter base-vs-HEAD control-flow audit
 
@@ -189,10 +204,16 @@ sources, guard evaluation site, provider-bridge locals). One test line was delet
 / `currentResult` directly and consults no latch; no assertion, name or fixture changed, and the
 codex suite stays green (§9). Its guarded behaviour is the latch itself, which mutant m1/m2 covers.
 
-Tests added: one root test file (`staged_driver_test.go`, eight tests) and one omp pin
-(`TestStartTurnRefusesAfterCloseSetsTheStoppingLatch`, §8). Tests renamed or deleted: none. Every
-other adapter test file is byte-identical to base, and the seven OpenCode `--assert` names plus the
-two pi `--assert` names are untouched.
+Tests added: one root test file (`staged_driver_test.go`, eight tests), one omp pin
+(`TestStartTurnRefusesAfterCloseSetsTheStoppingLatch`, §8), and four apply-stage
+`StartTurn`-before-open pins that assert each adapter's wrapper text byte-exactly
+(`TestStartTurnBeforeOpenRefusesWithThePiNotOpenedText`, `…TheCodexThreadBarrierText`,
+`…TheOmONotOpenedText`, `…TheOMPAdmissionText`; the claude wrapper keeps its pre-existing
+contains-assertion at `claude/adapter_test.go:62`, and the already-opening mappings stay unpinned —
+the four adapters have no cheap deterministic open-blocking seam (codex would need the multi-step
+handshake re-driven around a withheld reply), recorded here as the apply stage's coverage gap). Tests
+renamed or deleted: none. Every other adapter test file is byte-identical to base, and the seven
+OpenCode `--assert` names plus the two pi `--assert` names are untouched.
 
 ## 8. Mutants
 
@@ -201,18 +222,21 @@ two pi `--assert` names are untouched.
 | m1 (contract a) | `StagedDriver.Open`: the record becomes unconditional (`driver.handle, driver.opened = handle, true`) instead of `if err == nil` — the handle is persisted before the native session opened | `--- FAIL: TestStagedDriverFailedOpenRecordsNoHandleAndStaysRefused` / `staged_driver_test.go:266: a failed open marked the session opened` | 1 |
 | m2 (contract b) | `StagedDriver.Admit`: `opened` precondition deleted | `--- FAIL: TestStagedDriverOrdersLaunchPersistOpenBeforeAdmission` / `staged_driver_test.go:188: admission before open: <nil>` and `--- FAIL: TestClaudeCandidateStagesFreshTransportAndBarriers` (pre-existing claude row) | 1 (both) |
 | m3 (contract c) | omp `AdmitNativeTurn`: `session.stopping` term removed from the guard | `--- FAIL: TestStartTurnRefusesAfterCloseSetsTheStoppingLatch` / `adapter_test.go:890: StartTurn after Close = OMP transport is not usable, want the stopping refusal` | 1 |
-| m4 (contract d) | `StagedDriver.closeAttempt`: the hook result is re-wrapped as `errors.New(err.Error())`, so the bare marker never reaches the gate | `--- FAIL: TestStagedDriverCloseIsSingleFlightAndPermanentOnlyForBareMarker` / `staged_driver_test.go:324: permanent close: terminate failed` and `--- FAIL: TestClaudeCandidateCloseFailureIsStableWithoutReterminating` / `adapter_test.go:824: first Close() error = ... want ...` (pre-existing claude row) | 1 (both) |
+| m4 (contract d) | `StagedDriver.Close` and `CloseDetached`: the hook result is re-wrapped as `errors.New(err.Error())` at both call sites (F1 deleted the implement-revision `closeAttempt` wrapper), so the bare marker never reaches the gate; re-run at the apply revision | `--- FAIL: TestStagedDriverCloseIsSingleFlightAndPermanentOnlyForBareMarker` / `staged_driver_test.go:325: permanent close: terminate failed` and `--- FAIL: TestClaudeCandidateCloseFailureIsStableWithoutReterminating` / `adapter_test.go:824: first Close() error = transient terminate failure, want transient terminate failure` (pre-existing claude row) | 1 (both) |
 | m5 (launch hook, driver) | `StagedDriver.Launch`: a fresh `execution.Invocation` from the description replaces the grant merge | `--- FAIL: TestStagedDriverLaunchDeliversTheGrantWithTheProcessDescription` / `staged_driver_test.go:131: grant persistence callback was dropped`; `TestStagedDriverOrdersLaunchPersistOpenBeforeAdmission` panics on the nil callback; pi's `TestAdapterStartForwardsPersistProcessWithAuthority` and `TestAdapterStagesPiRPCAndRequiresSettledExplicitTaskResult` fail (pre-existing rows) | 1 (all) |
 | m6 (launch hook, adapter) | pi `LaunchTransport`: `session.process = process` deleted (the transport is never installed) | `--- FAIL: TestAdapterStagesPiRPCAndRequiresSettledExplicitTaskResult` / `adapter_test.go:96: Open() error = pi native process is unavailable` (pre-existing row) | 1 |
 | m7 (admit hook, adapter) | claude `AdmitNativeTurn`: `session.turnStarted = true` deleted (the turn latch disappears) | `--- FAIL: TestClaudeCandidateRejectsSupersededAndClosedTurns` / `adapter_test.go:655: superseding StartTurn() error = <nil>, want an owned-turn rejection` (pre-existing row) | 1 |
 | m8 | `StartRequest.grant()`: the nil-guarded legacy merge deleted (a request without a grant becomes its raw invocation) | `--- FAIL: TestStagedDriverRequestWithoutGrantIsItsOwnGrant` / `staged_driver_test.go:167: request-level persistence callback did not win` | 1 |
 | m9 | `StagedDriver.Open`: the `opening` refusal deleted | `--- FAIL: TestStagedDriverOpenIsSingleFlightAndIdempotent` / panic `close of closed channel` (the fake hook is entered twice) | 1 |
-| m10 | `StagedDriver.Open`: the hook error replaced by `errors.New("staged native open failed")` | `--- FAIL: TestStagedDriverHookFailuresSurfaceUnchanged/admit` / `staged_driver_test.go:307: admit surfaced staged native open failed, want the hook error verbatim` | 1 |
-| m11 | `StagedDriver.CloseDetached`: `start` moved into the detached attempt (runs after it, off the caller) | `--- FAIL: TestStagedDriverCloseDetachedRunsStartOnTheCaller` / `staged_driver_test.go:366: start did not run on the caller before the detached attempt: []` | 1 |
+| m10 | `StagedDriver.Open`: the hook error replaced by `errors.New("staged native open failed")`; re-run at the apply revision (F5 fixed the `admit` case, which previously returned the failing Open error) | `--- FAIL: TestStagedDriverHookFailuresSurfaceUnchanged/open` / `staged_driver_test.go:308: open surfaced staged native open failed, want the hook error verbatim` | 1 |
+| m11 | `StagedDriver.CloseDetached`: `start` moved into the detached attempt, after the hook call (runs off the caller); re-run at the apply revision | `--- FAIL: TestStagedDriverCloseDetachedRunsStartOnTheCaller` / `staged_driver_test.go:367: start did not run on the caller before the detached attempt: []` | 1 |
 
 Every mutant was reverted and the four touched sources re-hashed to the §1 values
 (`staged_driver.go`, `pi/adapter.go`, `claude/adapter.go`, `omp/adapter.go`); the harness tree was
-re-run green afterwards. Mutants m5–m7 are killed by tests that predate the slice
+re-run green afterwards. The apply stage re-ran m4 (at the restated two-call-site edit), m10 and m11
+at the apply revision, all three red, all reverted with the §1 apply hashes re-verified (the apply
++1 line in `staged_driver_test.go` shifts the m11 failure line from :366 to :367).
+Mutants m5–m7 are killed by tests that predate the slice
 (`pi/adapter_test.go`, `claude/adapter_test.go`), satisfying the R2 amendment's "at least one
 predating test" arm; m1 and m4 also kill the root-level pins added here, and m2/m4 kill a
 pre-existing adapter row as well.
@@ -251,10 +275,30 @@ text and the guard the hook keeps inside the adapter.
 | callback grep | §4 grep | 0 conforming-adapter hits |
 | file cap | `wc -l` | `staged_driver.go` 178, `staged_driver_test.go` 380; `codex/adapter.go` 2616 (base 2619 — not grown) |
 
+### Apply-revision re-run (2026-11-22, accepted findings F1–F5 and P1)
+
+| Gate | Command (from `daemon/`) | Exit |
+| --- | --- | --- |
+| formatting | `gofmt -l internal/` | 0 (no output) |
+| vet | `go vet ./...` | 0 |
+| windows build | `GOOS=windows go build ./...` | 0 |
+| linux build | `GOOS=linux go build ./...` | 0 |
+| linux amd64 vet | `GOOS=linux GOARCH=amd64 go vet ./internal/harness/...` | 0 |
+| linux amd64 vet, app | `GOOS=linux GOARCH=amd64 go vet ./internal/app/...` | 0 |
+| linux arm64 build | `GOOS=linux GOARCH=arm64 go build ./...` | 0 |
+| harness tree | `go test -count=1 -timeout 600s ./internal/harness/...` | 0 — `harness 0.344s`, `claude 25.283s`, `codex 26.148s`, `linejson 0.162s`, `omo 16.951s`, `omp 17.253s`, `opencode 5.759s`, `pi 15.669s`, `probeconformance 7.373s` |
+| app tree | `go test -count=1 -timeout 1500s ./internal/app/...` | 0 — `ok …internal/app 162.385s`. An earlier attempt of the same command on the same bytes failed at 543.275s on `TestOmOAttachAckRegressionCancellationAndDeadlineDoNotRenewBudget/{caller_deadline,admission_deadline}`: its 2-second deadline expired inside a loopback `GET` (`context deadline exceeded`); the same test then passed 3/3 in isolation (71.337s) and the full package passed on re-run, with Windows loopback probes at that point at 0/30 connect and 0/30 HTTP failures — recorded as a host-level loopback stall, not a code regression |
+| mutations m4/m10/m11 | §8 | red, reverted, §1 apply hashes re-verified |
+| whitespace | `git diff --check` | 0 |
+| file cap | `wc -l` | `staged_driver.go` 160, `staged_driver_test.go` 381; `codex/adapter.go` 2617 (base 2619; the apply +1 is the shared `errNativeThreadNotOpened` declaration — the slice net stays −2) |
+| hook count | §2 grep | 4 (relative lines 4/7/8/11) |
+| callback grep | `rg 'PersistProcess\|SupervisorHandoff\|PersistContainment' internal/harness --glob '!*_test.go'` | `opencode` 10, `staged_driver` 6, `types` 6; 0 conforming-adapter hits |
+| WSL race (harness + app) | see §12 (Command F) | 0 — all ten packages `ok` under `-race`, `internal/app` 815.956s |
+
 ## 10. Subject-list proof
 
 ```
-$ git diff --name-only
+$ git diff --name-only 7f34d40d          # delivered worktree vs the merged origin/main tip
 daemon/internal/app/goal_admission_tx.go
 daemon/internal/app/linux_owner_witness_linux.go
 daemon/internal/harness/claude/adapter.go
@@ -262,36 +306,45 @@ daemon/internal/harness/codex/adapter.go
 daemon/internal/harness/codex/adapter_test.go
 daemon/internal/harness/generic.go
 daemon/internal/harness/omo/adapter.go
+daemon/internal/harness/omo/adapter_test.go
 daemon/internal/harness/omp/adapter.go
 daemon/internal/harness/omp/adapter_test.go
 daemon/internal/harness/pi/adapter.go
+daemon/internal/harness/pi/adapter_test.go
+daemon/internal/harness/staged_driver.go
+daemon/internal/harness/staged_driver_test.go
 daemon/internal/harness/types.go
 docs/TODO.md
+docs/evidence/rf-w4-15b-staged-driver-2026-11-22.md
+docs/plans/2026-11-22-rf-w4-15b-staged-driver-plan.md
 ```
 
-plus four new files (`staged_driver.go`, `staged_driver_test.go`, this record and the plan). The
-seven OpenCode
-CI `--assert` entries are unaffected because no `opencode/**` byte changed; the two CI-pinned pi
-assertions (`TestProviderBridgeCloseReleasesBoundPeerFD`, `TestNativePiProviderBridgeAction`) stay
-green in the harness tree run above (the first is Linux-gated and runs in §12).
+At the implement revision the same command listed sixteen entries — the twelve modified files,
+`staged_driver.go`, `staged_driver_test.go`, this record and the plan; the apply stage adds
+`pi/adapter_test.go` and `omo/adapter_test.go` (the four `StartTurn`-before-open pins, §7). The seven OpenCode CI `--assert`
+entries are unaffected because no `opencode/**` byte changed (`git diff --name-only 7f34d40d --
+daemon/internal/harness/opencode` = 0 lines); the two CI-pinned pi assertions
+(`TestProviderBridgeCloseReleasesBoundPeerFD`, `TestNativePiProviderBridgeAction`) stay green in the
+harness tree run above (the first is Linux-gated and runs in §12).
 
 ## 11. LOC delta (report-only, D2)
 
 | Group | Lines |
 | --- | --- |
-| five adapters + generic + types + the two app files (non-test, `git diff --numstat -- daemon`) | +395 / −348 (net +47) |
-| adapter test files | +13 / −1 |
-| `docs/TODO.md` | +14 / −0 |
-| new `staged_driver.go` | +178 |
-| new `staged_driver_test.go` | +380 |
+| five adapters + generic + types + the two app files (non-test, base→worktree) | +402 / −354 (net +48; implement revision +395 / −348) |
+| adapter test files | +77 / −1 (implement revision +13 / −1) |
+| `docs/TODO.md` | +14 / −4 (the slice's own delta is +14 / −0 over `7f34d40d..64703460`; the −4 is origin/main's W4-09 closeout carried by the merge, §1) |
+| new `staged_driver.go` | +160 (implement revision +178) |
+| new `staged_driver_test.go` | +381 (implement revision +380) |
 | the plan and this record (untracked) | documentation |
 
 W4-15a's merge (`4fdea989`) measured +1450 / −165 over 12 files (including its own record and plan),
 so the plan row's −600…−800 combined target is not met in either direction of arithmetic; the
 2026-11-21 reshape superseded absorption with the ≤4-hook constraint, and D2 makes the number
 report-only. The dedup that did land is visible per adapter (the invocation literals and the latch
-bodies are gone: pi −6, codex −3, claude −1 source lines) and is offset by the refusal-mapping
-wrappers the byte-identity requirement forces (omo +24, omp +15).
+bodies are gone: pi −9, codex −2, claude −1 source lines; the apply stage moved pi −6→−9, codex
+−3→−2 and omp +15→+18) and is offset by the refusal-mapping wrappers the byte-identity requirement
+forces (omo +24, omp +18).
 
 ## 12. WSL and race
 
@@ -434,10 +487,43 @@ multiplier on tests this slice does not touch explains the WSL `-race` wall cloc
 `internal/app` timeout was exactly the default 30-minute per-package budget against that runtime;
 Command E's 90-minute budget is the same test set and passes.
 
-The Windows `internal/app` run above stays bound to the delivered revision: no `internal/app` source
-or test byte and no `internal/harness` production byte changed after it ran (the later edits were
-`staged_driver_test.go`, `omp/adapter_test.go`, `codex/adapter_test.go`, this record and the plan;
-a package's test files do not enter another package's build).
+The Windows `internal/app` run above stays bound to the implement revision: no `internal/app` source
+or test byte and no `internal/harness` production byte changed after it ran (the later implement-stage
+edits were `staged_driver_test.go`, `omp/adapter_test.go`, `codex/adapter_test.go`, this record and
+the plan; a package's test files do not enter another package's build). The apply stage then changed
+harness production bytes, so both app gates were re-run on the apply bytes: the Windows app suite
+(`162.385s`, §9) and Command F below.
+
+### Command F (apply revision, 2026-11-22)
+
+The loopback repair was re-probed before the run (`ipv4-loopback-ok`) and the whole-tree `-race`
+command was re-run on the apply bytes:
+
+```
+$ wsl.exe -d Ubuntu-24.04 -u accept bash -lc 'cd /mnt/q/repos/wt-w4-15b-staged-driver/symmetry/daemon \
+    && go test -count=1 -race -timeout 5400s ./internal/harness/... ./internal/app/...'
+```
+
+Result: **exit 0** (outer `wsl.exe` status; the inner `echo $?` was again lost to the quoting layer,
+as with the earlier commands above) — all ten packages `ok` under `-race`:
+
+| Package | Result |
+| --- | --- |
+| `internal/harness` (root, incl. `staged_driver_test.go`) | `ok … 1.118s` |
+| `internal/harness/claude` | `ok … 19.395s` |
+| `internal/harness/codex` | `ok … 26.833s` |
+| `internal/harness/linejson` | `ok … 1.061s` |
+| `internal/harness/omo` | `ok … 9.148s` |
+| `internal/harness/omp` | `ok … 23.590s` |
+| `internal/harness/opencode` | `ok … 2.430s` |
+| `internal/harness/pi` | `ok … 5.878s` |
+| `internal/harness/probeconformance` | `ok … 8.094s` |
+| `internal/app` | `ok … 815.956s` |
+
+The WSL `-race` gate is therefore green in three runs (Commands D/E at the implement revision, this
+one at the apply revision) and rebinds both the harness tree and the app suite to the apply bytes;
+the opencode peer suite ran (2.430s), so the seven CI `--assert` entries have local WSL-race proof
+at the apply revision too.
 
 The CI `daemon_race_tests` job (`go test -race -count=1 -timeout 600s -json ./...` with the seven
 OpenCode `--assert` entries and the pi `TestProviderBridgeCloseReleasesBoundPeerFD` assertion in the

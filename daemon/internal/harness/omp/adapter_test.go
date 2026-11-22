@@ -1019,3 +1019,10 @@ func TestObservedWindowsAndLinuxFailedAndAbortedTurns(t *testing.T) {
 		}
 	}
 }
+
+func TestStartTurnBeforeOpenRefusesWithTheOMPAdmissionText(t *testing.T) {
+	session, _ := testSession(t, nil, nil, nil)
+	if err := session.StartTurn(context.Background(), harness.TurnRequest{Goal: "before open", Context: json.RawMessage(`{}`)}); err == nil || err.Error() != "OMP session does not admit another prompt" {
+		t.Fatalf("StartTurn before Open = %v, want the admission refusal", err)
+	}
+}

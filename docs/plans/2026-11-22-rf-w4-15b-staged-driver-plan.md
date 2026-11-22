@@ -253,8 +253,10 @@ The tree is authoritative for these; the sections above record the design intent
   inert line (`native.opened = true`) from `codex/adapter_test.go`; no assertion changed.
 - Mutants grew to eleven (m1–m11) so every root test has a one-to-one red and every hook has one;
   the contract's four are m1, m2, m3 and m4 (the evidence §8 carries the exact edits and tails).
-- One adapter test was added (`omp/adapter_test.go`): the contract's mutant (c) names omp's stopping
-  latch, and no base test pinned it.
-- LOC reality (report-only, D2): the adapters net +46 source lines, the driver is +178 and the root
-  test +380; the combined W4-15 target of −600…−800 is not met by either half, as the reshape's
-  ≤4-hook constraint replaced absorption. Numbers in the evidence §11.
+- One adapter test was added at implement (`omp/adapter_test.go`): the contract's mutant (c) names
+  omp's stopping latch, and no base test pinned it. The apply stage added four
+  `StartTurn`-before-open pins (`pi`, `codex`, `omo`, `omp`; evidence §7).
+- LOC reality (report-only, D2): the adapters net +30 source lines (base→worktree; the implement
+  revision was +29), the driver is +160 (implement +178) and the root test +381 (implement +380);
+  the combined W4-15 target of −600…−800 is not met by either half, as the reshape's ≤4-hook
+  constraint replaced absorption. Numbers in the evidence §11.
