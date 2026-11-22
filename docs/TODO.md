@@ -1289,6 +1289,39 @@ instead of appended.
       `outbox.go`, `state.go`), which is why that slice recorded this entry instead of changing them;
       owner: daemon outbox/state.
 
+## Daemon platform: the Windows witness hooks stay outside the Linux witness config (rf-w5-01)
+
+- [ ] Consolidate the Windows pre-authority witness hooks the way rf-w5-01 (2026-11-22, branch
+      `refactor/rf-w5-01-witness-converge-in-place`) consolidated the Linux surface. The Windows
+      side still reads raw literals with no witness gate —
+      `supervisor_windows_helper.go:554-555` (`SYMMETRY_PREAUTHORITY_DROP_FIRST_HELLO_RESPONSE`,
+      `SYMMETRY_PREAUTHORITY_HELLO_RETRY_MARKER`) and `supervisor_windows_client.go:1080`
+      (`SYMMETRY_PREAUTHORITY_WRONG_SECRET_MARKER`) — and
+      `cmd/symmetry-daemon/preauthority_witness_command_windows.go` enters witness mode from argv
+      (`init()` `:26-36`) while setting the same three names for the helper child (`:142-148`).
+      Conductor decision A (2026-11-21) scoped rf-w5-01 to the Linux family and left these bytes
+      for W6-03, which already owns the same files and dispatches after rf-w5-01; the Linux half
+      now has one per-use witness-config parser
+      (`daemon/internal/platform/supervisor_linux_witness.go`) behind
+      `SYMMETRY_PRODUCTION_LINUX_CONTAINMENT_WITNESS` plus marker-parent validation, so the two
+      conventions coexist until W6-03 lands.
+
+## Daemon platform: two daemon-side barrier markers lack witness parent validation (rf-w5-01 residual)
+
+- [ ] Validate the marker parent directory for the two daemon-side witness writers that still
+      publish env-supplied marker paths unvalidated: the stop-receipt barrier reached marker
+      (`daemon/internal/app/cleanup_glue.go:232-233` reads
+      `SYMMETRY_LINUX_SUPERVISOR_STOP_RECEIPT_BARRIER_{REACHED,RELEASE}_FILE`, written at `:259`)
+      and the shared resume-barrier writer (`daemon/internal/execution/runner.go:1077`
+      `waitForResumeBarrier`, publishing the reached marker at `:1114`), which serves both the
+      commit-resume family (`SYMMETRY_RUNNER_COMMIT_RESUME_BARRIER_{REACHED,RELEASE}_FILE`, caller
+      `:1012`) and the lease-armed family
+      (`SYMMETRY_RUNNER_LEASE_ARMED_RESUME_BARRIER_{REACHED,RELEASE}_FILE`, callers `:909,919` via
+      `waitForLeaseArmedResumeBarrier`).
+      Both are pre-existing and outside rf-w5-01's owned set (rf-w5-01 review CR-06); the platform
+      helper funnels are covered by `validateLinuxSupervisorWitnessMarkerParent`.
+      owner: daemon app/execution.
+
 ## Comment-policy sweep: debt the deleted comments recorded (2026-11-22)
 
 The comment-policy sweep (plan `docs/plans/2026-11-22-comment-policy-sweep-plan.md`, evidence

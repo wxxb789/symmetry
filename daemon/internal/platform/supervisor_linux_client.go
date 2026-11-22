@@ -1410,7 +1410,7 @@ func (supervisor *linuxSupervisor) RenewLease(deadline time.Duration, sequence u
 // first lease acknowledgement; all other launch and renewal paths are unchanged.
 func (supervisor *linuxSupervisor) sealInitialMirrorScanForWitness(sequence uint64) error {
 	injection, enabled := linuxSupervisorScanFailureInjectionFromEnv()
-	if !enabled || strings.TrimSpace(os.Getenv(linuxSupervisorLeaseArmedBarrierReachedEnv)) == "" ||
+	if !enabled || strings.TrimSpace(linuxSupervisorWitnessConfigFromEnv().leaseArmedBarrierReachedPath) == "" ||
 		sequence != 1 || !injection.sealAfterClean || injection.sealOwner != authority.SupervisorScanOwnerMirror {
 		return nil
 	}
@@ -1554,10 +1554,14 @@ func (supervisor *linuxSupervisor) closeControlAfterResponseLossRequestLocked() 
 }
 
 func (supervisor *linuxSupervisor) dropResponseTransportOnce(operation string) bool {
-	if supervisor == nil || os.Getenv(linuxSupervisorProductionWitnessEnv) != "1" {
+	if supervisor == nil {
 		return false
 	}
-	configuredOperation := os.Getenv(linuxSupervisorDropResponseOnceEnv)
+	witness := linuxSupervisorWitnessConfigFromEnv()
+	if witness.productionWitness != "1" {
+		return false
+	}
+	configuredOperation := witness.dropResponseOnce
 	if configuredOperation != linuxSupervisorOpStop && configuredOperation != linuxSupervisorOpRelease || configuredOperation != operation {
 		return false
 	}
@@ -1575,7 +1579,7 @@ func (supervisor *linuxSupervisor) dropResponseTransportOnce(operation string) b
 	controlWrite := supervisor.markResponseTransportLostLocked()
 	supervisor.mu.Unlock()
 
-	if markerPath := strings.TrimSpace(os.Getenv(linuxSupervisorDropResponseMarkerEnv)); markerPath != "" {
+	if markerPath := strings.TrimSpace(witness.dropResponseFiredPath); markerPath != "" {
 		_ = publishLinuxSupervisorWitnessFile(markerPath, []byte("fired\n"))
 	}
 	_ = responseRead.Close()
@@ -1588,8 +1592,9 @@ func (supervisor *linuxSupervisor) dropResponseTransportOnce(operation string) b
 // Opt-in production witness seam: the reached marker is created before automatic recovery, and
 // recovery/clear proceeds only after the test-owned release marker appears.
 func (supervisor *linuxSupervisor) waitForLinuxSupervisorReleaseResponseLossBarrier() error {
-	if os.Getenv(linuxSupervisorProductionWitnessEnv) != "1" ||
-		os.Getenv(linuxSupervisorDropResponseOnceEnv) != linuxSupervisorOpRelease {
+	witness := linuxSupervisorWitnessConfigFromEnv()
+	if witness.productionWitness != "1" ||
+		witness.dropResponseOnce != linuxSupervisorOpRelease {
 		return nil
 	}
 	supervisor.mu.Lock()
@@ -1599,8 +1604,8 @@ func (supervisor *linuxSupervisor) waitForLinuxSupervisorReleaseResponseLossBarr
 	if !dropTriggered {
 		return nil
 	}
-	reachedPath, reachedConfigured := os.LookupEnv(linuxSupervisorReleaseBarrierReachedEnv)
-	releasePath, releaseConfigured := os.LookupEnv(linuxSupervisorReleaseBarrierReleaseEnv)
+	reachedPath, reachedConfigured := witness.releaseBarrierReachedPath, witness.releaseBarrierReachedSet
+	releasePath, releaseConfigured := witness.releaseBarrierReleasePath, witness.releaseBarrierReleaseSet
 	if !reachedConfigured && !releaseConfigured {
 		return nil
 	}
