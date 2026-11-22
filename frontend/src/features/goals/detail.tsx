@@ -6,8 +6,9 @@ import { goalEventsOptions, goalOptions, sessionOptions, workspaceOptions } from
 import { useRealtimeEpoch } from "../../app/realtime";
 import { StatusBadge } from "../../components/primitives";
 import { EmptyState, ErrorState, LoadingState, PageHeading, RefreshButton } from "../../components/workspace";
-import { errorMessage, Network, ownValue, postGoalCommand, UnexpectedResponse, type GoalDecision, type GoalEvent, type GoalGraph, type GoalProjection, type GoalWorkItem, type Workspace } from "../../services/api";
+import { errorMessage, ownValue, postGoalCommand, type GoalDecision, type GoalEvent, type GoalGraph, type GoalProjection, type GoalWorkItem, type Workspace } from "../../services/api";
 import { commandEnvelope, MutationRefused, newMutationId, planApprovalCommand, type CommandKind, type GoalCommandEnvelope } from "../../services/commands";
+import { isStaleRefusal, isUnknownOutcome } from "../../services/refusals";
 import { servedMember, servedText } from "../../services/served";
 
 type ActionPayload = Record<string, unknown>;
@@ -34,13 +35,6 @@ function formatMicroUsd(value: string | null | undefined): string {
   const micro = Number(value);
   if (!Number.isFinite(micro)) return `unknown (${String(value)})`;
   return `$${(micro / 1_000_000).toFixed(4)}`;
-}
-
-// An answer the page can interpret settles a command attempt; a transport
-// failure or an uninterpretable answer leaves its fate unknown, so the frozen
-// bytes are kept for a re-send that replays instead of applying twice.
-function outcomeUnknown(error: unknown): boolean {
-  return error instanceof Network || error instanceof UnexpectedResponse;
 }
 
 interface PlanApprovalAttempt { key: string; resolve: GoalCommandEnvelope; admit: GoalCommandEnvelope | null }
@@ -164,7 +158,7 @@ export function GoalDetailPage() {
       setRefusal(error instanceof MutationRefused ? error : null);
       if (!(error instanceof MutationRefused)) setNotice(errorMessage(error));
       // An answered attempt is settled and releases its identity and envelope.
-      if (!outcomeUnknown(error)) releaseAttempt();
+      if (!isUnknownOutcome(error)) releaseAttempt();
     },
   });
 
@@ -221,7 +215,7 @@ export function GoalDetailPage() {
       setRefusal(error instanceof MutationRefused ? error : null);
       if (!(error instanceof MutationRefused)) setNotice(errorMessage(error));
       // Same settle rule as the generic command.
-      if (!outcomeUnknown(error)) sentApproval.current = null;
+      if (!isUnknownOutcome(error)) sentApproval.current = null;
     },
   });
 
@@ -259,7 +253,7 @@ export function GoalDetailPage() {
 }
 
 function RefusalNotice({ refusal, refresh }: { refusal: MutationRefused; refresh: () => void }) {
-  const stale = refusal.stale;
+  const stale = isStaleRefusal(refusal);
   return <section className={stale ? "notice notice-conflict" : "notice notice-error"} role="alert">
     <ShieldAlert size={20} aria-hidden="true" />
     <div>

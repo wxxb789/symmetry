@@ -22,11 +22,6 @@ import { cancelWorkMutation, provideInputMutation, retryWorkMutation, startWorkM
 import { useSessionToken } from "../../app/session";
 import { clearActionId, readActionId, readOrMintActionId, type ActionKind } from "../../services/control-actions";
 import {
-  Conflict,
-  Forbidden,
-  ServerRefusal,
-  Unsupported,
-  Validation,
   errorMessage,
   type ActionId,
   type ControlReceipt,
@@ -35,6 +30,7 @@ import {
   type WorkDetail,
   type WorkTimeline,
 } from "../../services/api";
+import { isDefinitive } from "../../services/refusals";
 import { asRecord, asText } from "../../services/served";
 import { executionStateLabel, hasDecisionPacket, timelineBoundary, timelineItemKey, timestamp, type TimelineItemLike } from "./presentation";
 import {
@@ -200,7 +196,7 @@ export function WorkControlSurface({ detail, cursor, children }: { detail: WorkD
       },
       onError: (error) => {
         settle("start", (attempt) => ({ ...attempt, baseline: snapshotVersion(), ...failurePatch(error) }));
-        if (definitiveRefusal(error)) clearActionId("start", workItemId, "initial");
+        if (isDefinitive(error)) clearActionId("start", workItemId, "initial");
       },
       onSettled: invalidate,
     });
@@ -217,7 +213,7 @@ export function WorkControlSurface({ detail, cursor, children }: { detail: WorkD
       },
       onError: (error) => {
         settle("cancel", (attempt) => ({ ...attempt, baseline: snapshotVersion(), ...failurePatch(error) }));
-        if (definitiveRefusal(error)) clearActionId("cancel", workItemId, scope);
+        if (isDefinitive(error)) clearActionId("cancel", workItemId, scope);
       },
       onSettled: invalidate,
     });
@@ -234,7 +230,7 @@ export function WorkControlSurface({ detail, cursor, children }: { detail: WorkD
       },
       onError: (error) => {
         settle("retry", (attempt) => ({ ...attempt, baseline: snapshotVersion(), ...failurePatch(error) }));
-        if (definitiveRefusal(error)) clearActionId("retry", workItemId, scope);
+        if (isDefinitive(error)) clearActionId("retry", workItemId, scope);
       },
       onSettled: invalidate,
     });
@@ -252,7 +248,7 @@ export function WorkControlSurface({ detail, cursor, children }: { detail: WorkD
       },
       onError: (error) => {
         settle("input", (attempt) => ({ ...attempt, baseline: snapshotVersion(), ...failurePatch(error) }));
-        if (definitiveRefusal(error)) clearActionId("input", workItemId, waitingTransitionId);
+        if (isDefinitive(error)) clearActionId("input", workItemId, waitingTransitionId);
       },
       onSettled: invalidate,
     });
@@ -460,17 +456,11 @@ function commandRecord(command: ControlReceipt): ReceiptCommand {
   };
 }
 
-/** A definitive server refusal: it is a refusal receipt and its attempt id is dead. */
-function definitiveRefusal(error: unknown): boolean {
-  return error instanceof Conflict || error instanceof Validation || error instanceof Forbidden || error instanceof Unsupported ||
-    (error instanceof ServerRefusal && error.status >= 400 && error.status < 500);
-}
-
 function failurePatch(error: unknown): Pick<ControlAttempt, "refusal" | "unconfirmed"> {
   const message = errorMessage(error);
   // A control-plane refusal is the server's own decision: it renders as a
   // refusal, never as the runtime's rejection or as a local failure.
-  if (definitiveRefusal(error)) return { refusal: { outcome: "refused", message }, unconfirmed: null };
+  if (isDefinitive(error)) return { refusal: { outcome: "refused", message }, unconfirmed: null };
   // A lost response or an unproven fault: the request may have been applied, so
   // it stays unknown until the server's own records place it.
   return { refusal: null, unconfirmed: { outcome: "unknown", message } };
