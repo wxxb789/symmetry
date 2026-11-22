@@ -2769,7 +2769,7 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
 
 - [ ] Class scan of the other paginated reads (2026-11-18). The Goal receipt list is bound by
       construction: its pages are keyed by their own `after` sequence numbers
-      (`frontend/src/features/goals/detail.tsx`, `ReadModel.events/2`), which are append-only and
+      (`frontend/src/features/goals/detail.tsx` and `ReadModel.events/2`), which are append-only and
       re-read under their own keys, so a page is never served under a boundary it was not fetched
       from. The chat conversation binds its pages by the boundary message's id (`chatHistoryView`'s
       gap in `frontend/src/features/chat/presentation.ts`, rendered by

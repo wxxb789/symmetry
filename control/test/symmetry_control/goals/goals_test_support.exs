@@ -663,8 +663,9 @@ defmodule SymmetryControl.GoalsTestSupport do
     "sha256:" <> Base.encode16(SymmetryControl.RequestHash.canonical(subject), case: :lower)
   end
 
-  # By design independent of `Goals.mutation_id/2` so served ids cannot change bytes without
-  # a red test: sha256 over "<prefix>:<part>:…", version-5/"a" nibbles, not RFC 9562 name hashing.
+  # By design independent of `Goals.Internal.mutation_id/2` so served ids cannot change bytes
+  # without a red test: sha256 over "<prefix>:<part>:…", version-5/"a" nibbles, not RFC 9562
+  # name hashing.
   def frozen_mutation_id(prefix, parts) do
     hex =
       :crypto.hash(:sha256, prefix <> ":" <> Enum.join(parts, ":"))

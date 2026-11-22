@@ -490,7 +490,8 @@ Kernel imports (per caller module, from the tracer's `imported` events):
 `run_fence.ex` changes (the only kernel edit): the call lines below are repointed to the module
 that now owns each function, and the three `alias` lines those calls need are added
 (`alias SymmetryControl.Goals.Budget`, `.ContextAssembly`, `.Settlement`); the existing
-`alias SymmetryControl.Goals.HarnessSessions` / `.Internal` lines stay untouched, and
+`import SymmetryControl.Goals.ContractValidation` / `.EventsReceipts` / `.Internal` blocks and
+the existing `alias SymmetryControl.Goals.HarnessSession` schema alias stay untouched, and
 `alias SymmetryControl.Goals` is deleted because RunFence keeps no facade call.
 
 | `run_fence.ex` line | function | was | is |
@@ -840,7 +841,7 @@ format: no files need formatting (empty log)
 3 cycles found
 No cycles found
 OK
-check-citation-existence: at dc070002 refused (1 stale citation, pre-existing on main from 7f34d40d); the apply tree refreshes it, and a commit-faithful shell of the slice head passes: "1 changed document(s) pass the path and symbol check (518 path citation(s))"
+check-citation-existence: the apply tree refreshed the 3196 citation (committed at 067c0dcc); at 067c0dcc the gate still refused 1 pre-existing citation in docs/archive/CLOSED-TODO.md:2772 (symbol `events` bound by the checker to frontend/src/features/goals/detail.tsx, whose lowercase events query key #245 moved out), and the fix-stage tree repairs that line (", " -> " and ", the smallest wording change that keeps the record truthful) under the fix-stage owned-set amendment; the checker reads commits, so the gate ran on a copy of the slice head (ed9413f7: 067c0dcc plus the fix-stage CLOSED-TODO.md, blob 5cdaad00, base 42afb56c) and exits 0 -- "1 changed document(s) pass the path and symbol check (518 path citation(s))"
 git diff --check: clean (exit 0)
 host path scan: 0 hits (grep exit 1)
 backslash-u scan: 9 occurrences in the same scope (lib `goals.ex` + `goals/` + the goals test files), = base 9; the apply diff adds none
