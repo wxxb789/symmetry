@@ -8,8 +8,8 @@ Base revision: `b6c7c38397f41d99a0a1e4956e9fb8aaa8977a98` (origin/main, 2026-11-
 Goal shape: move-only. `cmd/symmetry-linux-launcher` and `cmd/symmetry-linux-clone-bootstrap`
 become thin process shims; every other declaration moves verbatim into
 `internal/launchercore` and `internal/clonebootstrap` with only the package clause, the recorded
-rename map, one deleted dead comment and three rename-stale comment corrections (conductor
-ruling 2026-11-22) as deltas. 06a alone does not remove RC-1 (ordering
+rename map, one deleted unanchored EOF note (§1) and three rename-stale comment corrections
+(conductor ruling 2026-11-22) as deltas. 06a alone does not remove RC-1 (ordering
 policy fused with the host effect surface); it removes RC-2's blocker by creating importable
 homes, and must not be reported as root-cause removal.
 
@@ -17,7 +17,7 @@ homes, and must not be reported as root-cause removal.
 
 | HEAD file | Source | Deltas |
 | --- | --- | --- |
-| `internal/launchercore/main_linux_amd64.go` | `cmd/symmetry-linux-launcher/main.go` minus `main`/`run` | `package launchercore`; `runLaunch`→`RunLaunch`, `runCloneCleanup`→`RunCloneCleanup`; dead trailing comment deleted; the two comment references to `runCloneCleanup` corrected to `RunCloneCleanup` |
+| `internal/launchercore/main_linux_amd64.go` | `cmd/symmetry-linux-launcher/main.go` minus `main`/`run` | `package launchercore`; `runLaunch`→`RunLaunch`, `runCloneCleanup`→`RunCloneCleanup`; the unanchored EOF note deleted (history below); the two comment references to `runCloneCleanup` corrected to `RunCloneCleanup` |
 | `cmd/symmetry-linux-launcher/main.go` | new shim | keeps `main()`/`run()` byte-identical except the two calls now read `launchercore.RunLaunch()` / `launchercore.RunCloneCleanup()`; binary-identity package doc comment kept here |
 | `internal/launchercore/main_linux_amd64_test.go` | `cmd/symmetry-linux-launcher/main_test.go` tests 1-5,7 + `openCleanupTestPins`, `newCleanupTestRoot`, `protocolOwnerForCleanupTest` | `package launchercore`; imports trimmed to those the moved tests use |
 | `cmd/symmetry-linux-launcher/main_test.go` | same file, test 6 (`TestInstalledLinuxOwnerCleanupRejectsBCallerScratch`) only | imports trimmed; body verbatim |
@@ -28,6 +28,19 @@ homes, and must not be reported as root-cause removal.
 Build tags stay exactly `//go:build linux && amd64` on every moved and new file. Every exported
 name in the two internal packages is a rename of a base declaration; no new declaration is
 created, and none is deleted except `main`/`run` moving to the shims. No file is split.
+
+EOF-note history (record correction, review F3): the deleted note ("These local binary helpers
+keep the root stage's proc writes fixed-format; no command path, environment, cwd, or
+B-controlled bytes enter this phase.") is unanchored prose, not the residue of a deleted helper.
+`git log -S 'These local binary helpers'` shows `41e64851` (#9) added the file with the note
+already on its last two lines (1748 L, nothing follows it), and it stayed the file's last two
+lines at base (`cmd/symmetry-linux-launcher/main.go:1743-1744`); `32bbab36`'s only deletion in this
+file was `openProcDir`, a function with no doc comment. The invariant the note stated still holds
+at HEAD, carried by code: the gate exec uses the fixed path `/proc/self/fd/3` with fixed argv,
+environment and cwd (`internal/launchercore/main_linux_amd64.go:778-781`), its stdio is a verified
+fixed `/dev/null` (`:945-960`), and the root stage's only proc writes stay fixed-format — literal
+names/values plus decimal `BUID`/`BGID` (`:962-995`). Deleted under comment policy item 4 as
+unanchored prose, not because its invariant became false.
 
 Naming decisions (contract leaves these open):
 
@@ -61,9 +74,9 @@ approximated.
 
 - AST declaration-set/comment/import comparison base vs HEAD (go/ast + go/printer; a scratch
   program under the GDD tmp root, never committed): decl multiset equal after the rename map,
-  comment groups equal except the one deleted dead comment plus the three rename-stale text
-  corrections, import/package deltas confined to the two shims and the new internal files.
-  Baseline captured before the move: base vs pre-move
+  comment groups equal except the one deleted unanchored EOF note (§1) plus the three
+  rename-stale text corrections, import/package deltas confined to the two shims and the new
+  internal files. Baseline captured before the move: base vs pre-move
   tree = 0 differences across 173 decls / 17 comment groups / 8 import sets / 8 package clauses.
 - Per-function control-flow audit table for the contract's function list, backed by the
   normalized per-decl text equality (the same program's decl records).
@@ -82,8 +95,8 @@ approximated.
 
 The 06b syscall/fd seam and any new test; the W6-05 legacy containment deletion;
 `native/linux-gate/protocol/**`; `internal/authority/**`; witness tests and acceptance case sets;
-any comment-policy sweep beyond the dead comment and the three rename-stale reference
-corrections; `docs/goals/0010-refactor-program.md`'s
+any comment-policy sweep beyond the deleted unanchored EOF note and the three rename-stale
+reference corrections; `docs/goals/0010-refactor-program.md`'s
 W6-06 row (conductor-owned; flagged in the report as the document this slice makes stale).
 
 ## 6. TODO bookkeeping
