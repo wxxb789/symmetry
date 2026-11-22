@@ -9,7 +9,7 @@ import (
 )
 
 // ControlAPI is a configurable ControlAPI double. A nil hook answers with the
-// permissive behaviour most app fakes use; every call is recorded.
+// permissive behaviour most app fakes use; all methods but Dispatch record the request.
 type ControlAPI struct {
 	OnRegisterSession    func(context.Context, string, string, protocol.SessionRegistrationRequest) (protocol.SessionRegistrationResponse, error)
 	OnHeartbeat          func(context.Context, string, protocol.RuntimeHeartbeatRequest) (protocol.RuntimeSnapshot, error)

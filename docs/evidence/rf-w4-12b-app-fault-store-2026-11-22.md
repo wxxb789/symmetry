@@ -24,7 +24,7 @@ W3-08 `6d428d8f` yes, W3-15 `de526861` yes; arch-decision-2 BOUND (conductor dis
 | `daemon/internal/app/apptest_contract_test.go` | new: `var _ journalStore = (*apptest.FaultStore)(nil)` | 7 | `8ff38f3e766a9887` |
 
 Loc delta on tracked files (`git diff --stat`): 30 files changed, 616 insertions(+), 596
-deletions(-) — 9 production files + 21 app test files; the nine new files add 1,931 lines. The
+deletions(-) — 9 production files + 21 app test files; the nine new files add 1,851 lines. The
 whole tracked code delta is bound by `git diff -- daemon | sha256sum` =
 `9c66fe7e30b837b10a61cecedf8b78b3bd86a144c3d1202592f5b34e63a50680`. No production
 forwarding/adapter type: the only `journalStore` implementers in the tree are
@@ -142,9 +142,11 @@ store-interaction change with the base and HEAD outcomes recorded.
 
 ### 5a. `store == nil` decisions (verification-amendment table)
 
-The 21 PROBES of `TestStorelessDaemonTakesEveryStoreNilBranch` were re-derived at HEAD: 18 probes
-still run a storeless daemon and still take their nil-store branch; 3 subtests now install a real
-`FaultStore` and take the store path. Base vs HEAD outcome per migrated subtest:
+The 23 probe rows of `TestStorelessDaemonTakesEveryStoreNilBranch` were re-derived at HEAD: 3 rows
+install a real `FaultStore` and take the store path; 20 rows still run a storeless daemon, 18 of
+which still take their nil-store branch (the two remaining rows are not nil-branch probes: the
+untyped-nil `withStore` injection check and the storeless `close` check). Base vs HEAD outcome per
+migrated subtest:
 
 | subtest (name unchanged) | base setup | base `store == nil` decision | HEAD setup | HEAD decision | nil-branch coverage retained by |
 | --- | --- | --- | --- | --- | --- |
@@ -425,3 +427,52 @@ declarations only (no declaration was relocated into a new file), so `SOURCE_PAT
 6. The scratch logs quoted in §9 (suite logs, mutant outputs, WSL log) are deleted before handoff;
    the quoted lines above are the transcript. `git status` at handoff lists only the slice's own
    files.
+
+## 13. Apply pass (2026-11-22)
+
+The simplify review of `cbe4910e..2ecaec28`
+(`.../2026-11-22/symmetry-rf-w4-12b-app-fault-store-simplify/answer.md`) was applied on top of the
+delivered revision (implement commit `b7d42074`, in HEAD `635c3f69`). Applied: S1
+(`harness_test.go` dead `wire` return), S2 + S9 (`nativeUsageSettlementHook` plus
+`TestNativeUsageSettlementAttemptRouting`), S3 (`withStore` back to `*state.Store`; plan D2
+withdrawn), S5 (`cleanup_test.go` fixtures take the `FaultStore` directly), S6 (`probeStore`
+helper), S7 (`apptest/control.go` doc corrected), and the D1/§1 and D2/§5a record corrections.
+Rejected: S4 (needs `supervisory_test.go` and `decision_requirement_test.go`, outside the STRICT
+owned set) and S8 (cross-file rename churn; every file already uses one name for the double, and
+the finding itself recommends skipping).
+
+Revision identity: HEAD `635c3f69` plus this uncommitted apply diff;
+`git diff -- daemon | sha256sum` = `639ffbe90cb94067830886e97c3c6409390f1d6bda6cea0b3cce474a954ed178`
+(6 files, 76 insertions(+), 75 deletions(-)); the diff's other two paths are this evidence record
+and `docs/plans/2026-11-22-rf-w4-12b-app-fault-store-plan.md`. The nine new files still total 1,851
+lines; `apptest/control.go` sha256 (first 16) = `26b9e1d66f47b463`. The apply adds one test function
+(`TestNativeUsageSettlementAttemptRouting`), so the implement-stage "no test function added"
+set-diff statements in §5/§6 describe `b7d42074`; every implement-stage assertion, subtest name and
+test function name is otherwise unchanged (gate below). Production code is untouched by the apply
+(`apptest/control.go` is a comment-only change); §10's production coverage numbers are re-derived
+in the re-run below.
+
+One further record note re-derived here: §1's implement-delta hash `9c66fe7e30b837b1` does not
+reproduce from commit `b7d42074`; the same scope (`git diff 2db5ed0c b7d42074 -- daemon` minus the
+nine new files) hashes to `a2e9d94f2ab5ee57` and its `git diff --stat` (30 files, 616
+insertions(+), 596 deletions(-)) matches §1, so only that hash line is stale (likely an
+intermediate worktree state). The new-file line counts and the §5a probe census are fixed in
+place; no other §1-§12 number required a change.
+
+| gate | command | result |
+| --- | --- | --- |
+| gofmt | `gofmt -l .` (daemon/) | empty, exit 0 |
+| whitespace | `git diff --check` (repo root) | empty, exit 0 |
+| mirror census | the §2 statement | no match, `rg` exit 1 |
+| override mechanism | `rg -n 'storeCallbackWrite' daemon/internal/app` | no match, exit 1 |
+| vet | `go vet ./...` | exit 0 |
+| vet, GOOS=linux | `GOOS=linux GOARCH=amd64 go vet ./internal/app/` | exit 0 |
+| builds | `GOOS=linux\|windows\|darwin GOARCH=amd64 go build ./...` | exit 0 each |
+| focused tests | the §9 focused set plus `TestNativeUsageSettlementAttemptRouting` | `ok .../internal/app 20.196s`, `ok .../internal/app/apptest 3.654s` (first pass), re-run of the five routing tests after the predicate rewrite: `ok ... 4.599s`, exit 0 |
+| Windows suite | `go test -count=1 -timeout 1200s ./internal/app/...` | rerun: `ok .../internal/app 464.116s`; `ok .../internal/app/apptest 16.551s`, exit 0. First attempt (679.180s) failed only `TestOmOAttachAckRegressionCancellationAndDeadlineDoNotRenewBudget/admission_deadline` (an untouched deadline test whose local-control GET hit `context deadline exceeded`), green in isolation (`31.501s`) and on the rerun — the host-load timing-flake class documented in `docs/TODO.md` |
+| R2 coverage | `go test -count=1 -timeout 2400s -coverprofile=... ./internal/app/`; `go test -count=1 -cover ./internal/app/apptest/` | `ok .../internal/app 477.927s coverage: 75.2%`, exit 0; `ok .../internal/app/apptest 17.045s coverage: 99.6%`, exit 0. Nine-file uncovered sum 1313 vs the §10 HEAD record 1310; the deltas are run variance, not the apply: a control run of the pre-apply tree (`git archive 635c3f69`, `669.414s`) gave 75.3% and nine-file uncovered 1304, and the blocks that flip between the two runs sit inside select/retry loops of files the apply never touched (`app.go:423-425`, `goal_delivery.go:772`, `outbox.go:302/305/323-325/685`) |
+| WSL race | `wsl -d Ubuntu-24.04 -u accept -- bash -lc '... go test -count=1 -race -timeout 3000s ./internal/app/... ./internal/platform/... ./internal/execution/...'` | `ok .../internal/app 1300.723s`; `ok .../internal/app/apptest 1.526s`; `ok .../internal/platform 63.006s`; `ok .../internal/execution 23.679s`; exit 0, no `--- FAIL`, no data race (race failures exit non-zero) |
+| R9 | `python scripts/ci/test-omo-control-native-evidence.py` | `Ran 15 tests ... OK`, exit 0 |
+| lint ratchet | `GOOS=linux golangci-lint run --config .golangci.yml --max-issues-per-linter=0 --max-same-issues=0 ./internal/app/...` | 145 issues, `internal/app/apptest` = 0 findings (equal to the implement-stage final count); one QF1001 the apply had introduced in the first helper shape was removed before this run |
+| assertion/subtest-name invariance | per-file normalized set diff vs `635c3f69` (the §9 one-liner) | only additions inside the new routing test in `goal_delivery_test.go`; `harness_test.go`, `cleanup_test.go`, `journal_store_test.go`, `export_test.go` sets identical |
+| receiver-method counts | the §7 statement, app-only and module-wide | identical to the §7 columns for all 14 methods |

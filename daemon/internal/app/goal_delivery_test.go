@@ -371,6 +371,46 @@ func TestDeliveredNativeUsageDoesNotRegenerateAfterRestart(t *testing.T) {
 	}
 }
 
+// The deferred and exhaustion recovery writes share QueueNativeUsageRecoverySettlement
+// with the settlement attempt; only the settlement attempt is the base injection point.
+func nativeUsageSettlementHook(active *runningRun, store *state.Store, attempt func(state.RunKey, protocol.Usage, *state.NativeUsageTerminalRecovery) (state.RunJournal, error)) func(state.RunKey, protocol.Usage, *state.NativeUsageTerminalRecovery) (state.RunJournal, error) {
+	return func(runKey state.RunKey, usage protocol.Usage, settlement *state.NativeUsageTerminalRecovery) (state.RunJournal, error) {
+		if !nativeUsageSettlementAttempt(active) {
+			return store.QueueNativeUsageRecoverySettlement(runKey, usage, settlement)
+		}
+		if _, err := store.MarkNativeUsageRecoverySettlement(runKey, settlement); err != nil {
+			return state.RunJournal{}, err
+		}
+		return attempt(runKey, usage, settlement)
+	}
+}
+
+func nativeUsageSettlementAttempt(active *runningRun) bool {
+	if active.nativeUsageRetryExhausted {
+		return false
+	}
+	return !active.nativeUsageRetryPending || active.nativeUsageRetryInFlight
+}
+
+func TestNativeUsageSettlementAttemptRouting(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		active     *runningRun
+		settlement bool
+	}{
+		{name: "settlement attempt", active: &runningRun{}, settlement: true},
+		{name: "deferred recovery write", active: &runningRun{runLifecycle: runLifecycle{nativeUsageRetryPending: true}}},
+		{name: "in-flight retry write", active: &runningRun{runLifecycle: runLifecycle{nativeUsageRetryPending: true, nativeUsageRetryInFlight: true}}, settlement: true},
+		{name: "exhausted recovery write", active: &runningRun{runLifecycle: runLifecycle{nativeUsageRetryPending: true, nativeUsageRetryInFlight: true, nativeUsageRetryExhausted: true}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := nativeUsageSettlementAttempt(test.active); got != test.settlement {
+				t.Fatalf("nativeUsageSettlementAttempt = %t, want %t", got, test.settlement)
+			}
+		})
+	}
+}
+
 func TestNativeGoalUsageFailureBlocksTerminalizationAndRetainsRun(t *testing.T) {
 	admission, present, err := parseAdmissionInput(validAdmissionInput())
 	if err != nil || !present {
@@ -403,17 +443,9 @@ func TestNativeGoalUsageFailureBlocksTerminalizationAndRetainsRun(t *testing.T) 
 		running: map[state.RunKey]*runningRun{key: active},
 		options: options{newID: ids(), clock: time.Now},
 	}
-	faults.OnQueueNativeUsageRecoverySettlement = func(runKey state.RunKey, usage protocol.Usage, settlement *state.NativeUsageTerminalRecovery) (state.RunJournal, error) {
-		// The deferred and exhaustion recovery writes share this method with the
-		// settlement attempt; only the settlement attempt is the base injection point.
-		if active.nativeUsageRetryExhausted || (active.nativeUsageRetryPending && !active.nativeUsageRetryInFlight) {
-			return store.QueueNativeUsageRecoverySettlement(runKey, usage, settlement)
-		}
-		if _, err := store.MarkNativeUsageRecoverySettlement(runKey, settlement); err != nil {
-			return state.RunJournal{}, err
-		}
+	faults.OnQueueNativeUsageRecoverySettlement = nativeUsageSettlementHook(active, store, func(state.RunKey, protocol.Usage, *state.NativeUsageTerminalRecovery) (state.RunJournal, error) {
 		return state.RunJournal{}, usageFailure
-	}
+	})
 
 	daemon.waitForNativeRun(context.Background(), key, active, active.nativeSession)
 	journal, err := store.LoadJournal(key)
@@ -450,22 +482,14 @@ func TestNativeGoalUsageRetrySucceedsWithoutRestartAndFinalizesOnce(t *testing.T
 		running: map[state.RunKey]*runningRun{key: active},
 		options: options{newID: ids(), clock: func() time.Time { return now }},
 	}
-	faults.OnQueueNativeUsageRecoverySettlement = func(runKey state.RunKey, usage protocol.Usage, settlement *state.NativeUsageTerminalRecovery) (state.RunJournal, error) {
-		// The deferred and exhaustion recovery writes share this method with the
-		// settlement attempt; only the settlement attempt is the base injection point.
-		if active.nativeUsageRetryExhausted || (active.nativeUsageRetryPending && !active.nativeUsageRetryInFlight) {
-			return store.QueueNativeUsageRecoverySettlement(runKey, usage, settlement)
-		}
-		if _, err := store.MarkNativeUsageRecoverySettlement(runKey, settlement); err != nil {
-			return state.RunJournal{}, err
-		}
+	faults.OnQueueNativeUsageRecoverySettlement = nativeUsageSettlementHook(active, store, func(runKey state.RunKey, usage protocol.Usage, settlement *state.NativeUsageTerminalRecovery) (state.RunJournal, error) {
 		usageCalls++
 		usages = append(usages, cloneNativeUsage(usage))
 		if usageCalls == 1 {
 			return state.RunJournal{}, errors.New("injected usage persistence failure")
 		}
 		return store.QueueNativeUsageRecoverySettlement(runKey, usage, settlement)
-	}
+	})
 	faults.OnQueueTerminalTransitionAt = func(runKey state.RunKey, transition protocol.StateTransitionRequest, at time.Time) (state.RunJournal, error) {
 		terminalCalls++
 		return store.QueueTerminalTransitionAt(runKey, transition, at)
@@ -523,18 +547,10 @@ func TestNativeGoalUsageRetryExhaustionBlocksRenewalAndRetainsEvidence(t *testin
 		running: map[state.RunKey]*runningRun{key: active},
 		options: options{newID: ids(), clock: func() time.Time { return now }},
 	}
-	faults.OnQueueNativeUsageRecoverySettlement = func(runKey state.RunKey, usage protocol.Usage, settlement *state.NativeUsageTerminalRecovery) (state.RunJournal, error) {
-		// The deferred and exhaustion recovery writes share this method with the
-		// settlement attempt; only the settlement attempt is the base injection point.
-		if active.nativeUsageRetryExhausted || (active.nativeUsageRetryPending && !active.nativeUsageRetryInFlight) {
-			return store.QueueNativeUsageRecoverySettlement(runKey, usage, settlement)
-		}
-		if _, err := store.MarkNativeUsageRecoverySettlement(runKey, settlement); err != nil {
-			return state.RunJournal{}, err
-		}
+	faults.OnQueueNativeUsageRecoverySettlement = nativeUsageSettlementHook(active, store, func(state.RunKey, protocol.Usage, *state.NativeUsageTerminalRecovery) (state.RunJournal, error) {
 		usageCalls++
 		return state.RunJournal{}, errors.New("persistent usage outage")
-	}
+	})
 
 	daemon.waitForNativeRun(context.Background(), key, active, active.nativeSession)
 	for attempt := 0; attempt < nativeUsageRetryLimit-1; attempt++ {
@@ -2499,21 +2515,13 @@ func TestNativeTerminalReservationSurvivesLeaseTerminationDuringUsageRetry(t *te
 		running: map[state.RunKey]*runningRun{key: active},
 		options: options{newID: ids(), clock: func() time.Time { return now }},
 	}
-	faults.OnQueueNativeUsageRecoverySettlement = func(runKey state.RunKey, usage protocol.Usage, settlement *state.NativeUsageTerminalRecovery) (state.RunJournal, error) {
-		// The deferred and exhaustion recovery writes share this method with the
-		// settlement attempt; only the settlement attempt is the base injection point.
-		if active.nativeUsageRetryExhausted || (active.nativeUsageRetryPending && !active.nativeUsageRetryInFlight) {
-			return store.QueueNativeUsageRecoverySettlement(runKey, usage, settlement)
-		}
-		if _, err := store.MarkNativeUsageRecoverySettlement(runKey, settlement); err != nil {
-			return state.RunJournal{}, err
-		}
+	faults.OnQueueNativeUsageRecoverySettlement = nativeUsageSettlementHook(active, store, func(runKey state.RunKey, usage protocol.Usage, settlement *state.NativeUsageTerminalRecovery) (state.RunJournal, error) {
 		usageCalls++
 		if usageCalls == 1 {
 			return state.RunJournal{}, errors.New("injected native usage persistence failure")
 		}
 		return store.QueueNativeUsageRecoverySettlement(runKey, usage, settlement)
-	}
+	})
 
 	daemon.waitForNativeRun(context.Background(), key, active, session)
 	if usageCalls != 1 || !active.nativeUsageRetryPending {

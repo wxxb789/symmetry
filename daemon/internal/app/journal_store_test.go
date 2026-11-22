@@ -147,6 +147,16 @@ func difference(left, right []string) []string {
 	return only
 }
 
+func probeStore(t *testing.T) *apptest.FaultStore {
+	t.Helper()
+	store, err := apptest.NewFaultStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	return store
+}
+
 func TestStorelessDaemonTakesEveryStoreNilBranch(t *testing.T) {
 	key := state.RunKey{RunID: "run", Generation: 1}
 	probes := []storelessProbe{
@@ -183,11 +193,7 @@ func TestStorelessDaemonTakesEveryStoreNilBranch(t *testing.T) {
 			}
 		}},
 		{"cleanup_glue.go selectStoreWrite override wins without a store", func(t *testing.T, daemon *daemon) {
-			store, err := apptest.NewFaultStore(t.TempDir())
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { _ = store.Close() })
+			store := probeStore(t)
 			daemon.store = store
 			calls := 0
 			store.OnMarkContainmentUnproven = func(state.RunKey, int, string) (state.RunJournal, error) {
@@ -214,16 +220,12 @@ func TestStorelessDaemonTakesEveryStoreNilBranch(t *testing.T) {
 			}
 		}},
 		{"cleanup_glue.go persistProcessMarker mirror error skips the readback", func(t *testing.T, daemon *daemon) {
-			store, err := apptest.NewFaultStore(t.TempDir())
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { _ = store.Close() })
+			store := probeStore(t)
 			daemon.store = store
 			store.OnSetProcessDetails = func(state.RunKey, int, string, time.Time) (state.RunJournal, error) {
 				return state.RunJournal{}, errStoreCallbackProbe
 			}
-			err = daemon.persistProcessMarker(key, 81, "windows:81:0000000000000001", time.Now())
+			err := daemon.persistProcessMarker(key, 81, "windows:81:0000000000000001", time.Now())
 			if !errors.Is(err, errStoreCallbackProbe) {
 				t.Fatalf("marker mirror error = %v, want %v", err, errStoreCallbackProbe)
 			}
@@ -233,11 +235,7 @@ func TestStorelessDaemonTakesEveryStoreNilBranch(t *testing.T) {
 			requireErrorMessage(t, err, "state store is unavailable")
 		}},
 		{"cleanup_glue.go clearPersistedProcessDetails skips the readback", func(t *testing.T, daemon *daemon) {
-			store, err := apptest.NewFaultStore(t.TempDir())
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { _ = store.Close() })
+			store := probeStore(t)
 			daemon.store = store
 			cleared := 0
 			store.OnClearContainmentUnproven = func(state.RunKey, int, string) (state.RunJournal, error) {

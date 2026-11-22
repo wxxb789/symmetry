@@ -3274,11 +3274,11 @@ func (session *stopProofNativeGoalSession) WaitStopped(ctx context.Context) (exe
 func TestNativeCloseDurableWriteFailuresRetryWithoutLeakingRecoveryBarrier(t *testing.T) {
 	for _, test := range []struct {
 		name string
-		wire func(*apptest.FaultStore) func()
+		wire func(*apptest.FaultStore)
 	}{
 		{
 			name: "load Goal session",
-			wire: func(faults *apptest.FaultStore) func() {
+			wire: func(faults *apptest.FaultStore) {
 				calls := 0
 				faults.OnLoadGoalSession = func(key state.GoalSessionKey) (state.GoalSessionJournal, error) {
 					calls++
@@ -3287,12 +3287,11 @@ func TestNativeCloseDurableWriteFailuresRetryWithoutLeakingRecoveryBarrier(t *te
 					}
 					return faults.Store.LoadGoalSession(key)
 				}
-				return func() {}
 			},
 		},
 		{
 			name: "close Goal session",
-			wire: func(faults *apptest.FaultStore) func() {
+			wire: func(faults *apptest.FaultStore) {
 				calls := 0
 				faults.OnCloseGoalSession = func(key state.GoalSessionKey) (state.GoalSessionJournal, error) {
 					calls++
@@ -3301,12 +3300,11 @@ func TestNativeCloseDurableWriteFailuresRetryWithoutLeakingRecoveryBarrier(t *te
 					}
 					return faults.Store.CloseGoalSession(key)
 				}
-				return func() {}
 			},
 		},
 		{
 			name: "clear process details",
-			wire: func(faults *apptest.FaultStore) func() {
+			wire: func(faults *apptest.FaultStore) {
 				calls := 0
 				faults.OnClearProcessDetails = func(key state.RunKey, pid int, identity string) (state.RunJournal, error) {
 					calls++
@@ -3315,7 +3313,6 @@ func TestNativeCloseDurableWriteFailuresRetryWithoutLeakingRecoveryBarrier(t *te
 					}
 					return faults.Store.ClearProcessDetails(key, pid, identity)
 				}
-				return func() {}
 			},
 		},
 	} {
@@ -3344,7 +3341,7 @@ func TestNativeCloseDurableWriteFailuresRetryWithoutLeakingRecoveryBarrier(t *te
 				options: options{clock: time.Now},
 			}
 			app.slots <- struct{}{}
-			_ = test.wire(faults)
+			test.wire(faults)
 
 			if err := app.closeNativeGoalSession(key, active, session); err == nil {
 				t.Fatal("closeNativeGoalSession() succeeded despite durable write failure")

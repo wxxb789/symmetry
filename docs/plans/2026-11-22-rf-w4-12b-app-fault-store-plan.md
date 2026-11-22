@@ -73,11 +73,15 @@ it would spread one lock/refusal rule over 8 sites and change the lock-site audi
 behavioural gain. Gate reading: "`selectStoreWrite` override branch and `storeCallbackWrite` gone"
 = the override branch is gone (`rg -n 'storeCallbackWrite|override'` = 0), the function survives.
 
-### D2 — `withStore` takes the seam type
+### D2 — `withStore` takes the seam type (withdrawn at apply, 2026-11-22)
 
-`export_test.go:9 withStore(store *state.Store)` becomes `withStore(store journalStore)` so a
-`Run`-based test can inject a `FaultStore`. `withStore(nil)` still writes an untyped nil (W4-12a
-D6 probe stays green); `*state.Store` callers compile unchanged.
+Superseded by the applied simplify finding S3: the widened `withStore(store journalStore)` had no
+caller passing a `FaultStore` (all 12 call sites pass `*state.Store` or an untyped nil) and the
+interface parameter weakened the helper's own `store == nil` guard, because a typed-nil
+`*state.Store` would become a non-nil interface. `export_test.go` keeps
+`withStore(store *state.Store)`: `withStore(nil)` still writes an untyped nil (W4-12a D6 probe
+stays green); `*state.Store` callers compile unchanged. The widening can return when a `Run`-based
+test actually injects a `FaultStore`.
 
 ### D3 — mirror branches are dead in production, the store path is kept verbatim
 
@@ -170,10 +174,24 @@ behaviour is pinned by `process_test.go` and mutant (c).
 ## Delivered revision
 
 Uncommitted working tree over `2db5ed0c` (the implement stage leaves the tree for verification):
-9 new files — `daemon/internal/app/apptest/` (8 files, 1,924 lines incl. tests) plus
+9 new files — `daemon/internal/app/apptest/` (8 files, 1,844 lines incl. tests) plus
 `apptest_contract_test.go` (7 lines); production deletions in `app.go`, `cleanup_glue.go`,
 `goal_admission.go`, `goal_delivery.go`, `native_run.go`, `outbox.go`, `recovery.go`,
 `recovery_glue.go`, `supervisory.go`; test migration in 21 files; `export_test.go`'s `withStore`
-takes the seam type (D2, W4-12a D6 probe stays green). Census, dead-in-production table,
+keeps its `*state.Store` parameter (D2, withdrawn at apply; W4-12a D6 probe stays green). Census,
+dead-in-production table,
 divergence table, control-flow audit, mutants and gate outputs:
 `docs/evidence/rf-w4-12b-app-fault-store-2026-11-22.md`.
+
+## Apply pass (2026-11-22)
+
+The simplify review (`.../2026-11-22/symmetry-rf-w4-12b-app-fault-store-simplify/answer.md`) was
+applied on top of the delivered revision (implement commit `b7d42074`, reachable as `635c3f69`):
+S1 (`harness_test.go` dead `wire` return), S2 + S9 (`nativeUsageSettlementHook` plus
+`TestNativeUsageSettlementAttemptRouting`), S3 (`withStore` back to `*state.Store`; D2 withdrawn
+above), S5 (`cleanup_test.go` fixtures take the `FaultStore` directly), S6 (`probeStore` helper),
+S7 (`apptest/control.go` doc corrected), D1 and D2 record corrections. Rejected: S4 (needs
+`supervisory_test.go` and `decision_requirement_test.go`, outside the STRICT owned set) and S8
+(cross-file rename churn; every file already uses one name for the double, and the finding itself
+recommends skipping). Gate outputs and the apply revision identity:
+`docs/evidence/rf-w4-12b-app-fault-store-2026-11-22.md` §13.
