@@ -31,7 +31,7 @@ byte-identity is proved by the golden suite (§5) and by the JSON key-order tabl
 in the evidence record.
 
 Workspace ownership joins `RunCloneState` because every validator that binds
-the reserved clone target reads exactly that block (`validateLinuxCloneAbortPending`,
+the reserved clone target reads that block's workspace/clone fields (`validateLinuxCloneAbortPending`,
 `…CleanupPending`, `…CleanupProof`, `linuxV2ReleasedCloneStateSafe`,
 `linuxCloneReuseSourceMatches`); the alternative (workspace in the core) leaves
 the clone sub-ledger with one owned predicate and forces contrived parameter
@@ -52,9 +52,14 @@ reads compile unchanged.
   `requireLinuxScansCleanForAuthority`, `requireLinuxScansSealedForHandoff`,
   `requireLinuxScansSealedForAuthority`.
 * `RunCloneState`: `validateLinuxCloneIntentAbsent`,
-  `validateLinuxCloneAbortPending`, `validateLinuxCloneCleanupPending`,
-  `validateLinuxCloneCleanupProof`, `linuxCloneStageCanAdvance(localState string)`,
-  `linuxV2ReleasedCloneStateSafe(localState string)`.
+  `validateLinuxCloneCleanupPending`, `validateLinuxCloneCleanupProof`,
+  `linuxCloneStageCanAdvance(localState string)` — the four shipped receivers.
+  `validateLinuxCloneAbortPending(journal RunJournal, intent *authority.LinuxCloneIntent)`
+  and `linuxV2ReleasedCloneStateSafe(journal RunJournal) bool` stay free functions on
+  the whole journal: the first calls `linuxCloneAbortFenceAvailable` /
+  `linuxCloneAbortPendingReleaseUnresolved`, which scan containment state, and the
+  second compares `journal.RunID` / `journal.Generation`; both bodies stay
+  byte-identical to base (`linux_clone_validation.go:9`, `:221`).
 * `RunOutboxState`: `validatePendingEntries(runID string, fence protocol.Fence)`
   (split of `validatePendingJournalEntriesAndDeliveries`, which keeps the
   `validateGoalDeliveries` tail because that validator lives in

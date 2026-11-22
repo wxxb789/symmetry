@@ -105,6 +105,15 @@ parameter substitution:
 `hasExactUsageDelivery(journal, usage)` → `(journal RunGoalDeliveryState) hasExactUsageDelivery(runID string, fence protocol.Fence, usage protocol.Usage)`;
 the other ten diffs change only the receiver. No condition, branch or error string moves.
 
+Two clone predicates that the plan's §2 roster originally listed did **not** become methods:
+`validateLinuxCloneAbortPending` and `linuxV2ReleasedCloneStateSafe` keep `RunJournal`
+parameters (final tree `linux_clone_validation.go:221` and `:9`; both appear as verbatim
+relocations, not among the 30 changed declarations, in `scratch/inspect-apply.txt`), because
+they read outside the block — the first calls `linuxCloneAbortFenceAvailable` /
+`linuxCloneAbortPendingReleaseUnresolved`, which scan containment state, and the second
+compares `journal.RunID` / `journal.Generation`. The plan §2 roster now lists exactly the four
+shipped methods.
+
 `scratch/recvfields-final.txt` (mode `recvfields` of the scratch AST tool) proves the
 invariant mechanically: for every method whose receiver is one of the four blocks, it lists
 every selector taken off that receiver and flags any name that is not a field of the block or a
@@ -320,7 +329,8 @@ package.
 ## 9. R9 source-subject mapping
 
 `scripts/ci/omo-control-native-evidence.py` `SOURCE_PATHS` gains the ten new files that receive
-`state.go` code, and `state.go` keeps its path:
+`state.go` code, appended after the two evidence-frozen entries so `state.go` and
+`goal_session.go` keep their base indices (91/92), and `state.go` keeps its path:
 
 | New path | Base `state.go` spans |
 | --- | --- |
@@ -365,9 +375,12 @@ O28 exclude those files. `scratch/plans-citations-map.tsv` maps all 328 of their
 `state.go:<line>` citations to the declaration each line held at this slice's base and to that
 declaration's head file:line (86 distinct declarations; 48 citations already fell outside every
 declaration at base, i.e. they were stale before this slice). The gate itself
-(`scripts/ci/check-citation-existence.py --base origin/main --head HEAD`) exits 0; it audits only
-documents the range changes, and it strips line suffixes, so `state.go:<line>` citations keep
-resolving to the file that still exists.
+(`scripts/ci/check-citation-existence.py --base 2ec47dd1a7b6 --head HEAD`) exits 0; it audits
+only documents the range changes, and it strips line suffixes, so `state.go:<line>` citations
+keep resolving to the file that still exists. The base is pinned to the revision (fix-stage
+amendment): `origin/main` has advanced past `2ec47dd1`, and the main-side
+`docs/archive/CLOSED-TODO.md` change that newer main carries is outside this range, so the
+moving-ref form refuses on a citation this slice does not own.
 
 ## 11. Interpretations, residual risks
 
@@ -403,3 +416,20 @@ resolving to the file that still exists.
 * Residual risk: the four sub-ledger blocks are embedded, so a future field added to a block is
   silently persisted at that block's position; the golden key test is the detector — it fails
   when a moved field's key appears outside its golden position.
+
+## 12. Coverage (fix-stage measurement)
+
+The arch-decision-2 "R2 frozen set applies" bullet's "touched-file line coverage must not drop"
+clause is superseded by the verification amendment, and the `ci.yml` coverage job is advisory
+with no threshold. Measured anyway at the fix stage — `go test -count=1 -coverprofile=…`
+`./internal/state/...` over the range base `2ec47dd1` and the final tree, statement-weighted
+totals parsed from the four profiles (`<scratch>/cover-{base,head}-{win,wsl}.txt`):
+
+| Platform | Base | Head |
+| --- | --- | --- |
+| Windows | 3147/5314 = 59.22% | 3147/5313 = 59.23% |
+| WSL linux/amd64 | 4124/5509 = 74.86% | 4134/5508 = 75.05% |
+
+`go test`'s printed percentages agree (Windows 59.2/59.2, WSL 74.9/75.1). The head files the
+split creates are new paths, so per-file coverage has no base counterpart; the package total is
+the comparable aggregate and it did not drop on either platform.
