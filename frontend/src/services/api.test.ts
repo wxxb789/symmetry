@@ -559,6 +559,29 @@ describe("read/write split", () => {
   type ParametersOf<F> = F extends (...args: infer A) => unknown ? A : never;
   type SignalTakers<M> = { [K in keyof M]: Extract<ParametersOf<M[K]>[number], AbortSignal> extends never ? never : K }[keyof M];
 
+  const goalId = "33333333-3333-4333-8333-333333333333";
+  const reads: readonly { name: string; call: (api: Api, signal: AbortSignal) => Promise<unknown> }[] = [
+    { name: "workspace", call: (api, signal) => api.workspace(null, signal) },
+    { name: "workDetail", call: (api, signal) => api.workDetail(workItemId, signal) },
+    { name: "workTimeline", call: (api, signal) => api.workTimeline(workItemId, null, signal) },
+    { name: "attention", call: (api, signal) => api.attention(null, null, signal) },
+    { name: "goal", call: (api, signal) => api.goal(goalId, signal) },
+    { name: "goalEvents", call: (api, signal) => api.goalEvents(goalId, 0, signal) },
+    { name: "session", call: (api, signal) => api.session(signal) },
+    { name: "connections", call: (api, signal) => api.connections(signal) },
+    { name: "chatConversation", call: (api, signal) => api.chatConversation({ scope: "workspace" }, signal) },
+  ];
+
+  it.each(reads)("carries the caller's own signal into the $name read's fetch init (mutant: the transport signal dropped from one read)", async ({ call }) => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response("{}", { status: 500 }));
+    const controller = new AbortController();
+    await call(createApi(fetcher), controller.signal).catch(() => undefined);
+    const init = fetcher.mock.calls[0]?.[1];
+    expect(init?.signal).toBe(controller.signal);
+    controller.abort();
+    expect(init?.signal?.aborted).toBe(true);
+  });
+
   it("sends a bodyed write with the boundary's own init values and no signal (mutants: a changed credentials value; an undefined-valued signal member)", async () => {
     const draft = { provider: "github", name: "draft", account_ref: "acme", capabilities: [] };
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ disposition: "created", connection: { id: "c1" } })));

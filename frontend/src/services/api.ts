@@ -510,11 +510,6 @@ export interface Writes {
   updateProject: (projectId: string, changes: ProjectChanges, csrf: string) => Promise<WriteReceipt>;
   createWorkItem: (projectId: string, draft: WorkItemDraft, csrf: string) => Promise<WorkItemReceipt>;
   updateWorkItem: (workItemId: string, changes: WorkItemChanges, csrf: string) => Promise<WorkItemReceipt>;
-  /**
-   * The assignment write, on the same work-item endpoint as `updateWorkItem`:
-   * the body is the version-fenced assignment and the answer is read as the
-   * served identity and version rather than a creation disposition.
-   */
   assignWorkItem: (workItemId: string, assignment: WorkItemAssignment, csrf: string) => Promise<AssignmentReceipt>;
   moveWorkItem: (workItemId: string, intent: MoveIntent, csrf: string) => Promise<WorkItemReceipt>;
   createResource: (projectId: string, draft: ResourceDraft, csrf: string) => Promise<ResourceReceipt>;
@@ -733,38 +728,43 @@ const chatMessageResponse = (body: Uint8Array, status: number) =>
 export function createApi(
   fetcher: typeof fetch = globalThis.fetch.bind(globalThis),
 ): Api {
+  const read = <A>(
+    path: string,
+    decode: (body: Uint8Array) => Effect.Effect<A, unknown>,
+    signal: AbortSignal,
+  ): Promise<A> => run(request(fetcher, path, { method: "GET" }, decode, "server", signal), signal);
   return {
     workspace(projectId: string | null, signal: AbortSignal): Promise<Workspace> {
       const query = projectId === null ? "" : `?${new URLSearchParams({ project_id: projectId })}`;
-      return run(request(fetcher, `/portal/api/workspace${query}`, { method: "GET" }, (body) => decodeBody(body).pipe(Effect.flatMap((text) => WorkspaceRead.decodeJson(text))), "server", signal), signal);
+      return read(`/portal/api/workspace${query}`, (body) => decodeBody(body).pipe(Effect.flatMap((text) => WorkspaceRead.decodeJson(text))), signal);
     },
     workDetail(workItemId: string, signal: AbortSignal): Promise<WorkDetail> {
-      return run(request(fetcher, `/portal/api/work-items/${encodeURIComponent(workItemId)}`, { method: "GET" }, (body) => decodeBody(body).pipe(Effect.flatMap((text) => WorkDetailRead.decodeJson(text))), "server", signal), signal);
+      return read(`/portal/api/work-items/${encodeURIComponent(workItemId)}`, (body) => decodeBody(body).pipe(Effect.flatMap((text) => WorkDetailRead.decodeJson(text))), signal);
     },
     workTimeline(workItemId: string, before: string | null, signal: AbortSignal): Promise<WorkTimeline> {
       // The cursor is an opaque signed token: only the served `before` direction exists.
       const query = before === null ? "" : `?${new URLSearchParams({ before })}`;
-      return run(request(fetcher, `/portal/api/work-items/${encodeURIComponent(workItemId)}/timeline${query}`, { method: "GET" }, (body) => decodeBody(body).pipe(Effect.flatMap((text) => WorkTimelineRead.decodeJson(text))), "server", signal), signal);
+      return read(`/portal/api/work-items/${encodeURIComponent(workItemId)}/timeline${query}`, (body) => decodeBody(body).pipe(Effect.flatMap((text) => WorkTimelineRead.decodeJson(text))), signal);
     },
     attention(projectId: string | null, cursor: string | null, signal: AbortSignal): Promise<Attention> {
       const query = new URLSearchParams();
       if (projectId !== null) query.set("project_id", projectId);
       if (cursor !== null) query.set("cursor", cursor);
       const suffix = query.size === 0 ? "" : `?${query}`;
-      return run(request(fetcher, `/portal/api/attention${suffix}`, { method: "GET" }, (body) => decodeBody(body).pipe(Effect.flatMap((text) => AttentionReadBoundary.decodeJson(text))), "server", signal), signal);
+      return read(`/portal/api/attention${suffix}`, (body) => decodeBody(body).pipe(Effect.flatMap((text) => AttentionReadBoundary.decodeJson(text))), signal);
     },
     goal(goalId: string, signal: AbortSignal): Promise<GoalProjection> {
-      return run(request(fetcher, `/portal/api/goals/${encodeURIComponent(goalId)}`, { method: "GET" }, (body) => decodeBody(body).pipe(Effect.flatMap((text) => GoalReadBoundary.decodeJson(text))), "server", signal), signal);
+      return read(`/portal/api/goals/${encodeURIComponent(goalId)}`, (body) => decodeBody(body).pipe(Effect.flatMap((text) => GoalReadBoundary.decodeJson(text))), signal);
     },
     goalEvents(goalId: string, after: number, signal: AbortSignal): Promise<GoalEvents> {
       const query = `?${new URLSearchParams({ after: String(after) })}`;
-      return run(request(fetcher, `/portal/api/goals/${encodeURIComponent(goalId)}/events${query}`, { method: "GET" }, (body) => decodeBody(body).pipe(Effect.flatMap((text) => Schema.decodeUnknown(Schema.parseJson(GoalEventsShape))(text))), "server", signal), signal);
+      return read(`/portal/api/goals/${encodeURIComponent(goalId)}/events${query}`, (body) => decodeBody(body).pipe(Effect.flatMap((text) => Schema.decodeUnknown(Schema.parseJson(GoalEventsShape))(text))), signal);
     },
     session(signal: AbortSignal): Promise<Session> {
-      return run(request(fetcher, "/portal/api/session", { method: "GET" }, (body) => decodeBody(body).pipe(Effect.flatMap((text) => Schema.decodeUnknown(Schema.parseJson(Session))(text))), "server", signal), signal);
+      return read("/portal/api/session", (body) => decodeBody(body).pipe(Effect.flatMap((text) => Schema.decodeUnknown(Schema.parseJson(Session))(text))), signal);
     },
     connections(signal: AbortSignal): Promise<ConnectionsReadModel> {
-      return run(request(fetcher, "/portal/api/connections", { method: "GET" }, (body) => decodeBody(body).pipe(Effect.flatMap((text) => ConnectionsRead.decodeJson(text))), "server", signal), signal);
+      return read("/portal/api/connections", (body) => decodeBody(body).pipe(Effect.flatMap((text) => ConnectionsRead.decodeJson(text))), signal);
     },
     createConnection(draft: ConnectionDraft, csrf: string): Promise<ConnectionReceipt> {
       return run(request(fetcher, "/portal/api/connections", { method: "POST", body: draft, csrf }, receipt));
@@ -837,8 +837,9 @@ export function createApi(
       if (query.scope === "project" && query.projectId) params.set("project_id", query.projectId);
       if (query.scope === "run" && query.runId) params.set("run_id", query.runId);
       if (query.before) params.set("before", query.before);
-      return run(
-        request(fetcher, `/portal/api/chat?${params.toString()}`, { method: "GET" }, (body) => decodeBody(body).pipe(Effect.flatMap((text) => ChatRead.decodeJson(text))), "server", signal),
+      return read(
+        `/portal/api/chat?${params.toString()}`,
+        (body) => decodeBody(body).pipe(Effect.flatMap((text) => ChatRead.decodeJson(text))),
         signal,
       );
     },

@@ -4505,5 +4505,6 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
       deadline would be new production behaviour with no accepted requirement, and D1 freezes the
       wire bytes, so the split states the decision in the type surface instead — `Writes` has no
       signal parameter, and a caller cannot believe a command write is cancellable. The Goal
-      command/creation path (`postGoalCommand`/`postGoalCreation` through `goalCommand`) is
-      unchanged, and `run()`'s optional `signal` remains for the read half only.
+      command/creation path's source (`postGoalCommand`/`postGoalCreation` through `goalCommand`)
+      is unchanged; like every write, its fetch init no longer carries the runtime's
+      never-aborted step signal, and `run()`'s optional `signal` remains for the read half only.

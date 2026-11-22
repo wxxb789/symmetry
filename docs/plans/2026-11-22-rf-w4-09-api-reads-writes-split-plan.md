@@ -47,7 +47,7 @@ store was run once at dispatch; the tree stayed clean.
 
 | file | change | detail |
 | --- | --- | --- |
-| `frontend/src/services/api.ts` | edited | `Api` becomes `Reads & Writes`; `request()` gains a trailing optional `signal` and omits the fetch-init member when absent; 20 write bodies lose their `signal` parameter and the second `run()` argument; 9 read bodies pass the caller's signal to `request()` |
+| `frontend/src/services/api.ts` | edited | `Api` becomes `Reads & Writes`; `request()` gains a trailing optional `signal` and omits the fetch-init member when absent; 20 write bodies lose their `signal` parameter and the second `run()` argument; 9 read bodies route through one `read` helper whose required signal feeds both `request()` and `run()` |
 | `frontend/src/app/application.ts` | edited | 5 write mutations drop `new AbortController().signal`; `:181`'s read signal stays |
 | `frontend/src/features/connections/connections.tsx` | edited | 4 write sites |
 | `frontend/src/features/connections/resources.tsx` | edited | 5 write sites |
@@ -55,7 +55,7 @@ store was run once at dispatch; the tree stayed clean.
 | `frontend/src/features/projects/projects.tsx` | edited | 1 write site |
 | `frontend/src/features/projects/work-surface.tsx` | edited | 1 write site |
 | `frontend/src/features/work/assignment.tsx` | edited | 1 write site |
-| `frontend/src/services/api.test.ts` | edited | write calls lose their signal; the control-command table's `send` loses its signal parameter; 4 new guarding clauses (two init-shape pins — a bodyed write's values/members and a bodyless write's members — two `@ts-expect-error` pins and one mapped-type assertion over every `Writes` member) |
+| `frontend/src/services/api.test.ts` | edited | write calls lose their signal; the control-command table's `send` loses its signal parameter; 5 new guarding clauses (a 9-case per-read init-signal table, two init-shape pins — a bodyed write's values/members and a bodyless write's members — two `@ts-expect-error` pins and one mapped-type assertion over every `Writes` member) |
 | `frontend/src/app/application.test.ts` | edited | 1 write call loses its signal |
 | `docs/plans/2026-11-22-rf-w4-09-api-reads-writes-split-plan.md` | new | this plan |
 | `docs/evidence/rf-w4-09-api-reads-writes-split-2026-11-22.md` | new | evidence record (clause 2's judging artifact) |
@@ -97,7 +97,8 @@ function request<A>(
   signal?: AbortSignal,
 ): Effect.Effect<A, ApiError>;
 
-// read body (9 sites):  run(request(fetcher, path, init, decode, "server", signal), signal)
+// read body (9 sites, one helper) → read(path, decode, signal)
+//   const read = (path, decode, signal: AbortSignal) => run(request(fetcher, path, { method: "GET" }, decode, "server", signal), signal)
 // write body (20 sites): run(request(fetcher, path, init, decode))
 // W3-13 boundary, unchanged: request(fetcher, path, init, goalReceipt, "mutation")
 ```
@@ -118,7 +119,8 @@ all (never `signal: undefined`):
    writes. The read init gains no new member either: its `signal` value is the caller's signal
    where the base's was the interruption signal of the same run.
 2. **One request owner.** `request()` stays the single HTTP boundary; reads keep both arms
-   (`request(…, signal)` and `run(…, signal)`), writes keep `run(request(…))`. The Goal
+   inside the single `read` helper (`request(…, signal)` and `run(…, signal)`), writes keep
+   `run(request(…))`. The Goal
    command/creation callers (W3-13) are untouched, because `signal` is appended after
    `surface`.
 3. **No hidden write policy (option (a)).** No `AbortController`, no timeout, no deadline in a
@@ -143,11 +145,12 @@ all (never `signal: undefined`):
 | P2 | `signal` is the trailing parameter *after* `surface` in `request()` | W3-13's merged `goalCommand` passes `"mutation"` as the fifth positional argument and must stay byte-identical; with `signal` fifth that call would break. Reads therefore pass `"server"` explicitly, which is also self-documenting |
 | P3 | No bounded write timeout/abort policy | conductor option (a): a hidden write deadline is new production behaviour with no accepted requirement and would break D1; the type surface is the whole change |
 | P4 | The two `@ts-expect-error` pins are never-called arrows inside `it()` bodies; the all-writes assertion is a type-argument `expectTypeOf` call | the guards must be *type-checked* but must not issue requests: an uncalled arrow is checked by `tsc` and costs nothing at runtime, and each arrow is named by `expect(arrow).toBeTypeOf("function")` so `noUnusedLocals` stays satisfied; `expectTypeOf` is a runtime no-op |
-| P5 | Each guarded pin carries its killed mutant in the test title | the conductor's mutation-proof decision: the write pin and its mapped all-writes assertion (a write signal re-added on the pinned call or on any other member), the read pin (read signal made optional), the init-shape clauses (an `undefined`-valued `signal` member, a changed init value, a `body` member on a bodyless write) |
+| P5 | Each guarded pin carries its killed mutant in the test title | the conductor's mutation-proof decision: the write pin and its mapped all-writes assertion (a write signal re-added on the pinned call or on any other member), the read pin (read signal made optional), the per-read table (the transport signal dropped from one read), the init-shape clauses (an `undefined`-valued `signal` member, a changed init value, a `body` member on a bodyless write) |
 | P6 | The init-shape pins assert own-member absence, the exact member set *and* D1's values | D1 says the init carries exactly today's members minus `signal`: `Object.hasOwn(init, "signal") === false` is the named absence assertion; the sorted `Reflect.ownKeys` list pins "exactly" including non-enumerable members; the full-object equality pins the values (`credentials: "same-origin"`, `cache: "no-store"`, `redirect: "manual"`, the `Accept`/`content-type`/`x-csrf-token` headers, the body bytes); the second clause pins a bodyless write's five members (no `body`/`content-type`) |
 | P7 | `run()` is left as W3-13 wrote it (`signal?: AbortSignal`, `signal === undefined ? undefined : { signal }`) | already the contract's shape; editing it would be a no-op diff |
 | P8 | No doc amendment in `docs/design/frontend.md` | its cancellation sentence scopes the AbortSignal forwarding to "the query adapter" (reads), which is preserved; the split states the write half without contradicting it |
 | P9 | The `docs/TODO.md` goal-write cancellation entry is closed, not scheduled | the entry says the split "owns adding one"; option (a) refuses a write signal, so the residual becomes a stated design property. The closure text records the decision and the archive keeps the trace |
+| P10 | The read path is one `read(path, decode, signal)` helper inside `createApi` (PR-review round 1, finding P2-1) | with both `request()` parameters optional, dropping only the inner `signal` compiled and left 8 of 9 reads undetected; the helper's required parameter makes that omission a type error, and one 9-case table pins the transport arm at runtime |
 
 ## Evidence plan
 
@@ -181,6 +184,8 @@ Mutation list (each applied alone, run, reverted):
 | M5 undefined-valued signal member | the init always spreads `signal` | both init-shape clauses (`Object.hasOwn(init, "signal")` true) |
 | M6 init value changed | `request()`'s `credentials: "same-origin"` → `"include"` | the bodyed init-shape clause's value equality |
 | M7 body member added to a bodyless write | `checkConnection`'s init gains `body: {}` | the bodyless init-shape clause's member set and value equality |
+| M8a the transport signal dropped from a read (the table's mutant) | `goal`'s call to the `read` helper omits `signal` | typecheck: TS2554 missing argument at the call |
+| M8b the transport signal dropped inside the helper | the helper's `request(…)` loses `"server", signal` | `api.test.ts`: all 9 table rows (`goal` included) fail the init-signal identity assertion |
 
 ## Control-flow audit (lesson 32)
 
@@ -203,9 +208,10 @@ recorded ceremonial read signal, no DOM-suite edit (frozen oracles).
 - **Read/init equivalence rests on one argument, not on a test.** The base's read init signal
   was `Effect.tryPromise`'s interruption signal; HEAD's is the caller's signal, which is the
   value `run()` passes to `runPromise`. No new test can compare the two revisions, so the
-  equivalence row in the evidence record is the artifact; the two cancellation tests
-  (`aborts the underlying request when the consuming query is cancelled`, `aborts the in-flight
-  body download…`) are the runnable pins on the HEAD side.
+  equivalence row in the evidence record is the artifact; the HEAD side's caller-signal identity
+  is pinned for every read by the §8 clause 5 table (PR-review round 1, P2-1), and the two
+  cancellation tests (`aborts the underlying request when the consuming query is cancelled`,
+  `aborts the in-flight body download…`) remain the abort-propagation pins.
 - **A write's body read is no longer cancellable at all** — it never was in practice (the base
   controller was fresh and never aborted); a future bounded write policy is a new increment.
 - **`Writes`/`Reads` are exported but only `Api` consumes them**; knip may report them
