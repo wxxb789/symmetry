@@ -285,7 +285,7 @@ vocabulary has no `result` member, so no native admission can require one. The
 evidence is the contract and both producers of it — `contracts/v1/common.schema.json`
 declares `AdapterOperations` with `additionalProperties: false` and no `result`
 member, `daemon/internal/harness/types.go` defines no result capability, and
-`startGoalAdmission` (`daemon/internal/app/goal_admission.go:263`) admits exactly
+`startGoalAdmission` (`daemon/internal/app/goal_admission.go:258`) admits exactly
 `start`/`events`/`cancel` at launch —
 while the terminal result already travels on the `events` stream this sentence
 requires. The smallest amendment is therefore that the admission requirement is
