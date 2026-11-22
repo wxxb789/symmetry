@@ -578,8 +578,6 @@ describe("read/write split", () => {
     await call(createApi(fetcher), controller.signal).catch(() => undefined);
     const init = fetcher.mock.calls[0]?.[1];
     expect(init?.signal).toBe(controller.signal);
-    controller.abort();
-    expect(init?.signal?.aborted).toBe(true);
   });
 
   it("sends a bodyed write with the boundary's own init values and no signal (mutants: a changed credentials value; an undefined-valued signal member)", async () => {
