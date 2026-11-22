@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Verify native capture preserves valid bytes and fails closed while draining."""
 
-import importlib.util
 import json
 import os
 import pathlib
@@ -13,10 +12,10 @@ import types
 import unittest
 from unittest import mock
 
+import citest
+
 SCRIPT = pathlib.Path(__file__).with_name("omo-native-evidence.py")
-SPEC = importlib.util.spec_from_file_location("omo_native_evidence", SCRIPT)
-WITNESS = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(WITNESS)
+WITNESS = citest.load_gate(SCRIPT, "omo_native_evidence")
 
 
 class OmONativeEvidenceTest(unittest.TestCase):

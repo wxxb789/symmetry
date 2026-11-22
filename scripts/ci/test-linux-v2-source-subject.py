@@ -5,38 +5,26 @@ import hashlib
 import json
 import pathlib
 import subprocess
-import sys
 import tempfile
 import unittest
+
+import citest
+from testsupport.gitfixture import FixtureRepo
 
 SCRIPT = pathlib.Path(__file__).with_name("linux-v2-source-subject.py")
 
 
-class SourceSubjectTests(unittest.TestCase):
-    def setUp(self) -> None:
-        temporary = tempfile.TemporaryDirectory(prefix="symmetry-subject-")
-        self.addCleanup(temporary.cleanup)
-        self.repository = pathlib.Path(temporary.name)
-        self.git("init", "--quiet")
-        self.git("config", "user.name", "Fixture")
-        self.git("config", "user.email", "fixture@example.invalid")
-        self.git("config", "commit.gpgsign", "false")
-        self.git("config", "core.autocrlf", "false")
-        (self.repository / "source.txt").write_bytes(b"reviewed source\n")
-        self.git("add", "source.txt")
-        self.git("commit", "--quiet", "-m", "fixture")
-        self.commit = self.git("rev-parse", "HEAD").decode("ascii").strip()
+class SourceSubjectTests(FixtureRepo, unittest.TestCase):
+    REPOSITORY_PREFIX = "symmetry-subject-"
+    REPOSITORY_DIRECTORY = None
 
-    def git(self, *arguments: str) -> bytes:
-        return subprocess.check_output(["git", "-C", str(self.repository), *arguments], stderr=subprocess.PIPE)
+    def setUp(self) -> None:
+        super().setUp()
+        (self.repo / "source.txt").write_bytes(b"reviewed source\n")
+        self.commit_sha = self.commit("fixture")
 
     def invoke(self, commit: str | None = None) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            [sys.executable, str(SCRIPT), str(self.repository), commit or self.commit],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        return citest.run_gate(SCRIPT, str(self.repo), commit or self.commit_sha)
 
     def test_clean_source_emits_the_known_subject(self) -> None:
         result = self.invoke()
@@ -46,7 +34,7 @@ class SourceSubjectTests(unittest.TestCase):
         self.assertEqual(
             json.loads(result.stdout),
             {
-                "commit": self.commit,
+                "commit": self.commit_sha,
                 "tree_digest": "sha256:" + digest,
             },
         )
@@ -59,7 +47,7 @@ class SourceSubjectTests(unittest.TestCase):
     def test_dirty_source_emits_no_subject_and_preserves_changes(self) -> None:
         for kind in ("staged", "unstaged", "untracked"):
             with self.subTest(kind=kind):
-                path = self.repository / ("extra.go" if kind == "untracked" else "source.txt")
+                path = self.repo / ("extra.go" if kind == "untracked" else "source.txt")
                 original = path.read_bytes() if path.exists() else None
                 path.write_bytes(b"unreviewed source\n")
                 if kind == "staged":
@@ -76,12 +64,7 @@ class SourceSubjectTests(unittest.TestCase):
 
     def test_non_repository_emits_no_subject(self) -> None:
         with tempfile.TemporaryDirectory(prefix="symmetry-not-git-") as directory:
-            result = subprocess.run(
-                [sys.executable, str(SCRIPT), directory, self.commit],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
+            result = citest.run_gate(SCRIPT, directory, self.commit_sha)
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(result.stdout, "")
 

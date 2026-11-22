@@ -4,7 +4,6 @@
 import copy
 import hashlib
 import http.client
-import importlib.util
 import json
 import os
 import pathlib
@@ -16,11 +15,9 @@ import threading
 import unittest
 from unittest import mock
 
-spec = importlib.util.spec_from_file_location(
-    "witness", pathlib.Path(__file__).with_name("opencode-v2-support-witness.py")
-)
-witness = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(witness)
+import citest
+
+witness = citest.load_gate(pathlib.Path(__file__).with_name("opencode-v2-support-witness.py"), "witness")
 
 
 class ClassificationTests(unittest.TestCase):
