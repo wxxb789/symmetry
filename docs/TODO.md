@@ -1170,9 +1170,10 @@ version pinned` section of `docs/archive/CLOSED-TODO.md`.
       (`daemon/internal/linuxpreflight/preflight_linux_test.go:326`) compares the copy against a
       hard-coded literal table, not against `app`'s copy, so drift between the two copies goes
       undetected. Fix direction: one `internal/harness` vocabulary — `ParseKind` plus the native-goal
-      predicate — consumed by `internal/config`, `internal/app/probe.go`/`goal_admission.go` and
-      `linuxpreflight`, with the pin test reading that shared table instead of a literal. That
-      touches `internal/harness`, `internal/app/probe.go` and `internal/app/goal_admission.go`, all
+      predicate — consumed by `internal/config`, `internal/app/probe.go` and
+      `validateConfiguredHarness` (`internal/app/goal_admission_tx.go`) and `linuxpreflight`, with
+      the pin test reading that shared table instead of a literal. That touches `internal/harness`,
+      `internal/app/probe.go` and `internal/app/goal_admission_tx.go`, all
       outside the rf-w4-19 owned set (plan
       `docs/plans/2026-11-21-rf-w4-19-linuxpreflight-package-plan.md`, "The runtime-selection
       vocabulary"), so the slice kept the copy and recorded this entry instead.
@@ -1332,8 +1333,9 @@ version pinned` section of `docs/archive/CLOSED-TODO.md`.
       `assertRequests`'s `attachment requests=[] … context deadline exceeded`, then pass 2/2 alone
       and 3/3 on the PR head. Failures take one of two shapes: the attach GET leg hits the deadline
       (`native_calls=[start details open details close wait]`), or the admission check fires first
-      (`Goal admission deadline has elapsed before native launch`, `goal_admission.go`); both are
-      recorded under load in `docs/evidence/rf-w4-03-runner-decomposition-2026-11-21.md`
+      (`Goal admission deadline has elapsed before native launch`, `resolveGoalAdapter` in
+      `goal_admission_tx.go`); both are recorded under load in
+      `docs/evidence/rf-w4-03-runner-decomposition-2026-11-21.md`
       (the app-suite failure paragraph). The failure is consistent with the deadline expiring when
       the suite is starved, but the cause is unconfirmed. The arm's duration is bounded by a
       production limit, so a fix needs an owner decision on the deadline or the assertion;

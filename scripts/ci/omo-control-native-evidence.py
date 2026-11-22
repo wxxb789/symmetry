@@ -107,6 +107,7 @@ SOURCE_PATHS = [
     "contracts/v1/task-result.schema.json",
     "daemon/internal/app/command_queue.go",
     "daemon/internal/app/run_lifecycle.go",
+    "daemon/internal/app/goal_admission_tx.go",
 ]
 
 
