@@ -6,8 +6,9 @@ import { workspaceOptions } from "../../app/application";
 import { useSessionToken } from "../../app/session";
 import { StatusBadge } from "../../components/primitives";
 import { EmptyState, ErrorState, LoadingState, PageHeading, RefreshButton } from "../../components/workspace";
-import { hasServedRevision, refusalNotice } from "../planning/write-policy";
+import { hasServedRevision } from "../planning/write-policy";
 import { ProjectEditor, WorkItemEditor } from "../planning/editors";
+import { refusalNotice } from "../../services/refusals";
 import { ProjectWorkSurface } from "./work-surface";
 
 interface SurfaceNotice {
