@@ -1409,3 +1409,25 @@ is fixed here; each bullet names what a follow-up has to re-derive.
 - [ ] `daemon/native/linux-gate/protocol/wire_test.go`: the dedicated "start time is truncated"
       decode guard is unreachable (the size guard already refuses those packets), so no test can
       cover that branch.
+
+## Contracts: the evidence-batch response and conflict-details duplicate identities need independent enforcement (rf-w6-08 review REV-02/P3-1)
+
+- [ ] Restore cross-item uniqueness for the evidence-batch response and conflict-details envelopes
+      on top of the request correlation. The daemon-side parsers that rejected duplicate receipt
+      `id`/`evidence_key` and duplicate conflict index/`evidence_key` were deleted with the dead
+      goal-envelope family (rf-w6-08, 2026-11-22). The daemon's only consuming path still rejects
+      duplicate receipt identity transitively: `validateGoalEvidenceBatch`
+      (`daemon/internal/control/validation.go`) rejects duplicate request `evidence_id`/`evidence_key`,
+      and `validateGoalEvidenceBatchReceipt` compares each receipt's `id`/`evidence_key` per index
+      against that uniqueness-validated request, so a duplicate response can only match a request the
+      daemon already refused. What is missing is enforcement independent of the request: neither
+      `evidence-batch-response.schema.json` nor `evidence-batch-conflict-details.schema.json` carries
+      `uniqueItems` (which would express whole-item, not per-field, uniqueness); the Elixir semantic
+      clause for a response checks only receipt `run_id` equality
+      (`validate_evidence_batch_response_semantics`,
+      `control/lib/symmetry_control/goals/contract_validation.ex`) and `validate_semantics/2` falls
+      through to `:ok` for conflict details, whose decoded items no production consumer reads
+      (decoded only by `contracts.DecodeSchema` in `daemon/internal/control/client.go`);
+      `contracts/ts/semantics.ts` has no response or conflict-details validator. The gap is latent,
+      so the fix is a strictness restore, not an incident: add `uniqueItems` where it can express the
+      rule, or a semantic clause on the Elixir side. Owner: contracts strictness (A6).
