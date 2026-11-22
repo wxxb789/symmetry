@@ -103,8 +103,8 @@ function ConnectionEditor({ connection, providers, api, csrf, editorId, fallback
   const provider = providers.find((candidate) => candidate.id === draft.provider);
   const save = useMutation({
     mutationFn: (payload: ConnectionDraft) => editedTarget
-      ? api.updateConnection(editedTarget.id, { version: editedTarget.version, name: payload.name, capabilities: [...payload.capabilities] }, csrf, new AbortController().signal)
-      : api.createConnection(payload, csrf, new AbortController().signal),
+      ? api.updateConnection(editedTarget.id, { version: editedTarget.version, name: payload.name, capabilities: [...payload.capabilities] }, csrf)
+      : api.createConnection(payload, csrf),
     // The server resets bound resource health and sync state only when the
     // update changes the capabilities; the receipt notice must not claim a
     // reset that did not happen.
@@ -207,16 +207,8 @@ function ConnectionDetail({ connection, api, csrf, writePending, requests, close
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; version: number } | null>(null);
   const deleteOpener = useRef<HTMLElement | null>(null);
   const refresh = () => queryClient.invalidateQueries({ queryKey: ["connections"] });
-  // This detail belongs to exactly one connection (the list keys it by
-  // connection id), and its requests belong to that connection, not to the
-  // instance: the page holds the pending state by connection id so a remount
-  // while the operator inspects another connection cannot forget a running
-  // check or removal. A continuation that settles for a connection the
-  // operator has left neither navigates nor reopens anything — only its own
-  // notice is stated (an empty selection still counts as the operator's own
-  // request, see `noticeFor`).
   const check = useMutation({
-    mutationFn: () => api.checkConnection(connection.id, csrf, new AbortController().signal),
+    mutationFn: () => api.checkConnection(connection.id, csrf),
     onMutate: () => { onRequest(connection.id, "check", true); },
     onSettled: () => { onRequest(connection.id, "check", false); },
     // The server answers a provider check with `checked`; a replayed receipt is
@@ -229,7 +221,7 @@ function ConnectionDetail({ connection, api, csrf, writePending, requests, close
     },
   });
   const remove = useMutation({
-    mutationFn: (target: { id: string; version: number }) => api.deleteConnection(target.id, target.version, csrf, new AbortController().signal),
+    mutationFn: (target: { id: string; version: number }) => api.deleteConnection(target.id, target.version, csrf),
     onMutate: () => { onRequest(connection.id, "remove", true); },
     onSettled: () => { onRequest(connection.id, "remove", false); },
     onSuccess: async () => {

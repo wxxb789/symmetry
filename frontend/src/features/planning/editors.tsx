@@ -69,8 +69,8 @@ export function ProjectEditor({ project, api, csrf, onSaved, onRefused, onClose,
   const inFlightRef = useRef(false);
   const save = useMutation({
     mutationFn: (submitted: ProjectIntent) => submitted.kind === "create"
-      ? api.createProject(submitted.payload, csrf, new AbortController().signal)
-      : api.updateProject(project?.id ?? "", submitted.payload, csrf, new AbortController().signal),
+      ? api.createProject(submitted.payload, csrf)
+      : api.updateProject(project?.id ?? "", submitted.payload, csrf),
     onSuccess: (receipt, submitted) => {
       if (submitted.kind === "create") onSaved(receipt, "Project created.");
       else onSaved(receipt, submitted.payload.status === "archived" ? "Project archived." : submitted.payload.status === "active" && project?.status === "archived" ? "Project restored." : "Project updated.");
@@ -244,8 +244,8 @@ function useWorkItemDraft({ project, item, api, csrf, onSaved, onRefused, onClos
   };
   const save = useMutation({
     mutationFn: (submitted: WorkItemIntent) => submitted.kind === "create"
-      ? api.createWorkItem(project.id, submitted.payload, csrf, new AbortController().signal)
-      : api.updateWorkItem(item?.id ?? "", submitted.payload, csrf, new AbortController().signal),
+      ? api.createWorkItem(project.id, submitted.payload, csrf)
+      : api.updateWorkItem(item?.id ?? "", submitted.payload, csrf),
     onSuccess: (receipt, submitted) => {
       // An acknowledged create releases its identity: the next draft mints a
       // new one, while an unacknowledged draft keeps replaying this one.
