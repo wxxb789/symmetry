@@ -3,7 +3,9 @@ import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import type { Application } from "../../app/application";
-import { recordingFetcher, renderRoute, trackApplications } from "../../app/test-harness";
+import { portal } from "../../app/portal-double";
+import type { PortalResolver, PortalWorkItem } from "../../app/portal-double";
+import { renderRoute, trackApplications } from "../../app/test-harness";
 import type { Connection } from "../../services/api";
 
 const connectionId = "20000000-0000-4000-8000-000000000001";
@@ -61,7 +63,7 @@ function connection(overrides: Partial<Connection> = {}): Connection {
 // for the first one is still in flight.
 const secondConnection = () => connection({ id: secondConnectionId, name: "Second connection" });
 
-interface ProjectFixture { id: string; key: string; name: string; description: string | null; status: string; work_items: unknown[]; resources: Record<string, unknown>[] }
+interface ProjectFixture { id: string; key: string; name: string; description: string | null; status: string; work_items: PortalWorkItem[]; resources: Record<string, unknown>[] }
 interface RuntimeFixture { runtime_id: string; runtime_name: string; agent_profile: string | null; workspace: string | null }
 
 function projectFixture(overrides: Partial<ProjectFixture> = {}): ProjectFixture {
@@ -100,7 +102,6 @@ function resourceRow(name: string) {
 
 interface Harness {
   application: Application;
-  requests: { method: string; path: string; body: unknown }[];
   history: RouterHistory;
   setConnections: (value: Connection[]) => void;
   setProjects: (value: ProjectFixture[]) => void;
@@ -113,53 +114,42 @@ interface Harness {
 const applications = trackApplications();
 
 function renderConnections(
-  handler: (request: { method: string; path: string; body: unknown; url: URL }) => Response | Promise<Response>,
+  serve: PortalResolver,
   path = "/portal/connections",
   options: { deferReads?: Promise<void>; connections?: Connection[]; projects?: ProjectFixture[]; registeredRuntimes?: RuntimeFixture[] } = {},
 ) {
-  let current: Connection[] = options.connections ?? [connection()];
-  let projects = options.projects ?? [];
-  const registeredRuntimes = options.registeredRuntimes ?? [];
   let readFailure: (() => Response) | null = null;
   let workspaceFailure: (() => Response) | null = null;
   let readGate: Promise<void> | null = options.deferReads ?? null;
   let workspaceGate: Promise<void> | null = null;
-  const requests: Harness["requests"] = [];
-  const { fetcher } = recordingFetcher(async (input, init) => {
-    const url = new URL(input, "http://localhost");
-    const method = init?.method ?? "GET";
-    const body = typeof init?.body === "string" ? JSON.parse(init.body) as unknown : undefined;
-    requests.push({ method, path: url.pathname + url.search, body });
-    if (url.pathname === "/portal/api/session") {
-      return new Response(JSON.stringify({ csrf_token: "session-token" }));
-    }
-    if (method === "GET" && url.pathname === "/portal/api/connections") {
-      if (readGate) await readGate;
-      if (readFailure) return readFailure();
-      return new Response(JSON.stringify({ providers, connections: current }));
-    }
-    if (method === "GET" && url.pathname === "/portal/api/workspace") {
-      if (workspaceGate) await workspaceGate;
-      if (workspaceFailure) return workspaceFailure();
-      // The server serves the project directory plus the selected project's
-      // resources only, so a switch cannot render the previous project's rows.
-      const selected = url.searchParams.get("project_id") ?? projectId;
-      return new Response(JSON.stringify({
-        selected_project_id: selected,
-        projects: projects.map((project) => ({ ...project, resources: project.id === selected ? project.resources : [] })),
-        registered_runtimes: registeredRuntimes,
-      }));
-    }
-    return handler({ method, path: url.pathname + url.search, body, url });
+  portal.seed({
+    workspace: {
+      selectedProjectId: projectId,
+      projects: options.projects ?? [],
+      registeredRuntimes: options.registeredRuntimes ?? [],
+    },
+    connections: { providers, connections: options.connections ?? [connection()] },
   });
-  const { application, history } = renderRoute(path, fetcher);
+  portal.serve(async (request) => {
+    if (request.method !== "GET") return undefined;
+    if (request.url.pathname === "/portal/api/connections") {
+      if (readGate !== null) await readGate;
+      if (readFailure !== null) return readFailure();
+    }
+    if (request.url.pathname === "/portal/api/workspace") {
+      if (workspaceGate !== null) await workspaceGate;
+      if (workspaceFailure !== null) return workspaceFailure();
+    }
+    return undefined;
+  });
+  portal.serve(serve);
+  const { application, history } = renderRoute(path);
   applications.push(application);
   return {
     application,
-    requests,
     history,
-    setConnections: (value: Connection[]) => { current = value; },
-    setProjects: (value: ProjectFixture[]) => { projects = value; },
+    setConnections: (value: Connection[]) => { portal.state.connections.connections = value; },
+    setProjects: (value: ProjectFixture[]) => { portal.state.workspace.projects = value; },
     failReads: (response: () => Response) => { readFailure = response; },
     failWorkspaceReads: (response: () => Response) => { workspaceFailure = response; },
     gateReads: (gate: Promise<void> | null) => { readGate = gate; },
@@ -180,13 +170,9 @@ async function startTwoConnections(harness: Harness) {
 const refusal = (status: number, code: string, message: string, fields: Record<string, string[]> | null = null, extra: Record<string, unknown> = {}) =>
   new Response(JSON.stringify({ error: { code, message, ...(fields ? { fields } : {}) }, ...extra }), { status });
 
-// The fallback for a request a case does not expect: an unset call must surface
-// as a refusal instead of a plausible answer.
-const unexpectedRequest = () => refusal(404, "not_found", "unexpected request");
-
 describe("connection management", () => {
   it("lists providers, capabilities and bound resource state without inventing values", async () => {
-    renderConnections(() => new Response(null, { status: 404 }));
+    renderConnections(() => undefined);
     expect(await screen.findByRole("heading", { level: 1, name: "Connections" })).toBeVisible();
     const row = await screen.findByRole("button", { name: /GitHub engineering/ });
     expect(row).toHaveTextContent("acme · GitHub CLI · HTTPS");
@@ -197,7 +183,7 @@ describe("connection management", () => {
   });
 
   it("renders an unknown status and capability instead of hiding them", async () => {
-    const harness = renderConnections(() => new Response(null, { status: 404 }));
+    const harness = renderConnections(() => undefined);
     harness.setConnections([connection({ status: "future_state", capabilities: ["future_capability"], status_message: "Provider authentication failed" })]);
     await userEvent.setup().click(await screen.findByRole("button", { name: "Refresh" }));
     expect(await screen.findByText("Unknown connection status: future_state")).toBeVisible();
@@ -209,7 +195,7 @@ describe("connection management", () => {
     const { promise: pending, resolve: release } = Promise.withResolvers<Response>();
     const harness = renderConnections(({ method }) => method === "POST"
       ? pending
-      : unexpectedRequest());
+      : undefined);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "New connection" }));
     await user.type(screen.getByLabelText("Name"), "Azure delivery");
@@ -224,9 +210,9 @@ describe("connection management", () => {
       await pending;
     });
     await waitFor(() => { expect(screen.queryByRole("button", { name: "Saving…" })).toBeNull(); });
-    expect(harness.requests.filter((request) => request.method === "POST")).toHaveLength(1);
+    expect(portal.requests.filter((request) => request.method === "POST")).toHaveLength(1);
     expect(await screen.findByText("Connection created.")).toBeVisible();
-    expect(harness.requests.filter((request) => request.method === "POST")[0]?.body).toEqual({
+    expect(portal.requests.filter((request) => request.method === "POST")[0]?.body).toEqual({
       provider: "github",
       name: "Azure delivery",
       account_ref: "acme",
@@ -237,7 +223,7 @@ describe("connection management", () => {
   it("renders the server's refusal code, message and field errors", async () => {
     renderConnections(({ method }) => method === "POST"
       ? refusal(422, "validation_failed", "request contains invalid fields", { name: ["has already been taken"] })
-      : unexpectedRequest());
+      : undefined);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "New connection" }));
     await user.type(screen.getByLabelText("Name"), "GitHub engineering");
@@ -250,7 +236,7 @@ describe("connection management", () => {
   it("shows the server's refusal for a stale capability update and keeps the server state", async () => {
     const harness = renderConnections(({ method }) => method === "PATCH"
       ? refusal(409, "stale", "resource changed since it was loaded")
-      : unexpectedRequest());
+      : undefined);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
     await user.click(await screen.findByRole("button", { name: "Edit capabilities" }));
@@ -260,7 +246,7 @@ describe("connection management", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("resource changed since it was loaded (stale)");
     expect(screen.getByText(/changed elsewhere; close and reopen/)).toBeVisible();
     expect(screen.getByRole("checkbox", { name: "CI" })).toBeDisabled();
-    expect(harness.requests.filter((request) => request.method === "PATCH")[0]?.body).toEqual({
+    expect(portal.requests.filter((request) => request.method === "PATCH")[0]?.body).toEqual({
       version: 3,
       name: "GitHub engineering",
       capabilities: ["repositories", "work_items", "changes"],
@@ -269,7 +255,7 @@ describe("connection management", () => {
 
   it("keeps a failed provider check actionable and renders the server's own reason", async () => {
     const harness = renderConnections(({ method, path }) => {
-      if (method !== "POST" || !path.endsWith("/check")) return unexpectedRequest();
+      if (method !== "POST" || !path.endsWith("/check")) return undefined;
       harness.setConnections([connection({ version: 4, status: "degraded", status_message: "Provider authentication failed", last_checked_at: "2026-11-16T09:00:00.000000Z" })]);
       return refusal(502, "provider_unauthorized", "external provider authentication failed", null, {
         disposition: "checked",
@@ -302,7 +288,7 @@ describe("connection management", () => {
         sync_status: "constructor",
       }],
     });
-    renderConnections(() => unexpectedRequest(), "/portal/connections", {
+    renderConnections(() => undefined, "/portal/connections", {
       connections: [hostile],
       projects: [projectFixture({ resources: [resourceFixture({ kind: "constructor", status: "toString", sync_status: "constructor" })] })],
     });
@@ -322,7 +308,7 @@ describe("connection management", () => {
   it("confirms a removal against the version the dialog opened with, even after a background refresh", async () => {
     const harness = renderConnections(({ method }) => method === "DELETE"
       ? refusal(409, "stale", "resource changed since it was loaded")
-      : unexpectedRequest());
+      : undefined);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
     await user.click(await screen.findByRole("button", { name: "Remove" }));
@@ -334,13 +320,13 @@ describe("connection management", () => {
     await user.click(screen.getByRole("button", { name: "Remove connection" }));
     expect(await screen.findByText(/resource changed since it was loaded \(stale\)/)).toBeVisible();
     expect(screen.getByText(/The server's current state is shown instead\./)).toBeVisible();
-    expect(harness.requests.filter((request) => request.method === "DELETE")[0]?.path).toBe(`/portal/api/connections/${connectionId}?version=3`);
+    expect(portal.requests.filter((request) => request.method === "DELETE")[0]?.path).toBe(`/portal/api/connections/${connectionId}?version=3`);
   });
 
   it("re-renders reset bound-resource health after a capability update", async () => {
     const harness = renderConnections(({ method }) => method === "PATCH"
       ? new Response(JSON.stringify({ disposition: "updated", connection: connection({ version: 4, capabilities: ["repositories", "work_items"] }) }))
-      : unexpectedRequest());
+      : undefined);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
     expect(await screen.findByText("Synced")).toBeVisible();
@@ -364,7 +350,7 @@ describe("connection management", () => {
   it("a late create response never closes or hijacks a newer editor", async () => {
     const { promise: pending, resolve: release } = Promise.withResolvers<Response>();
     const harness = renderConnections(({ method }) =>
-      method === "POST" ? pending : unexpectedRequest());
+      method === "POST" ? pending : undefined);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "New connection" }));
     await user.type(screen.getByLabelText("Name"), "First connection");
@@ -394,7 +380,7 @@ describe("connection management", () => {
 
   it("submits a draft against the version it was edited from after a background refresh", async () => {
     const harness = renderConnections(({ method, body }) => {
-      if (method !== "PATCH") return unexpectedRequest();
+      if (method !== "PATCH") return undefined;
       const version = typeof body === "object" && body !== null && "version" in body ? body.version : undefined;
       return version === 3
         ? refusal(409, "stale", "resource changed since it was loaded")
@@ -413,18 +399,18 @@ describe("connection management", () => {
     expect(screen.getByRole("checkbox", { name: "CI" })).not.toBeChecked();
 
     await user.click(screen.getByRole("button", { name: "Save" }));
-    await waitFor(() => { expect(harness.requests.some((request) => request.method === "PATCH")).toBe(true); });
-    expect(harness.requests.filter((request) => request.method === "PATCH")[0]?.body).toMatchObject({ version: 3 });
+    await waitFor(() => { expect(portal.requests.some((request) => request.method === "PATCH")).toBe(true); });
+    expect(portal.requests.filter((request) => request.method === "PATCH")[0]?.body).toMatchObject({ version: 3 });
     expect(await screen.findByRole("alert")).toHaveTextContent("(stale)");
     expect(screen.getByText(/changed elsewhere; close and reopen/)).toBeVisible();
   });
 
   it("keeps provider check, update and removal mutually exclusive while one is pending", async () => {
     const { promise: pending, resolve: release } = Promise.withResolvers<Response>();
-    const harness = renderConnections(({ method, path }) =>
+    renderConnections(({ method, path }) =>
       method === "POST" && path.endsWith("/check")
         ? pending
-        : unexpectedRequest());
+        : undefined);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
     await user.click(await screen.findByRole("button", { name: "Test connection" }));
@@ -437,20 +423,20 @@ describe("connection management", () => {
     screen.getByRole("button", { name: "Remove" }).dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(screen.queryByRole("dialog", { name: "Connection settings" })).toBeNull();
     expect(screen.queryByRole("dialog", { name: /Remove/ })).toBeNull();
-    expect(harness.requests.filter((request) => request.method === "POST")).toHaveLength(1);
+    expect(portal.requests.filter((request) => request.method === "POST")).toHaveLength(1);
 
     await act(async () => {
       release(new Response(JSON.stringify({ disposition: "checked", connection: connection({ version: 4 }) }), { status: 200 }));
       await pending;
     });
     expect(await screen.findByRole("button", { name: "Test connection" })).toBeEnabled();
-    expect(harness.requests.filter((request) => request.method === "POST")).toHaveLength(1);
+    expect(portal.requests.filter((request) => request.method === "POST")).toHaveLength(1);
   });
 
   it("keeps check and removal blocked while an editor save is pending", async () => {
     const { promise: pending, resolve: release } = Promise.withResolvers<Response>();
-    const harness = renderConnections(({ method }) =>
-      method === "PATCH" ? pending : unexpectedRequest());
+    renderConnections(({ method }) =>
+      method === "PATCH" ? pending : undefined);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
     await user.click(screen.getByRole("button", { name: "Edit capabilities" }));
@@ -466,21 +452,21 @@ describe("connection management", () => {
     screen.getByRole("button", { name: "Test connection" }).dispatchEvent(new MouseEvent("click", { bubbles: true }));
     screen.getByRole("button", { name: "Remove" }).dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(screen.queryByRole("dialog", { name: /Remove/ })).toBeNull();
-    expect(harness.requests.filter((request) => request.method === "POST")).toHaveLength(0);
-    expect(harness.requests.filter((request) => request.method === "DELETE")).toHaveLength(0);
+    expect(portal.requests.filter((request) => request.method === "POST")).toHaveLength(0);
+    expect(portal.requests.filter((request) => request.method === "DELETE")).toHaveLength(0);
 
     await act(async () => {
       release(new Response(JSON.stringify({ disposition: "updated", connection: connection({ version: 4 }) }), { status: 200 }));
       await pending;
     });
     expect(await screen.findByRole("button", { name: "Test connection" })).toBeEnabled();
-    expect(harness.requests.filter((request) => request.method === "PATCH")).toHaveLength(1);
+    expect(portal.requests.filter((request) => request.method === "PATCH")).toHaveLength(1);
   });
 
   it("keeps check and editing blocked while a removal is pending", async () => {
     const { promise: pending, resolve: release } = Promise.withResolvers<Response>();
     const harness = renderConnections(({ method }) =>
-      method === "DELETE" ? pending : unexpectedRequest());
+      method === "DELETE" ? pending : undefined);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
     await user.click(await screen.findByRole("button", { name: "Remove" }));
@@ -496,21 +482,21 @@ describe("connection management", () => {
     screen.getByRole("button", { name: "Test connection" }).dispatchEvent(new MouseEvent("click", { bubbles: true }));
     screen.getByRole("button", { name: "Edit capabilities" }).dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(screen.queryByRole("dialog", { name: "Connection settings" })).toBeNull();
-    expect(harness.requests.filter((request) => request.method === "POST")).toHaveLength(0);
-    expect(harness.requests.filter((request) => request.method === "PATCH")).toHaveLength(0);
+    expect(portal.requests.filter((request) => request.method === "POST")).toHaveLength(0);
+    expect(portal.requests.filter((request) => request.method === "PATCH")).toHaveLength(0);
 
     await act(async () => {
       release(new Response(JSON.stringify({ disposition: "deleted", deleted_connection_id: connectionId }), { status: 200 }));
       await pending;
     });
     await waitFor(() => { expect(harness.history.location.search).not.toContain(connectionId); });
-    expect(harness.requests.filter((request) => request.method === "DELETE")).toHaveLength(1);
+    expect(portal.requests.filter((request) => request.method === "DELETE")).toHaveLength(1);
   });
 
   it("drops a provider check receipt that arrives after the operator selected another connection", async () => {
     const { promise: pending, resolve: release } = Promise.withResolvers<Response>();
     const harness = renderConnections(({ method, path }) =>
-      method === "POST" && path.endsWith("/check") ? pending : unexpectedRequest());
+      method === "POST" && path.endsWith("/check") ? pending : undefined);
     const { second, user } = await startTwoConnections(harness);
     await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
     await user.click(screen.getByRole("button", { name: "Test connection" }));
@@ -536,7 +522,7 @@ describe("connection management", () => {
   it("keeps a pending provider check blocked after the detail remounts", async () => {
     const { promise: pending, resolve: release } = Promise.withResolvers<Response>();
     const harness = renderConnections(({ method, path }) =>
-      method === "POST" && path.endsWith("/check") ? pending : unexpectedRequest());
+      method === "POST" && path.endsWith("/check") ? pending : undefined);
     const { user } = await startTwoConnections(harness);
     await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
     await user.click(screen.getByRole("button", { name: "Test connection" }));
@@ -555,20 +541,20 @@ describe("connection management", () => {
     expect(within(detail).getByRole("button", { name: "Edit capabilities" })).toBeDisabled();
     expect(within(detail).getByRole("button", { name: "Remove" })).toBeDisabled();
     within(detail).getByRole("button", { name: "Checking…" }).dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    expect(harness.requests.filter((request) => request.method === "POST")).toHaveLength(1);
+    expect(portal.requests.filter((request) => request.method === "POST")).toHaveLength(1);
 
     await act(async () => {
       release(new Response(JSON.stringify({ disposition: "checked", connection: connection({ version: 4 }) }), { status: 200 }));
       await pending;
     });
     expect(await screen.findByRole("button", { name: "Test connection" })).toBeEnabled();
-    expect(harness.requests.filter((request) => request.method === "POST")).toHaveLength(1);
+    expect(portal.requests.filter((request) => request.method === "POST")).toHaveLength(1);
   });
 
   it("keeps a pending removal blocked after the detail remounts", async () => {
     const { promise: pending, resolve: release } = Promise.withResolvers<Response>();
     const harness = renderConnections(({ method }) =>
-      method === "DELETE" ? pending : unexpectedRequest());
+      method === "DELETE" ? pending : undefined);
     const { second, user } = await startTwoConnections(harness);
     await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
     await user.click(screen.getByRole("button", { name: "Remove" }));
@@ -590,7 +576,7 @@ describe("connection management", () => {
     expect(within(detail).getByRole("button", { name: "Remove" })).toBeDisabled();
     within(detail).getByRole("button", { name: "Remove" }).dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(screen.queryByRole("dialog", { name: /Remove GitHub engineering/ })).toBeNull();
-    expect(harness.requests.filter((request) => request.method === "DELETE")).toHaveLength(1);
+    expect(portal.requests.filter((request) => request.method === "DELETE")).toHaveLength(1);
 
     harness.setConnections([second]);
     await act(async () => {
@@ -604,7 +590,7 @@ describe("connection management", () => {
   it("surfaces a check refusal that settles after the operator returned to the same connection", async () => {
     const { promise: pending, resolve: release } = Promise.withResolvers<Response>();
     const harness = renderConnections(({ method, path }) =>
-      method === "POST" && path.endsWith("/check") ? pending : unexpectedRequest());
+      method === "POST" && path.endsWith("/check") ? pending : undefined);
     const { second, user } = await startTwoConnections(harness);
     await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
     await user.click(screen.getByRole("button", { name: "Test connection" }));
@@ -628,7 +614,7 @@ describe("connection management", () => {
   it("does not clear the newly selected connection when a removal settles late", async () => {
     const { promise: pending, resolve: release } = Promise.withResolvers<Response>();
     const harness = renderConnections(({ method }) =>
-      method === "DELETE" ? pending : unexpectedRequest());
+      method === "DELETE" ? pending : undefined);
     const { second, user } = await startTwoConnections(harness);
     await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
     await user.click(await screen.findByRole("button", { name: "Remove" }));
@@ -651,7 +637,7 @@ describe("connection management", () => {
   it("states a removal refusal whose connection the change-discovery re-read removed first", async () => {
     const { promise: pending, resolve: release } = Promise.withResolvers<Response>();
     const harness = renderConnections(({ method }) =>
-      method === "DELETE" ? pending : unexpectedRequest());
+      method === "DELETE" ? pending : undefined);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
     await user.click(screen.getByRole("button", { name: "Remove" }));
@@ -680,7 +666,7 @@ describe("connection management", () => {
   it("does not navigate back when the operator selects another connection during the save's re-read", async () => {
     const harness = renderConnections(({ method }) => method === "PATCH"
       ? new Response(JSON.stringify({ disposition: "updated", connection: connection({ version: 4 }) }), { status: 200 })
-      : unexpectedRequest());
+      : undefined);
     const { second, user } = await startTwoConnections(harness);
     await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
     await user.click(screen.getByRole("button", { name: "Edit capabilities" }));
@@ -692,7 +678,7 @@ describe("connection management", () => {
     harness.gateReads(gate);
     await user.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => { expect(screen.queryByRole("dialog", { name: "Connection settings" })).toBeNull(); });
-    await waitFor(() => { expect(harness.requests.filter((request) => request.method === "GET" && request.path === "/portal/api/connections")).toHaveLength(3); });
+    await waitFor(() => { expect(portal.requests.filter((request) => request.method === "GET" && request.path === "/portal/api/connections")).toHaveLength(3); });
     await user.click(screen.getByRole("button", { name: /Second connection/ }));
     expect(await screen.findByRole("complementary", { name: "Connection detail" })).toHaveTextContent("Second connection");
 
@@ -707,7 +693,7 @@ describe("connection management", () => {
     const harness = renderConnections(({ method }) =>
       method === "POST"
         ? new Response(JSON.stringify({ disposition: "created", connection: { id: connectionId } }), { status: 201 })
-        : unexpectedRequest());
+        : undefined);
     const user = userEvent.setup();
     await screen.findByRole("button", { name: /GitHub engineering/ });
     await user.click(screen.getByRole("button", { name: "New connection" }));
@@ -743,7 +729,7 @@ describe("connection management", () => {
   it("does not pull the operator back after they left the page while a save was pending", async () => {
     const { promise: pending, resolve: release } = Promise.withResolvers<Response>();
     const harness = renderConnections(({ method }) =>
-      method === "PATCH" ? pending : unexpectedRequest());
+      method === "PATCH" ? pending : undefined);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
     await user.click(screen.getByRole("button", { name: "Edit capabilities" }));
@@ -761,7 +747,7 @@ describe("connection management", () => {
   });
 
   it("returns keyboard focus to the invoking control when either dialog closes", async () => {
-    renderConnections(() => unexpectedRequest());
+    renderConnections(() => undefined);
     const user = userEvent.setup();
 
     const create = await screen.findByRole("button", { name: "New connection" });
@@ -782,7 +768,7 @@ describe("connection management", () => {
 
   it("keeps focus in the detail when the editor closes while its save is pending", async () => {
     const { promise: pending, resolve: release } = Promise.withResolvers<Response>();
-    renderConnections(({ method }) => method === "PATCH" ? pending : unexpectedRequest());
+    renderConnections(({ method }) => method === "PATCH" ? pending : undefined);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
     await user.click(await screen.findByRole("button", { name: "Edit capabilities" }));
@@ -806,7 +792,7 @@ describe("connection management", () => {
 
   it("keeps focus in the detail when the removal dialog closes while its removal is pending", async () => {
     const { promise: pending, resolve: release } = Promise.withResolvers<Response>();
-    renderConnections(({ method }) => method === "DELETE" ? pending : unexpectedRequest());
+    renderConnections(({ method }) => method === "DELETE" ? pending : undefined);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
     await user.click(screen.getByRole("button", { name: "Remove" }));
@@ -827,7 +813,7 @@ describe("connection management", () => {
 
   it("hands focus to the surviving page control when a settled removal unmounts the detail", async () => {
     const { promise: pending, resolve: release } = Promise.withResolvers<Response>();
-    const harness = renderConnections(({ method }) => method === "DELETE" ? pending : unexpectedRequest());
+    const harness = renderConnections(({ method }) => method === "DELETE" ? pending : undefined);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
     await user.click(screen.getByRole("button", { name: "Remove" }));
@@ -856,7 +842,7 @@ describe("connection management", () => {
   });
 
   it("keeps keyboard focus on the connection row across a background refresh", async () => {
-    const harness = renderConnections(() => unexpectedRequest());
+    const harness = renderConnections(() => undefined);
     const row = await screen.findByRole("button", { name: /GitHub engineering/ });
     row.focus();
     expect(row).toHaveFocus();
@@ -870,7 +856,7 @@ describe("connection management", () => {
     const harness = renderConnections(({ method }) =>
       method === "PATCH"
         ? pending
-        : unexpectedRequest());
+        : undefined);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
     await user.click(await screen.findByRole("button", { name: "Edit capabilities" }));
@@ -894,7 +880,7 @@ describe("connection management", () => {
   });
 
   it("issues a new workspace read when a refresh is clicked while a re-read is in flight", async () => {
-    const harness = renderConnections(() => unexpectedRequest());
+    const harness = renderConnections(() => undefined);
     const user = userEvent.setup();
     expect(await screen.findByText("Project not found")).toBeVisible();
 
@@ -906,7 +892,7 @@ describe("connection management", () => {
     // the read it supersedes because the query already has data.
     const { promise: gate, resolve: release } = Promise.withResolvers<void>();
     harness.gateWorkspaceReads(gate);
-    const reads = () => harness.requests.filter((request) => request.path.startsWith("/portal/api/workspace")).length;
+    const reads = () => portal.requests.filter((request) => request.path.startsWith("/portal/api/workspace")).length;
     const settled = reads();
     act(() => { void harness.application.queryClient.refetchQueries({ queryKey: ["workspace"] }); });
     await waitFor(() => { expect(reads()).toBe(settled + 1); });
@@ -921,7 +907,7 @@ describe("connection management", () => {
   });
 
   it("re-reads the project when Try again is clicked while a re-read is in flight", async () => {
-    const harness = renderConnections(() => unexpectedRequest());
+    const harness = renderConnections(() => undefined);
     const user = userEvent.setup();
     expect(await screen.findByText("Project not found")).toBeVisible();
 
@@ -936,7 +922,7 @@ describe("connection management", () => {
     // still issue the operator's own read.
     const { promise: gate, resolve: release } = Promise.withResolvers<void>();
     harness.gateWorkspaceReads(gate);
-    const reads = () => harness.requests.filter((request) => request.path.startsWith("/portal/api/workspace")).length;
+    const reads = () => portal.requests.filter((request) => request.path.startsWith("/portal/api/workspace")).length;
     const settled = reads();
     act(() => { void harness.application.queryClient.refetchQueries({ queryKey: ["workspace"] }); });
     await waitFor(() => { expect(reads()).toBe(settled + 1); });
@@ -950,7 +936,7 @@ describe("connection management", () => {
   });
 
   it("keeps the server's repositories-for-changes coupling observable in the editor", async () => {
-    renderConnections(() => unexpectedRequest());
+    renderConnections(() => undefined);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "New connection" }));
     const repositories = screen.getByRole("checkbox", { name: "Repositories" });
@@ -968,7 +954,7 @@ describe("connection management", () => {
 
   it("waits for the provider catalog before opening the create editor", async () => {
     const { promise: gate, resolve: release } = Promise.withResolvers<void>();
-    const harness = renderConnections(() => unexpectedRequest(), "/portal/connections", { deferReads: gate });
+    renderConnections(() => undefined, "/portal/connections", { deferReads: gate });
     const user = userEvent.setup();
     // The first read (which carries the provider catalog) is still in flight:
     // creation must wait instead of opening a form whose provider select has
@@ -987,8 +973,8 @@ describe("connection management", () => {
     await user.type(screen.getByLabelText("Name"), "Catalog complete");
     await user.type(screen.getByLabelText("Account or organization"), "acme");
     await user.click(screen.getByRole("button", { name: "Connect" }));
-    await waitFor(() => { expect(harness.requests.filter((request) => request.method === "POST")).toHaveLength(1); });
-    expect(harness.requests.find((request) => request.method === "POST")?.body).toEqual({
+    await waitFor(() => { expect(portal.requests.filter((request) => request.method === "POST")).toHaveLength(1); });
+    expect(portal.requests.find((request) => request.method === "POST")?.body).toEqual({
       provider: "github",
       name: "Catalog complete",
       account_ref: "acme",
@@ -997,7 +983,7 @@ describe("connection management", () => {
   });
 
   it("closes the editor with a notice when the edited connection is removed elsewhere", async () => {
-    const harness = renderConnections(() => unexpectedRequest());
+    const harness = renderConnections(() => undefined);
     const { second, user } = await startTwoConnections(harness);
     await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
     await user.click(await screen.findByRole("button", { name: "Edit capabilities" }));
@@ -1020,7 +1006,7 @@ describe("connection management", () => {
   it("does not claim a capability reset when the edit only changed the name", async () => {
     const harness = renderConnections(({ method }) => method === "PATCH"
       ? new Response(JSON.stringify({ disposition: "updated", connection: connection({ version: 4, name: "Renamed engineering" }) }), { status: 200 })
-      : unexpectedRequest());
+      : undefined);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: /GitHub engineering/ }));
     await user.click(screen.getByRole("button", { name: "Edit capabilities" }));
@@ -1030,7 +1016,7 @@ describe("connection management", () => {
     await user.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByText("Connection updated.")).toBeVisible();
     expect(screen.queryByText(/Bound resource health and sync state was reset/)).toBeNull();
-    expect(harness.requests.filter((request) => request.method === "PATCH")[0]?.body).toEqual({
+    expect(portal.requests.filter((request) => request.method === "PATCH")[0]?.body).toEqual({
       version: 3,
       name: "Renamed engineering",
       capabilities: ["repositories", "work_items", "changes", "ci"],
@@ -1040,7 +1026,7 @@ describe("connection management", () => {
   it("surfaces a replayed create receipt as already applied", async () => {
     const harness = renderConnections(({ method }) => method === "POST"
       ? new Response(JSON.stringify({ disposition: "replayed", connection: { id: connectionId } }), { status: 200 })
-      : unexpectedRequest());
+      : undefined);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "New connection" }));
     await user.type(screen.getByLabelText("Name"), "GitHub engineering");
@@ -1048,15 +1034,15 @@ describe("connection management", () => {
     harness.setConnections([connection({ name: "GitHub engineering" })]);
     await user.click(screen.getByRole("button", { name: "Connect" }));
     expect(await screen.findByText(/already applied; the server returned the existing connection/)).toBeVisible();
-    expect(harness.requests.filter((request) => request.method === "POST")).toHaveLength(1);
+    expect(portal.requests.filter((request) => request.method === "POST")).toHaveLength(1);
   });
 });
 
 describe("project resources", () => {
   it("offers only the connections that grant a kind's capability and submits the served bind payload", async () => {
     const boards = connection({ id: secondConnectionId, provider: "azure_devops", name: "Azure Boards", account_ref: "acme", capabilities: ["work_items"] });
-    const harness = renderConnections(({ method }) => {
-      if (method !== "POST") return unexpectedRequest();
+    renderConnections(({ method }) => {
+      if (method !== "POST") return undefined;
       return new Response(JSON.stringify({ resource: resourceFixture({ name: "checkout service", version: 1 }) }), { status: 201 });
     }, "/portal/connections", { connections: [connection(), boards], projects: [projectFixture()] });
     const user = userEvent.setup();
@@ -1073,9 +1059,9 @@ describe("project resources", () => {
     await user.type(dialog.getByLabelText("Name"), "checkout service");
     await user.type(dialog.getByLabelText("Reference"), "acme/checkout");
     await user.click(dialog.getByRole("button", { name: "Bind" }));
-    await waitFor(() => { expect(harness.requests.filter((request) => request.method === "POST")).toHaveLength(1); });
-    expect(harness.requests.find((request) => request.method === "POST")?.path).toBe(`/portal/api/projects/${projectId}/resources`);
-    expect(harness.requests.find((request) => request.method === "POST")?.body).toEqual({
+    await waitFor(() => { expect(portal.requests.filter((request) => request.method === "POST")).toHaveLength(1); });
+    expect(portal.requests.find((request) => request.method === "POST")?.path).toBe(`/portal/api/projects/${projectId}/resources`);
+    expect(portal.requests.find((request) => request.method === "POST")?.body).toEqual({
       kind: "repository", connection_id: connectionId, name: "checkout service", external_ref: "acme/checkout",
     });
     expect(await screen.findByText("Resource attached — checkout service.")).toBeVisible();
@@ -1087,9 +1073,9 @@ describe("project resources", () => {
   });
 
   it("renders the resource form's own field error from the server's refusal", async () => {
-    const harness = renderConnections(({ method }) => method === "POST"
+    renderConnections(({ method }) => method === "POST"
       ? refusal(422, "validation_failed", "request contains invalid fields", { external_ref: ["must reference a registered runtime"] })
-      : unexpectedRequest(), "/portal/connections", {
+      : undefined, "/portal/connections", {
       connections: [connection()],
       projects: [projectFixture()],
     });
@@ -1107,7 +1093,7 @@ describe("project resources", () => {
     expect(fieldError).toHaveClass("field-error");
     expect(fieldError).toHaveAttribute("role", "alert");
     expect(dialog.getByText(/request contains invalid fields \(validation_failed\)/)).toBeVisible();
-    expect(harness.requests.find((request) => request.method === "POST")?.path).toBe(`/portal/api/projects/${projectId}/resources`);
+    expect(portal.requests.find((request) => request.method === "POST")?.path).toBe(`/portal/api/projects/${projectId}/resources`);
   });
 
   it("leaves a provider_owned refusal to the server's own message, without assignment-surface guidance", async () => {
@@ -1115,9 +1101,9 @@ describe("project resources", () => {
     // is the work-item update behind the assignment surface, which carries its
     // own guidance. The page's fold must render the server's message alone
     // instead of guidance for a code no call site here can receive.
-    const harness = renderConnections(({ method }) => method === "POST"
+    renderConnections(({ method }) => method === "POST"
       ? refusal(409, "provider_owned", "field is authoritative in the external provider")
-      : unexpectedRequest(), "/portal/connections", {
+      : undefined, "/portal/connections", {
       connections: [connection()],
       projects: [projectFixture()],
     });
@@ -1129,13 +1115,13 @@ describe("project resources", () => {
     await user.click(dialog.getByRole("button", { name: "Bind" }));
     expect(await dialog.findByText("field is authoritative in the external provider (provider_owned)")).toBeVisible();
     expect(dialog.queryByText(/This field is authored by the provider/)).toBeNull();
-    expect(harness.requests.find((request) => request.method === "POST")?.path).toBe(`/portal/api/projects/${projectId}/resources`);
+    expect(portal.requests.find((request) => request.method === "POST")?.path).toBe(`/portal/api/projects/${projectId}/resources`);
   });
 
   it("takes a local resource's reference from the workspace's registered runtimes", async () => {
-    const harness = renderConnections(({ method }) => method === "POST"
+    renderConnections(({ method }) => method === "POST"
       ? new Response(JSON.stringify({ resource: resourceFixture({ kind: "runtime", name: "review runner" }) }), { status: 201 })
-      : unexpectedRequest(), "/portal/connections", {
+      : undefined, "/portal/connections", {
       projects: [projectFixture()],
       registeredRuntimes: [
         { runtime_id: "77777777-7777-4777-8777-777777777771", runtime_name: "builder-a", agent_profile: "oss-default", workspace: "/work/alpha" },
@@ -1164,15 +1150,15 @@ describe("project resources", () => {
     expect(dialog.getByLabelText("Reference")).toHaveValue("77777777-7777-4777-8777-777777777772");
     await user.type(dialog.getByLabelText("Name"), "review runner");
     await user.click(dialog.getByRole("button", { name: "Bind" }));
-    await waitFor(() => { expect(harness.requests.filter((request) => request.method === "POST")).toHaveLength(1); });
-    expect(harness.requests.find((request) => request.method === "POST")?.body).toEqual({
+    await waitFor(() => { expect(portal.requests.filter((request) => request.method === "POST")).toHaveLength(1); });
+    expect(portal.requests.find((request) => request.method === "POST")?.body).toEqual({
       kind: "runtime", connection_id: null, name: "review runner", external_ref: "77777777-7777-4777-8777-777777777772",
     });
   });
 
   it("offers no connection for a kind whose capability no connection grants", async () => {
     const boards = connection({ id: secondConnectionId, provider: "azure_devops", name: "Azure Boards", account_ref: "acme", capabilities: ["work_items"] });
-    renderConnections(() => unexpectedRequest(), "/portal/connections", { connections: [boards], projects: [projectFixture()] });
+    renderConnections(() => undefined, "/portal/connections", { connections: [boards], projects: [projectFixture()] });
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Bind resource" }));
     const dialog = within(await screen.findByRole("dialog", { name: "Bind resource" }));
@@ -1185,7 +1171,7 @@ describe("project resources", () => {
   });
 
   it("renders the served resource state, including a failed sync and an unknown kind", async () => {
-    renderConnections(() => unexpectedRequest(), "/portal/connections", {
+    renderConnections(() => undefined, "/portal/connections", {
       projects: [projectFixture({
         resources: [
           resourceFixture(),
@@ -1238,7 +1224,7 @@ describe("project resources", () => {
     // unchanged instead of the id fallback, and the two badges label the
     // unreadable status they were served rather than a known status word. A
     // helper that trims has to be a declared policy here, not a silent swap.
-    renderConnections(() => unexpectedRequest(), "/portal/connections", {
+    renderConnections(() => undefined, "/portal/connections", {
       projects: [projectFixture({ resources: [resourceFixture({ name: " ", status: " ", sync_status: " " })] })],
     });
     expect(await screen.findByRole("heading", { name: "Project resources" })).toBeVisible();
@@ -1255,12 +1241,12 @@ describe("project resources", () => {
       url: null, status: "unknown", sync_status: "unknown", last_synced_at: null, version: 5,
     });
     const harness = renderConnections(({ method, path }) => {
-      if (method !== "POST" || !path.endsWith("/sync")) return unexpectedRequest();
+      if (method !== "POST" || !path.endsWith("/sync")) return undefined;
       harness.setProjects([projectFixture({ resources: [{ ...target, status: "degraded", sync_status: "failed", status_message: "Resource has no external connection" }] })]);
       return refusal(409, "not_connected", "resource has no external connection");
     }, "/portal/connections", { projects: [projectFixture({ resources: [target] })] });
     const user = userEvent.setup();
-    const reads = harness.requests.filter((request) => request.path === "/portal/api/workspace").length;
+    const reads = portal.requests.filter((request) => request.path === "/portal/api/workspace").length;
     await user.click(await screen.findByRole("button", { name: "Sync engineering issues" }));
     expect(await screen.findByText(/resource has no external connection \(not_connected\)/)).toBeVisible();
     expect(screen.getByText(/Bind the resource to a connection first\./)).toBeVisible();
@@ -1269,13 +1255,13 @@ describe("project resources", () => {
     expect(row.getByText("Resource has no external connection")).toBeVisible();
     expect(row.getByText("Never synced")).toBeVisible();
     expect(row.queryByText("Synced")).toBeNull();
-    await waitFor(() => { expect(harness.requests.filter((request) => request.path === "/portal/api/workspace").length).toBeGreaterThan(reads); });
+    await waitFor(() => { expect(portal.requests.filter((request) => request.path === "/portal/api/workspace").length).toBeGreaterThan(reads); });
   });
 
   it("renders the served capability refusal with the capability-specific next step", async () => {
     const target = resourceFixture();
     const harness = renderConnections(({ method, path }) => {
-      if (method !== "POST" || !path.endsWith("/sync")) return unexpectedRequest();
+      if (method !== "POST" || !path.endsWith("/sync")) return undefined;
       harness.setProjects([projectFixture({ resources: [{ ...target, status: "degraded", sync_status: "failed", status_message: "Connection capability is not granted" }] })]);
       return refusal(403, "capability_not_granted", "connection capability is not granted");
     }, "/portal/connections", { projects: [projectFixture({ resources: [target] })] });
@@ -1291,7 +1277,7 @@ describe("project resources", () => {
   it("keeps a failed provider read explicit and never renders it as synchronized", async () => {
     const failed = resourceFixture({ status: "degraded", sync_status: "failed", status_message: "Provider returned HTTP 500", version: 5 });
     const harness = renderConnections(({ method, path }) => {
-      if (method !== "POST" || !path.endsWith("/sync")) return unexpectedRequest();
+      if (method !== "POST" || !path.endsWith("/sync")) return undefined;
       harness.setProjects([projectFixture({ resources: [failed] })]);
       return refusal(502, "provider_failure", "external provider request failed", null, { resource: failed });
     }, "/portal/connections", { projects: [projectFixture({ resources: [resourceFixture()] })] });
@@ -1310,35 +1296,35 @@ describe("project resources", () => {
   });
 
   it("reports the project sync count from the served receipt", async () => {
-    const harness = renderConnections(({ method, path }) => method === "POST" && path.endsWith("/sync")
+    renderConnections(({ method, path }) => method === "POST" && path.endsWith("/sync")
       ? new Response(JSON.stringify({ synced_resource_ids: [alphaId, betaId] }))
-      : unexpectedRequest(), "/portal/connections", { projects: [projectFixture({ resources: [resourceFixture()] })] });
+      : undefined, "/portal/connections", { projects: [projectFixture({ resources: [resourceFixture()] })] });
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Synchronize project" }));
     expect(await screen.findByText("Project resources synchronized: 2 resources updated.")).toBeVisible();
-    expect(harness.requests.find((request) => request.method === "POST")?.path).toBe(`/portal/api/projects/${projectId}/sync`);
+    expect(portal.requests.find((request) => request.method === "POST")?.path).toBe(`/portal/api/projects/${projectId}/sync`);
   });
 
   it("renders an aggregate project sync failure with the server's code and re-reads the project", async () => {
-    const harness = renderConnections(({ method, path }) => {
-      if (method !== "POST" || !path.endsWith("/sync")) return unexpectedRequest();
+    renderConnections(({ method, path }) => {
+      if (method !== "POST" || !path.endsWith("/sync")) return undefined;
       return refusal(502, "provider_failure", "external provider request failed", null, {
         causes: [{ code: "provider_failure", message: "external provider request failed", count: 1 }],
         results: [{ resource_id: alphaId, status: "failed", error: { code: "provider_failure", message: "external provider request failed" } }],
       });
     }, "/portal/connections", { projects: [projectFixture({ resources: [resourceFixture()] })] });
     const user = userEvent.setup();
-    const reads = harness.requests.filter((request) => request.path === "/portal/api/workspace").length;
+    const reads = portal.requests.filter((request) => request.path === "/portal/api/workspace").length;
     await user.click(await screen.findByRole("button", { name: "Synchronize project" }));
     expect(await screen.findByText(/external provider request failed \(provider_failure\)/)).toBeVisible();
-    await waitFor(() => { expect(harness.requests.filter((request) => request.path === "/portal/api/workspace").length).toBeGreaterThan(reads); });
+    await waitFor(() => { expect(portal.requests.filter((request) => request.path === "/portal/api/workspace").length).toBeGreaterThan(reads); });
     expect(screen.queryByText(/Project resources synchronized/)).toBeNull();
   });
 
   it("submits the version the update dialog opened with and renders the stale refusal", async () => {
     const harness = renderConnections(({ method }) => method === "PATCH"
       ? refusal(409, "stale", "resource changed since it was loaded")
-      : unexpectedRequest(), "/portal/connections", { projects: [projectFixture({ resources: [resourceFixture()] })] });
+      : undefined, "/portal/connections", { projects: [projectFixture({ resources: [resourceFixture()] })] });
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Update checkout service" }));
     const dialog = within(await screen.findByRole("dialog", { name: "Update resource" }));
@@ -1352,8 +1338,8 @@ describe("project resources", () => {
     await act(async () => { await harness.application.queryClient.refetchQueries({ queryKey: ["workspace"] }); });
     expect(dialog.getByLabelText("Name")).toHaveValue("checkout service (renamed)");
     await user.click(dialog.getByRole("button", { name: "Save" }));
-    await waitFor(() => { expect(harness.requests.filter((request) => request.method === "PATCH")).toHaveLength(1); });
-    expect(harness.requests.find((request) => request.method === "PATCH")?.body).toEqual({
+    await waitFor(() => { expect(portal.requests.filter((request) => request.method === "PATCH")).toHaveLength(1); });
+    expect(portal.requests.find((request) => request.method === "PATCH")?.body).toEqual({
       version: 4, name: "checkout service (renamed)", connection_id: connectionId, external_ref: "acme/checkout",
     });
     expect(await dialog.findByRole("alert")).toHaveTextContent("resource changed since it was loaded (stale)");
@@ -1364,7 +1350,7 @@ describe("project resources", () => {
   it("renders a not-found update refusal with the server's reason instead of assuming success", async () => {
     renderConnections(({ method }) => method === "PATCH"
       ? refusal(404, "not_found", "resource was not found")
-      : unexpectedRequest(), "/portal/connections", { projects: [projectFixture({ resources: [resourceFixture()] })] });
+      : undefined, "/portal/connections", { projects: [projectFixture({ resources: [resourceFixture()] })] });
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Update checkout service" }));
     const dialog = within(await screen.findByRole("dialog", { name: "Update resource" }));
@@ -1377,15 +1363,15 @@ describe("project resources", () => {
   it("submits the version the unbind dialog opened with and renders the state conflict", async () => {
     const harness = renderConnections(({ method }) => method === "DELETE"
       ? refusal(409, "state_conflict", "state has already advanced")
-      : unexpectedRequest(), "/portal/connections", { projects: [projectFixture({ resources: [resourceFixture()] })] });
+      : undefined, "/portal/connections", { projects: [projectFixture({ resources: [resourceFixture()] })] });
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Unbind checkout service" }));
     const dialog = within(await screen.findByRole("dialog", { name: "Unbind checkout service?" }));
     harness.setProjects([projectFixture({ resources: [resourceFixture({ version: 9 })] })]);
     await act(async () => { await harness.application.queryClient.refetchQueries({ queryKey: ["workspace"] }); });
     await user.click(dialog.getByRole("button", { name: "Unbind resource" }));
-    await waitFor(() => { expect(harness.requests.filter((request) => request.method === "DELETE")).toHaveLength(1); });
-    expect(harness.requests.find((request) => request.method === "DELETE")?.path).toBe(`/portal/api/resources/${alphaId}?version=4`);
+    await waitFor(() => { expect(portal.requests.filter((request) => request.method === "DELETE")).toHaveLength(1); });
+    expect(portal.requests.find((request) => request.method === "DELETE")?.path).toBe(`/portal/api/resources/${alphaId}?version=4`);
     expect(await dialog.findByRole("alert")).toHaveTextContent("state has already advanced (state_conflict)");
     expect(dialog.getByText(/Reload and resolve the changed state\./)).toBeVisible();
     expect(dialog.getByRole("button", { name: "Unbind resource" })).toBeDisabled();
@@ -1393,9 +1379,9 @@ describe("project resources", () => {
 
   it("locks every resource control while one write is pending", async () => {
     const { promise: pending, resolve: release } = Promise.withResolvers<Response>();
-    const harness = renderConnections(({ method, path }) => method === "POST" && path.endsWith("/sync")
+    renderConnections(({ method, path }) => method === "POST" && path.endsWith("/sync")
       ? pending
-      : unexpectedRequest(), "/portal/connections", { projects: [projectFixture({ resources: [resourceFixture()] })] });
+      : undefined, "/portal/connections", { projects: [projectFixture({ resources: [resourceFixture()] })] });
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Sync checkout service" }));
     expect(screen.getByRole("button", { name: "Bind resource" })).toBeDisabled();
@@ -1410,7 +1396,7 @@ describe("project resources", () => {
     row.getByRole("button", { name: "Unbind checkout service" }).dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(screen.queryByRole("dialog", { name: "Bind resource" })).toBeNull();
     expect(screen.queryByRole("dialog", { name: /Unbind/ })).toBeNull();
-    expect(harness.requests.filter((request) => request.method === "POST")).toHaveLength(1);
+    expect(portal.requests.filter((request) => request.method === "POST")).toHaveLength(1);
 
     await act(async () => {
       release(new Response(JSON.stringify({ resource: resourceFixture({ version: 5 }) }), { status: 200 }));
@@ -1418,7 +1404,7 @@ describe("project resources", () => {
     });
     await waitFor(() => expect(screen.getByRole("button", { name: "Bind resource" })).toBeEnabled());
     expect(resourceRow("checkout service").getByRole("button", { name: "Sync checkout service" })).toBeEnabled();
-    expect(harness.requests.filter((request) => request.method === "POST")).toHaveLength(1);
+    expect(portal.requests.filter((request) => request.method === "POST")).toHaveLength(1);
   });
 
   it("never lets a late response for the previous project touch the newly selected project's rows", async () => {
@@ -1427,9 +1413,9 @@ describe("project resources", () => {
       url: null, status: "unknown", sync_status: "unknown", last_synced_at: null, version: 2,
     });
     const { promise: pending, resolve: release } = Promise.withResolvers<Response>();
-    const harness = renderConnections(({ method, path }) => method === "POST" && path.endsWith("/sync")
+    renderConnections(({ method, path }) => method === "POST" && path.endsWith("/sync")
       ? pending
-      : unexpectedRequest(), "/portal/connections", {
+      : undefined, "/portal/connections", {
       projects: [
         projectFixture({ resources: [resourceFixture()] }),
         projectFixture({ id: secondProjectId, key: "SEC", name: "Second engineering", resources: [beta] }),
@@ -1461,14 +1447,14 @@ describe("project resources", () => {
     expect(row.queryByText("Synced")).toBeNull();
     // The exclusion survived the section's remount: the pending write released.
     await waitFor(() => expect(screen.getByRole("button", { name: "Bind resource" })).toBeEnabled());
-    expect(harness.requests.filter((request) => request.path === `/portal/api/projects/${projectId}/sync`)).toHaveLength(1);
+    expect(portal.requests.filter((request) => request.path === `/portal/api/projects/${projectId}/sync`)).toHaveLength(1);
   });
 
   it("does not reopen an editor whose response arrives after the dialog closed", async () => {
     const { promise: pending, resolve: release } = Promise.withResolvers<Response>();
-    const harness = renderConnections(({ method, path }) => method === "POST" && path.endsWith("/resources")
+    renderConnections(({ method, path }) => method === "POST" && path.endsWith("/resources")
       ? pending
-      : unexpectedRequest(), "/portal/connections", { projects: [projectFixture()] });
+      : undefined, "/portal/connections", { projects: [projectFixture()] });
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Bind resource" }));
     const dialog = within(await screen.findByRole("dialog", { name: "Bind resource" }));
@@ -1478,7 +1464,7 @@ describe("project resources", () => {
     // The operator closes the dialog while its write is still in flight.
     await user.click(dialog.getByRole("button", { name: "Close bind dialog" }));
     expect(screen.queryByRole("dialog", { name: "Bind resource" })).toBeNull();
-    const reads = harness.requests.filter((request) => request.path === "/portal/api/workspace").length;
+    const reads = portal.requests.filter((request) => request.path === "/portal/api/workspace").length;
 
     await act(async () => {
       release(new Response(JSON.stringify({ resource: resourceFixture({ version: 1 }) }), { status: 201 }));
@@ -1487,11 +1473,11 @@ describe("project resources", () => {
     expect(screen.queryByRole("dialog", { name: "Bind resource" })).toBeNull();
     expect(screen.queryByText(/Resource attached/)).toBeNull();
     // The write is real, so the project read is reconciled even for a closed editor.
-    await waitFor(() => { expect(harness.requests.filter((request) => request.path === "/portal/api/workspace").length).toBeGreaterThan(reads); });
+    await waitFor(() => { expect(portal.requests.filter((request) => request.path === "/portal/api/workspace").length).toBeGreaterThan(reads); });
   });
 
   it("disables every mutation control for an archived project with a visible reason", async () => {
-    renderConnections(() => unexpectedRequest(), "/portal/connections", {
+    renderConnections(() => undefined, "/portal/connections", {
       projects: [projectFixture({ status: "archived", resources: [resourceFixture()] })],
     });
     expect(await screen.findByText(/This project is archived, so binding, updating, unbinding and synchronizing its resources are disabled\./)).toBeVisible();
@@ -1506,7 +1492,7 @@ describe("project resources", () => {
   });
 
   it("returns keyboard focus to the invoking control when a resource dialog closes", async () => {
-    renderConnections(() => unexpectedRequest(), "/portal/connections", { projects: [projectFixture({ resources: [resourceFixture()] })] });
+    renderConnections(() => undefined, "/portal/connections", { projects: [projectFixture({ resources: [resourceFixture()] })] });
     const user = userEvent.setup();
     const bind = await screen.findByRole("button", { name: "Bind resource" });
     await user.click(bind);
@@ -1525,7 +1511,7 @@ describe("project resources", () => {
 
   it("renders the project-not-found state for an unknown scope instead of another project's rows", async () => {
     const missingId = "10000000-0000-4000-8000-0000000000ff";
-    renderConnections(() => unexpectedRequest(), `/portal/connections?projectId=${missingId}`, {
+    renderConnections(() => undefined, `/portal/connections?projectId=${missingId}`, {
       projects: [projectFixture({ resources: [resourceFixture()] })],
     });
     expect(await screen.findByRole("heading", { name: "Project not found" })).toBeVisible();

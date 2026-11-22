@@ -1,6 +1,7 @@
 import { screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
-import { jsonResponse, renderRoute, requestPath } from "../../app/test-harness";
+import { describe, expect, it } from "vitest";
+import { portal } from "../../app/portal-double";
+import { renderRoute } from "../../app/test-harness";
 import { readWorkDetail } from "../../services/api.fixtures";
 
 /**
@@ -65,23 +66,18 @@ function detailWithoutProject(executionOverride?: Record<string, unknown>) {
   return detail;
 }
 
-const workspaceBody = () => ({
-  selected_project_id: projectId,
-  projects: [{ id: projectId, key: "ONE", name: "Project One", description: null, status: "active", resources: [], work_items: [] }],
-  health: { status: "unknown" },
-  runtimes: [],
-  registered_runtimes: [],
-});
-
 function renderWorkDetail(detail: Record<string, unknown>, search = "") {
-  const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => {
-    const url = new URL(requestPath(input), "http://localhost");
-    if (url.pathname === "/portal/api/session") return Promise.resolve(jsonResponse({ csrf_token: "session-token" }));
-    if (url.pathname === `/portal/api/work-items/${subjectId}`) return Promise.resolve(jsonResponse(detail));
-    if (url.pathname === "/portal/api/workspace") return Promise.resolve(jsonResponse(workspaceBody()));
-    return Promise.resolve(jsonResponse({}, 404));
+  portal.seed({
+    workspace: {
+      selectedProjectId: projectId,
+      projects: [{ id: projectId, key: "ONE", name: "Project One", description: null, status: "active", resources: [], work_items: [] }],
+      runtimes: [],
+      registeredRuntimes: [],
+      health: { status: "unknown" },
+    },
+    details: { [subjectId]: detail },
   });
-  renderRoute(`/portal/work/${subjectId}${search}`, fetcher);
+  renderRoute(`/portal/work/${subjectId}${search}`);
 }
 
 describe("work detail conversation entry point", () => {
