@@ -327,9 +327,9 @@ complexity, and the contract asks for the bound with no new finding.
 
 ## Delivered revision (2026-11-22)
 
-Measured at the working tree (`goal_admission_tx.go` 1,466 lines, `goal_admission.go` 612 lines at
-the `fix1` revision = `84839346` post-merge and after the accepted simplify findings plus the
-review-fix round edits):
+Measured at the working tree (`goal_admission_tx.go` 1,465 lines, `goal_admission.go` 612 lines at
+the `fix2` revision = `84839346` post-merge and after the accepted simplify findings, the
+review-fix round edits and the PR #234 review-round-1 fix):
 
 - **Per-method bound.** 67 `*goalAdmissionTx` methods + the `newGoalAdmissionTx` constructor + the
   7-line residual entry: max gocyclo 19
@@ -369,8 +369,9 @@ review-fix round edits):
   the dispatch shape stays uniform, the T3 call-shape audit stays valid, and `unparam` stays
   silent (a dropped parameter would have changed the audited call shapes instead).
 - **File sizes (contract gate "no file > 1,500 L").** `goal_admission.go` 1,593 -> 612 L;
-  `goal_admission_tx.go` 1,466 L; `goal_admission_tx_test.go` 319 L (6 tests) at the delivered
-  revision, 12 tests after the review-fix round (evidence §1, §7).
+  `goal_admission_tx.go` 1,465 L; `goal_admission_tx_test.go` 319 L (6 tests) at the delivered
+  revision, 12 tests after the review-fix round and 19 tests / 907 L after the review-round-1 fix
+  (evidence §1, §7, §11).
 - **Lint (primary/secondary).** Primary merged-config run: base 147 findings -> 147 at the apply
   revision; the `startGoalAdmission` gocyclo 277 row is resolved (`gocyclo` 64 -> 63), base's own
   `gocritic ifElseChain` moved with its code from `goal_admission.go` into the tx file, and the
@@ -387,3 +388,24 @@ review-fix round edits):
   updates. Evidence §8, apply subsection.
   The review-fix round then completed the seam matrix (12 tests, mutants M1-M14) and republished
   the record's numbers at the `fix1` revision; evidence §7 and the §8 review-fix round subsection.
+
+## Review-round-1 fix (2026-11-22, PR #234 review 1 — `fix2`)
+
+Findings P2-1 (incomplete seam matrix: no injected failure at the validate/attach/open boundaries,
+no retained-resume case, no post-launch cancellation or expiry case, and the reviewer's
+unknown-outcome mutant mA surviving), P3-1 (`abort`'s comment claimed a base-defers behaviour base
+did not have, and §4/§9 still described a slice-and-loop `abort`), P3-2 (stale PR body) and P3-3
+(`docs/TODO.md` citations pointing at `goal_admission.go` for code now in `goal_admission_tx.go`)
+were all fixed:
+
+- 7 new seam cases (`goal_admission_tx_test.go`, 19 tests total) drive `tx.run` through the
+  validate, attach and open phase boundaries, a retained (resume) admission, post-launch
+  cancellation and post-Open lease expiry; mutants M16-M22 (plus the reviewer's mA as M16) each go
+  red on their owning case, and M1-M15 were rebuilt from the delivered bytes and re-run (evidence
+  §7, §11).
+- `abort`'s comment is the 2-line hazard statement only; evidence §4/§9 and the F2 row now describe
+  the per-entry deferred calls and record the panic-isolation difference from base as harmless.
+- the PR body numbers, this plan and the evidence record were regenerated from the delivered bytes
+  (1,465 L / 67 methods + constructor / 7-line entry / 907 L / 19 tests / 22 mutants).
+- `docs/TODO.md`'s two entries cite `validateConfiguredHarness` and `resolveGoalAdapter` instead of
+  `goal_admission.go` (symbols, no line numbers).

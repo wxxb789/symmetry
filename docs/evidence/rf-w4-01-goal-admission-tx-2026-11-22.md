@@ -6,19 +6,22 @@ base coordinate: `b25e34ae` (the dispatch HEAD). Shape reference: `docs/evidence
 Revision labels: unlabelled line/range coordinates are `b25e34ae` base coordinates; the consumed
 review range is `40314211..84839346` (`40314211` = `b25e34ae` + the #220/#222/#223/#224 merges) and
 delivered-row numbers are labelled `84839346`; `fix1` labels the `84839346` tree plus the review-fix
-round edits, which is the tree every number in §1-§8 binds.
+round edits; `fix2` labels the PR #234 review-round-1 fix (the seam matrix, the `abort` comment,
+the citation and record updates of §11), which is the tree every unlabelled number in §1-§8 binds.
+Head-file line coordinates in §5-§6 are `fix2` coordinates; the `fix1` rows in §2 and §8 keep
+their revision's coordinates.
 
 ## 1. Deliverable shape (files, counts)
 
 | file | change | measure |
 |---|---|---|
-| `daemon/internal/app/goal_admission_tx.go` | new | 1,466 L (`fix1`): transaction object, 67 methods + the constructor + the `deferredCompensation` helper, compensation stack, phases |
+| `daemon/internal/app/goal_admission_tx.go` | new | 1,465 L (`fix2`): transaction object, 67 methods + the constructor + the `deferredCompensation` helper, compensation stack, phases |
 | `daemon/internal/app/goal_admission.go` | `startGoalAdmission` region replaced by the thin entry | 1,593 -> 612 lines; entry at `:249-255` (7 lines); `abandonGoalSession` and everything from `:256` code-identical (checked below) |
-| `daemon/internal/app/goal_admission_tx_test.go` | new | 570 L (`fix1`), 12 seam tests: 2 order/join probes at `abort` level, 6 driven through `tx.run` (fresh cancellation, pre-native write failure, post-handover outcome, whole-launch success, lease-expired process start, refused Pi bridge), 4 unit-level tx seams (queued-attach abort, clone/reuse arm+abort, native-owner handover, launch-phase arm/release); each has a red mutant (§7) |
+| `daemon/internal/app/goal_admission_tx_test.go` | new | 907 L (`fix2`), 19 seam tests: 2 order/join probes at `abort` level, 13 driven through `tx.run` (fresh cancellation, pre-native write failure, post-handover outcome, whole-launch success, lease-expired process start, refused Pi bridge, native Open failure, attach failure, model-profile refusal, retained resume success, retained Open failure, post-launch cancellation, post-Open lease expiry), 4 unit-level tx seams (queued-attach abort, clone/reuse arm+abort, native-owner handover, launch-phase arm/release); each has a red mutant (§7, §11) |
 | `scripts/ci/omo-control-native-evidence.py` | `SOURCE_PATHS` line only (R9) | +`daemon/internal/app/goal_admission_tx.go` |
 | `docs/design/harness.md` | citation-only (O23) | `goal_admission.go:263` -> `:249` (the delivered entry declaration) |
 | `docs/plans/…-rf-w4-01-goal-admission-tx-plan.md` | new plan + delivered-revision section | |
-| `docs/TODO.md` | unchanged | no slice TODO entry existed; none closed |
+| `docs/TODO.md` | citation-only (`fix2`) | no slice TODO entry existed and none closed: the two rf-w4-19/#217 entries that cited `goal_admission.go` for moved code now cite `validateConfiguredHarness` / `resolveGoalAdapter` in `goal_admission_tx.go` (§11) |
 
 `app.go` is **untouched** (`git diff --stat` shows no `app.go` entry): the entry keeps its
 signature and the caller at `app.go:1418` compiles unchanged.
@@ -84,7 +87,7 @@ method (`funcs`); every delivered value is inside 120/60/25.
 
 | base range | HEAD method(s) | base l/s/c | head l/s/c |
 |---|---|---|---|
-| 263-307 (locals + 3 defers) | `newGoalAdmissionTx` + `abort` + `deferredCompensation` + 5 entry methods | n/a (composite) | 13/7/1 + 10/7/1 + 6/1/3 |
+| 263-307 (locals + 3 defers) | `newGoalAdmissionTx` + `abort` + `deferredCompensation` + 5 entry methods | n/a (composite) | 13/7/1 + 9/7/1 + 6/1/3 |
 | 308-340 | `validateAdmissionEnvelope` | 33/22/10 | 35/24/10 |
 | 341-358 | `validateConfiguredHarness` | 18/13/6 | 23/18/6 |
 | 364-383 | `validateAdapterInvocationArgs` | 20/12/9 | 21/13/9 |
@@ -142,9 +145,9 @@ choice). `openGoalTurnAndSettleTerminalOwnership`'s sub-methods are
 
 Base: three anonymous defers (registration order `:271`, `:276`, `:441`) execute LIFO —
 bridge close, clone abort, reuse retire, unknown-outcome wrap, launch-phase release. HEAD: one
-`abort(ctx, returnErr)` in the entry, iterating five entries in exactly that order (`abort`'s
-slice literal), each `armed` at the point its base handle became live and `released` where base set
-a transfer flag:
+`abort(ctx, returnErr)` in the entry, running five entries in exactly that order through one
+deferred call per entry (`abort` registers the `deferredCompensation` frames in reverse), each
+`armed` at the point its base handle became live and `released` where base set a transfer flag:
 
 | base defer / body | HEAD entry | armed (base) | released (base) |
 |---|---|---|---|
@@ -172,9 +175,13 @@ Per-exit-path participation (which entries run at HEAD, same order):
 | success (final `return nil`) | release (or released inline), wraps skipped | same |
 
 `abort` runs the armed-and-unreleased entries in the fixed order and threads `returnErr` through
-them, so `errors.Join` argument order is the base order (each entry from its own deferred call, so
-a panic inside one compensation still runs the rest, as the base three-defers unwind did; `settle` test
-`TestGoalAdmissionTxCompensationErrorsJoinInExecutionOrder` pins the order textually).
+them, so `errors.Join` argument order is the base order. Each entry runs from its own deferred
+call, so a panic inside one compensation cannot skip the remaining compensations; base ran the
+clone abort, reuse retire and unknown-outcome wrap inside a single anonymous defer, where a panic
+in the clone abort skipped the other two. That difference is not observable: clone and reuse are
+mutually exclusive by `SessionMode` (`handOffLaunchToNativeOwner` releases the one that exists),
+and the wrap only rewrites a return value a panic discards. The settle test
+`TestGoalAdmissionTxCompensationErrorsJoinInExecutionOrder` pins the order textually.
 
 ## 5. Durable writes, calls, locks
 
@@ -254,30 +261,34 @@ Each mutant is a standalone copy of `goal_admission_tx.go` applied alone through
 is modified and nothing needs reverting), the owning test run, then the same command without the
 overlay to show green. Mutant copies, overlays and raw outputs:
 `<HOST-PATH>/.local/state/gdd/scratch/w4-01/fix1/mutants/` (`M1`-`M15`; `control.out.txt` is the
-unmutated run). Control: `go test -count=1 -run '^TestGoalAdmissionTx' ./internal/app/` without an
-overlay — `ok github.com/wxxb789/symmetry/daemon/internal/app 1.695s`, exit 0 (all 12 tests).
+unmutated run) and `…/fix2/mutants/` (`M1`-`M15` rebuilt and re-run on the `fix2` bytes, `M16`-`M22`
+new; §11). Control at `fix2`: `go test -count=1 -run '^TestGoalAdmissionTx' ./internal/app/`
+without an overlay — `ok github.com/wxxb789/symmetry/daemon/internal/app 3.625s`, exit 0 (all 19
+tests). The rows below carry the `fix2` failure lines (`M*-r2.out.txt`); the `fix1` table's line
+numbers were two lower (the round-2 test import block).
 
 | # | test | mutant | observed failure (exit 1) |
 |---|---|---|---|
-| M1 | `…CompensationOrderMatchesTheBaseDeferOrder` | swap the bridge and clone deferred registrations in `abort` | `:102: compensation order = "clone-refusal,provider-bridge,clone-reuse-refusal,native-start-outcome,linux-v2-launch-phase", want "provider-bridge,clone-refusal,…"` |
-| M2 | same | drop the `released` check from `deferredCompensation` | `:112: compensation order after transfers = "provider-bridge,clone-refusal,clone-reuse-refusal,…", want "clone-reuse-refusal,native-start-outcome,linux-v2-launch-phase"` |
-| M3 | same | register the bridge entry first in `abort` (so it executes last) | `:102: compensation order = "clone-refusal,clone-reuse-refusal,native-start-outcome,linux-v2-launch-phase,provider-bridge", want "provider-bridge,clone-refusal,…"` |
-| M4 | `…RunsOnlyTheOutcomeCompensationAfterNativeHandover` | drop `tx.bridgeCompensation.released = true` in `launchNativeProcess` | `:308: the session handover did not release the provider-bridge compensation` |
-| M5 | same | drop `tx.nativeOutcomeCompensation.armed = true` in `launchNativeProcess` | `:305: the native start attempt did not arm the outcome compensation` |
-| M6 | `…SettlesFreshCancellationWithoutCompensation` | arm the outcome entry in `newGoalAdmissionTx` | `:180: a cancelled fresh launch armed the native-start outcome compensation` |
-| M7 | same | drop the `abortGoalSessionLaunchBeforeNativeStart` call from `abortFreshLaunchIfCancelled` | `:190: cancelled fresh launch compensation = []state.GoalSessionJournal{{…LocalHandleID:"1a4e6d24-…"…}}` (the session never closed) |
-| M8 | `…AbortsQueuedAttachBeforeNativeStart` | drop the `discardUnreadyGoalSessionAttachDelivery` call from `abortFreshLaunchIfCancelled` | `:224: cancelled launch compensation = abort 1, discard 0; want 1 and 1` |
-| M9 | `…CompletesAWholeLaunchWithoutEffectfulCompensation` | make the outcome entry effectful on the success path (synthetic error instead of nil for `returnErr == nil`) | `:350: abort() after a successful launch returned mutant: effectful outcome compensation on the success path, want no compensation effect` |
-| M10 | `…SettlesLeaseExpiredProcessStart` | make `settleLeaseExpiredProcessStart` return `(false, nil)` | `:376: lease expiry settled after the native session Open: ["start","details","open","details","close","wait"]` |
-| M11 | `…HandsCloneCompensationsToTheNativeOwner` | drop the reuse release mark in `handOffLaunchToNativeOwner` | `:454: handOffLaunchToNativeOwner() clone released = true, reuse released = false; want both transferred` |
-| M12 | `…ReleasesLinuxV2LaunchPhaseOnce` | drop the `tx.releaseLinuxV2LaunchPhase()` call from `releaseNativeLaunchPhase` | `:482: launch-phase release calls = 0, want exactly 1` |
-| M13 | `…ClosesUnownedProviderBridgeForReal` | replace `closeUnownedProviderBridge`'s body with `return returnErr` | `:551: the real closeUnownedProviderBridge body left the provider bridge reachable` |
-| M14 | `…SettlesFreshCancellationWithoutCompensation` + `…AbortsQueuedAttachBeforeNativeStart` | return the unsettled signal from `abortFreshLaunchIfCancelled` itself (both returns) | `:177: cancelled fresh launch error = mark Goal session launch: goal session is closed, want the compensated settle path`; `:221: abortFreshLaunchIfCancelled() = false, <nil>; want a compensated cancellation` |
+| M1 | `…CompensationOrderMatchesTheBaseDeferOrder` | swap the bridge and clone deferred registrations in `abort` | `:104: compensation order = "clone-refusal,provider-bridge,clone-reuse-refusal,native-start-outcome,linux-v2-launch-phase", want "provider-bridge,clone-refusal,…"` |
+| M2 | same | drop the `released` check from `deferredCompensation` | `:114: compensation order after transfers = "provider-bridge,clone-refusal,clone-reuse-refusal,…", want "clone-reuse-refusal,native-start-outcome,linux-v2-launch-phase"` |
+| M3 | same | register the bridge entry first in `abort` (so it executes last) | `:104: compensation order = "clone-refusal,clone-reuse-refusal,native-start-outcome,linux-v2-launch-phase,provider-bridge", want "provider-bridge,clone-refusal,…"` |
+| M4 | `…RunsOnlyTheOutcomeCompensationAfterNativeHandover` | drop `tx.bridgeCompensation.released = true` in `launchNativeProcess` | `:310: the session handover did not release the provider-bridge compensation` |
+| M5 | same | drop `tx.nativeOutcomeCompensation.armed = true` in `launchNativeProcess` | `:307: the native start attempt did not arm the outcome compensation` |
+| M6 | `…SettlesFreshCancellationWithoutCompensation` | arm the outcome entry in `newGoalAdmissionTx` | `:182: a cancelled fresh launch armed the native-start outcome compensation` |
+| M7 | same | drop the `abortGoalSessionLaunchBeforeNativeStart` call from `abortFreshLaunchIfCancelled` | `:192: cancelled fresh launch compensation = []state.GoalSessionJournal{{…LocalHandleID:"1a4e6d24-…"…}}` (the session never closed) |
+| M8 | `…AbortsQueuedAttachBeforeNativeStart` | drop the `discardUnreadyGoalSessionAttachDelivery` call from `abortFreshLaunchIfCancelled` | `:226: cancelled launch compensation = abort 1, discard 0; want 1 and 1` |
+| M9 | `…CompletesAWholeLaunchWithoutEffectfulCompensation` | make the outcome entry effectful on the success path (synthetic error instead of nil for `returnErr == nil`) | `:352: abort() after a successful launch returned mutant: effectful outcome compensation on the success path, want no compensation effect` |
+| M10 | `…SettlesLeaseExpiredProcessStart` | make `settleLeaseExpiredProcessStart` return `(false, nil)` | `:378: lease expiry settled after the native session Open: ["start","details","open","details","close","wait"]` |
+| M11 | `…HandsCloneCompensationsToTheNativeOwner` | drop the reuse release mark in `handOffLaunchToNativeOwner` | `:456: handOffLaunchToNativeOwner() clone released = true, reuse released = false; want both transferred` |
+| M12 | `…ReleasesLinuxV2LaunchPhaseOnce` | drop the `tx.releaseLinuxV2LaunchPhase()` call from `releaseNativeLaunchPhase` | `:484: launch-phase release calls = 0, want exactly 1` |
+| M13 | `…ClosesUnownedProviderBridgeForReal` | replace `closeUnownedProviderBridge`'s body with `return returnErr` | `:553: the real closeUnownedProviderBridge body left the provider bridge reachable` |
+| M14 | `…SettlesFreshCancellationWithoutCompensation` + `…AbortsQueuedAttachBeforeNativeStart` | return the unsettled signal from `abortFreshLaunchIfCancelled` itself (both returns) | `:179: cancelled fresh launch error = mark Goal session launch: goal session is closed, want the compensated settle path`; `:223: abortFreshLaunchIfCancelled() = false, <nil>; want a compensated cancellation` |
 
 The candidate replaced at the previous revision — the same unsettled signal returned at the first
 `abortFreshLaunchIfCancelled` call site inside `prepareFreshGoalSessionForLaunch` (`M15`) —
-**still survives** at `fix1`: `go test -count=1 -overlay …/M15.json -run '^TestGoalAdmissionTx'`
-is `ok github.com/wxxb789/symmetry/daemon/internal/app 1.718s`, exit 0. Settlement happens at an
+**still survives** at `fix2`: `go test -count=1 -overlay …/M15-r2.json -run '^TestGoalAdmissionTx'`
+is `ok github.com/wxxb789/symmetry/daemon/internal/app 33.603s`, exit 0 (the same run was
+`ok … 1.718s` at `fix1`). Settlement happens at an
 adjacent check with the same settled outcome (closed, unstarted, fully compensated session, no
 `"launch_state":"launching"` write), so the delivered tests pin the closure's contract (M14 is red)
 but not which adjacent call site settles a fresh cancellation.
@@ -371,7 +382,7 @@ none was judged invalid. What changed:
 | finding | change |
 |---|---|
 | F1 | `acquireNativeLaunchPhase`/`prepareLinuxCloneWorkspace` store and arm the returned handle before the `err` check again (base's assign-then-check), so a `(non-nil handle, non-nil error)` callee result cannot skip its compensation |
-| F2 | `abort` registers one deferred call per entry (reverse registration, named result, `deferredCompensation` helper) so a panic inside one compensation still runs the remaining entries, as the base three anonymous defers did |
+| F2 | `abort` registers one deferred call per entry (reverse registration, named result, `deferredCompensation` helper) so a panic inside one compensation cannot skip the remaining entries; base's second anonymous defer held clone abort, reuse retire and the unknown-outcome wrap in one body, so a panic there skipped the other two — harmless, because clone and reuse are mutually exclusive by `SessionMode` and the wrap only rewrites a return value a panic discards |
 | F3 | seam matrix completed: 6 new tests (whole-launch success, lease-expired process start, clone/reuse real bodies, native-owner handover, launch-phase arm/release, refused Pi bridge) plus mutants M9-M13; coverage of the previously unexecuted compensation bodies is recorded in §7 and §10 |
 | F4 | this record republished at `fix1`: §7 re-run with the delivered line numbers and the `fix1/mutants/` artifacts, §8 file sizes re-derived, the citation-gate row states the real basis (audited corpus) |
 | F5 | §1/§3/§5/§6 numbers and line references re-measured at `fix1` (calls 414/468, lock sites, composite rows, §6 examples), `app.go:1418` everywhere, the plan's declaration-line and O23 rows corrected |
@@ -407,7 +418,8 @@ Candidates from the delivered diff, each with the ablation tried or the reason i
    failure mode; dedup belongs to a later slice that can add its own mutants.
 4. **`typeNativeStartOutcome(_ context.Context, ...)` and `releaseNativeLaunchPhase(_ ...)`** —
    retained blank parameters. Per-entry signatures would need a type switch in `abort`; the
-   uniform `func(context.Context, error) error` keeps one loop and the order auditable.
+   uniform `func(context.Context, error) error` keeps one `deferredCompensation` frame per entry
+   and the order auditable.
 5. **`linuxV2Environment`** — the field kept the base local's name rather than a shorter
    `linuxV2Env` (ablation tried and reverted for audit fidelity; the plan's field map names it).
 6. **No diagnostic trace field on the tx** — the seam tests wrap `entry.run` from the same package
@@ -435,13 +447,20 @@ statements.
   (`linux_owner_witness_unsupported.go`), so the Linux store/journal path behind it and
   `launchNativeProcess`'s confirm-path auto-release still run only in the Linux v2 suites; the
   bridge case skips on Linux for the missing non-Linux Pi provider-extension fixture (§8's WSL row).
-- The WSL `-race` oracle inherits the pre-existing loopback-`httptest` stall recorded at W4-17a and
-  W4-17b for `TestClaimAdmissionInputFailsClosedBeforeWorkspaceOrProcessStart`. It was reproduced
-  exactly: the `-v` full-package run passes 18 tests with no failure and no `DATA RACE`, then
-  freezes at that test's `mixed_null_marker_survives_replay_and_restart` subtest (§8), so no
-  full-suite green claim is made for Linux. That test is unchanged by this slice and exercises no
-  goal-admission path (it passes in the Windows suite); the recorded Linux oracle is the
-  touched-path `-race` run, 22 tests + 7 subtests green, which excludes it.
+- The worker's own WSL `-race` attempts inherited the pre-existing loopback-`httptest` stall
+  recorded at W4-17a and W4-17b for
+  `TestClaimAdmissionInputFailsClosedBeforeWorkspaceOrProcessStart`: the `-v` full-package run
+  passes 18 tests with no failure and no `DATA RACE`, then freezes at that test's
+  `mixed_null_marker_survives_replay_and_restart` subtest (§8). The conductor then ran the
+  full-package oracle at `ca4927fa` in a fresh network namespace with loopback up and it is green
+  (§11): `ok github.com/wxxb789/symmetry/daemon/internal/app 726.951s`, exit 0, go1.27.0
+  linux/amd64. That dispatch tree's production statements are the delivered ones — the only
+  production edit after `ca4927fa` is the `abort` comment text (`git diff ca4927fa` over
+  `goal_admission_tx.go` is that hunk alone) — so the oracle covers the delivered behaviour; the
+  `fix2` seam cases themselves are synchronous single-goroutine calls into `tx.run` and were run
+  by the Windows suite, the focused `-run` set and the M-series overlay runs. The earlier
+  touched-path `-race` run at `fix1` (22 tests + 7 subtests green, excluding the stalling test)
+  remains the worker-side race evidence.
 - One defect class (dropped settle/error signal) was found twice by the Windows suite rather than
   by the audits; `guards2.py` was written in response and is shape-based, so an unusual call shape
   could still slip through it.
@@ -450,3 +469,133 @@ statements.
   cancellation and settles identically (§7, M15). No test therefore pins *which*
   of the two adjacent sites settles a fresh cancellation — only that the session ends closed,
   unstarted and fully compensated.
+- The retained *Linux clone reuse* arm is not reachable through `tx.run` for the kinds that can
+  run on this host: `requiresLinuxV2NativeOwner` is `linux && (Pi || OpenCode)`, and the shared
+  `fakeWorkspace` refuses `RecoverLinuxCloneReuse` ("test fake does not recover retained Linux
+  clones"), so the retained-resume case uses OMP and asserts the *absence* of clone/reuse arming
+  (§11). The reuse entry's own body is pinned at unit level by M11 (§7).
+- Post-turn settlement stays outside this matrix: `settleLeaseExpiredTurn` 11.5% and
+  `settleCancelledTurnStart` 33.3% under the seam-only run (unchanged from the review's measure);
+  those paths are driven by the lifecycle/terminal suites (`native_settlement_*`, `harness_test.go`
+  StartTurn terminal cases), not by the phase-boundary seam cases this round added.
+
+## 11. Review-round-1 fix (PR #234 review 1, 2026-11-22) — `fix2`
+
+Input: `234-opus-review-1.md` (read-only whole-increment review of `ca4927fa`), findings P2-1
+(incomplete seam matrix; the open-phase typing mutant mA survives the whole Windows suite), P3-1
+(`abort`'s comment and evidence §4/§9), P3-2 (PR body numbers) and P3-3 (`docs/TODO.md`
+citations). All four are fixed; none was judged invalid. Every number and gate below is measured on
+the `fix2` tree.
+
+### 11.1 P2-1 — seam matrix completed (7 cases, 19 tests total)
+
+Each case drives `tx.run` with the shared doubles only (`fakeNativeGoalSession.onOpen`,
+`fakeNativeGoalAdapter.onStart`, `nativeAdmissionControl`) and adds no fake type:
+
+| # | new case | boundary / path driven | key assertions |
+|---|---|---|---|
+| 1 | `…SettlesNativeOpenFailureAsAnUnknownOutcome` | open phase (untyped `staged.Open` error) | open-phase wrapper around the injected error, `close` called, no `start_turn`, unready attach discarded, workspace retained, session uncertain, `abort` types the failure `unknown_outcome` |
+| 2 | `…SettlesAttachFailureBeforeTheNativeOpen` | attach phase (`attachNativeSession` refuses a torn-down run) | `start` + compensation `close`, no `open`/`start_turn`, session uncertain, `abort` types `unknown_outcome` and keeps the text |
+| 3 | `…RejectsAMismatchedModelProfileBeforeAnyAcquisition` | validate phase (`model_profile` mismatch) | exact refusal text, no adapter call, no compensation entry armed/released, no Goal session persisted, `abort` returns the value unchanged and untyped |
+| 4 | `…ResumesARetainedNativeSession` | retained (resume) success through `tx.run` | `StartRequest.Resume` equals the retained handle, journal `running`, bridge/clone/reuse unarmed, outcome entry armed, `abort` runs only the no-op outcome entry |
+| 5 | `…SettlesRetainedOpenFailureWithoutDiscardingItsReadyAttach` | retained (resume) + open failure | exact wrapper text (no discard error joined), `close`, ready attach barrier survives, session uncertain, `abort` types `unknown_outcome` |
+| 6 | `…SettlesPostLaunchCancellationBeforeTheTurn` | post-launch cancellation (settled `settlePublishedCancellation`) | `tx.run` returns nil, session closed, no `start_turn`, unready attach discarded, `abort` no-op |
+| 7 | `…SettlesLeaseExpiryAfterTheNativeOpen` | post-Open lease expiry (`settleLeaseExpiredAttachedStart`) | typed `process_failure` with the watchdog reason, `open` + compensation `close`, no `start_turn`, session uncertain (not closed), the settled failure is preserved |
+
+Seam-only coverage (`go test -count=1 -coverprofile=… -run '^TestGoalAdmissionTx' ./internal/app/`
+then `go tool cover -func`; `fix2/logs/cover-seam-func.txt`), the review's measure -> `fix2`:
+
+| function | review (`fix1`) | `fix2` |
+|---|---:|---:|
+| `attachGoalNativeSession` | 25.0% | 91.7% |
+| `openGoalNativeSession` | 17.9% | 57.1% |
+| `settlePublishedCancellation` | 0.0% | 75.0% |
+| `prepareRetainedGoalSessionForLaunch` | 0.0% | 62.5% |
+| `recoverRetainedGoalSession` | 0.0% | 55.6% |
+| `rebindRetainedGoalSession` | 0.0% | 25.0% |
+| `settleLeaseExpiredAttachedStart` | 25.0% | 83.3% |
+| `abort` / `deferredCompensation` / `run` | n/a (0.0% for `settlePublishedCancellation`) | 100% |
+
+Package statements under that run 9.4% -> 13.3%. `settleLeaseExpiredTurn` (11.5%) and
+`settleCancelledTurnStart` (33.3%) are unchanged — post-turn settlement is the lifecycle suites'
+surface (§10).
+
+### 11.2 Red mutants at `fix2`
+
+M1-M15 were rebuilt from the delivered bytes (their recorded replacement recovered by diffing the
+`fix1/mutants/` copies against `ca4927fa`'s file) and re-run; M16-M22 are this round's mutants,
+including the reviewer's mA as M16. Every run is `go test -count=1 -overlay
+fix2/mutants/<name>.json -run <owning test> ./internal/app/` (nothing in the worktree is modified);
+raw outputs `fix2/mutants/<name>.out.txt` and `M*-r2.out.txt`, summary
+`fix2/logs/mutants-r2.txt`.
+
+| mutant | owning case | mutation | observed failure (exit 1) |
+|---|---|---|---|
+| M16 (reviewer mA) | `…SettlesNativeOpenFailureAsAnUnknownOutcome` | release `nativeOutcomeCompensation` on entering the `staged.Open` error branch | `:571: Open failure outcome compensation = armed true, released true; want an owned unknown-outcome wrap` |
+| M17 | `…SettlesAttachFailureBeforeTheNativeOpen` | drop `abandonGoalSession` from the attach error branch | `:631: attach failure native calls = []string{"start", "details"}, want Start and the compensation Close` |
+| M18 | `…RejectsAMismatchedModelProfileBeforeAnyAcquisition` | delete the `model_profile` check | `:660: mismatched model profile = <nil>, want "Goal admission model_profile \"other-profile\" does not match configured runtime agent_profile \"local\""` |
+| M19 | `…ResumesARetainedNativeSession` | drop `tx.resume = &resume` | `:696: retained resume request = (*harness.ResumeHandle)(nil), want harness.ResumeHandle{LocalHandleID:"00000000-…-088", NativeSessionID:"native-retained", NativeSessionFilename:"<HOST-PATH>", WorkspaceFingerprint:"sha256:aaa…", NativeVersion:"18.20.0"}` |
+| M20 | `…SettlesRetainedOpenFailureWithoutDiscardingItsReadyAttach` | discard unconditionally in the Open error branch | `:727: retained Open failure = open native Goal session: retained native Goal session Open refused` / `goal delivery conflicts with pending receipt, want only the open-phase wrapper` |
+| M21 | `…SettlesPostLaunchCancellationBeforeTheTurn` | invert the `isCancelled` guard in `settlePublishedCancellation` | `:777: post-launch cancellation error = open native Goal session: native Goal session Open refused after the cancellation, want the settled cancellation` |
+| M22 | `…SettlesLeaseExpiryAfterTheNativeOpen` | claim `attached = true` in `settleLeaseExpiredAttachedStart` | `:834: post-Open lease expiry Goal session = []state.GoalSessionJournal{{…HarnessKind:"codex"…}}, error = <nil>; want one uncertain launch` |
+| M1-M14 | as §7 | review-fix-round mutants, rebuilt and re-run on the delivered bytes | §7 rows, all exit 1 (lines +2 from the round-2 import block) |
+| M15 | `…SettlesFreshCancellationWithoutCompensation` call site | review-fix-round masked candidate, re-run | **exit 0 (survivor, expected)**: `ok … 33.603s` (33.603 s = the 19-test overlay run) |
+
+M20 is a store-enforced invariant rather than a tx invariant:
+`state.DiscardUnreadyGoalSessionAttachDelivery` returns `ErrGoalDeliveryConflict` and keeps a
+*ready* delivery, so only the joined error text shows the mutant; the case therefore pins the
+exact wrapper text (`goal delivery conflicts with pending receipt`). M15 remains the one masked
+mutant of the series (§7, §10).
+
+### 11.3 P3-1 / P3-2 / P3-3
+
+- **P3-1** — `abort`'s comment is now the 2-line hazard statement only (no base-defer claim, no
+  revision reference): "Deferred in reverse registration order so entries run bridge, clone, reuse,
+  outcome, launch-phase: one entry's panic cannot skip the remaining compensations." §4's stack
+  paragraph and closing paragraph and §9 item 4 describe the per-entry deferred calls, and the F2
+  row records the panic-isolation difference from base as harmless (clone and reuse are mutually
+  exclusive by `SessionMode`; the wrap only rewrites a return value a panic discards). The trim
+  moved every later head-file line by one, which aligns §5's lock sites and §6's T1/T2/T4/T6
+  examples with the delivered file.
+- **P3-2** — the PR body, this record and the plan were regenerated from the delivered bytes:
+  `goal_admission_tx.go` 1,465 L with 67 tx methods + constructor + the `deferredCompensation`
+  helper (max 19 gocyclo / 42 lines / 29 statements), the entry 7 lines at
+  `goal_admission.go:249-255` (`goal_admission.go` 612 L), `goal_admission_tx_test.go` 907 L / 19
+  tests, 22 named mutants (M1-M22).
+- **P3-3** — `docs/TODO.md`'s rf-w4-19 entry cites `validateConfiguredHarness`
+  (`goal_admission_tx.go`) for the `nativeGoalHarnessKind` consumer and the #217 flake entry cites
+  `resolveGoalAdapter` (`goal_admission_tx.go`) for the deadline refusal; symbols only, no line
+  numbers.
+
+### 11.4 Conductor-run race oracle (contract amendment 2026-11-22)
+
+Full-package WSL `-race` at `ca4927fa` inside a fresh network namespace with loopback up:
+
+```
+wsl -d Ubuntu-24.04 -u root -- unshare -n bash -c 'ip link set lo up && cd <WORKTREE>/daemon && su accept -c "PATH=$PATH go test -count=1 -race -timeout 60m ./internal/app/..."'
+```
+
+Result: `ok github.com/wxxb789/symmetry/daemon/internal/app 726.951s`, exit 0 (go1.27.0
+linux/amd64). Conductor-run; the worker did not re-run it (the fresh namespace removed the stall
+this record's §8 rows describe). The delivered production statements are unchanged since
+`ca4927fa` (`git diff ca4927fa -- daemon/internal/app/goal_admission_tx.go` is the `abort` comment
+hunk alone), so the oracle covers the delivered behaviour (§10).
+
+### 11.5 Gates (`fix2`)
+
+| gate | command (cwd) | result |
+|---|---|---|
+| gofmt | `gofmt -l internal/app/goal_admission.go internal/app/goal_admission_tx.go internal/app/goal_admission_tx_test.go` (`daemon/`) | no output, exit 0 |
+| vet | `go vet ./...` (`daemon/`) | no output, exit 0 |
+| build linux | `GOOS=linux go build ./...` (`daemon/`) | no output, exit 0 |
+| build linux/arm64 | `GOOS=linux GOARCH=arm64 go build ./...` (`daemon/`) | no output, exit 0 |
+| build windows | `GOOS=windows go build ./...` (`daemon/`) | no output, exit 0 |
+| seam tests + write-site scan | `go test -count=1 -timeout 10m -v -run '^TestGoalAdmissionTx\|^TestRunLifecycleWritesStayInTheModule$' ./internal/app/` | `ok … 21.733s`, exit 0: 19 seam tests PASS + `TestRunLifecycleWritesStayInTheModule` PASS |
+| full package suite (Windows) | `go test -count=1 -timeout 25m ./internal/app/` (`daemon/`) | `ok github.com/wxxb789/symmetry/daemon/internal/app 339.544s`, exit 0 |
+| lint primary | `cd daemon && GOOS=linux golangci-lint run --config .golangci.yml --max-issues-per-linter=0 --max-same-issues=0 ./internal/app/...` (pinned 2.15.0) | exit 1 (findings exist, as at base), **147 rows** with the `fix1` per-linter set (copyloopvar 2, errorlint 6, exhaustive 9, funlen 2, gocritic 22, gocyclo 63, ineffassign 3, nilerr 4, staticcheck 15, unconvert 1, unparam 19, whitespace 1); the normalised per-row diff (message + file, line/column stripped) against `fix1/logs/lint-primary.txt` is **empty**; the only tx-file row is the moved `gocritic ifElseChain` (`goal_admission_tx.go:999`); `fix2/logs/lint-primary-r2.txt` |
+| whitespace | `git diff --check` (working tree and `$BASE...HEAD`) | no output, exit 0 both |
+| record cleanliness | `python scripts/ci/check-record-cleanliness.py --base $(git merge-base HEAD origin/main) --head HEAD` | exit 0 at the pushed head: `1 changed record(s) pass the root-only check` |
+| citation gate (§11) | `python scripts/ci/check-citation-existence.py --base $(git merge-base HEAD origin/main) --head HEAD` | exit 0: `no audited document added or modified …; nothing to check` (the audited corpus is `docs/runbooks/**`, `docs/design/quality.md`, `docs/archive/CLOSED-TODO.md`; §8's row records the same basis) |
+| R9 native-evidence gate | `python scripts/ci/test-omo-control-native-evidence.py` | `Ran 10 tests in 5.901s … OK`, exit 0 |
+| mutant set | `python <HOST-PATH>/…/fix2/mutate2.py` | exit 0: M1-M14 and M16-M22 red on their owning cases, M15 green (documented survivor); `fix2/logs/mutants-r2.txt` |
+| expected-red gates | as at base: lint exits 1 (pre-existing findings exist); the `-race` gate is conductor-owned (§11.4) and Windows `-race` is refused (`-race requires cgo`, §8) | — |

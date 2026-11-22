@@ -103,9 +103,8 @@ func newGoalAdmissionTx(daemon *daemon, key state.RunKey, claim protocol.ClaimRe
 
 func (tx *goalAdmissionTx) abort(ctx context.Context, returnErr error) (aborted error) {
 	aborted = returnErr
-	// Registered in reverse execution order: the entries run in the base LIFO order (bridge,
-	// clone, reuse, outcome, launch-phase) and one entry's panic still runs the remaining
-	// entries, as the base three anonymous defers did.
+	// Deferred in reverse registration order so entries run bridge, clone, reuse, outcome,
+	// launch-phase: one entry's panic cannot skip the remaining compensations.
 	defer deferredCompensation(&tx.launchPhaseCompensation, ctx, &aborted)()
 	defer deferredCompensation(&tx.nativeOutcomeCompensation, ctx, &aborted)()
 	defer deferredCompensation(&tx.reuseCompensation, ctx, &aborted)()

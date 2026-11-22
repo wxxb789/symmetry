@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -549,6 +551,341 @@ func TestGoalAdmissionTxClosesUnownedProviderBridgeForReal(t *testing.T) {
 	}
 	if providerBridgeReachable(t, tx.providerBridge) {
 		t.Fatal("the real closeUnownedProviderBridge body left the provider bridge reachable")
+	}
+}
+
+func TestGoalAdmissionTxSettlesNativeOpenFailureAsAnUnknownOutcome(t *testing.T) {
+	app, store, session, key, claim, admission := nativeAdmissionFixture(t)
+	app.running[key] = &runningRun{runLifecycle: runLifecycle{starting: true, claimed: true}}
+	openFailure := errors.New("native Goal session Open refused")
+	session.onOpen = func() error { return openFailure }
+
+	tx := newGoalAdmissionTx(app, key, claim, admission, nil)
+	probe := newGoalAdmissionCompensationProbe(tx)
+	probe.observeDelegate()
+	runErr := tx.run(context.Background())
+	if runErr == nil || !errors.Is(runErr, openFailure) || !strings.Contains(runErr.Error(), "open native Goal session: ") {
+		t.Fatalf("native Open failure = %v, want the open-phase wrapper around %v", runErr, openFailure)
+	}
+	if !tx.nativeOutcomeCompensation.armed || tx.nativeOutcomeCompensation.released {
+		t.Fatalf("Open failure outcome compensation = armed %t, released %t; want an owned unknown-outcome wrap",
+			tx.nativeOutcomeCompensation.armed, tx.nativeOutcomeCompensation.released)
+	}
+	calls := session.callsSnapshot()
+	if !slices.Contains(calls, "close") {
+		t.Fatalf("Open failure did not close the returned native session: %#v", calls)
+	}
+	if slices.Contains(calls, "start_turn") {
+		t.Fatalf("Open failure crossed into the native turn: %#v", calls)
+	}
+	returnErr := tx.abort(context.Background(), runErr)
+	if want := "native-start-outcome"; probe.sequence() != want {
+		t.Fatalf("Open failure compensation sequence = %q, want %q", probe.sequence(), want)
+	}
+	if !errors.Is(returnErr, openFailure) {
+		t.Fatalf("abort() lost the Open failure: %v", returnErr)
+	}
+	if reason, typed := taskResultFailureReason(returnErr); !typed || reason != protocol.TaskResultReasonUnknownOutcome {
+		t.Fatalf("abort() left the Open failure untyped: %v (reason %q, typed %t)", returnErr, reason, typed)
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, present := pendingSessionAttachDelivery(journal, tx.localHandleID); present {
+		t.Fatalf("Open failure kept the unready attach delivery: %#v", journal.PendingGoalDeliveries)
+	}
+	if !journal.RetainWorkspace {
+		t.Fatalf("Open failure did not retain the unproven workspace: %#v", journal)
+	}
+	assertGoalSessionUncertain(t, store, "Open failure")
+}
+
+func TestGoalAdmissionTxSettlesAttachFailureBeforeTheNativeOpen(t *testing.T) {
+	app, store, session, key, claim, admission := nativeAdmissionFixture(t)
+	active := &runningRun{runLifecycle: runLifecycle{starting: true, claimed: true}}
+	app.running[key] = active
+	adapterValue, err := app.harnessRegistry.Lookup(harness.KindCodex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := adapterValue.(*fakeNativeGoalAdapter)
+	adapter.onStart = func(harness.StartRequest, *fakeNativeGoalSession) error {
+		app.mu.Lock()
+		if app.running[key] == active {
+			delete(app.running, key)
+		}
+		app.mu.Unlock()
+		return nil
+	}
+
+	tx := newGoalAdmissionTx(app, key, claim, admission, nil)
+	probe := newGoalAdmissionCompensationProbe(tx)
+	probe.observeDelegate()
+	runErr := tx.run(context.Background())
+	if runErr == nil || !strings.Contains(runErr.Error(), "Goal run is no longer active") {
+		t.Fatalf("attach failure = %v, want the publication refusal of a torn-down run", runErr)
+	}
+	calls := session.callsSnapshot()
+	if !slices.Contains(calls, "start") || !slices.Contains(calls, "close") {
+		t.Fatalf("attach failure native calls = %#v, want Start and the compensation Close", calls)
+	}
+	if slices.Contains(calls, "open") || slices.Contains(calls, "start_turn") {
+		t.Fatalf("attach failure crossed the Open boundary: %#v", calls)
+	}
+	assertGoalSessionUncertain(t, store, "attach failure")
+	returnErr := tx.abort(context.Background(), runErr)
+	if want := "native-start-outcome"; probe.sequence() != want {
+		t.Fatalf("attach failure compensation sequence = %q, want %q", probe.sequence(), want)
+	}
+	if !errors.Is(returnErr, runErr) || returnErr.Error() != runErr.Error() {
+		t.Fatalf("attach failure compensation changed the failure: %v", returnErr)
+	}
+	if reason, typed := taskResultFailureReason(returnErr); !typed || reason != protocol.TaskResultReasonUnknownOutcome {
+		t.Fatalf("attach failure was left untyped: %v (reason %q, typed %t)", returnErr, reason, typed)
+	}
+}
+
+func TestGoalAdmissionTxRejectsAMismatchedModelProfileBeforeAnyAcquisition(t *testing.T) {
+	app, store, session, key, claim, admission := nativeAdmissionFixture(t)
+	app.running[key] = &runningRun{runLifecycle: runLifecycle{starting: true, claimed: true}}
+	admission.ModelProfile = "other-profile"
+
+	tx := newGoalAdmissionTx(app, key, claim, admission, nil)
+	probe := newGoalAdmissionCompensationProbe(tx)
+	probe.observe(false)
+	runErr := tx.run(context.Background())
+	want := fmt.Sprintf("Goal admission model_profile %q does not match configured runtime agent_profile %q", "other-profile", app.config.Runtime.AgentProfile)
+	if runErr == nil || runErr.Error() != want {
+		t.Fatalf("mismatched model profile = %v, want %q", runErr, want)
+	}
+	if calls := session.callsSnapshot(); len(calls) != 0 {
+		t.Fatalf("mismatched model profile reached the native adapter: %#v", calls)
+	}
+	for _, entry := range probe.entries {
+		if entry.armed || entry.released {
+			t.Fatalf("mismatched model profile armed compensation %q: armed %t, released %t", probe.names[entry], entry.armed, entry.released)
+		}
+	}
+	if returnErr := tx.abort(context.Background(), runErr); !errors.Is(returnErr, runErr) || returnErr.Error() != runErr.Error() {
+		t.Fatalf("abort() changed the validation failure: %v", returnErr)
+	}
+	if reason, typed := taskResultFailureReason(runErr); typed {
+		t.Fatalf("validation failure was typed %q: %v", reason, runErr)
+	}
+	if sessions, err := store.ListGoalSessions(); err != nil || len(sessions) != 0 {
+		t.Fatalf("validation failure persisted a Goal session: %#v, error = %v", sessions, err)
+	}
+}
+
+func TestGoalAdmissionTxResumesARetainedNativeSession(t *testing.T) {
+	app, store, session, key, claim, admission, source := retainedResumeFixture(t)
+
+	tx := newGoalAdmissionTx(app, key, claim, admission, nil)
+	probe := newGoalAdmissionCompensationProbe(tx)
+	probe.observeDelegate()
+	if runErr := tx.run(context.Background()); runErr != nil {
+		t.Fatalf("retained resume error = %v, want a completed launch without effectful compensation", runErr)
+	}
+	wantResume := harness.ResumeHandle{
+		LocalHandleID: source.LocalHandleID, NativeSessionID: source.NativeSessionID,
+		NativeSessionFilename: source.NativeSessionFilename,
+		WorkspaceFingerprint:  source.WorkspaceFingerprint, NativeVersion: source.HarnessVersion,
+	}
+	if session.request.Resume == nil || *session.request.Resume != wantResume {
+		t.Fatalf("retained resume request = %#v, want %#v", session.request.Resume, wantResume)
+	}
+	if tx.reuseCompensation.armed || tx.cloneCompensation.armed || tx.bridgeCompensation.armed {
+		t.Fatalf("retained resume armed unrelated compensation: reuse %t, clone %t, bridge %t",
+			tx.reuseCompensation.armed, tx.cloneCompensation.armed, tx.bridgeCompensation.armed)
+	}
+	if !tx.nativeOutcomeCompensation.armed {
+		t.Fatal("retained resume never armed the native-start outcome compensation")
+	}
+	if returnErr := tx.abort(context.Background(), nil); returnErr != nil {
+		t.Fatalf("abort() after a retained resume returned %v, want no compensation effect", returnErr)
+	}
+	if want := "native-start-outcome"; probe.sequence() != want {
+		t.Fatalf("retained resume compensation sequence = %q, want only the no-op %q", probe.sequence(), want)
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil || journal.LocalState != "running" {
+		t.Fatalf("retained resume journal = %#v, error = %v", journal, err)
+	}
+}
+
+func TestGoalAdmissionTxSettlesRetainedOpenFailureWithoutDiscardingItsReadyAttach(t *testing.T) {
+	app, store, session, key, claim, admission, _ := retainedResumeFixture(t)
+	openFailure := errors.New("retained native Goal session Open refused")
+	session.onOpen = func() error { return openFailure }
+
+	tx := newGoalAdmissionTx(app, key, claim, admission, nil)
+	probe := newGoalAdmissionCompensationProbe(tx)
+	probe.observeDelegate()
+	runErr := tx.run(context.Background())
+	if runErr == nil || !errors.Is(runErr, openFailure) || runErr.Error() != "open native Goal session: "+openFailure.Error() {
+		t.Fatalf("retained Open failure = %v, want only the open-phase wrapper around %v", runErr, openFailure)
+	}
+	calls := session.callsSnapshot()
+	if !slices.Contains(calls, "close") {
+		t.Fatalf("retained Open failure did not close the returned native session: %#v", calls)
+	}
+	if slices.Contains(calls, "start_turn") {
+		t.Fatalf("retained Open failure crossed into the native turn: %#v", calls)
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delivery, present := pendingSessionAttachDelivery(journal, tx.localHandleID)
+	if !present || !delivery.Ready {
+		t.Fatalf("retained Open failure lost the ready attach barrier: present %t, delivery %#v", present, delivery)
+	}
+	assertGoalSessionUncertain(t, store, "retained Open failure")
+	returnErr := tx.abort(context.Background(), runErr)
+	if want := "native-start-outcome"; probe.sequence() != want {
+		t.Fatalf("retained Open failure compensation sequence = %q, want %q", probe.sequence(), want)
+	}
+	if !errors.Is(returnErr, openFailure) {
+		t.Fatalf("abort() lost the retained Open failure: %v", returnErr)
+	}
+	if reason, typed := taskResultFailureReason(returnErr); !typed || reason != protocol.TaskResultReasonUnknownOutcome {
+		t.Fatalf("abort() left the retained Open failure untyped: %v (reason %q, typed %t)", returnErr, reason, typed)
+	}
+}
+
+func TestGoalAdmissionTxSettlesPostLaunchCancellationBeforeTheTurn(t *testing.T) {
+	app, store, session, key, claim, admission := nativeAdmissionFixture(t)
+	active := &runningRun{runLifecycle: runLifecycle{starting: true, claimed: true}}
+	app.running[key] = active
+	openFailure := errors.New("native Goal session Open refused after the cancellation")
+	session.onOpen = func() error {
+		app.mu.Lock()
+		if app.running[key] == active {
+			active.cancelled = true
+			active.cancelCommandID = "cancel-open-failure"
+		}
+		app.mu.Unlock()
+		return openFailure
+	}
+
+	tx := newGoalAdmissionTx(app, key, claim, admission, nil)
+	probe := newGoalAdmissionCompensationProbe(tx)
+	probe.observeDelegate()
+	runErr := tx.run(context.Background())
+	if runErr != nil {
+		t.Fatalf("post-launch cancellation error = %v, want the settled cancellation", runErr)
+	}
+	calls := session.callsSnapshot()
+	if !slices.Contains(calls, "close") || slices.Contains(calls, "start_turn") {
+		t.Fatalf("post-launch cancellation native calls = %#v, want a closed session without a native turn", calls)
+	}
+	sessions, err := store.ListGoalSessions()
+	if err != nil || len(sessions) != 1 || !goalSessionClosed(sessions[0]) {
+		t.Fatalf("post-launch cancellation Goal session = %#v, error = %v", sessions, err)
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, present := pendingSessionAttachDelivery(journal, tx.localHandleID); present {
+		t.Fatalf("settled cancellation kept the unready attach delivery: %#v", journal.PendingGoalDeliveries)
+	}
+	if returnErr := tx.abort(context.Background(), runErr); returnErr != nil {
+		t.Fatalf("abort() after a settled cancellation returned %v, want no compensation error", returnErr)
+	}
+	if want := "native-start-outcome"; probe.sequence() != want {
+		t.Fatalf("settled cancellation compensation sequence = %q, want only the no-op %q", probe.sequence(), want)
+	}
+}
+
+func TestGoalAdmissionTxSettlesLeaseExpiryAfterTheNativeOpen(t *testing.T) {
+	app, store, session, key, claim, admission := nativeAdmissionFixture(t)
+	active := &runningRun{runLifecycle: runLifecycle{starting: true, claimed: true}}
+	app.running[key] = active
+	leaseReason := "native start lease expired after the test Open"
+	session.onOpen = func() error {
+		app.mu.Lock()
+		if app.running[key] == active {
+			active.nativeStartLeaseExpired = true
+			active.nativeStartLeaseReason = leaseReason
+		}
+		app.mu.Unlock()
+		return nil
+	}
+
+	tx := newGoalAdmissionTx(app, key, claim, admission, nil)
+	probe := newGoalAdmissionCompensationProbe(tx)
+	probe.observeDelegate()
+	runErr := tx.run(context.Background())
+	if reason, typed := taskResultFailureReason(runErr); !typed || reason != protocol.TaskResultReasonProcessFailure {
+		t.Fatalf("post-Open lease expiry error = %v (reason %q, typed %t); want the process-failure reason", runErr, reason, typed)
+	}
+	if !strings.Contains(runErr.Error(), leaseReason) {
+		t.Fatalf("post-Open lease expiry error = %v, want the watchdog reason %q", runErr, leaseReason)
+	}
+	calls := session.callsSnapshot()
+	if !slices.Contains(calls, "open") || !slices.Contains(calls, "close") {
+		t.Fatalf("post-Open lease expiry native calls = %#v, want the Open and its compensation Close", calls)
+	}
+	if slices.Contains(calls, "start_turn") {
+		t.Fatalf("post-Open lease expiry crossed into the native turn: %#v", calls)
+	}
+	assertGoalSessionUncertain(t, store, "post-Open lease expiry")
+	returnErr := tx.abort(context.Background(), runErr)
+	if want := "native-start-outcome"; probe.sequence() != want {
+		t.Fatalf("post-Open lease expiry compensation sequence = %q, want only the no-op %q", probe.sequence(), want)
+	}
+	if returnErr.Error() != runErr.Error() {
+		t.Fatalf("post-Open lease expiry abort changed the settled failure: %v", returnErr)
+	}
+}
+
+func retainedResumeFixture(t *testing.T) (*daemon, *state.Store, *fakeNativeGoalSession, state.RunKey, protocol.ClaimResponse, protocol.Admission, state.GoalSessionJournal) {
+	t.Helper()
+	controlSessionID := "00000000-0000-4000-8000-000000000090"
+	resumeBindingID := "00000000-0000-4000-8000-000000000091"
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	admission.SessionMode = protocol.SessionModeResume
+	admission.RequestedSessionID = &controlSessionID
+	capabilities := testVerifiedNativeCapabilities(harness.KindOMP)
+	capabilities.Resume = true
+	app, store, session, controlClient := nativeAdmissionDaemonForHarness(t, admission, validNativeTaskResult(t, admission), nil, harness.KindOMP, config.RuntimeHarnessOMP, capabilities)
+	t.Cleanup(func() { _ = store.Close() })
+	nativeFile := filepath.Join(t.TempDir(), "retained-session.jsonl")
+	if err := os.WriteFile(nativeFile, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source := saveAvailableNativeGoalSession(t, store, admission, controlSessionID, nativeFile, capabilities, 1)
+	session.handle = harness.NativeSessionHandle{ID: source.NativeSessionID, Filename: source.NativeSessionFilename}
+	controlClient.attachSessionID = controlSessionID
+	key := state.RunKey{RunID: "run-1", Generation: 1}
+	saveClaimedGoalRun(t, store, key)
+	claim := protocol.ClaimResponse{
+		RunID: key.RunID, Generation: key.Generation, TaskID: "task-1", Work: controlClient.work,
+		HarnessSessionID: &controlSessionID, HarnessBindingID: &resumeBindingID,
+	}
+	app.running[key] = &runningRun{runLifecycle: runLifecycle{starting: true, claimed: true}}
+	return app, store, session, key, claim, admission, source
+}
+
+func pendingSessionAttachDelivery(journal state.RunJournal, localHandleID string) (state.GoalDelivery, bool) {
+	for _, delivery := range journal.PendingGoalDeliveries {
+		if delivery.Kind == state.GoalDeliverySessionAttach && delivery.DeliveryID == localHandleID {
+			return delivery, true
+		}
+	}
+	return state.GoalDelivery{}, false
+}
+
+func assertGoalSessionUncertain(t *testing.T, store *state.Store, stage string) {
+	t.Helper()
+	sessions, err := store.ListGoalSessions()
+	if err != nil || len(sessions) != 1 || sessions[0].LaunchState != state.GoalSessionLaunchStateUncertain {
+		t.Fatalf("%s Goal session = %#v, error = %v; want one uncertain launch", stage, sessions, err)
 	}
 }
 
