@@ -18,12 +18,8 @@ import (
 	linuxgate "github.com/wxxb789/symmetry/daemon/native/linux-gate/protocol"
 )
 
-// These tests execute the real close paths (finalize / finalizePreGate) on a
-// hand-built owner. No native helper, cgroup leaf or anchor exists in a CI
-// process, so the owner carries two doubles from linuxV2CloseSeams: the helper
-// control channel and the opaque platform release capability snapshot. Every
-// other guard runs for real, including the issued/valid capability checks, the
-// receipt reconcile and the durable mutation order.
+// No native helper, cgroup leaf or anchor exists in a CI process, so only
+// linuxV2CloseSeams is doubled; every other guard runs for real.
 
 var errLinuxV2CloseReceiptWrite = errors.New("stop receipt write failed")
 
@@ -34,10 +30,6 @@ const (
 	linuxV2CloseRecovery    = "/run/symmetry/close-recovery.sock"
 )
 
-// linuxV2CloseHarness is the CI executable environment of one close path: the
-// coherent identity set the production validators accept, the recorded
-// close-path call order and the doubles for the helper control channel and the
-// opaque release capability.
 type linuxV2CloseHarness struct {
 	t *testing.T
 
@@ -64,9 +56,6 @@ type linuxV2CloseHarness struct {
 	preGateReceipt      authority.LinuxCgroupPreGateStopReceipt
 	preGateReleaseProof authority.LinuxCgroupPreGateReleaseProof
 
-	// receiptAttempts counts every RecordStopReceipt invocation; receiptFailures
-	// fails that many initial attempts and receiptAckLost makes the first
-	// attempt report the never-replayable ACK-loss sentinel instead.
 	receiptAttempts int
 	receiptFailures int
 	receiptAckLost  bool
@@ -190,9 +179,6 @@ func (harness *linuxV2CloseHarness) assertStopProof(handoff authority.Supervisor
 	}
 }
 
-// bindOwnerReleaseFixture derives the durable receipt and the opaque release
-// capability of one gate-path fixture with the production constructor, so the
-// pipeline's own reconcile and claim guards accept them.
 func (harness *linuxV2CloseHarness) bindOwnerReleaseFixture(handoff authority.SupervisorHandoff, proof authority.LinuxCgroupStopProof) {
 	harness.t.Helper()
 	base := handoff.Clone()
@@ -238,8 +224,8 @@ func (harness *linuxV2CloseHarness) gateCallbacks() LinuxV2JournalCallbacks {
 			attempt := harness.nextReceiptAttempt()
 			harness.record("receipt")
 			if attempt == 1 {
-				// Model a callback that mutates its arguments. Every attempt
-				// must receive its own clone, so a retry may not observe this.
+				// Model a callback that mutates its arguments: every attempt must receive
+				// its own clone, so a retry may not observe the mutation.
 				handoff.LauncherExit.Reaped = false
 				receipt.CgroupIdentity.LeafName = strings.Repeat("f", authority.TokenBytes*2)
 			}
@@ -275,9 +261,6 @@ func (harness *linuxV2CloseHarness) assertPristineReceiptInput(attempt int, hand
 	}
 }
 
-// assertPreGateClearInput pins the pre-gate clear input: the reservation the
-// close sends must carry the just-persisted pre-gate stop receipt, never a
-// reservation without its durable receipt.
 func (harness *linuxV2CloseHarness) assertPreGateClearInput(expected state.LinuxCgroupReservation) {
 	harness.t.Helper()
 	if expected.PreGateStopReceipt == nil {
@@ -288,14 +271,10 @@ func (harness *linuxV2CloseHarness) assertPreGateClearInput(expected state.Linux
 	}
 }
 
-// linuxV2CloseTestControl doubles the helper control channel of the close
-// pipeline and records every call in the harness order.
 type linuxV2CloseTestControl struct {
 	harness *linuxV2CloseHarness
 	ackErr  error
 
-	// releaseErr fails the release acknowledgement of either close path; the
-	// pipeline then resolves the lost response through the anchor readback.
 	releaseErr error
 }
 
@@ -319,9 +298,6 @@ func (control *linuxV2CloseTestControl) ReleaseAfterPreGateClear(context.Context
 	return control.releaseErr
 }
 
-// newLinuxV2CloseGateOwner builds the gate-path owner the real finalize
-// validates: a durably bound handoff with measured physical-stop evidence, the
-// opaque release already removed, and the anchor already retired.
 func newLinuxV2CloseGateOwner(t *testing.T, harness *linuxV2CloseHarness, mirror bool) *linuxV2ProcessOwner {
 	t.Helper()
 	launcherExit := harness.helperLauncherExit
@@ -364,10 +340,6 @@ func newLinuxV2CloseGateOwner(t *testing.T, harness *linuxV2CloseHarness, mirror
 	}
 }
 
-// newLinuxV2ClosePreGateOwner builds the pre-gate owner the real finalizePreGate
-// validates: an armed never-created reservation with authenticated pre-gate
-// stop evidence, the pre-gate leaf already removed, and the anchor already
-// retired.
 func newLinuxV2ClosePreGateOwner(t *testing.T, harness *linuxV2CloseHarness) *linuxV2ProcessOwner {
 	t.Helper()
 	grant := platform.LinuxOwnerAnchorGrant{
@@ -587,10 +559,8 @@ func TestLinuxV2FinalizeMirrorStopSkipsStopReceiptAck(t *testing.T) {
 }
 
 func TestLinuxV2FinalizePromotionHopStaysBeforeClear(t *testing.T) {
-	// The hop itself is out of scope and revalidates the opaque capability, so
-	// CI pins its position from both sides: with a valid claim the sequence
-	// stops on the hop before any clear, and with an unissued claim it stops at
-	// the claim before the hop.
+	// The hop revalidates the opaque capability, so CI pins its position from
+	// both sides: a valid claim stops on the hop, an unissued one at the claim.
 	hopHarness := newLinuxV2CloseHarness(t)
 	hopOwner := newLinuxV2CloseGateOwner(t, hopHarness, false)
 	hopOwner.cloneGrant = &authority.LinuxCloneGrant{}
@@ -654,8 +624,7 @@ func TestLinuxV2FinalizeDoesNotReplayLostReceiptAck(t *testing.T) {
 func TestLinuxV2FinalizeReconcilesCachedReceiptBeforeAnyMutation(t *testing.T) {
 	harness := newLinuxV2CloseHarness(t)
 	owner := newLinuxV2ClosePreGateOwner(t, harness)
-	// The cached receipt came from an earlier physical-stop measurement: it is
-	// shape-valid but differs from the exact evidence measured now.
+	// Shape-valid yet not the freshly measured evidence, so the reconcile must reject it.
 	conflicting := harness.preGateReceipt
 	conflicting.Proof.GateOutcome.Authenticator = strings.Repeat("a", 64)
 	owner.mu.Lock()
@@ -772,9 +741,8 @@ func TestLinuxV2FinalizePreGateClaimsCapabilityOnlyAfterClear(t *testing.T) {
 		t.Fatal("failed pre-gate clear settled the owner")
 	}
 
-	// The claim is also pinned from the other side: with the durable clear
-	// succeeding, the unissued capability must stop the sequence on the claim
-	// error after [receipt, ack, clear] and before any release.
+	// Pinned from the other side: with the durable clear succeeding, the unissued
+	// capability stops on the claim error after [receipt, ack, clear], before release.
 	claimHarness := newLinuxV2CloseHarness(t)
 	claimOwner := newLinuxV2ClosePreGateOwner(t, claimHarness)
 	claimOwner.closeSeams.preGateReleaseSnapshot = func(platform.LinuxCgroupV2Release) (authority.LinuxCgroupPreGateReleaseProof, bool) {
@@ -792,10 +760,8 @@ func TestLinuxV2FinalizePreGateClaimsCapabilityOnlyAfterClear(t *testing.T) {
 }
 
 func TestLinuxV2FinalizeRejectsCapabilityBoundToAnotherReceipt(t *testing.T) {
-	// The seam reports an issued capability whose proof binds a different
-	// receipt: the real ValidFor half of the claim guard must stop the
-	// sequence on the claim error, before the hop on the gate path and after
-	// the durable clear on the pre-gate path.
+	// The seam reports a proof bound to a different receipt: the real ValidFor guard
+	// must stop on the claim error, before the hop on the gate path, after the clear pre-gate.
 	gateHarness := newLinuxV2CloseHarness(t)
 	gateOwner := newLinuxV2CloseGateOwner(t, gateHarness, false)
 	foreignGateProof := gateHarness.ownerReleaseProof.Clone()
@@ -832,10 +798,8 @@ func TestLinuxV2FinalizeRejectsCapabilityBoundToAnotherReceipt(t *testing.T) {
 }
 
 func TestLinuxV2FinalizeJoinsLostReleaseAckRetirementReadback(t *testing.T) {
-	// The release acknowledgement is lost and the anchor readback that would
-	// resolve it fails too (no anchor client exists in a CI process), so the
-	// joined error must carry the release wrap first and the readback wrap
-	// second, each with its exact base text.
+	// Release ack lost and the anchor readback fails too (no anchor client in CI):
+	// the joined error carries the release wrap first, then the readback wrap.
 	releaseErr := errors.New("helper response lost after the durable clear")
 
 	harness := newLinuxV2CloseHarness(t)

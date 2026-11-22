@@ -10,11 +10,8 @@ defmodule SymmetryControl.MixProject do
       start_permanent: Mix.env() == :prod,
       aliases: aliases(),
       deps: deps(),
-      # The advisory `mix test --cover` step of the coverage plane (refactor
-      # slice W2-17, `.github/workflows/ci.yml`) must not trip the coverage
-      # task's default 90% summary threshold: coverage floors become blocking at
-      # W6-10/W6-12, not here, so the report is the artifact and the suite's own
-      # status is the step's status.
+      # 0 keeps the advisory cover step green: the task's default 90% summary threshold
+      # would fail it; coverage floors become blocking later, not at this step.
       test_coverage: [summary: [threshold: 0]],
       listeners: [Phoenix.CodeReloader]
     ]

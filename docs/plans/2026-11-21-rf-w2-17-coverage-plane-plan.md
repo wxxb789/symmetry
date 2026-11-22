@@ -346,3 +346,35 @@ as passed from inference.
   hosted coverage job may go red for the same shape while still uploading its report — that is
   exactly the advisory posture the contract asks for, and the job log, not the colour, is the
   evidence.
+
+## Comment-policy sweep (2026-11-22)
+
+Module intent removed from `scripts/ci/test-ci-changed-path-classifier.py` by the 2026-11-22
+comment-policy sweep is recorded below (workstream record "ws7a-ci-model-routing").
+
+- Both are the two suites' ownership/fixture-sharing boundary (module-intent class, `M1`). The
+  performance blocks were compressed in place instead: their rationale survives ("one pass is one
+  rebuild / `_rebuild_with_groups`; call count must not grow with matches", "the raw look re-enters only
+  a small window behind each kept match"), while the deleted text carried round measurements
+  (4.3 s/115 s/41.7 s, 99 KB ≈ 49 s, 12.0M bytes, 26,871→222,871) and mutant tallies.
+11. `test-ci-changed-path-classifier.py:65-66` — routing rationale: a coverage run is only worth its
+    runner time beside the heavy matrix, so each coverage job is gated `run-heavy`.
+12. `test-ci-changed-path-classifier.py:515-516` — why the plane check exists: `check_job_gating`'s
+    message names the routing rule, not the plane; binding the three names against every fixture
+    diff makes a renamed, regated or deleted coverage job redden there too.
+13. `test-ci-changed-path-classifier.py:534-536` — contract reference: the coverage-plane contract's
+    failure control names a coverage job without the job-level `continue-on-error: true` as
+    not-achieved, so it is pinned rather than left to review.
+14. `test-ci-changed-path-classifier.py:552-556` — coverage gap the artifact pins close: with only
+    the routing/advisory pins, a deleted upload step, a renamed artifact, a moved report path or a
+    dropped command leaves the suite green and only the advisory draft-PR run would notice.
+15. `test-ci-changed-path-classifier.py:70-71` (deleted as D1) — `COVERAGE_DAEMON_HEADER` is the
+    coverage-daemon gated header as the workflow spells it; both coverage mutation tests anchor on
+    it, which is why it is spelled once.
+- `control/mix.exs` (13-17): the step is *the advisory `mix test --cover` step of the
+  coverage plane (refactor slice W2-17, `.github/workflows/ci.yml`)*; *coverage floors
+  become blocking at W6-10/W6-12, not here, so the report is the artifact and the suite's
+  own status is the step's status* (the in-file note keeps only the threshold-0 why).
+
+The sweep's plan is
+[`docs/plans/2026-11-22-comment-policy-sweep-plan.md`](2026-11-22-comment-policy-sweep-plan.md).

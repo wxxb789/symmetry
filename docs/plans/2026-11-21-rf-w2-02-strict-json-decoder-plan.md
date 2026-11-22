@@ -195,3 +195,14 @@ outside the owned set goes stale. `docs/TODO.md` holds no `W2-02` entry, so no T
   design behind it.
 - Plug-internal behavior (body-reader negotiation, `pass`, multipart): W1-02's area, already
   settled.
+
+## Comment-policy sweep (2026-11-22)
+
+Module intent removed from `control/lib/symmetry_control_web/plugs/strict_evidence_json.ex` by the 2026-11-22 comment-policy sweep is recorded below (workstream record "ws8-control-lib").
+
+- `control/lib/symmetry_control_web/plugs/strict_evidence_json.ex` (17-24): dropped
+  nuance — *the plug maps the wrapped `Plug.Parsers.ParseError` back to the protocol
+  envelope* (the kept single-line `@doc` keeps "Plug wraps them in ParseError; others
+  re-raise unchanged").
+
+The sweep's plan is [`docs/plans/2026-11-22-comment-policy-sweep-plan.md`](2026-11-22-comment-policy-sweep-plan.md).

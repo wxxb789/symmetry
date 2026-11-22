@@ -25,11 +25,8 @@ defmodule SymmetryControl.Goals.ReadModel do
   alias SymmetryControl.Repo
   alias SymmetryControl.RequestHash
 
-  # The loaded goal-revision context every read-model pass reads from. Fields
-  # named `current_*` hold the current-revision subsets; `work_items`,
-  # `dependencies`, `outcomes`, `tasks` and `runs` hold the unfiltered records
-  # because some passes (readiness gates, evidence eligibility, accounting) must
-  # see every revision. Built once by `build_projection/2`.
+  # Loaded goal-revision context: `current_*` fields hold current-revision subsets; the
+  # unfiltered lists stay unfiltered for the passes that must see every revision.
   defmodule Projection do
     @moduledoc false
 
@@ -190,8 +187,6 @@ defmodule SymmetryControl.Goals.ReadModel do
     }
   end
 
-  # Loads every related record for the goal and derives the current-revision
-  # subsets once; every pass below reads the resulting context by name.
   defp build_projection(goal, related) do
     goal = map_value(goal, :goal, goal)
     current_revision = map_value(goal, :current_revision)
@@ -1465,9 +1460,8 @@ defmodule SymmetryControl.Goals.ReadModel do
   end
 
   defp completion_readiness_candidates(projection) do
-    # This gate sees every loaded task, matching the readiness blocker's
-    # unfiltered view of the goal; the integration blocker below gates on the
-    # current-revision tasks instead.
+    # Unfiltered like the readiness blocker (every loaded task), unlike the integration
+    # blocker below, which gates on current-revision tasks only.
     if completion_readiness_gate?(projection, projection.tasks) do
       accepted_integration_outcomes(projection)
       |> Enum.filter(fn candidate ->
@@ -1557,8 +1551,8 @@ defmodule SymmetryControl.Goals.ReadModel do
     accepted_required =
       Enum.count(required_items, &Map.has_key?(projection.accepted, map_value(&1, :id)))
 
-    # Unfiltered on purpose, as before the projection: any nonterminal task of
-    # any revision keeps `no_nonterminal_tasks?` false.
+    # Unfiltered on purpose: any nonterminal task of any revision must keep
+    # `no_nonterminal_tasks?` false.
     nonterminal_tasks =
       Enum.filter(projection.tasks, &(map_value(&1, :state) in @nonterminal_task_states))
 

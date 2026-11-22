@@ -304,9 +304,8 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
       end
     end
 
-    # The web layer's own upper bound is discriminated directly: the table above would still
-    # pass with `Protocol.history_limit/1` widened to `:infinity`, because `Orchestration`'s
-    # identical bound answers 400 for `"501"` end to end.
+    # Direct pin of the web bound: the table above stays green with `Protocol.history_limit/1`
+    # widened to `:infinity` (`Orchestration`'s identical bound still answers 400 for "501").
     assert {:error, :invalid_request} =
              Protocol.history_options(%{"limit" => "501"}, task.id, "events", "after")
 

@@ -50,10 +50,8 @@ func taskResultFailureReason(cause error) (protocol.TaskResultReason, bool) {
 	return "", false
 }
 
-// linuxV2NativeOwner is the App-owned host boundary for new Linux Pi/OpenCode
-// executions. Preflight is read-only and must succeed before workspace or
-// provider-bridge effects; BuildInvocation binds the already-claimed Run to
-// the exact Store callback chain immediately before the staged adapter starts.
+// App-owned host boundary for new Linux Pi/OpenCode executions: Preflight is read-only and must
+// succeed before workspace or provider-bridge effects; BuildInvocation binds the Store callbacks.
 type linuxV2NativeOwner interface {
 	Preflight(context.Context, config.Config, harness.Kind, config.AgentProfile, bool) ([]string, error)
 	BuildInvocation(context.Context, state.RunKey, protocol.Fence, execution.Invocation, execution.LinuxV2JournalCallbacks) (execution.Invocation, error)
@@ -97,13 +95,11 @@ type runningRun struct {
 	// inputMu serializes stdin delivery with input-related lifecycle mutations.
 	// Never wait for it while holding daemon.mu.
 	inputMu sync.Mutex
-	// linuxCloneOperationMu serializes one RunKey's A-owned seed preparation
-	// with its exact pre-checkout abort. It is owned by the active run, not a
-	// second durable workspace lock.
+	// Serializes one RunKey's A-owned seed preparation with its exact pre-checkout abort;
+	// owned by the active run, not a second durable workspace lock.
 	linuxCloneOperationMu sync.Mutex
-	// nativeCloseMu serializes one native session Close with the durable session
-	// and process-marker evidence that proves its result. It is never acquired
-	// while daemon.mu is held.
+	// Serializes one native session Close with the durable session and process-marker evidence
+	// that proves its result; never acquired while daemon.mu is held.
 	nativeCloseMu         sync.Mutex
 	process               Process
 	nativeSession         harness.Session
@@ -187,10 +183,8 @@ func (daemon *daemon) prepareLinuxV2NativeOwner(ctx context.Context, key state.R
 		owner = created
 	}
 	if kind == harness.KindPi {
-		// This runtime-only value is derived from the owner constructed from the
-		// strict root-installed A/B config; JSON and ambient environment can
-		// never select the provider extension's group. Initialize it under the
-		// same lock before any concurrent native preflight reads the config.
+		// This runtime-only value comes from the owner built from the strict root-installed A/B
+		// config; JSON and ambient environment can never select it. Same lock before preflight.
 		if err := setTrustedPiProviderExtensionGroup(&daemon.config, owner); err != nil {
 			daemon.linuxV2OwnerInitMu.Unlock()
 			return nil, nil, errors.Join(err, owner.Close())
@@ -304,9 +298,8 @@ func (daemon *daemon) reserveNativeTerminalClaim(key state.RunKey, expected *run
 	return ownerClaim, true
 }
 
-// reserveNativeObservedTerminalClaim linearizes a completed native turn with
-// lease expiry. Once WaitTurn returns terminal evidence, elapsed wall time alone
-// cannot let a watchdog that has not yet claimed settlement replace it.
+// Linearizes a completed native turn with lease expiry: once WaitTurn returns terminal
+// evidence, elapsed wall time alone cannot let an unclaimed watchdog replace it.
 func (daemon *daemon) reserveNativeObservedTerminalClaim(key state.RunKey, expected *runningRun) (uint64, bool) {
 	daemon.eventReceiptMu.Lock()
 	daemon.mu.Lock()
@@ -325,9 +318,8 @@ func (daemon *daemon) reserveNativeObservedTerminalClaim(key state.RunKey, expec
 	return ownerClaim, true
 }
 
-// beginNativeStart owns Adapter.Start through the returned StartTurn result.
-// Cancellation and lease expiry may cancel the launch context while this bit
-// is set, but neither may settle an unpublished native session.
+// Owns Adapter.Start through the returned StartTurn result: cancellation and lease expiry may
+// cancel the launch context while this bit is set, but may not settle an unpublished session.
 func (daemon *daemon) beginNativeStart(key state.RunKey) bool {
 	now := daemon.localNow()
 	daemon.mu.Lock()
@@ -346,9 +338,8 @@ func (daemon *daemon) beginNativeStart(key state.RunKey) bool {
 	return true
 }
 
-// publishNativeStartResult makes the adapter result visible without releasing
-// start ownership. The caller releases it only after cancellation, lease loss,
-// or StartTurn has settled.
+// Makes the adapter result visible without releasing start ownership: the caller releases it
+// only after cancellation, lease loss, or StartTurn has settled.
 func (daemon *daemon) publishNativeStartResult(key state.RunKey, session harness.Session, sessionKey state.GoalSessionKey, admission protocol.Admission, prepared workspace.Prepared) {
 	if isNilHarnessSession(session) {
 		session = nil
@@ -370,9 +361,8 @@ func (daemon *daemon) finishNativeStartPublication(key state.RunKey) {
 	}
 }
 
-// transferNativeStartTerminal lets terminal or usage evidence durably observed
-// during StartTurn retain settlement ownership after the lease watchdog fires.
-// Only a TaskResult proves that the stale lease outcome may be replaced.
+// Lets terminal or usage evidence durably observed during StartTurn keep settlement ownership
+// after the lease watchdog fires: only a TaskResult may replace the stale lease outcome.
 func (daemon *daemon) transferNativeStartTerminal(key state.RunKey, expected *runningRun, session harness.Session) bool {
 	daemon.eventReceiptMu.Lock()
 	defer daemon.eventReceiptMu.Unlock()
@@ -474,9 +464,8 @@ func isNilHarnessSession(session harness.Session) bool {
 	}
 }
 
-// goalProviderAccess is intentionally separate from legacy initialInput: a
-// native harness must receive the broker capability out of band rather than
-// through a persisted prompt or process environment.
+// Intentionally separate from legacy initialInput: a native harness receives the broker
+// capability out of band, never through a persisted prompt or process environment.
 func goalProviderAccess(profile config.AgentProfile, access *protocol.ProviderAccess) (*protocol.ProviderAccess, error) {
 	if access == nil {
 		return nil, nil
@@ -493,9 +482,8 @@ func goalProviderAccess(profile config.AgentProfile, access *protocol.ProviderAc
 	return &copy, nil
 }
 
-// resolveCancelledNativeStartAbortFailure distinguishes a failed abort write
-// from an unknown native owner. Exact missing/closed readback proves the abort;
-// every other outcome retains the workspace and durable reconciliation state.
+// Distinguishes a failed abort write from an unknown native owner: only exact missing/closed
+// readback proves the abort; every other outcome retains workspace and reconciliation state.
 func (daemon *daemon) resolveCancelledNativeStartAbortFailure(key state.RunKey, sessionKey state.GoalSessionKey, cause error) error {
 	observed, readErr := daemon.loadGoalSession(sessionKey)
 	if state.IsNotFound(readErr) || (readErr == nil && goalSessionClosed(observed)) {
@@ -521,9 +509,8 @@ func (daemon *daemon) resolveCancelledNativeStartAbortFailure(key state.RunKey, 
 	return errors.Join(cause, retentionErr, readErr, uncertainErr, resolveErr)
 }
 
-// compensatePreNativeGoalLaunchFailure resolves a failed pre-native write by
-// exact readback. Only a missing or closed journal proves that no native owner
-// remains; every ambiguous outcome retains the workspace for recovery.
+// Resolves a failed pre-native write by exact readback: only a missing or closed journal proves
+// no native owner remains; every ambiguous outcome retains the workspace for recovery.
 func (daemon *daemon) compensatePreNativeGoalLaunchFailure(key state.RunKey, sessionKey state.GoalSessionKey, cause error) error {
 	observed, readErr := daemon.store.LoadGoalSession(sessionKey)
 	if state.IsNotFound(readErr) || (readErr == nil && goalSessionClosed(observed)) {
@@ -562,9 +549,8 @@ func (daemon *daemon) compensatePreNativeGoalLaunchFailure(key state.RunKey, ses
 	return taskResultFailure(protocol.TaskResultReasonUnknownOutcome, errors.Join(cause, fmt.Errorf("abort pre-native Goal session: %w", abortErr), fmt.Errorf("read Goal session after compensation: %w", resolveErr)))
 }
 
-// settleCancelledResumeBeforeNativeStart releases a retained resume turn when
-// the daemon rejected Adapter.Start locally. The predecessor stop certificate
-// proves that no new native turn was running.
+// Releases a retained resume turn when the daemon rejected Adapter.Start locally: the
+// predecessor stop certificate proves that no new native turn was running.
 func (daemon *daemon) settleCancelledResumeBeforeNativeStart(ctx context.Context, key state.RunKey, sessionKey state.GoalSessionKey) error {
 	if _, err := daemon.store.MarkGoalSessionResumeNativeStopped(sessionKey); err != nil {
 		return err
@@ -598,9 +584,8 @@ func (daemon *daemon) acknowledgeExpiredNativeStartCancellation(ctx context.Cont
 	return daemon.acknowledgeExpiredNativeStartCancellationCommand(ctx, key, commandID)
 }
 
-// settleCancelledNativeStart closes a session returned while cancellation owns
-// the start-publication race. A failed close is retried independently, while
-// this owner still captures usage and publishes the durable terminal outcome.
+// Closes a session returned while cancellation owned the start-publication race: a failed
+// close is retried independently, while this owner still captures usage and the terminal outcome.
 func (daemon *daemon) settleCancelledNativeStart(ctx context.Context, key state.RunKey, sessionKey state.GoalSessionKey, localHandleID string, session harness.Session, discardAttach bool, abortFresh bool) (bool, error) {
 	daemon.eventReceiptMu.Lock()
 	daemon.mu.Lock()
@@ -895,18 +880,16 @@ func (daemon *daemon) prepareNativeGoalUsage(key state.RunKey, result *harness.T
 	return daemon.prepareNativeGoalUsageWithSnapshot(key, result, true)
 }
 
-// prepareNativeUnknownGoalUsage creates the conservative recovery receipt. A
-// cumulative usage observation is useful for ordinary finalization, but it is
-// not proof of the final total after an unproven native stop.
+// Creates the conservative recovery receipt: a cumulative usage observation is useful for
+// ordinary finalization but is not proof of the final total after an unproven native stop.
 func (daemon *daemon) prepareNativeUnknownGoalUsage(key state.RunKey) (protocol.Usage, bool, error) {
 	return daemon.prepareNativeGoalUsageWithSnapshot(key, nil, false)
 }
 
 func (daemon *daemon) prepareNativeGoalUsageWithSnapshot(key state.RunKey, result *harness.TaskResult, allowSnapshot bool) (protocol.Usage, bool, error) {
 	if !canonicalGoalRunID(key.RunID) {
-		// Legacy/unit fixtures may use descriptive run IDs. Goal transport IDs
-		// are UUIDs in production; do not let a compatibility fixture invent a
-		// malformed accounting receipt.
+		// Goal transport IDs are UUIDs in production; legacy/unit fixtures must not invent a
+		// malformed accounting receipt from a descriptive run ID.
 		return protocol.Usage{}, false, nil
 	}
 	journal, err := daemon.store.LoadJournal(key)
@@ -1029,9 +1012,8 @@ func (daemon *daemon) prepareNativeGoalUsageWithSnapshot(key state.RunKey, resul
 	return usage, true, nil
 }
 
-// queueNativeUnknownUsageRecovery persists the accounting barrier together
-// with an immutable unknown usage body. The optional queue hook is retained for
-// focused tests; production uses the state store's atomic mutation.
+// Persists the accounting barrier together with an immutable unknown usage body; the optional
+// queue hook exists for focused tests, production uses the state store's atomic mutation.
 func (daemon *daemon) queueNativeUnknownUsageRecovery(key state.RunKey) error {
 	usage, shouldQueue, err := daemon.prepareNativeUnknownGoalUsage(key)
 	if err != nil || !shouldQueue {
@@ -1181,17 +1163,13 @@ func (daemon *daemon) recordGenericProcessExit(key state.RunKey, expected *runni
 	return true
 }
 
-// watchFailedStartProcess restores the usual exit cleanup when a Process was
-// exposed together with a Start error. It is deliberately outside workers: a
-// stuck Process must not make daemon shutdown wait forever. Its process marker
-// was saved before this watcher is started, so restart recovery retains the
-// authority to stop an unresolved child.
+// Restores usual exit cleanup for a Process exposed with a Start error; deliberately outside
+// workers, and its marker was saved before this watcher so recovery can stop the unresolved child.
 func (daemon *daemon) watchFailedStartProcess(ctx, finalizationContext context.Context, key state.RunKey, process Process) {
 	completion, ok := process.(processResultCompletion)
 	if !ok {
-		// A custom Process without a completion witness cannot be waited by the
-		// app without creating an unowned goroutine. Its persisted identity stays
-		// as the recovery authority.
+		// A custom Process without a completion witness cannot be waited without creating an
+		// unowned goroutine; its persisted identity stays as the recovery authority.
 		return
 	}
 	resultDone := completion.ResultDone()
@@ -1218,10 +1196,8 @@ func nativeTurnTerminalObserved(err error) bool {
 	return err == nil || (!errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded))
 }
 
-// waitForNativeRun deliberately treats a native TaskResult, not app-server
-// process exit, as terminal execution truth. A successful terminal transition
-// settles the bounded Task only; the semantic result remains a proposal and
-// cannot accept a Goal outcome by itself.
+// Deliberately treats a native TaskResult, not app-server process exit, as terminal execution
+// truth: it settles the bounded Task only, and a Goal outcome still needs acceptance.
 func (daemon *daemon) waitForNativeRun(ctx context.Context, key state.RunKey, active *runningRun, session harness.Session) {
 	staged, isStaged := session.(harness.StagedSession)
 	waitContext := ctx
@@ -1232,9 +1208,8 @@ func (daemon *daemon) waitForNativeRun(ctx context.Context, key state.RunKey, ac
 	if admission != nil {
 		admissionCopy := *admission
 		admission = &admissionCopy
-		// A close retry can clear the live session while this waiter is blocked
-		// on the final native result. Retain the admitted context for its exact
-		// terminal/usage publication rather than rereading mutable active state.
+		// A close retry can clear the live session while this waiter blocks on the final result:
+		// retain the admitted context instead of rereading mutable active state.
 		active.nativeFinalAdmission = &admissionCopy
 	}
 	prepared := active.prepared
@@ -1250,13 +1225,12 @@ func (daemon *daemon) waitForNativeRun(ctx context.Context, key state.RunKey, ac
 		// close permission only; it must never expose an early TaskResult.
 		waitErr = staged.WaitTurn(waitContext)
 	} else {
-		// Legacy/non-staged sessions retain the original physical Wait behavior.
+		// Non-staged sessions keep the physical Wait behavior.
 		result, waitErr = session.Wait(waitContext)
 	}
 	if nativeTurnTerminalObserved(waitErr) {
-		// Both a valid terminal and a terminal validation failure are observations
-		// of this turn. Reserve before Close so late cancellation or lease expiry
-		// cannot replace either outcome. If one already owns the race, stop here.
+		// Both a valid terminal and a terminal validation failure are observations of this turn:
+		// reserve before Close so late cancellation or lease expiry cannot replace either.
 		if claim, owned := daemon.nativeStartTerminalOwnerClaim(key, active); owned {
 			ownerClaim = claim
 		} else {
@@ -1270,9 +1244,8 @@ func (daemon *daemon) waitForNativeRun(ctx context.Context, key state.RunKey, ac
 	}
 	stopWaitDeadline()
 	if !isStaged && errors.Is(waitErr, context.DeadlineExceeded) {
-		// The session remains live because its process context is not the wait
-		// deadline. Request native interruption before Close performs the final
-		// process stop, so an elapsed admission cannot keep making progress.
+		// The session remains live because its process context is not the wait deadline:
+		// interrupt before Close's final process stop so an elapsed admission cannot progress.
 		interruptContext, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		_, interruptErr := session.Control(interruptContext, harness.ControlRequest{Kind: harness.ControlCancel})
 		cancel()
@@ -1741,10 +1714,8 @@ func (daemon *daemon) exhaustNativeUsageRetryOwned(ctx context.Context, key stat
 		return
 	}
 
-	// A close failure already marks the native session uncertain. If the session
-	// is still open for any other reason, make that recovery barrier durable
-	// before dropping the in-memory run. A successfully closed session remains
-	// closed; the retained journal/usage evidence below is the recovery record.
+	// A close failure already marks the session uncertain: any still-open session for another
+	// reason needs that recovery barrier durable before the in-memory run is dropped.
 	var recoveryErr error
 	if goalSession != nil {
 		sessionJournal, sessionErr := daemon.store.LoadGoalSession(*goalSession)
@@ -1782,9 +1753,8 @@ func (daemon *daemon) exhaustNativeUsageRetryOwned(ctx context.Context, key stat
 		daemon.rememberNativeFinalUsage(key, active, usage)
 	}
 
-	// The accounting barrier and immutable receipt must become durable together.
-	// A failed write keeps the stopped native run resident with its exact body so
-	// a retry cannot invent a replacement usage identity.
+	// The accounting barrier and immutable receipt become durable together: a failed write keeps
+	// the stopped run resident so a retry cannot invent a replacement usage identity.
 	settlement, settlementErr := nativeUsageTerminalRecovery(finalResult, finalAdmission, finalWaitErr, finalCloseErr, cancelCommandID, cancelTerminalObserved, cancelRejected, cancelTerminateErr)
 	if settlementErr != nil {
 		daemon.retryNativeUsageRecoveryPersistence(key, active, ownerClaim, errors.Join(cause, retentionErr, recoveryErr, settlementErr))
@@ -1824,9 +1794,8 @@ func (daemon *daemon) exhaustNativeUsageRetryOwned(ctx context.Context, key stat
 		daemon.retryNativeUsageRecoveryPersistence(key, active, ownerClaim, errors.Join(cause, retentionErr, staleErr, recoveryErr, terminalErr))
 		return
 	}
-	// All durable recovery markers have been attempted. Do not retain a dead
-	// native run in daemon.running: renewal and command admission are already
-	// disabled, and restart must not be required to release the slot/memory.
+	// All durable recovery markers attempted: do not retain a dead run in daemon.running —
+	// renewal and command admission are disabled; restart must not be needed to release it.
 	daemon.releaseRun(key)
 	if daemon.log != nil {
 		daemon.log.Error("native_goal_usage_retry_exhausted", "run_id", key.RunID, "generation", key.Generation, "error", errors.Join(cause, retentionErr, staleErr, recoveryErr, terminalErr))
@@ -2033,9 +2002,8 @@ func typedTaskResultReason(cause error) (protocol.TaskResultReason, bool) {
 	return "", false
 }
 
-// canonicalTaskResultReason defines one precedence order for failed terminal
-// payloads. A valid semantic TaskResult records the turn's own outcome and
-// therefore outranks physical transport/process failures observed afterward.
+// One precedence order for failed terminal payloads: a valid semantic TaskResult records the
+// turn's own outcome and outranks physical transport/process failures observed afterwards.
 func canonicalTaskResultReason(cause error, result *harness.TaskResult, fallback protocol.TaskResultReason) protocol.TaskResultReason {
 	if result != nil && result.Semantic != nil && result.Semantic.Kind == protocol.TaskResultFailed && result.Semantic.Reason != nil && result.Semantic.Validate() == nil {
 		return *result.Semantic.Reason
@@ -2049,10 +2017,8 @@ func canonicalTaskResultReason(cause error, result *harness.TaskResult, fallback
 	return fallback
 }
 
-// verifyNativeTaskResultSubject ensures a native model only proposes the
-// artifact actually present in its daemon-owned worktree. A candidate result
-// may advance from admission Subject A to commit B; all other result kinds
-// remain bound to A.
+// A native model only proposes the artifact actually present in its daemon-owned worktree: a
+// candidate result may advance from admission Subject A to commit B; other kinds stay bound to A.
 func (daemon *daemon) verifyNativeTaskResultSubject(ctx context.Context, key state.RunKey, prepared workspace.Prepared, admission *protocol.Admission, result *harness.TaskResult) error {
 	if admission == nil {
 		return errors.New("native Goal admission is unavailable")
@@ -2205,10 +2171,8 @@ func (daemon *daemon) stopAll() {
 	}
 }
 
-// terminateProcessBounded makes shutdown independent of a Process
-// implementation that fails to honour its cancellation context. The runner
-// still owns physical reaping; the persisted marker remains for recovery when
-// that cannot be confirmed during this daemon lifetime.
+// Makes shutdown independent of a Process that fails to honour its cancellation context; the
+// runner still owns physical reaping, and the persisted marker remains for recovery.
 func (daemon *daemon) terminateProcessBounded(process Process, grace time.Duration) {
 	if process == nil {
 		return

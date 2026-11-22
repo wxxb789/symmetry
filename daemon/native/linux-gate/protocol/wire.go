@@ -54,11 +54,8 @@ const (
 	maxCommandVector           = 128
 )
 
-// OwnerConfig is the non-secret root-owned A/B identity and optional pinned
-// StateDir provisioned by the operator. StateDir is empty only for legacy v1
-// owner config; such config remains valid for launch but not root cleanup.
-// Namespace UID/GID 1 map to BUID/BGID; host A and host root are deliberately
-// absent from both maps.
+// Non-secret namespace UID/GID 1 map to BUID/BGID; host A and host root are
+// deliberately absent from both maps, so an empty StateDir means legacy v1 config.
 type OwnerConfig struct {
 	AUID     uint32
 	AGID     uint32
@@ -67,8 +64,6 @@ type OwnerConfig struct {
 	StateDir string
 }
 
-// ProcessIdentity pins the gate/native process through its pidfd, boot ID and
-// creation-time start tick. Namespace fields identify the A-created userns.
 type ProcessIdentity struct {
 	PID          int
 	StartTime    uint64
@@ -80,9 +75,8 @@ type ProcessIdentity struct {
 	OwnerPID     int
 }
 
-// LauncherIdentity pins the transient root producer before its one launch
-// request is sent. The caller's hook must persist this identity (or fail); a
-// hook error closes the private channel and prevents gate creation.
+// The caller's hook must persist this identity or fail: a hook error closes the
+// private channel and prevents gate creation.
 type LauncherIdentity struct {
 	PID       int
 	StartTime uint64
@@ -90,17 +84,14 @@ type LauncherIdentity struct {
 	Identity  string
 }
 
-// LauncherReady is emitted by the fixed root core only after it has verified
-// the sanitized root environment, empty supplementary groups, inherited FDs,
-// and authenticated A channel. Its identity must match the command.Start PID.
+// Emitted only after the root core verified its sanitized environment, empty
+// supplementary groups, inherited FDs and A channel; identity = command.Start PID.
 type LauncherReady struct {
 	PID       int
 	StartTime uint64
 	Identity  string
 }
 
-// LauncherReadyFailureStage is a fixed, non-sensitive root startup phase that
-// can be reported to the authenticated A channel before READY.
 type LauncherReadyFailureStage uint32
 
 const (
@@ -137,8 +128,7 @@ func (stage LauncherReadyFailureStage) String() string {
 	}
 }
 
-// LauncherReadyFailureError is safe to surface to the A helper: it contains
-// only a fixed stage code and never includes B-controlled data or paths.
+// Safe to surface to A: only a fixed stage code, never B-controlled data or paths.
 type LauncherReadyFailureError struct {
 	Stage LauncherReadyFailureStage
 }
@@ -150,15 +140,12 @@ func (failure *LauncherReadyFailureError) Error() string {
 	return "transient root launcher failed READY stage " + failure.Stage.String()
 }
 
-// GateProductionAuth contains the existing per-run journal launch token and
-// helper secret. Prepare sends them only over its authenticated inherited
-// socket; neither value is placed in argv or environment.
+// Sent only over the authenticated inherited socket, never via argv or environment.
 type GateProductionAuth struct {
 	LaunchToken string
 	Secret      string
 }
 
-// LaunchRequest is the authenticated A-to-root fixed prepare request.
 // Secret is raw entropy and must be cleared after result verification.
 type LaunchRequest struct {
 	ReleaseToken [32]byte
@@ -166,23 +153,19 @@ type LaunchRequest struct {
 	Secret       [32]byte
 }
 
-// LaunchRequestSize is the exact one-packet prepare request size.
 const LaunchRequestSize = launchRequestSize
 
 const (
-	// LaunchStatusReady means the A gate is mapped, parked, and pidfd-transferred.
+	// The A gate is mapped, parked, and pidfd-transferred.
 	LaunchStatusReady uint32 = iota
-	// LaunchStatusRejected means setup failed and the launcher proved its gate child exited.
+	// Setup failed and the launcher proved its gate child exited.
 	LaunchStatusRejected
-	// LaunchStatusUnresolved means the root launcher could not prove gate exit.
+	// The root launcher could not prove that the gate child exited.
 	LaunchStatusUnresolved
-	// LaunchStatusNeverProduced is signed by root only for failures before the
-	// core calls Cmd.Start; any attempted clone is unresolved or gate-stopped.
+	// Signed by root only for failures before the core calls Cmd.Start.
 	LaunchStatusNeverProduced
 )
 
-// LaunchResult is the fixed result transferred over the launch socket. A
-// pidfd is sent separately with SCM_RIGHTS when a gate exists.
 type LaunchResult struct {
 	Status        uint32
 	Errno         uint32
@@ -191,15 +174,8 @@ type LaunchResult struct {
 	Authenticator [32]byte
 }
 
-// NativeCommand is a complete execve request. Before RELEASE, A opens Path
-// without following symlinks, requires a direct root/A-owned executable image
-// under non-B-writable parents, and pins its inode for status and /proc
-// readback. Env is not merged with the helper environment. The three A-owned
-// pipe ends are borrowed:
-// Release sends exact SCM_RIGHTS duplicates but does not close the caller's
-// files. The runner must retire its child-side copies after Release settles so
-// stdout and stderr readers can observe EOF. Launcher/release authentication
-// material is never added to Args or Env.
+// Path is opened symlink-free and must be a direct root/A-owned image; the three
+// pipe ends are borrowed and the runner retires its child-side copies after Release.
 type NativeCommand struct {
 	Path   string
 	Args   []string
@@ -212,8 +188,7 @@ type NativeCommand struct {
 	Reuse  *authority.LinuxCloneReuseGrant
 }
 
-// CloneBootstrapFailureStage is a fixed, non-sensitive phase in the B-owned
-// clone/bootstrap handoff. Free-form Git output never crosses the status pipe.
+// Free-form Git output never crosses the status pipe.
 type CloneBootstrapFailureStage uint32
 
 const (
@@ -226,7 +201,6 @@ const (
 	CloneFailureExec
 )
 
-// CloneBootstrapFailureError contains only a fixed stage and errno.
 type CloneBootstrapFailureError struct {
 	Stage CloneBootstrapFailureStage
 	Errno uint32
@@ -261,8 +235,6 @@ func encodeLaunchRequest(token [32]byte, auth GateProductionAuth) ([]byte, error
 	return packet, nil
 }
 
-// EncodeLauncherReady binds the root core's group-cleared readiness event to
-// the exact process identity which the A helper will durably record.
 func EncodeLauncherReady(identity LauncherIdentity) ([]byte, error) {
 	if identity.PID <= 1 || identity.PID > int(^uint32(0)>>1) || identity.StartTime == 0 ||
 		identity.Identity == "" || len(identity.Identity) > 256 || strings.ContainsRune(identity.Identity, '\x00') {
@@ -281,7 +253,6 @@ func EncodeLauncherReady(identity LauncherIdentity) ([]byte, error) {
 	return packet, nil
 }
 
-// DecodeLauncherReady accepts only a bounded, exact producer identity frame.
 func DecodeLauncherReady(packet []byte) (LauncherReady, error) {
 	var ready LauncherReady
 	if len(packet) < 29 || len(packet) > maxLauncherReadySize || string(packet[:8]) != launchMagic ||
@@ -307,15 +278,12 @@ func DecodeLauncherReady(packet []byte) (LauncherReady, error) {
 	return ready, nil
 }
 
-// EncodeLauncherReadyFailure reports one fixed readiness stage without
-// serializing paths, syscall text, or any caller-controlled values.
 func EncodeLauncherReadyFailure(stage LauncherReadyFailureStage) []byte {
 	packet := fixedFrame(frameLauncherReadyFailure, launcherReadyFailureSize)
 	binary.LittleEndian.PutUint32(packet[12:16], uint32(stage))
 	return packet
 }
 
-// DecodeLauncherReadyFailure validates the fixed pre-READY failure frame.
 func DecodeLauncherReadyFailure(packet []byte) (LauncherReadyFailureStage, error) {
 	if validateFixedFrame(packet, frameLauncherReadyFailure, launcherReadyFailureSize) != nil {
 		return 0, errors.New("transient launcher readiness failure frame is malformed")
@@ -360,7 +328,6 @@ func DecodeLaunchResult(packet []byte) (LaunchResult, error) {
 	return result, nil
 }
 
-// EncodeLaunchResult serializes the immutable root-to-A result frame.
 func EncodeLaunchResult(result LaunchResult) ([]byte, error) {
 	if result.Status > LaunchStatusNeverProduced || result.Errno > uint32(^uint32(0)>>1) {
 		return nil, errors.New("Linux owner launcher result status or errno is invalid")
@@ -380,7 +347,6 @@ func EncodeLaunchResult(result LaunchResult) ([]byte, error) {
 	return packet, nil
 }
 
-// DecodeLaunchRequest validates the exact A-to-root prepare request.
 func DecodeLaunchRequest(packet []byte) (LaunchRequest, error) {
 	var request LaunchRequest
 	if len(packet) != launchRequestSize || string(packet[:8]) != launchMagic ||
@@ -398,20 +364,14 @@ func DecodeLaunchRequest(packet []byte) (LaunchRequest, error) {
 	return request, nil
 }
 
-// EncodeGateReady reports that the static gate dropped to A and created its
-// child user namespace.
 func EncodeGateReady() []byte { return fixedFrame(frameGateReady, gateReadySize) }
 
-// ValidateGateReady validates the exact gate-to-root readiness frame.
 func ValidateGateReady(packet []byte) error {
 	return validateFixedFrame(packet, frameGateReady, gateReadySize)
 }
 
-// EncodeGateParked reports that the A gate accepted its one-use token and is
-// parked with no native instruction executed.
 func EncodeGateParked() []byte { return fixedFrame(frameGateParked, gateParkedSize) }
 
-// ValidateGateParked validates the exact pre-RELEASE parking acknowledgement.
 func ValidateGateParked(packet []byte) error {
 	return validateFixedFrame(packet, frameGateParked, gateParkedSize)
 }
@@ -485,8 +445,8 @@ func readWireString(body []byte, position *int) (string, error) {
 	return string(value), nil
 }
 
-// EncodeExecAttempt is written immediately before same-PID execveat; successful
-// exec closes this status descriptor because the gate marks it CLOEXEC.
+// Written immediately before same-PID execveat; a successful exec closes this
+// status descriptor because the gate marks it CLOEXEC.
 func EncodeExecAttempt(device, inode uint64) []byte {
 	packet := fixedFrame(frameExecAttempt, execAttemptSize)
 	binary.LittleEndian.PutUint64(packet[12:20], device)
@@ -494,7 +454,6 @@ func EncodeExecAttempt(device, inode uint64) []byte {
 	return packet
 }
 
-// EncodeExecFailure reports a fail-closed pre-exec/execveat error.
 func EncodeExecFailure(errno uint32) []byte {
 	packet := fixedFrame(frameExecFailure, execFailureSize)
 	binary.LittleEndian.PutUint32(packet[12:16], errno)
@@ -535,24 +494,18 @@ func decodeCloneExecAttempt(packet []byte, kind uint16) (uint64, uint64, error) 
 	return device, inode, nil
 }
 
-// EncodeBootstrapExecAttempt is written by the fixed gate immediately before
-// it execs the root-installed B clone bootstrap in the same PID.
 func EncodeBootstrapExecAttempt(device, inode uint64) []byte {
 	return encodeCloneExecAttempt(frameBootstrapExecAttempt, device, inode)
 }
 
-// DecodeBootstrapExecAttempt accepts the exact same-PID bootstrap image proof.
 func DecodeBootstrapExecAttempt(packet []byte) (uint64, uint64, error) {
 	return decodeCloneExecAttempt(packet, frameBootstrapExecAttempt)
 }
 
-// EncodeNativeExecAttempt is written by the B bootstrap immediately before it
-// execs the requested native CLI in the same PID.
 func EncodeNativeExecAttempt(device, inode uint64) []byte {
 	return encodeCloneExecAttempt(frameNativeExecAttempt, device, inode)
 }
 
-// DecodeNativeExecAttempt accepts the exact same-PID native image proof.
 func DecodeNativeExecAttempt(packet []byte) (uint64, uint64, error) {
 	return decodeCloneExecAttempt(packet, frameNativeExecAttempt)
 }
@@ -635,28 +588,23 @@ func decodeCloneCheckoutReceipt(packet []byte, kind uint16) (authority.LinuxClon
 	return receipt, nil
 }
 
-// EncodeCloneCheckoutReady sends B's exact new-target inode readback to A.
 func EncodeCloneCheckoutReady(receipt authority.LinuxCloneCheckoutReceipt) ([]byte, error) {
 	return encodeCloneCheckoutReceipt(frameCheckoutReady, receipt)
 }
 
-// DecodeCloneCheckoutReady validates the B bootstrap's checkout-ready frame.
 func DecodeCloneCheckoutReady(packet []byte) (authority.LinuxCloneCheckoutReceipt, error) {
 	return decodeCloneCheckoutReceipt(packet, frameCheckoutReady)
 }
 
-// EncodeCloneCheckoutReadyAck is sent only after A durably records the exact
-// checkout receipt. The same receipt body makes the ACK nonce/target-bound.
+// Sent only after A durably records the receipt; the same body makes the ACK nonce-bound.
 func EncodeCloneCheckoutReadyAck(receipt authority.LinuxCloneCheckoutReceipt) ([]byte, error) {
 	return encodeCloneCheckoutReceipt(frameCheckoutReadyAck, receipt)
 }
 
-// DecodeCloneCheckoutReadyAck validates the exact A callback acknowledgement.
 func DecodeCloneCheckoutReadyAck(packet []byte) (authority.LinuxCloneCheckoutReceipt, error) {
 	return decodeCloneCheckoutReceipt(packet, frameCheckoutReadyAck)
 }
 
-// EncodeCloneBootstrapFailure reports one fixed bootstrap phase and errno.
 func EncodeCloneBootstrapFailure(stage CloneBootstrapFailureStage, errno uint32) ([]byte, error) {
 	if stage < CloneFailureRequest || stage > CloneFailureExec || errno == 0 || errno > uint32(^uint32(0)>>1) {
 		return nil, errors.New("Linux clone bootstrap failure code is invalid")
@@ -667,7 +615,6 @@ func EncodeCloneBootstrapFailure(stage CloneBootstrapFailureStage, errno uint32)
 	return packet, nil
 }
 
-// DecodeCloneBootstrapFailure returns only fixed, non-sensitive failure data.
 func DecodeCloneBootstrapFailure(packet []byte) (*CloneBootstrapFailureError, error) {
 	if validateCloneStatusFrame(packet, frameCloneBootstrapFailure, cloneFailureSize) != nil {
 		return nil, errors.New("Linux clone bootstrap failure frame is malformed")

@@ -925,8 +925,6 @@ defmodule SymmetryControl.Integrations.AzureDevOpsTest do
     HTTPStub.verify!()
   end
 
-  # Fails if called: the nil-work-item short-circuit must return before the
-  # provider authenticates.
   defmodule AuthMustNotBeCalledStub do
     @moduledoc false
 

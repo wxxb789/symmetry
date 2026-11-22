@@ -20,15 +20,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// configuredHarnessKind maps a configured runtime.harness_kind to the daemon
-// harness kind and rejects unsupported values. The probe vocabulary is owned by
-// the app package (internal/app/probe.go), which also validates the same set in
-// the config loader (internal/config/config.go); linuxpreflight must not import
-// internal/app and that file is outside this extraction, so this is a verbatim
-// copy. It has to stay in lockstep with both owners; it is pinned by
-// TestNativeRuntimeSelectionVocabularyMatchesTheConfiguredKinds to a literal
-// table, not to the app-side copy, so drift between the copies is undetected. A
-// kind this copy does not know is still rejected here, never admitted.
 func configuredHarnessKind(value string) (harness.Kind, error) {
 	switch value {
 	case config.RuntimeHarnessGeneric:
@@ -50,10 +41,8 @@ func configuredHarnessKind(value string) (harness.Kind, error) {
 	}
 }
 
-// nativeGoalHarnessKind identifies adapter families whose launch contract is
-// staged: process identity, then native session handle, then a native turn. The
-// generic adapter deliberately remains outside this set. Verbatim copy of the
-// app-side owner (internal/app/probe.go); see configuredHarnessKind.
+// Adapter families whose launch contract is staged: process identity, then native
+// session handle, then a native turn. Verbatim copy of the app-side owner.
 func nativeGoalHarnessKind(kind harness.Kind) bool {
 	switch kind {
 	case harness.KindCodex, harness.KindClaude, harness.KindPi, harness.KindOMP, harness.KindOmO, harness.KindOpenCode:

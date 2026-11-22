@@ -1081,9 +1081,8 @@ func (client *LinuxOwnerAnchorClient) RetirePreGateClearedRunWithProof(
 	return client.retireClearedRunWithProofs(ctx, key, fence, helper, nil, &proofCopy)
 }
 
-// sendRetireRequest performs the authenticated, bounded send and read the two
-// retired-run paths share; each caller keeps its own verification of the
-// response and its own purpose text, so the errors stay byte-identical.
+// sendRetireRequest does the authenticated bounded send/read the two retired-run paths share; each
+// caller keeps its own response verification and purpose text, so the errors stay byte-identical.
 func (client *LinuxOwnerAnchorClient) sendRetireRequest(
 	ctx context.Context,
 	request linuxOwnerAnchorRequest,

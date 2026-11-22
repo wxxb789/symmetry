@@ -32,12 +32,8 @@ type linuxOwnerAnchorWitnessConfig struct {
 	HoldForReleaseFile bool   `json:"hold_for_release_file,omitempty"`
 }
 
-// LinuxOwnerAnchorGrant is the durable, run-bound input to the anchor. The
-// caller obtains it from the existing RunJournal after the cgroup leaf is
-// durably bound. Secret, PipeToken, JobID and Fence.LeaseToken are local
-// control material: they travel only over this private socket and must never
-// be logged or placed in argv/environment. The anchor keeps no journal copy
-// and makes no scheduling or lease decisions.
+// LinuxOwnerAnchorGrant is the durable, run-bound input to the anchor. Secret, PipeToken,
+// JobID and Fence.LeaseToken are local control material: never log them or put them in argv/environment.
 type LinuxOwnerAnchorGrant struct {
 	ReservationVersion int                                  `json:"reservation_version"`
 	RunKey             LinuxOwnerAnchorRunKey               `json:"run_key"`
@@ -766,11 +762,8 @@ func linuxOwnerAnchorUserNamespaceParentIdentity(namespace *os.File) (LinuxUserN
 	return linuxOwnerAnchorUserNamespaceFDIdentity(parent)
 }
 
-// linuxOwnerAnchorUserNamespaceRun returns the exact active RunKey whose
-// pinned gate namespace is an ancestor of process. The Anchor's own pinned
-// user namespace is the traversal stop: an inaccessible parent, malformed
-// nsfs object, changed PID, or unstable namespace returns an error and cannot
-// be interpreted as current-run origin.
+// linuxOwnerAnchorUserNamespaceRun returns the exact active RunKey whose pinned gate namespace is an
+// ancestor of process; an inaccessible parent, changed PID or unstable namespace is never current-run origin.
 func linuxOwnerAnchorUserNamespaceRun(
 	ctx context.Context,
 	process authority.LinuxCgroupProcessIdentity,
@@ -949,9 +942,8 @@ func (anchor *linuxOwnerAnchor) classifyUnregisteredPreReleaseGate(
 	launcherCount := 0
 	for _, child := range run.children {
 		if child.role != "launcher" {
-			// A physical-only gate is accepted only in the narrow fork gap
-			// after the run's sole registered root launcher and before any gate
-			// or native identity was installed.
+			// A physical-only gate is accepted only in the narrow fork gap after the run's sole
+			// registered root launcher and before any gate or native identity was installed.
 			return linuxOwnerAnchorRunChildClassification{}, false, nil
 		}
 		if child.identity.Validate() != nil || child.creator.Validate() != nil || !child.creator.Equal(run.helper) ||
@@ -959,10 +951,8 @@ func (anchor *linuxOwnerAnchor) classifyUnregisteredPreReleaseGate(
 			child.classification.Origin != linuxOwnerAnchorRunChildOriginRegisteredCurrent {
 			return linuxOwnerAnchorRunChildClassification{}, false, errors.New("pre-release gate source lacks the exact registered root launcher")
 		}
-		// RegisterProcess already bound this retained PIDFD to the exact
-		// launcher start identity. The helper may have waitid-reaped it before
-		// Anchor observes helper death, in which case fdinfo intentionally no
-		// longer exposes a numeric PID; never reopen that number after exit.
+		// RegisterProcess already bound this retained PIDFD to the exact launcher start identity.
+		// The helper may waitid-reap it first, so fdinfo stops exposing the numeric PID: never reopen it.
 		ready, err := linuxOwnerAnchorPIDFDReady(child.pidfd)
 		if err != nil || !ready {
 			return linuxOwnerAnchorRunChildClassification{}, false, fmt.Errorf("verify root launcher exited before unregistered gate containment: %w", errOr(err, ErrLinuxOwnerLauncherPIDFDNotReady))
@@ -1000,12 +990,8 @@ func (anchor *linuxOwnerAnchor) classifyUnregisteredPreReleaseGate(
 	if err := classification.ValidateFor(run.grant, run.helper, process); err != nil {
 		return linuxOwnerAnchorRunChildClassification{}, false, err
 	}
-	// Only the authenticated Anchor RegisterGate transition can install a gate
-	// identity, and AuthorizeGateRelease rejects requests until that transition
-	// has pinned GateReady. The fixed helper calls AuthorizeGateRelease before
-	// writing the one-use private RELEASE socket, so an exact helper exit with
-	// neither state set proves this pre-RegisterGate gate could not have received
-	// RELEASE. Keep that proof's image inode pinned through containment.
+	// AuthorizeGateRelease rejects until RegisterGate pins GateReady, so an exact helper exit with
+	// neither state proves RELEASE was unreachable; keep that proof's image inode pinned.
 	if err := run.trackPreReleaseGatePhysicalOnlyChild(process, pidfd, classification); err != nil {
 		return linuxOwnerAnchorRunChildClassification{}, false, fmt.Errorf("retain exact pre-release gate origin proof: %w", err)
 	}

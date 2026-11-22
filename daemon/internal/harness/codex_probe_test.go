@@ -124,9 +124,6 @@ func TestCodexProbeSchemaMismatchFailsClosed(t *testing.T) {
 	}
 }
 
-// TestCodexProbeRejectsNilContextWithoutCallingTheRunner pins the entry-level
-// guard. Its text is the shared helper's string by design, so the observable
-// pin is: no panic, no runner call, no promoted evidence.
 func TestCodexProbeRejectsNilContextWithoutCallingTheRunner(t *testing.T) {
 	runner := &codexFixtureRunner{}
 	capabilities, err := probeCodexExecutableWithRunner(nil, "codex", runner)

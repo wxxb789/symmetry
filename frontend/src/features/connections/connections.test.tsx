@@ -1219,11 +1219,6 @@ describe("project resources", () => {
   });
 
   it("renders a whitespace-only served name, status and sync status verbatim", async () => {
-    // Served text is rendered as served: a whitespace-only member is not blank
-    // for this surface's own presence rule, so the name reaches the heading
-    // unchanged instead of the id fallback, and the two badges label the
-    // unreadable status they were served rather than a known status word. A
-    // helper that trims has to be a declared policy here, not a silent swap.
     renderConnections(() => undefined, "/portal/connections", {
       projects: [projectFixture({ resources: [resourceFixture({ name: " ", status: " ", sync_status: " " })] })],
     });

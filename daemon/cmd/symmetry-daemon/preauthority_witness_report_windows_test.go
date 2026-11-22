@@ -14,12 +14,9 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/state"
 )
 
-// The witness report is the only durable artifact of a reached stage, so a
-// swallowed writer error publishes a healthy-looking invocation with missing
-// evidence. These tests drive the writer's result-directory and publish
-// failures and the entry function mapping its returned error to exit 1.
+// The witness report is the only durable artifact of a reached stage: a swallowed
+// writer error would publish a healthy-looking invocation with missing evidence.
 
-// recoveryReport is the report body the recovery-shaped cases write or fail to write.
 var recoveryReport = preAuthorityWitnessReport{Mode: "recover", Stage: "recover", Status: "already-clear"}
 
 func TestWritePreAuthorityWitnessReportPublishesReportAtomically(t *testing.T) {
@@ -206,8 +203,8 @@ func TestPreAuthorityWitnessCommandExitsOneWhenReportMissing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// init() maps the entrypoint error to stderr + exit 1, which only a real
-	// process can observe, so run this test binary through the entrypoint.
+	// init() maps the entrypoint error to exit 1, which only a real process can
+	// observe, so run this test binary through the entrypoint.
 	command := exec.Command(os.Args[0],
 		"-preauthority-witness",
 		"-mode", "recover",

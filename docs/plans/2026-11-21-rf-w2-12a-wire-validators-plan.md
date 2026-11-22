@@ -212,3 +212,20 @@ end-to-end] — record as a local-protocol strictness note in the PR body, per P
 - The duplicate-member rejection is not exercised end-to-end against a live control plane on this
   host (no Control stack started); the parity claim rests on the two named tests plus the Jason
   emission audit cited above.
+
+## Comment-policy sweep (2026-11-22)
+
+Module intent removed from `daemon/internal/control/validation.go` by the 2026-11-22 comment-policy sweep is recorded below (workstream record "ws12-daemon-misc").
+
+- `daemon/e2e/internal/operator/client.go` (HEAD lines 1–7, package doc):
+```
+// Package operator carries the operator task-control driver for its only
+// callers — the end-to-end witnesses under daemon/e2e. Production has no
+// reachable caller for the driver, so it ships beside those callers instead of
+// staying unreachable in the machine control client. The transport, error and
+// decode substrate below is a byte-identical copy of the declarations the
+// machine client keeps; the driver's operator-exclusive response validators
+// live in validation.go and its v1 task projection in task.go.
+```
+
+The sweep's plan is [`docs/plans/2026-11-22-comment-policy-sweep-plan.md`](2026-11-22-comment-policy-sweep-plan.md).
