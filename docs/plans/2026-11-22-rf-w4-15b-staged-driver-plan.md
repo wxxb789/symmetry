@@ -133,7 +133,7 @@ the driver now owns.
 | codex | `opened` | schema load, `turnStarted`/`turnStarting` + deferred rollback, replay branch | `"codex native session has not opened a thread"` (the `threadID == ""` check stays in the hook) |
 | claude | `opened` | frame marshal, write fence, `turnStarted`, emit, write | `"Claude Code native adapter session has not opened"` |
 | omo | `opened` | prompt build, `turnGate`, prepared/recovering machine | `"OmO native handle has not opened"` |
-| omp | `opened` | `started`/`stopping`/`failure`, emit, prompt call | `errors.Join(session.failure, "OMP session does not admit another prompt")` |
+| omp | `opened` | `started`/`stopping`/`failure`, emit, prompt call | plain `"OMP session does not admit another prompt"` (the shared `errOMPPromptRefused`; only the `Open` refusal joins `session.failure`, §11) |
 
 ### 4.4 close
 

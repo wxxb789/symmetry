@@ -28,18 +28,26 @@ the WSL row runs Ubuntu-24.04 (see §12). Nothing is committed.
 | `daemon/internal/harness/codex/adapter_test.go` (−1: one inert line; apply +28: F4 pin) | `b8fbd163bb0105d22efaaf310f37fd3f4f38e4c4bab0875c963f43a3369ac46b` |
 | `daemon/internal/harness/pi/adapter_test.go` (apply +9: F4 pin) | `e4025812bf2fa141a9e9c2c324236ffd77efe387e28fb2233772264bcd968e7b` |
 | `daemon/internal/harness/omo/adapter_test.go` (apply +19: F4 pin) | `8c8c41dd8980e57bc1286df65124518dfc0436accef0bec4782d3c2ea97bea4e` |
-| `docs/plans/2026-11-22-rf-w4-15b-staged-driver-plan.md` | `dad0228968487b3e058614127f27e7ba90300caf2f03657a44fb01fc949229d2` |
-| `docs/TODO.md` (delivered/merge revision) | `2f762c5fc4dcdf9356dfc19f76ecf483225cc02d967341a49922208d7feea124` |
+| `docs/plans/2026-11-22-rf-w4-15b-staged-driver-plan.md` (fix r1: §4.3 omp cell) | `964d8155a6cda5e566feef52d314480485dc8b126fd3f05e085dfc1bef7645d9` |
+| `docs/TODO.md` (delivered/merge revision, `0aed5adb`) | `8861979db3376150cc4e1e11ff63c531883b38d22164542b4623d9e0a9d34713` |
 | this record | the file you are reading (no self-referential hash) |
 
 Apply stage (2026-11-22, accepted simplify findings F1–F5 and P1): rows marked "apply" were
 re-hashed on the apply revision; the implement-revision values they replace are, in the order
 above, `842f7b28…`, `7a4095aa…`, `7c89bbf2…`, `729ab6bf…`, `765ee5c7…`, `35c4164a…`,
-`decbd3e4…` and `d53ca106…`. `docs/TODO.md`'s recorded implement value `d53ca106…` was the
-pre-merge branch blob (`03fc75b6`); the merge `64703460` took origin/main's four-line deletion of an
-unrelated `frontend/src/services/api.ts` TODO bullet, so the delivered blob is `2f762c5f…`. The
-slice's own TODO delta is unchanged: `git diff --numstat 7f34d40d..64703460 -- docs/TODO.md` =
-`14 0`.
+`decbd3e4…` and `d53ca106…` (`pi/adapter_test.go` and `omo/adapter_test.go` are base-identical at
+implement; the apply pins are their whole diff). `docs/TODO.md`'s recorded implement value
+`d53ca106…` was the pre-merge branch blob (`03fc75b6`); the merge `64703460` took origin/main's
+four-line deletion of an unrelated `frontend/src/services/api.ts` TODO bullet (`2f762c5f…`), and the
+final merge `0aed5adb` additionally took origin/main `c5d0a4a8`'s #241 edit to the same file (the
+`frontend/src/features/planning/write-policy.ts` bullet), so the delivered blob is `8861979d…`. The
+slice's own entry is the only `docs/TODO.md` delta over the frozen range: `git diff --numstat
+c5d0a4a8..0aed5adb -- docs/TODO.md` = `14 0` (and `7f34d40d..64703460` = `14 0`).
+
+Fix stage r1 (2026-11-22, review findings STD-A01/SPEC-A01/SPEC-A02): the apply stage rewrote the
+plan (to `227524f4…`) without refreshing its §1 row, so this stage re-hashed that row after its
+§4.3 omp-cell correction; the `docs/TODO.md` row was re-hashed to the delivered blob (above). The
+file-cap rows now name their corpus in §9.1.
 
 Unchanged and re-hashed to bind the claim: `daemon/internal/harness/close_gate.go`,
 `process_forwarding.go`, `wait_barrier.go`, `nil_value.go`, `result_clone.go`, `event_delivery.go`
@@ -273,7 +281,7 @@ text and the guard the hook keeps inside the adapter.
 | subject list | `git diff --name-only` | no `opencode/**`, no `execution/**`, no `testdata/**`, no 5a helper |
 | hook count | §2 grep | 4 |
 | callback grep | §4 grep | 0 conforming-adapter hits |
-| file cap | `wc -l` | `staged_driver.go` 178, `staged_driver_test.go` 380; `codex/adapter.go` 2616 (base 2619 — not grown) |
+| file cap | `wc -l` (corpus and over-cap listing: §9.1) | `staged_driver.go` 178, `staged_driver_test.go` 380; `codex/adapter.go` 2616 (base 2619 — not grown) |
 
 ### Apply-revision re-run (2026-11-22, accepted findings F1–F5 and P1)
 
@@ -290,10 +298,63 @@ text and the guard the hook keeps inside the adapter.
 | app tree | `go test -count=1 -timeout 1500s ./internal/app/...` | 0 — `ok …internal/app 162.385s`. An earlier attempt of the same command on the same bytes failed at 543.275s on `TestOmOAttachAckRegressionCancellationAndDeadlineDoNotRenewBudget/{caller_deadline,admission_deadline}`: its 2-second deadline expired inside a loopback `GET` (`context deadline exceeded`); the same test then passed 3/3 in isolation (71.337s) and the full package passed on re-run, with Windows loopback probes at that point at 0/30 connect and 0/30 HTTP failures — recorded as a host-level loopback stall, not a code regression |
 | mutations m4/m10/m11 | §8 | red, reverted, §1 apply hashes re-verified |
 | whitespace | `git diff --check` | 0 |
-| file cap | `wc -l` | `staged_driver.go` 160, `staged_driver_test.go` 381; `codex/adapter.go` 2617 (base 2619; the apply +1 is the shared `errNativeThreadNotOpened` declaration — the slice net stays −2) |
+| file cap | `wc -l` (corpus and over-cap listing: §9.1) | `staged_driver.go` 160, `staged_driver_test.go` 381; `codex/adapter.go` 2617 (base 2619; the apply +1 is the shared `errNativeThreadNotOpened` declaration — the slice net stays −2) |
 | hook count | §2 grep | 4 (relative lines 4/7/8/11) |
 | callback grep | `rg 'PersistProcess\|SupervisorHandoff\|PersistContainment' internal/harness --glob '!*_test.go'` | `opencode` 10, `staged_driver` 6, `types` 6; 0 conforming-adapter hits |
 | WSL race (harness + app) | see §12 (Command F) | 0 — all ten packages `ok` under `-race`, `internal/app` 815.956s |
+
+### Fix-revision re-run (2026-11-22, review findings STD-A01/SPEC-A01/SPEC-A02)
+
+The fix changes only this record and the plan (no daemon byte), so the code-bound rows below
+re-ran at the delivered bytes; the expensive rows are bound to the last recorded runs of the same
+bytes instead of being re-run.
+
+| Gate | Command (from `daemon/` unless noted) | Exit |
+| --- | --- | --- |
+| formatting | `gofmt -l internal/` | 0 (no output) |
+| vet | `go vet ./...` | 0 |
+| windows build | `GOOS=windows go build ./...` | 0 |
+| linux build | `GOOS=linux go build ./...` | 0 |
+| linux arm64 build | `GOOS=linux GOARCH=arm64 go build ./...` | 0 |
+| linux amd64 vet | `GOOS=linux GOARCH=amd64 go vet ./internal/harness/... ./internal/app/...` | 0 |
+| harness tree | `go test -count=1 -timeout 600s ./internal/harness/...` | 0 — `harness 0.219s`, `claude 13.788s`, `codex 13.570s`, `linejson 0.131s`, `omo 3.421s`, `omp 3.549s`, `opencode 0.482s`, `pi 5.010s`, `probeconformance 7.262s`; 548 test functions (`go test -list '.*' ./internal/harness/...`), count unchanged by the fix |
+| subject bytes | §1 re-hash of the 17 rows against the fix revision | 17/17 match |
+| whitespace | `git diff --check` | 0 |
+| host path | `git diff origin/main...HEAD \| grep -i 'users/\|\\u'` | no matches (`<HOST-PATH>` rule) |
+| file cap | §9.1 numbers re-measured on the fix revision | match (160 / 381 / 2,617 / 3,172 / 1,570 / 3,845 / 1,554) |
+| app tree (not re-run) | `go test -count=1 -timeout 1500s ./internal/app/...` | last runs of the same daemon bytes stand: implement `154.726s`, apply `162.385s`, WSL `-race` Command F `815.956s`; the review's independent Windows run is `351.713s` |
+| mutations (not re-run) | §8 | no code byte changed since the review reproduced m1/m2/m3/m4/m8/m10 and the m11 variant red |
+
+### 9.1 File-cap corpus (fix r1, review finding SPEC-A02)
+
+The contract's gate reads "no file > 1,500 L (`codex/adapter.go` is 2,619 L — this slice must not
+grow it; W5-16 splits it)". The corpus the cap rows above gate is the slice's own file surface —
+the files it creates, moves or splits, plus the file the gate names. The two created files end
+under the cap; the named `codex/adapter.go`, already over it, loses two lines and does not grow:
+
+| Corpus file | Delivered | Base (`c5d0a4a8`) | Delta |
+| --- | --- | --- | --- |
+| `staged_driver.go` (created) | 160 | — | new |
+| `staged_driver_test.go` (created) | 381 | — | new |
+| `codex/adapter.go` (named by the gate; split deferred to W5-16) | 2,617 | 2,619 | −2 |
+
+Four further files this slice touches were already over 1,500 L at the base revision and all four
+grew. They are listed here, with the cause of each delta, so a literal "any touched file > 1,500 L
+= not achieved" reading is auditable instead of inferred:
+
+| Touched file over the cap | Delivered | Base (`c5d0a4a8`) | Delta | Cause |
+| --- | --- | --- | --- | --- |
+| `codex/adapter_test.go` | 3,172 | 3,144 | +28 | apply-stage F4 pin (`StartTurn`-before-open text) |
+| `omo/adapter_test.go` | 1,570 | 1,551 | +19 | apply-stage F4 pin |
+| `linux_owner_witness_linux.go` | 3,845 | 3,837 | +8 | grant construction at the `StartRequest` site (Change 3) |
+| `docs/TODO.md` | 1,554 | 1,540 | +14 | the dated W6-04 entry (Change 4 / R12) |
+
+Those four growths are required work (the accepted apply pins, the contract's grant construction
+and its TODO entry), so the literal reading is not met, and in the table's order it would take
+deleting 1,672 / 70 / 2,345 / 54 lines respectively — pinned tests, tracker entries or
+contract-required production code — to reach the cap. Ruling requested from the conductor: does the
+cap bind the slice's file surface (met, first table) or every touched file (not met, second table)?
+This record claims the first reading only.
 
 ## 10. Subject-list proof
 
@@ -333,7 +394,7 @@ harness tree run above (the first is Linux-gated and runs in §12).
 | --- | --- |
 | five adapters + generic + types + the two app files (non-test, base→worktree) | +402 / −354 (net +48; implement revision +395 / −348) |
 | adapter test files | +77 / −1 (implement revision +13 / −1) |
-| `docs/TODO.md` | +14 / −4 (the slice's own delta is +14 / −0 over `7f34d40d..64703460`; the −4 is origin/main's W4-09 closeout carried by the merge, §1) |
+| `docs/TODO.md` | +15 / −5 over the record's base `adfe7d6a..0aed5adb` (apply revision +14 / −4; the slice's own entry is +14 / −0 and is the only `docs/TODO.md` delta over the frozen range `c5d0a4a8..0aed5adb`, origin/main supplying the −4 `api.ts` closeout and the +1 / −1 #241 `write-policy.ts` line, §1) |
 | new `staged_driver.go` | +160 (implement revision +178) |
 | new `staged_driver_test.go` | +381 (implement revision +380) |
 | the plan and this record (untracked) | documentation |
