@@ -38,6 +38,21 @@ var rawWireErrorTexts = map[string]string{
 	"trailing_garbage":      "invalid character",
 }
 
+// The corpus vocabulary; a row accepted at every level never consults
+// rawWireErrorTexts, so an unknown class must fail before the level loop.
+var rawWireErrorClasses = map[string]struct{}{
+	"duplicate_json_member": {},
+	"noncanonical_number":   {},
+	"unsafe_integer":        {},
+	"leading_zero":          {},
+	"negative_zero":         {},
+	"nonfinite_number":      {},
+	"invalid_utf8":          {},
+	"bom":                   {},
+	"trailing_value":        {},
+	"trailing_garbage":      {},
+}
+
 var rawWireLevels = map[string]responseDecodeLevel{
 	"legacy": responseDecodeLegacy,
 	"typed":  responseDecodeTyped,
@@ -63,6 +78,9 @@ func TestResponseDecodeLevelsMatchTheRawCorpus(t *testing.T) {
 		seen++
 		fixture := fixture
 		t.Run(fixture.ID, func(t *testing.T) {
+			if _, known := rawWireErrorClasses[fixture.WireError]; !known {
+				t.Fatalf("unknown wire_error class %q", fixture.WireError)
+			}
 			data, err := os.ReadFile(filepath.Join(root, "contracts", "fixtures", filepath.FromSlash(fixture.Path)))
 			if err != nil {
 				t.Fatal(err)
@@ -87,7 +105,7 @@ func TestResponseDecodeLevelsMatchTheRawCorpus(t *testing.T) {
 				}
 				want, known := rawWireErrorTexts[fixture.WireError]
 				if !known {
-					t.Fatalf("unknown wire_error class %q", fixture.WireError)
+					t.Fatalf("wire_error class %q was rejected but this reader has no native text", fixture.WireError)
 				}
 				if !strings.Contains(err.Error(), want) {
 					t.Fatalf("schema rejection %q does not carry %q", err, want)
@@ -163,6 +181,17 @@ func TestResponseDecodeRoutesEveryPathThroughTheEntry(t *testing.T) {
 		}
 	})
 
+	t.Run("requestWithStatusNilResponse", func(t *testing.T) {
+		client := machineResponse(t, `{"value":1}`)
+		delta := entryDelta(t, func() error {
+			_, err := client.requestWithStatus(context.Background(), http.MethodGet, "v1/enroll", nil, "token", "", nil, nil)
+			return err
+		})
+		if delta != 1 {
+			t.Fatalf("entry calls = %d, want 1", delta)
+		}
+	})
+
 	t.Run("decodeStrictObjectJSON", func(t *testing.T) {
 		var target struct {
 			GoalID string `json:"goal_id"`
@@ -191,6 +220,20 @@ func TestResponseDecodeRoutesEveryPathThroughTheEntry(t *testing.T) {
 		delta := entryDelta(t, func() error {
 			_ = decodeAPIError(http.StatusBadRequest, http.Header{}, []byte(`{"error":{"code":"invalid_request","message":"bad"}}`))
 			return nil
+		})
+		if delta != 1 {
+			t.Fatalf("entry calls = %d, want 1", delta)
+		}
+	})
+
+	t.Run("decodeEvidenceBatchConflictDetails", func(t *testing.T) {
+		body, err := os.ReadFile(filepath.Join(controlRepositoryRoot(t), "contracts", "fixtures", "valid", "evidence-batch-conflict-details.basic.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		delta := entryDelta(t, func() error {
+			_, err := decodeEvidenceBatchConflictDetails(json.RawMessage(body))
+			return err
 		})
 		if delta != 1 {
 			t.Fatalf("entry calls = %d, want 1", delta)

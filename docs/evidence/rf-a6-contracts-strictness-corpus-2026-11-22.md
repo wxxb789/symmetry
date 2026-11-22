@@ -44,7 +44,7 @@ plus the `unpaired_surrogate` cases in `boundary.test.mjs` and `schema_test.go`.
 
 | row | runtime | today's outcome | cause |
 |---|---|---|---|
-| `goal-command.raw-duplicate-member-top-level` | Elixir | accepts | `Jason` keeps the last member; `validate_goal_command/2` then sees the valid document |
+| `goal-command.raw-duplicate-member-top-level` | Elixir | accepts | the modelled `Jason` decode keeps the first member; `validate_goal_command/2` then sees the valid document, while the strict mutation ingress rejects the duplicate before any validator |
 | `goal-command.raw-number-fractional` | Elixir | accepts | `Jason` decodes `1.0` as a float and `validate_goal_command/2` accepts the value |
 | `goal-command.raw-number-exponent` | Elixir | accepts | `Jason` decodes `1e0` as a float and `validate_goal_command/2` accepts the value |
 | `goal-command.raw-bom-prefix` | JS | accepts | `JSON.parse` strips a leading BOM |
@@ -187,7 +187,7 @@ artifact).
 | Elixir | `sh <HOST-PATH>/.local/state/gdd/scratch/rf-a6-mix.sh test test/symmetry_control/goals/contract_fixture_manifest_test.exs test/symmetry_control_web/plugs/strict_evidence_json_test.exs` (portable Elixir 1.20.4 / OTP 29.0.6, `MIX_TEST_PARTITION=rf-a6`, foreground, no concurrent mix run) | 0 | `Result: 25 passed`; re-run at the settled tree: 25 passed (2.4s) |
 | citation existence | `python scripts/ci/check-citation-existence.py --repo . --base <snap>^ --head <snap>` over synthetic snapshots built with `GIT_INDEX_FILE` + `git commit-tree` (real refs untouched), last `9c9ce10c` | 0 | `no audited document added or modified between 333c572c1cd4 and 9c9ce10c4515; nothing to check` (same result for the earlier passes `b890ce6c`, `be12078f`) |
 | whitespace | `git diff --check` (repo root) | 0 | no output |
-| host-path scan | `git diff HEAD \| grep -ci "users/"` (repo root) | 0 | 0 matches |
+| host-path scan | case-insensitive profile-path grep over `git diff HEAD` (repo root) | 0 | 0 matches |
 | DLP escape scan | the two-character backslash+`u` escape grepped over `git diff HEAD` additions and the new files directly | 0 | 0 matches |
 
 Row count: `contracts/fixtures/manifest.json` 248 → 261 (13 raw rows). The host's shared
@@ -219,3 +219,63 @@ between 9c46e561f6e0 and 505f2f49bc2e`.
   evidence-batch.raw-duplicate-member-nested expected elixir wire acceptance=false, got true`
   (observed at the final tree, then reverted; the test file's working blob equals its
   pre-mutant blob `152d477906dcf0b1cc5e21502a55aad34a54c2ce`, and the gate re-ran green).
+
+## 8. Fix-stage changes and re-runs (2026-11-22, review round 1)
+
+Findings file `rf-a6-contracts-strictness-corpus-fix1.md` (REV-A6-01..06, all valid, all fixed);
+frozen head for the before-state: `1dfdb1d6`.
+
+- REV-A6-01: the false mechanism (Jason keeps the last member) is corrected to the first member
+  in §2's divergence table and in `docs/TODO.md`. Probe with the pinned toolchain
+  (`rf-a6-mix.sh run --no-start`): `Jason.decode!(~s({"a":1,"a":2}))` -> `%{"a" => 1}`, matching
+  `strict_evidence_json_test.exs`'s first-wins test. No corpus assertion depends on the
+  mechanism: both duplicate members in the row are `1`.
+- REV-A6-02: all four readers now hold the full `wire_error` vocabulary (`negative_zero` and
+  `bom` included) and check membership before the acceptance branch, which never consulted the
+  class table; `check.mjs` and `check-effect.mjs` gain the vocabulary as a `Set` beside the
+  native-code map, the two Go readers as `rawWireErrorClasses` beside `rawWireErrorTexts`.
+- REV-A6-03: `contracts/README.md` records the `map[string]any` decode target `wire_levels` is
+  measured with and that a typed DTO can reject more after the entry. Corroboration at the fix
+  tree: `SymmetryGoalCommandV1.expected_revision` (int64) rejects `1.0` and `1e0` (`json: cannot
+  unmarshal number 1.0 into Go struct field SymmetryGoalCommandV1.expected_revision of type
+  int64`), while `-0` into the same field decodes as 0.
+- REV-A6-04: `contracts/README.md` and this record's §2 name the modelled Elixir decode path
+  (Jason outside the machine-request schemas) and note that the `StrictJSONDecoder` mutation
+  ingress under `/api/v1/**` and `/portal/api/**` already rejects the top-level duplicate member.
+- REV-A6-05: `contracts/README.md` now states the repaired-document isolation is a property of
+  the fixtures, not a gate assertion (a raw rejection stops every reader before schema
+  validation), replacing the unqualified "so only the raw property fails".
+- REV-A6-06: `daemon/internal/control/decode_test.go` adds the two missing routing subtests,
+  `requestWithStatusNilResponse` and `decodeEvidenceBatchConflictDetails` (the latter over
+  `valid/evidence-batch-conflict-details.basic.json`).
+
+Negative proofs re-derived at the fix tree, each mutant applied alone and reverted with the
+original sha256 restored (`client.go` `e5fab880844d…`, `manifest.json` `ad63bae2605d…`):
+
+| mutant | before the fix (`1dfdb1d6`) | after the fix |
+|---|---|---|
+| `goal-command.raw-number-negative-zero` `wire_error` -> `negzero` | `check.mjs`, `check-effect.mjs`, `TestResponseDecodeLevelsMatchTheRawCorpus`, `TestGoalTransportParsesContractFixtures` all exit 0 | all four exit 1: `fixture goal-command.raw-number-negative-zero has unknown wire_error class negzero`; `AssertionError: unknown wire_error class for goal-command.raw-number-negative-zero: negzero`; `decode_test.go:82` and `goal_contract_fixture_test.go:79` `unknown wire_error class "negzero"` |
+| inline `json.Unmarshal` at the nil-response branch of `requestWithStatus` and at `decodeEvidenceBatchConflictDetails` | `TestResponseDecodeRoutesEveryPathThroughTheEntry` exit 0 | `--- FAIL …/requestWithStatusNilResponse` (`decode_test.go:191: entry calls = 0, want 1`) and `…/decodeEvidenceBatchConflictDetails` (`decode_test.go:239: entry calls = 0, want 1`) |
+
+### Fix-stage gates (foreground, serialized, fix tree)
+
+| Gate | Command (cwd) | Exit | Output |
+|---|---|---:|---|
+| contracts:check | `mise x pnpm@12.17.0 -- pnpm --trust-lockfile --config.verify-deps-before-run=false contracts:check` (repo root) | 0 | typecheck pass; `node --test` 35/35 (0 fail); `Generated contract DTOs are up to date.`; `Validated 21 Draft 7 schemas and 261 fixtures.`; `Effect decoded all 261 raw fixtures; 246 parsed documents reached Schema validation` |
+| gofmt | `gofmt -l .` (`daemon/`) | 0 | no output |
+| vet | `go vet ./...` (`daemon/`) | 0 | no output |
+| Linux build | `GOOS=linux go build ./...` (`daemon/`) | 0 | no output |
+| Windows build | `GOOS=windows go build ./...` (`daemon/`) | 0 | no output |
+| Go tests | `go test -count=1 ./internal/protocol/... ./internal/control/... ./internal/contracts/...` (`daemon/`) | 0 | `ok` ×3 (5.322s / 2.835s / 2.835s); `-v`: RUN=1102 (RUN=1100 at `1dfdb1d6`; the two new subtests are the delta), top-level PASS=164, FAIL=0 |
+| Go tests, WSL `-race` | `wsl -d Ubuntu-24.04 -u accept bash -c 'cd /mnt/q/repos/wt-a6-contracts-strictness/symmetry/daemon && go test -count=1 -race -timeout 25m ./internal/protocol/... ./internal/control/... ./internal/contracts/...'` | 0 | `ok` ×3 (13.239s / 10.248s / 5.263s), 0 `DATA RACE` lines |
+| Elixir | `sh <HOST-PATH>/.local/state/gdd/scratch/rf-a6-mix.sh test test/symmetry_control/goals/contract_fixture_manifest_test.exs test/symmetry_control_web/plugs/strict_evidence_json_test.exs` (`control/` via the recipe) | 0 | `Result: 25 passed` (2.7s) |
+| citation existence | `python scripts/ci/check-citation-existence.py --repo . --base 1dfdb1d6e7ff --head 599da9d62a83` (synthetic snapshot via `GIT_INDEX_FILE` + `git commit-tree`; real refs untouched) | 0 | `no audited document added or modified between 1dfdb1d6e7ff and 599da9d62a83; nothing to check` |
+| whitespace | `git diff --check` (repo root) | 0 | no output |
+| host-path scan | case-insensitive profile-path grep over the fix diff (repo root) | 0 | 0 matches |
+| DLP escape scan | fix-diff additions grepped for the forbidden two-byte escape | 0 | 0 matches |
+
+Fix-stage tree: `git status --porcelain` lists exactly 7 paths (`contracts/README.md`,
+`contracts/scripts/check.mjs`, `contracts/scripts/check-effect.mjs`,
+`daemon/internal/control/decode_test.go`, `daemon/internal/protocol/goal_contract_fixture_test.go`,
+`docs/TODO.md`, this record). No fixture bytes, schemas or generated files changed; the manifest
+row count stays 261 and the raw fixtures stay byte-identical.

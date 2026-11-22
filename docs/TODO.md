@@ -1582,7 +1582,7 @@ is fixed here; each bullet names what a follow-up has to re-derive.
       the legacy and typed levels today and rejected by the schema level. The tightening artifact
       must re-derive that set from a base-vs-head corpus run rather than from this list. Runtime
       divergences the corpus records and this slice deliberately does not fix:
-      `goal-command.raw-duplicate-member-top-level` (Elixir's Jason keeps the last member),
+      `goal-command.raw-duplicate-member-top-level` (Elixir's Jason keeps the first member),
       `goal-command.raw-number-fractional` and `goal-command.raw-number-exponent` (Elixir accepts the
       lexeme and its validator accepts the value), `goal-command.raw-bom-prefix` (the JS
       `JSON.parse` strips a leading BOM) and `goal-command.raw-number-negative-zero` (accepted by Go,

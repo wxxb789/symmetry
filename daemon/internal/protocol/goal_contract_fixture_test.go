@@ -38,6 +38,21 @@ var rawWireErrorTexts = map[string]string{
 	"trailing_garbage":      "invalid character",
 }
 
+// The corpus vocabulary; an accepted row never consults rawWireErrorTexts, so
+// an unknown class must fail before the divergence branch.
+var rawWireErrorClasses = map[string]struct{}{
+	"duplicate_json_member": {},
+	"noncanonical_number":   {},
+	"unsafe_integer":        {},
+	"leading_zero":          {},
+	"negative_zero":         {},
+	"nonfinite_number":      {},
+	"invalid_utf8":          {},
+	"bom":                   {},
+	"trailing_value":        {},
+	"trailing_garbage":      {},
+}
+
 func TestGoalTransportParsesContractFixtures(t *testing.T) {
 	root := contractRepositoryRoot(t)
 	manifestData, err := os.ReadFile(filepath.Join(root, "contracts", "fixtures", "manifest.json"))
@@ -179,6 +194,9 @@ func validateFixtureSchema(schema string, data []byte) error {
 
 func assertRawWireFixture(t *testing.T, fixture goalContractFixture, data []byte) {
 	t.Helper()
+	if _, known := rawWireErrorClasses[fixture.WireError]; !known {
+		t.Fatalf("unknown wire_error class %q", fixture.WireError)
+	}
 	var decoded map[string]any
 	err := contractdto.DecodeSchema(contractdto.Envelope(fixture.Schema), data, &decoded)
 	if fixture.RuntimeDivergence["go"] == "accepts" {
@@ -192,7 +210,7 @@ func assertRawWireFixture(t *testing.T, fixture goalContractFixture, data []byte
 	}
 	want, known := rawWireErrorTexts[fixture.WireError]
 	if !known {
-		t.Fatalf("unknown wire_error class %q", fixture.WireError)
+		t.Fatalf("wire_error class %q was rejected but this reader has no native text", fixture.WireError)
 	}
 	if !strings.Contains(err.Error(), want) {
 		t.Fatalf("rejection %q does not carry %q", err, want)

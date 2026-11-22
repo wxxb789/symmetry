@@ -19,6 +19,21 @@ const wireErrorCodes = new Map([
   ["trailing_garbage", "invalid_json"],
 ]);
 
+// The corpus vocabulary, checked before either acceptance branch: an accepted
+// row never consults wireErrorCodes, so an unknown class would pass vacuously.
+const wireErrorClasses = new Set([
+  "duplicate_json_member",
+  "noncanonical_number",
+  "unsafe_integer",
+  "leading_zero",
+  "negative_zero",
+  "nonfinite_number",
+  "invalid_utf8",
+  "bom",
+  "trailing_value",
+  "trailing_garbage",
+]);
+
 const presentationReadSchemas = new Set([
   "attention-read",
   "chat-read",
@@ -87,6 +102,11 @@ for (const fixture of manifest.fixtures) {
   const decoder = decoders[fixture.schema];
   const schema = schemas[fixture.schema];
   assert.ok(decoder && schema, `unknown schema for ${fixture.id}`);
+  if (fixture.wire_error !== undefined)
+    assert.ok(
+      wireErrorClasses.has(fixture.wire_error),
+      `unknown wire_error class for ${fixture.id}: ${fixture.wire_error}`,
+    );
   const bytes = await fs.readFile(new URL(fixture.path, fixtureRoot));
 
   // Every negative fixture reaches the public raw-body decoder, including number lexemes.

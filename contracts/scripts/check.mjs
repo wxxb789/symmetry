@@ -49,6 +49,21 @@ const wireErrorCodes = new Map([
   ["trailing_garbage", "invalid_json"],
 ]);
 
+// The corpus vocabulary, checked before either acceptance branch: an accepted
+// row never consults wireErrorCodes, so an unknown class would pass vacuously.
+const wireErrorClasses = new Set([
+  "duplicate_json_member",
+  "noncanonical_number",
+  "unsafe_integer",
+  "leading_zero",
+  "negative_zero",
+  "nonfinite_number",
+  "invalid_utf8",
+  "bom",
+  "trailing_value",
+  "trailing_garbage",
+]);
+
 const relativePath = (filePath) => path.relative(ROOT_DIR, filePath);
 
 // Read projections permit additive presentation fields and finite presentation
@@ -188,6 +203,8 @@ const main = async () => {
     for (const tag of fixture.tags ?? []) tags.add(tag);
     if (fixture.wire_error !== undefined && !fixture.path?.startsWith("raw/"))
       throw new Error(`fixture ${fixture.id} declares wire_error outside raw/`);
+    if (fixture.wire_error !== undefined && !wireErrorClasses.has(fixture.wire_error))
+      throw new Error(`fixture ${fixture.id} has unknown wire_error class ${fixture.wire_error}`);
     const schema = schemas.get(fixture.schema);
     if (!schema)
       throw new Error(`fixture ${fixture.id} references unknown schema ${fixture.schema}`);
@@ -203,7 +220,9 @@ const main = async () => {
         }
         const expectedWireError = wireErrorCodes.get(fixture.wire_error);
         if (expectedWireError === undefined)
-          throw new Error(`fixture ${fixture.id} has unclassified wire_error ${fixture.wire_error}`);
+          throw new Error(
+            `fixture ${fixture.id} rejected wire_error ${fixture.wire_error} with no mapped TS code`,
+          );
         if (fixtureDocument.issue.code !== expectedWireError) {
           throw new Error(
             `fixture ${fixture.id} expected raw code ${expectedWireError}, got ${fixtureDocument.issue.code}: ${fixtureDocument.issue.reason}`,
