@@ -41,32 +41,14 @@ const (
 	linuxSupervisorOpWait    = "wait"
 	linuxSupervisorOpScan    = "scan_update"
 
-	linuxSupervisorOwnerKind                     = authority.OwnerKindLinuxHelper
-	linuxSupervisorTimeout                       = 5 * time.Second
-	linuxSupervisorProductionWitnessEnv          = "SYMMETRY_PRODUCTION_LINUX_CONTAINMENT_WITNESS"
-	linuxSupervisorHelloSessionInjectionEnv      = "SYMMETRY_LINUX_SUPERVISOR_TEST_INJECT_WRONG_HELLO_SESSION"
-	linuxSupervisorHelloSessionFiredEnv          = "SYMMETRY_LINUX_SUPERVISOR_TEST_WRONG_HELLO_SESSION_FIRED_PATH"
-	linuxSupervisorHelloSessionReleaseEnv        = "SYMMETRY_LINUX_SUPERVISOR_TEST_WRONG_HELLO_SESSION_RELEASE_PATH"
-	linuxSupervisorOwnerLossProofReachedEnv      = "SYMMETRY_LINUX_SUPERVISOR_TEST_OWNER_STOP_BEFORE_PROOF_REACHED_FILE"
-	linuxSupervisorOwnerLossProofReleaseEnv      = "SYMMETRY_LINUX_SUPERVISOR_TEST_OWNER_STOP_BEFORE_PROOF_RELEASE_FILE"
-	linuxSupervisorOwnerLossProofResultEnv       = "SYMMETRY_LINUX_SUPERVISOR_TEST_OWNER_STOP_PROOF_RESULT_FILE"
-	linuxSupervisorOwnerRecoveryAuthenticatedEnv = "SYMMETRY_LINUX_SUPERVISOR_TEST_OWNER_RECOVERY_AUTHENTICATED_FILE"
-	linuxSupervisorLeaseArmedBarrierReachedEnv   = "SYMMETRY_RUNNER_LEASE_ARMED_RESUME_BARRIER_REACHED_FILE"
-	linuxSupervisorDropResponseOnceEnv           = "SYMMETRY_LINUX_SUPERVISOR_DROP_RESPONSE_ONCE"
-	linuxSupervisorDropResponseMarkerEnv         = "SYMMETRY_LINUX_SUPERVISOR_DROP_RESPONSE_FIRED_PATH"
-	linuxSupervisorReleaseBarrierReachedEnv      = "SYMMETRY_LINUX_SUPERVISOR_RELEASE_RESPONSE_LOSS_BARRIER_REACHED_FILE"
-	linuxSupervisorReleaseBarrierReleaseEnv      = "SYMMETRY_LINUX_SUPERVISOR_RELEASE_RESPONSE_LOSS_BARRIER_RELEASE_FILE"
-	linuxSupervisorScanFailureModeEnv            = "SYMMETRY_LINUX_SUPERVISOR_INJECT_SCAN_FAILURE_ONCE"
-	linuxSupervisorScanFailureTriggerEnv         = "SYMMETRY_LINUX_SUPERVISOR_INJECT_SCAN_FAILURE_TRIGGER_PATH"
-	linuxSupervisorScanFailureFiredEnv           = "SYMMETRY_LINUX_SUPERVISOR_INJECT_SCAN_FAILURE_FIRED_PATH"
-	linuxSupervisorScanPendingReleaseEnv         = "SYMMETRY_LINUX_SUPERVISOR_SCAN_PENDING_RELEASE_PATH"
-	linuxSupervisorScanFailureChildren           = "children_after_initial"
-	linuxSupervisorScanPendingChildren           = "children_after_initial_pending"
-	linuxSupervisorScanPauseAfterClean           = "pause_after_clean_scan"
-	linuxSupervisorScanSealAfterClean            = "seal_after_clean_scan"
-	linuxSupervisorScanSealOwnerEnv              = "SYMMETRY_LINUX_SUPERVISOR_SCAN_SEAL_OWNER"
-	linuxSupervisorReleaseBarrierTimeout         = 30 * time.Second
-	linuxSupervisorReleaseBarrierPollInterval    = 25 * time.Millisecond
+	linuxSupervisorOwnerKind                  = authority.OwnerKindLinuxHelper
+	linuxSupervisorTimeout                    = 5 * time.Second
+	linuxSupervisorScanFailureChildren        = "children_after_initial"
+	linuxSupervisorScanPendingChildren        = "children_after_initial_pending"
+	linuxSupervisorScanPauseAfterClean        = "pause_after_clean_scan"
+	linuxSupervisorScanSealAfterClean         = "seal_after_clean_scan"
+	linuxSupervisorReleaseBarrierTimeout      = 30 * time.Second
+	linuxSupervisorReleaseBarrierPollInterval = 25 * time.Millisecond
 )
 
 var (
@@ -119,28 +101,29 @@ type linuxSupervisorScanFailureInjection struct {
 }
 
 func linuxSupervisorScanFailureInjectionFromEnv() (linuxSupervisorScanFailureInjection, bool) {
-	if strings.TrimSpace(os.Getenv(linuxSupervisorProductionWitnessEnv)) != "1" ||
-		strings.TrimSpace(os.Getenv(linuxSupervisorScanFailureModeEnv)) == "" {
+	witness := linuxSupervisorWitnessConfigFromEnv()
+	if strings.TrimSpace(witness.productionWitness) != "1" ||
+		strings.TrimSpace(witness.scanFailureMode) == "" {
 		return linuxSupervisorScanFailureInjection{}, false
 	}
-	mode := strings.TrimSpace(os.Getenv(linuxSupervisorScanFailureModeEnv))
+	mode := strings.TrimSpace(witness.scanFailureMode)
 	if mode != linuxSupervisorScanFailureChildren && mode != linuxSupervisorScanPendingChildren &&
 		mode != linuxSupervisorScanPauseAfterClean && mode != linuxSupervisorScanSealAfterClean {
 		return linuxSupervisorScanFailureInjection{}, false
 	}
-	triggerPath := strings.TrimSpace(os.Getenv(linuxSupervisorScanFailureTriggerEnv))
-	firedPath := strings.TrimSpace(os.Getenv(linuxSupervisorScanFailureFiredEnv))
+	triggerPath := strings.TrimSpace(witness.scanFailureTriggerPath)
+	firedPath := strings.TrimSpace(witness.scanFailureFiredPath)
 	if triggerPath == "" || firedPath == "" || !filepath.IsAbs(triggerPath) || !filepath.IsAbs(firedPath) {
 		return linuxSupervisorScanFailureInjection{}, false
 	}
-	releasePath := strings.TrimSpace(os.Getenv(linuxSupervisorScanPendingReleaseEnv))
+	releasePath := strings.TrimSpace(witness.scanPendingReleasePath)
 	if (mode == linuxSupervisorScanPendingChildren || mode == linuxSupervisorScanPauseAfterClean || mode == linuxSupervisorScanSealAfterClean) &&
 		(releasePath == "" || !filepath.IsAbs(releasePath)) {
 		return linuxSupervisorScanFailureInjection{}, false
 	}
 	sealOwner := ""
 	if mode == linuxSupervisorScanSealAfterClean {
-		sealOwner = strings.TrimSpace(os.Getenv(linuxSupervisorScanSealOwnerEnv))
+		sealOwner = strings.TrimSpace(witness.scanSealOwner)
 		if sealOwner == "" {
 			sealOwner = "both"
 		}
@@ -157,10 +140,11 @@ func linuxSupervisorScanFailureInjectionFromEnv() (linuxSupervisorScanFailureInj
 }
 
 func validateLinuxSupervisorScanFailureEnv() error {
-	if os.Getenv(linuxSupervisorProductionWitnessEnv) != "1" {
+	witness := linuxSupervisorWitnessConfigFromEnv()
+	if witness.productionWitness != "1" {
 		return nil
 	}
-	mode := strings.TrimSpace(os.Getenv(linuxSupervisorScanFailureModeEnv))
+	mode := strings.TrimSpace(witness.scanFailureMode)
 	if mode == "" {
 		return nil
 	}
@@ -168,19 +152,19 @@ func validateLinuxSupervisorScanFailureEnv() error {
 		mode != linuxSupervisorScanPauseAfterClean && mode != linuxSupervisorScanSealAfterClean {
 		return fmt.Errorf("unsupported Linux supervisor scan-failure mode %q", mode)
 	}
-	triggerPath := strings.TrimSpace(os.Getenv(linuxSupervisorScanFailureTriggerEnv))
-	firedPath := strings.TrimSpace(os.Getenv(linuxSupervisorScanFailureFiredEnv))
+	triggerPath := strings.TrimSpace(witness.scanFailureTriggerPath)
+	firedPath := strings.TrimSpace(witness.scanFailureFiredPath)
 	if triggerPath == "" || firedPath == "" || !filepath.IsAbs(triggerPath) || !filepath.IsAbs(firedPath) {
 		return errors.New("Linux supervisor scan-failure injection requires absolute trigger and fired marker paths")
 	}
 	if mode == linuxSupervisorScanPendingChildren || mode == linuxSupervisorScanPauseAfterClean || mode == linuxSupervisorScanSealAfterClean {
-		releasePath := strings.TrimSpace(os.Getenv(linuxSupervisorScanPendingReleaseEnv))
+		releasePath := strings.TrimSpace(witness.scanPendingReleasePath)
 		if releasePath == "" || !filepath.IsAbs(releasePath) {
 			return errors.New("Linux supervisor scan barrier requires an absolute release marker path")
 		}
 	}
 	if mode == linuxSupervisorScanSealAfterClean {
-		owner := strings.TrimSpace(os.Getenv(linuxSupervisorScanSealOwnerEnv))
+		owner := strings.TrimSpace(witness.scanSealOwner)
 		if owner != "" && owner != "both" && owner != authority.SupervisorScanOwnerHelper && owner != authority.SupervisorScanOwnerMirror {
 			return fmt.Errorf("unsupported Linux supervisor scan seal owner %q", owner)
 		}
@@ -194,21 +178,22 @@ type linuxSupervisorHelloSessionInjection struct {
 }
 
 func linuxSupervisorHelloSessionInjectionFromEnv() (linuxSupervisorHelloSessionInjection, bool, error) {
-	if os.Getenv(linuxSupervisorProductionWitnessEnv) != "1" {
+	witness := linuxSupervisorWitnessConfigFromEnv()
+	if witness.productionWitness != "1" {
 		return linuxSupervisorHelloSessionInjection{}, false, nil
 	}
-	mode := strings.TrimSpace(os.Getenv(linuxSupervisorHelloSessionInjectionEnv))
+	mode := strings.TrimSpace(witness.helloSessionInjection)
 	if mode == "" {
 		return linuxSupervisorHelloSessionInjection{}, false, nil
 	}
 	if mode != "1" {
 		return linuxSupervisorHelloSessionInjection{}, false, fmt.Errorf("unsupported Linux supervisor wrong-session hello injection mode %q", mode)
 	}
-	firedPath := strings.TrimSpace(os.Getenv(linuxSupervisorHelloSessionFiredEnv))
+	firedPath := strings.TrimSpace(witness.helloSessionFiredPath)
 	if firedPath == "" || !filepath.IsAbs(firedPath) {
 		return linuxSupervisorHelloSessionInjection{}, false, errors.New("Linux supervisor wrong-session hello injection requires an absolute fired marker path")
 	}
-	releasePath := strings.TrimSpace(os.Getenv(linuxSupervisorHelloSessionReleaseEnv))
+	releasePath := strings.TrimSpace(witness.helloSessionReleasePath)
 	if releasePath != "" && !filepath.IsAbs(releasePath) {
 		return linuxSupervisorHelloSessionInjection{}, false, errors.New("Linux supervisor wrong-session hello barrier requires an absolute release marker path")
 	}
@@ -229,17 +214,12 @@ func wrongLinuxSupervisorHelloSession(anchor LinuxProcessGroupAnchor) (int64, er
 	return session, nil
 }
 
-// publishLinuxSupervisorWitnessFile publishes a helper-side witness document as
-// one visible state change: readers poll these paths and accept the first
-// successful read, so a document must never be observable while it is
-// incomplete. The previous create-then-write sequence exposed an empty file
-// first, and the wrong-session test decoded that intermediate state as
-// `decode wrong-session helper witness: unexpected end of JSON input` (CI run
-// 44133750246). The document is assembled in a temporary file in the
-// destination directory and renamed into place; the destination must still be
-// absent, which keeps the create-with-O_EXCL contract of witness paths that
-// this package validates as absent before a run.
+// Witness readers accept the first successful read, so a document that appears
+// partially written would be decoded as evidence: publish by temp file + rename.
 func publishLinuxSupervisorWitnessFile(path string, contents []byte) error {
+	if err := validateLinuxSupervisorWitnessMarkerParent(path); err != nil {
+		return err
+	}
 	if _, err := os.Lstat(path); err == nil {
 		return fmt.Errorf("witness path %q already exists", path)
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -332,14 +312,14 @@ type linuxSupervisorOwnerRecoveryAuthenticatedMarker struct {
 }
 
 func linuxSupervisorOwnerRecoveryAuthenticatedMarkerFromEnv() (linuxSupervisorOwnerRecoveryAuthenticatedMarker, bool, error) {
-	raw, configured := os.LookupEnv(linuxSupervisorOwnerRecoveryAuthenticatedEnv)
-	if !configured {
+	witness := linuxSupervisorWitnessConfigFromEnv()
+	if !witness.ownerRecoveryAuthenticatedSet {
 		return linuxSupervisorOwnerRecoveryAuthenticatedMarker{}, false, nil
 	}
-	if os.Getenv(linuxSupervisorProductionWitnessEnv) != "1" {
+	if witness.productionWitness != "1" {
 		return linuxSupervisorOwnerRecoveryAuthenticatedMarker{}, false, errors.New("Linux supervisor authenticated owner-recovery marker requires the production witness flag")
 	}
-	path := strings.TrimSpace(raw)
+	path := strings.TrimSpace(witness.ownerRecoveryAuthenticatedPath)
 	if path == "" || !filepath.IsAbs(path) {
 		return linuxSupervisorOwnerRecoveryAuthenticatedMarker{}, false, errors.New("Linux supervisor authenticated owner-recovery marker requires a non-empty absolute file path")
 	}
@@ -367,30 +347,32 @@ func writeLinuxSupervisorOwnerRecoveryAuthenticatedMarker(marker linuxSupervisor
 		return errors.New("Linux supervisor authenticated owner-recovery marker has no latched owner-loss proof category")
 	}
 	contents := fmt.Sprintf("operation=%s\ntarget_pid=%d\nhelper_pid=%d\nowner_loss_proof_category=%s\n", operation, targetPID, helperPID, proofCategory)
-	if err := writeLinuxSupervisorTestMarker(marker.path, contents); err != nil {
+	if err := writeLinuxSupervisorAbsentWitnessMarker(marker.path, contents); err != nil {
 		return fmt.Errorf("publish Linux supervisor authenticated owner-recovery marker: %w", err)
 	}
 	return nil
 }
 
 func linuxSupervisorOwnerLossProofBarrierFromEnv() (linuxSupervisorOwnerLossProofBarrier, bool, error) {
-	if os.Getenv(linuxSupervisorProductionWitnessEnv) != "1" {
+	witness := linuxSupervisorWitnessConfigFromEnv()
+	if witness.productionWitness != "1" {
 		return linuxSupervisorOwnerLossProofBarrier{}, false, nil
 	}
 	var barrier linuxSupervisorOwnerLossProofBarrier
 	values := []struct {
-		name string
-		path *string
+		raw        string
+		configured bool
+		path       *string
 	}{
-		{linuxSupervisorOwnerLossProofReachedEnv, &barrier.reachedPath},
-		{linuxSupervisorOwnerLossProofReleaseEnv, &barrier.releasePath},
-		{linuxSupervisorOwnerLossProofResultEnv, &barrier.resultPath},
+		{witness.ownerLossProofReachedPath, witness.ownerLossProofReachedSet, &barrier.reachedPath},
+		{witness.ownerLossProofReleasePath, witness.ownerLossProofReleaseSet, &barrier.releasePath},
+		{witness.ownerLossProofResultPath, witness.ownerLossProofResultSet, &barrier.resultPath},
 	}
 	configured := 0
 	for _, value := range values {
-		if raw, ok := os.LookupEnv(value.name); ok {
+		if value.configured {
 			configured++
-			*value.path = strings.TrimSpace(raw)
+			*value.path = strings.TrimSpace(value.raw)
 		}
 	}
 	if configured == 0 {
@@ -426,7 +408,7 @@ func validateLinuxSupervisorOwnerLossProofBarrierEnv() error {
 }
 
 func waitForLinuxSupervisorOwnerLossProofBarrier(barrier linuxSupervisorOwnerLossProofBarrier) error {
-	if err := writeLinuxSupervisorTestMarker(barrier.reachedPath, "post_reap_pre_proof\n"); err != nil {
+	if err := writeLinuxSupervisorAbsentWitnessMarker(barrier.reachedPath, "post_reap_pre_proof\n"); err != nil {
 		return fmt.Errorf("publish Linux supervisor owner-loss proof barrier: %w", err)
 	}
 	deadline := time.NewTimer(linuxSupervisorReleaseBarrierTimeout)
@@ -452,7 +434,7 @@ func writeLinuxSupervisorOwnerLossProofResult(barrier linuxSupervisorOwnerLossPr
 	if category := linuxSupervisorOwnerLossProofResultCategory(proofErr); category != "" {
 		contents += "category=" + category + "\n"
 	}
-	if err := writeLinuxSupervisorTestMarker(barrier.resultPath, contents); err != nil {
+	if err := writeLinuxSupervisorAbsentWitnessMarker(barrier.resultPath, contents); err != nil {
 		return fmt.Errorf("publish Linux supervisor owner-loss proof result: %w", err)
 	}
 	return nil
@@ -469,7 +451,7 @@ func linuxSupervisorOwnerLossProofResultCategory(proofErr error) string {
 	return "other_error"
 }
 
-func writeLinuxSupervisorTestMarker(path, contents string) error {
+func writeLinuxSupervisorAbsentWitnessMarker(path, contents string) error {
 	return publishLinuxSupervisorWitnessFile(path, []byte(contents))
 }
 
@@ -544,7 +526,7 @@ func installLinuxSupervisorScanInjection(group *processGroup, targetPID int, tar
 				return false
 			}
 			reachedPath := injection.firedPath + "." + owner
-			if err := os.WriteFile(reachedPath, []byte(fmt.Sprintf("owner=%s\nsequence=%d\n", owner, sequence)), 0o600); err != nil {
+			if err := writeLinuxSupervisorScanWitnessMarker(reachedPath, fmt.Sprintf("owner=%s\nsequence=%d\n", owner, sequence)); err != nil {
 				return false
 			}
 			for {
@@ -608,7 +590,7 @@ func installLinuxSupervisorScanInjection(group *processGroup, targetPID int, tar
 		}
 		group.afterDescendantScanSeal = func(sequence uint64) {
 			path := injection.firedPath + "." + owner
-			_ = os.WriteFile(path, []byte(fmt.Sprintf("owner=%s\nsequence=%d\n", owner, sequence)), 0o600)
+			_ = writeLinuxSupervisorScanWitnessMarker(path, fmt.Sprintf("owner=%s\nsequence=%d\n", owner, sequence))
 		}
 		group.sealCleanScanForTesting = true
 		group.mutex.Unlock()
@@ -625,7 +607,7 @@ func installLinuxSupervisorScanInjection(group *processGroup, targetPID int, tar
 		if identityErr != nil || actualIdentity != targetIdentity || !fired.CompareAndSwap(false, true) {
 			return nil
 		}
-		markerErr := os.WriteFile(injection.firedPath, []byte("fired\n"), 0o600)
+		markerErr := writeLinuxSupervisorScanWitnessMarker(injection.firedPath, "fired\n")
 		if markerErr != nil {
 			restore()
 			return fmt.Errorf("%w: write fired marker: %v", errLinuxSupervisorInjectedDescendantScanFailure, markerErr)

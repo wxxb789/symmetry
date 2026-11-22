@@ -2854,13 +2854,7 @@ func TestLinuxSupervisorScanFailureInjectionGateOffPreservesReader(t *testing.T)
 	t.Setenv(linuxSupervisorScanFailureFiredEnv, firedPath)
 
 	called := 0
-	group := &processGroup{
-		monitorReadStat: func(int) (linuxProcessStat, error) { return linuxProcessStat{}, nil },
-		monitorReadChildren: func(int) ([]int, error) {
-			called++
-			return []int{7}, nil
-		},
-	}
+	group := countingProcessGroup(&called)
 	restore := installLinuxSupervisorScanFailureInjection(group, os.Getpid(), "unused")
 	t.Cleanup(restore)
 	children, err := group.monitorReadChildren(os.Getpid())
