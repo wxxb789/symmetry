@@ -41,7 +41,12 @@ and `bounded_probe.go` were never opened by the slice — every mutant that touc
 scratch copies, §9; `bounded_probe.go`'s implement-time hash was `0e8038e8…` and its current value
 differs only by the origin/main comment sweep merged in `d25bc33a`, audited comment-only in §13).
 
-Base bytes for the moved code (sha256, from the base worktree before any edit):
+Base bytes for the moved code (sha256, from the base worktree before any edit; they bind the
+authoring base `4fdea989`, not the frozen range base `9e36058` — at `9e36058`
+`claude_candidate_adapter.go` hashes
+`386b88c52561660144a1f599fa5c9fff3438c3c8b64aa0ed8eafc35c83eeb662`, the `Close()` comment reflow
+§13.1's merge audit proves comment-only, while `claude_probe.go` and `registry.go` are
+byte-identical at both bases):
 `claude_candidate_adapter.go` `a98560d4e13f14eac01f6492c7cac4ba67c408dbf7f5fb215b14db5d69d9bc31`,
 `claude_probe.go` `e50b5c7cb7f33a9c8ea6ab66fdd9e8f08acd448f5a30daea90f464ec36c9957e`,
 `registry.go` `47b49ec408d59ec70cca1a5ac05d151afe75269a85c62a10299f1acfbb0fc7b2`.
@@ -188,14 +193,14 @@ Strict-mode diff, verbatim:
 
 ```
 DIFFERS    func (session *claudeCandidateSession) Close(
-   --- base
-   +++ head
-   @@ -15,3 +15,3 @@
-    		default:
-   -			return permanentCloseFailure{Err: err}
-   +			return PermanentCloseFailure(err)
-    		}
-   IDENTICAL  func (session *claudeCandidateSession) closeOnce(
+--- base
++++ head
+@@ -15,3 +15,3 @@
+		default:
+-			return permanentCloseFailure{Err: err}
++			return PermanentCloseFailure(err)
+		}
+IDENTICAL  func (session *claudeCandidateSession) closeOnce(
 ```
 
 No early return, no retryability decision, no lock or channel behaviour changed by the move.
@@ -218,20 +223,26 @@ control is unverified for this operation"`, `"Claude emitted stderr"`, `"Claude 
 completed"`, `"Claude process was cancelled"`, `"Claude terminal observation failed; cancellation
 rejected"`, `"Claude terminal was already observed; cancellation rejected"`, `"Claude turn is not
 active"` (×2), `"Claude wait cancelled"`. Package sentinels (`errors.New("…")`, distinct/occurrences):
-base 31/38, HEAD 31/38, sets equal.
+base 32/39, HEAD 32/39, sets equal.
 
-Full `"…"` literal multiset over the same files plus the moved `registry.go` block, with every delta
-explained (none is an error or status text):
+Full `"…"` literal multiset over the same two-file scope (base `claude_candidate_adapter.go` +
+`claude_probe.go`, HEAD `claude/adapter.go` + `claude/probe.go`), with every delta explained (none
+is an error or status text):
 
 | Delta | Literal | Cause |
 | --- | --- | --- |
-| −1 | `"{"`, `""` | the adapter-local `isClaudeCandidateJSONObject` helper (replaced by `claude/stream.go`'s `isJSONObject`) |
-| −1 | `"Claude Code native session lifecycle is unverified"` | deleted shadow constructor; the identical literal survives in `evidenceCapabilities` |
-| −1 | `"codex"` | deleted `defaultCodexExecutable` (shadow-only) |
+| −1 each | `"{"`, `""` | the adapter-local `isClaudeCandidateJSONObject` helper (replaced by `claude/stream.go`'s `isJSONObject`) |
 | −1 | `"…/internal/harness/claude"` | the `claudeprotocol` import alias (same package now) |
-| +1 | `"…/internal/execution"` | `claude/probe.go` owns the `osCommandRunner` |
+| +1 | `"claude"` | `claude/probe.go`'s `defaultExecutable`, whose `registry.go` shadow copy is deleted |
+| +1 | `"…/internal/execution"` | `claude/probe.go` owns the `osCommandRunner` seam |
+| +1 | `"time"` | the `claudeProbeTimeout` bound moved in from `registry.go` as `probeTimeout` |
 | +2 | `"…/internal/harness"` | the new root import in `adapter.go` and `probe.go` |
-| +1 | `"time"` | the moved `probeTimeout` constant |
+
+`registry.go`'s deleted shadow declarations (the codex/omp/omo/pi/claude constructors and their
+probe helpers) are outside this scope and account for that file's own literal deltas — including
+`"codex"` with `defaultCodexExecutable` and one `"Claude Code native session lifecycle is
+unverified"`; the session-lifecycle literal survives in this scope's `evidenceCapabilities`, so no
+live error or status text is removed.
 
 ## 8. Test moves, retargets and deletions
 
@@ -298,7 +309,7 @@ noted, the sentinel that the new production path carries):
 | `TestClaudeProbeHelpWithoutJSONSchemaFailsClosed` | `probeCapabilities` | the help gate moved with the probe |
 | `TestClaudeProbeUnknownVersionFailsClosed` | `probeCapabilities` | the version gate moved with the probe |
 | `TestClaudeProbeAbsentExecutableIsUnavailable` | `probeCapabilities` | the availability projection moved with the probe |
-| `TestClaudeAdapterStartRemainsFailClosedAfterProbeEvidence` | `adapter.Probe` over the same fixture + `Start` refusal | the composed adapter's `Start` validates the request before the app-level gate; the sentinel assertion is preserved on `Probe`, and the app composition's refusal is pinned by the app suite (§10) |
+| `TestClaudeAdapterStartRemainsFailClosedAfterProbeEvidence` | `adapter.Probe` over the same fixture + `Start` refusal | sentinel assertion preserved on the added `Probe` half (`ErrNativeUnverified` + unverified no-operation projection); the `Start` half is an assertion replacement pinning the exact workspace-refusal text (`CandidateAdapter.Start` validates the request before any probe use), and the app composition's refusal is pinned by the app suite (§10) |
 | `TestClaudeProbeBoundsHangingRunnerAndPreservesCallerCancellation` | `probeCapabilities` | unchanged timing path |
 | `TestClaudeProbeRejectsSuccessAfterProbeDeadline` | `probeCapabilities` | the post-bound check is in the shared probe helper |
 | `TestClaudeProbeRejectsNilContextBeforeTheSharedGuard` | `probeCapabilities` | the entry-level guard moved with the probe |
@@ -461,8 +472,8 @@ apply-stage re-run on the refreshed bytes (§1/§8) is §13.
 | Windows suite | `go test -count=1 ./internal/harness/... ./internal/app/...` (verbose re-run on the final bytes) | exit 0; `harness` 0.200 s, `claude` 16.372 s, `codex` 14.366 s, `linejson` 0.164 s, `omo` 3.771 s, `omp` 4.517 s, `opencode` 0.690 s, `pi` 9.446 s, `probeconformance` 7.387 s, `app` 183.936 s |
 | WSL suite | `wsl -d Ubuntu-24.04 -u accept` running the same command in this worktree's mount | §10.1 |
 | frozen surfaces | `git diff --name-only` plus a name filter | no `opencode/**`, `pi/**`, `claude/stream*.go` or `testdata/**` entry |
-| line cap | `wc -l` over every file this slice writes or moves | maximum `claude/adapter.go` 1,180 and `claude/adapter_test.go` 1,162 at the apply revision (the implement bytes measured 1,181/1,164); all < 1,500. Pre-existing over-cap files outside the owned set (`codex/adapter_test.go` 3,144, `codex/adapter.go` 2,619, `opencode/adapter_native_*` 2,571/2,487) are W5-16's/W6's and are byte-unchanged here |
-| whitespace | `git diff --check` | exit 0 |
+| line cap | `wc -l` over every file this slice creates, moves or splits | maximum `claude/adapter.go` 1,180 and `claude/adapter_test.go` 1,162 at the apply revision (the implement bytes measured 1,181/1,164); all < 1,500. Touched pre-existing over-cap file: `daemon/internal/app/harness_test.go` 6,331 L (6,338 at base; outside this corpus, listed so the exclusion is explicit). Byte-unchanged over-cap files outside the owned set (`codex/adapter_test.go` 3,144, `codex/adapter.go` 2,619, `opencode/adapter_native_*` 2,571/2,487) are W5-16's/W6's |
+| whitespace | `git diff --check 9e36058` (frozen range base → final bytes; the implement-stage plain form ran while this record and the plan were untracked) | exit 0 (the two `space before tab in indent` lines the range form flags are re-indented) |
 | citation gate | `python3 scripts/ci/check-citation-existence.py --base 4fdea989 --head HEAD` in the mirrored clone | exit 0, §11 |
 
 Test-name bookkeeping (`go test -list '.*'` over `./internal/harness/... ./internal/app/...`):
@@ -684,8 +695,8 @@ suite and the WSL runs never overlapped.
 | WSL bounded | `wsl -d Ubuntu-24.04 -u accept` (Go 1.27.0): `go test -count=1` over the six moved/edited harness packages, then `-run 'TestNewHarnessRegistry\|TestComposedClaudeProbe\|TestStartupProbe' ./internal/app/` | 6/6 packages `ok` — harness 0.063 s, claude 11.570 s, codex 13.068 s, linejson 0.019 s, omo 1.510 s, probeconformance 7.034 s — exit 0; app subset `ok` 1.287 s, exit 0 |
 | WSL whole tree | `go test -count=1 -timeout 150s ./internal/harness/... ./internal/app/...` | exit 1; 6 packages `ok` — root `harness` 0.061 s, claude 11.251 s, codex 13.017 s, linejson 0.025 s, omo 1.180 s, probeconformance 7.037 s — and 4 `FAIL` at the 150 s bound: `omp` 31.831 s, `opencode` 150.047 s, `pi` 150.037 s, `app` 150.094 s — the same loopback-dependent packages as the implement-stage run (§10.1), reproduced by a second identical invocation. The exit code was captured by a script file (`<HOST-PATH>/.local/tmp/w4-15c-apply-mutant/wsl-tree.sh`) executed through the distro, so it comes from the outer process. The claude package's five environment-gated moved tests still skip (`-v` count 5; provenance unchanged, §10.1) |
 | test-name bookkeeping | `go test -list '.*'` over `./internal/harness/... ./internal/app/...` | 1,119 `Test*` names, unchanged; nothing added, renamed or deleted |
-| line cap | `wc -l` over every file this slice writes or moves | maximum `claude/adapter.go` 1,180 and `claude/adapter_test.go` 1,162; all < 1,500 |
-| whitespace | `git diff --check` | exit 0 |
+| line cap | `wc -l` over every file this slice creates, moves or splits | maximum `claude/adapter.go` 1,180 and `claude/adapter_test.go` 1,162; all < 1,500. The touched pre-existing over-cap `daemon/internal/app/harness_test.go` (6,331 L) is outside this corpus (§10 row) |
+| whitespace | `git diff --check 9e36058` (frozen range base → final bytes) | exit 0; the two `space before tab in indent` lines the frozen tip carried are re-indented |
 | record cleanliness | `python3 scripts/ci/model-routing-record-sanitize.py --check --root-only` on this record | exit 0; the implement bytes exited 1 (four lines carried host absolute paths) and now use `<HOST-PATH>` tokens |
 | profile-name scan | `git diff` piped through a case-insensitive host-root/profile-name scan (patterns spelled with a character class so this diff does not match itself) | no operator profile name in any added line; the retained `runneradmin` fixture shapes and the untouched `codex_probe_test.go` context are as recorded |
 | citation gate | corpus `docs/runbooks/**`, `docs/design/quality.md`, `docs/archive/CLOSED-TODO.md` (`scripts/ci/audited_paths.py`) | the apply diff names none of them, so the gate's selected set is empty; the implement-stage run of §11 stands |

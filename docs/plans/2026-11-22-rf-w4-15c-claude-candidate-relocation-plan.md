@@ -125,8 +125,8 @@ The moved tests exercise the adapter's default `osCommandRunner` only behind the
 (`SYMMETRY_CLAUDE_*`, skipped by default), so no host client is required.
 
 **`claude_probe_test.go` probe cases (8)** — the subject `probeClaudeExecutable` is deleted; each
-case is retargeted to the production path that carries the same assertion, with the same name,
-fixtures and assertions:
+case is retargeted to the production path that carries the same assertion, with the same name and
+fixtures (the sole assertion replacement, case 5's `Start` half, is marked in its row):
 
 | Case (base line) | HEAD call | Why the assertion survives |
 | --- | --- | --- |
@@ -134,7 +134,7 @@ fixtures and assertions:
 | `TestClaudeProbeHelpWithoutJSONSchemaFailsClosed` (:41) | `probeCapabilities` | same `ErrNativeUnverified` naming `--json-schema`, from the moved evidence gate |
 | `TestClaudeProbeUnknownVersionFailsClosed` (:56) | `probeCapabilities` | `ErrUnsupportedVersion`, version projection and `["--version"]` call pin unchanged |
 | `TestClaudeProbeAbsentExecutableIsUnavailable` (:74) | `probeCapabilities` | `AvailabilityError` → `ErrHarnessUnavailable`, no `ErrNativeUnverified`, `evidenceCapabilities` start reason text |
-| `TestClaudeAdapterStartRemainsFailClosedAfterProbeEvidence` (:91) | `NewCandidateAdapter("claude")` with `probe` set to the promotion gate over the same fixture | `Start` returns the probe's `ErrNativeUnverified`; same shape as the composed adapter |
+| `TestClaudeAdapterStartRemainsFailClosedAfterProbeEvidence` (:91) | `NewCandidateAdapter("claude")` with `probe` set to the promotion gate over the same fixture | **assertion replacement in the `Start` half**: the `ErrNativeUnverified` sentinel assertion lives on the added `Probe` half; `Start` pins the exact workspace-refusal text instead (`CandidateAdapter.Start` validates the request before any probe use), and the app composition's refusal is pinned by the app suite |
 | `TestClaudeProbeBoundsHangingRunnerAndPreservesCallerCancellation` (:107) | `probeCapabilities` | local deadline and caller cancellation still surface from `probeNativeEvidence` |
 | `TestClaudeProbeRejectsSuccessAfterProbeDeadline` (:165) | `probeCapabilities` | `DeadlineExceeded`, no capability from success-after-deadline output |
 | `TestClaudeProbeRejectsNilContextBeforeTheSharedGuard` (:178) | `probeCapabilities` | entry-level `"Claude probe context must not be nil"`, runner never called |
@@ -194,8 +194,8 @@ Gates (foreground, in `daemon/`): `gofmt -l internal/harness internal/app` empty
 ./...`; `go list -deps` check; `GOOS=linux golangci-lint run --config .golangci.yml --enable-only
 unused ./internal/harness/...` (2.15.0) clean; Windows `go test -count=1
 ./internal/harness/... ./internal/app/...`; WSL `go test -count=1 ./internal/harness/...
-./internal/app/...` in this worktree (`/mnt/q/repos/wt-w4-15c-claude-relocation/symmetry/daemon` —
-the contract's `/mnt/q/repos/symmetry/daemon` is the main checkout, not this worktree);
+./internal/app/...` in this worktree's `<HOST-PATH>` distro mount of `daemon/` (the contract's
+`<HOST-PATH>` names the main checkout, not this worktree);
 `git diff --name-only` shows no `opencode/**`, `pi/**`, `claude/stream*.go` or `testdata/**`;
 `scripts/ci/check-citation-existence.py`; `git diff --check`.
 
@@ -258,10 +258,12 @@ tree is authoritative; the tables above record the implement-time state.
 
 - §1's `CommandRunner` seam and the identifier table's `CommandRunner`, `TestedVersion` and
   `TestedExecutableHash` rows are unexported in the tree (`commandRunner`, `testedVersion`,
-  `testedExecutableHash`); no call site changed, because the package had no external consumer.
+  `testedExecutableHash`); no package-external call site changed, because the package had no
+  external consumer — the moved test files requalify the in-package names.
 - §4's `assertKnownVersionProjection`/`knownVersionProjection` copies are gone: the projection
   assertion is inlined into its only caller, `TestClaudeProbeKnownVersionAndHelpFailsClosed`.
 - `jsonObjectForCandidateAdditionalTest` is gone; the fixture is the
   `` json.RawMessage(`{"snapshot":"canonical"}`) `` literal the package's other fixture sites use.
-- The `Start` half of `TestClaudeAdapterStartRemainsFailClosedAfterProbeEvidence` pins the exact
-  workspace-refusal text, not merely a non-nil error.
+- The `Start` half of `TestClaudeAdapterStartRemainsFailClosedAfterProbeEvidence` is an assertion
+  replacement: it pins the exact workspace-refusal text while the `ErrNativeUnverified` sentinel
+  assertion moved to the case's added `Probe` half (§4's row is marked accordingly).
