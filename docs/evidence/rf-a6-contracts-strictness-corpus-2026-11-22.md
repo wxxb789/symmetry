@@ -310,7 +310,7 @@ this round's refreshed PR body; neither changes the tree. The other findings cha
   `decodeEvidenceBatchConflictDetails` schema). Mutants, each applied alone and reverted:
   - `requestGoalContractWithStatus` schema → typed (`client.go:1043`): red, exit 1,
     `--- FAIL …/requestGoalContractWithStatus … decode_test.go:176: typed entry calls = 1, want 0`.
-  - `decodeAPIError` legacy → typed (`client.go:1237`): red, exit 1,
+  - `decodeAPIError` legacy → typed (`client.go:1236`): red, exit 1,
     `decode_test.go:220: legacy entry calls = 0, want 1`.
   - `requestWithStatus` (Enroll) legacy → typed (`client.go:1072`): red, exit 1,
     `decode_test.go:187: legacy entry calls = 0, want 1`.
