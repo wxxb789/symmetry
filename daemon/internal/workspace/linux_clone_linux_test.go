@@ -1354,8 +1354,8 @@ func linuxCloneCleanupArtifactEvidence(t *testing.T, runID string, subject proto
 	if err != nil {
 		t.Fatal(err)
 	}
-	parsed, err := protocol.ParseEvidence(encoded)
-	if err != nil {
+	var parsed protocol.Evidence
+	if err := json.Unmarshal(encoded, &parsed); err != nil {
 		t.Fatalf("cleanup artifact evidence is invalid: %v", err)
 	}
 	return parsed

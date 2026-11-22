@@ -889,7 +889,8 @@ func cleanupGoalArtifactEvidence(t *testing.T, runID string) protocol.Evidence {
 	if err != nil {
 		t.Fatal(err)
 	}
-	evidence, err := protocol.ParseEvidence([]byte(fmt.Sprintf(`{
+	var evidence protocol.Evidence
+	if err := json.Unmarshal([]byte(fmt.Sprintf(`{
 		"schema_version":"symmetry.evidence.v1",
 		"evidence_id":"00000000-0000-4000-8000-000000000011",
 		"run_id":"%s",
@@ -903,8 +904,7 @@ func cleanupGoalArtifactEvidence(t *testing.T, runID string) protocol.Evidence {
 		"verdict":"passed",
 		"payload":{"predicate_id":"artifact-publish","subject":{"resource_id":"%s","commit":"%s","tree_digest":"%s"},"subject_hash":"%s","resource_id":"%s","commit":"%s","path":"result.txt","content_digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
 		"observed_at":"2026-09-10T01:01:00Z"
-	}`, runID, subject.ResourceID, subject.Commit, subject.TreeDigest, subjectHash, subjectHash, subject.ResourceID, subject.Commit, subject.ResourceID, subject.Commit, subject.TreeDigest, subjectHash, subject.ResourceID, subject.Commit)))
-	if err != nil {
+	}`, runID, subject.ResourceID, subject.Commit, subject.TreeDigest, subjectHash, subjectHash, subject.ResourceID, subject.Commit, subject.ResourceID, subject.Commit, subject.TreeDigest, subjectHash, subject.ResourceID, subject.Commit)), &evidence); err != nil {
 		t.Fatal(err)
 	}
 	return evidence
