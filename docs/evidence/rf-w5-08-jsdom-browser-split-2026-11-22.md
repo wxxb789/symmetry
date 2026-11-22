@@ -33,12 +33,12 @@ shell can decide.
 
 | file | status | lines | note |
 | --- | --- | ---: | --- |
-| `frontend/AGENTS.md` | edited | 24 → 28 | the D15 split rule, +4 lines (§4) |
+| `frontend/AGENTS.md` | edited | 24 → 29 | the D15 split rule, +5 lines (§4) |
 | `frontend/src/features/chat/chat.test.tsx` | edited | 2,062 → 2,013 | one case deleted (−49 lines; 48 → 47 cases): the pair's jsdom copy (§6, §7) |
 | `frontend/src/features/connections/connections.test.tsx` | **unedited** | 1,516 | 57 cases; the six focus sites are kept-and-named (§6) |
 | `frontend/src/features/goals/goal-attention.test.tsx` | **unedited** | 1,321 | 29 cases; the probe's goal-attention claim does not reproduce (§3) |
 | the seven render-gate specs | **unedited** | — | no twin addition was needed; no file renamed, no title touched, no case added or skipped |
-| `docs/plans/2026-11-22-rf-w5-08-jsdom-browser-split-plan.md` | new | 144 | the plan (its §4 carries the settled summary; §8 below is the matrix) |
+| `docs/plans/2026-11-22-rf-w5-08-jsdom-browser-split-plan.md` | new | 148 | the plan (its §4 carries the settled summary; §8 below is the matrix) |
 | `docs/evidence/rf-w5-08-jsdom-browser-split-2026-11-22.md` | new | — | this record |
 
 Not edited: every `frontend/src/**` production file (all six mutations were reverted; §8 —
@@ -69,8 +69,13 @@ browser acceptance" — consistent with the split, not stale).
    deletion was invented, and the non-reproduction is this record's outcome for the contract's
    goal-attention clause.
 3. **The four chat pane-simulation cases** are `chat.test.tsx:569` (deleted, §7), `:618`, `:666`
-   and `:701` (kept, §6). Each builds a `scrollTop`/`scrollHeight`/`clientHeight` model on
-   `#chat-scroll` by `Object.defineProperty` and drives it with `fireEvent.scroll`.
+   and `:701` (kept, §6). The deleted case models `scrollTop` alone — `Object.defineProperty`
+   with a loading-state getter/setter (`#chat-messages === null → 0`, base `:586-590`) — and
+   drives it with `fireEvent.scroll`; `scrollHeight`/`clientHeight` stay at jsdom's 0 defaults.
+   Of the kept cases, the pinned-transcript (`:618`) and too-short-pane (`:666`) cases define
+   `scrollTop`/`scrollHeight`/`clientHeight` by `Object.defineProperty` (head `:586`, `:591-592`
+   and `:630`, `:635-636`) and drive them with `fireEvent.scroll`; the live-capture case (`:701`)
+   uses plain `scrollTop` assignments only (head `:667`, `:672`).
 4. **The single production carrier is `frontend/src/features/chat/use-chat-scroll-restoration.ts`**
    (69 L): `panePinnedBelowOffset` (`:10-13`), the owed-offset re-assertion (`:19-26`),
    `assertRecordedOffset` with its two effects (`:28-40`), `onScroll` (`:52-59`) and
@@ -83,7 +88,8 @@ browser acceptance" — consistent with the split, not stale).
 +- jsdom owns decoding, state and DOM contracts; Playwright owns layout, scroll
 +  retention, focus return and real-network flows. A jsdom assertion that only
 +  simulates an interaction (scroll position, layout, focus) may not be the
-+  authoritative test for it: the authoritative one lives in `browser/tests/`.
++  authoritative test for it: the authoritative one lives in one of the
++  render-gate specs under `browser/tests/`.
 ```
 
 Placed directly after the existing "Preserve keyboard focus, drafts, selection, and scroll during
@@ -137,7 +143,7 @@ nothing that runs in CI. Measured consequences:
 | --- | --- |
 | base assertion | `chat.test.tsx:569` "settles a scope's pane on its own offset after a switch, even while the pane clamped it" (case body `:569-616`) |
 | guarded invariant | a scope's own recorded offset is re-asserted whenever its pane renders that scope again, after a scope switch, a router repositioning and an unrelated cache invalidation — the pane's own last scroll event is not the authority |
-| the jsdom-simulated aspect | the pane model: `scrollTop`/`scrollHeight`/`clientHeight` defined by `Object.defineProperty` with a loading-state clamp (`#chat-messages === null → 0`), driven by `fireEvent.scroll`; Chromium's own clamping is replaced by a hand-written getter/setter |
+| the jsdom-simulated aspect | the pane model: `scrollTop` alone defined by `Object.defineProperty` with a loading-state clamp (`#chat-messages === null → 0`, base `:586-590`), driven by `fireEvent.scroll`; `scrollHeight`/`clientHeight` stay at jsdom's 0 defaults, so Chromium's clamp is replaced by the hand-written `scrollTop` getter/setter alone |
 | the browser twin that now owns it | `browser/tests/portal-chat.spec.mjs:114` "each scope keeps its own draft, intent and scroll, and a late read never overwrites another scope's draft" — a real-data walk (44 seeded messages, three scope switches, a held read) whose `:162`, `:190` and `:197` assertions are the same invariant on real Chromium |
 | mutation that reddens the twin | **M-A**: `frontend/src/features/chat/use-chat-scroll-restoration.ts` — the two `assertRecordedOffset` effects (`useLayoutEffect(assertRecordedOffset, [...])` and `useEffect(() => router.subscribe("onRendered", assertRecordedOffset), [...])`) removed, so a scope's recorded offset is never re-applied on return |
 | mutation result (deleted copy gone) | twin `:114` **red** at `:162` — `Expected: 40, Received: 120` (1 failed / 1 passed, exit 1) — while `chat.test.tsx` reports 47 cases with the case absent; the same mutation also reddened the kept `:231` in jsdom, and both twins green on the reverted tree |
@@ -188,7 +194,12 @@ attempt.
   instances, the seven specs) and **the executed-set assertion**
   (`scripts/ci/assert-playwright-json.py`, `--expect-skipped 1` + the seven `--expect-file`s + the
   three pinned titles): the release harness is not runnable on this host (W4-14's recorded
-  limitation). They are CI-verified on the draft PR.
+  limitation). They are **not run for this revision**: at the probed head `f109d0c4` no draft PR
+  and no CI run exist (`gh pr list --state all --head refactor/rf-w5-08-jsdom-browser-split` →
+  `[]`; `gh run list --commit f109d0c47d34886fcf9fa5b9d3861ac93ff363b2` → `[]`), so they are
+  recorded as not-run, not as green — the draft-PR render-gate output and the
+  `scripts/ci/assert-playwright-json.py` executed-set output must be attached before clause 1/2
+  is considered closed.
 - **The twins' mobile project**: the local runs are desktop-chromium only; the render gate runs
   both projects, and the added-twin path was not taken, so the only browser behaviour this slice
   changes is the *deleted* jsdom case — the specs are byte-identical to base.
@@ -200,7 +211,7 @@ attempt.
 ## 11. LOC delta (D2: report-only)
 
 - Deleted-line total at head: **49 lines** (`chat.test.tsx`, one case) — the recorded
-  deleted-and-mutated set. Added: 4 lines in `frontend/AGENTS.md`; the plan (144) and this record
+  deleted-and-mutated set. Added: 5 lines in `frontend/AGENTS.md`; the plan (148) and this record
   are documentation.
 - The plan's `−1,000…−2,000 test` is an audit estimate over both trees and remains report-only;
   the gate is the pair table with its mutations, and the honest outcome of this slice is one

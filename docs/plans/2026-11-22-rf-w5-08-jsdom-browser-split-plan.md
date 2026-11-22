@@ -36,9 +36,13 @@ the conductor-verified judgement of the seven render-gate specs).
    a scope's offset when the browser pins the pane under a replaced transcript`), `:666` (`still
    records a reader's own move inside a pane too short for the scope's offset`) and `:701` (`keeps
    the offset a scope was left with when the pane's own positioning was never reported as a
-   scroll`). Each builds a `scrollTop`/`scrollHeight`/`clientHeight` model on `#chat-scroll` by
-   `Object.defineProperty` and drives it with `fireEvent.scroll` — jsdom simulations of Chromium
-   pane behaviour, superseded by real Chromium in `browser/tests/portal-chat.spec.mjs`.
+   scroll`). Per case: the deleted `:569` models `scrollTop` alone (`Object.defineProperty` with a
+   loading-state getter/setter clamping it to 0 while `#chat-messages` is absent) and drives it
+   with `fireEvent.scroll`, `scrollHeight`/`clientHeight` left at jsdom's 0 defaults; `:618` and
+   `:666` define `scrollTop`/`scrollHeight`/`clientHeight` by `Object.defineProperty` and drive
+   them with `fireEvent.scroll`; `:701` uses plain `scrollTop` assignments. These are jsdom
+   simulations of Chromium pane behaviour, superseded by real Chromium in
+   `browser/tests/portal-chat.spec.mjs`.
 4. **The production carrier is one hook.** `frontend/src/features/chat/use-chat-scroll-restoration.ts`
    (69 L): `panePinnedBelowOffset` (`:10-13`), the owed-offset re-assertion (`:19-26`), the
    recorded-offset re-assertion (`:28-40`), `onScroll` (`:52-59`) and `rememberLeavingScope`
