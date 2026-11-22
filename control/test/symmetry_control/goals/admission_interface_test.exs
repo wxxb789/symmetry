@@ -76,7 +76,6 @@ defmodule SymmetryControl.Goals.AdmissionInterfaceTest do
 
     payload = task_admission_payload(item, admission_key)
 
-    # admit_task!/6 is private; its only public admission wrapper runs it.
     assert {:ok, task} =
              Repo.transaction(fn ->
                Admission.admit_authorized_task!(goal, item, "implement", "codex", payload,

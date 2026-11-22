@@ -45,8 +45,6 @@ defmodule SymmetryControl.Goals.ReconciliationTest do
     assert receipt.goal.version == before.version + 1
     assert fetch_goal!(goal.id).version == before.version + 1
 
-    # Both commands carry actor `operator:test`: the refusal below is the stale
-    # pre-pause version token, not a different actor.
     assert {:error, {:stale, %{current_revision: 1, current_version: current_version}}} =
              Goals.command(
                goal.id,

@@ -589,9 +589,9 @@ unchanged (the four new cases live in interface files, which this table does not
 Titles: 147 base titles vs 147 HEAD titles, identical as a multiset (`titles_base.txt` vs
 `titles_head2.txt`); re-derived at the apply stage (`titles_dup.py`, base `642928b3` vs the final
 tree: the 8 split files carry exactly the base `goals_test.exs` 147 titles), plus the new interface
-cases below, which are 79 at the final tree (75 at `dc070002` + the 4 apply-stage titles listed in
-the apply section). Repo-wide (`control/test`), every one of the base revision's 1022 titles is
-present in the final tree's 1101 (0 lost, +79); the one duplicated title in the tree
+cases below: 75 at `dc070002`, 4 more at the apply stage, 2 more at the fix stage (both sets listed
+in their sections), 81 at the final tree. Repo-wide (`control/test`), every one of the base revision's 1022 titles is
+present in the final tree's 1103 (0 lost, +81); the one duplicated title in the tree
 (`short-circuits a work item without a pull request before authenticating`) is already duplicated
 at the base revision (`integrations/azure_devops_test.exs` = `integrations/github_test.exs`).
 Size-balancing moves: 8 (recorded in `split/split_moves.tsv`).
@@ -607,7 +607,7 @@ the facade). One case per public or `@doc false` entry that has a discriminating
 * `goals/admission_interface_test.exs` — 11 cases
 * `goals/budget_interface_test.exs` — 6 cases
 * `goals/commands_interface_test.exs` — 4 cases
-* `goals/context_assembly_interface_test.exs` — 6 cases
+* `goals/context_assembly_interface_test.exs` — 8 cases
 * `goals/decisions_interface_test.exs` — 10 cases
 * `goals/goal_control_interface_test.exs` — 4 cases
 * `goals/handoff_interface_test.exs` — 5 cases
@@ -622,17 +622,20 @@ Red mutants: each interface case is killed by a source mutation of its subject e
 with `mix test file:line` and restores the file; a row whose case still passes is reported as
 SURVIVED). Both the mutant manifest and the raw kill table are the evidence for this clause.
 
-Interface-entry coverage audit: the cross-edge set has 61 `@doc false` entries (the `widened`
-set) plus the 13 facade delegates that land in the concept modules = 74 required entries, and all
-74 have a case (the last one, `Admission.goal_predicate_matches_evidence?/2` at
-`validation_outcome.ex:364`, was added after the first audit pass). The 75th case exercises
-`Admission.admit_task!/6`, a private step reachable only through `admit_authorized_task!/6`, which
-is itself covered. The apply stage adds four more cases (79 in total): the
-`:missing` and settled-without-`awaiting_validation` refusals of `reconcile_validation_outcome/4`,
-its late-receipt/`WorkOutcome` fail-closed branch, and the frozen `RequestHash.canonical`/
-plan-action byte vector in `commands_interface_test.exs`. The red-mutant ledger below therefore
-executes 90 rows: the 75 `dc070002` rows re-anchored to the final tree, plus 15 rows for the cases
-the apply stage strengthened (11) or added (4).
+Interface-entry coverage audit: the required set is 63 `@doc false` entries — the 61 `widened`
+entries of the cross-edge set plus the two entries only `run_fence.ex` calls,
+`ContextAssembly.safe_document?/1` and `safe_evidence_document/1` — plus the 13 facade delegates
+that land in the concept modules = 76 required entries, and all 76 have a case (the last widened
+one, `Admission.goal_predicate_matches_evidence?/2` at `validation_outcome.ex:364`, was added after
+the first audit pass; the two RunFence-only entries were added at the fix stage). The 77th case
+exercises `Admission.admit_task!/6`, a private step reachable only through
+`admit_authorized_task!/6`, which is itself covered. The apply stage adds four more cases (79 in
+total): the `:missing` and settled-without-`awaiting_validation` refusals of
+`reconcile_validation_outcome/4`, its late-receipt/`WorkOutcome` fail-closed branch, and the frozen
+`RequestHash.canonical`/plan-action byte vector in `commands_interface_test.exs`; the fix stage
+adds the two RunFence-only cases (81 in total). The red-mutant ledger below therefore executes
+92 rows: the 75 `dc070002` rows re-anchored to the final tree, plus 15 rows for the cases the
+apply stage strengthened (11) or added (4), plus the 2 fix-stage rows.
 
 Static audit of the 12 interface files: each aliases its module and calls it directly
 (4–25 qualified call sites per file); the facade is used only to build fixtures/state. No case has
@@ -643,9 +646,11 @@ that is the vacuity screen that runs before the kill table below.
 
 Each interface case was written together with a source mutation of its subject entry that flips the
 case (`case title :: mutation`); the contracts cluster below is *executed* by the harness
-(`mutants.json`, mode `replace`, 26 rows), the remaining files' rows are executed as call-site
-failure mutants (`raise` at the subject's first clause) and their designed semantic mutation is
-recorded here for the reviewer. A case whose mutation list is empty would be a defect.
+(`mutants.json`, mode `replace`, 26 rows; the fix stage adds 2 more `replace` rows in
+`mutants_fix_r1.json` for the two new `ContextAssembly` cases), the remaining files' rows are
+executed as call-site failure mutants (`raise` at the subject's first clause) and their designed
+semantic mutation is recorded here for the reviewer. A case whose mutation list is empty would be
+a defect.
 
 Commands / Decisions / PlanContracts / ContextAssembly (`replace`, executed):
 
@@ -675,6 +680,8 @@ Commands / Decisions / PlanContracts / ContextAssembly (`replace`, executed):
 * `context_wire_envelope/4 returns the persisted snapshot document only while it still verifies` :: `document["snapshot_id"] == snapshot.id` → `snapshot.goal_id`.
 * `planning_context_snapshot_document/7 pins the planning contract, sources and content hash` :: work contract `"purpose" => "plan"` → `"implement"`.
 * `context_snapshot_document/11 pins the implement work contract, sources and content hash` :: `"source_revision" => "work-item:#{item.id}"` → `"goal:…"`.
+* `safe_document?/1 rejects sensitive keys at any depth and non-string map keys` :: the map clause `not sensitive_document_key?(key) and safe_document?(nested)` → `not sensitive_document_key?(key) and true`.
+* `safe_evidence_document/1 accepts a clean evidence document and refuses a sensitive one` :: `else: {:error, :invalid_request}` → `else: :ok`.
 
 Settlement / ValidationOutcome / Recovery / Reconciliation (recorded, executed as call-site mutants):
 
@@ -796,9 +803,10 @@ count does not rise.
 * Cross-module calls use qualified `Alias.fun(...)` rather than `import`s: the contract's second
   decision makes imports count as connected edges, so no concept module imports another. The cost is
   a longer call site; the benefit is that `--label compile-connected` stays empty.
-* `defp` functions called from another module are widened to `@doc false def`; `def` functions that
-  stop crossing anything are narrowed to `defp` (the AST census recorded the original kind, so the
-  widening set is auditable).
+* `defp` functions called from another module are widened to `@doc false def` (the AST census
+  recorded the original kind, so the widening set is auditable). No base `def` became a `defp`:
+  the six W4-07 transitional facade interfaces moved to their concept modules as public functions
+  (P3-2 ruling below).
 * Delegates rather than moves for the public API: `defdelegate` preserves defaults/specs/docs with
   one line per entry, and keeps the facade readable as the map of the feature.
 * Two size-forced sub-group splits (`Handoff`, `GoalControl`) exist only because the literal k2
@@ -814,6 +822,18 @@ count does not rise.
 
 
 
+
+## Conductor rulings (2026-11-22, PR #248 independent review — recorded per the contract)
+
+* P3-2: the facade's public names drop from 37 to 31 because the six W4-07 transitional interfaces
+  moved to their concept modules; their only in-repo caller (RunFence) is repointed and nothing
+  dangles. Ruled **not a public-API change** for the clause-3 failure control (internal
+  transitional surface, no external consumer).
+* P3-3: `control/lib/symmetry_control/goals/run_fence.ex` is added to the owned set for the repoint
+  edits only (aliases and call-site module names; target functions byte-identical). No behaviour
+  change permitted there.
+* P3-6: the `portal_goal_attention_test.exs` comment references to moved functions may be
+  corrected (comments only); done in the fix-stage section below.
 
 ## Results (measured)
 
@@ -844,10 +864,10 @@ OK
 check-citation-existence: the apply tree refreshed the 3196 citation (committed at 067c0dcc); at 067c0dcc the gate still refused 1 pre-existing citation in docs/archive/CLOSED-TODO.md:2772 (symbol `events` bound by the checker to frontend/src/features/goals/detail.tsx, whose lowercase events query key #245 moved out), and the fix-stage tree repairs that line (", " -> " and ", the smallest wording change that keeps the record truthful) under the fix-stage owned-set amendment; the checker reads commits, so the gate ran on a copy of the slice head (ed9413f7: 067c0dcc plus the fix-stage CLOSED-TODO.md, blob 5cdaad00, base 42afb56c) and exits 0 -- "1 changed document(s) pass the path and symbol check (518 path citation(s))"
 git diff --check: clean (exit 0)
 host path scan: 0 hits (grep exit 1)
-backslash-u scan: 9 occurrences in the same scope (lib `goals.ex` + `goals/` + the goals test files), = base 9; the apply diff adds none
+backslash-u scan: scope total (lib `goals.ex` + `goals/` + the goals test files) base 9 = HEAD 9; over the committed range (`git diff origin/main...HEAD`, added lines) the program's DLP pattern (a backslash immediately followed by `u`) matches 4 lines, all four a verbatim carry of a base `goals_test.exs` line (two patterns x two sites), so the slice writes no new occurrence; this committed-range count supersedes the fix-stage scan of the then-empty worktree diff (0, vacuous)
 native-evidence: Ran 15 tests — OK
-red mutants: 90 KILLED / 0 SURVIVED / 0 COMPILE_ERR
-titles: the 8 split files 147 = base `goals_test.exs` 147; repo-wide base 1022 is contained in final 1101 (0 lost, +79)
+red mutants: 92 KILLED / 0 SURVIVED / 0 COMPILE_ERR (90 apply-stage rows + 2 fix-stage rows)
+titles: the 8 split files 147 = base `goals_test.exs` 147; repo-wide base 1022 is contained in final 1103 (0 lost, +81)
 
 R2 line coverage (`mix test --cover --exclude portal_assets`; the base revision runs in a
 scratch worktree at `642928b3` sharing this tree's deps, with its own build path and test
@@ -1009,9 +1029,10 @@ At `dc070002` every interface case had exactly one row: 75 cases across the 12 i
 `replace`, 43 call-site mutants executed with mode `raise`). The apply stage keeps those 75 rows
 (re-anchored) and adds `mutants_apply.json`: 15 `replace` rows — 11 for strengthened assertions of
 existing cases and 4 for the new cases (3 x `reconcile_validation_outcome/4`, 1 x frozen
-`RequestHash`/plan-action vector) — so the final tree is 79 cases over 90 executed rows (plus the
-F23 consistency probe row), all KILLED. A `SURVIVED` row would mean the case does not exercise its
-entry, or no longer kills it.
+`RequestHash`/plan-action vector); the fix stage adds `mutants_fix_r1.json`: 2 `replace` rows for
+the two new `ContextAssembly` cases — so the final tree is 81 cases over 92 executed rows (plus
+the F23 consistency probe row), all KILLED. A `SURVIVED` row would mean the case does not exercise
+its entry, or no longer kills it.
 
 ## Apply stage — accepted simplify findings
 
@@ -1141,3 +1162,52 @@ run, so no mutant-harness edit is in flight):
  M docs/archive/CLOSED-TODO.md
  M docs/plans/2026-11-22-rf-w5-14-goals-concepts-phase2-plan.md
 ```
+
+## Fix stage (PR #248 review round 1 — 2026-11-22)
+
+Findings source: `248-opus-review-1.md` (verdict: fix first). Fixes applied, all inside the owned
+set plus the contract's P3-3/P3-6 rulings:
+
+* P2-1: two cases added to `goals/context_assembly_interface_test.exs` for the two RunFence-only
+  `@doc false` entries — `ContextAssembly.safe_document?/1` (line 402) and
+  `safe_evidence_document/1` (line 408). Each has one executed `replace` row in
+  `mutants_fix_r1.json`; both KILLED with exit 2 (`mutants_fix_r1.tsv`; the killing assertions sit
+  at `context_assembly_interface_test.exs:404` and `:413`). The coverage audit above re-derives to
+  63 + 13 = 76 required entries.
+* P3-2/P3-3: the conductor rulings are recorded in their own section above.
+* P3-4: the false "`def` functions … narrowed to `defp`" claim is removed (no base `def` became a
+  `defp`); `docs/archive/CLOSED-TODO.md`'s `append_event!/7` citation becomes `append_event!/8` at
+  `control/lib/symmetry_control/goals/events_receipts.ex:65` (its lock at `:134`), and the same
+  sentence's stale refs are repointed to `commands.ex:458` (amend bump), `goal_control.ex:395` and
+  `commands.ex:447` (the two `update_all` sites under `goals/`). The backslash-u gate is re-run on
+  the committed range: 4 added lines match, each a verbatim carry of a base `goals_test.exs` line,
+  scope total base 9 = HEAD 9 (supersedes the vacuous worktree-diff 0).
+* P3-5: the two item-1 comments are removed (`reconciliation_test.exs`,
+  `admission_interface_test.exs`).
+* P3-6: the two stale comment references in `portal_goal_attention_test.exs` (~:869, ~:918) now
+  name the owning modules (comments only).
+
+The apply-stage full-suite and coverage rows above are not re-measured in this stage (the contract's
+fix-round gates name the targeted suite only); the two added interface cases can only raise
+`ContextAssembly` coverage.
+
+Fix-stage gates (FOREGROUND, one at a time, portable-toolchain wrapper with
+`MIX_TEST_PARTITION=rf-w5-14`; the Results table's targeted row is the apply-stage measurement of
+the same command):
+
+| gate | exit | observed |
+| --- | --- | --- |
+| `mix format --check-formatted` | 0 | no files need formatting |
+| `MIX_ENV=test mix compile --warnings-as-errors` | 0 | compiled, no warnings |
+| targeted `mix test` (goals_test.exs + `goals/` + the 5 oracle files) | 0 | Result: 382 passed, 11 skipped |
+| `mix xref graph --format cycles` | 0 | 3 cycles found (25 / 20 / 4, unchanged) |
+| `mix xref graph --format cycles --label compile-connected` | 0 | No cycles found |
+| `check-citation-existence.py --base 66bc9dcb --head <snapshot>` | 0 | "1 changed document(s) pass the path and symbol check (523 path citation(s))", 3 pre-existing ignore-rule notices |
+| `test-omo-control-native-evidence.py` | 0 | Ran 15 tests — OK |
+| host-path added lines (committed range + worktree) | — | 0 hits |
+| backslash-u added lines (committed range) | — | 4, all verbatim base carries; worktree diff 0 |
+| `git diff --check` | 0 | clean |
+
+The citation gate reads commits, so it ran on a faithful committed copy of the fix-stage tree
+(`git clone --shared` of this worktree in the scratch directory, the worktree diff applied and
+committed there as `2430b440`, base `66bc9dcb`).

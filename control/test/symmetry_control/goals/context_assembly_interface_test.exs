@@ -398,4 +398,18 @@ defmodule SymmetryControl.Goals.ContextAssemblyInterfaceTest do
                RequestHash.canonical(Map.delete(document, "content_hash"))
              )
   end
+
+  test "safe_document?/1 rejects sensitive keys at any depth and non-string map keys" do
+    assert ContextAssembly.safe_document?(%{"objective" => "ship", "items" => [%{"id" => "w1"}]})
+    refute ContextAssembly.safe_document?(%{"objective" => %{"api_key" => "k"}})
+    refute ContextAssembly.safe_document?(%{1 => "objective"})
+  end
+
+  test "safe_evidence_document/1 accepts a clean evidence document and refuses a sensitive one" do
+    clean = %{"summary" => "done", "checks" => [%{"id" => "c1"}]}
+    assert ContextAssembly.safe_evidence_document(clean) == :ok
+
+    sensitive = %{"summary" => "done", "authorization" => "Bearer token"}
+    assert ContextAssembly.safe_evidence_document(sensitive) == {:error, :invalid_request}
+  end
 end
