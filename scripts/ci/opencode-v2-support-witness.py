@@ -23,6 +23,8 @@ import tempfile
 import threading
 import time
 
+import source_subject
+
 BINARY_ENVIRONMENT = "SYMMETRY_OPENCODE_BINARY"
 DIGEST = "38153a142354634c82b5cfe6c00b19df15a71e6cf8c17ef5f5c1a4cc684a6917"
 SIZE = 257553288
@@ -43,6 +45,13 @@ def pinned_binary():
         if size != SIZE or hashlib.file_digest(stream, "sha256").hexdigest() != DIGEST:
             raise RuntimeError("owner-pinned executable identity mismatch")
     return binary
+
+
+def binding_sha256(repository):
+    return {
+        path.resolve().relative_to(repository).as_posix(): source_subject.file_sha256_hex(path)
+        for path in (pathlib.Path(__file__), pathlib.Path(source_subject.__file__))
+    }
 
 
 def classify(receipt):
@@ -231,8 +240,10 @@ def main():
         "decision": "unsupported",
         "binary": {"path": str(binary), "size": SIZE, "sha256": DIGEST},
         "platform": {"system": platform.system(), "kernel": platform.version(), "distribution": platform.platform()},
-        "source_head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repository, text=True).strip(),
-        "witness_sha256": hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest(),
+        "source_head": source_subject.head_revision(
+            lambda *arguments: subprocess.check_output(["git", *arguments], cwd=repository)
+        ),
+        "binding_sha256": binding_sha256(repository),
         "command": ["python3", "scripts/ci/opencode-v2-support-witness.py", "--out", str(args.out)],
         "workspace": str(root),
         "operations": [],

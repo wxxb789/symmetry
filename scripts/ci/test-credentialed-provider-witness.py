@@ -68,6 +68,14 @@ class WitnessLauncherTests(FixtureRepo, unittest.TestCase):
             ["mix", *args], cwd=self.root / "control", env=self.environment, capture_output=True, check=True
         ).stdout
 
+    def test_usage_declares_the_shared_module_in_the_manifest_scope(self):
+        result = citest.run_gate(ROOT / "scripts/ci/credentialed-provider-witness.py", "--help")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            "the witness scripts plus the shared scripts/ci/source_subject.py module",
+            " ".join(result.stdout.split()),
+        )
+
     def test_launcher_force_compiles_stale_beam_before_first_phase(self):
         self.mix("compile")
         timestamp = self.module.stat().st_mtime_ns
@@ -186,6 +194,31 @@ class WitnessLauncherTests(FixtureRepo, unittest.TestCase):
         (self.root / "control/lib/unreviewed.ex").write_text("unreviewed\n")
         with self.assertRaisesRegex(RuntimeError, "dirty_source_missing_from_manifest"):
             WITNESS.source(self.root, self.config)
+
+    def test_the_binding_requires_the_declared_head_and_base(self):
+        self.manifest()
+        for field, reason in (("code_head_sha", "code_head_mismatch"), ("code_base_sha", "code_base_mismatch")):
+            with self.subTest(field=field):
+                original = self.config[field]
+                self.config[field] = "0" * 40
+                try:
+                    with self.assertRaisesRegex(RuntimeError, reason):
+                        WITNESS.source(self.root, self.config)
+                finally:
+                    self.config[field] = original
+
+    def test_the_declared_scope_covers_the_shared_module(self):
+        self.manifest()
+        module = self.root / "scripts/ci/source_subject.py"
+        module.parent.mkdir(parents=True, exist_ok=True)
+        module.write_text("# shared rules\n")
+        with self.assertRaisesRegex(RuntimeError, "dirty_source_missing_from_manifest"):
+            WITNESS.source(self.root, self.config)
+        self.config["changed_source_manifest"].append(
+            {"path": "scripts/ci/source_subject.py", "sha256": hashlib.sha256(module.read_bytes()).hexdigest()}
+        )
+        observed = WITNESS.source(self.root, self.config)
+        self.assertEqual(observed["manifest_bound_dirty_paths"], ["scripts/ci/source_subject.py"])
 
 
 ELIXIR_CONTROLS = (

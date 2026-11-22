@@ -115,6 +115,16 @@ class SourceSubjectTests(unittest.TestCase):
         added.unlink()
         self.assertEqual(tool.source_subject(self.root), before)
 
+    def test_the_shared_module_is_inside_the_declared_scope(self) -> None:
+        tool = load_tool()
+        module = self.write("scripts/ci/source_subject.py", "# shared rules\n")
+        self.assertIn("scripts/ci/source_subject.py", tool.source_paths(self.root))
+        before = tool.source_subject(self.root)
+        module.write_bytes(b"# changed shared rules\n")
+        after = tool.source_subject(self.root)
+        self.assertEqual(after[0], before[0])
+        self.assertNotEqual(after[1], before[1])
+
 
 if __name__ == "__main__":
     unittest.main()

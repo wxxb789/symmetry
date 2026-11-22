@@ -23,6 +23,7 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/control"
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
+	"github.com/wxxb789/symmetry/daemon/internal/harness/claude"
 	"github.com/wxxb789/symmetry/daemon/internal/harness/codex"
 	"github.com/wxxb789/symmetry/daemon/internal/harness/omo"
 	"github.com/wxxb789/symmetry/daemon/internal/harness/omp"
@@ -63,8 +64,8 @@ func TestNewHarnessRegistryBindsNativeAdaptersAndUnsupportedOpenCode(t *testing.
 	if err != nil {
 		t.Fatalf("Lookup(claude) error = %v", err)
 	}
-	if _, ok := claudeAdapter.(*harness.ClaudeCandidateAdapter); !ok {
-		t.Fatalf("Claude adapter type = %T, want *harness.ClaudeCandidateAdapter", claudeAdapter)
+	if _, ok := claudeAdapter.(*claude.CandidateAdapter); !ok {
+		t.Fatalf("Claude adapter type = %T, want *claude.CandidateAdapter", claudeAdapter)
 	}
 	piAdapter, err := registry.Lookup(harness.KindPi)
 	if err != nil {
@@ -108,7 +109,7 @@ func TestComposedClaudeProbeReportsUnavailableMetadata(t *testing.T) {
 	value.Runtime.AdapterVersion = "claude-stream-json-v1"
 	value.Runtime.AdapterProtocolVersion = 1
 	registry := harness.NewRegistry()
-	if err := registry.Register(harness.KindClaude, harness.NewClaudeCandidateAdapter(filepath.Join(t.TempDir(), "absent-claude.exe"))); err != nil {
+	if err := registry.Register(harness.KindClaude, claude.NewCandidateAdapter(filepath.Join(t.TempDir(), "absent-claude.exe"))); err != nil {
 		t.Fatal(err)
 	}
 	daemon := &daemon{config: value, harnessRegistry: registry}
@@ -287,14 +288,6 @@ func TestStartupProbeRegistersUnverifiedCodexProjection(t *testing.T) {
 	}
 }
 
-// absentClaudeRunner keeps the unavailable projection independent of any
-// Claude Code executable installed on the test host.
-type absentClaudeRunner struct{}
-
-func (absentClaudeRunner) Run(context.Context, string, ...string) ([]byte, error) {
-	return nil, errors.New("claude executable not found")
-}
-
 func TestStartupProbeRegistersUnavailableNativeProjections(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -303,8 +296,8 @@ func TestStartupProbeRegistersUnavailableNativeProjections(t *testing.T) {
 		adapter        harness.Adapter
 		adapterVersion string
 	}{
-		{name: "claude", configKind: config.RuntimeHarnessClaudeCode, harnessKind: harness.KindClaude, adapter: harness.NewClaudeAdapterWithRunner("claude", absentClaudeRunner{})},
-		{name: "pi", configKind: config.RuntimeHarnessPi, harnessKind: harness.KindPi, adapter: harness.NewPiAdapter()},
+		{name: "claude", configKind: config.RuntimeHarnessClaudeCode, harnessKind: harness.KindClaude, adapter: claude.NewCandidateAdapter(filepath.Join(t.TempDir(), "absent-claude.exe"))},
+		{name: "pi", configKind: config.RuntimeHarnessPi, harnessKind: harness.KindPi, adapter: pi.NewAdapter(filepath.Join(t.TempDir(), "absent-pi.exe"))},
 		{name: "omp", configKind: config.RuntimeHarnessOMP, harnessKind: harness.KindOMP, adapter: omp.NewAdapter(filepath.Join(t.TempDir(), "absent-omp.exe")), adapterVersion: omp.ImplementationVersion},
 		{name: "omo", configKind: config.RuntimeHarnessOmO, harnessKind: harness.KindOmO, adapter: omo.NewAdapter(filepath.Join(t.TempDir(), "absent-omo.exe")), adapterVersion: omo.ImplementationVersion},
 		{name: "opencode", configKind: config.RuntimeHarnessOpenCode, harnessKind: harness.KindOpenCode, adapter: harness.NewOpenCodeAdapter()},

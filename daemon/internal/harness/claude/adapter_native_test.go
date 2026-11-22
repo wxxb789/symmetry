@@ -1,4 +1,4 @@
-package harness
+package claude
 
 import (
 	"context"
@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
+	"github.com/wxxb789/symmetry/daemon/internal/harness"
 )
 
 const (
@@ -33,10 +34,10 @@ func TestNativeClaudeCandidateStructuredOutput(t *testing.T) {
 	}
 	executable := strings.TrimSpace(os.Getenv(nativeClaudeSmokeExecutableEnv))
 	if executable == "" || !filepath.IsAbs(executable) {
-		t.Fatalf("%s must name the absolute Claude Code %s executable", nativeClaudeSmokeExecutableEnv, ClaudeTestedVersion)
+		t.Fatalf("%s must name the absolute Claude Code %s executable", nativeClaudeSmokeExecutableEnv, testedVersion)
 	}
 
-	gateway := &nativeClaudeMessagesGateway{taskResult: json.RawMessage(validClaudeCandidateTaskResultJSON(t))}
+	gateway := &nativeClaudeMessagesGateway{taskResult: json.RawMessage(validCandidateTaskResultJSON(t))}
 	server := httptest.NewServer(gateway)
 	t.Cleanup(server.Close)
 	root := t.TempDir()
@@ -74,7 +75,7 @@ func TestNativeClaudeCandidateStructuredOutput(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
-	sink := &recordingClaudeCandidateSink{}
+	sink := &recordingCandidateSink{}
 	t.Cleanup(func() {
 		if t.Failed() {
 			for _, event := range sink.eventsSnapshot() {
@@ -82,20 +83,20 @@ func TestNativeClaudeCandidateStructuredOutput(t *testing.T) {
 			}
 		}
 	})
-	started, err := NewClaudeCandidateAdapter(executable).Start(ctx, StartRequest{
+	started, err := NewCandidateAdapter(executable).Start(ctx, harness.StartRequest{
 		Workspace:  workspace,
 		Invocation: execution.Invocation{Env: environment},
 	}, sink)
 	if err != nil {
 		t.Fatalf("start native Claude candidate: %v", err)
 	}
-	staged := started.(StagedSession)
+	staged := started.(harness.StagedSession)
 	closed := false
 	t.Cleanup(func() {
 		if closed {
 			return
 		}
-		cleanupContext, cleanupCancel := context.WithTimeout(context.Background(), claudeCandidateCleanupTimeout+claudeCandidateTerminationGrace)
+		cleanupContext, cleanupCancel := context.WithTimeout(context.Background(), cleanupTimeout+terminationGrace)
 		defer cleanupCancel()
 		_ = staged.Close(cleanupContext)
 		_, _ = staged.Wait(cleanupContext)
@@ -108,7 +109,7 @@ func TestNativeClaudeCandidateStructuredOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open native Claude candidate (no system/init before the first user frame): %v", err)
 	}
-	if err := staged.StartTurn(ctx, TurnRequest{Goal: "Return the Symmetry task result.", Context: json.RawMessage(`{"task":"native_claude_structured_output_smoke"}`)}); err != nil {
+	if err := staged.StartTurn(ctx, harness.TurnRequest{Goal: "Return the Symmetry task result.", Context: json.RawMessage(`{"task":"native_claude_structured_output_smoke"}`)}); err != nil {
 		t.Fatalf("start native Claude turn: %v", err)
 	}
 	if err := staged.WaitTurn(ctx); err != nil {
@@ -122,7 +123,7 @@ func TestNativeClaudeCandidateStructuredOutput(t *testing.T) {
 		t.Fatalf("wait native Claude candidate: %v", err)
 	}
 	closed = true
-	if result.Kind != ResultSucceeded || result.Semantic == nil || result.Semantic.Summary != "made bounded progress" {
+	if result.Kind != harness.ResultSucceeded || result.Semantic == nil || result.Semantic.Summary != "made bounded progress" {
 		t.Fatalf("native Claude result = %+v, want semantic TaskResult", result)
 	}
 
@@ -130,7 +131,7 @@ func TestNativeClaudeCandidateStructuredOutput(t *testing.T) {
 	if gatewayErr != nil {
 		t.Fatalf("fake Messages API: %v", gatewayErr)
 	}
-	encodedSchema, err := claudeCandidateStructuredOutputSchema()
+	encodedSchema, err := candidateStructuredOutputSchema()
 	if err != nil {
 		t.Fatal(err)
 	}

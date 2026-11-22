@@ -33,25 +33,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       revalidated and removed on the W3-07 follow-up branch
       `refactor/rf-w3-07b-state-error-followups` (moved to `docs/archive/CLOSED-TODO.md`).
 
-- [ ] Revalidate and remove `harness.NewClaudeAdapterWithRunner` (three test files), the residual
-      of the 2026-11-21 W1-06 daemon dead-code survey (branch
-      `refactor/rf-w1-06-daemon-deadcode`, plan
-      `docs/plans/2026-11-21-w1-06-daemon-deadcode-plan.md`). The survey's other
-      unreachable-but-referenced, in-intersection surfaces were dispositioned by the W2-12b
-      relocation (branch `refactor/rf-w2-12b-operator-client-relocation`, plan
-      `docs/plans/2026-11-21-rf-w2-12b-operator-client-relocation-plan.md`): the operator client,
-      its five methods, the seven operator-exclusive task validators of
-      `daemon/internal/control/validation.go` and the v1 task decoders now live in
-      the e2e-owned `daemon/e2e/internal/operator/` package beside their only callers; six
-      declarations of the relocated set differ from their originals only by the sanctioned package
-      qualifiers, the rest byte-identical. The closed
-      part is recorded in `docs/archive/CLOSED-TODO.md` under `## Dead-code candidates`.
-      `control.WithMaxResponseBytes` stays in `control` by that slice's binding amendment (its
-      callers are the machine-client and PI-bridge tests). This residual belongs to the
-      probe/registry dedup (W3-04), not to a deletion pass: its shadowed root-probe siblings are
-      main-reachable through `NewCodexAdapter`/`NewClaudeAdapter`. The two live groups of the same
-      survey stay covered by the decision note below.
-
 - live — do not remove (decision note, 2026-11-21, same branch and plan): the two remaining
       groups of that survey are production-live surfaces that no deletion pass may touch.
       **In the same `validation.go:209-629` range but in no target's `deadcode` findings (live
@@ -68,6 +49,49 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       reports; the probe/registry dedup (W3-04, #187) kept them (D4: the root stays fail-closed
       and undelegated — no `harness` → `harness/codex` import), so no deletion pass may remove
       them either.
+
+      **Annotation (2026-11-22, rf-w4-15c):** the "no deletion pass may remove them either"
+      sentence is superseded for the two named probe paths by the arch-decision-2 ruling O13
+      (ACCEPT): the Claude candidate relocation moved the Claude adapter and its promotion probe
+      out of the root package, deleted the Codex, Claude and Pi shadow constructors with their
+      probe helpers, and left the registry registering only the generic and OpenCode adapters,
+      while the daemon composition root keeps registering all five native kinds, so the
+      registered-adapter set the daemon sees is unchanged. The removed W1-06 residual moved to
+      `docs/archive/CLOSED-TODO.md` under `## Dead-code candidates (rf-w1-06 re-scoped sweep)`;
+      the subject hashes, deleted-declaration list and mutant record are in
+      `docs/evidence/rf-w4-15c-claude-candidate-relocation-2026-11-22.md`. The sentence above is
+      kept as recorded.
+
+- [ ] Reconcile the `harness/claude` package comment with the package's contents: the header of
+      `daemon/internal/harness/claude/stream.go` still states that the package "intentionally does
+      not expose a `harness.Adapter` until credentialed native lifecycle evidence proves the
+      required session and control semantics", which the Claude candidate relocation made false —
+      the package now owns the adapter. That file was outside the relocation's owned set (W4-15a's
+      decoder, W4-15b's driver), so the sentence waits for the slice that next opens it. Owner
+      area: daemon harness.
+
+- [ ] Unify the `controlCapability` switch copy in `daemon/internal/harness/claude/adapter.go:576`
+      with the root helper in `daemon/internal/harness/generic.go:255`: the two bodies are
+      byte-identical outside the `harness.` qualifier, but the root helper is unexported and
+      `generic.go` was outside the rf-w4-15c owned file set, so the relocation kept a package-local
+      copy. Export the root helper and delete the copy in the slice that next owns `generic.go`
+      (A3 adapter policy, W5). Owner area: daemon harness.
+
+- [ ] Reconcile the two `testdata/claude/**` READMEs with the relocated identifiers: both files
+      were frozen for rf-w4-15c (`harness/testdata/**` is W5-10's surface) and neither is in the
+      citation gate's audited corpus, so the move left them stale —
+      `daemon/internal/harness/testdata/claude/2.1.281/README.md:48` names
+      `claudeCandidateStructuredOutputSchema` (now `candidateStructuredOutputSchema` in
+      `claude/adapter.go`) and `daemon/internal/harness/testdata/claude/2.1.323/README.md:36`
+      names `ClaudeTestedExecutableHash` (now `testedExecutableHash` in `claude/probe.go`). Owner
+      area: W5-10 fixture pruning.
+
+- [ ] Re-pin `codex.Probe`'s own nil-context guard: `daemon/internal/harness/codex/probe.go`
+      rejects a nil context with `"codex probe context must not be nil"`, and after the rf-w4-15c
+      relocation deleted the root registry-seam case that exercised a nil context end to end, no
+      HEAD test covers that guard text — the shared entry guard stays pinned by
+      `TestRunBoundedProbeRejectsNilContext`
+      (`daemon/internal/harness/bounded_probe_test.go`). Owner: W5-16 (codex adapter concepts).
 
 ## Build-tag parity (arm64 oracle)
 
@@ -888,11 +912,9 @@ instead of appended.
       only to ruff's own file discovery: `ruff check scripts/ci` skips the excluded files, while
       `ruff check scripts/ci/model-routing-record-sanitize.py` (an explicitly named path) checks
       them anyway unless `--force-exclude` is passed.
-- [ ] The `ci.yml` ruff step (W1-01) must install ruff 0.17.5 exactly. `pyproject.toml` carries
-      `required-version = "==0.17.5"`, so any other ruff refuses to load the configuration
-      (exit 2, `Required version … does not match the running version …`) instead of reporting a
-      different finding set than the one the 2026-11-21 baseline fixed (373 findings at
-      `a3039f0`, of which 220 E501 at `line-length = 120`).
+The ruff half of this entry, the `ci.yml` ruff step installing ruff 0.17.5 exactly, is closed; the
+closure record is the `## scripts/ci ruff baseline: drop the #137 exclude and keep the gate's ruff
+version pinned` section of `docs/archive/CLOSED-TODO.md`.
 
 ## Deferred review findings (PR #154)
 
@@ -949,11 +971,12 @@ instead of appended.
 - [ ] The merged W2-01 plan (`docs/plans/2026-11-21-rf-w2-01-ci-test-observability-plan.md:363`)
       misstates the run: it records the checks as run "with the pinned ruff 0.17.6", which
       `pyproject.toml:6` `required-version = "==0.17.5"` makes impossible (the config refuses any
-      other version, exit 2). The real conflict (`pyproject.toml` `==0.17.5` vs `ci.yml:1707`
-      `ruff_version='0.17.6'`) is already tracked above
-      (`## scripts/ci ruff baseline: drop the #137 exclude and keep the gate's ruff version pinned`,
-      `docs/TODO.md:901`); this entry only records the misstatement in the merged evidence plan
-      (found by the Opus review of PR #205).
+      other version, exit 2). The real conflict (`pyproject.toml` `==0.17.5` vs `ci.yml`'s
+      `ruff_version`) was resolved by rf-w6-01 (PR #237), which pinned the step to 0.17.5; that
+      tracked entry now lives under
+      `## scripts/ci ruff baseline: drop the #137 exclude and keep the gate's ruff version pinned`
+      in `docs/archive/CLOSED-TODO.md`. This entry only records the misstatement in the merged
+      evidence plan (found by the Opus review of PR #205).
 
 ## Harness shared-scaffolding deferrals (rf-w2-13, PR #155)
 
@@ -1051,33 +1074,6 @@ instead of appended.
       `type linuxOwnerMismatch struct { text string; class error }` whose `Error()` returns
       `text` and whose `Is(target)` reports `target == class`, so each phrasing keeps its exact
       wire text and joins its class.
-
-## scripts/ci: install a pinned PyYAML for the lockfile differential oracle (W6-01)
-
-- [ ] The `ci.yml` `daemon` job's "Check CI gate helper scripts" step
-      (`.github/workflows/ci.yml:1482-1493` as of `6a815c0f`, which runs
-      `python3 ../scripts/ci/test-check-lockfile-registry.py` at `:1489`) must install a pinned
-      PyYAML and export `SYMMETRY_REQUIRE_PYYAML=1` for that step, so the differential cross-check
-      between `check-lockfile-registry.py`'s own YAML reader and PyYAML can never silently vanish
-      again. This is the recorded follow-up of contract `goal-rf-w3-16-scripts-defects` (refactor
-      wave 3, SC S8, branch `refactor/rf-w3-16-scripts-defects`, plan
-      `docs/plans/2026-11-21-rf-w3-16-scripts-defects-plan.md`): the suite now prints the exact
-      notice `PyYAML differential oracle skipped: module not importable` on stderr and asserts
-      that string when the module is not importable, and with `SYMMETRY_REQUIRE_PYYAML=1` set the
-      differential test fails instead of skipping. The repository still declares no Python
-      dependency and no workflow performs a `pip install`, so on a runner without PyYAML the
-      oracle stays skipped. Measured 2026-11-21 at `a7681da4` (this slice's increment commit on top
-      of `36f9a887`): portable Python 3.12.10 on the Windows host has PyYAML 6.0.3 and runs `Ran 24
-      tests`, `OK` with no skip; WSL Ubuntu-24.04 Python 3.12.3 has PyYAML 6.0.1 and is `OK`
-      likewise; `python -S` (site-packages off) and `python3 -S` print the notice and report `OK
-      (skipped=1)`; `SYMMETRY_REQUIRE_PYYAML=1
-      python -S scripts/ci/test-check-lockfile-registry.py` exits 1 with `FAILED (failures=1)` on
-      both platforms. Pin the version next to the other tool pins in `ci.yml` (the W1-01 ruff-pin
-      entry's `required-version = "==0.17.5"` handshake at `docs/TODO.md:744` is the same
-      pattern) and set the environment variable in the same step, so a lost install reddens the
-      job instead of shrinking the oracle. `ci.yml` is untouched by rf-w3-16 because W3-01/#157
-      owned it in wave 3 (that PR has since landed as `6a815c0f`, the revision the line numbers
-      above bind); W6-01 is its wave-6 owner.
 
 ## Deferred review findings (PR #193)
 
@@ -1529,3 +1525,20 @@ is fixed here; each bullet names what a follow-up has to re-derive.
       the untested variable — and, on a reproduction, capture the assertion text and whether the failure is
       the bounded wait or a recorded-request mismatch. The subset's file list is not recoverable from the
       repository (PR #220's plan records shuffle runs over the full 21-file suite at seed `20261122`).
+
+## Goals state-set duplication after the rf-w4-07 facade split (2026-11-22)
+
+- [ ] Consolidate the duplicated Task/Run state sets behind one compile-time owner. After
+      `refactor/rf-w4-07-goals-facade-phase1` (PR #233) the same literals are re-declared per
+      module: `@nonterminal_task_states` in `SymmetryControl.Goals` (`goals.ex`),
+      `SymmetryControl.Goals.RunFence`, `SymmetryControl.Goals.Internal` and
+      `SymmetryControl.Goals.ReadModel`; `@terminal_run_states` in `SymmetryControl.Goals` and
+      `SymmetryControl.Goals.HarnessSessions`; `@accounting_terminal_run_states` in those two plus
+      `SymmetryControl.Goals.ReadModel`, which derives it from that module's own
+      `@terminal_task_states`. The split mandated per-module copies ("module attributes travel
+      with their users") because the values feed compile-time query literals, so the SQL text
+      stays frozen; the drift risk is real: a state added to one copy only silently splits
+      transition policy from the read model. Next step (W5-14, the following goals.ex phase): a
+      `@moduledoc false` owner module exposing the sets as functions the others read at compile
+      time (`@x Owner.state_set()`), keeping every SQL literal byte-identical, plus one pinning
+      test that fails on divergence.

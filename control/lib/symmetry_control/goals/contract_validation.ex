@@ -1100,4 +1100,56 @@ defmodule SymmetryControl.Goals.ContractValidation do
   defp normalize_json_key(key) when is_binary(key), do: {:ok, key}
   defp normalize_json_key(key) when is_atom(key), do: {:ok, Atom.to_string(key)}
   defp normalize_json_key(key), do: {:error, {:invalid_json_key, key}}
+
+  @doc false
+  def validate_contract(_kind, _document, opts) when not is_list(opts),
+    do: {:error, :invalid_request}
+
+  def validate_contract(kind, document, opts) do
+    schema_root =
+      Keyword.get_lazy(opts, :schema_root, fn ->
+        :symmetry_control
+        |> Application.fetch_env!(:contracts)
+        |> Keyword.fetch!(:directory)
+        |> Path.join("v1")
+      end)
+
+    case kind do
+      :goal_create ->
+        validate_goal_create(document, schema_root: schema_root)
+
+      :goal_command ->
+        validate_goal_command(document, schema_root: schema_root)
+
+      :plan_proposal ->
+        validate_plan_proposal(document, schema_root: schema_root)
+
+      :admission ->
+        validate_admission(document, schema_root: schema_root)
+
+      :context_snapshot ->
+        validate_context_snapshot(document, schema_root: schema_root)
+
+      :task_result ->
+        validate_task_result(document, schema_root: schema_root)
+
+      :evidence ->
+        validate_evidence(document, schema_root: schema_root)
+
+      :evidence_batch ->
+        validate_evidence_batch(document, schema_root: schema_root)
+
+      :evidence_batch_response ->
+        validate_evidence_batch_response(document, schema_root: schema_root)
+
+      :usage ->
+        validate_usage(document, schema_root: schema_root)
+
+      :decision ->
+        validate_decision(document, schema_root: schema_root)
+
+      :goal_revision ->
+        validate_goal_revision(document, schema_root: schema_root)
+    end
+  end
 end
