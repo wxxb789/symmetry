@@ -1326,32 +1326,15 @@ instead of appended.
 
 - [ ] Revalidate and diagnose the pre-existing flake in
       `TestOmOAttachAckRegressionCancellationAndDeadlineDoNotRenewBudget/admission_deadline`
-      (`daemon/internal/app/omo_attach_ack_test.go`; the four-mode parent starts `:602`, the
-      `admission_deadline` arm is `:616-624`, the request-context wait `:626`, the failing
-      assertion call `:629`). The PR #217 review observed it fail twice on the base tree `394859a9` —
-      once under concurrent load, once alone — with `attachment requests=[] … context deadline
-      exceeded` (the review elides the middle), then pass 2/2 alone on that base and 3/3 on the PR
-      head; the file is byte-identical between `394859a9` and `e0782105` and last changed by
-      `8ded7715`, so the observation binds the current bytes. The message is
-      `assertRequests`'s (function `:294`, message `:307`): `attachment requests=%v, want %v (PUT error=%v
-      local_state=%s terminal_state=%s failure=%s native_calls=%v journal_error=%v)`. Every recorded
-      instance of the arm's failure carries an empty request list and `PUT error=<nil>`, with the
-      deadline inside the `failure` payload in one of two shapes: the attach GET leg hitting it
-      (`failure={"error":"attach native Goal session: read Goal session attachment: perform request: Get
-      \"…/session?…\": context deadline exceeded","reason":"unknown_outcome","stage":"goal_admission",…}`
-      with `native_calls=[start details open details close wait]`;
-      `<GDD-STATE>/refactor/tools/w3-02-response-table/host-callers-suite.txt:18-19`) or the production
-      admission check firing before native launch
-      (`failure={"error":"Goal admission deadline has elapsed before native launch","reason":"unknown_outcome","stage":"goal_admission","summary":"daemon failed during goal_admission"}`
-      with `native_calls=[]`; `daemon/internal/app/goal_admission.go:413`,
-      `<GDD-STATE>/tmp/rf-w2-10/omo-attach-final.txt:2-3`). The arm arms a 2 s admission
-      `DeadlineAt` and then waits on the request context, so the failure is consistent with the
-      deadline expiring before the run reaches its stop and pending-delivery assertions, but the
-      cause is unknown and no fix belongs to the toolchain-followups slice that recorded this entry
-      (`git grep -n 'admission_deadline' e0782105 -- docs/TODO.md` → no hits, so it is
-      `docs/TODO.md`'s first record of the arm). The refactor program's rf-w4-13 contract
-      (E5) marks tests whose duration is bounded by a production limit as `out of scope
-      (production-bound)` and names this test's `request_deadline` arm
-      (`controlRequestLimit = 15 * time.Second`, `daemon/internal/app/app.go:38`), so a fix needs an
-      owner decision rather than a W4-13 conversion. Revalidate against a recovered failure before
-      changing the deadline or the assertion.
+      (`daemon/internal/app/omo_attach_ack_test.go`; the `admission_deadline` arm sets a 2 s
+      wall-clock admission `DeadlineAt` and then requires a loopback GET+PUT inside it). The PR #217
+      review observed it fail twice on `394859a9` (once under concurrent load, once alone) with
+      `assertRequests`'s `attachment requests=[] … context deadline exceeded`, then pass 2/2 alone
+      and 3/3 on the PR head. Failures take one of two shapes: the attach GET leg hits the deadline
+      (`native_calls=[start details open details close wait]`), or the admission check fires first
+      (`Goal admission deadline has elapsed before native launch`, `goal_admission.go`); both are
+      recorded under load in `docs/evidence/rf-w4-03-runner-decomposition-2026-11-21.md`
+      (the app-suite failure paragraph). The failure is consistent with the deadline expiring when
+      the suite is starved, but the cause is unconfirmed. The arm's duration is bounded by a
+      production limit, so a fix needs an owner decision on the deadline or the assertion;
+      revalidate against a recovered failure before changing either.
