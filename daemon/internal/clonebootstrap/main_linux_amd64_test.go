@@ -1,6 +1,6 @@
 //go:build linux && amd64
 
-package main
+package clonebootstrap
 
 import (
 	"strconv"
