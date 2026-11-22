@@ -20,7 +20,9 @@ updates:
       interval: weekly
     open-pull-requests-limit: 5
   - package-ecosystem: github-actions
-    directory: /
+    directories:
+      - /
+      - /.github/actions/*
     schedule:
       interval: weekly
     open-pull-requests-limit: 5

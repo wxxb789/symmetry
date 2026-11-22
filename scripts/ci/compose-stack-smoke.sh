@@ -1,0 +1,226 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+local_project="symmetry-local-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+production_project="symmetry-production-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+temporary_dir=$(mktemp -d)
+local_compose=(docker compose --project-name "$local_project" --file compose.yaml)
+production_compose=(docker compose --project-name "$production_project" --file compose.production.yaml)
+production_override="$temporary_dir/compose.postgres.yaml"
+production_env="$temporary_dir/production.env"
+rendered_production="$temporary_dir/production.rendered.json"
+redirect_headers="$temporary_dir/http-redirect.headers"
+runtime_nginx="$temporary_dir/nginx.runtime.conf"
+
+cleanup() {
+  status=$?
+  "${local_compose[@]}" ps || true
+  "${local_compose[@]}" logs --no-color || true
+  "${local_compose[@]}" down --volumes --remove-orphans || true
+  "${production_compose[@]}" --file "$production_override" --env-file "$production_env" ps || true
+  "${production_compose[@]}" --file "$production_override" --env-file "$production_env" logs --no-color || true
+  "${production_compose[@]}" --file "$production_override" --env-file "$production_env" down --volumes --remove-orphans || true
+  rm -rf "$temporary_dir"
+  exit "$status"
+}
+trap cleanup EXIT
+
+wait_for() {
+  local description=$1
+  local attempts=$2
+  shift 2
+
+  for ((attempt = 1; attempt <= attempts; attempt++)); do
+    if "$@"; then
+      return 0
+    fi
+    sleep 1
+  done
+
+  echo "Timed out waiting for ${description}" >&2
+  return 1
+}
+
+http_redirect_is_ready() {
+  redirect_status=$(curl --silent --output /dev/null --dump-header "$redirect_headers" --write-out '%{http_code}' --header 'Host: localhost' http://127.0.0.1:8080/healthz || true)
+  [[ "$redirect_status" == '308' ]] || return 1
+  tr -d '\r' < "$redirect_headers" | grep --ignore-case --fixed-strings --line-regexp 'location: https://localhost/healthz' >/dev/null
+}
+
+forged_host_is_rejected() {
+  forged_http_status=$(curl --silent --output /dev/null --write-out '%{http_code}' --header 'Host: forged.example' http://127.0.0.1:8080/healthz || true)
+  [[ "$forged_http_status" == '421' ]] || return 1
+
+  forged_https_status=$(curl --silent --output /dev/null --write-out '%{http_code}' --cacert "$cert_dir/tls.crt" --header 'Host: forged.example' https://localhost:8443/healthz || true)
+  [[ "$forged_https_status" == '421' ]]
+}
+
+forged_sni_is_rejected() {
+  ! curl --silent --show-error --insecure \
+    --resolve forged.example:8443:127.0.0.1 \
+    --header 'Host: localhost' \
+    https://forged.example:8443/healthz >/dev/null 2>&1
+}
+
+"${local_compose[@]}" config --quiet
+"${local_compose[@]}" up --build --detach
+
+wait_for "local control health endpoint" 60 \
+  curl --fail --silent --show-error http://127.0.0.1:4000/healthz
+wait_for "daemon service to remain running" 30 \
+  bash -c 'docker compose --project-name "$0" --file compose.yaml ps --status running --services | grep --fixed-strings --line-regexp daemon >/dev/null' "$local_project"
+
+task_json=$(curl --fail --silent --show-error \
+  --request POST \
+  --header 'Authorization: Bearer development-operator-token' \
+  --header 'Idempotency-Key: compose-smoke-task' \
+  --header 'Content-Type: application/json' \
+  --data '{"work":{"goal":"compose smoke test","agent_profile":"default","workspace":"primary","input":{"mode":"success"}}}' \
+  http://127.0.0.1:4000/api/v1/tasks)
+task_id=$(jq --exit-status --raw-output '.task_id' <<<"$task_json")
+test -n "$task_id"
+
+task_url="http://127.0.0.1:4000/api/v1/tasks/${task_id}"
+wait_for "fake-agent task ${task_id} to complete" 60 \
+  bash -c 'task=$(curl --fail --silent --show-error --header "Authorization: Bearer development-operator-token" "$0"); jq --exit-status -e '\''.state == "completed"'\'' <<<"$task" >/dev/null' "$task_url"
+
+cert_dir="$temporary_dir/tls"
+mkdir -p "$cert_dir"
+chmod 700 "$cert_dir"
+openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 1 \
+  -subj '/CN=localhost' \
+  -addext 'subjectAltName=DNS:localhost,IP:127.0.0.1' \
+  -keyout "$cert_dir/tls.key" \
+  -out "$cert_dir/tls.crt" >/dev/null 2>&1
+chmod 600 "$cert_dir/tls.key"
+
+database_url='postgresql://symmetry:edge-postgres-password@postgres:5432/symmetry_edge'
+secret_key_base=$(openssl rand -hex 48)
+enrollment_token=$(openssl rand -hex 32)
+operator_token=$(openssl rand -hex 32)
+cat > "$production_env" <<EOF
+DATABASE_URL=$database_url
+SECRET_KEY_BASE=$secret_key_base
+SYMMETRY_ENROLLMENT_TOKEN=$enrollment_token
+SYMMETRY_OPERATOR_TOKEN=$operator_token
+SYMMETRY_TLS_CERT_FILE=$cert_dir/tls.crt
+SYMMETRY_TLS_KEY_FILE=$cert_dir/tls.key
+PHX_HOST=localhost
+EOF
+chmod 600 "$production_env"
+
+cat > "$production_override" <<'EOF'
+services:
+  postgres:
+    image: postgres:18.6-alpine
+    environment:
+      POSTGRES_DB: symmetry_edge
+      POSTGRES_USER: symmetry
+      POSTGRES_PASSWORD: edge-postgres-password
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    networks:
+      - database
+  control-migrate:
+    depends_on:
+      postgres:
+        condition: service_healthy
+EOF
+
+required_variables=(
+  DATABASE_URL
+  PHX_HOST
+  SECRET_KEY_BASE
+  SYMMETRY_ENROLLMENT_TOKEN
+  SYMMETRY_OPERATOR_TOKEN
+  SYMMETRY_TLS_CERT_FILE
+  SYMMETRY_TLS_KEY_FILE
+)
+for required_variable in "${required_variables[@]}"; do
+  missing_env="$temporary_dir/missing-${required_variable}.env"
+  grep --invert-match --fixed-strings "${required_variable}=" "$production_env" > "$missing_env"
+  if env -u "$required_variable" \
+    "${production_compose[@]}" --env-file "$missing_env" config --quiet >/dev/null 2>&1; then
+    echo "production Compose accepted missing ${required_variable}" >&2
+    exit 1
+  fi
+done
+
+"${production_compose[@]}" --env-file "$production_env" config --quiet
+"${production_compose[@]}" --env-file "$production_env" config --format json > "$rendered_production"
+if grep --fixed-strings --quiet \
+  -e 'development-enrollment-token' \
+  -e 'development-operator-token' \
+  -e 'development-only-secret-key-base-change-before-production-0123456789' \
+  -e 'symmetry_dev' \
+  "$rendered_production"; then
+  echo 'production Compose rendered a development credential' >&2
+  exit 1
+fi
+jq --exit-status '
+  (.services.control.ports // [] | length == 0) and
+  (.services["control-migrate"].ports // [] | length == 0) and
+  (.services.edge.ports | length == 2) and
+  ([.services.edge.ports[] | .target] | sort == [80, 443]) and
+  ([.services.edge.ports[] | .published | tonumber] | sort == [80, 443]) and
+  ([.services.edge.volumes[] | select(.target == "/run/symmetry/tls.crt" or .target == "/run/symmetry/tls.key") | select(.read_only == true)] | length == 2)
+' "$rendered_production" >/dev/null
+
+SYMMETRY_HTTP_PORT=8080 SYMMETRY_HTTPS_PORT=8443 \
+  "${production_compose[@]}" --file "$production_override" --env-file "$production_env" up --build --detach
+wait_for "production HTTP to HTTPS redirect" 60 http_redirect_is_ready
+wait_for "production edge to reject forged Host headers" 10 forged_host_is_rejected
+wait_for "production edge to reject forged TLS SNI" 10 forged_sni_is_rejected
+
+"${production_compose[@]}" --file "$production_override" --env-file "$production_env" exec --no-TTY edge nginx -T > "$runtime_nginx" 2>&1
+required_forwarded_headers=(
+  'proxy_set_header Host localhost;'
+  'proxy_set_header Forwarded "";'
+  'proxy_set_header X-Real-IP $remote_addr;'
+  'proxy_set_header X-Forwarded-For $remote_addr;'
+  'proxy_set_header X-Forwarded-Host localhost;'
+  'proxy_set_header X-Forwarded-Port 443;'
+  'proxy_set_header X-Forwarded-Proto https;'
+  'proxy_set_header X-Forwarded-Server localhost;'
+)
+for required_header in "${required_forwarded_headers[@]}"; do
+  grep --fixed-strings --quiet -- "$required_header" "$runtime_nginx"
+done
+
+wait_for "production HTTPS control health endpoint" 60 \
+  bash -c 'curl --fail --silent --show-error --cacert "$0" --header "Forwarded: proto=http" --header "X-Forwarded-Proto: http" https://localhost:8443/healthz | jq --exit-status -e '\''.status == "ok"'\'' >/dev/null' "$cert_dir/tls.crt"
+
+machine_token=$(openssl rand -hex 32)
+enrollment=$(curl --fail --silent --show-error --cacert "$cert_dir/tls.crt" \
+  --request POST \
+  --header "Authorization: Bearer $enrollment_token" \
+  --header 'Idempotency-Key: edge-websocket-enrollment' \
+  --header 'Content-Type: application/json' \
+  --data "{\"machine\":{\"name\":\"edge-websocket-machine\"},\"machine_token\":\"$machine_token\"}" \
+  https://localhost:8443/api/v1/machines)
+machine_id=$(jq --exit-status --raw-output '.machine_id' <<<"$enrollment")
+test -n "$machine_id"
+test "$(jq --raw-output '.machine_token' <<<"$enrollment")" = "$machine_token"
+
+websocket_headers="$temporary_dir/websocket.headers"
+websocket_key=$(openssl rand -base64 16)
+set +e
+websocket_status=$(curl --silent --show-error --http1.1 --max-time 3 \
+  --output /dev/null --dump-header "$websocket_headers" --write-out '%{http_code}' \
+  --cacert "$cert_dir/tls.crt" \
+  --header 'Connection: Upgrade' \
+  --header 'Upgrade: websocket' \
+  --header 'Origin: https://localhost' \
+  --header 'Sec-WebSocket-Version: 13' \
+  --header "Sec-WebSocket-Key: $websocket_key" \
+  --header "X-Symmetry-Token: $machine_token" \
+  'https://localhost:8443/socket/websocket?vsn=2.0.0')
+websocket_exit=$?
+set -e
+if [[ "$websocket_exit" -ne 0 && "$websocket_exit" -ne 28 ]]; then
+  exit "$websocket_exit"
+fi
+test "$websocket_status" = '101'
