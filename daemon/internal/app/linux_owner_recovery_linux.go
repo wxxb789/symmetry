@@ -26,7 +26,7 @@ func init() {
 	linuxCloneTargetDeleterForRun = linuxCloneTargetRemovalDeleter
 	linuxCloneCleanupPersistMutation = func(
 		daemon *daemon,
-		store *state.Store,
+		store journalStore,
 		key state.RunKey,
 		fence protocol.Fence,
 		stage string,

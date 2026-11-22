@@ -19,6 +19,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouteContext } from "@tanstack/react-router";
 import { createContext, useContext, useState, type ReactNode } from "react";
 import { cancelWorkMutation, provideInputMutation, retryWorkMutation, startWorkMutation } from "../../app/application";
+import { workItemReadKey, workItemTimelineReadKey } from "../../app/read-cache";
 import { useSessionToken } from "../../app/session";
 import { clearActionId, readActionId, readOrMintActionId, type ActionKind } from "../../services/control-actions";
 import {
@@ -109,7 +110,7 @@ export function WorkControlSurface({ detail, cursor, children }: { detail: WorkD
   const executionRow = item.execution ?? null;
   const goalManaged = asText(item.goal_id) !== null;
 
-  const snapshotVersion = () => queryClient.getQueryState(["work-item", { workItemId }])?.dataUpdatedAt ?? 0;
+  const snapshotVersion = () => queryClient.getQueryState(workItemReadKey(workItemId))?.dataUpdatedAt ?? 0;
   const [attempts, setAttempts] = useState<ControlAttempt[]>(() => (goalManaged ? [] : mountAttempts(item, snapshotVersion())));
   // The boundary this detail read's first page ends at. The pages a reader loads
   // are fetched from exactly this boundary, and the server signs a fresh cursor
@@ -125,7 +126,7 @@ export function WorkControlSurface({ detail, cursor, children }: { detail: WorkD
     workItemId,
     boundary: servedBoundary,
     cursor,
-    entries: queryClient.getQueryData<{ pages: readonly WorkTimeline[] }>(["work-item-timeline", { workItemId, cursor }])?.pages.flatMap((page) => page.items) ?? [],
+    entries: queryClient.getQueryData<{ pages: readonly WorkTimeline[] }>(workItemTimelineReadKey(workItemId, cursor))?.pages.flatMap((page) => page.items) ?? [],
   }));
   // Every older page is served by a reader action, so the merge runs when that
   // fetch resolves, under the boundary the render that issued the fetch served.
@@ -147,11 +148,11 @@ export function WorkControlSurface({ detail, cursor, children }: { detail: WorkD
     setAttempts((previous) => previous.map((attempt) => (attempt.kind === kind ? patch(attempt) : attempt)));
   };
   const invalidate = () => {
-    void queryClient.invalidateQueries({ queryKey: ["work-item", { workItemId }] });
+    void queryClient.invalidateQueries({ queryKey: workItemReadKey(workItemId) });
     // The timeline is only invalidated when no page read is in flight: a
     // settle must never cancel the older page a reader asked for.
-    if (queryClient.isFetching({ queryKey: ["work-item-timeline", { workItemId }] }) === 0) {
-      void queryClient.invalidateQueries({ queryKey: ["work-item-timeline", { workItemId }] });
+    if (queryClient.isFetching({ queryKey: workItemTimelineReadKey(workItemId) }) === 0) {
+      void queryClient.invalidateQueries({ queryKey: workItemTimelineReadKey(workItemId) });
     }
   };
 

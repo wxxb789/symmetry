@@ -10,6 +10,7 @@ import {
   type ExecutionGeneration,
 } from "../services/api";
 import { createRealtime, type RealtimeHandle, type RealtimeSocket } from "../services/realtime";
+import { attentionReadKey, chatOlderReadKey, chatReadKey, connectionsReadKey, goalEventsReadKey, goalReadKey, sessionReadKey, workItemReadKey, workItemTimelineReadKey, workspaceReadKey } from "./read-cache";
 
 interface BrowserLocation {
   href: string;
@@ -208,19 +209,19 @@ export function createApplication(options: {
 }
 
 export const sessionOptions = (api: Api) => queryOptions({
-  queryKey: ["session"],
+  queryKey: sessionReadKey(),
   queryFn: ({ signal }) => api.session(signal),
   staleTime: 0,
   gcTime: 0,
 });
 
 export const workspaceOptions = (api: Api, projectId: string | null) => queryOptions({
-  queryKey: ["workspace", { projectId }],
+  queryKey: workspaceReadKey(projectId),
   queryFn: ({ signal }) => api.workspace(projectId, signal),
 });
 
 export const workDetailOptions = (api: Api, workItemId: string) => queryOptions({
-  queryKey: ["work-item", { workItemId }],
+  queryKey: workItemReadKey(workItemId),
   queryFn: ({ signal }) => api.workDetail(workItemId, signal),
 });
 
@@ -230,12 +231,12 @@ export const workDetailOptions = (api: Api, workItemId: string) => queryOptions(
  * own query key: an older page never overwrites the newest one.
  */
 export const attentionOptions = (api: Api, projectId: string | null, cursor: string | null) => queryOptions({
-  queryKey: ["attention", { projectId, cursor }],
+  queryKey: attentionReadKey(projectId, cursor),
   queryFn: ({ signal }) => api.attention(projectId, cursor, signal),
 });
 
 export const goalOptions = (api: Api, goalId: string) => queryOptions({
-  queryKey: ["goal", { goalId }],
+  queryKey: goalReadKey(goalId),
   queryFn: ({ signal }) => api.goal(goalId, signal),
 });
 
@@ -245,7 +246,7 @@ export const goalOptions = (api: Api, goalId: string) => queryOptions({
  * so an older page never overwrites a newer one.
  */
 export const goalEventsOptions = (api: Api, goalId: string, after: number) => queryOptions({
-  queryKey: ["goal-events", { goalId, after }],
+  queryKey: goalEventsReadKey(goalId, after),
   queryFn: ({ signal }) => api.goalEvents(goalId, after, signal),
 });
 
@@ -257,7 +258,7 @@ export const goalEventsOptions = (api: Api, goalId: string, after: number) => qu
 export const workTimelineOptions = (api: Api, workItemId: string, cursor: string | null) => infiniteQueryOptions({
   // The served boundary is part of the identity: a refreshed detail re-keys the
   // disabled query, so its page param restarts from the newly served cursor.
-  queryKey: ["work-item-timeline", { workItemId, cursor }],
+  queryKey: workItemTimelineReadKey(workItemId, cursor),
   queryFn: ({ signal, pageParam }) => api.workTimeline(workItemId, pageParam, signal),
   initialPageParam: cursor,
   getNextPageParam: (lastPage) => lastPage.next_before,
@@ -265,7 +266,7 @@ export const workTimelineOptions = (api: Api, workItemId: string, cursor: string
 });
 
 export const connectionsOptions = (api: Api) => queryOptions({
-  queryKey: ["connections"],
+  queryKey: connectionsReadKey(),
   queryFn: ({ signal }) => api.connections(signal),
 });
 
@@ -325,7 +326,7 @@ export interface ChatScopeKey {
  * so a background update for one scope can never touch another scope's data.
  */
 export const chatConversationOptions = (api: Api, key: ChatScopeKey) => queryOptions({
-  queryKey: ["chat", key],
+  queryKey: chatReadKey(key),
   queryFn: ({ signal }) => api.chatConversation(key, signal),
   staleTime: 0,
 });
@@ -338,7 +339,7 @@ export const chatConversationOptions = (api: Api, key: ChatScopeKey) => queryOpt
  * the surface rather than by this cursor's own key.
  */
 export const chatOlderPageOptions = (api: Api, key: ChatScopeKey, before: string) => queryOptions({
-  queryKey: ["chat-older", { ...key, before }],
+  queryKey: chatOlderReadKey(key, before),
   queryFn: ({ signal }) => api.chatConversation({ ...key, before }, signal),
   staleTime: 0,
 });

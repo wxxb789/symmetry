@@ -1412,7 +1412,7 @@ func (witness *linuxV2NativeWitnessRun) summarizeJournal(journal state.RunJourna
 	return nil
 }
 
-func (witness *linuxV2NativeWitnessRun) summarizeResponseLost(store *state.Store, after string) error {
+func (witness *linuxV2NativeWitnessRun) summarizeResponseLost(store journalStore, after string) error {
 	if witness == nil || store == nil || witness.request.Case != "stage_replay" {
 		return errors.New("response-loss summary requires an exact StageReplay Store")
 	}
@@ -1793,7 +1793,7 @@ func verifyLinuxV2NativeWitnessHookRoot(path string, owner linuxgate.OwnerConfig
 	return nil
 }
 
-func (witness *linuxV2NativeWitnessRun) startDetachedChildCapture(ctx context.Context, daemon *daemon, store *state.Store) {
+func (witness *linuxV2NativeWitnessRun) startDetachedChildCapture(ctx context.Context, daemon *daemon, store journalStore) {
 	if witness.request.Case != "helper_sigkill_detached_child" && witness.request.Case != "daemon_sigkill_helper_survives_detached_child" {
 		return
 	}
@@ -1831,7 +1831,7 @@ func (witness *linuxV2NativeWitnessRun) startDetachedChildCapture(ctx context.Co
 	}()
 }
 
-func (witness *linuxV2NativeWitnessRun) waitForDetachedChild(ctx context.Context, daemon *daemon, store *state.Store) error {
+func (witness *linuxV2NativeWitnessRun) waitForDetachedChild(ctx context.Context, daemon *daemon, store journalStore) error {
 	deadline := time.NewTimer(time.Duration(witness.request.Barrier.TimeoutSeconds) * time.Second)
 	defer deadline.Stop()
 	ticker := time.NewTicker(linuxV2NativeOwnerWitnessPoll)
@@ -2022,7 +2022,7 @@ func writeLinuxV2NativeWitnessSummary(output io.Writer, summary linuxV2NativeWit
 	return nil
 }
 
-func (witness *linuxV2NativeWitnessRun) stage(stage string, daemon *daemon, store *state.Store, allowHold bool) error {
+func (witness *linuxV2NativeWitnessRun) stage(stage string, daemon *daemon, store journalStore, allowHold bool) error {
 	key := state.RunKey{RunID: witness.request.RunKey.RunID, Generation: witness.request.RunKey.Generation}
 	journal, err := store.LoadJournal(key)
 	if err != nil {
@@ -2475,7 +2475,7 @@ type linuxV2NativeWitnessDropStatusReader interface {
 	LinuxV2WitnessDropStatus(context.Context) (execution.LinuxV2WitnessDropStatus, error)
 }
 
-func (witness *linuxV2NativeWitnessRun) captureHelperDropStatus(store *state.Store, process Process) error {
+func (witness *linuxV2NativeWitnessRun) captureHelperDropStatus(store journalStore, process Process) error {
 	if witness == nil || store == nil || process == nil || witness.request.DropAckAfter != "" {
 		return nil
 	}
@@ -2593,7 +2593,7 @@ func validateLinuxV2NativeWitnessExistingJournal(journal state.RunJournal, reque
 func recoverLinuxV2NativeWitnessRunKey(
 	ctx context.Context,
 	value config.Config,
-	store *state.Store,
+	store journalStore,
 	journal state.RunJournal,
 ) error {
 	if ctx == nil || store == nil || journal.Key() == (state.RunKey{}) {
@@ -2793,7 +2793,7 @@ func linuxV2NativeWitnessJournalPhysicallyReleased(journal state.RunJournal) boo
 	return false
 }
 
-func (witness *linuxV2NativeWitnessRun) runFresh(ctx context.Context, store *state.Store) (resultErr error) {
+func (witness *linuxV2NativeWitnessRun) runFresh(ctx context.Context, store journalStore) (resultErr error) {
 	profile := witness.config.AgentProfiles[witness.config.Runtime.AgentProfile]
 	kind, err := configuredHarnessKind(witness.config.Runtime.HarnessKind)
 	if err != nil {
@@ -2915,7 +2915,7 @@ func (witness *linuxV2NativeWitnessRun) verifyNativeExecutable(profile config.Ag
 func (witness *linuxV2NativeWitnessRun) prepareClone(
 	ctx context.Context,
 	daemon *daemon,
-	store *state.Store,
+	store journalStore,
 ) (workspace.Prepared, authority.LinuxCloneGrant, linuxV2CloneWorkspace, error) {
 	cloneWorkspace, ok := daemon.workspace.(linuxV2CloneWorkspace)
 	if !ok {
@@ -2966,7 +2966,7 @@ func (witness *linuxV2NativeWitnessRun) prepareClone(
 func (witness *linuxV2NativeWitnessRun) launchNative(
 	ctx context.Context,
 	daemon *daemon,
-	store *state.Store,
+	store journalStore,
 	kind harness.Kind,
 	profile config.AgentProfile,
 	owner linuxV2NativeOwner,
@@ -3442,7 +3442,7 @@ func (witness *linuxV2NativeWitnessRun) restoreRunnerBarrierEnvironment() {
 	restore()
 }
 
-func (witness *linuxV2NativeWitnessRun) watchRunnerLeaseBarrier(daemon *daemon, store *state.Store) {
+func (witness *linuxV2NativeWitnessRun) watchRunnerLeaseBarrier(daemon *daemon, store journalStore) {
 	reached := filepath.Join(witness.request.Barrier.Directory, ".runner-lease-armed")
 	go func() {
 		timer := time.NewTimer(time.Duration(witness.request.Barrier.TimeoutSeconds) * time.Second)
@@ -3478,7 +3478,7 @@ func (witness *linuxV2NativeWitnessRun) watchRunnerLeaseBarrier(daemon *daemon, 
 
 func (witness *linuxV2NativeWitnessRun) wrapLinuxV2Callbacks(
 	daemon *daemon,
-	store *state.Store,
+	store journalStore,
 	callbacks *execution.LinuxV2JournalCallbacks,
 ) error {
 	if callbacks == nil {
@@ -3600,7 +3600,7 @@ func (witness *linuxV2NativeWitnessRun) wrapLinuxV2Callbacks(
 	return nil
 }
 
-func (witness *linuxV2NativeWitnessRun) clearAfterLeafRemoval(daemon *daemon, store *state.Store, clear func() error) error {
+func (witness *linuxV2NativeWitnessRun) clearAfterLeafRemoval(daemon *daemon, store journalStore, clear func() error) error {
 	already, err := witness.stageEffectAlreadyPresent(store, linuxV2NativeWitnessClearedStage)
 	if err != nil {
 		return err
@@ -3617,7 +3617,7 @@ func (witness *linuxV2NativeWitnessRun) clearAfterLeafRemoval(daemon *daemon, st
 	)
 }
 
-func (witness *linuxV2NativeWitnessRun) stageEffectAlreadyPresent(store *state.Store, stage string) (bool, error) {
+func (witness *linuxV2NativeWitnessRun) stageEffectAlreadyPresent(store journalStore, stage string) (bool, error) {
 	if witness.request.DropAckAfter != stage {
 		return false, nil
 	}
@@ -3679,7 +3679,7 @@ func runLinuxV2WitnessReleaseClearCallbacks(stageLeafRemoved, clear, stageJourna
 
 func (witness *linuxV2NativeWitnessRun) installCloneCallbacks(
 	daemon *daemon,
-	store *state.Store,
+	store journalStore,
 	grant authority.LinuxCloneGrant,
 	callbacks *execution.LinuxV2JournalCallbacks,
 ) error {
@@ -3757,7 +3757,7 @@ func (witness *linuxV2NativeWitnessRun) installCloneCallbacks(
 	return nil
 }
 
-func (witness *linuxV2NativeWitnessRun) markJournalClearedStage(daemon *daemon, store *state.Store) error {
+func (witness *linuxV2NativeWitnessRun) markJournalClearedStage(daemon *daemon, store journalStore) error {
 	journal, err := store.LoadJournal(state.RunKey{RunID: witness.request.RunKey.RunID, Generation: witness.request.RunKey.Generation})
 	if err != nil {
 		return fmt.Errorf("read owner witness after exact v2 clear: %w", err)
@@ -3794,7 +3794,7 @@ func (witness *linuxV2NativeWitnessRun) validateFreshClaim(now time.Time) error 
 	return nil
 }
 
-func (witness *linuxV2NativeWitnessRun) seedAuthenticClaim(store *state.Store) error {
+func (witness *linuxV2NativeWitnessRun) seedAuthenticClaim(store journalStore) error {
 	key := state.RunKey{RunID: witness.request.RunKey.RunID, Generation: witness.request.RunKey.Generation}
 	intent := state.ClaimIntent{
 		Key: key, RuntimeKey: witness.config.Runtime.RuntimeKey,

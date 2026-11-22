@@ -46,7 +46,7 @@ const (
 // newDurablePiProviderBridgeExecutor surrounds the Control mapper with the
 // run-journal commit/ack boundary required before a native bridge can use it.
 // Provider input is represented only by a SHA-256 digest in local state.
-func newDurablePiProviderBridgeExecutor(controlAPI ControlAPI, store *state.Store, key state.RunKey, access protocol.ProviderAccess) (pi.ExecuteProviderAction, error) {
+func newDurablePiProviderBridgeExecutor(controlAPI ControlAPI, store journalStore, key state.RunKey, access protocol.ProviderAccess) (pi.ExecuteProviderAction, error) {
 	if store == nil || strings.TrimSpace(key.RunID) == "" || key.Generation <= 0 {
 		return nil, errPiProviderActionStoreUnavailable
 	}
