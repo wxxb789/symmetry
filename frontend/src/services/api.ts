@@ -40,8 +40,6 @@ export class ServerRefusal extends Data.TaggedError("ServerRefusal")<{
 }> {}
 
 type ReadError = Unauthenticated | Forbidden | Conflict | Validation | Unsupported | Network | UnexpectedResponse;
-// Every error the request boundary fails with: a read/status error, the server's
-// typed refusal for a control/chat write, or the Goal command's own refusal.
 type ApiError = ReadError | ServerRefusal | MutationRefused;
 export type Workspace = SymmetryWorkspaceReadV1;
 export type Project = Workspace["projects"][number];
@@ -289,11 +287,8 @@ const Session = Schema.Struct({
   socket_token: Schema.optionalWith(Schema.String, { default: () => "" }),
 });
 type Session = typeof Session.Type;
-// The one refusal envelope every boundary decodes: the union of the members the
-// server sends and the two write surfaces consume. `code`/`message` are
-// required and non-empty — a document that cannot name its own refusal is
-// answered by the status mapping instead — `fields` is the read/domain member a
-// form renders, and the command members ride into `MutationRefused.details`.
+// The one refusal envelope both write surfaces decode: `code`/`message` required
+// non-empty, else the status mapping answers; `fields` for forms, `details` for commands.
 const RefusalBody = Schema.Struct({
   error: Schema.Struct({
     code: Schema.NonEmptyString,
@@ -326,10 +321,8 @@ const WorkItemReceiptBody = Schema.Struct({
   disposition: Schema.optional(Schema.NonEmptyString),
   work_item: Schema.Struct({ id: Schema.NonEmptyString }),
 });
-// Every accepted Goal write (a command or a creation) answers with the
-// server's receipt snapshot, which repeats the Goal identity and the mutation
-// identity. These two members are the receipt's own contract here: an empty
-// 200 is not a receipt and must never be announced as an applied write.
+// Every accepted Goal write answers with the server's receipt: both identities are
+// required — an empty 200 is not a receipt and must never be announced as applied.
 const GoalReceiptBody = Schema.Struct({
   goal_id: Schema.NonEmptyString,
   mutation_id: Schema.NonEmptyString,
@@ -545,20 +538,13 @@ export interface Api {
   ) => Promise<InputOutcome>;
 }
 
-// The one transport failure: a fetch or a body read that never produced an
-// answer.
 const unreachable = () => new Network({ message: "Cannot reach the server. Check your connection and try again." });
 
-// The one unreadable-body failure: a body that is not valid UTF-8 or does not
-// match the schema its path decodes it with. `status` is the response status
-// where the boundary had one, and `null` when the body never reached it.
 const unreadableBody = (status: number | null) =>
   new UnexpectedResponse({ message: "The server response could not be read safely. Refresh or contact your operator.", status, transient: false });
 
 // Strict byte-level decoding keeps invalid UTF-8 visible to the schema boundary;
-// response.text() would silently substitute U+FFFD and pass corrupted text. It
-// is the one body decoder: every path wraps it, the accepted answers as the
-// effect below and the refusal parser inside its own try.
+// response.text() would silently substitute U+FFFD and pass corrupted text on.
 const decodeBodyText = (body: Uint8Array) => new TextDecoder("utf-8", { fatal: true }).decode(body);
 
 const decodeBody = (body: Uint8Array) =>
@@ -595,19 +581,12 @@ function mutationStatusError(status: number): ReadError {
   return statusError(status);
 }
 
-/**
- * Which refusal error a refused write produces: the control-plane and chat
- * surfaces consume the server's typed `ServerRefusal`, while a Goal command
- * answers `MutationRefused` — the type the Goal surfaces branch on — carrying
- * exactly the members the server sent in `details`.
- */
+// Which refusal error a refused write produces: the control-plane and chat surfaces
+// consume `ServerRefusal`; a Goal command answers `MutationRefused` with the served `details`.
 type RefusalSurface = "server" | "mutation";
 
-// The one refusal parser: every refused response body decodes through the same
-// fatal decode and the same union schema, and the surface picks which error the
-// boundary hands back. A body that is not valid UTF-8, is not the refusal
-// envelope, or cannot name its own refusal (`code`/`message` empty) is not a
-// described refusal: its caller falls back to the status mapping.
+// A body that is not valid UTF-8, is not the refusal envelope, or cannot name its own
+// refusal is not a described refusal: the caller falls back to the status mapping.
 function parseRefusal(status: number, body: Uint8Array, surface: RefusalSurface): ApiError | null {
   try {
     const decoded = Schema.decodeUnknownEither(Schema.parseJson(RefusalBody))(decodeBodyText(body));
@@ -636,10 +615,8 @@ function request<A>(
   surface: RefusalSurface = "server",
 ): Effect.Effect<A, ApiError> {
   return Effect.gen(function* () {
-    // The fetch and the body read share one signalled step: the signal handed
-    // to `fetcher` is the step's own, so the caller's cancellation aborts an
-    // in-flight body download with the request (the base behaviour; a second,
-    // controller-free step would leave the response stream running).
+    // Fetch and body read share one signalled step, so a caller cancel aborts an
+    // in-flight body download; a controller-free second step would leave it running.
     const { response, expired, body } = yield* Effect.tryPromise({
       try: async (signal) => {
         const response = await fetcher(path, {
@@ -655,14 +632,11 @@ function request<A>(
           ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
           signal,
         });
-        // An expiry answer is classified from its status alone: its body is
-        // never the refusal envelope, so it stays unread and an unreadable one
-        // cannot turn the session failure into a transport failure.
+        // An expiry answer is classified from its status alone, so its body stays unread:
+        // an unreadable one cannot turn the session failure into a transport failure.
         const expired = response.type === "opaqueredirect" || response.status === 302 || response.status === 303 || response.status === 401;
-        // Read the body only when the boundary consumes it: an accepted
-        // answer's decoded body, or a failed write's refusal. A failed GET
-        // reads none, so its unreadable body cannot mask its status-derived
-        // error with a Network.
+        // Read the body only when the boundary consumes it (accepted answer, failed
+        // write): a failed GET's unreadable body cannot mask its status-derived error.
         const reads = !expired && (response.ok || init.method !== "GET");
         return { response, expired, body: reads ? new Uint8Array(await response.arrayBuffer()) : new Uint8Array(0) };
       },
@@ -680,10 +654,6 @@ function request<A>(
   });
 }
 
-// `signal` is the read path's caller cancellation. A Goal command has none
-// today — the reads/writes split is its own slice (W4-09) — so the write path
-// omits it rather than minting a throwaway controller; the Effect runtime still
-// hands the fetch its own fiber signal.
 function run<A>(effect: Effect.Effect<A, ApiError>, signal?: AbortSignal): Promise<A> {
   return runtime.runPromise(Effect.either(effect), signal === undefined ? undefined : { signal }).then((result) => {
     if (Either.isLeft(result)) throw result.left;
@@ -962,11 +932,8 @@ const resourceReceipt = (body: Uint8Array) =>
   );
 
 /**
- * One Goal command on the shared request boundary: the accepted write returns
- * the decoded receipt, a domain refusal answers `MutationRefused` carrying
- * exactly the members the server sent (the surface renders the conflict instead
- * of guessing it), a transport failure keeps its own read error, and a
- * 401/redirect expiry is classified like every other read.
+ * One Goal command on the shared request boundary: an accepted write returns the
+ * decoded receipt; a domain refusal answers `MutationRefused` with the served members.
  */
 async function goalCommand(
   fetcher: typeof fetch,
@@ -979,7 +946,6 @@ async function goalCommand(
   );
 }
 
-/** One Goal command posted to the named goal, authenticated by the session's CSRF token. */
 export async function postGoalCommand(
   fetcher: typeof fetch,
   csrfToken: string,
@@ -989,11 +955,8 @@ export async function postGoalCommand(
   return goalCommand(fetcher, csrfToken, `/portal/api/goals/${encodeURIComponent(goalId)}/commands`, envelope);
 }
 
-/**
- * One project-scoped Goal creation. The creation is a Goal command for every
- * purpose this boundary owns — the same receipt, the same refusals — so it
- * posts through the same function.
- */
+// One project-scoped Goal creation: the same receipt and the same refusals as a
+// command, so it posts through the same function.
 export async function postGoalCreation(
   fetcher: typeof fetch,
   csrfToken: string,

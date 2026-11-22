@@ -39,9 +39,8 @@ func (daemon *daemon) ensureHarnessProbe(ctx context.Context) error {
 		return err
 	}
 	capabilities, probeErr := registry.Probe(ctx, kind)
-	// Registry.Probe joins adapter failures with capability validation. Validate
-	// again before tolerating expected unavailable/unverified sentinels so a
-	// malformed projection cannot be hidden behind errors.Is on a joined error.
+	// Registry.Probe joins adapter failures with capability validation: validate again before
+	// tolerating expected sentinels, so errors.Is on a joined error cannot hide malformation.
 	if err := capabilities.Validate(); err != nil {
 		return fmt.Errorf("probe %s adapter capability projection: %w", runtime.HarnessKind, err)
 	}
@@ -68,8 +67,8 @@ func (daemon *daemon) ensureHarnessProbe(ctx context.Context) error {
 	return nil
 }
 
-// probeErrorContainsOnly allows a probe's expected sentinel and contextual
-// wrappers, but does not let errors.Join hide an independent fatal failure.
+// Allows a probe's expected sentinel and contextual wrappers, but never lets errors.Join
+// hide an independent fatal failure.
 func probeErrorContainsOnly(err, expected error) bool {
 	if err == nil || expected == nil {
 		return false
@@ -94,9 +93,8 @@ func probeErrorContainsOnly(err, expected error) bool {
 	return errors.Is(err, expected)
 }
 
-// newHarnessRegistry is the daemon composition root. Native adapter packages
-// depend on harness interfaces, so they are wired here rather than from the
-// harness package itself.
+// Daemon composition root: native adapter packages depend on harness interfaces, so they
+// are wired here rather than from the harness package itself.
 func newHarnessRegistry(profile config.AgentProfile) *harness.Registry {
 	registry := harness.NewRegistry()
 	_ = registry.Register(harness.KindCodex, codex.NewAdapterWithNativeIdentity(profile.Command, profile.NativeModel, profile.NativeModelProvider))
@@ -150,9 +148,8 @@ func unavailableRuntimeKind(value string) bool {
 	}
 }
 
-// nativeGoalHarnessKind identifies adapter families whose launch contract is
-// staged: process identity, then native session handle, then a native turn.
-// The generic adapter deliberately remains outside this set.
+// Identifies adapter families whose launch contract is staged (process identity, then native
+// session handle, then native turn); the generic adapter deliberately remains outside.
 func nativeGoalHarnessKind(kind harness.Kind) bool {
 	switch kind {
 	case harness.KindCodex, harness.KindClaude, harness.KindPi, harness.KindOMP, harness.KindOmO, harness.KindOpenCode:
@@ -226,8 +223,8 @@ func buildRuntimeRegistration(runtime config.Runtime, profile config.AgentProfil
 		},
 	}
 	if runtime.HarnessKind != config.RuntimeHarnessGeneric {
-		// Native identity is evidence from this probe, never an operator pin.
-		// A failed probe advertises an explicit sentinel rather than stale config.
+		// Native identity is evidence from this probe, never an operator pin; a failed probe
+		// advertises an explicit sentinel rather than stale config.
 		metadata.HarnessVersion = probedMetadataVersion(capabilities.NativeVersion)
 		metadata.AdapterVersion = probedMetadataVersion(capabilities.ImplementationVersion)
 	}
@@ -260,9 +257,8 @@ func structuredInputForProfile(profile config.AgentProfile) bool {
 	return profile.InputMode == config.InputModeJSON
 }
 
-// legacyProviderAccessForRegistration describes the existing stdin envelope
-// contract only. Native harnesses must not advertise provider access until
-// their broker bridge is independently verified.
+// Describes the existing stdin envelope contract only: native harnesses must not advertise
+// provider access until their broker bridge is independently verified.
 func legacyProviderAccessForRegistration(runtime config.Runtime, profile config.AgentProfile) bool {
 	return runtime.HarnessKind == config.RuntimeHarnessGeneric &&
 		profile.InputMode == config.InputModeJSON && profile.ProviderAccess

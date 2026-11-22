@@ -12,6 +12,8 @@ import sys
 import tempfile
 import unittest
 
+import citest
+
 SCRIPT = pathlib.Path(__file__).with_name("publish-linux-v2-control-receipt.py")
 OWNER_UID = 65534
 OWNER_GID = 65534
@@ -68,13 +70,7 @@ class ReceiptPublisherTest(unittest.TestCase):
         os.chmod(self.source, 0o600)
 
     def publish(self, uid: int = OWNER_UID, gid: int = OWNER_GID) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            [sys.executable, str(SCRIPT), str(self.source), str(self.directory), self.name, str(uid), str(gid)],
-            text=True,
-            capture_output=True,
-            check=False,
-            timeout=10,
-        )
+        return citest.run_gate(SCRIPT, str(self.source), str(self.directory), self.name, str(uid), str(gid), timeout=10)
 
     def assert_rejected_without_publication(self, result: subprocess.CompletedProcess[str], reason: str) -> None:
         self.assertNotEqual(result.returncode, 0)

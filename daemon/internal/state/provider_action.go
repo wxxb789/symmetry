@@ -562,11 +562,8 @@ func validateProviderActionDispatchCapacity(journal RunJournal) error {
 	return validateProviderActionJournalSize(reserveWorstCaseCompletions(journal))
 }
 
-// reserveWorstCaseCompletions returns a copy of the journal with the complete
-// serialized shape of the largest legal completion reserved for every
-// unresolved intent. Completed provider data may already exceed the
-// provider-only budget, but a mutation must leave enough journal space to
-// classify every outstanding effect without making completion lossy.
+// Completed provider data may already exceed the provider-only budget, so a
+// mutation must leave space to classify every outstanding effect without loss.
 func reserveWorstCaseCompletions(journal RunJournal) RunJournal {
 	reserved := journal
 	reserved.ProviderActionIntents = append([]ProviderActionIntent(nil), journal.ProviderActionIntents...)

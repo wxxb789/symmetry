@@ -9,7 +9,6 @@ replacements: UUID-validated path segments and the parsed `go version -m`
 records, both against hostile input.
 """
 
-import importlib.util
 import pathlib
 import shutil
 import subprocess
@@ -18,10 +17,10 @@ import textwrap
 import unittest
 from unittest import mock
 
+import citest
+
 SCRIPT = pathlib.Path(__file__).with_name("omo-control-native-evidence.py")
-SPEC = importlib.util.spec_from_file_location("omo_control_native_evidence", SCRIPT)
-EVIDENCE = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(EVIDENCE)
+EVIDENCE = citest.load_gate(SCRIPT, "omo_control_native_evidence")
 
 GO = shutil.which("go")
 

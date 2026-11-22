@@ -8,9 +8,6 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/config"
 )
 
-// TestNormalizeOwnerStateDirIsIdentityOutsideLinuxAmd64 pins the non-linux/amd64
-// surface: NormalizeOwnerStateDir is the identity passthrough (today's
-// normalizeLinuxNativeStateDir default), never a transformation or a refusal.
 func TestNormalizeOwnerStateDirIsIdentityOutsideLinuxAmd64(t *testing.T) {
 	for _, path := range []string{"", ".", "var/lib/symmetry/state", "/var/lib/symmetry/state", "/"} {
 		got, err := NormalizeOwnerStateDir(path)
@@ -20,8 +17,6 @@ func TestNormalizeOwnerStateDirIsIdentityOutsideLinuxAmd64(t *testing.T) {
 	}
 }
 
-// TestUnsupportedKindRefusalsAreStable pins both refusal strings of the
-// non-linux/amd64 surface, byte for byte.
 func TestUnsupportedKindRefusalsAreStable(t *testing.T) {
 	if err := VerifyLegacyLinuxOwnersDrained(config.Config{}); err == nil ||
 		err.Error() != "legacy Linux owner drain verification is supported only on Linux amd64" {

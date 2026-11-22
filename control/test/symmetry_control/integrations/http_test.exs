@@ -3,8 +3,7 @@ defmodule SymmetryControl.Integrations.HTTPTest do
 
   alias SymmetryControl.Integrations.HTTP
 
-  # Port 1 is reserved and unbound, so a socket attempt fails immediately with
-  # econnrefused instead of reaching a server.
+  # Port 1 is reserved and unbound, so a socket attempt fails immediately with econnrefused.
   @unreachable_url "http://127.0.0.1:1/x"
 
   describe "request/4 request construction" do

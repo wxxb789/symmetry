@@ -204,10 +204,6 @@ func TestNormalizeJSONStringEscapesLeavesNonC0TokensUnchanged(t *testing.T) {
 	}
 }
 
-// TestValidateUUIDPinsRejectionMessages pins the exact rejection message for
-// every admission_id rejection class. The strings are the byte-identity
-// contract for the wire-validator unification: this table must stay green when
-// the validator body becomes a policy-driven delegate.
 func TestValidateUUIDPinsRejectionMessages(t *testing.T) {
 	const field = "admission_id"
 	const uuid = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"

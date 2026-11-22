@@ -23,10 +23,8 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// containmentSupervisorOwnerWatchdog observes an inherited read end whose
-// write end remains owned by the daemon. EOF or any other read failure means
-// the daemon owner is no longer alive. The helper keeps the watchdog local to
-// the process and never serializes this handle into durable authority.
+// Observes an inherited read end whose write end stays owned by the daemon: EOF or any read
+// failure means the owner is no longer alive. Never serialized into durable authority.
 type containmentSupervisorOwnerWatchdog struct {
 	file      *os.File
 	lost      chan struct{}
@@ -63,8 +61,7 @@ func (watchdog *containmentSupervisorOwnerWatchdog) ownerLost() <-chan struct{} 
 	return watchdog.lost
 }
 
-// disarm closes the inherited read end only after marking the close as
-// intentional. This ordering is the graceful-close fence: the helper cannot
+// Marking the close intentional before closing is the graceful-close fence: the helper cannot
 // mistake its own shutdown path for daemon owner loss.
 func (watchdog *containmentSupervisorOwnerWatchdog) disarm() {
 	if watchdog == nil {
@@ -81,10 +78,8 @@ func (watchdog *containmentSupervisorOwnerWatchdog) disarm() {
 	<-watchdog.done
 }
 
-// runContainmentSupervisorIOContext owns the goroutine used by the existing
-// file-based I/O hooks. Cancellation must cancel the Windows handle before the
-// file is closed, then wait for the operation to return so no I/O goroutine
-// survives the bootstrap failure boundary.
+// Cancellation must cancel the Windows handle before the file is closed, then wait for the
+// operation to return so no I/O goroutine survives the bootstrap failure boundary.
 func runContainmentSupervisorIOContext(ctx context.Context, file *os.File, deadline time.Time, operation string, action func() error) error {
 	if ctx == nil {
 		return errors.New("containment supervisor I/O context is nil")
@@ -140,8 +135,7 @@ type containmentSupervisorArgs struct {
 	launchToken     string
 }
 
-// RunContainmentSupervisor is called only by the hidden daemon mode. It does
-// not accept ordinary daemon configuration or unknown arguments.
+// Called only by the hidden daemon mode; it does not accept ordinary daemon configuration or unknown arguments.
 func RunContainmentSupervisor(args []string) error {
 	parsed, err := parseContainmentSupervisorArgs(args)
 	if err != nil {
@@ -287,9 +281,8 @@ func runDurableContainmentSupervisor(args containmentSupervisorArgs, ownerWatchd
 	defer bootstrapFile.Close()
 	line, err := readBoundedLine(bootstrapFile)
 	if err != nil {
-		// Before the secret-bearing bootstrap arrives, the inherited Job is the
-		// only cleanup authority. An owner crash or cancellation must stop and
-		// release it rather than leave an unbound child alive.
+		// Before the secret-bearing bootstrap arrives, the inherited Job is the only cleanup authority:
+		// stop and release it rather than leave an unbound child alive.
 		_, _ = terminateAndObserveSupervisorJob(args.jobHandle)
 		_ = closeJob(args.jobHandle)
 		return fmt.Errorf("read durable containment supervisor bootstrap: %w", err)
@@ -518,10 +511,8 @@ func runContainmentSupervisorWithJob(_ containmentSupervisorArgs, bootstrap cont
 	}
 	stopState := containmentSupervisorStopState{}
 	stopJobUntilEmpty := func() error {
-		// One stop call is already bounded by containmentCloseDeadline. Keep
-		// the named-pipe loop alive after an unproven attempt so an exact
-		// authenticated recovery can retry; never block the helper forever in
-		// a local retry loop.
+		// One stop call is already bounded by containmentCloseDeadline; keep the named-pipe loop alive
+		// after an unproven attempt so an exact authenticated recovery can retry, never a local retry loop.
 		_, err := stopState.stop(job)
 		return err
 	}
@@ -559,9 +550,8 @@ func runContainmentSupervisorWithJob(_ containmentSupervisorArgs, bootstrap cont
 	var recoveryRetained atomic.Bool
 	leaseState := newContainmentSupervisorLeaseState(func() {
 		if err := stopJobUntilEmpty(); err != nil {
-			// Lease expiry is an independent stop boundary. Preserve the helper
-			// and its Job authority when the first proof attempt fails so the
-			// main loop can retry before any authenticated recovery or release.
+			// Lease expiry is an independent stop boundary: preserve the helper and its Job authority when
+			// the first proof attempt fails so the main loop can retry before authenticated recovery or release.
 			recoveryRetained.Store(true)
 		}
 	})
@@ -628,15 +618,13 @@ func runContainmentSupervisorWithJob(_ containmentSupervisorArgs, bootstrap cont
 		if readErr != nil {
 			_ = pipe.Close()
 			refreshOwnerLoss()
-			// A client has not authenticated until the request secret and the
-			// complete endpoint fence validate. An unauthenticated disconnect is
-			// not owner loss and must never gain Job-stop authority.
+			// A client is authenticated only once the request secret and the complete endpoint fence
+			// validate; an unauthenticated disconnect is not owner loss and gains no Job-stop authority.
 			continue
 		}
 		refreshOwnerLoss()
-		// A lost hello response can leave the daemon with an uncertain bootstrap
-		// result. Accept the exact secret-bearing bootstrap replay on a fresh
-		// connection before decoding ordinary post-auth requests.
+		// A lost hello response can leave the daemon with an uncertain bootstrap result. Accept the
+		// exact secret-bearing bootstrap replay on a fresh connection before decoding ordinary post-auth requests.
 		if endpoint.JobName != "" {
 			var replayBootstrap containmentSupervisorBootstrap
 			if decodeErr := decodeSupervisorJSON(requestLine, &replayBootstrap); decodeErr == nil && replayBootstrap.JobName != "" {
@@ -690,9 +678,8 @@ func runContainmentSupervisorWithJob(_ containmentSupervisorArgs, bootstrap cont
 					return fmt.Errorf("write hello retry witness marker: %w", markerErr)
 				}
 			}
-			// The authenticated request is intentionally left without a response.
-			// The client must classify the resulting peer disconnect as a transient
-			// initial-hello failure and retry on a fresh pipe instance.
+			// The authenticated request is intentionally left without a response; the client must classify
+			// the disconnect as a transient initial-hello failure and retry on a fresh pipe instance.
 			_ = pipe.Close()
 			continue
 		}
@@ -785,10 +772,8 @@ func runContainmentSupervisorWithJob(_ containmentSupervisorArgs, bootstrap cont
 			continue
 		}
 
-		// Both explicit close and persisted recovery are terminal operations.
-		// Latch no-more-renewals first, then prove an empty Job before disarming
-		// the owner watchdog. A failed stop therefore retains an independent
-		// owner/receipt path instead of silently losing the stop responsibility.
+		// Both explicit close and persisted recovery are terminal: latch no-more-renewals first, then
+		// prove an empty Job before disarming the watchdog; a failed stop retains the owner/receipt path.
 		wasAlreadyStopped := stopState.stoppedSuccessfully()
 		leaseState.stop()
 		response.Status = "stopped"
@@ -828,8 +813,7 @@ func runContainmentSupervisorWithJob(_ containmentSupervisorArgs, bootstrap cont
 			continue
 		}
 		if releaseErr := release(); releaseErr != nil {
-			// The Job is already proven empty; retain the helper and let the
-			// next exact recovery request retry handle release.
+			// The Job is already proven empty; retain the helper so the next exact recovery request retries release.
 			continue
 		}
 		return nil
@@ -902,9 +886,8 @@ func createContainmentSupervisorPipe(name string) (*os.File, error) {
 	return os.NewFile(uintptr(handle), containmentSupervisorPipeFileName), nil
 }
 
-// containmentSupervisorSecurityDescriptor grants the current Windows account
-// full access to this one pipe and protects the DACL from inherited entries.
-// The pipe is additionally created with PIPE_REJECT_REMOTE_CLIENTS.
+// Grants the current Windows account full access to this one pipe and protects the DACL from
+// inherited entries; the pipe is also created with PIPE_REJECT_REMOTE_CLIENTS.
 func containmentSupervisorSecurityDescriptor() (*windows.SECURITY_DESCRIPTOR, error) {
 	user, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil {

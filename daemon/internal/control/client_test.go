@@ -489,10 +489,6 @@ func runJSON(state, result, failure string) string {
 	return fmt.Sprintf(`{"run_id":"run-1","task_id":"task-1","runtime_id":"runtime-1","generation":2,"state":%q,"claim_id":"claim-1","lease_token":"lease-1","lease_expires_at":"2026-09-03T00:00:30Z","result":%s,"failure":%s}`, state, result, failure)
 }
 
-// TestValidateProviderActionUUIDPinsRejectionMessages pins the exact rejection
-// message for the provider-action action_id classes this boundary already
-// rejects. Version and variant rows are deliberately absent: the base accepts
-// them here, and the tightening is covered by its own test.
 func TestValidateProviderActionUUIDPinsRejectionMessages(t *testing.T) {
 	const field = "provider action action_id"
 	const uuid = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
@@ -531,9 +527,6 @@ func TestValidateProviderActionUUIDPinsRejectionMessages(t *testing.T) {
 	}
 }
 
-// The tolerant legacy path (decodeJSON) already rejected duplicate members
-// before this change; these rows pin that rejection so a later tolerance
-// relaxation cannot silently reopen the gap.
 func TestDecodeJSONRejectsDuplicateMembers(t *testing.T) {
 	for _, test := range []struct {
 		name string

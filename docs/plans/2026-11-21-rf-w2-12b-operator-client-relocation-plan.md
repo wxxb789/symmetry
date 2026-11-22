@@ -324,3 +324,22 @@ byte-identical); the goal-envelope family (D5/W6-08); ack stages (W3); W2-13's `
   `sameJSONObject` (number spellings, `-0`, large-integer separation, nested members), so a future
   change to the retained helper now fails in `control` even though the operator cases still cover
   the moved caller.
+
+## Comment-policy sweep (2026-11-22)
+
+Module intent removed from `daemon/e2e/internal/operator/client.go` by the 2026-11-22 comment-policy
+sweep is recorded below (workstream record "ws12-daemon-misc").
+
+- `daemon/e2e/internal/operator/client.go` (HEAD lines 1–7, package doc):
+```
+// Package operator carries the operator task-control driver for its only
+// callers — the end-to-end witnesses under daemon/e2e. Production has no
+// reachable caller for the driver, so it ships beside those callers instead of
+// staying unreachable in the machine control client. The transport, error and
+// decode substrate below is a byte-identical copy of the declarations the
+// machine client keeps; the driver's operator-exclusive response validators
+// live in validation.go and its v1 task projection in task.go.
+```
+
+The sweep's plan is
+[`docs/plans/2026-11-22-comment-policy-sweep-plan.md`](2026-11-22-comment-policy-sweep-plan.md).

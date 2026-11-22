@@ -509,3 +509,23 @@ pass because no production statement other than the comment above moved.
   `internal/config`, `internal/app/probe.go`, `internal/app/goal_admission.go`: untouched.
 - New packages: none beyond `internal/linuxpreflight` (a second shared-primitives package is not in
   the owned set, and the primitives have exactly one shared home now).
+
+## Comment-policy sweep (2026-11-22)
+
+Module intent removed from this slice's files (`daemon/internal/linuxpreflight/preflight_linux.go`,
+`preflight_unsupported.go`) by the 2026-11-22 comment-policy sweep is recorded below (workstream record "ws12-daemon-misc").
+
+- `daemon/internal/linuxpreflight/preflight_linux.go` and
+  `daemon/internal/linuxpreflight/preflight_unsupported.go` (HEAD lines 3–9, same package doc in both):
+```
+// Package linuxpreflight verifies a Linux amd64 host installation of the
+// Symmetry daemon owner: the installed A/B accounts, the delegated cgroup
+// parent, the fixed Git clone/repository ownership, the systemd units, and the
+// POSIX ACLs that fence A-private state from the fixed B runtime. Every
+// verifier is read-only: none of them launches a process, mutates a journal, or
+// certifies a future run, and none of them holds daemon state — callers pass the
+// daemon configuration and the trusted root-installed owner configuration.
+```
+
+The sweep's plan is
+[`docs/plans/2026-11-22-comment-policy-sweep-plan.md`](2026-11-22-comment-policy-sweep-plan.md).

@@ -17,25 +17,14 @@ import (
 )
 
 const (
-	// The gate map and clone RELEASE golden bytes below were produced by
-	// composing the same fixtures with the production portable helpers
-	// (fixedFrame/appendWire*, json.Marshal) on the host where these tests were
-	// authored; the fd-bearing RELEASE encoders cannot run there. The tests
-	// below re-derive the same bytes through the production encoders. The
-	// scratch v2 RELEASE golden and its explicit deadline live in wire_test.go
-	// next to the portable encoder test that pins them.
 	wireTestGateMapGoldenHex   = "53594d4c4130303101000400e9030000ea030000d1070000d20700000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
 	wireTestReleaseV3GoldenHex = "53594d4c41303031030006000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20480300000400000015cd5b0700000000090000002f62696e2f7472756501000000090000002f62696e2f7472756501000000060000004c414e473d43420000002f746d702f73796d6d657472792d776972652d676f6c64656e2f62696e64696e672d62696e64696e672d312f72756e2d72756e2d312f67656e65726174696f6e2d31d20200007b22696e74656e74223a7b2276657273696f6e223a322c2272756e5f6964223a2272756e2d31222c2267656e65726174696f6e223a312c2262696e64696e675f6b6579223a2262696e64696e672d31222c227265736f757263655f6964223a2230303030303030302d303030302d343030302d383030302d303030303030303030303031222c22626173655f636f6d6d6974223a2261616161616161616161616161616161616161616161616161616161616161616161616161616161222c22626173655f747265655f646967657374223a227368613235363a62626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262222c226e6f6e6365223a2263636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363222c22736565645f70617468223a222f746d702f73796d6d657472792d776972652d676f6c64656e2d736565642f62696e64696e672d62696e64696e672d312f72756e2d72756e2d312f67656e65726174696f6e2d312e62756e646c65222c22746172676574223a222f746d702f73796d6d657472792d776972652d676f6c64656e2f62696e64696e672d62696e64696e672d312f72756e2d72756e2d312f67656e65726174696f6e2d31227d2c2273656564223a7b2276657273696f6e223a322c22626173655f636f6d6d6974223a2261616161616161616161616161616161616161616161616161616161616161616161616161616161222c22646967657374223a227368613235363a64646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464222c2273697a65223a312c22646576696365223a312c22696e6f6465223a327d7d"
 )
 
-// wireTestOwnerConfig is the deterministic non-secret A/B identity fixture.
 func wireTestOwnerConfig() OwnerConfig {
 	return OwnerConfig{AUID: 1001, AGID: 1002, BUID: 2001, BGID: 2002}
 }
 
-// TestWireLinuxGateMapRoundTrip covers the root-to-gate map acknowledgement.
-// Its codec lives in wire_linux.go because the map IDs are validated by the
-// linux-only owner config rules.
 func TestWireLinuxGateMapRoundTrip(t *testing.T) {
 	config := wireTestOwnerConfig()
 	token := wireTestToken()
@@ -57,7 +46,6 @@ func TestWireLinuxGateMapRoundTrip(t *testing.T) {
 	}
 }
 
-// TestWireLinuxGateMapRefusals covers the B-only map identity guards.
 func TestWireLinuxGateMapRefusals(t *testing.T) {
 	config := wireTestOwnerConfig()
 	packet := EncodeGateMap(config, wireTestToken())
@@ -90,8 +78,6 @@ func TestWireLinuxGateMapRefusals(t *testing.T) {
 	}, cases)
 }
 
-// TestWireLinuxReleaseScratchRoundTrip round-trips the v2 scratch RELEASE with
-// the four A-owned descriptors the decoder validates.
 func TestWireLinuxReleaseScratchRoundTrip(t *testing.T) {
 	pipes := newScratchNativePipes(t)
 	guard, _ := newScratchReleaseGuard(t, time.Minute)
@@ -124,8 +110,6 @@ func TestWireLinuxReleaseScratchRoundTrip(t *testing.T) {
 	}
 }
 
-// TestWireLinuxReleaseCloneRoundTrip round-trips the v3 clone RELEASE and the
-// sealed token-scrubbed v3 request the trusted B bootstrap decodes.
 func TestWireLinuxReleaseCloneRoundTrip(t *testing.T) {
 	pipes := newScratchNativePipes(t)
 	guard, _ := newScratchReleaseGuard(t, time.Minute)
@@ -176,9 +160,6 @@ func TestWireLinuxReleaseCloneRoundTrip(t *testing.T) {
 	}
 }
 
-// TestWireLinuxReleaseGoldenBytes pins both guarded RELEASE frames. The clone
-// fixture uses a deterministic root so its grant JSON cannot depend on the
-// scratch directory; the path is never touched on disk.
 func TestWireLinuxReleaseGoldenBytes(t *testing.T) {
 	token := wireTestToken()
 	root := filepath.Join(string(filepath.Separator), "tmp", "symmetry-wire-golden")
@@ -214,12 +195,10 @@ func TestWireLinuxReleaseGoldenBytes(t *testing.T) {
 	}
 }
 
-// wireTestReleaseArgcOffset is the packet offset of the argv count field.
 func wireTestReleaseArgcOffset(command NativeCommand) int {
 	return releaseHeaderSize + 4 + len(command.Path)
 }
 
-// wireTestReleaseEnvCountOffset is the packet offset of the env count field.
 func wireTestReleaseEnvCountOffset(command NativeCommand) int {
 	offset := wireTestReleaseArgcOffset(command) + 4
 	for _, arg := range command.Args {
@@ -228,8 +207,6 @@ func wireTestReleaseEnvCountOffset(command NativeCommand) int {
 	return offset
 }
 
-// wireTestAppendAndFixBodySize appends bytes and keeps the declared body size
-// consistent, so only the trailing-bytes guard can refuse the frame.
 func wireTestAppendAndFixBodySize(extra ...byte) func([]byte) []byte {
 	return func(packet []byte) []byte {
 		mutated := append(wireTestCopy(packet), extra...)
@@ -238,8 +215,6 @@ func wireTestAppendAndFixBodySize(extra ...byte) func([]byte) []byte {
 	}
 }
 
-// wireTestXorByte flips one byte so the mutation cannot collide with the
-// fixture value it is meant to change.
 func wireTestXorByte(index int, mask byte) func([]byte) []byte {
 	return func(packet []byte) []byte {
 		mutated := wireTestCopy(packet)
@@ -248,15 +223,12 @@ func wireTestXorByte(index int, mask byte) func([]byte) []byte {
 	}
 }
 
-// wireTestAppendOversizedRelease appends one full release bound so the decoder
-// must refuse the frame on its top-level size guard, not on the body size.
 func wireTestAppendOversizedRelease() func([]byte) []byte {
 	return func(packet []byte) []byte {
 		return append(wireTestCopy(packet), make([]byte, maxReleaseSize)...)
 	}
 }
 
-// TestWireLinuxReleaseRefusals covers the guarded v2/v3 RELEASE guards.
 func TestWireLinuxReleaseRefusals(t *testing.T) {
 	pipes := newScratchNativePipes(t)
 	guard, _ := newScratchReleaseGuard(t, time.Minute)
@@ -340,7 +312,6 @@ func TestWireLinuxReleaseRefusals(t *testing.T) {
 	}, cases)
 }
 
-// TestWireLinuxCloneBootstrapRefusals covers the sealed v3 request guards.
 func TestWireLinuxCloneBootstrapRefusals(t *testing.T) {
 	token := wireTestToken()
 	intent := cleanupTestIntentWithBinding(t, t.TempDir(), "run-1", "binding-1", 1)
@@ -375,8 +346,8 @@ func TestWireLinuxCloneBootstrapRefusals(t *testing.T) {
 	}
 	cases := []wireRefusalCase{
 		{
-			// The C gate only seals token-scrubbed requests; an unsealed frame
-			// must stay refused by the token guard.
+			// The C gate only seals token-scrubbed requests; an unsealed frame must stay
+			// refused by the token guard.
 			name: "unsealed token", mutate: func([]byte) []byte { return wireTestCopy(packet) },
 			want: "Linux owner RELEASE token is stale",
 		},
@@ -441,10 +412,6 @@ func TestWireLinuxCloneBootstrapRefusals(t *testing.T) {
 	}, cases)
 }
 
-// wireTestFuzzReleaseDescriptors creates the four A-owned descriptors the
-// RELEASE decoder validates. newScratchNativePipes takes a *testing.T, which
-// *testing.F is not, so the fuzz fixture creates the same pipe set directly and
-// keeps it alive for every fuzz iteration through f.Cleanup.
 func wireTestFuzzReleaseDescriptors(f *testing.F) [releaseFDCount]*os.File {
 	f.Helper()
 	var descriptors [releaseFDCount]*os.File
@@ -453,7 +420,7 @@ func wireTestFuzzReleaseDescriptors(f *testing.F) [releaseFDCount]*os.File {
 		if err != nil {
 			f.Fatalf("create fuzz stdio pipe %d: %v", index, err)
 		}
-		// stdin is the read end; stdout and stderr are write ends.
+		// stdin is the read end; stdout/stderr are write ends.
 		retained := read
 		if index != 0 {
 			retained = write
@@ -476,9 +443,6 @@ func wireTestFuzzReleaseDescriptors(f *testing.F) [releaseFDCount]*os.File {
 	return descriptors
 }
 
-// wireTestFuzzCloneGrant builds the structural clone grant for the fuzz seeds.
-// cleanupTestIntentWithBinding takes a *testing.T, which *testing.F is not, so
-// the fuzz fixture builds the same intent shape from f.TempDir() directly.
 func wireTestFuzzCloneGrant(f *testing.F) authority.LinuxCloneGrant {
 	f.Helper()
 	root := f.TempDir()
@@ -497,7 +461,6 @@ func wireTestFuzzCloneGrant(f *testing.F) authority.LinuxCloneGrant {
 	return cleanupTestGrant(intent)
 }
 
-// wireTestGateMap is the decoded map acknowledgement pair.
 type wireTestGateMap struct {
 	config OwnerConfig
 	token  [32]byte
@@ -513,10 +476,8 @@ func FuzzDecodeGateMap(f *testing.F) {
 	})
 }
 
-// wireTestReleaseCanonical re-encodes an accepted command through the wire
-// encoder, so replay comparisons never depend on pointer identity: fmt prints a
-// nested pointer field (NativeCommand.Clone) as an address, which differs
-// between two decodes of the same accepted packet.
+// Re-encodes so replay comparisons never depend on pointer identity: fmt prints
+// the nested Clone pointer as an address, which differs between two decodes.
 func wireTestReleaseCanonical(t *testing.T, token [32]byte, command NativeCommand, deadline uint64) string {
 	t.Helper()
 	packet, err := encodeGuardedRelease(token, command, deadline)
@@ -526,9 +487,6 @@ func wireTestReleaseCanonical(t *testing.T, token [32]byte, command NativeComman
 	return hex.EncodeToString(packet)
 }
 
-// wireTestFuzzReleaseReplay fuzzes one RELEASE-family decoder for replay
-// determinism: an accepted packet must decode twice to the same deadline and to
-// the same canonical re-encoded bytes. label names the decoder in failures.
 func wireTestFuzzReleaseReplay(t *testing.T, candidate []byte, label string, token [32]byte,
 	decode func(packet []byte) (NativeCommand, uint64, error)) {
 	t.Helper()
@@ -576,7 +534,7 @@ func FuzzDecodeCloneBootstrapRequest(f *testing.F) {
 	command := NativeCommand{
 		Path: "/bin/true", Args: []string{"/bin/true"}, Env: []string{"LANG=C"}, Dir: grant.Intent.Target, Clone: &grant,
 	}
-	// The sealed request carries the token-scrubbed v3 frame of the gate.
+	// The sealed request carries the gate's token-scrubbed v3 frame.
 	sealed, err := encodeGuardedRelease([32]byte{}, command, wireTestReleaseGoldenDeadlineNS)
 	if err != nil {
 		f.Fatalf("encode sealed clone bootstrap fuzz seed: %v", err)

@@ -947,10 +947,6 @@ func configForLinuxPreflight(stateDir string) config.Config {
 	return config.Config{StateDir: stateDir}
 }
 
-// claimedStoreAt creates an exclusive Store with one claimed run, the minimum
-// journal state the drain verifiers scan. The app suite keeps its own copy of
-// this fixture (internal/app/app_test.go); the two packages no longer share
-// test helpers, and this file is the only linuxpreflight caller.
 func claimedStoreAt(t *testing.T, directory string) (*state.Store, state.RunKey) {
 	t.Helper()
 	store, err := state.New(directory)

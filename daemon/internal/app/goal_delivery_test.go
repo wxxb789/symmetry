@@ -637,12 +637,6 @@ func TestAbandonGoalSessionAfterStartTurnResponseLossQueuesStopWhenCloseSucceeds
 	}
 }
 
-// TestBoundedGoalSessionUncertainReason pins the helper's exact output: reasons
-// within budget are returned byte-identically (including bytes that are not
-// valid UTF-8 — the store-side hazard for those is tracked in docs/TODO.md),
-// and an over-budget reason is cut at the store budget with exactly the invalid
-// or partial-rune bytes dropped, so the result is valid UTF-8 and the store's
-// JSON round trip cannot expand it back over the budget.
 func TestBoundedGoalSessionUncertainReason(t *testing.T) {
 	budget := state.GoalSessionUncertainReasonBytes
 	for _, test := range []struct {
@@ -713,14 +707,6 @@ func TestBoundedGoalSessionUncertainReason(t *testing.T) {
 	}
 }
 
-// TestAbandonGoalSessionBoundsOversizedUncertainReason drives the abandon path
-// with writer-failure causes larger than the durable reason budget (W307-R1:
-// the state layer's wrapped causes lengthen the composed reason, and the store
-// rejects an over-budget reason outright, which would leave the uncertain mark
-// unrecorded). The session must still reach the durable uncertain state, and
-// the stored reason must remain readable back: the store's JSON round trip
-// expands invalid bytes into U+FFFD, so a bounded reason that kept an interior
-// invalid byte would pass the write check and then make the journal unloadable.
 func TestAbandonGoalSessionBoundsOversizedUncertainReason(t *testing.T) {
 	for _, test := range []struct {
 		name         string

@@ -180,3 +180,25 @@ Ambiguous placements and the decision taken (recorded as required; no silent gue
   `//nolint` addition.
 - `docs/goals/archive/**` and `docs/evidence/**` historical documents: not repointed (see above).
 - Creating `options.go` with no declarations (see Deliverable shape).
+
+## Comment-policy sweep (2026-11-22)
+
+Module intent removed from `daemon/internal/app/outbox.go`, `daemon/internal/app/native_run.go`, `scripts/ci/export-linux-v2-redacted-evidence.py`, `daemon/internal/app/commands.go` by the 2026-11-22 comment-policy sweep is recorded below (workstream record "ws3a-app-prod", "ws7b-ci-scripts").
+
+- `daemon/internal/app/command_queue.go` — module ownership and budget contract, removed from the `commandQueue`/`commandReceipts` docs (the lock-contract and lock-order lines stayed under K1):
+  - "commandQueue owns the daemon's command queue: the arrival FIFO, the dedupe index keyed by command key, and the per-run serialization lanes, together with the acknowledgement-receipt bookkeeping (commandReceipts) that fences late control-plane responses against delivered acknowledgements."
+  - "A commandQueue may be used as a zero value: every map it reads is created on first use."
+  - "It is a value inside commandQueue rather than more queue methods because it keeps its own ordering: every write to it happens inside a queue call under the caller's locks, but markCommandAcknowledgementDelivered orders the tombstone against a journal write with daemon.commandReceiptMu. … commandReceiptMu is held across a journal write only by the terminal-acknowledgement persistence loop (outbox.go:210-241), which never touches this bookkeeping. One intent per type, every write to the bookkeeping inside this file, and the module stays at the contract's binding budget (at most 12 methods: the 8 queue methods above plus the 4 receipt methods below). Lock contract and zero-value tolerance are commandQueue's."
+  - "newCommandQueue returns an empty queue. startBackground constructs one per background lifetime, replacing the fields the daemon used to reset there." (`D2` narration; folded into the zero-value item)
+
+16. `export-linux-v2-redacted-evidence.py:544-553` (the deleted bullets) — the daemon-log allowlist
+    producer map they recorded: `stage` ← the `queueFailure` stage literals and call sites
+    (`events.go`, `app.go`) and the process-exit retry; `reason` ← the literals reaching
+    `stopRecoveredJournal` (lease/ownership reasons, `outbox.go`) and the
+    `protocol.ReconcileDecisionKind` decisions; `outcome` ← the acknowledgement outcomes
+    (`native_run.go`, `commands.go`); `kind` ← the `newIDWithRetry` kinds (`outbox.go`,
+    `supervisory.go`). The non-candidate maintenance rule + `msg`/`state` bullets stay in place, and
+    `test-linux-v2-evidence.py::test_daemon_log_allowlists_match_daemon_producers` keeps the sets
+    complete, so only the stale citations are lost.
+
+The sweep's plan is [`docs/plans/2026-11-22-comment-policy-sweep-plan.md`](2026-11-22-comment-policy-sweep-plan.md).

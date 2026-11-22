@@ -1,9 +1,5 @@
 //go:build linux && amd64
 
-// Package protocol implements the fixed-B transient launcher IPC used by the
-// Linux native-run helper. Prepare returns only an A-credentialed parked gate;
-// callers must durably commit the existing RunJournal handoff and receive the
-// initial lease acknowledgement before calling Release exactly once.
 package protocol
 
 import (
@@ -37,18 +33,14 @@ var (
 	ErrInaccessibleUserNamespace = errors.New("Linux owner host cannot inspect the exact user-namespace nsfs identity")
 )
 
-// LauncherStartHook durably records the exact root producer after the root
-// core's group-cleared READY frame and before Prepare sends the sole gate
-// request. pidfd is borrowed; duplicate it if an independent handle is needed.
+// Runs after the group-cleared READY frame and before Prepare sends the sole
+// gate request; the root core cannot clone before it. pidfd is borrowed.
 type LauncherStartHook func(context.Context, LauncherIdentity, *os.File) error
 
-// ErrGateNeverProduced identifies the only pre-gate outcome that can support
-// a no-target reservation abort. The typed proof is constructed only after an
-// authenticated root result and exact root-launcher pidfd exit/reap.
+// The only pre-gate outcome that can support a no-target reservation abort:
+// the typed proof needs an authenticated root result and exact reap.
 var ErrGateNeverProduced = errors.New("Linux A gate was never produced")
 
-// GateNeverProducedError returns the root-authenticated outcome that no
-// clone3 gate was attempted, bound to the exact root launcher process.
 type GateNeverProducedError struct {
 	result       authority.LinuxCgroupGateProductionResult
 	launcherExit *authority.LinuxCgroupExitProof
@@ -64,9 +56,8 @@ func (failure *GateNeverProducedError) Error() string {
 
 func (failure *GateNeverProducedError) Unwrap() error { return ErrGateNeverProduced }
 
-// Result returns the authenticated authority shape for the caller to bind to
-// its current reservation. State still verifies launch-token and launcher
-// identity equality; platform must verify the MAC before issuing it.
+// Callers bind this to their reservation; the platform must verify the MAC
+// before issuing it, and State still checks launch-token/launcher identity.
 func (failure *GateNeverProducedError) Result() authority.LinuxCgroupGateProductionResult {
 	if failure == nil {
 		return authority.LinuxCgroupGateProductionResult{}
@@ -74,7 +65,6 @@ func (failure *GateNeverProducedError) Result() authority.LinuxCgroupGateProduct
 	return failure.result
 }
 
-// Errno returns the root pre-clone failure errno without exposing the secret.
 func (failure *GateNeverProducedError) Errno() uint32 {
 	if failure == nil {
 		return 0
@@ -82,7 +72,6 @@ func (failure *GateNeverProducedError) Errno() uint32 {
 	return failure.errno
 }
 
-// LauncherExitProof returns the helper's exact root-launcher wait/reap proof.
 func (failure *GateNeverProducedError) LauncherExitProof() (authority.LinuxCgroupExitProof, bool) {
 	if failure == nil || failure.launcherExit == nil {
 		return authority.LinuxCgroupExitProof{}, false
@@ -90,9 +79,8 @@ func (failure *GateNeverProducedError) LauncherExitProof() (authority.LinuxCgrou
 	return *failure.launcherExit, true
 }
 
-// LauncherOutcomeError preserves producer identity and optional exact
-// launcher exit/reap evidence on every post-Start error path. A nil proof is
-// explicitly unresolved; callers must not infer exit from the error alone.
+// A nil exit proof is explicitly unresolved: callers must not infer launcher
+// exit from the error alone.
 type LauncherOutcomeError struct {
 	launcher LauncherIdentity
 	exit     *authority.LinuxCgroupExitProof
@@ -147,11 +135,8 @@ func launcherExitProof(producer, helper LauncherIdentity, command *exec.Cmd) *au
 	return proof
 }
 
-// PreparedGate owns the launch-transferred pidfd, release writer, exec-status
-// reader, and any A-pinned executable images. PIDFD returns a borrowed
-// descriptor; the caller must not close it. Release is legal only after durable
-// handoff commit and the initial lease acknowledgement. Close never kills a
-// process or creates stop proof.
+// PIDFD returns a borrowed descriptor, and Release is legal only after the
+// durable handoff commit and the initial lease acknowledgement.
 type PreparedGate struct {
 	mu sync.Mutex
 
@@ -173,8 +158,6 @@ type PreparedGate struct {
 	abortSignalSent bool
 }
 
-// LauncherIdentity returns the root producer recorded by Prepare's mandatory
-// durable hook.
 func (gate *PreparedGate) LauncherIdentity() LauncherIdentity {
 	if gate == nil {
 		return LauncherIdentity{}
@@ -184,8 +167,6 @@ func (gate *PreparedGate) LauncherIdentity() LauncherIdentity {
 	return gate.launcher
 }
 
-// LauncherExitProof returns exact root-launcher wait/reap evidence observed
-// before Prepare returned. A false result remains unresolved.
 func (gate *PreparedGate) LauncherExitProof() (authority.LinuxCgroupExitProof, bool) {
 	if gate == nil {
 		return authority.LinuxCgroupExitProof{}, false
@@ -209,14 +190,8 @@ const (
 	gateUnresolved
 )
 
-// Prepare starts only the root-owned static A gate inside the caller's pinned
-// cgroup-v2 leaf. It waits for the root core's authenticated group-cleared READY
-// frame, records the exact producer through the mandatory hook, and sends the
-// sole launch request only after that durable hook succeeds. The root core
-// cannot clone before receiving that request. Prepare then waits for the exact
-// launcher exit and verifies A adopted the exact gate child. Callers must
-// durably record the RunKey-scoped launch intent before calling Prepare. No
-// native program runs here.
+// Callers must durably record the RunKey-scoped launch intent first: the root
+// core cannot clone before the durable hook succeeds and the request is sent.
 func Prepare(ctx context.Context, leafFD int, gateAuth GateProductionAuth, onLauncherStart LauncherStartHook) (preparedResult *PreparedGate, prepareErr error) {
 	var producerStarted bool
 	var producer LauncherIdentity
@@ -330,8 +305,8 @@ func Prepare(ctx context.Context, leafFD int, gateAuth GateProductionAuth, onLau
 	producerStarted = true
 	closeErr := closeFiles(controlLauncher, releaseGate, statusGate, leafFile)
 	if launcherPIDFD < 0 {
-		// The authenticated request has not been sent. Closing the channel makes
-		// the root wrapper/core exit without creating a gate; do not signal by PID.
+		// The request was never sent: closing the channel makes the root wrapper exit
+		// without creating a gate, so do not signal by PID here.
 		closeErr = errors.Join(closeErr, closeFiles(controlHelper, releaseHelper, statusHelper))
 		return nil, errors.Join(fmt.Errorf("%w: Go did not return a launcher pidfd", ErrOutcomeUnknown), closeErr)
 	}
@@ -361,8 +336,8 @@ func Prepare(ctx context.Context, leafFD int, gateAuth GateProductionAuth, onLau
 		closeFiles(controlHelper, releaseHelper, statusHelper)
 		return nil, errors.Join(fmt.Errorf("%w: capture transient root launcher start time: %v", ErrOutcomeUnknown, err), stopErr)
 	}
-	// The root producer's PID namespace cannot be read by unprivileged A on
-	// all supported procfs mounts. Its identity is completed from READY below.
+	// Unprivileged A cannot read the root producer's PID namespace on every
+	// supported procfs mount; the identity is completed from READY below.
 	launcherIdentity := LauncherIdentity{PID: command.Process.Pid, StartTime: launcherStartTime, BootID: helper.BootID}
 	producer = launcherIdentity
 	ready, err := receiveLauncherReady(ctx, int(controlHelper.Fd()), time.Now().Add(bootstrapTimeout))
@@ -371,11 +346,8 @@ func Prepare(ctx context.Context, leafFD int, gateAuth GateProductionAuth, onLau
 		closeFiles(controlHelper, releaseHelper, statusHelper)
 		return nil, errors.Join(fmt.Errorf("%w: receive group-cleared root launcher readiness: %w", ErrOutcomeUnknown, err), stopErr)
 	}
-	// A cannot reliably stat /proc/<root-pid>/ns/pid after the setuid exec:
-	// procfs may return the restricted symlink's inode instead of nsfs's inode.
-	// The pinned launcher stays in A's PID namespace until this READY frame.
-	// Compare the root core's report with A's own namespace and the exact PID
-	// and start time captured from command.Start, not that restricted procfs path.
+	// A cannot reliably stat /proc/<root-pid>/ns/pid after the setuid exec: procfs
+	// may return the restricted symlink inode, so compare the READY report instead.
 	var pidNamespace syscall.Stat_t
 	if err := syscall.Stat("/proc/self/ns/pid", &pidNamespace); err != nil || pidNamespace.Ino == 0 {
 		stopErr := stopLauncher(command, launcherPIDFD)
@@ -625,8 +597,6 @@ func Prepare(ctx context.Context, leafFD int, gateAuth GateProductionAuth, onLau
 	return prepared, nil
 }
 
-// Identity returns the creation-time identity reported by the trusted root
-// launcher and independently verified by Prepare.
 func (gate *PreparedGate) Identity() ProcessIdentity {
 	if gate == nil {
 		return ProcessIdentity{}
@@ -636,9 +606,8 @@ func (gate *PreparedGate) Identity() ProcessIdentity {
 	return gate.identity
 }
 
-// PIDFD returns a borrowed pidfd for the exact gate/native leader. It remains
-// open across exec and must be retained until the caller has completed its
-// versioned stop and reap proof.
+// Borrowed pidfd: it stays valid across the leader's exec and must be retained
+// until the caller completes its stop and reap proof.
 func (gate *PreparedGate) PIDFD() *os.File {
 	if gate == nil {
 		return nil
@@ -648,9 +617,8 @@ func (gate *PreparedGate) PIDFD() *os.File {
 	return gate.pidfd
 }
 
-// VerifyLeafMembership checks the exact live leader against cgroup.procs from
-// the caller's pinned leaf FD. Call before durable binding, before Release,
-// and before stop proof; this point observation is not itself a stop receipt.
+// Call before durable binding, before Release and before stop proof; a point
+// observation is not itself a stop receipt.
 func (gate *PreparedGate) VerifyLeafMembership(leafFD int) error {
 	if gate == nil || leafFD < 0 {
 		return errors.New("Linux owner leaf verification requires a gate and pinned leaf FD")
@@ -660,12 +628,8 @@ func (gate *PreparedGate) VerifyLeafMembership(leafFD int) error {
 	return gate.verifyIdentity(leafFD, !gate.released)
 }
 
-// Release sends one guarded RELEASE; Clone commands use the v3 bootstrap and
-// require A to durably record B's checkout-ready progress claim before native
-// execution can begin. That B-origin receipt is not an A-certified clean
-// checkout: A validates it against the exact grant and retains all journal and
-// cgroup stop authority. The callback runs without gate.mu held. Unknown
-// send/ACK results are terminal and are never resent.
+// One guarded RELEASE: unknown send/ACK results are terminal and never resent,
+// and the checkout-ready callback runs without gate.mu held.
 func (gate *PreparedGate) Release(ctx context.Context, leafFD int, command NativeCommand, guard ReleaseGuard,
 	onCheckoutReady func(context.Context, authority.LinuxCloneCheckoutReceipt) error) error {
 	if gate == nil || ctx == nil {
@@ -834,9 +798,7 @@ func (gate *PreparedGate) Release(ctx context.Context, leafFD int, command Nativ
 	return nil
 }
 
-// Abort is idempotent. It terminalizes the gate, half-closes the exec-status
-// writer, then closes the release writer. It never waits for the gate or
-// signals a PID.
+// Idempotent, and never waits for the gate or signals a PID.
 func (gate *PreparedGate) Abort() error {
 	if gate == nil {
 		return nil
@@ -901,10 +863,8 @@ func (gate *PreparedGate) awaitCloneRelease(ctx context.Context, leafFD int, com
 	if err := ctx.Err(); err != nil {
 		return execStatus{}, err
 	}
-	// The caller's A-owned callback must perform the exact grant and target
-	// dev/inode CAS in its journal/workspace path before returning. B's receipt
-	// remains only a progress claim; it never carries A's journal or cgroup stop
-	// authority.
+	// The callback must perform the exact grant and target dev/inode CAS before
+	// returning; B's receipt stays a progress claim without A's stop authority.
 	if err := onCheckoutReady(ctx, receipt); err != nil {
 		return execStatus{}, fmt.Errorf("durably record clone checkout-ready receipt: %w", err)
 	}
@@ -947,8 +907,6 @@ func (gate *PreparedGate) awaitCloneRelease(ctx context.Context, leafFD int, com
 	return status, nil
 }
 
-// validateCloneCheckoutReceipt binds B's progress claim to A's exact grant; it
-// does not certify a clean checkout or transfer A's journal/stop authority.
 func validateCloneCheckoutReceipt(grant authority.LinuxCloneGrant, receipt authority.LinuxCloneCheckoutReceipt) error {
 	if err := receipt.Validate(); err != nil {
 		return fmt.Errorf("invalid B checkout-ready receipt: %w", err)
@@ -998,8 +956,8 @@ func (gate *PreparedGate) verifyBLeafMembership(leafFD int) error {
 	return nil
 }
 
-// WaitLeader waits and reaps only this pidfd-identified direct/adopted child.
-// It says nothing about detached descendants or recursive leaf emptiness.
+// Reaps only the pidfd-identified direct/adopted child: nothing about detached
+// descendants or recursive leaf emptiness.
 func (gate *PreparedGate) WaitLeader(ctx context.Context) (unix.Siginfo, error) {
 	if gate == nil || ctx == nil {
 		return unix.Siginfo{}, errors.New("Linux owner wait requires a gate and context")
@@ -1050,9 +1008,8 @@ func (gate *PreparedGate) WaitLeader(ctx context.Context) (unix.Siginfo, error) 
 	return info, nil
 }
 
-// Close retires protocol descriptors only after exact leader reap. Before reap
-// it calls Abort to block pending execution and returns an error; it never
-// signals a process, claims that a leaf is empty, or authorizes a journal clear.
+// Retires descriptors only after exact leader reap, otherwise Abort; it never
+// signals a process or authorizes a journal clear.
 func (gate *PreparedGate) Close() error {
 	if gate == nil {
 		return nil
