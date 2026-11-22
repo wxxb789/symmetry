@@ -222,7 +222,7 @@ adapter; `cmp` byte-compares base against head.
 Corpus: 60 000 deterministic cases per adapter (`math/rand/v2` PCG seed `0x20261122`/`0x15a`; 19
 bounds — 0, 1…17, 32, 64, 1024, 1 MiB, -1, -7 — plus a 1-in-16 zero-value-wrapper arm; 1–8 pieces
 per case from an alphabet including CR/LF/CRLF, blank/whitespace lines, JSON envelopes, duplicate
-keys, `1e1000`, invalid UTF-8, `\u2028`, bare `{`/`}`/`"`/`\`; random splits into 1–4 chunks; a
+keys, `1e1000`, invalid UTF-8, U+2028 (LINE SEPARATOR), bare `{`/`}`/`"`/`\`; random splits into 1–4 chunks; a
 1-in-5 nil chunk; a 1-in-3 mid-stream `Close`), then `Close`, post-close `Feed("z\n")` and
 post-close `Close`. Every call dumps each returned record field-wise (pointers dereferenced — no
 addresses) plus the `%T`, text, `errors.Is` and `==` of every returned error and `DecodeError`
@@ -330,7 +330,7 @@ does.
 ## 8. WSL Linux run
 
 Re-run at the r3 bytes (`wsl -d Ubuntu-24.04`, tree under test =
-`/mnt/q/repos/wt-w4-15a-jsonl-decoder-leaf/symmetry/daemon`): `go test -count=1
+`<WORKTREE>/daemon`): `go test -count=1
 ./internal/harness/linejson ./internal/harness/omo ./internal/harness/claude
 ./internal/harness/codex ./internal/harness/probeconformance` → 5/5 `ok` (0.016s / 1.203s /
 0.139s / 13.089s / 7.047s), `CORE5_OK`; `go test -count=1 -skip "TestProviderBridge"
