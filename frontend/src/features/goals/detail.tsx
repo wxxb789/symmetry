@@ -1,4 +1,4 @@
-import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useParams, useRouteContext } from "@tanstack/react-router";
 import { AlertCircle, CircleCheck, Inbox, ScrollText, ShieldAlert } from "lucide-react";
 import { useRef, useState } from "react";
@@ -40,36 +40,58 @@ function formatMicroUsd(value: string | null | undefined): string {
 
 interface PlanApprovalAttempt { key: string; resolve: GoalCommandEnvelope; admit: GoalCommandEnvelope | null }
 
+// The settle's read cadence and its documented bound (goal-rf-w5-04).
+const settleReadIntervalMs = 120;
+const settleReadBoundMs = 2_500;
+
+function goalMarker(goal: GoalProjection | undefined): string | null {
+  return goal === undefined ? null : [goal.version, goal.state, goal.current_revision].join("|");
+}
+
+// The settle observes the goal query's own read results (its refetchInterval drives them):
+// two consecutive moved markers confirm, and a failed read neither confirms nor aborts.
+function waitForGoalSettle(queryClient: QueryClient, goalId: string, before: string | null): Promise<void> {
+  const { promise, resolve } = Promise.withResolvers<void>();
+  const goalQuery = queryClient.getQueryCache().find({ queryKey: goalReadKey(goalId), exact: true });
+  let previous: string | null = null;
+  const unsubscribe = queryClient.getQueryCache().subscribe((event) => {
+    if (event.type !== "updated" || event.query !== goalQuery) return;
+    if (event.action.type === "error") previous = null;
+    else if (event.action.type === "success") {
+      const marker = goalMarker(queryClient.getQueryData<GoalProjection>(goalReadKey(goalId)));
+      if (marker !== null && marker !== before && previous === marker) finish();
+      else previous = marker;
+    }
+  });
+  const bound = setTimeout(finish, settleReadBoundMs);
+  function finish() {
+    clearTimeout(bound);
+    unsubscribe();
+    resolve();
+  }
+  return promise;
+}
+
 export function GoalDetailPage() {
   const { application } = useRouteContext({ from: "__root__" });
   const { goalId } = useParams({ from: "/goals/$goalId" });
-  const query = useQuery(goalOptions(application.api, goalId));
+  const [settlePending, setSettlePending] = useState(false);
+  const query = useQuery({
+    ...goalOptions(application.api, goalId),
+    refetchInterval: settlePending ? settleReadIntervalMs : false,
+  });
   const workspace = useQuery(workspaceOptions(application.api, query.data?.project_id ?? null));
   const session = useQuery(sessionOptions(application.api));
   const queryClient = useQueryClient();
   const [refusal, setRefusal] = useState<MutationRefused | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  /**
-   * An accepted operator command commits its own operator-version advance; the
-   * [version, state, current_revision] marker this page holds is stale from
-   * that commit, and no internal writer moves it. The acceptance notice waits
-   * for the served goal to serve a different marker held across two reads,
-   * instead of announcing acceptance while the page still holds the
-   * pre-application read. Bounded: the wait stops at the deadline.
-   */
   const settleGoalRead = async (acknowledged: GoalProjection | undefined) => {
-    const deadline = Date.now() + 2_500;
-    const before = acknowledged === undefined ? null : [acknowledged.version, acknowledged.state, acknowledged.current_revision].join("|");
-    let previous: string | null = null;
-    while (Date.now() < deadline) {
-      const served = await application.api.goal(goalId, new AbortController().signal).catch(() => null);
-      const marker = served === null ? null : [served.version, served.state, served.current_revision].join("|");
-      if (marker !== null && marker !== before && previous === marker) return;
-      previous = marker;
-      const { promise, resolve } = Promise.withResolvers<void>();
-      setTimeout(resolve, 120);
-      await promise;
+    setSettlePending(true);
+    try {
+      await waitForGoalSettle(queryClient, goalId, goalMarker(acknowledged));
+    } finally {
+      setSettlePending(false);
     }
   };
 
@@ -144,9 +166,8 @@ export function GoalDetailPage() {
     onSuccess: async (_body, variables) => {
       setRefusal(null);
       releaseAttempt();
-      // The acceptance notice appears once the served goal reflects this
-      // command's own commit, so the next command's envelope carries the
-      // version the server has actually written.
+      // The notice waits for the command's own committed read, so the next
+      // envelope carries the version the server has written.
       const acknowledged = query.data;
       await queryClient.invalidateQueries({ queryKey: goalReadKey(goalId) });
       await settleGoalRead(acknowledged);
@@ -202,8 +223,7 @@ export function GoalDetailPage() {
     onSuccess: async () => {
       sentApproval.current = null;
       setRefusal(null);
-      // Same ordering as the generic command: the notice is the page's statement
-      // that the served goal now reflects this command.
+      // Same ordering as the generic command: the notice states the served goal.
       const acknowledged = query.data;
       await queryClient.invalidateQueries({ queryKey: goalReadKey(goalId) });
       await settleGoalRead(acknowledged);
