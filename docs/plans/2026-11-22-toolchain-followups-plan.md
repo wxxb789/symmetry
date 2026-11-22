@@ -76,10 +76,10 @@ hits); contract clause 4 excludes `go.mod`.
 
 Sources read before editing: `gh api repos/<owner>/<name>/releases` for `actions/upload-artifact`
 (v4.6.2, v5.0.0, v6.0.0, v7.0.0-v7.0.2), `actions/setup-node` (v4.4.0, v5.0.0, v6.0.0-v6.5.0, v7.0.0,
-v7.1.0) and `pnpm/action-setup` (v4.3.0, v4.4.0, v5.0.0, v6.0.0, v6.0.1, v6.1.0, v6.1.1) — every
+v7.1.0) and `pnpm/action-setup` (v4.3.0, v4.4.0, v5.0.0, v6.0.0-v6.1.1) — every
 release from each current tag to the target tag; the `action.yml` input keys and `runs.using` at
-`v4.6.2`/`v4.4.0` against `v7.0.2`/`v7.1.0`/`v6.1.1`; and `actions/setup-node`'s v7 README caching
-section.
+`v4.6.2`/`v4.4.0` against `v7.0.2`/`v7.1.0`/`v6.1.1` and at the intermediate `pnpm/action-setup` tags
+`v6.0.1`/`v6.0.10`; and `actions/setup-node`'s v7 README caching section.
 
 | Action | Major | Documented breaking change | This repo's usage |
 | --- | --- | --- | --- |
@@ -87,15 +87,16 @@ section.
 | upload-artifact | v6.0.0 | `runs.using` flips node20 → node24 (`action.yml` diff confirms); runner ≥ 2.327.1 (#719, #744, #745) | Not affected: GitHub-hosted runners are far past 2.327.1; the runtime flip is the purpose of the bump. |
 | upload-artifact | v7.0.0 | new `archive` input for direct single-file uploads — when set to `false` the `name` input is ignored and the action fails unless the glob resolves to exactly one file; module moved to ESM (#762, #764) | Not affected: no site sets `archive` (`git grep -n 'archive:' -- .github` → no hits), so every artifact keeps the zip upload v4 produced. The single-file site (#2, `daemon/coverage.out`) is unaffected because the failure mode exists only with `archive: false`. |
 | upload-artifact | v7.0.1 / v7.0.2 | `typespec/ts-http-runtime` 0.3.5; artifact-download 429 retry with `Retry-After`, `@actions/artifact` 6.3.1 | Not affected; no input change. |
-| setup-node | v5.0.0 | automatic caching when `package.json` carries a valid `packageManager` field, with the new `package-manager-cache: false` opt-out (#1348); node24 runtime, runner ≥ 2.327.1 (#1325) | Not affected: the site already passes an explicit `cache: pnpm`, and the v7 README states automatic caching applies only to npm and only "when no explicit cache input is provided". This repository's root `package.json` sets `packageManager: pnpm@12.17.0`, which never triggers the npm-only automatic path; the runtime flip is the purpose of the bump. |
+| setup-node | v5.0.0 | automatic caching when `package.json` carries a valid `packageManager` field, with the new `package-manager-cache: false` opt-out (#1348); node24 runtime, runner ≥ 2.327.1 (#1325) | Not affected: the site already passes an explicit `cache: pnpm`, and the v7.1.0 README scopes automatic caching to npm and to a tree whose `packageManager` or `devEngines.packageManager` field names npm with no explicit cache input provided. This repository's root `package.json` sets `packageManager: pnpm@12.17.0`, which never triggers the npm-only automatic path; the runtime flip is the purpose of the bump. |
 | setup-node | v6.0.0 | automatic caching limited to npm (#1374) | Not affected: narrows only the automatic default, and all four setup-node sites are explicit (`cache: pnpm` at the sites that cache). |
-| setup-node | v6.1.0 | `always-auth` configuration handling removed (#1436); the input disappears from `action.yml` (confirmed by the v4.4.0 → v7.1.0 input diff) | Not affected: no workflow sets `always-auth` or `registry-url` (`git grep -n -E 'always-auth\|registry-url' -- .github` → no hits), so no `.npmrc` auth line is written at all. |
+| setup-node | v6.1.0 | `always-auth` configuration handling removed (#1436); the input disappears from `action.yml` (confirmed by the v4.4.0 → v7.1.0 input diff) | Not affected: no workflow sets `always-auth` or `registry-url` (`git grep -n -e 'always-auth' -e 'registry-url' -- .github` → no hits), so no `.npmrc` auth line is written at all. |
 | setup-node | v6.2.0-v6.5.0 | `@actions/cache` 5.x bumps, `devEngines` parsing for `node-version-file`, `uuid` → `crypto.randomUUID()`, mirror bearer-token handling | Not affected: no site sets `node-version-file`, `mirror`, `mirror-token` or `token`; the cache key source is unchanged for an explicit `cache: pnpm` + lockfile hash. |
 | setup-node | v7.0.0 | ESM migration (#1574); new `cache-primary-key`/`cache-matched-key` outputs; dummy `NODE_AUTH_TOKEN` export removed (#1558); `mirrorToken` only when provided (#1548) | Not affected: no workflow reads setup-node outputs (`steps.*.outputs` uses in these two files are `steps.paths` and `steps.windows_postgres` only), and no site sets `registry-url`, `mirror-token` or `token`. |
-| setup-node | v7.1.0 | `mise.toml` support (#1421) and absolute `node-version-file` paths (#1633), both reachable only through `node-version-file`; Node version validation and manifest retry (#1580); `@actions/cache` 6.2.0 | Not affected: the site passes a concrete `node-version: 24` and no `node-version-file`. The two other `setup-node@v7` sites in `ci.yml` and the one in the acceptance workflow already run this exact input pair, green on PR #218's hosted run. |
+| setup-node | v7.1.0 | `mise.toml` support (#1421) and absolute `node-version-file` paths (#1633), both reachable only through `node-version-file`; Node version validation and manifest retry (#1580); `@actions/cache` 6.2.0 | Not affected: the site passes a concrete `node-version: 24` and no `node-version-file`. The two other `setup-node@v7` sites in `ci.yml` already run this exact input pair and were green on PR #218's hosted run; the acceptance workflow's site (`.github/workflows/linux-native-v2-acceptance.yml:166-169`) is configured identically but that workflow is `workflow_dispatch`-only and its single run (`44487017117`, 2026-11-19) was cancelled, so it is not yet exercised. |
 | pnpm/action-setup | v4.3.0 / v4.4.0 | store caching (#188); "Updated the action to use Node.js 24" (v4.4.0) | Not affected; no input change, and the floating `@v4` tag already resolves to the node24 v4.4.0. |
 | pnpm/action-setup | v5.0.0 | "Updated the action to use Node.js 24" (runtime only) | Not affected: `runs.using` is already `node24` at v4.4.0. |
 | pnpm/action-setup | v6.0.0 / v6.0.1 | pnpm v11 support; bootstrap moved to `11.0.0-rc.2`, with a lockfile two-document caveat unless the manager version comes from `devEngines.packageManager` | Not affected: the site pins `version: 12.17.0` explicitly and CI installs with `--frozen-lockfile` against the committed lockfile. |
+| pnpm/action-setup | v6.0.2-v6.0.10 | bootstrap and self-update fixes ("pnpm self-update binary shadowed by bootstrap on `PATH`", npm co-located with the action's node binary, `PATH` append order, `bin_dest` after self-update, `devEngines.packageManager.onFail=error`, post-state restore, self-update bootstrap to the `packageManager`-pinned version, `patchPnpmEnv` dropped for standalone+self-update on Windows); bundled bootstrap updates to pnpm 11.0.0-rc.5, 11.1.1, 11.7.0 and 11.19.0; cache restore keys; README docs | Not affected: the floating `@v6` tag resolves to `v6.1.1` (`refs/tags/v6` and `refs/tags/v6.1.1` both peel to commit `73e46992`), so no v6.0.2-v6.0.10 dist ever runs at this site, and the input keys are the same seven (`version`, `dest`, `run_install`, `cache`, `cache_dependency_path`, `package_json_file`, `standalone`) at v4.4.0, v6.0.1, v6.0.10 and v6.1.1. |
 | pnpm/action-setup | v6.1.0 / v6.1.1 | pnpm v12 support (#288); native bootstrap refresh, pnpm 11 bootstrap 11.28.10, missing-cache-directory skip, pinned-action updates | Not affected: this is the major that makes v6 the correct target for the site's pnpm 12.17.0; the input keys are byte-identical between v4.4.0 and v6.1.1 (confirmed by the `action.yml` diff). |
 
 **Input-adjustment verdict: no site needs an input change.** Contract Change 4's "keep
@@ -115,12 +116,26 @@ then passed 2/2 alone on that base and 3/3 on the PR head. Coordinates re-derive
   package `daemon/internal/app`; file `daemon/internal/app/omo_attach_ack_test.go`, four-mode parent
   at `:602`, `admission_deadline` arm at `:616-624`, the request-context wait at `:626`, the failing
   `assertRequests` call at `:629` (the review's cited line).
-- The file is byte-identical between `394859a9` and `e0782105` (`git diff --stat 394859a9 HEAD --`
-  → empty) and last changed by `8ded7715`, so the observation binds the current bytes.
+- The file is byte-identical between `394859a9` and `e0782105` (`git diff --stat 394859a9 e0782105
+  -- daemon/internal/app/omo_attach_ack_test.go` → empty) and last changed by `8ded7715`, so the
+  observation binds the current bytes.
 - The failure text: `assertRequests` (function `:294`, message `:307`) is the failing assertion; its message template is
   `attachment requests=%v, want %v (PUT error=%v local_state=%s terminal_state=%s failure=%s
-  native_calls=%v journal_error=%v)`, and `fixture.methods` was empty with the PUT error carrying
-  `context deadline exceeded`.
+  native_calls=%v journal_error=%v)`. Every recorded instance of this arm's failure carries an empty
+  request list and `PUT error=<nil>`, and shows the deadline inside the `failure` payload in one of
+  two shapes: the attach GET leg hitting it —
+  `failure={"error":"attach native Goal session: read Goal session attachment: perform request: Get
+  \"…/session?…\": context deadline exceeded","reason":"unknown_outcome","stage":"goal_admission",…}`
+  with `native_calls=[start details open details close wait]`
+  (`<GDD-STATE>/refactor/tools/w3-02-response-table/host-callers-suite.txt:18-19`) — or the production
+  admission check firing before native launch — `failure={"error":"Goal admission deadline has
+  elapsed before native launch","reason":"unknown_outcome","stage":"goal_admission","summary":"daemon
+  failed during goal_admission"}` with `native_calls=[]`
+  (`daemon/internal/app/goal_admission.go:413`; shape recorded in full at
+  `<GDD-STATE>/tmp/rf-w2-10/omo-attach-final.txt:2-3`, and its `failure` message also at
+  `docs/evidence/rf-w4-03-runner-decomposition-2026-11-21.md:490-492`).
+- The sibling `caller_deadline` arm fails on its GET leg
+  (`<GDD-STATE>/refactor/tools/w2-11-typed-errors/daemon-full.txt:18-19`).
 - Cause unknown, no fix in this slice. The refactor program's `rf-w4-13` contract (E5) marks tests
   whose duration is bounded by a production limit as `out of scope (production-bound)` and names this
   test's `request_deadline` arm (`controlRequestLimit = 15 * time.Second`,
@@ -176,7 +191,7 @@ Foreground, on the frozen tree, recorded with real exit codes:
 | # | Command | Expectation |
 | --- | --- | --- |
 | 1 | `actionlint -shellcheck= -pyflakes= .github/workflows/ci.yml` (1.7.12, the version earlier slices used) | exit 0, no output |
-| 2 | `git grep -n -E 'upload-artifact@\|setup-node@\|pnpm/action-setup@\|GO_IMAGE' -- .github docker` (the contract's gate) plus the repo-wide `git grep -n -E '(upload-artifact\|setup-node\|action-setup)@v[0-9]+' -- . ':(exclude)docs'` and `git grep -n 'golang:[0-9]' -- . ':(exclude)docs' ':(exclude)daemon/internal/harness/testdata'` | only the new values in `.github`/`docker`: `@v7`/`@v7`/`@v6` and `golang:1.27.4-bookworm`; the repo-wide scan leaves no `@v4` literal and no old Go image outside docs |
+| 2 | `git grep -n -e 'upload-artifact@' -e 'setup-node@' -e 'pnpm/action-setup@' -e 'GO_IMAGE' -- .github docker` (the contract's gate, respelled with `-e` because a raw alternation pipe inside this cell is either a table separator or, escaped, a literal pipe to `-E`) plus the repo-wide `git grep -n -e 'upload-artifact@v' -e 'setup-node@v' -e 'action-setup@v' -- . ':(exclude)docs'` and `git grep -n 'golang:[0-9]' -- . ':(exclude)docs' ':(exclude)daemon/internal/harness/testdata'` | only the new values in `.github`/`docker`: `@v7`/`@v7`/`@v6` and `golang:1.27.4-bookworm`; the repo-wide scan leaves no `@v4` literal and no old Go image outside docs |
 | 3 | `python3 scripts/ci/test-ci-changed-path-classifier.py` | exit 0 (the fixture test that pins the three coverage upload steps) |
 | 4 | `git diff --check` | exit 0 |
 | 5 | host-path scan: the whole increment (`git diff HEAD` plus the untracked plan file) grepped for the profile-directory segment the program rule names (`<profile-segment>/`, the phrasing `docs/plans/2026-11-22-ci-toolchain-bump-plan.md` uses) | empty (program rule) |

@@ -1301,8 +1301,17 @@ instead of appended.
       head; the file is byte-identical between `394859a9` and `e0782105` and last changed by
       `8ded7715`, so the observation binds the current bytes. The message is
       `assertRequests`'s (function `:294`, message `:307`): `attachment requests=%v, want %v (PUT error=%v
-      local_state=%s terminal_state=%s failure=%s native_calls=%v journal_error=%v)` with an empty
-      request list and `context deadline exceeded` as the PUT error. The arm arms a 2 s admission
+      local_state=%s terminal_state=%s failure=%s native_calls=%v journal_error=%v)`. Every recorded
+      instance of the arm's failure carries an empty request list and `PUT error=<nil>`, with the
+      deadline inside the `failure` payload in one of two shapes: the attach GET leg hitting it
+      (`failure={"error":"attach native Goal session: read Goal session attachment: perform request: Get
+      \"…/session?…\": context deadline exceeded","reason":"unknown_outcome","stage":"goal_admission",…}`
+      with `native_calls=[start details open details close wait]`;
+      `<GDD-STATE>/refactor/tools/w3-02-response-table/host-callers-suite.txt:18-19`) or the production
+      admission check firing before native launch
+      (`failure={"error":"Goal admission deadline has elapsed before native launch","reason":"unknown_outcome","stage":"goal_admission","summary":"daemon failed during goal_admission"}`
+      with `native_calls=[]`; `daemon/internal/app/goal_admission.go:413`,
+      `<GDD-STATE>/tmp/rf-w2-10/omo-attach-final.txt:2-3`). The arm arms a 2 s admission
       `DeadlineAt` and then waits on the request context, so the failure is consistent with the
       deadline expiring before the run reaches its stop and pending-delivery assertions, but the
       cause is unknown and no fix belongs to the toolchain-followups slice that recorded this entry
