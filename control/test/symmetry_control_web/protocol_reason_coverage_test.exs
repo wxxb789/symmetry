@@ -7,9 +7,7 @@ defmodule SymmetryControlWeb.ProtocolReasonCoverageTest do
   @lib_dir Path.expand("../../lib", __DIR__)
   @reason_pattern ~r/\{:error,\s*:([a-z][a-zA-Z0-9_]*)\}/
 
-  # Frozen copy of `error_details/1`'s served envelope: status, code and message are
-  # wire bytes, so a table edit must redden here before it reaches a client.
-  @table %{
+  @frozen_wire_table %{
     internal_error: {500, "internal_error", "internal server error"},
     invalid_request: {400, "invalid_request", "request payload is invalid"},
     unauthenticated: {401, "unauthenticated", "credential is missing or invalid"},
@@ -197,7 +195,7 @@ defmodule SymmetryControlWeb.ProtocolReasonCoverageTest do
     :validation_reconciliation_not_pending
   ]
 
-  test "every control/lib error reason is pinned as mapped or known-unmapped" do
+  test "every closed {:error, :atom} reason in control/lib is pinned as mapped or known-unmapped" do
     assert scanned_reasons() ==
              (@scanned_mapped ++ @scanned_unmapped)
              |> Enum.map(&Atom.to_string/1)
@@ -206,33 +204,34 @@ defmodule SymmetryControlWeb.ProtocolReasonCoverageTest do
 
   test "a scanned reason with a table entry returns exactly that entry" do
     for reason <- @scanned_mapped do
-      assert Protocol.error_details(reason) == Map.fetch!(@table, reason)
+      assert Protocol.error_details(reason) == Map.fetch!(@frozen_wire_table, reason)
     end
   end
 
   test "a scanned reason without a table entry returns the invalid_request fallback" do
     for reason <- @scanned_unmapped do
-      assert Protocol.error_details(reason) == @table.invalid_request
+      assert Protocol.error_details(reason) == @frozen_wire_table.invalid_request
     end
   end
 
   test "every pinned table entry is the entry Protocol serves" do
-    for {reason, details} <- @table do
+    for {reason, details} <- @frozen_wire_table do
       assert Protocol.error_details(reason) == details
     end
   end
 
   test "the served table has exactly the pinned keys" do
     assert served_table_keys() ==
-             @table |> Map.keys() |> Enum.map(&Atom.to_string/1) |> Enum.sort()
+             @frozen_wire_table |> Map.keys() |> Enum.map(&Atom.to_string/1) |> Enum.sort()
   end
 
   test "the tuple-shaped contract and stale clauses keep their entries" do
     attach_counter!(:tuple_clause_probe)
 
-    assert Protocol.error_details({:invalid_contract, %{details: %{}}}) == @table.invalid_contract
+    assert Protocol.error_details({:invalid_contract, %{details: %{}}}) ==
+             @frozen_wire_table.invalid_contract
 
-    assert Protocol.error_details({:stale, %{current_version: 2}}) == @table.stale
+    assert Protocol.error_details({:stale, %{current_version: 2}}) == @frozen_wire_table.stale
 
     refute_receive {:unmapped_reason, _, _, %{reason: {:invalid_contract, _}}}
     refute_receive {:unmapped_reason, _, _, %{reason: {:stale, _}}}
@@ -242,14 +241,14 @@ defmodule SymmetryControlWeb.ProtocolReasonCoverageTest do
     probe_reason = :rf_w5_05_unmapped_probe
     attach_counter!(:unmapped_probe)
 
-    assert Protocol.error_details(probe_reason) == @table.invalid_request
+    assert Protocol.error_details(probe_reason) == @frozen_wire_table.invalid_request
 
     assert_unmapped_event!(probe_reason)
     refute_receive {:unmapped_reason, _, _, %{reason: ^probe_reason}}
 
     tuple_probe = {:rf_w5_05_unmapped_probe, %{}}
 
-    assert Protocol.error_details(tuple_probe) == @table.invalid_request
+    assert Protocol.error_details(tuple_probe) == @frozen_wire_table.invalid_request
     assert_unmapped_event!(tuple_probe)
     refute_receive {:unmapped_reason, _, _, %{reason: ^tuple_probe}}
 
@@ -266,7 +265,7 @@ defmodule SymmetryControlWeb.ProtocolReasonCoverageTest do
   test "a mapped reason does not emit the fallback counter" do
     attach_counter!(:mapped_probe)
 
-    assert Protocol.error_details(:not_found) == @table.not_found
+    assert Protocol.error_details(:not_found) == @frozen_wire_table.not_found
     refute_receive {:unmapped_reason, _, _, %{reason: :not_found}}
   end
 
@@ -304,9 +303,8 @@ defmodule SymmetryControlWeb.ProtocolReasonCoverageTest do
              ~s({"error":{"code":"invalid_request","message":"request payload is invalid"}})
   end
 
-  # Whole-map comparison: additive measurement/metadata keys must redden. The
-  # reason is pinned inside the pattern so an emission from a concurrently
-  # running test module cannot satisfy the receive.
+  # The reason is pinned in the pattern so an emission from a concurrently running
+  # test module cannot satisfy the receive.
   defp assert_unmapped_event!(reason) do
     assert_receive {:unmapped_reason, event, measurements, %{reason: ^reason} = metadata}
     assert event == @event

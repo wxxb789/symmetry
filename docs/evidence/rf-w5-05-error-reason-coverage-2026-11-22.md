@@ -185,7 +185,7 @@ Re-run at the fix-stage test bytes `d6833f89…` (`fix1/mut/`): each mutant appl
 
 | # | mutant | exit | red |
 | --- | --- | ---: | --- |
-| a | `defp rf_w5_05_mutant, do: {:error, :brand_new_reason}` appended to `portal_api_controller.ex` | 2 (8/9) | "every control/lib error reason is pinned as mapped or known-unmapped" — the scan set gained `"brand_new_reason"` (`fix1/mut/mut-a.log:6`) |
+| a | `defp rf_w5_05_mutant, do: {:error, :brand_new_reason}` appended to `portal_api_controller.ex` | 2 (8/9) | "every closed {:error, :atom} reason in control/lib is pinned as mapped or known-unmapped" — the scan set gained `"brand_new_reason"` (`fix1/mut/mut-a.log:6`) |
 | b | `timeout: {504, "timeout", "request timeout"},` added to `@error_statuses` | 2 (7/9) | "a scanned reason without a table entry returns the invalid_request fallback" — `left: {504, "timeout", "request timeout"}`; and "the served table has exactly the pinned keys" — the key set gained `"timeout"` (`fix1/mut/mut-b.log:6,15`) |
 | c | counter emission deleted from the `:error` branch | 2 (7/9) | "an unmapped reason emits the fallback counter once and keeps the response bytes" (`assert_receive`: no matching message, mailbox empty) and "a raising counter handler cannot change the response bytes" (the raising handler was never invoked) (`fix1/mut/mut-c.log:6,20`) |
 | d | emission moved to the clause head (fires for every reason; the fallback emission stayed, so an unmapped reason emits twice) | 2 (7/9) | "an unmapped reason emits the fallback counter once and keeps the response bytes" — the second emission was caught; and "a mapped reason does not emit the fallback counter" — unexpected `%{reason: :not_found}` message (`fix1/mut/mut-d.log:6,18`) |
@@ -258,6 +258,11 @@ is the recorded environmental `:portal_assets` limit, unchanged from the impleme
   environmental and pre-date the slice. `test/support/portal_bundle.ex`'s own moduledoc sanctions
   `mix test --exclude portal_assets` for a host without a usable staging; the excluded run is the
   substantive web-tree gate here.
+- **The scan covers only closed `{:error, :atom}` returns.** A reason shaped `{:error, {:atom, fields}}`
+  reaches `error_details/1` as a bare atom through `error/2`'s `{reason, fields}` clause but is not in
+  the scanned inventory; a new reason of that shape is visible only through the runtime
+  `[:symmetry_control_web, :protocol, :unmapped_reason]` counter (PR #225 review F1; an independent
+  mutant `{:error, {:x, %{}}}` left the suite green). The test name states this scope.
 - The scan over-approximates reachability (option (b)); a scanned atom that never reaches
   `Protocol.error/1` is pinned to the fallback tuple like a wire-reachable one.
 - The test pins the served table's values from the outside (each of the 64 keys → its tuple) and
@@ -282,3 +287,7 @@ is the recorded environmental `:portal_assets` limit, unchanged from the impleme
 - No `docs/TODO.md` entry is added or closed: CW-9's second step (the `:internal_error` default
   flip with a client-error allowlist) stays out of scope and is tracked by the program plan row
   W5-05 and the contract's out-of-scope clause.
+
+## 9. Conductor round (PR #225 review round 1)
+
+The test module renames `@table` to `@frozen_wire_table` (its comment deleted), keeps only the concurrency note on `assert_unmapped_event!/1`, and names the scan scope in the inventory test (review F1-F3); section 8 records the open-tuple blind spot. New `protocol_reason_coverage_test.exs` sha256 `f9965dbb0ac71ea51e998d32446cbc37102c89ae279ed991a47dfe74133d0b43`; `protocol.ex` is unchanged. The full Control suite re-runs on this head before landing.
