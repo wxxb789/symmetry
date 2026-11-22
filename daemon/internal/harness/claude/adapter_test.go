@@ -18,6 +18,37 @@ import (
 
 const candidateTestSessionID = "11111111-1111-4111-8111-111111111111"
 
+func TestCandidateAdapterStartUsesOwnerSuppliedProcessSeam(t *testing.T) {
+	process := newCandidateFakeProcess()
+	adapter := &CandidateAdapter{
+		executable:   "claude-test",
+		newSessionID: func() (string, error) { return candidateTestSessionID, nil },
+		startProcess: func(context.Context, execution.Invocation, execution.Sink) (candidateProcess, error) {
+			t.Fatal("adapter default process starter was used despite an owner-supplied seam")
+			return nil, nil
+		},
+	}
+	request := candidateStartRequest(t)
+	called := false
+	request.StartProcess = func(_ context.Context, _ execution.Invocation, sink execution.Sink) (harness.NativeProcess, error) {
+		called = true
+		process.sink = sink
+		return process, nil
+	}
+	raw, err := adapter.Start(context.Background(), request, &recordingCandidateSink{})
+	if err != nil {
+		t.Fatalf("Start() with owner process seam: %v", err)
+	}
+	if !called {
+		t.Fatal("adapter did not use the owner-supplied process seam")
+	}
+	session, ok := raw.(*candidateSession)
+	if !ok {
+		t.Fatalf("Start() session = %T, want *candidateSession", raw)
+	}
+	session.cancel()
+}
+
 func TestClaudeCandidateStagesFreshTransportAndBarriers(t *testing.T) {
 	process := newCandidateFakeProcess()
 	var invocation execution.Invocation

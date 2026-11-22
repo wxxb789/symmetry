@@ -20,6 +20,9 @@ const (
 	testedExecutableHash = "sha256:5064e6e0572dca86257363ca04d48653eef20ef27f1bd04b504ed7199ed3fd13"
 )
 
+// TestedVersion is the pinned Claude Code release a Linux v2 owner witness may carry.
+const TestedVersion = testedVersion
+
 const (
 	defaultExecutable = "claude"
 	// probeTimeout is 5 s because the pinned 367 MB Windows client exceeds 1 s on a loaded host,

@@ -41,6 +41,8 @@ const (
 	linuxV2PiDaemonCrashConfigEnvironment                = "SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_PI_DAEMON_CRASH_CONFIG"
 	linuxV2OpenCodeConfigEnvironment                     = "SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_OPENCODE_CONFIG"
 	linuxV2WSL2ConfigEnvironment                         = "SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_WSL2_CONFIG"
+	linuxV2CodexConfigEnvironment                        = "SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_CODEX_CONFIG"
+	linuxV2ClaudeConfigEnvironment                       = "SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_CLAUDE_CONFIG"
 	linuxV2StageReplayRootEnvironment                    = "SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_STAGE_REPLAY_ROOT"
 	linuxV2StageReplayRequestEnvironment                 = "SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_STAGE_REPLAY_REQUEST"
 	linuxV2AckLossReplayRootEnvironment                  = "SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_ACK_LOSS_ROOT"
@@ -54,6 +56,8 @@ const (
 
 	linuxV2PiRequestEnvironment             = "SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_PI_REQUEST"
 	linuxV2OpenCodeRequestEnvironment       = "SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_OPENCODE_REQUEST"
+	linuxV2CodexRequestEnvironment          = "SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_CODEX_REQUEST"
+	linuxV2ClaudeRequestEnvironment         = "SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_CLAUDE_REQUEST"
 	linuxV2CrashPiRequestEnvironment        = "SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_PI_CRASH_REQUEST"
 	linuxV2DaemonCrashPiRequestEnvironment  = "SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_PI_DAEMON_CRASH_REQUEST"
 	linuxV2WSL2RequestEnvironment           = "SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_WSL2_REQUEST"
@@ -61,6 +65,8 @@ const (
 	linuxV2NativeHookMarkerChildEnvironment = "SYMMETRY_LINUX_V2_NATIVE_HOOK_MARKER_ROOT"
 	linuxV2NativeHookMarkerMaxBytes         = 64
 	linuxV2NativeTaskTimeout                = 7 * time.Minute
+	linuxV2CodexBinaryDigestEnvironment     = "SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_CODEX_BINARY_SHA256"
+	linuxV2ClaudeBinaryDigestEnvironment    = "SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_CLAUDE_BINARY_SHA256"
 )
 
 var errLinuxV2DaemonCrashInjected = errors.New("production v2 daemon crash witness injected")
@@ -85,6 +91,22 @@ func TestProductionLinuxV2OpenCodeNativeHealth(t *testing.T) {
 	runProductionLinuxV2NativeOwnerWitness(t, linuxV2NativeWitnessCase{
 		harness: "opencode", configEnvironment: linuxV2OpenCodeConfigEnvironment,
 		requestEnvironment: linuxV2OpenCodeRequestEnvironment, requestCase: "opencode_native_health",
+	})
+}
+
+func TestProductionLinuxV2CodexNativeContainment(t *testing.T) {
+	runProductionLinuxV2NativeOwnerWitness(t, linuxV2NativeWitnessCase{
+		harness: "codex", configEnvironment: linuxV2CodexConfigEnvironment,
+		requestEnvironment: linuxV2CodexRequestEnvironment, requestCase: "codex_containment",
+		markerDirectory: "codex-containment", containmentRequired: true,
+	})
+}
+
+func TestProductionLinuxV2ClaudeNativeContainment(t *testing.T) {
+	runProductionLinuxV2NativeOwnerWitness(t, linuxV2NativeWitnessCase{
+		harness: "claude_code", configEnvironment: linuxV2ClaudeConfigEnvironment,
+		requestEnvironment: linuxV2ClaudeRequestEnvironment, requestCase: "claude_containment",
+		markerDirectory: "claude-containment", containmentRequired: true,
 	})
 }
 
@@ -151,6 +173,26 @@ func TestProductionLinuxV2StageCrashReplayMatrix(t *testing.T) {
 			t.Setenv(linuxV2OpenCodeConfigEnvironment, configPath)
 			t.Setenv(linuxV2StageReplayRequestEnvironment, requestPath)
 			runProductionLinuxV2StageCrashReplay(t, stage)
+		})
+	}
+	kindLegs := []struct {
+		name, harness, markerDirectory, configEnvironment string
+	}{
+		{"native_release_codex", "codex", "stage-replay-native-release-codex", linuxV2CodexConfigEnvironment},
+		{"native_release_claude", "claude_code", "stage-replay-native-release-claude", linuxV2ClaudeConfigEnvironment},
+	}
+	for _, leg := range kindLegs {
+		leg := leg
+		t.Run(leg.name, func(t *testing.T) {
+			stageRoot := filepath.Join(fixtureRoot, leg.name)
+			t.Setenv(leg.configEnvironment, filepath.Join(stageRoot, "config.json"))
+			t.Setenv(linuxV2StageReplayRequestEnvironment, filepath.Join(stageRoot, "request.json"))
+			runProductionLinuxV2StageCrashReplayCase(t, "native_release", linuxV2NativeWitnessCase{
+				harness: leg.harness, configEnvironment: leg.configEnvironment,
+				requestEnvironment: linuxV2StageReplayRequestEnvironment, requestCase: "stage_replay",
+				barrierStage: "native_release", markerDirectory: leg.markerDirectory,
+				containmentRequired: true,
+			})
 		})
 	}
 }
@@ -946,6 +988,7 @@ type linuxV2NativeWitnessCase struct {
 	wsl2DenialRequired     bool
 	helperCrashWitness     bool
 	daemonCrashWitness     bool
+	containmentRequired    bool
 	// afterStageProcessKilled runs before same-RunKey recovery; nil for ordinary replay cases.
 	afterStageProcessKilled func(*testing.T, linuxV2NativeFixture, string)
 }
@@ -1145,6 +1188,13 @@ type linuxV2OwnerWitnessResponse struct {
 	ProviderAction         *linuxV2OwnerWitnessProviderAction `json:"provider_action,omitempty"`
 	Health                 *linuxV2OwnerWitnessHealth         `json:"health,omitempty"`
 	DetachedChild          *linuxV2OwnerWitnessDetachedChild  `json:"detached_child,omitempty"`
+	NativeBinary           string                             `json:"native_binary,omitempty"`
+	NativeBinarySHA256     string                             `json:"native_binary_sha256,omitempty"`
+	Containment            *linuxV2OwnerWitnessContainment    `json:"containment,omitempty"`
+}
+
+type linuxV2OwnerWitnessContainment struct {
+	NativeOpenReached bool `json:"native_open_reached"`
 }
 
 type linuxV2OwnerWitnessStageMarker struct {
@@ -1200,6 +1250,10 @@ type linuxV2NativeWitness struct {
 	ProviderActionOK          bool                                   `json:"provider_action_succeeded"`
 	HealthPeerOK              bool                                   `json:"health_peer_verified"`
 	LeafAbsent                bool                                   `json:"leaf_absent_after_receipt"`
+	NativeBinary              string                                 `json:"native_binary,omitempty"`
+	NativeBinarySHA256        string                                 `json:"native_binary_sha256,omitempty"`
+	NativeVersionLine         string                                 `json:"native_version_line,omitempty"`
+	Containment               *linuxV2OwnerWitnessContainment        `json:"containment,omitempty"`
 	NoNativeFallback          bool                                   `json:"no_native_fallback"`
 	Outcome                   string                                 `json:"owner_witness_outcome,omitempty"`
 	Response                  *linuxV2OwnerWitnessResponse           `json:"owner_witness_response,omitempty"`
@@ -1660,7 +1714,7 @@ func newLinuxV2NativeFixture(t *testing.T, testCase linuxV2NativeWitnessCase) li
 	if value.Runtime.HarnessKind != testCase.harness {
 		t.Fatalf("%s runtime.harness_kind = %q, want %q", testCase.configEnvironment, value.Runtime.HarnessKind, testCase.harness)
 	}
-	expectedVersion := map[string]string{"pi": "1.5.2", "opencode": "1.18.32"}[testCase.harness]
+	expectedVersion := linuxV2PinnedNativeVersion(testCase.harness)
 	if value.Runtime.HarnessVersion != expectedVersion {
 		t.Fatalf("%s runtime.harness_version = %q, want pinned release %q", testCase.configEnvironment, value.Runtime.HarnessVersion, expectedVersion)
 	}
@@ -1674,14 +1728,14 @@ func newLinuxV2NativeFixture(t *testing.T, testCase linuxV2NativeWitnessCase) li
 	if !filepath.IsAbs(profile.Command) || filepath.Clean(profile.Command) != profile.Command {
 		t.Fatalf("%s native executable must be an absolute canonical path", testCase.configEnvironment)
 	}
-	if err := linuxV2VerifyPinnedNativeCLI(profile.Command, expectedVersion); err != nil {
+	if err := linuxV2VerifyPinnedNativeCLI(profile.Command, linuxV2PinnedNativeVersionLine(testCase.harness)); err != nil {
 		t.Fatalf("%s does not point to the pinned real CLI release: %v", testCase.configEnvironment, err)
 	}
 	if testCase.providerActionRequired && !profile.ProviderAccess {
 		t.Fatalf("%s Pi profile must enable provider_access for the real provider action witness", testCase.configEnvironment)
 	}
-	if testCase.harness == "opencode" && profile.ProviderAccess {
-		t.Fatalf("%s OpenCode profile must not claim unsupported provider-broker access", testCase.configEnvironment)
+	if testCase.harness != "pi" && profile.ProviderAccess {
+		t.Fatalf("%s non-Pi profile must not claim unsupported provider-broker access", testCase.configEnvironment)
 	}
 	workspace, ok := value.Workspaces[value.Runtime.Workspace]
 	if !ok || workspace.Policy != config.WorkspacePolicyGitCloneV2 || workspace.Path != "" || workspace.Ref != "" ||
@@ -1805,6 +1859,10 @@ func linuxV2ValidateFixedBSecretFiles(owner linuxgate.OwnerConfig, harnessKind s
 			filepath.Join(account.HomeDir, ".local", "share", "opencode", "auth.json"),
 			filepath.Join(account.HomeDir, ".config", "opencode", "opencode.json"),
 		)
+	case "codex":
+		paths = append(paths, filepath.Join(account.HomeDir, ".codex", "auth.json"))
+	case "claude_code":
+		paths = append(paths, filepath.Join(account.HomeDir, ".claude", ".credentials.json"))
 	default:
 		return errors.New("native witness harness is unsupported")
 	}
@@ -1868,6 +1926,19 @@ func linuxV2RequireActiveOwnerService() error {
 		return errors.New("symmetry-owner.service is not active")
 	}
 	return nil
+}
+
+func linuxV2PinnedNativeVersion(harnessKind string) string {
+	return map[string]string{"pi": "1.5.2", "opencode": "1.18.32", "codex": "0.168.0", "claude_code": "2.1.323"}[harnessKind]
+}
+
+func linuxV2PinnedNativeVersionLine(harnessKind string) string {
+	return map[string]string{
+		"pi":          "1.5.2",
+		"opencode":    "1.18.32",
+		"codex":       "codex-cli 0.168.0",
+		"claude_code": "2.1.323 (Claude Code)",
+	}[harnessKind]
 }
 
 func linuxV2VerifyPinnedNativeCLI(executable, expectedVersion string) error {
@@ -2989,6 +3060,10 @@ func linuxV2NativeCommandMatches(harnessKind string, commandLine []byte) bool {
 		return containsPair("--mode", "rpc")
 	case "opencode":
 		return containsPair("serve", "--hostname") && containsPair("--hostname", "127.0.0.1") && containsPair("--port", "0")
+	case "codex":
+		return containsPair("app-server", "--stdio")
+	case "claude_code":
+		return containsPair("--input-format", "stream-json") && containsPair("--output-format", "stream-json")
 	default:
 		return false
 	}

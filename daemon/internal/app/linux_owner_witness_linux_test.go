@@ -19,6 +19,8 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/config"
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
+	"github.com/wxxb789/symmetry/daemon/internal/harness/claude"
+	"github.com/wxxb789/symmetry/daemon/internal/harness/codex"
 	"github.com/wxxb789/symmetry/daemon/internal/harness/pi"
 	"github.com/wxxb789/symmetry/daemon/internal/linuxpreflight"
 	"github.com/wxxb789/symmetry/daemon/internal/platform"
@@ -1006,6 +1008,110 @@ func TestLinuxV2NativeWitnessCodexCaseRequiresCodexHarness(t *testing.T) {
 	for _, other := range []string{config.RuntimeHarnessPi, config.RuntimeHarnessOpenCode, config.RuntimeHarnessGeneric} {
 		if linuxV2NativeWitnessCaseMatches("codex_native_turn", other) {
 			t.Fatalf("Codex witness case selected harness %q", other)
+		}
+	}
+}
+
+func TestLinuxV2NativeWitnessContainmentCasesMatchTheirKind(t *testing.T) {
+	for _, accepted := range []struct {
+		name    string
+		harness string
+	}{
+		{"codex_containment", config.RuntimeHarnessCodex},
+		{"claude_containment", config.RuntimeHarnessClaudeCode},
+		{"stage_replay", config.RuntimeHarnessCodex},
+		{"stage_replay", config.RuntimeHarnessClaudeCode},
+	} {
+		if !linuxV2NativeWitnessCaseMatches(accepted.name, accepted.harness) {
+			t.Fatalf("case %q did not select harness %q", accepted.name, accepted.harness)
+		}
+	}
+	for _, rejected := range []struct {
+		name    string
+		harness string
+	}{
+		{"codex_containment", config.RuntimeHarnessClaudeCode},
+		{"claude_containment", config.RuntimeHarnessCodex},
+		{"codex_containment", config.RuntimeHarnessGeneric},
+		{"claude_containment", config.RuntimeHarnessOpenCode},
+		{"stage_replay", config.RuntimeHarnessGeneric},
+	} {
+		if linuxV2NativeWitnessCaseMatches(rejected.name, rejected.harness) {
+			t.Fatalf("case %q accepted harness %q", rejected.name, rejected.harness)
+		}
+	}
+}
+
+func TestLinuxV2NativeWitnessContainmentSelectsTheOpenOnlyPath(t *testing.T) {
+	run := &linuxV2NativeWitnessRun{request: linuxV2NativeWitnessRequest{Case: "codex_containment", Harness: config.RuntimeHarnessCodex}}
+	if !run.containmentCase() {
+		t.Fatal("codex containment case did not select the credential-free Open path")
+	}
+	run.request = linuxV2NativeWitnessRequest{Case: "claude_containment", Harness: config.RuntimeHarnessClaudeCode}
+	if !run.containmentCase() {
+		t.Fatal("claude containment case did not select the credential-free Open path")
+	}
+	run.request = linuxV2NativeWitnessRequest{Case: "stage_replay", Harness: config.RuntimeHarnessCodex}
+	if !run.containmentCase() {
+		t.Fatal("codex native-release replay leg did not select the credential-free Open path")
+	}
+	run.request = linuxV2NativeWitnessRequest{Case: "stage_replay", Harness: config.RuntimeHarnessOpenCode}
+	if run.containmentCase() {
+		t.Fatal("OpenCode stage replay was routed through the containment-only path")
+	}
+	run.request = linuxV2NativeWitnessRequest{Case: "codex_native_turn", Harness: config.RuntimeHarnessCodex}
+	if run.containmentCase() {
+		t.Fatal("codex_native_turn lost its turn path")
+	}
+}
+
+func TestLinuxV2NativeWitnessContainmentSummaryRequiresTheOpenBoundary(t *testing.T) {
+	run := &linuxV2NativeWitnessRun{request: linuxV2NativeWitnessRequest{Case: "codex_containment", Harness: config.RuntimeHarnessCodex}}
+	run.summary = linuxV2NativeWitnessSummary{Case: "codex_containment", Harness: config.RuntimeHarnessCodex}
+	if err := run.validateFinalSummary(); err == nil || !strings.Contains(err.Error(), "credential-free native Open") {
+		t.Fatalf("containment summary without the Open boundary error = %v", err)
+	}
+	run.summary.Containment = &linuxV2NativeWitnessContainment{NativeOpenReached: true}
+	if err := run.validateFinalSummary(); err == nil || !strings.Contains(err.Error(), "executable path or digest") {
+		t.Fatalf("containment summary without the binary digest error = %v", err)
+	}
+	run.summary.NativeBinary = "/usr/local/bin/codex"
+	run.summary.NativeBinarySHA256 = "sha256:" + strings.Repeat("a", 64)
+	if err := run.validateFinalSummary(); err != nil &&
+		(strings.Contains(err.Error(), "credential-free native Open") || strings.Contains(err.Error(), "executable path or digest")) {
+		t.Fatalf("satisfied containment boundary was rejected: %v", err)
+	}
+}
+
+func TestLinuxV2NativeWitnessConfigRequiresThePinnedKindVersion(t *testing.T) {
+	owner := linuxgate.OwnerConfig{
+		AUID: 60000, AGID: 60000, BUID: 60001, BGID: 60001,
+		StateDir: linuxV2NativeOwnerWitnessStateDir,
+	}
+	for _, testCase := range []struct {
+		kind    string
+		version string
+	}{
+		{config.RuntimeHarnessCodex, codex.TestedVersion},
+		{config.RuntimeHarnessClaudeCode, claude.TestedVersion},
+	} {
+		value := validLinuxV2NativeWitnessConfig(owner)
+		profile := value.AgentProfiles["profile"]
+		profile.ProviderAccess = false
+		if testCase.kind == config.RuntimeHarnessCodex {
+			profile.NativeModel = "gpt-5.1-codex"
+			profile.NativeModelProvider = "openai"
+		}
+		value.AgentProfiles["profile"] = profile
+		value.Runtime.HarnessKind = testCase.kind
+		value.Runtime.HarnessVersion = testCase.version
+		if err := validateLinuxV2NativeWitnessConfig(value, owner); err != nil {
+			t.Fatalf("%s witness config with the pinned release rejected: %v", testCase.kind, err)
+		}
+		foreign := value
+		foreign.Runtime.HarnessVersion = "0.0.0"
+		if err := validateLinuxV2NativeWitnessConfig(foreign, owner); err == nil || !strings.Contains(err.Error(), "tested release") {
+			t.Fatalf("%s witness config with a foreign release error = %v", testCase.kind, err)
 		}
 	}
 }

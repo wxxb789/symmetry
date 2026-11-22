@@ -15,7 +15,12 @@ CASES = {
     "daemon_sigkill_helper_survives_detached_child": ("pi", "pi-native", "native_turn_started"),
     "wsl2_denial": ("opencode", "opencode-native", "none"),
     "stage_replay": ("opencode", "opencode-native", None),
+    "codex_containment": ("codex", "codex-native", "native_release"),
+    "claude_containment": ("claude_code", "claude-native", "native_release"),
+    "stage_replay_native_release_codex": ("codex", "codex-native", "native_release"),
+    "stage_replay_native_release_claude": ("claude_code", "claude-native", "native_release"),
 }
+STAGE_REPLAY_NATIVE_RELEASE_CASES = {"stage_replay_native_release_codex", "stage_replay_native_release_claude"}
 STAGE_REPLAY_HOLDS = {
     "reservation_durable",
     "create_started",
@@ -80,9 +85,13 @@ def main() -> int:
             or (hold_after.startswith("drop_ack_after=") and ack_loss_stage in ACK_LOSS_STAGES),
             "stage replay hold is unsupported",
         )
+    elif case in STAGE_REPLAY_NATIVE_RELEASE_CASES:
+        require(len(sys.argv) == 8, "native-release stage replay requests use their fixed hold")
+        hold_after = default_hold_after
     else:
         require(len(sys.argv) == 8, "only stage replay requests accept a hold override")
         hold_after = default_hold_after
+    request_case = "stage_replay" if case in STAGE_REPLAY_NATIVE_RELEASE_CASES else case
     run = read_json(run_path)
     config = read_json(config_path)
     runtime = config.get("runtime", {})
@@ -204,7 +213,7 @@ def main() -> int:
 
     request = {
         "version": 1,
-        "case": case,
+        "case": request_case,
         "harness": harness,
         "run_key": {"run_id": run["run_id"], "generation": run["generation"]},
         "fence": {

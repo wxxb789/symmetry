@@ -69,6 +69,16 @@ MANUAL_WITNESSES = (
         "unresolved-journal-guard.json",
     ),
     ("unprovisioned/TestProductionLinuxV2UnprovisionedHostRefusal.json", "unprovisioned-owner-refusal.json"),
+    ("codex_containment/TestProductionLinuxV2CodexNativeContainment.json", "codex-native-containment.json"),
+    ("claude_containment/TestProductionLinuxV2ClaudeNativeContainment.json", "claude-native-containment.json"),
+    (
+        "stage-replay/TestProductionLinuxV2StageCrashReplayMatrix_native_release_codex.json",
+        "codex-stage-crash-replay-native-release.json",
+    ),
+    (
+        "stage-replay/TestProductionLinuxV2StageCrashReplayMatrix_native_release_claude.json",
+        "claude-stage-crash-replay-native-release.json",
+    ),
 )
 MANUAL_STAGE_HOLDS = (
     "reservation_durable",
@@ -311,6 +321,12 @@ MANUAL_CASE_SET_FILES = {
     "stale_journal_fence": {"stale-fence-denial.json"},
     "stale_journal_subject": {"stale-subject-denial.json"},
     "synthetic_goal_cleanup": {"synthetic-goal-cleanup.json"},
+    "codex_containment": {"codex-native-containment.json", "codex-stage-crash-replay-native-release.json"},
+    "claude_containment": {"claude-native-containment.json", "claude-stage-crash-replay-native-release.json"},
+}
+CONTAINMENT_KINDS = {
+    "codex": ("codex_containment", "codex_containment/TestProductionLinuxV2CodexNativeContainment.json"),
+    "claude_code": ("claude_containment", "claude_containment/TestProductionLinuxV2ClaudeNativeContainment.json"),
 }
 FORBIDDEN_KEYS = (
     "lease_token",
@@ -1427,7 +1443,38 @@ def main() -> int:
     parser.add_argument("--runner-uid", type=int)
     parser.add_argument("--runner-gid", type=int)
     parser.add_argument("--case-set", choices=tuple(MANUAL_CASE_SET_FILES))
+    parser.add_argument("--native-kind")
+    parser.add_argument("--native-binary")
+    parser.add_argument("--native-binary-sha256")
+    parser.add_argument("--native-archive-sha256")
+    parser.add_argument("--native-version-line")
+    parser.add_argument("--source-tree-digest")
     arguments = parser.parse_args()
+
+    native_kind = arguments.native_kind
+    native_binary = arguments.native_binary
+    native_binary_sha256 = arguments.native_binary_sha256
+    native_archive_sha256 = arguments.native_archive_sha256
+    native_version_line = arguments.native_version_line
+    native_values = (native_kind, native_binary, native_binary_sha256, native_archive_sha256, native_version_line)
+    if any(value is not None for value in native_values) and not all(value is not None for value in native_values):
+        fail(
+            "native containment export requires --native-kind, --native-binary, --native-binary-sha256, "
+            "--native-archive-sha256 and --native-version-line together"
+        )
+    if native_kind is not None and native_kind not in CONTAINMENT_KINDS:
+        fail(f"--native-kind {native_kind} is not a containment-capable native kind")
+    if native_kind is not None and arguments.case_set != CONTAINMENT_KINDS[native_kind][0]:
+        fail(f"--native-kind {native_kind} requires --case-set {CONTAINMENT_KINDS[native_kind][0]}")
+    if native_kind is not None and arguments.mode != "manual":
+        fail("native containment export is available only in manual mode")
+    if arguments.source_tree_digest is not None and (
+        not arguments.source_tree_digest.startswith("sha256:")
+        or len(arguments.source_tree_digest) != len("sha256:") + 64
+    ):
+        fail("--source-tree-digest must be a sha256:<64 hex> tree digest")
+    if native_kind is not None and arguments.source_tree_digest is None:
+        fail("native containment export requires --source-tree-digest")
 
     output = pathlib.Path(arguments.output_directory)
     if not output.is_absolute() or output != pathlib.Path(os.path.normpath(str(output))):
@@ -1534,6 +1581,24 @@ def main() -> int:
             atomic_write(output, target, data, runner_uid, runner_gid)
         copied.append({"file": target, "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()})
 
+    if native_kind is not None:
+        source = witness_root / CONTAINMENT_KINDS[native_kind][1]
+        try:
+            _, document = read_regular(source, secret_values)
+        except FileNotFoundError:
+            fail("containment witness is unavailable")
+        containment = document.get("containment")
+        if document.get("native_binary") != native_binary:
+            fail("containment witness native_binary does not match --native-binary")
+        if document.get("native_binary_sha256") != native_binary_sha256:
+            fail("containment witness native_binary_sha256 does not match --native-binary-sha256")
+        if document.get("native_version_line") != native_version_line:
+            fail("containment witness native_version_line does not match --native-version-line")
+        if document.get("subject", {}).get("tree_digest") != arguments.source_tree_digest:
+            fail("containment witness subject.tree_digest does not match --source-tree-digest")
+        if not isinstance(containment, dict) or not isinstance(containment.get("native_open_reached"), bool):
+            fail("containment witness does not record a boolean containment.native_open_reached")
+
     # A failed witness run is the one case whose daemon-side stall the uploaded
     # evidence must explain, so the restarted daemon's log tails are published
     # as sanitized projections. Per-case verdicts are not visible here (the
@@ -1601,6 +1666,16 @@ def main() -> int:
         "files": copied,
         "missing_allowlisted_files": missing,
     }
+    if native_kind is not None:
+        manifest["native_binary"] = {
+            "kind": native_kind,
+            "path": native_binary,
+            "sha256": native_binary_sha256,
+            "archive_sha256": native_archive_sha256,
+            "version": native_version_line,
+        }
+        manifest["containment"] = {"native_open_reached": document["containment"]["native_open_reached"]}
+        manifest["source_tree_digest"] = arguments.source_tree_digest
     if arguments.mode == "legacy":
         manifest["complete"] = not incomplete
         manifest["incomplete_evidence_files"] = incomplete_files

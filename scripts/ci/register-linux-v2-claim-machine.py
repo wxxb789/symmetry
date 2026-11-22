@@ -105,6 +105,24 @@ def main() -> int:
                     "repository_resource_id": fixture["opencode_repository_resource_id"],
                     "capabilities": {"structured_input": True},
                 },
+                {
+                    "runtime_key": "owner-witness-control-codex-generic",
+                    "name": "Isolated generic Control codex-claim fixture; not a native runtime",
+                    "capacity": 64,
+                    "agent_profile": "codex-native",
+                    "workspace": "native",
+                    "repository_resource_id": fixture["opencode_repository_resource_id"],
+                    "capabilities": {"structured_input": True},
+                },
+                {
+                    "runtime_key": "owner-witness-control-claude-generic",
+                    "name": "Isolated generic Control claude-claim fixture; not a native runtime",
+                    "capacity": 64,
+                    "agent_profile": "claude-native",
+                    "workspace": "native",
+                    "repository_resource_id": fixture["opencode_repository_resource_id"],
+                    "capabilities": {"structured_input": True},
+                },
             ]
         },
         200,
@@ -113,7 +131,12 @@ def main() -> int:
         runtime.get("runtime_key"): runtime for runtime in response.get("runtimes", []) if isinstance(runtime, dict)
     }
     result = {"machine_id": machine_id, "session_id": session_id, "runtimes": {}}
-    for runtime_key in ("owner-witness-control-pi-generic", "owner-witness-control-opencode-generic"):
+    for runtime_key in (
+        "owner-witness-control-pi-generic",
+        "owner-witness-control-opencode-generic",
+        "owner-witness-control-codex-generic",
+        "owner-witness-control-claude-generic",
+    ):
         runtime = runtimes.get(runtime_key)
         if (
             not isinstance(runtime, dict)
@@ -121,7 +144,7 @@ def main() -> int:
             or not isinstance(runtime.get("runtime_epoch"), int)
             or runtime["runtime_epoch"] <= 0
         ):
-            raise SystemExit("Control did not register the two generic claim fixture runtimes")
+            raise SystemExit("Control did not register the four generic claim fixture runtimes")
         result["runtimes"][runtime_key] = {
             "runtime_id": runtime["runtime_id"],
             "runtime_epoch": runtime["runtime_epoch"],

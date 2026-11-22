@@ -27,7 +27,7 @@ source_subject_json=$(python3 "$repo/scripts/ci/linux-v2-source-subject.py" "$re
 
 fixture_case_set=${SYMMETRY_LINUX_V2_NATIVE_CASE_SET:-}
 case "$fixture_case_set" in
-  shared|stage_replay_create_started|stage_replay_leaf_bound|stage_replay_launcher_bound|ack_loss_launcher_bound|stale_leaf|migration|stale_journal_run_key|stale_journal_run_key_legacy|stale_journal_fence|stale_journal_subject|synthetic_goal_cleanup) ;;
+  shared|codex_containment|claude_containment|stage_replay_create_started|stage_replay_leaf_bound|stage_replay_launcher_bound|ack_loss_launcher_bound|stale_leaf|migration|stale_journal_run_key|stale_journal_run_key_legacy|stale_journal_fence|stale_journal_subject|synthetic_goal_cleanup) ;;
   *) fail 'set SYMMETRY_LINUX_V2_NATIVE_CASE_SET to one exact shared or unresolved witness case set' ;;
 esac
 fixture_identity_suffix=${fixture_case_set//_/-}
@@ -145,12 +145,36 @@ export_native_evidence() {
     python3 "$repo/scripts/ci/linux-v2-source-subject.py" "$repo" "$GITHUB_SHA" >/dev/null || return 1
     run_status=passed
   fi
+  local -a native_manifest_args=()
+  case "$fixture_case_set" in
+    codex_containment)
+      native_manifest_args=(
+        --native-kind codex
+        --native-binary /usr/local/bin/codex
+        --native-binary-sha256 "sha256:${codex_executable_sha:-}"
+        --native-archive-sha256 "sha256:${codex_archive_sha:-}"
+        --native-version-line "${codex_version_line:-}"
+        --source-tree-digest "$source_tree_digest"
+      )
+      ;;
+    claude_containment)
+      native_manifest_args=(
+        --native-kind claude_code
+        --native-binary /usr/local/bin/claude
+        --native-binary-sha256 "sha256:${claude_executable_sha:-}"
+        --native-archive-sha256 "sha256:${claude_archive_sha:-}"
+        --native-version-line "${claude_version_line:-}"
+        --source-tree-digest "$source_tree_digest"
+      )
+      ;;
+  esac
   sudo python3 "$repo/scripts/ci/export-linux-v2-redacted-evidence.py" \
     manual "$evidence_directory" "$GITHUB_SHA" "$run_status" \
     --witness-root "$witness_root" --receipt-root "$receipt_root" \
     --case-set "$fixture_case_set" \
     --secret-values-file "$evidence_secret_values_file" \
-    --runner-uid "$(id -u)" --runner-gid "$(id -g)"
+    --runner-uid "$(id -u)" --runner-gid "$(id -g)" \
+    "${native_manifest_args[@]}"
 }
 
 cleanup() {
@@ -281,6 +305,23 @@ sudo install -d -o root -g root -m 0755 "$rootfs/root" "$rootfs/etc/symmetry" "$
   "$rootfs/opt"
 sudo install -o root -g root -m 0755 "$pi_unpack/pi/pi" "$rootfs/usr/local/bin/pi"
 sudo install -o root -g root -m 0755 "$opencode_unpack/opencode" "$rootfs/usr/local/bin/opencode"
+if [[ "$fixture_case_set" == codex_containment ]]; then
+  linux_v2_fetch_codex "$fixture_root"
+  sudo install -o root -g root -m 0755 "$codex_executable" "$rootfs/usr/local/bin/codex"
+  sudo install -o root -g root -m 0755 "$code_mode_host_executable" "$rootfs/usr/local/bin/codex-code-mode-host"
+  sudo install -o root -g root -m 0755 "$bwrap_executable" "$rootfs/usr/local/bin/bwrap"
+  [[ "$(sudo sha256sum "$rootfs/usr/local/bin/codex" | cut -d' ' -f1)" == "$codex_executable_sha" ]] ||
+    fail 'staged codex executable digest differs from the pinned codex release'
+  [[ "$(sudo sha256sum "$rootfs/usr/local/bin/codex-code-mode-host" | cut -d' ' -f1)" == "$code_mode_host_executable_sha" ]] ||
+    fail 'staged codex code-mode host digest differs from the pinned codex release'
+  [[ "$(sudo sha256sum "$rootfs/usr/local/bin/bwrap" | cut -d' ' -f1)" == "$bwrap_executable_sha" ]] ||
+    fail 'staged bwrap digest differs from the pinned codex release'
+elif [[ "$fixture_case_set" == claude_containment ]]; then
+  linux_v2_fetch_claude "$fixture_root"
+  sudo install -o root -g root -m 0755 "$claude_executable" "$rootfs/usr/local/bin/claude"
+  [[ "$(sudo sha256sum "$rootfs/usr/local/bin/claude" | cut -d' ' -f1)" == "$claude_executable_sha" ]] ||
+    fail 'staged claude executable digest differs from the pinned claude release'
+fi
 sudo install -o root -g root -m 0755 "$repo/scripts/install-linux-owner.sh" "$rootfs/root/install-linux-owner.sh"
 sudo install -d -o root -g root -m 0700 "$rootfs/root/symmetry-linux-owner-stage"
 sudo install -d -o root -g root -m 0700 \
@@ -451,11 +492,12 @@ sudo install -d -o "$B_UID" -g "$B_GID" -m 0700 \
   "$rootfs$B_HOME/.pi" "$rootfs$B_HOME/.pi/agent" \
   "$rootfs$B_HOME/.config" "$rootfs$B_HOME/.config/opencode" \
   "$rootfs$B_HOME/hooks" "$rootfs$B_HOME/.local" \
-  "$rootfs$B_HOME/.local/share" "$rootfs$B_HOME/.local/share/opencode"
+  "$rootfs$B_HOME/.local/share" "$rootfs$B_HOME/.local/share/opencode" \
+  "$rootfs$B_HOME/.codex" "$rootfs$B_HOME/.claude"
 for private_directory in \
   "$B_HOME" "$B_HOME/.pi" "$B_HOME/.pi/agent" "$B_HOME/.config" \
   "$B_HOME/.config/opencode" "$B_HOME/.local" "$B_HOME/.local/share" \
-  "$B_HOME/.local/share/opencode" "$B_HOME/hooks"; do
+  "$B_HOME/.local/share/opencode" "$B_HOME/hooks" "$B_HOME/.codex" "$B_HOME/.claude"; do
   [[ "$(sudo stat -c '%u:%g:%a' "$rootfs$private_directory")" == "$B_UID:$B_GID:700" ]] ||
     fail "B private HOME directory must be B-owned mode 0700 before A search ACLs: $private_directory"
 done
@@ -463,7 +505,8 @@ done
 sudo setfacl -m "u:$A_UID:--x" \
   "$rootfs$B_HOME" "$rootfs$B_HOME/.pi" "$rootfs$B_HOME/.pi/agent" \
   "$rootfs$B_HOME/.config" "$rootfs$B_HOME/.config/opencode" \
-  "$rootfs$B_HOME/.local" "$rootfs$B_HOME/.local/share" "$rootfs$B_HOME/.local/share/opencode"
+  "$rootfs$B_HOME/.local" "$rootfs$B_HOME/.local/share" "$rootfs$B_HOME/.local/share/opencode" \
+  "$rootfs$B_HOME/.codex" "$rootfs$B_HOME/.claude"
 sudo setfacl -m "u:$A_UID:r-x,m::r-x,d:u:$A_UID:r-x,d:u:$B_UID:rwx,d:m::rwx" "$rootfs$B_CLONE_ROOT"
 sudo setfacl -m "u:$A_UID:r-x,m::r-x,d:u:$A_UID:r-x,d:u:$B_UID:rwx,d:m::rwx" \
   "$rootfs$DAEMON_SERVICE_WORKSPACE_ROOT"
@@ -544,7 +587,11 @@ sudo install -d -o "$A_UID" -g "$B_GID" -m 2770 \
   "$rootfs$OWNER_HELPER_EXIT_MARKER" \
   "$rootfs$NATIVE_HOOK_MARKER_ROOT/helper-stop-response-loss" \
   "$rootfs$NATIVE_HOOK_MARKER_ROOT/helper-ack-response-loss" \
-  "$rootfs$NATIVE_HOOK_MARKER_ROOT/helper-launcher-response-loss"
+  "$rootfs$NATIVE_HOOK_MARKER_ROOT/helper-launcher-response-loss" \
+  "$rootfs$NATIVE_HOOK_MARKER_ROOT/codex-containment" \
+  "$rootfs$NATIVE_HOOK_MARKER_ROOT/claude-containment" \
+  "$rootfs$NATIVE_HOOK_MARKER_ROOT/stage-replay-native-release-codex" \
+  "$rootfs$NATIVE_HOOK_MARKER_ROOT/stage-replay-native-release-claude"
 for hold_after in "${OWNER_STAGE_REPLAY_HOLDS[@]}"; do
   sudo install -d -o "$A_UID" -g "$B_GID" -m 2770 \
     "$rootfs$NATIVE_HOOK_MARKER_ROOT/stage-replay-$hold_after"
@@ -576,7 +623,7 @@ for receipt_case in pi_provider_action helper_sigkill_detached_child daemon_sigk
     "$rootfs$OWNER_CONTROL_RECEIPT_CONTEXT_ROOT/$receipt_case"
 done
 sudo install -d -o "$A_UID" -g "$A_GID" -m 0700 "$rootfs$OWNER_BARRIER_ROOT"
-for barrier_case in pi_provider_action opencode_native_health helper_sigkill_detached_child daemon_sigkill_helper_survives_detached_child wsl2_denial; do
+for barrier_case in pi_provider_action opencode_native_health helper_sigkill_detached_child daemon_sigkill_helper_survives_detached_child wsl2_denial codex_containment claude_containment; do
   sudo install -d -o "$A_UID" -g "$A_GID" -m 0700 "$rootfs$OWNER_BARRIER_ROOT/$barrier_case"
 done
 sudo install -d -o "$A_UID" -g "$A_GID" -m 0700 "$rootfs$OWNER_BARRIER_ROOT/stage-replay"
@@ -598,6 +645,14 @@ for hold_after in "${OWNER_STAGE_REPLAY_HOLDS[@]}"; do
     fail "stage replay barrier must be A-owned mode 0700: $hold_after"
   [[ "$(sudo stat -c '%u:%g:%a' "$rootfs$OWNER_STAGE_REPLAY_ROOT/$hold_after")" == "0:$A_GID:750" ]] ||
     fail "stage replay bundle directory must be root:A mode 0750: $hold_after"
+done
+for kind in codex claude; do
+  sudo install -d -o "$A_UID" -g "$A_GID" -m 0700 "$rootfs$OWNER_BARRIER_ROOT/stage-replay/native_release_$kind"
+  sudo install -d -o root -g "$A_GID" -m 0750 "$rootfs$OWNER_STAGE_REPLAY_ROOT/native_release_$kind"
+  [[ "$(sudo stat -c '%u:%g:%a' "$rootfs$OWNER_BARRIER_ROOT/stage-replay/native_release_$kind")" == "$A_UID:$A_GID:700" ]] ||
+    fail "stage replay barrier must be A-owned mode 0700: native_release_$kind"
+  [[ "$(sudo stat -c '%u:%g:%a' "$rootfs$OWNER_STAGE_REPLAY_ROOT/native_release_$kind")" == "0:$A_GID:750" ]] ||
+    fail "stage replay bundle directory must be root:A mode 0750: native_release_$kind"
 done
 for ack_loss_stage in "${OWNER_ACK_LOSS_STAGES[@]}"; do
   sudo install -d -o root -g "$A_GID" -m 0750 \
@@ -646,7 +701,11 @@ sudo setfacl -m "u:$A_UID:r-x,m::rwx" "$rootfs$CLONE_TEST_MARKER_ROOT" \
   "$rootfs$OWNER_HELPER_EXIT_MARKER" \
   "$rootfs$NATIVE_HOOK_MARKER_ROOT/helper-stop-response-loss" \
   "$rootfs$NATIVE_HOOK_MARKER_ROOT/helper-ack-response-loss" \
-  "$rootfs$NATIVE_HOOK_MARKER_ROOT/helper-launcher-response-loss"
+  "$rootfs$NATIVE_HOOK_MARKER_ROOT/helper-launcher-response-loss" \
+  "$rootfs$NATIVE_HOOK_MARKER_ROOT/codex-containment" \
+  "$rootfs$NATIVE_HOOK_MARKER_ROOT/claude-containment" \
+  "$rootfs$NATIVE_HOOK_MARKER_ROOT/stage-replay-native-release-codex" \
+  "$rootfs$NATIVE_HOOK_MARKER_ROOT/stage-replay-native-release-claude"
 for hold_after in "${OWNER_STAGE_REPLAY_HOLDS[@]}"; do
   sudo setfacl -m "u:$A_UID:r-x,m::rwx" \
     "$rootfs$NATIVE_HOOK_MARKER_ROOT/stage-replay-$hold_after"
@@ -776,7 +835,7 @@ machine_run /usr/bin/id -G "$B_USER"
 for private_directory in \
   "$B_HOME" "$B_HOME/.pi" "$B_HOME/.pi/agent" "$B_HOME/.config" \
   "$B_HOME/.config/opencode" "$B_HOME/.local" "$B_HOME/.local/share" \
-  "$B_HOME/.local/share/opencode"; do
+  "$B_HOME/.local/share/opencode" "$B_HOME/.codex" "$B_HOME/.claude"; do
   machine_run_as "$A_USER" "$A_USER" /usr/bin/test -x "$private_directory"
   if machine_run_as "$A_USER" "$A_USER" /usr/bin/test -r "$private_directory"; then
     fail "A unexpectedly listed B-private native configuration directory: $private_directory"
@@ -837,11 +896,18 @@ import sys
 fixture = pathlib.Path(fixture_root)
 
 def config(kind, profile, model, resource_id):
+    native_model_keys = (
+        {} if kind == "claude_code" else {"native_model": model, "native_model_provider": "openai"}
+    )
     agent = {
-        "command": "/usr/local/bin/pi" if kind == "pi" else "/usr/local/bin/opencode",
+        "command": {
+            "pi": "/usr/local/bin/pi",
+            "opencode": "/usr/local/bin/opencode",
+            "codex": "/usr/local/bin/codex",
+            "claude_code": "/usr/local/bin/claude",
+        }[kind],
         "args": ["--provider", "openai", "--model", model] if kind == "pi" else [],
-        "native_model": model,
-        "native_model_provider": "openai",
+        **native_model_keys,
         "input_mode": "json",
         "provider_access": kind == "pi",
         "interactive": True,
@@ -878,7 +944,12 @@ def config(kind, profile, model, resource_id):
             "workspace": "native",
             "repository_resource_id": resource_id,
             "harness_kind": kind,
-            "harness_version": "1.5.2" if kind == "pi" else "1.18.32",
+            "harness_version": {
+                "pi": "1.5.2",
+                "opencode": "1.18.32",
+                "codex": "0.168.0",
+                "claude_code": "2.1.323",
+            }[kind],
             "adapter_version": "symmetry-daemon:ci-linux-v2",
             "adapter_protocol_version": 1,
         },
@@ -893,6 +964,8 @@ configs = {
     "pi-daemon-crash.json": config("pi", "pi-native", pi_model, pi_repository_id),
     "opencode-health.json": config("opencode", "opencode-native", opencode_model, opencode_repository_id),
     "opencode-wsl2.json": config("opencode", "opencode-native", opencode_model, opencode_repository_id),
+    "codex-containment.json": config("codex", "codex-native", "gpt-5.1-codex", opencode_repository_id),
+    "claude-containment.json": config("claude_code", "claude-native", None, opencode_repository_id),
 }
 for name, value in configs.items():
     (fixture / name).write_text(json.dumps(value, separators=(",", ":")), encoding="utf-8")
@@ -924,6 +997,25 @@ private_home = fixture / "b-home"
 (private_home / ".local/share/opencode/auth.json").write_text(
     json.dumps({"openai": {"type": "api", "key": api_key}}), encoding="utf-8"
 )
+(private_home / ".codex").mkdir(parents=True, mode=0o700)
+(private_home / ".claude").mkdir(parents=True, mode=0o700)
+(private_home / ".codex/auth.json").write_text(
+    json.dumps({"OPENAI_API_KEY": "containment-placeholder-no-credential"}),
+    encoding="utf-8",
+)
+(private_home / ".claude/.credentials.json").write_text(
+    json.dumps(
+        {
+            "claudeAiOauth": {
+                "accessToken": "containment-placeholder-no-credential",
+                "refreshToken": "containment-placeholder-no-credential",
+                "expiresAt": 4102444800000,
+                "scopes": ["user:inference"],
+            }
+        }
+    ),
+    encoding="utf-8",
+)
 PY
 python3 - "$fixture_root/opencode-health.json" "$fixture_root/stage-replay" "$DAEMON_SERVICE_STATE_DIR" \
   "${OWNER_STAGE_REPLAY_HOLDS[@]}" <<'PY'
@@ -939,6 +1031,21 @@ for hold in holds:
     stage_dir.mkdir(parents=True, mode=0o700, exist_ok=True)
     config = dict(template)
     config["state_dir"] = owner_state_dir
+    (stage_dir / "config.json").write_text(json.dumps(config, separators=(",", ":")), encoding="utf-8")
+PY
+python3 - "$fixture_root/codex-containment.json" "$fixture_root/claude-containment.json" \
+  "$fixture_root" "$DAEMON_SERVICE_STATE_DIR" <<'PY'
+import json
+import pathlib
+import sys
+
+codex_config_path, claude_config_path, fixture_root, owner_state_dir = sys.argv[1:]
+root = pathlib.Path(fixture_root)
+for kind, config_path in (("codex", codex_config_path), ("claude", claude_config_path)):
+    config = json.loads(pathlib.Path(config_path).read_text(encoding="utf-8"))
+    config["state_dir"] = owner_state_dir
+    stage_dir = root / f"stage-replay-native-release-{kind}" / "native_release"
+    stage_dir.mkdir(parents=True, mode=0o700, exist_ok=True)
     (stage_dir / "config.json").write_text(json.dumps(config, separators=(",", ":")), encoding="utf-8")
 PY
 python3 - "$fixture_root/opencode-health.json" "$fixture_root/ack-loss" "$DAEMON_SERVICE_STATE_DIR" \
@@ -1016,9 +1123,12 @@ sudo install -o "$B_UID" -g "$B_GID" -m 0600 "$fixture_root/b-home/.pi/agent/set
 sudo install -o "$B_UID" -g "$B_GID" -m 0600 "$fixture_root/b-home/.pi/agent/auth.json" "$rootfs$B_HOME/.pi/agent/auth.json"
 sudo install -o "$B_UID" -g "$B_GID" -m 0600 "$fixture_root/b-home/.config/opencode/opencode.json" "$rootfs$B_HOME/.config/opencode/opencode.json"
 sudo install -o "$B_UID" -g "$B_GID" -m 0600 "$fixture_root/b-home/.local/share/opencode/auth.json" "$rootfs$B_HOME/.local/share/opencode/auth.json"
+sudo install -o "$B_UID" -g "$B_GID" -m 0600 "$fixture_root/b-home/.codex/auth.json" "$rootfs$B_HOME/.codex/auth.json"
+sudo install -o "$B_UID" -g "$B_GID" -m 0600 "$fixture_root/b-home/.claude/.credentials.json" "$rootfs$B_HOME/.claude/.credentials.json"
 for private_file in \
   "$B_HOME/.pi/agent/settings.json" "$B_HOME/.pi/agent/auth.json" \
-  "$B_HOME/.config/opencode/opencode.json" "$B_HOME/.local/share/opencode/auth.json"; do
+  "$B_HOME/.config/opencode/opencode.json" "$B_HOME/.local/share/opencode/auth.json" \
+  "$B_HOME/.codex/auth.json" "$B_HOME/.claude/.credentials.json"; do
   machine_run_as "$B_USER" "$B_USER" /usr/bin/test -r "$private_file"
   machine_run_as "$B_USER" "$B_USER" /usr/bin/test -w "$private_file"
   if machine_run_as "$A_USER" "$A_USER" /usr/bin/test -r "$private_file"; then
@@ -1031,13 +1141,14 @@ done
 for private_directory in \
   "$B_HOME" "$B_HOME/.pi" "$B_HOME/.pi/agent" "$B_HOME/.config" \
   "$B_HOME/.config/opencode" "$B_HOME/.local" "$B_HOME/.local/share" \
-  "$B_HOME/.local/share/opencode" "$B_HOME/hooks"; do
+  "$B_HOME/.local/share/opencode" "$B_HOME/hooks" "$B_HOME/.codex" "$B_HOME/.claude"; do
   [[ "$(sudo stat -c '%u:%g' "$rootfs$private_directory")" == "$B_UID:$B_GID" ]] ||
     fail "B private HOME directory has unsafe ownership: $private_directory"
 done
 for private_file in \
   "$B_HOME/.pi/agent/settings.json" "$B_HOME/.pi/agent/auth.json" \
-  "$B_HOME/.config/opencode/opencode.json" "$B_HOME/.local/share/opencode/auth.json"; do
+  "$B_HOME/.config/opencode/opencode.json" "$B_HOME/.local/share/opencode/auth.json" \
+  "$B_HOME/.codex/auth.json" "$B_HOME/.claude/.credentials.json"; do
   if ! sudo test -f "$rootfs$private_file" || ! sudo test ! -L "$rootfs$private_file" ||
      [[ "$(sudo stat -c '%u:%g:%a:%h' "$rootfs$private_file")" != "$B_UID:$B_GID:600:1" ]] ||
      ! sudo test -s "$rootfs$private_file"; then
@@ -1046,7 +1157,7 @@ for private_file in \
 done
 rm -f -- "$native_api_key_file"
 rm -rf -- "$fixture_root/b-home"
-for config in pi-provider-action.json pi-helper-crash.json pi-daemon-crash.json opencode-health.json opencode-wsl2.json; do
+for config in pi-provider-action.json pi-helper-crash.json pi-daemon-crash.json opencode-health.json opencode-wsl2.json codex-containment.json claude-containment.json; do
   sudo install -o root -g "$A_GID" -m 0640 "$fixture_root/$config" "$rootfs$OWNER_CONFIG_ROOT/$config"
   [[ "$(sudo stat -c '%u:%g:%a:%h' "$rootfs$OWNER_CONFIG_ROOT/$config")" == "0:$A_GID:640:1" ]] ||
     fail "owner-witness config must be singly-linked root:A mode 0640: $config"
@@ -1068,6 +1179,13 @@ for hold_after in "${OWNER_STAGE_REPLAY_HOLDS[@]}"; do
   sudo install -o root -g "$A_GID" -m 0640 "$stage_config" "$rootfs$stage_guest_config"
   [[ "$(sudo stat -c '%u:%g:%a:%h' "$rootfs$stage_guest_config")" == "0:$A_GID:640:1" ]] ||
     fail "stage replay config must be singly-linked root:A mode 0640: $hold_after"
+done
+for kind in codex claude; do
+  stage_config="$fixture_root/stage-replay-native-release-$kind/native_release/config.json"
+  stage_guest_config="$OWNER_STAGE_REPLAY_ROOT/native_release_$kind/config.json"
+  sudo install -o root -g "$A_GID" -m 0640 "$stage_config" "$rootfs$stage_guest_config"
+  [[ "$(sudo stat -c '%u:%g:%a:%h' "$rootfs$stage_guest_config")" == "0:$A_GID:640:1" ]] ||
+    fail "stage replay config must be singly-linked root:A mode 0640: native_release_$kind"
 done
 for ack_loss_stage in "${OWNER_ACK_LOSS_STAGES[@]}"; do
   ack_loss_config="$fixture_root/ack-loss/$ack_loss_stage/config.json"
@@ -1423,11 +1541,25 @@ run_go_test() {
         --setenv="SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_PI_DAEMON_CRASH_CONFIG=$OWNER_CONFIG_ROOT/pi-daemon-crash.json"
         --setenv="SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_OPENCODE_CONFIG=$OWNER_CONFIG_ROOT/opencode-health.json"
         --setenv="SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_WSL2_CONFIG=$OWNER_CONFIG_ROOT/opencode-wsl2.json"
+        --setenv="SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_CODEX_CONFIG=$OWNER_CONFIG_ROOT/codex-containment.json"
+        --setenv="SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_CLAUDE_CONFIG=$OWNER_CONFIG_ROOT/claude-containment.json"
         --setenv="SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_CONTROL_RECEIPT_ROOT=$OWNER_CONTROL_RECEIPT_ROOT"
         --setenv="SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_CONTROL_RECEIPT_CONTEXT_ROOT=$OWNER_CONTROL_RECEIPT_CONTEXT_ROOT"
         "--setenv=$request_environment=$request_path"
         "--setenv=SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_WITNESS_OUTPUT_DIR=$output_directory"
       )
+      if [[ -n "${codex_executable_sha:-}" ]]; then
+        command+=(
+          --setenv="SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_CODEX_BINARY_SHA256=sha256:$codex_executable_sha"
+          --setenv="SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_CODEX_ARCHIVE_SHA256=sha256:$codex_archive_sha"
+        )
+      fi
+      if [[ -n "${claude_executable_sha:-}" ]]; then
+        command+=(
+          --setenv="SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_CLAUDE_BINARY_SHA256=sha256:$claude_executable_sha"
+          --setenv="SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_CLAUDE_ARCHIVE_SHA256=sha256:$claude_archive_sha"
+        )
+      fi
       ;;
     stage-replay)
       machine_run_as "$A_USER" "$A_USER" /usr/bin/mkdir -m 0700 -p "$output_directory"
@@ -1731,6 +1863,16 @@ run_native_owner_witness() {
       test_name=TestProductionLinuxV2DaemonSIGKILLHelperSurvivesDetachedChild
       provider_receipt_required=1
       ;;
+    codex_containment)
+      config_file=codex-containment.json
+      request_environment=SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_CODEX_REQUEST
+      test_name=TestProductionLinuxV2CodexNativeContainment
+      ;;
+    claude_containment)
+      config_file=claude-containment.json
+      request_environment=SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_CLAUDE_REQUEST
+      test_name=TestProductionLinuxV2ClaudeNativeContainment
+      ;;
     *) fail "unknown production Linux v2 owner witness case: $case_name" ;;
   esac
 
@@ -1822,22 +1964,29 @@ PY
   fi
 }
 
-run_stage_replay_case() {
+run_stage_replay_leg() {
   local event_file=$1
   local hold_after=$2
+  local stage_name=$3
+  local fixture_case=$4
+  local request_case=$5
+  local config_source=$6
   local test_name=TestProductionLinuxV2StageCrashReplayMatrix
   local output_directory="$A_HOME/ci-fixture/witness-output/stage-replay"
   local status=0
-  local fixture_case="stage_replay_$hold_after"
-  local stage_directory="$OWNER_STAGE_REPLAY_ROOT/$hold_after"
-  local -a expected_tests=("$test_name" "$test_name/$hold_after")
-  prepare_owner_request \
-    "$fixture_case" stage_replay \
-    "$fixture_root/stage-replay/$hold_after/config.json" \
-    "$OWNER_BARRIER_ROOT/stage-replay/$hold_after" \
-    "$stage_directory/request.json" "$hold_after"
+  local stage_directory="$OWNER_STAGE_REPLAY_ROOT/$stage_name"
+  local -a expected_tests=("$test_name" "$test_name/$stage_name")
+  local -a prepare_args=(
+    "$fixture_case" "$request_case" "$config_source"
+    "$OWNER_BARRIER_ROOT/stage-replay/$stage_name"
+    "$stage_directory/request.json"
+  )
+  if [[ "$request_case" == stage_replay ]]; then
+    prepare_args+=("$hold_after")
+  fi
+  prepare_owner_request "${prepare_args[@]}"
 
-  if run_go_test "$event_file" ./e2e "^${test_name}/${hold_after}$" stage-replay \
+  if run_go_test "$event_file" ./e2e "^${test_name}/${stage_name}$" stage-replay \
     '' '' "$output_directory" -- "${expected_tests[@]}"; then
     status=0
   else
@@ -1847,6 +1996,21 @@ run_stage_replay_case() {
   if (( status != 0 )); then
     return "$status"
   fi
+}
+
+run_stage_replay_case() {
+  local event_file=$1
+  local hold_after=$2
+  run_stage_replay_leg "$event_file" "$hold_after" "$hold_after" \
+    "stage_replay_$hold_after" stage_replay "$fixture_root/stage-replay/$hold_after/config.json"
+}
+
+run_kind_stage_replay_case() {
+  local event_file=$1
+  local kind=$2
+  run_stage_replay_leg "$event_file" native_release "native_release_$kind" \
+    "stage_replay_native_release_$kind" "stage_replay_native_release_$kind" \
+    "$fixture_root/stage-replay-native-release-$kind/native_release/config.json"
 }
 
 run_stage_replay_cases() {
@@ -2423,6 +2587,10 @@ v2_marker_reader_events="$fixture_root/linux-v2-native-marker-reader.json"
 v2_synthetic_goal_cleanup_events="$fixture_root/linux-v2-synthetic-goal-cleanup.json"
 v2_peer_negative_pi_events="$fixture_root/linux-v2-peer-negative-pi.json"
 v2_peer_negative_opencode_events="$fixture_root/linux-v2-peer-negative-opencode.json"
+v2_codex_containment_events="$fixture_root/linux-v2-codex-containment.json"
+v2_codex_stage_replay_events="$fixture_root/linux-v2-codex-stage-replay.json"
+v2_claude_containment_events="$fixture_root/linux-v2-claude-containment.json"
+v2_claude_stage_replay_events="$fixture_root/linux-v2-claude-stage-replay.json"
 case "$fixture_case_set" in
   shared)
     # Legacy Linux owners must fail before effects; installed-v2 positives run separately below.
@@ -2491,6 +2659,14 @@ case "$fixture_case_set" in
     ;;
   ack_loss_launcher_bound)
     run_ack_loss_replay_case "$v2_ack_loss_events" launcher_bound
+    ;;
+  codex_containment)
+    run_native_owner_witness codex_containment "$v2_codex_containment_events"
+    run_kind_stage_replay_case "$v2_codex_stage_replay_events" codex
+    ;;
+  claude_containment)
+    run_native_owner_witness claude_containment "$v2_claude_containment_events"
+    run_kind_stage_replay_case "$v2_claude_stage_replay_events" claude
     ;;
   stale_leaf)
     run_stale_leaf_identity_witness "$v2_stale_leaf_events"

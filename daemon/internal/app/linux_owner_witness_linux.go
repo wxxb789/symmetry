@@ -29,6 +29,7 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/control"
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
+	"github.com/wxxb789/symmetry/daemon/internal/harness/claude"
 	"github.com/wxxb789/symmetry/daemon/internal/harness/codex"
 	"github.com/wxxb789/symmetry/daemon/internal/harness/opencode"
 	"github.com/wxxb789/symmetry/daemon/internal/harness/pi"
@@ -273,6 +274,10 @@ type linuxV2NativeWitnessCodex struct {
 	UsageEvents    uint64 `json:"usage_events"`
 }
 
+type linuxV2NativeWitnessContainment struct {
+	NativeOpenReached bool `json:"native_open_reached"`
+}
+
 type linuxV2NativeWitnessSummary struct {
 	Version                   int                                    `json:"version"`
 	Case                      string                                 `json:"case"`
@@ -304,6 +309,9 @@ type linuxV2NativeWitnessSummary struct {
 	Health                    linuxV2NativeWitnessHealth             `json:"health"`
 	DetachedChild             *linuxV2NativeWitnessDetachedChild     `json:"detached_child,omitempty"`
 	Codex                     *linuxV2NativeWitnessCodex             `json:"codex,omitempty"`
+	NativeBinary              string                                 `json:"native_binary,omitempty"`
+	NativeBinarySHA256        string                                 `json:"native_binary_sha256,omitempty"`
+	Containment               *linuxV2NativeWitnessContainment       `json:"containment,omitempty"`
 }
 
 type linuxV2NativeWitnessStageMarker struct {
@@ -698,6 +706,16 @@ func (witness *linuxV2NativeWitnessRun) updateHealth(update func(*linuxV2NativeW
 }
 
 func (witness *linuxV2NativeWitnessRun) validateFinalSummary() error {
+	if witness.request.Case == "codex_containment" || witness.request.Case == "claude_containment" {
+		if witness.summary.Containment == nil || !witness.summary.Containment.NativeOpenReached {
+			return errors.New("native containment witness did not reach the credential-free native Open boundary")
+		}
+		if !filepath.IsAbs(witness.summary.NativeBinary) ||
+			!strings.HasPrefix(witness.summary.NativeBinarySHA256, "sha256:") ||
+			len(witness.summary.NativeBinarySHA256) != len("sha256:")+64 {
+			return errors.New("native containment witness lacks its exact executable path or digest")
+		}
+	}
 	if witness.request.Case == "stage_replay" {
 		if !linuxV2NativeWitnessValidReleaseState(witness.summary.NativeReleaseState) {
 			return errors.New("stage replay omitted its tri-state native RELEASE assessment")
@@ -776,7 +794,7 @@ func (witness *linuxV2NativeWitnessRun) validateFinalSummary() error {
 		witness.summary.Health.PeerPID != witness.summary.Target.PID || witness.summary.Health.PeerIdentity != witness.summary.Target.Identity) {
 		return errors.New("OpenCode health summary is not bound to the exact target PID and network namespace")
 	}
-	if witness.summary.Harness == config.RuntimeHarnessCodex {
+	if witness.request.Case == "codex_native_turn" {
 		codex := witness.summary.Codex
 		if codex == nil || codex.ResultKind != string(harness.ResultSucceeded) ||
 			codex.SemanticKind != string(protocol.TaskResultCandidateCompletion) ||
@@ -2236,12 +2254,13 @@ func validateLinuxV2NativeWitnessConfig(value config.Config, owner linuxgate.Own
 		return fmt.Errorf("validate strict owner witness config: %w", err)
 	}
 	if value.Runtime.HarnessKind != config.RuntimeHarnessPi && value.Runtime.HarnessKind != config.RuntimeHarnessOpenCode &&
-		value.Runtime.HarnessKind != config.RuntimeHarnessCodex {
-		return errors.New("owner witness config must select pinned Pi, OpenCode, or Codex")
+		value.Runtime.HarnessKind != config.RuntimeHarnessCodex && value.Runtime.HarnessKind != config.RuntimeHarnessClaudeCode {
+		return errors.New("owner witness config must select pinned Pi, OpenCode, Codex, or Claude Code")
 	}
 	if value.Runtime.HarnessKind == config.RuntimeHarnessPi && value.Runtime.HarnessVersion != pi.TestedVersion ||
 		value.Runtime.HarnessKind == config.RuntimeHarnessOpenCode && value.Runtime.HarnessVersion != opencode.TestedVersion ||
-		value.Runtime.HarnessKind == config.RuntimeHarnessCodex && value.Runtime.HarnessVersion != codex.TestedVersion {
+		value.Runtime.HarnessKind == config.RuntimeHarnessCodex && value.Runtime.HarnessVersion != codex.TestedVersion ||
+		value.Runtime.HarnessKind == config.RuntimeHarnessClaudeCode && value.Runtime.HarnessVersion != claude.TestedVersion {
 		return errors.New("owner witness config native harness version differs from the tested release")
 	}
 	profile := value.AgentProfiles[value.Runtime.AgentProfile]
@@ -2289,7 +2308,7 @@ func validateLinuxV2NativeWitnessConfig(value config.Config, owner linuxgate.Own
 		}
 	} else {
 		if profile.ProviderAccess || len(profile.Args) != 0 {
-			return errors.New("OpenCode owner witness cannot enable Pi broker access or unverified argv")
+			return errors.New("non-Pi owner witness cannot enable Pi broker access or unverified argv")
 		}
 	}
 	if owner.Validate() != nil || owner.AUID == 0 || owner.BUID == 0 || owner.AUID == owner.BUID || owner.BGID == 0 {
@@ -2431,16 +2450,40 @@ func validateLinuxV2NativeWitnessRequest(request linuxV2NativeWitnessRequest, va
 func linuxV2NativeWitnessCaseMatches(testCase, harnessKind string) bool {
 	switch testCase {
 	case "stage_replay":
-		return harnessKind == config.RuntimeHarnessPi || harnessKind == config.RuntimeHarnessOpenCode
+		return harnessKind == config.RuntimeHarnessPi || harnessKind == config.RuntimeHarnessOpenCode ||
+			harnessKind == config.RuntimeHarnessCodex || harnessKind == config.RuntimeHarnessClaudeCode
 	case "pi_provider_action", "helper_sigkill_detached_child", "daemon_sigkill_helper_survives_detached_child":
 		return harnessKind == config.RuntimeHarnessPi
 	case "opencode_native_health", "wsl2_denial":
 		return harnessKind == config.RuntimeHarnessOpenCode
 	case "codex_native_turn":
 		return harnessKind == config.RuntimeHarnessCodex
+	case "codex_containment":
+		return harnessKind == config.RuntimeHarnessCodex
+	case "claude_containment":
+		return harnessKind == config.RuntimeHarnessClaudeCode
 	default:
 		return false
 	}
+}
+
+// A containment case proves launch/release/stop/replay/recovery with the exact
+// binary and never starts a billable turn (no owner spend decision exists).
+func (witness *linuxV2NativeWitnessRun) containmentCase() bool {
+	switch witness.request.Case {
+	case "codex_containment", "claude_containment":
+		return true
+	case "stage_replay":
+		return witness.request.Harness == config.RuntimeHarnessCodex || witness.request.Harness == config.RuntimeHarnessClaudeCode
+	default:
+		return false
+	}
+}
+
+func (witness *linuxV2NativeWitnessRun) recordContainmentBoundary() {
+	witness.mu.Lock()
+	defer witness.mu.Unlock()
+	witness.summary.Containment = &linuxV2NativeWitnessContainment{NativeOpenReached: true}
 }
 
 func linuxV2NativeWitnessHoldSupported(stage string) bool {
@@ -2799,7 +2842,7 @@ func (witness *linuxV2NativeWitnessRun) runFresh(ctx context.Context, store jour
 	if err != nil {
 		return err
 	}
-	if err := witness.verifyNativeExecutable(profile, kind); err != nil {
+	if err := witness.verifyNativeExecutable(ctx, profile, kind); err != nil {
 		return err
 	}
 	localNow := time.Now
@@ -2860,7 +2903,7 @@ func (witness *linuxV2NativeWitnessRun) runFresh(ctx context.Context, store jour
 	if err != nil || validateLinuxV2NativeWitnessPath(home) != nil {
 		return errors.Join(errors.New("fixed-B native HOME is outside the isolated owner witness root"), err)
 	}
-	if err := witness.verifyNativeExecutable(profile, kind); err != nil {
+	if err := witness.verifyNativeExecutable(ctx, profile, kind); err != nil {
 		return err
 	}
 	witness.summary.InstalledOwnerVerified = true
@@ -2875,7 +2918,7 @@ func (witness *linuxV2NativeWitnessRun) runFresh(ctx context.Context, store jour
 	return witness.launchNative(ctx, witnessDaemon, store, kind, profile, owner, prepared, grant)
 }
 
-func (witness *linuxV2NativeWitnessRun) verifyNativeExecutable(profile config.AgentProfile, kind harness.Kind) error {
+func (witness *linuxV2NativeWitnessRun) verifyNativeExecutable(ctx context.Context, profile config.AgentProfile, kind harness.Kind) error {
 	if !filepath.IsAbs(profile.Command) || filepath.Clean(profile.Command) != profile.Command {
 		return errors.New("owner witness native executable must be canonical and absolute")
 	}
@@ -2896,6 +2939,15 @@ func (witness *linuxV2NativeWitnessRun) verifyNativeExecutable(profile config.Ag
 	if kind == harness.KindCodex && witness.config.Runtime.HarnessVersion != codex.TestedVersion {
 		return errors.New("Codex owner witness requires the tested release")
 	}
+	if kind == harness.KindClaude && witness.config.Runtime.HarnessVersion != claude.TestedVersion {
+		return errors.New("Claude Code owner witness requires the tested release")
+	}
+	digest, err := harness.HashExecutableFile(ctx, profile.Command)
+	if err != nil {
+		return fmt.Errorf("hash pinned native executable: %w", err)
+	}
+	witness.summary.NativeBinary = profile.Command
+	witness.summary.NativeBinarySHA256 = digest
 	accounts, err := linuxpreflight.VerifyOwnerAccounts(witness.ownerConfig)
 	if err != nil {
 		return err
@@ -3188,7 +3240,7 @@ func (witness *linuxV2NativeWitnessRun) launchNative(
 	if kind == harness.KindPi {
 		startRequest.Context = witness.nativeContext()
 	}
-	if kind == harness.KindCodex {
+	if kind == harness.KindCodex || kind == harness.KindClaude {
 		startRequest.StartProcess = func(startContext context.Context, invocation execution.Invocation, sink execution.Sink) (harness.NativeProcess, error) {
 			process, startErr := daemon.start(startContext, invocation, sink)
 			if process == nil {
@@ -3200,7 +3252,7 @@ func (witness *linuxV2NativeWitnessRun) launchNative(
 				_ = process.Terminate(terminateContext, 0)
 				cancel()
 				_ = process.Wait()
-				return nil, errors.New("Codex owner witness start returned an incompatible process handle")
+				return nil, errors.New("native owner witness start returned an incompatible process handle")
 			}
 			return native, startErr
 		}
@@ -3268,6 +3320,14 @@ func (witness *linuxV2NativeWitnessRun) launchNative(
 				})
 			}
 		}
+	} else if witness.containmentCase() {
+		if startErr != nil {
+			return errors.New("native containment witness transport failed before native Open")
+		}
+		if _, err := staged.Open(startContext); err != nil {
+			return errors.New("open pinned native owner containment session")
+		}
+		witness.recordContainmentBoundary()
 	} else {
 		if startErr != nil {
 			return errors.New("Pi owner witness transport failed before native Open")
@@ -3326,7 +3386,7 @@ func (witness *linuxV2NativeWitnessRun) launchNative(
 	if witness.request.Case == "wsl2_denial" && witness.summary.FailureCategory == "" {
 		return errors.New("WSL2 denial witness did not observe a supported exact peer permission denial")
 	}
-	if kind == harness.KindCodex {
+	if witness.request.Case == "codex_native_turn" {
 		waitContext, waitCancel := context.WithTimeout(context.Background(), 15*time.Second)
 		result, waitErr := session.Wait(waitContext)
 		waitCancel()

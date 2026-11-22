@@ -342,6 +342,54 @@ def compose_refusal(harness: str) -> dict:
     }
 
 
+CONTAINMENT_PINS = {
+    "codex": {
+        "case_set": "codex_containment",
+        "harness": "codex",
+        "native_version": "0.168.0",
+        "native_version_line": "codex-cli 0.168.0",
+        "tree_digest": "sha256:" + "2" * 64,
+        "binary": "/usr/local/bin/codex",
+        "binary_sha256": "a8cb58c528c76e7313d4a70294ec614757b0f4c7bf9683e11c88ecad8c3d421b",
+        "archive_sha256": "3acbff91c0a8e30767d47c8b6941279a603ab4087280aa3e546537cef3622cb8",
+        "witness": "codex_containment/TestProductionLinuxV2CodexNativeContainment.json",
+        "replay": "stage-replay/TestProductionLinuxV2StageCrashReplayMatrix_native_release_codex.json",
+        "exported": ("codex-native-containment.json", "codex-stage-crash-replay-native-release.json"),
+    },
+    "claude_code": {
+        "case_set": "claude_containment",
+        "harness": "claude_code",
+        "native_version": "2.1.323",
+        "native_version_line": "2.1.323 (Claude Code)",
+        "tree_digest": "sha256:" + "3" * 64,
+        "binary": "/usr/local/bin/claude",
+        "binary_sha256": "604d29a6869409106b6a1110bdadcc8b72e8654a5a865d23258f938a696e348e",
+        "archive_sha256": "522255678548859b9799b7b098c03a3aa286c9a9ede01957e35f4713ccc43631",
+        "witness": "claude_containment/TestProductionLinuxV2ClaudeNativeContainment.json",
+        "replay": "stage-replay/TestProductionLinuxV2StageCrashReplayMatrix_native_release_claude.json",
+        "exported": ("claude-native-containment.json", "claude-stage-crash-replay-native-release.json"),
+    },
+}
+
+
+def containment_witness(kind: str) -> dict:
+    pin = CONTAINMENT_PINS[kind]
+    return {
+        "version": 1,
+        "case": pin["case_set"],
+        "harness": pin["harness"],
+        "native_version": pin["native_version"],
+        "installed_owner_verified": True,
+        "native_binary": pin["binary"],
+        "native_binary_sha256": "sha256:" + pin["binary_sha256"],
+        "native_version_line": pin["native_version_line"],
+        "subject": {"tree_digest": pin["tree_digest"]},
+        "containment": {"native_open_reached": True},
+        "no_native_fallback": False,
+        "owner_witness_outcome": "passed",
+    }
+
+
 class ExporterTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -370,6 +418,20 @@ class ExporterTest(unittest.TestCase):
             path = source / name / "witness-evidence.json"
             originals[path] = self.write_json(path, legacy_fixture(name, raw_secret))
         return originals
+
+    def populate_containment(self, source: pathlib.Path, kind: str) -> None:
+        pin = CONTAINMENT_PINS[kind]
+        self.write_json(source / pin["witness"], containment_witness(kind))
+        self.write_json(
+            source / pin["replay"],
+            {
+                "version": 1,
+                "case": "stage_replay",
+                "harness": pin["harness"],
+                "stage": "native_release",
+                "status": "passed",
+            },
+        )
 
     def test_legacy_projects_actual_shapes_without_mutating_or_leaking_raw_inputs(self) -> None:
         source = self.private_dir("source")
@@ -1450,6 +1512,142 @@ class ExporterTest(unittest.TestCase):
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("one exact case set", result.stderr)
+
+    def test_manual_containment_export_records_pinned_native_binary(self) -> None:
+        for index, kind in enumerate(("codex", "claude_code")):
+            with self.subTest(kind=kind):
+                pin = CONTAINMENT_PINS[kind]
+                source = self.private_dir(f"containment-source-{index}")
+                receipts = self.private_dir(f"containment-receipts-{index}")
+                output = self.private_dir(f"containment-output-{index}")
+                self.populate_containment(source, kind)
+                result = citest.run_gate(
+                    SCRIPT,
+                    "manual",
+                    str(output),
+                    "1" * 40,
+                    "passed",
+                    "--witness-root",
+                    str(source),
+                    "--receipt-root",
+                    str(receipts),
+                    "--case-set",
+                    pin["case_set"],
+                    "--native-kind",
+                    kind,
+                    "--native-binary",
+                    pin["binary"],
+                    "--native-binary-sha256",
+                    "sha256:" + pin["binary_sha256"],
+                    "--native-archive-sha256",
+                    "sha256:" + pin["archive_sha256"],
+                    "--native-version-line",
+                    pin["native_version_line"],
+                    "--source-tree-digest",
+                    pin["tree_digest"],
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                manifest = json.loads((output / "manifest.json").read_text())
+                self.assertEqual(manifest["case_set"], pin["case_set"])
+                self.assertEqual(manifest["status"], "passed")
+                self.assertEqual(
+                    manifest["native_binary"],
+                    {
+                        "kind": kind,
+                        "path": pin["binary"],
+                        "sha256": "sha256:" + pin["binary_sha256"],
+                        "archive_sha256": "sha256:" + pin["archive_sha256"],
+                        "version": pin["native_version_line"],
+                    },
+                )
+                self.assertEqual(manifest["containment"], {"native_open_reached": True})
+                self.assertEqual(manifest["source_tree_digest"], pin["tree_digest"])
+                self.assertEqual({entry["file"] for entry in manifest["files"]}, set(pin["exported"]))
+                for name in pin["exported"]:
+                    self.assertTrue((output / name).is_file())
+
+    def test_manual_containment_digest_mismatch_refuses_publication(self) -> None:
+        pin = CONTAINMENT_PINS["codex"]
+        source = self.private_dir("mismatch-source")
+        receipts = self.private_dir("mismatch-receipts")
+        output = self.private_dir("mismatch-output")
+        self.populate_containment(source, "codex")
+        result = citest.run_gate(
+            SCRIPT,
+            "manual",
+            str(output),
+            "1" * 40,
+            "passed",
+            "--witness-root",
+            str(source),
+            "--receipt-root",
+            str(receipts),
+            "--case-set",
+            pin["case_set"],
+            "--native-kind",
+            "codex",
+            "--native-binary",
+            pin["binary"],
+            "--native-binary-sha256",
+            pin["binary_sha256"],
+            "--native-archive-sha256",
+            "sha256:" + pin["archive_sha256"],
+            "--native-version-line",
+            pin["native_version_line"],
+            "--source-tree-digest",
+            pin["tree_digest"],
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("--native-binary-sha256", result.stderr)
+        self.assertFalse((output / "manifest.json").exists())
+
+    def test_manual_native_arguments_require_all_five_and_matching_case_set(self) -> None:
+        pin = CONTAINMENT_PINS["codex"]
+        source = self.private_dir("native-args-source")
+        receipts = self.private_dir("native-args-receipts")
+        complete = (
+            "--native-kind",
+            "codex",
+            "--native-binary",
+            pin["binary"],
+            "--native-binary-sha256",
+            "sha256:" + pin["binary_sha256"],
+            "--native-archive-sha256",
+            "sha256:" + pin["archive_sha256"],
+            "--native-version-line",
+            pin["native_version_line"],
+        )
+        cases = (
+            ("codex_containment", ("--native-kind", "codex"), "requires --native-kind"),
+            ("claude_containment", complete, "requires --case-set codex_containment"),
+            ("claude_containment", ("--native-kind", "opencode", *complete[2:]), "not a containment-capable"),
+            ("codex_containment", complete, "requires --source-tree-digest"),
+            (
+                "codex_containment",
+                (*complete, "--source-tree-digest", "sha256:short"),
+                "must be a sha256:<64 hex> tree digest",
+            ),
+        )
+        for index, (case_set, native_arguments, expected) in enumerate(cases):
+            with self.subTest(case_set=case_set, native_arguments=native_arguments):
+                output = self.private_dir(f"native-args-output-{index}")
+                result = citest.run_gate(
+                    SCRIPT,
+                    "manual",
+                    str(output),
+                    "1" * 40,
+                    "passed",
+                    "--witness-root",
+                    str(source),
+                    "--receipt-root",
+                    str(receipts),
+                    "--case-set",
+                    case_set,
+                    *native_arguments,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(expected, result.stderr)
+                self.assertEqual(list(output.iterdir()), [])
 
 
 if __name__ == "__main__":

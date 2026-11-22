@@ -107,6 +107,8 @@ jobs:
           evidence_root="$RUNNER_TEMP/linux-v2-native-evidence-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           case_sets=(
             shared
+            codex_containment
+            claude_containment
             synthetic_goal_cleanup
             stage_replay_create_started
             stage_replay_leaf_bound
@@ -141,6 +143,8 @@ jobs:
           retention-days: 14
           path: |
             ${{ runner.temp }}/linux-v2-native-evidence-${{ github.run_id }}-${{ github.run_attempt }}/shared/*.json
+            ${{ runner.temp }}/linux-v2-native-evidence-${{ github.run_id }}-${{ github.run_attempt }}/codex_containment/*.json
+            ${{ runner.temp }}/linux-v2-native-evidence-${{ github.run_id }}-${{ github.run_attempt }}/claude_containment/*.json
             ${{ runner.temp }}/linux-v2-native-evidence-${{ github.run_id }}-${{ github.run_attempt }}/synthetic_goal_cleanup/*.json
             ${{ runner.temp }}/linux-v2-native-evidence-${{ github.run_id }}-${{ github.run_attempt }}/stage_replay_create_started/*.json
             ${{ runner.temp }}/linux-v2-native-evidence-${{ github.run_id }}-${{ github.run_attempt }}/stage_replay_leaf_bound/*.json

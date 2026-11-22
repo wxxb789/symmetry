@@ -32,7 +32,7 @@ defmodule LinuxV2ControlClaimFixture do
     "native_release",
     "journal_cleared"
   ]
-  @expected_fixture_runs 44
+  @expected_fixture_runs 48
 
   @cases [
     {"pi_provider_action", "pi-native", :pi,
@@ -42,7 +42,11 @@ defmodule LinuxV2ControlClaimFixture do
     {"helper_sigkill_detached_child", "pi-native", :pi,
      "Use the real symmetry_resource_sync tool, then create and commit one small file for the detached-child helper crash witness. Do not publish."},
     {"daemon_sigkill_helper_survives_detached_child", "pi-native", :pi,
-     "Use the real symmetry_resource_sync tool, then create and commit one small file for the detached-child daemon crash witness. Do not publish."}
+     "Use the real symmetry_resource_sync tool, then create and commit one small file for the detached-child daemon crash witness. Do not publish."},
+    {"codex_containment", "codex-native", :codex,
+     "Use the real codex runtime for the Linux v2 containment boundary witness. Do not publish."},
+    {"claude_containment", "claude-native", :claude_code,
+     "Use the real Claude Code runtime for the Linux v2 containment boundary witness. Do not publish."}
   ] ++
     Enum.map(@stage_replay_holds, fn hold ->
       {"stage_replay_#{hold}", "opencode-native", :opencode,
@@ -84,7 +88,11 @@ defmodule LinuxV2ControlClaimFixture do
       {"stage_replay_helper_launcher_response_loss", "opencode-native", :opencode,
        "Use the real OpenCode runtime for the Linux v2 helper launcher-response-loss replay witness. Do not publish."},
       {"stage_replay_unprovisioned_refusal", "opencode-native", :opencode,
-       "Use the real OpenCode runtime for the unprovisioned Linux owner refusal witness. Do not publish."}
+       "Use the real OpenCode runtime for the unprovisioned Linux owner refusal witness. Do not publish."},
+      {"stage_replay_native_release_codex", "codex-native", :codex,
+       "Use the real codex runtime for the Linux v2 native-release crash-replay witness. Do not publish."},
+      {"stage_replay_native_release_claude", "claude-native", :claude_code,
+       "Use the real Claude Code runtime for the Linux v2 native-release crash-replay witness. Do not publish."}
     ]
 
   def run!("prepare", [output_path, repository_ref, repository_owner, commit, tree_digest]) do
@@ -177,7 +185,12 @@ defmodule LinuxV2ControlClaimFixture do
     end
     {^case_name, profile, harness, _description} =
       Enum.find(@cases, &(elem(&1, 0) == case_name)) || raise "unknown owner-witness case"
-    request_case = if String.starts_with?(case_name, "stage_replay_"), do: "stage_replay", else: case_name
+    request_case =
+      cond do
+        case_name in ["stage_replay_native_release_codex", "stage_replay_native_release_claude"] -> case_name
+        String.starts_with?(case_name, "stage_replay_") -> "stage_replay"
+        true -> case_name
+      end
 
     item = Map.fetch!(fixture["work_items"], case_name)
     task_id = launch_one_shot_work_item!(item["work_item_id"], case_name)
