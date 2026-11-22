@@ -6,7 +6,15 @@ import (
 )
 
 // Run does not close the store.
-func withStore(store *state.Store) Options { return func(value *options) { value.store = store } }
+func withStore(store *state.Store) Options {
+	return func(value *options) {
+		if store == nil {
+			value.store = nil
+			return
+		}
+		value.store = store
+	}
+}
 
 func withControl(client ControlAPI) Options { return func(value *options) { value.control = client } }
 
