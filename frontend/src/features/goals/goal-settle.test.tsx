@@ -51,10 +51,11 @@ async function observeFor(ms: number) {
   await act(async () => { await settled.promise; });
 }
 
-// A cleared interval yields at most an in-flight read; a live 120 ms cadence yields ~3.
+// A cleared interval yields at most an in-flight read; a live 120 ms cadence yields ~6 in this
+// window, so the `< 3` allowance keeps three reads of margin against a live interval.
 async function expectReadsStopped(readCount: () => number) {
   const before = readCount();
-  await observeFor(400);
+  await observeFor(800);
   expect(readCount() - before).toBeLessThan(3);
 }
 
@@ -103,7 +104,7 @@ describe("goal acceptance settle", () => {
     await user.click(screen.getByRole("button", { name: "Send Pause" }));
     expect(await screen.findByText("Pause accepted by the server.", {}, { timeout: NOTICE_WAIT_MS })).toBeVisible();
     expect(movedReads).toBe(2);
-    expect(Date.now() - sentAt).toBeLessThan(2_000);
+    expect(Date.now() - sentAt).toBeLessThan(2_400);
     expect(invalidated).toHaveBeenCalledWith({ queryKey: goalEventsReadKey(goalId) });
     expect(invalidated).toHaveBeenCalledWith({ queryKey: attentionReadKey() });
 
@@ -279,9 +280,9 @@ describe("goal acceptance settle", () => {
     await user.click(screen.getByRole("button", { name: "Pause" }));
     await user.type(screen.getByLabelText("Reason"), "Operator pause");
     await user.click(screen.getByRole("button", { name: "Send Pause" }));
-    expect(await screen.findByText("Pause accepted by the server.", {}, { timeout: 2_000 })).toBeVisible();
+    expect(await screen.findByText("Pause accepted by the server.", {}, { timeout: 2_400 })).toBeVisible();
     expect(pauseReads).toBeGreaterThanOrEqual(2);
-    expect(Date.now() - pauseSentAt).toBeLessThan(2_000);
+    expect(Date.now() - pauseSentAt).toBeLessThan(2_400);
   });
 
   it("keeps the settle's reads flowing while the document is unfocused", async () => {
@@ -315,7 +316,7 @@ describe("goal acceptance settle", () => {
       await user.click(screen.getByRole("button", { name: "Send Pause" }));
       expect(await screen.findByText("Pause accepted by the server.", {}, { timeout: NOTICE_WAIT_MS })).toBeVisible();
       expect(movedReads).toBe(2);
-      expect(Date.now() - sentAt).toBeLessThan(2_000);
+      expect(Date.now() - sentAt).toBeLessThan(2_400);
     } finally {
       focusManager.setFocused(true);
     }

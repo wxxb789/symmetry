@@ -26,7 +26,7 @@ in `pnpm-workspace.yaml` pinning exactly those three to `6.45.1`/`5.1.0`/`3.0.5`
 | --- | --- | ---: | --- |
 | `frontend/src/features/goals/detail.tsx` | edited | 757 → 778 | the settle conversion only: the goal query's `refetchInterval` while a settle is outstanding and `refetchIntervalInBackground` (`:82-83`), the outstanding-settle count (`:78-79`, incremented/decremented at `:92`/`:96`), `goalMarker` (`:47-49`), `waitForGoalSettle` (`:51-73`), `settleGoalRead` (`:91-98`), the two call sites' compressed comments (`:171`, `:227`) |
 | `frontend/vitest.config.ts` | edited | 39 → 41 | the explicit `testTimeout: 15_000` (`:24-25`) |
-| `frontend/src/features/goals/goal-settle.test.tsx` | new | 0 → 337 | 8 cases: the six settle cases + the two budget-guard cases (the apply pass of §12 added the overlapping-settle and unfocused-document cases and extended cases 1 and 4) |
+| `frontend/src/features/goals/goal-settle.test.tsx` | new | 0 → 338 | 8 cases: the six settle cases + the two budget-guard cases (the apply pass of §12 added the overlapping-settle and unfocused-document cases and extended cases 1 and 4; the fix pass of §13 widened the shared reads-stopped probe and unified the before-bound thresholds) |
 | `frontend/src/features/goals/goal-attention.test.tsx` | **unedited** | 1,321 | 29 case names, the eight 5,000 ms waits and the seven `}, 15_000)` budgets byte-identical |
 | `frontend/src/tool-cache-config.test.ts` | **unedited** | 71 | oracle; its two cases keep their own 30,000 ms budgets |
 | `frontend/src/features/connections/connections.test.tsx` | **unedited** | — | oracle; its three wait sites keep 5,000 ms under the new 15,000 ms default |
@@ -105,7 +105,8 @@ transient attempt failures. Neither confirms nor aborts the wait.
 
 ## 5. The new settle cases (and the base characterization observed first)
 
-`frontend/src/features/goals/goal-settle.test.tsx` (6 cases):
+`frontend/src/features/goals/goal-settle.test.tsx` — the implement stage's 6 cases (4 settle plus
+2 budget); the delivered file carries 8 — §1, §12:
 
 | case | pins | base run (before the source change) | head run |
 | --- | --- | --- | --- |
@@ -121,10 +122,11 @@ Base run of the final artifact (sources restored to `42afb56c`, test file as del
 12,061 ms in the full-suite json (isolated runs: 9,111 ms and 14,951 ms warm; 24–35 s when the cold
 config import lands in its worker — the config case's own 30 s budget covers it).
 
-The apply pass (§12) added case 5 (overlapping settles) and case 6 (unfocused document) and
-extended case 1 (the unrelated-cache-success injection) and case 4 (the pre-notice invalidation
-assertions). The head/base columns above are the implement-stage runs of the six cases as then
-delivered; §12 carries the apply-stage runs of all eight.
+The apply pass (§12) added the overlapping-settle and unfocused-document cases (delivered cases 5
+and 6, after this table's budget rows) and extended case 1 (the unrelated-cache-success injection)
+and case 4 (the pre-notice invalidation assertions). The head/base columns above are the
+implement-stage runs of the six cases as then delivered; §12 carries the apply-stage runs of all
+eight.
 
 ## 6. Per-site wait-budget table (site → budget → enclosing budget)
 
@@ -142,15 +144,15 @@ delivered; §12 carries the apply-stage runs of all eight.
 | 10 | `connections.test.tsx:918` | 5,000 | 15,000 (global; was 5,000) | yes |
 | 11 | `connections.test.tsx:935` | 5,000 | 15,000 (global; was 5,000) | yes |
 | 12 | `chat.test.tsx:1276` | 8,000 | 20,000 (`}, 20_000)` `:1283`) | yes |
-| 13 | `goal-settle.test.tsx` `NOTICE_WAIT_MS` (`:16`; the notice waits and case 4's read wait) | 5,000 | 15,000 (global; asserted at runtime, `:327-328`) | yes |
-| 14 | `goal-settle.test.tsx` `FOLLOW_UP_WAIT_MS` (`:17`) | 4,000 | 15,000 (global; asserted at runtime, `:327-328`) | yes |
+| 13 | `goal-settle.test.tsx` `NOTICE_WAIT_MS` (`:16`; the notice waits and case 4's read wait) | 5,000 | 15,000 (global; asserted at runtime, `:328-329`) | yes |
+| 14 | `goal-settle.test.tsx` `FOLLOW_UP_WAIT_MS` (`:17`) | 4,000 | 15,000 (global; asserted at runtime, `:328-329`) | yes |
 | — | `tool-cache-config.test.ts:48,59` (oracle) | no inner wait | 30,000 per case (sized from the cold import) | n/a |
-| — | `goal-settle.test.tsx:331` config case | no inner wait | 30,000 (`CONFIG_IMPORT_BUDGET_MS`) | n/a |
+| — | `goal-settle.test.tsx:332` config case | no inner wait | 30,000 (`CONFIG_IMPORT_BUDGET_MS`) | n/a |
 
 The budget rule's runnable guards: `task.timeout === 15_000` for a case without an explicit budget
 (reddens when the option is removed, mutation (c)), every wait budget of the new file asserted
-strictly below that runtime number (`:327-328`), and the parsed `vitest.config.test?.testTimeout`
-(`:335`). The eight `goal-attention` and one `chat` sites keep their numbers and their explicit
+strictly below that runtime number (`:328-329`), and the parsed `vitest.config.test?.testTimeout`
+(`:336`). The eight `goal-attention` and one `chat` sites keep their numbers and their explicit
 case budgets; the three `connections` sites are resolved by the global default with no site edit.
 Not covered by a runnable check: the per-case-budget containment of the eight `goal-attention`
 sites (their case budgets are explicit and this table records them; a source-text scan was
@@ -240,7 +242,7 @@ no converted assertion needs a mutation record.
   the parsed global option and the new file's own waits.
 - **Cadence pin strength (apply pass, simplify finding 9).** The frozen 120 ms cadence is pinned
   loosely: a 120 → 240 ms variant passes all eight cases (case 1 confirms in ~0.96 s against its
-  2,000 ms assertion), and only roughly 2× reddens case 1, so the effective pin is "much faster
+  2,400 ms assertion), and only roughly 2× reddens case 1, so the effective pin is "much faster
   than the 2.5 s bound". No timer-exact test was added (flake-prone); recorded as the residual.
 - **Unfocused document (apply pass, simplify finding 11).** The interval reads while the document
   is unfocused (`refetchIntervalInBackground: true`), as base's private loop did; jsdom observes
@@ -379,3 +381,60 @@ unmount). Cases 1–3 stay green, and cases 5 and 6 are green at base too: the t
 pre-existing (frozen) semantics — the base's independent loops confirm an overlapping settle and
 keep reading while the document is unfocused — so the counted flag and
 `refetchIntervalInBackground` restore base behavior rather than adding to it.
+
+## 13. Fix-stage re-verification (2026-11-22, fourth pass; review findings REV-A01/A02/A03)
+
+Scope: the fix stage's three accepted P3 findings — the shared reads-stopped probe's window
+(`expectReadsStopped`: 400 → 800 ms, REV-A01), the before-bound thresholds (2,000 → 2,400 ms at
+the four discriminating sites: the moved-marker case's elapsed assertion, the overlapping-settle
+case's notice wait and elapsed assertion, and the unfocused case's elapsed assertion, REV-A02),
+and this record's §5 staging label (now marked as the implement stage's 6 cases, with the apply
+pass's additions numbered in the delivered order, REV-A03). The pass changed only the test file
+and this record (`git diff --numstat`: test file +7/−6, record +71/−12); the probe comment carries
+the recalculated arithmetic (a live 120 ms cadence yields ~6 reads in the 800 ms window).
+
+Bytes under verification (final fix-stage bytes; the mutant flips below were applied alone to
+them and reverted under `sha256sum -c` against a byte backup):
+
+| file | lines | sha256 |
+| --- | ---: | --- |
+| `frontend/src/features/goals/detail.tsx` | 778 | `72863f5f358498344c12f422f4f29c68a147791bfe8df9f13162b26b2546cdb0` (unchanged from §12) |
+| `frontend/src/features/goals/goal-settle.test.tsx` | 338 | `a9629e2b4cdef53f6a426ddd148fb7ed21da8400fa59a8924dca6b3f99880ca5` |
+| `frontend/vitest.config.ts` | 41 | `661cbe330e5c9c16ed088911f81708648abd17935fad2768383765b3d2cbc0df` (unchanged from §12) |
+
+§12's `goal-settle.test.tsx` hash and the window numbers recorded in §12.2 (d)/(h)/(k) bind the
+pre-fix bytes; the rows below re-run every probe whose window changed.
+
+### 13.1 Before-state proof of REV-A01 (observed red before the edit)
+
+Mutant (h) applied alone to the pre-fix tree (§12 bytes): `vitest run
+src/features/goals/goal-settle.test.tsx` → **2 failed / 6 passed**, rc 1, case 1 and case 2
+`expected 3 to be less than 3` — a live 120 ms cadence produced exactly 3 reads in the 400 ms
+window, the zero-margin boundary the finding names (reproducing §12.2 (h)).
+
+### 13.2 Gate rows (foreground, serialized; exit codes)
+
+| # | command (cwd `frontend`; workspace-resolved binaries) | exit | result |
+| --- | --- | ---: | --- |
+| 1 | `node ../node_modules/typescript/bin/tsc --noEmit` | 0 | no output; 5 s |
+| 2 | `node node_modules/eslint/bin/eslint.js . --max-warnings 229` | 0 | 221 warnings, 0 errors (count unchanged from §12.1); 67 s |
+| 3 | `node node_modules/vitest/vitest.mjs run src/features/goals/goal-attention.test.tsx` | 0 | 29 passed (29); 33 s |
+| 4 | `node node_modules/vitest/vitest.mjs run src/features/goals/goal-settle.test.tsx` | 0 | 8 passed (8); 23 s |
+| 5 | `node node_modules/vitest/vitest.mjs run src/tool-cache-config.test.ts` | 0 | 2 passed (2); 8 s |
+| 6 | `node node_modules/vitest/vitest.mjs run src/features/chat/chat.test.tsx src/features/connections/connections.test.tsx` | 0 | 105 passed (105); 38 s |
+| 7 | `node node_modules/vitest/vitest.mjs run` (full suite) | 0 | 25 files / 613 passed (613); 69 s |
+| 8 | `git diff --check`; `git status --porcelain -uall` | 0 | clean; exactly this record and the test file modified |
+| 9 | DLP: profile-path and host-absolute-path greps over the added lines of the branch and working diffs and over all five delivered files; backslash-u over added lines | 1 | no matches (exit 1 = clean) |
+
+### 13.3 Mutant re-runs (fix-stage bytes; each applied alone, run, reverted)
+
+`vitest run src/features/goals/goal-settle.test.tsx` on each flip; rc 1 in every row.
+
+| mutant | flip | result |
+| --- | --- | --- |
+| (h) | no pending-clear (the interval stays live; §12.2 (h) form) | 2 failed / 6 passed: case 1 and case 2 `expected 5` / `expected 6 to be less than 3` — the probe reddens 2–3 reads clear of the `< 3` allowance (pre-fix: exactly 3) |
+| (k) | the pending count collapsed to one boolean flag | 1 failed / 7 passed: case 5 — the notice does not arrive inside the widened 2,400 ms window (the second settle fell to its bound) |
+| (d) | `refetchInterval: false` | 6 failed / 2 passed: cases 1–4, case 5 (notice not inside its 2,400 ms window), case 6 |
+
+Counts: the settle file stays at 8 cases and the full suite at 613 (no case added, renamed or
+removed; no oracle file touched by this pass).
