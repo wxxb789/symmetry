@@ -354,4 +354,4 @@ plus the round-2 working-tree changes; committed as the merge commit
 | `scripts/ci/test-check-record-cleanliness.py` | 0 | `Ran 19 tests in 70.890s` / `OK` |
 | `--help` comparison, four runtime-docstring scripts | 0 | identical on base and head |
 | `git diff --check` | 0 | 0 lines |
-| added-side host scans | — | `users/` 0, `/Users/` 0, case-sensitive profile name 0; the case-insensitive profile-name pattern matches only `localHandleID` identifiers (present at base) |
+| added-side host scans | — | both case-insensitive host-path component patterns 0, case-sensitive profile name 0; the case-insensitive profile-name pattern matches only `localHandleID` identifiers (present at base); the record itself names no pattern (fix-stage R8 rule) |

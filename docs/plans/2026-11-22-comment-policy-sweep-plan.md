@@ -793,9 +793,10 @@ warnings)` (the count moved from 227 through #220's merged frontend changes; the
 1.7.12 binary; the mise shim is unversioned on this host) → exit 0; the six touched
 `scripts/ci/test-*.py` suites → exit 0; the `--help` comparison for the four runtime-docstring
 scripts → identical output on base and head; `git diff --check` → 0 lines; added-side host-path
-scans → 0 (`users/`, `/Users/` and case-sensitive profile name; the case-insensitive
-profile-name pattern matches only `localHandleID` identifiers). Verbatim table: evidence record
-§9.
+scans → 0 (both case-insensitive host-path component patterns and the case-sensitive profile
+name; the case-insensitive profile-name pattern matches only `localHandleID` identifiers, which
+are present at base — the two mid-stage hits were this paragraph and evidence §9 quoting the
+patterns themselves, reworded as in fix-stage R8). Verbatim table: evidence record §9.
 
 ### 11.6 Fix-stage record (review r1, 2026-11-22)
 
