@@ -221,7 +221,7 @@ defmodule SymmetryControl.Goals.EligibilityTest do
     assert Eligibility.intersect_validation_binding_runtime_ids(duplicated) == :invalid
   end
 
-  test "value, valid_uuid?, map_key?, and exact_map_keys? share string keys" do
+  test "value, valid_uuid?, and exact_map_keys? share string keys" do
     uuid = Ecto.UUID.generate()
     map = %{"outer" => %{inner: 1}, "atom_key" => 2}
 
@@ -233,11 +233,6 @@ defmodule SymmetryControl.Goals.EligibilityTest do
     assert Eligibility.valid_uuid?(uuid)
     assert Eligibility.valid_uuid?(String.upcase(uuid))
     refute Eligibility.valid_uuid?("not-a-uuid")
-
-    assert Eligibility.map_key?(map, :atom_key)
-    assert Eligibility.map_key?(map, :outer)
-    refute Eligibility.map_key?(map, :absent)
-    refute Eligibility.map_key?(nil, :outer)
 
     assert Eligibility.exact_map_keys?(%{:a => 1, "b" => 2}, ["a", "b"])
     refute Eligibility.exact_map_keys?(%{"a" => 1}, ["a", "b"])

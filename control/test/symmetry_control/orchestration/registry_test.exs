@@ -96,6 +96,15 @@ defmodule SymmetryControl.Orchestration.RegistryTest do
     refute Registry.jsonb_compatible?({:tuple, 1})
   end
 
+  test "map_key? reads atom and string keys and rejects non-maps" do
+    map = %{"outer" => %{inner: 1}, "atom_key" => 2}
+
+    assert Registry.map_key?(map, :atom_key)
+    assert Registry.map_key?(map, :outer)
+    refute Registry.map_key?(map, :absent)
+    refute Registry.map_key?(nil, :outer)
+  end
+
   test "heartbeat rejects a stale runtime epoch with :ownership_lost" do
     {machine, _token} = enroll_machine("heartbeat")
     runtime = register_runtime(machine, @now)

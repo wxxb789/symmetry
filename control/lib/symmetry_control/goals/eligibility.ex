@@ -288,12 +288,6 @@ defmodule SymmetryControl.Goals.Eligibility do
   end
 
   @doc false
-  def map_key?(map, key) when is_map(map),
-    do: Map.has_key?(map, key) or Map.has_key?(map, Atom.to_string(key))
-
-  def map_key?(_map, _key), do: false
-
-  @doc false
   def valid_uuid?(value) when is_binary(value), do: match?({:ok, _}, Ecto.UUID.cast(value))
   def valid_uuid?(_), do: false
 

@@ -10,7 +10,6 @@ defmodule SymmetryControl.Orchestration.Registry do
   import SymmetryControl.Goals.Eligibility,
     only: [
       exact_map_keys?: 2,
-      map_key?: 2,
       valid_uuid?: 1,
       value: 2,
       value: 3
@@ -40,24 +39,9 @@ defmodule SymmetryControl.Orchestration.Registry do
   alias SymmetryControl.Orchestration.Runtime
   alias SymmetryControl.Orchestration.Task
 
-  @doc """
-  Whether `kind` names a native harness kind.
-
-  One list, two readers: native Goal admission selects runtimes on
-  `@native_harness_kinds` in `next_assignable_legacy_task_and_runtime/1`, and
-  `SymmetryControl.Chat` asks this predicate to decide whether a Chat-launched
-  (goal-less) start is admitted through the adapter operations rather than the
-  legacy supervisory flag. The Runtime and HarnessSession schema inclusions and
-  the database check constraints restate that vocabulary instead of reading it;
-  `SymmetryControl.NativeHarnessKindBindingTest` holds those restatements to
-  `native_harness_kinds/0`.
-  """
   @spec native_harness_kind?(term()) :: boolean()
   def native_harness_kind?(kind), do: kind in native_harness_kinds()
 
-  @doc """
-  The native harness kinds `native_harness_kind?/1` admits.
-  """
   @spec native_harness_kinds() :: [String.t()]
   def native_harness_kinds, do: @native_harness_kinds
 
@@ -264,7 +248,7 @@ defmodule SymmetryControl.Orchestration.Registry do
 
   def heartbeat(_, _, _, _), do: {:error, :invalid_request}
 
-  def heartbeat_runtime(runtime_id, runtime_epoch, opts) do
+  defp heartbeat_runtime(runtime_id, runtime_epoch, opts) do
     Repo.transaction(fn ->
       runtime = lock_runtime(runtime_id)
       current = now(opts)
@@ -363,7 +347,7 @@ defmodule SymmetryControl.Orchestration.Registry do
     %{assignments: assignments, commands: commands, server_time: current}
   end
 
-  def valid_runtime_specification?(specification) when is_map(specification) do
+  defp valid_runtime_specification?(specification) when is_map(specification) do
     capabilities = value(specification, :capabilities, %{})
 
     is_map(capabilities) and jsonb_compatible?(capabilities) and
@@ -377,11 +361,11 @@ defmodule SymmetryControl.Orchestration.Registry do
       valid_runtime_adapter_metadata?(specification, capabilities)
   end
 
-  def valid_runtime_specification?(_), do: false
+  defp valid_runtime_specification?(_), do: false
 
   # A pre-Goal release can omit contracts entirely: only old registrations without adapter
   # metadata may use the legacy capability subset; any schema, rollout or adapter stays strict.
-  def valid_runtime_capabilities_schema?(specification, capabilities) do
+  defp valid_runtime_capabilities_schema?(specification, capabilities) do
     schema_root =
       :symmetry_control
       |> Application.fetch_env!(:contracts)
@@ -396,7 +380,7 @@ defmodule SymmetryControl.Orchestration.Registry do
     end
   end
 
-  def legacy_contract_fallback?(specification, capabilities) do
+  defp legacy_contract_fallback?(specification, capabilities) do
     goals_rollout_disabled?() and not runtime_metadata_present?(specification) and
       Enum.all?(capabilities, fn {key, value} ->
         key in [
@@ -412,20 +396,20 @@ defmodule SymmetryControl.Orchestration.Registry do
       end)
   end
 
-  def goals_rollout_disabled? do
+  defp goals_rollout_disabled? do
     goals = Application.get_env(:symmetry_control, :goals) || []
     Keyword.get(goals, :rollout_enabled, false) != true
   end
 
-  def valid_runtime_repository_resource?(specification) do
+  defp valid_runtime_repository_resource?(specification) do
     not map_key?(specification, :repository_resource_id) or
       is_nil(value(specification, :repository_resource_id)) or
       valid_uuid?(value(specification, :repository_resource_id))
   end
 
-  def ensure_runtime_repository_resource!(nil), do: :ok
+  defp ensure_runtime_repository_resource!(nil), do: :ok
 
-  def ensure_runtime_repository_resource!(resource_id) do
+  defp ensure_runtime_repository_resource!(resource_id) do
     resource =
       Repo.one(
         from resource in ProjectResource,
@@ -436,13 +420,13 @@ defmodule SymmetryControl.Orchestration.Registry do
     unless resource.kind == "repository", do: rollback(:invalid_request)
   end
 
-  def ensure_runtime_repository_binding_change_safe!(nil, _repository_resource_id), do: :ok
+  defp ensure_runtime_repository_binding_change_safe!(nil, _repository_resource_id), do: :ok
 
-  def ensure_runtime_repository_binding_change_safe!(runtime, repository_resource_id)
-      when runtime.repository_resource_id == repository_resource_id,
-      do: :ok
+  defp ensure_runtime_repository_binding_change_safe!(runtime, repository_resource_id)
+       when runtime.repository_resource_id == repository_resource_id,
+       do: :ok
 
-  def ensure_runtime_repository_binding_change_safe!(runtime, _repository_resource_id) do
+  defp ensure_runtime_repository_binding_change_safe!(runtime, _repository_resource_id) do
     active_goal_run? =
       Repo.exists?(
         from run in Run,
@@ -470,7 +454,7 @@ defmodule SymmetryControl.Orchestration.Registry do
     end
   end
 
-  def valid_runtime_adapter_metadata?(specification, capabilities) do
+  defp valid_runtime_adapter_metadata?(specification, capabilities) do
     adapter_present? = map_key?(capabilities, :adapter)
     adapter = value(capabilities, :adapter)
 
@@ -482,7 +466,7 @@ defmodule SymmetryControl.Orchestration.Registry do
     end
   end
 
-  def runtime_metadata_present?(specification) do
+  defp runtime_metadata_present?(specification) do
     Enum.any?(
       [:harness_kind, :harness_version, :adapter_version, :adapter_protocol_version],
       &map_key?(specification, &1)
@@ -502,8 +486,8 @@ defmodule SymmetryControl.Orchestration.Registry do
       is_integer(protocol_version) and protocol_version > 0 and protocol_version <= 2_147_483_647
   end
 
-  def valid_registered_adapter?(adapter, _adapter_present?, specification, capabilities)
-      when is_map(adapter) do
+  defp valid_registered_adapter?(adapter, _adapter_present?, specification, capabilities)
+       when is_map(adapter) do
     adapter_matches_runtime_metadata?(adapter, specification) and
       valid_adapter_operations?(value(adapter, :operations)) and
       generic_adapter_operations_allowed?(
@@ -517,9 +501,9 @@ defmodule SymmetryControl.Orchestration.Registry do
       )
   end
 
-  def valid_registered_adapter?(nil, false, _specification, _capabilities), do: true
+  defp valid_registered_adapter?(nil, false, _specification, _capabilities), do: true
 
-  def valid_registered_adapter?(_adapter, _adapter_present?, _specification, _capabilities),
+  defp valid_registered_adapter?(_adapter, _adapter_present?, _specification, _capabilities),
     do: false
 
   @doc false
@@ -577,7 +561,7 @@ defmodule SymmetryControl.Orchestration.Registry do
 
   def valid_adapter_operations?(_operations), do: false
 
-  def generic_adapter_operations_allowed?("generic", operations) do
+  defp generic_adapter_operations_allowed?("generic", operations) do
     value(operations, :resume) == false and
       value(operations, :handoff) == false and
       value(operations, :guidance) == "unsupported" and
@@ -587,11 +571,11 @@ defmodule SymmetryControl.Orchestration.Registry do
       value(operations, :hard_cost_limit) == false
   end
 
-  def generic_adapter_operations_allowed?(_harness_kind, _operations), do: true
+  defp generic_adapter_operations_allowed?(_harness_kind, _operations), do: true
 
-  def native_capabilities_match_adapter?("generic", _capabilities, _operations), do: true
+  defp native_capabilities_match_adapter?("generic", _capabilities, _operations), do: true
 
-  def native_capabilities_match_adapter?(_harness_kind, capabilities, operations) do
+  defp native_capabilities_match_adapter?(_harness_kind, capabilities, operations) do
     value(capabilities, :supervisory_control, false) != true and
       value(operations, :pause) == "unsupported"
   end
@@ -600,11 +584,11 @@ defmodule SymmetryControl.Orchestration.Registry do
   def legacy_supervisory_runtime?(runtime),
     do: is_nil(runtime.harness_kind) or runtime.harness_kind == "generic"
 
-  def nonempty_bounded_text?(value, maximum)
-      when is_binary(value) and byte_size(value) <= maximum,
-      do: String.trim(value) != ""
+  defp nonempty_bounded_text?(value, maximum)
+       when is_binary(value) and byte_size(value) <= maximum,
+       do: String.trim(value) != ""
 
-  def nonempty_bounded_text?(_value, _maximum), do: false
+  defp nonempty_bounded_text?(_value, _maximum), do: false
 
   # PostgreSQL jsonb rejects U+0000. Validate every untrusted JSONB value before a transaction.
   @doc false
@@ -627,12 +611,18 @@ defmodule SymmetryControl.Orchestration.Registry do
 
   def jsonb_compatible?(_), do: false
 
-  def jsonb_key_compatible?(key) when is_binary(key), do: jsonb_compatible?(key)
+  defp jsonb_key_compatible?(key) when is_binary(key), do: jsonb_compatible?(key)
 
-  def jsonb_key_compatible?(key) when is_atom(key),
+  defp jsonb_key_compatible?(key) when is_atom(key),
     do: key |> Atom.to_string() |> jsonb_compatible?()
 
-  def jsonb_key_compatible?(_), do: false
+  defp jsonb_key_compatible?(_), do: false
+
+  @doc false
+  def map_key?(map, key) when is_map(map),
+    do: Map.has_key?(map, key) or Map.has_key?(map, Atom.to_string(key))
+
+  def map_key?(_map, _key), do: false
 
   @doc false
   def valid_active_run?(run) when is_map(run) do
@@ -646,10 +636,10 @@ defmodule SymmetryControl.Orchestration.Registry do
 
   def valid_active_run?(_), do: false
 
-  def digest(value), do: :crypto.hash(:sha256, value)
+  defp digest(value), do: :crypto.hash(:sha256, value)
 
-  def owned?(schema, machine_id, id, machine_field)
-      when is_binary(machine_id) and is_binary(id) do
+  defp owned?(schema, machine_id, id, machine_field)
+       when is_binary(machine_id) and is_binary(id) do
     if valid_uuid?(machine_id) and valid_uuid?(id) do
       Repo.exists?(
         from record in schema,
@@ -660,10 +650,10 @@ defmodule SymmetryControl.Orchestration.Registry do
     end
   end
 
-  def owned?(_, _, _, _), do: false
+  defp owned?(_, _, _, _), do: false
 
-  def secure_compare(left, right) when byte_size(left) == byte_size(right),
+  defp secure_compare(left, right) when byte_size(left) == byte_size(right),
     do: Plug.Crypto.secure_compare(left, right)
 
-  def secure_compare(_, _), do: false
+  defp secure_compare(_, _), do: false
 end

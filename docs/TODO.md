@@ -1615,21 +1615,25 @@ is fixed here; each bullet names what a follow-up has to re-derive.
 ## Orchestration concept split (rf-w5-18, 2026-11-22)
 
 - [ ] Remove the duplicated `ContextSnapshot` read in the goal runtime match. The split moved the
-      read into `control/lib/symmetry_control/goals/eligibility.ex:129-139` (validation runtime ids
-      from the admitted snapshot); the admission and claim paths load the same row in
-      `control/lib/symmetry_control/goals.ex:881` and `:6139`. The contract declared the removal out
-      of scope, so the duplicate survives the split unchanged.
+      read into `control/lib/symmetry_control/goals/eligibility.ex:128-135` (validation runtime ids
+      from the admitted snapshot); the same row is loaded again by task id in
+      `control/lib/symmetry_control/goals/settlement.ex:620` (`Repo.get/2`) and re-read with a lock
+      in `control/lib/symmetry_control/goals/validation_outcome.ex:312-318`; Goal admission locks
+      it through `goals/internal.ex:144-151`. The contract declared the removal out of scope, so
+      the duplicate survives the split unchanged.
 
-- [ ] Fold the four compile-time constant copies the split created, or assert them against each
+- [ ] Fold the three compile-time constant copies the split left, or assert them against each
       other. Attributes cannot be imported, so each module that reads one declares it:
       `@terminal_states` (`control/lib/symmetry_control/orchestration/registry.ex:6`,
       `.../transitions.ex:4`), `@supervisory_commands` (`.../registry.ex:5`,
-      `.../commands.ex`, `.../transitions.ex:7`), `@capacity_bearing_states`
-      (`.../assignment.ex`, `.../task_reads.ex`), `@native_harness_kinds`
-      (`.../registry.ex:4`, `.../assignment.ex`). A drift between two copies changes eligibility
-      silently; a shared module or a compile-time assertion removes the risk.
+      `.../commands.ex:4`, `.../transitions.ex:7`), `@capacity_bearing_states`
+      (`.../assignment.ex:4`, `.../task_reads.ex:4`). A drift between two copies changes
+      eligibility silently; a shared module or a compile-time assertion removes the risk.
+      (`@native_harness_kinds` was folded in the apply stage: `Assignment.next_goal_runtime/3`
+      consumes `Registry.native_harness_kinds/0`.)
 
 - [ ] Fold the `retry_binding` type copy: `@type retry_binding` (with its `@typedoc`) is declared in
-      `control/lib/symmetry_control/orchestration.ex:18-28` for the facade's public specs and again
-      in `control/lib/symmetry_control/orchestration/task_reads.ex:339-349` for the moved specs. A
-      drifted copy would mis-document the retry projection without failing a test.
+      `control/lib/symmetry_control/orchestration.ex:22-27` (typedoc at `:17`) for the facade's
+      public specs and again in `control/lib/symmetry_control/orchestration/task_reads.ex:333-338`
+      (typedoc at `:328`) for the moved specs. A drifted copy would mis-document the retry
+      projection without failing a test.

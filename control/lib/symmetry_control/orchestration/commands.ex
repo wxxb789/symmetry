@@ -67,16 +67,6 @@ defmodule SymmetryControl.Orchestration.Commands do
   alias SymmetryControl.Orchestration.Run
   alias SymmetryControl.Orchestration.Task
 
-  @doc """
-  The required capabilities a retried generation is re-admitted with: `required`
-  with `supervisory_control: true` restored when the attempt being replaced
-  required it.
-
-  `retry_task/4` never lets a retry drop the supervisory fence of its
-  predecessor, and the served retry control resolves the same value through
-  `Workspaces.retry_binding/2`, so the reader states the assignment the retry
-  would apply.
-  """
   @spec retry_required_capabilities(map(), map() | nil) :: map()
   def retry_required_capabilities(required, current_required) when is_map(required) do
     if value(current_required, :supervisory_control, false) == true,
@@ -229,7 +219,7 @@ defmodule SymmetryControl.Orchestration.Commands do
 
   def request_cancel(_, _), do: {:error, :invalid_request}
 
-  def request_task_cancel(task_id, opts) do
+  defp request_task_cancel(task_id, opts) do
     notify? = not Repo.in_transaction?()
 
     Repo.transaction(fn ->
@@ -372,15 +362,15 @@ defmodule SymmetryControl.Orchestration.Commands do
 
   def retry_task(_, _, _, _), do: {:error, :invalid_request}
 
-  def create_or_replay_locked_command!(
-        task,
-        kind,
-        payload,
-        idempotency_key,
-        command_hash,
-        current,
-        opts
-      ) do
+  defp create_or_replay_locked_command!(
+         task,
+         kind,
+         payload,
+         idempotency_key,
+         command_hash,
+         current,
+         opts
+       ) do
     case lock_task_command(task.id, idempotency_key) do
       %Command{} = command ->
         ensure_command_replay!(command, kind, payload, opts)
@@ -391,7 +381,7 @@ defmodule SymmetryControl.Orchestration.Commands do
     end
   end
 
-  def create_new_command!(task, "cancel", payload, idempotency_key, command_hash, current, opts) do
+  defp create_new_command!(task, "cancel", payload, idempotency_key, command_hash, current, opts) do
     ensure_expected_generation!(task, Keyword.get(opts, :expected_generation))
 
     case task.state do
@@ -479,15 +469,15 @@ defmodule SymmetryControl.Orchestration.Commands do
     end
   end
 
-  def create_new_command!(
-        task,
-        "provide_input",
-        payload,
-        idempotency_key,
-        command_hash,
-        _current,
-        opts
-      ) do
+  defp create_new_command!(
+         task,
+         "provide_input",
+         payload,
+         idempotency_key,
+         command_hash,
+         _current,
+         opts
+       ) do
     ensure_expected_generation!(task, Keyword.get(opts, :expected_generation))
 
     if task.state != "waiting_for_input" do
@@ -530,8 +520,8 @@ defmodule SymmetryControl.Orchestration.Commands do
     end
   end
 
-  def create_new_command!(task, kind, payload, idempotency_key, command_hash, _current, opts)
-      when kind in @supervisory_commands do
+  defp create_new_command!(task, kind, payload, idempotency_key, command_hash, _current, opts)
+       when kind in @supervisory_commands do
     ensure_expected_generation!(task, Keyword.get(opts, :expected_generation))
     if task.state not in ["running", "paused"], do: rollback(:state_conflict)
     run = lock_current_run(task)
@@ -575,16 +565,16 @@ defmodule SymmetryControl.Orchestration.Commands do
     {command, :created, nil}
   end
 
-  def insert_command!(
-        task_id,
-        run_id,
-        generation,
-        kind,
-        payload,
-        idempotency_key,
-        {command_hash, command_hash_version},
-        opts
-      ) do
+  defp insert_command!(
+         task_id,
+         run_id,
+         generation,
+         kind,
+         payload,
+         idempotency_key,
+         {command_hash, command_hash_version},
+         opts
+       ) do
     %Command{}
     |> Command.changeset(%{
       task_id: task_id,
@@ -697,7 +687,7 @@ defmodule SymmetryControl.Orchestration.Commands do
 
   def acknowledge_command(_, _, _, _, _), do: {:error, :invalid_request}
 
-  def ensure_goal_control_task_ownership!(goal_id, item, task) do
+  defp ensure_goal_control_task_ownership!(goal_id, item, task) do
     owned? =
       task.goal_id == goal_id and
         case task.work_item_id do
@@ -708,7 +698,7 @@ defmodule SymmetryControl.Orchestration.Commands do
     unless owned?, do: rollback(:ownership_lost)
   end
 
-  def ensure_goal_control_run_envelope!(task, envelope) do
+  defp ensure_goal_control_run_envelope!(task, envelope) do
     run_id = value(envelope, :run_id)
     generation = value(envelope, :generation)
 
@@ -727,7 +717,7 @@ defmodule SymmetryControl.Orchestration.Commands do
     end
   end
 
-  def valid_command_request?(kind, payload) do
+  defp valid_command_request?(kind, payload) do
     jsonb_compatible?(payload) and
       case kind do
         kind when kind in ["cancel", "pause", "resume"] ->
@@ -745,33 +735,33 @@ defmodule SymmetryControl.Orchestration.Commands do
       end
   end
 
-  def ensure_expected_generation!(_task, nil), do: :ok
+  defp ensure_expected_generation!(_task, nil), do: :ok
 
-  def ensure_expected_generation!(task, expected_generation)
-      when is_integer(expected_generation) do
+  defp ensure_expected_generation!(task, expected_generation)
+       when is_integer(expected_generation) do
     if task.attempt_generation != expected_generation, do: rollback(:state_conflict)
   end
 
-  def ensure_expected_generation!(_task, _expected_generation), do: rollback(:invalid_request)
+  defp ensure_expected_generation!(_task, _expected_generation), do: rollback(:invalid_request)
 
-  def ensure_expected_waiting!(_task, _run, nil), do: :ok
+  defp ensure_expected_waiting!(_task, _run, nil), do: :ok
 
-  def ensure_expected_waiting!(task, _run, expected_transition_id)
-      when is_binary(expected_transition_id) do
+  defp ensure_expected_waiting!(task, _run, expected_transition_id)
+       when is_binary(expected_transition_id) do
     if task.waiting_transition_id != expected_transition_id, do: rollback(:state_conflict)
   end
 
-  def ensure_expected_waiting!(_task, _run, _expected_transition_id),
+  defp ensure_expected_waiting!(_task, _run, _expected_transition_id),
     do: rollback(:invalid_request)
 
-  def normalize_command_payload("cancel", _payload), do: %{}
-  def normalize_command_payload("provide_input", payload), do: payload
-  def normalize_command_payload(kind, payload) when kind in @supervisory_commands, do: payload
+  defp normalize_command_payload("cancel", _payload), do: %{}
+  defp normalize_command_payload("provide_input", payload), do: payload
+  defp normalize_command_payload(kind, payload) when kind in @supervisory_commands, do: payload
 
-  def command_request_hash(kind, payload, opts),
+  defp command_request_hash(kind, payload, opts),
     do: kind |> command_request_body(payload, opts) |> RequestHash.write(:command)
 
-  def command_request_body(kind, payload, opts) do
+  defp command_request_body(kind, payload, opts) do
     context =
       opts |> Keyword.take([:expected_generation, :expected_waiting_transition_id]) |> Map.new()
 
@@ -779,7 +769,7 @@ defmodule SymmetryControl.Orchestration.Commands do
     if map_size(context) == 0, do: body, else: Map.put(body, :context, context)
   end
 
-  def ensure_command_replay!(command, kind, payload, opts) do
+  defp ensure_command_replay!(command, kind, payload, opts) do
     expected_hash =
       case command.request_hash_version do
         1 -> RequestHash.legacy(%{kind: kind, payload: payload})
@@ -790,7 +780,7 @@ defmodule SymmetryControl.Orchestration.Commands do
     unless command.request_hash == expected_hash, do: rollback(:idempotency_conflict)
   end
 
-  def lock_task_command(task_id, idempotency_key) do
+  defp lock_task_command(task_id, idempotency_key) do
     Repo.one(
       from command in Command,
         where: command.task_id == ^task_id and command.idempotency_key == ^idempotency_key,
@@ -798,10 +788,10 @@ defmodule SymmetryControl.Orchestration.Commands do
     )
   end
 
-  def legacy_cancel_idempotency_key(%Task{current_generation: 0, id: task_id}),
+  defp legacy_cancel_idempotency_key(%Task{current_generation: 0, id: task_id}),
     do: "legacy-cancel:task:" <> task_id
 
-  def legacy_cancel_idempotency_key(task) do
+  defp legacy_cancel_idempotency_key(task) do
     run = lock_current_run(task)
     "legacy-cancel:run:" <> run.id
   end

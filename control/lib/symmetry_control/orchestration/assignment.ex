@@ -9,8 +9,6 @@ defmodule SymmetryControl.Orchestration.Assignment do
     "waiting_for_input",
     "cancelling"
   ]
-  @native_harness_kinds ["codex", "claude_code", "pi", "opencode", "omp", "omo"]
-
   import Ecto.Query
 
   import SymmetryControl.Goals.Eligibility,
@@ -44,6 +42,7 @@ defmodule SymmetryControl.Orchestration.Assignment do
     only: [
       adapter_matches_runtime_metadata?: 2,
       legacy_supervisory_runtime?: 1,
+      native_harness_kinds: 0,
       valid_adapter_operations?: 1,
       valid_runtime_metadata?: 1
     ]
@@ -109,10 +108,10 @@ defmodule SymmetryControl.Orchestration.Assignment do
 
   # Goal candidates are scanned by a stable keyset, one transaction per candidate, so an
   # unavailable or malformed frozen validation binding cannot retain locks or starve a later task.
-  def assign_one_goal(current, assignment_duration_ms, opts),
+  defp assign_one_goal(current, assignment_duration_ms, opts),
     do: assign_one_goal(current, assignment_duration_ms, opts, nil)
 
-  def assign_one_goal(current, assignment_duration_ms, opts, cursor) do
+  defp assign_one_goal(current, assignment_duration_ms, opts, cursor) do
     case next_goal_task_candidate_page(current, cursor) do
       [] ->
         {:error, :no_assignment}
@@ -126,9 +125,9 @@ defmodule SymmetryControl.Orchestration.Assignment do
     end
   end
 
-  def assign_goal_candidate_page([], _current, _assignment_duration_ms, _opts), do: :skip
+  defp assign_goal_candidate_page([], _current, _assignment_duration_ms, _opts), do: :skip
 
-  def assign_goal_candidate_page([candidate | remaining], current, assignment_duration_ms, opts) do
+  defp assign_goal_candidate_page([candidate | remaining], current, assignment_duration_ms, opts) do
     case try_assign_goal_candidate(candidate, current, assignment_duration_ms, opts) do
       {:ok, run} -> {:ok, run}
       :skip -> assign_goal_candidate_page(remaining, current, assignment_duration_ms, opts)
@@ -136,7 +135,7 @@ defmodule SymmetryControl.Orchestration.Assignment do
     end
   end
 
-  def try_assign_goal_candidate(candidate, _current, assignment_duration_ms, opts) do
+  defp try_assign_goal_candidate(candidate, _current, assignment_duration_ms, opts) do
     Repo.transaction(fn ->
       with {:ok, _project, goal, item, task} <-
              try_lock_goal_assignment_chain(candidate),
@@ -157,7 +156,7 @@ defmodule SymmetryControl.Orchestration.Assignment do
     end
   end
 
-  def try_lock_goal_assignment_chain(candidate) do
+  defp try_lock_goal_assignment_chain(candidate) do
     with %Project{} = project <- try_lock_goal_project(candidate.goal_id),
          true <- project.status == "active",
          %Goal{} = goal <- try_lock_goal(candidate.goal_id),
@@ -170,7 +169,7 @@ defmodule SymmetryControl.Orchestration.Assignment do
     end
   end
 
-  def try_lock_goal_project(goal_id) do
+  defp try_lock_goal_project(goal_id) do
     with project_id when is_binary(project_id) <-
            Repo.one(from(goal in Goal, where: goal.id == ^goal_id, select: goal.project_id)) do
       Repo.one(
@@ -182,22 +181,22 @@ defmodule SymmetryControl.Orchestration.Assignment do
     end
   end
 
-  def try_lock_goal(goal_id),
+  defp try_lock_goal(goal_id),
     do: Repo.one(from goal in Goal, where: goal.id == ^goal_id, lock: "FOR UPDATE SKIP LOCKED")
 
-  def try_lock_work_item(work_item_id),
+  defp try_lock_work_item(work_item_id),
     do:
       Repo.one(
         from item in WorkItem, where: item.id == ^work_item_id, lock: "FOR UPDATE SKIP LOCKED"
       )
 
-  def try_lock_goal_task_item(nil), do: nil
-  def try_lock_goal_task_item(work_item_id), do: try_lock_work_item(work_item_id)
+  defp try_lock_goal_task_item(nil), do: nil
+  defp try_lock_goal_task_item(work_item_id), do: try_lock_work_item(work_item_id)
 
-  def try_lock_task(task_id),
+  defp try_lock_task(task_id),
     do: Repo.one(from task in Task, where: task.id == ^task_id, lock: "FOR UPDATE SKIP LOCKED")
 
-  def assign_one_legacy(current, assignment_duration_ms, opts) do
+  defp assign_one_legacy(current, assignment_duration_ms, opts) do
     Repo.transaction(fn ->
       case next_assignable_legacy_task_and_runtime(current) do
         nil ->
@@ -215,7 +214,7 @@ defmodule SymmetryControl.Orchestration.Assignment do
     end)
   end
 
-  def assign_task_to_runtime!(task, runtime, item, current, assignment_duration_ms) do
+  defp assign_task_to_runtime!(task, runtime, item, current, assignment_duration_ms) do
     generation = task.attempt_generation
 
     task =
@@ -253,7 +252,7 @@ defmodule SymmetryControl.Orchestration.Assignment do
     ) < runtime.capacity
   end
 
-  def runtime_available_at?(runtime, current) do
+  defp runtime_available_at?(runtime, current) do
     runtime.status == "online" and
       not is_nil(runtime.last_heartbeat_at) and
       DateTime.compare(
@@ -262,7 +261,7 @@ defmodule SymmetryControl.Orchestration.Assignment do
       ) == :gt
   end
 
-  def next_assignable_legacy_task_and_runtime(current) do
+  defp next_assignable_legacy_task_and_runtime(current) do
     Repo.one(
       from task in Task,
         join: runtime in Runtime,
@@ -309,7 +308,7 @@ defmodule SymmetryControl.Orchestration.Assignment do
     )
   end
 
-  def next_goal_runtime(task, item, current) do
+  defp next_goal_runtime(task, item, current) do
     case {goal_task_repository_resource_id(task, item), task_allowed_runtime_ids(task),
           validation_runtime_ids_for_task(task), native_goal_session_requirement(task)} do
       {nil, _, _, _} ->
@@ -336,7 +335,7 @@ defmodule SymmetryControl.Orchestration.Assignment do
               runtime.status == "online" and runtime.agent_profile == ^task.agent_profile and
                 runtime.workspace == ^task.workspace and
                 runtime.repository_resource_id == ^repository_resource_id and
-                runtime.harness_kind in ^@native_harness_kinds,
+                runtime.harness_kind in ^native_harness_kinds(),
             where:
               fragment("? @> ?", runtime.capabilities, type(^task.required_capabilities, :map)),
             where: fragment("? @> ?", runtime.capabilities, type(^adapter_requirement, :map)),
@@ -386,9 +385,9 @@ defmodule SymmetryControl.Orchestration.Assignment do
 
   # A retained native session is machine-local and must not fall back to another
   # runtime merely because it matches the task profile.
-  def restrict_to_requested_session(query, %Task{requested_session_id: nil}, _item), do: query
+  defp restrict_to_requested_session(query, %Task{requested_session_id: nil}, _item), do: query
 
-  def restrict_to_requested_session(query, %Task{} = task, item) do
+  defp restrict_to_requested_session(query, %Task{} = task, item) do
     repository_resource_id =
       goal_task_repository_resource_id(task, item) || rollback(:ownership_lost)
 
@@ -412,9 +411,9 @@ defmodule SymmetryControl.Orchestration.Assignment do
 
   # Handoff starts a fresh native session whose verified artifact belongs to the source machine;
   # another machine would turn a local artifact pointer into a cross-machine transfer.
-  def restrict_to_handoff_source_machine(query, %Task{handoff_source_run_id: nil}), do: query
+  defp restrict_to_handoff_source_machine(query, %Task{handoff_source_run_id: nil}), do: query
 
-  def restrict_to_handoff_source_machine(query, %Task{} = task) do
+  defp restrict_to_handoff_source_machine(query, %Task{} = task) do
     source_machine_id =
       Repo.one(
         from(source_run in Run,
@@ -432,16 +431,16 @@ defmodule SymmetryControl.Orchestration.Assignment do
 
   # The scheduler owns each retained attachment identity. It is persisted with
   # the Run before dispatch so a daemon cannot choose or reuse a stale binding.
-  def reserve_requested_session!(
-        %Task{requested_session_id: nil},
-        _runtime,
-        _item,
-        run,
-        _current
-      ),
-      do: run
+  defp reserve_requested_session!(
+         %Task{requested_session_id: nil},
+         _runtime,
+         _item,
+         run,
+         _current
+       ),
+       do: run
 
-  def reserve_requested_session!(task, runtime, item, run, current) do
+  defp reserve_requested_session!(task, runtime, item, run, current) do
     repository_resource_id =
       goal_task_repository_resource_id(task, item) || rollback(:ownership_lost)
 
@@ -532,7 +531,7 @@ defmodule SymmetryControl.Orchestration.Assignment do
       native_goal_adapter_capable?(runtime, task)
   end
 
-  def native_goal_adapter_requirement do
+  defp native_goal_adapter_requirement do
     %{
       "adapter" => %{
         "operations" => %{
@@ -545,7 +544,7 @@ defmodule SymmetryControl.Orchestration.Assignment do
     }
   end
 
-  def native_goal_resume_requirement do
+  defp native_goal_resume_requirement do
     %{
       "adapter" => %{
         "operations" => %{
@@ -555,7 +554,7 @@ defmodule SymmetryControl.Orchestration.Assignment do
     }
   end
 
-  def native_goal_handoff_requirement do
+  defp native_goal_handoff_requirement do
     %{
       "adapter" => %{
         "operations" => %{
@@ -565,7 +564,7 @@ defmodule SymmetryControl.Orchestration.Assignment do
     }
   end
 
-  def native_goal_session_requirement(task) do
+  defp native_goal_session_requirement(task) do
     case value(task.input || %{}, :session_mode, "fresh") do
       "fresh" -> %{}
       "resume" -> native_goal_resume_requirement()
@@ -574,7 +573,7 @@ defmodule SymmetryControl.Orchestration.Assignment do
     end
   end
 
-  def native_goal_adapter_capable?(runtime, task) do
+  defp native_goal_adapter_capable?(runtime, task) do
     adapter = value(runtime.capabilities, :adapter)
     operations = value(adapter, :operations)
     session_mode = value(task.input || %{}, :session_mode, "fresh")
@@ -590,7 +589,7 @@ defmodule SymmetryControl.Orchestration.Assignment do
       (session_mode != "handoff" or value(operations, :handoff) == true)
   end
 
-  def strict_budget_capability_requirement(task) do
+  defp strict_budget_capability_requirement(task) do
     if strict_budget_task?(task) do
       %{"adapter" => %{"operations" => %{"hard_cost_limit" => true}}}
     else
@@ -598,7 +597,7 @@ defmodule SymmetryControl.Orchestration.Assignment do
     end
   end
 
-  def strict_budget_task?(%Task{} = task) do
+  defp strict_budget_task?(%Task{} = task) do
     task.input
     |> value(:limits, %{})
     |> value(:max_cost_microusd)
@@ -606,7 +605,7 @@ defmodule SymmetryControl.Orchestration.Assignment do
     |> Kernel.not()
   end
 
-  def strict_budget_task?(_task), do: false
+  defp strict_budget_task?(_task), do: false
 
   @spec assign_all(keyword()) :: {:ok, [Run.t()]}
   def assign_all(opts \\ []) do

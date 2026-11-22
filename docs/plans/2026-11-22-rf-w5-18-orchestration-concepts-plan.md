@@ -38,8 +38,12 @@ controller now calls instead of re-implementing the `:goal | :legacy` fork and t
 lock. No behaviour change: wire bytes, persisted bytes, SQL text, lock order, transaction
 boundaries, returned atoms, error/log text and telemetry are byte-identical (evidence record).
 
-Module sizes at the slice head (`wc -l`): facade 264; Registry 670; Assignment 647; Claims 608;
-Transitions 1,191; Commands 808; TaskReads 909; Goals.Eligibility 307 — every module ≤ 1,500 L.
+Module sizes on the applied delivered tree (`wc -l`, apply stage 2026-11-22): facade 327;
+Registry 659; Assignment 639; Claims 612; Transitions 1,181; Commands 798; TaskReads 874;
+Goals.Eligibility 301 — every module ≤ 1,500 L. (The pre-apply slice head measured facade 266,
+Registry 669, Assignment 640, Claims 607, Transitions 1,188, Commands 808, TaskReads 909,
+Eligibility 307; the earlier table was a pre-implementation estimate. The delta is the apply
+stage's changes plus the doc-block move of finding F6.)
 
 ## Public / API shape
 
@@ -49,6 +53,10 @@ Transitions 1,191; Commands 808; TaskReads 909; Goals.Eligibility 307 — every 
   keep their facade clauses too, because `orchestration_telemetry_test.exs` and the controller's
   transition endpoint still call them; making them "internal to Claims" means the *controller's
   claim path* no longer routes on them, not that they leave the public module.
+  The apply stage returned the seven public `@doc` blocks to their facade delegates (simplify
+  finding F6), restored the base delegate parameter names where the split had left generated
+  `arg1` (F4) and re-added the `RunEvent` alias the `append_events/4` spec resolves against (D7);
+  the public inventory is unchanged.
 - **`Claims.claim_run/3`** (new, `@doc false`): `claim_owner/1` read outside the transaction →
   `Repo.transaction` → `ProviderAccess.lock_claim_scope/1` *first* → owner dispatch
   (`:goal` → `Goals.claim_with_disposition/3`, `:legacy` → `claim_with_disposition/3`) →
@@ -136,12 +144,17 @@ vocabulary, listed in the `Goals.Eligibility` row. `claim_run/3` is new code, no
 4. **Helper placement keeps the concept graph acyclic** (`mix xref graph --format cycles --label
    compile-connected` at base: "No cycles found", so every new compile-connected cycle would be a
    regression):
-   - `value/2,3`, `valid_uuid?/1`, `exact_map_keys?/2`, `map_key?/2` → `Goals.Eligibility`, the
-     leaf. Dominant-caller census over the placed functions: Eligibility 12 `value/3` call sites
+   - `value/2,3`, `valid_uuid?/1`, `exact_map_keys?/2` → `Goals.Eligibility`, the leaf.
+     Dominant-caller census over the placed functions: Eligibility 12 `value/3` call sites
      and the other map/UUID vocabulary reads are its own (b)/(c) predicates; putting the leaf's
      vocabulary anywhere else would make the leaf import an Orchestration module that transitively
      depends on it (Registry via Claims, TaskReads via Assignment), i.e. a new Goals ↔
-     Orchestration compile-connected cycle — forbidden by the AD2 gate.
+     Orchestration compile-connected cycle — forbidden by the AD2 gate. `map_key?/2` moved to
+     `Registry` in the apply stage (simplify finding F5): its only callers were `registry.ex`'s
+     runtime-metadata validation (`valid_runtime_repository_resource?/1`,
+     `valid_runtime_adapter_metadata?/2`, `runtime_metadata_present?/1`) and no Eligibility
+     predicate reads it, so the leaf-vocabulary rationale did not hold for it; the move adds no
+     leaf → Orchestration edge.
    - `now/1`, `rollback/1`, `emit/2`, `stamp_insert/2`, `stamp_update/2`, the single-row and
      shared locks (`lock_*`, `share_*`), the fence helpers (`ensure_fence!/5`,
      `ensure_static_fence!/4`, `lock_chain/2`, `lock_goal_chain/1`) and the write primitives
@@ -171,7 +184,10 @@ vocabulary, listed in the `Goals.Eligibility` row. `claim_run/3` is new code, no
    `@terminal_targets`, `@supervisory_commands`, `@capacity_bearing_states`,
    `@native_harness_kinds`) are declared in each module that reads them (attributes cannot be
    imported); the copies are recorded in `docs/TODO.md` as a drift risk. `@retry_binding_types`
-   moves inside its owning block (`retryable_attempt?/1`), so it is not re-declared.
+   moves inside its owning block (`retryable_attempt?/1`), so it is not re-declared. The apply
+   stage removed the `@native_harness_kinds` copy: `Assignment.next_goal_runtime/3` consumes
+   `Registry.native_harness_kinds/0` (simplify finding F8's fold); the remaining copies stay
+   TODO-recorded.
 8. **Module attributes travel with their dominant user** exactly as in 7; `@terminal_targets`,
    `@terminal_states` and `@supervisory_commands` are the only multi-module ones and
    `@decision_reasons`, `@terminal_grace_ms`, `@minimum_lease_duration_ms`,
@@ -232,7 +248,8 @@ any behaviour change; `docs/design/core.md`/`data.md` (PR #246 carries both).
 - Three moved function bodies carry a module-qualified call that the base wrote unqualified; the
   qualification is the mechanism that keeps the compile-connected module graph acyclic and is
   recorded per line.
-- Attribute and type copies (7, 6) can drift; pinned by `docs/TODO.md` entries.
+- Attribute and type copies (three attribute copies after the apply stage's `@native_harness_kinds`
+  fold, plus the `retry_binding` type copy) can drift; pinned by `docs/TODO.md` entries.
 - The comment-policy trims change comment text inside moved functions; the evidence record lists
   each one so the reviewer can check that no rationale needed for maintenance was dropped.
 - The base-side SQL/lock capture comes from the base worktree's test run, not from a frozen log;
@@ -261,11 +278,13 @@ directory `<HOST-PATH>/.local/state/gdd/scratch/w5-18/` (not committed).
 4. **`candidate_task_query/2` (decision 11, upheld)**: the base `next_goal_task_candidate_page/2`
    body is a query builder plus a one-line runner; the capture comparison shows the candidate SQL
    byte-identical and the per-candidate query count unchanged.
-5. **Attribute copies, measured (supersedes decision 7's list)**: the multi-module compile-time
-   constants are four, not five — `@terminal_states` (Registry, Transitions),
+5. **Attribute copies, measured (supersedes decision 7's list; apply stage 2026-11-22)**: the
+   multi-module compile-time constants are three — `@terminal_states` (Registry, Transitions),
    `@supervisory_commands` (Commands, Registry, Transitions), `@capacity_bearing_states`
-   (Assignment, TaskReads), `@native_harness_kinds` (Assignment, Registry). `@terminal_targets` is
-   read by `Transitions` only. `docs/TODO.md` records the four copies as a drift risk.
+   (Assignment, TaskReads). `@terminal_targets` is read by `Transitions` only.
+   `@native_harness_kinds` is no longer copied: `Assignment.next_goal_runtime/3` consumes
+   `Registry.native_harness_kinds/0` (simplify finding F8's fold; the SQL/lock probe set re-ran
+   with identical SQL). `docs/TODO.md` records the three remaining copies as a drift risk.
 6. **`retry_binding` type copy (decision 6, upheld)**: declared in the facade and in `TaskReads`;
    `docs/TODO.md` carries the drift risk.
 7. **Comments, measured**: 13 comment paragraphs at base in `orchestration.ex`; 13 across the
@@ -282,17 +301,33 @@ directory `<HOST-PATH>/.local/state/gdd/scratch/w5-18/` (not committed).
    same bound values); each side re-run twice produced byte-identical output, so the order is a
    property of the compiled build, not of the run. Details and the comparator's normalisation
    rules are in the evidence record.
-9. **Test files**: eight split files (title multiset intact: 0 deleted, +64 new titles) and seven
-   new interface files with 64 cases; the largest file is 1,278 L. Six warnings the split left
+9. **Test files**: eight split files (two renamed in the apply stage from their `_b` placeholders
+   to `orchestration_goal_assignment_test.exs` and `orchestration_goal_transitions_test.exs`,
+   simplify finding F3; title multiset intact: 0 deleted, +64 new titles) and seven
+   new interface files with 65 cases (the `map_key?/2` case moved out of the eligibility
+   vocabulary case, F5); the largest file is 1,278 L. Six warnings the split left
    behind (two now-unused helpers, three unused aliases, two never-used default arguments) were
    removed; the suite runs warning-free.
-10. **`mix credo --strict`, measured (deviation from the evidence plan's "must not rise")**: head
-    553 issues (5 warnings / 362 refactoring / 95 readability / 91 design; 4,465 mods/funs) against
-    base 500 (5 / 357 / 82 / 56; 4,323). Attribution over credo's own listing: the base
+10. **`mix credo --strict`, measured (deviation from the evidence plan's "must not rise")**: slice
+    head 553 issues (5 warnings / 362 refactoring / 95 readability / 91 design; 4,465 mods/funs);
+    applied revision 552 (5 / 362 / 93 / 92; 4,516) against base 500 (5 / 357 / 82 / 56; 4,323).
+    Attribution over credo's own listing: the base
     `orchestration.ex` carried 68 findings and the facade now carries 2, while the seven concept
     modules carry 76 — the same function-level complexity/depth findings the god module already
     had, now attributed per module — and the split leaves 7 duplicate-code items across the split
     test files, which the contract's verbatim split rule requires (each file keeps the helpers its
     cases use). The only new class is alias ordering in the new alias blocks; it was left in place
     because reordering aliases would invalidate the recorded gate run for a cosmetic `--strict`
-    suggestion. Raw output: `gates/credo-head.out`, `gates/credo-base.out`.
+    suggestion. Raw output: `gates/credo-head.out`, `gates/apply-credo.out`,
+    `gates/credo-base.out`.
+
+13. **Apply stage (2026-11-22, simplify findings F1–F9 / D1–D9)**: the accepted findings were
+    applied inside the owned files — 122 helpers back to `defp` (F1), the `_b` split-file renames
+    (F3), the facade parameter names and the seven `@doc` blocks (F4/F6), `map_key?/2` to
+    `Registry` (F5), `Claims.static_fence_matches?/3` (F7), the `@native_harness_kinds` fold (F8)
+    and the `RunEvent` alias (D7) — with the record corrections of D1/D3–D9; F2, F8's test half and
+    F9 were rejected for needing artifacts outside the contract's owned set. The SQL/lock probes,
+    the red-mutant batch (65/65, 0 UNKILLED) and the AST token audit (242/247 token-identical, the
+    five recorded deviations) re-ran at the applied revision; the committed head's two rotted
+    `CLOSED-TODO.md` citations were pinned per the citation gate's prescription. Numbers:
+    evidence record sections 2, 3, 7, 8, 12.

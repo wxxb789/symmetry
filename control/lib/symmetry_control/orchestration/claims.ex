@@ -151,7 +151,7 @@ defmodule SymmetryControl.Orchestration.Claims do
 
   def commit_new_claim_in_transaction(_, _), do: {:error, :invalid_request}
 
-  def prepare_claim_locked(run_id, request, current, work_item, opts) do
+  defp prepare_claim_locked(run_id, request, current, work_item, opts) do
     {task, run, runtime} = lock_chain(run_id, opts)
 
     claim_context = %{
@@ -173,20 +173,20 @@ defmodule SymmetryControl.Orchestration.Claims do
     end
   end
 
-  def commit_new_claim!(
-        %{
-          task: task,
-          run: run,
-          runtime: runtime,
-          work_item: work_item,
-          request_runtime_id: request_runtime_id,
-          request_epoch: request_epoch,
-          request_generation: request_generation,
-          request_claim_id: request_claim_id
-        },
-        current,
-        lease_duration_ms
-      ) do
+  defp commit_new_claim!(
+         %{
+           task: task,
+           run: run,
+           runtime: runtime,
+           work_item: work_item,
+           request_runtime_id: request_runtime_id,
+           request_epoch: request_epoch,
+           request_generation: request_generation,
+           request_claim_id: request_claim_id
+         },
+         current,
+         lease_duration_ms
+       ) do
     cond do
       not is_nil(task.goal_id) and not Assignment.goal_runtime_matches?(runtime, task, work_item) ->
         rollback(:ownership_lost)
@@ -294,15 +294,20 @@ defmodule SymmetryControl.Orchestration.Claims do
   end
 
   @doc false
+  def static_fence_matches?(task, run, fence) do
+    run.runtime_id == value(fence, :runtime_id) and
+      run.claimed_runtime_epoch == value(fence, :runtime_epoch) and
+      run.generation == value(fence, :generation) and
+      task.current_generation == value(fence, :generation) and
+      run.claim_id == value(fence, :claim_id) and
+      run.lease_token == value(fence, :lease_token)
+  end
+
+  @doc false
   def ensure_static_fence!(task, run, runtime, fence) do
     valid? =
-      run.runtime_id == value(fence, :runtime_id) and
-        runtime.connection_epoch == value(fence, :runtime_epoch) and
-        run.claimed_runtime_epoch == value(fence, :runtime_epoch) and
-        run.generation == value(fence, :generation) and
-        task.current_generation == value(fence, :generation) and
-        run.claim_id == value(fence, :claim_id) and
-        run.lease_token == value(fence, :lease_token)
+      static_fence_matches?(task, run, fence) and
+        runtime.connection_epoch == value(fence, :runtime_epoch)
 
     unless valid?, do: rollback(:ownership_lost)
   end
@@ -321,14 +326,14 @@ defmodule SymmetryControl.Orchestration.Claims do
     {task, run, runtime}
   end
 
-  def notify_claim_task_locked(opts, task) do
+  defp notify_claim_task_locked(opts, task) do
     case Keyword.get(opts, :on_claim_task_locked) do
       hook when is_function(hook, 1) -> hook.(task)
       _ -> :ok
     end
   end
 
-  def lock_execution_chain(run_id) do
+  defp lock_execution_chain(run_id) do
     {task, run, runtime, goal, item} = lock_goal_chain(run_id)
 
     if goal do
@@ -368,7 +373,7 @@ defmodule SymmetryControl.Orchestration.Claims do
     end
   end
 
-  def ensure_goal_work_item_ownership!(goal, item, task) do
+  defp ensure_goal_work_item_ownership!(goal, item, task) do
     unless goal_work_item_owned?(goal, item, task),
       do: rollback(:ownership_lost)
   end
@@ -386,15 +391,15 @@ defmodule SymmetryControl.Orchestration.Claims do
     ensure_current_goal_execution!(goal, item, task)
   end
 
-  def ensure_requested_session_claim_binding!(
-        %Task{requested_session_id: nil},
-        _runtime,
-        _item,
-        _run
-      ),
-      do: :ok
+  defp ensure_requested_session_claim_binding!(
+         %Task{requested_session_id: nil},
+         _runtime,
+         _item,
+         _run
+       ),
+       do: :ok
 
-  def ensure_requested_session_claim_binding!(task, runtime, item, run) do
+  defp ensure_requested_session_claim_binding!(task, runtime, item, run) do
     repository_resource_id =
       goal_task_repository_resource_id(task, item) || rollback(:ownership_lost)
 
@@ -418,7 +423,7 @@ defmodule SymmetryControl.Orchestration.Claims do
            do: rollback(:ownership_lost)
   end
 
-  def replayed_claim?(task, run, runtime, request, current) do
+  defp replayed_claim?(task, run, runtime, request, current) do
     run.runtime_id == value(request, :runtime_id) and runtime.id == value(request, :runtime_id) and
       runtime.connection_epoch == value(request, :runtime_epoch) and
       task.current_generation == value(request, :generation) and
@@ -429,7 +434,7 @@ defmodule SymmetryControl.Orchestration.Claims do
       DateTime.compare(run.lease_expires_at, current) == :gt
   end
 
-  def lock_goal(goal_id),
+  defp lock_goal(goal_id),
     do:
       Repo.one(from goal in Goal, where: goal.id == ^goal_id, lock: "FOR UPDATE") ||
         rollback(:not_found)
@@ -509,7 +514,7 @@ defmodule SymmetryControl.Orchestration.Claims do
   def now(opts),
     do: opts |> Keyword.get(:now, DateTime.utc_now()) |> DateTime.truncate(:microsecond)
 
-  def lease_duration_ms(opts) do
+  defp lease_duration_ms(opts) do
     duration =
       Keyword.get_lazy(opts, :lease_duration_ms, fn ->
         Application.fetch_env!(:symmetry_control, :orchestration)
@@ -528,7 +533,7 @@ defmodule SymmetryControl.Orchestration.Claims do
   @doc false
   def stamp_update(changeset, current), do: Ecto.Changeset.change(changeset, updated_at: current)
 
-  def valid_claim_request?(request) do
+  defp valid_claim_request?(request) do
     valid_uuid?(value(request, :runtime_id)) and
       is_integer(value(request, :runtime_epoch)) and value(request, :runtime_epoch) > 0 and
       is_integer(value(request, :generation)) and value(request, :generation) > 0 and

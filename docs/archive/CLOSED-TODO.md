@@ -848,8 +848,8 @@ sweep)` section below and moved on 2026-11-22 from branch
       so the searches are the primary record.
 
 - [ ] Revalidate the unused `replay_task` binding at
-      `control/test/symmetry_control/orchestration_goal_admission_test.exs:1059`
-      and `task` bindings at lines `2079` and `2170`. The 0007a `mix test` run
+      `git show 66bc9dcb:control/test/symmetry_control/orchestration_goal_admission_test.exs`
+      line `1059` and `task` bindings at lines `2079` and `2170`. The 0007a `mix test` run
       reported these compiler warnings (`.tmp/0007a-session/control-test.log`).
       Preserve the fixture calls and leave any binding cleanup to separate
       maintenance.
@@ -869,8 +869,8 @@ sweep)` section below and moved on 2026-11-22 from branch
 
 - [ ] Revalidate the unused default `kind \\ "omp"` on private
       `register_unverified_omp_runtime/2` in
-      `control/test/symmetry_control/orchestration_goal_admission_test.exs:3651`.
-      The 0009 full Control run reports that the optional default is never used
+      `git show 66bc9dcb:control/test/symmetry_control/orchestration_goal_admission_test.exs`
+      line `3651`. The 0009 full Control run reports that the optional default is never used
       (`.tmp/0009/control-full.log`). Preserve the runtime fixture behavior and
       leave cleanup and verification to separate maintenance.
       Closed by branch `chore/deadcode-revalidation` (2026-11-19): the default was

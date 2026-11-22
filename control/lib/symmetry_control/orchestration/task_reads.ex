@@ -316,15 +316,6 @@ defmodule SymmetryControl.Orchestration.TaskReads do
     }
   end
 
-  @doc """
-  Whether `runtime` advertises the boolean adapter operation `operation`.
-
-  Only a runtime registered with the versioned adapter record advertises
-  per-operation support; a runtime without the record, without the operation,
-  or with a non-`true` value is unknown and answers false. The portal
-  projection reads this so a served control is never offered for an operation
-  the runtime cannot perform.
-  """
   @spec adapter_operation_supported?(Runtime.t() | nil, atom()) :: boolean()
   def adapter_operation_supported?(%Runtime{} = runtime, operation) when is_atom(operation) do
     adapter = value(runtime.capabilities, :adapter)
@@ -353,33 +344,12 @@ defmodule SymmetryControl.Orchestration.TaskReads do
     required_capabilities: :map
   }
 
-  @doc """
-  Whether `task` is the attempt a retry can replace: a terminal attempt that is
-  not Goal-owned.
-
-  The served retry gate resolves its eligibility from exactly this set, in the
-  workspace read and in the command responses, so a live or Goal-owned attempt
-  never claims a retry.
-  """
   @spec retryable_attempt?(Task.t()) :: boolean()
   def retryable_attempt?(%Task{goal_id: nil, state: state}) when state in ["failed", "cancelled"],
     do: true
 
   def retryable_attempt?(%Task{}), do: false
 
-  @doc """
-  The ids of `bindings` with at least one runtime assignment could select that
-  advertises the adapter `start` operation.
-
-  Each binding carries the values the retried generation is re-admitted with —
-  not the failed task row's (`Workspaces.retry_binding/2`) — and eligibility is
-  the non-transient part of the goal-less assignment path: same binding,
-  capability containment, supervisory and harness-kind clauses, intersected
-  with the adapter `start` requirement. Transient online, heartbeat and
-  capacity state is ignored: the served control states that some eligible
-  runtime could start the retried attempt; the scheduler still decides the
-  actual assignment.
-  """
   @spec retry_runtime_eligible_task_ids([retry_binding()]) :: MapSet.t(Ecto.UUID.t())
   def retry_runtime_eligible_task_ids(bindings) when is_list(bindings) do
     rows = Enum.map(bindings, &retry_binding_row/1)
@@ -395,17 +365,12 @@ defmodule SymmetryControl.Orchestration.TaskReads do
     |> MapSet.new()
   end
 
-  @doc """
-  Whether assignment could select a runtime that advertises the adapter `start`
-  operation for the retry `binding`; the single-binding reader for
-  `retry_runtime_eligible_task_ids/1`.
-  """
   @spec retry_runtime_eligible?(retry_binding()) :: boolean()
   def retry_runtime_eligible?(binding) when is_map(binding) do
     not Enum.empty?(retry_runtime_eligible_task_ids([binding]))
   end
 
-  def retry_binding_row(binding) do
+  defp retry_binding_row(binding) do
     Map.take(binding, Map.keys(@retry_binding_types))
   end
 
@@ -515,7 +480,7 @@ defmodule SymmetryControl.Orchestration.TaskReads do
     end)
   end
 
-  def runtime_read_models(rows) do
+  defp runtime_read_models(rows) do
     {completed, current} =
       Enum.reduce(rows, {[], nil}, fn row, {completed, current} ->
         case current do
@@ -536,7 +501,7 @@ defmodule SymmetryControl.Orchestration.TaskReads do
     Enum.reverse(completed)
   end
 
-  def runtime_read_model(%{machine: machine, runtime: runtime, run: run}) do
+  defp runtime_read_model(%{machine: machine, runtime: runtime, run: run}) do
     %{
       machine_id: machine.id,
       machine_name: machine.name,
@@ -557,9 +522,9 @@ defmodule SymmetryControl.Orchestration.TaskReads do
     |> add_active_run(run)
   end
 
-  def add_active_run(snapshot, nil), do: snapshot
+  defp add_active_run(snapshot, nil), do: snapshot
 
-  def add_active_run(snapshot, run) do
+  defp add_active_run(snapshot, run) do
     active_run = %{
       run_id: run.id,
       task_id: run.task_id,
@@ -575,7 +540,7 @@ defmodule SymmetryControl.Orchestration.TaskReads do
     }
   end
 
-  def finish_runtime_read_model(snapshot),
+  defp finish_runtime_read_model(snapshot),
     do: %{snapshot | active_runs: Enum.reverse(snapshot.active_runs)}
 
   @doc false
@@ -623,7 +588,7 @@ defmodule SymmetryControl.Orchestration.TaskReads do
 
   def current_waiting_context(_, _), do: nil
 
-  def latest_task_command(task_id) do
+  defp latest_task_command(task_id) do
     Repo.one(
       from command in Command,
         where: command.task_id == ^task_id,
@@ -632,7 +597,7 @@ defmodule SymmetryControl.Orchestration.TaskReads do
     )
   end
 
-  def with_history_task(task_id, opts, direction, callback) do
+  defp with_history_task(task_id, opts, direction, callback) do
     with true <- valid_uuid?(task_id),
          {:ok, limit} <- history_limit(opts),
          {:ok, position} <- history_position(opts, direction) do
@@ -646,42 +611,42 @@ defmodule SymmetryControl.Orchestration.TaskReads do
     end
   end
 
-  def history_limit(opts) when is_list(opts) do
+  defp history_limit(opts) when is_list(opts) do
     case Keyword.get(opts, :limit, @default_history_limit) do
       limit when is_integer(limit) and limit > 0 and limit <= @max_history_limit -> {:ok, limit}
       _ -> {:error, :invalid_request}
     end
   end
 
-  def history_limit(_), do: {:error, :invalid_request}
+  defp history_limit(_), do: {:error, :invalid_request}
 
-  def history_position(opts, :after) when is_list(opts),
+  defp history_position(opts, :after) when is_list(opts),
     do: validate_history_position(Keyword.get(opts, :after))
 
-  def history_position(opts, :before) when is_list(opts),
+  defp history_position(opts, :before) when is_list(opts),
     do: validate_timeline_position(Keyword.get(opts, :before))
 
-  def history_position(_, _), do: {:error, :invalid_request}
+  defp history_position(_, _), do: {:error, :invalid_request}
 
-  def validate_history_position(nil), do: {:ok, nil}
+  defp validate_history_position(nil), do: {:ok, nil}
 
-  def validate_history_position(%{inserted_at: %DateTime{} = inserted_at, id: id})
-      when is_binary(id) do
+  defp validate_history_position(%{inserted_at: %DateTime{} = inserted_at, id: id})
+       when is_binary(id) do
     if valid_uuid?(id),
       do: {:ok, %{inserted_at: inserted_at, id: id}},
       else: {:error, :invalid_request}
   end
 
-  def validate_history_position(_), do: {:error, :invalid_request}
+  defp validate_history_position(_), do: {:error, :invalid_request}
 
-  def validate_timeline_position(nil), do: {:ok, nil}
+  defp validate_timeline_position(nil), do: {:ok, nil}
 
-  def validate_timeline_position(%{
-        inserted_at: %DateTime{} = inserted_at,
-        source: source,
-        id: id
-      })
-      when is_binary(source) and is_binary(id) do
+  defp validate_timeline_position(%{
+         inserted_at: %DateTime{} = inserted_at,
+         source: source,
+         id: id
+       })
+       when is_binary(source) and is_binary(id) do
     if Map.has_key?(@timeline_source_ranks, source) and valid_uuid?(id) do
       {:ok, %{inserted_at: inserted_at, source: source, id: id}}
     else
@@ -689,11 +654,11 @@ defmodule SymmetryControl.Orchestration.TaskReads do
     end
   end
 
-  def validate_timeline_position(_), do: {:error, :invalid_request}
+  defp validate_timeline_position(_), do: {:error, :invalid_request}
 
-  def after_position(query, nil), do: query
+  defp after_position(query, nil), do: query
 
-  def after_position(query, %{inserted_at: inserted_at, id: id}) do
+  defp after_position(query, %{inserted_at: inserted_at, id: id}) do
     where(
       query,
       [entry, ...],
@@ -702,9 +667,9 @@ defmodule SymmetryControl.Orchestration.TaskReads do
     )
   end
 
-  def page_query(query, page_limit), do: limit(query, ^(page_limit + 1))
+  defp page_query(query, page_limit), do: limit(query, ^(page_limit + 1))
 
-  def page_with_next(entries, page_limit, cursor_key) do
+  defp page_with_next(entries, page_limit, cursor_key) do
     {page, remainder} = Enum.split(entries, page_limit)
 
     next_position =
@@ -717,13 +682,13 @@ defmodule SymmetryControl.Orchestration.TaskReads do
     %{cursor_key => next_position, entries: page}
   end
 
-  def entry_position(%{source: source, inserted_at: inserted_at, id: id}),
+  defp entry_position(%{source: source, inserted_at: inserted_at, id: id}),
     do: %{inserted_at: inserted_at, source: source, id: id}
 
-  def entry_position(%{inserted_at: inserted_at, id: id}),
+  defp entry_position(%{inserted_at: inserted_at, id: id}),
     do: %{inserted_at: inserted_at, id: id}
 
-  def task_timeline_events(task_id, before_position, fetch_limit) do
+  defp task_timeline_events(task_id, before_position, fetch_limit) do
     from(event in RunEvent,
       join: run in Run,
       on: run.id == event.run_id,
@@ -747,7 +712,7 @@ defmodule SymmetryControl.Orchestration.TaskReads do
     |> Repo.all()
   end
 
-  def task_timeline_transitions(task_id, before_position, fetch_limit) do
+  defp task_timeline_transitions(task_id, before_position, fetch_limit) do
     from(transition in RunTransition,
       join: run in Run,
       on: run.id == transition.run_id,
@@ -769,7 +734,7 @@ defmodule SymmetryControl.Orchestration.TaskReads do
     |> Repo.all()
   end
 
-  def task_timeline_commands(task_id, before_position, fetch_limit) do
+  defp task_timeline_commands(task_id, before_position, fetch_limit) do
     from(command in Command,
       where: command.task_id == ^task_id,
       order_by: [desc: command.inserted_at, desc: command.id],
@@ -793,13 +758,13 @@ defmodule SymmetryControl.Orchestration.TaskReads do
     |> Repo.all()
   end
 
-  def timeline_before_position(query, nil, _source), do: query
+  defp timeline_before_position(query, nil, _source), do: query
 
-  def timeline_before_position(
-        query,
-        %{inserted_at: inserted_at, source: source, id: id},
-        entry_source
-      ) do
+  defp timeline_before_position(
+         query,
+         %{inserted_at: inserted_at, source: source, id: id},
+         entry_source
+       ) do
     source_rank = Map.fetch!(@timeline_source_ranks, entry_source)
     cursor_rank = Map.fetch!(@timeline_source_ranks, source)
 
@@ -824,7 +789,7 @@ defmodule SymmetryControl.Orchestration.TaskReads do
     end
   end
 
-  def timeline_precedes?(left, right) do
+  defp timeline_precedes?(left, right) do
     case DateTime.compare(left.inserted_at, right.inserted_at) do
       :gt ->
         true
@@ -856,7 +821,7 @@ defmodule SymmetryControl.Orchestration.TaskReads do
 
   def work_snapshot(_, _, _), do: {:error, :invalid_request}
 
-  def daemon_runtime_snapshot(runtime_id, runtime_epoch, opts) do
+  defp daemon_runtime_snapshot(runtime_id, runtime_epoch, opts) do
     Repo.transaction(fn ->
       runtime = share_runtime(runtime_id)
       current = now(opts)
@@ -881,7 +846,7 @@ defmodule SymmetryControl.Orchestration.TaskReads do
       Repo.one(from runtime in Runtime, where: runtime.id == ^runtime_id, lock: "FOR SHARE") ||
         rollback(:not_found)
 
-  def share_task(task_id),
+  defp share_task(task_id),
     do:
       Repo.one(from task in Task, where: task.id == ^task_id, lock: "FOR SHARE") ||
         rollback(:not_found)

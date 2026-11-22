@@ -8,6 +8,7 @@ defmodule SymmetryControl.Orchestration do
 
   alias SymmetryControl.Orchestration.Machine
   alias SymmetryControl.Orchestration.Run
+  alias SymmetryControl.Orchestration.RunEvent
   alias SymmetryControl.Orchestration.Runtime
   alias SymmetryControl.Orchestration.Task
   alias SymmetryControl.Orchestration.Command
@@ -32,9 +33,24 @@ defmodule SymmetryControl.Orchestration do
   alias SymmetryControl.Orchestration.Commands
   alias SymmetryControl.Orchestration.TaskReads
 
+  @doc """
+  Whether `kind` names a native harness kind.
+
+  One list, two readers: native Goal admission selects runtimes on
+  `native_harness_kinds/0` in `next_goal_runtime/3`, and
+  `SymmetryControl.Chat` asks this predicate to decide whether a Chat-launched
+  (goal-less) start is admitted through the adapter operations rather than the
+  legacy supervisory flag. The Runtime and HarnessSession schema inclusions and
+  the database check constraints restate that vocabulary instead of reading it;
+  `SymmetryControl.NativeHarnessKindBindingTest` holds those restatements to
+  `native_harness_kinds/0`.
+  """
   @spec native_harness_kind?(term()) :: boolean()
   defdelegate native_harness_kind?(kind), to: Registry
 
+  @doc """
+  The native harness kinds `native_harness_kind?/1` admits.
+  """
   @spec native_harness_kinds() :: [String.t()]
   defdelegate native_harness_kinds(), to: Registry
 
@@ -101,18 +117,63 @@ defmodule SymmetryControl.Orchestration do
 
   defdelegate control_capabilities(task, run, runtime, pending?), to: TaskReads
 
+  @doc """
+  Whether `runtime` advertises the boolean adapter operation `operation`.
+
+  Only a runtime registered with the versioned adapter record advertises
+  per-operation support; a runtime without the record, without the operation,
+  or with a non-`true` value is unknown and answers false. The portal
+  projection reads this so a served control is never offered for an operation
+  the runtime cannot perform.
+  """
   @spec adapter_operation_supported?(Runtime.t() | nil, atom()) :: boolean()
-  defdelegate adapter_operation_supported?(arg1, operation), to: TaskReads
+  defdelegate adapter_operation_supported?(runtime, operation), to: TaskReads
 
+  @doc """
+  Whether `task` is the attempt a retry can replace: a terminal attempt that is
+  not Goal-owned.
+
+  The served retry gate resolves its eligibility from exactly this set, in the
+  workspace read and in the command responses, so a live or Goal-owned attempt
+  never claims a retry.
+  """
   @spec retryable_attempt?(Task.t()) :: boolean()
-  defdelegate retryable_attempt?(arg1), to: TaskReads
+  defdelegate retryable_attempt?(task), to: TaskReads
 
+  @doc """
+  The ids of `bindings` with at least one runtime assignment could select that
+  advertises the adapter `start` operation.
+
+  Each binding carries the values the retried generation is re-admitted with —
+  not the failed task row's (`Workspaces.retry_binding/2`) — and eligibility is
+  the non-transient part of the goal-less assignment path: same binding,
+  capability containment, supervisory and harness-kind clauses, intersected
+  with the adapter `start` requirement. Transient online, heartbeat and
+  capacity state is ignored: the served control states that some eligible
+  runtime could start the retried attempt; the scheduler still decides the
+  actual assignment.
+  """
   @spec retry_runtime_eligible_task_ids([retry_binding()]) :: MapSet.t(Ecto.UUID.t())
   defdelegate retry_runtime_eligible_task_ids(bindings), to: TaskReads
 
+  @doc """
+  Whether assignment could select a runtime that advertises the adapter `start`
+  operation for the retry `binding`; the single-binding reader for
+  `retry_runtime_eligible_task_ids/1`.
+  """
   @spec retry_runtime_eligible?(retry_binding()) :: boolean()
   defdelegate retry_runtime_eligible?(binding), to: TaskReads
 
+  @doc """
+  The required capabilities a retried generation is re-admitted with: `required`
+  with `supervisory_control: true` restored when the attempt being replaced
+  required it.
+
+  `retry_task/4` never lets a retry drop the supervisory fence of its
+  predecessor, and the served retry control resolves the same value through
+  `Workspaces.retry_binding/2`, so the reader states the assignment the retry
+  would apply.
+  """
   @spec retry_required_capabilities(map(), map() | nil) :: map()
   defdelegate retry_required_capabilities(required, current_required), to: Commands
 
@@ -130,7 +191,7 @@ defmodule SymmetryControl.Orchestration do
 
   @spec assignment_target(Run.t()) ::
           {:ok, %{machine_id: Ecto.UUID.t(), runtime_id: Ecto.UUID.t()}} | {:error, :not_found}
-  defdelegate assignment_target(arg1), to: Assignment
+  defdelegate assignment_target(run), to: Assignment
 
   @spec assign_one(keyword()) :: {:ok, Run.t()} | {:error, :no_assignment}
   defdelegate assign_one(opts \\ []), to: Assignment
@@ -162,11 +223,11 @@ defmodule SymmetryControl.Orchestration do
 
   @doc false
   @spec emit_claimed(Run.t()) :: :ok
-  defdelegate emit_claimed(arg1), to: Claims
+  defdelegate emit_claimed(run), to: Claims
 
   @doc false
   @spec emit_transition(Run.t(), String.t()) :: :ok
-  defdelegate emit_transition(arg1, state), to: Transitions
+  defdelegate emit_transition(run, state), to: Transitions
 
   @spec renew_lease(Ecto.UUID.t(), map(), keyword()) :: {:ok, Run.t()} | {:error, atom()}
   defdelegate renew_lease(run_id, fence, opts \\ []), to: Claims

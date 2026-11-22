@@ -1,4 +1,4 @@
-defmodule SymmetryControl.OrchestrationAssignmentBTest do
+defmodule SymmetryControl.OrchestrationGoalAssignmentTest do
   use SymmetryControl.OrchestrationCase, async: false
 
   alias Oban.Job

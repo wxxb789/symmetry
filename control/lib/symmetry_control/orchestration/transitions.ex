@@ -42,6 +42,7 @@ defmodule SymmetryControl.Orchestration.Transitions do
       lock_runtime: 1,
       now: 1,
       rollback: 1,
+      static_fence_matches?: 3,
       stamp_insert: 2,
       stamp_update: 2,
       valid_fence?: 1
@@ -324,7 +325,7 @@ defmodule SymmetryControl.Orchestration.Transitions do
 
   def reconcile(_, _, _, _), do: {:error, :invalid_request}
 
-  def reconcile_runtime(runtime_id, runtime_epoch, journals, opts) do
+  defp reconcile_runtime(runtime_id, runtime_epoch, journals, opts) do
     Repo.transaction(fn ->
       runtime = share_runtime(runtime_id)
       current = now(opts)
@@ -414,7 +415,7 @@ defmodule SymmetryControl.Orchestration.Transitions do
     %{expired_runs: expired_runs, offline_runtimes: offline_runtimes}
   end
 
-  def expire_run(run_id, opts) do
+  defp expire_run(run_id, opts) do
     case Repo.transaction(fn ->
            {task, run, _runtime} = lock_chain(run_id)
            current = now(opts)
@@ -523,7 +524,7 @@ defmodule SymmetryControl.Orchestration.Transitions do
     end
   end
 
-  def expire_offline_runtimes(opts) do
+  defp expire_offline_runtimes(opts) do
     runtime_ids =
       Repo.all(
         from runtime in Runtime,
@@ -560,17 +561,17 @@ defmodule SymmetryControl.Orchestration.Transitions do
     end)
   end
 
-  def transition_once!(
-        task,
-        run,
-        target_state,
-        payload,
-        transition_id,
-        body_hash,
-        body_hash_version,
-        current,
-        goal
-      ) do
+  defp transition_once!(
+         task,
+         run,
+         target_state,
+         payload,
+         transition_id,
+         body_hash,
+         body_hash_version,
+         current,
+         goal
+       ) do
     validate_transition!(transition_origin_state(run), target_state)
     ensure_expired_run_can_settle_task!(task, run)
     apply_supervisory_transition!(task, run, target_state, payload, current, goal)
@@ -609,22 +610,22 @@ defmodule SymmetryControl.Orchestration.Transitions do
     {run, receipt}
   end
 
-  def task_attrs_for_transition("completed", payload, _transition_id),
+  defp task_attrs_for_transition("completed", payload, _transition_id),
     do: %{state: "completed", waiting_transition_id: nil, result: payload, failure: nil}
 
-  def task_attrs_for_transition("failed", payload, _transition_id),
+  defp task_attrs_for_transition("failed", payload, _transition_id),
     do: %{state: "failed", waiting_transition_id: nil, result: nil, failure: payload}
 
-  def task_attrs_for_transition("cancelled", _payload, _transition_id),
+  defp task_attrs_for_transition("cancelled", _payload, _transition_id),
     do: %{state: "cancelled", waiting_transition_id: nil, result: nil, failure: nil}
 
-  def task_attrs_for_transition("waiting_for_input", _payload, transition_id),
+  defp task_attrs_for_transition("waiting_for_input", _payload, transition_id),
     do: %{state: "waiting_for_input", waiting_transition_id: transition_id}
 
-  def task_attrs_for_transition(target_state, _payload, _transition_id),
+  defp task_attrs_for_transition(target_state, _payload, _transition_id),
     do: %{state: target_state, waiting_transition_id: nil}
 
-  def task_attrs_for_expiry(task, run, true, _persisted_run_state, _failure) do
+  defp task_attrs_for_expiry(task, run, true, _persisted_run_state, _failure) do
     next_generation = run.generation + 1
 
     if goal_attempt_limit_exhausted?(task, next_generation) do
@@ -644,7 +645,7 @@ defmodule SymmetryControl.Orchestration.Transitions do
     end
   end
 
-  def task_attrs_for_expiry(_task, _run, false, terminal_state, failure) do
+  defp task_attrs_for_expiry(_task, _run, false, terminal_state, failure) do
     %{state: terminal_state, waiting_transition_id: nil, failure: failure}
   end
 
@@ -683,7 +684,7 @@ defmodule SymmetryControl.Orchestration.Transitions do
     |> Repo.update!()
   end
 
-  def attempt_limit_failure(task) do
+  defp attempt_limit_failure(task) do
     %{
       "reason" => "attempt_limit",
       "message" => "The admitted run attempt limit has been exhausted.",
@@ -691,27 +692,27 @@ defmodule SymmetryControl.Orchestration.Transitions do
     }
   end
 
-  def lease_expired_failure do
+  defp lease_expired_failure do
     %{
       "reason" => "lease_expired",
       "message" => "Worker lease expired before a terminal delivery was accepted."
     }
   end
 
-  def restore_expired_attempt_generation(task_attrs, %Run{
-        state: "expired",
-        generation: generation
-      }),
-      do: Map.put(task_attrs, :attempt_generation, generation)
+  defp restore_expired_attempt_generation(task_attrs, %Run{
+         state: "expired",
+         generation: generation
+       }),
+       do: Map.put(task_attrs, :attempt_generation, generation)
 
-  def restore_expired_attempt_generation(task_attrs, %Run{
-        state: "failed",
-        failure: %{"reason" => "lease_expired"},
-        generation: generation
-      }),
-      do: Map.put(task_attrs, :attempt_generation, generation)
+  defp restore_expired_attempt_generation(task_attrs, %Run{
+         state: "failed",
+         failure: %{"reason" => "lease_expired"},
+         generation: generation
+       }),
+       do: Map.put(task_attrs, :attempt_generation, generation)
 
-  def restore_expired_attempt_generation(task_attrs, _run), do: task_attrs
+  defp restore_expired_attempt_generation(task_attrs, _run), do: task_attrs
 
   @doc false
   def enqueue_goal_task_terminal!(task, run, terminal_state, opts)
@@ -732,14 +733,14 @@ defmodule SymmetryControl.Orchestration.Transitions do
 
   def enqueue_goal_task_terminal!(_task, _run, _state, _opts), do: nil
 
-  def goal_task_terminal_receipt(%Task{goal_id: goal_id}, %Run{} = run)
-      when not is_nil(goal_id) do
+  defp goal_task_terminal_receipt(%Task{goal_id: goal_id}, %Run{} = run)
+       when not is_nil(goal_id) do
     %{task_id: run.task_id, run_id: run.id, generation: run.generation}
   end
 
-  def goal_task_terminal_receipt(_task, _run), do: nil
+  defp goal_task_terminal_receipt(_task, _run), do: nil
 
-  def settlement_job_args(%{task_id: task_id, run_id: run_id, generation: generation}) do
+  defp settlement_job_args(%{task_id: task_id, run_id: run_id, generation: generation}) do
     %{"task_id" => task_id, "run_id" => run_id, "generation" => generation}
   end
 
@@ -759,46 +760,46 @@ defmodule SymmetryControl.Orchestration.Transitions do
     end
   end
 
-  def ensure_expired_run_can_settle_task!(%Task{state: "queued"}, %Run{state: "expired"}),
+  defp ensure_expired_run_can_settle_task!(%Task{state: "queued"}, %Run{state: "expired"}),
     do: :ok
 
-  def ensure_expired_run_can_settle_task!(
-        %Task{state: "queued"},
-        %Run{state: "failed", failure: %{"reason" => "lease_expired"}}
-      ),
-      do: :ok
+  defp ensure_expired_run_can_settle_task!(
+         %Task{state: "queued"},
+         %Run{state: "failed", failure: %{"reason" => "lease_expired"}}
+       ),
+       do: :ok
 
-  def ensure_expired_run_can_settle_task!(
-        %Task{
-          state: "failed",
-          current_generation: generation,
-          failure: %{"reason" => "attempt_limit"}
-        },
-        %Run{state: "expired", generation: generation}
-      ),
-      do: :ok
+  defp ensure_expired_run_can_settle_task!(
+         %Task{
+           state: "failed",
+           current_generation: generation,
+           failure: %{"reason" => "attempt_limit"}
+         },
+         %Run{state: "expired", generation: generation}
+       ),
+       do: :ok
 
-  def ensure_expired_run_can_settle_task!(
-        %Task{
-          state: "failed",
-          current_generation: generation,
-          failure: %{"reason" => "attempt_limit"}
-        },
-        %Run{state: "failed", failure: %{"reason" => "lease_expired"}, generation: generation}
-      ),
-      do: :ok
+  defp ensure_expired_run_can_settle_task!(
+         %Task{
+           state: "failed",
+           current_generation: generation,
+           failure: %{"reason" => "attempt_limit"}
+         },
+         %Run{state: "failed", failure: %{"reason" => "lease_expired"}, generation: generation}
+       ),
+       do: :ok
 
-  def ensure_expired_run_can_settle_task!(_task, %Run{state: "expired"}),
+  defp ensure_expired_run_can_settle_task!(_task, %Run{state: "expired"}),
     do: rollback(:ownership_lost)
 
-  def ensure_expired_run_can_settle_task!(_task, _run), do: :ok
+  defp ensure_expired_run_can_settle_task!(_task, _run), do: :ok
 
-  def transition_origin_state(%Run{state: "failed", failure: %{"reason" => "lease_expired"}}),
+  defp transition_origin_state(%Run{state: "failed", failure: %{"reason" => "lease_expired"}}),
     do: "expired"
 
-  def transition_origin_state(%Run{state: state}), do: state
+  defp transition_origin_state(%Run{state: state}), do: state
 
-  def ensure_cancelled_transition_authority!(%Run{state: "cancelled"} = run, target_state) do
+  defp ensure_cancelled_transition_authority!(%Run{state: "cancelled"} = run, target_state) do
     if target_state in @terminal_targets and
          not Repo.exists?(
            from transition in RunTransition,
@@ -808,24 +809,24 @@ defmodule SymmetryControl.Orchestration.Transitions do
     end
   end
 
-  def ensure_cancelled_transition_authority!(_run, _target_state), do: :ok
+  defp ensure_cancelled_transition_authority!(_run, _target_state), do: :ok
 
-  def valid_transition?("claimed", state) when state in ["running", "completed", "failed"],
+  defp valid_transition?("claimed", state) when state in ["running", "completed", "failed"],
     do: true
 
-  def valid_transition?("running", state)
-      when state in ["paused", "waiting_for_input", "completed", "failed"], do: true
+  defp valid_transition?("running", state)
+       when state in ["paused", "waiting_for_input", "completed", "failed"], do: true
 
-  def valid_transition?("paused", state) when state in ["running", "failed"], do: true
+  defp valid_transition?("paused", state) when state in ["running", "failed"], do: true
 
-  def valid_transition?("waiting_for_input", state)
-      when state in ["running", "completed", "failed"],
-      do: true
+  defp valid_transition?("waiting_for_input", state)
+       when state in ["running", "completed", "failed"],
+       do: true
 
-  def valid_transition?("cancelling", "cancelled"), do: true
-  def valid_transition?(_, _), do: false
+  defp valid_transition?("cancelling", "cancelled"), do: true
+  defp valid_transition?(_, _), do: false
 
-  def validate_transition!(current_state, target_state) do
+  defp validate_transition!(current_state, target_state) do
     cond do
       target_state not in ["running", "paused", "waiting_for_input" | @terminal_targets] ->
         rollback(:invalid_transition)
@@ -844,7 +845,7 @@ defmodule SymmetryControl.Orchestration.Transitions do
     end
   end
 
-  def transition_response(run, transition) do
+  defp transition_response(run, transition) do
     attrs =
       case transition.state do
         "completed" -> %{state: transition.state, result: transition.payload, failure: nil}
@@ -855,7 +856,7 @@ defmodule SymmetryControl.Orchestration.Transitions do
     struct(run, attrs)
   end
 
-  def apply_supervisory_transition!(task, run, target_state, payload, current, goal) do
+  defp apply_supervisory_transition!(task, run, target_state, payload, current, goal) do
     kind =
       case {run.state, target_state} do
         {"running", "paused"} ->
@@ -897,12 +898,12 @@ defmodule SymmetryControl.Orchestration.Transitions do
     end
   end
 
-  def ensure_goal_pause_command_current!(nil, _task, _command, _kind), do: :ok
+  defp ensure_goal_pause_command_current!(nil, _task, _command, _kind), do: :ok
 
-  def ensure_goal_pause_command_current!(_goal, _task, _command, kind) when kind != "pause",
+  defp ensure_goal_pause_command_current!(_goal, _task, _command, kind) when kind != "pause",
     do: :ok
 
-  def ensure_goal_pause_command_current!(goal, task, command, "pause") do
+  defp ensure_goal_pause_command_current!(goal, task, command, "pause") do
     action_id =
       case String.split(command.idempotency_key, ":", parts: 4) do
         ["goal-control", action_id, "pause", task_id] when task_id == task.id ->
@@ -919,7 +920,7 @@ defmodule SymmetryControl.Orchestration.Transitions do
   def goal_control_idempotency_key(action_id, kind, task_id),
     do: "goal-control:#{action_id}:#{kind}:#{task_id}"
 
-  def pending_pause?(run_id) do
+  defp pending_pause?(run_id) do
     Repo.exists?(
       from command in Command,
         where:
@@ -949,7 +950,7 @@ defmodule SymmetryControl.Orchestration.Transitions do
     )
   end
 
-  def validate_decision_packet!(task, payload) do
+  defp validate_decision_packet!(task, payload) do
     decision = value(payload, :decision)
     required? = value(task.required_capabilities, :supervisory_control, false) == true
 
@@ -958,7 +959,7 @@ defmodule SymmetryControl.Orchestration.Transitions do
        do: rollback(:invalid_request)
   end
 
-  def valid_decision?(decision) when is_map(decision) do
+  defp valid_decision?(decision) when is_map(decision) do
     options = value(decision, :options)
     recommendation = value(decision, :recommended_option_id)
 
@@ -972,7 +973,7 @@ defmodule SymmetryControl.Orchestration.Transitions do
       (is_nil(recommendation) or Enum.any?(options, &(value(&1, :id) == recommendation)))
   end
 
-  def valid_decision?(_), do: false
+  defp valid_decision?(_), do: false
 
   @doc false
   def validate_decision_choice!(task, run, payload, opts) do
@@ -989,7 +990,7 @@ defmodule SymmetryControl.Orchestration.Transitions do
     end
   end
 
-  def ensure_transition_fence!(task, run, runtime, fence, target_state, current) do
+  defp ensure_transition_fence!(task, run, runtime, fence, target_state, current) do
     if target_state in @terminal_targets do
       ensure_terminal_fence!(task, run, runtime, fence, current)
     else
@@ -997,7 +998,7 @@ defmodule SymmetryControl.Orchestration.Transitions do
     end
   end
 
-  def ensure_transition_static_fence!(task, run, runtime, fence, target_state) do
+  defp ensure_transition_static_fence!(task, run, runtime, fence, target_state) do
     if target_state in @terminal_targets do
       ensure_terminal_static_fence!(task, run, fence)
     else
@@ -1018,45 +1019,37 @@ defmodule SymmetryControl.Orchestration.Transitions do
     unless valid?, do: rollback(:terminal_grace_expired)
   end
 
-  def within_terminal_grace?(%Run{lease_expires_at: %DateTime{} = lease_expires_at}, current) do
+  defp within_terminal_grace?(%Run{lease_expires_at: %DateTime{} = lease_expires_at}, current) do
     DateTime.compare(DateTime.add(lease_expires_at, @terminal_grace_ms, :millisecond), current) !=
       :lt
   end
 
-  def within_terminal_grace?(_run, _current), do: false
+  defp within_terminal_grace?(_run, _current), do: false
 
   @doc false
   def ensure_terminal_static_fence!(task, run, fence) do
-    valid? =
-      run.runtime_id == value(fence, :runtime_id) and
-        run.claimed_runtime_epoch == value(fence, :runtime_epoch) and
-        run.generation == value(fence, :generation) and
-        task.current_generation == value(fence, :generation) and
-        run.claim_id == value(fence, :claim_id) and
-        run.lease_token == value(fence, :lease_token)
-
-    unless valid?, do: rollback(:ownership_lost)
+    unless static_fence_matches?(task, run, fence), do: rollback(:ownership_lost)
   end
 
   # A Goal pause transition consumes a Goal-issued control action and keeps the
   # Goal -> WorkItem -> Task -> Run lock order; its paused Goal state is the authority.
-  def lock_transition_chain(run_id, "paused") do
+  defp lock_transition_chain(run_id, "paused") do
     {task, run, runtime, goal, _item} = lock_goal_chain(run_id)
     {task, run, runtime, goal, nil}
   end
 
   # A terminal receipt can still settle an already-started Goal run after its
   # Goal changes. All other progress requires current Goal authority.
-  def lock_transition_chain(run_id, target_state) when target_state in @terminal_targets do
+  defp lock_transition_chain(run_id, target_state) when target_state in @terminal_targets do
     {task, run, runtime} = lock_chain(run_id)
     {task, run, runtime, nil, nil}
   end
 
-  def lock_transition_chain(run_id, _target_state) do
+  defp lock_transition_chain(run_id, _target_state) do
     lock_goal_chain(run_id)
   end
 
-  def goal_owned_run?(run_id) do
+  defp goal_owned_run?(run_id) do
     Repo.exists?(
       from run in Run,
         join: task in Task,
@@ -1065,19 +1058,19 @@ defmodule SymmetryControl.Orchestration.Transitions do
     )
   end
 
-  def ensure_current_goal_transition_authority!(nil, _item, _task, _target_state), do: :ok
+  defp ensure_current_goal_transition_authority!(nil, _item, _task, _target_state), do: :ok
 
-  def ensure_current_goal_transition_authority!(_goal, _item, _task, target_state)
-      when target_state in @terminal_targets or target_state == "paused",
-      do: :ok
+  defp ensure_current_goal_transition_authority!(_goal, _item, _task, target_state)
+       when target_state in @terminal_targets or target_state == "paused",
+       do: :ok
 
-  def ensure_current_goal_transition_authority!(goal, item, task, _target_state) do
+  defp ensure_current_goal_transition_authority!(goal, item, task, _target_state) do
     ensure_current_goal_execution!(goal, item, task)
   end
 
-  def event_replay([], _existing_events), do: :missing
+  defp event_replay([], _existing_events), do: :missing
 
-  def event_replay(events, existing_events) do
+  defp event_replay(events, existing_events) do
     {all_present?, conflict?, stored, _request_hashes} =
       Enum.reduce(events, {true, false, [], %{}}, fn event,
                                                      {all_present?, conflict?, stored,
@@ -1120,7 +1113,7 @@ defmodule SymmetryControl.Orchestration.Transitions do
     end
   end
 
-  def ensure_current_goal_control_action!(goal, revision, action_id, command_kind) do
+  defp ensure_current_goal_control_action!(goal, revision, action_id, command_kind) do
     action =
       Repo.one(
         from event in GoalEvent,
@@ -1152,7 +1145,7 @@ defmodule SymmetryControl.Orchestration.Transitions do
            do: rollback(:stale_revision)
   end
 
-  def valid_event?(event) when is_map(event) do
+  defp valid_event?(event) when is_map(event) do
     valid_uuid?(value(event, :event_id)) and
       is_integer(value(event, :sequence)) and value(event, :sequence) >= 0 and
       is_binary(value(event, :kind)) and is_map(value(event, :payload, %{})) and
@@ -1160,9 +1153,9 @@ defmodule SymmetryControl.Orchestration.Transitions do
       jsonb_compatible?(value(event, :payload, %{}))
   end
 
-  def valid_event?(_), do: false
+  defp valid_event?(_), do: false
 
-  def valid_journal?(journal) when is_map(journal) do
+  defp valid_journal?(journal) when is_map(journal) do
     valid_active_run?(%{
       run_id: value(journal, :run_id),
       generation: value(journal, :generation),
@@ -1175,9 +1168,9 @@ defmodule SymmetryControl.Orchestration.Transitions do
       value(journal, :last_event_sequence) >= 0
   end
 
-  def valid_journal?(_), do: false
+  defp valid_journal?(_), do: false
 
-  def event_body(event) do
+  defp event_body(event) do
     %{
       sequence: value(event, :sequence),
       kind: value(event, :kind),
