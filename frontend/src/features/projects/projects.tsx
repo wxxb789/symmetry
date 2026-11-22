@@ -94,7 +94,7 @@ export function ProjectPage() {
   // like every other update, and the surface re-reads the server's answer.
   const restore = useMutation({
     mutationFn: (target: { id: string; version: number }) =>
-      application.api.updateProject(target.id, { version: target.version, status: "active" }, csrf, new AbortController().signal),
+      application.api.updateProject(target.id, { version: target.version, status: "active" }, csrf),
     onSuccess: () => { setNotice({ tone: "status", text: "Project restored." }); },
     onError: (error) => { setNotice({ tone: "alert", text: refusalNotice(error) }); },
     onSettled: async () => { await reRead(); },

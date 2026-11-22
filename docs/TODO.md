@@ -1372,10 +1372,6 @@ is fixed here; each bullet names what a follow-up has to re-derive.
       `vite.config.ts`; the `warn` entry and its `// 2` note feed the ratchet, so fixing the accesses
       and dropping the entry must happen together.
 
-- [ ] `frontend/src/services/api.ts`: Goal command/creation writes have no caller-cancellation
-      signal — the W4-09 reads/writes split owns adding one; `run()` accepts an optional `signal`
-      the write path never supplies.
-
 - [ ] `pyproject.toml`: the three `scripts/ci/*model-routing-record-sanitize*` files stay in
       `extend-exclude`; the entry's premise (see "scripts/ci ruff baseline: drop the #137 exclude")
       no longer holds after #137 — the landed files carry 2 `PERF401` findings and 67 `ruff format`

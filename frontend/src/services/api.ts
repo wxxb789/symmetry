@@ -484,7 +484,7 @@ interface InputOutcome {
   command: ControlReceipt;
 }
 
-export interface Api {
+export interface Reads {
   workspace: (projectId: string | null, signal: AbortSignal) => Promise<Workspace>;
   workDetail: (workItemId: string, signal: AbortSignal) => Promise<WorkDetail>;
   workTimeline: (workItemId: string, before: string | null, signal: AbortSignal) => Promise<WorkTimeline>;
@@ -493,50 +493,49 @@ export interface Api {
   goalEvents: (goalId: string, after: number, signal: AbortSignal) => Promise<GoalEvents>;
   session: (signal: AbortSignal) => Promise<Session>;
   connections: (signal: AbortSignal) => Promise<ConnectionsReadModel>;
-  createConnection: (draft: ConnectionDraft, csrf: string, signal: AbortSignal) => Promise<ConnectionReceipt>;
-  updateConnection: (connectionId: string, update: ConnectionUpdate, csrf: string, signal: AbortSignal) => Promise<ConnectionReceipt>;
-  deleteConnection: (connectionId: string, version: number, csrf: string, signal: AbortSignal) => Promise<{ disposition: string; deletedConnectionId: string }>;
-  checkConnection: (connectionId: string, csrf: string, signal: AbortSignal) => Promise<ConnectionReceipt>;
-  createProject: (draft: ProjectDraft, csrf: string, signal: AbortSignal) => Promise<WriteReceipt>;
-  updateProject: (projectId: string, changes: ProjectChanges, csrf: string, signal: AbortSignal) => Promise<WriteReceipt>;
-  createWorkItem: (projectId: string, draft: WorkItemDraft, csrf: string, signal: AbortSignal) => Promise<WorkItemReceipt>;
-  updateWorkItem: (workItemId: string, changes: WorkItemChanges, csrf: string, signal: AbortSignal) => Promise<WorkItemReceipt>;
-  /**
-   * The assignment write, on the same work-item endpoint as `updateWorkItem`:
-   * the body is the version-fenced assignment and the answer is read as the
-   * served identity and version rather than a creation disposition.
-   */
-  assignWorkItem: (workItemId: string, assignment: WorkItemAssignment, csrf: string, signal: AbortSignal) => Promise<AssignmentReceipt>;
-  moveWorkItem: (workItemId: string, intent: MoveIntent, csrf: string, signal: AbortSignal) => Promise<WorkItemReceipt>;
-  createResource: (projectId: string, draft: ResourceDraft, csrf: string, signal: AbortSignal) => Promise<ResourceReceipt>;
-  updateResource: (resourceId: string, update: ResourceUpdate, csrf: string, signal: AbortSignal) => Promise<ResourceReceipt>;
-  deleteResource: (resourceId: string, version: number, csrf: string, signal: AbortSignal) => Promise<{ deletedResourceId: string }>;
-  syncResource: (resourceId: string, csrf: string, signal: AbortSignal) => Promise<ResourceReceipt>;
-  syncProject: (projectId: string, csrf: string, signal: AbortSignal) => Promise<{ syncedResourceIds: readonly string[] }>;
   /**
    * The scoped conversation read. The query string carries only the members the
    * server accepts for that scope, and the cursor is always the served opaque
    * `before` direction.
    */
   chatConversation: (query: ChatConversationQuery, signal: AbortSignal) => Promise<ChatConversation>;
+}
+
+export interface Writes {
+  createConnection: (draft: ConnectionDraft, csrf: string) => Promise<ConnectionReceipt>;
+  updateConnection: (connectionId: string, update: ConnectionUpdate, csrf: string) => Promise<ConnectionReceipt>;
+  deleteConnection: (connectionId: string, version: number, csrf: string) => Promise<{ disposition: string; deletedConnectionId: string }>;
+  checkConnection: (connectionId: string, csrf: string) => Promise<ConnectionReceipt>;
+  createProject: (draft: ProjectDraft, csrf: string) => Promise<WriteReceipt>;
+  updateProject: (projectId: string, changes: ProjectChanges, csrf: string) => Promise<WriteReceipt>;
+  createWorkItem: (projectId: string, draft: WorkItemDraft, csrf: string) => Promise<WorkItemReceipt>;
+  updateWorkItem: (workItemId: string, changes: WorkItemChanges, csrf: string) => Promise<WorkItemReceipt>;
+  assignWorkItem: (workItemId: string, assignment: WorkItemAssignment, csrf: string) => Promise<AssignmentReceipt>;
+  moveWorkItem: (workItemId: string, intent: MoveIntent, csrf: string) => Promise<WorkItemReceipt>;
+  createResource: (projectId: string, draft: ResourceDraft, csrf: string) => Promise<ResourceReceipt>;
+  updateResource: (resourceId: string, update: ResourceUpdate, csrf: string) => Promise<ResourceReceipt>;
+  deleteResource: (resourceId: string, version: number, csrf: string) => Promise<{ deletedResourceId: string }>;
+  syncResource: (resourceId: string, csrf: string) => Promise<ResourceReceipt>;
+  syncProject: (projectId: string, csrf: string) => Promise<{ syncedResourceIds: readonly string[] }>;
   /**
    * One conversation message. The payload is the caller's frozen request; the
    * 200/201 status is the disposition the answer itself does not carry. One
    * attempt per call — a caller that must retry resends the same payload.
    */
-  chatMessage: (payload: ChatMessageRequest, csrf: string, signal: AbortSignal) => Promise<ChatMessageOutcome>;
-  startWork: (workItemId: string, actionId: ActionId, csrf: string, signal: AbortSignal) => Promise<StartOutcome>;
-  cancelWork: (workItemId: string, generation: ExecutionGeneration, actionId: ActionId, csrf: string, signal: AbortSignal) => Promise<CancelOutcome>;
-  retryWork: (workItemId: string, generation: ExecutionGeneration, actionId: ActionId, csrf: string, signal: AbortSignal) => Promise<RetryOutcome>;
+  chatMessage: (payload: ChatMessageRequest, csrf: string) => Promise<ChatMessageOutcome>;
+  startWork: (workItemId: string, actionId: ActionId, csrf: string) => Promise<StartOutcome>;
+  cancelWork: (workItemId: string, generation: ExecutionGeneration, actionId: ActionId, csrf: string) => Promise<CancelOutcome>;
+  retryWork: (workItemId: string, generation: ExecutionGeneration, actionId: ActionId, csrf: string) => Promise<RetryOutcome>;
   provideInput: (
     workItemId: string,
     input: Record<string, unknown>,
     waitingTransitionId: string,
     actionId: ActionId,
     csrf: string,
-    signal: AbortSignal,
   ) => Promise<InputOutcome>;
 }
+
+export type Api = Reads & Writes;
 
 const unreachable = () => new Network({ message: "Cannot reach the server. Check your connection and try again." });
 
@@ -613,12 +612,11 @@ function request<A>(
   // answers 200, a created one 201).
   decode: (body: Uint8Array, status: number) => Effect.Effect<A, unknown>,
   surface: RefusalSurface = "server",
+  signal?: AbortSignal,
 ): Effect.Effect<A, ApiError> {
   return Effect.gen(function* () {
-    // Fetch and body read share one signalled step, so a caller cancel aborts an
-    // in-flight body download; a controller-free second step would leave it running.
     const { response, expired, body } = yield* Effect.tryPromise({
-      try: async (signal) => {
+      try: async () => {
         const response = await fetcher(path, {
           method: init.method,
           credentials: "same-origin",
@@ -630,7 +628,7 @@ function request<A>(
           cache: "no-store",
           redirect: "manual",
           ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
-          signal,
+          ...(signal === undefined ? {} : { signal }),
         });
         // An expiry answer is classified from its status alone, so its body stays unread:
         // an unreadable one cannot turn the session failure into a transport failure.
@@ -730,102 +728,107 @@ const chatMessageResponse = (body: Uint8Array, status: number) =>
 export function createApi(
   fetcher: typeof fetch = globalThis.fetch.bind(globalThis),
 ): Api {
+  const read = <A>(
+    path: string,
+    decode: (body: Uint8Array) => Effect.Effect<A, unknown>,
+    signal: AbortSignal,
+  ): Promise<A> => run(request(fetcher, path, { method: "GET" }, decode, "server", signal), signal);
   return {
     workspace(projectId: string | null, signal: AbortSignal): Promise<Workspace> {
       const query = projectId === null ? "" : `?${new URLSearchParams({ project_id: projectId })}`;
-      return run(request(fetcher, `/portal/api/workspace${query}`, { method: "GET" }, (body) => decodeBody(body).pipe(Effect.flatMap((text) => WorkspaceRead.decodeJson(text)))), signal);
+      return read(`/portal/api/workspace${query}`, (body) => decodeBody(body).pipe(Effect.flatMap((text) => WorkspaceRead.decodeJson(text))), signal);
     },
     workDetail(workItemId: string, signal: AbortSignal): Promise<WorkDetail> {
-      return run(request(fetcher, `/portal/api/work-items/${encodeURIComponent(workItemId)}`, { method: "GET" }, (body) => decodeBody(body).pipe(Effect.flatMap((text) => WorkDetailRead.decodeJson(text)))), signal);
+      return read(`/portal/api/work-items/${encodeURIComponent(workItemId)}`, (body) => decodeBody(body).pipe(Effect.flatMap((text) => WorkDetailRead.decodeJson(text))), signal);
     },
     workTimeline(workItemId: string, before: string | null, signal: AbortSignal): Promise<WorkTimeline> {
       // The cursor is an opaque signed token: only the served `before` direction exists.
       const query = before === null ? "" : `?${new URLSearchParams({ before })}`;
-      return run(request(fetcher, `/portal/api/work-items/${encodeURIComponent(workItemId)}/timeline${query}`, { method: "GET" }, (body) => decodeBody(body).pipe(Effect.flatMap((text) => WorkTimelineRead.decodeJson(text)))), signal);
+      return read(`/portal/api/work-items/${encodeURIComponent(workItemId)}/timeline${query}`, (body) => decodeBody(body).pipe(Effect.flatMap((text) => WorkTimelineRead.decodeJson(text))), signal);
     },
     attention(projectId: string | null, cursor: string | null, signal: AbortSignal): Promise<Attention> {
       const query = new URLSearchParams();
       if (projectId !== null) query.set("project_id", projectId);
       if (cursor !== null) query.set("cursor", cursor);
       const suffix = query.size === 0 ? "" : `?${query}`;
-      return run(request(fetcher, `/portal/api/attention${suffix}`, { method: "GET" }, (body) => decodeBody(body).pipe(Effect.flatMap((text) => AttentionReadBoundary.decodeJson(text)))), signal);
+      return read(`/portal/api/attention${suffix}`, (body) => decodeBody(body).pipe(Effect.flatMap((text) => AttentionReadBoundary.decodeJson(text))), signal);
     },
     goal(goalId: string, signal: AbortSignal): Promise<GoalProjection> {
-      return run(request(fetcher, `/portal/api/goals/${encodeURIComponent(goalId)}`, { method: "GET" }, (body) => decodeBody(body).pipe(Effect.flatMap((text) => GoalReadBoundary.decodeJson(text)))), signal);
+      return read(`/portal/api/goals/${encodeURIComponent(goalId)}`, (body) => decodeBody(body).pipe(Effect.flatMap((text) => GoalReadBoundary.decodeJson(text))), signal);
     },
     goalEvents(goalId: string, after: number, signal: AbortSignal): Promise<GoalEvents> {
       const query = `?${new URLSearchParams({ after: String(after) })}`;
-      return run(request(fetcher, `/portal/api/goals/${encodeURIComponent(goalId)}/events${query}`, { method: "GET" }, (body) => decodeBody(body).pipe(Effect.flatMap((text) => Schema.decodeUnknown(Schema.parseJson(GoalEventsShape))(text)))), signal);
+      return read(`/portal/api/goals/${encodeURIComponent(goalId)}/events${query}`, (body) => decodeBody(body).pipe(Effect.flatMap((text) => Schema.decodeUnknown(Schema.parseJson(GoalEventsShape))(text))), signal);
     },
     session(signal: AbortSignal): Promise<Session> {
-      return run(request(fetcher, "/portal/api/session", { method: "GET" }, (body) => decodeBody(body).pipe(Effect.flatMap((text) => Schema.decodeUnknown(Schema.parseJson(Session))(text)))), signal);
+      return read("/portal/api/session", (body) => decodeBody(body).pipe(Effect.flatMap((text) => Schema.decodeUnknown(Schema.parseJson(Session))(text))), signal);
     },
     connections(signal: AbortSignal): Promise<ConnectionsReadModel> {
-      return run(request(fetcher, "/portal/api/connections", { method: "GET" }, (body) => decodeBody(body).pipe(Effect.flatMap((text) => ConnectionsRead.decodeJson(text)))), signal);
+      return read("/portal/api/connections", (body) => decodeBody(body).pipe(Effect.flatMap((text) => ConnectionsRead.decodeJson(text))), signal);
     },
-    createConnection(draft: ConnectionDraft, csrf: string, signal: AbortSignal): Promise<ConnectionReceipt> {
-      return run(request(fetcher, "/portal/api/connections", { method: "POST", body: draft, csrf }, receipt), signal);
+    createConnection(draft: ConnectionDraft, csrf: string): Promise<ConnectionReceipt> {
+      return run(request(fetcher, "/portal/api/connections", { method: "POST", body: draft, csrf }, receipt));
     },
-    updateConnection(connectionId: string, update: ConnectionUpdate, csrf: string, signal: AbortSignal): Promise<ConnectionReceipt> {
-      return run(request(fetcher, `/portal/api/connections/${encodeURIComponent(connectionId)}`, { method: "PATCH", body: update, csrf }, receipt), signal);
+    updateConnection(connectionId: string, update: ConnectionUpdate, csrf: string): Promise<ConnectionReceipt> {
+      return run(request(fetcher, `/portal/api/connections/${encodeURIComponent(connectionId)}`, { method: "PATCH", body: update, csrf }, receipt));
     },
-    deleteConnection(connectionId: string, version: number, csrf: string, signal: AbortSignal): Promise<{ disposition: string; deletedConnectionId: string }> {
+    deleteConnection(connectionId: string, version: number, csrf: string): Promise<{ disposition: string; deletedConnectionId: string }> {
       return run(request(
         fetcher,
         `/portal/api/connections/${encodeURIComponent(connectionId)}?${new URLSearchParams({ version: String(version) })}`,
         { method: "DELETE", csrf },
         (body) => decodeBody(body).pipe(Effect.flatMap((text) => Schema.decodeUnknown(Schema.parseJson(DeletedConnectionBody))(text))),
-      ).pipe(Effect.map((value) => ({ disposition: value.disposition, deletedConnectionId: value.deleted_connection_id }))), signal);
+      ).pipe(Effect.map((value) => ({ disposition: value.disposition, deletedConnectionId: value.deleted_connection_id }))));
     },
-    checkConnection(connectionId: string, csrf: string, signal: AbortSignal): Promise<ConnectionReceipt> {
-      return run(request(fetcher, `/portal/api/connections/${encodeURIComponent(connectionId)}/check`, { method: "POST", csrf }, receipt), signal);
+    checkConnection(connectionId: string, csrf: string): Promise<ConnectionReceipt> {
+      return run(request(fetcher, `/portal/api/connections/${encodeURIComponent(connectionId)}/check`, { method: "POST", csrf }, receipt));
     },
-    createProject(draft: ProjectDraft, csrf: string, signal: AbortSignal): Promise<WriteReceipt> {
-      return run(request(fetcher, "/portal/api/projects", { method: "POST", body: draft, csrf }, projectReceipt), signal);
+    createProject(draft: ProjectDraft, csrf: string): Promise<WriteReceipt> {
+      return run(request(fetcher, "/portal/api/projects", { method: "POST", body: draft, csrf }, projectReceipt));
     },
-    updateProject(projectId: string, changes: ProjectChanges, csrf: string, signal: AbortSignal): Promise<WriteReceipt> {
-      return run(request(fetcher, `/portal/api/projects/${encodeURIComponent(projectId)}`, { method: "PATCH", body: changes, csrf }, projectReceipt), signal);
+    updateProject(projectId: string, changes: ProjectChanges, csrf: string): Promise<WriteReceipt> {
+      return run(request(fetcher, `/portal/api/projects/${encodeURIComponent(projectId)}`, { method: "PATCH", body: changes, csrf }, projectReceipt));
     },
-    createWorkItem(projectId: string, draft: WorkItemDraft, csrf: string, signal: AbortSignal): Promise<WorkItemReceipt> {
-      return run(request(fetcher, `/portal/api/projects/${encodeURIComponent(projectId)}/work-items`, { method: "POST", body: draft, csrf }, workItemReceipt), signal);
+    createWorkItem(projectId: string, draft: WorkItemDraft, csrf: string): Promise<WorkItemReceipt> {
+      return run(request(fetcher, `/portal/api/projects/${encodeURIComponent(projectId)}/work-items`, { method: "POST", body: draft, csrf }, workItemReceipt));
     },
-    updateWorkItem(workItemId: string, changes: WorkItemChanges, csrf: string, signal: AbortSignal): Promise<WorkItemReceipt> {
-      return run(request(fetcher, `/portal/api/work-items/${encodeURIComponent(workItemId)}`, { method: "PATCH", body: changes, csrf }, workItemReceipt), signal);
+    updateWorkItem(workItemId: string, changes: WorkItemChanges, csrf: string): Promise<WorkItemReceipt> {
+      return run(request(fetcher, `/portal/api/work-items/${encodeURIComponent(workItemId)}`, { method: "PATCH", body: changes, csrf }, workItemReceipt));
     },
-    assignWorkItem(workItemId: string, assignment: WorkItemAssignment, csrf: string, signal: AbortSignal): Promise<AssignmentReceipt> {
-      return run(request(fetcher, `/portal/api/work-items/${encodeURIComponent(workItemId)}`, { method: "PATCH", body: assignment, csrf }, assignmentReceipt), signal);
+    assignWorkItem(workItemId: string, assignment: WorkItemAssignment, csrf: string): Promise<AssignmentReceipt> {
+      return run(request(fetcher, `/portal/api/work-items/${encodeURIComponent(workItemId)}`, { method: "PATCH", body: assignment, csrf }, assignmentReceipt));
     },
-    moveWorkItem(workItemId: string, intent: MoveIntent, csrf: string, signal: AbortSignal): Promise<WorkItemReceipt> {
+    moveWorkItem(workItemId: string, intent: MoveIntent, csrf: string): Promise<WorkItemReceipt> {
       return run(request(fetcher, `/portal/api/work-items/${encodeURIComponent(workItemId)}/move`, {
         method: "PATCH",
         body: { version: intent.version, status: intent.status, before_id: intent.beforeId },
         csrf,
-      }, workItemReceipt), signal);
+      }, workItemReceipt));
     },
-    createResource(projectId: string, draft: ResourceDraft, csrf: string, signal: AbortSignal): Promise<ResourceReceipt> {
-      return run(request(fetcher, `/portal/api/projects/${encodeURIComponent(projectId)}/resources`, { method: "POST", body: draft, csrf }, resourceReceipt), signal);
+    createResource(projectId: string, draft: ResourceDraft, csrf: string): Promise<ResourceReceipt> {
+      return run(request(fetcher, `/portal/api/projects/${encodeURIComponent(projectId)}/resources`, { method: "POST", body: draft, csrf }, resourceReceipt));
     },
-    updateResource(resourceId: string, update: ResourceUpdate, csrf: string, signal: AbortSignal): Promise<ResourceReceipt> {
-      return run(request(fetcher, `/portal/api/resources/${encodeURIComponent(resourceId)}`, { method: "PATCH", body: update, csrf }, resourceReceipt), signal);
+    updateResource(resourceId: string, update: ResourceUpdate, csrf: string): Promise<ResourceReceipt> {
+      return run(request(fetcher, `/portal/api/resources/${encodeURIComponent(resourceId)}`, { method: "PATCH", body: update, csrf }, resourceReceipt));
     },
-    deleteResource(resourceId: string, version: number, csrf: string, signal: AbortSignal): Promise<{ deletedResourceId: string }> {
+    deleteResource(resourceId: string, version: number, csrf: string): Promise<{ deletedResourceId: string }> {
       return run(request(
         fetcher,
         `/portal/api/resources/${encodeURIComponent(resourceId)}?${new URLSearchParams({ version: String(version) })}`,
         { method: "DELETE", csrf },
         (body) => decodeBody(body).pipe(Effect.flatMap((text) => Schema.decodeUnknown(Schema.parseJson(DeletedResourceBody))(text))),
-      ).pipe(Effect.map((value) => ({ deletedResourceId: value.deleted_resource_id }))), signal);
+      ).pipe(Effect.map((value) => ({ deletedResourceId: value.deleted_resource_id }))));
     },
-    syncResource(resourceId: string, csrf: string, signal: AbortSignal): Promise<ResourceReceipt> {
-      return run(request(fetcher, `/portal/api/resources/${encodeURIComponent(resourceId)}/sync`, { method: "POST", csrf }, resourceReceipt), signal);
+    syncResource(resourceId: string, csrf: string): Promise<ResourceReceipt> {
+      return run(request(fetcher, `/portal/api/resources/${encodeURIComponent(resourceId)}/sync`, { method: "POST", csrf }, resourceReceipt));
     },
-    syncProject(projectId: string, csrf: string, signal: AbortSignal): Promise<{ syncedResourceIds: readonly string[] }> {
+    syncProject(projectId: string, csrf: string): Promise<{ syncedResourceIds: readonly string[] }> {
       return run(request(
         fetcher,
         `/portal/api/projects/${encodeURIComponent(projectId)}/sync`,
         { method: "POST", csrf },
         (body) => decodeBody(body).pipe(Effect.flatMap((text) => Schema.decodeUnknown(Schema.parseJson(ProjectSyncBody))(text))),
-      ).pipe(Effect.map((value) => ({ syncedResourceIds: value.synced_resource_ids }))), signal);
+      ).pipe(Effect.map((value) => ({ syncedResourceIds: value.synced_resource_ids }))));
     },
     chatConversation(query: ChatConversationQuery, signal: AbortSignal): Promise<ChatConversation> {
       // Only the members the server accepts for this scope: a project read never
@@ -834,15 +837,15 @@ export function createApi(
       if (query.scope === "project" && query.projectId) params.set("project_id", query.projectId);
       if (query.scope === "run" && query.runId) params.set("run_id", query.runId);
       if (query.before) params.set("before", query.before);
-      return run(
-        request(fetcher, `/portal/api/chat?${params.toString()}`, { method: "GET" }, (body) => decodeBody(body).pipe(Effect.flatMap((text) => ChatRead.decodeJson(text)))),
+      return read(
+        `/portal/api/chat?${params.toString()}`,
+        (body) => decodeBody(body).pipe(Effect.flatMap((text) => ChatRead.decodeJson(text))),
         signal,
       );
     },
-    chatMessage(payload: ChatMessageRequest, csrf: string, signal: AbortSignal): Promise<ChatMessageOutcome> {
+    chatMessage(payload: ChatMessageRequest, csrf: string): Promise<ChatMessageOutcome> {
       return run(
         request(fetcher, "/portal/api/chat/messages", { method: "POST", body: payload, csrf }, chatMessageResponse),
-        signal,
       );
     },
     /**
@@ -852,7 +855,7 @@ export function createApi(
      * same contract every other write surface consumes — and a 401 flows to the
      * session-expiry owner like every read.
      */
-    startWork(workItemId: string, actionId: ActionId, csrf: string, signal: AbortSignal): Promise<StartOutcome> {
+    startWork(workItemId: string, actionId: ActionId, csrf: string): Promise<StartOutcome> {
       return run(
         request(
           fetcher,
@@ -860,10 +863,9 @@ export function createApi(
           { method: "POST", body: { action_id: actionId }, csrf },
           startResponse,
         ),
-        signal,
       );
     },
-    cancelWork(workItemId: string, generation: ExecutionGeneration, actionId: ActionId, csrf: string, signal: AbortSignal): Promise<CancelOutcome> {
+    cancelWork(workItemId: string, generation: ExecutionGeneration, actionId: ActionId, csrf: string): Promise<CancelOutcome> {
       return run(
         request(
           fetcher,
@@ -871,10 +873,9 @@ export function createApi(
           { method: "POST", body: { action_id: actionId, generation }, csrf },
           cancelResponse,
         ),
-        signal,
       );
     },
-    retryWork(workItemId: string, generation: ExecutionGeneration, actionId: ActionId, csrf: string, signal: AbortSignal): Promise<RetryOutcome> {
+    retryWork(workItemId: string, generation: ExecutionGeneration, actionId: ActionId, csrf: string): Promise<RetryOutcome> {
       return run(
         request(
           fetcher,
@@ -882,7 +883,6 @@ export function createApi(
           { method: "POST", body: { action_id: actionId, generation }, csrf },
           retryResponse,
         ),
-        signal,
       ).then((outcome) => ({
         disposition: outcome.disposition,
         execution: outcome.execution,
@@ -896,7 +896,6 @@ export function createApi(
       waitingTransitionId: string,
       actionId: ActionId,
       csrf: string,
-      signal: AbortSignal,
     ): Promise<InputOutcome> {
       return run(
         request(
@@ -905,7 +904,6 @@ export function createApi(
           { method: "POST", body: { input, action_id: actionId, waiting_transition_id: waitingTransitionId }, csrf },
           inputResponse,
         ),
-        signal,
       );
     },
   };
