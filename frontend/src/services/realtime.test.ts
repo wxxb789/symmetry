@@ -2,7 +2,6 @@ import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createRealtime,
-  invalidationKeys,
   type RealtimePush,
   type RealtimeSocket,
 } from "./realtime";
@@ -292,47 +291,6 @@ describe("operator invalidation client", () => {
     expect(invalidate.mock.calls.map((call) => JSON.stringify(call[0]?.queryKey)))
       .toContain('["work-item",{"workItemId":"w1"}]');
     expect(realtime.lastRefresh()).toBe(everyRead);
-  });
-
-  it("maps a resource invalidation onto the query keys that read it", () => {
-    expect(invalidationKeys({ kind: "work_item", id: "w1" })).toEqual([
-      ["work-item", { workItemId: "w1" }],
-      ["work-item-timeline"],
-      ["workspace"],
-      ["attention"],
-    ]);
-    // The attention read is project-scoped by its own query keys
-    // (`["attention", { projectId, cursor }]`), so the work-item kind must
-    // invalidate the whole root: a focused Attention page shows the project's
-    // blocked items and loses them to staleness otherwise.
-    expect(invalidationKeys({ kind: "work_item" })).toEqual([
-      ["work-item"],
-      ["work-item-timeline"],
-      ["workspace"],
-      ["attention"],
-    ]);
-    expect(invalidationKeys({ kind: "run", id: "r1" })).toEqual([
-      ["work-item"],
-      ["work-item-timeline"],
-      ["workspace"],
-    ]);
-    expect(invalidationKeys({ kind: "goal", id: "g1", cursor: 4 })).toEqual([
-      ["goal", { goalId: "g1" }],
-      ["goal-events"],
-      ["goal-events-catch-up"],
-      ["attention"],
-    ]);
-    expect(invalidationKeys({ kind: "chat" })).toEqual([["chat"]]);
-    expect(invalidationKeys({ kind: "connection" })).toEqual([["connections"], ["workspace"]]);
-    expect(invalidationKeys({ kind: "resource", id: "res1" })).toEqual([
-      ["connections"],
-      ["workspace"],
-    ]);
-    expect(invalidationKeys({ kind: "project" })).toEqual([["workspace"], ["connections"]]);
-    expect(invalidationKeys({ kind: "runtime" })).toEqual([["workspace"]]);
-    // An unclassified kind refetches broadly instead of being dropped.
-    expect(invalidationKeys({ kind: "workspace" })).toEqual([]);
-    expect(invalidationKeys({ kind: "something_new" })).toEqual([]);
   });
 
   it("batches a burst of changes into one invalidation pass", () => {

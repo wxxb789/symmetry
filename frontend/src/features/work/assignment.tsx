@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { workspaceOptions } from "../../app/application";
+import { workItemReadKey, workspaceReadKey } from "../../app/read-cache";
 import { useSessionToken } from "../../app/session";
 import { restoreFocus } from "../../components/focus";
 import {
@@ -226,8 +227,8 @@ function AssignmentEditor({ api, csrf, item, project, blockedReason, fallbackFoc
     // operator has already left the item and this editor is unmounted.
     onSettled: () => {
       void Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["work-item", { workItemId: target.id }] }),
-        ...(itemProjectId === null ? [] : [queryClient.invalidateQueries({ queryKey: ["workspace", { projectId: itemProjectId }] })]),
+        queryClient.invalidateQueries({ queryKey: workItemReadKey(target.id) }),
+        ...(itemProjectId === null ? [] : [queryClient.invalidateQueries({ queryKey: workspaceReadKey(itemProjectId) })]),
       ]);
     },
   });

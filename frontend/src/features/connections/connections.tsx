@@ -4,6 +4,7 @@ import { useNavigate, useRouteContext, useRouterState, useSearch } from "@tansta
 import { AlertCircle, Cable, Plus, Trash2, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { connectionsOptions, workspaceOptions } from "../../app/application";
+import { connectionsReadKey } from "../../app/read-cache";
 import { useSessionToken } from "../../app/session";
 import {
   ownValue,
@@ -118,7 +119,7 @@ function ConnectionEditor({ connection, providers, api, csrf, editorId, fallback
       ); },
     // A refused write is never rendered as success: re-read the server's state
     // so the console shows what the server actually holds.
-    onError: () => { void queryClient.invalidateQueries({ queryKey: ["connections"] }); },
+    onError: () => { void queryClient.invalidateQueries({ queryKey: connectionsReadKey() }); },
     // The page-level pending count drops only when the request settles, so the
     // exclusion holds even after this editor closes while the write is pending.
     onSettled: () => { onWriteSettled(); },
@@ -206,7 +207,7 @@ function ConnectionDetail({ connection, api, csrf, writePending, requests, close
   // confirmed intent into a delete of a revision the operator never saw.
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; version: number } | null>(null);
   const deleteOpener = useRef<HTMLElement | null>(null);
-  const refresh = () => queryClient.invalidateQueries({ queryKey: ["connections"] });
+  const refresh = () => queryClient.invalidateQueries({ queryKey: connectionsReadKey() });
   const check = useMutation({
     mutationFn: () => api.checkConnection(connection.id, csrf),
     onMutate: () => { onRequest(connection.id, "check", true); },
@@ -419,7 +420,7 @@ export function ConnectionsPage() {
     if (editor !== editorSequence.current) {
       // A late response for an editor that has since closed: the write is real,
       // so re-read the list, but never close or navigate the open editor.
-      void queryClient.invalidateQueries({ queryKey: ["connections"] });
+      void queryClient.invalidateQueries({ queryKey: connectionsReadKey() });
       return;
     }
     closeEditor();
@@ -437,7 +438,7 @@ export function ConnectionsPage() {
     // and only move the operator if neither the selection nor the editor
     // generation changed while the re-read was in flight.
     const selection = selectionRef.current;
-    void queryClient.invalidateQueries({ queryKey: ["connections"] })
+    void queryClient.invalidateQueries({ queryKey: connectionsReadKey() })
       .then(() => {
         if (!mounted.current || editorSequence.current !== generation || selectionRef.current !== selection) return;
         void navigate({ to: "/connections", search: { connectionId } });
