@@ -17,9 +17,8 @@ type EvidenceBatch struct {
 	Items         []Evidence `json:"items"`
 }
 
-// RejectDuplicateJSONMembers rejects duplicate keys before any Go object
-// decoder can apply its last-wins behavior. The scan is recursive so it also
-// covers every object nested inside a batch item.
+// RejectDuplicateJSONMembers rejects duplicate keys at any depth before any Go
+// object decoder can apply its last-wins behavior.
 func RejectDuplicateJSONMembers(data []byte) error {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()

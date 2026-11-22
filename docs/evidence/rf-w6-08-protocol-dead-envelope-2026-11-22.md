@@ -69,11 +69,14 @@ as roots the reference count for every candidate disappears (windows 23 findings
 and `deadcode -test ./cmd/...` is byte-identical to the plain run because `./cmd/...` has no test
 files.
 
-Citation leg: no audited-corpus document names any of the 26 (`git grep -nw` over
-`docs/runbooks/**`, `docs/design/quality.md`, `docs/archive/CLOSED-TODO.md`). Two out-of-corpus
-prose citations exist and are recorded, not repaired (clause 4): `contracts/README.md:217`
-(`protocol.ValidateGoalEnvelope`) and `docs/archive/CLOSED-TODO.md:3640` (a historical closure naming
-`goal_contract_semantics.go` + `canonicalPlanProposalSHA256`).
+Citation leg: `git grep -nw` over the audited corpus (`docs/runbooks/**`, `docs/design/quality.md`,
+`docs/archive/CLOSED-TODO.md`) finds one hit, `docs/archive/CLOSED-TODO.md:3640` (§8). The gate reads
+only documents a revision modifies (`scripts/ci/check-citation-existence.py` →
+`changed_paths(..., AUDITED_PATHS)`), and this revision modifies no audited document, so no citation
+gate reddens. Two prose citations of deleted symbols exist and are recorded, not repaired (clause 4):
+`contracts/README.md:217` (`protocol.ValidateGoalEnvelope`, outside the corpus) and the
+`CLOSED-TODO.md:3640` closure (a historical record of a past fix, in the corpus but unmodified,
+naming `goal_contract_semantics.go` + `canonicalPlanProposalSHA256`).
 
 ## 3. Deadcode before/after (measured, not asserted)
 
@@ -89,7 +92,9 @@ Line-diff of the before/after outputs: **26 removed findings, 0 added** on both 
 set is exactly the 26 names of §2 (`diff before after | grep '^<' | sed 's/.*unreachable func: //'`).
 No new unreachable function appeared anywhere; the family's post-deletion fixpoint is the 26 itself,
 so no additional helper function was deleted. The contract's draft counts (250 linux / 140 windows)
-were measured at `0fa9b705`; the re-measured base is 227/118.
+were measured at `0fa9b705`; the re-measured base is 227/118. The apply stage re-measured the three
+after counts at the delivered tree — 92 / 201 / 153, unchanged — and re-checked that none of the
+deleted names appears in any of the findings lists (§11).
 
 ## 4. Deleted set and orphaned declarations
 
@@ -118,7 +123,7 @@ contract's D5 anticipates.
 
 | deleted function(s) | base callers | rule enforced | production entry point with the same rule | HEAD equivalent |
 | --- | --- | --- | --- | --- |
-| `ValidateGoalEnvelope` | tests only (`goal_contract_fixture_test.go:70`, `goal_contract_semantics_test.go`) | envelope dispatch to the family members | n/a (it *was* the dispatch) | the retargeted fixture dispatch: `ParseAdmissionInput`, `ParseTaskResult`, `DecodeContextSnapshot`, the retained DTO decoders; per-envelope drops §7 |
+| `ValidateGoalEnvelope` | tests only (`goal_contract_fixture_test.go:70`, `goal_contract_semantics_test.go`) | envelope dispatch to the family members | n/a (it *was* the dispatch) | the retargeted fixture dispatch: `ParseAdmissionInput`, `ParseTaskResult`, `DecodeContextSnapshot`, `ValidatePlanProposal` (the plan-proposal envelope's retained live validator, restored by the apply stage's finding 1), the retained DTO decoders; per-envelope drops §7 |
 | `DecodeGoalRevision` | `ValidateGoalEnvelope` | goal-revision schema + revision-contract semantics (duplicate predicate ids; deterministic acceptance rejects non-machine predicates unless the operator fence is set) | no daemon path decodes a goal-revision envelope | rule deleted daemon-side; `ContractValidation.validate_goal_revision/2` (`control/lib/symmetry_control/goals/contract_validation.ex:77`) + `contracts/ts/semantics.ts:186` enforce it against the same manifest |
 | `ValidateGoalCreate` | `ValidateGoalEnvelope` | goal-create schema + the same revision-contract rule on `initial_revision` | none | deleted daemon-side; `validate_goal_create/2` (`:80`) + TS `validateGoalCreateSemantics` |
 | `ValidateGoalCommand` | `ValidateGoalEnvelope` | goal-command schema + predicate ids + `request_plan` resource/subject identity + `accept_plan` `proposal_hash` recompute with the omitted-`integration` default | none (the operator client that would have called it moved to `e2e/internal/operator` by #178 and never called it) | deleted daemon-side; `validate_goal_command/2` (`:83`) + TS `validateGoalCommandSemantics`; the `request_plan` identity rule also survives for admissions via `subject.resource_id` validation |
@@ -145,7 +150,7 @@ was inside this slice's deleted set, and the build plus the `deadcode` re-run co
 | `TestAdmissionProviderScopeIsFailClosedAndPreservesCanonicalGrants` | `ParseAdmission` | `ParseAdmissionInput` | 8 |
 | `TestNormalizedResultsRejectUnknownEnumsAndValidateSafeUsage` | `ParseUsage` | `json.Unmarshal(&Usage{})` | 11 |
 | `TestEvidenceCanonicalSubjectSourceAndPredicateConsistency` | `ParseEvidence` | `json.Unmarshal(&Evidence{})` | 5 |
-| `TestGoalTransportParsesContractFixtures` | `ValidateGoalEnvelope` | six-oracle dispatch (below) | 85 semantic |
+| `TestGoalTransportParsesContractFixtures` | `ValidateGoalEnvelope` | seven-oracle dispatch (below) | 85 + 6 semantic |
 | `TestEvidenceReviewPayloadVerdictMustMatchEvidenceVerdict` | `ParseEvidence` | `json.Unmarshal(&Evidence{})` | 2 |
 | `TestGoalEnvelopeRejectsDuplicateContextPredicateIDs` | `ValidateGoalEnvelope` | `DecodeContextSnapshot` | 1 |
 | `TestAdmissionProviderScopeBindsOperationsToItsResources` | `ValidateGoalEnvelope` | `ParseAdmissionInput` | 2 |
@@ -164,13 +169,19 @@ Fixture-suite dispatch (schema arm unchanged for all 248 fixtures; semantic arm 
 | adapter-capabilities | 3 | `json.Unmarshal(&RuntimeCapabilities{})` |
 | evidence | 10 | `json.Unmarshal(&Evidence{})` |
 | usage | 12 | `json.Unmarshal(&Usage{})` |
-| connections-read + 5 presentation reads | 47 | unchanged `DecodeSchema` arm |
-| decision, evidence-batch, evidence-batch-response, evidence-batch-conflict-details, goal-command, goal-create, goal-revision, plan-proposal | 163 | none; schema arm only, 17 of them lose a semantic-only rule (§7 D11) |
+| plan-proposal | 6 | `ValidatePlanProposal` (restored by the apply stage, finding 1) |
+| connections-read + the six presentation reads | 57 | unchanged `DecodeSchema` arm |
+| decision, evidence-batch, evidence-batch-response, evidence-batch-conflict-details, goal-command, goal-create, goal-revision | 100 | none; schema arm only, 15 of them lose a semantic-only rule (§7 D11) |
 
 Oracle equivalence was measured **before** the retarget: a throwaway in-package probe ran the six
 oracles over `contracts/fixtures/manifest.json` and reproduced `semantic_valid` for 85/85 fixtures of
 those envelopes with zero mismatches (`go test -run TestZZProbeRetargetOracles ./internal/protocol/`,
-`ok ... 0.633s`; probe deleted afterwards).
+`ok ... 0.633s`; probe deleted afterwards). The `plan-proposal` arm is outside that probe: the
+deleted `ValidateGoalEnvelope` dispatched this envelope to exactly `return ValidatePlanProposal(data)`
+(base `goal_schema.go`), the function is retained and cmd-reachable through `TaskResult.Validate`
+(`goal_results.go:343`), and both restored semantic-only rows (`duplicate-predicate-id`,
+`same-change-branch`) are mutation-checked (§9 Dm7, Dm12); the pristine dispatch left them silently
+unasserted (measured, §9 Dm7).
 
 Contract-enumeration corrections applied: `goal_subject_test.go` was added to the retarget set (it
 carries the only test references to `canonicalPlanProposalSHA256`/`normalizePlanProposal`);
@@ -193,10 +204,13 @@ Each row: base assertion → HEAD equivalent → why the wire property stays cov
 | D8 | `TestParseEvidenceBatchConflictDetailsValidatesItems` | index `0..255`, fixed `conflict` disposition | `validate_evidence_batch_conflict_details/2` + TS | Dm4 |
 | D9 | `TestParseEvidenceBatchConflictDetailsRejectsDuplicateIndexesAndKeys` — 2 subtests | duplicate index / duplicate evidence_key | as D8 | Dm4 |
 | D10 | `TestCanonicalizeJSONPlanProposalHashMatchesTheControlPlaneDigest` — second half | the daemon recomputed `proposal_hash` with the `normalizePlanProposal` default before admitting an `accept_plan` command | deleted with `validateGoalCommandPredicateIDs`; TS `validateGoalCommandSemantics` + `validate_goal_command/2` enforce it; the first half (canonical bytes + Jason digest) stays | Dm5 |
-| D11 | `TestGoalTransportParsesContractFixtures` — the semantic assertion for the 17 fixtures whose manifest `semantic_valid` ≠ `schema_valid` | `decision` 5 (`duplicate-option`, `missing-resolution`, `open-with-resolution`, `unknown-option`, `superseded-with-resolution`), `goal-command` 6 (`amend-deterministic-review`, `plan-same-change-branch`, `decision-plan-same-change-branch`, `proposal-hash-mismatch`, `request-plan-subject-resource-mismatch`, `unpaired-surrogate`), `goal-revision` 2 (`duplicate-predicate-id`, `deterministic-review`), `plan-proposal` 2 (`duplicate-predicate-id`, `same-change-branch`), `goal-create` 1 (`deterministic-review`), `evidence-batch` 1 (`duplicate-key`) | schema arm unchanged for all 248; Elixir `contract_fixture_manifest_test.exs` ("public Elixir validators agree with every manifest semantic expectation") pins the semantic column; the proposal rules stay live for a proposal embedded in a TaskResult (`validatePlanProposalPredicateIDs` via `TaskResult.Validate`) | Dm6/Dm7 |
+| D11 | `TestGoalTransportParsesContractFixtures` — the semantic assertion for the 15 fixtures whose manifest `semantic_valid` ≠ `schema_valid` | `decision` 5 (`duplicate-option`, `missing-resolution`, `open-with-resolution`, `unknown-option`, `superseded-with-resolution`), `goal-command` 6 (`amend-deterministic-review`, `plan-same-change-branch`, `decision-plan-same-change-branch`, `proposal-hash-mismatch`, `request-plan-subject-resource-mismatch`, `unpaired-surrogate`), `goal-revision` 2 (`duplicate-predicate-id`, `deterministic-review`), `goal-create` 1 (`deterministic-review`), `evidence-batch` 1 (`duplicate-key`) | schema arm unchanged for all 248; Elixir `contract_fixture_manifest_test.exs` ("public Elixir validators agree with every manifest semantic expectation") pins the semantic column; the proposal rules stay live for a proposal embedded in a TaskResult (`validatePlanProposalPredicateIDs` via `TaskResult.Validate`) | Dm6/Dm7 |
 
-The other 146 no-oracle fixtures keep their coverage: their `semantic_valid` equals `schema_valid`,
-which the unchanged schema assertion pins. Test names were kept byte-identical, including
+The 2 `plan-proposal` rows left this row when the apply stage restored their oracle (finding 1), so
+D11 now covers 15 fixtures, and both restored rows redden under their mutants (§9 Dm7, Dm12). The
+other 85 fixtures of the seven remaining no-oracle envelopes keep their coverage (100 fixtures in
+those envelopes − the 15 semantic-only rows): their `semantic_valid` equals `schema_valid`, which the
+unchanged schema assertion pins. Test names were kept byte-identical, including
 `TestParseEvidenceBatchRejectsDuplicateJSONObjectMembers` whose name now outlives the parser it was
 named after (contract clause "no test name changes"); the retarget is visible in its body
 (`RejectDuplicateJSONMembers`).
@@ -248,7 +262,7 @@ test files; every row exited 1 with the named case red:
 | M4 `Evidence.Validate` `source_ref.subject_hash` binding | `TestEvidenceCanonicalSubjectSourceAndPredicateConsistency/source_hash_mismatch` (`goal_transport_test.go:534`) |
 | M5 `Subject` required-member list + `Validate` `tree_digest` | `TestSubjectHashUsesCompleteCanonicalSubject` (`goal_transport_test.go:72`) |
 | M6 `scanJSONValue` duplicate detection | `TestParseEvidenceBatchRejectsDuplicateJSONObjectMembers` (both subtests) and `TestRejectDuplicateJSONMembersCanonicalizesEscapedNames` |
-| M7 `TaskResult.Validate` subject-hash equality | fixture subtest `task-result.subject-hash-mismatch` (`goal_contract_fixture_test.go:94`) |
+| M7 `TaskResult.Validate` subject-hash equality | fixture subtest `task-result.subject-hash-mismatch` (`goal_contract_fixture_test.go:96`; was `:94` before the apply stage's finding-1 arm) |
 
 Dropped-case red baselines, mutants applied to a pristine pre-deletion worktree (base tests intact):
 
@@ -261,7 +275,9 @@ Dropped-case red baselines, mutants applied to a pristine pre-deletion worktree 
 | Dm4 conflict-details `Validate`/duplicate checks + append | `TestParseEvidenceBatchConflictDetailsValidatesItems` + both subtests of `...RejectsDuplicateIndexesAndKeys` | D8, D9 |
 | Dm5 `normalizePlanProposal` `integration` default | the second half of `TestCanonicalizeJSONPlanProposalHashMatchesTheControlPlaneDigest` (`goal_subject_test.go:220`, digest mismatch) | D10 |
 | Dm6 `DecodeDecision` semantic layer | all 5 decision fixture rows | D11 (decision) |
-| Dm7 `validateProviderChangeTarget` equal-branch rule | pre-deletion tree: 5 fixture rows red; retargeted tree: `task-result.proposal-same-change-branch` and `context-snapshot.same-change-branch` red while `plan-proposal.same-change-branch`, `goal-command.plan-same-change-branch` and `goal-command.decision-plan-same-change-branch` stayed **green** — the D11 coverage loss, measured | D11 (change targets) |
+| Dm7 `validateProviderChangeTarget` equal-branch rule | pre-deletion tree: 5 fixture rows red. Retargeted tree at `7f259378` with the pristine dispatch (re-measured by the apply stage in a scratch worktree): `task-result.proposal-same-change-branch` and `context-snapshot.same-change-branch` red while `plan-proposal.same-change-branch`, `goal-command.plan-same-change-branch` and `goal-command.decision-plan-same-change-branch` stayed **green** — the D11 coverage loss, measured | D11 (change targets) |
+| Dm7 (re-run with finding 1 applied; scratch worktree at `7f259378` plus the edited dispatch) | 3 fixture rows red: `plan-proposal.same-change-branch` (restored), `task-result.proposal-same-change-branch` and `context-snapshot.same-change-branch`; `goal-command.plan-same-change-branch` and `goal-command.decision-plan-same-change-branch` stay green — the residual D11 loss | D11 (change targets), finding 1 |
+| Dm12 `acceptanceContract.validatePredicateIDs` duplicate id (retargeted-tree re-run of the M3 mutant, same scratch worktree) | `plan-proposal.duplicate-predicate-id` (restored), `context-snapshot.duplicate-predicate-id` and `task-result.proposal-duplicate-predicate` red; `goal-revision.duplicate-predicate-id` stays green — the residual D11 loss | D11 (predicate ids), finding 1 |
 | Dm8 `ValidateGoalCommand` `request_plan` identity rule | `goal-command.request-plan-subject-resource-mismatch` | D11 |
 | Dm9 `contracts.DecodeSchema` unpaired-surrogate strictness | `goal-command.unpaired-surrogate` (that row only) | D11 |
 | Dm10 `proposal_hash` equality | `goal-command.proposal-hash-mismatch` | D11 |
@@ -280,18 +296,23 @@ Retarget equivalence: the retargeted suite was also run unmodified against the p
 
 ## 10. LOC delta (report-only, D2) and residual risks
 
-`git diff --shortstat`: 19 files changed, 82 insertions(+), 1018 deletions(-) — net **−936**. Per
-file: `goal_evidence_batch_response.go −216`, `goal_evidence_batch_response_test.go −169`,
-`goal_contract_semantics.go −148`, `goal_schema.go −148`, `goal_evidence_batch_test.go −82`,
-`goal_evidence_batch.go −74`, `goal_contract_semantics_test.go −51`, `goal_subject_test.go −28`,
-`goal_results.go −20`, `goal_admission.go −12`, `goal_subject.go −9`, `goal_transport_test.go`
-±33 lines (oracle swaps), and the six cross-package fixture builders ±2-4 lines each. The
-contract's −400..−900 estimate was report-only (D2); the measured net delta is −936.
+`git diff --shortstat 4fdea989 -- daemon` (re-measured by the apply stage at the delivered tree):
+19 files changed, 88 insertions(+), 1023 deletions(-) — net **−935**. Per file (`git diff --numstat
+4fdea989 -- daemon`): `goal_evidence_batch_response.go` 0/216, `goal_evidence_batch_response_test.go`
+0/169, `goal_schema.go` 0/148, `goal_contract_semantics.go` 2/150 (0/148 at the deletion; the apply
+stage's finding-3 comment rewrite replaces two lines), `goal_evidence_batch_test.go` 1/83,
+`goal_evidence_batch.go` 3/78 (0/74 at the deletion; the finding-2 comment rewrite drops one line),
+`goal_contract_semantics_test.go` 5/56, `goal_subject_test.go` 2/30, `goal_results.go` 0/20,
+`goal_admission.go` 0/12, `goal_subject.go` 0/9, `goal_transport_test.go` 33/33 (oracle swaps),
+`goal_contract_fixture_test.go` 26/3 (24/3 at the deletion; the finding-1 restored arm adds a case),
+and the six cross-package fixture builders 2-4 lines each on both sides. The contract's −400..−900
+estimate was report-only (D2); the measured net delta is −935.
 
 Residual risks and known limits:
 
-- The daemon no longer decodes a goal-command, goal-create, goal-revision, decision, plan-proposal or
-  evidence-batch envelope at all. Those wire properties stay pinned on the control side
+- The daemon no longer decodes a goal-command, goal-create, goal-revision, decision or evidence-batch
+  envelope at all; a plan-proposal envelope stays validated by the retained `ValidatePlanProposal`
+  (live through `TaskResult.Validate`). Those wire properties stay pinned on the control side
   (`control/lib/symmetry_control/goals/contract_validation.ex` + the Elixir manifest test over all
   248 fixtures, and TS `contracts/ts/semantics.ts`); a future daemon consumer calls the production
   parsers (D5) or re-adds a dropped rule with its own tests.
@@ -310,3 +331,27 @@ Residual risks and known limits:
   and the `-test ./...` classification leg are the independent second strategy.
 - Windows host: no local `-race`; Linux-only suites run under WSL (`Ubuntu-24.04`, go1.27.0) and the
   arm64 evidence is compile/analysis level only.
+
+## 11. Apply-stage re-verification (2026-11-22; simplify findings 1-3, PD-3/PD-4)
+
+Findings applied without committing (the per-finding table is in the apply-stage report). All
+foreground, one heavy job at a time; from `daemon/` unless noted.
+
+| gate | exit | output |
+| --- | --- | --- |
+| `gofmt -l .` | 0 | no files listed |
+| `go vet ./...` (windows/amd64) | 0 | no output |
+| `go build ./...`, `GOOS=windows go build ./...`, `GOOS=linux GOARCH=amd64 go build ./...`, `GOOS=linux GOARCH=arm64 go build ./...` | 0 each | |
+| `go test -count=1 ./internal/protocol/ ./internal/app/ ./internal/state/ ./internal/control/ ./internal/harness/... ./internal/workspace/` | 0 | 14 packages `ok` (protocol 2.166s, app 259.430s, state 12.690s, control 1.381s, harness 14.476s + 8 sub-packages, workspace 211.812s) |
+| WSL `Ubuntu-24.04` (go1.27.0) `go test -count=1 ./internal/state/ ./internal/workspace/` | 0 | `ok state 12.579s`, `ok workspace 52.848s` |
+| `deadcode ./cmd/...` windows/amd64 / linux-amd64 / linux-arm64 (after) | 0 | 92 / 201 / 153 — unchanged from §3 |
+| deleted-name check over the three findings lists (and `git grep -nw` over `daemon/**`) | n/a | 0 of the 26 names in the lists; the tree grep finds only the retained `EvidenceBatchSchemaVersion` |
+| `python scripts/ci/test-check-citation-existence.py` | 0 | `Ran 49 tests in 161.040s` … `OK` |
+| citation scan over the audited corpus for the 26 names | n/a | 1 hit, `docs/archive/CLOSED-TODO.md:3640` (an unmodified document; the gate reads modified documents only) |
+| `git diff --check` | 0 | clean |
+| DLP probe (added lines, profile-path pattern and backslash-u pattern) | n/a | 0 host-path hits; 0 backslash-u hits |
+| Dm7 and Dm12 mutants re-measured on the retargeted tree (§9) | 1 each | the restored `plan-proposal` rows are red (3 named rows per mutant) |
+| LOC (`git diff --shortstat 4fdea989 -- daemon`) | n/a | 19 files, 88 insertions(+), 1023 deletions(-), net −935 (§10) |
+
+The implement gate recorded 13 packages `ok`; the package set now has 14 because `harness/linejson`
+(#222, `4fdea989`) is part of the run.

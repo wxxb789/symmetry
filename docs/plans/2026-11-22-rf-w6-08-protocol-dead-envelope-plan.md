@@ -150,10 +150,12 @@ reproduced `semantic_valid` for **85 of 85** fixtures of the six oracle-bearing 
 Fixture-suite dispatch after the retarget (`TestGoalTransportParsesContractFixtures` keeps its name
 and its schema-validity arm unchanged, `contracts.ValidateSchema`):
 `admission` → `ParseAdmissionInput`; `task-result` → `ParseTaskResult`; `context-snapshot` →
-`DecodeContextSnapshot`; `adapter-capabilities`/`evidence`/`usage` → the retained DTO decode;
-`connections-read` and the five presentation reads → unchanged `DecodeSchema` arm; the eight
-envelopes with no daemon-side decoder (`decision`, `goal-command`, `goal-create`, `goal-revision`,
-`plan-proposal`, `evidence-batch`, `evidence-batch-response`, `evidence-batch-conflict-details`)
+`DecodeContextSnapshot`; `plan-proposal` → `ValidatePlanProposal` (restored by the apply stage,
+finding 1: the deleted `ValidateGoalEnvelope` dispatched this envelope to exactly that call, and the
+function is live through `TaskResult.Validate`); `adapter-capabilities`/`evidence`/`usage` → the
+retained DTO decode; `connections-read` and the six presentation reads → unchanged `DecodeSchema`
+arm; the seven envelopes with no daemon-side decoder (`decision`, `goal-command`, `goal-create`,
+`goal-revision`, `evidence-batch`, `evidence-batch-response`, `evidence-batch-conflict-details`)
 carry the schema arm only; any envelope in neither list fails the subtest closed.
 
 ## Case-by-case retarget table
@@ -169,7 +171,7 @@ Retargeted (property preserved; oracle swapped; test names byte-identical):
 | `TestAdmissionProviderScopeIsFailClosedAndPreservesCanonicalGrants` | `ParseAdmission` | `ParseAdmissionInput` | 8 |
 | `TestNormalizedResultsRejectUnknownEnumsAndValidateSafeUsage` | `ParseUsage` | `json.Unmarshal(&Usage{})` | 3 + 8 usage |
 | `TestEvidenceCanonicalSubjectSourceAndPredicateConsistency` | `ParseEvidence` | `json.Unmarshal(&Evidence{})` | 5 |
-| `TestGoalTransportParsesContractFixtures` | `ValidateGoalEnvelope` | six-oracle dispatch | 85 semantic |
+| `TestGoalTransportParsesContractFixtures` | `ValidateGoalEnvelope` | seven-oracle dispatch | 85 + 6 semantic |
 | `TestEvidenceReviewPayloadVerdictMustMatchEvidenceVerdict` | `ParseEvidence` | `json.Unmarshal(&Evidence{})` | 2 |
 | `TestGoalEnvelopeRejectsDuplicateContextPredicateIDs` | `ValidateGoalEnvelope` | `DecodeContextSnapshot` | 1 |
 | `TestAdmissionProviderScopeBindsOperationsToItsResources` | `ValidateGoalEnvelope` | `ParseAdmissionInput` | 2 |
@@ -198,10 +200,12 @@ the **same** manifest by `control/test/symmetry_control/goals/contract_fixture_m
 | D8 | `TestParseEvidenceBatchConflictDetailsValidatesItems` | index `0..255`, fixed `conflict` disposition | `validate_evidence_batch_conflict_details` |
 | D9 | `TestParseEvidenceBatchConflictDetailsRejectsDuplicateIndexesAndKeys` — 2 subtests | duplicate index / duplicate evidence key | same |
 | D10 | `TestCanonicalizeJSONPlanProposalHashMatchesTheControlPlaneDigest` second half | the daemon recomputes `proposal_hash` with the omitted-`integration` default before admitting an `accept_plan` command | deleted with the validator (`"proposal_hash does not match canonical proposal"`); control/TS `validateGoalCommandSemantics` enforces it; the first half (canonical bytes + Jason digest) stays and keeps its name |
-| D11 | `TestGoalTransportParsesContractFixtures` — semantic assertion for the 17 fixtures whose manifest `semantic_valid` differs from `schema_valid` | `decision` 5, `goal-command` 6, `goal-revision` 2, `plan-proposal` 2, `goal-create` 1, `evidence-batch` 1 | the schema assertion for the same 248 fixtures is unchanged; the Elixir manifest test pins the semantic column of all 248 |
+| D11 | `TestGoalTransportParsesContractFixtures` — semantic assertion for the 15 fixtures whose manifest `semantic_valid` differs from `schema_valid` | `decision` 5, `goal-command` 6, `goal-revision` 2, `goal-create` 1, `evidence-batch` 1 | the schema assertion for the same 248 fixtures is unchanged; the Elixir manifest test pins the semantic column of all 248 |
 
-For D11 the other 146 no-oracle fixtures keep coverage: their `semantic_valid` equals `schema_valid`,
-which the unchanged schema assertion already pins (recorded, not silently dropped).
+For D11 the other 85 fixtures of the seven remaining no-oracle envelopes keep coverage (100 fixtures
+in those envelopes − the 15 semantic-only rows): their `semantic_valid` equals `schema_valid`, which
+the unchanged schema assertion already pins (recorded, not silently dropped). The 2 `plan-proposal`
+rows left D11 when the apply stage restored their oracle (finding 1) and are mutation-checked there.
 
 ## Evidence plan (all foreground; one heavy job at a time)
 
@@ -234,11 +238,13 @@ Order matters on this host: the `deadcode` runs and the test suites never run co
    Dropped-case mutations (D1-D11) are run on the same pre-deletion tree to record each case's red
    baseline before its oracle is deleted: batch identity/duplicate rules (one mutant of
    `EvidenceBatch.UnmarshalJSON`), receipt-set rules, conflict-item rules, the deterministic-acceptance
-   predicate rule, the proposal-hash rule, and the manifest semantic validators for the 17 rows.
+   predicate rule, the proposal-hash rule, and the manifest semantic validators for the 17 rows
+   (15 after the apply stage's finding 1 restored the `plan-proposal` arm).
 8. `python scripts/ci/test-check-citation-existence.py` (the gate script's own unit suite) and a
-   citation scan over the audited corpus for the 26 names (expected: no hit; the corpus is
-   `docs/runbooks/**`, `docs/design/quality.md`, `docs/archive/CLOSED-TODO.md` and this PR modifies
-   none of them).
+   citation scan over the audited corpus for the 26 names (measured: one hit,
+   `docs/archive/CLOSED-TODO.md:3640` — a document this PR does not modify, and the gate reads only
+   modified documents; the corpus is `docs/runbooks/**`, `docs/design/quality.md`,
+   `docs/archive/CLOSED-TODO.md`).
 
 ## Design trade-offs
 
@@ -252,10 +258,11 @@ Order matters on this host: the `deadcode` runs and the test suites never run co
 2. **Fixture dispatch fails closed on an unknown envelope** (`t.Fatalf`) instead of falling back to
    a schema-only arm: a new manifest envelope must be given an oracle or an explicit no-oracle row
    rather than silently losing its semantic arm.
-3. **Drop the eight no-oracle envelopes' semantic arm, keep the schema arm.** The alternatives were
-   to keep the deleted validators alive behind a test-only shim (forbidden: a deleted symbol with a
-   surviving reference, and D5's whole point), or to stop asserting the semantic column for those
-   fixtures (chosen, with per-fixture rows and the control-plane manifest test as the retained pin).
+3. **Drop the no-oracle envelopes' semantic arm, keep the schema arm — seven envelopes after the
+   apply stage restored `plan-proposal` (finding 1).** The alternatives were to keep the deleted
+   validators alive behind a test-only shim (forbidden: a deleted symbol with a surviving reference,
+   and D5's whole point), or to stop asserting the semantic column for those fixtures (chosen, with
+   per-fixture rows and the control-plane manifest test as the retained pin).
 4. **Keep exported constants and DTO structs whose only *function* consumers are deleted**
    (`EvidenceBatchSchemaVersion`, the batch response DTOs, `EvidenceReceiptDisposition`): they are
    the wire surface clause 3 protects, and `deadcode` reports functions, not declarations. Private
@@ -313,9 +320,13 @@ Order matters on this host: the `deadcode` runs and the test suites never run co
 - Retargeted surfaces: the 248-fixture dispatch plus every retargeted case is green at HEAD and was
   run green against the pre-deletion bytes (five packages); 7 retargeted-case mutants and 12
   dropped-rule mutants reddened the named cases, with Dm7 measured in both trees (live-path rows red,
-  dropped-envelope rows green — the D11 coverage loss, measured rather than asserted).
+  dropped-envelope rows green — the D11 coverage loss, measured rather than asserted). The apply stage
+  restored the `plan-proposal` semantic arm (simplify finding 1) and re-measured Dm7 in the delivered
+  tree: `plan-proposal.same-change-branch` and `plan-proposal.duplicate-predicate-id` now redden with
+  their mutants, leaving 15 semantic-only fixture rows dropped (D11).
 - Gates: `gofmt -l .` clean, `go vet ./...` 0, the four builds 0, the foreground package gate 0
-  (13 packages `ok`), WSL `./internal/state/ ./internal/workspace/` ok, `git diff --check` clean,
-  deleted-name grep clean, no live caller lost. LOC delta −936 net (report-only).
+  (13 packages `ok` at the implement run, 14 at the apply-stage re-run — `harness/linejson`),
+  WSL `./internal/state/ ./internal/workspace/` ok, `git diff --check` clean, deleted-name grep
+  clean, no live caller lost. LOC delta −935 net (report-only).
 - `goal_subject_test.go` joined the retarget set as the contract-enumeration correction predicted;
   `goal_admission_input_test.go` needed no edit; `protocol.go` stayed unedited and left the owned set.

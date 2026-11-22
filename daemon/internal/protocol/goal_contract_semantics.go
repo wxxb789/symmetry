@@ -6,8 +6,8 @@ import (
 	"fmt"
 )
 
-// decodeGoalContractObject preserves JSON number lexemes for proposal hashing.
-// contracts.DecodeSchema has already enforced raw JSON and the portable schema.
+// decodeGoalContractObject decodes with json.Number so number lexemes survive
+// re-encoding; contracts.DecodeSchema already enforced raw JSON and the schema.
 func decodeGoalContractObject(data []byte) (map[string]any, error) {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()

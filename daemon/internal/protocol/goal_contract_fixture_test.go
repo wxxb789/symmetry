@@ -81,9 +81,11 @@ func TestGoalTransportParsesContractFixtures(t *testing.T) {
 			case contractdto.EnvelopeUsage:
 				var usage Usage
 				semanticErr = json.Unmarshal(data, &usage)
+			case contractdto.EnvelopePlanProposal:
+				semanticErr = ValidatePlanProposal(data)
 			case contractdto.EnvelopeDecision, contractdto.EnvelopeEvidenceBatch, contractdto.EnvelopeEvidenceBatchConflictDetails,
 				contractdto.EnvelopeEvidenceBatchResponse, contractdto.EnvelopeGoalCommand, contractdto.EnvelopeGoalCreate,
-				contractdto.EnvelopeGoalRevision, contractdto.EnvelopePlanProposal:
+				contractdto.EnvelopeGoalRevision:
 				// No daemon-side decoder remains for these envelopes; the control-plane
 				// validators pin their fixtures (control/test/symmetry_control/goals/contract_fixture_manifest_test.exs).
 				return
