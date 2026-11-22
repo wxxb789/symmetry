@@ -23,6 +23,18 @@ from testsupport.gitfixture import FixtureRepo
 SCRIPT = pathlib.Path(__file__).with_name("model-routing-evaluation.py")
 
 
+MATERIALIZED_TOOL_NAMES = (
+    SCRIPT.name,
+    "model_routing_records.py",
+    "model_routing_subject.py",
+    "model_routing_gates.py",
+    "model_routing_receipts.py",
+    "assert-go-test-json.py",
+    "linux-v2-source-subject.py",
+    "model-routing-record-sanitize.py",
+)
+
+
 def load_runner_module():
     """Import the acceptance runner so gate validation rules can be asserted directly."""
     return citest.load_gate(pathlib.Path(__file__).with_name("model-routing-evaluation.py"), "model_routing_evaluation")
@@ -30,7 +42,6 @@ def load_runner_module():
 
 def defining_module(name):
     """Import the module that owns a split rule, so its own globals can be read or patched."""
-    load_runner_module()
     return importlib.import_module(name)
 
 
@@ -1084,16 +1095,7 @@ class EvaluationTests(FixtureRepo, unittest.TestCase):
         self.accepted_run()
         tools = self.root / "changed-tools"
         tools.mkdir()
-        for name in (
-            SCRIPT.name,
-            "model_routing_records.py",
-            "model_routing_subject.py",
-            "model_routing_gates.py",
-            "model_routing_receipts.py",
-            "assert-go-test-json.py",
-            "linux-v2-source-subject.py",
-            "model-routing-record-sanitize.py",
-        ):
+        for name in MATERIALIZED_TOOL_NAMES:
             shutil.copyfile(SCRIPT.with_name(name), tools / name)
         # The pristine copies reproduce the accepted receipt, so each mutation below is
         # what makes the evidence differ.
@@ -3743,16 +3745,7 @@ class EvaluationTests(FixtureRepo, unittest.TestCase):
         # is what makes the derivation refuse.
         tools = self.root / "changed-redaction-tools"
         tools.mkdir()
-        for name in (
-            SCRIPT.name,
-            "model_routing_records.py",
-            "model_routing_subject.py",
-            "model_routing_gates.py",
-            "model_routing_receipts.py",
-            "assert-go-test-json.py",
-            "linux-v2-source-subject.py",
-            "model-routing-record-sanitize.py",
-        ):
+        for name in MATERIALIZED_TOOL_NAMES:
             shutil.copyfile(SCRIPT.with_name(name), tools / name)
 
         for run in (measured_run, bound_run):

@@ -208,10 +208,7 @@ class Refused(Exception):
     """A refusal that must never be recorded as accepted evidence."""
 
 
-# Recorded measured-surface values must not republish the operator profile or a
-# disposable evaluation root; the shared host-path definition loads lazily from
-# `model-routing-record-sanitize.py`, and a sibling that cannot be read, parsed or
-# executed refuses cleanly instead of raising.
+# Recorded measured-surface values must not republish the operator profile or a disposable evaluation root.
 
 
 SANITIZE_SCRIPT = pathlib.Path(__file__).with_name("model-routing-record-sanitize.py")

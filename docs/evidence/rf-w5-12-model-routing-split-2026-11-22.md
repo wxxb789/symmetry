@@ -18,16 +18,21 @@ dispatch HEAD: `refactor(ci): one source-subject implementation with named varia
 | file | status | lines | sha256 |
 | --- | --- | ---: | --- |
 | `scripts/ci/model-routing-evaluation.py` | rewritten entry | 4,199 → 761 | `4a4cff24bd316ab4326b7fc4b062679e337b23cb5eb8022a809c4acf74478fc3` |
-| `scripts/ci/model_routing_records.py` | new | 1,239 | `b8b56a274abf7edd4be307d08c448b9b698fbdba604b479dd75c936514a054ff` |
+| `scripts/ci/model_routing_records.py` | new | 1,236 | `f80a835ce3d7e04d944d684d2b658a137ca6ffe2da078cc27bc7c36658d72642` |
 | `scripts/ci/model_routing_subject.py` | new | 539 | `e18dadb062d7590d80ba040db4e05f3e0173d876652097f6319c2613017edce8` |
 | `scripts/ci/model_routing_gates.py` | new | 1,119 | `f84c93b79039e15cdae8f3b48a87bd44a4a196b1dcb763e4b1c3f223aa22d20f` |
 | `scripts/ci/model_routing_receipts.py` | new | 699 | `37d8b351212ec44db7819405b39ca8196ea97cf1bd9edd5a6a6dd41d54f825eb` |
-| `scripts/ci/test-model-routing-evaluation.py` | edited (repoints + one pin test) | 3,748 → 3,795 | `0281de88f830167e5c48cd35575dc8d7da62a0f346d7f0f8618a0dd15a64b7d6` |
-| `scripts/ci/test-model-routing-omp-usage.py` | edited (constant read repoint) | 738 → 738 | `fc9163f591d1532108cdce7427361dae7385bbffa8f49058f4c56e2615839150` |
+| `scripts/ci/test-model-routing-evaluation.py` | edited (repoints + one pin test) | 3,748 → 3,788 | `8231d8d66c59fc11be7a2e99f217ef902addf8cdf5119e7ed9be0e45047a2777` |
+| `scripts/ci/test-model-routing-omp-usage.py` | edited (loaders + constant reads repointed to the defining module) | 1,286 → 1,288 | `1e9876686d77d2addd70c64d4fc94536013cc53c2fafdaf914da028f252151f5` |
+| `scripts/ci/model-routing-omp-usage.py` | edited (copy comment names `model_routing_records.py`) | 738 → 738 | `eb331a2138e7d06cea92d97ba3049bb3602a323c0ecadf83e62776ac6afe60f5` |
 | `scripts/ci/model-routing-source-subject.py` | edited (`DELIVERED_TOOL_PATHS` + docstring) | 71 → 75 | `6312f154a2ed97e9111ba9e56a0c46802ec4817a569e5c8881ae7c58c1ad6648` |
 | `scripts/ci/test-model-routing-source-subject.py` | edited (new pin test) | 130 → 147 | `845fa4215d9a427d4fc675d2b57d13d923a312c092b51c4797f3bc0a9530383f` |
-| `docs/plans/2026-11-22-rf-w5-12-model-routing-split-plan.md` | new | 264 | `d97c19f5ace7a595edfa1e1c91dc7eb9def90dd24b7890115804e823462affcf` |
+| `docs/plans/2026-11-22-rf-w5-12-model-routing-split-plan.md` | new | 270 | `d48269334ee49f21d204807ae825b4d38502aadb315af7129b5bd8dbc34ad52f` |
 | `docs/evidence/rf-w5-12-model-routing-split-2026-11-22.md` | new | this record | — |
+
+Counts and digests are measured on the delivered revision after the accepted simplify findings were
+applied (S1-S3): `model_routing_records.py`, the two suites and the plan carry their
+post-simplification figures, and `model-routing-omp-usage.py` gains the row the earlier table lost.
 
 Untouched: `.github/workflows/**` (the "Check auditable model-routing workflow" step at
 `.github/workflows/ci.yml:1078-1090` still runs the same six suite paths),
@@ -63,11 +68,16 @@ and `SPLIT_SCRIPTS` naming the four modules (receipts module). Everything else i
 is byte-identical. The unit table with base/delivered sha256 per unit is
 `<HOST-PATH>/.local/state/gdd/scratch/w5-12/units.tsv` (215 rows, one `patched`).
 
-Base accounting: 4,199 lines = 3,851 migrated unit lines + 29 dropped comment lines + 122
-imports/docstring + 364 blank lines. Dropped comments (each recorded in the plan): the eight
-section-divider pairs (comment policy 4), the `:148-152` tool-run-state note that itself defers to
-the module docstring, and the `:411-418` host-path note (trimmed to four why-lines beside
-`SANITIZE_SCRIPT`). No dropped line carries code — the checker proves that by requiring every
+Base accounting, as split.py prints it: 4,199 lines = 3,851 lines inside attributed spans (3,722
+unit-span lines + 23 kept-comment lines + the 106-line raw header/trailer) + 29 comment lines in
+dropped or replaced ranges + 122 docstring/import lines + 364 whitespace-only lines. The four
+classes are a cover, not a partition: they overlap by 167 lines (103 module-docstring lines are in
+both the raw header range and the docstring/import class, and 64 whitespace-only lines lie inside
+unit spans with 5 more inside the docstring), and split.py fails the run only when a line is in no
+class. Dropped comments (each recorded in the plan): the eight section-divider pairs (comment
+policy 4), the `:148-152` tool-run-state note that itself defers to the module docstring, and the
+`:411-418` host-path note, whose eight lines are replaced by the one-line why beside
+`SANITIZE_SCRIPT`. No dropped line carries code — the checker proves that by requiring every
 non-comment base line to be inside a migrated unit.
 
 ## 3. Refusal inventory before/after (the machine-checkable pin)
@@ -108,16 +118,17 @@ enters the bytes):
 | 6 | `check --run-dir run-missing` | 1 |
 | 7 | `receipt --run-dir run-missing --usage missing-usage.json` | 1 |
 
-Result: `cmp` per case × stdout/stderr/exit code — all 21 files identical; also the two raw logs
-(`cli-before/`, `cli-after/`, scratch) are byte-identical. No fixture directory is created (the
-`prepare` refusal precedes `mkdir`).
+Result: `cmp` per case × stdout/stderr/exit code — all 21 files identical before, after and on the
+apply revision (`cli-apply/`); the raw logs (`cli-before/`, `cli-after/`, `cli-apply/`, scratch) are
+byte-identical too. No fixture directory is created (the `prepare` refusal precedes `mkdir`).
 
 ## 5. Loader / pin diffs (contract Change (1)-(3))
 
 `test-model-routing-evaluation.py`:
 
-- one loader `defining_module(name)` (`load_runner_module()` then `importlib.import_module(name)`)
-  returns the exact module object the entry imported — the object a module-global patch must hit;
+- one loader `defining_module(name)` — plain `importlib.import_module(name)` — returns the module
+  object the entry itself binds (the same `sys.modules` instance), the object a module-global patch
+  must hit; it does not load the entry first;
 - monkeypatch repoints: `records.SANITIZE_SCRIPT`/`records._HOST_PATH_PATTERNS` +
   `records.host_path_patterns()`; `gates.terminate_owned_process_tree` (+ cleanup),
   `gates.subprocess` (+ cleanup), `gates.run_owned_command`, `gates.PROCESS_TREE_REAP_SECONDS`;
@@ -126,8 +137,8 @@ Result: `cmp` per case × stdout/stderr/exit code — all 21 files identical; al
   `gates.vitest_report_detail`/`gates.vitest_report_argv`;
 - the AST walk repoints to `pathlib.Path(gates.__file__).read_text(...)` so the inventory's lines
   and the traced code object come from one file;
-- both tool-materialization copy lists gain the four module file names (the materialized entry
-  imports its siblings from its own directory);
+- one module-level `MATERIALIZED_TOOL_NAMES` tuple gains the four module file names and feeds both
+  tool-materialization loops (the materialized entry imports its siblings from its own directory);
 - new test `test_receipt_binds_every_tooling_source` (contract change (5));
 - reads that stay on the loaded runner: `Refused`, `canonical_json`, `dependency_tree_digest`,
   `first_difference`, `redact_host_paths`, `_dependency_tree` (six names; the resolution check
@@ -135,10 +146,11 @@ Result: `cmp` per case × stdout/stderr/exit code — all 21 files identical; al
 - no test renamed, none removed; every needle, count, subTest and fixture byte stays; the
   coverage pin `(17, 15, 2)` stays.
 
-`test-model-routing-omp-usage.py`: `load_records_module()` helper; the seven `load_runner_module()`
-validator sites (`module.validate_usage`, `module.Refused`) and
-`test_shared_constants_match_the_runner` (now `records.STAGES`, `records.SECRET_KEY_PATTERN`) read
-the defining module; the extractor's copy comment names `model_routing_records.py`.
+`test-model-routing-omp-usage.py`: two loaders, `load_records_module()` and `load_usage_module()`;
+the six `load_records_module()` sites (`module.validate_usage`, `module.Refused`, and
+`test_shared_constants_match_the_runner` reading `records.STAGES`/`records.SECRET_KEY_PATTERN`) read
+the defining module, and the suite no longer loads the entry at all; the extractor's copy comment
+names `model_routing_records.py`.
 
 ## 6. Binding extensions (contract changes (4) and (5))
 
@@ -156,22 +168,34 @@ the defining module; the extractor's copy comment names `model_routing_records.p
 
 ## 7. Gates
 
+All rows were re-run on the apply-stage revision (the accepted simplify findings applied); the
+implement-stage figures are superseded, and the log names below are the apply-stage runs.
+
 | gate | command | exit | result |
 | --- | --- | ---: | --- |
-| verbatim/resolution check | `python3 <HOST-PATH>/.local/state/gdd/scratch/w5-12/check.py` | 0 | 215 units, 214 identical + 1 patched; docstring kept; 6/6 runner reads exposed (re-run on the frozen tree) |
-| main suite (final tree) | `python3 scripts/ci/test-model-routing-evaluation.py` | 0 | `Ran 81 tests in 1367.393s` → `OK (skipped=2)`; printed `17 returns, 15 reached …, 2 unreached` (log `logs/suite-final.log`) |
-| extractor suite | `python3 scripts/ci/test-model-routing-omp-usage.py` | 0 | `Ran 40 tests in 13.669s` → `OK` |
-| source-subject suite | `python3 scripts/ci/test-model-routing-source-subject.py` | 0 | `Ran 8 tests in 0.236s` → `OK (skipped=1)` (execute-bit skip) |
-| CLI byte-diff | `bash <HOST-PATH>/.local/state/gdd/scratch/w5-12/cli-byte-diff.sh` ×2 + `cmp` | 0 | 21/21 files identical (re-run on the frozen tree) |
+| verbatim/resolution check | `python3 <HOST-PATH>/.local/state/gdd/scratch/w5-12/check.py` | 0 | 215 units, 214 identical + 1 patched; docstring kept; 6/6 runner reads exposed (log `logs/check-apply.log`) |
+| main suite | `python3 -u scripts/ci/test-model-routing-evaluation.py -v` | 0 | `Ran 81 tests in 3023.559s` → `OK (skipped=2)`, zero `FAIL:`/`ERROR:` lines; printed `17 returns, 15 reached …, 2 unreached` (gates lines 212/241; log `logs/suite-apply.log`) |
+| extractor suite | `python3 scripts/ci/test-model-routing-omp-usage.py` | 0 | `Ran 40 tests in 25.499s` → `OK` |
+| source-subject suite | `python3 scripts/ci/test-model-routing-source-subject.py` | 0 | `Ran 8 tests in 0.283s` → `OK (skipped=1)` (execute-bit skip) |
+| CLI byte-diff | `bash <HOST-PATH>/.local/state/gdd/scratch/w5-12/cli-byte-diff.sh <HOST-PATH>/…/cli-apply` + `diff -r cli-before cli-apply` | 0 | 21/21 files identical, exit codes 0/2/1/1/1/1/1 (`cli-apply/`) |
 | ruff check | `python3 -m ruff check scripts/ci` | 0 | `All checks passed!` (ruff 0.17.5, pip module) |
 | ruff format | `python3 -m ruff format --check scripts/ci` | 0 | `63 files already formatted` |
 | whitespace | `git diff --check` | 0 | clean |
-| materialized copy | entry + siblings copied to a directory, `--help` | 0 | imports resolve from the copy |
+| materialized copy | entry + siblings copied to a directory, `--help` | 0 | imports resolve from the copy, usage printed (log `logs/copysmoke-apply.log`) |
+
+The apply-stage main suite ran at roughly twice the implement-stage ambient load (extractor suite
+13.7 s → 25.5 s; main suite 1,367.4 s → 3,023.6 s on a host running other agents' workloads). A
+first apply-stage attempt was killed at its 3,300 s deadline after 75 tests with one `F` at
+`test_timed_out_gate_terminates_its_descendants`; that fixture is the load-sensitive one
+`docs/archive/CLOSED-TODO.md:1343` records, and the verbose re-run above passed all 81 tests.
 
 ## 8. Mutation checks (judging)
 
-Frozen tree = the delivered revision in §1; every mutation was reverted and the four mutated files
-re-verified with `sha256sum -c` against their pre-mutation digests (`all mutants restored`).
+Frozen tree = the delivered revision in §1; every mutation was reverted and each mutated file
+re-hashed against its pre-mutation digest (`all mutants restored`). The four mutations were re-run
+on the apply-stage revision and reproduced the same four reds; raw logs
+`<HOST-PATH>/.local/state/gdd/scratch/w5-12/logs/mutant-{a,b,c,d}-apply.log` (implement stage:
+`logs/mutant-{a,b,c,d}.log`).
 
 | # | mutation | command | exit | observed red |
 | --- | --- | --- | ---: | --- |
@@ -180,17 +204,16 @@ re-verified with `sha256sum -c` against their pre-mutation digests (`all mutants
 | c | `model-routing-source-subject.py` `DELIVERED_TOOL_PATHS` loses `scripts/ci/model_routing_subject.py` | `python3 scripts/ci/test-model-routing-source-subject.py SourceSubjectTests.test_delivered_tool_paths_cover_the_whole_evaluation_tool_set` | 1 | tuple diff names the missing element |
 | d | `model_routing_receipts.py` `SPLIT_SCRIPTS` loses `"model_routing_receipts.py"` | `python3 scripts/ci/test-model-routing-evaluation.py EvaluationTests.test_receipt_binds_every_tooling_source` | 1 | `Items in the second set but not the first: 'model_routing_receipts.py'` |
 
-Raw logs: `<HOST-PATH>/.local/state/gdd/scratch/w5-12/logs/mutant-{a,b,c,d}.log`.
-
 The first full suite run on the repointed tree surfaced exactly one failure — the sanitize-patch
 test (repointed to the shared records module) left `SANITIZE_SCRIPT` pointing into a deleted
 temporary directory and the later `test_measured_redaction_keeps_urls_literal` refused; the fix
 registers `addCleanup` restores of `SANITIZE_SCRIPT` and `_HOST_PATH_PATTERNS` (the patch target is
 the module the runner executes, so the test must put it back). Both tests pass together after the
 fix (2.348 s). This is the only suite failure the split introduced; the run's other numbers
-(81 tests, 2 skips, 1,266 s) come from that run. The final run on the fixed tree is the gate:
-`Ran 81 tests in 1367.393s` → `OK (skipped=2)`, and it printed the identical refusal-coverage line
-(`17 returns, 15 reached …, 2 unreached`, gates lines 212/241).
+(81 tests, 2 skips, 1,266 s) come from that run. The final run on the fixed tree was the
+implement-stage gate: `Ran 81 tests in 1367.393s` → `OK (skipped=2)`, and it printed the identical
+refusal-coverage line (`17 returns, 15 reached …, 2 unreached`, gates lines 212/241); the
+apply-stage run in §7 is the current gate.
 
 ## 9. Method, tools and raw outputs
 
@@ -203,8 +226,9 @@ accounting. `<HOST-PATH>/.local/state/gdd/scratch/w5-12/check.py` is an independ
 derives its expectations from
 the git-bound base and the delivered files, not from the generator's table). `units.tsv` carries
 the per-unit digests. `cli-before/`, `cli-after/`, `cli-byte-diff.sh` are the byte-diff harness and
-its raw logs; `logs/suite-main.log` is the main suite's verbatim output. All scratch paths live
-outside the repository under `<HOST-PATH>/.local/state/gdd/scratch/w5-12/`.
+its raw logs; `logs/suite-main.log` is the implement-stage main suite's verbatim output and
+`logs/suite-apply.log` the apply-stage one (`cli-apply/` is the apply-stage byte-diff output). All
+scratch paths live outside the repository under `<HOST-PATH>/.local/state/gdd/scratch/w5-12/`.
 
 Residual limits: the main suite is the slow oracle (budgeted > 580 s locally, ≈146 s in CI); the
 CI step itself is unchanged and remains the conductor-verified oracle. The refusal-coverage

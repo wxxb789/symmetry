@@ -33,7 +33,7 @@ citations below resolve at the base revision.
 | `scripts/ci/model_routing_gates.py` | new | gate execution and stored evidence: the go/exunit/vitest derivations, `validator_argv`/`run_validator`, `terminate_owned_process_tree`/`run_owned_command`/`execute_gate`/`recompute_gate`, the dependency-tree walk and digest (`_tree_entries`/`dependency_tree_digest`/`verify_dependency_tree`), the resolved-tree checks, the process/trace constants |
 | `scripts/ci/model_routing_receipts.py` | new | the run-record and receipt layer: `load_run`/`save_run`/`load_frozen_*`/`load_sealed`, attempt reading and verification, `provisioning_view`/`require_dependency_provisioning`, `build_receipt`/`derive_receipt`, `INCOMPLETE_CHECK_DETAIL`, the bound-tooling path constant |
 | `scripts/ci/model-routing-evaluation.py` | edited | thin CLI entry: same path, same `prog="model-routing-evaluation.py"`, same seven subcommands, the module docstring unchanged, the `command_*` handlers and `finish_prepare`/`environment_record`/`first_difference`/`main` stay, plus imports of the four modules it uses (the suites read the defining modules — below) |
-| `scripts/ci/test-model-routing-evaluation.py` | edited | loader/AST-walk updates only (four monkeypatch sites and the AST walk repointed to the defining modules; two materialized-tool copy lists extended) plus the `tooling_sources` key-set pin of change (5) |
+| `scripts/ci/test-model-routing-evaluation.py` | edited | loader/AST-walk updates only (the four monkeypatch sites and the rule-read sites — `records.number_sum`/`validate_gate`/`is_vitest_entry`/`requires_dependency_provisioning`, `gates.vitest_report_detail`/`vitest_report_argv`/`PROCESS_TREE_REAP_SECONDS` — repointed to the defining modules, the AST walk with them; one `MATERIALIZED_TOOL_NAMES` tuple feeds both tool-materialization loops) plus the `tooling_sources` key-set pin of change (5) |
 | `scripts/ci/model-routing-source-subject.py` | edited | `DELIVERED_TOOL_PATHS` extends to the full delivered set and its docstring sentence names it; W5-11 leaves this tuple untouched, so no rebase conflict |
 | `scripts/ci/test-model-routing-source-subject.py` | edited | the new `DELIVERED_TOOL_PATHS` pin test (decision E) |
 | `scripts/ci/model-routing-omp-usage.py` | edited | the `SECRET_KEY_PATTERN` copy comment names the new defining module (one comment line) |
@@ -120,15 +120,17 @@ executes in that module's namespace, so these must name the defining module (con
 | `:1450` `runner.terminate_owned_process_tree = parent_only_kill` (+ cleanup) | gates module attribute |
 | `:1462` `real_subprocess = runner.subprocess`, `:1492` `runner.subprocess = RecordingSubprocess()` (+ cleanup) | gates module attributes |
 | `:2933` `refusal_returns(SCRIPT.read_text(…), "vitest_report_detail")` | the gates module file's text (AST walk is line-number-relative to the defining file; the counted set stays identical) |
-| `:1075-1085` and `:3700-3712` tool-materialization loops | gain the four new module file names, or the materialized entry cannot import |
+| `:1075-1085` and `:3700-3712` tool-materialization loops | the one `MATERIALIZED_TOOL_NAMES` tuple gains the four new module file names, or the materialized entry cannot import |
 
-The new helper is one loader (`citest.load_gate`-free: `load_runner_module()` imports register the
-siblings; the helper returns `importlib.import_module(<sibling>)`). Every assertion, needle, count
+The new helper is one loader, `defining_module(name)`: plain `importlib.import_module(name)` returns
+the `sys.modules` instance the entry itself binds, so the suite reads and patches the defining
+module's own globals, and the helper does not load the entry first. Every assertion, needle, count
 and fixture byte stays; the re-exported `runner.*` reads stay as they are.
 
-`test-model-routing-omp-usage.py` gets the same helper for its seven `module = load_runner_module()`
-validator sites (`validate_usage`, `Refused`) and its two shared constants. Reads of rules the
-entry keeps (`Refused`, `canonical_json`, `dependency_tree_digest`, `first_difference`,
+`test-model-routing-omp-usage.py` gets its own two loaders — `load_records_module()` for the six
+validator/constant sites (`validate_usage`, `Refused`, the `STAGES`/`SECRET_KEY_PATTERN` pin) and
+`load_usage_module()` for the extractor — and it does not load the entry. Reads of rules the entry
+keeps (`Refused`, `canonical_json`, `dependency_tree_digest`, `first_difference`,
 `redact_host_paths`, `_dependency_tree`) stay spelled against the loaded runner.
 
 ## Delivered sizes (D2: report-only)
@@ -136,11 +138,11 @@ entry keeps (`Refused`, `canonical_json`, `dependency_tree_digest`, `first_diffe
 | file | base | delivered |
 | --- | ---: | ---: |
 | `scripts/ci/model-routing-evaluation.py` | 4,199 L / 200,035 B | 761 L / 35,056 B |
-| `scripts/ci/model_routing_records.py` | — | 1,239 L / 53,854 B |
+| `scripts/ci/model_routing_records.py` | — | 1,236 L / 53,672 B |
 | `scripts/ci/model_routing_subject.py` | — | 539 L / 25,517 B |
 | `scripts/ci/model_routing_gates.py` | — | 1,119 L / 55,535 B |
 | `scripts/ci/model_routing_receipts.py` | — | 699 L / 32,272 B |
-| total source | 4,199 L | 4,357 L (+158: four module import headers, the bound-tooling constants, minus dropped comment lines) |
+| total source | 4,199 L | 4,354 L (+155: four module import headers, the bound-tooling constants, minus dropped comment lines) |
 
 215 base top-level units: 214 delivered byte-identical, 1 (`build_receipt`) delivered with the
 recorded `tooling_sources` patch and nothing else.
@@ -174,9 +176,11 @@ split stay historical; the derivation necessarily refuses them, exactly as the e
   ("the module docstring's tool-run-state paragraph records…"), and the docstring moves with the
   entry, so the comment would cite a paragraph another module now owns; the docstring itself stays
   verbatim in the entry.
-- `:411-418` (host-path definition) is trimmed to the two lines that carry the why (shared
-  definition loaded lazily from the sanitize tool; a broken sibling is a refusal) — its enumeration
-  of the pattern families duplicates the sanitize tool's own docstring.
+- `:411-418` (host-path definition) is trimmed to the one why-line beside `SANITIZE_SCRIPT`
+  (recorded measured-surface values must not republish the operator profile or a disposable
+  evaluation root); the lazy load from the sanitize tool and the refusal on a broken sibling live in
+  `host_path_patterns()`'s docstring, and the base note's pattern-family enumeration duplicated that
+  same docstring.
 - Kept verbatim: the measured external shapes (`:171-178` ExUnit trace lines, `:182-185`
   `mix test` summaries), the launcher-flag note at `:1930-1935` (cites STD-A04), `:304-306`
   (extractor sync), `:340-341` (optional provisioning view).
@@ -195,8 +199,9 @@ computed from each module's real name usage. Two independent checks run after ge
 after any later edit:
 
 1. **Verbatim check** — for every top-level unit, the delivered text's AST segment equals the base
-   file's AST segment byte for byte; every base line has exactly one disposition (unit → module,
-   kept comment → module, dropped-with-reason), and the accounting is printed. This is the
+   file's AST segment byte for byte; every base line is accounted for (unit → module, kept comment
+   → module, dropped-with-reason, structural header/trailer, or blank) and `split.py` refuses on an
+   unaccounted line; the printed accounting is a cover, not a partition. This is the
    machine-checkable form of lesson 32 for a move: a byte-identical body preserves every early
    return, refusal, `except` clause, default and exit-code path by construction.
 2. **Resolution check** — every global name referenced by a module is defined in it, imported into
@@ -259,6 +264,7 @@ its pin, the `tooling_sources` key set, and the LOC delta (report-only, D2) — 
   object the coverage test traces; the repoint keeps that identity (gates module file ↔ gates
   module function). The printed line numbers change (2015/2044 → gates coordinates) and are
   recorded as historical.
-- **Entry re-export drift**: the redundant-alias imports are the only names the suites read through
-  the entry that the entry does not itself use; the resolution check enumerates them, so a future
-  edit that drops one fails a machine check rather than a suite.
+- **Suite reads pinned to the entry**: the suites read six names through the loaded runner
+  (`Refused`, `canonical_json`, `dependency_tree_digest`, `first_difference`, `redact_host_paths`,
+  `_dependency_tree`); the entry uses each of them itself, and the resolution check enumerates the
+  set, so an edit that drops one fails a machine check rather than a suite.

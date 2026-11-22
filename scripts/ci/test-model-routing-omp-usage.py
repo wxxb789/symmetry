@@ -74,14 +74,8 @@ def surrogatepass_digest(value):
     return "sha256:" + hashlib.sha256(value.encode("utf-8", "surrogatepass")).hexdigest()
 
 
-def load_runner_module():
-    """Import the acceptance runner so exported rows can be validated in-process."""
-    return citest.load_gate(pathlib.Path(__file__).with_name("model-routing-evaluation.py"), "model_routing_evaluation")
-
-
 def load_records_module():
     """Import the runner's records module, the split home of the shared constants."""
-    load_runner_module()
     return importlib.import_module("model_routing_records")
 
 
