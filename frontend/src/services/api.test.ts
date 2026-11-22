@@ -1,6 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { failureMode } from "../features/planning/write-policy";
-import { createApi, Forbidden, Network, postGoalCommand, postGoalCreation, readRetry, refusalNotice, ServerRefusal, Unauthenticated, UnexpectedResponse, Validation, type ActionId, type Api, type ExecutionGeneration } from "./api";
+import { createApi, Forbidden, Network, postGoalCommand, postGoalCreation, readRetry, refusalNotice, ServerRefusal, Unauthenticated, UnexpectedResponse, Validation, type ActionId, type Api, type ExecutionGeneration, type Writes } from "./api";
 import { MutationRefused } from "./commands";
 import { readWorkDetail } from "./api.fixtures";
 
@@ -556,17 +556,46 @@ describe("chat boundary", () => {
 });
 
 describe("read/write split", () => {
-  it("sends a write with exactly the boundary's own init members and no signal (mutant: an undefined-valued signal member)", async () => {
+  type ParametersOf<F> = F extends (...args: infer A) => unknown ? A : never;
+  type SignalTakers<M> = { [K in keyof M]: Extract<ParametersOf<M[K]>[number], AbortSignal> extends never ? never : K }[keyof M];
+
+  it("sends a bodyed write with the boundary's own init values and no signal (mutants: a changed credentials value; an undefined-valued signal member)", async () => {
+    const draft = { provider: "github", name: "draft", account_ref: "acme", capabilities: [] };
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ disposition: "created", connection: { id: "c1" } })));
-    await createApi(fetcher).createConnection({ provider: "github", name: "draft", account_ref: "acme", capabilities: [] }, "csrf");
+    await createApi(fetcher).createConnection(draft, "csrf");
     const [path, init] = fetcher.mock.calls[0] ?? [];
     expect(path).toBe("/portal/api/connections");
     expect(Object.hasOwn(init ?? {}, "signal")).toBe(false);
-    expect(Object.keys(init ?? {}).sort()).toEqual(["body", "cache", "credentials", "headers", "method", "redirect"]);
+    expect(Reflect.ownKeys(init ?? {}).map(String).sort()).toEqual(["body", "cache", "credentials", "headers", "method", "redirect"]);
+    expect(init).toEqual({
+      method: "POST",
+      credentials: "same-origin",
+      headers: { Accept: "application/json", "content-type": "application/json", "x-csrf-token": "csrf" },
+      cache: "no-store",
+      redirect: "manual",
+      body: JSON.stringify(draft),
+    });
   });
 
-  it("keeps a write from accepting a caller signal (mutant: a write signal re-added)", () => {
+  it("keeps a bodyless write to the five init members it carries in base (mutant: a body member added to a bodyless write)", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ disposition: "created", connection: { id: "c1" } })));
+    await createApi(fetcher).checkConnection("c1", "csrf");
+    const [path, init] = fetcher.mock.calls[0] ?? [];
+    expect(path).toBe("/portal/api/connections/c1/check");
+    expect(Object.hasOwn(init ?? {}, "signal")).toBe(false);
+    expect(Reflect.ownKeys(init ?? {}).map(String).sort()).toEqual(["cache", "credentials", "headers", "method", "redirect"]);
+    expect(init).toEqual({
+      method: "POST",
+      credentials: "same-origin",
+      headers: { Accept: "application/json", "x-csrf-token": "csrf" },
+      cache: "no-store",
+      redirect: "manual",
+    });
+  });
+
+  it("keeps every write from accepting a caller signal (mutant: a write signal re-added)", () => {
     const api = createApi(vi.fn<typeof fetch>());
+    expectTypeOf<SignalTakers<Writes>>().toBeNever();
     // @ts-expect-error write paths must not accept a signal
     const writeWithSignal = () => api.createConnection({ provider: "github", name: "draft", account_ref: "acme", capabilities: [] }, "csrf", new AbortController().signal);
     expect(writeWithSignal).toBeTypeOf("function");

@@ -25,10 +25,10 @@ evidence record (same-stage GDD shape, lesson-32 audit table, mutation table).
 
 | artifact | measurement |
 | --- | --- |
-| `frontend/src/services/api.ts` | 1,005 L; `export interface Api` `:487-539` = **29 methods**: 9 reads (`:488-495`, `:521`) each with `signal: AbortSignal`, 20 writes (`:496-515`, `:527-530`, `:536`) each with `signal: AbortSignal` |
+| `frontend/src/services/api.ts` | 1,005 L; `export interface Api` `:487-539` = **29 methods**: 9 reads (`:488-495`, `:521`) each with `signal: AbortSignal`, 20 writes (`:496-515`, `:527-538`) each with `signal: AbortSignal` |
 | `request()` | `:607-655`: no signal parameter; the fetch init's `signal` comes from `Effect.tryPromise`'s interruption callback |
 | `run()` | `:657`: `signal?: AbortSignal` (already optional, W3-13) |
-| `createApi()` | `:730-1010`: 9 read bodies call `run(request(...), signal)`; 20 write bodies call `run(request(...), signal)` |
+| `createApi()` | `:730-912`: 9 read bodies call `run(request(...), signal)`; 20 write bodies call `run(request(...), signal)` |
 | non-test `new AbortController()` | **24 sites / 8 files**: 21 write sites — `application.ts` `:289,:295,:301,:312,:354`, `connections.tsx` `:106,:107,:219,:232`, `resources.tsx` `:457,:458,:459,:624,:642`, `editors.tsx` `:72,:73,:247,:248`, `projects.tsx` `:97`, `work-surface.tsx` `:223`, `assignment.tsx` `:231` — and 3 read sites that stay: `application.ts:181` (`api.session`), `goals/detail.tsx:71,:98` (`api.goal`) |
 | test-side `new AbortController()` | 33 sites: `api.test.ts` 32, `application.test.ts` 1; no DOM suite constructs one |
 | write call sites outside the owned set | none: `rg "\.(createConnection|…|provideInput)\("` over non-test `src` matches only the 21 owned sites |
@@ -55,7 +55,7 @@ store was run once at dispatch; the tree stayed clean.
 | `frontend/src/features/projects/projects.tsx` | edited | 1 write site |
 | `frontend/src/features/projects/work-surface.tsx` | edited | 1 write site |
 | `frontend/src/features/work/assignment.tsx` | edited | 1 write site |
-| `frontend/src/services/api.test.ts` | edited | write calls lose their signal; the control-command table's `send` loses its signal parameter; 3 new guarding clauses (two `@ts-expect-error` pins, one init-shape pin) |
+| `frontend/src/services/api.test.ts` | edited | write calls lose their signal; the control-command table's `send` loses its signal parameter; 4 new guarding clauses (two init-shape pins — a bodyed write's values/members and a bodyless write's members — two `@ts-expect-error` pins and one mapped-type assertion over every `Writes` member) |
 | `frontend/src/app/application.test.ts` | edited | 1 write call loses its signal |
 | `docs/plans/2026-11-22-rf-w4-09-api-reads-writes-split-plan.md` | new | this plan |
 | `docs/evidence/rf-w4-09-api-reads-writes-split-2026-11-22.md` | new | evidence record (clause 2's judging artifact) |
@@ -127,9 +127,9 @@ all (never `signal: undefined`):
 4. **Retry/identity semantics unchanged.** Mutation retries stay off; no call site's argument
    order changes other than dropping the signal; the chat payload identity, `action_id` and
    `creation_id` carriers are untouched.
-5. **Type surface is the enforcement.** The two pins and the init-shape pin are the runnable
-   guards; the call-shape edits in the two owned test files keep every path/method/body/header
-   assertion byte-identical.
+5. **Type surface is the enforcement.** The two pins, the mapped assertion over every `Writes`
+   member and the two init-shape clauses are the runnable guards; the call-shape edits in the two
+   owned test files keep every path/method/body/header assertion byte-identical.
 6. **Comments.** Owner policy applies to every touched hunk: the surrounding 1-2 line
    why-only notes already in the touched regions stay, and no comment is added except the two
    `@ts-expect-error` directives the contract requires (machine-consumed pragmas) and each
@@ -142,9 +142,9 @@ all (never `signal: undefined`):
 | P1 | `Api` is recomposed as `export type Api = Reads & Writes` (not `interface Api extends Reads, Writes`) | the contract names the shape `Reads & Writes`; the intersection is one line, keeps every `application.api.<method>` call site's name, and no module declaration-merges `Api` (`rg "extends Api"` finds none) |
 | P2 | `signal` is the trailing parameter *after* `surface` in `request()` | W3-13's merged `goalCommand` passes `"mutation"` as the fifth positional argument and must stay byte-identical; with `signal` fifth that call would break. Reads therefore pass `"server"` explicitly, which is also self-documenting |
 | P3 | No bounded write timeout/abort policy | conductor option (a): a hidden write deadline is new production behaviour with no accepted requirement and would break D1; the type surface is the whole change |
-| P4 | The pin clauses are never-called arrows inside `it()` bodies | the directives must be *type-checked* but must not issue requests: an uncalled arrow is checked by `tsc` and costs nothing at runtime; each arrow is named by `expect(arrow).toBeTypeOf("function")` so `noUnusedLocals` stays satisfied |
-| P5 | Each guarded pin carries its killed mutant in the test title | the conductor's mutation-proof decision: the write pin (write signal re-added), the read pin (read signal made optional), the init-shape pin (an `undefined`-valued `signal` member) |
-| P6 | The init-shape pin asserts own-member absence *and* the exact sorted member set | D1 says the init carries exactly today's members minus `signal`: `Object.hasOwn(init, "signal") === false` is the named assertion; the sorted key list `["body","cache","credentials","headers","method","redirect"]` pins "exactly" without depending on literal order |
+| P4 | The two `@ts-expect-error` pins are never-called arrows inside `it()` bodies; the all-writes assertion is a type-argument `expectTypeOf` call | the guards must be *type-checked* but must not issue requests: an uncalled arrow is checked by `tsc` and costs nothing at runtime, and each arrow is named by `expect(arrow).toBeTypeOf("function")` so `noUnusedLocals` stays satisfied; `expectTypeOf` is a runtime no-op |
+| P5 | Each guarded pin carries its killed mutant in the test title | the conductor's mutation-proof decision: the write pin and its mapped all-writes assertion (a write signal re-added on the pinned call or on any other member), the read pin (read signal made optional), the init-shape clauses (an `undefined`-valued `signal` member, a changed init value, a `body` member on a bodyless write) |
+| P6 | The init-shape pins assert own-member absence, the exact member set *and* D1's values | D1 says the init carries exactly today's members minus `signal`: `Object.hasOwn(init, "signal") === false` is the named absence assertion; the sorted `Reflect.ownKeys` list pins "exactly" including non-enumerable members; the full-object equality pins the values (`credentials: "same-origin"`, `cache: "no-store"`, `redirect: "manual"`, the `Accept`/`content-type`/`x-csrf-token` headers, the body bytes); the second clause pins a bodyless write's five members (no `body`/`content-type`) |
 | P7 | `run()` is left as W3-13 wrote it (`signal?: AbortSignal`, `signal === undefined ? undefined : { signal }`) | already the contract's shape; editing it would be a no-op diff |
 | P8 | No doc amendment in `docs/design/frontend.md` | its cancellation sentence scopes the AbortSignal forwarding to "the query adapter" (reads), which is preserved; the split states the write half without contradicting it |
 | P9 | The `docs/TODO.md` goal-write cancellation entry is closed, not scheduled | the entry says the split "owns adding one"; option (a) refuses a write signal, so the residual becomes a stated design property. The closure text records the decision and the archive keeps the trace |
@@ -173,11 +173,14 @@ Mutation list (each applied alone, run, reverted):
 
 | mutant | flip | expected red |
 | --- | --- | --- |
-| M1 write signal re-added | `Writes.checkConnection` regains `signal?: AbortSignal` | typecheck: unused `@ts-expect-error` directive at the write pin |
-| M2 read signal dropped at a call site | `application.ts` `sessionOptions`'s `api.session(signal)` → `api.session()` | typecheck: missing argument |
-| M3 read signal made optional | `Reads.session` drops its `signal` parameter | typecheck: unused `@ts-expect-error` directive at the read pin |
-| M4 csrf header dropped | `request()`'s init drops the `x-csrf-token` header | `api.test.ts` csrf assertions + `chat.test.tsx`'s write-header assertion |
-| M5 undefined-valued signal member | the init always spreads `signal` | the init-shape pin (`Object.hasOwn(init, "signal")` true) |
+| M1 write signal re-added (write pin's mutant) | `Writes.createConnection` regains `signal?: AbortSignal` | typecheck: unused `@ts-expect-error` directive at the write pin |
+| M1b write signal re-added on another member (mapped assertion's mutant) | `Writes.updateConnection` regains `signal?: AbortSignal` | typecheck: the `expectTypeOf<SignalTakers<Writes>>().toBeNever()` assertion stops compiling |
+| M2 read signal dropped at a call site | `application.ts` `sessionOptions`'s `api.session(signal)` → `api.session()` | typecheck: missing argument at the call (+ the unused destructured `signal`) |
+| M3 read signal made optional | `Reads.session` and its implementation both take `signal?: AbortSignal` | typecheck: unused `@ts-expect-error` directive at the read pin |
+| M4 csrf header dropped | `request()`'s init drops the `x-csrf-token` header | `api.test.ts`: the four control rows, the chat row and both init-shape clauses |
+| M5 undefined-valued signal member | the init always spreads `signal` | both init-shape clauses (`Object.hasOwn(init, "signal")` true) |
+| M6 init value changed | `request()`'s `credentials: "same-origin"` → `"include"` | the bodyed init-shape clause's value equality |
+| M7 body member added to a bodyless write | `checkConnection`'s init gains `body: {}` | the bodyless init-shape clause's member set and value equality |
 
 ## Control-flow audit (lesson 32)
 
