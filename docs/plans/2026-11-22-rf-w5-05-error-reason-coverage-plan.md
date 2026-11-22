@@ -15,6 +15,15 @@ slices add the `docs/evidence/<slice>-<date>.md` record this contract's clause 2
 decision demand. Both records are written here; the GDD contract and its index live outside this
 repository and this stage does not move them.
 
+Fix stage (review findings R1–R6, brief
+`<HOST-PATH>/.local/state/gdd/findings/rf-w5-05-error-reason-coverage-fix1.md`): the evidence
+record's byte-identity dump was re-run with a corrected CRLF-safe, fail-loud tool (`fix1/dump.exs`);
+the coverage test gained the tuple-clause no-emission pin, the rendered-path exactly-once pin and
+whole-map event comparisons; the lesson-32 line coordinates and the evidence record's
+inventory-identity claim are corrected.
+`protocol.ex` bytes are unchanged (`sha256 d2968799…`); the delivered test file is `sha256
+d6833f89…` (evidence record header).
+
 ## Measured basis (dispatch HEAD `e84973a7`)
 
 Scanner: `<HOST-PATH>/.local/state/gdd/scratch/w5-05/scan.py` — for every `control/lib/**/*.ex`
@@ -95,8 +104,9 @@ public/private function added or removed, no response byte changed.
   behaviour-identical to today's `Map.get/3` default.
 - **No wire delta.** Status, code and message are unchanged for every reason. The rendered bytes
   are frozen by: the base-vs-HEAD dump over all 127 reasons (64 table keys ∪ 86 scanned) through
-  both `error_details/1` and `Protocol.error/2`; the counter test's byte-exact assertion on the
-  probe reason's rendered body; and the unmodified controller oracles.
+  both `error_details/1` and `Protocol.error/2`, with its fail-loud per-key guard (fix r1); the
+  counter test's byte-exact assertion on the probe reason's rendered body; and the unmodified
+  controller oracles.
 - **The counter cannot fail the response.** `:telemetry.execute/3` isolates handler exceptions in
   1.4.3 (`telemetry.erl:221-238`: catch, detach the handler, emit `[telemetry, handler, failure]`,
   log) — a faulty handler cannot turn the 400 into a 500.
@@ -112,13 +122,19 @@ public/private function added or removed, no response byte changed.
 | `error_details(reason)`, key present | `:151-152` `Map.get` hit → entry | `Map.fetch` hit → entry, no emission | yes |
 | `error_details(reason)`, key absent | `:151-152` `Map.get` default → `invalid_request` | `:error` branch → emit, then `invalid_request` | yes (tuple identical) |
 | emission order vs status/JSON | n/a (no emission) | emission happens inside `error_details/1`, before `put_status`/`json` in the callers | n/a; no response interaction |
-| `error/2`, `{:invalid_contract, _}` | `:114` → `error(conn, :invalid_contract)` | unchanged | yes |
-| `error/2`, `{reason, fields}` when map | `:116-123` `put_status` → `json` with `goal_error_fields/1` | unchanged | yes |
-| `error/2`, scalar/other | `:125-128` `put_status` → `json` | unchanged | yes |
-| `validation_error/2` | `:138-146` 422 `validation_failed` | unchanged | yes |
+| `error/2`, `{:invalid_contract, _}` | `:116` → `error(conn, :invalid_contract)` | same line, byte-identical | yes |
+| `error/2`, `{reason, fields}` when map | `:118-124` `put_status` → `json` with `goal_error_fields/1` | same lines, byte-identical | yes |
+| `error/2`, scalar/other | `:126-129` `put_status` → `json` | same lines, byte-identical | yes |
+| `validation_error/2` | `:136-146` 422 `validation_failed` | same lines, byte-identical | yes |
 
-A green controller suite does not prove the 63 unmapped reasons still hit the same tuple; the
-127-reason base-vs-HEAD dump is the direct proof, and the coverage test keeps it true afterwards.
+`protocol.ex` lines 1–147 are byte-identical between the base and the delivered file (blobs
+`3283e6c9` → `d119987b`; the only differing region is the fallback clause, HEAD `:151-164`), so the
+four `error/2`/`validation_error/2` coordinates above are the same at both revisions. A green
+controller suite does not prove the 63 unmapped reasons still hit the same tuple. Since fix r1 the
+127-reason base-vs-HEAD dump is that direct proof *and* provably exercises the table: its fail-loud
+guard requires 64/64 `@error_statuses` keys to resolve to their source entries, and the recorded
+artifact shows 64 mapped inputs hitting entries (63 with non-fallback tuples; `invalid_request` is
+the 64th). The coverage test keeps the mapping true afterwards.
 
 ## Evidence plan (exact commands)
 
@@ -142,10 +158,13 @@ Sequencing: the measurement/dump scripts and the focused test/mutation runs are 
 with a full suite (shared PostgreSQL cap); full `mix test` is the conductor's gate-runner, not run
 here.
 
-Base-vs-HEAD dump (outside the repository, `<HOST-PATH>/.local/state/gdd/scratch/w5-05/`):
-`dump.exs` run before the `protocol.ex` edit (`base.txt`) and after it (`head.txt`), input the
-frozen 127-reason list, then `diff base.txt head.txt` → empty. Emitted per reason:
-`error_details/1` tuple, and `Protocol.error/2` status + `resp_body` bytes.
+Base-vs-HEAD dump (outside the repository, `<HOST-PATH>/.local/state/gdd/scratch/w5-05/fix1/`):
+`dump.exs` — CRLF-safe input split plus the fail-loud guard that requires every parsed
+`@error_statuses` key to resolve to its source entry — run on the base `e84973a7` bytes
+(`base.txt`) and on the delivered bytes (`head.txt`), input the frozen 127-reason list, then
+`cmp base.txt head.txt` → identical (`sha256 5aa77e8e…`). Emitted per reason: `error_details/1`
+tuple, and `Protocol.error/2` status + `resp_body` bytes; the guard summary on stderr is
+`inputs=127 mapped_inputs=64 unmapped_inputs=63 table_keys=64 table_hits=64`.
 
 Mutation matrix (judging; each mutant applied in place, focused test run, file restored from a
 scratch copy with sha256 re-verified):
@@ -156,6 +175,9 @@ scratch copy with sha256 re-verified):
 | (b) map one `@scanned_unmapped` reason in `@error_statuses` | that reason's `invalid_request`-tuple assertion |
 | (c) delete the counter emission | counter test's `assert_receive` |
 | (d) emit the counter for every reason (not just the fallback) | counter test's `refute_receive` for a mapped reason |
+| (e2) emit inside the `{:invalid_contract, _}` clause (a counter outside the fallback branch) | tuple-clause test's `refute_receive` |
+| (e4) emit a second time in `error/2`'s scalar clause (wire path) | the rendered-path `refute_receive` in the unmapped case |
+| (e6) add an extra metadata key (`status: 400`) to the fallback emission | the whole-map `metadata`/`measurements` comparisons |
 
 ## Design trade-offs
 

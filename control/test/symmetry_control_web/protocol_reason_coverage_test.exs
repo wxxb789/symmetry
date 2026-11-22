@@ -228,8 +228,14 @@ defmodule SymmetryControlWeb.ProtocolReasonCoverageTest do
   end
 
   test "the tuple-shaped contract and stale clauses keep their entries" do
+    attach_counter!(:tuple_clause_probe)
+
     assert Protocol.error_details({:invalid_contract, %{details: %{}}}) == @table.invalid_contract
+
     assert Protocol.error_details({:stale, %{current_version: 2}}) == @table.stale
+
+    refute_receive {:unmapped_reason, _, _, %{reason: {:invalid_contract, _}}}
+    refute_receive {:unmapped_reason, _, _, %{reason: {:stale, _}}}
   end
 
   test "an unmapped reason emits the fallback counter once and keeps the response bytes" do
@@ -238,17 +244,20 @@ defmodule SymmetryControlWeb.ProtocolReasonCoverageTest do
 
     assert Protocol.error_details(probe_reason) == @table.invalid_request
 
-    assert_receive {:unmapped_reason, @event, %{count: 1}, %{reason: ^probe_reason}}
+    assert_unmapped_event!(probe_reason)
     refute_receive {:unmapped_reason, _, _, %{reason: ^probe_reason}}
 
     tuple_probe = {:rf_w5_05_unmapped_probe, %{}}
 
     assert Protocol.error_details(tuple_probe) == @table.invalid_request
-    assert_receive {:unmapped_reason, @event, %{count: 1}, %{reason: ^tuple_probe}}
+    assert_unmapped_event!(tuple_probe)
     refute_receive {:unmapped_reason, _, _, %{reason: ^tuple_probe}}
 
     response = Protocol.error(Plug.Test.conn(:get, "/"), probe_reason)
     assert response.status == 400
+
+    assert_unmapped_event!(probe_reason)
+    refute_receive {:unmapped_reason, _, _, %{reason: ^probe_reason}}
 
     assert response.resp_body ==
              ~s({"error":{"code":"invalid_request","message":"request payload is invalid"}})
@@ -293,6 +302,16 @@ defmodule SymmetryControlWeb.ProtocolReasonCoverageTest do
 
     assert response.resp_body ==
              ~s({"error":{"code":"invalid_request","message":"request payload is invalid"}})
+  end
+
+  # Whole-map comparison: additive measurement/metadata keys must redden. The
+  # reason is pinned inside the pattern so an emission from a concurrently
+  # running test module cannot satisfy the receive.
+  defp assert_unmapped_event!(reason) do
+    assert_receive {:unmapped_reason, event, measurements, %{reason: ^reason} = metadata}
+    assert event == @event
+    assert measurements == %{count: 1}
+    assert metadata == %{reason: reason}
   end
 
   defp attach_counter!(tag) do
