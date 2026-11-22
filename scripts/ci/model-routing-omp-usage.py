@@ -42,7 +42,7 @@ STAGES = ("exploration", "implementation", "verification", "review", "repair", "
 SAFE_LABEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 SAFE_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:+/@~-]{0,127}$")
 
-# Secret-like key detector copied verbatim from scripts/ci/model-routing-evaluation.py
+# Secret-like key detector copied verbatim from the runner's model_routing_records.py
 # (SECRET_KEY_PATTERN); test-model-routing-omp-usage.py pins the two copies (pattern
 # and flags) equal, because a session-controlled record type name the runner's
 # secret-key scan would refuse must never be exported raw.

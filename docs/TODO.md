@@ -1538,3 +1538,31 @@ is fixed here; each bullet names what a follow-up has to re-derive.
       `@moduledoc false` owner module exposing the sets as functions the others read at compile
       time (`@x Owner.state_set()`), keeping every SQL literal byte-identical, plus one pinning
       test that fails on divergence.
+
+## Daemon app tests: the retained-resume attach-ready mark is unpinned (PR #234 review round 2)
+
+- [ ] Pin the `tx.attachReady = true` assignment in `publishRetainedNativeStartBoundary`
+      (`daemon/internal/app/goal_admission_tx.go`): deleting it survives the tx seam matrix and the
+      full app suite, so no test reaches the retained-resume path that reads the mark. It only
+      matters when a retained resume is cancelled after launch or its lease expires after `Open`.
+      The gap exists at base; owner: the next daemon app-test slice.
+
+## Harness launch grant: legacy `StartRequest` members (rf-w4-15b, 2026-11-22)
+
+- [ ] Remove the legacy `StartRequest.Invocation`, `StartRequest.PersistProcess`,
+      `StartRequest.PersistProcessAuthority` and `StartRequest.PersistContainmentStopReceipt`
+      members. `daemon/internal/harness/staged_driver.go` now hands every staged adapter one opaque
+      `harness.LaunchGrant`, but the legacy surface still has readers. The five conforming adapters
+      (`pi`, `codex`, `claude`, `omo`, `omp`) still read `request.Invocation`'s process-description
+      members (`Args`, `Env`, `InitialInput`, `CloseInputAfterInitial`), which must move onto a
+      description input before `Invocation` can be deleted. `StartRequest.grant()` in
+      `staged_driver.go` still merges the three request-level persist members over
+      `request.Invocation` for every direct construction that carries no `Grant` (in practice the
+      adapter tests that build `StartRequest{...}` without one); deleting that fallback depends
+      only on migrating those callers to `Grant`, not on W6-04. The member deletion itself is tied
+      to W6-04 (OpenCode promote-or-drop):
+      `daemon/internal/harness/opencode/adapter.go`, which the slice (E3/D1) may not touch, is the
+      only adapter still reading all four members. Once it adopts the grant or is dropped, delete
+      the four members, the `grant()` fallback, and their population in
+      `daemon/internal/app/goal_admission_tx.go` and
+      `daemon/internal/app/linux_owner_witness_linux.go`.
