@@ -40,7 +40,7 @@ the pinned golangci-lint 2.15.0 runs.
 | closures | 5: `abortFreshLaunchIfCancelled :462` (4 call sites `:630,:636,:662,:681`), `sink :665`, `PersistProcess :817` / `PersistProcessAuthority :824`, `settlePublishedCancellation :849` (6 call sites `:989,:1008,:1074,:1096,:1110,:1126`), `settleExpiredNativeStartFailure :862` (2 call sites `:915,:1005`) | source |
 | `settleCancelledNativeStart` call sites | 6: `:853,:898,:907,:1042,:1147,:1204` | source |
 | `finishNativeStartPublication` call sites | 7 inline (`:870,:919,:978,:992,:1011,:1029,:1178`) + the `:1040` defer | source |
-| direct `startGoalAdmission` callers | production `app.go:1443`; tests `abandon_error_join_test.go:44` (added by W3-09, not in the contract's pre-W3-09 list), `deterministic_validation_test.go:572`, `harness_test.go:3828,:3865,:6002`, `native_process_stop_test.go:131`, `native_settlement_regression_test.go:700` | source |
+| direct `startGoalAdmission` callers | production `app.go:1418`; tests `abandon_error_join_test.go:44` (added by W3-09, not in the contract's pre-W3-09 list), `deterministic_validation_test.go:572`, `harness_test.go:3828,:3865,:6002`, `native_process_stop_test.go:131`, `native_settlement_regression_test.go:700` | source |
 | W4-17b lifecycle write-site gate | green at base (`TestRunLifecycleWritesStayInTheModule`) | `go test -run TestRunLifecycleWritesStayInTheModule` |
 
 ## Deliverable shape
@@ -53,11 +53,13 @@ the pinned golangci-lint 2.15.0 runs.
    - `type goalAdmissionCompensation struct{ armed, released bool; run func(context.Context, error) error }`.
    - the phase methods and their sub-methods (seam table below), the five compensation entry
      methods, `abort`, the former closures as methods.
-2. **`daemon/internal/app/goal_admission.go:263-1222`** — `startGoalAdmission` shrinks to:
-   build the tx, defer `tx.abort(ctx, returnErr)` into the named return, return `tx.run(ctx)`.
-   The declaration stays on line 263 (O23 does not trigger; the citation gate stays green).
-   Nothing at `:1223+` changes; `abandonGoalSession` stays byte-identical.
-3. **`daemon/internal/app/app.go:1443`** — untouched: the entry keeps its signature, so the caller
+2. **`daemon/internal/app/goal_admission.go:263-1222`** (base range) — `startGoalAdmission`
+   shrinks to the delivered entry at `:249-255`: build the tx, defer `tx.abort(ctx, returnErr)`
+   into the named return, return `tx.run(ctx)`. The declaration moved `:263` -> `:249` (imports,
+   then #223's comment trims), so O23 triggers: `docs/design/harness.md:288` is refreshed
+   citation-only in this PR. Nothing at the delivered `:256+` changes; `abandonGoalSession`
+   stays byte-identical.
+3. **`daemon/internal/app/app.go:1418`** — untouched: the entry keeps its signature, so the caller
    is byte-identical (re-verified in the evidence by line comparison).
 4. **New `daemon/internal/app/goal_admission_tx_test.go`** (package `app`) — the seam tests, each
    with its recorded red mutant. No existing test file changes.
@@ -273,7 +275,7 @@ complexity, and the contract asks for the bound with no new finding.
 3. **Goroutines, channels, timers.** None added, none moved: `tx.abort` runs the same calls the base
    defers ran; the operation context is created and cancelled at the base positions.
 4. **Text.** No error string, join order, log key, journal/receipt field or test name changes; the
-   entry signature is unchanged, so `app.go:1443` and the seven test callers compile unchanged.
+   entry signature is unchanged, so `app.go:1418` and the seven test callers compile unchanged.
 5. **Lifecycle.** The tx writes no `runLifecycle` field; the W4-17b write-site scan and its field
    set stay green.
 6. **Behaviour on unmodelled states.** No new refusal: a state the base has no branch for takes the
@@ -325,8 +327,9 @@ complexity, and the contract asks for the bound with no new finding.
 
 ## Delivered revision (2026-11-22)
 
-Measured at the working tree (`goal_admission_tx.go` 1,460 lines, `goal_admission.go` 612 lines at
-the apply revision on top of `a5d9bd88`, post-merge and after the accepted simplify findings):
+Measured at the working tree (`goal_admission_tx.go` 1,466 lines, `goal_admission.go` 612 lines at
+the `fix1` revision = `84839346` post-merge and after the accepted simplify findings plus the
+review-fix round edits):
 
 - **Per-method bound.** 67 `*goalAdmissionTx` methods + the `newGoalAdmissionTx` constructor + the
   7-line residual entry: max gocyclo 19
@@ -366,7 +369,8 @@ the apply revision on top of `a5d9bd88`, post-merge and after the accepted simpl
   the dispatch shape stays uniform, the T3 call-shape audit stays valid, and `unparam` stays
   silent (a dropped parameter would have changed the audited call shapes instead).
 - **File sizes (contract gate "no file > 1,500 L").** `goal_admission.go` 1,593 -> 612 L;
-  `goal_admission_tx.go` 1,460 L; `goal_admission_tx_test.go` 319 L (6 tests).
+  `goal_admission_tx.go` 1,466 L; `goal_admission_tx_test.go` 319 L (6 tests) at the delivered
+  revision, 12 tests after the review-fix round (evidence §1, §7).
 - **Lint (primary/secondary).** Primary merged-config run: base 147 findings -> 147 at the apply
   revision; the `startGoalAdmission` gocyclo 277 row is resolved (`gocyclo` 64 -> 63), base's own
   `gocritic ifElseChain` moved with its code from `goal_admission.go` into the tx file, and the
@@ -381,3 +385,5 @@ the apply revision on top of `a5d9bd88`, post-merge and after the accepted simpl
   constructor literal (no test assertion changed). Finding 2 (clone-abort cleanup-context dedup)
   kept unapplied — D5 defers dedup to a later slice; the rename landed together with the record
   updates. Evidence §8, apply subsection.
+  The review-fix round then completed the seam matrix (12 tests, mutants M1-M14) and republished
+  the record's numbers at the `fix1` revision; evidence §7 and the §8 review-fix round subsection.

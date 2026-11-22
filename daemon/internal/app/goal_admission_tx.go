@@ -101,20 +101,26 @@ func newGoalAdmissionTx(daemon *daemon, key state.RunKey, claim protocol.ClaimRe
 	return tx
 }
 
-func (tx *goalAdmissionTx) abort(ctx context.Context, returnErr error) error {
-	for _, entry := range []*goalAdmissionCompensation{
-		&tx.bridgeCompensation,
-		&tx.cloneCompensation,
-		&tx.reuseCompensation,
-		&tx.nativeOutcomeCompensation,
-		&tx.launchPhaseCompensation,
-	} {
+func (tx *goalAdmissionTx) abort(ctx context.Context, returnErr error) (aborted error) {
+	aborted = returnErr
+	// Registered in reverse execution order: the entries run in the base LIFO order (bridge,
+	// clone, reuse, outcome, launch-phase) and one entry's panic still runs the remaining
+	// entries, as the base three anonymous defers did.
+	defer deferredCompensation(&tx.launchPhaseCompensation, ctx, &aborted)()
+	defer deferredCompensation(&tx.nativeOutcomeCompensation, ctx, &aborted)()
+	defer deferredCompensation(&tx.reuseCompensation, ctx, &aborted)()
+	defer deferredCompensation(&tx.cloneCompensation, ctx, &aborted)()
+	defer deferredCompensation(&tx.bridgeCompensation, ctx, &aborted)()
+	return aborted
+}
+
+func deferredCompensation(entry *goalAdmissionCompensation, ctx context.Context, aborted *error) func() {
+	return func() {
 		if !entry.armed || entry.released {
-			continue
+			return
 		}
-		returnErr = entry.run(ctx, returnErr)
+		*aborted = entry.run(ctx, *aborted)
 	}
-	return returnErr
 }
 
 func (tx *goalAdmissionTx) run(ctx context.Context) error {
@@ -320,12 +326,12 @@ func (tx *goalAdmissionTx) acquireNativeLaunchPhase(ctx context.Context) error {
 		ClaimID: tx.claim.ClaimID, LeaseToken: tx.claim.LeaseToken,
 	}
 	releasePhase, err := tx.daemon.acquireLinuxV2LaunchPhase(ctx, tx.key, tx.claim)
-	if err != nil {
-		return fmt.Errorf("wait for Linux v2 native launch phase: %w", err)
-	}
 	tx.releaseLinuxV2LaunchPhase = releasePhase
 	if tx.releaseLinuxV2LaunchPhase != nil {
 		tx.launchPhaseCompensation.armed = true
+	}
+	if err != nil {
+		return fmt.Errorf("wait for Linux v2 native launch phase: %w", err)
 	}
 	if err := tx.daemon.checkLinuxV2NativeAdmission(ctx, tx.key, tx.linuxV2Fence); err != nil {
 		return fmt.Errorf("recheck exact Linux v2 owner after launch-phase wait: %w", err)
@@ -574,13 +580,13 @@ func (tx *goalAdmissionTx) prepareFreshGoalSessionForLaunch(ctx context.Context)
 
 func (tx *goalAdmissionTx) prepareLinuxCloneWorkspace(ctx context.Context) (bool, error) {
 	linuxClone, fingerprint, err := tx.daemon.prepareLinuxV2CloneRun(ctx, tx.key, tx.linuxV2Fence, tx.admission)
-	if err != nil {
-		return false, err
-	}
 	tx.linuxClone = linuxClone
 	tx.fingerprint = fingerprint
 	if tx.linuxClone != nil {
 		tx.cloneCompensation.armed = true
+	}
+	if err != nil {
+		return false, err
 	}
 	tx.prepared = tx.linuxClone.prepared
 	if err := tx.daemon.installLinuxCloneRun(tx.key, tx.linuxClone); err != nil {

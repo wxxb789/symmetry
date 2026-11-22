@@ -4,10 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/wxxb789/symmetry/daemon/internal/authority"
+	"github.com/wxxb789/symmetry/daemon/internal/config"
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 	"github.com/wxxb789/symmetry/daemon/internal/state"
@@ -316,4 +320,251 @@ func TestGoalAdmissionTxRunsOnlyTheOutcomeCompensationAfterNativeHandover(t *tes
 	if reason, typed := taskResultFailureReason(returnErr); !typed || reason != protocol.TaskResultReasonUnknownOutcome {
 		t.Fatalf("the outcome compensation did not type the failure: %v (reason %q, typed %t)", returnErr, reason, typed)
 	}
+}
+
+func TestGoalAdmissionTxCompletesAWholeLaunchWithoutEffectfulCompensation(t *testing.T) {
+	app, store, session, key, claim, admission := nativeAdmissionFixture(t)
+	app.running[key] = &runningRun{runLifecycle: runLifecycle{starting: true, claimed: true}}
+
+	tx := newGoalAdmissionTx(app, key, claim, admission, nil)
+	probe := newGoalAdmissionCompensationProbe(tx)
+	probe.observeDelegate()
+	if runErr := tx.run(context.Background()); runErr != nil {
+		t.Fatalf("successful fresh launch error = %v, want the running path", runErr)
+	}
+	calls := session.callsSnapshot()
+	if len(calls) < 4 || !slices.Equal(calls[:4], []string{"start", "details", "open", "start_turn"}) {
+		t.Fatalf("successful launch native calls = %#v, want start/details/open/start_turn", calls)
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.LocalState != "running" || journal.TerminalState != "" {
+		t.Fatalf("successful launch journal = %q/%q, want the running publication", journal.LocalState, journal.TerminalState)
+	}
+	if !tx.nativeOutcomeCompensation.armed {
+		t.Fatal("the successful launch never armed the native-start outcome compensation")
+	}
+	if returnErr := tx.abort(context.Background(), nil); returnErr != nil {
+		t.Fatalf("abort() after a successful launch returned %v, want no compensation effect", returnErr)
+	}
+	if want := "native-start-outcome"; probe.sequence() != want {
+		t.Fatalf("success-path compensation sequence = %q, want only the no-op %q", probe.sequence(), want)
+	}
+}
+
+func TestGoalAdmissionTxSettlesLeaseExpiredProcessStart(t *testing.T) {
+	app, store, session, key, claim, admission := nativeAdmissionFixture(t)
+	leaseReason := "native start lease expired in the test watchdog"
+	app.running[key] = &runningRun{runLifecycle: runLifecycle{
+		starting: true, claimed: true, nativeStartLeaseExpired: true, nativeStartLeaseReason: leaseReason,
+	}}
+
+	tx := newGoalAdmissionTx(app, key, claim, admission, nil)
+	probe := newGoalAdmissionCompensationProbe(tx)
+	probe.observeDelegate()
+	runErr := tx.run(context.Background())
+	if reason, typed := taskResultFailureReason(runErr); !typed || reason != protocol.TaskResultReasonProcessFailure {
+		t.Fatalf("lease-expired process start error = %v (reason %q, typed %t); want the process-failure reason", runErr, reason, typed)
+	}
+	if !strings.Contains(runErr.Error(), leaseReason) {
+		t.Fatalf("lease-expired process start error = %v, want the watchdog reason %q", runErr, leaseReason)
+	}
+	calls := session.callsSnapshot()
+	if slices.Contains(calls, "open") {
+		t.Fatalf("lease expiry settled after the native session Open: %#v", calls)
+	}
+	if !slices.Contains(calls, "close") {
+		t.Fatalf("lease-expired process start did not close the native session: %#v", calls)
+	}
+	goalSession, err := store.LoadGoalSession(tx.sessionKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if goalSession.LaunchState != state.GoalSessionLaunchStateUncertain || goalSession.SessionState != state.GoalSessionStateUnavailable ||
+		!goalSession.RecoveryRequired || !strings.Contains(goalSession.UncertainReason, leaseReason) {
+		t.Fatalf("lease-expired process start Goal session = %#v", goalSession)
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !journal.RetainWorkspace {
+		t.Fatalf("lease-expired process start did not retain the unproven workspace: %#v", journal)
+	}
+	for _, delivery := range journal.PendingGoalDeliveries {
+		if delivery.Kind == state.GoalDeliverySessionAttach && delivery.DeliveryID == tx.localHandleID {
+			t.Fatalf("lease-expired process start kept the unready attach delivery: %#v", delivery)
+		}
+	}
+	returnErr := tx.abort(context.Background(), runErr)
+	if want := "native-start-outcome"; probe.sequence() != want {
+		t.Fatalf("post-expiry compensation sequence = %q, want only the no-op %q", probe.sequence(), want)
+	}
+	if returnErr.Error() != runErr.Error() {
+		t.Fatalf("post-expiry abort changed the settled failure: %v", returnErr)
+	}
+}
+
+func TestGoalAdmissionTxRunsPreCheckoutCloneAndReuseCompensations(t *testing.T) {
+	tx := newBareGoalAdmissionTx()
+	store, err := state.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	// The Linux clone body reads the journal; without a store it panics instead of
+	// returning the platform error this case asserts through the wrapper prefix.
+	tx.daemon.store = store
+	tx.linuxClone = &linuxCloneRun{}
+	tx.linuxCloneReuse = &authority.LinuxCloneReuseGrant{}
+	tx.cloneCompensation.armed = true
+	tx.reuseCompensation.armed = true
+	probe := newGoalAdmissionCompensationProbe(tx)
+	probe.observeDelegate()
+	seed := errors.New("native launch refused")
+	returnErr := tx.abort(context.Background(), seed)
+	if want := "clone-refusal,clone-reuse-refusal"; probe.sequence() != want {
+		t.Fatalf("clone compensation sequence = %q, want %q", probe.sequence(), want)
+	}
+	if !errors.Is(returnErr, seed) {
+		t.Fatalf("clone compensation dropped the seed failure: %v", returnErr)
+	}
+	for _, prefix := range []string{
+		"abort pre-checkout Linux clone after native-start refusal: ",
+		"retire pre-native Linux clone reuse after launch refusal: ",
+	} {
+		if !strings.Contains(returnErr.Error(), prefix) {
+			t.Fatalf("clone compensation error = %v, want the real body wrapper prefix %q", returnErr, prefix)
+		}
+	}
+}
+
+func TestGoalAdmissionTxHandsCloneCompensationsToTheNativeOwner(t *testing.T) {
+	tx := newBareGoalAdmissionTx()
+	tx.linuxClone = &linuxCloneRun{}
+	tx.linuxCloneReuse = &authority.LinuxCloneReuseGrant{}
+	tx.cloneCompensation.armed = true
+	tx.reuseCompensation.armed = true
+	probe := newGoalAdmissionCompensationProbe(tx)
+	probe.observeDelegate()
+	tx.handOffLaunchToNativeOwner()
+	if !tx.cloneCompensation.released || !tx.reuseCompensation.released {
+		t.Fatalf("handOffLaunchToNativeOwner() clone released = %t, reuse released = %t; want both transferred",
+			tx.cloneCompensation.released, tx.reuseCompensation.released)
+	}
+	seed := errors.New("launch refused after the native-owner handover")
+	returnErr := tx.abort(context.Background(), seed)
+	if probe.sequence() != "" {
+		t.Fatalf("post-handover abort ran transferred compensation: %q", probe.sequence())
+	}
+	if !errors.Is(returnErr, seed) || returnErr.Error() != seed.Error() {
+		t.Fatalf("post-handover abort changed the seed failure: %v", returnErr)
+	}
+}
+
+func TestGoalAdmissionTxReleasesLinuxV2LaunchPhaseOnce(t *testing.T) {
+	tx := newBareGoalAdmissionTx()
+	releases := 0
+	tx.releaseLinuxV2LaunchPhase = func() { releases++ }
+	tx.launchPhaseCompensation.armed = true
+	probe := newGoalAdmissionCompensationProbe(tx)
+	probe.observeDelegate()
+	seed := errors.New("launch phase failure")
+	if returnErr := tx.abort(context.Background(), seed); !errors.Is(returnErr, seed) || returnErr.Error() != seed.Error() {
+		t.Fatalf("launch-phase abort changed the seed failure: %v", returnErr)
+	}
+	if want := "linux-v2-launch-phase"; probe.sequence() != want {
+		t.Fatalf("launch-phase compensation sequence = %q, want %q", probe.sequence(), want)
+	}
+	if releases != 1 {
+		t.Fatalf("launch-phase release calls = %d, want exactly 1", releases)
+	}
+	tx.launchPhaseCompensation.released = true
+	if returnErr := tx.abort(context.Background(), seed); !errors.Is(returnErr, seed) || returnErr.Error() != seed.Error() {
+		t.Fatalf("released launch-phase abort changed the seed failure: %v", returnErr)
+	}
+	if releases != 1 {
+		t.Fatalf("released launch phase was released again: %d calls", releases)
+	}
+}
+
+func TestGoalAdmissionTxClosesUnownedProviderBridgeForReal(t *testing.T) {
+	if requiresLinuxV2NativeOwner(harness.KindPi) {
+		t.Skip("Linux Pi admission requires the Linux v2 native owner and a Pi provider-extension share; no shared non-Linux fixture drives that path")
+	}
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	admission.ProviderScope = &protocol.ProviderScope{
+		ResourceIDs: []string{admission.Subject.ResourceID},
+		OperationsByResource: map[string][]protocol.ProviderOperation{
+			admission.Subject.ResourceID: {protocol.ProviderOperationResourceSync},
+		},
+	}
+	capabilities := testVerifiedNativeCapabilities(harness.KindPi)
+	capabilities.ProviderAccess = true
+	app, store, session, controlClient := nativeAdmissionDaemonForHarness(t, admission, validNativeTaskResult(t, admission), nil, harness.KindPi, config.RuntimeHarnessPi, capabilities)
+	t.Cleanup(func() { _ = store.Close() })
+	profile := app.config.AgentProfiles[app.config.Runtime.AgentProfile]
+	profile.ProviderAccess = true
+	app.config.AgentProfiles[app.config.Runtime.AgentProfile] = profile
+	controlClient.providerAccess = &protocol.ProviderAccess{
+		Path:  "/api/v1/provider-actions",
+		Token: "provider-token-do-not-persist",
+		Grants: []protocol.ProviderGrant{{
+			ResourceID: admission.Subject.ResourceID,
+			Provider:   "github",
+			Kind:       "repository",
+			Operations: []string{"resource.sync"},
+		}},
+	}
+	key := state.RunKey{RunID: "run-1", Generation: 1}
+	saveClaimedGoalRun(t, store, key)
+	claim := protocol.ClaimResponse{RunID: key.RunID, Generation: key.Generation, TaskID: "task-1", Work: controlClient.work, ProviderAccess: controlClient.providerAccess}
+	app.running[key] = &runningRun{runLifecycle: runLifecycle{starting: true, claimed: true}}
+	session.startErr = errors.New("pi native start refused after the provider bridge was prepared")
+
+	tx := newGoalAdmissionTx(app, key, claim, admission, nil)
+	probe := newGoalAdmissionCompensationProbe(tx)
+	probe.observeDelegate()
+	runErr := tx.run(context.Background())
+	if !tx.bridgeCompensation.armed || tx.bridgeCompensation.released {
+		t.Fatalf("refused Pi launch bridge compensation = armed %t, released %t; want an unowned bridge", tx.bridgeCompensation.armed, tx.bridgeCompensation.released)
+	}
+	if tx.providerBridge == nil {
+		t.Fatalf("refused Pi launch error = %v; no provider bridge was prepared", runErr)
+	}
+	if !providerBridgeReachable(t, tx.providerBridge) {
+		t.Fatalf("the provider bridge was unreachable before the compensation ran: %v", runErr)
+	}
+	returnErr := tx.abort(context.Background(), runErr)
+	if want := "provider-bridge,native-start-outcome"; probe.sequence() != want {
+		t.Fatalf("unowned bridge compensation sequence = %q, want %q", probe.sequence(), want)
+	}
+	if !errors.Is(returnErr, runErr) {
+		t.Fatalf("unowned bridge compensation lost the launch failure: %v", returnErr)
+	}
+	if providerBridgeReachable(t, tx.providerBridge) {
+		t.Fatal("the real closeUnownedProviderBridge body left the provider bridge reachable")
+	}
+}
+
+func providerBridgeReachable(t *testing.T, bridge *harness.ProviderBridgeLaunch) bool {
+	t.Helper()
+	request, err := http.NewRequest(http.MethodPost, bridge.URL, strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Symmetry-Bridge-Nonce", bridge.Nonce)
+	client := &http.Client{Timeout: 500 * time.Millisecond}
+	response, requestErr := client.Do(request)
+	if requestErr != nil {
+		return false
+	}
+	_ = response.Body.Close()
+	return true
 }

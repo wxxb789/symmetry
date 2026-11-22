@@ -3,21 +3,25 @@
 Contract: `goal-rf-w4-01-goal-admission-split.md` (GDD), binding with its `## Conductor decision`
 sections. Plan: `docs/plans/2026-11-22-rf-w4-01-goal-admission-tx-plan.md`. Base revision for every
 base coordinate: `b25e34ae` (the dispatch HEAD). Shape reference: `docs/evidence/rf-w4-17b-run-lifecycle-2026-11-22.md`.
+Revision labels: unlabelled line/range coordinates are `b25e34ae` base coordinates; the consumed
+review range is `40314211..84839346` (`40314211` = `b25e34ae` + the #220/#222/#223/#224 merges) and
+delivered-row numbers are labelled `84839346`; `fix1` labels the `84839346` tree plus the review-fix
+round edits, which is the tree every number in §1-§8 binds.
 
 ## 1. Deliverable shape (files, counts)
 
 | file | change | measure |
 |---|---|---|
-| `daemon/internal/app/goal_admission_tx.go` | new | 1,460 L: transaction object, 67 methods + the constructor, compensation stack, phases |
+| `daemon/internal/app/goal_admission_tx.go` | new | 1,466 L (`fix1`): transaction object, 67 methods + the constructor + the `deferredCompensation` helper, compensation stack, phases |
 | `daemon/internal/app/goal_admission.go` | `startGoalAdmission` region replaced by the thin entry | 1,593 -> 612 lines; entry at `:249-255` (7 lines); `abandonGoalSession` and everything from `:256` code-identical (checked below) |
-| `daemon/internal/app/goal_admission_tx_test.go` | new | 319 L, 6 seam tests (2 order/join, 4 driven through `tx.run`); each has a red mutant (§7) |
+| `daemon/internal/app/goal_admission_tx_test.go` | new | 570 L (`fix1`), 12 seam tests: 2 order/join probes at `abort` level, 6 driven through `tx.run` (fresh cancellation, pre-native write failure, post-handover outcome, whole-launch success, lease-expired process start, refused Pi bridge), 4 unit-level tx seams (queued-attach abort, clone/reuse arm+abort, native-owner handover, launch-phase arm/release); each has a red mutant (§7) |
 | `scripts/ci/omo-control-native-evidence.py` | `SOURCE_PATHS` line only (R9) | +`daemon/internal/app/goal_admission_tx.go` |
-| `docs/design/harness.md` | citation-only (O23) | `goal_admission.go:263` -> `:258`; -> `:249` at the apply revision (post-merge #223 comment trims) |
+| `docs/design/harness.md` | citation-only (O23) | `goal_admission.go:263` -> `:249` (the delivered entry declaration) |
 | `docs/plans/…-rf-w4-01-goal-admission-tx-plan.md` | new plan + delivered-revision section | |
 | `docs/TODO.md` | unchanged | no slice TODO entry existed; none closed |
 
 `app.go` is **untouched** (`git diff --stat` shows no `app.go` entry): the entry keeps its
-signature and the caller at `app.go:1443` compiles unchanged.
+signature and the caller at `app.go:1418` compiles unchanged.
 
 Byte-identity of the untouched region: the base file from line 1223 on (371 lines, starting at
 `attachPartialNativeSession`) is code-identical to the delivered file from line 256 on (357 lines;
@@ -50,10 +54,11 @@ reproduced exactly.
 
 ## 2. Per-method bound (clause: funlen 120/60, gocyclo 25)
 
-Scanner over the delivered tx file plus the entry: **67 tx methods + `newGoalAdmissionTx`** (68
-`func` declarations in the tx file) plus the `startGoalAdmission` entry;
+Scanner over the delivered tx file plus the entry: **67 tx methods + `newGoalAdmissionTx` + the
+`deferredCompensation` helper** (69 `func` declarations in the tx file) plus the
+`startGoalAdmission` entry;
 max gocyclo **19** (`startGoalNativeSession` 40/29/19, `attachPublishedNativeSession` 34/23/19),
-mean 6.1; max 42 lines (`launchNativeProcess`); max 29 statements; **0 over any bound**
+mean 6.0; max 42 lines (`launchNativeProcess`); max 29 statements; **0 over any bound**
 (`l/s/c` = lines / funlen statements / gocyclo). Entry: 7 lines, 4 statements, gocyclo 1.
 The phase methods: `validateGoalAdmissionInputs` 22/15/9, `prepareGoalSessionForLaunch` 19/12/8,
 `startGoalNativeSession` 40/29/19, `attachGoalNativeSession` 15/12/5 + `openGoalNativeSession`
@@ -70,6 +75,7 @@ Merged-config finding set (`GOOS=linux golangci-lint run --config .golangci.yml
 | base `b25e34ae` | 147 | 66 (64 gocyclo + 2 funlen) | — |
 | head | 146 | 65 | `-1`: the `startGoalAdmission` gocyclo 277 finding is gone; the normalised per-linter diff (message + file) adds **no** finding — the only head-only row is base's own `gocritic ifElseChain`, moved with its code into the tx file; `unparam` 19/19 and `errorlint` 6/6 unchanged (§8 lists every linter) |
 | apply revision (`a5d9bd88` + the accepted simplify findings) | 147 | 65 (63 gocyclo + 2 funlen) | the 277 row stays resolved; the +1 is one post-merge `whitespace` finding at `process_persistence_test.go:775` (brought in on main by #223, outside this slice); the normalised diff adds no other row |
+| `fix1` (`84839346` + the review-fix round) | 147 | 65 (63 gocyclo + 2 funlen) | identical to the apply row: the per-linter set is copyloopvar 2, errorlint 6, exhaustive 9, funlen 2, gocritic 22, gocyclo 63, ineffassign 3, nilerr 4, staticcheck 15, unconvert 1, unparam 19, whitespace 1; the only tx-file row is the moved `gocritic ifElseChain` (`goal_admission_tx.go:1000`); the review-fix round's three test-file `!=` comparisons were rewritten to `errors.Is` + text equality, so `errorlint` stays 6/6 and `abort`'s per-entry defers add no `deferInLoop` row (`fix1/logs/lint-primary.txt`) |
 
 ## 3. Seam table (base range -> HEAD method, measured)
 
@@ -78,7 +84,7 @@ method (`funcs`); every delivered value is inside 120/60/25.
 
 | base range | HEAD method(s) | base l/s/c | head l/s/c |
 |---|---|---|---|
-| 263-307 (locals + 3 defers) | `newGoalAdmissionTx` + `abort` + 5 entry methods | n/a (composite) | 13/7/1 + 13/5/4 |
+| 263-307 (locals + 3 defers) | `newGoalAdmissionTx` + `abort` + `deferredCompensation` + 5 entry methods | n/a (composite) | 13/7/1 + 10/7/1 + 6/1/3 |
 | 308-340 | `validateAdmissionEnvelope` | 33/22/10 | 35/24/10 |
 | 341-358 | `validateConfiguredHarness` | 18/13/6 | 23/18/6 |
 | 364-383 | `validateAdapterInvocationArgs` | 20/12/9 | 21/13/9 |
@@ -86,7 +92,7 @@ method (`funcs`); every delivered value is inside 120/60/25.
 | 404-425 | `resolveGoalAdapter` | 22/16/8 | 26/20/8 |
 | 426-435 | `buildNativeEnvironment` | 10/7/4 | 12/9/4 |
 | 436-439 | `prepareProviderBridge` | 4/3/2 | 9/7/3 |
-| 477-553 | `prepareGoalSessionForLaunch` + `prepareRetainedGoalSessionForLaunch` | n/a (composite) | 17/11/7 + 11/8/4 |
+| 477-553 | `prepareGoalSessionForLaunch` + `prepareRetainedGoalSessionForLaunch` | n/a (composite) | 19/12/8 + 11/8/4 |
 | 479-495 | `recoverRetainedGoalSession` | 17/13/5 | 23/18/6 |
 | 497-507 | `markRetainedWorkspaceRecovery` | 11/6/4 | 12/7/4 |
 | 509-521 | `queueRetainedSessionAttach` | 13/3/2 | 13/4/2 |
@@ -166,23 +172,26 @@ Per-exit-path participation (which entries run at HEAD, same order):
 | success (final `return nil`) | release (or released inline), wraps skipped | same |
 
 `abort` runs the armed-and-unreleased entries in the fixed order and threads `returnErr` through
-them, so `errors.Join` argument order is the base order (`settle` test
+them, so `errors.Join` argument order is the base order (each entry from its own deferred call, so
+a panic inside one compensation still runs the rest, as the base three-defers unwind did; `settle` test
 `TestGoalAdmissionTxCompensationErrorsJoinInExecutionOrder` pins the order textually).
 
 ## 5. Durable writes, calls, locks
 
-- **Call multiset, base main body vs HEAD phase concatenation**: base 414 calls, HEAD 469 calls;
+- **Call multiset, base main body vs HEAD phase concatenation**: base 414 calls, HEAD 468 calls
+  (`fix1/audit/calls-multiset.txt`; the base/head flow-point totals 322/469 in that file are the
+  §6 flow measure, not calls);
   **missing_terms = 0, missing_instances = 0** — every `daemon.store.*`, `daemon.control`/`goalAPI`,
   `adapter.Start`/`staged.Open`/`staged.StartTurn`, `fmt.Errorf`, `errors.Join` call of the base
-  region appears the same number of times at HEAD. The 55 added terms (55 instances) are all
+  region appears the same number of times at HEAD. The 54 added terms (54 instances) are all
   `*goalAdmissionTx` method calls (dispatch/phase/closure-method calls), i.e. no new external call.
 - **Durable-write order** persist -> commit -> lease-arm -> resume -> input: unchanged, per path —
   `daemon.store.*` sequence base vs HEAD differs only by the phase dispatch (the call multiset has
   zero missing store calls; the ordered `seq` diff lists the HEAD-only phase calls by name).
 - **Locks**: five `daemon.mu.Lock()` sites in the base region (`:773` lease-sequence arm, `:1132`
   running publication, `:1162` lease-expired turn, `:1191`/`:1195` terminal-observed cancellation)
-  and five at HEAD (`armNativeLeaseSequence:868`, `markNativeRunRunning:1365`,
-  `settleLeaseExpiredTurn:1408`, `settleObservedTerminalCancellation:1439`/`:1445`), same order,
+  and five at HEAD (`fix1`: `armNativeLeaseSequence:864`, `markNativeRunRunning:1357`,
+  `settleLeaseExpiredTurn:1400`, `settleObservedTerminalCancellation:1431`/`:1437`), same order,
   same critical sections' content. No other mutex appears (0 occurrences of
   `eventReceiptMu`/`commandReceiptMu`/`inputMu` in the tx file, as at base).
 - **Goroutines/channels/timers**: none added; the only concurrency objects in the moved code are
@@ -191,25 +200,26 @@ them, so `errors.Join` argument order is the base order (`settle` test
 ## 6. Control-flow audit (lesson 32)
 
 Base main body (263-1222, closure bodies excluded by the scanner, as at base): **322** flow points.
-HEAD: the 56-method execution-order concatenation (phases, sub-methods, spines, `run`), closure
-methods excluded: **473** flow points. Alignment (`audit/align-apply.txt` at the apply revision;
-the pre-apply run measured 114/265): `base-only = 115`, `head-only = 266` — the +1/+1 is the apply
-revision's `publishPreparedWorkspace` inline, which moved the `if workspacePersisted != nil` term into `prepareGoalSessionForLaunch` at
+HEAD (`fix1`): the 55-method execution-order concatenation (phases, sub-methods, spines, `run`),
+closure methods excluded: **473** flow points. Alignment (`fix1/audit/align.txt`; the apply
+revision measured the same 115/266, the pre-apply run 114/265): `base-only = 115`,
+`head-only = 266` — the pair is the `publishPreparedWorkspace` inline, which moved the
+`if workspacePersisted != nil` term into `prepareGoalSessionForLaunch` at
 its true execution position (the flow totals 322/473 are unchanged); every difference belongs to
 one of six transformation classes, verified by
-relaxed-multiset comparison (`audit/flow-classify-v2.txt`): unexplained terms = 15 (21
+relaxed-multiset comparison (`fix1/audit/classify2.txt`): unexplained terms = 15 (21
 instances), each mapped by inspection to a class below; addition classes: dispatch and moved guard
 forms 15 terms / 60 instances, phase return adaptations 19 / 63, settled returns 1 / 25,
 fall-through markers 1 / 24 (all enumerated in the artifact).
 
 | # | transformation class | count | example |
 |---|---|---:|---|
-| T1 | settle-signal adapter: base `return nil` (settled) -> `return true, nil` / `return settled, nil`; base implicit fall-through -> `return false, nil` | 25 + 24 | `startGoalNativeSession:712` |
-| T2 | guard inversion for the false-return convention (`if X { ... }` -> `if !X { return false, nil }; ...`) | 15 terms (with T4) | `settleCancelledProcessStart:1032` (De Morgan of base `:906`) |
-| T3 | phase dispatch: `if err := tx.<phase>(ctx); err != nil \|\| settled { return err }` | 60 instances | `run:121-141` |
-| T4 | return adaptation for the settled/error signatures (`return X` -> `return false, X`, `return X` -> `return nil, false, X`) | 63 instances | `fetchGoalRunContextJSON:1347` |
+| T1 | settle-signal adapter: base `return nil` (settled) -> `return true, nil` / `return settled, nil`; base implicit fall-through -> `return false, nil` | 25 + 24 | `startGoalNativeSession:695` |
+| T2 | guard inversion for the false-return convention (`if X { ... }` -> `if !X { return false, nil }; ...`) | 15 terms (with T4) | `settleCancelledProcessStart:1028` (De Morgan of base `:906`) |
+| T3 | phase dispatch: `if err := tx.<phase>(ctx); err != nil \|\| settled { return err }` | 60 instances | `run:125-146` |
+| T4 | return adaptation for the settled/error signatures (`return X` -> `return false, X`, `return X` -> `return nil, false, X`) | 63 instances | `fetchGoalRunContextJSON:1346` |
 | T5 | entry guard replacement: the three defer-body guards (`linuxClone != nil && !cloneLaunchStarted`, `providerBridge == nil \|\| providerBridgeTransferred`, `releaseLinuxV2LaunchPhase != nil`) moved to the entries' `armed`/`released` markers; entries return `returnErr` | 5 entries | `abortPreCheckoutLinuxClone` |
-| T6 | bool-only settle method: `settleObservedTerminalCancellation` returns `bool` (base's block has no error path), so its call site is `if tx.settleObservedTerminalCancellation() { return nil }` — base's settled `return nil` is preserved, and there is no error left to drop | 1 site | `runGoalTurn:1230` |
+| T6 | bool-only settle method: `settleObservedTerminalCancellation` returns `bool` (base's block has no error path), so its call site is `if tx.settleObservedTerminalCancellation() { return nil }` — base's settled `return nil` is preserved, and there is no error left to drop | 1 site | `runGoalTurn:1222` |
 
 The 15 unexplained terms are each an instance of T1/T2/T4 with the scanner's polarity
 canonicalization not applying (e.g. base `if ctx.Err() != nil` vs HEAD `if ctx.Err() == nil`; base
@@ -217,7 +227,7 @@ canonicalization not applying (e.g. base `if ctx.Err() != nil` vs HEAD `if ctx.E
 the six base `if settled {` short-circuits converted into the helpers' returned `settled` values);
 the list is `audit/flow-classify-v2.txt`.
 
-Former-closure rows (`audit/closures-apply.txt`; the rows are identical to the implement run): `settlePublishedCancellation` and
+Former-closure rows (`fix1/audit/closures.txt`; the rows are identical to the apply run): `settlePublishedCancellation` and
 `settleExpiredNativeStartFailure` map **IDENTICAL** (7 and 12 flow points); the four entry-guard
 rows differ by exactly the guard replacement (T5) plus `return returnErr`; `abortFreshLaunchIfCancelled`
 differs by the `(bool, error)` returns and the tx field substitutions, with the same three
@@ -239,32 +249,45 @@ shape-based (regex over the delivered file), not a type-level guarantee.
 
 ## 7. Red mutants
 
-Each mutant applied alone to a copy of `goal_admission_tx.go` through `go test -overlay` (the
-overlay maps the module path to a mutant file outside the repository, so no repository file is
-modified and nothing needs reverting), the owning test run, then the same command without the
-overlay to show green. Mutant files and outputs: `<HOST-PATH>/.local/state/gdd/scratch/w4-01/mutants/`.
-Control: `go test -count=1 -run '^TestGoalAdmissionTx' ./internal/app/` without an overlay —
-`ok github.com/wxxb789/symmetry/daemon/internal/app 0.980s`, exit 0.
+Each mutant is a standalone copy of `goal_admission_tx.go` applied alone through `go test -overlay`
+(the overlay maps the module path to the mutant file outside the repository, so no repository file
+is modified and nothing needs reverting), the owning test run, then the same command without the
+overlay to show green. Mutant copies, overlays and raw outputs:
+`<HOST-PATH>/.local/state/gdd/scratch/w4-01/fix1/mutants/` (`M1`-`M15`; `control.out.txt` is the
+unmutated run). Control: `go test -count=1 -run '^TestGoalAdmissionTx' ./internal/app/` without an
+overlay — `ok github.com/wxxb789/symmetry/daemon/internal/app 1.695s`, exit 0 (all 12 tests).
 
 | # | test | mutant | observed failure (exit 1) |
 |---|---|---|---|
-| M1 | `…CompensationOrderMatchesTheBaseDeferOrder` | swap the first two entries in `abort`'s slice literal | `:92: compensation order = "clone-refusal,provider-bridge,clone-reuse-refusal,native-start-outcome,linux-v2-launch-phase", want "provider-bridge,clone-refusal,…"` |
-| M2 | same | drop `!entry.released` from `abort`'s skip condition | `:102: compensation order after transfers = "provider-bridge,clone-refusal,clone-reuse-refusal,…", want "clone-reuse-refusal,native-start-outcome,linux-v2-launch-phase"` |
-| M3 | `…CompensationErrorsJoinInExecutionOrder` | move the bridge entry behind the launch-phase entry | `:139: compensation join order = [… "compensation linux-v2-launch-phase failed" "compensation provider-bridge failed"], want [… "compensation linux-v2-launch-phase failed"]` |
-| M4 | `…RunsOnlyTheOutcomeCompensationAfterNativeHandover` | drop `tx.bridgeCompensation.released = true` in `launchNativeProcess` | `:277: the session handover did not release the provider-bridge compensation` |
-| M5 | same | drop `tx.nativeOutcomeCompensation.armed = true` in `launchNativeProcess` | `:274: the native start attempt did not arm the outcome compensation` |
-| M6 | `…KeepsKnownPreNativeFailureUnwrapped` | arm the outcome entry in `newGoalAdmissionTx` | `:237: a pre-native failure armed the native-start outcome compensation` |
-| M7 | `…SettlesFreshCancellationWithoutCompensation` | drop the `abortGoalSessionLaunchBeforeNativeStart` call from `abortFreshLaunchIfCancelled` | `:180: cancelled fresh launch compensation = []state.GoalSessionJournal{{…LocalHandleID:"0ac92bbe-…"…}}` (the session never closed) |
-| M8 | `…AbortsQueuedAttachBeforeNativeStart` | drop the `discardUnreadyGoalSessionAttachDelivery` call | `:196: cancelled launch compensation = abort 1, discard 0; want 1 and 1` |
+| M1 | `…CompensationOrderMatchesTheBaseDeferOrder` | swap the bridge and clone deferred registrations in `abort` | `:102: compensation order = "clone-refusal,provider-bridge,clone-reuse-refusal,native-start-outcome,linux-v2-launch-phase", want "provider-bridge,clone-refusal,…"` |
+| M2 | same | drop the `released` check from `deferredCompensation` | `:112: compensation order after transfers = "provider-bridge,clone-refusal,clone-reuse-refusal,…", want "clone-reuse-refusal,native-start-outcome,linux-v2-launch-phase"` |
+| M3 | same | register the bridge entry first in `abort` (so it executes last) | `:102: compensation order = "clone-refusal,clone-reuse-refusal,native-start-outcome,linux-v2-launch-phase,provider-bridge", want "provider-bridge,clone-refusal,…"` |
+| M4 | `…RunsOnlyTheOutcomeCompensationAfterNativeHandover` | drop `tx.bridgeCompensation.released = true` in `launchNativeProcess` | `:308: the session handover did not release the provider-bridge compensation` |
+| M5 | same | drop `tx.nativeOutcomeCompensation.armed = true` in `launchNativeProcess` | `:305: the native start attempt did not arm the outcome compensation` |
+| M6 | `…SettlesFreshCancellationWithoutCompensation` | arm the outcome entry in `newGoalAdmissionTx` | `:180: a cancelled fresh launch armed the native-start outcome compensation` |
+| M7 | same | drop the `abortGoalSessionLaunchBeforeNativeStart` call from `abortFreshLaunchIfCancelled` | `:190: cancelled fresh launch compensation = []state.GoalSessionJournal{{…LocalHandleID:"1a4e6d24-…"…}}` (the session never closed) |
+| M8 | `…AbortsQueuedAttachBeforeNativeStart` | drop the `discardUnreadyGoalSessionAttachDelivery` call from `abortFreshLaunchIfCancelled` | `:224: cancelled launch compensation = abort 1, discard 0; want 1 and 1` |
+| M9 | `…CompletesAWholeLaunchWithoutEffectfulCompensation` | make the outcome entry effectful on the success path (synthetic error instead of nil for `returnErr == nil`) | `:350: abort() after a successful launch returned mutant: effectful outcome compensation on the success path, want no compensation effect` |
+| M10 | `…SettlesLeaseExpiredProcessStart` | make `settleLeaseExpiredProcessStart` return `(false, nil)` | `:376: lease expiry settled after the native session Open: ["start","details","open","details","close","wait"]` |
+| M11 | `…HandsCloneCompensationsToTheNativeOwner` | drop the reuse release mark in `handOffLaunchToNativeOwner` | `:454: handOffLaunchToNativeOwner() clone released = true, reuse released = false; want both transferred` |
+| M12 | `…ReleasesLinuxV2LaunchPhaseOnce` | drop the `tx.releaseLinuxV2LaunchPhase()` call from `releaseNativeLaunchPhase` | `:482: launch-phase release calls = 0, want exactly 1` |
+| M13 | `…ClosesUnownedProviderBridgeForReal` | replace `closeUnownedProviderBridge`'s body with `return returnErr` | `:551: the real closeUnownedProviderBridge body left the provider bridge reachable` |
+| M14 | `…SettlesFreshCancellationWithoutCompensation` + `…AbortsQueuedAttachBeforeNativeStart` | return the unsettled signal from `abortFreshLaunchIfCancelled` itself (both returns) | `:177: cancelled fresh launch error = mark Goal session launch: goal session is closed, want the compensated settle path`; `:221: abortFreshLaunchIfCancelled() = false, <nil>; want a compensated cancellation` |
 
-M7's first candidate — return the unsettled signal (`return false, err`) at the pre-native abort
-check — **survived** the test: it is behaviourally equivalent in this path, because the following
-phase-level abort check re-detects the same cancellation and settles identically, and the mutation
-returns before the launch-started write. The candidate was replaced by M7 above; while
-investigating, the test gained the launch-started-marker assertion (a cancelled pre-native launch
-must publish no `"launch_state":"launching"` write), and the test now flips the cancellation during
-the launch-intent write (`SetAtomicWriterForTesting`) so the pre-native abort check — not the
-workspace short-circuit — is the settling site.
+The candidate replaced at the previous revision — the same unsettled signal returned at the first
+`abortFreshLaunchIfCancelled` call site inside `prepareFreshGoalSessionForLaunch` (`M15`) —
+**still survives** at `fix1`: `go test -count=1 -overlay …/M15.json -run '^TestGoalAdmissionTx'`
+is `ok github.com/wxxb789/symmetry/daemon/internal/app 1.718s`, exit 0. Settlement happens at an
+adjacent check with the same settled outcome (closed, unstarted, fully compensated session, no
+`"launch_state":"launching"` write), so the delivered tests pin the closure's contract (M14 is red)
+but not which adjacent call site settles a fresh cancellation.
+
+Coverage of the previously unexecuted bodies with only the six new tests selected
+(`go test -count=1 -coverprofile=… -run '<the six new tests>' ./internal/app/`, 9.4% of package
+statements; `fix1/logs/cover-run.txt`): `closeUnownedProviderBridge` 83.3%,
+`abortPreCheckoutLinuxClone` 100%, `abortPreNativeLinuxCloneReuse` 100%, `typeNativeStartOutcome`
+80%, `releaseNativeLaunchPhase` 100%, `handOffLaunchToNativeOwner` 100%,
+`settleLeaseExpiredProcessStart` 86.7%.
 
 ## 8. Gates
 
@@ -277,24 +300,24 @@ workspace short-circuit — is the settling site.
 | build linux/arm64 | `GOOS=linux GOARCH=arm64 go build ./...` (`daemon/`) | exit 0 |
 | whitespace | `git diff --check` (repo root) | exit 0 |
 | lint primary (before) | `cd daemon && GOOS=linux golangci-lint run --config .golangci.yml --max-issues-per-linter=0 --max-same-issues=0 ./internal/app/...` (pinned 2.15.0) at `b25e34ae` | 147 findings: 64 gocyclo, 22 gocritic, 19 unparam, 15 staticcheck, 9 exhaustive, 6 errorlint, 4 nilerr, 3 ineffassign, 2 funlen, 2 copyloopvar, 1 unconvert; exit 1 (findings exist); `<HOST-PATH>/…/scratch/w4-01/repo-scratch/lint-base-primary.txt` |
-| lint primary (after) | same at the frozen revision | 146 findings; normalised per-linter diff vs base (message + file, line numbers ignored): only-in-head = 1 `gocritic ifElseChain` in the tx file, which is base's identical finding **moved** with its code; only-in-base = that finding plus the resolved `goal_admission.go` gocyclo 277. Per linter: gocyclo 64→63, gocritic 22→22 (moved), unparam 19→19, errorlint 6→6, staticcheck 15→15, exhaustive 9→9, nilerr 4→4, ineffassign 3→3, funlen 2→2, copyloopvar 2→2, unconvert 1→1. **No new production finding**, exit 1 as at base; `<HOST-PATH>/…/scratch/w4-01/final-lint-primary.txt` |
-| lint secondary | `GOOS=linux golangci-lint run --no-config --default=none --enable=funlen,gocyclo,ineffassign --max-issues-per-linter=0 --max-same-issues=0 ./internal/app/...` | 0 findings in the new files (default 60/40/25 limits), exit 1 (other pre-existing files have findings); `<HOST-PATH>/…/scratch/w4-01/final-lint-secondary.txt` |
-| per-method bound | calibrated scanner (`<HOST-PATH>/…/scratch/w4-01/measure`) | 68 tx methods + constructor + entry; max 19 gocyclo / 42 lines / 29 statements, 0 over bound |
-| focused (contract's six) | `go test -count=1 ./internal/app/ -run 'TestStartGoalAdmissionCompletesArtifactOnlyValidationWithoutNativeLaunch\|TestFreshCodexGoalAttachQueueFailureReportsAbortCompensationFailure\|TestFreshCodexNativeStartFailureReportsUncertainCompensationFailure\|TestFreshCodexPreNativeLaunchWriteFailuresReadBackAndCompensate\|TestNativeHandlePersistenceAndDiscardFailureStillClosesOwner\|TestLeaseOwnedNativeStartErrorsCleanupAndAcknowledgeBeforeReturn'` | `ok …`, exit 0 |
-| focused (new seam tests) | `go test -count=1 -v -run '^TestGoalAdmissionTx' ./internal/app/` | `ok … 1.096s`, exit 0, 6 tests pass (order, join order, fresh cancellation, queued-attach abort, pre-native unwrapped, post-handover outcome) |
-| full package suite (Windows) | `go test -count=1 -timeout 20m ./internal/app/...` (`daemon/`) | `ok github.com/wxxb789/symmetry/daemon/internal/app 189.154s` (`real 3m11.6s`), exit 0 — **the frozen revision**, after the review-driven edits; the same suite on earlier revisions caught the two settle-signal defects (§6). Earlier full runs: `280.707s` exit 0 (pre-review revision), log `<HOST-PATH>/…/scratch/w4-01/final-app-suite.txt` |
+| lint primary (after) | same at `fix1` | 147 findings (copyloopvar 2, errorlint 6, exhaustive 9, funlen 2, gocritic 22, gocyclo 63, ineffassign 3, nilerr 4, staticcheck 15, unconvert 1, unparam 19, whitespace 1); normalised per-linter diff vs base (message + file, line numbers ignored): only-in-head = the moved `gocritic ifElseChain` (now `goal_admission_tx.go:1000`) plus main's `whitespace` row at `process_persistence_test.go:775` (#223, outside this slice); only-in-base = those minus the resolved `goal_admission.go` gocyclo 277. Gocyclo 64→63, gocritic 22→22 (moved), errorlint 6→6, all others equal. **No new production finding**, exit 1 as at base; `fix1/logs/lint-primary.txt` |
+| lint secondary | `GOOS=linux golangci-lint run --no-config --default=none --enable=funlen,gocyclo,ineffassign --max-issues-per-linter=0 --max-same-issues=0 ./internal/app/...` | 240 rows package-wide at the default 60/40/25 bounds, **0 in the new files**; the two `goal_admission*` rows are base's own `recoverNativeGoalSessionForResume` 38 and `abandonGoalSession` 33 gocyclo (line-shifted only), exit 1 (other pre-existing files have findings); `fix1/logs/lint-secondary.txt` |
+| per-method bound | calibrated scanner (`<HOST-PATH>/…/scratch/w4-01/measure`) | 67 tx methods + constructor + `deferredCompensation` + the 7-line entry; max 19 gocyclo / 42 lines / 29 statements, mean 6.0, 0 over bound (`fix1/audit/funcs-tx.txt`) |
+| focused (contract's six) | `go test -count=1 ./internal/app/ -run 'TestStartGoalAdmissionCompletesArtifactOnlyValidationWithoutNativeLaunch\|TestFreshCodexGoalAttachQueueFailureReportsAbortCompensationFailure\|TestFreshCodexNativeStartFailureReportsUncertainCompensationFailure\|TestFreshCodexPreNativeLaunchWriteFailuresReadBackAndCompensate\|TestNativeHandlePersistenceAndDiscardFailureStillClosesOwner\|TestLeaseOwnedNativeStartErrorsCleanupAndAcknowledgeBeforeReturn'` | `ok … 3.129s`, exit 0 at `fix1`; `fix1/logs/focused-contract-six.txt` |
+| focused (seam tests) | `go test -count=1 -v -run '^TestGoalAdmissionTx' ./internal/app/` | `ok … 1.881s`, exit 0, **12 tests pass** (order, join order, fresh cancellation, queued-attach abort, pre-native unwrapped, post-handover outcome, whole-launch success, lease-expired process start, clone/reuse real bodies, native-owner handover, launch-phase arm/release, refused Pi bridge); `fix1/logs/focused-tx.txt` |
+| full package suite (Windows) | `go test -count=1 -timeout 20m ./internal/app/...` (`daemon/`) | `ok github.com/wxxb789/symmetry/daemon/internal/app 167.555s`, exit 0 — `fix1`; the same suite on earlier revisions caught the two settle-signal defects (§6). Earlier full runs: `189.154s` (apply revision), `280.707s` exit 0 (pre-review revision); `fix1/logs/full-suite.txt` |
 | `-race` (Windows) | `go test -count=1 -race ./internal/app/...` | refused: `-race requires cgo` on this host, as recorded at W4-17a/W4-17b |
 | WSL race oracle (full package) | `wsl -d Ubuntu-24.04 -u accept` -> `cd /mnt/q/repos/wt-w4-01-goal-admission-split/symmetry/daemon && go test -count=1 -race -timeout 30m -v ./internal/app/...` | **no result**: the first attempt (no `-v`, `-timeout 25m`) produced nothing in 95 minutes (the `-race` build of the full test binary is itself long under WSL) and was cancelled with an empty log. The `-v` retry streamed **18 passing tests, 0 failures, 0 `DATA RACE`** and then stopped progressing for 10+ minutes at `TestClaimAdmissionInputFailsClosedBeforeWorkspaceOrProcessStart/mixed_null_marker_survives_replay_and_restart` — the exact W4-17a/W4-17b-documented pre-existing WSL loopback-`httptest` stall. Log `<HOST-PATH>/…/scratch/w4-01/wsl-race-full-v2.txt` (69 lines, mtime frozen); the same test passes in the Windows suite (exit 0, 189.154s) and exercises no goal-admission path. |
-| WSL race oracle (touched path) | `wsl -d Ubuntu-24.04 -u accept` -> `cd /mnt/q/repos/wt-w4-01-goal-admission-split/symmetry/daemon && go test -count=1 -race -timeout 12m -v -run 'TestGoalAdmissionTx\|TestStartGoalAdmissionCompletesArtifactOnly\|TestFreshCodex\|TestNativeHandlePersistenceAndDiscardFailureStillClosesOwner\|TestLeaseOwnedNativeStartErrorsCleanupAndAcknowledgeBeforeReturn' ./internal/app/` | **PASS**: 22 tests + 7 subtests, including all six seam tests and the fresh-Codex native-settlement family; `ok github.com/wxxb789/symmetry/daemon/internal/app 6.705s`, `real 1m4.8s`, exit 0, no `DATA RACE` line (go1.27.0 linux/amd64) |
+| WSL race oracle (touched path) | `wsl -d Ubuntu-24.04 -u accept` -> `cd /mnt/q/repos/wt-w4-01-goal-admission-split/symmetry/daemon && go test -count=1 -race -timeout 12m -v -run 'TestGoalAdmissionTx\|TestStartGoalAdmissionCompletesArtifactOnly\|TestFreshCodex\|TestNativeHandlePersistenceAndDiscardFailureStillClosesOwner\|TestLeaseOwnedNativeStartErrorsCleanupAndAcknowledgeBeforeReturn' ./internal/app/` | **PASS** at `fix1`: 27 tests + 7 subtests, 1 skip (`…ClosesUnownedProviderBridgeForReal`, Linux lacks the non-Linux Pi fixture), 0 failures, 0 `DATA RACE` lines; `ok github.com/wxxb789/symmetry/daemon/internal/app 8.475s`, exit 0 (go1.27.0 linux/amd64); `fix1/logs/wsl-race-touched.txt` |
 | W4-17b write-site scan | `TestRunLifecycleWritesStayInTheModule` (part of the suite) | pass: 0 lifecycle writes outside `run_lifecycle.go`; the tx writes no lifecycle field |
-| control-flow audit | `<HOST-PATH>/…/audit/flow_audit.py` (`align`, `closures`) + `classify2.py` | base 322 / head 473 points; `base-only=114`, `head-only=265`; every difference in T1-T6; `audit/align-final.txt`, `audit/closures.txt`, `audit/flow-classify-v2-final.txt` |
+| control-flow audit | `<HOST-PATH>/…/scratch/w4-01/audit/flow_audit.py` (`align`, `closures`) + `classify2.py` | base 322 / head 473 points; `base-only=115`, `head-only=266`; every difference in T1-T6; `fix1/audit/align.txt`, `fix1/audit/closures.txt`, `fix1/audit/classify2.txt` |
 | compensation order | `abort`'s fixed entry order + `TestGoalAdmissionTx…Order…` + M1/M2/M3 | base LIFO order bridge -> clone -> reuse -> wrap -> release preserved |
-| durable writes / calls | `audit/flow_audit.py seq` + multiset check | base 414 calls / head 469; `missing_terms = 0`; added terms are tx methods only |
+| durable writes / calls | `audit/flow_audit.py seq` + multiset check (`fix1/audit/calls-multiset.txt`) | base 414 calls / head 468; `missing_terms = 0`; added terms are tx methods only |
 | lock sites | `grep -c 'mu.Lock()'` both revisions | 5 <-> 5, same order, no other mutex |
 | settled/error propagation | `audit/guards2.py` | 12 risky methods, 63 call sites, 0 violations |
-| file sizes | `wc -l` | `goal_admission.go` 635, `goal_admission_tx.go` 1,473, `goal_admission_tx_test.go` 313 — all <= 1,500 |
-| §11 citation gate | `python scripts/ci/check-citation-existence.py --base b25e34ae --head HEAD` | exit 0 (`no audited document added or modified …; nothing to check` — the deliverable is uncommitted, so the audited-corpus diff is empty; `harness.md` is not in the audited corpus and the gate never validates line suffixes) |
-| R9 native-evidence gate | `python scripts/ci/test-omo-control-native-evidence.py` | `Ran 10 tests … OK`, exit 0 |
+| file sizes | `wc -l` | `fix1`: `goal_admission.go` 612, `goal_admission_tx.go` 1,466, `goal_admission_tx_test.go` 570 — all <= 1,500 |
+| §11 citation gate | `python scripts/ci/check-citation-existence.py --base b25e34ae --head HEAD` | exit 0 (`no audited document added or modified …; nothing to check` — the audited corpus is `docs/runbooks/**`, `docs/design/quality.md` and `docs/archive/CLOSED-TODO.md`; `docs/design/harness.md` is outside it, and the gate strips line suffixes before resolving a cited path) |
+| R9 native-evidence gate | `python scripts/ci/test-omo-control-native-evidence.py` | `Ran 10 tests in 3.859s … OK`, exit 0; `fix1/logs/r9.txt` |
 
 ### Independent read-only review (2026-11-22, before completion)
 
@@ -336,9 +359,26 @@ republished numbers). Commands are the rows above unless stated.
 | `-race` (Windows) | exit 2, refused (`-race requires cgo`), as recorded |
 | WSL race oracle (touched path, the same `-run` set as the pre-merge run) | exit 0, 22 PASS / 0 FAIL / 0 `DATA RACE`, `ok … 5.678s` |
 | R9 native-evidence gate | exit 0, `Ran 10 tests … OK` |
-| §11 citation gate | exit 0 (`no audited document added or modified …; nothing to check` — the work is uncommitted) |
+| §11 citation gate | exit 0 (`no audited document added or modified …; nothing to check` — `docs/design/harness.md` is outside the audited corpus; see the §8 row) |
 | audits re-run (`flow` / classifiers / `guards2.py`) | align 322/473 points, base-only 115 / head-only 266, unexplained 15 (21 instances); guards 12 methods / 63 call sites / 0 violations |
-| red mutants rebuilt from the apply file (M1-M8, `-overlay`) | control exit 0; M1-M8 each exit 1 with the §7 failure classes (seam-test line numbers shifted by the probe edit) |
+| red mutants rebuilt at `fix1` (M1-M14, `-overlay`, `fix1/mutants/`) | control exit 0 (`ok … 1.851s`); M1-M14 each exit 1 with the §7 failure classes; M15 (the call-site candidate) survives as recorded in §7 |
+
+### Review-fix round re-verification (2026-11-22, `fix1` on top of `84839346`)
+
+Input: the whole-increment review of `40314211..84839346` (findings F1-F5). Every finding was fixed;
+none was judged invalid. What changed:
+
+| finding | change |
+|---|---|
+| F1 | `acquireNativeLaunchPhase`/`prepareLinuxCloneWorkspace` store and arm the returned handle before the `err` check again (base's assign-then-check), so a `(non-nil handle, non-nil error)` callee result cannot skip its compensation |
+| F2 | `abort` registers one deferred call per entry (reverse registration, named result, `deferredCompensation` helper) so a panic inside one compensation still runs the remaining entries, as the base three anonymous defers did |
+| F3 | seam matrix completed: 6 new tests (whole-launch success, lease-expired process start, clone/reuse real bodies, native-owner handover, launch-phase arm/release, refused Pi bridge) plus mutants M9-M13; coverage of the previously unexecuted compensation bodies is recorded in §7 and §10 |
+| F4 | this record republished at `fix1`: §7 re-run with the delivered line numbers and the `fix1/mutants/` artifacts, §8 file sizes re-derived, the citation-gate row states the real basis (audited corpus) |
+| F5 | §1/§3/§5/§6 numbers and line references re-measured at `fix1` (calls 414/468, lock sites, composite rows, §6 examples), `app.go:1418` everywhere, the plan's declaration-line and O23 rows corrected |
+
+Re-run gates are the §8 rows above; the `git diff --check` (branch range and working tree), the
+citation gate and the R9 gate are exit 0, and no host path or backslash-`u` sequence is in the
+diff (2 scans, 0 hits).
 
 The diff carries no user-profile path and no backslash-u sequence (2 scans, 0 hits). The full WSL
 race oracle (all tests) was not re-attempted: the pre-existing stall at
@@ -349,8 +389,8 @@ touched-path run is the race evidence.
 
 Candidates from the delivered diff, each with the ablation tried or the reason it was retained:
 
-1. **The five-entry compensation chain** (`armed`/`released` markers + `abort`'s ordered slice
-   literal) — retained. The ablation (a plain LIFO by acquisition time) changes the base execution
+1. **The five-entry compensation chain** (`armed`/`released` markers + `abort`'s reverse-registered
+   deferred calls) — retained. The ablation (a plain LIFO by acquisition time) changes the base execution
    order for the bridge-vs-clone pair and therefore the `errors.Join` order; a single boolean
    "compensate" flag loses the four distinct lifetimes. The chain is what the contract asks the tx
    to own; the deletion test fails (removing it re-spreads the guards into the phases).
@@ -386,9 +426,15 @@ statements.
 - The flow/call audits are shape-level (go/ast + regex) with the closure bodies compared per
   method, not per call site; they prove the statement/call moves, not dynamic equivalence. The
   dynamic oracle is the existing suites plus the new seam tests.
-- The clone/reuse compensation entries are exercised dynamically only by the Linux v2 suites
-  (WSL); on Windows they are proven by the arming/release mapping and the order/guards audits. A
-  live Pi provider-bridge close (`bridgeCompensation`'s body) is likewise not driven on this host.
+- The four compensation bodies that the pre-review tests never executed are now driven directly by
+  the `fix1` seam tests (§7, M9-M13): the clone/reuse entries run their real bodies
+  (`abortPreCheckoutLinuxClone`, `abortPreNativeLinuxCloneReuse`) against a real Store, the
+  launch-phase entry its counting release func, and the bridge entry its real
+  `closeUnownedProviderBridge` body through an HTTP reachability check. The two clone entries'
+  *platform* forks stay WSL-only: on Windows the daemon method is the `errors.ErrUnsupported` stub
+  (`linux_owner_witness_unsupported.go`), so the Linux store/journal path behind it and
+  `launchNativeProcess`'s confirm-path auto-release still run only in the Linux v2 suites; the
+  bridge case skips on Linux for the missing non-Linux Pi provider-extension fixture (§8's WSL row).
 - The WSL `-race` oracle inherits the pre-existing loopback-`httptest` stall recorded at W4-17a and
   W4-17b for `TestClaimAdmissionInputFailsClosedBeforeWorkspaceOrProcessStart`. It was reproduced
   exactly: the `-v` full-package run passes 18 tests with no failure and no `DATA RACE`, then
@@ -401,6 +447,6 @@ statements.
   could still slip through it.
 - One settle-signal mutation is not observable at all: returning the unsettled signal at the
   pre-native abort check is masked, because the next phase-level abort check re-detects the same
-  cancellation and settles identically (§7, M7's first candidate). No test therefore pins *which*
+  cancellation and settles identically (§7, M15). No test therefore pins *which*
   of the two adjacent sites settles a fresh cancellation — only that the session ends closed,
   unstarted and fully compensated.
