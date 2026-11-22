@@ -50,12 +50,14 @@ defmodule SymmetryControl.Goals.RunFence do
       value: 3
     ]
 
-  alias SymmetryControl.Goals
+  alias SymmetryControl.Goals.Budget
+  alias SymmetryControl.Goals.ContextAssembly
   alias SymmetryControl.Goals.Goal
   alias SymmetryControl.Goals.GoalEvent
   alias SymmetryControl.Goals.HarnessSession
   alias SymmetryControl.Goals.RunEvidence
   alias SymmetryControl.Goals.RunUsage
+  alias SymmetryControl.Goals.Settlement
   alias SymmetryControl.Orchestration.Run
   alias SymmetryControl.Orchestration.Runtime
   alias SymmetryControl.Orchestration.Scheduler
@@ -221,7 +223,7 @@ defmodule SymmetryControl.Goals.RunFence do
     with :ok <- valid_uuid(machine_id),
          :ok <- valid_uuid(run_id),
          :ok <- valid_fence(fence),
-         :ok <- Goals.safe_evidence_document(evidence),
+         :ok <- ContextAssembly.safe_evidence_document(evidence),
          {:ok, evidence_attrs} <- evidence_attrs(evidence, run_id) do
       Repo.transaction(fn ->
         {goal, task, item, run, runtime} =
@@ -298,7 +300,7 @@ defmodule SymmetryControl.Goals.RunFence do
     with :ok <- valid_uuid(machine_id),
          :ok <- valid_uuid(run_id),
          :ok <- valid_fence(fence),
-         :ok <- Goals.safe_evidence_document(batch),
+         :ok <- ContextAssembly.safe_evidence_document(batch),
          {:ok, evidence_items} <- evidence_batch_attrs(batch, run_id) do
       Repo.transaction(fn ->
         {goal, task, item, run, runtime} =
@@ -607,7 +609,7 @@ defmodule SymmetryControl.Goals.RunFence do
       Repo.one(from(runtime in Runtime, where: runtime.id == ^run.runtime_id, lock: "FOR UPDATE")) ||
         rollback(:not_found)
 
-    unless Goals.settlement_task_owned_by_goal?(task, goal, item) do
+    unless Settlement.settlement_task_owned_by_goal?(task, goal, item) do
       rollback(:ownership_lost)
     end
 
@@ -695,7 +697,9 @@ defmodule SymmetryControl.Goals.RunFence do
          true <- verdict in ["passed", "failed", "unknown", "not_applicable"],
          {:ok, payload} <- required_map(evidence, :payload),
          {:ok, observed_at} <- required_datetime(evidence, :observed_at),
-         true <- Goals.safe_document?(source_ref) and Goals.safe_document?(payload) do
+         true <-
+           ContextAssembly.safe_document?(source_ref) and
+             ContextAssembly.safe_document?(payload) do
       {:ok,
        %{
          id: id,
@@ -971,7 +975,7 @@ defmodule SymmetryControl.Goals.RunFence do
         run_id: row.run_id,
         evidence_key: row.evidence_key,
         kind: row.kind,
-        subject_hash: Goals.context_digest(row.subject_hash),
+        subject_hash: ContextAssembly.context_digest(row.subject_hash),
         verdict: row.verdict,
         observed_at: DateTime.to_iso8601(row.inserted_at)
       }
@@ -1074,7 +1078,7 @@ defmodule SymmetryControl.Goals.RunFence do
   end
 
   defp reconcile_reservation_and_arm!(goal, task, opts) do
-    Goals.reconcile_reservation!(goal, task, opts)
+    Budget.reconcile_reservation!(goal, task, opts)
 
     if goal.state == "active" do
       current = now(opts)
@@ -1119,7 +1123,7 @@ defmodule SymmetryControl.Goals.RunFence do
   end
 
   def context_wire_envelope!(snapshot, goal, item, task) do
-    case Goals.context_wire_envelope(snapshot, goal, item, task) do
+    case ContextAssembly.context_wire_envelope(snapshot, goal, item, task) do
       {:ok, context} ->
         context
 
