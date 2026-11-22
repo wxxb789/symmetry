@@ -343,7 +343,7 @@ Gate runs on the closeout revision (from the worktree root; host interpreter `py
 | --- | --- | ---: | --- |
 | targeted pin, baseline | `python scripts/ci/test-model-routing-evaluation.py EvaluationTests.test_receipt_binds_every_tooling_source` | 0 | `Ran 1 test in 28.012s` → `OK` |
 | targeted pin, mutant | the same command with `SPLIT_SCRIPTS` minus `"model_routing_subject.py"` | 1 | `Ran 1 test in 35.588s` → `FAILED (failures=1)`; the assertion diff names `model_routing_subject.py` (restored after the run) |
-| CLI byte-diff | `bash C:/…/scratch/w5-12/cli-byte-diff.sh C:/…/scratch/w5-12/cli-closeout`, then `diff -r cli-before cli-closeout` and `diff -r cli-fix cli-closeout` | 0 | 21/21 files identical against both the base-revision and the r1 runs (case exit codes 0/2/1/1/1/1/1) |
+| CLI byte-diff | `bash <scratch>/cli-byte-diff.sh <scratch>/cli-closeout`, then `diff -r cli-before cli-closeout` and `diff -r cli-fix cli-closeout` | 0 | 21/21 files identical against both the base-revision and the r1 runs (case exit codes 0/2/1/1/1/1/1) |
 | isolated-mode start | `python -I scripts/ci/model-routing-evaluation.py --help` | 0 | usage printed |
 | ruff check | `python -m ruff check scripts/ci` | 0 | `All checks passed!` |
 | ruff format | `python -m ruff format --check scripts/ci` | 0 | `63 files already formatted` |
