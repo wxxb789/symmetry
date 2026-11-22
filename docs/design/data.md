@@ -100,7 +100,8 @@ Retain current generation/attempt identity and terminal-grace behavior. For goal
 tasks, Orchestration enforces the admission-snapshotted max_run_attempts before
 creating another Run (including automatic lease-expiry retry); exhaustion fails
 the Task with attempt_limit. Goal-less tasks retain the existing retry policy.
-Orchestration enforces this local Task field without calling Goals policy.
+Orchestration enforces this immutable Task field from the task row; the
+Goals-owned eligibility query reads the same field.
 
 ### Additive amendment: native runtime repository affinity
 
