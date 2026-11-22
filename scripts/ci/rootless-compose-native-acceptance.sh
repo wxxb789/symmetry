@@ -470,7 +470,7 @@ docker run --rm --network "$network" --user 65532:65532 \
   --env SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_UNPROVISIONED_DAEMON=/opt/symmetry-owner-test/unprovisioned/symmetry-daemon \
   --env SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_HOOK_MARKER_ROOT=/opt/symmetry-owner-test/native-hook-markers \
   --env SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_WITNESS_OUTPUT_DIR=/tmp/rootless-compose-output \
-  --entrypoint /bin/bash golang:1.27.0-bookworm \
+  --entrypoint /bin/bash golang:1.27.4-bookworm \
   -euc 'mkdir -p "$HOME" "$GOCACHE" "$GOMODCACHE" "$GOTMPDIR" "$SYMMETRY_PRODUCTION_LINUX_V2_ROOTLESS_COMPOSE_WITNESS_OUTPUT_DIR"; cd /workspace/daemon; go mod download; go test -count=1 -timeout 900s -json ./e2e -run "^(TestProductionLinuxV2RootlessComposeNativeWorkItemRefusal|TestProductionLinuxV2UnprovisionedHostRefusal)$"' \
   >"$event_file" || container_test_status=$?
 if ! python3 "$repo/scripts/ci/assert-go-test-json.py" "$event_file" \
