@@ -16,7 +16,6 @@ defmodule SymmetryControl.Goals.SettlementTest do
 
   @now ~U[2026-09-09 00:00:00.000000Z]
   @validation_runtime_id "00000000-0000-4000-8000-000000000001"
-  @validation_profile_digest "sha256:" <> String.duplicate("c", 64)
 
   use SymmetryControl.TestFixtures,
     command_opts: [now: @now, validation_profiles: validation_profiles()]
@@ -44,7 +43,7 @@ defmodule SymmetryControl.Goals.SettlementTest do
         }
       ])
 
-    put_task_result!(run, task_result(task, "plan_proposed", %{proposal: proposal}))
+    put_run_task_result!(run, task_result(task, "plan_proposed", %{proposal: proposal}))
 
     assert {:ok, receipt} = Goals.settle_task(task.id, run.id, 1, now: @now)
     assert receipt["settlement"] == "invalid_task_result"
@@ -146,7 +145,7 @@ defmodule SymmetryControl.Goals.SettlementTest do
              command_current(
                goal.id,
                "admit_task",
-               admission_payload(revised_item, %{reserved_microusd: 42}),
+               admission_payload(revised_item),
                rollout_enabled: true
              )
 
@@ -164,8 +163,7 @@ defmodule SymmetryControl.Goals.SettlementTest do
                "admit_task",
                admission_payload(revised_item, %{
                  purpose: "validate",
-                 validation_of_task_id: revised_producer.id,
-                 reserved_microusd: 0
+                 validation_of_task_id: revised_producer.id
                }),
                rollout_enabled: true
              )
@@ -385,7 +383,7 @@ defmodule SymmetryControl.Goals.SettlementTest do
     runtime = runtime_fixture()
     {run, _fence} = completed_goal_run_fixture(task, runtime)
 
-    put_task_result!(
+    put_run_task_result!(
       run,
       task_result(task, "blocked", %{
         "blocker" => %{"kind" => "decision", "decision_id" => Ecto.UUID.generate()}
@@ -419,7 +417,7 @@ defmodule SymmetryControl.Goals.SettlementTest do
       "reason" => "Fix the failing check."
     }
 
-    put_task_result!(
+    put_run_task_result!(
       run,
       task_result(task, "repair_required", %{
         "proposed_next_action" => repair
@@ -437,7 +435,7 @@ defmodule SymmetryControl.Goals.SettlementTest do
              command_current(
                goal.id,
                "admit_task",
-               admission_payload(item, %{reserved_microusd: 0}),
+               admission_payload(item),
                rollout_enabled: true
              )
 
@@ -445,7 +443,7 @@ defmodule SymmetryControl.Goals.SettlementTest do
     {replan_run, _fence} = completed_goal_run_fixture(replan_task, runtime)
     replan = %{"kind" => "replan", "reason" => "The approved plan needs a scope decision."}
 
-    put_task_result!(
+    put_run_task_result!(
       replan_run,
       task_result(replan_task, "replan_required", %{
         "proposed_next_action" => replan
@@ -468,7 +466,7 @@ defmodule SymmetryControl.Goals.SettlementTest do
     {first_run, _fence} = completed_goal_run_fixture(first_task, runtime)
     first_progress = task_result(first_task, "progress")
 
-    put_task_result!(first_run, first_progress)
+    put_run_task_result!(first_run, first_progress)
     delete_goal_wakeup_jobs(goal.id)
 
     assert {:ok, %{"settlement" => "progress", "next_wake_at" => next_wake_at}} =
@@ -480,13 +478,13 @@ defmodule SymmetryControl.Goals.SettlementTest do
              command_current(
                goal.id,
                "admit_task",
-               admission_payload(item, %{reserved_microusd: 0}),
+               admission_payload(item),
                rollout_enabled: true
              )
 
     second_task = Repo.get!(Task, admitted.response["task"]["id"])
     {second_run, _fence} = completed_goal_run_fixture(second_task, runtime)
-    put_task_result!(second_run, task_result(second_task, "progress"))
+    put_run_task_result!(second_run, task_result(second_task, "progress"))
     delete_goal_wakeup_jobs(goal.id)
 
     assert {:ok, receipt} = Goals.settle_task(second_task.id, second_run.id, 1, now: @now)
@@ -637,7 +635,7 @@ defmodule SymmetryControl.Goals.SettlementTest do
 
     {run, _fence} = completed_goal_run_fixture(task, runtime, progressed_subject)
     progress_result = task_result(task, "progress", %{"subject" => progressed_subject})
-    put_task_result!(run, progress_result)
+    put_run_task_result!(run, progress_result)
 
     assert {:ok, %{"settlement" => "progress"}} =
              Goals.settle_task(task.id, run.id, 1, now: @now)
@@ -963,7 +961,7 @@ defmodule SymmetryControl.Goals.SettlementTest do
     target = Repo.get!(Task, admission.response["task"]["id"])
     {target_run, target_fence} = running_goal_run_fixture(target, source_runtime)
     attrs = session_attrs(item, "workspace-handoff-conflict")
-    insert_handoff_conflict_session!(source_runtime, item, attrs)
+    available_session_fixture(source_runtime, item, attrs)
 
     assert {:error, :handoff_session_reuse} =
              Goals.attach_harness_session(
@@ -1030,15 +1028,7 @@ defmodule SymmetryControl.Goals.SettlementTest do
   end
 
   test "runless cancellation settlement requires a canonical Goal control cancellation" do
-    previous_goals = Application.fetch_env!(:symmetry_control, :goals)
-
-    Application.put_env(
-      :symmetry_control,
-      :goals,
-      Keyword.put(previous_goals, :rollout_enabled, true)
-    )
-
-    on_exit(fn -> Application.put_env(:symmetry_control, :goals, previous_goals) end)
+    enable_rollout!()
 
     {_goal, _item, task} = admitted_task_fixture()
     Repo.update_all(from(row in Task, where: row.id == ^task.id), set: [state: "cancelled"])
@@ -1180,7 +1170,7 @@ defmodule SymmetryControl.Goals.SettlementTest do
         }
       })
 
-    put_task_result!(source_run, blocked_result)
+    put_run_task_result!(source_run, blocked_result)
 
     assert {:ok, receipt} = Goals.settle_task(source_task.id, source_run.id, 1, now: @now)
     assert receipt["settlement"] == "blocked"
@@ -1292,7 +1282,7 @@ defmodule SymmetryControl.Goals.SettlementTest do
         "proposed_next_action" => repair_action
       })
 
-    put_task_result!(source_run, repair_result)
+    put_run_task_result!(source_run, repair_result)
 
     assert {:ok, repair_receipt} =
              Goals.settle_task(source_task.id, source_run.id, 1, now: @now)
@@ -1346,24 +1336,6 @@ defmodule SymmetryControl.Goals.SettlementTest do
              )
 
     assert Repo.aggregate(from(task in Task, where: task.goal_id == ^goal.id), :count) == 2
-  end
-
-  defp insert_handoff_conflict_session!(runtime, item, attrs) do
-    %HarnessSession{}
-    |> HarnessSession.changeset(%{
-      machine_id: runtime.machine_id,
-      runtime_id: runtime.id,
-      repository_resource_id: item_repository_resource_id(item),
-      local_handle_id: attrs.local_handle_id,
-      binding_id: Ecto.UUID.generate(),
-      binding_verified: true,
-      harness_kind: attrs.harness_kind,
-      harness_version: attrs.harness_version,
-      adapter_version: attrs.adapter_version,
-      workspace_fingerprint: attrs.workspace_fingerprint,
-      state: "available"
-    })
-    |> Repo.insert!()
   end
 
   defp replace_terminal_result!(task, run, task_result) do

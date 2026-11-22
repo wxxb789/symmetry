@@ -1,10 +1,7 @@
 defmodule SymmetryControl.GoalsTestSupport do
-  import Ecto
-  import Ecto.Changeset
   import Ecto.Query
   import ExUnit.Assertions
   import ExUnit.Callbacks
-  import SymmetryControl.DataCase
 
   @now ~U[2026-09-09 00:00:00.000000Z]
   @validation_runtime_id "00000000-0000-4000-8000-000000000001"
@@ -35,6 +32,18 @@ defmodule SymmetryControl.GoalsTestSupport do
 
     on_exit(fn -> Application.put_env(:symmetry_control, :goals, previous_goals) end)
     :ok
+  end
+
+  def enable_rollout! do
+    previous_goals = Application.fetch_env!(:symmetry_control, :goals)
+
+    Application.put_env(
+      :symmetry_control,
+      :goals,
+      Keyword.put(previous_goals, :rollout_enabled, true)
+    )
+
+    on_exit(fn -> Application.put_env(:symmetry_control, :goals, previous_goals) end)
   end
 
   def goal_with_items_fixture(execution_policy, item_count \\ 1) do
@@ -104,9 +113,9 @@ defmodule SymmetryControl.GoalsTestSupport do
     |> Repo.insert!()
   end
 
-  def put_goal_acceptance_contract(attrs, nil), do: attrs
+  defp put_goal_acceptance_contract(attrs, nil), do: attrs
 
-  def put_goal_acceptance_contract(attrs, contract),
+  defp put_goal_acceptance_contract(attrs, contract),
     do: put_in(attrs, [:initial_revision, :acceptance_contract], contract)
 
   def admitted_task_fixture(
@@ -185,14 +194,8 @@ defmodule SymmetryControl.GoalsTestSupport do
              })
 
     decision_id = decision.response["decision"]["id"]
-    decision_version = Repo.get!(SymmetryControl.Goals.GoalDecision, decision_id).lock_version
 
-    assert {:ok, _resolved, :created} =
-             command_current(goal_id, "resolve_decision", %{
-               decision_id: decision_id,
-               expected_decision_version: decision_version,
-               option_id: "accept"
-             })
+    resolve_decision!(goal_id, decision_id)
 
     assert {:ok, _planned, :created} =
              command_current(
@@ -226,7 +229,7 @@ defmodule SymmetryControl.GoalsTestSupport do
                command_current(
                  goal_id,
                  "admit_task",
-                 admission_payload(item, %{reserved_microusd: 42}),
+                 admission_payload(item),
                  admission_opts
                )
 
@@ -506,11 +509,25 @@ defmodule SymmetryControl.GoalsTestSupport do
     )
   end
 
-  def put_task_result!(run, task_result) do
+  def put_run_task_result!(run, task_result) do
     Repo.update_all(
       from(row in Run, where: row.id == ^run.id),
       set: [result: %{"task_result" => task_result}]
     )
+  end
+
+  def resolve_decision!(goal_id, decision_id, option_id \\ "accept") do
+    payload = %{
+      decision_id: decision_id,
+      expected_decision_version:
+        Repo.get!(SymmetryControl.Goals.GoalDecision, decision_id).lock_version,
+      option_id: option_id
+    }
+
+    assert {:ok, resolved, :created} =
+             command_current(goal_id, "resolve_decision", payload)
+
+    resolved
   end
 
   def delete_goal_wakeup_jobs(goal_id) do
@@ -646,6 +663,8 @@ defmodule SymmetryControl.GoalsTestSupport do
     "sha256:" <> Base.encode16(SymmetryControl.RequestHash.canonical(subject), case: :lower)
   end
 
+  # By design independent of `Goals.mutation_id/2` so served ids cannot change bytes without
+  # a red test: sha256 over "<prefix>:<part>:…", version-5/"a" nibbles, not RFC 9562 name hashing.
   def frozen_mutation_id(prefix, parts) do
     hex =
       :crypto.hash(:sha256, prefix <> ":" <> Enum.join(parts, ":"))
@@ -692,13 +711,7 @@ defmodule SymmetryControl.GoalsTestSupport do
 
     decision_id = decision.response["decision"]["id"]
 
-    assert {:ok, _resolved, :created} =
-             command_current(goal_id, "resolve_decision", %{
-               decision_id: decision_id,
-               expected_decision_version:
-                 Repo.get!(SymmetryControl.Goals.GoalDecision, decision_id).lock_version,
-               option_id: "accept"
-             })
+    resolve_decision!(goal_id, decision_id)
 
     assert {:ok, planned, :created} =
              command_current(
@@ -816,13 +829,7 @@ defmodule SymmetryControl.GoalsTestSupport do
     }
   end
 
-  def check_contract do
-    %{
-      "schema_version" => "symmetry.acceptance.v1",
-      "description" => "An independent check must pass.",
-      "predicates" => [%{"id" => "check", "kind" => "check", "validator_profile" => "test"}]
-    }
-  end
+  defdelegate check_contract(), to: SymmetryControl.TestFixtures
 
   def baseline_subject(resource_id) do
     %{
@@ -891,15 +898,7 @@ defmodule SymmetryControl.GoalsTestSupport do
     project
   end
 
-  def repository_fixture(project) do
-    {:ok, repository} =
-      Workspaces.create_resource(project.id, %{
-        kind: "repository",
-        name: "Repository #{System.unique_integer([:positive])}"
-      })
-
-    repository
-  end
+  defdelegate repository_fixture(project), to: SymmetryControl.TestFixtures
 
   def connected_github_repository_fixture(
         project,
@@ -925,21 +924,14 @@ defmodule SymmetryControl.GoalsTestSupport do
     repository
   end
 
-  def runtime_fixture(runtime_id \\ nil) do
+  def runtime_fixture(runtime_id \\ nil, opts \\ []) do
     case runtime_id && Repo.get(Runtime, runtime_id) do
       %Runtime{} = runtime ->
         runtime
 
       _ ->
         repository_resource_id =
-          Repo.one(
-            from(item in WorkItem,
-              where: not is_nil(item.goal_id) and not is_nil(item.repository_resource_id),
-              order_by: [desc: item.inserted_at, desc: item.id],
-              limit: 1,
-              select: item.repository_resource_id
-            )
-          )
+          Keyword.get_lazy(opts, :repository_resource_id, &runtime_repository_resource_id/0)
 
         machine =
           %Machine{}
@@ -970,5 +962,16 @@ defmodule SymmetryControl.GoalsTestSupport do
         })
         |> Repo.insert!()
     end
+  end
+
+  defp runtime_repository_resource_id do
+    Repo.one(
+      from(item in WorkItem,
+        where: not is_nil(item.goal_id) and not is_nil(item.repository_resource_id),
+        order_by: [desc: item.inserted_at, desc: item.id],
+        limit: 1,
+        select: item.repository_resource_id
+      )
+    )
   end
 end

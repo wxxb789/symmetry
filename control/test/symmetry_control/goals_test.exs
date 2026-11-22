@@ -19,7 +19,6 @@ defmodule SymmetryControl.GoalsTest do
 
   @now ~U[2026-09-09 00:00:00.000000Z]
   @validation_runtime_id "00000000-0000-4000-8000-000000000001"
-  @validation_profile_digest "sha256:" <> String.duplicate("c", 64)
 
   use SymmetryControl.TestFixtures,
     command_opts: [now: @now, validation_profiles: validation_profiles()]
@@ -192,7 +191,7 @@ defmodule SymmetryControl.GoalsTest do
              command_current(
                goal.id,
                "admit_task",
-               admission_payload(conflicting, %{reserved_microusd: 42}),
+               admission_payload(conflicting),
                rollout_enabled: true
              )
 
@@ -502,7 +501,7 @@ defmodule SymmetryControl.GoalsTest do
              command_current(
                goal.id,
                "admit_task",
-               admission_payload(item, %{session_mode: "resume", reserved_microusd: 1}),
+               admission_payload(item, %{session_mode: "resume"}),
                rollout_enabled: true
              )
   end
@@ -565,9 +564,7 @@ defmodule SymmetryControl.GoalsTest do
                "admit_task",
                admission_payload(item, %{
                  session_mode: "resume",
-                 requested_session_id: retained.id,
-                 admission_key: Ecto.UUID.generate(),
-                 reserved_microusd: 1
+                 requested_session_id: retained.id
                }),
                rollout_enabled: true
              )
@@ -612,9 +609,7 @@ defmodule SymmetryControl.GoalsTest do
                "admit_task",
                admission_payload(item, %{
                  session_mode: "resume",
-                 requested_session_id: retained.id,
-                 admission_key: Ecto.UUID.generate(),
-                 reserved_microusd: 1
+                 requested_session_id: retained.id
                }),
                rollout_enabled: true
              )
@@ -656,9 +651,7 @@ defmodule SymmetryControl.GoalsTest do
                "admit_task",
                admission_payload(item, %{
                  purpose: "validate",
-                 validation_of_task_id: producer.id,
-                 admission_key: Ecto.UUID.generate(),
-                 reserved_microusd: 0
+                 validation_of_task_id: producer.id
                }),
                rollout_enabled: true,
                validation_profiles:
@@ -683,8 +676,7 @@ defmodule SymmetryControl.GoalsTest do
                "admit_task",
                admission_payload(item, %{
                  purpose: "validate",
-                 validation_of_task_id: producer.id,
-                 reserved_microusd: 0
+                 validation_of_task_id: producer.id
                }),
                rollout_enabled: true,
                validation_profiles:
@@ -720,8 +712,7 @@ defmodule SymmetryControl.GoalsTest do
                "admit_task",
                admission_payload(empty_item, %{
                  purpose: "validate",
-                 validation_of_task_id: empty_producer.id,
-                 reserved_microusd: 0
+                 validation_of_task_id: empty_producer.id
                }),
                rollout_enabled: true,
                validation_profiles:
@@ -777,7 +768,7 @@ defmodule SymmetryControl.GoalsTest do
              command_current(
                missing_goal.id,
                "admit_task",
-               admission_payload(missing_item, %{reserved_microusd: 1}),
+               admission_payload(missing_item),
                rollout_enabled: true
              )
 
@@ -803,7 +794,7 @@ defmodule SymmetryControl.GoalsTest do
              command_current(
                budget_goal.id,
                "admit_task",
-               admission_payload(budget_item, %{reserved_microusd: 1}),
+               admission_payload(budget_item),
                rollout_enabled: true
              )
 
@@ -936,8 +927,7 @@ defmodule SymmetryControl.GoalsTest do
                "admit_task",
                admission_payload(item, %{
                  purpose: "validate",
-                 validation_of_task_id: producer.id,
-                 reserved_microusd: 0
+                 validation_of_task_id: producer.id
                })
                |> Map.put(:subject, candidate_subject),
                rollout_enabled: true
@@ -949,8 +939,7 @@ defmodule SymmetryControl.GoalsTest do
                "admit_task",
                admission_payload(item, %{
                  purpose: "validate",
-                 validation_of_task_id: producer.id,
-                 reserved_microusd: 0
+                 validation_of_task_id: producer.id
                }),
                rollout_enabled: true
              )
@@ -1047,8 +1036,7 @@ defmodule SymmetryControl.GoalsTest do
                "admit_task",
                admission_payload(item, %{
                  purpose: "validate",
-                 validation_of_task_id: validation.id,
-                 reserved_microusd: 0
+                 validation_of_task_id: validation.id
                }),
                rollout_enabled: true
              )

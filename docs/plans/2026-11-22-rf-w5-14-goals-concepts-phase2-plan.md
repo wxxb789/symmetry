@@ -22,7 +22,7 @@ Everything else becomes module-private inside its concept module, except the pai
 crossing a module boundary: those become `@doc false def` on the owning side and are called as
 `Alias.fun(...)` from the caller (no `import` between concept modules, hence no compile-connected
 cycle). The kernel modules keep their W4-07 shapes; `run_fence.ex` changes only the eight call sites
-and five `alias` lines recorded in the cross-edge table.
+and four `alias` lines (three added, one deleted) recorded in the cross-edge table.
 
 ## Exact edge-case semantics the contract demands
 
@@ -488,10 +488,10 @@ Kernel imports (per caller module, from the tracer's `imported` events):
 | `Goals.ValidationOutcome` | `Goals.Internal` | 13 (lock_goal!/1, lock_work_item!/1, mutation_id/2, now/1, parse_subject/1, required_uuid/2, rollback/1, settlement_mutation_id/3, stamp_insert/2, valid_uuid/1, value/2, value/3, work_item_acceptance_action_hash/3) |
 
 `run_fence.ex` changes (the only kernel edit): the call lines below are repointed to the module
-that now owns each function, and the five `alias` lines those calls need are added
-(`alias SymmetryControl.Goals.Budget`, `.ContextAssembly`, `.Settlement`,
-`.HarnessSessions`, `.Internal`); `alias SymmetryControl.Goals` stays only for the names RunFence
-still calls on the facade (`goal_managed_task?/1`, `legacy_task_command_allowed?/1`).
+that now owns each function, and the three `alias` lines those calls need are added
+(`alias SymmetryControl.Goals.Budget`, `.ContextAssembly`, `.Settlement`); the existing
+`alias SymmetryControl.Goals.HarnessSessions` / `.Internal` lines stay untouched, and
+`alias SymmetryControl.Goals` is deleted because RunFence keeps no facade call.
 
 | `run_fence.ex` line | function | was | is |
 | --- | --- | --- | --- |
@@ -571,19 +571,29 @@ caller of it lives in that file, otherwise it becomes a public helper of
 
 | file | `wc -l` | tests | local helpers |
 | --- | --- | --- | --- |
-| `goals_test.exs` | 1427 | 29 | 9 |
-| `goals/settlement_test.exs` | 1375 | 23 | 2 |
-| `goals/reconciliation_test.exs` | 944 | 13 | 1 |
-| `goals/recovery_test.exs` | 537 | 5 | 0 |
-| `goals/commands_test.exs` | 1425 | 18 | 3 |
-| `goals/commands_flow_test.exs` | 1450 | 21 | 5 |
-| `goals/run_fence_flow_test.exs` | 1400 | 29 | 7 |
-| `goals/harness_session_flow_test.exs` | 574 | 9 | 1 |
-| `goals/goals_test_support.exs` | 974 | 0 | 43 |
+| `goals_test.exs` | 1415 | 29 | 9 |
+| `goals/settlement_test.exs` | 1347 | 23 | 1 |
+| `goals/reconciliation_test.exs` | 934 | 13 | 1 |
+| `goals/recovery_test.exs` | 527 | 5 | 0 |
+| `goals/commands_test.exs` | 1426 | 18 | 3 |
+| `goals/commands_flow_test.exs` | 1372 | 21 | 6 |
+| `goals/run_fence_flow_test.exs` | 1399 | 29 | 7 |
+| `goals/harness_session_flow_test.exs` | 528 | 9 | 1 |
+| `goals/goals_test_support.exs` | 977 | 0 | 44 |
+
+`wc -l` and the local-helper counts are re-measured at the apply stage: the apply edits shrink the
+moved bodies, move one settlement helper into `goals_test_support.exs` and leave the test counts
+unchanged (the four new cases live in interface files, which this table does not list).
 
 Titles: 147 base titles vs 147 HEAD titles, identical as a multiset (`titles_base.txt` vs
-`titles_head2.txt`), plus the new interface cases below. Size-balancing moves: 8
-(recorded in `split/split_moves.tsv`).
+`titles_head2.txt`); re-derived at the apply stage (`titles_dup.py`, base `642928b3` vs the final
+tree: the 8 split files carry exactly the base `goals_test.exs` 147 titles), plus the new interface
+cases below, which are 79 at the final tree (75 at `dc070002` + the 4 apply-stage titles listed in
+the apply section). Repo-wide (`control/test`), every one of the base revision's 1022 titles is
+present in the final tree's 1101 (0 lost, +79); the one duplicated title in the tree
+(`short-circuits a work item without a pull request before authenticating`) is already duplicated
+at the base revision (`integrations/azure_devops_test.exs` = `integrations/github_test.exs`).
+Size-balancing moves: 8 (recorded in `split/split_moves.tsv`).
 
 | test moved | from | to |
 | --- | --- | --- |
@@ -595,7 +605,7 @@ the facade). One case per public or `@doc false` entry that has a discriminating
 
 * `goals/admission_interface_test.exs` — 11 cases
 * `goals/budget_interface_test.exs` — 6 cases
-* `goals/commands_interface_test.exs` — 3 cases
+* `goals/commands_interface_test.exs` — 4 cases
 * `goals/context_assembly_interface_test.exs` — 6 cases
 * `goals/decisions_interface_test.exs` — 10 cases
 * `goals/goal_control_interface_test.exs` — 4 cases
@@ -604,7 +614,7 @@ the facade). One case per public or `@doc false` entry that has a discriminating
 * `goals/reconciliation_interface_test.exs` — 5 cases
 * `goals/recovery_interface_test.exs` — 7 cases
 * `goals/settlement_interface_test.exs` — 9 cases
-* `goals/validation_outcome_interface_test.exs` — 2 cases
+* `goals/validation_outcome_interface_test.exs` — 5 cases
 
 Red mutants: each interface case is killed by a source mutation of its subject entry
 (`gen_mutants.py` builds the manifest, `mutant.py` applies one row at a time, runs the single case
@@ -616,7 +626,12 @@ set) plus the 13 facade delegates that land in the concept modules = 74 required
 74 have a case (the last one, `Admission.goal_predicate_matches_evidence?/2` at
 `validation_outcome.ex:364`, was added after the first audit pass). The 75th case exercises
 `Admission.admit_task!/6`, a private step reachable only through `admit_authorized_task!/6`, which
-is itself covered.
+is itself covered. The apply stage adds four more cases (79 in total): the
+`:missing` and settled-without-`awaiting_validation` refusals of `reconcile_validation_outcome/4`,
+its late-receipt/`WorkOutcome` fail-closed branch, and the frozen `RequestHash.canonical`/
+plan-action byte vector in `commands_interface_test.exs`. The red-mutant ledger below therefore
+executes 90 rows: the 75 `dc070002` rows re-anchored to the final tree, plus 15 rows for the cases
+the apply stage strengthened (11) or added (4).
 
 Static audit of the 12 interface files: each aliases its module and calls it directly
 (4–25 qualified call sites per file); the facade is used only to build fixtures/state. No case has
@@ -751,6 +766,13 @@ from the repointed guard; two 99/100-character lines in `settlement_interface_te
 fixed by reflowing those expressions to the formatter's own canonical layout; the per-function AST
 comparison was re-run after the fix (`282` identical + `21` recorded rewrites, 0 missing, 0 changed).
 
+Apply-stage re-run: 499 again (5 / 357 / 80 / 57). The first apply-stage run measured 501 because
+the F29-3 dedup had inlined the same `Keyword.get_lazy(..., fn -> Repo.one(...) end)` block that
+`orchestration_goal_admission_test.exs:3808` already carries, which credo reported as two
+`Duplicate code found` issues; extracting the query to `defp runtime_repository_resource_id/0` in
+`goals_test_support.exs` restored the count, so the touched files still add no issue kind and the
+count does not rise.
+
 ## Evidence plan
 
 | claim | check | artifact |
@@ -804,24 +826,27 @@ delivery report names it).
 | compile | `MIX_ENV=test mix compile --warnings-as-errors` | 0 | compiled, no warnings | `compile.log` |
 | xref_plain | `mix xref graph --format cycles` | 0 | 3 cycles found | `xref_plain.log` |
 | xref_cc | `mix xref graph --format cycles --label compile-connected` | 0 | No cycles found | `xref_cc.log` |
-| targeted | `mix test` (goals_test + goals/ + 5 oracle files) | 0 | Result: 376 passed, 11 skipped | `targeted.log` |
-| full_cover | `mix test --cover --exclude portal_assets` (alone) | 0 | Result: 1082 passed, 21 skipped, 4 excluded | `full_cover.log` |
+| targeted | `mix test` (goals_test + goals/ + 5 oracle files) | 0 | Result: 380 passed, 11 skipped | `targeted.log` |
+| full_cover | `mix test --cover --exclude portal_assets` (alone) | 0 | Result: 1086 passed, 21 skipped, 4 excluded | `full_cover.log` |
 
 Raw counts:
 
 ```
-Result: 376 passed, 11 skipped
-Result: 1082 passed, 21 skipped, 4 excluded
+Result: 380 passed, 11 skipped
+Result: 1086 passed, 21 skipped, 4 excluded
 credo head: 499 issues (oneline letters: 57 design / 357 refactoring / 80 readability / 5 warnings)
 credo base: 500 issues (5 warnings / 357 refactoring / 82 readability / 56 design)
 format: no files need formatting (empty log)
 3 cycles found
 No cycles found
 OK
-check-citation-existence: no audited document added or modified between 642928b38f5a and 642928b38f5a; nothing to check
+check-citation-existence: at dc070002 refused (1 stale citation, pre-existing on main from 7f34d40d); the apply tree refreshes it, and a commit-faithful shell of the slice head passes: "1 changed document(s) pass the path and symbol check (518 path citation(s))"
 git diff --check: clean (exit 0)
 host path scan: 0 hits (grep exit 1)
-backslash-u scan: 9 occurrences, all pre-existing (base 9 over the same tracked files; the 4 in new files are the verbatim-moved test bodies, each present at base)
+backslash-u scan: 9 occurrences in the same scope (lib `goals.ex` + `goals/` + the goals test files), = base 9; the apply diff adds none
+native-evidence: Ran 15 tests — OK
+red mutants: 90 KILLED / 0 SURVIVED / 0 COMPILE_ERR
+titles: the 8 split files 147 = base `goals_test.exs` 147; repo-wide base 1022 is contained in final 1101 (0 lost, +79)
 
 R2 line coverage (`mix test --cover --exclude portal_assets`; the base revision runs in a
 scratch worktree at `642928b3` sharing this tree's deps, with its own build path and test
@@ -831,7 +856,7 @@ partition). The summary cover tool prints percentages only, so the table is perc
 | --- | --- | --- |
 | `SymmetryControl.ContractSchema` | 100.00% | 100.00% |
 | `SymmetryControl.Goals` | 86.32% | 84.38% |
-| `SymmetryControl.Goals.Admission` | — (absent) | 85.63% |
+| `SymmetryControl.Goals.Admission` | — (absent) | 85.83% |
 | `SymmetryControl.Goals.Budget` | — (absent) | 88.70% |
 | `SymmetryControl.Goals.ChangesetValidators` | 100.00% | 100.00% |
 | `SymmetryControl.Goals.Commands` | — (absent) | 85.86% |
@@ -863,25 +888,34 @@ partition). The summary cover tool prints percentages only, so the table is perc
 | `SymmetryControl.Goals.RunFence` | 84.84% | 84.69% |
 | `SymmetryControl.Goals.RunUsage` | 84.62% | 84.62% |
 | `SymmetryControl.Goals.Settlement` | — (absent) | 80.51% |
-| `SymmetryControl.Goals.ValidationOutcome` | — (absent) | 90.53% |
+| `SymmetryControl.Goals.ValidationOutcome` | — (absent) | 92.63% |
 | `SymmetryControl.Goals.ValidationProfiles` | 83.33% | 83.33% |
 | `SymmetryControl.Goals.WorkDependency` | 83.33% | 83.33% |
 | `SymmetryControl.Goals.WorkOutcome` | 85.71% | 85.71% |
 | `SymmetryControl.Goals.Workers.GoalControlWorker` | 65.63% | 65.63% |
 | `SymmetryControl.Goals.Workers.SettleTaskWorker` | 60.00% | 60.00% |
 | `SymmetryControl.Goals.Workers.WakeupWorker` | 50.98% | 50.98% |
-| `Total` | 87.07% | 87.21% |
+| `Total` | 87.07% | 87.32% |
 
-Reading the table: base `goals.ex` (8,121 lines) was 86.32% covered; at HEAD the facade is
-84.38% of its 332 remaining lines and the moved bodies live in the 12 concept modules at
-80.51% (Settlement) to 98.68% (Decisions), with every kernel/schema module unchanged to the
-point. The summary tool prints no line counts, so the deliberate non-reduction evidence is:
+Reading the table: base `goals.ex` (8,121 lines) was 86.32% covered; at the final tree the facade
+is 84.38% of its 332 remaining lines (its bodies now live in the concept modules) and those 12
+modules range from 80.51% (Settlement) to 98.68% (Decisions). Every other base module keeps its
+percentage except `RunFence` (84.84% → 84.69%; the repointed guard's layout, recorded in the credo
+section). The apply stage's strengthened and new interface cases lift `Admission` (85.63% → 85.83%)
+and `ValidationOutcome` (90.53% → 92.63%) and the `Total` (base 87.07% → `dc070002` 87.21% → final
+87.32%). The summary tool prints no line counts, so the deliberate non-reduction evidence is:
 the 147 test titles are unchanged as a multiset (the same tests run the same bodies), the
 per-function AST of the moved code is identical (`282` exact + `21` recorded call-prefix
 rewrites), and the only lines that change class are each new module's header/import
 scaffolding (the same artefact phase 1 recorded for its four extracted modules).
 
-Red-mutant results over the 75 rows (one per interface case): KILLED 75.
+Red-mutant results at the apply stage: 91 executed rows, KILLED 91 (SURVIVED 0, COMPILE_ERR 0) —
+the 75 `dc070002` rows re-anchored to the final tree (`mutants_reanchored2.tsv`: "total 75 killed
+75 survived 0 err 0"), 15 rows for the cases the apply stage strengthened or added
+(`mutants_apply2.tsv`: "total 15 killed 15 survived 0 err 0") and the F23 consistency probe
+(`mutants_f23.tsv`: the `recovery.ex` key-format mutation is killed by the existing
+`commands_flow_test.exs:709` case, which is why F23 needs no new case). The 75-row first-pass table
+follows.
 
 | status | case | mutation | file |
 | --- | --- | --- | --- |
@@ -969,10 +1003,67 @@ one mutant aimed at the sibling function of the same name): they were repaired a
 `mutants_fix*.tsv`, and every one is killed. `mutants_pre.tsv`/`mutants_post.tsv` are kept
 unchanged as the raw record of the first pass.
 
-Every interface case has exactly one row: 75 cases across the 12 interface files,
+At `dc070002` every interface case had exactly one row: 75 cases across the 12 interface files,
 75 rows in `mutants.json` (32 authored semantic mutants executed with mode
-`replace`, 43 call-site mutants executed with mode `raise`). A `SURVIVED`
-row would mean the case does not exercise its entry, or no longer kills it.
+`replace`, 43 call-site mutants executed with mode `raise`). The apply stage keeps those 75 rows
+(re-anchored) and adds `mutants_apply.json`: 15 `replace` rows — 11 for strengthened assertions of
+existing cases and 4 for the new cases (3 x `reconcile_validation_outcome/4`, 1 x frozen
+`RequestHash`/plan-action vector) — so the final tree is 79 cases over 90 executed rows (plus the
+F23 consistency probe row), all KILLED. A `SURVIVED` row would mean the case does not exercise its
+entry, or no longer kills it.
+
+## Apply stage — accepted simplify findings
+
+Source: the simplify review of `7f34d40d..dc070002` and its accepted-findings file (kept in the
+slice's scratch directory, named by the delivery report). The final tree is `dc070002` plus the
+edits below; no commit was made. `control/lib/**` is untouched by the whole stage.
+
+Applied: 27 accepted rows (20 findings + 7 PD rows; PD9 pairs with F3).
+
+| group | rows | files | evidence |
+| --- | --- | --- | --- |
+| compile-warning cleanups | F1, F2 | `goals_test_support.exs` + 9 test files | before: 3 `unused import` warnings + 10 set-only attributes; after: `mix compile --warnings-as-errors` clean. `commands_test.exs`'s `@validation_runtime_id` is kept (reused by F37) |
+| dead-override deletion | F3 (= PD9) | support + 4 test files, 25 sites (the finding named 4; the same-key scan found 21 more) | `admission_payload/2` drops `:reserved_microusd`/`:admission_key` unconditionally; the server refuses caller injection, pinned by `commands_test.exs`'s field loop and `reconciliation_test.exs:830`, so deleting the dead keys is the edit that keeps those paths green |
+| duplicate helpers / verbatim extractions | F4, F9, F10, F11, F12, F29 (1, 3, 4, 5, 6a, 6b-resolve), F30 | support + 10 test files | field-by-field diffs; `put_task_result!` -> `put_run_task_result!` with 0 leftovers; `check_contract/0` and `repository_fixture/1` delegate to `TestFixtures`; the admission helper is named `task_admission_payload/2` because a same-name `def` would collide with the imported support function (compile error reproduced) |
+| comment hygiene | F5, F6 | `reconciliation_test.exs`, `handoff_interface_test.exs` | comment policy items 1/4 |
+| strengthened assertions | F31, F32, F33, F34, F35, F37, PD4, PD5, PD6, PD7 | 6 test files | one executed `replace` mutant per row (11 rows in `mutants_apply2.tsv`) |
+| new cases | F36 (3), F38 (1) | `validation_outcome_interface_test.exs`, `commands_interface_test.exs` | 4 new titles; F36's third case tampers through `ALTER TABLE work_outcomes DISABLE TRIGGER work_outcomes_immutable_history` (a plain delete hits the `goal_0006_immutable_history` trigger) |
+| records | PD1, PD2 | `docs/TODO.md`, this document | state-set homes list re-derived per file; run_fence alias record corrected (3 additions, 1 removal) |
+
+Not applied (18 findings): F7, F8, F13-F22, F23-F27, each with its clause conflict in the delivery
+report — the moved-lib dedups would rewrite moved bodies and invalidate the per-function AST proof
+and the declaration table (clause 2), F8 additionally deletes a base function, F23/F25 would add a
+cross-module edge (clause 3), F26 changes the observable replay envelope (clauses 3/4), F27 reaches
+for a third canonicalizer, F28's shared rule-attribution comment is a documented boundary. Skipped
+with reasons: PD3 (the replay-shape asymmetry is a behaviour decision, recorded in `docs/TODO.md`),
+PD8 (protected non-adoption record; reachability recorded in the plan), F29 sub-items 2/7/8 and
+6b-request (data literals / no duplicate to remove / needs a contract change).
+
+Deviations recorded at this stage:
+
+1. `docs/archive/CLOSED-TODO.md:3196` — the `ensure_preconditions!/2` citation's owner path moved
+   from `control/lib/symmetry_control/goals.ex:8571-8585` to
+   `control/lib/symmetry_control/goals/events_receipts.ex:347-363`: the gate
+   `check-citation-existence.py` refuses the old citation at `dc070002` (the symbol moved in the
+   W4-07 reshape; main's `7f34d40d` wrote the citation stale), and the contract's gate clause
+   requires refreshing citations that move. This single line is the only edit outside the strict
+   owned set. The checker reads commits only, so it was verified on a faithful copy of the slice
+   head (`git clone --shared` of this worktree in the scratch directory, the full worktree diff
+   applied and committed there as `2cb10013`): exit 0, "1 changed document(s) pass the path and
+   symbol check (518 path citation(s))".
+2. `goals_test_support.exs` credo follow-up (501 -> 499), recorded in the credo section above.
+3. Red-mutant evidence re-anchored to the final tree after those edits: 91/91 KILLED (75
+   re-anchored rows + 15 new rows + the F23 probe).
+
+Apply-stage gates (final tree; full logs in the slice scratch directory): the refreshed Results and
+R2 tables above, `verify_ast.exs` (282 identical + 21 recorded rewrites, byte-identical to the
+`dc070002` table), `string_compare.py` (312/312 identical, byte-identical), the title multiset,
+`mutant.py` (91 rows), `test-omo-control-native-evidence.py` (15 tests OK),
+`check-citation-existence.py`, `git diff --check`, the host-path scan and the backslash-u scan.
+The full suite was retried once: the first `mix test --cover --exclude portal_assets` run exited 2
+with a single unrelated WebSocket timing flake (`SymmetryControlWeb.DaemonChannelTest`, a 100 ms
+`assert_receive` whose mailbox already held the PubSub tuple; the file passes alone: 3 tests), and
+the retry is the 1086-passed row recorded in the Results table.
 
 ## Tree state (no commits made)
 
@@ -1018,3 +1109,34 @@ row would mean the case does not exercise its entry, or no longer kills it.
 ```
 
 Why: the contract forbids commits in this stage; the plan document itself is part of the slice.
+Everything above is the implement stage's record of the same slice: `dc070002` is the branch tip
+that carries it (the phase-2 commits plus the `origin/main` merge), and the apply-stage edits are
+the only uncommitted delta.
+
+Current uncommitted state at the apply stage (`git status --short`, captured after the last gate
+run, so no mutant-harness edit is in flight):
+
+```
+ M control/test/symmetry_control/goals/admission_interface_test.exs
+ M control/test/symmetry_control/goals/budget_interface_test.exs
+ M control/test/symmetry_control/goals/commands_flow_test.exs
+ M control/test/symmetry_control/goals/commands_interface_test.exs
+ M control/test/symmetry_control/goals/commands_test.exs
+ M control/test/symmetry_control/goals/context_assembly_interface_test.exs
+ M control/test/symmetry_control/goals/decisions_interface_test.exs
+ M control/test/symmetry_control/goals/goal_control_interface_test.exs
+ M control/test/symmetry_control/goals/goals_test_support.exs
+ M control/test/symmetry_control/goals/handoff_interface_test.exs
+ M control/test/symmetry_control/goals/harness_session_flow_test.exs
+ M control/test/symmetry_control/goals/plan_contracts_interface_test.exs
+ M control/test/symmetry_control/goals/reconciliation_interface_test.exs
+ M control/test/symmetry_control/goals/reconciliation_test.exs
+ M control/test/symmetry_control/goals/recovery_test.exs
+ M control/test/symmetry_control/goals/run_fence_flow_test.exs
+ M control/test/symmetry_control/goals/settlement_test.exs
+ M control/test/symmetry_control/goals/validation_outcome_interface_test.exs
+ M control/test/symmetry_control/goals_test.exs
+ M docs/TODO.md
+ M docs/archive/CLOSED-TODO.md
+ M docs/plans/2026-11-22-rf-w5-14-goals-concepts-phase2-plan.md
+```

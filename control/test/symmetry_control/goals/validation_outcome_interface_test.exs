@@ -171,4 +171,109 @@ defmodule SymmetryControl.Goals.ValidationOutcomeInterfaceTest do
              now: @now
            ) == nil
   end
+
+  test "reconcile_validation_outcome/4 refuses an attempt that never settled" do
+    {_goal, _item, _producer, _producer_run, validation, validation_run, _validation_runtime,
+     _validation_fence, _candidate_subject} = independent_validation_attempt_fixture()
+
+    assert {:error, :validation_reconciliation_not_pending} =
+             ValidationOutcome.reconcile_validation_outcome(
+               validation.id,
+               validation_run.id,
+               1,
+               now: @now
+             )
+  end
+
+  test "reconcile_validation_outcome/4 refuses an attempt settled without awaiting validation" do
+    {_goal, _item, _producer, _producer_run, validation, validation_run, _validation_runtime,
+     _validation_fence, _candidate_subject} = independent_validation_attempt_fixture()
+
+    put_run_task_result!(
+      validation_run,
+      task_result(validation, "failed", %{"reason" => "network"})
+    )
+
+    assert {:ok, %{"settlement" => "failed"}} =
+             Goals.settle_task(validation.id, validation_run.id, 1, now: @now)
+
+    assert {:error, :validation_reconciliation_not_pending} =
+             ValidationOutcome.reconcile_validation_outcome(
+               validation.id,
+               validation_run.id,
+               1,
+               now: @now
+             )
+  end
+
+  test "reconcile_validation_outcome/4 fails closed when the late receipt outlives its WorkOutcome" do
+    {goal, item, _producer, _producer_run, validation, validation_run, validation_runtime,
+     validation_fence, candidate_subject} =
+      independent_validation_attempt_fixture(check_and_operator_acceptance_contract())
+
+    assert {:ok, %{evidence: _stored}, :created} =
+             Goals.append_evidence(
+               validation_runtime.machine_id,
+               validation_run.id,
+               validation_fence,
+               evidence_attrs(validation_run.id, item, candidate_subject),
+               now: @now
+             )
+
+    assert {:ok, %{"settlement" => "awaiting_validation"}} =
+             Goals.settle_task(validation.id, validation_run.id, 1, now: @now)
+
+    review_goal = fetch_goal!(goal.id)
+
+    assert {:ok, review, :created} =
+             Goals.command(
+               goal.id,
+               goal_command(review_goal, "request_decision", %{
+                 kind: "review",
+                 work_item_id: item.id,
+                 subject_hash: evidence_subject_hash(candidate_subject)
+               }),
+               "operator:test",
+               now: @now
+             )
+
+    review_id = review.response["decision"]["id"]
+    resolve_goal = fetch_goal!(goal.id)
+
+    assert {:ok, _resolved, :created} =
+             Goals.command(
+               goal.id,
+               goal_command(resolve_goal, "resolve_decision", %{
+                 decision_id: review_id,
+                 expected_decision_version: Repo.get!(GoalDecision, review_id).lock_version,
+                 option_id: "reject"
+               }),
+               "operator:test",
+               now: @now
+             )
+
+    assert {:ok, %{"settlement" => "rejected"}} =
+             ValidationOutcome.reconcile_validation_outcome(
+               validation.id,
+               validation_run.id,
+               1,
+               now: @now
+             )
+
+    Repo.query!("ALTER TABLE work_outcomes DISABLE TRIGGER work_outcomes_immutable_history")
+
+    try do
+      Repo.delete_all(from(row in WorkOutcome, where: row.validation_task_id == ^validation.id))
+    after
+      Repo.query!("ALTER TABLE work_outcomes ENABLE TRIGGER work_outcomes_immutable_history")
+    end
+
+    assert {:error, :internal_error} =
+             ValidationOutcome.reconcile_validation_outcome(
+               validation.id,
+               validation_run.id,
+               1,
+               now: @now
+             )
+  end
 end

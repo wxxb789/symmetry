@@ -73,7 +73,7 @@ defmodule SymmetryControl.Goals.GoalControlInterfaceTest do
                now: @now
              )
 
-    assert replayed == command
+    assert replayed == Repo.get!(Command, command.id)
 
     assert Repo.aggregate(from(row in Command, where: row.task_id == ^task.id), :count) == 1
 

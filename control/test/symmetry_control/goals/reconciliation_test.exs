@@ -13,7 +13,6 @@ defmodule SymmetryControl.Goals.ReconciliationTest do
 
   @now ~U[2026-09-09 00:00:00.000000Z]
   @validation_runtime_id "00000000-0000-4000-8000-000000000001"
-  @validation_profile_digest "sha256:" <> String.duplicate("c", 64)
 
   use SymmetryControl.TestFixtures,
     command_opts: [now: @now, validation_profiles: validation_profiles()]
@@ -31,9 +30,7 @@ defmodule SymmetryControl.Goals.ReconciliationTest do
     assert {:ok, [%{disposition: :noop}]} =
              Goals.reconcile_due_goals(goal_ids: [goal.id], now: @now)
 
-    # The due reconcile advanced the row through the optimistic-lock path ...
     assert Repo.get!(SymmetryControl.Goals.Goal, goal.id).lock_version > lock_version_before
-    # ... and left the command precondition where the operator read it.
     assert fetch_goal!(goal.id).version == before.version
 
     assert {:ok, receipt, :created} =
@@ -48,10 +45,8 @@ defmodule SymmetryControl.Goals.ReconciliationTest do
     assert receipt.goal.version == before.version + 1
     assert fetch_goal!(goal.id).version == before.version + 1
 
-    # Another operator's accepted command is what a stale version still refuses:
-    # the same pre-reconcile version no longer matches after the pause advanced
-    # it. Both commands carry actor `operator:test`, so the refusal is the token
-    # the pause advanced, not a different actor.
+    # Both commands carry actor `operator:test`: the refusal below is the stale
+    # pre-pause version token, not a different actor.
     assert {:error, {:stale, %{current_revision: 1, current_version: current_version}}} =
              Goals.command(
                goal.id,
@@ -705,7 +700,7 @@ defmodule SymmetryControl.Goals.ReconciliationTest do
              command_current(
                created.goal.id,
                "admit_task",
-               admission_payload(source_item, %{reserved_microusd: 0}),
+               admission_payload(source_item),
                rollout_enabled: true
              )
 
@@ -723,8 +718,7 @@ defmodule SymmetryControl.Goals.ReconciliationTest do
                "admit_task",
                admission_payload(source_item, %{
                  purpose: "validate",
-                 validation_of_task_id: producer.id,
-                 reserved_microusd: 0
+                 validation_of_task_id: producer.id
                }),
                rollout_enabled: true
              )
@@ -922,14 +916,10 @@ defmodule SymmetryControl.Goals.ReconciliationTest do
         )
       )
 
-    # The internal append wrote the row through the optimistic lock ...
     assert Repo.get!(SymmetryControl.Goals.Goal, goal.id).lock_version > lock_version_before
-    # ... and left the command precondition where the operator's read took it,
-    # in the served goal and in the event's own stored receipt.
     assert fetch_goal!(goal.id).version == before.version
     assert event.response["_receipt_v1"]["goal"]["version"] == before.version
 
-    # A command built from that pre-append read is still accepted.
     assert {:ok, receipt, :created} =
              Goals.command(
                goal.id,

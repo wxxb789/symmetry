@@ -7,9 +7,9 @@ defmodule SymmetryControl.Goals.CommandsFlowTest do
 
   alias SymmetryControl.Goals
   alias SymmetryControl.Goals.HarnessSession
+  alias SymmetryControl.Goals.WorkDependency
   alias SymmetryControl.Goals.Workers.GoalControlWorker
   alias SymmetryControl.Orchestration
-  alias SymmetryControl.Orchestration.Machine
   alias SymmetryControl.Orchestration.Run
   alias SymmetryControl.Orchestration.Runtime
   alias SymmetryControl.Orchestration.Task
@@ -17,8 +17,6 @@ defmodule SymmetryControl.Goals.CommandsFlowTest do
   alias SymmetryControl.Workspaces.WorkItem
 
   @now ~U[2026-09-09 00:00:00.000000Z]
-  @validation_runtime_id "00000000-0000-4000-8000-000000000001"
-  @validation_profile_digest "sha256:" <> String.duplicate("c", 64)
 
   use SymmetryControl.TestFixtures,
     command_opts: [now: @now, validation_profiles: validation_profiles()]
@@ -76,7 +74,7 @@ defmodule SymmetryControl.Goals.CommandsFlowTest do
         }
       ])
 
-    put_task_result!(run, task_result(task, "plan_proposed", %{proposal: proposal}))
+    put_run_task_result!(run, task_result(task, "plan_proposed", %{proposal: proposal}))
 
     assert {:ok, receipt} = Goals.settle_task(task.id, run.id, 1, now: @now)
     decision_id = receipt["decision_id"]
@@ -265,13 +263,7 @@ defmodule SymmetryControl.Goals.CommandsFlowTest do
 
     decision_id = decision.response["decision"]["id"]
 
-    assert {:ok, _resolved, :created} =
-             command_current(goal_id, "resolve_decision", %{
-               decision_id: decision_id,
-               expected_decision_version:
-                 Repo.get!(SymmetryControl.Goals.GoalDecision, decision_id).lock_version,
-               option_id: "accept"
-             })
+    resolve_decision!(goal_id, decision_id)
 
     authorized_hash =
       "sha256:" <> Base.encode16(SymmetryControl.RequestHash.canonical(proposal), case: :lower)
@@ -437,9 +429,18 @@ defmodule SymmetryControl.Goals.CommandsFlowTest do
         ])
       )
 
-    assert Enum.map(fetch_goal!(created.goal.id).work_items, & &1.repository_resource_id)
-           |> Enum.sort() ==
+    goal = fetch_goal!(created.goal.id)
+    items_by_title = Map.new(goal.work_items, &{&1.title, &1})
+
+    assert Enum.map(goal.work_items, & &1.repository_resource_id) |> Enum.sort() ==
              [consumer_repository.id, source_repository.id]
+
+    assert Repo.one!(
+             from(dependency in WorkDependency,
+               where: dependency.work_item_id == ^items_by_title["Consumer work"].id,
+               select: dependency.depends_on_id
+             )
+           ) == items_by_title["Source work"].id
   end
 
   test "amended planning Task results remain historical and do not create current authorization" do
@@ -501,7 +502,7 @@ defmodule SymmetryControl.Goals.CommandsFlowTest do
       ])
       |> Map.put(:expected_revision, task.goal_revision)
 
-    put_task_result!(run, task_result(task, "plan_proposed", %{proposal: proposal}))
+    put_run_task_result!(run, task_result(task, "plan_proposed", %{proposal: proposal}))
 
     assert {:ok, receipt} = Goals.settle_task(task.id, run.id, 1, now: @now)
     assert receipt["settlement"] == "historical_result"
@@ -699,15 +700,7 @@ defmodule SymmetryControl.Goals.CommandsFlowTest do
 
   test "Goal control retry recovers a committed runless cancellation before settlement" do
     {goal, _item, task} = admitted_task_fixture()
-    previous_goals = Application.fetch_env!(:symmetry_control, :goals)
-
-    Application.put_env(
-      :symmetry_control,
-      :goals,
-      Keyword.put(previous_goals, :rollout_enabled, true)
-    )
-
-    on_exit(fn -> Application.put_env(:symmetry_control, :goals, previous_goals) end)
+    enable_rollout!()
 
     assert {:ok, cancelled, :created} = command_current(goal.id, "cancel", %{reason: "stop"})
     action_id = cancelled.response["control_action_id"]
@@ -740,45 +733,12 @@ defmodule SymmetryControl.Goals.CommandsFlowTest do
 
     assert :ok = GoalControlWorker.perform(job)
 
-    assert Repo.one!(
-             from(reservation in SymmetryControl.Goals.GoalBudgetReservation,
-               where: reservation.task_id == ^task.id
-             )
-           ).state == "released"
-
-    assert unstarted_settlement_event_count(goal.id, task.id) == 1
-
-    assert 1 ==
-             Repo.aggregate(
-               from(command in SymmetryControl.Orchestration.Command,
-                 where: command.task_id == ^task.id
-               ),
-               :count
-             )
-
-    refute Repo.exists?(from(run in Run, where: run.task_id == ^task.id))
-
-    refute Repo.exists?(
-             from(outcome in SymmetryControl.Goals.WorkOutcome,
-               where: outcome.producing_task_id == ^task.id
-             )
-           )
-
-    assert :ok = GoalControlWorker.perform(job)
-    assert unstarted_settlement_event_count(goal.id, task.id) == 1
+    assert_runless_cancellation_landed!(goal, task, job)
   end
 
   test "Goal resume waits for an old amendment cancellation to settle" do
     {goal, _item, task} = admitted_task_fixture()
-    previous_goals = Application.fetch_env!(:symmetry_control, :goals)
-
-    Application.put_env(
-      :symmetry_control,
-      :goals,
-      Keyword.put(previous_goals, :rollout_enabled, true)
-    )
-
-    on_exit(fn -> Application.put_env(:symmetry_control, :goals, previous_goals) end)
+    enable_rollout!()
 
     assert {:ok, amended, :created} =
              command_current(goal.id, "amend", %{
@@ -830,15 +790,7 @@ defmodule SymmetryControl.Goals.CommandsFlowTest do
 
   test "later Goal control work recovers a historical runless cancellation" do
     {goal, _item, task} = admitted_task_fixture()
-    previous_goals = Application.fetch_env!(:symmetry_control, :goals)
-
-    Application.put_env(
-      :symmetry_control,
-      :goals,
-      Keyword.put(previous_goals, :rollout_enabled, true)
-    )
-
-    on_exit(fn -> Application.put_env(:symmetry_control, :goals, previous_goals) end)
+    enable_rollout!()
 
     assert {:ok, first_amendment, :created} =
              command_current(goal.id, "amend", %{
@@ -882,32 +834,7 @@ defmodule SymmetryControl.Goals.CommandsFlowTest do
 
     assert :ok = GoalControlWorker.perform(job)
 
-    assert Repo.one!(
-             from(reservation in SymmetryControl.Goals.GoalBudgetReservation,
-               where: reservation.task_id == ^task.id
-             )
-           ).state == "released"
-
-    assert unstarted_settlement_event_count(goal.id, task.id) == 1
-
-    assert 1 ==
-             Repo.aggregate(
-               from(command in SymmetryControl.Orchestration.Command,
-                 where: command.task_id == ^task.id
-               ),
-               :count
-             )
-
-    refute Repo.exists?(from(run in Run, where: run.task_id == ^task.id))
-
-    refute Repo.exists?(
-             from(outcome in SymmetryControl.Goals.WorkOutcome,
-               where: outcome.producing_task_id == ^task.id
-             )
-           )
-
-    assert :ok = GoalControlWorker.perform(job)
-    assert unstarted_settlement_event_count(goal.id, task.id) == 1
+    assert_runless_cancellation_landed!(goal, task, job)
   end
 
   test "control recovery selects pending actions after more than one page of terminal no-op Goals" do
@@ -1017,7 +944,7 @@ defmodule SymmetryControl.Goals.CommandsFlowTest do
 
     automatic_policy = %{
       "automatic_execution" => true,
-      "max_parallel_tasks" => 3,
+      "max_parallel_tasks" => 2,
       "max_task_admissions" => 3,
       "allowed_actions" => ["implement"],
       "allowed_resource_ids" => [repository.id],
@@ -1062,7 +989,7 @@ defmodule SymmetryControl.Goals.CommandsFlowTest do
                validation_profiles: validation_profiles()
              )
 
-    assert Enum.count(admissions, &(&1.disposition == :admitted)) == 3
+    assert Enum.count(admissions, &(&1.disposition == :admitted)) == 2
 
     assert Enum.all?(
              Enum.filter(admissions, &(&1.disposition == :admitted)),
@@ -1070,18 +997,18 @@ defmodule SymmetryControl.Goals.CommandsFlowTest do
            )
 
     assert Repo.aggregate(from(task in Task, where: task.goal_id == ^created.goal.id), :count) ==
-             3
+             2
 
     assert Repo.aggregate(
              from(task in Task,
                where: task.goal_id == ^created.goal.id and task.state == "queued"
              ),
              :count
-           ) == 3
+           ) == 2
 
     set_goal_due!(created.goal.id)
 
-    assert {:ok, [%{disposition: :noop}]} =
+    assert {:ok, [%{disposition: :deferred, reason: "admission_capacity_unavailable"}]} =
              Goals.reconcile_due_goals(
                goal_ids: [created.goal.id],
                now: @now,
@@ -1090,7 +1017,7 @@ defmodule SymmetryControl.Goals.CommandsFlowTest do
              )
 
     assert Repo.aggregate(from(task in Task, where: task.goal_id == ^created.goal.id), :count) ==
-             3
+             2
   end
 
   test "resume admission accepts a verified available session while its runtime is offline" do
@@ -1355,7 +1282,7 @@ defmodule SymmetryControl.Goals.CommandsFlowTest do
              command_current(
                created.goal.id,
                "admit_task",
-               admission_payload(item, %{reserved_microusd: 42}),
+               admission_payload(item),
                rollout_enabled: true
              )
 
@@ -1392,13 +1319,7 @@ defmodule SymmetryControl.Goals.CommandsFlowTest do
 
     decision_id = decision.response["decision"]["id"]
 
-    assert {:ok, _resolved, :created} =
-             command_current(goal_id, "resolve_decision", %{
-               decision_id: decision_id,
-               expected_decision_version:
-                 Repo.get!(SymmetryControl.Goals.GoalDecision, decision_id).lock_version,
-               option_id: "accept"
-             })
+    resolve_decision!(goal_id, decision_id)
 
     assert {:error, reason} =
              command_current(
@@ -1417,34 +1338,35 @@ defmodule SymmetryControl.Goals.CommandsFlowTest do
     reason
   end
 
-  defp plan_runtime_fixture(repository) do
-    machine =
-      %Machine{}
-      |> Machine.changeset(%{
-        name: "plan-machine-#{System.unique_integer([:positive])}",
-        token_digest: :crypto.strong_rand_bytes(32)
-      })
-      |> Repo.insert!()
+  defp plan_runtime_fixture(repository),
+    do: runtime_fixture(nil, repository_resource_id: repository.id)
 
-    %Runtime{}
-    |> Runtime.changeset(%{
-      machine_id: machine.id,
-      runtime_key: "plan-runtime-#{System.unique_integer([:positive])}",
-      name: "Plan runtime",
-      daemon_instance_id: Ecto.UUID.generate(),
-      connection_epoch: 1,
-      capacity: 1,
-      agent_profile: "codex",
-      workspace: "primary",
-      repository_resource_id: repository.id,
-      capabilities: %{},
-      harness_kind: "codex",
-      harness_version: "1.0.0",
-      adapter_version: "1.0.0",
-      adapter_protocol_version: 1,
-      status: "online",
-      heartbeat_interval_ms: 5_000
-    })
-    |> Repo.insert!()
+  defp assert_runless_cancellation_landed!(goal, task, job) do
+    assert Repo.one!(
+             from(reservation in SymmetryControl.Goals.GoalBudgetReservation,
+               where: reservation.task_id == ^task.id
+             )
+           ).state == "released"
+
+    assert unstarted_settlement_event_count(goal.id, task.id) == 1
+
+    assert 1 ==
+             Repo.aggregate(
+               from(command in SymmetryControl.Orchestration.Command,
+                 where: command.task_id == ^task.id
+               ),
+               :count
+             )
+
+    refute Repo.exists?(from(run in Run, where: run.task_id == ^task.id))
+
+    refute Repo.exists?(
+             from(outcome in SymmetryControl.Goals.WorkOutcome,
+               where: outcome.producing_task_id == ^task.id
+             )
+           )
+
+    assert :ok = GoalControlWorker.perform(job)
+    assert unstarted_settlement_event_count(goal.id, task.id) == 1
   end
 end

@@ -89,7 +89,7 @@ defmodule SymmetryControl.Goals.ReconciliationInterfaceTest do
     {goal, item, task} = admitted_task_fixture()
     runtime = runtime_fixture()
     {run, _fence} = completed_goal_run_fixture(task, runtime)
-    put_task_result!(run, task_result(task, "progress"))
+    put_run_task_result!(run, task_result(task, "progress"))
 
     assert {:ok, %{"settlement" => "progress"}} =
              Goals.settle_task(task.id, run.id, 1, now: @now)

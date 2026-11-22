@@ -51,6 +51,17 @@ defmodule SymmetryControl.Goals.PlanContractsInterfaceTest do
              []
            )
 
+    unknown_profile = %{
+      "schema_version" => "symmetry.acceptance.v1",
+      "description" => "An independent check must pass.",
+      "predicates" => [%{"id" => "check", "kind" => "check", "validator_profile" => "absent"}]
+    }
+
+    refute PlanContracts.plan_admission_preflight?(
+             [plan_item("only", resource_id, %{acceptance: unknown_profile})],
+             []
+           )
+
     refute PlanContracts.plan_admission_preflight?(
              [
                plan_item("first", resource_id, %{depends_on_keys: ["missing"]})

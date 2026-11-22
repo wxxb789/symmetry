@@ -20,6 +20,19 @@ defmodule SymmetryControl.Goals.AdmissionInterfaceTest do
 
   setup :put_goal_validation_profiles
 
+  defp task_admission_payload(item, admission_key) do
+    %{
+      work_item_id: item.id,
+      purpose: "implement",
+      model_profile: "codex",
+      session_mode: "fresh",
+      requested_session_id: nil,
+      validation_of_task_id: nil,
+      admission_key: admission_key,
+      subject: candidate_subject(item_repository_resource_id(item))
+    }
+  end
+
   test "admit_plan_items!/3 pins the admitted revision, membership and baseline" do
     project = project_fixture()
     repository = repository_fixture(project)
@@ -61,16 +74,7 @@ defmodule SymmetryControl.Goals.AdmissionInterfaceTest do
     admission_key = Ecto.UUID.generate()
     subject = candidate_subject(item_repository_resource_id(item))
 
-    payload = %{
-      work_item_id: item.id,
-      purpose: "implement",
-      model_profile: "codex",
-      session_mode: "fresh",
-      requested_session_id: nil,
-      validation_of_task_id: nil,
-      admission_key: admission_key,
-      subject: subject
-    }
+    payload = task_admission_payload(item, admission_key)
 
     # admit_task!/6 is private; its only public admission wrapper runs it.
     assert {:ok, task} =
@@ -159,18 +163,7 @@ defmodule SymmetryControl.Goals.AdmissionInterfaceTest do
 
   test "admit_authorized_task!/6 rechecks item admissibility before one admission" do
     {goal, [item]} = goal_with_items_fixture(%{})
-    subject = candidate_subject(item_repository_resource_id(item))
-
-    payload = %{
-      work_item_id: item.id,
-      purpose: "implement",
-      model_profile: "codex",
-      session_mode: "fresh",
-      requested_session_id: nil,
-      validation_of_task_id: nil,
-      admission_key: Ecto.UUID.generate(),
-      subject: subject
-    }
+    payload = task_admission_payload(item, Ecto.UUID.generate())
 
     assert {:error, :stale_revision} =
              Repo.transaction(fn ->
@@ -291,6 +284,23 @@ defmodule SymmetryControl.Goals.AdmissionInterfaceTest do
     assert Admission.goal_predicate_matches_evidence?(
              %{"id" => "check", "kind" => "check", "validator_profile" => "test-review"},
              evidence
+           ) == false
+
+    review_evidence = %{
+      evidence
+      | kind: "review",
+        validator_profile: "test",
+        payload: Map.put(evidence.payload, "verdict", evidence.verdict)
+    }
+
+    assert Admission.goal_predicate_matches_evidence?(
+             %{"id" => "review", "kind" => "review", "reviewer_profile" => "test"},
+             review_evidence
+           ) == true
+
+    assert Admission.goal_predicate_matches_evidence?(
+             %{"id" => "review", "kind" => "review", "reviewer_profile" => "test-review"},
+             review_evidence
            ) == false
 
     assert Admission.goal_predicate_matches_evidence?(

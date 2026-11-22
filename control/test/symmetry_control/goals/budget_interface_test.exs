@@ -15,15 +15,19 @@ defmodule SymmetryControl.Goals.BudgetInterfaceTest do
 
   setup :put_goal_validation_profiles
 
+  defp strict_execution_policy do
+    %{
+      "budget_mode" => "strict",
+      "budget_limit_microusd" => 1_000,
+      "per_run_cost_limit_microusd" => 10,
+      "hard_cost_limit_required" => true
+    }
+  end
+
   test "budget_status/3 counts a held strict reservation against the total limit" do
     {goal, _item, task} =
       admitted_task_fixture("primary", check_contract(), %{
-        execution_policy: %{
-          "budget_mode" => "strict",
-          "budget_limit_microusd" => 1_000,
-          "per_run_cost_limit_microusd" => 10,
-          "hard_cost_limit_required" => true
-        }
+        execution_policy: strict_execution_policy()
       })
 
     assert Repo.one!(
@@ -93,13 +97,7 @@ defmodule SymmetryControl.Goals.BudgetInterfaceTest do
                 "max_cost_microusd" => nil
               }, nil, %{}}
 
-    {strict_goal, _items} =
-      goal_with_items_fixture(%{
-        "budget_mode" => "strict",
-        "budget_limit_microusd" => 1_000,
-        "per_run_cost_limit_microusd" => 10,
-        "hard_cost_limit_required" => true
-      })
+    {strict_goal, _items} = goal_with_items_fixture(strict_execution_policy())
 
     strict_revision = Internal.current_revision!(strict_goal)
 
@@ -117,13 +115,7 @@ defmodule SymmetryControl.Goals.BudgetInterfaceTest do
 
     assert Budget.ensure_resume_budget!(soft_goal, soft_revision) == nil
 
-    {strict_goal, _items} =
-      goal_with_items_fixture(%{
-        "budget_mode" => "strict",
-        "budget_limit_microusd" => 1_000,
-        "per_run_cost_limit_microusd" => 10,
-        "hard_cost_limit_required" => true
-      })
+    {strict_goal, _items} = goal_with_items_fixture(strict_execution_policy())
 
     strict_revision = Internal.current_revision!(strict_goal)
 

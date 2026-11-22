@@ -114,7 +114,7 @@ defmodule SymmetryControl.Goals.RunFenceFlowTest do
              command_current(
                goal.id,
                "admit_task",
-               admission_payload(revised_item, %{reserved_microusd: 1}),
+               admission_payload(revised_item),
                rollout_enabled: true
              )
   end
@@ -509,7 +509,7 @@ defmodule SymmetryControl.Goals.RunFenceFlowTest do
                now: @now
              )
 
-    put_task_result!(
+    put_run_task_result!(
       validation_run,
       task_result(validation, "failed", %{"reason" => "network"})
     )
@@ -544,7 +544,7 @@ defmodule SymmetryControl.Goals.RunFenceFlowTest do
                now: @now
              )
 
-    put_task_result!(
+    put_run_task_result!(
       validation_run,
       task_result(validation, "candidate_completion", %{"subject" => evidence_subject(item)})
     )
@@ -1044,7 +1044,7 @@ defmodule SymmetryControl.Goals.RunFenceFlowTest do
              command_current(
                goal.id,
                "admit_task",
-               admission_payload(item, %{reserved_microusd: 1}),
+               admission_payload(item),
                rollout_enabled: true
              )
   end
@@ -1237,8 +1237,7 @@ defmodule SymmetryControl.Goals.RunFenceFlowTest do
                "admit_task",
                admission_payload(item, %{
                  purpose: "validate",
-                 validation_of_task_id: producer.id,
-                 reserved_microusd: 0
+                 validation_of_task_id: producer.id
                }),
                rollout_enabled: true
              )

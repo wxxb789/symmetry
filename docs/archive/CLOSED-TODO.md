@@ -3193,9 +3193,10 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
       (`frontend/src/features/goals/detail.tsx:124`), the page's last settled read, while its sibling
       senders re-read at submit through `servedEnvelope` (`:77`, used by the generic command `:86` and by
       the plan admission `:129`), so a Goal advance between the last settled read and the press makes
-      `ensure_preconditions!/2` (`control/lib/symmetry_control/goals.ex:8571-8585`) answer 409 `stale`
-      (`control/lib/symmetry_control_web/protocol.ex:33`) and the card renders "The goal changed since
-      this page loaded" (`detail.tsx:187`) for an action the operator would simply repeat. The writer
+      `ensure_preconditions!/2` (`control/lib/symmetry_control/goals/events_receipts.ex:347-363`)
+      answer 409 `stale` (`control/lib/symmetry_control_web/protocol.ex:33`) and the card renders
+      "The goal changed since this page loaded" (`detail.tsx:187`) for an action the operator would
+      simply repeat. The writer
       that advances the Goal row's `lock_version` is identified, which settles the reachability half of
       the original note: every accepted command appends an event through `append_event!/7`
       (`goals.ex:8308`, explicit `Changeset.optimistic_lock(:lock_version)` at `:8359`), the transition

@@ -10,7 +10,9 @@ defmodule SymmetryControl.Goals.CommandsInterfaceTest do
   alias SymmetryControl.Goals.GoalDecision
   alias SymmetryControl.Goals.GoalEvent
   alias SymmetryControl.Goals.GoalRevision
+  alias SymmetryControl.Goals.Internal
   alias SymmetryControl.Repo
+  alias SymmetryControl.RequestHash
 
   @now ~U[2026-09-09 00:00:00.000000Z]
 
@@ -205,5 +207,37 @@ defmodule SymmetryControl.Goals.CommandsInterfaceTest do
            }
 
     assert Commands.canonical_plan_proposal("not-a-map") == "not-a-map"
+  end
+
+  test "RequestHash.canonical and the plan action hash freeze their output bytes" do
+    subject = %{
+      "resource_id" => "subject-resource",
+      "commit" => String.duplicate("a", 40),
+      "tree_digest" => "sha256:" <> String.duplicate("b", 64)
+    }
+
+    assert "sha256:" <> Base.encode16(RequestHash.canonical(subject), case: :lower) ==
+             "sha256:ed97b1a071d44c4226742e2b3c252d5212c92203a04c771f83daa3cc21bae490"
+
+    proposal = %{"schema_version" => "symmetry.plan.v1", "items" => [%{"key" => "frozen"}]}
+    proposal_hash = RequestHash.canonical(proposal)
+
+    assert "sha256:" <> Base.encode16(proposal_hash, case: :lower) ==
+             "sha256:2a41c1318ed6f20faa9bd0c8c3201bc89fa03e9d39a0ff88ed5f5075804ed886"
+
+    goal = %Goal{id: "00000000-0000-4000-8000-0000000000f3", current_revision: 3}
+
+    assert "sha256:" <>
+             Base.encode16(Internal.plan_action_hash(goal, proposal_hash), case: :lower) ==
+             "sha256:ca23d54c587954a85430d6895c0d4fc4700c204fd86cb2b74919bff8d152e51d"
+
+    assert Base.encode16(
+             RequestHash.canonical(%{
+               b: 1,
+               a: [true, nil, "x"],
+               at: ~U[2026-09-09 00:00:00.000000Z]
+             }),
+             case: :lower
+           ) == "337f9f734ddaf8af630b720453dc1bc8d2f0d8de57863a0c327e0a3c1ec2116c"
   end
 end

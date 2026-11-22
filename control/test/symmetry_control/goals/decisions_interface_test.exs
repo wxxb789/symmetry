@@ -15,18 +15,28 @@ defmodule SymmetryControl.Goals.DecisionsInterfaceTest do
 
   @now ~U[2026-09-09 00:00:00.000000Z]
 
+  use SymmetryControl.TestFixtures,
+    command_opts: [now: @now, validation_profiles: validation_profiles()]
+
   setup :put_goal_validation_profiles
 
   defp command!(goal_id, kind, payload, opts \\ []) do
-    assert {:ok, receipt, :created} =
-             Goals.command(
-               goal_id,
-               goal_command(fetch_goal!(goal_id), kind, payload),
-               "operator:test",
-               Keyword.merge([now: @now], opts)
-             )
-
+    assert {:ok, receipt, :created} = command_current(goal_id, kind, payload, opts)
     receipt
+  end
+
+  defp planned_item(repository) do
+    %{
+      key: "planned-work",
+      title: "Planned work",
+      description: "Remain pending explicit operator approval.",
+      required: true,
+      repository_resource_id: repository.id,
+      acceptance: check_contract(),
+      depends_on_keys: [],
+      model_profile: "codex",
+      baseline: baseline_subject(repository.id)
+    }
   end
 
   test "decision_request!/6 hashes the plan proposal pre-image and asks the plan question" do
@@ -38,20 +48,7 @@ defmodule SymmetryControl.Goals.DecisionsInterfaceTest do
 
     goal = Repo.get!(Goal, created.goal.id)
 
-    proposal =
-      plan_proposal(goal.id, [
-        %{
-          key: "planned-work",
-          title: "Planned work",
-          description: "Remain pending explicit operator approval.",
-          required: true,
-          repository_resource_id: repository.id,
-          acceptance: check_contract(),
-          depends_on_keys: [],
-          model_profile: "codex",
-          baseline: baseline_subject(repository.id)
-        }
-      ])
+    proposal = plan_proposal(goal.id, [planned_item(repository)])
 
     expected_action_hash =
       RequestHash.canonical(%{
@@ -100,11 +97,7 @@ defmodule SymmetryControl.Goals.DecisionsInterfaceTest do
     assert Decisions.unresolved_decisions?(goal_id, 1)
     refute Decisions.unresolved_decisions?(goal_id, 2)
 
-    command!(goal_id, "resolve_decision", %{
-      decision_id: decision_id,
-      expected_decision_version: Repo.get!(GoalDecision, decision_id).lock_version,
-      option_id: "accept"
-    })
+    resolve_decision!(goal_id, decision_id)
 
     refute Decisions.unresolved_decisions?(goal_id, 1)
   end
@@ -167,33 +160,26 @@ defmodule SymmetryControl.Goals.DecisionsInterfaceTest do
     decision_receipt =
       command!(goal_id, "request_decision", %{
         kind: "plan",
-        proposal:
-          plan_proposal(goal_id, [
-            %{
-              key: "planned-work",
-              title: "Planned work",
-              description: "Remain pending explicit operator approval.",
-              required: true,
-              repository_resource_id: repository.id,
-              acceptance: check_contract(),
-              depends_on_keys: [],
-              model_profile: "codex",
-              baseline: baseline_subject(repository.id)
-            }
-          ])
+        proposal: plan_proposal(goal_id, [planned_item(repository)])
       })
 
     decision_id = decision_receipt.response["decision"]["id"]
 
     assert Decisions.plan_decision_pending_acceptance?(Repo.get!(Goal, goal_id))
 
-    command!(goal_id, "resolve_decision", %{
-      decision_id: decision_id,
-      expected_decision_version: Repo.get!(GoalDecision, decision_id).lock_version,
-      option_id: "reject"
-    })
+    resolve_decision!(goal_id, decision_id, "reject")
 
     refute Decisions.plan_decision_pending_acceptance?(Repo.get!(Goal, goal_id))
+
+    accepted_receipt =
+      command!(goal_id, "request_decision", %{
+        kind: "plan",
+        proposal: plan_proposal(goal_id, [planned_item(repository)])
+      })
+
+    resolve_decision!(goal_id, accepted_receipt.response["decision"]["id"])
+
+    assert Decisions.plan_decision_pending_acceptance?(Repo.get!(Goal, goal_id))
   end
 
   test "planning_acceptance_contract/0 is the operator-acceptance contract for proposed plans" do
@@ -217,11 +203,7 @@ defmodule SymmetryControl.Goals.DecisionsInterfaceTest do
 
     decision_id = decision_receipt.response["decision"]["id"]
 
-    command!(goal_projection.id, "resolve_decision", %{
-      decision_id: decision_id,
-      expected_decision_version: Repo.get!(GoalDecision, decision_id).lock_version,
-      option_id: "accept"
-    })
+    resolve_decision!(goal_projection.id, decision_id)
 
     goal = Repo.get!(Goal, goal_projection.id)
 
@@ -260,11 +242,7 @@ defmodule SymmetryControl.Goals.DecisionsInterfaceTest do
 
     decision_id = decision_receipt.response["decision"]["id"]
 
-    command!(goal_id, "resolve_decision", %{
-      decision_id: decision_id,
-      expected_decision_version: Repo.get!(GoalDecision, decision_id).lock_version,
-      option_id: "accept"
-    })
+    resolve_decision!(goal_id, decision_id)
 
     goal = Repo.get!(Goal, goal_id)
 

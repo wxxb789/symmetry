@@ -20,6 +20,27 @@ defmodule SymmetryControl.Goals.ContextAssemblyInterfaceTest do
   @now ~U[2026-09-09 00:00:00.000000Z]
   @observed_at "2026-09-09T00:00:00.000000Z"
 
+  defp approved_goal_document(goal, revision) do
+    %{
+      "goal_id" => goal.id,
+      "revision" => revision.revision,
+      "objective" => revision.objective,
+      "authority_policy" => revision.authority_policy
+    }
+  end
+
+  defp assert_current_decisions(document, goal) do
+    [decision] = Repo.all(from(row in GoalDecision, where: row.goal_id == ^goal.id))
+
+    assert document["current_decisions"] == [
+             %{
+               "decision_id" => decision.id,
+               "action_hash" => ContextAssembly.context_digest(decision.action_hash),
+               "state" => "resolved"
+             }
+           ]
+  end
+
   test "context_digest/1 renders a raw sha256 digest and passes through a wire digest" do
     wire = "sha256:3781049acb7fd5d7de257b5522345fccce1e56f50ea02589ab65256ed359f37f"
 
@@ -131,12 +152,7 @@ defmodule SymmetryControl.Goals.ContextAssemblyInterfaceTest do
         nil
       )
 
-    approved_goal = %{
-      "goal_id" => goal.id,
-      "revision" => 1,
-      "objective" => revision.objective,
-      "authority_policy" => revision.authority_policy
-    }
+    approved_goal = approved_goal_document(goal, revision)
 
     work_contract = %{
       "title" => "Plan the approved Goal",
@@ -231,15 +247,7 @@ defmodule SymmetryControl.Goals.ContextAssemblyInterfaceTest do
              }
            ]
 
-    [decision] = Repo.all(from(row in GoalDecision, where: row.goal_id == ^goal.id))
-
-    assert document["current_decisions"] == [
-             %{
-               "decision_id" => decision.id,
-               "action_hash" => ContextAssembly.context_digest(decision.action_hash),
-               "state" => "resolved"
-             }
-           ]
+    assert_current_decisions(document, goal)
 
     assert document["size"]["byte_budget"] == 32_768
     assert document["size"]["token_estimate"] == nil
@@ -282,12 +290,7 @@ defmodule SymmetryControl.Goals.ContextAssemblyInterfaceTest do
         nil
       )
 
-    approved_goal = %{
-      "goal_id" => goal.id,
-      "revision" => 1,
-      "objective" => revision.objective,
-      "authority_policy" => revision.authority_policy
-    }
+    approved_goal = approved_goal_document(goal, revision)
 
     work_contract = %{
       "title" => item.title,
@@ -297,6 +300,26 @@ defmodule SymmetryControl.Goals.ContextAssemblyInterfaceTest do
       "validation_bindings" => bindings,
       "change_target" => item.change_target
     }
+
+    assert Map.keys(document) |> Enum.sort() == [
+             "advisory_recall",
+             "approved_goal",
+             "content_hash",
+             "created_at",
+             "current_decisions",
+             "failed_attempts",
+             "goal_id",
+             "goal_revision",
+             "next_action",
+             "schema_version",
+             "size",
+             "snapshot_id",
+             "sources",
+             "subject",
+             "validated_evidence",
+             "work_contract",
+             "work_item_id"
+           ]
 
     assert document["schema_version"] == "symmetry.context_snapshot.v1"
     assert document["snapshot_id"] == snapshot_id
@@ -363,15 +386,7 @@ defmodule SymmetryControl.Goals.ContextAssemblyInterfaceTest do
              }
            ]
 
-    [decision] = Repo.all(from(row in GoalDecision, where: row.goal_id == ^goal.id))
-
-    assert document["current_decisions"] == [
-             %{
-               "decision_id" => decision.id,
-               "action_hash" => ContextAssembly.context_digest(decision.action_hash),
-               "state" => "resolved"
-             }
-           ]
+    assert_current_decisions(document, goal)
 
     assert document["size"]["byte_budget"] == 32_768
     assert document["size"]["token_estimate"] == nil

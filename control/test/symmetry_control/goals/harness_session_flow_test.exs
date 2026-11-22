@@ -15,8 +15,6 @@ defmodule SymmetryControl.Goals.HarnessSessionFlowTest do
   alias SymmetryControl.Repo
 
   @now ~U[2026-09-09 00:00:00.000000Z]
-  @validation_runtime_id "00000000-0000-4000-8000-000000000001"
-  @validation_profile_digest "sha256:" <> String.duplicate("c", 64)
 
   use SymmetryControl.TestFixtures,
     command_opts: [now: @now, validation_profiles: validation_profiles()]
@@ -59,39 +57,7 @@ defmodule SymmetryControl.Goals.HarnessSessionFlowTest do
       ]
     }
 
-    assert {:ok, plan_decision, :created} =
-             command_current(created.goal.id, "request_decision", %{
-               kind: "plan",
-               question: "Accept this bounded plan?",
-               options: [
-                 %{"id" => "accept", "label" => "Accept", "consequence" => "Admit the items"}
-               ],
-               proposal: proposal
-             })
-
-    plan_decision_id = plan_decision.response["decision"]["id"]
-
-    assert {:ok, _resolved, :created} =
-             command_current(created.goal.id, "resolve_decision", %{
-               decision_id: plan_decision_id,
-               expected_decision_version:
-                 Repo.get!(SymmetryControl.Goals.GoalDecision, plan_decision_id).lock_version,
-               option_id: "accept"
-             })
-
-    assert {:ok, _planned, :created} =
-             command_current(
-               created.goal.id,
-               "accept_plan",
-               %{
-                 proposal: proposal,
-                 proposal_hash:
-                   "sha256:" <>
-                     Base.encode16(SymmetryControl.RequestHash.canonical(proposal), case: :lower),
-                 decision_id: plan_decision_id
-               },
-               rollout_enabled: true
-             )
+    accept_plan!(created.goal.id, proposal)
 
     items_by_title = Map.new(fetch_goal!(created.goal.id).work_items, &{&1.title, &1})
     first = Map.fetch!(items_by_title, "first work")
@@ -111,13 +77,7 @@ defmodule SymmetryControl.Goals.HarnessSessionFlowTest do
 
     scope_decision_id = scope_decision.response["decision"]["id"]
 
-    assert {:ok, _resolved, :created} =
-             command_current(created.goal.id, "resolve_decision", %{
-               decision_id: scope_decision_id,
-               expected_decision_version:
-                 Repo.get!(SymmetryControl.Goals.GoalDecision, scope_decision_id).lock_version,
-               option_id: "accept"
-             })
+    resolve_decision!(created.goal.id, scope_decision_id)
 
     assert {:error, :invalid_decision} =
              command_current(created.goal.id, "add_dependency", %{
@@ -153,13 +113,7 @@ defmodule SymmetryControl.Goals.HarnessSessionFlowTest do
 
     baseline_scope_decision_id = baseline_scope_decision.response["decision"]["id"]
 
-    assert {:ok, _resolved, :created} =
-             command_current(created.goal.id, "resolve_decision", %{
-               decision_id: baseline_scope_decision_id,
-               expected_decision_version:
-                 Repo.get!(SymmetryControl.Goals.GoalDecision, baseline_scope_decision_id).lock_version,
-               option_id: "accept"
-             })
+    resolve_decision!(created.goal.id, baseline_scope_decision_id)
 
     assert {:error, :invalid_plan} =
              command_current(created.goal.id, "remove_dependency", %{

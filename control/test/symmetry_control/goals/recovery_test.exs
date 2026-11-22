@@ -15,7 +15,6 @@ defmodule SymmetryControl.Goals.RecoveryTest do
 
   @now ~U[2026-09-09 00:00:00.000000Z]
   @validation_runtime_id "00000000-0000-4000-8000-000000000001"
-  @validation_profile_digest "sha256:" <> String.duplicate("c", 64)
 
   use SymmetryControl.TestFixtures,
     command_opts: [now: @now, validation_profiles: validation_profiles()]
@@ -239,15 +238,7 @@ defmodule SymmetryControl.Goals.RecoveryTest do
                validation_profiles: validation_profiles()
              )
 
-    previous_goals = Application.fetch_env!(:symmetry_control, :goals)
-
-    Application.put_env(
-      :symmetry_control,
-      :goals,
-      Keyword.put(previous_goals, :rollout_enabled, true)
-    )
-
-    on_exit(fn -> Application.put_env(:symmetry_control, :goals, previous_goals) end)
+    enable_rollout!()
 
     assert :ok = WakeupWorker.perform(%Oban.Job{args: %{"goal_id" => goal.id}})
     assert :ok = WakeupWorker.perform(%Oban.Job{args: %{"goal_id" => goal.id}})
@@ -392,8 +383,7 @@ defmodule SymmetryControl.Goals.RecoveryTest do
                "admit_task",
                admission_payload(item, %{
                  purpose: "validate",
-                 validation_of_task_id: producer.id,
-                 reserved_microusd: 0
+                 validation_of_task_id: producer.id
                }),
                rollout_enabled: true
              )

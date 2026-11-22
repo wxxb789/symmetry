@@ -64,7 +64,6 @@ defmodule SymmetryControl.Goals.HandoffInterfaceTest do
       evidence_ids: []
     }
 
-    # The validate clause reads only the payload and the source identity.
     assert Handoff.handoff_admission_subject!(
              nil,
              nil,
@@ -109,17 +108,8 @@ defmodule SymmetryControl.Goals.HandoffInterfaceTest do
     {_goal, item, _task} = admitted_task_fixture()
     runtime = runtime_fixture()
 
-    Repo.update_all(
-      from(row in Runtime, where: row.id == ^runtime.id),
-      set: [capabilities: %{"adapter" => %{"operations" => %{"resume" => true}}}]
-    )
-
-    retained = available_session_fixture(runtime, item, session_attrs(item, "workspace-handoff"))
-
-    unverified =
-      available_session_fixture(runtime, item, session_attrs(item, "workspace-unverified"),
-        binding_verified: false
-      )
+    {retained, unverified} =
+      resume_capable_sessions!(runtime, item, "workspace-handoff", "workspace-unverified")
 
     assert :ok = Handoff.ensure_requested_session_available!(item, nil, "fresh")
 
@@ -139,17 +129,8 @@ defmodule SymmetryControl.Goals.HandoffInterfaceTest do
     resource = Repo.get!(ProjectResource, item_repository_resource_id(item))
     runtime = runtime_fixture()
 
-    Repo.update_all(
-      from(row in Runtime, where: row.id == ^runtime.id),
-      set: [capabilities: %{"adapter" => %{"operations" => %{"resume" => true}}}]
-    )
-
-    retained = available_session_fixture(runtime, item, session_attrs(item, "workspace-plan"))
-
-    unverified =
-      available_session_fixture(runtime, item, session_attrs(item, "workspace-plan-unverified"),
-        binding_verified: false
-      )
+    {retained, unverified} =
+      resume_capable_sessions!(runtime, item, "workspace-plan", "workspace-plan-unverified")
 
     assert :ok = Handoff.ensure_plan_requested_session_available!(resource, nil, "fresh")
 
@@ -162,5 +143,21 @@ defmodule SymmetryControl.Goals.HandoffInterfaceTest do
              Repo.transaction(fn ->
                Handoff.ensure_plan_requested_session_available!(resource, unverified.id, "resume")
              end)
+  end
+
+  defp resume_capable_sessions!(runtime, item, workspace, unverified_workspace) do
+    Repo.update_all(
+      from(row in Runtime, where: row.id == ^runtime.id),
+      set: [capabilities: %{"adapter" => %{"operations" => %{"resume" => true}}}]
+    )
+
+    retained = available_session_fixture(runtime, item, session_attrs(item, workspace))
+
+    unverified =
+      available_session_fixture(runtime, item, session_attrs(item, unverified_workspace),
+        binding_verified: false
+      )
+
+    {retained, unverified}
   end
 end

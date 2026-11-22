@@ -6,6 +6,9 @@ defmodule SymmetryControl.Goals.CommandsTest do
   import SymmetryControl.GoalsTestSupport
 
   alias SymmetryControl.Goals
+  alias SymmetryControl.Goals.Budget
+  alias SymmetryControl.Goals.Goal
+  alias SymmetryControl.Goals.Internal
   alias SymmetryControl.Orchestration.Task
   alias SymmetryControl.Repo
   alias SymmetryControl.Workspaces
@@ -13,7 +16,6 @@ defmodule SymmetryControl.Goals.CommandsTest do
 
   @now ~U[2026-09-09 00:00:00.000000Z]
   @validation_runtime_id "00000000-0000-4000-8000-000000000001"
-  @validation_profile_digest "sha256:" <> String.duplicate("c", 64)
 
   use SymmetryControl.TestFixtures,
     command_opts: [now: @now, validation_profiles: validation_profiles()]
@@ -100,7 +102,7 @@ defmodule SymmetryControl.Goals.CommandsTest do
 
     assert {:ok, receipt, :created} = Goals.command(goal_id, command, "operator:test", now: @now)
     assert Repo.get!(SymmetryControl.Goals.GoalEvent, receipt.event.id).request_hash_version == 2
-    assert String.starts_with?(receipt.response["decision"]["action_hash"], "sha256:")
+    assert receipt.response["decision"]["action_hash"] =~ ~r/^sha256:[0-9a-f]{64}$/
 
     assert {:error, {:stale, %{current_revision: 1, current_version: _}}} =
              Goals.command(
@@ -489,7 +491,12 @@ defmodule SymmetryControl.Goals.CommandsTest do
                now: @now
              )
 
+    goal = Repo.get!(Goal, created.goal.id)
+    revision = Internal.current_revision!(goal)
+
     assert fetch_goal!(created.goal.id).revision.execution_policy["budget_limit_microusd"] == "42"
+    assert Budget.budget_status(goal, revision, 42) == :ok
+    assert Budget.budget_status(goal, revision, 43) == {:error, :budget_exhausted}
   end
 
   test "revision validation rejects duplicate or unsafe acceptance predicates" do
@@ -855,7 +862,12 @@ defmodule SymmetryControl.Goals.CommandsTest do
     repository = repository_fixture(project)
 
     assert {:ok, created, :created} =
-             Goals.create_goal(project.id, goal_attrs(), "operator:test", now: @now)
+             Goals.create_goal(
+               project.id,
+               goal_attrs(nil, %{"allowed_runtime_ids" => [@validation_runtime_id]}),
+               "operator:test",
+               now: @now
+             )
 
     goal_id = created.goal.id
 
@@ -953,7 +965,7 @@ defmodule SymmetryControl.Goals.CommandsTest do
              command_current(
                goal_id,
                "admit_task",
-               admission_payload(item, %{reserved_microusd: 42}),
+               admission_payload(item),
                rollout_enabled: true
              )
 
@@ -962,8 +974,7 @@ defmodule SymmetryControl.Goals.CommandsTest do
     assert task.goal_id == goal_id
     assert task.goal_revision == 1
 
-    assert task.allowed_runtime_ids ==
-             fetch_goal!(goal_id).revision.execution_policy["allowed_runtime_ids"]
+    assert task.allowed_runtime_ids == [@validation_runtime_id]
 
     assert task.context_snapshot_id
     assert task.admission_key
@@ -1120,13 +1131,7 @@ defmodule SymmetryControl.Goals.CommandsTest do
 
     decision_id = decision.response["decision"]["id"]
 
-    assert {:ok, _resolved, :created} =
-             command_current(created.goal.id, "resolve_decision", %{
-               decision_id: decision_id,
-               expected_decision_version:
-                 Repo.get!(SymmetryControl.Goals.GoalDecision, decision_id).lock_version,
-               option_id: "accept"
-             })
+    resolve_decision!(created.goal.id, decision_id)
 
     assert {:error, :invalid_plan} =
              command_current(
@@ -1211,7 +1216,10 @@ defmodule SymmetryControl.Goals.CommandsTest do
     assert {:ok, created, :created} =
              Goals.create_goal(
                project.id,
-               goal_attrs(nil, %{"max_task_admissions" => 2}),
+               goal_attrs(nil, %{
+                 "max_task_admissions" => 2,
+                 "allowed_runtime_ids" => [@validation_runtime_id]
+               }),
                "operator:test",
                now: @now
              )
@@ -1243,8 +1251,7 @@ defmodule SymmetryControl.Goals.CommandsTest do
     assert task.goal_id == created.goal.id
     assert task.goal_revision == created.goal.current_revision
 
-    assert task.allowed_runtime_ids ==
-             fetch_goal!(created.goal.id).revision.execution_policy["allowed_runtime_ids"]
+    assert task.allowed_runtime_ids == [@validation_runtime_id]
 
     assert task.purpose == "plan"
     assert task.work_item_id == nil
@@ -1397,13 +1404,7 @@ defmodule SymmetryControl.Goals.CommandsTest do
 
     decision_id = decision.response["decision"]["id"]
 
-    assert {:ok, _resolved, :created} =
-             command_current(goal_id, "resolve_decision", %{
-               decision_id: decision_id,
-               expected_decision_version:
-                 Repo.get!(SymmetryControl.Goals.GoalDecision, decision_id).lock_version,
-               option_id: "accept"
-             })
+    resolve_decision!(goal_id, decision_id)
 
     decision_id
   end
