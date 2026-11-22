@@ -18,7 +18,7 @@ Relative paths, URLs and ``sha256:`` digests pass through unchanged, and
 rendering is idempotent - except that a ``file:`` URL or a doubled-slash
 authority spelling is an absolute location, not a URL to spare.
 
-Two render boundaries are disclosed non-fixpoints; `docs/evaluations/model-routing/README.md` names both.
+Three render boundaries are disclosed non-fixpoints; `docs/evaluations/model-routing/README.md` names them.
 
 With ``--root-only`` the renderer flags only host absolute paths: Windows drive
 and UNC roots, a root-relative Windows spelling (``\\Users\\op\\run``, which
