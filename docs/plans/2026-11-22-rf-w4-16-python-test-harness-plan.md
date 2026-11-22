@@ -245,7 +245,7 @@ limit, not as the contract's gate.
 7. **Comment policy.** The new modules carry no docstrings, no banners and no what-comments; the
    only comment added by this slice is the two-line why beside `FixtureRepo`'s configuration block
    (a host's global identity/signing/eol configuration must not decide fixture bytes) plus the
-   two-line why beside the dropped `GIT_*` variables in `citest.git` - both are the "line-level
+   two-line why beside the module-level `GIT_REPOSITORY_VARIABLES` constants in `citest.py` - both are the "line-level
    blast-radius hazard" class the policy allows. In the migrated files the `# -- helpers ---`
    dividers go with the sections they label.
    The migrated files lose the dividers that bracketed deleted blocks: the helpers/tests pairs in

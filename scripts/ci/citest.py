@@ -5,10 +5,8 @@ import os
 import subprocess
 import sys
 
-# An inherited value redirects `-C <repository>` to another repository, worktree, index or
-# object store, points the local configuration at another file, or injects configuration
-# at command scope; the pinned GIT_CONFIG variables are kept because callers pin
-# configuration through them.
+# Inherited values would redirect `-C <repository>` to another repository or config scope;
+# GIT_CONFIG pins stay because callers pin configuration through them.
 GIT_REPOSITORY_VARIABLES = (
     "GIT_DIR",
     "GIT_WORK_TREE",
