@@ -428,3 +428,21 @@ Reruns on the round-2 fix revision `d556d26c04` (portable toolchain recipe,
 `MIX_TEST_PARTITION=rf-w3-03`): format exit 0; `MIX_ENV=test mix compile --warnings-as-errors
 --force` exit 0; the two e2e files 2 passed, 10 skipped, exit 0, 0 `warning:` lines. The full
 suite stays with the conductor gate-runner.
+
+## Comment-policy sweep (2026-11-22)
+
+Module intent removed from `control/test/support/served_document.ex` by the 2026-11-22 comment-policy
+sweep is recorded below (workstream record "ws9a-control-test-support").
+
+3. `served_document.ex` (HEAD 101-106) — `gate_members/3` is the union of the definition's
+   declared members (read from the bundle) and the frontend-read list, so a schema-side rename and
+   a serving-side rename/omission fail the same "stopped serving" message: the assertion cannot
+   stay green while schema, projection and read sites disagree. Recorded in
+   `docs/plans/2026-11-21-served-doc-gates-plan.md:263-269`.
+4. `served_document.ex` (HEAD 116-120) — `declared_members/2` reads the bundle at test time so a
+   rename inside it fails the presence assertion until the projection follows; the bundle
+   comparison alone cannot refuse it because the definitions are `additionalProperties: true` and
+   an optional member may be absent. Recorded in the same plan (:30-31, :263-269).
+
+The sweep's plan is
+[`docs/plans/2026-11-22-comment-policy-sweep-plan.md`](2026-11-22-comment-policy-sweep-plan.md).

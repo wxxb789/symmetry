@@ -1,80 +1,40 @@
-# Credo configuration for the Control application, added with the advisory
-# `mix credo --strict` CI step (refactor slice W1-01). The step does not gate:
-# it prints the strict issue count as a metric, and the count recorded on the
-# pull request is the ratchet baseline the burn-down slices measure against.
-#
-# Provenance: the check list is `mix credo gen.config` output (Credo 1.7.19),
-# with the two contract changes below and the recorded deviations, each with
-# its inline reason. The `checks:` map decides the counted set: an empty
-# `checks: %{}` falls back to Credo's built-in defaults, so the metric shifts
-# silently (measured 459 issues with `%{}` at 1.7.19 at the delivered revision;
-# the earlier audit's 403 came from a Credo that dropped AliasOrder, AliasUsage,
-# PreferImplicitTry, StringSigils and Apply, whose findings at the delivered
-# revision sum to 67). Keep the `enabled`/`disabled` lists explicit; never
-# replace them with `%{}`.
-#
-#   * `Credo.Check.Design.DuplicatedCode` is enabled at `mass_threshold: 40`
-#     (it is opt-in in the generated config, which carries it under
-#     `disabled`); `mass_threshold` is the 1.7 spelling of the threshold, and
-#     40 is also the check's own default, recorded here so the threshold is
-#     visible in the file that decides it.
-#   * `Credo.Check.Readability.MaxLineLength` is tightened from the generated
-#     `max_length: 120` to 98, the line length the repository's `mix format`
-#     configuration and the rest of the tree use.
 %{
   configs: [
     %{
       name: "default",
       files: %{
-        # Deliberate narrowing of the generated template, which also lists
-        # `src/`, `web/` and `apps/*/` paths this application does not have;
-        # this pair is the scope the recorded issue/file count covers.
         included: ["lib/", "test/"],
         excluded: [~r"/_build/", ~r"/deps/", ~r"/node_modules/"]
       },
       plugins: [],
       requires: [],
-      # The CI step passes `--strict`; the config says the same so a bare
-      # `mix credo` cannot under-report the metric.
+      # `--strict` is mirrored from CI so a bare `mix credo` cannot under-report the metric.
       strict: true,
-      # The generated default is 5_000. Credo *skips* a source file that exceeds
-      # this cap and still prints a summary, which silently under-reports the
-      # very count this configuration exists to record: `lib/symmetry_control/
-      # goals.ex` alone is 10,810 lines and was skipped on a loaded host at
-      # 5_000 (measured 288 issues over 148 files against the recorded 516
-      # issues over 153 files). The cap is a hang guard, not a budget, so it
-      # stays generous.
+      # Credo *skips* a source file above this cap and still prints a summary, silently
+      # under-reporting the count; 30000 is a hang guard, not a budget.
       parse_timeout: 30000,
-      # Plain text in the CI log: the step greps the summary line, and colour
-      # escapes would make the extracted counts differ from a local run.
+      # CI greps the summary line; colour escapes would make the counts differ from a local run.
       color: false,
+      # An empty `checks: %{}` falls back to Credo's built-in defaults and silently
+      # shifts the counted set; keep the enabled/disabled lists explicit.
       checks: %{
         enabled: [
-          #
-          ## Consistency Checks
-          #
           {Credo.Check.Consistency.ExceptionNames, []},
           {Credo.Check.Consistency.LineEndings, []},
           {Credo.Check.Consistency.ParameterPatternMatching, []},
           {Credo.Check.Consistency.SpaceAroundOperators, []},
           {Credo.Check.Consistency.SpaceInParentheses, []},
           {Credo.Check.Consistency.TabsOrSpaces, []},
-
-          #
-          ## Design Checks
-          #
           {Credo.Check.Design.AliasUsage,
            [priority: :low, if_nested_deeper_than: 2, if_called_more_often_than: 0]},
+          # Opt-in upstream; `mass_threshold` (Credo 1.7 spelling) 40 is the check default.
           {Credo.Check.Design.DuplicatedCode, [mass_threshold: 40]},
           {Credo.Check.Design.TagFIXME, []},
           {Credo.Check.Design.TagTODO, [exit_status: 2]},
-
-          #
-          ## Readability Checks
-          #
           {Credo.Check.Readability.AliasOrder, []},
           {Credo.Check.Readability.FunctionNames, []},
           {Credo.Check.Readability.LargeNumbers, []},
+          # Tightened from the generated 120 to 98, the repository's `mix format` line length.
           {Credo.Check.Readability.MaxLineLength, [priority: :low, max_length: 98]},
           {Credo.Check.Readability.ModuleAttributeNames, []},
           {Credo.Check.Readability.ModuleDoc, []},
@@ -93,10 +53,6 @@
           {Credo.Check.Readability.UnnecessaryAliasExpansion, []},
           {Credo.Check.Readability.VariableNames, []},
           {Credo.Check.Readability.WithSingleClause, []},
-
-          #
-          ## Refactoring Opportunities
-          #
           {Credo.Check.Refactor.Apply, []},
           {Credo.Check.Refactor.CondStatements, []},
           {Credo.Check.Refactor.CyclomaticComplexity, []},
@@ -113,10 +69,6 @@
           {Credo.Check.Refactor.RejectReject, []},
           {Credo.Check.Refactor.UnlessWithElse, []},
           {Credo.Check.Refactor.WithClauses, []},
-
-          #
-          ## Warnings
-          #
           {Credo.Check.Warning.ApplicationConfigInModuleAttribute, []},
           {Credo.Check.Warning.BoolOperationOnSameValues, []},
           {Credo.Check.Warning.Dbg, []},
@@ -142,11 +94,10 @@
           {Credo.Check.Warning.WrongTestFilename, []}
         ],
         disabled: [
-          # Checks scheduled for the next check update (opt-in for now).
+          # Opt-in upstream, scheduled for the next Credo update.
           {Credo.Check.Refactor.UtcNowTruncate, []},
 
-          # Controversial and experimental checks (opt-in): move a check to
-          # `enabled` when the repository decides to adopt it.
+          # Controversial/experimental upstream checks: opt-in until the repo adopts them.
           {Credo.Check.Consistency.MultiAliasImportRequireUse, []},
           {Credo.Check.Consistency.UnusedVariableNames, []},
           {Credo.Check.Design.SkipTestWithoutComment, []},

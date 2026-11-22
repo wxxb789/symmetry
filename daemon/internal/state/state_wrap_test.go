@@ -9,11 +9,6 @@ import (
 	"testing"
 )
 
-// TestSaveJournalWrapsAtomicWriteCause pins the contract's wrapped write path:
-// the durable write error carries the concrete writer cause, its message prefix
-// is unchanged, and the cause is reachable with errors.Is (a %w chain, not %v
-// text). The goal-session lane pins the same seam for the GoalSession journal,
-// whose write failure is classified by the app's recovery paths.
 func TestSaveJournalWrapsAtomicWriteCause(t *testing.T) {
 	injected := errors.New("injected atomic writer failure")
 
@@ -44,8 +39,7 @@ func TestSaveJournalWrapsAtomicWriteCause(t *testing.T) {
 		if err != nil {
 			t.Fatalf("SaveGoalSessionLaunchIntent() error = %v", err)
 		}
-		// The uncertain transition also refreshes the derived lineage index, so
-		// the injected failure is scoped to the journal path itself.
+
 		journalPath := store.goalSessionPath(saved.Key())
 		restore := store.SetAtomicWriterForTesting(func(path string, data []byte) error {
 			if path == journalPath {
@@ -68,9 +62,6 @@ func TestSaveJournalWrapsAtomicWriteCause(t *testing.T) {
 	})
 }
 
-// TestLoadJournalWrapsDecodeCause pins the read/decode prefix: the base
-// revision returned the bare verdict string, so the cause of an unreadable or
-// malformed durable journal was invisible in the field.
 func TestLoadJournalWrapsDecodeCause(t *testing.T) {
 	t.Parallel()
 	store := mustStore(t)
@@ -78,8 +69,7 @@ func TestLoadJournalWrapsDecodeCause(t *testing.T) {
 	if err := store.SaveJournal(journal); err != nil {
 		t.Fatalf("SaveJournal() error = %v", err)
 	}
-	// A valid JSON document that is not a RunJournal object reaches the
-	// decoder and fails there.
+
 	if err := os.WriteFile(store.journalPath(journal.Key()), []byte("[]"), 0o600); err != nil {
 		t.Fatalf("write corrupt journal: %v", err)
 	}

@@ -326,3 +326,24 @@ stays as the commit-boundary belt, but no input distinguishes it from the earlie
 4. **Move-only proof by construction.** The split is produced by a rule table plus an
    AST-preserving splitter, never by hand; `--color-moved` is reported as an aid only,
    because it cannot see a body edit inside a moved block.
+
+## Comment-policy sweep (2026-11-22)
+
+Module intent removed from this slice's files (`daemon/internal/authority/linux_clone.go`,
+`daemon/internal/authority/supervisor.go`) by the 2026-11-22 comment-policy sweep is recorded below (workstream record "ws4-authority").
+
+1. `daemon/internal/authority/supervisor.go:1-4` (package doc, deleted):
+   > Package authority contains the small durable binding used to recover a machine-local process
+   > containment boundary. It is deliberately independent of platform and state packages so the
+   > journal can store the exact authority without making either package own the other's policy.
+2. `daemon/internal/authority/linux_clone.go:116-119` (`LinuxCloneReuseStop` doc, deleted):
+   > LinuxCloneReuseStop … is deliberately independent of the state package so the RunJournal can
+   > persist the authority without an import cycle.
+
+Also deleted as refactor design narration (`D2`, no relocation) if the owning slice plan wants it:
+`supervisor.go:251-256` (`supervisorCore` "not a wire shape … carries the shared cloning, equality,
+compare-and-set and conversion policy in one place") and `supervisor.go:283-287` (why `Supervisor.core`
+is a struct conversion while the handoff/release-proof extractors stay explicit literals).
+
+The sweep's plan is
+[`docs/plans/2026-11-22-comment-policy-sweep-plan.md`](2026-11-22-comment-policy-sweep-plan.md).

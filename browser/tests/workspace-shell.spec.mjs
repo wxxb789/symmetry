@@ -20,10 +20,6 @@ if (process.env.SYMMETRY_RENDER_GATE_REQUIRED === "1" && !process.env.SYMMETRY_S
 const EXPIRY_GUARD_MS = 6_000;
 const EXPIRY_POLL_INTERVALS = [100, 250, 500];
 
-// The shared login plus this suite's own readiness marker, the command palette
-// trigger: every authenticated entry here waited for it before the
-// consolidation, so the marker is passed to the shared helper rather than
-// dropped, and every call site keeps its one-line shape.
 const shellLogin = (page, path = "/portal/attention") =>
   login(page, path, { assert: [page.getByRole("button", { name: "Search or navigate", exact: true })] });
 

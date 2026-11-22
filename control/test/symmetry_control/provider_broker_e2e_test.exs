@@ -1430,11 +1430,8 @@ defmodule SymmetryControl.ProviderBrokerE2ETest do
     :ok
   end
 
-  # `setsid --fork --wait` makes the daemon the port program's child, and that
-  # child calls setsid(2) before exec, so the daemon owns the session this
-  # fixture tears down. Signaling the port program's own session instead would
-  # reach only the `setsid` wrapper and leave the daemon writing state/runs and
-  # state/goal-usage while the fixture is removed.
+  # `setsid --fork --wait`: the daemon is the port program's child and owns the session this
+  # fixture tears down — signaling the wrapper's own session would leave it writing state/runs, state/goal-usage.
   defp await_daemon_session_id!(os_pid, timeout) do
     deadline = System.monotonic_time(:millisecond) + timeout
     await_daemon_session_id_loop!(os_pid, deadline)

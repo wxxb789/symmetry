@@ -17,32 +17,6 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
 
   @now ~U[2026-09-04 11:00:00.000000Z]
 
-  # The members of `work-detail-read` and `work-timeline-read` the surfaces read
-  # and the bundle comparison cannot refuse on its own. The work row's names are
-  # absent from `WorkspaceWorkItem`'s `required` array, and the waiting packet's
-  # names are absent from `WorkItemWaitingDecision`'s, so a serving-side rename
-  # of one of those passes the bundle; the timeline item's five names are
-  # required inside each `oneOf` variant of `WorkItemTimelineItem`, so the bundle
-  # refuses their renames and the pin restates them. The presence assertions in
-  # "the real served work detail and timeline carry every member the surfaces
-  # read" are what fails red for the first two classes, and every assertion also
-  # walks the definition's own declared members read from the contract bundle
-  # (`declared_members/2`), so a schema-side rename (e.g.
-  # `WorkspaceWorkItem.goal_id` -> `goal_ref` in the bundle, with the projection
-  # not yet following) fails red as well. Frontend read sites, list by list:
-  #
-  #   work row         features/work/control.tsx:305,445; features/work/assignment.tsx:153-156;
-  #                    features/planning/write-policy.ts:27-28,40,264-279;
-  #                    features/work/detail.tsx:310-343,370 — the row body is
-  #                    `WorkspaceWorkItem`, shared with `workspace-read` and served by the same
-  #                    `PortalJSON.work_item/2`; this file states the pin again because the detail
-  #                    read must keep its own row contract if the two reads stop sharing the body.
-  #                    Its nested consumed members (`delivery.*.provider`/`recorded_at`,
-  #                    `external.provider_owned_fields`) are populated by this scenario's provider
-  #                    sync and tracker import and pinned here too
-  #   timeline item    features/work/presentation.ts:448-490; features/work/receipts.ts:156-179;
-  #                    features/work/history.tsx:60-62
-  #   waiting decision features/work/presentation.ts:358-378
   @work_row_members ~w(project_id goal_id description priority assignee workspace
     repository_resource_id repository ci_resource_id ci_resource branch pull_request_url
     ci_status review_status delivery external goal_managed version can_start execution updated_at)
@@ -1281,14 +1255,6 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
            "expected every cancel response read query on #{inspect(reader)}, got #{inspect(processes)}"
   end
 
-  # The work-detail and work-timeline gates: both reads are served from the same
-  # durable rows, so one scenario drives them and each pin names its own read.
-  # The bundle comparison refuses a renamed member only where the schema requires
-  # it, so the member lists above carry the optional-but-consumed names, the class
-  # a serving-side rename would otherwise leave green. The scenario syncs its own
-  # provider repository and imports a tracker row, so the shared row's nested
-  # consumed members are served and pinned here too, not only through the
-  # workspace gate's scenario on the shared `PortalJSON.work_item/2` body.
   test "the real served work detail and timeline carry every member the surfaces read" do
     TestEnv.put!(:integration_providers,
       github: SymmetryControl.Integrations.ProviderStub,
@@ -1323,9 +1289,6 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
         "acme/symmetry"
       )
 
-    # The tracker sync imports the external work item this gate serves; the
-    # matching `external_ref` binds it to the repository, which is what the
-    # repository sync below needs to run the delivery path for it.
     assert %{"resource" => _tracker_synced} =
              api_conn()
              |> post("/portal/api/resources/#{tracker["id"]}/sync")
@@ -1352,8 +1315,6 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
              })
              |> json_response(200)
 
-    # The repository sync runs the delivery path for the bound item: the served
-    # `delivery` values then carry the provider-sourced branch this gate pins.
     assert %{"resource" => _repository_synced} =
              api_conn()
              |> post("/portal/api/resources/#{repository["id"]}/sync")
@@ -1372,9 +1333,6 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
     assert run.task_id == task_id
     transition(run.id, fence, "running", 5_101)
 
-    # At least one item from each timeline source — the running and waiting
-    # transitions, the event and the input command below — so the item pin and
-    # the bundle comparison exercise all three `data` variants.
     assert {:ok, [_event]} =
              Orchestration.append_events(
                run.id,
@@ -1406,8 +1364,6 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
     assert %{"command" => _command} =
              api_conn()
              |> post("/portal/api/work-items/#{item["id"]}/input", %{
-               # The decision packet makes the choice an option id
-               # (`Orchestration.validate_decision_choice!/4`).
                "input" => %{"option_id" => "reviewer-a"},
                "action_id" => "detail-gate-input",
                "waiting_transition_id" => waiting_id
@@ -1628,10 +1584,6 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
     ]
   end
 
-  # `capabilities` lets one gate register the runtime its item's binding
-  # requires (a provider-bound item requires `provider_access`, which
-  # registration admits only beside `structured_input`); the default empty map
-  # serves the unbound items.
   defp claim_current_task(capabilities \\ %{}) do
     key = Ecto.UUID.generate()
 

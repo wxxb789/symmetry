@@ -105,9 +105,8 @@ defmodule SymmetryControlWeb.Router do
 
   defp put_portal_no_store(conn, _options), do: put_resp_header(conn, "cache-control", "no-store")
 
-  # The authority surface a route belongs to, assigned once per pipeline: a
-  # `:portal` route serves the portal projection and acts as the portal
-  # operator, an `:operator` route the durable projection and the operator.
+  # The authority surface a route belongs to, assigned once per pipeline: `:portal`
+  # serves the portal projection and acts as portal operator, `:operator` the durable pair.
   defp put_surface(conn, options), do: assign(conn, :surface, Keyword.fetch!(options, :surface))
 
   scope "/", SymmetryControlWeb do

@@ -1,21 +1,4 @@
 defmodule SymmetryControl.SlowestFormatter do
-  @moduledoc """
-  Prints the slowest tests at suite end, next to `ExUnit.CLIFormatter`.
-
-  The control job's `mix test` step registers this formatter as a second
-  `--formatter` so per-test duration telemetry reaches the CI log without
-  ExUnit's own `--slowest` flag. That flag is forbidden here: it forces trace
-  mode (`ExUnit.configure/1` sets `:trace` whenever `:slowest` is positive),
-  which drops `:max_cases` to `1` (the whole suite serialized) and makes every
-  test timeout `:infinity`. This formatter reads the same `test_finished`
-  events, so it adds the table and changes nothing about how the tests run;
-  `ExUnit.CLIFormatter` stays listed and keeps the run's normal output and
-  exit status.
-
-  Only tests that ran count (passed or failed, like the CLI formatter's own
-  slowest list); a run with no finished tests prints nothing.
-  """
-
   use GenServer
 
   @slowest_tests 20

@@ -14,8 +14,6 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
 )
 
-// probeResult captures both outputs of a bounded probe so a hung or late call
-// can be asserted from the test goroutine.
 type probeResult struct {
 	output []byte
 	err    error
@@ -116,9 +114,8 @@ func TestRunBoundedProbeRejectsSuccessAfterCallerCancellation(t *testing.T) {
 	}
 }
 
-// probeBoundSlack is the scheduling slack between the requested bound and the
-// deadline the delegate observes, so the window assertion below pins the
-// forwarded bound value itself and not only its direction.
+// Scheduling slack between the requested bound and the deadline the delegate observes,
+// so the window assertion pins the forwarded bound value and not only its direction.
 const probeBoundSlack = 2 * time.Second
 
 func TestRunBoundedProbePassesDelegateResultThroughUntouched(t *testing.T) {
@@ -138,8 +135,8 @@ func TestRunBoundedProbePassesDelegateResultThroughUntouched(t *testing.T) {
 		} else if deadline.Before(time.Now().Add(30*time.Second - probeBoundSlack)) {
 			t.Errorf("delegate deadline = %v, want the caller's full 30s bound, not a narrowed one", deadline)
 		}
-		// The delegate owns the output bound: a limit verdict must reach the
-		// caller unwrapped, and the shared probe must not impose one of its own.
+		// The delegate owns the output bound: a limit verdict must reach the caller
+		// unwrapped, and the shared probe must not impose one of its own.
 		return nil, limitErr
 	})
 	if err != limitErr {

@@ -7,21 +7,19 @@ declared exclusion cannot move it while a change to bound bytes always does.
 """
 
 import hashlib
-import importlib.util
 import os
 import pathlib
 import shutil
 import tempfile
 import unittest
 
+import citest
+
 SCRIPT = pathlib.Path(__file__).with_name("model-routing-source-subject.py")
 
 
 def load_tool():
-    spec = importlib.util.spec_from_file_location("model_routing_source_subject", SCRIPT)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return citest.load_gate(SCRIPT, "model_routing_source_subject")
 
 
 class SourceSubjectTests(unittest.TestCase):

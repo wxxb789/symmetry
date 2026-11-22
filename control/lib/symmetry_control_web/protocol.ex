@@ -128,11 +128,8 @@ defmodule SymmetryControlWeb.Protocol do
     conn |> put_status(status) |> json(%{error: %{code: code, message: message}})
   end
 
-  # One validation envelope for every refused changeset: the same field-error
-  # shape the portal and chat controllers served before this consolidation.
-  # `error/2` deliberately does not absorb changesets: a domain rollback can
-  # hand one to a caller with no field-error wire shape (provider actions answer
-  # 400 invalid_request for it), and those responses must not change.
+  # One field-error envelope for every refused changeset; `error/2` deliberately does
+  # not absorb changesets, so a domain rollback keeps its own wire shape (400 invalid_request).
   def validation_error(conn, %Ecto.Changeset{} = changeset) do
     conn
     |> put_status(:unprocessable_entity)

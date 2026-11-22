@@ -539,13 +539,6 @@ func TestCleanupRefusesWorktreeWithoutOwnershipJournal(t *testing.T) {
 	runGit(t, repository, "worktree", "remove", "--force", prepared.Path)
 }
 
-// TestCleanupRefusesLinuxCloneWithoutStoreReadback pins the two outcomes of the
-// guard that keeps a reserved Linux clone out of the linked-worktree remover:
-// the linuxClone refusal precedes the unmanaged no-op and owns its exact string,
-// while an unmanaged Prepared is a silent success that touches no path. The
-// unmanaged case uses an existing directory with content, because a missing
-// path makes the no-op indistinguishable from the unguarded remover's
-// "not a worktree of configured repository" refusal.
 func TestCleanupRefusesLinuxCloneWithoutStoreReadback(t *testing.T) {
 	manager := New(nil)
 	reserved := Prepared{

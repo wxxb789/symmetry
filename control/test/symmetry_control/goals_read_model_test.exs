@@ -1106,9 +1106,6 @@ defmodule SymmetryControl.GoalsReadModelTest do
       state: "running"
     }
 
-    # `completion_readiness_candidates` gates on every loaded task, so the stale
-    # nonterminal task suppresses the predicate blocker this revision raises
-    # once its own tasks are terminal.
     deterministic =
       final_acceptance_related(subject_hash,
         authority_policy: %{"operator_required_for_completion" => false},
@@ -1129,8 +1126,6 @@ defmodule SymmetryControl.GoalsReadModelTest do
     refute projection.completion.no_nonterminal_tasks?
     refute "required_predicates_unmet" in projection.blocker_reasons
 
-    # `integration_outcome_required_blocker` gates on the current-revision tasks
-    # only, so the same stale task does not hide the missing integration outcome.
     missing_outcome =
       final_acceptance_related(subject_hash,
         outcomes: [],

@@ -114,9 +114,6 @@ describe("read boundary", () => {
   });
 
   it("classifies a 401 write's expiry from its status when its body cannot be read", async () => {
-    // An expiry answer is classified from its status alone: its body is never
-    // the refusal envelope, so an unreadable one must not turn the session
-    // failure into a transport failure (or a retry).
     const body = new ReadableStream({ start(controller) { controller.error(new Error("body read failed")); } });
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(body, { status: 401 }));
     const failure = await createApi(fetcher)
@@ -197,12 +194,8 @@ describe("read boundary", () => {
 
 describe("request cancellation", () => {
   it("aborts the in-flight body download when the consumer cancels during the read", async () => {
-    // Fetch and body read share one signalled step, so a cancel that lands
-    // after the fetch resolved still aborts the fetch signal (and, in a
-    // browser, the response stream with it). A controller-free second step
-    // would leave the body downloading. The response is hand-built because the
-    // test environment's `Response` starts pulling its stream at construction,
-    // which would fire before the boundary is actually reading.
+    // The response is hand-built: the test environment's `Response` starts pulling its
+    // stream at construction, before the boundary is actually reading.
     let requestSignal: AbortSignal | null | undefined;
     const download = Promise.withResolvers<ArrayBuffer>(); // never settles: the read is still in flight
     const read = vi.fn(() => download.promise);
@@ -279,16 +272,13 @@ describe("goal command boundary", () => {
   });
 
   it("carries an accepted write's receipt on both command paths and refuses a receiptless creation", async () => {
-    // One body, two calls: each call needs its own Response (a body is consumed once).
+    // One body, two calls: each call needs its own `Response` (a body is consumed once).
     const fetcher = vi.fn<typeof fetch>().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({ goal_id: goalId, mutation_id: envelope.mutation_id, goal: { id: goalId } }), { status: 201 })));
     const command = await postGoalCommand(fetcher, "csrf", goalId, envelope);
     expect(command).toMatchObject({ goal_id: goalId, mutation_id: envelope.mutation_id });
-    // The creation path decodes the same receipt and percent-encodes its
-    // project id into the path.
     const created = await postGoalCreation(fetcher, "csrf", "p x", { schema_version: "symmetry.goal_create.v1" });
     expect(created).toMatchObject({ goal_id: goalId, mutation_id: envelope.mutation_id });
     expect(fetcher.mock.calls[1]?.[0]).toBe("/portal/api/projects/p%20x/goals");
-    // D6 holds on this path too: a 2xx without the receipt is not a success.
     const receiptless = vi.fn<typeof fetch>().mockResolvedValue(new Response("{}", { status: 200 }));
     const failure = await postGoalCreation(receiptless, "csrf", "p1", { schema_version: "symmetry.goal_create.v1" }).then(() => null, (error: unknown) => error);
     expect(failure).toBeInstanceOf(UnexpectedResponse);
@@ -301,15 +291,12 @@ describe("goal command boundary", () => {
     const refused = await postGoalCommand(fetcher, "csrf", goalId, envelope).then(() => null, (error: unknown) => error);
     expect(refused).toBeInstanceOf(Forbidden);
     expect(refused).toMatchObject({ message });
-    // The Goal creation path shares the boundary: the same answer, the same text.
     const created = await postGoalCreation(fetcher, "csrf", "p1", { schema_version: "symmetry.goal_create.v1" }).then(() => null, (error: unknown) => error);
     expect(created).toBeInstanceOf(Forbidden);
     expect(created).toMatchObject({ message });
   });
 
   it("degrades a command refusal that cannot name itself to the status mapping", async () => {
-    // `code`/`message` are non-empty members on both surfaces: an empty pair is
-    // not a described refusal, so the 403 answers the session-protection message.
     const fetcher = vi.fn<typeof fetch>().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({ error: { code: "", message: "" } }), { status: 403 })));
     const refused = await postGoalCommand(fetcher, "csrf", goalId, envelope).then(() => null, (error: unknown) => error);
     expect(refused).toBeInstanceOf(Forbidden);
@@ -331,11 +318,8 @@ describe("goal command boundary", () => {
     const fetcher = vi.fn<typeof fetch>().mockImplementation(() => Promise.resolve(new Response(body, { status: 409 })));
     const refused = await postGoalCommand(fetcher, "csrf", goalId, envelope).then(() => null, (error: unknown) => error);
     expect(refused).toBeInstanceOf(MutationRefused);
-    // Exactly the command members: the read surface's `fields` never reaches a
-    // command's `details`.
     expect((refused as MutationRefused).details).toEqual({ current_version: 9, current_revision: 3, allowed_actions: ["resume"], details: { reason: "stale" } });
     expect((refused as MutationRefused).stale).toBe(true);
-    // The same body on the one parser's other surface keeps the read members.
     const control = await createApi(fetcher)
       .cancelWork(workItemId, 2 as ExecutionGeneration, "action-1" as ActionId, "csrf", new AbortController().signal)
       .then(() => null, (error: unknown) => error);
@@ -366,12 +350,8 @@ describe("goal command boundary", () => {
   });
 
   it("keeps a goal write's unreadable body a transport failure that preserves the attempt", async () => {
-    // The write path reads its refusal from the body, so a body that never
-    // arrives describes nothing: the attempt's fate stays unknown through the
-    // same catch a failed fetch uses. At the base this rejection escaped
-    // `postPortalCommand` uncaught, so only the shared boundary answers Network
-    // (D12); `detail.tsx`'s `outcomeUnknown` therefore keeps the frozen
-    // envelope for a replay instead of releasing it.
+    // The write path reads its refusal from the body: a body that never arrives
+    // describes nothing, so the attempt stays replayable under the shared Network catch.
     const refusalFetcher = vi.fn<typeof fetch>().mockImplementation(() => Promise.resolve(new Response(
       new ReadableStream({ start(controller) { controller.error(new Error("body read failed")); } }),
       { status: 409 },
@@ -380,7 +360,6 @@ describe("goal command boundary", () => {
     expect(refused).toBeInstanceOf(Network);
     expect(refused).toMatchObject({ message: "Cannot reach the server. Check your connection and try again." });
     expect(refused).not.toBeInstanceOf(MutationRefused);
-    // The accepted answer's body rejects through the same catch.
     const acceptedFetcher = vi.fn<typeof fetch>().mockImplementation(() => Promise.resolve(new Response(
       new ReadableStream({ start(controller) { controller.error(new Error("body read failed")); } }),
       { status: 200 },
@@ -391,8 +370,6 @@ describe("goal command boundary", () => {
   });
 
   it("classifies a redirect write's expiry from its status when its body cannot be read", async () => {
-    // D11's 302 half: the expiry classification runs before the body read, so
-    // an unreadable redirect body cannot become a transport failure.
     const body = new ReadableStream({ start(controller) { controller.error(new Error("body read failed")); } });
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(body, { status: 302 }));
     const failure = await postGoalCommand(fetcher, "csrf", goalId, envelope).then(() => null, (error: unknown) => error);
@@ -402,8 +379,8 @@ describe("goal command boundary", () => {
   });
 
   it("classifies an opaqueredirect write's expiry from its type before the body", async () => {
-    // A hand-built opaqueredirect carries no readable body at all: the type
-    // check must answer from the type alone, or this input surfaces as Network.
+    // A hand-built opaqueredirect carries no readable body: the type check must answer
+    // from the type alone, or this input surfaces as Network.
     const opaque = { type: "opaqueredirect", status: 0, ok: false } as unknown as Response;
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(opaque);
     const failure = await postGoalCommand(fetcher, "csrf", goalId, envelope).then(() => null, (error: unknown) => error);

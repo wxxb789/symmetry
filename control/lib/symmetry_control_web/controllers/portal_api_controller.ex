@@ -407,13 +407,8 @@ defmodule SymmetryControlWeb.PortalApiController do
 
   def provide_input(conn, _params), do: error(conn, :invalid_request)
 
-  # One receipt for every portal mutation that carries a disposition — the
-  # resource and project writes that answer with their own member keep their own
-  # envelopes. This one serves the durable disposition label plus the members
-  # the surface renders, and the status policy is `{disposition, created_status}`
-  # — a fresh mutation takes the caller's created status (`:accepted` for an
-  # asynchronous work-item action, `:created` for a resource write) and a replay
-  # is a plain 200.
+  # Receipt for portal mutations carrying a disposition (resource/project writes keep
+  # their own envelopes): fresh takes the caller's created status, a replay answers 200.
   defp action_receipt(conn, {disposition, created_status}, fields) do
     status = if disposition == :created, do: created_status, else: :ok
 

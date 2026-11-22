@@ -427,11 +427,6 @@ func TestNewRejectsUnsafeInputs(t *testing.T) {
 	}
 }
 
-// TestRunReportsDialAndConnectionFailuresToTheHandler pins the two failure
-// classes the handler exists for: the rejected handshake of the first attempt
-// and the failure of a connection that had joined on the second. The third
-// attempt is kept alive so the caller's cancellation is the only error left,
-// which must not be reported.
 func TestRunReportsDialAndConnectionFailuresToTheHandler(t *testing.T) {
 	reported := make(chan error, 8)
 	var attempts atomic.Int32
@@ -453,14 +448,12 @@ func TestRunReportsDialAndConnectionFailuresToTheHandler(t *testing.T) {
 			join := readChannelFrame(t, ctx, conn)
 			writeChannelFrame(t, ctx, conn, channelFrame{JoinRef: join.JoinRef, Ref: join.Ref, Topic: join.Topic, Event: "phx_reply", Payload: json.RawMessage(`{"status":"ok"}`)})
 			if attempt == 2 {
-				// A joined connection that never answers a heartbeat is the
-				// dropped-connection failure under test.
+
 				close(joined)
 				<-ctx.Done()
 				return
 			}
-			// The third attempt stays live: every heartbeat is answered, so the
-			// only error left for the client is the caller's cancellation.
+
 			for {
 				frame, err := readChannelFrameQuietly(ctx, conn)
 				if err != nil {
@@ -497,8 +490,7 @@ func TestRunReportsDialAndConnectionFailuresToTheHandler(t *testing.T) {
 	case <-time.After(testHangGuard):
 		t.Fatal("client did not reconnect after the failed dial")
 	}
-	// Only an established connection can fail from here on, so the next report
-	// is the runConnection failure.
+
 	connectionFailure := awaitConnectionError(t, reported)
 	if strings.Contains(dialFailure.Error(), "heartbeat") {
 		t.Errorf("failed dial reported as a connection failure: %v", dialFailure)
@@ -526,9 +518,6 @@ func TestRunReportsDialAndConnectionFailuresToTheHandler(t *testing.T) {
 	}
 }
 
-// TestConnectionErrorHandlerOptionReportsFailedDial pins the exported option:
-// newTestClient builds clientOptions directly, so without this test the seam
-// production will use would be unpinned.
 func TestConnectionErrorHandlerOptionReportsFailedDial(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		http.Error(writer, "control plane is not ready", http.StatusServiceUnavailable)
@@ -558,12 +547,8 @@ func TestConnectionErrorHandlerOptionReportsFailedDial(t *testing.T) {
 	}
 }
 
-// TestConnectionErrorHandlerRunsBeforeTheRetryBackoff pins the ordering the
-// WithConnectionErrorHandler doc promises: the handler runs on Run's goroutine
-// before waitForBackoff, so a failed dial is reported while the first backoff
-// is still pending. The five-minute first backoff makes the ordering
-// load-bearing: with the report moved below waitForBackoff it cannot arrive
-// inside testHangGuard.
+// Pins that the handler runs before waitForBackoff: the five-minute first backoff makes the ordering load-bearing,
+// and with the report moved below it the failure cannot arrive inside testHangGuard.
 func TestConnectionErrorHandlerRunsBeforeTheRetryBackoff(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		http.Error(writer, "control plane is not ready", http.StatusServiceUnavailable)
@@ -587,8 +572,6 @@ func TestConnectionErrorHandlerRunsBeforeTheRetryBackoff(t *testing.T) {
 	}
 }
 
-// awaitConnectionError receives the next connection failure the handler
-// reported, or fails the test when none arrives.
 func awaitConnectionError(t *testing.T, reported <-chan error) error {
 	t.Helper()
 	select {
@@ -610,8 +593,7 @@ type testOptions struct {
 	dialTimeout       time.Duration
 	writeTimeout      time.Duration
 	heartbeatTimeout  time.Duration
-	// connectionErrorHandler lets a test observe the retried connection
-	// failures of a client built with the fast test schedule.
+
 	connectionErrorHandler func(error)
 }
 
@@ -688,9 +670,6 @@ func readChannelFrame(t *testing.T, ctx context.Context, conn *websocket.Conn) c
 	return frame
 }
 
-// readChannelFrameQuietly reads one Phoenix frame and returns the read or
-// decode error instead of failing the test, so a server-side loop can end
-// quietly when the client closes the connection.
 func readChannelFrameQuietly(ctx context.Context, conn *websocket.Conn) (channelFrame, error) {
 	messageType, value, err := conn.Read(ctx)
 	if err != nil {

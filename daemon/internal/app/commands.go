@@ -76,10 +76,8 @@ func (daemon *daemon) dispatchQueuedCommand(ctx context.Context, queued *queuedC
 	if queued.command.Kind == "cancel" {
 		if active := daemon.running[key]; active != nil {
 			if active.terminal || active.terminalizing > 0 {
-				// A terminal owner has reserved this run. Do not publish a local
-				// cancellation flag that could make the terminal owner fail its
-				// own durable write; the command remains replayable until the
-				// authoritative terminal is visible.
+				// A terminal owner reserved this run: a local cancelled flag could make it
+				// fail its own durable write; the command stays replayable until then.
 			} else {
 				active.markCancelled()
 				if !active.claimed {
@@ -153,8 +151,7 @@ func (daemon *daemon) finishQueuedCommand(queued *queuedCommand, receipt bool) {
 func (daemon *daemon) finishDeferredCommand(key commandKey, receipt bool) {
 	daemon.mu.Lock()
 	defer daemon.mu.Unlock()
-	// A nil entry resolves whatever key currently maps to: the deferred path
-	// completes the entry the command key is registered under, if any.
+	// nil completes whatever entry the command key currently maps to, if any.
 	daemon.commands.finish(key, nil, receipt)
 }
 
@@ -330,9 +327,8 @@ func (daemon *daemon) handleCommand(ctx context.Context, command protocol.Comman
 		}
 	}
 	if command.Kind == "cancel" {
-		// A terminal transition is authoritative as soon as it is durable, even
-		// before Control has returned a verdict. Re-read immediately before
-		// touching the live process so a late cancellation cannot replace it.
+		// A terminal transition is authoritative as soon as it is durable, even before
+		// Control's verdict: re-read immediately before touching the live process.
 		journal, err = daemon.store.LoadJournal(key)
 		if err != nil {
 			return false
@@ -359,9 +355,8 @@ func (daemon *daemon) handleCommand(ctx context.Context, command protocol.Comman
 				return daemon.queueCancellationReceipt(ctx, key, command.CommandID)
 			}
 			if journal.LocalState == "stale" {
-				// Lease loss released the in-memory owner before this cancel
-				// arrived. Recovery stops or proves the recorded process before
-				// it publishes the cancellation receipt.
+				// Lease loss released the in-memory owner before this cancel arrived: recovery
+				// stops or proves the recorded process before publishing the cancellation receipt.
 				return daemon.cancelRecoveredJournal(ctx, journal, command.CommandID)
 			}
 			return daemon.queueCommandAcknowledgementWithContext(ctx, key, command.CommandID, "rejected")
@@ -376,15 +371,13 @@ func (daemon *daemon) handleCommand(ctx context.Context, command protocol.Comman
 			if loadErr == nil && durableTerminalPresent(latest) {
 				return daemon.rejectCancellationIfTerminalDurable(ctx, key, command.CommandID, latest)
 			}
-			// A terminal owner has a local reservation but has not published its
-			// transition yet. Do not mark this run cancelled or touch native
-			// state; Control will replay the command after the owner commits.
+			// A terminal owner holds a local reservation but has not published: do not mark
+			// the run cancelled or touch native state; Control replays after it commits.
 			return false
 		}
 		if active.nativeStartInFlight {
-			// Adapter.Start/Open/StartTurn still owns publication. Record the
-			// request and cancel its context; the starter settles the returned
-			// session before any command may touch it.
+			// Adapter.Start/Open/StartTurn still owns publication: record the request and
+			// cancel its context; the starter settles the returned session before any use.
 			if active.nativeStartLeaseExpired {
 				daemon.mu.Unlock()
 				return false
@@ -398,9 +391,8 @@ func (daemon *daemon) handleCommand(ctx context.Context, command protocol.Comman
 			return false
 		}
 		if active.stale {
-			// Lease loss already stopped this owner. Remember the cancel so the
-			// exact process-exit witness can settle it; never acknowledge before
-			// that physical stop is proven.
+			// Lease loss already stopped this owner: remember the cancel for the exact
+			// process-exit witness; never acknowledge before that physical stop is proven.
 			if active.cancelCommandID == "" {
 				active.setCancelCommandID(command.CommandID)
 			}
@@ -480,18 +472,15 @@ func (daemon *daemon) handleCommand(ctx context.Context, command protocol.Comman
 				controlFailure = fmt.Errorf("native cancel was %s: %s", receipt.Outcome, receipt.Message)
 			}
 			cancelExplicitlyRejected = controlErr == nil && receipt.Outcome == harness.ControlRejected
-			// A control acknowledgement only accepts the native request. The
-			// staged turn barrier is the first close permission; it never returns
-			// an early TaskResult and it remains bounded when acknowledgement is
-			// lost.
+			// A control acknowledgement only accepts the native request: the bounded staged
+			// turn barrier is the first close permission and never returns an early TaskResult.
 			waitContext, stopWait := context.WithTimeout(ctx, 2*time.Second)
 			var waitErr error
 			if staged, ok := nativeSession.(harness.StagedSession); ok {
 				waitErr = staged.WaitTurn(waitContext)
 				nativeWaitTurnErr = waitErr
-				// Only an explicit native rejection may be reported as rejected.
-				// A lost/failed control response with an observed terminal is failed,
-				// while the observed native result still owns the Run terminal.
+				// Only an explicit native rejection may be reported as rejected; a lost/failed
+				// control response with an observed terminal is failed, native result owning it.
 				terminalObserved = controlFailure != nil && nativeTurnTerminalObserved(waitErr)
 			} else {
 				finalResult, waitErr = nativeSession.Wait(waitContext)
@@ -507,9 +496,8 @@ func (daemon *daemon) handleCommand(ctx context.Context, command protocol.Comman
 				if closeErr != nil {
 					terminateErr = errors.Join(terminateErr, controlFailure, closeErr)
 				} else {
-					// Preserve the existing cancellation contract: a bounded process
-					// close is sufficient even when the native interrupt receipt was
-					// unavailable.
+					// Cancellation contract: a bounded process close is sufficient even when
+					// the native interrupt receipt was unavailable.
 					terminateErr = errors.Join(terminateErr)
 				}
 			} else {
@@ -635,9 +623,8 @@ func (daemon *daemon) handleCommand(ctx context.Context, command protocol.Comman
 		return daemon.queueCommandAcknowledgementWithContext(ctx, key, command.CommandID, "rejected")
 	}
 	if nativeSessionActive {
-		// This vertical slice only has a verified cancellation delivery path.
-		// Guidance, pause/resume, approval, and a second native turn remain
-		// visible as unsupported rather than falling back to legacy stdin.
+		// Only cancellation has a verified delivery path for native sessions; the other kinds
+		// stay visible as unsupported rather than falling back to legacy stdin.
 		return daemon.queueCommandAcknowledgementWithContext(ctx, key, command.CommandID, "rejected")
 	}
 	outcome := "rejected"
@@ -711,9 +698,8 @@ func (daemon *daemon) handleCommand(ctx context.Context, command protocol.Comman
 	return daemon.queueCommandAcknowledgementWithContext(ctx, key, command.CommandID, outcome)
 }
 
-// commandRunSnapshot reads run ownership and native-session state together.
-// Close recovery may clear nativeSession on a concurrent outbox worker, so
-// command routing must use this protected snapshot after releasing daemon.mu.
+// Close recovery may clear nativeSession on a concurrent outbox worker: command routing must
+// use this protected snapshot after releasing daemon.mu.
 func (daemon *daemon) commandRunSnapshot(key state.RunKey) (*runningRun, bool) {
 	daemon.mu.Lock()
 	defer daemon.mu.Unlock()

@@ -532,25 +532,12 @@ LEGACY_DAEMON_LOG_STREAMS = ("stdout", "stderr")
 # the daemon code can write into that field, so a credential-shaped value in
 # one of these generic keys is dropped before publication, not masked:
 #   msg   -- every daemon.log.<Level>("...") message literal under
-#           daemon/internal/app (the twelve files that carry daemon.log call
-#           sites: app.go, cleanup.go, commands.go, events.go, goal_admission.go,
-#           goal_delivery.go, lease.go, native_run.go, outbox.go, recovery.go,
-#           recovery_glue.go, supervisory.go).
+#           daemon/internal/app (the files that carry daemon.log call sites).
 #   state -- the terminal transition states (daemon/internal/state/state.go
 #           isTerminalTransitionState) logged as stateName by
 #           queueTerminalTransitionWithRetry / queueTerminalTransitionAndAcknowledgement
 #           (outbox.go:166, 246); nativeTerminalPayload (goal_delivery.go:357) returns the
 #           same three.
-#   stage -- the queueFailure stage literals and their call sites
-#           (events.go:530, app.go:1440-1666) and the process-exit retry
-#           (app.go:2011).
-#   reason -- the literals reaching stopRecoveredJournal (app.go:1188, 1222,
-#           1393; lease.go:579): lease/ownership reasons (lease.go:126-277;
-#           outbox.go:734, 834, 1110) and the protocol.ReconcileDecisionKind
-#           decisions (daemon/internal/protocol/protocol.go:560-564).
-#   outcome -- the acknowledgement outcomes (native_run.go:1566-1630,
-#           2181-2216; commands.go:696).
-#   kind -- the newIDWithRetry kinds (outbox.go:130, 191, 195; supervisory.go:85).
 # Maintenance rule: a change that adds a producer or literal for one of these
 # fields must extend the set in the same change; test-linux-v2-evidence.py
 # scans the log call sites and the known producer call sites and fails when a

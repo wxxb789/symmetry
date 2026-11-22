@@ -1,13 +1,8 @@
 /**
  * Presentation of the scoped engineering conversation.
  *
- * Every rendered value is the server's own: the intent vocabulary is the server's, the
- * scope label names the conversation read's answer rather than the URL that asked for
- * it, receipts are derived by `features/work/receipts.ts` (applied only from a served
- * acknowledgement outcome) and a served value becomes an anchor only through the one
- * safe-URL helper http(s) admits — `services/served.ts`; the work vocabulary stays in
- * `features/work/presentation.ts`. Raw execution data is never a source here: evidence
- * rows read the read's semantic timeline only.
+ * Rendered values are the server's own (receipts only from served acknowledgements,
+ * anchors only via http(s) `safeUrl`); raw execution data never renders here.
  */
 import { decisionRecord, executionStateLabel } from "../work/presentation";
 import { receiptLabel, receiptOutcome, type ReceiptCommand, type ReceiptOutcome } from "../work/receipts";
@@ -429,7 +424,7 @@ export function chatDecisionPacket(waiting: ChatWaitingProjection | null): ChatD
   };
 }
 
-/** The chat surface's failure policy: `message`, then `summary`, then `error`, verbatim (no prefix). */
+/** The chat surface's failure policy: `message` → `summary` → `error`, verbatim (no prefix). */
 function chatFailureText(failure: unknown): string | null {
   const record = asRecord(failure);
   if (record === null) return null;

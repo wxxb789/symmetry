@@ -16,11 +16,6 @@ import {
 } from "../../services/api";
 import { safeUrl } from "../../services/served";
 
-// This module owns the project-resource surface on `/portal/connections` and the
-// provider labels, refusal notice and dialog frame the connection surface
-// shares; the connection surface imports them so the import direction stays
-// one-way and there is exactly one refusal map.
-
 const providerLabels: Record<string, string> = { github: "GitHub", azure_devops: "Azure DevOps" };
 const kindLabels: Record<string, string> = { repository: "Repository", work_tracking: "Work tracking", ci: "CI", agent: "Agent", runtime: "Runtime", connection: "Connection" };
 // Kinds this surface creates. `connection` is a served local kind this surface
@@ -51,7 +46,7 @@ const isLocalKind = (kind: string) => ownValue(localKinds, kind) === true;
 
 export const refusalNotice = (error: unknown) => sharedRefusalNotice(error, refusalGuidance);
 
-// Declared policy: a served member is present when non-empty (no trim); the shared `asText` trims that case away.
+// Declared policy: a served member is present when non-empty (no trim), unlike the shared `asText`.
 const presentText = (value: unknown): string | null => typeof value === "string" && value !== "" ? value : null;
 const asVersion = (value: unknown): number => typeof value === "number" && Number.isFinite(value) ? value : 0;
 
@@ -218,22 +213,18 @@ function ResourceRowItem({ row, connections, locked, syncPending, onSync, onUpda
   </li>;
 }
 
-// The three editors this surface offers are one dialog with one intent: binding
-// a new resource to the project, updating the served resource, and removing it.
 type ResourceIntent =
   | { kind: "bind"; projectId: string }
   | { kind: "update"; resource: ResourceRow }
   | { kind: "unbind"; resource: ResourceRow };
 
-// The write a submission carries: everything the mutation needs, including the
-// version the dialog opened with, so the mutation and its notices never re-read
-// a row a background refresh may have replaced.
+// Carries the version the dialog opened with: the mutation and its notices must not
+// re-read a row a background refresh may have replaced.
 type ResourceSubmission =
   | { kind: "bind"; projectId: string; draft: ResourceDraft }
   | { kind: "update"; resourceId: string; version: number; update: { name: string; connection_id: string | null; external_ref: string | null } }
   | { kind: "unbind"; resourceId: string; version: number; name: string };
 
-// The controls a bind or an update edits.
 interface ResourceDraftState {
   connectionId: string;
   name: string;
@@ -242,7 +233,6 @@ interface ResourceDraftState {
 
 const emptyToNull = (value: string): string | null => value === "" ? null : value;
 
-/** A bind draft is incomplete until the selection its kind requires exists: a registered reference for a local kind, a connection for a provider kind. */
 function bindDraftIncomplete(draft: ResourceDraftState, kind: string, references: readonly { value: string; label: string }[]): boolean {
   if (!isLocalKind(kind)) return draft.connectionId === "";
   return references.length === 0 || draft.reference === "";
@@ -268,7 +258,6 @@ function resourceSubmission(intent: ResourceIntent, draft: ResourceDraftState, k
   }
 }
 
-/** The dialog's own copy, one intent per entry, so every rendered string stays literal here. */
 function resourceDialogCopy(intent: ResourceIntent): { title: string; closeLabel: string; descriptionId: string; description: string } {
   switch (intent.kind) {
     case "bind":
@@ -297,7 +286,6 @@ function resourceSavedNotice(submission: ResourceSubmission): string {
   }
 }
 
-/** The refusal line, plus the next step of the refusal that froze this intent. */
 function resourceRefusalNotice(intent: ResourceIntent, error: unknown, frozen: boolean): string {
   const notice = refusalNotice(error);
   if (intent.kind === "update" && frozen) return `${notice} This resource changed elsewhere; close and reopen it to edit the server's current values.`;
@@ -313,11 +301,9 @@ interface BindFieldsProps {
   pending: boolean;
   error: unknown;
   onChange: (patch: Partial<ResourceDraftState>) => void;
-  /** A kind change re-derives the connection and the reference a fresh draft starts from. */
   onKind: (kind: string) => void;
 }
 
-/** The bind draft: its kind, the connection that grants the kind's capability, the name and the reference. */
 function BindResourceFields({ kind, draft, connections, references, pending, error, onChange, onKind }: BindFieldsProps) {
   const local = isLocalKind(kind);
   const eligible = eligibleConnections(kind, connections);
@@ -373,15 +359,13 @@ interface UpdateFieldsProps {
   onChange: (patch: Partial<ResourceDraftState>) => void;
 }
 
-/** The served subject's facts and the three fields an update may change. */
 function UpdateResourceFields({ resource, draft, connections, runtimes, blocked, error, onChange }: UpdateFieldsProps) {
   const local = isLocalKind(resource.kind);
   const eligible = eligibleConnections(resource.kind, connections);
   const current = connections.find((connection) => connection.id === resource.connectionId);
   const currentIneligible = current !== undefined && !eligible.some((candidate) => candidate.id === current.id);
-  // The served binding stays selectable even when the connection no longer
-  // grants the capability: hiding it would silently change the resource on
-  // save, while keeping it lets the server refuse the submission it refuses.
+  // The served binding stays selectable even when the connection no longer grants
+  // the capability: hiding it would silently change the resource on save.
   const choices = currentIneligible && current !== undefined ? [...eligible, current] : eligible;
   const references = referenceOptions(resource.kind, runtimes);
   const referenceKnown = references.some((option) => option.value === draft.reference);
@@ -454,8 +438,6 @@ function ResourceDialog(props: ResourceDialogProps) {
   // loads another operator's change must not turn the draft into a silent
   // overwrite — the server still answers with its own stale refusal.
   const [intent] = useState(() => props.intent);
-  // The bind's kind selector: another kind re-derives the connection and the
-  // reference a fresh draft starts from.
   const [kind, setKind] = useState("repository");
   const [draft, setDraft] = useState<ResourceDraftState>(() => intent.kind === "bind"
     ? { connectionId: eligibleConnections("repository", connections)[0]?.id ?? "", name: "", reference: "" }
@@ -468,8 +450,8 @@ function ResourceDialog(props: ResourceDialogProps) {
   };
   const pendingSubject = intent.kind === "bind" ? projectSubject(intent.projectId) : resourceSubject(intent.resource.id);
   const save = useMutation({
-    // The receipt is not read here: the notice names the submission, and the
-    // project read the surface already holds shows the applied state.
+    // The receipt is not read: the notice names the submission, and the project read
+    // the surface already holds shows the applied state.
     mutationFn: (submission: ResourceSubmission): Promise<unknown> => {
       switch (submission.kind) {
         case "bind": return api.createResource(submission.projectId, submission.draft, csrf, new AbortController().signal);
@@ -477,13 +459,13 @@ function ResourceDialog(props: ResourceDialogProps) {
         case "unbind": return api.deleteResource(submission.resourceId, submission.version, csrf, new AbortController().signal);
       }
     },
-    // The pending counts live on the page, so the exclusion holds after this
-    // dialog closes, after a re-read and after a remount.
+    // The pending counts live on the page, so the exclusion holds after this dialog
+    // closes, after a re-read and after a remount.
     onMutate: () => { onWriteStart(); onSubjectPending(pendingSubject, true); },
     onSettled: () => { onWriteSettled(); onSubjectPending(pendingSubject, false); },
     onSuccess: (_receipt, submission) => { onSaved(editorId, resourceSavedNotice(submission)); },
-    // A refused write is never rendered as success: re-read the server's state
-    // so the surface shows what the server actually holds.
+    // A refused write is never rendered as success, so re-read the server's state and
+    // let the surface show what the server actually holds.
     onError: onRefresh,
   });
   const pending = save.isPending;
@@ -491,12 +473,10 @@ function ResourceDialog(props: ResourceDialogProps) {
   const stale = failure instanceof ServerRefusal && failure.code === "stale";
   const terminal = failure instanceof ServerRefusal &&
     (failure.code === "stale" || failure.code === "state_conflict" || failure.code === "not_found");
-  // A versioned subject freezes on the refusal that invalidates the version the
-  // dialog opened with: an update on `stale`, a removal on any terminal refusal.
-  // A bind draft carries no version and never freezes.
+  // A versioned subject freezes on the refusal that invalidates the version it opened
+  // with — update `stale`, unbind terminal; a bind draft carries no version.
   const frozen = intent.kind === "update" ? stale : intent.kind === "unbind" && terminal;
   const blocked = pending || frozen;
-  // A bind never freezes, but its submit waits for the selection its kind needs.
   const submitBlocked = blocked || (intent.kind === "bind" && bindDraftIncomplete(draft, kind, bindReferences));
   const copy = resourceDialogCopy(intent);
   const notice = failure && resourceRefusalNotice(intent, failure, frozen);

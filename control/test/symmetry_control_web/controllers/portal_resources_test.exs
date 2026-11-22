@@ -129,9 +129,6 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
   @delivery_head_sha "9f2c1d4b6a8e0f3c5d7b9a1e2f4c6d8b0a2e4f6c"
   @delivery_ci_url "https://github.com/acme/symmetry/actions/runs/9"
 
-  # The delivery precedence matrix's inputs. The provider and manual values are
-  # distinguishable per member, and the CI provider timestamp differs from the
-  # change one so a member fed the wrong provider context fails its row.
   @delivery_provider_url "https://provider.example/acme/symmetry/pull/410"
   @delivery_provider_state "merged"
   @delivery_provider_ci "passed"
@@ -146,13 +143,6 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
   @delivery_agent_review_url "https://agent.example/acme/symmetry/reviews/77"
   @delivery_agent_summary "One failing test in control"
 
-  # The read model's evidence entries (`workspaces/read_model.ex`): `source/1`
-  # contributes source/generation/event_id/recorded_at, the kind's own event
-  # members are merged over it, and `url`/`state` (pull_request) or
-  # `status`/`url`/`summary` (ci, review) exist only when the payload carried
-  # them. `@delivery_bare_agent` is the map the read model does not write (an
-  # entry without its kind's required member is never recorded), so it pins the
-  # `Map.put_new(field, value)` half of the agent branch.
   @delivery_agent_pull_request %{
     source: "agent",
     generation: 3,
@@ -186,34 +176,6 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
     recorded_at: @delivery_agent_recorded_at
   }
 
-  # The optional-but-consumed members of `workspace-read`
-  # (`contracts/v1/workspace-read.schema.json`): each name is read by
-  # `frontend/src` feature code and absent from its definition's `required`
-  # array, so the bundle comparison alone cannot refuse a serving-side rename of
-  # it. Every presence assertion in "the real served workspace read carries
-  # every member the surface reads" walks these lists *plus* the definition's own
-  # declared members read from the contract bundle (`declared_members/2`): the
-  # bundle side makes a schema-side rename of a declared member (e.g.
-  # `WorkspaceWorkItem.goal_id` -> `goal_ref` in the bundle, with the projection
-  # not yet following) fail red, and the hand lists below keep every member a
-  # consumed surface reads pinned by name even if a schema edit stops declaring
-  # it. Frontend read sites, list by list:
-  #
-  #   root             features/runtimes/runtimes.tsx:82,86,96; features/connections/resources.tsx:121
-  #   project row      features/projects/projects.tsx:90,109; features/planning/write-policy.ts:50,201;
-  #                    features/work/assignment.tsx:251; features/connections/resources.tsx:115
-  #   resource row     features/connections/resources.tsx:87-101; features/work/assignment.tsx:54-58
-  #   registered row   features/connections/resources.tsx:122-125
-  #   runtime row      features/runtimes/runtimes.tsx:18,26,38-42
-  #   capabilities     features/runtimes/runtimes.tsx:17,51-57 read `adapter`; the four booleans have no
-  #                    member-named read site — the whole map is serialized into `data-capabilities`
-  #                    (`runtimes.tsx:25`) and `browser/tests/portal-live-daemon.spec.mjs` asserts that
-  #                    attribute equals the registration-side map
-  #   work row         features/work/control.tsx:305,445; features/work/assignment.tsx:153-156;
-  #                    features/planning/write-policy.ts:27-28,40,264-279; features/work/detail.tsx:310-343,370
-  #   delivery value   features/work/presentation.ts:262,308-309,316-317,324-325
-  #   external row     features/work/detail.tsx:320; features/planning/write-policy.ts:20
-  #   waiting decision features/work/presentation.ts:368-378
   @workspace_read_members ~w(runtimes registered_runtimes)
   @workspace_project_members ~w(version default_agent_profile default_workspace resources)
   @workspace_resource_members ~w(id project_id connection_id kind name provider external_ref url
@@ -231,7 +193,6 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
   @workspace_waiting_decision_members ~w(context reason options recommended_option_id)
   @workspace_waiting_decision_option_members ~w(id label consequence)
 
-  # The capability maps the two runtime fixtures register.
   @adapter_runtime_capabilities %{
     "structured_input" => true,
     "provider_access" => true,
@@ -255,11 +216,6 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
     }
   }
 
-  # The runtime row the workspace gate serves: registered with every
-  # `RuntimeCapabilities` member the surface reads — `adapter` plus the four
-  # booleans — so the registered map's pass-through is exercised whole, and
-  # advertising the adapter `start` operation the item's launch needs a
-  # selectable runtime for.
   @gate_runtime_capabilities %{
     "interactive" => true,
     "structured_input" => true,
@@ -948,14 +904,6 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
     assert stored.external_ci_data == %{}
   end
 
-  # The delivery member is the wire's one place where a provider-owned value, an
-  # operator's manual value and the attempt's agent evidence compete. Only the
-  # provider branch adds `provider`/`recorded_at`, only the agent branch carries
-  # the evidence map's own members; manual and none serve the same five, and the
-  # pull request's `status` is overridden after resolution
-  # (`provider_pull_request_state/2`). This matrix pins the full served map —
-  # exact member set and values — of every branch for every member, on the
-  # projection every delivery-serving read shares (`PortalJSON.work_item/2`).
   test "the served delivery keeps the provider, manual, agent and none precedence member by member" do
     matrix = delivery_precedence_matrix()
 
@@ -972,13 +920,6 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
     end)
   end
 
-  # The one thing the projection-level matrix cannot reach: the agent branch's
-  # members as the *read model* writes them (not a hand-built map), travelling
-  # through Jason to the response body — the evidence's `recorded_at` is a
-  # `DateTime` there and an ISO 8601 string on the wire. No test in the four
-  # owned files serves a delivery from evidence today; repo-wide, the agent
-  # branch's pass-through members were pinned only as `delivery.ci.generation`
-  # (`chat_test.exs:847`), so this case is their first full-member wire pin.
   test "the served agent delivery carries the attempt's evidence members through the wire" do
     project = create_project("AGENTDEL")
 
@@ -999,8 +940,6 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
 
     {run, fence} = claim_gate_attempt(runtime, task_id, 4_600)
 
-    # The three semantic delivery events the read model folds into one evidence
-    # entry per member; `now:` pins the recording time every entry reports.
     assert {:ok, stored} =
              Orchestration.append_events(
                run.id,
@@ -1077,13 +1016,6 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
            }
   end
 
-  # CW-8a's getter reads the attempt's result under two spellings, and the
-  # string one is the spelling a result JSON arrives in. These two cases are the
-  # only tests in the four owned suites that serve a non-empty attempt result
-  # through `PortalJSON.outcome/5` — the getter's key table reduced to a single
-  # key left every suite green (plan, `## Evidence as run`) — so they are the
-  # table's committed pins: each served member below fails if its own key leaves
-  # the table.
   test "the served outcome reads the attempt result's string-keyed members" do
     project = create_project("OUTCOME")
     runtime = enroll_adapter_runtime("outcome-result", "Outcome result runtime")
@@ -1103,8 +1035,6 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
 
     {run, fence} = claim_gate_attempt(runtime, task_id, 4_700)
 
-    # The attempt's result JSON, string keys and all: the served outcome's
-    # members resolve only through the getter's string spelling.
     transition(run, fence, "completed", 4_701, %{
       "summary" => "The attempt's own result summary",
       "findings" => [
@@ -1135,11 +1065,6 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
     assert outcome["tests"] == [%{"name" => "portal_resources_test", "status" => "passed"}]
   end
 
-  # The getter's fallback spelling: the outcome serves `changed_artifacts`
-  # through `list_value(result, "changed_artifacts", "changed_files")`, so a
-  # result carrying only `changed_files` exercises the fallback lookup — the
-  # case above carries the primary spelling. This is the committed pin for the
-  # table's `changed_files` entry (plan, `## Fix-stage re-record`).
   test "the served outcome reads a changed_files result through the fallback spelling" do
     project = create_project("CHGFILES")
     runtime = enroll_adapter_runtime("changed-files", "Changed files runtime")
@@ -1353,16 +1278,6 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
     assert Enum.map(project_read(project["id"])["resources"], & &1["id"]) == [repository["id"]]
   end
 
-  # The workspace-read gate: a real served document — never a fixture — is
-  # validated against the canonical bundle AND every member the surface reads is
-  # asserted present. The bundle comparison refuses a renamed member only where
-  # the schema requires it, so the member lists above carry the
-  # optional-but-consumed names, the class a serving-side rename would otherwise
-  # leave green. `WorkspaceWorkItem` is one definition body across
-  # `workspace-read`, `work-detail-read` and `chat-read`, and
-  # `PortalJSON.work_item/2` is the one body that serves it: the provider-sourced
-  # delivery values, the external row and the waiting packet pinned here are that
-  # shared row's own shape.
   test "the real served workspace read carries every member the surface reads" do
     project = create_project("WSGATE")
 
@@ -1391,9 +1306,6 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
     steer("Workspace gate tracker", {:ok, tracker_document(connection)})
     assert %{"resource" => _tracker_synced} = sync_resource(tracker["id"]) |> json_response(200)
 
-    # The repository's own document: the `changes` capability makes the launch
-    # derive a change scope from the repository's default branch, so the synced
-    # metadata carries it.
     steer("Workspace gate repository", {:ok, repository_document(connection, "acme/symmetry")})
 
     steer_delivery("Workspace gate repository", {:ok, provider_delivery(@delivery_url)})
@@ -1432,9 +1344,6 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
     assert %{"resource" => _repository_synced} =
              sync_resource(repository["id"]) |> json_response(200)
 
-    # `execution` is served only for a work item with an attempt, and the
-    # waiting packet only for a `waiting_for_input` attempt: the fixture drives
-    # the durable states the shared row's optional members need.
     assert %{"execution" => %{"generation" => 1, "task_id" => task_id}} =
              api_conn()
              |> post("/portal/api/work-items/#{item["id"]}/run", %{
@@ -1637,9 +1546,6 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
     runtime
   end
 
-  # Claims the gate item's queued attempt for the runtime the gate registered:
-  # that runtime is the only one assignment can select for this test's binding,
-  # so the picked attempt must be the gate item's own.
   defp claim_gate_attempt(runtime, task_id, claim_number) do
     assert {:ok, run} = Orchestration.assign_one()
     assert run.task_id == task_id
@@ -1669,8 +1575,6 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
     assert {:ok, _run} = Orchestration.transition(run.id, fence, state, payload, uuid(number))
   end
 
-  # The tracker's own sync document: the shape `Integrations` writes an external
-  # work item from.
   defp tracker_document(connection) do
     %{
       resource: %{
@@ -1745,13 +1649,6 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
   defp provider_url(%{"provider" => "azure_devops", "account_ref" => account_ref}, external_ref),
     do: "https://dev.azure.com/#{account_ref}/" <> external_ref
 
-  # The delivery precedence matrix: one row per (member, branch). Each row is
-  # the inputs the four branches switch on plus the *full* served map the branch
-  # must produce, so an added, dropped or revalued member fails the row. Rows
-  # that reach the same branch through a different input spelling are kept
-  # separately on purpose: `""` and an absent value are both "not set" (the
-  # empty-string fall-through), and an agent map with and without the member's
-  # own field pins the `Map.put_new(field, value)` half of that branch.
   defp delivery_precedence_matrix do
     [
       {:pull_request, "provider wins over manual and agent",
@@ -2017,17 +1914,10 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
     ]
   end
 
-  # One matrix row's served row: the work item carrying the row's provider and
-  # manual inputs, with the row's evidence attached to its attempt projection —
-  # the shape `PortalJSON.activity_entry/1` builds — projected by the same
-  # `PortalJSON.work_item/2` the workspace read, the work detail read, the chat
-  # outcome and the activity feed serve their delivery from.
   defp delivery_row(attrs, evidence) do
     work_item = struct!(delivery_work_item(), attrs)
-    # The resolver reads each member straight off the evidence map, and the read
-    # model always hands it all three entries (`nil` until an event lands), so a
-    # row naming one member still gets the other two as `nil`. A row passing no
-    # evidence at all keeps the `nil`-map path.
+    # `delivery_row` mirrors the read model's evidence shape: all three entries present (`nil`
+    # until an event lands), and a row passing no evidence keeps the `nil`-map path.
     evidence = evidence && Map.merge(%{pull_request: nil, ci: nil, review: nil}, evidence)
     projections = %{work_item.orchestration_task_id => %{execution: nil, evidence: evidence}}
 

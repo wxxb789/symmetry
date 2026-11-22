@@ -33,27 +33,10 @@ PREDICATE_NAMES = {"run-heavy": "run_heavy", "run-records": "run_records", "run-
 PINNED_GATES = {"record-cleanliness": "run-records", "citation-existence": "run-citations"}
 DEFAULT_GATE = "run-heavy"
 UNCONDITIONAL_JOBS = ("legacy-route-audit",)
-# The coverage plane's advisory artifact jobs (refactor slice W2-17). They are
-# routed like the heavy matrix on purpose - a coverage run is only worth its
-# runner time beside the matrix - so each is gated `run-heavy`, and
-# `check_coverage_plane_routing` below binds the three names to that output
-# against every fixture diff, not only against the workflow text.
 COVERAGE_JOBS = ("coverage-control", "coverage-daemon", "coverage-frontend")
-# The coverage-daemon job's gated header as the workflow spells it: both
-# coverage mutation tests below anchor on it, so it is spelled once here.
 COVERAGE_DAEMON_HEADER = "  coverage-daemon:\n    needs: changes\n    if: needs.changes.outputs.run-heavy == 'true'\n"
-# The upload step and the command line(s) that produce each coverage job's
-# artifact (refactor slice W2-17, contract clause 1), as the workflow spells
-# them: the routing and advisory checks pin when a coverage job runs, these
-# literals pin its product, so a deleted upload step, a renamed artifact, a
-# moved report path or a dropped command reddens the artifact check below
-# instead of only the draft-PR run. Each literal spans the step's
-# `if: always()`, the decision-7 promise that a red coverage run still uploads
-# its report, so a dropped `if: always()` reddens here too. The daemon command
-# is a block scalar under the stdio-only caller boundary over the whole module:
-# no package is excluded, because `go test` sets `GOCOVERDIR` for each
-# instrumented test binary itself and `internal/execution`'s re-exec'd helper
-# children forward it through their environment builder.
+# No package is excluded from the daemon cover command: `go test` sets GOCOVERDIR for each
+# instrumented test binary, and `internal/execution`'s re-exec'd helper children forward it.
 COVERAGE_UPLOADS = {
     "coverage-control": (
         "        if: always()\n"
@@ -77,15 +60,8 @@ COVERAGE_UPLOADS = {
         "          path: frontend/coverage\n"
     ),
 }
-# The `defaults.run` block that carries the working directory each coverage
-# job's command resolves against, as the workflow spells it: the Control
-# command's report lands in `control/cover/` because the job runs in
-# `control/`, and the daemon command reaches `../scripts/ci/...` and writes
-# `coverage.out` from `daemon/`. Both directories are load-bearing, so they are
-# pinned beside the command and the artifact. `coverage-frontend` is
-# deliberately absent: its `pnpm --filter` command and `pnpm install
-# --frozen-lockfile` step must run at the workspace root, where the lockfile
-# lives.
+# Both working directories are load-bearing (the commands write `control/cover/` and
+# `daemon/coverage.out` relative to them); `coverage-frontend` must run at the pnpm workspace root.
 COVERAGE_DEFAULTS = {
     "coverage-control": "    defaults:\n      run:\n        working-directory: control\n",
     "coverage-daemon": "    defaults:\n      run:\n        working-directory: daemon\n",
@@ -520,14 +496,6 @@ def check_coverage_plane_routing(
     model: WorkflowModel,
     outputs_by_fixture: collections.abc.Mapping[str, dict[str, bool]],
 ) -> None:
-    """Every coverage job exists and runs exactly when its fixture's run-heavy does.
-
-    ``check_job_gating`` already refuses an unconditional job and an unrecognized
-    gate, but its message names the routing rule, not the plane. This check binds
-    the three jobs the coverage plane adds (refactor slice W2-17) to the heavy
-    output by name and measures that binding against every fixture diff, so a
-    renamed, regated or deleted coverage job reddens here as well.
-    """
     for name in COVERAGE_JOBS:
         require(name in model.jobs, f"the workflow has no coverage job {name!r}")
     for fixture_name, outputs in outputs_by_fixture.items():
@@ -542,13 +510,6 @@ def check_coverage_plane_routing(
 
 
 def check_coverage_jobs_are_advisory(workflow_text: str) -> None:
-    """Every coverage job carries the job-level ``continue-on-error: true``.
-
-    The gate alone would still let a coverage failure gate a pull request and the
-    heavy matrix's conclusions: the contract's failure control names a coverage
-    job without the advisory flag as not-achieved, so it is pinned here rather
-    than left to review.
-    """
     blocks = job_blocks(workflow_text)
     for name in COVERAGE_JOBS:
         require(name in blocks, f"the workflow has no coverage job {name!r}")
@@ -560,18 +521,6 @@ def check_coverage_jobs_are_advisory(workflow_text: str) -> None:
 
 
 def check_coverage_artifacts(workflow_text: str) -> None:
-    """Every coverage job carries its pinned upload step and its pinned command.
-
-    The routing and advisory checks pin when a coverage job runs and that its
-    failure cannot gate a pull request, but not what the plane produces: with
-    only those pins, deleting an upload step, renaming an artifact, moving its
-    report path or dropping the command leaves the suite green, and only the
-    draft-PR run - advisory by construction - would ever notice. The upload
-    literal spans the step's ``if: always()``, so dropping the always-upload
-    promise reddens here, and each command's ``defaults.run`` working directory
-    is pinned beside it because the daemon command's ``../scripts/...``
-    reference and its ``coverage.out`` path resolve against it.
-    """
     blocks = job_blocks(workflow_text)
     for name in COVERAGE_JOBS:
         require(name in blocks, f"the workflow has no coverage job {name!r}")
