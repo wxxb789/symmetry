@@ -73,11 +73,11 @@ that revision, and one contract item is already satisfied. Re-derived per site:
    keys that read it"`, `:297-336`, 11 `invalidationKeys` calls; the only `invalidationKeys` use in
    the file, import at `:5`) is deleted under clause 4 with the recorded red mutants of §10, and the
    now-unused import name is dropped as part of that deletion. Every other case in the file is
-   untouched; the `keys()`-based cases (`:336-355` batch, `:292-294` delivery) keep verifying the
+   untouched; the `keys()`-based cases (`:296-317` batch, `:288-293` delivery) keep verifying the
    map indirectly through `flush()`.
 
 Owned set as delivered (grouped by edit class): new `frontend/src/app/read-cache.ts` and
-`frontend/src/app/read-cache.test.ts` [DISPLAY NOTATION: CAD files are binary for ODA purposes];
+`frontend/src/app/read-cache.test.ts`;
 key construction `app/application.ts`; map + predicate consumer
 `services/realtime.ts`; key-expression-only call sites in `app/shell.tsx`,
 `features/attention/attention.tsx`, `features/chat/use-chat-scope-state.ts`,
@@ -93,7 +93,7 @@ mutation-proven deletion in `services/realtime.test.ts`; docs (`docs/plans/...`,
 | artifact | measurement |
 | --- | --- |
 | `app/application.ts` | 355 L; the ten option builders with literal keys `:211` `["session"]`, `:218`, `:223`, `:233`, `:238`, `:248`, `:260`, `:268`, `:328`, `:341` |
-| `services/realtime.ts` | 462 L; `invalidationKeys` `:432-462` (8 kinds + `default → []`), `flush()` `:223-243` (JSON-dedupe, empty-list fallback to `invalidateReads`), the `"session"` predicate `:218` |
+| `services/realtime.ts` | 462 L; `invalidationKeys` `:432-462` (8 kinds + `default → []`), `flush()` `:224-240` (JSON-dedupe, empty-list fallback to `invalidateReads`), the `"session"` predicate `:218` |
 | `features/chat/use-chat-scope-state.ts` | 248 L; `:165` `["chat", sendIdentity]` |
 | `features/work/control.tsx` | 468 L; `:112` `getQueryState`, `:128` `getQueryData`, `:150-154` invalidate/timeline-guard |
 | success-path key sites (12 files) | 30 literal `queryKey: [` sites (§2.3): 26 `invalidateQueries`, 1 `refetchQueries` (`type: "active"`, `work/detail.tsx:263`), 1 `resetQueries` (`work/history.tsx:42`), 1 `isFetching` (`control.tsx:153`), 1 read option (`goals/detail.tsx:730`, the catch-up `useQuery`); plus the two positional reads `control.tsx:112` (`getQueryState`), `:128` (`getQueryData`) |
@@ -304,7 +304,7 @@ kind / reorder a member).
 | M6 | `workItemTimelineReadKey(workItemId)` returns the full form with `cursor: null` | table timeline mid row (and the mid-form callers) |
 | M7 | `chatOlderReadKey` spread order reversed (`{ before, ...scope }`) | table chat-older row (member order) |
 | M8 | `goalEventsReadKey(goalId)` returns `{ goalId, after: 0 }` | table goal-events mid row |
-| M9 | `isSessionReadKey` inverted | table predicate row + `realtime.test.ts` predicate cases (`:181-182`, `:206-207`) |
+| M9 | `isSessionReadKey` inverted | table predicate row + `realtime.test.ts` predicate cases (`:180-181`, `:205-206`) |
 | M10 | `runtime` kind returns `[workspaceReadKey(), connectionsReadKey()]` | table runtime row |
 
 ## 11. Oracles that must pass unmodified

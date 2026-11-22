@@ -18,7 +18,7 @@ per-success-path table, grep-gate outputs, mutation runs, gate outputs with exit
 | `frontend/src/app/read-cache.ts` | new | 0 → 113 | the eleven builders, `InvalidationPayload`, `invalidationKeys`, `isSessionReadKey` |
 | `frontend/src/app/read-cache.test.ts` | new | 0 → 78 | 38 cases: 24 builder-tuple rows, 13 change-kind rows, 1 predicate case |
 | `frontend/src/app/application.ts` | edited | 355 → 356 | import line + the ten option builders' keys |
-| `frontend/src/services/realtime.ts` | edited | 462 → 417 | `InvalidationPayload` and the map moved out; import line; the every-read predicate |
+| `frontend/src/services/realtime.ts` | edited | 462 → 416 | `InvalidationPayload` and the map moved out; import line; the every-read predicate |
 | `frontend/src/app/shell.tsx` | edited | 280 → 281 | import line + one key |
 | `frontend/src/features/attention/attention.tsx` | edited | 201 → 202 | import line + one key |
 | `frontend/src/features/chat/use-chat-scope-state.ts` | edited | 248 → 249 | import line + one key (the contract's `chat.tsx:321` site, moved here by W4-08) |
@@ -73,8 +73,8 @@ names the key vocabulary), `contracts/**`, `browser/**`, `pnpm-lock.yaml`, `pnpm
    `invalidationKeys` calls) was its only `invalidationKeys` use; it is deleted per clause 4 with
    the red mutants M1/M2/M3/M10 (§7) proving the table test catches the same defects, and the
    import name goes with it. Every other case in the file is untouched, including the two
-   predicate cases (`:181-182`, `:206-207`) and the `flush()` cases that exercise the map through
-   `keys()` (`:297-317` batch after the deletion, `:290-294` delivery).
+   predicate cases (`:180-181`, `:205-206`) and the `flush()` cases that exercise the map through
+   `keys()` (`:296-317` batch after the deletion, `:288-293` delivery).
 
 ## 3. Module interface (final list, with callers)
 
@@ -147,7 +147,7 @@ call options, the `await`/`void` shape, the ordering and the branches are unchan
 
 | # | decision point | base | HEAD | preserved |
 | --- | --- | --- | --- | --- |
-| C1 | `realtime.ts` `flush()` | JSON-dedupe map, `allReads` flag, empty-list early return into `invalidateReads("invalidation")`, per-key `invalidateQueries({ queryKey: key })` loop | identical lines (`:223-243` → `:213-233` shifted); only the key objects' producer changed | yes |
+| C1 | `realtime.ts` `flush()` | JSON-dedupe map, `allReads` flag, empty-list early return into `invalidateReads("invalidation")`, per-key `invalidateQueries({ queryKey: key })` loop | identical lines (`:224-240` → `:214-230` shifted); only the key objects' producer changed | yes |
 | C2 | `realtime.ts` `invalidateReads()` | `{ predicate: (query) => query.queryKey[0] !== "session" }, { cancelRefetch: source !== "fallback" }`, `.then(settled, settled)` | `{ predicate: (query) => !isSessionReadKey(query.queryKey) }, { cancelRefetch: … }`, same settle arms | yes — same comparison, same polarity |
 | C3 | goal command `onSuccess` | `await goal → await settleGoalRead → notice → void goal-events → void attention` | same order, same `await`/`void`; `settleGoalRead` untouched | yes |
 | C4 | plan approval `onSuccess` | same sequence with its own notice string | same | yes |
@@ -223,7 +223,7 @@ focused run is green (38/38).
 | M6 | `workItemTimelineReadKey(workItemId)` returns the full form with `cursor: null` | `read-cache.test.ts` — 1 failed / 37: the mid-form row |
 | M7 | `chatOlderReadKey` spread order reversed (`{ before, ...scope }`) | `read-cache.test.ts` — 1 failed / 37: the `chat-older` row (member order) |
 | M8 | `goalEventsReadKey(goalId)` returns `{ goalId, after: 0 }` | `read-cache.test.ts` — 1 failed / 37: the mid-form row |
-| M9 | `isSessionReadKey` inverted (`!==`) | `read-cache.test.ts` + `realtime.test.ts` — 3 failed / 54: the predicate case and both realtime predicate cases (`:181-182`, `:206-207`) |
+| M9 | `isSessionReadKey` inverted (`!==`) | `read-cache.test.ts` + `realtime.test.ts` — 3 failed / 54: the predicate case and both realtime predicate cases (`:180-181`, `:205-206`) |
 | M10 | `runtime` kind returns `[workspaceReadKey(), connectionsReadKey()]` | `read-cache.test.ts` — 1 failed / 37: the `runtime` kind row |
 
 The M1/M2/M3/M10 rows are exactly the assertions of the clause-4-deleted realtime case (its
