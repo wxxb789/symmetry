@@ -186,29 +186,39 @@ func (adapter *Adapter) start(ctx context.Context, request harness.StartRequest,
 		pending: make(map[string]chan Response), turnDone: make(chan struct{}), processDone: make(chan struct{}),
 		turnGate: make(chan struct{}, 1), controlGate: make(chan struct{}, 1),
 	}
+	session.staged = harness.NewStagedDriver(session, &session.mutex)
 	session.forwarder = harness.NewProcessForwarder(&session.mutex, &session.process)
-	invocation := request.Invocation
-	invocation.Program, invocation.Args, invocation.Dir = executable, args, request.Workspace
-	invocation.Env = append([]string(nil), request.Invocation.Env...)
-	invocation.PersistProcess = request.PersistProcess
-	invocation.PersistProcessAuthority = request.PersistProcessAuthority
-	invocation.PersistContainmentStopReceipt = request.PersistContainmentStopReceipt
-	var process harness.NativeProcess
-	if request.StartProcess != nil {
-		process, err = request.StartProcess(processContext, invocation, execution.SinkFunc(session.handleOutput))
-	} else {
-		var launched *execution.Process
-		launched, err = execution.NewRunner().Start(processContext, invocation, execution.SinkFunc(session.handleOutput))
-		if launched != nil {
-			process = launched
+	launchProcess := request.StartProcess
+	if launchProcess == nil {
+		launchProcess = func(ctx context.Context, invocation execution.Invocation, sink execution.Sink) (harness.NativeProcess, error) {
+			launched, err := execution.NewRunner().Start(ctx, invocation, sink)
+			if launched == nil {
+				return nil, err
+			}
+			return launched, err
 		}
 	}
+	session.launchProcess = launchProcess
+	launchErr := session.staged.Launch(processContext, request, harness.ProcessDescription{
+		Program: executable, Args: args, Dir: request.Workspace, Env: append([]string(nil), request.Invocation.Env...),
+	})
+	session.mutex.Lock()
+	installed := !harness.IsNilInterface(session.process)
+	session.mutex.Unlock()
+	if launchErr != nil && !installed {
+		return nil, launchErr
+	}
+	return session, launchErr
+}
+
+func (session *nativeSession) LaunchTransport(ctx context.Context, invocation execution.Invocation) error {
+	process, err := session.launchProcess(ctx, invocation, execution.SinkFunc(session.handleOutput))
 	if harness.IsNilInterface(process) {
-		cancel()
+		session.cancel()
 		if err == nil {
 			err = errors.New("OmO process launcher returned no process")
 		}
-		return nil, err
+		return err
 	}
 	// The Runner has completed the supplied persistence callbacks before ready
 	// output is released. A post-launch error transfers the same cleanup owner.
@@ -234,7 +244,7 @@ func (adapter *Adapter) start(ctx context.Context, request harness.StartRequest,
 		session.fail(err)
 	}
 	go session.watchProcess()
-	return session, err
+	return err
 }
 
 type nativeSession struct {
@@ -244,7 +254,9 @@ type nativeSession struct {
 	decoder         *Decoder
 	validator       *Validator
 	process         harness.NativeProcess
+	launchProcess   func(context.Context, execution.Invocation, execution.Sink) (harness.NativeProcess, error)
 	forwarder       harness.ProcessForwarder[harness.NativeProcess]
+	staged          *harness.StagedDriver
 	expected        *SessionState
 	directory       string
 	workspace       string
@@ -256,14 +268,11 @@ type nativeSession struct {
 	emitMutex       sync.Mutex
 	turnGate        chan struct{}
 	controlGate     chan struct{}
-	closeGate       harness.CloseGate
 	ready           bool
 	preReady        []execution.Event
 	preReadyBytes   int
 	pending         map[string]chan Response
 	nextID          uint64
-	opening         bool
-	opened          bool
 	turnStarted     bool
 	prompt          string
 	completing      bool
@@ -309,22 +318,22 @@ func (session *nativeSession) Open(ctx context.Context) (harness.NativeSessionHa
 		return harness.NativeSessionHandle{}, errors.New("OmO Open requires context")
 	}
 	session.mutex.Lock()
-	if err := session.usableLocked(); err != nil {
-		session.mutex.Unlock()
+	usableErr := session.usableLocked()
+	session.mutex.Unlock()
+	if usableErr != nil {
+		return harness.NativeSessionHandle{}, usableErr
+	}
+	handle, err := session.staged.Open(ctx)
+	if err != nil {
+		if errors.Is(err, harness.ErrStagedSessionOpening) {
+			return harness.NativeSessionHandle{}, errors.New("OmO session is already opening")
+		}
 		return harness.NativeSessionHandle{}, err
 	}
-	if session.opened {
-		state, _ := session.validator.SessionState()
-		session.mutex.Unlock()
-		return harness.NativeSessionHandle{ID: state.SessionID, Filename: state.SessionFile}, nil
-	}
-	if session.opening {
-		session.mutex.Unlock()
-		return harness.NativeSessionHandle{}, errors.New("OmO session is already opening")
-	}
-	session.opening = true
-	session.mutex.Unlock()
-	defer func() { session.mutex.Lock(); session.opening = false; session.mutex.Unlock() }()
+	return handle, nil
+}
+
+func (session *nativeSession) OpenNativeSession(ctx context.Context) (harness.NativeSessionHandle, error) {
 	if _, err := session.call(ctx, Request{Type: CommandProtocol}); err != nil {
 		return harness.NativeSessionHandle{}, session.openError(err)
 	}
@@ -352,7 +361,6 @@ func (session *nativeSession) Open(ctx context.Context) (harness.NativeSessionHa
 	if err := session.usableLocked(); err != nil {
 		return harness.NativeSessionHandle{}, session.openError(err)
 	}
-	session.opened = true
 	return harness.NativeSessionHandle{ID: state.SessionID, Filename: state.SessionFile}, nil
 }
 
@@ -385,6 +393,22 @@ func (session *nativeSession) StartTurn(ctx context.Context, request harness.Tur
 	if ctx == nil {
 		return errors.New("OmO StartTurn requires context")
 	}
+	if err := session.staged.Admit(ctx, request); err != nil {
+		if errors.Is(err, harness.ErrStagedSessionNotOpened) {
+			session.mutex.Lock()
+			usableErr := session.usableLocked()
+			session.mutex.Unlock()
+			if usableErr != nil {
+				return usableErr
+			}
+			return errors.New("OmO native handle has not opened")
+		}
+		return err
+	}
+	return nil
+}
+
+func (session *nativeSession) AdmitNativeTurn(ctx context.Context, request harness.TurnRequest) error {
 	prompt, err := buildTurnPrompt(request.Goal, request.Context)
 	if err != nil {
 		return err
@@ -401,10 +425,6 @@ func (session *nativeSession) StartTurn(ctx context.Context, request harness.Tur
 	if err := session.usableLocked(); err != nil {
 		session.mutex.Unlock()
 		return err
-	}
-	if !session.opened {
-		session.mutex.Unlock()
-		return errors.New("OmO native handle has not opened")
 	}
 	prepared := session.turnStarted
 	if prepared && session.prompt != prompt {
@@ -588,7 +608,11 @@ func (session *nativeSession) Close(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("OmO Close requires context")
 	}
-	return session.closeGate.RunDetached(ctx, cleanupTimeout, nil, session.closeOnce)
+	return session.staged.CloseDetached(ctx, cleanupTimeout, nil)
+}
+
+func (session *nativeSession) CloseNativeSession(ctx context.Context) error {
+	return session.closeOnce(ctx)
 }
 
 func (session *nativeSession) closeOnce(ctx context.Context) error {

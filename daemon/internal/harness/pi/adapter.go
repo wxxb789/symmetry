@@ -182,6 +182,7 @@ func (adapter *Adapter) Start(ctx context.Context, request harness.StartRequest,
 		cancelTimeout = nativeCancelTimeout
 	}
 	session := newNativeSession(processContext, cancel, sink, cancelTimeout, resumeState)
+	session.launchProcess = adapter.startProcess
 	if providerBridge != nil {
 		session.providerBridge = providerBridge.Lifecycle
 	}
@@ -194,40 +195,36 @@ func (adapter *Adapter) Start(ctx context.Context, request harness.StartRequest,
 			return nil, err
 		}
 	}
-	invocation := execution.Invocation{
-		Program:                            adapter.executable,
-		Args:                               args,
-		Dir:                                request.Workspace,
-		Env:                                environment,
-		InitialLeaseDeadline:               request.Invocation.InitialLeaseDeadline,
-		InitialLeaseDeadlineAt:             request.Invocation.InitialLeaseDeadlineAt,
-		InitialLeaseSequence:               request.Invocation.InitialLeaseSequence,
-		PrepareSupervisorHandoff:           request.Invocation.PrepareSupervisorHandoff,
-		BindSupervisorHandoff:              request.Invocation.BindSupervisorHandoff,
-		CommitSupervisorHandoff:            request.Invocation.CommitSupervisorHandoff,
-		RecordSupervisorHandoffStopReceipt: request.Invocation.RecordSupervisorHandoffStopReceipt,
-		ClearSupervisorHandoff:             request.Invocation.ClearSupervisorHandoff,
-		PersistProcessWithAuthority:        request.Invocation.PersistProcessWithAuthority,
-		PersistProcess:                     request.PersistProcess,
-		PersistProcessAuthority:            request.PersistProcessAuthority,
-		PersistContainmentStopReceipt:      request.PersistContainmentStopReceipt,
-		PersistContainmentUnproven:         request.Invocation.PersistContainmentUnproven,
-		LinuxV2Required:                    request.Invocation.LinuxV2Required,
-		LinuxV2:                            request.Invocation.LinuxV2,
+	launchErr := session.staged.Launch(processContext, request, harness.ProcessDescription{
+		Program: adapter.executable,
+		Args:    args,
+		Dir:     request.Workspace,
+		Env:     environment,
+	})
+	session.mutex.Lock()
+	installed := !harness.IsNilInterface(session.process)
+	session.mutex.Unlock()
+	if launchErr != nil && !installed {
+		return nil, launchErr
 	}
-	process, err := adapter.startProcess(processContext, invocation, execution.SinkFunc(session.handleProcessOutput))
+	return session, launchErr
+}
+
+func (session *nativeSession) LaunchTransport(ctx context.Context, invocation execution.Invocation) error {
+	providerBridge := session.providerBridge
+	process, err := session.launchProcess(ctx, invocation, execution.SinkFunc(session.handleProcessOutput))
 	if harness.IsNilInterface(process) {
-		cancel()
+		session.cancel()
 		if providerBridge != nil {
 			closeContext, closeCancel := context.WithTimeout(context.WithoutCancel(ctx), processCleanupTimeout)
-			closeErr := providerBridge.Lifecycle.Close(closeContext)
+			closeErr := providerBridge.Close(closeContext)
 			closeCancel()
 			err = errors.Join(err, closeErr)
 		}
 		if err != nil {
-			return nil, err
+			return err
 		}
-		return nil, errNativeProcessNil
+		return errNativeProcessNil
 	}
 
 	session.outputMutex.Lock()
@@ -235,13 +232,13 @@ func (adapter *Adapter) Start(ctx context.Context, request harness.StartRequest,
 	session.process = process
 	session.mutex.Unlock()
 	if err == nil && providerBridge != nil {
-		if bindErr := bindProviderBridgeProcess(process, providerBridge.Lifecycle); bindErr != nil {
+		if bindErr := bindProviderBridgeProcess(process, providerBridge); bindErr != nil {
 			err = bindErr
 		}
 	}
 	if err != nil && providerBridge != nil {
 		closeContext, closeCancel := context.WithTimeout(context.WithoutCancel(ctx), processCleanupTimeout)
-		closeErr := providerBridge.Lifecycle.Close(closeContext)
+		closeErr := providerBridge.Close(closeContext)
 		if closeErr != nil {
 			err = errors.Join(err, fmt.Errorf("close pi provider bridge after start failure: %w", closeErr))
 		}
@@ -262,14 +259,14 @@ func (adapter *Adapter) Start(ctx context.Context, request harness.StartRequest,
 		session.outputMutex.Unlock()
 		session.fail(err)
 		go session.watchProcess()
-		return session, err
+		return err
 	}
 	for _, event := range queued {
-		if err := session.handleProcessOutputLocked(processContext, event); err != nil {
+		if err := session.handleProcessOutputLocked(ctx, event); err != nil {
 			session.outputMutex.Unlock()
 			session.fail(err)
 			if providerBridge != nil {
-				closeErr := closeProviderBridgeAfterStartFailure(ctx, providerBridge.Lifecycle)
+				closeErr := closeProviderBridgeAfterStartFailure(ctx, providerBridge)
 				err = errors.Join(err, closeErr)
 				if closeErr == nil {
 					session.mutex.Lock()
@@ -278,7 +275,7 @@ func (adapter *Adapter) Start(ctx context.Context, request harness.StartRequest,
 				}
 			}
 			go session.watchProcess()
-			return session, err
+			return err
 		}
 	}
 	session.outputMutex.Unlock()
@@ -287,7 +284,7 @@ func (adapter *Adapter) Start(ctx context.Context, request harness.StartRequest,
 	session.mutex.Unlock()
 	if startFailure != nil {
 		if providerBridge != nil {
-			closeErr := closeProviderBridgeAfterStartFailure(ctx, providerBridge.Lifecycle)
+			closeErr := closeProviderBridgeAfterStartFailure(ctx, providerBridge)
 			startFailure = errors.Join(startFailure, closeErr)
 			if closeErr == nil {
 				session.mutex.Lock()
@@ -296,10 +293,10 @@ func (adapter *Adapter) Start(ctx context.Context, request harness.StartRequest,
 			}
 		}
 		go session.watchProcess()
-		return session, startFailure
+		return startFailure
 	}
 	go session.watchProcess()
-	return session, nil
+	return nil
 }
 
 func closeProviderBridgeAfterStartFailure(ctx context.Context, lifecycle harness.ProviderBridgeLifecycle) error {
@@ -509,6 +506,8 @@ type nativeSession struct {
 
 	process               nativeProcess
 	forwarder             harness.ProcessForwarder[nativeProcess]
+	launchProcess         processStarter
+	staged                *harness.StagedDriver
 	providerBridge        harness.ProviderBridgeLifecycle
 	cancelTimeout         time.Duration
 	processReady          bool
@@ -517,8 +516,6 @@ type nativeSession struct {
 	validator             *Validator
 	pending               map[string]chan Response
 	nextRequestID         uint64
-	opened                bool
-	opening               bool
 	turnStarted           bool
 	turnFinal             bool
 	turnResult            *harness.TaskResult
@@ -541,7 +538,6 @@ type nativeSession struct {
 	watchDone  chan struct{}
 	watchOnce  sync.Once
 
-	closeGate    harness.CloseGate
 	eventCount   uint64
 	lastSequence uint64
 }
@@ -566,6 +562,7 @@ func newNativeSession(ctx context.Context, cancel context.CancelFunc, sink harne
 		watchDone:     make(chan struct{}),
 	}
 	session.forwarder = harness.NewProcessForwarder(&session.mutex, &session.process)
+	session.staged = harness.NewStagedDriver(session, &session.mutex)
 	return session
 }
 
@@ -610,35 +607,21 @@ func (session *nativeSession) Open(ctx context.Context) (harness.NativeSessionHa
 	if ctx == nil {
 		return harness.NativeSessionHandle{}, errors.New("pi open context must not be nil")
 	}
-	session.mutex.Lock()
-	if session.opened {
-		state, ok := session.validator.SessionState()
-		session.mutex.Unlock()
-		if !ok {
-			return harness.NativeSessionHandle{}, ErrMissingSessionState
-		}
-		return harness.NativeSessionHandle{ID: state.SessionID, Filename: state.SessionFile}, nil
-	}
-	if session.opening {
-		session.mutex.Unlock()
+	handle, err := session.staged.Open(ctx)
+	if errors.Is(err, harness.ErrStagedSessionOpening) {
 		return harness.NativeSessionHandle{}, errors.New("pi native session is already opening")
 	}
+	return handle, err
+}
+
+func (session *nativeSession) OpenNativeSession(ctx context.Context) (harness.NativeSessionHandle, error) {
+	session.mutex.Lock()
 	if err := session.usableLocked(); err != nil {
 		session.mutex.Unlock()
 		return harness.NativeSessionHandle{}, err
 	}
-	session.opening = true
 	id := session.requestIDLocked("state")
 	session.mutex.Unlock()
-	opened := false
-	defer func() {
-		if opened {
-			return
-		}
-		session.mutex.Lock()
-		session.opening = false
-		session.mutex.Unlock()
-	}()
 	request, err := GetStateRequest(id)
 	if err != nil {
 		return harness.NativeSessionHandle{}, err
@@ -663,9 +646,6 @@ func (session *nativeSession) Open(ctx context.Context) (harness.NativeSessionHa
 			return harness.NativeSessionHandle{}, resumeRejected(err)
 		}
 	}
-	session.opened = true
-	session.opening = false
-	opened = true
 	return harness.NativeSessionHandle{ID: state.SessionID, Filename: state.SessionFile}, nil
 }
 
@@ -682,6 +662,20 @@ func (session *nativeSession) StartTurn(ctx context.Context, request harness.Tur
 	if strings.TrimSpace(request.Goal) == "" || !isJSONObject(request.Context) {
 		return errors.New("pi turn requires a non-empty goal and JSON object context")
 	}
+	err := session.staged.Admit(ctx, request)
+	if errors.Is(err, harness.ErrStagedSessionNotOpened) {
+		session.mutex.Lock()
+		unopenedErr := session.usableLocked()
+		session.mutex.Unlock()
+		if unopenedErr != nil {
+			return unopenedErr
+		}
+		return errors.New("pi native session has not opened")
+	}
+	return err
+}
+
+func (session *nativeSession) AdmitNativeTurn(ctx context.Context, request harness.TurnRequest) error {
 	prompt, err := buildTurnPrompt(request.Goal, request.Context)
 	if err != nil {
 		return err
@@ -690,10 +684,6 @@ func (session *nativeSession) StartTurn(ctx context.Context, request harness.Tur
 	if err := session.usableLocked(); err != nil {
 		session.mutex.Unlock()
 		return err
-	}
-	if !session.opened {
-		session.mutex.Unlock()
-		return errors.New("pi native session has not opened")
 	}
 	if session.turnStarted {
 		session.mutex.Unlock()
@@ -864,7 +854,7 @@ func (session *nativeSession) Close(ctx context.Context) error {
 	// The initiating caller may leave at any time, but a close that has begun
 	// must still attempt bounded process-tree cleanup. WithoutCancel preserves
 	// request values without deriving an unbounded Background operation.
-	return session.closeGate.RunDetached(ctx, session.cancelTimeout+processCleanupTimeout+processTerminationGrace, nil, session.closeOnce)
+	return session.staged.CloseDetached(ctx, session.cancelTimeout+processCleanupTimeout+processTerminationGrace, nil)
 }
 
 func (session *nativeSession) closeOnce(ctx context.Context) error {
@@ -905,6 +895,10 @@ func (session *nativeSession) closeOnce(ctx context.Context) error {
 	case <-ctx.Done():
 		return errors.Join(bridgeErr, ctx.Err())
 	}
+}
+
+func (session *nativeSession) CloseNativeSession(ctx context.Context) error {
+	return session.closeOnce(ctx)
 }
 
 func (session *nativeSession) call(ctx context.Context, request Request) (Response, error) {

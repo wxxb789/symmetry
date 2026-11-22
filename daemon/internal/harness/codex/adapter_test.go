@@ -1307,7 +1307,6 @@ func TestTerminalSuccessIsOverriddenByNonzeroProcessExit(t *testing.T) {
 	native := newNativeSession(context.Background(), func() {}, &recordingHarnessSink{}, t.TempDir())
 	native.process = process
 	native.processReady = true
-	native.opened = true
 	native.turnStarted = true
 	native.threadID = "thread-1"
 	native.turnID = "turn-1"

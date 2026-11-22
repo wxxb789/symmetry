@@ -878,6 +878,19 @@ func TestCloseRetainsOwnerAfterFailedPhysicalStop(t *testing.T) {
 	}
 }
 
+func TestStartTurnRefusesAfterCloseSetsTheStoppingLatch(t *testing.T) {
+	session, _ := testSession(t, nil, nil, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
+	defer cancel()
+	_, err := session.Open(ctx)
+	mustSettle(t, "Open", err)
+	mustSettle(t, "Close", session.Close(ctx))
+	err = session.StartTurn(ctx, harness.TurnRequest{Goal: "after close", Context: json.RawMessage(`{}`)})
+	if err == nil || err.Error() != "OMP session does not admit another prompt" {
+		t.Fatalf("StartTurn after Close = %v, want the stopping refusal", err)
+	}
+}
+
 func TestCancelFallsBackToPhysicalStopAfterUncertainAbort(t *testing.T) {
 	session, process := testSession(t, func(request map[string]any) []any {
 		if request["type"] == "prompt" {

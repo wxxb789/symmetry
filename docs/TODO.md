@@ -1542,3 +1542,17 @@ is fixed here; each bullet names what a follow-up has to re-derive.
       `@moduledoc false` owner module exposing the sets as functions the others read at compile
       time (`@x Owner.state_set()`), keeping every SQL literal byte-identical, plus one pinning
       test that fails on divergence.
+
+## Harness launch grant: legacy `StartRequest` members (rf-w4-15b, 2026-11-22)
+
+- [ ] Remove the legacy `StartRequest.Invocation`, `StartRequest.PersistProcess`,
+      `StartRequest.PersistProcessAuthority` and `StartRequest.PersistContainmentStopReceipt`
+      members. `daemon/internal/harness/staged_driver.go` now hands every staged adapter one opaque
+      `harness.LaunchGrant`; the five conforming adapters (`pi`, `codex`, `claude`, `omo`, `omp`)
+      and `generic.go` read the grant only, so the four legacy members are populated and read
+      solely by `daemon/internal/harness/opencode/adapter.go`, which the slice (E3/D1) may not
+      touch. Removal is tied to W6-04 (OpenCode promote-or-drop): once OpenCode adopts the grant or
+      is dropped, delete the four members, the `StartRequest.grant()` fallback in
+      `staged_driver.go` that merges them, and their population in
+      `daemon/internal/app/goal_admission_tx.go` and
+      `daemon/internal/app/linux_owner_witness_linux.go`.

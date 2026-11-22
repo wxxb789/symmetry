@@ -168,7 +168,8 @@ func (adapter *CandidateAdapter) Start(ctx context.Context, request harness.Star
 
 	processContext, cancel := context.WithCancel(ctx)
 	session := newCandidateSession(processContext, cancel, sink, sessionID)
-	invocation := execution.Invocation{
+	session.launchProcess = startProcess
+	launchErr := session.staged.Launch(processContext, request, harness.ProcessDescription{
 		Program: adapter.executable,
 		Args: []string{
 			"--print",
@@ -191,31 +192,26 @@ func (adapter *CandidateAdapter) Start(ctx context.Context, request harness.Star
 			"--permission-mode",
 			"acceptEdits",
 		},
-		Dir:                                request.Workspace,
-		Env:                                append([]string(nil), request.Invocation.Env...),
-		InitialLeaseDeadline:               request.Invocation.InitialLeaseDeadline,
-		InitialLeaseDeadlineAt:             request.Invocation.InitialLeaseDeadlineAt,
-		InitialLeaseSequence:               request.Invocation.InitialLeaseSequence,
-		PrepareSupervisorHandoff:           request.Invocation.PrepareSupervisorHandoff,
-		BindSupervisorHandoff:              request.Invocation.BindSupervisorHandoff,
-		CommitSupervisorHandoff:            request.Invocation.CommitSupervisorHandoff,
-		RecordSupervisorHandoffStopReceipt: request.Invocation.RecordSupervisorHandoffStopReceipt,
-		ClearSupervisorHandoff:             request.Invocation.ClearSupervisorHandoff,
-		PersistProcessWithAuthority:        request.Invocation.PersistProcessWithAuthority,
-		PersistProcess:                     request.PersistProcess,
-		PersistProcessAuthority:            request.PersistProcessAuthority,
-		PersistContainmentStopReceipt:      request.PersistContainmentStopReceipt,
-		PersistContainmentUnproven:         request.Invocation.PersistContainmentUnproven,
-		LinuxV2Required:                    request.Invocation.LinuxV2Required,
-		LinuxV2:                            request.Invocation.LinuxV2,
+		Dir: request.Workspace,
+		Env: append([]string(nil), request.Invocation.Env...),
+	})
+	session.mutex.Lock()
+	installed := !harness.IsNilInterface(session.process)
+	session.mutex.Unlock()
+	if launchErr != nil && !installed {
+		return nil, launchErr
 	}
-	process, startErr := startProcess(processContext, invocation, execution.SinkFunc(session.handleProcessOutput))
+	return session, launchErr
+}
+
+func (session *candidateSession) LaunchTransport(ctx context.Context, invocation execution.Invocation) error {
+	process, startErr := session.launchProcess(ctx, invocation, execution.SinkFunc(session.handleProcessOutput))
 	if harness.IsNilInterface(process) {
-		cancel()
+		session.cancel()
 		if startErr != nil {
-			return nil, startErr
+			return startErr
 		}
-		return nil, errCandidateProcessNil
+		return errCandidateProcessNil
 	}
 	if startErr != nil {
 		// A non-nil process plus an error is a cleanup-owner transfer. The
@@ -238,7 +234,7 @@ func (adapter *CandidateAdapter) Start(ctx context.Context, request harness.Star
 	var outputErr error
 	if startErr == nil && outputFailure == nil {
 		for _, event := range queued {
-			if err := session.handleProcessOutputLocked(processContext, event); err != nil && outputErr == nil {
+			if err := session.handleProcessOutputLocked(ctx, event); err != nil && outputErr == nil {
 				outputErr = err
 			}
 		}
@@ -253,15 +249,12 @@ func (adapter *CandidateAdapter) Start(ctx context.Context, request harness.Star
 	session.mutex.Unlock()
 	go session.watchProcess()
 	if startErr != nil {
-		return session, startErr
+		return startErr
 	}
 	if outputErr != nil {
-		return session, outputErr
+		return outputErr
 	}
-	if outputFailure != nil {
-		return session, outputFailure
-	}
-	return session, nil
+	return outputFailure
 }
 
 type candidateSession struct {
@@ -278,6 +271,7 @@ type candidateSession struct {
 	writeMutex  sync.Mutex
 
 	forwarder      harness.ProcessForwarder[candidateProcess]
+	launchProcess  candidateProcessStarter
 	process        candidateProcess
 	processReady   bool
 	preReadyEvents []execution.Event
@@ -286,7 +280,6 @@ type candidateSession struct {
 	processResult  *execution.Result
 
 	identityObserved     bool
-	opened               bool
 	turnStarted          bool
 	turnFinal            bool
 	turnErr              error
@@ -308,7 +301,7 @@ type candidateSession struct {
 	watchDone  chan struct{}
 	watchOnce  sync.Once
 
-	closeGate harness.CloseGate
+	staged *harness.StagedDriver
 }
 
 func newCandidateSession(ctx context.Context, cancel context.CancelFunc, sink harness.EventSink, sessionID string) *candidateSession {
@@ -324,6 +317,7 @@ func newCandidateSession(ctx context.Context, cancel context.CancelFunc, sink ha
 		watchDone:         make(chan struct{}),
 	}
 	session.forwarder = harness.NewProcessForwarder(&session.mutex, &session.process)
+	session.staged = harness.NewStagedDriver(session, &session.mutex)
 	return session
 }
 
@@ -362,17 +356,20 @@ func (session *candidateSession) Open(ctx context.Context) (harness.NativeSessio
 	if err := ctx.Err(); err != nil {
 		return harness.NativeSessionHandle{}, err
 	}
-	session.mutex.Lock()
-	if session.opened {
-		handle := harness.NativeSessionHandle{ID: session.expectedSessionID}
-		session.mutex.Unlock()
-		return handle, nil
+	handle, err := session.staged.Open(ctx)
+	if errors.Is(err, harness.ErrStagedSessionOpening) {
+		// This open is idempotent and side-effect free, so an in-flight concurrent open still returns the requested UUID.
+		return harness.NativeSessionHandle{ID: session.expectedSessionID}, nil
 	}
+	return handle, err
+}
+
+func (session *candidateSession) OpenNativeSession(ctx context.Context) (harness.NativeSessionHandle, error) {
+	session.mutex.Lock()
 	if err := session.usableLocked(); err != nil {
 		session.mutex.Unlock()
 		return harness.NativeSessionHandle{}, err
 	}
-	session.opened = true
 	session.mutex.Unlock()
 	return harness.NativeSessionHandle{ID: session.expectedSessionID}, nil
 }
@@ -393,6 +390,20 @@ func (session *candidateSession) StartTurn(ctx context.Context, request harness.
 	if !isJSONObject(request.Context) {
 		return errors.New("Claude Code native adapter turn context must be a JSON object")
 	}
+	err := session.staged.Admit(ctx, request)
+	if errors.Is(err, harness.ErrStagedSessionNotOpened) {
+		session.mutex.Lock()
+		usableErr := session.usableLocked()
+		session.mutex.Unlock()
+		if usableErr != nil {
+			return usableErr
+		}
+		return errors.New("Claude Code native adapter session has not opened")
+	}
+	return err
+}
+
+func (session *candidateSession) AdmitNativeTurn(ctx context.Context, request harness.TurnRequest) error {
 	frame, err := json.Marshal(candidateUserFrame{
 		Type: "user",
 		Message: candidateUserMessage{
@@ -411,11 +422,6 @@ func (session *candidateSession) StartTurn(ctx context.Context, request harness.
 		session.mutex.Unlock()
 		session.writeMutex.Unlock()
 		return err
-	}
-	if !session.opened {
-		session.mutex.Unlock()
-		session.writeMutex.Unlock()
-		return errors.New("Claude Code native adapter session has not opened")
 	}
 	if session.turnStarted {
 		session.mutex.Unlock()
@@ -596,7 +602,7 @@ func (session *candidateSession) WaitTurn(ctx context.Context) error {
 		return errors.New("Claude Code native adapter wait-turn context must not be nil")
 	}
 	session.mutex.Lock()
-	if !session.opened {
+	if !session.staged.OpenedLocked() {
 		session.mutex.Unlock()
 		return errors.New("Claude Code native adapter session has not opened")
 	}
@@ -649,22 +655,15 @@ func (session *candidateSession) Close(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("Claude Code native adapter close context must not be nil")
 	}
-	return session.closeGate.RunDetached(ctx, cleanupTimeout+terminationGrace, session.requestClose, func(cleanupContext context.Context) error {
-		err, retryable := session.closeOnce(cleanupContext)
-		switch {
-		case err == nil:
-			return nil
-		case retryable:
-			// A watcher-only timeout is provisional: the native process can
-			// settle after this bounded attempt. Leave Close retryable so a
-			// later reconciliation can observe watchDone and prove cleanup.
-			return err
-		default:
-			// Process.Terminate is idempotent and retains its first failure; preserve that
-			// observation instead of issuing another terminate call.
-			return harness.PermanentCloseFailure(err)
-		}
-	})
+	return session.staged.CloseDetached(ctx, cleanupTimeout+terminationGrace, session.requestClose)
+}
+
+func (session *candidateSession) CloseNativeSession(ctx context.Context) error {
+	err, retryable := session.closeOnce(ctx)
+	if err == nil || retryable {
+		return err
+	}
+	return harness.PermanentCloseFailure(err)
 }
 
 func (session *candidateSession) requestClose() {

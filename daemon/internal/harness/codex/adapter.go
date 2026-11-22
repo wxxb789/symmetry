@@ -181,101 +181,38 @@ func (adapter *Adapter) Start(ctx context.Context, request harness.StartRequest,
 
 	processContext, cancel := context.WithCancel(ctx)
 	session := newNativeSession(processContext, cancel, sink, request.Workspace)
+	launchProcess := request.StartProcess
+	if launchProcess == nil {
+		launchProcess = adapter.startProcess
+	}
+	session.launchProcess = launchProcess
 	session.configuredNativeModel = strings.TrimSpace(adapter.configuredNativeModel)
 	session.configuredNativeProvider = strings.TrimSpace(adapter.configuredNativeProvider)
-	invocation := execution.Invocation{
-		Program:                            adapter.executable,
-		Args:                               []string{"app-server", "--stdio"},
-		Dir:                                request.Workspace,
-		Env:                                append([]string(nil), request.Invocation.Env...),
-		InitialLeaseDeadline:               request.Invocation.InitialLeaseDeadline,
-		InitialLeaseDeadlineAt:             request.Invocation.InitialLeaseDeadlineAt,
-		InitialLeaseSequence:               request.Invocation.InitialLeaseSequence,
-		PrepareSupervisorHandoff:           request.Invocation.PrepareSupervisorHandoff,
-		BindSupervisorHandoff:              request.Invocation.BindSupervisorHandoff,
-		CommitSupervisorHandoff:            request.Invocation.CommitSupervisorHandoff,
-		RecordSupervisorHandoffStopReceipt: request.Invocation.RecordSupervisorHandoffStopReceipt,
-		ClearSupervisorHandoff:             request.Invocation.ClearSupervisorHandoff,
-		PersistProcessWithAuthority:        request.Invocation.PersistProcessWithAuthority,
-		PersistProcess:                     request.PersistProcess,
-		PersistProcessAuthority:            request.PersistProcessAuthority,
-		PersistContainmentStopReceipt:      request.PersistContainmentStopReceipt,
-		PersistContainmentUnproven:         request.Invocation.PersistContainmentUnproven,
-		LinuxV2Required:                    request.Invocation.LinuxV2Required,
-		LinuxV2:                            request.Invocation.LinuxV2,
-	}
-	var process nativeProcess
-	var err error
-	if request.StartProcess != nil {
-		process, err = request.StartProcess(processContext, invocation, execution.SinkFunc(session.handleProcessOutput))
-	} else {
-		process, err = adapter.startProcess(processContext, invocation, execution.SinkFunc(session.handleProcessOutput))
-	}
-	if harness.IsNilInterface(process) {
-		if err != nil {
-			cancel()
-			return nil, err
-		}
-		session.outputMutex.Lock()
-		failure := session.failProcessOutputBeforeReady(execution.Event{
-			Stream:   execution.Stdout,
-			Sequence: atomic.AddUint64(&session.lastSeq, 1),
-			At:       time.Now().UTC(),
-		}, errNativeProcessNil)
-		session.outputMutex.Unlock()
-		cancel()
-		return nil, failure
-	}
-	if err != nil {
-		session.retainStartFailure(process, err)
-		return session, err
-	}
-
-	session.outputMutex.Lock()
+	launchErr := session.staged.Launch(processContext, request, harness.ProcessDescription{
+		Program: adapter.executable,
+		Args:    []string{"app-server", "--stdio"},
+		Dir:     request.Workspace,
+		Env:     append([]string(nil), request.Invocation.Env...),
+	})
 	session.mutex.Lock()
-	session.process = process
-	preReadyEvents := append([]execution.Event(nil), session.preReadyEvents...)
-	session.preReadyEvents = nil
-	session.preReadyBytes = 0
-	outputFailure := session.outputFailure
-	session.processReady = outputFailure == nil
+	installed := !harness.IsNilInterface(session.process)
 	session.mutex.Unlock()
-	var outputErr error
-	if outputFailure == nil {
-		for _, queued := range preReadyEvents {
-			if err := session.handleProcessOutputLocked(processContext, queued); err != nil {
-				outputErr = err
-				break
-			}
-		}
+	if launchErr != nil && !installed {
+		return nil, launchErr
 	}
-	if outputErr != nil {
-		session.retainStartFailureLocked(process, outputErr)
-		session.outputMutex.Unlock()
-		session.cancel()
-		session.launchWatcher()
-		return session, outputErr
-	}
-	session.outputMutex.Unlock()
-	session.mutex.Lock()
-	outputFailure = session.outputFailure
-	session.mutex.Unlock()
-	if outputFailure != nil {
-		session.retainStartFailure(process, outputFailure)
-		return session, outputFailure
-	}
-	session.launchWatcher()
-	return session, nil
+	return session, launchErr
 }
 
 type nativeSession struct {
-	context   context.Context
-	cancel    context.CancelFunc
-	process   nativeProcess
-	forwarder harness.ProcessForwarder[nativeProcess]
-	sink      harness.EventSink
-	workspace string
-	framer    *Framer
+	context       context.Context
+	cancel        context.CancelFunc
+	process       nativeProcess
+	forwarder     harness.ProcessForwarder[nativeProcess]
+	staged        *harness.StagedDriver
+	launchProcess func(context.Context, execution.Invocation, execution.Sink) (nativeProcess, error)
+	sink          harness.EventSink
+	workspace     string
+	framer        *Framer
 
 	mutex                    sync.Mutex
 	outputMutex              sync.Mutex
@@ -286,8 +223,6 @@ type nativeSession struct {
 	retiredRPCOrder          []uint64
 	pendingCancelAttempts    map[uint64]uint64
 	nextID                   uint64
-	opened                   bool
-	opening                  bool
 	closed                   bool
 	threadID                 string
 	sessionStartedSent       bool
@@ -319,7 +254,6 @@ type nativeSession struct {
 	watchDone                chan struct{}
 	watchOnce                sync.Once
 	watchStarted             bool
-	closeGate                harness.CloseGate
 	closeNormalCandidate     bool
 	sinkErr                  error
 	nativeFailureReason      *protocol.TaskResultReason
@@ -363,7 +297,67 @@ func newNativeSession(ctx context.Context, cancel context.CancelFunc, sink harne
 		cancelAttempts:        make(map[uint64]*cancelAttempt),
 	}
 	session.forwarder = harness.NewProcessForwarder(&session.mutex, &session.process)
+	session.staged = harness.NewStagedDriver(session, &session.mutex)
 	return session
+}
+
+func (session *nativeSession) LaunchTransport(ctx context.Context, invocation execution.Invocation) error {
+	process, err := session.launchProcess(ctx, invocation, execution.SinkFunc(session.handleProcessOutput))
+	if harness.IsNilInterface(process) {
+		if err != nil {
+			session.cancel()
+			return err
+		}
+		session.outputMutex.Lock()
+		failure := session.failProcessOutputBeforeReady(execution.Event{
+			Stream:   execution.Stdout,
+			Sequence: atomic.AddUint64(&session.lastSeq, 1),
+			At:       time.Now().UTC(),
+		}, errNativeProcessNil)
+		session.outputMutex.Unlock()
+		session.cancel()
+		return failure
+	}
+	if err != nil {
+		session.retainStartFailure(process, err)
+		return err
+	}
+
+	session.outputMutex.Lock()
+	session.mutex.Lock()
+	session.process = process
+	preReadyEvents := append([]execution.Event(nil), session.preReadyEvents...)
+	session.preReadyEvents = nil
+	session.preReadyBytes = 0
+	outputFailure := session.outputFailure
+	session.processReady = outputFailure == nil
+	session.mutex.Unlock()
+	var outputErr error
+	if outputFailure == nil {
+		for _, queued := range preReadyEvents {
+			if err := session.handleProcessOutputLocked(ctx, queued); err != nil {
+				outputErr = err
+				break
+			}
+		}
+	}
+	if outputErr != nil {
+		session.retainStartFailureLocked(process, outputErr)
+		session.outputMutex.Unlock()
+		session.cancel()
+		session.launchWatcher()
+		return outputErr
+	}
+	session.outputMutex.Unlock()
+	session.mutex.Lock()
+	outputFailure = session.outputFailure
+	session.mutex.Unlock()
+	if outputFailure != nil {
+		session.retainStartFailure(process, outputFailure)
+		return outputFailure
+	}
+	session.launchWatcher()
+	return nil
 }
 
 func (session *nativeSession) ProcessDetails() (int, string) {
@@ -406,26 +400,19 @@ func (session *nativeSession) Open(ctx context.Context) (harness.NativeSessionHa
 	if err := session.ensureUsable(false); err != nil {
 		return harness.NativeSessionHandle{}, err
 	}
-	session.mutex.Lock()
-	if session.opened {
-		handle := harness.NativeSessionHandle{ID: session.threadID}
-		session.mutex.Unlock()
-		return handle, nil
-	}
-	if session.opening {
-		session.mutex.Unlock()
+	handle, err := session.staged.Open(ctx)
+	if errors.Is(err, harness.ErrStagedSessionOpening) {
 		return harness.NativeSessionHandle{}, errors.New("codex native session is already opening")
 	}
-	session.opening = true
-	session.mutex.Unlock()
+	return handle, err
+}
+
+func (session *nativeSession) OpenNativeSession(ctx context.Context) (harness.NativeSessionHandle, error) {
 	opened := false
 	defer func() {
 		if opened {
 			return
 		}
-		session.mutex.Lock()
-		session.opening = false
-		session.mutex.Unlock()
 		// A failed native open cannot be retried safely: the process may have
 		// accepted thread/start and then returned an incompatible identity or
 		// policy. Stop it before the caller can accidentally create a second
@@ -499,8 +486,6 @@ func (session *nativeSession) Open(ctx context.Context) (harness.NativeSessionHa
 		session.mutex.Unlock()
 		return harness.NativeSessionHandle{}, session.sessionError()
 	}
-	session.opened = true
-	session.opening = false
 	session.threadID = started.Thread.ID
 	session.nativeModel = strings.TrimSpace(started.Model)
 	session.nativeModelProvider = strings.TrimSpace(started.ModelProvider)
@@ -529,13 +514,21 @@ func (session *nativeSession) StartTurn(ctx context.Context, request harness.Tur
 	if err := session.ensureUsable(false); err != nil {
 		return err
 	}
+	err := session.staged.Admit(ctx, request)
+	if errors.Is(err, harness.ErrStagedSessionNotOpened) {
+		return errors.New("codex native session has not opened a thread")
+	}
+	return err
+}
+
+func (session *nativeSession) AdmitNativeTurn(ctx context.Context, request harness.TurnRequest) error {
 	outputSchema, err := nativeTaskResultSchema()
 	if err != nil {
 		return fmt.Errorf("load canonical Codex task-result schema: %w", err)
 	}
 
 	session.mutex.Lock()
-	if !session.opened || session.threadID == "" {
+	if session.threadID == "" {
 		session.mutex.Unlock()
 		return errors.New("codex native session has not opened a thread")
 	}
@@ -772,7 +765,7 @@ func (session *nativeSession) Close(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("codex close context must not be nil")
 	}
-	return session.closeGate.Run(ctx, session.closeOnce)
+	return session.staged.Close(ctx)
 }
 
 func (session *nativeSession) closeOnce(ctx context.Context) error {
@@ -834,6 +827,10 @@ func (session *nativeSession) closeOnce(ctx context.Context) error {
 		return nil
 	}
 	return errors.Join(interruptErr, terminateErr, watcherErr)
+}
+
+func (session *nativeSession) CloseNativeSession(ctx context.Context) error {
+	return session.closeOnce(ctx)
 }
 
 func (session *nativeSession) watchProcess() {
@@ -1592,7 +1589,7 @@ func (session *nativeSession) waitForTurnReplay(ctx context.Context, replayDone 
 func (session *nativeSession) preparePendingTurnReplayAfterProcessExit() bool {
 	session.mutex.Lock()
 	defer session.mutex.Unlock()
-	if session.closed || !session.opened || !session.turnStarting || len(session.pendingTurnEvents) == 0 {
+	if session.closed || !session.staged.OpenedLocked() || !session.turnStarting || len(session.pendingTurnEvents) == 0 {
 		return false
 	}
 	turnID := ""
@@ -1983,7 +1980,7 @@ func (session *nativeSession) ensureUsable(requireTurn bool) error {
 	if session.sinkErr != nil {
 		return session.sinkErr
 	}
-	if requireTurn && (!session.opened || !session.turnStarted || session.threadID == "" || session.turnID == "") {
+	if requireTurn && (!session.staged.OpenedLocked() || !session.turnStarted || session.threadID == "" || session.turnID == "") {
 		return errors.New("codex native turn has not started")
 	}
 	return nil
@@ -1998,7 +1995,7 @@ func (session *nativeSession) matches(threadID, turnID string) bool {
 func (session *nativeSession) matchesThread(threadID string) bool {
 	session.mutex.Lock()
 	defer session.mutex.Unlock()
-	return session.opened && threadID != "" && threadID == session.threadID
+	return session.staged.OpenedLocked() && threadID != "" && threadID == session.threadID
 }
 
 func (session *nativeSession) hasTerminalResult() bool {
@@ -2020,7 +2017,7 @@ func (session *nativeSession) markTerminalSeen() bool {
 func (session *nativeSession) stageThreadStarted(threadID string, raw json.RawMessage) bool {
 	session.mutex.Lock()
 	defer session.mutex.Unlock()
-	if !session.opening || session.opened {
+	if !session.staged.OpeningLocked() || session.staged.OpenedLocked() {
 		return false
 	}
 	if _, duplicate := session.pendingThreadStarts[threadID]; duplicate {
