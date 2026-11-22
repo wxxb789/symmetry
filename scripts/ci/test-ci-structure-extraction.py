@@ -2,6 +2,7 @@
 """Structural pins for the extracted CI programs, the contracts composite action, and the advisory plane."""
 
 import dataclasses
+import hashlib
 import pathlib
 import posixpath
 import re
@@ -18,9 +19,11 @@ ACTION = ROOT / ".github" / "actions" / "contracts-build" / "action.yml"
 JOB_HEADER = re.compile(r"^  ([a-z][a-z0-9-]*):$")
 KEY = re.compile(r"^(\s*)([A-Za-z_][A-Za-z0-9_-]*):(?: (.*))?$")
 GATE_ENTRY = re.compile(r'"([^"=]+)=\$(?:env:)?([A-Za-z_][A-Za-z0-9_]*)"')
+OUTCOME_BINDING = re.compile(r"\$\{\{ steps\.[A-Za-z_][A-Za-z0-9_]*\.outcome \}\}")
 ASSERTION_JOB = re.compile(r"assert-folded-gates\.py --job ([a-z][a-z0-9-]*)")
 NATIVE_CALL = re.compile(r"(^|[^&\w])&\s*\$[A-Za-z_]|\bStart-Process\b")
 STATUS_CHECK = re.compile(r"\$LASTEXITCODE\b|\.ExitCode\b")
+INLINE_RUN_KEY = re.compile(r"^(?: {8}| {6}- )run: \|$")
 
 WORKFLOW_INDENT = (6, 8)
 ACTION_INDENT = (4, 6)
@@ -47,6 +50,15 @@ BASH_PROLOGUE = ("#!/usr/bin/env bash", "set -Eeuo pipefail")
 NATIVE_SITE_COUNTS = {
     "pi-windows-postgres-loopback.ps1": 4,
     "pi-windows-cleanup-evidence.ps1": 0,
+}
+
+# After the extraction the moved bodies live only inside these programs, so their bytes are pinned whole.
+PROGRAM_SHA256 = {
+    "compose-stack-smoke.sh": "1cdf4203ddf26726b4e1ea75bd9298f31d789be34eb7162ec919dec95f9e653d",
+    "verify-linux-pi-pidfd-cleanup.sh": "10fc56095ad58247550036692a6d16ca0e6f5433ec536f5b1e4cd0ed0659cc05",
+    "daemon-recovery-after-control-restart.sh": "b2a2d850203600fa3c0b549f72ba956392bdf4ae7d8de31fc38244801de1e4e8",
+    "pi-windows-postgres-loopback.ps1": "1ce5cd4f57f093b1d6a9a244b343cece9a4346ccc3b9854aa2ffa1208debeed7",
+    "pi-windows-cleanup-evidence.ps1": "d95b53e145989aad5d675c8236e1a9205d08f7a546c2c74654d81e2ec4a78b1d",
 }
 
 
@@ -124,10 +136,9 @@ EXTRACTED_STEPS = (
     ),
 )
 
-ACTION_INPUTS = ("audit-prod", "build-control-release")
+ACTION_INPUTS = ("build-control-release",)
 ACTION_STEPS = (
     "name: Check lockfile registry provenance",
-    "name: Measure production dependency advisories (advisory)",
     "run: pnpm install --frozen-lockfile",
     "run: pnpm contracts:check",
     "run: pnpm --filter @symmetry/frontend typecheck",
@@ -139,6 +150,11 @@ ACTION_STEPS = (
     "name: Build production Control release",
     "uses: actions/upload-artifact@v7",
 )
+ACTION_CONDITIONS = (
+    ("uses: erlef/setup-beam@v1", "inputs.build-control-release == 'true'"),
+    ("name: Build production Control release", "inputs.build-control-release == 'true'"),
+    ("uses: actions/upload-artifact@v7", "inputs.build-control-release == 'true'"),
+)
 ACTION_ARTIFACTS = (
     ("portal-assets", "control/priv/static/portal", None),
     ("control-release-linux", "${{ runner.temp }}/control-release-linux.tar.gz", "error"),
@@ -147,7 +163,14 @@ CONTRACTS_HEADERS = {
     "ci.yml": ("needs: changes", "if: needs.changes.outputs.run-heavy == 'true'", "runs-on: ubuntu-latest"),
     "linux-native-v2-acceptance.yml": ("runs-on: ubuntu-latest",),
 }
-CONTRACTS_INPUTS = {"ci.yml": ("true", "true"), "linux-native-v2-acceptance.yml": ("false", "false")}
+CONTRACTS_INPUTS = {"ci.yml": "true", "linux-native-v2-acceptance.yml": "false"}
+# The advisory audit stays with the caller that wants it: `always()` is what reaches it after a failed setup.
+CONTRACTS_ADVISORY_STEP = {
+    "name": "Measure production dependency advisories (advisory)",
+    "if": "always()",
+    "continue-on-error": "true",
+    "run": "|",
+}
 
 ADVISORY_STEPS = frozenset(
     {
@@ -160,7 +183,7 @@ ADVISORY_STEPS = frozenset(
         ("legacy-route-audit", "Measure shellcheck findings in scripts/ci (advisory)"),
         ("legacy-route-audit", "Measure actionlint findings for the workflows (advisory)"),
         ("daemon-windows", "Measure golangci-lint findings (GOOS=windows, advisory)"),
-        (ACTION_JOB, "Measure production dependency advisories (advisory)"),
+        ("contracts", "Measure production dependency advisories (advisory)"),
     }
 )
 ADVISORY_JOBS = frozenset({"coverage-control", "coverage-daemon", "coverage-frontend"})
@@ -259,11 +282,15 @@ def step_name(step_lines: list[str], indent: tuple[int, int]) -> str:
 
 
 def inline_run_bodies(workflow_text: str) -> list[tuple[int, list[str]]]:
-    """Every `run: |` body in the workflow file, with the line number of its key."""
+    """Every `run: |` body in the workflow file, with the line number of its key.
+
+    Scans both the plain key form and a step whose head carries the key (`- run: |`), so no
+    inline body escapes the ceiling by moving to the step head.
+    """
     lines = workflow_text.split("\n")
     bodies = []
     for index, line in enumerate(lines):
-        if re.match(r"^        run: \|$", line):
+        if INLINE_RUN_KEY.match(line):
             bodies.append((index + 1, block_body(lines, index, 8)))
     return bodies
 
@@ -301,12 +328,23 @@ def assertion_gates(job_lines: list[str], job: str) -> set[str]:
         body = run_body_at(normalized, WORKFLOW_INDENT[1])
         if body is None:
             continue
-        text = "\n".join(body)
+        text = "\n".join(line for line in body if not line.lstrip().startswith("#"))
         match = ASSERTION_JOB.search(text)
         if match is None:
             continue
         require(match.group(1) == job, f"job {job} runs an assertion that names another job: {match.group(1)}")
-        gates.update(name for name, _ in GATE_ENTRY.findall(text))
+        env = nested_at(normalized, "env", WORKFLOW_INDENT[1])
+        for name, variable in GATE_ENTRY.findall(text):
+            value = env.get(variable)
+            require(
+                value is not None,
+                f"job {job}: the gate {name!r} reads {variable}, which the step's env does not define",
+            )
+            require(
+                OUTCOME_BINDING.fullmatch(value) is not None,
+                f"job {job}: the gate {name!r} reads {variable}={value!r}, which is not a steps.<id>.outcome",
+            )
+            gates.add(name)
     return gates
 
 
@@ -321,36 +359,55 @@ def advisory_value(line: str, prefix: str, scope: str) -> bool:
 def workflow_advisories(workflow_text: str) -> tuple[set[tuple[str, str]], set[str]]:
     steps: set[tuple[str, str]] = set()
     jobs: set[str] = set()
+    prefix = " " * WORKFLOW_INDENT[1]
     for job, block in job_blocks(workflow_text).items():
         if any(advisory_value(line, "    ", job) for line in block):
             jobs.add(job)
         for step_lines in split_steps(block, WORKFLOW_INDENT[0]):
-            if any(advisory_value(line, "        ", job) for line in step_lines):
+            normalized = normalized_step(step_lines, *WORKFLOW_INDENT)
+            if any(advisory_value(line, prefix, job) for line in normalized):
                 steps.add((job, step_name(step_lines, WORKFLOW_INDENT)))
     return steps, jobs
 
 
 def action_advisories(action_text: str) -> set[tuple[str, str]]:
     steps = set()
+    prefix = " " * ACTION_INDENT[1]
     for step_lines in split_steps(action_text.split("\n"), ACTION_INDENT[0]):
-        if any(advisory_value(line, "      ", ACTION_JOB) for line in step_lines):
+        normalized = normalized_step(step_lines, *ACTION_INDENT)
+        if any(advisory_value(line, prefix, ACTION_JOB) for line in normalized):
             steps.add((ACTION_JOB, step_name(step_lines, ACTION_INDENT)))
     return steps
 
 
+def action_steps(action_text: str) -> list[list[str]]:
+    return [
+        normalized_step(step_lines, *ACTION_INDENT)
+        for step_lines in split_steps(action_text.split("\n"), ACTION_INDENT[0])
+    ]
+
+
+def action_step_signature(normalized: list[str]) -> str:
+    scalars = scalars_at(normalized, ACTION_INDENT[1])
+    if "name" in scalars:
+        return f"name: {scalars['name']}"
+    if "uses" in scalars:
+        return f"uses: {scalars['uses']}"
+    body = run_body_at(normalized, ACTION_INDENT[1])
+    return f"run: {scalars.get('run') or (body[0] if body else '')}"
+
+
 def action_step_signatures(action_text: str) -> list[str]:
-    signatures = []
-    for step_lines in split_steps(action_text.split("\n"), ACTION_INDENT[0]):
-        normalized = normalized_step(step_lines, *ACTION_INDENT)
-        scalars = scalars_at(normalized, ACTION_INDENT[1])
-        if "name" in scalars:
-            signatures.append(f"name: {scalars['name']}")
-        elif "uses" in scalars:
-            signatures.append(f"uses: {scalars['uses']}")
-        else:
-            body = run_body_at(normalized, ACTION_INDENT[1])
-            signatures.append(f"run: {scalars.get('run') or (body[0] if body else '')}")
-    return signatures
+    return [action_step_signature(normalized) for normalized in action_steps(action_text)]
+
+
+def action_step_conditions(action_text: str) -> list[tuple[str, str]]:
+    conditions = []
+    for normalized in action_steps(action_text):
+        condition = scalars_at(normalized, ACTION_INDENT[1]).get("if")
+        if condition is not None:
+            conditions.append((action_step_signature(normalized), condition))
+    return conditions
 
 
 def action_artifacts(action_text: str) -> list[tuple[str, str, str | None]]:
@@ -411,6 +468,9 @@ def check_programs(root: pathlib.Path) -> None:
             len([line for line in lines if line.strip()]) > len(prologue),
             f"{step.program} is effectively empty",
         )
+        digest = hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()
+        expected_digest = PROGRAM_SHA256[pathlib.Path(step.program).name]
+        require(digest == expected_digest, f"{step.program}: the body changed (sha256 {digest})")
         if not step.program.endswith(".ps1"):
             continue
         stripped = [line for line in lines if line.strip()]
@@ -449,6 +509,10 @@ def check_action(action_text: str, workflows: dict[str, str]) -> None:
         f"the contracts action step list changed: {action_step_signatures(action_text)!r}",
     )
     require(
+        tuple(action_step_conditions(action_text)) == ACTION_CONDITIONS,
+        f"the contracts action step conditions changed: {action_step_conditions(action_text)!r}",
+    )
+    require(
         tuple(action_artifacts(action_text)) == ACTION_ARTIFACTS,
         f"the contracts action artifacts changed: {action_artifacts(action_text)!r}",
     )
@@ -456,9 +520,8 @@ def check_action(action_text: str, workflows: dict[str, str]) -> None:
         blocks = job_blocks(workflow_text)
         require("contracts" in blocks, f"{label} lost its contracts job")
         body = "\n".join(blocks["contracts"])
-        audit_prod, build_release = CONTRACTS_INPUTS[label]
+        build_release = CONTRACTS_INPUTS[label]
         require(ACTION_CALL in body, f"{label}: the contracts job does not call the action")
-        require(f'          audit-prod: "{audit_prod}"' in body, f"{label}: audit-prod changed")
         require(
             f'          build-control-release: "{build_release}"' in body, f"{label}: build-control-release changed"
         )
@@ -471,6 +534,13 @@ def check_action(action_text: str, workflows: dict[str, str]) -> None:
         "    needs: contracts\n" in "\n".join(acceptance_job) + "\n",
         "the acceptance job lost its contracts prerequisite",
     )
+
+
+def check_caller_advisory_step(workflow_text: str) -> None:
+    """The advisory audit must stay with its caller: `always()` is what reaches it after a failed setup."""
+    normalized = find_step(job_blocks(workflow_text)["contracts"], CONTRACTS_ADVISORY_STEP["name"])
+    scalars = scalars_at(normalized, WORKFLOW_INDENT[1])
+    require(scalars == CONTRACTS_ADVISORY_STEP, f"the contracts advisory step changed: {scalars!r}")
 
 
 def check_folded_gate_completeness(workflow_text: str, action_text: str) -> None:
@@ -511,6 +581,9 @@ class ContractsActionTests(unittest.TestCase):
                 "linux-native-v2-acceptance.yml": ACCEPTANCE.read_text(encoding="utf-8"),
             },
         )
+
+    def test_the_caller_keeps_the_advisory_step_with_its_always_reachability(self) -> None:
+        check_caller_advisory_step(WORKFLOW.read_text(encoding="utf-8"))
 
 
 class FoldedGateCompletenessTests(unittest.TestCase):
@@ -561,14 +634,55 @@ class MutationTests(unittest.TestCase):
         with self.assertRaises(AssertionError):
             check_action(mutated, self.workflows)
 
-    def test_mutation_dropping_one_inputs_required_flag_reddens_the_input_check(self) -> None:
+    def test_mutation_dropping_the_inputs_required_flag_reddens_the_input_check(self) -> None:
         flag = "    required: true\n"
-        self.assertEqual(self.action_text.count(flag), 2, "the mutation's anchor must be the two input flags")
-        cut = self.action_text.rindex(flag)
-        mutated = self.action_text[:cut] + self.action_text[cut + len(flag) :]
-        self.assertEqual(mutated.count(flag), 1, "the mutation must leave the first input's flag in place")
+        self.assertEqual(self.action_text.count(flag), 1, "the mutation's anchor must be the input's flag")
+        mutated = self.action_text.replace(flag, "")
+        self.assertNotEqual(mutated, self.action_text, "the mutation must edit the action text")
         with self.assertRaises(AssertionError):
             check_action(mutated, self.workflows)
+
+    def test_mutation_flipping_the_release_upload_condition_reddens_the_action_check(self) -> None:
+        upload = (
+            "    - uses: actions/upload-artifact@v7\n"
+            "      if: inputs.build-control-release == 'true'\n"
+            "      with:\n"
+            "        name: control-release-linux\n"
+        )
+        self.assertIn(upload, self.action_text, "the mutation's anchor must be the release upload")
+        mutated = self.action_text.replace(upload, upload.replace("== 'true'", "== 'false'"))
+        self.assertNotEqual(mutated, self.action_text, "the mutation must edit the action text")
+        with self.assertRaises(AssertionError):
+            check_action(mutated, self.workflows)
+
+    def test_mutation_narrowing_the_caller_advisory_reachability_reddens_the_step_pin(self) -> None:
+        guard = "      - name: Measure production dependency advisories (advisory)\n        if: always()\n"
+        self.assertIn(guard, self.workflow_text, "the mutation's anchor must be the contracts advisory step")
+        mutated = self.workflow_text.replace(guard, guard.replace("if: always()", "if: success()"))
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaises(AssertionError):
+            check_caller_advisory_step(mutated)
+
+    def test_mutation_an_eighty_one_line_anonymous_run_step_reddens_the_inline_ceiling(self) -> None:
+        anchor = "      - uses: actions/checkout@v7\n"
+        self.assertIn(anchor, self.workflow_text, "the mutation's anchor must be a step head")
+        inline = "      - run: |\n" + "".join(f"          echo {index}\n" for index in range(81))
+        mutated = self.workflow_text.replace(anchor, anchor + inline, 1)
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaises(AssertionError):
+            check_inline_bodies(mutated)
+
+    def test_mutation_shortening_a_program_reddens_the_sha256_pin(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            for step in EXTRACTED_STEPS:
+                target = root / step.program
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(ROOT / step.program, target)
+            program = root / "scripts" / "ci" / "compose-stack-smoke.sh"
+            program.write_text("#!/usr/bin/env bash\nset -Eeuo pipefail\necho noop\n", encoding="utf-8")
+            with self.assertRaises(AssertionError):
+                check_programs(root)
 
     def test_mutation_marking_an_unlisted_step_advisory_reddens_the_completeness_check(self) -> None:
         mutated = self.workflow_text.replace(
@@ -579,6 +693,30 @@ class MutationTests(unittest.TestCase):
         self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
         with self.assertRaises(AssertionError):
             check_folded_gate_completeness(mutated, self.action_text)
+
+    def test_mutation_a_dash_first_advisory_key_is_discovered_and_then_requires_its_gate(self) -> None:
+        mutated = self.workflow_text.replace(
+            "      - run: scripts/audit-no-legacy-routes.sh\n",
+            "      - continue-on-error: true\n        name: A new quiet step\n"
+            "        run: scripts/audit-no-legacy-routes.sh\n",
+        )
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaises(AssertionError):
+            check_folded_gate_completeness(mutated, self.action_text)
+
+    def test_mutation_commenting_out_a_gate_member_reddens_the_completeness_check(self) -> None:
+        flagged = self.workflow_text.replace(
+            "      - name: Prepare pinned OpenCode release\n",
+            "      - name: Prepare pinned OpenCode release\n        continue-on-error: true\n",
+        )
+        self.assertNotEqual(flagged, self.workflow_text, "the mutation must flag the gate's step advisory")
+        commented = flagged.replace(
+            '            "Prepare pinned OpenCode release=$PREPARE_OUTCOME"\n',
+            '            # "Prepare pinned OpenCode release=$PREPARE_OUTCOME"\n',
+        )
+        self.assertNotEqual(commented, flagged, "the mutation must comment out the gate member")
+        with self.assertRaises(AssertionError):
+            check_folded_gate_completeness(commented, self.action_text)
 
     def test_an_advisory_step_inside_a_folded_gate_array_is_accepted_without_an_allowlist_entry(self) -> None:
         mutated = self.workflow_text.replace(
@@ -615,7 +753,7 @@ class FailClosedPowerShellTests(unittest.TestCase):
                 *POWERSHELL_PROLOGUE,
                 "",
                 "& pwsh -NoProfile -NonInteractive -Command 'exit 7'",
-                "if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }",
+                PROPAGATION_GUARD,
                 "",
             )
         )

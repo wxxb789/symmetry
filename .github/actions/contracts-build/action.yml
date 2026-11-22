@@ -1,13 +1,8 @@
 name: Contracts build
 description: >-
-  The shared `contracts` job build both workflows call, with the caller-selected advisory audit and
-  Control release behind the boolean inputs.
+  The shared `contracts` job build both workflows call, with the Control release producer behind
+  the `build-control-release` input.
 inputs:
-  audit-prod:
-    description: >-
-      Run the advisory `pnpm audit --prod` metric beside the provenance check, before the install:
-      it resolves the locked versions against the registry.
-    required: true
   build-control-release:
     description: >-
       Build the production Control release and upload `control-release-linux`, the shared release
@@ -20,22 +15,6 @@ runs:
     - name: Check lockfile registry provenance
       shell: bash
       run: python3 scripts/ci/check-lockfile-registry.py
-    - name: Measure production dependency advisories (advisory)
-      if: always() && inputs.audit-prod == 'true'
-      continue-on-error: true
-      shell: bash
-      run: |
-        set -Eeuo pipefail
-        if [ ! -f pnpm-lock.yaml ]; then
-          echo "note: the repository has no pnpm-lock.yaml; skipping the advisory production-dependency audit"
-          exit 0
-        fi
-        set +e
-        pnpm audit --prod
-        pnpm_audit_status=$?
-        set -e
-        echo "pnpm_audit_prod_exit_status=$pnpm_audit_status"
-        exit "$pnpm_audit_status"
     - run: pnpm install --frozen-lockfile
       shell: bash
     - run: pnpm contracts:check

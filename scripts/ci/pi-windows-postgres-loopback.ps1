@@ -45,8 +45,15 @@ try {
   )) {
     foreach ($registryKey in @(Get-Item -Path $registryPattern -ErrorAction SilentlyContinue)) {
       $properties = Get-ItemProperty -LiteralPath $registryKey.PSPath -ErrorAction SilentlyContinue
-      if ($null -ne $properties -and -not [string]::IsNullOrWhiteSpace([string]$properties.'Base Directory')) {
-        Add-PostgresCandidate $candidates $seenCandidates (Join-Path ([string]$properties.'Base Directory') 'bin') "registry:$registryPattern"
+      # `Base Directory` is optional on an Installations key; reading it through PSObject keeps
+      # Set-StrictMode from turning an absent value into a step failure.
+      $baseDirectory = $null
+      if ($null -ne $properties) {
+        $baseDirectoryProperty = $properties.PSObject.Properties['Base Directory']
+        $baseDirectory = if ($null -eq $baseDirectoryProperty) { $null } else { [string]$baseDirectoryProperty.Value }
+      }
+      if (-not [string]::IsNullOrWhiteSpace($baseDirectory)) {
+        Add-PostgresCandidate $candidates $seenCandidates (Join-Path $baseDirectory 'bin') "registry:$registryPattern"
       }
     }
   }

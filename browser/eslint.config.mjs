@@ -9,7 +9,7 @@ export default [
     languageOptions: {
       ecmaVersion: "latest",
       sourceType: "module",
-      globals: { ...globals.browser, ...globals.node },
+      globals: { ...globals.browser, ...globals.nodeBuiltin },
     },
     rules: {
       "no-unused-vars": ["error", { ignoreRestSiblings: true }],

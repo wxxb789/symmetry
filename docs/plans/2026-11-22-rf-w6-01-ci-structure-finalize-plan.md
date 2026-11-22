@@ -84,28 +84,31 @@ one character flipped inside a program → the proof reddens.
 ## Change 2 — one composite action for the duplicated `contracts` job
 
 `.github/actions/contracts-build/action.yml` (composite) absorbs the step list both jobs spell
-today, in base order: `Check lockfile registry provenance`, the advisory `Measure production
-dependency advisories (advisory)` (`audit-prod` input; keeps `continue-on-error: true` and
-`if: always() && inputs.audit-prod == 'true'`), `pnpm install --frozen-lockfile`,
+today, in base order: `Check lockfile registry provenance`, `pnpm install --frozen-lockfile`,
 `pnpm contracts:check`, `@symmetry/frontend` typecheck/lint/test/build, the `portal-assets` upload
 (`control/priv/static/portal`), and — under `build-control-release` — `erlef/setup-beam@v1`,
 `Build production Control release` and the `control-release-linux` upload
-(`${{ runner.temp }}/control-release-linux.tar.gz`, `if-no-files-found: error`).
+(`${{ runner.temp }}/control-release-linux.tar.gz`, `if-no-files-found: error`). The advisory
+`Measure production dependency advisories (advisory)` step stays with its caller in `ci.yml`
+(fix r1; see the residual-risks bullet): an unguarded `uses:` call step is skipped when an earlier
+caller step fails and an `if: always()` inside the action cannot revive it, so hoisting that one
+step preserves the base reachability while the other eleven keep their dedup.
 
 Both call sites keep their own `checkout`, `pnpm/action-setup`, `setup-node`, job name, `needs`,
 `if` and `runs-on`; the step list after those becomes `uses: ./.github/actions/contracts-build` with
-`audit-prod`/`build-control-release` = `true/true` in `ci.yml` and `false/false` in
-`linux-native-v2-acceptance.yml` (whose base copy deliberately omits the advisory audit and the
-shared release producer). Composite `run` steps state `shell:` (a workflow-level bare `run:` does
-not need it); unnamed `run:` steps keep their command text and named steps keep their names.
-`erlef/setup-beam` moves into the gated block because it exists only for the release producer; the
-dependabot `directories` addition (Change 5) is what keeps that `uses:` scanned.
+`build-control-release` = `"true"` in `ci.yml` and `"false"` in
+`linux-native-v2-acceptance.yml` (whose base copy deliberately omits the shared release producer).
+Composite `run` steps state `shell:` (a workflow-level bare `run:` does not need it); unnamed `run:`
+steps keep their command text and named steps keep their names. `erlef/setup-beam` moves into the
+gated block because it exists only for the release producer; the dependabot `directories` addition
+(Change 5) is what keeps that `uses:` scanned.
 
-Observable delta, recorded: the acceptance `contracts` job now shows the release-producer and
-advisory-audit steps as skipped (it showed no such steps). No artifact name, artifact path, job
-name, `needs` or `if` changes; the artifact consumers are `control` (portal-assets and
-control-release-linux), `integration` (control-release-linux) and the acceptance native job
-(portal-assets) — the PR body names all three.
+Observable delta, recorded: the acceptance `contracts` job now shows the release-producer steps as
+skipped (it showed no such steps); the advisory step it never had stays absent. No artifact name,
+artifact path, job name, `needs` or `if` changes; the artifact consumers are `control`
+(portal-assets and control-release-linux), `coverage-control` (portal-assets; the job itself is
+advisory), `integration` (control-release-linux) and the acceptance native job (portal-assets) —
+the PR body names all four.
 
 ## Change 3 — `scripts/ci/test-ci-structure-extraction.py` (new pin) and its CI wiring
 
@@ -116,24 +119,35 @@ unittest, text-only over `ci.yml` and `action.yml` (it never executes the workfl
    env), and each body's program path is resolved against the step's **effective** cwd
    (step key > job `defaults.run.working-directory` > repo root) and required to land on
    `scripts/ci/<program>`;
-2. each program exists and is non-empty; bash programs start with `set -Eeuo pipefail`; PowerShell
-   programs start `$ErrorActionPreference = 'Stop'` + `Set-StrictMode -Version Latest` and end with
-   the propagation epilogue, and every native call site is followed by a status check
-   (`$LASTEXITCODE`/`ExitCode`) before the next native call;
-3. no `run: |` body in `ci.yml` exceeds 80 dedented lines; `python3 - <<'PY'` occurrences = 0;
-4. the composite action exists, carries exactly the pinned step list/artifact names/paths/inputs and
-   no caller re-spells `pnpm contracts:check`, `name: portal-assets` or `name: control-release-linux`;
+2. each program exists, is non-empty, and its whole body is pinned by sha256 — after the extraction
+   the moved bytes live only here, so nothing else would notice a rewrite; bash programs start with
+   `set -Eeuo pipefail`; PowerShell programs start `$ErrorActionPreference = 'Stop'` +
+   `Set-StrictMode -Version Latest` and end with the propagation epilogue, and every native call
+   site is followed by a status check (`$LASTEXITCODE`/`ExitCode`) before the next native call;
+3. no `run: |` body in `ci.yml` exceeds 80 dedented lines, scanning both the plain key form and a
+   step head carrying the key (`- run: |`); `python3 - <<'PY'` occurrences = 0;
+4. the composite action exists, carries exactly the pinned step list, `if:` conditions, artifact
+   names/paths and inputs, and no caller re-spells `pnpm contracts:check`, `name: portal-assets` or
+   `name: control-release-linux`; `ci.yml` keeps the advisory step at its caller with `if: always()`;
 5. **folded-gate completeness** (arch-decision-1, Gemini candidate 08): every step with
-   `continue-on-error: true` is either named in its job's `assert-folded-gates.py` gate array or
-   listed in the pin's explicit advisory allowlist; job-level `continue-on-error` is allowlisted by
-   job; an unrecognized `continue-on-error:` value is refused; a stale allowlist entry fails;
+   `continue-on-error: true` — including one whose head carries the key — is either named in its
+   job's `assert-folded-gates.py` gate array or listed in the pin's explicit advisory allowlist; a
+   gate member counts only from a non-comment line, and its env variable must bind a
+   `steps.<id>.outcome`; job-level `continue-on-error` is allowlisted by job; an unrecognized
+   `continue-on-error:` value is refused; a stale allowlist entry fails;
 6. a PowerShell fail-closed reproduction (skipped when `pwsh` is absent): a generated fixture whose
-   native child exits 7, invoked exactly as the steps invoke their programs, must exit 7; the same
-   fixture without the propagation line must exit 0 (the red witness for reviewer P1-1).
+   native child exits 7 and whose guard is the pinned epilogue text itself, invoked exactly as the
+   steps invoke their programs, must exit 7; the same fixture without the guard must exit 0 (the red
+   witness for reviewer P1-1).
 
-Mutation (c): reintroduce a 60-line inline block → check 3 reddens. Mutation for the action:
-delete the `portal-assets` upload step from the action text → check 4 reddens (CI itself cannot be
-run locally; recorded as such).
+Mutation (c): reintroduce a 60-line inline block → the extracted step's exact-key pin reddens (60 is
+below the 80-line ceiling, so the size check cannot be the one that fires; the recorded
+AssertionError is the step-keys one), while an anonymous `- run: |` step with an 81-line body
+reddens check 3. Mutation for the action: delete the `portal-assets` upload step from the action
+text → check 4 reddens; flip the release upload's `if:` → the conditions pin reddens (CI itself
+cannot be run locally; recorded as such). Fix r1 added a mutation per repaired check: the dash-first
+advisory step head, the commented-out gate member, the narrowed caller advisory `if:`, the 81-line
+anonymous body, and a shortened program against the sha256 pin.
 
 CI wiring: `legacy-route-audit` (the unconditional job) gets
 `- run: python3 scripts/ci/test-ci-structure-extraction.py` beside
@@ -168,20 +182,25 @@ run (`linux-v2-host-prerequisite-probe.sh:231`, from `daemon/`), so it can rot s
 
 ## Change 7 — the `browser/**` flat ESLint block and its gate (plan §10.3, W6 reconcile)
 
-`browser/eslint.config.mjs` (new flat config: `@eslint/js` recommended + node/browser globals for
-`**/*.mjs`), `browser/package.json` gains an `eslint`/`@eslint/js`/`globals` devDependency trio at
-the frontend's pinned versions and a `lint` script (`eslint . --max-warnings 0`, the measured
-warning count), the root `pnpm-lock.yaml` is updated with `mise exec pnpm@12.17.0`, and the
-`control` job (which already installs the workspace and drives the browser render gate) gains
-`- run: pnpm --filter symmetry-browser-acceptance lint` right after its
-`pnpm install --frozen-lockfile`. The finding count and the ratchet value are measured in the
-evidence section; the acceptance workflow is untouched by this gate.
+`browser/eslint.config.mjs` (new flat config: `@eslint/js` recommended + `globals.browser` +
+`globals.nodeBuiltin` for `**/*.mjs`/`**/*.js` — nodeBuiltin rather than node, so a CommonJS-only
+name such as `require` cannot lint clean inside an ESM file), `browser/package.json` gains an
+`eslint`/`@eslint/js`/`globals` devDependency trio at the frontend's pinned versions and a `lint`
+script (`eslint . --max-warnings 0`, the measured warning count), the root `pnpm-lock.yaml` is
+updated with `mise exec pnpm@12.17.0`, and the `control` job (which already installs the workspace
+and drives the browser render gate) gains `- run: pnpm --filter symmetry-browser-acceptance lint`
+right after its `pnpm install --frozen-lockfile`. Two existing specs carried the gate's only
+findings and are edited with no behaviour change: `portal-work-planning.spec.mjs` drops the unused
+`isMobile` fixture binding (`no-unused-vars`) and `portal-work-views.spec.mjs` drops the useless
+`\"` escape inside a single-quoted string (`no-useless-escape`). The finding count and the ratchet
+value are measured in the evidence section; the acceptance workflow is untouched by this gate.
 
 ## Change 8 — the pinned PyYAML + `SYMMETRY_REQUIRE_PYYAML=1` step (W3-16 follow-up)
 
-`docs/TODO.md`'s "install a pinned PyYAML for the lockfile differential oracle (W6-01)" entry (the
-recorded follow-up of merged `goal-rf-w3-16-scripts-defects`) is closed here because this slice owns
-the wave-6 `ci.yml`: the `daemon` job's `Check CI gate helper scripts` step gains
+The "install a pinned PyYAML for the lockfile differential oracle (W6-01)" entry — the recorded
+follow-up of merged `goal-rf-w3-16-scripts-defects`, moved by this increment from `docs/TODO.md`
+into `docs/archive/CLOSED-TODO.md`, whose closure paragraph this change records — is closed here
+because this slice owns the wave-6 `ci.yml`: the `daemon` job's `Check CI gate helper scripts` step gains
 `env: SYMMETRY_REQUIRE_PYYAML: "1"` and, before its suites,
 `python3 -m pip install --user --break-system-packages --quiet 'PyYAML==6.0.3'` followed by a
 `test` on `yaml.__version__`, so a lost or drifted install reddens the job instead of silently
@@ -200,7 +219,7 @@ the HEAD program side by side, not from memory:
 | pidfd | `name`, `id`, `if: always()`, `shell` | same + explicit `working-directory: control` | `set -Eeuo pipefail`, Python child's `finally` cleanup + non-zero `run_cleanup()` assertions, `sys.exit` via uncaught `RuntimeError` | byte-identical in `verify-linux-pi-pidfd-cleanup.sh` |
 | Windows postgres | `name`, `id`, `shell` | same + explicit `working-directory: control` | `try/catch` that writes `postgres_status=unavailable` and rethrows; per-native status checks (`$versionStatus`, `$initStatus`, `$startStatus`, `$createStatus`); `::error::` annotation | byte-identical + StrictMode prologue + terminal epilogue |
 | Windows cleanup evidence | `name`, `if: always()`, `shell`, `env` | same + explicit `working-directory: control` | `$cleanupFailed` accumulation, `exit 1`, `continue` on an unreadable marker | byte-identical + StrictMode prologue + terminal epilogue |
-| daemon recovery | `name`, `working-directory`, `shell`, `env` | same | `trap cleanup EXIT` (kills the restarter, prints the control log, re-exits with `status`), `set +e`/`set -e` around the gate and the restarter wait, explicit `exit` of the first failing status | byte-identical in `daemon-recovery-after-control-restart.sh` |
+| daemon recovery | `name`, `working-directory`, `shell`, `env` | same | `trap cleanup EXIT` (kills the restarter with `|| true` on both the `kill` and the `wait`, prints the control log with `|| true` on the `cat`, re-exits with `status`), `set +e`/`set -e` around the gate and the restarter wait, explicit `exit` of the first failing status | byte-identical in `daemon-recovery-after-control-restart.sh` |
 
 Frozen: every job name, `needs`, `if`, `--assert` name, folded-gate list entry, artifact name and
 artifact path; the classifier step and heredoc region; the opencode assertion steps and the witness
@@ -237,11 +256,15 @@ hunk.
 
 ## Mutation records (judging)
 
-(a) one character inside `compose-stack-smoke.sh` → the move proof diff is non-empty;
+(a) one character inside `compose-stack-smoke.sh` → the move proof diff is non-empty (fix r1 also
+turns that mutation into a sha256-pin failure);
 (b) the `portal-assets` upload step deleted from `action.yml` → the pin's action check reddens;
-(c) a 60-line inline block reintroduced into `ci.yml` → the pin's size check reddens;
+(c) a 60-line inline block reintroduced into `ci.yml` → the extracted step's exact-key pin reddens
+(60 is below the 80-line ceiling, so the size check cannot be the one that fires); the 81-line
+anonymous `- run: |` body is the mutation that reddens the size check;
 (d) the propagation line removed from the fail-closed fixture → the runtime reproduction reddens
-(and the un-guarded fixture exits 0, which is the hazard itself).
+(and the un-guarded fixture exits 0, which is the hazard itself); fix r1 runs the pinned epilogue
+text itself as the guard.
 
 ## Ambiguities resolved (options and the recommendation taken)
 
@@ -320,7 +343,8 @@ ruff pin, the PyYAML install, the pin wiring — was authored with the patch too
 ## Executed gates (this tree, 2026-11-22; uncommitted worktree)
 
 This table binds the implement-stage revision; the apply-stage refresh below supersedes the pin,
-browser-lint, ruff, shellcheck and actionlint rows it names.
+browser-lint, ruff, shellcheck and actionlint rows it names, and the fix-stage refresh supersedes
+the pin row again and binds the current numbers.
 
 | Command | Result |
 | --- | --- |
@@ -376,11 +400,54 @@ and the five programs are untouched by the apply stage. Gates re-run on the chan
 
 The accepted findings: the dead `RUN_BLOCK` constant and the unreachable job-default
 `working-directory` fallback are gone (the exact-keys assertion already freezes each step's
-`working-directory`); the action's two inputs are pinned per input (each block must carry
+`working-directory`); the action's inputs are pinned per input (each block must carry
 `required: true`, with a mutation that drops one flag and reddens the check); the browser config
 comment naming a non-existent identifier is gone; the action description is one sentence.
 Refreshed counts: the pin 637 → 647, `.github/actions/contracts-build/action.yml` 75 → 73, the
 browser flat config 19 → 18.
+
+## Fix-stage refresh (rf-w6-01 fix r1, 2026-11-22)
+
+The review's fix r1 changed five surfaces: the postgres program's StrictMode-safe registry read
+(R1), the advisory step's return to `ci.yml`'s caller plus the action's dead `audit-prod` input
+removal (R2), the browser flat config's `nodeBuiltin` swap (R8), the pin (R3–R6: step-head
+normalization, comment- and outcome-bound gate collection, `if:` conditions, the block-scalar scan,
+sha256 program pins, six new mutations, the pinned-epilogue fixture, the caller advisory pin), and
+this plan's records. Gates re-run on the changed tree; this table supersedes the pin, browser-lint,
+ruff, actionlint and shellcheck rows above it:
+
+| Command | Result |
+| --- | --- |
+| `python3 scripts/ci/test-ci-structure-extraction.py` | **exit 0**, `Ran 21 tests in 3.380s`, `OK` |
+| `python3 scripts/ci/test-ci-changed-path-classifier.py` | **exit 0**, `Ran 31 tests in 59.212s`, `OK` |
+| `python3 scripts/ci/test-assert-folded-gates.py` | **exit 0**, `Ran 6 tests in 0.546s`, `OK` |
+| `python3 scripts/ci/test-assert-playwright-json.py` | **exit 0**, `Ran 17 tests in 3.618s`, `OK` |
+| `SYMMETRY_REQUIRE_PYYAML=1 python3 scripts/ci/test-check-lockfile-registry.py` | **exit 0**, `Ran 25 tests in 4.988s`, `OK`, no skip |
+| `SYMMETRY_REQUIRE_PYYAML=1 python3 -S scripts/ci/test-check-lockfile-registry.py` | **exit 1**, `FAILED (failures=1)`, the loud switch |
+| `bash -n` on the three bash programs | **exit 0** each |
+| PowerShell parser over the two `.ps1` programs (pwsh 7.7.0) | **exit 0** each, no parse errors |
+| `pi-windows-postgres-loopback.ps1` with a fabricated env (`POSTGRES_PORT=abc`, no PostgreSQL toolset on this host) | **exit 1** at the intended `postgres_status=unavailable` throw, `postgres_candidate_bins=none`; the registry loop ran under `Set-StrictMode -Version Latest` with no StrictMode error |
+| pwsh probe on a property-absent install record | the old `$properties.'Base Directory'` form **throws** `PropertyNotFoundException`; the new `PSObject.Properties['Base Directory']` form yields blank → the candidate is skipped as in base (R1) |
+| `ruff check scripts/ci` / `ruff format --check scripts/ci` (0.17.5) | **exit 0** `All checks passed!` / **exit 0** `58 files already formatted` |
+| actionlint 1.7.12 `-shellcheck= -pyflakes=`, the two touched workflows | **exit 0**, 0 findings |
+| `shellcheck --severity=warning --format=gcc scripts/ci/*.sh` (0.11.0) | exit 1, 10 findings, all in the two pre-existing acceptance programs; the moved programs add 0 |
+| `eslint . --max-warnings 0` (eslint 10.14.0, `@eslint/js` 10.0.1, globals 17.14.0, scratch install behind a `node_modules` junction) | **exit 0**, 22 files, 0 errors, 0 warnings; a `require()` in an added `.mjs` probe reddens with `no-undef`, and `globals.nodeBuiltin` carries `process`/`Buffer` but not `require`/`module`/`exports`/`__dirname`/`__filename` |
+| `cd daemon && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOFLAGS=-mod=readonly go vet ../scripts/ci/linux-v2-host-peer-probe.go` | **exit 0** |
+| `python3 scripts/ci/assert-browser-suite-coverage.py` | **exit 0**, `suites=16 wired=7 manual=9 unclassified=0`, `PASS` |
+| `git diff --check` (base and `origin/main` ranges) | **exit 0** both |
+| host-path scans over the range (user-profile path segments, drive-letter user paths, `\u` escapes) | 0 matches |
+
+Fix-stage mutation probes (each reproduces a review finding's bypass): against the frozen
+implement-revision checkers the dash-first `continue-on-error: true` step head, the commented-out
+gate member, the flipped release-upload `if:`, the 81-line anonymous `- run: |` body, the 3-line
+no-op `compose-stack-smoke.sh` and the weakened pg_ctl condition are all **green** (the gaps R3–R6
+name); the fix r1 checkers redden every one of them, in-suite and via these probes. The
+apply-revision md5s in the mutation-record table above bind that revision: fix r1 changed those
+bytes.
+
+Counts after fix r1: `ci.yml` 1,831 → 1,847, `.github/actions/contracts-build/action.yml` 73 → 52,
+`linux-native-v2-acceptance.yml` 175 → 173, `pi-windows-postgres-loopback.ps1` 181 → 188, the pin
+647 → 785.
 
 ## Mutation records (all on the real files, restored and md5-verified)
 
@@ -391,21 +458,25 @@ browser flat config 19 → 18.
 | (c) `ci.yml`: the compose step's one-line body replaced by a 60-line inline block | pin **exit 1**, `FAILED (failures=2)`; `AssertionError: scripts/ci/compose-stack-smoke.sh: the step keys changed: {… 'run': '\|'} != {… 'run': 'bash scripts/ci/compose-stack-smoke.sh'}`; restored md5 `8ed1e9743ca3a2b8e753738c00f479ff` |
 | (d) the fail-closed fixture without its propagation line (in-suite, `FailClosedPowerShellTests`) | `pwsh -NoProfile -File` exits **0** on a failing native child; with the line it exits **7** — the reviewer P1-1 hazard and its closure in one run |
 | browser gate: `const unusedProbe = 1;` appended to `browser/tests/readable-fixtures.mjs` | eslint **exit 1**, `'unusedProbe' is assigned a value but never used`; restored |
-| in-suite mutations (`MutationTests`) | the five YAML/action mutations (the apply stage added the one-flag-dropped input mutation) redden the same checkers the tests call; the folded-gate positive control (an advisory flag on a step already named in its job's `assert-folded-gates.py` array) stays green |
+| in-suite mutations (`MutationTests`) | the YAML/action mutations redden the same checkers the tests call; the folded-gate positive control (an advisory flag on a step already named in its job's `assert-folded-gates.py` array) stays green; fix r1 added six (dash-first advisory step head, commented-out gate member, narrowed caller advisory `if:`, flipped release-upload `if:`, 81-line anonymous body, shortened program) and `FailClosedPowerShellTests` now runs the pinned epilogue text itself |
 
 ## dLOC (report-only, D2)
 
-`ci.yml` 2,642 → **1,831** lines (net −811; `+26/−837`): −783 the five extractions, −39 the
-`contracts` job's absorbed steps becoming one `uses:` call, +12 the four reconcile-added steps
-(pin wiring 3, browser lint 2, peer-probe vet 2, PyYAML install 5 minus the 2 lines the step's
-`run:` reused), and ±1 from the surrounding hunks. The draft's "≈1,780 (≤1,800)" assumed a larger
-action reduction than the measured 39 lines and no reconcile additions; the re-derived number is
-1,831. `linux-native-v2-acceptance.yml` 181 → 175 (−6); new `.github/actions/contracts-build/action.yml`
-73 (75 at the implement revision: the apply stage shortened its description); the five programs 794
-lines (787 base + 7 authored prologue/epilogue lines); the pin 647 (637 at the implement revision,
-minus the dead constant and the unreachable fallback, plus the per-input input pin and its
-mutation); the browser flat config 18; modified tracked files `+125/−888` (`git diff --numstat` over
-the files present in both revisions) plus the new files.
+`ci.yml` 2,642 → **1,847** lines (net −795; `+25/−820`): −783 the five extractions (−200 compose,
+−178 pidfd, −93 daemon recovery, −88 postgres, −224 cleanup) and −24 the `contracts` job's hunks —
+the absorbed step list becoming one `uses:` call and the `audit-prod` removal, net of the fix r1
+advisory-step return — against +12 the four reconcile-added steps (pin wiring 3, browser lint 2,
+peer-probe vet 2, PyYAML install 5). The draft's "≈1,780 (≤1,800)" assumed a larger action
+reduction than the measured contracts hunks and no reconcile additions; the re-derived number is
+1,847. `linux-native-v2-acceptance.yml` 181 → 173 (−8); `.github/actions/contracts-build/action.yml`
+**52** (75 at the implement revision, 73 after the apply stage shortened its description, minus the
+fix r1 removal of the advisory step and the dead `audit-prod` input); the five programs 801 lines
+(787 base + 7 authored prologue/epilogue lines at the implement revision + 7 the fix r1
+StrictMode-safe registry read); the pin 785 (637 at the implement revision, minus the dead constant
+and the unreachable fallback, plus the per-input pin and the apply-stage mutation, plus the fix r1
+conditions/comment/outcome/sha256 checks and their mutations); the browser flat config 18; modified
+tracked files `+122/−871` (`git diff --numstat` over the files present in both revisions) plus the
+new files.
 
 ## Simplification review
 
@@ -421,13 +492,15 @@ the files present in both revisions) plus the new files.
 ## Residual risks / known limits
 
 - **The runner image's registry keys.** `Set-StrictMode -Version Latest` makes a *missing* property
-  access an error; `pi-windows-postgres-loopback.ps1` reads `$properties.'Base Directory'` from
-  `Get-ItemProperty` on each discovered `HKLM/HKCU …\PostgreSQL\Installations\*` key. On this host
-  no such key exists (discovery returned `postgres_candidate_bins=none`), so that one access was
-  not exercised locally; on the Windows runner the key exists and carries `Base Directory`
-  (the base script has always required it to build a candidate), and any mismatch now fails closed
-  in the script's own `catch` instead of silently. The `daemon-windows`-independent
-  `pi-control-e2e-windows` job is the oracle.
+  access an error. The implement revision read `$properties.'Base Directory'` from `Get-ItemProperty`
+  on each discovered `HKLM/HKCU …\PostgreSQL\Installations\*` key, so an `Installations\*` subkey
+  that exists without that value threw `PropertyNotFoundException` (reproduced with pwsh 7.7.0)
+  where the base body skipped the key and kept the PGBIN/PATH/Program Files candidates; fix r1
+  reads the optional value through `$properties.PSObject.Properties` instead, so an absent value
+  skips the key exactly like the base body while `Set-StrictMode` stays on. This host has no such
+  key (discovery returned `postgres_candidate_bins=none`), so the present-value branch is still
+  exercised only on the Windows runner; the `daemon-windows`-independent `pi-control-e2e-windows`
+  job is the oracle.
 - **The browser-lint measurement.** The corporate npm mirror cannot resolve
   `typescript-eslint@8.73.0`, which `frontend/package.json` pins, so no workspace install (and no
   pnpm lockfile regeneration) is possible in this environment; `registry.npmjs.org` is
@@ -443,13 +516,15 @@ the files present in both revisions) plus the new files.
   `pnpm install --frozen-lockfile` on the runner remains the CI oracle, because the corporate
   mirror here cannot resolve the pre-existing `typescript-eslint@8.73.0` and `registry.npmjs.org`
   is unreachable, so no lockfile *regeneration* was possible in this environment.
-- **The composite action's `always()` reachability (disclosed delta, D1 escalation).** Inside the
-  action the advisory audit keeps its base `if: always()`, but the base step also ran when an
-  earlier *caller* step (`checkout`, `pnpm/action-setup`, `setup-node`) failed, while the unguarded
-  `uses:` call step is skipped in that case: the advisory metric is lost exactly when the
-  toolchain install fails. Left as a disclosed behaviour delta rather than fixed — giving the call
-  step `if: always()` would run install and build after a failed setup, and hoisting the advisory
-  step back to the callers would drop the dedup this slice exists for. Composite-action step
-  gating is exercised only by CI.
+- **The composite action's `always()` reachability (fixed in fix r1).** In the implement revision
+  the advisory audit rode inside the action with its base `if: always()`, but the caller's
+  unguarded `uses:` step is skipped when an earlier caller step (`checkout`, `pnpm/action-setup`,
+  `setup-node`) fails, so the metric was lost exactly when the toolchain install failed — the
+  disclosed delta the review confirmed as a D1 escalation. Fix r1 restores the base reachability
+  instead of accepting the delta: the advisory step is back in `ci.yml`'s `contracts` job with its
+  base keys and `if: always()`, and the pin freezes it (`check_caller_advisory_step` plus a
+  narrowing mutation). The action keeps the other eleven steps and `build-control-release`;
+  `audit-prod` is gone because no step read it any more. Composite-action step gating is exercised
+  only by CI.
 - **CI-only checks.** The pinned ruff archive, the pinned PyYAML wheel, the composite action's step
   list, the artifact hand-off and the Windows-runner PostgreSQL discovery run only on the runner.
