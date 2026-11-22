@@ -23,7 +23,7 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       in `internal/state` (2026-11-21, branch `refactor/rf-w1-06-daemon-deadcode`; plan
       `docs/plans/2026-11-21-w1-06-daemon-deadcode-plan.md`). `Store.AttachGoalSession`
       (`daemon/internal/state/goal_session.go:1026`) and `Store.FailUnresolvedProvideInput`
-      (`daemon/internal/state/state.go:4241`) are
+      (`daemon/internal/state/run_journal.go:674`) are
       unreachable from `deadcode -test ./cmd/...` on windows/amd64, linux/amd64 and linux/arm64
       alike, and at the baseline revision `a3039f0` `git grep -nw <symbol>` matches only each
       definition plus its doc comment — no call site, no test, no doc citation anywhere; this
@@ -793,27 +793,27 @@ round 1) left two paths open here.
       that slice). Reachability was probed by mutating one condition at a time against the rf-w2-09
       pin fixtures (probe code not committed); the affected strings are listed in
       `docs/evidence/rf-w2-09-state-validators-2026-11-21.md` §5.
-      (a) `v2 cgroup reservation cannot accompany a v1 authority` (`state.go:6120`) and
-      `v2 cgroup reservation cannot accompany a v1 handoff` (`state.go:6123`): the authority and
+      (a) `v2 cgroup reservation cannot accompany a v1 authority` (`containment_journal.go:614`) and
+      `v2 cgroup reservation cannot accompany a v1 handoff` (`containment_journal.go:617`): the authority and
       handoff blocks (`validateContainmentAuthority`, `validateContainmentHandoff`) already return
       `v1 … cannot use a v2 cgroup reservation` whenever a non-v2 owner is combined with a cgroup
       reservation, so the later checks can never fire.
-      (b) `Linux cgroup reservation cannot have both abort and physical-stop proof` (`state.go:259`)
-      and `Linux cgroup aborted reservation lost producer-exit evidence` (`state.go:263`):
-      `linuxCgroupReservationAbortMatches` (`state.go:5885`) returns false for every proof that
+      (b) `Linux cgroup reservation cannot have both abort and physical-stop proof` (`linux_cgroup_journal.go:165`)
+      and `Linux cgroup aborted reservation lost producer-exit evidence` (`linux_cgroup_journal.go:169`):
+      `linuxCgroupReservationAbortMatches` (`linux_cgroup_journal.go:1082`) returns false for every proof that
       carries a pre-gate receipt or lacks producer-exit parity, so the earlier abort-proof error
       fires first. Probes: aborted reservation + pre-gate receipt → `Linux cgroup reservation abort
       proof is invalid`; aborted reservation + helper exit proof → `Linux cgroup helper exit proof
       is invalid`.
-      (c) `Linux cgroup reservation has effects before creation intent` (`state.go:272`): with
+      (c) `Linux cgroup reservation has effects before creation intent` (`linux_cgroup_journal.go:178`): with
       `CreateStarted == false` every listed effect is shadowed by an earlier block
       (leaf→leaf identity, helper→helper identity, launcher→launcher identity,
       launcher exit→launcher exit proof, gate→gate identity, helper exit→helper exit proof,
       abort with a disposition other than `neverCreated`→abort proof). Probe: unstarted reservation
       + leaf identity → `Linux cgroup reservation leaf identity is invalid`.
-      (d) `unresolved input command has an acknowledgement` (`state.go:6261`): it needs `pending`
+      (d) `unresolved input command has an acknowledgement` (`journal_validation.go:128`): it needs `pending`
       with `intent.Outcome == ""`, but `pending` compares against `acknowledgement.Outcome` and
-      `validAcknowledgement` (`state.go:6427`) requires a non-blank `Outcome`, so an empty-outcome
+      `validAcknowledgement` (`run_outbox.go:840`) requires a non-blank `Outcome`, so an empty-outcome
       acknowledgement is rejected earlier with `run journal is invalid`. Probe: empty-outcome
       acknowledgement → `run journal is invalid`; an applied acknowledgement leaves the fixture
       valid.
@@ -827,23 +827,23 @@ round 1) left two paths open here.
       earlier block or an earlier operand of the same condition already covers every journal that
       could satisfy it, so deleting it changes no verdict — a pin case cannot isolate it. Recorded
       instead of edited for the same move-only reason as the entry above.
-      (a) `journal.ContainmentCgroup != nil` in `validateContainmentScans` (`state.go:6132`): a
+      (a) `journal.ContainmentCgroup != nil` in `validateContainmentScans` (`containment_journal.go:626`): a
       journal carrying both a cgroup reservation and containment scans is rejected earlier by
-      `validateContainmentCgroup` (`state.go:6103` `journal.ContainmentScans != nil`).
-      (b) `handoff.SupervisorPID <= 0` in `validateContainmentScans` (`state.go:6141`): the earlier
+      `validateContainmentCgroup` (`containment_journal.go:597` `journal.ContainmentScans != nil`).
+      (b) `handoff.SupervisorPID <= 0` in `validateContainmentScans` (`containment_journal.go:628`): the earlier
       scan block rejects `scans.SupervisorPID <= 0`, and `scans.matchesHandoff` equates the two
       supervisor PIDs, so a non-positive handoff supervisor PID can never be the deciding operand.
-      (c) `journal.ContainmentAuthority != nil` in `validateContainmentHandoff` (`state.go:6080`):
-      a valid authority always carries `TargetPID > 0` (`state.go:6059`) equal to the journal PID,
+      (c) `journal.ContainmentAuthority != nil` in `validateContainmentHandoff` (`containment_journal.go:574`):
+      a valid authority always carries `TargetPID > 0` (`containment_journal.go:553`) equal to the journal PID,
       so `journal.HasProcessDetails()` is already true in the same condition whenever the authority
       operand could matter.
       (d) `journal.ContainmentAuthority != nil` in the aborted / pre-gate cgroup preconditions
-      (`state.go:6106`, `state.go:6110`): `validateContainmentAuthority` rejects a v1 authority
+      (`containment_journal.go:600`, `containment_journal.go:604`): `validateContainmentAuthority` rejects a v1 authority
       beside a cgroup reservation, and a v2 authority whose cgroup carries an abort or pre-gate
       proof fails `linuxCgroupReservationMatchesAuthority` (it requires both to be nil), so the
       authority block always errors first.
-      (e) `journal.ContainmentHandoff != nil` in the same two preconditions (`state.go:6107`,
-      `state.go:6111`): a v2 handoff passes only when its cgroup matches it with a gate, a bound
+      (e) `journal.ContainmentHandoff != nil` in the same two preconditions (`containment_journal.go:601`,
+      `containment_journal.go:605`): a v2 handoff passes only when its cgroup matches it with a gate, a bound
       launcher grant and no pre-gate receipt, while an aborted cgroup must have no gate and no
       launcher grant (`linuxCgroupReservationAbortMatches`) and a pre-gate receipt requires no abort
       proof; a v1 handoff beside any cgroup always errors in the handoff block.
@@ -851,8 +851,8 @@ round 1) left two paths open here.
       condition's live operands.
 
 - [ ] Fix the nil-pointer panic in `validateLinuxCloneCheckout`
-      (`daemon/internal/state/state.go:5113`). It dereferences `*seed`
-      (`linuxCloneCheckoutMatches(*intent, *seed, *checkout)`, `state.go:5124`) although
+      (`daemon/internal/state/linux_clone_validation.go:250`). It dereferences `*seed`
+      (`linuxCloneCheckoutMatches(*intent, *seed, *checkout)`, `linux_clone_validation.go:55`) although
       `journal.LinuxCloneSeedReceipt` is only tested as `seed != nil && …` earlier in the same
       validator, so a journal carrying `linux_clone_checkout_receipt` without
       `linux_clone_seed_receipt` panics instead of failing validation. Verified 2026-11-21 with a
@@ -866,8 +866,8 @@ round 1) left two paths open here.
       first-error strings.
 
 Decision note: rf-w2-09 left `validateJournalLeaseTerminalAndGrantInvariants`
-(`state.go:6184`) at cyclomatic complexity 25 and `validateJournalKeyScalarsAndProcessDetails`
-(`state.go:6036`) and `validateContainmentScans` (`state.go:6129`) at 24, against the wave's ≤25
+(`journal_validation.go:73`) at cyclomatic complexity 25 and `validateJournalKeyScalarsAndProcessDetails`
+(`journal_validation.go:53`) and `validateContainmentScans` (`containment_journal.go:623`) at 24, against the wave's ≤25
 acceptance. The next condition added to any of those three blocks must be split into a new helper
 instead of appended.
 
@@ -1270,9 +1270,9 @@ version pinned` section of `docs/archive/CLOSED-TODO.md`.
       `payload["error"]`; `queueTerminalTransitionWithRetry` (`daemon/internal/app/outbox.go:124-168`)
       retries `state.ErrProviderActionCapacity` forever (`minimumInterval`, log
       `queue_terminal_transition_failed`); the capacity error comes from
-      `saveJournalWithCapacityGuardLocked` (`daemon/internal/state/state.go:5326`) →
+      `saveJournalWithCapacityGuardLocked` (`daemon/internal/state/state.go:254`) →
       `validateJournalSaveCapacity` (`daemon/internal/state/provider_action.go:594-606`, 4 MiB check
-      at `:599`) and `saveJournalLocked` (`state.go:5305`, size check at `:5311`;
+      at `:599`) and `saveJournalLocked` (`state.go:236`, size check at `:240`;
       `maxJournalFileBytes = 4<<20`). rf-w3-09 (2026-11-22, drop-errcheck slice) joined the abandon
       result into the nine `startGoalAdmission` returns, and the `goal_admission` `queueFailure`
       call in `daemon/internal/app/app.go` passes that value through unchanged (read from source,
