@@ -16,6 +16,7 @@ import unittest
 import citest
 
 SCRIPT = pathlib.Path(__file__).with_name("model-routing-source-subject.py")
+RUNNER = SCRIPT.with_name("model-routing-evaluation.py")
 
 
 def load_tool():
@@ -124,6 +125,25 @@ class SourceSubjectTests(unittest.TestCase):
         after = tool.source_subject(self.root)
         self.assertEqual(after[0], before[0])
         self.assertNotEqual(after[1], before[1])
+
+    def test_delivered_tool_paths_cover_the_whole_evaluation_tool_set(self) -> None:
+        tool = load_tool()
+        self.assertEqual(
+            tool.DELIVERED_TOOL_PATHS,
+            (
+                "scripts/ci/model-routing-evaluation.py",
+                "scripts/ci/model_routing_gates.py",
+                "scripts/ci/model_routing_receipts.py",
+                "scripts/ci/model_routing_records.py",
+                "scripts/ci/model_routing_subject.py",
+                "scripts/ci/test-model-routing-evaluation.py",
+            ),
+        )
+        imported = {f"scripts/ci/{name}.py" for name in citest.runner_module_closure(RUNNER)}
+        self.assertLessEqual(imported, set(tool.DELIVERED_TOOL_PATHS), imported - set(tool.DELIVERED_TOOL_PATHS))
+        root = SCRIPT.resolve().parents[2]
+        for relative in tool.DELIVERED_TOOL_PATHS:
+            self.assertTrue((root / relative).is_file(), relative)
 
 
 if __name__ == "__main__":

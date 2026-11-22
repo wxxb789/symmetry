@@ -8,6 +8,7 @@ evidence, not live acceptance evidence for any real session or route.
 
 import contextlib
 import hashlib
+import importlib
 import io
 import json
 import pathlib
@@ -71,11 +72,6 @@ def prompt_hash(text):
 
 def surrogatepass_digest(value):
     return "sha256:" + hashlib.sha256(value.encode("utf-8", "surrogatepass")).hexdigest()
-
-
-def load_runner_module():
-    """Import the acceptance runner so exported rows can be validated in-process."""
-    return citest.load_gate(pathlib.Path(__file__).with_name("model-routing-evaluation.py"), "model_routing_evaluation")
 
 
 def load_usage_module():
@@ -310,15 +306,16 @@ class OmpUsageExtractionTest(unittest.TestCase):
 
         The runner keeps its own `STAGES` (which usage rows must cover) and
         `SECRET_KEY_PATTERN` (which decides whether an exported entry-type name
-        passes its secret-key scan), and the extractor duplicates both; this test
-        pins the pair per constant against this suite's stage literal too.
+        passes its secret-key scan) in its records module, and the extractor
+        duplicates both; this test pins the pair per constant against this suite's
+        stage literal too.
         """
-        runner = load_runner_module()
+        records = importlib.import_module("model_routing_records")
         usage = load_usage_module()
         self.assertEqual(usage.STAGES, ACCOUNTABLE_STAGES)
-        self.assertEqual(runner.STAGES, ACCOUNTABLE_STAGES)
-        self.assertEqual(usage.SECRET_KEY_PATTERN.pattern, runner.SECRET_KEY_PATTERN.pattern)
-        self.assertEqual(usage.SECRET_KEY_PATTERN.flags, runner.SECRET_KEY_PATTERN.flags)
+        self.assertEqual(records.STAGES, ACCOUNTABLE_STAGES)
+        self.assertEqual(usage.SECRET_KEY_PATTERN.pattern, records.SECRET_KEY_PATTERN.pattern)
+        self.assertEqual(usage.SECRET_KEY_PATTERN.flags, records.SECRET_KEY_PATTERN.flags)
 
     def test_usage_sums_include_failed_and_aborted_attempts(self):
         records = [
@@ -886,7 +883,7 @@ class OmpUsageExtractionTest(unittest.TestCase):
         self.assertEqual(first["session_ref"], second["session_ref"])
 
         # The runner must refuse to count the same evidence twice.
-        module = load_runner_module()
+        module = importlib.import_module("model_routing_records")
         usage = self.phases_with(first, second)
         with self.assertRaises(module.Refused) as refusal:
             module.validate_usage(json.dumps(usage).encode("utf-8"))
@@ -901,7 +898,7 @@ class OmpUsageExtractionTest(unittest.TestCase):
         self.assertNotEqual(first["metadata"]["source_sha256"], second["metadata"]["source_sha256"])
         self.assertNotEqual(first["session_ref"], second["session_ref"])
 
-        module = load_runner_module()
+        module = importlib.import_module("model_routing_records")
         rows, repair_count, task_wall_time = module.validate_usage(
             json.dumps(self.phases_with(first, second)).encode("utf-8")
         )
@@ -1110,7 +1107,7 @@ class OmpUsageExtractionTest(unittest.TestCase):
                 self.non_model_phase("failed_attempt"),
             ],
         }
-        module = load_runner_module()
+        module = importlib.import_module("model_routing_records")
         rows, repair_count, task_wall_time = module.validate_usage(json.dumps(usage).encode("utf-8"))
         self.assertEqual(len(rows), 6)
         self.assertEqual(repair_count, 0)
@@ -1149,7 +1146,7 @@ class OmpUsageExtractionTest(unittest.TestCase):
                 self.non_model_phase("failed_attempt"),
             ],
         }
-        module = load_runner_module()
+        module = importlib.import_module("model_routing_records")
         rows, repair_count, task_wall_time = module.validate_usage(json.dumps(usage).encode("utf-8"))
         self.assertEqual(len(rows), 6)
         self.assertEqual(repair_count, 0)
@@ -1188,7 +1185,7 @@ class OmpUsageExtractionTest(unittest.TestCase):
                         self.non_model_phase("failed_attempt"),
                     ],
                 }
-                module = load_runner_module()
+                module = importlib.import_module("model_routing_records")
                 rows, repair_count, task_wall_time = module.validate_usage(json.dumps(usage).encode("utf-8"))
                 self.assertEqual(len(rows), 6)
                 self.assertEqual(repair_count, 0)
