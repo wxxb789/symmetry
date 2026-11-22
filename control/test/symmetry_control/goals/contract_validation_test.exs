@@ -133,6 +133,28 @@ defmodule SymmetryControl.Goals.ContractValidationTest do
              ContractValidation.validate_evidence_batch(invalid, opts)
   end
 
+  test "the request schemas describe the fence-stripped evidence, batch and usage documents" do
+    opts = [schema_root: @schema_root]
+    fence = fence_document()
+
+    for {filename, validate} <- [
+          {"evidence.artifact.json", &ContractValidation.validate_evidence/2},
+          {"evidence-batch.basic.json", &ContractValidation.validate_evidence_batch/2},
+          {"usage.nullable.json", &ContractValidation.validate_usage/2}
+        ] do
+      document = fixture(@valid_root, filename)
+
+      assert :ok == validate.(document, opts)
+
+      assert {:error, {:validation_failed, errors}} =
+               validate.(Map.merge(document, fence), opts)
+
+      refusal = inspect(errors, limit: :infinity, printable_limit: 100_000)
+      assert refusal =~ ~r/additionalproperties/i
+      for member <- Map.keys(fence), do: assert(refusal =~ member)
+    end
+  end
+
   test "validates pure decision and GoalRevision semantics after schema validation" do
     opts = [schema_root: @schema_root]
 
@@ -390,6 +412,16 @@ defmodule SymmetryControl.Goals.ContractValidationTest do
     |> Path.join(filename)
     |> File.read!()
     |> Jason.decode!()
+  end
+
+  defp fence_document do
+    %{
+      "runtime_id" => "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "runtime_epoch" => 3,
+      "generation" => 2,
+      "claim_id" => "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      "lease_token" => "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+    }
   end
 
   defp canonical_plan_proposal(proposal) do
