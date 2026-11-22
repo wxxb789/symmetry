@@ -67,12 +67,13 @@ defmodule SymmetryControl.Goals.ContractFixtureManifestTest do
       end)
 
     Enum.each(fixtures, fn fixture ->
-      expected = Map.get(fixture, "semantic_valid", Map.fetch!(fixture, "valid"))
       path = Path.join(@fixture_root, fixture["path"])
 
       if fixture["wire_error"] do
         assert_raw_wire_read(fixture, read_schemas)
       else
+        expected = Map.get(fixture, "semantic_valid", Map.fetch!(fixture, "valid"))
+
         case Jason.decode(File.read!(path)) do
           {:ok, data} ->
             result = validate_fixture(fixture["schema"], data, read_schemas)
@@ -101,7 +102,7 @@ defmodule SymmetryControl.Goals.ContractFixtureManifestTest do
     actual =
       case raw_wire_decode(fixture["schema"], body) do
         {:ok, data} -> validate_fixture(fixture["schema"], data, read_schemas) == :ok
-        {:error, _error} -> false
+        :error -> false
       end
 
     assert actual == accepts,
@@ -111,13 +112,13 @@ defmodule SymmetryControl.Goals.ContractFixtureManifestTest do
   defp raw_wire_decode(schema, body) when schema in @machine_request_schemas do
     {:ok, StrictJSONDecoder.decode!(body)}
   rescue
-    error -> {:error, error.__struct__}
+    _error -> :error
   end
 
   defp raw_wire_decode(_schema, body) do
     case Jason.decode(body) do
       {:ok, value} -> {:ok, value}
-      {:error, error} -> {:error, error.__struct__}
+      {:error, _error} -> :error
     end
   end
 

@@ -190,7 +190,11 @@ func assertRawWireFixture(t *testing.T, fixture goalContractFixture, data []byte
 	if err == nil {
 		t.Fatalf("raw fixture class %s was accepted by DecodeSchema", fixture.WireError)
 	}
-	if want := rawWireErrorTexts[fixture.WireError]; !strings.Contains(err.Error(), want) {
+	want, known := rawWireErrorTexts[fixture.WireError]
+	if !known {
+		t.Fatalf("unknown wire_error class %q", fixture.WireError)
+	}
+	if !strings.Contains(err.Error(), want) {
 		t.Fatalf("rejection %q does not carry %q", err, want)
 	}
 }

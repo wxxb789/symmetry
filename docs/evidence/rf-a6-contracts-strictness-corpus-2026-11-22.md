@@ -73,7 +73,10 @@ Single entry: `decodeResponseJSON(level, envelope, value, target)` (`daemon/inte
 | `decodeStrictObjectJSON` (18 callers, `decodeStrictJSON`) | typed | unknown fields, single value, duplicate members | `decodeResponseJSON(responseDecodeTyped, "", …)` |
 
 Deleted: `decodeJSON`, `decodeJSONUnchecked`, `decodeStrictJSON`. `rejectDuplicateJSONMembersOnly`
-remains (provider-action alias comparison). Control-flow audit: every removed body's checks are the
+remains as the provider-action path's own duplicate gate: `decodeProviderActionObjectJSON` rejects
+duplicate members before its missing-field and tag-alias checks (the legacy level then re-scans the
+same bytes, keeping duplicate members ahead of those errors), and `equalProviderActionJSON` filters
+both sides before canonical comparison. Control-flow audit: every removed body's checks are the
 entry's per-level bodies verbatim (single-value message, duplicate-after-parse precedence, legacy
 duplicate filter); no early return or error wrap changed; the outer `responseErrorf` prefixes are
 byte-compared in §5.
@@ -192,14 +195,25 @@ PostgreSQL 18.6 instance needed crash recovery before the Elixir gate (a host-le
 `20:14 CST`/`04:14 PDT` terminated its workers); the Elixir row above records the run that
 followed once `psql` accepted connections again.
 
+Apply-stage re-run at `9c46e561` plus the apply edits (2026-11-22): every row above re-ran green —
+contracts:check 35/35 node tests, 21 schemas / 261 fixtures; `gofmt -l`, `go vet`, both builds exit 0;
+Go tests `ok` ×3 (7.394s / 3.317s / 3.350s Windows; 16.767s / 19.134s / 7.196s WSL `-race`, no
+`DATA RACE`); Elixir `Result: 25 passed`; `git diff --check`, host-path and DLP scans clean; citation
+gate over a synthetic working-tree snapshot (`505f2f49`) exit 0, `no audited document added or modified
+between 9c46e561f6e0 and 505f2f49bc2e`.
+
 ## 7. Mutants (each applied alone, reverted)
 
 - Bypass the entry inside `requestGoalWithStatus` (inline `json.Decoder` decode, no entry call) → red:
-  `--- FAIL: TestResponseDecodeRoutesEveryPathThroughTheEntry/requestGoalWithStatus … decode_test.go:128: entry calls = 0, want 1`
+  `--- FAIL: TestResponseDecodeRoutesEveryPathThroughTheEntry/requestGoalWithStatus … decode_test.go:132: entry calls = 0, want 1`
   (observed at the final tree, then reverted).
 - Flip one `wire_levels` entry (`goal-command.raw-invalid-utf8` to `["legacy", "typed", "schema"]`) → red:
   `--- FAIL: TestResponseDecodeLevelsMatchTheRawCorpus/goal-command.raw-invalid-utf8 … decode_test.go:83: legacy level rejected = false, want true: <nil>`
   (observed at the final tree, then reverted).
+- Remove the `bom` class from one Go reader's `wire_error` table (same mutant per reader, reverted) → red:
+  `unknown wire_error class "bom"` at `decode_test.go:89` and `goal_contract_fixture_test.go:63` (the
+  `assertRawWireFixture` call site behind `t.Helper()`; the checks sit at `:90` and `:195` in the applied
+  tree). Proves an unknown class fails loudly instead of passing vacuously.
 - Replace the Elixir machine-request decoder with `Jason.decode/1` → red (`mix` exit 2):
   `1) test public Elixir validators agree with every manifest semantic expectation …
   evidence-batch.raw-duplicate-member-nested expected elixir wire acceptance=false, got true`

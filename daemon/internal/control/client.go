@@ -1191,7 +1191,7 @@ func decodeResponseJSON(level responseDecodeLevel, envelope contracts.Envelope, 
 		// Duplicate members are rejected only after the value parsed, preserving every
 		// pre-existing rejection message and precedence at every depth.
 		return protocol.RejectDuplicateJSONMembers(value)
-	default:
+	case responseDecodeLegacy:
 		if err := rejectDuplicateJSONMembersOnly(value); err != nil {
 			return err
 		}
@@ -1200,6 +1200,8 @@ func decodeResponseJSON(level responseDecodeLevel, envelope contracts.Envelope, 
 			return err
 		}
 		return requireSingleJSONValue(decoder)
+	default:
+		return fmt.Errorf("unknown response decode level %d", level)
 	}
 }
 
@@ -1658,14 +1660,7 @@ func rejectProviderActionResponseTagAliases(value []byte) error {
 	if delimiter, ok := closing.(json.Delim); !ok || delimiter != '}' {
 		return errors.New("response must be a JSON object")
 	}
-	var trailing any
-	if err := decoder.Decode(&trailing); err != io.EOF {
-		if err == nil {
-			return errors.New("response must contain one JSON value")
-		}
-		return err
-	}
-	return nil
+	return requireSingleJSONValue(decoder)
 }
 
 func hasJSONField(fields map[string]json.RawMessage, name string) bool {

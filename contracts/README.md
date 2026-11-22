@@ -88,7 +88,9 @@ members at the top level and nested, fractional, exponent, negative-zero,
 leading-zero and unsafe-integer lexemes, non-finite presentation numbers, an
 invalid UTF-8 byte, a UTF-8 BOM prefix, a trailing second value and trailing
 garbage — each wrapped in a document of a real schema so only the raw property
-fails. A row's `runtime_divergence` map names a runtime that accepts the bytes
+fails; the unsafe-integer row is the one exception, because `9007199254740992`
+also exceeds the envelope's `expected_revision` maximum once parsed. A row's
+`runtime_divergence` map names a runtime that accepts the bytes
 today (for example the BOM, which `JSON.parse` strips, or `-0`); every reader
 asserts today's behavior instead of adding a rejection, and the agreement work
 that remains is recorded in `docs/TODO.md`.

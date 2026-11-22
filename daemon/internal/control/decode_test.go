@@ -26,7 +26,7 @@ type rawWireManifest struct {
 	Fixtures []rawWireFixture `json:"fixtures"`
 }
 
-var rawWireTexts = map[string]string{
+var rawWireErrorTexts = map[string]string{
 	"duplicate_json_member": "duplicate JSON object member",
 	"noncanonical_number":   "fractional or exponent number is not canonical",
 	"unsafe_integer":        "integer exceeds the JSON safe-integer range",
@@ -85,7 +85,11 @@ func TestResponseDecodeLevelsMatchTheRawCorpus(t *testing.T) {
 				if name != "schema" || err == nil {
 					continue
 				}
-				if want := rawWireTexts[fixture.WireError]; !strings.Contains(err.Error(), want) {
+				want, known := rawWireErrorTexts[fixture.WireError]
+				if !known {
+					t.Fatalf("unknown wire_error class %q", fixture.WireError)
+				}
+				if !strings.Contains(err.Error(), want) {
 					t.Fatalf("schema rejection %q does not carry %q", err, want)
 				}
 			}
