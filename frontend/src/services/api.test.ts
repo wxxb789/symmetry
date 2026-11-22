@@ -1,6 +1,6 @@
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
-import { failureMode } from "../features/planning/write-policy";
-import { createApi, Forbidden, Network, postGoalCommand, postGoalCreation, readRetry, refusalNotice, ServerRefusal, Unauthenticated, UnexpectedResponse, Validation, type ActionId, type Api, type ExecutionGeneration, type Writes } from "./api";
+import { failureMode, refusalNotice } from "./refusals";
+import { createApi, Forbidden, Network, postGoalCommand, postGoalCreation, readRetry, ServerRefusal, Unauthenticated, UnexpectedResponse, Validation, type ActionId, type Api, type ExecutionGeneration, type Writes } from "./api";
 import { MutationRefused } from "./commands";
 import { readWorkDetail } from "./api.fixtures";
 

@@ -1,13 +1,9 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { useState, type RefObject } from "react";
 import { chatConversationOptions, chatOlderPageOptions, type Application, type ChatScopeKey } from "../../app/application";
-import { Conflict, UnexpectedResponse, Validation, errorMessage } from "../../services/api";
+import { errorMessage } from "../../services/api";
+import { isDefinitiveReadRefusal } from "../../services/refusals";
 import { ownsChainPointer, pendingOlderLoadFor, retainOlderPage, type ChatOlderLoad, type ChatScopeState, type ChatSendStatus } from "./scopes";
-
-function definitiveReadRefusal(error: unknown): boolean {
-  return error instanceof Conflict || error instanceof Validation ||
-    (error instanceof UnexpectedResponse && error.status === 400);
-}
 
 export function useOlderPageLoading(options: {
   readonly key: string;
@@ -36,7 +32,7 @@ export function useOlderPageLoading(options: {
         (error: unknown) => {
           // Rejection callback, not a `.catch`: a throwing retain write must
           // not be reported as a read failure.
-          const refused = definitiveReadRefusal(error);
+          const refused = isDefinitiveReadRefusal(error);
           if (refused) {
             // The gate reads the last committed store while the write below
             // judges the queued record: one benign re-read, never a wrong cursor.

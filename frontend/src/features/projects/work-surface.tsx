@@ -7,7 +7,8 @@ import type { MoveIntent, Project, WorkItem } from "../../services/api";
 import { StatusBadge, statusLabel } from "../../components/primitives";
 import { EmptyState } from "../../components/workspace";
 import { acceptanceLabel, ciLabel, ciResourcesOf, costHint, costLabel, noBlocker, noReportedResult, ownerKeyLabel, ownerLabel, priorityLabel, reportedResult, type CiResourceLike } from "../work/presentation";
-import { boardMoveRequest, hasServedRevision, isGoalManaged, providerOwnedControlsOf, refusalNotice, workItemMovePolicy } from "../planning/write-policy";
+import { boardMoveRequest, hasServedRevision, isGoalManaged, providerOwnedControlsOf, workItemMovePolicy } from "../planning/write-policy";
+import { refusalNotice } from "../../services/refusals";
 import {
   boardColumns,
   filterWorkItems,

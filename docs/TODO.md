@@ -642,7 +642,7 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       `contracts/generated/ts/work-detail-read.ts:96`, `contracts/generated/ts/chat-read.ts:144`;
       `daemon/internal/contracts/generated.go:238`, `:1510`, `:1888`;
       `daemon/internal/contracts/schema_bundle.json:8389`, `:39339`, `:44347`), in two frontend
-      comments (`frontend/src/features/planning/write-policy.ts:251`,
+      comments (`frontend/src/features/planning/write-policy.ts`, above `recordedDeliveryValue`;
       `frontend/src/services/api.fixtures.ts:44`) and in two plan files
       (`docs/plans/2026-11-21-portal-json-plan.md`,
       `docs/plans/2026-11-21-served-doc-gates-plan.md`), which are historical and stay. Reword the

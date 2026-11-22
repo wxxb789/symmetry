@@ -987,17 +987,3 @@ export function errorMessage(error: unknown): string {
 export function ownValue<T>(map: Record<string, T>, key: string): T | undefined {
   return Object.hasOwn(map, key) ? map[key] : undefined;
 }
-
-/**
- * The refusal fold every write surface renders: a `ServerRefusal` keeps the
- * server's own message and code, and the surface contributes the operator's
- * next step for the codes its guidance map itself owns (a prototype-named code
- * contributes none). Any other error renders the message `errorMessage` gives
- * it — a refusal's own text, or the generic workspace message for a bare
- * `Error`.
- */
-export function refusalNotice(error: unknown, guidance: Record<string, string>): string {
-  if (!(error instanceof ServerRefusal)) return errorMessage(error);
-  const step = ownValue(guidance, error.code);
-  return `${error.message} (${error.code})${step ? ` — ${step}` : ""}`;
-}
