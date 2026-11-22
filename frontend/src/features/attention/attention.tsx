@@ -4,6 +4,7 @@ import { AlertCircle, CircleCheck, Plus, Target } from "lucide-react";
 import { useState } from "react";
 import { attentionOptions, sessionOptions, workspaceOptions } from "../../app/application";
 import { attentionReadKey } from "../../app/read-cache";
+import { useSelectedProject } from "../../app/selected-project";
 import { StatusBadge } from "../../components/primitives";
 import { EmptyState, ErrorState, LoadingState, PageHeading, RefreshButton } from "../../components/workspace";
 import { errorMessage, postGoalCreation, type GoalAttentionEntry, type ProjectBlockedEntry } from "../../services/api";
@@ -12,16 +13,16 @@ import { MutationRefused, newMutationId } from "../../services/commands";
 export function AttentionPage() {
   const { application } = useRouteContext({ from: "__root__" });
   const search = useSearch({ from: "/attention" });
-  const projectId = search.projectId ?? null;
+  const selectedProjectId = useSelectedProject() ?? null;
   // The chain the reader expanded: the served cursor the feed's first page ended
   // at when the first older page was loaded, and the cursors of the pages loaded
   // from it. The cursor IS the boundary (it encodes the last Goal's position and
   // is not re-minted per read), so the served value is the identity to compare.
   const [expanded, setExpanded] = useState<{ readonly start: string | null; readonly cursors: readonly string[] }>({ start: null, cursors: [] });
-  const workspace = useQuery(workspaceOptions(application.api, projectId ?? null));
+  const workspace = useQuery(workspaceOptions(application.api, selectedProjectId));
   // The first page is its own read; the feed's chain starts at the cursor it
   // serves, so only its own read can name that start.
-  const first = useQuery(attentionOptions(application.api, projectId, null));
+  const first = useQuery(attentionOptions(application.api, selectedProjectId, null));
   const servedStart = first.data?.goal_attention.next_cursor ?? null;
   // The reader's pages belong to the chain they were fetched for: a re-read that
   // ends somewhere else does not serve them, because the entries between its
@@ -30,12 +31,12 @@ export function AttentionPage() {
   // as the reader loads more and hooks must not be called in a loop over it.
   const cursors = expanded.start !== null && expanded.start === servedStart ? expanded.cursors : [];
   const older = useQueries({
-    queries: cursors.map((cursor) => attentionOptions(application.api, projectId, cursor)),
+    queries: cursors.map((cursor) => attentionOptions(application.api, selectedProjectId, cursor)),
   });
   const queries = [first, ...older];
   const goalEntries = queries.flatMap((query) => query.data?.goal_attention.entries ?? []);
   const projectBlocked = first?.data?.project_blocked.entries ?? [];
-  const selectedProjectName = workspace.data?.projects.find((project) => project.id === (projectId ?? first?.data?.selected_project_id))?.name ?? null;
+  const selectedProjectName = workspace.data?.projects.find((project) => project.id === (selectedProjectId ?? first?.data?.selected_project_id))?.name ?? null;
   const goalUnavailable = first?.data?.goal_attention.unavailable ?? null;
   const projectUnavailable = first?.data?.project_blocked.unavailable ?? null;
   const nextCursor = queries[queries.length - 1]?.data?.goal_attention.next_cursor ?? null;
@@ -54,7 +55,7 @@ export function AttentionPage() {
   return <main className="workspace-content">
     <PageHeading title="Attention" description="Goal decisions, settlement attention and derived blockers together with the project's blocked work.">
       <div className="heading-actions">
-        <NewGoalButton projectId={projectId ?? first?.data?.selected_project_id ?? null} />
+        <NewGoalButton projectId={selectedProjectId ?? first?.data?.selected_project_id ?? null} />
         <RefreshButton fetching={fetching} refresh={refresh} />
       </div>
     </PageHeading>
