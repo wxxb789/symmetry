@@ -27,6 +27,8 @@ import time
 import urllib.parse
 import uuid
 
+import source_subject
+
 BASELINE = {
     "commit": "6adc9ef1a2f704590ee4172cecb4e0bb6c70408c",
     "tree_digest": "sha256:1831626e62b934f63cf3abd59d3e5ed73e5a21d898eccd6e7d349ae116a39d92",
@@ -68,6 +70,7 @@ GO_BUILD_SETTINGS = ("vcs", "vcs.revision", "vcs.time", "vcs.modified")
 MACHINE_SESSION_ENDPOINT = re.compile(r"/api/v1/machines/([^/]+)/sessions/([^/]+)")
 SOURCE_PATHS = [
     "scripts/ci/omo-control-native-evidence.py",
+    "scripts/ci/source_subject.py",
     "scripts/ci/omo-control-native-fixture.exs",
     "daemon/cmd/symmetry-daemon/main.go",
     "daemon/internal/app/app.go",
@@ -116,6 +119,7 @@ SOURCE_PATHS = [
     "contracts/v1/task-result.schema.json",
     "daemon/internal/app/command_queue.go",
     "daemon/internal/app/run_lifecycle.go",
+    "daemon/internal/app/goal_admission_tx.go",
 ]
 
 
@@ -150,16 +154,8 @@ def machine_session_ids(path):
     return canonical_uuid(match.group(1), "machine id"), canonical_uuid(match.group(2), "session id")
 
 
-def sha(data):
-    return "sha256:" + hashlib.sha256(data).hexdigest()
-
-
-def file_identity(path):
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1 << 20), b""):
-            digest.update(chunk)
-    return {"path": str(path), "bytes": path.stat().st_size, "sha256": "sha256:" + digest.hexdigest()}
+sha = source_subject.sha256_digest
+file_identity = source_subject.file_identity
 
 
 def workspace_files(workspace, git, env, receipt):
@@ -684,11 +680,22 @@ def command_bytes(argv, env, cwd, receipt):
     return result.stdout
 
 
+ATTESTATION_REFUSALS = {
+    "declared_path_set_mismatch": "invalid parent source attestation identity or path set",
+    "declared_entry_shape": "parent source attestation differs from actual source blob: {detail}",
+    "declared_content_mismatch": "parent source attestation differs from actual source blob: {detail}",
+}
+TREE_REFUSALS = {
+    "tree_entry_not_a_file": "fixture tree contains non-file effects",
+    "invalid_tree_record": "fixture tree listing is unreadable",
+}
+
+
 def source_revision(source, git, env, receipt, attestation=None):
-    files = {name: file_identity(source / name) for name in SOURCE_PATHS}
+    files = source_subject.declared_file_identities(source, SOURCE_PATHS)
     if attestation is None:
-        revision = (
-            command_bytes([str(git), "-C", str(source), "rev-parse", "HEAD"], env, source, receipt).decode().strip()
+        revision = source_subject.head_revision(
+            lambda *arguments: command_bytes([str(git), "-C", str(source), *arguments], env, source, receipt)
         )
         provenance = {"kind": "local_git_head", "platform": platform.system()}
     else:
@@ -700,21 +707,13 @@ def source_revision(source, git, env, receipt, attestation=None):
             set(value) == {"source_revision", "source_files", "origin"}
             and value["origin"] == "parent-observed-Windows-Git-HEAD-and-source-blobs"
             and isinstance(value["source_revision"], str)
-            and re.fullmatch(r"[0-9a-f]{40}", value["source_revision"])
-            and isinstance(value["source_files"], dict)
-            and set(value["source_files"]) == set(SOURCE_PATHS),
+            and re.fullmatch(r"[0-9a-f]{40}", value["source_revision"]),
             "invalid parent source attestation identity or path set",
         )
-        for name, observed in files.items():
-            expected = value["source_files"][name]
-            require(
-                isinstance(expected, dict)
-                and set(expected) == {"bytes", "sha256"}
-                and type(expected["bytes"]) is int
-                and expected["bytes"] == observed["bytes"]
-                and expected["sha256"] == observed["sha256"],
-                "parent source attestation differs from actual source blob: " + name,
-            )
+        try:
+            source_subject.verify_declared_file_set(SOURCE_PATHS, value["source_files"], files)
+        except source_subject.Refused as refusal:
+            raise Rejected(ATTESTATION_REFUSALS[refusal.code].format(detail=refusal.detail)) from refusal
         revision = value["source_revision"]
         provenance = {
             "kind": value["origin"],
@@ -731,18 +730,18 @@ def tree_digest(repository, commit, git, env, receipt):
     listing = command_bytes(
         [str(git), "-C", str(repository), "ls-tree", "-r", "-z", "--full-tree", commit], env, repository, receipt
     )
-    entries = []
-    for record in listing.split(b"\0"):
-        if not record:
-            continue
-        metadata, path = record.split(b"\t", 1)
-        mode, kind, object_id = metadata.split(b" ")
-        require(kind == b"blob" and mode in (b"100644", b"100755"), "fixture tree contains non-file effects")
-        blob = command_bytes(
+
+    def read_object(object_id):
+        return command_bytes(
             [str(git), "-C", str(repository), "cat-file", "blob", object_id.decode()], env, repository, receipt
         )
-        entries.append((path, mode + b"\0" + kind + b"\0" + path + b"\0" + sha(blob).encode() + b"\0"))
-    return sha(b"".join(record for _path, record in sorted(entries)))
+
+    try:
+        return source_subject.committed_tree_digest(
+            source_subject.tree_records(listing), read_object, modes=source_subject.FILE_MODES
+        )
+    except source_subject.Refused as refusal:
+        raise Rejected(TREE_REFUSALS[refusal.code]) from refusal
 
 
 def process_marker(pid):

@@ -6,6 +6,8 @@ import (
 	"time"
 )
 
+func PermanentCloseFailure(err error) error { return permanentCloseFailure{Err: err} }
+
 // Classified as permanent only when returned bare: a wrapped or joined marker stays a
 // retryable failure, and a nil Err is retryable too.
 type permanentCloseFailure struct{ Err error }

@@ -83,6 +83,10 @@ The accepted colon-owner-keys item appended to the `## Retro review follow-ups (
 The closed `stopDescendantMonitor` post-timer recheck appended to the `## Retro review follow-ups`
 section below was moved on 2026-11-21 from branch `fix/stop-descendant-recheck`.
 
+The declined goal-write cancellation signal appended to the `## Comment-policy sweep: debt the
+deleted comments recorded (2026-11-22)` section at the end of this file was moved on 2026-11-22
+from branch `refactor/rf-w4-09-api-reads-writes-split`.
+
 The two closed chat-history-chain items appended to `## Paginated reads must be bound to the cursor
 that served their pages` below were moved on 2026-11-21 from branch `fix/chat-history-chain`.
 
@@ -102,6 +106,11 @@ occurrence` section at the end of this file was moved on 2026-11-21 from branch
 The CI Go toolchain closure appended to its own
 `## CI Go toolchain: bump past the stdlib advisories` section at the end of this file was moved on
 2026-11-22 from branch `refactor/ci-toolchain-bump`.
+
+The revalidated W1-06 `NewClaudeAdapterWithRunner` residual (filed under `## SEO / repository
+metadata` in `docs/TODO.md`) was appended to the `## Dead-code candidates (rf-w1-06 re-scoped
+sweep)` section below and moved on 2026-11-22 from branch
+`refactor/rf-w4-15c-claude-candidate-relocation`.
 
 ## Model-routing evaluation records
 
@@ -4280,6 +4289,39 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
       (`Store.AttachGoalSession`, `Store.FailUnresolvedProvideInput`) stay open in `docs/TODO.md`
       under the same section, with a residual line pointing here.
 
+- [ ] Revalidate and remove `harness.NewClaudeAdapterWithRunner` (three test files), the residual
+      of the 2026-11-21 W1-06 daemon dead-code survey (branch
+      `refactor/rf-w1-06-daemon-deadcode`, plan
+      `docs/plans/2026-11-21-w1-06-daemon-deadcode-plan.md`). The survey's other
+      unreachable-but-referenced, in-intersection surfaces were dispositioned by the W2-12b
+      relocation (branch `refactor/rf-w2-12b-operator-client-relocation`, plan
+      `docs/plans/2026-11-21-rf-w2-12b-operator-client-relocation-plan.md`): the operator client,
+      its five methods, the seven operator-exclusive task validators of
+      `daemon/internal/control/validation.go` and the v1 task decoders now live in
+      the e2e-owned `daemon/e2e/internal/operator/` package beside their only callers; six
+      declarations of the relocated set differ from their originals only by the sanctioned package
+      qualifiers, the rest byte-identical. The closed
+      part is recorded in `docs/archive/CLOSED-TODO.md` under `## Dead-code candidates`.
+      `control.WithMaxResponseBytes` stays in `control` by that slice's binding amendment (its
+      callers are the machine-client and PI-bridge tests). This residual belongs to the
+      probe/registry dedup (W3-04), not to a deletion pass: its shadowed root-probe siblings are
+      main-reachable through `NewCodexAdapter`/`NewClaudeAdapter`. The two live groups of the same
+      survey stay covered by the decision note below.
+
+      **Closed (2026-11-22, branch `refactor/rf-w4-15c-claude-candidate-relocation`, plan
+      `docs/plans/2026-11-22-rf-w4-15c-claude-candidate-relocation-plan.md`):** all three
+      constructor names are gone. The relocation moved the Claude adapter and its promotion probe
+      out of the root package into the adapter package, and the registry trim deleted the
+      Claude runner-seam constructor together with its two siblings, the Codex constructor pair,
+      the Pi constructor and the probe helpers reachable only from them; the registry now
+      registers only the generic and OpenCode adapters, while the daemon composition root still
+      registers Codex, Claude, Pi, OMP and OmO, so the registered-adapter set the daemon sees is
+      unchanged. Reachability is proven, not assumed: the pinned `unused` lint run is clean, and
+      the before/after declaration list records each deletion with its last caller, in
+      `docs/evidence/rf-w4-15c-claude-candidate-relocation-2026-11-22.md`, whose subject hashes
+      bind the exact bytes. The item's "not to a deletion pass" sentence is superseded by the
+      arch-decision-2 ruling O13 (ACCEPT), annotated in `docs/TODO.md`.
+
 ## Production Linux containment witness: stop-receipt barrier stall awaiting a diagnosable occurrence
 
 - [ ] Diagnose the next occurrence of the `daemon_sigkill_after_lease_arm_before_resume` barrier
@@ -4488,3 +4530,19 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
       scripts/ci/test-check-lockfile-registry.py` → exit 1, `FAILED (failures=1)` on
       `SYMMETRY_REQUIRE_PYYAML=1 requires the PyYAML differential oracle, and it is not importable`.
       The pinned download itself runs only on the CI runner, recorded as such.
+
+## Comment-policy sweep: debt the deleted comments recorded (2026-11-22)
+
+- [ ] `frontend/src/services/api.ts`: Goal command/creation writes have no caller-cancellation
+      signal — the W4-09 reads/writes split owns adding one; `run()` accepts an optional `signal`
+      the write path never supplies.
+
+      **Closed (2026-11-22, branch `refactor/rf-w4-09-api-reads-writes-split`, plan
+      `docs/plans/2026-11-22-rf-w4-09-api-reads-writes-split-plan.md`):** declined, not added, by
+      the slice's binding conductor decision option (a). A write keeps no signal: a hidden write
+      deadline would be new production behaviour with no accepted requirement, and D1 freezes the
+      wire bytes, so the split states the decision in the type surface instead — `Writes` has no
+      signal parameter, and a caller cannot believe a command write is cancellable. The Goal
+      command/creation path's source (`postGoalCommand`/`postGoalCreation` through `goalCommand`)
+      is unchanged; like every write, its fetch init no longer carries the runtime's
+      never-aborted step signal, and `run()`'s optional `signal` remains for the read half only.

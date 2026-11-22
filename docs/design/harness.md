@@ -38,10 +38,18 @@ promote Linux from Windows evidence.
 Claude Code promotion is bound the same way: the resolved `claude.exe` SHA-256,
 the anchored `2.1.323 (Claude Code)` version line and the committed fixture
 digests must all match, and a PATH shim that reports the same version is a
-different blob that promotes nothing. Linux Claude admission stays fail-closed
-until the Linux v2 owner path carries exact-binary evidence. Because the
-permission layer is not a containment boundary, the fixed transport argv selects
-the narrowest native permission mode that keeps a real repository turn possible
+different blob that promotes nothing. Each probe command (`--version`,
+`--help`) is bounded at 5 s and 64 KiB of output: the pinned 367 MB Windows
+executable answered well under 1 s on an idle host but has exceeded 1 s under
+host load, and because a deadline is not a tolerated sentinel a spurious expiry
+would fail daemon startup instead of reporting an unavailable client. Version
+and transport agreement stay necessary but never sufficient; Linux Claude
+admission stays fail-closed because the Linux v2 owner path requires an
+installed A/B systemd runtime with a delegated cgroup-v2 parent and cross-UID
+peer inspection, which the recorded host evidence does not provide, and Windows
+evidence is never promoted as Linux support. Because the permission layer is
+not a containment boundary, the fixed transport argv selects the narrowest
+native permission mode that keeps a real repository turn possible
 (`--permission-mode acceptEdits`). The measured bounds of that mode are
 tool-specific and recorded per control in
 `daemon/internal/harness/testdata/claude/2.1.323/`: a file-tool write inside the
@@ -285,7 +293,7 @@ vocabulary has no `result` member, so no native admission can require one. The
 evidence is the contract and both producers of it — `contracts/v1/common.schema.json`
 declares `AdapterOperations` with `additionalProperties: false` and no `result`
 member, `daemon/internal/harness/types.go` defines no result capability, and
-`startGoalAdmission` (`daemon/internal/app/goal_admission.go:263`) admits exactly
+`startGoalAdmission` (`daemon/internal/app/goal_admission.go:249`) admits exactly
 `start`/`events`/`cancel` at launch —
 while the terminal result already travels on the `events` stream this sentence
 requires. The smallest amendment is therefore that the admission requirement is
