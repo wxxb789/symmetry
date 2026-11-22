@@ -12,6 +12,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/wxxb789/symmetry/daemon/internal/harness/linejson"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 )
 
@@ -202,10 +203,7 @@ type Record struct {
 // Decoder enforces pi's LF-only JSONL framing. A CR immediately before LF is
 // accepted; Unicode line separators are ordinary JSON string content.
 type Decoder struct {
-	max      int
-	buffer   []byte
-	sequence uint64
-	failed   error
+	reader *linejson.Decoder[Record]
 }
 
 // NewDecoder creates a bounded decoder. A non-positive size uses one MiB.
@@ -213,7 +211,20 @@ func NewDecoder(maxRecordBytes int) *Decoder {
 	if maxRecordBytes <= 0 {
 		maxRecordBytes = defaultMaxRecordBytes
 	}
-	return &Decoder{max: maxRecordBytes}
+	return &Decoder{reader: newReader(maxRecordBytes)}
+}
+
+func newReader(maxBytes int) *linejson.Decoder[Record] {
+	return linejson.New(linejson.Policy[Record]{
+		MaxBytes:    maxBytes,
+		CRAllowance: true,
+		TrimCR:      true,
+		SkipBlank:   true,
+		Latch:       true,
+		TooLarge:    func() error { return ErrRecordTooLarge },
+		Incomplete:  func() error { return ErrIncompleteRecord },
+		Decode:      decodeRecord,
+	})
 }
 
 // Feed decodes complete records without ever accumulating an unbounded chunk.
@@ -221,37 +232,7 @@ func (decoder *Decoder) Feed(chunk []byte) ([]Record, error) {
 	if decoder == nil {
 		return nil, errors.New("pi rpc decoder is nil")
 	}
-	if decoder.failed != nil {
-		return nil, decoder.failed
-	}
-	var records []Record
-	for len(chunk) > 0 {
-		lineEnd := bytes.IndexByte(chunk, '\n')
-		if lineEnd < 0 {
-			if len(decoder.buffer)+len(chunk) > decoder.max {
-				return records, decoder.fail(ErrRecordTooLarge)
-			}
-			decoder.buffer = append(decoder.buffer, chunk...)
-			break
-		}
-		recordBytes := len(decoder.buffer) + lineEnd
-		if recordBytes > decoder.max+1 || (recordBytes > decoder.max && !hasTrailingCRBeforeLF(decoder.buffer, chunk, lineEnd)) {
-			return records, decoder.fail(ErrRecordTooLarge)
-		}
-		decoder.buffer = append(decoder.buffer, chunk[:lineEnd]...)
-		chunk = chunk[lineEnd+1:]
-		line := decoder.buffer
-		decoder.buffer = nil
-		if len(line) > 0 && line[len(line)-1] == '\r' {
-			line = line[:len(line)-1]
-		}
-		if len(bytes.TrimSpace(line)) == 0 {
-			continue
-		}
-		decoder.sequence++
-		records = append(records, decodeRecord(decoder.sequence, line))
-	}
-	return records, nil
+	return decoder.readerOrZeroBound().Feed(chunk)
 }
 
 // Close rejects a non-empty unterminated suffix, even when it is valid JSON.
@@ -259,30 +240,18 @@ func (decoder *Decoder) Close() ([]Record, error) {
 	if decoder == nil {
 		return nil, errors.New("pi rpc decoder is nil")
 	}
-	if decoder.failed != nil {
-		return nil, decoder.failed
+	sequence, pending, err := decoder.readerOrZeroBound().Close()
+	if pending == nil {
+		return nil, err
 	}
-	if len(bytes.TrimSpace(decoder.buffer)) == 0 {
-		decoder.buffer = nil
-		return nil, nil
-	}
-	decoder.sequence++
-	raw := append([]byte(nil), decoder.buffer...)
-	decoder.buffer = nil
-	return []Record{{Sequence: decoder.sequence, Raw: raw, DecodeError: ErrIncompleteRecord}}, decoder.fail(ErrIncompleteRecord)
+	return []Record{{Sequence: sequence, Raw: pending, DecodeError: ErrIncompleteRecord}}, err
 }
 
-func (decoder *Decoder) fail(err error) error {
-	decoder.buffer = nil
-	decoder.failed = err
-	return err
-}
-
-func hasTrailingCRBeforeLF(buffer, chunk []byte, lineEnd int) bool {
-	if lineEnd > 0 {
-		return chunk[lineEnd-1] == '\r'
+func (decoder *Decoder) readerOrZeroBound() *linejson.Decoder[Record] {
+	if decoder.reader == nil {
+		decoder.reader = newReader(0)
 	}
-	return len(buffer) > 0 && buffer[len(buffer)-1] == '\r'
+	return decoder.reader
 }
 
 func decodeRecord(sequence uint64, line []byte) Record {
