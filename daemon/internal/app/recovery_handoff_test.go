@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/wxxb789/symmetry/daemon/internal/app/apptest"
 	"github.com/wxxb789/symmetry/daemon/internal/authority"
 	"github.com/wxxb789/symmetry/daemon/internal/state"
 )
@@ -98,8 +99,9 @@ func TestRecoverPersistedSupervisorHandoffStopsAndReleasesBoundLaunch(t *testing
 }
 
 func TestRecoverPersistedSupervisorHandoffRetainsWorkspaceBeforeProcessControl(t *testing.T) {
-	store, key := claimedStore(t)
-	defer store.Close()
+	baseStore, key := claimedStore(t)
+	defer baseStore.Close()
+	store := apptest.NewFaultStoreFrom(baseStore)
 	handoff := testRecoveryHandoffFixture(46, "windows:46:created-at")
 	if _, err := store.PrepareSupervisorHandoff(key, handoff); err != nil {
 		t.Fatalf("PrepareSupervisorHandoff() error = %v", err)
@@ -146,12 +148,11 @@ func TestRecoverPersistedSupervisorHandoffRetainsWorkspaceBeforeProcessControl(t
 		events = append(events, "release")
 		return got.ReleaseProof(), nil
 	}
-	app := &daemon{store: store, options: options{
-		retainWorkspace: func(got state.RunKey) (state.RunJournal, error) {
-			events = append(events, "retain")
-			return store.RetainWorkspace(got)
-		},
-	}}
+	store.OnRetainWorkspace = func(got state.RunKey) (state.RunJournal, error) {
+		events = append(events, "retain")
+		return baseStore.RetainWorkspace(got)
+	}
+	app := &daemon{store: store}
 	if err := app.recoverPersistedSupervisorHandoff(key, expected); err != nil {
 		t.Fatalf("recoverPersistedSupervisorHandoff() error = %v", err)
 	}
@@ -168,8 +169,9 @@ func TestRecoverPersistedSupervisorHandoffRetainsWorkspaceBeforeProcessControl(t
 }
 
 func TestRecoverPersistedSupervisorHandoffRetentionFailurePreservesPendingJournal(t *testing.T) {
-	store, key := claimedStore(t)
-	defer store.Close()
+	baseStore, key := claimedStore(t)
+	defer baseStore.Close()
+	store := apptest.NewFaultStoreFrom(baseStore)
 	handoff := testRecoveryHandoffFixture(48, "windows:48:created-at")
 	if _, err := store.PrepareSupervisorHandoff(key, handoff); err != nil {
 		t.Fatalf("PrepareSupervisorHandoff() error = %v", err)
@@ -194,11 +196,10 @@ func TestRecoverPersistedSupervisorHandoffRetentionFailurePreservesPendingJourna
 		t.Fatal("prepared supervisor release ran after workspace retention failed")
 		return authority.SupervisorHandoffReleaseProof{}, nil
 	}
-	app := &daemon{store: store, options: options{
-		retainWorkspace: func(got state.RunKey) (state.RunJournal, error) {
-			return state.RunJournal{}, retentionErr
-		},
-	}}
+	store.OnRetainWorkspace = func(got state.RunKey) (state.RunJournal, error) {
+		return state.RunJournal{}, retentionErr
+	}
+	app := &daemon{store: store}
 	err = app.recoverPersistedSupervisorHandoff(key, expected)
 	if !errors.Is(err, retentionErr) {
 		t.Fatalf("recoverPersistedSupervisorHandoff() error = %v, want %v", err, retentionErr)

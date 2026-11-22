@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wxxb789/symmetry/daemon/internal/app/apptest"
 	"github.com/wxxb789/symmetry/daemon/internal/authority"
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
@@ -182,8 +183,14 @@ func TestStorelessDaemonTakesEveryStoreNilBranch(t *testing.T) {
 			}
 		}},
 		{"cleanup_glue.go selectStoreWrite override wins without a store", func(t *testing.T, daemon *daemon) {
+			store, err := apptest.NewFaultStore(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = store.Close() })
+			daemon.store = store
 			calls := 0
-			daemon.options.markContainmentUnproven = func(state.RunKey, int, string) (state.RunJournal, error) {
+			store.OnMarkContainmentUnproven = func(state.RunKey, int, string) (state.RunJournal, error) {
 				calls++
 				return state.RunJournal{}, nil
 			}
@@ -207,10 +214,16 @@ func TestStorelessDaemonTakesEveryStoreNilBranch(t *testing.T) {
 			}
 		}},
 		{"cleanup_glue.go persistProcessMarker mirror error skips the readback", func(t *testing.T, daemon *daemon) {
-			daemon.options.recordProcess = func(state.RunKey, int, string, time.Time) (state.RunJournal, error) {
+			store, err := apptest.NewFaultStore(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = store.Close() })
+			daemon.store = store
+			store.OnSetProcessDetails = func(state.RunKey, int, string, time.Time) (state.RunJournal, error) {
 				return state.RunJournal{}, errStoreCallbackProbe
 			}
-			err := daemon.persistProcessMarker(key, 81, "windows:81:0000000000000001", time.Now())
+			err = daemon.persistProcessMarker(key, 81, "windows:81:0000000000000001", time.Now())
 			if !errors.Is(err, errStoreCallbackProbe) {
 				t.Fatalf("marker mirror error = %v, want %v", err, errStoreCallbackProbe)
 			}
@@ -220,11 +233,17 @@ func TestStorelessDaemonTakesEveryStoreNilBranch(t *testing.T) {
 			requireErrorMessage(t, err, "state store is unavailable")
 		}},
 		{"cleanup_glue.go clearPersistedProcessDetails skips the readback", func(t *testing.T, daemon *daemon) {
+			store, err := apptest.NewFaultStore(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = store.Close() })
+			daemon.store = store
 			cleared := 0
-			daemon.options.clearContainmentUnproven = func(state.RunKey, int, string) (state.RunJournal, error) {
+			store.OnClearContainmentUnproven = func(state.RunKey, int, string) (state.RunJournal, error) {
 				return state.RunJournal{}, nil
 			}
-			daemon.options.clearProcessDetails = func(state.RunKey, int, string) (state.RunJournal, error) {
+			store.OnClearProcessDetails = func(state.RunKey, int, string) (state.RunJournal, error) {
 				cleared++
 				return state.RunJournal{RunID: key.RunID, Generation: key.Generation}, nil
 			}

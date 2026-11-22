@@ -28,13 +28,10 @@ func (daemon *daemon) persistSupervisorHandoffStopReceipt(key state.RunKey, expe
 	if !receipt.ValidForHandoff(expected) {
 		return errors.New("supervisor handoff stop receipt does not match handoff")
 	}
-	record := daemon.options.recordSupervisorHandoffStopReceipt
-	if record == nil {
-		if daemon.store == nil {
-			return errDaemonStoreClosing
-		}
-		record = daemon.store.RecordSupervisorHandoffStopReceipt
+	if daemon.store == nil {
+		return errDaemonStoreClosing
 	}
+	record := daemon.store.RecordSupervisorHandoffStopReceipt
 	if _, err := record(key, expected.Clone(), receipt); err != nil {
 		return err
 	}

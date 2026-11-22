@@ -1,12 +1,11 @@
 package app
 
 import (
-	"github.com/wxxb789/symmetry/daemon/internal/state"
 	"github.com/wxxb789/symmetry/daemon/internal/workspace"
 )
 
 // Run does not close the store.
-func withStore(store *state.Store) Options {
+func withStore(store journalStore) Options {
 	return func(value *options) {
 		if store == nil {
 			value.store = nil

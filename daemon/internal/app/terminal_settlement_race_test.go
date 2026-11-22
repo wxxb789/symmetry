@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wxxb789/symmetry/daemon/internal/app/apptest"
 	"github.com/wxxb789/symmetry/daemon/internal/control"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 	"github.com/wxxb789/symmetry/daemon/internal/state"
@@ -21,20 +22,21 @@ func TestConcurrentTerminalSettlementKeepsFirstDurableTerminal(t *testing.T) {
 	entered := make(chan protocol.StateTransitionRequest, 2)
 	releaseCompleted := make(chan struct{})
 	releaseFailed := make(chan struct{})
+	faultStore := apptest.NewFaultStoreFrom(store)
+	faultStore.OnQueueTerminalTransitionAt = func(key state.RunKey, transition protocol.StateTransitionRequest, pendingAt time.Time) (state.RunJournal, error) {
+		entered <- transition
+		if transition.State == "completed" {
+			<-releaseCompleted
+		} else {
+			<-releaseFailed
+		}
+		return store.QueueTerminalTransitionAt(key, transition, pendingAt)
+	}
 	app := &daemon{
-		store: store,
+		store: faultStore,
 		options: options{
 			clock: func() time.Time { return now },
 			newID: ids(),
-			queueTerminalTransition: func(key state.RunKey, transition protocol.StateTransitionRequest, pendingAt time.Time) (state.RunJournal, error) {
-				entered <- transition
-				if transition.State == "completed" {
-					<-releaseCompleted
-				} else {
-					<-releaseFailed
-				}
-				return store.QueueTerminalTransitionAt(key, transition, pendingAt)
-			},
 		},
 		running: map[state.RunKey]*runningRun{key: {}},
 	}

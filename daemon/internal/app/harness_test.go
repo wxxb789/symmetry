@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wxxb789/symmetry/daemon/internal/app/apptest"
 	"github.com/wxxb789/symmetry/daemon/internal/config"
 	"github.com/wxxb789/symmetry/daemon/internal/control"
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
@@ -2926,7 +2927,9 @@ func TestGoalReadyMarkerFailureDiscardsUnreadyAttachBeforeTerminalCleanup(t *tes
 	app, store, session, controlClient := nativeAdmissionDaemon(t, admission, validNativeTaskResult(t, admission), nil)
 	defer store.Close()
 	markerFailure := errors.New("ready marker persistence failed")
-	app.options.markGoalSessionAttachDeliveryReady = func(state.RunKey, string) (state.RunJournal, error) {
+	faults := apptest.NewFaultStoreFrom(store)
+	app.store = faults
+	faults.OnMarkGoalSessionAttachDeliveryReady = func(state.RunKey, string) (state.RunJournal, error) {
 		return state.RunJournal{}, markerFailure
 	}
 
@@ -2958,11 +2961,13 @@ func TestGoalReadyMarkerFailureRetriesUnreadyDiscardWithoutRestart(t *testing.T)
 	}
 	app, store, session, controlClient := nativeAdmissionDaemon(t, admission, validNativeTaskResult(t, admission), nil)
 	defer store.Close()
-	app.options.markGoalSessionAttachDeliveryReady = func(state.RunKey, string) (state.RunJournal, error) {
+	faults := apptest.NewFaultStoreFrom(store)
+	app.store = faults
+	faults.OnMarkGoalSessionAttachDeliveryReady = func(state.RunKey, string) (state.RunJournal, error) {
 		return state.RunJournal{}, errors.New("ready marker persistence failed")
 	}
 	discardCalls := 0
-	app.options.discardUnreadyGoalSessionAttachDelivery = func(key state.RunKey, localHandleID string) (state.RunJournal, error) {
+	faults.OnDiscardUnreadyGoalSessionAttachDelivery = func(key state.RunKey, localHandleID string) (state.RunJournal, error) {
 		discardCalls++
 		if discardCalls == 1 {
 			return state.RunJournal{}, errors.New("discard persistence failed")
@@ -3002,7 +3007,9 @@ func TestGoalReadyMarkerFailureRetriesNativeCloseWithoutRestart(t *testing.T) {
 	}
 	app, store, session, controlClient := nativeAdmissionDaemon(t, admission, validNativeTaskResult(t, admission), nil)
 	defer store.Close()
-	app.options.markGoalSessionAttachDeliveryReady = func(state.RunKey, string) (state.RunJournal, error) {
+	faults := apptest.NewFaultStoreFrom(store)
+	app.store = faults
+	faults.OnMarkGoalSessionAttachDeliveryReady = func(state.RunKey, string) (state.RunJournal, error) {
 		return state.RunJournal{}, errors.New("ready marker persistence failed")
 	}
 	session.closeErr = errors.New("native close unavailable")
@@ -3267,46 +3274,46 @@ func (session *stopProofNativeGoalSession) WaitStopped(ctx context.Context) (exe
 func TestNativeCloseDurableWriteFailuresRetryWithoutLeakingRecoveryBarrier(t *testing.T) {
 	for _, test := range []struct {
 		name string
-		wire func(*daemon, *state.Store, state.GoalSessionKey) func()
+		wire func(*apptest.FaultStore) func()
 	}{
 		{
 			name: "load Goal session",
-			wire: func(app *daemon, store *state.Store, sessionKey state.GoalSessionKey) func() {
+			wire: func(faults *apptest.FaultStore) func() {
 				calls := 0
-				app.options.loadGoalSession = func(key state.GoalSessionKey) (state.GoalSessionJournal, error) {
+				faults.OnLoadGoalSession = func(key state.GoalSessionKey) (state.GoalSessionJournal, error) {
 					calls++
 					if calls == 1 {
 						return state.GoalSessionJournal{}, errors.New("temporary Goal session load failure")
 					}
-					return store.LoadGoalSession(key)
+					return faults.Store.LoadGoalSession(key)
 				}
 				return func() {}
 			},
 		},
 		{
 			name: "close Goal session",
-			wire: func(app *daemon, store *state.Store, sessionKey state.GoalSessionKey) func() {
+			wire: func(faults *apptest.FaultStore) func() {
 				calls := 0
-				app.options.closeGoalSession = func(key state.GoalSessionKey) (state.GoalSessionJournal, error) {
+				faults.OnCloseGoalSession = func(key state.GoalSessionKey) (state.GoalSessionJournal, error) {
 					calls++
 					if calls == 1 {
 						return state.GoalSessionJournal{}, errors.New("temporary Goal session close failure")
 					}
-					return store.CloseGoalSession(key)
+					return faults.Store.CloseGoalSession(key)
 				}
 				return func() {}
 			},
 		},
 		{
 			name: "clear process details",
-			wire: func(app *daemon, store *state.Store, _ state.GoalSessionKey) func() {
+			wire: func(faults *apptest.FaultStore) func() {
 				calls := 0
-				app.options.clearProcessDetails = func(key state.RunKey, pid int, identity string) (state.RunJournal, error) {
+				faults.OnClearProcessDetails = func(key state.RunKey, pid int, identity string) (state.RunJournal, error) {
 					calls++
 					if calls == 1 {
 						return state.RunJournal{}, errors.New("temporary process clear failure")
 					}
-					return store.ClearProcessDetails(key, pid, identity)
+					return faults.Store.ClearProcessDetails(key, pid, identity)
 				}
 				return func() {}
 			},
@@ -3328,15 +3335,16 @@ func TestNativeCloseDurableWriteFailuresRetryWithoutLeakingRecoveryBarrier(t *te
 			}
 			session := &fakeNativeGoalSession{turnStarted: make(chan struct{}), processPID: 71, processIdentity: "native:71"}
 			active := &runningRun{nativeSession: session, goalSession: &sessionKey, runLifecycle: runLifecycle{slotHeld: true}}
+			faults := apptest.NewFaultStoreFrom(store)
 			app := &daemon{
-				store:   store,
+				store:   faults,
 				log:     slog.New(slog.NewJSONHandler(io.Discard, nil)),
 				running: map[state.RunKey]*runningRun{key: active},
 				slots:   make(chan struct{}, 1),
 				options: options{clock: time.Now},
 			}
 			app.slots <- struct{}{}
-			_ = test.wire(app, store, sessionKey)
+			_ = test.wire(faults)
 
 			if err := app.closeNativeGoalSession(key, active, session); err == nil {
 				t.Fatal("closeNativeGoalSession() succeeded despite durable write failure")
@@ -3802,11 +3810,13 @@ func TestFreshCodexGoalAttachQueueFailureReportsAbortCompensationFailure(t *test
 	}
 	app, store, session, controlClient := nativeAdmissionDaemon(t, admission, validNativeTaskResult(t, admission), nil)
 	defer store.Close()
+	faults := apptest.NewFaultStoreFrom(store)
+	app.store = faults
 	key := state.RunKey{RunID: "run-1", Generation: 1}
 	saveClaimedGoalRun(t, store, key)
 
 	abortFailure := errors.New("abort launch compensation failed")
-	app.options.abortGoalSessionLaunchBeforeNativeStart = func(state.GoalSessionKey) (state.GoalSessionJournal, error) {
+	faults.OnAbortGoalSessionLaunchBeforeNativeStart = func(state.GoalSessionKey) (state.GoalSessionJournal, error) {
 		return state.GoalSessionJournal{}, abortFailure
 	}
 	attachWriteFailed := false
@@ -3846,12 +3856,14 @@ func TestFreshCodexNativeStartFailureReportsUncertainCompensationFailure(t *test
 	}
 	app, store, session, controlClient := nativeAdmissionDaemon(t, admission, validNativeTaskResult(t, admission), nil)
 	defer store.Close()
+	faults := apptest.NewFaultStoreFrom(store)
+	app.store = faults
 	key := state.RunKey{RunID: "run-1", Generation: 1}
 	saveClaimedGoalRun(t, store, key)
 	startFailure := errors.New("native start failed before session creation")
 	uncertainFailure := errors.New("persist uncertain compensation failed")
 	session.startErr = startFailure
-	app.options.markGoalSessionUncertain = func(state.GoalSessionKey, string) (state.GoalSessionJournal, error) {
+	faults.OnMarkGoalSessionUncertain = func(state.GoalSessionKey, string) (state.GoalSessionJournal, error) {
 		return state.GoalSessionJournal{}, uncertainFailure
 	}
 
@@ -6291,20 +6303,22 @@ func TestGoalCancellationRetriesNativeUsageBeforeReceipt(t *testing.T) {
 	session := &fakeNativeGoalSession{handle: harness.NativeSessionHandle{ID: "native-thread-1"}, result: harness.TaskResult{Kind: harness.ResultSucceeded}, turnStarted: make(chan struct{})}
 	usageAttempts := 0
 	usageFailure := errors.New("transient native usage queue failure")
+	faults := apptest.NewFaultStoreFrom(store)
 	app := &daemon{
 		config:  testConfig(t),
-		store:   store,
+		store:   faults,
 		control: &fakeControl{},
 		log:     slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		running: map[state.RunKey]*runningRun{key: {runLifecycle: runLifecycle{claimed: true}, nativeSession: session, goalSession: &sessionKey}},
 		slots:   make(chan struct{}, 1),
-		options: options{newID: ids(), clock: time.Now, queueGoalUsage: func(got state.RunKey, usage protocol.Usage) (state.RunJournal, error) {
-			usageAttempts++
-			if usageAttempts == 1 {
-				return state.RunJournal{}, usageFailure
-			}
-			return store.QueueGoalUsage(got, usage)
-		}},
+		options: options{newID: ids(), clock: time.Now},
+	}
+	faults.OnQueueNativeUsageRecoverySettlement = func(got state.RunKey, usage protocol.Usage, settlement *state.NativeUsageTerminalRecovery) (state.RunJournal, error) {
+		usageAttempts++
+		if usageAttempts == 1 {
+			return state.RunJournal{}, usageFailure
+		}
+		return store.QueueNativeUsageRecoverySettlement(got, usage, settlement)
 	}
 	if app.handleCommand(context.Background(), protocol.Command{RunID: key.RunID, Generation: key.Generation, CommandID: "cancel-retry", Kind: "cancel"}) {
 		t.Fatal("cancellation acknowledged before native usage retry")
