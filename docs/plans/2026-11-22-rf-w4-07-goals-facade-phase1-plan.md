@@ -11,11 +11,13 @@ satisfied). Base file under analysis: `git show b25e34ae:control/lib/symmetry_co
 sha256 `6ad78e29ae9d5caa7392da1ce90ed541fc9de8618022e55adc5eaf5b33f7db45`, 10,606 lines.
 
 Owned files: `control/lib/symmetry_control/goals.ex`; new
-`control/lib/symmetry_control/goals/{run_fence,events_receipts,internal}.ex`; the existing
+`control/lib/symmetry_control/goals/{run_fence,harness_sessions,events_receipts,internal}.ex`
+(`harness_sessions.ex` by the 2026-11-22 round-1 conductor amendment); the existing
 `control/lib/symmetry_control/goals/contract_validation.ex` (receives `validate_contract/3`); new
-`control/test/symmetry_control/goals/{run_fence,events_receipts}_test.exs`;
-`scripts/ci/omo-control-native-evidence.py` (`SOURCE_PATHS` only); this plan file. No other file is
-edited.
+`control/test/symmetry_control/goals/{run_fence,events_receipts,internal}_test.exs`
+(`internal_test.exs` by the review-F7 conductor amendment); `docs/TODO.md` (the duplicated
+state-set entry, round-1 P3-3); `scripts/ci/omo-control-native-evidence.py` (`SOURCE_PATHS` only);
+this plan file and its evidence record. No other file is edited.
 
 Slice shape: the slice moves three move-only regions out of `goals.ex` behind the unchanged
 `SymmetryControl.Goals` facade — the shared kernel (`Goals.Internal`, 63 functions), the run-fence
