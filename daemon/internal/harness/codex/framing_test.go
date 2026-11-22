@@ -107,6 +107,51 @@ func TestFramerCountsWhitespaceTowardRawFrameLimit(t *testing.T) {
 	}
 }
 
+func TestFramerKeepsNumbersBeyondFloat64Range(t *testing.T) {
+	frames, err := NewFramer(1024).Feed([]byte(`{"id":1,"result":{"value":1e1000}}` + "\n"))
+	if err != nil || len(frames) != 1 || frames[0].DiagnosticCode != "unverified_native_response" || frames[0].IsFramingError() {
+		t.Fatalf("frames = %+v, %v; want one unverified response frame", frames, err)
+	}
+}
+
+func TestFramerAcceptsTheNextFrameAfterABoundFailure(t *testing.T) {
+	framer := NewFramer(8)
+	if _, err := framer.Feed([]byte("123456789")); !errors.Is(err, ErrFrameTooLarge) {
+		t.Fatalf("oversized Feed() error = %v, want ErrFrameTooLarge", err)
+	}
+	frames, err := framer.Feed([]byte("{}\n"))
+	if err != nil || len(frames) != 1 || frames[0].DiagnosticCode != "unknown_native_event" {
+		t.Fatalf("Feed() after overflow = %+v, %v; want a resumed decode", frames, err)
+	}
+}
+
+func TestFramerKeepsThePendingChunkOnRetainedOverflow(t *testing.T) {
+	framer := NewFramer(8)
+	if _, err := framer.Feed([]byte("123456789\n123456789\n")); !errors.Is(err, ErrFrameTooLarge) {
+		t.Fatalf("oversized Feed() error = %v, want ErrFrameTooLarge", err)
+	}
+	if frames, err := framer.Feed([]byte("{}\n")); !errors.Is(err, ErrFrameTooLarge) || len(frames) != 0 {
+		t.Fatalf("Feed() during the retained overflow = %+v, %v; want no frames and ErrFrameTooLarge", frames, err)
+	}
+	frames, err := framer.Feed(nil)
+	if err != nil || len(frames) != 1 || frames[0].Sequence != 1 || frames[0].DiagnosticCode != "unknown_native_event" || string(frames[0].Raw) != "{}" {
+		t.Fatalf("Feed(nil) after the retained overflow = %+v, %v; want exactly the {} diagnostic", frames, err)
+	}
+}
+
+func TestFramerZeroValueKeepsTheZeroBound(t *testing.T) {
+	var framer Framer
+	if frames, err := framer.Feed([]byte("\n")); err != nil || len(frames) != 0 {
+		t.Fatalf("blank Feed() = %+v, %v; want the blank line skipped", frames, err)
+	}
+	if _, err := framer.Feed([]byte("123456789")); !errors.Is(err, ErrFrameTooLarge) {
+		t.Fatalf("zero-bound Feed() error = %v, want ErrFrameTooLarge", err)
+	}
+	if frames, err := framer.Close(); err != nil || len(frames) != 0 {
+		t.Fatalf("zero-bound Close() = %+v, %v; want an empty close", frames, err)
+	}
+}
+
 func TestFramerAllowsMissingAndRejectsUnsupportedJSONRPCVersion(t *testing.T) {
 	tests := []struct {
 		name           string

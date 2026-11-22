@@ -123,6 +123,64 @@ func TestDecoderRejectsAmbiguousOrUnboundedJSONL(t *testing.T) {
 	}
 }
 
+const boundErrorText = "invalid OmO RPC record: JSONL record exceeds limit"
+
+func TestDecoderCountsTrailingCRTowardTheLimit(t *testing.T) {
+	record := `{"type":"notice"}`
+	decoder := NewDecoder(len(record))
+	records, err := decoder.Feed([]byte(record + "\r\n"))
+	if !errors.Is(err, ErrInvalidRecord) || len(records) != 0 {
+		t.Fatalf("CRLF record at the limit = %+v, %v; want the bound error", records, err)
+	}
+	if err.Error() != boundErrorText {
+		t.Fatalf("CRLF record error = %q, want the bound text", err)
+	}
+	decoder = NewDecoder(len(record) + 1)
+	if records, err = decoder.Feed([]byte(record + "\r\n")); err != nil || len(records) != 1 || records[0].Type != "notice" {
+		t.Fatalf("CRLF record over the limit = %+v, %v; want one record", records, err)
+	}
+}
+
+func TestDecoderTreatsBlankLinesAsRecords(t *testing.T) {
+	decoder := NewDecoder(64)
+	records, err := decoder.Feed([]byte("  \n"))
+	if !errors.Is(err, ErrInvalidRecord) || len(records) != 1 || !errors.Is(records[0].DecodeError, ErrInvalidRecord) {
+		t.Fatalf("blank line = %+v, %v; want one invalid record", records, err)
+	}
+}
+
+func TestDecoderRetainsTheBoundFailureAcrossCalls(t *testing.T) {
+	decoder := NewDecoder(8)
+	if _, err := decoder.Feed([]byte("123456789")); err == nil || err.Error() != boundErrorText {
+		t.Fatalf("oversize Feed() error = %v, want the bound error", err)
+	}
+	if _, err := decoder.Feed(nil); err == nil || err.Error() != boundErrorText {
+		t.Fatalf("Feed after overflow error = %v, want the retained bound error", err)
+	}
+	if err := decoder.Close(); err == nil || err.Error() != boundErrorText {
+		t.Fatalf("Close after overflow error = %v, want the retained bound error", err)
+	}
+}
+
+func TestDecoderZeroValueKeepsTheZeroBound(t *testing.T) {
+	var decoder Decoder
+	records, err := decoder.Feed([]byte("\n"))
+	if !errors.Is(err, ErrInvalidRecord) || err.Error() == boundErrorText || len(records) != 1 {
+		t.Fatalf("blank-line Feed() = %+v, %v; want the blank line delivered as a decode error", records, err)
+	}
+	if err := decoder.Close(); !errors.Is(err, ErrInvalidRecord) {
+		t.Fatalf("Close after the decode failure error = %v, want the retained error", err)
+	}
+
+	var bounded Decoder
+	if _, err := bounded.Feed([]byte("123456789")); err == nil || err.Error() != boundErrorText {
+		t.Fatalf("zero-bound Feed() error = %v, want the bound error", err)
+	}
+	if err := bounded.Close(); err == nil || err.Error() != boundErrorText {
+		t.Fatalf("zero-bound Close() error = %v, want the retained bound error", err)
+	}
+}
+
 func TestProtocolGateRejectsBeforeSessionExposure(t *testing.T) {
 	for _, mutation := range []struct {
 		name, key string
