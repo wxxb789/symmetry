@@ -21,8 +21,17 @@ window.matchMedia = (query: string): MediaQueryList => ({
 // navigation: without this no-op each call prints a `Not implemented` line.
 window.scrollTo = () => undefined;
 
+const unhandledRequests: string[] = [];
+
 beforeAll(() => {
   portalServer.listen({ onUnhandledFrame: "error" });
+  portalServer.events.on("request:unhandled", ({ request }) => {
+    unhandledRequests.push(`${request.method} ${request.url}`);
+  });
+});
+afterEach(() => {
+  const seen = unhandledRequests.splice(0);
+  if (seen.length > 0) throw new Error(`unhandled portal requests: ${seen.join(", ")}`);
 });
 afterEach(resetPortalDouble);
 afterAll(() => {

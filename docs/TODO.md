@@ -1331,5 +1331,7 @@ instead of appended.
       app's token-refresh reads into the next case. `frontend/src/app/router.test.tsx` solves it locally by
       passing an inert `socketFactory` to `createApplication` by default (`renderWorkspace`). If a later
       suite needs a token without exercising the socket, do the same, or extend the double's listen options
-      so WebSocket frames stay quiet while HTTP paths keep failing loudly (the contract's mechanism). The
-      second half is out of rf-w4-11's owned set.
+      so WebSocket frames stay quiet while HTTP paths keep failing loudly. This is deferred, not out of
+      scope: both files a fix touches (`frontend/src/test-setup.ts`, `frontend/src/app/portal-double.ts`)
+      are in rf-w4-11's owned set; no suite seeds a token yet, and an unexercised `ws` path would be
+      unproven behaviour in a slice whose executed-case count is pinned.

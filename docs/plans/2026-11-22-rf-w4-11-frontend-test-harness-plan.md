@@ -69,9 +69,10 @@ Harness/config at the base:
    per-case resolvers; nothing keeps a second routing table.
 
 2. **`frontend/src/test-setup.ts`**: install the double's server for every test file
-   (`listen({ onUnhandledRequest: "error" })`), reset state/log/handlers after each case, close
-   after each file; `window.scrollTo` no-op stub (comment policy 3: one `why` line naming the
-   jsdom gap).
+   (`listen({ onUnhandledFrame: "error" })`), record msw's `request:unhandled` events and fail the
+   case on any recorded unhandled request in `afterEach`, reset seed/state/log/layers after each
+   case, close after each file; `window.scrollTo` no-op stub (comment policy 3: one `why` line
+   naming the jsdom gap).
 
 3. **`frontend/vitest.config.ts`**: the measured config shape (isolate/pool/maxWorkers), chosen
    from the state inventory and the shuffle run, with the tool-cache behaviour byte-identical.
@@ -156,9 +157,12 @@ method+path case.
 | planning's write model | `POST /portal/api/projects`, `PATCH /portal/api/projects/:id`, `POST /portal/api/projects/:id/work-items`, `PATCH /portal/api/work-items/:id`, `PATCH /portal/api/work-items/:id/move` — the seven refusal rules the deleted `createHarness` held (version 409, archived 409, move-fields 422, goal authority 403, provider-owned 409, blocked-without-blocker 422, duplicate key 422, creation-id replay) |
 
 Everything else is **unhandled**: MSW's `onUnhandledFrame: "error"` rejects the request at the
-interceptor without a network attempt, so a case that silently stops being scripted reddens
-instead of passing. This is stricter than every deleted double (each of them answered 404/500 or, in
-router's and goal-attention's case, *any* path with a workspace body).
+interceptor without a network attempt, and `test-setup.ts` records msw's `request:unhandled` event
+and fails the case in `afterEach`. The rejection alone does not fail a case whose expected outcome
+is itself a transport failure (the same `TypeError` a case scripts for a lost response), so the
+listener is the mechanism that makes a case which silently stops being scripted redden instead of
+passing (mutation (f) below). This is stricter than every deleted double (each of them answered
+404/500 or, in router's and goal-attention's case, *any* path with a workspace body).
 
 #### Registered defaults vs the deleted doubles (enumerated; no case provokes an extra answer)
 
@@ -175,7 +179,7 @@ the case's own handler, which answered 404 unless the case scripted them.
 | `GET /portal/api/connections` (200, seeded) | detail, planning, runtimes, control, assignment and chat refused it (404); router and goal-attention answered the workspace catch-all |
 | `GET /portal/api/work-items/:id` for an unseeded id (200, derived `Item` row) | detail matched only its scripted subject id; connections, runtimes and chat refused it (404); planning, assignment and control derived a row per read |
 | `GET /portal/api/workspace`, unscoped (the seeded selection's full rows) | planning's deleted double served every project's `work_items: []` for the unscoped read — the one workspace read where the unified table is wider |
-| registered writes with no responder (transport error) | the deleted doubles' fallback 404/500: the same failure in a different carrier, named in the branch-preservation audit |
+| registered writes with no responder (501 JSON, code `unscripted`) | the deleted doubles' fallback 404/500: a refusal a lost-response case cannot mistake for a deliberate transport loss |
 
 The workspace row is the clause-3 delta the review found unasserted: the planning board cases now
 pin the scoped read (`/portal/api/workspace?project_id=…` present, the unscoped path absent;
@@ -213,7 +217,7 @@ directory read) redden exactly those assertions.
 | # | decision | rationale |
 | --- | --- | --- |
 | P1 | Convert **nine** suites (planning, connections, goal-attention, chat, router, control, assignment, detail, runtimes), not only the five the contract names | clause 1 demands exactly one shared portal double; control/assignment/detail/runtimes each carry their own portal routing table today. `api.test.ts`/`application.test.ts` keep their per-case transport doubles: they test the fetch boundary and the application wiring itself, which the contract's own carve-out names, and their doubles are not portal surfaces. |
-| P2 | `serve()` layer + seeded defaults instead of a catch-all-then-defaults chain | keeps MSW's `onUnhandledRequest: "error"` as the real unhandled mechanism; a suite resolver that answers nothing for a registered path is a defect and is caught by the same error path. |
+| P2 | `serve()` layer + seeded defaults instead of a catch-all-then-defaults chain | keeps MSW's `onUnhandledFrame: "error"` plus the `request:unhandled` guard as the real unhandled mechanism; a nested resolver that answers nothing falls through to the next layer, and a registered entry with no responder answers the 501 `unscripted` refusal. |
 | P3 | Implementation lands as one working tree, staged in the contract's two logical steps (config split + `scrollTo` first, double + dependency second) | the stage template forbids committing; the verifier/committer lands the two commits, and every gate below is run on the final tree. The step order is honoured in the *edits*: config/stub edits are verifiable alone (mutation (d)/(e) run against exactly those edits). |
 | P4 | `pnpm install --trust-lockfile` on this host | the lockfile supply-chain policy verification hangs against the host's registry proxy (no policy feed); the contract's fail-closed gate is the registry check, which still runs. Recorded with its reason in the artifact. |
 | P5 | The suite that cannot hold `isolate: false` (if any) goes to an isolated project/pool rather than reverting the whole change | conductor decision in the contract's change item 3. |
@@ -237,6 +241,7 @@ All foreground, serialized; no measurement harness beside a suite. Baseline rows
 | 10 | mutation (d) `scrollTo` stub removed | the recorded pre-change line count returns |
 | 11 | mutation (e) the config change flipped back | wall time returns to baseline |
 | 12 | `git diff --check`; profile-path grep over the diff | hygiene + DLP |
+| 13 | mutation (f): the client's cancel path rewritten to `/portal/api/runs/:id/cancel` | the control lost-response case reddens via the `request:unhandled` guard — the misrouted-path claim is mutation-checked |
 
 ## Out of scope (with reasons)
 
@@ -256,8 +261,9 @@ named in P1 keep their injected fetchers.
   most likely to hide a branch. Its inventory (every double, branch and captured request state)
   is recorded in the artifact.
 - `msw@3.0.5` behaviour that the design depends on (relative-URL normalization in Node,
-  `onUnhandledRequest: "error"` on an unmatched path, `HttpResponse.error()` rejecting the
-  client fetch) is probed empirically before the port; the probe result is recorded.
+  `onUnhandledFrame: "error"` rejecting an unmatched path, the `request:unhandled` event firing
+  for it, `HttpResponse.error()` rejecting the client fetch) is probed empirically; the probe
+  result is recorded.
 
 ## Implement-stage notes (environment and probes, 2026-11-22)
 
@@ -287,7 +293,10 @@ Environment findings that shape the delivered tree:
   member of v3's listen options; the v2 spelling is silently ignored). `listen({ onUnhandledFrame:
   "error" })` prints `[MSW] Error: intercepted a request without a matching request handler` and
   the request is rejected at the interceptor — no real network attempt (apply-stage re-probe:
-  `error` rejects, `bypass` reaches a live local server) — the contract's mechanism.
+  `error` rejects, `bypass` reaches a live local server). Review 1 correction: the rejection alone
+  does not fail a case that pins a transport failure, so the delivered mechanism adds the
+  `request:unhandled` listener + `afterEach` guard in `test-setup.ts` and answers responder-less
+  registered entries with a 501 JSON instead of `HttpResponse.error()` (round-2 annotation below).
 - Probes that the design depends on: a **relative** `fetch("/portal/api/...")` is matched and
   answered by a relative handler path; a handler returning `HttpResponse.error()` rejects the
   client fetch; a plain `new Response(...)` returned by a handler is delivered normally. The
@@ -402,10 +411,10 @@ observables):
 
 ### Branch-preservation audit (lesson 32, per converted double)
 
-`planning`: session/workspace/detail reads → default table; `failNextMutation` → `portal.state.mutations.failNext` (non-GET only, after the read routes, before the hold); `holdNextMutation` → `portal.state.mutations.hold`; `loseNextCreateResponse` → `portal.state.mutations.loseNextCreateResponse` (consumed inside the create branch after the row commits, before the 201); duplicate key 422, blank title 422, creation-id replay 200, project 404/409 stale/409 state_conflict, move 403 goal/409 stale, item 422 move-fields/403/409 stale/409 provider_owned/422 blocked-without-blocker — **all preserved**, verified branch by branch against the head double; the fallback 404 is intentionally gone (unhandled → MSW error).
-`connections`: session, connections read (gate → failure → list), workspace read (gate → failure → scoped body), 502/409/404/422/403 `provider_unauthorized`/`provider_failure` branches, all pending/hold branches, read-count observables — preserved; deltas recorded: an unscripted scripted-only write answers `HttpResponse.error()` (one case, its assertions are the recorded POST count/body), `work_items` scoping added (every fixture carries `[]`), `body: null` instead of `undefined` for body-less requests (unasserted). No 401 branch exists in this suite.
+`planning`: session/workspace/detail reads → default table; `failNextMutation` → `portal.state.mutations.failNext` (non-GET only, after the read routes, before the hold); `holdNextMutation` → `portal.state.mutations.hold`; `loseNextCreateResponse` → `portal.state.mutations.loseNextCreateResponse` (consumed inside the create branch after the row commits, before the 201); duplicate key 422, blank title 422, creation-id replay 200, project 404/409 stale/409 state_conflict, move 403 goal/409 stale, item 422 move-fields/403/409 stale/409 provider_owned/422 blocked-without-blocker — **all preserved**, verified branch by branch against the head double; the fallback 404 is intentionally gone (an unhandled path reddens via the `request:unhandled` guard; a registered entry with no responder answers the 501 `unscripted` refusal).
+`connections`: session, connections read (gate → failure → list), workspace read (gate → failure → scoped body), 502/409/404/422/403 `provider_unauthorized`/`provider_failure` branches, all pending/hold branches, read-count observables — preserved; deltas recorded: an unscripted scripted-only write answers the 501 `unscripted` refusal (one case, its assertions are the recorded POST count/body), `work_items` scoping added (every fixture carries `[]`), `body: null` instead of `undefined` for body-less requests (unasserted). No 401 branch exists in this suite.
 `goal-attention`: cursor pagination (two first-page branches + `firstPageReads` counter), `goalUnavailable` refusal, session-expiry 401, refusal codes 422 `invalid_contract`/409 `stale`/403 `forbidden`/422 `invalid_plan`/`invalid_decision`, 200 undecodable/empty receipts, 5 thrown transports → `HttpResponse.error()` — preserved; the catch-all workspace fallback is intentionally gone (no case needed it).
-`chat`: per-scope conversation bodies and their `scope`/`before` conditions, 13 `Promise.withResolvers` holds (late read, late write, pane settle, cursor renew, refused press, 8k, three in-flight pages, scope switch, same-cursor-bytes), 409 `idempotency_conflict`, 400/500 older-page refusals, 403 read failures, three thrown `TypeError`s, one rejected held promise, 1-based `postIndex` — preserved; the unscripted message-POST 500 default and the 404 catch-all are gone (no case relied on them; unscripted now fails loudly).
+`chat`: per-scope conversation bodies and their `scope`/`before` conditions, 13 `Promise.withResolvers` holds (late read, late write, pane settle, cursor renew, refused press, 8k, three in-flight pages, scope switch, same-cursor-bytes), 409 `idempotency_conflict`, 400/500 older-page refusals, 403 read failures, three thrown `TypeError`s, one rejected held promise, 1-based `postIndex` — preserved; the unscripted message-POST 500 default and the 404 catch-all are gone (no case relied on them; an unhandled path reddens via the `request:unhandled` guard, a responder-less registered write answers the 501 `unscripted` refusal).
 `router`: 400 aged-out timeline, 401 bootstrap expiry, 403 recoverable workspace error, 404 `project_id=missing`, held session/first-project/bootstrap reads, `holdDetail`, mutable `subjectStatus` projection, dynamic detail reads, scoped attention where a case asserts it — preserved; the 404 catch-all was unexercised; the default attention derivation is scope-aware (`project_id` → explicit select → first project) and the four cases that read unscoped attention assert no blocked row; the scoped layer one case carried at implement time duplicated that derivation and was removed in the apply stage (F5), its DOM/history assertions unchanged.
 `control`: session rotation by read index, detail by read index, command acceptances (202), refusals (409/403/default 500), a never-settling second detail read, timeline cursor reads, `Promise.reject` → `HttpResponse.error()`, the "must not reach the server" tripwire (a sent POST would be logged and answered by the layer's default 500 responder) — preserved.
 `assignment`: session/workspace/detail/timeline reads, 403 refusal, gated workspace read, per-item detail overrides and the live `intent_locked` flip via `portal.state.details`, deferred PATCH for the late save, 409 `provider_owned` — preserved.
@@ -507,8 +516,9 @@ The accepted simplify findings are applied to the working tree (not committed; n
 rewritten). Code changes and the record corrections made above:
 
 - **F1** `portal-double.ts`: `scriptedOnly` and the 18 `respond: scriptedOnly` entries deleted;
-  `dispatch`'s `entry.respond?.(call, state) ?? HttpResponse.error()` is the one failure path for
-  a registered-but-unscripted request (same transport error, paths still registered and logged).
+  `dispatch`'s `entry.respond?.(call, state)` fallback is the one failure path for a
+  registered-but-unscripted request (round-2 fix stage replaced `HttpResponse.error()` with the
+  501 `unscripted` refusal; paths stay registered and logged).
 - **F2** `test-harness.tsx`: the callerless `options.fetcher` seam deleted; failure injection
   stays available through `serve` layers returning `HttpResponse.error()` (edge-case semantics 3),
   and no converted case ever needed the seam (above).
@@ -617,3 +627,30 @@ lockfile is unchanged):
 | diff hygiene | `git diff --check` | 0 | clean |
 | DLP profile path | case-insensitive Users-directory-fragment grep over the worktree diff (the fragment is not spelled literally here, so the check cannot self-match) | 1 | 0 matching lines (grep exits 1 when it selects none) |
 | DLP sequence | `git diff origin/main \| grep -c '[\\]u'` | 1 | 0 matching lines; the same pattern selects the one pre-fix occurrence in `git diff e0782105 fe5b0690`, so the pattern is validated |
+
+## Fix-stage annotation (2026-11-22, review round 2: findings P1-1, P3-1–P3-3)
+
+The opus review's P1-1 (contract clause 3) and its three record/hygiene findings are applied in
+the working tree. No production `src/` file is edited; the temporary mutation edits of this round
+were reverted byte-identically (`frontend/src/services/api.ts` sha256 `29ac0d2f…` before and after,
+`git diff` over it selects no line).
+
+| finding | change |
+| --- | --- |
+| P1-1 | `test-setup.ts` records msw's `request:unhandled` events and fails the case in `afterEach` — the `"error"` strategy alone only rejects the fetch, the same observable a case scripts for a lost response. `portal-double.ts`'s responder-less fallback answers a 501 JSON (code `unscripted`) instead of `HttpResponse.error()`; deliberate `HttpResponse.error()` remains only where a case simulates a network failure (`failNext`, `loseNextCreateResponse`, per-case resolvers). Mutation (f): the client's cancel path rewritten to `/portal/api/runs/:id/cancel` → `control.test.tsx -t "never renders a lost response"` exit 1, `1 failed | 12 skipped`, `Error: unhandled portal requests: POST http://localhost:3000/portal/api/runs/…/cancel`; reverted → exit 0, `1 passed | 12 skipped`. The default-table paragraph, the delta row, P2, the branch audits and the probe bullet above carry the corrected mechanism. |
+| P3-1 | `docs/TODO.md`: the WebSocket entry no longer claims the second half is outside the owned set — both files a fix touches (`frontend/src/test-setup.ts`, `frontend/src/app/portal-double.ts`) are in it; the deferral is that no suite seeds a token yet and an unexercised `ws` path would be unproven behaviour in a slice pinned to the pre-change count. |
+| P3-2 | `resetPortalDouble` resets `seedSnapshot = defaultSeed()`; the now-stale `cloneSeed` comment dropped. Probe (temporary two-case file, deleted after the run): case A seeds a project, case B reads the seeded project count — with the reset exit 0, `2 passed`; with the reset line removed exit 1, `1 failed | 1 passed` (`expected [ { id: 'p1', …(3) } ] to have a length of +0 but got 1`); restored exit 0, `2 passed`. |
+| P3-3 | Comment policy applied: `vitest.config.ts`'s pool/rationale comment and the "what" comments at `portal-double.ts:22,93,127,247-248,264` deleted (`:63`'s sentinel note kept); `goal-attention.test.tsx`'s achieve capture reshaped to `sent: Record<string, unknown>[]` + `const [payload] = sent`, so the type-checker note is gone. |
+
+Round-2 gates (foreground, serialized; host pnpm 12.21.0 against the project's 12.17.0 pin, so
+every command carries `--pm-on-fail=ignore`; no dependency file is touched, so the lockfile is
+unchanged):
+
+| gate | command | exit | counts |
+| --- | --- | ---: | --- |
+| typecheck | `pnpm exec tsc --noEmit` | 0 | no output |
+| lint | `pnpm lint` | 0 | 223 problems (0 errors, 223 warnings), ceiling 229 untouched — not above the pre-fix count |
+| suite (contract command) | `pnpm test` | 0 | 21 files / 534 tests, 54.43 s |
+| suite (--silent=false) | `pnpm exec vitest run --silent=false` | 0 | 21 files / 534 tests, 0 `[MSW]` lines, 0 `Not implemented` lines, 0 `stderr` blocks |
+| diff hygiene | `git diff --check` | 0 | clean |
+| mutation (f) | cancel path `/portal/api/work-items/…/cancel` → `/portal/api/runs/…/cancel` in `services/api.ts`, control suite `-t "never renders a lost response"` | 1 then 0 | mutated `1 failed | 12 skipped` (`unhandled portal requests: POST …/runs/…/cancel`); reverted `1 passed | 12 skipped`, api.ts sha256 restored |

@@ -525,9 +525,7 @@ describe("goal detail surface", () => {
     const integrationSubject = { resource_id: "88888888-8888-4888-8888-888888888888", commit: "c".repeat(40), tree_digest: `sha256:${"d".repeat(64)}` };
     const implementationEvidence = "99999999-9999-4999-8999-999999999999";
     const integrationEvidence = "99999999-9999-4999-8999-999999999998";
-    // `undefined`, not `null`, as the sentinel: the capture happens inside the
-    // resolver, so a `= null` initializer narrows the checker's view of it.
-    let achievePayload: Record<string, unknown> | undefined;
+    const sent: Record<string, unknown>[] = [];
     portal.serve((request) => {
       const url = request.url;
       if (url.pathname === `/portal/api/goals/${goalId}`) {
@@ -552,7 +550,7 @@ describe("goal detail surface", () => {
         }));
       }
       if (url.pathname === `/portal/api/goals/${goalId}/commands`) {
-        achievePayload = asRecord(request.body?.payload) ?? {};
+        sent.push(asRecord(request.body?.payload) ?? {});
         return jsonResponse({ goal_id: goalId, mutation_id: "m", event: { id: "m", sequence: 3, kind: "achieve", revision: 1 }, response: { state: "achieved" } });
       }
       if (url.pathname === `/portal/api/goals/${goalId}/events`) return jsonResponse({ entries: [], next_after: null });
@@ -563,9 +561,9 @@ describe("goal detail surface", () => {
     await screen.findByRole("heading", { level: 1, name: "Ready goal" });
     await user.click(screen.getByRole("button", { name: "Achieve" }));
     await user.click(screen.getByRole("button", { name: "Send Achieve" }));
-    await waitFor(() => { expect(achievePayload).toBeDefined(); });
-    if (achievePayload === undefined) throw new Error("the achieve command was not sent");
-    const payload = achievePayload;
+    await waitFor(() => { expect(sent[0]).toBeDefined(); });
+    const [payload] = sent;
+    if (payload === undefined) throw new Error("the achieve command was not sent");
     expect(payload.subject).toEqual(integrationSubject);
     expect(payload.evidence_ids).toEqual([integrationEvidence]);
     expect(payload.integration_work_item_id).toBe("55555555-5555-4555-8555-555555555555");

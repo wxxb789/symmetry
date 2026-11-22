@@ -24,8 +24,6 @@ export default defineConfig({
     setupFiles: ["./src/test-setup.ts"],
     restoreMocks: true,
     clearMocks: true,
-    // Pool/worker shape chosen from the measured runs recorded in the slice plan;
-    // isolation stays at vitest's default.
     pool: "threads",
     maxWorkers: "50%",
     // `cache` is a test-level option: at the config root it is an unknown Vite key

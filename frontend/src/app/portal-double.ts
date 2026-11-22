@@ -19,7 +19,6 @@ export interface PortalProject {
   default_workspace?: string | null;
   resources?: unknown[];
   work_items?: PortalWorkItem[];
-  /** creation_id -> work item id: the server's own creation identity index. */
   creation_ids?: Record<string, string>;
 }
 
@@ -90,7 +89,6 @@ export interface PortalDouble {
   readonly requests: PortalRequest[];
   sent(method: string, path: string): PortalRequest[];
   serve(resolver: PortalResolver): void;
-  /** Holds every mutation until the returned release runs. */
   holdNextMutation(): () => void;
 }
 
@@ -124,7 +122,6 @@ const mergedSeed = (seed: PortalSeedInput): PortalSeed => {
   };
 };
 
-/** Served state is per-case mutable, so the file's seed is kept out of reach. */
 const cloneSeed = (seed: PortalSeed): PortalSeed => ({
   ...structuredClone({ ...seed, mutations: undefined }),
   mutations: { failNext: false, loseNextCreateResponse: false, hold: null },
@@ -244,8 +241,6 @@ const createWorkItem = (request: PortalRequest, state: PortalSeed): Response => 
   const body = request.body;
   const title = text(body?.title, "");
   if (title.trim() === "") return validationFailed({ title: ["can't be blank"] });
-  // The server's creation identity: a replayed identity answers with the row the
-  // original submission created instead of inserting a second one.
   const creationId = typeof body?.creation_id === "string" ? body.creation_id : "";
   const replayedId = creationId === "" ? undefined : project.creation_ids?.[creationId];
   if (replayedId !== undefined) return jsonResponse({ disposition: "replayed", work_item: { id: replayedId } });
@@ -261,7 +256,6 @@ const createWorkItem = (request: PortalRequest, state: PortalSeed): Response => 
   }
   if (state.mutations.loseNextCreateResponse) {
     state.mutations.loseNextCreateResponse = false;
-    // Committed on the double; the answer dies at the transport.
     return HttpResponse.error();
   }
   return jsonResponse({ disposition: "created", work_item: { id: created.id } }, 201);
@@ -407,7 +401,7 @@ const dispatch = async (entry: PortalEntry, request: Request): Promise<Response>
     }
     if (state.mutations.hold !== null) await state.mutations.hold;
   }
-  return entry.respond?.(call, state) ?? HttpResponse.error();
+  return entry.respond?.(call, state) ?? jsonResponse({ error: { code: "unscripted", message: `no responder for ${call.method} ${call.path}` } }, 501);
 };
 
 const handle = (entry: PortalEntry) => {
@@ -456,5 +450,6 @@ export const portal: PortalDouble = {
 export function resetPortalDouble(): void {
   layers.length = 0;
   requests.length = 0;
+  seedSnapshot = defaultSeed();
   state = cloneSeed(seedSnapshot);
 }
