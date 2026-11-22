@@ -413,7 +413,7 @@ Command A (WSL Ubuntu-24.04, Go 1.27.0, cgo enabled for the race detector; the r
 `2026-11-22T06:17:14Z` and ended at `2026-11-22T06:47:31Z`, 1817 s):
 
 ```
-$ wsl.exe -d Ubuntu-24.04 -u accept bash -lc 'cd /mnt/q/repos/wt-w4-15b-staged-driver/symmetry/daemon \
+$ wsl.exe -d Ubuntu-24.04 -u accept bash -lc 'cd <worktree>/daemon \
     && go test -count=1 -race -timeout 1800s ./internal/harness/... ./internal/app/...'
 ```
 
@@ -427,7 +427,7 @@ for 24 minutes at 0.0 % CPU behind seven loopback listeners.
 Command B (same bytes, harness tree without `opencode`, per-package timeout 240 s):
 
 ```
-$ wsl.exe -d Ubuntu-24.04 -u accept bash -lc 'cd /mnt/q/repos/wt-w4-15b-staged-driver/symmetry/daemon \
+$ wsl.exe -d Ubuntu-24.04 -u accept bash -lc 'cd <worktree>/daemon \
     && go test -count=1 -race -timeout 240s ./internal/harness/ ./internal/harness/pi \
        ./internal/harness/codex ./internal/harness/claude ./internal/harness/omo ./internal/harness/omp \
        ./internal/harness/probeconformance ./internal/harness/linejson'
@@ -449,7 +449,7 @@ $ wsl.exe -d Ubuntu-24.04 -u accept bash -lc 'cd /mnt/q/repos/wt-w4-15b-staged-d
 Command C (the two failing packages with their loopback-dependent tests skipped):
 
 ```
-$ wsl.exe -d Ubuntu-24.04 -u accept bash -lc 'cd /mnt/q/repos/wt-w4-15b-staged-driver/symmetry/daemon \
+$ wsl.exe -d Ubuntu-24.04 -u accept bash -lc 'cd <worktree>/daemon \
     && go test -count=1 -race -timeout 240s -skip \
        "ProviderBridge|Loopback|NativeRepositoryTask|NativeAcceptanceCancelToolOracle|LegacyPiProviderBridge" \
        ./internal/harness/pi ./internal/harness/omp'
@@ -493,7 +493,7 @@ Deleting that single redirect
 (the same probe then printed `ipv4-loopback-ok`), and Command D was run on the frozen bytes:
 
 ```
-$ wsl.exe -d Ubuntu-24.04 -u accept bash -lc 'cd /mnt/q/repos/wt-w4-15b-staged-driver/symmetry/daemon \
+$ wsl.exe -d Ubuntu-24.04 -u accept bash -lc 'cd <worktree>/daemon \
     && go test -count=1 -race -timeout 1800s ./internal/harness/... ./internal/app/...'
 ```
 
@@ -520,8 +520,8 @@ app suite's runtime. Command E re-runs that package alone with a 90-minute budge
 stream for a per-test duration table:
 
 ```
-$ wsl.exe -d Ubuntu-24.04 -u accept bash -lc 'cd /mnt/q/repos/wt-w4-15b-staged-driver/symmetry/daemon \
-    && go test -count=1 -race -timeout 5400s -json ./internal/app/... > /tmp/app-race.json 2>&1'
+$ wsl.exe -d Ubuntu-24.04 -u accept bash -lc 'cd <worktree>/daemon \
+    && go test -count=1 -race -timeout 5400s -json ./internal/app/... > <scratch>/app-race.json 2>&1'
 ```
 
 Result: **exit 0**, `2026-11-22T07:29:26Z` → `2026-11-22T08:07:45Z` (2300 s wall), and the JSON
@@ -561,7 +561,7 @@ The loopback repair was re-probed before the run (`ipv4-loopback-ok`) and the wh
 command was re-run on the apply bytes:
 
 ```
-$ wsl.exe -d Ubuntu-24.04 -u accept bash -lc 'cd /mnt/q/repos/wt-w4-15b-staged-driver/symmetry/daemon \
+$ wsl.exe -d Ubuntu-24.04 -u accept bash -lc 'cd <worktree>/daemon \
     && go test -count=1 -race -timeout 5400s ./internal/harness/... ./internal/app/...'
 ```
 
