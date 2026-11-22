@@ -26,8 +26,6 @@ import {
   uniqueKey
 } from "./readable-fixtures.mjs";
 
-// This suite's frozen acceptance description, passed to the shared revision and
-// plan builders; every other payload literal is shared.
 const acceptanceDescription = "Operator verifies the cutover boundary.";
 // The socket's own reconnect backoff is the subject of the catch-up case, so its
 // wait is a backstop over the client's retry schedule rather than a tighter

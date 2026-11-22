@@ -1,15 +1,4 @@
 defmodule SymmetryControl.Goals.ChangesetValidatorsTest do
-  @moduledoc """
-  Byte-exact pins for the validation messages the goal schema modules produce
-  and the accept/reject outcome of each drive: the digest, object and
-  immutability tables assert the exact message bytes on rejection, the
-  valid-digest drive asserts acceptance, and the no-change drive asserts
-  silence. Each drive calls the schema module's own public changeset function
-  (`changeset/2`, `resolve_changeset/2` or `immutable_changeset/2`); where
-  `cast/3` rejects the malformed value first (the `:map` fields), the drive
-  pre-seeds the change on the changeset so the pin records the validator's own
-  message rather than Ecto's `"is invalid"`.
-  """
   use ExUnit.Case, async: true
 
   alias Ecto.Changeset
@@ -31,19 +20,14 @@ defmodule SymmetryControl.Goals.ChangesetValidatorsTest do
   @uuid "00000000-0000-0000-0000-000000000001"
   @digest :binary.copy(<<1>>, 32)
 
-  # Ecto stores errors most-recent-first, so `Keyword.get_values/2` order is the
-  # order the assertion below pins.
   defp messages(changeset, field) do
     changeset.errors
     |> Keyword.get_values(field)
     |> Enum.map(&elem(&1, 0))
   end
 
-  # A field-pinned validator only runs when the value reaches `changes`. The
-  # `:map`-typed fields reject non-maps in `cast/3` itself, so the drives below
-  # put the malformed value on a changeset base first: that is the only way the
-  # validator's own message (rather than Ecto's "is invalid") can fire, and it is
-  # the path a caller that pre-seeds the changeset exercises.
+  # Field-pinned validators run only when the value reaches `changes`; `cast/3` rejects
+  # non-map `:map` fields first, so seeding the base is the only way the validator's own message fires.
   defp seeded(struct, field, value) do
     struct |> Changeset.change() |> Changeset.put_change(field, value)
   end

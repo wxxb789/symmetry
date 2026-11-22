@@ -103,9 +103,6 @@ type linuxV2ProcessOwner struct {
 	waitMu     sync.Mutex
 	waitResult *platform.LinuxOwnerHelperV2Exit
 
-	// closeSeams binds the close pipeline's CI test doubles. Production owners
-	// leave it zero: the pipeline then reads the bound helper's exact native
-	// control channel and the opaque platform release capability stored above.
 	closeSeams linuxV2CloseSeams
 }
 
@@ -1477,9 +1474,7 @@ func (owner *linuxV2ProcessOwner) finalize() error {
 	if handoff == nil || evidence.Proof.ValidateFor(owner.supervisorForProof(evidence.Proof.LauncherExit)) != nil {
 		return errors.New("Linux v2 stop proof does not match the exact bound handoff")
 	}
-	// The cached-receipt reconcile stays byte-identical here: a valid bound
-	// handoff already determines the measured proof, so a CI fixture cannot
-	// execute its conflict branch (see the rf-w4-05 evidence record).
+	// Unreachable from CI: a valid bound handoff already determines the measured proof.
 	baseHandoff := handoff.Clone()
 	var receipt *authority.StopReceipt
 	receiptPersisted := baseHandoff.StopReceipt != nil
@@ -1507,10 +1502,6 @@ func (owner *linuxV2ProcessOwner) finalize() error {
 	})
 }
 
-// linuxV2HelperControl is the helper's control channel as the close pipeline
-// uses it. A bound helper carries the concrete native client; the pipeline
-// reads the channel through helperControl() so the CI characterization tests
-// can drive the real pipeline where no native helper can exist.
 type linuxV2HelperControl interface {
 	AcknowledgeStopReceipt(ctx context.Context, receipt authority.StopReceipt) error
 	ReleaseAfterClear(ctx context.Context, proof authority.SupervisorHandoffReleaseProof) error
@@ -1518,19 +1509,14 @@ type linuxV2HelperControl interface {
 	ReleaseAfterPreGateClear(ctx context.Context, proof authority.LinuxCgroupPreGateReleaseProof) error
 }
 
-// linuxV2CloseSeams are the close pipeline's test doubles. Every field is nil
-// in production, where the pipeline reads the bound helper's exact native
-// client and the opaque platform release capability stored on the owner; the
-// CI characterization tests install doubles because no native helper, cgroup
-// leaf or anchor can exist in the test process. Only the capability snapshots
-// are doubled: the pipeline still runs the issued/valid guards on their result.
+// Only the capability snapshots are doubled: no native helper, cgroup leaf or
+// anchor can exist in a CI process, and the issued/valid guards still run.
 type linuxV2CloseSeams struct {
 	helperControl          linuxV2HelperControl
 	ownerReleaseSnapshot   func(platform.LinuxCgroupV2Release) (authority.SupervisorHandoffReleaseProof, bool)
 	preGateReleaseSnapshot func(platform.LinuxCgroupV2Release) (authority.LinuxCgroupPreGateReleaseProof, bool)
 }
 
-// helperControl returns the close pipeline's helper control channel.
 func (owner *linuxV2ProcessOwner) helperControl() linuxV2HelperControl {
 	if owner.closeSeams.helperControl != nil {
 		return owner.closeSeams.helperControl
@@ -1541,8 +1527,6 @@ func (owner *linuxV2ProcessOwner) helperControl() linuxV2HelperControl {
 	return owner.helper.Control
 }
 
-// ownerReleaseProof snapshots the opaque removed-leaf capability of the gate
-// path; the caller still validates the proof against the durable receipt.
 func (owner *linuxV2ProcessOwner) ownerReleaseProof(release platform.LinuxCgroupV2Release) (authority.SupervisorHandoffReleaseProof, bool) {
 	if owner.closeSeams.ownerReleaseSnapshot != nil {
 		return owner.closeSeams.ownerReleaseSnapshot(release)
@@ -1550,7 +1534,6 @@ func (owner *linuxV2ProcessOwner) ownerReleaseProof(release platform.LinuxCgroup
 	return release.Snapshot()
 }
 
-// preGateReleaseProof snapshots the opaque pre-gate removal capability.
 func (owner *linuxV2ProcessOwner) preGateReleaseProof(release platform.LinuxCgroupV2Release) (authority.LinuxCgroupPreGateReleaseProof, bool) {
 	if owner.closeSeams.preGateReleaseSnapshot != nil {
 		return owner.closeSeams.preGateReleaseSnapshot(release)
@@ -1558,12 +1541,6 @@ func (owner *linuxV2ProcessOwner) preGateReleaseProof(release platform.LinuxCgro
 	return release.SnapshotPreGate()
 }
 
-// linuxV2CloseSteps is one close path's typed steps for the shared close
-// pipeline. Each step keeps its base guards, wrap texts and owner-flag updates;
-// runClosePipeline owns the single order both paths share. The gate path claims
-// the release capability before the promotion hop (base :1527-1535) and the
-// pre-gate path claims after its clear (base :2184-2197), which
-// claimsCapabilityAfterClear selects.
 type linuxV2CloseSteps interface {
 	persistReceipt() error
 	acknowledgeReceipt() error
@@ -1577,14 +1554,6 @@ type linuxV2CloseSteps interface {
 	claimsCapabilityAfterClear() bool
 }
 
-// runClosePipeline executes the close sequence both close paths share:
-//
-//	persist receipt → acknowledge receipt → remove leaf → claim capability →
-//	[promotion hop] → clear journal → claim capability → release helper →
-//	retire anchor → settle
-//
-// Every step returns its base error unwrapped, exactly as the base close paths
-// returned it, so a failure stops the sequence where the base path stopped.
 func (owner *linuxV2ProcessOwner) runClosePipeline(steps linuxV2CloseSteps) error {
 	if err := steps.persistReceipt(); err != nil {
 		return err
@@ -1620,15 +1589,11 @@ func (owner *linuxV2ProcessOwner) runClosePipeline(steps linuxV2CloseSteps) erro
 	return steps.settle()
 }
 
-// linuxV2CloseGateSteps is the gate path's step set: the durably bound
-// handoff, its exact physical-stop receipt and the mirror-stop acknowledgement
-// skip.
 type linuxV2CloseGateSteps struct {
 	owner *linuxV2ProcessOwner
 	ctx   context.Context
 
-	// handoff is the receipt-bearing close handoff; baseHandoff is the same
-	// handoff with its cached receipt cleared for the durable write.
+	// baseHandoff clears the cached receipt: the durable write must carry the freshly measured evidence.
 	handoff          authority.SupervisorHandoff
 	baseHandoff      authority.SupervisorHandoff
 	receipt          authority.StopReceipt
@@ -1644,14 +1609,8 @@ type linuxV2CloseGateSteps struct {
 	anchorRetired  bool
 }
 
-// claimsCapabilityAfterClear reports the gate path's claim position: the
-// promotion hop runs after the release-capability snapshot and before the
-// clear.
 func (steps *linuxV2CloseGateSteps) claimsCapabilityAfterClear() bool { return false }
 
-// persistReceipt persists the exact physical-stop receipt when it is not
-// durable yet and publishes the receipt-bound handoff to the owner
-// (base :1487-1500).
 func (steps *linuxV2CloseGateSteps) persistReceipt() error {
 	if !steps.receiptPersisted {
 		if err := retryMutation(func() error {
@@ -1672,9 +1631,6 @@ func (steps *linuxV2CloseGateSteps) persistReceipt() error {
 	return nil
 }
 
-// acknowledgeReceipt acknowledges the durable stop receipt and captures the
-// first attempt's failure as a witness drop; a mirror stop has no bound helper
-// left to acknowledge (base :1501-1516).
 func (steps *linuxV2CloseGateSteps) acknowledgeReceipt() error {
 	if steps.mirrorStop || steps.receiptAcked {
 		return nil
@@ -1700,9 +1656,6 @@ func (steps *linuxV2CloseGateSteps) acknowledgeReceipt() error {
 	return nil
 }
 
-// removeLeaf removes the exact receipt-authorized leaf, or proves only
-// receipt-backed pinned-parent absence, and remembers the opaque release that
-// authorizes the clear and the helper release (base :1517-1526).
 func (steps *linuxV2CloseGateSteps) removeLeaf() error {
 	if steps.release != nil {
 		return nil
@@ -1718,8 +1671,6 @@ func (steps *linuxV2CloseGateSteps) removeLeaf() error {
 	return nil
 }
 
-// claimRelease snapshots the opaque release capability and verifies it against
-// the receipt-bound handoff (base :1527-1531).
 func (steps *linuxV2CloseGateSteps) claimRelease() error {
 	releaseProof, issued := steps.owner.ownerReleaseProof(*steps.release)
 	if !issued || !releaseProof.ValidFor(steps.handoff) {
@@ -1729,15 +1680,10 @@ func (steps *linuxV2CloseGateSteps) claimRelease() error {
 	return nil
 }
 
-// promoteClone runs the A-owned promotion hop after the release capability is
-// proven and before the durable clear (base :1532-1535).
 func (steps *linuxV2CloseGateSteps) promoteClone() error {
 	return steps.owner.promoteCloneAfterStop(steps.ctx, steps.receipt, *steps.release)
 }
 
-// clearJournal clears the exact receipt-bound journal entry with the opaque
-// leaf release, only after the durable receipt and its acknowledgement
-// (base :1536-1543).
 func (steps *linuxV2CloseGateSteps) clearJournal() error {
 	if steps.clearDone {
 		return nil
@@ -1751,9 +1697,6 @@ func (steps *linuxV2CloseGateSteps) clearJournal() error {
 	return nil
 }
 
-// releaseHelper releases the helper only after the durable Store clear and
-// resolves a lost release acknowledgement through the exact receipt-bound
-// anchor retirement readback (base :1544-1566).
 func (steps *linuxV2CloseGateSteps) releaseHelper() error {
 	if steps.mirrorStop || steps.helperReleased {
 		return nil
@@ -1782,8 +1725,6 @@ func (steps *linuxV2CloseGateSteps) releaseHelper() error {
 	return nil
 }
 
-// retireAnchor retires the exact anchor run after the durable clear
-// (base :1567-1574).
 func (steps *linuxV2CloseGateSteps) retireAnchor() error {
 	if steps.anchorRetired {
 		return nil
@@ -1797,8 +1738,6 @@ func (steps *linuxV2CloseGateSteps) retireAnchor() error {
 	return nil
 }
 
-// settle marks the owner released once every step above completed
-// (base :1575-1578).
 func (steps *linuxV2CloseGateSteps) settle() error {
 	steps.owner.mu.Lock()
 	steps.owner.ownerReleased = true
@@ -2377,11 +2316,6 @@ func (owner *linuxV2ProcessOwner) finalizePreGate(ctx context.Context) error {
 	})
 }
 
-// linuxV2ClosePreGateSteps is the pre-gate path's step set: the durably armed
-// never-created reservation, its authenticated pre-gate receipt and the
-// distinct pre-gate removal capability. Its capability claim sits after the
-// clear, exactly as base finalizePreGate ordered it, and it has no promotion
-// hop.
 type linuxV2ClosePreGateSteps struct {
 	owner *linuxV2ProcessOwner
 	ctx   context.Context
@@ -2399,13 +2333,8 @@ type linuxV2ClosePreGateSteps struct {
 	anchorRetired  bool
 }
 
-// claimsCapabilityAfterClear reports the pre-gate claim position: base
-// finalizePreGate cleared the durable reservation before it consumed the
-// pre-gate release proof.
 func (steps *linuxV2ClosePreGateSteps) claimsCapabilityAfterClear() bool { return true }
 
-// persistReceipt persists the authenticated pre-gate receipt when it is not
-// durable yet and publishes it to the owner's reservation (base :2138-2146).
 func (steps *linuxV2ClosePreGateSteps) persistReceipt() error {
 	if steps.receiptPersisted {
 		return nil
@@ -2422,8 +2351,6 @@ func (steps *linuxV2ClosePreGateSteps) persistReceipt() error {
 	return nil
 }
 
-// acknowledgeReceipt acknowledges the durable pre-gate stop receipt and
-// captures the first attempt's failure as a witness drop (base :2147-2163).
 func (steps *linuxV2ClosePreGateSteps) acknowledgeReceipt() error {
 	if steps.receiptAcked {
 		return nil
@@ -2449,10 +2376,7 @@ func (steps *linuxV2ClosePreGateSteps) acknowledgeReceipt() error {
 	return nil
 }
 
-// removeLeaf removes the authenticated no-gate leaf, or proves only
-// receipt-backed pinned-parent absence, with the distinct pre-gate
-// authorization; never the gate-bound handoff release method or a generic
-// receipt (base :2164-2183).
+// Never the gate-bound handoff release method or a generic receipt.
 func (steps *linuxV2ClosePreGateSteps) removeLeaf() error {
 	if steps.release != nil {
 		return nil
@@ -2474,8 +2398,6 @@ func (steps *linuxV2ClosePreGateSteps) removeLeaf() error {
 	return nil
 }
 
-// clearJournal clears the exact no-gate reservation with the opaque release
-// (base :2184-2193).
 func (steps *linuxV2ClosePreGateSteps) clearJournal() error {
 	if steps.clearDone {
 		return nil
@@ -2491,8 +2413,6 @@ func (steps *linuxV2ClosePreGateSteps) clearJournal() error {
 	return nil
 }
 
-// claimRelease snapshots the pre-gate removal capability and verifies it
-// against the exact pre-gate receipt (base :2194-2197).
 func (steps *linuxV2ClosePreGateSteps) claimRelease() error {
 	releaseProof, issued := steps.owner.preGateReleaseProof(*steps.release)
 	if !issued || !releaseProof.ValidFor(steps.receipt) {
@@ -2502,14 +2422,9 @@ func (steps *linuxV2ClosePreGateSteps) claimRelease() error {
 	return nil
 }
 
-// promoteClone is the pre-gate path's promotion hop: base finalizePreGate had
-// none, because a never-created launcher cannot own a promoted clone
-// (base :2092-2231).
+// No hop here: a never-created launcher cannot own a promoted clone.
 func (steps *linuxV2ClosePreGateSteps) promoteClone() error { return nil }
 
-// releaseHelper releases the pre-gate helper only after the durable clear and
-// resolves a lost release acknowledgement through the exact anchor pre-gate
-// retirement readback (base :2198-2216).
 func (steps *linuxV2ClosePreGateSteps) releaseHelper() error {
 	if steps.helperReleased {
 		return nil
@@ -2535,7 +2450,6 @@ func (steps *linuxV2ClosePreGateSteps) releaseHelper() error {
 	return nil
 }
 
-// retireAnchor retires the exact cleared pre-gate anchor run (base :2217-2224).
 func (steps *linuxV2ClosePreGateSteps) retireAnchor() error {
 	if steps.anchorRetired {
 		return nil
@@ -2549,8 +2463,6 @@ func (steps *linuxV2ClosePreGateSteps) retireAnchor() error {
 	return nil
 }
 
-// settle finalizes the no-checkout clone after the exact pre-gate retirement
-// and marks the owner released (base :2225-2231).
 func (steps *linuxV2ClosePreGateSteps) settle() error {
 	if err := steps.owner.finalizeNoCheckoutCloneAfterRetirement(steps.ctx, &steps.releaseProof, nil); err != nil {
 		return fmt.Errorf("finalize no-checkout Linux clone after exact pre-gate retirement: %w", err)
@@ -2914,13 +2826,8 @@ func (owner *linuxV2ProcessOwner) closeAfterClear() error {
 	return closeErr
 }
 
-// retryMutation runs one idempotent journal mutation at most twice. A first
-// attempt that reports ErrLinuxV2MutationAckLost already took durable effect
-// and lost its response, so it is never replayed and recovery owns the next
-// observation; any other first failure is retried once and both attempts are
-// joined. The value-carrying sites clone their inputs inside callback, so a
-// callback that mutates its arguments there cannot leak the mutation into the
-// retry; the clone-less sites pass the same values to both attempts.
+// At most two attempts of one idempotent mutation: an ACK-loss first attempt
+// already took durable effect and is never replayed; other failures retry once.
 func retryMutation(callback func() error) error {
 	first := callback()
 	if first == nil || errors.Is(first, ErrLinuxV2MutationAckLost) {

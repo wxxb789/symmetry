@@ -1,40 +1,10 @@
 defmodule SymmetryControl.TestFixtures do
-  @moduledoc """
-  Data builders and host-signal helpers shared by the control suites.
-
-  Each builder below replaces a helper that had been copy-pasted into every
-  suite that needed it (2-11 copies per name). The values stay identical to the
-  copies': a knob the converted call sites set differently from the documented
-  default is an explicit option, and the defaults are the deterministic fixture
-  values most of those call sites rely on. Suite-specific values (the suite
-  clock, the schema base, a fresh daemon or claim id) are arguments at the call
-  site, never hidden defaults; `unix_signal/1` is the one non-builder, the flag
-  pair the e2e suites pass to `System.cmd("kill", ...)`.
-  """
-
   import ExUnit.Assertions
 
   alias SymmetryControl.Goals
   alias SymmetryControl.Orchestration
   alias SymmetryControl.Workspaces
 
-  @doc """
-  Injects the suite's command surface: `command_opts/0` returns the suite's
-  default command options and `command_current/3,4` submits the current
-  revision of a goal with them.
-
-  A suite whose command call sites share one option list declares it once:
-
-      use SymmetryControl.TestFixtures,
-        command_opts: [now: @now, validation_profiles: validation_profiles()]
-
-  `command_opts/0` rebuilds the list on every call, so lazily-generated values
-  (`Ecto.UUID.generate()`, `DateTime.utc_now/0`) stay per-call. A call's `opts`
-  are merged over the defaults, so a caller's `:now`, `:rollout_enabled` or
-  `:validation_profiles` always wins — the same precedence the converted
-  suites' local wrappers had. A suite that passes no `:command_opts` injects
-  nothing.
-  """
   defmacro __using__(opts) do
     case Keyword.fetch(opts, :command_opts) do
       {:ok, command_opts} ->
@@ -58,37 +28,14 @@ defmodule SymmetryControl.TestFixtures do
     end
   end
 
-  # Deterministic fixture ids: the daemon instance the review suite pinned
-  # (`uuid(1)` there) and the claim id the review and retry suites pinned
-  # (`uuid(10)` in both). A suite that needs a fresh id passes one explicitly; a
-  # fresh id is the deliberate choice in the tests that use it (replay and
-  # duplicate-claim semantics), so it never arrives by default.
   @daemon_instance_id "00000000-0000-0000-0000-000000000001"
   @claim_id "00000000-0000-0000-0000-000000000010"
 
   @task_base %{goal: "Run tests", agent_profile: "codex", workspace: "primary", input: %{}}
   @provider_task_base Map.put(@task_base, :goal, "Use provider")
 
-  @doc """
-  A fresh version-4 UUID: the converted suites' `uuid/0` one-liner, kept as a
-  name so a call site that wants a fresh id per call says so.
-  """
   def uuid, do: Ecto.UUID.generate()
 
-  @doc """
-  Registers one runtime for `machine` at `now` and returns it.
-
-  Defaults are the plain codex runtime the converted suites registered:
-
-    * `:runtime_key` / `:name` — `"default"` / `"Local Codex"`
-    * `:capacity` / `:agent_profile` / `:workspace` / `:capabilities` —
-      `1` / `"codex"` / `"primary"` / `%{}`
-    * `:daemon_instance_id` — `#{@daemon_instance_id}`; pass `Ecto.UUID.generate()`
-      when the registration must carry a fresh daemon instance
-    * `:extra` — a map merged over the registration spec, for
-      `heartbeat_interval_ms`, `harness_*`, `adapter_*` and
-      `repository_resource_id` fields
-  """
   def register_runtime(machine, now, opts \\ []) do
     spec =
       %{
@@ -109,17 +56,6 @@ defmodule SymmetryControl.TestFixtures do
     runtime
   end
 
-  @doc """
-  Claims `run` for `runtime` at `now` and returns the fence map the suites
-  pass to transitions, settlements and renewals.
-
-  Options:
-
-    * `:claim_id` — the claim's idempotency key, default `#{@claim_id}`;
-      pass `Ecto.UUID.generate()` when the claim must be a fresh delivery
-    * `:via` — the entry point, `SymmetryControl.Orchestration` (default) or
-      `SymmetryControl.Goals`
-  """
   def claim(run, runtime, now, opts \\ []) do
     claim_id = Keyword.get(opts, :claim_id, @claim_id)
     via = Keyword.get(opts, :via, Orchestration)
@@ -146,28 +82,21 @@ defmodule SymmetryControl.TestFixtures do
   end
 
   @doc """
-  Claims `run` for `runtime` at `now` through `Goals` — the goal-admission
-  suites' claim entry point — and returns the fence map the transitions take.
-
-  The claim id is generated per call: those suites pin a fresh id deliberately
-  (replay and duplicate-claim semantics), so this does not take `claim/4`'s
-  deterministic default. `opts` are merged over the `via: Goals` default.
+  Claims through `Goals` with a fresh claim id per call — `claim/4`'s fixed default is the
+  idempotency key the replay/duplicate-claim tests rely on.
   """
   def goal_claim(run, runtime, now, opts \\ []) do
     claim(run, runtime, now, Keyword.merge([claim_id: Ecto.UUID.generate(), via: Goals], opts))
   end
 
-  @doc "Task attributes over the default `\"Run tests\"` goal, with overrides merged in."
   def task_attrs(overrides \\ []) do
     Map.merge(@task_base, Map.new(overrides))
   end
 
-  @doc "Task attributes over the capability suite's `\"Use provider\"` goal."
   def provider_task_attrs(overrides) do
     Map.merge(@provider_task_base, Map.new(overrides))
   end
 
-  @doc "The baseline subject of a repository resource."
   def subject(repository_id) do
     %{
       "resource_id" => repository_id,
@@ -176,7 +105,6 @@ defmodule SymmetryControl.TestFixtures do
     }
   end
 
-  @doc "The acceptance contract the converted suites pin: one `check` predicate."
   def check_contract do
     %{
       "schema_version" => "symmetry.acceptance.v1",
@@ -186,9 +114,8 @@ defmodule SymmetryControl.TestFixtures do
   end
 
   @doc """
-  The validation profile the converted web suites register: one enabled check
-  under `:test`, whose `allowed_runtime_ids` is a fresh id that admits no
-  registered runtime (call sites pass `validation_profiles(runtime_id)`).
+  One enabled `:test` check whose `allowed_runtime_ids` is a fresh id: no registered runtime is
+  admitted, so admission sites use their own `validation_profiles(runtime_id)`.
   """
   def validation_profiles do
     [
@@ -201,7 +128,6 @@ defmodule SymmetryControl.TestFixtures do
     ]
   end
 
-  @doc "Creates a repository resource for `project` and returns it."
   def repository_fixture(project) do
     {:ok, repository} =
       Workspaces.create_resource(project.id, %{
@@ -212,11 +138,6 @@ defmodule SymmetryControl.TestFixtures do
     repository
   end
 
-  @doc """
-  The canonical `symmetry.goal_command.v1` map for `goal`, with `payload`
-  canonicalised for `"request_decision"` exactly as the goals suite pinned it
-  (every other kind passes the payload through).
-  """
   def goal_command(goal, kind, payload, mutation_id \\ Ecto.UUID.generate()) do
     %{
       schema_version: "symmetry.goal_command.v1",
@@ -228,7 +149,6 @@ defmodule SymmetryControl.TestFixtures do
     }
   end
 
-  @doc "The `kill` flag for `:term`/`:kill`, shared by the two e2e suites."
   def unix_signal(:term), do: "-TERM"
   def unix_signal(:kill), do: "-KILL"
 

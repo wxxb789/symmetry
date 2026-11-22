@@ -1,12 +1,8 @@
 defmodule SymmetryControl.Schemas.VersionedChangeset do
   @moduledoc false
 
-  # The optimistic-locking contract the portal contexts share. An expected version is a
-  # positive integer, a row whose `lock_version` no longer matches — or that a locked re-read
-  # found missing — is `:stale`, and a refused versioned write is normalized back to the same
-  # tags whatever the schema, so the controller renders one 409/stale body per reason. The
-  # attrs helpers normalize the atom/string key spellings these writes receive from the JSON
-  # boundary, including the `:version` strip.
+  # Optimistic-locking contract: positive-integer expected version; `:stale` on mismatch
+  # or a missing locked re-read; attrs helpers normalize the JSON atom/string spellings.
 
   alias SymmetryControl.Repo
 
@@ -21,9 +17,8 @@ defmodule SymmetryControl.Schemas.VersionedChangeset do
   @spec matches_version(term(), term()) :: :ok | {:error, :stale | :invalid_request}
   def matches_version(%{lock_version: version}, version), do: :ok
 
-  # The expected version alone decides `:stale` versus `:invalid_request`: a missing row from a
-  # locked re-read (`nil`, deleted mid-transaction) keeps the base Integrations `:stale`
-  # verdict, and only a malformed expected version is refused as `:invalid_request`.
+  # Only a malformed expected version is `:invalid_request`: `nil` from a locked re-read
+  # (row deleted mid-transaction) keeps the base `:stale` verdict.
   def matches_version(_record, expected) when is_integer(expected),
     do: {:error, :stale}
 

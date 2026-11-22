@@ -404,12 +404,8 @@ defmodule SymmetryControlWeb.PortalJSON do
     }
   end
 
-  # The execution members only the work item decides, resolved by
-  # `WorkItemEligibility` — the same verdicts the commands enforce.
-  # `can_cancel` is withheld from every Goal-managed item in every state: the
-  # legacy cancel path refuses that item (`ensure_legacy_work_item/1` applies
-  # `WorkItemEligibility.cancel_gate/1`), and a Goal is the authority that stops
-  # its work. `can_retry` joins the attempt's own gates with the work item's
+  # The execution members only the work item decides, resolved by the same
+  # `WorkItemEligibility` verdicts the commands enforce; `can_retry` joins the item's
   # agent-assignment, external-work and active-project conditions.
   defp legacy_capabilities(nil, _work_item), do: nil
 
@@ -480,14 +476,8 @@ defmodule SymmetryControlWeb.PortalJSON do
     }
   end
 
-  # The three delivery members resolve the same way — a provider-owned value
-  # wins over the operator's manual value, which wins over the attempt's agent
-  # evidence, and with none of the three the member serves its own fallback —
-  # though only the provider branch adds `provider`/`recorded_at` and only the
-  # agent branch carries the evidence map's own members; manual and none serve
-  # the same five. The descriptor names that member's three inputs, the field
-  # they compete for, the fallback the none branch serves, and the provider
-  # metadata the provider branch serves.
+  # Delivery precedence for the three members: provider value > operator manual value >
+  # agent evidence > the member's own fallback (member sets differ per branch).
   defp delivery(work_item, evidence) do
     %{
       pull_request:
@@ -560,11 +550,8 @@ defmodule SymmetryControlWeb.PortalJSON do
     |> normalize_delivery(descriptor.fallback)
   end
 
-  # The agent branch serves the whole evidence map: its own `source` (the
-  # evidence's, not necessarily "agent") and every member the agent wrote.
-  # `:value` is always replaced by the resolved value; `source`, the member's own
-  # field, `generation`, `url` and `status` are added only where the map does not
-  # already carry them.
+  # Agent branch serves the whole evidence map (its own `source`, not necessarily "agent"):
+  # `:value` is always replaced; other members are added only where the map lacks them.
   defp resolve_delivery(%{agent: agent} = descriptor) when is_map(agent) do
     value = Map.get(agent, descriptor.field) || descriptor.fallback
 
@@ -575,8 +562,6 @@ defmodule SymmetryControlWeb.PortalJSON do
     |> normalize_delivery(descriptor.fallback)
   end
 
-  # Nothing resolved: a `:url` member claims neither a value nor a status, a
-  # `:status` member serves its fallback in both.
   defp resolve_delivery(%{field: :url}),
     do: %{value: nil, url: nil, status: nil, source: "none", generation: nil}
 
@@ -704,12 +689,8 @@ defmodule SymmetryControlWeb.PortalJSON do
   defp loaded(%Ecto.Association.NotLoaded{}), do: []
   defp loaded(values), do: values
 
-  # The getter answers the two spellings a key can arrive under: the string is
-  # the wire spelling (the attempt's result JSON, deep-stringified before it is
-  # stored and string-keyed again after the JSONB round trip), the atom arm is a
-  # legacy fallback that no producer in this revision reaches. One table names
-  # both, so a new evidence field is a word here instead of another clause, and
-  # the atoms are this module's own literals (never built from a served key).
+  # Keys arrive in two spellings: the wire string (the result JSON is string-keyed after its
+  # JSONB round trip) and a legacy atom arm; atoms are this module's literals, never served keys.
   @evidence_keys ~w[summary message question findings changed_artifacts changed_files tests]a
   @evidence_key_strings Map.new(@evidence_keys, &{Atom.to_string(&1), &1})
 

@@ -279,3 +279,14 @@ setup failures), and no other case is excluded.
    `docs/evidence/`; this plan carries the evidence section and the run's `answer.md` carries the
    report (shape reference `a503eab7` / `rf-w2-16`). No repository file outside the owned set is
    created or edited.
+
+## Comment-policy sweep (2026-11-22)
+
+Module intent removed from `control/lib/symmetry_control_web/controllers/daemon_controller.ex` by the 2026-11-22 comment-policy sweep is recorded below (workstream record "ws8-control-lib").
+
+- `control/lib/symmetry_control_web/controllers/daemon_controller.ex` (510-516): the
+  wire-contract half — *turning this check into a served 400 would change an error
+  response outside the slice's byte-identical wire contract* (the in-file note keeps only
+  "preserve the pre-merge error shape"; the plan path is in debt below).
+
+The sweep's plan is [`docs/plans/2026-11-22-comment-policy-sweep-plan.md`](2026-11-22-comment-policy-sweep-plan.md).

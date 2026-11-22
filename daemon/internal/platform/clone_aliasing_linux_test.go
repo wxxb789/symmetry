@@ -13,64 +13,21 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/authority"
 )
 
-// The platform package keeps hand-written deep-clone functions for authority
-// and evidence values (P-08 in the phase-0 audit). A clone that copies a
-// pointer, slice or map field shallowly makes the clone share mutable state
-// with its source, and a field added later without extending the clone turns
-// that sharing into an aliasing authority bug no existing test or linter sees.
-//
-// These tests convert the invariant into a gate: for every covered clone they
-// populate all fields of the input by reflection, clone it through the
-// production function, then write the mutation marker through every pointer,
-// slice element and map entry the original still holds (a map value is
-// recursed into and one key is deleted) and require the clone's rendered
-// content to be unchanged. A field the clone copies shallowly is exactly a
-// field whose mutation becomes visible inside the clone, so a newly added
-// pointer/slice/map field fails this test red until its clone copies it.
-//
-// A few exit proofs cannot be populated uniformly: cloneLinuxOwnerAnchorExitProof
-// (anchor_server.go:44-49) truncates the nested HelperExit by design, and
-// cloneLinuxCgroupStopReceipt (linux_cgroup_v2_linux.go:1443-1457) shares it
-// under recorded debt (docs/TODO.md, "rf-w2-16 clone-aliasing gate"). Each such
-// case lists the dotted field paths it leaves nil (cloneAliasingCase's
-// skipExitProofs); the driver fails a case whose listed path never appears,
-// and it re-runs the case with each path removed so a skip that no longer
-// changes the outcome fails too. Every other exit-proof pointer is populated
-// one nesting level deep; the next level stays nil because Validate rejects it
-// (authority/authority.go:1164).
-//
-// The covered clones split by build universe. This file carries the harness and
-// the three clones compiled under //go:build linux; the seven clones compiled
-// under //go:build linux && amd64 live in clone_aliasing_linux_amd64_test.go,
-// and cloneContainmentSessionID (//go:build windows) in
-// clone_aliasing_windows_test.go.
-
 const (
-	// cloneAliasingPopulateMarker fills every string field of a covered value.
 	cloneAliasingPopulateMarker = "clone-aliasing-marker"
-	// cloneAliasingMutatedMarker replaces every string scalar written through
-	// a reachable reference.
-	cloneAliasingMutatedMarker = "clone-aliasing-mutated"
-	// cloneAliasingRenderDepth bounds the rendering of a (cyclic) value graph.
-	cloneAliasingRenderDepth = 64
+	cloneAliasingMutatedMarker  = "clone-aliasing-mutated"
+	cloneAliasingRenderDepth    = 64
 )
 
 var (
-	cloneAliasingTimeType      = reflect.TypeOf(time.Time{})
-	cloneAliasingExitProofType = reflect.TypeOf(authority.LinuxCgroupExitProof{})
-	// cloneAliasingExitProofPointerType is the type every skipExitProofs path
-	// must name: the harness only ever leaves a *authority.LinuxCgroupExitProof
-	// field nil.
+	cloneAliasingTimeType             = reflect.TypeOf(time.Time{})
+	cloneAliasingExitProofType        = reflect.TypeOf(authority.LinuxCgroupExitProof{})
 	cloneAliasingExitProofPointerType = reflect.TypeOf((*authority.LinuxCgroupExitProof)(nil))
 	cloneAliasingFixedTime            = time.Date(2026, 11, 21, 0, 0, 0, 0, time.UTC)
 )
 
-// cloneAliasingFieldOverrides pins the fields whose value must satisfy a
-// covered type's own Validate so that the Validate-gated clone
-// cloneLinuxOwnerGateIdentityIfValid copies instead of returning nil
-// (LinuxCgroupGateIdentity.Validate, authority/authority.go:1317). Every other
-// field - including any field added later - is populated by kind, so these
-// entries pin value formats, not clone coverage.
+// These entries pin value formats, not clone coverage: every value must satisfy
+// Validate (authority/authority.go:1317) so the Validate-gated clone copies instead of returning nil.
 var cloneAliasingFieldOverrides = map[string]any{
 	"authority.LinuxCgroupParentIdentity.BootID":  "12345678-9abc-def0-1234-56789abcdef0",
 	"authority.LinuxCgroupParentIdentity.Path":    "/sys/fs/cgroup/clone-aliasing-marker",
@@ -79,12 +36,6 @@ var cloneAliasingFieldOverrides = map[string]any{
 	"authority.LinuxCgroupGateIdentity.BirthKind": authority.LinuxCgroupTargetBirthTrustedAGate,
 }
 
-// cloneAliasingCase is one covered clone: fresh builds a zero *T whose pointee
-// the driver populates, clone runs the production clone on that value, and
-// skipExitProofs lists the dotted field paths (slice elements flatten into
-// their field's name) whose *authority.LinuxCgroupExitProof field is left nil;
-// each listed path must stay load-bearing, so the driver fails a case that
-// still passes without it.
 type cloneAliasingCase struct {
 	name           string
 	fresh          func() any
@@ -92,11 +43,6 @@ type cloneAliasingCase struct {
 	skipExitProofs []string
 }
 
-// cloneAliasingCaseFor registers a clone that takes a *T (or a value the case
-// dereferences itself) and returns the cloned value. skipExitProofs are only
-// for paths production truncates or shares under recorded debt; the driver
-// fails the case when population never reaches a listed path, or when removing
-// the path leaves the case green.
 func cloneAliasingCaseFor[T any](name string, clone func(value *T) any, skipExitProofs ...string) cloneAliasingCase {
 	return cloneAliasingCase{
 		name:           name,
@@ -106,18 +52,13 @@ func cloneAliasingCaseFor[T any](name string, clone func(value *T) any, skipExit
 	}
 }
 
-// TestCloneAliasingLinuxCgroupEvidence covers the three cgroup-v2 clone
-// functions compiled under //go:build linux.
 func TestCloneAliasingLinuxCgroupEvidence(t *testing.T) {
 	for _, testCase := range []cloneAliasingCase{
 		cloneAliasingCaseFor("cloneLinuxCgroupV2RemovalAuthorization", func(value *LinuxCgroupV2RemovalAuthorization) any {
 			return cloneLinuxCgroupV2RemovalAuthorization(*value)
 		},
-			// The Supervisor and Handoff clones are authority's deep clones;
-			// the authorization's own Receipt goes through the platform
-			// cloneLinuxCgroupStopReceipt, which shares the LinuxProof nested
-			// exits with the input (linux_cgroup_v2_linux.go:1449-1453) - the
-			// live alias recorded in docs/TODO.md.
+			// The Receipt's LinuxProof nested exits go through cloneLinuxCgroupStopReceipt,
+			// which shares them with the input (linux_cgroup_v2_linux.go:1449-1453).
 			"Receipt.LinuxProof.GateExit.HelperExit",
 			"Receipt.LinuxProof.HelperExit.HelperExit",
 			"Receipt.LinuxProof.LauncherExit.HelperExit"),
@@ -127,11 +68,8 @@ func TestCloneAliasingLinuxCgroupEvidence(t *testing.T) {
 		cloneAliasingCaseFor("cloneLinuxCgroupStopReceipt", func(value *authority.StopReceipt) any {
 			return cloneLinuxCgroupStopReceipt(*value)
 		},
-			// The LinuxProof struct copy at linux_cgroup_v2_linux.go:1449
-			// leaves GateExit.HelperExit and LauncherExit.HelperExit shared
-			// with the input - the live alias recorded in docs/TODO.md - and
-			// the stored HelperExit copy at :1450-1453 shares one nesting
-			// deeper.
+			// The LinuxProof struct copy at linux_cgroup_v2_linux.go:1449 shares GateExit
+			// and LauncherExit HelperExit with the input; the stored HelperExit copy (:1450-1453) shares one level deeper.
 			"LinuxProof.GateExit.HelperExit",
 			"LinuxProof.HelperExit.HelperExit",
 			"LinuxProof.LauncherExit.HelperExit"),
@@ -140,13 +78,8 @@ func TestCloneAliasingLinuxCgroupEvidence(t *testing.T) {
 	}
 }
 
-// runCloneAliasingCase is the shared driver. The first pass populates, clones,
-// verifies content, mutates through every reference the original still holds
-// and verifies the clone again. It then proves each listed skip still earns
-// its place: with that one path removed the pass must fail, or the skip hides
-// a path production now deep-copies and has to go (docs/TODO.md, "rf-w2-16
-// clone-aliasing gate", records the production fixes that owe those
-// deletions).
+// With one skip path removed the pass must fail, or the skip hides a path
+// production now deep-copies and has to go (docs/TODO.md, "rf-w2-16 clone-aliasing gate").
 func runCloneAliasingCase(t *testing.T, testCase cloneAliasingCase) {
 	t.Helper()
 	skipExitProofs := cloneAliasingSkipSet(testCase.skipExitProofs)
@@ -170,8 +103,6 @@ func runCloneAliasingCase(t *testing.T, testCase cloneAliasingCase) {
 	}
 }
 
-// cloneAliasingSkipSet copies the case's skip paths into a fresh marker map;
-// false means population has not reached the path yet.
 func cloneAliasingSkipSet(paths []string) map[string]bool {
 	set := make(map[string]bool, len(paths))
 	for _, path := range paths {
@@ -180,8 +111,6 @@ func cloneAliasingSkipSet(paths []string) map[string]bool {
 	return set
 }
 
-// cloneAliasingPrepareCase builds and populates a fresh *T for the case,
-// leaving every skip path nil and marking each one reached.
 func cloneAliasingPrepareCase(testCase cloneAliasingCase, skipExitProofs map[string]bool) (reflect.Value, error) {
 	original := reflect.ValueOf(testCase.fresh())
 	if original.Kind() != reflect.Ptr || original.IsNil() {
@@ -198,16 +127,13 @@ func cloneAliasingPrepareCase(testCase cloneAliasingCase, skipExitProofs map[str
 	return original, nil
 }
 
-// cloneAliasingAssertCase clones the populated original through the production
-// function and asserts fidelity, mutation coverage and independence; a nil
-// return means the case passed.
 func cloneAliasingAssertCase(testCase cloneAliasingCase, original reflect.Value) error {
 	cloned := reflect.ValueOf(testCase.clone(original))
 	if !cloned.IsValid() || (cloned.Kind() == reflect.Ptr && cloned.IsNil()) {
 		return fmt.Errorf("clone returned an empty value for a populated original")
 	}
-	// Both sides are dereferenced once so that a value-returning clone and a
-	// pointer-returning clone compare the same covered value.
+	// Both sides are dereferenced once so a value-returning and a pointer-returning
+	// clone compare the same covered value.
 	before := cloneAliasingRender(cloneAliasingDereference(original))
 	if after := cloneAliasingRender(cloneAliasingDereference(cloned)); after != before {
 		return fmt.Errorf("clone content differs from the populated original\n clone: %s\norigin: %s", after, before)
@@ -222,8 +148,6 @@ func cloneAliasingAssertCase(testCase cloneAliasingCase, original reflect.Value)
 	return nil
 }
 
-// cloneAliasingDereference strips one pointer level so that the covered value
-// is compared regardless of whether the clone returns a value or a pointer.
 func cloneAliasingDereference(v reflect.Value) reflect.Value {
 	if v.Kind() == reflect.Ptr && !v.IsNil() {
 		return v.Elem()
@@ -231,13 +155,8 @@ func cloneAliasingDereference(v reflect.Value) reflect.Value {
 	return v
 }
 
-// cloneAliasingPopulate fills every settable field of v with a non-zero,
-// deterministic value: pointers allocate and recurse, slices get two populated
-// elements, maps one populated entry, structs recurse field by field. path is
-// the dotted field path from the case root (slice elements keep their slice
-// field's path) and helperDepth counts the HelperExit hops that lead to v.
-// Unknown kinds and unexported fields are errors, so a field added later forces
-// a harness decision instead of a silent skip.
+// Fills every settable field with a non-zero, deterministic value; unknown kinds
+// and unexported fields are errors, so a field added later forces a harness decision.
 func cloneAliasingPopulate(v reflect.Value, path string, helperDepth int, skipPaths map[string]bool) error {
 	if v.Type() == cloneAliasingTimeType {
 		if !v.CanSet() {
@@ -299,12 +218,8 @@ func cloneAliasingPopulate(v reflect.Value, path string, helperDepth int, skipPa
 	}
 }
 
-// cloneAliasingPopulateStruct populates one struct value field by field. A
-// field path listed in skipPaths is left nil, must name a
-// *authority.LinuxCgroupExitProof and is marked reached. An exit proof's own
-// HelperExit is populated only at helperDepth zero; the exit proof nested
-// there stops in turn, because Validate accepts one nesting level at most
-// (authority/authority.go:1164) and the stop keeps the recursion finite.
+// A skip path must name a *authority.LinuxCgroupExitProof and is marked reached.
+// HelperExit nests only at helperDepth zero: Validate accepts one level at most (authority/authority.go:1164).
 func cloneAliasingPopulateStruct(v reflect.Value, path string, helperDepth int, skipPaths map[string]bool) error {
 	t := v.Type()
 	for index := range t.NumField() {
@@ -347,8 +262,6 @@ func cloneAliasingPopulateStruct(v reflect.Value, path string, helperDepth int, 
 	return nil
 }
 
-// cloneAliasingPopulatedValue returns a new addressable value of type t filled
-// by cloneAliasingPopulate.
 func cloneAliasingPopulatedValue(t reflect.Type) (reflect.Value, error) {
 	v := reflect.New(t).Elem()
 	if err := cloneAliasingPopulate(v, "", 0, map[string]bool{}); err != nil {
@@ -357,8 +270,7 @@ func cloneAliasingPopulatedValue(t reflect.Type) (reflect.Value, error) {
 	return v, nil
 }
 
-// cloneAliasingIntegerSentinel returns a non-zero value small enough that
-// populating and incrementing it cannot overflow the signed or unsigned type.
+// Small enough that populating and incrementing it cannot overflow the signed or unsigned type.
 func cloneAliasingIntegerSentinel(t reflect.Type) int64 {
 	if t.Bits() > 16 {
 		return 4242
@@ -366,10 +278,7 @@ func cloneAliasingIntegerSentinel(t reflect.Type) int64 {
 	return 1 << (t.Bits() - 2)
 }
 
-// cloneAliasingRender renders v into a deterministic deep text image with
-// pointers dereferenced, so two values compare as equal exactly when their
-// content is equal and a shared pointee, backing array or map shows up as a
-// changed image.
+// Deterministic deep text image with pointers dereferenced: a shared pointee, backing array or map changes it.
 func cloneAliasingRender(v reflect.Value) string {
 	var builder strings.Builder
 	cloneAliasingRenderValue(&builder, v, 0)
@@ -444,13 +353,6 @@ func cloneAliasingRenderValue(builder *strings.Builder, v reflect.Value, depth i
 	}
 }
 
-// cloneAliasingMutateReferences writes the mutation marker through the case's
-// *T handle and every pointer, slice element and map entry reachable from it,
-// recursing into map values and deleting one map key, so a clone that shares a
-// pointee, a backing array or a map - whether the clone shares the map header
-// itself or only its values' pointees - changes the clone's rendering. It
-// returns the number of write sites; a zero count means the case exercised
-// nothing that a clone could alias.
 func cloneAliasingMutateReferences(original reflect.Value) int {
 	if original.Kind() != reflect.Ptr || original.IsNil() {
 		return 0
@@ -458,10 +360,6 @@ func cloneAliasingMutateReferences(original reflect.Value) int {
 	return cloneAliasingMutateValue(original.Elem())
 }
 
-// cloneAliasingMutateValue mutates one reachable value in place: every pointer
-// is followed, every slice element is written, every map value is recursed
-// into and one map key is deleted, and every settable scalar is replaced, so a
-// clone that shares any of them changes its rendering.
 func cloneAliasingMutateValue(v reflect.Value) int {
 	switch v.Kind() {
 	case reflect.Ptr:
@@ -483,15 +381,12 @@ func cloneAliasingMutateValue(v reflect.Value) int {
 		sort.Slice(keys, func(i, j int) bool { return cloneAliasingRender(keys[i]) < cloneAliasingRender(keys[j]) })
 		writes := 0
 		for _, key := range keys {
-			// A map entry's value is not addressable, but a pointer, slice or
-			// interface it holds still reaches a writable pointee, so a map
-			// copied entry-wise over shared pointees (maps.Clone) cannot hide
-			// behind its fresh map header.
+			// A map entry's value is not addressable, but a pointer, slice or interface
+			// in it still reaches a writable pointee, so an entry-wise copy cannot hide behind a fresh map header.
 			writes += cloneAliasingMutateValue(v.MapIndex(key))
 		}
-		// Deleting one key catches a clone that still shares the original's
-		// map header, which the recursion above cannot see through a
-		// value-only entry.
+		// Deleting one key catches a clone that still shares the original's map
+		// header, which the recursion above cannot see through a value-only entry.
 		v.SetMapIndex(keys[0], reflect.Value{})
 		return writes + 1
 	case reflect.Interface:
@@ -514,8 +409,6 @@ func cloneAliasingMutateValue(v reflect.Value) int {
 	}
 }
 
-// cloneAliasingMutatedScalar returns the marker value written through a
-// reference, chosen so that it differs from the populated value.
 func cloneAliasingMutatedScalar(v reflect.Value) reflect.Value {
 	switch v.Kind() {
 	case reflect.Bool:
@@ -535,9 +428,7 @@ func cloneAliasingMutatedScalar(v reflect.Value) reflect.Value {
 		value.SetFloat(v.Float() + 1)
 		return value
 	default:
-		// Populate rejects every kind beyond the cases above, so this arm is
-		// reached only if the harness's kind sets drift apart. Panic with the
-		// kind so the gap is self-locating.
+		// Reached only if the harness's kind sets drift apart; panics with the kind so the gap is self-locating.
 		panic(fmt.Sprintf("cloneAliasingMutatedScalar: kind %s is not handled by the aliasing harness", v.Kind()))
 	}
 }

@@ -2,7 +2,6 @@
 """Exercise the Portal fixture login with a trusted TLS Secure-cookie session."""
 
 import http.server
-import importlib.util
 import pathlib
 import ssl
 import subprocess
@@ -11,10 +10,10 @@ import threading
 import unittest
 import urllib.parse
 
+import citest
+
 SCRIPT = pathlib.Path(__file__).with_name("prepare-rootless-compose-owner-claim.py")
-spec = importlib.util.spec_from_file_location("rootless_claim", SCRIPT)
-claim = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(claim)
+claim = citest.load_gate(SCRIPT, "rootless_claim")
 
 
 class PortalHandler(http.server.BaseHTTPRequestHandler):

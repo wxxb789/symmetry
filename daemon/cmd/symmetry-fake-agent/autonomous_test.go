@@ -200,23 +200,14 @@ func TestAutonomousOutputFailureStopsExecution(t *testing.T) {
 	}
 }
 
-// leakCheckTB is the part of testing.TB the per-test leak oracle uses.
-// *testing.T satisfies it directly; TestLeakOracleDetectsLeakedGoroutine drives
-// the same oracle through a recording implementation, so the oracle's liveness
-// is pinned by a test and not only by an out-of-repo mutation record.
 type leakCheckTB interface {
 	Cleanup(func())
 	Error(args ...any)
 	Helper()
 }
 
-// verifyNoLeakedGoroutines marks the test failed when a goroutine it started is
-// still running after the test's own cleanups, so call it first in a test: its
-// cleanup then runs last. The baseline snapshot keeps a failure attributable:
-// goleak's VerifyNone scans every goroutine in the process, so without it a
-// goroutine stranded by another test in this package would blame this one. Not
-// for tests that call t.Parallel: VerifyNone cannot associate goroutines with a
-// specific test.
+// Call first in a test so its cleanup runs last; the goleak baseline keeps a
+// leak attributed to this test. Not for t.Parallel tests.
 func verifyNoLeakedGoroutines(tb leakCheckTB) {
 	tb.Helper()
 	baseline := goleak.IgnoreCurrent()
@@ -225,12 +216,6 @@ func verifyNoLeakedGoroutines(tb leakCheckTB) {
 	})
 }
 
-// TestLeakOracleDetectsLeakedGoroutine pins the liveness of
-// verifyNoLeakedGoroutines: it drives the oracle itself with a recording TB
-// while a goroutine is parked in this test, and requires the recorded failure
-// to name this test. Neuter the oracle (a no-op body) and this test fails while
-// TestAutonomousReturnReleasesItsInputReader would stay green. It joins the
-// parked goroutine before returning so no later test's check sees residue.
 func TestLeakOracleDetectsLeakedGoroutine(t *testing.T) {
 	recorder := &leakCheckRecorder{}
 	verifyNoLeakedGoroutines(recorder)
@@ -252,16 +237,14 @@ func TestLeakOracleDetectsLeakedGoroutine(t *testing.T) {
 	}
 }
 
-// parkedLeakOracleGoroutine blocks until release is closed. It is a named
-// function so the oracle's report reads as this test's own goroutine.
+// Blocks until release is closed; named so the oracle's report reads as this
+// test's own goroutine.
 func parkedLeakOracleGoroutine(started chan<- struct{}, release <-chan struct{}, exited chan<- struct{}) {
 	close(started)
 	<-release
 	close(exited)
 }
 
-// leakCheckRecorder records what the leak oracle reports instead of failing the
-// test that expects the failure.
 type leakCheckRecorder struct {
 	cleanups []func()
 	failures []string
@@ -277,32 +260,21 @@ func (recorder *leakCheckRecorder) Cleanup(cleanup func()) {
 	recorder.cleanups = append(recorder.cleanups, cleanup)
 }
 
-// runCleanups runs the recorded cleanups in testing.T's order: last registered
-// first.
 func (recorder *leakCheckRecorder) runCleanups() {
 	for i := len(recorder.cleanups) - 1; i >= 0; i-- {
 		recorder.cleanups[i]()
 	}
 }
 
-// TestAutonomousReturnReleasesItsInputReader pins the exit path of an
-// autonomous run: the run finishes while the pipe's read side is still open and
-// the reader goroutine is parked in readLine, and returning closes the input
-// and joins that goroutine. The decision record only reaches the run through
-// the reader goroutine, so a reader that drops an already-read record leaves
-// the run blocked in boundary and this test times out instead of finishing.
-// The stack scan right after the return pins the join itself: goleak's
-// VerifyNone retries, so it would also pass a reader that exits shortly after
-// the return instead of being joined.
 func TestAutonomousReturnReleasesItsInputReader(t *testing.T) {
 	verifyNoLeakedGoroutines(t)
-	// The run writes progress.md and result.json into the working directory.
+	// The run writes progress.md and result.json into the working directory, so
+	// the test must chdir to a temp dir.
 	t.Chdir(t.TempDir())
 
 	input, writer := io.Pipe()
-	// The write end is deliberately left open: only the run may release its
-	// reader goroutine, so a run that leaves it parked is still visible to the
-	// leak check at the end of this test instead of being unblocked here.
+	// The write end is deliberately left open: only the run may release its reader
+	// goroutine, so one that leaves it parked is still visible to the leak check.
 	var output bytes.Buffer
 	decision := `{"type":"provide_input","goal":"goal","input":{"option_id":"staged"}}` + "\n"
 	writerHook := autonomousOutputFunc(func(data []byte) (int, error) {
@@ -329,10 +301,7 @@ func TestAutonomousReturnReleasesItsInputReader(t *testing.T) {
 	case <-time.After(testHangGuard):
 		t.Fatal("runAutonomous did not return after the decision was answered")
 	}
-	// At this instant the join is the only thing that can have made the reader
-	// goroutine exit, so its absence shows up here. goleak alone does not pin
-	// this: VerifyNone retries, and the io.ErrClosedPipe assertion below pins
-	// only the Close.
+
 	stacks := make([]byte, 1<<20)
 	stacks = stacks[:runtime.Stack(stacks, true)]
 	if bytes.Contains(stacks, []byte("runAutonomous.func1")) {
@@ -346,17 +315,12 @@ func TestAutonomousReturnReleasesItsInputReader(t *testing.T) {
 	}
 }
 
-// TestAutonomousReturnBoundsTheJoinOnAnUnblockableCarrier pins the timeout arm
-// of the exit join: on a carrier whose Close cannot unblock a parked read (the
-// Linux inherited stdio pipe measured in the plan), the run must still return,
-// because nothing else can release the reader goroutine before the run ends.
-// Deleting the readerJoinTimeout arm parks this test's run in the join.
 func TestAutonomousReturnBoundsTheJoinOnAnUnblockableCarrier(t *testing.T) {
-	// The run writes progress.md and result.json into the working directory.
+
 	t.Chdir(t.TempDir())
 
-	// release is closed only after the run has returned, so the parked reader
-	// goroutine exits with this test and cannot unblock the join before it.
+	// release is closed only after the run returns, so the parked reader goroutine
+	// exits with this test and cannot unblock the join before that.
 	release := make(chan struct{})
 	defer close(release)
 	input := unblockableReader{release: release}
@@ -379,8 +343,8 @@ func TestAutonomousReturnBoundsTheJoinOnAnUnblockableCarrier(t *testing.T) {
 	}
 }
 
-// unblockableReader models the Linux inherited stdio carrier measured in the
-// plan: Read parks until release is closed, and Close does not unblock it.
+// Models the Linux inherited stdio carrier: Read parks until release is
+// closed, and Close does not unblock it.
 type unblockableReader struct{ release <-chan struct{} }
 
 func (reader unblockableReader) Read([]byte) (int, error) {

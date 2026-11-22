@@ -31,12 +31,6 @@ if (process.env.SYMMETRY_RENDER_GATE_REQUIRED === "1" && !goalsOffUrl) {
   );
 }
 
-// This suite's fixture identity over the shared payload builders: the frozen
-// acceptance description, and a project preset that mints the `H`-prefixed key
-// and names the codex/primary bindings the Goal cases run against. Every
-// mechanic — the project POST and its 201 assertion, the optional blocked work
-// item — lives in the shared `createProject`; this preserves only the identity
-// the suite's own assertions render (`Goal workspace <key>`, `Blocked work <key>`).
 const acceptanceDescription = "Operator verifies the goal workspace boundary.";
 const goalProject = (page, suffix, { blocked = false } = {}) => {
   const key = `H${Date.now().toString(36).slice(-5)}${suffix}`.toUpperCase().slice(0, 8);

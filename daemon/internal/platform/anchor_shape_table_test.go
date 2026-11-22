@@ -2,17 +2,8 @@
 
 package platform
 
-// Per-operation request-shape oracle for the anchor control socket (rf-w3-02,
-// DP S-4).
-//
-// Every expectation in this file is hard-coded: the shape-clean requests come
-// from the wire harness's builders and the per-operation columns below repeat
-// the pre-refactor values, so mutating one production row or one baseResponse
-// field fails here instead of moving the expectation with it. The writer cases
-// re-pin the byte strings captured from the eight former `writeResponse*`
-// variants (the golden literals live in anchor_wire_shape_test.go, which also
-// compiles against the pre-slice base tree), including the clone-cleanup key
-// override and the zero-valued identity response.
+// Per-operation request-shape oracle for the anchor control socket: every expectation in this file
+// is hard-coded, so mutating one production row or baseResponse field fails here instead of moving it.
 
 import (
 	"encoding/json"
@@ -26,13 +17,10 @@ import (
 	daemonprotocol "github.com/wxxb789/symmetry/daemon/internal/protocol"
 )
 
-// linuxOwnerAnchorShapeFence returns a non-zero fence for the shape cases.
 func linuxOwnerAnchorShapeFence() daemonprotocol.Fence {
 	return daemonprotocol.Fence{RuntimeID: "shape-runtime", RuntimeEpoch: 1, Generation: 1, ClaimID: "shape-claim", LeaseToken: "shape-lease"}
 }
 
-// linuxOwnerAnchorShapeExpectation is the hard-coded pre-refactor content of one
-// shape row.
 type linuxOwnerAnchorShapeExpectation struct {
 	timeoutClass        linuxOwnerAnchorTimeoutClass
 	serverRequiredFDs   int
@@ -45,10 +33,6 @@ type linuxOwnerAnchorShapeExpectation struct {
 	runHelperPeer       bool
 }
 
-// linuxOwnerAnchorShapeExpectations repeats the columns of the 16 shape rows as
-// measured before the refactor: the per-operation descriptor counts, timeout
-// classes, the three client-checked operations, the stopping answers and the
-// five run-helper-peer operations.
 var linuxOwnerAnchorShapeExpectations = map[string]linuxOwnerAnchorShapeExpectation{
 	linuxOwnerAnchorOperationIdentity: {
 		timeoutClass: linuxOwnerAnchorTimeoutClassRequest, serverRequiredFDs: 0, responseFDs: 0, stoppingAnswer: true,
@@ -103,12 +87,8 @@ var linuxOwnerAnchorShapeExpectations = map[string]linuxOwnerAnchorShapeExpectat
 	},
 }
 
-// linuxOwnerAnchorShapeFieldExpectations pins the declared required|forbidden
-// field names of every row, in declaration order. The generated rejection cases
-// below can only test the fields a row declares, so this map is what makes a
-// *loosened* row (a forbidden field silently dropped) fail instead of quietly
-// widening the accept set. The expected strings were derived clause by clause
-// from the pre-refactor conditions recorded in the control-flow audit.
+// linuxOwnerAnchorShapeFieldExpectations pins each row's declared required|forbidden field names; a
+// loosened row (a forbidden field silently dropped) fails here instead of widening the accept set.
 var linuxOwnerAnchorShapeFieldExpectations = map[string]string{
 	linuxOwnerAnchorOperationIdentity:        "|grant,helper,creator,process,role,release_proof,pre_gate_release_proof,abort_proof,run_key,fence,gate,user_namespace,stop_fence,clone_grant,cleanup,target_fd_present",
 	linuxOwnerAnchorOperationStart:           "grant|helper,creator,process,role,gate,user_namespace,stop_fence,clone_grant,cleanup,target_fd_present",
@@ -128,10 +108,8 @@ var linuxOwnerAnchorShapeFieldExpectations = map[string]string{
 	linuxOwnerAnchorOperationCloneCleanup:    "clone_grant,cleanup|grant,helper,creator,process,role,release_proof,pre_gate_release_proof,abort_proof,fence,after_pid,gate,user_namespace,stop_fence",
 }
 
-// TestLinuxOwnerAnchorShapeTableFieldSets pins every row's required and
-// forbidden field names; a row that drops, adds or renames a field fails here.
-// The presence check is order-independent, so both sides are compared as sorted
-// sets: the declaration order is not part of the contract.
+// TestLinuxOwnerAnchorShapeTableFieldSets pins every row's required and forbidden field names
+// order-independently: the declaration order is not part of the contract.
 func TestLinuxOwnerAnchorShapeTableFieldSets(t *testing.T) {
 	if len(linuxOwnerAnchorShapeFieldExpectations) != len(linuxOwnerAnchorOperationShapes) {
 		t.Fatalf("field expectations cover %d operations, table has %d",
@@ -167,12 +145,8 @@ func TestLinuxOwnerAnchorShapeTableFieldSets(t *testing.T) {
 	}
 }
 
-// TestLinuxOwnerAnchorShapeTableOperationLiterals pins the wire strings of the
-// three operations that were bare literals before this slice. The pinned
-// stopping goldens cover the `identity` and `register-process` frames, but no
-// golden frame carries `wait-reap`, so its wire string has this independent pin
-// (a renamed constant fails here even though the table keys both sides by the
-// same constant).
+// TestLinuxOwnerAnchorShapeTableOperationLiterals pins the three operation wire strings; no golden
+// frame carries `wait-reap`, so it needs this independent pin against a renamed constant.
 func TestLinuxOwnerAnchorShapeTableOperationLiterals(t *testing.T) {
 	for _, item := range []struct {
 		operation string
@@ -189,10 +163,8 @@ func TestLinuxOwnerAnchorShapeTableOperationLiterals(t *testing.T) {
 	}
 }
 
-// linuxOwnerAnchorShapeExpectedFDs mirrors the row's TargetFDPresent-dependent
-// descriptor expectation, so a rejection assertion that goes through
-// row.refuses (the composition the server runs) still isolates the rule under
-// test instead of failing for a descriptor-count reason.
+// linuxOwnerAnchorShapeExpectedFDs mirrors the row's TargetFDPresent-dependent descriptor count so a
+// row.refuses assertion isolates the rule under test instead of failing on descriptors.
 func linuxOwnerAnchorShapeExpectedFDs(request linuxOwnerAnchorRequest, expected linuxOwnerAnchorShapeExpectation) int {
 	if request.TargetFDPresent {
 		return expected.serverFDsWithTarget
@@ -258,11 +230,6 @@ func TestLinuxOwnerAnchorShapeTableCoverage(t *testing.T) {
 	}
 }
 
-// TestLinuxOwnerAnchorShapeTableTimeoutDeadlines pins the class-to-deadline
-// relation the consumers read through linuxOwnerAnchorTimeoutFor: the client
-// exchange and serveCloneCleanup (the one server call site that takes its
-// deadline from a row) must resolve every operation to its class's production
-// constant.
 func TestLinuxOwnerAnchorShapeTableTimeoutDeadlines(t *testing.T) {
 	deadlines := map[linuxOwnerAnchorTimeoutClass]time.Duration{
 		linuxOwnerAnchorTimeoutClassRequest: linuxOwnerAnchorRequestTimeout,
@@ -402,9 +369,8 @@ func TestLinuxOwnerAnchorShapeTableRejectsForbiddenFields(t *testing.T) {
 			if !row.presenceRejected(request) {
 				t.Fatalf("operation %q accepted forbidden field %q", operation, field)
 			}
-			// The server refuses through row.refuses, which composes the
-			// presence, descriptor and relational terms; asserting the
-			// composition keeps a dropped term red.
+			// The server refuses through row.refuses, which composes presence, descriptor and
+			// relational terms; asserting the composition keeps a dropped term red.
 			if !row.refuses(request, linuxOwnerAnchorShapeExpectedFDs(request, expected)) {
 				t.Fatalf("operation %q does not refuse forbidden field %q in row.refuses", operation, field)
 			}
@@ -581,9 +547,7 @@ func TestLinuxOwnerAnchorShapeTableRejectsRelationalViolations(t *testing.T) {
 
 func TestLinuxOwnerAnchorShapeTableAcceptsLocallyToleratedFields(t *testing.T) {
 	fixture := newLinuxOwnerAnchorWireFixture(t, false)
-	// The pre-refactor server never inspected these fields on these operations;
-	// clause 3 forbids changing any per-operation accept/reject set, so the rows
-	// must keep tolerating them.
+
 	tolerated := []struct {
 		operation string
 		tolerate  func(*linuxOwnerAnchorRequest)
@@ -623,8 +587,6 @@ func TestLinuxOwnerAnchorShapeTableAcceptsLocallyToleratedFields(t *testing.T) {
 	}
 }
 
-// linuxOwnerAnchorShapeWriteFrame runs one writer call against a fresh
-// unixpacket pair and returns the frame and transferred descriptor count.
 func linuxOwnerAnchorShapeWriteFrame(t *testing.T, write func(*net.UnixConn)) ([]byte, []int) {
 	t.Helper()
 	client, server := linuxOwnerAnchorWirePair(t)
@@ -632,8 +594,6 @@ func linuxOwnerAnchorShapeWriteFrame(t *testing.T, write func(*net.UnixConn)) ([
 	return linuxOwnerAnchorWireReadFrame(t, client)
 }
 
-// linuxOwnerAnchorShapeWriterPayload reproduces the capture harness payloads so
-// the pinned goldens stay verbatim.
 func linuxOwnerAnchorShapeWriterPayload(t *testing.T, grant LinuxOwnerAnchorGrant) (
 	helper, process authority.LinuxCgroupProcessIdentity,
 	exitProof authority.LinuxCgroupExitProof,
@@ -791,15 +751,14 @@ func TestLinuxOwnerAnchorShapeWriterGoldens(t *testing.T) {
 			t.Fatalf("writer case %q carried %d descriptors, want %d", item.name, len(fds), linuxOwnerAnchorShapeWriterGoldenFDs[item.name])
 		}
 	}
-	// The override case pins the clone-cleanup key substitution explicitly.
+
 	override := linuxOwnerAnchorShapeWriterGoldens["clone-override"]
 	if !strings.Contains(override, `"fence_digest":"`+cloneRemoval.Intent.FenceDigest+`"`) ||
 		!strings.Contains(override, `"launch_token":"`+grant.LaunchToken+`"`) ||
 		!strings.Contains(override, `"run_key":{"run_id":"`+grant.RunKey.RunID+`"`) {
 		t.Fatal("the pinned clone-cleanup frame does not carry the cleanup intent's run key, fence digest and launch token")
 	}
-	// The zero-valued case pins that the identity response still carries the
-	// zero run key, fence and launch token instead of omitting them.
+	// The zero-valued case pins that the identity response still carries the zero run key, fence and launch token.
 	zero := linuxOwnerAnchorShapeWriterGoldens["zero-identity"]
 	for _, fragment := range []string{`"run_key":{"run_id":"","generation":0}`, `"launch_token":""`, `"fence":{`} {
 		if !strings.Contains(zero, fragment) {
@@ -808,9 +767,6 @@ func TestLinuxOwnerAnchorShapeWriterGoldens(t *testing.T) {
 	}
 }
 
-// TestLinuxOwnerAnchorShapeWriterSignatureFrameIsStable pins that passing pin
-// descriptors does not change the frame bytes: the FD-carrying writer must emit
-// exactly the same JSON as the pin-free writer for the same response.
 func TestLinuxOwnerAnchorShapeWriterSignatureFrameIsStable(t *testing.T) {
 	fixture := newLinuxOwnerAnchorWireFixture(t, false)
 	anchor, grant := fixture.anchor, fixture.grant

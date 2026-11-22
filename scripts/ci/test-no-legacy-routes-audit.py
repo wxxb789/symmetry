@@ -18,8 +18,9 @@ import pathlib
 import shutil
 import subprocess
 import sys
-import tempfile
 import unittest
+
+from testsupport.gitfixture import FixtureRepo
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 AUDIT = REPO / "scripts" / "audit-no-legacy-routes.sh"
@@ -58,10 +59,12 @@ def fixture_body(path):
     )
 
 
-class LegacyRouteAuditTest(unittest.TestCase):
+class LegacyRouteAuditTest(FixtureRepo, unittest.TestCase):
+    REPOSITORY_PREFIX = "legacy-route-audit-"
+    REPOSITORY_DIRECTORY = None
+
     def setUp(self):
-        self.directory = tempfile.TemporaryDirectory()
-        self.root = pathlib.Path(self.directory.name)
+        super().setUp()
         (self.root / "scripts").mkdir()
         shutil.copy2(AUDIT, self.root / "scripts" / AUDIT.name)
         # The audit refuses to run when an exclusion no longer matches a literal
@@ -69,24 +72,6 @@ class LegacyRouteAuditTest(unittest.TestCase):
         # controls in place.
         for control in NEGATIVE_CONTROLS:
             self.copy_from_repo(control)
-        self.git("init", "--quiet")
-
-    def tearDown(self):
-        self.directory.cleanup()
-
-    def git(self, *arguments):
-        return subprocess.run(
-            ["git", "-C", str(self.root), *arguments],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-
-    def write(self, relative, text):
-        path = self.root / relative
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text, encoding="utf-8")
-        return path
 
     def plant(self, relative):
         self.write(relative, fixture_body(relative))

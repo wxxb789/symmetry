@@ -1075,8 +1075,7 @@ func TestContainmentSupervisorPipeOpenErrorRedactsPipeName(t *testing.T) {
 }
 
 func containmentEndpointForIdentity(pid int, identity string) (containmentSupervisorEndpoint, error) {
-	// This constructor is retained only for tests and diagnostics. A public
-	// process identity must never be sufficient to recover a supervisor.
+	// A public process identity must never be sufficient to recover a supervisor.
 	identityPID, _, err := parseWindowsProcessIdentity(identity)
 	if err != nil {
 		return containmentSupervisorEndpoint{}, err

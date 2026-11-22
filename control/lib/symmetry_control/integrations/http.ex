@@ -29,9 +29,8 @@ defmodule SymmetryControl.Integrations.HTTP do
     }
   end
 
-  # The socket call and the environment-dependent options (the CA-store load in
-  # particular) are rescued together; the `{:error, reason}` clause above cannot
-  # double-wrap this tagged outcome.
+  # Socket call and environment-dependent options (the CA-store load) are rescued
+  # together; the `{:error, reason}` clause above cannot double-wrap the outcome.
   defp perform(method, request) do
     try do
       options = [

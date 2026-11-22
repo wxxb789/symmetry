@@ -15,10 +15,8 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// InaccessibleUserNamespaceError is returned when the host procfs/ptrace
-// policy prevents A from reading the exact parked gate's user-namespace
-// nsfs identity. Linux v2 must fail closed on this host; it never falls back
-// to PID-only identity or a native RELEASE.
+// The host procfs/ptrace policy blocks A from reading the parked gate's
+// user-namespace nsfs identity: fail closed, never PID-only identity.
 type InaccessibleUserNamespaceError struct {
 	PID   int
 	Cause error
@@ -38,9 +36,8 @@ func (failure *InaccessibleUserNamespaceError) Unwrap() error {
 	return errors.Join(ErrInaccessibleUserNamespace, failure.Cause)
 }
 
-// nativeImageIdentity is captured from an A-opened O_PATH descriptor before
-// RELEASE. The status bytes from B are only a claim; they must match this
-// identity and the same-PID /proc/<pid>/exe readback independently.
+// Captured from an A-opened O_PATH descriptor before RELEASE: B's status bytes
+// are only a claim and must match this identity and the /proc/<pid>/exe readback.
 type nativeImageIdentity struct {
 	Device uint64
 	Inode  uint64
@@ -51,8 +48,7 @@ type nativeImageIdentity struct {
 	Links  uint64
 }
 
-// pinnedNativeImage retains the exact approved inode for the complete
-// RELEASE/readback boundary and remembers the symlink-free path A inspected.
+// The fd stays open for the complete RELEASE/readback boundary, with the symlink-free path A inspected.
 type pinnedNativeImage struct {
 	file     *os.File
 	path     string
@@ -486,9 +482,8 @@ func readBootID() (string, error) {
 	return value, nil
 }
 
-// CaptureLauncherIdentity uses the platform's existing linux:v2 identity
-// spelling (boot ID, PID namespace inode, PID, start tick). A restricted
-// /proc/<pid>/ns/pid symlink is not a namespace identity.
+// Uses the platform's linux:v2 identity spelling (boot ID, PID-namespace inode,
+// PID, start tick); a restricted /proc/<pid>/ns/pid symlink is not an identity.
 func CaptureLauncherIdentity(pid int) (LauncherIdentity, error) {
 	if pid <= 1 {
 		return LauncherIdentity{}, errors.New("launcher identity requires a PID above one")

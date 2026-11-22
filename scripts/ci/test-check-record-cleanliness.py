@@ -11,62 +11,29 @@ stay literal; a real host path is refused).
 import os
 import pathlib
 import subprocess
-import sys
-import tempfile
 import unittest
+
+import citest
+from testsupport.gitfixture import FixtureRepo
 
 SCRIPT = pathlib.Path(__file__).with_name("check-record-cleanliness.py")
 ZERO = "0" * 40
 
 
-class RecordCleanlinessTests(unittest.TestCase):
+class RecordCleanlinessTests(FixtureRepo, unittest.TestCase):
+    REPOSITORY_PREFIX = "record-cleanliness-"
+
     def setUp(self) -> None:
-        self.temporary = tempfile.TemporaryDirectory(prefix="record-cleanliness-")
-        self.addCleanup(self.temporary.cleanup)
-        self.root = pathlib.Path(self.temporary.name)
-        self.repo = self.root / "repository"
-        self.repo.mkdir()
-        self.git("init", "--quiet")
-        self.git("config", "user.name", "Fixture")
-        self.git("config", "user.email", "fixture@example.invalid")
-        self.git("config", "commit.gpgsign", "false")
+        super().setUp()
         self.write("docs/evaluations/model-routing/clean.json", '{"route": "/portal/runtimes"}\n')
         # A pre-existing dirty record is deliberately present in the base: the gate
         # checks what a range changes, never the whole tree.
         self.write("docs/evidence/old-dirty.md", "the operator's temp root was /home/operator/eval\n")
         self.write("daemon/main.go", "package main\n")
-        self.git("add", "-A")
-        self.git("commit", "--quiet", "-m", "fixture base")
-        self.base = self.git_text("rev-parse", "HEAD")
-
-    # -- helpers -------------------------------------------------------------
-
-    def git(self, *arguments: str, input: bytes | None = None) -> bytes:
-        return subprocess.check_output(["git", "-C", str(self.repo), *arguments], input=input, stderr=subprocess.PIPE)
-
-    def git_text(self, *arguments: str) -> str:
-        return self.git(*arguments).decode("ascii").strip()
-
-    def write(self, relative: str, content: str) -> pathlib.Path:
-        path = self.repo / relative
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8")
-        return path
-
-    def commit(self, message: str) -> str:
-        self.git("add", "-A")
-        self.git("commit", "--quiet", "-m", message)
-        return self.git_text("rev-parse", "HEAD")
+        self.base = self.commit("fixture base")
 
     def run_gate(self, *arguments: str) -> subprocess.CompletedProcess:
-        return subprocess.run(
-            [sys.executable, str(SCRIPT), "--repo", str(self.repo), *arguments],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-
-    # -- tests ---------------------------------------------------------------
+        return citest.run_gate(SCRIPT, "--repo", str(self.repo), *arguments)
 
     def test_a_range_that_changes_no_record_reports_nothing_to_check(self) -> None:
         self.write("docs/TODO.md", "notes\n")
@@ -207,19 +174,14 @@ class RecordCleanlinessTests(unittest.TestCase):
         # against: refusing is the only safe outcome.
         orphan = self.root / "orphan-repository"
         orphan.mkdir()
-        subprocess.check_call(["git", "init", "--quiet"], cwd=str(orphan))
-        subprocess.check_call(["git", "config", "user.name", "Fixture"], cwd=str(orphan))
-        subprocess.check_call(["git", "config", "user.email", "fixture@example.invalid"], cwd=str(orphan))
+        citest.git(orphan, "init", "--quiet")
+        citest.git(orphan, "config", "user.name", "Fixture")
+        citest.git(orphan, "config", "user.email", "fixture@example.invalid")
         (orphan / "docs" / "evidence").mkdir(parents=True)
         (orphan / "docs" / "evidence" / "record.md").write_text("clean\n", encoding="utf-8")
-        subprocess.check_call(["git", "add", "-A"], cwd=str(orphan))
-        subprocess.check_call(["git", "commit", "--quiet", "-m", "only commit"], cwd=str(orphan))
-        result = subprocess.run(
-            [sys.executable, str(SCRIPT), "--repo", str(orphan), "--base", ZERO],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        citest.git(orphan, "add", "-A")
+        citest.git(orphan, "commit", "--quiet", "-m", "only commit")
+        result = citest.run_gate(SCRIPT, "--repo", str(orphan), "--base", ZERO)
         self.assertEqual(result.returncode, 2, result.stdout)
         self.assertIn("cannot resolve a comparison base", result.stderr)
 
@@ -317,13 +279,7 @@ class RecordCleanlinessTests(unittest.TestCase):
             GIT_CONFIG_KEY_0="diff.orderFile",
             GIT_CONFIG_VALUE_0=str(self.root / "missing-order-file"),
         )
-        result = subprocess.run(
-            [sys.executable, str(SCRIPT), "--repo", str(self.repo), "--base", self.base, "--head", head],
-            capture_output=True,
-            text=True,
-            check=False,
-            env=environment,
-        )
+        result = citest.run_gate(SCRIPT, "--repo", str(self.repo), "--base", self.base, "--head", head, env=environment)
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("cannot diff", result.stderr)
 

@@ -1057,10 +1057,8 @@ func TestClaudeCandidateCancelledControlContextDoesNotAcknowledgeFailure(t *test
 	if firstControlErr == nil || firstReceipt.Outcome != ControlFailed {
 		t.Fatalf("cancelled control = receipt=%+v error=%v, want failed non-acknowledgement", firstReceipt, firstControlErr)
 	}
-	// The cancelled control still starts the session's single detached cleanup
-	// attempt. Close joins that attempt (or reads its stored outcome) before
-	// the retry, so the retry observes the settled observation instead of
-	// racing the attempt's start.
+	// The cancelled control still starts the session's single detached cleanup attempt;
+	// Close joins it before the retry so the retry sees the settled observation.
 	settleContext, cancelSettle := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancelSettle()
 	if err := session.Close(settleContext); !errors.Is(err, firstErr) {

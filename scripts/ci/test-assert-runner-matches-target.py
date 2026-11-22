@@ -1,18 +1,15 @@
 #!/usr/bin/env python3
 """Unit tests for the pinned-release target/runner guard."""
 
-import importlib.util
 import os
 import pathlib
 import platform
-import subprocess
-import sys
 import unittest
 
+import citest
+
 SCRIPT = pathlib.Path(__file__).with_name("assert-runner-matches-target.py")
-SPEC = importlib.util.spec_from_file_location("assert_runner_matches_target", SCRIPT)
-GUARD = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(GUARD)
+GUARD = citest.load_gate(SCRIPT, "assert_runner_matches_target")
 
 LINUX_TARGET = "x86_64-pc-linux-gnu"
 WINDOWS_TARGET = "x86_64-pc-windows"
@@ -24,13 +21,7 @@ def run_guard(target, *arguments, env=None):
     environment.pop("PI_RUNNER_MACHINE", None)
     if env:
         environment.update(env)
-    return subprocess.run(
-        [sys.executable, str(SCRIPT), "--target", target, *arguments],
-        capture_output=True,
-        text=True,
-        check=False,
-        env=environment,
-    )
+    return citest.run_gate(SCRIPT, "--target", target, *arguments, env=environment)
 
 
 class ParseTests(unittest.TestCase):

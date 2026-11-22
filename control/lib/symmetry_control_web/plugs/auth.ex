@@ -4,9 +4,8 @@ defmodule SymmetryControlWeb.Plugs.CredentialAuth do
 
   alias SymmetryControlWeb.Protocol
 
-  # One credential-classification policy for the three token pipelines. The
-  # pipeline declares the class it accepts; the precedence between classes stays
-  # in `Protocol.credential_class/1` and the refusal stays `Protocol.error/2`.
+  # One credential-classification policy for the token pipelines: the pipeline declares
+  # the class it accepts; precedence stays in `Protocol.credential_class/1`.
   def init(options), do: options
 
   def call(conn, options) do
