@@ -94,17 +94,50 @@ class SourceSubjectTests(FixtureRepo, unittest.TestCase):
     def test_a_listing_that_is_not_a_record_refuses_as_an_invalid_source_object(self) -> None:
         tool = citest.load_gate(SCRIPT, "linux_v2_source_subject")
         real_check_output = subprocess.check_output
+        real_popen = subprocess.Popen
 
         def fake_check_output(argv, **options):
             if "ls-tree" in argv:
                 return b"100644 blob deadbeef"
             return real_check_output(argv, **options)
 
+        def fake_popen(argv, **options):
+            if "cat-file" in argv:
+                raise AssertionError("a malformed tree record must be refused before any blob read")
+            return real_popen(argv, **options)
+
         with (
             mock.patch.object(subprocess, "check_output", side_effect=fake_check_output),
-            self.assertRaisesRegex(SystemExit, "Git returned an invalid source object"),
+            mock.patch.object(subprocess, "Popen", side_effect=fake_popen),
+            self.assertRaisesRegex(SystemExit, "Git returned an invalid source object") as refused,
         ):
             tool.source_subject(str(self.repo), self.commit_sha)
+        self.assertEqual(refused.exception.__cause__.code, "invalid_tree_record")
+
+    def test_a_symlink_record_is_admitted_by_the_any_mode_rule(self) -> None:
+        # With symlinks disabled a regular file carrying the link text is the 120000
+        # entry's clean checkout, so the fixture needs no real symlink.
+        self.git("config", "core.symlinks", "false")
+        target = b"source.txt"
+        blob = self.git("hash-object", "-w", "--stdin", input=target).decode("ascii").strip()
+        self.git("update-index", "--add", "--cacheinfo", f"120000,{blob},link.txt")
+        (self.repo / "link.txt").write_bytes(target)
+        self.git("commit", "--quiet", "-m", "symlink")
+        commit = self.git_text("rev-parse", "HEAD")
+
+        result = self.invoke(commit)
+
+        entries = [
+            b"120000\0blob\0link.txt\0sha256:" + hashlib.sha256(target).hexdigest().encode("ascii") + b"\0",
+            b"100644\0blob\0source.txt\0sha256:"
+            + hashlib.sha256(b"reviewed source\n").hexdigest().encode("ascii")
+            + b"\0",
+        ]
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            json.loads(result.stdout),
+            {"commit": commit, "tree_digest": "sha256:" + hashlib.sha256(b"".join(entries)).hexdigest()},
+        )
 
 
 if __name__ == "__main__":

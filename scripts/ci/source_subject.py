@@ -1,47 +1,6 @@
 #!/usr/bin/env python3
-"""One implementation of every source-subject rule, as five named variants.
-
-A source subject binds evidence to the bytes it was produced from, and the five
-witnesses in this directory bind five different shapes of it. This module owns those
-shapes; each tool keeps its CLI, its refusal text and its receipt plumbing and
-delegates the rule here.
-
-Variant A, ``index_mode_digest(repository, expected_commit)``: the committed tree of an
-exactly expected commit in a clean checkout. ``rev-parse HEAD`` must equal
-``expected_commit`` and ``status --porcelain=v1 --untracked-files=all`` must be empty,
-before and after hashing; the tree comes from ``ls-tree --full-tree -r -z`` and is read
-through one ``cat-file --batch`` process; a non-blob entry is refused, any mode is
-admitted, and the entries are accumulated in path order.
-
-Variant B, ``working_tree_digest(root)``: a working-tree walk over the declared
-exclusions (``WORKING_TREE_EXCLUDED_*``): ``.git`` in either form, everything under
-``docs/``, ``.tmp/``, the build and report output directories (``dist``,
-``playwright-report``, ``test-results``), ``__pycache__`` bytecode caches, the whole
-``node_modules`` tree and the tool caches (``.vite``, ``.vite-temp``, ``.vitest-cache``)
-wherever else they appear. Only a path's parent directories decide exclusion, a symlinked
-file is never an entry, directories are never entries, and the mode is the tree's own
-execute bits (any of owner, group or other sets ``100755``).
-
-Variant C, ``committed_tree_digest(records, read_object, modes=...)``: the committed tree
-of one commit, read one object at a time by the caller's runner, admitting only those
-modes (``FILE_MODES`` for a real source tree). Its revision provenance is
-``head_revision`` (variant E), or ``declared_file_identities`` /
-``verify_declared_file_set`` for a parent-observed attestation.
-
-Variant D, ``head_with_manifest(root, config, git, base_sha=..., scope=...)``: ``rev-parse
-HEAD`` must equal the declared head, the declared base must be the frozen one, every
-manifest entry must name a file inside the root carrying the declared digest, and the
-scoped ``status --porcelain=v1 -z --untracked-files=all`` must stay inside the manifest
-(renames and copies skipped); a dirty path is refused unless the config consents, and the
-manifest digest is the sha256 of the manifest's canonical bytes.
-
-Variant E, ``head_revision(git)``: the bare head revision, as ``git rev-parse HEAD``
-prints it.
-
-Import convention: ``import source_subject`` from a sibling in this directory, resolved
-from the importing script's own directory (``sys.path[0]``), the way ``revision_scope``
-is imported; every repository entry point runs a ``scripts/ci`` file as a script. This
-file is a library - nothing runs at import time.
+"""One implementation of every source-subject rule; the five variants and their
+parameters are documented in docs/plans/2026-11-22-rf-w5-11-source-subject-plan.md.
 """
 
 from __future__ import annotations
@@ -70,13 +29,15 @@ WORKING_TREE_EXCLUDED_DIRECTORIES = {
 WORKING_TREE_EXCLUDED_CACHE_NAMES = {".vite", ".vite-temp", ".vitest-cache"}
 WORKING_TREE_EXCLUDED_ROOTS = {".git", "docs"}
 
-# A record is `mode kind object-id`, a tab, the path: what `ls-tree -z` prints.
-TreeRecord = tuple[bytes, bytes, bytes, bytes]
+
+class TreeRecord(NamedTuple):
+    mode: bytes
+    kind: bytes
+    path: bytes
+    object_id: bytes
 
 
 class Refused(Exception):
-    """A binding rule refused; `code` names the rule and `detail` the offending item."""
-
     def __init__(self, code: str, detail: str | None = None) -> None:
         super().__init__(code if detail is None else f"{code}: {detail}")
         self.code = code
@@ -89,8 +50,6 @@ class SourceSubject(TypedDict):
 
 
 class DirtyScope(NamedTuple):
-    """A declared dirty surface, in the three spellings its query and filter use."""
-
     pathspecs: tuple[str, ...]
     prefixes: tuple[str, ...]
     names: frozenset[str]
@@ -142,7 +101,6 @@ def verify_declared_file_set(
     declared: Mapping[str, Mapping[str, object]],
     observed: Mapping[str, Mapping[str, object]],
 ) -> None:
-    """Refuse a declaration that disagrees with the observed identities."""
     if not isinstance(declared, Mapping) or set(declared) != set(paths):
         raise Refused("declared_path_set_mismatch")
     for name in paths:
@@ -162,7 +120,7 @@ def tree_records(listing: bytes) -> list[TreeRecord]:
         fields = header.split(b" ")
         if not separator or len(fields) != 3:
             raise Refused("invalid_tree_record", record[:200].decode("utf-8", "replace"))
-        records.append((fields[0], fields[1], path, fields[2]))
+        records.append(TreeRecord(fields[0], fields[1], path, fields[2]))
     return records
 
 
@@ -196,6 +154,8 @@ def working_tree_paths(root: pathlib.Path) -> list[str]:
             for part in parts[:-1]
         ):
             continue
+        # pathlib descends a Windows junction (reparse points are not symlinks), so an
+        # in-scope junction binds bytes outside the tree; the delivered tree has none.
         if path.is_file() and not path.is_symlink():
             paths.append(path.relative_to(root).as_posix())
     return sorted(paths, key=lambda value: value.encode("utf-8"))
@@ -221,8 +181,6 @@ def working_tree_executable_paths(root: pathlib.Path) -> list[str]:
 
 
 class _BatchReader:
-    """One `cat-file --batch` process, asked for one object at a time."""
-
     def __init__(self, batch: subprocess.Popen[bytes]) -> None:
         if batch.stdin is None or batch.stdout is None:
             raise Refused("batch_unavailable")

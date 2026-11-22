@@ -25,13 +25,13 @@ Program-plan claims re-derived at this revision (the contract asks for exactly t
 
 | File | State | Content |
 | --- | --- | --- |
-| `scripts/ci/source_subject.py` | new | The single implementation of every source-subject rule: the five named variants (`index_mode_digest`, `working_tree_digest`, `committed_tree_digest`, `head_with_manifest`, `head_revision`), the shared primitives they compose (git argv builders, the two entry grammars, both sort keys, the exclusion sets, the execute-bit rule, the revision and cleanliness checks), and `Refused` with its rule codes. |
+| `scripts/ci/source_subject.py` | new | The single implementation of every source-subject rule: the five named variants (`index_mode_digest`, `working_tree_digest`, `committed_tree_digest`, `head_with_manifest`, `head_revision`), the shared primitives they compose (the two entry grammars, both sort keys, the exclusion sets, the execute-bit rule, the revision and cleanliness checks), and `Refused` with its rule codes; the variant table and the rule notes are this plan's. |
 | `scripts/ci/linux-v2-source-subject.py` | thin CLI | keeps `main()` byte-identical and a module-level `source_subject(repository, expected_commit) -> SourceSubject` that delegates to `index_mode_digest` and maps the rule codes to its frozen messages. 83 -> 46 lines. |
-| `scripts/ci/model-routing-source-subject.py` | thin CLI | keeps `main()` byte-identical; `source_paths`, `entry_bytes`, `source_subject`, `executable_paths` become module aliases (same names, same signatures, same semantics); the rule prose moves to the module. 138 -> 71 lines. |
+| `scripts/ci/model-routing-source-subject.py` | thin CLI | keeps `main()` byte-identical; `source_paths`, `entry_bytes`, `source_subject`, `executable_paths` become module aliases (same names, same signatures, same semantics); the rule prose moves to this plan (the Windows junction quirk stays as a why-comment at the walk). 138 -> 71 lines. |
 | `scripts/ci/omo-control-native-evidence.py` | thin tool | `SOURCE_PATHS` gains the module; `source_revision`/`tree_digest` delegate to `committed_tree_digest`/`head_revision`/the declared-file-set verification and pass their receipt-observing git runner in; `file_identity`/`sha` become module aliases. 1815 -> 1813 lines. |
 | `scripts/ci/credentialed-provider-witness.py` | thin tool | `source()` delegates to `head_with_manifest` and maps the rule codes to its frozen reason strings; the declared dirty scope becomes one `DirtyScope` constant that gains the module in all three spellings. 338 -> 319 lines. |
 | `scripts/ci/opencode-v2-support-witness.py` | thin tool | `source_head` reads through `head_revision`; the single-file `witness_sha256` becomes `binding_sha256`, the map of the tool and the module. 523 -> 534 lines. |
-| the five suites | modified | each tool's new binding test (decision E) plus the shared-rule pins the delegation needs (omo's two new refusal mappings, the non-mapping file-set refusal cases and the cross-variant digest agreement, credentialed's head/base rule, opencode's head rule); the fix pass adds the two approved-delta pins (linux's mocked malformed listing, credentialed's `--help` line); every existing assertion, message and fixture byte stays - the diffs are insertions only. |
+| the five suites | modified | each tool's new binding test (decision E) plus the shared-rule pins the delegation needs (omo's two new refusal mappings, the non-mapping file-set refusal cases and the cross-variant digest agreement, credentialed's head/base rule, opencode's head rule); the fix pass adds the two approved-delta pins (linux's mocked malformed listing, credentialed's `--help` line); fix round 1 strengthens the linux malformed-listing pin (no object may be read) and adds the linux symlink `modes=None` pin; every existing assertion, message and fixture byte stays. |
 | `docs/plans/2026-11-22-rf-w5-11-source-subject-plan.md` | new | this plan. |
 
 `pyproject.toml`, `.github/workflows/**`, `scripts/ci/model-routing-evaluation.py` (+ its test),
@@ -47,7 +47,7 @@ parameters that reproduce the measured differences.
 | Tool | Base rule set (measured at `4031421`) | Module variant + parameters |
 | --- | --- | --- |
 | `linux-v2-source-subject.py` | `:24-30` `rev-parse HEAD == expected`, clean `status --porcelain=v1 -uall`, `ls-tree --full-tree -r -z`, `cat-file --batch` streaming, reject non-blob, entry `mode\0kind\0path\0sha256:<hex>\0`, sorted by path, re-check `rev-parse`+clean before returning, `:62-65` | `index_mode_digest(repository, expected_commit)`: git source = committed objects read through one `cat-file --batch` process; exclusion sets = none; mode rule = `modes=None` (the kind decides); entry grammar = `tree_entry`; sort key = the committed-tree key; clean checks = exact head + clean before and after |
-| `model-routing-source-subject.py` | `:54-64` declared exclusions (`EXCLUDED_DIRECTORIES`/`EXCLUDED_CACHE_NAMES`/`EXCLUDED_ROOTS`), `:78-86` working-tree walk skipping symlinked files, `:92` execute-bit rule (`0o111` -> `100755`), entry `mode\0sha256:<hex>\0<path-utf8>\0`, sorted by the UTF-8 bytes of the path | `working_tree_digest(root)` (+ `working_tree_paths`, `working_tree_entry`, `working_tree_executable_paths`): git source = the working tree; exclusion sets = the module's declared triples; mode rule = the execute bits; entry grammar = `working_entry`; sort key = UTF-8 path bytes; clean checks = none |
+| `model-routing-source-subject.py` | `:54-64` declared exclusions (`EXCLUDED_DIRECTORIES`/`EXCLUDED_CACHE_NAMES`/`EXCLUDED_ROOTS`), `:78-86` working-tree walk skipping symlinked files, `:92` execute-bit rule (`0o111` -> `100755`), entry `mode\0sha256:<hex>\0<path-utf8>\0`, sorted by the UTF-8 bytes of the path | `working_tree_digest(root)` (+ `working_tree_paths`, `working_tree_entry`, `working_tree_executable_paths`): git source = the working tree; exclusion sets = the module's declared triples; mode rule = the execute bits; entry grammar = `working_tree_entry`; sort key = UTF-8 path bytes; clean checks = none |
 | `omo-control-native-evidence.py` | `:666-698` `source_revision` (local `rev-parse HEAD` through `command_bytes`, or a parent attestation verified per file by bytes/sha256 over `SOURCE_PATHS`), `:709-728` `tree_digest` (`ls-tree -r -z --full-tree` + one `cat-file blob` per entry, mode/kind admission, entry `mode\0kind\0path\0sha256:<hex>\0`, sorted by `(path, record)`) | `committed_tree_digest(records, read_object, modes=FILE_MODES)` + `head_revision(runner)` + `declared_file_identities`/`verify_declared_file_set`: git source = committed objects read one at a time by the caller's runner; mode rule = `100644`/`100755` only; entry grammar and sort key shared with the index variant; clean checks = none (its self-check at `:1142` keeps comparing the module's answer with the approved Subject) |
 | `credentialed-provider-witness.py` | `:90-135` `source()`: `rev-parse HEAD == code_head_sha`, `code_base_sha == BASE`, per-entry sha256 over `changed_source_manifest`, scoped `status --porcelain=v1 -z -uall` with the rename skip, `relevant <= manifest paths`, `allow_manifest_bound_dirty` consent, canonical `manifest_sha256` | `head_with_manifest(root, config, git, base_sha=BASE, scope=SOURCE_SCOPE)`: git source = head + declared manifest; exclusion sets = the declared scope (pathspecs, prefixes, names); mode rule = n/a; entry grammar = the canonical-JSON manifest digest; clean checks = the scoped dirty check with its subset and consent rules |
 | `opencode-v2-support-witness.py` | `:234` `source_head` = bare `git rev-parse HEAD`; `:235` `witness_sha256` = sha256 of the tool's own file | `head_revision(runner)`; `binding_sha256` = the module's file digests for the tool and the shared module: git source = bare head; the declared self-binding set |
@@ -59,7 +59,7 @@ Recorded variant names for the three shapes the plan did not name:
 
 ## Public shape
 
-`scripts/ci/source_subject.py` is a library, imported as `import source_subject` from the importing
+`scripts/ci/source_subject.py` is an internal sibling library, imported as `import source_subject` from the importing
 script's own directory (the convention `revision_scope.py` already sets): every repository entry point
 runs a `scripts/ci` file as a script, so `sys.path[0]` is that directory - including
 `model-routing-evaluation.py`'s by-path load of `linux-v2-source-subject.py`
@@ -160,9 +160,9 @@ alone.
 | entry `mode\0kind\0path\0sha256:<hex>\0`, wrapped in a `sha256:` digest (`linux :59-60`, `:66`) | `tree_entry` + `committed_tree_digest` | yes |
 | sort by path before streaming (`linux :41`) | `committed_tree_digest`'s `(path, entry)` sort; the read order stays the base's | yes (one entry per path makes the keys equivalent; recorded) |
 | declared exclusions by parent directory (`model-routing :74-88`) | `working_tree_paths` (`parts[:-1]` test, root/`.git` skip, `is_file() and not is_symlink()`) | yes |
-| execute-bit rule (`model-routing :92`) | `working_entry` (`stat().st_mode & 0o111`) | yes |
+| execute-bit rule (`model-routing :92`) | `working_tree_entry` (`stat().st_mode & 0o111`) | yes |
 | UTF-8 path sort (`model-routing :88`) | `working_tree_paths`'s `encode("utf-8")` key | yes |
-| `mode\0sha256:<hex>\0<path-utf8>\0` (`model-routing :91-93`) | `working_entry` | yes |
+| `mode\0sha256:<hex>\0<path-utf8>\0` (`model-routing :91-93`) | `working_tree_entry` | yes |
 | `ls-tree -r -z --full-tree` parse and mode/kind admission (`omo :714-722`) | `tree_records` + `committed_tree_digest(modes=FILE_MODES)` | yes |
 | per-object `cat-file blob` through the receipt-observing runner (`omo :723-726`) | `read_object` callback (the tool's runner, unchanged argv and event) | yes |
 | `(path, record)` sort and `sha256:<hex>` digest (`omo :728`) | `committed_tree_digest` | yes |
@@ -187,8 +187,9 @@ raised `IndexError` for a tab-less record (it escaped `main`) and `ValueError` f
 `main`'s handler as `failures[].type = "ValueError"`, `classification: witness_failed`, exit 1. HEAD
 refuses both as `invalid_tree_record`: linux -> `SystemExit("Git returned an invalid source
 object")`, omo -> `failures[].detail = "fixture tree listing is unreadable"` (its one new message,
-test-pinned; the linux mapping is unpinned). Measured in the apply pass, recorded in decisions
-below, not hidden.
+test-pinned; the linux pin is discriminating since fix round 1 - the mocked `cat-file` must not run
+and the refusal's cause code is asserted, mutant (h) red below). Measured in the apply pass,
+recorded in decisions below, not hidden.
 
 ## Binding audit (decision E) and its mutation record
 
@@ -230,7 +231,7 @@ Children are not patched: the recorded invocations are the ones a plain run make
 
 | Suite | Windows host (this workstation) | WSL Ubuntu-24.04 (same mount) |
 | --- | --- | --- |
-| `test-linux-v2-source-subject.py` | exit 0, `Ran 6 tests`, `OK` | exit 0, `Ran 6 tests`, `OK` |
+| `test-linux-v2-source-subject.py` | exit 0, `Ran 7 tests`, `OK` | exit 0, `Ran 7 tests`, `OK` |
 | `test-model-routing-source-subject.py` | exit 0, `Ran 7 tests`, `OK (skipped=1)` (no POSIX execute bit) | exit 0, `Ran 7 tests`, `OK` |
 | `test-omo-control-native-evidence.py` | exit 0, `Ran 15 tests`, `OK` | exit 0, `Ran 15 tests`, `OK` |
 | `test-opencode-v2-support-witness.py` | exit 0, `Ran 18 tests`, `OK` | exit 0, `Ran 18 tests`, `OK` |
@@ -276,10 +277,13 @@ version was installed for the gate run: `python3 -m pip install ruff==0.17.5`, w
 7. **`DELIVERED_TOOL_PATHS` is untouched** (contract clause 4): the 0008 records bind the two
    evaluation files, and extending that set is W5-12's after its split. The module is inside the
    working-tree scope regardless, so the subject digest covers it today.
-8. **Comment policy.** The module's docstring documents the five variants, their rules and the
-   import convention (policy class 3: a published contract); the tools keep only their usage/output
-   contract plus the variant they use. No excuse comments, no banners; the base's rule prose moves
-   rather than being copied.
+8. **Comment policy.** The module is an internal sibling library (five in-repo importers), not a
+   published contract, so its header is two lines and points here: the variant table, the
+   parameters and the rule notes are this plan's. The base's rule prose was replaced by this plan
+   rather than copied into the module, except the one live platform quirk kept at the rule - a
+   2-line why-comment beside `working_tree_paths`: `pathlib` descends a Windows junction (reparse
+   points are not symlinks), so an in-scope junction would bind bytes outside the tree. The tools
+   keep only their usage/output contract plus the variant they use. No excuse comments, no banners.
 
 ## Rule greps after the change (contract clause 1's "definition grep per rule")
 
@@ -343,6 +347,29 @@ the manifest revision, (d) drop the module from a tool's binding, (e) mutate the
 | `python3 scripts/ci/check-lockfile-registry.py` | 0 | `verified every recorded tarball URL ... 303 entries checked` |
 | `git diff --check` | 0 | no output |
 
+### Fix round 1 gate runs (PR review 238, 2026-11-22)
+
+P2-1 ("the linux pin does not discriminate"), P2-2 (header/docstrings against the comment policy),
+P3-1 (dropped junction note), P3-2 (unpinned `modes=None`) and P3-3 (plan names) are fixed; the
+mutants the review named are rows (h)/(i) above. Re-run on this revision
+(`PYTHONDONTWRITEBYTECODE=1`, foreground, Windows host unless noted):
+
+| Gate | Exit | Measured output |
+| --- | --- | --- |
+| `python3 scripts/ci/test-linux-v2-source-subject.py` | 0 | `Ran 7 tests in 43.296s`, `OK` |
+| `python3 scripts/ci/test-model-routing-source-subject.py` | 0 | `Ran 7 tests in 0.430s`, `OK (skipped=1)` |
+| `python3 scripts/ci/test-omo-control-native-evidence.py` | 0 | `Ran 15 tests in 107.683s`, `OK` |
+| `python3 scripts/ci/test-opencode-v2-support-witness.py` | 0 | `Ran 18 tests in 3.974s`, `OK` |
+| `MIX_ENV=test python3 scripts/ci/test-credentialed-provider-witness.py` | 1 | `Ran 8 tests in 81.417s`, `FAILED (errors=2)`: the same two pre-existing `mix`-shim errors (`test_actual_elixir_http_policy_and_pending_intent_negative_controls`, `test_launcher_force_compiles_stale_beam_before_first_phase`) |
+| the linux suite in WSL Ubuntu-24.04 (same mount) | 0 | `Ran 7 tests in 10.311s`, `OK` |
+| `python3 scripts/ci/test-model-routing-evaluation.py EvaluationTests.test_prepare_environment_json_records_the_measured_surface` | 0 | `Ran 1 test in 35.270s`, `OK` - the by-path consumer still loads the tool through the module |
+| `mise x ruff@0.17.5 -- ruff check --no-cache <the four touched Python files>` | 0 | `All checks passed!` |
+| `mise x ruff@0.17.5 -- ruff format --check --no-cache <the four touched Python files>` | 0 | `4 files already formatted` |
+| `git diff --check` | 0 | no output |
+
+The record-cleanliness gate over the pushed range and the DLP scans are recorded in the PR's
+`238-fix-r1.md` findings file.
+
 ### The tool-output byte-diff (D1)
 
 The driver (`.tmp/w5-11/diff_tools.py`, scratch, outside the commit) records 49 Windows and 51 WSL
@@ -394,12 +421,14 @@ module return `sha256:1831626e62b934f63cf3abd59d3e5ed73e5a21d898eccd6e7d349ae116
 | (e) mutate the shared module's bytes | one `# mutated` comment line appended to `scripts/ci/source_subject.py` | exactly three recorded observations moved (re-measured on `342d1226`): the model-routing delivered-tree subject (`source_paths` stays 1297, digest `sha256:f22c5d19… -> sha256:ec024844…`), the opencode binding module entry (`d16097a8… -> 429fb684…`) in `binding-keys` and `binding-matches-expression`; and the D-1/D-2 rows above are the omo/credentialed refusals a mutated module triggers where base accepted it. After reverting (the file's sha256 restored to `d16097a8…`) the binding value returned to `d16097a8…` |
 | (f) return a bare-hex `file_identity` digest (S5's converted oracle) | `file_identity` drops `DIGEST_PREFIX` | omo `test_the_declared_file_set_covers_the_shared_module` `ERROR`: `Rejected: parent source attestation differs from actual source blob: scripts/ci/omo-control-native-evidence.py`; suite exit 1 - the independent declaration no longer moves with the function under test |
 | (g) drop the declared-file-set mapping check (D1) | `verify_declared_file_set` loses `isinstance(declared, Mapping)` | omo `test_an_attestation_whose_file_set_is_not_a_mapping_is_refused` `ERROR`: `TypeError: list indices must be integers or slices, not str`; suite exit 1 |
+| (h) drop the tab-separator check (review 238 P2-1) | `tree_records`: `if not separator or len(fields) != 3:` loses `not separator` | linux `test_a_listing_that_is_not_a_record_refuses_as_an_invalid_source_object` `FAILED (failures=1)`, exit 1: `AssertionError: a malformed tree record must be refused before any blob read` - the mocked `cat-file` was started, so the strengthened pin discriminates (before it, this mutant survived) |
+| (i) admit only `FILE_MODES` in the index variant (review 238 P3-2) | `index_mode_digest` calls `committed_tree_digest(..., modes=FILE_MODES)` | linux `test_a_symlink_record_is_admitted_by_the_any_mode_rule` `FAILED (failures=1)`, exit 1: `1 != 0 : source tree contains a non-blob entry` (the committed `120000` record is refused); before the pin the mutant survived linux and omo |
 
-`git diff --numstat` over the five suites is `33/0`, `38/0`, `10/0`, `91/0`, `26/0`
+| `git diff --numstat` over the five suites is `33/0`, `71/0`, `10/0`, `89/0`, `24/0`
 (insertions/deletions, alphabetical by path: credentialed-provider-witness, linux-v2-source-subject,
-model-routing-source-subject, omo-control-native-evidence, opencode-v2-support-witness): every
-removed line was added by this slice itself, so no assertion is deleted or re-pinned, and the apply
-pass's two converted oracles carry the (f)/(g) mutation checks.
+model-routing-source-subject, omo-control-native-evidence, opencode-v2-support-witness): every hunk
+is an insertion, so no assertion is deleted or re-pinned, and the apply pass's two converted oracles
+carry the (f)/(g) mutation checks.
 
 ### Rule greps after the change (the definition grep per rule)
 
@@ -423,14 +452,14 @@ pass's two converted oracles carry the (f)/(g) mutation checks.
 | Measure | Base `4031421` | HEAD | Delta |
 | --- | --- | --- | --- |
 | the five tools | 2897 (83 + 138 + 1815 + 338 + 523) | 2783 (46 + 71 + 1813 + 319 + 534) | **-114** |
-| `scripts/ci/source_subject.py` | absent | 327 (44 docstring + 283 code) | **+327** |
-| owned set, net | 2897 | 3110 | **+213** |
-| the five suites | 1050 | 1248 | +198 (new tests only) |
+| `scripts/ci/source_subject.py` | absent | 285 (3 header lines + 282 code) | **+285** |
+| owned set, net | 2897 | 3068 | **+171** |
+| the five suites | 1050 | 1277 | +227 (new tests plus fix round 1) |
 | `docs/plans/2026-11-22-rf-w5-11-source-subject-plan.md` | absent | this file | new |
 
 The plan's `-200..-300` figure came from F9's combined estimate, which counted the 4k-line
 `model-routing-evaluation.py` split that the conductor decoupled into W5-12; this slice deletes the
-four divergent copies (-114 lines in the tools) and pays for one implementation (+327). The
+four divergent copies (-114 lines in the tools) and pays for one implementation (+285). The
 divergent-rule count is the change that matters and it is 5 -> 1 with 0 copies left in the tools.
 
 ## Residual risks and known limits
@@ -443,7 +472,9 @@ divergent-rule count is the change that matters and it is 5 -> 1 with 0 copies l
    approved delta (the conductor's 2026-11-22 amendment): base's tab-less record raised `IndexError`
    (escaping `main`) and its short header reached `ValueError` -> "could not read the exact source
    checkout" (exit 1), while HEAD raises `SystemExit("Git returned an invalid source object")`
-   (exit 1).
+   (exit 1). The linux test is discriminating since fix round 1: it patches `subprocess.Popen` so
+   starting `cat-file` fails the test, and asserts the refusal's cause is `invalid_tree_record`
+   (mutant (h) below).
 3. **The linux variant's header parse is now as strict as the omo one** (three fields): base's
    `split(b" ", 2)` tolerated a fourth field, which git never produces, and the module's shared
    parse refuses it. Recorded in the control-flow audit, unreachable from real git.

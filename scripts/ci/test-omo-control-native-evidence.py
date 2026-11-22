@@ -205,8 +205,6 @@ class GoBuildSettingsTest(unittest.TestCase):
 
 
 class SourceBindingTest(FixtureRepo, unittest.TestCase):
-    """The revision binding covers the shared module, and refuses bytes it does not declare."""
-
     REPOSITORY_PREFIX = "omo-control-binding-"
 
     def test_the_declared_file_set_covers_the_shared_module(self):

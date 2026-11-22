@@ -250,8 +250,6 @@ class PinnedBlobTest(unittest.TestCase):
 
 
 class BindingTest(FixtureRepo, unittest.TestCase):
-    """The receipt binds both files whose rules decide it, and reads the checkout's HEAD."""
-
     REPOSITORY_PREFIX = "opencode-witness-binding-"
     REPOSITORY_DIRECTORY = None
 
