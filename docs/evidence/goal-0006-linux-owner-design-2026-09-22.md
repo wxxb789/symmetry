@@ -1124,3 +1124,9 @@ that it "may remain root-owned". Recorded amendment with measured evidence, not 
 weakening; the implementation plan is
 `docs/plans/2026-11-23-rf-acc-delegated-cgroup-kill-plan.md`.
 
+A second instance of the same retired rule stands in the systemd-nspawn guest subsection further
+above, in the paragraph reporting the post-`a260b9b` start ("the parent `cgroup.kill` remained
+root-owned mode `0200`"): that guest environment was not re-measured for this retarget — only the
+WSL2 distro install was — so the observation stays unmeasured, neither reproduced nor refuted, and
+must not be cited as host behaviour in either direction.
+

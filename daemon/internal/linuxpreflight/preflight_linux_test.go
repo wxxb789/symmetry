@@ -321,6 +321,7 @@ func TestLinuxOwnerKillBoundaryMetadata(t *testing.T) {
 		{name: "root-owned with a foreign group", gid: 1002, mode: unix.S_IFREG | 0o200},
 		{name: "group-writable", mode: unix.S_IFREG | 0o220},
 		{name: "other-writable", mode: unix.S_IFREG | 0o202},
+		{name: "owner-unwritable", mode: unix.S_IFREG | 0o400},
 		{name: "not-a-plain-file", mode: unix.S_IFDIR | 0o700},
 	} {
 		if err := validateLinuxOwnerUnitKillMetadata(test.uid, test.gid, test.mode, a, b); (err == nil) != test.valid {

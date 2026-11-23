@@ -4662,10 +4662,10 @@ unmerged branch `refactor/rf-acc-native-hosted-run`; it is not in `docs/TODO.md`
 (`daemon/internal/linuxpreflight/cgroup_linux.go`) no longer requires the delegated
 `manager/cgroup.kill` to be root-owned and A-unwritable — no stock systemd ≥254 host can satisfy
 that inside the delegated subtree — and enforces the retained boundary one level up instead: the
-owning unit cgroup's own `cgroup.kill` must be root:root, a plain file, not group/other-writable,
-and refused for an A `O_WRONLY` open (ENOENT is a failure). The manager file must still be a plain
-file owned by root or A with a gid matching its owner, owner-writable and with no group/other
-write, so B cannot write it. Local WSL2 systemd 255 measurement (`systemctl --version`
+owning unit cgroup's own `cgroup.kill` must be root:root, a plain owner-writable file with no
+group/other write, and refused for an A `O_WRONLY` open (ENOENT is a failure). The manager file
+must still be a plain file owned by root or A with a gid matching its owner, owner-writable and
+with no group/other write, so B cannot write it. Local WSL2 systemd 255 measurement (`systemctl --version`
 `255.4-1ubuntu8.17`; real v2 owner install; mandated unit) reproduced the hosted ownership at all
 three phases (after start, after `daemon-reload`, after restart): `manager/cgroup.kill`
 `1002:1003 0200` and A-writable, unit `cgroup.kill` `0:0 0200` with `EACCES` for A — which also

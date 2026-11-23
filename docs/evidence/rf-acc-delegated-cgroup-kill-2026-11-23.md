@@ -260,3 +260,102 @@ revision.
 - If `refactor/rf-acc-native-hosted-run` lands after this branch, its `docs/TODO.md` paragraph
   supersedes this branch's retirement sentence textually; the archive closure entry and this record
   carry the resolution.
+
+## 12. Apply-stage amendment (2026-11-23): accepted simplify findings
+
+Applied exactly the accepted findings of the apply-stage brief: simplify findings 1-5, D1 as its
+non-weakening variant, D2. Findings 1-4 are behaviour-preserving edits inside
+`daemon/internal/linuxpreflight/cgroup_linux.go`; finding 5 adds the unit table's
+`owner-unwritable` row; D1 keeps the unit kill's owner-write requirement (the shared mode rule) and
+discloses it here and in the CLOSED-TODO closure - the contract's stated unit-file set is a subset
+of the enforced set, the same relationship §9 records for the manager file; D2 appends the sentence
+naming the systemd-nspawn guest instance of the retired rule in the 0006 record. The plan file is
+unchanged: no accepted finding named it, and its §4 evidence plan points at this record.
+**§1's subject hashes and binary hash, §5's first-red line numbers and §8's numstat bind the
+implement-stage bytes; the apply-stage bytes are bound here.** §6's row list gains the unit
+`owner-unwritable` row. §4's live rows and every acceptance decision stay valid: no gate was
+relaxed, no test row removed, and the loop's refusal semantics are unchanged (any open, stat or
+close error still refuses; only the helper's wording changed).
+
+| Finding | Change |
+| --- | --- |
+| 1 (delete) | `unitKillPath` no longer wraps `linuxOwnerUnitCgroupKillPath` in `filepath.ToSlash`; the helper owns the conversion, which is identity in this linux/amd64 file. |
+| 2 (refactor) | The control loop calls `statLinuxOwnerCgroupControl`; only its owner/mode conditions stay inline, so one open/stat/close path serves the four controls and both kill metadata reads. |
+| 3 (refactor) | The helper's error text drops "delegated" (`open cgroup control %s metadata read-only`), which misnamed the unit cgroup file and the manager controls. |
+| 4 (refactor) | `linuxOwnerKillSubjectsDistinctAndNonRoot` is the one distinct-non-root A/B predicate; the manager keeps its `ownerUID` coupling checks and the unit keeps its root:root check. |
+| 5 (test) | Unit table gains the `owner-unwritable` row (mode `0400`), rejected - parity with the code, and the row `docs/archive/CLOSED-TODO.md` claims for both checks. |
+| D1 | Unit kill keeps the strict mode rule; disclosed here and in the closure text. Contract-literal relaxation not applied: it would remove a validation requirement the contract does not require removing, and no measured host produces `0400` (the unit kill is kernel/systemd-made `0200`). |
+| D2 | 0006 amendment gains the sentence naming the `:710-714` instance and its unmeasured guest environment; the historic text is untouched. |
+
+Subject bytes after apply (sha256):
+
+| File | sha256 |
+| --- | --- |
+| `daemon/internal/linuxpreflight/cgroup_linux.go` | `cb82e1e1d61c63e70542397a28629e3c321bcd841899c6090d8eb20628b90f05` |
+| `daemon/internal/linuxpreflight/preflight_linux_test.go` | `552a9576b6a855fb73664f257b2df8aad1fd7e8ddc103053b9a428689065e42f` |
+| `docs/TODO.md` (unchanged; matches §1) | `e00a0692942b9482624792a7fb6c2f25f1233ee76dbe88a22f2f4a8b5ace1a36` |
+| `docs/archive/CLOSED-TODO.md` | `bcd27881439f891a96184e62b2b31370db5bb50f23f03134d5c6c4927bf6529d` |
+| `docs/evidence/goal-0006-linux-owner-design-2026-09-22.md` | `4fa086ca51cf9401d299a1d17030fcc3df95f4f65337c3b5e977078e76c7fbe6` |
+| `docs/plans/2026-11-23-rf-acc-delegated-cgroup-kill-plan.md` (unchanged; matches §1) | `914c306be9dabe8cdba16609149e655544ea784f45da7cf709a9b333382239a5` |
+
+The apply bytes build reproducibly to
+`8d49dc0b1798dc2bdd350049d5a357bd7ddc052849cc61e078ebeff7b11c8275`
+(`CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o … ./cmd/symmetry-daemon` from
+`daemon/`), and that exact binary ran every live apply row below.
+
+| Gate (working directory) | Exit | Output |
+| --- | --- | --- |
+| `gofmt -l .` (`daemon/`, Windows) | 0 | no file listed |
+| `go vet ./internal/linuxpreflight/...` (`daemon/`, Windows) | 0 | empty |
+| `GOOS=linux go build ./...` (`daemon/`, Windows) | 0 | empty |
+| `go vet ./internal/linuxpreflight/...` (`daemon/`, WSL) | 0 | empty |
+| `go test -race -count=1 ./internal/linuxpreflight/...` (`daemon/`, WSL) | 0 | `ok github.com/wxxb789/symmetry/daemon/internal/linuxpreflight 1.188s` |
+| `git diff --check` (git root) | 0 | no whitespace error |
+| `python scripts/ci/model-routing-record-sanitize.py --check --root-only` (git root; per changed doc) | 0 for `docs/evidence/goal-0006-linux-owner-design-2026-09-22.md`; 1 pre-existing for `docs/archive/CLOSED-TODO.md` and `docs/TODO.md`, unchanged from their `b9d4b4a4` blobs (first rendered host-path token: CLOSED-TODO line 247 at both revisions; TODO line 730 at base, 734 now) | this record: see the closing line of this section |
+
+Mutants, each applied alone to the apply bytes, run, and reverted; both Go files hash back to this
+section after every revert (`sha256sum` verified):
+
+| Mutant | Killer (exit) | First red line |
+| --- | --- | --- |
+| M1 accept a B-owned manager kill | unit test, exit 1 | `preflight_linux_test.go:308` manager B-owned (+ the two wrong-group rows) |
+| M2 drop the unit-kill root check | unit test, exit 1 | `preflight_linux_test.go:328` unit A-owned (+ B-owned, foreign-group) - the finding 5 row moved this line from §5's 327 |
+| M4 accept a group-writable manager kill | unit test, exit 1 | `preflight_linux_test.go:308` manager group/other-writable, then the same unit rows at `:328` |
+| M3 union mutant (unit root check and A `O_WRONLY` refusal removed) | live hostile-state row, mutant exit 0 where the fixed binary exits 1 | mutant binary `4ca24d41fdc750037d8d54e802069a6ce8ebb296b6697dd3f251ca9f315f96d0` accepts the chowned host |
+| extra: retarget the unit check | live unchanged-host row, mutant exit 1 where the fixed binary exits 0 | mutant binary `fd8026a7e8833f57efbaefc165f08a14557e8741d6cdb5828850bf5a27013ebe` refuses with `unit cgroup.kill must remain root:root` |
+
+Live apply rows (install host from the header; the owner unit started; the apply binary run as A
+with `-verify-linux-owner-install -config /etc/symmetry/daemon.json`):
+
+| Row | Exit | Output |
+| --- | --- | --- |
+| unchanged host | 0 | the §4 success line |
+| unit kill chowned to A (`1002:1003 0200`, root action) | 1 | `unit cgroup.kill must remain root:root` |
+| ownership restored (`0:0 0200`) | 0 | the §4 success line |
+| M3 union mutant on the same chowned state | 0 | the §4 success line - accepts the state the contract requires to fail |
+| retarget mutant on the unchanged host | 1 | `unit cgroup.kill must remain root:root` |
+
+The Change 1 measurement was re-run read-only (probe script from the same scratch set; open only,
+never write) because the live rows consume the host state it describes: all three phases reproduce
+§3 exactly - `manager/cgroup.kill` `1002:1003 0200` with the A open succeeding, unit `cgroup.kill`
+`0:0 0200` with `EACCES` for A, `systemctl --version` `systemd 255 (255.4-1ubuntu8.17)`. The probe
+never ran concurrently with the suite. The host was left as found: owner unit `inactive`, both kill
+files `0:0 0200` / `1002:1003 0200` restored.
+
+Numstat: apply delta (`git diff --numstat`, worktree against `e19999b7`) is `14 13`
+`daemon/internal/linuxpreflight/cgroup_linux.go`, `1 0`
+`daemon/internal/linuxpreflight/preflight_linux_test.go`, `4 4` `docs/archive/CLOSED-TODO.md`,
+`6 0` `docs/evidence/goal-0006-linux-owner-design-2026-09-22.md`. Cumulative against the recorded
+range's base `2c8c419e`: `80 20` and `58 12` for the two Go files, `4 0` `docs/TODO.md`, `45 0`
+`docs/archive/CLOSED-TODO.md`, `43 0` `docs/evidence/goal-0006-linux-owner-design-2026-09-22.md`.
+§8's `72 13`/`57 12` counted the implement-stage uncommitted diff at `b9d4b4a4`; per-file numstat
+is not additive across revisions, so the cumulative row is the current count.
+
+Doc gates for this record, observed on this appendix tree (scratch commit of these bytes,
+`7474eb06fa81ad85efff6881dc008aa5ba2ca289`, dangling, no ref; `HEAD` and the worktree unchanged):
+`model-routing-record-sanitize.py --check --root-only` exit 0; `check-citation-existence.py --base
+e19999b7 --head 7474eb06` exit 0 (`1 changed document(s) pass the path and symbol check (534 path
+citation(s))`, with the same three pre-existing ignore-rule notes as §7);
+`check-record-cleanliness.py --base e19999b7 --head 7474eb06` exit 0 (`2 changed record(s) pass the
+root-only check`). This closing paragraph was appended after that audit; the conductor's
+post-commit run rebinds all three gates to the committed revision.
