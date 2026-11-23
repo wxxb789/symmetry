@@ -650,7 +650,7 @@ test.describe("planning work-item mutations", () => {
     // notice names the replay instead of claiming a second creation.
     const replay = statusNotice(page, "Work item already existed; the server returned the original row, so this submission was not applied.");
     await expect(replay).toBeVisible();
-    expect(await replay.evaluate((node) => node.firstChild?.textContent)).toBe("Work item already existed; the server returned the original row, so this submission was not applied.");
+    expect(await replay.evaluate((node) => node.firstChild?.textContent)).toBe("Work item already existed; the server returned the original row, so this submission was not applied. Control records no workspace for an unassigned item, so that value was not applied.");
     // Both recorded attempts carry the frozen intent, including the client-minted
     // creation identity.
     expect(bodies).toHaveLength(2);

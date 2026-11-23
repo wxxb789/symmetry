@@ -14,8 +14,9 @@ the collection-parity method the conversions below reuse).
 `.github/workflows/ci.yml` (the `compose` job's appended browser steps and the new
 `browser-fixture-linux` job only; the render gate at `:479-556` and its 7-name `--expect-file`
 list stay byte-identical) · `browser/README.md` (the manual matrix) · `browser/tests/*` (only the
-four wired specs, and only for the E6-deferred conversions — no rename, no title change, no
-render-gate spec, no shared module) · `docs/TODO.md` / `docs/archive/CLOSED-TODO.md` (only if an
+four wired specs, for the E6-deferred conversions and — per the 2026-11-22 review ruling — the
+one replayed-create expectation in `portal-work-planning.spec.mjs` — no rename, no title change,
+no render-gate spec, no shared module) · `docs/TODO.md` / `docs/archive/CLOSED-TODO.md` (only if an
 entry closes — none does) · this plan file · `docs/evidence/rf-w6-02-browser-spec-wiring-2026-11-22.md`
 (the repo's evidence-record convention, `docs/evidence/rf-w5-08-…` style).
 
@@ -55,12 +56,12 @@ the increment's six new blocks take it to 52 at HEAD). Jobs:
 
 Per-spec executed shape (the executed-set assertion's inputs, measured from the specs):
 
-| spec | projects | by-design skips | title the assertion pins |
+| spec | projects | by-design skips | executed set the assertion pins |
 | --- | --- | ---: | --- |
-| `portal-connections.spec.mjs` | desktop + mobile | 0 (22 tests) | `a connection is created, inspected, tested and removed through the real API` |
-| `portal-work-planning.spec.mjs` | desktop + mobile | 0 (36 tests) | `creates, edits, archives and restores a project on real data` |
-| `portal-compose-daemon.spec.mjs` | desktop only (driver base) | 0 (1 test) | `the production Compose stack completes F1-F7 and persists each outcome` |
-| `portal-compose-restart.spec.mjs` | desktop only (driver base) | 0 (1 test) | `the control restart preserves the complete F1-F7 workspace` |
+| `portal-connections.spec.mjs` | desktop + mobile | 0 (22 tests) | all 11 case titles in both projects (the review-fix stage extended the one title) |
+| `portal-work-planning.spec.mjs` | desktop + mobile | 0 (36 tests) | all 18 case titles in both projects (same) |
+| `portal-compose-daemon.spec.mjs` | desktop only (driver base) | 0 (1 test) | its one case title in desktop-chromium |
+| `portal-compose-restart.spec.mjs` | desktop only (driver base) | 0 (1 test) | its one case title in desktop-chromium |
 
 The compose run keeps the drivers' `--project=desktop-chromium` invocation base: the daemon spec
 skips mobile *inside the spec*, and the drivers' executed sets are the acceptance base the
@@ -76,8 +77,9 @@ in its `EXIT` trap, so the browser steps provision a second stack under their ow
    `pnpm --filter symmetry-browser-acceptance exec playwright install --with-deps chromium`
    (the runner's browser; the stack itself is built by `docker compose`).
 2. `Run the Compose daemon acceptance on a stack this job provisions` — `docker compose
-   --project-name … --file compose.yaml up --build --detach`, wait for `/healthz` and for the
-   `daemon` service running (the smoke step's own readiness pair), then
+   --project-name … --file compose.yaml up --build --detach`, wait for `/healthz` (`curl
+   --retry-all-errors --retry 90`, the drivers' retry pattern) and for the `daemon` service
+   running, then
    `portal-compose-daemon.spec.mjs --project=desktop-chromium` with `SYMMETRY_COMPOSE_DAEMON=1`,
    the driver's URL/token defaults, and the JSON report asserted by
    `assert-playwright-json.py --expect-skipped 0 --expect-project desktop-chromium
@@ -85,7 +87,8 @@ in its `EXIT` trap, so the browser steps provision a second stack under their ow
 3. `Verify the control restart preserves the Compose workspace` — the driver's restart phase,
    ported: identify the `DC%` project with `docker compose exec -T postgres psql`, take the
    driver's eight-table `md5(jsonb_build_object(…))` fingerprint, `docker compose restart
-   control`, wait for `/healthz`, re-take the fingerprint and require byte equality, then run
+   control`, wait for `/healthz` (`--retry-all-errors --retry 30`), re-take the fingerprint and
+   require byte equality, then run
    `portal-compose-restart.spec.mjs --project=desktop-chromium` with
    `SYMMETRY_COMPOSE_PROJECT_ID/KEY/NAME` and its own `--expect-file` + title assertion.
 4. `Tear down the Compose acceptance stack` — `if: always()`, the smoke script's cleanup body:
@@ -140,10 +143,11 @@ Steps:
    `control/`, wait for the identity file (identity + port), the fixture's
    `connection fixture transport installed` marker, its logged identity and `/healthz`, then run
    `portal-connections.spec.mjs` (both projects) and assert its JSON report
-   (`--expect-skipped 0`, both `--expect-project`, `--expect-file`, the pinned title). `trap …
+   (`--expect-skipped 0`, both `--expect-project`, `--expect-file`, all 11 case titles). `trap …
    EXIT` stops the fixture process on every exit path (the driver's `finally`). The step then
    repeats the driver's canary scan: neither provider canary may appear in the fixture log (the
-   step merges the fixture's stderr into it) and the provider-call log must be non-empty.
+   step merges the fixture's stderr into it) or in the provider-call log, which must also be
+   non-empty.
 5. `Run the planning acceptance on the Control release` — extract the release archive, create and
    migrate `POSTGRES_DB=symmetry_0007c_test` (the driver's default name; dev `mix` for the create
    step and the fixture), mint `SYMMETRY_OPERATOR_TOKEN`/`SECRET_KEY_BASE`, set `DATABASE_URL` for
@@ -153,8 +157,9 @@ Steps:
    `SYMMETRY_GOALS_ROLLOUT_ENABLED=true` (the render gate's primary-release posture),
    `SYMMETRY_PLANNING_HARNESS=1` and `SYMMETRY_FIXTURE_MIX=mix` (no `mise` on the runner), start
    `bin/symmetry_control start` after `eval 'SymmetryControl.Release.migrate()'`, wait for
-   `/healthz`, run `portal-work-planning.spec.mjs` (both projects) and assert its JSON report with
-   its own `--expect-file` + title. `trap … EXIT` kills the release.
+   `/healthz` (`--retry-all-errors --retry 60`), run `portal-work-planning.spec.mjs` (both
+   projects) and assert its JSON report with its own `--expect-file` and all 18 case titles.
+   `trap … EXIT` kills the release.
 6. `Upload the browser fixture evidence` — `if: always()`: the two JSON reports, both logs, the
    fixture transport log and the Playwright report/output directories.
 
@@ -211,7 +216,12 @@ render-gate specs are untouched.
   synthetic reports built from the new shape — the real CI reports are the conductor's oracle;
   (c) runs locally on the edited README; (d) the connection phase's trailing canary guard runs
   locally against synthetic logs — a provider canary in the control log, an empty provider-call
-  log and a missing provider-call log each redden it, and the clean pair is green.
+  log and a missing provider-call log each redden it, and the clean pair is green. The
+  2026-11-22 review rulings add: (e) one non-first case dropped from the connections/planning
+  report reddens the full-title assertions while HEAD's single-title invocations stay green on
+  the same report; (f) a provider canary in the provider-call log reddens the restored guard
+  while the HEAD guard stays green; (g) a socket server resetting its first connections kills
+  the HEAD probes (exit 56) while the final `--retry-all-errors` probes retry through and exit 0.
 - CI is the slow oracle (green `compose` browser steps, green `browser-fixture-linux`, unchanged
   render gate, the inventory step green): conductor-verified on the PR.
 - Host limitations, recorded with the exact commands: no Docker daemon and no PostgreSQL on this

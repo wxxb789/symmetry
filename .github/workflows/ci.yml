@@ -1864,7 +1864,7 @@ jobs:
           project="symmetry-compose-browser-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           compose=(docker compose --project-name "$project" --file compose.yaml)
           "${compose[@]}" up --build --detach
-          curl --fail --retry 90 --retry-delay 1 --retry-connrefused http://127.0.0.1:4000/healthz
+          curl --fail --silent --show-error --retry 90 --retry-delay 1 --retry-all-errors http://127.0.0.1:4000/healthz
           for attempt in {1..30}; do
             if "${compose[@]}" ps --status running --services | grep --fixed-strings --line-regexp daemon >/dev/null; then
               break
@@ -1921,7 +1921,7 @@ jobs:
           }
           before=$(fingerprint)
           "${compose[@]}" restart control
-          curl --fail --retry 30 --retry-delay 1 --retry-connrefused http://127.0.0.1:4000/healthz
+          curl --fail --silent --show-error --retry 30 --retry-delay 1 --retry-all-errors http://127.0.0.1:4000/healthz
           after=$(fingerprint)
           if [[ "$before" != "$after" ]]; then
             echo "database fingerprint changed across the control restart" >&2
@@ -2071,19 +2071,31 @@ jobs:
             --expect-project desktop-chromium \
             --expect-project mobile-chromium \
             --expect-file portal-connections.spec.mjs \
-            'a connection is created, inspected, tested and removed through the real API'
+            'a connection is created, inspected, tested and removed through the real API' \
+            'an expired provider session, a repeated submission and a refused submission stay actionable' \
+            'stale updates and concurrent deletion reconcile to the server'\''s current state' \
+            'a capability update visibly resets dependent resource health and sync state' \
+            'Azure DevOps connection management runs on the new route' \
+            'a GitHub repository resource is bound, synced, updated and unbound through the console' \
+            'a provider failure and an ambiguous outcome stay explicit and the next readback writes the provider'\''s answer' \
+            'project switching discards a late sync continuation and never writes into the new project' \
+            'external work items keep their identity, their provider-owned lock and their availability' \
+            'Azure DevOps repository, board and pipeline resources bind and sync against the fixture documents' \
+            'a failed workspace re-read after a write surfaces the failure instead of the stale rows'
           # The fixture's provider tokens are canaries (scripts/ci/portal-connection-fixture.exs):
-          # a token in the control log or an unrecorded provider call is a leak, not evidence.
-          for canary in gho_fixture_connection_token_canary fixture-ado-access-token-canary; do
-            if grep --fixed-strings --quiet "$canary" "$fixture_log"; then
-              echo "canary scan FAILED: $fixture_log contains $canary" >&2
-              exit 1
-            fi
-          done
+          # a token in the control log or the provider-call log is a leak, not evidence.
           if [[ ! -s "$SYMMETRY_FIXTURE_TRANSPORT_LOG" ]]; then
             echo "canary scan FAILED: provider-call log $SYMMETRY_FIXTURE_TRANSPORT_LOG is missing or empty: no recorded provider call to scan" >&2
             exit 1
           fi
+          for scan_file in "$fixture_log" "$SYMMETRY_FIXTURE_TRANSPORT_LOG"; do
+            for canary in gho_fixture_connection_token_canary fixture-ado-access-token-canary; do
+              if grep --fixed-strings --quiet "$canary" "$scan_file"; then
+                echo "canary scan FAILED: $scan_file contains $canary" >&2
+                exit 1
+              fi
+            done
+          done
       - name: Run the planning acceptance on the Control release
         timeout-minutes: 30
         shell: bash
@@ -2110,14 +2122,31 @@ jobs:
           PHX_SERVER=true PORT=4030 "$control_bin" start > "$RUNNER_TEMP/planning-release.log" 2>&1 &
           release=$!
           trap 'kill "$release" 2>/dev/null || true; wait "$release" 2>/dev/null || true' EXIT
-          curl --fail --retry 60 --retry-delay 1 --retry-connrefused "$SYMMETRY_PORTAL_URL/healthz"
+          curl --fail --silent --show-error --retry 60 --retry-delay 1 --retry-all-errors "$SYMMETRY_PORTAL_URL/healthz"
           pnpm --filter symmetry-browser-acceptance test tests/portal-work-planning.spec.mjs
           python3 scripts/ci/assert-playwright-json.py "$SYMMETRY_PLAYWRIGHT_JSON_REPORT" \
             --expect-skipped 0 \
             --expect-project desktop-chromium \
             --expect-project mobile-chromium \
             --expect-file portal-work-planning.spec.mjs \
-            'creates, edits, archives and restores a project on real data'
+            'creates, edits, archives and restores a project on real data' \
+            'refuses a duplicate project key with the server'\''s field error and keeps the draft' \
+            'submits a project and a work item once on a double submit' \
+            're-syncs to the newest project after a stale update in two contexts' \
+            'creates a work item with the project'\''s resources, edits it and moves status through the board' \
+            'refuses a whitespace title with the server'\''s field error and keeps the draft' \
+            'replays the failed intent verbatim on an explicit retry' \
+            'keeps an open draft across a background refresh and applies it against the loaded revision' \
+            're-syncs to the newest work item after a stale update in two contexts' \
+            'applies a late board move only to its own project' \
+            'moves and reorders the focused board card with the keyboard' \
+            'moves work into a ready column that has no cards on the board' \
+            'keeps the ready destination while the board is filtered to backlog' \
+            'replays a lost create response without duplicating the work item' \
+            'keeps an open editor draft across the responsive breakpoint' \
+            'a Goal-managed item offers no writable path and the server refuses legacy writes' \
+            'an external-tracker-owned item keeps its provider-owned fields and column unwritable' \
+            'an archived project'\''s board offers no create, edit or move path'
       - name: Upload the browser fixture evidence
         if: always()
         uses: actions/upload-artifact@v7
