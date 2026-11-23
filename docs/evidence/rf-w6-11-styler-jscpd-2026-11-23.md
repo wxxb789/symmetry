@@ -36,7 +36,7 @@ run after them).
 | `package.json`, `pnpm-lock.yaml` | `jscpd@4.3.0` devDependency; the lockfile closure was generated in a scratch tree (this host's mirror cannot resolve four unrelated frontend dev pins) and spliced in; `check-lockfile-registry.py` green over 405 tarball URLs |
 | `.jscpd.json` | the committed scope: corpus ignores, `mode: mild`, the explicit format table |
 | `scripts/ci/jscpd-changed.py` | the changed-file gate (exit 0 tolerated / 1 refused / 2 unusable) |
-| `scripts/ci/test-jscpd-changed.py` | the gate's suite, 17 tests over real throwaway Git repositories |
+| `scripts/ci/test-jscpd-changed.py` | the gate's suite, 23 tests over real throwaway Git repositories |
 | `docs/plans/2026-11-23-rf-w6-11-styler-jscpd-plan.md`, this record | plan and evidence |
 | `.github/workflows/ci.yml` | **not touched** — W6-12 inserts the step whose text §9 delivers |
 
@@ -112,8 +112,8 @@ metadata and compared as a sorted multiset (base revision vs head revision), wit
 
 | # | file | what Styler did | disposition |
 | --- | --- | --- | --- |
-| 1 | `control/lib/mix/tasks/symmetry.check_test_db.ex` | the interpolation-aware pass **doubled an `@acceptance_databases` attribute** when the moduledoc interpolated module attributes (idempotence broke: a second pass grew the attribute again) | the moduledoc interpolations were re-expressed as literals; the rendered documentation is byte-identical (1957 characters, compared through `Code.fetch_docs`), and `mix format` is now a fixpoint (`--check-formatted` green after two passes) |
-| 2 | 12 `control/test/**` files | `use SymmetryControl.TestFixtures` was hoisted above the `import GoalsTestSupport`/`import TestFixtures` lines, so the `validation_profiles()` call the import provides stopped compiling | the calls were re-expressed fully qualified (`SymmetryControl.GoalsTestSupport.validation_profiles()` / `SymmetryControl.TestFixtures.validation_profiles()`); no `import` was removed and no stub was edited. Files: `goals/{commands_flow,commands,decisions_interface,goal_control_interface,harness_session_flow,reconciliation,recovery,run_fence_flow,settlement}_test.exs`, `goals_test.exs`, `web/controllers/{goal_machine,task_goal_guard}_controller_test.exs` |
+| 1 | `control/lib/mix/tasks/symmetry.check_test_db.ex` | the interpolation-aware pass **doubled an `@acceptance_databases` attribute** when the moduledoc interpolated module attributes (idempotence broke: a second pass grew the attribute again) | the moduledoc interpolations were re-expressed as literals; the rendered documentation is byte-identical (1957 characters, compared through `Code.fetch_docs`), and `mix format` is now a fixpoint (`--check-formatted` green after two passes). The apply stage pins the rendered moduledoc against the reserved values in `symmetry_check_test_db_test.exs`, so a literal edited apart from its attribute reddens |
+| 2 | 12 `control/test/**` files | `use SymmetryControl.TestFixtures` was hoisted above the `import GoalsTestSupport`/`import TestFixtures` lines, so the `validation_profiles()` call the import provides stopped compiling | the calls were re-expressed fully qualified (`SymmetryControl.GoalsTestSupport.validation_profiles()` / `SymmetryControl.TestFixtures.validation_profiles()`); no `import` was removed and no stub was edited. Files: `goals/{commands_flow,commands,decisions_interface,goal_control_interface,harness_session_flow,reconciliation,recovery,run_fence_flow,settlement}_test.exs`, `goals_test.exs`, `web/controllers/{goal_machine,task_goal_guard}_controller_test.exs`. The apply stage drops the `validation_profiles: 0` entry the re-expression left dead in `goal_machine_controller_test.exs`'s `only:` list (the `import` line itself and every other entry unchanged) |
 
 Both are the D12 caveat class ("test stub modules where a fully-qualified reference is
 deliberate"); neither weakens an assertion (the calls return the same fixture maps).
@@ -155,6 +155,9 @@ total (+10 of 554) is report-only per D2 and is the baseline W6-10's zero-count 
 will measure; the CI Credo step is advisory (`continue-on-error: true`), so no gate
 changes colour, and this slice touched no check, threshold or suppression (the only
 `.credo.exs` diff is `parse_timeout: 30000` → `30_000` and one unwrapped line, §3.1).
+The apply-stage re-run (`mix credo --strict`, same checkout after the two control-test
+edits) exits 30 with the same total: 564 (5 warnings / 326 refactoring / 160
+readability / 73 design) — report-only.
 
 ## 6. The changed-file jscpd gate (D16)
 
@@ -164,18 +167,21 @@ changes colour, and this slice touched no check, threshold or suppression (the o
   working tree, so a dirty checkout cannot change the verdict).
 - Scan: the pinned `node_modules/jscpd` entry, `--min-lines 10 --min-tokens 50
   --max-lines 5000 --max-size 1mb` plus `--reporters json --silent --no-colors`, and
-  the scanned repository's committed `.jscpd.json`.
+  the `.jscpd.json` of the `--head` revision itself, read from its Git blob like the
+  corpus, so a dirty working tree cannot change the scan scope either.
 - Verdict: a clone is refused when one of its two occurrences overlaps the range's
   added lines **and** the occurrence holds a run of at least `--min-lines` (10)
   consecutive added lines whose content the file did not already hold at the comparison
   base (whitespace-insensitive, so refolds and line joins are not new), **or** a run of
-  that length whose lines were inserted into the file while the same file deleted that
-  block nowhere else (a copy, not a move). Renames follow their base path. Everything
+  that length whose lines were inserted into the file — a pure insertion, or the surplus
+  of a hunk that also replaces lines — while the same file deleted that block nowhere
+  else (a copy, not a move). Renames follow their base path. Everything
   else that reaches added lines is printed as tolerated; the exit code stays 0.
 - Fail-closed edges: no report, no scanned source, a failed jscpd run, a missing pinned
-  package, a missing config, an unresolvable base/tree — each exits 2. A changed file
-  with added lines that jscpd did not scan (unknown format, binary, over the size
-  ceiling) is a notice.
+  package, a missing config, an unresolvable base/tree, a quoted diff path — each exits
+  2. A changed file with added lines that jscpd did not scan (an unknown format, a path
+  outside the configured scope, a file below the line threshold, an oversized file) is
+  a notice; a binary carries no hunk, so it has no added lines to notice.
 
 ### 6.2 Why the added-line test alone is not the criterion
 
@@ -189,14 +195,16 @@ orchestration test files. The measured disambiguation (same corpus, per the rule
 `check-citation-existence.py` / `check-record-cleanliness.py` (21/17/15 lines,
 185/151/135 tokens) — genuine new duplication, which the script then restructured away
 (§7). The 100 tolerated clones of the final run all carry new-content runs of ≤ 4 lines
-(next longest run: 4; the refused three ran 11–21).
+(next longest run: 4; the refused three ran 11–21). The apply-stage re-run of the
+hardened gate over the same 194-file change (§7) reproduces the boundary: 100
+tolerated, 0 refusals.
 
 ### 6.3 Format table (jscpd 4.3.0 does not know Elixir)
 
 `@jscpd/tokenizer`'s default `EXT_TO_FORMAT` maps no `ex`/`exs` extension, so a default
 jscpd run scans none of `control/**` — the tree this slice formats. `formatsExts`
-*replaces* that table (finder `getFormatByFile`), so `.jscpd.json` declares the
-sixteen default-mapped formats the tree uses plus `elixir: [ex, exs]`, with the
+*replaces* that table (finder `getFormatByFile`), so `.jscpd.json` declares fifteen of
+the sixteen default-mapped formats the tree uses plus `elixir: [ex, exs]`, with the
 extensions the repository inventory produced. Pinned by test: dropping the elixir entry
 turns the elixir clone fixture from refused into a notice/green, and a table that
 recognizes nothing exits 2 instead of passing.
@@ -209,10 +217,10 @@ recognizes nothing exits 2 instead of passing.
 | format mutation (a) | same, after reversing four `alias` lines in `goals.ex` | 1 | names the file and prints the sorted fix |
 | format revert | same, after reverting the mutation | 0 | no output |
 | elixir compile | `MIX_ENV=test mix compile --warnings-as-errors` (`control/`) | 0 | no output |
-| control suite | `mix test` with the host's stale `PHX_SERVER`/`POSTGRES_PORT`/`SYMMETRY_CONTRACTS_DIR` unset and `POSTGRES_DB=symmetry_control_test_w611` | 0 | `1162 passed, 21 skipped` in 272 s (the 4 portal-bundle cases included: the bundle was staged locally with `pnpm --filter @symmetry/frontend build`, gitignored build output) |
-| gate suite | `python scripts/ci/test-jscpd-changed.py` | 0 | `Ran 17 tests … OK` (54 s) |
+| control suite | `mix test` with the host's stale `PHX_SERVER`/`POSTGRES_PORT`/`SYMMETRY_CONTRACTS_DIR` unset and `POSTGRES_DB=symmetry_control_test_w611` | 0 | `1163 passed, 21 skipped` in 331 s, apply-stage re-run (the 4 portal-bundle cases included: the bundle was staged locally with `pnpm --filter @symmetry/frontend build`, gitignored build output) |
+| gate suite | `python scripts/ci/test-jscpd-changed.py` | 0 | `Ran 23 tests … OK` (114 s, apply-stage re-run) |
 | gate, changed set (real new duplication) | `python scripts/ci/jscpd-changed.py --base HEAD --head <emulated head>` | 1 | 3 refusals: `check-citation-existence.py`/`check-record-cleanliness.py` ↔ the new gate script (21/17/15 lines, 185/151/135 tokens), 100 clones tolerated |
-| gate, changed set (final tree) | same, after restructuring the preamble; re-run on the frozen tree | 0 | `194 changed file(s), 1665 scanned source(s), 1275 clone(s) in the corpus, 100 tolerated among the added lines, none new` (115 s) |
+| gate, changed set (final tree) | `python scripts/ci/jscpd-changed.py --base b9d4b4a4 --head 4eb4682d` (the stage range; the row above used an emulated head of the same 194-file change); apply-stage re-run with the hardened parser | 0 | `194 changed file(s), 1677 scanned source(s), 1272 clone(s) in the corpus, 100 tolerated among the added lines, none new` (105 s; 4 notices — `.formatter.exs`, `mix.lock`, `pi_control_e2e_test.exs`, one more) |
 | injected-clone fixtures | inside the suite: a 12-line/≥60-token copy appended to a changed file, and the same copy inside a file that already held the block | 1 | fixture asserts the gate refuses both and names the file |
 | large-file fixture (flag mutation (c)) | suite: jscpd's defaults over the same corpus, then the gate | 0 then 1 | the default report holds `duplicates: []` for the 1250-line file; the gate refuses it only because `--max-lines 5000 --max-size 1mb` are passed (`JSCPD_LIMITS` is pinned by its own test) |
 | ruff | `python -m ruff check` + `python -m ruff format --check` on both new scripts | 0 | `All checks passed!` / `2 files already formatted` |
@@ -239,6 +247,24 @@ lines is green, a reformat that only rewrites a clone is tolerated, a block move
 inside its file is tolerated, a block *copied* inside its file is refused, a third copy
 of a pre-existing duplication is refused, a renamed file is compared against its base
 path, and a changed file jscpd did not scan is a notice rather than a silent skip.
+The apply stage adds: a copier whose path git C-quotes (a non-ASCII name, and a space
+in the name) is refused by that name; a content line shaped like a diff header
+(`++ b/decoy.py` added, `-- first` removed) is content and never a header; a self-copy
+merged into an edit hunk is refused as copied-not-moved; and a dirty working-tree
+config cannot change the verdict (the `--head` blob supplies it).
+
+**Apply-stage mutation checks.** Each mutant ran alone on the apply-stage tree and was
+reverted before the next step; `scripts/ci/jscpd-changed.py` was restored to
+`9ffee509…` and `scripts/ci/revision_scope.py` to `5faf04b3…` (sha256 verified), and no
+other file carries a mutant byte.
+
+| # | mutant | observed |
+| --- | --- | --- |
+| d | the pre-apply gate restored (the `4eb4682d` bytes) in place of the hardened script | 6 suite reds: both header-shaped-content fixtures (added: `0 != 1`, a false green; removed: a false refusal), both quoted/spaced-path copiers (`0 != 1`), the mixed-hunk self-copy (`0 != 1`), and the detection-mode test's dirty-config step (`1 != 0`: the working-tree config decided) |
+| e | the reached-side test swapped from `edits.added` to `edits.inserted` | the reformat fixture reddens (`1 tolerated among the added lines` not found; the gate printed `0 tolerated … none new`) |
+| f | the interval-overlap test dropped from the reached-side test | the clone-outside-added-lines fixture reddens (the gate printed `1 tolerated … none new` for a clone no added line reaches) |
+| g | `D` added to `revision_scope.SELECTED_STATUSES` | the deleted-file fixture reddens (`nothing to check` missing; the gate took the non-empty path) |
+| h | one reserved name replaced in the task moduledoc (`symmetry_0007e_` → `…f_`) | the new documentation assertion reddens (`assert moduledoc =~ value` for `symmetry_0007e_`) |
 
 ## 9. CI step text for W6-12 (handoff, D16)
 
@@ -314,7 +340,9 @@ tolerated ones §6.2 describes. Per D16 these numbers gate nothing.
   `jscpd-changed`) repeat the same ~20-line CLI/range preamble. This gate's copy was
   restructured to the minimum (its own help texts, a local refusal helper), which is
   what the gate's own run demanded; extracting `revision_scope.parse_range` for all
-  three is the follow-up and is outside this slice's owned set.
+  three — the `--name-status -z` field reader this gate repeats from
+  `revision_scope.changed_paths` included — is the follow-up and is outside this
+  slice's owned set.
 
 ## 12. DLP and path hygiene
 

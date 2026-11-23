@@ -12,13 +12,13 @@ evidence pair.
 | --- | --- |
 | `control/mix.exs`, `control/mix.lock` | `{:styler, "~> 1.12", only: [:dev, :test], runtime: false}` (resolved 1.12.2) |
 | `control/.formatter.exs` | `plugins: [Styler]` (keys stay sorted by the key order the file already used) |
-| `control/**` | the mechanical `mix format` diff (187 files, +5265/−6292), every hunk reviewed |
+| `control/**` | the mechanical `mix format` diff (187 files, +5301/−6303), every hunk reviewed |
 | `package.json`, `pnpm-lock.yaml` | `jscpd@4.3.0` devDependency, lockfile entry from canonical registry URLs |
 | `.jscpd.json` | the committed jscpd scope: corpus ignores, detection mode, format table |
 | `scripts/ci/jscpd-changed.py` | the changed-file gate (script, exit 0/1/2) |
-| `scripts/ci/test-jscpd-changed.py` | the gate's suite (12 tests, real Git fixtures) |
+| `scripts/ci/test-jscpd-changed.py` | the gate's suite (23 tests, real Git fixtures) |
 | `docs/plans/2026-11-23-rf-w6-11-styler-jscpd-plan.md`, `docs/evidence/rf-w6-11-styler-jscpd-2026-11-23.md` | this plan and the evidence record |
-| `docs/TODO.md` | closure entries for the two items this slice finishes |
+| `docs/TODO.md` | untouched: neither the base nor the head tree holds a Styler/jscpd/W6-11 entry to close |
 
 `.github/workflows/ci.yml` is **not** in the owned set (contract §Owned files, D16
 handoff): W6-12 inserts the single step whose exact text this slice delivers in the
@@ -51,8 +51,8 @@ evidence record.
    so a default run scans none of `control/**` (the tree this slice formats), and
    `formatsExts` *replaces* the default map (finder `getFormatByFile`) rather than
    extending it. `.jscpd.json` therefore declares the repository's languages
-   (`elixir: [ex, exs]` plus the sixteen default-mapped formats the tree uses, each
-   with the extensions the inventory produced). Consequence, asserted by the suite:
+   (`elixir: [ex, exs]` plus fifteen of the sixteen default-mapped formats the tree
+   uses, each with the extensions the inventory produced). Consequence, asserted by the suite:
    an extension outside the table is never scanned, and a *changed* file in such an
    extension is reported as a notice instead of being silently skipped.
 3. **`mode: "mild"`, the audit's default-equivalent mode** (jscpd's own default), so
@@ -124,8 +124,9 @@ evidence record.
   side is therefore only treated as reached when its own interval overlaps added
   lines, and the tolerated/refused decision never reads the fragment text.
 - The changed-file gates share a CLI/range preamble; this gate's copy is restructured
-  to the minimum it needs. Extracting it into `revision_scope.py` is the follow-up and
-  lies outside this slice's owned set.
+  to the minimum it needs. Extracting it into `revision_scope.py` — the `--name-status
+  -z` field reader this gate repeats from `revision_scope.changed_paths` included — is
+  the follow-up and lies outside this slice's owned set.
 - The gate's runtime is linear in the head tree (a `git archive` plus one jscpd scan
   per run); on the CI runner that is the cost of the changed-file verdict.
 - The report's key names (`duplicates`, `statistics.formats.*.sources`) are jscpd 4's;
@@ -140,11 +141,11 @@ evidence record.
 | the pass | 187 `control` files, `+5301 −6303`; two hunks rejected and re-expressed (§4 of the plan / evidence §4) |
 | `mix format --check-formatted` | 0; the alias-order mutation reddens it (1) and the revert restores 0 |
 | `MIX_ENV=test mix compile --warnings-as-errors` | 0 |
-| full `mix test` | 0 — `1162 passed, 21 skipped` (272 s), the portal-bundle cases included |
-| test names | 130 test files, 1173 names, multiset identical base ↔ head |
+| full `mix test` | 0 — `1163 passed, 21 skipped` (331 s), the portal-bundle cases included (apply-stage re-run) |
+| test names | 130 test files, 1173 names each side, multiset identical base ↔ head for the format pass; the apply stage adds the one documentation assertion (1174 names at the head) |
 | `mix credo --strict` | alias class −46 (AliasOrder 26→0, AliasUsage 33→13); total 554→564 (MaxLineLength +120, the formatter's line joining); report-only |
-| the gate's suite | 17 tests green (`scripts/ci/test-jscpd-changed.py`) |
-| the gate on this PR's changed set | refused 3 clones before the script's preamble was restructured (real new duplication), green afterwards (100 clones tolerated, 0 new) |
+| the gate's suite | 23 tests green (`scripts/ci/test-jscpd-changed.py`) |
+| the gate on this PR's changed set | refused 3 clones before the script's preamble was restructured (real new duplication), green afterwards (100 clones tolerated, 0 new); apply-stage re-run with the hardened parser on `b9d4b4a4..4eb4682d`: 194 changed files, 1677 scanned sources, 1272 corpus clones, 100 tolerated, 0 new |
 | repo-wide jscpd (trend-only) | base 4.53 % → head 4.56 %; 244 → 250 clones with a `control/` side (the audit's "0 touching control/" was vacuous: jscpd 4.3.0 does not scan Elixir by default) |
 | other gates | ruff 0, classifier suite 0 (31 tests), lockfile provenance 0 (405 URLs), `git diff --check` 0, record cleanliness 0, DLP scans clean |
 | CI step | delivered in evidence §9 for W6-12; `.github/workflows/ci.yml` untouched |

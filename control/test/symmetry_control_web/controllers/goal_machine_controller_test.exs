@@ -7,7 +7,7 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
   import Ecto.Query
 
   import SymmetryControl.TestFixtures,
-    only: [check_contract: 0, repository_fixture: 1, subject: 1, validation_profiles: 0]
+    only: [check_contract: 0, repository_fixture: 1, subject: 1]
 
   import SymmetryControlWeb.TestConn, only: [assert_error: 3, bearer: 2]
 
