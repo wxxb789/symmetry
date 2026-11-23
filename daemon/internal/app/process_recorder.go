@@ -1,6 +1,7 @@
 package app
 
 import (
+	"github.com/wxxb789/symmetry/daemon/internal/authority"
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
 	"github.com/wxxb789/symmetry/daemon/internal/state"
 )
@@ -21,5 +22,17 @@ func (daemon *daemon) processRecorder(key state.RunKey, persistProcess func(pid 
 		PersistProcessAuthority:            persistAuthority,
 		PersistContainmentStopReceipt:      daemon.persistContainmentStopReceiptCallback(key),
 		PersistContainmentUnproven:         daemon.markContainmentUnprovenCallback(key),
+		RecordSupervisorRecoveryScanSeal:   daemon.recordSupervisorRecoveryScanSealCallback(key),
 	})
+}
+
+func (daemon *daemon) recordSupervisorRecoveryScanSealCallback(key state.RunKey) func(authority.Supervisor, uint64) error {
+	return func(value authority.Supervisor, sequence uint64) error {
+		daemon.storeLifetimeMu.RLock()
+		defer daemon.storeLifetimeMu.RUnlock()
+		if daemon.storeClosing || daemon.store == nil {
+			return errDaemonStoreClosing
+		}
+		return daemon.persistSupervisorRecoveryScanSeal(key, value, sequence)
+	}
 }

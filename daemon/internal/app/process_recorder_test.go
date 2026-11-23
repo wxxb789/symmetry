@@ -1,7 +1,9 @@
 package app
 
 import (
+	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,7 +13,7 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/state"
 )
 
-func TestProcessRecorderDispatchesEveryWriteToItsLegacyStoreMethod(t *testing.T) {
+func TestProcessRecorderDispatchesEveryLegacyWriteToItsStoreMethod(t *testing.T) {
 	now := time.Date(2026, 11, 22, 1, 2, 3, 0, time.UTC)
 	calls := []string{}
 	daemon, store, key := recorderTestDaemon(t, &calls, now)
@@ -29,6 +31,7 @@ func TestProcessRecorderDispatchesEveryWriteToItsLegacyStoreMethod(t *testing.T)
 		PersistProcessAuthority:            true,
 		PersistContainmentStopReceipt:      true,
 		PersistContainmentUnproven:         true,
+		RecordSupervisorRecoveryScanSeal:   true,
 	}
 	if capabilities := recorder.Capabilities(); capabilities != want {
 		t.Fatalf("process recorder capabilities = %+v, want every write", capabilities)
@@ -206,4 +209,50 @@ func recorderTestJournal(t *testing.T, store *state.Store, key state.RunKey) sta
 		t.Fatalf("LoadJournal() error = %v", err)
 	}
 	return journal
+}
+
+func TestProcessRecorderRecordsTheRecoveryScanSealThroughItsBoundKey(t *testing.T) {
+	now := time.Date(2026, 11, 23, 1, 2, 3, 0, time.UTC)
+	store, key := claimedStore(t)
+	t.Cleanup(func() { _ = store.Close() })
+	value := testProcessPersistenceAuthority(42, "test:42")
+	type sealCall struct {
+		key      state.RunKey
+		expected authority.Supervisor
+		sequence uint64
+	}
+	var calls []sealCall
+	fault := apptest.NewFaultStoreFrom(store)
+	record := func(gotKey state.RunKey, expected authority.Supervisor, sequence uint64) state.RunJournal {
+		calls = append(calls, sealCall{key: gotKey, expected: expected, sequence: sequence})
+		return state.RunJournal{}
+	}
+	fault.OnRecordSupervisorRecoveryScanSeal = func(gotKey state.RunKey, expected authority.Supervisor, sequence uint64) (state.RunJournal, error) {
+		return record(gotKey, expected, sequence), errors.New("durable recovery seal write failed")
+	}
+	daemon := &daemon{store: fault}
+	recorder := daemon.processRecorder(key, func(pid int, identity string) error {
+		return daemon.persistProcessMarker(key, pid, identity, now)
+	})
+	err := recorder.RecordSupervisorRecoveryScanSeal(value, 2)
+	if err == nil || !strings.Contains(err.Error(), "replay exact helper scan seal") {
+		t.Fatalf("failing recovery seal error = %v, want the exact replay joined error", err)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("recovery seal store calls after a failure = %d, want the one exact replay", len(calls))
+	}
+	fault.OnRecordSupervisorRecoveryScanSeal = func(gotKey state.RunKey, expected authority.Supervisor, sequence uint64) (state.RunJournal, error) {
+		return record(gotKey, expected, sequence), nil
+	}
+	if err := recorder.RecordSupervisorRecoveryScanSeal(value, 2); err != nil {
+		t.Fatalf("recovery seal error = %v", err)
+	}
+	if len(calls) != 3 {
+		t.Fatalf("recovery seal store calls after a success = %d, want exactly one more attempt", len(calls))
+	}
+	for _, call := range calls {
+		if call.key != key || !call.expected.Equal(value) || call.sequence != 2 {
+			t.Fatalf("recovery seal call = %+v, want the bound key, exact authority and sequence", call)
+		}
+	}
 }

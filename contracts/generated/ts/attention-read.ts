@@ -15,7 +15,6 @@ export interface SymmetryAttentionReadV1 {
 export interface GoalAttentionFeed {
   entries: GoalAttentionEntry[];
   next_cursor: string | null;
-  unavailable: ReadUnavailable | null;
   [k: string]: unknown | undefined;
 }
 /**
@@ -63,14 +62,6 @@ export interface SettlementAttention {
   evidence_refs?: {}[];
   [k: string]: unknown | undefined;
 }
-/**
- * Set when one feed could not be read. The page still serves the other feed with HTTP 200; the code is the server's mapped error code, never a fabricated reason.
- */
-export interface ReadUnavailable {
-  code: string;
-  message: string;
-  [k: string]: unknown | undefined;
-}
 export interface ProjectBlockedFeed {
   entries: ProjectBlockedEntry[];
   unavailable: ReadUnavailable | null;
@@ -91,5 +82,13 @@ export interface ProjectBlockedEntry {
   blocked: boolean;
   blocker: string | null;
   updated_at?: string | null;
+  [k: string]: unknown | undefined;
+}
+/**
+ * Set when one feed could not be read. The page still serves the other feed with HTTP 200; the code is the server's mapped error code, never a fabricated reason.
+ */
+export interface ReadUnavailable {
+  code: string;
+  message: string;
   [k: string]: unknown | undefined;
 }

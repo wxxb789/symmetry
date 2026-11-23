@@ -38,12 +38,7 @@ func defaultProcessLauncher(
 		if !capabilities.SupervisorHandoffComplete() {
 			return nil, errors.New("durable Linux supervisor handoff callbacks are incomplete")
 		}
-		supervisor, launchErr := platform.StartLinuxSupervisor(platform.LinuxSupervisorStartSpec{
-			Command:      command,
-			OwnerContext: linuxSupervisorOwnerContext(invocation),
-			Prepare:      writes.PrepareSupervisorHandoff,
-			Bind:         writes.BindSupervisorHandoff,
-		})
+		supervisor, launchErr := platform.StartLinuxSupervisor(linuxSupervisorStartSpec(command, invocation, writes))
 		if supervisor == nil {
 			return nil, launchErr
 		}
@@ -114,4 +109,14 @@ func linuxSupervisorOwnerContext(invocation Invocation) string {
 		return "linux-helper:" + invocation.Program
 	}
 	return "linux-helper:run"
+}
+
+func linuxSupervisorStartSpec(command *exec.Cmd, invocation Invocation, writes RecorderFuncs) platform.LinuxSupervisorStartSpec {
+	return platform.LinuxSupervisorStartSpec{
+		Command:                command,
+		OwnerContext:           linuxSupervisorOwnerContext(invocation),
+		Prepare:                writes.PrepareSupervisorHandoff,
+		Bind:                   writes.BindSupervisorHandoff,
+		RecordRecoveryScanSeal: writes.RecordSupervisorRecoveryScanSeal,
+	}
 }

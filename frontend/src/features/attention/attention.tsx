@@ -37,7 +37,6 @@ export function AttentionPage() {
   const goalEntries = queries.flatMap((query) => query.data?.goal_attention.entries ?? []);
   const projectBlocked = first?.data?.project_blocked.entries ?? [];
   const selectedProjectName = workspace.data?.projects.find((project) => project.id === (selectedProjectId ?? first?.data?.selected_project_id))?.name ?? null;
-  const goalUnavailable = first?.data?.goal_attention.unavailable ?? null;
   const projectUnavailable = first?.data?.project_blocked.unavailable ?? null;
   const nextCursor = queries[queries.length - 1]?.data?.goal_attention.next_cursor ?? null;
   const fetching = queries.some((query) => query.isFetching);
@@ -64,28 +63,22 @@ export function AttentionPage() {
     {(first?.isPending || workspace.isPending) && <LoadingState label="Loading blocked work…" />}
     {surfaceError !== null && <ErrorState error={surfaceError} retry={refresh} stale={first?.data !== undefined} />}
     {first?.data && <>
-      <GoalAttention entries={goalEntries} unavailable={goalUnavailable} nextCursor={nextCursor} fetching={fetching} onLoadMore={() => { if (nextCursor !== null) setExpanded({ start: servedStart, cursors: [...cursors, nextCursor] }); }} />
+      <GoalAttention entries={goalEntries} nextCursor={nextCursor} fetching={fetching} onLoadMore={() => { if (nextCursor !== null) setExpanded({ start: servedStart, cursors: [...cursors, nextCursor] }); }} />
       <ProjectBlocked entries={projectBlocked} unavailable={projectUnavailable} />
     </>}
     <p className="sr-only" role="status">{fetching && !first?.isPending ? "Refreshing attention" : ""}</p>
   </main>;
 }
 
-function GoalAttention({ entries, unavailable, nextCursor, fetching, onLoadMore }: {
+function GoalAttention({ entries, nextCursor, fetching, onLoadMore }: {
   entries: GoalAttentionEntry[];
-  unavailable: { code: string; message: string } | null;
   nextCursor: string | null;
   fetching: boolean;
   onLoadMore: () => void;
 }) {
   return <section aria-labelledby="goal-attention-heading">
     <div className="section-heading"><h2 id="goal-attention-heading">Goal attention <span className="count">{entries.length}</span></h2><span className="muted text-small">Server-derived</span></div>
-    {unavailable && <section className="notice" role="status"><div>
-      <h2>Goal attention is unavailable on this server</h2>
-      <p>{unavailable.message} <span className="text-small">Code: <code>{unavailable.code}</code></span></p>
-      <p className="text-small muted">The project's blocked work below is unaffected; nothing here is inferred client-side.</p>
-    </div></section>}
-    {!unavailable && entries.length === 0 && <EmptyState title="No Goal needs attention">No Goal currently carries a pending decision, settlement attention, active work or blocker.</EmptyState>}
+    {entries.length === 0 && <EmptyState title="No Goal needs attention">No Goal currently carries a pending decision, settlement attention, active work or blocker.</EmptyState>}
     {entries.length > 0 && <ul className="attention-list">{entries.map((entry) => <li className="attention-card" key={entry.goal_id}>
       <Target className="attention-icon" size={20} aria-hidden="true" />
       <div className="attention-main">

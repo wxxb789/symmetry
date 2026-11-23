@@ -17,16 +17,13 @@
     "GoalAttentionFeed": {
       "type": "object",
       "additionalProperties": true,
-      "required": ["entries", "next_cursor", "unavailable"],
+      "required": ["entries", "next_cursor"],
       "properties": {
         "entries": {
           "type": "array",
           "items": {"$ref": "#/definitions/GoalAttentionEntry"}
         },
-        "next_cursor": {"oneOf": [{"type": "string"}, {"type": "null"}]},
-        "unavailable": {
-          "oneOf": [{"$ref": "#/definitions/ReadUnavailable"}, {"type": "null"}]
-        }
+        "next_cursor": {"oneOf": [{"type": "string"}, {"type": "null"}]}
       }
     },
     "GoalAttentionEntry": {
