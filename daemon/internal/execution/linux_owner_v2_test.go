@@ -352,6 +352,61 @@ func TestDefaultLinuxLauncherDoesNotUseTestBinaryV1BypassForV2(t *testing.T) {
 	}
 }
 
+func TestDefaultLinuxLauncherUsesRecorderHandoffCapability(t *testing.T) {
+	command := exec.Command("/bin/true")
+	command.Stdin = strings.NewReader("")
+	var stdout, stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+
+	invocation := Invocation{Program: command.Path}
+	invocation.PrepareSupervisorHandoff = func(authority.SupervisorHandoff) error { return nil }
+	invocation.BindSupervisorHandoff = func(authority.SupervisorHandoff, int, string) error { return nil }
+	invocation.CommitSupervisorHandoff = func(authority.SupervisorHandoff, time.Time) error { return nil }
+
+	started, err := defaultProcessLauncher(context.Background(), command, invocation, nil, nil, nil)
+	if started != nil {
+		_ = started.close()
+		_, _ = started.wait()
+	}
+	if err == nil || !strings.Contains(err.Error(), "Linux supervisor target stdio must be *os.File") {
+		t.Fatalf("complete handoff recorder did not enter the durable supervisor branch: %v", err)
+	}
+}
+
+func TestLinuxSupervisorDurableHandoffIsDisabledForGoTestBinary(t *testing.T) {
+	restore := UseInProcessContainmentSupervisorForTesting()
+	defer restore()
+
+	command := exec.Command("/bin/true")
+	if err := platform.ConfigureProcess(command); err != nil {
+		t.Fatalf("ConfigureProcess() error = %v", err)
+	}
+	devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("open %s: %v", os.DevNull, err)
+	}
+	defer devNull.Close()
+	command.Stdin, command.Stdout, command.Stderr = devNull, devNull, devNull
+
+	invocation := Invocation{Program: command.Path}
+	invocation.PrepareSupervisorHandoff = func(authority.SupervisorHandoff) error { return nil }
+	invocation.BindSupervisorHandoff = func(authority.SupervisorHandoff, int, string) error { return nil }
+	invocation.CommitSupervisorHandoff = func(authority.SupervisorHandoff, time.Time) error { return nil }
+
+	started, err := defaultProcessLauncher(context.Background(), command, invocation, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("in-process launch did not use the local containment route: %v", err)
+	}
+	_, _ = started.wait()
+	if started.containmentHandoff != nil {
+		t.Fatal("in-process launch produced a durable supervisor handoff")
+	}
+	if err := started.close(); err != nil {
+		t.Fatalf("close in-process containment: %v", err)
+	}
+}
+
 func TestLinuxV2RejectsMissingCloneGrantBeforeReservation(t *testing.T) {
 	callbacks := LinuxV2JournalCallbacks{
 		Reserve:            func(state.LinuxCgroupReservation) error { return nil },

@@ -8,7 +8,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"net"
@@ -23,15 +22,6 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/authority"
 	"golang.org/x/sys/unix"
 )
-
-// Go test binaries have a generated test main and must retain the local containment path instead.
-func DurableSupervisorHandoffAvailable() bool {
-	if flag.CommandLine.Lookup("test.v") == nil {
-		return true
-	}
-	name := strings.ToLower(os.Args[0])
-	return !strings.HasSuffix(name, ".test")
-}
 
 // Supplied by the caller that still owns the daemon/store lifetime. Must return nil only
 // after the old writer is quiesced.

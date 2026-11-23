@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wxxb789/symmetry/daemon/internal/authority"
 	"github.com/wxxb789/symmetry/daemon/internal/platform"
 )
 
@@ -258,4 +259,46 @@ func windowsProcessExists(pid int) (bool, string) {
 		return false, err.Error()
 	}
 	return strings.Contains(string(output), fmt.Sprintf("\"%d\"", pid)), string(output)
+}
+
+var errDurableHandoffRouteReached = errors.New("durable handoff route reached")
+
+func TestDefaultWindowsLauncherUsesRecorderHandoffCapability(t *testing.T) {
+	handoffAttempts := 0
+	previous := attachSuspendedProcessWithHandoff
+	attachSuspendedProcessWithHandoff = func(context.Context, *platform.SuspendedProcess, platform.SupervisorHandoffCallbacks) (platform.Containment, authority.SupervisorHandoff, string, error) {
+		handoffAttempts++
+		return nil, authority.SupervisorHandoff{}, "", errDurableHandoffRouteReached
+	}
+	t.Cleanup(func() { attachSuspendedProcessWithHandoff = previous })
+
+	complete := helperInvocation("args")
+	complete.PrepareSupervisorHandoff = func(authority.SupervisorHandoff) error { return nil }
+	complete.BindSupervisorHandoff = func(authority.SupervisorHandoff, int, string) error { return nil }
+	complete.CommitSupervisorHandoff = func(authority.SupervisorHandoff, time.Time) error { return nil }
+	process, err := NewRunner().Start(context.Background(), complete, &recordingSink{})
+	if process != nil {
+		t.Cleanup(func() { cleanupRunnerTestProcess(t, process) })
+	}
+	if !errors.Is(err, errDurableHandoffRouteReached) {
+		t.Fatalf("complete handoff recorder did not reach the durable route: process=%v err=%v", process, err)
+	}
+	if handoffAttempts != 1 {
+		t.Fatalf("durable handoff attempts = %d, want 1", handoffAttempts)
+	}
+
+	process, err = NewRunner().Start(context.Background(), helperInvocation("args"), &recordingSink{})
+	if err != nil {
+		if process != nil {
+			cleanupRunnerTestProcess(t, process)
+		}
+		t.Fatalf("capability-free launch error = %v", err)
+	}
+	t.Cleanup(func() { cleanupRunnerTestProcess(t, process) })
+	if result := waitForResult(t, process); !result.Success() {
+		t.Fatalf("capability-free launch result = %#v, want success", result)
+	}
+	if handoffAttempts != 1 {
+		t.Fatalf("capability-free invocation reached the durable route %d times, want 0", handoffAttempts-1)
+	}
 }

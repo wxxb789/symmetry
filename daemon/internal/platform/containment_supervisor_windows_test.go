@@ -22,6 +22,13 @@ type fakeContainmentSupervisorLease struct {
 	err   error
 }
 
+func TestMain(m *testing.M) {
+	restore := UseInProcessContainmentSupervisorForTesting()
+	code := m.Run()
+	restore()
+	os.Exit(code)
+}
+
 func (lease *fakeContainmentSupervisorLease) close(time.Time) error {
 	lease.calls++
 	return lease.err
