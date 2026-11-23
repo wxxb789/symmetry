@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/wxxb789/symmetry/daemon/internal/harness/codex"
@@ -101,32 +102,34 @@ func TestProbeBoundsHangingRunnerAndPreservesCancellation(t *testing.T) {
 				{name: "caller cancellation", context: func() (context.Context, context.CancelFunc) { return context.WithCancel(context.Background()) }, want: context.Canceled, cancelAfterStart: true},
 			} {
 				t.Run(test.name, func(t *testing.T) {
-					ctx, cancel := test.context()
-					defer cancel()
-					runner := hangingRunner{started: make(chan struct{})}
-					done := make(chan error, 1)
-					go func() {
-						done <- provider.probe(ctx, runner)
-					}()
-					select {
-					case <-runner.started:
-					case <-time.After(testHangGuard):
-						t.Fatal("the probe did not start the injected runner")
-					}
-					if test.cancelAfterStart {
-						cancel()
-					}
-					// Only the provider's own bound may end the local-timeout
-					// row; the guard below only catches a harness that hangs.
-					var err error
-					select {
-					case err = <-done:
-					case <-time.After(testHangGuard):
-						t.Fatalf("the probe did not return after its own %s bound", provider.probeTimeout)
-					}
-					if !errors.Is(err, test.want) {
-						t.Fatalf("probe error = %v, want %v", err, test.want)
-					}
+					synctest.Test(t, func(t *testing.T) {
+						ctx, cancel := test.context()
+						defer cancel()
+						runner := hangingRunner{started: make(chan struct{})}
+						done := make(chan error, 1)
+						go func() {
+							done <- provider.probe(ctx, runner)
+						}()
+						select {
+						case <-runner.started:
+						case <-time.After(testHangGuard):
+							t.Fatal("the probe did not start the injected runner")
+						}
+						if test.cancelAfterStart {
+							cancel()
+						}
+						// Only the provider's own bound may end the local-timeout
+						// row; the guard below only catches a harness that hangs.
+						var err error
+						select {
+						case err = <-done:
+						case <-time.After(testHangGuard):
+							t.Fatalf("the probe did not return after its own %s bound", provider.probeTimeout)
+						}
+						if !errors.Is(err, test.want) {
+							t.Fatalf("probe error = %v, want %v", err, test.want)
+						}
+					})
 				})
 			}
 		})

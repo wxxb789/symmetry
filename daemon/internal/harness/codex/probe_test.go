@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
@@ -250,31 +251,33 @@ func TestProbeRejectsSuccessfulSchemaResultAfterCancellation(t *testing.T) {
 }
 
 func TestProbeBoundsHangingSchemaRunner(t *testing.T) {
-	runner := &hangingSchemaRunner{fixtureRunner: fixtureRunner{
-		responses: map[string][]byte{
-			"--version":         []byte("codex-cli " + TestedVersion + "\n"),
-			"app-server --help": []byte("app-server stdio\n"),
-		},
-	}, started: make(chan struct{})}
-	done := make(chan error, 1)
-	go func() {
-		_, err := Probe(context.Background(), "codex", runner)
-		done <- err
-	}()
-	select {
-	case <-runner.started:
-	case <-time.After(testHangGuard):
-		t.Fatal("Probe() did not start the schema runner")
-	}
-	var err error
-	select {
-	case err = <-done:
-	case <-time.After(testHangGuard):
-		t.Fatalf("Probe() did not return after its own %s bound", probeTimeout)
-	}
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("Probe() error = %v, want context.DeadlineExceeded", err)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		runner := &hangingSchemaRunner{fixtureRunner: fixtureRunner{
+			responses: map[string][]byte{
+				"--version":         []byte("codex-cli " + TestedVersion + "\n"),
+				"app-server --help": []byte("app-server stdio\n"),
+			},
+		}, started: make(chan struct{})}
+		done := make(chan error, 1)
+		go func() {
+			_, err := Probe(context.Background(), "codex", runner)
+			done <- err
+		}()
+		select {
+		case <-runner.started:
+		case <-time.After(testHangGuard):
+			t.Fatal("Probe() did not start the schema runner")
+		}
+		var err error
+		select {
+		case err = <-done:
+		case <-time.After(testHangGuard):
+			t.Fatalf("Probe() did not return after its own %s bound", probeTimeout)
+		}
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("Probe() error = %v, want context.DeadlineExceeded", err)
+		}
+	})
 }
 
 func TestAdapterStartDoesNotTreatProbeEvidenceAsAStartRequirement(t *testing.T) {
