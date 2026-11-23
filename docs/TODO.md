@@ -106,7 +106,9 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       relocation deleted the root registry-seam case that exercised a nil context end to end, no
       HEAD test covers that guard text — the shared entry guard stays pinned by
       `TestRunBoundedProbeRejectsNilContext`
-      (`daemon/internal/harness/bounded_probe_test.go`). Owner: W5-16 (codex adapter concepts).
+      (`daemon/internal/harness/bounded_probe_test.go`). Owner: unassigned — rf-w5-16 (codex
+      adapter concepts) could not cover it: its strict owned set excludes `codex/probe.go` and
+      `codex/probe_test.go`, so the re-pin needs the slice that next owns the probe's tests.
 
 ## Build-tag parity (arm64 oracle)
 
