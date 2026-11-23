@@ -36,7 +36,7 @@ run after them).
 | `package.json`, `pnpm-lock.yaml` | `jscpd@4.3.0` devDependency; the lockfile closure was generated in a scratch tree (this host's mirror cannot resolve four unrelated frontend dev pins) and spliced in; `check-lockfile-registry.py` green over 405 tarball URLs |
 | `.jscpd.json` | the committed scope: corpus ignores, `mode: mild`, the explicit format table |
 | `scripts/ci/jscpd-changed.py` | the changed-file gate (exit 0 tolerated / 1 refused / 2 unusable) |
-| `scripts/ci/test-jscpd-changed.py` | the gate's suite, 23 tests over real throwaway Git repositories |
+| `scripts/ci/test-jscpd-changed.py` | the gate's suite, 32 tests over real throwaway Git repositories |
 | `docs/plans/2026-11-23-rf-w6-11-styler-jscpd-plan.md`, this record | plan and evidence |
 | `.github/workflows/ci.yml` | **not touched** — W6-12 inserts the step whose text §9 delivers |
 
@@ -47,6 +47,17 @@ base revision's and the head revision's ASTs were compared after metadata stripp
 named normalizations (pipe normalization; `assert`/collection/time normal forms;
 negation/comparison/branch normal form; alias expansion; directive/attribute moves),
 then the residue was read hunk by hunk.
+
+The delivered bytes are the plugin's own **second-pass** fixpoint for two lib files,
+not a single pass (Styler's line-break and alias-dedup decisions depend on the incoming
+newline metadata): `lib/symmetry_control/integrations/provider_access.ex` (the
+`Repo.update_all` line join at :727; the duplicate aliases inside `defmodule IntentContext`
+removed at :1094) and `lib/symmetry_control/orchestration/transitions.ex` (:878, the
+same line join). A base tree plus one `mix format` pass leaves those two files differing
+from the head; the second pass matches it (16 → 14 differing files, the 14 being the §4
+re-expressions and their pinning test). Both deltas are behaviour-neutral: the removed
+aliases are all declared in the enclosing module (`provider_access.ex:8-22`, and Elixir
+inherits outer aliases into a nested `defmodule`), and the rest is line breaking.
 
 | class | files |
 | --- | --- |
@@ -444,8 +455,9 @@ and for a backslash immediately before `u`:
 - the two new scripts, `.jscpd.json`, `package.json`, the plan and this record: no
   hit (the only temporary-directory match is Python's `import tempfile`);
 - the 187-file `control` diff: 0 host-path hits; 3 lines carry the escape sequence,
-  all of them **context** lines in the diff (`git diff HEAD -- control | grep -c '^+.*\\u'`
-  = 0), so the pass adds no such byte;
+  all of them **context** lines in the diff (a `git diff HEAD -- control | grep -c` run
+  whose pattern matches an added line holding a backslash immediately before the letter
+  `u` returns 0), so the pass adds no such byte;
 - the pre-existing occurrences in 8 `control` files are unchanged lines.
 
 **Fix stage:** the same two scans over the working tree's diff (the gate script, its

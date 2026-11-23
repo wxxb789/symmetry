@@ -12,11 +12,11 @@ evidence pair.
 | --- | --- |
 | `control/mix.exs`, `control/mix.lock` | `{:styler, "~> 1.12", only: [:dev, :test], runtime: false}` (resolved 1.12.2) |
 | `control/.formatter.exs` | `plugins: [Styler]` (keys stay sorted by the key order the file already used) |
-| `control/**` | the mechanical `mix format` diff (188 files, +5311/−6304 at the frozen head), every hunk reviewed |
+| `control/**` | the mechanical `mix format` diff (188 files, +5311/−6304 at the frozen head), every hunk reviewed; the plugin needed a second pass for two lib files (outcome row) |
 | `package.json`, `pnpm-lock.yaml` | `jscpd@4.3.0` devDependency, lockfile entry from canonical registry URLs |
 | `.jscpd.json` | the committed jscpd scope: corpus ignores, detection mode, format table |
 | `scripts/ci/jscpd-changed.py` | the changed-file gate (script, exit 0/1/2) |
-| `scripts/ci/test-jscpd-changed.py` | the gate's suite (23 tests, real Git fixtures) |
+| `scripts/ci/test-jscpd-changed.py` | the gate's suite (32 tests, real Git fixtures) |
 | `docs/plans/2026-11-23-rf-w6-11-styler-jscpd-plan.md`, `docs/evidence/rf-w6-11-styler-jscpd-2026-11-23.md` | this plan and the evidence record |
 | `docs/TODO.md` | untouched: neither the base nor the head tree holds a Styler/jscpd/W6-11 entry to close |
 
@@ -164,7 +164,7 @@ evidence record.
 
 | what | result |
 | --- | --- |
-| the pass | 188 `control` files, `+5311 −6304` at the frozen head; two hunks rejected and re-expressed (§4 of the plan / evidence §4) |
+| the pass | 188 `control` files, `+5311 −6304` at the frozen head; the plugin's first pass is not always its own fixpoint, so the delivered bytes are the **second-pass** output for `integrations/provider_access.ex` (:727 line join, the duplicate aliases at :1094) and `orchestration/transitions.ex` (:878, the same line join) — a fresh base plus one `mix format` pass leaves 16 files differing from the head, the second pass 14 (the §4 re-expressions); two hunks rejected and re-expressed (§4 of the plan / evidence §4) |
 | `mix format --check-formatted` | 0; the alias-order mutation reddens it (1) and the revert restores 0 |
 | `MIX_ENV=test mix compile --warnings-as-errors` | 0 |
 | full `mix test` | 0 — `1163 passed, 21 skipped` (331 s), the portal-bundle cases included (apply-stage re-run; the fix stage changes no `control/**` byte) |
