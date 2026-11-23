@@ -395,6 +395,20 @@ func linuxV2ValidateOwnerWitnessResponse(fixture linuxV2NativeFixture, response 
 		(response.DetachedChild == nil || !response.DetachedChild.PIDFDVerified || !response.DetachedChild.LeafMembershipVerified) {
 		return errors.New("successful/crash witness omitted its exact detached-child pidfd/leaf proof")
 	}
+	if request.Case == "codex_containment" || request.Case == "claude_containment" {
+		if response.Containment == nil || !response.Containment.NativeOpenReached {
+			return errors.New("native containment witness did not reach the credential-free native Open boundary")
+		}
+		digestEnvironment := map[string]string{
+			"codex":       linuxV2CodexBinaryDigestEnvironment,
+			"claude_code": linuxV2ClaudeBinaryDigestEnvironment,
+		}[request.Harness]
+		expected := strings.TrimSpace(os.Getenv(digestEnvironment))
+		if expected == "" || response.NativeBinary != fixture.profile.Command ||
+			response.NativeBinarySHA256 != expected {
+			return errors.New("native containment response does not bind the staged root-owned executable digest")
+		}
+	}
 	return nil
 }
 
@@ -1836,6 +1850,7 @@ func runProductionLinuxV2StageCrashReplayCase(
 	}
 	witness.HealthPeerOK = response.Health != nil && response.Health.Healthy && response.Health.PeerVerified && response.Health.NetworkNamespaceVerified
 	witness.LeafAbsent = response.Release != nil && response.Release.LeafRemoved
+	_, witness.NativeVersionLine = linuxV2PinnedNativeVersions(testCase.harness)
 	if witness.Clone == nil {
 		witness.Clone = linuxV2CloneSnapshotFromResponse(response.Clone)
 	}
@@ -4487,6 +4502,10 @@ func runProductionLinuxV2NativeOwnerWitness(t *testing.T, testCase linuxV2Native
 	witness.ProviderActionOK = response.ProviderAction != nil && response.ProviderAction.CompletedCount > 0 && response.ProviderAction.Outcome == "succeeded"
 	witness.HealthPeerOK = response.Health != nil && response.Health.Healthy && response.Health.PeerVerified && response.Health.NetworkNamespaceVerified
 	witness.LeafAbsent = response.Release != nil && response.Release.LeafRemoved
+	witness.NativeBinary = response.NativeBinary
+	witness.NativeBinarySHA256 = response.NativeBinarySHA256
+	_, witness.NativeVersionLine = linuxV2PinnedNativeVersions(testCase.harness)
+	witness.Containment = response.Containment
 	if witness.Process == nil && response.Target != nil {
 		witness.Process = linuxV2ProcessSnapshotFromResponse(response.Target, response.Health)
 	}
@@ -4563,7 +4582,7 @@ func runProductionLinuxV2NativeOwnerWitness(t *testing.T, testCase linuxV2Native
 		if testCase.providerActionRequired {
 			witness.ControlAction = linuxV2ReadControlActionSnapshot(t, fixture, response)
 		}
-		if !testCase.providerActionRequired && !witness.HealthPeerOK {
+		if !testCase.providerActionRequired && !testCase.containmentRequired && !witness.HealthPeerOK {
 			t.Fatal("OpenCode owner witness did not complete the exact B loopback health-peer check")
 		}
 	}

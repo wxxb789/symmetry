@@ -36,15 +36,7 @@ var (
 	errCandidateWatcherTimeout   = errors.New("Claude Code native adapter process watcher did not settle after close")
 )
 
-// candidateProcess is the existing execution.Process seam required by
-// the staged adapter. Keeping it local makes the candidate deterministic in
-// tests without adding another process abstraction to the daemon.
-type candidateProcess interface {
-	WriteInputContext(context.Context, []byte) error
-	Wait() execution.Result
-	Terminate(context.Context, time.Duration) error
-	ProcessDetails() (int, string)
-}
+type candidateProcess = harness.NativeProcess
 
 type candidateProcessStarter func(context.Context, execution.Invocation, execution.Sink) (candidateProcess, error)
 
@@ -149,6 +141,9 @@ func (adapter *CandidateAdapter) Start(ctx context.Context, request harness.Star
 	startProcess := adapter.startProcess
 	if startProcess == nil {
 		startProcess = candidateRunnerProcessStarter
+	}
+	if request.StartProcess != nil {
+		startProcess = request.StartProcess
 	}
 	newSessionID := adapter.newSessionID
 	if newSessionID == nil {

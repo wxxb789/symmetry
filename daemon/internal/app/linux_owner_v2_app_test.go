@@ -2685,6 +2685,47 @@ func TestLinuxV2AdmissionGateDoesNotSuppressLegacyCodexAssignment(t *testing.T) 
 	}
 }
 
+func TestLinuxV2AdmissionKeepsCodexAndClaudeOnTheLegacyPath(t *testing.T) {
+	if requiresLinuxV2NativeOwner(harness.KindCodex) || requiresLinuxV2NativeOwner(harness.KindClaude) {
+		t.Fatal("codex/claude must not select the Linux v2 native owner on Linux")
+	}
+	for _, testCase := range []struct {
+		name       string
+		kind       harness.Kind
+		configKind string
+	}{
+		{"codex", harness.KindCodex, config.RuntimeHarnessCodex},
+		{"claude", harness.KindClaude, config.RuntimeHarnessClaudeCode},
+	} {
+		admission, present, err := parseAdmissionInput(validAdmissionInput())
+		if err != nil || !present {
+			t.Fatalf("parse admission = present:%t error:%v", present, err)
+		}
+		app, store, session, controlClient := nativeAdmissionDaemonForHarness(
+			t, admission, validNativeTaskResult(t, admission), nil,
+			testCase.kind, testCase.configKind, testVerifiedNativeCapabilities(testCase.kind),
+		)
+		key := state.RunKey{RunID: "legacy-" + testCase.name + "-run", Generation: 1}
+		app.startAssignment(context.Background(), protocol.Assignment{RunID: key.RunID, Generation: key.Generation, Work: controlClient.work})
+		app.workers.Wait()
+		if controlClient.claimCalls != 1 {
+			t.Fatalf("%s legacy assignment claims = %d, want one dispatch", testCase.name, controlClient.claimCalls)
+		}
+		if _, err := store.LoadJournal(key); err != nil {
+			t.Fatalf("%s legacy assignment did not retain its own RunJournal: %v", testCase.name, err)
+		}
+		if session.request.Workspace == "" {
+			t.Fatalf("%s legacy assignment did not start its native session", testCase.name)
+		}
+		if session.request.Invocation.LinuxV2Required || session.request.Invocation.LinuxV2 != nil {
+			t.Fatalf("%s legacy assignment entered the Linux v2 owner path", testCase.name)
+		}
+		if err := store.Close(); err != nil {
+			t.Fatalf("close %s legacy StateDir: %v", testCase.name, err)
+		}
+	}
+}
+
 func TestLinuxV2PiResumeWithoutRetainedSessionFailsBeforeNativeStart(t *testing.T) {
 	admission, present, err := parseAdmissionInput(validAdmissionInput())
 	if err != nil || !present {
