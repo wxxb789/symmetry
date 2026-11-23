@@ -224,6 +224,7 @@ func TestLaunchSuspendedOwnsConfiguredJobAndHandles(t *testing.T) {
 }
 
 func TestAttachSuspendedProcessTransfersJobOwnershipToContainment(t *testing.T) {
+	installContainmentSupervisorTestLauncher(t)
 	process := launchNativeTestProcess(t, "block")
 	containment, identity, err := AttachSuspendedProcess(process)
 	if err != nil {

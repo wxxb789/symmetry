@@ -308,11 +308,59 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
     and the variables `SYMMETRY_LINUX_V2_TEST_PI_MODEL`, `SYMMETRY_LINUX_V2_TEST_OPENCODE_MODEL` and
     `SYMMETRY_LINUX_V2_TEST_OPENAI_BASE_URL` (the OpenAI-compatible provider base URL the native
     fixtures route their model calls through).
-    Recorded status, still limiting (2026-11-15): the Environment policy read allowed branches `main` and
-    `codex/goal-0006b-crash-safe-process-containment` with `prevent_self_review=false`; and no environment
-    available here yet satisfies the host prerequisite — the last hosted attempt (run `43673581776`) failed
-    the probe with `unified_cgroup_v2_mounted=false` and the local WSL2 attempt failed at
-    `transient_unit_cleanup`, so a host that does not qualify fails at the probe before any case set runs.
+    Recorded status, still limiting (2026-11-23): the Environment policy read allowed branches `main` and
+    `codex/goal-0006b-crash-safe-process-containment` with `prevent_self_review=false`. The hosted runner now
+    passes the probe and the fixture's whole host preflight: an earlier attempt (run `43673581776`) failed the
+    probe with `unified_cgroup_v2_mounted=false`, and run `45130117124` (2026-11-23, main `55ecd76a`) got all
+    14 case sets past the probe into `scripts/ci/linux-v2-native-acceptance.sh`, where every one died at `:68`
+    with `stat: cannot statx '/proc/1/ns/pid': Permission denied` — the fixture read the PID 1 namespace inode
+    without the `sudo` it uses for its other privileged host reads. Goal `rf-acc-native-hosted-run` fixes each
+    failure the scratch loop then reached: that read, the private Store StateDir ownership (its implicitly
+    created parent came from `install -d` as root-owned), the guest A-search fence, the removed A-side `rmdir`,
+    the fixture project key length and the debootstrap mirror source, verified by the loop's before/after runs
+    `45132022431` through `45169868354`. The debootstrap source is now the image's own apt configuration (the
+    first archive URI in `/etc/apt/apt-mirrors.txt`, else the first `URIs:` entry in
+    `/etc/apt/sources.list.d/*.sources`), or the case set fails with a named message: the public-archive
+    fallback was removed deliberately, because that archive dropped individual packages from the hosted runner
+    network (runs `45154695682`, `45159670971`). The block is fail-closed and cannot be steered to an archive
+    this record does not name. Two host-tooling facts this record must carry: the `ubuntu-latest`
+    image is `resolute`, whose `coreutils` package is the uutils Rust build (`/usr/bin/test` resolves to
+    `/usr/lib/cargo/bin/coreutils/test`, version `9.5-1ubuntu2+0.0.0~ubuntu25`; guest images debootstrap the
+    same package), and uutils evaluates `test -x/-r/-w` from stat mode bits only, ignoring POSIX ACLs. Probe
+    runs `45145656538`, `45146607068` and `45147275664` show the kernel itself enforcing the same ACL entries
+    on the runner root filesystem, where the fixture's ACL paths live: raw `chdir`/`open` syscalls and
+    `faccessat2(..., X_OK, AT_EACCESS)` agree, deny entries deny, and `mount -o remount,acl` changes nothing.
+    The only disagreement on fresh tmpfs, fresh `mkfs.ext4 -q` loop mounts, xfs, btrfs and `/dev/shm` came
+    from the uutils `/usr/bin/test` (`45147275664` straces that tool reading a mode-bit `statx`, while the
+    bash builtin `test` and `python3 os.access` reach `faccessat2` and honour the ACL), so those `acl-ignored`
+    verdicts are that tool's artifact; the fence's three probes now run through the bash builtin `test`, which
+    issues that kernel call. With the scratch-only `gh` credential-ingestion shim on `PATH` (a scratch-branch
+    workflow step, deleted with the branch; runs `45164286155` and `45169868354`), the loop reaches Control
+    start, the production owner install and the installed daemon's own preflight, where it stops on a host
+    property: systemd 259 (`259.9-0ubuntu0.1`) chowns the whole delegated `DelegateSubgroup=manager` subtree,
+    `manager/cgroup.kill` included, to the service user (probe run `45169655828`: `55200:55200 200`, and that
+    user can open it for writing; in-guest diagnostic in run `45169868354`: `52000:52000 200` while the unit's
+    own `cgroup.kill` stays `0:0 200`), while `-verify-linux-owner-install` (run `45164286155`) requires that
+    file to stay root-owned and unwritable by A. Making a credentialed run pass that step needs a
+    production-side decision (installer re-chown once the subgroup exists, a reviewed preflight change, or a
+    host whose systemd keeps the control root-owned); the fixture keeps the production sequence unchanged. The
+    scratch runs carried only the contract's dummy credentials, so the delivered bytes' final all-14 run
+    `45183708322` (scratch head `c514d3f6`, whose tree adds only the throwaway workflow to PR head `e329d8dd`;
+    script sha256 `8cc4bd831e89085ddfcf3b669ebc6756808d955659a4791cc4bde6e07edae089`, fixture sha256
+    `bf8f659b036fb32573b1f768db1dc8f1d913a1ada535835773233257864f10b5`) stops at that credential-dependent
+    `gh auth login` (the fixture's `:292` refuses the dummy `gho_` token) and every provider turn stays unproven
+    until the owner dispatches the workflow again. Run `45171498923` remains the historical all-14 run on the
+    pre-mirror-fix bytes (script sha256 `592b98f8a0be53aaeab9022c5cc692320dc1be49a6e10bdab00a05c5664fab68`).
+    Retired (2026-11-23): the `manager/cgroup.kill` ownership refusal on systemd ≥254 this record was to
+    carry was retargeted by goal `rf-acc-delegated-cgroup-kill` to the boundary systemd keeps (the owning
+    unit cgroup's own `cgroup.kill`); recorded in `docs/archive/CLOSED-TODO.md` and
+    `docs/evidence/rf-acc-delegated-cgroup-kill-2026-11-23.md`.
+
+    Missing CI oracle (2026-11-23, goal `rf-acc-delegated-cgroup-kill`): the `daemon` CI job runs as
+    its runner's non-root user, so the row that pins the unit-kill write-probe wiring
+    (`TestLinuxOwnerUnitKillControlReadsTheDerivedUnitPath`) only discriminates as root - non-root it
+    refuses at the root:root metadata rule before the probe. A root-run (or WSL-root) pin of the probe
+    wiring is the missing CI oracle; the metadata rule still catches an A-owned unit kill without root.
 
     **When it must be dispatched.** At release acceptance, against the exact subject, and never cited as
     passed before it runs. The goals' pending predicate, quoted from `docs/goals/README.md`: "the operator
@@ -968,7 +1016,7 @@ version pinned` section of `docs/archive/CLOSED-TODO.md`.
       and `encodeGuardedRelease`'s body and grant bounds. The generation and minimum-length checks may
       be shadowed by later reads or `receipt.Validate`; the rest are real gaps. Add one rejection test
       per check in a separate maintenance slice.
-- [ ] `scripts/ci/linux-v2-native-acceptance.sh:1714` pins
+- [ ] `scripts/ci/linux-v2-native-acceptance.sh:1733` pins
       `TestInstalledLinuxOwnerRejectsUnexpectedCgroupKillFD`, which no Go file defines (base and
       HEAD); owner: the acceptance-script maintainer — restore the test or drop the pin.
 
@@ -1346,17 +1394,31 @@ version pinned` section of `docs/archive/CLOSED-TODO.md`.
 - [ ] Consolidate the Windows pre-authority witness hooks the way rf-w5-01 (2026-11-22, branch
       `refactor/rf-w5-01-witness-converge-in-place`) consolidated the Linux surface. The Windows
       side still reads raw literals with no witness gate —
-      `supervisor_windows_helper.go:554-555` (`SYMMETRY_PREAUTHORITY_DROP_FIRST_HELLO_RESPONSE`,
-      `SYMMETRY_PREAUTHORITY_HELLO_RETRY_MARKER`) and `supervisor_windows_client.go:1080`
+      `supervisor_windows_helper.go:545-546` (`SYMMETRY_PREAUTHORITY_DROP_FIRST_HELLO_RESPONSE`,
+      `SYMMETRY_PREAUTHORITY_HELLO_RETRY_MARKER`) and `supervisor_windows_client.go:1038`
       (`SYMMETRY_PREAUTHORITY_WRONG_SECRET_MARKER`) — and
       `cmd/symmetry-daemon/preauthority_witness_command_windows.go` enters witness mode from argv
       (`init()` `:26-36`) while setting the same three names for the helper child (`:142-148`).
       Conductor decision A (2026-11-21) scoped rf-w5-01 to the Linux family and left these bytes
-      for W6-03, which already owns the same files and dispatches after rf-w5-01; the Linux half
-      now has one per-use witness-config parser
+      unassigned; W6-03 (the Go-test-binary fork removal) does not deliver this consolidation. The
+      Linux half now has one per-use witness-config parser
       (`daemon/internal/platform/supervisor_linux_witness.go`) behind
       `SYMMETRY_PRODUCTION_LINUX_CONTAINMENT_WITNESS` plus marker-parent validation, so the two
-      conventions coexist until W6-03 lands.
+      conventions coexist. Owner: unassigned.
+
+## Daemon harness: native OpenCode tests run without the in-process containment install (W6-04)
+
+- [ ] The env-gated native OpenCode tests — `internal/harness/opencode/adapter_native_test.go`
+      (`SYMMETRY_OPENCODE_NATIVE_SMOKE=1`), `adapter_native_work_test.go`
+      (`SYMMETRY_OPENCODE_NATIVE_{SYNTHETIC_TOOL,ADMISSION_REPLAY,RESUME_CAPTURE,REPOSITORY_TASK}=1`)
+      and `adapter_native_terminal_candidate_test.go`
+      (`SYMMETRY_OPENCODE_NATIVE_TERMINAL_CANDIDATE=1`) — launch real processes in-process, so with
+      their gates set they reach the shipped containment route a generated test main cannot
+      dispatch. rf-w6-03 (the Go-test-binary fork removal) installed
+      `execution.UseInProcessContainmentSupervisorForTesting` in every other launching test binary
+      but left `opencode/**` frozen (W6-04 owns it), so this package has no
+      `inprocess_containment_test.go`; add the per-package install with the next `opencode/**`
+      change. Owner: W6-04.
 
 ## Daemon platform: two daemon-side barrier markers lack witness parent validation (rf-w5-01 residual)
 

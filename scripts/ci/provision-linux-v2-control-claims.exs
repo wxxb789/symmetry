@@ -104,7 +104,7 @@ defmodule LinuxV2ControlClaimFixture do
     {:ok, project} =
       Workspaces.create_project(%{
         name: "Linux v2 isolated owner witness #{suffix}",
-        key: "V2" <> (String.slice(suffix, 0, 8) |> String.upcase()),
+        key: "V2" <> (String.slice(suffix, 0, 6) |> String.upcase()),
         default_agent_profile: "pi-native",
         default_workspace: "native"
       })

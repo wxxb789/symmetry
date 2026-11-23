@@ -150,6 +150,7 @@ func verifyLinuxOwnerParentKillBoundary(mountPoint, delegatedPath string, ownerU
 	if parentStat.Uid != ownerUID || parentStat.Mode&unix.S_IFMT != unix.S_IFDIR || parentStat.Mode&0022 != 0 || a.UID != ownerUID || b.UID == ownerUID {
 		return errors.New("delegated manager parent must be A-owned with no group/other write access")
 	}
+	metadataHow := &unix.OpenHow{Flags: uint64(unix.O_PATH | unix.O_CLOEXEC | unix.O_NOFOLLOW), Resolve: uint64(unix.RESOLVE_BENEATH | unix.RESOLVE_NO_SYMLINKS | unix.RESOLVE_NO_MAGICLINKS | unix.RESOLVE_NO_XDEV)}
 	for _, control := range []struct {
 		name           string
 		ownerUID       uint32
@@ -158,43 +159,115 @@ func verifyLinuxOwnerParentKillBoundary(mountPoint, delegatedPath string, ownerU
 	}{
 		{name: "cgroup.procs", ownerUID: ownerUID, mustBeWritable: true},
 		{name: "cgroup.subtree_control", ownerUID: ownerUID, mustBeWritable: true},
-		{name: "cgroup.kill", ownerUID: 0, mustBeWritable: true},
 		{name: "cgroup.events", ownerUID: 0, allowAOwner: true},
 		{name: "cgroup.controllers", ownerUID: 0, allowAOwner: true},
 	} {
-		how := &unix.OpenHow{Flags: uint64(unix.O_PATH | unix.O_CLOEXEC | unix.O_NOFOLLOW), Resolve: uint64(unix.RESOLVE_BENEATH | unix.RESOLVE_NO_SYMLINKS | unix.RESOLVE_NO_MAGICLINKS | unix.RESOLVE_NO_XDEV)}
-		fd, openErr := unix.Openat2(parentFD, control.name, how)
-		if openErr != nil {
-			return fmt.Errorf("open manager %s metadata read-only: %w", control.name, openErr)
+		controlStat, controlErr := statLinuxOwnerCgroupControl(parentFD, control.name, metadataHow)
+		if controlErr != nil {
+			return controlErr
 		}
-		var stat unix.Stat_t
-		statErr := unix.Fstat(fd, &stat)
-		closeErr := unix.Close(fd)
-		ownerMatches := stat.Uid == control.ownerUID || control.allowAOwner && stat.Uid == ownerUID
-		if statErr != nil || closeErr != nil || stat.Mode&unix.S_IFMT != unix.S_IFREG || !ownerMatches || stat.Mode&0022 != 0 || control.mustBeWritable && stat.Mode&0200 == 0 {
+		ownerMatches := controlStat.Uid == control.ownerUID || control.allowAOwner && controlStat.Uid == ownerUID
+		if controlStat.Mode&unix.S_IFMT != unix.S_IFREG || !ownerMatches || controlStat.Mode&0022 != 0 || control.mustBeWritable && controlStat.Mode&0200 == 0 {
 			return fmt.Errorf("manager control %s is not owned/writable only by its trusted owner", control.name)
 		}
-		if control.name == "cgroup.kill" {
-			if err := validateLinuxOwnerManagerKillMetadata(stat.Uid, stat.Gid, stat.Mode, ownerUID, a, b); err != nil {
-				return err
-			}
-		}
 	}
-	writeHow := &unix.OpenHow{Flags: uint64(unix.O_WRONLY | unix.O_CLOEXEC | unix.O_NOFOLLOW | unix.O_NONBLOCK), Resolve: uint64(unix.RESOLVE_BENEATH | unix.RESOLVE_NO_SYMLINKS | unix.RESOLVE_NO_MAGICLINKS | unix.RESOLVE_NO_XDEV)}
-	writeFD, writeErr := unix.Openat2(parentFD, "cgroup.kill", writeHow)
-	if writeErr == nil {
-		_ = unix.Close(writeFD)
-		return errors.New("A can open the manager cgroup.kill for writing; the parent kill control must remain root-only")
+	// The manager kill control sits inside the delegated subtree systemd hands to A from
+	// v254 on; the boundary that stays root-only is the owning unit cgroup's own control.
+	managerKill, err := statLinuxOwnerCgroupControl(parentFD, "cgroup.kill", metadataHow)
+	if err != nil {
+		return err
 	}
-	if !errors.Is(writeErr, unix.EACCES) && !errors.Is(writeErr, unix.EPERM) {
-		return fmt.Errorf("cannot establish root-only manager cgroup.kill permissions: %w", writeErr)
+	if err := validateLinuxOwnerManagerKillMetadata(managerKill.Uid, managerKill.Gid, managerKill.Mode, ownerUID, a, b); err != nil {
+		return err
+	}
+	if err := verifyLinuxOwnerUnitKillControl(mountFD, delegatedPath, metadataHow, a, b); err != nil {
+		return err
 	}
 	return nil
 }
 
+func statLinuxOwnerCgroupControl(directoryFD int, relativePath string, how *unix.OpenHow) (unix.Stat_t, error) {
+	fd, err := unix.Openat2(directoryFD, relativePath, how)
+	if err != nil {
+		return unix.Stat_t{}, fmt.Errorf("open cgroup control %s metadata read-only: %w", relativePath, err)
+	}
+	var stat unix.Stat_t
+	statErr := unix.Fstat(fd, &stat)
+	closeErr := unix.Close(fd)
+	if statErr != nil || closeErr != nil {
+		return unix.Stat_t{}, fmt.Errorf("read cgroup control %s metadata: %w", relativePath, errors.Join(statErr, closeErr))
+	}
+	return stat, nil
+}
+
+func verifyLinuxOwnerUnitKillControl(rootFD int, delegatedPath string, metadataHow *unix.OpenHow, a, b ACLSubject) error {
+	unitKillPath := linuxOwnerUnitCgroupKillPath(delegatedPath)
+	unitKill, err := statLinuxOwnerCgroupControl(rootFD, unitKillPath, metadataHow)
+	if err != nil {
+		return err
+	}
+	if err := validateLinuxOwnerUnitKillMetadata(unitKill.Uid, unitKill.Gid, unitKill.Mode, a, b); err != nil {
+		return err
+	}
+	writeHow := &unix.OpenHow{Flags: uint64(unix.O_WRONLY | unix.O_CLOEXEC | unix.O_NOFOLLOW | unix.O_NONBLOCK), Resolve: uint64(unix.RESOLVE_BENEATH | unix.RESOLVE_NO_SYMLINKS | unix.RESOLVE_NO_MAGICLINKS | unix.RESOLVE_NO_XDEV)}
+	writeFD, writeErr := unix.Openat2(rootFD, unitKillPath, writeHow)
+	if writeErr == nil {
+		_ = unix.Close(writeFD)
+	}
+	return validateLinuxOwnerUnitKillWriteProbe(writeErr)
+}
+
+func validateLinuxOwnerUnitKillWriteProbe(writeErr error) error {
+	if writeErr == nil {
+		return errors.New("A can open the owning unit cgroup.kill for writing; the unit kill control must remain root-only")
+	}
+	if errors.Is(writeErr, unix.EACCES) || errors.Is(writeErr, unix.EPERM) {
+		return nil
+	}
+	return fmt.Errorf("cannot establish root-only unit cgroup.kill permissions: %w", writeErr)
+}
+
+func linuxOwnerUnitCgroupKillPath(delegatedPath string) string {
+	unit := filepath.Dir(delegatedPath)
+	if unit == "." {
+		return "cgroup.kill"
+	}
+	return filepath.ToSlash(unit) + "/cgroup.kill"
+}
+
+func linuxOwnerKillSubjectsDistinctAndNonRoot(a, b ACLSubject) bool {
+	return a.UID != 0 && a.UID != b.UID && b.UID != 0
+}
+
 func validateLinuxOwnerManagerKillMetadata(uid, gid, mode, ownerUID uint32, a, b ACLSubject) error {
-	if uid != 0 || gid != 0 || mode&unix.S_IFMT != unix.S_IFREG || mode&0022 != 0 || ownerUID == 0 || a.UID != ownerUID || b.UID == ownerUID {
-		return errors.New("delegated manager cgroup.kill must remain root-owned and unavailable to A/B write access")
+	if ownerUID == 0 || a.UID != ownerUID || b.UID == ownerUID || !linuxOwnerKillSubjectsDistinctAndNonRoot(a, b) {
+		return errors.New("delegated manager cgroup.kill requires distinct non-root A and B accounts")
+	}
+	ownerGID := uint32(0)
+	if uid == ownerUID {
+		ownerGID = a.GID
+	} else if uid != 0 {
+		return errors.New("delegated manager cgroup.kill must be owned by root or A, never by B")
+	}
+	if gid != ownerGID {
+		return errors.New("delegated manager cgroup.kill group must match its root or A owner")
+	}
+	return validateLinuxOwnerKillControlMode(mode)
+}
+
+func validateLinuxOwnerUnitKillMetadata(uid, gid, mode uint32, a, b ACLSubject) error {
+	if uid != 0 || gid != 0 {
+		return errors.New("unit cgroup.kill must remain root:root")
+	}
+	if !linuxOwnerKillSubjectsDistinctAndNonRoot(a, b) {
+		return errors.New("unit cgroup.kill requires distinct non-root A and B accounts")
+	}
+	return validateLinuxOwnerKillControlMode(mode)
+}
+
+func validateLinuxOwnerKillControlMode(mode uint32) error {
+	if mode&unix.S_IFMT != unix.S_IFREG || mode&0200 == 0 || mode&0022 != 0 {
+		return errors.New("cgroup.kill must be a plain file writable only by its owner")
 	}
 	return nil
 }
