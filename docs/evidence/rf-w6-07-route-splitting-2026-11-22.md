@@ -1,0 +1,424 @@
+# rf-w6-07-frontend-route-splitting — evidence record (2026-11-22)
+
+Contract: `goal-rf-w6-07-frontend-route-splitting.md` (GDD, 2026-11-21, binding with the W6-reconcile
+stale-chunk policy, the lesson-32 control-flow decision and the owner comment policy of 2026-11-22).
+Plan: `docs/plans/2026-11-22-rf-w6-07-route-splitting-plan.md` (its §6 carries the conflict found
+below, resolved by the conductor ruling of 2026-11-22). Base revision `6d55c575`
+(`test(frontend): keep layout, scroll and focus invariants in the browser layer only (#254)`).
+Files: `frontend/src/app/router.tsx` (modified, +10/-6), `frontend/src/app/route-chunks.ts` (new,
+64 L), `frontend/src/app/route-chunks.test.tsx` (new, 98 L),
+`frontend/src/features/connections/connections.tsx` (modified, +8/-6: the mount-timing guard, §9a),
+the plan, this record.
+
+Verdict up front: every contract gate is green on the settled tree — typecheck, lint, the 42-case
+router suite (byte-identical file), the 57-case connections suite (byte-identical file, the pinned
+case from §9 among them), the full suite (27 files / 625 tests), and both builds. §9 carries the
+conflict attempt 1 hit, the conductor ruling that resolved it and the corrected guard; §6 carries
+the four mutation runs (chunk-level, wrong lazy target, the mount-only guard revert); §10 carries
+the host-feed limits.
+
+## 1. Dispatch re-derivation (base `6d55c575`)
+
+| probe | contract's re-measure (base `0fa9b705`) | at dispatch (`6d55c575`) |
+| --- | --- | --- |
+| `frontend/src/app/router.tsx` | 80 L / 12 static imports / 9 route declarations | 80 L / 12 static imports / 9 route declarations (identical) |
+| `features/goals/detail.tsx` | 761 L | 778 L |
+| `features/chat/chat.tsx` | 734 L | 257 L (`chat-sections.tsx` 272 L carries the rest; W4-08 split it) |
+| `features/connections/resources.tsx` | 675 L | 672 L |
+| `features/planning/editors.tsx` | 583 L | 558 L |
+| `features/work/detail.tsx` | 456 L | 457 L |
+| `router.test.tsx` | 1,328 L / 41 declarations / 42 executed cases | 1,215 L / 41 declarations (40 `it` + one `it.each` with 2 paths) / 42 executed cases |
+| `lazyRouteComponent` / `React.lazy` in `frontend/src` | 0 hits | 0 hits |
+| `@tanstack/react-router` | 1.170.46 | 1.170.46 (`@tanstack/router-core` resolved at 1.171.39) |
+| render gate as landed (W6-02 not merged) | the 7-spec render step + executed-set assertion | step "Render authenticated release shell on desktop and mobile" (`ci.yml:479-533`), "Assert the render gate's executed set" (`ci.yml:535-553`) |
+| open PRs at dispatch | none touching `router.tsx` | #258, #257, #256 — no `frontend/**` path |
+
+The base build reproduces the audit's F13 measurement: one chunk
+`dist/assets/index-BMaoDiZV.js` **887.65 kB (257.27 kB gzip)** plus `index-Ccu45kBm.css`
+35.35 kB (7.45 kB gzip), and the >500 kB chunk warning (audit: 886.2 kB / 255.9 kB gzip).
+
+## 2. The lazy set as implemented
+
+| route | module | base import site | lazy boundary |
+| --- | --- | --- | --- |
+| `/chat` | `features/chat/chat` → `ChatPage` | `router.tsx:4` (static) | `lazyRouteComponent(loadRouteChunk(() => import("../features/chat/chat")), "ChatPage")` |
+| `/projects` | `features/projects/projects` → `ProjectsPage` | `router.tsx:7` | same shape, `"ProjectsPage"` |
+| `/projects/$projectId` | `features/projects/projects` → `ProjectPage` | `router.tsx:7` | same shape, `"ProjectPage"` |
+| `/work/$workItemId` | `features/work/detail` → `WorkDetailPage` | `router.tsx:9` | same shape, `"WorkDetailPage"` |
+| `/connections` | `features/connections/connections` → `ConnectionsPage` (pulls `connections/resources`) | `router.tsx:5` | same shape, `"ConnectionsPage"` |
+| `/goals/$goalId` | `features/goals/detail` → `GoalDetailPage` | `router.tsx:6` | same shape, `"GoalDetailPage"` |
+
+Eager and byte-identical: the root route and `WorkspaceRoot`, the `/` redirect (`router.tsx:20`),
+`/attention` (`AttentionPage`), `/runtimes` (`RuntimesPage`), `features/projects/filters` (both
+`validateSearch` functions), `app/**`, `services/**`, `components/**`. The route declarations
+themselves are untouched: `git diff frontend/src/app/router.tsx` changes the import block, adds six
+`const <Name> = lazyRouteComponent(...)` lines and one `installStaleChunkReload();` call inside
+`createAppRouter` — no route body line changes. `planning/editors` reaches the graph only through the
+projects/work lazy chunks (measured: §4).
+
+## 3. Route base→HEAD audit (control-flow preservation)
+
+| route | component wiring | `validateSearch` / `beforeLoad` / `notFound` | rendered first paint, pinned by | preserved |
+| --- | --- | --- | --- | --- |
+| `/` | none (redirect) | `beforeLoad` → `redirect({ to: "/attention", search: {}, throw: true })` at `:20`, byte-identical | **no case names it** (jsdom or render gate): named here, not assumed | yes |
+| `/attention` | eager `AttentionPage` (static import kept) | `validateSearch` `:24-27` unchanged | router.test.tsx 7 cases (":73 `keeps Attention project scope…`", ":192 returns keyboard focus…", ":208 shows a recoverable error…", ":223 removes private shell content…", ":232 keeps the operator's focus…", ":268 uses the current bootstrap CSRF token…", ":292 awaits the current session…") + the `it.each` path "/portal/attention?projectId=missing"; render gate `workspace-shell`, `portal-goal-attention`, `portal-cutover` | yes |
+| `/chat` | lazy `ChatPage` | `validateSearch` `:39-43` unchanged, `ChatScope` filter `:32-33` unchanged | router.test.tsx `describe("chat route")`: ":944 `subscribes /chat and carries the shell's project scope in its navigation`", ":964 `returns a session expiry to the chat scope it was holding`"; `chat.test.tsx` (47 cases, real router through `renderRoute`); render gate `portal-chat`, `portal-cutover` | yes |
+| `/projects` | lazy `ProjectsPage` | none | router.test.tsx ":49 `does not report unloaded project work as zero…`", ":208 `shows a recoverable error…`"; render gate `workspace-shell`, `portal-work-views`, `portal-cutover` | yes |
+| `/projects/$projectId` | lazy `ProjectPage` | `validateSearch: workSearch` (filters `:7`) unchanged | router.test.tsx `readable work views` (16 cases over `:395-722`); render gate `portal-work-views`, `portal-cutover` | yes |
+| `/work/$workItemId` | lazy `WorkDetailPage` | `validateSearch: workItemSearch` unchanged | router.test.tsx `readable work views` + `execution history boundaries` (6 cases) + `channel-join read epoch`; `work/detail.test.tsx`, `work/assignment.test.tsx`, `work/control.test.tsx` through `renderRoute`; render gate `portal-work-views`, `portal-execution-control`, `portal-goal-managed` | yes |
+| `/connections` | lazy `ConnectionsPage` | `validateSearch` `:54-57` unchanged | **no router.test.tsx case** (named): `connections.test.tsx` (57 cases through the real router), `selected-project.test.tsx`, render gate `portal-cutover` (`/portal/connections` at `:109-110`, `:356`) | yes |
+| `/runtimes` | eager `RuntimesPage` (static import kept) | `validateSearch` `:65-66` unchanged | `runtimes.test.tsx`, `selected-project.test.tsx` (`:56-121`), render gate `portal-execution-control`, `portal-cutover` | yes |
+| `/goals/$goalId` | lazy `GoalDetailPage` | none | **no router.test.tsx case** (named): `goal-attention.test.tsx` (29 cases) and `goal-settle.test.tsx` through `renderRoute`; render gate `portal-goal-attention`, `portal-cutover` | yes |
+
+Deep links: `createMemoryHistory({ initialEntries })` + a cold mount per case in every suite above, so
+each split route is exercised as a first-load deep link, not only as a navigation target.
+
+## 4. Chunk tables (before / after, raw + gzip)
+
+`pnpm --filter @symmetry/frontend build`, run on the same host tree (§10 dependency note).
+
+Before (base `6d55c575`):
+
+| chunk | raw | gzip |
+| --- | --- | --- |
+| `dist/assets/index-BMaoDiZV.js` (entry, single chunk) | 887.65 kB | 257.27 kB |
+| `dist/assets/index-Ccu45kBm.css` | 35.35 kB | 7.45 kB |
+
+After (settled tree, attempt 2 — the numbers below are this build's own Vite report; Vite prints
+decimal kB):
+
+| chunk | raw | gzip | role |
+| --- | --- | --- | --- |
+| `dist/assets/index-DDkgw58W.js` | 321.32 kB | 101.84 kB | entry |
+| `dist/assets/served-ZmW5x40A.js` | 400.76 kB | 116.11 kB | the entry's own static import (shared framework/services); preloaded by `index.html` |
+| `dist/assets/chat-BBPaDqCn.js` | 27.11 kB | 8.68 kB | `/chat` |
+| `dist/assets/connections-DZt3_XF9.js` | 34.42 kB | 9.11 kB | `/connections` (+ `connections/resources`) |
+| `dist/assets/detail-DhZbbcoE.js` | 30.40 kB | 8.40 kB | `/goals/$goalId` |
+| `dist/assets/detail-C5P8TMWc.js` | 35.08 kB | 10.38 kB | `/work/$workItemId` |
+| `dist/assets/projects-C1LVaO58.js` | 6.23 kB | 2.23 kB | `/projects`, `/projects/$projectId` |
+| `dist/assets/work-surface-vtboPdK8.js` | 34.51 kB | 9.58 kB | shared by the projects/work routes: `projects/work-surface` + `planning/editors` |
+| `dist/assets/refusals-C5yaP-QR.js` | 2.67 kB | 1.06 kB | shared by the lazy chunks |
+| `dist/assets/receipts-CxYE8YmQ.js` | 2.96 kB | 1.21 kB | shared by the lazy chunks |
+| `dist/assets/use-dialog-opener-BywfTvAD.js` | 0.42 kB | 0.28 kB | shared by the lazy chunks |
+| `dist/assets/index-Ccu45kBm.css` | 35.35 kB | 7.45 kB | unchanged stylesheet |
+
+Attempt 1's build of the pre-ruling tree has the same sizes for every chunk except
+`connections-*.js` (34.34 kB / 9.07 kB) and the same entry (321.32 kB / 101.84 kB); the asset
+hashes cascade from the guard edit (routes whose chunks import `work-surface`, which imports
+`connections/resources`, re-hash with it). A rebuild of the settled tree reproduced the same hashes
+in the same run order (§7).
+
+Initial script payload: `index.html` references the entry plus one `modulepreload` of
+`served-ZmW5x40A.js` → **722,093 bytes raw / 217.95 kB gzip**, versus the base's single
+887.65 kB / 257.27 kB (−165.6 kB raw, −39.3 kB gzip, −15.3 % gzip). The six route chunks and the
+three small shared chunks are **not** in the initial payload.
+
+Entry chunk: 887.65 → 321.32 kB raw (−63.8 %), 257.27 → 101.84 kB gzip (−60.4 %) with the heavy
+features outside it. The delivered build is deterministic: the settled tree's rebuild reproduced the
+same asset hashes (`index-Cfd4EG-e.js`, `served-ZmW5x40A.js`, …).
+
+Route→module→chunk check (each literal is unique inside `frontend/src`, so its chunk is a fact, not
+an inference):
+
+| module | distinctive literal | chunk containing it (settled build) |
+| --- | --- | --- |
+| `features/chat/chat` | `Open Chat from a project to hold a project conversation` | `chat-BBPaDqCn.js` |
+| `features/connections/connections` | `Microsoft Entra ID` | `connections-DZt3_XF9.js` |
+| `features/connections/resources` | `No agent profile` | `connections-DZt3_XF9.js` |
+| `features/goals/detail` | `Approve the plan` | `detail-DhZbbcoE.js` |
+| `features/work/detail` | `This project is archived. Restore it before editing its work.` | `detail-C5P8TMWc.js` |
+| `features/projects/projects` | `Your workspace, organized by project.` | `projects-C1LVaO58.js` |
+| `features/planning/editors` | `Project archived.` | `work-surface-vtboPdK8.js` |
+| `features/attention/attention` | `Refreshing attention` | `index-DDkgw58W.js` (eager, by decision) |
+| `features/runtimes/runtimes` | `Refreshing runtimes` | `index-DDkgw58W.js` (eager, by decision) |
+
+## 5. Stale-chunk policy: upstream mechanics and the pinned unit test
+
+Upstream facts (installed: vite 8.3.8, `@tanstack/react-router` 1.170.46 → `@tanstack/router-core`
+1.171.39):
+
+- Vite's preload helper (`vite/dist/node/chunks/node.js:27046-27058`) dispatches a cancelable
+  `vite:preloadError` event carrying `payload: Error` and then `if (!e.defaultPrevented) throw err`,
+  so a **prevented** event makes the dynamic import resolve with `undefined`.
+- `lazyRouteComponent` (`@tanstack/react-router/dist/esm/lazyRouteComponent.js`) already carries its
+  own reload-once guard: for a module-not-found error — the three browser wordings, matched by
+  `isModuleNotFoundError` (`@tanstack/router-core/dist/esm/utils.js:147-150`) — it writes
+  `tanstack_router_reload:<error.message>` and reloads. That key is the *message*, not the build, and
+  it fires only when the rejection reaches the component.
+
+`frontend/src/app/route-chunks.ts` implements the decision:
+
+- marker `portal:stale-chunk-reload`, value = `import.meta.url` of the entry chunk (the URL a
+  deployment replaces); `claimReloadOnce` writes it and calls the injected `reload` exactly once per
+  build;
+- `installStaleChunkReload` (called from `createAppRouter`) registers one `vite:preloadError`
+  listener per window: it examines `event.payload`, claims when this build has not reloaded yet and
+  `preventDefault()`s only when it claimed;
+- `loadRouteChunk(importer, reload)` wraps every route importer: a load-failure rejection claims (if
+  unclaimed) and then throws a plain `Error` whose message is *not* a module-not-found wording, so
+  the library's message-keyed guard cannot fire a second reload; the `undefined` module a prevented
+  event leaves behind takes the same path (the listener already owns that failure's reload);
+- non-load failures (a chunk that evaluates and throws) are rethrown untouched: error state, no
+  reload;
+- the terminal surface is the router's existing error state (`MatchesInner`'s `CatchBoundary` →
+  `ErrorComponent`) — no `errorComponent`/`pendingComponent` is added anywhere;
+- `reload` is an injected default because jsdom's `Location.reload` is unforgeable
+  (`Object.getOwnPropertyDescriptor(window.location, "reload")` → `{ configurable: false,
+  writable: false }`; `Object.defineProperty` throws `Cannot redefine property: reload`). The unit
+  test drives that seam; the real reload is the render gate's business.
+
+Unit test `frontend/src/app/route-chunks.test.tsx` (7 cases, all green; 428 ms in the full-suite json run, 7/7 in a standalone run after the LF normalization):
+
+| case | pins |
+| --- | --- |
+| `keeps the shell and the current route mounted while the next route's chunk is still loading` | navigation into a lazy route holds the previous page (no flash of missing content) |
+| `holds the first paint of a cold lazy deep link until that route's chunk resolves` | a cold deep link renders shell and page in one commit, never a half-shell |
+| `reloads the page once and shows the route's error state when a chunk load fails` | first failure: one reload, the marker written, the route's error state rendered |
+| `shows the route's error state without another reload once this build has reloaded` | second failure: no loop, error state |
+| `leaves a failing route chunk that is not a stale chunk to the error state without reloading` | an eval-time error is not a stale chunk: no reload, no marker, the real message shown |
+| `claims one reload for a prevented vite:preloadError and leaves the repeat to the error state` | the event path: claimed + prevented once, then left alone |
+| `shows the route's error state when a prevented preload left the chunk import empty` | the swallowed-`undefined` path and the shared claim across both entry points (exactly one reload) |
+
+## 6. Mutation runs (each applied alone, reverted, hash-verified)
+
+| # | mutation | observed | proof |
+| --- | --- | --- | --- |
+| a | `/chat` back to the static import (`import { ChatPage } from "../features/chat/chat";`, lazy const deleted) | build exit 0 on the mutant tree: entry `index-D1ZKwl5i.js` **349.39 kB (gzip 109.90 kB)** vs the delivered 321.32 kB (101.84), **no `chat-*.js` chunk**, and the chat-only literal (`Open Chat from a project to hold a project conversation`) resolves to `index-D1ZKwl5i.js` — the entry regains the module | chunk-level mutant red |
+| b | chat lazy target pointed at `../features/attention/attention` / `"AttentionPage"` | `vitest run src/app/router.test.tsx` exit 1: **1 of 42 red** — `chat route > subscribes /chat and carries the shell's project scope in its navigation`, `TestingLibraryElementError: Unable to find role="heading" and name "Chat"`, error surface `Invariant failed: Could not find an active match from "/attention"` (attempt 1 measured the same shape as 3 of 42; the two extra failures there did not reproduce in either attempt-2 run) | route-level mutant red |
+| c | no test needed an added `await`: `git diff --exit-code frontend/src/app/router.test.tsx frontend/src/features/connections/connections.test.tsx` → 0 (both byte-identical) | — | mutant not applicable, recorded |
+| d | the connections guard back to mount-only under lazy routes (`stillOnConnections = () => mounted.current`) | `vitest run src/features/connections/connections.test.tsx -t "does not pull the operator back"` exit 1: `1 failed, 56 skipped (57)`, `Expected: "/portal/projects"` / `Received: "/portal/connections"` at `connections.test.tsx:746` | route-guard mutant red |
+
+Every mutant was reverted and the revert checked with `sha256sum -c`:
+`frontend/src/app/router.tsx: OK`, `frontend/src/app/route-chunks.ts: OK`,
+`frontend/src/app/route-chunks.test.tsx: OK`, `frontend/src/app/router.test.tsx: OK`,
+`frontend/src/features/connections/connections.test.tsx: OK`, and the guard mutant against the
+pre-mutant `connections.tsx` hash
+(`1c6761b7a13a3a4aa29f0a77099c823930051b2e55997bd0690ca926006ad492: OK`).
+
+## 7. Gates (settled tree, attempt 2)
+
+Host invocation (§10): `pnpm` is the pinned 12.17.0 binary, invoked as
+`pnpm --trust-lockfile --config.verify-deps-before-run=false <script>`; the two flags skip the
+lockfile policy sweep and the pre-run install against the host feed only — each script's payload is
+the contract's command.
+
+| gate | command (script payload) | result |
+| --- | --- | --- |
+| typecheck | `--filter @symmetry/frontend typecheck` | **exit 0**, `$ tsc --noEmit`, no diagnostics, 7.03 s |
+| lint | `--filter @symmetry/frontend lint` | **exit 0**, `220 problems (0 errors, 220 warnings)`, 74.15 s; base is the same 220 → the `--max-warnings 229` cap is not raised |
+| router suite (frozen) | `--filter @symmetry/frontend exec vitest run src/app/router.test.tsx` | **exit 0**, `Tests 42 passed (42)`, 13.05 s, run with `router.tsx` sha256 `c12df3df…` and `router.test.tsx` sha256 `9b46ec7d…` (the file is byte-identical to HEAD) |
+| connections suite (frozen) | `--filter @symmetry/frontend exec vitest run src/features/connections/connections.test.tsx` | **exit 0**, 57/57 (26.5 s inside the json run); the file is byte-identical to HEAD (`ac68f053…`) and the pinned §9 case is one of the 57 |
+| full suite | `--filter @symmetry/frontend test` | **exit 0** on 7 of 8 invocations of the settled bytes, `Test Files 27 passed (27)`, `Tests 625 passed (625)` each (33-90 s). The composition table below comes from a `--reporter=json` run of the same source (before the new test file's LF normalization; 27 files / 625 tests / 0 failed). One earlier invocation of the same bytes exited 1 with an unidentified failure (my own `tail` truncation dropped the case name) and never reproduced — see §11 |
+| build before | `--filter @symmetry/frontend build` (attempt 1, base tree) | exit 0, single 887.65 kB chunk (§4) |
+| build after | `--filter @symmetry/frontend build` (settled tree, run twice) | exit 0, the §4 table, 4.28 s and 2.07 s; the rebuild reproduced every asset hash |
+| diff hygiene | `git diff --check` | exit 0 |
+| DLP | the user-profile-path grep and the backslash-u grep over the changed/new files | 0 matches each; `scripts/ci/model-routing-record-sanitize.py --check --root-only` on this record: exit 0 |
+| render gate (CI) | the PR's `control` job: the seven spec files + the executed-set assertion | CI-verified on the PR; the release-shell harness cannot run on this host (W5-08 §3.3 records the limitation) |
+
+Full-suite composition on the settled tree (27 files / 625 tests; per-file test counts and
+durations from `vitest run --reporter=json`, the same tree and config as the gate above):
+
+| file | tests | duration |
+| --- | --- | --- |
+| `src/app/application.test.ts` | 90 | 90 ms |
+| `src/app/legacy.test.ts` | 7 | 8 ms |
+| `src/app/read-cache.test.ts` | 38 | 14 ms |
+| `src/app/route-chunks.test.tsx` (new) | 7 | 428 ms |
+| `src/app/router.test.tsx` | 42 | 12,326 ms |
+| `src/app/selected-project.test.tsx` | 6 | 1,635 ms |
+| `src/components/primitives.test.tsx` | 14 | 537 ms |
+| `src/features/chat/chat-hooks.test.tsx` | 9 | 327 ms |
+| `src/features/chat/chat.test.tsx` | 47 | 23,195 ms |
+| `src/features/chat/presentation.test.ts` | 39 | 38 ms |
+| `src/features/connections/connections.test.tsx` | 57 (all green) | 26,516 ms |
+| `src/features/goals/goal-attention.test.tsx` | 29 | 18,182 ms |
+| `src/features/goals/goal-settle.test.tsx` | 8 | 12,872 ms |
+| `src/features/planning/planning.test.tsx` | 35 | 13,431 ms |
+| `src/features/projects/filters.test.ts` | 9 | 14 ms |
+| `src/features/projects/saved-views.test.ts` | 6 | 13 ms |
+| `src/features/runtimes/presentation.test.ts` | 20 | 17 ms |
+| `src/features/runtimes/runtimes.test.tsx` | 4 | 974 ms |
+| `src/features/work/assignment.test.tsx` | 10 | 5,126 ms |
+| `src/features/work/control.test.tsx` | 13 | 3,106 ms |
+| `src/features/work/detail.test.tsx` | 7 | 2,427 ms |
+| `src/features/work/presentation.test.ts` | 22 | 20 ms |
+| `src/features/work/receipts.test.ts` | 14 | 13 ms |
+| `src/services/api.test.ts` | 59 | 191 ms |
+| `src/services/realtime.test.ts` | 19 | 50 ms |
+| `src/services/refusals.test.ts` | 12 | 18 ms |
+| `src/tool-cache-config.test.ts` | 2 | 670 ms |
+
+Base for comparison: 26 files / 618 tests, green; final = 618 + 7 new = 625.
+
+## 8. Attention and Runtimes: the eager decision with numbers
+
+Both variants were built on the same tree (the second one reverted immediately afterwards):
+
+| variant | entry chunk | entry's static shared chunk | attention / runtimes chunks | initial payload |
+| --- | --- | --- | --- | --- |
+| delivered (both eager) | 321.32 kB (101.84 gzip) | 400.76 kB (116.11 gzip) | — (both inside the entry) | 722.09 kB / 217.95 kB gzip |
+| both lazy (measured, reverted) | 301.64 kB (95.85 gzip) | 398.04 kB (115.38 gzip) | `attention-DL7A5b2m.js` 9.36 kB (3.19 gzip), `runtimes-BRRhG7Zz.js` 6.29 kB (2.02 gzip) | 699.68 kB / 211.23 kB gzip |
+
+The lazy boundary would move 19.68 kB raw / 5.99 kB gzip off the entry and 22.41 kB raw /
+6.72 kB gzip off the initial payload — bought by making the **default landing route** (`/` redirects
+to `/attention`) wait for a chunk before the router commits, i.e. an extra round trip on the most
+common cold load, for 3.19 kB gzip. Decision: both stay eager, as the contract's default states,
+with these numbers recorded.
+
+## 9. The mount-timing conflict (attempt 1) — resolved by the conductor ruling
+
+**Case**: `frontend/src/features/connections/connections.test.tsx:735`
+`connection management > does not pull the operator back after they left the page while a save was
+pending`, failing at `:746`: `Expected: "/portal/projects"`, `Received: "/portal/connections"`.
+
+Attempt 1 hit this as a blocking conflict between clause 1 (full suite green) and the split's own
+"previous page stays rendered while the destination chunk loads" wording. The conductor ruling of
+2026-11-22 resolved it: the mount-based guard is replaced by a check of the router's current
+location at all the page's late-continuation sites, and every other page under a split route is
+audited for the same class (plan §6a/§6b).
+
+**Base comparison**: the same case passes at base in isolation (2 of 2 runs, exit 0) on this host;
+the failure is introduced by the split, deterministically (3 of 3 isolated runs, plus both full-suite
+runs).
+
+**Mechanism** (measured with an instrumented copy of the case, deleted before hand-off; history
+subscription + `push`/`replace` stack logging):
+
+1. `act(() => { harness.history.push("/portal/projects"); })` — the history pathname becomes
+   `/portal/projects`, the connections page's DOM is detached, the content area is empty while the
+   `/projects` chunk loads. The push itself is logged from the test.
+2. The pending PATCH response is released. `connections.tsx:443-448`'s continuation runs while
+   `mounted.current` (`:357-360`) is still `true`, because React keeps the previous route's
+   component tree mounted while the new route's chunk resolves — the behavior the contract's own
+   "no flash of missing content" clause asks for, pinned by `route-chunks.test.tsx` case 1.
+3. The guard therefore passes and the page navigates back:
+   `PUSH "/portal/connections?connectionId=20000000-0000-4000-8000-000000000001" at
+   frontend/src/features/connections/connections.tsx:446:14`.
+
+So the app answers "did the operator leave?" with mount state, and lazy routing deliberately widens
+the window in which a mounted page is no longer the visible page.
+
+**Why this is a contract conflict, not an implementation slip**: clause 1 requires the full suite
+green; the split's acceptance wording requires the previous page to stay rendered while the
+destination's chunk loads ("the router's own pending state is the only new intermediate surface and
+the suites must not observe a flash of missing content"). Keeping the previous page mounted is
+exactly what keeps `mounted.current` true. The two requirements meet in this one case.
+
+**Rejected alternatives**:
+
+- `wrapInSuspense: true` on the lazy routes (per-route Suspense fallback = `null`): it would drop
+  the previous page during the chunk load — the flash of missing content the same paragraph
+  forbids — to make one assertion pass. Not run; rejected on the contract's wording.
+- removing `lazyRouteComponent`'s `component.preload` so the router's `load()` commits the location
+  without awaiting the chunk (measured, reverted): the case still failed 3 of 3 (React keeps the old
+  tree while the new render suspends) **and** the frozen case
+  `readable work views > focuses the content heading on a genuine route change` (`router.test.tsx:520`)
+  failed 3 of 3, because the shell's heading reset is gated on the router's `status === "idle"`
+  (`shell.tsx:246-253`), which then no longer implies the new page is mounted. So the current
+  behavior is the one that keeps the focus contract.
+- preloading every route chunk after first paint: it would fetch the whole application on every load
+  and defeat the split the contract asks for.
+
+**Resolution as implemented (attempt 2, conductor ruling of 2026-11-22)** — one predicate at
+`frontend/src/features/connections/connections.tsx:363`, used by `noticeFor` (`:415`),
+`clearSelectionFor` (`:418`) and the `saved` continuation (`:447`):
+
+```tsx
+const stillOnConnections = () => mounted.current && router.latestLocation.pathname === "/connections";
+```
+
+`mounted.current` stays as the second conjunct, so the unmounted case keeps its semantics; no test
+file, route, `validateSearch` or rendered surface changes
+(`git diff --exit-code frontend/src/features/connections/connections.test.tsx` → 0).
+
+Note on attempt 1's recorded diff: it compared the raw `router.history.location.pathname` with
+`"/connections"`. On this route that value is `/portal/connections` (§9a), so the recorded
+comparison is always true here — a no-op guard that could neither fix the pinned case nor preserve
+the notice path; it cannot be the exact shape that produced attempt 1's green measurement runs.
+Attempt 2 implements the comparison against the router's parsed current location, whose both
+branches the suites exercise: `connections.test.tsx:322` and `:663` assert a notice that
+`noticeFor` sets (guard pass), and the pinned case asserts the navigation is dropped once the
+location moved (guard fail).
+
+### 9a. Location accessors on this tree (temporary probe, deleted before the gates)
+
+A throwaway test (`frontend/src/app/tmp-location-probe.test.tsx`, deleted before any gate) mounted
+the real `createAppRouter` at `/portal/connections` through `renderRoute` and printed the accessors:
+
+| moment | `router.latestLocation.pathname` | `router.state.location.pathname` | `history.location.pathname` | `router.state.matches.at(-1).routeId` |
+| --- | --- | --- | --- | --- |
+| on the page | `/connections` | `/connections` | `/portal/connections` | `/connections` |
+| right after `history.push("/portal/projects")` | `/projects` | `/projects` | `/portal/projects` | `/connections` (still) |
+| +1 microtask | `/projects` | `/projects` | `/portal/projects` | `/connections` (still) |
+| +100 ms (destination chunk resolved) | `/projects` | `/projects` | `/portal/projects` | `/projects` |
+
+Both parsed locations are basepath-stripped and flip with the push, before the destination chunk
+resolves (`load()` calls `updateLatestLocation()` first —
+`router-core@1.171.39/dist/esm/router.js:487`); the committed match tree keeps the leaving route for
+the whole chunk-load window. The parsed current location is the only one of the four that both
+strips the basepath and moves at the moment the operator leaves.
+
+## 10. Host dependency tree (documented deviation, restored before hand-off)
+
+- HEAD pins four dev packages the only reachable registry on this host does not serve: `msw 3.0.7`
+  (feed latest 3.0.6), `@vitest/coverage-v8 5.1.1` (5.1.0), `knip 6.46.1` (6.45.1),
+  `typescript-eslint 8.73.0` (8.72.2 stable) — all four from `09bf927c` (#240). `registry.npmjs.org`
+  and `registry.npmmirror.com` are TLS-filtered from this network (`curl` → `000`; a
+  `--frozen-lockfile` install failed with `ERR_PNPM_META_FETCH_FAIL`, and the host's supply-chain
+  sweep reported `✗ Lockfile failed supply-chain policy check (488 entries in 7 m 12.5 s)`).
+- The gate runs therefore used a tree materialized from a temporary lockfile whose deltas against
+  HEAD's are those four packages (and their peer suffixes, e.g.
+  `vitest@5.1.0(@vitest/coverage-v8@5.1.0)(…msw@3.0.6…)`) plus the feed's own tarball URLs. A first
+  install attempt left pnpm with two peer variants of `vitest@5.1.0` (the frontend linked one,
+  `@testing-library/jest-dom` the other), which made `tsc` report 721
+  `Property 'toBeVisible' does not exist on type 'Assertion<…>'` errors; a clean re-install produced
+  a single variant (verified by `readlink` on both consumers) and the 721-error class did not
+  reappear in any later run.
+- `pnpm-lock.yaml` and `frontend/package.json` were restored to HEAD's bytes before the diff and DLP
+  checks (`sha256` `b9575212…` and `371e97c3…`, `git status` shows only the four slice files). The
+  temporary lockfile is not committed. CI installs from HEAD's lockfile on a runner with npmjs.org
+  access, so this deviation is host-local.
+- Rejected alternatives: `scripts/ci/check-lockfile-registry.py` on the temporary lockfile would fail
+  by design (it carries feed tarball URLs) — it was not run against the temporary file, and the
+  committed lockfile is untouched.
+- Attempt 2 re-hit the two-variant state: the attempt's first pnpm invocation (the pinned binary
+  without the flags, which re-ran `verifyDepsBeforeRun` against the committed lockfile) left
+  `@testing-library/jest-dom@7…/node_modules/vitest` pointing at the other `vitest@5.1.0` peer
+  variant (`…_a41af5d6…`) than `frontend/node_modules/vitest` (`…_d22a4b15…`), and `tsc` reported
+  the 721-error class again. Repaired by re-pointing that one symlink at the frontend's variant
+  (both consumers re-checked with `readlink`); typecheck is exit 0 (7.03 s) after it. Every
+  attempt-2 gate ran under `--trust-lockfile --config.verify-deps-before-run=false`, which keeps
+  pnpm from re-running that install and the lockfile policy sweep (measured: the bare pinned-pnpm
+  invocation timed out at 120 s inside the sweep; the accommodated invocation completes in 0.4 s
+  with no install attempted).
+
+## 11. Residual risks and limits
+
+- The render gate is CI's verdict; this host cannot run the release-shell harness. Every split route
+  is a deep-link target in the gate's wired specs except `/connections`, which appears only in
+  `portal-cutover`'s navigation list.
+- The `/` redirect has no jsdom case and no wired render-gate case (named in §3); its line is
+  byte-identical and it carries no component import.
+- The mount-timing class was audited across every page under a split route (plan §6b carries the
+  grep methods and the per-site disposition). Two sites remain unfixed, both state-writes-only
+  behind a subject fence that already discards another subject's continuations:
+  `connections/resources.tsx:566-574` (`live()`) and `work/assignment.tsx:116-121`, `:137`. Under
+  the split, a late write from either can at most render a notice on a page that is still visible
+  while the destination chunk loads; no navigation, no URL change, no gate pins that window, and
+  neither file is inside the ruling's owned set.
+- Lazy routes change *when* a navigation's commit happens: on a cold deep link into a split route the
+  navigation's commit waits for that route's chunk (`router-core`'s `hasLoaders` treats
+  `component.preload` as a route loader), so the shell's first paint follows that one fetch; on a
+  navigation the previous page stays until the new one is ready (both pinned by
+  `route-chunks.test.tsx` cases 1-2). Dropping the preload measured a lost heading focus, so the
+  trade is deliberate.
+- One full-suite invocation of the settled bytes exited 1 with an unidentified failure: my own
+  `tail -10` truncation dropped the failing case's name before the output reached this record, and
+  the run does not reproduce — 7 further invocations of the same byte revision are `27/625` green,
+  every one of them with a FAIL/`timed out` grep in place (plus two green runs of the same source
+  before the new test file's LF normalization), and every suite that exercises the moved
+  paths (router, connections, chat, goals, work, planning, route-chunks) is green in all of them.
+  Recorded as a host-side flake of one occurrence, unidentified; it is not the deterministic
+  single-case red of any mutant (§6), and no evidence attributes it to this change.
+- 4 dev packages differ from the committed lockfile on this host (§10); no other file in the tree was
+  left modified.
