@@ -182,8 +182,12 @@ RuntimeHarnessGeneric = string(protocol.HarnessKindGeneric) // … ×7
 3. **Generator wiring.** `contracts/scripts/check.mjs` already spawned `generate.mjs --check`
    (`runGeneratorCheck`) before this slice, so `pnpm contracts:check` already gated the generator
    transitively; C6's "no CI caller exists" held only for a direct `.github/**` caller. Q3=a is
-   implemented literally anyway: `package.json`'s `contracts:check` now names the check
-   explicitly, so the wiring is visible and mutant-checkable at the script level.
+   satisfied by `check.mjs` alone, and that is where the check stays wired: the requirement
+   ("`generate.mjs --check` runs in `contracts:check`") holds through `runGeneratorCheck`
+   (`check.mjs:124-136`, invoked at `:352`). The implement stage had also named the check in
+   `package.json`'s `contracts:check`, running it a second time per invocation; the apply stage
+   removed that duplicate member (simplify finding F2) and re-proved the wiring by mutating a
+   generated artifact until `pnpm contracts:check` reported the drift.
 4. **Frontend gate environment.** The worktree had no `node_modules` and the registry was
    unreachable, so the contracts tooling and frontend dependencies were borrowed read-only from
    two worktrees with byte-identical `pnpm-lock.yaml` (root/contracts from the primary checkout,

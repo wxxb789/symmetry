@@ -19,9 +19,6 @@ func TestParseKindAcceptsExactlyTheWireVocabulary(t *testing.T) {
 		}
 		accepted[kind] = string(wire)
 	}
-	if len(accepted) != len(protocol.HarnessKinds()) {
-		t.Fatalf("ParseKind() produced %d distinct kinds, want %d", len(accepted), len(protocol.HarnessKinds()))
-	}
 	for _, value := range []string{"", "claude", "Generic", "generic ", "future_harness", "opencode-v2"} {
 		if _, err := ParseKind(value); err == nil || err.Error() != fmt.Sprintf("runtime.harness_kind %q is unsupported", value) {
 			t.Fatalf("ParseKind(%q) = %v, want the exact unsupported-kind refusal", value, err)

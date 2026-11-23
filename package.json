@@ -5,7 +5,7 @@
   "packageManager": "pnpm@12.17.0",
   "scripts": {
     "contracts:generate": "node contracts/scripts/generate.mjs",
-    "contracts:check": "pnpm contracts:typecheck && pnpm contracts:test && node contracts/scripts/check.mjs && node contracts/scripts/check-effect.mjs && node contracts/scripts/generate.mjs --check",
+    "contracts:check": "pnpm contracts:typecheck && pnpm contracts:test && node contracts/scripts/check.mjs && node contracts/scripts/check-effect.mjs",
     "contracts:typecheck": "tsc --project contracts/tsconfig.json",
     "contracts:test": "node --test contracts/scripts/*.test.mjs"
   },

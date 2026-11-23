@@ -162,11 +162,7 @@ func truthTableCall(t *testing.T, mode protocol.SessionMode, capabilities harnes
 func truthTableMinimalProjection(t *testing.T, kind harness.Kind) harness.Capabilities {
 	t.Helper()
 	if kind == harness.KindGeneric {
-		capabilities, err := harness.NewGenericAdapter().Probe(context.Background())
-		if err != nil {
-			t.Fatal(err)
-		}
-		return capabilities
+		return truthTableProductionProjection(t, kind)
 	}
 	return testVerifiedNativeCapabilities(kind)
 }
