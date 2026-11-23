@@ -4,6 +4,7 @@ Contract: `goal-rf-w4-12c-process-recorder-port.md` (GDD state root, external to
 with the 2026-11-21 arch-decision-2 rulings (R1, R12, O1, O2, O3, O5), the verification amendments
 and the 2026-11-22 comment policy binding over the earlier text. Base revision:
 `f04487736a30bccdc30ace6c40ecfd288fd45e05` (W4-15b/#243, W4-12b/#257 and W4-12a/#244 merged).
+Fix-stage revision: `bd819940` (the fix-stage amendments of evidence §13; review 1's slice).
 Branch: `refactor/rf-w4-12c-process-recorder-port`. Owned files are the contract's strict set plus
 this plan, `docs/evidence/rf-w4-12c-process-recorder-port-2026-11-22.md` and
 `docs/TODO.md`/`docs/archive/CLOSED-TODO.md`.
@@ -201,3 +202,5 @@ The tree is authoritative for these; the sections above record the design intent
 - `StartRequest.grant()`'s no-grant fallback stays (evidence §3 explains its new role: it folds the
   three request-level members onto the frozen mirrors a direct construction without a recorder
   still launches through).
+- The fix-stage amendments are committed as `bd819940` (evidence §13); the review-round amendments
+  (evidence §14) are the working-tree edits on top of it.

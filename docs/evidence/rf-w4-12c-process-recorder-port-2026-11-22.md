@@ -7,8 +7,9 @@ Plan: `docs/plans/2026-11-22-rf-w4-12c-process-recorder-port-plan.md`. Base revi
 `f04487736a30bccdc30ace6c40ecfd288fd45e05` (W4-15b/#243, W4-12a/#244, W4-12b/#257 merged). Branch:
 `refactor/rf-w4-12c-process-recorder-port`. Every command ran in `daemon/` unless its row says
 otherwise, on the Windows host with the Go toolchain of this checkout; the WSL row runs
-Ubuntu-24.04 over the same worktree through its mount point (`<worktree>/daemon`). Nothing is
-committed by the fix stage (§13); the reviewed slice is commit `5945f5d4` on the branch.
+Ubuntu-24.04 over the same worktree through its mount point (`<worktree>/daemon`). The fix-stage
+amendments (§13) are committed as `bd819940`, the branch HEAD review 1 reviewed; §14 records the
+review-round amendments, whose bytes §1 binds.
 
 ## 1. Subject bytes (sha256, final tree)
 
@@ -20,7 +21,7 @@ committed by the fix stage (§13); the reviewed slice is commit `5945f5d4` on th
 | `daemon/internal/execution/probe_test.go` | `6e63515653a03893394f98b01e634929d3ea4f35e61a7bcae0b6073c71c6d334` |
 | `daemon/internal/execution/process_launcher_linux.go` | `72c58a553a5c9c795199eea74400e2a40f198760630d17d595062822ddb5124d` |
 | `daemon/internal/execution/process_launcher_windows.go` | `8985bdf01f8d639b0afe693a1bfc819f934407e02e802066132056c1528767c9` |
-| `daemon/internal/execution/recorder_test.go` (new) | `b339162b49aa60ec11a01d75c4106b3cd7ecc880e4349037cf153682207a0ff0` |
+| `daemon/internal/execution/recorder_test.go` (new) | `0dffd1a3626e2e9b634cbbc618c92e548ee0807e9b538ac15e1a2df969c7f156` |
 | `daemon/internal/harness/types.go` | `9765d28b2922acaa39d30d6172d042d2791306e36a4e69b234b4966cf3e35144` |
 | `daemon/internal/harness/staged_driver.go` | `fa69dd24210bfe09caa422291ced99192e0e712bf7ffa57b5197bacd12402b64` |
 | `daemon/internal/harness/frozen_members_test.go` (new) | `e0659e6cfddedf75de2492ef501a0e85337ac62e516a301124e4bd81a9ad1722` |
@@ -31,7 +32,7 @@ committed by the fix stage (§13); the reviewed slice is commit `5945f5d4` on th
 | `daemon/internal/app/linux_owner_witness_linux.go` | `3383fe973e1a41b15ea699eb7fa153b7b84ede16b5e7d814a2564ff9ae021442` |
 | `scripts/ci/omo-control-native-evidence.py` | `b66b0d0c88c4201f7f0415571dc7a64a3ffcc7d2611b3a8df4a567f5d13d0803` |
 | `docs/TODO.md` | `42b6b6d644632a1fc516bcc0115f4219a08fb4c393d1a96f5bd0266f33781e4c` |
-| `docs/plans/2026-11-22-rf-w4-12c-process-recorder-port-plan.md` | `a89da88c2806295251b26c860a7c5927fd561a43c6dad092c0869a0c91407253` |
+| `docs/plans/2026-11-22-rf-w4-12c-process-recorder-port-plan.md` | `f21ae0c6c2142dd1cba171f8581952275854003c9e2180f48fffb5fa32cef68b` |
 | this record | the file you are reading (no self-referential hash) |
 
 ## 2. The port: one interface, ten writes, one capability query
@@ -186,9 +187,16 @@ store methods run in the same order with the same arguments, and the parity test
 | `PersistContainmentUnproven` nil | no uncertainty observer installed | same |
 | handoff members nil | `configureStartedHandoff` leaves the launcher's funcs | same (`writes.*`) |
 
-The parity test's five shapes (marker+authority, atomic, atomic failure, marker without authority,
-no durable write) each assert the exact write sequence for the frozen-member form and the
+The parity test's eight shapes (marker+authority, atomic, atomic failure, marker without authority,
+no durable write, the production marker+atomic+authority+stop set, handoff commit-then-stop,
+unproven-on-close-failure) each assert the write sequence for the frozen-member form and the
 recorder form, plus the start error, the containment error and the containment cleanup counters.
+The last three arrived in the review round (§14): the production shape pins the atomic write's
+precedence over both legacy writes, the handoff shape pins commit-then-stop-receipt, and the
+unproven shape pins one `PersistContainmentUnproven` after the failed close with no stop receipt.
+The permanently failing atomic shape asserts the failing write's identity, the retry range [2,3]
+and the stop invariant instead of a fixed length, because the write is retried once per
+finalization call and a failed finalization stays retryable (§7.4).
 
 ### 5.2 Handoff truth table
 
@@ -301,6 +309,55 @@ subject bytes are unchanged; it was re-run to capture the true output order for 
 | mF1 absent write populated as present | `PopulateOpencodeRecorderMembers` restores the method-value body (`request.PersistProcess = recorder.PersistProcess`, …) | new `TestPopulateOpencodeRecorderMembersKeepsAbsentRequestWritesNil` | `an absent write was populated onto the request as present` |
 | m5 re-run | `SupervisorHandoffRequested` loses the `Clear` term (unchanged bytes; the §7 row's first red line is corrected) | new `TestRecorderHandoffCapabilityMatchesPresenceGates` | `mask 10000: frozen members decided requested=false complete=false, want requested=true complete=false`; then `mask 10000: recorder decided requested=false complete=false, want requested=true complete=false` |
 
+### 7.3 Review-round re-checks (2026-11-23)
+
+The review round (§14) added the parity shape that kills m6 and the absent-write table test that
+kills m7; both edits were applied alone to the final tree, run against their killer (exit 1), then
+reverted (`sha256sum -c` over the pre-mutant hashes of `recorder.go` and `runner.go` says `OK`).
+
+| Mutant | Edit | Killer (exit 1) | First red line |
+| --- | --- | --- | --- |
+| m6 two-callback path while a marker write exists (the review's M2) | `persist()`: the atomic branch additionally requires `run.writes.PersistProcess == nil` | new parity subtest `atomic_write_wins_over_the_production_marker_and_authority_pair` | `write sequence = ["persist-process(4242,fake:4242)","persist-process-authority(4242,fake:4242)","persist-containment-stop-receipt(4242,fake:4242)"], want ["persist-process-with-authority(4242,fake:4242)","persist-containment-stop-receipt(4242,fake:4242)"]` |
+| m7 absent write fails open | `recorderFuncs.PrepareSupervisorHandoff`: the nil branch returns nil instead of `errRecorderWriteUnavailable` | new `TestRecorderFuncsEveryAbsentWriteFailsClosed` | `absent PrepareSupervisorHandoff error = <nil>, want errRecorderWriteUnavailable` |
+
+### 7.4 Retry-count determination (2026-11-23)
+
+The `atomic_write_failure_stops_the_launch` row once observed a third
+`PersistProcessWithAuthority` attempt under load. Two scratch copies (base `764c653e`; head
+`bd819940` plus this round's test file) ran the same shape — an always-failing authority write
+plus a stop receipt over `p1AuthorityContainment` — in loops with the worker count pinned to
+GOMAXPROCS; the head copy also counted finalization calls per run (scratch-only probe).
+
+| Tree / representation | Setting | Runs | attempts=2 | attempts=3 | violations |
+| --- | --- | --- | --- | --- | --- |
+| head members | GOMAXPROCS=1 | 2000 | 2000 | 0 | 0 |
+| head recorder | GOMAXPROCS=1 | 2000 | 2000 | 0 | 0 |
+| head members | GOMAXPROCS=8 | 4000 | 3985 | 15 | 0 |
+| head recorder | GOMAXPROCS=8 | 4000 | 3981 | 19 | 0 |
+| base members | GOMAXPROCS=1 | 2000 | 2000 | 0 | 0 |
+| base members | GOMAXPROCS=8 | 4000 | 3992 | 8 | 0 |
+| head members | WSL `-race`, 8 workers | 2400 | 2302 | 98 | 0, no race report |
+| head recorder | WSL `-race`, 8 workers | 2400 | 2318 | 82 | 0, no race report |
+| base members | WSL `-race`, 8 workers | 2400 | 2319 | 81 | 0, no race report |
+
+Every run kept the stop invariant: every event was the same `persist-process-with-authority` call,
+no stop receipt was written, `success=false`, both the start and containment errors carried the
+write failure, and the cleanup stayed at one close with no release or abort. The instrumented head
+copy showed `finalize calls == runs + attempts=3 runs` (8035 = 8000 + 35 for members, 8025 = 8000
++ 25 for the recorder form); `runtime.Caller` attributed the calls to `waitForCompletion`'s two
+finalize sites and `Terminate`'s result-done site — an extra legitimate finalization call adds
+exactly one retry, and the retry never multiplies inside one finalization. The base copy behaves
+identically, and the base→head diff touches none of `closeContainment`/`waitForCompletion`/
+`Terminate` (no hunks), so the count is a scheduling artifact of the shared runner retry semantics,
+not a port behaviour: the permanently failing write stays retryable by design, and the row now
+asserts the failing write's identity, the [2,3] retry range and the stop invariant instead of a
+fixed length and the interleaving-dependent joined error text. The final tree passes the
+sequential 500/500 re-run and 8000 additional loaded runs (16-process batches; 8 attempts=3 runs),
+all exit 0. Under the same load, the round before the retry/error-text adjustments reproduced both
+rejected artifacts: `frozen=2 recorder=3` sequence logs (four in 1000 runs, rejected by the
+original exact-sequence comparison) and one batch failure on `start errors differ`, whose texts
+differed only in which finalization call Terminate joined.
+
 ## 8. Gates
 
 Every row ran in the foreground on this host except the WSL and coverage rows, which ran alone (no
@@ -362,6 +419,26 @@ covered count (636 → 639), both run-to-run variation on a file whose §1 sha25
 the apply-stage `app.go` movement. `staged_driver.go` stays 55/55 (100.0%): the three mirror-copy
 statements keep the tested shape, and the new `TestPopulateOpencodeRecorderMembersKeepsAbsentRequestWritesNil`
 adds no uncovered production statement.
+
+Review-round re-run (2026-11-23, §14, final tree after §7.4): `gofmt -l .` → no file listed;
+`go vet ./...` and `GOOS=linux go vet ./...` → empty; `GOOS=linux go build ./...` and
+`GOOS=windows go build ./...` → exit 0; `go test -count=1 -timeout 40m ./internal/execution/...
+./internal/harness/...` → exit 0, ten packages `ok` (execution 11.670s, harness 2.137s, claude
+14.277s, codex 16.007s, linejson 0.750s, omo 5.253s, omp 6.260s, opencode 0.504s, pi 5.511s,
+probeconformance 10.288s); the targeted app pattern → exit 0 (app 75.141s, apptest 2.604s no tests
+to run); the WSL `-race` execution row → exit 0 (22.314s, no race report); R9 → exit 0 (`Ran 15
+tests in 10.909s / OK`); the permanently failing parity row → exit 0 in the sequential 500/500
+re-run and in 8000 additional loaded runs (§7.4). Not re-run: the darwin/arm64 builds and the full
+WSL harness/app/platform suites, whose inputs a test-only round does not touch. The R1 coverage
+profile for `./internal/execution/` moves the package total from 54.3% to 58.2% (841/1446
+statements) and `recorder.go` from 46/75 (61.3%) to 64/75 (85.3%): every `recorderFuncs` wrapper
+method leaves 0% for 66.7% (its nil branch; the delegate branch runs only from the app package),
+and `runner.go` reads 677/1167 (58.0%, fix-stage row 639) because the three new parity shapes
+exercise its handoff and unproven paths. The unskipped coverage pass trips the pre-existing
+`TestStartDrainsStdoutAndStderrBeyondSixtyFourKiB` under coverage instrumentation on this host
+(stderr length +577 bytes; reproduced with this round's two tests skipped and again on the base
+revision, 1 of 3 runs; the test passes focused and in the plain suite row above), so the profile
+above comes from a pass that skips that one test.
 
 ## 9. Scope
 
@@ -439,7 +516,7 @@ Post-apply line counts: `execution/recorder.go` 277, `execution/recorder_test.go
 `app/goal_admission_tx.go` 1455, `app/linux_owner_witness_linux.go` 3897, `execution/runner.go`
 2672.
 
-Fix stage (2026-11-23, working tree against `5945f5d4`; §13): the same owned set, no new files;
+Fix stage (2026-11-23, committed as `bd819940` on top of `5945f5d4`; §13): the same owned set, no new files;
 the five findings fix the harness port helper and its test, the R9 script, and this record's three
 documents.
 
@@ -466,6 +543,26 @@ fix-stage sections).
 Post-fix line counts: unchanged from the post-apply list except `harness/staged_driver.go` 151 and
 `harness/frozen_members_test.go` 138 (was 112); `SOURCE_PATHS` holds 62 entries covering 62
 distinct paths.
+
+Review round (2026-11-23, working tree against the committed `bd819940`; §14): the same owned set;
+`daemon/internal/execution/recorder_test.go` gains the three parity shapes, the absent-write table
+test and the invariant-based assertions for the permanently failing shape (§7.4), and this record
+and the plan carry the review-round text.
+
+```
+$ git diff --name-only
+daemon/internal/execution/recorder_test.go
+docs/evidence/rf-w4-12c-process-recorder-port-2026-11-22.md
+docs/plans/2026-11-22-rf-w4-12c-process-recorder-port-plan.md
+
+$ git diff --numstat
+224	29	daemon/internal/execution/recorder_test.go
+3	0	docs/plans/2026-11-22-rf-w4-12c-process-recorder-port-plan.md
+```
+
+(the `docs/evidence/...` row is omitted: this record's own count changes with each edit.)
+
+Review-round line counts: `execution/recorder_test.go` 730, `docs/plans/...` 206.
 
 No path is under `daemon/internal/harness/opencode/`; a case-insensitive scan of the final
 working-tree branch diff for the workstation profile directory fragment has no match (the
@@ -496,6 +593,11 @@ stage removed it, §13). The new files are LF (`file` reports `ASCII text`).
 
 - The recorder-less fallback stays for the frozen adapter; it is the only way an OpenCode launch can
   reach its durable writes without editing `opencode/**` (O2). W6-04 deletes it with the members.
+- The supervisor-handoff **positive** path (the two launchers' `Prepare`/`Bind` closures and
+  `commitSupervisorHandoff`) stays unreachable under `go test` on both OSes, because
+  `platform.DurableSupervisorHandoffAvailable()` is false in a test binary; it is provable only by
+  the native/e2e witness runs the contract's gate list names. The unit-side evidence is the
+  mechanical retarget (one identifier per call) and the 32-mask capability test (§5.2).
 - `Recorder` writes on a non-`RecorderFuncs` implementations are taken as method values once per
   launch (`recorderWrites`); the app and both construction paths use `NewRecorder`, which avoids it.
 - The base coverage profile was taken from a throwaway worktree at `f0448773` (removed after the
@@ -544,8 +646,8 @@ issues.
 
 The accepted findings of the review stage
 (`state/gdd/runs/2026-11-23/symmetry-rf-w4-12c-process-recorder-port-review/answer.md`,
-STD-01…STD-05) were applied to the reviewed slice `5945f5d4`; the working tree carries them
-uncommitted (no commit, no push). Every finding was accepted; none was judged invalid.
+STD-01…STD-05) were applied on top of `5945f5d4` and are committed as `bd819940`, the branch HEAD
+review 1 reviewed (no push). Every finding was accepted; none was judged invalid.
 
 - STD-01: `SOURCE_PATHS` carried `daemon/internal/app/goal_admission_tx.go` twice — the implement
   stage added it at the sorted position while W4-01's append already held the tail entry
@@ -559,9 +661,10 @@ uncommitted (no commit, no push). Every finding was accepted; none was judged in
   `MirrorRecorderMembers`, so all thirteen frozen members share one absence semantics — a false
   capability stays nil, exactly the legacy absent callback, where the previous recorder method
   values stayed non-nil and failed closed with `errRecorderWriteUnavailable`. Probe: the new
-  `TestPopulateOpencodeRecorderMembersKeepsAbsentRequestWritesNil` is red at `5945f5d4` (`go test
-  -count=1 -run TestPopulateOpencodeRecorderMembers ./internal/harness/`, exit 1, `an absent write
-  was populated onto the request as present`) and green on the fixed tree; §7.2 re-runs the
+  `TestPopulateOpencodeRecorderMembersKeepsAbsentRequestWritesNil` goes red when this change alone
+  is reverted (`go test -count=1 -run TestPopulateOpencodeRecorderMembers ./internal/harness/`,
+  exit 1, `an absent write was populated onto the request as present`) and green on the committed
+  tree; §7.2 re-runs the
   previous method-value body as mutant mF1 and re-expresses m4b against the new line.
 - STD-03: the m5 row's first red line is the frozen-side `mask 10000` line, with the port-side line
   second (§7, §7.2): `SupervisorHandoffRequested` has one implementation that both assertions call,
@@ -578,3 +681,37 @@ uncommitted (no commit, no push). Every finding was accepted; none was judged in
 
 Refreshed at their single source by this stage: §1 hashes, §3 grep outputs, §7 m5 row, §7.2, §8
 gate rows and coverage note, §9 scope and line counts.
+
+## 14. Review-round amendments (2026-11-23)
+
+Review 1 (the P3-only report beside this record's evidence bundle) found no code defect; the
+accepted findings changed three things inside the owned set and two record documents, and the one
+advisory record note (P3-04) is now in §11.
+
+- P3-03: `recorderParityCases()` gains three shapes — the production marker+atomic+authority+stop
+  set (expected atomic, stop: the atomic write skips both legacy writes), handoff commit-then-stop
+  (expected `commit-supervisor-handoff` with the launcher's frozen `startedAt`, then the stop
+  receipt at finalize) and unproven-on-close-failure (expected marker, authority, then one
+  `persist-containment-unproven` after the failed close, with no stop receipt). The production
+  shape kills the review's M2 edit (m6, §7.3), so the mutant no longer survives the slice's own
+  parity test.
+- P3-05: `TestRecorderFuncsEveryAbsentWriteFailsClosed` drives all ten `recorderFuncs` methods
+  from a zero `RecorderFuncs` and asserts `errors.Is(err, errRecorderWriteUnavailable)`; the nine
+  methods that sat at 0% statement coverage now show 66.7% in-package (the nil branch; the
+  delegate branch runs only from the app package), and m7 (§7.3) shows a wrapper failing open is
+  red.
+- P3-01: the header, §9's fix-stage line, §13's lead sentence, this record's §7.3/§8/§14 and the
+  plan's header and §9 name `bd819940` as the committed fix-stage revision (review 1's slice); §1
+  refreshed the two changed rows, §5.1 the shape list and §9 the review-round line counts.
+- P3-04 (record note): §11 states that the launcher's handoff positive path is provable only by
+  the native/e2e witness runs, not by unit tests.
+- Review-round self-finding (retry-count flake, §7.4): the permanently failing parity shape's exact
+  attempt count and joined error text are scheduling artifacts of the runner's retry-by-design
+  finalization (base and head behave identically; the process-completion path and `Terminate`'s
+  result-done path may both finalize). The row now asserts the failing write's identity, the [2,3]
+  retry range and the stop invariant.
+
+Probes on the final tree (working directory `daemon/` unless a row says otherwise): the two new
+test runs are green (10 absent-write subtests, 8 parity subtests, and the failing row's 500/500);
+m6 and m7 are red then reverted with the pre-mutant hashes restored (§7.3); the gate rows in §8
+re-ran with exit 0, and §7.4 re-ran the failing row 8000 times under load.
