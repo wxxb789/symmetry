@@ -867,17 +867,10 @@ func TestCloseRetriesHandleReleaseWithoutReplayingStop(t *testing.T) {
 	}
 }
 
-// The native Go-test-binary AttachProcess route returns
-// noopContainmentSupervisorLease: it carries the stop/release capability but no
-// durable authority, so Close cannot bind success to a stop receipt. Its
-// failure path must therefore retain the failed stop proof itself, because the
-// daemon-side Job handle is released best-effort and the proof cannot be
-// re-derived afterwards. A repeated Close that only retries the handle release
-// must never turn an unproven stop into a reported success.
 func TestNonDurableStopLeaseCloseRetainsFailedStopProof(t *testing.T) {
-	if DurableSupervisorHandoffAvailable() {
-		t.Fatal("native test binary can dispatch the durable supervisor; the non-durable stop lease route is not exercised")
-	}
+	restoreContainmentSupervisorLauncher(t, func(_ syscall.Handle, _ int, targetIdentity string) (containmentSupervisorLease, string, error) {
+		return noopContainmentSupervisorLease{}, targetIdentity, nil
+	})
 	command := exec.Command("cmd", "/c", "ping", "-t", "127.0.0.1")
 	if err := ConfigureProcess(command); err != nil {
 		t.Fatalf("ConfigureProcess() error = %v", err)
@@ -909,10 +902,10 @@ func TestNonDurableStopLeaseCloseRetainsFailedStopProof(t *testing.T) {
 		t.Fatalf("AttachProcess() returned %T, want *jobContainment", containment)
 	}
 	if _, stopLease := job.supervisor.(containmentSupervisorStopLease); !stopLease {
-		t.Fatalf("test-binary supervisor %T lacks the stop/release capability; the non-durable stop lease route is not exercised", job.supervisor)
+		t.Fatalf("in-process supervisor %T lacks the stop/release capability; the non-durable stop lease route is not exercised", job.supervisor)
 	}
 	if _, durable := job.supervisor.(containmentSupervisorAuthorityProvider); durable {
-		t.Fatalf("test-binary supervisor %T exposes durable authority; the non-durable stop lease route is not exercised", job.supervisor)
+		t.Fatalf("in-process supervisor %T exposes durable authority; the non-durable stop lease route is not exercised", job.supervisor)
 	}
 
 	settlementFailure := errors.New("job object remained non-empty after containment close deadline")

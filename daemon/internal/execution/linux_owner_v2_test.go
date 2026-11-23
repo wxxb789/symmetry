@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -349,6 +350,59 @@ func TestDefaultLinuxLauncherDoesNotUseTestBinaryV1BypassForV2(t *testing.T) {
 	}
 	if err == nil {
 		t.Fatal("default Linux v2 launch accepted an incomplete grant")
+	}
+}
+
+func TestDefaultLinuxLauncherUsesRecorderHandoffCapability(t *testing.T) {
+	command := exec.Command("/bin/true")
+	command.Stdin = strings.NewReader("")
+	var stdout, stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+
+	invocation := completeHandoffInvocation(Invocation{Program: command.Path})
+
+	started, err := defaultProcessLauncher(context.Background(), command, invocation, nil, nil, nil)
+	if started != nil {
+		_ = started.close()
+		_, _ = started.wait()
+	}
+	if err == nil || !strings.Contains(err.Error(), "Linux supervisor target stdio must be *os.File") {
+		t.Fatalf("complete handoff recorder did not enter the durable supervisor branch: %v", err)
+	}
+}
+
+func TestLinuxSupervisorDurableHandoffIsDisabledForGoTestBinary(t *testing.T) {
+	restore := UseInProcessContainmentSupervisorForTesting()
+	defer restore()
+
+	command := exec.Command("/bin/true")
+	if err := platform.ConfigureProcess(command); err != nil {
+		t.Fatalf("ConfigureProcess() error = %v", err)
+	}
+	devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("open %s: %v", os.DevNull, err)
+	}
+	defer devNull.Close()
+	command.Stdin, command.Stdout, command.Stderr = devNull, devNull, devNull
+
+	invocation := completeHandoffInvocation(Invocation{Program: command.Path})
+
+	started, err := defaultProcessLauncher(context.Background(), command, invocation, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("in-process launch did not use the local containment route: %v", err)
+	}
+	_, _ = started.wait()
+	if started.containmentHandoff != nil {
+		t.Fatal("in-process launch produced a durable supervisor handoff")
+	}
+	if err := started.close(); err != nil {
+		t.Fatalf("close in-process containment: %v", err)
+	}
+	restore()
+	if reflect.ValueOf(launchLinuxSupervisor).Pointer() != reflect.ValueOf(launchLinuxSupervisorProcess).Pointer() {
+		t.Fatal("capability restore did not restore the shipped durable dispatch")
 	}
 }
 

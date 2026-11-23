@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wxxb789/symmetry/daemon/internal/authority"
 	"github.com/wxxb789/symmetry/daemon/internal/platform"
 )
 
@@ -515,6 +516,13 @@ func helperInvocation(mode string, arguments ...string) Invocation {
 		Args:    append([]string{"-test.run=^TestHelperProcess$", "--", mode}, arguments...),
 		Env:     append(minimalEnvironment(), "GO_WANT_HELPER_PROCESS=1"),
 	}
+}
+
+func completeHandoffInvocation(invocation Invocation) Invocation {
+	invocation.PrepareSupervisorHandoff = func(authority.SupervisorHandoff) error { return nil }
+	invocation.BindSupervisorHandoff = func(authority.SupervisorHandoff, int, string) error { return nil }
+	invocation.CommitSupervisorHandoff = func(authority.SupervisorHandoff, time.Time) error { return nil }
+	return invocation
 }
 
 func minimalEnvironment() []string {
