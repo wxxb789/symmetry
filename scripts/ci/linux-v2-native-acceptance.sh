@@ -65,7 +65,9 @@ command -v systemd-run >/dev/null || fail 'systemd-run is required for isolated 
 command -v systemd-nspawn >/dev/null || fail 'systemd-nspawn is required for an isolated throwaway systemd manager'
 command -v setfacl >/dev/null || fail 'ACL tools are required to provision the exact A/B filesystem boundary'
 command -v gh >/dev/null || fail 'Control GitHub provider actions require the gh CLI on the host Control process'
-host_pid_namespace_inode=$(stat -Lc '%i' /proc/1/ns/pid)
+# Reading another process's namespace link needs ptrace-read access, so PID 1's
+# inode is unreadable to the unprivileged runner user without sudo.
+host_pid_namespace_inode=$(sudo stat -Lc '%i' /proc/1/ns/pid)
 [[ "$host_pid_namespace_inode" =~ ^[1-9][0-9]*$ ]] || fail 'cannot identify the host PID namespace inode'
 
 [[ -f "$repo/daemon/go.mod" && -f "$repo/scripts/install-linux-owner.sh" ]] || fail 'run this fixture from the checked-out repository'
@@ -320,9 +322,23 @@ linux_v2_fetch_native_tools "$fixture_root"
 
 . /etc/os-release
 codename=${VERSION_CODENAME:?Ubuntu release codename is unavailable}
+# The public archive drops individual packages from the hosted runner network; mirror
+# the highest-priority archive from the image's own apt mirrorlist, as debootstrap's source.
+ubuntu_mirror=https://archive.ubuntu.com/ubuntu
+apt_mirror_uri=$(awk '/^[[:space:]]*https?:\/\/[^ ]*\/ubuntu\/?[[:space:]]/ { sub(/\/$/, "", $1); print $1; exit }' /etc/apt/apt-mirrors.txt 2>/dev/null)
+case "$apt_mirror_uri" in
+http://*/ubuntu|https://*/ubuntu) ubuntu_mirror=$apt_mirror_uri ;;
+*)
+  sources_uri=$(awk '/^URIs:/ { print $2; exit }' /etc/apt/sources.list.d/*.sources 2>/dev/null)
+  case "$sources_uri" in
+  http://*/ubuntu|https://*/ubuntu|http://*/ubuntu/|https://*/ubuntu/) ubuntu_mirror=${sources_uri%/} ;;
+  esac
+  ;;
+esac
+printf 'Using the image apt archive mirror for the disposable rootfs: %s\n' "$ubuntu_mirror"
 sudo debootstrap --variant=minbase \
   --include=acl,binutils,bash,ca-certificates,coreutils,curl,dbus,git,libacl1,libcap2-bin,libgcc-s1,libstdc++6,passwd,procps,python3,sudo,systemd,systemd-sysv,tar,util-linux \
-  "$codename" "$rootfs" https://archive.ubuntu.com/ubuntu
+  "$codename" "$rootfs" "$ubuntu_mirror"
 sudo chroot "$rootfs" /usr/bin/test -x /usr/bin/readelf
 sudo install -d -o root -g root -m 0755 "$rootfs/root" "$rootfs/etc/symmetry" "$rootfs/usr/local/bin" \
   "$rootfs/usr/libexec" "$rootfs/usr/libexec/symmetry-test" "$rootfs/home" "$rootfs/var/lib" "$rootfs/workspace" \
@@ -486,6 +502,7 @@ sudo install -d -o "$A_UID" -g "$A_GID" -m 0700 \
   "$rootfs$SEED_ROOT"
 for state_dir in "${OWNER_STATE_DIRS[@]}"; do
   # The production drain verifier is read-only; provision its complete Store layout before invoking the installer.
+  sudo install -d -o "$A_UID" -g "$A_GID" -m 0700 "$rootfs$state_dir"
   sudo install -d -o "$A_UID" -g "$A_GID" -m 0700 "$rootfs$state_dir/runs"
   sudo install -o "$A_UID" -g "$A_GID" -m 0600 /dev/null "$rootfs$state_dir/.symmetry-daemon.lock"
   [[ "$(sudo stat -c '%u:%g:%a' "$rootfs$state_dir")" == "$A_UID:$A_GID:700" ]] ||
@@ -857,17 +874,18 @@ machine_run /usr/bin/id -u "$B_USER"
 machine_run /usr/bin/id -G "$A_USER"
 machine_run /usr/bin/id -G "$B_USER"
 for private_directory in "$B_HOME" "${b_native_credential_directories[@]}"; do
-  machine_run_as "$A_USER" "$A_USER" /usr/bin/test -x "$private_directory"
-  if machine_run_as "$A_USER" "$A_USER" /usr/bin/test -r "$private_directory"; then
+  # /usr/bin/test is the uutils coreutils build on this image and evaluates mode bits only,
+  # ignoring POSIX ACLs; the bash builtin test queries the kernel through faccessat2.
+  machine_run_as "$A_USER" "$A_USER" /usr/bin/bash -c 'test -x "$1"' bash "$private_directory"
+  if machine_run_as "$A_USER" "$A_USER" /usr/bin/bash -c 'test -r "$1"' bash "$private_directory"; then
     fail "A unexpectedly listed B-private native configuration directory: $private_directory"
   fi
-  if machine_run_as "$A_USER" "$A_USER" /usr/bin/test -w "$private_directory"; then
+  if machine_run_as "$A_USER" "$A_USER" /usr/bin/bash -c 'test -w "$1"' bash "$private_directory"; then
     fail "A unexpectedly modified B-private native configuration directory: $private_directory"
   fi
 done
 
 printf 'Preparing the A-owned source repository and B-only native credentials.\n'
-machine_run_as "$A_USER" "$A_USER" /usr/bin/rmdir "$A_SOURCE"
 machine_run_as "$A_USER" "$A_USER" /usr/bin/git -c "safe.directory=$A_HOME/ci-source" \
   clone --no-hardlinks --no-checkout "$A_HOME/ci-source" "$A_SOURCE"
 machine_run_as "$A_USER" "$A_USER" /usr/bin/git -C "$A_SOURCE" checkout --quiet -B main "$GITHUB_SHA"

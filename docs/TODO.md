@@ -298,11 +298,35 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
     and the variables `SYMMETRY_LINUX_V2_TEST_PI_MODEL`, `SYMMETRY_LINUX_V2_TEST_OPENCODE_MODEL` and
     `SYMMETRY_LINUX_V2_TEST_OPENAI_BASE_URL` (the OpenAI-compatible provider base URL the native
     fixtures route their model calls through).
-    Recorded status, still limiting (2026-11-15): the Environment policy read allowed branches `main` and
-    `codex/goal-0006b-crash-safe-process-containment` with `prevent_self_review=false`; and no environment
-    available here yet satisfies the host prerequisite — the last hosted attempt (run `43673581776`) failed
-    the probe with `unified_cgroup_v2_mounted=false` and the local WSL2 attempt failed at
-    `transient_unit_cleanup`, so a host that does not qualify fails at the probe before any case set runs.
+    Recorded status, still limiting (2026-11-23): the Environment policy read allowed branches `main` and
+    `codex/goal-0006b-crash-safe-process-containment` with `prevent_self_review=false`. The hosted runner now
+    passes the probe and the fixture's whole host preflight: an earlier attempt (run `43673581776`) failed the
+    probe with `unified_cgroup_v2_mounted=false`, and run `45130117124` (2026-11-23, main `55ecd76a`) got all
+    14 case sets past the probe into `scripts/ci/linux-v2-native-acceptance.sh`, where every one died at `:68`
+    with `stat: cannot statx '/proc/1/ns/pid': Permission denied` — the fixture read the PID 1 namespace inode
+    without the `sudo` it uses for every other host read. Goal `rf-acc-native-hosted-run` fixes that read, the
+    private Store StateDir ownership (its implicitly created parent came from `install -d` as root-owned), and
+    the guest A-search fence, verified by scratch runs `45132022431` through `45151589866`. Two host-tooling
+    facts this record must carry: the `ubuntu-latest` image is `resolute`, whose `coreutils` package is the
+    uutils Rust build (`/usr/bin/test` resolves to `/usr/lib/cargo/bin/coreutils/test`, version
+    `9.5-1ubuntu2+0.0.0~ubuntu25`; guest images debootstrap the same package), and uutils evaluates
+    `test -x/-r/-w` from stat mode bits only, ignoring POSIX ACLs. Probe runs `45145656538`, `45146607068`
+    and `45147275664` show the kernel itself enforcing the same ACL entries on every probed filesystem (root
+    ext4, fresh tmpfs, fresh `mkfs.ext4 -q` loop mounts, xfs, btrfs and `/dev/shm`; raw `chdir`/`open`
+    syscalls and `faccessat2(..., X_OK, AT_EACCESS)` agree, deny entries deny, `mount -o remount,acl` changes
+    nothing), so the fence's three probes now run through the bash builtin `test`, which issues that kernel
+    call. On that image the loop now reaches Control start, the production owner install and the installed
+    daemon's own preflight, where it stops on a host property: systemd 259 (`259.9-0ubuntu0.1`) chowns the
+    whole delegated `DelegateSubgroup=manager` subtree, `manager/cgroup.kill` included, to the service user
+    (probe run `45169655828`: `55200:55200 200`, and that user can open it for writing; in-guest diagnostic in
+    run `45169868354`: `52000:52000 200` while the unit's own `cgroup.kill` stays `0:0 200`), while
+    `-verify-linux-owner-install` (run `45164286155`) requires that file to stay root-owned and unwritable by
+    A. Making a credentialed run pass that step needs a production-side decision (installer re-chown once the
+    subgroup exists, a reviewed preflight change, or a host whose systemd keeps the control root-owned); the
+    fixture keeps the production sequence unchanged. The scratch runs carried only the contract's dummy
+    credentials, so Control's GitHub identity
+    (`gh auth login` refuses the dummy `gho_` token at `:292`) and every provider turn stay unproven until the
+    owner dispatches the workflow again.
 
     **When it must be dispatched.** At release acceptance, against the exact subject, and never cited as
     passed before it runs. The goals' pending predicate, quoted from `docs/goals/README.md`: "the operator
