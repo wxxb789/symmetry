@@ -28,7 +28,9 @@ func defaultProcessLauncher(
 	if ctx == nil {
 		return nil, errors.New("native process launcher context is nil")
 	}
-	if durableSupervisorHandoffRequested(invocation) && !durableSupervisorHandoffCallbacksComplete(invocation) {
+	writes := invocationWrites(invocation)
+	capabilities := writes.Capabilities()
+	if capabilities.SupervisorHandoffRequested() && !capabilities.SupervisorHandoffComplete() {
 		return nil, errors.New("durable supervisor handoff callbacks are incomplete")
 	}
 
@@ -46,8 +48,8 @@ func defaultProcessLauncher(
 		return nil, err
 	}
 
-	if durableSupervisorHandoffRequested(invocation) && platform.DurableSupervisorHandoffAvailable() {
-		return launchNativeProcessWithSupervisorHandoff(ctx, native, command, invocation)
+	if capabilities.SupervisorHandoffRequested() && platform.DurableSupervisorHandoffAvailable() {
+		return launchNativeProcessWithSupervisorHandoff(ctx, native, command, writes)
 	}
 
 	containment, identity, attachErr := platform.AttachSuspendedProcess(native)
@@ -58,26 +60,26 @@ func defaultProcessLauncher(
 	return started, nil
 }
 
-func launchNativeProcessWithSupervisorHandoff(ctx context.Context, native *platform.SuspendedProcess, command *exec.Cmd, invocation Invocation) (*startedProcess, error) {
+func launchNativeProcessWithSupervisorHandoff(ctx context.Context, native *platform.SuspendedProcess, command *exec.Cmd, writes RecorderFuncs) (*startedProcess, error) {
 	prepareUnknown := false
 	bindUnknown := false
 	prepare := func(value authority.SupervisorHandoff) error {
-		firstErr := invocation.PrepareSupervisorHandoff(value.Clone())
+		firstErr := writes.PrepareSupervisorHandoff(value.Clone())
 		if firstErr == nil {
 			return nil
 		}
-		if retryErr := invocation.PrepareSupervisorHandoff(value.Clone()); retryErr != nil {
+		if retryErr := writes.PrepareSupervisorHandoff(value.Clone()); retryErr != nil {
 			prepareUnknown = true
 			return errors.Join(firstErr, retryErr)
 		}
 		return nil
 	}
 	bind := func(value authority.SupervisorHandoff, pid int, identity string) error {
-		firstErr := invocation.BindSupervisorHandoff(value.Clone(), pid, identity)
+		firstErr := writes.BindSupervisorHandoff(value.Clone(), pid, identity)
 		if firstErr == nil {
 			return nil
 		}
-		if retryErr := invocation.BindSupervisorHandoff(value.Clone(), pid, identity); retryErr != nil {
+		if retryErr := writes.BindSupervisorHandoff(value.Clone(), pid, identity); retryErr != nil {
 			bindUnknown = true
 			return errors.Join(firstErr, retryErr)
 		}

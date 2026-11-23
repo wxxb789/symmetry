@@ -3110,13 +3110,9 @@ func (witness *linuxV2NativeWitnessRun) launchNative(
 		Program: profile.Command, Args: append([]string(nil), profile.Args...),
 		Dir: prepared.Path, Env: environment, InitialLeaseDeadlineAt: deadlineAt,
 		InitialLeaseSequence: 1, LinuxV2Required: true,
-		PrepareSupervisorHandoff:           daemon.prepareSupervisorHandoffCallback(key),
-		BindSupervisorHandoff:              daemon.bindSupervisorHandoffCallback(key),
-		CommitSupervisorHandoff:            daemon.commitSupervisorHandoffCallback(key),
-		RecordSupervisorHandoffStopReceipt: daemon.recordSupervisorHandoffStopReceiptCallback(key),
-		ClearSupervisorHandoff:             daemon.clearSupervisorHandoffCallback(key),
-		PersistProcessWithAuthority:        daemon.persistProcessAuthorityCallback(key),
-		PersistContainmentUnproven:         daemon.markContainmentUnprovenCallback(key),
+		Recorder: daemon.processRecorder(key, func(pid int, identity string) error {
+			return daemon.persistProcessMarker(key, pid, identity, time.Now().UTC())
+		}),
 	}
 	invocation, err = owner.BuildInvocation(ctx, key, witness.request.Fence, invocation, callbacks)
 	if err != nil {
@@ -3227,23 +3223,12 @@ func (witness *linuxV2NativeWitnessRun) launchNative(
 		}
 		return eventContext.Err()
 	})
-	persistProcess := func(pid int, identity string) error {
-		return daemon.persistProcessMarker(key, pid, identity, time.Now().UTC())
-	}
-	persistAuthority := daemon.persistProcessAuthorityCallback(key)
-	persistStopReceipt := daemon.persistContainmentStopReceiptCallback(key)
-	grantInvocation := invocation
-	grantInvocation.PersistProcess = persistProcess
-	grantInvocation.PersistProcessAuthority = persistAuthority
-	grantInvocation.PersistContainmentStopReceipt = persistStopReceipt
 	startRequest := harness.StartRequest{
 		Workspace: prepared.Path, Goal: witness.request.Claim.Work.Goal,
 		ProviderAccess: providerAccess, ProviderBridge: providerBridge, Invocation: invocation,
-		Grant:                         harness.NewLaunchGrant(grantInvocation),
-		PersistProcess:                persistProcess,
-		PersistProcessAuthority:       persistAuthority,
-		PersistContainmentStopReceipt: persistStopReceipt,
+		Grant: harness.NewLaunchGrant(invocation),
 	}
+	startRequest = harness.PopulateOpencodeRecorderMembers(startRequest)
 	if kind == harness.KindPi {
 		startRequest.Context = witness.nativeContext()
 	}
