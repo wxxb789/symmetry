@@ -180,22 +180,8 @@ func verifyLinuxOwnerParentKillBoundary(mountPoint, delegatedPath string, ownerU
 	if err := validateLinuxOwnerManagerKillMetadata(managerKill.Uid, managerKill.Gid, managerKill.Mode, ownerUID, a, b); err != nil {
 		return err
 	}
-	unitKillPath := linuxOwnerUnitCgroupKillPath(delegatedPath)
-	unitKill, err := statLinuxOwnerCgroupControl(mountFD, unitKillPath, metadataHow)
-	if err != nil {
+	if err := verifyLinuxOwnerUnitKillControl(mountFD, delegatedPath, metadataHow, a, b); err != nil {
 		return err
-	}
-	if err := validateLinuxOwnerUnitKillMetadata(unitKill.Uid, unitKill.Gid, unitKill.Mode, a, b); err != nil {
-		return err
-	}
-	writeHow := &unix.OpenHow{Flags: uint64(unix.O_WRONLY | unix.O_CLOEXEC | unix.O_NOFOLLOW | unix.O_NONBLOCK), Resolve: uint64(unix.RESOLVE_BENEATH | unix.RESOLVE_NO_SYMLINKS | unix.RESOLVE_NO_MAGICLINKS | unix.RESOLVE_NO_XDEV)}
-	writeFD, writeErr := unix.Openat2(mountFD, unitKillPath, writeHow)
-	if writeErr == nil {
-		_ = unix.Close(writeFD)
-		return errors.New("A can open the owning unit cgroup.kill for writing; the unit kill control must remain root-only")
-	}
-	if !errors.Is(writeErr, unix.EACCES) && !errors.Is(writeErr, unix.EPERM) {
-		return fmt.Errorf("cannot establish root-only unit cgroup.kill permissions: %w", writeErr)
 	}
 	return nil
 }
@@ -212,6 +198,33 @@ func statLinuxOwnerCgroupControl(directoryFD int, relativePath string, how *unix
 		return unix.Stat_t{}, fmt.Errorf("read cgroup control %s metadata: %w", relativePath, errors.Join(statErr, closeErr))
 	}
 	return stat, nil
+}
+
+func verifyLinuxOwnerUnitKillControl(rootFD int, delegatedPath string, metadataHow *unix.OpenHow, a, b ACLSubject) error {
+	unitKillPath := linuxOwnerUnitCgroupKillPath(delegatedPath)
+	unitKill, err := statLinuxOwnerCgroupControl(rootFD, unitKillPath, metadataHow)
+	if err != nil {
+		return err
+	}
+	if err := validateLinuxOwnerUnitKillMetadata(unitKill.Uid, unitKill.Gid, unitKill.Mode, a, b); err != nil {
+		return err
+	}
+	writeHow := &unix.OpenHow{Flags: uint64(unix.O_WRONLY | unix.O_CLOEXEC | unix.O_NOFOLLOW | unix.O_NONBLOCK), Resolve: uint64(unix.RESOLVE_BENEATH | unix.RESOLVE_NO_SYMLINKS | unix.RESOLVE_NO_MAGICLINKS | unix.RESOLVE_NO_XDEV)}
+	writeFD, writeErr := unix.Openat2(rootFD, unitKillPath, writeHow)
+	if writeErr == nil {
+		_ = unix.Close(writeFD)
+	}
+	return validateLinuxOwnerUnitKillWriteProbe(writeErr)
+}
+
+func validateLinuxOwnerUnitKillWriteProbe(writeErr error) error {
+	if writeErr == nil {
+		return errors.New("A can open the owning unit cgroup.kill for writing; the unit kill control must remain root-only")
+	}
+	if errors.Is(writeErr, unix.EACCES) || errors.Is(writeErr, unix.EPERM) {
+		return nil
+	}
+	return fmt.Errorf("cannot establish root-only unit cgroup.kill permissions: %w", writeErr)
 }
 
 func linuxOwnerUnitCgroupKillPath(delegatedPath string) string {

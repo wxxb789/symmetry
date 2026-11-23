@@ -4674,17 +4674,23 @@ file root-owned (not reproduced; the record now carries an appendix). Live rows 
 built daemon run as A: base `b9d4b4a4` exits 1 (`manager control cgroup.kill is not
 owned/writable only by its trusted owner`), HEAD exits 0, the unit kill temporarily chowned to A
 (root) exits 1 (`unit cgroup.kill must remain root:root`), and a retarget mutant that points the
-unit check at `manager/cgroup.kill` exits 1 on the same host. Unit rows pin the acceptance set
-(accepted: root-owned, A-owned; rejected: B-owned, wrong-owner-gid, group-writable, other-writable,
-owner-unwritable, non-plain-file) for both checks; mutants M1 (accept a B-owned manager kill), M2
-(drop the unit-kill root check) and M4 (accept a group-writable manager kill) each redden the new
-`TestLinuxOwnerKillBoundaryMetadata` and were reverted (`sha256sum` restored), and the M3 union
-mutant (accept an A-writable unit kill: unit metadata root check and A-write refusal removed)
-accepts the chowned host with exit 0 where the fixed code refuses. Gates: `gofmt -l .` exit 0;
+unit check at `manager/cgroup.kill` exits 1 on the same host. Unit rows pin the acceptance set per
+check: root-owned is accepted by both checks and A-owned only by the manager file, while the unit
+file must remain root:root; both checks reject B-owned, wrong-owner-gid, group-writable,
+other-writable, owner-unwritable and non-plain-file rows; mutants M1 (accept a B-owned manager
+kill), M2 (drop the unit-kill root check) and M4 (accept a group-writable manager kill) each
+redden `TestLinuxOwnerKillBoundaryMetadata` and were reverted (`sha256sum` restored), and the M3
+union mutant (accept an A-writable unit kill: unit metadata root check and A-write refusal
+removed) is red in the new hermetic `TestLinuxOwnerUnitKillWriteProbeDecisions` and
+`TestLinuxOwnerUnitKillControlReadsTheDerivedUnitPath` rows as well as on the live chowned host,
+where it accepts with exit 0 while the fixed code refuses. Gates: `gofmt -l .` exit 0;
 `go vet ./internal/linuxpreflight/...` exit 0 (Windows and WSL); `GOOS=linux go build ./...` exit
 0; WSL `go test -race -count=1 ./internal/linuxpreflight/...` exit 0. Residual: the A `O_WRONLY`
 probe's independent discriminating power (a root-owned unit kill A could still write through a
-capability) is refused earlier by the anchor's own client gate (all-zero capability sets), so it
-is defense-in-depth beyond the metadata rule; and the rf-acc-native-hosted-run paragraph, if it
+capability) was never demonstrated live — a capable A client is refused earlier during anchor
+discovery (`sendmsg: broken pipe`; the refusing check was not identified, record sections 9 and
+11) — so on every known host state the probe is defense-in-depth beyond the metadata rule, and its
+decisions and derived-path wiring are now covered hermetically (record section 13); and the
+rf-acc-native-hosted-run paragraph, if it
 lands after this goal, records the decision as open while this entry and the goal record carry the
 closure.

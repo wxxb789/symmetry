@@ -26,8 +26,11 @@ on a second, disposable WSL2 Ubuntu 24.04 distro that carries a real v2 owner in
 The live rows bind the built bytes: the final tree builds reproducibly to
 `ea0dccd0a2d08828e10c4c1d8220d78b2c6860cfd32ebf5d24e674f35e13be91`
 (`CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o … ./cmd/symmetry-daemon`), and that
-exact hash was the binary executed in every live row, including a rebuild from the post-mutant
-restored tree.
+exact hash was the binary executed in every live row of the implement tree, the capable-binary row
+included, the rebuild from the post-mutant restored tree reproducing it; the base `b9d4b4a4` row
+ran the base revision's own build and each mutant row ran its mutant build (`4ca24d41…` and
+`fd8026a7…` for the M3 and retarget mutants, §12); §13 re-runs the live rows on the fix-stage
+binary.
 
 ## 2. The retargeted boundary
 
@@ -359,3 +362,99 @@ citation(s))`, with the same three pre-existing ignore-rule notes as §7);
 `check-record-cleanliness.py --base e19999b7 --head 7474eb06` exit 0 (`2 changed record(s) pass the
 root-only check`). This closing paragraph was appended after that audit; the conductor's
 post-commit run rebinds all three gates to the committed revision.
+
+## 13. Fix-stage amendment (2026-11-23): review findings STD-A01..A05, SPEC-A01, SPEC-A02
+
+Applied exactly the fix brief's findings; nothing else changed. No test row was removed and no gate
+relaxed. §1's subject and binary hashes and §12's amend hashes bind the implement/apply bytes; the
+fix-stage bytes are bound here.
+
+Subject bytes after the fix (sha256):
+
+| File | sha256 |
+| --- | --- |
+| `daemon/internal/linuxpreflight/cgroup_linux.go` | `a474b6206f79d129ab5b7c20880c7fca63abbfd5d82c502ae77ba4a224c6c85a` |
+| `daemon/internal/linuxpreflight/preflight_linux_test.go` | `3a885793af323c6bc4be72786201f40575ca7607a1890af9af0711141e8544cb` |
+| `docs/archive/CLOSED-TODO.md` | `7476b1f3038ad3b452f26e7872d20632cd6e5e9dcd39cba9fd0e83d4561a7da8` |
+| `docs/plans/2026-11-23-rf-acc-delegated-cgroup-kill-plan.md` | `4eaacfd171789391750b34028c54a553eb1989729620141090f8b4ab94c63add` |
+
+`docs/TODO.md` and `docs/evidence/goal-0006-linux-owner-design-2026-09-22.md` are unchanged from
+§12 (`e00a0692…`, `4fa086ca…`); this record carries no self-referential hash.
+
+Structural change (STD-A03, SPEC-A01): the unit-kill metadata read, its root:root judgement and the
+A `O_WRONLY` probe move out of `verifyLinuxOwnerParentKillBoundary`'s inline tail into
+`verifyLinuxOwnerUnitKillControl(rootFD, delegatedPath, metadataHow, a, b)`, which derives
+`linuxOwnerUnitCgroupKillPath(delegatedPath)` and performs both the metadata read and the probe
+under the caller's `mountFD`; the probe outcome is the pure
+`validateLinuxOwnerUnitKillWriteProbe(writeErr)` - nil open and every errno but `EACCES`/`EPERM`
+refuse, `EACCES`/`EPERM` accept bare or wrapped. Every error string and the decision sequence are
+unchanged; the live rows below re-run on the fix-stage binary and reproduce §4.
+
+New committed rows: `TestLinuxOwnerUnitKillWriteProbeDecisions` table-tests nil, bare and wrapped
+`EACCES`, `EPERM`, `ENOENT` and `EINVAL`; `TestLinuxOwnerUnitKillControlReadsTheDerivedUnitPath`
+drives the control helper against a real directory tree under one directory fd - an absent
+`unit/cgroup.kill` refuses with `ENOENT` at the derived path (not the delegated `unit/manager`), and
+a present root:root `0200` file is refused through the live `O_WRONLY` probe (the gate environment
+runs the suite as root, so the probe really opens; a non-root run asserts the root:root metadata
+refusal instead). Package count: 27 `func Test` / 25 top-level PASS before, 29 / 27 after (2 SKIP
+at the fix bytes).
+
+Mutants, each applied alone to the fix bytes, run, and reverted (`git cat-file blob` restore,
+sha256 checked; commands from `daemon/`):
+
+| Mutant | Edit | Killer (exit 1) | First red line |
+| --- | --- | --- | --- |
+| F1 probe accepts an opened fd | probe `writeErr == nil` branch returns nil | `go test -count=1 -v -run 'TestLinuxOwnerUnitKillWriteProbeDecisions\|TestLinuxOwnerUnitKillControlReadsTheDerivedUnitPath' ./internal/linuxpreflight/...` | `preflight_linux_test.go:363: unit kill write probe opened for writing: err = <nil>, accepted = true, want accepted = false`; `:395: unit cgroup.kill as root: err = <nil>, want the write-probe refusal` |
+| F2 any errno accepted | probe default branch returns nil | the same command | `preflight_linux_test.go:363: unit kill write probe missing file: err = <nil>, accepted = true, want accepted = false` (+ wrapped missing file, invalid flags, wrapped invalid flags; the wiring rows stay green because the metadata read refuses first) |
+| F3 `EACCES`/`EPERM` refused | probe accept branch deleted | `go test -count=1 -v -run TestLinuxOwnerUnitKillWriteProbeDecisions ./internal/linuxpreflight/...` | `preflight_linux_test.go:363: unit kill write probe refused with EACCES: err = cannot establish root-only unit cgroup.kill permissions: permission denied, accepted = false, want accepted = true` (+ EPERM, wrapped EACCES, wrapped EPERM) |
+| F4 unit check retargeted at the delegated path | `linuxOwnerUnitCgroupKillPath(delegatedPath)` to `delegatedPath` | `go test -count=1 -v -run TestLinuxOwnerUnitKillControlReadsTheDerivedUnitPath ./internal/linuxpreflight/...` | `preflight_linux_test.go:383: absent unit cgroup.kill: err = cgroup.kill must be a plain file writable only by its owner, want an ENOENT refusal at the derived path` |
+| M3 union, re-recorded | unit metadata root check and the A `O_WRONLY` refusal removed | the new probe/control rows and the live chowned-host row below | `preflight_linux_test.go:329: unit cgroup.kill A-owned: err = <nil>, accepted = true, want accepted = false`; `:363: unit kill write probe opened for writing: err = <nil>, accepted = true, want accepted = false`; `:395: unit cgroup.kill as root: err = <nil>, want the write-probe refusal`; live: mutant exit 0 on the chowned host where the fixed binary exits 1 |
+
+F4 replaces the previous live-only kill of the retarget mutation, and M3's killer column gains the
+hermetic probe rows alongside the live row (STD-A03, SPEC-A01).
+
+Live rows (fix-stage binary, install host from the header, owner unit started, run as A with
+`-verify-linux-owner-install -config /etc/symmetry/daemon.json`):
+
+| Row | Exit | Output |
+| --- | --- | --- |
+| fixed binary, unchanged host | 0 | the §4 success line |
+| retarget mutant binary `02d01eeefd1456a6455cfb283f9edfd842f1da4aef48f4cde312396c7098dd88`, unchanged host | 1 | `unit cgroup.kill must remain root:root` |
+| fixed binary, unit kill chowned to A (`1002:1003 0200`) | 1 | `unit cgroup.kill must remain root:root` |
+| M3 union mutant binary `e75517e28393636580427fee7bcd005df66d0c1a57abeefa78f075923464d8f4`, chowned host | 0 | the §4 success line - accepts the state the contract requires to fail |
+| fixed binary, ownership restored (`0:0 0200`) | 0 | the §4 success line |
+
+The fix-stage binary is
+`52b441e045d223aa32f354ce4a3a837802f7335d9b546e1c88599255ae41d511`
+(`CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o … ./cmd/symmetry-daemon`; a rebuild
+reproduced it byte for byte); the host was left as found (unit stopped, no leftover cgroup).
+
+Doc corrections: STD-A01 - the closure's residual no longer attributes the capable-client refusal
+to "the anchor's own client gate (all-zero capability sets)"; it states the record's finding
+(refused during anchor discovery, `sendmsg: broken pipe`, refusing check not identified) and the new
+hermetic probe coverage. STD-A02 - the closure's acceptance-set sentence now states acceptance per
+check (root-owned for both, A-owned manager-only, unit stays root:root) per §6 and the unit table.
+STD-A04 - the plan's §1 base-coordinate cell now cites `:150-152` and `:153-182` (the `:161` entry),
+verified against `b9d4b4a4`. STD-A05 - §1's binary sentence scopes `ea0dccd0…` to the implement-tree
+rows. SPEC-A02 - all three corrections applied in one pass.
+
+Fix-stage gates (all from `daemon/` unless stated; Windows and WSL):
+
+| Gate | Exit | Output |
+| --- | --- | --- |
+| `gofmt -l .` (Windows) | 0 | no file listed |
+| `go vet ./internal/linuxpreflight/...` (Windows) | 0 | empty |
+| `GOOS=linux GOARCH=amd64 go build ./...` (Windows) | 0 | empty |
+| `go vet ./internal/linuxpreflight/...` (WSL) | 0 | empty |
+| `go test -count=1 ./internal/linuxpreflight/...` (WSL) | 0 | `ok github.com/wxxb789/symmetry/daemon/internal/linuxpreflight 0.085s` |
+| `go test -race -count=1 ./internal/linuxpreflight/...` (WSL) | 0 | `ok github.com/wxxb789/symmetry/daemon/internal/linuxpreflight 1.117s` |
+| `git diff --check` (git root) | 0 | no whitespace error |
+| `python scripts/ci/check-citation-existence.py --repo . --base 2c8c419e --head <scratch>` | 0 | `1 changed document(s) pass the path and symbol check (534 path citation(s))`; the 3 pre-existing ignore-rule notes |
+| `python scripts/ci/check-record-cleanliness.py --repo . --base 2c8c419e --head <scratch>` | 0 | `2 changed record(s) pass the root-only check` |
+| `python scripts/ci/model-routing-record-sanitize.py --check --root-only` per changed doc | 0 for this record, the plan and the 0006 evidence doc; 1 pre-existing for `docs/TODO.md` and `docs/archive/CLOSED-TODO.md`; the added lines of every changed doc exit 0 through the same tool (stdin) | no host absolute path in the slice's lines |
+
+The three revision gates above ran over scratch commit
+`a564b42314b3bc58554bf44398b88d947fb04480` (dangling, no ref; `HEAD` and the worktree unchanged) of
+these bytes, which differ from the final record only in this sentence naming that commit; the
+sanitize gates ran on the worktree files. The conductor's post-commit run rebinds all revision
+gates to the committed revision.

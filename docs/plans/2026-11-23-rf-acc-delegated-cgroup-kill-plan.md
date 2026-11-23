@@ -17,7 +17,7 @@ delegated directory, the A-owned writable `cgroup.procs`/`cgroup.subtree_control
 
 | Contract entry | HEAD reality | Action |
 | --- | --- | --- |
-| `daemon/internal/linuxpreflight/cgroup_linux.go:130` `verifyLinuxOwnerParentKillBoundary` | the base function; `:161` requires the manager dir A-owned; `:170-183` the control loop with `cgroup.kill ownerUID: 0`; `:183-193` the A `O_WRONLY` refusal; `:195-200` `validateLinuxOwnerManagerKillMetadata` root-only | rewrite the file's two kill checks, keep the loop's other four controls, delete the manager A-probe |
+| `daemon/internal/linuxpreflight/cgroup_linux.go:130` `verifyLinuxOwnerParentKillBoundary` | the base function; `:150-152` requires the manager dir A-owned; `:153-182` the control loop with the `cgroup.kill ownerUID: 0` entry at `:161`; `:183-193` the A `O_WRONLY` refusal; `:195-200` `validateLinuxOwnerManagerKillMetadata` root-only | rewrite the file's two kill checks, keep the loop's other four controls, delete the manager A-probe |
 | `daemon/internal/linuxpreflight/preflight_linux_test.go:280-291` manager-kill rows | three rows inside `TestLinuxOwnerHostPrerequisiteChecksFailClosed` (`a`/`b` = 1001:1002 / 1003:1004) | replace with the contract's acceptance set in a new table-driven test in the same file; at most one new `*_test.go` is allowed and is not needed |
 | `docs/evidence/goal-0006-linux-owner-design-2026-09-22.md:613-624` | states "the parent's `cgroup.kill` remained root-owned mode `0200`" and "The parent kill control must remain root-only" | append a dated amendment; no rewrite of the historic text |
 | `docs/design/*` | `grep -rn "kill control\|parent kill\|root-only" docs/design/` finds nothing (the rule is stated only in the 0006 evidence record) | no edit; recorded as checked-absent |
@@ -146,3 +146,9 @@ probe's proof:
 - The probe's live proof is the M2-nometa row instead: with the metadata root rule dropped, the
   probe alone refuses the chowned unit kill
   (`A can open the owning unit cgroup.kill for writing; the unit kill control must remain root-only`).
+
+Fix stage (2026-11-23, record §13): the unit-kill metadata read, root:root judgement and the
+A `O_WRONLY` probe are extracted into `verifyLinuxOwnerUnitKillControl`, with the pure
+`validateLinuxOwnerUnitKillWriteProbe` decision; the new hermetic rows
+(`TestLinuxOwnerUnitKillWriteProbeDecisions`, `TestLinuxOwnerUnitKillControlReadsTheDerivedUnitPath`)
+redden the M3 union mutant and the unit-path retarget mutant as well as the live rows.
