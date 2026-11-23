@@ -45,7 +45,7 @@ from the capture machine produced the `hook_started`/`hook_response` frames.
 
 Claude Code forwards `--json-schema` verbatim as the `StructuredOutput` tool
 `input_schema`. The Anthropic Messages API rejects a tool `input_schema` that has
-`oneOf`, `anyOf` or `allOf` at the top level. `claudeCandidateStructuredOutputSchema`
+`oneOf`, `anyOf` or `allOf` at the top level. `candidateStructuredOutputSchema`
 therefore drops the TaskResult root `oneOf`, which couples `kind` with
 `proposal` and `reason`. The root object type, properties, required keys,
 `additionalProperties: false` and definitions are all kept.
