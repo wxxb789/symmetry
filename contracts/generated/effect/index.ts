@@ -527,8 +527,7 @@ export const DefinitionAdapterGraph = S.suspend(() => withObjectPropertyBounds(s
 
 export const DefinitionGoalAttentionFeedGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
   "entries": arrayConstraints(S.Array(DefinitionGoalAttentionEntryGraph), undefined, undefined, undefined),
-  "next_cursor": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
-  "unavailable": exactOneOf(S.Union(DefinitionReadUnavailableGraph, S.Null), DefinitionReadUnavailableGraph, S.Null)
+  "next_cursor": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null)
 })), undefined, undefined));
 
 export const DefinitionGoalAttentionEntryGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({

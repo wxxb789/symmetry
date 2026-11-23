@@ -60,25 +60,33 @@ describe("attention entry point", () => {
     expect(screen.getByText("Showing Project One.")).toBeVisible();
   });
 
-  it("renders a served Goal-feed refusal statement while keeping the project blocked work", async () => {
+  it("serves the Goal feed with no unavailable member", () => {
+    const document = readAttention({ selectedProjectId: projectId });
+    const goalFeed = asRecord(document.goal_attention);
+    const projectFeed = asRecord(document.project_blocked);
+    if (goalFeed === null || projectFeed === null) throw new Error("the served attention document is missing a feed");
+    expect(Object.hasOwn(goalFeed, "unavailable")).toBe(false);
+    expect(Object.hasOwn(projectFeed, "unavailable")).toBe(true);
+  });
+
+  it("states the project read refusal while the Goal attention entries stay served", async () => {
     portal.serve((request) => {
       const url = request.url;
       if (url.pathname === "/portal/api/attention") {
         return jsonResponse(readAttention({
           selectedProjectId: projectId,
-          goals: [],
-          blocked: [{ projectId, projectName: "Project One", workItemId: "44444444-4444-4444-8444-444444444444", title: "Operator review required", blocker: "Operator review required" }],
-          goalUnavailable: { code: "goal_admission_disabled", message: "goal admission is disabled" },
+          goals: [{ goalId, projectId, title: "Served attention goal" }],
+          projectUnavailable: { code: "not_found", message: "resource was not found" },
         }));
       }
     });
 
     renderRoute("/portal/attention");
-    expect(await screen.findByRole("heading", { name: "Goal attention is unavailable on this server" })).toBeVisible();
-    expect(screen.getByText(/goal admission is disabled/)).toBeVisible();
-    expect(screen.getByText("goal_admission_disabled")).toBeVisible();
-    // The pre-existing project blockers stay rendered and actionable.
-    expect(screen.getByRole("heading", { name: "Operator review required" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "The project read is unavailable" })).toBeVisible();
+    expect(screen.getByText(/resource was not found/)).toBeVisible();
+    expect(screen.getByText("not_found")).toBeVisible();
+    expect(screen.getByRole("link", { name: "Served attention goal" })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "Goal attention is unavailable on this server" })).toBeNull();
   });
 
   it("loads the Goal feed's older page with the served cursor and never repeats an entry", async () => {

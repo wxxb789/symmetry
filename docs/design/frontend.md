@@ -61,6 +61,15 @@ equivalent URL. Domain JSON endpoints retain compatibility; new goal projections
 are additive. Remove old portal.js/CSS/EEx workspace renderer after parity;
 retain the login template. A cutover must not leave two writable UI state models.
 
+Amendment (2026-11-23, rf-w6-09 attention-read member removal). The Portal
+attention read loses one member under the 2026-11-21 owner mandate (no backward
+compatibility required for this refactor program): the client no longer decodes
+`goal_attention.unavailable` and no longer renders the Goal-feed refusal notice
+that member fed. The project-refusal notice, the served `project_blocked.unavailable`
+member and every other domain-JSON member are unchanged. Contract revision
+`goal-rf-w6-09-goal-attention-unavailable-removal.md`, SHA-256
+`b39af1298b29d94392ba7ac0686a7d00973524da07694ea08a9a4d8829ded929`.
+
 Target scripts (implement these exact entrypoints):
 `pnpm --filter @symmetry/frontend typecheck`, `lint`, `test`, `build`;
 `pnpm --filter symmetry-browser-acceptance test`;

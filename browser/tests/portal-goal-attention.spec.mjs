@@ -124,7 +124,6 @@ test.describe("Goal attention workspace", () => {
     expect(empty.status).toBe(200);
     // The draft-free feed is empty but the project blockers are served.
     expect(empty.body.project_blocked.entries).toHaveLength(1);
-    expect(empty.body.goal_attention.unavailable).toBe(null);
 
     const repositoryId = await attachRepository(page, project.id);
     const { goalId } = await createGoalWithPlan(page, project, repositoryId, "Attention merge goal");
@@ -133,7 +132,6 @@ test.describe("Goal attention workspace", () => {
     // the page below renders those two reads, not a substituted response.
     const served = await api(page, "GET", `/portal/api/attention?project_id=${project.id}`);
     expect(served.status).toBe(200);
-    expect(served.body.goal_attention.unavailable).toBe(null);
     expect(served.body.goal_attention.entries.map((entry) => entry.goal_id)).toContain(goalId);
 
     await page.goto(`/portal/attention?projectId=${project.id}`);
@@ -484,7 +482,6 @@ test.describe("Goal attention workspace", () => {
     // project blockers, with no unavailable feed stated.
     const served = await api(page, "GET", `/portal/api/attention?project_id=${project.id}`);
     expect(served.status).toBe(200);
-    expect(served.body.goal_attention.unavailable).toBe(null);
     expect(served.body.goal_attention.entries.map((entry) => entry.goal_id)).toContain(goalId);
 
     await page.goto(`${goalsOffUrl}/portal/attention?projectId=${project.id}`);

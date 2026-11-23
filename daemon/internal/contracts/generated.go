@@ -76,9 +76,8 @@ type SymmetryAttentionReadV1 struct {
 }
 
 type GoalAttentionFeed struct {
-	Entries     []GoalAttentionEntry `json:"entries"`
-	NextCursor  *string              `json:"next_cursor"`
-	Unavailable *ReadUnavailable     `json:"unavailable"`
+	Entries    []GoalAttentionEntry `json:"entries"`
+	NextCursor *string              `json:"next_cursor"`
 }
 
 // Goals.ReadModel.attention/1 entry as served; the goal surface re-reads the full
@@ -125,13 +124,6 @@ type EntrySettlementAttention struct {
 	WorkItemID               *string                  `json:"work_item_id"`
 }
 
-// Set when one feed could not be read. The page still serves the other feed with HTTP 200;
-// the code is the server's mapped error code, never a fabricated reason.
-type ReadUnavailable struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-}
-
 type ProjectBlockedFeed struct {
 	Entries     []ProjectBlockedEntry `json:"entries"`
 	Unavailable *ReadUnavailable      `json:"unavailable"`
@@ -151,6 +143,13 @@ type ProjectBlockedEntry struct {
 	UpdatedAt     *string `json:"updated_at"`
 	WorkItemID    string  `json:"work_item_id"`
 	WorkItemKey   *string `json:"work_item_key"`
+}
+
+// Set when one feed could not be read. The page still serves the other feed with HTTP 200;
+// the code is the server's mapped error code, never a fabricated reason.
+type ReadUnavailable struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
 }
 
 // Consumed fields of SymmetryControl.Chat.conversation/1 (GET /portal/api/chat): the

@@ -41,6 +41,18 @@ unsupported required capabilities. Optional diagnostics can be ignored. Strict
 command payloads set additionalProperties false. A breaking semantic change gets
 a new schema_version and explicit adapter negotiation.
 
+Amendment (2026-11-23, rf-w6-09 attention-read member removal). One v1 member is
+removed rather than added: the Portal attention read's `GoalAttentionFeed.unavailable`,
+always `null` on the served path, is gone from the schema, the served projection,
+the generated DTOs, the fixtures and the frontend in one revision. The 2026-11-21
+owner mandate (no backward compatibility required for this refactor program)
+authorizes it, and no other member moved: `ProjectBlockedFeed.unavailable` still
+carries the live refusal (`code` + `message`) when the workspace read fails. The
+authorization is recorded here rather than left implicit in the mandate. Contract
+revision `goal-rf-w6-09-goal-attention-unavailable-removal.md`, SHA-256
+`b39af1298b29d94392ba7ac0686a7d00973524da07694ea08a9a4d8829ded929`. Any further
+non-additive v1 change needs its own recorded mandate.
+
 ## Admission and native execution
 
 Server admission envelope (inside existing work.input for opted-in runtimes):
