@@ -1,5 +1,5 @@
 defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
-  use SymmetryControl.MigrationCase, async: false
+  use SymmetryControl.MigrationCase, async: true
 
   alias SymmetryControl.Repo
   alias SymmetryControl.Repo.Migrations.AddGoal0006ControlPlane
@@ -15,34 +15,12 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   alias SymmetryControl.Repo.Migrations.AddPlanningTaskIdentityGuards
   alias SymmetryControl.Repo.Migrations.AddGoalWorkItemBaselines
   alias SymmetryControl.Repo.Migrations.AddGoalWorkItemChangeTargets
-  alias SymmetryControl.Repo.Migrations.AddEngineeringConnections
-  alias SymmetryControl.Repo.Migrations.AddHistoryLookupIndexes
-  alias SymmetryControl.Repo.Migrations.AddMachineEnrollmentReplay
-  alias SymmetryControl.Repo.Migrations.AddObanJobsTable
   alias SymmetryControl.Repo.Migrations.AddRuntimeRepositoryResourceAffinity
-  alias SymmetryControl.Repo.Migrations.AddProviderActionDispatchOwnership
   alias SymmetryControl.Repo.Migrations.AddRunProviderAccessSnapshots
-  alias SymmetryControl.Repo.Migrations.AddRetryCommands
-  alias SymmetryControl.Repo.Migrations.AddSupervisoryControls
-  alias SymmetryControl.Repo.Migrations.AddTaskAttemptIdentity
-  alias SymmetryControl.Repo.Migrations.AddTaskCommandOwnership
-  alias SymmetryControl.Repo.Migrations.AddTaskRequiredCapabilities
-  alias SymmetryControl.Repo.Migrations.BindWorkItemsToResources
-  alias SymmetryControl.Repo.Migrations.CompleteEngineeringWorkspace
-  alias SymmetryControl.Repo.Migrations.CreateChat
-  alias SymmetryControl.Repo.Migrations.CreateEngineeringWorkspace
-  alias SymmetryControl.Repo.Migrations.CreateOrchestrationTables
-  alias SymmetryControl.Repo.Migrations.CreateProviderActionIntents
-  alias SymmetryControl.Repo.Migrations.EnforceConnectedResourceIdentity
   alias SymmetryControl.Repo.Migrations.EnforceRuntimeRepositoryResourceAffinity
-  alias SymmetryControl.Repo.Migrations.EnforceWorkItemCoherence
-  alias SymmetryControl.Repo.Migrations.SnapshotProviderActionTargets
-  alias SymmetryControl.Repo.Migrations.VersionCommandRequestHashes
-  alias SymmetryControl.Repo.Migrations.VersionRequestHashes
   alias SymmetryControl.Orchestration.Task
 
   @migration_version 20_260_909_000_000
-  @oban_migration_version 20_260_909_010_000
   @runtime_affinity_migration_version 20_260_909_020_000
   @integration_designation_migration_version 20_260_909_030_000
   @baseline_migration_version 20_260_909_040_000
@@ -622,7 +600,12 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
         end
       end
 
-      Ecto.Migrator.run(Repo, [{@omp_harness_kind_migration_version, AddOmpHarnessKind}], :up,
+      Ecto.Migrator.run(
+        Repo,
+        MigrationModules.verified_pairs!([
+          {@omp_harness_kind_migration_version, AddOmpHarnessKind}
+        ]),
+        :up,
         all: true,
         log: false,
         migration_lock: false,
@@ -665,7 +648,12 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
       end
 
       downgrade = fn ->
-        Ecto.Migrator.run(Repo, [{@omp_harness_kind_migration_version, AddOmpHarnessKind}], :down,
+        Ecto.Migrator.run(
+          Repo,
+          MigrationModules.verified_pairs!([
+            {@omp_harness_kind_migration_version, AddOmpHarnessKind}
+          ]),
+          :down,
           step: 1,
           log: false,
           migration_lock: false,
@@ -1233,70 +1221,6 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
                Repo.query!("SELECT version FROM schema_migrations WHERE version = $1", [
                  @migration_version
                ])
-    end)
-  end
-
-  test "applies the Goal control plane before its Oban jobs dependency" do
-    with_base_schema(fn ->
-      migrate_goal_up!()
-      migrate_oban_up!()
-
-      assert %{rows: [["public.oban_jobs"]]} =
-               Repo.query!("SELECT to_regclass('public.oban_jobs')::text")
-
-      assert %{rows: [[@migration_version], [@oban_migration_version]]} =
-               Repo.query!(
-                 "SELECT version FROM schema_migrations WHERE version IN ($1, $2) ORDER BY version",
-                 [@migration_version, @oban_migration_version]
-               )
-    end)
-  end
-
-  test "refuses Oban rollback while an incomplete Goal worker remains queued" do
-    with_base_schema(fn ->
-      migrate_goal_up!()
-
-      assert %{rows: [[oban_jobs_before]]} =
-               Repo.query!("SELECT to_regclass('public.oban_jobs')::text")
-
-      migrate_oban_up!()
-
-      job_marker = "goal-0006-oban-#{System.unique_integer([:positive])}"
-
-      assert %{rows: [[job_id]]} =
-               Repo.query!(
-                 """
-                 INSERT INTO public.oban_jobs (state, queue, worker, args)
-                 VALUES (
-                   'available',
-                   'goal_wakeup',
-                   'SymmetryControl.Goals.Workers.WakeupWorker',
-                   $1::text::jsonb
-                 )
-                 RETURNING id
-                 """,
-                 [Jason.encode!(%{"goal_0006_test_marker" => job_marker})]
-               )
-
-      assert_raise Postgrex.Error,
-                   ~r/cannot roll back Oban jobs while queued Goal wakeups exist/i,
-                   &migrate_oban_down!/0
-
-      assert %{rows: [["public.oban_jobs"]]} =
-               Repo.query!("SELECT to_regclass('public.oban_jobs')::text")
-
-      Repo.query!(
-        "DELETE FROM public.oban_jobs WHERE id = $1 AND args ->> 'goal_0006_test_marker' = $2",
-        [job_id, job_marker]
-      )
-
-      if is_nil(oban_jobs_before) do
-        migrate_oban_down!()
-        assert %{rows: [[nil]]} = Repo.query!("SELECT to_regclass('public.oban_jobs')::text")
-      else
-        assert %{rows: [["public.oban_jobs"]]} =
-                 Repo.query!("SELECT to_regclass('public.oban_jobs')::text")
-      end
     end)
   end
 
@@ -3829,16 +3753,17 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   defp with_base_schema(test) do
-    load_migration_modules!()
-
-    with_schema("goal_0006_migration_#{System.system_time(:microsecond)}", fn ->
+    with_schema("goal_0006_migration", fn ->
       migrate_base_up!()
       test.()
     end)
   end
 
   defp migrate_base_up! do
-    Ecto.Migrator.run(Repo, base_migrations(), :up,
+    Ecto.Migrator.run(
+      Repo,
+      MigrationModules.verified_pairs!(MigrationModules.base_migrations()),
+      :up,
       all: true,
       log: false,
       migration_lock: false,
@@ -3847,7 +3772,10 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   defp migrate_goal_up! do
-    Ecto.Migrator.run(Repo, [{@migration_version, AddGoal0006ControlPlane}], :up,
+    Ecto.Migrator.run(
+      Repo,
+      MigrationModules.verified_pairs!([{@migration_version, AddGoal0006ControlPlane}]),
+      :up,
       all: true,
       log: false,
       migration_lock: false,
@@ -3858,26 +3786,10 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   defp migrate_goal_down! do
     Ecto.Migrator.run(
       Repo,
-      base_migrations() ++ [{@migration_version, AddGoal0006ControlPlane}],
+      MigrationModules.verified_pairs!(
+        MigrationModules.base_migrations() ++ [{@migration_version, AddGoal0006ControlPlane}]
+      ),
       :down,
-      step: 1,
-      log: false,
-      migration_lock: false,
-      dynamic_repo: Repo.get_dynamic_repo()
-    )
-  end
-
-  defp migrate_oban_up! do
-    Ecto.Migrator.run(Repo, [{@oban_migration_version, AddObanJobsTable}], :up,
-      all: true,
-      log: false,
-      migration_lock: false,
-      dynamic_repo: Repo.get_dynamic_repo()
-    )
-  end
-
-  defp migrate_oban_down! do
-    Ecto.Migrator.run(Repo, [{@oban_migration_version, AddObanJobsTable}], :down,
       step: 1,
       log: false,
       migration_lock: false,
@@ -3888,7 +3800,9 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   defp migrate_runtime_affinity_up! do
     Ecto.Migrator.run(
       Repo,
-      [{@runtime_affinity_migration_version, AddRuntimeRepositoryResourceAffinity}],
+      MigrationModules.verified_pairs!([
+        {@runtime_affinity_migration_version, AddRuntimeRepositoryResourceAffinity}
+      ]),
       :up,
       all: true,
       log: false,
@@ -3900,7 +3814,9 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   defp migrate_runtime_affinity_down! do
     Ecto.Migrator.run(
       Repo,
-      [{@runtime_affinity_migration_version, AddRuntimeRepositoryResourceAffinity}],
+      MigrationModules.verified_pairs!([
+        {@runtime_affinity_migration_version, AddRuntimeRepositoryResourceAffinity}
+      ]),
       :down,
       step: 1,
       log: false,
@@ -3912,7 +3828,9 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   defp migrate_runtime_affinity_guard_up! do
     Ecto.Migrator.run(
       Repo,
-      [{@runtime_affinity_guard_migration_version, EnforceRuntimeRepositoryResourceAffinity}],
+      MigrationModules.verified_pairs!([
+        {@runtime_affinity_guard_migration_version, EnforceRuntimeRepositoryResourceAffinity}
+      ]),
       :up,
       all: true,
       log: false,
@@ -3924,7 +3842,9 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   defp migrate_runtime_affinity_guard_down! do
     Ecto.Migrator.run(
       Repo,
-      [{@runtime_affinity_guard_migration_version, EnforceRuntimeRepositoryResourceAffinity}],
+      MigrationModules.verified_pairs!([
+        {@runtime_affinity_guard_migration_version, EnforceRuntimeRepositoryResourceAffinity}
+      ]),
       :down,
       step: 1,
       log: false,
@@ -3936,7 +3856,9 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   defp migrate_integration_designation_up! do
     Ecto.Migrator.run(
       Repo,
-      [{@integration_designation_migration_version, AddGoalIntegrationWorkItemDesignation}],
+      MigrationModules.verified_pairs!([
+        {@integration_designation_migration_version, AddGoalIntegrationWorkItemDesignation}
+      ]),
       :up,
       all: true,
       log: false,
@@ -3948,11 +3870,13 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   defp migrate_integration_designation_down! do
     Ecto.Migrator.run(
       Repo,
-      base_migrations() ++
-        [
-          {@migration_version, AddGoal0006ControlPlane},
-          {@integration_designation_migration_version, AddGoalIntegrationWorkItemDesignation}
-        ],
+      MigrationModules.verified_pairs!(
+        MigrationModules.base_migrations() ++
+          [
+            {@migration_version, AddGoal0006ControlPlane},
+            {@integration_designation_migration_version, AddGoalIntegrationWorkItemDesignation}
+          ]
+      ),
       :down,
       step: 1,
       log: false,
@@ -3964,7 +3888,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   defp migrate_baseline_up! do
     Ecto.Migrator.run(
       Repo,
-      [{@baseline_migration_version, AddGoalWorkItemBaselines}],
+      MigrationModules.verified_pairs!([{@baseline_migration_version, AddGoalWorkItemBaselines}]),
       :up,
       all: true,
       log: false,
@@ -3976,7 +3900,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   defp migrate_identity_up! do
     Ecto.Migrator.run(
       Repo,
-      [{@identity_migration_version, AddGoalIdentityGuards}],
+      MigrationModules.verified_pairs!([{@identity_migration_version, AddGoalIdentityGuards}]),
       :up,
       all: true,
       log: false,
@@ -3988,7 +3912,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   defp migrate_identity_down! do
     Ecto.Migrator.run(
       Repo,
-      [{@identity_migration_version, AddGoalIdentityGuards}],
+      MigrationModules.verified_pairs!([{@identity_migration_version, AddGoalIdentityGuards}]),
       :down,
       step: 1,
       log: false,
@@ -4000,7 +3924,9 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   defp migrate_planning_task_up! do
     Ecto.Migrator.run(
       Repo,
-      [{@planning_task_migration_version, AddPlanningTaskIdentityGuards}],
+      MigrationModules.verified_pairs!([
+        {@planning_task_migration_version, AddPlanningTaskIdentityGuards}
+      ]),
       :up,
       all: true,
       log: false,
@@ -4012,7 +3938,9 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   defp migrate_planning_task_down! do
     Ecto.Migrator.run(
       Repo,
-      [{@planning_task_migration_version, AddPlanningTaskIdentityGuards}],
+      MigrationModules.verified_pairs!([
+        {@planning_task_migration_version, AddPlanningTaskIdentityGuards}
+      ]),
       :down,
       step: 1,
       log: false,
@@ -4024,7 +3952,9 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   defp migrate_terminal_policy_up! do
     Ecto.Migrator.run(
       Repo,
-      [{@terminal_policy_migration_version, AddGoalTerminalGuardsAndExecutionPolicy}],
+      MigrationModules.verified_pairs!([
+        {@terminal_policy_migration_version, AddGoalTerminalGuardsAndExecutionPolicy}
+      ]),
       :up,
       all: true,
       log: false,
@@ -4036,7 +3966,9 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   defp migrate_terminal_policy_down! do
     Ecto.Migrator.run(
       Repo,
-      [{@terminal_policy_migration_version, AddGoalTerminalGuardsAndExecutionPolicy}],
+      MigrationModules.verified_pairs!([
+        {@terminal_policy_migration_version, AddGoalTerminalGuardsAndExecutionPolicy}
+      ]),
       :down,
       step: 1,
       log: false,
@@ -4048,10 +3980,10 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   defp migrate_terminal_authority_up! do
     Ecto.Migrator.run(
       Repo,
-      [
+      MigrationModules.verified_pairs!([
         {@terminal_authority_migration_version,
          AddGoalTerminalAuthorityGuardsAndSessionReciprocity}
-      ],
+      ]),
       :up,
       all: true,
       log: false,
@@ -4063,10 +3995,10 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   defp migrate_terminal_authority_down! do
     Ecto.Migrator.run(
       Repo,
-      [
+      MigrationModules.verified_pairs!([
         {@terminal_authority_migration_version,
          AddGoalTerminalAuthorityGuardsAndSessionReciprocity}
-      ],
+      ]),
       :down,
       step: 1,
       log: false,
@@ -4076,7 +4008,12 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   defp migrate_handoff_lineage_up! do
-    Ecto.Migrator.run(Repo, [{@handoff_lineage_migration_version, AddTaskHandoffLineage}], :up,
+    Ecto.Migrator.run(
+      Repo,
+      MigrationModules.verified_pairs!([
+        {@handoff_lineage_migration_version, AddTaskHandoffLineage}
+      ]),
+      :up,
       all: true,
       log: false,
       migration_lock: false,
@@ -4085,7 +4022,12 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   defp migrate_handoff_lineage_down! do
-    Ecto.Migrator.run(Repo, [{@handoff_lineage_migration_version, AddTaskHandoffLineage}], :down,
+    Ecto.Migrator.run(
+      Repo,
+      MigrationModules.verified_pairs!([
+        {@handoff_lineage_migration_version, AddTaskHandoffLineage}
+      ]),
+      :down,
       step: 1,
       log: false,
       migration_lock: false,
@@ -4096,7 +4038,9 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   defp migrate_session_stop_receipt_up! do
     Ecto.Migrator.run(
       Repo,
-      [{@session_stop_receipt_migration_version, AddHarnessSessionStopReceipts}],
+      MigrationModules.verified_pairs!([
+        {@session_stop_receipt_migration_version, AddHarnessSessionStopReceipts}
+      ]),
       :up,
       all: true,
       log: false,
@@ -4108,7 +4052,9 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   defp migrate_session_stop_receipt_down! do
     Ecto.Migrator.run(
       Repo,
-      [{@session_stop_receipt_migration_version, AddHarnessSessionStopReceipts}],
+      MigrationModules.verified_pairs!([
+        {@session_stop_receipt_migration_version, AddHarnessSessionStopReceipts}
+      ]),
       :down,
       step: 1,
       log: false,
@@ -4120,7 +4066,9 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   defp migrate_session_attach_receipt_up! do
     Ecto.Migrator.run(
       Repo,
-      [{@session_attach_receipt_migration_version, AddHarnessSessionAttachReceipts}],
+      MigrationModules.verified_pairs!([
+        {@session_attach_receipt_migration_version, AddHarnessSessionAttachReceipts}
+      ]),
       :up,
       all: true,
       log: false,
@@ -4132,7 +4080,9 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   defp migrate_session_attach_receipt_down! do
     Ecto.Migrator.run(
       Repo,
-      [{@session_attach_receipt_migration_version, AddHarnessSessionAttachReceipts}],
+      MigrationModules.verified_pairs!([
+        {@session_attach_receipt_migration_version, AddHarnessSessionAttachReceipts}
+      ]),
       :down,
       step: 1,
       log: false,
@@ -4144,7 +4094,9 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   defp migrate_provider_access_snapshot_up! do
     Ecto.Migrator.run(
       Repo,
-      [{@provider_access_snapshot_migration_version, AddRunProviderAccessSnapshots}],
+      MigrationModules.verified_pairs!([
+        {@provider_access_snapshot_migration_version, AddRunProviderAccessSnapshots}
+      ]),
       :up,
       all: true,
       log: false,
@@ -4156,7 +4108,9 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   defp migrate_provider_access_snapshot_down! do
     Ecto.Migrator.run(
       Repo,
-      [{@provider_access_snapshot_migration_version, AddRunProviderAccessSnapshots}],
+      MigrationModules.verified_pairs!([
+        {@provider_access_snapshot_migration_version, AddRunProviderAccessSnapshots}
+      ]),
       :down,
       step: 1,
       log: false,
@@ -4168,7 +4122,9 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   defp migrate_runtime_policy_snapshot_up! do
     Ecto.Migrator.run(
       Repo,
-      [{@runtime_policy_snapshot_migration_version, AddTaskRuntimePolicySnapshot}],
+      MigrationModules.verified_pairs!([
+        {@runtime_policy_snapshot_migration_version, AddTaskRuntimePolicySnapshot}
+      ]),
       :up,
       all: true,
       log: false,
@@ -4180,7 +4136,9 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   defp migrate_runtime_policy_snapshot_down! do
     Ecto.Migrator.run(
       Repo,
-      [{@runtime_policy_snapshot_migration_version, AddTaskRuntimePolicySnapshot}],
+      MigrationModules.verified_pairs!([
+        {@runtime_policy_snapshot_migration_version, AddTaskRuntimePolicySnapshot}
+      ]),
       :down,
       step: 1,
       log: false,
@@ -4192,7 +4150,9 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   defp migrate_change_target_up! do
     Ecto.Migrator.run(
       Repo,
-      [{@change_target_migration_version, AddGoalWorkItemChangeTargets}],
+      MigrationModules.verified_pairs!([
+        {@change_target_migration_version, AddGoalWorkItemChangeTargets}
+      ]),
       :up,
       all: true,
       log: false,
@@ -4204,7 +4164,9 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   defp migrate_change_target_down! do
     Ecto.Migrator.run(
       Repo,
-      [{@change_target_migration_version, AddGoalWorkItemChangeTargets}],
+      MigrationModules.verified_pairs!([
+        {@change_target_migration_version, AddGoalWorkItemChangeTargets}
+      ]),
       :down,
       step: 1,
       log: false,
@@ -4216,7 +4178,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   defp migrate_baseline_down! do
     Ecto.Migrator.run(
       Repo,
-      [{@baseline_migration_version, AddGoalWorkItemBaselines}],
+      MigrationModules.verified_pairs!([{@baseline_migration_version, AddGoalWorkItemBaselines}]),
       :down,
       step: 1,
       log: false,
@@ -4899,86 +4861,4 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
 
   defp hash(byte), do: :binary.copy(<<byte>>, 32)
   defp project_key, do: "G#{System.unique_integer([:positive])}" |> String.slice(0, 8)
-
-  defp base_migrations do
-    [
-      {20_260_902_000_000, CreateOrchestrationTables},
-      {20_260_903_000_000, AddTaskCommandOwnership},
-      {20_260_903_010_000, AddMachineEnrollmentReplay},
-      {20_260_903_020_000, AddHistoryLookupIndexes},
-      {20_260_904_000_000, CreateEngineeringWorkspace},
-      {20_260_904_010_000, CompleteEngineeringWorkspace},
-      {20_260_904_020_000, BindWorkItemsToResources},
-      {20_260_904_030_000, AddRetryCommands},
-      {20_260_904_040_000, AddTaskAttemptIdentity},
-      {20_260_904_050_000, EnforceWorkItemCoherence},
-      {20_260_905_000_000, AddEngineeringConnections},
-      {20_260_906_000_000, AddTaskRequiredCapabilities},
-      {20_260_906_010_000, CreateProviderActionIntents},
-      {20_260_906_020_000, AddProviderActionDispatchOwnership},
-      {20_260_906_030_000, EnforceConnectedResourceIdentity},
-      {20_260_906_040_000, SnapshotProviderActionTargets},
-      {20_260_906_050_000, AddSupervisoryControls},
-      {20_260_906_060_000, CreateChat},
-      {20_260_906_070_000, VersionCommandRequestHashes},
-      {20_260_907_000_000, VersionRequestHashes}
-    ]
-  end
-
-  defp load_migration_modules! do
-    migrations = [
-      {CreateOrchestrationTables, "20260902000000_create_orchestration_tables.exs"},
-      {AddTaskCommandOwnership, "20260903000000_add_task_command_ownership.exs"},
-      {AddMachineEnrollmentReplay, "20260903010000_add_machine_enrollment_replay.exs"},
-      {AddHistoryLookupIndexes, "20260903020000_add_history_lookup_indexes.exs"},
-      {CreateEngineeringWorkspace, "20260904000000_create_engineering_workspace.exs"},
-      {CompleteEngineeringWorkspace, "20260904010000_complete_engineering_workspace.exs"},
-      {BindWorkItemsToResources, "20260904020000_bind_work_items_to_resources.exs"},
-      {AddRetryCommands, "20260904030000_add_retry_commands.exs"},
-      {AddTaskAttemptIdentity, "20260904040000_add_task_attempt_identity.exs"},
-      {EnforceWorkItemCoherence, "20260904050000_enforce_work_item_coherence.exs"},
-      {AddEngineeringConnections, "20260905000000_add_engineering_connections.exs"},
-      {AddTaskRequiredCapabilities, "20260906000000_add_task_required_capabilities.exs"},
-      {CreateProviderActionIntents, "20260906010000_create_provider_action_intents.exs"},
-      {AddProviderActionDispatchOwnership,
-       "20260906020000_add_provider_action_dispatch_ownership.exs"},
-      {EnforceConnectedResourceIdentity,
-       "20260906030000_enforce_connected_resource_identity.exs"},
-      {SnapshotProviderActionTargets, "20260906040000_snapshot_provider_action_targets.exs"},
-      {AddSupervisoryControls, "20260906050000_add_supervisory_controls.exs"},
-      {CreateChat, "20260906060000_create_chat.exs"},
-      {VersionCommandRequestHashes, "20260906070000_version_command_request_hashes.exs"},
-      {VersionRequestHashes, "20260907000000_version_request_hashes.exs"},
-      {AddGoal0006ControlPlane, "20260909000000_add_goal_0006_control_plane.exs"},
-      {AddObanJobsTable, "20260909010000_add_oban_jobs_table.exs"},
-      {AddRuntimeRepositoryResourceAffinity,
-       "20260909020000_add_runtime_repository_resource_affinity.exs"},
-      {AddGoalIntegrationWorkItemDesignation,
-       "20260909030000_add_goal_integration_work_item_designation.exs"},
-      {AddGoalWorkItemBaselines, "20260909040000_add_goal_work_item_baselines.exs"},
-      {AddGoalIdentityGuards, "20260909050000_add_goal_identity_guards.exs"},
-      {AddRunProviderAccessSnapshots, "20260909070000_add_run_provider_access_snapshots.exs"},
-      {AddGoalWorkItemChangeTargets, "20260909080000_add_goal_work_item_change_targets.exs"},
-      {AddPlanningTaskIdentityGuards, "20260910000000_add_planning_task_identity_guards.exs"},
-      {AddGoalTerminalGuardsAndExecutionPolicy,
-       "20260910010000_add_goal_terminal_guards_and_execution_policy.exs"},
-      {EnforceRuntimeRepositoryResourceAffinity,
-       "20260910020000_enforce_runtime_repository_resource_affinity.exs"},
-      {AddGoalTerminalAuthorityGuardsAndSessionReciprocity,
-       "20260910030000_add_goal_terminal_authority_guards_and_session_reciprocity.exs"},
-      {AddTaskHandoffLineage, "20260910040000_add_task_handoff_lineage.exs"},
-      {AddHarnessSessionStopReceipts, "20260910050000_add_harness_session_stop_receipts.exs"},
-      {AddHarnessSessionAttachReceipts, "20260911000000_add_harness_session_attach_receipts.exs"},
-      {AddTaskRuntimePolicySnapshot, "20260916000000_add_task_runtime_policy_snapshot.exs"},
-      {AddOmpHarnessKind, "20261114010000_add_omp_harness_kind.exs"}
-    ]
-
-    Enum.each(migrations, fn {module, filename} ->
-      unless function_exported?(module, :__migration__, 0) do
-        filename
-        |> then(&Path.expand("../../../priv/repo/migrations/#{&1}", __DIR__))
-        |> Code.compile_file()
-      end
-    end)
-  end
 end

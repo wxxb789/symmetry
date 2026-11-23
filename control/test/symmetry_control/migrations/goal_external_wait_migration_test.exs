@@ -1,5 +1,5 @@
 defmodule SymmetryControl.Migrations.GoalExternalWaitMigrationTest do
-  use SymmetryControl.MigrationCase, async: false
+  use SymmetryControl.MigrationCase, async: true
 
   alias SymmetryControl.Repo
   alias SymmetryControl.Repo.Migrations.AddGoalExternalWaits
@@ -75,7 +75,10 @@ defmodule SymmetryControl.Migrations.GoalExternalWaitMigrationTest do
     with_schema("goal_external_wait_migration", fn ->
       migrate_all_up!()
 
-      Ecto.Migrator.run(Repo, [{@migration_version, AddGoalExternalWaits}], :down,
+      Ecto.Migrator.run(
+        Repo,
+        MigrationModules.verified_pairs!([{@migration_version, AddGoalExternalWaits}]),
+        :down,
         step: 1,
         log: false,
         migration_lock: false,
@@ -126,7 +129,9 @@ defmodule SymmetryControl.Migrations.GoalExternalWaitMigrationTest do
 
       Ecto.Migrator.run(
         Repo,
-        [{@unsupported_migration_version, AddGoalExternalWaitUnsupportedState}],
+        MigrationModules.verified_pairs!([
+          {@unsupported_migration_version, AddGoalExternalWaitUnsupportedState}
+        ]),
         :down,
         step: 1,
         log: false,
@@ -156,7 +161,9 @@ defmodule SymmetryControl.Migrations.GoalExternalWaitMigrationTest do
 
       Ecto.Migrator.run(
         Repo,
-        [{@unsupported_migration_version, AddGoalExternalWaitUnsupportedState}],
+        MigrationModules.verified_pairs!([
+          {@unsupported_migration_version, AddGoalExternalWaitUnsupportedState}
+        ]),
         :up,
         step: 1,
         log: false,
