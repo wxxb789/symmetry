@@ -49,6 +49,32 @@ func TestCandidateAdapterStartUsesOwnerSuppliedProcessSeam(t *testing.T) {
 	session.cancel()
 }
 
+func TestCandidateAdapterStartWithoutOwnerSeamUsesAdapterStarter(t *testing.T) {
+	process := newCandidateFakeProcess()
+	usedAdapterStarter := false
+	adapter := &CandidateAdapter{
+		executable:   "claude-test",
+		newSessionID: func() (string, error) { return candidateTestSessionID, nil },
+		startProcess: func(_ context.Context, _ execution.Invocation, sink execution.Sink) (candidateProcess, error) {
+			usedAdapterStarter = true
+			process.sink = sink
+			return process, nil
+		},
+	}
+	raw, err := adapter.Start(context.Background(), candidateStartRequest(t), &recordingCandidateSink{})
+	if err != nil {
+		t.Fatalf("Start() without owner process seam: %v", err)
+	}
+	if !usedAdapterStarter {
+		t.Fatal("adapter did not use its configured default process starter")
+	}
+	session, ok := raw.(*candidateSession)
+	if !ok {
+		t.Fatalf("Start() session = %T, want *candidateSession", raw)
+	}
+	session.cancel()
+}
+
 func TestClaudeCandidateStagesFreshTransportAndBarriers(t *testing.T) {
 	process := newCandidateFakeProcess()
 	var invocation execution.Invocation

@@ -1,10 +1,13 @@
 # rf-w5-02a acceptance-matrix extension — plan
 
 Contract: `goal-rf-w5-02a-acceptance-matrix-extension.md` (GDD state root; external to the
-repository). Base revision: `6148ba6ddb7b9918a5ea5ed40df434a30953c691` (= `origin/main`,
-2026-11-22; W6-06a #252 and the host-probe fix #247 already merged). Branch:
-`refactor/rf-w5-02a-acceptance-matrix-extension`. Owned set is the contract's strict list plus
-this plan, `docs/TODO.md` and the evidence record `docs/evidence/rf-w5-02a-acceptance-matrix-extension-2026-11-22.md`.
+repository). Base revision: `6148ba6ddb7b9918a5ea5ed40df434a30953c691` (W6-06a #252, the revision
+this slice branched from; `origin/main` had advanced to `540263924ecb7c2d9d0a2410d249c37bb695992c`,
+merged into the branch at `1ac4e867`). Branch: `refactor/rf-w5-02a-acceptance-matrix-extension`;
+implement `8ebe96ee` → merge `1ac4e867` → apply `49361f03` → fix r1 `7765fa26` → fix r2 (this final
+change set, on top of `7765fa26`). Every gate row in the evidence record names the revision it ran
+against. Owned set is the contract's strict list plus this plan, `docs/TODO.md` and the evidence
+record `docs/evidence/rf-w5-02a-acceptance-matrix-extension-2026-11-22.md`.
 
 Conductor decision (2026-11-22, F3/F9 ruling) SUPERSEDES the five-kind scope: this slice covers
 **codex and claude only**. `validateRuntimeWorkspacePolicy` already accepts `git_clone_v2` for
@@ -14,20 +17,29 @@ ruling F2 (2026-11-22, binding) excludes the frozen opencode leg from the per-ki
 W6-04/D1 keeps its acceptance-case bytes frozen; this slice leaves those bytes untouched and
 records the exclusion in §7.
 
+Conductor rulings on the PR #256 independent review (2026-11-22, binding, at the contract's end)
+resolve the round-2 findings: the workflow loop runs every case set, records each set's exit status
+and fails the job only after all sets ran, orders the new per-kind sets before `shared`, and keeps
+the allowlisted evidence upload on `if: always()` (a recorded divergence from Change item 6, see the
+evidence record); the claude `StartProcess` seam (+ its test), `register-linux-v2-claim-machine.py`
+and `harness_test.go` are acknowledged into the owned set with the seam's behavior neutrality
+proved; the `.codex`/`.claude` placeholders are provisioned only for the containment case sets, and
+every other set's B-HOME stays byte-identical to `origin/main`.
+
 ## 1. Delivered shape
 
 | file | change |
 | --- | --- |
 | `scripts/ci/linux-v2-native-tools.sh` | `linux_v2_fetch_codex` (codex package + `bwrap` + `codex-code-mode-host` archives, archive/executable SHA-256 and `codex-cli 0.168.0` asserts) and `linux_v2_fetch_claude` (`claude-linux-x64.tar.gz`, executable SHA-256, `2.1.323 (Claude Code)`); `linux_v2_fetch_native_tools` keeps its pi+opencode contract, new fetches are called per case set |
-| `scripts/ci/linux-v2-native-acceptance.sh` | case-set whitelist +2; codex/claude guest installs (root-owned 0755, staged-digest assert), a B-owned containment credential tree holding only the kind's placeholder (the W6-04/D1-frozen acceptance-case bytes stay byte-identical; new-kind handling sits after them), per-kind containment configs, request/barrier/marker wiring, `codex_containment`/`claude_containment` dispatch arms, per-kind `native_release` replay leg, per-kind manifest CLI args |
-| `.github/workflows/linux-native-v2-acceptance.yml` | `case_sets` +2; the twelve per-case-set artifact allowlist entries are replaced by one `<evidence root>/*/*.json` upload glob (committed fact, verified with `git diff 540263924e..HEAD -- .github/workflows/linux-native-v2-acceptance.yml`; recorded as a divergence in the evidence record); trigger/environment/timeout untouched |
+| `scripts/ci/linux-v2-native-acceptance.sh` | case-set whitelist +2; codex/claude guest installs (root-owned 0755, staged-digest assert), a B-owned containment credential tree holding only the kind's placeholder (the W6-04/D1-frozen acceptance-case bytes stay byte-identical; new-kind handling sits after them), per-kind containment configs, request/barrier/marker wiring, `codex_containment`/`claude_containment` dispatch arms, per-kind `native_release` replay leg, per-kind manifest CLI args; non-containment sets stage/install exactly the `origin/main` B-HOME (fix r2) |
+| `.github/workflows/linux-native-v2-acceptance.yml` | `case_sets` +2, ordered before `shared`; the loop runs every set, records each set's exit status and fails the job only after all sets ran, with the allowlisted evidence upload on `if: always()` (conductor P1 ruling, a recorded divergence from Change item 6); the twelve per-case-set artifact allowlist entries are replaced by one `<evidence root>/*/*.json` upload glob (committed fact, verified with `git diff 540263924e..HEAD -- .github/workflows/linux-native-v2-acceptance.yml`; recorded in the evidence record); trigger/environment/timeout untouched |
 | `scripts/ci/provision-linux-v2-control-claims.exs` | `@expected_fixture_runs` 44 → 48; `@cases` +2 containment +2 per-kind `native_release` replay rows; per-kind replay names keep their own `case` |
-| `scripts/ci/register-linux-v2-claim-machine.py` | +2 generic Control claim runtimes (`codex-native`, `claude-native`, capabilities `{structured_input: true}`) — scope addition §6 |
+| `scripts/ci/register-linux-v2-claim-machine.py` | +2 generic Control claim runtimes (`codex-native`, `claude-native`, capabilities `{structured_input: true}`) — conductor-acknowledged scope §6 |
 | `scripts/ci/write-linux-v2-owner-request.py` | `CASES` +4 rows; per-kind `native_release` replay rows write request `case: stage_replay` |
 | `daemon/internal/app/linux_owner_witness_linux.go` | kind whitelist + version equality (codex, `claude_code`); case map +2 + `stage_replay` for codex/claude; credential-free containment path (Open without a turn); codex turn/artifact/usage gates case-scoped to `codex_native_turn`; `verifyNativeExecutable` extended for claude's release equality; new `recordNativeExecutableDigest` (sole writer, called only from `runFresh`, call-site audit `:2909`/`:2964`) records the new summary fields `native_binary`/`native_binary_sha256`; `containment.native_open_reached` |
 | `daemon/internal/harness/claude/probe.go` | export `TestedVersion = testedVersion` (one line) |
-| `daemon/internal/harness/claude/adapter.go` | optional `StartProcess` launch seam, mirroring `codex/adapter.go:185-195` — scope addition §6 |
-| `daemon/internal/harness/claude/adapter_test.go` | seam test |
+| `daemon/internal/harness/claude/adapter.go` | optional `StartProcess` launch seam, mirroring `codex/adapter.go:185-195` — conductor-acknowledged scope §6 |
+| `daemon/internal/harness/claude/adapter_test.go` | seam tests: the owner-supplied seam is used, and without it the adapter's default starter selection is unchanged (§6) |
 | `daemon/e2e/production_linux_v2_native_witness_test.go` | `TestProductionLinuxV2CodexNativeContainment`, `…ClaudeNativeContainment`; kind-aware version map/CLI check; `linuxV2ValidateFixedBSecretFiles` +2; `linuxV2NativeCommandMatches` +2; per-kind binary-digest env assert; evidence `native_binary`/`native_binary_sha256`/`containment`; per-kind replay sub-cases |
 | `daemon/e2e/production_linux_v2_owner_cli_test.go` | `runProductionLinuxV2StageCrashReplay` generalized to an explicit case; containment boundary/digest asserts in `linuxV2ValidateOwnerWitnessResponse`; opencode-only health-peer assert in `runProductionLinuxV2NativeOwnerWitness` |
 | `daemon/internal/app/linux_owner_v2_app_test.go` | routing invariance assertion (codex/claude Linux configs stay legacy, `LinuxV2Required == false`) with a red mutant |
@@ -97,7 +109,10 @@ Naming (frozen):
    `SYMMETRY_OPENAI_API_KEY` is never written for it (no `native-api-key` fixture file, no
    pi/opencode fixture entries), and the guest check proves B's HOME carries no `.pi`,
    `.config/opencode` or `.local/share/opencode` path and the kind directory holds exactly its
-   placeholder (probes in the evidence record §Fix r1).
+   placeholder (probes in the evidence record §Fix r1). Every other case set stages and installs
+   exactly the `origin/main` B-HOME: the credential arrays and the fixture generator carry the
+   placeholders only for the containment sets (conductor P2 ruling 2026-11-22; probe in the
+   evidence record §Fix r2).
 4. **Per-kind replay legs stay** (the conductor did not drop them): each containment set runs the
    fresh case plus one same-RunKey `native_release` crash-replay leg for that kind, so
    launch/stop/replay/recovery is proven per kind. Cost: one extra Control fixture Run and one
@@ -128,6 +143,10 @@ Naming (frozen):
 
 ## 5. Evidence plan (judging artifact: `answer.md` in the GDD run dir)
 
+The fix r2 re-run below executes the same off-host matrix on the final tree; it additionally
+parses the extracted workflow `run:` block (`bash -n`, `shellcheck`) and re-runs the base-vs-HEAD
+B-HOME byte-identity probe and the claude no-seam test (evidence record §Fix r2).
+
 - Contract-clause table with the exact command, exit code, and the evidence row/proof for each
   clause; the dispatch is recorded as **not run** at this stage (implementation stage cannot
   dispatch; the post-merge stage owns it) — never as passed.
@@ -151,7 +170,7 @@ Naming (frozen):
   environment, `gh workflow run linux-native-v2-acceptance.yml --repo wxxb789/symmetry --ref main`,
   the `jq -e` predicates from the contract, recorded as the next stage's work.
 
-## 6. Scope additions (recorded, with alternatives)
+## 6. Scope additions (conductor-acknowledged 2026-11-22, with alternatives and behavior proofs)
 
 1. **`daemon/internal/harness/claude/adapter.go` (+ its test).** The witness's exact-target gate
    (`validateNativeTargetSummary`, `linux_owner_witness_linux.go:969-976`) requires
@@ -161,18 +180,29 @@ Naming (frozen):
    optional seam. Alternatives rejected: a witness-side pidfd capture (no process handle reaches
    the witness, and reopening a pidfd cannot prove launch transfer); weakening the target gate for
    containment cases (contradicts contract clause 4 and quality policy). The addition is the
-   codex-shaped 12-line seam plus one focused test; it changes no production behavior (the seam is
-   nil outside the witness).
+   codex-shaped 12-line seam plus focused tests; it changes no production behavior (the seam is
+   nil outside the witness). The conductor rulings of 2026-11-22 acknowledge the seam and its test
+   into the owned set and require the neutrality proof: the added
+   `TestCandidateAdapterStartWithoutOwnerSeamUsesAdapterStarter` shows that without an owner seam
+   the adapter keeps its pre-change starter selection, and the only non-test
+   `harness.StartRequest` construction sites are `goal_admission_tx.go:911` (no `StartProcess`
+   field, so nil on every ordinary daemon start) and the witness at
+   `linux_owner_witness_linux.go:3239` (the seam, for codex/claude only). Production claude starts
+   therefore take the `origin/main` path unchanged.
 2. **`scripts/ci/register-linux-v2-claim-machine.py`.** The Control scheduler can only assign the
    new Work items to registered runtimes; the fixture's `schedule` requires a runtime whose
    `agent_profile`/`repository_resource_id` match the case, so two generic claim runtimes
    (`codex-native`, `claude-native`, opencode repository resource, no `provider_access`/`adapter`
    capability) must be registered with the existing two. Alternative rejected: reusing the
    opencode profile name for a codex runtime would keep the file untouched but record a kind
-   lie in every fixture request and evidence row.
+   lie in every fixture request and evidence row. Acknowledged into the owned set by the same
+   conductor rulings.
+3. **`daemon/internal/app/harness_test.go`.** One claude arm in `testVerifiedNativeCapabilities`,
+   the shared test helper of the witness tests; test-only enabler, no production surface.
+   Acknowledged into the owned set by the same conductor rulings.
 
-Both additions are CI/witness-support surfaces inside the conductor's codex+claude containment
-scope; neither touches `daemon/internal/config/**`, `daemon/internal/linuxpreflight/**`,
+All three additions are CI/witness-support surfaces inside the conductor's codex+claude containment
+scope; none touches `daemon/internal/config/**`, `daemon/internal/linuxpreflight/**`,
 production routing, admission, composition, or any frozen opencode byte.
 
 ## 7. Out of scope (with reasons)

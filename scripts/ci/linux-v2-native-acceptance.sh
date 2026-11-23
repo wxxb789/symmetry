@@ -502,23 +502,20 @@ sudo install -d -o "$A_UID" -g "$B_GID" -m 2750 "$rootfs$PI_SHARE"
 [[ "$(sudo stat -c '%u:%g:%a' "$rootfs/home")" == '0:0:755' ]] || fail 'the shared /home parent must remain root-owned and traversable'
 [[ "$(sudo stat -c '%u:%g:%a' "$rootfs$A_HOME")" == "$A_UID:$A_GID:700" ]] || fail 'A passwd HOME must remain A-owned mode 0700'
 [[ "$(sudo stat -c '%u:%g:%a' "$rootfs$B_HOME")" == "$B_UID:$B_GID:700" ]] || fail 'B passwd HOME must remain B-owned mode 0700'
-b_native_credential_directories=("$B_HOME/.codex" "$B_HOME/.claude")
-b_native_credential_files=("$B_HOME/.codex/auth.json" "$B_HOME/.claude/.credentials.json")
+b_native_credential_directories=(
+  "$B_HOME/.pi" "$B_HOME/.pi/agent" "$B_HOME/.config" "$B_HOME/.config/opencode" \
+  "$B_HOME/.local" "$B_HOME/.local/share" "$B_HOME/.local/share/opencode"
+)
+b_native_credential_files=(
+  "$B_HOME/.pi/agent/settings.json" "$B_HOME/.pi/agent/auth.json" \
+  "$B_HOME/.config/opencode/opencode.json" "$B_HOME/.local/share/opencode/auth.json"
+)
 if [[ "$native_containment_kind" == codex ]]; then
   b_native_credential_directories=("$B_HOME/.codex")
   b_native_credential_files=("$B_HOME/.codex/auth.json")
 elif [[ "$native_containment_kind" == claude_code ]]; then
   b_native_credential_directories=("$B_HOME/.claude")
   b_native_credential_files=("$B_HOME/.claude/.credentials.json")
-else
-  b_native_credential_directories+=(
-    "$B_HOME/.pi" "$B_HOME/.pi/agent" "$B_HOME/.config" "$B_HOME/.config/opencode" \
-    "$B_HOME/.local" "$B_HOME/.local/share" "$B_HOME/.local/share/opencode"
-  )
-  b_native_credential_files+=(
-    "$B_HOME/.pi/agent/settings.json" "$B_HOME/.pi/agent/auth.json" \
-    "$B_HOME/.config/opencode/opencode.json" "$B_HOME/.local/share/opencode/auth.json"
-  )
 fi
 sudo install -d -o "$B_UID" -g "$B_GID" -m 0700 "$rootfs$B_HOME/hooks" \
   "${b_native_credential_directories[@]/#/$rootfs}"
@@ -1045,25 +1042,6 @@ else:
     )
     (private_home / ".local/share/opencode/auth.json").write_text(
         json.dumps({"openai": {"type": "api", "key": api_key}}), encoding="utf-8"
-    )
-    (private_home / ".codex").mkdir(parents=True, mode=0o700)
-    (private_home / ".claude").mkdir(parents=True, mode=0o700)
-    (private_home / ".codex/auth.json").write_text(
-        json.dumps({"OPENAI_API_KEY": "containment-placeholder-no-credential"}),
-        encoding="utf-8",
-    )
-    (private_home / ".claude/.credentials.json").write_text(
-        json.dumps(
-            {
-                "claudeAiOauth": {
-                    "accessToken": "containment-placeholder-no-credential",
-                    "refreshToken": "containment-placeholder-no-credential",
-                    "expiresAt": 4102444800000,
-                    "scopes": ["user:inference"],
-                }
-            }
-        ),
-        encoding="utf-8",
     )
 PY
 python3 - "$fixture_root/opencode-health.json" "$fixture_root/stage-replay" "$DAEMON_SERVICE_STATE_DIR" \

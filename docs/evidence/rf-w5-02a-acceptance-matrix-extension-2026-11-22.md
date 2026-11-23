@@ -56,7 +56,9 @@ executable digest before the witness runs, and the e2e requires the daemon-repor
 
 ## Off-host gates (commands and exits)
 
-All runs on the worktree at HEAD `6148ba6ddb7b9918a5ea5ed40df434a30953c691` plus the uncommitted change set.
+These are the implement-stage runs (worktree based at `6148ba6ddb7b9918a5ea5ed40df434a30953c691`,
+before `origin/main` was merged at `1ac4e867`) plus that stage's change set; every later section
+names the revision its own rows ran against.
 
 | Gate | Command (working directory) | Result |
 | --- | --- | --- |
@@ -72,7 +74,7 @@ All runs on the worktree at HEAD `6148ba6ddb7b9918a5ea5ed40df434a30953c691` plus
 | Go race (WSL) | `go test -count=1 -race ./internal/app/...` re-run on the final bytes (bg_26; the only post-bg_22 source delta was a comment line in `linux_owner_witness_linux.go`, final `sha256` `5897cfe391981d207a964b9ba3ea4acd0bf6b12cab517d7d4b9ee869977e47f3`) | rc=0, `internal/app` 1074.9 s |
 | Workflow lint | `actionlint` 1.7.12 `.github/workflows/linux-native-v2-acceptance.yml` | rc=0 |
 | Shell syntax | `bash -n scripts/ci/linux-v2-native-{tools,acceptance}.sh` | rc=0 |
-| Shell lint | `shellcheck --severity=warning scripts/ci/linux-v2-native-acceptance.sh scripts/ci/linux-v2-native-tools.sh` (repo root, shellcheck 0.9.0) | exit 1 (findings present, advisory: `continue-on-error: true`, `ci.yml:1297`); by code at the final tree: `SC1078` 2, `SC2024` 1, `SC2043` 1, `SC2174` 1, `SC2276` 3, `SC2288` 1, `SC2289` 2, `SC2154` 0. Measured identically for the pre-fix content under the same command (a `scripts/ci/zz-head-probe.sh` copy plus the real `linux-v2-native-tools.sh` in one invocation), so the fix adds no finding. The `SC2154` class disappears as soon as `tools.sh` is part of the invocation — shellcheck then resolves the `source "$repo/scripts/ci/linux-v2-native-tools.sh"` directive and sees the assignments; single-file invocations that cannot resolve it report 8 (`pi_unpack`, `opencode_unpack`, `codex_executable`, `code_mode_host_executable{,_sha}`, `bwrap_executable{,_sha}`, `claude_executable`), which is the class recorded before |
+| Shell lint | `shellcheck --severity=warning scripts/ci/linux-v2-native-acceptance.sh scripts/ci/linux-v2-native-tools.sh` (repo root; shellcheck 0.9.0 at fix r1, 0.9.0/0.11.0 at fix r2) | exit 1 (findings present, advisory: `continue-on-error: true`, `ci.yml:1297`); fix-r1 counts at the fix-r1 tree: `SC1078` 2, `SC2024` 1, `SC2043` 1, `SC2174` 1, `SC2276` 3, `SC2288` 1, `SC2289` 2, `SC2154` 0. Fix-r2 re-measurement: per-code counts identical between the fix-r2 tree and an `origin/main` copy under the same invocation — `SC1078` 1, `SC2024` 1, `SC2043` 1, `SC2174` 1, `SC2276` 2, `SC2288` 1, `SC2289` 1 (§Fix r2) — so neither fix adds a finding. The `SC2154` class is an artifact of single-file invocations that cannot resolve the `source "$repo/scripts/ci/linux-v2-native-tools.sh"` directive (8 findings: `pi_unpack`, `opencode_unpack`, `codex_executable`, `code_mode_host_executable{,_sha}`, `bwrap_executable{,_sha}`, `claude_executable`). |
 | Python fixtures | `python3 scripts/ci/test-linux-v2-evidence.py` (WSL; 39 tests at the implement stage, 41 after the apply added the boundary-copy and replay-binding tests, 42 after the fix r1 mutation tests) | 42 tests at the final tree, `OK`, rc=0 |
 | Python fixtures | `python3 scripts/ci/test-linux-v2-control-receipt.py` (WSL root, bg_25) | 9 tests, `OK`, rc=0 |
 | Python fixtures | `scripts/ci/test-linux-v2-source-subject.py`, `scripts/ci/test-linux-v2-go-events.py`, `scripts/ci/test-ci-structure-extraction.py` | 7 OK / 6 OK / 23 OK, rc=0 |
@@ -100,20 +102,22 @@ not part of this change's evidence.
   version equality, containment path selection and the summary digest requirement.
 - **No weakening of pi/opencode.** The config generator keeps the base `command`/`native_model` expression
   byte-identical and applies the codex/claude overrides after the agent dictionary, so `pi`/`opencode`
-  JSON is unchanged; the fixture probe (see §Fix r1) stages the `shared` B-home tree from the fixed
-  generator and from the pre-fix generator and compares the relative paths and bytes (identical), and
-  compares the generated `pi-provider-action`/`pi-helper-crash`/`pi-daemon-crash`/`opencode-health`/
+  JSON is unchanged; the fix-r1 fixture probe compared the `shared` B-home tree between the r1
+  generator and the pre-r1-fix generator (identical at that stage, both still carrying the then-unscoped
+  placeholders), and fix r2 removed that churn and proves the tree byte-identical to `origin/main`
+  itself (`probe_bhome.py`, §Fix r2); the probe also compares the generated
+  `pi-provider-action`/`pi-helper-crash`/`pi-daemon-crash`/`opencode-health`/
   `opencode-wsl2`/`codex-containment`/`claude-containment` config bytes for the `shared`,
   `codex-containment` and `claude-containment` suffixes (no mismatch);
   `write-linux-v2-owner-request.py` changes are pure additions plus one refusal-message rename; every
   deleted line in `daemon/e2e/` and `daemon/internal/app/` is a kind-predicate/signature generalization of
   the same assertion (e.g. the non-Pi profile check keeps `profile.ProviderAccess || len(args) != 0`).
 
-## Fix r1 (2026-11-22, review findings fixed at the final tree)
+## Fix r1 (2026-11-22, round-1 review findings; committed as `7765fa26`)
 
 The ce-code-review receipt for `540263924e..49361f03` reported `MUST_FIX (7)` (6×P2 + 1×P3). All
-seven are fixed in the worktree (HEAD `49361f03` plus the fix change set); the probes and mutants
-below ran at this final tree. Each finding maps to evidence that would redden without the change:
+seven are fixed and committed as `7765fa26` (the head the round-2 review examined); the probes and
+mutants below ran on the fix-r1 worktree. Each finding maps to evidence that would redden without the change:
 
 - **#9 frozen acceptance-case bytes.** Base `:579` (barrier-case loop) and base `:819-841` (config
   generator head, including the `command` line and its dict shape) are restored byte-identical; the
@@ -131,9 +135,10 @@ below ran at this final tree. Each finding maps to evidence that would redden wi
   (the `git show HEAD:` bytes) stages all six files with the sentinel in `.pi/agent/auth.json`
   and `.local/share/opencode/auth.json` (mutant red). The shell-guard probe extracts the real
   credential arrays, key-write guard and absence block: containment arrays hold only the kind path,
-  `shared` keeps the five pi/opencode files (and the `shared` staged tree is byte-identical between
-  the final and pre-fix generators), the contained key file stays absent (unguarded pre-fix write:
-  present, mutant red), and the absence block passes clean while reddening on a planted
+  the non-containment arrays keep only the pi/opencode entries (the fix-r2 change set removes the
+  r1-stage placeholder churn and re-proves the generated `shared` tree against `origin/main`,
+  §Fix r2), the contained key file stays absent (unguarded pre-fix write: present, mutant red), and
+  the absence block passes clean while reddening on a planted
   `.pi/agent/auth.json` and on a planted `.codex/extra.json`.
 - **#2 EXIT-trap unbound variable.** `source_commit`/`source_tree_digest` are derived from
   `$source_subject_json` at the script top (before the `trap cleanup EXIT INT TERM` at `:278`); the
@@ -160,7 +165,7 @@ below ran at this final tree. Each finding maps to evidence that would redden wi
   `go test -count=1 ./internal/app -run 'TestNewHarnessRegistryBindsNativeAdaptersAndUnsupportedOpenCode|TestStartupProbeRegistersUnavailableNativeProjections'`
   → `PASS` (1.7 s), including the opencode subtest that asserts the refused start.
 
-Fix-stage gate re-run (worktree = `49361f03` + the fix change set): `bash -n` on both scripts rc=0
+Fix-stage gate re-run (worktree = `49361f03` + the fix change set, committed as `7765fa26`): `bash -n` on both scripts rc=0
 (WSL bash and Windows bash); `shellcheck` per the Shell lint row; `actionlint` rc=0;
 `test-linux-v2-evidence.py` 42 tests `OK` rc=0 (WSL); `test-linux-v2-source-subject.py` 7 OK,
 `test-linux-v2-go-events.py` 6 OK, `test-ci-structure-extraction.py` 23 OK (3 skipped),
@@ -172,17 +177,82 @@ entries; Elixir row arithmetic re-derived (6 + 18 literal rows + `@stage_replay_
 `@ack_loss_stages` 10 = 48 = `@expected_fixture_runs`, no duplicate names, the four new rows exact).
 The heavy `go test` suites are unchanged (no Go file is touched by the fix) and are not re-run here.
 
+## Fix r2 (2026-11-22, PR #256 round-2 review findings fixed; conductor rulings)
+
+The independent round-2 review (`256-opus-review-1`) reported `Fix first`: P1 (a dispatch could never
+run the new case sets or publish their evidence), two P2s (scope, frozen churn) and two P3s (stale
+wording, stale revision labels). The conductor rulings of 2026-11-22 at the contract's end are binding
+for the fixes. Every row below ran on the fix-r2 worktree (`7765fa26` + the fix-r2 change set).
+
+Behavioral probes (a local scratch directory outside the repository):
+
+- **P1 loop: one red set must not hide the others.** The workflow step's `run:` block was extracted
+  verbatim (indentation stripped) into a scratch `workflow-run-block.sh` and exercised in a scratch
+  `RUNNER_TEMP` against a stub acceptance script that reds only `shared` (the frozen F2-excluded leg):
+  all 14 sets ran (`14` `Case set … exited` lines, 13× `exit 0`), stderr carried
+  `Failed case sets: shared`, the job exited 1 at the end, and manifests existed for sets after the
+  failure (`codex_containment`, `claude_containment`, `stale_leaf`, `stale_journal_subject`) while
+  `shared` published none. Red mutant: dropping `|| status=$?` aborts at `shared` after 3 stub lines,
+  no later manifest, no failed-set summary. Both shapes exit 1; the assertion set above (14 sets vs 3,
+  later manifests present vs absent, the failed-set summary line) distinguishes them.
+- **P2 frozen churn: the non-containment B-HOME is byte-identical to `origin/main`.** A scratch probe
+  extracts the real fixture-generator heredoc from `origin/main` and from the final tree, runs both in
+  scratch roots for the `shared` suffix, and compares the generated `b-home` tree path-by-path with
+  per-file SHA-256: identical (4 files + 7 directories), and the containment suffixes stage exactly
+  `.codex/auth.json` / `.claude/.credentials.json` (1 directory + 1 file each). A second extraction
+  evaluates the final tree's credential arrays for the non-containment case and diffs the effective
+  `$B_HOME` token set (arrays + `hooks` + `$B_HOME`) against every `$B_HOME`-prefixed token in the
+  `origin/main` region: `diff` exit 0. `python <scratch>/probe_bhome.py` → `PROBE OK`, rc=0.
+- **P2 seam neutrality.** `TestCandidateAdapterStartWithoutOwnerSeamUsesAdapterStarter` (new) drives
+  `Start` with `request.StartProcess == nil` and an adapter-configured starter and asserts the adapter
+  starter ran — the pre-change selection. Production wiring audit:
+  `grep -rn 'harness.StartRequest{' daemon --include='*.go' | grep -v _test` → only
+  `goal_admission_tx.go:911` (no `StartProcess` field, nil on every ordinary daemon start) and
+  `linux_owner_witness_linux.go:3239` (the seam, for codex/claude only), so no production claude start
+  reaches the new branch.
+- **P3 wording.** `grep -n 'OpenCode owner witness\|non-Pi owner witness' daemon/internal/app/linux_owner_witness_linux.go`
+  → the two non-Pi request refusals now read `non-Pi owner witness …` (`:2437`, `:2439`); the
+  remaining `OpenCode owner witness` strings are kind-specific arms (`:790`, `:2378`, `:2940`,
+  `:3317`). No test or doc pins the old strings (`grep` over `*_test.go` → none).
+- **P3 revision labels.** This record's implement-stage runs, §Fix r1 and §Fix r2 each name their
+  revision; the plan header names `540263924e`, `1ac4e867` and `7765fa26` and the fix-r2 change set;
+  the PR body's fix-r1 sentence names `7765fa26` and no longer claims an uncommitted fix.
+
+Fix-r2 gate re-run:
+
+| Gate | Command | Result |
+| --- | --- | --- |
+| Shell syntax | `bash -n scripts/ci/linux-v2-native-acceptance.sh scripts/ci/linux-v2-native-tools.sh` | rc=0 |
+| Workflow run block | `bash -n` + `shellcheck -s bash` on the extracted step block | rc=0 / rc=0 |
+| Workflow lint | `actionlint .github/workflows/linux-native-v2-acceptance.yml` | rc=0 |
+| Shell lint (advisory) | `shellcheck --severity=warning scripts/ci/linux-v2-native-acceptance.sh scripts/ci/linux-v2-native-tools.sh` | exit 1 (advisory; repo `ci.yml:1297` `continue-on-error: true`); per-code counts at the fix-r2 tree and for an `origin/main` copy under the same invocation are identical (WSL 0.9.0 and host 0.11.0): `SC1078` 1, `SC2024` 1, `SC2043` 1, `SC2174` 1, `SC2276` 2, `SC2288` 1, `SC2289` 1 — no new finding |
+| Python fixtures | `python3 scripts/ci/test-linux-v2-evidence.py` (WSL) | 42 tests `OK`, rc=0 |
+| Python fixtures | `python3 scripts/ci/test-linux-v2-source-subject.py` (WSL) | 7 tests `OK`, rc=0 |
+| Python fixtures | `python3 scripts/ci/test-linux-v2-go-events.py` (WSL) | 6 tests `OK`, rc=0 |
+| Python fixtures | `python3 scripts/ci/test-ci-structure-extraction.py` (WSL) | 23 tests `OK` (3 skipped), rc=0 |
+| Python fixtures | `python3 scripts/ci/test-linux-v2-control-receipt.py` (WSL root) | 9 tests `OK`, rc=0 |
+| gofmt | `gofmt -l internal/app e2e internal/harness/claude` (`daemon/`) | no output, rc=0 |
+| Go vet (host) | `go vet ./...` (`daemon/`) | rc=0 |
+| Go build (linux) | `GOOS=linux GOARCH=amd64 go build ./...` (`daemon/`) | rc=0 |
+| Go vet (linux) | `GOOS=linux GOARCH=amd64 go vet ./e2e/... ./internal/app/... ./internal/harness/...` | rc=0 |
+| Go claude (host) | `go test -count=1 ./internal/harness/claude/...` | `ok` 15.1 s, rc=0 (both seam tests included) |
+| e2e discovery (WSL) | `go test -list 'NativeContainment$' ./e2e/` | rc=0, lists both containment entry points |
+| Focused app tests (WSL) | `go test -count=1 ./internal/app/ -run 'TestLinuxV2AdmissionKeepsCodexAndClaudeOnTheLegacyPath\|TestLinuxV2NativeWitness' -v` | all matched tests `PASS`, rc=0 (containment case-map/open-path/summary pins and the pinned-kind-version config pin included) |
+| Routing invariance (WSL) | `go test -count=1 ./internal/app/ -run TestLinuxV2AdmissionKeepsCodexAndClaudeOnTheLegacyPath -v` | `PASS` 0.71 s, rc=0 |
+| Go race (WSL) | `go test -count=1 -timeout 40m -race ./internal/app/... ./internal/harness/...` | rc=0; `internal/app` `ok` 623.7 s, `harness/claude` `ok` 21.9 s, all other harness packages `ok`. The first invocation used Go's default 10 m package timeout and was killed mid-suite at 600 s (the `internal/app` suite runs just past it under `-race` on WSL); re-run with `-timeout 40m`, no race reported |
+
 ## Base-vs-HEAD control-flow audit
 
-114 hunks over 20 changed files (`git diff -U0 540263924e | grep -c '^@@'`), 1441 insertions / 94 deletions
-(`git diff --numstat 540263924e`, counting the new plan and this record; the figures include the
-2026-11-22 apply-stage change set: +260/−175 over 13 files).
+126 hunks over 20 changed files (`git diff -U0 540263924e | grep -c '^@@'`), 1800 insertions / 144
+deletions (`git diff --numstat 540263924e`, counting the new plan and this record; re-derived at the
+fix-r2 tree, where the fix-r2 change set alone is 38 hunks, +194/−73 over 6 files).
 
 | Decision point | Base | HEAD | Effect on existing kinds |
 | --- | --- | --- | --- |
 | `validateLinuxV2NativeWitnessConfig` kind whitelist | pi, opencode, codex | + `claude_code` | addition only; omo/omp/generic still rejected |
 | version equality chain | pi/opencode/codex against their `TestedVersion` | + claude against the new `claude.TestedVersion` | same fail-closed shape |
 | non-Pi profile check | `profile.ProviderAccess \|\| len(profile.Args) != 0` → "OpenCode owner witness…" | same condition, message "non-Pi owner witness…" | assertion unchanged |
+| non-Pi request refusals (`linux_owner_witness_linux.go`) | both arms said "OpenCode owner witness…" for every non-Pi kind | "non-Pi owner witness…" (fix r2) | same conditions; codex/claude refusals are kind-accurate |
 | `linuxV2NativeWitnessCaseMatches` | 6 rows | + `codex_containment`→codex, `claude_containment`→`claude_code`; `stage_replay` accepts codex/claude | cross-kind requests still rejected |
 | `launchNative` launch-transfer arm | `kind == KindCodex` | `kind == KindCodex \|\| KindClaude` (same wrapper) | claude gains the seam; codex body unchanged |
 | `launchNative` turn arm | `else` ran a Pi-style turn for every non-OpenCode kind | `else if witness.containmentCase()` → `Open` + `recordContainmentBoundary()`; the Pi `else` unchanged | containment and per-kind replay legs never start a turn or request `provider_access` |
@@ -210,14 +280,19 @@ not run, never as passed.
 3. The contract's gofmt scope named `internal/e2e`; the real path is `daemon/e2e`.
 4. Owned-set additions beyond the contract's file list (plan §6): `daemon/internal/harness/claude/adapter.go`
    (+ alias and `StartProcess` seam and test), `scripts/ci/register-linux-v2-claim-machine.py`,
-   `daemon/internal/app/harness_test.go` (claude caps test-enabler), this evidence record.
+   `daemon/internal/app/harness_test.go` (claude caps test-enabler), this evidence record. The
+   conductor rulings of 2026-11-22 acknowledge these three files into the owned set and require the
+   claude seam's behavior-neutrality proof (§Fix r2).
 5. The dispatch is **not run** (no qualifying host here) and is recorded as not-run in the dispatch section
    above, never as passed.
 6. Contract Change item 6 asked for the new case sets to be added to the workflow's per-case-set artifact
    allowlist; the commit instead replaced the twelve named entries with one `<evidence root>/*/*.json`
-   upload glob (`.github/workflows/linux-native-v2-acceptance.yml`, upload step). The glob covers the same
-   per-case-set evidence files; the behavioural delta (a wildcard instead of named paths) is recorded here
-   rather than re-litigated, and the plan's workflow row now states the committed bytes.
+   upload glob (`.github/workflows/linux-native-v2-acceptance.yml`, upload step). Per the conductor P1
+   ruling, the step's loop also orders the new per-kind sets before `shared`, runs every case set,
+   records each set's exit status, fails the job only after all sets ran, and the allowlisted upload is
+   gated `if: always()` instead of `if: success()`. The glob covers the same per-case-set evidence files
+   and the upload stays allowlist-only; the behavioural deltas are recorded here rather than
+   re-litigated, and the plan's workflow row states the committed bytes.
 
 ## Not evidence of
 
@@ -241,3 +316,6 @@ evidence, not acceptance.
 - The shellcheck advisory step stays at exit 1 (see the Shell lint gate row for the measured per-code counts at
   the final tree and the invocation the counts depend on); the `SC2154` class is an artifact of single-file
   invocations that cannot resolve the `source "$repo/scripts/ci/linux-v2-native-tools.sh"` directive.
+- The P1 aggregate loop means a red set no longer short-circuits the job: the worst-case runtime is the sum of
+  all 14 sets even when an early one fails (the reason the loop exists — one red set must not hide the others'
+  evidence). The first dispatch measures per-set runtimes before any `timeout-minutes` change (F5 lever (a)).

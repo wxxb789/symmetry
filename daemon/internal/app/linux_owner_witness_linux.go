@@ -2434,9 +2434,9 @@ func validateLinuxV2NativeWitnessRequest(request linuxV2NativeWitnessRequest, va
 			}
 		}
 	} else if request.Claim.ProviderAccess != nil {
-		return errors.New("OpenCode owner witness must not receive Pi provider bridge authority")
+		return errors.New("non-Pi owner witness must not receive Pi provider bridge authority")
 	} else if len(request.Claim.Work.RequiredCapabilities) != 0 {
-		return errors.New("OpenCode owner witness claim must not require native/provider capability promotion")
+		return errors.New("non-Pi owner witness claim must not require native/provider capability promotion")
 	}
 	if owner.BUID == 0 || owner.BGID == 0 || value.Runtime.RepositoryResourceID != request.Subject.ResourceID {
 		return errors.New("owner witness does not match the installed B/resource identity")

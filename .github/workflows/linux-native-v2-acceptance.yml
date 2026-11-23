@@ -106,9 +106,9 @@ jobs:
           set -Eeuo pipefail
           evidence_root="$RUNNER_TEMP/linux-v2-native-evidence-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           case_sets=(
-            shared
             codex_containment
             claude_containment
+            shared
             synthetic_goal_cleanup
             stage_replay_create_started
             stage_replay_leaf_bound
@@ -121,21 +121,30 @@ jobs:
             stale_journal_fence
             stale_journal_subject
           )
+          failed_case_sets=()
           for case_set in "${case_sets[@]}"; do
+            status=0
             SYMMETRY_LINUX_V2_NATIVE_CASE_SET="$case_set" \
             SYMMETRY_LINUX_V2_NATIVE_EVIDENCE_DIR="$evidence_root/$case_set" \
-              bash scripts/ci/linux-v2-native-acceptance.sh
-            test -s "$evidence_root/$case_set/manifest.json" || {
+              bash scripts/ci/linux-v2-native-acceptance.sh || status=$?
+            if (( status == 0 )) && [[ ! -s "$evidence_root/$case_set/manifest.json" ]]; then
               printf 'Missing sanitized evidence manifest for required case set: %s\n' "$case_set" >&2
-              exit 1
-            }
+              status=1
+            fi
+            printf 'Case set %s exited %d\n' "$case_set" "$status"
+            (( status == 0 )) || failed_case_sets+=("$case_set")
           done
+          if (( ${#failed_case_sets[@]} > 0 )); then
+            printf 'Failed case sets: %s\n' "${failed_case_sets[*]}" >&2
+            exit 1
+          fi
+          printf 'All %d case sets exited 0.\n' "${#case_sets[@]}"
       - name: Clear isolated Control operator token
         if: always()
         shell: bash
         run: printf 'SYMMETRY_OPERATOR_TOKEN=\n' >> "$GITHUB_ENV"
       - name: Upload allowlisted sanitized Linux v2 evidence
-        if: success()
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: linux-v2-native-evidence-${{ github.run_id }}-${{ github.run_attempt }}
