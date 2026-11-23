@@ -215,7 +215,41 @@ func TestCancelDeferredTerminalTakeOnce(t *testing.T) {
 		}
 	})
 
-	t.Run("older bound attempt wins", func(t *testing.T) {
+	t.Run("observed response does not defer", func(t *testing.T) {
+		tracker := newCancelTracker()
+		id, _, _ := tracker.acquire()
+		tracker.bindRPC(15)
+		tracker.markWritten(id)
+		tracker.observeResponse(id)
+		if tracker.deferTerminal(interruptedTerminal()) {
+			t.Fatal("an attempt whose interrupt response was already observed deferred the terminal")
+		}
+		if tracker.deferredTerminal != nil {
+			t.Fatalf("deferred terminal = %+v, want none", tracker.deferredTerminal)
+		}
+	})
+
+	t.Run("newest bound attempt wins the fallback", func(t *testing.T) {
+		tracker := newCancelTracker()
+		older, _, _ := tracker.acquire()
+		tracker.bindRPC(16)
+		tracker.markWritten(older)
+		tracker.finish(older, context.DeadlineExceeded)
+		newer, _, _ := tracker.acquire()
+		tracker.bindRPC(17)
+		tracker.markWritten(newer)
+		tracker.finish(newer, context.DeadlineExceeded)
+		tracker.acquire()
+		terminal := interruptedTerminal()
+		if !tracker.deferTerminal(terminal) {
+			t.Fatal("two written attempts with unanswered interrupts did not defer")
+		}
+		if terminal.attemptID != newer {
+			t.Fatalf("deferred attempt id = %d, want the newest eligible attempt %d", terminal.attemptID, newer)
+		}
+	})
+
+	t.Run("settled written attempt beats the unbound flight", func(t *testing.T) {
 		tracker := newCancelTracker()
 		older, _, _ := tracker.acquire()
 		tracker.bindRPC(13)
@@ -553,11 +587,10 @@ func TestCancelFieldsWrittenOnlyInOwnerFile(t *testing.T) {
 		files[name] = file
 		names = append(names, name)
 	}
-	owner, ok := files["cancel_state.go"]
-	if !ok {
+	if _, ok := files["cancel_state.go"]; !ok {
 		t.Fatal("cancel_state.go is missing from the package")
 	}
-	cancelTrackerFields := assertCancelTrackerShape(t, owner)
+	cancelTrackerFields := assertCancelTrackerShape(t, names, files)
 	writes := map[string]int{}
 	for _, name := range names {
 		file := files[name]
@@ -566,6 +599,9 @@ func TestCancelFieldsWrittenOnlyInOwnerFile(t *testing.T) {
 			switch typed := node.(type) {
 			case *ast.FuncDecl:
 				aliases = map[string]bool{}
+				if receiver, ok := cancelTrackerReceiver(typed); ok && receiver != "" {
+					aliases[receiver] = true
+				}
 			case *ast.DeclStmt:
 				recordTrackerAliasDecl(typed, aliases)
 			case *ast.AssignStmt:
@@ -715,49 +751,75 @@ func cancelTrackerFieldAccess(target ast.Expr, fields map[string]bool, aliases m
 	return "", false
 }
 
-func assertCancelTrackerShape(t *testing.T, file *ast.File) map[string]bool {
+func cancelTrackerReceiver(decl *ast.FuncDecl) (string, bool) {
+	if decl.Recv == nil || len(decl.Recv.List) != 1 {
+		return "", false
+	}
+	receiver := decl.Recv.List[0].Type
+	for {
+		switch typed := receiver.(type) {
+		case *ast.StarExpr:
+			receiver = typed.X
+			continue
+		case *ast.ParenExpr:
+			receiver = typed.X
+			continue
+		}
+		break
+	}
+	ident, ok := receiver.(*ast.Ident)
+	if !ok || ident.Name != "cancelTracker" {
+		return "", false
+	}
+	if len(decl.Recv.List[0].Names) == 1 {
+		return decl.Recv.List[0].Names[0].Name, true
+	}
+	return "", true
+}
+
+func assertCancelTrackerShape(t *testing.T, names []string, files map[string]*ast.File) map[string]bool {
 	t.Helper()
 	methods := map[string]bool{}
 	fields := map[string]bool{}
-	ast.Inspect(file, func(node ast.Node) bool {
-		switch typed := node.(type) {
-		case *ast.FuncDecl:
-			if typed.Recv == nil || len(typed.Recv.List) != 1 {
-				return true
-			}
-			receiver := typed.Recv.List[0].Type
-			if pointer, ok := receiver.(*ast.StarExpr); ok {
-				receiver = pointer.X
-			}
-			if ident, ok := receiver.(*ast.Ident); ok && ident.Name == "cancelTracker" {
+	for _, name := range names {
+		file := files[name]
+		ast.Inspect(file, func(node ast.Node) bool {
+			switch typed := node.(type) {
+			case *ast.FuncDecl:
+				if _, ok := cancelTrackerReceiver(typed); !ok {
+					return true
+				}
+				if name != "cancel_state.go" {
+					t.Fatalf("%s defines cancelTracker method %s outside cancel_state.go", name, typed.Name.Name)
+				}
 				methods[typed.Name.Name] = true
-			}
-		case *ast.TypeSpec:
-			if typed.Name.Name != "cancelTracker" {
-				return true
-			}
-			structure, ok := typed.Type.(*ast.StructType)
-			if !ok {
-				t.Fatal("cancelTracker is not a struct")
-			}
-			for _, field := range structure.Fields.List {
-				for _, name := range field.Names {
-					fields[name.Name] = true
+			case *ast.TypeSpec:
+				if name != "cancel_state.go" || typed.Name.Name != "cancelTracker" {
+					return true
 				}
-				switch fieldType := field.Type.(type) {
-				case *ast.Ident:
-					if strings.Contains(fieldType.Name, "Mutex") {
-						t.Fatalf("cancelTracker field %v is a lock", field.Names)
+				structure, ok := typed.Type.(*ast.StructType)
+				if !ok {
+					t.Fatal("cancelTracker is not a struct")
+				}
+				for _, field := range structure.Fields.List {
+					for _, fieldName := range field.Names {
+						fields[fieldName.Name] = true
 					}
-				case *ast.SelectorExpr:
-					if strings.Contains(fieldType.Sel.Name, "Mutex") {
-						t.Fatalf("cancelTracker field %v is a lock", field.Names)
+					switch fieldType := field.Type.(type) {
+					case *ast.Ident:
+						if strings.Contains(fieldType.Name, "Mutex") {
+							t.Fatalf("cancelTracker field %v is a lock", field.Names)
+						}
+					case *ast.SelectorExpr:
+						if strings.Contains(fieldType.Sel.Name, "Mutex") {
+							t.Fatalf("cancelTracker field %v is a lock", field.Names)
+						}
 					}
 				}
 			}
-		}
-		return true
-	})
+			return true
+		})
+	}
 	if len(fields) == 0 {
 		t.Fatal("cancelTracker has no fields to scan")
 	}

@@ -104,7 +104,8 @@ through `forgetRPC` before deleting, preserving base's write order per path.
 
 New files:
 
-- `cancel_state_test.go`: tracker-only, no session, no process. Table-driven legal sequences
+- `cancel_state_test.go`: tracker-only — no live RPC session or process; a test may build a session
+  value as a fixture (conductor clause-5 ruling, section 17 F20). Table-driven legal sequences
   (intent→written→accepted; intent→written→failed; intent→failed from a write failure; flight
   shared by two acquire calls; deferred terminal defer/take-once plus the Cancelled-vs-Failed rule;
   process-exit settlement of intent and written attempts; RPC bind/forget/observe; reset), plus
@@ -345,17 +346,17 @@ does not weaken tests, types, validation or permissions. `F` numbers are the sim
 | F5 | found/retired interrupt settlement duplicated in `handleResponseWithOutputLock` | applied | one settlement block entered per resolution; `forgetRPC` stays in the found branch and the retired branch keeps its `cancelAttempt != 0` guard |
 | F6 | dedupe keys re-derived inline in the notification handlers | applied | `turnStartedDedupeKey`/`itemLifecycleDedupeKey`/`terminalDedupeKey` in `translate.go`, called by both `notificationDedupeKey` and the handlers, so the replay comparison has one source |
 | F7 | overflow escalation repeated at five notification sites | applied | `markNotificationDeduplicated(frame, preDedupeKey, key)`; `rememberNativeFailureReason` stays after the seen check and before the emit |
-| F8 | unreachable `Written` disjunct in `resolvePendingInterrupt` | not applied | the disjunct is a deliberately preserved base guard (section 3 records it as kept), and removing a state guard is a validation reduction; a conductor ruling is requested |
+| F8 | unreachable `Written` disjunct in `resolvePendingInterrupt` | not applied | the disjunct is a deliberately preserved base guard (section 3 records it as kept), and removing a state guard is a validation reduction; the conductor's 2026-11-23 ruling declined and recorded it as a base-frozen shape |
 | F9–F11, F13, F14 | test-side duplication: local `controlResult` ×4, deferred-terminal introspection ×2, the -32001 envelope ×4 and its assertion ×3, the inline adapter literal ×2, the delta fixture ×4, repeated wire payloads | applied | shared `controlResult`, `assertDeferredIncomplete`, `interruptRejectionResponse`, `assertRejectedNonApplied`, `adapterFor`, `deltaNotification`, `initializeReply`, `turnStartedNotification`, `statusChangedNotification` |
 | F12 note | the finding's literal replacement `fakeAdapter(process.fakeNativeProcess)` | applied with correction | that call returns the embedded fake, dropping the blocking override: tried at one site, `TestBlockedRPCWriteIsCancelledAndDoesNotLeak` failed after the 30 s guard ("Open() did not enter blocked native write"), then reverted; `adapterFor(process, process.fakeNativeProcess)` returns the wrapper and attaches the sink to the embedded fake |
 | F14 note | the finding listed four initialize replies | corrected | six existed (two more in `rpc_session_test.go`); all six call `initializeReply()` |
-| F15 | `Control` goroutine scaffolding in 11 tests | not applied | optional per the finding; one helper across the three shapes changes the channel structure of 11 CI-pinned cancel tests, whose goroutine/channel behaviour is frozen; conductor's call |
+| F15 | `Control` goroutine scaffolding in 11 tests | not applied | optional per the finding; one helper across the three shapes changes the channel structure of 11 CI-pinned cancel tests, whose goroutine/channel behaviour is frozen; the conductor's 2026-11-23 ruling declined and recorded it as a base-frozen shape |
 | F16 | overflow summary asserted through the code-under-test variable | applied | `rpc_session_test.go` asserts the literal `"Codex pending turn notification buffer overflow"` (the `adapter.go` text) |
 | F17 | `TestFramingFailureSettlesWaitWithoutDiagnosticSink` asserted no diagnostic at all | applied | the sink is captured and the test now asserts no diagnostic event was recorded; the framing-failure path emits no sink event at all, so this is a negative pin on the absence of a diagnostic (no positive control) |
 | F18 | owner-file scan used a hand-written field map | applied | field names derive from the parsed `cancelTracker` struct; an empty field set fails the test instead of scanning nothing |
 | F19 | section 9 recorded `cancel_state_test.go` at 682 L | applied | the recorded number was wrong (697 L at `2571fd56`); post-apply sizes are in 17.1 |
-| F20 | "no session" wording versus `TestCancelProcessExitSettlesDeferredTerminal` | rejected | the wording lives in the contract's clause 5, outside the owned set; a conductor wording ruling is requested |
-| F21 | "each case with a recorded red mutant" versus seven group-level mutants | rejected | contract interpretation, outside the owned set; a conductor ruling is requested |
+| F20 | "no session" wording versus `TestCancelProcessExitSettlesDeferredTerminal` | rejected | conductor wording ruling 2026-11-23: "no session" means no live RPC session or process, so a session value built as a fixture is in scope and the test stays |
+| F21 | "each case with a recorded red mutant" versus seven group-level mutants | rejected | conductor wording ruling 2026-11-23: the group-level mutants M1-M4/M8-M10 satisfy the clause, with P3-2/P3-3 added as per-case mutants (section 19, M12-M13) |
 
 ### 17.1 Post-apply measurements (single source — supersedes the counts in sections 9, 12 and 13)
 
@@ -364,18 +365,20 @@ does not weaken tests, types, validation or permissions. `F` numbers are the sim
 | file | implement | apply |
 | --- | --- | --- |
 | `adapter.go` | 1,331 | 1,300 |
-| `cancel_state.go` | 405 | 426 |
-| `rpc_session.go` | 889 | 889 |
+| `cancel_state.go` | 405 | 426 → 420 (fix r2 comment trims) |
+| `rpc_session.go` | 889 | 889 → 886 (fix r2 comment trims) |
 | `translate.go` | 167 | 179 |
 | `adapter_test.go` | 1,296 | 1,283 |
 | `cancel_test.go` | 493 | 472 |
 | `rpc_session_test.go` | 848 | 834 |
 | `adapter_support_test.go` | 609 | 624 |
-| `cancel_state_test.go` | 697 (recorded as 682) | 704 → 773 (fix r1) |
+| `cancel_state_test.go` | 697 (recorded as 682) | 704 → 773 (fix r1) → 835 (fix r2) |
 | `translate_test.go` | 396 | 396 |
 
 Every file stays under 1,500 L. Fix round r1 changed only the `cancel_state_test.go` row above (the
-owner-file scan hardening); every other row is final.
+owner-file scan hardening); fix round r2 trimmed three comment lines in `cancel_state.go` and
+`rpc_session.go` and added the receiver/method-set scan and the two P3 cases to
+`cancel_state_test.go`; every other row is final.
 
 Literal multiset (`rg -o '"[^"]*"'`, import blocks excluded, the eight non-test `codex/*.go` files):
 base 682 / 391 distinct → apply 674 / 391 distinct. The only differing keys are F6's single-sourcing:
@@ -477,9 +480,11 @@ was reverted and the scan re-run green (M8-M10 below).
 The repaired scan: `delete` with two arguments records `Args[0]`; `clear` with one argument records
 `Args[0]`; and per function it tracks identifiers bound to the tracker by assignment or `var`
 declaration (through parentheses, address-of and alias chains) and matches those bases in
-`cancelTrackerFieldAccess`. Bounded reach, stated: a value copy taken elsewhere and a function
-parameter of type `cancelTracker` are outside syntactic reach; every write form that names a
-tracker field or an intermediate pointer alias is now seen.
+`cancelTrackerFieldAccess`. Bounded reach, stated: a function parameter of type `cancelTracker` and
+a value copy taken from anything but a nameable tracker expression are outside syntactic reach.
+Every write form that names a tracker field or an intermediate pointer alias is seen; fix round r2
+(section 19) extends this to any receiver identifier on a `*cancelTracker`/`cancelTracker` method
+and refuses such a method in any file but `cancel_state.go`.
 
 | # | group | mutation | failing test and observed message |
 | --- | --- | --- | --- |
@@ -529,10 +534,12 @@ target disjoint fields, no statement between them reads either field, and the ne
 operation is identical; the moved read is of a key disjoint from the two deletions and holds the
 same value before and after them.
 
-Smallest proposed amendment, awaiting the conductor's ruling (clause 1 is external to this plan):
-read clause 1's "write order" as the per-function cancel-field write sequence, which section 11's
-table shows matching base, and record the strict cross-owner reading's two deviations as tolerated
-by clause 4's "unless proven unobservable". No code change was made for this finding.
+Smallest proposed amendment, accepted by the conductor's 2026-11-23 ruling (clause 1 is external to
+this plan): "write order" reads as the per-function order of writes to cancel fields inside one
+uninterrupted `session.mutex` critical section, which section 11's table shows matching base;
+writes to disjoint fields with no intervening reader may interleave differently from base, and the
+dropped `finish` re-check was unreachable after the early return. The reviewer verified the
+mechanism independently. No code change was made for this finding.
 
 ### 18.4 Fix-round gate results (working directory `daemon/`)
 
@@ -555,3 +562,87 @@ M6 re-checked at the fixed tree (the assignment form the scan has always covered
 `TestCancelFieldsWrittenOnlyInOwnerFile` red with "rpc_session.go:880 writes
 cancelTracker.deferredTerminal outside cancel_state.go"; reverted, green. Test names are unchanged
 from section 14 (138; the fix round adds no test function) and no `t.Skip` is added.
+
+## 19. Fix round r2 — PR #265 review findings P3-1..P3-5 and the conductor rulings (2026-11-23)
+
+Source: the adversarial review of PR #265 (findings P3-1..P3-6) and the conductor's binding ruling
+of 2026-11-23. Test, comment, gate and record changes only — no production file behaviour changed.
+The ruling accepted SPEC-A01 as amended (section 18.3), read clause 5's "no session" as no live RPC
+session or process (F20) and its mutation rule as satisfied by the group-level mutants plus P3-2/P3-3
+(F21), declined F8/F15 as base-frozen shapes, and required P3-1..P3-5 fixed as below. P3-6 needs no
+code action: 0 review threads at `4954718b`, the landing check reads threads, and the Codex state
+blob is a landing-time concern for the conductor.
+
+### 19.1 P3-1 — the owner gate is now receiver- and package-wide
+
+The r1 scan resolved write bases by identifier text (`tracker`, aliases, `.cancelTracker` selectors)
+and pinned the method count from `cancel_state.go` alone, so `func (t *cancelTracker) rogue() { ... }`
+in another file escaped both. The gate now:
+
+- collects, from every non-test file in the package, every method whose receiver type is
+  `*cancelTracker`/`cancelTracker` (through parentheses), whatever the receiver identifier is, and
+  fails any such method declared outside `cancel_state.go` — the count pin therefore counts that set;
+- adds the receiver identifier to the per-function alias set in the write scan, so receiver-named
+  writes are resolved like `tracker`-named ones.
+
+Mutant M11 (the reviewer's exact injection) turns the gate red; a no-write variant proves the method
+set pin alone suffices. The r1 tree passed the injection (`ok` 4.298 s, reviewer-measured).
+
+### 19.2 P3-2 — `deferTerminal`'s `!responseObserved` guard pinned
+
+New subtest `TestCancelDeferredTerminalTakeOnce/observed response does not defer`
+(`acquire` → `bindRPC` → `markWritten` → `observeResponse` → `deferTerminal` returns false, no
+deferral). M12 drops both `responseObserved` conditions and turns it red.
+
+### 19.3 P3-3 — the fallback tie-break pinned
+
+New subtest `TestCancelDeferredTerminalTakeOnce/newest bound attempt wins the fallback`: two written,
+bound, unobserved attempts (the second settled, a third unbound flight current) make the fallback
+loop choose the newer id. The case named "older bound attempt wins" only exercised a single eligible
+candidate and is renamed to `settled written attempt beats the unbound flight`, which is what it
+pins. M13 flips `candidate.id > attempt.id` to `<` and turns the new case red.
+
+### 19.4 P3-4 — comment policy
+
+`cancelTracker`'s four-line doc comment is now the one-line lock-discipline hazard;
+`cancelTransition`'s and `rpcCorrelator`'s are one line each; `interruptRPCOutcome`'s and
+`rpcResolution`'s "what" descriptions are deleted (their names and fields say it). No other comment
+in the slice is new (section 12); `cancel_state.go` 426 → 420 L, `rpc_session.go` 889 → 886 L.
+
+### 19.5 P3-5 — PR body
+
+The PR body is rewritten from the final tree: the commit stanza now carries `2571fd56` (split),
+`cf4b5e1f` (simplify apply), `9037a307` (fix round r1) and merge `4954718b`, and the test-move
+description reads "moved, with the documented substitutions" pointing at section 17.1 instead of
+"verbatim". The body is an external GDD artifact, not a repository file.
+
+### 19.6 Mutants and gates (all foreground; working directory `daemon/` unless noted)
+
+| # | group | mutation | failing test and observed message (exit 1) |
+| --- | --- | --- | --- |
+| M11 | owner gate, foreign receiver | `func (t *cancelTracker) rogueFifteenth() { t.deferredTerminal = nil }` appended to `rpc_session.go`; variant with an empty body | `TestCancelFieldsWrittenOnlyInOwnerFile`: "rpc_session.go defines cancelTracker method rogueFifteenth outside cancel_state.go"; the empty-body variant fails the same way through the method-set pin alone; green before the fix (`ok` 4.298 s, reviewer) |
+| M12 | deferred-terminal guard | both `!candidate.responseObserved` / `candidate.responseObserved` conditions dropped from `deferTerminal` | `TestCancelDeferredTerminalTakeOnce/observed_response_does_not_defer`: "an attempt whose interrupt response was already observed deferred the terminal" |
+| M13 | fallback tie-break | `candidate.id > attempt.id` flipped to `<` | `TestCancelDeferredTerminalTakeOnce/newest_bound_attempt_wins_the_fallback`: "deferred attempt id = 1, want the newest eligible attempt 2" |
+
+Each mutant was applied alone to the final tree, observed failing, then reverted — the pre/post
+SHA-256 of `cancel_state.go` (`b90d6ae2…`) and `rpc_session.go` (`453da8fb…`) match, and each
+mutation's target test was re-run green after the revert.
+
+Red commands (working directory `daemon/`): M11 `go test -count=1 -run TestCancelFieldsWrittenOnlyInOwnerFile ./internal/harness/codex/`; M12 `go test -count=1 -run 'TestCancelDeferredTerminalTakeOnce/observed_response_does_not_defer' ./internal/harness/codex/`; M13 `go test -count=1 -run 'TestCancelDeferredTerminalTakeOnce/newest_bound_attempt_wins_the_fallback' ./internal/harness/codex/` — each exit 1, the same command re-run after the byte-exact revert exit 0.
+
+| gate | result |
+| --- | --- |
+| `gofmt -l internal/harness/codex` | empty (exit 0) |
+| `go vet ./internal/harness/codex/...` | exit 0 |
+| `GOOS=linux go build ./...` / `GOOS=windows go build ./...` | exit 0 / exit 0 |
+| `go test -list '.*' ./internal/harness/codex/` | 138 names, 0 duplicates (r2 adds no top-level test name; subtests and helpers only) |
+| `go test -count=1 ./internal/harness/codex/...` | exit 0, `ok` 14.370 s / 14.774 s (two runs) |
+| `GOMAXPROCS=8 go test -count=200 -run 'TestCancelDeferredTerminalTakeOnce\|TestCancelFieldsWrittenOnlyInOwnerFile' ./internal/harness/codex/` | exit 0, `ok` 6.524 s |
+| WSL `-race`: `go test -race -count=1 ./internal/harness/codex/...` | exit 0, `ok` 23.909 s |
+| WSL `-race`: `go test -race -count=50 -run 'TestCancelDeferredTerminalTakeOnce\|TestCancelFieldsWrittenOnlyInOwnerFile' ./internal/harness/codex/` | exit 0, `ok` 7.097 s |
+| `go test -count=1 ./internal/harness/...` (Windows) | exit 0, 9/9 packages ok (`harness` 2.637 s, `claude` 14.927 s, `codex` 14.972 s, `linejson` 1.262 s, `omo` 4.668 s, `omp` 6.510 s, `opencode` 0.621 s, `pi` 6.009 s, `probeconformance` 9.392 s) |
+| `git diff --check` | exit 0 |
+
+No new test touches concurrency or timing (the two additions are pure tracker tables); the count
+runs above cover the assignment's load rule. No `t.Skip` is added. The full WSL harness+app run of
+section 18.4 stands for the r1 tree, whose only delta to the final tree is test/comment lines.

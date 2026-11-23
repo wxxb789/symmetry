@@ -38,8 +38,7 @@ type pendingInterruptedTerminal struct {
 	parseErr  error
 }
 
-// cancelTransition names the tracker methods whose preconditions are checked by
-// cancelViolationHook; tests install the hook, production leaves it nil.
+// cancelTransition names the tracker transitions cancelViolationHook reports on (nil outside tests).
 type cancelTransition uint8
 
 const (
@@ -50,8 +49,6 @@ const (
 	cancelFinish
 )
 
-// interruptRPCOutcome is how a pending turn/interrupt RPC resolves once its turn
-// reached a terminal status.
 type interruptRPCOutcome uint8
 
 const (
@@ -68,10 +65,7 @@ func cancelViolation(transition cancelTransition, attemptID uint64) {
 	}
 }
 
-// cancelTracker owns the cancel-attempt state machine: the shared interrupt
-// flight, every attempt's state, the deferred interrupted terminal and the RPC
-// bindings. Its methods never lock; every caller holds nativeSession.mutex, so
-// one flight and its RPC stay under one critical section.
+// cancelTracker's methods never lock: every caller holds nativeSession.mutex.
 type cancelTracker struct {
 	pendingCancelAttempts map[uint64]uint64
 	cancelRequested       bool

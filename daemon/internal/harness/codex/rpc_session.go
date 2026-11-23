@@ -18,8 +18,6 @@ type retiredRPC struct {
 	cancelAttemptID uint64
 }
 
-// rpcResolution is the correlator's answer for one response id: the waiter still
-// registered for it, or the retired record that keeps a late response classifiable.
 type rpcResolution struct {
 	waiter        chan rpcResponse
 	method        string
@@ -28,8 +26,7 @@ type rpcResolution struct {
 	retired       bool
 }
 
-// rpcCorrelator owns JSON-RPC request ids, their waiters and the retired-id
-// window. It never locks: every caller holds nativeSession.mutex.
+// rpcCorrelator's methods never lock: every caller holds nativeSession.mutex.
 type rpcCorrelator struct {
 	pending        map[uint64]chan rpcResponse
 	pendingMethods map[uint64]string
