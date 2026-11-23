@@ -1,6 +1,6 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate, useRouteContext, useRouterState, useSearch } from "@tanstack/react-router";
+import { useNavigate, useRouteContext, useRouter, useRouterState, useSearch } from "@tanstack/react-router";
 import { AlertCircle, Cable, Plus, Trash2, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { connectionsOptions, workspaceOptions } from "../../app/application";
@@ -295,6 +295,7 @@ export function ConnectionsPage() {
   const csrf = useSessionToken();
   const search = useSearch({ from: "/connections" });
   const navigate = useNavigate();
+  const router = useRouter();
   const queryClient = useQueryClient();
   const query = useQuery(connectionsOptions(application.api));
   // The project directory and the selected project's resources + registered
@@ -352,13 +353,16 @@ export function ConnectionsPage() {
   // operator is told instead of losing the draft silently.
   const editSubject = editingSubject === null ? undefined : connections.find((connection) => connection.id === editingSubject);
   const editSubjectRemoved = editingSubject !== null && query.data !== undefined && editSubject === undefined;
-  // This page's own lifetime: a continuation that settles after the operator
-  // navigated away must not pull them back to this route.
+  // Mount state is not "still here" under lazy routes (this page stays mounted
+  // while the destination chunk loads): the router's current location decides.
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
     return () => { mounted.current = false; };
   }, []);
+  // The router's matching is not the pathname's text: it matches `/connections/` and another case,
+  // so ask which route the current location resolves to instead of comparing the pathname.
+  const stillOnConnections = () => mounted.current && router.matchRoutes(router.latestLocation.pathname, router.latestLocation.search).at(-1)?.routeId === "/connections";
   // The live selection, readable by continuations that outlive this render: a
   // response that arrives after the operator chose another subject must not
   // navigate them back or act on the newer subject.
@@ -411,10 +415,10 @@ export function ConnectionsPage() {
   // the selection before the refusal its own subject caused arrives — the
   // operator still issued the request, so its reason must be stated.
   const noticeFor = (connectionId: string, notice: string) => {
-    if (mounted.current && (selectionRef.current === connectionId || selectionRef.current === null)) setNotice(notice);
+    if (stillOnConnections() && (selectionRef.current === connectionId || selectionRef.current === null)) setNotice(notice);
   };
   const clearSelectionFor = (connectionId: string) => {
-    if (!mounted.current || selectionRef.current !== connectionId) return;
+    if (!stillOnConnections() || selectionRef.current !== connectionId) return;
     removalFocusPending.current = true;
     void navigate({ to: "/connections", search: {} });
   };
@@ -442,7 +446,7 @@ export function ConnectionsPage() {
     const selection = selectionRef.current;
     void queryClient.invalidateQueries({ queryKey: connectionsReadKey() })
       .then(() => {
-        if (!mounted.current || editorSequence.current !== generation || selectionRef.current !== selection) return;
+        if (!stillOnConnections() || editorSequence.current !== generation || selectionRef.current !== selection) return;
         void navigate({ to: "/connections", search: { connectionId } });
       });
   };
