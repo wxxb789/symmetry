@@ -277,8 +277,7 @@ defmodule SymmetryControl.Integrations.CredentialLeakProviderStub do
   end
 
   @impl true
-  def sync_ci(connection, resource, work_item, auth),
-    do: ProviderStub.sync_ci(connection, resource, work_item, auth)
+  def sync_ci(connection, resource, work_item, auth), do: ProviderStub.sync_ci(connection, resource, work_item, auth)
 
   @impl true
   def execute(connection, resource, work_item, operation, input, auth) do

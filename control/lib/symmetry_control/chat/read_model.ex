@@ -3,7 +3,10 @@ defmodule SymmetryControl.Chat.ReadModel do
 
   import Ecto.Query
 
-  alias SymmetryControl.Orchestration.{Command, RunEvent, RunTransition, Task}
+  alias SymmetryControl.Orchestration.Command
+  alias SymmetryControl.Orchestration.RunEvent
+  alias SymmetryControl.Orchestration.RunTransition
+  alias SymmetryControl.Orchestration.Task
   alias SymmetryControl.Repo
   alias SymmetryControl.Workspaces.ReadModel, as: WorkReadModel
   alias SymmetryControl.Workspaces.WorkItem
@@ -67,8 +70,7 @@ defmodule SymmetryControl.Chat.ReadModel do
   end
 
   def context_reply([], _intent, _content),
-    do:
-      "There is no work in this context yet. Choose Start work to send a goal to an autonomous worker."
+    do: "There is no work in this context yet. Choose Start work to send a goal to an autonomous worker."
 
   def context_reply(runs, intent, content) do
     topics = question_topics(intent, content)
@@ -278,11 +280,13 @@ defmodule SymmetryControl.Chat.ReadModel do
       |> Enum.map(&timeline_entry(&1, "event", Map.fetch!(runs, &1.run_id)))
 
     transitions =
-      latest_per_run(RunTransition, run_ids)
+      RunTransition
+      |> latest_per_run(run_ids)
       |> Enum.map(&timeline_entry(&1, "transition", Map.fetch!(runs, &1.run_id)))
 
     commands =
-      latest_per_run(Command, run_ids)
+      Command
+      |> latest_per_run(run_ids)
       |> Enum.map(&timeline_entry(&1, "command", Map.fetch!(runs, &1.run_id)))
 
     (events ++ transitions ++ commands)
@@ -336,10 +340,7 @@ defmodule SymmetryControl.Chat.ReadModel do
   end
 
   defp value(map, key) when is_map(map),
-    do:
-      Enum.find_value(map, fn {stored_key, value} ->
-        if to_string(stored_key) == key, do: value
-      end)
+    do: Enum.find_value(map, fn {stored_key, value} -> if to_string(stored_key) == key, do: value end)
 
   defp value(_map, _key), do: nil
   defp present(value) when is_binary(value) and value != "", do: value

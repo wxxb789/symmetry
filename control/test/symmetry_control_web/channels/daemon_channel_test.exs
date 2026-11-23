@@ -1,8 +1,10 @@
 defmodule SymmetryControlWeb.DaemonChannelTest do
   use SymmetryControl.DataCase, async: false
+
   import Phoenix.ChannelTest
 
   alias SymmetryControl.Orchestration
+
   @endpoint SymmetryControlWeb.Endpoint
 
   test "only the authenticated machine can join its hint topic and receives work hints" do
@@ -10,9 +12,7 @@ defmodule SymmetryControlWeb.DaemonChannelTest do
       assert_enrolled("socket-builder")
 
     assert {:ok, socket} =
-             connect(SymmetryControlWeb.UserSocket, %{},
-               connect_info: %{"x_headers" => [{"x-symmetry-token", token}]}
-             )
+             connect(SymmetryControlWeb.UserSocket, %{}, connect_info: %{"x_headers" => [{"x-symmetry-token", token}]})
 
     assert {:ok, _, socket} = subscribe_and_join(socket, "daemon:#{machine.id}")
 

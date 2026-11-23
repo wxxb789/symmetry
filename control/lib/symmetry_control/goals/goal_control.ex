@@ -32,7 +32,7 @@ defmodule SymmetryControl.Goals.GoalControl do
   def control_dispatch_plan(goal_id, revision, action_id, _opts)
       when is_binary(goal_id) and is_integer(revision) and revision > 0 and is_binary(action_id) do
     with :ok <- valid_uuid(goal_id), :ok <- valid_uuid(action_id) do
-      Repo.transaction(fn ->
+      fn ->
         project_id =
           Repo.one(from(goal in Goal, where: goal.id == ^goal_id, select: goal.project_id)) ||
             rollback(:not_found)
@@ -45,7 +45,8 @@ defmodule SymmetryControl.Goals.GoalControl do
           {:ok, event} -> Recovery.control_descriptors(goal, event.kind, action_id)
           :superseded -> :superseded
         end
-      end)
+      end
+      |> Repo.transaction()
       |> case do
         {:ok, :superseded} -> {:ok, :superseded}
         {:ok, descriptors} -> {:ok, descriptors}
@@ -56,37 +57,19 @@ defmodule SymmetryControl.Goals.GoalControl do
 
   def control_dispatch_plan(_, _, _, _), do: {:error, :invalid_request}
 
-  def dispatch_goal_control_command(
-        goal_id,
-        revision,
-        action_id,
-        task_id,
-        kind,
-        payload,
-        idempotency_key,
-        opts \\ []
-      )
+  def dispatch_goal_control_command(goal_id, revision, action_id, task_id, kind, payload, idempotency_key, opts \\ [])
 
-  def dispatch_goal_control_command(
-        goal_id,
-        revision,
-        action_id,
-        task_id,
-        kind,
-        payload,
-        idempotency_key,
-        opts
-      )
-      when is_binary(goal_id) and is_integer(revision) and revision > 0 and is_binary(action_id) and
-             is_binary(task_id) and is_binary(kind) and is_map(payload) and
-             is_binary(idempotency_key) and byte_size(idempotency_key) > 0 and is_list(opts) do
+  def dispatch_goal_control_command(goal_id, revision, action_id, task_id, kind, payload, idempotency_key, opts)
+      when is_binary(goal_id) and is_integer(revision) and revision > 0 and is_binary(action_id) and is_binary(task_id) and
+             is_binary(kind) and is_map(payload) and is_binary(idempotency_key) and byte_size(idempotency_key) > 0 and
+             is_list(opts) do
     with :ok <- valid_uuid(goal_id),
          :ok <- valid_uuid(action_id),
          :ok <- valid_uuid(task_id),
          true <- kind in ["pause", "cancel"],
          true <- valid_control_command_payload?(kind, payload),
          true <- idempotency_key == goal_control_idempotency_key(action_id, kind, task_id) do
-      Repo.transaction(fn ->
+      fn ->
         if goal_control_command_exists?(task_id, idempotency_key) do
           goal = Repo.get(Goal, goal_id) || rollback(:not_found)
 
@@ -137,7 +120,8 @@ defmodule SymmetryControl.Goals.GoalControl do
               end
           end
         end
-      end)
+      end
+      |> Repo.transaction()
       |> case do
         {:ok, :superseded} -> {:ok, :superseded}
         {:ok, {command, disposition}} -> {:ok, command, disposition}
@@ -150,16 +134,7 @@ defmodule SymmetryControl.Goals.GoalControl do
 
   def dispatch_goal_control_command(_, _, _, _, _, _, _, _), do: {:error, :invalid_request}
 
-  defp dispatch_authorized_goal_control_command!(
-         goal,
-         revision,
-         action_id,
-         task_id,
-         kind,
-         payload,
-         idempotency_key,
-         opts
-       ) do
+  defp dispatch_authorized_goal_control_command!(goal, revision, action_id, task_id, kind, payload, idempotency_key, opts) do
     authorization = %{
       goal_id: goal.id,
       revision: revision,
@@ -187,12 +162,9 @@ defmodule SymmetryControl.Goals.GoalControl do
   def apply_goal_pause_transition(run_id, fence, payload, transition_id, opts \\ [])
 
   def apply_goal_pause_transition(run_id, fence, payload, transition_id, opts)
-      when is_binary(run_id) and is_map(fence) and is_map(payload) and
-             is_binary(transition_id) and is_list(opts) do
-    if not (valid_uuid?(run_id) and valid_uuid?(transition_id)) do
-      {:error, :invalid_request}
-    else
-      Repo.transaction(fn ->
+      when is_binary(run_id) and is_map(fence) and is_map(payload) and is_binary(transition_id) and is_list(opts) do
+    if valid_uuid?(run_id) and valid_uuid?(transition_id) do
+      fn ->
         ownership =
           Repo.one(
             from(run in Run,
@@ -227,9 +199,9 @@ defmodule SymmetryControl.Goals.GoalControl do
             )
           )
 
-        unless transition_exists? do
+        if !transition_exists? do
           command_id = value(payload, :command_id)
-          unless valid_uuid?(command_id), do: rollback(:invalid_request)
+          if !valid_uuid?(command_id), do: rollback(:invalid_request)
 
           command = Repo.get(Command, command_id) || rollback(:state_conflict)
 
@@ -253,7 +225,7 @@ defmodule SymmetryControl.Goals.GoalControl do
                value(payload, :generation) not in [nil, run.generation],
              do: rollback(:ownership_lost)
 
-          unless task.goal_revision == goal.current_revision,
+          if task.goal_revision != goal.current_revision,
             do: rollback(:stale_revision)
 
           case lock_current_goal_control_action(goal, goal.current_revision, action_id, "pause") do
@@ -274,12 +246,15 @@ defmodule SymmetryControl.Goals.GoalControl do
           {:replayed, updated_run} -> {:replayed, updated_run}
           {:error, reason} -> rollback(reason)
         end
-      end)
+      end
+      |> Repo.transaction()
       |> case do
         {:ok, {:created, {run, receipt}}} -> {:ok, run, :created, receipt}
         {:ok, {:replayed, run}} -> {:ok, run, :replayed}
         {:error, reason} -> {:error, reason}
       end
+    else
+      {:error, :invalid_request}
     end
   end
 
@@ -297,8 +272,7 @@ defmodule SymmetryControl.Goals.GoalControl do
     latest_lifecycle_action =
       Repo.one(
         from(event in GoalEvent,
-          where:
-            event.goal_id == ^goal.id and event.kind in ["pause", "resume", "cancel", "amend"],
+          where: event.goal_id == ^goal.id and event.kind in ["pause", "resume", "cancel", "amend"],
           order_by: [desc: event.sequence],
           limit: 1,
           lock: "FOR UPDATE"
@@ -344,8 +318,7 @@ defmodule SymmetryControl.Goals.GoalControl do
       )
   end
 
-  defp valid_control_command_payload?(kind, payload),
-    do: kind in ["pause", "cancel"] and payload == %{}
+  defp valid_control_command_payload?(kind, payload), do: kind in ["pause", "cancel"] and payload == %{}
 
   defp goal_control_command_exists?(task_id, idempotency_key) do
     Repo.exists?(
@@ -355,8 +328,7 @@ defmodule SymmetryControl.Goals.GoalControl do
     )
   end
 
-  defp goal_pause_action_id!(%Command{idempotency_key: idempotency_key}, task_id)
-       when is_binary(idempotency_key) do
+  defp goal_pause_action_id!(%Command{idempotency_key: idempotency_key}, task_id) when is_binary(idempotency_key) do
     case String.split(idempotency_key, ":", parts: 4) do
       ["goal-control", action_id, "pause", ^task_id] ->
         if valid_uuid?(action_id), do: action_id, else: rollback(:goal_authority_required)
@@ -375,7 +347,7 @@ defmodule SymmetryControl.Goals.GoalControl do
         goal_work_item_owned?(goal, item, task) and
         task.current_generation == run.generation
 
-    unless owned?, do: rollback(:ownership_lost)
+    if !owned?, do: rollback(:ownership_lost)
   end
 
   defp goal_work_item_owned?(goal, nil, %Task{work_item_id: nil} = task),
@@ -386,8 +358,7 @@ defmodule SymmetryControl.Goals.GoalControl do
       task.goal_id == goal.id and item.admitted_revision == task.goal_revision
   end
 
-  defp goal_control_idempotency_key(action_id, kind, task_id),
-    do: "goal-control:#{action_id}:#{kind}:#{task_id}"
+  defp goal_control_idempotency_key(action_id, kind, task_id), do: "goal-control:#{action_id}:#{kind}:#{task_id}"
 
   @doc false
 

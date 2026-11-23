@@ -132,7 +132,7 @@ defmodule SymmetryControl.Migrations.AddOmoHarnessKindMigrationTest do
       [
         project_id,
         "omo-kind-project-#{System.unique_integer([:positive])}",
-        "OK#{System.unique_integer([:positive])}" |> String.slice(0, 8)
+        String.slice("OK#{System.unique_integer([:positive])}", 0, 8)
       ]
     )
 

@@ -73,7 +73,7 @@ defmodule SymmetryControl.Goals.SettlementInterfaceTest do
     assert receipt["reason"] == "cancelled"
 
     assert {:ok, replayed} = Settlement.settle_unstarted_task(task.id, "cancelled", now: @now)
-    assert Map.drop(replayed, ["event_sequence"]) == Map.drop(receipt, ["event_sequence"])
+    assert Map.delete(replayed, "event_sequence") == Map.delete(receipt, "event_sequence")
     assert replayed["settlement"] == "released_without_run"
 
     assert Repo.aggregate(
@@ -91,7 +91,7 @@ defmodule SymmetryControl.Goals.SettlementInterfaceTest do
   end
 
   test "terminal_next_wake_at/4 keeps the earliest future wake" do
-    hour_later = DateTime.add(@now, 3_600, :second)
+    hour_later = DateTime.shift(@now, hour: 1)
     goal = %Goal{state: "active", current_revision: 1, next_wake_at: hour_later}
     task = %Task{goal_revision: 1}
 
@@ -101,7 +101,7 @@ defmodule SymmetryControl.Goals.SettlementInterfaceTest do
     assert Settlement.terminal_next_wake_at(
              goal,
              task,
-             %{wake_at: DateTime.add(@now, 7_200, :second)},
+             %{wake_at: DateTime.shift(@now, hour: 2)},
              now: @now
            ) == hour_later
 
@@ -187,15 +187,15 @@ defmodule SymmetryControl.Goals.SettlementInterfaceTest do
     goal = %Goal{
       state: "active",
       current_revision: 1,
-      next_wake_at: DateTime.add(@now, 60, :second)
+      next_wake_at: DateTime.shift(@now, minute: 1)
     }
 
     assert Settlement.external_wait_wake_at(goal, @now) == nil
   end
 
   test "lock_settlement_tasks!/2 locks the validation task and its producer" do
-    {_goal, _item, producer, _producer_run, validation, _validation_run, _runtime, _fence,
-     _subject} = independent_validation_attempt_fixture()
+    {_goal, _item, producer, _producer_run, validation, _validation_run, _runtime, _fence, _subject} =
+      independent_validation_attempt_fixture()
 
     assert {:ok, {locked, producing}} =
              Repo.transaction(fn ->

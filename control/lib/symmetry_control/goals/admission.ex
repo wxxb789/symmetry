@@ -77,7 +77,7 @@ defmodule SymmetryControl.Goals.Admission do
   @doc false
 
   def admit_plan_items!(goal, items, opts) do
-    unless PlanContracts.plan_admission_preflight?(items, opts), do: rollback(:invalid_plan)
+    if !PlanContracts.plan_admission_preflight?(items, opts), do: rollback(:invalid_plan)
 
     keys = Enum.map(items, &required_string!(&1, :key))
     if length(keys) != MapSet.size(MapSet.new(keys)), do: rollback(:invalid_plan)
@@ -101,14 +101,14 @@ defmodule SymmetryControl.Goals.Admission do
         profile = required_string!(item, :model_profile)
         acceptance = required_map!(item, :acceptance)
         resource = Map.fetch!(resources_by_id, resource_id)
-        unless PlanContracts.valid_acceptance_contract?(acceptance), do: rollback(:invalid_plan)
+        if !PlanContracts.valid_acceptance_contract?(acceptance), do: rollback(:invalid_plan)
 
-        unless PlanContracts.acceptance_contract_matches_resource?(acceptance, resource_id),
+        if !PlanContracts.acceptance_contract_matches_resource?(acceptance, resource_id),
           do: rollback(:resource_not_allowed)
 
-        unless resource.project_id == goal.project_id, do: rollback(:resource_not_allowed)
-        unless resources == [] or resource_id in resources, do: rollback(:resource_not_allowed)
-        unless profiles == [] or profile in profiles, do: rollback(:model_not_allowed)
+        if resource.project_id != goal.project_id, do: rollback(:resource_not_allowed)
+        if !(resources == [] or resource_id in resources), do: rollback(:resource_not_allowed)
+        if !(profiles == [] or profile in profiles), do: rollback(:model_not_allowed)
 
         baseline = plan_item_baseline!(item, item_ids)
         change_target = plan_item_change_target!(item, resource, current_revision!(goal))
@@ -231,11 +231,11 @@ defmodule SymmetryControl.Goals.Admission do
     source_branch = PlanContracts.required_untrimmed_string!(target, :source_branch)
     target_branch = PlanContracts.required_untrimmed_string!(target, :target_branch)
 
-    unless only_known_keys?(target, ["kind", "source_branch", "target_branch"]) and
-             source_branch != target_branch and
-             {:ok, source_branch} == ChangeAction.normalize_branch(source_branch) and
-             {:ok, target_branch} == ChangeAction.normalize_branch(target_branch) and
-             provider_operation_allowed?(revision, "change.upsert") do
+    if !(only_known_keys?(target, ["kind", "source_branch", "target_branch"]) and
+           source_branch != target_branch and
+           {:ok, source_branch} == ChangeAction.normalize_branch(source_branch) and
+           {:ok, target_branch} == ChangeAction.normalize_branch(target_branch) and
+           provider_operation_allowed?(revision, "change.upsert")) do
       rollback(:invalid_plan)
     end
 
@@ -249,10 +249,10 @@ defmodule SymmetryControl.Goals.Admission do
   defp pull_request_change_target!(target, connection, resource, revision) do
     pull_request_url = PlanContracts.required_untrimmed_string!(target, :pull_request_url)
 
-    unless only_known_keys?(target, ["kind", "pull_request_url"]) and
-             valid_long_text?(pull_request_url) and
-             provider_operation_allowed?(revision, "change.update") and
-             valid_pull_request_change_target?(connection, resource, pull_request_url) do
+    if !(only_known_keys?(target, ["kind", "pull_request_url"]) and
+           valid_long_text?(pull_request_url) and
+           provider_operation_allowed?(revision, "change.update") and
+           valid_pull_request_change_target?(connection, resource, pull_request_url)) do
       rollback(:invalid_plan)
     end
 
@@ -332,9 +332,7 @@ defmodule SymmetryControl.Goals.Admission do
 
     provider_scope = admission_provider_scope!(goal, revision, item, purpose)
 
-    required_capabilities =
-      required_capabilities
-      |> require_provider_access(provider_scope)
+    required_capabilities = require_provider_access(required_capabilities, provider_scope)
 
     validation_bindings =
       admission_validation_bindings!(
@@ -692,15 +690,14 @@ defmodule SymmetryControl.Goals.Admission do
   end
 
   defp manual_predecessor_subject!(goal, item, opts) do
-    Repo.all(
-      from(task in Task,
-        where:
-          task.goal_id == ^goal.id and task.goal_revision == ^goal.current_revision and
-            task.work_item_id == ^item.id and task.purpose == "implement" and
-            task.state == "completed" and task.current_generation > 0,
-        order_by: [desc: task.inserted_at, desc: task.id]
-      )
+    from(task in Task,
+      where:
+        task.goal_id == ^goal.id and task.goal_revision == ^goal.current_revision and
+          task.work_item_id == ^item.id and task.purpose == "implement" and
+          task.state == "completed" and task.current_generation > 0,
+      order_by: [desc: task.inserted_at, desc: task.id]
     )
+    |> Repo.all()
     |> Enum.find_value(fn task ->
       case Reconciliation.automatic_progress_subject(goal, item, task, opts) do
         {:ok, subject, _source_identity} -> subject
@@ -718,7 +715,7 @@ defmodule SymmetryControl.Goals.Admission do
   def ensure_achievable!(goal, payload) do
     revision = current_revision!(goal)
     final_acceptance = ensure_goal_final_acceptance!(revision)
-    subject = required_map!(payload, :subject) |> parse_subject!()
+    subject = payload |> required_map!(:subject) |> parse_subject!()
     subject_hash = RequestHash.canonical(subject)
     evidence_ids = required_list!(payload, :evidence_ids)
     integration_work_item_id = optional_uuid!(payload, :integration_work_item_id)
@@ -742,20 +739,19 @@ defmodule SymmetryControl.Goals.Admission do
     |> Enum.each(&ensure_dependencies_satisfied!(goal, &1))
 
     accepted_outcomes =
-      Repo.all(
-        from(outcome in WorkOutcome,
-          where:
-            outcome.goal_id == ^goal.id and outcome.goal_revision == ^goal.current_revision and
-              outcome.disposition == "accepted",
-          select: {outcome.work_item_id, outcome.subject_hash}
-        )
+      from(outcome in WorkOutcome,
+        where:
+          outcome.goal_id == ^goal.id and outcome.goal_revision == ^goal.current_revision and
+            outcome.disposition == "accepted",
+        select: {outcome.work_item_id, outcome.subject_hash}
       )
+      |> Repo.all()
       |> Map.new()
 
     if Enum.any?(required_items, &(not Map.has_key?(accepted_outcomes, &1.id))),
       do: rollback(:incomplete_work)
 
-    unless integration_outcome?(goal, integration_item.id, subject, subject_hash),
+    if !integration_outcome?(goal, integration_item.id, subject, subject_hash),
       do: rollback(:integration_outcome_required)
 
     if Decisions.unresolved_decisions?(goal.id, goal.current_revision),
@@ -819,9 +815,9 @@ defmodule SymmetryControl.Goals.Admission do
       producer_id = optional_uuid!(payload, :validation_of_task_id) || rollback(:invalid_request)
       producer = lock_task!(producer_id)
 
-      unless producer.goal_id == goal.id and producer.work_item_id == item.id and
-               producer.goal_revision == goal.current_revision and
-               producer.state == "completed" and producer.purpose != "validate" do
+      if !(producer.goal_id == goal.id and producer.work_item_id == item.id and
+             producer.goal_revision == goal.current_revision and
+             producer.state == "completed" and producer.purpose != "validate") do
         rollback(:invalid_validation)
       end
     end
@@ -859,8 +855,7 @@ defmodule SymmetryControl.Goals.Admission do
     end
   end
 
-  defp constrain_validation_runtime_intersection!(bindings, purpose) when purpose != "validate",
-    do: bindings
+  defp constrain_validation_runtime_intersection!(bindings, purpose) when purpose != "validate", do: bindings
 
   defp constrain_validation_runtime_intersection!([], "validate"), do: []
 
@@ -878,7 +873,7 @@ defmodule SymmetryControl.Goals.Admission do
   @doc false
 
   def ensure_admissible_item!(goal, item) do
-    unless item.goal_id == goal.id and item.admitted_revision == goal.current_revision,
+    if !(item.goal_id == goal.id and item.admitted_revision == goal.current_revision),
       do: rollback(:stale_revision)
   end
 
@@ -892,17 +887,16 @@ defmodule SymmetryControl.Goals.Admission do
       )
 
     accepted_ids =
-      Repo.all(
-        from(outcome in WorkOutcome,
-          where:
-            outcome.goal_id == ^goal.id and outcome.goal_revision == ^goal.current_revision and
-              outcome.disposition == "accepted" and outcome.work_item_id in ^dependency_ids,
-          select: outcome.work_item_id
-        )
+      from(outcome in WorkOutcome,
+        where:
+          outcome.goal_id == ^goal.id and outcome.goal_revision == ^goal.current_revision and
+            outcome.disposition == "accepted" and outcome.work_item_id in ^dependency_ids,
+        select: outcome.work_item_id
       )
+      |> Repo.all()
       |> MapSet.new()
 
-    unless Enum.all?(dependency_ids, &MapSet.member?(accepted_ids, &1)),
+    if !Enum.all?(dependency_ids, &MapSet.member?(accepted_ids, &1)),
       do: rollback(:waiting_dependency)
   end
 
@@ -911,12 +905,11 @@ defmodule SymmetryControl.Goals.Admission do
     item_ids = Map.keys(item_by_id)
 
     dependency_ids_by_item =
-      Repo.all(
-        from(edge in WorkDependency,
-          where: edge.goal_id == ^goal.id and edge.work_item_id in ^item_ids,
-          select: {edge.work_item_id, edge.depends_on_id}
-        )
+      from(edge in WorkDependency,
+        where: edge.goal_id == ^goal.id and edge.work_item_id in ^item_ids,
+        select: {edge.work_item_id, edge.depends_on_id}
       )
+      |> Repo.all()
       |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
 
     root_ids = MapSet.new(Enum.map(required_items, & &1.id) ++ [integration_item.id])
@@ -942,7 +935,7 @@ defmodule SymmetryControl.Goals.Admission do
   defp candidate_subject_from_result!(run, opts, error) do
     task_result = value(run.result || %{}, "task_result")
 
-    unless is_map(task_result), do: rollback(error)
+    if !is_map(task_result), do: rollback(error)
 
     case validate_contract(:task_result, task_result, opts) do
       :ok -> :ok
@@ -953,15 +946,15 @@ defmodule SymmetryControl.Goals.Admission do
     subject_hash = RequestHash.canonical(subject)
     result_id = required_uuid!(task_result, :result_id)
 
-    unless value(task_result, "kind") == "candidate_completion" and
-             value(task_result, "subject_hash") == ContextAssembly.context_digest(subject_hash),
-           do: rollback(error)
+    if !(value(task_result, "kind") == "candidate_completion" and
+           value(task_result, "subject_hash") == ContextAssembly.context_digest(subject_hash)),
+       do: rollback(error)
 
     {subject, subject_hash, result_id}
   end
 
   defp ensure_subject_resource!(subject, item, error) do
-    unless value(subject, "resource_id") == item.repository_resource_id, do: rollback(error)
+    if value(subject, "resource_id") != item.repository_resource_id, do: rollback(error)
   end
 
   defp integration_outcome?(goal, work_item_id, subject, subject_hash) do
@@ -995,16 +988,16 @@ defmodule SymmetryControl.Goals.Admission do
   defp ensure_evidence_subject!(evidence, subject, subject_hash) do
     expected_hash = ContextAssembly.context_digest(subject_hash)
 
-    unless Enum.all?(evidence, fn row ->
-             row.subject_hash == subject_hash and value(row.payload, "subject") == subject and
-               value(row.payload, "subject_hash") == expected_hash and
-               value(row.source_ref, "subject_hash") == expected_hash
-           end),
-           do: rollback(:missing_evidence)
+    if !Enum.all?(evidence, fn row ->
+         row.subject_hash == subject_hash and value(row.payload, "subject") == subject and
+           value(row.payload, "subject_hash") == expected_hash and
+           value(row.source_ref, "subject_hash") == expected_hash
+       end),
+       do: rollback(:missing_evidence)
   end
 
   defp goal_evidence_for!(goal, evidence_ids) do
-    unless Enum.all?(evidence_ids, &valid_uuid?(&1)), do: rollback(:invalid_request)
+    if !Enum.all?(evidence_ids, &valid_uuid?(&1)), do: rollback(:invalid_request)
 
     rows =
       Repo.all(
@@ -1049,7 +1042,7 @@ defmodule SymmetryControl.Goals.Admission do
                 goal_predicate_matches_evidence?(predicate, row)
             end)
 
-          unless found, do: rollback(:missing_evidence)
+          if !found, do: rollback(:missing_evidence)
       end
     end)
   end
@@ -1139,8 +1132,7 @@ defmodule SymmetryControl.Goals.Admission do
     end
   end
 
-  defp ensure_final_acceptance_authority!(_goal, :deterministic, _decision_id, _subject_hash),
-    do: :ok
+  defp ensure_final_acceptance_authority!(_goal, :deterministic, _decision_id, _subject_hash), do: :ok
 
   defp ensure_completion_subject_not_rejected!(goal, subject_hash) do
     expected_action_hash =
@@ -1183,10 +1175,10 @@ defmodule SymmetryControl.Goals.Admission do
     producer_id = optional_uuid!(payload, :validation_of_task_id) || rollback(:invalid_request)
     producer = lock_task!(producer_id)
 
-    unless producer.goal_id == goal.id and producer.work_item_id == item.id and
-             producer.goal_revision == goal.current_revision and producer.state == "completed" and
-             producer.current_generation > 0,
-           do: rollback(:invalid_validation)
+    if !(producer.goal_id == goal.id and producer.work_item_id == item.id and
+           producer.goal_revision == goal.current_revision and producer.state == "completed" and
+           producer.current_generation > 0),
+       do: rollback(:invalid_validation)
 
     run =
       Repo.one(
@@ -1226,13 +1218,11 @@ defmodule SymmetryControl.Goals.Admission do
   defp admission_provider_scope!(_goal, revision, item, purpose) do
     resource_id = item.repository_resource_id
 
-    unless resource_allowed?(revision.execution_policy, resource_id) do
+    if !resource_allowed?(revision.execution_policy, resource_id) do
       rollback(:resource_not_allowed)
     end
 
-    if purpose != "implement" do
-      nil
-    else
+    if purpose == "implement" do
       case item.change_target do
         nil ->
           if provider_operation_allowed?(revision, "resource.sync") do
@@ -1241,7 +1231,7 @@ defmodule SymmetryControl.Goals.Admission do
           end
 
         %{"kind" => "branches"} = target ->
-          unless provider_operation_allowed?(revision, "change.upsert"),
+          if !provider_operation_allowed?(revision, "change.upsert"),
             do: rollback(:invalid_plan)
 
           provider_scope_resource!(resource_id, ["repositories", "changes"])
@@ -1255,7 +1245,7 @@ defmodule SymmetryControl.Goals.Admission do
           provider_scope(resource_id, operations, target)
 
         %{"kind" => "pull_request"} = target ->
-          unless provider_operation_allowed?(revision, "change.update"),
+          if !provider_operation_allowed?(revision, "change.update"),
             do: rollback(:invalid_plan)
 
           {resource, connection} =
@@ -1332,6 +1322,5 @@ defmodule SymmetryControl.Goals.Admission do
     end
   end
 
-  defp optional_string(map, key),
-    do: if(is_binary(value(map, key)), do: String.trim(value(map, key)), else: nil)
+  defp optional_string(map, key), do: if(is_binary(value(map, key)), do: String.trim(value(map, key)))
 end

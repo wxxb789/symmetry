@@ -2,7 +2,8 @@ defmodule SymmetryControl.Workspaces.WorkItemEligibilityTest do
   @moduledoc false
   use ExUnit.Case, async: true
 
-  alias SymmetryControl.Workspaces.{Project, WorkItem}
+  alias SymmetryControl.Workspaces.Project
+  alias SymmetryControl.Workspaces.WorkItem
   alias SymmetryControl.Workspaces.WorkItemEligibility
 
   @project_id "4f3a3f38-9a3a-4c9a-8a3a-4f3a3f38d0a1"
@@ -143,8 +144,8 @@ defmodule SymmetryControl.Workspaces.WorkItemEligibilityTest do
   end
 
   defp assert_row(
-         {goal, launched, assignee, status, project_status, external, start, can_start, cancel,
-          can_cancel, retry, can_retry}
+         {goal, launched, assignee, status, project_status, external, start, can_start, cancel, can_cancel, retry,
+          can_retry}
        ) do
     work_item =
       work_item(goal, launched, assignee, status, external, project(project_status))

@@ -19,7 +19,7 @@ defmodule SymmetryControl.Goals.Workers.SettleTaskWorker do
   def perform(%Job{} = job), do: settle(job.args)
 
   @impl Oban.Worker
-  def timeout(_job), do: :timer.seconds(30)
+  def timeout(_job), do: to_timeout(second: 30)
 
   defp settle(%{"task_id" => task_id, "run_id" => run_id, "generation" => generation})
        when is_binary(task_id) and is_binary(run_id) and is_integer(generation) and generation > 0 do

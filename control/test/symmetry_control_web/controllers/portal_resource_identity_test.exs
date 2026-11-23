@@ -4,12 +4,13 @@ defmodule SymmetryControlWeb.PortalResourceIdentityTest do
   import SymmetryControlWeb.PortalFixtures, only: [create_connection: 4, create_project: 2]
   import SymmetryControlWeb.TestConn, only: [api_conn: 0]
 
+  alias SymmetryControl.Integrations.ProviderStub
   alias SymmetryControl.TestEnv
 
   setup do
     TestEnv.put!(:integration_providers,
-      github: SymmetryControl.Integrations.ProviderStub,
-      azure_devops: SymmetryControl.Integrations.ProviderStub
+      github: ProviderStub,
+      azure_devops: ProviderStub
     )
 
     :ok
@@ -22,7 +23,8 @@ defmodule SymmetryControlWeb.PortalResourceIdentityTest do
       create_connection("github", "GitHub identity", "acme", ["repositories", "work_items"])
 
     assert %{"resource" => _resource} =
-             create_resource(project, %{
+             project
+             |> create_resource(%{
                "connection_id" => connection["id"],
                "kind" => "repository",
                "name" => "Primary repository",
@@ -38,7 +40,8 @@ defmodule SymmetryControlWeb.PortalResourceIdentityTest do
                }
              }
            } =
-             create_resource(project, %{
+             project
+             |> create_resource(%{
                "connection_id" => connection["id"],
                "kind" => "repository",
                "name" => "Duplicate repository",
@@ -47,7 +50,8 @@ defmodule SymmetryControlWeb.PortalResourceIdentityTest do
              |> json_response(422)
 
     assert %{"resource" => _tracker} =
-             create_resource(project, %{
+             project
+             |> create_resource(%{
                "connection_id" => connection["id"],
                "kind" => "work_tracking",
                "name" => "GitHub Issues",
@@ -59,7 +63,8 @@ defmodule SymmetryControlWeb.PortalResourceIdentityTest do
       create_connection("github", "GitHub identity two", "acme", ["repositories"])
 
     assert %{"resource" => _other_connection_resource} =
-             create_resource(project, %{
+             project
+             |> create_resource(%{
                "connection_id" => other_connection["id"],
                "kind" => "repository",
                "name" => "Other connection repository",
@@ -68,7 +73,8 @@ defmodule SymmetryControlWeb.PortalResourceIdentityTest do
              |> json_response(201)
 
     assert %{"resource" => _first_manual} =
-             create_resource(project, %{
+             project
+             |> create_resource(%{
                "kind" => "repository",
                "name" => "Manual repository one",
                "external_ref" => "acme/symmetry"
@@ -76,7 +82,8 @@ defmodule SymmetryControlWeb.PortalResourceIdentityTest do
              |> json_response(201)
 
     assert %{"resource" => _second_manual} =
-             create_resource(project, %{
+             project
+             |> create_resource(%{
                "kind" => "repository",
                "name" => "Manual repository two",
                "external_ref" => "ACME/SYMMETRY"
@@ -91,7 +98,8 @@ defmodule SymmetryControlWeb.PortalResourceIdentityTest do
       create_connection("azure_devops", "Azure identity", "acme", ["repositories"])
 
     assert %{"resource" => _primary} =
-             create_resource(project, %{
+             project
+             |> create_resource(%{
                "connection_id" => connection["id"],
                "kind" => "repository",
                "name" => "Primary Azure repository",
@@ -100,7 +108,8 @@ defmodule SymmetryControlWeb.PortalResourceIdentityTest do
              |> json_response(201)
 
     assert %{"resource" => candidate} =
-             create_resource(project, %{
+             project
+             |> create_resource(%{
                "connection_id" => connection["id"],
                "kind" => "repository",
                "name" => "Candidate Azure repository",
@@ -127,7 +136,6 @@ defmodule SymmetryControlWeb.PortalResourceIdentityTest do
   defp create_project(key), do: create_project(key, "Connected identity #{key}")
 
   defp create_resource(project, attrs) do
-    api_conn()
-    |> post("/portal/api/projects/#{project["id"]}/resources", attrs)
+    post(api_conn(), "/portal/api/projects/#{project["id"]}/resources", attrs)
   end
 end

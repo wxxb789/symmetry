@@ -1,9 +1,13 @@
 defmodule SymmetryControl.Orchestration.CommandsTest do
   use SymmetryControl.OrchestrationCase, async: false
 
-  alias SymmetryControl.Goals.{ContextSnapshot, Goal, GoalRevision}
+  alias SymmetryControl.Goals.ContextSnapshot
+  alias SymmetryControl.Goals.Goal
+  alias SymmetryControl.Goals.GoalRevision
   alias SymmetryControl.Orchestration
-  alias SymmetryControl.Orchestration.{Command, Commands, Task}
+  alias SymmetryControl.Orchestration.Command
+  alias SymmetryControl.Orchestration.Commands
+  alias SymmetryControl.Orchestration.Task
   alias SymmetryControl.Workspaces
   alias SymmetryControl.Workspaces.WorkItem
 

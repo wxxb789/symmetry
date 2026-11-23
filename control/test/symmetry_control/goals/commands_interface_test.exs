@@ -118,7 +118,7 @@ defmodule SymmetryControl.Goals.CommandsInterfaceTest do
 
     assert receipt.goal.version == 3
 
-    assert Map.keys(receipt.response) |> Enum.sort() == [
+    assert receipt.response |> Map.keys() |> Enum.sort() == [
              "current_revision",
              "decision",
              "goal_id",

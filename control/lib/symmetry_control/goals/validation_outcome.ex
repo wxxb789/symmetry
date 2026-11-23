@@ -42,101 +42,99 @@ defmodule SymmetryControl.Goals.ValidationOutcome do
   def reconcile_validation_outcome(task_id, run_id, generation, opts \\ [])
 
   def reconcile_validation_outcome(task_id, run_id, generation, opts)
-      when is_binary(task_id) and is_binary(run_id) and is_integer(generation) and generation >= 0 and
-             is_list(opts) do
+      when is_binary(task_id) and is_binary(run_id) and is_integer(generation) and generation >= 0 and is_list(opts) do
     with :ok <- valid_uuid(task_id), :ok <- valid_uuid(run_id) do
-      Repo.transaction(fn ->
+      fn ->
         task_locator = Repo.get(Task, task_id)
 
-        cond do
-          is_nil(task_locator) or is_nil(task_locator.goal_id) ->
-            %{task_id: task_id, run_id: run_id, generation: generation}
+        if is_nil(task_locator) or is_nil(task_locator.goal_id) do
+          %{task_id: task_id, run_id: run_id, generation: generation}
+        else
+          goal = lock_goal!(task_locator.goal_id)
 
-          true ->
-            goal = lock_goal!(task_locator.goal_id)
+          item =
+            if task_locator.work_item_id,
+              do: lock_work_item!(task_locator.work_item_id)
 
-            item =
-              if task_locator.work_item_id,
-                do: lock_work_item!(task_locator.work_item_id)
+          {task, producer} =
+            Settlement.lock_settlement_tasks!(task_id, task_locator.validation_of_task_id)
 
-            {task, producer} =
-              Settlement.lock_settlement_tasks!(task_id, task_locator.validation_of_task_id)
+          if !(Settlement.settlement_task_owned_by_goal?(task, goal, item) and
+                 task.work_item_id == task_locator.work_item_id and
+                 task.validation_of_task_id == task_locator.validation_of_task_id),
+             do: rollback(:stale_run)
 
-            unless Settlement.settlement_task_owned_by_goal?(task, goal, item) and
-                     task.work_item_id == task_locator.work_item_id and
-                     task.validation_of_task_id == task_locator.validation_of_task_id,
-                   do: rollback(:stale_run)
+          {run, producing_run} = Settlement.lock_settlement_runs!(run_id, task_id, producer)
 
-            {run, producing_run} = Settlement.lock_settlement_runs!(run_id, task_id, producer)
+          if is_nil(run) or run.generation != generation or
+               run.state not in @terminal_run_states or task.current_generation != generation or
+               task.state not in @terminal_run_states do
+            rollback(:stale_run)
+          end
 
-            if is_nil(run) or run.generation != generation or
-                 run.state not in @terminal_run_states or task.current_generation != generation or
-                 task.state not in @terminal_run_states do
-              rollback(:stale_run)
+          original_mutation_id = settlement_mutation_id(task.id, run.id, generation)
+
+          original_body = %{
+            task_id: task.id,
+            run_id: run.id,
+            generation: generation,
+            state: run.state,
+            goal_revision: task.goal_revision
+          }
+
+          original_receipt =
+            case replay_command(goal.id, original_mutation_id, original_body) do
+              {:ok, receipt} -> receipt
+              :missing -> rollback(:validation_reconciliation_not_pending)
+              {:error, reason} -> rollback(reason)
             end
 
-            original_mutation_id = settlement_mutation_id(task.id, run.id, generation)
+          if value(original_receipt.response, "settlement") != "awaiting_validation",
+            do: rollback(:validation_reconciliation_not_pending)
 
-            original_body = %{
-              task_id: task.id,
-              run_id: run.id,
-              generation: generation,
-              state: run.state,
-              goal_revision: task.goal_revision
-            }
+          late_mutation_id =
+            late_validation_outcome_mutation_id(task.id, run.id, run.generation)
 
-            original_receipt =
-              case replay_command(goal.id, original_mutation_id, original_body) do
-                {:ok, receipt} -> receipt
-                :missing -> rollback(:validation_reconciliation_not_pending)
-                {:error, reason} -> rollback(reason)
-              end
-
-            unless value(original_receipt.response, "settlement") == "awaiting_validation",
-              do: rollback(:validation_reconciliation_not_pending)
-
-            late_mutation_id =
-              late_validation_outcome_mutation_id(task.id, run.id, run.generation)
-
-            late_event =
-              Repo.one(
-                from(event in GoalEvent,
-                  where: event.id == ^late_mutation_id,
-                  lock: "FOR UPDATE"
-                )
+          late_event =
+            Repo.one(
+              from(event in GoalEvent,
+                where: event.id == ^late_mutation_id,
+                lock: "FOR UPDATE"
               )
+            )
+
+          outcome = existing_validation_outcome(task.id)
+
+          if late_event do
+            if !(late_event.kind == "validation_outcome_settled" and outcome),
+              do: rollback(:internal_error)
+
+            late_validation_outcome_receipt!(goal, task, run, outcome, opts)
+          else
+            # Re-run the complete frozen Subject/revision/evidence validation
+            # before creating the independent reconciliation receipt. The
+            # existing outcome is only sufficient for exact replay.
+            Settlement.terminal_settlement!(
+              goal,
+              item,
+              task,
+              run,
+              producer,
+              producing_run,
+              opts
+            )
 
             outcome = existing_validation_outcome(task.id)
 
-            if late_event do
-              unless late_event.kind == "validation_outcome_settled" and outcome,
-                do: rollback(:internal_error)
-
+            if outcome do
               late_validation_outcome_receipt!(goal, task, run, outcome, opts)
             else
-              # Re-run the complete frozen Subject/revision/evidence validation
-              # before creating the independent reconciliation receipt. The
-              # existing outcome is only sufficient for exact replay.
-              Settlement.terminal_settlement!(
-                goal,
-                item,
-                task,
-                run,
-                producer,
-                producing_run,
-                opts
-              )
-
-              outcome = existing_validation_outcome(task.id)
-
-              if outcome do
-                late_validation_outcome_receipt!(goal, task, run, outcome, opts)
-              else
-                rollback(:validation_pending)
-              end
+              rollback(:validation_pending)
             end
+          end
         end
-      end)
+      end
+      |> Repo.transaction()
       |> case do
         {:ok, response} -> {:ok, response}
         {:error, reason} -> {:error, reason}
@@ -173,16 +171,17 @@ defmodule SymmetryControl.Goals.ValidationOutcome do
            candidate_subject_from_terminal_result(producing_run, opts),
          true <- terminal_subject == subject,
          true <- terminal_subject_hash == subject_hash,
-         true <- validation_subject_matches_candidate?(goal, item, task, subject, subject_hash),
-         outcome <-
-           validation_evidence_outcome(
-             goal,
-             item,
-             item.acceptance_contract,
-             run.id,
-             subject,
-             subject_hash
-           ) do
+         true <- validation_subject_matches_candidate?(goal, item, task, subject, subject_hash) do
+      outcome =
+        validation_evidence_outcome(
+          goal,
+          item,
+          item.acceptance_contract,
+          run.id,
+          subject,
+          subject_hash
+        )
+
       existing_validation = existing_validation_outcome(task.id)
       existing_accepted = existing_accepted_work_outcome(goal, item)
 
@@ -277,8 +276,7 @@ defmodule SymmetryControl.Goals.ValidationOutcome do
         _terminal_subject,
         _terminal_subject_hash,
         _opts
-      ),
-      do: nil
+      ), do: nil
 
   defp eligible_validation_outcome?(task, goal, item, %Task{} = producer, %Run{} = producing_run) do
     task.purpose == "validate" and task.validation_of_task_id == producer.id and
@@ -337,19 +335,17 @@ defmodule SymmetryControl.Goals.ValidationOutcome do
 
     operator_acceptance_decision =
       if Enum.any?(required_predicates, &(value(&1, "kind") == "operator_acceptance")),
-        do: resolved_work_item_acceptance_decision(goal, item, subject_hash),
-        else: nil
+        do: resolved_work_item_acceptance_decision(goal, item, subject_hash)
 
     operator_acceptance_decision_id =
       if operator_acceptance_decision, do: operator_acceptance_decision.id
 
     evidence =
-      Repo.all(
-        from(evidence in RunEvidence,
-          where: evidence.run_id == ^validation_run_id and evidence.subject_hash == ^subject_hash,
-          lock: "FOR UPDATE"
-        )
+      from(evidence in RunEvidence,
+        where: evidence.run_id == ^validation_run_id and evidence.subject_hash == ^subject_hash,
+        lock: "FOR UPDATE"
       )
+      |> Repo.all()
       |> Enum.filter(fn evidence ->
         value(evidence.payload, "subject") == subject and
           value(evidence.payload, "subject_hash") == ContextAssembly.context_digest(subject_hash)
@@ -442,16 +438,15 @@ defmodule SymmetryControl.Goals.ValidationOutcome do
   defp resolved_work_item_acceptance_decision(goal, item, subject_hash) do
     action_hash = work_item_acceptance_action_hash(goal, item.id, subject_hash)
 
-    Repo.one(
-      from(decision in GoalDecision,
-        where:
-          decision.goal_id == ^goal.id and decision.goal_revision == ^goal.current_revision and
-            decision.state == "resolved" and decision.kind == "review" and
-            decision.work_item_id == ^item.id and decision.subject_hash == ^subject_hash and
-            decision.action_hash == ^action_hash,
-        select: %{id: decision.id, resolution: decision.resolution}
-      )
+    from(decision in GoalDecision,
+      where:
+        decision.goal_id == ^goal.id and decision.goal_revision == ^goal.current_revision and
+          decision.state == "resolved" and decision.kind == "review" and
+          decision.work_item_id == ^item.id and decision.subject_hash == ^subject_hash and
+          decision.action_hash == ^action_hash,
+      select: %{id: decision.id, resolution: decision.resolution}
     )
+    |> Repo.one()
     |> case do
       %{id: id, resolution: resolution} when is_map(resolution) ->
         case value(resolution, "option_id") do
@@ -487,7 +482,7 @@ defmodule SymmetryControl.Goals.ValidationOutcome do
         Map.put(receipt.response, "event_sequence", receipt.event.sequence)
 
       :missing ->
-        wake_at = if(settlement == "accepted", do: :immediate, else: nil)
+        wake_at = if(settlement == "accepted", do: :immediate)
         next_wake_at = Settlement.terminal_next_wake_at(goal, task, %{wake_at: wake_at}, opts)
 
         response = %{

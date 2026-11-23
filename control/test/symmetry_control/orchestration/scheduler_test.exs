@@ -23,7 +23,7 @@ defmodule SymmetryControl.Orchestration.SchedulerTest do
     assert {:ok, assigned} = Orchestration.fetch_task(task.id)
     assert assigned.state == "assigned"
 
-    later = DateTime.add(@now, 31, :second)
+    later = DateTime.shift(@now, second: 31)
     assert %{expired_runs: 1} = Reconciler.run_once(now: later)
     assert {:ok, requeued} = Orchestration.fetch_task(task.id)
     assert requeued.state == "queued"

@@ -1,11 +1,14 @@
 defmodule SymmetryControlWeb.Protocol do
   @moduledoc false
 
-  import Plug.Conn
   import Phoenix.Controller, only: [json: 2]
+  import Plug.Conn
 
   alias SymmetryControl.Orchestration
-  alias SymmetryControl.Orchestration.{Command, Run, Runtime, Task}
+  alias SymmetryControl.Orchestration.Command
+  alias SymmetryControl.Orchestration.Run
+  alias SymmetryControl.Orchestration.Runtime
+  alias SymmetryControl.Orchestration.Task
   alias SymmetryControlWeb.PortalJSON
   alias SymmetryControlWeb.QueryParams
 
@@ -20,63 +23,45 @@ defmodule SymmetryControlWeb.Protocol do
     invalid_request: {400, "invalid_request", "request payload is invalid"},
     unauthenticated: {401, "unauthenticated", "credential is missing or invalid"},
     forbidden: {403, "forbidden", "credential does not own this resource"},
-    capability_not_granted:
-      {403, "capability_not_granted", "connection capability is not granted"},
+    capability_not_granted: {403, "capability_not_granted", "connection capability is not granted"},
     provider_owned: {409, "provider_owned", "field is authoritative in the external provider"},
     not_found: {404, "not_found", "resource was not found"},
-    requested_session_not_found:
-      {404, "requested_session_not_found", "requested harness session was not found"},
-    handoff_source_not_found:
-      {404, "handoff_source_not_found", "handoff source Run was not found"},
+    requested_session_not_found: {404, "requested_session_not_found", "requested harness session was not found"},
+    handoff_source_not_found: {404, "handoff_source_not_found", "handoff source Run was not found"},
     capacity_exhausted: {409, "capacity_exhausted", "runtime capacity is exhausted"},
-    idempotency_conflict:
-      {409, "idempotency_conflict", "idempotency key was reused with different input"},
+    idempotency_conflict: {409, "idempotency_conflict", "idempotency key was reused with different input"},
     ownership_lost: {409, "ownership_lost", "execution lease is no longer authoritative"},
     stale: {409, "stale", "resource changed since it was loaded"},
     stale_revision: {409, "stale_revision", "goal revision is no longer current"},
     stale_run: {409, "stale_run", "run is no longer current for this Goal"},
-    terminal_grace_expired:
-      {409, "terminal_grace_expired", "terminal delivery grace period has expired"},
+    terminal_grace_expired: {409, "terminal_grace_expired", "terminal delivery grace period has expired"},
     state_conflict: {409, "state_conflict", "state has already advanced"},
-    requested_session_unavailable:
-      {409, "requested_session_unavailable", "requested harness session is unavailable"},
-    handoff_source_consumed:
-      {409, "handoff_source_consumed", "handoff source Run already has a successor admission"},
-    handoff_session_reuse:
-      {409, "handoff_session_reuse", "handoff must create a new native session"},
+    requested_session_unavailable: {409, "requested_session_unavailable", "requested harness session is unavailable"},
+    handoff_source_consumed: {409, "handoff_source_consumed", "handoff source Run already has a successor admission"},
+    handoff_session_reuse: {409, "handoff_session_reuse", "handoff must create a new native session"},
     invalid_decision: {409, "invalid_decision", "decision is no longer valid for this Goal"},
     decision_expired: {409, "decision_expired", "decision has expired"},
-    goal_admission_disabled:
-      {409, "goal_admission_disabled", "Goal admission is currently unavailable"},
-    unsupported_control:
-      {409, "unsupported_control", "runtime does not support supervisory control"},
+    goal_admission_disabled: {409, "goal_admission_disabled", "Goal admission is currently unavailable"},
+    unsupported_control: {409, "unsupported_control", "runtime does not support supervisory control"},
     assignment_expired: {410, "assignment_expired", "assignment has expired"},
     invalid_cursor: {400, "invalid_cursor", "cursor is invalid"},
     invalid_transition: {422, "invalid_transition", "state transition is invalid"},
     invalid_contract: {422, "invalid_contract", "goal contract is invalid"},
     admitted_work_required: {422, "admitted_work_required", "Goal requires admitted work"},
-    integration_outcome_required:
-      {422, "integration_outcome_required", "Goal requires an accepted integration outcome"},
-    context_budget_exceeded:
-      {422, "context_budget_exceeded", "mandatory Goal context exceeds the configured budget"},
+    integration_outcome_required: {422, "integration_outcome_required", "Goal requires an accepted integration outcome"},
+    context_budget_exceeded: {422, "context_budget_exceeded", "mandatory Goal context exceeds the configured budget"},
     required_context_source_missing:
       {422, "required_context_source_missing", "a required Goal context source is missing"},
-    unsatisfied_predicate:
-      {422, "unsatisfied_predicate", "goal command predicates are not satisfied"},
-    unsupported_capability:
-      {422, "unsupported_capability", "required capability is not supported"},
+    unsatisfied_predicate: {422, "unsatisfied_predicate", "goal command predicates are not satisfied"},
+    unsupported_capability: {422, "unsupported_capability", "required capability is not supported"},
     dependency_cycle: {422, "dependency_cycle", "dependency would create a cycle"},
-    waiting_dependency:
-      {422, "waiting_dependency", "a required Goal dependency is not yet accepted"},
+    waiting_dependency: {422, "waiting_dependency", "a required Goal dependency is not yet accepted"},
     budget_exhausted: {422, "budget_exhausted", "Goal budget is exhausted"},
     budget_unknown: {422, "budget_unknown", "Goal budget cannot be safely determined"},
     missing_evidence: {422, "missing_evidence", "required evidence is missing"},
-    goal_authority_required:
-      {403, "goal_authority_required", "Goal authority is required for this operation"},
-    admission_limit_reached:
-      {422, "admission_limit_reached", "Goal admission limit has been reached"},
-    parallel_limit_reached:
-      {422, "parallel_limit_reached", "Goal parallel execution limit has been reached"},
+    goal_authority_required: {403, "goal_authority_required", "Goal authority is required for this operation"},
+    admission_limit_reached: {422, "admission_limit_reached", "Goal admission limit has been reached"},
+    parallel_limit_reached: {422, "parallel_limit_reached", "Goal parallel execution limit has been reached"},
     active_task: {422, "active_task", "work item already has active Goal work"},
     incomplete_work: {422, "incomplete_work", "required Goal work is incomplete"},
     unresolved_decision: {422, "unresolved_decision", "Goal has unresolved decisions"},
@@ -86,29 +71,21 @@ defmodule SymmetryControlWeb.Protocol do
     validation_required: {422, "validation_required", "independent validation is required"},
     invalid_validation: {422, "invalid_validation", "validation does not satisfy Goal policy"},
     invalid_outcome: {422, "invalid_outcome", "outcome does not match Goal ownership"},
-    invalid_evidence_identity:
-      {422, "invalid_evidence_identity", "evidence does not match the admitted Goal subject"},
+    invalid_evidence_identity: {422, "invalid_evidence_identity", "evidence does not match the admitted Goal subject"},
     invalid_subject: {422, "invalid_subject", "repository subject is invalid for the Goal"},
-    invalid_context_snapshot:
-      {422, "invalid_context_snapshot", "context snapshot does not match its Goal identity"},
-    requested_session_required:
-      {422, "requested_session_required", "resume requires a requested harness session"},
+    invalid_context_snapshot: {422, "invalid_context_snapshot", "context snapshot does not match its Goal identity"},
+    requested_session_required: {422, "requested_session_required", "resume requires a requested harness session"},
     handoff_source_ineligible:
-      {422, "handoff_source_ineligible",
-       "handoff source Run is not a current settled progression"},
-    handoff_source_stale:
-      {422, "handoff_source_stale", "handoff source Run is not the current progression tip"},
-    handoff_source_subject_mismatch:
-      {422, "handoff_source_subject_mismatch", "handoff source subject is inconsistent"},
+      {422, "handoff_source_ineligible", "handoff source Run is not a current settled progression"},
+    handoff_source_stale: {422, "handoff_source_stale", "handoff source Run is not the current progression tip"},
+    handoff_source_subject_mismatch: {422, "handoff_source_subject_mismatch", "handoff source subject is inconsistent"},
     invalid_plan: {422, "invalid_plan", "plan does not satisfy Goal contract"},
     resource_not_allowed: {422, "resource_not_allowed", "resource is not allowed by Goal policy"},
     model_not_allowed: {422, "model_not_allowed", "model profile is not allowed by Goal policy"},
     not_connected: {409, "not_connected", "resource has no external connection"},
-    provider_unauthorized:
-      {502, "provider_unauthorized", "external provider authentication failed"},
+    provider_unauthorized: {502, "provider_unauthorized", "external provider authentication failed"},
     provider_failure: {502, "provider_failure", "external provider request failed"},
-    provider_access_unavailable:
-      {503, "provider_access_unavailable", "required provider access is unavailable"}
+    provider_access_unavailable: {503, "provider_access_unavailable", "required provider access is unavailable"}
   }
 
   # Contract validator details can contain provider/schema internals. Preserve
@@ -164,9 +141,7 @@ defmodule SymmetryControlWeb.Protocol do
   defp goal_error_fields(fields) do
     fields
     |> Map.take([:current_version, :current_revision, :allowed_actions, :details])
-    |> Map.merge(
-      Map.take(fields, ["current_version", "current_revision", "allowed_actions", "details"])
-    )
+    |> Map.merge(Map.take(fields, ["current_version", "current_revision", "allowed_actions", "details"]))
   end
 
   def machine_token(conn) do
@@ -186,8 +161,7 @@ defmodule SymmetryControlWeb.Protocol do
     end
   end
 
-  def configured_token(kind),
-    do: Application.fetch_env!(:symmetry_control, :orchestration) |> Keyword.fetch!(kind)
+  def configured_token(kind), do: :symmetry_control |> Application.fetch_env!(:orchestration) |> Keyword.fetch!(kind)
 
   def credential_class(token) when is_binary(token) do
     cond do
@@ -205,9 +179,8 @@ defmodule SymmetryControlWeb.Protocol do
     end
   end
 
-  def secure_compare(left, right)
-      when is_binary(left) and is_binary(right) and byte_size(left) == byte_size(right),
-      do: Plug.Crypto.secure_compare(left, right)
+  def secure_compare(left, right) when is_binary(left) and is_binary(right) and byte_size(left) == byte_size(right),
+    do: Plug.Crypto.secure_compare(left, right)
 
   def secure_compare(_, _), do: false
 
@@ -231,13 +204,12 @@ defmodule SymmetryControlWeb.Protocol do
     }
   end
 
-  def lease_heartbeat(%Run{} = run, commands, %DateTime{} = server_time)
-      when is_list(commands) do
-    %{
-      lease_expires_at: iso8601(run.lease_expires_at),
-      commands: Enum.map(commands, &command/1)
-    }
-    |> put_positive_lease_remaining(run.lease_expires_at, server_time)
+  def lease_heartbeat(%Run{} = run, commands, %DateTime{} = server_time) when is_list(commands) do
+    put_positive_lease_remaining(
+      %{lease_expires_at: iso8601(run.lease_expires_at), commands: Enum.map(commands, &command/1)},
+      run.lease_expires_at,
+      server_time
+    )
   end
 
   def reconcile(snapshot) do
@@ -250,18 +222,21 @@ defmodule SymmetryControlWeb.Protocol do
     server_time = server_time || DateTime.utc_now()
 
     response =
-      %{
-        run_id: run.id,
-        task_id: task.id,
-        generation: run.generation,
-        harness_session_id: run.harness_session_id,
-        harness_binding_id: run.harness_binding_id,
-        claim_id: run.claim_id,
-        lease_token: run.lease_token,
-        lease_expires_at: iso8601(run.lease_expires_at),
-        work: work(task)
-      }
-      |> put_positive_lease_remaining(run.lease_expires_at, server_time)
+      put_positive_lease_remaining(
+        %{
+          run_id: run.id,
+          task_id: task.id,
+          generation: run.generation,
+          harness_session_id: run.harness_session_id,
+          harness_binding_id: run.harness_binding_id,
+          claim_id: run.claim_id,
+          lease_token: run.lease_token,
+          lease_expires_at: iso8601(run.lease_expires_at),
+          work: work(task)
+        },
+        run.lease_expires_at,
+        server_time
+      )
 
     case provider_access do
       nil ->
@@ -328,13 +303,8 @@ defmodule SymmetryControlWeb.Protocol do
   end
 
   # Keep old cancellation receipts replayable without rewriting stored history.
-  defp command_applied_at(%{
-         kind: "cancel",
-         state: "acknowledged",
-         acknowledgement_outcome: "applied",
-         applied_at: _
-       }),
-       do: nil
+  defp command_applied_at(%{kind: "cancel", state: "acknowledged", acknowledgement_outcome: "applied", applied_at: _}),
+    do: nil
 
   defp command_applied_at(command), do: iso8601(Map.fetch!(command, :applied_at))
 
@@ -382,8 +352,7 @@ defmodule SymmetryControlWeb.Protocol do
   end
 
   def history_options(params, task_id, surface, direction)
-      when is_map(params) and is_binary(task_id) and is_binary(surface) and
-             direction in ["after", "before"] do
+      when is_map(params) and is_binary(task_id) and is_binary(surface) and direction in ["after", "before"] do
     cursor_key = direction
     opposite_key = if direction == "after", do: "before", else: "after"
 
@@ -400,10 +369,7 @@ defmodule SymmetryControlWeb.Protocol do
   def history_options(_, _, _, _), do: {:error, :invalid_request}
 
   def history_page(task_id, "events", %{entries: entries, next_after: next_after}),
-    do: %{
-      events: Enum.map(entries, &event/1),
-      next_after: encode_history_cursor(task_id, "events", "after", next_after)
-    }
+    do: %{events: Enum.map(entries, &event/1), next_after: encode_history_cursor(task_id, "events", "after", next_after)}
 
   def history_page(task_id, "transitions", %{entries: entries, next_after: next_after}),
     do: %{
@@ -461,11 +427,7 @@ defmodule SymmetryControlWeb.Protocol do
   defp parse_event_time(_event), do: {:error, :invalid_request}
 
   defp runtime_registration(%Runtime{} = runtime),
-    do: %{
-      runtime_key: runtime.runtime_key,
-      runtime_id: runtime.id,
-      runtime_epoch: runtime.connection_epoch
-    }
+    do: %{runtime_key: runtime.runtime_key, runtime_id: runtime.id, runtime_epoch: runtime.connection_epoch}
 
   defp assignment(%{run: %Run{} = run, task: %Task{} = task}) do
     %{
@@ -514,11 +476,7 @@ defmodule SymmetryControlWeb.Protocol do
   defp iso8601(nil), do: nil
   defp iso8601(%DateTime{} = value), do: DateTime.to_iso8601(value)
 
-  defp put_positive_lease_remaining(
-         response,
-         %DateTime{} = lease_expires_at,
-         %DateTime{} = server_time
-       ) do
+  defp put_positive_lease_remaining(response, %DateTime{} = lease_expires_at, %DateTime{} = server_time) do
     case DateTime.diff(lease_expires_at, server_time, :millisecond) do
       remaining when remaining > 0 -> Map.put(response, :lease_remaining_ms, remaining)
       _ -> response
@@ -670,9 +628,8 @@ defmodule SymmetryControlWeb.Protocol do
   defp cursor_source(_payload, surface, inserted_at, id) when surface != "timeline",
     do: {:ok, %{inserted_at: inserted_at, id: id}}
 
-  defp cursor_source(%{"source" => source}, "timeline", inserted_at, id)
-       when source in @timeline_sources,
-       do: {:ok, %{inserted_at: inserted_at, source: source, id: id}}
+  defp cursor_source(%{"source" => source}, "timeline", inserted_at, id) when source in @timeline_sources,
+    do: {:ok, %{inserted_at: inserted_at, source: source, id: id}}
 
   defp cursor_source(_, _, _, _), do: {:error, :invalid_request}
 end

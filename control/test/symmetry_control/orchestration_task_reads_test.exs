@@ -1,8 +1,12 @@
 defmodule SymmetryControl.OrchestrationTaskReadsTest do
   use SymmetryControl.OrchestrationCase, async: false
 
+  alias Oban.Job
   alias SymmetryControl.Orchestration
-  alias SymmetryControl.Orchestration.{Command, RunEvent, RunTransition}
+  alias SymmetryControl.Orchestration.Command
+  alias SymmetryControl.Orchestration.RunEvent
+  alias SymmetryControl.Orchestration.RunTransition
+  alias SymmetryControl.RequestHash
 
   @now ~U[2026-09-02 00:00:00.000000Z]
 
@@ -11,9 +15,7 @@ defmodule SymmetryControl.OrchestrationTaskReadsTest do
     assert {:ok, _task, :replayed} = Orchestration.submit_task(task_attrs(), "task-1", now: @now)
 
     assert {:error, :idempotency_conflict} =
-             Orchestration.submit_task(Map.put(task_attrs(), :goal, "another"), "task-1",
-               now: @now
-             )
+             Orchestration.submit_task(Map.put(task_attrs(), :goal, "another"), "task-1", now: @now)
   end
 
   test "submission preserves omitted input separately from explicit empty input" do
@@ -42,13 +44,11 @@ defmodule SymmetryControl.OrchestrationTaskReadsTest do
     runtime = register_runtime(machine, @now, capacity: 2)
 
     assert {:ok, _task, :created} =
-             Orchestration.submit_task(task_attrs(goal: "monotonic-lease"), "monotonic-lease",
-               now: @now
-             )
+             Orchestration.submit_task(task_attrs(goal: "monotonic-lease"), "monotonic-lease", now: @now)
 
     assert {:ok, run} = Orchestration.assign_one(now: @now)
     fence = claim(run, runtime, @now)
-    existing_expiry = DateTime.add(@now, 90, :second)
+    existing_expiry = DateTime.shift(@now, second: 90)
 
     assert {:ok, loaded_run} = Orchestration.fetch_run(run.id)
 
@@ -58,7 +58,7 @@ defmodule SymmetryControl.OrchestrationTaskReadsTest do
 
     assert {:ok, renewed} =
              Orchestration.renew_lease(run.id, fence,
-               now: DateTime.add(@now, 1, :second),
+               now: DateTime.shift(@now, second: 1),
                lease_duration_ms: 30_000
              )
 
@@ -82,7 +82,7 @@ defmodule SymmetryControl.OrchestrationTaskReadsTest do
                  target_state,
                  %{"source_state" => local_state},
                  Ecto.UUID.generate(),
-                 now: DateTime.add(@now, 31, :second)
+                 now: DateTime.shift(@now, second: 31)
                )
 
       assert {:ok, %{state: ^target_state}} = Orchestration.fetch_run(run.id)
@@ -93,8 +93,8 @@ defmodule SymmetryControl.OrchestrationTaskReadsTest do
   test "an expired current generation becomes the visible attempt after a late terminal transition" do
     for target_state <- ["completed", "failed", "cancelled"] do
       {task, run, runtime, fence} = terminal_grace_fixture("expired-current-#{target_state}")
-      expired_at = DateTime.add(@now, 30, :second)
-      terminal_at = DateTime.add(expired_at, 1, :second)
+      expired_at = DateTime.shift(@now, second: 30)
+      terminal_at = DateTime.shift(expired_at, second: 1)
       payload = %{"summary" => "late #{target_state} delivery"}
 
       assert %{expired_runs: 1} = Orchestration.expire(now: expired_at)
@@ -167,9 +167,7 @@ defmodule SymmetryControl.OrchestrationTaskReadsTest do
         assert retried_task.attempt_generation == run.generation + 1
 
         assert {:ok, _snapshot} =
-                 Orchestration.heartbeat(runtime.id, runtime.connection_epoch, [],
-                   now: terminal_at
-                 )
+                 Orchestration.heartbeat(runtime.id, runtime.connection_epoch, [], now: terminal_at)
 
         assert {:ok, retry_run} = Orchestration.assign_one(now: terminal_at)
         assert retry_run.task_id == task.id
@@ -181,7 +179,7 @@ defmodule SymmetryControl.OrchestrationTaskReadsTest do
   test "terminal grace cannot overwrite an operator cancellation after expiry" do
     for target_state <- ["completed", "failed", "cancelled"] do
       {task, run, _runtime, fence} = terminal_grace_fixture("cancel-wins-#{target_state}")
-      expired_at = DateTime.add(@now, 30, :second)
+      expired_at = DateTime.shift(@now, second: 30)
 
       assert %{expired_runs: 1} = Orchestration.expire(now: expired_at)
 
@@ -204,7 +202,7 @@ defmodule SymmetryControl.OrchestrationTaskReadsTest do
                  target_state,
                  %{"summary" => "stale terminal delivery"},
                  Ecto.UUID.generate(),
-                 now: DateTime.add(expired_at, 1, :second)
+                 now: DateTime.shift(expired_at, second: 1)
                )
 
       assert {:ok, %{state: "expired"}} = Orchestration.fetch_run(run.id)
@@ -228,10 +226,10 @@ defmodule SymmetryControl.OrchestrationTaskReadsTest do
     second_run = Map.fetch!(runs_by_task, second_task.id)
     first_fence = claim(first_run, runtime, @now)
     second_fence = claim(second_run, runtime, @now)
-    refreshed_at = DateTime.add(@now, 29, :second)
+    refreshed_at = DateTime.shift(@now, second: 29)
     assert {:ok, _} = Orchestration.renew_lease(second_run.id, second_fence, now: refreshed_at)
 
-    assert %{expired_runs: 1} = Orchestration.expire(now: DateTime.add(@now, 31, :second))
+    assert %{expired_runs: 1} = Orchestration.expire(now: DateTime.shift(@now, second: 31))
     assert {:ok, expired_task} = Orchestration.fetch_task(first_task.id)
     assert expired_task.state == "queued"
     assert {:ok, preserved_task} = Orchestration.fetch_task(second_task.id)
@@ -480,9 +478,7 @@ defmodule SymmetryControl.OrchestrationTaskReadsTest do
     assert acknowledged_snapshot.latest_command.state == "acknowledged"
 
     {:ok, queued, :created} =
-      Orchestration.submit_task(task_attrs(goal: "runless command"), "snapshot-runless",
-        now: @now
-      )
+      Orchestration.submit_task(task_attrs(goal: "runless command"), "snapshot-runless", now: @now)
 
     assert {:ok, _cancelled, applied} = Orchestration.request_cancel(queued.id, now: @now)
     assert {:ok, applied_snapshot} = Orchestration.task_snapshot(queued.id)
@@ -494,7 +490,7 @@ defmodule SymmetryControl.OrchestrationTaskReadsTest do
 
   test "separate task history collections are ascending, task-scoped, and keyset paged" do
     %{task: task, first_run: first_run, second_run: second_run} = history_fixture()
-    at = DateTime.add(@now, 1, :second)
+    at = DateTime.shift(@now, second: 1)
 
     first = insert_history_event(first_run, "00000000-0000-0000-0000-000000000121", 1, at)
 
@@ -644,8 +640,8 @@ defmodule SymmetryControl.OrchestrationTaskReadsTest do
 
   test "timeline spans generations, uses durable insertion order, and has stable source and id ties" do
     %{task: task, first_run: first_run, second_run: second_run} = history_fixture()
-    first_at = DateTime.add(@now, 1, :second)
-    same_at = DateTime.add(@now, 2, :second)
+    first_at = DateTime.shift(@now, second: 1)
+    same_at = DateTime.shift(@now, second: 2)
 
     oldest_event =
       insert_history_event(first_run, "00000000-0000-0000-0000-000000000131", 1, first_at)
@@ -774,14 +770,12 @@ defmodule SymmetryControl.OrchestrationTaskReadsTest do
     {:ok, task, :created} = Orchestration.submit_task(task_attrs(), "history-task", now: @now)
     {:ok, first_run} = Orchestration.assign_one(now: @now)
 
-    assert %{expired_runs: 1} = Orchestration.expire(now: DateTime.add(@now, 31, :second))
+    assert %{expired_runs: 1} = Orchestration.expire(now: DateTime.shift(@now, second: 31))
 
     assert {:ok, _} =
-             Orchestration.heartbeat(runtime.id, runtime.connection_epoch, [],
-               now: DateTime.add(@now, 31, :second)
-             )
+             Orchestration.heartbeat(runtime.id, runtime.connection_epoch, [], now: DateTime.shift(@now, second: 31))
 
-    assert {:ok, second_run} = Orchestration.assign_one(now: DateTime.add(@now, 31, :second))
+    assert {:ok, second_run} = Orchestration.assign_one(now: DateTime.shift(@now, second: 31))
 
     %{task: task, runtime: runtime, first_run: first_run, second_run: second_run}
   end
@@ -795,7 +789,7 @@ defmodule SymmetryControl.OrchestrationTaskReadsTest do
       sequence: sequence,
       kind: "progress",
       payload: %{"sequence" => sequence},
-      occurred_at: DateTime.add(inserted_at, -1, :second)
+      occurred_at: DateTime.shift(inserted_at, second: -1)
     })
     |> Ecto.Changeset.change(inserted_at: inserted_at, updated_at: inserted_at)
     |> Repo.insert!()
@@ -806,9 +800,7 @@ defmodule SymmetryControl.OrchestrationTaskReadsTest do
     _runtime = register_runtime(machine, @now)
 
     assert {:ok, _task, :created} =
-             Orchestration.submit_task(task_attrs(goal: "other history"), "other-history-task",
-               now: inserted_at
-             )
+             Orchestration.submit_task(task_attrs(goal: "other history"), "other-history-task", now: inserted_at)
 
     assert {:ok, run} = Orchestration.assign_one(now: inserted_at)
     insert_history_event(run, "00000000-0000-0000-0000-000000000128", 1, inserted_at)
@@ -842,10 +834,6 @@ defmodule SymmetryControl.OrchestrationTaskReadsTest do
     |> Ecto.Changeset.change(inserted_at: inserted_at, updated_at: inserted_at)
     |> Repo.insert!()
   end
-
-  alias Oban.Job
-  alias SymmetryControl.RequestHash
-  alias SymmetryControl.Orchestration
 
   # The cases below came from the other base file's region and pin its clock;
   # the shadowing is intentional, so do not move a case across this line.

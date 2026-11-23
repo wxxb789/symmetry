@@ -1,24 +1,24 @@
 defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   use SymmetryControl.MigrationCase, async: true
 
+  alias SymmetryControl.Orchestration.Task
   alias SymmetryControl.Repo
   alias SymmetryControl.Repo.Migrations.AddGoal0006ControlPlane
-  alias SymmetryControl.Repo.Migrations.AddGoalTerminalGuardsAndExecutionPolicy
-  alias SymmetryControl.Repo.Migrations.AddGoalTerminalAuthorityGuardsAndSessionReciprocity
-  alias SymmetryControl.Repo.Migrations.AddHarnessSessionStopReceipts
-  alias SymmetryControl.Repo.Migrations.AddHarnessSessionAttachReceipts
-  alias SymmetryControl.Repo.Migrations.AddOmpHarnessKind
-  alias SymmetryControl.Repo.Migrations.AddTaskRuntimePolicySnapshot
-  alias SymmetryControl.Repo.Migrations.AddGoalIntegrationWorkItemDesignation
   alias SymmetryControl.Repo.Migrations.AddGoalIdentityGuards
-  alias SymmetryControl.Repo.Migrations.AddTaskHandoffLineage
-  alias SymmetryControl.Repo.Migrations.AddPlanningTaskIdentityGuards
+  alias SymmetryControl.Repo.Migrations.AddGoalIntegrationWorkItemDesignation
+  alias SymmetryControl.Repo.Migrations.AddGoalTerminalAuthorityGuardsAndSessionReciprocity
+  alias SymmetryControl.Repo.Migrations.AddGoalTerminalGuardsAndExecutionPolicy
   alias SymmetryControl.Repo.Migrations.AddGoalWorkItemBaselines
   alias SymmetryControl.Repo.Migrations.AddGoalWorkItemChangeTargets
-  alias SymmetryControl.Repo.Migrations.AddRuntimeRepositoryResourceAffinity
+  alias SymmetryControl.Repo.Migrations.AddHarnessSessionAttachReceipts
+  alias SymmetryControl.Repo.Migrations.AddHarnessSessionStopReceipts
+  alias SymmetryControl.Repo.Migrations.AddOmpHarnessKind
+  alias SymmetryControl.Repo.Migrations.AddPlanningTaskIdentityGuards
   alias SymmetryControl.Repo.Migrations.AddRunProviderAccessSnapshots
+  alias SymmetryControl.Repo.Migrations.AddRuntimeRepositoryResourceAffinity
+  alias SymmetryControl.Repo.Migrations.AddTaskHandoffLineage
+  alias SymmetryControl.Repo.Migrations.AddTaskRuntimePolicySnapshot
   alias SymmetryControl.Repo.Migrations.EnforceRuntimeRepositoryResourceAffinity
-  alias SymmetryControl.Orchestration.Task
 
   @migration_version 20_260_909_000_000
   @runtime_affinity_migration_version 20_260_909_020_000
@@ -211,7 +211,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
 
       assert_raise Postgrex.Error, ~r/goal_0006_provider_access_snapshot_immutable/i, fn ->
         Repo.query!(
-          "UPDATE runs SET provider_access_snapshot = '{\"v\": 1, \"kind\": \"none\"}'::jsonb WHERE id = $1",
+          ~s(UPDATE runs SET provider_access_snapshot = '{"v": 1, "kind": "none"}'::jsonb WHERE id = $1),
           [provider_run_id]
         )
       end
@@ -249,9 +249,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
       allowed_runtime_ids = [Ecto.UUID.generate(), Ecto.UUID.generate()]
 
       %{goal_id: goal_id, work_item_id: work_item_id} =
-        insert_goal_fixture!(
-          protected_execution_policy_json(%{"allowed_runtime_ids" => allowed_runtime_ids})
-        )
+        insert_goal_fixture!(protected_execution_policy_json(%{"allowed_runtime_ids" => allowed_runtime_ids}))
 
       goal_task_id = insert_goal_task!(%{goal_id: goal_id, work_item_id: work_item_id})
       legacy_task_id = insert_legacy_task!("Goal-less runtime policy task")
@@ -307,9 +305,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
       runtime_b = Ecto.UUID.generate()
 
       %{goal_id: goal_id, work_item_id: work_item_id} =
-        insert_goal_fixture!(
-          protected_execution_policy_json(%{"allowed_runtime_ids" => [runtime_a, runtime_b]})
-        )
+        insert_goal_fixture!(protected_execution_policy_json(%{"allowed_runtime_ids" => [runtime_a, runtime_b]}))
 
       migrate_runtime_policy_snapshot_up!()
 
@@ -430,9 +426,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
 
         Repo.query!("ALTER TABLE goal_revisions DISABLE TRIGGER goal_revisions_immutable_history")
 
-        Repo.query!(
-          "ALTER TABLE goal_revisions DROP CONSTRAINT goal_revisions_execution_policy_v1"
-        )
+        Repo.query!("ALTER TABLE goal_revisions DROP CONSTRAINT goal_revisions_execution_policy_v1")
 
         Repo.query!(
           "UPDATE goal_revisions SET execution_policy = $1::text::jsonb WHERE goal_id = $2",
@@ -778,7 +772,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
       migrate_planning_task_up!()
 
       plan_task_id =
-        Repo.transaction(fn ->
+        fn ->
           context_snapshot_id = insert_planning_context_snapshot!(goal_id)
 
           insert_goal_task!(%{
@@ -787,7 +781,8 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
             context_snapshot_id: context_snapshot_id,
             purpose: "plan"
           })
-        end)
+        end
+        |> Repo.transaction()
         |> then(fn {:ok, task_id} -> task_id end)
 
       assert %{rows: [[^plan_task_id, nil, "plan"]]} =
@@ -997,24 +992,16 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
       migrate_goal_up!()
 
       assert %{rows: [[true]]} =
-               Repo.query!(
-                 "SELECT goal_0006_jsonb_uuid_array('[\"550e8400-e29b-41d4-a716-446655440000\"]'::jsonb)"
-               )
+               Repo.query!("SELECT goal_0006_jsonb_uuid_array('[\"550e8400-e29b-41d4-a716-446655440000\"]'::jsonb)")
 
       assert %{rows: [[false]]} =
-               Repo.query!(
-                 "SELECT goal_0006_jsonb_uuid_array('[\"550E8400-E29B-41D4-A716-446655440000\"]'::jsonb)"
-               )
+               Repo.query!("SELECT goal_0006_jsonb_uuid_array('[\"550E8400-E29B-41D4-A716-446655440000\"]'::jsonb)")
 
       assert %{rows: [[false]]} =
-               Repo.query!(
-                 "SELECT goal_0006_jsonb_uuid_array('[\"550e8400-e29b-01d4-a716-446655440000\"]'::jsonb)"
-               )
+               Repo.query!("SELECT goal_0006_jsonb_uuid_array('[\"550e8400-e29b-01d4-a716-446655440000\"]'::jsonb)")
 
       assert %{rows: [[false]]} =
-               Repo.query!(
-                 "SELECT goal_0006_jsonb_uuid_array('[\"550e8400-e29b-41d4-c716-446655440000\"]'::jsonb)"
-               )
+               Repo.query!("SELECT goal_0006_jsonb_uuid_array('[\"550e8400-e29b-41d4-c716-446655440000\"]'::jsonb)")
     end)
   end
 
@@ -1494,14 +1481,11 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
       Repo.query!("UPDATE runtimes SET status = 'offline' WHERE id = $1", [runtime_id])
 
       for {statement, parameters} <- [
-            {"UPDATE project_resources SET project_id = $1 WHERE id = $2",
-             [other_project_id, repository_id]},
+            {"UPDATE project_resources SET project_id = $1 WHERE id = $2", [other_project_id, repository_id]},
             {"UPDATE project_resources SET kind = 'ci' WHERE id = $1", [repository_id]},
             {"UPDATE project_resources SET provider = 'github' WHERE id = $1", [repository_id]},
-            {"UPDATE project_resources SET external_ref = 'rewritten' WHERE id = $1",
-             [repository_id]},
-            {"UPDATE project_resources SET connection_id = $1 WHERE id = $2",
-             [connection_id, repository_id]}
+            {"UPDATE project_resources SET external_ref = 'rewritten' WHERE id = $1", [repository_id]},
+            {"UPDATE project_resources SET connection_id = $1 WHERE id = $2", [connection_id, repository_id]}
           ] do
         assert_raise Postgrex.Error, ~r/runtime_repository_resource_identity_immutable/i, fn ->
           Repo.query!(statement, parameters)
@@ -1625,7 +1609,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
 
       assert_raise Postgrex.Error, ~r/goal_0006_work_item_change_target_requires_goal/i, fn ->
         Repo.query!(
-          "UPDATE work_items SET change_target = '{\"kind\": \"branches\", \"source_branch\": \"feature\", \"target_branch\": \"main\"}'::jsonb WHERE id = $1",
+          ~s(UPDATE work_items SET change_target = '{"kind": "branches", "source_branch": "feature", "target_branch": "main"}'::jsonb WHERE id = $1),
           [legacy_work_item_id]
         )
       end
@@ -1667,7 +1651,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
 
       assert_raise Postgrex.Error, ~r/goal_0006_work_item_change_target_immutable/i, fn ->
         Repo.query!(
-          "UPDATE work_items SET change_target = '{\"kind\": \"branches\", \"source_branch\": \"feature\", \"target_branch\": \"main\", \"unexpected\": true}'::jsonb WHERE id = $1",
+          ~s(UPDATE work_items SET change_target = '{"kind": "branches", "source_branch": "feature", "target_branch": "main", "unexpected": true}'::jsonb WHERE id = $1),
           [goal_work_item_id]
         )
       end
@@ -1708,7 +1692,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
 
       assert_raise Postgrex.Error, ~r/goal_0006_work_item_change_target_immutable/i, fn ->
         Repo.query!(
-          "UPDATE work_items SET change_target = '{\"kind\": \"pull_request\", \"pull_request_url\": \"https://github.com/acme/repo/pull/1\"}'::jsonb WHERE id = $1",
+          ~s(UPDATE work_items SET change_target = '{"kind": "pull_request", "pull_request_url": "https://github.com/acme/repo/pull/1"}'::jsonb WHERE id = $1),
           [goal_work_item_id]
         )
       end
@@ -3169,9 +3153,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
 
       insert_harness_run!(run_id, task_id, runtime_id, session_id, 1, "completed")
 
-      Repo.query!(
-        "ALTER TABLE harness_sessions DISABLE TRIGGER harness_sessions_active_run_identity_guard"
-      )
+      Repo.query!("ALTER TABLE harness_sessions DISABLE TRIGGER harness_sessions_active_run_identity_guard")
 
       try do
         Repo.query!(
@@ -3182,9 +3164,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
           ]
         )
       after
-        Repo.query!(
-          "ALTER TABLE harness_sessions ENABLE TRIGGER harness_sessions_active_run_identity_guard"
-        )
+        Repo.query!("ALTER TABLE harness_sessions ENABLE TRIGGER harness_sessions_active_run_identity_guard")
       end
 
       assert_raise Postgrex.Error,
@@ -3981,8 +3961,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
     Ecto.Migrator.run(
       Repo,
       MigrationModules.verified_pairs!([
-        {@terminal_authority_migration_version,
-         AddGoalTerminalAuthorityGuardsAndSessionReciprocity}
+        {@terminal_authority_migration_version, AddGoalTerminalAuthorityGuardsAndSessionReciprocity}
       ]),
       :up,
       all: true,
@@ -3996,8 +3975,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
     Ecto.Migrator.run(
       Repo,
       MigrationModules.verified_pairs!([
-        {@terminal_authority_migration_version,
-         AddGoalTerminalAuthorityGuardsAndSessionReciprocity}
+        {@terminal_authority_migration_version, AddGoalTerminalAuthorityGuardsAndSessionReciprocity}
       ]),
       :down,
       step: 1,
@@ -4860,5 +4838,5 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   defp hash(byte), do: :binary.copy(<<byte>>, 32)
-  defp project_key, do: "G#{System.unique_integer([:positive])}" |> String.slice(0, 8)
+  defp project_key, do: String.slice("G#{System.unique_integer([:positive])}", 0, 8)
 end

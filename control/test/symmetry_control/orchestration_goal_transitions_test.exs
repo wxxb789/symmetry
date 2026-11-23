@@ -2,11 +2,20 @@ defmodule SymmetryControl.OrchestrationGoalTransitionsTest do
   use SymmetryControl.OrchestrationCase, async: false
 
   alias Oban.Job
-  alias SymmetryControl.{Goals, RequestHash}
-  alias SymmetryControl.Goals.{Goal, GoalEvent, GoalRevision, HarnessSession}
+  alias SymmetryControl.Goals
+  alias SymmetryControl.Goals.Goal
+  alias SymmetryControl.Goals.GoalEvent
+  alias SymmetryControl.Goals.GoalRevision
+  alias SymmetryControl.Goals.HarnessSession
   alias SymmetryControl.Orchestration
-  alias SymmetryControl.Orchestration.{Command, Run, Runtime, Task}
-  alias SymmetryControl.Workspaces.{ProjectResource, WorkItem}
+  alias SymmetryControl.Orchestration.Command
+  alias SymmetryControl.Orchestration.Run
+  alias SymmetryControl.Orchestration.Runtime
+  alias SymmetryControl.Orchestration.RunTransition
+  alias SymmetryControl.Orchestration.Task
+  alias SymmetryControl.RequestHash
+  alias SymmetryControl.Workspaces.ProjectResource
+  alias SymmetryControl.Workspaces.WorkItem
 
   @now ~U[2026-09-09 09:00:00.000000Z]
 
@@ -17,9 +26,7 @@ defmodule SymmetryControl.OrchestrationGoalTransitionsTest do
     fence = goal_claim(run, runtime, @now)
 
     assert {:ok, %{state: "running"}} =
-             Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(),
-               now: @now
-             )
+             Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(), now: @now)
 
     assert {:error, :goal_authority_required} =
              Orchestration.transition(
@@ -133,9 +140,7 @@ defmodule SymmetryControl.OrchestrationGoalTransitionsTest do
     fence = goal_claim(run, runtime, @now)
 
     assert {:ok, %{state: "running"}} =
-             Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(),
-               now: @now
-             )
+             Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(), now: @now)
 
     goal = Repo.get!(Goal, goal_id)
 
@@ -200,9 +205,7 @@ defmodule SymmetryControl.OrchestrationGoalTransitionsTest do
     fence = goal_claim(run, runtime, @now)
 
     assert {:ok, %{state: "running"}} =
-             Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(),
-               now: @now
-             )
+             Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(), now: @now)
 
     pause_action_id = Ecto.UUID.generate()
     insert_goal_event(goal_id, pause_action_id, 1, "pause")
@@ -243,9 +246,7 @@ defmodule SymmetryControl.OrchestrationGoalTransitionsTest do
     fence = goal_claim(run, runtime, @now)
 
     assert {:ok, %{state: "running"}} =
-             Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(),
-               now: @now
-             )
+             Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(), now: @now)
 
     pause_action_id = Ecto.UUID.generate()
     insert_goal_event(goal_id, pause_action_id, 1, "pause")
@@ -287,9 +288,7 @@ defmodule SymmetryControl.OrchestrationGoalTransitionsTest do
     fence = goal_claim(run, runtime, @now)
 
     assert {:ok, %{state: "running"}} =
-             Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(),
-               now: @now
-             )
+             Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(), now: @now)
 
     action_id = Ecto.UUID.generate()
     insert_goal_event(goal_id, action_id, 1, "pause")
@@ -330,7 +329,7 @@ defmodule SymmetryControl.OrchestrationGoalTransitionsTest do
 
     assert 1 ==
              Repo.aggregate(
-               from(transition in SymmetryControl.Orchestration.RunTransition,
+               from(transition in RunTransition,
                  where:
                    transition.run_id == ^run.id and
                      transition.transition_id == ^transition_id
@@ -354,13 +353,11 @@ defmodule SymmetryControl.OrchestrationGoalTransitionsTest do
     fence = goal_claim(run, runtime, @now)
 
     assert {:ok, %{state: "running"}} =
-             Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(),
-               now: @now
-             )
+             Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(), now: @now)
 
     Repo.update_all(
       from(stored in Run, where: stored.id == ^run.id),
-      set: [lease_expires_at: DateTime.add(DateTime.utc_now(), 60, :second)]
+      set: [lease_expires_at: DateTime.shift(DateTime.utc_now(), minute: 1)]
     )
 
     assert_receive {[:symmetry_control, :orchestration, :run, :transition], ^ref, %{count: 1},
@@ -415,9 +412,7 @@ defmodule SymmetryControl.OrchestrationGoalTransitionsTest do
     fence = goal_claim(run, runtime, @now)
 
     assert {:ok, %{state: "running"}} =
-             Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(),
-               now: @now
-             )
+             Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(), now: @now)
 
     action_id = Ecto.UUID.generate()
     insert_goal_event(goal_id, action_id, 1, "pause")
@@ -447,7 +442,7 @@ defmodule SymmetryControl.OrchestrationGoalTransitionsTest do
     assert %{state: "running"} = Repo.get!(Run, run.id)
 
     refute Repo.exists?(
-             from(transition in SymmetryControl.Orchestration.RunTransition,
+             from(transition in RunTransition,
                where: transition.run_id == ^run.id and transition.transition_id == ^transition_id
              )
            )
@@ -460,9 +455,7 @@ defmodule SymmetryControl.OrchestrationGoalTransitionsTest do
     fence = goal_claim(run, runtime, @now)
 
     assert {:ok, %{state: "running"}} =
-             Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(),
-               now: @now
-             )
+             Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(), now: @now)
 
     action_id = Ecto.UUID.generate()
     insert_goal_event(goal_id, action_id, 1, "pause")
@@ -559,9 +552,7 @@ defmodule SymmetryControl.OrchestrationGoalTransitionsTest do
     fence = goal_claim(run, runtime, @now)
 
     assert {:ok, %{state: "running"}} =
-             Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(),
-               now: @now
-             )
+             Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(), now: @now)
 
     assert {:ok, %{state: "completed"}} =
              Orchestration.transition(
@@ -609,7 +600,7 @@ defmodule SymmetryControl.OrchestrationGoalTransitionsTest do
     assert {:ok, run} = Orchestration.assign_one(now: @now)
     fence = goal_claim(run, runtime, @now)
 
-    expiry = DateTime.add(@now, 30, :second)
+    expiry = DateTime.shift(@now, second: 30)
     assert %{expired_runs: 1} = Orchestration.expire(now: expiry)
 
     assert {:ok, %{state: "completed"}} =
@@ -619,7 +610,7 @@ defmodule SymmetryControl.OrchestrationGoalTransitionsTest do
                "completed",
                %{"summary" => "late but within terminal grace"},
                uuid(2),
-               now: DateTime.add(expiry, 1, :second)
+               now: DateTime.shift(expiry, second: 1)
              )
 
     assert {:ok, %{state: "completed", attempt_generation: 1}} = Orchestration.fetch_task(task.id)
@@ -650,13 +641,12 @@ defmodule SymmetryControl.OrchestrationGoalTransitionsTest do
                on_goal_task_terminal: hook
              )
 
-    assert_receive {:goal_task_terminal,
-                    %{task_id: task_id, run_id: run_id, generation: generation}}
+    assert_receive {:goal_task_terminal, %{task_id: task_id, run_id: run_id, generation: generation}}
 
     assert task_id == task.id
     assert run_id == run.id
     assert generation == 1
-    assert settlement_jobs(task.id, run.id, 1) |> length() == 1
+    assert task.id |> settlement_jobs(run.id, 1) |> length() == 1
 
     assert {:ok, %{state: "completed"}} =
              Orchestration.transition(
@@ -670,7 +660,7 @@ defmodule SymmetryControl.OrchestrationGoalTransitionsTest do
              )
 
     refute_receive {:goal_task_terminal, _}
-    assert settlement_jobs(task.id, run.id, 1) |> length() == 1
+    assert task.id |> settlement_jobs(run.id, 1) |> length() == 1
 
     {rolled_back_task, _goal} = insert_goal_task(max_run_attempts: 2)
     second_item = Repo.get!(WorkItem, rolled_back_task.work_item_id)
@@ -712,7 +702,7 @@ defmodule SymmetryControl.OrchestrationGoalTransitionsTest do
              end)
 
     refute_receive {:goal_task_terminal, _}
-    assert settlement_jobs(task.id, run.id, 1) |> length() == 1
+    assert task.id |> settlement_jobs(run.id, 1) |> length() == 1
     assert [] == settlement_jobs(rolled_back_task.id, rolled_back_run.id, 1)
   end
 
@@ -729,7 +719,7 @@ defmodule SymmetryControl.OrchestrationGoalTransitionsTest do
     admission_key = Ecto.UUID.generate()
     reservation_id = Ecto.UUID.generate()
     repository_id = Keyword.get(opts, :repository_id, Ecto.UUID.generate())
-    validation_of_task_id = if purpose == "validate", do: Ecto.UUID.generate(), else: nil
+    validation_of_task_id = if purpose == "validate", do: Ecto.UUID.generate()
     validation_bindings = Keyword.get(opts, :validation_bindings, [])
     policy = Keyword.get(opts, :execution_policy, execution_policy(max_run_attempts))
     allowed_runtime_ids = Map.get(policy, "allowed_runtime_ids", [])
@@ -742,27 +732,29 @@ defmodule SymmetryControl.OrchestrationGoalTransitionsTest do
     task_inserted_at = Keyword.get(opts, :inserted_at, @now)
 
     task_input =
-      %{
-        "subject" => %{
-          "resource_id" => repository_id,
-          "commit" => String.duplicate("a", 40),
-          "tree_digest" => "sha256:" <> String.duplicate("b", 64)
-        }
-      }
-      |> then(fn input ->
-        if requested_session_id do
-          input
-          |> Map.put("session_mode", "resume")
-          |> Map.put("requested_session_id", requested_session_id)
-        else
-          input
+      then(
+        %{
+          "subject" => %{
+            "resource_id" => repository_id,
+            "commit" => String.duplicate("a", 40),
+            "tree_digest" => "sha256:" <> String.duplicate("b", 64)
+          }
+        },
+        fn input ->
+          if requested_session_id do
+            input
+            |> Map.put("session_mode", "resume")
+            |> Map.put("requested_session_id", requested_session_id)
+          else
+            input
+          end
         end
-      end)
+      )
 
     task_input =
       Map.put(task_input, "limits", %{
         "max_turns" => 1,
-        "deadline_at" => DateTime.to_iso8601(DateTime.add(@now, 15 * 60, :second)),
+        "deadline_at" => DateTime.to_iso8601(DateTime.shift(@now, minute: 15)),
         "max_cost_microusd" =>
           if(strict_budget?,
             do: Integer.to_string(Map.fetch!(policy, "per_run_cost_limit_microusd"))
@@ -782,9 +774,7 @@ defmodule SymmetryControl.OrchestrationGoalTransitionsTest do
                  )
                end
 
-               unless Repo.exists?(
-                        from(resource in ProjectResource, where: resource.id == ^repository_id)
-                      ) do
+               if !Repo.exists?(from(resource in ProjectResource, where: resource.id == ^repository_id)) do
                  Repo.query!(
                    """
                    INSERT INTO project_resources (
@@ -825,7 +815,7 @@ defmodule SymmetryControl.OrchestrationGoalTransitionsTest do
                  [db_uuid(goal_id), Jason.encode!(policy), @now]
                )
 
-               unless planning? do
+               if !planning? do
                  Repo.query!(
                    """
                    INSERT INTO work_items (
@@ -1047,7 +1037,8 @@ defmodule SymmetryControl.OrchestrationGoalTransitionsTest do
       end)
 
     adapter =
-      native_adapter(harness_kind, harness_version, adapter_version, 1)
+      harness_kind
+      |> native_adapter(harness_version, adapter_version, 1)
       |> put_in(["operations", "resume"], resume?)
       |> put_in(["operations", "handoff"], handoff?)
       |> put_in(["operations", "hard_cost_limit"], hard_cost_limit?)
@@ -1057,27 +1048,29 @@ defmodule SymmetryControl.OrchestrationGoalTransitionsTest do
                machine_id,
                Ecto.UUID.generate(),
                [
-                 %{
-                   runtime_key: "goal-admission-#{label}",
-                   name: "Goal admission #{label}",
-                   capacity: capacity,
-                   agent_profile: "codex",
-                   workspace: "primary",
-                   harness_kind: harness_kind,
-                   harness_version: harness_version,
-                   adapter_version: adapter_version,
-                   adapter_protocol_version: 1,
-                   capabilities: %{
-                     "structured_input" => true,
-                     "interactive" => true,
-                     "adapter" => adapter
-                   }
-                 }
-                 |> then(fn specification ->
-                   if is_nil(repository_resource_id),
-                     do: specification,
-                     else: Map.put(specification, :repository_resource_id, repository_resource_id)
-                 end)
+                 then(
+                   %{
+                     runtime_key: "goal-admission-#{label}",
+                     name: "Goal admission #{label}",
+                     capacity: capacity,
+                     agent_profile: "codex",
+                     workspace: "primary",
+                     harness_kind: harness_kind,
+                     harness_version: harness_version,
+                     adapter_version: adapter_version,
+                     adapter_protocol_version: 1,
+                     capabilities: %{
+                       "structured_input" => true,
+                       "interactive" => true,
+                       "adapter" => adapter
+                     }
+                   },
+                   fn specification ->
+                     if is_nil(repository_resource_id),
+                       do: specification,
+                       else: Map.put(specification, :repository_resource_id, repository_resource_id)
+                   end
+                 )
                ],
                now: @now
              )
@@ -1178,6 +1171,5 @@ defmodule SymmetryControl.OrchestrationGoalTransitionsTest do
     "P" <> Integer.to_string(rem(System.unique_integer([:positive]), 9_999_999))
   end
 
-  defp uuid(number),
-    do: "00000000-0000-0000-0000-" <> String.pad_leading(Integer.to_string(number), 12, "0")
+  defp uuid(number), do: "00000000-0000-0000-0000-" <> String.pad_leading(Integer.to_string(number), 12, "0")
 end

@@ -2,7 +2,10 @@ defmodule SymmetryControlWeb.PortalSessionController do
   use SymmetryControlWeb, :controller
 
   alias Plug.Conn.Status
-  alias SymmetryControlWeb.{PortalHTML, PortalSession, PortalSocketToken, Protocol}
+  alias SymmetryControlWeb.PortalHTML
+  alias SymmetryControlWeb.PortalSession
+  alias SymmetryControlWeb.PortalSocketToken
+  alias SymmetryControlWeb.Protocol
 
   def new(conn, params), do: render_login(conn, :ok, nil, params["return_to"])
 
@@ -31,8 +34,7 @@ defmodule SymmetryControlWeb.PortalSessionController do
   end
 
   def create(conn, params),
-    do:
-      render_login(conn, :unprocessable_entity, "Operator token is required", params["return_to"])
+    do: render_login(conn, :unprocessable_entity, "Operator token is required", params["return_to"])
 
   def delete(conn, _params) do
     conn

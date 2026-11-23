@@ -1,5 +1,7 @@
 defmodule SymmetryControl.Orchestration.Machine do
+  @moduledoc false
   use Ecto.Schema
+
   import Ecto.Changeset
 
   @primary_key {:id, :binary_id, autogenerate: true}
@@ -26,13 +28,13 @@ defmodule SymmetryControl.Orchestration.Machine do
       |> validate_required([:name, :token_digest])
       |> validate_inclusion(:enrollment_request_hash_version, [1, 2])
       |> unique_constraint(:enrollment_idempotency_key)
-      |> check_constraint(:enrollment_request_hash_version,
-        name: :machines_enrollment_request_hash_version_check
-      )
+      |> check_constraint(:enrollment_request_hash_version, name: :machines_enrollment_request_hash_version_check)
 end
 
 defmodule SymmetryControl.Orchestration.Runtime do
+  @moduledoc false
   use Ecto.Schema
+
   import Ecto.Changeset
 
   @primary_key {:id, :binary_id, autogenerate: true}
@@ -141,7 +143,9 @@ defmodule SymmetryControl.Orchestration.Runtime do
 end
 
 defmodule SymmetryControl.Orchestration.Task do
+  @moduledoc false
   use Ecto.Schema
+
   import Ecto.Changeset
 
   @primary_key {:id, :binary_id, autogenerate: true}
@@ -375,7 +379,9 @@ defmodule SymmetryControl.Orchestration.Task do
 end
 
 defmodule SymmetryControl.Orchestration.Run do
+  @moduledoc false
   use Ecto.Schema
+
   import Ecto.Changeset
 
   @primary_key {:id, :binary_id, autogenerate: true}
@@ -466,7 +472,9 @@ defmodule SymmetryControl.Orchestration.Run do
 end
 
 defmodule SymmetryControl.Orchestration.RunEvent do
+  @moduledoc false
   use Ecto.Schema
+
   import Ecto.Changeset
 
   @primary_key {:id, :binary_id, autogenerate: true}
@@ -486,25 +494,8 @@ defmodule SymmetryControl.Orchestration.RunEvent do
   def changeset(event, attrs),
     do:
       event
-      |> cast(attrs, [
-        :run_id,
-        :event_id,
-        :request_hash,
-        :request_hash_version,
-        :sequence,
-        :kind,
-        :payload,
-        :occurred_at
-      ])
-      |> validate_required([
-        :run_id,
-        :event_id,
-        :request_hash,
-        :sequence,
-        :kind,
-        :payload,
-        :occurred_at
-      ])
+      |> cast(attrs, [:run_id, :event_id, :request_hash, :request_hash_version, :sequence, :kind, :payload, :occurred_at])
+      |> validate_required([:run_id, :event_id, :request_hash, :sequence, :kind, :payload, :occurred_at])
       |> validate_number(:sequence, greater_than_or_equal_to: 0)
       |> unique_constraint([:run_id, :event_id])
       |> validate_inclusion(:request_hash_version, [1, 2])
@@ -512,7 +503,9 @@ defmodule SymmetryControl.Orchestration.RunEvent do
 end
 
 defmodule SymmetryControl.Orchestration.RunTransition do
+  @moduledoc false
   use Ecto.Schema
+
   import Ecto.Changeset
 
   @primary_key {:id, :binary_id, autogenerate: true}
@@ -530,32 +523,18 @@ defmodule SymmetryControl.Orchestration.RunTransition do
   def changeset(transition, attrs),
     do:
       transition
-      |> cast(attrs, [
-        :run_id,
-        :transition_id,
-        :request_hash,
-        :request_hash_version,
-        :state,
-        :payload
-      ])
+      |> cast(attrs, [:run_id, :transition_id, :request_hash, :request_hash_version, :state, :payload])
       |> validate_required([:run_id, :transition_id, :request_hash, :state, :payload])
-      |> validate_inclusion(:state, [
-        "running",
-        "paused",
-        "waiting_for_input",
-        "completed",
-        "failed",
-        "cancelled"
-      ])
+      |> validate_inclusion(:state, ["running", "paused", "waiting_for_input", "completed", "failed", "cancelled"])
       |> unique_constraint([:run_id, :transition_id])
       |> validate_inclusion(:request_hash_version, [1, 2])
-      |> check_constraint(:request_hash_version,
-        name: :run_transitions_request_hash_version_check
-      )
+      |> check_constraint(:request_hash_version, name: :run_transitions_request_hash_version_check)
 end
 
 defmodule SymmetryControl.Orchestration.Command do
+  @moduledoc false
   use Ecto.Schema
+
   import Ecto.Changeset
 
   @primary_key {:id, :binary_id, autogenerate: true}

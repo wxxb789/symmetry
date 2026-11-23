@@ -1,7 +1,18 @@
 defmodule SymmetryControl.OrchestrationCommandsTest do
   use SymmetryControl.OrchestrationCase, async: false
 
+  alias SymmetryControl.Goals
+  alias SymmetryControl.Goals.Goal
+  alias SymmetryControl.Goals.GoalBudgetReservation
+  alias SymmetryControl.Goals.GoalEvent
+  alias SymmetryControl.Goals.GoalRevision
+  alias SymmetryControl.Goals.HarnessSession
   alias SymmetryControl.Orchestration
+  alias SymmetryControl.Orchestration.Command
+  alias SymmetryControl.Orchestration.Runtime
+  alias SymmetryControl.Orchestration.Task
+  alias SymmetryControl.Workspaces.Project
+  alias SymmetryControl.Workspaces.ProjectResource
 
   @now ~U[2026-09-02 00:00:00.000000Z]
 
@@ -27,9 +38,9 @@ defmodule SymmetryControl.OrchestrationCommandsTest do
                now: @now
              )
 
-    expired_at = DateTime.add(@now, 30, :second)
-    grace_boundary = DateTime.add(@now, 510, :second)
-    after_grace = DateTime.add(grace_boundary, 1, :second)
+    expired_at = DateTime.shift(@now, second: 30)
+    grace_boundary = DateTime.shift(@now, second: 510)
+    after_grace = DateTime.shift(grace_boundary, second: 1)
 
     assert %{expired_runs: 1} = Orchestration.expire(now: expired_at)
     assert {:ok, %{state: "expired"}} = Orchestration.fetch_run(expired_run.id)
@@ -102,7 +113,7 @@ defmodule SymmetryControl.OrchestrationCommandsTest do
                now: @now
              )
 
-    assert %{expired_runs: 1} = Orchestration.expire(now: DateTime.add(@now, 30, :second))
+    assert %{expired_runs: 1} = Orchestration.expire(now: DateTime.shift(@now, second: 30))
 
     assert {:error, :terminal_grace_expired} =
              Orchestration.acknowledge_command(
@@ -110,14 +121,14 @@ defmodule SymmetryControl.OrchestrationCommandsTest do
                fence,
                "applied",
                Ecto.UUID.generate(),
-               now: DateTime.add(@now, 511, :second)
+               now: DateTime.shift(@now, second: 511)
              )
   end
 
   test "terminal transition replays and acknowledgement conflicts survive grace" do
     {_task, run, _runtime, fence} = terminal_grace_fixture("terminal-replay")
-    inside_grace = DateTime.add(@now, 509, :second)
-    outside_grace = DateTime.add(@now, 511, :second)
+    inside_grace = DateTime.shift(@now, second: 509)
+    outside_grace = DateTime.shift(@now, second: 511)
     transition_id = Ecto.UUID.generate()
     transition_payload = %{"summary" => "completed after expiry"}
 
@@ -154,9 +165,7 @@ defmodule SymmetryControl.OrchestrationCommandsTest do
     {ack_task, ack_run, _runtime, ack_fence} = terminal_grace_fixture("ack-replay")
 
     assert {:ok, command, :created} =
-             Orchestration.create_command(ack_task.id, "cancel", %{}, "ack-replay-command",
-               now: @now
-             )
+             Orchestration.create_command(ack_task.id, "cancel", %{}, "ack-replay-command", now: @now)
 
     acknowledgement_id = Ecto.UUID.generate()
 
@@ -365,20 +374,6 @@ defmodule SymmetryControl.OrchestrationCommandsTest do
     {task, run, runtime, fence}
   end
 
-  alias SymmetryControl.Goals
-
-  alias SymmetryControl.Goals.{
-    Goal,
-    GoalBudgetReservation,
-    GoalEvent,
-    GoalRevision,
-    HarnessSession
-  }
-
-  alias SymmetryControl.Orchestration
-  alias SymmetryControl.Orchestration.{Command, Runtime, Task}
-  alias SymmetryControl.Workspaces.{Project, ProjectResource}
-
   # The cases below came from the other base file's region and pin its clock;
   # the shadowing is intentional, so do not move a case across this line.
   @now ~U[2026-09-09 09:00:00.000000Z]
@@ -392,9 +387,7 @@ defmodule SymmetryControl.OrchestrationCommandsTest do
     assert {:error, :goal_authority_required} = Orchestration.request_cancel(task.id, now: @now)
 
     assert {:error, :goal_authority_required} =
-             Orchestration.provide_input(task.id, %{"answer" => "legacy"}, "legacy-goal-input",
-               now: @now
-             )
+             Orchestration.provide_input(task.id, %{"answer" => "legacy"}, "legacy-goal-input", now: @now)
 
     assert {:error, :goal_authority_required} =
              Orchestration.retry_task(
@@ -681,7 +674,7 @@ defmodule SymmetryControl.OrchestrationCommandsTest do
     admission_key = Ecto.UUID.generate()
     reservation_id = Ecto.UUID.generate()
     repository_id = Keyword.get(opts, :repository_id, Ecto.UUID.generate())
-    validation_of_task_id = if purpose == "validate", do: Ecto.UUID.generate(), else: nil
+    validation_of_task_id = if purpose == "validate", do: Ecto.UUID.generate()
     validation_bindings = Keyword.get(opts, :validation_bindings, [])
     policy = Keyword.get(opts, :execution_policy, execution_policy(max_run_attempts))
     allowed_runtime_ids = Map.get(policy, "allowed_runtime_ids", [])
@@ -694,27 +687,29 @@ defmodule SymmetryControl.OrchestrationCommandsTest do
     task_inserted_at = Keyword.get(opts, :inserted_at, @now)
 
     task_input =
-      %{
-        "subject" => %{
-          "resource_id" => repository_id,
-          "commit" => String.duplicate("a", 40),
-          "tree_digest" => "sha256:" <> String.duplicate("b", 64)
-        }
-      }
-      |> then(fn input ->
-        if requested_session_id do
-          input
-          |> Map.put("session_mode", "resume")
-          |> Map.put("requested_session_id", requested_session_id)
-        else
-          input
+      then(
+        %{
+          "subject" => %{
+            "resource_id" => repository_id,
+            "commit" => String.duplicate("a", 40),
+            "tree_digest" => "sha256:" <> String.duplicate("b", 64)
+          }
+        },
+        fn input ->
+          if requested_session_id do
+            input
+            |> Map.put("session_mode", "resume")
+            |> Map.put("requested_session_id", requested_session_id)
+          else
+            input
+          end
         end
-      end)
+      )
 
     task_input =
       Map.put(task_input, "limits", %{
         "max_turns" => 1,
-        "deadline_at" => DateTime.to_iso8601(DateTime.add(@now, 15 * 60, :second)),
+        "deadline_at" => DateTime.to_iso8601(DateTime.shift(@now, minute: 15)),
         "max_cost_microusd" =>
           if(strict_budget?,
             do: Integer.to_string(Map.fetch!(policy, "per_run_cost_limit_microusd"))
@@ -734,9 +729,7 @@ defmodule SymmetryControl.OrchestrationCommandsTest do
                  )
                end
 
-               unless Repo.exists?(
-                        from(resource in ProjectResource, where: resource.id == ^repository_id)
-                      ) do
+               if !Repo.exists?(from(resource in ProjectResource, where: resource.id == ^repository_id)) do
                  Repo.query!(
                    """
                    INSERT INTO project_resources (
@@ -777,7 +770,7 @@ defmodule SymmetryControl.OrchestrationCommandsTest do
                  [db_uuid(goal_id), Jason.encode!(policy), @now]
                )
 
-               unless planning? do
+               if !planning? do
                  Repo.query!(
                    """
                    INSERT INTO work_items (

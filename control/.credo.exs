@@ -12,7 +12,7 @@
       strict: true,
       # Credo *skips* a source file above this cap and still prints a summary, silently
       # under-reporting the count; 30000 is a hang guard, not a budget.
-      parse_timeout: 30000,
+      parse_timeout: 30_000,
       # CI greps the summary line; colour escapes would make the counts differ from a local run.
       color: false,
       # An empty `checks: %{}` falls back to Credo's built-in defaults and silently
@@ -25,8 +25,7 @@
           {Credo.Check.Consistency.SpaceAroundOperators, []},
           {Credo.Check.Consistency.SpaceInParentheses, []},
           {Credo.Check.Consistency.TabsOrSpaces, []},
-          {Credo.Check.Design.AliasUsage,
-           [priority: :low, if_nested_deeper_than: 2, if_called_more_often_than: 0]},
+          {Credo.Check.Design.AliasUsage, [priority: :low, if_nested_deeper_than: 2, if_called_more_often_than: 0]},
           # Opt-in upstream; `mass_threshold` (Credo 1.7 spelling) 40 is the check default.
           {Credo.Check.Design.DuplicatedCode, [mass_threshold: 40]},
           {Credo.Check.Design.TagFIXME, []},

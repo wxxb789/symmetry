@@ -75,134 +75,132 @@ defmodule SymmetryControl.Goals.Settlement do
   def settle_task(task_id, run_id, generation, opts \\ [])
 
   def settle_task(task_id, run_id, generation, opts)
-      when is_binary(task_id) and is_binary(run_id) and is_integer(generation) and generation >= 0 and
-             is_list(opts) do
+      when is_binary(task_id) and is_binary(run_id) and is_integer(generation) and generation >= 0 and is_list(opts) do
     with :ok <- valid_uuid(task_id), :ok <- valid_uuid(run_id) do
-      Repo.transaction(fn ->
+      fn ->
         task_locator = Repo.get(Task, task_id)
 
-        cond do
-          is_nil(task_locator) or is_nil(task_locator.goal_id) ->
-            {:ignored, %{task_id: task_id, run_id: run_id, generation: generation}}
+        if is_nil(task_locator) or is_nil(task_locator.goal_id) do
+          {:ignored, %{task_id: task_id, run_id: run_id, generation: generation}}
+        else
+          goal = lock_goal!(task_locator.goal_id)
 
-          true ->
-            goal = lock_goal!(task_locator.goal_id)
+          # Keep settlement compatible with commands that take a WorkItem
+          # lock: Goal -> WorkItem -> Tasks (sorted) -> Runs (sorted).
+          item =
+            if task_locator.work_item_id,
+              do: lock_work_item!(task_locator.work_item_id)
 
-            # Keep settlement compatible with commands that take a WorkItem
-            # lock: Goal -> WorkItem -> Tasks (sorted) -> Runs (sorted).
-            item =
-              if task_locator.work_item_id,
-                do: lock_work_item!(task_locator.work_item_id)
+          {task, producer} =
+            lock_settlement_tasks!(task_id, task_locator.validation_of_task_id)
 
-            {task, producer} =
-              lock_settlement_tasks!(task_id, task_locator.validation_of_task_id)
+          if !(settlement_task_owned_by_goal?(task, goal, item) and
+                 task.work_item_id == task_locator.work_item_id and
+                 task.validation_of_task_id == task_locator.validation_of_task_id),
+             do: rollback(:stale_run)
 
-            unless settlement_task_owned_by_goal?(task, goal, item) and
-                     task.work_item_id == task_locator.work_item_id and
-                     task.validation_of_task_id == task_locator.validation_of_task_id,
-                   do: rollback(:stale_run)
+          {run, producing_run} = lock_settlement_runs!(run_id, task_id, producer)
 
-            {run, producing_run} = lock_settlement_runs!(run_id, task_id, producer)
+          if is_nil(run) or run.generation != generation or
+               run.state not in @terminal_run_states or task.current_generation != generation or
+               task.state not in @terminal_run_states do
+            rollback(:stale_run)
+          end
 
-            if is_nil(run) or run.generation != generation or
-                 run.state not in @terminal_run_states or task.current_generation != generation or
-                 task.state not in @terminal_run_states do
-              rollback(:stale_run)
-            end
+          mutation_id = settlement_mutation_id(task.id, run.id, generation)
 
-            mutation_id = settlement_mutation_id(task.id, run.id, generation)
+          body = %{
+            task_id: task.id,
+            run_id: run.id,
+            generation: generation,
+            state: run.state,
+            goal_revision: task.goal_revision
+          }
 
-            body = %{
-              task_id: task.id,
-              run_id: run.id,
-              generation: generation,
-              state: run.state,
-              goal_revision: task.goal_revision
-            }
+          case replay_command(goal.id, mutation_id, body) do
+            {:ok, receipt} ->
+              {:replayed, Map.put(receipt.response, "event_sequence", receipt.event.sequence)}
 
-            case replay_command(goal.id, mutation_id, body) do
-              {:ok, receipt} ->
-                {:replayed, Map.put(receipt.response, "event_sequence", receipt.event.sequence)}
+            :missing ->
+              Budget.reconcile_reservation!(goal, task, opts)
 
-              :missing ->
-                Budget.reconcile_reservation!(goal, task, opts)
+              mark_harness_session_unavailable!(run, opts)
 
-                mark_harness_session_unavailable!(run, opts)
+              terminal =
+                if plan_task?(task) do
+                  terminal_plan_settlement!(goal, task, run, opts)
+                else
+                  terminal_settlement!(goal, item, task, run, producer, producing_run, opts)
+                end
 
-                terminal =
-                  if plan_task?(task) do
-                    terminal_plan_settlement!(goal, task, run, opts)
-                  else
-                    terminal_settlement!(goal, item, task, run, producer, producing_run, opts)
-                  end
+              external_wait =
+                if plan_task?(task),
+                  do: nil,
+                  else: prepare_external_wait!(goal, item, task, run, terminal, opts)
 
-                external_wait =
-                  if plan_task?(task),
-                    do: nil,
-                    else: prepare_external_wait!(goal, item, task, run, terminal, opts)
+              terminal =
+                terminal
+                |> external_observation_terminal!(task, external_wait)
+                |> unsupported_external_wait_terminal(external_wait)
 
-                terminal =
-                  terminal
-                  |> external_observation_terminal!(task, external_wait)
-                  |> unsupported_external_wait_terminal(external_wait)
+              next_wake_at = terminal_next_wake_at(goal, task, terminal, opts)
 
-                next_wake_at = terminal_next_wake_at(goal, task, terminal, opts)
+              terminal = Map.put(terminal, :next_wake_at, next_wake_at)
 
-                terminal = Map.put(terminal, :next_wake_at, next_wake_at)
+              response = %{
+                "goal_id" => goal.id,
+                "goal_revision" => task.goal_revision,
+                "mutation_id" => mutation_id,
+                "task_id" => task.id,
+                "run_id" => run.id,
+                "generation" => generation,
+                "settlement" => terminal.settlement,
+                "result_id" => terminal.result_id,
+                "result_kind" => terminal.result_kind,
+                "reason" => terminal.reason,
+                "blocker" => terminal.blocker,
+                "decision_id" => terminal.decision_id,
+                "proposed_next_action" => terminal.proposed_next_action,
+                "proposed_next_action_status" =>
+                  if(is_nil(terminal.proposed_next_action), do: nil, else: "proposal_only"),
+                "subject_hash" => terminal.subject_hash,
+                "evidence_refs" => terminal.evidence_refs,
+                "next_wake_at" => nullable_datetime(next_wake_at)
+              }
 
-                response = %{
-                  "goal_id" => goal.id,
-                  "goal_revision" => task.goal_revision,
-                  "mutation_id" => mutation_id,
-                  "task_id" => task.id,
-                  "run_id" => run.id,
-                  "generation" => generation,
-                  "settlement" => terminal.settlement,
-                  "result_id" => terminal.result_id,
-                  "result_kind" => terminal.result_kind,
-                  "reason" => terminal.reason,
-                  "blocker" => terminal.blocker,
-                  "decision_id" => terminal.decision_id,
-                  "proposed_next_action" => terminal.proposed_next_action,
-                  "proposed_next_action_status" =>
-                    if(is_nil(terminal.proposed_next_action), do: nil, else: "proposal_only"),
-                  "subject_hash" => terminal.subject_hash,
-                  "evidence_refs" => terminal.evidence_refs,
-                  "next_wake_at" => nullable_datetime(next_wake_at)
-                }
-
-                event =
-                  append_event!(
-                    goal,
-                    mutation_id,
-                    "task_settled",
-                    "system:settlement",
-                    body,
-                    response,
-                    opts
-                    |> Keyword.put(:event_revision, task.goal_revision)
-                    |> Keyword.put(:settlement_next_wake_at, next_wake_at),
-                    false
-                  )
-
-                finalize_external_wait!(
-                  external_wait,
-                  event,
+              event =
+                append_event!(
                   goal,
-                  item,
-                  task,
-                  run,
-                  terminal,
+                  mutation_id,
+                  "task_settled",
+                  "system:settlement",
+                  body,
+                  response,
                   opts
+                  |> Keyword.put(:event_revision, task.goal_revision)
+                  |> Keyword.put(:settlement_next_wake_at, next_wake_at),
+                  false
                 )
 
-                {:created, Map.put(response, "event_sequence", event.sequence)}
+              finalize_external_wait!(
+                external_wait,
+                event,
+                goal,
+                item,
+                task,
+                run,
+                terminal,
+                opts
+              )
 
-              {:error, reason} ->
-                rollback(reason)
-            end
+              {:created, Map.put(response, "event_sequence", event.sequence)}
+
+            {:error, reason} ->
+              rollback(reason)
+          end
         end
-      end)
+      end
+      |> Repo.transaction()
       |> case do
         {:ok, {_disposition, response}} -> {:ok, response}
         {:error, reason} -> {:error, reason}
@@ -217,15 +215,7 @@ defmodule SymmetryControl.Goals.Settlement do
   # A terminal Run is durable execution history. A completed validation candidate
   # may derive accepted or rejected work from its frozen Subject and persisted
   # evidence; other typed results remain immutable receipts only.
-  def terminal_settlement!(
-        goal,
-        item,
-        task,
-        %Run{state: "completed"} = run,
-        producer,
-        producing_run,
-        opts
-      ) do
+  def terminal_settlement!(goal, item, task, %Run{state: "completed"} = run, producer, producing_run, opts) do
     task_result = value(run.result || %{}, "task_result")
 
     if is_nil(task_result) do
@@ -294,27 +284,11 @@ defmodule SymmetryControl.Goals.Settlement do
     end
   end
 
-  def terminal_settlement!(
-        _goal,
-        _item,
-        _task,
-        %Run{state: "failed"} = run,
-        _producer,
-        _producing_run,
-        opts
-      ),
-      do: process_terminal_settlement("failed", failed_terminal_reason(run, opts))
+  def terminal_settlement!(_goal, _item, _task, %Run{state: "failed"} = run, _producer, _producing_run, opts),
+    do: process_terminal_settlement("failed", failed_terminal_reason(run, opts))
 
-  def terminal_settlement!(
-        _goal,
-        _item,
-        _task,
-        %Run{state: "cancelled"},
-        _producer,
-        _producing_run,
-        _opts
-      ),
-      do: process_terminal_settlement("cancelled", "cancelled")
+  def terminal_settlement!(_goal, _item, _task, %Run{state: "cancelled"}, _producer, _producing_run, _opts),
+    do: process_terminal_settlement("cancelled", "cancelled")
 
   defp terminal_plan_settlement!(goal, task, %Run{state: "completed"} = run, opts) do
     task_result = value(run.result || %{}, "task_result")
@@ -443,17 +417,7 @@ defmodule SymmetryControl.Goals.Settlement do
 
   # Arm order = settlement evaluation order: validation outcome, revision guard, then
   # the TaskResult kind; no catch-all, so an unexpected kind raises instead of settling.
-  defp dispatch_result(
-         goal,
-         task,
-         run,
-         kind,
-         blocker_wake_at,
-         subject_hash,
-         evidence_refs,
-         outcome,
-         opts
-       ) do
+  defp dispatch_result(goal, task, run, kind, blocker_wake_at, subject_hash, evidence_refs, outcome, opts) do
     case {outcome, goal.state, kind} do
       {%WorkOutcome{disposition: "rejected", reason: "historical_result"}, _state, _kind} ->
         {:ok, "historical_result", nil}
@@ -496,25 +460,18 @@ defmodule SymmetryControl.Goals.Settlement do
     end
   end
 
-  defp validation_outcome_reason(
-         %WorkOutcome{disposition: "rejected", reason: "historical_result"},
-         _task_result
-       ),
-       do: "historical_result"
+  defp validation_outcome_reason(%WorkOutcome{disposition: "rejected", reason: "historical_result"}, _task_result),
+    do: "historical_result"
 
-  defp validation_outcome_reason(%WorkOutcome{disposition: "rejected"}, _task_result),
-    do: "validation_failed"
+  defp validation_outcome_reason(%WorkOutcome{disposition: "rejected"}, _task_result), do: "validation_failed"
 
-  defp validation_outcome_reason(%WorkOutcome{disposition: "accepted"}, _task_result),
-    do: "validation_passed"
+  defp validation_outcome_reason(%WorkOutcome{disposition: "accepted"}, _task_result), do: "validation_passed"
 
-  defp validation_outcome_reason(_validation_outcome, task_result),
-    do: value(task_result, "reason")
+  defp validation_outcome_reason(_validation_outcome, task_result), do: value(task_result, "reason")
 
   defp invalid_terminal_settlement(reason) do
     %{
-      settlement:
-        if(reason == "missing_result", do: "missing_result", else: "invalid_task_result"),
+      settlement: if(reason == "missing_result", do: "missing_result", else: "invalid_task_result"),
       result_id: nil,
       result_kind: nil,
       reason: reason,
@@ -577,9 +534,7 @@ defmodule SymmetryControl.Goals.Settlement do
     end
   end
 
-  defp external_wait_for_observation(_goal, _item, %Task{purpose: purpose})
-       when purpose != "observe",
-       do: nil
+  defp external_wait_for_observation(_goal, _item, %Task{purpose: purpose}) when purpose != "observe", do: nil
 
   defp external_wait_for_observation(goal, item, task) do
     case Repo.one(
@@ -673,16 +628,7 @@ defmodule SymmetryControl.Goals.Settlement do
     :ok
   end
 
-  defp finalize_external_wait!(
-         {:unsupported, _wait},
-         _event,
-         _goal,
-         _item,
-         _task,
-         _run,
-         _terminal,
-         _opts
-       ) do
+  defp finalize_external_wait!({:unsupported, _wait}, _event, _goal, _item, _task, _run, _terminal, _opts) do
     # Existing unsupported waits are terminal historical records. Their first
     # settlement event is immutable, so a later Task cannot attach a new one.
     :ok
@@ -690,10 +636,7 @@ defmodule SymmetryControl.Goals.Settlement do
 
   defp external_observation_terminal!(terminal, _task, _external_wait), do: terminal
 
-  defp unsupported_external_wait_terminal(
-         %{result_kind: "progress"} = terminal,
-         {:unsupported, %GoalExternalWait{}}
-       ) do
+  defp unsupported_external_wait_terminal(%{result_kind: "progress"} = terminal, {:unsupported, %GoalExternalWait{}}) do
     %{
       terminal
       | settlement: "no_verified_progress",
@@ -703,10 +646,7 @@ defmodule SymmetryControl.Goals.Settlement do
     }
   end
 
-  defp unsupported_external_wait_terminal(
-         terminal,
-         {:new, %{"kind" => "external"}}
-       ) do
+  defp unsupported_external_wait_terminal(terminal, {:new, %{"kind" => "external"}}) do
     %{
       terminal
       | reason: "unsupported_external_check",
@@ -803,7 +743,7 @@ defmodule SymmetryControl.Goals.Settlement do
          true <-
            decision.goal_id == goal.id and decision.goal_revision == task.goal_revision and
              decision.state == "open" and decision.work_item_id in [nil, item.id] and
-             (is_nil(decision.expires_at) or DateTime.compare(decision.expires_at, current) == :gt) do
+             (is_nil(decision.expires_at) or DateTime.after?(decision.expires_at, current)) do
       {:ok, %{"kind" => "decision", "decision_id" => decision.id}, nil}
     else
       _ -> {:error, "invalid_blocker"}
@@ -911,18 +851,17 @@ defmodule SymmetryControl.Goals.Settlement do
 
   defp progress_has_new_verification?(goal, task, run, subject_hash, evidence_refs, opts) do
     previous_progress =
-      Repo.all(
-        from(previous_run in Run,
-          join: previous_task in Task,
-          on: previous_task.id == previous_run.task_id,
-          where:
-            previous_run.id != ^run.id and previous_run.state == "completed" and
-              previous_task.goal_id == ^goal.id and
-              previous_task.goal_revision == ^task.goal_revision and
-              previous_task.work_item_id == ^item_id(task),
-          select: %{run: previous_run, task: previous_task}
-        )
+      from(previous_run in Run,
+        join: previous_task in Task,
+        on: previous_task.id == previous_run.task_id,
+        where:
+          previous_run.id != ^run.id and previous_run.state == "completed" and
+            previous_task.goal_id == ^goal.id and
+            previous_task.goal_revision == ^task.goal_revision and
+            previous_task.work_item_id == ^item_id(task),
+        select: %{run: previous_run, task: previous_task}
       )
+      |> Repo.all()
       |> Enum.flat_map(fn %{run: previous_run} ->
         previous_result = value(previous_run.result || %{}, "task_result")
 
@@ -965,26 +904,25 @@ defmodule SymmetryControl.Goals.Settlement do
   defp evidence_fingerprints([]), do: MapSet.new()
 
   defp evidence_fingerprints(evidence_ids) do
-    Repo.all(
-      from(evidence in RunEvidence,
-        where: evidence.id in ^evidence_ids,
-        select: %{
-          kind: evidence.kind,
-          source_ref: evidence.source_ref,
-          source_revision: evidence.source_revision,
-          validator_profile: evidence.validator_profile,
-          verdict: evidence.verdict,
-          payload: evidence.payload
-        }
-      )
+    from(evidence in RunEvidence,
+      where: evidence.id in ^evidence_ids,
+      select: %{
+        kind: evidence.kind,
+        source_ref: evidence.source_ref,
+        source_revision: evidence.source_revision,
+        validator_profile: evidence.validator_profile,
+        verdict: evidence.verdict,
+        payload: evidence.payload
+      }
     )
+    |> Repo.all()
     |> MapSet.new(&RequestHash.canonical/1)
   end
 
   defp future_utc_datetime(value, current) when is_binary(value) do
     case DateTime.from_iso8601(value) do
       {:ok, datetime, 0} ->
-        if DateTime.compare(datetime, current) == :gt,
+        if DateTime.after?(datetime, current),
           do: {:ok, datetime},
           else: {:error, :invalid_datetime}
 
@@ -1012,7 +950,7 @@ defmodule SymmetryControl.Goals.Settlement do
       end
 
     external_wait_wake_at =
-      if goal.state == "active", do: external_wait_wake_at(goal, current), else: nil
+      if goal.state == "active", do: external_wait_wake_at(goal, current)
 
     if next_wake_at == current do
       current
@@ -1029,20 +967,19 @@ defmodule SymmetryControl.Goals.Settlement do
     case existing_future_wake(existing, current) do
       nil -> requested
       existing when is_nil(requested) -> existing
-      existing -> if(DateTime.compare(existing, requested) == :lt, do: existing, else: requested)
+      existing -> if(DateTime.before?(existing, requested), do: existing, else: requested)
     end
   end
 
   defp existing_future_wake(%DateTime{} = wake_at, current) do
-    if DateTime.compare(wake_at, current) == :gt, do: wake_at, else: nil
+    if DateTime.after?(wake_at, current), do: wake_at
   end
 
   defp existing_future_wake(_wake_at, _current), do: nil
 
   def settle_unstarted_task(task_id, reason, opts \\ [])
 
-  def settle_unstarted_task(task_id, reason, opts)
-      when is_binary(task_id) and is_binary(reason) and is_list(opts) do
+  def settle_unstarted_task(task_id, reason, opts) when is_binary(task_id) and is_binary(reason) and is_list(opts) do
     with :ok <- valid_uuid(task_id),
          {:ok, reason} <- required_string(%{reason: reason}, :reason) do
       if reason == "cancelled",
@@ -1054,7 +991,7 @@ defmodule SymmetryControl.Goals.Settlement do
   def settle_unstarted_task(_, _, _), do: {:error, :invalid_request}
 
   defp settle_unstarted_cancelled(task_id, reason, opts) do
-    Repo.transaction(fn ->
+    fn ->
       untrusted_task = Repo.get(Task, task_id) || rollback(:not_found)
       goal = lock_goal!(untrusted_task.goal_id || rollback(:not_found))
       mutation_id = unstarted_settlement_mutation_id(task_id, reason)
@@ -1074,12 +1011,12 @@ defmodule SymmetryControl.Goals.Settlement do
           item = if untrusted_task.work_item_id, do: lock_work_item!(untrusted_task.work_item_id)
           task = lock_task!(task_id)
 
-          unless settlement_task_owned_by_goal?(task, goal, item) and task.state == "cancelled" and
-                   not Repo.exists?(from(run in Run, where: run.task_id == ^task.id)) do
+          if !(settlement_task_owned_by_goal?(task, goal, item) and task.state == "cancelled" and
+                 not Repo.exists?(from(run in Run, where: run.task_id == ^task.id))) do
             rollback(:invalid_unstarted_settlement)
           end
 
-          unless Recovery.recoverable_historical_unstarted_cancellation?(goal, task.id),
+          if !Recovery.recoverable_historical_unstarted_cancellation?(goal, task.id),
             do: rollback(:invalid_unstarted_settlement)
 
           reservation =
@@ -1090,7 +1027,7 @@ defmodule SymmetryControl.Goals.Settlement do
               )
             ) || rollback(:not_found)
 
-          unless reservation.state == "held", do: rollback(:invalid_unstarted_settlement)
+          if reservation.state != "held", do: rollback(:invalid_unstarted_settlement)
 
           reservation
           |> GoalBudgetReservation.settle_changeset("released")
@@ -1122,7 +1059,8 @@ defmodule SymmetryControl.Goals.Settlement do
         {:error, error} ->
           rollback(error)
       end
-    end)
+    end
+    |> Repo.transaction()
     |> case do
       {:ok, {_disposition, response}} -> {:ok, response}
       {:error, error} -> {:error, error}
@@ -1139,13 +1077,12 @@ defmodule SymmetryControl.Goals.Settlement do
       |> Enum.sort()
 
     tasks =
-      Repo.all(
-        from(task in Task,
-          where: task.id in ^ids,
-          order_by: [asc: task.id],
-          lock: "FOR UPDATE"
-        )
+      from(task in Task,
+        where: task.id in ^ids,
+        order_by: [asc: task.id],
+        lock: "FOR UPDATE"
       )
+      |> Repo.all()
       |> Map.new(&{&1.id, &1})
 
     task = Map.get(tasks, task_id) || rollback(:not_found)
@@ -1178,13 +1115,12 @@ defmodule SymmetryControl.Goals.Settlement do
       |> Enum.sort()
 
     runs =
-      Repo.all(
-        from(run in Run,
-          where: run.id in ^ids,
-          order_by: [asc: run.id],
-          lock: "FOR UPDATE"
-        )
+      from(run in Run,
+        where: run.id in ^ids,
+        order_by: [asc: run.id],
+        lock: "FOR UPDATE"
       )
+      |> Repo.all()
       |> Map.new(&{&1.id, &1})
 
     run = Map.get(runs, run_id)
@@ -1202,14 +1138,7 @@ defmodule SymmetryControl.Goals.Settlement do
   defp task_result_matches_task?(task, "plan_proposed"), do: plan_task?(task)
 
   defp task_result_matches_task?(task, kind)
-       when kind in [
-              "progress",
-              "candidate_completion",
-              "blocked",
-              "repair_required",
-              "replan_required",
-              "failed"
-            ],
+       when kind in ["progress", "candidate_completion", "blocked", "repair_required", "replan_required", "failed"],
        do: not plan_task?(task)
 
   defp task_result_matches_task?(_task, _kind), do: false

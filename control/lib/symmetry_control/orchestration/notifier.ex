@@ -3,8 +3,7 @@ defmodule SymmetryControl.Orchestration.Notifier do
 
   alias SymmetryControl.Orchestration
 
-  def command_available(%{id: command_id, state: "pending", run_id: run_id})
-      when is_binary(run_id) do
+  def command_available(%{id: command_id, state: "pending", run_id: run_id}) when is_binary(run_id) do
     with {:ok, %{machine_id: machine_id, runtime_id: runtime_id}} <-
            Orchestration.assignment_target(run_id) do
       Phoenix.PubSub.broadcast(
