@@ -26,6 +26,10 @@ review findings (0007f)` and `(0007h)` sections below were moved on 2026-11-19 f
 The closed reversed-import Control flake appended to the second `## Dead-code candidates` section
 below was moved on 2026-11-20 from branch `investigate/flake-reversed-import`.
 
+The closed Credo deflation half of the `.github/workflows/ci.yml` actionlint item appended to the
+`## Comment-policy sweep: debt the deleted comments recorded (2026-11-22)` section below was moved
+on 2026-11-23 from branch `refactor/rf-w6-10-elixir-lint-coverage-flips`.
+
 The citation existence check and the changed-path classifier fixture appended to `## Record and
 documentation hygiene` below were moved on 2026-11-20 from branch `fix/ci-classifier-gates`.
 
@@ -4567,6 +4571,17 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
       their surviving two-line comment needed no edit — the pre-slice #185 comment that named the
       deferral was shortened by this sweep before the slice started. Evidence record:
       `docs/evidence/rf-w4-22-response-loss-seal-consumer-2026-11-23.md`.
+
+- [ ] `.github/workflows/ci.yml`: Credo printed the same numbered list for files skipped over
+      `parse_timeout` and for unparsable files, so the strict baseline could deflate while only a
+      guard printed.
+
+      **Closed (2026-11-23, branch `refactor/rf-w6-10-elixir-lint-coverage-flips`, plan
+      `docs/plans/2026-11-23-rf-w6-10-elixir-lint-coverage-flips-plan.md`):** the Credo step is the
+      blocking ratchet gate, and `scripts/ci/assert-credo-strict-baseline.py` refuses a report whose
+      analyzed source set was skipped — a skipped file now fails the gate instead of printing a
+      guard. Credo keeps printing one numbered list for both causes; that is a limit of its output,
+      not a hole in the gate. The actionlint half of the item stays open in `docs/TODO.md`.
 
 ## Codex adapter giant-file split (rf-w5-16, 2026-11-23)
 

@@ -10,9 +10,9 @@ defmodule SymmetryControl.MixProject do
       start_permanent: Mix.env() == :prod,
       aliases: aliases(),
       deps: deps(),
-      # 0 keeps the advisory cover step green: the task's default 90% summary threshold
-      # would fail it; coverage floors become blocking later, not at this step.
-      test_coverage: [summary: [threshold: 0]],
+      # One point under the weakest of three measured totals at the base revision, and now the
+      # blocking floor (docs/evidence/rf-w6-10-elixir-lint-coverage-flips-2026-11-23.md §6).
+      test_coverage: [summary: [threshold: 86.58]],
       listeners: [Phoenix.CodeReloader]
     ]
   end

@@ -193,7 +193,6 @@ CONTRACTS_ADVISORY_STEP = {
 
 ADVISORY_STEPS = frozenset(
     {
-        ("control", "Measure Credo strict findings (advisory)"),
         ("control", "Measure Hex advisories (advisory)"),
         ("daemon", "Measure golangci-lint findings (GOOS=linux, advisory)"),
         ("daemon", "Measure govulncheck findings (advisory)"),
@@ -205,7 +204,7 @@ ADVISORY_STEPS = frozenset(
         ("contracts", "Measure production dependency advisories (advisory)"),
     }
 )
-ADVISORY_JOBS = frozenset({"coverage-control", "coverage-daemon", "coverage-frontend"})
+ADVISORY_JOBS = frozenset({"coverage-daemon", "coverage-frontend"})
 
 
 def require(condition: bool, message: str) -> None:
@@ -788,6 +787,16 @@ class MutationTests(unittest.TestCase):
 
     def test_mutation_removing_an_advisory_step_reddens_the_stale_allowlist_check(self) -> None:
         mutated = self.workflow_text.replace("        continue-on-error: true\n", "", 1)
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaises(AssertionError):
+            check_folded_gate_completeness(mutated, self.action_text)
+
+    def test_mutation_marking_the_control_coverage_job_advisory_reddens_the_completeness_check(self) -> None:
+        mutated = self.workflow_text.replace(
+            "  coverage-control:\n    needs: [changes, contracts]\n    if: needs.changes.outputs.run-heavy == 'true'\n",
+            "  coverage-control:\n    needs: [changes, contracts]"
+            "\n    if: needs.changes.outputs.run-heavy == 'true'\n    continue-on-error: true\n",
+        )
         self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
         with self.assertRaises(AssertionError):
             check_folded_gate_completeness(mutated, self.action_text)

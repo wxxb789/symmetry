@@ -35,6 +35,13 @@ DEFAULT_GATE = "run-heavy"
 UNCONDITIONAL_JOBS = ("legacy-route-audit",)
 COVERAGE_JOBS = ("coverage-control", "coverage-daemon", "coverage-frontend")
 COVERAGE_DAEMON_HEADER = "  coverage-daemon:\n    needs: changes\n    if: needs.changes.outputs.run-heavy == 'true'\n"
+COVERAGE_CONTROL_HEADER = (
+    "  coverage-control:\n    needs: [changes, contracts]\n    if: needs.changes.outputs.run-heavy == 'true'\n"
+)
+# The Control floor is blocking (rf-w6-10): its job drops the advisory flag, while the Go and
+# vitest jobs stay advisory until their own flips (rf-w6-12).
+BLOCKING_COVERAGE_JOBS = ("coverage-control",)
+ADVISORY_COVERAGE_JOBS = ("coverage-daemon", "coverage-frontend")
 # No package is excluded from the daemon cover command: `go test` sets GOCOVERDIR for each
 # instrumented test binary, and `internal/execution`'s re-exec'd helper children forward it.
 COVERAGE_UPLOADS = {
@@ -511,12 +518,23 @@ def check_coverage_plane_routing(
 
 def check_coverage_jobs_are_advisory(workflow_text: str) -> None:
     blocks = job_blocks(workflow_text)
-    for name in COVERAGE_JOBS:
+    for name in ADVISORY_COVERAGE_JOBS:
         require(name in blocks, f"the workflow has no coverage job {name!r}")
         require(
             any(line == "    continue-on-error: true" for line in blocks[name]),
             f"coverage job {name} must carry the job-level `continue-on-error: true`: a coverage "
             "failure must not be able to gate a pull request",
+        )
+
+
+def check_the_control_coverage_floor_is_blocking(workflow_text: str) -> None:
+    blocks = job_blocks(workflow_text)
+    for name in BLOCKING_COVERAGE_JOBS:
+        require(name in blocks, f"the workflow has no coverage job {name!r}")
+        require(
+            not any(line.startswith("    continue-on-error:") for line in blocks[name]),
+            f"coverage job {name} must drop its job-level `continue-on-error`: its floor is blocking, "
+            "so a coverage count below the mix.exs threshold has to fail the job",
         )
 
 
@@ -988,6 +1006,7 @@ class ChangedPathClassifierTests(unittest.TestCase):
     def test_the_coverage_jobs_follow_the_heavy_matrix_across_every_fixture(self) -> None:
         check_coverage_plane_routing(self.model, self.outputs)
         check_coverage_jobs_are_advisory(self.workflow_text)
+        check_the_control_coverage_floor_is_blocking(self.workflow_text)
         check_coverage_artifacts(self.workflow_text)
 
     # -- mutations: the assertions must fail when a routing is changed --------
@@ -1060,6 +1079,23 @@ class ChangedPathClassifierTests(unittest.TestCase):
         self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
         with self.assertRaises(AssertionError):
             check_coverage_jobs_are_advisory(mutated)
+
+    def test_mutation_restoring_the_control_coverage_jobs_advisory_flag_breaks_the_blocking_check(self) -> None:
+        advisory_line = "    continue-on-error: true\n"
+        self.assertIn(
+            COVERAGE_CONTROL_HEADER,
+            self.workflow_text,
+            "the mutation's anchor must be the control coverage job's gated header",
+        )
+        self.assertNotIn(
+            COVERAGE_CONTROL_HEADER + advisory_line,
+            self.workflow_text,
+            "the control coverage job's floor is blocking; the mutation must restore the flag",
+        )
+        mutated = self.workflow_text.replace(COVERAGE_CONTROL_HEADER, COVERAGE_CONTROL_HEADER + advisory_line)
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaises(AssertionError):
+            check_the_control_coverage_floor_is_blocking(mutated)
 
     def test_mutation_dropping_a_coverage_uploads_always_flag_breaks_the_artifact_check(self) -> None:
         upload = COVERAGE_UPLOADS["coverage-daemon"]

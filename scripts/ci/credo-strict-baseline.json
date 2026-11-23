@@ -1,0 +1,13 @@
+{
+  "revision": "95d1df45e07bb8b4383732b8b394354607f3d2df",
+  "recorded": "2026-11-23",
+  "issues": 564,
+  "files_analyzed": 225,
+  "checks_run": 70,
+  "by_category": {
+    "warning": 5,
+    "refactor": 326,
+    "readability": 160,
+    "design": 73
+  }
+}
