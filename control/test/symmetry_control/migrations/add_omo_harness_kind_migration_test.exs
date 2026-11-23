@@ -1,5 +1,5 @@
 defmodule SymmetryControl.Migrations.AddOmoHarnessKindMigrationTest do
-  use SymmetryControl.MigrationCase, async: false
+  use SymmetryControl.MigrationCase, async: true
 
   alias SymmetryControl.Repo
   alias SymmetryControl.Repo.Migrations.AddOmoHarnessKind
@@ -100,7 +100,9 @@ defmodule SymmetryControl.Migrations.AddOmoHarnessKindMigrationTest do
   defp migrate_omo_down! do
     Ecto.Migrator.run(
       Repo,
-      [{@omo_harness_kind_migration_version, AddOmoHarnessKind}],
+      MigrationModules.verified_pairs!([
+        {@omo_harness_kind_migration_version, AddOmoHarnessKind}
+      ]),
       :down,
       step: 1,
       log: false,

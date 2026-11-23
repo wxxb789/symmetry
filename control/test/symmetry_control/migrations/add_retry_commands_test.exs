@@ -1,5 +1,5 @@
 defmodule SymmetryControl.Migrations.AddRetryCommandsTest do
-  use SymmetryControl.MigrationCase, async: false
+  use SymmetryControl.MigrationCase, async: true
 
   alias SymmetryControl.Repo
   alias SymmetryControl.Repo.Migrations.AddRetryCommands
@@ -9,8 +9,6 @@ defmodule SymmetryControl.Migrations.AddRetryCommandsTest do
   @retry_version 20_260_904_030_000
 
   test "rolls back retry support when no retry history exists" do
-    load_migration_modules!()
-
     with_schema("goal2_retry", fn ->
       migrate_up!()
       task_id = insert_task!()
@@ -34,8 +32,6 @@ defmodule SymmetryControl.Migrations.AddRetryCommandsTest do
   end
 
   test "refuses rollback and preserves durable retry history" do
-    load_migration_modules!()
-
     with_schema("goal2_retry", fn ->
       migrate_up!()
       task_id = insert_task!()
@@ -74,7 +70,7 @@ defmodule SymmetryControl.Migrations.AddRetryCommandsTest do
   end
 
   defp migrate_up! do
-    Ecto.Migrator.run(Repo, migrations(), :up,
+    Ecto.Migrator.run(Repo, MigrationModules.verified_pairs!(migrations()), :up,
       all: true,
       log: false,
       migration_lock: false,
@@ -83,7 +79,7 @@ defmodule SymmetryControl.Migrations.AddRetryCommandsTest do
   end
 
   defp migrate_down! do
-    Ecto.Migrator.run(Repo, migrations(), :down,
+    Ecto.Migrator.run(Repo, MigrationModules.verified_pairs!(migrations()), :down,
       step: 1,
       log: false,
       migration_lock: false,
@@ -132,22 +128,6 @@ defmodule SymmetryControl.Migrations.AddRetryCommandsTest do
       {20_260_903_000_000, AddTaskCommandOwnership},
       {@retry_version, AddRetryCommands}
     ]
-  end
-
-  defp load_migration_modules! do
-    migrations = [
-      {CreateOrchestrationTables, "20260902000000_create_orchestration_tables.exs"},
-      {AddTaskCommandOwnership, "20260903000000_add_task_command_ownership.exs"},
-      {AddRetryCommands, "20260904030000_add_retry_commands.exs"}
-    ]
-
-    Enum.each(migrations, fn {module, filename} ->
-      unless function_exported?(module, :__migration__, 0) do
-        filename
-        |> then(&Path.expand("../../../priv/repo/migrations/#{&1}", __DIR__))
-        |> Code.compile_file()
-      end
-    end)
   end
 
   defp uuid, do: Ecto.UUID.bingenerate()

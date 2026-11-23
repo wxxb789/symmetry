@@ -1,5 +1,5 @@
 defmodule SymmetryControl.Migrations.AddHistoryLookupIndexesTest do
-  use SymmetryControl.MigrationCase, async: false
+  use SymmetryControl.MigrationCase, async: true
 
   alias SymmetryControl.Repo
   alias SymmetryControl.Repo.Migrations.AddHistoryLookupIndexes
@@ -18,21 +18,19 @@ defmodule SymmetryControl.Migrations.AddHistoryLookupIndexesTest do
   ]
 
   test "creates valid history and current-wait lookup indexes after a migration rerun" do
-    load_migration_modules!()
-
     migration_config = Map.new(AddHistoryLookupIndexes.__migration__())
     assert migration_config.disable_ddl_transaction
     refute migration_config.disable_migration_lock
     assert Application.fetch_env!(:symmetry_control, Repo)[:migration_lock] == :pg_advisory_lock
 
-    schema = "history_lookup_indexes_#{System.unique_integer([:positive])}"
+    schema = schema_name("history_lookup_indexes")
     create_schema!(schema)
 
     repo = start_schema_repo(schema)
     previous_dynamic_repo = Repo.put_dynamic_repo(repo)
 
     try do
-      Ecto.Migrator.run(Repo, migrations(), :up,
+      Ecto.Migrator.run(Repo, MigrationModules.verified_pairs!(migrations()), :up,
         all: true,
         log: false,
         migration_lock: false,
@@ -43,7 +41,7 @@ defmodule SymmetryControl.Migrations.AddHistoryLookupIndexesTest do
 
       Repo.query!("DELETE FROM schema_migrations WHERE version = $1", [@migration_version])
 
-      Ecto.Migrator.run(Repo, migrations(), :up,
+      Ecto.Migrator.run(Repo, MigrationModules.verified_pairs!(migrations()), :up,
         all: true,
         log: false,
         migration_lock: false,
@@ -79,7 +77,7 @@ defmodule SymmetryControl.Migrations.AddHistoryLookupIndexesTest do
       assert_indexes_valid!()
     after
       Repo.put_dynamic_repo(previous_dynamic_repo)
-      GenServer.stop(repo)
+      GenServer.stop(repo, :normal, 30_000)
       drop_schema!(schema)
     end
   end
@@ -127,22 +125,5 @@ defmodule SymmetryControl.Migrations.AddHistoryLookupIndexesTest do
       {20_260_903_010_000, AddMachineEnrollmentReplay},
       {@migration_version, AddHistoryLookupIndexes}
     ]
-  end
-
-  defp load_migration_modules! do
-    migrations = [
-      {CreateOrchestrationTables, "20260902000000_create_orchestration_tables.exs"},
-      {AddTaskCommandOwnership, "20260903000000_add_task_command_ownership.exs"},
-      {AddMachineEnrollmentReplay, "20260903010000_add_machine_enrollment_replay.exs"},
-      {AddHistoryLookupIndexes, "20260903020000_add_history_lookup_indexes.exs"}
-    ]
-
-    Enum.each(migrations, fn {module, filename} ->
-      unless function_exported?(module, :__migration__, 0) do
-        filename
-        |> then(&Path.expand("../../../priv/repo/migrations/#{&1}", __DIR__))
-        |> Code.compile_file()
-      end
-    end)
   end
 end

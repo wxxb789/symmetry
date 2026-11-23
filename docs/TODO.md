@@ -1170,6 +1170,42 @@ version pinned` section of `docs/archive/CLOSED-TODO.md`.
       W3-15 cannot: its contract has no wall-time clause and `goals_test.exs` stays `async: false`
       as an app-env mutator.
 
+      **rf-w3-17 update (2026-11-22, branch `refactor/rf-w3-17-migration-tests-async`, plan
+      `docs/plans/2026-11-22-rf-w3-17-migration-tests-async-plan.md`, conductor rulings F-7/F-8):**
+      the D9 pin is removed — all nine files declare `async: true`, the test-time migration compile
+      is replaced by a boot registry (`control/test/support/migration_modules.ex`), which also binds
+      every test-time `{version, module}` source to the compiled files (`verified_pairs!/1`) and
+      owns the one shared base-migration prefix, schema DDL runs on private single-connection Repos,
+      and the two `public.oban_jobs` rollback tests moved to a new `async: false` module
+      (`control/test/symmetry_control/migrations/add_oban_jobs_table_test.exs`) so their
+      `LOCK TABLE … IN SHARE MODE` cannot queue behind an async Oban producer. Measured on this
+      16-scheduler host, same command and partition (`w3-17-runs-pre/` five seeds,
+      `w3-17-r2-runs/` three final-tree seeds): run 656.6 / 605.2 / 803.3 s → 342.7 / 336.0 / 294.0 s;
+      sync phase 625.4 / 568.3 / 766.4 s → 123.1 / 137.8 / 120.1 s; async phase 31.2 / 36.9 / 36.9 s
+      → 219.5 / 198.1 / 173.9 s, now bounded by `Goal0006MigrationTest` alone (its own work
+      202.0 / 178.1 / 154.9 s). Counts and name sets equal the reviewed head `f6b5b176`
+      (`only_left=0 only_right=0 state_diff=0` over `1181 = 1181`), as the attempt-2 streams did
+      against the dispatch base before the branch merged origin/main (`1032 = 1007 + 21 + 4`,
+      seeds 0/1/2, names identical with the F-8 move's two names remapped and the only state
+      movement being two pre-side flakes passing on the post side); the merged tree runs
+      `1181 = 1156 passed + 21 skipped + 4 excluded`. The ten-module set is green at seeds 0-4
+      plus a 5× repeat,
+      with the seven small files at 25× repeat each and `goal_external_wait` at 25×. Five
+      same-workload A/B runs in both orders show the local wall difference is not stable (the
+      path-identical nine-path pair put the post side 16 s wall below the pre side, the
+      nine-pre→ten-post pair sat 40 s above it, and the reversed pair put the pre side 16 s above
+      the preceding post run) while the level drifted inside fifteen minutes and nine-way
+      concurrency inflates each module's own work (summed +16 % to +53 %), so the local number is
+      report-only (W3-14 lesson F4). The review-stage fix revision re-ran the gates on the merged
+      tree (ten-file set seeds 0-4, a 5× set repeat, the per-file sweeps at the accepted counts, one
+      full seed; table in the plan's "Fix-stage verification"). **D9 ruling (2026-11-22, PR #262 CI
+      run 45115861829 vs main run 45109921118):** the `coverage-control` test step moved 166 s →
+      151 s (−9 %), ExUnit 133.9 s → 118.4 s (sync 116.0 → 47.3 s, async 17.9 → 71.0 s), and
+      `redefining module` warnings 516 → 0. The ≤65 s target is NOT reached: the async phase
+      (71.0 s) is now the floor. The slice lands as a measured improvement; this entry stays open
+      with the next lever named by the conductor: profile the longest async module and split it,
+      not more conversions. No further work in this slice.
+
 ## Deferred review findings (PR #197)
 
 - [ ] Unify the three copies of the runtime harness-kind vocabulary left by the rf-w4-19
