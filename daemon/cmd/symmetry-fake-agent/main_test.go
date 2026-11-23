@@ -38,7 +38,9 @@ var (
 )
 
 func TestMain(mainTest *testing.M) {
+	restore := execution.UseInProcessContainmentSupervisorForTesting()
 	code := mainTest.Run()
+	restore()
 	if fixtureDirectory != "" {
 		_ = os.RemoveAll(fixtureDirectory)
 	}
