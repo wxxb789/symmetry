@@ -21,6 +21,7 @@ type RecorderCapabilities struct {
 	PersistProcessAuthority            bool
 	PersistContainmentStopReceipt      bool
 	PersistContainmentUnproven         bool
+	RecordSupervisorRecoveryScanSeal   bool
 }
 
 // SupervisorHandoffRequested is the legacy durable-handoff gate: any of the five
@@ -78,6 +79,9 @@ type Recorder interface {
 	// PersistContainmentUnproven retains the exact process marker when local
 	// containment cleanup cannot prove the complete owned boundary stopped.
 	PersistContainmentUnproven(pid int, identity string) error
+	// RecordSupervisorRecoveryScanSeal persists an in-process owner-loss stop's
+	// helper terminal scan proof, which no scan-transport observer wrote.
+	RecordSupervisorRecoveryScanSeal(authority.Supervisor, uint64) error
 }
 
 var errRecorderWriteUnavailable = errors.New("process recorder write is unavailable")
@@ -95,6 +99,7 @@ type RecorderFuncs struct {
 	PersistProcessAuthority            func(pid int, identity string, value *authority.Supervisor) error
 	PersistContainmentStopReceipt      func(pid int, identity string, receipt authority.StopReceipt) error
 	PersistContainmentUnproven         func(pid int, identity string) error
+	RecordSupervisorRecoveryScanSeal   func(authority.Supervisor, uint64) error
 }
 
 func (writes RecorderFuncs) Capabilities() RecorderCapabilities {
@@ -109,6 +114,7 @@ func (writes RecorderFuncs) Capabilities() RecorderCapabilities {
 		PersistProcessAuthority:            writes.PersistProcessAuthority != nil,
 		PersistContainmentStopReceipt:      writes.PersistContainmentStopReceipt != nil,
 		PersistContainmentUnproven:         writes.PersistContainmentUnproven != nil,
+		RecordSupervisorRecoveryScanSeal:   writes.RecordSupervisorRecoveryScanSeal != nil,
 	}
 }
 
@@ -192,6 +198,13 @@ func (recorder recorderFuncs) PersistContainmentUnproven(pid int, identity strin
 	return recorder.RecorderFuncs.PersistContainmentUnproven(pid, identity)
 }
 
+func (recorder recorderFuncs) RecordSupervisorRecoveryScanSeal(value authority.Supervisor, sequence uint64) error {
+	if recorder.RecorderFuncs.RecordSupervisorRecoveryScanSeal == nil {
+		return errRecorderWriteUnavailable
+	}
+	return recorder.RecorderFuncs.RecordSupervisorRecoveryScanSeal(value, sequence)
+}
+
 // invocationWrites returns the durable writes one launch performs: the
 // invocation's recorder when it has one, otherwise the frozen OpenCode-facing
 // members, which are all a rebuilt OpenCode invocation can carry.
@@ -251,6 +264,9 @@ func recorderWrites(recorder Recorder) RecorderFuncs {
 	}
 	if capabilities.PersistContainmentUnproven {
 		writes.PersistContainmentUnproven = recorder.PersistContainmentUnproven
+	}
+	if capabilities.RecordSupervisorRecoveryScanSeal {
+		writes.RecordSupervisorRecoveryScanSeal = recorder.RecordSupervisorRecoveryScanSeal
 	}
 	return writes
 }

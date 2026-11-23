@@ -770,7 +770,8 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
 The closed witness-stall entry (`docs/archive/CLOSED-TODO.md`, "Production Linux containment
 witness: stop-receipt barrier stall awaiting a diagnosable occurrence", closed 2026-11-21 by commit
 `e9c457d8`) latched owner loss at every `enterRecovery` entry; the review of that fix (PR #185
-round 1) left two paths open here.
+round 1) left two paths open here — the in-process response-loss consumer path was closed
+2026-11-23 (see `docs/archive/CLOSED-TODO.md`).
 
 - [ ] Close the same sticky-refusal class for the lease-expiry arm. `ownerLostStop` in
       `(*linuxSupervisorSession).runStop` is still computed from `ownerLostLatched ||
@@ -787,19 +788,6 @@ round 1) left two paths open here.
       latch) seals through the owner-loss branch — and clear `descendantSealPending` when the
       observer seal write fails in `sealDescendantScanAfterMonitorStop`. This changes retry
       semantics and needs its own increment; the plan of the closed fix records it as out of scope.
-- [ ] Give the in-process `recoverResponseLossStop` consumer the helper's owner-loss terminal seal.
-      The live-owner entries of the latch (a daemon-side control close on response-transport loss,
-      and response writes that fail before any pipe I/O) make the helper seal locally with no
-      observer writes, so the durable helper progress keeps its pre-latch sequence; the restarted
-      daemon records the seal returned over the recovery endpoint
-      (`RecordSupervisorRecoveryScanSeal`, exact `Completed+1`) before the receipt, but the
-      in-process consumer does not, `assert_all_sealed` refuses, and that stop fails closed into a
-      durable containment-unproven mark. Pinned by
-      `TestLinuxSupervisorLiveOwnerControlCloseInProcessStopFailsClosed`; the amendment (record the
-      returned seal before the mirror freeze, added once where the run-journal callback is plumbed)
-      is deferred to the RunJournalRecorder lane — the callback is added once there instead of being
-      hand-copied into every adapter — and the interim state stays fail-closed (PR #185 review
-      round 1, finding F1; conductor decision 2026-11-21).
 
 ## Daemon: state validator dead branches, a nil-deref panic and the `validGoalSessionUUID` follow-up (rf-w2-09 survey)
 
@@ -1457,12 +1445,6 @@ is fixed here; each bullet names what a follow-up has to re-derive.
       parked read (the inherited stdio pipe), the reader goroutine is not joined before the run
       returns; the bounded join caps the wait and the goroutine exits with the process.
 
-- [ ] `daemon/internal/platform/supervisor_linux_helper.go`: the in-process consumer of
-      `recoverResponseLossStop` does not record the helper's authenticated recovery scan seal, so
-      such a stop fails closed into a durable containment-unproven mark; only the restarted-daemon
-      path records it (`TestLinuxSupervisorLiveOwnerControlCloseInProcessStopFailsClosed` pins the
-      behaviour, not the missing seal record).
-
 - [ ] `daemon/internal/app/leak_check_test.go`: there is deliberately no package-wide goleak
       `TestMain` while the "`writeInputBounded` can strand its writer goroutine (audit F15)" entry
       above stands; per-test leak verification is the interim oracle.
@@ -1663,6 +1645,10 @@ is fixed here; each bullet names what a follow-up has to re-derive.
       deleted. Once OpenCode adopts the grant or is dropped (W6-04), delete the ten mirrors, the
       three request members, `MirrorRecorderMembers`, `PopulateOpencodeRecorderMembers`, the
       `grant()` fallback and their population in the three sites above.
+      The port's eleventh write, `RecordSupervisorRecoveryScanSeal` (rf-w4-22), is deliberately not
+      mirrored: it has no legacy member to keep byte-identical, so a launch whose invocation was
+      rebuilt from the mirrors (OpenCode) keeps today's fail-closed response-loss stop until W6-04
+      lets it carry the recorder.
 
 ## Linux v2 owner hosts under the Ubuntu AppArmor userns restriction (2026-11-22)
 
