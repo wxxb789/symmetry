@@ -106,6 +106,8 @@ jobs:
           set -Eeuo pipefail
           evidence_root="$RUNNER_TEMP/linux-v2-native-evidence-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           case_sets=(
+            codex_containment
+            claude_containment
             shared
             synthetic_goal_cleanup
             stage_replay_create_started
@@ -119,39 +121,36 @@ jobs:
             stale_journal_fence
             stale_journal_subject
           )
+          failed_case_sets=()
           for case_set in "${case_sets[@]}"; do
+            status=0
             SYMMETRY_LINUX_V2_NATIVE_CASE_SET="$case_set" \
             SYMMETRY_LINUX_V2_NATIVE_EVIDENCE_DIR="$evidence_root/$case_set" \
-              bash scripts/ci/linux-v2-native-acceptance.sh
-            test -s "$evidence_root/$case_set/manifest.json" || {
+              bash scripts/ci/linux-v2-native-acceptance.sh || status=$?
+            if (( status == 0 )) && [[ ! -s "$evidence_root/$case_set/manifest.json" ]]; then
               printf 'Missing sanitized evidence manifest for required case set: %s\n' "$case_set" >&2
-              exit 1
-            }
+              status=1
+            fi
+            printf 'Case set %s exited %d\n' "$case_set" "$status"
+            (( status == 0 )) || failed_case_sets+=("$case_set")
           done
+          if (( ${#failed_case_sets[@]} > 0 )); then
+            printf 'Failed case sets: %s\n' "${failed_case_sets[*]}" >&2
+            exit 1
+          fi
+          printf 'All %d case sets exited 0.\n' "${#case_sets[@]}"
       - name: Clear isolated Control operator token
         if: always()
         shell: bash
         run: printf 'SYMMETRY_OPERATOR_TOKEN=\n' >> "$GITHUB_ENV"
       - name: Upload allowlisted sanitized Linux v2 evidence
-        if: success()
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: linux-v2-native-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: warn
           retention-days: 14
-          path: |
-            ${{ runner.temp }}/linux-v2-native-evidence-${{ github.run_id }}-${{ github.run_attempt }}/shared/*.json
-            ${{ runner.temp }}/linux-v2-native-evidence-${{ github.run_id }}-${{ github.run_attempt }}/synthetic_goal_cleanup/*.json
-            ${{ runner.temp }}/linux-v2-native-evidence-${{ github.run_id }}-${{ github.run_attempt }}/stage_replay_create_started/*.json
-            ${{ runner.temp }}/linux-v2-native-evidence-${{ github.run_id }}-${{ github.run_attempt }}/stage_replay_leaf_bound/*.json
-            ${{ runner.temp }}/linux-v2-native-evidence-${{ github.run_id }}-${{ github.run_attempt }}/stage_replay_launcher_bound/*.json
-            ${{ runner.temp }}/linux-v2-native-evidence-${{ github.run_id }}-${{ github.run_attempt }}/ack_loss_launcher_bound/*.json
-            ${{ runner.temp }}/linux-v2-native-evidence-${{ github.run_id }}-${{ github.run_attempt }}/stale_leaf/*.json
-            ${{ runner.temp }}/linux-v2-native-evidence-${{ github.run_id }}-${{ github.run_attempt }}/migration/*.json
-            ${{ runner.temp }}/linux-v2-native-evidence-${{ github.run_id }}-${{ github.run_attempt }}/stale_journal_run_key/*.json
-            ${{ runner.temp }}/linux-v2-native-evidence-${{ github.run_id }}-${{ github.run_attempt }}/stale_journal_run_key_legacy/*.json
-            ${{ runner.temp }}/linux-v2-native-evidence-${{ github.run_id }}-${{ github.run_attempt }}/stale_journal_fence/*.json
-            ${{ runner.temp }}/linux-v2-native-evidence-${{ github.run_id }}-${{ github.run_attempt }}/stale_journal_subject/*.json
+          path: ${{ runner.temp }}/linux-v2-native-evidence-${{ github.run_id }}-${{ github.run_attempt }}/*/*.json
 
   # build-control-release is false: the native job builds its own release once.
   contracts:
