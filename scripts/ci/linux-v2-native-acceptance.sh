@@ -1076,6 +1076,32 @@ else:
         ),
         encoding="utf-8",
     )
+    pi_routing = json.loads((private_home / ".pi/agent/models.json").read_text(encoding="utf-8"))
+    opencode_routing = json.loads(
+        (private_home / ".config/opencode/opencode.json").read_text(encoding="utf-8")
+    )
+    pi_openai = pi_routing.get("providers", {}).get("openai", {})
+    if pi_openai.get("baseUrl") != openai_base_url:
+        raise SystemExit(
+            f"pi models.json must route providers.openai.baseUrl to {openai_base_url!r}: "
+            f"{pi_openai.get('baseUrl')!r}"
+        )
+    if not any(
+        entry.get("id") == pi_model and entry.get("api") == "openai-completions"
+        for entry in pi_openai.get("models", [])
+    ):
+        raise SystemExit(
+            f"pi models.json must carry a {pi_model!r} entry with api openai-completions: "
+            f"{pi_openai.get('models')!r}"
+        )
+    opencode_openai = opencode_routing.get("provider", {}).get("openai", {})
+    if opencode_openai.get("options", {}).get("baseURL") != openai_base_url:
+        raise SystemExit(
+            "opencode.json must route provider.openai.options.baseURL to "
+            f"{openai_base_url!r}: {opencode_openai.get('options', {}).get('baseURL')!r}"
+        )
+    if not opencode_routing.get("small_model"):
+        raise SystemExit(f"opencode.json must set small_model: {opencode_routing.get('small_model')!r}")
     (private_home / ".local/share/opencode/auth.json").write_text(
         json.dumps({"openai": {"type": "api", "key": api_key}}), encoding="utf-8"
     )
