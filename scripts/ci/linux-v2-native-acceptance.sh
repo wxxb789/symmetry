@@ -908,8 +908,7 @@ import sys
 
 (
     fixture_root, a_home, repository,
-    clone_root, seed_root, owner_state_dir, pi_share, pi_model, opencode_model, openai_base_url,
-    api_key_file,
+    clone_root, seed_root, owner_state_dir, pi_share, pi_model, opencode_model, openai_base_url, api_key_file,
     pi_repository_id, opencode_repository_id, fixture_identity_suffix,
     synthetic_source, synthetic_seeds, synthetic_clones,
 ) = sys.argv[1:]
