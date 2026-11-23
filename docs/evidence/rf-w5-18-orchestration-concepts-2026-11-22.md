@@ -64,7 +64,7 @@ per-finding diff is `apply1.diff`.)
 | `control/test/symmetry_control/orchestration_{registry,assignment,goal_assignment,claims,transitions,goal_transitions,commands,task_reads}_test.exs` | new (split) | 1,258 / 1,141 / 1,087 / 1,280 / 1,243 / 1,183 / 992 / 877 | base titles verbatim, multiset preserved; two files renamed from their `_b` placeholders (F3); +2 L in five files for the R-19 `@now` comments |
 | `control/test/symmetry_control/orchestration/{registry,assignment,claims,transitions,commands,task_reads}_test.exs` | new | 151 / 171 / 377 / 329 / 335 / 156 | 66 new interface cases (64 at the slice head; +1 by F5, +1 by R-21) |
 | `control/test/symmetry_control/goals/eligibility_test.exs` | new | 446 | truth table + seeded query |
-| `docs/plans/2026-11-22-rf-w5-18-orchestration-concepts-plan.md` | new | 356 | plan + implementation record (the fewer-line pre-fix figure 298 was a pre-apply measurement) |
+| `docs/plans/2026-11-22-rf-w5-18-orchestration-concepts-plan.md` | new | 358 | plan + implementation record (the fewer-line pre-fix figure 298 was a pre-apply measurement; the F1/F2 record fixes added two lines) |
 | `docs/evidence/rf-w5-18-orchestration-concepts-2026-11-22.md` | new | — | this record (own line count not self-measured) |
 | `docs/TODO.md` | edited | +3 entries | duplicated `ContextSnapshot` read, three attribute copies, `retry_binding` type copy |
 
@@ -479,11 +479,11 @@ and the rest tests; the doc edits are the remainder of the fix-stage diff).
 | finding | change | probe |
 |---|---|---|
 | R-01 | `claims.ex:557`: the `claim_run/3` `@spec` third tuple element became `map() \| nil` | the pre-existing case asserts the nil arm (`claims_test.exs:27`, `assert provider_access == nil`); `ProviderAccess.issue/3` returns `{:ok, nil}` for a task without provider access (`provider_access.ex:686-690`) and `replay_claim_access/2` returns `{:ok, nil}` for a `kind: none` snapshot (`provider_access.ex:751-770`); the toolchain has no Dialyzer (no dialyxir in `control/mix.exs`) |
-| R-02 | plan: `map_key?/2` added to the `Orchestration.Registry` row of the function → module table (line 114) and struck from the `Goals.Eligibility` API-shape paragraph (line 77) | `rg -n 'def map_key' control/lib` → only `registry.ex:622-625`; the plan's own move record (lines 152, 340) unchanged |
+| R-02 | plan: `map_key?/2` added to the `Orchestration.Registry` row of the function → module table (line 116 after the F1/F2 record fixes) and struck from the `Goals.Eligibility` API-shape paragraph (line 77) | `rg -n 'def map_key' control/lib` → only `registry.ex:622-625`; the plan's own move record (lines 154, 342 unchanged in content, re-based by the two added lines) |
 | R-03 | evidence section 2 "Goal policy": `goal_runtime_matches?/3` struck from the `Goals.Eligibility` function list | `rg -n 'def goal_runtime_matches' control/lib` → only `assignment.ex:520`; the same bullet already recorded the composite as Orchestration-owned |
 | R-04 | evidence section 1 interface-test row: path gained the `/orchestration/` segment (`control/test/symmetry_control/orchestration/{…}_test.exs`) | the row's counts are those files' `wc -l` (`fix1-wc-l.txt`: 151/171/377/329/335/156) |
 | R-05 | plan implementation-record item 1 relabelled "Module set, slice head (`wc -l`, pre-apply)"; the delivered numbers stay in "Slice shape" | `fix1-wc-l.txt` re-measures the delivered tree: facade 327; Registry 659; Assignment 639; Claims 612; Transitions 1,181; Commands 798; TaskReads 874; Eligibility 301 — identical to "Slice shape" |
-| R-06 | evidence section 1 plan row: 298 → 356 lines, the pre-apply figure named as such | `wc -l docs/plans/…` (`fix1-wc-l.txt`) |
+| R-06 | evidence section 1 plan row: 298 → 356 lines at the fix stage, 358 after the F1/F2 record fixes; the pre-apply figure named as such | `wc -l docs/plans/…` (`fix1-wc-l.txt`) |
 | R-07 | moved-comment coordinate 565 → `claims.ex:570-571` in evidence section 4 and plan item 7 | `grep -n 'Scope locking precedes' control/lib/symmetry_control/orchestration/claims.ex` → 570 |
 | R-08 | evidence section 2: `assignment.ex:521` → `:520` | `grep -n 'def goal_runtime_matches' control/lib/symmetry_control/orchestration/assignment.ex` → 520 |
 | R-09 | subject-identity table: the pointer names `fix1-hashes.txt` (the fix-stage checksums) and the restore proof (`mutants/fix1-restore-check.out`) | `sha256sum -c mutants/hashes-before-fix1.txt` → 14 `OK`, exit 0 |

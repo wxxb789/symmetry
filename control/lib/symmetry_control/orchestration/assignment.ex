@@ -289,9 +289,8 @@ defmodule SymmetryControl.Orchestration.Assignment do
     )
   end
 
-  # The non-transient conditions that make a runtime eligible for a goal-less task; runtime
-  # status, heartbeat freshness and free capacity are added by the caller. The retry projection
-  # shares exactly these conditions against the binding the retried generation is re-admitted with.
+  # Non-transient conditions for a goal-less runtime; the caller adds runtime status, heartbeat
+  # freshness and free capacity. The retry projection shares exactly these conditions.
   @doc false
   def runtime_matches_binding do
     dynamic(

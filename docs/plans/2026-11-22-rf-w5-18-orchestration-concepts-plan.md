@@ -75,7 +75,8 @@ stage's changes plus the doc-block move of finding F6.)
   `runtime_matches_goal_resource?/3`, `runtime_allowed_for_task?/2`, `task_allowed_runtime_ids/1`,
   `handoff_source_machine_matches?/2`) plus the shared map/UUID vocabulary those predicates read
   (`value/2,3`, `valid_uuid?/1`, `exact_map_keys?/2`). It depends on schemas and
-  `Repo` only — no Goals facade, no Orchestration module.
+  `Repo` only — no `Goals` or `Orchestration` facade (only the three `Orchestration` schema
+  aliases, which the binding text permits).
 - **No other public Orchestration API change**: no function added to the facade, none removed, no
   arity or return-shape change. `claim_run/3` lives on `Orchestration.Claims` and is exercised by
   `control/test/symmetry_control/orchestration/claims_test.exs` without `Plug.Conn`.
@@ -106,8 +107,9 @@ stage's changes plus the doc-block move of finding F6.)
 
 ### Function → module table (re-derived at the slice head)
 
-223 of the 247 groups are listed below; the remaining 24 are the eligibility predicates and
-vocabulary, listed in the `Goals.Eligibility` row. `claim_run/3` is new code, not a moved group.
+Every base function group is named below: 250 entries in all — the six Orchestration concept rows
+228 (227 base groups plus the new `claim_run/3`) and the `Goals.Eligibility` row 22 (20 base groups
+plus the new `candidate_task_query/2` and the `value/2` default arity).
 
 | module | functions |
 | --- | --- |
