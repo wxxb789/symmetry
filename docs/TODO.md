@@ -342,6 +342,16 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
     `gh auth login` (the fixture's `:292` refuses the dummy `gho_` token) and every provider turn stays unproven
     until the owner dispatches the workflow again. Run `45171498923` remains the historical all-14 run on the
     pre-mirror-fix bytes (script sha256 `592b98f8a0be53aaeab9022c5cc692320dc1be49a6e10bdab00a05c5664fab68`).
+    Retired (2026-11-23): the `manager/cgroup.kill` ownership refusal on systemd ≥254 this record was to
+    carry was retargeted by goal `rf-acc-delegated-cgroup-kill` to the boundary systemd keeps (the owning
+    unit cgroup's own `cgroup.kill`); recorded in `docs/archive/CLOSED-TODO.md` and
+    `docs/evidence/rf-acc-delegated-cgroup-kill-2026-11-23.md`.
+
+    Missing CI oracle (2026-11-23, goal `rf-acc-delegated-cgroup-kill`): the `daemon` CI job runs as
+    its runner's non-root user, so the row that pins the unit-kill write-probe wiring
+    (`TestLinuxOwnerUnitKillControlReadsTheDerivedUnitPath`) only discriminates as root - non-root it
+    refuses at the root:root metadata rule before the probe. A root-run (or WSL-root) pin of the probe
+    wiring is the missing CI oracle; the metadata rule still catches an A-owned unit kill without root.
 
     **When it must be dispatched.** At release acceptance, against the exact subject, and never cited as
     passed before it runs. The goals' pending predicate, quoted from `docs/goals/README.md`: "the operator
