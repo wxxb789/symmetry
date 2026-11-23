@@ -158,7 +158,7 @@ probeconformance subtests (`codex`/`opencode`/`pi` × `local_timeout`/`caller_ea
 | `internal/harness` | 3.14 (red row, §5.3) | 2.12 |
 
 Whole co-run: base 4 m 42.8 s → HEAD 4 m 00.5 s (both including the unchanged `internal/app`
-suite). The four harness package totals drop by 26.7 s; the difference between that and the
+suite). The four harness package totals drop by 31.39 s; the difference between that and the
 co-run's 42.3 s comes from the shorter tail of the parallel co-run.
 
 ### 6.3 Co-run gate result
@@ -239,9 +239,9 @@ The recorded trap stands: dropping only the interrupt reply does not red the clo
    (`TestOmOAttachAckRegressionCancellationAndDeadlineDoNotRenewBudget/admission_deadline`): red in
    the first HEAD co-run under parallel-package load, green in the baseline co-run, the targeted
    run and the re-run. Not-owned file; the fixture's deadline tolerance is what moves.
-3. `daemon/internal/harness/claude/probe_test.go:26` carries a `C:\Users\runneradmin\…` fixture
-   string (a fictional Windows-runner path, present at `b9d4b4a4`). The diff adds no
-   backslash-before-`u` line and no `users/` path; the pre-existing line is reported, not edited.
+3. `daemon/internal/harness/claude/probe_test.go:26` carries a profile-path fixture string (a
+   fictional Windows-runner path, present at `b9d4b4a4`). The diff adds no profile path and no
+   backslash before a `u`; the pre-existing line is reported, not edited.
 
 ## 10. Evidence plan
 
@@ -270,6 +270,10 @@ The recorded trap stands: dropping only the interrupt reply does not red the clo
 - `synctest` around a real subprocess/socket/filesystem wait is a failure-control condition; all
   five converted bodies wait only on in-process doubles (verified per test above) — C3's row (ii)
   uses a hand-written context type, not a timer.
+- Accepted tradeoff (F4): inside a `synctest` bubble the 30 s hang guards read the bubble clock, so
+  a future real-I/O block inside a converted body surfaces as the `go test -timeout` package
+  timeout rather than a 30 s guard failure. Today no switched seam does real I/O, and `synctest`'s
+  own deadlock panic (seen under M1) is the backstop.
 - The `nativeInterruptTimeout` tolerance itself is not converted or weakened; `adapter_test.go:972`
   keeps that contract.
 - Out of scope: `internal/app/**` (E5 rows), the two `output_settlement` throughput rows (22.5 s /
