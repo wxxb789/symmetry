@@ -22,8 +22,8 @@ rows run Ubuntu-24.04 over the same worktree through its mount point (`<worktree
 | `daemon/internal/app/process_recorder.go` | `b2ab5e7d6ca781ea4bc4f9c98d2a5bc6d77d616fbe726b27a4ae179e580374e3` |
 | `daemon/internal/app/process_recorder_test.go` | `824cc4828443b513513c63b359cb1c4a3b016e7f5ca48819b08c8d808acce982` |
 | `daemon/internal/app/apptest/faultstore.go` | `aeb257808710dab11486154c9817671822376c0ebe3a0bccc48be783846742a2` |
-| `docs/TODO.md` | `84d3c7d618fcf5e94ec9b3228153e4d842db6df6120361f956a29b5d34d54a36` |
-| `docs/archive/CLOSED-TODO.md` | `e91f81ede69711e3b8a70611822090d990e9f83f5525e8fafa45a114b546cc41` |
+| `docs/TODO.md` | `bb383285cdf0eb76fd3f43cec67a1f88e0256e4a5f603bab3414d6388db8da23` |
+| `docs/archive/CLOSED-TODO.md` | `11e4320d4fed65a4fe571e271f9af18c11b62b5e82d1ec1de28012e004b4b93c` |
 | `docs/plans/2026-11-23-rf-w4-22-response-loss-seal-consumer-plan.md` | `ccc761540b261551a5f0a70afee35aaab3015d6be6b17cd585297cd728a0b9fe` |
 | this record | the file you are reading (no self-referential hash) |
 
@@ -484,7 +484,7 @@ were not re-run):
 | `sha256sum -c` (§1, 12 rows) | 0 | 12/12 OK |
 | platform package test functions (`grep -h '^func Test' internal/platform/*_test.go \| wc -l`): HEAD `b3ca0367` vs working tree | - | 332 → 333 (the new model arm); the changed file 58 → 59 |
 
-## 14. Conductor ruling and round-1 revisions (2026-11-23, PR #266 dual audit round 1)
+## 14. Conductor rulings and revisions (2026-11-23, PR #266 dual audit rounds 1 and 2)
 
 Conductor ruling (dual audit round 1: Sol reviewer + DeepSeek auditor, reconciled); the fix list is
 records and comments only, no production code change:
@@ -523,3 +523,33 @@ Ubuntu-24.04 over the same worktree as `wsl -d Ubuntu-24.04 -u accept`):
 the plan is now 145 lines (was 140), the test file 4150 (14 comment lines removed), and the platform
 test-function counts still read 333 total / 59 in the changed file. The conductor commits this
 round-1 revision as the branch head after `a7f4cbbb`.
+
+### Round 2: both auditors ship; two P3 records items
+
+The round-2 conductor ruling (2026-11-23, PR #266) closed with both auditors shipping and two
+records items, both applied in this revision:
+
+- The rf-w4-22 closure entry in `docs/archive/CLOSED-TODO.md` moved back to the end of the
+  `## Comment-policy sweep: debt the deleted comments recorded (2026-11-22)` section, ahead of the
+  `## Codex adapter giant-file split (rf-w5-16, 2026-11-23)` heading. The entry's bytes are
+  unchanged — only its position moved, proved by `git diff --stat` reading 15 insertions and 15
+  deletions over the single file and by the sorted line lists of `HEAD` and the working tree being
+  identical (4645 lines each).
+- §1's `docs/TODO.md` and `docs/archive/CLOSED-TODO.md` rows recomputed from the final bytes. The
+  merge named: `f037f918` + main `126b435e` → `b25fe1f4` — bringing #265, whose changes are why
+  the pre-merge `f037f918` rows no longer matched — and the conductor commits this round-2 records
+  revision as the records commit on top of that merge; every round-2 row below reads the tree this
+  records commit carries. The PR body's `sha256sum -c … 12/12` row is rebound to this final head
+  and reproduces.
+
+Round-2 verification (git root; no code file changes; the changed docs are this record and
+`docs/archive/CLOSED-TODO.md`):
+
+| Check | Exit | Output |
+| --- | --- | --- |
+| `sha256sum -c` (§1, 12 rows, from a checklist of §1's refreshed rows) | 0 | 12/12 OK |
+| `git diff --stat` over `docs/archive/CLOSED-TODO.md`, plus the sorted line-multiset comparison (`git show HEAD:… \| sort` vs `sort …`) | 0 | 15 insertions, 15 deletions; the two sorted lists byte-identical |
+| `python scripts/ci/model-routing-record-sanitize.py --check --root-only` on this record | 0 | no host absolute path |
+| `python scripts/ci/model-routing-record-sanitize.py --check --root-only` on `docs/archive/CLOSED-TODO.md` | 1 | pre-existing and unchanged: the archive quotes the sanitizer's own specimen paths (first refusal line `:373`). The revision's added lines carry no host path — the same tool over the added lines (`git diff -U0`, `^+` filter, fed via stdin) reads exit 0; the committed-record gate scopes records to `docs/evaluations` + `docs/evidence` |
+| `git diff --check` | 0 | no whitespace error |
+| `git diff --name-only` | - | exactly the two docs above; no code file |

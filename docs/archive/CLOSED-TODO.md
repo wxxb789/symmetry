@@ -4553,6 +4553,21 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
       is unchanged; like every write, its fetch init no longer carries the runtime's
       never-aborted step signal, and `run()`'s optional `signal` remains for the read half only.
 
+- [ ] `daemon/internal/platform/supervisor_linux_helper.go`: the in-process consumer of
+      `recoverResponseLossStop` does not record the helper's authenticated recovery scan seal, so
+      such a stop fails closed into a durable containment-unproven mark; only the restarted-daemon
+      path records it (`TestLinuxSupervisorLiveOwnerControlCloseInProcessStopFailsClosed` pins the
+      behaviour, not the missing seal record).
+
+      **Closed (2026-11-23, branch `refactor/rf-w4-22-response-loss-seal-consumer`):** the same
+      change pays this debt. The in-process consumer now records the authenticated seal before the
+      receipt, and the pin that recorded the missing-seal behaviour asserts the durable seal under
+      its new name (`…StopRecordsSeal`). The entry's file reference is re-derived: the helper loop
+      and `enterRecovery` live in `daemon/internal/platform/supervisor_session.go` at this base, and
+      their surviving two-line comment needed no edit — the pre-slice #185 comment that named the
+      deferral was shortened by this sweep before the slice started. Evidence record:
+      `docs/evidence/rf-w4-22-response-loss-seal-consumer-2026-11-23.md`.
+
 ## Codex adapter giant-file split (rf-w5-16, 2026-11-23)
 
 - [ ] `daemon/internal/harness/codex/adapter.go` carried four protocol responsibilities in one
@@ -4578,21 +4593,6 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
       gate reruns. The evidence tables live in the plan; the `codex.Probe` nil-context re-pin stays
       open in `docs/TODO.md` because `codex/probe.go` and `codex/probe_test.go` are outside this
       slice's owned set.
-
-- [ ] `daemon/internal/platform/supervisor_linux_helper.go`: the in-process consumer of
-      `recoverResponseLossStop` does not record the helper's authenticated recovery scan seal, so
-      such a stop fails closed into a durable containment-unproven mark; only the restarted-daemon
-      path records it (`TestLinuxSupervisorLiveOwnerControlCloseInProcessStopFailsClosed` pins the
-      behaviour, not the missing seal record).
-
-      **Closed (2026-11-23, branch `refactor/rf-w4-22-response-loss-seal-consumer`):** the same
-      change pays this debt. The in-process consumer now records the authenticated seal before the
-      receipt, and the pin that recorded the missing-seal behaviour asserts the durable seal under
-      its new name (`…StopRecordsSeal`). The entry's file reference is re-derived: the helper loop
-      and `enterRecovery` live in `daemon/internal/platform/supervisor_session.go` at this base, and
-      their surviving two-line comment needed no edit — the pre-slice #185 comment that named the
-      deferral was shortened by this sweep before the slice started. Evidence record:
-      `docs/evidence/rf-w4-22-response-loss-seal-consumer-2026-11-23.md`.
 
 ## Linux supervisor: remaining sticky-refusal paths after the owner-loss latch
 
