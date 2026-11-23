@@ -23,8 +23,14 @@ below resolves at the base unless it names a slice file.
 | migration files | 43 `.exs` | `ls control/priv/repo/migrations/*.exs \| wc -l` |
 | `async: true` declarations | 34 files / 35 matching lines | `grep -rl/-rh "async: true" control/test` |
 | `async: false` declarations | 45 files / 48 matching lines | same, `"async: false"` |
-| after conversion (delivered) | 43 files / 44 `async: true` lines (one is an assertion argument, `pi_control_e2e_test.exs:5162`); 36 files / 39 `async: false` lines — +9 / −9 files and lines | same commands on the slice tree |
+| after conversion (final tree `8615a836` + fix revision) | 43 files / 44 `async: true` lines (one is an assertion argument, `pi_control_e2e_test.exs:5162`) — +9 files / +9 lines vs base; 69 files / 73 `async: false` lines (69 declaration lines; `pi_control_e2e_test.exs` carries three more, the new Oban file its pin comment) — nine flips and one new file against the merged-in main `764c653e` (77 files / 80 lines) | same commands on the slice tree |
 | `max_cases` / `pool_size` | 28 / `min(max(schedulers*2, 32), 90)` = 32 on this 16-scheduler host | `control/test/test_helper.exs:4`, `control/config/test.exs:18` |
+
+The delivered row was re-measured on the final tree: its attempt-2 numbers (`36 files / 39
+`async: false` lines`) held against the dispatch base before the branch merged origin/main, and the
+merge side `764c653e` carries main's post-dispatch tests (32 more `async: false` files than the
+base), so the false side is paired with that revision while the `async: true` side is unaffected by
+the merge (+9 files / +9 lines against either revision).
 
 Three ad-hoc schema-name constructions existed at the base
 (`goal_0006_migration_test.exs:3834`, `add_history_lookup_indexes_test.exs:28`,
@@ -75,7 +81,7 @@ bundle; the flag is identical on both sides and CI covers those four cases.
 | `control/test/test_helper.exs` | `+ SymmetryControl.MigrationModules.compile_all!()` before `ExUnit.start/1` (plus the existing blank line) |
 | `control/test/support/migration_case.ex` | `+ schema_name/1` (one naming authority: lowercase-identifier check, node-unique plus wall-clock suffix, 63-byte guard); `create_schema!/1`/`drop_schema!/1` run their DDL on a private single-connection non-sandbox Repo and register an ExUnit `on_exit` drop; `migrate_all_up!/0` runs `MigrationModules.migrations()` instead of the path source; `private_repo_config/0` shared by `start_schema_repo/1` and the DDL Repo, with `migration_lock: false`, `timeout: 30_000`, `queue_target: 5_000`, `queue_interval: 10_000`. Fix revision: `with_schema/2`'s teardown reduced to a non-raising dynamic-repo restore (review #5), the execution recipe factored into `run_private_query!/2` so `on_exit` cleanup can use it, and the case template aliases `MigrationModules` into every user |
 | the nine `control/test/symmetry_control/migrations/*_test.exs` | `async: false` → `async: true` (nine declarations); five `load_migration_modules!/0` definitions and seven call sites deleted; three schema-name sites routed through `schema_name/1`; `goal_0006_migration_test.exs` loses its two Oban tests and their now-unused helpers to the F-8 move. Fix revision: all 53 `Ecto.Migrator.run` sources route through `MigrationModules.verified_pairs!/1`, and the duplicated 20-pair base list plus its now-unused aliases are deleted (review #3/#6) |
-| `control/test/symmetry_control/migrations/add_oban_jobs_table_test.exs` | new (F-8 ruling): `async: false` module holding the two moved Oban tests, names and bodies byte-identical, with the local helper set the directory's convention gives every file. Fix revision: extends the shared `MigrationModules.base_migrations/0`, drops its 20 duplicated aliases, and registers the marker-row `DELETE` as an `on_exit` (PRE-A01) |
+| `control/test/symmetry_control/migrations/add_oban_jobs_table_test.exs` | new (F-8 ruling): `async: false` module holding the two moved Oban tests, byte-identical test names and unchanged assertion lines, with the local helper set the directory's convention gives every file. Fix revision: extends the shared `MigrationModules.base_migrations/0`, drops its 20 duplicated aliases, and adds the refusal test's only body change — the PRE-A01 marker-row `DELETE` registered as an `on_exit` |
 | `control/test/symmetry_control/native_harness_kind_binding_test.exs` | one change (F-7 ruling): the live-constraint read is scoped to the test's own schema (`AND connamespace = current_schema()::regnamespace`) |
 | `docs/plans/2026-11-22-rf-w3-17-migration-tests-async-plan.md` | this plan |
 | `docs/TODO.md` | the wall-time entry gains this slice's numbers and the disposition request |
@@ -235,11 +241,51 @@ SPEC-A01 (the A/B table and its statements), SPEC-A02 (the gate-4 evidence citat
 (the stale R6 row) are corrected in place below. Each mechanism claim in this section names the
 probe or mutant that proved it at the fix revision; the probes are in "Fix-stage verification".
 
+## PR-review corrections (2026-11-22, review of `8615a836`) and their delivery
+
+The second independent review (PR #262) found no behaviour-changing code defect: one P2 pair (the #5
+teardown-masking class at two sibling sites) and four P3 records. The corrections this revision
+carries:
+
+1. **P2-1 (two surviving bare stops).** `add_history_lookup_indexes_test.exs` and
+   `add_task_command_ownership_test.exs` still carried the base's 1-arity `GenServer.stop(repo)` in
+   their `after` blocks — the class mutant M2 shows can report a stop's exit over a failing body.
+   Both now use `GenServer.stop(repo, :normal, 30_000)`, the shape `run_private_query!/2` uses; R9
+   is corrected to name `run_private_query!/2` as the first fix revision's only bounded site.
+2. **P3-1 (stale counts).** The re-derivation table's delivered row and the TODO entry's equality
+   claim were measured on the attempt-2 tree before the branch merged origin/main; both now carry
+   the final tree's numbers (43/44 `async: true`; 69/73 `async: false`) and the equality claim is
+   against the reviewed head (`f6b5b176` export: `1181 = 1156 + 21 + 4` in both streams, counts
+   equal, `only_left=0 only_right=0 state_diff=0`).
+3. **P3-2 (Oban-move wording).** "names and bodies byte-identical" is corrected everywhere to
+   byte-identical test names with unchanged assertion lines; the refusal test's body gains only
+   PRE-A01's marker-row `on_exit` cleanup.
+4. **P3-3 (comment budget).** The over-budget prose is cut to 1-2 lines per docstring:
+   `migration_case.ex`'s `@moduledoc` and the `with_schema/2`, `create_schema!/1` and
+   `run_private_query!/2` docs, and `migration_modules.ex`'s `@moduledoc`, `base_migrations/0` and
+   `verified_pairs!/1` docs; the hazards stay beside their lines, the rationale lives in this plan.
+5. **P3-4 (call-site count).** The `migrate_all_up!/0` call-site count is 12 (2 + 3 + 3 + 4 over the
+   four directory-migrating files), not 11; both plan occurrences are corrected.
+6. **D9 (conductor ruling on the CI numbers).** Recorded in `docs/TODO.md`: the ≤65 s target stays
+   open (coverage-control test step 166 → 151 s, ExUnit 133.9 → 118.4 s, sync 116.0 → 47.3 s, async
+   17.9 → 71.0 s; `redefining module` 516 → 0) with the next lever named — profile the longest
+   async module and split it, not more conversions; no further work in this slice.
+
+Gates at this revision (slice partition `rf-w3-17`, foreground, strictly one run at a time; the ten
+`disconnected: … goal_0006_*` error lines in the test log are the pre-existing constraint-test
+noise that is byte-identical on both sides of the CI comparison):
+
+| gate | command | rc | counts |
+| --- | --- | --- | --- |
+| format | `mix format --check-formatted` | 0 | whole project |
+| compile | `MIX_ENV=test mix compile --warnings-as-errors` | 0 | `Compiling 2 files (.ex)` (the two edited support files), no warnings |
+| the eleven paths, seed 0 | `mix test <the ten migration files> test/symmetry_control/native_harness_kind_binding_test.exs --seed 0` | 0 | `81 passed` = 78 migration + 3 reader; 142.3 s = 137.0 s async + 5.2 s sync |
+
 ## Shared-state inventory (before → after)
 
 | shared surface at the base | why shared | after |
 | --- | --- | --- |
-| migration modules in the global code server: the base's one path-source helper (`MigrationCase.migrate_all_up!/0`, 11 call sites across four files, each call `Code.compile_file`-ing all 43 files) + 5 lazy loaders under a `function_exported?` check-then-act guard | redefinition warnings: 516 lines in the baseline seed-0 log (473 in seed 1), 0 in every delivered-side log; under `async: true` a redefinition can purge/swap a module another process executes | compiled once at boot under `ignore_module_conflict` (the `test` alias may have loaded the same files first); test time passes `{version, module}` tuples only; no `Code.compile_file` under `control/test` on this path |
+| migration modules in the global code server: the base's one path-source helper (`MigrationCase.migrate_all_up!/0`, 12 call sites across four files, each call `Code.compile_file`-ing all 43 files) + 5 lazy loaders under a `function_exported?` check-then-act guard | redefinition warnings: 516 lines in the baseline seed-0 log (473 in seed 1), 0 in every delivered-side log; under `async: true` a redefinition can purge/swap a module another process executes | compiled once at boot under `ignore_module_conflict` (the `test` alias may have loaded the same files first); test time passes `{version, module}` tuples only; no `Code.compile_file` under `control/test` on this path |
 | `CREATE SCHEMA`/`DROP SCHEMA` through `Sandbox.unboxed_run(Repo, …)` — a checkout against the suite-wide sandbox pool whose mode is one global value | DDL under the shared Repo while other tests use it | DDL on a fresh private single-connection non-sandbox Repo; the shared Repo is untouched |
 | schema names built ad hoc at three sites; one from `System.system_time(:microsecond)` | not unique under concurrency | one helper: module base + node-unique `System.unique_integer([:positive])` + wall-clock microseconds, 63-byte guard, lowercase-identifier check |
 | `public.oban_jobs` (the two Oban-rollback tests, in the F-8 `async: false` module) | the production migration hard-codes `public.` and the refusal test takes `LOCK TABLE public.oban_jobs IN SHARE MODE`; the async `migrate_all_up!()` runs drive `AddObanJobsTable` → `Oban.Migrations` with the same default `public` prefix, and the async phase enqueues through `task_goal_guard_controller_test.exs` → `Goals.command/4` → `Oban.insert!` | the refusal tests now run in the serial phase (F-8 move), so their SHARE lock cannot queue behind an async producer; the `AddObanJobsTable`-under-`migrate_all_up!` coupling stays, is bounded by the private pools' 30 s budget, and is audited not edited (see the Oban audit) |
@@ -303,7 +349,7 @@ Attempt 2 adds two hunk classes on top of the above, both ordered by a conductor
 | class | where | content |
 | --- | --- | --- |
 | query predicate | `native_harness_kind_binding_test.exs` (F-7) | `- "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = $1"` → `+` the same query as a heredoc with `AND connamespace = current_schema()::regnamespace`; plus two `#`-comment lines stating the concurrency reason. The changed text is the **argument** of the same `assert %{rows: [[definition]]} =` — no assertion, expected value or order changed, and the census shows the reader's 14 assert-family lines byte-identical |
-| F-8 move | `goal_0006_migration_test.exs` (donor) and `add_oban_jobs_table_test.exs` (new) | the two test bodies, their two helper definitions, the `@oban_migration_version` attribute and the `AddObanJobsTable` alias move out of the donor into the new module byte-for-byte; the new module additionally carries `with_base_schema/1`, `migrate_base_up!/0`, `migrate_goal_up!/0`, `base_migrations/0` (20 literal pairs), their aliases and `@migration_version`, copied from the donor because every file in this directory owns its migration list |
+| F-8 move | `goal_0006_migration_test.exs` (donor) and `add_oban_jobs_table_test.exs` (new) | the two test bodies (the refusal test's gaining only PRE-A01's marker-row `on_exit` cleanup), their two helper definitions, the `@oban_migration_version` attribute and the `AddObanJobsTable` alias move out of the donor into the new module; the new module additionally carries `with_base_schema/1`, `migrate_base_up!/0`, `migrate_goal_up!/0`, `base_migrations/0` (20 literal pairs), their aliases and `@migration_version`, copied from the donor because every file in this directory owns its migration list |
 
 `git diff --stat` over the final tree (attempt 1 + 2, uncommitted): the nine files, the two support
 files, `test_helper.exs`, the reader file, the new module, the plan and (after this stage's other
@@ -351,7 +397,7 @@ At the fix revision every one of the 53 sources is additionally wrapped in
 (`wrapped=53`), so the inner expressions above are the classified ones and still no source is a
 path, a directory or a variable.
 The four files that migrate the whole directory call
-`migrate_all_up!/0` (11 sites), whose implementation
+`migrate_all_up!/0` (12 sites), whose implementation
 (`control/test/support/migration_case.ex`, `migrate_all_up!/0`) passes
 `MigrationModules.migrations()`. No path,
 directory or string source remains. The suite-wide `Sandbox.mode(Repo, :manual)` stays in
@@ -435,9 +481,10 @@ Audit at the delivered tree (commands and outputs recorded):
 * **Resolution (attempt 2, conductor ruling F-8, third reading).** The two Oban tests moved out of
   `goal_0006_migration_test.exs` into a new `async: false` module —
   `control/test/symmetry_control/migrations/add_oban_jobs_table_test.exs`,
-  `SymmetryControl.Migrations.AddObanJobsTableTest` — with names and bodies byte-identical (the
-  census's union comparison is IDENTICAL to the base donor), so ExUnit runs them after every async
-  module and the refusal test can no longer wait on an async Oban producer. The new module carries
+  `SymmetryControl.Migrations.AddObanJobsTableTest` — with byte-identical test names and unchanged
+  assertion lines (the census's union comparison is IDENTICAL to the base donor; the refusal
+  test's body gains only PRE-A01's marker-row `on_exit` cleanup), so ExUnit runs them after every
+  async module and the refusal test can no longer wait on an async Oban producer. The new module carries
   the helpers it needs locally (`with_base_schema/1`, `migrate_base_up!/0`, `migrate_goal_up!/0`,
   `migrate_oban_up!/0`, `migrate_oban_down!/0`, `base_migrations/0`, their aliases and the two
   version attributes) — this directory's convention is one self-contained file per migration — and
@@ -798,7 +845,7 @@ re-verified in the tree before being accepted or rejected:
 | R6 | unvalidated base interpolated into DDL; `create_schema!` outside the `try`; the two manual call sites stop their Repo before dropping the schema, so a raising stop skips the drop (both) | latent, no live caller | fixed for the first two: lowercase-identifier check on the base, create moved inside the `try` (`DROP … IF EXISTS` makes the extra drop harmless). Restated at the fix revision (review SPEC-A03): `create_schema!/1` registers its ExUnit `on_exit` drop before it runs the DDL, so a raising `GenServer.stop` at the two manual call sites no longer skips the drop — the runner still drops the schema (probe P5-rerun: a killed test leaves `schemas_matching=0`, and with the registration removed it leaves one). The surviving residual is the narrower one: an `on_exit` drop that itself fails or is interrupted, with nothing sweeping leaks and no test asserting their absence |
 | R7 | `pool_size: 1` plus the inherited `migration_lock: :pg_advisory_lock` raises "pool size less than 2" for any caller that forgets `migration_lock: false` (ReviewTencent) | read in `postgres.ex:305-313`; all 51 sites pass the option today | fixed: `migration_lock: false` in `private_repo_config/0` |
 | R8 | registry glob is top-level-only while Ecto recurses; an empty glob is silent (ReviewSol) | read in `migrator.ex:660-680` | fixed: `**/*.exs` and a boot raise when the glob is empty |
-| R9 | `migrations/0`'s bare `:persistent_term` error; `GenServer.stop/1`'s 5 s default; the queue comment named the wrong defaults (both) | read | fixed: named error, `GenServer.stop(repo, :normal, 30_000)` at both sites, comment names the observed 4000 ms message |
+| R9 | `migrations/0`'s bare `:persistent_term` error; `GenServer.stop/1`'s 5 s default; the queue comment named the wrong defaults (both) | read | fixed: named error; `GenServer.stop(repo, :normal, 30_000)` in `run_private_query!/2` (the first fix revision's only bounded stop), the two pre-existing manual stops in `add_history_lookup_indexes_test.exs` / `add_task_command_ownership_test.exs` bounded to the same shape at the PR-review revision (P2-1); comment names the observed 4000 ms message |
 | R10 | three fresh connections per test instead of the base's one; suggested one shared DDL Repo per VM (ReviewTencent) | churn is real; the peak is measured in the envelope section (52 nominal ≤ 100) | **rejected with reasons**: a small shared DDL pool would serialize DDL that F-1/F-4/F-5 show can take tens of seconds under host saturation — the failure class the per-statement design exists to avoid |
 | R11 | `version!/1` raises where Ecto silently skips an unparseable file (both) | read | kept deliberately: Change 1 asks for drift caught before the first test |
 

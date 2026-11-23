@@ -1,9 +1,7 @@
 defmodule SymmetryControl.MigrationModules do
   @moduledoc """
   Ecto's directory source recompiles every migration file into the global code server on each
-  `run/4`, redefining modules that concurrent tests execute; the suite compiles the directory once
-  at boot (`test_helper.exs`) and passes these pairs to `Ecto.Migrator` instead. The `test` alias
-  already loaded this same source, so the recompiles' module-conflict warning is suppressed.
+  `run/4`, redefining modules concurrent tests may execute; the suite compiles them once at boot.
   """
 
   alias SymmetryControl.Repo.Migrations.AddEngineeringConnections
@@ -61,9 +59,8 @@ defmodule SymmetryControl.MigrationModules do
   end
 
   @doc """
-  The 20 `{version, module}` pairs every goal-0006-era test migrates before its own migration,
-  `CreateOrchestrationTables` through `VersionRequestHashes`. One definition so the files that
-  build on this base cannot drift apart silently.
+  The 20 migration pairs every goal-0006-era test builds on, one definition so the files that
+  extend them cannot drift apart silently.
   """
   def base_migrations do
     verified_pairs!([
@@ -91,9 +88,8 @@ defmodule SymmetryControl.MigrationModules do
   end
 
   @doc """
-  Returns `pairs` unchanged after checking every one against the boot registry's file-derived
-  entry for its module; raises when the version differs or the module has no migration file, so a
-  test cannot migrate or record a version no file on disk carries.
+  Returns `pairs` after checking each against the boot registry; raises when the version differs or
+  the module has no migration file, so a test cannot record a version no file carries.
   """
   def verified_pairs!(pairs) do
     registry = Map.new(migrations(), fn {version, module} -> {module, version} end)

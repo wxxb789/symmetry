@@ -1183,8 +1183,13 @@ version pinned` section of `docs/archive/CLOSED-TODO.md`.
       `w3-17-r2-runs/` three final-tree seeds): run 656.6 / 605.2 / 803.3 s → 342.7 / 336.0 / 294.0 s;
       sync phase 625.4 / 568.3 / 766.4 s → 123.1 / 137.8 / 120.1 s; async phase 31.2 / 36.9 / 36.9 s
       → 219.5 / 198.1 / 173.9 s, now bounded by `Goal0006MigrationTest` alone (its own work
-      202.0 / 178.1 / 154.9 s). Counts and name sets equal the baseline (`1032 = 1007 + 21 + 4`; the
-      F-8 move remaps two names), and the ten-module set is green at seeds 0-4 plus a 5× repeat,
+      202.0 / 178.1 / 154.9 s). Counts and name sets equal the reviewed head `f6b5b176`
+      (`only_left=0 only_right=0 state_diff=0` over `1181 = 1181`), as the attempt-2 streams did
+      against the dispatch base before the branch merged origin/main (`1032 = 1007 + 21 + 4`,
+      seeds 0/1/2, names identical with the F-8 move's two names remapped and the only state
+      movement being two pre-side flakes passing on the post side); the merged tree runs
+      `1181 = 1156 passed + 21 skipped + 4 excluded`. The ten-module set is green at seeds 0-4
+      plus a 5× repeat,
       with the seven small files at 25× repeat each and `goal_external_wait` at 25×. Five
       same-workload A/B runs in both orders show the local wall difference is not stable (the
       path-identical nine-path pair put the post side 16 s wall below the pre side, the
@@ -1193,13 +1198,13 @@ version pinned` section of `docs/archive/CLOSED-TODO.md`.
       concurrency inflates each module's own work (summed +16 % to +53 %), so the local number is
       report-only (W3-14 lesson F4). The review-stage fix revision re-ran the gates on the merged
       tree (ten-file set seeds 0-4, a 5× set repeat, the per-file sweeps at the accepted counts, one
-      full seed; table in the plan's "Fix-stage verification"). **Disposition request:** the
-      conductor rules on D9 and on the
-      ≤65 s target from the CI `coverage-control` number on the PR head (4-scheduler runner,
-      baseline 140.2 s = 18.1 s async + 122.0 s sync); the `[INFERENCE]` from these streams — the
-      async phase is now `Goal0006MigrationTest`'s own 58-test duration and the released serial time
-      is 48.2-86.7 s of the pre-side nine-file total at seed 0 — is that this conversion alone does
-      not reach ≤65 s. This entry stays open until that adjudication.
+      full seed; table in the plan's "Fix-stage verification"). **D9 ruling (2026-11-22, PR #262 CI
+      run 45115861829 vs main run 45109921118):** the `coverage-control` test step moved 166 s →
+      151 s (−9 %), ExUnit 133.9 s → 118.4 s (sync 116.0 → 47.3 s, async 17.9 → 71.0 s), and
+      `redefining module` warnings 516 → 0. The ≤65 s target is NOT reached: the async phase
+      (71.0 s) is now the floor. The slice lands as a measured improvement; this entry stays open
+      with the next lever named by the conductor: profile the longest async module and split it,
+      not more conversions. No further work in this slice.
 
 ## Deferred review findings (PR #197)
 

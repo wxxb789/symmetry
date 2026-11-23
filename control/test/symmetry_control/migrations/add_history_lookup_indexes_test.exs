@@ -77,7 +77,7 @@ defmodule SymmetryControl.Migrations.AddHistoryLookupIndexesTest do
       assert_indexes_valid!()
     after
       Repo.put_dynamic_repo(previous_dynamic_repo)
-      GenServer.stop(repo)
+      GenServer.stop(repo, :normal, 30_000)
       drop_schema!(schema)
     end
   end

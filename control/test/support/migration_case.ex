@@ -1,8 +1,7 @@
 defmodule SymmetryControl.MigrationCase do
   @moduledoc """
-  The isolated-schema harness of the migration tests: every test migrates
-  into a private schema through its own Repo, then the schema is dropped,
-  so partially-migrated states never touch the shared test schema.
+  Isolated-schema harness of the migration tests: every test migrates through its own Repo into a
+  private schema, so partially-migrated states never touch the shared test schema.
   """
 
   use ExUnit.CaseTemplate
@@ -30,11 +29,8 @@ defmodule SymmetryControl.MigrationCase do
   end
 
   @doc """
-  Runs `test` against `schema_base` plus a unique suffix, in the dynamic repo's private schema.
-  The private Repo is linked to the test process and ExUnit terminates that process with `:shutdown`
-  before `on_exit` runs, so no teardown call can fail over the test's own error; `create_schema!/1`'s
-  registered `on_exit` drop still runs for a failing or killed test. To observe pre-migration state
-  call `schema_name/1`, `create_schema!/1`, `start_schema_repo/1` and `drop_schema!/1` directly.
+  Runs `test` against a unique private schema. No teardown call here: ExUnit kills the test process
+  before `on_exit`, so a stop could only mask the test's own error.
   """
   def with_schema(schema_base, test) do
     schema = schema_name(schema_base)
@@ -79,8 +75,8 @@ defmodule SymmetryControl.MigrationCase do
   end
 
   @doc """
-  Registers an ExUnit `on_exit` drop for the paths no `after` block can reach: the runner process
-  runs it even after ExUnit killed the test process for a timeout.
+  Registers the `on_exit` drop before the DDL: ExUnit's kill path runs it even when it skips every
+  `after` block, so a timed-out test cannot leak its schema.
   """
   def create_schema!(schema) do
     on_exit(fn -> drop_schema!(schema) end)
@@ -93,9 +89,8 @@ defmodule SymmetryControl.MigrationCase do
   end
 
   @doc """
-  Runs `statement` with `params` on a fresh private single-connection Repo and stops it. Being off
-  the test's own pools is what makes this the shape for `on_exit` cleanup: the suite Repo cannot run
-  there (no sandbox ownership) and the test's dynamic Repo is already terminating.
+  Runs `statement` on a fresh private Repo with a bounded `:normal` stop: the shape `on_exit` cleanup
+  needs, since the suite Repo has no sandbox ownership and the dynamic Repo is already terminating.
   """
   def run_private_query!(statement, params) do
     {:ok, repo} = Repo.start_link(private_repo_config())
