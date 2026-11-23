@@ -1648,3 +1648,47 @@ is fixed here; each bullet names what a follow-up has to re-derive.
       UTF-8 `TextDecoder` strips the leading BOM before `JSON.parse`) and
       `goal-command.raw-number-negative-zero` (accepted by Go,
       JS and Elixir; no runtime enforces the canonical `-0` to `0` form).
+
+## Linux v2 codex/claude containment case sets await their first dispatch (rf-w5-02a, 2026-11-22)
+
+- [ ] `codex_containment` and `claude_containment` exist in
+      `.github/workflows/linux-native-v2-acceptance.yml` and
+      `scripts/ci/linux-v2-native-acceptance.sh` (fresh witness plus one same-RunKey `native_release`
+      crash-replay leg per kind), but no dispatched run has exercised them yet: the only full proof
+      is the dispatch-only workflow on a qualifying host, so this slice's off-host gates stay
+      prerequisites and the D3 `harness.md` amendment cannot cite per-kind green runs for codex or
+      claude until a run is green with each kind's `manifest.json` binding its executable digest,
+      archive digest, version line and source tree digest plus the recorded
+      `containment.native_open_reached`. The
+      `shared` set's frozen opencode leg is excluded from the per-kind green gate while W6-04/D1
+      keeps its bytes frozen (Owner ruling F2, 2026-11-22, binding): a red frozen leg in a dispatch
+      is recorded as the F2-excluded leg, not edited. The fixture's AppArmor-userns question above
+      is unverified for the guest launcher
+      (its userns creation is a privileged root one, unlike the probe's ambient-cap worker): the
+      first dispatch records the real behavior before any fixture work is scheduled there.
+
+## Orchestration concept split (rf-w5-18, 2026-11-22)
+
+- [ ] Remove the duplicated `ContextSnapshot` read in the goal runtime match. The split moved the
+      read into `control/lib/symmetry_control/goals/eligibility.ex:128-135` (validation runtime ids
+      from the admitted snapshot); the same row is loaded again by task id in
+      `control/lib/symmetry_control/goals/settlement.ex:620` (`Repo.get/2`) and re-read with a lock
+      in `control/lib/symmetry_control/goals/validation_outcome.ex:312-318`; Goal admission locks
+      it through `goals/internal.ex:144-151`. The contract declared the removal out of scope, so
+      the duplicate survives the split unchanged.
+
+- [ ] Fold the three compile-time constant copies the split left, or assert them against each
+      other. Attributes cannot be imported, so each module that reads one declares it:
+      `@terminal_states` (`control/lib/symmetry_control/orchestration/registry.ex:6`,
+      `.../transitions.ex:4`), `@supervisory_commands` (`.../registry.ex:5`,
+      `.../commands.ex:4`, `.../transitions.ex:7`), `@capacity_bearing_states`
+      (`.../assignment.ex:4`, `.../task_reads.ex:4`). A drift between two copies changes
+      eligibility silently; a shared module or a compile-time assertion removes the risk.
+      (`@native_harness_kinds` was folded in the apply stage: `Assignment.next_goal_runtime/3`
+      consumes `Registry.native_harness_kinds/0`.)
+
+- [ ] Fold the `retry_binding` type copy: `@type retry_binding` (with its `@typedoc`) is declared in
+      `control/lib/symmetry_control/orchestration.ex:22-27` (typedoc at `:17`) for the facade's
+      public specs and again in `control/lib/symmetry_control/orchestration/task_reads.ex:333-338`
+      (typedoc at `:328`) for the moved specs. A drifted copy would mis-document the retry
+      projection without failing a test.
