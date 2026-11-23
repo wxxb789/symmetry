@@ -4,9 +4,12 @@ Contract: `goal-rf-w6-09-goal-attention-unavailable-removal.md` (GDD; binding de
 lesson-32 control-flow decision, the PR #182 review round 2 design-amendment duty P2-A, the
 W6-reconcile P1 absence assertions, owner comment policy 2026-11-22). Contract revision SHA-256:
 `b39af1298b29d94392ba7ac0686a7d00973524da07694ea08a9a4d8829ded929`. Plan:
-`docs/plans/2026-11-23-rf-w6-09-goal-attention-unavailable-removal-plan.md`. Baseline:
-`55ecd76a61c26092b2bf0e97cbcb36d410cf5f22` (this worktree's HEAD, origin/main). Every coordinate
-below was read at that revision or at the change recorded beside it.
+`docs/plans/2026-11-23-rf-w6-09-goal-attention-unavailable-removal-plan.md`. Dispatch baseline:
+`55ecd76a61c26092b2bf0e97cbcb36d410cf5f22` (this worktree's HEAD, origin/main at dispatch).
+Delivered base: `e13450bc03499a62e77b125ac02596cdb433ce05` (origin/main; merged by the branch at
+`f9ca993d`). A commit cannot name its own sha, so the delivered head sha is recorded outside the
+tree (GDD ledger); the delivered tree is bound by the six artifact hashes in section 9. Every
+coordinate below was read at the dispatch baseline or at the change recorded beside it.
 
 ## 1. Method and toolchain
 
@@ -178,12 +181,14 @@ Every gate was run at least twice: once during implementation and again on the f
 | elixir web tree | `mix test test/symmetry_control_web/` | 0 | `291 passed, 1 skipped`, 33.8 s. The skip is the environment-gated `committed harness session receipts recover through real Go HTTP after listener restarts` (pre-existing, unrelated) |
 | frontend typecheck | `pnpm --filter @symmetry/frontend typecheck` | 0 | `tsc --noEmit`, no output |
 | frontend lint | `pnpm --filter @symmetry/frontend lint` | 0 | `219 problems (0 errors, 219 warnings)` — under the pinned `--max-warnings 229` cap, not raised |
-| frontend attention file | `vitest run src/features/goals/goal-attention.test.tsx` | 0 | `30 passed` (28 base cases + the new absence case; the replaced case keeps its slot), 18-20 s |
+| frontend attention file | `vitest run src/features/goals/goal-attention.test.tsx` | 0 | `30 passed` (29 base cases + the new absence case; the replaced case keeps its slot), 18-20 s |
 | frontend full | `pnpm --filter @symmetry/frontend test` | 0 | `27 passed` files, `633 passed` tests, 32.9 s |
 | frontend build (staging for the web tree) | `pnpm --filter @symmetry/frontend build` | 0 | built in 1.10 s; assets staged (gitignored) |
 | browser lint | `pnpm --filter symmetry-browser-acceptance lint` | 0 | `eslint . --max-warnings 0`, clean |
 | browser spec syntax | `node --check browser/tests/portal-goal-attention.spec.mjs` | 0 | syntax ok |
 | go test | `go test -count=1 ./internal/contracts/... ./internal/protocol/...` | 0 | `ok internal/contracts 1.694s`, `ok internal/protocol 2.538s` |
+| go format | `gofmt -l .` (daemon/) | 0 | no files listed |
+| go vet | `go vet ./...` (daemon/, host windows/amd64) | 0 | no output |
 | go build linux | `GOOS=linux go build ./...` | 0 | clean (regenerated `generated.go` compiles) |
 | go build windows | `GOOS=windows go build ./...` | 0 | clean |
 | whitespace | `git diff --check` | 0 | clean |

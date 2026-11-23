@@ -44,7 +44,7 @@ a new schema_version and explicit adapter negotiation.
 Amendment (2026-11-23, rf-w6-09 attention-read member removal). One v1 member is
 removed rather than added: the Portal attention read's `GoalAttentionFeed.unavailable`,
 always `null` on the served path, is gone from the schema, the served projection,
-the generated DTOs, the fixtures and the frontend in one revision. The 2026-11-21
+the generated DTOs, the served (valid) fixture and the frontend in one revision. The 2026-11-21
 owner mandate (no backward compatibility required for this refactor program)
 authorizes it, and no other member moved: `ProjectBlockedFeed.unavailable` still
 carries the live refusal (`code` + `message`) when the workspace read fails. The
