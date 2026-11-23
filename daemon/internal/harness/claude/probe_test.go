@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
@@ -124,44 +125,48 @@ func TestClaudeProbeBoundsHangingRunnerAndPreservesCallerCancellation(t *testing
 		}, want: context.Canceled, cancelAfterStart: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			ctx, cancel := test.context()
-			defer cancel()
-			runner := &hangingRunner{started: make(chan struct{})}
-			done := make(chan error, 1)
-			go func() {
-				_, err := probeCapabilities(ctx, "claude", runner)
-				done <- err
-			}()
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := test.context()
+				defer cancel()
+				runner := &hangingRunner{started: make(chan struct{})}
+				done := make(chan error, 1)
+				go func() {
+					_, err := probeCapabilities(ctx, "claude", runner)
+					done <- err
+				}()
 
-			select {
-			case <-runner.started:
-			case <-time.After(testHangGuard):
-				t.Fatal("probeCapabilities() did not start the runner")
-			}
-			if test.cancelAfterStart {
-				cancel()
-			}
-
-			select {
-			case err := <-done:
-				if !errors.Is(err, test.want) {
-					t.Fatalf("probeCapabilities() error = %v, want %v", err, test.want)
+				select {
+				case <-runner.started:
+				case <-time.After(testHangGuard):
+					t.Fatal("probeCapabilities() did not start the runner")
 				}
-			case <-time.After(testHangGuard):
-				t.Fatalf("probeCapabilities() did not return after %s", test.name)
-			}
+				if test.cancelAfterStart {
+					cancel()
+				}
+
+				select {
+				case err := <-done:
+					if !errors.Is(err, test.want) {
+						t.Fatalf("probeCapabilities() error = %v, want %v", err, test.want)
+					}
+				case <-time.After(testHangGuard):
+					t.Fatalf("probeCapabilities() did not return after %s", test.name)
+				}
+			})
 		})
 	}
 }
 
 func TestClaudeProbeRejectsSuccessAfterProbeDeadline(t *testing.T) {
-	capabilities, err := probeCapabilities(context.Background(), "claude", successAfterDeadlineRunner{})
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("probeCapabilities() error = %v, want context.DeadlineExceeded", err)
-	}
-	if capabilities.VersionKnown || capabilities.NativeVersion != "" || capabilities.TransportVerified || capabilities.Verified {
-		t.Fatalf("capabilities = %+v, want no capability from success-after-deadline output", capabilities)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		capabilities, err := probeCapabilities(context.Background(), "claude", successAfterDeadlineRunner{})
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("probeCapabilities() error = %v, want context.DeadlineExceeded", err)
+		}
+		if capabilities.VersionKnown || capabilities.NativeVersion != "" || capabilities.TransportVerified || capabilities.Verified {
+			t.Fatalf("capabilities = %+v, want no capability from success-after-deadline output", capabilities)
+		}
+	})
 }
 
 func TestClaudeProbeRejectsNilContextBeforeTheSharedGuard(t *testing.T) {
