@@ -1,27 +1,6 @@
 #!/usr/bin/env python3
-"""Fail when the Control Credo strict analysis breaches its committed baseline.
-
-The strict count is the ratchet: `credo-strict-baseline.json` records the measured
-issue count (per category), the analyzed-file count and the check count, and the
-baseline may only decrease - every decrease is recorded in the same change as the fix
-that causes it. A count above the baseline, a count below a stale baseline (a ceiling
-nobody lowered would let a later regression back in), fewer analyzed files or fewer
-checks than the baseline records, a source file Credo skipped, and any output line of
-the report this parser does not account for all fail: Credo's own exit status is a
-bitmask of issue severities rather than a count, so it is reported, never compared.
-
-The log is the whole `mix credo --strict` output (both streams) written under
-`control/.credo.exs`, whose explicit check list and `strict: true` make the printed
-report complete: every issue is rendered, in one block per category, and the closing
-report carries the analyzed-file count, the check count and the per-category wording.
-Lines before the `Checking N source files ...` banner are `mix`'s own output and are
-tolerated; from that banner on every line must be accounted for, so a changed output
-shape (a new Credo version, an added warning block, a coloured log) refuses instead of
-silently under-reporting the count.
-
-Usage:
-  assert-credo-strict-baseline.py --log PATH [--baseline PATH]
-"""
+"""Fail when the Control Credo strict analysis breaches its committed baseline; run it with
+`--log PATH [--baseline PATH]` over the whole `mix credo --strict` output."""
 
 import argparse
 import json

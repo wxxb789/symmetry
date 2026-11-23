@@ -18,7 +18,33 @@ SKIPPED_FILES = (
     "info: Some source files were not parsed in the time allotted:",
     "  1) lib/symmetry_control/slow.ex",
 )
+UNPARSABLE_FILES = (
+    "info: Some source files could not be parsed correctly and are excluded:",
+    "  1) lib/symmetry_control/broken.ex",
+)
 CATEGORY_ORDER = ("design", "readability", "refactor", "warning", "consistency")
+RENDERED_TITLE = {
+    "design": "Software Design",
+    "readability": "Code Readability",
+    "refactor": "Refactoring opportunities",
+    "warning": "Warnings - please take a look",
+    "consistency": "Consistency",
+}
+RENDERED_TAG = {
+    "design": "D",
+    "readability": "R",
+    "refactor": "F",
+    "warning": "W",
+    "consistency": "C",
+}
+RENDERED_WORDING = {
+    "consistency": ("consistency issue", "consistency issues"),
+    "warning": ("warning", "warnings"),
+    "refactor": ("refactoring opportunity", "refactoring opportunities"),
+    "readability": ("code readability issue", "code readability issues"),
+    "design": ("software design suggestion", "software design suggestions"),
+}
+SUMMARY_ORDER = ("consistency", "warning", "refactor", "readability", "design")
 
 
 def small_baseline(**overrides):
@@ -68,10 +94,10 @@ def render_log(
         count = sections.get(category, 0)
         if count == 0:
             continue
-        lines.append(f"  {GATE.CATEGORY_TITLE[category]}".ljust(79))
+        lines.append(f"  {RENDERED_TITLE[category]}".ljust(79))
         lines.append("┃ ")
         for number in range(count):
-            lines.append(f"┃ [{GATE.CATEGORY_TAG[category]}] → message {number} of {count}")
+            lines.append(f"┃ [{RENDERED_TAG[category]}] → message {number} of {count}")
             lines.append(f"┃       lib/symmetry_control/sample.ex:1{number}:3 #(Sample.run)")
         lines.extend(inside_section)
         lines.append("")
@@ -79,9 +105,7 @@ def render_log(
         analysis = f"Analysis took 16.2 seconds (1.2s to load, 15.0s running {checks} checks on {files} files)"
     if summary is None:
         parts = ", ".join(
-            f"{counts[category]} {GATE.CATEGORY_WORDING[category][1]}"
-            for category in GATE.SUMMARY_ORDER
-            if category in counts
+            f"{counts[category]} {RENDERED_WORDING[category][1]}" for category in SUMMARY_ORDER if category in counts
         )
         summary = f"4527 mods/funs, found {parts}."
     lines.extend([CRY_FOR_HELP, "", analysis, summary, "", HINT, "", *after_report])
@@ -176,6 +200,10 @@ class ShapeTests(GateCase):
         log = render_log(self.document, preamble=(*PREAMBLE, *SKIPPED_FILES))
         self.assert_red(log, "Credo skipped source file(s), so the analyzed set is incomplete")
 
+    def test_an_unparsable_source_file_preamble_refuses(self):
+        log = render_log(self.document, preamble=(*PREAMBLE, *UNPARSABLE_FILES))
+        self.assert_red(log, "Credo skipped source file(s), so the analyzed set is incomplete")
+
     def test_an_empty_analyzed_set_refuses(self):
         self.assert_red(
             render_log(self.document, files=0, summary="0 mods/funs, found no issues."), "analyzed no source file(s)"
@@ -248,6 +276,10 @@ class ShapeTests(GateCase):
     def test_a_summary_fragment_naming_no_category_refuses(self):
         log = render_log(self.document, summary="4527 mods/funs, found 3 spelling issues.")
         self.assert_red(log, "names no known category")
+
+    def test_an_out_of_order_summary_fragment_refuses(self):
+        log = render_log(self.document, summary="4527 mods/funs, found 2 software design suggestions, 1 warnings.")
+        self.assert_red(log, "is out of the summary's fixed order")
 
     def test_a_section_with_no_issue_refuses(self):
         log = render_log(self.document)
@@ -340,6 +372,24 @@ class InvocationTests(GateCase):
         )
         self.assertEqual(result.returncode, 2)
         self.assertIn("'files_analyzed' must be a positive integer", result.stderr)
+
+    def test_a_baseline_with_a_non_integer_count_is_not_usable(self):
+        for value in ("3", True):
+            path = self.write_baseline(small_baseline(files_analyzed=value))
+            result = citest.run_gate(
+                SCRIPT, "--log", str(self.write_log(render_log(self.document))), "--baseline", str(path)
+            )
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("'files_analyzed' must be an integer", result.stderr)
+
+    def test_a_baseline_with_a_non_positive_category_count_is_not_usable(self):
+        for by_category in ({"design": 2, "warning": True}, {"design": 3, "warning": 0}):
+            path = self.write_baseline(small_baseline(by_category=by_category))
+            result = citest.run_gate(
+                SCRIPT, "--log", str(self.write_log(render_log(self.document))), "--baseline", str(path)
+            )
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("needs a positive count", result.stderr)
 
 
 class ShippedBaselineTests(unittest.TestCase):

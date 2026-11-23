@@ -188,7 +188,7 @@ delivered, plus the formatter's own +120 `MaxLineLength`, leave the total above 
 | Credo, base and head | 564 issues over 225 files and 70 checks (identical in `dev` and `test`), unchanged by this slice's own files; 98 of the 225 files carry an issue |
 | the ratchet gate | the extracted `ci.yml` step body green (exit 0); the alias mutant red (exit 1, `Code Readability: 161 issue(s) against the baseline's 160`); the revert green |
 | coverage | three runs 87.64 / 87.62 / 87.58 % → `test_coverage: [summary: [threshold: 86.58]]`; the delivered threshold green at 87.65 %; a below-floor subset run red at 61.21 % (exit 3) |
-| suites | the gate's 38, the classifier's 32, the structure suite's 24, the folded-gate suite's 6 — all OK |
+| suites | the gate's 42, the classifier's 32, the structure suite's 24, the folded-gate suite's 6 — all OK |
 | tree | `mix format --check-formatted` 0, `MIX_ENV=test mix compile --warnings-as-errors` 0, `mix test` 1163 passed / 21 skipped, the web tree 291 passed / 1 skipped |
 | `ci.yml` | +9 / −39; the control job's other steps and `coverage-daemon`/`coverage-frontend` byte-identical |
 | record | `docs/evidence/rf-w6-10-elixir-lint-coverage-flips-2026-11-23.md` (every row with its command, exit code and counts) |

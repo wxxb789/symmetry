@@ -35,7 +35,7 @@ overlapped another harness.
 | --- | --- |
 | `.github/workflows/ci.yml` | the Credo step is the blocking ratchet gate (`continue-on-error` and the three `exit 0` skip branches gone, renamed, ending in the gate program); `coverage-control` drops its job-level `continue-on-error`, its step loses the `(advisory)` label and its comment names the mix threshold |
 | `scripts/ci/assert-credo-strict-baseline.py` | new: the fail-closed report parser and ratchet (exit 0 / 1 / 2) |
-| `scripts/ci/test-assert-credo-strict-baseline.py` | new: 38 tests |
+| `scripts/ci/test-assert-credo-strict-baseline.py` | new: 42 tests |
 | `scripts/ci/credo-strict-baseline.json` | new: the committed baseline (564 issues, 225 files, 70 checks, split 5/326/160/73 at `95d1df45`) |
 | `scripts/ci/test-ci-changed-path-classifier.py` | the advisory pin split per job + one mutation case (32 tests) |
 | `scripts/ci/test-ci-structure-extraction.py` | `ADVISORY_STEPS` loses the Credo step, `ADVISORY_JOBS` loses `coverage-control` + one mutation case (24 tests) |
@@ -50,8 +50,8 @@ Line delta (D2, report-only), `git diff --numstat` plus the new files' line coun
 `ci.yml` **+9 / −39** (the Credo step body shrinks from 37 to 9 lines; the coverage job loses one line
 and gains two comment lines), `control/mix.exs` **+3 / −3** (the threshold and its comment), the
 classifier suite **+37 / −1**, the structure suite **+11 / −2**, `docs/TODO.md` +14 / −3,
-`docs/archive/CLOSED-TODO.md` +15 / −0, and the new files: the gate **347** lines, its suite **355**,
-the baseline artefact **13**, the plan **194** and this record **223**. No `control/lib` or
+`docs/archive/CLOSED-TODO.md` +15 / −0, and the new files: the gate **326** lines, its suite **405**,
+the baseline artefact **13**, the plan **194** and this record **224**. No `control/lib` or
 `control/test` line changes.
 
 ## 3. The base→head control flow (conductor lesson 32)
@@ -168,7 +168,7 @@ the local minimum, the fix stage re-runs the arithmetic on the CI-observed numbe
 
 | gate | command | exit | counts / output |
 | --- | --- | ---: | --- |
-| the gate's suite | `python scripts/ci/test-assert-credo-strict-baseline.py` | 0 | `Ran 38 tests … OK` |
+| the gate's suite | `python scripts/ci/test-assert-credo-strict-baseline.py` | 0 | `Ran 42 tests … OK` |
 | classifier suite | `python scripts/ci/test-ci-changed-path-classifier.py` | 0 | `Ran 32 tests … OK` (routing/artifact pins unmodified; the advisory pin split, one mutation case added) |
 | structure suite | `python scripts/ci/test-ci-structure-extraction.py` | 0 | `Ran 24 tests … OK` (both advisory allowlists updated, one mutation case added) |
 | folded-gate suite | `python scripts/ci/test-assert-folded-gates.py` | 0 | `Ran 6 tests … OK` |
@@ -199,7 +199,7 @@ never committed), plus one row per guard the gate's suite pins:
 | a | two adjacent `alias` lines swapped in `control/lib/symmetry_control/orchestration.ex` (one `Readability.AliasOrder` violation) | the **extracted CI step body** exits 1 with `Code Readability: 161 issue(s) against the baseline's 160 (the strict count rose; …)`; the revert restores exit 0 (§5) |
 | b | a coverage run whose `Total` sits below the floor (the web-tree subset under the delivered 86.58) | `mix test --cover test/symmetry_control_web/` exits 3 with `Coverage test failed, threshold not met: Coverage: 61.21% / Threshold: 86.58%`, while the full run under the same threshold is green at 87.65 % (§6) |
 | c | the classifier/structure suites | re-gating `coverage-daemon` on `run-citations`, dropping its advisory line, dropping its `if: always()`, dropping its `defaults.run`, restoring `continue-on-error: true` to `coverage-control`, and marking `coverage-control` advisory again each redden the matching check (the suite cases themselves) |
-| d | the gate's own guards | each refusal has its own test in §2's suite: a rise, a fall, a new category, files below the floor, checks below the floor, a skipped source file, a missing banner, a truncated report, disagreeing counts, an out-of-order category, a crossed tag, a section with no issue, an unaccounted line inside a section, an unaccounted line after the report, a coloured line, a `--all`-style truncation, a missing summary, a missing analysis line, a missing or non-strict closing line, a malformed/missing/empty baseline |
+| d | the gate's own guards | each refusal has its own test in §2's suite: a rise, a fall, a new category, files below the floor, checks below the floor, a skipped source file, an unparsable-file preamble, a missing banner, a truncated report, disagreeing counts, an out-of-order category, an out-of-order summary fragment, a crossed tag, a section with no issue, an unaccounted line inside a section, an unaccounted line after the report, a coloured line, a `--all`-style truncation, a missing summary, a missing analysis line, a missing or non-strict closing line, a malformed/missing/empty/non-integer baseline and a non-positive category count |
 
 ## 9. Residual risks and limits
 
