@@ -4553,6 +4553,32 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
       is unchanged; like every write, its fetch init no longer carries the runtime's
       never-aborted step signal, and `run()`'s optional `signal` remains for the read half only.
 
+## Codex adapter giant-file split (rf-w5-16, 2026-11-23)
+
+- [ ] `daemon/internal/harness/codex/adapter.go` carried four protocol responsibilities in one
+      2,617-line file with the cancel-attempt state machine encoded as six loose session fields.
+      **Closed (2026-11-23, branch `refactor/rf-w5-16-codex-adapter-concepts`, plan
+      `docs/plans/2026-11-23-rf-w5-16-codex-adapter-concepts-plan.md`):** the file is split into
+      `adapter.go` (1,300 L), `cancel_state.go` (420 L: the `cancelTracker` state machine with 14
+      named transitions and one test-only violation hook), `rpc_session.go` (886 L: the
+      `rpcCorrelator`/`rpcResolution` correlation plus notification staging) and `translate.go`
+      (179 L: pure item/turn/notification mappings); those final line counts are the plan's section
+      17.1, the single source, and every file stays under the 1,500-line bound, with no production
+      behaviour change. The 58 lock-site sequences, the per-function cancel-field write sequences
+      (two disclosed order deviations inside one uninterrupted critical section, plan section 11)
+      and all 116 pre-existing test names survive; the non-test string literals are unchanged as
+      distinct values (391 — occurrence counts drop only where the dedupe keys were single-sourced,
+      section 17.1), and the tracker-level invariants carry new direct tests plus recorded red
+      mutants. The fix rounds hardened the owner-file write scan: map deletion, `clear` and
+      pointer-alias writes are refused (plan section 18, M8-M10), and a `cancelTracker` method
+      declared in any other file is refused whatever the receiver identifier is (plan section 19,
+      M11). The conductor's 2026-11-23 ruling accepted SPEC-A01 as amended (plan section 18.3) and
+      read clause 5's "no session" and mutant-wording items as the plan's section 17 records
+      (F20/F21); plan section 19 carries the round's other test, comment and record fixes with its
+      gate reruns. The evidence tables live in the plan; the `codex.Probe` nil-context re-pin stays
+      open in `docs/TODO.md` because `codex/probe.go` and `codex/probe_test.go` are outside this
+      slice's owned set.
+
 - [ ] `daemon/internal/platform/supervisor_linux_helper.go`: the in-process consumer of
       `recoverResponseLossStop` does not record the helper's authenticated recovery scan seal, so
       such a stop fails closed into a durable containment-unproven mark; only the restarted-daemon
