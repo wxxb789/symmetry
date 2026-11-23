@@ -92,15 +92,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       copy. Export the root helper and delete the copy in the slice that next owns `generic.go`
       (A3 adapter policy, W5). Owner area: daemon harness.
 
-- [ ] Reconcile the two `testdata/claude/**` READMEs with the relocated identifiers: both files
-      were frozen for rf-w4-15c (`harness/testdata/**` is W5-10's surface) and neither is in the
-      citation gate's audited corpus, so the move left them stale —
-      `daemon/internal/harness/testdata/claude/2.1.281/README.md:48` names
-      `claudeCandidateStructuredOutputSchema` (now `candidateStructuredOutputSchema` in
-      `claude/adapter.go`) and `daemon/internal/harness/testdata/claude/2.1.323/README.md:36`
-      names `ClaudeTestedExecutableHash` (now `testedExecutableHash` in `claude/probe.go`). Owner
-      area: W5-10 fixture pruning.
-
 - [ ] Re-pin `codex.Probe`'s own nil-context guard: `daemon/internal/harness/codex/probe.go`
       rejects a nil context with `"codex probe context must not be nil"`, and after the rf-w4-15c
       relocation deleted the root registry-seam case that exercised a nil context end to end, no

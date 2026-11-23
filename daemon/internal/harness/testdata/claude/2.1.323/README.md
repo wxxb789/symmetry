@@ -33,7 +33,7 @@ historical only and cannot satisfy this pin.
   every committed fixture in this directory.
   `TestClaudeTestdataManifestBindsRecordedDigests` recomputes every digest and
   requires the manifest's executable digest to equal the pinned
-  `ClaudeTestedExecutableHash`, so a fixture or pin drift fails a test instead of
+  `testedExecutableHash`, so a fixture or pin drift fails a test instead of
   silently weakening the evidence.
 
 ## Exact-binary binding
