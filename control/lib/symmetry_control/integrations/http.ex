@@ -32,24 +32,22 @@ defmodule SymmetryControl.Integrations.HTTP do
   # Socket call and environment-dependent options (the CA-store load) are rescued
   # together; the `{:error, reason}` clause above cannot double-wrap the outcome.
   defp perform(method, request) do
-    try do
-      options = [
-        autoredirect: false,
-        timeout: @timeout,
-        connect_timeout: 5_000,
-        ssl: [
-          verify: :verify_peer,
-          cacerts: :public_key.cacerts_get(),
-          customize_hostname_check: [
-            match_fun: :public_key.pkix_verify_hostname_match_fun(:https)
-          ]
+    options = [
+      autoredirect: false,
+      timeout: @timeout,
+      connect_timeout: 5_000,
+      ssl: [
+        verify: :verify_peer,
+        cacerts: :public_key.cacerts_get(),
+        customize_hostname_check: [
+          match_fun: :public_key.pkix_verify_hostname_match_fun(:https)
         ]
       ]
+    ]
 
-      :httpc.request(method, request, options, body_format: :binary)
-    rescue
-      error -> {:rescue, error}
-    end
+    :httpc.request(method, request, options, body_format: :binary)
+  rescue
+    error -> {:rescue, error}
   end
 
   defp encode_headers(headers) do

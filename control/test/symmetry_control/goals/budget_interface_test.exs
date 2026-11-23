@@ -30,9 +30,8 @@ defmodule SymmetryControl.Goals.BudgetInterfaceTest do
         execution_policy: strict_execution_policy()
       })
 
-    assert Repo.one!(
-             from(reservation in GoalBudgetReservation, where: reservation.task_id == ^task.id)
-           ).reserved_microusd == 20
+    assert Repo.one!(from(reservation in GoalBudgetReservation, where: reservation.task_id == ^task.id)).reserved_microusd ==
+             20
 
     revision = Internal.current_revision!(goal)
 
@@ -132,9 +131,8 @@ defmodule SymmetryControl.Goals.BudgetInterfaceTest do
 
     assert Budget.reconcile_reservation!(goal, completed, now: @now) == true
 
-    assert Repo.one!(
-             from(reservation in GoalBudgetReservation, where: reservation.task_id == ^task.id)
-           ).state == "released"
+    assert Repo.one!(from(reservation in GoalBudgetReservation, where: reservation.task_id == ^task.id)).state ==
+             "released"
 
     assert Budget.reconcile_reservation!(goal, completed, now: @now) == false
   end

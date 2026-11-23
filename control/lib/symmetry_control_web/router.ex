@@ -1,23 +1,27 @@
 defmodule SymmetryControlWeb.Router do
   use SymmetryControlWeb, :router
 
+  alias SymmetryControlWeb.Plugs.CredentialAuth
+  alias SymmetryControlWeb.Plugs.PortalAuth
+  alias SymmetryControlWeb.Plugs.PortalInvalidations
+
   pipeline :api do
     plug :accepts, ["json"]
   end
 
   pipeline :enrollment do
-    plug SymmetryControlWeb.Plugs.CredentialAuth, accepts: :enrollment
+    plug CredentialAuth, accepts: :enrollment
   end
 
   pipeline :machine do
-    plug SymmetryControlWeb.Plugs.CredentialAuth, accepts: :machine
-    plug SymmetryControlWeb.Plugs.PortalInvalidations
+    plug CredentialAuth, accepts: :machine
+    plug PortalInvalidations
   end
 
   pipeline :operator do
     plug :put_surface, surface: :operator
-    plug SymmetryControlWeb.Plugs.CredentialAuth, accepts: :operator
-    plug SymmetryControlWeb.Plugs.PortalInvalidations
+    plug CredentialAuth, accepts: :operator
+    plug PortalInvalidations
   end
 
   pipeline :portal_browser do
@@ -35,12 +39,12 @@ defmodule SymmetryControlWeb.Router do
     plug :protect_from_forgery
     plug :put_secure_browser_headers
     plug :put_portal_no_store
-    plug SymmetryControlWeb.Plugs.PortalAuth, format: :json
-    plug SymmetryControlWeb.Plugs.PortalInvalidations
+    plug PortalAuth, format: :json
+    plug PortalInvalidations
   end
 
   pipeline :portal_authenticated do
-    plug SymmetryControlWeb.Plugs.PortalAuth, format: :html
+    plug PortalAuth, format: :html
   end
 
   scope "/", SymmetryControlWeb do
@@ -122,7 +126,7 @@ defmodule SymmetryControlWeb.Router do
   end
 
   scope "/api/v1", SymmetryControlWeb do
-    pipe_through [:api, SymmetryControlWeb.Plugs.PortalInvalidations]
+    pipe_through [:api, PortalInvalidations]
 
     post "/provider-actions", ProviderActionController, :create, log: false
   end

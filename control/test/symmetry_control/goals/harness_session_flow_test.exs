@@ -2,22 +2,25 @@ Code.require_file("goals_test_support.exs", __DIR__)
 
 defmodule SymmetryControl.Goals.HarnessSessionFlowTest do
   use SymmetryControl.OrchestrationCase, async: false
+  @now ~U[2026-09-09 00:00:00.000000Z]
+  use SymmetryControl.TestFixtures,
+    command_opts: [
+      now: @now,
+      validation_profiles: SymmetryControl.GoalsTestSupport.validation_profiles()
+    ]
 
   import SymmetryControl.GoalsTestSupport
 
   alias SymmetryControl.Goals
+  alias SymmetryControl.Goals.ContextSnapshot
   alias SymmetryControl.Goals.HarnessSession
   alias SymmetryControl.Goals.HarnessSessionAttachReceipt
   alias SymmetryControl.Goals.HarnessSessionStopReceipt
+  alias SymmetryControl.Goals.WorkDependency
   alias SymmetryControl.Orchestration.Run
   alias SymmetryControl.Orchestration.Runtime
   alias SymmetryControl.Orchestration.Task
   alias SymmetryControl.Repo
-
-  @now ~U[2026-09-09 00:00:00.000000Z]
-
-  use SymmetryControl.TestFixtures,
-    command_opts: [now: @now, validation_profiles: validation_profiles()]
 
   setup :put_goal_validation_profiles
 
@@ -51,7 +54,8 @@ defmodule SymmetryControl.Goals.HarnessSessionFlowTest do
       expected_revision: created.goal.current_revision,
       items: [
         plan_item.("first"),
-        plan_item.("second")
+        "second"
+        |> plan_item.()
         |> Map.put(:depends_on_keys, ["first"])
         |> Map.put(:baseline, %{kind: "dependency", key: "first"})
       ]
@@ -93,7 +97,7 @@ defmodule SymmetryControl.Goals.HarnessSessionFlowTest do
                decision_id: scope_decision_id
              })
 
-    assert Repo.aggregate(SymmetryControl.Goals.WorkDependency, :count) == 1
+    assert Repo.aggregate(WorkDependency, :count) == 1
 
     assert {:ok, baseline_scope_decision, :created} =
              command_current(created.goal.id, "request_decision", %{
@@ -122,7 +126,7 @@ defmodule SymmetryControl.Goals.HarnessSessionFlowTest do
                decision_id: baseline_scope_decision_id
              })
 
-    assert Repo.aggregate(SymmetryControl.Goals.WorkDependency, :count) == 1
+    assert Repo.aggregate(WorkDependency, :count) == 1
   end
 
   test "machine session attach binds the claimed run and replays only the same opaque handle" do
@@ -210,8 +214,7 @@ defmodule SymmetryControl.Goals.HarnessSessionFlowTest do
 
     assert {:ok, _amended, :created} =
              command_current(goal.id, "amend", %{
-               revision_contract:
-                 amended_revision_contract("Amend after an attach acknowledgement loss."),
+               revision_contract: amended_revision_contract("Amend after an attach acknowledgement loss."),
                reason: "The original attach remains an idempotent fact."
              })
 
@@ -292,9 +295,7 @@ defmodule SymmetryControl.Goals.HarnessSessionFlowTest do
     }
 
     assert {:error, :state_conflict} =
-             Goals.mark_harness_session_stopped(runtime.machine_id, run.id, fence, stop,
-               now: @now
-             )
+             Goals.mark_harness_session_stopped(runtime.machine_id, run.id, fence, stop, now: @now)
 
     Repo.update_all(from(row in Task, where: row.id == ^task.id), set: [state: "completed"])
     Repo.update_all(from(row in Run, where: row.id == ^run.id), set: [state: "completed"])
@@ -319,9 +320,7 @@ defmodule SymmetryControl.Goals.HarnessSessionFlowTest do
                 "active_run_id" => nil
               }
             } = receipt, :created} =
-             Goals.mark_harness_session_stopped(runtime.machine_id, run.id, fence, stop,
-               now: @now
-             )
+             Goals.mark_harness_session_stopped(runtime.machine_id, run.id, fence, stop, now: @now)
 
     assert receipt_id
     assert run_id == run.id
@@ -332,9 +331,7 @@ defmodule SymmetryControl.Goals.HarnessSessionFlowTest do
     assert Repo.aggregate(HarnessSessionStopReceipt, :count) == 1
 
     assert {:ok, ^receipt, :replayed} =
-             Goals.mark_harness_session_stopped(runtime.machine_id, run.id, fence, stop,
-               now: @now
-             )
+             Goals.mark_harness_session_stopped(runtime.machine_id, run.id, fence, stop, now: @now)
 
     assert %{binding_id: ^binding_id, state: "available", active_run_id: nil} =
              Repo.get!(HarnessSession, session.id)
@@ -356,7 +353,7 @@ defmodule SymmetryControl.Goals.HarnessSessionFlowTest do
       set: [state: "completed", updated_at: @now]
     )
 
-    snapshot = Repo.get!(SymmetryControl.Goals.ContextSnapshot, admitted_task.context_snapshot_id)
+    snapshot = Repo.get!(ContextSnapshot, admitted_task.context_snapshot_id)
 
     snapshot_id = Ecto.UUID.generate()
 
@@ -379,8 +376,8 @@ defmodule SymmetryControl.Goals.HarnessSessionFlowTest do
       )
 
     snapshot =
-      %SymmetryControl.Goals.ContextSnapshot{id: snapshot_id}
-      |> SymmetryControl.Goals.ContextSnapshot.changeset(%{
+      %ContextSnapshot{id: snapshot_id}
+      |> ContextSnapshot.changeset(%{
         goal_id: goal.id,
         goal_revision: admitted_task.goal_revision,
         work_item_id: item.id,
@@ -456,9 +453,7 @@ defmodule SymmetryControl.Goals.HarnessSessionFlowTest do
     assert context.context["content_hash"] ==
              "sha256:" <>
                Base.encode16(
-                 SymmetryControl.RequestHash.canonical(
-                   Map.delete(context.context, "content_hash")
-                 ),
+                 SymmetryControl.RequestHash.canonical(Map.delete(context.context, "content_hash")),
                  case: :lower
                )
 

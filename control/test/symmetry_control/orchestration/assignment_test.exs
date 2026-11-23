@@ -4,7 +4,8 @@ defmodule SymmetryControl.Orchestration.AssignmentTest do
   alias SymmetryControl.Goals.HarnessSession
   alias SymmetryControl.Orchestration
   alias SymmetryControl.Orchestration.Assignment
-  alias SymmetryControl.Orchestration.{Run, TaskReads}
+  alias SymmetryControl.Orchestration.Run
+  alias SymmetryControl.Orchestration.TaskReads
   alias SymmetryControl.Workspaces
 
   @now ~U[2026-09-02 00:00:00.000000Z]

@@ -5,14 +5,19 @@ defmodule SymmetryControl.Goals.DispatchNotificationTest do
     command_opts: [now: now(), rollout_enabled: true, validation_profiles: validation_profiles()]
 
   import Ecto.Query
-
   import SymmetryControl.TestFixtures, only: [goal_command: 3, goal_command: 4]
 
   alias Ecto.Adapters.SQL.Sandbox
   alias Oban.Job
   alias SymmetryControl.Goals
-  alias SymmetryControl.Goals.Workers.{GoalControlWorker, WakeupWorker}
-  alias SymmetryControl.Orchestration.{Command, Machine, Run, Runtime, Scheduler, Task}
+  alias SymmetryControl.Goals.Workers.GoalControlWorker
+  alias SymmetryControl.Goals.Workers.WakeupWorker
+  alias SymmetryControl.Orchestration.Command
+  alias SymmetryControl.Orchestration.Machine
+  alias SymmetryControl.Orchestration.Run
+  alias SymmetryControl.Orchestration.Runtime
+  alias SymmetryControl.Orchestration.Scheduler
+  alias SymmetryControl.Orchestration.Task
   alias SymmetryControl.Repo
   alias SymmetryControl.Workspaces
   alias SymmetryControl.Workspaces.WorkItem
@@ -182,7 +187,7 @@ defmodule SymmetryControl.Goals.DispatchNotificationTest do
   test "a future same-Goal wakeup does not coalesce the immediate wakeup" do
     with_scheduler_disabled(fn ->
       fixture = active_goal_fixture()
-      future = DateTime.add(now(), 60, :second)
+      future = DateTime.shift(now(), minute: 1)
       jobs_before = wakeup_job_count(fixture.goal.id)
 
       assert {:ok, _receipt, :created} =
@@ -221,9 +226,7 @@ defmodule SymmetryControl.Goals.DispatchNotificationTest do
     refute_receive {:command_available, _}, 100
 
     assert :ok =
-             GoalControlWorker.perform(
-               control_job(fixture.goal.id, fixture.goal.current_revision, action_id)
-             )
+             GoalControlWorker.perform(control_job(fixture.goal.id, fixture.goal.current_revision, action_id))
 
     command_row =
       Repo.one!(
@@ -257,9 +260,7 @@ defmodule SymmetryControl.Goals.DispatchNotificationTest do
     assert {:ok, :outer_complete} =
              Repo.transaction(fn ->
                assert :ok =
-                        GoalControlWorker.perform(
-                          control_job(fixture.goal.id, fixture.goal.current_revision, action_id)
-                        )
+                        GoalControlWorker.perform(control_job(fixture.goal.id, fixture.goal.current_revision, action_id))
 
                refute_receive {:command_available, _}, 100
                :outer_complete
@@ -288,9 +289,7 @@ defmodule SymmetryControl.Goals.DispatchNotificationTest do
     action_id = cancelled.response["control_action_id"]
 
     assert :ok =
-             GoalControlWorker.perform(
-               control_job(fixture.goal.id, fixture.goal.current_revision, action_id)
-             )
+             GoalControlWorker.perform(control_job(fixture.goal.id, fixture.goal.current_revision, action_id))
 
     command_row =
       Repo.one!(
@@ -324,9 +323,7 @@ defmodule SymmetryControl.Goals.DispatchNotificationTest do
     action_id = paused.response["control_action_id"]
 
     assert :ok =
-             GoalControlWorker.perform(
-               control_job(fixture.goal.id, fixture.goal.current_revision + 1, action_id)
-             )
+             GoalControlWorker.perform(control_job(fixture.goal.id, fixture.goal.current_revision + 1, action_id))
 
     assert {:cancel, :invalid_goal_control_job} = GoalControlWorker.perform(%Job{args: %{}})
     refute Repo.exists?(from(command in Command, where: command.task_id == ^fixture.task.id))
@@ -337,8 +334,8 @@ defmodule SymmetryControl.Goals.DispatchNotificationTest do
     database = System.get_env("POSTGRES_DB")
     configured_database = Keyword.get(Repo.config(), :database)
 
-    unless is_binary(database) and configured_database == database and
-             Regex.match?(~r/^symmetry_dispatch_e2e_[0-9a-f]{32}$/, database) do
+    if !(is_binary(database) and configured_database == database and
+           Regex.match?(~r/^symmetry_dispatch_e2e_[0-9a-f]{32}$/, database)) do
       flunk(
         "goal dispatch E2E requires POSTGRES_DB and Repo database " <>
           "to match symmetry_dispatch_e2e_<32 lowercase hex>"
@@ -347,27 +344,27 @@ defmodule SymmetryControl.Goals.DispatchNotificationTest do
 
     %{rows: [[current_database]]} = Repo.query!("SELECT current_database()")
 
-    unless current_database == database do
+    if current_database != database do
       flunk("goal dispatch E2E connected to #{current_database}, expected #{database}")
     end
 
     table_names =
-      Repo.query!("""
-      SELECT table_name
-      FROM information_schema.tables
-      WHERE table_schema = 'public'
-        AND table_type = 'BASE TABLE'
-        AND table_name <> 'schema_migrations'
-      ORDER BY table_name
-      """).rows
-      |> Enum.map(&List.first/1)
+      Enum.map(
+        Repo.query!("""
+        SELECT table_name
+        FROM information_schema.tables
+        WHERE table_schema = 'public'
+          AND table_type = 'BASE TABLE'
+          AND table_name <> 'schema_migrations'
+        ORDER BY table_name
+        """).rows,
+        &List.first/1
+      )
 
     nonempty_tables = Enum.filter(table_names, &table_nonempty?/1)
 
-    unless nonempty_tables == [] do
-      flunk(
-        "goal dispatch E2E requires an empty database; found rows in #{inspect(nonempty_tables)}"
-      )
+    if nonempty_tables != [] do
+      flunk("goal dispatch E2E requires an empty database; found rows in #{inspect(nonempty_tables)}")
     end
   end
 
@@ -399,7 +396,7 @@ defmodule SymmetryControl.Goals.DispatchNotificationTest do
     end
   end
 
-  defp now, do: DateTime.utc_now() |> DateTime.truncate(:microsecond)
+  defp now, do: DateTime.truncate(DateTime.utc_now(), :microsecond)
 
   defp request_plan_command(fixture) do
     goal_command(fixture.goal, "request_plan", %{
@@ -416,13 +413,15 @@ defmodule SymmetryControl.Goals.DispatchNotificationTest do
     repository = repository_fixture(project)
 
     policy =
-      %{
-        "max_parallel_tasks" => 1,
-        "max_task_admissions" => 4,
-        "allowed_resource_ids" => [repository.id],
-        "allowed_model_profiles" => ["codex"]
-      }
-      |> Map.merge(policy_overrides)
+      Map.merge(
+        %{
+          "max_parallel_tasks" => 1,
+          "max_task_admissions" => 4,
+          "allowed_resource_ids" => [repository.id],
+          "allowed_model_profiles" => ["codex"]
+        },
+        policy_overrides
+      )
 
     assert {:ok, created, :created} =
              Goals.create_goal(project.id, goal_attrs(policy), "operator:test", command_opts())
@@ -537,9 +536,9 @@ defmodule SymmetryControl.Goals.DispatchNotificationTest do
         claim_id: claim_id,
         lease_token: lease_token,
         assigned_at: current,
-        assignment_expires_at: DateTime.add(current, 60, :second),
+        assignment_expires_at: DateTime.shift(current, minute: 1),
         claimed_at: current,
-        lease_expires_at: DateTime.add(current, 3_600, :second)
+        lease_expires_at: DateTime.shift(current, hour: 1)
       })
       |> Repo.insert!()
 
@@ -621,7 +620,7 @@ defmodule SymmetryControl.Goals.DispatchNotificationTest do
 
   defp wakeup_jobs(goal_id) do
     Repo.all(
-      from(job in Oban.Job,
+      from(job in Job,
         where:
           job.worker == "SymmetryControl.Goals.Workers.WakeupWorker" and
             fragment("? ->> 'goal_id' = ?", job.args, ^goal_id),
@@ -670,22 +669,24 @@ defmodule SymmetryControl.Goals.DispatchNotificationTest do
           "allowed_actions" => []
         },
         execution_policy:
-          %{
-            "automatic_execution" => false,
-            "max_parallel_tasks" => 1,
-            "max_task_admissions" => 4,
-            "max_run_attempts_per_task" => 2,
-            "budget_limit_microusd" => nil,
-            "per_run_cost_limit_microusd" => nil,
-            "budget_mode" => "soft",
-            "hard_cost_limit_required" => false,
-            "allowed_runtime_ids" => [],
-            "allowed_model_profiles" => [],
-            "final_acceptance" => "operator",
-            "allowed_actions" => [],
-            "allowed_resource_ids" => []
-          }
-          |> Map.merge(execution_policy),
+          Map.merge(
+            %{
+              "automatic_execution" => false,
+              "max_parallel_tasks" => 1,
+              "max_task_admissions" => 4,
+              "max_run_attempts_per_task" => 2,
+              "budget_limit_microusd" => nil,
+              "per_run_cost_limit_microusd" => nil,
+              "budget_mode" => "soft",
+              "hard_cost_limit_required" => false,
+              "allowed_runtime_ids" => [],
+              "allowed_model_profiles" => [],
+              "final_acceptance" => "operator",
+              "allowed_actions" => [],
+              "allowed_resource_ids" => []
+            },
+            execution_policy
+          ),
         context_manifest: %{
           "byte_budget" => 32_768,
           "required_source_kinds" => ["repository"],

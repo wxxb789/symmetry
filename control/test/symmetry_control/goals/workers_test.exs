@@ -3,9 +3,13 @@ defmodule SymmetryControl.Goals.WorkersTest do
   use SymmetryControl.TestFixtures, command_opts: [validation_profiles: validation_profiles()]
 
   alias Oban.Job
-  alias SymmetryControl.{Goals, Repo, Workspaces}
+  alias SymmetryControl.Goals
   alias SymmetryControl.Goals.GoalDecision
-  alias SymmetryControl.Goals.Workers.{GoalControlWorker, SettleTaskWorker, WakeupWorker}
+  alias SymmetryControl.Goals.Workers.GoalControlWorker
+  alias SymmetryControl.Goals.Workers.SettleTaskWorker
+  alias SymmetryControl.Goals.Workers.WakeupWorker
+  alias SymmetryControl.Repo
+  alias SymmetryControl.Workspaces
 
   setup do
     previous = Application.fetch_env!(:symmetry_control, :goals)
@@ -47,7 +51,7 @@ defmodule SymmetryControl.Goals.WorkersTest do
 
     assert opts[:queue] == :goal_settlement
     assert opts[:max_attempts] == 5
-    assert SettleTaskWorker.timeout(%Job{}) == :timer.seconds(30)
+    assert SettleTaskWorker.timeout(%Job{}) == to_timeout(second: 30)
 
     assert opts[:unique] == [
              period: {10, :minutes},
@@ -62,7 +66,7 @@ defmodule SymmetryControl.Goals.WorkersTest do
 
     assert opts[:queue] == :goal_wakeup
     assert opts[:max_attempts] == 5
-    assert WakeupWorker.timeout(%Job{}) == :timer.seconds(30)
+    assert WakeupWorker.timeout(%Job{}) == to_timeout(second: 30)
 
     assert opts[:unique] == [
              period: {10, :minutes},
@@ -77,7 +81,7 @@ defmodule SymmetryControl.Goals.WorkersTest do
 
     assert opts[:queue] == :goal_control
     assert opts[:max_attempts] == 5
-    assert GoalControlWorker.timeout(%Job{}) == :timer.seconds(30)
+    assert GoalControlWorker.timeout(%Job{}) == to_timeout(second: 30)
 
     assert opts[:unique] == [
              period: {10, :minutes},
@@ -97,9 +101,7 @@ defmodule SymmetryControl.Goals.WorkersTest do
       })
 
     {:ok, created, :created} =
-      Goals.create_goal(project.id, goal_attrs(), "operator:test",
-        validation_profiles: validation_profiles()
-      )
+      Goals.create_goal(project.id, goal_attrs(), "operator:test", validation_profiles: validation_profiles())
 
     {:ok, repository} =
       Workspaces.create_resource(project.id, %{

@@ -7,7 +7,8 @@ defmodule SymmetryControlWeb.PortalApiController do
   alias SymmetryControl.Orchestration
   alias SymmetryControl.Workspaces
   alias SymmetryControl.Workspaces.ReadModel
-  alias SymmetryControlWeb.{PortalJSON, Protocol}
+  alias SymmetryControlWeb.PortalJSON
+  alias SymmetryControlWeb.Protocol
 
   def workspace(conn, params) do
     case ReadModel.workspace(Map.get(params, "project_id")) do
@@ -377,14 +378,7 @@ defmodule SymmetryControlWeb.PortalApiController do
 
   def retry_work_item(conn, _params), do: error(conn, :invalid_request)
 
-  def provide_input(
-        conn,
-        %{
-          "input" => input,
-          "action_id" => action_id,
-          "waiting_transition_id" => waiting_transition_id
-        }
-      )
+  def provide_input(conn, %{"input" => input, "action_id" => action_id, "waiting_transition_id" => waiting_transition_id})
       when is_map(input) and is_binary(action_id) and is_binary(waiting_transition_id) do
     work_item_id = Map.fetch!(conn.path_params, "work_item_id")
 
@@ -432,8 +426,7 @@ defmodule SymmetryControlWeb.PortalApiController do
     PortalJSON.work_item(work_item, ReadModel.projections([work_item]))
   end
 
-  defp error(conn, %Ecto.Changeset{} = changeset),
-    do: Protocol.validation_error(conn, changeset)
+  defp error(conn, %Ecto.Changeset{} = changeset), do: Protocol.validation_error(conn, changeset)
 
   defp error(conn, reason), do: Protocol.error(conn, reason)
 
@@ -507,14 +500,11 @@ defmodule SymmetryControlWeb.PortalApiController do
     }
   end
 
-  defp resource_status_message(%{status_message: message})
-       when is_binary(message) and message != "",
-       do: message
+  defp resource_status_message(%{status_message: message}) when is_binary(message) and message != "", do: message
 
   defp resource_status_message(_resource), do: nil
 
-  defp version_param(params) when is_map(params),
-    do: wire_integer(Map.get(params, "version"), {1, :infinity})
+  defp version_param(params) when is_map(params), do: wire_integer(Map.get(params, "version"), {1, :infinity})
 
   defp version_param(_params), do: {:error, :invalid_request}
 end

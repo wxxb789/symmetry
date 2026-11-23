@@ -12,25 +12,18 @@ defmodule SymmetryControlWeb.PortalResourcesTest.Provider do
 
   @behaviour SymmetryControl.Integrations.Provider
 
+  alias SymmetryControl.Integrations.Providers.AzureDevOps
+  alias SymmetryControl.Integrations.Providers.GitHub
+
   @impl true
   def authenticate(_connection), do: {:ok, :steered}
 
   @impl true
   def validate_resource_reference(%{provider: "github"} = connection, kind, reference),
-    do:
-      SymmetryControl.Integrations.Providers.GitHub.validate_resource_reference(
-        connection,
-        kind,
-        reference
-      )
+    do: GitHub.validate_resource_reference(connection, kind, reference)
 
   def validate_resource_reference(%{provider: "azure_devops"} = connection, kind, reference),
-    do:
-      SymmetryControl.Integrations.Providers.AzureDevOps.validate_resource_reference(
-        connection,
-        kind,
-        reference
-      )
+    do: AzureDevOps.validate_resource_reference(connection, kind, reference)
 
   @impl true
   def check(connection, :steered) do
@@ -66,27 +59,16 @@ defmodule SymmetryControlWeb.PortalResourcesTest.Provider do
   end
 
   @impl true
-  def execute(_connection, _resource, _work_item, _operation, _input, :steered),
-    do: {:error, :unsupported_resource}
+  def execute(_connection, _resource, _work_item, _operation, _input, :steered), do: {:error, :unsupported_resource}
 
   # The pull request URL is the delivery's identity, so the policy runs before
   # any steered answer: a malformed URL, or one that belongs to a repository
   # other than the bound resource, is refused instead of reported as a delivery.
   defp validate_pull_request_url(%{provider: "github"} = connection, resource, url),
-    do:
-      SymmetryControl.Integrations.Providers.GitHub.validate_pull_request_url(
-        connection,
-        resource,
-        url
-      )
+    do: GitHub.validate_pull_request_url(connection, resource, url)
 
   defp validate_pull_request_url(%{provider: "azure_devops"} = connection, resource, url),
-    do:
-      SymmetryControl.Integrations.Providers.AzureDevOps.validate_pull_request_url(
-        connection,
-        resource,
-        url
-      )
+    do: AzureDevOps.validate_pull_request_url(connection, resource, url)
 
   defp steering, do: Application.get_env(:symmetry_control, :portal_resources_steering, %{})
 
@@ -100,8 +82,7 @@ defmodule SymmetryControlWeb.PortalResourcesTest.Provider do
     }
   end
 
-  defp provider_url(%{provider: "github"}, external_ref),
-    do: "https://github.com/" <> external_ref
+  defp provider_url(%{provider: "github"}, external_ref), do: "https://github.com/" <> external_ref
 
   defp provider_url(%{provider: "azure_devops", account_ref: account_ref}, external_ref),
     do: "https://dev.azure.com/#{account_ref}/" <> external_ref
@@ -118,8 +99,10 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
   alias SymmetryControl.Orchestration
   alias SymmetryControl.Repo
   alias SymmetryControl.TestEnv
-  alias SymmetryControl.Workspaces.{ProjectResource, WorkItem}
+  alias SymmetryControl.Workspaces.ProjectResource
+  alias SymmetryControl.Workspaces.WorkItem
   alias SymmetryControlWeb.PortalJSON
+  alias SymmetryControlWeb.PortalResourcesTest.Provider
 
   @delivery_url "https://github.com/acme/symmetry/pull/42"
   # The manual seed is GitHub's diff permalink, so the provider's own canonical
@@ -243,8 +226,8 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
 
   setup do
     TestEnv.put!(:integration_providers,
-      github: SymmetryControlWeb.PortalResourcesTest.Provider,
-      azure_devops: SymmetryControlWeb.PortalResourcesTest.Provider
+      github: Provider,
+      azure_devops: Provider
     )
 
     TestEnv.put!(:portal_resources_steering, %{})
@@ -327,16 +310,16 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
       |> Enum.map(& &1["id"])
       |> Enum.sort()
 
-    assert bound_ids == Enum.map(bindings, & &1.resource["id"]) |> Enum.sort()
+    assert bound_ids == bindings |> Enum.map(& &1.resource["id"]) |> Enum.sort()
 
     Enum.each(bindings, fn binding ->
       %{connection: connection, resource: resource, reference: reference} = binding
 
-      assert %{"resource" => synced} = sync_resource(resource["id"]) |> json_response(200)
+      assert %{"resource" => synced} = resource["id"] |> sync_resource() |> json_response(200)
       assert synced["status"] == "healthy"
       assert synced["sync_status"] == "synced"
       assert synced["url"] == provider_url(connection, reference)
-      assert synced["last_synced_at"] != nil
+      assert synced["last_synced_at"]
 
       assert %{"resource" => reset} =
                api_conn()
@@ -398,7 +381,7 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
              |> json_response(200)
 
     assert %{"resource" => refused, "error" => %{"code" => "capability_not_granted"}} =
-             sync_resource(tracker["id"]) |> json_response(403)
+             tracker["id"] |> sync_resource() |> json_response(403)
 
     assert refused["status"] == "degraded"
     assert refused["sync_status"] == "failed"
@@ -435,11 +418,11 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
     connection = create_connection("github", "Failure binding", "acme", ["work_items"])
     tracker = create_tracker(project, connection, "Failing tracker", "acme/issues")
 
-    assert %{"resource" => synced} = sync_resource(tracker["id"]) |> json_response(200)
+    assert %{"resource" => synced} = tracker["id"] |> sync_resource() |> json_response(200)
     assert synced["status"] == "healthy"
     assert synced["sync_status"] == "synced"
     assert synced["url"] == "https://github.com/acme/issues"
-    assert synced["last_synced_at"] != nil
+    assert synced["last_synced_at"]
 
     before = resource_snapshot(tracker["id"])
     assert before.status == "healthy"
@@ -448,7 +431,7 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
     steer("Failing tracker", {:error, {:http, 500, "provider exploded"}})
 
     assert %{"resource" => failed, "error" => %{"code" => "provider_failure"}} =
-             sync_resource(tracker["id"]) |> json_response(502)
+             tracker["id"] |> sync_resource() |> json_response(502)
 
     assert failed["status"] == "degraded"
     assert failed["sync_status"] == "failed"
@@ -482,19 +465,19 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
        }}
     )
 
-    assert %{"resource" => synced} = sync_resource(repository["id"]) |> json_response(200)
+    assert %{"resource" => synced} = repository["id"] |> sync_resource() |> json_response(200)
     assert synced["status"] == "healthy"
     assert synced["sync_status"] == "synced"
     assert synced["url"] == "https://github.com/acme/symmetry-before"
 
     before = resource_snapshot(repository["id"])
     assert before.metadata == %{"stage" => "before"}
-    assert before.last_synced_at != nil
+    assert before.last_synced_at
 
     steer("Readback repository", {:error, {:transport, :closed}})
 
     assert %{"resource" => failed, "error" => %{"code" => "provider_failure"}} =
-             sync_resource(repository["id"]) |> json_response(502)
+             repository["id"] |> sync_resource() |> json_response(502)
 
     assert failed["status"] == "degraded"
     assert failed["sync_status"] == "failed"
@@ -520,7 +503,7 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
        }}
     )
 
-    assert %{"resource" => resolved} = sync_resource(repository["id"]) |> json_response(200)
+    assert %{"resource" => resolved} = repository["id"] |> sync_resource() |> json_response(200)
     assert resolved["status"] == "healthy"
     assert resolved["sync_status"] == "synced"
     assert resolved["url"] == "https://github.com/acme/symmetry-after"
@@ -529,7 +512,7 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
     readback = resource_snapshot(repository["id"])
     assert readback.url == "https://github.com/acme/symmetry-after"
     assert readback.metadata == %{"stage" => "after", "archived" => true}
-    assert DateTime.compare(readback.last_synced_at, before.last_synced_at) == :gt
+    assert DateTime.after?(readback.last_synced_at, before.last_synced_at)
   end
 
   test "project sync reports the failing resource and still synchronizes the healthy one" do
@@ -563,7 +546,7 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
            }
 
     assert resource_snapshot(healthy["id"]).sync_status == "synced"
-    assert resource_snapshot(healthy["id"]).last_synced_at != nil
+    assert resource_snapshot(healthy["id"]).last_synced_at
     assert resource_snapshot(failing["id"]).sync_status == "failed"
   end
 
@@ -591,7 +574,7 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
       ])
     )
 
-    assert %{"resource" => synced} = sync_resource(tracker["id"]) |> json_response(200)
+    assert %{"resource" => synced} = tracker["id"] |> sync_resource() |> json_response(200)
     assert synced["status"] == "healthy"
     assert synced["sync_status"] == "synced"
 
@@ -680,7 +663,7 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
     # answer, never carried over from the previous synchronization.
     steer("External tracker", document.([]))
 
-    assert %{"resource" => _resynced} = sync_resource(tracker["id"]) |> json_response(200)
+    assert %{"resource" => _resynced} = tracker["id"] |> sync_resource() |> json_response(200)
 
     unavailable = served_items(project["id"])
 
@@ -724,7 +707,7 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
 
     steer_delivery("Delivery repository", {:ok, provider_delivery(@delivery_url)})
 
-    assert %{"resource" => synced} = sync_resource(repository["id"]) |> json_response(200)
+    assert %{"resource" => synced} = repository["id"] |> sync_resource() |> json_response(200)
     assert synced["status"] == "healthy"
     assert synced["sync_status"] == "synced"
     assert synced["url"] == "https://github.com/acme/symmetry"
@@ -824,7 +807,7 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
     assert %{
              "resource" => refused,
              "error" => %{"code" => "invalid_request", "message" => "request payload is invalid"}
-           } = sync_resource(repository["id"]) |> json_response(400)
+           } = repository["id"] |> sync_resource() |> json_response(400)
 
     assert refused["status"] == "degraded"
     assert refused["sync_status"] == "failed"
@@ -1206,9 +1189,7 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
 
     assert %{"error" => %{"code" => "state_conflict"}} =
              api_conn()
-             |> delete(
-               "/portal/api/resources/#{repository["id"]}?version=#{repository["version"]}"
-             )
+             |> delete("/portal/api/resources/#{repository["id"]}?version=#{repository["version"]}")
              |> json_response(409)
 
     # A name-only update of a referenced resource stays allowed.
@@ -1304,7 +1285,7 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
     tracker = create_tracker(project, connection, "Workspace gate tracker", "acme/issues")
 
     steer("Workspace gate tracker", {:ok, tracker_document(connection)})
-    assert %{"resource" => _tracker_synced} = sync_resource(tracker["id"]) |> json_response(200)
+    assert %{"resource" => _tracker_synced} = tracker["id"] |> sync_resource() |> json_response(200)
 
     steer("Workspace gate repository", {:ok, repository_document(connection, "acme/symmetry")})
 
@@ -1342,7 +1323,7 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
              |> json_response(200)
 
     assert %{"resource" => _repository_synced} =
-             sync_resource(repository["id"]) |> json_response(200)
+             repository["id"] |> sync_resource() |> json_response(200)
 
     assert %{"execution" => %{"generation" => 1, "task_id" => task_id}} =
              api_conn()
@@ -1475,7 +1456,7 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
   end
 
   defp sync_resource(resource_id) do
-    api_conn() |> post("/portal/api/resources/#{resource_id}/sync")
+    post(api_conn(), "/portal/api/resources/#{resource_id}/sync")
   end
 
   defp project_read(project_id) do
@@ -1643,8 +1624,7 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
   # collides with the resource's own sync document.
   defp steer_delivery(resource_name, answer), do: steer({resource_name, :delivery}, answer)
 
-  defp provider_url(%{"provider" => "github"}, external_ref),
-    do: "https://github.com/" <> external_ref
+  defp provider_url(%{"provider" => "github"}, external_ref), do: "https://github.com/" <> external_ref
 
   defp provider_url(%{"provider" => "azure_devops", "account_ref" => account_ref}, external_ref),
     do: "https://dev.azure.com/#{account_ref}/" <> external_ref
@@ -1704,8 +1684,7 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
          state: "open",
          status: nil
        }},
-      {:pull_request, "agent carries the field", [],
-       %{pull_request: @delivery_agent_pull_request},
+      {:pull_request, "agent carries the field", [], %{pull_request: @delivery_agent_pull_request},
        %{
          value: @delivery_agent_pr_url,
          source: "agent",
@@ -1716,8 +1695,7 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
          state: "open",
          status: nil
        }},
-      {:pull_request, "agent without the field serves the fallback", [],
-       %{pull_request: @delivery_bare_agent},
+      {:pull_request, "agent without the field serves the fallback", [], %{pull_request: @delivery_bare_agent},
        %{
          value: nil,
          source: "agent",
@@ -1739,8 +1717,7 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
          state: "open",
          status: nil
        }},
-      {:pull_request, "none", [], nil,
-       %{value: nil, url: nil, status: nil, source: "none", generation: nil}},
+      {:pull_request, "none", [], nil, %{value: nil, url: nil, status: nil, source: "none", generation: nil}},
       {:ci, "provider wins over manual and agent",
        [
          external_provider: "github",
@@ -1822,8 +1799,7 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
          url: @delivery_agent_ci_url,
          summary: @delivery_agent_summary
        }},
-      {:ci, "none", [], nil,
-       %{value: "unknown", url: nil, status: "unknown", source: "none", generation: nil}},
+      {:ci, "none", [], nil, %{value: "unknown", url: nil, status: "unknown", source: "none", generation: nil}},
       {:review, "provider wins over manual and agent",
        [
          external_provider: "github",
@@ -1854,8 +1830,7 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
          status: @delivery_manual_review,
          url: nil
        }},
-      {:review, "manual wins over agent", [review_status: @delivery_manual_review],
-       %{review: @delivery_agent_review},
+      {:review, "manual wins over agent", [review_status: @delivery_manual_review], %{review: @delivery_agent_review},
        %{
          value: @delivery_manual_review,
          source: "manual",
@@ -1863,8 +1838,7 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
          status: @delivery_manual_review,
          url: nil
        }},
-      {:review, "manual empty falls through to agent", [review_status: ""],
-       %{review: @delivery_agent_review},
+      {:review, "manual empty falls through to agent", [review_status: ""], %{review: @delivery_agent_review},
        %{
          value: "changes_requested",
          source: "agent",
@@ -1886,8 +1860,7 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
          url: @delivery_agent_review_url,
          summary: @delivery_agent_summary
        }},
-      {:review, "agent without the field serves the fallback", [],
-       %{review: @delivery_bare_agent},
+      {:review, "agent without the field serves the fallback", [], %{review: @delivery_bare_agent},
        %{
          value: "none",
          source: "agent",
@@ -1897,8 +1870,7 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
          status: "none",
          url: nil
        }},
-      {:review, "agent keeps its own source", [],
-       %{review: %{@delivery_agent_review | source: "backfilled"}},
+      {:review, "agent keeps its own source", [], %{review: %{@delivery_agent_review | source: "backfilled"}},
        %{
          value: "changes_requested",
          source: "backfilled",
@@ -1909,8 +1881,7 @@ defmodule SymmetryControlWeb.PortalResourcesTest do
          url: @delivery_agent_review_url,
          summary: @delivery_agent_summary
        }},
-      {:review, "none", [], nil,
-       %{value: "none", url: nil, status: "none", source: "none", generation: nil}}
+      {:review, "none", [], nil, %{value: "none", url: nil, status: "none", source: "none", generation: nil}}
     ]
   end
 

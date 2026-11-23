@@ -24,9 +24,7 @@ defmodule SymmetryControl.Orchestration.TaskReadsTest do
     assert {:ok, _task, :created} = TaskReads.submit_task(attrs, "submit-conflict", now: @now)
 
     assert {:error, :idempotency_conflict} =
-             TaskReads.submit_task(Map.put(attrs, :goal, "another goal"), "submit-conflict",
-               now: @now
-             )
+             TaskReads.submit_task(Map.put(attrs, :goal, "another goal"), "submit-conflict", now: @now)
   end
 
   test "fetch_task returns the stored task and not_found for an unknown uuid" do
@@ -73,9 +71,7 @@ defmodule SymmetryControl.Orchestration.TaskReadsTest do
              Orchestration.transition(run.id, fence, "running", %{}, running_id, now: @now)
 
     assert {:ok, _run} =
-             Orchestration.transition(run.id, fence, "waiting_for_input", payload, waiting_id,
-               now: @now
-             )
+             Orchestration.transition(run.id, fence, "waiting_for_input", payload, waiting_id, now: @now)
 
     assert {:ok, snapshot} = TaskReads.task_snapshot(task.id)
     assert snapshot.waiting.transition_id == waiting_id

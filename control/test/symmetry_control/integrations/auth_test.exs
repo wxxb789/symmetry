@@ -1,7 +1,8 @@
 defmodule SymmetryControl.Integrations.AuthTest do
   use ExUnit.Case, async: false
 
-  alias SymmetryControl.Integrations.{Auth, CommandStub}
+  alias SymmetryControl.Integrations.Auth
+  alias SymmetryControl.Integrations.CommandStub
 
   setup do
     previous = Application.get_env(:symmetry_control, :integration_command_runner)

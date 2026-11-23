@@ -38,12 +38,14 @@ defmodule SymmetryControl.Orchestration.Reconciler do
   end
 
   defp interval do
-    Application.fetch_env!(:symmetry_control, :orchestration)
+    :symmetry_control
+    |> Application.fetch_env!(:orchestration)
     |> Keyword.fetch!(:reaper_interval_ms)
   end
 
   defp enabled? do
-    Application.fetch_env!(:symmetry_control, :orchestration)
+    :symmetry_control
+    |> Application.fetch_env!(:orchestration)
     |> Keyword.fetch!(:reaper_enabled)
   end
 end

@@ -14,10 +14,7 @@ defmodule SymmetryControlWeb.ProviderActionController do
     end
   end
 
-  defp request(
-         %{"action_id" => action_id, "resource_id" => resource_id, "operation" => operation} =
-           body
-       )
+  defp request(%{"action_id" => action_id, "resource_id" => resource_id, "operation" => operation} = body)
        when is_binary(action_id) and is_binary(resource_id) and is_binary(operation) do
     case Map.get(body, "input", %{}) do
       input when is_map(input) -> {:ok, action_id, resource_id, operation, input}

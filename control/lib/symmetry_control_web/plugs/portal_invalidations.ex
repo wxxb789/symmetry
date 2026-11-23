@@ -44,11 +44,9 @@ defmodule SymmetryControlWeb.Plugs.PortalInvalidations do
   defp classify(["portal", "api", "projects"]), do: %{kind: "project"}
   defp classify(["portal", "api", "projects", id, "sync"]), do: %{kind: "project", id: id}
 
-  defp classify(["portal", "api", "projects", id, "resources"]),
-    do: %{kind: "resource", project_id: id}
+  defp classify(["portal", "api", "projects", id, "resources"]), do: %{kind: "resource", project_id: id}
 
-  defp classify(["portal", "api", "projects", id, "work-items"]),
-    do: %{kind: "work_item", project_id: id}
+  defp classify(["portal", "api", "projects", id, "work-items"]), do: %{kind: "work_item", project_id: id}
 
   defp classify(["portal", "api", "projects", id, "goals"]), do: %{kind: "goal", project_id: id}
   defp classify(["portal", "api", "projects", id | _rest]), do: %{kind: "project", id: id}

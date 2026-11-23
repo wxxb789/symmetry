@@ -20,10 +20,13 @@ defmodule SymmetryControl.Workspaces.ChangesetValidators do
 end
 
 defmodule SymmetryControl.Workspaces.Project do
+  @moduledoc false
   use Ecto.Schema
+
   import Ecto.Changeset
 
-  alias SymmetryControl.Workspaces.{ProjectResource, WorkItem}
+  alias SymmetryControl.Workspaces.ProjectResource
+  alias SymmetryControl.Workspaces.WorkItem
 
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
@@ -93,12 +96,14 @@ defmodule SymmetryControl.Workspaces.Project do
 end
 
 defmodule SymmetryControl.Workspaces.ProjectResource do
+  @moduledoc false
   use Ecto.Schema
+
   import Ecto.Changeset
 
   alias SymmetryControl.Integrations.Connection
-  alias SymmetryControl.Workspaces.Project
   alias SymmetryControl.Workspaces.ChangesetValidators
+  alias SymmetryControl.Workspaces.Project
 
   @kinds ["repository", "work_tracking", "ci", "agent", "runtime", "connection"]
   @statuses ["healthy", "degraded", "offline", "unknown"]
@@ -123,11 +128,9 @@ defmodule SymmetryControl.Workspaces.ProjectResource do
     field :last_synced_at, :utc_datetime_usec
     field :lock_version, :integer, default: 1
 
-    has_many :provider_action_intents, SymmetryControl.Integrations.ProviderActionIntent,
-      foreign_key: :resource_id
+    has_many :provider_action_intents, SymmetryControl.Integrations.ProviderActionIntent, foreign_key: :resource_id
 
-    has_many :runtimes, SymmetryControl.Orchestration.Runtime,
-      foreign_key: :repository_resource_id
+    has_many :runtimes, SymmetryControl.Orchestration.Runtime, foreign_key: :repository_resource_id
 
     timestamps(type: :utc_datetime_usec)
   end
@@ -276,11 +279,15 @@ defmodule SymmetryControl.Workspaces.ProjectResource do
 end
 
 defmodule SymmetryControl.Workspaces.WorkItem do
+  @moduledoc false
   use Ecto.Schema
+
   import Ecto.Changeset
 
   alias SymmetryControl.Orchestration.Task
-  alias SymmetryControl.Workspaces.{ChangesetValidators, Project, ProjectResource}
+  alias SymmetryControl.Workspaces.ChangesetValidators
+  alias SymmetryControl.Workspaces.Project
+  alias SymmetryControl.Workspaces.ProjectResource
 
   @statuses ["backlog", "ready", "in_progress", "review", "done"]
   @priorities ["urgent", "high", "medium", "low", "no_priority"]

@@ -5,14 +5,21 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
 
   import Ecto.Query
 
-  alias SymmetryControl.Goals.{Goal, GoalRevision}
+  alias SymmetryControl.Goals.Goal
+  alias SymmetryControl.Goals.GoalRevision
   alias SymmetryControl.Integrations
-  alias SymmetryControl.Integrations.{ChangeAction, Connection, ProviderActionIntent}
+  alias SymmetryControl.Integrations.ChangeAction
+  alias SymmetryControl.Integrations.Connection
+  alias SymmetryControl.Integrations.ProviderActionIntent
   alias SymmetryControl.Integrations.Providers.GitHub
-  alias SymmetryControl.Orchestration.{Run, Runtime, Task}
+  alias SymmetryControl.Orchestration.Run
+  alias SymmetryControl.Orchestration.Runtime
+  alias SymmetryControl.Orchestration.Task
   alias SymmetryControl.Repo
   alias SymmetryControl.RequestHash
-  alias SymmetryControl.Workspaces.{Project, ProjectResource, WorkItem}
+  alias SymmetryControl.Workspaces.Project
+  alias SymmetryControl.Workspaces.ProjectResource
+  alias SymmetryControl.Workspaces.WorkItem
 
   @salt "provider-access-v1"
   @active_states ["claimed", "running", "waiting_for_input"]
@@ -200,25 +207,25 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
       state
     else
       try do
-        Repo.all(
-          from intent in ProviderActionIntent,
-            join: task in Task,
-            on: task.id == intent.task_id,
-            join: run in Run,
-            on: run.id == intent.run_id,
-            left_join: goal in Goal,
-            on: goal.id == task.goal_id,
-            where:
-              (intent.state in ["accepted", "executing"] and
-                 (is_nil(task.goal_id) or goal.state != "paused" or
-                    is_nil(run.lease_expires_at) or
-                    run.lease_expires_at <= ^recovery_started_at)) or
-                (intent.state == "unknown" and not is_nil(task.goal_id) and
-                   fragment("COALESCE(?->>'readback_observed_at', '') = ''", intent.failure)),
-            order_by: [asc: intent.inserted_at, asc: intent.id],
-            limit: ^available,
-            select: intent.id
+        from(intent in ProviderActionIntent,
+          join: task in Task,
+          on: task.id == intent.task_id,
+          join: run in Run,
+          on: run.id == intent.run_id,
+          left_join: goal in Goal,
+          on: goal.id == task.goal_id,
+          where:
+            (intent.state in ["accepted", "executing"] and
+               (is_nil(task.goal_id) or goal.state != "paused" or
+                  is_nil(run.lease_expires_at) or
+                  run.lease_expires_at <= ^recovery_started_at)) or
+              (intent.state == "unknown" and not is_nil(task.goal_id) and
+                 fragment("COALESCE(?->>'readback_observed_at', '') = ''", intent.failure)),
+          order_by: [asc: intent.inserted_at, asc: intent.id],
+          limit: ^available,
+          select: intent.id
         )
+        |> Repo.all()
         |> Enum.reject(&MapSet.member?(state.recovering, &1))
         |> Enum.reduce(state, fn intent_id, current ->
           start_dispatch_job(current, nil, {:recover, intent_id})
@@ -349,22 +356,17 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
 
   def exact_claim_replay?(_run_id, _request), do: false
 
-  defp unexpired_claim_lease?(%DateTime{} = expiry),
-    do: DateTime.compare(expiry, DateTime.utc_now()) == :gt
+  defp unexpired_claim_lease?(%DateTime{} = expiry), do: DateTime.after?(expiry, DateTime.utc_now())
 
   defp unexpired_claim_lease?(_expiry), do: false
 
-  defp claim_value(request, "runtime_id"),
-    do: Map.get(request, "runtime_id", Map.get(request, :runtime_id))
+  defp claim_value(request, "runtime_id"), do: Map.get(request, "runtime_id", Map.get(request, :runtime_id))
 
-  defp claim_value(request, "runtime_epoch"),
-    do: Map.get(request, "runtime_epoch", Map.get(request, :runtime_epoch))
+  defp claim_value(request, "runtime_epoch"), do: Map.get(request, "runtime_epoch", Map.get(request, :runtime_epoch))
 
-  defp claim_value(request, "generation"),
-    do: Map.get(request, "generation", Map.get(request, :generation))
+  defp claim_value(request, "generation"), do: Map.get(request, "generation", Map.get(request, :generation))
 
-  defp claim_value(request, "claim_id"),
-    do: Map.get(request, "claim_id", Map.get(request, :claim_id))
+  defp claim_value(request, "claim_id"), do: Map.get(request, "claim_id", Map.get(request, :claim_id))
 
   defp lock_legacy_claim_scope(scope) do
     project = lock_record(Project, scope.project_id)
@@ -456,7 +458,7 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
   end
 
   defp validate_goal_provider_authority!(context, operation) do
-    unless goal_provider_authorized?(context, operation),
+    if !goal_provider_authorized?(context, operation),
       do: Repo.rollback(:provider_access_unavailable)
   end
 
@@ -477,11 +479,7 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
 
   defp goal_provider_authorized?(_context, _operation), do: true
 
-  defp unstarted_goal_recovery_status(
-         %ProviderActionIntent{} = intent,
-         %{goal: %Goal{} = goal} = context,
-         operation
-       ) do
+  defp unstarted_goal_recovery_status(%ProviderActionIntent{} = intent, %{goal: %Goal{} = goal} = context, operation) do
     cond do
       goal_provider_authorized?(context, operation) and
           persisted_intent_execution_live?(intent, context) ->
@@ -530,7 +528,7 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
   # previously dispatched unknown intent still needs a bounded readback of its
   # immutable original target.
   defp validate_goal_readback_target!(intent, context) do
-    unless goal_readback_target_valid?(intent, context), do: Repo.rollback(:ownership_lost)
+    if !goal_readback_target_valid?(intent, context), do: Repo.rollback(:ownership_lost)
   end
 
   defp goal_readback_target_valid?(intent, context) do
@@ -555,7 +553,7 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
         context.work_item.goal_id == context.goal.id and
         context.work_item.admitted_revision == context.goal.current_revision
 
-    unless current?, do: Repo.rollback(:ownership_lost)
+    if !current?, do: Repo.rollback(:ownership_lost)
   end
 
   defp immutable_readback_context(context, intent) do
@@ -576,8 +574,7 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
   end
 
   defp immutable_readback_capabilities(%{resource_kind: "repository", operation: operation})
-       when operation in @change_operations,
-       do: ["repositories", "changes"]
+       when operation in @change_operations, do: ["repositories", "changes"]
 
   defp immutable_readback_capabilities(%{resource_kind: "repository"}), do: ["repositories"]
   defp immutable_readback_capabilities(%{resource_kind: "work_tracking"}), do: ["work_items"]
@@ -689,11 +686,7 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
       else: {:ok, nil}
   end
 
-  def issue(
-        %{task_id: task_id, resources: resources} = scope,
-        %Run{} = run,
-        %Task{id: task_id} = task
-      ) do
+  def issue(%{task_id: task_id, resources: resources} = scope, %Run{} = run, %Task{id: task_id} = task) do
     if provider_access_required?(task) do
       with {:ok, allowed_operations} <- claim_scope_operations(scope, task),
            {:ok, grants} <- build_grants(resources, task, allowed_operations),
@@ -717,30 +710,26 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
 
   def issue(_scope, %Run{}, %Task{}), do: {:error, :provider_access_unavailable}
 
-  defp claim_scope_operations(
-         %{goal: goal, revision: revision, work_item: work_item, resources: resources},
-         task
-       ) do
+  defp claim_scope_operations(%{goal: goal, revision: revision, work_item: work_item, resources: resources}, task) do
     validate_goal_claim_authority(goal, revision, task, work_item, %{resources: resources})
   end
 
   defp claim_scope_operations(_scope, _task), do: {:ok, nil}
 
   @spec persist_claim_access(Run.t(), map() | nil) :: {:ok, Run.t()} | {:error, atom()}
-  def persist_claim_access(%Run{} = run, provider_access)
-      when provider_access in [nil] or is_map(provider_access) do
+  def persist_claim_access(%Run{} = run, provider_access) when provider_access in [nil] or is_map(provider_access) do
     snapshot = claim_access_snapshot(provider_access)
 
     {updated, _rows} =
-      from(current in Run,
-        where:
-          current.id == ^run.id and current.task_id == ^run.task_id and
-            current.runtime_id == ^run.runtime_id and
-            current.generation == ^run.generation and current.claim_id == ^run.claim_id and
-            current.claimed_runtime_epoch == ^run.claimed_runtime_epoch and
-            is_nil(current.provider_access_snapshot)
+      Repo.update_all(
+        from(current in Run,
+          where:
+            current.id == ^run.id and current.task_id == ^run.task_id and current.runtime_id == ^run.runtime_id and
+              current.generation == ^run.generation and current.claim_id == ^run.claim_id and
+              current.claimed_runtime_epoch == ^run.claimed_runtime_epoch and is_nil(current.provider_access_snapshot)
+        ),
+        set: [provider_access_snapshot: snapshot, updated_at: now()]
       )
-      |> Repo.update_all(set: [provider_access_snapshot: snapshot, updated_at: now()])
 
     if updated == 1,
       do: {:ok, %{run | provider_access_snapshot: snapshot}},
@@ -791,8 +780,7 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
 
   defp parse_claim_access_snapshot(%{"v" => 1, "kind" => "none"}), do: {:ok, :none}
 
-  defp parse_claim_access_snapshot(%{"v" => 1, "kind" => "granted", "grants" => grants})
-       when is_list(grants) do
+  defp parse_claim_access_snapshot(%{"v" => 1, "kind" => "granted", "grants" => grants}) when is_list(grants) do
     if Enum.all?(grants, &valid_snapshot_grant?/1),
       do: {:ok, {:granted, grants}},
       else: {:error, :ownership_lost}
@@ -816,21 +804,20 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
   @spec execute(String.t(), Ecto.UUID.t(), Ecto.UUID.t(), String.t(), map()) ::
           {:ok, map()} | {:error, atom()}
   def execute(token, action_id, resource_id, operation, input)
-      when is_binary(token) and is_binary(action_id) and is_binary(resource_id) and
-             is_binary(operation) and is_map(input) do
+      when is_binary(token) and is_binary(action_id) and is_binary(resource_id) and is_binary(operation) and is_map(input) do
     with {:ok, action_id} <- Ecto.UUID.cast(action_id),
          {:ok, resource_id} <- Ecto.UUID.cast(resource_id),
          true <- operation in @all_operations || {:error, :invalid_request},
          {:ok, claims} <- verify_token(token),
          :ok <- reject_token_content(input, token),
-         {:ok, caller_input} <- normalize_caller_input(operation, input),
-         request_body <- request_body(resource_id, operation, caller_input),
-         request_hash <- RequestHash.write(request_body) do
+         {:ok, caller_input} <- normalize_caller_input(operation, input) do
+      request_body = request_body(resource_id, operation, caller_input)
+      request_hash = RequestHash.write(request_body)
+
       try do
         GenServer.call(
           __MODULE__,
-          {:execute,
-           {claims, action_id, resource_id, operation, caller_input, request_hash, request_body}},
+          {:execute, {claims, action_id, resource_id, operation, caller_input, request_hash, request_body}},
           :infinity
         )
       catch
@@ -867,15 +854,7 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
 
   defp valid_claims?(_), do: false
 
-  defp accept_intent(
-         claims,
-         action_id,
-         resource_id,
-         operation,
-         caller_input,
-         request_hash,
-         request_body
-       ) do
+  defp accept_intent(claims, action_id, resource_id, operation, caller_input, request_hash, request_body) do
     Repo.transaction(fn ->
       case find_intent(claims["run"], action_id) do
         %ProviderActionIntent{} = intent ->
@@ -903,7 +882,7 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
   end
 
   defp existing_intent_decision(intent, request_hash, request_body, claims) do
-    unless RequestHash.matches?(intent.request_hash, intent.request_hash_version, request_body),
+    if !RequestHash.matches?(intent.request_hash, intent.request_hash_version, request_body),
       do: Repo.rollback(:idempotency_conflict)
 
     case intent.state do
@@ -926,7 +905,7 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
     validate_intent_claims!(intent, claims)
     intent = lock_record(ProviderActionIntent, intent.id) || Repo.rollback(:not_found)
 
-    unless RequestHash.matches?(intent.request_hash, intent.request_hash_version, request_body),
+    if !RequestHash.matches?(intent.request_hash, intent.request_hash_version, request_body),
       do: Repo.rollback(:idempotency_conflict)
 
     validate_intent_claims!(intent, claims)
@@ -961,7 +940,7 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
 
     intent = lock_record(ProviderActionIntent, intent.id) || Repo.rollback(:not_found)
 
-    unless RequestHash.matches?(intent.request_hash, intent.request_hash_version, request_body),
+    if !RequestHash.matches?(intent.request_hash, intent.request_hash_version, request_body),
       do: Repo.rollback(:idempotency_conflict)
 
     case intent.state do
@@ -995,7 +974,7 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
 
     intent = lock_record(ProviderActionIntent, intent.id) || Repo.rollback(:not_found)
 
-    unless RequestHash.matches?(intent.request_hash, intent.request_hash_version, request_body),
+    if !RequestHash.matches?(intent.request_hash, intent.request_hash_version, request_body),
       do: Repo.rollback(:idempotency_conflict)
 
     if goal_managed_intent?(intent) do
@@ -1036,14 +1015,7 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
     end
   end
 
-  defp accept_new_intent(
-         context,
-         claims,
-         action_id,
-         operation,
-         caller_input,
-         {request_hash, request_hash_version}
-       ) do
+  defp accept_new_intent(context, claims, action_id, operation, caller_input, {request_hash, request_hash_version}) do
     validate_live_execution!(claims, context)
     validate_bound_resource!(context)
 
@@ -1122,12 +1094,6 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
 
     import Ecto.Query
 
-    alias SymmetryControl.Goals.{Goal, GoalRevision}
-    alias SymmetryControl.Integrations.Connection
-    alias SymmetryControl.Orchestration.{Run, Runtime, Task}
-    alias SymmetryControl.Repo
-    alias SymmetryControl.Workspaces.{Project, ProjectResource, WorkItem}
-
     @link_fields [
       project_id: :project,
       work_item_id: :work_item,
@@ -1183,8 +1149,7 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
 
     defp lock_connection(connection_id, _resource), do: lock_record(Connection, connection_id)
 
-    defp lock_work_item(work_item_id) when is_binary(work_item_id),
-      do: lock_record(WorkItem, work_item_id)
+    defp lock_work_item(work_item_id) when is_binary(work_item_id), do: lock_record(WorkItem, work_item_id)
 
     defp lock_work_item(_work_item_id), do: nil
 
@@ -1203,10 +1168,11 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
             end
           end)
 
-      unless valid?, do: Repo.rollback(:ownership_lost)
+      if !valid?, do: Repo.rollback(:ownership_lost)
     end
 
     defp goal_context_links?(context, project_id) do
+      # A Goal-scoped lock takes its Project from the Goal row, not the intent.
       context.project.id == project_id and
         context.goal.project_id == context.project.id and
         context.resource.project_id == context.project.id and
@@ -1240,7 +1206,6 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
 
     case intent_goal_id(intent) do
       goal_id when is_binary(goal_id) ->
-        # A Goal-scoped lock takes its Project from the Goal row, not the intent.
         goal_ids = %{ids | goal_id: goal_id, project_id: goal_project_id(goal_id)}
         IntentContext.goal_lock(goal_ids, ids)
 
@@ -1328,7 +1293,7 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
       context.project.status == "active" and
         live_execution?(claims, context.run, context.task, context.runtime)
 
-    unless valid?, do: Repo.rollback(:ownership_lost)
+    if !valid?, do: Repo.rollback(:ownership_lost)
   end
 
   defp validate_persisted_intent_execution!(intent, context) do
@@ -1358,12 +1323,12 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
     runtime = lock_record(Runtime, intent.runtime_id) || Repo.rollback(:ownership_lost)
     intent = lock_record(ProviderActionIntent, intent.id) || Repo.rollback(:not_found)
 
-    unless RequestHash.matches?(intent.request_hash, intent.request_hash_version, request_body),
+    if !RequestHash.matches?(intent.request_hash, intent.request_hash_version, request_body),
       do: Repo.rollback(:idempotency_conflict)
 
     validate_intent_claims!(intent, claims)
 
-    unless live_execution?(claims, run, task, runtime), do: Repo.rollback(:ownership_lost)
+    if !live_execution?(claims, run, task, runtime), do: Repo.rollback(:ownership_lost)
     intent
   end
 
@@ -1376,7 +1341,7 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
         intent.generation == claims["generation"] and
         intent.claim_id == claims["claim"]
 
-    unless static?, do: Repo.rollback(:ownership_lost)
+    if !static?, do: Repo.rollback(:ownership_lost)
   end
 
   defp live_execution?(claims, run, task, runtime) do
@@ -1395,7 +1360,7 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
       run.state in @active_states and
       task.state in @active_states and
       not is_nil(run.lease_expires_at) and
-      DateTime.compare(run.lease_expires_at, DateTime.utc_now()) == :gt
+      DateTime.after?(run.lease_expires_at, DateTime.utc_now())
   end
 
   defp capabilities_match?(available, required) when is_map(available) and is_map(required) do
@@ -1413,8 +1378,7 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
     end)
   end
 
-  defp capabilities_match?(available, required) when is_map(available) or is_map(required),
-    do: false
+  defp capabilities_match?(available, required) when is_map(available) or is_map(required), do: false
 
   defp capabilities_match?(available, required), do: available == required
 
@@ -1433,13 +1397,13 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
         context.resource.id in bound_resource_ids(context.work_item) and
         context.resource.id in provider_resource_ids
 
-    unless valid?, do: Repo.rollback(:forbidden)
+    if !valid?, do: Repo.rollback(:forbidden)
   end
 
   defp validate_operation!(operation, resource, connection, task) do
     case grant_operations(resource, connection, task) do
       {:ok, operations} ->
-        unless operation in operations, do: Repo.rollback(:forbidden)
+        if operation not in operations, do: Repo.rollback(:forbidden)
 
       {:error, reason} ->
         Repo.rollback(reason)
@@ -1486,15 +1450,15 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
   end
 
   defp successful_upsert_url(run_id, resource_id) do
-    Repo.one(
-      from intent in ProviderActionIntent,
-        where:
-          intent.run_id == ^run_id and intent.resource_id == ^resource_id and
-            intent.operation == "change.upsert" and intent.state == "succeeded",
-        order_by: [desc: intent.completed_at, desc: intent.id],
-        limit: 1,
-        select: intent.result
+    from(intent in ProviderActionIntent,
+      where:
+        intent.run_id == ^run_id and intent.resource_id == ^resource_id and
+          intent.operation == "change.upsert" and intent.state == "succeeded",
+      order_by: [desc: intent.completed_at, desc: intent.id],
+      limit: 1,
+      select: intent.result
     )
+    |> Repo.one()
     |> case do
       %{"delivery" => %{"pull_request_url" => url}} -> present(url)
       _result -> nil
@@ -1567,8 +1531,7 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
     Integrations.execute_accepted_resource_sync_unprojected(context.connection, context.resource)
   end
 
-  defp dispatch(%{intent: %{operation: operation, input: input}} = context)
-       when operation in @change_operations do
+  defp dispatch(%{intent: %{operation: operation, input: input}} = context) when operation in @change_operations do
     if goal_managed_task?(context.task) and context.intent.provider == "github" and
          is_nil(context.intent.action_binding) do
       {:error, :provider_access_unavailable}
@@ -1585,8 +1548,7 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
   end
 
   defp execute_dispatch_job(
-         {:request,
-          {claims, action_id, resource_id, operation, caller_input, request_hash, request_body}}
+         {:request, {claims, action_id, resource_id, operation, caller_input, request_hash, request_body}}
        ) do
     request =
       {claims, action_id, resource_id, operation, caller_input, request_hash, request_body}
@@ -1651,10 +1613,7 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
     end
   end
 
-  defp recover_and_retry(
-         intent_id,
-         {claims, action_id, resource_id, operation, caller_input, request_hash, request_body}
-       ) do
+  defp recover_and_retry(intent_id, {claims, action_id, resource_id, operation, caller_input, request_hash, request_body}) do
     case recover_dispatch_context(intent_id) do
       {:ok, {:interrupted, dispatch_token}} ->
         with {:error, :provider_failure} <- mark_dispatch_unknown(intent_id, dispatch_token),
@@ -1698,15 +1657,7 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
     end
   end
 
-  defp replay_after_recovery(
-         claims,
-         action_id,
-         resource_id,
-         operation,
-         caller_input,
-         request_hash,
-         request_body
-       ) do
+  defp replay_after_recovery(claims, action_id, resource_id, operation, caller_input, request_hash, request_body) do
     case accept_intent(
            claims,
            action_id,
@@ -1726,10 +1677,11 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
   end
 
   defp active_dispatch_conflict(claims, intent_id, request_body) do
-    Repo.transaction(fn ->
+    fn ->
       intent = Repo.get(ProviderActionIntent, intent_id) || Repo.rollback(:not_found)
       intent |> lock_existing_intent(request_body, claims) |> completed_intent_decision()
-    end)
+    end
+    |> Repo.transaction()
     |> case do
       {:ok, {:replay, result}} -> {:ok, result}
       {:ok, {:failed, reason}} -> {:error, reason}
@@ -1773,8 +1725,7 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
     end
   end
 
-  defp readback_unknown_intent(%{intent: %{action_binding: binding}} = context)
-       when is_map(binding) do
+  defp readback_unknown_intent(%{intent: %{action_binding: binding}} = context) when is_map(binding) do
     case Integrations.readback_provider_action(
            context.connection,
            context.resource,
@@ -1837,9 +1788,9 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
       current = lock_intent_context(intent)
       intent = lock_record(ProviderActionIntent, intent.id) || Repo.rollback(:not_found)
 
-      unless intent.action_binding == context.intent.action_binding and
-               intent.request_hash == context.intent.request_hash,
-             do: Repo.rollback(:idempotency_conflict)
+      if !(intent.action_binding == context.intent.action_binding and
+             intent.request_hash == context.intent.request_hash),
+         do: Repo.rollback(:idempotency_conflict)
 
       case intent.state do
         "succeeded" ->
@@ -1849,7 +1800,8 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
           validate_goal_readback_target!(intent, current)
 
           outcome =
-            project_network_success(intent, current, delivery)
+            intent
+            |> project_network_success(current, delivery)
             |> Map.put(:readback_status, "confirmed")
             |> normalize_json()
 
@@ -1867,12 +1819,14 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
   end
 
   defp mark_readback_observed(intent_id, outcome, reason \\ nil) do
-    Repo.transaction(fn ->
+    fn ->
       intent = lock_record(ProviderActionIntent, intent_id) || Repo.rollback(:not_found)
 
       if intent.state == "unknown" do
+        if_result = if(is_map(intent.failure), do: intent.failure, else: %{})
+
         failure =
-          if(is_map(intent.failure), do: intent.failure, else: %{})
+          if_result
           |> Map.merge(%{
             "readback_observed_at" => DateTime.to_iso8601(now()),
             "readback_status" => Atom.to_string(outcome)
@@ -1888,7 +1842,8 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
       else
         Repo.rollback(:state_conflict)
       end
-    end)
+    end
+    |> Repo.transaction()
     |> case do
       {:ok, :ok} -> :ok
       {:error, reason} -> {:error, reason}
@@ -1900,8 +1855,7 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
   defp maybe_put_readback_error(failure, reason) when is_atom(reason),
     do: Map.put(failure, "readback_error", Atom.to_string(reason))
 
-  defp maybe_put_readback_error(failure, _reason),
-    do: Map.put(failure, "readback_error", "provider_failure")
+  defp maybe_put_readback_error(failure, _reason), do: Map.put(failure, "readback_error", "provider_failure")
 
   defp fail_unstarted_goal_intent(intent, reason) do
     case intent
@@ -1967,8 +1921,7 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
                        |> ProviderActionIntent.dispatch_changeset(dispatch_token)
                        |> Repo.update() do
                     {:ok, executing} ->
-                      {:execute, authorized_context(context, executing), executing.request_hash,
-                       dispatch_token}
+                      {:execute, authorized_context(context, executing), executing.request_hash, dispatch_token}
 
                     {:error, reason} ->
                       Repo.rollback(reason)
@@ -2130,7 +2083,8 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
 
         "executing" when intent.dispatch_token == dispatch_token ->
           outcome =
-            project_network_success(intent, current, result)
+            intent
+            |> project_network_success(current, result)
             |> normalize_json()
 
           case intent
@@ -2149,7 +2103,7 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
   defp finalize_failure(context, request_hash, dispatch_token, reason) do
     {code, outcome} = provider_failure(reason)
 
-    Repo.transaction(fn ->
+    fn ->
       intent = Repo.get(ProviderActionIntent, context.intent.id) || Repo.rollback(:not_found)
       current = lock_intent_context(intent)
       intent = lock_record(ProviderActionIntent, intent.id) || Repo.rollback(:not_found)
@@ -2180,7 +2134,8 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
         _state ->
           Repo.rollback(:state_conflict)
       end
-    end)
+    end
+    |> Repo.transaction()
     |> case do
       {:ok, {:replayed, result}} -> {:ok, result}
       {:ok, {:failed, error}} -> {:error, error}
@@ -2253,15 +2208,17 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
   end
 
   defp bound_resource?(context) do
-    with {:ok, provider_resource_ids} <- provider_resource_ids(context.task) do
-      context.work_item.project_id == context.project.id and
-        work_item_belongs_to_task?(context.work_item, context.task) and
-        context.resource.project_id == context.project.id and
-        context.resource.connection_id == context.connection.id and
-        context.resource.id in bound_resource_ids(context.work_item) and
-        context.resource.id in provider_resource_ids
-    else
-      _reason -> false
+    case provider_resource_ids(context.task) do
+      {:ok, provider_resource_ids} ->
+        context.work_item.project_id == context.project.id and
+          work_item_belongs_to_task?(context.work_item, context.task) and
+          context.resource.project_id == context.project.id and
+          context.resource.connection_id == context.connection.id and
+          context.resource.id in bound_resource_ids(context.work_item) and
+          context.resource.id in provider_resource_ids
+
+      _reason ->
+        false
     end
   end
 
@@ -2273,23 +2230,20 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
   end
 
   defp provider_failure({:provider_action_failure, code, outcome, message})
-       when is_atom(code) and outcome in [:definite, :ambiguous] and is_binary(message),
-       do: {code, outcome}
+       when is_atom(code) and outcome in [:definite, :ambiguous] and is_binary(message), do: {code, outcome}
 
-  defp provider_failure({:http, status, _body}) when status in 400..499,
-    do: {:provider_failure, :definite}
+  defp provider_failure({:http, status, _body}) when status in 400..499, do: {:provider_failure, :definite}
 
   defp provider_failure(:invalid_provider_success), do: {:provider_failure, :ambiguous}
   defp provider_failure(reason) when is_atom(reason), do: {reason, :definite}
   defp provider_failure(_reason), do: {:provider_failure, :ambiguous}
 
-  defp failure_state(operation, :ambiguous) when operation in @change_operations,
-    do: "unknown"
+  defp failure_state(operation, :ambiguous) when operation in @change_operations, do: "unknown"
 
   defp failure_state(_operation, _outcome), do: "failed"
 
   defp mark_dispatch_unknown(intent_id, dispatch_token) do
-    Repo.transaction(fn ->
+    fn ->
       intent = lock_record(ProviderActionIntent, intent_id) || Repo.rollback(:not_found)
 
       if intent.state == "executing" and intent.dispatch_token == dispatch_token do
@@ -2304,7 +2258,8 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
       else
         Repo.rollback(:state_conflict)
       end
-    end)
+    end
+    |> Repo.transaction()
     |> case do
       {:ok, result} -> result
       {:error, reason} -> {:error, reason}
@@ -2356,8 +2311,7 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
     end)
   end
 
-  defp contains_token?(value, token) when is_list(value),
-    do: Enum.any?(value, &contains_token?(&1, token))
+  defp contains_token?(value, token) when is_list(value), do: Enum.any?(value, &contains_token?(&1, token))
 
   defp contains_token?(_value, _token), do: false
 
@@ -2405,7 +2359,7 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
       :durable ->
         case Repo.get(WorkItem, Map.get(task, :work_item_id)) do
           %WorkItem{} = work_item ->
-            if WorkItem.goal_managed?(work_item), do: work_item, else: nil
+            if WorkItem.goal_managed?(work_item), do: work_item
 
           _missing ->
             nil
@@ -2427,10 +2381,7 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
        else: :legacy
   end
 
-  defp work_item_belongs_to_task?(
-         work_item,
-         %{task_id: task_id, work_item_id: work_item_id, membership: membership}
-       ) do
+  defp work_item_belongs_to_task?(work_item, %{task_id: task_id, work_item_id: work_item_id, membership: membership}) do
     case membership do
       :durable -> work_item.id == work_item_id and WorkItem.goal_managed?(work_item)
       :legacy -> work_item.orchestration_task_id == task_id
@@ -2448,7 +2399,8 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
   end
 
   defp build_grants(connected, task, allowed_operations) do
-    Enum.reduce_while(connected, {:ok, []}, fn {resource, connection}, {:ok, grants} ->
+    connected
+    |> Enum.reduce_while({:ok, []}, fn {resource, connection}, {:ok, grants} ->
       case grant_operations(resource, connection, task) do
         {:ok, operations} ->
           operations = restrict_operations(operations, resource.id, allowed_operations)
@@ -2478,9 +2430,8 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
 
   defp restrict_operations(operations, _resource_id, nil), do: operations
 
-  defp restrict_operations(operations, resource_id, allowed_operations)
-       when is_map(allowed_operations),
-       do: Enum.filter(operations, &(&1 in Map.get(allowed_operations, resource_id, [])))
+  defp restrict_operations(operations, resource_id, allowed_operations) when is_map(allowed_operations),
+    do: Enum.filter(operations, &(&1 in Map.get(allowed_operations, resource_id, [])))
 
   defp grant_operations(%ProjectResource{kind: "work_tracking"}, connection, _task) do
     require_grant(connection, "work_items", ["resource.sync"])
@@ -2529,8 +2480,7 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
     end
   end
 
-  defp grant_operations(_resource, _connection, _task),
-    do: {:error, :provider_access_unavailable}
+  defp grant_operations(_resource, _connection, _task), do: {:error, :provider_access_unavailable}
 
   defp require_grant(connection, capability, operations) do
     if capability in connection.capabilities,
@@ -2580,9 +2530,8 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
   defp task_input(%Task{input: input}) when is_map(input), do: input
   defp task_input(_task), do: %{}
 
-  defp provider_access_required?(%Task{required_capabilities: capabilities})
-       when is_map(capabilities),
-       do: capabilities["provider_access"] == true or capabilities[:provider_access] == true
+  defp provider_access_required?(%Task{required_capabilities: capabilities}) when is_map(capabilities),
+    do: capabilities["provider_access"] == true or capabilities[:provider_access] == true
 
   defp provider_access_required?(_task), do: false
 
@@ -2645,8 +2594,7 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
   end
 
   defp normalize_frozen_goal_provider_operations(resource_ids, operations_by_resource) do
-    resource_ids
-    |> Enum.reduce_while({:ok, %{}}, fn resource_id, {:ok, normalized} ->
+    Enum.reduce_while(resource_ids, {:ok, %{}}, fn resource_id, {:ok, normalized} ->
       case Map.fetch(operations_by_resource, resource_id) do
         {:ok, operations} when is_list(operations) and operations != [] ->
           if length(operations) == length(Enum.uniq(operations)) and
@@ -2662,8 +2610,7 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
     end)
   end
 
-  defp validate_frozen_goal_change_target(operations_by_resource, change_target)
-       when is_map(operations_by_resource) do
+  defp validate_frozen_goal_change_target(operations_by_resource, change_target) when is_map(operations_by_resource) do
     operations =
       operations_by_resource
       |> Map.values()
@@ -2675,10 +2622,11 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
 
   defp validate_frozen_goal_change_target(["resource.sync"], nil), do: {:ok, nil}
 
-  defp validate_frozen_goal_change_target(
-         operations,
-         %{"kind" => "branches", "source_branch" => source, "target_branch" => target}
-       )
+  defp validate_frozen_goal_change_target(operations, %{
+         "kind" => "branches",
+         "source_branch" => source,
+         "target_branch" => target
+       })
        when is_binary(source) and is_binary(target) do
     if "change.upsert" in operations and Enum.all?(operations, &(&1 in @all_operations)) do
       with {:ok, source} <- frozen_goal_branch(source),
@@ -2693,10 +2641,7 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
     end
   end
 
-  defp validate_frozen_goal_change_target(
-         operations,
-         %{"kind" => "pull_request", "pull_request_url" => url}
-       )
+  defp validate_frozen_goal_change_target(operations, %{"kind" => "pull_request", "pull_request_url" => url})
        when is_binary(url) do
     if "change.update" in operations and "change.upsert" not in operations and
          Enum.all?(operations, &(&1 in @all_operations)) do
@@ -2710,8 +2655,7 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
     end
   end
 
-  defp validate_frozen_goal_change_target(_operations, _change_target),
-    do: {:error, :provider_access_unavailable}
+  defp validate_frozen_goal_change_target(_operations, _change_target), do: {:error, :provider_access_unavailable}
 
   defp frozen_goal_branch(value) do
     case ChangeAction.normalize_branch(value) do
@@ -2730,17 +2674,19 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
   end
 
   defp frozen_goal_change_scope(task) do
-    with {:ok,
-          %{
-            change_target: %{
-              "kind" => "branches",
-              "source_branch" => source,
-              "target_branch" => target
-            }
-          }} <- frozen_goal_provider_scope(task) do
-      {:ok, source, target}
-    else
-      _invalid -> :error
+    case frozen_goal_provider_scope(task) do
+      {:ok,
+       %{
+         change_target: %{
+           "kind" => "branches",
+           "source_branch" => source,
+           "target_branch" => target
+         }
+       }} ->
+        {:ok, source, target}
+
+      _invalid ->
+        :error
     end
   end
 
@@ -2803,5 +2749,5 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
   defp present(_value), do: nil
   defp valid_uuid?(value) when is_binary(value), do: match?({:ok, _}, Ecto.UUID.cast(value))
   defp valid_uuid?(_), do: false
-  defp now, do: DateTime.utc_now() |> DateTime.truncate(:microsecond)
+  defp now, do: DateTime.truncate(DateTime.utc_now(), :microsecond)
 end

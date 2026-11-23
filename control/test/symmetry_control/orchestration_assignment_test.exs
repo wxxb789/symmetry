@@ -1,7 +1,19 @@
 defmodule SymmetryControl.OrchestrationAssignmentTest do
   use SymmetryControl.OrchestrationCase, async: false
 
+  alias SymmetryControl.Goals
+  alias SymmetryControl.Goals.Goal
+  alias SymmetryControl.Goals.GoalEvent
+  alias SymmetryControl.Goals.HarnessSession
   alias SymmetryControl.Orchestration
+  alias SymmetryControl.Orchestration.Command
+  alias SymmetryControl.Orchestration.Run
+  alias SymmetryControl.Orchestration.Runtime
+  alias SymmetryControl.Orchestration.Task
+  alias SymmetryControl.RequestHash
+  alias SymmetryControl.Workspaces
+  alias SymmetryControl.Workspaces.ProjectResource
+  alias SymmetryControl.Workspaces.WorkItem
 
   @now ~U[2026-09-02 00:00:00.000000Z]
 
@@ -60,13 +72,6 @@ defmodule SymmetryControl.OrchestrationAssignmentTest do
     enrolled
   end
 
-  alias SymmetryControl.{Goals, RequestHash}
-  alias SymmetryControl.Goals.{Goal, GoalEvent, HarnessSession}
-  alias SymmetryControl.Orchestration
-  alias SymmetryControl.Orchestration.{Command, Run, Runtime, Task}
-  alias SymmetryControl.Workspaces
-  alias SymmetryControl.Workspaces.{ProjectResource, WorkItem}
-
   # The cases below came from the other base file's region and pin its clock;
   # the shadowing is intentional, so do not move a case across this line.
   @now ~U[2026-09-09 09:00:00.000000Z]
@@ -102,8 +107,8 @@ defmodule SymmetryControl.OrchestrationAssignmentTest do
     assert {:ok, legacy_run} = Orchestration.assign_one(now: @now)
     assert legacy_run.task_id == legacy_task.id
 
-    resumed_at = DateTime.add(@now, 31, :second)
-    assert %{expired_runs: 1} = Orchestration.expire(now: DateTime.add(@now, 30, :second))
+    resumed_at = DateTime.shift(@now, second: 31)
+    assert %{expired_runs: 1} = Orchestration.expire(now: DateTime.shift(@now, second: 30))
 
     assert {:ok, _snapshot} =
              Orchestration.heartbeat(runtime.id, runtime.connection_epoch, [], now: resumed_at)
@@ -447,7 +452,7 @@ defmodule SymmetryControl.OrchestrationAssignmentTest do
 
     Repo.update_all(
       from(task_row in Task, where: task_row.id == ^blocked_task.id),
-      set: [inserted_at: DateTime.add(@now, -1, :second)]
+      set: [inserted_at: DateTime.shift(@now, second: -1)]
     )
 
     {ready_task, _goal_id} = insert_goal_task(max_run_attempts: 2)
@@ -474,7 +479,7 @@ defmodule SymmetryControl.OrchestrationAssignmentTest do
 
       Repo.update_all(
         from(task_row in Task, where: task_row.id == ^task.id),
-        set: [inserted_at: DateTime.add(@now, -1, :second)]
+        set: [inserted_at: DateTime.shift(@now, second: -1)]
       )
     end)
 
@@ -609,7 +614,7 @@ defmodule SymmetryControl.OrchestrationAssignmentTest do
     admission_key = Ecto.UUID.generate()
     reservation_id = Ecto.UUID.generate()
     repository_id = Keyword.get(opts, :repository_id, Ecto.UUID.generate())
-    validation_of_task_id = if purpose == "validate", do: Ecto.UUID.generate(), else: nil
+    validation_of_task_id = if purpose == "validate", do: Ecto.UUID.generate()
     validation_bindings = Keyword.get(opts, :validation_bindings, [])
     policy = Keyword.get(opts, :execution_policy, execution_policy(max_run_attempts))
     allowed_runtime_ids = Map.get(policy, "allowed_runtime_ids", [])
@@ -622,27 +627,29 @@ defmodule SymmetryControl.OrchestrationAssignmentTest do
     task_inserted_at = Keyword.get(opts, :inserted_at, @now)
 
     task_input =
-      %{
-        "subject" => %{
-          "resource_id" => repository_id,
-          "commit" => String.duplicate("a", 40),
-          "tree_digest" => "sha256:" <> String.duplicate("b", 64)
-        }
-      }
-      |> then(fn input ->
-        if requested_session_id do
-          input
-          |> Map.put("session_mode", "resume")
-          |> Map.put("requested_session_id", requested_session_id)
-        else
-          input
+      then(
+        %{
+          "subject" => %{
+            "resource_id" => repository_id,
+            "commit" => String.duplicate("a", 40),
+            "tree_digest" => "sha256:" <> String.duplicate("b", 64)
+          }
+        },
+        fn input ->
+          if requested_session_id do
+            input
+            |> Map.put("session_mode", "resume")
+            |> Map.put("requested_session_id", requested_session_id)
+          else
+            input
+          end
         end
-      end)
+      )
 
     task_input =
       Map.put(task_input, "limits", %{
         "max_turns" => 1,
-        "deadline_at" => DateTime.to_iso8601(DateTime.add(@now, 15 * 60, :second)),
+        "deadline_at" => DateTime.to_iso8601(DateTime.shift(@now, minute: 15)),
         "max_cost_microusd" =>
           if(strict_budget?,
             do: Integer.to_string(Map.fetch!(policy, "per_run_cost_limit_microusd"))
@@ -662,9 +669,7 @@ defmodule SymmetryControl.OrchestrationAssignmentTest do
                  )
                end
 
-               unless Repo.exists?(
-                        from(resource in ProjectResource, where: resource.id == ^repository_id)
-                      ) do
+               if !Repo.exists?(from(resource in ProjectResource, where: resource.id == ^repository_id)) do
                  Repo.query!(
                    """
                    INSERT INTO project_resources (
@@ -705,7 +710,7 @@ defmodule SymmetryControl.OrchestrationAssignmentTest do
                  [db_uuid(goal_id), Jason.encode!(policy), @now]
                )
 
-               unless planning? do
+               if !planning? do
                  Repo.query!(
                    """
                    INSERT INTO work_items (
@@ -945,7 +950,8 @@ defmodule SymmetryControl.OrchestrationAssignmentTest do
       end
 
     adapter =
-      native_adapter(kind, native_version, implementation_version, protocol_version)
+      kind
+      |> native_adapter(native_version, implementation_version, protocol_version)
       |> Map.put("operations", %{
         "start" => false,
         "events" => false,
@@ -975,9 +981,7 @@ defmodule SymmetryControl.OrchestrationAssignmentTest do
       })
 
     assert {:ok, [runtime]} =
-             Orchestration.register_runtimes(machine.id, Ecto.UUID.generate(), [specification],
-               now: @now
-             )
+             Orchestration.register_runtimes(machine.id, Ecto.UUID.generate(), [specification], now: @now)
 
     runtime
   end
@@ -1049,7 +1053,8 @@ defmodule SymmetryControl.OrchestrationAssignmentTest do
       end)
 
     adapter =
-      native_adapter(harness_kind, harness_version, adapter_version, 1)
+      harness_kind
+      |> native_adapter(harness_version, adapter_version, 1)
       |> put_in(["operations", "resume"], resume?)
       |> put_in(["operations", "handoff"], handoff?)
       |> put_in(["operations", "hard_cost_limit"], hard_cost_limit?)
@@ -1059,27 +1064,29 @@ defmodule SymmetryControl.OrchestrationAssignmentTest do
                machine_id,
                Ecto.UUID.generate(),
                [
-                 %{
-                   runtime_key: "goal-admission-#{label}",
-                   name: "Goal admission #{label}",
-                   capacity: capacity,
-                   agent_profile: "codex",
-                   workspace: "primary",
-                   harness_kind: harness_kind,
-                   harness_version: harness_version,
-                   adapter_version: adapter_version,
-                   adapter_protocol_version: 1,
-                   capabilities: %{
-                     "structured_input" => true,
-                     "interactive" => true,
-                     "adapter" => adapter
-                   }
-                 }
-                 |> then(fn specification ->
-                   if is_nil(repository_resource_id),
-                     do: specification,
-                     else: Map.put(specification, :repository_resource_id, repository_resource_id)
-                 end)
+                 then(
+                   %{
+                     runtime_key: "goal-admission-#{label}",
+                     name: "Goal admission #{label}",
+                     capacity: capacity,
+                     agent_profile: "codex",
+                     workspace: "primary",
+                     harness_kind: harness_kind,
+                     harness_version: harness_version,
+                     adapter_version: adapter_version,
+                     adapter_protocol_version: 1,
+                     capabilities: %{
+                       "structured_input" => true,
+                       "interactive" => true,
+                       "adapter" => adapter
+                     }
+                   },
+                   fn specification ->
+                     if is_nil(repository_resource_id),
+                       do: specification,
+                       else: Map.put(specification, :repository_resource_id, repository_resource_id)
+                   end
+                 )
                ],
                now: @now
              )

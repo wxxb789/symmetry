@@ -8,8 +8,7 @@ defmodule SymmetryControl.Integrations.ProviderActionTestStub do
 
   def github_headers(%{name: "Unavailable auth"} = connection), do: authenticate(connection)
 
-  def github_headers(connection),
-    do: SymmetryControl.Integrations.AuthStub.github_headers(connection)
+  def github_headers(connection), do: SymmetryControl.Integrations.AuthStub.github_headers(connection)
 
   def request(method, url, headers, body \\ nil) do
     if method in [:post, :patch, :put, :delete] do
@@ -198,11 +197,9 @@ defmodule SymmetryControl.Integrations.ProviderActionTestStub do
     end
   end
 
-  defp resource_url(%{provider: "github"}, resource),
-    do: "https://github.com/" <> resource.external_ref
+  defp resource_url(%{provider: "github"}, resource), do: "https://github.com/" <> resource.external_ref
 
-  defp resource_url(%{provider: "azure_devops"}, resource),
-    do: "https://dev.azure.com/acme/" <> resource.external_ref
+  defp resource_url(%{provider: "azure_devops"}, resource), do: "https://dev.azure.com/acme/" <> resource.external_ref
 
   defp provider_work_item_data("azure_devops"), do: %{"revision" => 1}
   defp provider_work_item_data(_provider), do: %{}
@@ -231,28 +228,36 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
 
   import Ecto.Query
   import ExUnit.CaptureLog
-
   import SymmetryControl.TestFixtures, only: [uuid: 0]
   import SymmetryControlWeb.TestConn, only: [assert_error: 3, bearer: 2]
 
-  alias SymmetryControl.Goals.{ContextSnapshot, Goal, GoalRevision}
+  alias Ecto.Adapters.SQL.Sandbox
+  alias SymmetryControl.Goals.ContextSnapshot
+  alias SymmetryControl.Goals.Goal
+  alias SymmetryControl.Goals.GoalRevision
   alias SymmetryControl.Integrations
-  alias SymmetryControl.Integrations.{Connection, ProviderAccess, ProviderActionIntent}
+  alias SymmetryControl.Integrations.Connection
   alias SymmetryControl.Integrations.HTTPStub
+  alias SymmetryControl.Integrations.ProviderAccess
+  alias SymmetryControl.Integrations.ProviderActionIntent
+  alias SymmetryControl.Integrations.ProviderActionTestStub
   alias SymmetryControl.Integrations.Providers.GitHub
   alias SymmetryControl.Orchestration
-  alias SymmetryControl.Orchestration.{Run, Runtime, Task}
+  alias SymmetryControl.Orchestration.Run
+  alias SymmetryControl.Orchestration.Runtime
+  alias SymmetryControl.Orchestration.Task
   alias SymmetryControl.Repo
   alias SymmetryControl.TestEnv
   alias SymmetryControl.Workspaces
-  alias SymmetryControl.Workspaces.{ProjectResource, WorkItem}
+  alias SymmetryControl.Workspaces.ProjectResource
+  alias SymmetryControl.Workspaces.WorkItem
 
   @enrollment_token "test-enrollment-token"
 
   setup %{conn: conn} do
     TestEnv.put!(:integration_providers,
-      github: SymmetryControl.Integrations.ProviderActionTestStub,
-      azure_devops: SymmetryControl.Integrations.ProviderActionTestStub
+      github: ProviderActionTestStub,
+      azure_devops: ProviderActionTestStub
     )
 
     TestEnv.put!(:provider_action_test_controller, self())
@@ -292,7 +297,8 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
     claim_id = uuid()
 
     claim =
-      bearer(conn, machine_token)
+      conn
+      |> bearer(machine_token)
       |> put("/api/v1/runs/#{run.id}/claims/#{claim_id}", %{
         "runtime_id" => runtime_id,
         "runtime_epoch" => 1,
@@ -446,7 +452,7 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
         end
       end)
 
-    Ecto.Adapters.SQL.Sandbox.allow(Repo, self(), requester.pid)
+    Sandbox.allow(Repo, self(), requester.pid)
     send(requester.pid, :lock_claim_scope)
 
     try do
@@ -601,13 +607,14 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
     run = goal_run(task, context.runtime_id)
     claim_id = uuid()
 
-    assert_error(
-      bearer(build_conn(), context.machine_token)
-      |> put("/api/v1/runs/#{run.id}/claims/#{claim_id}", %{
-        "runtime_id" => context.runtime_id,
-        "runtime_epoch" => 1,
-        "generation" => run.generation
-      }),
+    build_conn()
+    |> bearer(context.machine_token)
+    |> put("/api/v1/runs/#{run.id}/claims/#{claim_id}", %{
+      "runtime_id" => context.runtime_id,
+      "runtime_epoch" => 1,
+      "generation" => run.generation
+    })
+    |> assert_error(
       503,
       "provider_access_unavailable"
     )
@@ -636,13 +643,14 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
                capabilities: ["repositories"]
              })
 
-    assert_error(
-      bearer(build_conn(), context.machine_token)
-      |> put("/api/v1/runs/#{run.id}/claims/#{uuid()}", %{
-        "runtime_id" => context.runtime_id,
-        "runtime_epoch" => 1,
-        "generation" => run.generation
-      }),
+    build_conn()
+    |> bearer(context.machine_token)
+    |> put("/api/v1/runs/#{run.id}/claims/#{uuid()}", %{
+      "runtime_id" => context.runtime_id,
+      "runtime_epoch" => 1,
+      "generation" => run.generation
+    })
+    |> assert_error(
       503,
       "provider_access_unavailable"
     )
@@ -764,9 +772,7 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
     assert intent.action_binding["run_id"] == goal_context.run.id
     assert intent.action_binding["task_id"] == goal_context.task.id
 
-    HTTPStub.expect_shared(
-      exact_readback_requests(goal_context, exact_remote_pr(goal_context, body))
-    )
+    HTTPStub.expect_shared(exact_readback_requests(goal_context, exact_remote_pr(goal_context, body)))
 
     response =
       provider_request(
@@ -829,20 +835,20 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
   # code), and the injected failure, so one loop registers one named test per
   # case.
   for {name, binding, terminal_state, failure, code} <- [
-        {"stale exact unknown caller replays committed success before authentication", :exact,
-         "succeeded", :authentication, nil},
-        {"stale exact unknown caller replays committed failure before authentication", :exact,
-         "failed", :authentication, "forbidden"},
+        {"stale exact unknown caller replays committed success before authentication", :exact, "succeeded",
+         :authentication, nil},
+        {"stale exact unknown caller replays committed failure before authentication", :exact, "failed", :authentication,
+         "forbidden"},
         # A stored-row decode pin, not an end-to-end write-then-replay flow:
         # `authorized_connection/3` widens every execute context's capabilities
         # before dispatch, so no live flow commits this pair. The case pins
         # `stored_failure/1`'s decode of the `capability_not_granted` code.
-        {"stale exact unknown caller replays a stored capability refusal row", :exact, "failed",
-         :authentication, "capability_not_granted"},
-        {"stale generic unknown caller replays committed success before network readback",
-         :generic, "succeeded", :transport, nil},
-        {"stale generic unknown caller replays committed failure before network readback",
-         :generic, "failed", :transport, "forbidden"}
+        {"stale exact unknown caller replays a stored capability refusal row", :exact, "failed", :authentication,
+         "capability_not_granted"},
+        {"stale generic unknown caller replays committed success before network readback", :generic, "succeeded",
+         :transport, nil},
+        {"stale generic unknown caller replays committed failure before network readback", :generic, "failed", :transport,
+         "forbidden"}
       ] do
     test name, context do
       assert_terminal_replay_after_dispatch_lock(
@@ -862,8 +868,8 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
     HTTPStub.expect_shared(exact_readback_requests(goal_context, edited))
 
     assert %{"outcome" => "unknown", "readback_status" => "unconfirmed", "projected" => false} =
-             provider_request(
-               goal_context,
+             goal_context
+             |> provider_request(
                context.repository.id,
                "change.upsert",
                input,
@@ -906,7 +912,7 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
     Application.put_env(
       :symmetry_control,
       :integration_auth_provider,
-      SymmetryControl.Integrations.ProviderActionTestStub
+      ProviderActionTestStub
     )
 
     HTTPStub.expect_shared([])
@@ -973,8 +979,8 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
     assert exact_mutation_count(intent.action_id) == 1
     HTTPStub.verify_shared!()
 
-    assert provider_request(
-             goal_context,
+    assert goal_context
+           |> provider_request(
              context.repository.id,
              "change.upsert",
              input,
@@ -1010,8 +1016,8 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
     assert exact_mutation_count(intent.action_id) == 1
     HTTPStub.verify_shared!()
 
-    assert provider_request(
-             goal_context,
+    assert goal_context
+           |> provider_request(
              context.repository.id,
              "change.upsert",
              input,
@@ -1071,8 +1077,8 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
              "projected" => false,
              "readback" => %{"operation" => "resource.sync", "projected" => false}
            } =
-             provider_request(
-               goal_context,
+             goal_context
+             |> provider_request(
                context.repository.id,
                "change.upsert",
                %{"title" => "Readback applied"},
@@ -1107,8 +1113,8 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
              "outcome" => "unknown",
              "readback_status" => "unconfirmed"
            } =
-             provider_request(
-               goal_context,
+             goal_context
+             |> provider_request(
                context.repository.id,
                "change.upsert",
                %{"title" => "Readback unconfirmed"},
@@ -1173,8 +1179,8 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
              "readback_status" => "unconfirmed",
              "projected" => false
            } =
-             provider_request(
-               goal_context,
+             goal_context
+             |> provider_request(
                context.repository.id,
                "change.upsert",
                input,
@@ -1378,7 +1384,8 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
 
   test "allows a granted change action and persists only normalized delivery", context do
     response =
-      provider_request(context, context.repository.id, "change.upsert", %{
+      context
+      |> provider_request(context.repository.id, "change.upsert", %{
         "title" => "Add provider access"
       })
       |> json_response(200)
@@ -1555,9 +1562,10 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
       "generation" => context.run.generation
     }
 
-    assert_error(
-      bearer(build_conn(), context.machine_token)
-      |> put("/api/v1/runs/#{context.run.id}/claims/#{context.claim_id}", request),
+    build_conn()
+    |> bearer(context.machine_token)
+    |> put("/api/v1/runs/#{context.run.id}/claims/#{context.claim_id}", request)
+    |> assert_error(
       503,
       "provider_access_unavailable"
     )
@@ -1574,7 +1582,8 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
              })
 
     recovered =
-      bearer(build_conn(), context.machine_token)
+      build_conn()
+      |> bearer(context.machine_token)
       |> put("/api/v1/runs/#{context.run.id}/claims/#{context.claim_id}", request)
       |> json_response(200)
 
@@ -1606,7 +1615,8 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
     revoke_goal_provider_authority(goal, :paused)
 
     paused_replay =
-      bearer(build_conn(), context.machine_token)
+      build_conn()
+      |> bearer(context.machine_token)
       |> put("/api/v1/runs/#{initial_run.id}/claims/#{goal_context.claim_id}", %{
         "runtime_id" => goal_context.runtime_id,
         "runtime_epoch" => 1,
@@ -1627,7 +1637,8 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
              ProviderAccess.lock_claim_scope(initial_run.id)
 
     replay =
-      bearer(build_conn(), context.machine_token)
+      build_conn()
+      |> bearer(context.machine_token)
       |> put("/api/v1/runs/#{initial_run.id}/claims/#{goal_context.claim_id}", %{
         "runtime_id" => goal_context.runtime_id,
         "runtime_epoch" => 1,
@@ -1677,7 +1688,8 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
     claim_id = uuid()
 
     access =
-      bearer(build_conn(), context.machine_token)
+      build_conn()
+      |> bearer(context.machine_token)
       |> put("/api/v1/runs/#{run.id}/claims/#{claim_id}", %{
         "runtime_id" => context.runtime_id,
         "runtime_epoch" => 1,
@@ -1704,13 +1716,14 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
       inc: [lock_version: 1]
     )
 
-    assert_error(
-      bearer(build_conn(), context.machine_token)
-      |> put("/api/v1/runs/#{context.run.id}/claims/#{context.claim_id}", %{
-        "runtime_id" => context.runtime_id,
-        "runtime_epoch" => 1,
-        "generation" => context.run.generation
-      }),
+    build_conn()
+    |> bearer(context.machine_token)
+    |> put("/api/v1/runs/#{context.run.id}/claims/#{context.claim_id}", %{
+      "runtime_id" => context.runtime_id,
+      "runtime_epoch" => 1,
+      "generation" => context.run.generation
+    })
+    |> assert_error(
       503,
       "provider_access_unavailable"
     )
@@ -1725,13 +1738,15 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
     input = %{"title" => "Idempotent change"}
 
     first =
-      provider_request(context, context.repository.id, "change.upsert", input, action_id)
+      context
+      |> provider_request(context.repository.id, "change.upsert", input, action_id)
       |> json_response(200)
 
     assert_received {:provider_action, "github", _, _, "change.upsert", _, _}
 
     replay =
-      provider_request(context, context.repository.id, "change.upsert", input, action_id)
+      context
+      |> provider_request(context.repository.id, "change.upsert", input, action_id)
       |> json_response(200)
 
     assert replay == first
@@ -1775,7 +1790,7 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
         end
       end)
 
-    Ecto.Adapters.SQL.Sandbox.allow(Repo, self(), requester.pid)
+    Sandbox.allow(Repo, self(), requester.pid)
     send(requester.pid, :start_projection_race)
 
     readiness = await_provider_readiness(requester, context, action_id, :projection)
@@ -1838,7 +1853,8 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
     assert_received {:provider_action, "github", _, _, "change.upsert", _, _}
 
     retried =
-      provider_request(context, context.repository.id, "change.upsert", input, action_id)
+      context
+      |> provider_request(context.repository.id, "change.upsert", input, action_id)
       |> json_response(200)
 
     assert retried["operation"] == "change.upsert"
@@ -1849,7 +1865,8 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
     assert intent.state == "succeeded"
     assert intent.failure == nil
 
-    assert provider_request(context, context.repository.id, "change.upsert", input, action_id)
+    assert context
+           |> provider_request(context.repository.id, "change.upsert", input, action_id)
            |> json_response(200) == retried
 
     refute_receive {:provider_action, _, _, _, _, _, _}, 50
@@ -1861,8 +1878,8 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
     insert_accepted_intent(context, action_id, "change.upsert", input)
 
     assert %{"operation" => "change.upsert"} =
-             provider_request(
-               context,
+             context
+             |> provider_request(
                context.repository.id,
                "change.upsert",
                input,
@@ -1887,8 +1904,8 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
     )
 
     assert %{"operation" => "change.upsert", "projected" => false} =
-             provider_request(
-               context,
+             context
+             |> provider_request(
                context.repository.id,
                "change.upsert",
                input,
@@ -1908,13 +1925,13 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
     assert :ok =
              Supervisor.terminate_child(
                SymmetryControl.Supervisor,
-               SymmetryControl.Integrations.ProviderAccess
+               ProviderAccess
              )
 
     assert {:ok, _pid} =
              Supervisor.restart_child(
                SymmetryControl.Supervisor,
-               SymmetryControl.Integrations.ProviderAccess
+               ProviderAccess
              )
 
     readiness = await_provider_readiness(nil, context, action_id, :waiting)
@@ -1969,7 +1986,7 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
         end
       end)
 
-    Ecto.Adapters.SQL.Sandbox.allow(Repo, self(), requester.pid)
+    Sandbox.allow(Repo, self(), requester.pid)
     send(requester.pid, :start_health_write_race)
 
     readiness = await_provider_readiness(requester, context, action_id, :waiting)
@@ -2006,7 +2023,7 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
       end)
 
     requester_pid = requester.pid
-    Ecto.Adapters.SQL.Sandbox.allow(Repo, self(), requester_pid)
+    Sandbox.allow(Repo, self(), requester_pid)
 
     try do
       readiness = await_provider_readiness(requester, context, action_id, :waiting)
@@ -2049,7 +2066,7 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
     assert :ok =
              Supervisor.terminate_child(
                SymmetryControl.Supervisor,
-               SymmetryControl.Integrations.ProviderAccess
+               ProviderAccess
              )
 
     assert_receive {:DOWN, ^provider_ref, :process, ^first_provider_pid, :killed}
@@ -2058,7 +2075,7 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
     assert {:ok, _pid} =
              Supervisor.restart_child(
                SymmetryControl.Supervisor,
-               SymmetryControl.Integrations.ProviderAccess
+               ProviderAccess
              )
 
     recover_pending_and_wait()
@@ -2165,7 +2182,7 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
         end
       end)
 
-    Ecto.Adapters.SQL.Sandbox.allow(Repo, self(), requester.pid)
+    Sandbox.allow(Repo, self(), requester.pid)
     send(requester.pid, :start_health_write_race)
 
     readiness = await_provider_readiness(requester, context, action_id, :health_write)
@@ -2190,7 +2207,8 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
              "unknown"
 
     assert %{"operation" => "change.upsert"} =
-             provider_request(context, context.repository.id, "change.upsert", input, action_id)
+             context
+             |> provider_request(context.repository.id, "change.upsert", input, action_id)
              |> json_response(200)
 
     assert_received {:provider_action, "github", _, _, "change.upsert", _, _}
@@ -2274,8 +2292,7 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
   # so one loop registers one named test per fixture.
   for {name, fixture} <- [
         {"HTTP 5xx mutation failures remain retryable unknowns", "Fail HTTP 503"},
-        {"invalid successful mutation responses remain retryable unknowns",
-         "Return invalid success"}
+        {"invalid successful mutation responses remain retryable unknowns", "Return invalid success"}
       ] do
     test name, context do
       assert_unknown_mutation_failure(context, unquote(fixture))
@@ -2323,7 +2340,7 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
         end
       end)
 
-    Ecto.Adapters.SQL.Sandbox.allow(Repo, self(), requester.pid)
+    Sandbox.allow(Repo, self(), requester.pid)
     send(requester.pid, :start)
 
     readiness = await_provider_readiness(requester, context, action_id, :waiting)
@@ -2353,7 +2370,7 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
         end
       end)
 
-    Ecto.Adapters.SQL.Sandbox.allow(Repo, self(), requester.pid)
+    Sandbox.allow(Repo, self(), requester.pid)
     send(requester.pid, :start)
 
     readiness = await_provider_readiness(requester, context, action_id, :waiting)
@@ -2384,7 +2401,8 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
     refute_receive {:provider_action, _, _, _, _, _, _}, 50
 
     assert %{"operation" => "change.upsert"} =
-             provider_request(context, context.repository.id, "change.upsert", %{
+             context
+             |> provider_request(context.repository.id, "change.upsert", %{
                "title" => "Scoped",
                "body" => "Safe body"
              })
@@ -2408,7 +2426,8 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
     )
 
     assert %{"operation" => "change.update"} =
-             provider_request(context, context.repository.id, "change.update", %{
+             context
+             |> provider_request(context.repository.id, "change.update", %{
                "title" => "Scoped update"
              })
              |> json_response(200)
@@ -2463,7 +2482,8 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
     logs =
       capture_log([level: :debug], fn ->
         assert %{"operation" => "change.upsert"} =
-                 provider_request(context, context.repository.id, "change.upsert", %{
+                 context
+                 |> provider_request(context.repository.id, "change.upsert", %{
                    "title" => title,
                    "body" => body
                  })
@@ -2484,7 +2504,8 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
     )
 
     assert %{"operation" => "change.update"} =
-             provider_request(context, context.repository.id, "change.update", %{
+             context
+             |> provider_request(context.repository.id, "change.update", %{
                "title" => "Snapshot scoped"
              })
              |> json_response(200)
@@ -2520,7 +2541,8 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
     )
 
     assert %{"operation" => "change.upsert"} =
-             provider_request(context, context.repository.id, "change.upsert", %{
+             context
+             |> provider_request(context.repository.id, "change.upsert", %{
                "title" => "Create scoped PR"
              })
              |> json_response(200)
@@ -2531,7 +2553,8 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
     )
 
     assert %{"operation" => "change.update"} =
-             provider_request(context, context.repository.id, "change.update", %{
+             context
+             |> provider_request(context.repository.id, "change.update", %{
                "title" => "Update scoped PR"
              })
              |> json_response(200)
@@ -2544,7 +2567,7 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
   end
 
   test "an old signed token follows the live renewed lease", context do
-    renewed_until = DateTime.add(DateTime.utc_now(), 172_800, :second)
+    renewed_until = DateTime.shift(DateTime.utc_now(), day: 2)
 
     Repo.update_all(from(run in Run, where: run.id == ^context.run.id),
       set: [lease_expires_at: renewed_until]
@@ -2569,7 +2592,8 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
     old_context = put_in(context.access["token"], old_token)
 
     assert %{"operation" => "resource.sync"} =
-             provider_request(old_context, context.tracker.id, "resource.sync", %{})
+             old_context
+             |> provider_request(context.tracker.id, "resource.sync", %{})
              |> json_response(200)
 
     expire_run(context.run.id)
@@ -2624,7 +2648,7 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
         end
       end)
 
-    Ecto.Adapters.SQL.Sandbox.allow(Repo, self(), requester.pid)
+    Sandbox.allow(Repo, self(), requester.pid)
     send(requester.pid, :start)
 
     readiness = await_provider_readiness(requester, context, action_id, :waiting)
@@ -2668,7 +2692,7 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
     assert stored.external_change_data == %{}
     refute inspect(stored) =~ "provider-secret"
 
-    resource = Repo.get!(SymmetryControl.Workspaces.ProjectResource, context.repository.id)
+    resource = Repo.get!(ProjectResource, context.repository.id)
     assert resource.status == "degraded"
     assert resource.sync_status == "failed"
     assert resource.status_message == "Provider response is invalid"
@@ -2688,7 +2712,7 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
     assert_error(response, 502, "provider_failure")
     refute response.resp_body =~ "provider-secret"
 
-    resource = Repo.get!(SymmetryControl.Workspaces.ProjectResource, context.repository.id)
+    resource = Repo.get!(ProjectResource, context.repository.id)
     assert resource.status == "degraded"
     assert resource.sync_status == "failed"
     assert resource.status_message == "Provider transport failed"
@@ -2762,13 +2786,11 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
   end
 
   defp await_worker_exit(reference, pid, reason) do
-    try do
-      receive do
-        {:DOWN, ^reference, :process, ^pid, ^reason} -> :ok
-      end
-    after
-      Process.demonitor(reference, [:flush])
+    receive do
+      {:DOWN, ^reference, :process, ^pid, ^reason} -> :ok
     end
+  after
+    Process.demonitor(reference, [:flush])
   end
 
   defp install_provider_timer_observer do
@@ -2823,7 +2845,7 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
 
     Application.put_env(:symmetry_control, :integration_providers,
       github: GitHub,
-      azure_devops: SymmetryControl.Integrations.ProviderActionTestStub
+      azure_devops: ProviderActionTestStub
     )
 
     on_exit(fn ->
@@ -3011,7 +3033,7 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
     Application.put_env(
       :symmetry_control,
       :integration_http_client,
-      SymmetryControl.Integrations.ProviderActionTestStub
+      ProviderActionTestStub
     )
 
     response =
@@ -3060,8 +3082,7 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
       %{
         method: :get,
         url_contains: "/git/ref/heads/feature%2Fprovider-access",
-        response:
-          {:ok, 200, %{}, %{"object" => %{"sha" => context.task.input["subject"]["commit"]}}}
+        response: {:ok, 200, %{}, %{"object" => %{"sha" => context.task.input["subject"]["commit"]}}}
       },
       %{
         method: :get,
@@ -3089,8 +3110,7 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
     }
   end
 
-  defp exact_remote_body(action_id),
-    do: :ets.lookup_element(:provider_action_test_state, {:exact_body, action_id}, 2)
+  defp exact_remote_body(action_id), do: :ets.lookup_element(:provider_action_test_state, {:exact_body, action_id}, 2)
 
   defp exact_mutation_count(action_id),
     do: :ets.lookup_element(:provider_action_test_state, {:exact_mutations, action_id}, 2)
@@ -3098,7 +3118,8 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
   defp provider_request(context, resource_id, operation, input, action_id \\ nil) do
     action_id = action_id || uuid()
 
-    bearer(build_conn(), context.access["token"])
+    build_conn()
+    |> bearer(context.access["token"])
     |> post(context.access["path"], %{
       "action_id" => action_id,
       "resource_id" => resource_id,
@@ -3190,29 +3211,19 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
   end
 
   defp recover_pending_and_wait do
-    send(SymmetryControl.Integrations.ProviderAccess, :recover_interrupted_dispatches)
-    state = :sys.get_state(SymmetryControl.Integrations.ProviderAccess)
+    send(ProviderAccess, :recover_interrupted_dispatches)
+    state = :sys.get_state(ProviderAccess)
 
     Enum.each(Map.keys(state.jobs), fn pid ->
       reference = Process.monitor(pid)
       assert_receive {:DOWN, ^reference, :process, ^pid, _reason}, 5_000
     end)
 
-    :sys.get_state(SymmetryControl.Integrations.ProviderAccess)
+    :sys.get_state(ProviderAccess)
   end
 
   defp postgrex_test_options do
-    Repo.config()
-    |> Keyword.take([
-      :hostname,
-      :port,
-      :database,
-      :username,
-      :password,
-      :parameters,
-      :ssl,
-      :socket_options
-    ])
+    Keyword.take(Repo.config(), [:hostname, :port, :database, :username, :password, :parameters, :ssl, :socket_options])
   end
 
   defp advisory_key(intent_id) do
@@ -3229,7 +3240,7 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
 
   defp expire_run(run_id) do
     Repo.update_all(from(run in Run, where: run.id == ^run_id),
-      set: [lease_expires_at: DateTime.add(DateTime.utc_now(), -1, :second)]
+      set: [lease_expires_at: DateTime.shift(DateTime.utc_now(), second: -1)]
     )
   end
 
@@ -3346,14 +3357,7 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
     |> Repo.insert!()
   end
 
-  defp goal_task(
-         item,
-         goal,
-         snapshot,
-         resource_id,
-         provider_scope \\ nil,
-         provider_resource_ids \\ nil
-       ) do
+  defp goal_task(item, goal, snapshot, resource_id, provider_scope \\ nil, provider_resource_ids \\ nil) do
     provider_scope =
       provider_scope || frozen_goal_provider_scope([resource_id], ["change.upsert"])
 
@@ -3411,7 +3415,7 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
       generation: 1,
       state: "assigned",
       assigned_at: now,
-      assignment_expires_at: DateTime.add(now, 60, :second)
+      assignment_expires_at: DateTime.shift(now, minute: 1)
     })
     |> Repo.insert!()
   end
@@ -3469,7 +3473,7 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
         generation: generation,
         state: "assigned",
         assigned_at: now,
-        assignment_expires_at: DateTime.add(now, 60, :second)
+        assignment_expires_at: DateTime.shift(now, minute: 1)
       })
       |> Repo.insert!()
 
@@ -3480,7 +3484,8 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
     claim_id = uuid()
 
     response =
-      bearer(build_conn(), context.machine_token)
+      build_conn()
+      |> bearer(context.machine_token)
       |> put("/api/v1/runs/#{run.id}/claims/#{claim_id}", %{
         "runtime_id" => context.runtime_id,
         "runtime_epoch" => 1,
@@ -3639,7 +3644,8 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
     token = "machine-token-" <> uuid()
 
     response =
-      bearer(conn, @enrollment_token)
+      conn
+      |> bearer(@enrollment_token)
       |> put_req_header("idempotency-key", uuid())
       |> post("/api/v1/machines", %{
         "machine" => %{"name" => "provider-access-builder"},
@@ -3652,7 +3658,8 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
 
   defp register(conn, machine_id, machine_token) do
     response =
-      bearer(conn, machine_token)
+      conn
+      |> bearer(machine_token)
       |> put("/api/v1/machines/#{machine_id}/sessions/#{uuid()}", %{
         "runtimes" => [
           %{

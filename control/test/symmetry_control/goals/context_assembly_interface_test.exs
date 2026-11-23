@@ -156,8 +156,7 @@ defmodule SymmetryControl.Goals.ContextAssemblyInterfaceTest do
 
     work_contract = %{
       "title" => "Plan the approved Goal",
-      "description" =>
-        "Produce a bounded PlanProposal for the approved Goal. This does not approve or admit work.",
+      "description" => "Produce a bounded PlanProposal for the approved Goal. This does not approve or admit work.",
       "purpose" => "plan",
       "acceptance" => %{
         "schema_version" => "symmetry.acceptance.v1",
@@ -168,7 +167,7 @@ defmodule SymmetryControl.Goals.ContextAssemblyInterfaceTest do
       "change_target" => nil
     }
 
-    assert Map.keys(document) |> Enum.sort() == [
+    assert document |> Map.keys() |> Enum.sort() == [
              "advisory_recall",
              "approved_goal",
              "content_hash",
@@ -207,8 +206,7 @@ defmodule SymmetryControl.Goals.ContextAssemblyInterfaceTest do
                "resource_id" => repository.id,
                "source_kind" => "approved_goal",
                "source_revision" => "goal:#{goal.id}:1",
-               "content_hash" =>
-                 ContextAssembly.context_digest(RequestHash.canonical(approved_goal)),
+               "content_hash" => ContextAssembly.context_digest(RequestHash.canonical(approved_goal)),
                "observed_at" => @observed_at,
                "trust" => "trusted_policy",
                "required" => false,
@@ -218,8 +216,7 @@ defmodule SymmetryControl.Goals.ContextAssemblyInterfaceTest do
                "resource_id" => repository.id,
                "source_kind" => "work_contract",
                "source_revision" => "goal:#{goal.id}:1:plan",
-               "content_hash" =>
-                 ContextAssembly.context_digest(RequestHash.canonical(work_contract)),
+               "content_hash" => ContextAssembly.context_digest(RequestHash.canonical(work_contract)),
                "observed_at" => @observed_at,
                "trust" => "trusted_policy",
                "required" => false,
@@ -255,9 +252,7 @@ defmodule SymmetryControl.Goals.ContextAssemblyInterfaceTest do
     assert document["size"]["total_bytes"] == document["size"]["mandatory_bytes"]
 
     assert document["content_hash"] ==
-             ContextAssembly.context_digest(
-               RequestHash.canonical(Map.delete(document, "content_hash"))
-             )
+             ContextAssembly.context_digest(RequestHash.canonical(Map.delete(document, "content_hash")))
   end
 
   test "context_snapshot_document/11 pins the implement work contract, sources and content hash" do
@@ -301,7 +296,7 @@ defmodule SymmetryControl.Goals.ContextAssemblyInterfaceTest do
       "change_target" => item.change_target
     }
 
-    assert Map.keys(document) |> Enum.sort() == [
+    assert document |> Map.keys() |> Enum.sort() == [
              "advisory_recall",
              "approved_goal",
              "content_hash",
@@ -340,8 +335,7 @@ defmodule SymmetryControl.Goals.ContextAssemblyInterfaceTest do
                "resource_id" => item.repository_resource_id,
                "source_kind" => "approved_goal",
                "source_revision" => "goal:#{goal.id}:1",
-               "content_hash" =>
-                 ContextAssembly.context_digest(RequestHash.canonical(approved_goal)),
+               "content_hash" => ContextAssembly.context_digest(RequestHash.canonical(approved_goal)),
                "observed_at" => @observed_at,
                "trust" => "trusted_policy",
                "required" => false,
@@ -351,8 +345,7 @@ defmodule SymmetryControl.Goals.ContextAssemblyInterfaceTest do
                "resource_id" => item.repository_resource_id,
                "source_kind" => "work_contract",
                "source_revision" => "work-item:#{item.id}",
-               "content_hash" =>
-                 ContextAssembly.context_digest(RequestHash.canonical(work_contract)),
+               "content_hash" => ContextAssembly.context_digest(RequestHash.canonical(work_contract)),
                "observed_at" => @observed_at,
                "trust" => "trusted_policy",
                "required" => false,
@@ -394,9 +387,7 @@ defmodule SymmetryControl.Goals.ContextAssemblyInterfaceTest do
     assert document["size"]["total_bytes"] == document["size"]["mandatory_bytes"]
 
     assert document["content_hash"] ==
-             ContextAssembly.context_digest(
-               RequestHash.canonical(Map.delete(document, "content_hash"))
-             )
+             ContextAssembly.context_digest(RequestHash.canonical(Map.delete(document, "content_hash")))
   end
 
   test "safe_document?/1 rejects sensitive keys at any depth and non-string map keys" do

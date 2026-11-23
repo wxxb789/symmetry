@@ -1,9 +1,16 @@
 defmodule SymmetryControl.Goals.Goal do
+  @moduledoc false
   use Ecto.Schema
+
   import Ecto.Changeset
 
-  alias SymmetryControl.Goals.{GoalDecision, GoalEvent, GoalRevision, WorkDependency, WorkOutcome}
-  alias SymmetryControl.Workspaces.{Project, WorkItem}
+  alias SymmetryControl.Goals.GoalDecision
+  alias SymmetryControl.Goals.GoalEvent
+  alias SymmetryControl.Goals.GoalRevision
+  alias SymmetryControl.Goals.WorkDependency
+  alias SymmetryControl.Goals.WorkOutcome
+  alias SymmetryControl.Workspaces.Project
+  alias SymmetryControl.Workspaces.WorkItem
 
   @states ["draft", "active", "paused", "achieved", "cancelled"]
   @terminal_states ["achieved", "cancelled"]
@@ -95,6 +102,7 @@ defmodule SymmetryControl.Goals.Goal do
 end
 
 defmodule SymmetryControl.Goals.JsonDocument do
+  @moduledoc false
   @behaviour Ecto.Type
 
   @impl Ecto.Type
@@ -120,10 +128,14 @@ defmodule SymmetryControl.Goals.JsonDocument do
 end
 
 defmodule SymmetryControl.Goals.GoalRevision do
+  @moduledoc false
   use Ecto.Schema
+
   import Ecto.Changeset
 
-  alias SymmetryControl.Goals.{ChangesetValidators, Goal, JsonDocument}
+  alias SymmetryControl.Goals.ChangesetValidators
+  alias SymmetryControl.Goals.Goal
+  alias SymmetryControl.Goals.JsonDocument
 
   @execution_policy_keys [
     "automatic_execution",
@@ -310,11 +322,9 @@ defmodule SymmetryControl.Goals.GoalRevision do
     end
   end
 
-  defp execution_policy_errors(_policy),
-    do: [execution_policy: "must be an object"]
+  defp execution_policy_errors(_policy), do: [execution_policy: "must be an object"]
 
-  defp positive_safe_integer?(value),
-    do: is_integer(value) and value >= 1 and value <= @max_safe_integer
+  defp positive_safe_integer?(value), do: is_integer(value) and value >= 1 and value <= @max_safe_integer
 
   defp nullable_microusd?(nil), do: true
   defp nullable_microusd?(value), do: is_integer(value) and value >= 0 and value <= @max_microusd
@@ -322,8 +332,7 @@ defmodule SymmetryControl.Goals.GoalRevision do
   defp uuid_array?(values) when is_list(values), do: Enum.all?(values, &valid_uuid?/1)
   defp uuid_array?(_values), do: false
 
-  defp nonblank_string_array?(values) when is_list(values),
-    do: Enum.all?(values, &nonblank_string?/1)
+  defp nonblank_string_array?(values) when is_list(values), do: Enum.all?(values, &nonblank_string?/1)
 
   defp nonblank_string_array?(_values), do: false
 
@@ -338,10 +347,13 @@ defmodule SymmetryControl.Goals.GoalRevision do
 end
 
 defmodule SymmetryControl.Goals.WorkDependency do
+  @moduledoc false
   use Ecto.Schema
+
   import Ecto.Changeset
 
-  alias SymmetryControl.Goals.{ChangesetValidators, Goal}
+  alias SymmetryControl.Goals.ChangesetValidators
+  alias SymmetryControl.Goals.Goal
   alias SymmetryControl.Workspaces.WorkItem
 
   @primary_key false
@@ -382,10 +394,13 @@ defmodule SymmetryControl.Goals.WorkDependency do
 end
 
 defmodule SymmetryControl.Goals.ContextSnapshot do
+  @moduledoc false
   use Ecto.Schema
+
   import Ecto.Changeset
 
-  alias SymmetryControl.Goals.{ChangesetValidators, Goal}
+  alias SymmetryControl.Goals.ChangesetValidators
+  alias SymmetryControl.Goals.Goal
   alias SymmetryControl.Workspaces.WorkItem
 
   @primary_key {:id, :binary_id, autogenerate: true}
@@ -445,10 +460,14 @@ defmodule SymmetryControl.Goals.ContextSnapshot do
 end
 
 defmodule SymmetryControl.Goals.HarnessSession do
+  @moduledoc false
   use Ecto.Schema
+
   import Ecto.Changeset
 
-  alias SymmetryControl.Orchestration.{Machine, Run, Runtime}
+  alias SymmetryControl.Orchestration.Machine
+  alias SymmetryControl.Orchestration.Run
+  alias SymmetryControl.Orchestration.Runtime
   alias SymmetryControl.Workspaces.ProjectResource
 
   @states ["available", "busy", "unavailable", "closed"]
@@ -546,10 +565,13 @@ defmodule SymmetryControl.Goals.HarnessSession do
 end
 
 defmodule SymmetryControl.Goals.HarnessSessionStopReceipt do
+  @moduledoc false
   use Ecto.Schema
+
   import Ecto.Changeset
 
-  alias SymmetryControl.Goals.{ChangesetValidators, HarnessSession}
+  alias SymmetryControl.Goals.ChangesetValidators
+  alias SymmetryControl.Goals.HarnessSession
   alias SymmetryControl.Orchestration.Run
 
   @primary_key {:id, :binary_id, autogenerate: true}
@@ -589,11 +611,15 @@ defmodule SymmetryControl.Goals.HarnessSessionStopReceipt do
 end
 
 defmodule SymmetryControl.Goals.HarnessSessionAttachReceipt do
+  @moduledoc false
   use Ecto.Schema
+
   import Ecto.Changeset
 
-  alias SymmetryControl.Goals.{ChangesetValidators, HarnessSession}
-  alias SymmetryControl.Orchestration.{Run, Runtime}
+  alias SymmetryControl.Goals.ChangesetValidators
+  alias SymmetryControl.Goals.HarnessSession
+  alias SymmetryControl.Orchestration.Run
+  alias SymmetryControl.Orchestration.Runtime
 
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
@@ -652,7 +678,9 @@ defmodule SymmetryControl.Goals.HarnessSessionAttachReceipt do
 end
 
 defmodule SymmetryControl.Goals.RunEvidence do
+  @moduledoc false
   use Ecto.Schema
+
   import Ecto.Changeset
 
   alias SymmetryControl.Goals.ChangesetValidators
@@ -736,11 +764,16 @@ defmodule SymmetryControl.Goals.RunEvidence do
 end
 
 defmodule SymmetryControl.Goals.WorkOutcome do
+  @moduledoc false
   use Ecto.Schema
+
   import Ecto.Changeset
 
-  alias SymmetryControl.Goals.{ChangesetValidators, Goal, JsonDocument}
-  alias SymmetryControl.Orchestration.{Run, Task}
+  alias SymmetryControl.Goals.ChangesetValidators
+  alias SymmetryControl.Goals.Goal
+  alias SymmetryControl.Goals.JsonDocument
+  alias SymmetryControl.Orchestration.Run
+  alias SymmetryControl.Orchestration.Task
   alias SymmetryControl.Workspaces.WorkItem
 
   @dispositions ["accepted", "rejected"]
@@ -854,10 +887,14 @@ defmodule SymmetryControl.Goals.WorkOutcome do
 end
 
 defmodule SymmetryControl.Goals.GoalDecision do
+  @moduledoc false
   use Ecto.Schema
+
   import Ecto.Changeset
 
-  alias SymmetryControl.Goals.{ChangesetValidators, Goal, JsonDocument}
+  alias SymmetryControl.Goals.ChangesetValidators
+  alias SymmetryControl.Goals.Goal
+  alias SymmetryControl.Goals.JsonDocument
   alias SymmetryControl.Workspaces.WorkItem
 
   @kinds ["plan", "scope", "review", "budget", "external_action", "completion"]
@@ -1051,10 +1088,13 @@ defmodule SymmetryControl.Goals.GoalDecision do
 end
 
 defmodule SymmetryControl.Goals.GoalEvent do
+  @moduledoc false
   use Ecto.Schema
+
   import Ecto.Changeset
 
-  alias SymmetryControl.Goals.{ChangesetValidators, Goal}
+  alias SymmetryControl.Goals.ChangesetValidators
+  alias SymmetryControl.Goals.Goal
 
   @primary_key {:id, :binary_id, autogenerate: false}
   @foreign_key_type :binary_id
@@ -1134,7 +1174,9 @@ defmodule SymmetryControl.Goals.GoalEvent do
 end
 
 defmodule SymmetryControl.Goals.GoalBudgetReservation do
+  @moduledoc false
   use Ecto.Schema
+
   import Ecto.Changeset
 
   alias SymmetryControl.Goals.Goal
@@ -1187,7 +1229,9 @@ defmodule SymmetryControl.Goals.GoalBudgetReservation do
 end
 
 defmodule SymmetryControl.Goals.RunUsage do
+  @moduledoc false
   use Ecto.Schema
+
   import Ecto.Changeset
 
   alias SymmetryControl.Goals.ChangesetValidators
@@ -1293,12 +1337,18 @@ defmodule SymmetryControl.Goals.RunUsage do
 end
 
 defmodule SymmetryControl.Goals.GoalExternalWait do
+  @moduledoc false
   use Ecto.Schema
+
   import Ecto.Changeset
 
-  alias SymmetryControl.Goals.{ChangesetValidators, Goal, GoalEvent}
-  alias SymmetryControl.Orchestration.{Run, Task}
-  alias SymmetryControl.Workspaces.{ProjectResource, WorkItem}
+  alias SymmetryControl.Goals.ChangesetValidators
+  alias SymmetryControl.Goals.Goal
+  alias SymmetryControl.Goals.GoalEvent
+  alias SymmetryControl.Orchestration.Run
+  alias SymmetryControl.Orchestration.Task
+  alias SymmetryControl.Workspaces.ProjectResource
+  alias SymmetryControl.Workspaces.WorkItem
 
   @states ["satisfied", "failed", "cancelled", "unsupported"]
   @active_states []
@@ -1428,7 +1478,7 @@ defmodule SymmetryControl.Goals.GoalExternalWait do
     validate_change(changeset, :subject, fn :subject, value ->
       valid? =
         is_map(value) and
-          Map.keys(value) |> Enum.sort() == ["commit", "resource_id", "tree_digest"] and
+          value |> Map.keys() |> Enum.sort() == ["commit", "resource_id", "tree_digest"] and
           Enum.all?(~w(commit resource_id tree_digest), fn key ->
             is_binary(Map.get(value, key)) and String.trim(Map.get(value, key)) != ""
           end) and
