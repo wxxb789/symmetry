@@ -6,16 +6,17 @@ Plan: `docs/plans/2026-11-22-rf-w6-07-route-splitting-plan.md` (its §6 carries 
 below, resolved by the conductor ruling of 2026-11-22). Base revision `6d55c575`
 (`test(frontend): keep layout, scroll and focus invariants in the browser layer only (#254)`).
 Files: `frontend/src/app/router.tsx` (modified, +10/-6), `frontend/src/app/route-chunks.ts` (new,
-64 L), `frontend/src/app/route-chunks.test.tsx` (new, 98 L),
+64 L), `frontend/src/app/route-chunks.test.tsx` (new, 126 L: 7 cases at implement, 4 more at the
+2026-11-23 apply stage),
 `frontend/src/features/connections/connections.tsx` (modified, +8/-6: the mount-timing guard, §9a),
 the plan, this record.
 
 Verdict up front: every contract gate is green on the settled tree — typecheck, lint, the 42-case
 router suite (byte-identical file), the 57-case connections suite (byte-identical file, the pinned
-case from §9 among them), the full suite (27 files / 625 tests), and both builds. §9 carries the
+case from §9 among them), the full suite (27 files / 629 tests), and both builds. §9 carries the
 conflict attempt 1 hit, the conductor ruling that resolved it and the corrected guard; §6 carries
-the four mutation runs (chunk-level, wrong lazy target, the mount-only guard revert); §10 carries
-the host-feed limits.
+the mutation runs (chunk-level, wrong lazy target, the mount-only guard revert, plus the three
+apply-stage reds for the cases the 2026-11-23 apply stage added); §10 carries the host-feed limits.
 
 ## 1. Dispatch re-derivation (base `6d55c575`)
 
@@ -161,13 +162,16 @@ Upstream facts (installed: vite 8.3.8, `@tanstack/react-router` 1.170.46 → `@t
 - non-load failures (a chunk that evaluates and throws) are rethrown untouched: error state, no
   reload;
 - the terminal surface is the router's existing error state (`MatchesInner`'s `CatchBoundary` →
-  `ErrorComponent`) — no `errorComponent`/`pendingComponent` is added anywhere;
+  `ErrorComponent`) — no `errorComponent`/`pendingComponent` is added anywhere; the policy's one
+  new string is `staleChunkMessage`, and it renders only in the stale-chunk failure state (case 3);
 - `reload` is an injected default because jsdom's `Location.reload` is unforgeable
   (`Object.getOwnPropertyDescriptor(window.location, "reload")` → `{ configurable: false,
   writable: false }`; `Object.defineProperty` throws `Cannot redefine property: reload`). The unit
   test drives that seam; the real reload is the render gate's business.
 
-Unit test `frontend/src/app/route-chunks.test.tsx` (7 cases, all green; 428 ms in the full-suite json run, 7/7 in a standalone run after the LF normalization):
+Unit test `frontend/src/app/route-chunks.test.tsx` (11 cases, all green; 491 ms in the full-suite
+json run, 11/11 in a standalone run). Cases 8-11 are the 2026-11-23 apply stage's additions, each
+shown red under the mutant of the rule it pins (§6 rows e-g):
 
 | case | pins |
 | --- | --- |
@@ -178,6 +182,10 @@ Unit test `frontend/src/app/route-chunks.test.tsx` (7 cases, all green; 428 ms i
 | `leaves a failing route chunk that is not a stale chunk to the error state without reloading` | an eval-time error is not a stale chunk: no reload, no marker, the real message shown |
 | `claims one reload for a prevented vite:preloadError and leaves the repeat to the error state` | the event path: claimed + prevented once, then left alone |
 | `shows the route's error state when a prevented preload left the chunk import empty` | the swallowed-`undefined` path and the shared claim across both entry points (exactly one reload) |
+| `reloads for this build even when a marker an older build left is on record` | the marker is keyed by *this* build's id: an older build's marker never suppresses the reload this build needs |
+| `claims one reload for a Firefox module-not-found wording` | the boundary claims before the library's message-keyed guard can, for the Firefox wording |
+| `claims one reload for a Safari module-not-found wording` | same, for the Safari wording |
+| `leaves a preload failure that is not a stale chunk unclaimed and unprevented` | the listener's payload filter: a preload failure that is not a load-failure wording (Vite's CSS-dep message) causes no reload |
 
 ## 6. Mutation runs (each applied alone, reverted, hash-verified)
 
@@ -187,6 +195,9 @@ Unit test `frontend/src/app/route-chunks.test.tsx` (7 cases, all green; 428 ms i
 | b | chat lazy target pointed at `../features/attention/attention` / `"AttentionPage"` | `vitest run src/app/router.test.tsx` exit 1: **1 of 42 red** — `chat route > subscribes /chat and carries the shell's project scope in its navigation`, `TestingLibraryElementError: Unable to find role="heading" and name "Chat"`, error surface `Invariant failed: Could not find an active match from "/attention"` (attempt 1 measured the same shape as 3 of 42; the two extra failures there did not reproduce in either attempt-2 run) | route-level mutant red |
 | c | no test needed an added `await`: `git diff --exit-code frontend/src/app/router.test.tsx frontend/src/features/connections/connections.test.tsx` → 0 (both byte-identical) | — | mutant not applicable, recorded |
 | d | the connections guard back to mount-only under lazy routes (`stillOnConnections = () => mounted.current`) | `vitest run src/features/connections/connections.test.tsx -t "does not pull the operator back"` exit 1: `1 failed, 56 skipped (57)`, `Expected: "/portal/projects"` / `Received: "/portal/connections"` at `connections.test.tsx:746` | route-guard mutant red |
+| e | the build-id keying loosened to "any marker suppresses" (`claimReloadOnce`: `getItem(...) === buildId` → `!== null`), applied by the 2026-11-23 apply stage | `vitest run src/app/route-chunks.test.tsx -t "reloads for this build"` exit 1: `1 failed, 10 skipped (11)` — `expected "vi.fn()" to be called 1 times, but got 0 times`, failed at the count assertion (`waitFor`, 1,060 ms) | apply-stage red (case 8) |
+| f | each non-Chrome wording broken in `chunkLoadFailurePrefixes`, one at a time (`"error loading dynamically imported module"` → `"…modulX"`; then `"Importing a module script failed"` → `"…failedX"`) | `-t "Firefox module-not-found"` exit 1: `1 failed, 10 skipped (11)`, injected `reload` 0 calls (the boundary rethrows and `lazyRouteComponent`'s message-keyed guard takes over); `-t "Safari module-not-found"` exit 1: same shape, failed at the count assertion (`waitFor`, 1,062 ms) | apply-stage red (cases 9, 10) |
+| g | the listener's payload filter deleted (`if (!isChunkLoadFailure(event.payload)) return;`) | `vitest run src/app/route-chunks.test.tsx -t "unclaimed and unprevented"` exit 1: `1 failed, 10 skipped (11)`, `expected "vi.fn()" to not be called at all, but actually been called 1 times` | apply-stage red (case 11) |
 
 Every mutant was reverted and the revert checked with `sha256sum -c`:
 `frontend/src/app/router.tsx: OK`, `frontend/src/app/route-chunks.ts: OK`,
@@ -194,6 +205,9 @@ Every mutant was reverted and the revert checked with `sha256sum -c`:
 `frontend/src/features/connections/connections.test.tsx: OK`, and the guard mutant against the
 pre-mutant `connections.tsx` hash
 (`1c6761b7a13a3a4aa29f0a77099c823930051b2e55997bd0690ca926006ad492: OK`).
+Rows e-g reverted the same way: `route-chunks.ts` back to
+`96e682aa2abc390fd8908d90388c2baed2252fded9f61c2ed53468aaec3a82bf: OK` after each of the three
+mutants.
 
 ## 7. Gates (settled tree, attempt 2)
 
@@ -208,47 +222,61 @@ the contract's command.
 | lint | `--filter @symmetry/frontend lint` | **exit 0**, `220 problems (0 errors, 220 warnings)`, 74.15 s; base is the same 220 → the `--max-warnings 229` cap is not raised |
 | router suite (frozen) | `--filter @symmetry/frontend exec vitest run src/app/router.test.tsx` | **exit 0**, `Tests 42 passed (42)`, 13.05 s, run with `router.tsx` sha256 `c12df3df…` and `router.test.tsx` sha256 `9b46ec7d…` (the file is byte-identical to HEAD) |
 | connections suite (frozen) | `--filter @symmetry/frontend exec vitest run src/features/connections/connections.test.tsx` | **exit 0**, 57/57 (26.5 s inside the json run); the file is byte-identical to HEAD (`ac68f053…`) and the pinned §9 case is one of the 57 |
-| full suite | `--filter @symmetry/frontend test` | **exit 0** on 7 of 8 invocations of the settled bytes, `Test Files 27 passed (27)`, `Tests 625 passed (625)` each (33-90 s). The composition table below comes from a `--reporter=json` run of the same source (before the new test file's LF normalization; 27 files / 625 tests / 0 failed). One earlier invocation of the same bytes exited 1 with an unidentified failure (my own `tail` truncation dropped the case name) and never reproduced — see §11 |
+| full suite | `--filter @symmetry/frontend test` | **exit 0** on 7 of 8 invocations of the pre-apply settled bytes, `Test Files 27 passed (27)`, `Tests 625 passed (625)` each (33-90 s). One earlier invocation of the same bytes exited 1 with an unidentified failure (my own `tail` truncation dropped the case name) and never reproduced — see §11. The apply-stage refresh (below) re-ran the gate at the current revision: 27 files / 629 tests, exit 0 |
 | build before | `--filter @symmetry/frontend build` (attempt 1, base tree) | exit 0, single 887.65 kB chunk (§4) |
 | build after | `--filter @symmetry/frontend build` (settled tree, run twice) | exit 0, the §4 table, 4.28 s and 2.07 s; the rebuild reproduced every asset hash |
 | diff hygiene | `git diff --check` | exit 0 |
 | DLP | the user-profile-path grep and the backslash-u grep over the changed/new files | 0 matches each; `scripts/ci/model-routing-record-sanitize.py --check --root-only` on this record: exit 0 |
 | render gate (CI) | the PR's `control` job: the seven spec files + the executed-set assertion | CI-verified on the PR; the release-shell harness cannot run on this host (W5-08 §3.3 records the limitation) |
 
-Full-suite composition on the settled tree (27 files / 625 tests; per-file test counts and
+Full-suite composition at the apply-stage refresh (27 files / 629 tests; per-file test counts and
 durations from `vitest run --reporter=json`, the same tree and config as the gate above):
 
 | file | tests | duration |
 | --- | --- | --- |
-| `src/app/application.test.ts` | 90 | 90 ms |
-| `src/app/legacy.test.ts` | 7 | 8 ms |
-| `src/app/read-cache.test.ts` | 38 | 14 ms |
-| `src/app/route-chunks.test.tsx` (new) | 7 | 428 ms |
-| `src/app/router.test.tsx` | 42 | 12,326 ms |
-| `src/app/selected-project.test.tsx` | 6 | 1,635 ms |
-| `src/components/primitives.test.tsx` | 14 | 537 ms |
-| `src/features/chat/chat-hooks.test.tsx` | 9 | 327 ms |
-| `src/features/chat/chat.test.tsx` | 47 | 23,195 ms |
-| `src/features/chat/presentation.test.ts` | 39 | 38 ms |
-| `src/features/connections/connections.test.tsx` | 57 (all green) | 26,516 ms |
-| `src/features/goals/goal-attention.test.tsx` | 29 | 18,182 ms |
-| `src/features/goals/goal-settle.test.tsx` | 8 | 12,872 ms |
-| `src/features/planning/planning.test.tsx` | 35 | 13,431 ms |
-| `src/features/projects/filters.test.ts` | 9 | 14 ms |
-| `src/features/projects/saved-views.test.ts` | 6 | 13 ms |
-| `src/features/runtimes/presentation.test.ts` | 20 | 17 ms |
-| `src/features/runtimes/runtimes.test.tsx` | 4 | 974 ms |
-| `src/features/work/assignment.test.tsx` | 10 | 5,126 ms |
-| `src/features/work/control.test.tsx` | 13 | 3,106 ms |
-| `src/features/work/detail.test.tsx` | 7 | 2,427 ms |
-| `src/features/work/presentation.test.ts` | 22 | 20 ms |
+| `src/app/application.test.ts` | 90 | 78 ms |
+| `src/app/legacy.test.ts` | 7 | 5 ms |
+| `src/app/read-cache.test.ts` | 38 | 11 ms |
+| `src/app/route-chunks.test.tsx` (new) | 11 | 491 ms |
+| `src/app/router.test.tsx` | 42 | 10,761 ms |
+| `src/app/selected-project.test.tsx` | 6 | 1,733 ms |
+| `src/components/primitives.test.tsx` | 14 | 528 ms |
+| `src/features/chat/chat-hooks.test.tsx` | 9 | 345 ms |
+| `src/features/chat/chat.test.tsx` | 47 | 19,882 ms |
+| `src/features/chat/presentation.test.ts` | 39 | 31 ms |
+| `src/features/connections/connections.test.tsx` | 57 (all green) | 29,532 ms |
+| `src/features/goals/goal-attention.test.tsx` | 29 | 16,102 ms |
+| `src/features/goals/goal-settle.test.tsx` | 8 | 12,810 ms |
+| `src/features/planning/planning.test.tsx` | 35 | 14,679 ms |
+| `src/features/projects/filters.test.ts` | 9 | 15 ms |
+| `src/features/projects/saved-views.test.ts` | 6 | 15 ms |
+| `src/features/runtimes/presentation.test.ts` | 20 | 16 ms |
+| `src/features/runtimes/runtimes.test.tsx` | 4 | 661 ms |
+| `src/features/work/assignment.test.tsx` | 10 | 3,966 ms |
+| `src/features/work/control.test.tsx` | 13 | 3,214 ms |
+| `src/features/work/detail.test.tsx` | 7 | 1,525 ms |
+| `src/features/work/presentation.test.ts` | 22 | 25 ms |
 | `src/features/work/receipts.test.ts` | 14 | 13 ms |
-| `src/services/api.test.ts` | 59 | 191 ms |
-| `src/services/realtime.test.ts` | 19 | 50 ms |
-| `src/services/refusals.test.ts` | 12 | 18 ms |
-| `src/tool-cache-config.test.ts` | 2 | 670 ms |
+| `src/services/api.test.ts` | 59 | 184 ms |
+| `src/services/realtime.test.ts` | 19 | 52 ms |
+| `src/services/refusals.test.ts` | 12 | 14 ms |
+| `src/tool-cache-config.test.ts` | 2 | 561 ms |
 
-Base for comparison: 26 files / 618 tests, green; final = 618 + 7 new = 625.
+Base for comparison: 26 files / 618 tests, green; final = 618 + 11 new = 629 (7 cases at
+implement, 4 added by the 2026-11-23 apply stage).
+
+Apply-stage refresh (2026-11-23): the only source change is the helper's unit test (the four cases
+above); `route-chunks.ts`, `router.tsx` and `router.test.tsx` are byte-identical (`96e682aa…`,
+`c12df3df…`, `9b46ec7d…`), `connections.test.tsx` keeps `ac68f053…`, and `git status` lists only
+three modified files (the unit test, the plan, this record). Gates re-run, all foreground and in
+order:
+typecheck exit 0; lint exit 0 (same 220 problems / 0 errors, cap unraised); router suite
+`Tests 42 passed (42)`, 14.02 s, exit 0 at the same two hashes; `--filter @symmetry/frontend test`
+exit 0, `Test Files 27 passed (27)`, `Tests 629 passed (629)`, 42.85 s; the same suite under
+`--reporter=json` (source of the table above) 27 files / 629 tests / 0 failed, 32.4 s from first
+start to last end; the standalone `route-chunks.test.tsx` run 11/11 in 4.41 s; `build` exit 0 and
+reproduced the §4 table asset-for-asset (`index-DDkgw58W.js`, `served-ZmW5x40A.js`, …); the
+apply-stage mutants are §6 rows e-g; `git diff --check` exit 0; both DLP greps 0 matches.
 
 ## 8. Attention and Runtimes: the eager decision with numbers
 
@@ -407,14 +435,14 @@ strips the basepath and moves at the moment the operator leaves.
   while the destination chunk loads; no navigation, no URL change, no gate pins that window, and
   neither file is inside the ruling's owned set.
 - Lazy routes change *when* a navigation's commit happens: on a cold deep link into a split route the
-  navigation's commit waits for that route's chunk (`router-core`'s `hasLoaders` treats
-  `component.preload` as a route loader), so the shell's first paint follows that one fetch; on a
-  navigation the previous page stays until the new one is ready (both pinned by
-  `route-chunks.test.tsx` cases 1-2). Dropping the preload measured a lost heading focus, so the
-  trade is deliberate.
-- One full-suite invocation of the settled bytes exited 1 with an unidentified failure: my own
-  `tail -10` truncation dropped the failing case's name before the output reached this record, and
-  the run does not reproduce — 7 further invocations of the same byte revision are `27/625` green,
+  navigation's commit waits for that route's chunk (`router-core`'s `routeNeedsLoad`,
+  `Router.js:22-23`, treats `component.preload` as a route loader), so the shell's first paint
+  follows that one fetch; on a navigation the previous page stays until the new one is ready
+  (both pinned by `route-chunks.test.tsx` cases 1-2). Dropping the preload measured a lost heading
+  focus, so the trade is deliberate.
+- One full-suite invocation of the pre-apply settled bytes exited 1 with an unidentified failure: my
+  own `tail -10` truncation dropped the failing case's name before the output reached this record,
+  and the run does not reproduce — 7 further invocations of that revision are `27/625` green,
   every one of them with a FAIL/`timed out` grep in place (plus two green runs of the same source
   before the new test file's LF normalization), and every suite that exercises the moved
   paths (router, connections, chat, goals, work, planning, route-chunks) is green in all of them.

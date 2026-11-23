@@ -74,19 +74,22 @@ BLOCKED) resolves §6 — the connections guard change is authorized (option A),
    - **The library's own reload path is deliberately bypassed**: `lazyRouteComponent` 1.170.46
      implements a reload-once guard keyed by the error *message*
      (`tanstack_router_reload:<message>`); left alone it would fire a second reload for the same
-     build after this policy's claim. The boundary therefore throws a `StaleChunkError` (whose
-     message is not a module-not-found wording) when the claim is already on record, so exactly
-     one reload happens per build and the terminal surface is the router's own error state.
+     build after this policy's claim. The boundary therefore throws a plain `Error`
+     (`route-chunks.ts:41`, `:49`) whose message is not a module-not-found wording, so exactly one
+     reload happens per build and the terminal surface is the router's own error state.
    - **The terminal surface is the router's existing error state** (the default `ErrorComponent`,
      reached through the router's own `CatchBoundary`); no `errorComponent` or `pendingComponent`
-     is added anywhere, so no new rendered text exists on any path.
+     is added anywhere. The policy's one new string is `staleChunkMessage` (`route-chunks.ts:14`),
+     and it renders only in the stale-chunk failure state; every normal path is byte-identical.
 5. **The pending surface is the router's own**: no route or router pending component is
    configured, so the router's client-side boundaries (`Matches` wraps the match tree and the root
    `Outlet` wraps the child match, both falling back to `null`) render *nothing* for the outlet
    region while a route chunk resolves. Measured (evidence §5, `route-chunks.test.tsx` cases 1-2):
    on a navigation the previous page and the shell stay rendered until the new route is ready, and a
-   cold deep link into a split route commits shell and page together; `router-core`'s `hasLoaders`
-   treats `component.preload` as a route loader, so the location commit waits for that chunk.
+   cold deep link into a split route commits shell and page together; `router-core`'s
+   `routeNeedsLoad` (`@tanstack/router-core@1.171.39` `Router.js:22-23`, its
+   `route.options.component?.preload` branch) treats `component.preload` as a route loader, so the
+   location commit waits for that chunk.
 6. **`router.test.tsx` stays byte-identical** unless a case actually needs an added `await`; every
    case already awaits a `findBy*`/`waitFor` after `renderWorkspace`, so the expected number of
    additions is zero, and any addition would be enumerated per case with its mutant.
@@ -190,8 +193,10 @@ continuation guard.
   `/attention` / `/runtimes` stay in the entry by the measured decision (evidence §8).
 - `router.test.tsx` byte-identical, 42/42 green; `connections.test.tsx` byte-identical, 57/57 green
   (the pinned case from §6 among them); typecheck exit 0; lint 220 problems / 0 errors under the
-  `--max-warnings 229` cap; build deterministic; full suite 27 files / 625 tests green in 7 of 8
-  invocations of the settled bytes (one unidentified, non-reproducing host flake: evidence §11).
+  `--max-warnings 229` cap; build deterministic; full suite green — 27 files / 629 tests at the
+  apply-stage refresh, the pre-apply bytes' 27 files / 625 green in 7 of 8 invocations (one
+  unidentified, non-reproducing host flake: evidence §11).
 - Mutants (a) chunk-level, (b) wrong lazy target and (d) the mount-only connections guard each
   measured red and reverted byte-identically; (c) unused because `router.test.tsx` needed no added
-  `await`.
+  `await`. The 2026-11-23 apply stage's three further mutants (build-id keying, the Firefox
+  wording, the listener's payload filter — evidence §6 rows e-g) each measured red and reverted.

@@ -4,7 +4,7 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { installStaleChunkReload, loadRouteChunk } from "./route-chunks";
 
-const staleChunkMessage = "Failed to fetch dynamically imported module: http://localhost/portal/assets/chat-4f1c.js";
+const moduleNotFoundMessage = "Failed to fetch dynamically imported module: http://localhost/portal/assets/chat-4f1c.js";
 const staleChunkErrorText = /This route's code changed while the tab was open/;
 const reload = vi.fn();
 
@@ -51,7 +51,7 @@ describe("route chunk loading", () => {
   });
 
   it("reloads the page once and shows the route's error state when a chunk load fails", async () => {
-    renderRoutes("/late", () => Promise.reject(new Error(staleChunkMessage)));
+    renderRoutes("/late", () => Promise.reject(new Error(moduleNotFoundMessage)));
     expect(await screen.findByText("Something went wrong!")).toBeVisible();
     expect(screen.getByText(staleChunkErrorText)).toBeVisible();
     expect(reload).toHaveBeenCalledTimes(1);
@@ -59,11 +59,11 @@ describe("route chunk loading", () => {
   });
 
   it("shows the route's error state without another reload once this build has reloaded", async () => {
-    const first = renderRoutes("/late", () => Promise.reject(new Error(staleChunkMessage)));
+    const first = renderRoutes("/late", () => Promise.reject(new Error(moduleNotFoundMessage)));
     expect(await screen.findByText("Something went wrong!")).toBeVisible();
     expect(reload).toHaveBeenCalledTimes(1);
     first.unmount();
-    renderRoutes("/late", () => Promise.reject(new Error(staleChunkMessage)));
+    renderRoutes("/late", () => Promise.reject(new Error(moduleNotFoundMessage)));
     expect(await screen.findByText("Something went wrong!")).toBeVisible();
     expect(screen.getByText(staleChunkErrorText)).toBeVisible();
     expect(reload).toHaveBeenCalledTimes(1);
@@ -78,11 +78,11 @@ describe("route chunk loading", () => {
   });
 
   it("claims one reload for a prevented vite:preloadError and leaves the repeat to the error state", () => {
-    const first = preloadError(staleChunkMessage);
+    const first = preloadError(moduleNotFoundMessage);
     window.dispatchEvent(first);
     expect(first.defaultPrevented).toBe(true);
     expect(reload).toHaveBeenCalledTimes(1);
-    const second = preloadError(staleChunkMessage);
+    const second = preloadError(moduleNotFoundMessage);
     window.dispatchEvent(second);
     expect(second.defaultPrevented).toBe(false);
     expect(reload).toHaveBeenCalledTimes(1);
@@ -90,9 +90,37 @@ describe("route chunk loading", () => {
 
   it("shows the route's error state when a prevented preload left the chunk import empty", async () => {
     renderRoutes("/late", () => Promise.resolve(undefined));
-    window.dispatchEvent(preloadError(staleChunkMessage));
+    window.dispatchEvent(preloadError(moduleNotFoundMessage));
     expect(await screen.findByText("Something went wrong!")).toBeVisible();
     expect(screen.getByText(staleChunkErrorText)).toBeVisible();
     expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it("reloads for this build even when a marker an older build left is on record", async () => {
+    const olderBuildMarker = "http://localhost/portal/assets/index-OLDBUILD.js";
+    sessionStorage.setItem("portal:stale-chunk-reload", olderBuildMarker);
+    renderRoutes("/late", () => Promise.reject(new Error(moduleNotFoundMessage)));
+    await waitFor(() => { expect(reload).toHaveBeenCalledTimes(1); });
+    expect(sessionStorage.getItem("portal:stale-chunk-reload")).not.toBe(olderBuildMarker);
+    expect(await screen.findByText(staleChunkErrorText)).toBeVisible();
+  });
+
+  it("claims one reload for a Firefox module-not-found wording", async () => {
+    renderRoutes("/late", () => Promise.reject(new Error("error loading dynamically imported module: http://localhost/portal/assets/chat-4f1c.js")));
+    await waitFor(() => { expect(reload).toHaveBeenCalledTimes(1); });
+    expect(await screen.findByText(staleChunkErrorText)).toBeVisible();
+  });
+
+  it("claims one reload for a Safari module-not-found wording", async () => {
+    renderRoutes("/late", () => Promise.reject(new Error("Importing a module script failed.")));
+    await waitFor(() => { expect(reload).toHaveBeenCalledTimes(1); });
+    expect(await screen.findByText(staleChunkErrorText)).toBeVisible();
+  });
+
+  it("leaves a preload failure that is not a stale chunk unclaimed and unprevented", () => {
+    const event = preloadError("Unable to preload CSS for /portal/assets/index-abc.css");
+    window.dispatchEvent(event);
+    expect(reload).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
   });
 });
