@@ -16,19 +16,19 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
   import SymmetryControlWeb.ServedDocument, only: [validate_served_document!: 2]
   import SymmetryControlWeb.TestConn, only: [api_conn: 0, operator_conn: 1, assert_error: 3]
 
-  alias SymmetryControl.Goals.{
-    ContextSnapshot,
-    GoalDecision,
-    GoalEvent,
-    GoalExternalWait,
-    RunEvidence,
-    RunUsage,
-    WorkOutcome
-  }
-
-  alias SymmetryControl.RequestHash
-  alias SymmetryControl.Orchestration.{Machine, Run, Runtime, Task}
+  alias SymmetryControl.Goals.ContextSnapshot
+  alias SymmetryControl.Goals.GoalDecision
+  alias SymmetryControl.Goals.GoalEvent
+  alias SymmetryControl.Goals.GoalExternalWait
+  alias SymmetryControl.Goals.RunEvidence
+  alias SymmetryControl.Goals.RunUsage
+  alias SymmetryControl.Goals.WorkOutcome
+  alias SymmetryControl.Orchestration.Machine
+  alias SymmetryControl.Orchestration.Run
+  alias SymmetryControl.Orchestration.Runtime
+  alias SymmetryControl.Orchestration.Task
   alias SymmetryControl.Repo
+  alias SymmetryControl.RequestHash
   alias SymmetryControl.Workspaces
   alias SymmetryControl.Workspaces.WorkItem
 
@@ -160,9 +160,7 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
 
     second_page =
       api_conn()
-      |> get(
-        "/portal/api/attention?project_id=#{project.id}&limit=1&cursor=#{URI.encode_www_form(cursor)}"
-      )
+      |> get("/portal/api/attention?project_id=#{project.id}&limit=1&cursor=#{URI.encode_www_form(cursor)}")
       |> json_response(200)
 
     assert %{"goal_attention" => %{"entries" => remaining}} = second_page
@@ -178,34 +176,40 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
     assert %{"goal_attention" => %{"entries" => [last_entry], "next_cursor" => nil}} = third_page
     assert last_entry["goal_id"] == first
 
-    assert_error(
-      api_conn() |> get("/portal/api/attention?cursor=not-a-cursor"),
+    api_conn()
+    |> get("/portal/api/attention?cursor=not-a-cursor")
+    |> assert_error(
       400,
       "invalid_cursor"
     )
 
-    assert_error(
-      api_conn() |> get("/portal/api/attention?limit=0"),
+    api_conn()
+    |> get("/portal/api/attention?limit=0")
+    |> assert_error(
       400,
       "invalid_request"
     )
 
-    assert_error(
-      api_conn() |> get("/portal/api/attention?project_id=#{project.id}&unknown=1"),
+    api_conn()
+    |> get("/portal/api/attention?project_id=#{project.id}&unknown=1")
+    |> assert_error(
       400,
       "invalid_request"
     )
 
-    assert_error(
-      api_conn() |> get("/portal/api/attention?project_id=not-a-uuid"),
+    api_conn()
+    |> get("/portal/api/attention?project_id=not-a-uuid")
+    |> assert_error(
       400,
       "invalid_request"
     )
   end
 
   test "attention requires the authenticated portal session", %{conn: conn} do
-    assert_error(
-      conn |> put_req_header("accept", "application/json") |> get("/portal/api/attention"),
+    conn
+    |> put_req_header("accept", "application/json")
+    |> get("/portal/api/attention")
+    |> assert_error(
       401,
       "unauthenticated"
     )
@@ -488,13 +492,13 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
 
     # The served decision version is the durable lock version the resolver must
     # present; the read model's own projection is the single source.
-    assert Repo.get!(SymmetryControl.Goals.GoalDecision, decision_id).lock_version ==
+    assert Repo.get!(GoalDecision, decision_id).lock_version ==
              decision_version
 
     # The operator projection stays the durable projection: the same read-model
     # members and none of the portal's presentation additions.
     operator_read =
-      operator_conn(conn) |> get("/api/v1/goals/#{goal_id}") |> json_response(200)
+      conn |> operator_conn() |> get("/api/v1/goals/#{goal_id}") |> json_response(200)
 
     assert Map.has_key?(operator_read, "source")
     refute Map.has_key?(operator_read, "project_key")
@@ -584,8 +588,9 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
     project = create_project()
     goal_id = create_goal(conn, project)
 
-    assert_error(
-      api_conn() |> get("/portal/api/goals/#{goal_id}/contexts/#{Ecto.UUID.generate()}"),
+    api_conn()
+    |> get("/portal/api/goals/#{goal_id}/contexts/#{Ecto.UUID.generate()}")
+    |> assert_error(
       404,
       "not_found"
     )
@@ -600,18 +605,18 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
     project = create_project()
     goal_id = create_goal(conn, project)
 
-    assert_error(
-      conn
-      |> put_req_header("accept", "application/json")
-      |> post("/portal/api/goals/#{goal_id}/commands", %{}),
+    conn
+    |> put_req_header("accept", "application/json")
+    |> post("/portal/api/goals/#{goal_id}/commands", %{})
+    |> assert_error(
       401,
       "unauthenticated"
     )
 
-    assert_error(
-      conn
-      |> put_req_header("accept", "application/json")
-      |> get("/portal/api/goals/#{goal_id}"),
+    conn
+    |> put_req_header("accept", "application/json")
+    |> get("/portal/api/goals/#{goal_id}")
+    |> assert_error(
       401,
       "unauthenticated"
     )
@@ -642,7 +647,8 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
       )
 
     %{"goal" => %{"id" => goal_id}} =
-      operator_conn(conn)
+      conn
+      |> operator_conn()
       |> post("/api/v1/projects/#{project.id}/goals", payload)
       |> json_response(201)
 
@@ -666,10 +672,11 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
       "items" => items_fun.(repository.id)
     }
 
-    read = operator_conn(conn) |> get("/api/v1/goals/#{goal_id}") |> json_response(200)
+    read = conn |> operator_conn() |> get("/api/v1/goals/#{goal_id}") |> json_response(200)
 
     %{"response" => %{"decision" => %{"id" => decision_id}}} =
-      operator_conn(conn)
+      conn
+      |> operator_conn()
       |> post("/api/v1/goals/#{goal_id}/commands", %{
         "schema_version" => "symmetry.goal_command.v1",
         "mutation_id" => Ecto.UUID.generate(),
@@ -733,14 +740,12 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
 
     portal_command!(goal_id, "accept_plan", %{
       "proposal" => proposal,
-      "proposal_hash" =>
-        "sha256:" <> Base.encode16(SymmetryControl.RequestHash.canonical(proposal), case: :lower),
+      "proposal_hash" => "sha256:" <> Base.encode16(RequestHash.canonical(proposal), case: :lower),
       "decision_id" => decision_id
     })
   end
 
-  defp activate(goal_id),
-    do: portal_command!(goal_id, "activate", %{"approved_revision" => 1})
+  defp activate(goal_id), do: portal_command!(goal_id, "activate", %{"approved_revision" => 1})
 
   defp portal_command!(goal_id, kind, payload) do
     read = api_conn() |> get("/portal/api/goals/#{goal_id}") |> json_response(200)
@@ -820,7 +825,7 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
       generation: 1,
       state: state,
       assigned_at: now,
-      assignment_expires_at: DateTime.add(now, 60, :second),
+      assignment_expires_at: DateTime.shift(now, minute: 1),
       result: result
     })
     |> Repo.insert!()
@@ -963,7 +968,7 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
     subject_hash = RequestHash.canonical(subject)
     result_id = Ecto.UUID.generate()
     external_ref = "ci://build/unsupported"
-    next_check_at = DateTime.utc_now() |> DateTime.add(86_400, :second) |> DateTime.to_iso8601()
+    next_check_at = DateTime.utc_now() |> DateTime.shift(day: 1) |> DateTime.to_iso8601()
 
     blocked_result = %{
       "schema_version" => "symmetry.task_result.v1",

@@ -1,13 +1,13 @@
 defmodule SymmetryControlWeb.GoalControllerTest do
   use SymmetryControlWeb.ConnCase, async: false
 
+  import Ecto.Query
+
   import SymmetryControlWeb.PortalFixtures,
     only: [acceptance_contract: 1, create_context_project: 2, goal_create_payload: 3]
 
   import SymmetryControlWeb.TestConn,
     only: [api_conn: 0, operator_conn: 1, assert_error: 3, bearer: 2]
-
-  import Ecto.Query
 
   alias SymmetryControl.Repo
   alias SymmetryControl.RequestHash
@@ -23,14 +23,16 @@ defmodule SymmetryControlWeb.GoalControllerTest do
     payload = goal_payload()
 
     created =
-      operator_conn(conn)
+      conn
+      |> operator_conn()
       |> post("/api/v1/projects/#{project.id}/goals", payload)
       |> json_response(201)
 
     assert %{"goal" => %{"id" => goal_id, "state" => "draft", "current_revision" => 1}} = created
 
     assert ^created =
-             operator_conn(conn)
+             conn
+             |> operator_conn()
              |> post("/api/v1/projects/#{project.id}/goals", payload)
              |> json_response(200)
 
@@ -39,16 +41,18 @@ defmodule SymmetryControlWeb.GoalControllerTest do
              "allowed_actions" => allowed_actions,
              "blocker_reasons" => blocker_reasons
            } =
-             operator_conn(conn)
+             conn
+             |> operator_conn()
              |> get("/api/v1/goals/#{goal_id}")
              |> json_response(200)
 
     assert allowed_actions == ["request_plan", "amend", "cancel"]
     assert is_list(blocker_reasons)
 
-    assert_error(
-      operator_conn(conn)
-      |> post("/api/v1/projects/#{project.id}/goals", %{payload | "title" => "Different goal"}),
+    conn
+    |> operator_conn()
+    |> post("/api/v1/projects/#{project.id}/goals", %{payload | "title" => "Different goal"})
+    |> assert_error(
       409,
       "idempotency_conflict"
     )
@@ -65,10 +69,11 @@ defmodule SymmetryControlWeb.GoalControllerTest do
         ~s("title":"first","title":"second")
       )
 
-    assert_error(
-      operator_conn(conn)
-      |> put_req_header("content-type", "application/json")
-      |> post("/api/v1/projects/#{project.id}/goals", body),
+    conn
+    |> operator_conn()
+    |> put_req_header("content-type", "application/json")
+    |> post("/api/v1/projects/#{project.id}/goals", body)
+    |> assert_error(
       400,
       "invalid_request"
     )
@@ -78,7 +83,8 @@ defmodule SymmetryControlWeb.GoalControllerTest do
     goal_id = create_goal_with_accepted_plan(conn)
 
     goal =
-      operator_conn(conn)
+      conn
+      |> operator_conn()
       |> get("/api/v1/goals/#{goal_id}")
       |> json_response(200)
 
@@ -92,7 +98,8 @@ defmodule SymmetryControlWeb.GoalControllerTest do
     }
 
     receipt =
-      operator_conn(conn)
+      conn
+      |> operator_conn()
       |> post("/api/v1/goals/#{goal_id}/commands", command)
       |> json_response(200)
 
@@ -100,7 +107,8 @@ defmodule SymmetryControlWeb.GoalControllerTest do
     assert mutation_id == command["mutation_id"]
 
     assert ^receipt =
-             operator_conn(conn)
+             conn
+             |> operator_conn()
              |> post("/api/v1/goals/#{goal_id}/commands", command)
              |> json_response(200)
 
@@ -112,7 +120,8 @@ defmodule SymmetryControlWeb.GoalControllerTest do
                "allowed_actions" => allowed_actions
              }
            } =
-             operator_conn(conn)
+             conn
+             |> operator_conn()
              |> post("/api/v1/goals/#{goal_id}/commands", %{
                "schema_version" => "symmetry.goal_command.v1",
                "mutation_id" => Ecto.UUID.generate(),
@@ -126,13 +135,14 @@ defmodule SymmetryControlWeb.GoalControllerTest do
     assert current_version > goal["version"]
     assert "pause" in allowed_actions
 
-    assert_error(
-      operator_conn(conn)
-      |> post("/api/v1/goals/#{goal_id}/commands", %{
-        command
-        | "kind" => "pause",
-          "payload" => %{"reason" => "Verify mutation identity conflicts."}
-      }),
+    conn
+    |> operator_conn()
+    |> post("/api/v1/goals/#{goal_id}/commands", %{
+      command
+      | "kind" => "pause",
+        "payload" => %{"reason" => "Verify mutation identity conflicts."}
+    })
+    |> assert_error(
       409,
       "idempotency_conflict"
     )
@@ -145,28 +155,33 @@ defmodule SymmetryControlWeb.GoalControllerTest do
     goal_id = create_goal(conn)
 
     assert %{"entries" => events, "next_after" => _} =
-             operator_conn(conn)
+             conn
+             |> operator_conn()
              |> get("/api/v1/goals/#{goal_id}/events?after=0")
              |> json_response(200)
 
     assert Enum.all?(events, &(Map.has_key?(&1, "sequence") and Map.has_key?(&1, "kind")))
 
     assert %{"nodes" => nodes, "edges" => edges} =
-             operator_conn(conn)
+             conn
+             |> operator_conn()
              |> get("/api/v1/goals/#{goal_id}/graph")
              |> json_response(200)
 
     assert is_list(nodes)
     assert is_list(edges)
 
-    assert_error(
-      operator_conn(conn) |> get("/api/v1/goals/#{goal_id}/contexts/#{Ecto.UUID.generate()}"),
+    conn
+    |> operator_conn()
+    |> get("/api/v1/goals/#{goal_id}/contexts/#{Ecto.UUID.generate()}")
+    |> assert_error(
       404,
       "not_found"
     )
 
     assert %{"entries" => attention, "next_after" => _} =
-             operator_conn(conn)
+             conn
+             |> operator_conn()
              |> get("/api/v1/attention")
              |> json_response(200)
 
@@ -183,11 +198,13 @@ defmodule SymmetryControlWeb.GoalControllerTest do
           "/api/v1/goals/#{goal_id}/contexts/#{Ecto.UUID.generate()}",
           "/api/v1/attention"
         ] do
-      assert_error(bearer(conn, machine_token) |> get(path), 403, "forbidden")
+      conn |> bearer(machine_token) |> get(path) |> assert_error(403, "forbidden")
     end
 
-    assert_error(
-      bearer(conn, machine_token) |> post("/api/v1/goals/#{goal_id}/commands", %{}),
+    conn
+    |> bearer(machine_token)
+    |> post("/api/v1/goals/#{goal_id}/commands", %{})
+    |> assert_error(
       403,
       "forbidden"
     )
@@ -201,7 +218,8 @@ defmodule SymmetryControlWeb.GoalControllerTest do
     # `after` is the last rendered sequence and `limit` the served page size:
     # one entry per page here, paging strictly forward.
     assert %{"entries" => [first], "next_after" => next_after} =
-             operator_conn(conn)
+             conn
+             |> operator_conn()
              |> get("/api/v1/goals/#{goal_id}/events?limit=1")
              |> json_response(200)
 
@@ -209,7 +227,8 @@ defmodule SymmetryControlWeb.GoalControllerTest do
     assert next_after == 1
 
     assert %{"entries" => [second]} =
-             operator_conn(conn)
+             conn
+             |> operator_conn()
              |> get("/api/v1/goals/#{goal_id}/events?after=#{next_after}&limit=1")
              |> json_response(200)
 
@@ -218,15 +237,18 @@ defmodule SymmetryControlWeb.GoalControllerTest do
     # The read model's own maximum (100) is served; anything beyond it and any
     # parameter the read does not define is caller input, not a served window.
     assert %{"entries" => entries} =
-             operator_conn(conn)
+             conn
+             |> operator_conn()
              |> get("/api/v1/goals/#{goal_id}/events?after=0&limit=100")
              |> json_response(200)
 
     assert entries != []
 
     for query <- ["limit=101", "after=-1", "after=not-a-sequence", "unknown=1", "limit=0"] do
-      assert_error(
-        operator_conn(conn) |> get("/api/v1/goals/#{goal_id}/events?#{query}"),
+      conn
+      |> operator_conn()
+      |> get("/api/v1/goals/#{goal_id}/events?#{query}")
+      |> assert_error(
         400,
         "invalid_request"
       )
@@ -238,10 +260,10 @@ defmodule SymmetryControlWeb.GoalControllerTest do
   } do
     project = create_project()
 
-    assert_error(
-      conn
-      |> put_req_header("accept", "application/json")
-      |> get("/portal/api/attention"),
+    conn
+    |> put_req_header("accept", "application/json")
+    |> get("/portal/api/attention")
+    |> assert_error(
       401,
       "unauthenticated"
     )
@@ -270,10 +292,10 @@ defmodule SymmetryControlWeb.GoalControllerTest do
         ~S("title":"first","\u0074itle":"second")
       )
 
-    assert_error(
-      api_conn()
-      |> put_req_header("content-type", "application/json")
-      |> post("/portal/api/projects/#{project.id}/goals", body),
+    api_conn()
+    |> put_req_header("content-type", "application/json")
+    |> post("/portal/api/projects/#{project.id}/goals", body)
+    |> assert_error(
       400,
       "invalid_request"
     )
@@ -299,11 +321,13 @@ defmodule SymmetryControlWeb.GoalControllerTest do
     assert revision_actor(operator_goal_id, 1) == "operator"
 
     assert %{"event" => _} =
-             amend_goal(portal_conn, "/portal/api", portal_goal_id, initial_revision)
+             portal_conn
+             |> amend_goal("/portal/api", portal_goal_id, initial_revision)
              |> json_response(200)
 
     assert %{"event" => _} =
-             amend_goal(operator, "/api/v1", operator_goal_id, initial_revision)
+             operator
+             |> amend_goal("/api/v1", operator_goal_id, initial_revision)
              |> json_response(200)
 
     assert event_actor(portal_goal_id) == "portal_operator"
@@ -344,7 +368,8 @@ defmodule SymmetryControlWeb.GoalControllerTest do
     assert Map.has_key?(read, "project_name")
 
     assert %{"event" => _} =
-             amend_goal(portal_conn, "/%70ortal/api", goal_id, initial_revision)
+             portal_conn
+             |> amend_goal("/%70ortal/api", goal_id, initial_revision)
              |> json_response(200)
 
     assert revision_actor(goal_id, 2) == "portal_operator"
@@ -380,12 +405,13 @@ defmodule SymmetryControlWeb.GoalControllerTest do
       )
 
       assert %{"event" => _} =
-               amend_goal(conn_at_surface, prefix, goal_id, initial_revision)
+               conn_at_surface
+               |> amend_goal(prefix, goal_id, initial_revision)
                |> json_response(200)
     end
 
     assert %{"entries" => _} =
-             operator_conn(conn) |> get("/api/v1/attention") |> json_response(200)
+             conn |> operator_conn() |> get("/api/v1/attention") |> json_response(200)
   end
 
   test "goal integer reads accept exactly the documented forms", %{conn: conn} do
@@ -525,7 +551,8 @@ defmodule SymmetryControlWeb.GoalControllerTest do
   defp create_goal(conn) do
     project = create_project()
 
-    operator_conn(conn)
+    conn
+    |> operator_conn()
     |> post("/api/v1/projects/#{project.id}/goals", goal_payload())
     |> json_response(201)
     |> get_in(["goal", "id"])
@@ -542,7 +569,8 @@ defmodule SymmetryControlWeb.GoalControllerTest do
       })
 
     %{"goal" => %{"id" => goal_id}} =
-      operator_conn(conn)
+      conn
+      |> operator_conn()
       |> post("/api/v1/projects/#{project.id}/goals", goal_payload())
       |> json_response(201)
 
@@ -595,8 +623,7 @@ defmodule SymmetryControlWeb.GoalControllerTest do
     %{"response" => %{"plan" => %{"decision_id" => ^decision_id}}} =
       post_goal_command(conn, goal_id, "accept_plan", %{
         "proposal" => proposal,
-        "proposal_hash" =>
-          "sha256:" <> Base.encode16(RequestHash.canonical(proposal), case: :lower),
+        "proposal_hash" => "sha256:" <> Base.encode16(RequestHash.canonical(proposal), case: :lower),
         "decision_id" => decision_id
       })
 
@@ -604,7 +631,8 @@ defmodule SymmetryControlWeb.GoalControllerTest do
   end
 
   defp post_goal_command(conn, goal_id, kind, payload) do
-    operator_conn(conn)
+    conn
+    |> operator_conn()
     |> goal_command("/api/v1", goal_id, kind, payload)
     |> json_response(200)
   end
@@ -679,7 +707,8 @@ defmodule SymmetryControlWeb.GoalControllerTest do
     token = "goal-machine-#{Ecto.UUID.generate()}"
 
     response =
-      bearer(conn, @enrollment_token)
+      conn
+      |> bearer(@enrollment_token)
       |> put_req_header("idempotency-key", Ecto.UUID.generate())
       |> post("/api/v1/machines", %{
         "machine" => %{"name" => "goal-api-machine"},

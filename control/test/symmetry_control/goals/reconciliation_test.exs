@@ -2,20 +2,26 @@ Code.require_file("goals_test_support.exs", __DIR__)
 
 defmodule SymmetryControl.Goals.ReconciliationTest do
   use SymmetryControl.OrchestrationCase, async: false
+  @now ~U[2026-09-09 00:00:00.000000Z]
+  use SymmetryControl.TestFixtures,
+    command_opts: [
+      now: @now,
+      validation_profiles: SymmetryControl.GoalsTestSupport.validation_profiles()
+    ]
 
   import SymmetryControl.GoalsTestSupport
 
   alias SymmetryControl.Goals
+  alias SymmetryControl.Goals.ContextSnapshot
+  alias SymmetryControl.Goals.Goal
+  alias SymmetryControl.Goals.GoalBudgetReservation
+  alias SymmetryControl.Goals.GoalEvent
   alias SymmetryControl.Orchestration.Run
   alias SymmetryControl.Orchestration.Task
   alias SymmetryControl.Repo
   alias SymmetryControl.Workspaces.WorkItem
 
-  @now ~U[2026-09-09 00:00:00.000000Z]
   @validation_runtime_id "00000000-0000-4000-8000-000000000001"
-
-  use SymmetryControl.TestFixtures,
-    command_opts: [now: @now, validation_profiles: validation_profiles()]
 
   setup :put_goal_validation_profiles
 
@@ -25,12 +31,12 @@ defmodule SymmetryControl.Goals.ReconciliationTest do
     # The operator's read: the version every command must carry, taken before the
     # reconcile runs. The row's own lock_version is not that version.
     before = fetch_goal!(goal.id)
-    lock_version_before = Repo.get!(SymmetryControl.Goals.Goal, goal.id).lock_version
+    lock_version_before = Repo.get!(Goal, goal.id).lock_version
 
     assert {:ok, [%{disposition: :noop}]} =
              Goals.reconcile_due_goals(goal_ids: [goal.id], now: @now)
 
-    assert Repo.get!(SymmetryControl.Goals.Goal, goal.id).lock_version > lock_version_before
+    assert Repo.get!(Goal, goal.id).lock_version > lock_version_before
     assert fetch_goal!(goal.id).version == before.version
 
     assert {:ok, receipt, :created} =
@@ -73,13 +79,11 @@ defmodule SymmetryControl.Goals.ReconciliationTest do
     {blocked_goal, [first_item, _second_item]} = goal_with_items_fixture(blocker_policy, 2)
 
     assert {:ok, _admitted, :created} =
-             command_current(blocked_goal.id, "admit_task", admission_payload(first_item),
-               rollout_enabled: true
-             )
+             command_current(blocked_goal.id, "admit_task", admission_payload(first_item), rollout_enabled: true)
 
     set_goal_due!(blocked_goal.id)
     blocked_before = fetch_goal!(blocked_goal.id)
-    blocked_lock_before = Repo.get!(SymmetryControl.Goals.Goal, blocked_goal.id).lock_version
+    blocked_lock_before = Repo.get!(Goal, blocked_goal.id).lock_version
 
     assert {:ok, [%{disposition: :blocked, reason: "admission_limit_reached"}]} =
              Goals.reconcile_due_goals(
@@ -110,7 +114,7 @@ defmodule SymmetryControl.Goals.ReconciliationTest do
     {deferred_goal, [_item]} = goal_with_items_fixture(deferred_policy)
     set_goal_due!(deferred_goal.id)
     deferred_before = fetch_goal!(deferred_goal.id)
-    deferred_lock_before = Repo.get!(SymmetryControl.Goals.Goal, deferred_goal.id).lock_version
+    deferred_lock_before = Repo.get!(Goal, deferred_goal.id).lock_version
 
     assert {:ok, [%{disposition: :deferred, reason: "goal_admission_disabled"}]} =
              Goals.reconcile_due_goals(
@@ -140,7 +144,7 @@ defmodule SymmetryControl.Goals.ReconciliationTest do
     {admission_goal, [_item]} = goal_with_items_fixture(admission_policy)
     set_goal_due!(admission_goal.id)
     admission_before = fetch_goal!(admission_goal.id)
-    admission_lock_before = Repo.get!(SymmetryControl.Goals.Goal, admission_goal.id).lock_version
+    admission_lock_before = Repo.get!(Goal, admission_goal.id).lock_version
 
     assert {:ok, reconciliations} =
              Goals.reconcile_due_goals(
@@ -168,14 +172,12 @@ defmodule SymmetryControl.Goals.ReconciliationTest do
     {settlement_run, _fence} = completed_goal_run_fixture(settled_task, runtime)
 
     settlement_lock_before =
-      Repo.get!(SymmetryControl.Goals.Goal, settlement_goal.id).lock_version
+      Repo.get!(Goal, settlement_goal.id).lock_version
 
     settlement_before = fetch_goal!(settlement_goal.id)
 
     assert {:ok, %{"settlement" => "awaiting_validation"}} =
-             Goals.settle_task(settled_task.id, settlement_run.id, settlement_run.generation,
-               now: @now
-             )
+             Goals.settle_task(settled_task.id, settlement_run.id, settlement_run.generation, now: @now)
 
     assert_internal_append_leaves_the_operator_version!(
       settlement_goal,
@@ -252,8 +254,8 @@ defmodule SymmetryControl.Goals.ReconciliationTest do
               }
             ]} = Goals.reconcile_due_goals(goal_ids: [goal.id], now: @now, rollout_enabled: false)
 
-    assert next_wake_at == DateTime.add(@now, 60, :second)
-    assert Repo.get!(SymmetryControl.Goals.Goal, goal.id).next_wake_at == next_wake_at
+    assert next_wake_at == DateTime.shift(@now, minute: 1)
+    assert Repo.get!(Goal, goal.id).next_wake_at == next_wake_at
     assert Repo.aggregate(from(task in Task, where: task.goal_id == ^goal.id), :count) == 0
   end
 
@@ -269,9 +271,7 @@ defmodule SymmetryControl.Goals.ReconciliationTest do
     {goal, [first_item, _second_item]} = goal_with_items_fixture(policy, 2)
 
     assert {:ok, _admitted, :created} =
-             command_current(goal.id, "admit_task", admission_payload(first_item),
-               rollout_enabled: true
-             )
+             command_current(goal.id, "admit_task", admission_payload(first_item), rollout_enabled: true)
 
     set_goal_due!(goal.id)
 
@@ -285,7 +285,7 @@ defmodule SymmetryControl.Goals.ReconciliationTest do
 
     event =
       Repo.one!(
-        from(event in SymmetryControl.Goals.GoalEvent,
+        from(event in GoalEvent,
           where:
             event.goal_id == ^goal.id and event.kind == "automatic_admission_blocked" and
               fragment("? ->> 'reason' = 'admission_limit_reached'", event.payload)
@@ -293,7 +293,7 @@ defmodule SymmetryControl.Goals.ReconciliationTest do
       )
 
     assert event.payload["candidate_identity"] == "goal:admission_limit_reached"
-    assert Repo.get!(SymmetryControl.Goals.Goal, goal.id).next_wake_at == nil
+    assert Repo.get!(Goal, goal.id).next_wake_at == nil
 
     assert {:ok, projection} = Goals.fetch_goal(goal.id)
     assert "automatic_admission_blocked" in projection.blocker_reasons
@@ -343,14 +343,14 @@ defmodule SymmetryControl.Goals.ReconciliationTest do
     assert Repo.aggregate(from(task in Task, where: task.goal_id == ^goal.id), :count) == 1
 
     assert Repo.aggregate(
-             from(reservation in SymmetryControl.Goals.GoalBudgetReservation,
+             from(reservation in GoalBudgetReservation,
                where: reservation.goal_id == ^goal.id
              ),
              :count
            ) == 1
 
     assert Repo.aggregate(
-             from(snapshot in SymmetryControl.Goals.ContextSnapshot,
+             from(snapshot in ContextSnapshot,
                where: snapshot.goal_id == ^goal.id
              ),
              :count
@@ -358,7 +358,7 @@ defmodule SymmetryControl.Goals.ReconciliationTest do
 
     blocked_event =
       Repo.one!(
-        from(event in SymmetryControl.Goals.GoalEvent,
+        from(event in GoalEvent,
           where: event.goal_id == ^goal.id and event.kind == "automatic_admission_blocked"
         )
       )
@@ -414,7 +414,7 @@ defmodule SymmetryControl.Goals.ReconciliationTest do
     assert Repo.aggregate(from(task in Task, where: task.goal_id == ^goal.id), :count) == 1
 
     assert Repo.aggregate(
-             from(event in SymmetryControl.Goals.GoalEvent,
+             from(event in GoalEvent,
                where: event.goal_id == ^goal.id and event.kind == "automatic_admission_blocked"
              ),
              :count
@@ -475,14 +475,14 @@ defmodule SymmetryControl.Goals.ReconciliationTest do
     assert Repo.aggregate(from(task in Task, where: task.goal_id == ^goal.id), :count) == 0
 
     assert Repo.aggregate(
-             from(reservation in SymmetryControl.Goals.GoalBudgetReservation,
+             from(reservation in GoalBudgetReservation,
                where: reservation.goal_id == ^goal.id
              ),
              :count
            ) == 0
 
     assert Repo.aggregate(
-             from(snapshot in SymmetryControl.Goals.ContextSnapshot,
+             from(snapshot in ContextSnapshot,
                where: snapshot.goal_id == ^goal.id
              ),
              :count
@@ -500,7 +500,7 @@ defmodule SymmetryControl.Goals.ReconciliationTest do
            ) == 0
 
     assert Repo.aggregate(
-             from(event in SymmetryControl.Goals.GoalEvent,
+             from(event in GoalEvent,
                where: event.goal_id == ^goal.id and event.kind == "automatic_admission_blocked"
              ),
              :count
@@ -546,25 +546,25 @@ defmodule SymmetryControl.Goals.ReconciliationTest do
                validation_profiles: []
              )
 
-    assert next_wake_at == DateTime.add(@now, 60, :second)
+    assert next_wake_at == DateTime.shift(@now, minute: 1)
     assert Repo.aggregate(from(task in Task, where: task.goal_id == ^goal.id), :count) == 0
 
     assert Repo.aggregate(
-             from(reservation in SymmetryControl.Goals.GoalBudgetReservation,
+             from(reservation in GoalBudgetReservation,
                where: reservation.goal_id == ^goal.id
              ),
              :count
            ) == 0
 
     assert Repo.aggregate(
-             from(snapshot in SymmetryControl.Goals.ContextSnapshot,
+             from(snapshot in ContextSnapshot,
                where: snapshot.goal_id == ^goal.id
              ),
              :count
            ) == 0
 
     refute Repo.exists?(
-             from(event in SymmetryControl.Goals.GoalEvent,
+             from(event in GoalEvent,
                where: event.goal_id == ^goal.id and event.kind == "automatic_admission_blocked"
              )
            )
@@ -614,7 +614,7 @@ defmodule SymmetryControl.Goals.ReconciliationTest do
 
     deferred_events =
       Repo.all(
-        from(event in SymmetryControl.Goals.GoalEvent,
+        from(event in GoalEvent,
           where: event.goal_id == ^goal.id and event.kind == "automatic_reconciliation_deferred",
           order_by: [asc: event.sequence]
         )
@@ -652,9 +652,7 @@ defmodule SymmetryControl.Goals.ReconciliationTest do
     }
 
     assert {:ok, created, :created} =
-             Goals.create_goal(project.id, goal_attrs(nil, automatic_policy), "operator:test",
-               now: @now
-             )
+             Goals.create_goal(project.id, goal_attrs(nil, automatic_policy), "operator:test", now: @now)
 
     proposal =
       plan_proposal(created.goal.id, [
@@ -824,9 +822,7 @@ defmodule SymmetryControl.Goals.ReconciliationTest do
              )
 
     assert {:ok, first_admission, :created} =
-             command_current(goal.id, "admit_task", admission_payload(first_item),
-               rollout_enabled: true
-             )
+             command_current(goal.id, "admit_task", admission_payload(first_item), rollout_enabled: true)
 
     first_task = Repo.get!(Task, first_admission.response["task"]["id"])
 
@@ -844,7 +840,7 @@ defmodule SymmetryControl.Goals.ReconciliationTest do
 
     first_reservation =
       Repo.one!(
-        from(reservation in SymmetryControl.Goals.GoalBudgetReservation,
+        from(reservation in GoalBudgetReservation,
           where: reservation.task_id == ^first_task.id
         )
       )
@@ -854,14 +850,12 @@ defmodule SymmetryControl.Goals.ReconciliationTest do
     assert first_task.input["limits"]["max_turns"] == 1
 
     assert first_task.input["limits"]["deadline_at"] ==
-             DateTime.to_iso8601(DateTime.add(@now, 15 * 60, :second))
+             DateTime.to_iso8601(DateTime.shift(@now, minute: 15))
 
     assert {:error, :budget_exhausted} =
-             command_current(goal.id, "admit_task", admission_payload(second_item),
-               rollout_enabled: true
-             )
+             command_current(goal.id, "admit_task", admission_payload(second_item), rollout_enabled: true)
 
-    automatic_policy = Map.merge(strict_policy, %{"automatic_execution" => true})
+    automatic_policy = Map.put(strict_policy, "automatic_execution", true)
 
     {automatic_goal, [automatic_item, automatic_second_item]} =
       goal_with_items_fixture(automatic_policy, 2)
@@ -893,28 +887,23 @@ defmodule SymmetryControl.Goals.ReconciliationTest do
            ) == 1
 
     assert Repo.one!(
-             from(reservation in SymmetryControl.Goals.GoalBudgetReservation,
+             from(reservation in GoalBudgetReservation,
                where: reservation.task_id == ^automatic_task.id
              )
            ).reserved_microusd == 120
   end
 
-  defp assert_internal_append_leaves_the_operator_version!(
-         goal,
-         before,
-         lock_version_before,
-         kind
-       ) do
+  defp assert_internal_append_leaves_the_operator_version!(goal, before, lock_version_before, kind) do
     event =
       Repo.one!(
-        from(event in SymmetryControl.Goals.GoalEvent,
+        from(event in GoalEvent,
           where: event.goal_id == ^goal.id and event.kind == ^kind,
           order_by: [desc: event.sequence],
           limit: 1
         )
       )
 
-    assert Repo.get!(SymmetryControl.Goals.Goal, goal.id).lock_version > lock_version_before
+    assert Repo.get!(Goal, goal.id).lock_version > lock_version_before
     assert fetch_goal!(goal.id).version == before.version
     assert event.response["_receipt_v1"]["goal"]["version"] == before.version
 

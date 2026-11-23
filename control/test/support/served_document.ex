@@ -25,9 +25,7 @@ defmodule SymmetryControlWeb.ServedDocument do
         :ok
 
       {:error, errors} ->
-        flunk(
-          "#{name} real served document failed the contract bundle: #{inspect(errors, pretty: true)}"
-        )
+        flunk("#{name} real served document failed the contract bundle: #{inspect(errors, pretty: true)}")
     end
   end
 
@@ -35,8 +33,7 @@ defmodule SymmetryControlWeb.ServedDocument do
   A deterministic v4 UUID: the contract bundle's `UUID` pattern pins the version and variant
   nibbles, so a zeroed UUID is refused by the served-document gates.
   """
-  def uuid(number),
-    do: "00000000-0000-4000-8000-" <> String.pad_leading(Integer.to_string(number), 12, "0")
+  def uuid(number), do: "00000000-0000-4000-8000-" <> String.pad_leading(Integer.to_string(number), 12, "0")
 
   @doc """
   The agent's waiting packet: at `read_model.ex:221` a payload carrying `"decision"` wins, so
@@ -82,7 +79,7 @@ defmodule SymmetryControlWeb.ServedDocument do
   end
 
   def declared_members(read, definition) do
-    schema = contract_bundle() |> Map.fetch!("#{read}.schema.json")
+    schema = Map.fetch!(contract_bundle(), "#{read}.schema.json")
 
     schema
     |> definition_variants(definition)
@@ -97,6 +94,5 @@ defmodule SymmetryControlWeb.ServedDocument do
     [definition | Map.get(definition, "oneOf", [])]
   end
 
-  def contract_bundle,
-    do: @schema_bundle |> File.read!() |> Jason.decode!()
+  def contract_bundle, do: @schema_bundle |> File.read!() |> Jason.decode!()
 end

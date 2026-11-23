@@ -145,13 +145,14 @@ defmodule SymmetryControl.Goals.Commands do
          {:ok, parsed} <- parse_command(command, opts) do
       body = Map.take(parsed, [:expected_version, :expected_revision, :kind, :payload])
 
-      Repo.transaction(fn ->
+      fn ->
         case replay_command(goal_id, parsed.mutation_id, body) do
           {:ok, receipt} -> {:replayed, receipt}
           :missing -> execute_command(goal_id, parsed, actor_ref, body, opts)
           {:error, reason} -> rollback(reason)
         end
-      end)
+      end
+      |> Repo.transaction()
       |> case do
         {:ok, {:created, receipt}} ->
           {:ok, receipt, :created}
@@ -175,9 +176,8 @@ defmodule SymmetryControl.Goals.Commands do
 
   def command(_, _, _, _), do: {:error, :invalid_request}
 
-  defp maybe_wake_command({:ok, _receipt, _disposition} = result, kind)
-       when kind in ["request_plan", "admit_task"] do
-    unless Repo.in_transaction?(), do: Scheduler.wake()
+  defp maybe_wake_command({:ok, _receipt, _disposition} = result, kind) when kind in ["request_plan", "admit_task"] do
+    if !Repo.in_transaction?(), do: Scheduler.wake()
     result
   end
 
@@ -192,16 +192,14 @@ defmodule SymmetryControl.Goals.Commands do
     end
   end
 
-  defp policy_microusd!(value)
-       when is_integer(value) and value >= 0 and value <= @max_microusd,
-       do: value
+  defp policy_microusd!(value) when is_integer(value) and value >= 0 and value <= @max_microusd, do: value
 
   defp policy_microusd!(_value), do: rollback(:invalid_request)
 
   defp create_new_goal(project_id, title, initial_revision, mutation_id, actor_ref, body, opts) do
     current = now(opts)
 
-    Repo.transaction(fn ->
+    fn ->
       project = lock_project!(project_id)
 
       case Repo.one(from(event in GoalEvent, where: event.id == ^mutation_id, lock: "FOR UPDATE")) do
@@ -267,7 +265,8 @@ defmodule SymmetryControl.Goals.Commands do
             {:error, reason} -> rollback(reason)
           end
       end
-    end)
+    end
+    |> Repo.transaction()
     |> case do
       {:ok, {:created, receipt}} ->
         {:ok, receipt, :created}
@@ -371,13 +370,12 @@ defmodule SymmetryControl.Goals.Commands do
     if goal.state != "draft" or value(payload, :approved_revision) != goal.current_revision,
       do: rollback(:invalid_transition)
 
-    unless Repo.exists?(
-             from(item in WorkItem,
-               where:
-                 item.goal_id == ^goal.id and item.admitted_revision == ^goal.current_revision
-             )
-           ),
-           do: rollback(:admitted_work_required)
+    if !Repo.exists?(
+         from(item in WorkItem,
+           where: item.goal_id == ^goal.id and item.admitted_revision == ^goal.current_revision
+         )
+       ),
+       do: rollback(:admitted_work_required)
 
     transition_goal!(goal, "active")
   end
@@ -468,26 +466,21 @@ defmodule SymmetryControl.Goals.Commands do
   # Planning is an explicit, operator-authorized Goal task. It intentionally
   # has no WorkItem: the proposal remains non-authoritative until the operator
   # resolves its resulting plan Decision and separately accepts that plan.
-  defp apply_command!(
-         goal,
-         %{kind: "request_plan", payload: payload, mutation_id: mutation_id},
-         _actor_ref,
-         opts
-       ) do
-    unless admission_enabled?(opts), do: rollback(:goal_admission_disabled)
+  defp apply_command!(goal, %{kind: "request_plan", payload: payload, mutation_id: mutation_id}, _actor_ref, opts) do
+    if !admission_enabled?(opts), do: rollback(:goal_admission_disabled)
     if goal.state != "draft", do: rollback(:invalid_transition)
 
     model_profile = required_string!(payload, :model_profile)
     repository_resource_id = required_uuid!(payload, :repository_resource_id)
-    subject = required_map!(payload, :subject) |> parse_subject!()
+    subject = payload |> required_map!(:subject) |> parse_subject!()
     resource = lock_repository_resource!(repository_resource_id)
 
-    unless resource.project_id == goal.project_id and
-             Admission.resource_allowed?(
-               current_revision!(goal).execution_policy,
-               repository_resource_id
-             ) and
-             subject["resource_id"] == repository_resource_id do
+    if !(resource.project_id == goal.project_id and
+           Admission.resource_allowed?(
+             current_revision!(goal).execution_policy,
+             repository_resource_id
+           ) and
+           subject["resource_id"] == repository_resource_id) do
       rollback(:resource_not_allowed)
     end
 
@@ -525,22 +518,22 @@ defmodule SymmetryControl.Goals.Commands do
   end
 
   defp apply_command!(goal, %{kind: "accept_plan", payload: payload}, _actor_ref, opts) do
-    unless admission_enabled?(opts), do: rollback(:goal_admission_disabled)
+    if !admission_enabled?(opts), do: rollback(:goal_admission_disabled)
     if goal.state not in ["draft", "active", "paused"], do: rollback(:invalid_transition)
     proposal = required_map!(payload, :proposal)
     proposal_hash = required_digest!(payload, :proposal_hash)
     decision_id = required_uuid!(payload, :decision_id)
 
-    unless PlanContracts.valid_plan_proposal?(proposal, goal, opts), do: rollback(:invalid_plan)
+    if !PlanContracts.valid_plan_proposal?(proposal, goal, opts), do: rollback(:invalid_plan)
     if RequestHash.canonical(proposal) != proposal_hash, do: rollback(:invalid_request)
     decision = lock_decision!(decision_id)
 
-    unless decision.goal_id == goal.id and decision.goal_revision == goal.current_revision and
-             decision.kind == "plan" and
-             decision.state == "resolved" and
-             is_nil(decision.work_item_id) and
-             value(decision.resolution || %{}, "option_id") == "accept" and
-             decision.action_hash == plan_action_hash(goal, proposal_hash) do
+    if !(decision.goal_id == goal.id and decision.goal_revision == goal.current_revision and
+           decision.kind == "plan" and
+           decision.state == "resolved" and
+           is_nil(decision.work_item_id) and
+           value(decision.resolution || %{}, "option_id") == "accept" and
+           decision.action_hash == plan_action_hash(goal, proposal_hash)) do
       rollback(:invalid_decision)
     end
 
@@ -627,14 +620,14 @@ defmodule SymmetryControl.Goals.Commands do
     option_id = required_string!(payload, :option_id)
     decision = lock_decision!(decision_id)
 
-    unless decision.goal_id == goal.id and decision.goal_revision == goal.current_revision and
-             decision.state == "open" and
-             decision.lock_version == expected_version and
-             Decisions.decision_option?(decision, option_id) do
+    if !(decision.goal_id == goal.id and decision.goal_revision == goal.current_revision and
+           decision.state == "open" and
+           decision.lock_version == expected_version and
+           Decisions.decision_option?(decision, option_id)) do
       rollback(:invalid_decision)
     end
 
-    if decision.expires_at && DateTime.compare(decision.expires_at, now(opts)) == :lt,
+    if decision.expires_at && DateTime.before?(decision.expires_at, now(opts)),
       do: rollback(:decision_expired)
 
     resolution = %{
@@ -658,18 +651,13 @@ defmodule SymmetryControl.Goals.Commands do
      })}
   end
 
-  defp apply_command!(
-         goal,
-         %{kind: "admit_task", payload: payload, mutation_id: mutation_id},
-         _actor_ref,
-         opts
-       ) do
-    unless admission_enabled?(opts), do: rollback(:goal_admission_disabled)
+  defp apply_command!(goal, %{kind: "admit_task", payload: payload, mutation_id: mutation_id}, _actor_ref, opts) do
+    if !admission_enabled?(opts), do: rollback(:goal_admission_disabled)
     if goal.state != "active", do: rollback(:invalid_transition)
     work_item_id = required_uuid!(payload, :work_item_id)
     purpose = required_string!(payload, :purpose)
     model_profile = required_string!(payload, :model_profile)
-    unless purpose in @task_purposes, do: rollback(:invalid_request)
+    if purpose not in @task_purposes, do: rollback(:invalid_request)
     item = lock_work_item!(work_item_id)
     Admission.ensure_admissible_item!(goal, item)
     Admission.ensure_unaccepted_item!(goal, item)
@@ -778,11 +766,9 @@ defmodule SymmetryControl.Goals.Commands do
       objective: required_string!(contract, :objective),
       non_goals: value(contract, :non_goals, []),
       acceptance_contract: required_map!(contract, :acceptance_contract),
-      authority_policy:
-        ContextAssembly.canonical_authority_policy(value(contract, :authority_policy, %{})),
+      authority_policy: ContextAssembly.canonical_authority_policy(value(contract, :authority_policy, %{})),
       execution_policy: normalized_policy(value(contract, :execution_policy, %{})),
-      context_manifest:
-        ContextAssembly.canonical_context_manifest(value(contract, :context_manifest, %{})),
+      context_manifest: ContextAssembly.canonical_context_manifest(value(contract, :context_manifest, %{})),
       reason: required_string!(contract, :reason),
       actor_ref: actor_ref
     }
@@ -919,14 +905,12 @@ defmodule SymmetryControl.Goals.Commands do
     end
   end
 
-  defp valid_command_payload?("activate", payload),
-    do: only_known_keys?(payload, ["approved_revision"])
+  defp valid_command_payload?("activate", payload), do: only_known_keys?(payload, ["approved_revision"])
 
   defp valid_command_payload?(kind, payload) when kind in ["pause", "resume", "cancel"],
     do: only_known_keys?(payload, ["reason"])
 
-  defp valid_command_payload?("amend", payload),
-    do: only_known_keys?(payload, ["revision_contract", "reason"])
+  defp valid_command_payload?("amend", payload), do: only_known_keys?(payload, ["revision_contract", "reason"])
 
   defp valid_command_payload?("request_plan", payload),
     do:
@@ -957,13 +941,7 @@ defmodule SymmetryControl.Goals.Commands do
       ])
 
   defp valid_command_payload?("resolve_decision", payload),
-    do:
-      only_known_keys?(payload, [
-        "decision_id",
-        "expected_decision_version",
-        "option_id",
-        "comment"
-      ])
+    do: only_known_keys?(payload, ["decision_id", "expected_decision_version", "option_id", "comment"])
 
   defp valid_command_payload?("admit_task", payload),
     do:
@@ -981,13 +959,7 @@ defmodule SymmetryControl.Goals.Commands do
     do: only_known_keys?(payload, ["work_item_id", "depends_on_id", "decision_id"])
 
   defp valid_command_payload?("achieve", payload),
-    do:
-      only_known_keys?(payload, [
-        "subject",
-        "integration_work_item_id",
-        "evidence_ids",
-        "decision_id"
-      ])
+    do: only_known_keys?(payload, ["subject", "integration_work_item_id", "evidence_ids", "decision_id"])
 
   defp valid_command_payload?(_, _payload), do: false
 
@@ -1054,19 +1026,18 @@ defmodule SymmetryControl.Goals.Commands do
     end
   end
 
-  defp required_safe_positive_integer!(map, key),
-    do: required_safe_positive_integer(map, key) |> unwrap!()
+  defp required_safe_positive_integer!(map, key), do: map |> required_safe_positive_integer(key) |> unwrap!()
 
-  defp required_digest!(map, key), do: value(map, key) |> digest!()
+  defp required_digest!(map, key), do: map |> value(key) |> digest!()
 
-  defp optional_digest!(map, key), do: value(map, key) |> optional_digest!()
+  defp optional_digest!(map, key), do: map |> value(key) |> optional_digest!()
 
   defp optional_digest!(nil), do: nil
   defp optional_digest!(value), do: digest!(value)
 
   defp digest!(value) when is_binary(value) and byte_size(value) == 32, do: value
 
-  defp digest!(value) when is_binary(value), do: parse_digest(value) |> unwrap!()
+  defp digest!(value) when is_binary(value), do: value |> parse_digest() |> unwrap!()
 
   defp digest!(_), do: rollback(:invalid_request)
 
@@ -1074,23 +1045,23 @@ defmodule SymmetryControl.Goals.Commands do
     for key <- ["max_parallel_tasks", "max_task_admissions", "max_run_attempts_per_task"] do
       value = value(policy, key)
 
-      unless is_integer(value) and value > 0 and value <= @max_safe_integer do
+      if !(is_integer(value) and value > 0 and value <= @max_safe_integer) do
         rollback(:invalid_request)
       end
     end
 
     budget_limit = value(policy, "budget_limit_microusd")
 
-    unless is_nil(budget_limit) or
-             (is_integer(budget_limit) and budget_limit >= 0 and budget_limit <= @max_microusd) do
+    if !(is_nil(budget_limit) or
+           (is_integer(budget_limit) and budget_limit >= 0 and budget_limit <= @max_microusd)) do
       rollback(:invalid_request)
     end
 
     per_run_cost_limit = value(policy, "per_run_cost_limit_microusd")
 
-    unless is_nil(per_run_cost_limit) or
-             (is_integer(per_run_cost_limit) and per_run_cost_limit >= 0 and
-                per_run_cost_limit <= @max_microusd) do
+    if !(is_nil(per_run_cost_limit) or
+           (is_integer(per_run_cost_limit) and per_run_cost_limit >= 0 and
+              per_run_cost_limit <= @max_microusd)) do
       rollback(:invalid_request)
     end
 
@@ -1107,7 +1078,7 @@ defmodule SymmetryControl.Goals.Commands do
         rollback(:invalid_request)
     end
 
-    unless is_boolean(value(policy, "automatic_execution")) do
+    if !is_boolean(value(policy, "automatic_execution")) do
       rollback(:invalid_request)
     end
 
@@ -1117,11 +1088,7 @@ defmodule SymmetryControl.Goals.Commands do
   end
 
   defp valid_actor(actor_ref),
-    do:
-      if(is_binary(actor_ref) and String.trim(actor_ref) != "",
-        do: :ok,
-        else: {:error, :invalid_request}
-      )
+    do: if(is_binary(actor_ref) and String.trim(actor_ref) != "", do: :ok, else: {:error, :invalid_request})
 
   defp optional_string_strict!(map, key) do
     case value(map, key) do

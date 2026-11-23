@@ -2,7 +2,11 @@ defmodule SymmetryControl.Orchestration.TransitionsTest do
   use SymmetryControl.OrchestrationCase, async: false
 
   alias SymmetryControl.Orchestration
-  alias SymmetryControl.Orchestration.{Run, RunEvent, RunTransition, Task, Transitions}
+  alias SymmetryControl.Orchestration.Run
+  alias SymmetryControl.Orchestration.RunEvent
+  alias SymmetryControl.Orchestration.RunTransition
+  alias SymmetryControl.Orchestration.Task
+  alias SymmetryControl.Orchestration.Transitions
 
   @now ~U[2026-09-09 09:00:00.000000Z]
 
@@ -137,7 +141,7 @@ defmodule SymmetryControl.Orchestration.TransitionsTest do
     {task, run, _runtime} = assigned_legacy_run("expire-assignment")
 
     assert %{expired_runs: 1, offline_runtimes: 1} =
-             Transitions.expire(now: DateTime.add(@now, 31, :second))
+             Transitions.expire(now: DateTime.shift(@now, second: 31))
 
     assert %{state: "expired"} = Repo.get!(Run, run.id)
     assert %{state: "queued", attempt_generation: 2} = Repo.get!(Task, task.id)
@@ -298,7 +302,7 @@ defmodule SymmetryControl.Orchestration.TransitionsTest do
       generation: 1,
       state: "assigned",
       assigned_at: @now,
-      assignment_expires_at: DateTime.add(@now, 60, :second)
+      assignment_expires_at: DateTime.shift(@now, minute: 1)
     })
     |> Repo.insert!()
   end

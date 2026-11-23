@@ -138,6 +138,5 @@ defmodule SymmetryControlWeb.PortalBundle do
     """)
   end
 
-  defp staged_asset_path(asset),
-    do: Path.join(PortalAssets.directory(), String.replace_prefix(asset, "/portal/", ""))
+  defp staged_asset_path(asset), do: Path.join(PortalAssets.directory(), String.replace_prefix(asset, "/portal/", ""))
 end

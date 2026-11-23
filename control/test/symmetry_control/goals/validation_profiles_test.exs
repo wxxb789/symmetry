@@ -139,10 +139,8 @@ defmodule SymmetryControl.Goals.ValidationProfilesTest do
 
   test "rejects duplicate profile entries and malformed acceptance references" do
     duplicate_profiles = [
-      {"unit-check",
-       [kind: :check, profile_digest: @digest, enabled: true, allowed_runtime_ids: [@runtime_one]]},
-      {"unit-check",
-       [kind: :check, profile_digest: @digest, enabled: true, allowed_runtime_ids: [@runtime_one]]}
+      {"unit-check", [kind: :check, profile_digest: @digest, enabled: true, allowed_runtime_ids: [@runtime_one]]},
+      {"unit-check", [kind: :check, profile_digest: @digest, enabled: true, allowed_runtime_ids: [@runtime_one]]}
     ]
 
     assert {:error, {:duplicate_validation_profile, "unit-check"}} =

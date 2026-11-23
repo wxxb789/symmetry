@@ -123,7 +123,7 @@ defmodule SymmetryControlWeb.PortalControllerTest do
       assert Path.basename(asset) =~ ~r/-[A-Za-z0-9_-]+\.(?:js|css)\z/
 
       for suffix <- ["", "?vsn=release"] do
-        served = conn |> get(asset <> suffix)
+        served = get(conn, asset <> suffix)
         assert response(served, 200) != ""
 
         assert get_resp_header(served, "cache-control") == [

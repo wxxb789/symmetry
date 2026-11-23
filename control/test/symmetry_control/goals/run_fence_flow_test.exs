@@ -2,22 +2,31 @@ Code.require_file("goals_test_support.exs", __DIR__)
 
 defmodule SymmetryControl.Goals.RunFenceFlowTest do
   use SymmetryControl.OrchestrationCase, async: false
+  @now ~U[2026-09-09 00:00:00.000000Z]
+  use SymmetryControl.TestFixtures,
+    command_opts: [
+      now: @now,
+      validation_profiles: SymmetryControl.GoalsTestSupport.validation_profiles()
+    ]
 
   import SymmetryControl.GoalsTestSupport
 
   alias SymmetryControl.Goals
+  alias SymmetryControl.Goals.ContextSnapshot
+  alias SymmetryControl.Goals.Goal
+  alias SymmetryControl.Goals.GoalBudgetReservation
+  alias SymmetryControl.Goals.GoalDecision
+  alias SymmetryControl.Goals.GoalEvent
   alias SymmetryControl.Goals.RunEvidence
+  alias SymmetryControl.Goals.RunUsage
   alias SymmetryControl.Goals.Workers.WakeupWorker
+  alias SymmetryControl.Goals.WorkOutcome
   alias SymmetryControl.Orchestration.Run
   alias SymmetryControl.Orchestration.Task
   alias SymmetryControl.Repo
 
-  @now ~U[2026-09-09 00:00:00.000000Z]
   @validation_runtime_id "00000000-0000-4000-8000-000000000001"
   @validation_profile_digest "sha256:" <> String.duplicate("c", 64)
-
-  use SymmetryControl.TestFixtures,
-    command_opts: [now: @now, validation_profiles: validation_profiles()]
 
   setup :put_goal_validation_profiles
 
@@ -36,7 +45,7 @@ defmodule SymmetryControl.Goals.RunFenceFlowTest do
              Goals.record_usage(runtime.machine_id, run.id, fence, usage_attrs(run.id), now: @now)
 
     assert Repo.one!(
-             from(reservation in SymmetryControl.Goals.GoalBudgetReservation,
+             from(reservation in GoalBudgetReservation,
                where: reservation.task_id == ^task.id
              )
            ).state == "settled"
@@ -82,7 +91,7 @@ defmodule SymmetryControl.Goals.RunFenceFlowTest do
              })
 
     decision_id = decision.response["decision"]["id"]
-    decision_version = Repo.get!(SymmetryControl.Goals.GoalDecision, decision_id).lock_version
+    decision_version = Repo.get!(GoalDecision, decision_id).lock_version
 
     assert {:ok, _resolved, :created} =
              command_current(goal.id, "resolve_decision", %{
@@ -121,16 +130,17 @@ defmodule SymmetryControl.Goals.RunFenceFlowTest do
 
   test "evidence stores observed_at in its row timestamp without polluting the payload" do
     {_goal, item, _task, runtime, run, fence} = validation_goal_run_fixture()
-    observed_at = DateTime.add(@now, -60, :second)
+    observed_at = DateTime.shift(@now, minute: -1)
 
     evidence =
-      evidence_attrs(run.id, item)
+      run.id
+      |> evidence_attrs(item)
       |> Map.put(:observed_at, DateTime.to_iso8601(observed_at))
 
     assert {:ok, %{evidence: receipt}, :created} =
              Goals.append_evidence(runtime.machine_id, run.id, fence, evidence, now: @now)
 
-    row = Repo.get!(SymmetryControl.Goals.RunEvidence, evidence.evidence_id)
+    row = Repo.get!(RunEvidence, evidence.evidence_id)
     assert row.inserted_at == observed_at
     refute Map.has_key?(row.payload, "_observed_at")
     assert receipt.observed_at == DateTime.to_iso8601(observed_at)
@@ -140,8 +150,8 @@ defmodule SymmetryControl.Goals.RunFenceFlowTest do
   end
 
   test "deterministic final acceptance closes the Goal loop without a completion Decision" do
-    {goal, item, _producer, _producer_run, validation, validation_run, validation_runtime,
-     validation_fence, candidate_subject} =
+    {goal, item, _producer, _producer_run, validation, validation_run, validation_runtime, validation_fence,
+     candidate_subject} =
       independent_validation_attempt_fixture(check_contract(), %{
         execution_policy: %{"final_acceptance" => "deterministic"},
         authority_policy: %{"operator_required_for_completion" => false}
@@ -163,7 +173,7 @@ defmodule SymmetryControl.Goals.RunFenceFlowTest do
 
     [accepted_outcome] =
       Repo.all(
-        from(outcome in SymmetryControl.Goals.WorkOutcome,
+        from(outcome in WorkOutcome,
           where:
             outcome.goal_id == ^goal.id and outcome.work_item_id == ^item.id and
               outcome.validation_task_id == ^validation.id and outcome.disposition == "accepted"
@@ -173,7 +183,7 @@ defmodule SymmetryControl.Goals.RunFenceFlowTest do
     assert accepted_outcome.decision_id == nil
 
     refute Repo.exists?(
-             from(decision in SymmetryControl.Goals.GoalDecision,
+             from(decision in GoalDecision,
                where:
                  decision.goal_id == ^goal.id and
                    decision.goal_revision == ^goal.current_revision and
@@ -193,8 +203,8 @@ defmodule SymmetryControl.Goals.RunFenceFlowTest do
   end
 
   test "an accepted current-revision WorkItem rejects later manual admission" do
-    {goal, item, _producer, _producer_run, validation, validation_run, validation_runtime,
-     validation_fence, candidate_subject} = independent_validation_attempt_fixture()
+    {goal, item, _producer, _producer_run, validation, validation_run, validation_runtime, validation_fence,
+     candidate_subject} = independent_validation_attempt_fixture()
 
     assert {:ok, %{evidence: _stored}, :created} =
              Goals.append_evidence(
@@ -209,14 +219,12 @@ defmodule SymmetryControl.Goals.RunFenceFlowTest do
              Goals.settle_task(validation.id, validation_run.id, 1, now: @now)
 
     assert {:error, :already_accepted} =
-             command_current(goal.id, "admit_task", admission_payload(item),
-               rollout_enabled: true
-             )
+             command_current(goal.id, "admit_task", admission_payload(item), rollout_enabled: true)
   end
 
   test "operator review rejection settles the corresponding validation as rejected once" do
-    {goal, item, _producer, _producer_run, validation, validation_run, validation_runtime,
-     validation_fence, candidate_subject} =
+    {goal, item, _producer, _producer_run, validation, validation_run, validation_runtime, validation_fence,
+     candidate_subject} =
       independent_validation_attempt_fixture(check_and_operator_acceptance_contract())
 
     assert {:ok, %{evidence: _stored}, :created} =
@@ -248,8 +256,7 @@ defmodule SymmetryControl.Goals.RunFenceFlowTest do
     assert {:ok, _resolved, :created} =
              command_current(goal.id, "resolve_decision", %{
                decision_id: review_id,
-               expected_decision_version:
-                 Repo.get!(SymmetryControl.Goals.GoalDecision, review_id).lock_version,
+               expected_decision_version: Repo.get!(GoalDecision, review_id).lock_version,
                option_id: "reject"
              })
 
@@ -266,7 +273,7 @@ defmodule SymmetryControl.Goals.RunFenceFlowTest do
              }
            ] =
              Repo.all(
-               from(outcome in SymmetryControl.Goals.WorkOutcome,
+               from(outcome in WorkOutcome,
                  where:
                    outcome.validation_task_id == ^validation.id and
                      outcome.disposition == "rejected",
@@ -280,7 +287,7 @@ defmodule SymmetryControl.Goals.RunFenceFlowTest do
 
     assert [%{response: response}] =
              Repo.all(
-               from(event in SymmetryControl.Goals.GoalEvent,
+               from(event in GoalEvent,
                  where:
                    event.goal_id == ^goal.id and event.kind == "validation_outcome_settled" and
                      event.payload["task_id"] == ^validation.id,
@@ -293,8 +300,8 @@ defmodule SymmetryControl.Goals.RunFenceFlowTest do
   end
 
   test "a competing accepted Subject is historical and does not loop validation recovery" do
-    {goal, item, _producer, producer_run, validation, validation_run, validation_runtime,
-     validation_fence, candidate_subject} =
+    {goal, item, _producer, producer_run, validation, validation_run, validation_runtime, validation_fence,
+     candidate_subject} =
       independent_validation_attempt_fixture(check_and_operator_acceptance_contract())
 
     assert {:ok, %{evidence: _stored}, :created} =
@@ -327,8 +334,7 @@ defmodule SymmetryControl.Goals.RunFenceFlowTest do
     assert {:ok, _resolved, :created} =
              command_current(goal.id, "resolve_decision", %{
                decision_id: review_id,
-               expected_decision_version:
-                 Repo.get!(SymmetryControl.Goals.GoalDecision, review_id).lock_version,
+               expected_decision_version: Repo.get!(GoalDecision, review_id).lock_version,
                option_id: "accept"
              })
 
@@ -342,7 +348,7 @@ defmodule SymmetryControl.Goals.RunFenceFlowTest do
 
     assert [%{disposition: "rejected", reason: "historical_result"}] =
              Repo.all(
-               from(outcome in SymmetryControl.Goals.WorkOutcome,
+               from(outcome in WorkOutcome,
                  where: outcome.validation_task_id == ^validation_id,
                  select: %{disposition: outcome.disposition, reason: outcome.reason}
                )
@@ -350,7 +356,7 @@ defmodule SymmetryControl.Goals.RunFenceFlowTest do
 
     assert [%{response: response}] =
              Repo.all(
-               from(event in SymmetryControl.Goals.GoalEvent,
+               from(event in GoalEvent,
                  where:
                    event.goal_id == ^goal.id and event.kind == "validation_outcome_settled" and
                      event.payload["task_id"] == ^validation_id,
@@ -363,8 +369,8 @@ defmodule SymmetryControl.Goals.RunFenceFlowTest do
   end
 
   test "a competing accepted Subject settles a first terminal validation as historical result" do
-    {goal, item, _producer, producer_run, validation, validation_run, validation_runtime,
-     validation_fence, candidate_subject} =
+    {goal, item, _producer, producer_run, validation, validation_run, validation_runtime, validation_fence,
+     candidate_subject} =
       independent_validation_attempt_fixture(check_and_operator_acceptance_contract())
 
     assert {:ok, %{evidence: _stored}, :created} =
@@ -385,7 +391,7 @@ defmodule SymmetryControl.Goals.RunFenceFlowTest do
 
     assert [%{disposition: "rejected", reason: "historical_result"}] =
              Repo.all(
-               from(outcome in SymmetryControl.Goals.WorkOutcome,
+               from(outcome in WorkOutcome,
                  where: outcome.validation_task_id == ^validation.id,
                  select: %{disposition: outcome.disposition, reason: outcome.reason}
                )
@@ -393,12 +399,13 @@ defmodule SymmetryControl.Goals.RunFenceFlowTest do
   end
 
   test "failed validation evidence remains rejected even with scoped operator acceptance" do
-    {goal, item, _producer, _producer_run, validation, validation_run, validation_runtime,
-     validation_fence, candidate_subject} =
+    {goal, item, _producer, _producer_run, validation, validation_run, validation_runtime, validation_fence,
+     candidate_subject} =
       independent_validation_attempt_fixture(check_and_operator_acceptance_contract())
 
     failed_evidence =
-      evidence_attrs(validation_run.id, item, candidate_subject)
+      validation_run.id
+      |> evidence_attrs(item, candidate_subject)
       |> Map.put(:verdict, "failed")
       |> put_in([:payload, :exit_code], 1)
 
@@ -434,13 +441,12 @@ defmodule SymmetryControl.Goals.RunFenceFlowTest do
     assert {:ok, _resolved, :created} =
              command_current(goal.id, "resolve_decision", %{
                decision_id: scoped_review_id,
-               expected_decision_version:
-                 Repo.get!(SymmetryControl.Goals.GoalDecision, scoped_review_id).lock_version,
+               expected_decision_version: Repo.get!(GoalDecision, scoped_review_id).lock_version,
                option_id: "accept"
              })
 
     assert Repo.aggregate(
-             from(outcome in SymmetryControl.Goals.WorkOutcome,
+             from(outcome in WorkOutcome,
                where:
                  outcome.validation_task_id == ^validation.id and
                    outcome.disposition == "rejected"
@@ -449,7 +455,7 @@ defmodule SymmetryControl.Goals.RunFenceFlowTest do
            ) == 1
 
     refute Repo.exists?(
-             from(outcome in SymmetryControl.Goals.WorkOutcome,
+             from(outcome in WorkOutcome,
                where:
                  outcome.validation_task_id == ^validation.id and
                    outcome.disposition == "accepted"
@@ -459,11 +465,12 @@ defmodule SymmetryControl.Goals.RunFenceFlowTest do
 
   test "unknown and not-applicable validation evidence remain awaiting validation" do
     for verdict <- ["unknown", "not_applicable"] do
-      {goal, item, _producer, _producer_run, validation, validation_run, validation_runtime,
-       validation_fence, candidate_subject} = independent_validation_attempt_fixture()
+      {goal, item, _producer, _producer_run, validation, validation_run, validation_runtime, validation_fence,
+       candidate_subject} = independent_validation_attempt_fixture()
 
       evidence =
-        evidence_attrs(validation_run.id, item, candidate_subject)
+        validation_run.id
+        |> evidence_attrs(item, candidate_subject)
         |> Map.put(:evidence_id, Ecto.UUID.generate())
         |> Map.put(:evidence_key, "check:#{verdict}")
         |> Map.put(:verdict, verdict)
@@ -481,20 +488,20 @@ defmodule SymmetryControl.Goals.RunFenceFlowTest do
                Goals.settle_task(validation.id, validation_run.id, 1, now: @now)
 
       refute Repo.exists?(
-               from(outcome in SymmetryControl.Goals.WorkOutcome,
-                 where:
-                   outcome.goal_id == ^goal.id and outcome.validation_task_id == ^validation.id
+               from(outcome in WorkOutcome,
+                 where: outcome.goal_id == ^goal.id and outcome.validation_task_id == ^validation.id
                )
              )
     end
   end
 
   test "failed validation evidence does not turn a self-declared failure into a rejected outcome" do
-    {goal, item, _producer, _producer_run, validation, validation_run, validation_runtime,
-     validation_fence, candidate_subject} = independent_validation_attempt_fixture()
+    {goal, item, _producer, _producer_run, validation, validation_run, validation_runtime, validation_fence,
+     candidate_subject} = independent_validation_attempt_fixture()
 
     failed_evidence =
-      evidence_attrs(validation_run.id, item, candidate_subject)
+      validation_run.id
+      |> evidence_attrs(item, candidate_subject)
       |> Map.put(:evidence_id, Ecto.UUID.generate())
       |> Map.put(:evidence_key, "check:self-declared-failure")
       |> Map.put(:verdict, "failed")
@@ -518,18 +525,19 @@ defmodule SymmetryControl.Goals.RunFenceFlowTest do
              Goals.settle_task(validation.id, validation_run.id, 1, now: @now)
 
     refute Repo.exists?(
-             from(outcome in SymmetryControl.Goals.WorkOutcome,
+             from(outcome in WorkOutcome,
                where: outcome.goal_id == ^goal.id and outcome.disposition == "rejected"
              )
            )
   end
 
   test "failed validation evidence cannot reject a candidate that differs from the frozen producer Subject" do
-    {goal, item, _producer, _producer_run, validation, validation_run, validation_runtime,
-     validation_fence, candidate_subject} = independent_validation_attempt_fixture()
+    {goal, item, _producer, _producer_run, validation, validation_run, validation_runtime, validation_fence,
+     candidate_subject} = independent_validation_attempt_fixture()
 
     failed_evidence =
-      evidence_attrs(validation_run.id, item, candidate_subject)
+      validation_run.id
+      |> evidence_attrs(item, candidate_subject)
       |> Map.put(:evidence_id, Ecto.UUID.generate())
       |> Map.put(:evidence_key, "check:mismatched-candidate")
       |> Map.put(:verdict, "failed")
@@ -553,18 +561,19 @@ defmodule SymmetryControl.Goals.RunFenceFlowTest do
              Goals.settle_task(validation.id, validation_run.id, 1, now: @now)
 
     refute Repo.exists?(
-             from(outcome in SymmetryControl.Goals.WorkOutcome,
+             from(outcome in WorkOutcome,
                where: outcome.goal_id == ^goal.id and outcome.disposition == "rejected"
              )
            )
   end
 
   test "paused current revision records trusted validation rejection without waking execution" do
-    {goal, item, _producer, _producer_run, validation, validation_run, validation_runtime,
-     validation_fence, candidate_subject} = independent_validation_attempt_fixture()
+    {goal, item, _producer, _producer_run, validation, validation_run, validation_runtime, validation_fence,
+     candidate_subject} = independent_validation_attempt_fixture()
 
     failed_evidence =
-      evidence_attrs(validation_run.id, item, candidate_subject)
+      validation_run.id
+      |> evidence_attrs(item, candidate_subject)
       |> Map.put(:evidence_id, Ecto.UUID.generate())
       |> Map.put(:evidence_key, "check:paused-failure")
       |> Map.put(:verdict, "failed")
@@ -588,7 +597,7 @@ defmodule SymmetryControl.Goals.RunFenceFlowTest do
              Goals.settle_task(validation.id, validation_run.id, 1, now: @now)
 
     assert Repo.aggregate(
-             from(outcome in SymmetryControl.Goals.WorkOutcome,
+             from(outcome in WorkOutcome,
                where: outcome.goal_id == ^goal.id and outcome.disposition == "rejected"
              ),
              :count
@@ -598,8 +607,8 @@ defmodule SymmetryControl.Goals.RunFenceFlowTest do
   end
 
   test "paused current revision records accepted validation without waking execution" do
-    {goal, item, _producer, _producer_run, validation, validation_run, validation_runtime,
-     validation_fence, candidate_subject} = independent_validation_attempt_fixture()
+    {goal, item, _producer, _producer_run, validation, validation_run, validation_runtime, validation_fence,
+     candidate_subject} = independent_validation_attempt_fixture()
 
     evidence = evidence_attrs(validation_run.id, item, candidate_subject)
 
@@ -621,7 +630,7 @@ defmodule SymmetryControl.Goals.RunFenceFlowTest do
              Goals.settle_task(validation.id, validation_run.id, 1, now: @now)
 
     assert Repo.exists?(
-             from(outcome in SymmetryControl.Goals.WorkOutcome,
+             from(outcome in WorkOutcome,
                where:
                  outcome.goal_id == ^goal.id and outcome.validation_task_id == ^validation.id and
                    outcome.disposition == "accepted"
@@ -632,11 +641,12 @@ defmodule SymmetryControl.Goals.RunFenceFlowTest do
   end
 
   test "superseded validation failure remains historical and cannot reject the new revision" do
-    {goal, item, _producer, _producer_run, validation, validation_run, validation_runtime,
-     validation_fence, candidate_subject} = independent_validation_attempt_fixture()
+    {goal, item, _producer, _producer_run, validation, validation_run, validation_runtime, validation_fence,
+     candidate_subject} = independent_validation_attempt_fixture()
 
     failed_evidence =
-      evidence_attrs(validation_run.id, item, candidate_subject)
+      validation_run.id
+      |> evidence_attrs(item, candidate_subject)
       |> Map.put(:evidence_id, Ecto.UUID.generate())
       |> Map.put(:evidence_key, "check:superseded-failure")
       |> Map.put(:verdict, "failed")
@@ -663,7 +673,7 @@ defmodule SymmetryControl.Goals.RunFenceFlowTest do
              Goals.settle_task(validation.id, validation_run.id, 1, now: @now)
 
     refute Repo.exists?(
-             from(outcome in SymmetryControl.Goals.WorkOutcome,
+             from(outcome in WorkOutcome,
                where: outcome.goal_id == ^goal.id and outcome.disposition == "rejected"
              )
            )
@@ -671,7 +681,7 @@ defmodule SymmetryControl.Goals.RunFenceFlowTest do
 
   test "admission freezes validation bindings and evidence ignores later registry changes" do
     {_goal, item, task, runtime, run, fence} = validation_goal_run_fixture()
-    snapshot = Repo.get!(SymmetryControl.Goals.ContextSnapshot, task.context_snapshot_id)
+    snapshot = Repo.get!(ContextSnapshot, task.context_snapshot_id)
 
     assert snapshot.payload["work_contract"]["validation_bindings"] == [
              %{
@@ -709,7 +719,7 @@ defmodule SymmetryControl.Goals.RunFenceFlowTest do
       Application.put_env(:symmetry_control, :goals, previous_goals)
     end
 
-    assert Repo.get!(SymmetryControl.Goals.ContextSnapshot, snapshot.id).payload ==
+    assert Repo.get!(ContextSnapshot, snapshot.id).payload ==
              snapshot.payload
   end
 
@@ -846,7 +856,7 @@ defmodule SymmetryControl.Goals.RunFenceFlowTest do
              Goals.append_evidence(runtime.machine_id, run.id, fence, evidence, now: @now)
 
     assert {:error, :ownership_lost} = Goals.fetch_run_context(runtime.machine_id, run.id, fence)
-    assert Repo.aggregate(SymmetryControl.Goals.WorkOutcome, :count) == 0
+    assert Repo.aggregate(WorkOutcome, :count) == 0
   end
 
   test "late usage remains fenced to the original machine and replays by exact usage key" do
@@ -864,16 +874,16 @@ defmodule SymmetryControl.Goals.RunFenceFlowTest do
              Goals.record_usage(runtime.machine_id, run.id, fence, usage, now: @now)
 
     assert stored.cost_microusd == "42"
-    assert Repo.get!(SymmetryControl.Goals.RunUsage, usage.usage_id).inserted_at == @now
+    assert Repo.get!(RunUsage, usage.usage_id).inserted_at == @now
 
     assert Repo.one!(
-             from(row in SymmetryControl.Goals.GoalBudgetReservation,
+             from(row in GoalBudgetReservation,
                where: row.task_id == ^task.id
              )
            ).state == "settled"
 
     assert wakeup_job_count(goal.id) == 1
-    after_created = Repo.get!(SymmetryControl.Goals.Goal, goal.id)
+    after_created = Repo.get!(Goal, goal.id)
     created_next_wake_at = after_created.next_wake_at
     created_lock_version = after_created.lock_version
 
@@ -883,21 +893,19 @@ defmodule SymmetryControl.Goals.RunFenceFlowTest do
     assert wakeup_job_count(goal.id) == 1
 
     assert %{next_wake_at: ^created_next_wake_at, lock_version: ^created_lock_version} =
-             Repo.get!(SymmetryControl.Goals.Goal, goal.id)
+             Repo.get!(Goal, goal.id)
 
     assert {:error, :idempotency_conflict} =
              Goals.record_usage(
                runtime.machine_id,
                run.id,
                fence,
-               %{usage | observed_at: DateTime.to_iso8601(DateTime.add(@now, 1, :second))},
+               %{usage | observed_at: DateTime.to_iso8601(DateTime.shift(@now, second: 1))},
                now: @now
              )
 
     assert {:error, :idempotency_conflict} =
-             Goals.record_usage(runtime.machine_id, run.id, fence, %{usage | cost_microusd: "43"},
-               now: @now
-             )
+             Goals.record_usage(runtime.machine_id, run.id, fence, %{usage | cost_microusd: "43"}, now: @now)
 
     assert {:error, :ownership_lost} =
              Goals.record_usage(Ecto.UUID.generate(), run.id, fence, usage, now: @now)
@@ -932,7 +940,7 @@ defmodule SymmetryControl.Goals.RunFenceFlowTest do
              Goals.record_usage(runtime.machine_id, run.id, fence, unknown_usage, now: @now)
 
     assert Repo.one!(
-             from(row in SymmetryControl.Goals.GoalBudgetReservation,
+             from(row in GoalBudgetReservation,
                where: row.task_id == ^task.id
              )
            ).state == "unknown"
@@ -949,13 +957,13 @@ defmodule SymmetryControl.Goals.RunFenceFlowTest do
              Goals.record_usage(runtime.machine_id, run.id, fence, correction, now: @now)
 
     assert Repo.one!(
-             from(row in SymmetryControl.Goals.GoalBudgetReservation,
+             from(row in GoalBudgetReservation,
                where: row.task_id == ^task.id
              )
            ).state == "settled"
 
     assert wakeup_job_count(goal.id) == 1
-    after_correction = Repo.get!(SymmetryControl.Goals.Goal, goal.id)
+    after_correction = Repo.get!(Goal, goal.id)
     correction_next_wake_at = after_correction.next_wake_at
     correction_lock_version = after_correction.lock_version
 
@@ -965,7 +973,7 @@ defmodule SymmetryControl.Goals.RunFenceFlowTest do
     assert wakeup_job_count(goal.id) == 1
 
     assert %{next_wake_at: ^correction_next_wake_at, lock_version: ^correction_lock_version} =
-             Repo.get!(SymmetryControl.Goals.Goal, goal.id)
+             Repo.get!(Goal, goal.id)
   end
 
   test "new active usage wakes a Goal even when its reservation remains held" do
@@ -977,13 +985,13 @@ defmodule SymmetryControl.Goals.RunFenceFlowTest do
              Goals.record_usage(runtime.machine_id, run.id, fence, usage, now: @now)
 
     assert Repo.one!(
-             from(row in SymmetryControl.Goals.GoalBudgetReservation,
+             from(row in GoalBudgetReservation,
                where: row.task_id == ^task.id
              )
            ).state == "held"
 
     assert wakeup_job_count(goal.id) == 1
-    after_created = Repo.get!(SymmetryControl.Goals.Goal, goal.id)
+    after_created = Repo.get!(Goal, goal.id)
     created_next_wake_at = after_created.next_wake_at
     created_lock_version = after_created.lock_version
 
@@ -993,7 +1001,7 @@ defmodule SymmetryControl.Goals.RunFenceFlowTest do
     assert wakeup_job_count(goal.id) == 1
 
     assert %{next_wake_at: ^created_next_wake_at, lock_version: ^created_lock_version} =
-             Repo.get!(SymmetryControl.Goals.Goal, goal.id)
+             Repo.get!(Goal, goal.id)
   end
 
   test "known usage from an earlier Run cannot settle another terminal Run without usage" do
@@ -1021,7 +1029,7 @@ defmodule SymmetryControl.Goals.RunFenceFlowTest do
       generation: 2,
       state: "completed",
       assigned_at: @now,
-      assignment_expires_at: DateTime.add(@now, 60, :second)
+      assignment_expires_at: DateTime.shift(@now, minute: 1)
     })
     |> Repo.insert!()
 
@@ -1035,7 +1043,7 @@ defmodule SymmetryControl.Goals.RunFenceFlowTest do
              )
 
     assert Repo.one!(
-             from(row in SymmetryControl.Goals.GoalBudgetReservation,
+             from(row in GoalBudgetReservation,
                where: row.task_id == ^task.id
              )
            ).state == "unknown"
@@ -1066,7 +1074,7 @@ defmodule SymmetryControl.Goals.RunFenceFlowTest do
              Goals.record_usage(runtime.machine_id, run.id, fence, unknown_usage, now: @now)
 
     assert {:ok, [%{task_id: task_id, run_id: run_id, generation: 1}]} =
-             Goals.recover_pending_terminal_settlements(now: DateTime.add(@now, 8 * 60, :second))
+             Goals.recover_pending_terminal_settlements(now: DateTime.shift(@now, minute: 8))
 
     assert task_id == task.id
     assert run_id == run.id
@@ -1085,10 +1093,10 @@ defmodule SymmetryControl.Goals.RunFenceFlowTest do
                now: @now
              )
 
-    refute Repo.exists?(from(row in SymmetryControl.Goals.RunUsage, where: row.run_id == ^run.id))
+    refute Repo.exists?(from(row in RunUsage, where: row.run_id == ^run.id))
 
     assert Repo.one!(
-             from(row in SymmetryControl.Goals.GoalBudgetReservation,
+             from(row in GoalBudgetReservation,
                where: row.task_id == ^task.id
              )
            ).state == "held"
@@ -1122,7 +1130,8 @@ defmodule SymmetryControl.Goals.RunFenceFlowTest do
     legacy_path = String.duplicate("e\u0301", 513)
 
     legacy_artifact =
-      artifact_evidence_attrs(run.id, item)
+      run.id
+      |> artifact_evidence_attrs(item)
       |> put_in([:source_ref, :path], legacy_path)
       |> put_in([:payload, :path], legacy_path)
 
@@ -1183,7 +1192,8 @@ defmodule SymmetryControl.Goals.RunFenceFlowTest do
              Goals.append_evidence(runtime_a.machine_id, run_a.id, fence_a, evidence_a, now: @now)
 
     evidence_b =
-      observation_evidence_attrs(run_b.id, item_b)
+      run_b.id
+      |> observation_evidence_attrs(item_b)
       |> Map.put(:evidence_id, evidence_a.evidence_id)
       |> Map.put(:evidence_key, "observation:cross-run-primary-key")
       |> put_in([:source_ref, :external_ref], "status:cross-run")
@@ -1220,10 +1230,7 @@ defmodule SymmetryControl.Goals.RunFenceFlowTest do
     assert context.context["schema_version"] == "symmetry.context_snapshot.v1"
   end
 
-  defp validation_goal_run_fixture(
-         acceptance_contract \\ check_contract(),
-         runtime_id \\ @validation_runtime_id
-       ) do
+  defp validation_goal_run_fixture(acceptance_contract \\ check_contract(), runtime_id \\ @validation_runtime_id) do
     {goal, item, producer} = admitted_task_fixture("primary", acceptance_contract)
     producer_runtime = runtime_fixture()
     {producer_run, _producer_fence} = completed_goal_run_fixture(producer, producer_runtime)

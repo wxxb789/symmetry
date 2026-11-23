@@ -2,10 +2,12 @@ defmodule SymmetryControl.OrchestrationSupervisionTest do
   use SymmetryControl.DataCase, async: true
 
   alias SymmetryControl.Orchestration
-  alias SymmetryControl.Orchestration.{Command, RunTransition}
+  alias SymmetryControl.Orchestration.Command
+  alias SymmetryControl.Orchestration.RunTransition
   alias SymmetryControl.RequestHash
   alias SymmetryControl.Workspaces
-  alias SymmetryControlWeb.{PortalJSON, Protocol}
+  alias SymmetryControlWeb.PortalJSON
+  alias SymmetryControlWeb.Protocol
 
   @now ~U[2026-09-06 11:00:00.000000Z]
 
@@ -103,9 +105,7 @@ defmodule SymmetryControl.OrchestrationSupervisionTest do
     waiting_id = Ecto.UUID.generate()
 
     assert {:ok, _} =
-             Orchestration.transition(run.id, fence, "waiting_for_input", packet(), waiting_id,
-               now: @now
-             )
+             Orchestration.transition(run.id, fence, "waiting_for_input", packet(), waiting_id, now: @now)
 
     key = Ecto.UUID.generate()
     payload = %{"option_id" => "staged"}
@@ -133,9 +133,7 @@ defmodule SymmetryControl.OrchestrationSupervisionTest do
     waiting_id = Ecto.UUID.generate()
 
     assert {:ok, _} =
-             Orchestration.transition(run.id, fence, "waiting_for_input", packet(), waiting_id,
-               now: @now
-             )
+             Orchestration.transition(run.id, fence, "waiting_for_input", packet(), waiting_id, now: @now)
 
     key = Ecto.UUID.generate()
     payload = %{"option_id" => "staged"}
@@ -408,7 +406,7 @@ defmodule SymmetryControl.OrchestrationSupervisionTest do
         assert {:ok, _} = acknowledge(pause, fence)
       end
 
-      assert %{expired_runs: 1} = Orchestration.expire(now: DateTime.add(@now, 31, :second))
+      assert %{expired_runs: 1} = Orchestration.expire(now: DateTime.shift(@now, second: 31))
       assert {:ok, failed} = Orchestration.fetch_task(task.id)
       assert failed.state == "failed"
       assert failed.attempt_generation == run.generation
@@ -481,9 +479,7 @@ defmodule SymmetryControl.OrchestrationSupervisionTest do
       |> put_in(["decision", "recommended_option_id"], "option-11")
 
     assert {:ok, _} =
-             Orchestration.transition(run.id, fence, "waiting_for_input", payload, waiting_id,
-               now: @now
-             )
+             Orchestration.transition(run.id, fence, "waiting_for_input", payload, waiting_id, now: @now)
 
     assert {:ok, snapshot} = Orchestration.task_snapshot(task.id)
     assert Protocol.task(snapshot).waiting.decision == payload["decision"]
@@ -506,9 +502,7 @@ defmodule SymmetryControl.OrchestrationSupervisionTest do
     waiting_id = Ecto.UUID.generate()
 
     assert {:ok, _} =
-             Orchestration.transition(run.id, fence, "waiting_for_input", packet(), waiting_id,
-               now: @now
-             )
+             Orchestration.transition(run.id, fence, "waiting_for_input", packet(), waiting_id, now: @now)
 
     opts = [
       expected_generation: task.attempt_generation,
@@ -690,13 +684,7 @@ defmodule SymmetryControl.OrchestrationSupervisionTest do
     machine
   end
 
-  defp task_attrs,
-    do: %{
-      goal: "Build the adapter",
-      agent_profile: "supervised",
-      workspace: "primary",
-      input: %{}
-    }
+  defp task_attrs, do: %{goal: "Build the adapter", agent_profile: "supervised", workspace: "primary", input: %{}}
 
   defp runtime_spec(capabilities),
     do: %{
@@ -708,24 +696,16 @@ defmodule SymmetryControl.OrchestrationSupervisionTest do
       capabilities: capabilities
     }
 
-  defp capabilities,
-    do: %{"structured_input" => true, "interactive" => true, "supervisory_control" => true}
+  defp capabilities, do: %{"structured_input" => true, "interactive" => true, "supervisory_control" => true}
 
   defp command(task, kind, payload \\ %{}, key \\ Ecto.UUID.generate()),
-    do:
-      Orchestration.create_command(task.id, kind, payload, key,
-        expected_generation: task.attempt_generation,
-        now: @now
-      )
+    do: Orchestration.create_command(task.id, kind, payload, key, expected_generation: task.attempt_generation, now: @now)
 
   defp transition(run, fence, state, payload),
     do: Orchestration.transition(run.id, fence, state, payload, Ecto.UUID.generate(), now: @now)
 
   defp acknowledge(command, fence, outcome \\ "applied"),
-    do:
-      Orchestration.acknowledge_command(command.id, fence, outcome, Ecto.UUID.generate(),
-        now: @now
-      )
+    do: Orchestration.acknowledge_command(command.id, fence, outcome, Ecto.UUID.generate(), now: @now)
 
   defp packet do
     %{

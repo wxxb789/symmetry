@@ -1,0 +1,36 @@
+{
+  "gitignore": false,
+  "mode": "mild",
+  "formatsExts": {
+    "bash": ["sh"],
+    "c": ["c"],
+    "css": ["css"],
+    "elixir": ["ex", "exs"],
+    "go": ["go"],
+    "javascript": ["js", "mjs"],
+    "json": ["json"],
+    "markdown": ["md"],
+    "markup": ["html"],
+    "powershell": ["ps1", "psm1"],
+    "python": ["py"],
+    "toml": ["toml"],
+    "tsx": ["tsx"],
+    "txt": ["txt"],
+    "typescript": ["ts"],
+    "yaml": ["yaml", "yml"]
+  },
+  "ignore": [
+    "**/node_modules/**",
+    "**/deps/**",
+    "**/_build/**",
+    "**/cover/**",
+    "**/dist/**",
+    "**/build/**",
+    "**/.venv/**",
+    "**/venv/**",
+    "**/__pycache__/**",
+    "**/.elixir_ls/**",
+    "**/test-results/**",
+    "**/playwright-report/**"
+  ]
+}

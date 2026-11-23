@@ -16,14 +16,16 @@ defmodule SymmetryControl.DataCase do
 
   use ExUnit.CaseTemplate
 
+  alias Ecto.Adapters.SQL.Sandbox
+
   using do
     quote do
-      alias SymmetryControl.Repo
-
       import Ecto
       import Ecto.Changeset
       import Ecto.Query
       import SymmetryControl.DataCase
+
+      alias SymmetryControl.Repo
     end
   end
 
@@ -37,12 +39,12 @@ defmodule SymmetryControl.DataCase do
   """
   def setup_sandbox(tags) do
     pid =
-      Ecto.Adapters.SQL.Sandbox.start_owner!(
+      Sandbox.start_owner!(
         SymmetryControl.Repo,
         sandbox_options(tags)
       )
 
-    on_exit(fn -> Ecto.Adapters.SQL.Sandbox.stop_owner(pid) end)
+    on_exit(fn -> Sandbox.stop_owner(pid) end)
   end
 
   @doc false

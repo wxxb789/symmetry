@@ -5,13 +5,20 @@ defmodule SymmetryControl.ProviderBrokerE2ETest do
   import SymmetryControl.TestFixtures, only: [unix_signal: 1]
 
   alias SymmetryControl.Goals
-  alias SymmetryControl.Goals.{Goal, GoalDecision, HarnessSession, RunEvidence, WorkOutcome}
+  alias SymmetryControl.Goals.Goal
+  alias SymmetryControl.Goals.GoalDecision
+  alias SymmetryControl.Goals.HarnessSession
+  alias SymmetryControl.Goals.RunEvidence
+  alias SymmetryControl.Goals.WorkOutcome
   alias SymmetryControl.Integrations
   alias SymmetryControl.Integrations.HTTPStub
   alias SymmetryControl.Orchestration
-  alias SymmetryControl.Orchestration.{Run, RunTransition, Runtime, Task}
-  alias SymmetryControl.RequestHash
+  alias SymmetryControl.Orchestration.Run
+  alias SymmetryControl.Orchestration.Runtime
+  alias SymmetryControl.Orchestration.RunTransition
+  alias SymmetryControl.Orchestration.Task
   alias SymmetryControl.Repo
+  alias SymmetryControl.RequestHash
   alias SymmetryControl.TestEnv
   alias SymmetryControl.Workspaces
   alias SymmetryControl.Workspaces.WorkItem
@@ -84,10 +91,7 @@ defmodule SymmetryControl.ProviderBrokerE2ETest do
       end
 
     listener =
-      start_supervised!(
-        {Bandit,
-         plug: listener_plug, scheme: :http, ip: {127, 0, 0, 1}, port: 0, startup_log: false}
-      )
+      start_supervised!({Bandit, plug: listener_plug, scheme: :http, ip: {127, 0, 0, 1}, port: 0, startup_log: false})
 
     {:ok, {{127, 0, 0, 1}, port}} = ThousandIsland.listener_info(listener)
     runtime_key = "provider-e2e-#{Ecto.UUID.generate()}"
@@ -187,12 +191,9 @@ defmodule SymmetryControl.ProviderBrokerE2ETest do
   # The three provider flows share one expectation and differ only in their
   # fixture, so one loop registers one named test per flow.
   for {name, fixture} <- [
-        {"GitHub Issue reaches GitHub pull request, review, and Actions projection",
-         :github_case},
-        {"Azure Boards work item reaches GitHub changes and Azure Pipelines projection",
-         :mixed_provider_case},
-        {"Azure Boards work item reaches Azure Repos, review, and Pipelines projection",
-         :azure_devops_case}
+        {"GitHub Issue reaches GitHub pull request, review, and Actions projection", :github_case},
+        {"Azure Boards work item reaches GitHub changes and Azure Pipelines projection", :mixed_provider_case},
+        {"Azure Boards work item reaches Azure Repos, review, and Pipelines projection", :azure_devops_case}
       ] do
     test name, context do
       run_provider_flow!(unquote(fixture)(), context)
@@ -310,7 +311,7 @@ defmodule SymmetryControl.ProviderBrokerE2ETest do
           where: transition.run_id == ^validation_run.id and transition.state == "completed"
       )
 
-    assert DateTime.compare(evidence.inserted_at, transition.inserted_at) == :lt
+    assert DateTime.before?(evidence.inserted_at, transition.inserted_at)
     assert_artifact_ingress_order!(context.ingress_recorder, validation_run.id)
 
     assert {:ok, accepted} =
@@ -335,9 +336,7 @@ defmodule SymmetryControl.ProviderBrokerE2ETest do
     assert outcome.producing_task_id == fixture.producer.id
     assert outcome.producing_run_id == fixture.producer_run.id
 
-    refute Repo.exists?(
-             from session in HarnessSession, where: session.active_run_id == ^validation_run.id
-           )
+    refute Repo.exists?(from session in HarnessSession, where: session.active_run_id == ^validation_run.id)
   end
 
   defp run_provider_flow!(provider_case, context) do
@@ -799,7 +798,7 @@ defmodule SymmetryControl.ProviderBrokerE2ETest do
       "title" => "Provider broker end-to-end"
     }
 
-    unless body == expected, do: raise("unexpected GitHub pull request body: #{inspect(body)}")
+    if body != expected, do: raise("unexpected GitHub pull request body: #{inspect(body)}")
   end
 
   defp assert_mixed_github_pull_request_body!(body) do
@@ -809,7 +808,7 @@ defmodule SymmetryControl.ProviderBrokerE2ETest do
       "title" => "Provider broker end-to-end"
     }
 
-    unless body == expected, do: raise("unexpected GitHub pull request body: #{inspect(body)}")
+    if body != expected, do: raise("unexpected GitHub pull request body: #{inspect(body)}")
   end
 
   defp assert_azure_pull_request_body!(body) do
@@ -819,11 +818,11 @@ defmodule SymmetryControl.ProviderBrokerE2ETest do
       "title" => "Provider broker end-to-end"
     }
 
-    unless body == expected, do: raise("unexpected Azure pull request body: #{inspect(body)}")
+    if body != expected, do: raise("unexpected Azure pull request body: #{inspect(body)}")
   end
 
   defp create_artifact_repository_fixture! do
-    suffix = Ecto.UUID.generate() |> String.replace("-", "")
+    suffix = String.replace(Ecto.UUID.generate(), "-", "")
 
     repository_path =
       Path.join(System.tmp_dir!(), "symmetry-provider-artifact-repository-#{suffix}")
@@ -841,7 +840,7 @@ defmodule SymmetryControl.ProviderBrokerE2ETest do
     run_git!(repository_path, ["add", "proof.txt"])
     run_git!(repository_path, ["commit", "--quiet", "-m", "initial artifact subject"])
 
-    commit = git_output!(repository_path, ["rev-parse", "HEAD"]) |> String.trim()
+    commit = repository_path |> git_output!(["rev-parse", "HEAD"]) |> String.trim()
 
     {:ok, project} =
       Workspaces.create_project(%{
@@ -957,7 +956,7 @@ defmodule SymmetryControl.ProviderBrokerE2ETest do
 
     producer = Repo.get!(Task, producer_receipt.response["task"]["id"])
     producer_result = candidate_completion_result(artifact.subject)
-    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    now = DateTime.truncate(DateTime.utc_now(), :microsecond)
 
     # The producer terminal is a Control-side fixture precondition for this
     # validation seam; it is not claimed as live native execution evidence.
@@ -981,9 +980,9 @@ defmodule SymmetryControl.ProviderBrokerE2ETest do
         claim_id: Ecto.UUID.generate(),
         lease_token: Ecto.UUID.generate(),
         assigned_at: now,
-        assignment_expires_at: DateTime.add(now, 60, :second),
+        assignment_expires_at: DateTime.shift(now, minute: 1),
         claimed_at: now,
-        lease_expires_at: DateTime.add(now, 60, :second),
+        lease_expires_at: DateTime.shift(now, minute: 1),
         result: %{"task_result" => producer_result}
       })
       |> Repo.insert!()
@@ -1402,7 +1401,7 @@ defmodule SymmetryControl.ProviderBrokerE2ETest do
   defp stop_daemon!(%{port: port, os_pid: os_pid, session_id: nil}) do
     if os_process_alive?(os_pid), do: terminate_windows_process_tree(os_pid)
 
-    unless await_process_exit(os_pid, 5_000),
+    if !await_process_exit(os_pid, 5_000),
       do: raise("daemon process tree #{os_pid} did not terminate")
 
     close_port(port)
@@ -1411,11 +1410,11 @@ defmodule SymmetryControl.ProviderBrokerE2ETest do
   defp stop_daemon!(%{port: port, os_pid: os_pid, session_id: session_id}) do
     terminate_unix_session(session_id, :term)
 
-    unless await_unix_shutdown(session_id, os_pid, 5_000) do
+    if !await_unix_shutdown(session_id, os_pid, 5_000) do
       terminate_unix_session(session_id, :kill)
       if os_process_alive?(os_pid), do: signal_unix_process(os_pid, :kill)
 
-      unless await_unix_shutdown(session_id, os_pid, 5_000),
+      if !await_unix_shutdown(session_id, os_pid, 5_000),
         do: raise("daemon session #{session_id} did not terminate")
     end
 
@@ -1423,9 +1422,7 @@ defmodule SymmetryControl.ProviderBrokerE2ETest do
   end
 
   defp terminate_windows_process_tree(os_pid) do
-    System.cmd("taskkill", ["/PID", Integer.to_string(os_pid), "/T", "/F"],
-      stderr_to_stdout: true
-    )
+    System.cmd("taskkill", ["/PID", Integer.to_string(os_pid), "/T", "/F"], stderr_to_stdout: true)
 
     :ok
   end
@@ -1622,9 +1619,7 @@ defmodule SymmetryControl.ProviderBrokerE2ETest do
             await_loop!(daemon_port, description, assertion, deadline, output <> data)
 
           {^daemon_port, {:exit_status, status}} ->
-            flunk(
-              "daemon exited with status #{status} while waiting for #{description}:\n#{output}"
-            )
+            flunk("daemon exited with status #{status} while waiting for #{description}:\n#{output}")
         after
           50 -> await_loop!(daemon_port, description, assertion, deadline, output)
         end

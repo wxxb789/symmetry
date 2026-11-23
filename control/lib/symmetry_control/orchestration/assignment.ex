@@ -1,14 +1,6 @@
 defmodule SymmetryControl.Orchestration.Assignment do
   @moduledoc false
 
-  @capacity_bearing_states [
-    "assigned",
-    "claimed",
-    "running",
-    "paused",
-    "waiting_for_input",
-    "cancelling"
-  ]
   import Ecto.Query
 
   import SymmetryControl.Goals.Eligibility,
@@ -49,13 +41,21 @@ defmodule SymmetryControl.Orchestration.Assignment do
 
   alias SymmetryControl.Goals.Goal
   alias SymmetryControl.Goals.HarnessSession
-  alias SymmetryControl.Workspaces.Project
-  alias SymmetryControl.Repo
   alias SymmetryControl.Orchestration.Run
   alias SymmetryControl.Orchestration.Runtime
   alias SymmetryControl.Orchestration.Task
+  alias SymmetryControl.Repo
+  alias SymmetryControl.Workspaces.Project
   alias SymmetryControl.Workspaces.WorkItem
 
+  @capacity_bearing_states [
+    "assigned",
+    "claimed",
+    "running",
+    "paused",
+    "waiting_for_input",
+    "cancelling"
+  ]
   @spec assignment_target(Run.t()) ::
           {:ok, %{machine_id: Ecto.UUID.t(), runtime_id: Ecto.UUID.t()}} | {:error, :not_found}
   def assignment_target(%Run{id: run_id}), do: assignment_target(run_id)
@@ -136,10 +136,10 @@ defmodule SymmetryControl.Orchestration.Assignment do
   end
 
   defp try_assign_goal_candidate(candidate, _current, assignment_duration_ms, opts) do
-    Repo.transaction(fn ->
+    fn ->
       with {:ok, _project, goal, item, task} <-
              try_lock_goal_assignment_chain(candidate),
-           current <- now(opts),
+           current = now(opts),
            true <- goal_task_assignable?(goal, task) and goal_work_item_owned?(goal, item, task),
            %Runtime{} = runtime <- next_goal_runtime(task, item, current),
            true <- runtime_has_capacity?(runtime) do
@@ -147,7 +147,8 @@ defmodule SymmetryControl.Orchestration.Assignment do
       else
         _ -> :skip
       end
-    end)
+    end
+    |> Repo.transaction()
     |> case do
       {:ok, {:assigned, run}} -> {:ok, run}
       {:ok, :skip} -> :skip
@@ -160,7 +161,7 @@ defmodule SymmetryControl.Orchestration.Assignment do
     with %Project{} = project <- try_lock_goal_project(candidate.goal_id),
          true <- project.status == "active",
          %Goal{} = goal <- try_lock_goal(candidate.goal_id),
-         item <- try_lock_goal_task_item(candidate.work_item_id),
+         item = try_lock_goal_task_item(candidate.work_item_id),
          true <- is_nil(item) or match?(%WorkItem{}, item),
          %Task{} = task <- try_lock_task(candidate.task_id) do
       {:ok, project, goal, item, task}
@@ -181,20 +182,15 @@ defmodule SymmetryControl.Orchestration.Assignment do
     end
   end
 
-  defp try_lock_goal(goal_id),
-    do: Repo.one(from goal in Goal, where: goal.id == ^goal_id, lock: "FOR UPDATE SKIP LOCKED")
+  defp try_lock_goal(goal_id), do: Repo.one(from goal in Goal, where: goal.id == ^goal_id, lock: "FOR UPDATE SKIP LOCKED")
 
   defp try_lock_work_item(work_item_id),
-    do:
-      Repo.one(
-        from item in WorkItem, where: item.id == ^work_item_id, lock: "FOR UPDATE SKIP LOCKED"
-      )
+    do: Repo.one(from item in WorkItem, where: item.id == ^work_item_id, lock: "FOR UPDATE SKIP LOCKED")
 
   defp try_lock_goal_task_item(nil), do: nil
   defp try_lock_goal_task_item(work_item_id), do: try_lock_work_item(work_item_id)
 
-  defp try_lock_task(task_id),
-    do: Repo.one(from task in Task, where: task.id == ^task_id, lock: "FOR UPDATE SKIP LOCKED")
+  defp try_lock_task(task_id), do: Repo.one(from task in Task, where: task.id == ^task_id, lock: "FOR UPDATE SKIP LOCKED")
 
   defp assign_one_legacy(current, assignment_duration_ms, opts) do
     Repo.transaction(fn ->
@@ -255,10 +251,10 @@ defmodule SymmetryControl.Orchestration.Assignment do
   defp runtime_available_at?(runtime, current) do
     runtime.status == "online" and
       not is_nil(runtime.last_heartbeat_at) and
-      DateTime.compare(
+      DateTime.after?(
         runtime.last_heartbeat_at,
         DateTime.add(current, -3 * runtime.heartbeat_interval_ms, :millisecond)
-      ) == :gt
+      )
   end
 
   defp next_assignable_legacy_task_and_runtime(current) do
@@ -322,8 +318,7 @@ defmodule SymmetryControl.Orchestration.Assignment do
       {_, _, _, :invalid} ->
         nil
 
-      {repository_resource_id, {:ok, allowed_runtime_ids}, {:ok, validation_runtime_ids},
-       session_requirement} ->
+      {repository_resource_id, {:ok, allowed_runtime_ids}, {:ok, validation_runtime_ids}, session_requirement} ->
         adapter_requirement = native_goal_adapter_requirement()
 
         strict_budget_requirement = strict_budget_capability_requirement(task)
@@ -335,12 +330,10 @@ defmodule SymmetryControl.Orchestration.Assignment do
                 runtime.workspace == ^task.workspace and
                 runtime.repository_resource_id == ^repository_resource_id and
                 runtime.harness_kind in ^native_harness_kinds(),
-            where:
-              fragment("? @> ?", runtime.capabilities, type(^task.required_capabilities, :map)),
+            where: fragment("? @> ?", runtime.capabilities, type(^task.required_capabilities, :map)),
             where: fragment("? @> ?", runtime.capabilities, type(^adapter_requirement, :map)),
             where: fragment("? @> ?", runtime.capabilities, type(^session_requirement, :map)),
-            where:
-              fragment("? @> ?", runtime.capabilities, type(^strict_budget_requirement, :map)),
+            where: fragment("? @> ?", runtime.capabilities, type(^strict_budget_requirement, :map)),
             where:
               fragment(
                 "? > CAST(? AS timestamp) - (? * INTERVAL '3 milliseconds')",
@@ -377,7 +370,7 @@ defmodule SymmetryControl.Orchestration.Assignment do
             nil
 
           runtime ->
-            if goal_runtime_matches?(runtime, task, item), do: runtime, else: nil
+            if goal_runtime_matches?(runtime, task, item), do: runtime
         end
     end
   end
@@ -430,14 +423,7 @@ defmodule SymmetryControl.Orchestration.Assignment do
 
   # The scheduler owns each retained attachment identity. It is persisted with
   # the Run before dispatch so a daemon cannot choose or reuse a stale binding.
-  defp reserve_requested_session!(
-         %Task{requested_session_id: nil},
-         _runtime,
-         _item,
-         run,
-         _current
-       ),
-       do: run
+  defp reserve_requested_session!(%Task{requested_session_id: nil}, _runtime, _item, run, _current), do: run
 
   defp reserve_requested_session!(task, runtime, item, run, current) do
     repository_resource_id =

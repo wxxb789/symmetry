@@ -1,17 +1,16 @@
 defmodule SymmetryControl.GoalsTestSupport do
+  @moduledoc false
+  @now ~U[2026-09-09 00:00:00.000000Z]
+  use SymmetryControl.TestFixtures,
+    command_opts: [now: @now, validation_profiles: validation_profiles()]
+
   import Ecto.Query
   import ExUnit.Assertions
   import ExUnit.Callbacks
 
-  @now ~U[2026-09-09 00:00:00.000000Z]
-  @validation_runtime_id "00000000-0000-4000-8000-000000000001"
-  @validation_profile_digest "sha256:" <> String.duplicate("c", 64)
-
-  use SymmetryControl.TestFixtures,
-    command_opts: [now: @now, validation_profiles: validation_profiles()]
-
   alias SymmetryControl.Goals
   alias SymmetryControl.Goals.HarnessSession
+  alias SymmetryControl.Goals.WorkOutcome
   alias SymmetryControl.Integrations
   alias SymmetryControl.Orchestration.Machine
   alias SymmetryControl.Orchestration.Run
@@ -20,6 +19,9 @@ defmodule SymmetryControl.GoalsTestSupport do
   alias SymmetryControl.Repo
   alias SymmetryControl.Workspaces
   alias SymmetryControl.Workspaces.WorkItem
+
+  @validation_runtime_id "00000000-0000-4000-8000-000000000001"
+  @validation_profile_digest "sha256:" <> String.duplicate("c", 64)
 
   def put_goal_validation_profiles(_context) do
     previous_goals = Application.fetch_env!(:symmetry_control, :goals)
@@ -51,19 +53,21 @@ defmodule SymmetryControl.GoalsTestSupport do
     repository = repository_fixture(project)
 
     policy =
-      %{
-        "max_parallel_tasks" => max(item_count, 1),
-        "max_task_admissions" => max(item_count, 1),
-        "max_run_attempts_per_task" => 2,
-        "budget_limit_microusd" => nil,
-        "per_run_cost_limit_microusd" => nil,
-        "budget_mode" => "soft",
-        "hard_cost_limit_required" => false,
-        "allowed_resource_ids" => [repository.id],
-        "allowed_model_profiles" => ["codex"],
-        "allowed_actions" => ["implement"]
-      }
-      |> Map.merge(execution_policy)
+      Map.merge(
+        %{
+          "max_parallel_tasks" => max(item_count, 1),
+          "max_task_admissions" => max(item_count, 1),
+          "max_run_attempts_per_task" => 2,
+          "budget_limit_microusd" => nil,
+          "per_run_cost_limit_microusd" => nil,
+          "budget_mode" => "soft",
+          "hard_cost_limit_required" => false,
+          "allowed_resource_ids" => [repository.id],
+          "allowed_model_profiles" => ["codex"],
+          "allowed_actions" => ["implement"]
+        },
+        execution_policy
+      )
 
     assert {:ok, created, :created} =
              Goals.create_goal(project.id, goal_attrs(nil, policy), "operator:test", now: @now)
@@ -146,7 +150,8 @@ defmodule SymmetryControl.GoalsTestSupport do
       |> Map.new(fn {key, value} -> {to_string(key), value} end)
 
     attrs =
-      goal_attrs(nil, execution_policy, context_manifest)
+      nil
+      |> goal_attrs(execution_policy, context_manifest)
       |> update_in(
         [:initial_revision, :authority_policy],
         &Map.merge(&1, authority_policy)
@@ -239,11 +244,7 @@ defmodule SymmetryControl.GoalsTestSupport do
     end
   end
 
-  def claimed_goal_run_fixture(
-        acceptance_contract \\ check_contract(),
-        runtime_id \\ nil,
-        revision_overrides \\ %{}
-      ) do
+  def claimed_goal_run_fixture(acceptance_contract \\ check_contract(), runtime_id \\ nil, revision_overrides \\ %{}) do
     {goal, item, task} = admitted_task_fixture("primary", acceptance_contract, revision_overrides)
     runtime = runtime_fixture(runtime_id)
     claim_id = Ecto.UUID.generate()
@@ -265,9 +266,9 @@ defmodule SymmetryControl.GoalsTestSupport do
         claim_id: claim_id,
         lease_token: lease_token,
         assigned_at: @now,
-        assignment_expires_at: DateTime.add(@now, 60, :second),
+        assignment_expires_at: DateTime.shift(@now, minute: 1),
         claimed_at: @now,
-        lease_expires_at: DateTime.add(DateTime.utc_now(), 3_600, :second)
+        lease_expires_at: DateTime.shift(DateTime.utc_now(), hour: 1)
       })
       |> Repo.insert!()
 
@@ -326,9 +327,9 @@ defmodule SymmetryControl.GoalsTestSupport do
         claim_id: claim_id,
         lease_token: lease_token,
         assigned_at: @now,
-        assignment_expires_at: DateTime.add(@now, 60, :second),
+        assignment_expires_at: DateTime.shift(@now, minute: 1),
         claimed_at: @now,
-        lease_expires_at: DateTime.add(@now, 3_600, :second),
+        lease_expires_at: DateTime.shift(@now, hour: 1),
         result: result
       })
       |> Repo.insert!()
@@ -344,8 +345,8 @@ defmodule SymmetryControl.GoalsTestSupport do
   end
 
   def insert_accepted_work_outcome!(goal, work_item_id, run, subject, evidence_ids \\ []) do
-    %SymmetryControl.Goals.WorkOutcome{}
-    |> SymmetryControl.Goals.WorkOutcome.changeset(%{
+    %WorkOutcome{}
+    |> WorkOutcome.changeset(%{
       goal_id: goal.id,
       goal_revision: goal.current_revision,
       work_item_id: work_item_id,
@@ -413,9 +414,9 @@ defmodule SymmetryControl.GoalsTestSupport do
         claim_id: claim_id,
         lease_token: lease_token,
         assigned_at: @now,
-        assignment_expires_at: DateTime.add(@now, 60, :second),
+        assignment_expires_at: DateTime.shift(@now, minute: 1),
         claimed_at: @now,
-        lease_expires_at: DateTime.add(DateTime.utc_now(), 3_600, :second)
+        lease_expires_at: DateTime.shift(DateTime.utc_now(), hour: 1)
       })
       |> Repo.insert!()
 
@@ -457,10 +458,7 @@ defmodule SymmetryControl.GoalsTestSupport do
     {producer_run, validation, validation_run, validation_runtime, validation_fence}
   end
 
-  def independent_validation_attempt_fixture(
-        acceptance_contract \\ check_contract(),
-        revision_overrides \\ %{}
-      ) do
+  def independent_validation_attempt_fixture(acceptance_contract \\ check_contract(), revision_overrides \\ %{}) do
     revision_overrides =
       Map.update(
         revision_overrides,
@@ -481,8 +479,8 @@ defmodule SymmetryControl.GoalsTestSupport do
     {producer_run, validation, validation_run, validation_runtime, validation_fence} =
       settled_validation_attempt!(goal, item, producer, candidate_subject)
 
-    {goal, item, producer, producer_run, validation, validation_run, validation_runtime,
-     validation_fence, candidate_subject}
+    {goal, item, producer, producer_run, validation, validation_run, validation_runtime, validation_fence,
+     candidate_subject}
   end
 
   def task_result(task, kind, overrides \\ %{}) do
@@ -496,8 +494,7 @@ defmodule SymmetryControl.GoalsTestSupport do
         "kind" => kind,
         "summary" => "A bounded TaskResult for settlement coverage.",
         "subject" => subject,
-        "subject_hash" =>
-          "sha256:" <> Base.encode16(SymmetryControl.RequestHash.canonical(subject), case: :lower),
+        "subject_hash" => "sha256:" <> Base.encode16(SymmetryControl.RequestHash.canonical(subject), case: :lower),
         "evidence_refs" => [],
         "blocker" => nil,
         "proposed_next_action" => nil,
@@ -519,8 +516,7 @@ defmodule SymmetryControl.GoalsTestSupport do
   def resolve_decision!(goal_id, decision_id, option_id \\ "accept") do
     payload = %{
       decision_id: decision_id,
-      expected_decision_version:
-        Repo.get!(SymmetryControl.Goals.GoalDecision, decision_id).lock_version,
+      expected_decision_version: Repo.get!(SymmetryControl.Goals.GoalDecision, decision_id).lock_version,
       option_id: option_id
     }
 
@@ -584,7 +580,7 @@ defmodule SymmetryControl.GoalsTestSupport do
   def amended_revision_contract(objective) do
     goal_attrs()
     |> Map.fetch!(:initial_revision)
-    |> Map.drop([:reason])
+    |> Map.delete(:reason)
     |> Map.put(:objective, objective)
   end
 
@@ -623,14 +619,12 @@ defmodule SymmetryControl.GoalsTestSupport do
       evidence_key: "check:unit",
       kind: "check",
       subject: subject,
-      subject_hash:
-        "sha256:" <> Base.encode16(SymmetryControl.RequestHash.canonical(subject), case: :lower),
+      subject_hash: "sha256:" <> Base.encode16(SymmetryControl.RequestHash.canonical(subject), case: :lower),
       source_ref: %{
         kind: "check",
         ref: "unit-tests",
         validator_profile: "test",
-        subject_hash:
-          "sha256:" <> Base.encode16(SymmetryControl.RequestHash.canonical(subject), case: :lower)
+        subject_hash: "sha256:" <> Base.encode16(SymmetryControl.RequestHash.canonical(subject), case: :lower)
       },
       source_revision: "checks-v1",
       validator_profile: "test",
@@ -638,8 +632,7 @@ defmodule SymmetryControl.GoalsTestSupport do
       payload: %{
         predicate_id: "check",
         subject: subject,
-        subject_hash:
-          "sha256:" <> Base.encode16(SymmetryControl.RequestHash.canonical(subject), case: :lower),
+        subject_hash: "sha256:" <> Base.encode16(SymmetryControl.RequestHash.canonical(subject), case: :lower),
         profile_digest: "sha256:" <> String.duplicate("c", 64),
         command_argv_digest: "sha256:" <> String.duplicate("d", 64),
         exit_code: 0,
@@ -668,7 +661,8 @@ defmodule SymmetryControl.GoalsTestSupport do
   # name hashing.
   def frozen_mutation_id(prefix, parts) do
     hex =
-      :crypto.hash(:sha256, prefix <> ":" <> Enum.join(parts, ":"))
+      :sha256
+      |> :crypto.hash(prefix <> ":" <> Enum.join(parts, ":"))
       |> Base.encode16(case: :lower)
 
     String.slice(hex, 0, 8) <>
@@ -784,30 +778,30 @@ defmodule SymmetryControl.GoalsTestSupport do
       )
 
     execution_policy =
-      %{
-        "automatic_execution" => false,
-        "max_parallel_tasks" => 1,
-        "max_task_admissions" => 1,
-        "max_run_attempts_per_task" => 2,
-        "budget_limit_microusd" => nil,
-        "per_run_cost_limit_microusd" => nil,
-        "budget_mode" => "soft",
-        "hard_cost_limit_required" => false,
-        "allowed_runtime_ids" => [],
-        "allowed_model_profiles" => [],
-        "final_acceptance" => "operator",
-        "allowed_actions" => [],
-        "allowed_resource_ids" => []
-      }
-      |> Map.merge(execution_policy)
+      Map.merge(
+        %{
+          "automatic_execution" => false,
+          "max_parallel_tasks" => 1,
+          "max_task_admissions" => 1,
+          "max_run_attempts_per_task" => 2,
+          "budget_limit_microusd" => nil,
+          "per_run_cost_limit_microusd" => nil,
+          "budget_mode" => "soft",
+          "hard_cost_limit_required" => false,
+          "allowed_runtime_ids" => [],
+          "allowed_model_profiles" => [],
+          "final_acceptance" => "operator",
+          "allowed_actions" => [],
+          "allowed_resource_ids" => []
+        },
+        execution_policy
+      )
 
     context_manifest =
-      %{
-        "byte_budget" => 32_768,
-        "required_source_kinds" => ["repository"],
-        "include_advisory_recall" => false
-      }
-      |> Map.merge(context_manifest)
+      Map.merge(
+        %{"byte_budget" => 32_768, "required_source_kinds" => ["repository"], "include_advisory_recall" => false},
+        context_manifest
+      )
 
     %{
       schema_version: "symmetry.goal_create.v1",
@@ -867,10 +861,7 @@ defmodule SymmetryControl.GoalsTestSupport do
     }
   end
 
-  def validation_profiles(
-        check_runtime_ids \\ [@validation_runtime_id],
-        review_runtime_ids \\ [@validation_runtime_id]
-      ) do
+  def validation_profiles(check_runtime_ids \\ [@validation_runtime_id], review_runtime_ids \\ [@validation_runtime_id]) do
     [
       test: [
         kind: :check,
@@ -901,11 +892,7 @@ defmodule SymmetryControl.GoalsTestSupport do
 
   defdelegate repository_fixture(project), to: SymmetryControl.TestFixtures
 
-  def connected_github_repository_fixture(
-        project,
-        external_ref,
-        capabilities \\ ["repositories", "changes"]
-      ) do
+  def connected_github_repository_fixture(project, external_ref, capabilities \\ ["repositories", "changes"]) do
     assert {:ok, connection} =
              Integrations.create_connection(%{
                provider: "github",
@@ -942,7 +929,9 @@ defmodule SymmetryControl.GoalsTestSupport do
           })
           |> Repo.insert!()
 
-        if(runtime_id, do: %Runtime{id: runtime_id}, else: %Runtime{})
+        if_result = if(runtime_id, do: %Runtime{id: runtime_id}, else: %Runtime{})
+
+        if_result
         |> Runtime.changeset(%{
           machine_id: machine.id,
           runtime_key: "goal-runtime-#{System.unique_integer([:positive])}",

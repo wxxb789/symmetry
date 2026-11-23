@@ -1,17 +1,6 @@
 defmodule SymmetryControl.Goals.Internal do
   @moduledoc false
 
-  @nonterminal_task_states [
-    "queued",
-    "assigned",
-    "claimed",
-    "running",
-    "waiting_for_input",
-    "paused",
-    "cancelling"
-  ]
-  @max_safe_integer 9_007_199_254_740_991
-
   import Ecto.Query
 
   alias Ecto.Changeset
@@ -28,6 +17,17 @@ defmodule SymmetryControl.Goals.Internal do
   alias SymmetryControl.Workspaces.ProjectResource
   alias SymmetryControl.Workspaces.WorkItem
 
+  @nonterminal_task_states [
+    "queued",
+    "assigned",
+    "claimed",
+    "running",
+    "waiting_for_input",
+    "paused",
+    "cancelling"
+  ]
+  @max_safe_integer 9_007_199_254_740_991
+
   def nullable_string(map, key) do
     case value(map, key) do
       nil ->
@@ -35,7 +35,7 @@ defmodule SymmetryControl.Goals.Internal do
 
       value when is_binary(value) ->
         value = String.trim(value)
-        if value != "", do: {:ok, value}, else: {:error, :invalid_request}
+        if value == "", do: {:error, :invalid_request}, else: {:ok, value}
 
       _ ->
         {:error, :invalid_request}
@@ -190,22 +190,15 @@ defmodule SymmetryControl.Goals.Internal do
       )
 
     if length(rows) != length(Enum.uniq(ids)), do: rollback(:not_found)
-    Map.new(rows, &{&1.id, &1}) |> then(fn found -> Enum.map(ids, &Map.fetch!(found, &1)) end)
+    rows |> Map.new(&{&1.id, &1}) |> then(fn found -> Enum.map(ids, &Map.fetch!(found, &1)) end)
   end
 
-  def lock_task!(id),
-    do:
-      Repo.one(from(task in Task, where: task.id == ^id, lock: "FOR UPDATE")) ||
-        rollback(:not_found)
+  def lock_task!(id), do: Repo.one(from(task in Task, where: task.id == ^id, lock: "FOR UPDATE")) || rollback(:not_found)
 
-  def lock_run!(id),
-    do:
-      Repo.one(from(run in Run, where: run.id == ^id, lock: "FOR UPDATE")) || rollback(:not_found)
+  def lock_run!(id), do: Repo.one(from(run in Run, where: run.id == ^id, lock: "FOR UPDATE")) || rollback(:not_found)
 
   def lock_decision!(id),
-    do:
-      Repo.one(from(decision in GoalDecision, where: decision.id == ^id, lock: "FOR UPDATE")) ||
-        rollback(:not_found)
+    do: Repo.one(from(decision in GoalDecision, where: decision.id == ^id, lock: "FOR UPDATE")) || rollback(:not_found)
 
   def current_revision!(goal) do
     Repo.one(
@@ -247,8 +240,7 @@ defmodule SymmetryControl.Goals.Internal do
 
   def parse_subject(_), do: {:error, :invalid_subject}
 
-  defp valid_commit?(value),
-    do: is_binary(value) and Regex.match?(~r/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/, value)
+  defp valid_commit?(value), do: is_binary(value) and Regex.match?(~r/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/, value)
 
   defp required_sha256(map, key) do
     case value(map, key) do
@@ -272,7 +264,7 @@ defmodule SymmetryControl.Goals.Internal do
     end
   end
 
-  def required_uuid!(map, key), do: required_uuid(map, key) |> unwrap!()
+  def required_uuid!(map, key), do: map |> required_uuid(key) |> unwrap!()
 
   def optional_uuid(map, key) do
     case value(map, key) do
@@ -287,12 +279,11 @@ defmodule SymmetryControl.Goals.Internal do
     end
   end
 
-  def optional_uuid!(map, key), do: value(map, key) |> optional_uuid!()
+  def optional_uuid!(map, key), do: map |> value(key) |> optional_uuid!()
 
   def optional_uuid!(nil), do: nil
 
-  def optional_uuid!(value) when is_binary(value),
-    do: if(valid_uuid?(value), do: value, else: rollback(:invalid_request))
+  def optional_uuid!(value) when is_binary(value), do: if(valid_uuid?(value), do: value, else: rollback(:invalid_request))
 
   def optional_uuid!(_), do: rollback(:invalid_request)
 
@@ -312,7 +303,7 @@ defmodule SymmetryControl.Goals.Internal do
     end
   end
 
-  def required_string!(map, key), do: required_string(map, key) |> unwrap!()
+  def required_string!(map, key), do: map |> required_string(key) |> unwrap!()
 
   def required_map(map, key) do
     case value(map, key) do
@@ -321,9 +312,9 @@ defmodule SymmetryControl.Goals.Internal do
     end
   end
 
-  def required_map!(map, key), do: required_map(map, key) |> unwrap!()
+  def required_map!(map, key), do: map |> required_map(key) |> unwrap!()
 
-  def required_list!(map, key), do: optional_list(map, key, :missing) |> unwrap!()
+  def required_list!(map, key), do: map |> optional_list(key, :missing) |> unwrap!()
 
   def optional_list(map, key, default) do
     case value(map, key, default) do
@@ -361,8 +352,7 @@ defmodule SymmetryControl.Goals.Internal do
 
   def parse_digest(_), do: {:error, :invalid_request}
 
-  def is_short_identifier?(value),
-    do: is_binary(value) and Regex.match?(~r/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/, value)
+  def is_short_identifier?(value), do: is_binary(value) and Regex.match?(~r/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/, value)
 
   def policy_integer(policy, key, default \\ nil) do
     case value(policy || %{}, key, default) do
@@ -390,7 +380,8 @@ defmodule SymmetryControl.Goals.Internal do
   # nibbles (not RFC 9562 name hashing); changing these bytes changes persisted keys.
   def mutation_id(prefix, parts) do
     hex =
-      :crypto.hash(:sha256, prefix <> ":" <> Enum.join(parts, ":"))
+      :sha256
+      |> :crypto.hash(prefix <> ":" <> Enum.join(parts, ":"))
       |> Base.encode16(case: :lower)
 
     String.slice(hex, 0, 8) <>
@@ -432,8 +423,7 @@ defmodule SymmetryControl.Goals.Internal do
     Map.get(map, key, Map.get(map, to_string(key), default))
   end
 
-  def has_key?(map, key) when is_map(map),
-    do: Map.has_key?(map, key) or Map.has_key?(map, to_string(key))
+  def has_key?(map, key) when is_map(map), do: Map.has_key?(map, key) or Map.has_key?(map, to_string(key))
 
   def normalize_map(map) when is_map(map),
     do: Map.new(map, fn {key, value} -> {to_string(key), normalize_value(value)} end)
@@ -454,11 +444,9 @@ defmodule SymmetryControl.Goals.Internal do
       else: changeset
   end
 
-  def stamp_update(changeset, current),
-    do: Changeset.force_change(changeset, :updated_at, current)
+  def stamp_update(changeset, current), do: Changeset.force_change(changeset, :updated_at, current)
 
-  def now(opts),
-    do: Keyword.get(opts, :now, DateTime.utc_now() |> DateTime.truncate(:microsecond))
+  def now(opts), do: Keyword.get(opts, :now, DateTime.truncate(DateTime.utc_now(), :microsecond))
 
   def map_has_key?(map, key) when is_map(map) do
     Map.has_key?(map, key) or
@@ -467,8 +455,7 @@ defmodule SymmetryControl.Goals.Internal do
       end)
   end
 
-  def valid_long_text?(value),
-    do: is_binary(value) and String.length(value) in 1..16_384
+  def valid_long_text?(value), do: is_binary(value) and String.length(value) in 1..16_384
 
   def unwrap!({:ok, value}), do: value
   def unwrap!({:error, reason}), do: rollback(reason)

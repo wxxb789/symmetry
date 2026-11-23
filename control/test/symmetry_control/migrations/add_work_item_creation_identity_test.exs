@@ -119,7 +119,7 @@ defmodule SymmetryControl.Migrations.AddWorkItemCreationIdentityMigrationTest do
       [
         project_id,
         "creation-identity-project-#{System.unique_integer([:positive])}",
-        "CI#{System.unique_integer([:positive])}" |> String.slice(0, 8)
+        String.slice("CI#{System.unique_integer([:positive])}", 0, 8)
       ]
     )
 

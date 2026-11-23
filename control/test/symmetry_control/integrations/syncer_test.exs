@@ -3,6 +3,7 @@ defmodule SymmetryControl.Integrations.SyncerTest do
 
   import SymmetryControl.IntegrationFixtures, only: [tracked_resource!: 1]
 
+  alias SymmetryControl.Integrations.ProviderStub
   alias SymmetryControl.Integrations.Syncer
   alias SymmetryControl.Repo
   alias SymmetryControl.TestEnv
@@ -10,8 +11,8 @@ defmodule SymmetryControl.Integrations.SyncerTest do
 
   setup do
     TestEnv.put!(:integration_providers,
-      github: SymmetryControl.Integrations.ProviderStub,
-      azure_devops: SymmetryControl.Integrations.ProviderStub
+      github: ProviderStub,
+      azure_devops: ProviderStub
     )
 
     :ok
@@ -28,9 +29,7 @@ defmodule SymmetryControl.Integrations.SyncerTest do
 
     name = Module.concat(__MODULE__, "Worker#{System.unique_integer([:positive])}")
 
-    start_supervised!(
-      {Syncer, name: name, initial_delay_ms: 0, interval_ms: :timer.hours(1), notify: self()}
-    )
+    start_supervised!({Syncer, name: name, initial_delay_ms: 0, interval_ms: to_timeout(hour: 1), notify: self()})
 
     assert_receive {:integration_sync_complete, %{synced: 1, failed: 0}}, 1_000
     assert Repo.get!(ProjectResource, resource.id).sync_status == "synced"

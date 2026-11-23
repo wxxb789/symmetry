@@ -1,12 +1,15 @@
 defmodule SymmetryControl.Orchestration.ClaimsTest do
   use SymmetryControl.OrchestrationCase, async: false
 
+  alias SymmetryControl.Goals.Goal
   alias SymmetryControl.Orchestration
   alias SymmetryControl.Orchestration.Claims
-  alias SymmetryControl.Goals.Goal
-  alias SymmetryControl.Orchestration.{Run, Runtime, Task}
+  alias SymmetryControl.Orchestration.Run
+  alias SymmetryControl.Orchestration.Runtime
+  alias SymmetryControl.Orchestration.Task
   alias SymmetryControl.Repo
   alias SymmetryControl.Workspaces
+
   @now ~U[2026-09-09 09:00:00.000000Z]
 
   test "claim_run claims a legacy run without provider access" do
@@ -284,9 +287,7 @@ defmodule SymmetryControl.Orchestration.ClaimsTest do
       )
 
     assert {:ok, [runtime]} =
-             Orchestration.register_runtimes(machine.id, Ecto.UUID.generate(), [specification],
-               now: @now
-             )
+             Orchestration.register_runtimes(machine.id, Ecto.UUID.generate(), [specification], now: @now)
 
     repository_id = task.input |> Map.fetch!("subject") |> Map.fetch!("resource_id")
 
@@ -346,7 +347,7 @@ defmodule SymmetryControl.Orchestration.ClaimsTest do
       generation: task.attempt_generation,
       state: "assigned",
       assigned_at: @now,
-      assignment_expires_at: DateTime.add(@now, 60, :second)
+      assignment_expires_at: DateTime.shift(@now, minute: 1)
     })
     |> Repo.insert!()
   end

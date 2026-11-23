@@ -1,4 +1,5 @@
 defmodule SymmetryControl.Integrations.InflightMarkerProvider do
+  @moduledoc false
   @behaviour SymmetryControl.Integrations.Provider
 
   alias SymmetryControl.Integrations.ProviderStub
@@ -49,10 +50,13 @@ defmodule SymmetryControl.ResourceSyncInflightMarkerTest do
 
   alias Ecto.Adapters.SQL.Sandbox
   alias SymmetryControl.Integrations
-  alias SymmetryControl.Integrations.{Connection, InflightMarkerProvider, Syncer}
+  alias SymmetryControl.Integrations.Connection
+  alias SymmetryControl.Integrations.InflightMarkerProvider
+  alias SymmetryControl.Integrations.Syncer
   alias SymmetryControl.TestEnv
   alias SymmetryControl.Workspaces
-  alias SymmetryControl.Workspaces.{Project, ProjectResource}
+  alias SymmetryControl.Workspaces.Project
+  alias SymmetryControl.Workspaces.ProjectResource
 
   setup do
     TestEnv.put!(:integration_providers, github: InflightMarkerProvider)
@@ -162,9 +166,7 @@ defmodule SymmetryControl.ResourceSyncInflightMarkerTest do
     name = Module.concat(__MODULE__, "Worker#{System.unique_integer([:positive])}")
 
     syncer =
-      start_supervised!(
-        {Syncer, name: name, initial_delay_ms: 0, interval_ms: :timer.hours(1), notify: self()}
-      )
+      start_supervised!({Syncer, name: name, initial_delay_ms: 0, interval_ms: to_timeout(hour: 1), notify: self()})
 
     await_provider(syncer, resource)
     refute_received {:integration_sync_complete, _summary}
@@ -186,7 +188,7 @@ defmodule SymmetryControl.ResourceSyncInflightMarkerTest do
     assert_receive {:provider_authenticating, ^pid, false}, 5_000
     marker = Repo.get!(ProjectResource, resource.id)
     assert marker.sync_status == "syncing"
-    assert DateTime.compare(marker.last_checked_at, resource.last_checked_at) == :gt
+    assert DateTime.after?(marker.last_checked_at, resource.last_checked_at)
 
     send(pid, :authenticate)
     assert_receive {:provider_waiting, ^pid, snapshot, false}, 5_000

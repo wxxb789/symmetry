@@ -2,9 +2,17 @@ defmodule SymmetryControl.GoalsSchemaTest do
   use ExUnit.Case, async: true
 
   alias SymmetryControl.Goals
-  alias SymmetryControl.Goals.{ContextSnapshot, Goal, GoalDecision, GoalEvent, GoalRevision}
-  alias SymmetryControl.Goals.{HarnessSession, RunEvidence, RunUsage, WorkOutcome}
-  alias SymmetryControl.Orchestration.{Runtime, Task}
+  alias SymmetryControl.Goals.ContextSnapshot
+  alias SymmetryControl.Goals.Goal
+  alias SymmetryControl.Goals.GoalDecision
+  alias SymmetryControl.Goals.GoalEvent
+  alias SymmetryControl.Goals.GoalRevision
+  alias SymmetryControl.Goals.HarnessSession
+  alias SymmetryControl.Goals.RunEvidence
+  alias SymmetryControl.Goals.RunUsage
+  alias SymmetryControl.Goals.WorkOutcome
+  alias SymmetryControl.Orchestration.Runtime
+  alias SymmetryControl.Orchestration.Task
   alias SymmetryControl.Workspaces.WorkItem
 
   @id "00000000-0000-0000-0000-000000000001"
@@ -34,7 +42,7 @@ defmodule SymmetryControl.GoalsSchemaTest do
     changeset =
       Task.changeset(
         %Task{},
-        Map.merge(task_attrs(), %{work_item_id: @id})
+        Map.put(task_attrs(), :work_item_id, @id)
       )
 
     assert changeset.valid?
@@ -43,7 +51,7 @@ defmodule SymmetryControl.GoalsSchemaTest do
   end
 
   test "Goal Task membership fields are all present except planning WorkItem ownership" do
-    partial = Task.changeset(%Task{}, Map.merge(task_attrs(), %{goal_id: @id}))
+    partial = Task.changeset(%Task{}, Map.put(task_attrs(), :goal_id, @id))
     assert "must be present for a Goal task" in errors_on(partial).work_item_id
     assert "must be present for a Goal task" in errors_on(partial).max_run_attempts
     assert "must be present for a Goal task" in errors_on(partial).allowed_runtime_ids
@@ -56,7 +64,7 @@ defmodule SymmetryControl.GoalsSchemaTest do
         %Task{},
         Map.merge(
           task_attrs(),
-          Map.merge(goal_task_attrs(), %{allowed_runtime_ids: ["not-a-uuid"]})
+          Map.put(goal_task_attrs(), :allowed_runtime_ids, ["not-a-uuid"])
         )
       )
 
@@ -65,7 +73,7 @@ defmodule SymmetryControl.GoalsSchemaTest do
     duplicate_runtime_policy =
       Task.changeset(
         %Task{},
-        Map.merge(task_attrs(), Map.merge(goal_task_attrs(), %{allowed_runtime_ids: [@id, @id]}))
+        Map.merge(task_attrs(), Map.put(goal_task_attrs(), :allowed_runtime_ids, [@id, @id]))
       )
 
     assert "must not contain duplicate UUIDs" in errors_on(duplicate_runtime_policy).allowed_runtime_ids
@@ -75,23 +83,21 @@ defmodule SymmetryControl.GoalsSchemaTest do
         %Task{},
         Map.merge(
           task_attrs(),
-          Map.merge(goal_task_attrs(), %{
-            allowed_runtime_ids: Enum.map(1..257, fn _ -> Ecto.UUID.generate() end)
-          })
+          Map.put(goal_task_attrs(), :allowed_runtime_ids, Enum.map(1..257, fn _ -> Ecto.UUID.generate() end))
         )
       )
 
     assert "must contain at most 256 UUIDs" in errors_on(oversized_runtime_policy).allowed_runtime_ids
 
     goal_less_runtime_policy =
-      Task.changeset(%Task{}, Map.merge(task_attrs(), %{allowed_runtime_ids: []}))
+      Task.changeset(%Task{}, Map.put(task_attrs(), :allowed_runtime_ids, []))
 
     assert "must be absent without Goal membership" in errors_on(goal_less_runtime_policy).allowed_runtime_ids
 
     missing_producer =
       Task.changeset(
         %Task{},
-        Map.merge(task_attrs(), Map.merge(goal_task_attrs(), %{purpose: "validate"}))
+        Map.merge(task_attrs(), Map.put(goal_task_attrs(), :purpose, "validate"))
       )
 
     assert "must be present for a validation task" in errors_on(missing_producer).validation_of_task_id
@@ -121,7 +127,7 @@ defmodule SymmetryControl.GoalsSchemaTest do
     planning_with_work_item =
       Task.changeset(
         %Task{},
-        Map.merge(task_attrs(), Map.merge(goal_task_attrs(), %{purpose: "plan"}))
+        Map.merge(task_attrs(), Map.put(goal_task_attrs(), :purpose, "plan"))
       )
 
     assert "must be absent for a planning task" in errors_on(planning_with_work_item).work_item_id
@@ -138,7 +144,7 @@ defmodule SymmetryControl.GoalsSchemaTest do
     assert "must be present for a Goal task" in errors_on(nonplanning_without_work_item).work_item_id
 
     goal_less_planning_task =
-      Task.changeset(%Task{}, Map.merge(task_attrs(), %{purpose: "plan"}))
+      Task.changeset(%Task{}, Map.put(task_attrs(), :purpose, "plan"))
 
     assert "requires Goal membership" in errors_on(goal_less_planning_task).purpose
   end
@@ -161,7 +167,7 @@ defmodule SymmetryControl.GoalsSchemaTest do
     legacy = Runtime.changeset(%Runtime{}, runtime_attrs())
     assert legacy.valid?
 
-    partial = Runtime.changeset(%Runtime{}, Map.merge(runtime_attrs(), %{harness_kind: "codex"}))
+    partial = Runtime.changeset(%Runtime{}, Map.put(runtime_attrs(), :harness_kind, "codex"))
     assert "must be present with adapter metadata" in errors_on(partial).adapter_version
 
     native =
@@ -304,8 +310,7 @@ defmodule SymmetryControl.GoalsSchemaTest do
   test "append-only Goal records reject program-level mutation" do
     for {schema, immutable_changeset, change} <- [
           {%GoalRevision{}, &GoalRevision.immutable_changeset/2, %{objective: "changed"}},
-          {%ContextSnapshot{}, &ContextSnapshot.immutable_changeset/2,
-           %{payload: %{"changed" => true}}},
+          {%ContextSnapshot{}, &ContextSnapshot.immutable_changeset/2, %{payload: %{"changed" => true}}},
           {%RunEvidence{}, &RunEvidence.immutable_changeset/2, %{verdict: "failed"}},
           {%WorkOutcome{}, &WorkOutcome.immutable_changeset/2, %{reason: "changed"}},
           {%GoalEvent{}, &GoalEvent.immutable_changeset/2, %{kind: "changed"}},
@@ -541,21 +546,15 @@ defmodule SymmetryControl.GoalsSchemaTest do
 
     missing_key = Map.delete(execution_policy(), "hard_cost_limit_required")
 
-    assert "must contain exactly the v1 execution policy keys" in errors_on(
-             revision_changeset(missing_key)
-           ).execution_policy
+    assert "must contain exactly the v1 execution policy keys" in errors_on(revision_changeset(missing_key)).execution_policy
 
     extra_key = Map.put(execution_policy(), "unbounded_execution", true)
 
-    assert "must contain exactly the v1 execution policy keys" in errors_on(
-             revision_changeset(extra_key)
-           ).execution_policy
+    assert "must contain exactly the v1 execution policy keys" in errors_on(revision_changeset(extra_key)).execution_policy
 
     automatic_without_budget = Map.put(execution_policy(), "automatic_execution", true)
 
-    assert "automatic execution requires a total budget" in errors_on(
-             revision_changeset(automatic_without_budget)
-           ).execution_policy
+    assert "automatic execution requires a total budget" in errors_on(revision_changeset(automatic_without_budget)).execution_policy
 
     manual_strict =
       execution_policy()

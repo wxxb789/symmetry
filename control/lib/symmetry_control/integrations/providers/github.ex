@@ -14,16 +14,13 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
   def authenticate(connection), do: Support.auth().github_headers(connection)
 
   @impl true
-  def validate_resource_reference(connection, kind, reference)
-      when kind in ["repository", "work_tracking", "ci"] do
-    with {:ok, {owner, _repository}} <- repository_parts(reference),
-         :ok <- require_account(connection, owner) do
-      :ok
+  def validate_resource_reference(connection, kind, reference) when kind in ["repository", "work_tracking", "ci"] do
+    with {:ok, {owner, _repository}} <- repository_parts(reference) do
+      require_account(connection, owner)
     end
   end
 
-  def validate_resource_reference(_connection, _kind, _reference),
-    do: {:error, :invalid_request}
+  def validate_resource_reference(_connection, _kind, _reference), do: {:error, :invalid_request}
 
   @doc false
   def validate_pull_request_url(_connection, %{kind: "repository", external_ref: reference}, url) do
@@ -35,8 +32,7 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
     end
   end
 
-  def validate_pull_request_url(_connection, _resource, _url),
-    do: {:error, :invalid_pull_request_url}
+  def validate_pull_request_url(_connection, _resource, _url), do: {:error, :invalid_pull_request_url}
 
   def check(connection), do: Support.check(__MODULE__, connection)
 
@@ -55,8 +51,7 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
     end
   end
 
-  def sync_resource(connection, resource),
-    do: Support.sync_resource(__MODULE__, connection, resource)
+  def sync_resource(connection, resource), do: Support.sync_resource(__MODULE__, connection, resource)
 
   @impl true
   def sync_resource(connection, %{kind: "work_tracking", external_ref: repository}, headers) do
@@ -123,13 +118,11 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
     end
   end
 
-  def sync_resource(_connection, _resource, _headers),
-    do: {:error, :unsupported_resource}
+  def sync_resource(_connection, _resource, _headers), do: {:error, :unsupported_resource}
 
   @impl true
   def execute(connection, %{kind: "repository"} = resource, work_item, operation, input, headers)
-      when operation in ["change.upsert", "change.update"] and is_map(work_item) and
-             is_map(input) do
+      when operation in ["change.upsert", "change.update"] and is_map(work_item) and is_map(input) do
     with true <- "changes" in connection.capabilities || {:error, :capability_not_granted},
          {:ok, {owner, name}} <- repository_parts(resource.external_ref),
          :ok <- require_account(connection, owner),
@@ -138,8 +131,7 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
     end
   end
 
-  def execute(_connection, _resource, _work_item, _operation, _input, _headers),
-    do: {:error, :invalid_request}
+  def execute(_connection, _resource, _work_item, _operation, _input, _headers), do: {:error, :invalid_request}
 
   # This receipt is persisted with the intent before any provider request. Never
   # reconstruct a missing receipt from today's repository or task presentation.
@@ -228,9 +220,7 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
   end
 
   defp valid_action_target?("change.update", input, %{"kind" => "pull_request"} = target),
-    do:
-      is_binary(target["pull_request_url"]) and
-        input["pull_request_url"] == target["pull_request_url"]
+    do: is_binary(target["pull_request_url"]) and input["pull_request_url"] == target["pull_request_url"]
 
   defp valid_action_target?("change.update", _input, %{"kind" => "branches"} = target) do
     match?({:ok, _}, ChangeAction.branch(target, "source_branch")) and
@@ -279,18 +269,11 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
   end
 
   defp repository_identity?(repository, binding) when is_map(repository),
-    do:
-      repository["id"] == binding["repository"]["id"] and
-        repository["node_id"] == binding["repository"]["node_id"]
+    do: repository["id"] == binding["repository"]["id"] and repository["node_id"] == binding["repository"]["node_id"]
 
   defp repository_identity?(_repository, _binding), do: false
 
-  defp verify_branch_head(
-         owner,
-         name,
-         %{"target" => %{"kind" => "branches"} = target} = binding,
-         headers
-       ) do
+  defp verify_branch_head(owner, name, %{"target" => %{"kind" => "branches"} = target} = binding, headers) do
     with {:ok, ref} <-
            get(
              "/repos/#{Support.segment(owner)}/#{Support.segment(name)}/git/ref/heads/#{Support.segment(target["source_branch"])}",
@@ -304,13 +287,7 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
 
   defp verify_branch_head(_owner, _name, _binding, _headers), do: :ok
 
-  defp bound_pull_request(
-         owner,
-         name,
-         %{"operation" => "change.update", "input" => input},
-         _state,
-         headers
-       ) do
+  defp bound_pull_request(owner, name, %{"operation" => "change.update", "input" => input}, _state, headers) do
     with {:ok, number} <- pull_request_number(input["pull_request_url"], owner, name),
          {:ok, pull_request} <-
            get(
@@ -334,19 +311,22 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
         "per_page" => 2
       })
 
-    with {:ok, entries} when is_list(entries) <-
-           get(
-             "/repos/#{Support.segment(owner)}/#{Support.segment(name)}/pulls?#{query}",
-             headers
-           ) do
-      case entries do
-        [] -> {:ok, nil}
-        [one] -> {:ok, one}
-        _multiple -> {:error, :ambiguous_provider_objects}
-      end
-    else
-      {:error, reason} -> {:error, reason}
-      _invalid -> {:error, :invalid_provider_response}
+    case get(
+           "/repos/#{Support.segment(owner)}/#{Support.segment(name)}/pulls?#{query}",
+           headers
+         ) do
+      {:ok, entries} when is_list(entries) ->
+        case entries do
+          [] -> {:ok, nil}
+          [one] -> {:ok, one}
+          _multiple -> {:error, :ambiguous_provider_objects}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+
+      _invalid ->
+        {:error, :invalid_provider_response}
     end
   end
 
@@ -454,8 +434,7 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
     do: Support.sync_delivery(__MODULE__, connection, resource, work_item)
 
   @impl true
-  def sync_delivery(_connection, _resource, %{pull_request_url: nil}, _headers),
-    do: {:ok, nil}
+  def sync_delivery(_connection, _resource, %{pull_request_url: nil}, _headers), do: {:ok, nil}
 
   def sync_delivery(connection, resource, work_item, headers) do
     with {:ok, {owner, name}} <- repository_parts(resource.external_ref),
@@ -554,8 +533,7 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
 
   defp issues(owner, name, headers), do: issue_page(owner, name, headers, 1, [])
 
-  defp reviews(owner, name, number, headers),
-    do: review_page(owner, name, number, headers, 1, [])
+  defp reviews(owner, name, number, headers), do: review_page(owner, name, number, headers, 1, [])
 
   defp account(account_ref, actor, headers) do
     if is_binary(actor["login"]) and
@@ -641,7 +619,8 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
 
   defp review_status(reviews, pull_request) do
     latest =
-      Enum.reduce(reviews, %{}, fn review, acc ->
+      reviews
+      |> Enum.reduce(%{}, fn review, acc ->
         case {get_in(review, ["user", "login"]), review["state"]} do
           {login, state} when is_binary(login) and state in ["APPROVED", "CHANGES_REQUESTED"] ->
             Map.put(acc, login, state)
@@ -767,16 +746,7 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
     end
   end
 
-  defp maybe_create_pull_request(
-         pull_request,
-         owner,
-         name,
-         _source,
-         _target,
-         title,
-         body,
-         headers
-       )
+  defp maybe_create_pull_request(pull_request, owner, name, _source, _target, title, body, headers)
        when is_map(pull_request) do
     with {:ok, number} <- pull_request_response_number(pull_request, owner, name) do
       request(
@@ -788,16 +758,7 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
     end
   end
 
-  defp replay_after_create_conflict(
-         owner,
-         name,
-         source,
-         target,
-         title,
-         body,
-         headers,
-         create_error
-       ) do
+  defp replay_after_create_conflict(owner, name, source, target, title, body, headers, create_error) do
     case find_pull_request(owner, name, source, target, headers) do
       {:ok, pull_request} when is_map(pull_request) ->
         maybe_create_pull_request(
@@ -817,32 +778,34 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
   end
 
   defp delivery(pull_request, owner, name) when is_map(pull_request) do
-    with {:ok, number} <- pull_request_response_number(pull_request, owner, name) do
-      url = pull_request["html_url"]
+    case pull_request_response_number(pull_request, owner, name) do
+      {:ok, number} ->
+        url = pull_request["html_url"]
 
-      provider_data = %{
-        "pull_request_number" => number,
-        "pull_request_state" => pull_request["state"]
-      }
+        provider_data = %{
+          "pull_request_number" => number,
+          "pull_request_state" => pull_request["state"]
+        }
 
-      provider_data =
-        case get_in(pull_request, ["head", "sha"]) do
-          head_sha when is_binary(head_sha) and head_sha != "" ->
-            Map.put(provider_data, "head_sha", head_sha)
+        provider_data =
+          case get_in(pull_request, ["head", "sha"]) do
+            head_sha when is_binary(head_sha) and head_sha != "" ->
+              Map.put(provider_data, "head_sha", head_sha)
 
-          _missing ->
-            provider_data
-        end
+            _missing ->
+              provider_data
+          end
 
-      {:ok,
-       %{
-         pull_request_url: url,
-         pull_request_state: pull_request_state(pull_request),
-         updated_at: Support.now(),
-         provider_data: provider_data
-       }}
-    else
-      _invalid -> {:error, :invalid_provider_response}
+        {:ok,
+         %{
+           pull_request_url: url,
+           pull_request_state: pull_request_state(pull_request),
+           updated_at: Support.now(),
+           provider_data: provider_data
+         }}
+
+      _invalid ->
+        {:error, :invalid_provider_response}
     end
   end
 

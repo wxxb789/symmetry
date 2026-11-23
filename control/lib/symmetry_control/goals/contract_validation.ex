@@ -104,17 +104,15 @@ defmodule SymmetryControl.Goals.ContractValidation do
     with :ok <- ensure_ex_json_schema(),
          {:ok, schema_root} <- schema_root(opts),
          {:ok, normalized} <- normalize_json_keys(data),
-         :ok <- validate_evidence_batch_schema(normalized, schema_root),
-         :ok <- validate_evidence_batch_semantics(normalized, schema_root) do
-      :ok
+         :ok <- validate_evidence_batch_schema(normalized, schema_root) do
+      validate_evidence_batch_semantics(normalized, schema_root)
     end
   end
 
   def validate_evidence_batch(_data, _opts), do: {:error, :invalid_options}
 
   @spec validate_evidence_batch_response(map(), keyword()) :: validation_result()
-  def validate_evidence_batch_response(data, opts \\ []),
-    do: validate(:evidence_batch_response, data, opts)
+  def validate_evidence_batch_response(data, opts \\ []), do: validate(:evidence_batch_response, data, opts)
 
   @spec validate_evidence_batch_conflict_details(map(), keyword()) :: validation_result()
   def validate_evidence_batch_conflict_details(data, opts \\ []),
@@ -136,8 +134,7 @@ defmodule SymmetryControl.Goals.ContractValidation do
   def validate_chat_read(data, opts \\ []), do: validate(:chat_read, data, opts)
 
   @spec validate_adapter_capabilities(map() | list(), keyword()) :: validation_result()
-  def validate_adapter_capabilities(data, opts \\ []),
-    do: validate(:adapter_capabilities, data, opts)
+  def validate_adapter_capabilities(data, opts \\ []), do: validate(:adapter_capabilities, data, opts)
 
   @doc """
   Validate a repository-relative path addressed by a committed artifact.
@@ -169,8 +166,7 @@ defmodule SymmetryControl.Goals.ContractValidation do
   @spec final_acceptance_authority(map(), map(), map()) ::
           {:ok, :operator | :deterministic} | {:error, term()}
   def final_acceptance_authority(authority_policy, execution_policy, acceptance_contract)
-      when is_map(authority_policy) and is_map(execution_policy) and
-             is_map(acceptance_contract) do
+      when is_map(authority_policy) and is_map(execution_policy) and is_map(acceptance_contract) do
     predicates = value(acceptance_contract, "predicates")
     final_acceptance = value(execution_policy, "final_acceptance")
 
@@ -320,8 +316,7 @@ defmodule SymmetryControl.Goals.ContractValidation do
     end
   end
 
-  defp materialize_schema_for_kind(envelope, common, _schema_root, _kind),
-    do: {:ok, materialize_schema(envelope, common)}
+  defp materialize_schema_for_kind(envelope, common, _schema_root, _kind), do: {:ok, materialize_schema(envelope, common)}
 
   defp inline_evidence_schema(batch, evidence) do
     definitions =
@@ -342,11 +337,10 @@ defmodule SymmetryControl.Goals.ContractValidation do
     do: Map.put(value, "$ref", "#/definitions/Evidence")
 
   defp rewrite_evidence_schema_ref(value) when is_map(value) do
-    Enum.into(value, %{}, fn {key, child} -> {key, rewrite_evidence_schema_ref(child)} end)
+    Map.new(value, fn {key, child} -> {key, rewrite_evidence_schema_ref(child)} end)
   end
 
-  defp rewrite_evidence_schema_ref(value) when is_list(value),
-    do: Enum.map(value, &rewrite_evidence_schema_ref/1)
+  defp rewrite_evidence_schema_ref(value) when is_list(value), do: Enum.map(value, &rewrite_evidence_schema_ref/1)
 
   defp rewrite_evidence_schema_ref(value), do: value
 
@@ -366,8 +360,7 @@ defmodule SymmetryControl.Goals.ContractValidation do
 
   defp ensure_draft7(%{"$schema" => @draft7}, _filename), do: :ok
 
-  defp ensure_draft7(%{"$schema" => version}, filename),
-    do: {:error, {:unsupported_schema_dialect, filename, version}}
+  defp ensure_draft7(%{"$schema" => version}, filename), do: {:error, {:unsupported_schema_dialect, filename, version}}
 
   defp ensure_draft7(_schema, filename), do: {:error, {:schema_dialect_missing, filename}}
 
@@ -393,8 +386,7 @@ defmodule SymmetryControl.Goals.ContractValidation do
   defp external_ref(value) when is_list(value), do: Enum.find_value(value, &external_ref/1)
   defp external_ref(_value), do: nil
 
-  defp external_ref_pair({"$ref", ref}) when is_binary(ref),
-    do: if(String.starts_with?(ref, "#"), do: nil, else: ref)
+  defp external_ref_pair({"$ref", ref}) when is_binary(ref), do: if(String.starts_with?(ref, "#"), do: nil, else: ref)
 
   defp external_ref_pair({_key, value}), do: external_ref(value)
 
@@ -411,7 +403,7 @@ defmodule SymmetryControl.Goals.ContractValidation do
   end
 
   defp rewrite_common_refs(value) when is_map(value) do
-    Enum.into(value, %{}, fn
+    Map.new(value, fn
       {"$ref", "common.schema.json#/definitions/" <> definition} ->
         {"$ref", "#/definitions/" <> definition}
 
@@ -427,7 +419,7 @@ defmodule SymmetryControl.Goals.ContractValidation do
   # escape. Keep the canonical document untouched and adapt only the local
   # validator copy to the equivalent PCRE2 `\\x{0}` form.
   defp rewrite_pcre2_pattern_escapes(value) when is_map(value) do
-    Enum.into(value, %{}, fn
+    Map.new(value, fn
       {"pattern", pattern} when is_binary(pattern) ->
         {"pattern", String.replace(pattern, "\\u0000", "\\x{0}")}
 
@@ -436,46 +428,39 @@ defmodule SymmetryControl.Goals.ContractValidation do
     end)
   end
 
-  defp rewrite_pcre2_pattern_escapes(value) when is_list(value),
-    do: Enum.map(value, &rewrite_pcre2_pattern_escapes/1)
+  defp rewrite_pcre2_pattern_escapes(value) when is_list(value), do: Enum.map(value, &rewrite_pcre2_pattern_escapes/1)
 
   defp rewrite_pcre2_pattern_escapes(value), do: value
 
   defp resolve_schema(schema) do
-    try do
-      {:ok, apply(ExJsonSchema.Schema, :resolve, [schema])}
-    rescue
-      exception -> {:error, {:schema_resolution_failed, exception}}
-    catch
-      kind, reason -> {:error, {:schema_resolution_failed, {kind, reason}}}
-    end
+    {:ok, apply(ExJsonSchema.Schema, :resolve, [schema])}
+  rescue
+    exception -> {:error, {:schema_resolution_failed, exception}}
+  catch
+    kind, reason -> {:error, {:schema_resolution_failed, {kind, reason}}}
   end
 
   defp validate_resolved_schema(schema, data) do
-    try do
-      case apply(ExJsonSchema.Validator, :validate, [schema, data, [error_formatter: false]]) do
-        :ok -> :ok
-        {:error, errors} -> {:error, {:validation_failed, errors}}
-        other -> {:error, {:validation_failed, other}}
-      end
-    rescue
-      exception -> {:error, {:validation_failed, exception}}
-    catch
-      kind, reason -> {:error, {:validation_failed, {kind, reason}}}
+    case apply(ExJsonSchema.Validator, :validate, [schema, data, [error_formatter: false]]) do
+      :ok -> :ok
+      {:error, errors} -> {:error, {:validation_failed, errors}}
+      other -> {:error, {:validation_failed, other}}
     end
+  rescue
+    exception -> {:error, {:validation_failed, exception}}
+  catch
+    kind, reason -> {:error, {:validation_failed, {kind, reason}}}
   end
 
   defp validate_semantics(:goal_revision, revision) do
-    with :ok <- validate_acceptance_predicate_ids(revision["acceptance_contract"]),
-         :ok <- validate_goal_revision_semantics(revision) do
-      :ok
+    with :ok <- validate_acceptance_predicate_ids(revision["acceptance_contract"]) do
+      validate_goal_revision_semantics(revision)
     end
   end
 
   defp validate_semantics(:goal_create, %{"initial_revision" => revision}) do
-    with :ok <- validate_acceptance_predicate_ids(revision["acceptance_contract"]),
-         :ok <- validate_goal_revision_semantics(revision) do
-      :ok
+    with :ok <- validate_acceptance_predicate_ids(revision["acceptance_contract"]) do
+      validate_goal_revision_semantics(revision)
     end
   end
 
@@ -495,15 +480,13 @@ defmodule SymmetryControl.Goals.ContractValidation do
   defp validate_semantics(:goal_command, command) do
     case {command["kind"], command["payload"]} do
       {"amend", %{"revision_contract" => revision}} ->
-        with :ok <- validate_acceptance_predicate_ids(revision["acceptance_contract"]),
-             :ok <- validate_goal_revision_semantics(revision) do
-          :ok
+        with :ok <- validate_acceptance_predicate_ids(revision["acceptance_contract"]) do
+          validate_goal_revision_semantics(revision)
         end
 
       {"accept_plan", %{"proposal" => proposal, "proposal_hash" => proposal_hash}} ->
-        with :ok <- validate_semantics(:plan_proposal, proposal),
-             :ok <- validate_plan_proposal_hash(proposal, proposal_hash) do
-          :ok
+        with :ok <- validate_semantics(:plan_proposal, proposal) do
+          validate_plan_proposal_hash(proposal, proposal_hash)
         end
 
       {"request_decision", %{"kind" => "plan", "proposal" => proposal}} ->
@@ -545,33 +528,24 @@ defmodule SymmetryControl.Goals.ContractValidation do
     end
   end
 
-  defp validate_semantics(:task_result, task_result),
-    do: validate_task_result_semantics(task_result)
+  defp validate_semantics(:task_result, task_result), do: validate_task_result_semantics(task_result)
 
-  defp validate_semantics(:evidence, evidence),
-    do: validate_evidence_semantics(evidence)
+  defp validate_semantics(:evidence, evidence), do: validate_evidence_semantics(evidence)
 
-  defp validate_semantics(:usage, usage),
-    do: validate_usage_semantics(usage)
+  defp validate_semantics(:usage, usage), do: validate_usage_semantics(usage)
 
-  defp validate_semantics(:decision, decision),
-    do: validate_decision_semantics(decision)
+  defp validate_semantics(:decision, decision), do: validate_decision_semantics(decision)
 
-  defp validate_semantics(:evidence_batch_response, response),
-    do: validate_evidence_batch_response_semantics(response)
+  defp validate_semantics(:evidence_batch_response, response), do: validate_evidence_batch_response_semantics(response)
 
   defp validate_semantics(_kind, _data), do: :ok
 
-  defp validate_evidence_batch_response_semantics(%{
-         "evidence_batch" => %{
-           "run_id" => run_id,
-           "receipts" => receipts
-         }
-       })
+  defp validate_evidence_batch_response_semantics(%{"evidence_batch" => %{"run_id" => run_id, "receipts" => receipts}})
        when is_binary(run_id) and is_list(receipts) do
-    case Enum.all?(receipts, &(Map.get(&1, "run_id") == run_id)) do
-      true -> :ok
-      false -> {:error, :evidence_batch_response_run_id_mismatch}
+    if Enum.all?(receipts, &(Map.get(&1, "run_id") == run_id)) do
+      :ok
+    else
+      {:error, :evidence_batch_response_run_id_mismatch}
     end
   end
 
@@ -600,9 +574,8 @@ defmodule SymmetryControl.Goals.ContractValidation do
       when is_binary(run_id) and is_list(items) and items != [] and length(items) <= 256 ->
         with :ok <- validate_batch_envelope_keys(batch),
              :ok <- validate_batch_uuid(run_id),
-             :ok <- validate_batch_keys(items),
-             :ok <- validate_batch_items(items, run_id, schema_root) do
-          :ok
+             :ok <- validate_batch_keys(items) do
+          validate_batch_items(items, run_id, schema_root)
         end
 
       _ ->
@@ -610,8 +583,7 @@ defmodule SymmetryControl.Goals.ContractValidation do
     end
   end
 
-  defp validate_evidence_batch_semantics(_batch, _schema_root),
-    do: {:error, :invalid_evidence_batch}
+  defp validate_evidence_batch_semantics(_batch, _schema_root), do: {:error, :invalid_evidence_batch}
 
   defp validate_batch_uuid(value) do
     case Ecto.UUID.cast(value) do
@@ -621,35 +593,35 @@ defmodule SymmetryControl.Goals.ContractValidation do
   end
 
   defp validate_batch_keys(evidence) do
-    cond do
-      Enum.any?(evidence, &(not is_map(&1))) ->
-        {:error, :invalid_evidence_batch_item}
+    if Enum.any?(evidence, &(not is_map(&1))) do
+      {:error, :invalid_evidence_batch_item}
+    else
+      keys = Enum.map(evidence, &Map.get(&1, "evidence_key"))
+      ids = Enum.map(evidence, &Map.get(&1, "evidence_id"))
 
-      true ->
-        keys = Enum.map(evidence, &Map.get(&1, "evidence_key"))
-        ids = Enum.map(evidence, &Map.get(&1, "evidence_id"))
+      cond do
+        Enum.any?(keys, &(not is_binary(&1))) ->
+          {:error, :invalid_evidence_batch_item}
 
-        cond do
-          Enum.any?(keys, &(not is_binary(&1))) ->
-            {:error, :invalid_evidence_batch_item}
+        Enum.uniq(keys) != keys ->
+          {:error, :duplicate_evidence_key}
 
-          Enum.uniq(keys) != keys ->
-            {:error, :duplicate_evidence_key}
+        Enum.any?(ids, &(not is_binary(&1))) ->
+          {:error, :invalid_evidence_batch_item}
 
-          Enum.any?(ids, &(not is_binary(&1))) ->
-            {:error, :invalid_evidence_batch_item}
+        Enum.uniq(ids) != ids ->
+          {:error, :evidence_batch_duplicate_id}
 
-          Enum.uniq(ids) != ids ->
-            {:error, :evidence_batch_duplicate_id}
-
-          true ->
-            :ok
-        end
+        true ->
+          :ok
+      end
     end
   end
 
   defp validate_batch_envelope_keys(batch) do
-    Enum.all?(Map.keys(batch), fn
+    batch
+    |> Map.keys()
+    |> Enum.all?(fn
       key when is_atom(key) or is_binary(key) ->
         to_string(key) in ["schema_version", "run_id", "items"]
 
@@ -664,15 +636,13 @@ defmodule SymmetryControl.Goals.ContractValidation do
 
   defp validate_batch_items(evidence, run_id, schema_root) do
     Enum.reduce_while(evidence, :ok, fn item, :ok ->
-      cond do
-        Map.get(item, "run_id") != run_id ->
-          {:halt, {:error, :evidence_batch_run_id_mismatch}}
-
-        true ->
-          case validate_evidence(item, schema_root: schema_root) do
-            :ok -> {:cont, :ok}
-            {:error, reason} -> {:halt, {:error, {:evidence_batch_item_invalid, reason}}}
-          end
+      if Map.get(item, "run_id") == run_id do
+        case validate_evidence(item, schema_root: schema_root) do
+          :ok -> {:cont, :ok}
+          {:error, reason} -> {:halt, {:error, {:evidence_batch_item_invalid, reason}}}
+        end
+      else
+        {:halt, {:error, :evidence_batch_run_id_mismatch}}
       end
     end)
   end
@@ -680,9 +650,8 @@ defmodule SymmetryControl.Goals.ContractValidation do
   defp validate_task_result_semantics(task_result) do
     with :ok <- validate_subject_hash(task_result),
          :ok <- validate_task_result_reason(task_result),
-         :ok <- validate_task_result_blocker(task_result),
-         :ok <- validate_task_result_proposal(task_result) do
-      :ok
+         :ok <- validate_task_result_blocker(task_result) do
+      validate_task_result_proposal(task_result)
     end
   end
 
@@ -692,21 +661,12 @@ defmodule SymmetryControl.Goals.ContractValidation do
   defp validate_task_result_proposal(_task_result), do: :ok
 
   defp validate_task_result_reason(%{"kind" => "failed", "reason" => reason})
-       when reason in @task_result_terminal_failure_reasons,
-       do: :ok
+       when reason in @task_result_terminal_failure_reasons, do: :ok
 
-  defp validate_task_result_reason(%{"kind" => "failed"}),
-    do: {:error, :failed_result_requires_terminal_reason}
+  defp validate_task_result_reason(%{"kind" => "failed"}), do: {:error, :failed_result_requires_terminal_reason}
 
   defp validate_task_result_reason(%{"kind" => kind, "reason" => nil})
-       when kind in [
-              "progress",
-              "candidate_completion",
-              "blocked",
-              "repair_required",
-              "replan_required",
-              "plan_proposed"
-            ],
+       when kind in ["progress", "candidate_completion", "blocked", "repair_required", "replan_required", "plan_proposed"],
        do: :ok
 
   defp validate_task_result_reason(%{"kind" => kind, "reason" => reason}),
@@ -731,26 +691,22 @@ defmodule SymmetryControl.Goals.ContractValidation do
 
   defp validate_provider_change_target(_target), do: :ok
 
-  defp validate_task_result_blocker(%{"kind" => "blocked", "blocker" => blocker})
-       when is_map(blocker),
-       do: :ok
+  defp validate_task_result_blocker(%{"kind" => "blocked", "blocker" => blocker}) when is_map(blocker), do: :ok
 
-  defp validate_task_result_blocker(%{"kind" => "blocked"}),
-    do: {:error, :blocked_result_requires_blocker}
+  defp validate_task_result_blocker(%{"kind" => "blocked"}), do: {:error, :blocked_result_requires_blocker}
 
-  defp validate_task_result_blocker(%{"kind" => kind, "blocker" => nil})
-       when kind != "blocked",
-       do: :ok
+  defp validate_task_result_blocker(%{"kind" => kind, "blocker" => nil}) when kind != "blocked", do: :ok
 
-  defp validate_task_result_blocker(%{"kind" => kind}),
-    do: {:error, {:unexpected_blocker, kind}}
+  defp validate_task_result_blocker(%{"kind" => kind}), do: {:error, {:unexpected_blocker, kind}}
 
   defp validate_task_result_blocker(_task_result), do: :ok
 
   defp validate_context_snapshot_hash(snapshot) do
     expected =
       "sha256:" <>
-        (SymmetryControl.RequestHash.canonical(Map.delete(snapshot, "content_hash"))
+        (snapshot
+         |> Map.delete("content_hash")
+         |> SymmetryControl.RequestHash.canonical()
          |> Base.encode16(case: :lower))
 
     if snapshot["content_hash"] == expected do
@@ -760,19 +716,20 @@ defmodule SymmetryControl.Goals.ContractValidation do
     end
   end
 
-  defp validate_acceptance_predicate_ids(%{"predicates" => predicates})
-       when is_list(predicates) do
+  defp validate_acceptance_predicate_ids(%{"predicates" => predicates}) when is_list(predicates) do
     predicates
     |> Enum.reduce_while({:ok, MapSet.new()}, fn
       %{"id" => id} = predicate, {:ok, seen} when is_binary(id) ->
-        with :ok <- validate_acceptance_predicate_semantics(predicate) do
-          if MapSet.member?(seen, id) do
-            {:halt, {:error, {:duplicate_predicate_id, id}}}
-          else
-            {:cont, {:ok, MapSet.put(seen, id)}}
-          end
-        else
-          {:error, _reason} = error -> {:halt, error}
+        case validate_acceptance_predicate_semantics(predicate) do
+          :ok ->
+            if MapSet.member?(seen, id) do
+              {:halt, {:error, {:duplicate_predicate_id, id}}}
+            else
+              {:cont, {:ok, MapSet.put(seen, id)}}
+            end
+
+          {:error, _reason} = error ->
+            {:halt, error}
         end
 
       _predicate, _result ->
@@ -822,31 +779,22 @@ defmodule SymmetryControl.Goals.ContractValidation do
            ),
          :ok <- ensure_equal(evidence["kind"], source_ref["kind"], :source_ref_kind),
          :ok <- validate_evidence_validator_profile(evidence),
-         :ok <- validate_evidence_verdict(evidence),
-         :ok <-
-           validate_evidence_kind_identity(
-             evidence["kind"],
-             evidence["subject"],
-             source_ref,
-             payload
-           ) do
-      :ok
+         :ok <- validate_evidence_verdict(evidence) do
+      validate_evidence_kind_identity(
+        evidence["kind"],
+        evidence["subject"],
+        source_ref,
+        payload
+      )
     end
   end
 
-  defp validate_evidence_verdict(%{
-         "kind" => "review",
-         "verdict" => verdict,
-         "payload" => payload
-       }),
-       do: ensure_equal(verdict, payload["verdict"], :review_verdict)
+  defp validate_evidence_verdict(%{"kind" => "review", "verdict" => verdict, "payload" => payload}),
+    do: ensure_equal(verdict, payload["verdict"], :review_verdict)
 
   defp validate_evidence_verdict(_evidence), do: :ok
 
-  defp validate_evidence_validator_profile(%{
-         "validator_profile" => validator_profile,
-         "source_ref" => source_ref
-       }) do
+  defp validate_evidence_validator_profile(%{"validator_profile" => validator_profile, "source_ref" => source_ref}) do
     case Map.fetch(source_ref, "validator_profile") do
       {:ok, source_profile} when source_profile != validator_profile ->
         {:error, {:evidence_identity_mismatch, :validator_profile}}
@@ -872,10 +820,8 @@ defmodule SymmetryControl.Goals.ContractValidation do
              subject["resource_id"],
              payload["resource_id"],
              :artifact_subject_resource_id
-           ),
-         :ok <-
-           ensure_equal(subject["commit"], payload["commit"], :artifact_subject_commit) do
-      :ok
+           ) do
+      ensure_equal(subject["commit"], payload["commit"], :artifact_subject_commit)
     end
   end
 
@@ -910,9 +856,8 @@ defmodule SymmetryControl.Goals.ContractValidation do
   defp validate_usage_semantics(_usage), do: :ok
 
   defp validate_decision_semantics(decision) do
-    with :ok <- validate_unique_ids(decision["options"], :duplicate_decision_option_id),
-         :ok <- validate_decision_resolution(decision) do
-      :ok
+    with :ok <- validate_unique_ids(decision["options"], :duplicate_decision_option_id) do
+      validate_decision_resolution(decision)
     end
   end
 
@@ -968,10 +913,7 @@ defmodule SymmetryControl.Goals.ContractValidation do
 
   defp validate_goal_revision_semantics(_revision), do: :ok
 
-  defp validate_admission_provider_scope_purpose(%{
-         "purpose" => purpose,
-         "provider_scope" => provider_scope
-       })
+  defp validate_admission_provider_scope_purpose(%{"purpose" => purpose, "provider_scope" => provider_scope})
        when purpose in ["validate", "plan", "observe", "chat"] and not is_nil(provider_scope),
        do: {:error, :provider_scope_not_allowed_for_purpose}
 
@@ -1014,8 +956,7 @@ defmodule SymmetryControl.Goals.ContractValidation do
       else: {:error, :plan_proposal_hash_mismatch}
   end
 
-  defp validate_plan_proposal_hash(_proposal, _proposal_hash),
-    do: {:error, :plan_proposal_hash_mismatch}
+  defp validate_plan_proposal_hash(_proposal, _proposal_hash), do: {:error, :plan_proposal_hash_mismatch}
 
   defp canonical_plan_proposal(%{"items" => items} = proposal) when is_list(items) do
     Map.put(
@@ -1035,26 +976,19 @@ defmodule SymmetryControl.Goals.ContractValidation do
 
   defp canonical_plan_proposal(proposal), do: proposal
 
-  defp deterministic_predicate?(predicate) when is_map(predicate),
-    do: value(predicate, "kind") in ["check", "artifact"]
+  defp deterministic_predicate?(predicate) when is_map(predicate), do: value(predicate, "kind") in ["check", "artifact"]
 
   defp deterministic_predicate?(_predicate), do: false
 
   defp value(map, key, default \\ nil)
 
-  defp value(map, "predicates", default),
-    do: Map.get(map, "predicates", Map.get(map, :predicates, default))
+  defp value(map, "predicates", default), do: Map.get(map, "predicates", Map.get(map, :predicates, default))
 
   defp value(map, "final_acceptance", default),
     do: Map.get(map, "final_acceptance", Map.get(map, :final_acceptance, default))
 
   defp value(map, "operator_required_for_completion", default),
-    do:
-      Map.get(
-        map,
-        "operator_required_for_completion",
-        Map.get(map, :operator_required_for_completion, default)
-      )
+    do: Map.get(map, "operator_required_for_completion", Map.get(map, :operator_required_for_completion, default))
 
   defp value(map, "kind", default), do: Map.get(map, "kind", Map.get(map, :kind, default))
 
@@ -1063,12 +997,14 @@ defmodule SymmetryControl.Goals.ContractValidation do
 
   defp canonical_sha256(value) do
     "sha256:" <>
-      (SymmetryControl.RequestHash.canonical(value)
+      (value
+       |> SymmetryControl.RequestHash.canonical()
        |> Base.encode16(case: :lower))
   end
 
   defp normalize_json_keys(value) when is_list(value) do
-    Enum.reduce_while(value, {:ok, []}, fn item, {:ok, normalized} ->
+    value
+    |> Enum.reduce_while({:ok, []}, fn item, {:ok, normalized} ->
       case normalize_json_keys(item) do
         {:ok, item} -> {:cont, {:ok, [item | normalized]}}
         {:error, _reason} = error -> {:halt, error}
@@ -1102,8 +1038,7 @@ defmodule SymmetryControl.Goals.ContractValidation do
   defp normalize_json_key(key), do: {:error, {:invalid_json_key, key}}
 
   @doc false
-  def validate_contract(_kind, _document, opts) when not is_list(opts),
-    do: {:error, :invalid_request}
+  def validate_contract(_kind, _document, opts) when not is_list(opts), do: {:error, :invalid_request}
 
   def validate_contract(kind, document, opts) do
     schema_root =

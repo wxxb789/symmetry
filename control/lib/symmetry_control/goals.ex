@@ -125,7 +125,7 @@ defmodule SymmetryControl.Goals do
   @spec fetch_context(Ecto.UUID.t(), Ecto.UUID.t()) :: {:ok, map()} | {:error, term()}
   def fetch_context(goal_id, snapshot_id) when is_binary(goal_id) and is_binary(snapshot_id) do
     with :ok <- valid_uuid(goal_id), :ok <- valid_uuid(snapshot_id) do
-      Repo.transaction(fn ->
+      fn ->
         goal = lock_goal!(goal_id)
         snapshot = lock_context_snapshot!(goal.id, snapshot_id)
         item = if snapshot.work_item_id, do: lock_work_item!(snapshot.work_item_id)
@@ -135,7 +135,8 @@ defmodule SymmetryControl.Goals do
         end
 
         context_wire_envelope!(snapshot, goal, item, nil)
-      end)
+      end
+      |> Repo.transaction()
       |> case do
         {:ok, context} -> {:ok, context}
         {:error, reason} -> {:error, reason}

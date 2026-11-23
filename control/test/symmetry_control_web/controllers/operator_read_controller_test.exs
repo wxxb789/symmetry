@@ -7,7 +7,9 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
   import SymmetryControlWeb.TestConn, only: [assert_error: 3, operator_conn: 1]
 
   alias SymmetryControl.Orchestration
-  alias SymmetryControl.Orchestration.{Command, RunEvent, RunTransition}
+  alias SymmetryControl.Orchestration.Command
+  alias SymmetryControl.Orchestration.RunEvent
+  alias SymmetryControl.Orchestration.RunTransition
   alias SymmetryControl.Repo
   alias SymmetryControlWeb.Protocol
 
@@ -19,18 +21,20 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
     %{machine: machine, runtime: runtime, task: task, run: run} = runtime_fixture()
 
     assert %{"runtimes" => [snapshot]} =
-             operator_conn(conn)
+             conn
+             |> operator_conn()
              |> get("/api/v1/runtimes")
              |> json_response(200)
 
     assert_runtime(snapshot, machine, runtime, task, run)
 
     assert ^snapshot =
-             operator_conn(conn)
+             conn
+             |> operator_conn()
              |> get("/api/v1/runtimes/#{runtime.id}")
              |> json_response(200)
 
-    assert_error(operator_conn(conn) |> get("/api/v1/runtimes/#{uuid()}"), 404, "not_found")
+    conn |> operator_conn() |> get("/api/v1/runtimes/#{uuid()}") |> assert_error(404, "not_found")
   end
 
   test "task resource includes nullable waiting context and stable latest command states", %{
@@ -49,7 +53,8 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
              },
              "latest_command" => nil
            } =
-             operator_conn(conn)
+             conn
+             |> operator_conn()
              |> get("/api/v1/tasks/#{task.id}")
              |> json_response(200)
 
@@ -60,7 +65,8 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
     pending = create_input_command(task.id, %{"branch" => "main"}, "pending")
 
     assert %{"waiting" => waiting, "latest_command" => latest} =
-             operator_conn(conn)
+             conn
+             |> operator_conn()
              |> get("/api/v1/tasks/#{task.id}")
              |> json_response(200)
 
@@ -87,7 +93,8 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
              )
 
     assert %{"latest_command" => acknowledged} =
-             operator_conn(conn)
+             conn
+             |> operator_conn()
              |> get("/api/v1/tasks/#{task.id}")
              |> json_response(200)
 
@@ -99,12 +106,13 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
     assert {:ok, _cancelled, applied} = Orchestration.request_cancel(queued.id, now: @now)
 
     assert %{"waiting" => nil, "latest_command" => applied_command} =
-             operator_conn(conn)
+             conn
+             |> operator_conn()
              |> get("/api/v1/tasks/#{queued.id}")
              |> json_response(200)
 
     assert_command(applied_command, applied, "applied")
-    assert_error(operator_conn(conn) |> get("/api/v1/tasks/#{uuid()}"), 404, "not_found")
+    conn |> operator_conn() |> get("/api/v1/tasks/#{uuid()}") |> assert_error(404, "not_found")
   end
 
   test "task resource exposes queued attempt identity and an applied retry command", %{conn: conn} do
@@ -115,7 +123,8 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
              Orchestration.submit_task(task_attrs(), "retry-read", now: @now)
 
     assert %{"state" => "queued", "run_id" => nil, "generation" => 1} =
-             operator_conn(conn)
+             conn
+             |> operator_conn()
              |> get("/api/v1/tasks/#{task.id}")
              |> json_response(200)
 
@@ -151,7 +160,8 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
              "work" => %{"goal" => "Run tests again"},
              "latest_command" => latest_command
            } =
-             operator_conn(conn)
+             conn
+             |> operator_conn()
              |> get("/api/v1/tasks/#{task.id}")
              |> json_response(200)
 
@@ -164,12 +174,13 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
          conn: conn
        } do
     %{task: task, first_run: first_run, second_run: second_run} = history_fixture()
-    at = DateTime.add(@now, 1, :second)
+    at = DateTime.shift(@now, second: 1)
 
     event_ids = insert_events(first_run, second_run, at, 501)
 
     assert %{"events" => first_page, "next_after" => after_cursor} =
-             operator_conn(conn)
+             conn
+             |> operator_conn()
              |> get("/api/v1/tasks/#{task.id}/events")
              |> json_response(200)
 
@@ -177,10 +188,9 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
     assert is_binary(after_cursor)
 
     assert %{"events" => second_page, "next_after" => nil} =
-             operator_conn(conn)
-             |> get(
-               "/api/v1/tasks/#{task.id}/events?after=#{URI.encode_www_form(after_cursor)}&limit=500"
-             )
+             conn
+             |> operator_conn()
+             |> get("/api/v1/tasks/#{task.id}/events?after=#{URI.encode_www_form(after_cursor)}&limit=500")
              |> json_response(200)
 
     assert Enum.map(first_page ++ second_page, & &1["event_id"]) ==
@@ -196,7 +206,8 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
       insert_transition(first_run, "running", DateTime.add(at, 504, :microsecond))
 
     assert %{"transitions" => first_transition_page, "next_after" => transition_after_cursor} =
-             operator_conn(conn)
+             conn
+             |> operator_conn()
              |> get("/api/v1/tasks/#{task.id}/transitions?limit=2")
              |> json_response(200)
 
@@ -208,10 +219,9 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
     assert is_binary(transition_after_cursor)
 
     assert %{"transitions" => second_transition_page, "next_after" => nil} =
-             operator_conn(conn)
-             |> get(
-               "/api/v1/tasks/#{task.id}/transitions?after=#{URI.encode_www_form(transition_after_cursor)}&limit=2"
-             )
+             conn
+             |> operator_conn()
+             |> get("/api/v1/tasks/#{task.id}/transitions?after=#{URI.encode_www_form(transition_after_cursor)}&limit=2")
              |> json_response(200)
 
     assert Enum.map(second_transition_page, & &1["transition_id"]) == [
@@ -240,7 +250,8 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
       )
 
     assert %{"commands" => first_command_page, "next_after" => command_after_cursor} =
-             operator_conn(conn)
+             conn
+             |> operator_conn()
              |> get("/api/v1/tasks/#{task.id}/commands?limit=2")
              |> json_response(200)
 
@@ -252,10 +263,9 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
     assert is_binary(command_after_cursor)
 
     assert %{"commands" => second_command_page, "next_after" => nil} =
-             operator_conn(conn)
-             |> get(
-               "/api/v1/tasks/#{task.id}/commands?after=#{URI.encode_www_form(command_after_cursor)}&limit=2"
-             )
+             conn
+             |> operator_conn()
+             |> get("/api/v1/tasks/#{task.id}/commands?after=#{URI.encode_www_form(command_after_cursor)}&limit=2")
              |> json_response(200)
 
     assert Enum.map(second_command_page, & &1["command_id"]) == [third_command.id]
@@ -272,7 +282,7 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
           "/api/v1/tasks/#{task.id}/events?limit=invalid",
           "/api/v1/tasks/#{task.id}/events?before=not-allowed"
         ] do
-      assert_error(operator_conn(conn) |> get(path), 400, "invalid_request")
+      conn |> operator_conn() |> get(path) |> assert_error(400, "invalid_request")
     end
   end
 
@@ -295,7 +305,7 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
           {"9223372036854775807", 400},
           {"9223372036854775808", 400}
         ] do
-      response = operator_conn(conn) |> get("#{events}?limit=#{URI.encode_www_form(value)}")
+      response = conn |> operator_conn() |> get("#{events}?limit=#{URI.encode_www_form(value)}")
 
       if status == 200 do
         assert json_response(response, 200)
@@ -317,7 +327,7 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
     conn: conn
   } do
     %{task: task, first_run: first_run, second_run: second_run} = history_fixture()
-    at = DateTime.add(@now, 1, :second)
+    at = DateTime.shift(@now, second: 1)
 
     older_event = insert_event(first_run, 1, at)
     transition = insert_transition(first_run, "running", DateTime.add(at, 1, :microsecond))
@@ -326,7 +336,8 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
       insert_command(task, second_run, "pending", DateTime.add(at, 2, :microsecond))
 
     assert %{"items" => first_page, "next_before" => before_cursor} =
-             operator_conn(conn)
+             conn
+             |> operator_conn()
              |> get("/api/v1/tasks/#{task.id}/timeline?limit=2")
              |> json_response(200)
 
@@ -345,10 +356,9 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
     assert is_binary(before_cursor)
 
     assert %{"items" => second_page, "next_before" => nil} =
-             operator_conn(conn)
-             |> get(
-               "/api/v1/tasks/#{task.id}/timeline?before=#{URI.encode_www_form(before_cursor)}"
-             )
+             conn
+             |> operator_conn()
+             |> get("/api/v1/tasks/#{task.id}/timeline?before=#{URI.encode_www_form(before_cursor)}")
              |> json_response(200)
 
     assert [%{"source" => "event", "data" => %{"event_id" => event_id}}] = second_page
@@ -360,7 +370,7 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
           "/api/v1/tasks/#{task.id}/timeline?limit=501",
           "/api/v1/tasks/#{task.id}/timeline?limit=invalid"
         ] do
-      assert_error(operator_conn(conn) |> get(path), 400, "invalid_request")
+      conn |> operator_conn() |> get(path) |> assert_error(400, "invalid_request")
     end
   end
 
@@ -369,7 +379,7 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
          conn: conn
        } do
     %{task: task, first_run: first_run, second_run: second_run} = history_fixture()
-    at = DateTime.add(@now, 1, :second)
+    at = DateTime.shift(@now, second: 1)
 
     insert_event(first_run, 1, at)
     insert_event(second_run, 2, DateTime.add(at, 1, :microsecond))
@@ -378,17 +388,20 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
     insert_command(task, second_run, "pending", DateTime.add(at, 4, :microsecond))
 
     %{"next_after" => event_cursor} =
-      operator_conn(conn)
+      conn
+      |> operator_conn()
       |> get("/api/v1/tasks/#{task.id}/events?limit=1&ignored=value")
       |> json_response(200)
 
     %{"next_after" => transition_cursor} =
-      operator_conn(conn)
+      conn
+      |> operator_conn()
       |> get("/api/v1/tasks/#{task.id}/transitions?limit=1")
       |> json_response(200)
 
     %{"next_before" => timeline_cursor} =
-      operator_conn(conn)
+      conn
+      |> operator_conn()
       |> get("/api/v1/tasks/#{task.id}/timeline?limit=1")
       |> json_response(200)
 
@@ -440,12 +453,14 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
           "/api/v1/tasks/#{task.id}/events?after=#{URI.encode_www_form(expired_cursor)}",
           "/api/v1/tasks/#{task.id}/timeline?before=#{URI.encode_www_form(transition_cursor)}"
         ] do
-      assert_error(operator_conn(conn) |> get(path), 400, "invalid_request")
+      conn |> operator_conn() |> get(path) |> assert_error(400, "invalid_request")
     end
 
     for surface <- ["timeline", "events", "transitions", "commands"] do
-      assert_error(
-        operator_conn(conn) |> get("/api/v1/tasks/#{uuid()}/#{surface}"),
+      conn
+      |> operator_conn()
+      |> get("/api/v1/tasks/#{uuid()}/#{surface}")
+      |> assert_error(
         404,
         "not_found"
       )
@@ -488,14 +503,12 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
     {:ok, task, :created} = Orchestration.submit_task(task_attrs(), "history-read", now: @now)
     {:ok, first_run} = Orchestration.assign_one(now: @now)
 
-    assert %{expired_runs: 1} = Orchestration.expire(now: DateTime.add(@now, 31, :second))
+    assert %{expired_runs: 1} = Orchestration.expire(now: DateTime.shift(@now, second: 31))
 
     assert {:ok, _} =
-             Orchestration.heartbeat(runtime.id, runtime.connection_epoch, [],
-               now: DateTime.add(@now, 31, :second)
-             )
+             Orchestration.heartbeat(runtime.id, runtime.connection_epoch, [], now: DateTime.shift(@now, second: 31))
 
-    assert {:ok, second_run} = Orchestration.assign_one(now: DateTime.add(@now, 31, :second))
+    assert {:ok, second_run} = Orchestration.assign_one(now: DateTime.shift(@now, second: 31))
     %{task: task, first_run: first_run, second_run: second_run}
   end
 
@@ -546,7 +559,7 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
       sequence: sequence,
       kind: "progress",
       payload: %{"sequence" => sequence},
-      occurred_at: DateTime.add(inserted_at, -1, :second)
+      occurred_at: DateTime.shift(inserted_at, second: -1)
     })
     |> Ecto.Changeset.change(inserted_at: inserted_at, updated_at: inserted_at)
     |> Repo.insert!()
@@ -566,7 +579,7 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
           sequence: sequence,
           kind: "progress",
           payload: %{"sequence" => sequence},
-          occurred_at: DateTime.add(inserted_at, -1, :second),
+          occurred_at: DateTime.shift(inserted_at, second: -1),
           inserted_at: inserted_at,
           updated_at: inserted_at
         }
@@ -663,7 +676,7 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
     assert run_id == command.run_id
     assert generation == command.generation
     assert kind == command.kind
-    assert payload == SymmetryControlWeb.Protocol.normalize_map(command.payload)
+    assert payload == Protocol.normalize_map(command.payload)
     assert is_binary(issued_at)
   end
 end

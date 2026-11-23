@@ -62,16 +62,7 @@ defmodule SymmetryControl.Goals.EventsReceipts do
     end
   end
 
-  def append_event!(
-        goal,
-        mutation_id,
-        kind,
-        actor_ref,
-        body,
-        response,
-        opts,
-        operator_advance
-      ) do
+  def append_event!(goal, mutation_id, kind, actor_ref, body, response, opts, operator_advance) do
     # Goal events are new v1 domain receipts. Their canonical bytes must not
     # depend on the legacy Orchestration request-hash rollout mode.
     request_hash = RequestHash.canonical(body)
@@ -145,7 +136,7 @@ defmodule SymmetryControl.Goals.EventsReceipts do
 
   def enqueue_wakeup!(%Goal{next_wake_at: next_wake_at} = goal, current) do
     job_options =
-      if DateTime.compare(next_wake_at, current) == :gt do
+      if DateTime.after?(next_wake_at, current) do
         # A future external check must survive an already-queued immediate hint.
         # The Goal row remains authoritative; stale wake jobs simply find it not due.
         [scheduled_at: next_wake_at, unique: false]
@@ -208,8 +199,7 @@ defmodule SymmetryControl.Goals.EventsReceipts do
 
   defp encode_receipt_snapshot(receipt), do: normalize_map(receipt)
 
-  defp decode_receipt_snapshot(response, %Goal{} = goal, %GoalEvent{} = event)
-       when is_map(response) do
+  defp decode_receipt_snapshot(response, %Goal{} = goal, %GoalEvent{} = event) when is_map(response) do
     response = normalize_map(response)
     snapshot = value(response, "_receipt_v1")
 
@@ -220,7 +210,7 @@ defmodule SymmetryControl.Goals.EventsReceipts do
            "response" => stored_response
          } <- snapshot,
          true <-
-           Map.keys(snapshot) |> Enum.sort() == ["event", "goal", "response", "schema_version"],
+           snapshot |> Map.keys() |> Enum.sort() == ["event", "goal", "response", "schema_version"],
          :ok <- validate_receipt_goal_snapshot(goal_snapshot, goal),
          :ok <- validate_receipt_event_snapshot(event_snapshot, event),
          true <- is_map(stored_response),
@@ -255,7 +245,7 @@ defmodule SymmetryControl.Goals.EventsReceipts do
 
   defp validate_receipt_goal_snapshot(snapshot, goal) when is_map(snapshot) do
     with true <-
-           Map.keys(snapshot) |> Enum.sort() ==
+           snapshot |> Map.keys() |> Enum.sort() ==
              ["current_revision", "id", "next_wake_at", "state", "updated_at", "version"],
          true <- valid_uuid?(snapshot["id"]) and snapshot["id"] == goal.id,
          true <- snapshot["state"] in ["draft", "active", "paused", "achieved", "cancelled"],
@@ -270,7 +260,7 @@ defmodule SymmetryControl.Goals.EventsReceipts do
   defp validate_receipt_goal_snapshot(_snapshot, _goal), do: :error
 
   defp validate_receipt_event_snapshot(snapshot, event) when is_map(snapshot) do
-    with true <- Map.keys(snapshot) |> Enum.sort() == ["id", "kind", "revision", "sequence"],
+    with true <- snapshot |> Map.keys() |> Enum.sort() == ["id", "kind", "revision", "sequence"],
          true <- valid_uuid?(snapshot["id"]) and snapshot["id"] == event.id,
          true <- is_integer(snapshot["sequence"]) and snapshot["sequence"] > 0,
          true <- snapshot["sequence"] == event.sequence,

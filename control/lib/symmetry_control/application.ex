@@ -10,8 +10,7 @@ defmodule SymmetryControl.Application do
     children =
       [
         SymmetryControl.Repo,
-        {DNSCluster,
-         query: Application.get_env(:symmetry_control, :dns_cluster_query) || :ignore},
+        {DNSCluster, query: Application.get_env(:symmetry_control, :dns_cluster_query) || :ignore},
         {Phoenix.PubSub, name: SymmetryControl.PubSub},
         SymmetryControl.Integrations.ProviderAccess,
         SymmetryControl.Orchestration.Scheduler,

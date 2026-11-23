@@ -6,6 +6,7 @@ defmodule SymmetryControl.Goals.Recovery do
   import SymmetryControl.Goals.Internal,
     only: [lock_goal!: 1, now: 1, rollback: 1, valid_uuid: 1, valid_uuid?: 1]
 
+  alias Ecto.Query.CastError
   alias SymmetryControl.Goals.Goal
   alias SymmetryControl.Goals.GoalBudgetReservation
   alias SymmetryControl.Goals.GoalDecision
@@ -39,7 +40,7 @@ defmodule SymmetryControl.Goals.Recovery do
 
   def recover_pending_unstarted_cancellations(goal_id) when is_binary(goal_id) do
     if valid_uuid(goal_id) == :ok do
-      Repo.transaction(fn ->
+      fn ->
         goal = lock_goal!(goal_id)
 
         task_ids =
@@ -53,7 +54,8 @@ defmodule SymmetryControl.Goals.Recovery do
           )
 
         Enum.filter(task_ids, &recoverable_historical_unstarted_cancellation?(goal, &1))
-      end)
+      end
+      |> Repo.transaction()
       |> case do
         {:ok, task_ids} -> {:ok, task_ids}
         {:error, reason} -> {:error, reason}
@@ -104,7 +106,7 @@ defmodule SymmetryControl.Goals.Recovery do
       {:ok, Repo.all(recoverable)}
     end
   rescue
-    error in [Ecto.Query.CastError] -> {:error, error}
+    error in [CastError] -> {:error, error}
   end
 
   def recoverable_unstarted_cancellation_goal_ids(_), do: {:error, :invalid_request}
@@ -259,7 +261,7 @@ defmodule SymmetryControl.Goals.Recovery do
       {:ok, pending}
     end
   rescue
-    error in [Ecto.Query.CastError] -> {:error, error}
+    error in [CastError] -> {:error, error}
   end
 
   def recover_pending_terminal_settlements(_), do: {:error, :invalid_request}
@@ -324,7 +326,7 @@ defmodule SymmetryControl.Goals.Recovery do
       end
     end
   rescue
-    error in [Ecto.Query.CastError] -> {:error, error}
+    error in [CastError] -> {:error, error}
   end
 
   def recover_pending_goal_control_actions(_), do: {:error, :invalid_request}
@@ -352,8 +354,6 @@ defmodule SymmetryControl.Goals.Recovery do
 
       if valid? and control_descriptors(goal, event.kind, event.id) != [] do
         %{goal_id: goal.id, revision: event.revision, action_id: event.id}
-      else
-        nil
       end
     end)
   end
@@ -361,12 +361,14 @@ defmodule SymmetryControl.Goals.Recovery do
   @doc false
 
   def control_descriptors(goal, "pause", action_id) do
-    safe_pause_task_ids(goal.id)
+    goal.id
+    |> safe_pause_task_ids()
     |> control_descriptors_for("pause", action_id)
   end
 
   def control_descriptors(goal, "cancel", action_id) do
-    cancellable_task_ids(goal.id)
+    goal.id
+    |> cancellable_task_ids()
     |> control_descriptors_for("cancel", action_id)
   end
 
@@ -390,8 +392,7 @@ defmodule SymmetryControl.Goals.Recovery do
     latest_lifecycle_action =
       Repo.one(
         from(event in GoalEvent,
-          where:
-            event.goal_id == ^goal.id and event.kind in ["pause", "resume", "cancel", "amend"],
+          where: event.goal_id == ^goal.id and event.kind in ["pause", "resume", "cancel", "amend"],
           order_by: [desc: event.sequence],
           limit: 1
         )
@@ -457,20 +458,18 @@ defmodule SymmetryControl.Goals.Recovery do
         )
 
       not is_nil(reservation) and reservation.state == "held" and
-        Repo.all(
-          from(command in Command,
-            where:
-              command.task_id == ^task_id and command.kind == "cancel" and
-                command.state == "applied" and is_nil(command.run_id),
-            select: command.idempotency_key
-          )
+        from(command in Command,
+          where:
+            command.task_id == ^task_id and command.kind == "cancel" and
+              command.state == "applied" and is_nil(command.run_id),
+          select: command.idempotency_key
         )
+        |> Repo.all()
         |> Enum.any?(&historical_goal_cancel_command?(goal.id, task_id, &1))
     end
   end
 
-  defp historical_goal_cancel_command?(goal_id, task_id, command_key)
-       when is_binary(command_key) do
+  defp historical_goal_cancel_command?(goal_id, task_id, command_key) when is_binary(command_key) do
     case String.split(command_key, ":", parts: 4) do
       ["goal-control", action_id, "cancel", ^task_id] ->
         valid_uuid(action_id) == :ok and

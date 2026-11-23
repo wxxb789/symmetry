@@ -21,18 +21,22 @@ defmodule SymmetryControl.PiControlE2ETest do
   import SymmetryControl.TestFixtures, only: [unix_signal: 1]
 
   alias SymmetryControl.Goals
-
-  alias SymmetryControl.Goals.{
-    Goal,
-    GoalDecision,
-    GoalEvent,
-    HarnessSession,
-    HarnessSessionAttachReceipt,
-    HarnessSessionStopReceipt
-  }
-
+  alias SymmetryControl.Goals.ContextSnapshot
+  alias SymmetryControl.Goals.Goal
+  alias SymmetryControl.Goals.GoalDecision
+  alias SymmetryControl.Goals.GoalEvent
+  alias SymmetryControl.Goals.HarnessSession
+  alias SymmetryControl.Goals.HarnessSessionAttachReceipt
+  alias SymmetryControl.Goals.HarnessSessionStopReceipt
+  alias SymmetryControl.Goals.RunEvidence
+  alias SymmetryControl.Goals.RunUsage
+  alias SymmetryControl.Goals.WorkOutcome
   alias SymmetryControl.Orchestration
-  alias SymmetryControl.Orchestration.{Run, RunEvent, RunTransition, Runtime, Task}
+  alias SymmetryControl.Orchestration.Run
+  alias SymmetryControl.Orchestration.RunEvent
+  alias SymmetryControl.Orchestration.Runtime
+  alias SymmetryControl.Orchestration.RunTransition
+  alias SymmetryControl.Orchestration.Task
   alias SymmetryControl.Repo
   alias SymmetryControl.Workspaces
 
@@ -55,10 +59,8 @@ defmodule SymmetryControl.PiControlE2ETest do
   @pi_api "openai-responses"
   @pi_api_key "symmetry-control-loopback-test-key"
   @pi_executable_sha256_by_platform %{
-    {{:win32, :nt}, "x86_64-pc-windows"} =>
-      "40a062bedd75767e2c3c889265de7c83d64a0ba55c74b60243c2453d97cffd85",
-    {{:unix, :linux}, "x86_64-pc-linux-gnu"} =>
-      "6a2ac1c5b0d08b91ce6095591c1960b469d0665c7fc5f32812960a4a17ca0c57"
+    {{:win32, :nt}, "x86_64-pc-windows"} => "40a062bedd75767e2c3c889265de7c83d64a0ba55c74b60243c2453d97cffd85",
+    {{:unix, :linux}, "x86_64-pc-linux-gnu"} => "6a2ac1c5b0d08b91ce6095591c1960b469d0665c7fc5f32812960a4a17ca0c57"
   }
   @witness_adapter_version "symmetry-test:pi-control-loopback-witness-v1"
   @artifact_path "pi-control-e2e-artifact.txt"
@@ -98,10 +100,8 @@ defmodule SymmetryControl.PiControlE2ETest do
   end
 
   setup context do
-    unless System.get_env("SYMMETRY_PI_CONTROL_E2E") == "1" do
-      flunk(
-        "SYMMETRY_PI_CONTROL_E2E=1 is required when explicitly including the Pi Control E2E module"
-      )
+    if System.get_env("SYMMETRY_PI_CONTROL_E2E") != "1" do
+      flunk("SYMMETRY_PI_CONTROL_E2E=1 is required when explicitly including the Pi Control E2E module")
     end
 
     platform = assert_supported_platform!()
@@ -220,11 +220,7 @@ defmodule SymmetryControl.PiControlE2ETest do
     gateway_listener =
       start_supervised!(
         {Bandit,
-         plug: {&loopback_gateway_plug/2, gateway_state},
-         scheme: :http,
-         ip: {127, 0, 0, 1},
-         port: 0,
-         startup_log: false},
+         plug: {&loopback_gateway_plug/2, gateway_state}, scheme: :http, ip: {127, 0, 0, 1}, port: 0, startup_log: false},
         id: {:pi_control_gateway, Ecto.UUID.generate()}
       )
 
@@ -287,7 +283,8 @@ defmodule SymmetryControl.PiControlE2ETest do
     File.write!(process_marker_path, "starting\n")
 
     daemon_process =
-      start_daemon!(context.daemon, config_path, process_marker_path, root, root_cleanup_state)
+      context.daemon
+      |> start_daemon!(config_path, process_marker_path, root, root_cleanup_state)
       |> Map.put(:linux_refusal?, linux_refusal?)
       |> Map.put(:refusal_no_launch_proof, refusal_no_launch_proof)
 
@@ -464,7 +461,7 @@ defmodule SymmetryControl.PiControlE2ETest do
       assert subject_matches?, "refusal admission Subject differs from the exact fixture Subject"
 
       snapshot =
-        Repo.get!(SymmetryControl.Goals.ContextSnapshot, fixture.task.context_snapshot_id)
+        Repo.get!(ContextSnapshot, fixture.task.context_snapshot_id)
 
       assert admission["context_hash"] == snapshot.payload["content_hash"]
 
@@ -601,7 +598,8 @@ defmodule SymmetryControl.PiControlE2ETest do
     artifact = Path.join(workspace_path, @artifact_path)
     assert File.read!(artifact) == @artifact_content
 
-    assert git_status!(workspace_path)
+    assert workspace_path
+           |> git_status!()
            |> String.split("\n", trim: true)
            |> Enum.sort() ==
              ["?? .symmetry-workspace.json", "?? #{@artifact_path}"]
@@ -644,7 +642,7 @@ defmodule SymmetryControl.PiControlE2ETest do
     assert session.binding_id == completed_run.harness_binding_id
 
     usage_query =
-      from usage in SymmetryControl.Goals.RunUsage,
+      from usage in RunUsage,
         where: usage.run_id == ^completed_run.id
 
     run_usage_count = Repo.aggregate(usage_query, :count)
@@ -677,7 +675,7 @@ defmodule SymmetryControl.PiControlE2ETest do
     assert Repo.get!(Goal, fixture.goal.id).state == "active"
 
     refute Repo.exists?(
-             from outcome in SymmetryControl.Goals.WorkOutcome,
+             from outcome in WorkOutcome,
                where: outcome.work_item_id == ^fixture.item.id
            )
 
@@ -768,7 +766,7 @@ defmodule SymmetryControl.PiControlE2ETest do
            ) == 0
 
     assert Repo.aggregate(
-             from(usage in SymmetryControl.Goals.RunUsage,
+             from(usage in RunUsage,
                where: usage.run_id == ^first_run.id
              ),
              :count
@@ -892,7 +890,7 @@ defmodule SymmetryControl.PiControlE2ETest do
       end
 
     usage_query =
-      from usage in SymmetryControl.Goals.RunUsage, where: usage.run_id == ^recovered_run.id
+      from usage in RunUsage, where: usage.run_id == ^recovered_run.id
 
     assert Repo.aggregate(usage_query, :count) == 1
     usage = Repo.one!(usage_query)
@@ -1126,7 +1124,7 @@ defmodule SymmetryControl.PiControlE2ETest do
     assert Repo.get!(Goal, fixture.goal.id).state == "active"
 
     refute Repo.exists?(
-             from outcome in SymmetryControl.Goals.WorkOutcome,
+             from outcome in WorkOutcome,
                where: outcome.work_item_id == ^fixture.item.id
            )
 
@@ -1181,10 +1179,10 @@ defmodule SymmetryControl.PiControlE2ETest do
     validation_evidence =
       await!(context.daemon_port, "persisted deterministic artifact evidence", fn ->
         case Repo.one(
-               from evidence in SymmetryControl.Goals.RunEvidence,
+               from evidence in RunEvidence,
                  where: evidence.run_id == ^validation_run.id
              ) do
-          %SymmetryControl.Goals.RunEvidence{} = row -> {:ok, row}
+          %RunEvidence{} = row -> {:ok, row}
           _ -> :retry
         end
       end)
@@ -1243,7 +1241,7 @@ defmodule SymmetryControl.PiControlE2ETest do
     assert achieved.goal.state == "achieved"
 
     assert Repo.exists?(
-             from outcome in SymmetryControl.Goals.WorkOutcome,
+             from outcome in WorkOutcome,
                where:
                  outcome.goal_id == ^fixture.goal.id and
                    outcome.work_item_id == ^fixture.item.id and
@@ -1405,7 +1403,7 @@ defmodule SymmetryControl.PiControlE2ETest do
              Goals.settle_task(source_task.id, source_run.id, source_run.generation)
 
     source_context =
-      Repo.get!(SymmetryControl.Goals.ContextSnapshot, source_task.context_snapshot_id)
+      Repo.get!(ContextSnapshot, source_task.context_snapshot_id)
 
     assert {:ok, handoff_admission, :created} =
              command_current(fixture.goal.id, "admit_task", %{
@@ -1427,7 +1425,7 @@ defmodule SymmetryControl.PiControlE2ETest do
     assert target_task.input["subject"] == source_subject
 
     target_context =
-      Repo.get!(SymmetryControl.Goals.ContextSnapshot, target_task.context_snapshot_id)
+      Repo.get!(ContextSnapshot, target_task.context_snapshot_id)
 
     assert target_context.payload["validated_evidence"] ==
              source_context.payload["validated_evidence"]
@@ -1493,7 +1491,9 @@ defmodule SymmetryControl.PiControlE2ETest do
 
     assert target_subject["commit"] != source_subject["commit"]
 
-    assert File.read!(Path.join(target_workspace_path, @artifact_path))
+    assert target_workspace_path
+           |> Path.join(@artifact_path)
+           |> File.read!()
            |> String.replace("\r\n", "\n") == @artifact_content
 
     assert File.read!(Path.join(target_workspace_path, handoff_artifact_path)) ==
@@ -1703,7 +1703,7 @@ defmodule SymmetryControl.PiControlE2ETest do
 
     assert File.read!(Path.join(first_workspace_path, @artifact_path)) == @artifact_content
 
-    assert git_status!(first_workspace_path) |> String.split("\n", trim: true) |> Enum.sort() ==
+    assert first_workspace_path |> git_status!() |> String.split("\n", trim: true) |> Enum.sort() ==
              ["?? .symmetry-workspace.json", "?? #{@artifact_path}"]
 
     assert Repo.exists?(
@@ -1734,7 +1734,7 @@ defmodule SymmetryControl.PiControlE2ETest do
     assert first_session.binding_id == first_run.harness_binding_id
 
     first_usage_query =
-      from usage in SymmetryControl.Goals.RunUsage, where: usage.run_id == ^first_run.id
+      from usage in RunUsage, where: usage.run_id == ^first_run.id
 
     assert Repo.aggregate(first_usage_query, :count) == 1
     first_usage = Repo.one!(first_usage_query)
@@ -1764,7 +1764,7 @@ defmodule SymmetryControl.PiControlE2ETest do
     assert Repo.get!(Goal, fixture.goal.id).state == "active"
 
     refute Repo.exists?(
-             from outcome in SymmetryControl.Goals.WorkOutcome,
+             from outcome in WorkOutcome,
                where: outcome.work_item_id == ^fixture.item.id
            )
 
@@ -1874,7 +1874,7 @@ defmodule SymmetryControl.PiControlE2ETest do
       case Repo.get(Task, second_task.id) do
         %Task{state: "failed", failure: failure} ->
           failed_run = Repo.get_by(Run, task_id: second_task.id)
-          late_usage_files = Path.join(context.state_dir, "goal-usage") |> File.ls()
+          late_usage_files = context.state_dir |> Path.join("goal-usage") |> File.ls()
 
           flunk(
             "second Pi resume task failed before gateway response 4: #{inspect(failure)} " <>
@@ -1982,7 +1982,7 @@ defmodule SymmetryControl.PiControlE2ETest do
     assert File.read!(Path.join(first_workspace_path, @resume_artifact_path)) ==
              opaque_marker <> "\n"
 
-    assert git_status!(first_workspace_path) |> String.split("\n", trim: true) |> Enum.sort() ==
+    assert first_workspace_path |> git_status!() |> String.split("\n", trim: true) |> Enum.sort() ==
              [
                "?? .symmetry-workspace.json",
                "?? #{@artifact_path}",
@@ -2011,7 +2011,7 @@ defmodule SymmetryControl.PiControlE2ETest do
     assert second_session.binding_id == second_run.harness_binding_id
 
     second_usage_query =
-      from usage in SymmetryControl.Goals.RunUsage, where: usage.run_id == ^second_run.id
+      from usage in RunUsage, where: usage.run_id == ^second_run.id
 
     assert Repo.aggregate(second_usage_query, :count) == 1
     second_usage = Repo.one!(second_usage_query)
@@ -2041,7 +2041,7 @@ defmodule SymmetryControl.PiControlE2ETest do
     assert Repo.get!(Goal, fixture.goal.id).state == "active"
 
     refute Repo.exists?(
-             from outcome in SymmetryControl.Goals.WorkOutcome,
+             from outcome in WorkOutcome,
                where: outcome.work_item_id == ^fixture.item.id
            )
 
@@ -2121,7 +2121,7 @@ defmodule SymmetryControl.PiControlE2ETest do
     run_git!(repository_path, ["add", "README.md"])
     run_git!(repository_path, ["commit", "--quiet", "-m", "initial Pi Control E2E subject"])
 
-    commit = git_output!(repository_path, ["rev-parse", "HEAD"]) |> String.trim()
+    commit = repository_path |> git_output!(["rev-parse", "HEAD"]) |> String.trim()
 
     subject = %{
       "resource_id" => nil,
@@ -2420,14 +2420,7 @@ defmodule SymmetryControl.PiControlE2ETest do
     end
   end
 
-  defp terminal_crash_recovery_barrier?(
-         state_dir,
-         key,
-         run,
-         task,
-         workspace_path,
-         goal_id
-       ) do
+  defp terminal_crash_recovery_barrier?(state_dir, key, run, task, workspace_path, goal_id) do
     with true <- run.state == "failed",
          true <- task.state == "failed",
          true <- Map.get(task.failure || %{}, "reason") == "unknown_outcome",
@@ -2440,10 +2433,10 @@ defmodule SymmetryControl.PiControlE2ETest do
            ),
          true <-
            Repo.aggregate(
-             from(usage in SymmetryControl.Goals.RunUsage, where: usage.run_id == ^run.id),
+             from(usage in RunUsage, where: usage.run_id == ^run.id),
              :count
            ) == 1,
-         session_journal <- goal_session_journal_for_goal!(state_dir, goal_id),
+         session_journal = goal_session_journal_for_goal!(state_dir, goal_id),
          true <-
            terminal_crash_recovery_persistence_barrier?(
              state_dir,
@@ -2458,13 +2451,7 @@ defmodule SymmetryControl.PiControlE2ETest do
     end
   end
 
-  defp terminal_crash_recovery_persistence_barrier?(
-         state_dir,
-         key,
-         run,
-         session_journal,
-         workspace_path
-       ) do
+  defp terminal_crash_recovery_persistence_barrier?(state_dir, key, run, session_journal, workspace_path) do
     case journal_for_run(state_dir, key) do
       {:ok, journal} ->
         retained_terminal_crash_journal?(journal, workspace_path) or
@@ -2525,13 +2512,7 @@ defmodule SymmetryControl.PiControlE2ETest do
     end
   end
 
-  defp assert_crash_recovery_stop_receipt!(
-         run,
-         session,
-         session_journal,
-         attach_receipt,
-         stop_receipt
-       ) do
+  defp assert_crash_recovery_stop_receipt!(run, session, session_journal, attach_receipt, stop_receipt) do
     session_id = run.harness_session_id
     binding_id = run.harness_binding_id
 
@@ -2573,16 +2554,7 @@ defmodule SymmetryControl.PiControlE2ETest do
     assert certificate["delivery_digest"] != ""
   end
 
-  defp crash_recovery_diagnostic(
-         daemon,
-         state_dir,
-         key,
-         run,
-         task,
-         runtime_id,
-         workspace_path,
-         goal_id
-       ) do
+  defp crash_recovery_diagnostic(daemon, state_dir, key, run, task, runtime_id, workspace_path, goal_id) do
     journal =
       case journal_for_run(state_dir, key) do
         {:ok, value} -> value
@@ -2627,8 +2599,7 @@ defmodule SymmetryControl.PiControlE2ETest do
       persistence_barrier?: retained_journal? or stop_receipt_barrier?,
       journal_workspace_recovery_required: value_from_map(journal, "workspace_recovery_required"),
       journal_retain_workspace: value_from_map(journal, "retain_workspace"),
-      journal_workspace_matches?:
-        value_from_map(journal, "workspace_path") == normalize_path(workspace_path),
+      journal_workspace_matches?: value_from_map(journal, "workspace_path") == normalize_path(workspace_path),
       session_launch_state: session_journal["launch_state"],
       session_state: session_journal["session_state"],
       session_recovery_required: session_journal["recovery_required"],
@@ -2640,7 +2611,7 @@ defmodule SymmetryControl.PiControlE2ETest do
         ),
       usage_rows:
         Repo.aggregate(
-          from(usage in SymmetryControl.Goals.RunUsage, where: usage.run_id == ^run.id),
+          from(usage in RunUsage, where: usage.run_id == ^run.id),
           :count
         ),
       terminal_transitions:
@@ -2788,16 +2759,7 @@ defmodule SymmetryControl.PiControlE2ETest do
     File.write!(Path.join(agent_dir, "models.json"), Jason.encode!(models))
   end
 
-  defp isolate_child_environment!(
-         root,
-         agent_dir,
-         home_dir,
-         cache_dir,
-         data_dir,
-         temp_dir,
-         appdata_dir,
-         localappdata_dir
-       ) do
+  defp isolate_child_environment!(root, agent_dir, home_dir, cache_dir, data_dir, temp_dir, appdata_dir, localappdata_dir) do
     values = %{
       "PI_CODING_AGENT_DIR" => agent_dir,
       "HOME" => home_dir,
@@ -2914,7 +2876,7 @@ defmodule SymmetryControl.PiControlE2ETest do
 
         # Control has committed the real receipt; only its HTTP ACK is held so
         # the normal outbox cannot delete the matching durable journal yet.
-        unless released? do
+        if !released? do
           receive do
             :release_linux_refusal_ack -> :ok
           after
@@ -3017,12 +2979,10 @@ defmodule SymmetryControl.PiControlE2ETest do
     assert no_attach_receipt?, "unexpected native attach receipt before installed-owner refusal"
     assert no_stop_receipt?, "unexpected native stop receipt before installed-owner refusal"
 
-    refute Repo.exists?(
-             from usage in SymmetryControl.Goals.RunUsage, where: usage.run_id == ^run.id
-           )
+    refute Repo.exists?(from usage in RunUsage, where: usage.run_id == ^run.id)
 
     refute Repo.exists?(
-             from outcome in SymmetryControl.Goals.WorkOutcome,
+             from outcome in WorkOutcome,
                where: outcome.work_item_id == ^context.fixture.item.id
            )
 
@@ -3081,8 +3041,7 @@ defmodule SymmetryControl.PiControlE2ETest do
             state
             | responses: number,
               requests: state.requests ++ [document],
-              waiters:
-                if(gated?, do: Map.put(state.waiters, number, waiter), else: state.waiters),
+              waiters: if(gated?, do: Map.put(state.waiters, number, waiter), else: state.waiters),
               final_waiter: if(gated?, do: waiter, else: state.final_waiter)
           }
 
@@ -3167,8 +3126,7 @@ defmodule SymmetryControl.PiControlE2ETest do
               {state.first_call_id || "call_pi_control_e2e_#{marker}",
                state.first_item_id || "fc_pi_control_e2e_#{marker}", content}
             else
-              {"call_pi_control_e2e_resume", "fc_pi_control_e2e_resume",
-               state.resume_marker <> "\n"}
+              {"call_pi_control_e2e_resume", "fc_pi_control_e2e_resume", state.resume_marker <> "\n"}
             end
 
           {"write", call_id, item_id, Jason.encode!(%{"path" => path, "content" => content})}
@@ -3224,8 +3182,7 @@ defmodule SymmetryControl.PiControlE2ETest do
          "output_index" => 0,
          "item" => item
        }},
-      {"response.completed",
-       %{"type" => "response.completed", "sequence_number" => 6, "response" => response}}
+      {"response.completed", %{"type" => "response.completed", "sequence_number" => 6, "response" => response}}
     ]
   end
 
@@ -3258,8 +3215,7 @@ defmodule SymmetryControl.PiControlE2ETest do
       {:ok, state.opaque_marker}
     else
       false ->
-        {:error,
-         "resume history omitted the first native identity or leaked it into user/context text"}
+        {:error, "resume history omitted the first native identity or leaked it into user/context text"}
 
       nil ->
         {:error, "resume history omitted the first native identity"}
@@ -3380,8 +3336,7 @@ defmodule SymmetryControl.PiControlE2ETest do
          "output_index" => 0,
          "item" => item
        }},
-      {"response.completed",
-       %{"type" => "response.completed", "sequence_number" => 8, "response" => response}}
+      {"response.completed", %{"type" => "response.completed", "sequence_number" => 8, "response" => response}}
     ]
   end
 
@@ -3404,7 +3359,8 @@ defmodule SymmetryControl.PiControlE2ETest do
       |> Plug.Conn.put_resp_content_type("text/event-stream")
       |> Plug.Conn.send_chunked(200)
 
-    Enum.reduce(events, conn, fn {event_name, payload}, connection ->
+    events
+    |> Enum.reduce(conn, fn {event_name, payload}, connection ->
       frame = "event: #{event_name}\ndata: #{Jason.encode!(payload)}\n\n"
       {:ok, connection} = Plug.Conn.chunk(connection, frame)
       connection
@@ -3510,9 +3466,7 @@ defmodule SymmetryControl.PiControlE2ETest do
             await_loop!(daemon_port, description, assertion, deadline, output <> data)
 
           {^daemon_port, {:exit_status, status}} ->
-            flunk(
-              "daemon exited with status #{status} while waiting for #{description}: #{output}"
-            )
+            flunk("daemon exited with status #{status} while waiting for #{description}: #{output}")
         after
           min(100, remaining) ->
             await_loop!(daemon_port, description, assertion, deadline, output)
@@ -3545,7 +3499,8 @@ defmodule SymmetryControl.PiControlE2ETest do
 
   defp journal_for_run(state_dir, {run_id, generation}) do
     digest =
-      :crypto.hash(:sha256, run_id <> <<0>> <> Integer.to_string(generation))
+      :sha256
+      |> :crypto.hash(run_id <> <<0>> <> Integer.to_string(generation))
       |> Base.encode16(case: :lower)
 
     path = Path.join([state_dir, "runs", "journal-#{digest}.json"])
@@ -3606,8 +3561,7 @@ defmodule SymmetryControl.PiControlE2ETest do
     end
   end
 
-  defp git_status!(directory),
-    do: git_output!(directory, ["status", "--porcelain=v1", "--untracked-files=all"])
+  defp git_status!(directory), do: git_output!(directory, ["status", "--porcelain=v1", "--untracked-files=all"])
 
   defp git_tree_digest!(repository_path, commit) do
     entries =
@@ -3638,8 +3592,7 @@ defmodule SymmetryControl.PiControlE2ETest do
   defp subject_hash!(subject),
     do: "sha256:" <> Base.encode16(SymmetryControl.RequestHash.canonical(subject), case: :lower)
 
-  defp digest!(content),
-    do: "sha256:" <> Base.encode16(:crypto.hash(:sha256, content), case: :lower)
+  defp digest!(content), do: "sha256:" <> Base.encode16(:crypto.hash(:sha256, content), case: :lower)
 
   defp normalize_path(path) do
     case :os.type() do
@@ -3678,8 +3631,8 @@ defmodule SymmetryControl.PiControlE2ETest do
   end
 
   defp start_daemon!(executable, config_path, process_marker_path, root, root_cleanup_state) do
-    start_daemon_with_retry!(
-      executable,
+    executable
+    |> start_daemon_with_retry!(
       config_path,
       root,
       root_cleanup_state,
@@ -3690,14 +3643,7 @@ defmodule SymmetryControl.PiControlE2ETest do
     |> Map.put(:root_cleanup_state, root_cleanup_state)
   end
 
-  defp start_daemon_with_retry!(
-         executable,
-         config_path,
-         root,
-         root_cleanup_state,
-         deadline,
-         backoff_ms
-       ) do
+  defp start_daemon_with_retry!(executable, config_path, root, root_cleanup_state, deadline, backoff_ms) do
     start_daemon_attempt!(executable, config_path, root, root_cleanup_state)
   rescue
     exception in RuntimeError ->
@@ -3826,10 +3772,7 @@ defmodule SymmetryControl.PiControlE2ETest do
     {executable, ["-config", config_path]}
   end
 
-  defp stop_daemon!(
-         %{os_pid: os_pid, stop_state: stop_state, root_cleanup_state: root_cleanup_state} =
-           daemon
-       ) do
+  defp stop_daemon!(%{os_pid: os_pid, stop_state: stop_state, root_cleanup_state: root_cleanup_state} = daemon) do
     case :atomics.compare_exchange(stop_state, 1, 0, 1) do
       :ok ->
         try do
@@ -3883,11 +3826,7 @@ defmodule SymmetryControl.PiControlE2ETest do
     finish_stop_results!(stop_result, cleanup_result)
   end
 
-  defp stop_daemon_process!(%{
-         port: port,
-         os_pid: os_pid,
-         process_identity: process_identity
-       }) do
+  defp stop_daemon_process!(%{port: port, os_pid: os_pid, process_identity: process_identity}) do
     case daemon_state(port, os_pid, process_identity) do
       :stopped ->
         :ok
@@ -3948,16 +3887,13 @@ defmodule SymmetryControl.PiControlE2ETest do
       raise "skipping native Pi refusal cleanup while Pi witness OS PID #{os_pid} remains alive"
     end
 
-    unless :atomics.get(proof, 1) == 1 and
-             read_bounded_file(process_marker_path) == {:ok, "starting\n"} do
+    if !(:atomics.get(proof, 1) == 1 and
+           read_bounded_file(process_marker_path) == {:ok, "starting\n"}) do
       raise "refusing Linux Pi cleanup without exact durable installed-owner refusal and explicit no-launch proof"
     end
   end
 
-  defp cleanup_native_process_after_daemon_stop!(%{
-         os_pid: os_pid,
-         process_marker_path: process_marker_path
-       }) do
+  defp cleanup_native_process_after_daemon_stop!(%{os_pid: os_pid, process_marker_path: process_marker_path}) do
     if os_process_alive?(os_pid) do
       raise "skipping native Pi process cleanup while Pi witness OS PID #{os_pid} remains alive"
     end
@@ -3975,16 +3911,11 @@ defmodule SymmetryControl.PiControlE2ETest do
 
   defp finish_stop_results!(:ok, :ok), do: :ok
 
-  defp finish_stop_results!({:error, exception, stacktrace}, :ok),
-    do: reraise(exception, stacktrace)
+  defp finish_stop_results!({:error, exception, stacktrace}, :ok), do: reraise(exception, stacktrace)
 
-  defp finish_stop_results!(:ok, {:error, exception, stacktrace}),
-    do: reraise(exception, stacktrace)
+  defp finish_stop_results!(:ok, {:error, exception, stacktrace}), do: reraise(exception, stacktrace)
 
-  defp finish_stop_results!(
-         {:error, stop_exception, _stop_stacktrace},
-         {:error, cleanup_exception, _cleanup_stacktrace}
-       ) do
+  defp finish_stop_results!({:error, stop_exception, _stop_stacktrace}, {:error, cleanup_exception, _cleanup_stacktrace}) do
     raise "Pi witness stop failed: #{Exception.message(stop_exception)}; native process cleanup failed: #{Exception.message(cleanup_exception)}"
   end
 
@@ -4002,8 +3933,7 @@ defmodule SymmetryControl.PiControlE2ETest do
             :owned
 
           {:error, {:identity_changed, actual}} ->
-            {:error,
-             "the Port still refers to the recorded PID but its process identity changed to #{inspect(actual)}"}
+            {:error, "the Port still refers to the recorded PID but its process identity changed to #{inspect(actual)}"}
 
           {:error, {:identity_unavailable, reason}} ->
             {:error,
@@ -4019,8 +3949,8 @@ defmodule SymmetryControl.PiControlE2ETest do
   end
 
   defp daemon_state_after_port_closed(os_pid, process_identity) do
-    await_recorded_daemon_state(
-      os_pid,
+    os_pid
+    |> await_recorded_daemon_state(
       process_identity,
       System.monotonic_time(:millisecond) + @daemon_port_timeout_ms,
       "identity query has not completed after the Port closed"
@@ -4033,8 +3963,7 @@ defmodule SymmetryControl.PiControlE2ETest do
         :owned
 
       {:error, {:identity_changed, actual}} ->
-        {:error,
-         "the Port closed while the recorded process identity changed to #{inspect(actual)}"}
+        {:error, "the Port closed while the recorded process identity changed to #{inspect(actual)}"}
 
       {:error, {:identity_unavailable, reason}} ->
         {:error,
@@ -4043,9 +3972,7 @@ defmodule SymmetryControl.PiControlE2ETest do
   end
 
   defp recorded_daemon_state(os_pid, process_identity) do
-    if not os_process_alive?(os_pid) do
-      :stopped
-    else
+    if os_process_alive?(os_pid) do
       case process_identity(os_pid, process_identity.executable) do
         {:ok, ^process_identity} ->
           :owned
@@ -4056,6 +3983,8 @@ defmodule SymmetryControl.PiControlE2ETest do
         {:error, reason} ->
           {:error, {:identity_unavailable, reason}}
       end
+    else
+      :stopped
     end
   end
 
@@ -4100,8 +4029,7 @@ defmodule SymmetryControl.PiControlE2ETest do
 
   defp terminate_daemon!(os_pid, signal), do: terminate_process!(os_pid, signal, false)
 
-  defp terminate_native_process_group!(os_pid, signal),
-    do: terminate_process!(os_pid, signal, true)
+  defp terminate_native_process_group!(os_pid, signal), do: terminate_process!(os_pid, signal, true)
 
   defp terminate_process!(os_pid, signal, group?) do
     result =
@@ -4396,14 +4324,7 @@ defmodule SymmetryControl.PiControlE2ETest do
     end
   end
 
-  defp startup_identity_failure!(
-         port,
-         os_pid,
-         executable,
-         root,
-         root_cleanup_state,
-         reason
-       ) do
+  defp startup_identity_failure!(port, os_pid, executable, root, root_cleanup_state, reason) do
     initial_output = drain_port_output(port)
 
     cleanup_result =
@@ -4483,16 +4404,14 @@ defmodule SymmetryControl.PiControlE2ETest do
         end
 
       :closed ->
-        {:unverified,
-         "the Port closed before startup cleanup could verify ownership of OS PID #{os_pid}"}
+        {:unverified, "the Port closed before startup cleanup could verify ownership of OS PID #{os_pid}"}
 
       {:ok, actual_pid} ->
         {:unverified,
          "the Port reports OS PID #{actual_pid} instead of recorded PID #{os_pid}; refusing numeric PID termination"}
 
       {:error, reason} ->
-        {:unverified,
-         "could not inspect Port ownership for OS PID #{os_pid}: #{sanitize_cleanup_reason(reason)}"}
+        {:unverified, "could not inspect Port ownership for OS PID #{os_pid}: #{sanitize_cleanup_reason(reason)}"}
     end
   end
 
@@ -4691,9 +4610,7 @@ defmodule SymmetryControl.PiControlE2ETest do
   end
 
   defp native_process_state(os_pid, expected_identity) do
-    if not os_process_alive?(os_pid) do
-      :stopped
-    else
+    if os_process_alive?(os_pid) do
       case native_process_identity(os_pid) do
         {:ok, ^expected_identity} ->
           :owned
@@ -4709,6 +4626,8 @@ defmodule SymmetryControl.PiControlE2ETest do
             :stopped
           end
       end
+    else
+      :stopped
     end
   end
 
@@ -4748,9 +4667,7 @@ defmodule SymmetryControl.PiControlE2ETest do
         )
 
       {:error, reason} ->
-        flunk(
-          "could not prove native Pi OS PID #{os_pid} creation identity: #{sanitize_cleanup_reason(reason)}"
-        )
+        flunk("could not prove native Pi OS PID #{os_pid} creation identity: #{sanitize_cleanup_reason(reason)}")
     end
   end
 
@@ -4783,9 +4700,7 @@ defmodule SymmetryControl.PiControlE2ETest do
     end
   end
 
-  defp await_native_process_exit_or_escalate!(
-         %{pid: os_pid, identity: expected_identity} = marker
-       ) do
+  defp await_native_process_exit_or_escalate!(%{pid: os_pid, identity: expected_identity} = marker) do
     first_deadline = System.monotonic_time(:millisecond) + @daemon_stop_timeout_ms
 
     case await_process_exit(os_pid, first_deadline) do
@@ -4894,12 +4809,10 @@ defmodule SymmetryControl.PiControlE2ETest do
 
       {output, 2} ->
         {:error,
-         {:not_ready,
-          "PowerShell process identity query has not observed OS PID #{os_pid}: #{String.trim(output)}"}}
+         {:not_ready, "PowerShell process identity query has not observed OS PID #{os_pid}: #{String.trim(output)}"}}
 
       {output, status} ->
-        {:error,
-         "PowerShell process identity query failed (status #{status}): #{String.trim(output)}"}
+        {:error, "PowerShell process identity query failed (status #{status}): #{String.trim(output)}"}
     end
   end
 
@@ -4912,25 +4825,23 @@ defmodule SymmetryControl.PiControlE2ETest do
   end
 
   defp drain_port_output(port, deadline, chunks) do
-    cond do
-      System.monotonic_time(:millisecond) >= deadline ->
-        IO.iodata_to_binary(Enum.reverse(chunks))
+    if System.monotonic_time(:millisecond) >= deadline do
+      IO.iodata_to_binary(Enum.reverse(chunks))
+    else
+      receive do
+        {^port, {:data, data}} ->
+          drain_port_output(port, deadline, [data | chunks])
 
-      true ->
-        receive do
-          {^port, {:data, data}} ->
-            drain_port_output(port, deadline, [data | chunks])
-
-          {^port, {:exit_status, status}} ->
-            drain_port_output(port, deadline, ["[exit_status=#{status}]" | chunks])
-        after
-          min(25, max(deadline - System.monotonic_time(:millisecond), 0)) ->
-            if port_open?(port) do
-              drain_port_output(port, deadline, chunks)
-            else
-              IO.iodata_to_binary(Enum.reverse(chunks))
-            end
-        end
+        {^port, {:exit_status, status}} ->
+          drain_port_output(port, deadline, ["[exit_status=#{status}]" | chunks])
+      after
+        min(25, max(deadline - System.monotonic_time(:millisecond), 0)) ->
+          if port_open?(port) do
+            drain_port_output(port, deadline, chunks)
+          else
+            IO.iodata_to_binary(Enum.reverse(chunks))
+          end
+      end
     end
   end
 
@@ -4976,12 +4887,10 @@ defmodule SymmetryControl.PiControlE2ETest do
 
       {output, 2} ->
         {:error,
-         {:not_ready,
-          "PowerShell process identity query has not observed OS PID #{os_pid}: #{String.trim(output)}"}}
+         {:not_ready, "PowerShell process identity query has not observed OS PID #{os_pid}: #{String.trim(output)}"}}
 
       {output, status} ->
-        {:error,
-         "PowerShell process identity query failed (status #{status}): #{String.trim(output)}"}
+        {:error, "PowerShell process identity query failed (status #{status}): #{String.trim(output)}"}
     end
   end
 
@@ -5074,7 +4983,7 @@ defmodule SymmetryControl.PiControlE2ETest do
     if value == "",
       do: flunk("SYMMETRY_PI_CONTROL_E2E_EXECUTABLE must name the real Pi 1.5.2 executable")
 
-    unless Path.type(value) == :absolute, do: flunk("Pi executable path must be absolute")
+    if Path.type(value) != :absolute, do: flunk("Pi executable path must be absolute")
     if not File.regular?(value), do: flunk("Pi executable path must name a regular file")
     assert_pi_executable_sha256!(value, platform)
     value
@@ -5161,10 +5070,11 @@ defmodule SymmetryControl.DataCaseSandboxOptionsTest do
     assert SymmetryControl.DataCase.sandbox_options(%{async: false}) == [shared: true]
     assert SymmetryControl.DataCase.sandbox_options(%{async: true}) == [shared: false]
 
-    assert SymmetryControl.DataCase.sandbox_options(%{
+    assert %{
              async: false,
              sandbox_ownership_timeout: 240_000
-           })
+           }
+           |> SymmetryControl.DataCase.sandbox_options()
            |> Enum.sort() == [ownership_timeout: 240_000, shared: true]
   end
 

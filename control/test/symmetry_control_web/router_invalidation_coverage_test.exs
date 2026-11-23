@@ -89,7 +89,8 @@ defmodule SymmetryControlWeb.RouterInvalidationCoverageTest do
              Router.__match_route__(request_method(verb), segments, "www.example.com")
 
     conn =
-      build_conn(verb, "/" <> Enum.join(segments, "/"))
+      verb
+      |> build_conn("/" <> Enum.join(segments, "/"))
       |> Map.put(:secret_key_base, Endpoint.config(:secret_key_base))
       |> authenticate(metadata.pipe_through, machine_token)
 
