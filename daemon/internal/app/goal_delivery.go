@@ -27,11 +27,7 @@ func (err *goalDeliveryRejectedError) Error() string { return err.err.Error() }
 func (err *goalDeliveryRejectedError) Unwrap() error { return err.err }
 
 func (daemon *daemon) markGoalSessionAttachDeliveryReady(key state.RunKey, localHandleID string) (state.RunJournal, error) {
-	mark := daemon.options.markGoalSessionAttachDeliveryReady
-	if mark == nil {
-		mark = daemon.store.MarkGoalSessionAttachDeliveryReady
-	}
-	journal, err := mark(key, localHandleID)
+	journal, err := daemon.store.MarkGoalSessionAttachDeliveryReady(key, localHandleID)
 	if err == nil {
 		return journal, nil
 	}
@@ -53,11 +49,7 @@ func (daemon *daemon) markGoalSessionAttachDeliveryReady(key state.RunKey, local
 }
 
 func (daemon *daemon) discardUnreadyGoalSessionAttachDelivery(key state.RunKey, localHandleID string) error {
-	discard := daemon.options.discardUnreadyGoalSessionAttachDelivery
-	if discard == nil {
-		discard = daemon.store.DiscardUnreadyGoalSessionAttachDelivery
-	}
-	_, err := discard(key, localHandleID)
+	_, err := daemon.store.DiscardUnreadyGoalSessionAttachDelivery(key, localHandleID)
 	return err
 }
 

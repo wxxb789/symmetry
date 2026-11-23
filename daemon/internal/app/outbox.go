@@ -139,11 +139,7 @@ func (daemon *daemon) queueTerminalTransitionWithRetry(ctx context.Context, key 
 			journal  state.RunJournal
 			queueErr error
 		)
-		if daemon.options.queueTerminalTransition != nil {
-			journal, queueErr = daemon.options.queueTerminalTransition(key, transition, enteredAt)
-		} else {
-			journal, queueErr = daemon.store.QueueTerminalTransitionAt(key, transition, enteredAt)
-		}
+		journal, queueErr = daemon.store.QueueTerminalTransitionAt(key, transition, enteredAt)
 		if queueErr == nil {
 			persisted = true
 			daemon.scheduleTerminalSlotRelease(key, journal.TerminalPendingAt)
@@ -209,13 +205,7 @@ func (daemon *daemon) queueTerminalTransitionAndAcknowledgementWithContext(ctx c
 		// across one persistence attempt only, so a stalled writer cannot block unrelated delivery.
 		daemon.commandReceiptMu.Lock()
 		var journal state.RunJournal
-		if daemon.options.queueTerminalTransitionAndAcknowledgement != nil {
-			journal, err = daemon.options.queueTerminalTransitionAndAcknowledgement(key, transition, acknowledgement, enteredAt)
-		} else if stateName == "cancelled" && outcome == "applied" && daemon.options.queueCancelledTransitionAndAcknowledgement != nil {
-			journal, err = daemon.options.queueCancelledTransitionAndAcknowledgement(key, transition, acknowledgement, enteredAt)
-		} else {
-			journal, err = daemon.store.QueueTerminalTransitionAndAcknowledgementAt(key, transition, acknowledgement, enteredAt)
-		}
+		journal, err = daemon.store.QueueTerminalTransitionAndAcknowledgementAt(key, transition, acknowledgement, enteredAt)
 		if err == nil {
 			daemon.commandReceiptMu.Unlock()
 			persisted = true
@@ -1122,11 +1112,7 @@ func (daemon *daemon) markCommandAcknowledgementDelivered(key state.RunKey, ackn
 		updated state.RunJournal
 		err     error
 	)
-	if daemon.options.markCommandAcknowledgementsDelivered != nil {
-		updated, err = daemon.options.markCommandAcknowledgementsDelivered(key, []string{acknowledgement.AckID})
-	} else {
-		updated, err = daemon.store.MarkCommandAcknowledgementsDelivered(key, []string{acknowledgement.AckID})
-	}
+	updated, err = daemon.store.MarkCommandAcknowledgementsDelivered(key, []string{acknowledgement.AckID})
 	if err != nil {
 		return state.RunJournal{}, err
 	}

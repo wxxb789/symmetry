@@ -185,52 +185,27 @@ func (timer systemTimer) Chan() <-chan time.Time { return timer.timer.C }
 func (timer systemTimer) Stop()                  { timer.timer.Stop() }
 
 type options struct {
-	httpClient                                 *http.Client
-	store                                      journalStore
-	control                                    ControlAPI
-	enrollment                                 EnrollmentAPI
-	workspace                                  workspace.Service
-	start                                      StartProcess
-	harnessRegistry                            *harness.Registry
-	processObserver                            func(state.RunKey, int, string, time.Time)
-	containmentStopObserver                    func(state.RunKey, int, string, authority.StopReceipt) error
-	notifications                              NotificationClient
-	logWriter                                  io.Writer
-	clock                                      func() time.Time
-	localClock                                 func() time.Time
-	newTimer                                   func(time.Duration) deadlineTimer
-	newID                                      func() (string, error)
-	newMachineToken                            func() (string, error)
-	terminatePersist                           func(pid int, identity string) error
-	terminatePersistAuthority                  func(pid int, identity string, value *authority.Supervisor) (authority.StopReceipt, error)
-	terminatePersistAuthorityWithScanSeal      func(pid int, identity string, value *authority.Supervisor) (authority.StopReceipt, uint64, error)
-	recordWorkspace                            func(state.RunKey, string) (state.RunJournal, error)
-	recordProcess                              func(state.RunKey, int, string, time.Time) (state.RunJournal, error)
-	recordProcessAuthority                     func(state.RunKey, int, string, authority.Supervisor, time.Time) (state.RunJournal, error)
-	markContainmentUnproven                    func(state.RunKey, int, string) (state.RunJournal, error)
-	clearContainmentUnproven                   func(state.RunKey, int, string) (state.RunJournal, error)
-	recordContainmentStopReceipt               func(state.RunKey, int, string, authority.StopReceipt) (state.RunJournal, error)
-	prepareSupervisorHandoff                   func(state.RunKey, authority.SupervisorHandoff) (state.RunJournal, error)
-	bindSupervisorHandoff                      func(state.RunKey, authority.SupervisorHandoff, int, string) (state.RunJournal, error)
-	commitSupervisorHandoff                    func(state.RunKey, authority.SupervisorHandoff, time.Time) (state.RunJournal, error)
-	recordSupervisorHandoffStopReceipt         func(state.RunKey, authority.SupervisorHandoff, authority.StopReceipt) (state.RunJournal, error)
-	clearSupervisorHandoff                     func(state.RunKey, authority.SupervisorHandoff, authority.SupervisorHandoffReleaseProof) (state.RunJournal, error)
-	clearSupervisorHandoffAfterAbort           func(state.RunKey, authority.SupervisorHandoff, authority.SupervisorHandoffAbortProof) (state.RunJournal, error)
-	queueTerminalTransition                    func(state.RunKey, protocol.StateTransitionRequest, time.Time) (state.RunJournal, error)
-	queueGoalUsage                             func(state.RunKey, protocol.Usage) (state.RunJournal, error)
-	markGoalSessionAttachDeliveryReady         func(state.RunKey, string) (state.RunJournal, error)
-	discardUnreadyGoalSessionAttachDelivery    func(state.RunKey, string) (state.RunJournal, error)
-	abortGoalSessionLaunchBeforeNativeStart    func(state.GoalSessionKey) (state.GoalSessionJournal, error)
-	markGoalSessionUncertain                   func(state.GoalSessionKey, string) (state.GoalSessionJournal, error)
-	markCommandAcknowledgementsDelivered       func(state.RunKey, []string) (state.RunJournal, error)
-	queueTerminalTransitionAndAcknowledgement  func(state.RunKey, protocol.StateTransitionRequest, protocol.CommandAcknowledgement, time.Time) (state.RunJournal, error)
-	queueCancelledTransitionAndAcknowledgement func(state.RunKey, protocol.StateTransitionRequest, protocol.CommandAcknowledgement, time.Time) (state.RunJournal, error)
-	retainWorkspace                            func(state.RunKey) (state.RunJournal, error)
-	loadGoalSession                            func(state.GoalSessionKey) (state.GoalSessionJournal, error)
-	closeGoalSession                           func(state.GoalSessionKey) (state.GoalSessionJournal, error)
-	clearProcessDetails                        func(state.RunKey, int, string) (state.RunJournal, error)
-	nativeCloseRetryPublished                  func()
-	linuxV2NativeOwnerFactory                  linuxV2NativeOwnerFactory
+	httpClient                            *http.Client
+	store                                 journalStore
+	control                               ControlAPI
+	enrollment                            EnrollmentAPI
+	workspace                             workspace.Service
+	start                                 StartProcess
+	harnessRegistry                       *harness.Registry
+	processObserver                       func(state.RunKey, int, string, time.Time)
+	containmentStopObserver               func(state.RunKey, int, string, authority.StopReceipt) error
+	notifications                         NotificationClient
+	logWriter                             io.Writer
+	clock                                 func() time.Time
+	localClock                            func() time.Time
+	newTimer                              func(time.Duration) deadlineTimer
+	newID                                 func() (string, error)
+	newMachineToken                       func() (string, error)
+	terminatePersist                      func(pid int, identity string) error
+	terminatePersistAuthority             func(pid int, identity string, value *authority.Supervisor) (authority.StopReceipt, error)
+	terminatePersistAuthorityWithScanSeal func(pid int, identity string, value *authority.Supervisor) (authority.StopReceipt, uint64, error)
+	nativeCloseRetryPublished             func()
+	linuxV2NativeOwnerFactory             linuxV2NativeOwnerFactory
 }
 
 // WithHTTPClient replaces the HTTP transport used for production clients.
@@ -1630,11 +1605,7 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 	if readErr != nil {
 		err = readErr
 	} else if !alreadyRecorded {
-		if daemon.options.recordProcess != nil {
-			_, err = daemon.options.recordProcess(key, pid, identity, daemon.options.clock())
-		} else {
-			_, err = daemon.store.SetProcessDetails(key, pid, identity, daemon.options.clock())
-		}
+		_, err = daemon.store.SetProcessDetails(key, pid, identity, daemon.options.clock())
 	}
 	if err != nil {
 		if !daemon.isCancelled(key) {
@@ -2115,11 +2086,7 @@ func (daemon *daemon) persistWorkspacePath(runContext context.Context, key state
 	}
 	for {
 		var err error
-		if daemon.options.recordWorkspace != nil {
-			_, err = daemon.options.recordWorkspace(key, path)
-		} else {
-			_, err = daemon.store.SetWorkspacePath(key, path)
-		}
+		_, err = daemon.store.SetWorkspacePath(key, path)
 		if err == nil {
 			return true
 		}

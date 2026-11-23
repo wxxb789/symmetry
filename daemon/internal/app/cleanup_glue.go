@@ -22,30 +22,13 @@ const (
 	linuxStopReceiptBarrierPoll       = 25 * time.Millisecond
 )
 
-// Go forbids type parameters on methods, so the selector is a free function whose
-// constraint names the callback signatures it accepts; a func value compares to nil.
-type storeCallbackWrite interface {
-	~func(state.RunKey, int, string) (state.RunJournal, error) |
-		~func(state.RunKey, int, string, authority.StopReceipt) (state.RunJournal, error) |
-		~func(state.RunKey, authority.SupervisorHandoff) (state.RunJournal, error) |
-		~func(state.RunKey, authority.SupervisorHandoff, int, string) (state.RunJournal, error) |
-		~func(state.RunKey, authority.SupervisorHandoff, time.Time) (state.RunJournal, error) |
-		~func(state.RunKey, authority.SupervisorHandoff, authority.SupervisorHandoffReleaseProof) (state.RunJournal, error) |
-		~func(state.RunKey, authority.SupervisorHandoff, authority.SupervisorHandoffAbortProof) (state.RunJournal, error)
-}
-
-// Takes the store lifetime read lock and returns it as release for the caller to defer: the
-// lock must span the complete CAS, or shutdown could close the Store mid-write-decision.
-// The store fallback is bound inside the guard: a method value taken from a nil journalStore
-// panics before the guard can refuse the write.
-func selectStoreWrite[Fn storeCallbackWrite](daemon *daemon, override Fn, fromStore func(journalStore) Fn) (Fn, func(), error) {
+// Takes the store lifetime read lock and returns it as release for the caller to defer: the lock
+// must span the complete CAS, and the lazy store fallback binds inside the guard.
+func selectStoreWrite[Fn any](daemon *daemon, fromStore func(journalStore) Fn) (Fn, func(), error) {
 	daemon.storeLifetimeMu.RLock()
 	release := daemon.storeLifetimeMu.RUnlock
-	if !daemon.storeClosing && (override != nil || daemon.store != nil) {
-		if override == nil {
-			override = fromStore(daemon.store)
-		}
-		return override, release, nil
+	if !daemon.storeClosing && daemon.store != nil {
+		return fromStore(daemon.store), release, nil
 	}
 	release()
 	var refused Fn
@@ -58,7 +41,7 @@ func (daemon *daemon) persistProcessAuthorityCallback(key state.RunKey) func(int
 		// because recovery shares them; the refusal predicate must match selectStoreWrite.
 		daemon.storeLifetimeMu.RLock()
 		defer daemon.storeLifetimeMu.RUnlock()
-		if daemon.storeClosing || (daemon.store == nil && daemon.options.recordProcessAuthority == nil) {
+		if daemon.storeClosing || daemon.store == nil {
 			return errDaemonStoreClosing
 		}
 		if value == nil {
@@ -77,14 +60,10 @@ func (daemon *daemon) persistProcessAuthorityCallback(key state.RunKey) func(int
 func (daemon *daemon) persistProcessMarker(key state.RunKey, pid int, identity string, startedAt time.Time) error {
 	daemon.storeLifetimeMu.RLock()
 	defer daemon.storeLifetimeMu.RUnlock()
-	if daemon.storeClosing || (daemon.store == nil && daemon.options.recordProcess == nil) {
+	if daemon.storeClosing || daemon.store == nil {
 		return errDaemonStoreClosing
 	}
 	write := func() error {
-		if daemon.options.recordProcess != nil {
-			_, err := daemon.options.recordProcess(key, pid, identity, startedAt)
-			return err
-		}
 		_, err := daemon.store.SetProcessDetails(key, pid, identity, startedAt)
 		return err
 	}
@@ -92,9 +71,6 @@ func (daemon *daemon) persistProcessMarker(key state.RunKey, pid int, identity s
 		return nil
 	} else {
 		firstErr := err
-		if daemon.store == nil {
-			return firstErr
-		}
 		journal, readErr := daemon.store.LoadJournal(key)
 		if readErr == nil && journal.PID == pid && journal.ProcessIdentity == identity && !journal.StartedAt.IsZero() {
 			if replayErr := write(); replayErr == nil {
@@ -112,7 +88,7 @@ func (daemon *daemon) persistProcessMarker(key state.RunKey, pid int, identity s
 
 func (daemon *daemon) markContainmentUnprovenCallback(key state.RunKey) func(int, string) error {
 	return func(pid int, identity string) error {
-		mark, release, err := selectStoreWrite(daemon, daemon.options.markContainmentUnproven, func(store journalStore) func(state.RunKey, int, string) (state.RunJournal, error) {
+		mark, release, err := selectStoreWrite(daemon, func(store journalStore) func(state.RunKey, int, string) (state.RunJournal, error) {
 			return store.MarkContainmentUnproven
 		})
 		if err != nil {
@@ -126,7 +102,7 @@ func (daemon *daemon) markContainmentUnprovenCallback(key state.RunKey) func(int
 
 func (daemon *daemon) clearContainmentUnprovenCallback(key state.RunKey) func(int, string) error {
 	return func(pid int, identity string) error {
-		clear, release, err := selectStoreWrite(daemon, daemon.options.clearContainmentUnproven, func(store journalStore) func(state.RunKey, int, string) (state.RunJournal, error) {
+		clear, release, err := selectStoreWrite(daemon, func(store journalStore) func(state.RunKey, int, string) (state.RunJournal, error) {
 			return store.ClearContainmentUnproven
 		})
 		if err != nil {
@@ -140,7 +116,7 @@ func (daemon *daemon) clearContainmentUnprovenCallback(key state.RunKey) func(in
 
 func (daemon *daemon) persistContainmentStopReceiptCallback(key state.RunKey) func(int, string, authority.StopReceipt) error {
 	return func(pid int, identity string, receipt authority.StopReceipt) error {
-		record, release, err := selectStoreWrite(daemon, daemon.options.recordContainmentStopReceipt, func(store journalStore) func(state.RunKey, int, string, authority.StopReceipt) (state.RunJournal, error) {
+		record, release, err := selectStoreWrite(daemon, func(store journalStore) func(state.RunKey, int, string, authority.StopReceipt) (state.RunJournal, error) {
 			return store.RecordContainmentStopReceipt
 		})
 		if err != nil {
@@ -330,7 +306,7 @@ func (daemon *daemon) verifyDurableContainmentStopReceipt(key state.RunKey, pid 
 // the store lifetime read lock across each CAS, or shutdown can close it mid-decision.
 func (daemon *daemon) prepareSupervisorHandoffCallback(key state.RunKey) func(authority.SupervisorHandoff) error {
 	return func(handoff authority.SupervisorHandoff) error {
-		prepare, release, err := selectStoreWrite(daemon, daemon.options.prepareSupervisorHandoff, func(store journalStore) func(state.RunKey, authority.SupervisorHandoff) (state.RunJournal, error) {
+		prepare, release, err := selectStoreWrite(daemon, func(store journalStore) func(state.RunKey, authority.SupervisorHandoff) (state.RunJournal, error) {
 			return store.PrepareSupervisorHandoff
 		})
 		if err != nil {
@@ -344,7 +320,7 @@ func (daemon *daemon) prepareSupervisorHandoffCallback(key state.RunKey) func(au
 
 func (daemon *daemon) bindSupervisorHandoffCallback(key state.RunKey) func(authority.SupervisorHandoff, int, string) error {
 	return func(expected authority.SupervisorHandoff, pid int, identity string) error {
-		bind, release, err := selectStoreWrite(daemon, daemon.options.bindSupervisorHandoff, func(store journalStore) func(state.RunKey, authority.SupervisorHandoff, int, string) (state.RunJournal, error) {
+		bind, release, err := selectStoreWrite(daemon, func(store journalStore) func(state.RunKey, authority.SupervisorHandoff, int, string) (state.RunJournal, error) {
 			return store.BindSupervisorHandoff
 		})
 		if err != nil {
@@ -358,7 +334,7 @@ func (daemon *daemon) bindSupervisorHandoffCallback(key state.RunKey) func(autho
 
 func (daemon *daemon) commitSupervisorHandoffCallback(key state.RunKey) func(authority.SupervisorHandoff, time.Time) error {
 	return func(expected authority.SupervisorHandoff, startedAt time.Time) error {
-		commit, release, err := selectStoreWrite(daemon, daemon.options.commitSupervisorHandoff, func(store journalStore) func(state.RunKey, authority.SupervisorHandoff, time.Time) (state.RunJournal, error) {
+		commit, release, err := selectStoreWrite(daemon, func(store journalStore) func(state.RunKey, authority.SupervisorHandoff, time.Time) (state.RunJournal, error) {
 			return store.CommitSupervisorHandoff
 		})
 		if err != nil {
@@ -384,7 +360,7 @@ func (daemon *daemon) recordSupervisorHandoffStopReceiptCallback(key state.RunKe
 
 func (daemon *daemon) clearSupervisorHandoffCallback(key state.RunKey) func(authority.SupervisorHandoff, authority.SupervisorHandoffReleaseProof) error {
 	return func(expected authority.SupervisorHandoff, proof authority.SupervisorHandoffReleaseProof) error {
-		clear, release, err := selectStoreWrite(daemon, daemon.options.clearSupervisorHandoff, func(store journalStore) func(state.RunKey, authority.SupervisorHandoff, authority.SupervisorHandoffReleaseProof) (state.RunJournal, error) {
+		clear, release, err := selectStoreWrite(daemon, func(store journalStore) func(state.RunKey, authority.SupervisorHandoff, authority.SupervisorHandoffReleaseProof) (state.RunJournal, error) {
 			return store.ClearSupervisorHandoff
 		})
 		if err != nil {
@@ -398,7 +374,7 @@ func (daemon *daemon) clearSupervisorHandoffCallback(key state.RunKey) func(auth
 
 func (daemon *daemon) clearSupervisorHandoffAfterAbortCallback(key state.RunKey) func(authority.SupervisorHandoff, authority.SupervisorHandoffAbortProof) error {
 	return func(expected authority.SupervisorHandoff, proof authority.SupervisorHandoffAbortProof) error {
-		clear, release, err := selectStoreWrite(daemon, daemon.options.clearSupervisorHandoffAfterAbort, func(store journalStore) func(state.RunKey, authority.SupervisorHandoff, authority.SupervisorHandoffAbortProof) (state.RunJournal, error) {
+		clear, release, err := selectStoreWrite(daemon, func(store journalStore) func(state.RunKey, authority.SupervisorHandoff, authority.SupervisorHandoffAbortProof) (state.RunJournal, error) {
 			return store.ClearSupervisorHandoffAfterAbort
 		})
 		if err != nil {
@@ -428,11 +404,7 @@ func (daemon *daemon) clearPersistedProcessDetails(key state.RunKey, pid int, id
 	if err := daemon.clearContainmentUnprovenCallback(key)(pid, identity); err != nil {
 		return state.RunJournal{}, err
 	}
-	clear := daemon.options.clearProcessDetails
-	if clear == nil {
-		clear = daemon.store.ClearProcessDetails
-	}
-	journal, err := clear(key, pid, identity)
+	journal, err := daemon.store.ClearProcessDetails(key, pid, identity)
 	if err == nil {
 		daemon.forgetRecoveredProcessStop(key)
 	}

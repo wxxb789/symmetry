@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wxxb789/symmetry/daemon/internal/app/apptest"
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 	"github.com/wxxb789/symmetry/daemon/internal/state"
@@ -16,6 +17,7 @@ import (
 
 func TestAtomicTerminalAcknowledgementUnknownWriteSurvivesDeliveredTransition(t *testing.T) {
 	store, key := claimedGoalDeliveryStore(t)
+	faultStore := apptest.NewFaultStoreFrom(store)
 	controlClient := &terminalAcknowledgementInterleavingControl{fakeControl: &fakeControl{}, acknowledgementAccepted: make(chan struct{})}
 	result := harness.TaskResult{Kind: harness.ResultFailed, Summary: "native terminal"}
 	active := &runningRun{
@@ -29,30 +31,29 @@ func TestAtomicTerminalAcknowledgementUnknownWriteSurvivesDeliveredTransition(t 
 		cleanupBlocked: true,
 	}
 	flushDone := make(chan error, 1)
-	var app *daemon
-	app = &daemon{
+	app := &daemon{
 		config:  testConfig(t),
-		store:   store,
+		store:   faultStore,
 		control: controlClient,
 		log:     slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		running: map[state.RunKey]*runningRun{key: active},
 		options: options{
 			newID: ids(),
 			clock: time.Now,
-			queueTerminalTransitionAndAcknowledgement: func(runKey state.RunKey, transition protocol.StateTransitionRequest, acknowledgement protocol.CommandAcknowledgement, at time.Time) (state.RunJournal, error) {
-				journal, err := store.QueueTerminalTransitionAndAcknowledgementAt(runKey, transition, acknowledgement, at)
-				if err != nil {
-					return state.RunJournal{}, err
-				}
-				go func() { flushDone <- app.flushRun(context.Background(), journal) }()
-				select {
-				case <-controlClient.acknowledgementAccepted:
-				case <-time.After(2 * time.Second):
-					return state.RunJournal{}, errors.New("outbox did not accept the terminal before unknown write return")
-				}
-				return state.RunJournal{}, errors.New("injected post-write unknown terminal pair")
-			},
 		},
+	}
+	faultStore.OnQueueTerminalTransitionAndAcknowledgementAt = func(runKey state.RunKey, transition protocol.StateTransitionRequest, acknowledgement protocol.CommandAcknowledgement, at time.Time) (state.RunJournal, error) {
+		journal, err := store.QueueTerminalTransitionAndAcknowledgementAt(runKey, transition, acknowledgement, at)
+		if err != nil {
+			return state.RunJournal{}, err
+		}
+		go func() { flushDone <- app.flushRun(context.Background(), journal) }()
+		select {
+		case <-controlClient.acknowledgementAccepted:
+		case <-time.After(2 * time.Second):
+			return state.RunJournal{}, errors.New("outbox did not accept the terminal before unknown write return")
+		}
+		return state.RunJournal{}, errors.New("injected post-write unknown terminal pair")
 	}
 
 	app.completeNativeRunAfterUsage(context.Background(), key, active, result, nil, nil, false)
@@ -92,21 +93,22 @@ func TestAtomicTerminalAcknowledgementUnknownWriteRejectsConflicts(t *testing.T)
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			store, key := claimedGoalDeliveryStore(t)
+			faultStore := apptest.NewFaultStoreFrom(store)
+			faultStore.OnQueueTerminalTransitionAndAcknowledgementAt = func(runKey state.RunKey, transition protocol.StateTransitionRequest, acknowledgement protocol.CommandAcknowledgement, at time.Time) (state.RunJournal, error) {
+				test.mutate(&transition, &acknowledgement)
+				if _, err := store.QueueTerminalTransitionAndAcknowledgementAt(runKey, transition, acknowledgement, at); err != nil {
+					return state.RunJournal{}, err
+				}
+				return state.RunJournal{}, errors.New("injected conflicting unknown write")
+			}
 			app := &daemon{
 				config:  testConfig(t),
-				store:   store,
+				store:   faultStore,
 				log:     slog.New(slog.NewJSONHandler(io.Discard, nil)),
 				running: make(map[state.RunKey]*runningRun),
 				options: options{
 					newID: ids(),
 					clock: time.Now,
-					queueTerminalTransitionAndAcknowledgement: func(runKey state.RunKey, transition protocol.StateTransitionRequest, acknowledgement protocol.CommandAcknowledgement, at time.Time) (state.RunJournal, error) {
-						test.mutate(&transition, &acknowledgement)
-						if _, err := store.QueueTerminalTransitionAndAcknowledgementAt(runKey, transition, acknowledgement, at); err != nil {
-							return state.RunJournal{}, err
-						}
-						return state.RunJournal{}, errors.New("injected conflicting unknown write")
-					},
 				},
 			}
 

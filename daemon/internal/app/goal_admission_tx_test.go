@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wxxb789/symmetry/daemon/internal/app/apptest"
 	"github.com/wxxb789/symmetry/daemon/internal/authority"
 	"github.com/wxxb789/symmetry/daemon/internal/config"
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
@@ -203,15 +204,17 @@ func TestGoalAdmissionTxSettlesFreshCancellationWithoutCompensation(t *testing.T
 }
 
 func TestGoalAdmissionTxAbortsQueuedAttachBeforeNativeStart(t *testing.T) {
-	app, _, _, key, claim, admission := nativeAdmissionFixture(t)
+	app, store, _, key, claim, admission := nativeAdmissionFixture(t)
+	faults := apptest.NewFaultStoreFrom(store)
+	app.store = faults
 	app.running[key] = &runningRun{runLifecycle: runLifecycle{starting: true, claimed: true, cancelled: true}}
 	aborted := 0
 	discarded := 0
-	app.options.abortGoalSessionLaunchBeforeNativeStart = func(sessionKey state.GoalSessionKey) (state.GoalSessionJournal, error) {
+	faults.OnAbortGoalSessionLaunchBeforeNativeStart = func(sessionKey state.GoalSessionKey) (state.GoalSessionJournal, error) {
 		aborted++
 		return state.GoalSessionJournal{GoalID: sessionKey.GoalID, LocalHandleID: sessionKey.LocalHandleID}, nil
 	}
-	app.options.discardUnreadyGoalSessionAttachDelivery = func(state.RunKey, string) (state.RunJournal, error) {
+	faults.OnDiscardUnreadyGoalSessionAttachDelivery = func(state.RunKey, string) (state.RunJournal, error) {
 		discarded++
 		return state.RunJournal{}, nil
 	}
@@ -227,7 +230,7 @@ func TestGoalAdmissionTxAbortsQueuedAttachBeforeNativeStart(t *testing.T) {
 	}
 
 	abortFailure := errors.New("abort failed")
-	app.options.abortGoalSessionLaunchBeforeNativeStart = func(state.GoalSessionKey) (state.GoalSessionJournal, error) {
+	faults.OnAbortGoalSessionLaunchBeforeNativeStart = func(state.GoalSessionKey) (state.GoalSessionJournal, error) {
 		return state.GoalSessionJournal{}, abortFailure
 	}
 	cancelled, err = tx.abortFreshLaunchIfCancelled()
@@ -288,11 +291,13 @@ func TestGoalAdmissionTxKeepsKnownPreNativeFailureUnwrapped(t *testing.T) {
 }
 
 func TestGoalAdmissionTxRunsOnlyTheOutcomeCompensationAfterNativeHandover(t *testing.T) {
-	app, _, session, key, claim, admission := nativeAdmissionFixture(t)
+	app, store, session, key, claim, admission := nativeAdmissionFixture(t)
+	faults := apptest.NewFaultStoreFrom(store)
+	app.store = faults
 	app.running[key] = &runningRun{runLifecycle: runLifecycle{starting: true, claimed: true}}
 	session.handle = harness.NativeSessionHandle{}
 	discardFailure := errors.New("discard write failed")
-	app.options.discardUnreadyGoalSessionAttachDelivery = func(state.RunKey, string) (state.RunJournal, error) {
+	faults.OnDiscardUnreadyGoalSessionAttachDelivery = func(state.RunKey, string) (state.RunJournal, error) {
 		return state.RunJournal{}, discardFailure
 	}
 
