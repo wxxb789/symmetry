@@ -1,5 +1,5 @@
 defmodule SymmetryControl.Migrations.AddWorkItemCreationIdentityMigrationTest do
-  use SymmetryControl.MigrationCase, async: false
+  use SymmetryControl.MigrationCase, async: true
 
   alias SymmetryControl.Repo
   alias SymmetryControl.Repo.Migrations.AddWorkItemCreationIdentity
@@ -97,7 +97,7 @@ defmodule SymmetryControl.Migrations.AddWorkItemCreationIdentityMigrationTest do
   defp migrate_creation_identity_down! do
     Ecto.Migrator.run(
       Repo,
-      [{@migration_version, AddWorkItemCreationIdentity}],
+      MigrationModules.verified_pairs!([{@migration_version, AddWorkItemCreationIdentity}]),
       :down,
       step: 1,
       log: false,
