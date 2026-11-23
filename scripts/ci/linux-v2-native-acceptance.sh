@@ -323,18 +323,19 @@ linux_v2_fetch_native_tools "$fixture_root"
 . /etc/os-release
 codename=${VERSION_CODENAME:?Ubuntu release codename is unavailable}
 # The public archive drops individual packages from the hosted runner network; mirror
-# the highest-priority archive from the image's own apt mirrorlist, as debootstrap's source.
-ubuntu_mirror=https://archive.ubuntu.com/ubuntu
-apt_mirror_uri=$(awk '/^[[:space:]]*https?:\/\/[^ ]*\/ubuntu\/?[[:space:]]/ { sub(/\/$/, "", $1); print $1; exit }' /etc/apt/apt-mirrors.txt 2>/dev/null)
+# the first archive URI in the image's own apt mirrorlist, as debootstrap's source.
+ubuntu_mirror=
+apt_mirror_uri=$(awk '/^[[:space:]]*https?:\/\/[^ ]*\/ubuntu\/?[[:space:]]/ { sub(/\/$/, "", $1); print $1; exit }' /etc/apt/apt-mirrors.txt 2>/dev/null || true)
 case "$apt_mirror_uri" in
 http://*/ubuntu|https://*/ubuntu) ubuntu_mirror=$apt_mirror_uri ;;
 *)
-  sources_uri=$(awk '/^URIs:/ { print $2; exit }' /etc/apt/sources.list.d/*.sources 2>/dev/null)
+  sources_uri=$(awk '/^URIs:/ { print $2; exit }' /etc/apt/sources.list.d/*.sources 2>/dev/null || true)
   case "$sources_uri" in
   http://*/ubuntu|https://*/ubuntu|http://*/ubuntu/|https://*/ubuntu/) ubuntu_mirror=${sources_uri%/} ;;
   esac
   ;;
 esac
+[[ -n "$ubuntu_mirror" ]] || fail 'the image apt mirrorlist and apt sources name no Ubuntu archive for debootstrap'
 printf 'Using the image apt archive mirror for the disposable rootfs: %s\n' "$ubuntu_mirror"
 sudo debootstrap --variant=minbase \
   --include=acl,binutils,bash,ca-certificates,coreutils,curl,dbus,git,libacl1,libcap2-bin,libgcc-s1,libstdc++6,passwd,procps,python3,sudo,systemd,systemd-sysv,tar,util-linux \
