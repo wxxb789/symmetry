@@ -3263,6 +3263,7 @@ type linuxSupervisorScanJournalModel struct {
 	events                []string
 	recoverySealAttempts  int
 	recoverySealWriteErr  error
+	unproven              bool
 }
 
 type linuxSupervisorScanProgressModel struct {
@@ -3331,16 +3332,18 @@ func (model *linuxSupervisorScanJournalModel) prepare(handoff authority.Supervis
 	case authority.SupervisorScanPhaseUnproven:
 		progress.failure = update.FailureKind
 	case authority.SupervisorScanPhaseAssertClean:
+		owner := model.progress[update.Owner]
 		helper := model.progress[authority.SupervisorScanOwnerHelper]
 		mirror := model.progress[authority.SupervisorScanOwnerMirror]
-		if helper.completed == 0 || mirror.completed == 0 || helper.failure != "" || mirror.failure != "" {
+		if owner.completed != update.Sequence || helper.completed == 0 || mirror.completed == 0 || helper.failure != "" || mirror.failure != "" {
 			return errors.New("Linux containment scan evidence is unresolved")
 		}
 	case authority.SupervisorScanPhaseAssertAllSealed:
 		model.assertAllSealed++
+		owner := model.progress[update.Owner]
 		helper := model.progress[authority.SupervisorScanOwnerHelper]
 		mirror := model.progress[authority.SupervisorScanOwnerMirror]
-		if helper.completed == 0 || helper.sealed != helper.completed || helper.failure != "" ||
+		if owner.sealed != update.Sequence || helper.completed == 0 || helper.sealed != helper.completed || helper.failure != "" ||
 			mirror.completed == 0 || mirror.sealed != mirror.completed || mirror.failure != "" {
 			model.assertAllSealedFailed++
 			return errors.New("Linux containment scan seals are unresolved")
@@ -3350,8 +3353,8 @@ func (model *linuxSupervisorScanJournalModel) prepare(handoff authority.Supervis
 	return nil
 }
 
-// The store's RecordSupervisorRecoveryScanSeal rules: exact authority CAS, a prior
-// durable mirror seal, the exact Completed+1 sequence and an idempotent replay.
+// The store's RecordSupervisorRecoveryScanSeal rules: exact authority CAS, a prior durable clean
+// mirror seal with no unproven observation, the exact Completed+1 sequence and an idempotent replay.
 func (model *linuxSupervisorScanJournalModel) recordRecoveryScanSeal(expected authority.Supervisor, sequence uint64) error {
 	model.mutex.Lock()
 	defer model.mutex.Unlock()
@@ -3364,7 +3367,7 @@ func (model *linuxSupervisorScanJournalModel) recordRecoveryScanSeal(expected au
 		return errors.New("Linux helper recovery seal authority identity mismatch")
 	}
 	mirror := model.progress[authority.SupervisorScanOwnerMirror]
-	if mirror.completed == 0 || mirror.sealed != mirror.completed || mirror.failure != "" {
+	if model.unproven || mirror.completed == 0 || mirror.sealed != mirror.completed || mirror.failure != "" {
 		return errors.New("Linux helper recovery seal requires a durable clean mirror seal")
 	}
 	progress := model.progress[authority.SupervisorScanOwnerHelper]
@@ -3379,6 +3382,12 @@ func (model *linuxSupervisorScanJournalModel) recordRecoveryScanSeal(expected au
 	progress.sealed = sequence
 	model.progress[authority.SupervisorScanOwnerHelper] = progress
 	return nil
+}
+
+func (model *linuxSupervisorScanJournalModel) markContainmentUnproven() {
+	model.mutex.Lock()
+	model.unproven = true
+	model.mutex.Unlock()
 }
 
 type linuxSupervisorScanJournalSnapshot struct {
@@ -3471,6 +3480,7 @@ func runLiveOwnerResponseLossStop(t *testing.T, model *linuxSupervisorScanJourna
 		unprovenMutex.Lock()
 		unprovenCalls++
 		unprovenMutex.Unlock()
+		model.markContainmentUnproven()
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -3621,8 +3631,9 @@ func TestLinuxSupervisorLiveOwnerControlCloseInProcessStopSealWriteFailureFailsC
 	if tail := snapshot.events[max(0, len(snapshot.events)-len(wantTail)):]; !slices.Equal(tail, wantTail) {
 		t.Fatalf("durable write order tail = %#v, want %#v", tail, wantTail)
 	}
-	// A retry re-attempts the same proof and stays fail-closed; the durable containment-unproven
-	// mark the failed attempt wrote refuses the store rule itself.
+	// A retry re-attempts the same proof and stays fail-closed: the containment-unproven mark the
+	// failed attempt persisted makes the modelled store rule refuse the replay with no injected error.
+	model.recoverySealWriteErr = nil
 	if retryErr := scenario.supervisor.Terminate(true); !errors.Is(retryErr, ErrLinuxSupervisorStopUnproven) {
 		t.Fatalf("response-loss stop retry = %v, want the fail-closed unproven class", retryErr)
 	}
@@ -3720,6 +3731,41 @@ func TestLinuxSupervisorLiveOwnerControlCloseInProcessStopRecordsTheHelperReturn
 		t.Fatalf("recovery-endpoint receipt = %#v, want the adopted receipt %#v", replayed, receipt)
 	}
 	releaseLiveOwnerHelper(t, scenario.supervisor, scenario.value, receipt)
+}
+
+// The store CASes an assert update's sequence against the owner's durable progress
+// (`supervisor_handoff_journal.go`), so the model must refuse a stale assertion.
+func TestLinuxSupervisorScanJournalModelRefusesStaleAssertSequences(t *testing.T) {
+	model := newLinuxSupervisorScanJournalModel()
+	for _, step := range []struct {
+		owner    string
+		phase    string
+		sequence uint64
+	}{
+		{authority.SupervisorScanOwnerHelper, authority.SupervisorScanPhaseBegin, 1},
+		{authority.SupervisorScanOwnerHelper, authority.SupervisorScanPhaseClean, 1},
+		{authority.SupervisorScanOwnerHelper, authority.SupervisorScanPhaseRetire, 1},
+		{authority.SupervisorScanOwnerHelper, authority.SupervisorScanPhaseSeal, 1},
+		{authority.SupervisorScanOwnerMirror, authority.SupervisorScanPhaseBegin, 1},
+		{authority.SupervisorScanOwnerMirror, authority.SupervisorScanPhaseClean, 1},
+		{authority.SupervisorScanOwnerMirror, authority.SupervisorScanPhaseRetire, 1},
+		{authority.SupervisorScanOwnerMirror, authority.SupervisorScanPhaseSeal, 1},
+	} {
+		update := authority.SupervisorHandoff{ScanUpdate: &authority.SupervisorScanUpdate{Owner: step.owner, Phase: step.phase, Sequence: step.sequence}}
+		if err := model.prepare(update); err != nil {
+			t.Fatalf("prepare %s %s:%d: %v", step.owner, step.phase, step.sequence, err)
+		}
+	}
+	for _, stale := range []string{authority.SupervisorScanPhaseAssertClean, authority.SupervisorScanPhaseAssertAllSealed} {
+		current := authority.SupervisorHandoff{ScanUpdate: &authority.SupervisorScanUpdate{Owner: authority.SupervisorScanOwnerMirror, Phase: stale, Sequence: 1}}
+		if err := model.prepare(current); err != nil {
+			t.Fatalf("%s:%d refused the mirror's durable sequence: %v", stale, 1, err)
+		}
+		outdated := authority.SupervisorHandoff{ScanUpdate: &authority.SupervisorScanUpdate{Owner: authority.SupervisorScanOwnerMirror, Phase: stale, Sequence: 2}}
+		if err := model.prepare(outdated); err == nil {
+			t.Fatalf("%s accepted a stale sequence", stale)
+		}
+	}
 }
 
 func TestLinuxSupervisorPreCommitAbortUsesPhysicalAbsenceNotReceipt(t *testing.T) {

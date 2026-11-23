@@ -91,11 +91,11 @@ type LinuxSupervisorStartSpec struct { RecordRecoveryScanSeal func(authority.Sup
    `TestLinuxSupervisorLiveOwnerControlCloseInProcessStopRecordsSeal` (rename recorded with the old
    name): the same live-owner control-close scenario now asserts a successful stop, zero unproven
    callbacks, the adopted receipt, the durable state (helper `completed=2, sealed=2`; mirror
-   `1/1`), exactly one seal write with the exact authority and `Completed+1`, the ordered event tail
-   (`mirror:seal:1`, `recovery-scan-seal:2`, `mirror:assert_all_sealed:1`) and no refused
-   assertion. A subtest with a failing seal write pins §3.3. The pin's journal model gains the
-   store's recovery-seal rules (authority CAS, prior mirror seal, exact `Completed+1`, idempotent
-   replay, no unproven journal).
+   `2/2`, its sequence read from the model), exactly one seal write with the exact authority and
+   `Completed+1`, the ordered event tail (`mirror:assert_clean:2`, `mirror:seal:2`,
+   `recovery-scan-seal:2`, `mirror:assert_all_sealed:2`) and no refused assertion. A subtest with a
+   failing seal write pins §3.3. The pin's journal model gains the store's recovery-seal rules
+   (authority CAS, prior mirror seal, exact `Completed+1`, idempotent replay, no unproven journal).
 
 ## 4. Evidence plan
 

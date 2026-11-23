@@ -14,7 +14,7 @@ rows run Ubuntu-24.04 over the same worktree through its mount point (`<worktree
 | File | sha256 |
 | --- | --- |
 | `daemon/internal/platform/supervisor_linux_client.go` | `0b5642affc09cd6470b57bb173cc17c4544ebf7adffbb9745102c3a63a6b1821` |
-| `daemon/internal/platform/containment_supervisor_linux_test.go` | `780b20731bc3e625f28f46ce85e820e106045318a9a4918c47595e4515c14597` |
+| `daemon/internal/platform/containment_supervisor_linux_test.go` | `7e56cd760a860022a5961cb46b6124dffde051a463bec987978d36584ea7c529` |
 | `daemon/internal/execution/recorder.go` | `10833a31fbfa02f4b36ef2f8783a9cea1c4d158caf2e2621fc115a9f0bb90114` |
 | `daemon/internal/execution/recorder_test.go` | `b5fb2866b8c8afe15229b8d2493ac4934d190aaf4401e05f4277e91181811e9f` |
 | `daemon/internal/execution/process_launcher_linux.go` | `77ecbf4c8453f052446e824a06dfb809771039563def8e77aff8fc56a601a540` |
@@ -24,7 +24,7 @@ rows run Ubuntu-24.04 over the same worktree through its mount point (`<worktree
 | `daemon/internal/app/apptest/faultstore.go` | `aeb257808710dab11486154c9817671822376c0ebe3a0bccc48be783846742a2` |
 | `docs/TODO.md` | `84d3c7d618fcf5e94ec9b3228153e4d842db6df6120361f956a29b5d34d54a36` |
 | `docs/archive/CLOSED-TODO.md` | `e91f81ede69711e3b8a70611822090d990e9f83f5525e8fafa45a114b546cc41` |
-| `docs/plans/2026-11-23-rf-w4-22-response-loss-seal-consumer-plan.md` | `c23a191504e5b2857ba2227064e120ee5117c66fa5108dcb7d904220d96f6972` |
+| `docs/plans/2026-11-23-rf-w4-22-response-loss-seal-consumer-plan.md` | `6a15f81d8fb904bf8e05092b52b4b74e0b1a0fa3bba7a3419cf7343667a204ef` |
 | this record | the file you are reading (no self-referential hash) |
 
 ## 2. The one new write
@@ -115,7 +115,7 @@ live stop path calls the same composed function.
 | --- | --- | --- |
 | before the mirror seal | authority committed, mirror unsealed, helper `1/0` | base behaviour: a restarted daemon's plain route writes the receipt only if `requireLinuxScansSealedForAuthority` holds; otherwise the stop stays unproven (unchanged by this slice) |
 | after the mirror seal, before the recovery seal | mirror `2/2`, helper `1/0` → `RecoveryHelperScanSealEligible()` true | today's restart path: `terminatePersistAuthorityWithScanSeal` → `RecordSupervisorRecoveryScanSeal` (`Completed+1`) → receipt (`daemon/internal/app/recovery.go:449-470`) |
-| after the recovery seal, before the receipt | mirror `2/2`, helper `2/2`, no receipt | a restarted daemon takes the plain `terminatePersistAuthority` route (`RecoveryHelperScanSealEligible` is false because the helper is sealed) and the receipt write passes `requireLinuxScansSealedForAuthority`; a dead helper with no persisted receipt refuses exactly as at base; an in-process retry re-attempts the same endpoint proof, and because this window's failure callback already wrote the durable containment-unproven mark the store refuses the rule itself (`containment_journal.go:413-415`) — the pin's failure arm re-runs `Terminate` and pins that refusal and the re-attempt |
+| after the recovery seal, before the receipt | mirror `2/2`, helper `2/2`, no receipt | a restarted daemon takes the plain `terminatePersistAuthority` route (`RecoveryHelperScanSealEligible` is false because the helper is sealed) and the receipt write passes `requireLinuxScansSealedForAuthority`; a dead helper with no persisted receipt refuses exactly as at base; an in-process retry re-attempts the same endpoint proof, and because this window's failure callback already wrote the durable containment-unproven mark the store refuses the rule itself (`containment_journal.go:413-415`) — the pin's failure arm re-runs `Terminate` with the injected write error cleared and pins that refusal and the re-attempt (§13, probe F2) |
 | after the receipt adoption | receipt durable | unchanged base behaviour |
 
 Store-level idempotency and the one-exact-replay barrier are pinned by the state suite
@@ -231,11 +231,14 @@ plane or harness-adapter file is touched, and no path is under `daemon/internal/
 R9: `daemon/internal/app/process_recorder.go` is the only `SOURCE_PATHS` file among them and it
 gains code (13 added, 0 removed), so no listed path loses code.
 
-Result-bearing hygiene, on the final tree: a case-insensitive scan of every added line plus the
-untracked files for a workstation profile-path fragment finds no match (the only whole-file hits are
-pre-existing text: `localHandleID` matching the name fragment, and a historic `C:/Users/...` quote
-inside `CLOSED-TODO.md`); a byte scan for the backslash-u escape pair finds none in any added line
-or untracked file (pre-existing historic entries elsewhere in `CLOSED-TODO.md` carry such escapes).
+Result-bearing hygiene, on the final tree: scanning the line ranges the branch adds, plus the
+untracked files, case-insensitively for the account-name fragment and for path shapes (drive
+letters, the Linux mount, scratch and home prefixes) described here in prose finds no host path;
+the only whole-file hits are pre-existing text — an identifier that spells the account fragment
+inside a longer name, and a historic escaped profile-path quote inside `CLOSED-TODO.md`. §13
+records the two self-referential added-line hits the review found at `b3ca0367` and the rewrite
+that removed them. A byte scan for the backslash-u escape pair finds none in any added line or
+untracked file (pre-existing historic entries elsewhere in `CLOSED-TODO.md` carry such escapes).
 
 ## 9. As-built deviations from the plan/contract
 
@@ -317,9 +320,15 @@ the residual classes (§11); no finding was rejected as invalid.
 ## 11. Residual risks and known limits
 
 - The platform pin uses a journal model narrower than `state.Store`; it models the recovery-seal
-  rules that matter here (authority CAS via `handoff.ToSupervisor()`, prior durable mirror seal,
-  exact `Completed+1`, idempotent replay, no advance on a failed write) and does not model the
-  store's `ContainmentUnproven` flag or the journal write barrier. The store's own suite pins those.
+  rules that matter here (authority CAS via `handoff.ToSupervisor()`, prior durable clean mirror
+  seal with no unproven observation, exact `Completed+1`, idempotent replay, no advance on a failed
+  write, the assert-update sequence CAS at `state/supervisor_handoff_journal.go:269`/`:277`, and the
+  containment-unproven refusal at `state/containment_journal.go:412-415` that the fix stage
+  re-pinned). It does not model the journal write barrier or the store's broader unproven gate on
+  scan updates (`recordSupervisorScanUpdate`'s unproven gate, `:165-167`). The store's own suite pins
+  the mirror-seal precondition and the idempotent replay; the unproven refusal is pinned by the
+  pin's own arms because the store suite never marks a journal unproven before its recovery-seal
+  calls (§13, probe F2).
 - A response-loss stop whose helper response is refused by another store rule (for example a
   stale authority binding) is now reported through the same fail-closed wrapper as before; no path
   reaches the receipt without the durable all-sealed assertion passing.
@@ -394,9 +403,69 @@ bytes and the other nine rows still match. Gate re-runs on the applied tree:
 | apply-stage mutant re-runs m1, m2, m3, m4, m5 (each applied alone to the applied tree, run against the pin family, reverted; m5 is the function-body constant-sequence form, the call-site form does not build) | 1 | 5/5 red with the recorded first lines: m1 three arms (3541/3595/3691), m2 the same three ("the assertion refuses before the write"), m3 three arms including the recorded order tail, m4 the failure arm only, m5 the resumed-helper arm only; m6 not re-run — its subject (`linuxSupervisorStartSpec`) is outside the apply delta and the carrier test re-ran green |
 | restored-tree pin family re-run after the reverts (`-run TestLinuxSupervisorLiveOwnerControlCloseInProcessStop ./internal/platform/...`) | 0 | `ok platform 0.429s` |
 | `sha256sum -c` (§1, 12 rows, after the reverts) | 0 | 12/12 OK |
-| added-line DLP scan (`users/`, backslash-u) | 0 | no match |
+| added-line scan: profile-path shapes (prose) and the backslash-u escape pair | 0 | no host path, no escape pair in the added lines; the raw fragment scan read this record's own two restatements — §13 rewrites both lines and restates the scan in prose |
 
 §7's table binds the implement-stage committed tree; the rows above re-validate the applied tree.
 No measurement harness applies: this slice carries no consumer metric beyond §4's durable-write
 order table, which the pin's ordered-tail assertion re-verifies (green). The two long suites ran
 serialized, Windows first.
+
+## 13. Review-fix stage amendments (2026-11-23, fix r1)
+
+Review report: the review stage's `answer.md` (verdict `MUST_FIX (4)`, findings F1-F5). This stage
+changed the pin's journal model, the failure arm's retry setup, the plan's §3.5 numbers and this
+record; no production byte, contract clause, existing assertion or durable order moved, and nothing
+was committed. The model now carries the store's unproven precondition and both assert-CAS rules,
+so the pin's durable-evidence oracle matches `state` rather than approximating it.
+
+| Finding | Disposition | Change and probe |
+| --- | --- | --- |
+| F1 (P2) | Fixed | Two added lines spelled the account-name fragment (the §8 hygiene sentence and the §12 scan row), so the contract's raw fragment scan over the committed range read 2 added hits while the record claimed 0. Both are rewritten in prose; the §12 row now states the path-shape scan it measured, and §8 names the probe. Fix-revision probes: the added lines of `git diff origin/main` (filtered for `^+`) hold zero account-name fragment matches, zero path shapes (drive letters and the Linux mount, scratch, home, root, private and var prefixes) and zero backslash-u pairs; `python scripts/ci/model-routing-record-sanitize.py --check --root-only` on this record exits 0 (it exited 1 before the rewrite); `python scripts/ci/check-record-cleanliness.py --base cafd5488 --head b3ca0367` still exits 1 because it reads the committed blob of `b3ca0367`, where this uncommitted rewrite is not visible. |
+| F2 (P3) | Fixed | The failure arm's retry was refused by the injected write error, not by the durable unproven mark its comment and §11 claimed, and the model had no unproven state, while the real store refuses an unproven journal (`state/containment_journal.go:412-415`) and its own suite never covers that refusal (probe: `grep -rn RecordSupervisorRecoveryScanSeal internal/state/*_test.go` returns only `supervisor_handoff_test.go:1156`/`:1176`/`:1191`, none reached with an unproven journal). The double now records the mark (`markContainmentUnproven`, called from the pin's unproven callback exactly where production persists it) and `recordRecoveryScanSeal` refuses on it with the store's precondition; the retry clears the injected error first, so the refusal is the mark's. Red-first probe: with only the clearing line added and the model unchanged, the retry adopted the receipt (`response-loss stop retry = <nil>`); with the fix, the four arms and the new arm pass under `-race`. |
+| F3 (P3) | Fixed; the review's mutant claim did not reproduce | The double's assert branches did not model the store's `update.Sequence` CAS (`state/supervisor_handoff_journal.go:269`/`:277`). The fix adds the CAS to both branches plus a direct arm (`TestLinuxSupervisorScanJournalModelRefusesStaleAssertSequences`: the owner's durable sequence is accepted, the stale one refused). Probe: a mutant of `assertDurableScanStateSealed` sending `sequence - 1` does not survive at `b3ca0367` — it reddens `RecordsSeal` and `RecordsTheHelperReturnedSequence` at the ordered-tail assertion (`mirror:assert_all_sealed:1` against the wanted `:2`), so the review's "all four arms stay green" is refuted; the CAS is applied as model hardening with two killing mutants (m9, m10) rather than as the only oracle. |
+| F4 (P3) | Fixed | Plan §3.5 wrote mirror `1/1` and the tail `mirror:seal:1`, `recovery-scan-seal:2`, `mirror:assert_all_sealed:1`; the measured durable state is mirror `2/2` with the `:2` tail (§4's table; the response-loss request opens a second mirror sequence before the latch). §3.5 now carries the measured values and notes that the pin reads the mirror sequence from the model. Probe: the pin's ordered-tail assertion at the fix revision (green) plus §4's measured table. |
+| F5 (P3, advisory) | Recorded, no code change (as its own disposition says) | The inner cause of a seal-write failure differs from base's assertion-refusal text; the wrapper, the sentinel pair, the single unproven mark and the durable order are unchanged, and no consumer keys on the inner text. The finding defers to conductor ratification rather than asking for an edit; the rejected alternative (revert to the assertion refusal) would misattribute the cause. |
+
+New mutants at the fix revision (each applied alone to the fixed tree, run against the pin family
+and the new arm, then reverted; the restored tree is byte-identical in the modified files):
+
+| Mutant | Edit | Killer (exit 1) |
+| --- | --- | --- |
+| m7 | drop `model.markContainmentUnproven()` from the pin's unproven callback | failure arm: `response-loss stop retry = <nil>, want the fail-closed unproven class` |
+| m8 | drop `model.unproven ||` from the model's recovery-seal precondition | same failure-arm line |
+| m9 | drop `owner.completed != update.Sequence ||` from the assert-clean branch (with its now-unused read) | new arm: `assert_clean accepted a stale sequence` |
+| m10 | drop `owner.sealed != update.Sequence ||` from the assert-all-sealed branch (with its read) | new arm: `assert_all_sealed accepted a stale sequence` |
+
+Re-run of the implement/apply mutants at the fix revision (the pin family changed, so all six were
+re-run rather than inherited from §6/§12): m1 red on the success, failure and resumed arms (`Linux
+containment scan seals are unresolved` against `want a completed stop` / `want the freeze wrapper
+unchanged`); m2 the same three lines; m3 the same three plus the failure arm's tail
+`recovery-scan-seal:3` against `:2`; m4 red on the failure arm only; m5 red on the resumed-helper
+arm only; m6 red on `TestLinuxSupervisorStartSpecCarriesEveryLaunchWrite` (`start spec dropped a
+recorder write`). Restored tree: the focused family, the new arm and the carrier test re-ran green,
+and `git status` showed only the one subject test file modified.
+
+§1 rows refreshed: `containment_supervisor_linux_test.go` and the plan moved (the stage's only
+subject edits); the other ten rows still match, so `sha256sum -c` over §1 reads 12/12 OK.
+
+Fix-revision gates (working directory `daemon/` unless a row says otherwise; WSL rows run
+Ubuntu-24.04 over the same worktree as `wsl -d Ubuntu-24.04 -u accept`; the stage's subject delta is
+the platform test file, the plan and this record, so the full `app` suites stay conductor-owned and
+were not re-run):
+
+| Gate (working directory) | Exit | Output |
+| --- | --- | --- |
+| `gofmt -l .` (`daemon/`) | 0 | no file listed |
+| `git diff --check` (git root) | 0 | no whitespace error |
+| `go vet ./...` (`daemon/`) | 0 | empty log |
+| `GOOS=linux`/`windows`/`darwin` `go build ./...` (`daemon/`) | 0 | 3/3 ok |
+| WSL `go test -count=1 -race -timeout 3000s ./internal/platform/... ./internal/execution/...` | 0 | platform 62.626s, execution 22.512s; no race report |
+| focused family WSL: `-race -run 'TestLinuxSupervisorLiveOwnerControlCloseInProcessStop\|TestLinuxSupervisorScanJournalModelRefusesStaleAssertSequences\|TestLinuxSupervisorStartSpecCarriesEveryLaunchWrite' ./internal/platform/... ./internal/execution/...` | 0 | 4 arms + the new model arm + the carrier test; platform 6.019s, execution 1.215s |
+| load run WSL: `GOMAXPROCS=8 go test -count=200 -race -timeout 3000s -run 'TestLinuxSupervisorLiveOwnerControlCloseInProcessStop\|TestLinuxSupervisorScanJournalModelRefusesStaleAssertSequences' ./internal/platform/...` | 0 (`tail` end of a pipe; the run's own verdict is its summary line) | `ok platform 930.620s`; 200 repetitions of the four arms and the model arm, no failure line |
+| Windows `go test -count=1 ./internal/platform/... ./internal/execution/...` | 0 | platform 7.754s, execution 15.585s |
+| `python scripts/ci/check-citation-existence.py --base cafd5488 --head b3ca0367` (git root) | 0 | 527 path citations, 1 changed document (3 pre-existing ignore-rule notes) |
+| `python scripts/ci/model-routing-record-sanitize.py --check --root-only` on this record and the plan (git root) | 0 | no host absolute path in either (this record read exit 1 before the rewrite) |
+| `python scripts/ci/check-record-cleanliness.py --base cafd5488 --head b3ca0367` (git root) | 1 | reads the committed `b3ca0367` blob, where this uncommitted rewrite is not visible; the working-tree form of the same check (above) is clean |
+| added-line scans: account-name fragment, path shapes, backslash-u pair (`git diff origin/main`, `^+` filter) | 0 | 0 hits each |
+| `sha256sum -c` (§1, 12 rows) | 0 | 12/12 OK |
+| platform package test functions (`grep -h '^func Test' internal/platform/*_test.go \| wc -l`): HEAD `b3ca0367` vs working tree | - | 332 → 333 (the new model arm); the changed file 58 → 59 |
