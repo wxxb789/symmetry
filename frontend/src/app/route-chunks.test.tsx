@@ -105,6 +105,26 @@ describe("route chunk loading", () => {
     expect(await screen.findByText(staleChunkErrorText)).toBeVisible();
   });
 
+  it("shows the route's error state without reloading when the session storage is blocked", async () => {
+    const storage = vi.spyOn(window, "sessionStorage", "get").mockImplementation(() => {
+      throw new DOMException("The operation is insecure.", "SecurityError");
+    });
+    try {
+      renderRoutes("/late", () => Promise.reject(new Error(moduleNotFoundMessage)));
+      expect(await screen.findByText("Something went wrong!")).toBeVisible();
+      expect(screen.getByText(staleChunkErrorText)).toBeVisible();
+      expect(reload).not.toHaveBeenCalled();
+      // The listener cannot claim the reload either, so it leaves the event to the
+      // boundary's rejection and the same terminal error state.
+      const event = preloadError(moduleNotFoundMessage);
+      window.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(false);
+      expect(reload).not.toHaveBeenCalled();
+    } finally {
+      storage.mockRestore();
+    }
+  });
+
   it("claims one reload for a Firefox module-not-found wording", async () => {
     renderRoutes("/late", () => Promise.reject(new Error("error loading dynamically imported module: http://localhost/portal/assets/chat-4f1c.js")));
     await waitFor(() => { expect(reload).toHaveBeenCalledTimes(1); });

@@ -23,8 +23,14 @@ function isChunkLoadFailure(error: unknown): boolean {
 }
 
 function claimReloadOnce(reload: () => void): boolean {
-  if (window.sessionStorage.getItem(staleChunkReloadKey) === buildId) return false;
-  window.sessionStorage.setItem(staleChunkReloadKey, buildId);
+  try {
+    if (window.sessionStorage.getItem(staleChunkReloadKey) === buildId) return false;
+    window.sessionStorage.setItem(staleChunkReloadKey, buildId);
+  } catch {
+    // A storage-blocked context cannot record the claim, so a reload there would
+    // repeat on every failure: the route's error state is the terminal state.
+    return false;
+  }
   reload();
   return true;
 }

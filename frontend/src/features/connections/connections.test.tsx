@@ -626,6 +626,21 @@ describe("connection management", () => {
     await waitFor(() => { expect(harness.history.location.search).toContain(connectionId); });
   });
 
+  it("keeps this page's own continuations when the URL spells the route in another case", async () => {
+    const harness = renderConnections(({ method }) => method === "POST"
+      ? new Response(JSON.stringify({ disposition: "created", connection: { id: connectionId } }), { status: 201 })
+      : undefined, "/portal/Connections");
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "New connection" }));
+    await user.type(screen.getByLabelText("Name"), "Azure delivery");
+    await user.type(screen.getByLabelText("Account or organization"), "acme");
+    harness.setConnections([connection({ id: connectionId, name: "Azure delivery" })]);
+    await user.click(screen.getByRole("button", { name: "Connect" }));
+    // The router matches this URL to the connections route whatever its case, so
+    // the create's selection move is still this page's own continuation.
+    await waitFor(() => { expect(harness.history.location.search).toContain(connectionId); });
+  });
+
   it("does not clear the newly selected connection when a removal settles late", async () => {
     const { promise: pending, resolve: release } = Promise.withResolvers<Response>();
     const harness = renderConnections(({ method }) =>

@@ -6,20 +6,22 @@ Plan: `docs/plans/2026-11-22-rf-w6-07-route-splitting-plan.md` (its §6 carries 
 below, resolved by the conductor ruling of 2026-11-22). Base revision `6d55c575`
 (`test(frontend): keep layout, scroll and focus invariants in the browser layer only (#254)`).
 Files: `frontend/src/app/router.tsx` (modified, +10/-6), `frontend/src/app/route-chunks.ts` (new,
-64 L), `frontend/src/app/route-chunks.test.tsx` (new, 126 L: 7 cases at implement, 4 more at the
-2026-11-23 apply stage),
+70 L at revision 4; +8/-2 of it is the storage-blocked guard, §13),
+`frontend/src/app/route-chunks.test.tsx` (new, 146 L: 7 cases at implement, 4 more at the
+2026-11-23 apply stage, 1 more at the r2 fix stage),
 `frontend/src/features/connections/connections.tsx` (modified, +8/-6 at implement: the mount-timing
-guard, §9a; +4/-2 more at the 2026-11-23 fix stage: the trailing-slash trim, §12),
-`frontend/src/features/connections/connections.test.tsx` (modified at the fix stage, +15/-0: the
-trailing-slash case, §12), the plan, this record.
+guard, §9a; +4/-2 more at the 2026-11-23 fix stage: the trailing-slash trim, §12; +5/-4 at the r2
+fix stage: the route-id guard, §13),
+`frontend/src/features/connections/connections.test.tsx` (modified at the fix stages, +15/-0 and
++15/-0: the trailing-slash case, §12, and the mixed-case case, §13), the plan, this record.
 
 Verdict up front: every contract gate is green on the settled tree — typecheck, lint, the 42-case
-router suite (byte-identical file), the 58-case connections suite (the pinned case from §9 among
-them), the full suite (27 files / 630 tests), and both builds. §9 carries the conflict attempt 1
+router suite (byte-identical file), the 59-case connections suite (the pinned case from §9 among
+them), the full suite (27 files / 632 tests), and the builds. §9 carries the conflict attempt 1
 hit, the conductor ruling that resolved it and the corrected guard; §6 carries the mutation runs
-(chunk-level, wrong lazy target, the mount-only guard revert, the three apply-stage reds, and the
-fix stage's trailing-slash row); §12 carries the fix stage's finding, probes and pin; §10 carries
-the host-feed limits.
+(chunk-level, wrong lazy target, the mount-only guard revert, the three apply-stage reds, the
+fix stage's trailing-slash row and the r2 fix stage's two rows); §12 carries the fix stage's
+finding, probes and pin; §13 carries the r2 fix stage's findings; §10 carries the host-feed limits.
 
 ## 1. Dispatch re-derivation (base `6d55c575`)
 
@@ -180,9 +182,10 @@ Upstream facts (installed: vite 8.3.8, `@tanstack/react-router` 1.170.46 → `@t
   writable: false }`; `Object.defineProperty` throws `Cannot redefine property: reload`). The unit
   test drives that seam; the real reload is the render gate's business.
 
-Unit test `frontend/src/app/route-chunks.test.tsx` (11 cases, all green; 491 ms in the full-suite
-json run, 11/11 in a standalone run). Cases 8-11 are the 2026-11-23 apply stage's additions, each
-shown red under the mutant of the rule it pins (§6 rows e-g):
+Unit test `frontend/src/app/route-chunks.test.tsx` (12 cases at revision 4, all green; 11/11 at the
+fix stage, 491 ms in that stage's full-suite json run). Cases 8-11 are the 2026-11-23 apply stage's
+additions and case 12 is §13's storage-blocked case; each is shown red under the mutant of the rule
+it pins (§6 rows e-g and j):
 
 | case | pins |
 | --- | --- |
@@ -197,6 +200,7 @@ shown red under the mutant of the rule it pins (§6 rows e-g):
 | `claims one reload for a Firefox module-not-found wording` | the boundary claims before the library's message-keyed guard can, for the Firefox wording |
 | `claims one reload for a Safari module-not-found wording` | same, for the Safari wording |
 | `leaves a preload failure that is not a stale chunk unclaimed and unprevented` | the listener's payload filter: a preload failure that is not a load-failure wording (Vite's CSS-dep message) causes no reload |
+| `shows the route's error state without reloading when the session storage is blocked` | the storage-blocked claim: no reload and no throw out of the listener or the boundary; the policy's stale-chunk error state is the terminal state |
 
 ## 6. Mutation runs (each applied alone, reverted, hash-verified)
 
@@ -210,6 +214,8 @@ shown red under the mutant of the rule it pins (§6 rows e-g):
 | f | each non-Chrome wording broken in `chunkLoadFailurePrefixes`, one at a time (`"error loading dynamically imported module"` → `"…modulX"`; then `"Importing a module script failed"` → `"…failedX"`) | `-t "Firefox module-not-found"` exit 1: `1 failed, 10 skipped (11)`, injected `reload` 0 calls (the boundary rethrows and `lazyRouteComponent`'s message-keyed guard takes over); `-t "Safari module-not-found"` exit 1: same shape, failed at the count assertion (`waitFor`, 1,062 ms) | apply-stage red (cases 9, 10) |
 | g | the listener's payload filter deleted (`if (!isChunkLoadFailure(event.payload)) return;`) | `vitest run src/app/route-chunks.test.tsx -t "unclaimed and unprevented"` exit 1: `1 failed, 10 skipped (11)`, `expected "vi.fn()" to not be called at all, but actually been called 1 times` | apply-stage red (case 11) |
 | h | the guard's trailing-slash trim removed — `stillOnConnections` back to `router.latestLocation.pathname === "/connections"` (HEAD's guard bytes; applied by the 2026-11-23 fix stage) | `vitest run src/features/connections/connections.test.tsx -t "keeps this page's own continuations"` exit 1 on the pre-fix bytes: `Test Files 1 failed (1)`, `Tests 1 failed \| 57 skipped (58)`, `AssertionError: expected '' to contain '20000000-0000-4000-8000-000000000001'`; the same case is `1 passed \| 57 skipped (58)`, exit 0, on the fixed bytes (`connections.tsx` sha256 `315dc0e4…`) | fix-stage red (case 58, §12) |
+| i | the r2 fix stage's branch: the guard's route-id compare back to the pathname's text (`stillOnConnections` = `trimPathRight(router.latestLocation.pathname).endsWith("/connections")`, case-sensitive; HEAD's predicate) | `vitest run src/features/connections/connections.test.tsx -t "spells the route in another case"` exit 1 on the mutant bytes: `Test Files 1 failed (1)`, `Tests 1 failed \| 58 skipped (59)`, `AssertionError: expected '' to contain '20000000-0000-4000-8000-000000000001'` at the selection-move assertion; the same case is `1 passed \| 58 skipped (59)`, exit 0, 8.30 s, on the fixed bytes (`connections.tsx` sha256 `9c17cc62…`; re-run green after the two-line comment trim, `be5e44b4…`, §13) | r2-fix-stage red (case 59, §13) |
+| j | the r2 fix stage's branch: `claimReloadOnce` back to the unguarded get/set pair (the `try`/`catch` guard removed) | `vitest run src/app/route-chunks.test.tsx -t "session storage is blocked"` exit 1 on the mutant bytes: `Test Files 1 failed (1)`, `Tests 1 failed \| 11 skipped (12)`; the route's error state renders the raw `SecurityError` (`The operation is insecure.`) instead of the stale-chunk message, failing the stale-message assertion at `route-chunks.test.tsx:115`; the same case is `1 passed \| 11 skipped (12)`, exit 0, 2.69 s, on the fixed bytes (`route-chunks.ts` sha256 `58a7d89a…`) | r2-fix-stage red (case 12, §13) |
 
 Every mutant was reverted and the revert checked with `sha256sum -c`:
 `frontend/src/app/router.tsx: OK`, `frontend/src/app/route-chunks.ts: OK`,
@@ -226,6 +232,15 @@ Row h is the reverse pair: its red ran on HEAD's `connections.tsx` bytes
 fixed file (`315dc0e4f97e8d0f218fe867c58b1ddd18777926cc844e4b393f3fc47debf4c4`); case 58's name and the
 suite's counts are §7's. `connections.test.tsx` moved from `ac68f053…` (the pinned case's file) to
 `8b1cf080…` by the one added case — the pinned §9 case's bytes are unchanged inside it.
+
+Rows i/j are revision 4's: each ran on its mutant bytes and was reverted by restoring the fixed
+file, checked with `sha256sum` against the pre-mutant hash — `connections.tsx`
+`9c17cc62e95a24dc47dada68f471dcac64c5c6b0434fbf73e3fbbd3e23b5f223` and `route-chunks.ts`
+`58a7d89a4b9c3b302953c496efacaa47d05040c70c5f560b6d742f1496c0f011` (identical before and after the
+mutant in each case). The revision-4 pin files hash `59876c18…` (`connections.test.tsx`, case 59)
+and `37ea8598…` (`route-chunks.test.tsx`, case 12). `connections.tsx` re-hashed to
+`be5e44b4…` with §13's comment trim (no code change); its isolation case re-ran green on the new
+bytes.
 
 ## 7. Gates (settled tree, attempt 2)
 
@@ -305,6 +320,21 @@ the json run of the same suite (source of the table above) 27 files / 630 tests 
 `build` exit 0 in 1.32 s and the §4 after-table plus the route→module→chunk re-check are that
 build's own output; the fix-stage mutant is §6 row h; `git diff --check` exit 0; both DLP greps 0
 matches and the slice records' host-path scan 0 matches (§12).
+
+R2-fix-stage refresh (2026-11-23, after §13's three findings; the source changes are the two guards
+and their two cases): typecheck exit 0 (`tsc --noEmit`, 4.86 s); lint exit 0 (`220 problems (0
+errors, 220 warnings)`, 50.51 s, cap unraised); the two changed pin files in one run exit 0,
+`Test Files 2 passed (2)`, `Tests 71 passed (71)`; the connections suite alone 59/59 green in 3 of 3
+runs; the helper's suite 12/12 green in 8 of 8 runs; the isolated new cases green — the mixed-case
+case `1 passed \| 58 skipped (59)`, 8.30 s, and the storage-blocked case `1 passed \| 11 skipped
+(12)`, 2.69 s; the gate payload `vitest run` exit 0, `Test Files 27 passed (27)`, `Tests 632 passed
+(632)` in 39.90 s, 35.20 s, four further runs (145.08 s for the four) and once more after the
+owner-policy comment trim (39.41 s) — one earlier invocation of the same bytes exited 1 with `Tests
+1 failed \| 631 passed (632)`, name not captured, and never reproduced (§11's host-flake class);
+`build` exit 0 (1.33 s) and §13's asset table is that build's own output, reproduced name- and
+size-identical after the comment trim; the r2-fix-stage mutants are §6 rows i-j; `git diff --check`
+exit 0; both DLP greps over the worktree diff (HEAD → revision 4) 0 matches and the record
+sanitizer exit 0 on each record (§13).
 
 ## 8. Attention and Runtimes: the eager decision with numbers
 
@@ -485,7 +515,10 @@ trailing-slash form of the URL is §12's probe.
   (`work/assignment` 10/10, `work/control` 10/13, `router` 6/42, `goal-settle` 1/8) and all with an
   empty rendered tree (`<body><div /></body>` — the portal double never answered); the plain gate
   command on the same bytes was green twice, and the json invocation that produced §7's table was
-  green (630 passed, exit 0). Recorded as the same unidentified host flake.
+  green (630 passed, exit 0). Recorded as the same unidentified host flake. The r2 fix stage saw a
+  third instance: one invocation of its bytes exited 1 with a single unnamed case red (`Tests 1
+  failed | 631 passed (632)`), and six further invocations of the same bytes plus the two new cases'
+  stress runs are green — §7's r2 refresh.
 - The guard's trailing-slash normalization is this page's: `app/shell.tsx`'s own comparisons
   (`:91`, `:210`) keep the repo's plain `endsWith` form and still read a no-search trailing-slash
   URL as not this route (§12's probe reads `/connections/` for that form), so the project picker's
@@ -511,12 +544,16 @@ Probes (temporary test files, deleted before the gates; raw rows):
 | `/portal/connections/?connectionId=<id>` | mount, detail visible, after a settled refusal | `/connections` | `/portal/connections/?connectionId=<id>` | `/connections` |
 | `/portal/connections` | settled | `/connections` | `/portal/connections` | `/connections` |
 
-So the slash survives only on a URL that carries no search; a trailing-slash URL *with* a search
-parses slash-free. Consequences for the finding's wording: `noticeFor`/`clearSelectionFor` need an
-open detail, i.e. a search param, so they cannot be reached with the slash intact; the reachable
-affected continuation is the `saved` selection move after a create. The suggested `endsWith` form
-alone would not fix it (`"/connections/".endsWith("/connections")` is false — the probe's own
-columns), so the fix trims the pathname the way the router's own matching does: `trimPathRight`,
+The slash survives the initial parse on every URL that carries it, with or without a search: a
+fresh memory history at `/portal/connections/?connectionId=<id>` reads `latestLocation.pathname`
+`/connections/` at mount (revision-4 probe, §13). The table's second row read `/connections`
+because its moment is after the app's own selection navigation had rebuilt the URL without the
+slash — not because the search changes the parse. Consequences for the finding's reach, corrected:
+with the slash intact `noticeFor`/`clearSelectionFor` were reachable too, until such a navigation
+happened; the affected continuations are not limited to the `saved` selection move after a create.
+The suggested `endsWith` form alone would not fix it (`"/connections/".endsWith("/connections")` is
+false — the probe's own columns), so the fix trims the pathname the way the router's own matching
+does: `trimPathRight`,
 exported by `@tanstack/react-router`, which the router itself calls (`router-core@1.171.39`
 `dist/esm/router.js:241` and `:395`, `route.js:41`).
 
@@ -540,12 +577,104 @@ record under `docs/evidence/` is allowed (the contract's strict owned set enumer
 program's convention (w5-08 precedent), and this stage neither moved nor deleted it; the operator
 owns that call, and no edit was made for the finding.
 
-Host-path hygiene at this stage: a text scan over the slice's two records finds no Windows drive
-path, no account-name spelling and no absolute POSIX home, scratch or mount prefix — the single
-prefix-shaped hit is a relative test filename's first segment (the deleted §9a probe), not an
+Host-path hygiene at the r1 fix stage: a text scan over the slice's two records finds no Windows
+drive path, no account-name spelling and no absolute POSIX home, scratch or mount prefix — the
+single prefix-shaped hit is a relative test filename's first segment (the deleted §9a probe), not an
 absolute path; prose-only scan, no pattern pasted into this record. The repository's own record
 sanitizer accepts both files (`scripts/ci/model-routing-record-sanitize.py --check --root-only`,
 exit 0 each), the branch diff's user-profile grep is 0 and the backslash-u grep is 0, and
 `git diff --check` is exit 0. The scan covers the slice's own records only — the project-wide
 `docs/` tree carries pre-existing quoted log lines and pre-existing entries with such spellings
 (e.g. `docs/TODO.md`, `docs/archive/CLOSED-TODO.md`), which this stage did not rewrite.
+
+## 13. R2 fix stage (2026-11-23): the r2 review's P3-1, P3-2 and P3-5
+
+The round-2 review of PR #261 closed three actionable P3s: P3-1 (the guard compared the pathname's
+text, so a URL the router matches case-insensitively dropped the page's continuations), P3-2 (the
+§12 sentence claiming a slash+search URL parses slash-free) and P3-5 (the storage claim's unguarded
+`sessionStorage` access). P3-3/P3-4 are the disclosed scope deviations §12 already records
+(accepted or operator-owned); no edit was made for them.
+
+Probes (one temporary probe file, deleted before the gates; raw rows):
+
+| URL at mount | `latestLocation.pathname` | text compare | lowercased text compare | last `matchRoutes` routeId |
+| --- | --- | --- | --- | --- |
+| `/portal/connections` | `/connections` | true | true | `/connections` |
+| `/portal/connections/` | `/connections/` | true (`trimPathRight`) | true | `/connections` |
+| `/portal/Connections/` | `/Connections/` | **false** | true | `/connections` |
+| `/portal/CONNECTIONS` | `/CONNECTIONS` | **false** | true | `/connections` |
+| `/portal/Connections?connectionId=<id>` | `/Connections` | **false** | true | `/connections` |
+| `/portal/connections/?connectionId=<id>` | `/connections/` | true | true | `/connections` |
+| `/portal/connections?connectionId=<id>` | `/connections` | true | true | `/connections` |
+| `/portal/connections/xyz` | `/connections/xyz` | false | false | `/connections` (fuzzy not-found) |
+| `/portal/projects` | `/projects` | false | false | `/projects` |
+| `/portal/nope` | `/nope` | false | false | `__root__` |
+
+Every row comes from `createAppRouter(createApplication(...), createMemoryHistory({initialEntries:
+[url]}))` + `router.load()` on this tree; `matchRoutes(location)` and `matchRoutes(pathname, search)`
+returned the same route id on every row, and `getMatchedRoutes(pathname)`'s found route agrees. The
+table's second row is what corrects §12's reach claim: the slash survives *at mount* in the search
+shape too, so the revision-3 reading (`/connections` for that URL) was a step after an app-driven
+selection navigation had rebuilt the URL, not a property of the parse. The storage probe: jsdom
+defines `sessionStorage` as a configurable own getter on `window`, `vi.spyOn(window,
+"sessionStorage", "get")` stubs it so the property access throws
+`SecurityError: The operation is insecure.`, and `mockRestore()` restores the descriptor.
+
+Changes:
+
+- `connections.tsx` +5/-4: `stillOnConnections` reads `mounted.current &&
+  router.matchRoutes(router.latestLocation.pathname, router.latestLocation.search).at(-1)?.routeId
+  === "/connections"`, with the two-line why comment replacing the two-line trim comment (trimmed to
+  the owner policy's two-line hazard-comment cap the same day) and `trimPathRight` leaving the
+  import. The non-deprecated `(pathname, search)` overload is used; the older `(location)` overload
+  returned the same route id on every probe row. The trim is inert in the shipped bytes: the
+  rebuild after it reproduced every asset name and size.
+- `route-chunks.ts` +8/-2: `claimReloadOnce`'s get/set pair sits inside `try`/`catch`; a blocked
+  storage returns `false` (no claim), so the caller's `staleChunkMessage` rejection reaches the
+  router's error state and the listener leaves the event unprevented. Vite's helper rethrows an
+  unprevented preload error (`vite@8.3.8` `dist/node/chunks/node.js:27046-27051`), so both paths
+  reach the same terminal state; claiming a reload the marker could never suppress is what would
+  loop.
+- Pins: `connections.test.tsx` +15/-0, case 59 `connection management > keeps this page's own
+  continuations when the URL spells the route in another case` (mount at `/portal/Connections`, a
+  create's selection move asserted on `history.location.search`); `route-chunks.test.tsx` +20/-0,
+  case 12 `shows the route's error state without reloading when the session storage is blocked`
+  (stubbed getter; the stale-chunk text in the error state, `reload` 0 calls, and the dispatched
+  `vite:preloadError` left unprevented). §6 rows i-j are the reverse pairs: each case green on the
+  fixed bytes and red on its mutant.
+
+One consequence of the route-id form, recorded: `/portal/connections/xyz` resolves to the route id
+`/connections` (the default fuzzy not-found), so the guard answers true there where the text
+compare answered false. That is the router's own resolution of the location — the ruling's "follow
+the router's matching" — and no gate pins that URL shape.
+
+Build at revision 4 (`vite build` exit 0, 1.33 s; byte counts from the emitted files, sizes as the
+build's own report):
+
+| chunk | bytes | raw | gzip |
+| --- | --- | --- | --- |
+| `dist/assets/index-DXalnIiK.js` | 321,357 | 321.35 kB | 101.86 kB |
+| `dist/assets/served-ZmW5x40A.js` | 400,764 | 400.76 kB | 116.11 kB |
+| `dist/assets/chat-BgeMpCWY.js` | 27,115 | 27.11 kB | 8.68 kB |
+| `dist/assets/connections-Dyo4xJuW.js` | 34,476 | 34.47 kB | 9.14 kB |
+| `dist/assets/detail-Dj3xdiDj.js` (goals) | 30,405 | 30.40 kB | 8.40 kB |
+| `dist/assets/detail-DRpbuqHs.js` (work) | 35,088 | 35.08 kB | 10.38 kB |
+| `dist/assets/projects-CfjvBJ__.js` | 6,239 | 6.23 kB | 2.23 kB |
+| `dist/assets/work-surface-U7eftdWu.js` | 34,515 | 34.51 kB | 9.57 kB |
+| `dist/assets/refusals-C5yaP-QR.js` | 2,675 | 2.67 kB | 1.06 kB |
+| `dist/assets/receipts-BZD9UU-g.js` | 2,966 | 2.96 kB | 1.21 kB |
+| `dist/assets/use-dialog-opener-BywfTvAD.js` | 427 | 0.42 kB | 0.28 kB |
+| `dist/assets/index-Ccu45kBm.css` | 35,353 | 35.35 kB | 7.45 kB |
+| `dist/index.html` | 604 | 0.60 kB | 0.34 kB |
+
+`index.html` names the entry plus one `modulepreload` of `served-ZmW5x40A.js`, so the initial JS
+payload is 722,121 bytes; a second build of the same tree reproduced every asset name and size
+(report diff: identical), `portal:stale-chunk-reload` still appears only in the entry, and the
+distinctive-literals check still resolves chat → `chat-BgeMpCWY.js`, projects →
+`projects-CfjvBJ__.js`, attention and runtimes → the entry. Against §4's fix-stage table the entry
+re-took its name and bytes (321,329 → 321,357 B) because `route-chunks.ts` ships in it, and every
+chunk whose import specifier names the entry — or a chunk that does — re-hashed with it: `chat`,
+`connections`, both `detail`s, `projects`, `work-surface` and `receipts`; `served`, `refusals`,
+`use-dialog-opener` and the stylesheet kept their hashes. `connections-*.js` is 34,442 → 34,476 B
+(9.13 → 9.14 kB gzip) — the predicate's own bytes — and every other chunk keeps its size figures
+except `work-surface-*.js`'s gzip (9.58 → 9.57 kB, the build's own rounding).
