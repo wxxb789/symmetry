@@ -293,9 +293,11 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
     service; the protected Environment `linux-v2-native-acceptance` with its required reviewer and branch
     policy, which the workflow comment requires verifying before dispatch ("Before dispatch, verify the
     Environment requires @wxxb789's separate approval, permits self-review, and admits only the reviewed
-    0006b branch"); and four configured inputs: the secrets `SYMMETRY_LINUX_V2_TEST_GITHUB_OAUTH_TOKEN`
+    0006b branch"); and five configured inputs: the secrets `SYMMETRY_LINUX_V2_TEST_GITHUB_OAUTH_TOKEN`
     (must be `gho_*`; the hosted `GITHUB_TOKEN` is refused) and `SYMMETRY_LINUX_V2_TEST_OPENAI_API_KEY`,
-    and the variables `SYMMETRY_LINUX_V2_TEST_PI_MODEL` and `SYMMETRY_LINUX_V2_TEST_OPENCODE_MODEL`.
+    and the variables `SYMMETRY_LINUX_V2_TEST_PI_MODEL`, `SYMMETRY_LINUX_V2_TEST_OPENCODE_MODEL` and
+    `SYMMETRY_LINUX_V2_TEST_OPENAI_BASE_URL` (the OpenAI-compatible provider base URL the native
+    fixtures route their model calls through).
     Recorded status, still limiting (2026-11-15): the Environment policy read allowed branches `main` and
     `codex/goal-0006b-crash-safe-process-containment` with `prevent_self_review=false`; and no environment
     available here yet satisfies the host prerequisite — the last hosted attempt (run `43673581776`) failed
@@ -968,7 +970,7 @@ version pinned` section of `docs/archive/CLOSED-TODO.md`.
       and `encodeGuardedRelease`'s body and grant bounds. The generation and minimum-length checks may
       be shadowed by later reads or `receipt.Validate`; the rest are real gaps. Add one rejection test
       per check in a separate maintenance slice.
-- [ ] `scripts/ci/linux-v2-native-acceptance.sh:1490` pins
+- [ ] `scripts/ci/linux-v2-native-acceptance.sh:1714` pins
       `TestInstalledLinuxOwnerRejectsUnexpectedCgroupKillFD`, which no Go file defines (base and
       HEAD); owner: the acceptance-script maintainer — restore the test or drop the pin.
 
