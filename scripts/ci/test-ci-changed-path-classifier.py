@@ -14,6 +14,7 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+MIX_EXS = ROOT / "control" / "mix.exs"
 CI_DIR = ROOT / "scripts" / "ci"
 CLASSIFIER = CI_DIR / "classify-changed-paths.py"
 CORPUS_MODULE = CI_DIR / "audited_paths.py"
@@ -81,6 +82,9 @@ COVERAGE_COMMANDS = {
     ),
     "coverage-frontend": ("        run: pnpm --filter @symmetry/frontend exec vitest run --coverage",),
 }
+# `Mix.Tasks.Test.Coverage` refuses a total below the summary threshold; a zero threshold
+# would leave the blocking job green at any coverage.
+COVERAGE_THRESHOLD = re.compile(r"test_coverage:\s*\[\s*summary:\s*\[\s*threshold:\s*([0-9]+(?:\.[0-9]+)?)\s*\]\s*\]")
 
 # Updated together with the corpus: an entry without a fixture here fails
 # test_every_audited_document_gates_only_run_citations.
@@ -527,7 +531,7 @@ def check_coverage_jobs_are_advisory(workflow_text: str) -> None:
         )
 
 
-def check_the_control_coverage_floor_is_blocking(workflow_text: str) -> None:
+def check_the_control_coverage_floor_is_blocking(workflow_text: str, mix_text: str) -> None:
     blocks = job_blocks(workflow_text)
     for name in BLOCKING_COVERAGE_JOBS:
         require(name in blocks, f"the workflow has no coverage job {name!r}")
@@ -536,6 +540,17 @@ def check_the_control_coverage_floor_is_blocking(workflow_text: str) -> None:
             f"coverage job {name} must drop its job-level `continue-on-error`: its floor is blocking, "
             "so a coverage count below the mix.exs threshold has to fail the job",
         )
+    threshold = COVERAGE_THRESHOLD.search(mix_text)
+    require(
+        threshold is not None,
+        "control/mix.exs must keep the `test_coverage: [summary: [threshold: ...]]` floor the blocking "
+        "coverage job relies on",
+    )
+    require(
+        float(threshold.group(1)) > 0,
+        f"control/mix.exs must keep a positive coverage threshold; found {threshold.group(1)}: a zero "
+        "threshold lets any coverage total pass",
+    )
 
 
 def check_coverage_artifacts(workflow_text: str) -> None:
@@ -884,6 +899,7 @@ class ChangedPathClassifierTests(unittest.TestCase):
         cls.addClassCleanup(cls.temporary.cleanup)
         cls.root = pathlib.Path(cls.temporary.name)
         cls.workflow_text = WORKFLOW.read_text(encoding="utf-8")
+        cls.mix_text = MIX_EXS.read_text(encoding="utf-8")
         cls.program_text = CLASSIFIER.read_text(encoding="utf-8")
         cls.model = parse_model(cls.workflow_text)
         cls.audited = load_audited_paths()
@@ -1006,7 +1022,7 @@ class ChangedPathClassifierTests(unittest.TestCase):
     def test_the_coverage_jobs_follow_the_heavy_matrix_across_every_fixture(self) -> None:
         check_coverage_plane_routing(self.model, self.outputs)
         check_coverage_jobs_are_advisory(self.workflow_text)
-        check_the_control_coverage_floor_is_blocking(self.workflow_text)
+        check_the_control_coverage_floor_is_blocking(self.workflow_text, self.mix_text)
         check_coverage_artifacts(self.workflow_text)
 
     # -- mutations: the assertions must fail when a routing is changed --------
@@ -1095,7 +1111,19 @@ class ChangedPathClassifierTests(unittest.TestCase):
         mutated = self.workflow_text.replace(COVERAGE_CONTROL_HEADER, COVERAGE_CONTROL_HEADER + advisory_line)
         self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
         with self.assertRaises(AssertionError):
-            check_the_control_coverage_floor_is_blocking(mutated)
+            check_the_control_coverage_floor_is_blocking(mutated, self.mix_text)
+
+    def test_mutation_zeroing_the_control_coverage_threshold_breaks_the_blocking_check(self) -> None:
+        mutated = COVERAGE_THRESHOLD.sub("test_coverage: [summary: [threshold: 0]]", self.mix_text)
+        self.assertNotEqual(mutated, self.mix_text, "the mutation must edit control/mix.exs")
+        with self.assertRaises(AssertionError):
+            check_the_control_coverage_floor_is_blocking(self.workflow_text, mutated)
+
+    def test_mutation_dropping_the_control_coverage_threshold_breaks_the_blocking_check(self) -> None:
+        mutated = COVERAGE_THRESHOLD.sub("", self.mix_text)
+        self.assertNotEqual(mutated, self.mix_text, "the mutation must edit control/mix.exs")
+        with self.assertRaises(AssertionError):
+            check_the_control_coverage_floor_is_blocking(self.workflow_text, mutated)
 
     def test_mutation_dropping_a_coverage_uploads_always_flag_breaks_the_artifact_check(self) -> None:
         upload = COVERAGE_UPLOADS["coverage-daemon"]

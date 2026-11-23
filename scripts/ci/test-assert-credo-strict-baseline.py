@@ -9,6 +9,7 @@ import citest
 
 SCRIPT = pathlib.Path(__file__).with_name("assert-credo-strict-baseline.py")
 BASELINE = SCRIPT.with_name("credo-strict-baseline.json")
+CAPTURE = SCRIPT.with_name("credo-strict-capture-fixture.log")
 GATE = citest.load_gate(SCRIPT, "assert_credo_strict_baseline")
 
 CRY_FOR_HELP = "Please report incorrect results: https://github.com/rrrene/credo/issues"
@@ -390,6 +391,30 @@ class InvocationTests(GateCase):
             )
             self.assertEqual(result.returncode, 2)
             self.assertIn("needs a positive count", result.stderr)
+
+
+class RealCaptureTests(GateCase):
+    def capture_baseline(self):
+        return self.write_baseline(
+            small_baseline(
+                issues=4,
+                files_analyzed=3,
+                checks_run=70,
+                by_category={"design": 1, "readability": 1, "refactor": 1, "warning": 1},
+            )
+        )
+
+    def test_the_gate_accepts_a_real_mix_credo_strict_capture(self):
+        stdout = self.assert_green(CAPTURE.read_text(encoding="utf-8"), baseline=self.capture_baseline())
+        self.assertIn("credo_strict_issue_total=4\n", stdout)
+        self.assertIn("credo_strict_files_analyzed=3\n", stdout)
+        self.assertIn("credo_strict_checks_run=70\n", stdout)
+
+    def test_a_perturbed_real_capture_refuses(self):
+        log = CAPTURE.read_text(encoding="utf-8")
+        perturbed = log.replace("1 software design suggestion", "1 design suggestion")
+        self.assertNotEqual(perturbed, log, "the perturbation must edit the capture")
+        self.assert_red(perturbed, "names no known category", baseline=self.capture_baseline())
 
 
 class ShippedBaselineTests(unittest.TestCase):

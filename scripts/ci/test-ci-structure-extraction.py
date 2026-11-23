@@ -205,6 +205,8 @@ ADVISORY_STEPS = frozenset(
     }
 )
 ADVISORY_JOBS = frozenset({"coverage-daemon", "coverage-frontend"})
+CREDO_GATE_STEP = "Enforce the committed Credo strict baseline"
+CREDO_GATE_INVOCATION = 'python3 ../scripts/ci/assert-credo-strict-baseline.py --log "$credo_log"'
 
 
 def require(condition: bool, message: str) -> None:
@@ -591,6 +593,27 @@ def check_caller_advisory_step(workflow_text: str) -> None:
     require(scalars == CONTRACTS_ADVISORY_STEP, f"the contracts advisory step changed: {scalars!r}")
 
 
+def check_credo_gate_step(workflow_text: str) -> None:
+    normalized = find_step(job_blocks(workflow_text)["control"], CREDO_GATE_STEP)
+    scalars = scalars_at(normalized, WORKFLOW_INDENT[1])
+    require(
+        "continue-on-error" not in scalars,
+        "the Credo gate step must not carry a step-level continue-on-error: its verdict has to fail the job",
+    )
+    body = run_body_at(normalized, WORKFLOW_INDENT[1])
+    require(body is not None, "the Credo gate step must keep a `run: |` body")
+    commands = [line for line in body if line.strip() and not line.lstrip().startswith("#")]
+    require(
+        bool(commands) and commands[-1] == CREDO_GATE_INVOCATION,
+        f"the Credo gate step's body must end in {CREDO_GATE_INVOCATION!r}; "
+        f"found {commands[-1] if commands else '<an empty body>'!r}",
+    )
+    require(
+        not any(re.search(r"\bexit\s+0\b", line) for line in commands),
+        "the Credo gate step must not keep an `exit 0` skip path: every run has to reach the gate program",
+    )
+
+
 def check_folded_gate_completeness(workflow_text: str, action_text: str) -> None:
     steps, jobs = workflow_advisories(workflow_text)
     steps |= action_advisories(action_text)
@@ -637,6 +660,11 @@ class ContractsActionTests(unittest.TestCase):
 class FoldedGateCompletenessTests(unittest.TestCase):
     def test_every_advisory_step_is_asserted_by_its_job_or_allowlisted(self) -> None:
         check_folded_gate_completeness(WORKFLOW.read_text(encoding="utf-8"), ACTION.read_text(encoding="utf-8"))
+
+
+class CredoGateStepTests(unittest.TestCase):
+    def test_the_credo_gate_step_is_not_advisory_and_ends_in_the_gate_program(self) -> None:
+        check_credo_gate_step(WORKFLOW.read_text(encoding="utf-8"))
 
 
 class MutationTests(unittest.TestCase):
@@ -810,6 +838,36 @@ class MutationTests(unittest.TestCase):
         self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
         with self.assertRaises(AssertionError):
             check_folded_gate_completeness(mutated, self.action_text)
+
+    def test_mutation_replacing_the_credo_gate_invocation_with_exit_zero_reddens_the_step_pin(self) -> None:
+        mutated = self.workflow_text.replace(
+            f"          {CREDO_GATE_INVOCATION}\n",
+            "          exit 0\n",
+        )
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        self.assertNotIn(CREDO_GATE_INVOCATION, mutated)
+        with self.assertRaises(AssertionError):
+            check_credo_gate_step(mutated)
+
+    def test_mutation_restoring_the_credo_steps_advisory_flag_reddens_the_step_pin(self) -> None:
+        mutated = self.workflow_text.replace(
+            f"      - name: {CREDO_GATE_STEP}\n",
+            f"      - name: {CREDO_GATE_STEP}\n        continue-on-error: true\n",
+        )
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaises(AssertionError):
+            check_credo_gate_step(mutated)
+
+    def test_mutation_inserting_an_exit_zero_skip_branch_reddens_the_step_pin(self) -> None:
+        anchor = "          set -Eeuo pipefail\n"
+        self.assertIn(anchor, self.workflow_text, "the mutation's anchor must be the step's prologue")
+        mutated = self.workflow_text.replace(
+            anchor,
+            anchor + "          if [ ! -f .credo.exs ]; then exit 0; fi\n",
+        )
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaises(AssertionError):
+            check_credo_gate_step(mutated)
 
 
 class FailClosedPowerShellTests(unittest.TestCase):
