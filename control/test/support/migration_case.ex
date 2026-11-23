@@ -7,7 +7,9 @@ defmodule SymmetryControl.MigrationCase do
 
   use ExUnit.CaseTemplate
 
-  alias Ecto.Adapters.SQL.Sandbox
+  import ExUnit.Callbacks, only: [on_exit: 1]
+
+  alias SymmetryControl.MigrationModules
   alias SymmetryControl.Repo
 
   using do
@@ -15,6 +17,7 @@ defmodule SymmetryControl.MigrationCase do
       import SymmetryControl.MigrationCase,
         only: [
           with_schema: 2,
+          schema_name: 1,
           start_schema_repo: 1,
           create_schema!: 1,
           drop_schema!: 1,
@@ -24,22 +27,23 @@ defmodule SymmetryControl.MigrationCase do
   end
 
   @doc """
-  Runs `test` against a private schema whose name is `schema_base` plus a
-  unique suffix.
+  Runs `test` against a private schema named `schema_base` plus a unique
+  suffix.
 
   The schema is created first, a dedicated single-connection Repo starts
   against it, and the dynamic repo points there for the duration of `test`.
   The dynamic repo is restored, the Repo stopped and the schema dropped
   afterwards.
 
-  Tests that need to observe pre-migration state call `create_schema!/1`,
-  `start_schema_repo/1` and `drop_schema!/1` directly instead.
+  Tests that need to observe pre-migration state call `schema_name/1`,
+  `create_schema!/1`, `start_schema_repo/1` and `drop_schema!/1` directly
+  instead.
   """
   def with_schema(schema_base, test) do
-    schema = "#{schema_base}_#{System.unique_integer([:positive])}"
-    create_schema!(schema)
+    schema = schema_name(schema_base)
 
     try do
+      create_schema!(schema)
       repo = start_schema_repo(schema)
 
       try do
@@ -51,41 +55,87 @@ defmodule SymmetryControl.MigrationCase do
           Repo.put_dynamic_repo(previous_dynamic_repo)
         end
       after
-        GenServer.stop(repo)
+        GenServer.stop(repo, :normal, 30_000)
       end
     after
       drop_schema!(schema)
     end
   end
 
+  @doc "The private schema name for `schema_base`: unique per VM, test and wall-clock instant."
+  def schema_name(schema_base) do
+    unless is_binary(schema_base) and Regex.match?(~r/\A[a-z_][a-z0-9_]*\z/, schema_base) do
+      raise ArgumentError, "schema base #{inspect(schema_base)} is not a lowercase SQL identifier"
+    end
+
+    name =
+      "#{schema_base}_#{System.unique_integer([:positive])}_#{System.system_time(:microsecond)}"
+
+    # PostgreSQL truncates identifiers past NAMEDATALEN - 1 = 63 bytes silently.
+    if byte_size(name) > 63 do
+      raise ArgumentError, "schema name #{name} exceeds PostgreSQL's 63-byte identifier limit"
+    end
+
+    name
+  end
+
   @doc "Starts a dedicated single-connection Repo whose search path is `schema`."
   def start_schema_repo(schema) do
     config =
-      Application.fetch_env!(:symmetry_control, Repo)
-      |> Keyword.merge(name: nil, pool: DBConnection.ConnectionPool, pool_size: 1)
+      private_repo_config()
       |> Keyword.put(:parameters, search_path: schema)
 
     {:ok, repo} = Repo.start_link(config)
     repo
   end
 
-  @doc "Creates `schema` through the shared Repo outside the sandbox."
+  @doc """
+  Creates `schema` on a private single-connection Repo, outside the shared sandbox pool.
+
+  Registers an ExUnit `on_exit` drop as the fallback for the paths no `after` block can reach: the
+  runner process runs it even after ExUnit killed the test process for a timeout.
+  """
   def create_schema!(schema) do
-    Sandbox.unboxed_run(Repo, fn -> Repo.query!("CREATE SCHEMA #{schema}") end)
+    on_exit(fn -> drop_schema!(schema) end)
+    run_schema_ddl!("CREATE SCHEMA #{schema}")
   end
 
-  @doc "Drops `schema` and everything in it."
+  @doc "Drops `schema` and everything in it, outside the shared sandbox pool."
   def drop_schema!(schema) do
-    Sandbox.unboxed_run(Repo, fn -> Repo.query!("DROP SCHEMA IF EXISTS #{schema} CASCADE") end)
+    run_schema_ddl!("DROP SCHEMA IF EXISTS #{schema} CASCADE")
   end
 
-  defp migrations_path do
-    Path.expand("../../priv/repo/migrations", __DIR__)
+  defp run_schema_ddl!(statement) do
+    {:ok, repo} = Repo.start_link(private_repo_config())
+
+    try do
+      Ecto.Adapters.SQL.query!(repo, statement)
+    after
+      GenServer.stop(repo, :normal, 30_000)
+    end
   end
 
-  @doc "Runs migrations through the dynamic repo: the suite's private schema, never the shared test schema."
+  defp private_repo_config do
+    Application.fetch_env!(:symmetry_control, Repo)
+    |> Keyword.merge(
+      name: nil,
+      pool: DBConnection.ConnectionPool,
+      pool_size: 1,
+      migration_lock: false,
+      # A fresh single-connection pool can take seconds to establish on a saturated host: the
+      # default queue tolerance drops a request that waited 4_000 ms for its connection ("connection
+      # not available and request was dropped from queue after 4000ms"), and Postgrex's 15 s request
+      # timeout can expire while the first statement is in flight. Both were hit on this slice's
+      # shared host; see the plan's findings F-1/F-4/F-5.
+      timeout: 30_000,
+      queue_target: 5_000,
+      queue_interval: 10_000
+    )
+  end
+
+  @doc "Runs every boot-compiled migration into the dynamic repo's private schema."
   def migrate_all_up! do
-    Ecto.Migrator.run(Repo, migrations_path(), :up,
+    Ecto.Migrator.run(Repo, MigrationModules.migrations(), :up,
       all: true,
       log: false,
       migration_lock: false,

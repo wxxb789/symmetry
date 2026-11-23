@@ -1,5 +1,5 @@
 defmodule SymmetryControl.Migrations.VersionRequestHashesTest do
-  use SymmetryControl.MigrationCase, async: false
+  use SymmetryControl.MigrationCase, async: true
 
   alias SymmetryControl.Repo
   alias SymmetryControl.Repo.Migrations.CreateOrchestrationTables
@@ -9,8 +9,6 @@ defmodule SymmetryControl.Migrations.VersionRequestHashesTest do
   @version 20_260_907_000_000
 
   test "rolls back canonical hash version support when all history is legacy" do
-    load_migration_modules!()
-
     with_schema("version_request_hashes", fn ->
       migrate_up!()
 
@@ -35,8 +33,6 @@ defmodule SymmetryControl.Migrations.VersionRequestHashesTest do
   end
 
   test "refuses rollback when canonical hash history exists" do
-    load_migration_modules!()
-
     with_schema("version_request_hashes", fn ->
       migrate_up!()
 
@@ -85,21 +81,5 @@ defmodule SymmetryControl.Migrations.VersionRequestHashesTest do
       {20_260_902_000_000, CreateOrchestrationTables},
       {20_260_906_070_000, VersionCommandRequestHashes}
     ]
-  end
-
-  defp load_migration_modules! do
-    migrations = [
-      {CreateOrchestrationTables, "20260902000000_create_orchestration_tables.exs"},
-      {VersionCommandRequestHashes, "20260906070000_version_command_request_hashes.exs"},
-      {VersionRequestHashes, "20260907000000_version_request_hashes.exs"}
-    ]
-
-    Enum.each(migrations, fn {module, filename} ->
-      unless function_exported?(module, :__migration__, 0) do
-        filename
-        |> then(&Path.expand("../../../priv/repo/migrations/#{&1}", __DIR__))
-        |> Code.compile_file()
-      end
-    end)
   end
 end

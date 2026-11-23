@@ -1,14 +1,12 @@
 defmodule SymmetryControl.Migrations.AddTaskCommandOwnershipTest do
-  use SymmetryControl.MigrationCase, async: false
+  use SymmetryControl.MigrationCase, async: true
 
   alias SymmetryControl.Repo
   alias SymmetryControl.Repo.Migrations.AddTaskCommandOwnership
   alias SymmetryControl.Repo.Migrations.CreateOrchestrationTables
 
   test "backfills command ownership and enforces nullable command bindings" do
-    load_migration_modules!()
-
-    schema = "u1_command_ownership_#{System.unique_integer([:positive])}"
+    schema = schema_name("u1_command_ownership")
     create_schema!(schema)
 
     repo = start_schema_repo(schema)
@@ -214,21 +212,6 @@ defmodule SymmetryControl.Migrations.AddTaskCommandOwnershipTest do
       pending_command_id: pending_command_id,
       acknowledged_command_id: acknowledged_command_id
     }
-  end
-
-  defp load_migration_modules! do
-    migrations = [
-      {CreateOrchestrationTables, "20260902000000_create_orchestration_tables.exs"},
-      {AddTaskCommandOwnership, "20260903000000_add_task_command_ownership.exs"}
-    ]
-
-    Enum.each(migrations, fn {module, filename} ->
-      unless function_exported?(module, :__migration__, 0) do
-        filename
-        |> then(&Path.expand("../../../priv/repo/migrations/#{&1}", __DIR__))
-        |> Code.compile_file()
-      end
-    end)
   end
 
   defp uuid, do: Ecto.UUID.bingenerate()

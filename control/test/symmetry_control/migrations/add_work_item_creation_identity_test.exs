@@ -1,5 +1,5 @@
 defmodule SymmetryControl.Migrations.AddWorkItemCreationIdentityMigrationTest do
-  use SymmetryControl.MigrationCase, async: false
+  use SymmetryControl.MigrationCase, async: true
 
   alias SymmetryControl.Repo
   alias SymmetryControl.Repo.Migrations.AddWorkItemCreationIdentity

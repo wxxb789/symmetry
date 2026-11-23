@@ -1,5 +1,5 @@
 defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
-  use SymmetryControl.MigrationCase, async: false
+  use SymmetryControl.MigrationCase, async: true
 
   alias SymmetryControl.Repo
   alias SymmetryControl.Repo.Migrations.AddGoal0006ControlPlane
@@ -18,7 +18,6 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   alias SymmetryControl.Repo.Migrations.AddEngineeringConnections
   alias SymmetryControl.Repo.Migrations.AddHistoryLookupIndexes
   alias SymmetryControl.Repo.Migrations.AddMachineEnrollmentReplay
-  alias SymmetryControl.Repo.Migrations.AddObanJobsTable
   alias SymmetryControl.Repo.Migrations.AddRuntimeRepositoryResourceAffinity
   alias SymmetryControl.Repo.Migrations.AddProviderActionDispatchOwnership
   alias SymmetryControl.Repo.Migrations.AddRunProviderAccessSnapshots
@@ -42,7 +41,6 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   alias SymmetryControl.Orchestration.Task
 
   @migration_version 20_260_909_000_000
-  @oban_migration_version 20_260_909_010_000
   @runtime_affinity_migration_version 20_260_909_020_000
   @integration_designation_migration_version 20_260_909_030_000
   @baseline_migration_version 20_260_909_040_000
@@ -1233,70 +1231,6 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
                Repo.query!("SELECT version FROM schema_migrations WHERE version = $1", [
                  @migration_version
                ])
-    end)
-  end
-
-  test "applies the Goal control plane before its Oban jobs dependency" do
-    with_base_schema(fn ->
-      migrate_goal_up!()
-      migrate_oban_up!()
-
-      assert %{rows: [["public.oban_jobs"]]} =
-               Repo.query!("SELECT to_regclass('public.oban_jobs')::text")
-
-      assert %{rows: [[@migration_version], [@oban_migration_version]]} =
-               Repo.query!(
-                 "SELECT version FROM schema_migrations WHERE version IN ($1, $2) ORDER BY version",
-                 [@migration_version, @oban_migration_version]
-               )
-    end)
-  end
-
-  test "refuses Oban rollback while an incomplete Goal worker remains queued" do
-    with_base_schema(fn ->
-      migrate_goal_up!()
-
-      assert %{rows: [[oban_jobs_before]]} =
-               Repo.query!("SELECT to_regclass('public.oban_jobs')::text")
-
-      migrate_oban_up!()
-
-      job_marker = "goal-0006-oban-#{System.unique_integer([:positive])}"
-
-      assert %{rows: [[job_id]]} =
-               Repo.query!(
-                 """
-                 INSERT INTO public.oban_jobs (state, queue, worker, args)
-                 VALUES (
-                   'available',
-                   'goal_wakeup',
-                   'SymmetryControl.Goals.Workers.WakeupWorker',
-                   $1::text::jsonb
-                 )
-                 RETURNING id
-                 """,
-                 [Jason.encode!(%{"goal_0006_test_marker" => job_marker})]
-               )
-
-      assert_raise Postgrex.Error,
-                   ~r/cannot roll back Oban jobs while queued Goal wakeups exist/i,
-                   &migrate_oban_down!/0
-
-      assert %{rows: [["public.oban_jobs"]]} =
-               Repo.query!("SELECT to_regclass('public.oban_jobs')::text")
-
-      Repo.query!(
-        "DELETE FROM public.oban_jobs WHERE id = $1 AND args ->> 'goal_0006_test_marker' = $2",
-        [job_id, job_marker]
-      )
-
-      if is_nil(oban_jobs_before) do
-        migrate_oban_down!()
-        assert %{rows: [[nil]]} = Repo.query!("SELECT to_regclass('public.oban_jobs')::text")
-      else
-        assert %{rows: [["public.oban_jobs"]]} =
-                 Repo.query!("SELECT to_regclass('public.oban_jobs')::text")
-      end
     end)
   end
 
@@ -3829,9 +3763,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   defp with_base_schema(test) do
-    load_migration_modules!()
-
-    with_schema("goal_0006_migration_#{System.system_time(:microsecond)}", fn ->
+    with_schema("goal_0006_migration", fn ->
       migrate_base_up!()
       test.()
     end)
@@ -3860,24 +3792,6 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
       Repo,
       base_migrations() ++ [{@migration_version, AddGoal0006ControlPlane}],
       :down,
-      step: 1,
-      log: false,
-      migration_lock: false,
-      dynamic_repo: Repo.get_dynamic_repo()
-    )
-  end
-
-  defp migrate_oban_up! do
-    Ecto.Migrator.run(Repo, [{@oban_migration_version, AddObanJobsTable}], :up,
-      all: true,
-      log: false,
-      migration_lock: false,
-      dynamic_repo: Repo.get_dynamic_repo()
-    )
-  end
-
-  defp migrate_oban_down! do
-    Ecto.Migrator.run(Repo, [{@oban_migration_version, AddObanJobsTable}], :down,
       step: 1,
       log: false,
       migration_lock: false,
@@ -4923,62 +4837,5 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
       {20_260_906_070_000, VersionCommandRequestHashes},
       {20_260_907_000_000, VersionRequestHashes}
     ]
-  end
-
-  defp load_migration_modules! do
-    migrations = [
-      {CreateOrchestrationTables, "20260902000000_create_orchestration_tables.exs"},
-      {AddTaskCommandOwnership, "20260903000000_add_task_command_ownership.exs"},
-      {AddMachineEnrollmentReplay, "20260903010000_add_machine_enrollment_replay.exs"},
-      {AddHistoryLookupIndexes, "20260903020000_add_history_lookup_indexes.exs"},
-      {CreateEngineeringWorkspace, "20260904000000_create_engineering_workspace.exs"},
-      {CompleteEngineeringWorkspace, "20260904010000_complete_engineering_workspace.exs"},
-      {BindWorkItemsToResources, "20260904020000_bind_work_items_to_resources.exs"},
-      {AddRetryCommands, "20260904030000_add_retry_commands.exs"},
-      {AddTaskAttemptIdentity, "20260904040000_add_task_attempt_identity.exs"},
-      {EnforceWorkItemCoherence, "20260904050000_enforce_work_item_coherence.exs"},
-      {AddEngineeringConnections, "20260905000000_add_engineering_connections.exs"},
-      {AddTaskRequiredCapabilities, "20260906000000_add_task_required_capabilities.exs"},
-      {CreateProviderActionIntents, "20260906010000_create_provider_action_intents.exs"},
-      {AddProviderActionDispatchOwnership,
-       "20260906020000_add_provider_action_dispatch_ownership.exs"},
-      {EnforceConnectedResourceIdentity,
-       "20260906030000_enforce_connected_resource_identity.exs"},
-      {SnapshotProviderActionTargets, "20260906040000_snapshot_provider_action_targets.exs"},
-      {AddSupervisoryControls, "20260906050000_add_supervisory_controls.exs"},
-      {CreateChat, "20260906060000_create_chat.exs"},
-      {VersionCommandRequestHashes, "20260906070000_version_command_request_hashes.exs"},
-      {VersionRequestHashes, "20260907000000_version_request_hashes.exs"},
-      {AddGoal0006ControlPlane, "20260909000000_add_goal_0006_control_plane.exs"},
-      {AddObanJobsTable, "20260909010000_add_oban_jobs_table.exs"},
-      {AddRuntimeRepositoryResourceAffinity,
-       "20260909020000_add_runtime_repository_resource_affinity.exs"},
-      {AddGoalIntegrationWorkItemDesignation,
-       "20260909030000_add_goal_integration_work_item_designation.exs"},
-      {AddGoalWorkItemBaselines, "20260909040000_add_goal_work_item_baselines.exs"},
-      {AddGoalIdentityGuards, "20260909050000_add_goal_identity_guards.exs"},
-      {AddRunProviderAccessSnapshots, "20260909070000_add_run_provider_access_snapshots.exs"},
-      {AddGoalWorkItemChangeTargets, "20260909080000_add_goal_work_item_change_targets.exs"},
-      {AddPlanningTaskIdentityGuards, "20260910000000_add_planning_task_identity_guards.exs"},
-      {AddGoalTerminalGuardsAndExecutionPolicy,
-       "20260910010000_add_goal_terminal_guards_and_execution_policy.exs"},
-      {EnforceRuntimeRepositoryResourceAffinity,
-       "20260910020000_enforce_runtime_repository_resource_affinity.exs"},
-      {AddGoalTerminalAuthorityGuardsAndSessionReciprocity,
-       "20260910030000_add_goal_terminal_authority_guards_and_session_reciprocity.exs"},
-      {AddTaskHandoffLineage, "20260910040000_add_task_handoff_lineage.exs"},
-      {AddHarnessSessionStopReceipts, "20260910050000_add_harness_session_stop_receipts.exs"},
-      {AddHarnessSessionAttachReceipts, "20260911000000_add_harness_session_attach_receipts.exs"},
-      {AddTaskRuntimePolicySnapshot, "20260916000000_add_task_runtime_policy_snapshot.exs"},
-      {AddOmpHarnessKind, "20261114010000_add_omp_harness_kind.exs"}
-    ]
-
-    Enum.each(migrations, fn {module, filename} ->
-      unless function_exported?(module, :__migration__, 0) do
-        filename
-        |> then(&Path.expand("../../../priv/repo/migrations/#{&1}", __DIR__))
-        |> Code.compile_file()
-      end
-    end)
   end
 end

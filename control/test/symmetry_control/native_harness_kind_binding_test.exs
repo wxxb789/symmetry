@@ -211,10 +211,15 @@ defmodule SymmetryControl.NativeHarnessKindBindingTest do
 
   # The live constraint definition, not the migration source: a later migration
   # that rebuilds the constraint is what registration is checked against.
+  # `connamespace = current_schema()` keeps a concurrent migration test's private
+  # schema, which carries the same constraint names, out of the result.
   defp constraint_kinds!(name) do
     assert %{rows: [[definition]]} =
              Repo.query!(
-               "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = $1",
+               """
+               SELECT pg_get_constraintdef(oid) FROM pg_constraint
+               WHERE conname = $1 AND connamespace = current_schema()::regnamespace
+               """,
                [name]
              )
 
