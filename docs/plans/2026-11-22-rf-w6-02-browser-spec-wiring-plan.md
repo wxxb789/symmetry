@@ -32,7 +32,8 @@ its 80-line inline ceiling and add no advisory step).
 
 ## Measured basis (re-measured at `6d55c575`, not carried from the draft)
 
-`ci.yml` = 1,846 lines, 52 inline `run: |` blocks (the extraction pin's floor is 40). Jobs:
+`ci.yml` = 1,846 lines, 46 inline `run: |` blocks at this base (the extraction pin's floor is 40;
+the increment's six new blocks take it to 52 at HEAD). Jobs:
 `changes` `:38`, `record-cleanliness` `:71`, `citation-existence` `:97`, `contracts` `:111`,
 `control` `:145`, `coverage-*` `:601/:654/:691`, `daemon` `:960`, `legacy-route-audit` `:1229`,
 `daemon-windows` `:1365`, `integration` `:1526`, `compose` `:1758` (to `:1846`).
@@ -176,6 +177,7 @@ is not edited (the contract's failure control) — and records the copies that d
 | `portal-connections.spec.mjs` | `api(page, path, {method, body}):117` | shared `api(page, method, path, body)` at every call site (method spelled explicitly) | return shape loses the unused `text`/`contentType` fields; the null-body cases (`{}` from the shared helper) have no consumer that distinguishes them |
 | `portal-connections.spec.mjs` | `createProject(page):132` | shared `createProject(page, { key, name, description })` with `uniqueKey("C")` for the key | call sites take `project.id` |
 | `portal-connections.spec.mjs` | `deviceContextOptions(testInfo):233` | shared `deviceContextOptions(testInfo, { baseURL: portalOrigin })` | byte-identical option composition |
+| `portal-connections.spec.mjs` | `bindResourceThroughApi:176` | shared `attachResource(page, projectId, resource)` at its nine call sites, with the API field names (`external_ref`, `connection_id`) spelled at the site | same POST route, same 201 assertion, same returned `body.resource`; the copy both E6's census and this plan's first pass missed — converted in the apply stage (simplify finding F2) |
 | `portal-compose-daemon.spec.mjs` | `uniqueProject:20` | shared `uniqueKey(prefix)` + local name minting | same key grammar |
 | `portal-compose-daemon.spec.mjs` | `projectUrl:31`, `workUrl:35`, `servedColumnTitles:51` | shared imports of the same names | `projectUrl` was a byte-identical copy; `servedColumnTitles` gains the shared 200 + project assertions |
 | `portal-compose-restart.spec.mjs` | `workUrl:8` | shared import | byte-identical route |

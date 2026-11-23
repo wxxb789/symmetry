@@ -26,9 +26,9 @@ after the runs; `git status --porcelain` carries no tracked change from it).
 
 | file | status | lines | note |
 | --- | --- | ---: | --- |
-| `.github/workflows/ci.yml` | edited | 1,846 → 2,123 | +277/−0: the `compose` job's five appended steps and the new job (§3); the render gate `:479-556` and its 7-name `--expect-file` list are byte-identical |
+| `.github/workflows/ci.yml` | edited | 1,846 → 2,121 | +275/−0: the `compose` job's five appended steps and the new job (§3); two unused step ids (`compose_browser`, `compose_restart`) removed by the apply stage (simplify F1); the render gate `:479-556` and its 7-name `--expect-file` list are byte-identical |
 | `browser/README.md` | edited | 615 → 613 | +11/−13: the manual matrix intro and rows (§3.4) |
-| `browser/tests/portal-connections.spec.mjs` | edited | 1,489 → 1,451 | +67/−105: the four E6 conversions (§7) |
+| `browser/tests/portal-connections.spec.mjs` | edited | 1,489 → 1,443 | +74/−120: the four E6 conversions plus `bindResourceThroughApi` → shared `attachResource` (§7; the latter in the apply stage, simplify F2) |
 | `browser/tests/portal-compose-daemon.spec.mjs` | edited | 577 → 571 | +15/−21: four helper copies converted (§7) |
 | `browser/tests/portal-compose-restart.spec.mjs` | edited | 206 → 205 | +1/−2: `workUrl` converted (§7) |
 | `browser/tests/portal-work-planning.spec.mjs` | **unedited** | 875 | no shared counterpart exists for its remainder helpers (§7) |
@@ -36,7 +36,7 @@ after the runs; `git status --porcelain` carries no tracked change from it).
 | the 7 render-gate specs | **unedited** | — | no rename, no title change |
 | `browser/scripts/run-*.ps1` | **unedited** | 98 / 270 / 250 | each driver stays the local reproduction path; no owned-file clause forced an edit; the isolation suite still passes 7/7 |
 | `browser/playwright.config.mjs`, `browser/package.json` | **unedited** | — | no new reporter, no new script |
-| `docs/plans/2026-11-22-rf-w6-02-browser-spec-wiring-plan.md` | new | 228 | the plan |
+| `docs/plans/2026-11-22-rf-w6-02-browser-spec-wiring-plan.md` | new | 230 | the plan (228 after the implement stage; the apply stage's F6/F7 record edits add two lines) |
 | `docs/evidence/rf-w6-02-browser-spec-wiring-2026-11-22.md` | new | — | this record |
 | `docs/TODO.md` / `docs/archive/CLOSED-TODO.md` | **unedited** | — | no entry closes; the remaining helper copies are recorded here instead (§8) |
 
@@ -50,7 +50,7 @@ three node suites and the unchanged seven render-gate specs wired; `portal-live-
 
 ## 3. Changes
 
-### 3.1 The Compose family in the `compose` job (`:1848-1970`)
+### 3.1 The Compose family in the `compose` job (`:1848-1968`)
 
 Five appended steps after the rootless evidence upload: pnpm/node setup + `pnpm install` +
 `playwright install chromium`; `Run the Compose daemon acceptance on a stack this job provisions`
@@ -63,7 +63,7 @@ always()`); `Upload the Compose acceptance reports` (`if: always()`). P1 is impl
 is provisioned by this family (the smoke step's stack dies in its own `EXIT` trap), never reused
 across steps.
 
-### 3.2 `browser-fixture-linux` (`:1971-2123`)
+### 3.2 `browser-fixture-linux` (`:1969-2121`)
 
 `needs: [changes, contracts]`, `if: needs.changes.outputs.run-heavy == 'true'`, ubuntu-latest,
 the `postgres:18.6-alpine` service, `portal-assets` + `control-release-linux` downloads, the
@@ -134,7 +134,7 @@ Spec-side preconditions mapped to the new jobs: `portal-connections` needs the f
 | assertion-program pin | `python3 scripts/ci/test-assert-playwright-json.py` | 0 | `Ran 17 tests … OK` |
 | workflow syntax | `actionlint -shellcheck= -pyflakes= .github/workflows/ci.yml` | 0 | 0 findings |
 | YAML model | `python3 -c 'yaml.safe_load(...)'` | 0 | 15 jobs; the new job's `needs`/`if`/`runs-on` as pinned |
-| new inline bodies | `bash -n` over every `run: \|` body of `ci.yml` (52 blocks) | 0 | 52 blocks, 0 syntax failures; new bodies 27/48/6/2/48/28 lines ≤ 80 |
+| new inline bodies | `bash -n` over the 40 `shell: bash` `run: \|` bodies of `ci.yml` and the PowerShell parser over its 12 `shell: pwsh` bodies | 0 / 0 | 52 blocks, 0 syntax failures (parsed by their own shell); new bodies 27/48/6/2/48/28 lines ≤ 80 |
 | browser lint | `node node_modules/eslint/bin/eslint.js . --max-warnings 0` from `browser/` | 0 | 0 findings (converted specs included) |
 | collection parity | `playwright test --list` on the four converted specs, base copies vs HEAD | 0 / 0 | 62 normalized listing lines each, **identical** titles and order |
 | importer link check | `playwright test --list` (all 13 specs) | 0 | `Total: 168 tests in 13 files` |
@@ -144,6 +144,13 @@ Spec-side preconditions mapped to the new jobs: `portal-connections` needs the f
 | step control-flow dry run | the four new step bodies (27/48/48/28 lines) extracted from `ci.yml` and run under `bash` with command-level stubs for `docker`/`curl`/`mix`/`tar`/`pnpm`/`jq` and the real assertion program | 0 / 0 / 0 / 0 | daemon: up → healthz → service check → spec → assertion; restart: record → fingerprint → restart → healthz → fingerprint equality → spec → assertion; connection: create/migrate → fixture start → identity+marker+healthz readiness → spec → assertion; planning: create/migrate → release extract/eval/start → healthz → spec → assertion (the psql argument log shows the exact fingerprint SQL and the interpolated project id) |
 | diff hygiene | `git diff --check` | 0 | no whitespace errors |
 | DLP | case-insensitive profile-directory-fragment grep over the diff; backslash-u count over the raw diff | 1 / 0 | no host-path match, 0 backslash-u sequences |
+
+Apply stage re-run (simplify F1 + F2, the final tree): the same foreground gate set re-run with
+unchanged counts — inventory `suites=16 wired=14 manual=2 unclassified=0`, classifier 31 tests,
+extraction 23, assertion-program 17, actionlint 0 findings, the 52 `run: |` bodies clean under
+their own parser (40 `bash -n`, 12 pwsh), `git diff --check` clean, DLP clean — plus `node --check`
+and eslint on the converted spec, its `playwright test --list` parity against the base bytes, the
+two node suites, and the converted 201 guard's stub-driven mutation (§7).
 
 Not run on this host (recorded as missing, never passed):
 
@@ -177,6 +184,7 @@ assertion reads.
 | `portal-connections` | `api(page, path, {method, body})` (33 call sites) | shared `api(page, method, path, body)` at every site; return `{status, body}` (the unused `text`/`contentType` and the null-vs-`{}` empty body have no consumer) | collection parity; eslint 0; env suite |
 | `portal-connections` | `createProject(page)` (sequence-minted key) | shared `createProject(page, { key, name, description })` behind the `connectionProject` preset using shared `uniqueKey("C")` | collection parity |
 | `portal-connections` | `deviceContextOptions(testInfo)` (baked origin) | shared `deviceContextOptions(testInfo, { baseURL: portalOrigin })` | collection parity |
+| `portal-connections` | `bindResourceThroughApi(page, projectId, { kind, name, reference, connectionId })` (a field-renaming wrapper over the same POST) | shared `attachResource(page, projectId, resource)` at its nine call sites, with `external_ref`/`connection_id` spelled at the site | collection parity (apply stage); eslint 0; env suite; stub-driven mutation: 500 → red with the JSON body message, 201 → returns `body.resource` |
 | `portal-compose-daemon` | `uniqueProject` key minting | shared `uniqueKey(prefix)` inside the same-named preset | collection parity |
 | `portal-compose-daemon` | `projectUrl`, `workUrl`, `servedColumnTitles` | shared imports of the same names (`projectUrl` was a byte-identical copy; `servedColumnTitles` gains the shared 200 + project assertions) | collection parity |
 | `portal-compose-restart` | `workUrl` | shared import | collection parity |
@@ -184,6 +192,15 @@ assertion reads.
 
 Collection parity: `playwright test --list` over the four specs, base copies (HEAD bytes) vs the
 converted files, identical 62-line normalized listings (titles, order, projects).
+
+Apply stage (simplify F1 + F2, applied after the implement gate run): the two unused step ids
+above were deleted, and the `bindResourceThroughApi` conversion above was re-verified on the final
+tree — `playwright test --list` parity for the spec (identical titles and order), `node --check`,
+eslint 0, the two node suites, `git diff --check` and the DLP greps. Its 201 guard was
+mutation-checked with a stub `page` over a local HTTP server: 500 reddens the helper with the JSON
+body message, 201 resolves `body.resource`. The section 5 counts were re-run unchanged on the
+final tree; the section 1 line counts, the section 3.1/3.2 ranges and the section 9 dLOC are
+republished at the final tree.
 
 ## 8. Residual risks and recorded remainder
 
@@ -204,7 +221,7 @@ converted files, identical 62-line normalized listings (titles, order, projects)
 
 ## 9. dLOC (D2, report-only)
 
-`git diff --numstat` over the changed files: `ci.yml` +277/−0 (report-only per D2; the plan's
-~+200 estimate), `browser/README.md` +11/−13, `portal-connections.spec.mjs` +67/−105,
-`portal-compose-daemon.spec.mjs` +15/−21, `portal-compose-restart.spec.mjs` +1/−2 — total
-**+371/−141 = +230** tracked lines, plus the plan (228) and this record.
+`git diff --numstat` over the changed files at the final tree: `ci.yml` +275/−0 (report-only per
+D2; the plan's ~+200 estimate), `browser/README.md` +11/−13, `portal-connections.spec.mjs`
++74/−120, `portal-compose-daemon.spec.mjs` +15/−21, `portal-compose-restart.spec.mjs` +1/−2 —
+total **+376/−156 = +220** tracked lines, plus the plan (230) and this record.

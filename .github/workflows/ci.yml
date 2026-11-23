@@ -1857,7 +1857,6 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter symmetry-browser-acceptance exec playwright install --with-deps chromium
       - name: Run the Compose daemon acceptance on a stack this job provisions
-        id: compose_browser
         shell: bash
         timeout-minutes: 30
         run: |
@@ -1889,7 +1888,6 @@ jobs:
             --expect-file portal-compose-daemon.spec.mjs \
             'the production Compose stack completes F1-F7 and persists each outcome'
       - name: Verify the control restart preserves the Compose workspace
-        id: compose_restart
         shell: bash
         timeout-minutes: 15
         run: |

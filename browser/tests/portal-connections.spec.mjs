@@ -47,7 +47,7 @@ import {
   monitorBrowserErrors,
   test
 } from "./fixtures.mjs";
-import { api, capture, createProject, deviceContextOptions, login, uniqueKey } from "./readable-fixtures.mjs";
+import { api, attachResource, capture, createProject, deviceContextOptions, login, uniqueKey } from "./readable-fixtures.mjs";
 
 const fixtureVariables = [
   "SYMMETRY_OPERATOR_TOKEN",
@@ -148,14 +148,6 @@ async function createConnectionThroughApi(page, { provider = "github", name, acc
   const response = await api(page, "POST", "/portal/api/connections", { provider, name, account_ref: account, capabilities });
   expect(response.status, JSON.stringify(response.body)).toBe(201);
   return response.body.connection.id;
-}
-
-async function bindResourceThroughApi(page, projectId, { kind, name, reference, connectionId }) {
-  const response = await api(page, "POST", `/portal/api/projects/${projectId}/resources`, {
-    kind, name, external_ref: reference, connection_id: connectionId
-  });
-  expect(response.status, JSON.stringify(response.body)).toBe(201);
-  return response.body.resource;
 }
 
 async function readWorkspace(page, projectId) {
@@ -741,8 +733,8 @@ test("a provider failure and an ambiguous outcome stay explicit and the next rea
   });
   const issuesReference = `acme-fixture/issues-${suffix}`;
   const repositoryReference = `acme-fixture/repository-${suffix}`;
-  const issues = await bindResourceThroughApi(page, projectId, { kind: "work_tracking", name: "Issues", reference: issuesReference, connectionId });
-  await bindResourceThroughApi(page, projectId, { kind: "repository", name: "Repository", reference: repositoryReference, connectionId });
+  const issues = await attachResource(page, projectId, { kind: "work_tracking", name: "Issues", external_ref: issuesReference, connection_id: connectionId });
+  await attachResource(page, projectId, { kind: "repository", name: "Repository", external_ref: repositoryReference, connection_id: connectionId });
   await writeFixtureState({ github: { issues: { [issuesReference]: [101, 102] } } });
 
   await page.getByRole("button", { name: "Refresh", exact: true }).click();
@@ -1022,9 +1014,9 @@ test("project switching discards a late sync continuation and never writes into 
   const firstRepositoryReference = `acme-fixture/first-repository-${suffix}`;
   const firstIssuesReference = `acme-fixture/first-issues-${suffix}`;
   const secondReference = `acme-fixture/second-repository-${suffix}`;
-  await bindResourceThroughApi(page, first, { kind: "repository", name: "First repo", reference: firstRepositoryReference, connectionId });
-  await bindResourceThroughApi(page, first, { kind: "work_tracking", name: "First issues", reference: firstIssuesReference, connectionId });
-  await bindResourceThroughApi(page, second, { kind: "repository", name: "Second repo", reference: secondReference, connectionId });
+  await attachResource(page, first, { kind: "repository", name: "First repo", external_ref: firstRepositoryReference, connection_id: connectionId });
+  await attachResource(page, first, { kind: "work_tracking", name: "First issues", external_ref: firstIssuesReference, connection_id: connectionId });
+  await attachResource(page, second, { kind: "repository", name: "Second repo", external_ref: secondReference, connection_id: connectionId });
   await resetFixtureState();
 
   await page.getByRole("button", { name: "Refresh", exact: true }).click();
@@ -1157,10 +1149,10 @@ test("external work items keep their identity, their provider-owned lock and the
   const repositoryReference = `acme-fixture/repository-${suffix}`;
   const pipelineReference = `acme-fixture/pipeline-${suffix}`;
   const otherReference = `acme-fixture/other-${suffix}`;
-  const issues = await bindResourceThroughApi(page, projectId, { kind: "work_tracking", name: "Issues", reference: issuesReference, connectionId });
-  const repository = await bindResourceThroughApi(page, projectId, { kind: "repository", name: "Repository", reference: repositoryReference, connectionId });
-  const pipeline = await bindResourceThroughApi(page, projectId, { kind: "ci", name: "Pipeline", reference: pipelineReference, connectionId });
-  await bindResourceThroughApi(page, otherProjectId, { kind: "repository", name: "Other repository", reference: otherReference, connectionId });
+  const issues = await attachResource(page, projectId, { kind: "work_tracking", name: "Issues", external_ref: issuesReference, connection_id: connectionId });
+  const repository = await attachResource(page, projectId, { kind: "repository", name: "Repository", external_ref: repositoryReference, connection_id: connectionId });
+  const pipeline = await attachResource(page, projectId, { kind: "ci", name: "Pipeline", external_ref: pipelineReference, connection_id: connectionId });
+  await attachResource(page, otherProjectId, { kind: "repository", name: "Other repository", external_ref: otherReference, connection_id: connectionId });
   await writeFixtureState({ github: { issues: { [issuesReference]: [101, 102] } } });
 
   const synchronized = await api(page, "POST", `/portal/api/resources/${issues.id}/sync`);
