@@ -1,16 +1,19 @@
-import { createRootRouteWithContext, createRoute, Router, Link, redirect } from "@tanstack/react-router";
+import { createRootRouteWithContext, createRoute, lazyRouteComponent, Router, Link, redirect } from "@tanstack/react-router";
 import type { RouterHistory } from "@tanstack/react-router";
 import { AttentionPage } from "../features/attention/attention";
-import { ChatPage } from "../features/chat/chat";
-import { ConnectionsPage } from "../features/connections/connections";
-import { GoalDetailPage } from "../features/goals/detail";
 import { workItemSearch, workSearch } from "../features/projects/filters";
-import { ProjectPage, ProjectsPage } from "../features/projects/projects";
 import { RuntimesPage } from "../features/runtimes/runtimes";
-import { WorkDetailPage } from "../features/work/detail";
 import type { ChatScope } from "../services/api";
 import type { Application } from "./application";
+import { installStaleChunkReload, loadRouteChunk } from "./route-chunks";
 import { WorkspaceRoot } from "./shell";
+
+const ChatPage = lazyRouteComponent(loadRouteChunk(() => import("../features/chat/chat")), "ChatPage");
+const ConnectionsPage = lazyRouteComponent(loadRouteChunk(() => import("../features/connections/connections")), "ConnectionsPage");
+const GoalDetailPage = lazyRouteComponent(loadRouteChunk(() => import("../features/goals/detail")), "GoalDetailPage");
+const ProjectPage = lazyRouteComponent(loadRouteChunk(() => import("../features/projects/projects")), "ProjectPage");
+const ProjectsPage = lazyRouteComponent(loadRouteChunk(() => import("../features/projects/projects")), "ProjectsPage");
+const WorkDetailPage = lazyRouteComponent(loadRouteChunk(() => import("../features/work/detail")), "WorkDetailPage");
 
 const rootRoute = createRootRouteWithContext<{ application: Application }>()({
   component: WorkspaceRoot,
@@ -72,6 +75,7 @@ const routeTree = rootRoute.addChildren([indexRoute, attentionRoute, chatRoute, 
 type AppRouter = Router<typeof routeTree>;
 
 export function createAppRouter(application: Application, history?: RouterHistory): AppRouter {
+  installStaleChunkReload();
   return new Router({ routeTree, context: { application }, basepath: "/portal", ...(history ? { history } : {}), defaultPreload: false, scrollRestoration: true });
 }
 
