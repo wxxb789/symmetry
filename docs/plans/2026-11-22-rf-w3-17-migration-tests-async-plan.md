@@ -765,8 +765,9 @@ Three hazards considered before measuring:
   the two full-suite runs where the real producer is scheduled beside it. The disposition is the
   conductor's (answer §12.3).
 * Fresh-connect exposure under a saturated server. The base harness opens one fresh connection per
-  migration test (its schema Repo); the delivered harness opens three (schema Repo + the two DDL
-  Repos). While this slice's gate sweep ran beside the pre-slice baseline suite, one repeat of
+  migration test (its schema Repo); the delivered harness opens four (schema Repo + one DDL Repo
+  per statement: CREATE, the `after` DROP and the `on_exit` DROP). While this slice's gate sweep ran
+  beside the pre-slice baseline suite, one repeat of
   `add_work_item_creation_identity_test.exs` failed with Postgrex's async socket close
   (`tcp recv: closed`) inside the `CREATE SCHEMA` statement, with the cluster's own log showing
   checkpoints whose writes took 270 s and 218 s in that window (the host had three BEAMs and ~70 of
@@ -779,12 +780,12 @@ Three hazards considered before measuring:
   `create_schema!/2`/`drop_schema!/2` on the test's own Repo (a Repo accepts
   `parameters: [search_path: <missing schema>]`, and `CREATE SCHEMA`/`current_schema()`/`DROP SCHEMA`
   all work on it — `mix run --no-start` probe, 2026-11-22 22:46), which cuts fresh connects per test
-  from three to one but forces the two manual call sites to drop before stopping their Repo, and
+  from four to one but forces the two manual call sites to drop before stopping their Repo, and
   does not remove the failure class (a stalled connect can still fail a migration test's first query
   on either tree). The review's variant — one reusable DDL Repo per VM with a small pool — was
   rejected for the same class in the other direction (R10): a small shared pool serializes the DDL
   that F-1/F-4/F-5 show can take tens of seconds under host saturation, so the per-statement Repo
-  keeps the DDL parallel at the cost of two extra connects per test.
+  keeps the DDL parallel at the cost of three extra connects per test.
 
 Both configurations measured back to back in the same window on an idle host (0 foreign `erl.exe`),
 full-suite seed 0, same partition and command; only full-suite runs are compared because the

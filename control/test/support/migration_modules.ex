@@ -1,15 +1,9 @@
 defmodule SymmetryControl.MigrationModules do
   @moduledoc """
-  The boot-time registry of `priv/repo/migrations` as `{version, module}` pairs.
-
-  Ecto's directory source recompiles every migration file on each `run/4`, which
-  redefines the migration modules in the global code server while concurrent
-  tests execute them. The suite compiles the directory once at boot
-  (`test_helper.exs`) and passes these pairs to `Ecto.Migrator` instead.
-
-  The `test` alias migrates the same directory in this VM before `test_helper.exs` runs, so on a
-  fresh database the compile replaces already-loaded modules; the conflict warning is suppressed
-  because the compiled file is the same source that was loaded.
+  Ecto's directory source recompiles every migration file into the global code server on each
+  `run/4`, redefining modules that concurrent tests execute; the suite compiles the directory once
+  at boot (`test_helper.exs`) and passes these pairs to `Ecto.Migrator` instead. The `test` alias
+  already loaded this same source, so the recompiles' module-conflict warning is suppressed.
   """
 
   @migrations_dir Path.expand("../../priv/repo/migrations", __DIR__)

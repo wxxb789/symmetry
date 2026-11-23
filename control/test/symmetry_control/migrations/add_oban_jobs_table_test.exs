@@ -1,4 +1,6 @@
 defmodule SymmetryControl.Migrations.AddObanJobsTableTest do
+  # Deliberately `async: false`: the refusal test takes `LOCK TABLE public.oban_jobs IN SHARE MODE`,
+  # which queues behind an async Oban producer (W3-17 plan finding F-8); do not flip with the rest.
   use SymmetryControl.MigrationCase, async: false
 
   alias SymmetryControl.Repo

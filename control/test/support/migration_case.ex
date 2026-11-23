@@ -27,17 +27,10 @@ defmodule SymmetryControl.MigrationCase do
   end
 
   @doc """
-  Runs `test` against a private schema named `schema_base` plus a unique
-  suffix.
-
-  The schema is created first, a dedicated single-connection Repo starts
-  against it, and the dynamic repo points there for the duration of `test`.
-  The dynamic repo is restored, the Repo stopped and the schema dropped
-  afterwards.
-
-  Tests that need to observe pre-migration state call `schema_name/1`,
-  `create_schema!/1`, `start_schema_repo/1` and `drop_schema!/1` directly
-  instead.
+  Runs `test` against `schema_base` plus a unique suffix, in the dynamic repo's private schema.
+  The order create, start, `put_dynamic_repo`, restore/stop/drop is load-bearing; to observe
+  pre-migration state call `schema_name/1`, `create_schema!/1`, `start_schema_repo/1` and
+  `drop_schema!/1` directly instead.
   """
   def with_schema(schema_base, test) do
     schema = schema_name(schema_base)
@@ -90,10 +83,8 @@ defmodule SymmetryControl.MigrationCase do
   end
 
   @doc """
-  Creates `schema` on a private single-connection Repo, outside the shared sandbox pool.
-
-  Registers an ExUnit `on_exit` drop as the fallback for the paths no `after` block can reach: the
-  runner process runs it even after ExUnit killed the test process for a timeout.
+  Registers an ExUnit `on_exit` drop for the paths no `after` block can reach: the runner process
+  runs it even after ExUnit killed the test process for a timeout.
   """
   def create_schema!(schema) do
     on_exit(fn -> drop_schema!(schema) end)
@@ -122,11 +113,8 @@ defmodule SymmetryControl.MigrationCase do
       pool: DBConnection.ConnectionPool,
       pool_size: 1,
       migration_lock: false,
-      # A fresh single-connection pool can take seconds to establish on a saturated host: the
-      # default queue tolerance drops a request that waited 4_000 ms for its connection ("connection
-      # not available and request was dropped from queue after 4000ms"), and Postgrex's 15 s request
-      # timeout can expire while the first statement is in flight. Both were hit on this slice's
-      # shared host; see the plan's findings F-1/F-4/F-5.
+      # Saturated-host connects: the 4 s default queue drop ("request was dropped from queue after
+      # 4000ms") and Postgrex's 15 s request budget both fired (W3-17 plan F-1/F-4/F-5).
       timeout: 30_000,
       queue_target: 5_000,
       queue_interval: 10_000
