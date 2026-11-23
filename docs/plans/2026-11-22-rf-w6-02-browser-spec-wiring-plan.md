@@ -17,7 +17,8 @@ list stay byte-identical) · `browser/README.md` (the manual matrix) · `browser
 four wired specs, for the E6-deferred conversions, the 2026-11-22 review ruling's one
 replayed-create expectation in `portal-work-planning.spec.mjs`, the round-2 ruling's
 replay-branch fix in `portal-compose-daemon.spec.mjs` and the round-3 ruling's strict-mode
-locator scoping in both compose specs — no rename, no title change,
+locator scoping in both compose specs, plus the round-4 ruling's product-drift repairs in both
+compose specs — no rename, no title change,
 no render-gate spec, no shared module) · `docs/TODO.md` / `docs/archive/CLOSED-TODO.md` (only if an
 entry closes — none does) · this plan file · `docs/evidence/rf-w6-02-browser-spec-wiring-2026-11-22.md`
 (the repo's evidence-record convention, `docs/evidence/rf-w5-08-…` style).
@@ -218,6 +219,21 @@ locators were read against the frontend components and resolve to one element in
 runs in; the mutation check is the real-Chromium locator-shape harness described in the evidence
 file.
 
+## Change 6 — the round-4 product-drift repairs and the scratch loop
+
+The compose specs had drifted from the product since #35/#111 and had never executed past their
+first abort. One deterministic block carried the drift: the daemon spec filled the delivery
+controls of an agent-recorded item and asserted `source: manual`, while the editor renders a
+delivery value whose served source is neither `none` nor `manual` as a read-only `<output>`. The
+block now asserts that served rule (the three recorded agent values with `agent value, not
+editable here`, the editor closed, and the re-read after the board moves still `source: agent`);
+the restart spec's retried-item expectations move to the agent-recorded values, and the human
+item's manual edit stays the manual-path acceptance. The rest of both specs was verified on the
+conductor's fast loop — a scratch-only workflow running the compose job's daemon and restart
+steps, pushed to `scratch/w6-02-compose` through `git stash create` + `git commit-tree` commits
+so the PR branch never carried it, green on the first run (`45108962385`) and deleted after —
+rather than one PR CI round per failure.
+
 ## Evidence plan
 
 - Foreground local gates: `python3 scripts/ci/test-ci-changed-path-classifier.py` (the new job's
@@ -249,6 +265,11 @@ file.
   The round-3 ruling adds: (j) a real-Chromium replica of the failing snapshot's structure —
   every unreleased locator shape strict-fails (`strict mode violation`) while each scoped or
   exact shape resolves once and stays visible.
+  The round-4 ruling adds: (k) the old manual-edit shape on an agent-recorded delivery fails
+  against the served read-only rule (`locator.fill` refuses the `<output>`) while the final
+  read-only assertion passes; (l) the scratch-loop control — the compose daemon and restart
+  steps copied verbatim from `ci.yml`, run from the scratch-only workflow — green on run
+  `45108962385` with both specs executed and their executed sets verified.
 - CI is the slow oracle (green `compose` browser steps, green `browser-fixture-linux`, unchanged
   render gate, the inventory step green): conductor-verified on the PR.
 - Host limitations, recorded with the exact commands: no Docker daemon and no PostgreSQL on this

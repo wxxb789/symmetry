@@ -92,9 +92,9 @@ test.describe("Goal 2 Compose restart acceptance", () => {
         status: "done",
         execution: expect.objectContaining({ state: "completed", generation: 2 }),
         delivery: expect.objectContaining({
-          pull_request: expect.objectContaining({ source: "manual", url: "https://github.com/wxxb789/symmetry/pull/84" }),
-          ci: expect.objectContaining({ source: "manual", status: "passed" }),
-          review: expect.objectContaining({ source: "manual", status: "approved" })
+          pull_request: expect.objectContaining({ source: "agent" }),
+          ci: expect.objectContaining({ source: "agent", status: "passed" }),
+          review: expect.objectContaining({ source: "agent", status: "required" })
         })
       })
     );

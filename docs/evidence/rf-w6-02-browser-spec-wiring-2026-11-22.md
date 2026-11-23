@@ -30,14 +30,14 @@ after the runs; `git status --porcelain` carries no tracked change from it).
 | `.github/workflows/ci.yml` | edited | 1,846 → 2,174 | +328/−0: the `compose` job's five appended steps and the new job (§3); two unused step ids (`compose_browser`, `compose_restart`) removed by the apply stage (simplify F1); the fix stage added the planning step's `PHX_HOST` export (+2 lines) and the connection step's trailing canary guard (+12 lines, review F1/F2); the review-fix stage made the three new `/healthz` probes tolerant (`--retry-all-errors`, rulings P0-1/P1-3), restored the provider-call-log canary grep and pinned the full executed sets (rulings P3-5/P3-6, §3.5); the round-2 stage added the CI-only Compose origin override (ruling a, §3.6); the render gate `:479-556` and its 7-name `--expect-file` list are byte-identical |
 | `browser/README.md` | edited | 615 → 613 | +11/−13: the manual matrix intro and rows (§3.4) |
 | `browser/tests/portal-connections.spec.mjs` | edited | 1,489 → 1,443 | +74/−120: the four E6 conversions plus `bindResourceThroughApi` → shared `attachResource` (§7; the latter in the apply stage, simplify F2) |
-| `browser/tests/portal-compose-daemon.spec.mjs` | edited | 577 → 571 | +27/−33: four helper copies converted (§7), the round-2 replay-branch fix (§3.6) and the round-3 locator scoping (§3.7) |
-| `browser/tests/portal-compose-restart.spec.mjs` | edited | 206 → 204 | +4/−6: `workUrl` converted (§7) and the round-3 locator scoping (§3.7) |
+| `browser/tests/portal-compose-daemon.spec.mjs` | edited | 577 → 574 | +44/−47: four helper copies converted (§7), the round-2 replay-branch fix (§3.6), the round-3 locator scoping (§3.7) and the round-4 product-drift repairs (§3.8) |
+| `browser/tests/portal-compose-restart.spec.mjs` | edited | 206 → 204 | +7/−9: `workUrl` converted (§7), the round-3 locator scoping (§3.7) and the round-4 product-drift repairs (§3.8) |
 | `browser/tests/portal-work-planning.spec.mjs` | edited | 875 | +1/−1: the review-fix stage's replayed-create expectation — the served text, which PR #111 appended the owner-discard note to (ruling P0-2, cited in §3.5); no helper, no title and no other assertion changed |
 | `browser/tests/readable-fixtures.mjs` | **unedited** | 431 | the failure control forbids mutating it; `git diff` is empty |
 | the 7 render-gate specs | **unedited** | — | no rename, no title change |
 | `browser/scripts/run-*.ps1` | **unedited** | 98 / 270 / 250 | each driver stays the local reproduction path; no owned-file clause forced an edit; the isolation suite still passes 7/7 |
 | `browser/playwright.config.mjs`, `browser/package.json` | **unedited** | — | no new reporter, no new script |
-| `docs/plans/2026-11-22-rf-w6-02-browser-spec-wiring-plan.md` | new | 275 | the plan (228 after the implement stage; the apply stage's F6/F7 record edits add two lines; the fix stage's `PHX_HOST` description, canary guard, isolation-suite count and mutation clause add eight; the review-fix stage's probe, executed-set, canary and mutation wording add ten; the round-2 stage's origin override, replay-branch and mutation wording add nine; the round-3 stage's Change 5 and mutation wording add eighteen) |
+| `docs/plans/2026-11-22-rf-w6-02-browser-spec-wiring-plan.md` | new | 296 | the plan (228 after the implement stage; the apply stage's F6/F7 record edits add two lines; the fix stage's `PHX_HOST` description, canary guard, isolation-suite count and mutation clause add eight; the review-fix stage's probe, executed-set, canary and mutation wording add ten; the round-2 stage's origin override, replay-branch and mutation wording add nine; the round-3 stage's Change 5 and mutation wording add eighteen; the round-4 stage's Change 6 and mutation wording add twenty-one) |
 | `docs/evidence/rf-w6-02-browser-spec-wiring-2026-11-22.md` | new | — | this record |
 | `docs/TODO.md` / `docs/archive/CLOSED-TODO.md` | **unedited** | — | no entry closes; the remaining helper copies are recorded here instead (§8) |
 
@@ -142,6 +142,23 @@ history error state renders a `Retry history` button whose accessible name the s
 would also accept). Every other text locator in the two specs was read against the page
 structure and resolves to one element in the state it runs in (§6 row q).
 
+### 3.8 The round-4 product-drift repairs (PR #260 round-4 ruling, scratch loop)
+
+The compose specs had drifted from the product since #35/#111 and had never executed past their
+first abort. One deterministic block carried the drift: the daemon spec filled the delivery
+controls of an item whose delivery the agent had just recorded and asserted `source: manual`.
+The editor renders a delivery value whose served source is neither `none` nor `manual` as a
+read-only `<output>` (`deliveryValueEditable`; `frontend/src/features/planning/editors.tsx`), so
+the block now asserts that served rule — the pull request, CI and review outputs carry the
+recorded agent values (`https://example.invalid/pull/42`, `passed`, `required`) with `agent
+value, not editable here`, the editor is closed, and the re-read after the board moves still
+serves `source: agent` in all three positions. The restart spec's retried-item expectations move
+from the stale `source: manual` + `…/pull/84` shape to the agent-recorded values; the human
+item's manual edit (its delivery source is `none` before the edit) stays the manual-path
+acceptance. Everything after the old abort — the board moves, archive/restore, the persisted
+reads, the awaited-evidence surfaces — and the whole restart spec passed unchanged on the
+scratch loop's first green run (run `45108962385`), so these two blocks were the only drift.
+
 ## 4. Control-flow preservation (lesson 32)
 
 Base-vs-HEAD audit of the three drivers (read in full at the base revision). “Preserved” means the
@@ -241,6 +258,17 @@ tests, assertion-program 17 tests, actionlint 0 findings, `node --check` on both
 `git diff --check` clean, DLP clean — plus the locator-shape harness in real Chromium over a
 replica of the failing snapshot's structure (§6 row q).
 
+Round-4 scratch loop (PR #260 round-4 ruling): the fast loop ran the compose job's daemon and
+restart steps (copied verbatim from `ci.yml`) from a scratch-only workflow on the scratch
+branch, whose commits were built with `git stash create` plus a temporary index
+(`git commit-tree`), so the PR branch never carried the workflow; the branch was deleted after
+the green run. Run `45108962385` (job `137476672228`, 4m47s): daemon `1 passed (9.6s)` and
+restart `1 passed (2.1s)`, both with `render gate executed set verified: 0 skipped; … passed in
+every project`. The stage gates: inventory `suites=16 wired=14 manual=2 unclassified=0`,
+classifier 31 tests, extraction 23 tests, assertion-program 17 tests, actionlint 0 findings,
+`node --check` on both specs, `git diff --check` clean, DLP clean and the record-sanitize check
+clean.
+
 Not run on this host (recorded as missing, never passed):
 
 - the Compose stack and both browser phases (`docker compose up --build --detach`, `docker
@@ -286,6 +314,8 @@ Not run on this host (recorded as missing, never passed):
 | p | the unmutated shapes of the round-2 changes | the merged config with the override and the final-shape harness | `PHX_HOST=127.0.0.1` for both services; the harness passes |
 | q | the strict-mode locator shapes (round-3 ruling) | a real-Chromium replica of the failing snapshot's structure (dialog, evidence region, timeline, Outcome/Assignment `dl.detail-facts`, `Retry`/`Retry history` buttons): the unreleased shapes vs the final shapes | unreleased: every `toBeVisible` on the four evidence texts, the Owner fact and `Retry` throws `strict mode violation`; final: each scoped/exact locator resolves once and stays visible (2 tests, exit 0) |
 | r | the unmutated round-3 shapes | the same replica with the final locators | 2 passed, exit 0 |
+| s | the round-4 delivery drift | the old manual-edit shape on an agent-recorded delivery vs the final read-only assertion | the old shape fails in run 45107736954: `locator.fill` resolves `getByLabel('Pull request URL')` to `<output id="work-item-pull-request">… agent value, no…</output>` and refuses (`Element is not an <input>…`); the final assertion passed on the scratch run 45108962385 |
+| t | the scratch-loop control (round-4 ruling) | the compose daemon + restart steps copied verbatim from `ci.yml`, run from the scratch-only workflow via `git stash create` + `git commit-tree` commits | run 45108962385: both steps green, both specs executed (`1 passed` each) with `render gate executed set verified: 0 skipped`, so every previously unexecuted assertion in both specs ran and passed |
 
 The real reports of (a)/(b) are CI-side; the synthetic reports reproduce the report shape the
 Playwright JSON reporter writes for these specs (file, per-project case state), which is what the
@@ -333,10 +363,10 @@ republished at the final tree.
   config` merges the override in the daemon step's exact bytes, §6 row n); the Phoenix handshake
   itself rests on the same configured-host rule the green planning release demonstrates
   (`PHX_HOST=127.0.0.1` against a `127.0.0.1` origin) and is re-checked by the next CI run.
-- The round-3 locator sweep is verified against a replica of the failing run's snapshot structure
-  plus the frontend components; the compose specs have still never executed past their first
-  abort (the daemon spec aborted at the evidence assertions, the restart spec has never run), so
-  the next CI run is the first full execution of both.
+- The compose specs passed end to end on the scratch loop's green run (`45108962385`): both
+  specs executed with their executed sets verified, including every assertion that had never
+  run past the earlier aborts. Because the scratch branch was deleted, the PR-head run remains
+  the acceptance carrier for those bytes (conductor-verified).
 - Remaining helper copies with no shared counterpart stay in the three wired specs: `columnOf`,
   `moveByKeyboard` (work-planning, compose-daemon, compose-restart), `itemDetail`, `openWork`,
   `fixtureDescription` (compose-daemon), `workItemDetail` (compose-restart). They are
@@ -351,6 +381,6 @@ republished at the final tree.
 
 `git diff --numstat` over the changed files at the final tree (merge base `9aae1af7`): `ci.yml`
 +328/−0 (report-only per D2; the plan's ~+200 estimate), `browser/README.md` +11/−13,
-`portal-connections.spec.mjs` +74/−120, `portal-compose-daemon.spec.mjs` +27/−33,
-`portal-compose-restart.spec.mjs` +4/−6, `portal-work-planning.spec.mjs` +1/−1 — total
-**+445/−173 = +272** tracked lines, plus the plan (275) and this record (356).
+`portal-connections.spec.mjs` +74/−120, `portal-compose-daemon.spec.mjs` +44/−47,
+`portal-compose-restart.spec.mjs` +7/−9, `portal-work-planning.spec.mjs` +1/−1 — total
+**+465/−190 = +275** tracked lines, plus the plan (296) and this record (386).

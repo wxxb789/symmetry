@@ -430,27 +430,30 @@ test.describe("Goal 2 Compose daemon acceptance", () => {
 
     await retryDetail.getByRole("button", { name: "Edit work item" }).click();
     const deliveryEditor = page.getByRole("dialog", { name: "Edit work item" });
-    await deliveryEditor.getByLabel("Pull request URL").fill("https://github.com/wxxb789/symmetry/pull/84");
-    await deliveryEditor.getByLabel("CI", { exact: true }).selectOption("passed");
-    await deliveryEditor.getByLabel("Review").selectOption("approved");
-    await deliveryEditor.getByRole("button", { name: "Save" }).click();
-    await expect(statusNotice(retryDetail, "Work item updated.")).toBeVisible();
-    const retryReviewRow = retryDetail.locator("dl.delivery-list").locator("div", { hasText: "Review" }).first();
-    await expect(retryReviewRow).toContainText("approved");
-    await expect(retryReviewRow).toContainText("source: manual");
+    await expect(deliveryEditor.locator("#work-item-pull-request")).toHaveText(
+      "https://example.invalid/pull/42 · agent value, not editable here"
+    );
+    await expect(deliveryEditor.locator("#work-item-ci-status")).toHaveText("passed · agent value, not editable here");
+    await expect(deliveryEditor.locator("#work-item-review-status")).toHaveText(
+      "required · agent value, not editable here"
+    );
+    await deliveryEditor.getByRole("button", { name: "Cancel" }).click();
+    await expect(deliveryEditor).toHaveCount(0);
 
     await page.goto(projectUrl(projectId, { view: "board" }));
     for (const state of ["review", "done"]) {
       await moveByKeyboard(page, retryTitle, "ArrowRight");
       await expect.poll(() => columnOf(page, retryTitle)).toBe(state);
     }
-    const approved = await itemDetail(page, retryItem.id);
-    expect(approved.work_item.delivery.pull_request).toEqual(
-      expect.objectContaining({ source: "manual", url: "https://github.com/wxxb789/symmetry/pull/84" })
+    const completedRetry = await itemDetail(page, retryItem.id);
+    expect(completedRetry.work_item.delivery.pull_request).toEqual(
+      expect.objectContaining({ source: "agent" })
     );
-    expect(approved.work_item.delivery.ci).toEqual(expect.objectContaining({ source: "manual", status: "passed" }));
-    expect(approved.work_item.delivery.review).toEqual(
-      expect.objectContaining({ source: "manual", status: "approved" })
+    expect(completedRetry.work_item.delivery.ci).toEqual(
+      expect.objectContaining({ source: "agent", status: "passed" })
+    );
+    expect(completedRetry.work_item.delivery.review).toEqual(
+      expect.objectContaining({ source: "agent", status: "required" })
     );
 
     // The classic topbar settings dialog and its status select move to the
