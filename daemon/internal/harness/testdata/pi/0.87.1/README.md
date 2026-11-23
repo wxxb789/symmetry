@@ -28,9 +28,12 @@ surface they model did not change between the two releases:
   the adapter passes or admits (`ValidateRPCProfileArgs`, `--session`,
   `--extension`, `--no-extensions`).
 
-Historical real-run records for 0.85.1 stay in `../0.85.1/`. They are evidence
-for that binary only. The opt-in test descriptions and environment variables in
-`../0.85.1/README.md` still apply; substitute a 0.87.1 executable.
+The 0.85.1 real-run records were retired with the `../0.85.1/` directory; they
+were evidence for that binary only. The opt-in test descriptions and environment
+variables still apply; substitute a 0.87.1 executable. See
+[`native-windows-2026-09-24.md`](native-windows-2026-09-24.md) for this
+directory's recorded invocation and [`../1.5.2/README.md`](../1.5.2/README.md)
+for the current descriptions.
 
 [Windows native evidence for 0.87.1](native-windows-2026-09-24.md) records the
 local opt-in runs against this binary. No Linux run against 0.87.1 has been

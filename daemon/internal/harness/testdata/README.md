@@ -21,7 +21,8 @@ it), after checking `docs/runbooks/` and `docs/design/harness.md` for pins on th
 ## Adding a version
 
 1. Copy the harness's canonical directory (`<harness>/<TestedVersion>/`) to
-   `testdata/<harness>/<new-version>/`; replace `version.txt` with the new `--version` output.
+   `testdata/<harness>/<new-version>/`; replace `version.txt` with the new `--version` output
+   where the directory carries one.
 2. Capture the new evidence into that directory and update its `README.md`: what was captured,
    on which platform, and what it does not prove.
 3. If the directory carries a `fixture-manifest.json`, recompute every fixture digest and the
@@ -30,7 +31,7 @@ it), after checking `docs/runbooks/` and `docs/design/harness.md` for pins on th
 4. Update the adapter's `TestedVersion` (and the executable or schema digests its promotion
    binds) and the `docs/design/harness.md` pin in the same change, so a reviewer sees the version
    bump, the new evidence and the pin together.
-5. Run `go test -count=1 ./internal/harness/...`.
+5. From `daemon/`, run `go test -count=1 ./internal/harness/...`.
 
 A per-directory delta may replace a full copy only for a directory outside the frozen and
 digest-bound sets above, and only with a recorded admission: it passes the deletion test

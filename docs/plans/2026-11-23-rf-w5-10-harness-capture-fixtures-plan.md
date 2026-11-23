@@ -53,8 +53,9 @@ exactly `daemon/internal/harness/testdata/claude/2.1.281/README.md` and
 `git diff --name-only <base>...HEAD -- daemon/internal/harness/testdata/claude/2.1.281
 daemon/internal/harness/testdata/claude/2.1.323` showing only the two READMEs. The staging
 directories' own READMEs say "Historical: superseded by" and "stays in the tree as historical
-evidence" — retirement of `2.1.259` and `2.1.322` leaves those sentences true; the `2.1.281`
-README's "moved from `../2.1.259/`" is a historical statement about provenance and stays.
+evidence" — retiring `2.1.259` with its own README and keeping `2.1.322` leaves those sentences
+true; the `2.1.281` README's "moved from `../2.1.259/`" is a historical statement about provenance
+and stays.
 
 P5. **TODO bookkeeping.** The item at `docs/TODO.md:95-104` (the claude README reconciliation,
 parked on W5-10) moves to `docs/archive/CLOSED-TODO.md` per the repository contract: the item text
@@ -87,8 +88,8 @@ Base `git ls-tree -r --long HEAD -- daemon/internal/harness/testdata`: 114 files
 | claude/2.1.322 | 4 | 4,131 | `claude/stream_test.go:13` | none | keep (two most recent) |
 | claude/2.1.323 | 7 | 56,962 | `claude/probe_test.go:418` manifest test | fixture-manifest.json | keep (decision J; README prose edit) |
 | pi/0.85.1 | 8 | 30,497 | none | none | **retire** |
-| pi/0.87.1 | 5 | 8,726 | none (probe string `pi/probe_promotion_test.go:236`) | none | keep (one of the two most recent) |
-| pi/1.5.2 | 10 | 43,980 | `pi/rpc_test.go:16,:91`, `pi/probe_promotion_test.go:297` | fixture-manifest.json | keep (canonical `TestedVersion`) |
+| pi/0.87.1 | 5 | 8,726 | none (probe string `pi/probe_promotion_test.go:236`) | none | keep (one of the two most recent; README prose repair) |
+| pi/1.5.2 | 10 | 43,980 | `pi/rpc_test.go:16,:91`, `pi/probe_promotion_test.go:297` | fixture-manifest.json | keep (canonical `TestedVersion`; README prose repair) |
 | omo/5.1.69 | 5 | 182,762 | `omo/transcript_test.go:59`; comment `omo/probe.go:58` | none | keep (only version; design-pinned) |
 | omp/18.20.0 | 10 | 30,611 | `omp/adapter_test.go:961` | fixture-manifest.json | keep (decision J; unread in-repo) |
 | opencode/1.18.30, 1.18.32, 2.3.0 | 17 | 113,468 | `opencode/sse_test.go:13,:410` (out of scope) | none | keep (D1, untouched) |
@@ -97,7 +98,9 @@ Retired total: codex `0.153.4` + `0.156.1` + `0.167.1` + claude `2.1.259` + pi `
 **32 files / 77,092 bytes** (28.1 % of files, 12.9 % of bytes). Post-state: 82 files / 519,570 bytes
 plus the recipe file. The `-40..-60 %` estimate is reported, never a gate (D2-adjacent).
 The ruled claude README prose edits remove 12 further bytes from that total (two identifiers
-shortened by six characters each), so the measured retained-tree total is 519,558 bytes (§8).
+shortened by six characters each); the apply-stage prose repairs change `pi/0.87.1/README.md`
+(+174 B), `pi/1.5.2/README.md` (-60 B) and the recipe (+51 B), so the settled retained-tree
+total is 82 fixtures / 519,672 bytes + recipe 2,286 = 83 / 521,958 (§8).
 
 Runbook/design-pin check (re-derived at `2c8c419e`): no file under `docs/runbooks/` names any of the
 five retired version strings (grep = 0); `docs/design/harness.md` pins codex `0.167.2` (`:31`, kept
@@ -138,7 +141,8 @@ reader fails when its directory is disturbed.
 1. Windows `go test -count=1 ./internal/harness/...` (whole tree, one invocation).
 2. Census: `go test -list '.*' ./internal/harness/...` at base and at HEAD — name sets equal
    (D1: test names frozen). Fixture census: `git ls-tree -r --long` base 114 / 596,662 -> HEAD
-   82 / 519,570 plus the recipe file; any other delta is red.
+   82 / 519,672 + recipe 2,286 = 83 / 521,958 (§3/§8 arithmetic, apply-stage repairs included);
+   any other delta is red.
 3. Decoded-frame equality: the §4 hash table plus the reader audit.
 4. `gofmt -l`; `go vet ./...`; `GOOS=windows go build ./...` and `GOOS=linux go build ./...`
    (test files compile for the host GOOS only); `git diff --check`.
@@ -189,7 +193,7 @@ stage leaves the tree for verification). All gates foreground; Windows and WSL n
 | Settled re-run after mutants | `go test -count=1 ./internal/harness/...` | 0 | 9 `ok`, 0 `FAIL`, 18 s |
 | WSL `-race`, HEAD | `go test -race -count=1 ./internal/harness/...` (Ubuntu-24.04, go1.27.0) | 0 | 9 packages `ok`, 68 s; Linux halves (`omo/linux.json`) |
 | Test-name census | `go test -list '.*' ./internal/harness/...` base vs HEAD | 0/0 | 584 names, sets equal (`diff` empty) |
-| Fixture census | `git ls-tree -r --long <snapshot tree>` | — | 114 / 596,662 -> 82 / 519,558 + recipe 2,235 = 83 / 521,793 (§3 arithmetic) |
+| Fixture census | `git ls-tree -r --long <settled tree>` | — | 114 / 596,662 -> 82 / 519,672 + recipe 2,286 = 83 / 521,958 (§3 arithmetic; apply-stage prose repairs, §8.3) |
 | Reader-input equality | `sha256sum -c` over the 24 files the readers open | 0 | all identical base vs HEAD |
 | Citation corpus | `python3 scripts/ci/check-citation-existence.py --base 2c8c419e --head <snapshot>` | 0 | 1 changed document, 537 path citations, 3 pre-existing ignore-covered notices |
 | `gofmt -l .` | | 0 | no output |
@@ -227,3 +231,22 @@ reds the test).
 | M7 | appended a byte to `testdata/opencode/2.3.0/README.md` | the freeze diff prints that path; empty again after restore | blob `ac3f5740…` = base |
 | M8 | moved the keep-floor `codex/0.167.2` directory away | the inventory artifact prints DISAGREES (9 paths); AGREES again after restore (83 files before and after) | 9 blobs unchanged |
 | M9 | conditional delta rows | inapplicable: no delta lands; `find testdata -iname '*delta*' -o -iname '*patch*'` = 0, and the inventory lists no delta files | — |
+
+### 8.3 Apply-stage prose repairs (2026-11-23; simplify findings F1-F4, D1)
+
+Four README prose repairs landed on the settled tree; no capture, `version.txt`, manifest,
+reader or test byte changed. Range gate `git diff --name-status 2c8c419e --
+daemon/internal/harness/testdata` = 1 A (the recipe) + 32 D (the five retired directories) +
+4 M (exactly the two ruled claude READMEs and the two pi READMEs); the nine reader files diff
+empty; the opencode freeze diff empty.
+
+| file | change | bytes |
+| --- | --- | --- |
+| `testdata/README.md` (recipe) | step 1 conditional on a `version.txt`; step 5 states the `daemon/` cwd | 2,235 -> 2,286 |
+| `testdata/pi/0.87.1/README.md` | retired-`0.85.1` claims repointed to live content (`native-windows-2026-09-24.md`, `../1.5.2/README.md`) | 2,444 -> 2,618 |
+| `testdata/pi/1.5.2/README.md` | dangling `../0.85.1/README.md` link replaced | 4,538 -> 4,478 |
+
+Re-run gates on the settled tree: Windows `go test -count=1 ./internal/harness/...` exit 0
+(9 packages `ok`, 0 `FAIL`, 23 s); WSL `go test -race -count=1 ./internal/harness/...` exit 0
+(Ubuntu-24.04, go1.27.0; 9 `ok`, 0 `FAIL`, 57 s); fixture census `git ls-tree -r --long` =
+82 / 519,672 + recipe 2,286 = 83 / 521,958; `git diff --check` exit 0.

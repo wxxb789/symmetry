@@ -66,9 +66,8 @@ recorded blob for the platform before launching anything.
 
 ## Opt-in evidence commands
 
-The environment variables documented in
-[`../0.85.1/README.md`](../0.85.1/README.md) still apply, substituting a `1.5.2`
-executable. `TestNativeRepositoryTask` and
+The opt-in evidence environment variables apply to a `1.5.2` executable.
+`TestNativeRepositoryTask` and
 `TestNativeRepositoryTaskRetainedResume` need an operator-supplied numeric
 loopback OpenAI Responses gateway through
 `SYMMETRY_PI_NATIVE_REPOSITORY_TASK_BASE_URL`;
