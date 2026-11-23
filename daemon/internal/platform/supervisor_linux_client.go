@@ -866,6 +866,12 @@ func (supervisor *linuxSupervisor) recoverResponseLossStop() error {
 	supervisor.closeControlAfterResponseLossRequestLocked()
 	supervisor.requestMu.Unlock()
 	deadline := time.Now().Add(containmentCloseDeadline)
+	freezeUnproven := func(err error) error {
+		if supervisor.containmentUnprovenCallback != nil {
+			_ = supervisor.containmentUnprovenCallback()
+		}
+		return fmt.Errorf("response-loss mirror freeze: %w", err)
+	}
 	var lastErr error
 	for {
 		if channelClosedV2(supervisor.helperDone) {
@@ -887,20 +893,11 @@ func (supervisor *linuxSupervisor) recoverResponseLossStop() error {
 				}
 				lastErr = fmt.Errorf("response-loss mirror proof: %w", mirrorErr)
 			} else if mirrorErr := supervisor.sealMirrorObservation(); mirrorErr != nil {
-				if supervisor.containmentUnprovenCallback != nil {
-					_ = supervisor.containmentUnprovenCallback()
-				}
-				lastErr = fmt.Errorf("response-loss mirror freeze: %w", mirrorErr)
+				lastErr = freezeUnproven(mirrorErr)
 			} else if mirrorErr := supervisor.recordRecoveryScanSeal(sequence); mirrorErr != nil {
-				if supervisor.containmentUnprovenCallback != nil {
-					_ = supervisor.containmentUnprovenCallback()
-				}
-				lastErr = fmt.Errorf("response-loss mirror freeze: %w", mirrorErr)
+				lastErr = freezeUnproven(mirrorErr)
 			} else if mirrorErr := supervisor.assertDurableScanStateSealed(); mirrorErr != nil {
-				if supervisor.containmentUnprovenCallback != nil {
-					_ = supervisor.containmentUnprovenCallback()
-				}
-				lastErr = fmt.Errorf("response-loss mirror freeze: %w", mirrorErr)
+				lastErr = freezeUnproven(mirrorErr)
 			} else {
 				supervisor.mu.Lock()
 				supervisor.receipt = &receipt
@@ -1276,7 +1273,10 @@ func (supervisor *linuxSupervisor) sealMirrorObservation() error {
 
 // An absent write keeps the base fail-closed path: the all-sealed assertion refuses.
 func (supervisor *linuxSupervisor) recordRecoveryScanSeal(sequence uint64) error {
-	if supervisor == nil || supervisor.recoveryScanSealWrite == nil {
+	if supervisor == nil {
+		return errors.New("Linux supervisor is unavailable")
+	}
+	if supervisor.recoveryScanSealWrite == nil {
 		return nil
 	}
 	return supervisor.recoveryScanSealWrite(*supervisor.ContainmentAuthority(), sequence)

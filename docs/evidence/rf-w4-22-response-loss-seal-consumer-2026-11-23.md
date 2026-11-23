@@ -13,14 +13,14 @@ rows run Ubuntu-24.04 over the same worktree through its mount point (`<worktree
 
 | File | sha256 |
 | --- | --- |
-| `daemon/internal/platform/supervisor_linux_client.go` | `aae9c5f606da744f0a759c0ef9cb6a9bb7fc226bae8ddce1d6f54fc2f311b6c8` |
+| `daemon/internal/platform/supervisor_linux_client.go` | `0b5642affc09cd6470b57bb173cc17c4544ebf7adffbb9745102c3a63a6b1821` |
 | `daemon/internal/platform/containment_supervisor_linux_test.go` | `780b20731bc3e625f28f46ce85e820e106045318a9a4918c47595e4515c14597` |
 | `daemon/internal/execution/recorder.go` | `10833a31fbfa02f4b36ef2f8783a9cea1c4d158caf2e2621fc115a9f0bb90114` |
 | `daemon/internal/execution/recorder_test.go` | `b5fb2866b8c8afe15229b8d2493ac4934d190aaf4401e05f4277e91181811e9f` |
 | `daemon/internal/execution/process_launcher_linux.go` | `77ecbf4c8453f052446e824a06dfb809771039563def8e77aff8fc56a601a540` |
 | `daemon/internal/execution/process_launcher_linux_test.go` (new) | `17cfd115e3c971229c3168658455682a68101b905de997bb74c46f2aa1674faa` |
 | `daemon/internal/app/process_recorder.go` | `b2ab5e7d6ca781ea4bc4f9c98d2a5bc6d77d616fbe726b27a4ae179e580374e3` |
-| `daemon/internal/app/process_recorder_test.go` | `91613521b0d0812a6a5a951ccf2a98351225f866b2b9f500ac7e98faf7653d3d` |
+| `daemon/internal/app/process_recorder_test.go` | `824cc4828443b513513c63b359cb1c4a3b016e7f5ca48819b08c8d808acce982` |
 | `daemon/internal/app/apptest/faultstore.go` | `aeb257808710dab11486154c9817671822376c0ebe3a0bccc48be783846742a2` |
 | `docs/TODO.md` | `84d3c7d618fcf5e94ec9b3228153e4d842db6df6120361f956a29b5d34d54a36` |
 | `docs/archive/CLOSED-TODO.md` | `e91f81ede69711e3b8a70611822090d990e9f83f5525e8fafa45a114b546cc41` |
@@ -223,7 +223,7 @@ $ git diff --numstat
 ```
 
 New files: `daemon/internal/execution/process_launcher_linux_test.go` 46 lines, this record, and
-the plan (128 lines). `docs/TODO.md` loses 20 lines because the closed bullet moves here; the
+the plan (140 lines). `docs/TODO.md` loses 20 lines because the closed bullet moves here; the
 remaining modified files are the port member and its enumerations, the launcher spec extraction, the
 platform write and its pin family, and the apptest hook. Every path is in the contract's owned set
 or is one of the re-derivations recorded in §9; no helper, state, harness, Windows-client, control
@@ -350,3 +350,53 @@ the residual classes (§11); no finding was rejected as invalid.
   stay open in `docs/TODO.md` (contract out of scope).
 - The pin uses the `max` builtin and `slices.Clone`/`slices.Equal`; both need the Go toolchain the
   repository already pins (go1.27).
+
+## 12. Apply-stage amendments (2026-11-23)
+
+The simplify stage (`…-si/answer.md`, report-only) found no structural simplification and returned
+five P3 findings (no P0-P2). The apply stage applied all five on top of the committed slice
+`59f13815` as working-tree edits; it committed, pushed and reverted nothing, and it changed no file
+outside the accepted findings.
+
+- Finding 1: this record's §8 plan line count corrected 128 → 140 (the plan file is 140 lines; its
+  §1 sha256 row already matched that file, so no other number moved).
+- Finding 2: `recoverResponseLossStop`'s three freeze branches share one local `freezeUnproven`
+  closure; the containment-unproven callback, the wrapper bytes
+  (`response-loss mirror freeze: %w`) and the branch order are unchanged, and the
+  `response-loss mirror proof` branch keeps its own text.
+- Finding 3: `recordRecoveryScanSeal` now refuses an unavailable supervisor with the sibling's
+  `errors.New("Linux supervisor is unavailable")` instead of folding it into the absent-write
+  `return nil` (the finding's fail-closed option). The clause is unreachable at HEAD (the sole
+  caller is nil-guarded), so no pinned behaviour moves; the absent-write skip, the documented
+  fail-closed base path, is unchanged.
+- Finding 4: the recovery-seal recorder test drops its dead `options{clock: …}`; the test never
+  reaches `daemon.now()`, and `now` stays used by the `persistProcess` closure.
+- Finding 5: `TestProcessRecorderDispatchesEveryWriteToItsLegacyStoreMethod` renamed to
+  `TestProcessRecorderDispatchesEveryLegacyWriteToItsStoreMethod`; the eleventh port write stays
+  pinned by the recovery-seal test and is not folded into the dispatch test.
+
+Working-tree delta vs `59f13815`: `daemon/internal/platform/supervisor_linux_client.go` 13/13,
+`daemon/internal/app/process_recorder_test.go` 2/2; the §1 rows for those two files are the refreshed
+bytes and the other nine rows still match. Gate re-runs on the applied tree:
+
+| Gate (working directory) | Exit | Output |
+| --- | --- | --- |
+| `gofmt -l .` (`daemon/`) | 0 | no file listed |
+| `git diff --check` (git root) | 0 | no whitespace error |
+| focused recorder tests, Windows (`-run TestProcessRecorder -v ./internal/app/`) | 0 | 2/2 PASS, `app 1.271s` |
+| focused pin family, WSL (`-run TestLinuxSupervisorLiveOwnerControlCloseInProcessStop -count=5 ./internal/platform/...`) | 0 | 4 arms × 5 = 20/20 PASS, `platform 2.059s` |
+| focused carrier test, WSL (`-run TestLinuxSupervisorStartSpecCarriesEveryLaunchWrite ./internal/execution/...`) | 0 | PASS, `execution 0.015s` |
+| `go test -count=1 -timeout 1800s ./internal/execution/... ./internal/platform/... ./internal/app/...` (Windows) | 0 | execution 10.971s, platform 8.245s, app 212.452s, apptest 5.030s |
+| `go vet ./...` (`daemon/`) | 0 | empty log |
+| `GOOS=linux`, `GOOS=windows`, `GOOS=darwin` `go build ./...` (`daemon/`) | 0 | 3/3 ok |
+| WSL `go test -count=1 -race -timeout 3000s ./internal/platform/... ./internal/app/... ./internal/execution/...` | 0 | platform 62.790s, app 588.873s, apptest 3.358s, execution 22.907s; no race report |
+| `python3 scripts/ci/test-omo-control-native-evidence.py` (git root) | 0 | `Ran 15 tests in 17.423s` / `OK` |
+| apply-stage mutant re-runs m1, m2, m3, m4, m5 (each applied alone to the applied tree, run against the pin family, reverted; m5 is the function-body constant-sequence form, the call-site form does not build) | 1 | 5/5 red with the recorded first lines: m1 three arms (3541/3595/3691), m2 the same three ("the assertion refuses before the write"), m3 three arms including the recorded order tail, m4 the failure arm only, m5 the resumed-helper arm only; m6 not re-run — its subject (`linuxSupervisorStartSpec`) is outside the apply delta and the carrier test re-ran green |
+| restored-tree pin family re-run after the reverts (`-run TestLinuxSupervisorLiveOwnerControlCloseInProcessStop ./internal/platform/...`) | 0 | `ok platform 0.429s` |
+| `sha256sum -c` (§1, 12 rows, after the reverts) | 0 | 12/12 OK |
+| added-line DLP scan (`users/`, backslash-u) | 0 | no match |
+
+§7's table binds the implement-stage committed tree; the rows above re-validate the applied tree.
+No measurement harness applies: this slice carries no consumer metric beyond §4's durable-write
+order table, which the pin's ordered-tail assertion re-verifies (green). The two long suites ran
+serialized, Windows first.

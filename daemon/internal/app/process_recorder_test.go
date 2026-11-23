@@ -13,7 +13,7 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/state"
 )
 
-func TestProcessRecorderDispatchesEveryWriteToItsLegacyStoreMethod(t *testing.T) {
+func TestProcessRecorderDispatchesEveryLegacyWriteToItsStoreMethod(t *testing.T) {
 	now := time.Date(2026, 11, 22, 1, 2, 3, 0, time.UTC)
 	calls := []string{}
 	daemon, store, key := recorderTestDaemon(t, &calls, now)
@@ -230,7 +230,7 @@ func TestProcessRecorderRecordsTheRecoveryScanSealThroughItsBoundKey(t *testing.
 	fault.OnRecordSupervisorRecoveryScanSeal = func(gotKey state.RunKey, expected authority.Supervisor, sequence uint64) (state.RunJournal, error) {
 		return record(gotKey, expected, sequence), errors.New("durable recovery seal write failed")
 	}
-	daemon := &daemon{store: fault, options: options{clock: func() time.Time { return now }}}
+	daemon := &daemon{store: fault}
 	recorder := daemon.processRecorder(key, func(pid int, identity string) error {
 		return daemon.persistProcessMarker(key, pid, identity, now)
 	})
