@@ -1087,3 +1087,40 @@ performed; no test may count this as checkout-cleanup success. The rootless
 Compose refusal occurs before B checkout preparation and does not exercise
 this retained post-checkout case.
 
+## Delegated manager kill-control retarget (2026-11-23, goal rf-acc-delegated-cgroup-kill)
+
+The earlier claim above — "the **parent's** `cgroup.kill` remained root-owned mode `0200`" and
+"The parent kill control must remain root-only" — is contradicted by a direct measurement on the
+same mandated topology, and the invariant it states is retired by the retarget decision below.
+Measured on a local WSL2 Ubuntu 24.04 host, `systemctl --version` = systemd 255
+(`255.4-1ubuntu8.17`), with a real v2 owner install (`linux-owner.conf` version 2, A uid/gid
+`1002:1003`) and the mandated unit (`Delegate=yes`, `DelegateSubgroup=manager`, `User`/`Group` = A):
+
+| Phase | `manager/cgroup.kill` | A `O_WRONLY` open of it | unit `cgroup.kill` | A `O_WRONLY` open of it |
+| --- | --- | --- | --- | --- |
+| after start | `1002:1003 0200` | open succeeds | `0:0 0200` | `EACCES` |
+| after `daemon-reload` | `1002:1003 0200` | open succeeds | `0:0 0200` | `EACCES` |
+| after restart | `1002:1003 0200` | open succeeds | `0:0 0200` | `EACCES` |
+
+The probe opens `O_WRONLY|O_CLOEXEC|O_NOFOLLOW|O_NONBLOCK` as the exact A uid/gid with no
+supplementary groups and never writes; the transcript is quoted in the goal's evidence record
+(`docs/evidence/rf-acc-delegated-cgroup-kill-2026-11-23.md`). This matches upstream systemd since
+v254, whose per-start `cg_set_access_recursive(<unit>/manager)` chowns every file of the delegated
+subtree, `cgroup.kill` included, to the service user, while the unit cgroup's own `cgroup.kill`
+stays outside that allowlist. The earlier WSL2 observation quoted above was not reproduced in
+either restart phase; treat it as an unmeasured older observation, not as a host behaviour.
+
+Binding decision: the preflight no longer requires the delegated `manager/cgroup.kill` to be
+root-owned or A-unwritable — that state cannot exist under `DelegateSubgroup=` delegation — and
+the boundary it enforces moves one level up to the owning unit cgroup's own `cgroup.kill`
+(root:root, not group/other-writable, refused for an A `O_WRONLY` open, ENOENT a failure). The
+delegated manager file must still be a plain file owned by root or A with a matching group and no
+group/other write, so B still cannot write it. A can therefore bulk-kill its own delegated subtree,
+including cross-UID run processes; that is inherent to the delegation the unit pins, and the
+governing control for run stops stays the run-scoped exactly-once kill/ACK protocol with unknown
+outcomes failing closed. Nothing at runtime depended on root ownership:
+`platform/linux_cgroup_v2_linux.go` opens the manager `cgroup.kill` `O_PATH` only and documents
+that it "may remain root-owned". Recorded amendment with measured evidence, not a silent
+weakening; the implementation plan is
+`docs/plans/2026-11-23-rf-acc-delegated-cgroup-kill-plan.md`.
+

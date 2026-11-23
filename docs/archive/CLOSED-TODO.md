@@ -4643,3 +4643,48 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
       scripts/ci/test-omo-control-native-evidence.py` exit 0. Residuals stay tracked: a
       recorder-less OpenCode launch keeps the fail-closed stop until W6-04 (the port entry above),
       and the lease-expiry arm stays open in `docs/TODO.md`.
+
+## Linux owner preflight: delegated `manager/cgroup.kill` root-only refusal under systemd ≥254
+
+Recorded by goal `rf-acc-native-hosted-run` (2026-11-23): on the hosted `ubuntu-latest` runner
+(systemd 259), the installed daemon's `-verify-linux-owner-install` ExecStartPre refused at the
+delegated `DelegateSubgroup=manager` subgroup's `cgroup.kill`, which systemd chowns to the service
+user (probe run `45169655828`: `55200:55200 200` and that user can open it for writing; in-guest
+diagnostic in run `45169868354`: `52000:52000 200` while the unit's own `cgroup.kill` stays
+`0:0 200`; refusal recorded in run `45164286155`). Making a credentialed run pass that step needed
+a production-side decision (installer re-chown once the subgroup exists, a reviewed preflight
+change, or a host whose systemd keeps the control root-owned). The entry text landed only on the
+unmerged branch `refactor/rf-acc-native-hosted-run`; it is not in `docs/TODO.md` at `b9d4b4a4`.
+
+**Closed (2026-11-23, branch `refactor/rf-acc-delegated-cgroup-kill`, base `b9d4b4a4`, plan
+`docs/plans/2026-11-23-rf-acc-delegated-cgroup-kill-plan.md`, record
+`docs/evidence/rf-acc-delegated-cgroup-kill-2026-11-23.md`):** `verifyLinuxOwnerParentKillBoundary`
+(`daemon/internal/linuxpreflight/cgroup_linux.go`) no longer requires the delegated
+`manager/cgroup.kill` to be root-owned and A-unwritable — no stock systemd ≥254 host can satisfy
+that inside the delegated subtree — and enforces the retained boundary one level up instead: the
+owning unit cgroup's own `cgroup.kill` must be root:root, a plain file, not group/other-writable,
+and refused for an A `O_WRONLY` open (ENOENT is a failure). The manager file must still be a plain
+file owned by root or A with a gid matching its owner, owner-writable and with no group/other
+write, so B cannot write it. Local WSL2 systemd 255 measurement (`systemctl --version`
+`255.4-1ubuntu8.17`; real v2 owner install; mandated unit) reproduced the hosted ownership at all
+three phases (after start, after `daemon-reload`, after restart): `manager/cgroup.kill`
+`1002:1003 0200` and A-writable, unit `cgroup.kill` `0:0 0200` with `EACCES` for A — which also
+settles the older 0006 design record's ":613-617" claim that a systemd 255 host keeps the manager
+file root-owned (not reproduced; the record now carries an appendix). Live rows on that host, the
+built daemon run as A: base `b9d4b4a4` exits 1 (`manager control cgroup.kill is not
+owned/writable only by its trusted owner`), HEAD exits 0, the unit kill temporarily chowned to A
+(root) exits 1 (`unit cgroup.kill must remain root:root`), and a retarget mutant that points the
+unit check at `manager/cgroup.kill` exits 1 on the same host. Unit rows pin the acceptance set
+(accepted: root-owned, A-owned; rejected: B-owned, wrong-owner-gid, group-writable, other-writable,
+owner-unwritable, non-plain-file) for both checks; mutants M1 (accept a B-owned manager kill), M2
+(drop the unit-kill root check) and M4 (accept a group-writable manager kill) each redden the new
+`TestLinuxOwnerKillBoundaryMetadata` and were reverted (`sha256sum` restored), and the M3 union
+mutant (accept an A-writable unit kill: unit metadata root check and A-write refusal removed)
+accepts the chowned host with exit 0 where the fixed code refuses. Gates: `gofmt -l .` exit 0;
+`go vet ./internal/linuxpreflight/...` exit 0 (Windows and WSL); `GOOS=linux go build ./...` exit
+0; WSL `go test -race -count=1 ./internal/linuxpreflight/...` exit 0. Residual: the A `O_WRONLY`
+probe's independent discriminating power (a root-owned unit kill A could still write through a
+capability) is refused earlier by the anchor's own client gate (all-zero capability sets), so it
+is defense-in-depth beyond the metadata rule; and the rf-acc-native-hosted-run paragraph, if it
+lands after this goal, records the decision as open while this entry and the goal record carry the
+closure.

@@ -313,6 +313,10 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
     available here yet satisfies the host prerequisite — the last hosted attempt (run `43673581776`) failed
     the probe with `unified_cgroup_v2_mounted=false` and the local WSL2 attempt failed at
     `transient_unit_cleanup`, so a host that does not qualify fails at the probe before any case set runs.
+    Retired (2026-11-23): the `manager/cgroup.kill` ownership refusal on systemd ≥254 this record was to
+    carry was retargeted by goal `rf-acc-delegated-cgroup-kill` to the boundary systemd keeps (the owning
+    unit cgroup's own `cgroup.kill`); recorded in `docs/archive/CLOSED-TODO.md` and
+    `docs/evidence/rf-acc-delegated-cgroup-kill-2026-11-23.md`.
 
     **When it must be dispatched.** At release acceptance, against the exact subject, and never cited as
     passed before it runs. The goals' pending predicate, quoted from `docs/goals/README.md`: "the operator
