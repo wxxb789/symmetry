@@ -329,17 +329,13 @@ type StartRequest struct {
 	// test can wrap the exact execution.Process before the adapter observes
 	// it; production adapters use their own Runner when this is nil.
 	StartProcess func(context.Context, execution.Invocation, execution.Sink) (NativeProcess, error)
-	// PersistProcess is called after the native process has started but before
-	// the adapter exposes the session or drains pre-ready output. A failure
-	// leaves the native launch outcome conservative. Any surviving cleanup
-	// owner must be returned alongside the error, without acknowledging output.
+	// The three members below mirror Invocation.Recorder's writes for
+	// daemon/internal/harness/opencode/adapter.go, which reads them instead of the
+	// recorder. W6-04 deletes them with their population (docs/TODO.md).
 	PersistProcess func(pid int, identity string) error
-	// PersistProcessAuthority runs after PersistProcess for supervisor-backed
-	// containment. The typed value is machine-local authority and must not be
-	// forwarded to native argv or environment.
-	PersistProcessAuthority func(pid int, identity string, value *authority.Supervisor) error
-	// PersistContainmentStopReceipt records the exact stop witness before the
-	// adapter's process-containment helper may be released.
+	// The supervisor authority value is machine-local and must not be forwarded to
+	// native argv or environment.
+	PersistProcessAuthority       func(pid int, identity string, value *authority.Supervisor) error
 	PersistContainmentStopReceipt func(pid int, identity string, receipt authority.StopReceipt) error
 }
 

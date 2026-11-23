@@ -1595,25 +1595,26 @@ is fixed here; each bullet names what a follow-up has to re-derive.
       matters when a retained resume is cancelled after launch or its lease expires after `Open`.
       The gap exists at base; owner: the next daemon app-test slice.
 
-## Harness launch grant: legacy `StartRequest` members (rf-w4-15b, 2026-11-22)
+## Process recorder: frozen invocation and request members (rf-w4-12c, 2026-11-22)
 
 - [ ] Remove the legacy `StartRequest.Invocation`, `StartRequest.PersistProcess`,
       `StartRequest.PersistProcessAuthority` and `StartRequest.PersistContainmentStopReceipt`
-      members. `daemon/internal/harness/staged_driver.go` now hands every staged adapter one opaque
-      `harness.LaunchGrant`, but the legacy surface still has readers. The five conforming adapters
-      (`pi`, `codex`, `claude`, `omo`, `omp`) still read `request.Invocation`'s process-description
-      members (`Args`, `Env`, `InitialInput`, `CloseInputAfterInitial`), which must move onto a
-      description input before `Invocation` can be deleted. `StartRequest.grant()` in
-      `staged_driver.go` still merges the three request-level persist members over
-      `request.Invocation` for every direct construction that carries no `Grant` (in practice the
-      adapter tests that build `StartRequest{...}` without one); deleting that fallback depends
-      only on migrating those callers to `Grant`, not on W6-04. The member deletion itself is tied
-      to W6-04 (OpenCode promote-or-drop):
-      `daemon/internal/harness/opencode/adapter.go`, which the slice (E3/D1) may not touch, is the
-      only adapter still reading all four members. Once it adopts the grant or is dropped, delete
-      the four members, the `grant()` fallback, and their population in
-      `daemon/internal/app/goal_admission_tx.go` and
-      `daemon/internal/app/linux_owner_witness_linux.go`.
+      members with the ten frozen `execution.Invocation` mirrors, `Invocation.MirrorRecorderMembers`
+      (`daemon/internal/execution/recorder.go`),
+      `harness.PopulateOpencodeRecorderMembers` and `StartRequest.grant()`'s no-grant fallback
+      (`daemon/internal/harness/staged_driver.go`). Every durable write of a launch now goes through
+      the run's `execution.Recorder`; the members are only mirrors, populated from that recorder as
+      method values in the three app construction sites
+      (`daemon/internal/app/app.go`, `goal_admission_tx.go`,
+      `linux_owner_witness_linux.go`) and read only by
+      `daemon/internal/harness/opencode/adapter.go`, which the slice (E3/D1) may not touch, by the
+      runner's recorder-less fallback for an invocation OpenCode rebuilt from those members, and by
+      app test doubles. The five conforming adapters (`pi`, `codex`, `claude`, `omo`, `omp`) still
+      read `request.Invocation`'s process-description members (`Args`, `Env`, `InitialInput`,
+      `CloseInputAfterInitial`), which must move onto a description input before `Invocation` can be
+      deleted. Once OpenCode adopts the grant or is dropped (W6-04), delete the ten mirrors, the
+      three request members, `MirrorRecorderMembers`, `PopulateOpencodeRecorderMembers`, the
+      `grant()` fallback and their population in the three sites above.
 
 ## Linux v2 owner hosts under the Ubuntu AppArmor userns restriction (2026-11-22)
 

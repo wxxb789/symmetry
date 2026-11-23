@@ -744,21 +744,16 @@ func (tx *goalAdmissionTx) revalidateStartLease() error {
 
 func (tx *goalAdmissionTx) buildNativeInvocation(ctx context.Context) error {
 	tx.nativeInvocation = execution.Invocation{
-		Program:                            tx.profile.Command,
-		Args:                               tx.profile.Args,
-		Dir:                                tx.prepared.Path,
-		Env:                                tx.environment,
-		InitialLeaseDeadline:               tx.initialLeaseDeadline,
-		InitialLeaseDeadlineAt:             tx.initialLeaseDeadlineAt,
-		InitialLeaseSequence:               1,
-		PrepareSupervisorHandoff:           tx.daemon.prepareSupervisorHandoffCallback(tx.key),
-		BindSupervisorHandoff:              tx.daemon.bindSupervisorHandoffCallback(tx.key),
-		CommitSupervisorHandoff:            tx.daemon.commitSupervisorHandoffCallback(tx.key),
-		RecordSupervisorHandoffStopReceipt: tx.daemon.recordSupervisorHandoffStopReceiptCallback(tx.key),
-		ClearSupervisorHandoff:             tx.daemon.clearSupervisorHandoffCallback(tx.key),
-		PersistContainmentUnproven:         tx.daemon.markContainmentUnprovenCallback(tx.key),
-		PersistProcessWithAuthority:        tx.daemon.persistProcessAuthorityCallback(tx.key),
+		Program:                tx.profile.Command,
+		Args:                   tx.profile.Args,
+		Dir:                    tx.prepared.Path,
+		Env:                    tx.environment,
+		InitialLeaseDeadline:   tx.initialLeaseDeadline,
+		InitialLeaseDeadlineAt: tx.initialLeaseDeadlineAt,
+		InitialLeaseSequence:   1,
+		Recorder:               tx.daemon.processRecorder(tx.key, tx.persistNativeProcess),
 	}
+	tx.nativeInvocation.MirrorRecorderMembers()
 	if !tx.linuxV2Required {
 		return nil
 	}
@@ -903,12 +898,7 @@ func (tx *goalAdmissionTx) handOffLaunchToNativeOwner() {
 }
 
 func (tx *goalAdmissionTx) launchNativeProcess(ctx context.Context) error {
-	persistStopReceipt := tx.daemon.persistContainmentStopReceiptCallback(tx.key)
-	grantInvocation := tx.nativeInvocation
-	grantInvocation.PersistProcess = tx.persistNativeProcess
-	grantInvocation.PersistProcessAuthority = tx.persistNativeProcessAuthority
-	grantInvocation.PersistContainmentStopReceipt = persistStopReceipt
-	session, err := tx.adapter.Start(ctx, harness.StartRequest{
+	request := harness.StartRequest{
 		AdmissionID:   tx.admission.AdmissionID,
 		LocalHandleID: tx.localHandleID,
 		Workspace:     tx.prepared.Path,
@@ -920,14 +910,13 @@ func (tx *goalAdmissionTx) launchNativeProcess(ctx context.Context) error {
 			DeadlineAt:      parseAdmissionDeadline(tx.admission.Limits.DeadlineAt),
 			MaxCostMicrousd: tx.admission.Limits.MaxCostMicrousd,
 		},
-		ProviderAccess:                tx.providerAccess,
-		ProviderBridge:                tx.providerBridge,
-		Grant:                         harness.NewLaunchGrant(grantInvocation),
-		Invocation:                    tx.nativeInvocation,
-		PersistProcess:                tx.persistNativeProcess,
-		PersistProcessAuthority:       tx.persistNativeProcessAuthority,
-		PersistContainmentStopReceipt: persistStopReceipt,
-	}, tx.sink)
+		ProviderAccess: tx.providerAccess,
+		ProviderBridge: tx.providerBridge,
+		Grant:          harness.NewLaunchGrant(tx.nativeInvocation),
+		Invocation:     tx.nativeInvocation,
+	}
+	request = harness.PopulateOpencodeRecorderMembers(request)
+	session, err := tx.adapter.Start(ctx, request, tx.sink)
 	tx.session = session
 	tx.nativeOutcomeCompensation.armed = true
 	if isNilHarnessSession(tx.session) {
@@ -959,10 +948,6 @@ func (tx *goalAdmissionTx) persistNativeProcess(pid int, identity string) error 
 		tx.daemon.options.processObserver(tx.key, pid, identity, tx.daemon.now())
 	}
 	return persistErr
-}
-
-func (tx *goalAdmissionTx) persistNativeProcessAuthority(pid int, identity string, value *authority.Supervisor) error {
-	return tx.daemon.persistProcessAuthorityCallback(tx.key)(pid, identity, value)
 }
 
 func (tx *goalAdmissionTx) queueNativeEventSink(_ context.Context, event harness.Event) error {

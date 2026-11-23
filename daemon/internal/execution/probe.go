@@ -33,6 +33,7 @@ func RunBoundedCommand(ctx context.Context, invocation Invocation, maxOutputByte
 	// process-tree behavior, but prevent inherited persistence hooks or lease
 	// state from turning this ephemeral check into a journal write/watchdog.
 	invocation.CloseInputAfterInitial = true
+	invocation.Recorder = nil
 	invocation.PersistProcess = nil
 	invocation.PersistProcessAuthority = nil
 	invocation.PersistContainmentStopReceipt = nil

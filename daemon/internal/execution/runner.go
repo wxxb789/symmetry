@@ -109,39 +109,24 @@ type Invocation struct {
 	// typed journal callbacks. A non-nil LinuxV2 also requests this path.
 	LinuxV2Required bool
 	LinuxV2         *LinuxV2Invocation
-	// PrepareSupervisorHandoff durably records the exact launch binding before
-	// a Windows containment helper can outlive the daemon.
-	PrepareSupervisorHandoff func(authority.SupervisorHandoff) error
-	// BindSupervisorHandoff records the exact helper PID and creation identity
-	// after the inherited pre-auth channel has identified the helper.
-	BindSupervisorHandoff func(authority.SupervisorHandoff, int, string) error
-	// CommitSupervisorHandoff promotes a fully bound handoff into the normal
-	// process marker and containment authority before resume or lease arm.
-	CommitSupervisorHandoff func(authority.SupervisorHandoff, time.Time) error
-	// RecordSupervisorHandoffStopReceipt persists a stop proof for a pending
-	// handoff before its helper is released.
+	// Recorder performs every durable write this launch makes; see Recorder for
+	// the per-write contract. A nil recorder performs no durable write and falls
+	// back to the frozen OpenCode-facing members below.
+	Recorder Recorder
+	// The members below mirror Recorder's writes. They stay populated for
+	// daemon/internal/harness/opencode, which rebuilds its invocation from these
+	// members, and are read only through a rebuilt invocation without a recorder.
+	// W6-04 deletes them with their population (docs/TODO.md).
+	PrepareSupervisorHandoff           func(authority.SupervisorHandoff) error
+	BindSupervisorHandoff              func(authority.SupervisorHandoff, int, string) error
+	CommitSupervisorHandoff            func(authority.SupervisorHandoff, time.Time) error
 	RecordSupervisorHandoffStopReceipt func(authority.SupervisorHandoff, authority.StopReceipt) error
-	// ClearSupervisorHandoff removes a pending handoff only after release proof.
-	ClearSupervisorHandoff func(authority.SupervisorHandoff, authority.SupervisorHandoffReleaseProof) error
-	// PersistProcess runs immediately after the OS process identity is
-	// captured, before output readers or the Process value are exposed.
-	PersistProcess func(pid int, identity string) error
-	// PersistProcessWithAuthority atomically persists the process marker and its
-	// independently releasable containment authority. When supplied for an
-	// authority-capable containment owner, Runner uses it instead of the two
-	// legacy persistence callbacks so recovery cannot observe a marker without
-	// the authority required to release that process.
-	PersistProcessWithAuthority func(pid int, identity string, value *authority.Supervisor) error
-	// PersistProcessAuthority runs immediately after PersistProcess for a
-	// supervisor-backed containment owner. Legacy callers may leave it nil.
-	PersistProcessAuthority func(pid int, identity string, value *authority.Supervisor) error
-	// PersistContainmentStopReceipt runs after the process containment boundary
-	// proves an empty tree and before an independent supervisor is released.
-	// A failure retains that helper authority for retry or restart recovery.
-	PersistContainmentStopReceipt func(pid int, identity string, receipt authority.StopReceipt) error
-	// PersistContainmentUnproven retains the exact process marker when local
-	// containment cleanup cannot prove the complete owned boundary stopped.
-	PersistContainmentUnproven func(pid int, identity string) error
+	ClearSupervisorHandoff             func(authority.SupervisorHandoff, authority.SupervisorHandoffReleaseProof) error
+	PersistProcess                     func(pid int, identity string) error
+	PersistProcessWithAuthority        func(pid int, identity string, value *authority.Supervisor) error
+	PersistProcessAuthority            func(pid int, identity string, value *authority.Supervisor) error
+	PersistContainmentStopReceipt      func(pid int, identity string, receipt authority.StopReceipt) error
+	PersistContainmentUnproven         func(pid int, identity string) error
 	// InitialLeaseDeadline arms an optional independent containment watchdog
 	// after local authority persistence and before initial input is written. A
 	// zero value leaves legacy/test containment unchanged. When
@@ -284,22 +269,8 @@ type LinuxV2Invocation struct {
 	Callbacks  LinuxV2JournalCallbacks
 }
 
-func durableSupervisorHandoffRequested(invocation Invocation) bool {
-	return invocation.PrepareSupervisorHandoff != nil ||
-		invocation.BindSupervisorHandoff != nil ||
-		invocation.CommitSupervisorHandoff != nil ||
-		invocation.RecordSupervisorHandoffStopReceipt != nil ||
-		invocation.ClearSupervisorHandoff != nil
-}
-
 func (invocation Invocation) linuxV2Requested() bool {
 	return invocation.LinuxV2Required || invocation.LinuxV2 != nil
-}
-
-func durableSupervisorHandoffCallbacksComplete(invocation Invocation) bool {
-	return invocation.PrepareSupervisorHandoff != nil &&
-		invocation.BindSupervisorHandoff != nil &&
-		invocation.CommitSupervisorHandoff != nil
 }
 
 // LeaseRenewer is an optional process capability. The app uses a type
@@ -616,6 +587,7 @@ func (runner Runner) Start(ctx context.Context, invocation Invocation, sink Sink
 		runner:          runner,
 		ctx:             ctx,
 		invocation:      invocation,
+		writes:          invocationWrites(invocation),
 		program:         program,
 		startedAt:       time.Now().UTC(),
 		pipes:           pipes,
@@ -641,6 +613,7 @@ type startRun struct {
 	runner     Runner
 	ctx        context.Context
 	invocation Invocation
+	writes     RecorderFuncs
 	program    string
 	startedAt  time.Time
 	pipes      *startPipes
@@ -660,7 +633,7 @@ func (run *startRun) launchStarted(command *exec.Cmd, linuxV2Requested bool) (*P
 	if run.runner.launchProcess != nil {
 		run.started, err = run.runner.launchProcess(run.ctx, command, invocation, run.pipes.stdinRead, run.pipes.stdoutWrite, run.pipes.stderrWrite)
 		if run.started != nil && run.started.closeLinuxV2Containment == nil {
-			configureStartedHandoff(run.started, invocation)
+			configureStartedHandoff(run.started, run.writes)
 		}
 		if err != nil && (!errors.Is(err, errNativeProcessLauncherUnavailable) || linuxV2Requested) {
 			if run.started == nil {
@@ -718,7 +691,7 @@ func (run *startRun) fail(startErr, containmentErr error) (*Process, error) {
 func (run *startRun) persist() (*Process, error) {
 	started := run.started
 	containment := started.containment
-	started.persistContainmentUnproven = run.invocation.PersistContainmentUnproven
+	started.persistContainmentUnproven = run.writes.PersistContainmentUnproven
 	provider, hasAuthorityProvider := containment.(platform.ContainmentAuthorityProvider)
 	if err := installContainmentUnprovenCallback(started, run.markerPersisted); err != nil {
 		return run.fail(fmt.Errorf("install containment uncertainty observer: %w", err), nil)
@@ -731,7 +704,7 @@ func (run *startRun) persist() (*Process, error) {
 		if process, err := run.commitHandoff(); process != nil || err != nil {
 			return process, err
 		}
-	} else if authorityCapable && run.invocation.PersistProcessWithAuthority != nil {
+	} else if authorityCapable && run.writes.PersistProcessWithAuthority != nil {
 		if process, err := run.persistAtomicAuthority(provider); process != nil || err != nil {
 			return process, err
 		}
@@ -797,9 +770,9 @@ func (run *startRun) persistAtomicAuthority(provider platform.ContainmentAuthori
 	cloned := value.Clone()
 	started.containmentAuthorityUncertain = true
 	started.containmentAuthority = &cloned
-	started.persistProcessWithAuthority = run.invocation.PersistProcessWithAuthority
+	started.persistProcessWithAuthority = run.writes.PersistProcessWithAuthority
 	callbackAuthority := cloned.Clone()
-	if persistErr := run.invocation.PersistProcessWithAuthority(started.pid, started.identity, &callbackAuthority); persistErr != nil {
+	if persistErr := run.writes.PersistProcessWithAuthority(started.pid, started.identity, &callbackAuthority); persistErr != nil {
 		return run.fail(fmt.Errorf("persist process and containment authority: %w", persistErr), nil)
 	}
 	started.containmentAuthorityUncertain = false
@@ -809,14 +782,14 @@ func (run *startRun) persistAtomicAuthority(provider platform.ContainmentAuthori
 
 func (run *startRun) persistLegacyIdentity(provider platform.ContainmentAuthorityProvider, authorityCapable bool) (*Process, error) {
 	started := run.started
-	if run.invocation.PersistProcess != nil {
-		if persistErr := run.invocation.PersistProcess(started.pid, started.identity); persistErr != nil {
+	if run.writes.PersistProcess != nil {
+		if persistErr := run.writes.PersistProcess(started.pid, started.identity); persistErr != nil {
 			return run.fail(fmt.Errorf("persist process identity: %w", persistErr), nil)
 		}
 		run.markerPersisted.Store(true)
 	}
 	run.bindStopReceiptPersistence()
-	if authorityCapable && run.invocation.PersistProcessAuthority != nil {
+	if authorityCapable && run.writes.PersistProcessAuthority != nil {
 		value := provider.ContainmentAuthority()
 		// Freeze the cleanup contract before the legacy callback: it may error after its
 		// atomic rename, and either outcome must keep the receipt/release fence.
@@ -826,10 +799,10 @@ func (run *startRun) persistLegacyIdentity(provider platform.ContainmentAuthorit
 			return run.fail(errors.New(message), errors.New(message))
 		}
 		authorityCopy := value.Clone()
-		started.persistAuthority = run.invocation.PersistProcessAuthority
+		started.persistAuthority = run.writes.PersistProcessAuthority
 		started.containmentAuthority = &authorityCopy
 		callbackAuthority := authorityCopy.Clone()
-		if persistErr := run.invocation.PersistProcessAuthority(started.pid, started.identity, &callbackAuthority); persistErr != nil {
+		if persistErr := run.writes.PersistProcessAuthority(started.pid, started.identity, &callbackAuthority); persistErr != nil {
 			return run.fail(fmt.Errorf("persist process containment authority: %w", persistErr), nil)
 		}
 		started.containmentAuthorityUncertain = false
@@ -842,8 +815,8 @@ func (run *startRun) bindStopReceiptPersistence() {
 	_, hasStopReceiptProvider := run.started.containment.(platform.ContainmentStopReceiptProvider)
 	_, hasAuthorityProvider := run.started.containment.(platform.ContainmentAuthorityProvider)
 	if hasStopReceiptProvider || hasAuthorityProvider {
-		run.started.persistStopReceipt = run.invocation.PersistContainmentStopReceipt
-		run.started.stopReceiptRequired = run.invocation.PersistContainmentStopReceipt != nil
+		run.started.persistStopReceipt = run.writes.PersistContainmentStopReceipt
+		run.started.stopReceiptRequired = run.writes.PersistContainmentStopReceipt != nil
 	}
 }
 
@@ -915,18 +888,18 @@ func (run *startRun) deliverInitialInput(sink Sink) (*Process, error) {
 	return process, nil
 }
 
-func configureStartedHandoff(started *startedProcess, invocation Invocation) {
+func configureStartedHandoff(started *startedProcess, writes RecorderFuncs) {
 	if started == nil || started.containmentHandoff == nil {
 		return
 	}
 	if started.commitSupervisorHandoff == nil {
-		started.commitSupervisorHandoff = invocation.CommitSupervisorHandoff
+		started.commitSupervisorHandoff = writes.CommitSupervisorHandoff
 	}
 	if started.recordSupervisorHandoffStopReceipt == nil {
-		started.recordSupervisorHandoffStopReceipt = invocation.RecordSupervisorHandoffStopReceipt
+		started.recordSupervisorHandoffStopReceipt = writes.RecordSupervisorHandoffStopReceipt
 	}
 	if started.clearSupervisorHandoff == nil {
-		started.clearSupervisorHandoff = invocation.ClearSupervisorHandoff
+		started.clearSupervisorHandoff = writes.ClearSupervisorHandoff
 	}
 }
 

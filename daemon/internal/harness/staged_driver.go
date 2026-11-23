@@ -22,11 +22,30 @@ func (request StartRequest) grant() LaunchGrant {
 	if request.Grant.granted {
 		return request.Grant
 	}
+	// A direct construction with no grant folds the three request-level members
+	// onto the frozen invocation members; the runner reads those only when the
+	// invocation carries no recorder (W6-04 deletes them, docs/TODO.md).
 	invocation := request.Invocation
 	invocation.PersistProcess = request.PersistProcess
 	invocation.PersistProcessAuthority = request.PersistProcessAuthority
 	invocation.PersistContainmentStopReceipt = request.PersistContainmentStopReceipt
 	return LaunchGrant{invocation: invocation}
+}
+
+// PopulateOpencodeRecorderMembers mirrors one request's recorder onto the frozen
+// members daemon/internal/harness/opencode/adapter.go reads: the invocation's
+// recorder members and the three request-level persist members. W6-04 deletes
+// this with them (docs/TODO.md).
+func PopulateOpencodeRecorderMembers(request StartRequest) StartRequest {
+	request.Invocation.MirrorRecorderMembers()
+	recorder := request.Invocation.Recorder
+	if recorder == nil {
+		return request
+	}
+	request.PersistProcess = recorder.PersistProcess
+	request.PersistProcessAuthority = recorder.PersistProcessAuthority
+	request.PersistContainmentStopReceipt = recorder.PersistContainmentStopReceipt
+	return request
 }
 
 func (grant LaunchGrant) merged(description ProcessDescription) execution.Invocation {

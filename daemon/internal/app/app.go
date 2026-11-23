@@ -1491,31 +1491,22 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 		}
 		return
 	}
-	process, err := daemon.start(executionContext, execution.Invocation{
-		Program:                            profile.Command,
-		Args:                               profile.Args,
-		Dir:                                prepared.Path,
-		Env:                                environment,
-		InitialInput:                       input,
-		CloseInputAfterInitial:             !profile.Interactive,
-		InitialLeaseDeadline:               initialLeaseDeadline,
-		InitialLeaseDeadlineAt:             initialLeaseDeadlineAt,
-		InitialLeaseSequence:               1,
-		PrepareSupervisorHandoff:           daemon.prepareSupervisorHandoffCallback(key),
-		BindSupervisorHandoff:              daemon.bindSupervisorHandoffCallback(key),
-		CommitSupervisorHandoff:            daemon.commitSupervisorHandoffCallback(key),
-		RecordSupervisorHandoffStopReceipt: daemon.recordSupervisorHandoffStopReceiptCallback(key),
-		ClearSupervisorHandoff:             daemon.clearSupervisorHandoffCallback(key),
-		PersistContainmentUnproven:         daemon.markContainmentUnprovenCallback(key),
-		PersistProcessWithAuthority:        daemon.persistProcessAuthorityCallback(key),
-		PersistProcess: func(pid int, identity string) error {
+	invocation := execution.Invocation{
+		Program:                profile.Command,
+		Args:                   profile.Args,
+		Dir:                    prepared.Path,
+		Env:                    environment,
+		InitialInput:           input,
+		CloseInputAfterInitial: !profile.Interactive,
+		InitialLeaseDeadline:   initialLeaseDeadline,
+		InitialLeaseDeadlineAt: initialLeaseDeadlineAt,
+		InitialLeaseSequence:   1,
+		Recorder: daemon.processRecorder(key, func(pid int, identity string) error {
 			return daemon.persistProcessMarker(key, pid, identity, daemon.now())
-		},
-		PersistProcessAuthority: func(pid int, identity string, value *authority.Supervisor) error {
-			return daemon.persistProcessAuthorityCallback(key)(pid, identity, value)
-		},
-		PersistContainmentStopReceipt: daemon.persistContainmentStopReceiptCallback(key),
-	}, sink)
+		}),
+	}
+	invocation.MirrorRecorderMembers()
+	process, err := daemon.start(executionContext, invocation, sink)
 	if isNilProcess(process) {
 		process = nil
 		if err == nil {
