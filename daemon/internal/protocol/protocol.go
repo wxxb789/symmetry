@@ -206,8 +206,6 @@ func (capabilities *RuntimeCapabilities) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// HarnessKind is the wire vocabulary of configured harness families, the single wire-list
-// owner for the daemon; the contract schema enumerates the same values.
 type HarnessKind string
 
 const (
@@ -220,6 +218,7 @@ const (
 	HarnessKindOpenCode   HarnessKind = "opencode"
 )
 
+// harnessKindWireOrder is wire-visible; harness_kind_test.go binds it to the schema enum.
 var harnessKindWireOrder = [...]HarnessKind{
 	HarnessKindGeneric,
 	HarnessKindCodex,
@@ -230,12 +229,10 @@ var harnessKindWireOrder = [...]HarnessKind{
 	HarnessKindOpenCode,
 }
 
-// HarnessKinds returns the wire kind vocabulary in declaration order.
 func HarnessKinds() []HarnessKind {
 	return append([]HarnessKind(nil), harnessKindWireOrder[:]...)
 }
 
-// ParseHarnessKind reports whether value is a wire harness kind.
 func ParseHarnessKind(value string) (HarnessKind, bool) {
 	for _, kind := range harnessKindWireOrder {
 		if string(kind) == value {

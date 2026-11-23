@@ -249,8 +249,6 @@ func (session *genericSession) done() <-chan struct{} {
 	return session.resultDone
 }
 
-// ControlCapability maps a control command to the capability it requires; an
-// unknown kind maps to its own name.
 func ControlCapability(kind ControlKind) Capability {
 	switch kind {
 	case ControlPause:

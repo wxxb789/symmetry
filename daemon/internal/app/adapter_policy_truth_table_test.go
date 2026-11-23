@@ -15,12 +15,10 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/harness/codex"
 	"github.com/wxxb789/symmetry/daemon/internal/harness/omo"
 	"github.com/wxxb789/symmetry/daemon/internal/harness/omp"
+	"github.com/wxxb789/symmetry/daemon/internal/harness/opencode"
 	"github.com/wxxb789/symmetry/daemon/internal/harness/pi"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 )
-
-// Contract rf-a3 kind-by-kind truth table: each configured harness kind pins its
-// wire-to-internal mapping, both vocabulary predicates and the admission gate's answers.
 
 type truthTableOutcome struct {
 	Decision  string
@@ -62,6 +60,10 @@ const (
 	truthCodexPlatformRejectReason   = "Codex native repository lifecycle is verified only on Windows; Linux shell tool children detach into a new session that the process-group owner cannot contain"
 	truthCodexPromotedProviderReason = "Codex native provider broker bridge is not verified"
 	truthCodexPromotedResumeReason   = "Codex native resume is not verified"
+
+	truthOmOPromotedProviderReason = "native relay inference was observed; Symmetry provider broker access is not verified"
+	truthOmOUnpinnedReason         = "operation is not independently verified for the pinned OmO read/write profile"
+	truthOpenCodeProbeReason       = "OpenCode V2 2.3.0 native terminal and recovery behavior lacks exact-binary Windows and native Linux evidence; version and serve help do not establish native support"
 )
 
 var truthTableWires = []struct {
@@ -164,8 +166,6 @@ func (truthTableAbsentRunner) Run(context.Context, string, ...string) ([]byte, e
 	return nil, errors.New("harness executable is absent")
 }
 
-// truthTableProductionProjection returns each adapter's fail-closed projection for an
-// unusable configured command, through the adapter's exported probe seam where one exists.
 func truthTableProductionProjection(t *testing.T, kind harness.Kind) harness.Capabilities {
 	t.Helper()
 	absentPath := filepath.Join(t.TempDir(), truthAbsentCommand)
@@ -390,4 +390,63 @@ func TestAdapterPolicyTruthTablePromotedCodex(t *testing.T) {
 	truthTableCheck(t, "fail-closed codex provider_access advertised", truthTableCall(t, protocol.SessionModeFresh, advertisedProvider, providerAccess), startFailure)
 	truthTableCheck(t, "fail-closed codex resume", truthTableCall(t, protocol.SessionModeResume, capabilities, nil), startFailure)
 	truthTableCheck(t, "fail-closed codex resume advertised", truthTableCall(t, protocol.SessionModeResume, advertisedResume, nil), startFailure)
+}
+
+// OmO is the one remaining native kind whose promotion is observable through an exported
+// fixture seam; claude and omp promote only behind real pinned binaries and stay documented.
+func TestAdapterPolicyTruthTablePromotedOmO(t *testing.T) {
+	digest := omo.TestedWindowsExecutableHash
+	if runtime.GOOS == "linux" {
+		digest = omo.TestedLinuxExecutableHash
+	}
+	adapter := omo.NewAdapterWithRunner("omo-fixture", nativeProbeDigestFixtures{
+		responses: map[string][]byte{
+			"--version": []byte(omo.TestedVersionLine + "\n"),
+			"--help":    []byte("Options:\n  --mode <json|rpc>  Output mode\n"),
+		},
+		digest: digest,
+	})
+	capabilities, err := adapter.Probe(context.Background())
+	if runtime.GOOS != "windows" && runtime.GOOS != "linux" {
+		if err == nil {
+			t.Fatalf("omo probe on %s = %v, want the unpinned-platform refusal", runtime.GOOS, capabilities)
+		}
+		unpinned := truthRefusedOutcome(harness.KindOmO, harness.CapabilityStart, truthOmOUnpinnedReason)
+		truthTableCheck(t, "unpinned omo provider_access", truthTableCall(t, protocol.SessionModeFresh, capabilities, &protocol.ProviderAccess{}), unpinned)
+		truthTableCheck(t, "unpinned omo resume", truthTableCall(t, protocol.SessionModeResume, capabilities, nil), unpinned)
+		return
+	}
+	if err != nil {
+		t.Fatalf("promoted omo probe error = %v", err)
+	}
+	if !capabilities.Verified || !capabilities.Resume {
+		t.Fatalf("omo projection verified=%t resume=%t, want both promoted", capabilities.Verified, capabilities.Resume)
+	}
+	advertisedProvider := capabilities
+	advertisedProvider.ProviderAccess = true
+	truthTableCheck(t, "promoted omo provider_access", truthTableCall(t, protocol.SessionModeFresh, capabilities, &protocol.ProviderAccess{}),
+		truthRefusedOutcome(harness.KindOmO, harness.CapabilityProviderAccess, truthOmOPromotedProviderReason))
+	truthTableCheck(t, "promoted omo resume", truthTableCall(t, protocol.SessionModeResume, capabilities, nil), truthAllowedOutcome())
+	truthTableCheck(t, "promoted omo provider_access advertised", truthTableCall(t, protocol.SessionModeFresh, advertisedProvider, &protocol.ProviderAccess{}), truthAllowedOutcome())
+}
+
+// The OpenCode prototype seam never promotes, so this pins its fail-closed projection and the
+// production answer for the kind comes from the registered unavailable adapter in the table.
+func TestAdapterPolicyTruthTableProbeSeamOpenCode(t *testing.T) {
+	adapter := opencode.NewAdapterWithRunner("opencode-fixture", nativeProbeDigestFixtures{
+		responses: map[string][]byte{
+			"--version":    []byte("opencode v" + opencode.TestedVersion + "\n"),
+			"serve --help": []byte("opencode serve\n  --hostname\n  --port\n"),
+		},
+	})
+	capabilities, err := adapter.Probe(context.Background())
+	if !errors.Is(err, harness.ErrNativeUnverified) {
+		t.Fatalf("opencode probe error = %v, want ErrNativeUnverified", err)
+	}
+	if capabilities.Kind != harness.KindOpenCode || capabilities.Verified {
+		t.Fatalf("opencode projection kind=%q verified=%t, want an unverified opencode projection", capabilities.Kind, capabilities.Verified)
+	}
+	startRefusal := truthRefusedOutcome(harness.KindOpenCode, harness.CapabilityStart, truthOpenCodeProbeReason)
+	truthTableCheck(t, "probe-seam opencode provider_access", truthTableCall(t, protocol.SessionModeFresh, capabilities, &protocol.ProviderAccess{}), startRefusal)
+	truthTableCheck(t, "probe-seam opencode resume", truthTableCall(t, protocol.SessionModeResume, capabilities, nil), startRefusal)
 }

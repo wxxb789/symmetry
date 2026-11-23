@@ -43,6 +43,18 @@ func TestParseKindMapsEachWireValueToItsInternalKind(t *testing.T) {
 	}
 }
 
+func TestParseKindTableCoversExactlyTheWireVocabulary(t *testing.T) {
+	kinds := protocol.HarnessKinds()
+	if len(internalKindByWire) != len(kinds) {
+		t.Fatalf("wire→internal table has %d rows, want %d", len(internalKindByWire), len(kinds))
+	}
+	for wire := range internalKindByWire {
+		if parsed, ok := protocol.ParseHarnessKind(string(wire)); !ok || parsed != wire {
+			t.Fatalf("wire→internal table has a row for %q, which is not a wire harness kind", wire)
+		}
+	}
+}
+
 // These strings are persisted in Goal-session state and sent to Control, so changing one
 // is a persisted/wire byte change even though `Kind` is a package-local type.
 func TestKindSpellingsAreThePersistedAndControlBoundBytes(t *testing.T) {
