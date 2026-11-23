@@ -124,7 +124,6 @@ interface ReadAttentionOptions {
   blocked?: { projectId: string; projectName?: string | null; projectKey?: string | null; workItemId: string; key?: string; title: string; status?: string; blocker?: string | null }[];
   goals?: { goalId: string; projectId: string; title: string; state?: string; currentRevision?: number; blockerReasons?: string[]; attentionReasons?: string[]; activeTasks?: number; nonterminalTasks?: number; readyToAchieve?: boolean }[];
   nextCursor?: string | null;
-  goalUnavailable?: { code: string; message: string } | null;
   projectUnavailable?: { code: string; message: string } | null;
 }
 
@@ -155,7 +154,6 @@ export function readAttention(options: ReadAttentionOptions): Record<string, unk
         "ready_to_achieve?": goal.readyToAchieve ?? false,
       })),
       next_cursor: options.nextCursor ?? null,
-      unavailable: options.goalUnavailable ?? null,
     },
     project_blocked: {
       ...document.project_blocked,

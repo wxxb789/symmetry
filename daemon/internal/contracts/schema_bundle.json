@@ -4700,22 +4700,11 @@
                 "type": "null"
               }
             ]
-          },
-          "unavailable": {
-            "oneOf": [
-              {
-                "$ref": "#/definitions/ReadUnavailable"
-              },
-              {
-                "type": "null"
-              }
-            ]
           }
         },
         "required": [
           "entries",
-          "next_cursor",
-          "unavailable"
+          "next_cursor"
         ],
         "type": "object"
       },

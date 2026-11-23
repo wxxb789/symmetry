@@ -64,8 +64,7 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
              "selected_project_id" => project_id,
              "goal_attention" => %{
                "entries" => entries,
-               "next_cursor" => next_cursor,
-               "unavailable" => nil
+               "next_cursor" => next_cursor
              },
              "project_blocked" => %{"entries" => blocked_entries, "unavailable" => nil}
            } = response
@@ -93,6 +92,22 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
     assert title == blocked.title
   end
 
+  test "attention serves no unavailable member on the Goal feed", %{conn: conn} do
+    project = create_project()
+    goal_id = create_goal(conn, project, "Absent-member goal")
+
+    response =
+      api_conn()
+      |> get("/portal/api/attention?project_id=#{project.id}")
+      |> json_response(200)
+
+    assert [%{"goal_id" => ^goal_id}] = response["goal_attention"]["entries"]
+
+    # The feed schema admits additional members, so validation cannot prove the
+    # removed member is gone; the served document is the proof.
+    refute Map.has_key?(response["goal_attention"], "unavailable")
+  end
+
   test "attention serves the real Goal feed while Goal admission is disabled", %{conn: conn} do
     goals_config = Application.fetch_env!(:symmetry_control, :goals)
 
@@ -113,7 +128,7 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
     # page still serves the real Goal entry beside the project blockers and
     # states no unavailable feed. Rollout gates admission commands, not reads.
     assert %{
-             "goal_attention" => %{"entries" => [%{"goal_id" => ^goal_id}], "unavailable" => nil},
+             "goal_attention" => %{"entries" => [%{"goal_id" => ^goal_id}]},
              "project_blocked" => %{"entries" => [_ | _], "unavailable" => nil}
            } = response
   end
@@ -230,7 +245,7 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
     projection =
       SymmetryControlWeb.PortalJSON.attention(
         selected.id,
-        %{page: %{entries: [], next_after: nil, next_cursor: nil}, unavailable: nil},
+        %{page: %{entries: [], next_after: nil, next_cursor: nil}},
         {:ok, %{snapshot: %{projects: [unloaded, selected], selected_project: selected}}}
       )
 
@@ -238,6 +253,24 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
              projection.project_blocked.entries
 
     assert work_item_id == hd(selected.work_items).id
+  end
+
+  test "attention serves the Goal entries when the workspace read is refused" do
+    entry = %{goal_id: Ecto.UUID.generate(), title: "Served goal"}
+
+    projection =
+      SymmetryControlWeb.PortalJSON.attention(
+        Ecto.UUID.generate(),
+        %{page: %{entries: [entry], next_after: nil, next_cursor: "cursor"}},
+        {:error, :not_found}
+      )
+
+    assert %{
+             goal_attention: %{entries: [^entry], next_cursor: "cursor"},
+             project_blocked: %{entries: [], unavailable: %{code: "not_found", message: message}}
+           } = projection
+
+    assert is_binary(message)
   end
 
   test "attention states an unavailable project feed while the Goal feed stays served" do
@@ -258,7 +291,7 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
     # with its own mapped code while the Goal feed is still served (scoped to
     # the same unknown project, so it is empty but not unavailable).
     assert %{
-             "goal_attention" => %{"entries" => [], "unavailable" => nil},
+             "goal_attention" => %{"entries" => []},
              "project_blocked" => %{
                "entries" => [],
                "unavailable" => %{"code" => "not_found", "message" => _message}
