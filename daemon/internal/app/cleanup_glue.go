@@ -71,9 +71,6 @@ func (daemon *daemon) persistProcessMarker(key state.RunKey, pid int, identity s
 		return nil
 	} else {
 		firstErr := err
-		if daemon.store == nil {
-			return firstErr
-		}
 		journal, readErr := daemon.store.LoadJournal(key)
 		if readErr == nil && journal.PID == pid && journal.ProcessIdentity == identity && !journal.StartedAt.IsZero() {
 			if replayErr := write(); replayErr == nil {

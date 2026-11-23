@@ -214,7 +214,7 @@ func TestGoalNativeStartUsesAtomicProcessPersistenceBeforeObserver(t *testing.T)
 	app.workers.Wait()
 }
 
-func TestPersistProcessAuthorityCallbackDoesNotCallMarkerOverride(t *testing.T) {
+func TestPersistProcessAuthorityCallbackDoesNotCallMarkerHook(t *testing.T) {
 	store, key := claimedStore(t)
 	defer store.Close()
 	now := time.Date(2026, 9, 15, 9, 20, 21, 0, time.UTC)
@@ -223,7 +223,7 @@ func TestPersistProcessAuthorityCallbackDoesNotCallMarkerOverride(t *testing.T) 
 	fault := apptest.NewFaultStoreFrom(store)
 	fault.OnSetProcessDetails = func(got state.RunKey, pid int, identity string, startedAt time.Time) (state.RunJournal, error) {
 		markerCalls++
-		return state.RunJournal{}, errors.New("marker-only override must not be called")
+		return state.RunJournal{}, errors.New("marker-only hook must not be called")
 	}
 	app := &daemon{
 		store: fault,
@@ -242,7 +242,7 @@ func TestPersistProcessAuthorityCallbackDoesNotCallMarkerOverride(t *testing.T) 
 		t.Fatalf("persistProcessAuthorityCallback() error = %v", err)
 	}
 	if markerCalls != 0 {
-		t.Fatalf("recordProcess calls = %d, want 0 for combined authority persistence", markerCalls)
+		t.Fatalf("marker hook calls = %d, want 0 for combined authority persistence", markerCalls)
 	}
 	if got, want := events, []string{"observer"}; len(got) != len(want) || got[0] != want[0] {
 		t.Fatalf("combined persistence events = %#v, want %#v", got, want)
@@ -411,27 +411,27 @@ func TestStoreCallbackFactoriesRefuseClosingStore(t *testing.T) {
 				t.Fatalf("closing store: error = %v, want the unwrapped sentinel %v", err, errDaemonStoreClosing)
 			}
 			if closingObserved.calls != 0 {
-				t.Fatalf("closing store: override calls = %d, want 0", closingObserved.calls)
+				t.Fatalf("closing store: hook calls = %d, want 0", closingObserved.calls)
 			}
 
 			closingStoreOnly := &daemon{store: fault}
 			closingStoreOnly.storeClosing = true
 			if err := pin.invoke(closingStoreOnly); !errors.Is(err, errDaemonStoreClosing) || err != errDaemonStoreClosing {
-				t.Fatalf("closing store without an override: error = %v, want the unwrapped sentinel %v", err, errDaemonStoreClosing)
+				t.Fatalf("closing store without a hook: error = %v, want the unwrapped sentinel %v", err, errDaemonStoreClosing)
 			}
 
 			if err := pin.invoke(&daemon{}); !errors.Is(err, errDaemonStoreClosing) || err != errDaemonStoreClosing {
-				t.Fatalf("no store and no override: error = %v, want the unwrapped sentinel %v", err, errDaemonStoreClosing)
+				t.Fatalf("no store and no hook: error = %v, want the unwrapped sentinel %v", err, errDaemonStoreClosing)
 			}
 
-			var overrideObserved storeCallbackObservations
-			overrideOnly := &daemon{store: fault}
-			pin.installHook(fault, overrideOnly, &overrideObserved)
-			if err := pin.invoke(overrideOnly); !errors.Is(err, errStoreCallbackProbe) {
-				t.Fatalf("override without a store: error = %v, want %v", err, errStoreCallbackProbe)
+			var hookObserved storeCallbackObservations
+			hooked := &daemon{store: fault}
+			pin.installHook(fault, hooked, &hookObserved)
+			if err := pin.invoke(hooked); !errors.Is(err, errStoreCallbackProbe) {
+				t.Fatalf("hooked store: error = %v, want %v", err, errStoreCallbackProbe)
 			}
-			if overrideObserved.calls != pin.wantCalls {
-				t.Fatalf("override without a store: override calls = %d, want %d", overrideObserved.calls, pin.wantCalls)
+			if hookObserved.calls != pin.wantCalls {
+				t.Fatalf("hooked store: calls = %d, want %d", hookObserved.calls, pin.wantCalls)
 			}
 		})
 	}
@@ -480,13 +480,13 @@ func TestStoreCallbackFactoriesHoldStoreLifetimeReadLock(t *testing.T) {
 			var observed storeCallbackObservations
 			pin.installHook(fault, app, &observed)
 			if err := pin.invoke(app); !errors.Is(err, errStoreCallbackProbe) {
-				t.Fatalf("override error = %v, want %v", err, errStoreCallbackProbe)
+				t.Fatalf("hook error = %v, want %v", err, errStoreCallbackProbe)
 			}
 			if observed.calls != pin.wantCalls {
-				t.Fatalf("override calls = %d, want %d", observed.calls, pin.wantCalls)
+				t.Fatalf("hook calls = %d, want %d", observed.calls, pin.wantCalls)
 			}
 			if !observed.lockHeld {
-				t.Fatal("override ran without the store lifetime read lock")
+				t.Fatal("hook ran without the store lifetime read lock")
 			}
 		})
 	}
@@ -506,18 +506,18 @@ func TestStoreCallbackFactoriesCloneCallerArguments(t *testing.T) {
 
 			original := sessionIDOf(callerSessionID)
 			if err := invoke(app); !errors.Is(err, errStoreCallbackProbe) {
-				t.Fatalf("override error = %v, want %v", err, errStoreCallbackProbe)
+				t.Fatalf("hook error = %v, want %v", err, errStoreCallbackProbe)
 			}
 			if len(received) != pin.wantCalls {
-				t.Fatalf("override calls = %d, want %d", len(received), pin.wantCalls)
+				t.Fatalf("hook calls = %d, want %d", len(received), pin.wantCalls)
 			}
 			mutateCaller()
 			for index, receivedSessionID := range received {
 				if got := sessionIDOf(receivedSessionID); got != original {
-					t.Fatalf("override call %d received creator session id %d after the caller moved to %d, want the cloned %d", index, got, sessionIDOf(callerSessionID), original)
+					t.Fatalf("hook call %d received creator session id %d after the caller moved to %d, want the cloned %d", index, got, sessionIDOf(callerSessionID), original)
 				}
 				if receivedSessionID == callerSessionID {
-					t.Fatalf("override call %d aliased the caller's creator session id pointer, want a clone", index)
+					t.Fatalf("hook call %d aliased the caller's creator session id pointer, want a clone", index)
 				}
 			}
 		})
@@ -590,7 +590,7 @@ func TestStoreCallbackObserversFollowTheHook(t *testing.T) {
 				err := pin.invoke(app)
 				if failWrite {
 					if !errors.Is(err, errStoreCallbackProbe) {
-						t.Fatalf("override error = %v, want %v", err, errStoreCallbackProbe)
+						t.Fatalf("hook error = %v, want %v", err, errStoreCallbackProbe)
 					}
 					if want := slices.Repeat([]string{"write"}, pin.wantWrites); !slices.Equal(events, want) {
 						t.Fatalf("events after a failed write = %#v, want %#v", events, want)
@@ -598,7 +598,7 @@ func TestStoreCallbackObserversFollowTheHook(t *testing.T) {
 					return
 				}
 				if err != nil {
-					t.Fatalf("override error = %v, want nil", err)
+					t.Fatalf("hook error = %v, want nil", err)
 				}
 				if want := []string{"write", pin.wantObserved}; !slices.Equal(events, want) {
 					t.Fatalf("events after a durable write = %#v, want %#v", events, want)
@@ -799,9 +799,9 @@ func storeCallbackClonePins(key state.RunKey) []storeCallbackClonePin {
 		},
 		handoffClonePin(
 			"prepareSupervisorHandoffCallback",
-			func(store *apptest.FaultStore, override func(authority.SupervisorHandoff) (state.RunJournal, error)) {
+			func(store *apptest.FaultStore, hook func(authority.SupervisorHandoff) (state.RunJournal, error)) {
 				store.OnPrepareSupervisorHandoff = func(_ state.RunKey, got authority.SupervisorHandoff) (state.RunJournal, error) {
-					return override(got)
+					return hook(got)
 				}
 			},
 			func(app *daemon, handoff authority.SupervisorHandoff) error {
@@ -810,9 +810,9 @@ func storeCallbackClonePins(key state.RunKey) []storeCallbackClonePin {
 		),
 		handoffClonePin(
 			"bindSupervisorHandoffCallback",
-			func(store *apptest.FaultStore, override func(authority.SupervisorHandoff) (state.RunJournal, error)) {
+			func(store *apptest.FaultStore, hook func(authority.SupervisorHandoff) (state.RunJournal, error)) {
 				store.OnBindSupervisorHandoff = func(_ state.RunKey, got authority.SupervisorHandoff, _ int, _ string) (state.RunJournal, error) {
-					return override(got)
+					return hook(got)
 				}
 			},
 			func(app *daemon, handoff authority.SupervisorHandoff) error {
@@ -821,9 +821,9 @@ func storeCallbackClonePins(key state.RunKey) []storeCallbackClonePin {
 		),
 		handoffClonePin(
 			"commitSupervisorHandoffCallback",
-			func(store *apptest.FaultStore, override func(authority.SupervisorHandoff) (state.RunJournal, error)) {
+			func(store *apptest.FaultStore, hook func(authority.SupervisorHandoff) (state.RunJournal, error)) {
 				store.OnCommitSupervisorHandoff = func(_ state.RunKey, got authority.SupervisorHandoff, _ time.Time) (state.RunJournal, error) {
-					return override(got)
+					return hook(got)
 				}
 			},
 			func(app *daemon, handoff authority.SupervisorHandoff) error {
@@ -832,9 +832,9 @@ func storeCallbackClonePins(key state.RunKey) []storeCallbackClonePin {
 		),
 		handoffClonePin(
 			"clearSupervisorHandoffCallback",
-			func(store *apptest.FaultStore, override func(authority.SupervisorHandoff) (state.RunJournal, error)) {
+			func(store *apptest.FaultStore, hook func(authority.SupervisorHandoff) (state.RunJournal, error)) {
 				store.OnClearSupervisorHandoff = func(_ state.RunKey, got authority.SupervisorHandoff, _ authority.SupervisorHandoffReleaseProof) (state.RunJournal, error) {
-					return override(got)
+					return hook(got)
 				}
 			},
 			func(app *daemon, handoff authority.SupervisorHandoff) error {
@@ -843,9 +843,9 @@ func storeCallbackClonePins(key state.RunKey) []storeCallbackClonePin {
 		),
 		handoffClonePin(
 			"clearSupervisorHandoffAfterAbortCallback",
-			func(store *apptest.FaultStore, override func(authority.SupervisorHandoff) (state.RunJournal, error)) {
+			func(store *apptest.FaultStore, hook func(authority.SupervisorHandoff) (state.RunJournal, error)) {
 				store.OnClearSupervisorHandoffAfterAbort = func(_ state.RunKey, got authority.SupervisorHandoff, _ authority.SupervisorHandoffAbortProof) (state.RunJournal, error) {
-					return override(got)
+					return hook(got)
 				}
 			},
 			func(app *daemon, handoff authority.SupervisorHandoff) error {
@@ -855,13 +855,13 @@ func storeCallbackClonePins(key state.RunKey) []storeCallbackClonePin {
 	}
 }
 
-func handoffClonePin(name string, setOverride func(store *apptest.FaultStore, override func(authority.SupervisorHandoff) (state.RunJournal, error)), call func(app *daemon, handoff authority.SupervisorHandoff) error) storeCallbackClonePin {
+func handoffClonePin(name string, setHook func(store *apptest.FaultStore, hook func(authority.SupervisorHandoff) (state.RunJournal, error)), call func(app *daemon, handoff authority.SupervisorHandoff) error) storeCallbackClonePin {
 	handoff := testAppHandoffFixture(54, "windows:54:created-at")
 	return storeCallbackClonePin{
 		name:      name,
 		wantCalls: 1,
 		installHook: func(store *apptest.FaultStore, received *[]*uint32, _ func()) {
-			setOverride(store, func(got authority.SupervisorHandoff) (state.RunJournal, error) {
+			setHook(store, func(got authority.SupervisorHandoff) (state.RunJournal, error) {
 				*received = append(*received, got.CreatorSessionID)
 				return state.RunJournal{}, errStoreCallbackProbe
 			})

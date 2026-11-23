@@ -46,6 +46,11 @@ Full sha256 of the nine new files (64 hex chars, re-derived before handoff):
 `eventsink_test.go` `32700ec6311c71c63570db82ebd999778a4a5ec66576af35eb6dda26ce1a6d3a`;
 `apptest_contract_test.go` `8ff38f3e766a98879f2d4a22d8a8e4917940e912333ffff9bac7fdda08f6e562`.
 
+Final bytes: the implement-stage counts and hashes above are superseded. The fix-pass values for
+`faultstore_test.go`, `control.go`, `control_test.go` and `process_test.go` are in §14.5; §15
+carries the review-round-1 final values for `apptest_contract_test.go` and the two renamed test
+files (`journal_store_test.go`, `process_persistence_test.go`, whose §14.5 rows they supersede).
+
 ## 2. Mirror census (before / after)
 
 One statement over the mirror name list of the `options` struct block (`app.go:206-230` at base):
@@ -597,3 +602,103 @@ re-measured.
 | `daemon/internal/app/apptest/process_test.go` | 177 | `d57e415b9345346fd36c73b2f3e01e518b43d3705ccbb2a611fab1cfce53ae7b` |
 | `daemon/internal/app/journal_store_test.go` | 448 | `746a4578013d85f012043ebeac315cd72d906dbadd0b5b1f198901fc68047a75` |
 | `daemon/internal/app/process_persistence_test.go` | 896 | `a052ab34866664376c1fde1ac478f13e44ad24c9df089d727a585f61ae4a58aa` |
+
+## 15. Review round 1 fix pass (PR #257 review, 2026-11-22)
+
+Findings: `.../findings/257-opus-review-1.md` (P3-1…P3-6, review of `3cde6f49`). This pass changes
+four tracked code files (`internal/app/{cleanup_glue.go,journal_store_test.go,
+process_persistence_test.go}`, `internal/app/apptest_contract_test.go`), the plan and this record;
+code-only `git diff --stat`: 4 files changed, 41 insertions(+), 40 deletions(-). No production
+behaviour change: the only production edit is the deletion of an unreachable guard (§15.1).
+
+| finding | change | proof |
+| --- | --- | --- |
+| P3-1 | `journal_store_test.go` `:222`/`:237` subtest names now state the readback their bodies reach (`hook error survives the readback`, `proceeds past the readback`) and the `:250` message drops the false `storeless` claim | plan map rows 9-11; §15.2 |
+| P3-2 | every remaining override-era label in `process_persistence_test.go` renamed to hook vocabulary (test function, sentinel, 11 messages, 2 locals, 2 parameters) | plan map rows 12-27; §15.2; old-label census §15.3 |
+| P3-3 | deleted the dead inner `if daemon.store == nil { return firstErr }` in `persistProcessMarker` | §15.1 |
+| P3-4 | `apptest_contract_test.go` adds `var _ ControlAPI = (*apptest.ControlAPI)(nil)`, `var _ Process = (*apptest.Process)(nil)`, `var _ harness.EventSink = (*apptest.EventSink)(nil)` next to the existing `journalStore` pin | the pins are typechecked by every `go vet`/`go test` of `internal/app` (§15.3); the review's overlay compilation established the three interfaces match at head |
+| P3-5 | §1 now points at §14.5/§15 for final bytes | §1 |
+| P3-6 | no byte change | conductor's 2026-11-22 contract extension acknowledges `docs/evidence/**` into the owned set |
+
+### 15.1 P3-3: the deleted branch is unreachable
+
+Command evidence (repo root):
+
+```
+rg -n 'daemon\.store\s*=|\.store\s*=\s*nil' daemon/internal/app --glob '!**/*_test.go'
+```
+
+`daemon.store` is assigned only at `app.go:499` (`daemon.store = daemon.options.store`, guarded by
+`if daemon.options.store != nil`) and `app.go:505` (`daemon.store = store`, the `state.New` result;
+the caller returns on error) — both inside `initialize`, which `run` calls once (`app.go:329`)
+before the daemon serves callbacks. The only `.store = nil` write in the tree is
+`export_test.go:12` (`value.store = nil` on the `options` field, test-only `withStore(nil)`). No
+code path assigns nil to `daemon.store`, and nothing between the `:63` guard (`storeClosing ||
+store == nil` -> `errDaemonStoreClosing`) and the deleted `:74` read re-assigns the field, so the
+deleted read could never observe nil.
+
+Guard mutant (overlay only, no repo write): `cleanup_glue.go:63` weakened to
+`if daemon.storeClosing {` (scratch copy + `go test -overlay`) ->
+
+```
+go test -overlay <overlay.json> -count=1 -run 'TestStorelessDaemonTakesEveryStoreNilBranch$' ./internal/app/
+```
+
+exit 1: `--- FAIL: TestStorelessDaemonTakesEveryStoreNilBranch/cleanup_glue.go_persistProcessMarker`,
+then `panic: runtime error: invalid memory address or nil pointer dereference` in
+`persistProcessMarker` (`cleanup_glue.go:67`, the write) reached from `journal_store_test.go:217`.
+The `:63` guard is the load-bearing refusal and stays red when mutated; the deleted inner check
+added nothing.
+
+### 15.2 P3-1/P3-2: assertion-line invariance
+
+Multiset diff of assertion/name lines, base `2db5ed0c` vs this worktree (cwd `daemon/`):
+
+```
+norm(){ grep -E 't\.(Fatalf|Fatal|Errorf|Error|Skip|Skipf|Helper)\(|t\.Run\(|^func Test|^[[:space:]]*name: "|^[[:space:]]*\{[[:space:]]*"[^"]*",[[:space:]]*func\(' "$1" | sed 's/^[[:space:]]*//' | sort; }
+for f in journal_store_test.go process_persistence_test.go; do
+  diff <(git show 2db5ed0c:daemon/internal/app/$f | norm /dev/stdin) <(norm internal/app/$f)
+done
+```
+
+`journal_store_test.go`: 7 removed / 9 added — the five already-ruled fix-pass rows, plan rows
+9/10/11, and the two `probeStore` helper additions (`t.Helper()`, `t.Fatal(err)`) recorded in
+§14.3. `process_persistence_test.go`: 17 removed / 17 added — exactly plan rows 12-23 as textual
+renames. Applying the full old->new map (rows 9-27 plus the fix-pass rows) to the base lines
+leaves `process_persistence_test.go` with an empty difference and `journal_store_test.go` with
+only the two `probeStore` additions. No assertion condition, expected value, fixture datum or
+control-flow line differs at any renamed site.
+
+### 15.3 Final-tree gates
+
+Working directory `daemon/` unless stated; run after all four code edits.
+
+| gate | command | result |
+| --- | --- | --- |
+| gofmt | `gofmt -l .` | empty, exit 0 |
+| whitespace | `git diff --check` (repo root) | empty, exit 0 |
+| vet host | `go vet ./...` | exit 0 |
+| vet GOOS=linux | `GOOS=linux GOARCH=amd64 go vet ./internal/app/...` | exit 0 |
+| vet GOOS=darwin | `GOOS=darwin GOARCH=amd64 go vet ./internal/app/...` | exit 0 |
+| builds | `GOOS=linux\|windows GOARCH=amd64 go build ./...` | exit 0 each |
+| old-label census | `rg -n -i 'override' daemon/internal/app/journal_store_test.go daemon/internal/app/process_persistence_test.go`; `rg -n 'mirror error\|mirror wins\|skips the readback\|installOverride\|store callback override' daemon/` (repo root) | 0 matches, exit 1 each |
+| guard mutant | overlay weakening `cleanup_glue.go:63`, then `go test -overlay <overlay.json> -count=1 -run 'TestStorelessDaemonTakesEveryStoreNilBranch$' ./internal/app/` | exit 1, nil-pointer panic in the storeless `persistProcessMarker` probe (§15.1) |
+| focused renamed tests | `go test -count=1 -run 'TestStorelessDaemonTakesEveryStoreNilBranch\|TestStoreCallbackFactoriesRefuseClosingStore\|TestStoreCallbackFactoriesHoldStoreLifetimeReadLock\|TestStoreCallbackFactoriesCloneCallerArguments\|TestStoreCallbackObserversFollowTheHook\|TestPersistProcessAuthorityCallbackDoesNotCallMarkerHook\|TestPersistProcessMarkerReplaysPostRenameUnknownOutcome\|TestCommitSupervisorHandoffCallbackObservesDurableProcessMarker' ./internal/app/` | `ok .../internal/app 1.496s`, exit 0 |
+| host suite | `go test -count=1 -timeout 40m ./internal/app/...` | first attempt exit 1 on the documented host-load timing flake `TestOmOAttachAckRegressionCancellationAndDeadlineDoNotRenewBudget/admission_deadline` (local-control GET `context deadline exceeded`, unchanged test; §13 precedent; the attempt overlapped two short WSL probes on this host); that test in isolation `ok .../internal/app 21.914s`, exit 0; clean rerun `ok .../internal/app 205.169s`, `ok .../internal/app/apptest 3.620s`, exit 0 |
+| WSL race | `wsl -d Ubuntu-24.04 -u accept` -> `go test -count=1 -race -timeout 60m ./internal/app/...` | `ok .../internal/app 786.269s`; `ok .../internal/app/apptest 3.285s`; exit 0, no `FAIL`, no data race |
+| host-path / DLP | `git diff \| grep -in 'lhan\|users/\|AppData\|/mnt/\|/home/'`; `git diff \| grep -cP '\\u'` (repo root) | no match, exit 1; 0, exit 1 |
+
+### 15.4 Final bytes of this pass
+
+| file | lines | sha256 |
+| --- | --- | --- |
+| `daemon/internal/app/cleanup_glue.go` | 425 | `4ae6417577f6da8350fe64785f22f582cb6c21afa1af37f1b40caf4613cb3f53` |
+| `daemon/internal/app/journal_store_test.go` | 448 | `83d995cd18f946f3f7593c4e294f3d3c48142ad3f75d84236c5f3443db3d100a` |
+| `daemon/internal/app/process_persistence_test.go` | 896 | `62355978bbe919ec77faf10a3440e936b259967017284873a614b0c334090ac9` |
+| `daemon/internal/app/apptest_contract_test.go` | 11 | `54c908d8e5a68e95350ad4e8f5c2d4a19031aab635da36492c27df130cc29dbf` |
+| `docs/plans/2026-11-22-rf-w4-12b-app-fault-store-plan.md` | 267 | `3456f5b1014073af4a10832126239231b1c9126744ecde20e32a39bd8153607a` |
+
+This record is the sixth changed path of the pass. The four `apptest` files of §14.5 are
+untouched and still match their recorded line counts and hashes (`faultstore_test.go`
+772/`97c2087fdf8e24e3…`, `control.go` 238/`31c86defe52e1054…`, `control_test.go`
+530/`98d42ba15bbdb79e…`, `process_test.go` 177/`d57e415b9345346f…`, re-derived after this pass).

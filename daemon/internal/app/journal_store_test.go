@@ -219,7 +219,7 @@ func TestStorelessDaemonTakesEveryStoreNilBranch(t *testing.T) {
 				t.Fatalf("storeless process marker = %v, want %v", err, errDaemonStoreClosing)
 			}
 		}},
-		{"cleanup_glue.go persistProcessMarker hook error skips the readback", func(t *testing.T, daemon *daemon) {
+		{"cleanup_glue.go persistProcessMarker hook error survives the readback", func(t *testing.T, daemon *daemon) {
 			store := probeStore(t)
 			daemon.store = store
 			store.OnSetProcessDetails = func(state.RunKey, int, string, time.Time) (state.RunJournal, error) {
@@ -234,7 +234,7 @@ func TestStorelessDaemonTakesEveryStoreNilBranch(t *testing.T) {
 			err := daemon.verifyDurableContainmentStopReceipt(key, 81, "windows:81:0000000000000001", authority.StopReceipt{})
 			requireErrorMessage(t, err, "state store is unavailable")
 		}},
-		{"cleanup_glue.go clearPersistedProcessDetails skips the readback", func(t *testing.T, daemon *daemon) {
+		{"cleanup_glue.go clearPersistedProcessDetails proceeds past the readback", func(t *testing.T, daemon *daemon) {
 			store := probeStore(t)
 			daemon.store = store
 			cleared := 0
@@ -247,7 +247,7 @@ func TestStorelessDaemonTakesEveryStoreNilBranch(t *testing.T) {
 			}
 			journal, err := daemon.clearPersistedProcessDetails(key, 81, "windows:81:0000000000000001")
 			if err != nil || cleared != 1 || journal.RunID != key.RunID {
-				t.Fatalf("storeless process-detail clear = journal:%#v calls:%d err:%v", journal, cleared, err)
+				t.Fatalf("process-detail clear = journal:%#v calls:%d err:%v", journal, cleared, err)
 			}
 		}},
 		{"tryDeterministicArtifactValidation", func(t *testing.T, daemon *daemon) {

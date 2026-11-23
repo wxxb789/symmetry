@@ -227,3 +227,41 @@ fix pass strengthens them (STD-A02–A04) and adds `TestControlAPINestedRecordsA
 | 6 | `process_persistence_test.go` test function | `TestStoreCallbackObserversFollowTheOverride` | `TestStoreCallbackObserversFollowTheHook` |
 | 7 | `process_persistence_test.go` sentinel text | `store callback override probe` | `store callback hook probe` |
 | 8 | `process_persistence_test.go` fields | `storeCallbackPin.installOverride`, `storeCallbackClonePin.installOverride` | `storeCallbackPin.installHook`, `storeCallbackClonePin.installHook` (17 use sites) |
+
+The conductor's 2026-11-22 extension (PR #257 review, P3-1/P3-2) widens the ruling to every
+remaining override/mirror-era label in the same two files. Rows 9-27 are that extension; the
+assertions, conditions, fixtures and control flow of every renamed site are unchanged (evidence
+§15, normalized assertion-line multiset diff).
+
+| # | file | old | new |
+| --- | --- | --- | --- |
+| 9 | `journal_store_test.go` subtest name | `cleanup_glue.go persistProcessMarker hook error skips the readback` | `cleanup_glue.go persistProcessMarker hook error survives the readback` |
+| 10 | `journal_store_test.go` subtest name | `cleanup_glue.go clearPersistedProcessDetails skips the readback` | `cleanup_glue.go clearPersistedProcessDetails proceeds past the readback` |
+| 11 | `journal_store_test.go` message | `storeless process-detail clear = journal:%#v calls:%d err:%v` | `process-detail clear = journal:%#v calls:%d err:%v` |
+| 12 | `process_persistence_test.go` test function | `TestPersistProcessAuthorityCallbackDoesNotCallMarkerOverride` | `TestPersistProcessAuthorityCallbackDoesNotCallMarkerHook` |
+| 13 | `process_persistence_test.go` sentinel | `marker-only override must not be called` | `marker-only hook must not be called` |
+| 14 | `process_persistence_test.go` message | `recordProcess calls = %d, want 0 for combined authority persistence` | `marker hook calls = %d, want 0 for combined authority persistence` |
+| 15 | `process_persistence_test.go` message | `closing store: override calls = %d, want 0` | `closing store: hook calls = %d, want 0` |
+| 16 | `process_persistence_test.go` message | `closing store without an override: error = %v, want the unwrapped sentinel %v` | `closing store without a hook: error = %v, want the unwrapped sentinel %v` |
+| 17 | `process_persistence_test.go` message | `no store and no override: error = %v, want the unwrapped sentinel %v` | `no store and no hook: error = %v, want the unwrapped sentinel %v` |
+| 18 | `process_persistence_test.go` local | `overrideObserved` | `hookObserved` |
+| 19 | `process_persistence_test.go` local | `overrideOnly` | `hooked` |
+| 20 | `process_persistence_test.go` message | `override without a store: error = %v, want %v` | `hooked store: error = %v, want %v` |
+| 21 | `process_persistence_test.go` message | `override without a store: override calls = %d, want %d` | `hooked store: calls = %d, want %d` |
+| 22 | `process_persistence_test.go` message (4 sites) | `override error = %v, want %v` / `... want nil` | `hook error = %v, want %v` / `... want nil` |
+| 23 | `process_persistence_test.go` message (2 sites) | `override calls = %d, want %d` | `hook calls = %d, want %d` |
+| 24 | `process_persistence_test.go` message | `override ran without the store lifetime read lock` | `hook ran without the store lifetime read lock` |
+| 25 | `process_persistence_test.go` message (2 sites) | `override call %d ...` | `hook call %d ...` |
+| 26 | `process_persistence_test.go` parameter (5 closure literals + `handoffClonePin` signature) | `override func(authority.SupervisorHandoff) (state.RunJournal, error)` | `hook func(authority.SupervisorHandoff) (state.RunJournal, error)` |
+| 27 | `process_persistence_test.go` parameter | `setOverride` (`handoffClonePin` parameter and call site) | `setHook` |
+
+## Review round 1 fix pass (2026-11-22, PR #257)
+
+Findings: `.../findings/257-opus-review-1.md` (P3-1…P3-6). Fixed here: P3-1/P3-2 (rows 9-27
+above), P3-3 (delete the dead inner `daemon.store == nil` readback guard in `persistProcessMarker`;
+unreachable because the `:63` guard returns when the store is nil and no code path ever writes nil
+to `daemon.store` — evidence §15), P3-4 (three compile-time `var _` pins in
+`apptest_contract_test.go` for `apptest.ControlAPI`/`Process`/`EventSink`), P3-5 (evidence §1 now
+points at §14.5/§15 for final bytes). P3-6 is settled by the conductor's contract extension that
+acknowledges `docs/evidence/**` into the owned set. Assertion-line invariance proof, mutant run
+and gate outputs: evidence §15.
