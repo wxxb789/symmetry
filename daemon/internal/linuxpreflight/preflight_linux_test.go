@@ -5,6 +5,7 @@ package linuxpreflight
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -275,24 +276,128 @@ func TestLinuxOwnerHostPrerequisiteChecksFailClosed(t *testing.T) {
 	if err := validateLinuxOwnerParentIdentity(changedParent, 1001, 1001, anchor); err == nil {
 		t.Fatal("delegated-parent identity mismatch was accepted")
 	}
-	a := ACLSubject{UID: 1001, GID: 1002}
-	b := ACLSubject{UID: 1003, GID: 1004}
-	if err := validateLinuxOwnerManagerKillMetadata(0, 0, unix.S_IFREG|0o200, 1001, a, b); err != nil {
-		t.Fatalf("root-only parent cgroup.kill metadata was rejected: %v", err)
-	}
-	if err := validateLinuxOwnerManagerKillMetadata(1001, 0, unix.S_IFREG|0o200, 1001, a, b); err == nil {
-		t.Fatal("A-owned parent cgroup.kill was accepted instead of remaining root-only")
-	}
-	if err := validateLinuxOwnerManagerKillMetadata(0, 0, unix.S_IFREG|0o220, 1001, a, b); err == nil {
-		t.Fatal("group-writable parent cgroup.kill was accepted")
-	}
-
 	wrapper := trustedLinuxAsset{uid: 0, gid: 1002, mode: 0o4750, links: 1, denyBAll: true}
 	if err := validateTrustedLinuxAssetIdentity(StatIdentity{UID: 0, GID: 1002, Mode: 0o4750, Links: 1}, true, wrapper); err != nil {
 		t.Fatalf("valid root wrapper metadata: %v", err)
 	}
 	if err := validateTrustedLinuxAssetIdentity(StatIdentity{UID: 0, GID: 1002, Mode: 0o4755, Links: 1}, true, wrapper); err == nil {
 		t.Fatal("world-executable privileged wrapper was accepted")
+	}
+}
+
+func TestLinuxOwnerKillBoundaryMetadata(t *testing.T) {
+	a := ACLSubject{UID: 1001, GID: 1002}
+	b := ACLSubject{UID: 1003, GID: 1004}
+	for _, test := range []struct {
+		name  string
+		uid   uint32
+		gid   uint32
+		mode  uint32
+		valid bool
+	}{
+		{name: "root-owned", mode: unix.S_IFREG | 0o200, valid: true},
+		{name: "A-owned", uid: 1001, gid: 1002, mode: unix.S_IFREG | 0o200, valid: true},
+		{name: "B-owned", uid: 1003, gid: 1004, mode: unix.S_IFREG | 0o200},
+		{name: "A-owned with the root group", uid: 1001, mode: unix.S_IFREG | 0o200},
+		{name: "root-owned with A's group", gid: 1002, mode: unix.S_IFREG | 0o200},
+		{name: "group-writable", mode: unix.S_IFREG | 0o220},
+		{name: "other-writable", mode: unix.S_IFREG | 0o202},
+		{name: "owner-unwritable", mode: unix.S_IFREG | 0o400},
+		{name: "not-a-plain-file", mode: unix.S_IFDIR | 0o700},
+	} {
+		if err := validateLinuxOwnerManagerKillMetadata(test.uid, test.gid, test.mode, 1001, a, b); (err == nil) != test.valid {
+			t.Errorf("manager cgroup.kill %s: err = %v, accepted = %t, want accepted = %t", test.name, err, err == nil, test.valid)
+		}
+	}
+	for _, test := range []struct {
+		name  string
+		uid   uint32
+		gid   uint32
+		mode  uint32
+		valid bool
+	}{
+		{name: "root-owned", mode: unix.S_IFREG | 0o200, valid: true},
+		{name: "A-owned", uid: 1001, gid: 1002, mode: unix.S_IFREG | 0o200},
+		{name: "B-owned", uid: 1003, gid: 1004, mode: unix.S_IFREG | 0o200},
+		{name: "root-owned with a foreign group", gid: 1002, mode: unix.S_IFREG | 0o200},
+		{name: "group-writable", mode: unix.S_IFREG | 0o220},
+		{name: "other-writable", mode: unix.S_IFREG | 0o202},
+		{name: "owner-unwritable", mode: unix.S_IFREG | 0o400},
+		{name: "not-a-plain-file", mode: unix.S_IFDIR | 0o700},
+	} {
+		if err := validateLinuxOwnerUnitKillMetadata(test.uid, test.gid, test.mode, a, b); (err == nil) != test.valid {
+			t.Errorf("unit cgroup.kill %s: err = %v, accepted = %t, want accepted = %t", test.name, err, err == nil, test.valid)
+		}
+	}
+}
+
+func TestLinuxOwnerUnitCgroupKillPathFollowsTheDelegatedParent(t *testing.T) {
+	for delegated, want := range map[string]string{
+		"manager": "cgroup.kill",
+		"system.slice/symmetry-owner.service/manager": "system.slice/symmetry-owner.service/cgroup.kill",
+		"a/b/c/manager": "a/b/c/cgroup.kill",
+	} {
+		if got := linuxOwnerUnitCgroupKillPath(delegated); got != want {
+			t.Errorf("linuxOwnerUnitCgroupKillPath(%q) = %q, want %q", delegated, got, want)
+		}
+	}
+}
+
+func TestLinuxOwnerUnitKillWriteProbeDecisions(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		writeErr error
+		valid    bool
+	}{
+		{name: "refused with EACCES", writeErr: unix.EACCES, valid: true},
+		{name: "refused with EPERM", writeErr: unix.EPERM, valid: true},
+		{name: "wrapped EACCES", writeErr: fmt.Errorf("openat2: %w", unix.EACCES), valid: true},
+		{name: "wrapped EPERM", writeErr: fmt.Errorf("openat2: %w", unix.EPERM), valid: true},
+		{name: "opened for writing", writeErr: nil},
+		{name: "missing file", writeErr: unix.ENOENT},
+		{name: "wrapped missing file", writeErr: fmt.Errorf("openat2: %w", unix.ENOENT)},
+		{name: "invalid flags", writeErr: unix.EINVAL},
+		{name: "wrapped invalid flags", writeErr: fmt.Errorf("openat2: %w", unix.EINVAL)},
+	} {
+		if err := validateLinuxOwnerUnitKillWriteProbe(test.writeErr); (err == nil) != test.valid {
+			t.Errorf("unit kill write probe %s: err = %v, accepted = %t, want accepted = %t", test.name, err, err == nil, test.valid)
+		}
+	}
+}
+
+func TestLinuxOwnerUnitKillControlReadsTheDerivedUnitPath(t *testing.T) {
+	a := ACLSubject{UID: 1001, GID: 1002}
+	b := ACLSubject{UID: 1003, GID: 1004}
+	metadataHow := &unix.OpenHow{Flags: uint64(unix.O_PATH | unix.O_CLOEXEC | unix.O_NOFOLLOW), Resolve: uint64(unix.RESOLVE_BENEATH | unix.RESOLVE_NO_SYMLINKS | unix.RESOLVE_NO_MAGICLINKS | unix.RESOLVE_NO_XDEV)}
+	root := t.TempDir()
+	unit := filepath.Join(root, "unit")
+	if err := os.MkdirAll(filepath.Join(unit, "manager"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rootFD, err := unix.Open(root, unix.O_PATH|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unix.Close(rootFD)
+	if err := verifyLinuxOwnerUnitKillControl(rootFD, "unit/manager", metadataHow, a, b); !errors.Is(err, unix.ENOENT) {
+		t.Fatalf("absent unit cgroup.kill: err = %v, want an ENOENT refusal at the derived path", err)
+	}
+	kill := filepath.Join(unit, "cgroup.kill")
+	if err := os.WriteFile(kill, nil, 0o200); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(kill, 0o200); err != nil {
+		t.Fatal(err)
+	}
+	err = verifyLinuxOwnerUnitKillControl(rootFD, "unit/manager", metadataHow, a, b)
+	if os.Geteuid() == 0 {
+		if err == nil || !strings.Contains(err.Error(), "A can open the owning unit cgroup.kill for writing") {
+			t.Fatalf("unit cgroup.kill as root: err = %v, want the write-probe refusal", err)
+		}
+		return
+	}
+	if err == nil || !strings.Contains(err.Error(), "unit cgroup.kill must remain root:root") {
+		t.Fatalf("unit cgroup.kill without root: err = %v, want the root:root metadata refusal", err)
 	}
 }
 

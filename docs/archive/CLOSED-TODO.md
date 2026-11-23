@@ -112,6 +112,10 @@ metadata` in `docs/TODO.md`) was appended to the `## Dead-code candidates (rf-w1
 sweep)` section below and moved on 2026-11-22 from branch
 `refactor/rf-w4-15c-claude-candidate-relocation`.
 
+The reconciled stale-claude-README item appended to the new `## Harness capture fixtures: stale
+claude testdata READMEs (rf-w5-10, 2026-11-23)` section at the end of this file was moved on
+2026-11-23 from branch `refactor/rf-w5-10-harness-capture-fixtures`.
+
 ## Model-routing evaluation records
 
 - [x] Fixed the half-applied usage-receipt import (serialization gap) reported by the cancelled 0008a round-2
@@ -4643,6 +4647,81 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
       scripts/ci/test-omo-control-native-evidence.py` exit 0. Residuals stay tracked: a
       recorder-less OpenCode launch keeps the fail-closed stop until W6-04 (the port entry above),
       and the lease-expiry arm stays open in `docs/TODO.md`.
+
+## Linux owner preflight: delegated `manager/cgroup.kill` root-only refusal under systemd ≥254
+
+Recorded by goal `rf-acc-native-hosted-run` (2026-11-23): on the hosted `ubuntu-latest` runner
+(systemd 259), the installed daemon's `-verify-linux-owner-install` ExecStartPre refused at the
+delegated `DelegateSubgroup=manager` subgroup's `cgroup.kill`, which systemd chowns to the service
+user (probe run `45169655828`: `55200:55200 200` and that user can open it for writing; in-guest
+diagnostic in run `45169868354`: `52000:52000 200` while the unit's own `cgroup.kill` stays
+`0:0 200`; refusal recorded in run `45164286155`). Making a credentialed run pass that step needed
+a production-side decision (installer re-chown once the subgroup exists, a reviewed preflight
+change, or a host whose systemd keeps the control root-owned). The entry text landed on main as
+`dd758599` (#270, `refactor/rf-acc-native-hosted-run`) while this slice was in flight; it is not in
+`docs/TODO.md` at `b9d4b4a4`.
+
+**Closed (2026-11-23, branch `refactor/rf-acc-delegated-cgroup-kill`, base `b9d4b4a4`, plan
+`docs/plans/2026-11-23-rf-acc-delegated-cgroup-kill-plan.md`, record
+`docs/evidence/rf-acc-delegated-cgroup-kill-2026-11-23.md`):** `verifyLinuxOwnerParentKillBoundary`
+(`daemon/internal/linuxpreflight/cgroup_linux.go`) no longer requires the delegated
+`manager/cgroup.kill` to be root-owned and A-unwritable — no stock systemd ≥254 host can satisfy
+that inside the delegated subtree — and enforces the retained boundary one level up instead: the
+owning unit cgroup's own `cgroup.kill` must be root:root, a plain owner-writable file with no
+group/other write, and refused for an A `O_WRONLY` open (ENOENT is a failure). The manager file
+must still be a plain file owned by root or A with a gid matching its owner, owner-writable and
+with no group/other write, so B cannot write it. Local WSL2 systemd 255 measurement (`systemctl --version`
+`255.4-1ubuntu8.17`; real v2 owner install; mandated unit) reproduced the hosted ownership at all
+three phases (after start, after `daemon-reload`, after restart): `manager/cgroup.kill`
+`1002:1003 0200` and A-writable, unit `cgroup.kill` `0:0 0200` with `EACCES` for A — which also
+settles the older 0006 design record's ":613-617" claim that a systemd 255 host keeps the manager
+file root-owned (not reproduced; the record now carries an appendix). Live rows on that host, the
+built daemon run as A: base `b9d4b4a4` exits 1 (`manager control cgroup.kill is not
+owned/writable only by its trusted owner`), HEAD exits 0, the unit kill temporarily chowned to A
+(root) exits 1 (`unit cgroup.kill must remain root:root`), and a retarget mutant that points the
+unit check at `manager/cgroup.kill` exits 1 on the same host. Unit rows pin the acceptance set per
+check: root-owned is accepted by both checks and A-owned only by the manager file, while the unit
+file must remain root:root; both checks reject B-owned, wrong-owner-gid, group-writable,
+other-writable, owner-unwritable and non-plain-file rows; mutants M1 (accept a B-owned manager
+kill), M2 (drop the unit-kill root check) and M4 (accept a group-writable manager kill) each
+redden `TestLinuxOwnerKillBoundaryMetadata` and were reverted (`sha256sum` restored), and the M3
+union mutant (accept an A-writable unit kill: unit metadata root check and A-write refusal
+removed) is red in the new hermetic `TestLinuxOwnerUnitKillWriteProbeDecisions` and
+`TestLinuxOwnerUnitKillControlReadsTheDerivedUnitPath` rows as well as on the live chowned host,
+where it accepts with exit 0 while the fixed code refuses. Gates: `gofmt -l .` exit 0;
+`go vet ./internal/linuxpreflight/...` exit 0 (Windows and WSL); `GOOS=linux go build ./...` exit
+0; WSL `go test -race -count=1 ./internal/linuxpreflight/...` exit 0. Residual: the A `O_WRONLY`
+probe's independent discriminating power (a root-owned unit kill A could still write through a
+capability) was never demonstrated live — a capable A client is refused earlier during anchor
+discovery (`sendmsg: broken pipe`; the refusing check was not identified, record sections 9 and
+11) — so on every known host state the probe is defense-in-depth beyond the metadata rule, and its
+decisions and derived-path wiring are now covered hermetically (record section 13); and the
+rf-acc-native-hosted-run paragraph, landed with #270 while this slice was in flight, records the
+decision as open while this entry and the goal record carry the closure.
+
+## Harness capture fixtures: stale claude testdata READMEs (rf-w5-10, 2026-11-23)
+
+- [ ] Reconcile the two `testdata/claude/**` READMEs with the relocated identifiers: both files
+      were frozen for rf-w4-15c (`harness/testdata/**` is W5-10's surface) and neither is in the
+      citation gate's audited corpus, so the move left them stale —
+      `daemon/internal/harness/testdata/claude/2.1.281/README.md:48` names
+      `claudeCandidateStructuredOutputSchema` (now `candidateStructuredOutputSchema` in
+      `claude/adapter.go`) and `daemon/internal/harness/testdata/claude/2.1.323/README.md:36`
+      names `ClaudeTestedExecutableHash` (now `testedExecutableHash` in `claude/probe.go`). Owner
+      area: W5-10 fixture pruning.
+
+      **Closed (2026-11-23, branch `refactor/rf-w5-10-harness-capture-fixtures`, base
+      `2c8c419e`, plan
+      `docs/plans/2026-11-23-rf-w5-10-harness-capture-fixtures-plan.md`):** prose-only edits
+      correct both stale identifiers — `candidateStructuredOutputSchema` in
+      `daemon/internal/harness/claude/adapter.go` and `testedExecutableHash` in
+      `daemon/internal/harness/claude/probe.go` — and nothing else in either README changes.
+      Every capture byte, `version.txt` and `fixture-manifest.json` in the two directories stays
+      byte-identical: `git diff --name-only` over
+      `daemon/internal/harness/testdata/claude/2.1.281` and
+      `daemon/internal/harness/testdata/claude/2.1.323` lists exactly those two READMEs, and the
+      claude package suite stays green. The same slice retires the unread claude 2.1.259
+      directory, whose bytes remain in git history.
 
 ## Harness-kind vocabulary and adapter policy (rf-a3, 2026-11-23)
 
