@@ -14,6 +14,11 @@ under goal 0007, following `docs/design/frontend.md` and `protocol.md`.
   server allowed_actions and reject stale state after server conflicts.
 - Reuse accessible primitives and design tokens. Preserve keyboard focus,
   drafts, selection, and scroll during refresh. Do not render raw agent HTML.
+- jsdom owns decoding, state and DOM contracts; Playwright owns layout, scroll
+  retention, focus return and real-network flows. A jsdom assertion that only
+  simulates an interaction (scroll position, layout, focus) may not be the
+  authoritative test for it: the authoritative one lives in one of the
+  render-gate specs under `browser/tests/`.
 - Commands stay pending until authoritative acknowledgement. Optimistic state
   is appropriate for reversible view interactions, not execution or approval.
 - Use the exact installed Effect major and its matching APIs. Do not mix v3

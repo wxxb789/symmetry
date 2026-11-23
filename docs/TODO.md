@@ -23,7 +23,7 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       in `internal/state` (2026-11-21, branch `refactor/rf-w1-06-daemon-deadcode`; plan
       `docs/plans/2026-11-21-w1-06-daemon-deadcode-plan.md`). `Store.AttachGoalSession`
       (`daemon/internal/state/goal_session.go:1026`) and `Store.FailUnresolvedProvideInput`
-      (`daemon/internal/state/state.go:4241`) are
+      (`daemon/internal/state/run_journal.go:673`) are
       unreachable from `deadcode -test ./cmd/...` on windows/amd64, linux/amd64 and linux/arm64
       alike, and at the baseline revision `a3039f0` `git grep -nw <symbol>` matches only each
       definition plus its doc comment — no call site, no test, no doc citation anywhere; this
@@ -61,6 +61,21 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       the subject hashes, deleted-declaration list and mutant record are in
       `docs/evidence/rf-w4-15c-claude-candidate-relocation-2026-11-22.md`. The sentence above is
       kept as recorded.
+
+- Dead-surface candidates (decision note, 2026-11-22, rf-w4-21 state domain journals): the split
+      left two exported `*Store` methods with no non-test caller — `QueueEvent`
+      (`daemon/internal/state/run_outbox.go:58`) and
+      `QueueCancelledTransitionAndAcknowledgementAt`
+      (`daemon/internal/state/run_outbox.go:288`). The app-side cancel path that would call the
+      second one sits behind `options.queueCancelledTransitionAndAcknowledgement`
+      (`daemon/internal/app/outbox.go:214-215`), and that field is assigned only in tests
+      (`daemon/internal/app/app_test.go:2474,2653,4374,5723`,
+      `daemon/internal/app/retention_failure_test.go:148`); production falls back to
+      `QueueTerminalTransitionAndAcknowledgementAt`. Both methods predate this slice and are
+      exported, so unexporting them belongs to a W3-08-style surface slice rather than to the
+      apply stage of a same-package split; revalidate with `deadcode -test ./cmd/...` on the
+      three CI platforms plus a repo-wide `git grep -nw <symbol>` before deleting. Owner area:
+      daemon state unexport sweep.
 
 - [ ] Reconcile the `harness/claude` package comment with the package's contents: the header of
       `daemon/internal/harness/claude/stream.go` still states that the package "intentionally does
@@ -793,27 +808,27 @@ round 1) left two paths open here.
       that slice). Reachability was probed by mutating one condition at a time against the rf-w2-09
       pin fixtures (probe code not committed); the affected strings are listed in
       `docs/evidence/rf-w2-09-state-validators-2026-11-21.md` §5.
-      (a) `v2 cgroup reservation cannot accompany a v1 authority` (`state.go:6120`) and
-      `v2 cgroup reservation cannot accompany a v1 handoff` (`state.go:6123`): the authority and
+      (a) `v2 cgroup reservation cannot accompany a v1 authority` (`containment_journal.go:614`) and
+      `v2 cgroup reservation cannot accompany a v1 handoff` (`containment_journal.go:617`): the authority and
       handoff blocks (`validateContainmentAuthority`, `validateContainmentHandoff`) already return
       `v1 … cannot use a v2 cgroup reservation` whenever a non-v2 owner is combined with a cgroup
       reservation, so the later checks can never fire.
-      (b) `Linux cgroup reservation cannot have both abort and physical-stop proof` (`state.go:259`)
-      and `Linux cgroup aborted reservation lost producer-exit evidence` (`state.go:263`):
-      `linuxCgroupReservationAbortMatches` (`state.go:5885`) returns false for every proof that
+      (b) `Linux cgroup reservation cannot have both abort and physical-stop proof` (`linux_cgroup_journal.go:165`)
+      and `Linux cgroup aborted reservation lost producer-exit evidence` (`linux_cgroup_journal.go:169`):
+      `linuxCgroupReservationAbortMatches` (`linux_cgroup_journal.go:1082`) returns false for every proof that
       carries a pre-gate receipt or lacks producer-exit parity, so the earlier abort-proof error
       fires first. Probes: aborted reservation + pre-gate receipt → `Linux cgroup reservation abort
       proof is invalid`; aborted reservation + helper exit proof → `Linux cgroup helper exit proof
       is invalid`.
-      (c) `Linux cgroup reservation has effects before creation intent` (`state.go:272`): with
+      (c) `Linux cgroup reservation has effects before creation intent` (`linux_cgroup_journal.go:178`): with
       `CreateStarted == false` every listed effect is shadowed by an earlier block
       (leaf→leaf identity, helper→helper identity, launcher→launcher identity,
       launcher exit→launcher exit proof, gate→gate identity, helper exit→helper exit proof,
       abort with a disposition other than `neverCreated`→abort proof). Probe: unstarted reservation
       + leaf identity → `Linux cgroup reservation leaf identity is invalid`.
-      (d) `unresolved input command has an acknowledgement` (`state.go:6261`): it needs `pending`
+      (d) `unresolved input command has an acknowledgement` (`journal_validation.go:128`): it needs `pending`
       with `intent.Outcome == ""`, but `pending` compares against `acknowledgement.Outcome` and
-      `validAcknowledgement` (`state.go:6427`) requires a non-blank `Outcome`, so an empty-outcome
+      `validAcknowledgement` (`run_outbox.go:840`) requires a non-blank `Outcome`, so an empty-outcome
       acknowledgement is rejected earlier with `run journal is invalid`. Probe: empty-outcome
       acknowledgement → `run journal is invalid`; an applied acknowledgement leaves the fixture
       valid.
@@ -827,23 +842,23 @@ round 1) left two paths open here.
       earlier block or an earlier operand of the same condition already covers every journal that
       could satisfy it, so deleting it changes no verdict — a pin case cannot isolate it. Recorded
       instead of edited for the same move-only reason as the entry above.
-      (a) `journal.ContainmentCgroup != nil` in `validateContainmentScans` (`state.go:6132`): a
+      (a) `journal.ContainmentCgroup != nil` in `validateContainmentScans` (`containment_journal.go:626`): a
       journal carrying both a cgroup reservation and containment scans is rejected earlier by
-      `validateContainmentCgroup` (`state.go:6103` `journal.ContainmentScans != nil`).
-      (b) `handoff.SupervisorPID <= 0` in `validateContainmentScans` (`state.go:6141`): the earlier
+      `validateContainmentCgroup` (`containment_journal.go:597` `journal.ContainmentScans != nil`).
+      (b) `handoff.SupervisorPID <= 0` in `validateContainmentScans` (`containment_journal.go:628`): the earlier
       scan block rejects `scans.SupervisorPID <= 0`, and `scans.matchesHandoff` equates the two
       supervisor PIDs, so a non-positive handoff supervisor PID can never be the deciding operand.
-      (c) `journal.ContainmentAuthority != nil` in `validateContainmentHandoff` (`state.go:6080`):
-      a valid authority always carries `TargetPID > 0` (`state.go:6059`) equal to the journal PID,
+      (c) `journal.ContainmentAuthority != nil` in `validateContainmentHandoff` (`containment_journal.go:574`):
+      a valid authority always carries `TargetPID > 0` (`containment_journal.go:553`) equal to the journal PID,
       so `journal.HasProcessDetails()` is already true in the same condition whenever the authority
       operand could matter.
       (d) `journal.ContainmentAuthority != nil` in the aborted / pre-gate cgroup preconditions
-      (`state.go:6106`, `state.go:6110`): `validateContainmentAuthority` rejects a v1 authority
+      (`containment_journal.go:600`, `containment_journal.go:604`): `validateContainmentAuthority` rejects a v1 authority
       beside a cgroup reservation, and a v2 authority whose cgroup carries an abort or pre-gate
       proof fails `linuxCgroupReservationMatchesAuthority` (it requires both to be nil), so the
       authority block always errors first.
-      (e) `journal.ContainmentHandoff != nil` in the same two preconditions (`state.go:6107`,
-      `state.go:6111`): a v2 handoff passes only when its cgroup matches it with a gate, a bound
+      (e) `journal.ContainmentHandoff != nil` in the same two preconditions (`containment_journal.go:601`,
+      `containment_journal.go:605`): a v2 handoff passes only when its cgroup matches it with a gate, a bound
       launcher grant and no pre-gate receipt, while an aborted cgroup must have no gate and no
       launcher grant (`linuxCgroupReservationAbortMatches`) and a pre-gate receipt requires no abort
       proof; a v1 handoff beside any cgroup always errors in the handoff block.
@@ -851,8 +866,8 @@ round 1) left two paths open here.
       condition's live operands.
 
 - [ ] Fix the nil-pointer panic in `validateLinuxCloneCheckout`
-      (`daemon/internal/state/state.go:5113`). It dereferences `*seed`
-      (`linuxCloneCheckoutMatches(*intent, *seed, *checkout)`, `state.go:5124`) although
+      (`daemon/internal/state/linux_clone_validation.go:250`). It dereferences `*seed`
+      (`linuxCloneCheckoutMatches(*intent, *seed, *checkout)`, `linux_clone_validation.go:55`) although
       `journal.LinuxCloneSeedReceipt` is only tested as `seed != nil && …` earlier in the same
       validator, so a journal carrying `linux_clone_checkout_receipt` without
       `linux_clone_seed_receipt` panics instead of failing validation. Verified 2026-11-21 with a
@@ -866,8 +881,8 @@ round 1) left two paths open here.
       first-error strings.
 
 Decision note: rf-w2-09 left `validateJournalLeaseTerminalAndGrantInvariants`
-(`state.go:6184`) at cyclomatic complexity 25 and `validateJournalKeyScalarsAndProcessDetails`
-(`state.go:6036`) and `validateContainmentScans` (`state.go:6129`) at 24, against the wave's ≤25
+(`journal_validation.go:73`) at cyclomatic complexity 25 and `validateJournalKeyScalarsAndProcessDetails`
+(`journal_validation.go:53`) and `validateContainmentScans` (`containment_journal.go:623`) at 24, against the wave's ≤25
 acceptance. The next condition added to any of those three blocks must be split into a new helper
 instead of appended.
 
@@ -1295,9 +1310,9 @@ version pinned` section of `docs/archive/CLOSED-TODO.md`.
       `payload["error"]`; `queueTerminalTransitionWithRetry` (`daemon/internal/app/outbox.go:124-168`)
       retries `state.ErrProviderActionCapacity` forever (`minimumInterval`, log
       `queue_terminal_transition_failed`); the capacity error comes from
-      `saveJournalWithCapacityGuardLocked` (`daemon/internal/state/state.go:5326`) →
+      `saveJournalWithCapacityGuardLocked` (`daemon/internal/state/state.go:251`) →
       `validateJournalSaveCapacity` (`daemon/internal/state/provider_action.go:594-606`, 4 MiB check
-      at `:599`) and `saveJournalLocked` (`state.go:5305`, size check at `:5311`;
+      at `:599`) and `saveJournalLocked` (`state.go:237`, size check at `:241`;
       `maxJournalFileBytes = 4<<20`). rf-w3-09 (2026-11-22, drop-errcheck slice) joined the abandon
       result into the nine `startGoalAdmission` returns, and the `goal_admission` `queueFailure`
       call in `daemon/internal/app/app.go` passes that value through unchanged (read from source,
@@ -1551,18 +1566,51 @@ is fixed here; each bullet names what a follow-up has to re-derive.
 
 - [ ] Consolidate the duplicated Task/Run state sets behind one compile-time owner. After
       `refactor/rf-w4-07-goals-facade-phase1` (PR #233) the same literals are re-declared per
-      module: `@nonterminal_task_states` in `SymmetryControl.Goals` (`goals.ex`),
-      `SymmetryControl.Goals.RunFence`, `SymmetryControl.Goals.Internal` and
-      `SymmetryControl.Goals.ReadModel`; `@terminal_run_states` in `SymmetryControl.Goals` and
-      `SymmetryControl.Goals.HarnessSessions`; `@accounting_terminal_run_states` in those two plus
-      `SymmetryControl.Goals.ReadModel`, which derives it from that module's own
-      `@terminal_task_states`. The split mandated per-module copies ("module attributes travel
-      with their users") because the values feed compile-time query literals, so the SQL text
-      stays frozen; the drift risk is real: a state added to one copy only silently splits
-      transition policy from the read model. Next step (W5-14, the following goals.ex phase): a
-      `@moduledoc false` owner module exposing the sets as functions the others read at compile
-      time (`@x Owner.state_set()`), keeping every SQL literal byte-identical, plus one pinning
-      test that fails on divergence.
+      module. `refactor/rf-w5-14-goals-concepts-phase2` (2026-11-22) moved the copies into the
+      concept modules that use them and left the duplication in place, so the current homes are:
+      `@nonterminal_task_states` in `Goals.Admission`, `Goals.Budget`, `Goals.ContextAssembly`,
+      `Goals.Decisions`, `Goals.Internal`, `Goals.ReadModel`, `Goals.Reconciliation`,
+      `Goals.Recovery` and `Goals.RunFence`; `@terminal_run_states` in `Goals.Budget`,
+      `Goals.HarnessSessions`, `Goals.Recovery`, `Goals.Settlement` and `Goals.ValidationOutcome`;
+      `@accounting_terminal_run_states` in `Goals.Budget`, `Goals.HarnessSessions` and
+      `Goals.ReadModel` (the last deriving it from its own `@terminal_task_states`). The split
+      mandated per-module copies ("module attributes travel with their users") because the values
+      feed compile-time query literals, so the SQL text stays frozen; the drift risk is real: a
+      state added to one copy only silently splits transition policy from the read model.
+      Consolidation remains undone and is the next owner's item: a `@moduledoc false` owner module
+      exposing the sets as functions the others read at compile time (`@x Owner.state_set()`),
+      keeping every SQL literal byte-identical, plus one pinning test that fails on divergence.
+
+## rf-w5-14 goals-concepts phase 2 — deferred simplify findings (2026-11-22)
+
+- [ ] Apply the moved-lib simplifications the apply stage deferred (simplify report findings 7, 8,
+      13-28). Deferred because each rewrites a moved function body and would invalidate the recorded
+      per-function AST identity + string/atom control-flow move proof (contract clause 2) without a
+      re-derivation; take them as a dedicated cleanup slice that re-runs the AST comparison. Locations:
+      `goals/admission.ex:909-910` (`item_by_id` values never read; only `Map.keys` is used),
+      `goals/settlement.ex:691` (identity `external_observation_terminal!/3`, called at `:146`),
+      `goals/reconciliation.ex:308-339,345-367,369-389,511-548,644-668,693-702,1042-1190` (candidate
+      queries, blocker `Repo.exists?`, locked current-run lookup, lock+revalidate preambles),
+      `goals/admission.ex:279-304,347-459,474-476,509-613,812-825,1186-1189` (admission-limit gate,
+      snapshot->admission->task->reservation pipeline, model-profile gate, validation-producer chain),
+      `goals/handoff.ex:244-276,283-313`; `goals/budget.ex:73-89,299-308`;
+      `goals/goal_control.ex:36-38,104-106,347-348`;
+      `goals/commands.ex:162-167,226-233,278-283,293,374-379,404-529,900,1010-1030,1032-1037`;
+      `goals/plan_contracts.ex:38-39,55-77,117-126,132-140,286-299,338`;
+      `goals/settlement.ex:514-546,706-726,963,1135-1188`. Cross-module duplicates that would need a
+      new `@doc false` edge (the contract forbids new edges): `goals/settlement.ex:82-111` vs
+      `goals/validation_outcome.ex:50-77`; `goals/goal_control.ex:389-390` vs `goals/recovery.ex:440`
+      (persisted idempotency-key wire format, parsed at `goal_control.ex:358-367`).
+      Also not applied from the same report (F29 subset): the inline resource-keyed session fixture in
+      `test/symmetry_control/goals/commands_flow_test.exs` (no WorkItem exists at that point), the six
+      reconciliation policy maps (non-default `automatic_execution`/budget/parallel values), the run_fence
+      evidence builders (distinct payloads per kind) and the full request→resolve scope pairs (two
+      data-heavy call sites; their resolve halves now share `GoalsTestSupport.resolve_decision!/3`).
+- [ ] Decide the `settle_unstarted_task` replay response shape: `goals/settlement.ex:1069-1071` returns
+      `receipt.response` without `"event_sequence"` while the create path (`:1120`) and sibling replays
+      (`:125`, `goals/validation_outcome.ex:485-487`) add it; the settlement interface test normalizes the
+      difference away with `Map.drop`. Pre-existing asymmetry: either align the shape (observable change) or
+      pin it explicitly.
 
 ## Daemon app tests: the retained-resume attach-ready mark is unpinned (PR #234 review round 2)
 
@@ -1591,3 +1639,81 @@ is fixed here; each bullet names what a follow-up has to re-derive.
       the four members, the `grant()` fallback, and their population in
       `daemon/internal/app/goal_admission_tx.go` and
       `daemon/internal/app/linux_owner_witness_linux.go`.
+
+## Linux v2 owner hosts under the Ubuntu AppArmor userns restriction (2026-11-22)
+
+- [ ] Production Linux v2 owner hosts with `kernel.apparmor_restrict_unprivileged_userns=1` need a
+      per-program `userns` AppArmor profile for the launcher/gate (`scripts/install-linux-owner.sh`), or
+      the sysctl relaxed, to be specified by the D3 `harness.md` amendment / W5-02a. The Ubuntu default
+      transitions an unconfined `unshare(CLONE_NEWUSER)` caller into the capability-denying
+      `unprivileged_userns` profile, so the launcher/gate's later `drop_to_b`
+      (`daemon/native/linux-gate/c-gate/gate.c`) cannot proceed; the host prerequisite probe carries a
+      per-program exception for its own ephemeral binary, which does not cover production installs. The
+      native acceptance fixture (`scripts/ci/linux-v2-native-acceptance.sh`) needs the same exception
+      before its case sets can pass.
+
+## Contracts: A6 tightening — owner sign-off required (rf-a6-contracts-strictness-corpus, 2026-11-22)
+
+- [ ] Unify the Control response decode levels on `responseDecodeSchema`
+      (`daemon/internal/control/client.go`). The single entry `decodeResponseJSON` takes the level
+      explicitly (owner ruling L2=b, `goal-rf-a6-contracts-strictness-corpus.md`): the legacy and
+      typed levels reject duplicate members plus their typed checks, while the schema level also
+      applies the contracts raw-byte checks (UTF-8, escaped surrogates, number lexemes for the
+      envelope class) and the v1 envelope schema. Moving the legacy and typed callers to the schema
+      level needs recorded owner sign-off because it changes acceptance, fail-closed, for these raw
+      corpus rows (`contracts/fixtures/raw/`, `contracts/fixtures/manifest.json`):
+      `goal-command.raw-number-fractional`, `goal-command.raw-number-exponent`,
+      `goal-command.raw-number-unsafe-integer` and `goal-command.raw-invalid-utf8` are accepted by
+      the legacy and typed levels today and rejected by the schema level. The tightening artifact
+      must re-derive that set from a base-vs-head corpus run rather than from this list. Runtime
+      divergences the corpus records and this slice deliberately does not fix:
+      `goal-command.raw-duplicate-member-top-level` (Elixir's Jason keeps the first member),
+      `goal-command.raw-number-fractional` and `goal-command.raw-number-exponent` (Elixir accepts the
+      lexeme and its validator accepts the value), `goal-command.raw-bom-prefix` (the TS reader's
+      UTF-8 `TextDecoder` strips the leading BOM before `JSON.parse`) and
+      `goal-command.raw-number-negative-zero` (accepted by Go,
+      JS and Elixir; no runtime enforces the canonical `-0` to `0` form).
+
+## Linux v2 codex/claude containment case sets await their first dispatch (rf-w5-02a, 2026-11-22)
+
+- [ ] `codex_containment` and `claude_containment` exist in
+      `.github/workflows/linux-native-v2-acceptance.yml` and
+      `scripts/ci/linux-v2-native-acceptance.sh` (fresh witness plus one same-RunKey `native_release`
+      crash-replay leg per kind), but no dispatched run has exercised them yet: the only full proof
+      is the dispatch-only workflow on a qualifying host, so this slice's off-host gates stay
+      prerequisites and the D3 `harness.md` amendment cannot cite per-kind green runs for codex or
+      claude until a run is green with each kind's `manifest.json` binding its executable digest,
+      archive digest, version line and source tree digest plus the recorded
+      `containment.native_open_reached`. The
+      `shared` set's frozen opencode leg is excluded from the per-kind green gate while W6-04/D1
+      keeps its bytes frozen (Owner ruling F2, 2026-11-22, binding): a red frozen leg in a dispatch
+      is recorded as the F2-excluded leg, not edited. The fixture's AppArmor-userns question above
+      is unverified for the guest launcher
+      (its userns creation is a privileged root one, unlike the probe's ambient-cap worker): the
+      first dispatch records the real behavior before any fixture work is scheduled there.
+
+## Orchestration concept split (rf-w5-18, 2026-11-22)
+
+- [ ] Remove the duplicated `ContextSnapshot` read in the goal runtime match. The split moved the
+      read into `control/lib/symmetry_control/goals/eligibility.ex:128-135` (validation runtime ids
+      from the admitted snapshot); the same row is loaded again by task id in
+      `control/lib/symmetry_control/goals/settlement.ex:620` (`Repo.get/2`) and re-read with a lock
+      in `control/lib/symmetry_control/goals/validation_outcome.ex:312-318`; Goal admission locks
+      it through `goals/internal.ex:144-151`. The contract declared the removal out of scope, so
+      the duplicate survives the split unchanged.
+
+- [ ] Fold the three compile-time constant copies the split left, or assert them against each
+      other. Attributes cannot be imported, so each module that reads one declares it:
+      `@terminal_states` (`control/lib/symmetry_control/orchestration/registry.ex:6`,
+      `.../transitions.ex:4`), `@supervisory_commands` (`.../registry.ex:5`,
+      `.../commands.ex:4`, `.../transitions.ex:7`), `@capacity_bearing_states`
+      (`.../assignment.ex:4`, `.../task_reads.ex:4`). A drift between two copies changes
+      eligibility silently; a shared module or a compile-time assertion removes the risk.
+      (`@native_harness_kinds` was folded in the apply stage: `Assignment.next_goal_runtime/3`
+      consumes `Registry.native_harness_kinds/0`.)
+
+- [ ] Fold the `retry_binding` type copy: `@type retry_binding` (with its `@typedoc`) is declared in
+      `control/lib/symmetry_control/orchestration.ex:22-27` (typedoc at `:17`) for the facade's
+      public specs and again in `control/lib/symmetry_control/orchestration/task_reads.ex:333-338`
+      (typedoc at `:328`) for the moved specs. A drifted copy would mis-document the retry
+      projection without failing a test.

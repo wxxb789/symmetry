@@ -5010,6 +5010,9 @@ func testVerifiedNativeCapabilities(kind harness.Kind) harness.Capabilities {
 	var adapterVersion string
 	protocolVersion := 1
 	switch kind {
+	case harness.KindClaude:
+		nativeVersion = claude.TestedVersion
+		adapterVersion = "symmetry-daemon:test-claude"
 	case harness.KindCodex:
 		nativeVersion = codex.TestedVersion
 		adapterVersion = "symmetry-daemon:test-codex"

@@ -848,9 +848,10 @@ sweep)` section below and moved on 2026-11-22 from branch
       so the searches are the primary record.
 
 - [ ] Revalidate the unused `replay_task` binding at
-      `control/test/symmetry_control/orchestration_goal_admission_test.exs:1059`
-      and `task` bindings at lines `2079` and `2170`. The 0007a `mix test` run
-      reported these compiler warnings (`.tmp/0007a-session/control-test.log`).
+      `git show 66bc9dcb:control/test/symmetry_control/orchestration_goal_admission_test.exs`
+      line `1370` and `task` bindings at lines `2477` and `2568`. The 0007a `mix test` run
+      reported these compiler warnings at its own coordinates `1059`, `2079` and `2170`
+      (`.tmp/0007a-session/control-test.log`).
       Preserve the fixture calls and leave any binding cleanup to separate
       maintenance.
       The 0009 full Control run reports the same bindings at lines `1351`,
@@ -869,9 +870,10 @@ sweep)` section below and moved on 2026-11-22 from branch
 
 - [ ] Revalidate the unused default `kind \\ "omp"` on private
       `register_unverified_omp_runtime/2` in
-      `control/test/symmetry_control/orchestration_goal_admission_test.exs:3651`.
-      The 0009 full Control run reports that the optional default is never used
-      (`.tmp/0009/control-full.log`). Preserve the runtime fixture behavior and
+      `git show 66bc9dcb:control/test/symmetry_control/orchestration_goal_admission_test.exs`
+      line `3684` (the definition at that revision; the 0009 full Control run reported the
+      never-used optional default at its own coordinate `3651` in `.tmp/0009/control-full.log`).
+      Preserve the runtime fixture behavior and
       leave cleanup and verification to separate maintenance.
       Closed by branch `chore/deadcode-revalidation` (2026-11-19): the default was
       removed (`defp register_unverified_omp_runtime(label, kind)`); the function
@@ -2769,7 +2771,7 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
 
 - [ ] Class scan of the other paginated reads (2026-11-18). The Goal receipt list is bound by
       construction: its pages are keyed by their own `after` sequence numbers
-      (`frontend/src/features/goals/detail.tsx`, `ReadModel.events/2`), which are append-only and
+      (`frontend/src/features/goals/detail.tsx` and `ReadModel.events/2`), which are append-only and
       re-read under their own keys, so a page is never served under a boundary it was not fetched
       from. The chat conversation binds its pages by the boundary message's id (`chatHistoryView`'s
       gap in `frontend/src/features/chat/presentation.ts`, rendered by
@@ -3193,16 +3195,20 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
       (`frontend/src/features/goals/detail.tsx:124`), the page's last settled read, while its sibling
       senders re-read at submit through `servedEnvelope` (`:77`, used by the generic command `:86` and by
       the plan admission `:129`), so a Goal advance between the last settled read and the press makes
-      `ensure_preconditions!/2` (`control/lib/symmetry_control/goals.ex:8571-8585`) answer 409 `stale`
-      (`control/lib/symmetry_control_web/protocol.ex:33`) and the card renders "The goal changed since
-      this page loaded" (`detail.tsx:187`) for an action the operator would simply repeat. The writer
+      `ensure_preconditions!/2` (`control/lib/symmetry_control/goals/events_receipts.ex:347-363`)
+      answer 409 `stale` (`control/lib/symmetry_control_web/protocol.ex:33`) and the card renders
+      "The goal changed since this page loaded" (`detail.tsx:187`) for an action the operator would
+      simply repeat. The writer
       that advances the Goal row's `lock_version` is identified, which settles the reachability half of
-      the original note: every accepted command appends an event through `append_event!/7`
-      (`goals.ex:8308`, explicit `Changeset.optimistic_lock(:lock_version)` at `:8359`), the transition
+      the original note: every accepted command appends an event through `append_event!/8`
+      (`control/lib/symmetry_control/goals/events_receipts.ex:65`, explicit
+      `Changeset.optimistic_lock(:lock_version)` at `:134`), the transition
       and reconcile writers go through `Goal.transition_changeset`
       (`control/lib/symmetry_control/goals/schemas.ex:65`), and the amend branch bumps explicitly
-      (`goals.ex:6338`); no `update_all`/`inc` writer targets the `goals` table (the only such sites
-      in `goals.ex` update `Command` rows at `:5309` and `GoalDecision` rows at `:6327-6333`; the
+      (`control/lib/symmetry_control/goals/commands.ex:458`); no `update_all`/`inc` writer targets the
+      `goals` table (the only such sites under `control/lib/symmetry_control/goals/` update `Command`
+      rows at `control/lib/symmetry_control/goals/goal_control.ex:395` and `GoalDecision` rows at
+      `control/lib/symmetry_control/goals/commands.ex:447`; the
       seven other sites under `control/lib` update `ProjectResource`, `WorkItem`, `Run` and `Command`
       rows), so no writer bypasses the optimistic lock. An asynchronous reconcile advance
       alone can produce the refusal, which is what makes the page-held version worth revisiting; fix

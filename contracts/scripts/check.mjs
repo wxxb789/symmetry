@@ -37,6 +37,33 @@ const presentationReadSchemas = new Set([
   "connections-read",
 ]);
 
+// A class this decoder accepts today must be declared in the row's runtime_divergence.
+const wireErrorCodes = new Map([
+  ["duplicate_json_member", "duplicate_json_member"],
+  ["noncanonical_number", "noncanonical_number"],
+  ["unsafe_integer", "noncanonical_number"],
+  ["leading_zero", "invalid_json"],
+  ["nonfinite_number", "nonfinite_number"],
+  ["invalid_utf8", "invalid_utf8"],
+  ["trailing_value", "invalid_json"],
+  ["trailing_garbage", "invalid_json"],
+]);
+
+// The corpus vocabulary, checked before either acceptance branch: an accepted
+// row never consults wireErrorCodes, so an unknown class would pass vacuously.
+const wireErrorClasses = new Set([
+  "duplicate_json_member",
+  "noncanonical_number",
+  "unsafe_integer",
+  "leading_zero",
+  "negative_zero",
+  "nonfinite_number",
+  "invalid_utf8",
+  "bom",
+  "trailing_value",
+  "trailing_garbage",
+]);
+
 const relativePath = (filePath) => path.relative(ROOT_DIR, filePath);
 
 // Read projections permit additive presentation fields and finite presentation
@@ -68,12 +95,15 @@ const numberIssueFromError = (error) => {
   };
 };
 
-const readFixtureJson = async (filePath, schema) => {
+const readFixtureJson = async (filePath, schema, expectedWireError) => {
   let value;
   try {
     const parseJson = isReadProjection(schema) ? parsePresentationJson : parseWireJson;
     value = parseJson(await fs.readFile(filePath));
   } catch (error) {
+    if (error instanceof WireJsonError && expectedWireError !== undefined) {
+      return { value: null, issue: { reason: error.message, lexeme: "", code: error.code } };
+    }
     if (error instanceof WireJsonError && error.code === "noncanonical_number") {
       return { value: null, issue: numberIssueFromError(error) };
     }
@@ -171,13 +201,35 @@ const main = async () => {
     if (ids.has(fixture.id)) throw new Error(`duplicate fixture id: ${fixture.id}`);
     ids.add(fixture.id);
     for (const tag of fixture.tags ?? []) tags.add(tag);
+    if (fixture.wire_error !== undefined && !fixture.path?.startsWith("raw/"))
+      throw new Error(`fixture ${fixture.id} declares wire_error outside raw/`);
+    if (fixture.wire_error !== undefined && !wireErrorClasses.has(fixture.wire_error))
+      throw new Error(`fixture ${fixture.id} has unknown wire_error class ${fixture.wire_error}`);
     const schema = schemas.get(fixture.schema);
     if (!schema)
       throw new Error(`fixture ${fixture.id} references unknown schema ${fixture.schema}`);
     const fixturePath = path.join(ROOT_DIR, "contracts", "fixtures", fixture.path);
-    const fixtureDocument = await readFixtureJson(fixturePath, fixture.schema);
+    const fixtureDocument = await readFixtureJson(fixturePath, fixture.schema, fixture.wire_error);
     const expectedSchemaValid = fixture.schema_valid ?? fixture.valid;
     if (fixtureDocument.issue) {
+      if (fixture.wire_error !== undefined) {
+        if (fixture.runtime_divergence?.ts === "accepts") {
+          throw new Error(
+            `fixture ${fixture.id} declares a ts acceptance, but the raw decoder rejected it: ${fixtureDocument.issue.reason}`,
+          );
+        }
+        const expectedWireError = wireErrorCodes.get(fixture.wire_error);
+        if (expectedWireError === undefined)
+          throw new Error(
+            `fixture ${fixture.id} rejected wire_error ${fixture.wire_error} with no mapped TS code`,
+          );
+        if (fixtureDocument.issue.code !== expectedWireError) {
+          throw new Error(
+            `fixture ${fixture.id} expected raw code ${expectedWireError}, got ${fixtureDocument.issue.code}: ${fixtureDocument.issue.reason}`,
+          );
+        }
+        continue;
+      }
       if (expectedSchemaValid) {
         throw new Error(
           `fixture ${fixture.id} expected schema_valid=true, but the fixture was rejected before JSON.parse: ${fixtureDocument.issue.reason}: ${fixtureDocument.issue.lexeme}`,
@@ -185,6 +237,10 @@ const main = async () => {
       }
       continue;
     }
+    if (fixture.wire_error !== undefined && fixture.runtime_divergence?.ts !== "accepts")
+      throw new Error(
+        `fixture ${fixture.id} declares wire_error ${fixture.wire_error}, but the raw decoder accepted it`,
+      );
     const data = fixtureDocument.value;
     const validate = ajv.getSchema(schema.$id);
     if (!validate) throw new Error(`validator not registered for ${fixture.schema}`);
@@ -234,21 +290,25 @@ const main = async () => {
 
   // Every fixture gate reads the manifest, so a file no row names would be
   // never validated; hold the served fixture directories to exactly one row.
-  const manifestPathCounts = new Map();
+  const manifestPathRows = new Map();
   for (const fixture of manifest.fixtures) {
-    manifestPathCounts.set(fixture.path, (manifestPathCounts.get(fixture.path) ?? 0) + 1);
+    manifestPathRows.set(fixture.path, [...(manifestPathRows.get(fixture.path) ?? []), fixture]);
   }
-  for (const directory of ["valid", "invalid"]) {
+  for (const directory of ["valid", "invalid", "raw"]) {
     const directoryPath = path.join(ROOT_DIR, "contracts", "fixtures", directory);
     for (const entry of await fs.readdir(directoryPath, { withFileTypes: true })) {
       // The manifest describes `.json` fixtures; a gitignored OS artifact
       // (`.DS_Store`, an editor swap file) is not a fixture and must not fail
       // this gate.
       if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
-      const rows = manifestPathCounts.get(`${directory}/${entry.name}`) ?? 0;
-      if (rows !== 1)
+      const rows = manifestPathRows.get(`${directory}/${entry.name}`) ?? [];
+      if (rows.length !== 1)
         throw new Error(
-          `fixture file ${relativePath(path.join(directoryPath, entry.name))} must have exactly one manifest row, found ${rows}`,
+          `fixture file ${relativePath(path.join(directoryPath, entry.name))} must have exactly one manifest row, found ${rows.length}`,
+        );
+      if (directory === "raw" && rows[0].wire_error === undefined)
+        throw new Error(
+          `raw fixture ${relativePath(path.join(directoryPath, entry.name))} must declare wire_error`,
         );
     }
   }
@@ -283,6 +343,7 @@ const main = async () => {
     "evidence-batch-conflict-details",
     "disposition",
     "conflict-disposition",
+    "raw-bytes",
   ];
   const missingTags = requiredTags.filter((tag) => !tags.has(tag));
   if (missingTags.length > 0)

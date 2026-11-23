@@ -5,10 +5,8 @@ defmodule SymmetryControlWeb.DaemonController do
 
   alias SymmetryControl.Goals
   alias SymmetryControl.Goals.ContractValidation
-  alias SymmetryControl.Integrations.ProviderAccess
   alias SymmetryControl.Orchestration
   alias SymmetryControl.Orchestration.Scheduler
-  alias SymmetryControl.Repo
   alias SymmetryControlWeb.Plugs.StrictEvidenceJSON
   alias SymmetryControlWeb.Protocol
 
@@ -107,7 +105,8 @@ defmodule SymmetryControlWeb.DaemonController do
       |> Map.put("claim_id", claim_id)
 
     with :ok <- owns_run(conn, run_id),
-         {:ok, {run, task, provider_access}} <- claim_with_provider_access(run_id, request) do
+         {:ok, {run, task, provider_access}} <-
+           Orchestration.Claims.claim_run(run_id, request, lease_duration_ms: lease_duration_ms()) do
       response =
         Protocol.claimed_run(run, task, provider_access, claim_response_time(conn))
 
@@ -131,62 +130,6 @@ defmodule SymmetryControlWeb.DaemonController do
       _ -> DateTime.utc_now()
     end
   end
-
-  defp claim_with_provider_access(run_id, request) do
-    with {:ok, owner} <- Orchestration.claim_owner(run_id) do
-      owner |> claim_in_transaction(run_id, request) |> claim_provider_access_result()
-    end
-  end
-
-  defp claim_in_transaction(owner, run_id, request) do
-    Repo.transaction(fn ->
-      # Scope locking precedes a new claim to preserve the established
-      # Goal -> resource lock order. A replay ignores a now-stale scope result.
-      provider_scope = ProviderAccess.lock_claim_scope(run_id)
-
-      with {:ok, run, disposition} <-
-             claim_with_owner(owner, run_id, request, lease_duration_ms: lease_duration_ms()),
-           {:ok, %{task: task}} <- Orchestration.task_snapshot(run.task_id),
-           {:ok, provider_access} <-
-             provider_access_for_claim(provider_scope, disposition, run, task) do
-        {run, task, provider_access, disposition}
-      else
-        {:error, reason} -> Repo.rollback(reason)
-      end
-    end)
-  end
-
-  defp claim_with_owner(:goal, run_id, request, opts),
-    do: Goals.claim_with_disposition(run_id, request, opts)
-
-  defp claim_with_owner(:legacy, run_id, request, opts),
-    do: Orchestration.claim_with_disposition(run_id, request, opts)
-
-  defp claim_provider_access_result(result) do
-    case result do
-      {:ok, {run, task, provider_access, :created}} ->
-        Orchestration.emit_claimed(run)
-        {:ok, {run, task, provider_access}}
-
-      {:ok, {run, task, provider_access, :replayed}} ->
-        {:ok, {run, task, provider_access}}
-
-      error ->
-        error
-    end
-  end
-
-  defp provider_access_for_claim(_scope, :replayed, run, task),
-    do: ProviderAccess.replay_claim_access(run, task)
-
-  defp provider_access_for_claim({:ok, scope}, :created, run, task) do
-    with {:ok, provider_access} <- ProviderAccess.issue(scope, run, task),
-         {:ok, _run} <- ProviderAccess.persist_claim_access(run, provider_access) do
-      {:ok, provider_access}
-    end
-  end
-
-  defp provider_access_for_claim({:error, reason}, :created, _run, _task), do: {:error, reason}
 
   def heartbeat_run(conn, _params) do
     run_id = path_param(conn, "run_id")
