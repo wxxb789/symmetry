@@ -30,8 +30,7 @@ defmodule SymmetryControl.Goals.ContractFixtureManifestTest do
     "evidence" => &ContractValidation.validate_evidence/2,
     "evidence-batch" => &ContractValidation.validate_evidence_batch/2,
     "evidence-batch-response" => &ContractValidation.validate_evidence_batch_response/2,
-    "evidence-batch-conflict-details" =>
-      &ContractValidation.validate_evidence_batch_conflict_details/2,
+    "evidence-batch-conflict-details" => &ContractValidation.validate_evidence_batch_conflict_details/2,
     "goal-command" => &ContractValidation.validate_goal_command/2,
     "goal-create" => &ContractValidation.validate_goal_create/2,
     "goal-revision" => &ContractValidation.validate_goal_revision/2,
@@ -131,22 +130,18 @@ defmodule SymmetryControl.Goals.ContractFixtureManifestTest do
     validator.(data, schema_root: @schema_root)
   end
 
-  defp assert_expected_semantic_error(%{"semantic_error" => expected}, result)
-       when is_binary(expected),
-       do: assert_error_code(result, expected)
+  defp assert_expected_semantic_error(%{"semantic_error" => expected}, result) when is_binary(expected),
+    do: assert_error_code(result, expected)
 
-  defp assert_expected_semantic_error(%{"semantic_error_code" => expected}, result)
-       when is_binary(expected),
-       do: assert_error_code(result, expected)
+  defp assert_expected_semantic_error(%{"semantic_error_code" => expected}, result) when is_binary(expected),
+    do: assert_error_code(result, expected)
 
   defp assert_expected_semantic_error(_fixture, _result), do: :ok
 
-  defp assert_error_code({:error, code}, expected) when is_atom(code),
-    do: assert(Atom.to_string(code) == expected)
+  defp assert_error_code({:error, code}, expected) when is_atom(code), do: assert(Atom.to_string(code) == expected)
 
   defp assert_error_code({:error, {code, _details}}, expected) when is_atom(code),
     do: assert(Atom.to_string(code) == expected)
 
-  defp assert_error_code(result, expected),
-    do: flunk("expected semantic error #{expected}, got #{inspect(result)}")
+  defp assert_error_code(result, expected), do: flunk("expected semantic error #{expected}, got #{inspect(result)}")
 end

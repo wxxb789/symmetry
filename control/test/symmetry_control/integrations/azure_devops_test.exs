@@ -68,15 +68,14 @@ defmodule SymmetryControl.Integrations.AzureDevOpsTest do
         method: :get,
         url_contains: "https://dev.azure.com/acme/_apis/projects?",
         headers: %{"authorization" => auth},
-        response:
-          {:ok, 200, %{}, %{"count" => 1, "value" => [%{"id" => "p1", "name" => "Platform"}]}}
+        response: {:ok, 200, %{}, %{"count" => 1, "value" => [%{"id" => "p1", "name" => "Platform"}]}}
       },
       %{
         method: :post,
         url_contains: "/acme/Platform/_apis/wit/wiql?",
         url_excludes: ["%24top", "$top"],
         body_assertion: fn body ->
-          unless body["query"] =~ "System.TeamProject", do: raise("missing project query")
+          if !(body["query"] =~ "System.TeamProject"), do: raise("missing project query")
         end,
         response: {:ok, 200, %{}, %{"workItems" => [%{"id" => 77}]}}
       },
@@ -84,7 +83,7 @@ defmodule SymmetryControl.Integrations.AzureDevOpsTest do
         method: :post,
         url_contains: "/acme/Platform/_apis/wit/workitemsbatch?",
         body_assertion: fn body ->
-          unless body["ids"] == [77], do: raise("unexpected work item ids")
+          if body["ids"] != [77], do: raise("unexpected work item ids")
         end,
         response:
           {:ok, 200, %{},
@@ -474,8 +473,7 @@ defmodule SymmetryControl.Integrations.AzureDevOpsTest do
     HTTPStub.expect([
       %{
         method: :get,
-        url_contains:
-          "/acme/Platform%20Team/_apis/git/repositories/symmetry%20repo/pullrequests/84?",
+        url_contains: "/acme/Platform%20Team/_apis/git/repositories/symmetry%20repo/pullrequests/84?",
         response:
           {:ok, 200, %{},
            %{
@@ -504,8 +502,7 @@ defmodule SymmetryControl.Integrations.AzureDevOpsTest do
     }
 
     item = %{
-      pull_request_url:
-        "https://dev.azure.com/acme/Platform%20Team/_git/symmetry%20repo/pullrequest/84"
+      pull_request_url: "https://dev.azure.com/acme/Platform%20Team/_git/symmetry%20repo/pullrequest/84"
     }
 
     assert {:ok, delivery} = AzureDevOps.sync_delivery(connection, resource, item)
@@ -609,13 +606,13 @@ defmodule SymmetryControl.Integrations.AzureDevOpsTest do
         method: :post,
         url_contains: "/acme/Platform/_apis/git/repositories/symmetry/pullrequests?",
         body_assertion: fn body ->
-          unless body == %{
-                   "sourceRefName" => "refs/heads/codex/goal-3",
-                   "targetRefName" => "refs/heads/main",
-                   "title" => "Connect providers",
-                   "description" => "Typed action"
-                 },
-                 do: raise("unexpected Azure pull request body")
+          if body != %{
+               "sourceRefName" => "refs/heads/codex/goal-3",
+               "targetRefName" => "refs/heads/main",
+               "title" => "Connect providers",
+               "description" => "Typed action"
+             },
+             do: raise("unexpected Azure pull request body")
         end,
         response:
           {:ok, 201, %{},
@@ -680,11 +677,11 @@ defmodule SymmetryControl.Integrations.AzureDevOpsTest do
         method: :patch,
         url_contains: "/acme/Platform/_apis/git/repositories/symmetry/pullrequests/84?",
         body_assertion: fn body ->
-          unless body == %{
-                   "title" => "Connect providers",
-                   "description" => "Reconciled body"
-                 },
-                 do: raise("existing Azure pull request was not reconciled")
+          if body != %{
+               "title" => "Connect providers",
+               "description" => "Reconciled body"
+             },
+             do: raise("existing Azure pull request was not reconciled")
         end,
         response:
           {:ok, 200, %{},
@@ -752,11 +749,11 @@ defmodule SymmetryControl.Integrations.AzureDevOpsTest do
         method: :patch,
         url_contains: "/acme/Platform/_apis/git/repositories/symmetry/pullrequests/84?",
         body_assertion: fn body ->
-          unless body == %{
-                   "title" => "Connect providers",
-                   "description" => "Reconciled body"
-                 },
-                 do: raise("raced Azure pull request was not reconciled")
+          if body != %{
+               "title" => "Connect providers",
+               "description" => "Reconciled body"
+             },
+             do: raise("raced Azure pull request was not reconciled")
         end,
         response: {:ok, 200, %{}, existing}
       }
@@ -827,7 +824,7 @@ defmodule SymmetryControl.Integrations.AzureDevOpsTest do
         method: :patch,
         url_contains: "/acme/Platform/_apis/git/repositories/symmetry/pullrequests/84?",
         body_assertion: fn body ->
-          unless body == %{"title" => "Updated title", "description" => "Updated body"},
+          if body != %{"title" => "Updated title", "description" => "Updated body"},
             do: raise("unexpected Azure pull request update")
         end,
         response:
@@ -849,8 +846,7 @@ defmodule SymmetryControl.Integrations.AzureDevOpsTest do
                %{account_ref: "acme", capabilities: ["changes"]},
                %{kind: "repository", external_ref: "Platform/symmetry"},
                %{
-                 external_pull_request_url:
-                   "https://dev.azure.com/acme/Platform/_git/symmetry/pullrequest/84"
+                 external_pull_request_url: "https://dev.azure.com/acme/Platform/_git/symmetry/pullrequest/84"
                },
                "change.update",
                %{"title" => "Updated title", "body" => "Updated body"},
@@ -884,8 +880,7 @@ defmodule SymmetryControl.Integrations.AzureDevOpsTest do
                connection,
                resource,
                %{
-                 external_pull_request_url:
-                   "https://dev.azure.com/acme/Other/_git/repo/pullrequest/84"
+                 external_pull_request_url: "https://dev.azure.com/acme/Other/_git/repo/pullrequest/84"
                },
                "change.update",
                %{"title" => "Cannot escape binding"},
@@ -897,8 +892,7 @@ defmodule SymmetryControl.Integrations.AzureDevOpsTest do
                connection,
                resource,
                %{
-                 external_pull_request_url:
-                   "https://dev.azure.com/acme/Platform/_git/symmetry/pullrequest/84"
+                 external_pull_request_url: "https://dev.azure.com/acme/Platform/_git/symmetry/pullrequest/84"
                },
                "change.update",
                %{"title" => "No branch mutation", "target_branch" => "other"},
@@ -910,14 +904,12 @@ defmodule SymmetryControl.Integrations.AzureDevOpsTest do
                connection,
                resource,
                %{
-                 external_pull_request_url:
-                   "https://dev.azure.com/acme/Platform/_git/symmetry/pullrequest/84"
+                 external_pull_request_url: "https://dev.azure.com/acme/Platform/_git/symmetry/pullrequest/84"
                },
                "change.update",
                %{
                  "title" => "Cannot change another PR",
-                 "pull_request_url" =>
-                   "https://dev.azure.com/acme/Platform/_git/symmetry/pullrequest/85"
+                 "pull_request_url" => "https://dev.azure.com/acme/Platform/_git/symmetry/pullrequest/85"
                },
                []
              )

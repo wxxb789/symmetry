@@ -1,5 +1,15 @@
 import Config
 
+# Do not include metadata nor timestamps in development logs
+config :logger, :default_formatter, format: "[$level] $message\n"
+
+# Initialize plugs at runtime for faster development compilation
+config :phoenix, :plug_init_mode, :runtime
+
+# Set a higher stacktrace during development. Avoid configuring such
+# in production as building large stacktraces may be expensive.
+config :phoenix, :stacktrace_depth, 20
+
 # Configure your database
 config :symmetry_control, SymmetryControl.Repo,
   username: System.get_env("POSTGRES_USER", "postgres"),
@@ -52,13 +62,3 @@ config :symmetry_control, SymmetryControlWeb.Endpoint,
 
 # Enable dev routes for dashboard and mailbox
 config :symmetry_control, dev_routes: true
-
-# Do not include metadata nor timestamps in development logs
-config :logger, :default_formatter, format: "[$level] $message\n"
-
-# Set a higher stacktrace during development. Avoid configuring such
-# in production as building large stacktraces may be expensive.
-config :phoenix, :stacktrace_depth, 20
-
-# Initialize plugs at runtime for faster development compilation
-config :phoenix, :plug_init_mode, :runtime

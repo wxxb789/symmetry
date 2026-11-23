@@ -13,7 +13,7 @@ defmodule SymmetryControlWeb.ChatControllerTest do
              |> get("/portal/api/chat?scope=workspace")
              |> json_response(401)
 
-    protected = api_conn() |> Map.update!(:private, &Map.delete(&1, :plug_skip_csrf_protection))
+    protected = Map.update!(api_conn(), :private, &Map.delete(&1, :plug_skip_csrf_protection))
 
     assert_raise Plug.CSRFProtection.InvalidCSRFTokenError, fn ->
       post(protected, "/portal/api/chat/messages", %{

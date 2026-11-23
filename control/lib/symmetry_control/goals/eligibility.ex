@@ -1,20 +1,20 @@
 defmodule SymmetryControl.Goals.Eligibility do
   @moduledoc false
 
-  @goal_assignment_scan_page_size 32
-  @sha256 ~r/\Asha256:[0-9a-f]{64}\z/
-  @validation_profile_name ~r/\A[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\z/
-
   import Ecto.Query
 
   alias SymmetryControl.Goals.ContextSnapshot
   alias SymmetryControl.Goals.Goal
-  alias SymmetryControl.Workspaces.ProjectResource
-  alias SymmetryControl.Repo
   alias SymmetryControl.Orchestration.Run
   alias SymmetryControl.Orchestration.Runtime
   alias SymmetryControl.Orchestration.Task
+  alias SymmetryControl.Repo
+  alias SymmetryControl.Workspaces.ProjectResource
   alias SymmetryControl.Workspaces.WorkItem
+
+  @goal_assignment_scan_page_size 32
+  @sha256 ~r/\Asha256:[0-9a-f]{64}\z/
+  @validation_profile_name ~r/\A[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\z/
 
   @doc false
   def candidate_task_query(current, cursor) do
@@ -59,8 +59,7 @@ defmodule SymmetryControl.Goals.Eligibility do
   end
 
   @doc false
-  def next_goal_task_candidate_page(current, cursor),
-    do: Repo.all(candidate_task_query(current, cursor))
+  def next_goal_task_candidate_page(current, cursor), do: Repo.all(candidate_task_query(current, cursor))
 
   @doc false
   def goal_task_current?(goal, task) do
@@ -69,8 +68,7 @@ defmodule SymmetryControl.Goals.Eligibility do
          (goal.state == "active" and task.purpose != "plan"))
   end
 
-  def planning_task?(%Task{purpose: "plan", work_item_id: nil, validation_of_task_id: nil}),
-    do: true
+  def planning_task?(%Task{purpose: "plan", work_item_id: nil, validation_of_task_id: nil}), do: true
 
   def planning_task?(_task), do: false
 
@@ -82,7 +80,7 @@ defmodule SymmetryControl.Goals.Eligibility do
       |> value(:resource_id)
       |> case do
         resource_id when is_binary(resource_id) ->
-          if valid_uuid?(resource_id), do: resource_id, else: nil
+          if valid_uuid?(resource_id), do: resource_id
 
         _ ->
           nil
@@ -90,8 +88,7 @@ defmodule SymmetryControl.Goals.Eligibility do
     end
   end
 
-  def goal_task_repository_resource_id(_task, %WorkItem{} = item),
-    do: item.repository_resource_id
+  def goal_task_repository_resource_id(_task, %WorkItem{} = item), do: item.repository_resource_id
 
   def goal_task_repository_resource_id(_task, _item), do: nil
 
@@ -150,15 +147,14 @@ defmodule SymmetryControl.Goals.Eligibility do
 
   def validation_binding_runtime_ids([]), do: {:ok, nil}
 
-  def validation_binding_runtime_ids(bindings),
-    do: intersect_validation_binding_runtime_ids(bindings)
+  def validation_binding_runtime_ids(bindings), do: intersect_validation_binding_runtime_ids(bindings)
 
   def intersect_validation_binding_runtime_ids(bindings) do
     with true <- Enum.all?(bindings, &valid_validation_binding?/1),
-         identities <- Enum.map(bindings, &{value(&1, :profile_name), value(&1, :kind)}),
+         identities = Enum.map(bindings, &{value(&1, :profile_name), value(&1, :kind)}),
          true <- length(identities) == MapSet.size(MapSet.new(identities)) do
       bindings
-      |> Enum.map(&(value(&1, :allowed_runtime_ids) |> MapSet.new()))
+      |> Enum.map(&(&1 |> value(:allowed_runtime_ids) |> MapSet.new()))
       |> Enum.reduce_while(nil, fn runtime_ids, intersection ->
         intersection =
           if is_nil(intersection),
@@ -202,8 +198,7 @@ defmodule SymmetryControl.Goals.Eligibility do
   def canonical_runtime_uuid?(_value), do: false
 
   @doc false
-  def goal_subject_matches_resource?(%Task{} = task, repository_resource_id)
-      when is_binary(repository_resource_id) do
+  def goal_subject_matches_resource?(%Task{} = task, repository_resource_id) when is_binary(repository_resource_id) do
     subject = value(task.input || %{}, :subject)
     is_map(subject) and value(subject, :resource_id) == repository_resource_id
   end
@@ -236,8 +231,7 @@ defmodule SymmetryControl.Goals.Eligibility do
   end
 
   @doc false
-  def task_allowed_runtime_ids(%Task{goal_id: goal_id, allowed_runtime_ids: runtime_ids})
-      when not is_nil(goal_id) do
+  def task_allowed_runtime_ids(%Task{goal_id: goal_id, allowed_runtime_ids: runtime_ids}) when not is_nil(goal_id) do
     cond do
       not is_list(runtime_ids) ->
         :invalid
@@ -294,8 +288,7 @@ defmodule SymmetryControl.Goals.Eligibility do
   @doc false
   def value(map, key, default \\ nil)
 
-  def value(map, key, default) when is_map(map),
-    do: Map.get(map, key, Map.get(map, Atom.to_string(key), default))
+  def value(map, key, default) when is_map(map), do: Map.get(map, key, Map.get(map, Atom.to_string(key), default))
 
   def value(_, _key, default), do: default
 end

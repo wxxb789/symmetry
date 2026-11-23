@@ -2,20 +2,17 @@ defmodule SymmetryControl.Goals.ChangesetValidatorsTest do
   use ExUnit.Case, async: true
 
   alias Ecto.Changeset
-
-  alias SymmetryControl.Goals.{
-    ContextSnapshot,
-    GoalEvent,
-    GoalExternalWait,
-    GoalDecision,
-    GoalRevision,
-    HarnessSessionAttachReceipt,
-    HarnessSessionStopReceipt,
-    RunEvidence,
-    RunUsage,
-    WorkDependency,
-    WorkOutcome
-  }
+  alias SymmetryControl.Goals.ContextSnapshot
+  alias SymmetryControl.Goals.GoalDecision
+  alias SymmetryControl.Goals.GoalEvent
+  alias SymmetryControl.Goals.GoalExternalWait
+  alias SymmetryControl.Goals.GoalRevision
+  alias SymmetryControl.Goals.HarnessSessionAttachReceipt
+  alias SymmetryControl.Goals.HarnessSessionStopReceipt
+  alias SymmetryControl.Goals.RunEvidence
+  alias SymmetryControl.Goals.RunUsage
+  alias SymmetryControl.Goals.WorkDependency
+  alias SymmetryControl.Goals.WorkOutcome
 
   @uuid "00000000-0000-0000-0000-000000000001"
   @digest :binary.copy(<<1>>, 32)
@@ -34,24 +31,19 @@ defmodule SymmetryControl.Goals.ChangesetValidatorsTest do
 
   defp digest_messages do
     [
-      {"ContextSnapshot.content_hash",
-       fn -> ContextSnapshot.changeset(%ContextSnapshot{}, %{content_hash: "short"}) end,
+      {"ContextSnapshot.content_hash", fn -> ContextSnapshot.changeset(%ContextSnapshot{}, %{content_hash: "short"}) end,
        :content_hash, "must be a 32-byte digest"},
-      {"RunEvidence.subject_hash",
-       fn -> RunEvidence.changeset(%RunEvidence{}, %{subject_hash: "short"}) end, :subject_hash,
-       "must be a 32-byte digest"},
-      {"WorkOutcome.subject_hash",
-       fn -> WorkOutcome.changeset(%WorkOutcome{}, %{subject_hash: "short"}) end, :subject_hash,
-       "must be a 32-byte digest"},
-      {"GoalDecision.action_hash",
-       fn -> GoalDecision.changeset(%GoalDecision{}, %{action_hash: "short"}) end, :action_hash,
-       "must be a 32-byte digest"},
-      {"GoalEvent.request_hash",
-       fn -> GoalEvent.changeset(%GoalEvent{}, %{request_hash: "short"}) end, :request_hash,
+      {"RunEvidence.subject_hash", fn -> RunEvidence.changeset(%RunEvidence{}, %{subject_hash: "short"}) end,
+       :subject_hash, "must be a 32-byte digest"},
+      {"WorkOutcome.subject_hash", fn -> WorkOutcome.changeset(%WorkOutcome{}, %{subject_hash: "short"}) end,
+       :subject_hash, "must be a 32-byte digest"},
+      {"GoalDecision.action_hash", fn -> GoalDecision.changeset(%GoalDecision{}, %{action_hash: "short"}) end,
+       :action_hash, "must be a 32-byte digest"},
+      {"GoalEvent.request_hash", fn -> GoalEvent.changeset(%GoalEvent{}, %{request_hash: "short"}) end, :request_hash,
        "must be a 32-byte digest"},
       {"GoalExternalWait.subject_hash",
-       fn -> GoalExternalWait.changeset(%GoalExternalWait{}, %{subject_hash: "short"}) end,
-       :subject_hash, "must be a 32-byte digest"},
+       fn -> GoalExternalWait.changeset(%GoalExternalWait{}, %{subject_hash: "short"}) end, :subject_hash,
+       "must be a 32-byte digest"},
       {"HarnessSessionStopReceipt.request_hash",
        fn ->
          HarnessSessionStopReceipt.changeset(%HarnessSessionStopReceipt{}, %{
@@ -110,19 +102,15 @@ defmodule SymmetryControl.Goals.ChangesetValidatorsTest do
          GoalRevision.changeset(seeded(%GoalRevision{}, :context_manifest, :not_a_map), %{})
        end, :context_manifest, ["must be an object"]},
       {"ContextSnapshot.payload",
-       fn -> ContextSnapshot.changeset(seeded(%ContextSnapshot{}, :payload, :not_a_map), %{}) end,
-       :payload, ["must be an object"]},
-      {"RunEvidence.source_ref",
-       fn -> RunEvidence.changeset(seeded(%RunEvidence{}, :source_ref, :not_a_map), %{}) end,
-       :source_ref, ["must be an object"]},
-      {"RunEvidence.payload",
-       fn -> RunEvidence.changeset(seeded(%RunEvidence{}, :payload, :not_a_map), %{}) end,
-       :payload, ["must be an object"]},
-      {"GoalEvent.payload",
-       fn -> GoalEvent.changeset(seeded(%GoalEvent{}, :payload, :not_a_map), %{}) end, :payload,
+       fn -> ContextSnapshot.changeset(seeded(%ContextSnapshot{}, :payload, :not_a_map), %{}) end, :payload,
        ["must be an object"]},
-      {"GoalEvent.response",
-       fn -> GoalEvent.changeset(seeded(%GoalEvent{}, :response, :not_a_map), %{}) end, :response,
+      {"RunEvidence.source_ref", fn -> RunEvidence.changeset(seeded(%RunEvidence{}, :source_ref, :not_a_map), %{}) end,
+       :source_ref, ["must be an object"]},
+      {"RunEvidence.payload", fn -> RunEvidence.changeset(seeded(%RunEvidence{}, :payload, :not_a_map), %{}) end,
+       :payload, ["must be an object"]},
+      {"GoalEvent.payload", fn -> GoalEvent.changeset(seeded(%GoalEvent{}, :payload, :not_a_map), %{}) end, :payload,
+       ["must be an object"]},
+      {"GoalEvent.response", fn -> GoalEvent.changeset(seeded(%GoalEvent{}, :response, :not_a_map), %{}) end, :response,
        ["must be an object"]},
       {"HarnessSessionStopReceipt.response",
        fn ->
@@ -139,8 +127,8 @@ defmodule SymmetryControl.Goals.ChangesetValidatorsTest do
          )
        end, :response, ["must be an object"]},
       {"WorkOutcome.candidate_subject (shared validate_map)",
-       fn -> WorkOutcome.changeset(%WorkOutcome{}, %{candidate_subject: []}) end,
-       :candidate_subject, ["must be an object"]},
+       fn -> WorkOutcome.changeset(%WorkOutcome{}, %{candidate_subject: []}) end, :candidate_subject,
+       ["must be an object"]},
       {"GoalDecision.resolution (inline call-site validator)",
        fn ->
          GoalDecision.resolve_changeset(
@@ -175,25 +163,20 @@ defmodule SymmetryControl.Goals.ChangesetValidatorsTest do
 
   defp immutability_messages do
     [
-      {"goal_revision",
-       fn -> GoalRevision.immutable_changeset(%GoalRevision{}, %{objective: "x"}) end, :objective,
+      {"goal_revision", fn -> GoalRevision.immutable_changeset(%GoalRevision{}, %{objective: "x"}) end, :objective,
        "goal_revision is immutable"},
-      {"work dependency",
-       fn -> WorkDependency.immutable_changeset(%WorkDependency{}, %{goal_id: @uuid}) end,
-       :goal_id, "work dependency is immutable"},
-      {"context snapshot",
-       fn -> ContextSnapshot.immutable_changeset(%ContextSnapshot{}, %{schema_version: 2}) end,
+      {"work dependency", fn -> WorkDependency.immutable_changeset(%WorkDependency{}, %{goal_id: @uuid}) end, :goal_id,
+       "work dependency is immutable"},
+      {"context snapshot", fn -> ContextSnapshot.immutable_changeset(%ContextSnapshot{}, %{schema_version: 2}) end,
        :schema_version, "context snapshot is immutable"},
-      {"run evidence",
-       fn -> RunEvidence.immutable_changeset(%RunEvidence{}, %{evidence_key: "key"}) end,
-       :evidence_key, "run evidence is immutable"},
-      {"work outcome",
-       fn -> WorkOutcome.immutable_changeset(%WorkOutcome{}, %{reason: "why"}) end, :reason,
+      {"run evidence", fn -> RunEvidence.immutable_changeset(%RunEvidence{}, %{evidence_key: "key"}) end, :evidence_key,
+       "run evidence is immutable"},
+      {"work outcome", fn -> WorkOutcome.immutable_changeset(%WorkOutcome{}, %{reason: "why"}) end, :reason,
        "work outcome is immutable"},
-      {"goal event", fn -> GoalEvent.immutable_changeset(%GoalEvent{}, %{kind: "kind"}) end,
-       :kind, "goal event is immutable"},
-      {"run usage", fn -> RunUsage.immutable_changeset(%RunUsage{}, %{provider: "provider"}) end,
-       :provider, "run usage is immutable"},
+      {"goal event", fn -> GoalEvent.immutable_changeset(%GoalEvent{}, %{kind: "kind"}) end, :kind,
+       "goal event is immutable"},
+      {"run usage", fn -> RunUsage.immutable_changeset(%RunUsage{}, %{provider: "provider"}) end, :provider,
+       "run usage is immutable"},
       {"external wait history",
        fn ->
          GoalExternalWait.immutable_changeset(%GoalExternalWait{}, %{external_ref: "ref"})

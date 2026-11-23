@@ -47,6 +47,6 @@ defmodule SymmetryControl.Integrations.CommandTest do
   # `command_unavailable`.
   defp windows_shell do
     System.find_executable("pwsh") || System.find_executable("powershell.exe") ||
-      raise "CommandTest requires a shell on Windows: neither \"pwsh\" nor \"powershell.exe\" resolved via System.find_executable/1"
+      raise ~s(CommandTest requires a shell on Windows: neither "pwsh" nor "powershell.exe" resolved via System.find_executable/1)
   end
 end

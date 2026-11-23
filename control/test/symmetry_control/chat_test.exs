@@ -1,13 +1,21 @@
 defmodule SymmetryControl.ChatTest do
   use SymmetryControl.DataCase, async: false
 
-  alias SymmetryControl.{Chat, Orchestration, Workspaces}
-  alias SymmetryControl.Chat.{Action, Message}
-  alias SymmetryControl.Orchestration.{Command, Machine, Run, Runtime, Task}
-  alias SymmetryControl.Portal.Invalidations
-  alias SymmetryControl.Workspaces.{Project, WorkItem}
-  alias SymmetryControl.TelemetryReads
   alias Ecto.Adapters.SQL.Sandbox
+  alias SymmetryControl.Chat
+  alias SymmetryControl.Chat.Action
+  alias SymmetryControl.Chat.Message
+  alias SymmetryControl.Orchestration
+  alias SymmetryControl.Orchestration.Command
+  alias SymmetryControl.Orchestration.Machine
+  alias SymmetryControl.Orchestration.Run
+  alias SymmetryControl.Orchestration.Runtime
+  alias SymmetryControl.Orchestration.Task
+  alias SymmetryControl.Portal.Invalidations
+  alias SymmetryControl.TelemetryReads
+  alias SymmetryControl.Workspaces
+  alias SymmetryControl.Workspaces.Project
+  alias SymmetryControl.Workspaces.WorkItem
 
   test "reading a conversation does not create durable conversation state" do
     assert {:ok, %{messages: [], runs: [], next_before: nil}} =
@@ -294,7 +302,8 @@ defmodule SymmetryControl.ChatTest do
                  # this lock: the row it will lock is the legacy binding.
                  assert_launch_waiting_on_work_item(launcher_backend, locker_backend)
 
-                 Repo.get!(WorkItem, item.id)
+                 WorkItem
+                 |> Repo.get!(item.id)
                  |> WorkItem.changeset(%{agent_profile: "legacy-binding"})
                  |> Repo.update!()
                end)
@@ -709,9 +718,7 @@ defmodule SymmetryControl.ChatTest do
     }
 
     assert {:ok, _run} =
-             Orchestration.transition(run.id, fence, "waiting_for_input", packet, waiting_id,
-               now: now
-             )
+             Orchestration.transition(run.id, fence, "waiting_for_input", packet, waiting_id, now: now)
 
     params = %{
       scope: "run",
@@ -1246,9 +1253,7 @@ defmodule SymmetryControl.ChatTest do
     }
 
     assert {:ok, run} =
-             Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(),
-               now: now
-             )
+             Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(), now: now)
 
     {project, item, run, fence, now}
   end

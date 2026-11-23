@@ -1,8 +1,8 @@
 defmodule SymmetryControlWeb.Plugs.PortalAuth do
   @moduledoc false
 
-  import Plug.Conn
   import Phoenix.Controller
+  import Plug.Conn
 
   alias SymmetryControlWeb.PortalSession
   alias SymmetryControlWeb.Protocol
@@ -26,10 +26,10 @@ defmodule SymmetryControlWeb.Plugs.PortalAuth do
 
   defp unauthenticated(conn, :html) do
     requested_path =
-      if conn.query_string != "" do
-        conn.request_path <> "?" <> conn.query_string
-      else
+      if conn.query_string == "" do
         conn.request_path
+      else
+        conn.request_path <> "?" <> conn.query_string
       end
 
     query = URI.encode_query(%{"return_to" => PortalSession.return_to(requested_path)})

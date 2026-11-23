@@ -1,4 +1,5 @@
 defmodule SymmetryControl.SlowestFormatter do
+  @moduledoc false
   use GenServer
 
   @slowest_tests 20
@@ -7,8 +8,7 @@ defmodule SymmetryControl.SlowestFormatter do
   def init(_opts), do: {:ok, []}
 
   @impl GenServer
-  def handle_cast({:test_finished, %ExUnit.Test{state: nil} = test}, tests),
-    do: {:noreply, [test | tests]}
+  def handle_cast({:test_finished, %ExUnit.Test{state: nil} = test}, tests), do: {:noreply, [test | tests]}
 
   def handle_cast({:test_finished, %ExUnit.Test{state: {:failed, _failures}} = test}, tests),
     do: {:noreply, [test | tests]}

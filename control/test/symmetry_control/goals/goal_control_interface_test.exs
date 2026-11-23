@@ -2,6 +2,12 @@ Code.require_file("goals_test_support.exs", __DIR__)
 
 defmodule SymmetryControl.Goals.GoalControlInterfaceTest do
   use SymmetryControl.OrchestrationCase, async: false
+  @now ~U[2026-09-09 00:00:00.000000Z]
+  use SymmetryControl.TestFixtures,
+    command_opts: [
+      now: @now,
+      validation_profiles: SymmetryControl.GoalsTestSupport.validation_profiles()
+    ]
 
   import SymmetryControl.GoalsTestSupport
 
@@ -12,11 +18,6 @@ defmodule SymmetryControl.Goals.GoalControlInterfaceTest do
   alias SymmetryControl.Orchestration.Task
   alias SymmetryControl.Repo
   alias SymmetryControl.RequestHash
-
-  @now ~U[2026-09-09 00:00:00.000000Z]
-
-  use SymmetryControl.TestFixtures,
-    command_opts: [now: @now, validation_profiles: validation_profiles()]
 
   setup :put_goal_validation_profiles
 

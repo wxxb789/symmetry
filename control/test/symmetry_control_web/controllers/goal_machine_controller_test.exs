@@ -1,27 +1,28 @@
 defmodule SymmetryControlWeb.GoalMachineControllerTest do
   use SymmetryControlWeb.ConnCase, async: false
 
+  use SymmetryControl.TestFixtures,
+    command_opts: [validation_profiles: SymmetryControl.TestFixtures.validation_profiles()]
+
   import Ecto.Query
 
   import SymmetryControl.TestFixtures,
-    only: [check_contract: 0, repository_fixture: 1, subject: 1, validation_profiles: 0]
+    only: [check_contract: 0, repository_fixture: 1, subject: 1]
 
   import SymmetryControlWeb.TestConn, only: [assert_error: 3, bearer: 2]
 
-  use SymmetryControl.TestFixtures, command_opts: [validation_profiles: validation_profiles()]
-
-  alias SymmetryControl.Goals.ContractValidation
   alias SymmetryControl.Goals
-
-  alias SymmetryControl.Goals.{
-    Goal,
-    HarnessSession,
-    HarnessSessionAttachReceipt,
-    HarnessSessionStopReceipt
-  }
-
+  alias SymmetryControl.Goals.ContractValidation
+  alias SymmetryControl.Goals.Goal
+  alias SymmetryControl.Goals.HarnessSession
+  alias SymmetryControl.Goals.HarnessSessionAttachReceipt
+  alias SymmetryControl.Goals.HarnessSessionStopReceipt
+  alias SymmetryControl.Goals.RunEvidence
   alias SymmetryControl.Orchestration
-  alias SymmetryControl.Orchestration.{Machine, Run, Runtime, Task}
+  alias SymmetryControl.Orchestration.Machine
+  alias SymmetryControl.Orchestration.Run
+  alias SymmetryControl.Orchestration.Runtime
+  alias SymmetryControl.Orchestration.Task
   alias SymmetryControl.Repo
   alias SymmetryControl.RequestHash
   alias SymmetryControl.Workspaces
@@ -57,7 +58,8 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
     repository = repository_fixture(project)
 
     response =
-      bearer(conn, token)
+      conn
+      |> bearer(token)
       |> put("/api/v1/machines/#{machine_id}/sessions/#{Ecto.UUID.generate()}", %{
         "runtimes" => [
           %{
@@ -78,7 +80,8 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
     assert runtime.repository_resource_id == repository.id
 
     response =
-      bearer(conn, token)
+      conn
+      |> bearer(token)
       |> put("/api/v1/machines/#{machine_id}/sessions/#{Ecto.UUID.generate()}", %{
         "runtimes" => [
           %{
@@ -105,18 +108,20 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
     request = Map.merge(fence, session_attrs(item))
     refute Map.has_key?(request, :binding_id)
 
-    assert_error(
-      bearer(conn, token)
-      |> put(
-        "/api/v1/runs/#{run.id}/session",
-        Map.put(request, :binding_id, Ecto.UUID.generate())
-      ),
+    conn
+    |> bearer(token)
+    |> put(
+      "/api/v1/runs/#{run.id}/session",
+      Map.put(request, :binding_id, Ecto.UUID.generate())
+    )
+    |> assert_error(
       400,
       "invalid_request"
     )
 
     attached =
-      bearer(conn, token)
+      conn
+      |> bearer(token)
       |> put("/api/v1/runs/#{run.id}/session", request)
       |> json_response(201)
 
@@ -142,26 +147,29 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
     refute inspect(attached) =~ "transcript"
 
     assert ^attached =
-             bearer(conn, token)
+             conn
+             |> bearer(token)
              |> put("/api/v1/runs/#{run.id}/session", request)
              |> json_response(200)
 
-    assert_error(
-      bearer(conn, token)
-      |> put(
-        "/api/v1/runs/#{run.id}/session",
-        Map.put(request, :lease_token, Ecto.UUID.generate())
-      ),
+    conn
+    |> bearer(token)
+    |> put(
+      "/api/v1/runs/#{run.id}/session",
+      Map.put(request, :lease_token, Ecto.UUID.generate())
+    )
+    |> assert_error(
       409,
       "ownership_lost"
     )
 
-    assert_error(
-      bearer(conn, token)
-      |> put(
-        "/api/v1/runs/#{run.id}/session",
-        Map.put(request, "machine_id", Ecto.UUID.generate())
-      ),
+    conn
+    |> bearer(token)
+    |> put(
+      "/api/v1/runs/#{run.id}/session",
+      Map.put(request, "machine_id", Ecto.UUID.generate())
+    )
+    |> assert_error(
       400,
       "invalid_request"
     )
@@ -174,7 +182,8 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
     request = Map.merge(fence, session_attrs(item))
 
     attached =
-      bearer(conn, token)
+      conn
+      |> bearer(token)
       |> put("/api/v1/runs/#{run.id}/session", request)
       |> json_response(201)
 
@@ -190,7 +199,8 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
     receipt_path = "/api/v1/runs/#{run.id}/session?#{URI.encode_query(stringify_keys(fence))}"
 
     assert ^attached =
-             bearer(conn, token)
+             conn
+             |> bearer(token)
              |> get(receipt_path)
              |> json_response(200)
 
@@ -200,7 +210,7 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
     stale_path =
       "/api/v1/runs/#{run.id}/session?#{URI.encode_query(stringify_keys(Map.put(fence, :lease_token, Ecto.UUID.generate())))}"
 
-    assert_error(bearer(conn, token) |> get(stale_path), 409, "ownership_lost")
+    conn |> bearer(token) |> get(stale_path) |> assert_error(409, "ownership_lost")
   end
 
   test "resume session receipts preserve durable identity on replay", %{conn: conn} do
@@ -217,15 +227,17 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
 
     request = Map.merge(fence, attrs)
 
-    assert_error(
-      bearer(conn, token)
-      |> put("/api/v1/runs/#{run.id}/session", Map.delete(request, :binding_id)),
+    conn
+    |> bearer(token)
+    |> put("/api/v1/runs/#{run.id}/session", Map.delete(request, :binding_id))
+    |> assert_error(
       400,
       "invalid_request"
     )
 
     attached =
-      bearer(conn, token)
+      conn
+      |> bearer(token)
       |> put("/api/v1/runs/#{run.id}/session", request)
       |> json_response(201)
 
@@ -258,7 +270,8 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
     refute inspect(attached) =~ "credential"
 
     assert ^attached =
-             bearer(conn, token)
+             conn
+             |> bearer(token)
              |> put("/api/v1/runs/#{run.id}/session", request)
              |> json_response(200)
   end
@@ -270,7 +283,8 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
     attached_request = Map.merge(fence, session_attrs(item))
 
     attached =
-      bearer(conn, token)
+      conn
+      |> bearer(token)
       |> put("/api/v1/runs/#{run.id}/session", attached_request)
       |> json_response(201)
 
@@ -281,8 +295,10 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
         "binding_id" => attached["session"]["binding_id"]
       })
 
-    assert_error(
-      bearer(conn, token) |> put("/api/v1/runs/#{run.id}/session/stopped", stop_request),
+    conn
+    |> bearer(token)
+    |> put("/api/v1/runs/#{run.id}/session/stopped", stop_request)
+    |> assert_error(
       409,
       "state_conflict"
     )
@@ -294,7 +310,8 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
              Goals.settle_task(run.task_id, run.id, run.generation)
 
     stopped =
-      bearer(conn, token)
+      conn
+      |> bearer(token)
       |> put("/api/v1/runs/#{run.id}/session/stopped", stop_request)
       |> json_response(201)
 
@@ -317,26 +334,29 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
     assert binding_id == attached["session"]["binding_id"]
 
     assert ^stopped =
-             bearer(conn, token)
+             conn
+             |> bearer(token)
              |> put("/api/v1/runs/#{run.id}/session/stopped", stop_request)
              |> json_response(200)
 
-    assert_error(
-      bearer(conn, token)
-      |> put(
-        "/api/v1/runs/#{run.id}/session/stopped",
-        Map.put(stop_request, "local_handle_id", Ecto.UUID.generate())
-      ),
+    conn
+    |> bearer(token)
+    |> put(
+      "/api/v1/runs/#{run.id}/session/stopped",
+      Map.put(stop_request, "local_handle_id", Ecto.UUID.generate())
+    )
+    |> assert_error(
       409,
       "idempotency_conflict"
     )
 
-    assert_error(
-      bearer(conn, token)
-      |> put(
-        "/api/v1/runs/#{run.id}/session/stopped",
-        Map.put(stop_request, "machine_id", Ecto.UUID.generate())
-      ),
+    conn
+    |> bearer(token)
+    |> put(
+      "/api/v1/runs/#{run.id}/session/stopped",
+      Map.put(stop_request, "machine_id", Ecto.UUID.generate())
+    )
+    |> assert_error(
       400,
       "invalid_request"
     )
@@ -347,7 +367,8 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
     evidence = Map.merge(fence, evidence_attrs(run.id, subject))
 
     stored_evidence =
-      bearer(conn, token)
+      conn
+      |> bearer(token)
       |> post("/api/v1/runs/#{run.id}/evidence", evidence)
       |> json_response(201)
 
@@ -359,16 +380,18 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
     assert run_id == run.id
 
     assert ^stored_evidence =
-             bearer(conn, token)
+             conn
+             |> bearer(token)
              |> post("/api/v1/runs/#{run.id}/evidence", evidence)
              |> json_response(200)
 
-    assert_error(
-      bearer(conn, token)
-      |> post(
-        "/api/v1/runs/#{run.id}/evidence",
-        put_in(evidence, [:payload, :note], "changed observation")
-      ),
+    conn
+    |> bearer(token)
+    |> post(
+      "/api/v1/runs/#{run.id}/evidence",
+      put_in(evidence, [:payload, :note], "changed observation")
+    )
+    |> assert_error(
       409,
       "idempotency_conflict"
     )
@@ -376,7 +399,8 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
     usage = Map.merge(fence, usage_attrs(run.id))
 
     stored_usage =
-      bearer(conn, token)
+      conn
+      |> bearer(token)
       |> post("/api/v1/runs/#{run.id}/usage", usage)
       |> json_response(201)
 
@@ -391,13 +415,15 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
     assert is_binary(stored_usage["usage"]["cost_microusd"])
 
     assert ^stored_usage =
-             bearer(conn, token)
+             conn
+             |> bearer(token)
              |> post("/api/v1/runs/#{run.id}/usage", usage)
              |> json_response(200)
 
-    assert_error(
-      bearer(conn, token)
-      |> post("/api/v1/runs/#{run.id}/usage", Map.put(usage, :cost_microusd, "43")),
+    conn
+    |> bearer(token)
+    |> post("/api/v1/runs/#{run.id}/usage", Map.put(usage, :cost_microusd, "43"))
+    |> assert_error(
       409,
       "idempotency_conflict"
     )
@@ -417,7 +443,8 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
                "cost_microusd" => nil
              }
            } =
-             bearer(conn, token)
+             conn
+             |> bearer(token)
              |> post("/api/v1/runs/#{run.id}/usage", Map.merge(fence, unknown_usage))
              |> json_response(201)
   end
@@ -444,7 +471,8 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
     }
 
     created =
-      bearer(conn, token)
+      conn
+      |> bearer(token)
       |> post("/api/v1/runs/#{run.id}/evidence", Map.merge(fence, batch))
       |> json_response(201)
 
@@ -473,7 +501,8 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
              )
 
     replayed =
-      bearer(conn, token)
+      conn
+      |> bearer(token)
       |> post("/api/v1/runs/#{run.id}/evidence", Map.merge(fence, batch))
       |> json_response(200)
 
@@ -496,10 +525,11 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
       |> put_in([:payload, :note], "third observation")
 
     conflict = put_in(first, [:payload, :note], "changed observation")
-    count_before = Repo.aggregate(SymmetryControl.Goals.RunEvidence, :count)
+    count_before = Repo.aggregate(RunEvidence, :count)
 
     conflict_response =
-      bearer(conn, token)
+      conn
+      |> bearer(token)
       |> post(
         "/api/v1/runs/#{run.id}/evidence",
         Map.merge(fence, %{batch | items: [third, conflict]})
@@ -527,7 +557,7 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
                schema_root: @contracts_schema_root
              )
 
-    assert Repo.aggregate(SymmetryControl.Goals.RunEvidence, :count) == count_before
+    assert Repo.aggregate(RunEvidence, :count) == count_before
   end
 
   test "the evidence endpoint accepts exactly the fence beside the batch document", %{conn: conn} do
@@ -547,24 +577,27 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
                "receipts" => [%{"disposition" => "created"}]
              }
            } =
-             bearer(conn, token)
+             conn
+             |> bearer(token)
              |> post("/api/v1/runs/#{run.id}/evidence", wire)
              |> json_response(201)
 
     assert batch_run_id == run.id
 
     for member <- Map.keys(fence) do
-      assert_error(
-        bearer(conn, token)
-        |> post("/api/v1/runs/#{run.id}/evidence", Map.delete(wire, member)),
+      conn
+      |> bearer(token)
+      |> post("/api/v1/runs/#{run.id}/evidence", Map.delete(wire, member))
+      |> assert_error(
         400,
         "invalid_request"
       )
     end
 
-    assert_error(
-      bearer(conn, token)
-      |> post("/api/v1/runs/#{run.id}/evidence", Map.put(wire, :unexpected_member, true)),
+    conn
+    |> bearer(token)
+    |> post("/api/v1/runs/#{run.id}/evidence", Map.put(wire, :unexpected_member, true))
+    |> assert_error(
       400,
       "invalid_request"
     )
@@ -585,7 +618,7 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
         global: false
       )
 
-    count_before = Repo.aggregate(SymmetryControl.Goals.RunEvidence, :count)
+    count_before = Repo.aggregate(RunEvidence, :count)
 
     {_foreign_machine_id, foreign_token} = enroll(conn, "foreign-raw")
 
@@ -593,24 +626,26 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
           "/api/v1/runs/#{run.id}/evidence/",
           "/api/v1/runs/#{run.id}/%65vidence"
         ] do
-      assert_error(
-        bearer(conn, foreign_token)
-        |> put_req_header("content-type", "application/json")
-        |> post(path, duplicate_body),
+      conn
+      |> bearer(foreign_token)
+      |> put_req_header("content-type", "application/json")
+      |> post(path, duplicate_body)
+      |> assert_error(
         403,
         "forbidden"
       )
 
-      assert_error(
-        bearer(conn, owner_token)
-        |> put_req_header("content-type", "application/json")
-        |> post(path, duplicate_body),
+      conn
+      |> bearer(owner_token)
+      |> put_req_header("content-type", "application/json")
+      |> post(path, duplicate_body)
+      |> assert_error(
         400,
         "invalid_request"
       )
     end
 
-    assert Repo.aggregate(SymmetryControl.Goals.RunEvidence, :count) == count_before
+    assert Repo.aggregate(RunEvidence, :count) == count_before
   end
 
   test "batch response validation blocks noncanonical success and conflict responses", %{
@@ -655,20 +690,23 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
 
     Application.put_env(:symmetry_control, :contracts, directory: temporary_root)
 
-    count_before = Repo.aggregate(SymmetryControl.Goals.RunEvidence, :count)
+    count_before = Repo.aggregate(RunEvidence, :count)
 
-    assert_error(
-      bearer(conn, token) |> post("/api/v1/runs/#{run.id}/evidence", Map.merge(fence, batch)),
+    conn
+    |> bearer(token)
+    |> post("/api/v1/runs/#{run.id}/evidence", Map.merge(fence, batch))
+    |> assert_error(
       400,
       "invalid_request"
     )
 
-    assert Repo.aggregate(SymmetryControl.Goals.RunEvidence, :count) == count_before
+    assert Repo.aggregate(RunEvidence, :count) == count_before
 
     Application.put_env(:symmetry_control, :contracts, previous_contracts)
 
     created =
-      bearer(conn, token)
+      conn
+      |> bearer(token)
       |> post("/api/v1/runs/#{run.id}/evidence", Map.merge(fence, batch))
       |> json_response(201)
 
@@ -680,12 +718,13 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
 
     conflict = put_in(evidence, [:payload, :note], "changed after response validation")
 
-    assert_error(
-      bearer(conn, token)
-      |> post(
-        "/api/v1/runs/#{run.id}/evidence",
-        Map.merge(fence, %{batch | items: [conflict]})
-      ),
+    conn
+    |> bearer(token)
+    |> post(
+      "/api/v1/runs/#{run.id}/evidence",
+      Map.merge(fence, %{batch | items: [conflict]})
+    )
+    |> assert_error(
       409,
       "idempotency_conflict"
     )
@@ -706,7 +745,8 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
     session = Map.merge(fence, session_attrs(item))
 
     assert %{"session" => _} =
-             bearer(conn, owner_token)
+             conn
+             |> bearer(owner_token)
              |> put("/api/v1/runs/#{run.id}/session", session)
              |> json_response(201)
 
@@ -715,28 +755,35 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
     usage = Map.merge(fence, usage_attrs(run.id))
     context_path = "/api/v1/runs/#{run.id}/context?#{URI.encode_query(stringify_keys(fence))}"
 
-    assert_error(
-      bearer(conn, foreign_token) |> put("/api/v1/runs/#{run.id}/session", session),
+    conn
+    |> bearer(foreign_token)
+    |> put("/api/v1/runs/#{run.id}/session", session)
+    |> assert_error(
       403,
       "forbidden"
     )
 
-    assert_error(
-      bearer(conn, foreign_token) |> post("/api/v1/runs/#{run.id}/evidence", evidence),
+    conn
+    |> bearer(foreign_token)
+    |> post("/api/v1/runs/#{run.id}/evidence", evidence)
+    |> assert_error(
       403,
       "forbidden"
     )
 
-    assert_error(
-      bearer(conn, foreign_token) |> post("/api/v1/runs/#{run.id}/usage", usage),
+    conn
+    |> bearer(foreign_token)
+    |> post("/api/v1/runs/#{run.id}/usage", usage)
+    |> assert_error(
       403,
       "forbidden"
     )
 
-    assert_error(bearer(conn, foreign_token) |> get(context_path), 403, "forbidden")
+    conn |> bearer(foreign_token) |> get(context_path) |> assert_error(403, "forbidden")
 
     context =
-      bearer(conn, owner_token)
+      conn
+      |> bearer(owner_token)
       |> get(context_path)
       |> json_response(200)
 
@@ -793,7 +840,7 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
     stale_path =
       "/api/v1/runs/#{run.id}/context?#{URI.encode_query(stringify_keys(Map.put(fence, :lease_token, Ecto.UUID.generate())))}"
 
-    assert_error(bearer(conn, owner_token) |> get(stale_path), 409, "ownership_lost")
+    conn |> bearer(owner_token) |> get(stale_path) |> assert_error(409, "ownership_lost")
   end
 
   # This is a protocol fixture for committed HTTP acknowledgements. It does not
@@ -836,8 +883,8 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
     attach_snapshot =
       unboxed_e2e_run!(fn -> observe_attach_receipt!(fixture) end)
 
-    unless attach_snapshot.session_row.state == "busy" and
-             attach_snapshot.session_row.active_run_id == fixture.run.id do
+    if !(attach_snapshot.session_row.state == "busy" and
+           attach_snapshot.session_row.active_run_id == fixture.run.id) do
       flunk("attached session is not busy for its active run")
     end
 
@@ -890,8 +937,8 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
         session = Repo.get!(HarnessSession, run.harness_session_id)
         stop_receipt_count = Repo.aggregate(HarnessSessionStopReceipt, :count)
 
-        unless run.state == "failed" and task.state == "failed" and session.state == "unavailable" and
-                 is_nil(session.active_run_id) and stop_receipt_count == 0 do
+        if !(run.state == "failed" and task.state == "failed" and session.state == "unavailable" and
+               is_nil(session.active_run_id) and stop_receipt_count == 0) do
           flunk("terminal transition did not preserve the unavailable session barrier")
         end
 
@@ -953,9 +1000,9 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
     assert_attach_receipt_unchanged!(attach_snapshot, final.attach)
     assert_stop_receipt_unchanged!(stop_snapshot, final.stop)
 
-    unless final.stop.session.lock_version == stop_snapshot.session.lock_version and
-             final.stop.session.state == "available" and
-             is_nil(final.stop.session.active_run_id) do
+    if !(final.stop.session.lock_version == stop_snapshot.session.lock_version and
+           final.stop.session.state == "available" and
+           is_nil(final.stop.session.active_run_id)) do
       flunk("session lock version or availability changed during stop recovery")
     end
 
@@ -1001,8 +1048,7 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
                "accept_plan",
                %{
                  proposal: proposal,
-                 proposal_hash:
-                   "sha256:" <> Base.encode16(RequestHash.canonical(proposal), case: :lower),
+                 proposal_hash: "sha256:" <> Base.encode16(RequestHash.canonical(proposal), case: :lower),
                  decision_id: decision_id
                },
                rollout_enabled: true,
@@ -1052,7 +1098,7 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
           {runtime, "fresh", nil, nil}
       end
 
-    requested_session_id = if(retained_session, do: retained_session.id, else: nil)
+    requested_session_id = if(retained_session, do: retained_session.id)
 
     assert {:ok, _active, :created} =
              command_current(goal_id, "activate", %{approved_revision: 1})
@@ -1091,7 +1137,7 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
            } = task.input
 
     assert work_item_id == item.id
-    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    now = DateTime.truncate(DateTime.utc_now(), :microsecond)
     claim_id = Ecto.UUID.generate()
     lease_token = Ecto.UUID.generate()
 
@@ -1111,9 +1157,9 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
         claim_id: claim_id,
         lease_token: lease_token,
         assigned_at: now,
-        assignment_expires_at: DateTime.add(now, 60, :second),
+        assignment_expires_at: DateTime.shift(now, minute: 1),
         claimed_at: now,
-        lease_expires_at: DateTime.add(now, 60, :second)
+        lease_expires_at: DateTime.shift(now, minute: 1)
       })
       |> Repo.insert!()
 
@@ -1318,7 +1364,8 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
     token = "goal-machine-#{Ecto.UUID.generate()}"
 
     response =
-      bearer(conn, @enrollment_token)
+      conn
+      |> bearer(@enrollment_token)
       |> put_req_header("idempotency-key", Ecto.UUID.generate())
       |> post("/api/v1/machines", %{"machine" => %{"name" => name}, "machine_token" => token})
       |> json_response(201)
@@ -1328,7 +1375,8 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
 
   defp register_runtime(conn, machine_id, token) do
     response =
-      bearer(conn, token)
+      conn
+      |> bearer(token)
       |> put("/api/v1/machines/#{machine_id}/sessions/#{Ecto.UUID.generate()}", %{
         "runtimes" => [
           %{
@@ -1366,7 +1414,7 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
       is_binary(environment_database) and configured_database == environment_database and
         Regex.match?(~r/^symmetry_receipt_e2e_[0-9a-f]{32}$/, environment_database)
 
-    unless valid?,
+    if !valid?,
       do: flunk("goal receipt E2E requires its dedicated ephemeral PostgreSQL database")
   end
 
@@ -1384,7 +1432,7 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
           {"harness_session_attach_receipts", HarnessSessionAttachReceipt},
           {"harness_session_stop_receipts", HarnessSessionStopReceipt}
         ] do
-      unless Repo.aggregate(schema, :count) == 0,
+      if Repo.aggregate(schema, :count) != 0,
         do: flunk("goal receipt E2E requires an empty #{name} table")
     end
   end
@@ -1394,7 +1442,7 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
       first_txid = current_txid!()
       second_txid = current_txid!()
 
-      unless first_txid != second_txid,
+      if first_txid == second_txid,
         do: flunk("goal receipt E2E requires separate autocommit connections")
 
       fun.()
@@ -1410,17 +1458,13 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
     listener =
       start_supervised!(
         {Bandit,
-         plug: {&goal_receipt_endpoint_plug/2, []},
-         scheme: :http,
-         ip: {127, 0, 0, 1},
-         port: 0,
-         startup_log: false},
+         plug: {&goal_receipt_endpoint_plug/2, []}, scheme: :http, ip: {127, 0, 0, 1}, port: 0, startup_log: false},
         id: @goal_receipt_listener_id
       )
 
     {:ok, {{127, 0, 0, 1}, port}} = ThousandIsland.listener_info(listener)
 
-    unless is_integer(port) and port > 0,
+    if !(is_integer(port) and port > 0),
       do: flunk("goal receipt E2E listener did not expose a port")
 
     %{pid: listener, port: port, url: "http://127.0.0.1:#{port}/api"}
@@ -1430,7 +1474,7 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
     stop_goal_receipt_listener!(listener)
     restarted = start_goal_receipt_listener!()
 
-    unless restarted.pid != listener.pid and restarted.port > 0,
+    if !(restarted.pid != listener.pid and restarted.port > 0),
       do: flunk("goal receipt E2E listener restart did not create a new listener")
 
     restarted
@@ -1458,7 +1502,7 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
         stderr_to_stdout: true
       )
 
-    unless status == 0,
+    if status != 0,
       do: raise("go test -c ./internal/control failed with status #{status}")
 
     path
@@ -1509,7 +1553,7 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
         stderr_to_stdout: true
       )
 
-    unless status == 0,
+    if status != 0,
       do: flunk("Go receipt protocol driver failed in #{phase} phase")
 
     case Jason.decode(File.read!(output_path)) do
@@ -1519,18 +1563,18 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
   end
 
   defp assert_goal_receipt_output!(output, phase, dropped, expected_attachment, expected_stop) do
-    unless output["phase"] == phase, do: flunk("receipt protocol output phase mismatch")
+    if output["phase"] != phase, do: flunk("receipt protocol output phase mismatch")
 
-    unless output["dropped_responses"] == dropped,
+    if output["dropped_responses"] != dropped,
       do: flunk("receipt protocol drop count mismatch")
 
-    unless output["attachment"] == expected_attachment,
+    if output["attachment"] != expected_attachment,
       do: flunk("receipt protocol attachment output mismatch")
 
-    unless output["stopped"] == expected_stop,
+    if output["stopped"] != expected_stop,
       do: flunk("receipt protocol stop output mismatch")
 
-    unless is_list(output["requests"]), do: flunk("receipt protocol request observations missing")
+    if !is_list(output["requests"]), do: flunk("receipt protocol request observations missing")
   end
 
   defp observe_attach_receipt!(fixture) do
@@ -1539,7 +1583,7 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
     attach_receipt_count = Repo.aggregate(HarnessSessionAttachReceipt, :count)
     session_count = Repo.aggregate(HarnessSession, :count)
 
-    unless attach_receipt_count == 1 and session_count == 1,
+    if !(attach_receipt_count == 1 and session_count == 1),
       do: flunk("expected exactly one attach receipt and harness session")
 
     receipt =
@@ -1551,35 +1595,35 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
     session = Repo.get!(HarnessSession, receipt.session_id)
     session_response = get_in(receipt.response, ["session"])
 
-    unless receipt.run_id == run.id and receipt.session_id == session.id and
-             receipt.runtime_id == fixture.fence.runtime_id and
-             receipt.machine_id == runtime.machine_id and
-             receipt.runtime_epoch == fixture.fence.runtime_epoch and
-             receipt.generation == fixture.fence.generation and
-             receipt.claim_id == fixture.fence.claim_id and
-             receipt.lease_token == fixture.fence.lease_token and
-             run.harness_session_id == session.id and
-             run.harness_binding_id == session.binding_id do
+    if !(receipt.run_id == run.id and receipt.session_id == session.id and
+           receipt.runtime_id == fixture.fence.runtime_id and
+           receipt.machine_id == runtime.machine_id and
+           receipt.runtime_epoch == fixture.fence.runtime_epoch and
+           receipt.generation == fixture.fence.generation and
+           receipt.claim_id == fixture.fence.claim_id and
+           receipt.lease_token == fixture.fence.lease_token and
+           run.harness_session_id == session.id and
+           run.harness_binding_id == session.binding_id) do
       flunk("attach receipt fence or run/session binding pairing mismatch")
     end
 
-    unless is_binary(receipt.request_hash) and byte_size(receipt.request_hash) == 32,
+    if !(is_binary(receipt.request_hash) and byte_size(receipt.request_hash) == 32),
       do: flunk("attach receipt request hash is not a 32-byte digest")
 
-    unless is_map(receipt.response) and is_map(session_response),
+    if !(is_map(receipt.response) and is_map(session_response)),
       do: flunk("attach receipt response is not a complete object")
 
-    unless session_response["id"] == session.id and
-             session_response["session_id"] == session.id and
-             session_response["run_id"] == run.id and
-             session_response["active_run_id"] == run.id and
-             session_response["binding_id"] == session.binding_id and
-             session_response["local_handle_id"] == session.local_handle_id and
-             session_response["state"] == "busy" do
+    if !(session_response["id"] == session.id and
+           session_response["session_id"] == session.id and
+           session_response["run_id"] == run.id and
+           session_response["active_run_id"] == run.id and
+           session_response["binding_id"] == session.binding_id and
+           session_response["local_handle_id"] == session.local_handle_id and
+           session_response["state"] == "busy") do
       flunk("attach receipt response does not preserve the committed busy session")
     end
 
-    unless not is_nil(receipt.inserted_at),
+    if is_nil(receipt.inserted_at),
       do: flunk("attach receipt is missing its insertion timestamp")
 
     %{
@@ -1598,7 +1642,7 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
     stop_receipt_count = Repo.aggregate(HarnessSessionStopReceipt, :count)
     session_count = Repo.aggregate(HarnessSession, :count)
 
-    unless stop_receipt_count == 1 and session_count == 1,
+    if !(stop_receipt_count == 1 and session_count == 1),
       do: flunk("expected exactly one stop receipt and harness session")
 
     receipt =
@@ -1613,35 +1657,35 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
     stopped = get_in(receipt.response, ["session_stopped"])
     expected_lock_version = terminal_session.lock_version + 1
 
-    unless receipt.run_id == run.id and receipt.machine_id == runtime.machine_id and
-             receipt.session_id == attach_snapshot.session["id"] and
-             receipt.binding_id == attach_snapshot.session["binding_id"] and
-             run.harness_session_id == session.id and
-             run.harness_binding_id == session.binding_id do
+    if !(receipt.run_id == run.id and receipt.machine_id == runtime.machine_id and
+           receipt.session_id == attach_snapshot.session["id"] and
+           receipt.binding_id == attach_snapshot.session["binding_id"] and
+           run.harness_session_id == session.id and
+           run.harness_binding_id == session.binding_id) do
       flunk("stop receipt does not match the original run/session binding")
     end
 
-    unless is_binary(receipt.request_hash) and byte_size(receipt.request_hash) == 32,
+    if !(is_binary(receipt.request_hash) and byte_size(receipt.request_hash) == 32),
       do: flunk("stop receipt request hash is not a 32-byte digest")
 
-    unless is_map(receipt.response) and is_map(stopped),
+    if !(is_map(receipt.response) and is_map(stopped)),
       do: flunk("stop receipt response is not a complete object")
 
-    unless stopped["receipt_id"] == receipt.id and stopped["run_id"] == run.id and
-             stopped["session_id"] == session.id and
-             stopped["local_handle_id"] == session.local_handle_id and
-             stopped["binding_id"] == session.binding_id and
-             stopped["state"] == "available" and is_nil(stopped["active_run_id"]) and
-             stopped["lock_version"] == expected_lock_version do
+    if !(stopped["receipt_id"] == receipt.id and stopped["run_id"] == run.id and
+           stopped["session_id"] == session.id and
+           stopped["local_handle_id"] == session.local_handle_id and
+           stopped["binding_id"] == session.binding_id and
+           stopped["state"] == "available" and is_nil(stopped["active_run_id"]) and
+           stopped["lock_version"] == expected_lock_version) do
       flunk("stop receipt response does not preserve the committed available session")
     end
 
-    unless session.state == "available" and is_nil(session.active_run_id) and
-             session.lock_version == expected_lock_version do
+    if !(session.state == "available" and is_nil(session.active_run_id) and
+           session.lock_version == expected_lock_version) do
       flunk("stopped session is not durably available at the expected lock version")
     end
 
-    unless not is_nil(receipt.inserted_at),
+    if is_nil(receipt.inserted_at),
       do: flunk("stop receipt is missing its insertion timestamp")
 
     %{
@@ -1655,23 +1699,23 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
   end
 
   defp assert_attach_receipt_unchanged!(before, after_snapshot) do
-    unless before.row == after_snapshot.row and before.response == after_snapshot.response and
-             before.inserted_at == after_snapshot.inserted_at and
-             before.request_hash == after_snapshot.request_hash do
+    if !(before.row == after_snapshot.row and before.response == after_snapshot.response and
+           before.inserted_at == after_snapshot.inserted_at and
+           before.request_hash == after_snapshot.request_hash) do
       flunk("immutable attach receipt changed during recovery")
     end
   end
 
   defp assert_goal_receipt_session_unchanged!(before, after_snapshot) do
-    unless before.session_row == after_snapshot.session_row do
+    if before.session_row != after_snapshot.session_row do
       flunk("harness session changed during attach recovery")
     end
   end
 
   defp assert_stop_receipt_unchanged!(before, after_snapshot) do
-    unless before.row == after_snapshot.row and before.response == after_snapshot.response and
-             before.inserted_at == after_snapshot.inserted_at and
-             before.request_hash == after_snapshot.request_hash do
+    if !(before.row == after_snapshot.row and before.response == after_snapshot.response and
+           before.inserted_at == after_snapshot.inserted_at and
+           before.request_hash == after_snapshot.request_hash) do
       flunk("immutable stop receipt changed during recovery")
     end
   end

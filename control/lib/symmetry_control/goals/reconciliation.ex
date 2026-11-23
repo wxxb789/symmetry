@@ -72,11 +72,11 @@ defmodule SymmetryControl.Goals.Reconciliation do
     current = now(opts)
     requested_goal_ids = Keyword.get(opts, :goal_ids)
 
-    if not (is_nil(requested_goal_ids) or
-              (is_list(requested_goal_ids) and Enum.all?(requested_goal_ids, &valid_uuid?/1))) do
-      {:error, :invalid_request}
-    else
+    if is_nil(requested_goal_ids) or
+         (is_list(requested_goal_ids) and Enum.all?(requested_goal_ids, &valid_uuid?/1)) do
       reconcile_due_goal_rows(current, requested_goal_ids, opts)
+    else
+      {:error, :invalid_request}
     end
   rescue
     error in [Ecto.Query.CastError] -> {:error, error}
@@ -178,8 +178,7 @@ defmodule SymmetryControl.Goals.Reconciliation do
                     :quiescent
 
                   automatic_recoverable_pending_work?(goal) ->
-                    {:deferred, "waiting_for_admission_condition",
-                     "goal:waiting_for_admission_condition"}
+                    {:deferred, "waiting_for_admission_condition", "goal:waiting_for_admission_condition"}
 
                   true ->
                     :quiescent
@@ -200,16 +199,7 @@ defmodule SymmetryControl.Goals.Reconciliation do
     end
   end
 
-  defp attempt_automatic_admission!(
-         goal,
-         current,
-         opts,
-         item,
-         purpose,
-         model_profile,
-         payload,
-         source_identity
-       ) do
+  defp attempt_automatic_admission!(goal, current, opts, item, purpose, model_profile, payload, source_identity) do
     task = Admission.admit_authorized_task!(goal, item, purpose, model_profile, payload, opts)
     mutation_id = automatic_admission_mutation_id(goal, item, purpose, source_identity)
 
@@ -268,8 +258,7 @@ defmodule SymmetryControl.Goals.Reconciliation do
   defp automatic_policy_blocked_candidate(goal, opts) do
     revision = current_revision!(goal)
 
-    Enum.find(automatic_admission_candidates(goal, opts), fn {item, purpose, _profile, _payload,
-                                                              source_identity} ->
+    Enum.find(automatic_admission_candidates(goal, opts), fn {item, purpose, _profile, _payload, source_identity} ->
       not automatic_action_allowed?(revision, purpose) and
         not automatic_candidate_blocked?(goal, item, purpose, source_identity)
     end)
@@ -306,20 +295,20 @@ defmodule SymmetryControl.Goals.Reconciliation do
   end
 
   defp automatic_validation_candidates(goal) do
-    current_work_items(goal)
+    goal
+    |> current_work_items()
     |> Enum.flat_map(fn item ->
       if active_task_for_item?(item.id) do
         []
       else
-        Repo.all(
-          from(task in Task,
-            where:
-              task.goal_id == ^goal.id and task.goal_revision == ^goal.current_revision and
-                task.work_item_id == ^item.id and task.purpose != "validate" and
-                task.state == "completed" and task.current_generation > 0,
-            order_by: [asc: task.inserted_at, asc: task.id]
-          )
+        from(task in Task,
+          where:
+            task.goal_id == ^goal.id and task.goal_revision == ^goal.current_revision and
+              task.work_item_id == ^item.id and task.purpose != "validate" and
+              task.state == "completed" and task.current_generation > 0,
+          order_by: [asc: task.inserted_at, asc: task.id]
         )
+        |> Repo.all()
         |> Enum.flat_map(fn task ->
           if awaiting_validation_settlement?(goal, task) and
                not Repo.exists?(
@@ -343,20 +332,20 @@ defmodule SymmetryControl.Goals.Reconciliation do
   defp automatic_external_wait_candidates(_goal, _opts), do: []
 
   defp automatic_repair_candidates(goal) do
-    current_work_items(goal)
+    goal
+    |> current_work_items()
     |> Enum.flat_map(fn item ->
       if active_task_for_item?(item.id) or accepted_work_item?(goal, item.id) do
         []
       else
-        Repo.all(
-          from(task in Task,
-            where:
-              task.goal_id == ^goal.id and task.goal_revision == ^goal.current_revision and
-                task.work_item_id == ^item.id and task.purpose != "validate" and
-                task.state == "completed" and task.current_generation > 0,
-            order_by: [desc: task.inserted_at, desc: task.id]
-          )
+        from(task in Task,
+          where:
+            task.goal_id == ^goal.id and task.goal_revision == ^goal.current_revision and
+              task.work_item_id == ^item.id and task.purpose != "validate" and
+              task.state == "completed" and task.current_generation > 0,
+          order_by: [desc: task.inserted_at, desc: task.id]
         )
+        |> Repo.all()
         |> Enum.flat_map(fn task ->
           if settled_as?(goal, task, "repair_required"),
             do: [{:repair, item.id, task.id}],
@@ -367,20 +356,20 @@ defmodule SymmetryControl.Goals.Reconciliation do
   end
 
   defp automatic_progress_candidates(goal) do
-    current_work_items(goal)
+    goal
+    |> current_work_items()
     |> Enum.flat_map(fn item ->
       if active_task_for_item?(item.id) or accepted_work_item?(goal, item.id) do
         []
       else
-        Repo.all(
-          from(task in Task,
-            where:
-              task.goal_id == ^goal.id and task.goal_revision == ^goal.current_revision and
-                task.work_item_id == ^item.id and task.purpose in ["implement", "observe"] and
-                task.state == "completed" and task.current_generation > 0,
-            order_by: [desc: task.inserted_at, desc: task.id]
-          )
+        from(task in Task,
+          where:
+            task.goal_id == ^goal.id and task.goal_revision == ^goal.current_revision and
+              task.work_item_id == ^item.id and task.purpose in ["implement", "observe"] and
+              task.state == "completed" and task.current_generation > 0,
+          order_by: [desc: task.inserted_at, desc: task.id]
         )
+        |> Repo.all()
         |> Enum.flat_map(fn task ->
           if settled_as?(goal, task, "progress"), do: [{:implement, item.id, task.id}], else: []
         end)
@@ -389,7 +378,8 @@ defmodule SymmetryControl.Goals.Reconciliation do
   end
 
   defp automatic_baseline_candidates(goal) do
-    current_work_items(goal)
+    goal
+    |> current_work_items()
     |> Enum.filter(fn item ->
       baseline_source_present?(item) and
         not active_task_for_item?(item.id) and
@@ -595,8 +585,7 @@ defmodule SymmetryControl.Goals.Reconciliation do
         with %WorkOutcome{candidate_subject: candidate_subject} <- outcome,
              {:ok, parsed} <- parse_subject(candidate_subject),
              true <- value(parsed, "resource_id") == item.repository_resource_id do
-          {:ok, parsed,
-           "baseline:dependency:" <> item.baseline_dependency_id <> ":" <> outcome.id}
+          {:ok, parsed, "baseline:dependency:" <> item.baseline_dependency_id <> ":" <> outcome.id}
         else
           _ -> :none
         end
@@ -680,8 +669,7 @@ defmodule SymmetryControl.Goals.Reconciliation do
               :invalid_plan,
               :invalid_validation,
               :invalid_subject
-            ],
-       do: {:ok, Atom.to_string(reason)}
+            ], do: {:ok, Atom.to_string(reason)}
 
   defp automatic_admission_blocker_reason(_reason), do: :retry
 
@@ -713,9 +701,8 @@ defmodule SymmetryControl.Goals.Reconciliation do
   end
 
   defp automatic_budget_status(goal, revision) do
-    with {:ok, amount} <- Budget.server_reservation_amount(revision),
-         :ok <- Budget.budget_status(goal, revision, amount) do
-      :ok
+    with {:ok, amount} <- Budget.server_reservation_amount(revision) do
+      Budget.budget_status(goal, revision, amount)
     end
   end
 
@@ -802,7 +789,7 @@ defmodule SymmetryControl.Goals.Reconciliation do
   defp automatic_deferred_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
 
   defp defer_automatic_reconciliation!(goal, current, opts, reason, deferred_identity) do
-    next_wake_at = DateTime.add(current, @automatic_reconciliation_backoff_seconds, :second)
+    next_wake_at = DateTime.shift(current, second: @automatic_reconciliation_backoff_seconds)
     event_id = automatic_reconciliation_deferred_mutation_id(goal, deferred_identity, reason)
 
     {updated, event_sequence} =
@@ -892,8 +879,7 @@ defmodule SymmetryControl.Goals.Reconciliation do
     )
   end
 
-  defp awaiting_validation_settlement?(goal, task),
-    do: settled_as?(goal, task, "awaiting_validation")
+  defp awaiting_validation_settlement?(goal, task), do: settled_as?(goal, task, "awaiting_validation")
 
   defp settled_as?(goal, task, settlement) do
     case Repo.one(
@@ -926,9 +912,7 @@ defmodule SymmetryControl.Goals.Reconciliation do
   defp reconcile_due_goal_rows(current, requested_goal_ids, opts) do
     limit = Keyword.get(opts, :limit, 100)
 
-    if not (is_integer(limit) and limit > 0) do
-      {:error, :invalid_request}
-    else
+    if is_integer(limit) and limit > 0 do
       due =
         from(goal in Goal,
           where:
@@ -958,13 +942,14 @@ defmodule SymmetryControl.Goals.Reconciliation do
           if Enum.any?(reconciled, &(&1.disposition == :admitted)), do: Scheduler.wake()
           {:ok, reconciled}
       end
+    else
+      {:error, :invalid_request}
     end
   end
 
   # Each admission candidate commits in its own Goal transaction. A durable
   # business blocker therefore survives a later candidate's retryable failure.
-  defp reconcile_due_goal(goal_id, current, opts),
-    do: reconcile_due_goal(goal_id, current, opts, true, [])
+  defp reconcile_due_goal(goal_id, current, opts), do: reconcile_due_goal(goal_id, current, opts, true, [])
 
   defp reconcile_due_goal(goal_id, current, opts, require_due?, reconciled) do
     case reconcile_due_goal_once(goal_id, current, opts, require_due?) do
@@ -1088,15 +1073,7 @@ defmodule SymmetryControl.Goals.Reconciliation do
     end)
   end
 
-  defp append_automatic_admission_blocker!(
-         goal,
-         current,
-         opts,
-         item,
-         purpose,
-         source_identity,
-         blocker_reason
-       ) do
+  defp append_automatic_admission_blocker!(goal, current, opts, item, purpose, source_identity, blocker_reason) do
     candidate_identity = automatic_candidate_identity(item, purpose, source_identity)
     admission_key = automatic_admission_mutation_id(goal, item, purpose, source_identity)
 
@@ -1215,8 +1192,6 @@ defmodule SymmetryControl.Goals.Reconciliation do
               disposition: :noop
             }
           end
-        else
-          nil
         end
       else
         _ -> nil

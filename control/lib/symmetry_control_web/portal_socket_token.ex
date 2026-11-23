@@ -26,9 +26,7 @@ defmodule SymmetryControlWeb.PortalSocketToken do
   tokens are refused; there is no other credential this socket accepts.
   """
   def verify(token) when is_binary(token) and byte_size(token) > 0 do
-    case Phoenix.Token.verify(SymmetryControlWeb.Endpoint, @salt, token,
-           max_age: max_age_seconds()
-         ) do
+    case Phoenix.Token.verify(SymmetryControlWeb.Endpoint, @salt, token, max_age: max_age_seconds()) do
       {:ok, payload} when is_map(payload) -> audience_of(payload)
       {:error, reason} -> {:error, reason}
     end

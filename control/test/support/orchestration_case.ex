@@ -8,8 +8,6 @@ defmodule SymmetryControl.OrchestrationCase do
 
   using do
     quote do
-      alias SymmetryControl.Repo
-
       import Ecto
       import Ecto.Changeset
       import Ecto.Query
@@ -28,6 +26,8 @@ defmodule SymmetryControl.OrchestrationCase do
           goal_command: 3,
           goal_command: 4
         ]
+
+      alias SymmetryControl.Repo
     end
   end
 

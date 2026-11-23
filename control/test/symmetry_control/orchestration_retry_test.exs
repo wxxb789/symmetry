@@ -181,6 +181,5 @@ defmodule SymmetryControl.OrchestrationRetryTest do
              Orchestration.transition(run_id, fence, state, %{}, uuid(number), now: @now)
   end
 
-  defp uuid(number),
-    do: "00000000-0000-0000-0000-" <> String.pad_leading(Integer.to_string(number), 12, "0")
+  defp uuid(number), do: "00000000-0000-0000-0000-" <> String.pad_leading(Integer.to_string(number), 12, "0")
 end

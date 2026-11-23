@@ -1,10 +1,6 @@
 defmodule SymmetryControl.Orchestration.Registry do
   @moduledoc false
 
-  @native_harness_kinds ["codex", "claude_code", "pi", "opencode", "omp", "omo"]
-  @supervisory_commands ["guidance", "pause", "resume"]
-  @terminal_states ["completed", "failed", "cancelled", "expired"]
-
   import Ecto.Query
 
   import SymmetryControl.Goals.Eligibility,
@@ -28,16 +24,20 @@ defmodule SymmetryControl.Orchestration.Registry do
       stamp_update: 2
     ]
 
-  alias SymmetryControl.Orchestration.Command
   alias SymmetryControl.Goals.ContractValidation
   alias SymmetryControl.Goals.HarnessSession
+  alias SymmetryControl.Orchestration.Command
   alias SymmetryControl.Orchestration.Machine
-  alias SymmetryControl.Workspaces.ProjectResource
-  alias SymmetryControl.Repo
-  alias SymmetryControl.RequestHash
   alias SymmetryControl.Orchestration.Run
   alias SymmetryControl.Orchestration.Runtime
   alias SymmetryControl.Orchestration.Task
+  alias SymmetryControl.Repo
+  alias SymmetryControl.RequestHash
+  alias SymmetryControl.Workspaces.ProjectResource
+
+  @native_harness_kinds ["codex", "claude_code", "pi", "opencode", "omp", "omo"]
+  @supervisory_commands ["guidance", "pause", "resume"]
+  @terminal_states ["completed", "failed", "cancelled", "expired"]
 
   @spec native_harness_kind?(term()) :: boolean()
   def native_harness_kind?(kind), do: kind in native_harness_kinds()
@@ -49,8 +49,7 @@ defmodule SymmetryControl.Orchestration.Registry do
           {:ok, %{machine: Machine.t(), token: String.t()}, :created | :replayed}
           | {:error, atom() | Ecto.Changeset.t()}
   def enroll_machine(attrs, idempotency_key, opts)
-      when is_map(attrs) and is_binary(idempotency_key) and byte_size(idempotency_key) > 0 and
-             is_list(opts) do
+      when is_map(attrs) and is_binary(idempotency_key) and byte_size(idempotency_key) > 0 and is_list(opts) do
     submitted = Keyword.get(opts, :enrollment_token)
     expected = Keyword.get(opts, :expected_enrollment_token)
     token = value(attrs, :machine_token)
@@ -67,7 +66,7 @@ defmodule SymmetryControl.Orchestration.Registry do
         request = %{name: value(attrs, :name), machine_token: token}
         {request_hash, request_hash_version} = RequestHash.write(request)
 
-        Repo.transaction(fn ->
+        fn ->
           case Repo.one(
                  from machine in Machine,
                    where: machine.enrollment_idempotency_key == ^idempotency_key,
@@ -75,7 +74,8 @@ defmodule SymmetryControl.Orchestration.Registry do
                ) do
             nil ->
               changeset =
-                Machine.changeset(%Machine{}, %{
+                %Machine{}
+                |> Machine.changeset(%{
                   name: value(attrs, :name),
                   token_digest: digest(token),
                   enrollment_idempotency_key: idempotency_key,
@@ -134,7 +134,8 @@ defmodule SymmetryControl.Orchestration.Registry do
                  do: {machine, :replayed},
                  else: rollback(:idempotency_conflict)
           end
-        end)
+        end
+        |> Repo.transaction()
         |> case do
           {:ok, {machine, disposition}} ->
             {:ok, %{machine: machine, token: token}, disposition}
@@ -163,10 +164,8 @@ defmodule SymmetryControl.Orchestration.Registry do
 
   def register_runtimes(machine_id, daemon_instance_id, specifications, opts)
       when is_list(specifications) and is_list(opts) do
-    if not (valid_uuid?(machine_id) and valid_uuid?(daemon_instance_id) and
-              Enum.all?(specifications, &valid_runtime_specification?/1)) do
-      {:error, :invalid_request}
-    else
+    if valid_uuid?(machine_id) and valid_uuid?(daemon_instance_id) and
+         Enum.all?(specifications, &valid_runtime_specification?/1) do
       Repo.transaction(fn ->
         _machine = lock_machine(machine_id)
         now = now(opts)
@@ -231,6 +230,8 @@ defmodule SymmetryControl.Orchestration.Registry do
           end
         end)
       end)
+    else
+      {:error, :invalid_request}
     end
   end
 
@@ -241,9 +242,9 @@ defmodule SymmetryControl.Orchestration.Registry do
 
   def heartbeat(runtime_id, runtime_epoch, active_runs, opts)
       when is_integer(runtime_epoch) and runtime_epoch > 0 and is_list(active_runs) do
-    if not (valid_uuid?(runtime_id) and Enum.all?(active_runs, &valid_active_run?/1)),
-      do: {:error, :invalid_request},
-      else: heartbeat_runtime(runtime_id, runtime_epoch, opts)
+    if valid_uuid?(runtime_id) and Enum.all?(active_runs, &valid_active_run?/1),
+      do: heartbeat_runtime(runtime_id, runtime_epoch, opts),
+      else: {:error, :invalid_request}
   end
 
   def heartbeat(_, _, _, _), do: {:error, :invalid_request}
@@ -268,8 +269,7 @@ defmodule SymmetryControl.Orchestration.Registry do
   end
 
   @spec machine_owns_runtime?(Ecto.UUID.t(), Ecto.UUID.t()) :: boolean()
-  def machine_owns_runtime?(machine_id, runtime_id),
-    do: owned?(Runtime, machine_id, runtime_id, :machine_id)
+  def machine_owns_runtime?(machine_id, runtime_id), do: owned?(Runtime, machine_id, runtime_id, :machine_id)
 
   @spec machine_owns_run?(Ecto.UUID.t(), Ecto.UUID.t()) :: boolean()
   def machine_owns_run?(machine_id, run_id) when is_binary(machine_id) and is_binary(run_id) do
@@ -288,8 +288,7 @@ defmodule SymmetryControl.Orchestration.Registry do
   def machine_owns_run?(_, _), do: false
 
   @spec machine_owns_command?(Ecto.UUID.t(), Ecto.UUID.t()) :: boolean()
-  def machine_owns_command?(machine_id, command_id)
-      when is_binary(machine_id) and is_binary(command_id) do
+  def machine_owns_command?(machine_id, command_id) when is_binary(machine_id) and is_binary(command_id) do
     if valid_uuid?(machine_id) and valid_uuid?(command_id) do
       Repo.exists?(
         from command in Command,
@@ -417,14 +416,13 @@ defmodule SymmetryControl.Orchestration.Registry do
           lock: "FOR SHARE"
       ) || rollback(:invalid_request)
 
-    unless resource.kind == "repository", do: rollback(:invalid_request)
+    if resource.kind != "repository", do: rollback(:invalid_request)
   end
 
   defp ensure_runtime_repository_binding_change_safe!(nil, _repository_resource_id), do: :ok
 
   defp ensure_runtime_repository_binding_change_safe!(runtime, repository_resource_id)
-       when runtime.repository_resource_id == repository_resource_id,
-       do: :ok
+       when runtime.repository_resource_id == repository_resource_id, do: :ok
 
   defp ensure_runtime_repository_binding_change_safe!(runtime, _repository_resource_id) do
     active_goal_run? =
@@ -486,8 +484,7 @@ defmodule SymmetryControl.Orchestration.Registry do
       is_integer(protocol_version) and protocol_version > 0 and protocol_version <= 2_147_483_647
   end
 
-  defp valid_registered_adapter?(adapter, _adapter_present?, specification, capabilities)
-       when is_map(adapter) do
+  defp valid_registered_adapter?(adapter, _adapter_present?, specification, capabilities) when is_map(adapter) do
     adapter_matches_runtime_metadata?(adapter, specification) and
       valid_adapter_operations?(value(adapter, :operations)) and
       generic_adapter_operations_allowed?(
@@ -503,8 +500,7 @@ defmodule SymmetryControl.Orchestration.Registry do
 
   defp valid_registered_adapter?(nil, false, _specification, _capabilities), do: true
 
-  defp valid_registered_adapter?(_adapter, _adapter_present?, _specification, _capabilities),
-    do: false
+  defp valid_registered_adapter?(_adapter, _adapter_present?, _specification, _capabilities), do: false
 
   @doc false
   def adapter_matches_runtime_metadata?(adapter, specification) do
@@ -581,12 +577,10 @@ defmodule SymmetryControl.Orchestration.Registry do
   end
 
   @doc false
-  def legacy_supervisory_runtime?(runtime),
-    do: is_nil(runtime.harness_kind) or runtime.harness_kind == "generic"
+  def legacy_supervisory_runtime?(runtime), do: is_nil(runtime.harness_kind) or runtime.harness_kind == "generic"
 
-  defp nonempty_bounded_text?(value, maximum)
-       when is_binary(value) and byte_size(value) <= maximum,
-       do: String.trim(value) != ""
+  defp nonempty_bounded_text?(value, maximum) when is_binary(value) and byte_size(value) <= maximum,
+    do: String.trim(value) != ""
 
   defp nonempty_bounded_text?(_value, _maximum), do: false
 
@@ -597,8 +591,7 @@ defmodule SymmetryControl.Orchestration.Registry do
   def jsonb_compatible?(%DateTime{}), do: true
   def jsonb_compatible?(%_{}), do: false
 
-  def jsonb_compatible?(value) when is_list(value),
-    do: Enum.all?(value, &jsonb_compatible?/1)
+  def jsonb_compatible?(value) when is_list(value), do: Enum.all?(value, &jsonb_compatible?/1)
 
   def jsonb_compatible?(value) when is_map(value) do
     Enum.all?(value, fn {key, nested_value} ->
@@ -606,21 +599,18 @@ defmodule SymmetryControl.Orchestration.Registry do
     end)
   end
 
-  def jsonb_compatible?(value) when is_number(value) or is_boolean(value) or is_nil(value),
-    do: true
+  def jsonb_compatible?(value) when is_number(value) or is_boolean(value) or is_nil(value), do: true
 
   def jsonb_compatible?(_), do: false
 
   defp jsonb_key_compatible?(key) when is_binary(key), do: jsonb_compatible?(key)
 
-  defp jsonb_key_compatible?(key) when is_atom(key),
-    do: key |> Atom.to_string() |> jsonb_compatible?()
+  defp jsonb_key_compatible?(key) when is_atom(key), do: key |> Atom.to_string() |> jsonb_compatible?()
 
   defp jsonb_key_compatible?(_), do: false
 
   @doc false
-  def map_key?(map, key) when is_map(map),
-    do: Map.has_key?(map, key) or Map.has_key?(map, Atom.to_string(key))
+  def map_key?(map, key) when is_map(map), do: Map.has_key?(map, key) or Map.has_key?(map, Atom.to_string(key))
 
   def map_key?(_map, _key), do: false
 
@@ -638,8 +628,7 @@ defmodule SymmetryControl.Orchestration.Registry do
 
   defp digest(value), do: :crypto.hash(:sha256, value)
 
-  defp owned?(schema, machine_id, id, machine_field)
-       when is_binary(machine_id) and is_binary(id) do
+  defp owned?(schema, machine_id, id, machine_field) when is_binary(machine_id) and is_binary(id) do
     if valid_uuid?(machine_id) and valid_uuid?(id) do
       Repo.exists?(
         from record in schema,
@@ -652,8 +641,7 @@ defmodule SymmetryControl.Orchestration.Registry do
 
   defp owned?(_, _, _, _), do: false
 
-  defp secure_compare(left, right) when byte_size(left) == byte_size(right),
-    do: Plug.Crypto.secure_compare(left, right)
+  defp secure_compare(left, right) when byte_size(left) == byte_size(right), do: Plug.Crypto.secure_compare(left, right)
 
   defp secure_compare(_, _), do: false
 end

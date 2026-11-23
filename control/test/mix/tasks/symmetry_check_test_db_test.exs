@@ -113,6 +113,15 @@ defmodule Mix.Tasks.Symmetry.CheckTestDbTest do
     end
   end
 
+  test "names every reserved acceptance database in the task documentation" do
+    {:docs_v1, _anno, _language, _format, %{"en" => moduledoc}, _metadata, _docs} =
+      Code.fetch_docs(CheckTestDb)
+
+    for value <- @acceptance_databases ++ @acceptance_database_prefixes do
+      assert moduledoc =~ value
+    end
+  end
+
   test "run/1 refuses the database the repository configures" do
     repo_config = Application.get_env(:symmetry_control, SymmetryControl.Repo) || []
 

@@ -57,7 +57,7 @@ defmodule SymmetryControl.OrchestrationTelemetryTest do
     end)
 
     assert %{expired_runs: 1, offline_runtimes: 1} =
-             Orchestration.expire(now: DateTime.add(@now, 31, :second))
+             Orchestration.expire(now: DateTime.shift(@now, second: 31))
 
     assert_event([:symmetry_control, :orchestration, :run, :expired], ref, fn metadata ->
       assert metadata.run_id == run.id
@@ -88,9 +88,7 @@ defmodule SymmetryControl.OrchestrationTelemetryTest do
       )
 
     {:ok, _task, :created} =
-      Orchestration.submit_task(task_attrs(goal: "Observe events"), "rolled-back-claim",
-        now: @now
-      )
+      Orchestration.submit_task(task_attrs(goal: "Observe events"), "rolled-back-claim", now: @now)
 
     {:ok, run} = Orchestration.assign_one(now: @now)
 

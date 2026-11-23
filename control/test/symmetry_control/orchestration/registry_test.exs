@@ -76,9 +76,7 @@ defmodule SymmetryControl.Orchestration.RegistryTest do
     assert Registry.valid_adapter_operations?(adapter_operations())
     refute Registry.valid_adapter_operations?(Map.put(adapter_operations(), "events", false))
 
-    refute Registry.valid_adapter_operations?(
-             Map.put(adapter_operations(), "guidance", "sometimes")
-           )
+    refute Registry.valid_adapter_operations?(Map.put(adapter_operations(), "guidance", "sometimes"))
   end
 
   test "legacy_supervisory_runtime? is true for absent and generic harness kinds only" do

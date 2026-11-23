@@ -60,17 +60,19 @@ defmodule SymmetryControl.Goals.PlanContracts do
         :error -> []
       end
 
-    with {:ok, profiles} <- ValidationProfiles.snapshot(registry_opts) do
-      if Enum.all?(acceptance_contracts, fn acceptance_contract ->
-           match?(
-             {:ok, _bindings},
-             ValidationProfiles.bindings_for_acceptance(acceptance_contract, profiles: profiles)
-           )
-         end),
-         do: :ok,
-         else: {:error, :invalid_validation_profile}
-    else
-      {:error, _reason} -> {:error, :invalid_validation_profile}
+    case ValidationProfiles.snapshot(registry_opts) do
+      {:ok, profiles} ->
+        if Enum.all?(acceptance_contracts, fn acceptance_contract ->
+             match?(
+               {:ok, _bindings},
+               ValidationProfiles.bindings_for_acceptance(acceptance_contract, profiles: profiles)
+             )
+           end),
+           do: :ok,
+           else: {:error, :invalid_validation_profile}
+
+      {:error, _reason} ->
+        {:error, :invalid_validation_profile}
     end
   end
 
@@ -141,8 +143,7 @@ defmodule SymmetryControl.Goals.PlanContracts do
 
   defp designation_triples(items) do
     Enum.map(items, fn item ->
-      {value(item, :key), value(item, :required, true) == true,
-       value(item, :integration, false) == true}
+      {value(item, :key), value(item, :required, true) == true, value(item, :integration, false) == true}
     end)
   end
 
@@ -293,8 +294,7 @@ defmodule SymmetryControl.Goals.PlanContracts do
     end
   end
 
-  defp untrimmed_string?(value) when is_binary(value),
-    do: value == String.trim(value) and value != ""
+  defp untrimmed_string?(value) when is_binary(value), do: value == String.trim(value) and value != ""
 
   defp untrimmed_string?(_value), do: false
 

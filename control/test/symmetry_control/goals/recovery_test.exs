@@ -2,22 +2,29 @@ Code.require_file("goals_test_support.exs", __DIR__)
 
 defmodule SymmetryControl.Goals.RecoveryTest do
   use SymmetryControl.OrchestrationCase, async: false
+  @now ~U[2026-09-09 00:00:00.000000Z]
+  use SymmetryControl.TestFixtures,
+    command_opts: [
+      now: @now,
+      validation_profiles: SymmetryControl.GoalsTestSupport.validation_profiles()
+    ]
 
   import SymmetryControl.GoalsTestSupport
 
   alias SymmetryControl.Goals
+  alias SymmetryControl.Goals.ContextSnapshot
+  alias SymmetryControl.Goals.GoalBudgetReservation
+  alias SymmetryControl.Goals.GoalDecision
+  alias SymmetryControl.Goals.GoalEvent
   alias SymmetryControl.Goals.HarnessSession
   alias SymmetryControl.Goals.Workers.WakeupWorker
+  alias SymmetryControl.Goals.WorkOutcome
   alias SymmetryControl.Orchestration.Run
   alias SymmetryControl.Orchestration.Runtime
   alias SymmetryControl.Orchestration.Task
   alias SymmetryControl.Repo
 
-  @now ~U[2026-09-09 00:00:00.000000Z]
   @validation_runtime_id "00000000-0000-4000-8000-000000000001"
-
-  use SymmetryControl.TestFixtures,
-    command_opts: [now: @now, validation_profiles: validation_profiles()]
 
   setup :put_goal_validation_profiles
 
@@ -26,8 +33,7 @@ defmodule SymmetryControl.Goals.RecoveryTest do
 
     assert {:ok, amended, :created} =
              command_current(goal.id, "amend", %{
-               revision_contract:
-                 amended_revision_contract("A revised plan requires new admitted work."),
+               revision_contract: amended_revision_contract("A revised plan requires new admitted work."),
                reason: "The prior revision is retained as history."
              })
 
@@ -64,7 +70,7 @@ defmodule SymmetryControl.Goals.RecoveryTest do
              })
 
     decision_id = decision.response["decision"]["id"]
-    decision_version = Repo.get!(SymmetryControl.Goals.GoalDecision, decision_id).lock_version
+    decision_version = Repo.get!(GoalDecision, decision_id).lock_version
 
     assert {:ok, _resolved, :created} =
              command_current(goal.id, "resolve_decision", %{
@@ -96,8 +102,8 @@ defmodule SymmetryControl.Goals.RecoveryTest do
   end
 
   test "operator acceptance requires a current scoped review and wakes closed validation evaluation once" do
-    {goal, item, _producer, _producer_run, validation, validation_run, validation_runtime,
-     validation_fence, candidate_subject} =
+    {goal, item, _producer, _producer_run, validation, validation_run, validation_runtime, validation_fence,
+     candidate_subject} =
       independent_validation_attempt_fixture(check_and_operator_acceptance_contract())
 
     evidence = evidence_attrs(validation_run.id, item, candidate_subject)
@@ -132,11 +138,10 @@ defmodule SymmetryControl.Goals.RecoveryTest do
                "resolve_decision",
                %{
                  decision_id: completion_id,
-                 expected_decision_version:
-                   Repo.get!(SymmetryControl.Goals.GoalDecision, completion_id).lock_version,
+                 expected_decision_version: Repo.get!(GoalDecision, completion_id).lock_version,
                  option_id: "accept"
                },
-               now: DateTime.add(@now, 1, :second)
+               now: DateTime.shift(@now, second: 1)
              )
 
     assert {:ok, ^original_settlement_receipt} =
@@ -178,18 +183,17 @@ defmodule SymmetryControl.Goals.RecoveryTest do
                "resolve_decision",
                %{
                  decision_id: wrong_subject_review_id,
-                 expected_decision_version:
-                   Repo.get!(SymmetryControl.Goals.GoalDecision, wrong_subject_review_id).lock_version,
+                 expected_decision_version: Repo.get!(GoalDecision, wrong_subject_review_id).lock_version,
                  option_id: "accept"
                },
-               now: DateTime.add(@now, 3, :second)
+               now: DateTime.shift(@now, second: 3)
              )
 
     assert {:ok, %{"settlement" => "awaiting_validation"}} =
              Goals.settle_task(validation.id, validation_run.id, 1, now: @now)
 
     refute Repo.exists?(
-             from(outcome in SymmetryControl.Goals.WorkOutcome,
+             from(outcome in WorkOutcome,
                where:
                  outcome.validation_task_id == ^validation.id and
                    outcome.disposition == "accepted"
@@ -213,8 +217,7 @@ defmodule SymmetryControl.Goals.RecoveryTest do
     resolve_command =
       goal_command(current_goal, "resolve_decision", %{
         decision_id: scoped_review_id,
-        expected_decision_version:
-          Repo.get!(SymmetryControl.Goals.GoalDecision, scoped_review_id).lock_version,
+        expected_decision_version: Repo.get!(GoalDecision, scoped_review_id).lock_version,
         option_id: "accept"
       })
 
@@ -223,7 +226,7 @@ defmodule SymmetryControl.Goals.RecoveryTest do
                goal.id,
                resolve_command,
                "operator:test",
-               now: DateTime.add(@now, 4, :second),
+               now: DateTime.shift(@now, second: 4),
                validation_profiles: validation_profiles()
              )
 
@@ -234,7 +237,7 @@ defmodule SymmetryControl.Goals.RecoveryTest do
                goal.id,
                resolve_command,
                "operator:test",
-               now: DateTime.add(@now, 4, :second),
+               now: DateTime.shift(@now, second: 4),
                validation_profiles: validation_profiles()
              )
 
@@ -245,7 +248,7 @@ defmodule SymmetryControl.Goals.RecoveryTest do
 
     assert [late_outcome_event] =
              Repo.all(
-               from(event in SymmetryControl.Goals.GoalEvent,
+               from(event in GoalEvent,
                  where:
                    event.goal_id == ^goal.id and event.kind == "validation_outcome_settled" and
                      event.payload["task_id"] == ^validation.id,
@@ -286,7 +289,7 @@ defmodule SymmetryControl.Goals.RecoveryTest do
 
     assert [%{decision_id: ^scoped_review_id}] =
              Repo.all(
-               from(outcome in SymmetryControl.Goals.WorkOutcome,
+               from(outcome in WorkOutcome,
                  where:
                    outcome.validation_task_id == ^validation.id and
                      outcome.disposition == "accepted",
@@ -296,11 +299,12 @@ defmodule SymmetryControl.Goals.RecoveryTest do
   end
 
   test "failed independent validation records one immutable rejection and cannot be bypassed by passed evidence from that attempt" do
-    {goal, item, producer, producer_run, validation, validation_run, validation_runtime,
-     validation_fence, candidate_subject} = independent_validation_attempt_fixture()
+    {goal, item, producer, producer_run, validation, validation_run, validation_runtime, validation_fence,
+     candidate_subject} = independent_validation_attempt_fixture()
 
     failed_evidence =
-      evidence_attrs(validation_run.id, item, candidate_subject)
+      validation_run.id
+      |> evidence_attrs(item, candidate_subject)
       |> Map.put(:evidence_id, Ecto.UUID.generate())
       |> Map.put(:evidence_key, "check:failed")
       |> Map.put(:verdict, "failed")
@@ -316,7 +320,8 @@ defmodule SymmetryControl.Goals.RecoveryTest do
              )
 
     passed_evidence =
-      evidence_attrs(validation_run.id, item, candidate_subject)
+      validation_run.id
+      |> evidence_attrs(item, candidate_subject)
       |> Map.put(:evidence_id, Ecto.UUID.generate())
       |> Map.put(:evidence_key, "check:passed")
 
@@ -336,7 +341,7 @@ defmodule SymmetryControl.Goals.RecoveryTest do
 
     [rejected] =
       Repo.all(
-        from(outcome in SymmetryControl.Goals.WorkOutcome,
+        from(outcome in WorkOutcome,
           where:
             outcome.goal_id == ^goal.id and outcome.work_item_id == ^item.id and
               outcome.disposition == "rejected"
@@ -369,7 +374,7 @@ defmodule SymmetryControl.Goals.RecoveryTest do
     assert {:ok, ^receipt} = Goals.settle_task(validation.id, validation_run.id, 1, now: @now)
 
     assert Repo.aggregate(
-             from(outcome in SymmetryControl.Goals.WorkOutcome,
+             from(outcome in WorkOutcome,
                where:
                  outcome.validation_task_id == ^validation.id and
                    outcome.disposition == "rejected"
@@ -395,7 +400,8 @@ defmodule SymmetryControl.Goals.RecoveryTest do
       completed_goal_run_fixture(retry_validation, retry_runtime, candidate_subject)
 
     retry_evidence =
-      evidence_attrs(retry_run.id, item, candidate_subject)
+      retry_run.id
+      |> evidence_attrs(item, candidate_subject)
       |> Map.put(:evidence_key, "check:retry-passed")
 
     assert {:ok, %{evidence: retry_passed}, :created} =
@@ -411,7 +417,7 @@ defmodule SymmetryControl.Goals.RecoveryTest do
              Goals.settle_task(retry_validation.id, retry_run.id, 1, now: @now)
 
     assert Repo.exists?(
-             from(outcome in SymmetryControl.Goals.WorkOutcome,
+             from(outcome in WorkOutcome,
                where:
                  outcome.goal_id == ^goal.id and outcome.work_item_id == ^item.id and
                    outcome.validation_task_id == ^retry_validation.id and
@@ -436,7 +442,7 @@ defmodule SymmetryControl.Goals.RecoveryTest do
     assert {:ok, []} = Goals.recover_pending_terminal_settlements(now: @now)
 
     assert {:ok, [%{task_id: task_id, run_id: run_id, generation: 1}]} =
-             Goals.recover_pending_terminal_settlements(now: DateTime.add(@now, 8 * 60, :second))
+             Goals.recover_pending_terminal_settlements(now: DateTime.shift(@now, minute: 8))
 
     assert task_id == task.id
     assert run_id == run.id
@@ -460,16 +466,17 @@ defmodule SymmetryControl.Goals.RecoveryTest do
     runtime = Repo.get!(Runtime, runtime.id)
 
     attrs =
-      session_attrs(item, "omp-retained-workspace")
+      item
+      |> session_attrs("omp-retained-workspace")
       |> Map.merge(Map.take(metadata, [:harness_kind, :harness_version, :adapter_version]))
 
     retained = available_session_fixture(runtime, item, attrs)
 
     counts_before = %{
-      snapshots: Repo.aggregate(SymmetryControl.Goals.ContextSnapshot, :count),
+      snapshots: Repo.aggregate(ContextSnapshot, :count),
       tasks: Repo.aggregate(Task, :count),
-      reservations: Repo.aggregate(SymmetryControl.Goals.GoalBudgetReservation, :count),
-      events: Repo.aggregate(SymmetryControl.Goals.GoalEvent, :count)
+      reservations: Repo.aggregate(GoalBudgetReservation, :count),
+      events: Repo.aggregate(GoalEvent, :count)
     }
 
     for changed <- [
@@ -494,11 +501,10 @@ defmodule SymmetryControl.Goals.RecoveryTest do
 
       assert counts_before ==
                %{
-                 snapshots: Repo.aggregate(SymmetryControl.Goals.ContextSnapshot, :count),
+                 snapshots: Repo.aggregate(ContextSnapshot, :count),
                  tasks: Repo.aggregate(Task, :count),
-                 reservations:
-                   Repo.aggregate(SymmetryControl.Goals.GoalBudgetReservation, :count),
-                 events: Repo.aggregate(SymmetryControl.Goals.GoalEvent, :count)
+                 reservations: Repo.aggregate(GoalBudgetReservation, :count),
+                 events: Repo.aggregate(GoalEvent, :count)
                }
     end
 

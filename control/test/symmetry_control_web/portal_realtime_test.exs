@@ -3,11 +3,15 @@ defmodule SymmetryControlWeb.PortalRealtimeTest do
 
   import Phoenix.ChannelTest
 
+  alias Phoenix.Transports.WebSocket
   alias SymmetryControl.Goals.Goal
   alias SymmetryControl.Portal.Invalidations
   alias SymmetryControl.Repo
   alias SymmetryControl.Workspaces
-  alias SymmetryControlWeb.{PortalChannel, PortalSession, PortalSocket, PortalSocketToken}
+  alias SymmetryControlWeb.PortalChannel
+  alias SymmetryControlWeb.PortalSession
+  alias SymmetryControlWeb.PortalSocket
+  alias SymmetryControlWeb.PortalSocketToken
 
   @operator_token "test-operator-token"
   # One identity reused by the path table so a row's path and its expectation
@@ -185,18 +189,14 @@ defmodule SymmetryControlWeb.PortalRealtimeTest do
   test "the write classification names the changed resource for every write surface" do
     table = [
       {:post, "/portal/api/connections", %{kind: "connection"}},
-      {:patch, "/portal/api/connections/#{@resource_id}",
-       %{kind: "connection", id: @resource_id}},
-      {:post, "/portal/api/projects/#{@resource_id}/resources",
-       %{kind: "resource", project_id: @resource_id}},
+      {:patch, "/portal/api/connections/#{@resource_id}", %{kind: "connection", id: @resource_id}},
+      {:post, "/portal/api/projects/#{@resource_id}/resources", %{kind: "resource", project_id: @resource_id}},
       {:delete, "/portal/api/resources/#{@resource_id}", %{kind: "resource", id: @resource_id}},
-      {:post, "/portal/api/projects/#{@resource_id}/goals",
-       %{kind: "goal", project_id: @resource_id}},
+      {:post, "/portal/api/projects/#{@resource_id}/goals", %{kind: "goal", project_id: @resource_id}},
       {:post, "/portal/api/goals/#{@resource_id}/commands", %{kind: "goal", id: @resource_id}},
       {:post, "/portal/api/chat/messages", %{kind: "chat"}},
       {:post, "/api/v1/runs/#{@resource_id}/events", %{kind: "run", id: @resource_id}},
-      {:put, "/api/v1/runs/#{@resource_id}/transitions/#{@resource_id}",
-       %{kind: "run", id: @resource_id}},
+      {:put, "/api/v1/runs/#{@resource_id}/transitions/#{@resource_id}", %{kind: "run", id: @resource_id}},
       {:put, "/api/v1/commands/#{@resource_id}/acknowledgements/#{@resource_id}", %{kind: "run"}},
       {:patch, "/api/v1/runtimes/#{@resource_id}", %{kind: "runtime", id: @resource_id}},
       {:put, "/api/v1/machines/#{@resource_id}/sessions/#{@resource_id}", %{kind: "runtime"}},
@@ -207,10 +207,12 @@ defmodule SymmetryControlWeb.PortalRealtimeTest do
 
     Enum.each(table, fn {method, path, expected} ->
       conn =
-        build_conn(method, path)
+        method
+        |> build_conn(path)
         |> Plug.Conn.put_req_header("content-type", "application/json")
 
-      SymmetryControlWeb.Plugs.PortalInvalidations.call(conn, [])
+      conn
+      |> SymmetryControlWeb.Plugs.PortalInvalidations.call([])
       |> send_resp(200, "{}")
 
       assert_receive {:portal_invalidation, payload}
@@ -303,15 +305,16 @@ defmodule SymmetryControlWeb.PortalRealtimeTest do
     config =
       socket_config[:websocket]
       |> Keyword.put(:auth_token, socket_config[:auth_token])
-      |> Phoenix.Socket.Transport.load_config(Phoenix.Transports.WebSocket)
+      |> Phoenix.Socket.Transport.load_config(WebSocket)
 
-    build_conn(:get, "/portal/socket/websocket", %{"vsn" => "2.0.0"})
+    :get
+    |> build_conn("/portal/socket/websocket", %{"vsn" => "2.0.0"})
     |> put_req_header("origin", origin)
     |> put_req_header(
       "sec-websocket-protocol",
       "phoenix,base64url.bearer.phx." <> Base.encode64(token, padding: false)
     )
-    |> Phoenix.Transports.WebSocket.call({SymmetryControlWeb.Endpoint, module, config})
+    |> WebSocket.call({SymmetryControlWeb.Endpoint, module, config})
     |> Map.fetch!(:status)
   end
 end

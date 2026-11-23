@@ -13,10 +13,14 @@ defmodule SymmetryControl.Integrations do
   import Ecto.Query
 
   alias SymmetryControl.Integrations.Connection
-  alias SymmetryControl.Orchestration.{Run, RunEvent, Task}
+  alias SymmetryControl.Orchestration.Run
+  alias SymmetryControl.Orchestration.RunEvent
+  alias SymmetryControl.Orchestration.Task
   alias SymmetryControl.Repo
   alias SymmetryControl.Schemas.VersionedChangeset
-  alias SymmetryControl.Workspaces.{Project, ProjectResource, WorkItem}
+  alias SymmetryControl.Workspaces.Project
+  alias SymmetryControl.Workspaces.ProjectResource
+  alias SymmetryControl.Workspaces.WorkItem
 
   @secret_key_names ~w(
     accesstoken
@@ -111,7 +115,7 @@ defmodule SymmetryControl.Integrations do
     with :ok <- reject_secret_attrs(attrs),
          {:ok, expected_version} <- VersionedChangeset.expected_version(attrs),
          {:ok, connection_id} <- Ecto.UUID.cast(connection_id) do
-      Repo.transaction(fn ->
+      fn ->
         connection_snapshot =
           Repo.get(Connection, connection_id) || Repo.rollback(:not_found)
 
@@ -174,12 +178,12 @@ defmodule SymmetryControl.Integrations do
           case VersionedChangeset.update_with_stale_error(changeset) do
             {:ok, updated} ->
               if reset_health? do
-                from(resource in ProjectResource,
-                  join: project in Project,
-                  on: project.id == resource.project_id,
-                  where: resource.connection_id == ^updated.id and project.status == "active"
-                )
-                |> Repo.update_all(
+                Repo.update_all(
+                  from(resource in ProjectResource,
+                    join: project in Project,
+                    on: project.id == resource.project_id,
+                    where: resource.connection_id == ^updated.id and project.status == "active"
+                  ),
                   set: [
                     status: "unknown",
                     sync_status: "unknown",
@@ -201,7 +205,8 @@ defmodule SymmetryControl.Integrations do
         else
           {:error, reason} -> Repo.rollback(reason)
         end
-      end)
+      end
+      |> Repo.transaction()
       |> unwrap_transaction()
     else
       :error -> {:error, :not_found}
@@ -225,8 +230,9 @@ defmodule SymmetryControl.Integrations do
   end
 
   defp check_connection_snapshot(%Connection{} = connection) do
-    with provider <- provider_module(connection.provider),
-         {:ok, auth} <- provider.authenticate(connection),
+    provider = provider_module(connection.provider)
+
+    with {:ok, auth} <- provider.authenticate(connection),
          {:ok, metadata} <- provider_call(fn -> provider.check(connection, auth) end),
          {:ok, metadata} <- validate_provider_map(metadata || %{}) do
       update_connection_health(connection, %{
@@ -261,13 +267,13 @@ defmodule SymmetryControl.Integrations do
 
   def sync_all_resources do
     results =
-      Repo.all(
-        from resource in ProjectResource,
-          join: project in Project,
-          on: project.id == resource.project_id,
-          where: project.status == "active" and not is_nil(resource.connection_id),
-          order_by: [asc: resource.inserted_at, asc: resource.id]
+      from(resource in ProjectResource,
+        join: project in Project,
+        on: project.id == resource.project_id,
+        where: project.status == "active" and not is_nil(resource.connection_id),
+        order_by: [asc: resource.inserted_at, asc: resource.id]
       )
+      |> Repo.all()
       |> Enum.map(fn resource -> {resource.id, sync_resource(resource.id)} end)
 
     %{
@@ -287,8 +293,7 @@ defmodule SymmetryControl.Integrations do
 
   @doc false
   def execute_unprojected_provider_action(connection, resource, work_item, operation, input),
-    do:
-      execute_unprojected_provider_action(connection, resource, work_item, operation, input, nil)
+    do: execute_unprojected_provider_action(connection, resource, work_item, operation, input, nil)
 
   @doc false
   def execute_unprojected_provider_action(
@@ -305,7 +310,7 @@ defmodule SymmetryControl.Integrations do
            true <- work_item.repository_resource_id == resource.id || {:error, :forbidden},
            true <- resource.connection_id == connection.id || {:error, :forbidden},
            :ok <- require_capabilities(connection, ["repositories", "changes"]),
-           provider <- provider_module(connection.provider),
+           provider = provider_module(connection.provider),
            {:ok, auth} <- provider.authenticate(connection) do
         execute_unprojected_provider_delivery(
           provider,
@@ -367,24 +372,14 @@ defmodule SymmetryControl.Integrations do
 
   def readback_provider_action(_, _, _, _), do: {:ok, %{status: :unconfirmed}}
 
-  defp unprojected_provider_action_failure({:provider_action_failure, _, _, _} = failure),
-    do: failure
+  defp unprojected_provider_action_failure({:provider_action_failure, _, _, _} = failure), do: failure
 
   defp unprojected_provider_action_failure(reason) do
     {code, message} = failure(reason)
     {:provider_action_failure, code, mutation_failure_outcome(reason), message}
   end
 
-  defp execute_unprojected_provider_delivery(
-         provider,
-         connection,
-         resource,
-         work_item,
-         operation,
-         input,
-         binding,
-         auth
-       ) do
+  defp execute_unprojected_provider_delivery(provider, connection, resource, work_item, operation, input, binding, auth) do
     case provider_call(fn ->
            if is_map(binding) do
              if Code.ensure_loaded?(provider) and function_exported?(provider, :execute_bound, 7),
@@ -458,12 +453,7 @@ defmodule SymmetryControl.Integrations do
   def project_provider_action_delivery(_, _, _, _, _), do: {:error, :invalid_request}
 
   @doc false
-  def unprojected_provider_action_result(
-        %ProjectResource{} = resource,
-        %WorkItem{} = work_item,
-        operation,
-        delivery
-      )
+  def unprojected_provider_action_result(%ProjectResource{} = resource, %WorkItem{} = work_item, operation, delivery)
       when operation in ["change.upsert", "change.update"] and is_map(delivery) do
     provider_action_result(
       operation,
@@ -475,10 +465,7 @@ defmodule SymmetryControl.Integrations do
   end
 
   @doc false
-  def execute_accepted_resource_sync_unprojected(
-        %Connection{} = connection,
-        %ProjectResource{} = resource
-      ) do
+  def execute_accepted_resource_sync_unprojected(%Connection{} = connection, %ProjectResource{} = resource) do
     provider = provider_module(connection.provider)
 
     with {:ok, auth} <- provider.authenticate(connection),
@@ -498,11 +485,10 @@ defmodule SymmetryControl.Integrations do
   def execute_accepted_resource_sync_unprojected(_, _), do: {:error, :invalid_request}
 
   @doc false
-  def project_accepted_resource_sync(
-        %Connection{} = connection,
-        %ProjectResource{} = resource,
-        %{provider_result: result, deliveries: deliveries}
-      ) do
+  def project_accepted_resource_sync(%Connection{} = connection, %ProjectResource{} = resource, %{
+        provider_result: result,
+        deliveries: deliveries
+      }) do
     case persist_sync(connection, resource, result, deliveries) do
       {:ok, synced} -> {:ok, accepted_sync_result(synced, true, result)}
       {:error, _reason} -> {:ok, accepted_sync_result(resource, false, result)}
@@ -515,10 +501,7 @@ defmodule SymmetryControl.Integrations do
   end
 
   @doc false
-  def project_provider_action_failure(
-        %ProjectResource{} = resource,
-        {:provider_action_failure, code, outcome, message}
-      )
+  def project_provider_action_failure(%ProjectResource{} = resource, {:provider_action_failure, code, outcome, message})
       when is_atom(code) and outcome in [:definite, :ambiguous] and is_binary(message) do
     case record_resource_failure(resource, code, message) do
       {:error, _code, _resource} -> :ok
@@ -585,7 +568,7 @@ defmodule SymmetryControl.Integrations do
         )
 
       with :ok <- require_active_project(project),
-           locked <-
+           locked =
              Repo.one(
                from current in ProjectResource,
                  where: current.id == ^resource.id,
@@ -617,9 +600,9 @@ defmodule SymmetryControl.Integrations do
 
   defp sync_marked_resource(resource) do
     with true <- is_binary(resource.connection_id) || {:error, :not_connected},
-         connection <- Repo.get!(Connection, resource.connection_id),
+         connection = Repo.get!(Connection, resource.connection_id),
          :ok <- require_capability(connection, resource.kind),
-         provider <- provider_module(connection.provider),
+         provider = provider_module(connection.provider),
          {:ok, auth} <- provider.authenticate(connection),
          {:ok, result} <-
            provider_call(fn -> provider.sync_resource(connection, resource, auth) end),
@@ -650,8 +633,7 @@ defmodule SymmetryControl.Integrations do
     |> apply(:validate_resource_reference, [connection, kind, reference])
   end
 
-  defp delivery_updates(provider, connection, %{kind: kind} = resource, auth)
-       when kind == "repository" do
+  defp delivery_updates(provider, connection, %{kind: kind} = resource, auth) when kind == "repository" do
     items =
       Repo.all(
         from item in WorkItem,
@@ -677,11 +659,11 @@ defmodule SymmetryControl.Integrations do
   end
 
   defp delivery_updates(provider, connection, %{kind: "ci"} = resource, auth) do
-    Repo.all(
-      from item in WorkItem,
-        where: item.ci_resource_id == ^resource.id,
-        order_by: [asc: item.id]
+    from(item in WorkItem,
+      where: item.ci_resource_id == ^resource.id,
+      order_by: [asc: item.id]
     )
+    |> Repo.all()
     |> Enum.reduce_while({:ok, []}, fn item, {:ok, updates} ->
       case provider.sync_ci(connection, resource, item, auth) do
         {:ok, delivery} -> {:cont, {:ok, [{item, delivery} | updates]}}
@@ -693,8 +675,7 @@ defmodule SymmetryControl.Integrations do
 
   defp delivery_updates(_provider, _connection, _resource, _auth), do: {:ok, []}
 
-  defp maybe_sync_delivery(_provider, _connection, _resource, %{pull_request_url: nil}, _auth),
-    do: {:ok, nil}
+  defp maybe_sync_delivery(_provider, _connection, _resource, %{pull_request_url: nil}, _auth), do: {:ok, nil}
 
   defp maybe_sync_delivery(provider, connection, resource, item, auth) do
     if "changes" in connection.capabilities do
@@ -710,8 +691,7 @@ defmodule SymmetryControl.Integrations do
   end
 
   defp with_effective_pull_request(%WorkItem{pull_request_url: url} = item, _pull_requests)
-       when is_binary(url) and url != "",
-       do: item
+       when is_binary(url) and url != "", do: item
 
   defp with_effective_pull_request(%WorkItem{orchestration_task_id: nil} = item, _pull_requests),
     do: with_cached_pull_request(item)
@@ -723,9 +703,8 @@ defmodule SymmetryControl.Integrations do
     end
   end
 
-  defp with_cached_pull_request(%WorkItem{external_pull_request_url: url} = item)
-       when is_binary(url) and url != "",
-       do: %{item | pull_request_url: url}
+  defp with_cached_pull_request(%WorkItem{external_pull_request_url: url} = item) when is_binary(url) and url != "",
+    do: %{item | pull_request_url: url}
 
   defp with_cached_pull_request(item), do: item
 
@@ -735,17 +714,17 @@ defmodule SymmetryControl.Integrations do
     if task_ids == [] do
       %{}
     else
-      Repo.all(
-        from event in RunEvent,
-          join: run in Run,
-          on: run.id == event.run_id,
-          join: task in Task,
-          on: task.id == run.task_id and task.attempt_generation == run.generation,
-          where: task.id in ^task_ids and event.kind == "pull_request",
-          distinct: task.id,
-          order_by: [asc: task.id, desc: event.sequence, desc: event.inserted_at, desc: event.id],
-          select: {task.id, event.payload}
+      from(event in RunEvent,
+        join: run in Run,
+        on: run.id == event.run_id,
+        join: task in Task,
+        on: task.id == run.task_id and task.attempt_generation == run.generation,
+        where: task.id in ^task_ids and event.kind == "pull_request",
+        distinct: task.id,
+        order_by: [asc: task.id, desc: event.sequence, desc: event.inserted_at, desc: event.id],
+        select: {task.id, event.payload}
       )
+      |> Repo.all()
       |> Map.new(fn {task_id, payload} -> {task_id, payload["url"] || payload[:url]} end)
     end
   end
@@ -764,40 +743,40 @@ defmodule SymmetryControl.Integrations do
                    lock: "FOR SHARE"
                )
 
-             with :ok <- require_active_project(project) do
-               case resource
-                    |> ProjectResource.sync_changeset(
-                      Map.merge(resource_attrs, %{
-                        provider: connection.provider,
-                        status: "healthy",
-                        sync_status: "synced",
-                        status_message: nil,
-                        last_checked_at: synced_at,
-                        last_synced_at: synced_at
-                      })
-                    )
-                    |> VersionedChangeset.update_with_stale_error() do
-                 {:ok, synced_resource} ->
-                   with :ok <-
-                          persist_sync_work_items(
+             case require_active_project(project) do
+               :ok ->
+                 case resource
+                      |> ProjectResource.sync_changeset(
+                        Map.merge(resource_attrs, %{
+                          provider: connection.provider,
+                          status: "healthy",
+                          sync_status: "synced",
+                          status_message: nil,
+                          last_checked_at: synced_at,
+                          last_synced_at: synced_at
+                        })
+                      )
+                      |> VersionedChangeset.update_with_stale_error() do
+                   {:ok, synced_resource} ->
+                     case persist_sync_work_items(
                             synced_resource,
                             connection,
                             work_items,
                             prepared_deliveries
                           ) do
-                     synced_resource
-                   else
-                     {:error, reason} -> Repo.rollback(reason)
-                   end
+                       :ok -> synced_resource
+                       {:error, reason} -> Repo.rollback(reason)
+                     end
 
-                 {:error, :stale} ->
-                   :stale
+                   {:error, :stale} ->
+                     :stale
 
-                 {:error, reason} ->
-                   Repo.rollback(reason)
-               end
-             else
-               {:error, reason} -> Repo.rollback(reason)
+                   {:error, reason} ->
+                     Repo.rollback(reason)
+                 end
+
+               {:error, reason} ->
+                 Repo.rollback(reason)
              end
            end) do
         {:ok, :stale} -> {:error, :stale}
@@ -845,23 +824,17 @@ defmodule SymmetryControl.Integrations do
     end
   end
 
-  defp prepare_deliveries(deliveries) when is_list(deliveries),
-    do: prepare_deliveries(deliveries, [])
+  defp prepare_deliveries(deliveries) when is_list(deliveries), do: prepare_deliveries(deliveries, [])
 
   defp prepare_deliveries([], prepared), do: {:ok, Enum.reverse(prepared)}
 
-  defp prepare_deliveries(
-         [{%WorkItem{} = item, delivery} | remaining],
-         prepared
-       )
-       when is_map(delivery) do
+  defp prepare_deliveries([{%WorkItem{} = item, delivery} | remaining], prepared) when is_map(delivery) do
     with {:ok, attrs} <- delivery_attrs(item, delivery) do
       prepare_deliveries(remaining, [{item, attrs} | prepared])
     end
   end
 
-  defp prepare_deliveries(_deliveries, _prepared),
-    do: {:error, :invalid_provider_response}
+  defp prepare_deliveries(_deliveries, _prepared), do: {:error, :invalid_provider_response}
 
   defp persist_deliveries(prepared_deliveries) do
     Enum.reduce_while(prepared_deliveries, :ok, fn {item, attrs}, :ok ->
@@ -1078,15 +1051,7 @@ defmodule SymmetryControl.Integrations do
   defp readback_status(_provider_result), do: nil
 
   defp provider_action_error(reason)
-       when reason in [
-              :invalid_request,
-              :not_found,
-              :forbidden,
-              :stale,
-              :state_conflict,
-              :ownership_lost
-            ],
-       do: reason
+       when reason in [:invalid_request, :not_found, :forbidden, :stale, :state_conflict, :ownership_lost], do: reason
 
   defp provider_action_error(reason), do: reason |> failure() |> elem(0)
 
@@ -1157,21 +1122,21 @@ defmodule SymmetryControl.Integrations do
 
   defp do_upsert_work_items(resource, connection, repository_id, items, external_ids) do
     existing =
-      Repo.all(
-        from item in WorkItem,
-          where:
-            item.external_work_item_resource_id == ^resource.id and
-              item.external_id in ^external_ids
+      from(item in WorkItem,
+        where:
+          item.external_work_item_resource_id == ^resource.id and
+            item.external_id in ^external_ids
       )
+      |> Repo.all()
       |> Map.new(&{&1.external_id, &1})
 
     positions =
-      Repo.all(
-        from item in WorkItem,
-          where: item.project_id == ^resource.project_id,
-          group_by: item.status,
-          select: {item.status, max(item.position)}
+      from(item in WorkItem,
+        where: item.project_id == ^resource.project_id,
+        group_by: item.status,
+        select: {item.status, max(item.position)}
       )
+      |> Repo.all()
       |> Map.new()
 
     result =
@@ -1222,7 +1187,8 @@ defmodule SymmetryControl.Integrations do
   end
 
   defp prepare_provider_work_items(resource, connection, repository_id, items) do
-    Enum.reduce_while(items, {:ok, [], %{}}, fn item, {:ok, order, by_id} ->
+    items
+    |> Enum.reduce_while({:ok, [], %{}}, fn item, {:ok, order, by_id} ->
       with :ok <- validate_provider_revision(connection.provider, item),
            {:ok, item} <-
              validate_provider_work_item(resource, connection, repository_id, item) do
@@ -1386,24 +1352,18 @@ defmodule SymmetryControl.Integrations do
     end
   end
 
-  defp provider_snapshot_order(
-         %{external_provider: "github"} = candidate,
-         %{external_provider: "github"} = current
-       ) do
+  defp provider_snapshot_order(%{external_provider: "github"} = candidate, %{external_provider: "github"} = current) do
     case compare_external_timestamp(candidate, current) do
       :same -> :newer
       order -> order
     end
   end
 
-  defp provider_snapshot_order(candidate, current),
-    do: compare_external_timestamp(candidate, current)
+  defp provider_snapshot_order(candidate, current), do: compare_external_timestamp(candidate, current)
 
-  defp compare_external_timestamp(
-         %{external_updated_at: %DateTime{} = incoming},
-         %{external_updated_at: %DateTime{} = stored}
-       ),
-       do: DateTime.compare(incoming, stored) |> compare_result()
+  defp compare_external_timestamp(%{external_updated_at: %DateTime{} = incoming}, %{
+         external_updated_at: %DateTime{} = stored
+       }), do: incoming |> DateTime.compare(stored) |> compare_result()
 
   defp compare_external_timestamp(%{external_updated_at: %DateTime{}}, _current), do: :newer
   defp compare_external_timestamp(_candidate, _current), do: :older
@@ -1442,8 +1402,7 @@ defmodule SymmetryControl.Integrations do
   defp mark_missing_work_items_unavailable(resource_id, external_ids) do
     query =
       from item in WorkItem,
-        where:
-          item.external_work_item_resource_id == ^resource_id and item.external_available == true
+        where: item.external_work_item_resource_id == ^resource_id and item.external_available == true
 
     query =
       if external_ids == [],
@@ -1477,8 +1436,7 @@ defmodule SymmetryControl.Integrations do
     }
   end
 
-  defp matching_repository(%{provider: "github", external_ref: reference} = resource)
-       when is_binary(reference) do
+  defp matching_repository(%{provider: "github", external_ref: reference} = resource) when is_binary(reference) do
     reference = String.downcase(reference)
 
     Repo.one(
@@ -1563,28 +1521,23 @@ defmodule SymmetryControl.Integrations do
     end
   end
 
-  defp failure({:http, 401, _body}),
-    do: {:provider_unauthorized, "Provider authentication failed"}
+  defp failure({:http, 401, _body}), do: {:provider_unauthorized, "Provider authentication failed"}
 
   defp failure({:http, 403, _body}), do: {:forbidden, "Provider permission denied"}
   defp failure({:http, 404, _body}), do: {:not_found, "Provider resource was not found"}
 
-  defp failure({:http, status, _body}),
-    do: {:provider_failure, "Provider returned HTTP #{status}"}
+  defp failure({:http, status, _body}), do: {:provider_failure, "Provider returned HTTP #{status}"}
 
   defp failure(:not_connected), do: {:not_connected, "Resource has no external connection"}
 
-  defp failure(:capability_not_granted),
-    do: {:capability_not_granted, "Connection capability is not granted"}
+  defp failure(:capability_not_granted), do: {:capability_not_granted, "Connection capability is not granted"}
 
-  defp failure(:github_https_required),
-    do: {:provider_failure, "GitHub CLI authentication must use HTTPS"}
+  defp failure(:github_https_required), do: {:provider_failure, "GitHub CLI authentication must use HTTPS"}
 
   defp failure(:github_oauth_required),
     do: {:provider_unauthorized, "GitHub CLI must use browser-based OAuth authentication"}
 
-  defp failure(:authentication_unavailable),
-    do: {:provider_unauthorized, "Provider CLI is not authenticated"}
+  defp failure(:authentication_unavailable), do: {:provider_unauthorized, "Provider CLI is not authenticated"}
 
   defp failure({:command_unavailable, executable}),
     do: {:provider_failure, "Required provider CLI is unavailable: #{executable}"}
@@ -1597,35 +1550,26 @@ defmodule SymmetryControl.Integrations do
 
   defp failure({:transport, _reason}), do: {:provider_failure, "Provider transport failed"}
 
-  defp failure(:invalid_provider_response),
-    do: {:provider_failure, "Provider response is invalid"}
+  defp failure(:invalid_provider_response), do: {:provider_failure, "Provider response is invalid"}
 
-  defp failure(:invalid_provider_success),
-    do: {:provider_failure, "Provider response is invalid"}
+  defp failure(:invalid_provider_success), do: {:provider_failure, "Provider response is invalid"}
 
   defp failure(%Ecto.Changeset{}), do: {:provider_failure, "Provider response failed validation"}
   defp failure(:forbidden), do: {:forbidden, "Provider account does not own this resource"}
 
-  defp failure(:invalid_repository_reference),
-    do: {:invalid_request, "Repository reference is invalid"}
+  defp failure(:invalid_repository_reference), do: {:invalid_request, "Repository reference is invalid"}
 
-  defp failure(:invalid_pull_request_url),
-    do: {:invalid_request, "Pull request URL does not match the bound repository"}
+  defp failure(:invalid_pull_request_url), do: {:invalid_request, "Pull request URL does not match the bound repository"}
 
-  defp failure(:missing_head_sha),
-    do: {:provider_failure, "Pull request is missing a head commit"}
+  defp failure(:missing_head_sha), do: {:provider_failure, "Pull request is missing a head commit"}
 
-  defp failure(:missing_commit_id),
-    do: {:provider_failure, "Pull request is missing a source commit"}
+  defp failure(:missing_commit_id), do: {:provider_failure, "Pull request is missing a source commit"}
 
-  defp failure(:missing_ci_reference),
-    do: {:provider_failure, "Work item has no commit or branch for CI lookup"}
+  defp failure(:missing_ci_reference), do: {:provider_failure, "Work item has no commit or branch for CI lookup"}
 
-  defp failure(:ci_history_limit),
-    do: {:provider_failure, "CI history search exceeded the configured page limit"}
+  defp failure(:ci_history_limit), do: {:provider_failure, "CI history search exceeded the configured page limit"}
 
-  defp failure(:unsupported_resource),
-    do: {:invalid_request, "Provider resource type is unsupported"}
+  defp failure(:unsupported_resource), do: {:invalid_request, "Provider resource type is unsupported"}
 
   defp failure(_reason), do: {:provider_failure, "Provider request failed"}
 
@@ -1653,11 +1597,9 @@ defmodule SymmetryControl.Integrations do
     |> Keyword.get(key, default)
   end
 
-  defp require_capability(connection, "repository"),
-    do: require_capabilities(connection, ["repositories"])
+  defp require_capability(connection, "repository"), do: require_capabilities(connection, ["repositories"])
 
-  defp require_capability(connection, "work_tracking"),
-    do: require_capabilities(connection, ["work_items"])
+  defp require_capability(connection, "work_tracking"), do: require_capabilities(connection, ["work_items"])
 
   defp require_capability(connection, "ci"), do: require_capabilities(connection, ["ci"])
   defp require_capability(_connection, _kind), do: {:error, :unsupported_resource}
@@ -1690,8 +1632,7 @@ defmodule SymmetryControl.Integrations do
     ci_ids = connection_resource_ids(updated.id, "ci")
 
     if MapSet.member?(removed, "changes") and repository_ids != [] do
-      from(item in WorkItem, where: item.repository_resource_id in ^repository_ids)
-      |> Repo.update_all(
+      Repo.update_all(from(item in WorkItem, where: item.repository_resource_id in ^repository_ids),
         set: [
           external_pull_request_url: nil,
           external_pull_request_state: nil,
@@ -1705,16 +1646,14 @@ defmodule SymmetryControl.Integrations do
 
     if (MapSet.member?(removed, "changes") or MapSet.member?(removed, "ci")) and
          repository_ids != [] do
-      from(item in WorkItem,
-        where: item.repository_resource_id in ^repository_ids and is_nil(item.ci_resource_id)
+      clear_ci_authority(
+        from(item in WorkItem, where: item.repository_resource_id in ^repository_ids and is_nil(item.ci_resource_id))
       )
-      |> clear_ci_authority()
     end
 
     if MapSet.member?(removed, "ci") do
       if ci_ids != [] do
-        from(item in WorkItem, where: item.ci_resource_id in ^ci_ids)
-        |> clear_ci_authority()
+        clear_ci_authority(from(item in WorkItem, where: item.ci_resource_id in ^ci_ids))
       end
     end
   end
@@ -1816,5 +1755,5 @@ defmodule SymmetryControl.Integrations do
 
   defp attr_value(attrs, key), do: Map.get(attrs, key) || Map.get(attrs, Atom.to_string(key))
 
-  defp now, do: DateTime.utc_now() |> DateTime.truncate(:microsecond)
+  defp now, do: DateTime.truncate(DateTime.utc_now(), :microsecond)
 end

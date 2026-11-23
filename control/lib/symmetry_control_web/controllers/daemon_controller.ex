@@ -149,7 +149,7 @@ defmodule SymmetryControlWeb.DaemonController do
   def append_events(conn, _params) do
     run_id = path_param(conn, "run_id")
     body = body_params(conn)
-    request = mutation_params(body, ["run_id"]) |> Protocol.normalize_map()
+    request = body |> mutation_params(["run_id"]) |> Protocol.normalize_map()
     fence = Map.delete(request, "events")
 
     with {:ok, events} <- body_value(body, "events"),
@@ -168,7 +168,7 @@ defmodule SymmetryControlWeb.DaemonController do
     body = body_params(conn)
 
     request =
-      mutation_params(body, ["run_id", "transition_id"]) |> Protocol.normalize_map()
+      body |> mutation_params(["run_id", "transition_id"]) |> Protocol.normalize_map()
 
     payload = Map.get(request, "payload", %{})
 
@@ -305,11 +305,9 @@ defmodule SymmetryControlWeb.DaemonController do
     end
   end
 
-  defp valid_batch_conflict_details?(%{details: details}),
-    do: valid_batch_conflict_details?(details)
+  defp valid_batch_conflict_details?(%{details: details}), do: valid_batch_conflict_details?(details)
 
-  defp valid_batch_conflict_details?(%{"details" => details}),
-    do: valid_batch_conflict_details?(details)
+  defp valid_batch_conflict_details?(%{"details" => details}), do: valid_batch_conflict_details?(details)
 
   defp valid_batch_conflict_details?(details) when is_map(details) do
     ContractValidation.validate_evidence_batch_conflict_details(
@@ -331,8 +329,7 @@ defmodule SymmetryControlWeb.DaemonController do
     end
   end
 
-  defp conflict_error(evidence),
-    do: if(batch_evidence?(evidence), do: :invalid_request, else: :idempotency_conflict)
+  defp conflict_error(evidence), do: if(batch_evidence?(evidence), do: :invalid_request, else: :idempotency_conflict)
 
   defp batch_evidence?(%{"schema_version" => "symmetry.evidence_batch.v1"}), do: true
   defp batch_evidence?(_evidence), do: false
@@ -350,13 +347,8 @@ defmodule SymmetryControlWeb.DaemonController do
     end
   end
 
-  defp append_evidence_request(
-         machine_id,
-         run_id,
-         fence,
-         %{"schema_version" => "symmetry.evidence_batch.v1"} = batch
-       ),
-       do: Goals.append_evidence_batch(machine_id, run_id, fence, batch)
+  defp append_evidence_request(machine_id, run_id, fence, %{"schema_version" => "symmetry.evidence_batch.v1"} = batch),
+    do: Goals.append_evidence_batch(machine_id, run_id, fence, batch)
 
   defp append_evidence_request(machine_id, run_id, fence, evidence),
     do: Goals.append_evidence(machine_id, run_id, fence, evidence)
@@ -415,9 +407,8 @@ defmodule SymmetryControlWeb.DaemonController do
   defp command_run_matches?(%{run_id: run_id}, run_id) when is_binary(run_id), do: :ok
   defp command_run_matches?(_command, _run_id), do: {:error, :invalid_request}
 
-  defp acknowledgement_body(%{"run_id" => run_id, "outcome" => outcome})
-       when is_binary(run_id) and is_binary(outcome),
-       do: {:ok, run_id, outcome}
+  defp acknowledgement_body(%{"run_id" => run_id, "outcome" => outcome}) when is_binary(run_id) and is_binary(outcome),
+    do: {:ok, run_id, outcome}
 
   defp acknowledgement_body(_body), do: {:error, :invalid_request}
 
@@ -468,11 +459,9 @@ defmodule SymmetryControlWeb.DaemonController do
 
   defp fence_value(:string, _carrier, params, key), do: nonempty_string(params, key)
 
-  defp fence_value(:integer, :body, params, key),
-    do: json_integer(Map.get(params, key), {1, :infinity})
+  defp fence_value(:integer, :body, params, key), do: json_integer(Map.get(params, key), {1, :infinity})
 
-  defp fence_value(:integer, :query, params, key),
-    do: query_integer(Map.get(params, key), {1, :infinity})
+  defp fence_value(:integer, :query, params, key), do: query_integer(Map.get(params, key), {1, :infinity})
 
   defp run_id_matches?(body, _run_id, :absent) do
     if Map.has_key?(body, "run_id"), do: {:error, :invalid_request}, else: :ok
@@ -494,8 +483,7 @@ defmodule SymmetryControlWeb.DaemonController do
   defp created_or_ok(:created), do: :created
   defp created_or_ok(_disposition), do: :ok
 
-  defp mutation_params(conn, path_keys) when is_struct(conn, Plug.Conn),
-    do: conn |> body_params() |> Map.drop(path_keys)
+  defp mutation_params(conn, path_keys) when is_struct(conn, Plug.Conn), do: conn |> body_params() |> Map.drop(path_keys)
 
   defp mutation_params(params, path_keys) when is_map(params), do: Map.drop(params, path_keys)
 
@@ -515,8 +503,7 @@ defmodule SymmetryControlWeb.DaemonController do
 
   defp path_param(conn, key), do: Map.fetch!(conn.path_params, key)
 
-  defp config(key),
-    do: Application.fetch_env!(:symmetry_control, :orchestration) |> Keyword.fetch!(key)
+  defp config(key), do: :symmetry_control |> Application.fetch_env!(:orchestration) |> Keyword.fetch!(key)
 
   defp lease_duration_ms, do: config(:lease_duration_ms)
 

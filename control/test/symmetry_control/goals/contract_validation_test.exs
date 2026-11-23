@@ -67,25 +67,19 @@ defmodule SymmetryControl.Goals.ContractValidationTest do
     opts = [schema_root: @schema_root]
 
     for {filename, validate, tag} <- [
-          {"context-snapshot.content-hash-mismatch.json",
-           &ContractValidation.validate_context_snapshot/2, :content_hash_mismatch},
-          {"task-result.subject-hash-mismatch.json", &ContractValidation.validate_task_result/2,
-           :subject_hash_mismatch},
-          {"evidence.subject-hash-mismatch.json", &ContractValidation.validate_evidence/2,
-           :subject_hash_mismatch},
-          {"evidence.source-ref-mismatch.json", &ContractValidation.validate_evidence/2,
-           :evidence_identity_mismatch}
+          {"context-snapshot.content-hash-mismatch.json", &ContractValidation.validate_context_snapshot/2,
+           :content_hash_mismatch},
+          {"task-result.subject-hash-mismatch.json", &ContractValidation.validate_task_result/2, :subject_hash_mismatch},
+          {"evidence.subject-hash-mismatch.json", &ContractValidation.validate_evidence/2, :subject_hash_mismatch},
+          {"evidence.source-ref-mismatch.json", &ContractValidation.validate_evidence/2, :evidence_identity_mismatch}
         ] do
       assert {:error, {^tag, _}} = validate.(fixture(@invalid_root, filename), opts)
     end
 
     for {filename, validate} <- [
-          {"goal-revision.duplicate-predicate-id.json",
-           &ContractValidation.validate_goal_revision/2},
-          {"context-snapshot.duplicate-predicate-id.json",
-           &ContractValidation.validate_context_snapshot/2},
-          {"plan-proposal.duplicate-predicate-id.json",
-           &ContractValidation.validate_plan_proposal/2}
+          {"goal-revision.duplicate-predicate-id.json", &ContractValidation.validate_goal_revision/2},
+          {"context-snapshot.duplicate-predicate-id.json", &ContractValidation.validate_context_snapshot/2},
+          {"plan-proposal.duplicate-predicate-id.json", &ContractValidation.validate_plan_proposal/2}
         ] do
       assert {:error, {:duplicate_predicate_id, "tests"}} =
                validate.(fixture(@invalid_root, filename), opts)
@@ -94,11 +88,10 @@ defmodule SymmetryControl.Goals.ContractValidationTest do
     for {filename, validate, reason} <- [
           {"goal-create.deterministic-review.json", &ContractValidation.validate_goal_create/2,
            :deterministic_acceptance_contract},
-          {"admission.provider-scope-resource-mismatch.json",
-           &ContractValidation.validate_admission/2,
+          {"admission.provider-scope-resource-mismatch.json", &ContractValidation.validate_admission/2,
            :provider_scope_resource_operations_mismatch},
-          {"admission.provider-scope-equal-branches.json",
-           &ContractValidation.validate_admission/2, :provider_change_target_branches_must_differ}
+          {"admission.provider-scope-equal-branches.json", &ContractValidation.validate_admission/2,
+           :provider_change_target_branches_must_differ}
         ] do
       assert {:error, ^reason} = validate.(fixture(@invalid_root, filename), opts)
     end
@@ -108,14 +101,16 @@ defmodule SymmetryControl.Goals.ContractValidationTest do
     opts = [schema_root: @schema_root]
 
     blocked_without_blocker =
-      fixture(@valid_root, "task-result.candidate.json")
+      @valid_root
+      |> fixture("task-result.candidate.json")
       |> Map.put("kind", "blocked")
 
     assert {:error, :blocked_result_requires_blocker} =
              ContractValidation.validate_task_result(blocked_without_blocker, opts)
 
     invalid_decision =
-      fixture(@valid_root, "decision.open.json")
+      @valid_root
+      |> fixture("decision.open.json")
       |> Map.put("unexpected", true)
 
     assert {:error, {:validation_failed, _}} =
@@ -126,7 +121,8 @@ defmodule SymmetryControl.Goals.ContractValidationTest do
     opts = [schema_root: @schema_root]
 
     invalid =
-      fixture(@valid_root, "evidence-batch.basic.json")
+      @valid_root
+      |> fixture("evidence-batch.basic.json")
       |> put_in(["items", Access.at(0), "run_id"], Ecto.UUID.generate())
 
     assert {:error, :evidence_batch_run_id_mismatch} =
@@ -294,7 +290,8 @@ defmodule SymmetryControl.Goals.ContractValidationTest do
     opts = [schema_root: @schema_root]
 
     strict_create =
-      fixture(@valid_root, "goal-create.basic.json")
+      @valid_root
+      |> fixture("goal-create.basic.json")
       |> put_in(
         ["initial_revision", "execution_policy"],
         fixture(@valid_root, "goal-revision.strict-budget.json")["execution_policy"]
@@ -335,7 +332,8 @@ defmodule SymmetryControl.Goals.ContractValidationTest do
         ],
         malformed_item <- [nil, "not-an-object", 42] do
       malformed =
-        fixture(@valid_root, filename)
+        @valid_root
+        |> fixture(filename)
         |> put_in(["payload", "proposal", "items"], [malformed_item])
 
       assert {:error, {:validation_failed, _}} =
@@ -427,24 +425,20 @@ defmodule SymmetryControl.Goals.ContractValidationTest do
     }
   end
 
-  defp additional_property_paths(errors) when is_list(errors),
-    do: Enum.flat_map(errors, &additional_property_paths/1)
+  defp additional_property_paths(errors) when is_list(errors), do: Enum.flat_map(errors, &additional_property_paths/1)
 
-  defp additional_property_paths(%{
-         error: %{__struct__: ExJsonSchema.Validator.Error.AdditionalProperties},
-         path: path
-       }),
-       do: [path]
+  defp additional_property_paths(%{error: %{__struct__: ExJsonSchema.Validator.Error.AdditionalProperties}, path: path}),
+    do: [path]
 
-  defp additional_property_paths(%{error: %{invalid: branches}}),
-    do: additional_property_paths(branches)
+  defp additional_property_paths(%{error: %{invalid: branches}}), do: additional_property_paths(branches)
 
   defp additional_property_paths(%{errors: errors}), do: additional_property_paths(errors)
   defp additional_property_paths(_other), do: []
 
   defp canonical_plan_proposal(proposal) do
     Map.update!(proposal, "items", fn items ->
-      Enum.map(items, &Map.put_new(&1, "integration", false))
+      items
+      |> Enum.map(&Map.put_new(&1, "integration", false))
       |> Enum.map(&Map.put_new(&1, "change_target", nil))
     end)
   end
