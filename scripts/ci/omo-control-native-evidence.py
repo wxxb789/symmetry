@@ -78,7 +78,6 @@ SOURCE_PATHS = [
     "daemon/internal/app/commands.go",
     "daemon/internal/app/events.go",
     "daemon/internal/app/goal_admission.go",
-    "daemon/internal/app/goal_admission_tx.go",
     "daemon/internal/app/goal_delivery.go",
     "daemon/internal/app/lease.go",
     "daemon/internal/app/native_run.go",

@@ -7,8 +7,8 @@ Plan: `docs/plans/2026-11-22-rf-w4-12c-process-recorder-port-plan.md`. Base revi
 `f04487736a30bccdc30ace6c40ecfd288fd45e05` (W4-15b/#243, W4-12a/#244, W4-12b/#257 merged). Branch:
 `refactor/rf-w4-12c-process-recorder-port`. Every command ran in `daemon/` unless its row says
 otherwise, on the Windows host with the Go toolchain of this checkout; the WSL row runs
-Ubuntu-24.04 over the same worktree (`/mnt/q/repos/wt-w4-12c-process-recorder/symmetry/daemon`).
-Nothing is committed.
+Ubuntu-24.04 over the same worktree through its mount point (`<worktree>/daemon`). Nothing is
+committed by the fix stage (§13); the reviewed slice is commit `5945f5d4` on the branch.
 
 ## 1. Subject bytes (sha256, final tree)
 
@@ -22,16 +22,16 @@ Nothing is committed.
 | `daemon/internal/execution/process_launcher_windows.go` | `8985bdf01f8d639b0afe693a1bfc819f934407e02e802066132056c1528767c9` |
 | `daemon/internal/execution/recorder_test.go` (new) | `b339162b49aa60ec11a01d75c4106b3cd7ecc880e4349037cf153682207a0ff0` |
 | `daemon/internal/harness/types.go` | `9765d28b2922acaa39d30d6172d042d2791306e36a4e69b234b4966cf3e35144` |
-| `daemon/internal/harness/staged_driver.go` | `7400de152de00cbf449036a65a35e69e712404875564896eaa35d92705041fdd` |
-| `daemon/internal/harness/frozen_members_test.go` (new) | `6c77cb711ffb5acbbec92ed911303a74198180cd19f96489a0870d5e5118dae0` |
+| `daemon/internal/harness/staged_driver.go` | `fa69dd24210bfe09caa422291ced99192e0e712bf7ffa57b5197bacd12402b64` |
+| `daemon/internal/harness/frozen_members_test.go` (new) | `e0659e6cfddedf75de2492ef501a0e85337ac62e516a301124e4bd81a9ad1722` |
 | `daemon/internal/app/process_recorder.go` (new) | `e79090c8701d9cc26daaf6c04834cb03ed5462ae15863952c8181baa7dedf739` |
 | `daemon/internal/app/process_recorder_test.go` (new) | `9d462f5af6c33b20b88f7281e21e212c31403862e26b8e6f1b62da26678857c4` |
 | `daemon/internal/app/app.go` | `406ef06b9bfe720cee64e6a39333d76668a1d5a3a70607d458dbb6360129e67b` |
 | `daemon/internal/app/goal_admission_tx.go` | `54a9c0bca1c5c0af7dc17a763b543773875a0c25b72bca3442e6afcd349a9576` |
 | `daemon/internal/app/linux_owner_witness_linux.go` | `3383fe973e1a41b15ea699eb7fa153b7b84ede16b5e7d814a2564ff9ae021442` |
-| `scripts/ci/omo-control-native-evidence.py` | `ba117e1236629ef233ed39fcf95c997671be3916a991a79eb5d067161eb881b1` |
-| `docs/TODO.md` | `6c3712ff840a6a51510dd6f6a63e2e5879bff3892987e50acae9c6fe7616d1d5` |
-| `docs/plans/2026-11-22-rf-w4-12c-process-recorder-port-plan.md` | `15962b2b6c9bfecc14012a2ced43fa7c784b1d1d449a4f6545c46b95aac1ae34` |
+| `scripts/ci/omo-control-native-evidence.py` | `b66b0d0c88c4201f7f0415571dc7a64a3ffcc7d2611b3a8df4a567f5d13d0803` |
+| `docs/TODO.md` | `42b6b6d644632a1fc516bcc0115f4219a08fb4c393d1a96f5bd0266f33781e4c` |
+| `docs/plans/2026-11-22-rf-w4-12c-process-recorder-port-plan.md` | `a89da88c2806295251b26c860a7c5927fd561a43c6dad092c0869a0c91407253` |
 | this record | the file you are reading (no self-referential hash) |
 
 ## 2. The port: one interface, ten writes, one capability query
@@ -65,9 +65,12 @@ Two rules tie the port to the base surface:
   `request.Invocation` members (`daemon/internal/harness/opencode/adapter.go:343-362`) and cannot
   carry a recorder, so its launch reaches the same recorder through the mirrors; every other path
   carries the recorder itself.
-- `Invocation.MirrorRecorderMembers` sets the mirrors from the recorder's method values, and
-  `harness.PopulateOpencodeRecorderMembers` does the same for the three request-level members the
-  frozen adapter reads; both are the single W6-04 deletion sites.
+- `Invocation.MirrorRecorderMembers` sets the mirrors from the recorder's nil-gated write functions
+  (`recorderWrites`; a false capability stays nil, exactly the legacy absent callback), and
+  `harness.PopulateOpencodeRecorderMembers` copies those mirrors onto the three request-level
+  members the frozen adapter reads; both are the single W6-04 deletion sites. Probes:
+  `TestMirrorRecorderMembersKeepsAbsentWritesNil` and
+  `TestPopulateOpencodeRecorderMembersKeepsAbsentRequestWritesNil` (§7.2).
 
 ## 3. Callback-name gate (harness, excluding OpenCode and tests)
 
@@ -90,9 +93,9 @@ daemon/internal/harness/opencode/adapter.go:360:		PersistContainmentUnproven:   
 daemon/internal/harness/staged_driver.go:29:	invocation.PersistProcess = request.PersistProcess
 daemon/internal/harness/staged_driver.go:30:	invocation.PersistProcessAuthority = request.PersistProcessAuthority
 daemon/internal/harness/staged_driver.go:31:	invocation.PersistContainmentStopReceipt = request.PersistContainmentStopReceipt
-daemon/internal/harness/staged_driver.go:45:	request.PersistProcess = recorder.PersistProcess
-daemon/internal/harness/staged_driver.go:46:	request.PersistProcessAuthority = recorder.PersistProcessAuthority
-daemon/internal/harness/staged_driver.go:47:	request.PersistContainmentStopReceipt = recorder.PersistContainmentStopReceipt
+daemon/internal/harness/staged_driver.go:45:	request.PersistProcess = request.Invocation.PersistProcess
+daemon/internal/harness/staged_driver.go:46:	request.PersistProcessAuthority = request.Invocation.PersistProcessAuthority
+daemon/internal/harness/staged_driver.go:47:	request.PersistContainmentStopReceipt = request.Invocation.PersistContainmentStopReceipt
 daemon/internal/harness/types.go:335:	PersistProcess func(pid int, identity string) error
 daemon/internal/harness/types.go:338:	PersistProcessAuthority       func(pid int, identity string, value *authority.Supervisor) error
 daemon/internal/harness/types.go:339:	PersistContainmentStopReceipt func(pid int, identity string, receipt authority.StopReceipt) error
@@ -101,9 +104,9 @@ $ rg -n '<the same ten names>' daemon/internal/harness --glob '!**/opencode/**' 
 daemon/internal/harness/staged_driver.go:29:	invocation.PersistProcess = request.PersistProcess
 daemon/internal/harness/staged_driver.go:30:	invocation.PersistProcessAuthority = request.PersistProcessAuthority
 daemon/internal/harness/staged_driver.go:31:	invocation.PersistContainmentStopReceipt = request.PersistContainmentStopReceipt
-daemon/internal/harness/staged_driver.go:45:	request.PersistProcess = recorder.PersistProcess
-daemon/internal/harness/staged_driver.go:46:	request.PersistProcessAuthority = recorder.PersistProcessAuthority
-daemon/internal/harness/staged_driver.go:47:	request.PersistContainmentStopReceipt = recorder.PersistContainmentStopReceipt
+daemon/internal/harness/staged_driver.go:45:	request.PersistProcess = request.Invocation.PersistProcess
+daemon/internal/harness/staged_driver.go:46:	request.PersistProcessAuthority = request.Invocation.PersistProcessAuthority
+daemon/internal/harness/staged_driver.go:47:	request.PersistContainmentStopReceipt = request.Invocation.PersistContainmentStopReceipt
 daemon/internal/harness/types.go:335:	PersistProcess func(pid int, identity string) error
 daemon/internal/harness/types.go:338:	PersistProcessAuthority       func(pid int, identity string, value *authority.Supervisor) error
 daemon/internal/harness/types.go:339:	PersistContainmentStopReceipt func(pid int, identity string, receipt authority.StopReceipt) error
@@ -262,7 +265,7 @@ Five edits, each applied alone to the final tree, run against the named tests, t
 | m3 two-callback path while `PersistProcessWithAuthority` is supplied | `persist()` branch drops the write-presence check | new parity subtest `process_marker_and_legacy_authority` | `panic: runtime error: invalid memory address or nil pointer dereference` (nil atomic write reached) |
 | m4a wrong-method populate (invocation) | `MirrorRecorderMembers`: `PersistProcessAuthority = recorder.PersistProcessWithAuthority` | new `TestMirrorRecorderMembersCallsTheSameRecorderMethods` | `frozen member authority reached ["atomic"], want the same recorder method` |
 | m4b wrong-method populate (request) | `PopulateOpencodeRecorderMembers`: `PersistProcessAuthority = recorder.PersistProcessWithAuthority` | new `TestPopulateOpencodeRecorderMembersReachesTheSameRecorderMethod` | `frozen member PersistProcessAuthority reached ["PersistProcessWithAuthority"], want the same recorder method` |
-| m5 drop `ClearSupervisorHandoff` from the handoff decision | `SupervisorHandoffRequested` loses the `Clear` term | new `TestRecorderHandoffCapabilityMatchesPresenceGates` | `mask 10000: recorder decided requested=false complete=false, want requested=true complete=false` |
+| m5 drop `ClearSupervisorHandoff` from the handoff decision | `SupervisorHandoffRequested` loses the `Clear` term | new `TestRecorderHandoffCapabilityMatchesPresenceGates` | `mask 10000: frozen members decided requested=false complete=false, want requested=true complete=false`; then `mask 10000: recorder decided requested=false complete=false, want requested=true complete=false` |
 
 m1, m2 and m3 are killed by tests that predate the slice as well, satisfying the R2 amendment.
 
@@ -284,12 +287,26 @@ the same bytes.
 | mA3 wrong-method fallback | `recorderWrites`: `writes.PersistProcessAuthority = recorder.PersistProcessWithAuthority` | `TestRecorderWritesMapsEveryCapabilityToItsMethod` | `fallback write authority reached []string{"atomic"}, want its own method` |
 | m4a re-expressed | `MirrorRecorderMembers`: `invocation.PersistProcessAuthority = writes.PersistProcessWithAuthority` | `TestMirrorRecorderMembersCallsTheSameRecorderMethods` | `frozen member authority reached []string{"atomic"}, want the same recorder method` |
 
+### 7.2 Fix-stage re-checks (2026-11-23)
+
+The fix stage (STD-02, §13) changed `PopulateOpencodeRecorderMembers` and added
+`TestPopulateOpencodeRecorderMembersKeepsAbsentRequestWritesNil`, so every mutant whose edit text
+or killer sits on those bytes was re-run alone on the fixed tree and then reverted (`sha256sum -c`
+over the fix-stage hashes of `staged_driver.go` and `frozen_members_test.go` says `OK`). m5's
+subject bytes are unchanged; it was re-run to capture the true output order for its §7 row.
+
+| Mutant | Edit | Killer (exit 1) | First red line |
+| --- | --- | --- | --- |
+| m4b re-expressed | `PopulateOpencodeRecorderMembers`: `request.PersistProcessAuthority = request.Invocation.PersistProcessWithAuthority` (the wrong mirror) | new `TestPopulateOpencodeRecorderMembersReachesTheSameRecorderMethod` | `frozen member PersistProcessAuthority reached []string{"PersistProcessWithAuthority"}, want the same recorder method` |
+| mF1 absent write populated as present | `PopulateOpencodeRecorderMembers` restores the method-value body (`request.PersistProcess = recorder.PersistProcess`, …) | new `TestPopulateOpencodeRecorderMembersKeepsAbsentRequestWritesNil` | `an absent write was populated onto the request as present` |
+| m5 re-run | `SupervisorHandoffRequested` loses the `Clear` term (unchanged bytes; the §7 row's first red line is corrected) | new `TestRecorderHandoffCapabilityMatchesPresenceGates` | `mask 10000: frozen members decided requested=false complete=false, want requested=true complete=false`; then `mask 10000: recorder decided requested=false complete=false, want requested=true complete=false` |
+
 ## 8. Gates
 
 Every row ran in the foreground on this host except the WSL and coverage rows, which ran alone (no
-other suite on the host while either ran). The apply stage (2026-11-23, §12) re-ran every row
-against the applied tree; the numbers below are the apply-stage observations (the three
-callback-name greps are byte-identical, §3).
+other suite on the host while either ran). The fix stage (2026-11-23, §13) re-ran every row
+against the fixed tree; the numbers below are the fix-stage observations (the callback-name greps'
+populate-site lines are the §3 fixed-tree output).
 
 | Gate (working directory) | Exit | Output |
 | --- | --- | --- |
@@ -298,16 +315,16 @@ callback-name greps are byte-identical, §3).
 | conforming-adapter grep (`git root`) | 1 | no output: no durable callback named |
 | `gofmt -l .` (`daemon/`) | 0 | no file listed |
 | `git diff --check` (`git root`) | 0 | no whitespace error |
-| `go vet ./...` (`daemon/`) | 0 | empty log (`Q:/tmp/gate-vet.log`) |
+| `go vet ./...` (`daemon/`) | 0 | empty log (`<scratch>/gate-vet.log`) |
 | `GOOS=linux go build ./...` (`daemon/`) | 0 | — |
 | `GOOS=windows go build ./...` (`daemon/`) | 0 | — |
 | `GOOS=darwin go build ./...` (`daemon/`) | 0 | — |
 | `GOOS=linux GOARCH=arm64 go build ./...` (`daemon/`) | 0 | — |
-| `go test -count=1 -timeout 1800s ./internal/execution/... ./internal/harness/... ./internal/app/...` (Windows, `daemon/`) | 0 | 12 packages `ok`: execution 20.556s, harness 1.861s, claude 20.228s, codex 22.042s, linejson 1.271s, omo 12.609s, omp 12.535s, opencode 1.522s, pi 12.250s, probeconformance 9.962s, app 386.786s, apptest 11.118s |
-| `python3 scripts/ci/test-omo-control-native-evidence.py` (R9, `git root`) | 0 | `Ran 15 tests in 25.490s / OK` |
+| `go test -count=1 -timeout 1800s ./internal/execution/... ./internal/harness/... ./internal/app/...` (Windows, `daemon/`) | 0 | 12 packages `ok`: execution 12.188s, harness 3.378s, claude 16.041s, codex 15.639s, linejson 0.724s, omo 5.955s, omp 6.830s, opencode 2.278s, pi 7.292s, probeconformance 9.176s, app 202.702s, apptest 3.924s |
+| `python3 scripts/ci/test-omo-control-native-evidence.py` (R9, `git root`) | 0 | `Ran 15 tests in 21.865s / OK` |
 | `git diff --name-only` (scope, `git root`) | 0 | §9 |
-| `wsl -d Ubuntu-24.04 -u accept` → `go test -count=1 -race -timeout 3000s ./internal/execution/... ./internal/harness/... ./internal/app/... ./internal/platform/...` (`/mnt/q/repos/wt-w4-12c-process-recorder/symmetry/daemon`) | 0 | 13 packages `ok`: execution 26.470s, harness 1.163s, claude 27.453s, codex 39.375s, linejson 1.172s, omo 17.161s, omp 42.540s, opencode 5.676s, pi 12.642s, probeconformance 8.280s, app 741.095s, apptest 3.900s, platform 59.133s; no race report |
-| coverage pass (`go test -covermode=count -coverprofile=…` for `./internal/execution/`, `./internal/harness/`, `./internal/app/`, Windows) | 0 | execution 54.1% (base 53.0%), harness 71.1% (base 70.7%), app 75.2% (base 75.2%); per-file deltas below |
+| `wsl -d Ubuntu-24.04 -u accept` → `go test -count=1 -race -timeout 3000s ./internal/execution/... ./internal/harness/... ./internal/app/... ./internal/platform/...` (`<worktree>/daemon`) | 0 | 13 packages `ok`: execution 23.314s, harness 1.182s, claude 20.430s, codex 26.961s, linejson 1.032s, omo 9.886s, omp 23.020s, opencode 2.650s, pi 6.132s, probeconformance 8.082s, app 571.827s, apptest 4.082s, platform 58.537s; no race report |
+| coverage pass (`go test -covermode=count -coverprofile=…` for `./internal/execution/`, `./internal/harness/`, `./internal/app/`, Windows) | 0 | execution 54.3% (base 53.0%), harness 71.1% (base 70.7%), app 75.2% (base 75.2%); per-file deltas below |
 
 Coverage delta for every touched file (statements covered/total; the base side comes from a
 throwaway worktree at `f0448773`, so the base bytes are the code the contract was authored against;
@@ -338,6 +355,13 @@ code change.
 profile rows at base or HEAD (their behaviour is exercised by the WSL row above); the new test files
 carry no profile rows by construction, and the applied-stage movements are the statement-shape
 changes above, not uncovered additions.
+
+Fix-stage re-measure (2026-11-23, §13): the three profiles re-ran on the fixed tree; every
+per-file row above is unchanged except execution's package total (54.1% → 54.3%) and `runner.go`'s
+covered count (636 → 639), both run-to-run variation on a file whose §1 sha256 is unchanged, like
+the apply-stage `app.go` movement. `staged_driver.go` stays 55/55 (100.0%): the three mirror-copy
+statements keep the tested shape, and the new `TestPopulateOpencodeRecorderMembersKeepsAbsentRequestWritesNil`
+adds no uncovered production statement.
 
 ## 9. Scope
 
@@ -412,13 +436,43 @@ $ git diff --numstat
 
 Post-apply line counts: `execution/recorder.go` 277, `execution/recorder_test.go` 535,
 `execution/probe.go` 183, `execution/probe_test.go` 260, `app/process_recorder.go` 25,
-`app/goal_admission_tx.go` 1454, `app/linux_owner_witness_linux.go` 3896, `execution/runner.go`
+`app/goal_admission_tx.go` 1455, `app/linux_owner_witness_linux.go` 3897, `execution/runner.go`
 2672.
 
-No path is under `daemon/internal/harness/opencode/`; `git diff origin/main...HEAD | grep -i "users/"`
-matches only this record's own quoted command; no committed byte contains a backslash followed by `u` (checked with
-`rg -n '\\u'` over every changed and new file; the only match is this record's own quoted command);
-the new files are LF (`file` reports `ASCII text`).
+Fix stage (2026-11-23, working tree against `5945f5d4`; §13): the same owned set, no new files;
+the five findings fix the harness port helper and its test, the R9 script, and this record's three
+documents.
+
+```
+$ git status --porcelain -uall --no-renames
+ M daemon/internal/harness/frozen_members_test.go
+ M daemon/internal/harness/staged_driver.go
+ M docs/TODO.md
+ M docs/evidence/rf-w4-12c-process-recorder-port-2026-11-22.md
+ M docs/plans/2026-11-22-rf-w4-12c-process-recorder-port-plan.md
+ M scripts/ci/omo-control-native-evidence.py
+
+$ git diff --numstat
+26	0	daemon/internal/harness/frozen_members_test.go
+3	3	daemon/internal/harness/staged_driver.go
+2	2	docs/TODO.md
+5	3	docs/plans/2026-11-22-rf-w4-12c-process-recorder-port-plan.md
+0	1	scripts/ci/omo-control-native-evidence.py
+```
+
+(the `docs/evidence/...` row is omitted: this record's own count changes with each edit of the
+fix-stage sections).
+
+Post-fix line counts: unchanged from the post-apply list except `harness/staged_driver.go` 151 and
+`harness/frozen_members_test.go` 138 (was 112); `SOURCE_PATHS` holds 62 entries covering 62
+distinct paths.
+
+No path is under `daemon/internal/harness/opencode/`; a case-insensitive scan of the final
+working-tree branch diff for the workstation profile directory fragment has no match (the
+implement stage's own quoted check command was the only match; the fix stage rewrote these
+sentences in prose, §13), and a byte scan for the backslash-u escape pair over every changed and
+new file finds no byte (the implement stage's own quoted scan pattern was the only match; the fix
+stage removed it, §13). The new files are LF (`file` reports `ASCII text`).
 
 ## 10. As-built deviations from the plan
 
@@ -427,8 +481,12 @@ the new files are LF (`file` reports `ASCII text`).
   plan §9 records it.
 - The harness populate test file is `frozen_members_test.go` (not `opencode_members_test.go`) so the
   `opencode/**` scope check cannot be confused by a file name.
-- R9 adds `daemon/internal/app/goal_admission_tx.go` to `SOURCE_PATHS` besides the new
-  `process_recorder.go`: the W4-01 split had left the file out while its facade was listed.
+- R9 adds one `SOURCE_PATHS` entry, `daemon/internal/app/process_recorder.go` (the new receiver);
+  `daemon/internal/app/goal_admission_tx.go` was already declared by W4-01 — its record
+  (`docs/evidence/rf-w4-01-goal-admission-tx-2026-11-22.md` §1.1) states the append, and
+  `git blame` at the base revision attributes the existing entry to `adfe7d6a` (PR #234). The
+  implement stage's duplicate entry and its "left out" justification were removed in the fix
+  stage (STD-01, §13).
 - The Windows launcher evaluates the handoff capability once instead of twice: the invocation cannot
   change between the two base checks, and the reused capability set is the same value (the Linux
   launcher's condition order — query first, `DurableSupervisorHandoffAvailable` second — is
@@ -481,3 +539,42 @@ rows and coverage table, §9 scope and line counts. Not re-run: the base-side co
 (removed at implement stage; the base column is unchanged by construction). The advisory
 `golangci-lint run ./internal/execution/... ./internal/harness/...` stays at the recorded 105
 issues.
+
+## 13. Fix-stage amendments (2026-11-23)
+
+The accepted findings of the review stage
+(`state/gdd/runs/2026-11-23/symmetry-rf-w4-12c-process-recorder-port-review/answer.md`,
+STD-01…STD-05) were applied to the reviewed slice `5945f5d4`; the working tree carries them
+uncommitted (no commit, no push). Every finding was accepted; none was judged invalid.
+
+- STD-01: `SOURCE_PATHS` carried `daemon/internal/app/goal_admission_tx.go` twice — the implement
+  stage added it at the sorted position while W4-01's append already held the tail entry
+  (`git blame -L 128,134` at the base revision attributes the existing entry to `adfe7d6a`, PR
+  #234; the W4-01 record §1.1 states the append). The added duplicate is deleted, and the §10
+  bullet and the plan §9 bullet no longer claim the path was missing. Re-run: `python3
+  scripts/ci/test-omo-control-native-evidence.py` exit 0 (`Ran 15 tests … OK`); `SOURCE_PATHS`
+  holds 62 entries covering 62 distinct paths.
+- STD-02: `PopulateOpencodeRecorderMembers` now copies the three request-level members from the
+  invocation mirrors (`request.PersistProcess = request.Invocation.PersistProcess`, …) after
+  `MirrorRecorderMembers`, so all thirteen frozen members share one absence semantics — a false
+  capability stays nil, exactly the legacy absent callback, where the previous recorder method
+  values stayed non-nil and failed closed with `errRecorderWriteUnavailable`. Probe: the new
+  `TestPopulateOpencodeRecorderMembersKeepsAbsentRequestWritesNil` is red at `5945f5d4` (`go test
+  -count=1 -run TestPopulateOpencodeRecorderMembers ./internal/harness/`, exit 1, `an absent write
+  was populated onto the request as present`) and green on the fixed tree; §7.2 re-runs the
+  previous method-value body as mutant mF1 and re-expresses m4b against the new line.
+- STD-03: the m5 row's first red line is the frozen-side `mask 10000` line, with the port-side line
+  second (§7, §7.2): `SupervisorHandoffRequested` has one implementation that both assertions call,
+  and the frozen assertion at `recorder_test.go:57` executes before the port assertion at `:61` in
+  the same mask iteration.
+- STD-04: §9's post-apply line counts for `app/goal_admission_tx.go` and
+  `app/linux_owner_witness_linux.go` are corrected to 1455 and 3897 (`wc -l` and
+  `awk 'END{print NR}'` agree per file; both files are newline-terminated).
+- STD-05: the W6-04 entry in `docs/TODO.md` and §2's rule sentence now read that the mirrors are
+  populated from the recorder's nil-gated write functions (`recorderWrites`), not method values.
+- Host-path hygiene: the WSL mount path in the header and §8 and the vet log path are written as
+  `<worktree>`/`<scratch>`; §9's two scan sentences are prose (no pattern bytes), and a byte scan
+  for the backslash-u escape pair over the changed and new files finds none.
+
+Refreshed at their single source by this stage: §1 hashes, §3 grep outputs, §7 m5 row, §7.2, §8
+gate rows and coverage note, §9 scope and line counts.

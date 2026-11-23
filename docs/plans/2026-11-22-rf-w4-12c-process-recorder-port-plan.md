@@ -193,9 +193,11 @@ The tree is authoritative for these; the sections above record the design intent
 - `probe.go` clears `Recorder` in addition to the three members it already cleared.
 - The harness populate test is `daemon/internal/harness/frozen_members_test.go` (the file name keeps
   the `opencode/**` path check unambiguous).
-- R9 adds two `SOURCE_PATHS` entries: `daemon/internal/app/process_recorder.go` (the new receiver)
-  and `daemon/internal/app/goal_admission_tx.go` (the launch wiring the recorder is built in; the
-  W4-01 split had left it out while its facade `goal_admission.go` was listed).
+- R9 adds one `SOURCE_PATHS` entry, `daemon/internal/app/process_recorder.go` (the new receiver);
+  `daemon/internal/app/goal_admission_tx.go` was already declared by W4-01 (`git blame` at the base
+  revision attributes the existing entry to `adfe7d6a`, PR #234; the W4-01 record §1.1 states the
+  append). The implement stage added a duplicate entry and this bullet's "left out" justification;
+  both were removed in the fix stage (review finding STD-01).
 - `StartRequest.grant()`'s no-grant fallback stays (evidence §3 explains its new role: it folds the
   three request-level members onto the frozen mirrors a direct construction without a recorder
   still launches through).

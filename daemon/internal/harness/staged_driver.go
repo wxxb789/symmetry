@@ -42,9 +42,9 @@ func PopulateOpencodeRecorderMembers(request StartRequest) StartRequest {
 	if recorder == nil {
 		return request
 	}
-	request.PersistProcess = recorder.PersistProcess
-	request.PersistProcessAuthority = recorder.PersistProcessAuthority
-	request.PersistContainmentStopReceipt = recorder.PersistContainmentStopReceipt
+	request.PersistProcess = request.Invocation.PersistProcess
+	request.PersistProcessAuthority = request.Invocation.PersistProcessAuthority
+	request.PersistContainmentStopReceipt = request.Invocation.PersistContainmentStopReceipt
 	return request
 }
 

@@ -1605,8 +1605,8 @@ is fixed here; each bullet names what a follow-up has to re-derive.
       (`daemon/internal/execution/recorder.go`),
       `harness.PopulateOpencodeRecorderMembers` and `StartRequest.grant()`'s no-grant fallback
       (`daemon/internal/harness/staged_driver.go`). Every durable write of a launch now goes through
-      the run's `execution.Recorder`; the members are only mirrors, populated from that recorder as
-      method values in the three app construction sites
+      the run's `execution.Recorder`; the members are only mirrors, populated from that recorder's
+      nil-gated write functions in the three app construction sites
       (`daemon/internal/app/app.go`, `goal_admission_tx.go`,
       `linux_owner_witness_linux.go`) and read only by
       `daemon/internal/harness/opencode/adapter.go`, which the slice (E3/D1) may not touch, by the

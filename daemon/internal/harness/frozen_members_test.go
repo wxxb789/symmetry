@@ -110,3 +110,29 @@ func TestPopulateOpencodeRecorderMembersWithoutARecorderChangesNothing(t *testin
 		t.Fatalf("populate without a recorder changed the request: %+v", populated)
 	}
 }
+
+func TestPopulateOpencodeRecorderMembersKeepsAbsentRequestWritesNil(t *testing.T) {
+	var calls []string
+	request := StartRequest{Invocation: execution.Invocation{Recorder: execution.NewRecorder(execution.RecorderFuncs{
+		PersistProcess: func(int, string) error {
+			calls = append(calls, "marker")
+			return nil
+		},
+	})}}
+	populated := PopulateOpencodeRecorderMembers(request)
+	if populated.Invocation.Recorder == nil {
+		t.Fatal("populate dropped the recorder")
+	}
+	if populated.PersistProcessAuthority != nil || populated.PersistContainmentStopReceipt != nil {
+		t.Fatal("an absent write was populated onto the request as present")
+	}
+	if populated.PersistProcess == nil {
+		t.Fatal("the present write was not populated onto the request")
+	}
+	if err := populated.PersistProcess(7, "created:7"); err != nil {
+		t.Fatalf("populated write error = %v", err)
+	}
+	if !slices.Equal(calls, []string{"marker"}) {
+		t.Fatalf("populated write reached %#v, want the recorder method", calls)
+	}
+}
