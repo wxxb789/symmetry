@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wxxb789/symmetry/daemon/internal/app/apptest"
 	"github.com/wxxb789/symmetry/daemon/internal/authority"
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
@@ -146,6 +147,16 @@ func difference(left, right []string) []string {
 	return only
 }
 
+func probeStore(t *testing.T) *apptest.FaultStore {
+	t.Helper()
+	store, err := apptest.NewFaultStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	return store
+}
+
 func TestStorelessDaemonTakesEveryStoreNilBranch(t *testing.T) {
 	key := state.RunKey{RunID: "run", Generation: 1}
 	probes := []storelessProbe{
@@ -181,17 +192,19 @@ func TestStorelessDaemonTakesEveryStoreNilBranch(t *testing.T) {
 				t.Fatalf("storeless containment clear = %v, want %v", err, errDaemonStoreClosing)
 			}
 		}},
-		{"cleanup_glue.go selectStoreWrite override wins without a store", func(t *testing.T, daemon *daemon) {
+		{"cleanup_glue.go selectStoreWrite hook wins with a store", func(t *testing.T, daemon *daemon) {
+			store := probeStore(t)
+			daemon.store = store
 			calls := 0
-			daemon.options.markContainmentUnproven = func(state.RunKey, int, string) (state.RunJournal, error) {
+			store.OnMarkContainmentUnproven = func(state.RunKey, int, string) (state.RunJournal, error) {
 				calls++
 				return state.RunJournal{}, nil
 			}
 			if err := daemon.markContainmentUnprovenCallback(key)(81, "windows:81:0000000000000001"); err != nil {
-				t.Fatalf("override without a store = %v, want nil", err)
+				t.Fatalf("hook write = %v, want nil", err)
 			}
 			if calls != 1 {
-				t.Fatalf("override calls = %d, want 1", calls)
+				t.Fatalf("hook calls = %d, want 1", calls)
 			}
 		}},
 		{"cleanup_glue.go persistProcessAuthorityCallback", func(t *testing.T, daemon *daemon) {
@@ -206,31 +219,35 @@ func TestStorelessDaemonTakesEveryStoreNilBranch(t *testing.T) {
 				t.Fatalf("storeless process marker = %v, want %v", err, errDaemonStoreClosing)
 			}
 		}},
-		{"cleanup_glue.go persistProcessMarker mirror error skips the readback", func(t *testing.T, daemon *daemon) {
-			daemon.options.recordProcess = func(state.RunKey, int, string, time.Time) (state.RunJournal, error) {
+		{"cleanup_glue.go persistProcessMarker hook error survives the readback", func(t *testing.T, daemon *daemon) {
+			store := probeStore(t)
+			daemon.store = store
+			store.OnSetProcessDetails = func(state.RunKey, int, string, time.Time) (state.RunJournal, error) {
 				return state.RunJournal{}, errStoreCallbackProbe
 			}
 			err := daemon.persistProcessMarker(key, 81, "windows:81:0000000000000001", time.Now())
 			if !errors.Is(err, errStoreCallbackProbe) {
-				t.Fatalf("marker mirror error = %v, want %v", err, errStoreCallbackProbe)
+				t.Fatalf("marker hook error = %v, want %v", err, errStoreCallbackProbe)
 			}
 		}},
 		{"cleanup_glue.go verifyDurableContainmentStopReceipt", func(t *testing.T, daemon *daemon) {
 			err := daemon.verifyDurableContainmentStopReceipt(key, 81, "windows:81:0000000000000001", authority.StopReceipt{})
 			requireErrorMessage(t, err, "state store is unavailable")
 		}},
-		{"cleanup_glue.go clearPersistedProcessDetails skips the readback", func(t *testing.T, daemon *daemon) {
+		{"cleanup_glue.go clearPersistedProcessDetails proceeds past the readback", func(t *testing.T, daemon *daemon) {
+			store := probeStore(t)
+			daemon.store = store
 			cleared := 0
-			daemon.options.clearContainmentUnproven = func(state.RunKey, int, string) (state.RunJournal, error) {
+			store.OnClearContainmentUnproven = func(state.RunKey, int, string) (state.RunJournal, error) {
 				return state.RunJournal{}, nil
 			}
-			daemon.options.clearProcessDetails = func(state.RunKey, int, string) (state.RunJournal, error) {
+			store.OnClearProcessDetails = func(state.RunKey, int, string) (state.RunJournal, error) {
 				cleared++
 				return state.RunJournal{RunID: key.RunID, Generation: key.Generation}, nil
 			}
 			journal, err := daemon.clearPersistedProcessDetails(key, 81, "windows:81:0000000000000001")
 			if err != nil || cleared != 1 || journal.RunID != key.RunID {
-				t.Fatalf("storeless process-detail clear = journal:%#v calls:%d err:%v", journal, cleared, err)
+				t.Fatalf("process-detail clear = journal:%#v calls:%d err:%v", journal, cleared, err)
 			}
 		}},
 		{"tryDeterministicArtifactValidation", func(t *testing.T, daemon *daemon) {
