@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wxxb789/symmetry/daemon/internal/app/apptest"
 	"github.com/wxxb789/symmetry/daemon/internal/config"
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
@@ -480,11 +481,11 @@ func TestResolvedRejectedTerminalSelfHealsIntoCleanupPending(t *testing.T) {
 }
 
 func TestTerminalDeliveryWaitsForWorkspacePathPersistenceRetry(t *testing.T) {
-	store, err := state.New(t.TempDir())
+	baseStore, err := state.New(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer baseStore.Close()
 	root, stop := context.WithCancel(context.Background())
 	defer stop()
 	workspace := newCancelHeldPrepareWorkspace()
@@ -492,17 +493,18 @@ func TestTerminalDeliveryWaitsForWorkspacePathPersistenceRetry(t *testing.T) {
 	timers := make(chan *manualDeadlineTimer, 1)
 	persistFailed := make(chan struct{}, 1)
 	failFirst := true
-	daemon := startupTestDaemon(t, store, workspace)
-	daemon.control = control
-	daemon.background = root
-	daemon.options.recordWorkspace = func(key state.RunKey, path string) (state.RunJournal, error) {
+	store := apptest.NewFaultStoreFrom(baseStore)
+	store.OnSetWorkspacePath = func(key state.RunKey, path string) (state.RunJournal, error) {
 		if failFirst {
 			failFirst = false
 			persistFailed <- struct{}{}
 			return state.RunJournal{}, errors.New("injected workspace persistence failure")
 		}
-		return store.SetWorkspacePath(key, path)
+		return baseStore.SetWorkspacePath(key, path)
 	}
+	daemon := startupTestDaemon(t, store, workspace)
+	daemon.control = control
+	daemon.background = root
 	daemon.options.newTimer = func(delay time.Duration) deadlineTimer {
 		timer := &manualDeadlineTimer{channel: make(chan time.Time), delay: delay}
 		if delay == minimumInterval {
@@ -726,16 +728,16 @@ func TestAttachedProcessFailureWaitsBeforeCleanup(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			store, err := state.New(t.TempDir())
+			store, err := apptest.NewFaultStore(t.TempDir())
 			if err != nil {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = store.Close() })
+			store.OnSetProcessDetails = test.recordProcess
 			cleaned := make(chan bool, 1)
 			daemon := startupTestDaemon(t, store, &trackingWorkspace{cleaned: cleaned})
 			daemon.control = &orderingControl{}
 			daemon.start = test.process.Start
-			daemon.options.recordProcess = test.recordProcess
 			var releaseWait sync.Once
 			releaseProcessWait := func() {
 				releaseWait.Do(func() { close(test.process.waitRelease) })

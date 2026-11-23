@@ -7,14 +7,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wxxb789/symmetry/daemon/internal/app/apptest"
 	"github.com/wxxb789/symmetry/daemon/internal/authority"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 	"github.com/wxxb789/symmetry/daemon/internal/state"
 )
 
 func TestRecoveredInputStopWitnessSurvivesClearFailure(t *testing.T) {
-	store, key, _ := newRecoveredInputFixture(t, 71, "input:71")
-	defer store.Close()
+	baseStore, key, _ := newRecoveredInputFixture(t, 71, "input:71")
+	defer baseStore.Close()
+	store := apptest.NewFaultStoreFrom(baseStore)
 
 	stopCalls := 0
 	clearCalls := 0
@@ -33,12 +35,12 @@ func TestRecoveredInputStopWitnessSurvivesClearFailure(t *testing.T) {
 		}
 		return nil
 	}
-	app.options.clearProcessDetails = func(runKey state.RunKey, pid int, identity string) (state.RunJournal, error) {
+	store.OnClearProcessDetails = func(runKey state.RunKey, pid int, identity string) (state.RunJournal, error) {
 		clearCalls++
 		if clearCalls == 1 {
 			return state.RunJournal{}, errors.New("injected recovered input marker clear failure")
 		}
-		return store.ClearProcessDetails(runKey, pid, identity)
+		return baseStore.ClearProcessDetails(runKey, pid, identity)
 	}
 
 	if err := app.recoverUnresolvedInputIntents(context.Background()); err != nil {
@@ -70,8 +72,9 @@ func TestRecoveredInputStopWitnessSurvivesClearFailure(t *testing.T) {
 }
 
 func TestRecoveredGenericCleanupReusesStopWitnessAfterClearFailure(t *testing.T) {
-	store, key := claimedStore(t)
-	defer store.Close()
+	baseStore, key := claimedStore(t)
+	defer baseStore.Close()
+	store := apptest.NewFaultStoreFrom(baseStore)
 	startedAt := time.Date(2026, 9, 11, 8, 0, 0, 0, time.UTC)
 	if _, err := store.SetProcessDetails(key, 72, "generic:72", startedAt); err != nil {
 		t.Fatal(err)
@@ -100,12 +103,12 @@ func TestRecoveredGenericCleanupReusesStopWitnessAfterClearFailure(t *testing.T)
 		}
 		return nil
 	}
-	app.options.clearProcessDetails = func(runKey state.RunKey, pid int, identity string) (state.RunJournal, error) {
+	store.OnClearProcessDetails = func(runKey state.RunKey, pid int, identity string) (state.RunJournal, error) {
 		clearCalls++
 		if clearCalls == 1 {
 			return state.RunJournal{}, errors.New("injected recovered generic marker clear failure")
 		}
-		return store.ClearProcessDetails(runKey, pid, identity)
+		return baseStore.ClearProcessDetails(runKey, pid, identity)
 	}
 
 	app.enqueueRecoveredCleanups()
@@ -141,9 +144,10 @@ func TestRecoveredGenericCleanupReusesStopWitnessAfterClearFailure(t *testing.T)
 }
 
 func TestRecoveredNativeStopReceiptFailureReusesStopWitnessAndBinding(t *testing.T) {
-	store, key := claimedGoalDeliveryStore(t)
-	defer store.Close()
-	sessionKey, controlSessionID, bindingID := saveRetainedGoalSession(t, store, key)
+	baseStore, key := claimedGoalDeliveryStore(t)
+	defer baseStore.Close()
+	store := apptest.NewFaultStoreFrom(baseStore)
+	sessionKey, controlSessionID, bindingID := saveRetainedGoalSession(t, baseStore, key)
 	startedAt := time.Date(2026, 9, 11, 9, 0, 0, 0, time.UTC)
 	if _, err := store.SetProcessDetails(key, 73, "native:73", startedAt); err != nil {
 		t.Fatal(err)
@@ -167,8 +171,8 @@ func TestRecoveredNativeStopReceiptFailureReusesStopWitnessAndBinding(t *testing
 	}
 	// Retention is already durable in this fixture. Avoid an unrelated second
 	// journal write so the injected Store writer reaches the stop receipt mutation.
-	app.options.retainWorkspace = func(runKey state.RunKey) (state.RunJournal, error) {
-		return store.LoadJournal(runKey)
+	store.OnRetainWorkspace = func(runKey state.RunKey) (state.RunJournal, error) {
+		return baseStore.LoadJournal(runKey)
 	}
 	restoreWriter := store.SetAtomicWriterForTesting(func(string, []byte) error {
 		return errors.New("injected native stop receipt write failure")
@@ -272,8 +276,9 @@ func TestRecoveredStopProofCannotApplyReplacementMarker(t *testing.T) {
 }
 
 func TestFreshDaemonDoesNotReuseLostRecoveredStopProof(t *testing.T) {
-	store, key, _ := newRecoveredInputFixture(t, 75, "restart:75")
-	defer store.Close()
+	baseStore, key, _ := newRecoveredInputFixture(t, 75, "restart:75")
+	defer baseStore.Close()
+	store := apptest.NewFaultStoreFrom(baseStore)
 
 	firstStops := 0
 	first := &daemon{
@@ -288,7 +293,7 @@ func TestFreshDaemonDoesNotReuseLostRecoveredStopProof(t *testing.T) {
 		}
 		return nil
 	}
-	first.options.clearProcessDetails = func(state.RunKey, int, string) (state.RunJournal, error) {
+	store.OnClearProcessDetails = func(state.RunKey, int, string) (state.RunJournal, error) {
 		return state.RunJournal{}, errors.New("injected restart-boundary clear failure")
 	}
 	if err := first.recoverUnresolvedInputIntents(context.Background()); err != nil {
@@ -307,7 +312,7 @@ func TestFreshDaemonDoesNotReuseLostRecoveredStopProof(t *testing.T) {
 
 	secondStops := 0
 	second := &daemon{
-		store:   store,
+		store:   baseStore,
 		running: make(map[state.RunKey]*runningRun),
 		options: options{newID: ids(), clock: time.Now, terminatePersist: func(pid int, identity string) error {
 			secondStops++

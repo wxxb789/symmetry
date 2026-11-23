@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wxxb789/symmetry/daemon/internal/app/apptest"
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 	"github.com/wxxb789/symmetry/daemon/internal/state"
@@ -62,25 +63,26 @@ func TestRestartInputRecoveryDoesNotRegisterAfterPermanentTerminalQueueFailure(t
 	terminalQueueError := errors.New("injected permanent terminal queue failure")
 	queueCalls := 0
 	api := &restartRecoveryControl{registeredEpoch: 2}
+	faultStore := apptest.NewFaultStoreFrom(store)
 	restarted := &daemon{
 		config: testConfig(t),
 		log:    slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		options: options{
-			store:     store,
+			store:     faultStore,
 			control:   api,
 			workspace: &fakeWorkspace{},
 			start:     failStart,
 			clock:     func() time.Time { return now },
 			newID:     func() (string, error) { return "terminal-transition", nil },
-			queueTerminalTransition: func(runKey state.RunKey, transition protocol.StateTransitionRequest, at time.Time) (state.RunJournal, error) {
-				queueCalls++
-				if runKey != key || transition.State != "failed" || !at.Equal(now) {
-					t.Fatalf("terminal queue request = (%#v, %#v, %s)", runKey, transition, at)
-				}
-				return state.RunJournal{}, terminalQueueError
-			},
 		},
 		running: make(map[state.RunKey]*runningRun),
+	}
+	faultStore.OnQueueTerminalTransitionAt = func(runKey state.RunKey, transition protocol.StateTransitionRequest, at time.Time) (state.RunJournal, error) {
+		queueCalls++
+		if runKey != key || transition.State != "failed" || !at.Equal(now) {
+			t.Fatalf("terminal queue request = (%#v, %#v, %s)", runKey, transition, at)
+		}
+		return state.RunJournal{}, terminalQueueError
 	}
 
 	err := restarted.initialize(context.Background())
@@ -112,11 +114,12 @@ func TestRestartInputRecoveryCompletesIndependentJournalButBlocksRegistration(t 
 	queueCalls := make(map[state.RunKey]int)
 	startCalls := 0
 	api := &restartRecoveryControl{registeredEpoch: 2}
+	faultStore := apptest.NewFaultStoreFrom(store)
 	restarted := &daemon{
 		config: testConfig(t),
 		log:    slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		options: options{
-			store:     store,
+			store:     faultStore,
 			control:   api,
 			workspace: &fakeWorkspace{},
 			start: func(context.Context, execution.Invocation, execution.Sink) (Process, error) {
@@ -125,18 +128,18 @@ func TestRestartInputRecoveryCompletesIndependentJournalButBlocksRegistration(t 
 			},
 			clock: func() time.Time { return now },
 			newID: func() (string, error) { return "terminal-transition", nil },
-			queueTerminalTransition: func(key state.RunKey, transition protocol.StateTransitionRequest, at time.Time) (state.RunJournal, error) {
-				queueCalls[key]++
-				if transition.State != "failed" || !at.Equal(now) {
-					t.Fatalf("terminal queue request = (%#v, %#v, %s)", key, transition, at)
-				}
-				if key == blockedKey {
-					return state.RunJournal{}, blockedError
-				}
-				return store.QueueTerminalTransitionAt(key, transition, at)
-			},
 		},
 		running: make(map[state.RunKey]*runningRun),
+	}
+	faultStore.OnQueueTerminalTransitionAt = func(key state.RunKey, transition protocol.StateTransitionRequest, at time.Time) (state.RunJournal, error) {
+		queueCalls[key]++
+		if transition.State != "failed" || !at.Equal(now) {
+			t.Fatalf("terminal queue request = (%#v, %#v, %s)", key, transition, at)
+		}
+		if key == blockedKey {
+			return state.RunJournal{}, blockedError
+		}
+		return store.QueueTerminalTransitionAt(key, transition, at)
 	}
 
 	err := restarted.initialize(context.Background())
@@ -337,9 +340,11 @@ func TestNativeRecoveryPersistenceFailuresBlockRegistration(t *testing.T) {
 	}{
 		{
 			name: "retention",
-			configure: func(daemon *daemon, _ *state.Store, _ state.RunKey) error {
+			configure: func(daemon *daemon, store *state.Store, _ state.RunKey) error {
 				failure := errors.New("injected retention persistence failure")
-				daemon.options.retainWorkspace = func(state.RunKey) (state.RunJournal, error) {
+				faultStore := apptest.NewFaultStoreFrom(store)
+				daemon.options.store = faultStore
+				faultStore.OnRetainWorkspace = func(state.RunKey) (state.RunJournal, error) {
 					return state.RunJournal{}, failure
 				}
 				return failure
@@ -359,9 +364,14 @@ func TestNativeRecoveryPersistenceFailuresBlockRegistration(t *testing.T) {
 		},
 		{
 			name: "usage",
-			configure: func(daemon *daemon, _ *state.Store, _ state.RunKey) error {
+			configure: func(daemon *daemon, store *state.Store, _ state.RunKey) error {
 				failure := errors.New("injected native usage persistence failure")
-				daemon.options.queueGoalUsage = func(state.RunKey, protocol.Usage) (state.RunJournal, error) {
+				faultStore := apptest.NewFaultStoreFrom(store)
+				daemon.options.store = faultStore
+				faultStore.OnQueueNativeUsageRecovery = func(key state.RunKey, usage protocol.Usage) (state.RunJournal, error) {
+					if _, err := store.QueueNativeUsageRecovery(key, usage); err != nil {
+						return state.RunJournal{}, err
+					}
 					return state.RunJournal{}, failure
 				}
 				return failure
@@ -381,9 +391,11 @@ func TestNativeRecoveryPersistenceFailuresBlockRegistration(t *testing.T) {
 		},
 		{
 			name: "terminal",
-			configure: func(daemon *daemon, _ *state.Store, _ state.RunKey) error {
+			configure: func(daemon *daemon, store *state.Store, _ state.RunKey) error {
 				failure := errors.New("injected native terminal persistence failure")
-				daemon.options.queueTerminalTransition = func(state.RunKey, protocol.StateTransitionRequest, time.Time) (state.RunJournal, error) {
+				faultStore := apptest.NewFaultStoreFrom(store)
+				daemon.options.store = faultStore
+				faultStore.OnQueueTerminalTransitionAt = func(state.RunKey, protocol.StateTransitionRequest, time.Time) (state.RunJournal, error) {
 					return state.RunJournal{}, failure
 				}
 				return failure

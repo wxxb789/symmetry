@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wxxb789/symmetry/daemon/internal/app/apptest"
 	"github.com/wxxb789/symmetry/daemon/internal/config"
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
@@ -242,7 +243,8 @@ func TestOmOReviewRegressionStoppedResultsPermitOnlyExactDaemonCleanup(t *testin
 			}
 			active := &runningRun{nativeSession: session, goalSession: &sessionKey}
 			clearCalls := 0
-			app := &daemon{store: store, running: map[state.RunKey]*runningRun{key: active}, options: options{clock: time.Now, clearProcessDetails: func(clearedKey state.RunKey, pid int, identity string) (state.RunJournal, error) {
+			faultStore := apptest.NewFaultStoreFrom(store)
+			faultStore.OnClearProcessDetails = func(clearedKey state.RunKey, pid int, identity string) (state.RunJournal, error) {
 				clearCalls++
 				if clearedKey != key || pid != 71 || identity != "omo-review:71" {
 					t.Fatalf("marker clear lost the original process identity: %v %d %q", clearedKey, pid, identity)
@@ -264,7 +266,8 @@ func TestOmOReviewRegressionStoppedResultsPermitOnlyExactDaemonCleanup(t *testin
 					t.Fatalf("stale clear did not reach the exact-marker CAS rejection: %v", err)
 				}
 				return journal, err
-			}}}
+			}
+			app := &daemon{store: faultStore, running: map[state.RunKey]*runningRun{key: active}, options: options{clock: time.Now}}
 			closeErr := app.closeNativeGoalSession(key, active, session)
 			unprovenStop := test.physical.ContainmentError != nil || test.physical.TerminationError != nil
 			if (closeErr != nil) != (unprovenStop || test.changeMarker) || (unprovenStop && !errors.Is(closeErr, physicalFailure)) {

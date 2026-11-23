@@ -318,11 +318,7 @@ func (daemon *daemon) requireNativeSessionCloseRetry(key state.RunKey, session h
 }
 
 func (daemon *daemon) abortGoalSessionLaunchBeforeNativeStart(key state.GoalSessionKey) error {
-	abort := daemon.options.abortGoalSessionLaunchBeforeNativeStart
-	if abort == nil {
-		abort = daemon.store.AbortGoalSessionLaunchBeforeNativeStart
-	}
-	_, err := abort(key)
+	_, err := daemon.store.AbortGoalSessionLaunchBeforeNativeStart(key)
 	return err
 }
 
@@ -340,11 +336,7 @@ func boundedGoalSessionUncertainReason(reason string) string {
 }
 
 func (daemon *daemon) markGoalSessionUncertain(key state.GoalSessionKey, reason string) error {
-	mark := daemon.options.markGoalSessionUncertain
-	if mark == nil {
-		mark = daemon.store.MarkGoalSessionUncertain
-	}
-	_, err := mark(key, reason)
+	_, err := daemon.store.MarkGoalSessionUncertain(key, reason)
 	return err
 }
 
@@ -596,17 +588,9 @@ func equalOptionalGoalString(left, right *string) bool {
 }
 
 func (daemon *daemon) loadGoalSession(key state.GoalSessionKey) (state.GoalSessionJournal, error) {
-	load := daemon.options.loadGoalSession
-	if load == nil {
-		load = daemon.store.LoadGoalSession
-	}
-	return load(key)
+	return daemon.store.LoadGoalSession(key)
 }
 
 func (daemon *daemon) closeGoalSession(key state.GoalSessionKey) (state.GoalSessionJournal, error) {
-	close := daemon.options.closeGoalSession
-	if close == nil {
-		close = daemon.store.CloseGoalSession
-	}
-	return close(key)
+	return daemon.store.CloseGoalSession(key)
 }

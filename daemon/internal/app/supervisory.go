@@ -227,11 +227,7 @@ func (daemon *daemon) forgetWorkspaceRetention(key state.RunKey) {
 }
 
 func (daemon *daemon) persistWorkspaceRetention(key state.RunKey) {
-	retain := daemon.options.retainWorkspace
-	if retain == nil {
-		retain = daemon.store.RetainWorkspace
-	}
-	if _, err := retain(key); err != nil && !state.IsNotFound(err) && daemon.log != nil {
+	if _, err := daemon.store.RetainWorkspace(key); err != nil && !state.IsNotFound(err) && daemon.log != nil {
 		daemon.log.Error("retain_supervised_workspace_failed", "run_id", key.RunID, "error", err)
 	}
 }

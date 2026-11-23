@@ -724,11 +724,7 @@ func (daemon *daemon) retainUnknownGoalLaunchWorkspace(key state.RunKey) {
 
 func (daemon *daemon) retainUnknownGoalLaunchWorkspaceChecked(key state.RunKey) error {
 	daemon.rememberWorkspaceRetention(key)
-	retain := daemon.options.retainWorkspace
-	if retain == nil {
-		retain = daemon.store.RetainWorkspace
-	}
-	if _, err := retain(key); err != nil {
+	if _, err := daemon.store.RetainWorkspace(key); err != nil {
 		return fmt.Errorf("persist workspace retention: %w", err)
 	}
 	return nil
@@ -1012,22 +1008,11 @@ func (daemon *daemon) prepareNativeGoalUsageWithSnapshot(key state.RunKey, resul
 	return usage, true, nil
 }
 
-// Persists the accounting barrier together with an immutable unknown usage body; the optional
-// queue hook exists for focused tests, production uses the state store's atomic mutation.
+// Persists the accounting barrier together with an immutable unknown usage body.
 func (daemon *daemon) queueNativeUnknownUsageRecovery(key state.RunKey) error {
 	usage, shouldQueue, err := daemon.prepareNativeUnknownGoalUsage(key)
 	if err != nil || !shouldQueue {
 		return err
-	}
-	if queue := daemon.options.queueGoalUsage; queue != nil {
-		if _, err := daemon.store.MarkNativeUsageRecoveryRequired(key); err != nil {
-			return err
-		}
-		if _, err := queue(key, usage); err != nil {
-			return err
-		}
-		daemon.signalOutboxFor(key)
-		return nil
 	}
 	if _, err := daemon.store.QueueNativeUsageRecovery(key, usage); err != nil {
 		return err
@@ -1037,11 +1022,7 @@ func (daemon *daemon) queueNativeUnknownUsageRecovery(key state.RunKey) error {
 }
 
 func (daemon *daemon) queueNativeGoalUsageRecord(key state.RunKey, usage protocol.Usage) error {
-	queue := daemon.options.queueGoalUsage
-	if queue == nil {
-		queue = daemon.store.QueueGoalUsage
-	}
-	if _, err := queue(key, usage); err != nil {
+	if _, err := daemon.store.QueueGoalUsage(key, usage); err != nil {
 		return err
 	}
 	daemon.signalOutboxFor(key)
@@ -1081,10 +1062,6 @@ func (daemon *daemon) queueNativeGoalUsageSettlement(key state.RunKey, active *r
 			return nil
 		}
 		_, err = daemon.store.MarkNativeUsageRecoverySettlement(key, settlement)
-	} else if queue := daemon.options.queueGoalUsage; queue != nil {
-		if _, err = daemon.store.MarkNativeUsageRecoverySettlement(key, settlement); err == nil {
-			_, err = queue(key, *usage)
-		}
 	} else {
 		_, err = daemon.store.QueueNativeUsageRecoverySettlement(key, *usage, settlement)
 	}
