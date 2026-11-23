@@ -30,7 +30,11 @@ the conductor-verified judgement of the seven render-gate specs).
    non-reproduction is recorded in the evidence record.
 2. **The chat draft-scope state assertion is not a deletion candidate** (decision J: state, not
    layout). `chat.test.tsx:304`/`:327` and the browser twin `portal-chat.spec.mjs:114`'s late-read
-   half keep their state assertions in both layers; only pane/scroll *outcomes* move.
+   half keep their state assertions in both layers; only pane/scroll *outcomes* move. The deleted
+   pane case's two jsdom-owned lines (the `· pending` label, base `:597`, and the loading branch's
+   absent `#chat-messages`, base `:598`) were deleted with it in the first apply and **retained in
+   the fix stage** at `chat.test.tsx:304` (head `:317-318`), where the held project read keeps the
+   pane in the loading branch deterministically (M-G/M-H, record §7).
 3. **The jsdom pane-simulation cases are the four mid-file cases** `chat.test.tsx:569` (`settles a
    scope's pane on its own offset after a switch, even while the pane clamped it`), `:618` (`keeps
    a scope's offset when the browser pins the pane under a replaced transcript`), `:666` (`still
@@ -106,11 +110,13 @@ The draft plan expected cases 1-4 each to pair with a twin under their own mutat
 revised that: only case 1's *effective* guarded behaviour (the recorded-offset re-assertion, not the
 leaving-time clamp guard) reddens a render-gate twin. The full matrix — six mutations, each run
 against the jsdom suite and the two `portal-chat` twins — is in
-`docs/evidence/rf-w5-08-jsdom-browser-split-2026-11-22.md` §8; this table is its settled summary.
+`docs/evidence/rf-w5-08-jsdom-browser-split-2026-11-22.md` §8, and the fix stage's two targeted
+jsdom mutations for the retained lines (M-G/M-H) are its §7 rows; this table is the settled
+summary.
 
 | # | invariant | jsdom site (base 956ff4f6) | named twin (render gate) | mutation | outcome |
 | --- | --- | --- | --- | --- | --- |
-| 1 | a scope's own recorded offset is re-asserted when its pane renders again after a switch | `chat.test.tsx:569` (deleted) | `portal-chat.spec.mjs:114` (`:162`, `:190`, `:197`) | M-A: the `assertRecordedOffset` effects dropped | **deleted**: twin red at `:162` (`Expected: 40, Received: 120`) with the copy gone; both twins green on the settled tree |
+| 1 | a scope's own recorded offset is re-asserted when its pane renders again after a switch | `chat.test.tsx:569` (deleted) | `portal-chat.spec.mjs:114` (`:162`, `:190`, `:197`) | M-A: the `assertRecordedOffset` effects dropped | **deleted** (the scroll simulation): twin red at `:162` (`Expected: 40, Received: 120`) with the copy gone; both twins green on the settled tree. The case's jsdom-owned DOM/state lines were retained, not deleted: they run in `chat.test.tsx:304` at `:317-318` (pair row 10, M-G/M-H), D15 keeping DOM/state in jsdom |
 | 2 | a scope left while its pane is clamped does not record the clamped position | `chat.test.tsx:569`'s first half (deleted with it) | none | M1: `rememberLeavingScope`'s pinned guard dropped | recorded as an uncovered guard: 48/48 jsdom cases passed at base under M1 |
 | 3 | a pinning scroll event is not a reader move | `chat.test.tsx:618` | none | M-B (`onScroll` guard) and M-F (owed re-assertion) | **kept and named**: both mutations redden `:618` alone; both twins green |
 | 4 | a reader's move below a too-short pane's maximum is the reader's position | `chat.test.tsx:666` | none | M-E: the discriminator relaxed | **kept and named**: `:666` red alone; both twins green |
@@ -132,9 +138,9 @@ addition was needed, so the seven render-gate specs are byte-identical to base.
 | lint | `pnpm --filter @symmetry/frontend lint` (`--max-warnings 229`, not raised) | exit 0 |
 | jsdom suite | `pnpm --filter @symmetry/frontend test` | 26 files, every surviving test name identical to the pre-change baseline, exit 0 |
 | diff hygiene | `git diff --check`; the DLP greps | no whitespace damage, no user-profile path, no backslash-u |
-| pair mutations (as executed) | M1, M-A, M-B, M-D, M-E, M-F (six production mutations, each reverted) | measured matrix in the record's §8; the single pair (M-A) reddens the twin with the deleted copy gone |
+| pair mutations (as executed) | M1, M-A, M-B, M-D, M-E, M-F (six production mutations, each reverted) plus the fix stage's M-G/M-H for the retained lines (also reverted) | measured matrix in the record's §8; the single pair (M-A) reddens the twin with the deleted copy gone; M-G/M-H redden the retained lines and green on the reverted tree (record §7, §9) |
 | twins green | `playwright test tests/portal-chat.spec.mjs` on the local dev instance | the twin cases pass on the settled tree |
-| render gate (CI) | the PR's `control` job: the seven specs + the executed-set assertion | conductor-verified; named as not run here |
+| render gate (CI) | the PR's `control` job: the seven specs + the executed-set assertion | CI run `45083687616` (head `b939bbc2`): `control` **success** — `1 skipped / 93 passed`, executed set verified; recorded in the evidence record §10 |
 
 ## 6. Out of scope, with reasons
 

@@ -314,6 +314,8 @@ describe("per-scope state", () => {
     await user.type(contentField(), "workspace draft");
 
     await user.selectOptions(scopeSelect(), "project");
+    await screen.findByText(`Project conversation — ${projectId} · pending`);
+    expect(document.querySelector("#chat-messages")).toBeNull();
     await user.selectOptions(scopeSelect(), "workspace");
     await screen.findByText("Workspace conversation");
     await user.type(contentField(), " after late read");
