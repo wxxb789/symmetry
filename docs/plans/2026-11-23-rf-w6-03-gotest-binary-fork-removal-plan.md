@@ -119,10 +119,13 @@ test-binary behaviour, which already refused partial shapes.
   refuses with `Linux supervisor target stdio must be *os.File` before any helper spawn. Base-red
   observed (local route ran the process).
 - `platform/no_test_binary_branch_test.go`: walks shipped (non-`_test.go`) files under
-  `internal/platform` and `internal/execution` and fails on `flag.CommandLine.Lookup`, `test.v`,
-  `isGoTestBinary`, or a `".test` suffix literal; a second pin walks the whole `daemon/` tree and
-  allows `UseInProcessContainmentSupervisorForTesting` only in the three defining files. Both
-  base-red observed.
+  `internal/platform` and `internal/execution` and fails on `flag.CommandLine.Lookup`,
+  `flag.Lookup(`, `testing.Testing`, `test.v`, `isGoTestBinary`, or a `".test` suffix literal; a
+  second pin walks the whole `daemon/` tree and allows the exported capability identifier only in
+  its three defining files, and the unexported `installInProcessSupervisorRouteForTesting` only in
+  its four caller/definition files. Both base-red observed; the fix stage added the two
+  alternative self-inspection tokens, the installer-reference scan and the walk-sanity mutants
+  (record §8).
 
 ## 5. Evidence plan
 

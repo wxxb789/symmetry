@@ -16,9 +16,8 @@ import (
 
 var attachSuspendedProcessWithHandoff = platform.AttachSuspendedProcessWithHandoff
 
-// installInProcessSupervisorRouteForTesting keeps the durable route on the
-// local containment path: a generated test main cannot dispatch the
-// re-executed helper the durable route spawns.
+// installInProcessSupervisorRouteForTesting keeps the durable route on the local
+// containment path a generated test main can dispatch.
 func installInProcessSupervisorRouteForTesting() func() {
 	previous := attachSuspendedProcessWithHandoff
 	attachSuspendedProcessWithHandoff = func(_ context.Context, native *platform.SuspendedProcess, _ platform.SupervisorHandoffCallbacks) (platform.Containment, authority.SupervisorHandoff, string, error) {

@@ -17,13 +17,13 @@ Ubuntu-24.04 over the same worktree through its mount point (`<worktree>/daemon`
 | `daemon/internal/platform/containment_supervisor_windows.go` | `a092fedd3685fe8d25f2a82b4da19e8348ab5a3b71e905c7c94e41f907a502cf` |
 | `daemon/internal/platform/supervisor_windows_client.go` | `f9b83c29710e492317327157dd21934132974600f89fe4ca740da68afb89cb3f` |
 | `daemon/internal/platform/supervisor_linux_client.go` | `3fc7626317c705f8219d11f8bb9f12addccac551f1b508f37a89d54b4bfd4bb7` |
-| `daemon/internal/platform/containment_supervisor_testing_windows.go` (new) | `163ac56c660cb5d10f5e9a5302dca2f2beacba651cabc4f8271d1bb9b7b3f339` |
+| `daemon/internal/platform/containment_supervisor_testing_windows.go` (new) | `aac99c339bdd49638e89df96266e4814c70fdbae4f5ab595399411068431350f` |
 | `daemon/internal/platform/containment_supervisor_testing_other.go` (new) | `e2563ff774f4ade7155d292df3f2f1c708d4cb0c37fbbb2ad9225072559eaea2` |
-| `daemon/internal/execution/process_launcher_linux.go` | `215a5c515ea5ce284d22a007978a26204426c91360c3fdf3ad36ce212d4c40bd` |
-| `daemon/internal/execution/process_launcher_windows.go` | `09416475476bb8c11e3fcb846481f61ffa057c4acdd49a9d49546f92ac8f7761` |
-| `daemon/internal/execution/inprocess_containment_testing.go` (new) | `198c75f4af5a13d5881f8a5163b0af1d946a4d6b683aa79e31cecb434d380e29` |
+| `daemon/internal/execution/process_launcher_linux.go` | `6e6e8e322b9f3775f8dd6c74f664214d40d2e284a391501eeb818b0bc6332db2` |
+| `daemon/internal/execution/process_launcher_windows.go` | `7e494f2074626082fbaa6e1df39afa087bb03e0cc803be97a555481631ad1d39` |
+| `daemon/internal/execution/inprocess_containment_testing.go` (new) | `157787becc444c1573601cbfd64c90b8c2fd2be35626119738844d94128221ab` |
 | `daemon/internal/execution/inprocess_containment_testing_unsupported.go` (new) | `2dcf24f2aaf85342115a456f388fbdae5be06eb362462f238779b2ce313f8ec7` |
-| `daemon/internal/platform/no_test_binary_branch_test.go` (new) | `d1a5084c2eee35d427a421bd910fad9b98d46b2384938fe6019aa8619876c14a` |
+| `daemon/internal/platform/no_test_binary_branch_test.go` (new) | `e2bf45d7d60d30c7c46ace3557df88615c108a859baaf953e7ce8843190d490c` |
 | `daemon/internal/execution/runner_windows_test.go` | `34222448c313fb60d053ded407d3383c4b08beea54b03df1b7350d6d7ac5c35f` |
 | `daemon/internal/execution/runner_test.go` | `e9245e50c84aeb8eba87ecc4bdf3b07a92e746469dfdcd457fc6ed32c3f8089e` |
 | `daemon/internal/execution/linux_owner_v2_test.go` | `5cfcbb6a25c9ccf9b96ebe10db772c6c6694641018206ea4f3658e950eee9612` |
@@ -36,13 +36,17 @@ Ubuntu-24.04 over the same worktree through its mount point (`<worktree>/daemon`
 | `daemon/internal/app/inprocess_containment_test.go` (new) | `f89720befa058d873158ac1f7182a33145569584351a9efe397cc8f448d3c274` |
 | `daemon/internal/harness/omp/inprocess_containment_test.go` (new) | `5accfb3aeba8ab405beff950d10f579feaac17c2697e535a4a31d3fa33be85c6` |
 | `daemon/internal/harness/omo/inprocess_containment_test.go` (new) | `050375be1782ff56d26b94f18dab347150208b8aeec7a7e24eef3cc017acecc8` |
-| `docs/plans/2026-11-23-rf-w6-03-gotest-binary-fork-removal-plan.md` | `a83f0a17af648b022ac0f82d8f2cbed416cbcb1d1075b34b3ec302fc8ee5eaf4` |
+| `docs/plans/2026-11-23-rf-w6-03-gotest-binary-fork-removal-plan.md` | `f0a3cd984630da6ab0bbabb1fd1df19c38efa047a7e6b7f1b8120315b5ca0dfc` |
 | this record | the file you are reading (no self-referential hash) |
 
 The rows carrying apply-stage simplifications were re-hashed at the applied tree
 (`process_launcher_linux.go`, `runner_windows_test.go`, `linux_owner_v2_test.go`,
 `containment_supervisor_production_windows_test.go`, this plan); `runner_test.go` enters the
-inventory with the shared complete-handoff fixture.
+inventory with the shared complete-handoff fixture. The fix stage (pin hardening and
+comment-cap fixes) re-hashed the final tree: `containment_supervisor_testing_windows.go`,
+`process_launcher_linux.go`, `process_launcher_windows.go`, `inprocess_containment_testing.go`,
+`no_test_binary_branch_test.go` and this plan carry the fix-stage digests above; the other 17
+rows matched the recorded values in a `sha256sum` over the 23 table paths.
 
 ## 2. Deleted fork sites and the replacement capability
 
@@ -75,7 +79,10 @@ Added capability:
     dispatch) with `launchLocalLinuxProcess`;
   - other GOOS (`inprocess_containment_testing_unsupported.go`): no-op.
 - Production callers: none. `platform/no_test_binary_branch_test.go` walks every shipped (non-test)
-  `.go` file under `daemon/` and allows the identifier only in the three defining files.
+  `.go` file under `daemon/` and allows the exported identifier only in the three defining files,
+  and `installInProcessSupervisorRouteForTesting` only in its four caller/definition files
+  (`inprocess_containment_testing.go`, `inprocess_containment_testing_unsupported.go`,
+  `process_launcher_linux.go`, `process_launcher_windows.go`).
 
 Before/after site grep (`daemon/`, shipped files only; base output captured before the deletions):
 
@@ -213,6 +220,26 @@ Windows pins, the two Linux pins (§6) and the six cheap gates were green; the L
 re-ran as recorded (compile plus three env-gated skips). Mutant M5 below is the apply-stage
 addition for the new restore assertion; rows M1-M4 were not re-run.
 
+Fix-stage re-run (2026-11-23, final tree after the REV-01/REV-02 pin hardening and the five
+comment-cap fixes; commands in `daemon/` unless noted, WSL over the same `<worktree>` mount): the
+six cheap gates re-ran green (`gofmt -l .` exit 0, no files; `go vet ./...` exit 0; the three
+`GOOS` builds exit 0; `git diff --check` exit 0). The negative pin and the capability pin re-ran
+green on both halves (`-run 'TestShippedContainmentCodeHasNoTestBinarySelfInspection|TestInProcessContainmentCapabilityStaysTestOnly' ./internal/platform/` → Windows `ok`, WSL `ok`), and the
+three route pins re-ran green (Windows `TestDefaultWindowsLauncherUsesRecorderHandoffCapability`;
+WSL `TestDefaultLinuxLauncherUsesRecorderHandoffCapability` plus
+`TestLinuxSupervisorDurableHandoffIsDisabledForGoTestBinary`). The edited package suites: Windows
+`./internal/platform/` 95 `--- PASS` / 0 `--- FAIL` / 1 `--- SKIP` (`ok 8.208s`); WSL
+`./internal/platform/` 243 / 0 / 1 (`ok 37.697s`) and `./internal/execution/` 132 / 0 / 0
+(`ok 2.384s`). Load on the pins (the fix touches no timing or concurrency code; the run is
+assurance): Windows `GOMAXPROCS=8 go test -count=200 -run '<the two pins>' ./internal/platform/`
+→ `ok 70.585s`, and WSL `GOMAXPROCS=8 go test -race -count=200 -run '<the two pins>'
+./internal/platform/` → `ok 1224.742s`. Mutants M6-M10 in §8 are the fix-stage rows, including
+the two observed pre-fix holes; the conductor-owned four-tree suites and the CI witness jobs were
+not re-run. DLP at the final tree: the account-name string, and host-path-shaped forms (a drive
+letter followed by a separator, or a `/mnt`, `/home`, `/tmp` prefix in path position) over the
+branch-added lines and this record's text return no matches (`grep` exit 1, the pass condition),
+and the branch diff carries no backslash-u.
+
 Windows SKIP names (all pre-existing env gates; the diff adds no `t.Skip`):
 `TestProductionContainmentSupervisorReplaysReceiptAfterLostRecoverResponse`,
 `TestPreparePiProviderBridgeFailsClosedWithoutLinuxShare`, `TestPiProbeLiveRejectsDifferentBlob`,
@@ -314,16 +341,23 @@ pins are cross-platform and run in both suites.
 | M3 | removed the execution-side route install (`restoreRoute := installInProcessSupervisorRouteForTesting()` dropped from `UseInProcessContainmentSupervisorForTesting`) | Windows: `go test -count=1 -run '<the two decision-liveness tests>' ./internal/app/` → exit 1 (`start ... connect durable containment supervisor: containment supervisor connection timeout`); Linux (WSL): the relocated `TestLinuxSupervisorDurableHandoffIsDisabledForGoTestBinary` → exit 1, `receive Linux supervisor pidfd: Linux supervisor fd payload is incomplete`; restored → app tests `ok` (exit 0), relocated test `ok` (exit 0) |
 | M4 | made the converted stop-lease install expose durable authority (`mutantDurableAuthorityLease` embedding `noopContainmentSupervisorLease` plus `containmentAuthority()`) | `go test -count=1 -run '^TestNonDurableStopLeaseCloseRetainsFailedStopProof$' ./internal/platform/` → exit 1, `in-process supervisor platform.mutantDurableAuthorityLease exposes durable authority; the non-durable stop lease route is not exercised`; restored → exit 0 `ok` |
 | M5 (apply stage) | made the execution route restore a no-op (`installInProcessSupervisorRouteForTesting` returned `func() {}` instead of restoring `launchLinuxSupervisor`) | `go test -count=1 -run '^TestLinuxSupervisorDurableHandoffIsDisabledForGoTestBinary$' ./internal/execution/` (WSL) → exit 1, `capability restore did not restore the shipped durable dispatch`; restored → exit 0 `ok`, `process_launcher_linux.go` back to its §1 sha256 |
+| M6 (fix stage) | re-added the fork's cheapest modern spelling to `platform/supervisor_windows_client.go`: `if testing.Testing() { return noopContainmentSupervisorLease{}, targetIdentity, nil }` at the top of `launchContainmentSupervisorProcess` | The reviewed pin passed this mutant (`go test -count=1 -run '^TestShippedContainmentCodeHasNoTestBinarySelfInspection$' ./internal/platform/` → exit 0) — the observed REV-01 hole; with the fixed pin the same command → exit 1, `supervisor_windows_client.go decides containment from the test runner via "testing.Testing"`; restored → exit 0 `ok`, `supervisor_windows_client.go` back to the §1 digest |
+| M7 (fix stage) | re-added a flag-family consult that does not contain a covered literal: `if flag.Lookup("test.timeout") != nil { return noopContainmentSupervisorLease{}, targetIdentity, nil }` in `platform/supervisor_windows_client.go` | The reviewed pin passed it (exit 0): the old token list covered only `flag.CommandLine.Lookup` and the literal `test.v` (so `flag.Lookup("test.v")` was already caught by the `test.v` token — the real hole was the generic spelling, which REV-01 asked to close with `flag.Lookup(`); with the fixed pin → exit 1, `decides containment from the test runner via "flag.Lookup("`; restored → exit 0 `ok`, §1 digest restored |
+| M8 (fix stage) | shipped `internal/execution/runner.go` gained `var _ = installInProcessSupervisorRouteForTesting` (before the fix the unexported installer was outside both scans) | `go test -count=1 -run '^TestInProcessContainmentCapabilityStaysTestOnly$' ./internal/platform/` → exit 1, `production source internal/execution/runner.go references the in-process containment test capability "installInProcessSupervisorRouteForTesting"` plus `sources referencing "installInProcessSupervisorRouteForTesting" = 5, want the 4 defining files`; restored → exit 0 `ok` |
+| M9 (fix stage) | pin-sanity sub-mutants: (a) the token walk's file filter forced to skip every entry; (b) the `installInProcessSupervisorRouteForTesting` call removed from `inprocess_containment_testing.go`, leaving an allowed file without its token | (a) exit 1, `no shipped Go sources found under .` — the per-root `found == 0` guard that REV-02 keeps still detects an empty walk; (b) exit 1, `sources referencing "installInProcessSupervisorRouteForTesting" = 3, want the 4 defining files`; both restored → exit 0 `ok` |
+| M10 (fix stage) | shipped `internal/execution/runner.go` gained `var _ = UseInProcessContainmentSupervisorForTesting` | exit 1, `production source internal/execution/runner.go references the in-process containment test capability "UseInProcessContainmentSupervisorForTesting"` plus `= 4, want the 3 defining files`; restored → exit 0 `ok`. Coverage re-probe of the rewritten reference scan: the exported identifier's token and three-file allowed set are unchanged by the fix, so no pre-fix hole existed to observe here |
 
 ## 9. dLOC (D2: report-only)
 
 `git diff --numstat` over the strictly owned shipped files
 (`containment_supervisor_windows.go`, `supervisor_windows_client.go`, `supervisor_linux_client.go`,
-`process_launcher_linux.go`, `process_launcher_windows.go`): +68/−80, net −12 (re-measured at the
-applied tree; the pre-apply tree was +71/−80, net −9 — the apply-stage simplification removed the
-three dead statements the diff had moved in `process_launcher_linux.go` from the added side). The
+`process_launcher_linux.go`, `process_launcher_windows.go`): +66/−80, net −14 (fix-stage
+re-measurement, `git diff --numstat b9d4b4a4 -- <the five files>`; the apply tree was +68/−80,
+net −12; the pre-apply tree was +71/−80, net −9 — the apply-stage simplification removed the
+three dead statements the diff had moved in `process_launcher_linux.go` from the added side; the
+fix stage shortened two added comment blocks by one line each). The
 deleted fork family — `isGoTestBinary`, both probes, the noop take — is 31 of the deleted lines; the
-four new shipped capability files add 64 lines (35/9/15/5). Base plan estimated −40 dLOC;
+four new shipped capability files add 62 lines (34/9/14/5). Base plan estimated −40 dLOC;
 the gate is the grep + the pins + the mutations).
 
 ## 10. Residual risks and limits
@@ -337,5 +371,5 @@ the gate is the grep + the pins + the mutations).
   (`contain durable process tree for ...`) instead of the local route's. No assertion depends on
   that message.
 - The Linux e2e witness needs the GitHub-runner environment (live control plane at
-  `http://127.0.0.1:4000`, fake agent, `/tmp` workspace); it is recorded CI-only with its exact
+  `http://127.0.0.1:4000`, fake agent, a `<scratch>` workspace); it is recorded CI-only with its exact
   command and the freezing CI step. No skip is counted as coverage of the removed branch.

@@ -40,9 +40,8 @@ func defaultProcessLauncher(
 	return launchLocalLinuxProcess(command)
 }
 
-// launchLinuxSupervisor is the durable Linux dispatch; the in-process test
-// capability replaces it with the local route because a generated test main
-// cannot dispatch the re-executed helper.
+// launchLinuxSupervisor is the durable Linux dispatch; the in-process test capability
+// swaps in the local route a generated test main can dispatch.
 var launchLinuxSupervisor = launchLinuxSupervisorProcess
 
 func launchLinuxSupervisorProcess(command *exec.Cmd, invocation Invocation, writes RecorderFuncs) (*startedProcess, error) {

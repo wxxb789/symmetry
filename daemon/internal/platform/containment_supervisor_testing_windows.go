@@ -9,9 +9,8 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/authority"
 )
 
-// UseInProcessContainmentSupervisorForTesting keeps in-process launches on the
-// local containment route: a generated Go test main cannot dispatch the
-// re-executed helper the durable route spawns. Nothing in production calls it.
+// UseInProcessContainmentSupervisorForTesting keeps in-process launches on the local
+// route a generated test main can dispatch; nothing in production calls it.
 func UseInProcessContainmentSupervisorForTesting() func() {
 	previous := launchContainmentSupervisor
 	launchContainmentSupervisor = func(_ syscall.Handle, _ int, targetIdentity string) (containmentSupervisorLease, string, error) {
