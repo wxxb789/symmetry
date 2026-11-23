@@ -82,6 +82,7 @@ func TestRecorderFuncsCapabilitiesMatchPresentWritesAndFailClosed(t *testing.T) 
 	noopProcess := func(int, string) error { return nil }
 	noopAuthority := func(int, string, *authority.Supervisor) error { return nil }
 	noopStopReceipt := func(int, string, authority.StopReceipt) error { return nil }
+	noopRecoverySeal := func(authority.Supervisor, uint64) error { return nil }
 	writes := RecorderFuncs{
 		PrepareSupervisorHandoff:           noopHandoff,
 		BindSupervisorHandoff:              noopBind,
@@ -93,6 +94,7 @@ func TestRecorderFuncsCapabilitiesMatchPresentWritesAndFailClosed(t *testing.T) 
 		PersistProcessAuthority:            noopAuthority,
 		PersistContainmentStopReceipt:      noopStopReceipt,
 		PersistContainmentUnproven:         noopProcess,
+		RecordSupervisorRecoveryScanSeal:   noopRecoverySeal,
 	}
 	want := RecorderCapabilities{
 		PrepareSupervisorHandoff:           true,
@@ -105,6 +107,7 @@ func TestRecorderFuncsCapabilitiesMatchPresentWritesAndFailClosed(t *testing.T) 
 		PersistProcessAuthority:            true,
 		PersistContainmentStopReceipt:      true,
 		PersistContainmentUnproven:         true,
+		RecordSupervisorRecoveryScanSeal:   true,
 	}
 	if capabilities := writes.Capabilities(); capabilities != want {
 		t.Fatalf("complete recorder capabilities = %+v, want %+v", capabilities, want)
@@ -134,6 +137,9 @@ func TestRecorderFuncsEveryAbsentWriteFailsClosed(t *testing.T) {
 		{name: "PersistProcessAuthority", call: func() error { return recorder.PersistProcessAuthority(1, "created:1", value) }},
 		{name: "PersistContainmentStopReceipt", call: func() error { return recorder.PersistContainmentStopReceipt(1, "created:1", receipt) }},
 		{name: "PersistContainmentUnproven", call: func() error { return recorder.PersistContainmentUnproven(1, "created:1") }},
+		{name: "RecordSupervisorRecoveryScanSeal", call: func() error {
+			return recorder.RecordSupervisorRecoveryScanSeal(authority.Supervisor{}, 2)
+		}},
 	}
 	for _, check := range checks {
 		t.Run(check.name, func(t *testing.T) {
@@ -312,6 +318,11 @@ func (recorder *capabilityRecorder) PersistContainmentUnproven(int, string) erro
 	return nil
 }
 
+func (recorder *capabilityRecorder) RecordSupervisorRecoveryScanSeal(authority.Supervisor, uint64) error {
+	recorder.note("recovery-seal")
+	return nil
+}
+
 func TestRecorderWritesMapsEveryCapabilityToItsMethod(t *testing.T) {
 	complete := &capabilityRecorder{capabilities: RecorderCapabilities{
 		PrepareSupervisorHandoff:           true,
@@ -324,13 +335,15 @@ func TestRecorderWritesMapsEveryCapabilityToItsMethod(t *testing.T) {
 		PersistProcessAuthority:            true,
 		PersistContainmentStopReceipt:      true,
 		PersistContainmentUnproven:         true,
+		RecordSupervisorRecoveryScanSeal:   true,
 	}}
 	writes := recorderWrites(complete)
 	if writes.PrepareSupervisorHandoff == nil || writes.BindSupervisorHandoff == nil ||
 		writes.CommitSupervisorHandoff == nil || writes.RecordSupervisorHandoffStopReceipt == nil ||
 		writes.ClearSupervisorHandoff == nil || writes.PersistProcess == nil ||
 		writes.PersistProcessWithAuthority == nil || writes.PersistProcessAuthority == nil ||
-		writes.PersistContainmentStopReceipt == nil || writes.PersistContainmentUnproven == nil {
+		writes.PersistContainmentStopReceipt == nil || writes.PersistContainmentUnproven == nil ||
+		writes.RecordSupervisorRecoveryScanSeal == nil {
 		t.Fatal("a true capability was left unmapped")
 	}
 	members := []struct {
@@ -351,6 +364,7 @@ func TestRecorderWritesMapsEveryCapabilityToItsMethod(t *testing.T) {
 		{"authority", func() error { return writes.PersistProcessAuthority(7, "created:7", nil) }},
 		{"stop", func() error { return writes.PersistContainmentStopReceipt(7, "created:7", authority.StopReceipt{}) }},
 		{"unproven", func() error { return writes.PersistContainmentUnproven(7, "created:7") }},
+		{"recovery-seal", func() error { return writes.RecordSupervisorRecoveryScanSeal(authority.Supervisor{}, 2) }},
 	}
 	for _, member := range members {
 		complete.calls = nil
@@ -369,7 +383,7 @@ func TestRecorderWritesMapsEveryCapabilityToItsMethod(t *testing.T) {
 		sparse.CommitSupervisorHandoff != nil || sparse.RecordSupervisorHandoffStopReceipt != nil ||
 		sparse.ClearSupervisorHandoff != nil || sparse.PersistProcessWithAuthority != nil ||
 		sparse.PersistProcessAuthority != nil || sparse.PersistContainmentStopReceipt != nil ||
-		sparse.PersistContainmentUnproven != nil {
+		sparse.PersistContainmentUnproven != nil || sparse.RecordSupervisorRecoveryScanSeal != nil {
 		t.Fatal("a false capability was mapped to a write")
 	}
 }

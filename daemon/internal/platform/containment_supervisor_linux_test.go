@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -3251,13 +3252,18 @@ func TestLinuxSupervisorControlEOFWithDeadOwnerMetadataUsesOwnerLossSeal(t *test
 	_ = stderrWrite.Close()
 }
 
-// Test double for the app's durable scan-persistence callback, deliberately
+// Test double for the app's durable scan-persistence callbacks, deliberately
 // narrower than the store; the store rules remain the authority.
 type linuxSupervisorScanJournalModel struct {
 	mutex                 sync.Mutex
 	progress              map[string]linuxSupervisorScanProgressModel
 	assertAllSealed       int
 	assertAllSealedFailed int
+	authority             authority.Supervisor
+	events                []string
+	recoverySealAttempts  int
+	recoverySealWriteErr  error
+	unproven              bool
 }
 
 type linuxSupervisorScanProgressModel struct {
@@ -3272,6 +3278,21 @@ func newLinuxSupervisorScanJournalModel() *linuxSupervisorScanJournalModel {
 	return &linuxSupervisorScanJournalModel{progress: make(map[string]linuxSupervisorScanProgressModel)}
 }
 
+func (model *linuxSupervisorScanJournalModel) bind(handoff authority.SupervisorHandoff, pid int, identity string) error {
+	bound := handoff.Clone()
+	bound.SupervisorPID = pid
+	bound.SupervisorIdentity = identity
+	bound.ScanUpdate = nil
+	value, err := bound.ToSupervisor()
+	if err != nil {
+		return err
+	}
+	model.mutex.Lock()
+	model.authority = value
+	model.mutex.Unlock()
+	return nil
+}
+
 func (model *linuxSupervisorScanJournalModel) prepare(handoff authority.SupervisorHandoff) error {
 	update := handoff.ScanUpdate
 	if update == nil {
@@ -3279,6 +3300,7 @@ func (model *linuxSupervisorScanJournalModel) prepare(handoff authority.Supervis
 	}
 	model.mutex.Lock()
 	defer model.mutex.Unlock()
+	model.events = append(model.events, fmt.Sprintf("%s:%s:%d", update.Owner, update.Phase, update.Sequence))
 	progress := model.progress[update.Owner]
 	switch update.Phase {
 	case authority.SupervisorScanPhaseBegin:
@@ -3310,16 +3332,18 @@ func (model *linuxSupervisorScanJournalModel) prepare(handoff authority.Supervis
 	case authority.SupervisorScanPhaseUnproven:
 		progress.failure = update.FailureKind
 	case authority.SupervisorScanPhaseAssertClean:
+		owner := model.progress[update.Owner]
 		helper := model.progress[authority.SupervisorScanOwnerHelper]
 		mirror := model.progress[authority.SupervisorScanOwnerMirror]
-		if helper.completed == 0 || mirror.completed == 0 || helper.failure != "" || mirror.failure != "" {
+		if owner.completed != update.Sequence || helper.completed == 0 || mirror.completed == 0 || helper.failure != "" || mirror.failure != "" {
 			return errors.New("Linux containment scan evidence is unresolved")
 		}
 	case authority.SupervisorScanPhaseAssertAllSealed:
 		model.assertAllSealed++
+		owner := model.progress[update.Owner]
 		helper := model.progress[authority.SupervisorScanOwnerHelper]
 		mirror := model.progress[authority.SupervisorScanOwnerMirror]
-		if helper.completed == 0 || helper.sealed != helper.completed || helper.failure != "" ||
+		if owner.sealed != update.Sequence || helper.completed == 0 || helper.sealed != helper.completed || helper.failure != "" ||
 			mirror.completed == 0 || mirror.sealed != mirror.completed || mirror.failure != "" {
 			model.assertAllSealedFailed++
 			return errors.New("Linux containment scan seals are unresolved")
@@ -3329,30 +3353,97 @@ func (model *linuxSupervisorScanJournalModel) prepare(handoff authority.Supervis
 	return nil
 }
 
-// The in-process consumer sees no durable helper seal after the local owner-loss seal,
-// so the stop fails closed: no receipt is adopted and the containment-unproven callback fires once.
-func TestLinuxSupervisorLiveOwnerControlCloseInProcessStopFailsClosed(t *testing.T) {
+func (model *linuxSupervisorScanJournalModel) recordRecoveryScanSeal(expected authority.Supervisor, sequence uint64) error {
+	model.mutex.Lock()
+	defer model.mutex.Unlock()
+	model.recoverySealAttempts++
+	model.events = append(model.events, fmt.Sprintf("recovery-scan-seal:%d", sequence))
+	if model.recoverySealWriteErr != nil {
+		return model.recoverySealWriteErr
+	}
+	if sequence == 0 || !model.authority.Equal(expected) {
+		return errors.New("Linux helper recovery seal authority identity mismatch")
+	}
+	mirror := model.progress[authority.SupervisorScanOwnerMirror]
+	if model.unproven || mirror.completed == 0 || mirror.sealed != mirror.completed || mirror.failure != "" {
+		return errors.New("Linux helper recovery seal requires a durable clean mirror seal")
+	}
+	progress := model.progress[authority.SupervisorScanOwnerHelper]
+	if progress.sealed == sequence && progress.completed == sequence {
+		return nil
+	}
+	if progress.completed == 0 || progress.completed == ^uint64(0) || sequence != progress.completed+1 ||
+		progress.pending != 0 || progress.clean != 0 || progress.sealed != 0 || progress.failure != "" {
+		return errors.New("Linux helper recovery scan proof is not the exact next clean sequence")
+	}
+	progress.completed = sequence
+	progress.sealed = sequence
+	model.progress[authority.SupervisorScanOwnerHelper] = progress
+	return nil
+}
+
+func (model *linuxSupervisorScanJournalModel) markContainmentUnproven() {
+	model.mutex.Lock()
+	model.unproven = true
+	model.mutex.Unlock()
+}
+
+type linuxSupervisorScanJournalSnapshot struct {
+	helper    linuxSupervisorScanProgressModel
+	mirror    linuxSupervisorScanProgressModel
+	asserts   int
+	refusals  int
+	sealCalls int
+	events    []string
+}
+
+func (model *linuxSupervisorScanJournalModel) snapshot() linuxSupervisorScanJournalSnapshot {
+	model.mutex.Lock()
+	defer model.mutex.Unlock()
+	return linuxSupervisorScanJournalSnapshot{
+		helper:    model.progress[authority.SupervisorScanOwnerHelper],
+		mirror:    model.progress[authority.SupervisorScanOwnerMirror],
+		asserts:   model.assertAllSealed,
+		refusals:  model.assertAllSealedFailed,
+		sealCalls: model.recoverySealAttempts,
+		events:    slices.Clone(model.events),
+	}
+}
+
+type liveOwnerResponseLossStop struct {
+	supervisor *linuxSupervisor
+	value      authority.Supervisor
+	stopErr    error
+	unproven   int
+}
+
+type liveOwnerResponseLossOptions struct {
+	sealWrite func(authority.Supervisor, uint64) error
+	resume    bool
+}
+
+func runLiveOwnerResponseLossStop(t *testing.T, model *linuxSupervisorScanJournalModel, options liveOwnerResponseLossOptions) liveOwnerResponseLossStop {
+	t.Helper()
 	stdinRead, stdinWrite, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer stdinWrite.Close()
 	stdoutRead, stdoutWrite, err := os.Pipe()
 	if err != nil {
-		stdinRead.Close()
-		stdinWrite.Close()
 		t.Fatal(err)
 	}
-	defer stdoutRead.Close()
 	stderrRead, stderrWrite, err := os.Pipe()
 	if err != nil {
-		stdinRead.Close()
-		stdinWrite.Close()
-		stdoutRead.Close()
-		stdoutWrite.Close()
 		t.Fatal(err)
 	}
-	defer stderrRead.Close()
+	t.Cleanup(func() {
+		_ = stdinRead.Close()
+		_ = stdinWrite.Close()
+		_ = stdoutRead.Close()
+		_ = stdoutWrite.Close()
+		_ = stderrRead.Close()
+		_ = stderrWrite.Close()
+	})
 
 	command := exec.Command("/bin/sh", "-c", "sleep 30")
 	command.Stdin = stdinRead
@@ -3360,13 +3451,13 @@ func TestLinuxSupervisorLiveOwnerControlCloseInProcessStopFailsClosed(t *testing
 	command.Stderr = stderrWrite
 	helper := exec.Command(os.Args[0], "-test.run=^TestLinuxSupervisorHelperProcess$", "--")
 	helper.Env = append(os.Environ(), "SYMMETRY_LINUX_SUPERVISOR_HELPER=1")
-	journal := newLinuxSupervisorScanJournalModel()
 	supervisor, err := StartLinuxSupervisor(LinuxSupervisorStartSpec{
-		Command:       command,
-		HelperCommand: helper,
-		OwnerContext:  "linux-helper:test-live-owner-response-loss",
-		Prepare:       journal.prepare,
-		Bind:          func(authority.SupervisorHandoff, int, string) error { return nil },
+		Command:                command,
+		HelperCommand:          helper,
+		OwnerContext:           "linux-helper:test-live-owner-response-loss",
+		Prepare:                model.prepare,
+		Bind:                   model.bind,
+		RecordRecoveryScanSeal: options.sealWrite,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -3385,6 +3476,7 @@ func TestLinuxSupervisorLiveOwnerControlCloseInProcessStopFailsClosed(t *testing
 		unprovenMutex.Lock()
 		unprovenCalls++
 		unprovenMutex.Unlock()
+		model.markContainmentUnproven()
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -3397,6 +3489,23 @@ func TestLinuxSupervisorLiveOwnerControlCloseInProcessStopFailsClosed(t *testing
 	if err := supervisor.RenewLease(30*time.Second, 1); err != nil {
 		t.Fatal(err)
 	}
+	if options.resume {
+		if err := supervisor.Resume(); err != nil {
+			t.Fatal(err)
+		}
+		// The resumed helper's monitor retires one durable sequence per interval; the seal below must
+		// then be that sequence + 1, so wait for it instead of assuming the pre-latch sequence.
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			if progress := model.snapshot().helper; progress.completed >= 2 {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("durable helper progress after resume = %+v, want a second retired sequence", model.snapshot().helper)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
 	value := supervisor.ContainmentAuthority()
 	if value == nil {
 		t.Fatal("missing Linux supervisor authority")
@@ -3407,43 +3516,16 @@ func TestLinuxSupervisorLiveOwnerControlCloseInProcessStopFailsClosed(t *testing
 	supervisor.closeControlAfterResponseLossRequestLocked()
 	supervisor.requestMu.Unlock()
 	stopErr := supervisor.Terminate(true)
-	if !errors.Is(stopErr, ErrLinuxSupervisorStopUnproven) || !errors.Is(stopErr, ErrLinuxSupervisorResponseLost) {
-		t.Fatalf("live-owner response-loss stop = %v, want the fail-closed unproven class", stopErr)
-	}
 	unprovenMutex.Lock()
 	calls := unprovenCalls
 	unprovenMutex.Unlock()
-	if calls != 1 {
-		t.Fatalf("containment-unproven callbacks = %d, want exactly one persisted uncertainty mark", calls)
-	}
-	if _, ok := supervisor.ContainmentStopReceipt(); ok {
-		t.Fatal("response-loss stop adopted a receipt without a durable helper seal")
-	}
-	journal.mutex.Lock()
-	helperProgress := journal.progress[authority.SupervisorScanOwnerHelper]
-	mirrorProgress := journal.progress[authority.SupervisorScanOwnerMirror]
-	assertAttempts, assertRefusals := journal.assertAllSealed, journal.assertAllSealedFailed
-	journal.mutex.Unlock()
-	if helperProgress.completed == 0 || helperProgress.sealed != 0 {
-		t.Fatalf("durable helper progress after the local owner-loss seal = %+v, want the pre-latch clean sequence and no seal", helperProgress)
-	}
-	if mirrorProgress.sealed == 0 {
-		t.Fatalf("durable mirror progress = %+v, want the mirror seal persisted before the assertion", mirrorProgress)
-	}
-	if assertAttempts == 0 || assertRefusals == 0 {
-		t.Fatalf("durable all-sealed assertions = %d attempts / %d refusals, want the assertion attempted and refused", assertAttempts, assertRefusals)
-	}
-	// The helper's own terminal seal is still available over the authenticated recovery
-	// endpoint, whose persisted consumer applies the Completed+1 rule.
-	receipt, sealSequence, recoveryErr := StopPersistedLinuxSupervisorWithScanSeal(*value)
-	if recoveryErr != nil {
-		t.Fatalf("recovery-endpoint owner-loss seal after the refused in-process stop = %v", recoveryErr)
-	}
-	if sealSequence != 2 {
-		t.Fatalf("recovery-endpoint owner-loss seal sequence = %d, want previous clean sequence 1 + 1", sealSequence)
-	}
+	return liveOwnerResponseLossStop{supervisor: supervisor, value: *value, stopErr: stopErr, unproven: calls}
+}
+
+func releaseLiveOwnerHelper(t *testing.T, supervisor *linuxSupervisor, value authority.Supervisor, receipt authority.StopReceipt) {
+	t.Helper()
 	value.StopReceipt = &receipt
-	if err := ReleasePersistedLinuxSupervisor(*value); err != nil {
+	if err := ReleasePersistedLinuxSupervisor(value); err != nil {
 		t.Fatal(err)
 	}
 	// Close the still-open owner writer after the release so the watchdog's deferred
@@ -3454,9 +3536,222 @@ func TestLinuxSupervisorLiveOwnerControlCloseInProcessStopFailsClosed(t *testing
 	case <-time.After(testHangGuard):
 		t.Fatal("helper did not exit after recovery release")
 	}
-	_ = stdinRead.Close()
-	_ = stdoutWrite.Close()
-	_ = stderrWrite.Close()
+}
+
+func TestLinuxSupervisorLiveOwnerControlCloseInProcessStopRecordsSeal(t *testing.T) {
+	model := newLinuxSupervisorScanJournalModel()
+	scenario := runLiveOwnerResponseLossStop(t, model, liveOwnerResponseLossOptions{sealWrite: model.recordRecoveryScanSeal})
+	if scenario.stopErr != nil {
+		t.Fatalf("live-owner response-loss stop = %v, want a completed stop", scenario.stopErr)
+	}
+	if scenario.unproven != 0 {
+		t.Fatalf("containment-unproven callbacks = %d, want none after a sealed stop", scenario.unproven)
+	}
+	receipt, ok := scenario.supervisor.ContainmentStopReceipt()
+	if !ok || !receipt.ValidFor(scenario.value) {
+		t.Fatalf("response-loss stop receipt = %#v (adopted=%t), want the exact authority receipt", receipt, ok)
+	}
+	snapshot := model.snapshot()
+	if snapshot.helper.completed != 2 || snapshot.helper.sealed != 2 {
+		t.Fatalf("durable helper progress = %+v, want the recorded previous clean 1 + 1 seal", snapshot.helper)
+	}
+	if snapshot.mirror.completed == 0 || snapshot.mirror.sealed != snapshot.mirror.completed {
+		t.Fatalf("durable mirror progress = %+v, want the durable mirror seal written before the helper seal", snapshot.mirror)
+	}
+	if snapshot.asserts != 1 || snapshot.refusals != 0 {
+		t.Fatalf("durable all-sealed assertions = %d attempts / %d refusals, want one accepted assertion", snapshot.asserts, snapshot.refusals)
+	}
+	if snapshot.sealCalls != 1 {
+		t.Fatalf("recovery scan seal writes = %d, want exactly one", snapshot.sealCalls)
+	}
+	mirror := snapshot.mirror.completed
+	wantTail := []string{
+		fmt.Sprintf("mirror:assert_clean:%d", mirror),
+		fmt.Sprintf("mirror:seal:%d", mirror),
+		"recovery-scan-seal:2",
+		fmt.Sprintf("mirror:assert_all_sealed:%d", mirror),
+	}
+	if tail := snapshot.events[max(0, len(snapshot.events)-len(wantTail)):]; !slices.Equal(tail, wantTail) {
+		t.Fatalf("durable write order tail = %#v, want %#v", tail, wantTail)
+	}
+	// The helper's authenticated endpoint still reports the same terminal proof after the
+	// in-process consumer consumed it, so the exact seal is replay-safe across a crash.
+	replayed, sequence, err := StopPersistedLinuxSupervisorWithScanSeal(scenario.value)
+	if err != nil || sequence != 2 {
+		t.Fatalf("recovery-endpoint replay = sequence %d, %v, want the same Completed+1 seal", sequence, err)
+	}
+	if !replayed.Equal(receipt) {
+		t.Fatalf("recovery-endpoint receipt = %#v, want the adopted receipt %#v", replayed, receipt)
+	}
+	releaseLiveOwnerHelper(t, scenario.supervisor, scenario.value, receipt)
+}
+
+func TestLinuxSupervisorLiveOwnerControlCloseInProcessStopSealWriteFailureFailsClosed(t *testing.T) {
+	model := newLinuxSupervisorScanJournalModel()
+	model.recoverySealWriteErr = errors.New("durable recovery seal write failed")
+	scenario := runLiveOwnerResponseLossStop(t, model, liveOwnerResponseLossOptions{sealWrite: model.recordRecoveryScanSeal})
+	if !errors.Is(scenario.stopErr, ErrLinuxSupervisorStopUnproven) || !errors.Is(scenario.stopErr, ErrLinuxSupervisorResponseLost) {
+		t.Fatalf("live-owner response-loss stop = %v, want the fail-closed unproven class", scenario.stopErr)
+	}
+	if !strings.Contains(scenario.stopErr.Error(), "response-loss mirror freeze: durable recovery seal write failed") {
+		t.Fatalf("seal write failure = %v, want the freeze wrapper unchanged", scenario.stopErr)
+	}
+	if scenario.unproven != 1 {
+		t.Fatalf("containment-unproven callbacks = %d, want exactly one persisted uncertainty mark", scenario.unproven)
+	}
+	if _, ok := scenario.supervisor.ContainmentStopReceipt(); ok {
+		t.Fatal("a failed recovery seal write still adopted a receipt")
+	}
+	snapshot := model.snapshot()
+	if snapshot.helper.completed != 1 || snapshot.helper.sealed != 0 {
+		t.Fatalf("durable helper progress = %+v, want the pre-latch clean sequence and no seal", snapshot.helper)
+	}
+	if snapshot.mirror.completed == 0 || snapshot.mirror.sealed != snapshot.mirror.completed {
+		t.Fatalf("durable mirror progress = %+v, want the durable mirror seal retained", snapshot.mirror)
+	}
+	if snapshot.asserts != 0 {
+		t.Fatalf("durable all-sealed assertions = %d, want none after the failed seal write", snapshot.asserts)
+	}
+	if snapshot.sealCalls != 1 {
+		t.Fatalf("recovery scan seal writes = %d, want exactly one failed attempt", snapshot.sealCalls)
+	}
+	wantTail := []string{
+		fmt.Sprintf("mirror:assert_clean:%d", snapshot.mirror.completed),
+		fmt.Sprintf("mirror:seal:%d", snapshot.mirror.completed),
+		"recovery-scan-seal:2",
+	}
+	if tail := snapshot.events[max(0, len(snapshot.events)-len(wantTail)):]; !slices.Equal(tail, wantTail) {
+		t.Fatalf("durable write order tail = %#v, want %#v", tail, wantTail)
+	}
+	// A retry re-attempts the same proof and stays fail-closed: the containment-unproven mark the
+	// failed attempt persisted makes the modelled store rule refuse the replay with no injected error.
+	model.recoverySealWriteErr = nil
+	if retryErr := scenario.supervisor.Terminate(true); !errors.Is(retryErr, ErrLinuxSupervisorStopUnproven) {
+		t.Fatalf("response-loss stop retry = %v, want the fail-closed unproven class", retryErr)
+	}
+	retrySnapshot := model.snapshot()
+	if retrySnapshot.sealCalls != snapshot.sealCalls+1 {
+		t.Fatalf("recovery scan seal attempts after the retry = %d, want the same proof re-attempted", retrySnapshot.sealCalls)
+	}
+	if retrySnapshot.asserts != snapshot.asserts {
+		t.Fatalf("durable all-sealed assertions after the retry = %d, want none", retrySnapshot.asserts)
+	}
+	// The helper's own terminal seal is still available over the authenticated recovery
+	// endpoint, whose persisted consumer applies the Completed+1 rule.
+	receipt, sequence, err := StopPersistedLinuxSupervisorWithScanSeal(scenario.value)
+	if err != nil || sequence != 2 {
+		t.Fatalf("recovery-endpoint owner-loss seal after the failed seal write = sequence %d, %v", sequence, err)
+	}
+	if !receipt.ValidFor(scenario.value) {
+		t.Fatalf("recovery-endpoint receipt = %#v, want the exact authority receipt", receipt)
+	}
+	releaseLiveOwnerHelper(t, scenario.supervisor, scenario.value, receipt)
+}
+
+func TestLinuxSupervisorLiveOwnerControlCloseInProcessStopWithoutTheSealWriteFailsClosed(t *testing.T) {
+	model := newLinuxSupervisorScanJournalModel()
+	scenario := runLiveOwnerResponseLossStop(t, model, liveOwnerResponseLossOptions{})
+	if !errors.Is(scenario.stopErr, ErrLinuxSupervisorStopUnproven) || !errors.Is(scenario.stopErr, ErrLinuxSupervisorResponseLost) {
+		t.Fatalf("live-owner response-loss stop = %v, want the fail-closed unproven class", scenario.stopErr)
+	}
+	if !strings.Contains(scenario.stopErr.Error(), "response-loss mirror freeze: Linux containment scan seals are unresolved") {
+		t.Fatalf("absent seal write failure = %v, want the base refusal wrapper", scenario.stopErr)
+	}
+	if scenario.unproven != 1 {
+		t.Fatalf("containment-unproven callbacks = %d, want exactly one persisted uncertainty mark", scenario.unproven)
+	}
+	if _, ok := scenario.supervisor.ContainmentStopReceipt(); ok {
+		t.Fatal("a stop without the seal write still adopted a receipt")
+	}
+	snapshot := model.snapshot()
+	if snapshot.helper.completed != 1 || snapshot.helper.sealed != 0 {
+		t.Fatalf("durable helper progress = %+v, want the pre-latch clean sequence and no seal", snapshot.helper)
+	}
+	if snapshot.mirror.completed == 0 || snapshot.mirror.sealed != snapshot.mirror.completed {
+		t.Fatalf("durable mirror progress = %+v, want the durable mirror seal retained", snapshot.mirror)
+	}
+	if snapshot.sealCalls != 0 {
+		t.Fatalf("recovery scan seal writes = %d, want none without the callback", snapshot.sealCalls)
+	}
+	if snapshot.asserts != 2 || snapshot.refusals != 2 {
+		t.Fatalf("durable all-sealed assertions = %d attempts / %d refusals, want the base refused write and its exact replay", snapshot.asserts, snapshot.refusals)
+	}
+	receipt, sequence, err := StopPersistedLinuxSupervisorWithScanSeal(scenario.value)
+	if err != nil || sequence != 2 {
+		t.Fatalf("recovery-endpoint owner-loss seal = sequence %d, %v, want the Completed+1 seal", sequence, err)
+	}
+	releaseLiveOwnerHelper(t, scenario.supervisor, scenario.value, receipt)
+}
+
+func TestLinuxSupervisorLiveOwnerControlCloseInProcessStopRecordsTheHelperReturnedSequence(t *testing.T) {
+	model := newLinuxSupervisorScanJournalModel()
+	scenario := runLiveOwnerResponseLossStop(t, model, liveOwnerResponseLossOptions{sealWrite: model.recordRecoveryScanSeal, resume: true})
+	if scenario.stopErr != nil {
+		t.Fatalf("live-owner response-loss stop = %v, want a completed stop", scenario.stopErr)
+	}
+	snapshot := model.snapshot()
+	if snapshot.helper.completed < 3 || snapshot.helper.sealed != snapshot.helper.completed {
+		t.Fatalf("durable helper progress = %+v, want the resumed helper's own terminal seal", snapshot.helper)
+	}
+	if snapshot.asserts != 1 || snapshot.refusals != 0 || snapshot.sealCalls != 1 {
+		t.Fatalf("assertions = %d/%d and seal writes = %d, want one accepted assertion of one seal",
+			snapshot.asserts, snapshot.refusals, snapshot.sealCalls)
+	}
+	mirror := snapshot.mirror.completed
+	wantTail := []string{
+		fmt.Sprintf("mirror:assert_clean:%d", mirror),
+		fmt.Sprintf("mirror:seal:%d", mirror),
+		fmt.Sprintf("recovery-scan-seal:%d", snapshot.helper.completed),
+		fmt.Sprintf("mirror:assert_all_sealed:%d", mirror),
+	}
+	if tail := snapshot.events[max(0, len(snapshot.events)-len(wantTail)):]; !slices.Equal(tail, wantTail) {
+		t.Fatalf("durable write order tail = %#v, want %#v", tail, wantTail)
+	}
+	receipt, ok := scenario.supervisor.ContainmentStopReceipt()
+	if !ok || !receipt.ValidFor(scenario.value) {
+		t.Fatalf("response-loss stop receipt = %#v (adopted=%t), want the exact authority receipt", receipt, ok)
+	}
+	replayed, sequence, err := StopPersistedLinuxSupervisorWithScanSeal(scenario.value)
+	if err != nil || sequence != snapshot.helper.completed {
+		t.Fatalf("recovery-endpoint replay = sequence %d, %v, want the recorded seal %d", sequence, err, snapshot.helper.completed)
+	}
+	if !replayed.Equal(receipt) {
+		t.Fatalf("recovery-endpoint receipt = %#v, want the adopted receipt %#v", replayed, receipt)
+	}
+	releaseLiveOwnerHelper(t, scenario.supervisor, scenario.value, receipt)
+}
+
+func TestLinuxSupervisorScanJournalModelRefusesStaleAssertSequences(t *testing.T) {
+	model := newLinuxSupervisorScanJournalModel()
+	for _, step := range []struct {
+		owner    string
+		phase    string
+		sequence uint64
+	}{
+		{authority.SupervisorScanOwnerHelper, authority.SupervisorScanPhaseBegin, 1},
+		{authority.SupervisorScanOwnerHelper, authority.SupervisorScanPhaseClean, 1},
+		{authority.SupervisorScanOwnerHelper, authority.SupervisorScanPhaseRetire, 1},
+		{authority.SupervisorScanOwnerHelper, authority.SupervisorScanPhaseSeal, 1},
+		{authority.SupervisorScanOwnerMirror, authority.SupervisorScanPhaseBegin, 1},
+		{authority.SupervisorScanOwnerMirror, authority.SupervisorScanPhaseClean, 1},
+		{authority.SupervisorScanOwnerMirror, authority.SupervisorScanPhaseRetire, 1},
+		{authority.SupervisorScanOwnerMirror, authority.SupervisorScanPhaseSeal, 1},
+	} {
+		update := authority.SupervisorHandoff{ScanUpdate: &authority.SupervisorScanUpdate{Owner: step.owner, Phase: step.phase, Sequence: step.sequence}}
+		if err := model.prepare(update); err != nil {
+			t.Fatalf("prepare %s %s:%d: %v", step.owner, step.phase, step.sequence, err)
+		}
+	}
+	for _, stale := range []string{authority.SupervisorScanPhaseAssertClean, authority.SupervisorScanPhaseAssertAllSealed} {
+		current := authority.SupervisorHandoff{ScanUpdate: &authority.SupervisorScanUpdate{Owner: authority.SupervisorScanOwnerMirror, Phase: stale, Sequence: 1}}
+		if err := model.prepare(current); err != nil {
+			t.Fatalf("%s:%d refused the mirror's durable sequence: %v", stale, 1, err)
+		}
+		outdated := authority.SupervisorHandoff{ScanUpdate: &authority.SupervisorScanUpdate{Owner: authority.SupervisorScanOwnerMirror, Phase: stale, Sequence: 2}}
+		if err := model.prepare(outdated); err == nil {
+			t.Fatalf("%s accepted a stale sequence", stale)
+		}
+	}
 }
 
 func TestLinuxSupervisorPreCommitAbortUsesPhysicalAbsenceNotReceipt(t *testing.T) {
