@@ -5,7 +5,8 @@ defmodule SymmetryControlWeb.TaskController do
 
   alias SymmetryControl.Goals
   alias SymmetryControl.Orchestration
-  alias SymmetryControl.Orchestration.{Notifier, Scheduler}
+  alias SymmetryControl.Orchestration.Notifier
+  alias SymmetryControl.Orchestration.Scheduler
   alias SymmetryControlWeb.Protocol
 
   @work_fields ["goal", "agent_profile", "workspace", "input"]
@@ -58,21 +59,18 @@ defmodule SymmetryControlWeb.TaskController do
     end
   end
 
-  defp command_request(%{"kind" => "cancel"} = body) when map_size(body) == 1,
-    do: {:ok, "cancel", %{}, []}
+  defp command_request(%{"kind" => "cancel"} = body) when map_size(body) == 1, do: {:ok, "cancel", %{}, []}
 
   defp command_request(%{"kind" => "cancel", "generation" => generation} = body)
        when map_size(body) == 2 and is_integer(generation) and generation > 0,
        do: {:ok, "cancel", %{}, [expected_generation: generation]}
 
   defp command_request(%{"kind" => "provide_input", "payload" => payload} = body)
-       when map_size(body) == 2 and is_map(payload),
-       do: {:ok, "provide_input", Protocol.normalize_map(payload), []}
+       when map_size(body) == 2 and is_map(payload), do: {:ok, "provide_input", Protocol.normalize_map(payload), []}
 
   defp command_request(%{"kind" => kind, "payload" => payload, "generation" => generation} = body)
-       when kind in ["guidance", "pause", "resume"] and map_size(body) == 3 and
-              is_map(payload) and is_integer(generation) and generation > 0,
-       do: {:ok, kind, Protocol.normalize_map(payload), [expected_generation: generation]}
+       when kind in ["guidance", "pause", "resume"] and map_size(body) == 3 and is_map(payload) and is_integer(generation) and
+              generation > 0, do: {:ok, kind, Protocol.normalize_map(payload), [expected_generation: generation]}
 
   defp command_request(
          %{
@@ -82,14 +80,12 @@ defmodule SymmetryControlWeb.TaskController do
            "waiting_transition_id" => waiting_id
          } = body
        )
-       when map_size(body) == 4,
-       do: provide_input_command(payload, generation, waiting_id)
+       when map_size(body) == 4, do: provide_input_command(payload, generation, waiting_id)
 
   defp command_request(_), do: {:error, :invalid_request}
 
   defp provide_input_command(payload, generation, waiting_id)
-       when is_map(payload) and is_integer(generation) and generation > 0 and
-              is_binary(waiting_id),
+       when is_map(payload) and is_integer(generation) and generation > 0 and is_binary(waiting_id),
        do:
          {:ok, "provide_input", Protocol.normalize_map(payload),
           [expected_generation: generation, expected_waiting_transition_id: waiting_id]}

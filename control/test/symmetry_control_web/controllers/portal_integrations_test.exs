@@ -15,29 +15,23 @@ defmodule SymmetryControl.Integrations.AggregateProviderStub do
   def check(connection, auth), do: ProviderStub.check(connection, auth)
 
   @impl true
-  def sync_resource(%{name: "Forbidden sync"}, _resource, :stub_auth),
-    do: {:error, {:http, 403, "forbidden"}}
+  def sync_resource(%{name: "Forbidden sync"}, _resource, :stub_auth), do: {:error, {:http, 403, "forbidden"}}
 
-  def sync_resource(%{name: "Unauthorized sync"}, _resource, :stub_auth),
-    do: {:error, {:http, 401, "unauthorized"}}
+  def sync_resource(%{name: "Unauthorized sync"}, _resource, :stub_auth), do: {:error, {:http, 401, "unauthorized"}}
 
-  def sync_resource(%{name: "Provider failure sync"}, _resource, :stub_auth),
-    do: {:error, {:transport, :closed}}
+  def sync_resource(%{name: "Provider failure sync"}, _resource, :stub_auth), do: {:error, {:transport, :closed}}
 
-  def sync_resource(connection, resource, auth),
-    do: ProviderStub.sync_resource(connection, resource, auth)
+  def sync_resource(connection, resource, auth), do: ProviderStub.sync_resource(connection, resource, auth)
 
   @impl true
   def sync_delivery(connection, resource, work_item, auth),
     do: ProviderStub.sync_delivery(connection, resource, work_item, auth)
 
   @impl true
-  def sync_ci(connection, resource, work_item, auth),
-    do: ProviderStub.sync_ci(connection, resource, work_item, auth)
+  def sync_ci(connection, resource, work_item, auth), do: ProviderStub.sync_ci(connection, resource, work_item, auth)
 
   @impl true
-  def execute(_connection, _resource, _work_item, _operation, _input, _auth),
-    do: {:error, :unsupported_resource}
+  def execute(_connection, _resource, _work_item, _operation, _input, _auth), do: {:error, :unsupported_resource}
 end
 
 defmodule SymmetryControlWeb.PortalIntegrationsTest do
@@ -50,13 +44,15 @@ defmodule SymmetryControlWeb.PortalIntegrationsTest do
 
   alias Ecto.Adapters.SQL.Sandbox
   alias SymmetryControl.Integrations
+  alias SymmetryControl.Integrations.AggregateProviderStub
   alias SymmetryControl.Integrations.Connection
+  alias SymmetryControl.Integrations.ProviderStub
   alias SymmetryControl.TestEnv
 
   setup do
     TestEnv.put!(:integration_providers,
-      github: SymmetryControl.Integrations.ProviderStub,
-      azure_devops: SymmetryControl.Integrations.ProviderStub
+      github: ProviderStub,
+      azure_devops: ProviderStub
     )
 
     :ok
@@ -115,7 +111,7 @@ defmodule SymmetryControlWeb.PortalIntegrationsTest do
     assert %{"providers" => providers, "connections" => connections} =
              response
 
-    assert Enum.map(providers, & &1["id"]) |> Enum.sort() == ["azure_devops", "github"]
+    assert providers |> Enum.map(& &1["id"]) |> Enum.sort() == ["azure_devops", "github"]
 
     assert %{"auth_type" => "gh_cli", "capabilities" => capabilities} =
              Enum.find(providers, &(&1["id"] == "github"))
@@ -246,9 +242,7 @@ defmodule SymmetryControlWeb.PortalIntegrationsTest do
 
     cleanup = fn ->
       Sandbox.unboxed_run(SymmetryControl.Repo, fn ->
-        SymmetryControl.Repo.delete_all(
-          from(connection in Connection, where: connection.name == ^name)
-        )
+        SymmetryControl.Repo.delete_all(from(connection in Connection, where: connection.name == ^name))
       end)
     end
 
@@ -257,7 +251,7 @@ defmodule SymmetryControlWeb.PortalIntegrationsTest do
         Task.async(fn ->
           Sandbox.unboxed_run(SymmetryControl.Repo, fn ->
             SymmetryControl.Repo.transaction(fn ->
-              SymmetryControl.Repo.insert!(%Connection{} |> Connection.changeset(attrs))
+              %Connection{} |> Connection.changeset(attrs) |> SymmetryControl.Repo.insert!()
               send(parent, {:holder_inserted, self()})
 
               receive do
@@ -332,7 +326,7 @@ defmodule SymmetryControlWeb.PortalIntegrationsTest do
              |> json_response(200)
 
     assert checked["status"] == "healthy"
-    assert checked["last_checked_at"] != nil
+    assert checked["last_checked_at"]
 
     assert %{"resource" => synced} =
              api_conn()
@@ -663,8 +657,7 @@ defmodule SymmetryControlWeb.PortalIntegrationsTest do
 
     sync_task =
       Task.async(fn ->
-        api_conn()
-        |> post("/portal/api/projects/#{project["id"]}/sync")
+        post(api_conn(), "/portal/api/projects/#{project["id"]}/sync")
       end)
 
     assert_receive {:integration_provider_waiting, provider_pid}
@@ -716,8 +709,7 @@ defmodule SymmetryControlWeb.PortalIntegrationsTest do
 
     sync_task =
       Task.async(fn ->
-        api_conn()
-        |> post("/portal/api/projects/#{project["id"]}/sync")
+        post(api_conn(), "/portal/api/projects/#{project["id"]}/sync")
       end)
 
     assert_receive {:integration_provider_waiting, provider_pid}
@@ -757,23 +749,25 @@ defmodule SymmetryControlWeb.PortalIntegrationsTest do
 
   test "project sync reports mixed provider failures without collapsing their classifications" do
     Application.put_env(:symmetry_control, :integration_providers,
-      github: SymmetryControl.Integrations.AggregateProviderStub,
-      azure_devops: SymmetryControl.Integrations.AggregateProviderStub
+      github: AggregateProviderStub,
+      azure_devops: AggregateProviderStub
     )
 
     project = create_project("MIXFAIL")
 
     resources =
-      [
-        {"Healthy sync", "Healthy issues"},
-        {"Forbidden sync", "Forbidden issues"},
-        {"Unauthorized sync", "Unauthorized issues"},
-        {"Provider failure sync", "Unavailable issues"}
-      ]
-      |> Enum.map(fn {connection_name, resource_name} ->
-        connection = create_connection(connection_name)
-        create_tracker(project, connection, resource_name)
-      end)
+      Enum.map(
+        [
+          {"Healthy sync", "Healthy issues"},
+          {"Forbidden sync", "Forbidden issues"},
+          {"Unauthorized sync", "Unauthorized issues"},
+          {"Provider failure sync", "Unavailable issues"}
+        ],
+        fn {connection_name, resource_name} ->
+          connection = create_connection(connection_name)
+          create_tracker(project, connection, resource_name)
+        end
+      )
 
     assert %{
              "error" => %{

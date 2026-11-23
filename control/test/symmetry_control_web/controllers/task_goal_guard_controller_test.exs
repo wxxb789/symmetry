@@ -1,10 +1,11 @@
 defmodule SymmetryControlWeb.TaskGoalGuardControllerTest do
   use SymmetryControlWeb.ConnCase, async: true
 
+  use SymmetryControl.TestFixtures,
+    command_opts: [validation_profiles: SymmetryControl.TestFixtures.validation_profiles()]
+
   import SymmetryControl.TestFixtures, only: [subject: 1, validation_profiles: 0]
   import SymmetryControlWeb.TestConn, only: [assert_error: 3, operator_conn: 1]
-
-  use SymmetryControl.TestFixtures, command_opts: [validation_profiles: validation_profiles()]
 
   alias SymmetryControl.Goals
   alias SymmetryControl.Repo
@@ -16,10 +17,11 @@ defmodule SymmetryControlWeb.TaskGoalGuardControllerTest do
   } do
     task_id = admitted_goal_task()
 
-    assert_error(
-      operator_conn(conn)
-      |> put_req_header("idempotency-key", Ecto.UUID.generate())
-      |> post("/api/v1/tasks/#{task_id}/commands", %{"kind" => "cancel"}),
+    conn
+    |> operator_conn()
+    |> put_req_header("idempotency-key", Ecto.UUID.generate())
+    |> post("/api/v1/tasks/#{task_id}/commands", %{"kind" => "cancel"})
+    |> assert_error(
       403,
       "goal_authority_required"
     )
@@ -29,7 +31,8 @@ defmodule SymmetryControlWeb.TaskGoalGuardControllerTest do
     conn: conn
   } do
     %{"task_id" => task_id} =
-      operator_conn(conn)
+      conn
+      |> operator_conn()
       |> put_req_header("idempotency-key", Ecto.UUID.generate())
       |> post("/api/v1/tasks", %{
         "work" => %{
@@ -42,15 +45,17 @@ defmodule SymmetryControlWeb.TaskGoalGuardControllerTest do
       |> json_response(201)
 
     assert %{"kind" => "cancel", "state" => "applied"} =
-             operator_conn(conn)
+             conn
+             |> operator_conn()
              |> put_req_header("idempotency-key", Ecto.UUID.generate())
              |> post("/api/v1/tasks/#{task_id}/commands", %{"kind" => "cancel"})
              |> json_response(201)
 
-    assert_error(
-      operator_conn(conn)
-      |> put_req_header("idempotency-key", Ecto.UUID.generate())
-      |> post("/api/v1/tasks/#{task_id}/commands", %{"kind" => "cancel"}),
+    conn
+    |> operator_conn()
+    |> put_req_header("idempotency-key", Ecto.UUID.generate())
+    |> post("/api/v1/tasks/#{task_id}/commands", %{"kind" => "cancel"})
+    |> assert_error(
       409,
       "state_conflict"
     )
@@ -103,8 +108,7 @@ defmodule SymmetryControlWeb.TaskGoalGuardControllerTest do
                "accept_plan",
                %{
                  proposal: proposal,
-                 proposal_hash:
-                   "sha256:" <> Base.encode16(RequestHash.canonical(proposal), case: :lower),
+                 proposal_hash: "sha256:" <> Base.encode16(RequestHash.canonical(proposal), case: :lower),
                  decision_id: decision_id
                },
                rollout_enabled: true

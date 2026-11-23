@@ -154,9 +154,7 @@ defmodule SymmetryControl.Goals.HandoffInterfaceTest do
     retained = available_session_fixture(runtime, item, session_attrs(item, workspace))
 
     unverified =
-      available_session_fixture(runtime, item, session_attrs(item, unverified_workspace),
-        binding_verified: false
-      )
+      available_session_fixture(runtime, item, session_attrs(item, unverified_workspace), binding_verified: false)
 
     {retained, unverified}
   end

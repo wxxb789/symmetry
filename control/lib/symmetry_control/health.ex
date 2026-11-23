@@ -42,13 +42,11 @@ defmodule SymmetryControl.Health do
   end
 
   defp run_check(check) do
-    try do
-      check.()
-    rescue
-      _error -> :error
-    catch
-      _kind, _reason -> :error
-    end
+    check.()
+  rescue
+    _error -> :error
+  catch
+    _kind, _reason -> :error
   end
 
   defp registered?(name), do: if(is_pid(Process.whereis(name)), do: :ok, else: {:error, :down})

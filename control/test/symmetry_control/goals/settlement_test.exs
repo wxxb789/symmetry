@@ -2,23 +2,30 @@ Code.require_file("goals_test_support.exs", __DIR__)
 
 defmodule SymmetryControl.Goals.SettlementTest do
   use SymmetryControl.OrchestrationCase, async: false
+  @now ~U[2026-09-09 00:00:00.000000Z]
+  use SymmetryControl.TestFixtures,
+    command_opts: [
+      now: @now,
+      validation_profiles: SymmetryControl.GoalsTestSupport.validation_profiles()
+    ]
 
   import SymmetryControl.GoalsTestSupport
 
   alias SymmetryControl.Goals
+  alias SymmetryControl.Goals.Goal
+  alias SymmetryControl.Goals.GoalBudgetReservation
+  alias SymmetryControl.Goals.GoalDecision
+  alias SymmetryControl.Goals.GoalEvent
   alias SymmetryControl.Goals.GoalExternalWait
   alias SymmetryControl.Goals.HarnessSession
   alias SymmetryControl.Goals.Workers.GoalControlWorker
+  alias SymmetryControl.Goals.WorkOutcome
   alias SymmetryControl.Orchestration.Run
   alias SymmetryControl.Orchestration.Runtime
   alias SymmetryControl.Orchestration.Task
   alias SymmetryControl.Repo
 
-  @now ~U[2026-09-09 00:00:00.000000Z]
   @validation_runtime_id "00000000-0000-4000-8000-000000000001"
-
-  use SymmetryControl.TestFixtures,
-    command_opts: [now: @now, validation_profiles: validation_profiles()]
 
   setup :put_goal_validation_profiles
 
@@ -54,8 +61,8 @@ defmodule SymmetryControl.Goals.SettlementTest do
   end
 
   test "an amendment releases a rejected completion Subject for the revised revision" do
-    {goal, item, _producer, _producer_run, validation, validation_run, validation_runtime,
-     validation_fence, candidate_subject} =
+    {goal, item, _producer, _producer_run, validation, validation_run, validation_runtime, validation_fence,
+     candidate_subject} =
       independent_validation_attempt_fixture(check_contract(), %{
         acceptance_contract: check_and_operator_acceptance_contract()
       })
@@ -81,8 +88,7 @@ defmodule SymmetryControl.Goals.SettlementTest do
     assert {:ok, _resolved, :created} =
              command_current(goal.id, "resolve_decision", %{
                decision_id: rejected_decision_id,
-               expected_decision_version:
-                 Repo.get!(SymmetryControl.Goals.GoalDecision, rejected_decision_id).lock_version,
+               expected_decision_version: Repo.get!(GoalDecision, rejected_decision_id).lock_version,
                option_id: "reject"
              })
 
@@ -91,7 +97,7 @@ defmodule SymmetryControl.Goals.SettlementTest do
     revision_contract =
       goal_attrs()
       |> Map.fetch!(:initial_revision)
-      |> Map.drop([:reason])
+      |> Map.delete(:reason)
       |> Map.put(:objective, "Re-admit the rejected Subject under a revised revision.")
       |> Map.put(:acceptance_contract, check_and_operator_acceptance_contract())
       |> Map.update!(:execution_policy, fn policy ->
@@ -208,8 +214,7 @@ defmodule SymmetryControl.Goals.SettlementTest do
     assert {:ok, _resolved, :created} =
              command_current(goal.id, "resolve_decision", %{
                decision_id: accept_decision_id,
-               expected_decision_version:
-                 Repo.get!(SymmetryControl.Goals.GoalDecision, accept_decision_id).lock_version,
+               expected_decision_version: Repo.get!(GoalDecision, accept_decision_id).lock_version,
                option_id: "accept"
              })
 
@@ -235,20 +240,21 @@ defmodule SymmetryControl.Goals.SettlementTest do
   end
 
   test "incomplete validation closes its evidence set without accepting work" do
-    {goal, item, _producer, _producer_run, validation, validation_run, validation_runtime,
-     validation_fence, candidate_subject} = independent_validation_attempt_fixture()
+    {goal, item, _producer, _producer_run, validation, validation_run, validation_runtime, validation_fence,
+     candidate_subject} = independent_validation_attempt_fixture()
 
     assert {:ok, %{"settlement" => "awaiting_validation"}} =
              Goals.settle_task(validation.id, validation_run.id, 1, now: @now)
 
     refute Repo.exists?(
-             from(outcome in SymmetryControl.Goals.WorkOutcome,
+             from(outcome in WorkOutcome,
                where: outcome.goal_id == ^goal.id and outcome.validation_task_id == ^validation.id
              )
            )
 
     late_evidence =
-      evidence_attrs(validation_run.id, item, candidate_subject)
+      validation_run.id
+      |> evidence_attrs(item, candidate_subject)
       |> Map.put(:evidence_id, Ecto.UUID.generate())
       |> Map.put(:evidence_key, "check:late-after-incomplete")
 
@@ -340,7 +346,7 @@ defmodule SymmetryControl.Goals.SettlementTest do
                Goals.settle_task(task.id, run.id, 1, now: @now)
 
       refute Repo.exists?(
-               from(outcome in SymmetryControl.Goals.WorkOutcome,
+               from(outcome in WorkOutcome,
                  where: outcome.goal_id == ^goal.id
                )
              )
@@ -371,7 +377,7 @@ defmodule SymmetryControl.Goals.SettlementTest do
                Goals.settle_task(invalid_task.id, invalid_run.id, 1, now: @now)
 
       refute Repo.exists?(
-               from(outcome in SymmetryControl.Goals.WorkOutcome,
+               from(outcome in WorkOutcome,
                  where: outcome.goal_id == ^invalid_goal.id
                )
              )
@@ -399,7 +405,7 @@ defmodule SymmetryControl.Goals.SettlementTest do
     assert wakeup_job_count(goal.id) == 0
 
     assert Repo.one!(
-             from(row in SymmetryControl.Goals.GoalBudgetReservation,
+             from(row in GoalBudgetReservation,
                where: row.task_id == ^task.id
              )
            ).state == "unknown"
@@ -513,7 +519,7 @@ defmodule SymmetryControl.Goals.SettlementTest do
         generation: 1,
         state: "completed",
         assigned_at: @now,
-        assignment_expires_at: DateTime.add(@now, 60, :second)
+        assignment_expires_at: DateTime.shift(@now, minute: 1)
       })
       |> Repo.insert!()
 
@@ -521,7 +527,7 @@ defmodule SymmetryControl.Goals.SettlementTest do
              Goals.settle_task(task.id, run.id, 1, now: @now)
 
     assert Repo.one!(
-             from(row in SymmetryControl.Goals.GoalBudgetReservation,
+             from(row in GoalBudgetReservation,
                where: row.task_id == ^task.id
              )
            ).state == "unknown"
@@ -535,7 +541,7 @@ defmodule SymmetryControl.Goals.SettlementTest do
              )
 
     assert Repo.one!(
-             from(reservation in SymmetryControl.Goals.GoalBudgetReservation,
+             from(reservation in GoalBudgetReservation,
                where: reservation.task_id == ^admitted.response["task"]["id"],
                select: reservation.reserved_microusd
              )
@@ -600,7 +606,7 @@ defmodule SymmetryControl.Goals.SettlementTest do
     assert {:ok, refreshed} = Goals.fetch_goal(goal.id)
     assert refreshed.next_wake_at == nil
 
-    Repo.update_all(from(row in SymmetryControl.Goals.Goal, where: row.id == ^goal.id),
+    Repo.update_all(from(row in Goal, where: row.id == ^goal.id),
       set: [next_wake_at: @now]
     )
 
@@ -659,7 +665,7 @@ defmodule SymmetryControl.Goals.SettlementTest do
 
     event =
       Repo.one!(
-        from(event in SymmetryControl.Goals.GoalEvent,
+        from(event in GoalEvent,
           where: event.goal_id == ^goal.id and event.kind == "automatic_task_admitted",
           order_by: [desc: event.sequence],
           limit: 1
@@ -710,7 +716,7 @@ defmodule SymmetryControl.Goals.SettlementTest do
                validation_profiles: validation_profiles()
              )
 
-    assert Repo.get!(SymmetryControl.Goals.Goal, goal.id).next_wake_at == nil
+    assert Repo.get!(Goal, goal.id).next_wake_at == nil
     assert {:ok, projection} = Goals.fetch_goal(goal.id)
     assert projection.settlement_attention != []
     assert item.id == hd(projection.settlement_attention).work_item_id
@@ -757,16 +763,16 @@ defmodule SymmetryControl.Goals.SettlementTest do
            end)
 
     assert Repo.aggregate(
-             from(reservation in SymmetryControl.Goals.GoalBudgetReservation,
+             from(reservation in GoalBudgetReservation,
                where: reservation.task_id == ^target.id
              ),
              :count
            ) == 1
 
-    assert Repo.get!(SymmetryControl.Goals.Goal, goal.id).state == "active"
+    assert Repo.get!(Goal, goal.id).state == "active"
 
     refute Repo.exists?(
-             from(outcome in SymmetryControl.Goals.WorkOutcome,
+             from(outcome in WorkOutcome,
                where:
                  outcome.goal_id == ^goal.id and outcome.work_item_id == ^item.id and
                    outcome.disposition == "accepted"
@@ -801,14 +807,12 @@ defmodule SymmetryControl.Goals.SettlementTest do
              Goals.settle_task(first_task.id, first_run.id, first_run.generation, now: @now)
 
     assert {:ok, second_admission, :created} =
-             command_current(goal.id, "admit_task", admission_payload(item),
-               rollout_enabled: true
-             )
+             command_current(goal.id, "admit_task", admission_payload(item), rollout_enabled: true)
 
     second_task = Repo.get!(Task, second_admission.response["task"]["id"])
 
     Repo.update_all(from(task in Task, where: task.id == ^second_task.id),
-      set: [inserted_at: DateTime.add(@now, 1, :second)]
+      set: [inserted_at: DateTime.shift(@now, second: 1)]
     )
 
     progressed_subject = %{
@@ -984,15 +988,14 @@ defmodule SymmetryControl.Goals.SettlementTest do
              Goals.settle_task(task.id, run.id, run.generation, now: @now)
 
     assert Repo.one!(
-             from(row in SymmetryControl.Goals.GoalBudgetReservation,
+             from(row in GoalBudgetReservation,
                where: row.task_id == ^task.id
              )
            ).state == "unknown"
 
     assert {:ok, amended, :created} =
              command_current(goal.id, "amend", %{
-               revision_contract:
-                 amended_revision_contract("Resume after unknown terminal cost."),
+               revision_contract: amended_revision_contract("Resume after unknown terminal cost."),
                reason: "A terminal usage receipt is still pending."
              })
 
@@ -1037,7 +1040,7 @@ defmodule SymmetryControl.Goals.SettlementTest do
              Goals.settle_unstarted_task(task.id, "cancelled", now: @now)
 
     assert Repo.one!(
-             from(row in SymmetryControl.Goals.GoalBudgetReservation,
+             from(row in GoalBudgetReservation,
                where: row.task_id == ^task.id
              )
            ).state == "held"
@@ -1064,7 +1067,7 @@ defmodule SymmetryControl.Goals.SettlementTest do
 
     settlement_event =
       Repo.one!(
-        from(event in SymmetryControl.Goals.GoalEvent,
+        from(event in GoalEvent,
           where:
             event.goal_id == ^controlled_goal.id and
               event.kind == "task_unstarted_settled" and
@@ -1079,7 +1082,7 @@ defmodule SymmetryControl.Goals.SettlementTest do
              0
 
     assert Repo.one!(
-             from(row in SymmetryControl.Goals.GoalBudgetReservation,
+             from(row in GoalBudgetReservation,
                where: row.task_id == ^controlled_task.id
              )
            ).state == "released"
@@ -1096,8 +1099,7 @@ defmodule SymmetryControl.Goals.SettlementTest do
 
     assert {:ok, amended, :created} =
              command_current(goal.id, "amend", %{
-               revision_contract:
-                 amended_revision_contract("Record historical settlement accurately."),
+               revision_contract: amended_revision_contract("Record historical settlement accurately."),
                reason: "The active work is now historical."
              })
 
@@ -1111,7 +1113,7 @@ defmodule SymmetryControl.Goals.SettlementTest do
 
     event =
       Repo.one!(
-        from(event in SymmetryControl.Goals.GoalEvent,
+        from(event in GoalEvent,
           where: event.goal_id == ^goal.id and event.kind == "task_settled",
           order_by: [desc: event.sequence],
           limit: 1
@@ -1144,14 +1146,12 @@ defmodule SymmetryControl.Goals.SettlementTest do
     {goal, [item]} = goal_with_items_fixture(policy)
 
     assert {:ok, admission, :created} =
-             command_current(goal.id, "admit_task", admission_payload(item),
-               rollout_enabled: true
-             )
+             command_current(goal.id, "admit_task", admission_payload(item), rollout_enabled: true)
 
     source_task = Repo.get!(Task, admission.response["task"]["id"])
     runtime = runtime_fixture()
     {source_run, _source_fence} = completed_goal_run_fixture(source_task, runtime)
-    requested_check_at = DateTime.add(@now, 60, :second)
+    requested_check_at = DateTime.shift(@now, minute: 1)
 
     external_blocker = %{
       "kind" => "external",
@@ -1212,7 +1212,7 @@ defmodule SymmetryControl.Goals.SettlementTest do
     assert Repo.aggregate(from(task in Task, where: task.goal_id == ^goal.id), :count) == 1
 
     assert Repo.aggregate(
-             from(reservation in SymmetryControl.Goals.GoalBudgetReservation,
+             from(reservation in GoalBudgetReservation,
                where: reservation.goal_id == ^goal.id
              ),
              :count
@@ -1230,7 +1230,7 @@ defmodule SymmetryControl.Goals.SettlementTest do
 
     assert Repo.get!(GoalExternalWait, wait.id).state == "unsupported"
 
-    assert Repo.get!(SymmetryControl.Goals.Goal, goal.id).next_wake_at == nil
+    assert Repo.get!(Goal, goal.id).next_wake_at == nil
 
     assert Repo.aggregate(from(task in Task, where: task.goal_id == ^goal.id), :count) == 1
 
@@ -1263,9 +1263,7 @@ defmodule SymmetryControl.Goals.SettlementTest do
     {goal, [item]} = goal_with_items_fixture(policy)
 
     assert {:ok, admission, :created} =
-             command_current(goal.id, "admit_task", admission_payload(item),
-               rollout_enabled: true
-             )
+             command_current(goal.id, "admit_task", admission_payload(item), rollout_enabled: true)
 
     source_task = Repo.get!(Task, admission.response["task"]["id"])
     runtime = runtime_fixture()
@@ -1314,7 +1312,7 @@ defmodule SymmetryControl.Goals.SettlementTest do
 
     event =
       Repo.one!(
-        from(event in SymmetryControl.Goals.GoalEvent,
+        from(event in GoalEvent,
           where:
             event.goal_id == ^goal.id and event.kind == "automatic_task_admitted" and
               fragment("? ->> 'task_id' = ?", event.payload, ^repair_task.id)

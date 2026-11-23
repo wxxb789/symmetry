@@ -164,7 +164,7 @@ defmodule SymmetryControlWeb.PortalSessionTest do
           "/portal/goals/goal-123",
           "/portal?project_id=project-123&chat_scope=run&run_id=run-456"
         ] do
-      redirect_response = conn |> get(path)
+      redirect_response = get(conn, path)
 
       assert get_resp_header(redirect_response, "cache-control") == ["no-store"],
              "unauthorized deep link #{path} must not be cacheable"
@@ -212,7 +212,7 @@ defmodule SymmetryControlWeb.PortalSessionTest do
     # classic document itself is gone.
     query = "project_id=project-123&chat_scope=run&run_id=run-456"
     target = "/portal?" <> query
-    unauthenticated = conn |> get(target)
+    unauthenticated = get(conn, target)
     login_location = redirected_to(unauthenticated, 302)
     login_query = login_location |> URI.parse() |> Map.fetch!(:query) |> URI.decode_query()
     assert %{"return_to" => ^target} = login_query
@@ -412,8 +412,7 @@ defmodule SymmetryControlWeb.PortalSessionTest do
     end
   end
 
-  defp enforce_csrf(conn),
-    do: %{conn | private: Map.delete(conn.private, :plug_skip_csrf_protection)}
+  defp enforce_csrf(conn), do: %{conn | private: Map.delete(conn.private, :plug_skip_csrf_protection)}
 
   defp escaped_attribute(path), do: String.replace(path, "&", "&amp;")
 end

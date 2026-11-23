@@ -2,9 +2,9 @@ defmodule SymmetryControl.WorkspacesReadModelTest do
   use SymmetryControl.OrchestrationCase, async: true
 
   alias SymmetryControl.Orchestration
+  alias SymmetryControl.TelemetryReads
   alias SymmetryControl.Workspaces
   alias SymmetryControl.Workspaces.ReadModel
-  alias SymmetryControl.TelemetryReads
   alias SymmetryControlWeb.PortalJSON
 
   @now ~U[2026-09-04 10:00:00.000000Z]
@@ -141,11 +141,11 @@ defmodule SymmetryControl.WorkspacesReadModelTest do
       |> PortalJSON.workspace()
       |> then(fn workspace -> hd(workspace.activity).execution end)
 
-    assert queued_execution.timing.state_since != nil
+    assert queued_execution.timing.state_since
     assert queued_execution.timing.started_at == nil
     assert queued_execution.timing.finished_at == nil
 
-    assert {:ok, second_run} = Orchestration.assign_one(now: DateTime.add(@now, 1, :second))
+    assert {:ok, second_run} = Orchestration.assign_one(now: DateTime.shift(@now, second: 1))
     assert second_run.generation == 2
 
     assert {:ok, active_model} = ReadModel.workspace(project.id)
@@ -214,7 +214,7 @@ defmodule SymmetryControl.WorkspacesReadModelTest do
     assert {:ok, run} = Orchestration.assign_one(now: @now)
     fence = claim(run, runtime, @now, claim_id: uuid(100))
     transition(run.id, fence, "running", 30)
-    finished_at = DateTime.add(@now, 10, :second)
+    finished_at = DateTime.shift(@now, second: 10)
 
     assert {:ok, _completed} =
              Orchestration.transition(
@@ -248,7 +248,7 @@ defmodule SymmetryControl.WorkspacesReadModelTest do
     assert {:ok, expiring_run} = Orchestration.assign_one(now: @now)
     expiring_fence = claim(expiring_run, runtime, @now, claim_id: uuid(100))
     transition(expiring_run.id, expiring_fence, "running", 32)
-    assert %{expired_runs: 1} = Orchestration.expire(now: DateTime.add(@now, 30, :second))
+    assert %{expired_runs: 1} = Orchestration.expire(now: DateTime.shift(@now, second: 30))
     assert {:ok, expired_model} = ReadModel.workspace(project.id)
 
     expired_execution =
@@ -261,7 +261,7 @@ defmodule SymmetryControl.WorkspacesReadModelTest do
       end)
 
     assert expired_execution.state == "queued"
-    assert expired_execution.timing.state_since != nil
+    assert expired_execution.timing.state_since
     assert expired_execution.timing.started_at == nil
     assert expired_execution.timing.finished_at == nil
   end
@@ -736,7 +736,8 @@ defmodule SymmetryControl.WorkspacesReadModelTest do
   end
 
   defp supervised_adapter_capabilities do
-    adapter_capabilities(start: true, cancel: true)
+    [start: true, cancel: true]
+    |> adapter_capabilities()
     |> Map.merge(%{
       "structured_input" => true,
       "interactive" => true,
@@ -759,10 +760,9 @@ defmodule SymmetryControl.WorkspacesReadModelTest do
       sequence: sequence,
       kind: kind,
       payload: payload,
-      occurred_at: DateTime.add(@now, sequence, :second)
+      occurred_at: DateTime.shift(@now, second: sequence)
     }
   end
 
-  defp uuid(number),
-    do: "00000000-0000-0000-0000-" <> String.pad_leading(Integer.to_string(number), 12, "0")
+  defp uuid(number), do: "00000000-0000-0000-0000-" <> String.pad_leading(Integer.to_string(number), 12, "0")
 end

@@ -13,8 +13,6 @@ defmodule SymmetryControl.MigrationCase do
 
   using do
     quote do
-      alias SymmetryControl.MigrationModules
-
       import SymmetryControl.MigrationCase,
         only: [
           with_schema: 2,
@@ -25,6 +23,8 @@ defmodule SymmetryControl.MigrationCase do
           migrate_all_up!: 0,
           run_private_query!: 2
         ]
+
+      alias SymmetryControl.MigrationModules
     end
   end
 
@@ -49,7 +49,7 @@ defmodule SymmetryControl.MigrationCase do
 
   @doc "The private schema name for `schema_base`: unique per VM, test and wall-clock instant."
   def schema_name(schema_base) do
-    unless is_binary(schema_base) and Regex.match?(~r/\A[a-z_][a-z0-9_]*\z/, schema_base) do
+    if !(is_binary(schema_base) and Regex.match?(~r/\A[a-z_][a-z0-9_]*\z/, schema_base)) do
       raise ArgumentError, "schema base #{inspect(schema_base)} is not a lowercase SQL identifier"
     end
 
@@ -66,9 +66,7 @@ defmodule SymmetryControl.MigrationCase do
 
   @doc "Starts a dedicated single-connection Repo whose search path is `schema`."
   def start_schema_repo(schema) do
-    config =
-      private_repo_config()
-      |> Keyword.put(:parameters, search_path: schema)
+    config = Keyword.put(private_repo_config(), :parameters, search_path: schema)
 
     {:ok, repo} = Repo.start_link(config)
     repo
@@ -103,7 +101,8 @@ defmodule SymmetryControl.MigrationCase do
   end
 
   defp private_repo_config do
-    Application.fetch_env!(:symmetry_control, Repo)
+    :symmetry_control
+    |> Application.fetch_env!(Repo)
     |> Keyword.merge(
       name: nil,
       pool: DBConnection.ConnectionPool,

@@ -1,18 +1,6 @@
 defmodule SymmetryControl.Orchestration.TaskReads do
   @moduledoc false
 
-  @capacity_bearing_states [
-    "assigned",
-    "claimed",
-    "running",
-    "paused",
-    "waiting_for_input",
-    "cancelling"
-  ]
-  @max_history_limit 500
-  @default_history_limit 100
-  @timeline_source_ranks %{"event" => 0, "transition" => 1, "command" => 2}
-
   import Ecto.Query
 
   import SymmetryControl.Goals.Eligibility,
@@ -45,13 +33,25 @@ defmodule SymmetryControl.Orchestration.TaskReads do
 
   alias SymmetryControl.Orchestration.Command
   alias SymmetryControl.Orchestration.Machine
-  alias SymmetryControl.Repo
-  alias SymmetryControl.RequestHash
   alias SymmetryControl.Orchestration.Run
   alias SymmetryControl.Orchestration.RunEvent
   alias SymmetryControl.Orchestration.Runtime
   alias SymmetryControl.Orchestration.RunTransition
   alias SymmetryControl.Orchestration.Task
+  alias SymmetryControl.Repo
+  alias SymmetryControl.RequestHash
+
+  @capacity_bearing_states [
+    "assigned",
+    "claimed",
+    "running",
+    "paused",
+    "waiting_for_input",
+    "cancelling"
+  ]
+  @max_history_limit 500
+  @default_history_limit 100
+  @timeline_source_ranks %{"event" => 0, "transition" => 1, "command" => 2}
 
   @spec submit_task(map(), String.t(), keyword()) ::
           {:ok, Task.t(), :created | :replayed} | {:error, term()}
@@ -61,13 +61,11 @@ defmodule SymmetryControl.Orchestration.TaskReads do
       when is_map(attrs) and is_binary(idempotency_key) and byte_size(idempotency_key) > 0 do
     task_attrs = normalize_task_attrs(attrs)
 
-    if not valid_task_attrs?(task_attrs) do
-      {:error, :invalid_request}
-    else
+    if valid_task_attrs?(task_attrs) do
       {request_hash, request_hash_version} = RequestHash.write(task_attrs)
       current = now(opts)
 
-      Repo.transaction(fn ->
+      fn ->
         case Repo.one(
                from task in Task,
                  where: task.idempotency_key == ^idempotency_key,
@@ -75,8 +73,8 @@ defmodule SymmetryControl.Orchestration.TaskReads do
              ) do
           nil ->
             changeset =
-              Task.changeset(
-                %Task{},
+              %Task{}
+              |> Task.changeset(
                 Map.merge(task_attrs, %{
                   idempotency_key: idempotency_key,
                   request_hash: request_hash,
@@ -132,11 +130,14 @@ defmodule SymmetryControl.Orchestration.TaskReads do
               do: {task, :replayed},
               else: rollback(:idempotency_conflict)
         end
-      end)
+      end
+      |> Repo.transaction()
       |> case do
         {:ok, {task, disposition}} -> {:ok, task, disposition}
         error -> error
       end
+    else
+      {:error, :invalid_request}
     end
   end
 
@@ -187,24 +188,24 @@ defmodule SymmetryControl.Orchestration.TaskReads do
 
   @spec runtime_snapshots() :: {:ok, [map()]}
   def runtime_snapshots do
-    Repo.all(
-      from runtime in Runtime,
-        join: machine in Machine,
-        on: machine.id == runtime.machine_id,
-        left_join: run in Run,
-        on:
-          run.runtime_id == runtime.id and
-            run.state in ^@capacity_bearing_states,
-        order_by: [
-          asc: machine.inserted_at,
-          asc: machine.id,
-          asc: runtime.inserted_at,
-          asc: runtime.id,
-          asc: run.inserted_at,
-          asc: run.id
-        ],
-        select: %{machine: machine, runtime: runtime, run: run}
+    from(runtime in Runtime,
+      join: machine in Machine,
+      on: machine.id == runtime.machine_id,
+      left_join: run in Run,
+      on:
+        run.runtime_id == runtime.id and
+          run.state in ^@capacity_bearing_states,
+      order_by: [
+        asc: machine.inserted_at,
+        asc: machine.id,
+        asc: runtime.inserted_at,
+        asc: runtime.id,
+        asc: run.inserted_at,
+        asc: run.id
+      ],
+      select: %{machine: machine, runtime: runtime, run: run}
     )
+    |> Repo.all()
     |> runtime_read_models()
     |> then(&{:ok, &1})
   end
@@ -261,7 +262,7 @@ defmodule SymmetryControl.Orchestration.TaskReads do
           | {:error, atom()}
   def task_snapshot(task_id) when is_binary(task_id) do
     if valid_uuid?(task_id) do
-      Repo.transaction(fn ->
+      fn ->
         task = share_task(task_id)
 
         run =
@@ -286,7 +287,8 @@ defmodule SymmetryControl.Orchestration.TaskReads do
               not is_nil(run) and pending_supervisory_transition?(run.id)
             )
         }
-      end)
+      end
+      |> Repo.transaction()
       |> case do
         {:ok, snapshot} -> {:ok, snapshot}
         {:error, reason} -> {:error, reason}
@@ -345,8 +347,7 @@ defmodule SymmetryControl.Orchestration.TaskReads do
   }
 
   @spec retryable_attempt?(Task.t()) :: boolean()
-  def retryable_attempt?(%Task{goal_id: nil, state: state}) when state in ["failed", "cancelled"],
-    do: true
+  def retryable_attempt?(%Task{goal_id: nil, state: state}) when state in ["failed", "cancelled"], do: true
 
   def retryable_attempt?(%Task{}), do: false
 
@@ -502,24 +503,26 @@ defmodule SymmetryControl.Orchestration.TaskReads do
   end
 
   defp runtime_read_model(%{machine: machine, runtime: runtime, run: run}) do
-    %{
-      machine_id: machine.id,
-      machine_name: machine.name,
-      runtime_id: runtime.id,
-      runtime_key: runtime.runtime_key,
-      runtime_name: runtime.name,
-      status: runtime.status,
-      last_heartbeat_at: runtime.last_heartbeat_at,
-      connection_epoch: runtime.connection_epoch,
-      capacity: runtime.capacity,
-      reserved_capacity: 0,
-      agent_profile: runtime.agent_profile,
-      workspace: runtime.workspace,
-      repository_resource_id: runtime.repository_resource_id,
-      capabilities: runtime.capabilities,
-      active_runs: []
-    }
-    |> add_active_run(run)
+    add_active_run(
+      %{
+        machine_id: machine.id,
+        machine_name: machine.name,
+        runtime_id: runtime.id,
+        runtime_key: runtime.runtime_key,
+        runtime_name: runtime.name,
+        status: runtime.status,
+        last_heartbeat_at: runtime.last_heartbeat_at,
+        connection_epoch: runtime.connection_epoch,
+        capacity: runtime.capacity,
+        reserved_capacity: 0,
+        agent_profile: runtime.agent_profile,
+        workspace: runtime.workspace,
+        repository_resource_id: runtime.repository_resource_id,
+        capabilities: runtime.capabilities,
+        active_runs: []
+      },
+      run
+    )
   end
 
   defp add_active_run(snapshot, nil), do: snapshot
@@ -540,8 +543,7 @@ defmodule SymmetryControl.Orchestration.TaskReads do
     }
   end
 
-  defp finish_runtime_read_model(snapshot),
-    do: %{snapshot | active_runs: Enum.reverse(snapshot.active_runs)}
+  defp finish_runtime_read_model(snapshot), do: %{snapshot | active_runs: Enum.reverse(snapshot.active_runs)}
 
   @doc false
   def current_waiting_context(
@@ -620,18 +622,15 @@ defmodule SymmetryControl.Orchestration.TaskReads do
 
   defp history_limit(_), do: {:error, :invalid_request}
 
-  defp history_position(opts, :after) when is_list(opts),
-    do: validate_history_position(Keyword.get(opts, :after))
+  defp history_position(opts, :after) when is_list(opts), do: validate_history_position(Keyword.get(opts, :after))
 
-  defp history_position(opts, :before) when is_list(opts),
-    do: validate_timeline_position(Keyword.get(opts, :before))
+  defp history_position(opts, :before) when is_list(opts), do: validate_timeline_position(Keyword.get(opts, :before))
 
   defp history_position(_, _), do: {:error, :invalid_request}
 
   defp validate_history_position(nil), do: {:ok, nil}
 
-  defp validate_history_position(%{inserted_at: %DateTime{} = inserted_at, id: id})
-       when is_binary(id) do
+  defp validate_history_position(%{inserted_at: %DateTime{} = inserted_at, id: id}) when is_binary(id) do
     if valid_uuid?(id),
       do: {:ok, %{inserted_at: inserted_at, id: id}},
       else: {:error, :invalid_request}
@@ -641,11 +640,7 @@ defmodule SymmetryControl.Orchestration.TaskReads do
 
   defp validate_timeline_position(nil), do: {:ok, nil}
 
-  defp validate_timeline_position(%{
-         inserted_at: %DateTime{} = inserted_at,
-         source: source,
-         id: id
-       })
+  defp validate_timeline_position(%{inserted_at: %DateTime{} = inserted_at, source: source, id: id})
        when is_binary(source) and is_binary(id) do
     if Map.has_key?(@timeline_source_ranks, source) and valid_uuid?(id) do
       {:ok, %{inserted_at: inserted_at, source: source, id: id}}
@@ -685,8 +680,7 @@ defmodule SymmetryControl.Orchestration.TaskReads do
   defp entry_position(%{source: source, inserted_at: inserted_at, id: id}),
     do: %{inserted_at: inserted_at, source: source, id: id}
 
-  defp entry_position(%{inserted_at: inserted_at, id: id}),
-    do: %{inserted_at: inserted_at, id: id}
+  defp entry_position(%{inserted_at: inserted_at, id: id}), do: %{inserted_at: inserted_at, id: id}
 
   defp task_timeline_events(task_id, before_position, fetch_limit) do
     from(event in RunEvent,
@@ -760,11 +754,7 @@ defmodule SymmetryControl.Orchestration.TaskReads do
 
   defp timeline_before_position(query, nil, _source), do: query
 
-  defp timeline_before_position(
-         query,
-         %{inserted_at: inserted_at, source: source, id: id},
-         entry_source
-       ) do
+  defp timeline_before_position(query, %{inserted_at: inserted_at, source: source, id: id}, entry_source) do
     source_rank = Map.fetch!(@timeline_source_ranks, entry_source)
     cursor_rank = Map.fetch!(@timeline_source_ranks, source)
 
@@ -812,11 +802,10 @@ defmodule SymmetryControl.Orchestration.TaskReads do
   @spec work_snapshot(Ecto.UUID.t(), integer(), keyword()) :: {:ok, map()} | {:error, atom()}
   def work_snapshot(runtime_id, runtime_epoch, opts \\ [])
 
-  def work_snapshot(runtime_id, runtime_epoch, opts)
-      when is_integer(runtime_epoch) and runtime_epoch > 0 do
-    if not valid_uuid?(runtime_id),
-      do: {:error, :invalid_request},
-      else: daemon_runtime_snapshot(runtime_id, runtime_epoch, opts)
+  def work_snapshot(runtime_id, runtime_epoch, opts) when is_integer(runtime_epoch) and runtime_epoch > 0 do
+    if valid_uuid?(runtime_id),
+      do: daemon_runtime_snapshot(runtime_id, runtime_epoch, opts),
+      else: {:error, :invalid_request}
   end
 
   def work_snapshot(_, _, _), do: {:error, :invalid_request}
@@ -842,14 +831,10 @@ defmodule SymmetryControl.Orchestration.TaskReads do
 
   @doc false
   def share_runtime(runtime_id),
-    do:
-      Repo.one(from runtime in Runtime, where: runtime.id == ^runtime_id, lock: "FOR SHARE") ||
-        rollback(:not_found)
+    do: Repo.one(from runtime in Runtime, where: runtime.id == ^runtime_id, lock: "FOR SHARE") || rollback(:not_found)
 
   defp share_task(task_id),
-    do:
-      Repo.one(from task in Task, where: task.id == ^task_id, lock: "FOR SHARE") ||
-        rollback(:not_found)
+    do: Repo.one(from task in Task, where: task.id == ^task_id, lock: "FOR SHARE") || rollback(:not_found)
 
   @doc false
   def normalize_task_attrs(attrs) do

@@ -10,18 +10,17 @@ defmodule SymmetryControl.Goals.ReadModel do
 
   import Ecto.Query
 
-  alias SymmetryControl.Goals.{
-    ContractValidation,
-    ContextSnapshot,
-    Goal,
-    GoalBudgetReservation,
-    GoalEvent,
-    GoalExternalWait,
-    RunEvidence,
-    RunUsage
-  }
-
-  alias SymmetryControl.Orchestration.{Run, Runtime, Task}
+  alias SymmetryControl.Goals.ContextSnapshot
+  alias SymmetryControl.Goals.ContractValidation
+  alias SymmetryControl.Goals.Goal
+  alias SymmetryControl.Goals.GoalBudgetReservation
+  alias SymmetryControl.Goals.GoalEvent
+  alias SymmetryControl.Goals.GoalExternalWait
+  alias SymmetryControl.Goals.RunEvidence
+  alias SymmetryControl.Goals.RunUsage
+  alias SymmetryControl.Orchestration.Run
+  alias SymmetryControl.Orchestration.Runtime
+  alias SymmetryControl.Orchestration.Task
   alias SymmetryControl.Repo
   alias SymmetryControl.RequestHash
 
@@ -148,8 +147,7 @@ defmodule SymmetryControl.Goals.ReadModel do
       allowed_actions: allowed_actions(map_value(goal, :state, "draft"), projection, completion),
       work_items: Enum.map(projection.current_work_items, &item_projection(projection, &1)),
       graph: projection.graph,
-      decisions:
-        Enum.map(projection.decisions, &decision_projection(&1, projection.current_revision)),
+      decisions: Enum.map(projection.decisions, &decision_projection(&1, projection.current_revision)),
       accepted_outcomes: projection.accepted |> Map.values() |> Enum.map(&outcome_projection/1),
       execution: goal_execution_projection(projection.current_tasks, projection.current_runs),
       planning:
@@ -174,9 +172,7 @@ defmodule SymmetryControl.Goals.ReadModel do
           |> Enum.map(&dependency_projection/1),
         outcomes:
           projection.outcomes
-          |> Enum.reject(
-            &current_outcome?(&1, projection.current_revision, projection.current_work_item_ids)
-          )
+          |> Enum.reject(&current_outcome?(&1, projection.current_revision, projection.current_work_item_ids))
           |> Enum.map(&outcome_projection/1),
         external_waits:
           projection.external_waits
@@ -250,10 +246,8 @@ defmodule SymmetryControl.Goals.ReadModel do
       automatic_admission_blocked_events: automatic_admission_blocked_events,
       automatic_reconciliation_deferred_events: automatic_reconciliation_deferred_events,
       task_settled_events: task_settled_events,
-      execution:
-        execution_by_work_item(current_work_items, current_tasks, current_runs, runtimes),
-      graph:
-        graph_projection(current_work_items, current_dependencies, accepted, current_revision)
+      execution: execution_by_work_item(current_work_items, current_tasks, current_runs, runtimes),
+      graph: graph_projection(current_work_items, current_dependencies, accepted, current_revision)
     }
 
     %{projection | settled_receipts: current_task_settlements(projection)}
@@ -404,9 +398,7 @@ defmodule SymmetryControl.Goals.ReadModel do
     # pinned in the caller's process (`Repo.transaction`/`Repo.checkout`), not
     # the sandbox's owned connection, so `in_parallel: false` stays required.
     preloaded =
-      repo.preload(goal, [:revisions, :work_items, :dependencies, :outcomes, :decisions],
-        in_parallel: false
-      )
+      repo.preload(goal, [:revisions, :work_items, :dependencies, :outcomes, :decisions], in_parallel: false)
 
     task_query =
       from task in Task,
@@ -552,32 +544,35 @@ defmodule SymmetryControl.Goals.ReadModel do
     item_execution = Map.get(projection.execution, id)
     node = Enum.find(projection.graph.nodes, &(&1.id == id))
 
-    %{
-      id: id,
-      number: map_value(item, :number),
-      title: map_value(item, :title),
-      description: map_value(item, :description),
-      status: map_value(item, :status),
-      board_status: map_value(item, :status),
-      required?: map_value(item, :required, true),
-      priority: map_value(item, :priority),
-      position: map_value(item, :position),
-      assignee_type: map_value(item, :assignee_type),
-      assignee_name: map_value(item, :assignee_name),
-      agent_profile: map_value(item, :agent_profile),
-      workspace: map_value(item, :workspace),
-      admitted_revision: map_value(item, :admitted_revision),
-      repository_resource_id: map_value(item, :repository_resource_id),
-      goal_revision: map_value(item, :admitted_revision),
-      baseline: baseline_projection(item),
-      integration: map_value(item, :integration, false) == true,
-      change_target: sanitize(map_value(item, :change_target), @context_limit),
-      accepted?: not is_nil(receipt),
-      accepted_outcome: receipt && outcome_projection(receipt),
-      execution: item_execution,
-      blockers: if(node, do: node.blockers, else: [])
-    }
-    |> maybe_put(:current_revision, projection.current_revision)
+    maybe_put(
+      %{
+        id: id,
+        number: map_value(item, :number),
+        title: map_value(item, :title),
+        description: map_value(item, :description),
+        status: map_value(item, :status),
+        board_status: map_value(item, :status),
+        required?: map_value(item, :required, true),
+        priority: map_value(item, :priority),
+        position: map_value(item, :position),
+        assignee_type: map_value(item, :assignee_type),
+        assignee_name: map_value(item, :assignee_name),
+        agent_profile: map_value(item, :agent_profile),
+        workspace: map_value(item, :workspace),
+        admitted_revision: map_value(item, :admitted_revision),
+        repository_resource_id: map_value(item, :repository_resource_id),
+        goal_revision: map_value(item, :admitted_revision),
+        baseline: baseline_projection(item),
+        integration: map_value(item, :integration, false) == true,
+        change_target: sanitize(map_value(item, :change_target), @context_limit),
+        accepted?: not is_nil(receipt),
+        accepted_outcome: receipt && outcome_projection(receipt),
+        execution: item_execution,
+        blockers: if(node, do: node.blockers, else: [])
+      },
+      :current_revision,
+      projection.current_revision
+    )
   end
 
   defp baseline_projection(item) do
@@ -637,8 +632,7 @@ defmodule SymmetryControl.Goals.ReadModel do
       end)
 
     edges =
-      dependencies
-      |> Enum.map(fn dependency ->
+      Enum.map(dependencies, fn dependency ->
         work_item_id = map_value(dependency, :work_item_id)
         depends_on_id = map_value(dependency, :depends_on_id)
         satisfied? = Map.has_key?(accepted, depends_on_id)
@@ -1026,13 +1020,7 @@ defmodule SymmetryControl.Goals.ReadModel do
     end
   end
 
-  defp automatic_admission_blocker_replaced?(
-         task,
-         event,
-         work_item_id,
-         admission_key,
-         current_revision
-       ) do
+  defp automatic_admission_blocker_replaced?(task, event, work_item_id, admission_key, current_revision) do
     map_value(task, :goal_revision) == current_revision and
       map_value(task, :work_item_id) == work_item_id and
       (map_value(task, :admission_key) == admission_key or
@@ -1106,8 +1094,7 @@ defmodule SymmetryControl.Goals.ReadModel do
     unsupported_work_item_ids =
       projection.external_waits
       |> Enum.filter(&(map_value(&1, :state) == "unsupported"))
-      |> Enum.map(&map_value(&1, :work_item_id))
-      |> MapSet.new()
+      |> MapSet.new(&map_value(&1, :work_item_id))
 
     rows =
       Enum.filter(projection.current_work_items, fn item ->
@@ -1193,8 +1180,7 @@ defmodule SymmetryControl.Goals.ReadModel do
     goal_task_ids =
       projection.tasks
       |> Enum.filter(&goal_task?/1)
-      |> Enum.map(&map_value(&1, :id))
-      |> MapSet.new()
+      |> MapSet.new(&map_value(&1, :id))
 
     leaves =
       projection.usage
@@ -1287,7 +1273,7 @@ defmodule SymmetryControl.Goals.ReadModel do
       open_decision_ids =
         projection.decisions
         |> Enum.filter(
-          &(&1 |> map_value(:goal_revision) == projection.current_revision and
+          &(map_value(&1, :goal_revision) == projection.current_revision and
               map_value(&1, :state) == "open")
         )
         |> MapSet.new(&map_value(&1, :id))
@@ -1378,21 +1364,12 @@ defmodule SymmetryControl.Goals.ReadModel do
     |> map_value(:id)
   end
 
-  defp settlement_entry(
-         projection,
-         event,
-         response,
-         task,
-         run,
-         settlement,
-         item,
-         work_item?
-       ) do
+  defp settlement_entry(projection, event, response, task, run, settlement, item, work_item?) do
     %{
       event_id: map_value(event, :id),
       event_sequence: map_value(event, :sequence),
       goal_revision: projection.current_revision,
-      work_item_id: if(work_item?, do: map_value(task, :work_item_id), else: nil),
+      work_item_id: if(work_item?, do: map_value(task, :work_item_id)),
       task_id: map_value(task, :id),
       run_id: map_value(run, :id),
       generation: map_value(run, :generation),
@@ -1412,8 +1389,7 @@ defmodule SymmetryControl.Goals.ReadModel do
   end
 
   defp settlement_attention?(settlement, _blocker, _open_decision_ids, _decision_id)
-       when settlement in @settlement_attention_states,
-       do: true
+       when settlement in @settlement_attention_states, do: true
 
   defp settlement_attention?("blocked", blocker, open_decision_ids, _decision_id),
     do: disposition_required_blocker?(blocker, open_decision_ids)
@@ -1463,7 +1439,8 @@ defmodule SymmetryControl.Goals.ReadModel do
     # Unfiltered like the readiness blocker (every loaded task), unlike the integration
     # blocker below, which gates on current-revision tasks only.
     if completion_readiness_gate?(projection, projection.tasks) do
-      accepted_integration_outcomes(projection)
+      projection
+      |> accepted_integration_outcomes()
       |> Enum.filter(fn candidate ->
         valid_digest?(candidate.subject_hash) and
           integration_item_dependencies_satisfied?(projection, candidate.work_item_id)
@@ -1531,8 +1508,7 @@ defmodule SymmetryControl.Goals.ReadModel do
     %{
       reason: "required_predicates_unmet",
       count: length(candidates_with_unmet_predicates),
-      ids:
-        Enum.map(candidates_with_unmet_predicates, fn {candidate, _} -> candidate.work_item_id end),
+      ids: Enum.map(candidates_with_unmet_predicates, fn {candidate, _} -> candidate.work_item_id end),
       details:
         Enum.map(candidates_with_unmet_predicates, fn {candidate, unmet_predicates} ->
           %{
@@ -1602,7 +1578,8 @@ defmodule SymmetryControl.Goals.ReadModel do
               rejected_subjects =
                 MapSet.new(rejected_completion_subjects(projection))
 
-              accepted_integration_outcomes(projection)
+              projection
+              |> accepted_integration_outcomes()
               |> Enum.map(&map_value(&1, :subject_hash))
               |> Enum.reject(&MapSet.member?(rejected_subjects, &1))
 
@@ -1636,9 +1613,9 @@ defmodule SymmetryControl.Goals.ReadModel do
     end
   end
 
-  defp integration_candidate_dependencies_satisfied?(projection, subject_hash)
-       when is_binary(subject_hash) do
-    accepted_integration_outcomes(projection)
+  defp integration_candidate_dependencies_satisfied?(projection, subject_hash) when is_binary(subject_hash) do
+    projection
+    |> accepted_integration_outcomes()
     |> Enum.filter(&(&1.subject_hash == subject_hash))
     |> Enum.any?(&integration_item_dependencies_satisfied?(projection, &1.work_item_id))
   end
@@ -1652,8 +1629,7 @@ defmodule SymmetryControl.Goals.ReadModel do
     root_ids =
       projection.current_work_items
       |> Enum.filter(&map_value(&1, :required, true))
-      |> Enum.map(&map_value(&1, :id))
-      |> MapSet.new()
+      |> MapSet.new(&map_value(&1, :id))
 
     root_ids =
       if integration_work_item_id do
@@ -1735,8 +1711,7 @@ defmodule SymmetryControl.Goals.ReadModel do
   defp effective_integration_item_ids(work_items) do
     work_items
     |> Enum.map(fn item ->
-      {map_value(item, :id), map_value(item, :required, true) == true,
-       map_value(item, :integration, false) == true}
+      {map_value(item, :id), map_value(item, :required, true) == true, map_value(item, :integration, false) == true}
     end)
     |> ContractValidation.integration_designation()
     |> case do
@@ -1871,11 +1846,9 @@ defmodule SymmetryControl.Goals.ReadModel do
     end
   end
 
-  defp allowed_actions("active", _projection, completion),
-    do: maybe_achieve(["pause", "amend", "cancel"], completion)
+  defp allowed_actions("active", _projection, completion), do: maybe_achieve(["pause", "amend", "cancel"], completion)
 
-  defp allowed_actions("paused", _projection, completion),
-    do: maybe_achieve(["resume", "amend", "cancel"], completion)
+  defp allowed_actions("paused", _projection, completion), do: maybe_achieve(["resume", "amend", "cancel"], completion)
 
   defp allowed_actions(_state, _projection, _completion), do: []
 
@@ -1883,8 +1856,7 @@ defmodule SymmetryControl.Goals.ReadModel do
     current_revision = projection.current_revision
 
     settled_task_ids =
-      projection.task_settled_events
-      |> Enum.reduce(MapSet.new(), fn event, settled ->
+      Enum.reduce(projection.task_settled_events, MapSet.new(), fn event, settled ->
         with "task_settled" <- map_value(event, :kind),
              ^current_revision <- map_value(event, :revision),
              {:ok, task_id} <-
@@ -2216,19 +2188,15 @@ defmodule SymmetryControl.Goals.ReadModel do
         |> Enum.map(&map_value(&1, :reserved_microusd, 0))
         |> Enum.sum()
         |> microusd_wire_value(),
-      unknown_reservation_count:
-        Enum.count(projection.reservations, &(map_value(&1, :state) == "unknown")),
-      settled_reservation_count:
-        Enum.count(projection.reservations, &(map_value(&1, :state) == "settled")),
-      released_reservation_count:
-        Enum.count(projection.reservations, &(map_value(&1, :state) == "released")),
+      unknown_reservation_count: Enum.count(projection.reservations, &(map_value(&1, :state) == "unknown")),
+      settled_reservation_count: Enum.count(projection.reservations, &(map_value(&1, :state) == "settled")),
+      released_reservation_count: Enum.count(projection.reservations, &(map_value(&1, :state) == "released")),
       usage_records: length(projection.usage),
       usage_leaf_count: usage_summary.usage_leaf_count,
       known_usage_cost_microusd: microusd_wire_value(usage_summary.known_cost_microusd),
       usage_cost_microusd:
         if(usage_summary.unknown_usage_count == 0,
-          do: microusd_wire_value(usage_summary.known_cost_microusd),
-          else: nil
+          do: microusd_wire_value(usage_summary.known_cost_microusd)
         ),
       usage_cost_unknown?: usage_summary.unknown_usage_count > 0,
       unknown_usage_count: usage_summary.unknown_usage_count
@@ -2252,28 +2220,24 @@ defmodule SymmetryControl.Goals.ReadModel do
   end
 
   defp event_payload(payload) when is_map(payload) do
-    pick(
-      payload,
-      ~w(
+    payload
+    |> pick(~w(
         kind reason summary blocker result_kind outcome_id work_item_id task_id run_id generation state goal_revision
         decision_id revision purpose source_identity candidate_identity deferred_identity admission_key
-      )
-    )
+      ))
     |> sanitize(@context_limit)
   end
 
   defp event_payload(_payload), do: %{}
 
   defp event_response(response) when is_map(response) do
-    pick(
-      response,
-      ~w(
+    response
+    |> pick(~w(
         status code current_version current_revision allowed_actions details next_wake_at task_id run_id generation
         goal_revision settlement result_id result_kind reason blocker proposed_next_action
         proposed_next_action_status subject_hash evidence_refs
         disposition purpose candidate_identity
-      )
-    )
+      ))
     |> sanitize(@context_limit)
   end
 
@@ -2289,8 +2253,7 @@ defmodule SymmetryControl.Goals.ReadModel do
       generation: map_value(wait, :run_generation),
       result_id: map_value(wait, :result_id),
       state: map_value(wait, :state),
-      reason:
-        if(map_value(wait, :state) == "unsupported", do: "unsupported_external_check", else: nil),
+      reason: if(map_value(wait, :state) == "unsupported", do: "unsupported_external_check"),
       resource_id: map_value(wait, :resource_id),
       external_ref: map_value(wait, :external_ref),
       subject: sanitize(map_value(wait, :subject), @context_limit),
@@ -2379,12 +2342,14 @@ defmodule SymmetryControl.Goals.ReadModel do
   defp attention_cursor(_query, _cursor), do: {:error, :invalid_cursor}
 
   defp encode_attention_cursor(updated_at, id) when is_binary(id) and id != "" do
-    with {:ok, updated_at} <- attention_timestamp(updated_at) do
-      %{"updated_at" => DateTime.to_iso8601(updated_at), "id" => id}
-      |> Jason.encode!()
-      |> Base.url_encode64(padding: false)
-    else
-      _ -> nil
+    case attention_timestamp(updated_at) do
+      {:ok, updated_at} ->
+        %{"updated_at" => DateTime.to_iso8601(updated_at), "id" => id}
+        |> Jason.encode!()
+        |> Base.url_encode64(padding: false)
+
+      _ ->
+        nil
     end
   end
 
@@ -2403,8 +2368,7 @@ defmodule SymmetryControl.Goals.ReadModel do
 
   defp attention_timestamp(%DateTime{} = value), do: {:ok, value}
 
-  defp attention_timestamp(%NaiveDateTime{} = value),
-    do: DateTime.from_naive(value, "Etc/UTC")
+  defp attention_timestamp(%NaiveDateTime{} = value), do: DateTime.from_naive(value, "Etc/UTC")
 
   defp attention_timestamp(value) when is_binary(value) do
     case DateTime.from_iso8601(value) do
@@ -2554,8 +2518,7 @@ defmodule SymmetryControl.Goals.ReadModel do
 
   defp sanitize(value, limit) when is_binary(value), do: truncate(value, limit)
 
-  defp sanitize(value, _limit) when is_number(value) or is_boolean(value) or is_nil(value),
-    do: value
+  defp sanitize(value, _limit) when is_number(value) or is_boolean(value) or is_nil(value), do: value
 
   defp sanitize(value, limit) when is_list(value) do
     value
@@ -2573,7 +2536,7 @@ defmodule SymmetryControl.Goals.ReadModel do
     end)
   end
 
-  defp sanitize(value, _limit), do: inspect(value) |> truncate(500)
+  defp sanitize(value, _limit), do: value |> inspect() |> truncate(500)
 
   defp microusd_wire_value(value) when is_integer(value), do: Integer.to_string(value)
   defp microusd_wire_value(value), do: value

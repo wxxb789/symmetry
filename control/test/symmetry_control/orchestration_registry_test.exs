@@ -1,8 +1,16 @@
 defmodule SymmetryControl.OrchestrationRegistryTest do
   use SymmetryControl.OrchestrationCase, async: false
 
+  alias SymmetryControl.Goals
+  alias SymmetryControl.Goals.HarnessSession
   alias SymmetryControl.Orchestration
   alias SymmetryControl.Orchestration.Machine
+  alias SymmetryControl.Orchestration.Run
+  alias SymmetryControl.Orchestration.Runtime
+  alias SymmetryControl.Orchestration.Task
+  alias SymmetryControl.Workspaces
+  alias SymmetryControl.Workspaces.ProjectResource
+  alias SymmetryControl.Workspaces.WorkItem
 
   @now ~U[2026-09-02 00:00:00.000000Z]
 
@@ -112,13 +120,6 @@ defmodule SymmetryControl.OrchestrationRegistryTest do
     enrolled
   end
 
-  alias SymmetryControl.Goals
-  alias SymmetryControl.Goals.HarnessSession
-  alias SymmetryControl.Orchestration
-  alias SymmetryControl.Orchestration.{Run, Runtime, Task}
-  alias SymmetryControl.Workspaces
-  alias SymmetryControl.Workspaces.{ProjectResource, WorkItem}
-
   # The cases below came from the other base file's region and pin its clock;
   # the shadowing is intentional, so do not move a case across this line.
   @now ~U[2026-09-09 09:00:00.000000Z]
@@ -129,9 +130,7 @@ defmodule SymmetryControl.OrchestrationRegistryTest do
     daemon_instance_id = Ecto.UUID.generate()
 
     assert {:ok, [first]} =
-             Orchestration.register_runtimes(machine.id, daemon_instance_id, [specification],
-               now: @now
-             )
+             Orchestration.register_runtimes(machine.id, daemon_instance_id, [specification], now: @now)
 
     assert first.harness_kind == nil
     assert first.harness_version == nil
@@ -139,9 +138,7 @@ defmodule SymmetryControl.OrchestrationRegistryTest do
     assert first.adapter_protocol_version == nil
 
     assert {:ok, [replayed]} =
-             Orchestration.register_runtimes(machine.id, daemon_instance_id, [specification],
-               now: @now
-             )
+             Orchestration.register_runtimes(machine.id, daemon_instance_id, [specification], now: @now)
 
     assert replayed.id == first.id
     assert replayed.connection_epoch == first.connection_epoch
@@ -289,14 +286,10 @@ defmodule SymmetryControl.OrchestrationRegistryTest do
       })
 
     assert {:ok, [registered]} =
-             Orchestration.register_runtimes(machine.id, daemon_instance_id, [specification],
-               now: @now
-             )
+             Orchestration.register_runtimes(machine.id, daemon_instance_id, [specification], now: @now)
 
     assert {:ok, [replayed]} =
-             Orchestration.register_runtimes(machine.id, daemon_instance_id, [specification],
-               now: @now
-             )
+             Orchestration.register_runtimes(machine.id, daemon_instance_id, [specification], now: @now)
 
     assert replayed.id == registered.id
     assert replayed.connection_epoch == registered.connection_epoch
@@ -410,9 +403,7 @@ defmodule SymmetryControl.OrchestrationRegistryTest do
       })
 
     assert {:ok, [metadata_only_runtime]} =
-             Orchestration.register_runtimes(machine.id, daemon_instance_id, [specification],
-               now: @now
-             )
+             Orchestration.register_runtimes(machine.id, daemon_instance_id, [specification], now: @now)
 
     persisted_runtime = Repo.get!(Runtime, metadata_only_runtime.id)
     assert persisted_runtime.harness_kind == "omo"
@@ -430,9 +421,7 @@ defmodule SymmetryControl.OrchestrationRegistryTest do
       })
 
     assert {:ok, [runtime]} =
-             Orchestration.register_runtimes(machine.id, daemon_instance_id, [specification],
-               now: @now
-             )
+             Orchestration.register_runtimes(machine.id, daemon_instance_id, [specification], now: @now)
 
     assert runtime.id == metadata_only_runtime.id
     assert {:ok, run} = Orchestration.assign_one(now: @now)
@@ -582,7 +571,8 @@ defmodule SymmetryControl.OrchestrationRegistryTest do
         adapter_protocol_version: 1,
         capabilities: %{
           "adapter" =>
-            native_adapter("codex", "0.153.4", "symmetry-codex-1", 1)
+            "codex"
+            |> native_adapter("0.153.4", "symmetry-codex-1", 1)
             |> put_in(["operations", "events"], false)
             |> put_in(["operations", "approval_response"], true)
         }
@@ -635,7 +625,8 @@ defmodule SymmetryControl.OrchestrationRegistryTest do
     machine = enroll_machine("safe-pause")
 
     adapter =
-      native_adapter("codex", "0.153.4", "symmetry-codex-1", 1)
+      "codex"
+      |> native_adapter("0.153.4", "symmetry-codex-1", 1)
       |> put_in(["operations", "resume"], true)
       |> put_in(["operations", "pause"], "safe_boundary")
 
@@ -649,9 +640,7 @@ defmodule SymmetryControl.OrchestrationRegistryTest do
       })
 
     assert {:error, :invalid_request} =
-             Orchestration.register_runtimes(machine.id, Ecto.UUID.generate(), [specification],
-               now: @now
-             )
+             Orchestration.register_runtimes(machine.id, Ecto.UUID.generate(), [specification], now: @now)
   end
 
   test "runtime re-registration permits a same-affinity refresh but rejects a change during a Goal run" do
@@ -665,7 +654,7 @@ defmodule SymmetryControl.OrchestrationRegistryTest do
                runtime.machine_id,
                runtime.daemon_instance_id,
                [runtime_registration_spec(runtime)],
-               now: DateTime.add(@now, 1, :second)
+               now: DateTime.shift(@now, second: 1)
              )
 
     assert refreshed.repository_resource_id == item.repository_resource_id
@@ -683,7 +672,7 @@ defmodule SymmetryControl.OrchestrationRegistryTest do
                [
                  runtime_registration_spec(runtime, %{repository_resource_id: other_repository.id})
                ],
-               now: DateTime.add(@now, 2, :second)
+               now: DateTime.shift(@now, second: 2)
              )
 
     assert Repo.get!(Runtime, runtime.id).repository_resource_id == item.repository_resource_id
@@ -809,7 +798,7 @@ defmodule SymmetryControl.OrchestrationRegistryTest do
     admission_key = Ecto.UUID.generate()
     reservation_id = Ecto.UUID.generate()
     repository_id = Keyword.get(opts, :repository_id, Ecto.UUID.generate())
-    validation_of_task_id = if purpose == "validate", do: Ecto.UUID.generate(), else: nil
+    validation_of_task_id = if purpose == "validate", do: Ecto.UUID.generate()
     validation_bindings = Keyword.get(opts, :validation_bindings, [])
     policy = Keyword.get(opts, :execution_policy, execution_policy(max_run_attempts))
     allowed_runtime_ids = Map.get(policy, "allowed_runtime_ids", [])
@@ -822,27 +811,29 @@ defmodule SymmetryControl.OrchestrationRegistryTest do
     task_inserted_at = Keyword.get(opts, :inserted_at, @now)
 
     task_input =
-      %{
-        "subject" => %{
-          "resource_id" => repository_id,
-          "commit" => String.duplicate("a", 40),
-          "tree_digest" => "sha256:" <> String.duplicate("b", 64)
-        }
-      }
-      |> then(fn input ->
-        if requested_session_id do
-          input
-          |> Map.put("session_mode", "resume")
-          |> Map.put("requested_session_id", requested_session_id)
-        else
-          input
+      then(
+        %{
+          "subject" => %{
+            "resource_id" => repository_id,
+            "commit" => String.duplicate("a", 40),
+            "tree_digest" => "sha256:" <> String.duplicate("b", 64)
+          }
+        },
+        fn input ->
+          if requested_session_id do
+            input
+            |> Map.put("session_mode", "resume")
+            |> Map.put("requested_session_id", requested_session_id)
+          else
+            input
+          end
         end
-      end)
+      )
 
     task_input =
       Map.put(task_input, "limits", %{
         "max_turns" => 1,
-        "deadline_at" => DateTime.to_iso8601(DateTime.add(@now, 15 * 60, :second)),
+        "deadline_at" => DateTime.to_iso8601(DateTime.shift(@now, minute: 15)),
         "max_cost_microusd" =>
           if(strict_budget?,
             do: Integer.to_string(Map.fetch!(policy, "per_run_cost_limit_microusd"))
@@ -862,9 +853,7 @@ defmodule SymmetryControl.OrchestrationRegistryTest do
                  )
                end
 
-               unless Repo.exists?(
-                        from(resource in ProjectResource, where: resource.id == ^repository_id)
-                      ) do
+               if !Repo.exists?(from(resource in ProjectResource, where: resource.id == ^repository_id)) do
                  Repo.query!(
                    """
                    INSERT INTO project_resources (
@@ -905,7 +894,7 @@ defmodule SymmetryControl.OrchestrationRegistryTest do
                  [db_uuid(goal_id), Jason.encode!(policy), @now]
                )
 
-               unless planning? do
+               if !planning? do
                  Repo.query!(
                    """
                    INSERT INTO work_items (
@@ -1177,7 +1166,8 @@ defmodule SymmetryControl.OrchestrationRegistryTest do
       end)
 
     adapter =
-      native_adapter(harness_kind, harness_version, adapter_version, 1)
+      harness_kind
+      |> native_adapter(harness_version, adapter_version, 1)
       |> put_in(["operations", "resume"], resume?)
       |> put_in(["operations", "handoff"], handoff?)
       |> put_in(["operations", "hard_cost_limit"], hard_cost_limit?)
@@ -1187,27 +1177,29 @@ defmodule SymmetryControl.OrchestrationRegistryTest do
                machine_id,
                Ecto.UUID.generate(),
                [
-                 %{
-                   runtime_key: "goal-admission-#{label}",
-                   name: "Goal admission #{label}",
-                   capacity: capacity,
-                   agent_profile: "codex",
-                   workspace: "primary",
-                   harness_kind: harness_kind,
-                   harness_version: harness_version,
-                   adapter_version: adapter_version,
-                   adapter_protocol_version: 1,
-                   capabilities: %{
-                     "structured_input" => true,
-                     "interactive" => true,
-                     "adapter" => adapter
-                   }
-                 }
-                 |> then(fn specification ->
-                   if is_nil(repository_resource_id),
-                     do: specification,
-                     else: Map.put(specification, :repository_resource_id, repository_resource_id)
-                 end)
+                 then(
+                   %{
+                     runtime_key: "goal-admission-#{label}",
+                     name: "Goal admission #{label}",
+                     capacity: capacity,
+                     agent_profile: "codex",
+                     workspace: "primary",
+                     harness_kind: harness_kind,
+                     harness_version: harness_version,
+                     adapter_version: adapter_version,
+                     adapter_protocol_version: 1,
+                     capabilities: %{
+                       "structured_input" => true,
+                       "interactive" => true,
+                       "adapter" => adapter
+                     }
+                   },
+                   fn specification ->
+                     if is_nil(repository_resource_id),
+                       do: specification,
+                       else: Map.put(specification, :repository_resource_id, repository_resource_id)
+                   end
+                 )
                ],
                now: @now
              )

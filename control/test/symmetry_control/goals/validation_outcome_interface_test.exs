@@ -20,8 +20,8 @@ defmodule SymmetryControl.Goals.ValidationOutcomeInterfaceTest do
   setup :put_goal_validation_profiles
 
   test "reconcile_validation_outcome/4 settles a resolved operator rejection as rejected" do
-    {goal, item, _producer, _producer_run, validation, validation_run, validation_runtime,
-     validation_fence, candidate_subject} =
+    {goal, item, _producer, _producer_run, validation, validation_run, validation_runtime, validation_fence,
+     candidate_subject} =
       independent_validation_attempt_fixture(check_and_operator_acceptance_contract())
 
     assert {:ok, %{evidence: _stored}, :created} =
@@ -110,8 +110,8 @@ defmodule SymmetryControl.Goals.ValidationOutcomeInterfaceTest do
   end
 
   test "derive_validation_outcome!/10 inserts the accepted outcome bound to the candidate run" do
-    {goal, item, producer, producer_run, validation, validation_run, validation_runtime,
-     validation_fence, candidate_subject} =
+    {goal, item, producer, producer_run, validation, validation_run, validation_runtime, validation_fence,
+     candidate_subject} =
       independent_validation_attempt_fixture()
 
     evidence = evidence_attrs(validation_run.id, item, candidate_subject)
@@ -173,8 +173,8 @@ defmodule SymmetryControl.Goals.ValidationOutcomeInterfaceTest do
   end
 
   test "reconcile_validation_outcome/4 refuses an attempt that never settled" do
-    {_goal, _item, _producer, _producer_run, validation, validation_run, _validation_runtime,
-     _validation_fence, _candidate_subject} = independent_validation_attempt_fixture()
+    {_goal, _item, _producer, _producer_run, validation, validation_run, _validation_runtime, _validation_fence,
+     _candidate_subject} = independent_validation_attempt_fixture()
 
     assert {:error, :validation_reconciliation_not_pending} =
              ValidationOutcome.reconcile_validation_outcome(
@@ -186,8 +186,8 @@ defmodule SymmetryControl.Goals.ValidationOutcomeInterfaceTest do
   end
 
   test "reconcile_validation_outcome/4 refuses an attempt settled without awaiting validation" do
-    {_goal, _item, _producer, _producer_run, validation, validation_run, _validation_runtime,
-     _validation_fence, _candidate_subject} = independent_validation_attempt_fixture()
+    {_goal, _item, _producer, _producer_run, validation, validation_run, _validation_runtime, _validation_fence,
+     _candidate_subject} = independent_validation_attempt_fixture()
 
     put_run_task_result!(
       validation_run,
@@ -207,8 +207,8 @@ defmodule SymmetryControl.Goals.ValidationOutcomeInterfaceTest do
   end
 
   test "reconcile_validation_outcome/4 fails closed when the late receipt outlives its WorkOutcome" do
-    {goal, item, _producer, _producer_run, validation, validation_run, validation_runtime,
-     validation_fence, candidate_subject} =
+    {goal, item, _producer, _producer_run, validation, validation_run, validation_runtime, validation_fence,
+     candidate_subject} =
       independent_validation_attempt_fixture(check_and_operator_acceptance_contract())
 
     assert {:ok, %{evidence: _stored}, :created} =

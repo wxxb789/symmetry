@@ -25,8 +25,7 @@ defmodule SymmetryControl.RequestHash do
 
   defp canonical_json(%DateTime{} = value), do: DateTime.to_unix(value, :microsecond)
 
-  defp canonical_json(%_{} = value),
-    do: raise(ArgumentError, "unsupported request hash value: #{inspect(value)}")
+  defp canonical_json(%_{} = value), do: raise(ArgumentError, "unsupported request hash value: #{inspect(value)}")
 
   defp canonical_json(value) when is_map(value) do
     value
@@ -39,17 +38,14 @@ defmodule SymmetryControl.RequestHash do
   defp canonical_json(value) when value in [true, false, nil], do: value
   defp canonical_json(value) when is_atom(value), do: Atom.to_string(value)
 
-  defp canonical_json(value) when is_integer(value) or is_float(value) or is_binary(value),
-    do: value
+  defp canonical_json(value) when is_integer(value) or is_float(value) or is_binary(value), do: value
 
-  defp canonical_json(value),
-    do: raise(ArgumentError, "unsupported request hash value: #{inspect(value)}")
+  defp canonical_json(value), do: raise(ArgumentError, "unsupported request hash value: #{inspect(value)}")
 
   defp canonical_key(key) when is_atom(key), do: Atom.to_string(key)
   defp canonical_key(key) when is_binary(key), do: key
 
-  defp canonical_key(key),
-    do: raise(ArgumentError, "unsupported request hash key: #{inspect(key)}")
+  defp canonical_key(key), do: raise(ArgumentError, "unsupported request hash key: #{inspect(key)}")
 
   defp write_mode do
     :symmetry_control

@@ -20,9 +20,6 @@ if System.get_env("PHX_SERVER") do
   config :symmetry_control, SymmetryControlWeb.Endpoint, server: true
 end
 
-config :symmetry_control, SymmetryControlWeb.Endpoint,
-  http: [port: String.to_integer(System.get_env("PORT", "4000"))]
-
 goals_rollout_enabled =
   case System.get_env("SYMMETRY_GOALS_ROLLOUT_ENABLED", "false") do
     "true" -> true
@@ -40,6 +37,8 @@ contracts_dir = System.get_env("SYMMETRY_CONTRACTS_DIR", default_contracts_dir)
 contracts_dir_required =
   config_env() != :prod or goals_rollout_enabled or
     not is_nil(System.get_env("SYMMETRY_CONTRACTS_DIR"))
+
+config :symmetry_control, SymmetryControlWeb.Endpoint, http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 
 if contracts_dir_required and Path.type(contracts_dir) != :absolute do
   raise "SYMMETRY_CONTRACTS_DIR must be an absolute path"
@@ -93,6 +92,15 @@ if config_env() != :test do
     raise "SYMMETRY_ENROLLMENT_TOKEN and SYMMETRY_OPERATOR_TOKEN must differ"
   end
 
+  goals = Application.get_env(:symmetry_control, :goals) || []
+  goals = Keyword.put(goals, :rollout_enabled, goals_rollout_enabled)
+
+  config :symmetry_control, :goals, goals
+
+  config :symmetry_control, :integrations,
+    syncer_enabled: true,
+    sync_interval_ms: integration_sync_interval_ms
+
   config :symmetry_control, :orchestration,
     enrollment_token: enrollment_token,
     operator_token: operator_token,
@@ -101,20 +109,10 @@ if config_env() != :test do
     lease_duration_ms: lease_duration_ms,
     assignment_duration_ms: positive_integer.("SYMMETRY_ASSIGNMENT_DURATION_MS", "30000"),
     reaper_interval_ms: positive_integer.("SYMMETRY_REAPER_INTERVAL_MS", "5000"),
-    portal_session_max_age_seconds:
-      positive_integer.("SYMMETRY_PORTAL_SESSION_MAX_AGE_SECONDS", "28800"),
+    portal_session_max_age_seconds: positive_integer.("SYMMETRY_PORTAL_SESSION_MAX_AGE_SECONDS", "28800"),
     request_hash_write_mode: request_hash_write_mode,
     reaper_enabled: true,
     scheduler_enabled: true
-
-  config :symmetry_control, :integrations,
-    syncer_enabled: true,
-    sync_interval_ms: integration_sync_interval_ms
-
-  goals = Application.get_env(:symmetry_control, :goals) || []
-  goals = Keyword.put(goals, :rollout_enabled, goals_rollout_enabled)
-
-  config :symmetry_control, :goals, goals
 end
 
 if config_env() == :prod do
@@ -126,14 +124,6 @@ if config_env() == :prod do
       """
 
   maybe_ipv6 = if System.get_env("ECTO_IPV6") in ~w(true 1), do: [:inet6], else: []
-
-  config :symmetry_control, SymmetryControl.Repo,
-    # ssl: true,
-    url: database_url,
-    pool_size: String.to_integer(System.get_env("POOL_SIZE") || "10"),
-    # For machines with several cores, consider starting multiple pools of `pool_size`
-    # pool_count: 4,
-    socket_options: maybe_ipv6
 
   # The secret key base is used to sign/encrypt cookies and other secrets.
   # A default value is used in config/dev.exs and config/test.exs but you
@@ -147,9 +137,15 @@ if config_env() == :prod do
       You can generate one by calling: mix phx.gen.secret
       """
 
+  # For machines with several cores, consider starting multiple pools of `pool_size`
+  # pool_count: 4,
   host = System.fetch_env!("PHX_HOST")
 
-  config :symmetry_control, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
+  config :symmetry_control, SymmetryControl.Repo,
+    url: database_url,
+    pool_size: String.to_integer(System.get_env("POOL_SIZE") || "10"),
+    # ssl: true,
+    socket_options: maybe_ipv6
 
   config :symmetry_control, SymmetryControlWeb.Endpoint,
     url: [host: host, port: 443, scheme: "https"],
@@ -161,4 +157,6 @@ if config_env() == :prod do
       ip: {0, 0, 0, 0, 0, 0, 0, 0}
     ],
     secret_key_base: secret_key_base
+
+  config :symmetry_control, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 end

@@ -2,18 +2,19 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
   use SymmetryControlWeb.ConnCase, async: false
 
   import Ecto.Query
-
   import SymmetryControlWeb.PortalFixtures, only: [create_connection: 4, create_project: 2]
   import SymmetryControlWeb.ServedDocument
   import SymmetryControlWeb.TestConn, only: [api_conn: 0, create_resource: 5, enforce_csrf: 1]
 
   alias SymmetryControl.Goals
-  alias SymmetryControl.{Orchestration, Repo}
+  alias SymmetryControl.Integrations.ProviderStub
+  alias SymmetryControl.Orchestration
   alias SymmetryControl.Orchestration.RunTransition
+  alias SymmetryControl.Repo
+  alias SymmetryControl.TelemetryReads
   alias SymmetryControl.TestEnv
   alias SymmetryControl.Workspaces
   alias SymmetryControl.Workspaces.WorkItem
-  alias SymmetryControl.TelemetryReads
 
   @now ~U[2026-09-04 11:00:00.000000Z]
 
@@ -263,7 +264,7 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
 
     assert work_item_id == goal_managed.id
     assert served_goal_id == goal_managed.goal_id
-    refute is_nil(served_goal_id)
+    assert served_goal_id
 
     for {path, body} <- [
           {"run", %{"action_id" => "goal-start"}},
@@ -273,9 +274,9 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
         ] do
       response =
         if path == "move" do
-          api_conn() |> patch("/portal/api/work-items/#{goal_managed.id}/move", body)
+          patch(api_conn(), "/portal/api/work-items/#{goal_managed.id}/move", body)
         else
-          api_conn() |> post("/portal/api/work-items/#{goal_managed.id}/#{path}", body)
+          post(api_conn(), "/portal/api/work-items/#{goal_managed.id}/#{path}", body)
         end
 
       assert %{"error" => %{"code" => "goal_authority_required"}} = json_response(response, 403)
@@ -911,7 +912,7 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
                    sequence: 2,
                    kind: "waiting_for_input",
                    payload: %{"question" => "Choose a reviewer"},
-                   occurred_at: DateTime.add(@now, 1, :second)
+                   occurred_at: DateTime.shift(@now, second: 1)
                  }
                ],
                now: @now
@@ -927,11 +928,13 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
                now: @now
              )
 
-    from(transition in RunTransition, where: transition.transition_id == ^waiting_id)
-    |> Repo.update_all(set: [id: uuid(998), inserted_at: @now, updated_at: @now])
+    Repo.update_all(from(transition in RunTransition, where: transition.transition_id == ^waiting_id),
+      set: [id: uuid(998), inserted_at: @now, updated_at: @now]
+    )
 
-    from(transition in RunTransition, where: transition.transition_id == ^second_waiting_id)
-    |> Repo.update_all(set: [id: uuid(2), inserted_at: @now, updated_at: @now])
+    Repo.update_all(from(transition in RunTransition, where: transition.transition_id == ^second_waiting_id),
+      set: [id: uuid(2), inserted_at: @now, updated_at: @now]
+    )
 
     assert %{"error" => %{"code" => "state_conflict"}} =
              api_conn()
@@ -978,7 +981,7 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
           sequence: sequence,
           kind: "agent_event",
           payload: %{"message" => "raw event #{sequence}"},
-          occurred_at: DateTime.add(@now, sequence, :second)
+          occurred_at: DateTime.shift(@now, second: sequence)
         }
       end
 
@@ -1001,9 +1004,7 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
 
     assert %{"items" => older_page, "next_before" => nil} =
              api_conn()
-             |> get(
-               "/portal/api/work-items/#{item["id"]}/timeline?before=#{URI.encode_www_form(cursor)}"
-             )
+             |> get("/portal/api/work-items/#{item["id"]}/timeline?before=#{URI.encode_www_form(cursor)}")
              |> json_response(200)
 
     assert older_page != []
@@ -1011,8 +1012,7 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
     identity = fn entry ->
       data = entry["data"]
 
-      {entry["source"], entry["run_id"],
-       data["event_id"] || data["transition_id"] || data["command_id"]}
+      {entry["source"], entry["run_id"], data["event_id"] || data["transition_id"] || data["command_id"]}
     end
 
     first_ids = MapSet.new(first_page, identity)
@@ -1113,7 +1113,7 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
              })
 
     assert {:ok, repository} =
-             SymmetryControl.Workspaces.create_resource(project["id"], %{
+             Workspaces.create_resource(project["id"], %{
                connection_id: connection.id,
                kind: "repository",
                name: "Preload repository",
@@ -1121,7 +1121,7 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
              })
 
     assert {:ok, item} =
-             SymmetryControl.Workspaces.create_work_item(project["id"], %{
+             Workspaces.create_work_item(project["id"], %{
                title: "Read on one connection",
                status: "ready",
                priority: "medium",
@@ -1186,7 +1186,7 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
              })
 
     assert {:ok, repository} =
-             SymmetryControl.Workspaces.create_resource(project["id"], %{
+             Workspaces.create_resource(project["id"], %{
                connection_id: connection.id,
                kind: "repository",
                name: "Cancel read repository",
@@ -1194,7 +1194,7 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
              })
 
     assert {:ok, item} =
-             SymmetryControl.Workspaces.create_work_item(project["id"], %{
+             Workspaces.create_work_item(project["id"], %{
                title: "Cancel on one connection",
                status: "ready",
                priority: "medium",
@@ -1257,8 +1257,8 @@ defmodule SymmetryControlWeb.PortalWorkflowTest do
 
   test "the real served work detail and timeline carry every member the surfaces read" do
     TestEnv.put!(:integration_providers,
-      github: SymmetryControl.Integrations.ProviderStub,
-      azure_devops: SymmetryControl.Integrations.ProviderStub
+      github: ProviderStub,
+      azure_devops: ProviderStub
     )
 
     project = create_project("DTGATE")

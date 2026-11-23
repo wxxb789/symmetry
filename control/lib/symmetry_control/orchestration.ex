@@ -6,12 +6,18 @@ defmodule SymmetryControl.Orchestration do
   daemon protocol. Callers may use PubSub as a wake-up hint, never as state.
   """
 
+  alias SymmetryControl.Orchestration.Assignment
+  alias SymmetryControl.Orchestration.Claims
+  alias SymmetryControl.Orchestration.Command
+  alias SymmetryControl.Orchestration.Commands
   alias SymmetryControl.Orchestration.Machine
+  alias SymmetryControl.Orchestration.Registry
   alias SymmetryControl.Orchestration.Run
   alias SymmetryControl.Orchestration.RunEvent
   alias SymmetryControl.Orchestration.Runtime
   alias SymmetryControl.Orchestration.Task
-  alias SymmetryControl.Orchestration.Command
+  alias SymmetryControl.Orchestration.TaskReads
+  alias SymmetryControl.Orchestration.Transitions
   alias SymmetryControl.Workspaces.WorkItem
 
   @typedoc """
@@ -25,13 +31,6 @@ defmodule SymmetryControl.Orchestration do
           workspace: String.t() | nil,
           required_capabilities: map()
         }
-
-  alias SymmetryControl.Orchestration.Claims
-  alias SymmetryControl.Orchestration.Assignment
-  alias SymmetryControl.Orchestration.Registry
-  alias SymmetryControl.Orchestration.Transitions
-  alias SymmetryControl.Orchestration.Commands
-  alias SymmetryControl.Orchestration.TaskReads
 
   @doc """
   Whether `kind` names a native harness kind.

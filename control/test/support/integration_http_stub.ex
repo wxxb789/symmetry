@@ -81,10 +81,10 @@ defmodule SymmetryControl.Integrations.HTTPStub do
   end
 
   defp assert_request!(expectation, method, url, headers, body) do
-    unless expectation.method == method,
+    if expectation.method != method,
       do: raise("expected #{expectation.method}, got #{method}")
 
-    unless String.contains?(url, expectation.url_contains),
+    if !String.contains?(url, expectation.url_contains),
       do: raise("expected URL containing #{expectation.url_contains}, got #{url}")
 
     Enum.each(Map.get(expectation, :url_excludes, []), fn excluded ->
@@ -99,7 +99,7 @@ defmodule SymmetryControl.Integrations.HTTPStub do
             do: to_string(header_value)
         end)
 
-      unless actual == value,
+      if actual != value,
         do: raise("expected header #{name}=#{value}, got #{inspect(actual)}")
     end)
 

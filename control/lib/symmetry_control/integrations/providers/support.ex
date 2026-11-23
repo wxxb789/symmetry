@@ -36,7 +36,7 @@ defmodule SymmetryControl.Integrations.Providers.Support do
 
   def segment(value), do: URI.encode(value, &URI.char_unreserved?/1)
 
-  def now, do: DateTime.utc_now() |> DateTime.truncate(:microsecond)
+  def now, do: DateTime.truncate(DateTime.utc_now(), :microsecond)
 
   def required_datetime(value) when is_binary(value) do
     case DateTime.from_iso8601(value) do
@@ -66,8 +66,7 @@ defmodule SymmetryControl.Integrations.Providers.Support do
     end)
   end
 
-  def same_reference?(left, right),
-    do: String.downcase(left) == String.downcase(right)
+  def same_reference?(left, right), do: String.downcase(left) == String.downcase(right)
 
   def decoded_path_segments(path) when is_binary(path) do
     {:ok, path |> String.split("/", trim: true) |> Enum.map(&URI.decode/1)}

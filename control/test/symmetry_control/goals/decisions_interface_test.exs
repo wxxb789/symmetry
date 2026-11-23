@@ -2,6 +2,12 @@ Code.require_file("goals_test_support.exs", __DIR__)
 
 defmodule SymmetryControl.Goals.DecisionsInterfaceTest do
   use SymmetryControl.OrchestrationCase, async: false
+  @now ~U[2026-09-09 00:00:00.000000Z]
+  use SymmetryControl.TestFixtures,
+    command_opts: [
+      now: @now,
+      validation_profiles: SymmetryControl.GoalsTestSupport.validation_profiles()
+    ]
 
   import SymmetryControl.GoalsTestSupport
 
@@ -12,11 +18,6 @@ defmodule SymmetryControl.Goals.DecisionsInterfaceTest do
   alias SymmetryControl.Orchestration.Task
   alias SymmetryControl.Repo
   alias SymmetryControl.RequestHash
-
-  @now ~U[2026-09-09 00:00:00.000000Z]
-
-  use SymmetryControl.TestFixtures,
-    command_opts: [now: @now, validation_profiles: validation_profiles()]
 
   setup :put_goal_validation_profiles
 
@@ -88,8 +89,7 @@ defmodule SymmetryControl.Goals.DecisionsInterfaceTest do
     decision_receipt =
       command!(goal_id, "request_decision", %{
         kind: "completion",
-        subject_hash:
-          "sha256:" <> Base.encode16(:crypto.hash(:sha256, "unresolved-subject"), case: :lower)
+        subject_hash: "sha256:" <> Base.encode16(:crypto.hash(:sha256, "unresolved-subject"), case: :lower)
       })
 
     decision_id = decision_receipt.response["decision"]["id"]
@@ -286,8 +286,7 @@ defmodule SymmetryControl.Goals.DecisionsInterfaceTest do
     decision_receipt =
       command!(created.goal.id, "request_decision", %{
         kind: "completion",
-        subject_hash:
-          "sha256:" <> Base.encode16(:crypto.hash(:sha256, "changeset-subject"), case: :lower)
+        subject_hash: "sha256:" <> Base.encode16(:crypto.hash(:sha256, "changeset-subject"), case: :lower)
       })
 
     decision = Repo.get!(GoalDecision, decision_receipt.response["decision"]["id"])

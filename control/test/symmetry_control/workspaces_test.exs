@@ -1,11 +1,13 @@
 defmodule SymmetryControl.WorkspacesTest do
   use SymmetryControl.DataCase, async: false
 
-  alias SymmetryControl.Goals.{Goal, GoalRevision}
+  alias SymmetryControl.Goals.Goal
+  alias SymmetryControl.Goals.GoalRevision
   alias SymmetryControl.Orchestration
   alias SymmetryControl.Repo
   alias SymmetryControl.Workspaces
-  alias SymmetryControl.Workspaces.{ProjectResource, WorkItem}
+  alias SymmetryControl.Workspaces.ProjectResource
+  alias SymmetryControl.Workspaces.WorkItem
 
   test "projects aggregate independent engineering resources and prioritized work items" do
     assert {:ok, project} =

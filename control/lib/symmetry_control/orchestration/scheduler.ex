@@ -3,9 +3,9 @@ defmodule SymmetryControl.Orchestration.Scheduler do
 
   use GenServer
 
-  require Logger
-
   alias SymmetryControl.Orchestration
+
+  require Logger
 
   @name __MODULE__
 
@@ -72,8 +72,7 @@ defmodule SymmetryControl.Orchestration.Scheduler do
     end
   end
 
-  defp config(key),
-    do: Application.fetch_env!(:symmetry_control, :orchestration) |> Keyword.fetch!(key)
+  defp config(key), do: :symmetry_control |> Application.fetch_env!(:orchestration) |> Keyword.fetch!(key)
 
   defp enabled?, do: config(:scheduler_enabled)
 end

@@ -1,14 +1,5 @@
 defmodule Mix.Tasks.Symmetry.CheckTestDb do
   @shortdoc "Refuses test-environment Ecto commands against browser acceptance databases"
-
-  # The compose acceptance database, seeded and row-fingerprinted by
-  # `browser/scripts/run-compose-daemon-tests.ps1`.
-  @acceptance_databases ~w(symmetry_dev)
-
-  # Database families created, migrated and seeded by the browser acceptance
-  # harnesses. Add an entry here when a harness introduces another family.
-  @acceptance_database_prefixes ~w(symmetry_0007c_ symmetry_0007d_ symmetry_0007e_)
-
   @moduledoc """
   Refuses to run `mix test`, `mix ecto.create`, `mix ecto.migrate`,
   `mix ecto.migrations`, `mix ecto.drop`, `mix ecto.rollback` or `mix ecto.load`
@@ -16,7 +7,7 @@ defmodule Mix.Tasks.Symmetry.CheckTestDb do
 
   The browser acceptance harnesses (`browser/scripts/run-*.ps1`) own the
   databases they configure: the compose harness seeds and fingerprints
-  `#{Enum.join(@acceptance_databases, "`, `")}`, and the planning and fixture
+  `symmetry_dev`, and the planning and fixture
   harnesses recreate and seed the databases named for their families. Running
   the test suite against one of them makes the committed fixture rows visible to
   suite-level aggregates (`sync_all_resources/0`, workspace and portal reads),
@@ -28,8 +19,8 @@ defmodule Mix.Tasks.Symmetry.CheckTestDb do
   evaluates the effective database name the repository configures. Whole
   families are reserved, because a harness pointed at any name in one recreates
   and seeds it: every name beginning with
-  `#{Enum.join(@acceptance_database_prefixes, "`, `")}` is refused, whatever
-  suffix follows. The compose entry `#{Enum.join(@acceptance_databases, "`, `")}`
+  `symmetry_0007c_`, `symmetry_0007d_`, `symmetry_0007e_` is refused, whatever
+  suffix follows. The compose entry `symmetry_dev`
   is refused as an exact name: the compose harness never partition-suffixes the
   database it seeds and fingerprints, so a suffixed variant belongs to no
   harness. An arbitrary `-DbName` override cannot be covered by a static list;
@@ -45,6 +36,14 @@ defmodule Mix.Tasks.Symmetry.CheckTestDb do
   """
 
   use Mix.Task
+
+  # The compose acceptance database, seeded and row-fingerprinted by
+  # `browser/scripts/run-compose-daemon-tests.ps1`.
+  @acceptance_databases ~w(symmetry_dev)
+
+  # Database families created, migrated and seeded by the browser acceptance
+  # harnesses. Add an entry here when a harness introduces another family.
+  @acceptance_database_prefixes ~w(symmetry_0007c_ symmetry_0007d_ symmetry_0007e_)
 
   @impl true
   def run(_args) do
