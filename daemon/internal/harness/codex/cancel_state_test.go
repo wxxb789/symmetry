@@ -561,18 +561,30 @@ func TestCancelFieldsWrittenOnlyInOwnerFile(t *testing.T) {
 	writes := map[string]int{}
 	for _, name := range names {
 		file := files[name]
+		aliases := map[string]bool{}
 		ast.Inspect(file, func(node ast.Node) bool {
 			switch typed := node.(type) {
+			case *ast.FuncDecl:
+				aliases = map[string]bool{}
+			case *ast.DeclStmt:
+				recordTrackerAliasDecl(typed, aliases)
 			case *ast.AssignStmt:
+				recordTrackerAliasAssign(typed, aliases)
 				for _, target := range typed.Lhs {
-					recordCancelFieldWrite(t, fset, name, target, writes, cancelTrackerFields)
+					recordCancelFieldWrite(t, fset, name, target, aliases, writes, cancelTrackerFields)
 				}
 			case *ast.IncDecStmt:
-				recordCancelFieldWrite(t, fset, name, typed.X, writes, cancelTrackerFields)
+				recordCancelFieldWrite(t, fset, name, typed.X, aliases, writes, cancelTrackerFields)
 			case *ast.CallExpr:
 				ident, ok := typed.Fun.(*ast.Ident)
-				if ok && ident.Name == "delete" && len(typed.Args) == 1 {
-					recordCancelFieldWrite(t, fset, name, typed.Args[0], writes, cancelTrackerFields)
+				if !ok {
+					return true
+				}
+				if ident.Name == "delete" && len(typed.Args) == 2 {
+					recordCancelFieldWrite(t, fset, name, typed.Args[0], aliases, writes, cancelTrackerFields)
+				}
+				if ident.Name == "clear" && len(typed.Args) == 1 {
+					recordCancelFieldWrite(t, fset, name, typed.Args[0], aliases, writes, cancelTrackerFields)
 				}
 			case *ast.CompositeLit:
 				if ident, ok := typed.Type.(*ast.Ident); ok && ident.Name == "cancelTracker" {
@@ -602,9 +614,66 @@ func TestCancelFieldsWrittenOnlyInOwnerFile(t *testing.T) {
 	}
 }
 
-func recordCancelFieldWrite(t *testing.T, fset *token.FileSet, name string, target ast.Expr, writes map[string]int, fields map[string]bool) {
+func recordTrackerAliasAssign(stmt *ast.AssignStmt, aliases map[string]bool) {
+	if len(stmt.Lhs) != 1 || len(stmt.Rhs) != 1 {
+		return
+	}
+	ident, ok := stmt.Lhs[0].(*ast.Ident)
+	if !ok {
+		return
+	}
+	if trackerAliasExpr(stmt.Rhs[0], aliases) {
+		aliases[ident.Name] = true
+		return
+	}
+	delete(aliases, ident.Name)
+}
+
+func recordTrackerAliasDecl(stmt *ast.DeclStmt, aliases map[string]bool) {
+	decl, ok := stmt.Decl.(*ast.GenDecl)
+	if !ok {
+		return
+	}
+	for _, spec := range decl.Specs {
+		value, ok := spec.(*ast.ValueSpec)
+		if !ok {
+			continue
+		}
+		for index, ident := range value.Names {
+			if index < len(value.Values) && trackerAliasExpr(value.Values[index], aliases) {
+				aliases[ident.Name] = true
+			}
+		}
+	}
+}
+
+func trackerAliasExpr(expr ast.Expr, aliases map[string]bool) bool {
+	for {
+		switch typed := expr.(type) {
+		case *ast.ParenExpr:
+			expr = typed.X
+			continue
+		case *ast.UnaryExpr:
+			if typed.Op != token.AND {
+				return false
+			}
+			expr = typed.X
+			continue
+		}
+		break
+	}
+	switch typed := expr.(type) {
+	case *ast.Ident:
+		return typed.Name == "tracker" || aliases[typed.Name]
+	case *ast.SelectorExpr:
+		return typed.Sel.Name == "cancelTracker"
+	}
+	return false
+}
+
+func recordCancelFieldWrite(t *testing.T, fset *token.FileSet, name string, target ast.Expr, aliases map[string]bool, writes map[string]int, fields map[string]bool) {
 	t.Helper()
-	field, ok := cancelTrackerFieldAccess(target, fields)
+	field, ok := cancelTrackerFieldAccess(target, fields, aliases)
 	if !ok {
 		return
 	}
@@ -614,7 +683,7 @@ func recordCancelFieldWrite(t *testing.T, fset *token.FileSet, name string, targ
 	writes[field]++
 }
 
-func cancelTrackerFieldAccess(target ast.Expr, fields map[string]bool) (string, bool) {
+func cancelTrackerFieldAccess(target ast.Expr, fields map[string]bool, aliases map[string]bool) (string, bool) {
 	for {
 		switch typed := target.(type) {
 		case *ast.IndexExpr:
@@ -635,7 +704,7 @@ func cancelTrackerFieldAccess(target ast.Expr, fields map[string]bool) (string, 
 	}
 	switch base := selector.X.(type) {
 	case *ast.Ident:
-		if base.Name == "tracker" {
+		if base.Name == "tracker" || aliases[base.Name] {
 			return selector.Sel.Name, true
 		}
 	case *ast.SelectorExpr:

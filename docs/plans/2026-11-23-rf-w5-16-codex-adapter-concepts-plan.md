@@ -138,7 +138,7 @@ is planned.
 `gofmt -l internal/harness/codex`; `go vet ./...`; `GOOS=linux go build ./...`;
 `GOOS=windows go build ./...`; `go test -list '.*' ./internal/harness/codex/` before/after (base name
 set unchanged, new names listed); Windows `go test -count=1 ./internal/harness/...`; WSL
-`wsl -d Ubuntu-24.04 -u accept bash -lc 'cd /mnt/q/repos/wt-w5-16-codex-adapter/symmetry/daemon &&
+`wsl -d Ubuntu-24.04 -u accept bash -lc 'cd <worktree>/daemon &&
 go test -count=1 -race ./internal/harness/... ./internal/app/...'` (SKIP list, no new skips);
 write-site scan (committed go/ast test); lock-site table before/after; per-function write-sequence
 table; error-string multiset (`rg -o '"[^"]*"'` over non-test `codex/*.go`, base vs HEAD);
@@ -235,7 +235,8 @@ one `session.mutex` critical section per path:
 Two order notes, both inside a single uninterrupted critical section with no intervening read of the
 reordered field: the reset pair (`rpc.reset()` then `cancelTracker.reset()`) interleaves the rpc-map
 clears with the cancel clears differently from base; `retirePending` reads the binding in
-`forgetRPC` after the two rpc-map deletes instead of before them.
+`forgetRPC` after the two rpc-map deletes instead of before them. Section 18.3 records the
+feasibility conflict and the smallest proposed clause-1 amendment for these notes.
 
 ## 12. Error-string and literal multiset
 
@@ -370,10 +371,11 @@ does not weaken tests, types, validation or permissions. `F` numbers are the sim
 | `cancel_test.go` | 493 | 472 |
 | `rpc_session_test.go` | 848 | 834 |
 | `adapter_support_test.go` | 609 | 624 |
-| `cancel_state_test.go` | 697 (recorded as 682) | 704 |
+| `cancel_state_test.go` | 697 (recorded as 682) | 704 → 773 (fix r1) |
 | `translate_test.go` | 396 | 396 |
 
-Every file stays under 1,500 L.
+Every file stays under 1,500 L. Fix round r1 changed only the `cancel_state_test.go` row above (the
+owner-file scan hardening); every other row is final.
 
 Literal multiset (`rg -o '"[^"]*"'`, import blocks excluded, the eight non-test `codex/*.go` files):
 base 682 / 391 distinct → apply 674 / 391 distinct. The only differing keys are F6's single-sourcing:
@@ -446,3 +448,110 @@ exit 0, "no audited document added or modified … nothing to check" (this stage
 `codex/**`, the plan and `docs/TODO.md`, none of them in the gate's audited corpus, unlike the
 implement stage's `CLOSED-TODO.md` change); `python scripts/ci/check-record-cleanliness.py --base
 HEAD --head 66db65e81050` → exit 0, "no record added or modified … nothing to check".
+
+## 18. Fix round r1 — review findings STD-A01, STD-A02, SPEC-A01 (2026-11-23)
+
+Source: the review stage's report over `e13450bc..cf4b5e1f` (external GDD artifact). This round
+changed `cancel_state_test.go` and the two records; no production file changed, so every production
+measurement in sections 9, 11, 12, 13 and 17.1 stands, and section 17.1's table carries the final
+counts.
+
+### 18.1 STD-A01 — the owner-file scan's coverage
+
+`TestCancelFieldsWrittenOnlyInOwnerFile` (in `cancel_state_test.go`) is the only automated
+enforcement of the clause-1 rule "no cancel-field writes outside `cancel_state.go`". Its `delete`
+branch tested `len(typed.Args) == 1`, but Go's `delete` takes two arguments, so the branch was
+unreachable; `clear(...)` and pointer aliases were not recognised at all.
+
+Probe, before the fix: a `delete(session.cancelTracker.pendingCancelAttempts, id)` write injected at
+`rpc_session.go:880` (inside `removePending`) left the scan green (`ok`, 2.764 s) — the owner file's
+own deletion form (`cancel_state.go:138`) was invisible in every other file. The scan's positive
+control was therefore weaker than its declared scope.
+
+Probe, after the fix: the same injected write fails with "rpc_session.go:880 writes
+cancelTracker.pendingCancelAttempts outside cancel_state.go"; the `clear(...)` form fails with the
+same message; `t := &session.cancelTracker` followed by `t.deferredTerminal = nil` fails with
+"rpc_session.go:881 writes cancelTracker.deferredTerminal outside cancel_state.go". Each injection
+was reverted and the scan re-run green (M8-M10 below).
+
+The repaired scan: `delete` with two arguments records `Args[0]`; `clear` with one argument records
+`Args[0]`; and per function it tracks identifiers bound to the tracker by assignment or `var`
+declaration (through parentheses, address-of and alias chains) and matches those bases in
+`cancelTrackerFieldAccess`. Bounded reach, stated: a value copy taken elsewhere and a function
+parameter of type `cancelTracker` are outside syntactic reach; every write form that names a
+tracker field or an intermediate pointer alias is now seen.
+
+| # | group | mutation | failing test and observed message |
+| --- | --- | --- | --- |
+| M8 | owner-file scan, map deletion | `delete(session.cancelTracker.pendingCancelAttempts, id)` added to `removePending` (`rpc_session.go:880`) | `TestCancelFieldsWrittenOnlyInOwnerFile`: "rpc_session.go:880 writes cancelTracker.pendingCancelAttempts outside cancel_state.go" (green before the fix: `ok` 2.764 s) |
+| M9 | owner-file scan, `clear` form | `clear(session.cancelTracker.pendingCancelAttempts)` added to `removePending` (`rpc_session.go:880`) | `TestCancelFieldsWrittenOnlyInOwnerFile`: "rpc_session.go:880 writes cancelTracker.pendingCancelAttempts outside cancel_state.go" |
+| M10 | owner-file scan, pointer alias | `t := &session.cancelTracker` plus `t.deferredTerminal = nil` added to `removePending` (`rpc_session.go:880-881`) | `TestCancelFieldsWrittenOnlyInOwnerFile`: "rpc_session.go:881 writes cancelTracker.deferredTerminal outside cancel_state.go" |
+
+### 18.2 STD-A02 — closed-record correction
+
+`docs/archive/CLOSED-TODO.md` now carries the final sizes with section 17.1 named as the single
+source, qualifies the two facts that have recorded exceptions (the order deviations; the literal
+occurrence counts) and records the scan hardening with M8-M10. The implement-stage sizes no longer
+appear as the shipped state.
+
+### 18.3 SPEC-A01 — clause 1 write order: infeasibility and the smallest proposed amendment
+
+Measured against base at the final tree, three statement-order deviations exist. `failFraming`
+(`adapter.go:1019-1020`) and `failProcessOutputBeforeReady` (`adapter.go:991-992`) write
+`pendingCancelAttempts` and `deferredTerminal` through `rpc.reset()` then `cancelTracker.reset()`,
+where base's single block wrote the six field resets in the order pending, pendingMethods,
+pendingCancelAttempts, retiredRPCIDs, retiredRPCOrder, deferredTerminal (final: the two cancel
+writes land at positions 5 and 6). `retirePending` (`rpc_session.go:882-889`) reads the cancel
+binding inside `forgetRPC` after the two rpc-map deletions, where base read it before them.
+`finish` (`cancel_state.go:198-217`) dropped base's second `if !attempt.doneClosed` re-check
+(`adapter.go:2487` at `e13450bc`), unreachable after the early return. Every other write order is
+base-identical — `retirePending`'s three deletes keep base's order, and the dropped re-check is a
+read, not a write.
+
+Restoring base statement order is infeasible inside the binding design:
+
+- The reset pair cannot reproduce base's interleaving from two owner-atomic calls: base wrote
+  `pendingCancelAttempts` between the pending maps and the retired maps with `deferredTerminal`
+  last, and any single `cancelTracker.reset()` keeps those two writes adjacent. Splitting the reset
+  into two transitions exceeds the contract's ≤ 14-method budget and fails the committed shape pin
+  (`assertCancelTrackerShape` refuses "more than 14"); writing the fields directly from another file
+  is refused by the hardened scan (section 18.1), and a package-level field writer inside
+  `cancel_state.go` would evade the scan but contradicts design item 1's named-transition rule.
+- `retirePending`'s write order already matches base; only the binding read moved. Restoring its
+  position needs a read-only tracker accessor (method budget again) plus a second read of the same
+  map key per retired RPC.
+- `finish`'s dropped re-check is dead after the early return; restoring it would re-add unreachable
+  code, not restore a write.
+
+The deviations are proven unobservable: every site runs inside one uninterrupted `session.mutex`
+critical section (section 10's lock table shows the same lock sites as base); the reordered writes
+target disjoint fields, no statement between them reads either field, and the net state per
+operation is identical; the moved read is of a key disjoint from the two deletions and holds the
+same value before and after them.
+
+Smallest proposed amendment, awaiting the conductor's ruling (clause 1 is external to this plan):
+read clause 1's "write order" as the per-function cancel-field write sequence, which section 11's
+table shows matching base, and record the strict cross-owner reading's two deviations as tolerated
+by clause 4's "unless proven unobservable". No code change was made for this finding.
+
+### 18.4 Fix-round gate results (working directory `daemon/`)
+
+| gate | result |
+| --- | --- |
+| `gofmt -l internal/harness/codex` | empty (exit 0) |
+| `go vet ./...` | exit 0 |
+| `GOOS=linux go build ./...` / `GOOS=windows go build ./...` | exit 0 / exit 0 |
+| `go test -list '.*' ./internal/harness/codex/` | 138 names, 0 duplicates; the 116 base test names all present (probe: the eight base `*_test.go` files at `e13450bc`) |
+| `go test -count=1 ./internal/harness/codex/` | exit 0, `ok` 14.412 s (final tree) |
+| `GOMAXPROCS=8 go test -count=200 -run TestCancelFieldsWrittenOnlyInOwnerFile ./internal/harness/codex/` | exit 0, `ok` 14.430 s |
+| `go test -count=1 ./internal/harness/...` (Windows) | exit 0, 9/9 packages ok (`harness` 8.333 s, `claude` 29.442 s, `codex` 27.821 s, `linejson` 1.348 s, `omo` 19.438 s, `omp` 19.690 s, `opencode` 8.415 s, `pi` 20.228 s, `probeconformance` 10.535 s) |
+| WSL `-race` over the harness and app packages with the documented `-skip`/`-timeout` pair (bash working directory: the worktree's `daemon/` on the Linux mount) | exit 0, 11/11 packages ok (`codex` 37.143 s, `app` 537.457 s, `app/apptest` 5.706 s; wall 574.36 s) |
+| `git diff --check` | exit 0 |
+| repository gates against a dangling scratch commit `f5dce8fd7261` built from the fix-stage tree with a temporary `GIT_INDEX_FILE` (no branch, index or ref touched) | `python scripts/ci/check-citation-existence.py --base HEAD --head f5dce8fd7261`: exit 0, "1 changed document(s) pass the path and symbol check (524 path citation(s))"; `python scripts/ci/check-record-cleanliness.py --base HEAD --head f5dce8fd7261`: exit 0, "no record added or modified … nothing to check" |
+| scan probes over the fix-stage diff | the added record lines carry no drive-letter or Unix mount-root, home or tmp prefix path (record scan count 0); the user-profile path scan and the backslash-before-`u` scan over the branch diff return no match; the branch diff's single host-shaped added line is the deliberately redacted Windows-drive fixture value for the `codexHome` protocol field in `adapter_support_test.go:198`, which carries no profile name |
+
+M6 re-checked at the fixed tree (the assignment form the scan has always covered): a
+`session.cancelTracker.deferredTerminal = nil` write added to `removePending` turns
+`TestCancelFieldsWrittenOnlyInOwnerFile` red with "rpc_session.go:880 writes
+cancelTracker.deferredTerminal outside cancel_state.go"; reverted, green. Test names are unchanged
+from section 14 (138; the fix round adds no test function) and no `t.Skip` is added.

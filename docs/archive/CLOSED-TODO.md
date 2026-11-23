@@ -4559,13 +4559,18 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
       2,617-line file with the cancel-attempt state machine encoded as six loose session fields.
       **Closed (2026-11-23, branch `refactor/rf-w5-16-codex-adapter-concepts`, plan
       `docs/plans/2026-11-23-rf-w5-16-codex-adapter-concepts-plan.md`):** the file is split into
-      `adapter.go` (1,331 L), `cancel_state.go` (405 L: the `cancelTracker` state machine with 14
+      `adapter.go` (1,300 L), `cancel_state.go` (426 L: the `cancelTracker` state machine with 14
       named transitions and one test-only violation hook), `rpc_session.go` (889 L: the
       `rpcCorrelator`/`rpcResolution` correlation plus notification staging) and `translate.go`
-      (167 L: pure item/turn/notification mappings), with every file under the 1,500-line bound and
-      no production behaviour change: the 58 lock-site sequences, per-function cancel-field write
-      orders, every non-test string literal and all 116 pre-existing test names survive, and the
-      tracker-level invariants carry new direct tests plus recorded red mutants. The evidence tables
-      live in the plan's implement report; the `codex.Probe` nil-context re-pin stays open in
-      `docs/TODO.md` because `codex/probe.go` and `codex/probe_test.go` are outside this slice's
-      owned set.
+      (179 L: pure item/turn/notification mappings); those final line counts are the plan's section
+      17.1, the single source, and every file stays under the 1,500-line bound, with no production
+      behaviour change. The 58 lock-site sequences, the per-function cancel-field write sequences
+      (two disclosed order deviations inside one uninterrupted critical section, plan section 11)
+      and all 116 pre-existing test names survive; the non-test string literals are unchanged as
+      distinct values (391 — occurrence counts drop only where the dedupe keys were single-sourced,
+      section 17.1), and the tracker-level invariants carry new direct tests plus recorded red
+      mutants. The fix round hardened the owner-file write scan: map deletion, `clear` and
+      pointer-alias writes are now refused, each proven by an injected-write mutant row (plan
+      section 18, M8-M10). The evidence tables live in the plan; the `codex.Probe` nil-context
+      re-pin stays open in `docs/TODO.md` because `codex/probe.go` and `codex/probe_test.go` are
+      outside this slice's owned set.
