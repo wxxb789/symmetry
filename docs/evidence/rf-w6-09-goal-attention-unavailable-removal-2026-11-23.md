@@ -216,7 +216,7 @@ un-regenerated variant.
   (projection, schema, fixture, 4 generated files, frontend fix, browser spec) is **−31 dLOC**
   (30 insertions / 61 deletions), consistent with the plan row's −30; the positive total comes from
   the added clause tests (+38/−5 control, +17/−9 frontend) and the two design amendments (+21).
-- New-file sizes: Go test 42 L, plan 159 L, evidence 215 L.
+- New-file sizes: Go test 42 L, plan 189 L, evidence 249 L.
 - Host dependency tree: `frontend/package.json` and `pnpm-lock.yaml` restored to HEAD's bytes
   (sha256 `371e97c389f5fe61…` and `b9575212d79edd4f…`, re-measured after the restore) and absent
   from `git status`; the temporary feed-version lockfile is host-local and CI installs from HEAD's

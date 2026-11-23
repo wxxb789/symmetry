@@ -23,9 +23,9 @@ frontend, browser and daemon, with its disposition:
 | 1 | projection member | `control/lib/symmetry_control_web/portal_json.ex:123` | removed |
 | 2 | projection doc comment | `portal_json.ex:105-113` | rewritten (goal feed cannot be unavailable) |
 | 3 | controller doc comment | `control/lib/symmetry_control_web/controllers/portal_api_controller.ex:24-33` | kept (already states the workspace-refusal path; no member claim) |
-| 4 | control test, served read | `control/test/.../portal_goal_attention_test.exs:68` | removed from the pattern → `refute Map.has_key?` (P1) |
-| 5 | control test, rollout-off | `:116` | removed from the pattern → `refute Map.has_key?` (P1) |
-| 6 | control test, project refusal | `:261` | removed from the pattern → `refute Map.has_key?` (P1) |
+| 4 | control test, served read | `control/test/.../portal_goal_attention_test.exs:68` | removed from the pattern (P1; absence proof: the served-document case at `:95/:108`) |
+| 5 | control test, rollout-off | `:116` | removed from the pattern (P1; absence proof: the served-document case at `:95/:108`) |
+| 6 | control test, project refusal | `:261` | removed from the pattern (P1; absence proof: the served-document case at `:95/:108`) |
 | 7 | control test, unit-level `goal_result` literal | `:233` | removed (dead input member: `attention/3` reads only `.page`) |
 | 8 | schema required list | `contracts/v1/attention-read.schema.json:20` | removed |
 | 9 | schema property | `:27-29` | removed (`GoalAttentionFeed` keeps `additionalProperties: true`) |
@@ -66,11 +66,11 @@ destination redirect (a different feature, out of scope).
 
 ## Implementation choices the acceptance contract leaves open
 
-1. **Each removed member assertion becomes an explicit absence assertion, at the same site.** The
-   reconcile P1 requires absence proof (the schema's `additionalProperties: true` cannot): the three
-   Elixir sites become `refute Map.has_key?(..., "unavailable")`, the Go side gets a dedicated test
-   file, the frontend gets one focused case. Deleting an assertion without replacement would read as
-   the "weakened assertion" failure control.
+1. **Each removed member assertion is dropped in place; the absence proof is the dedicated case.**
+   The reconcile P1 requires absence proof (the schema's `additionalProperties: true` cannot): the
+   three Elixir patterns drop the member and the served-document case proves it (`refute Map.has_key?`
+   at `portal_goal_attention_test.exs:108`); the Go side gets a dedicated test file, the frontend gets
+   one focused case — a silent deletion would read as the "weakened assertion" failure control.
 2. **Go absence assertion lives in a new file `daemon/internal/contracts/attention_read_test.go`.**
    Binding P1 requires it and no owned file can hold it. The alternatives were to extend
    `schema_test.go` or create this file; the new file keeps the slice's edit surface free of a
@@ -86,8 +86,8 @@ destination redirect (a different feature, out of scope).
    branch → control case red; fixture-builder `projectUnavailable` assignment (and separately the
    `attention.tsx` project-notice condition) → frontend case red. Both mutants are run and recorded.
 4. **The control test carries three goal-member assertions, not two.** The contract's owned-files
-   clause counts two; at `55ecd76a` the sites are `:68`, `:116`, `:261`. All three are converted
-   (leaving one in a pattern would fail the gate, and deleting it unasserted would lose coverage).
+   clause counts two; at `55ecd76a` the sites are `:68`, `:116`, `:261`. All three drop the member
+   (leaving one in a pattern would fail the gate); the absence proof is the dedicated case (choice 1).
 5. **The unit test's `goal_result` literal drops its dead member** (`:233`): `attention/3` reads only
    `goal_result.page` and the controller passes `%{page: page}`; keeping a member no write path
    produces would leave the projection's input contract misstated.
@@ -120,7 +120,7 @@ destination redirect (a different feature, out of scope).
    targeted test green → `mix format --check-formatted`, `MIX_ENV=test mix compile
    --warnings-as-errors`, the attention file, then the web tree.
 3. Contracts: fixture member removed → `pnpm contracts:generate` → `pnpm contracts:check` (drift-free;
-   21 schemas; 248 fixtures).
+   21 schemas; 261 fixtures).
 4. Go: new absence test → red on the pre-regeneration tree (both legs as reachable) → regenerated
    bundle/DTO → `GOOS=linux go build ./...`, `GOOS=windows go build ./...`,
    `go test -count=1 ./internal/contracts/... ./internal/protocol/...`.
@@ -182,8 +182,8 @@ destination redirect (a different feature, out of scope).
   `contracts:check` and the Go test stay green when the member is re-added to the fixture only —
   the schema cannot prove absence, which is why the explicit assertions exist.
 - Report-only LOC (D2): tracked diff +106/−75 (net +31) over 14 files; the member-removal subset is
-  −31 dLOC (30/61), consistent with the plan row's −30; new files add 42 (Go test) + 159 (plan) +
-  215 (evidence) lines.
+  −31 dLOC (30/61), consistent with the plan row's −30; new files add 42 (Go test) + 189 (plan) +
+  249 (evidence) lines.
 - Host deviation recorded and reverted: the four feed-unavailable dev pins were downgraded for the
   local install only; `frontend/package.json` and `pnpm-lock.yaml` are back to HEAD's bytes
   (`371e97c3…` / `b9575212…`) and absent from `git status`.
