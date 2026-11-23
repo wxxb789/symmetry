@@ -2,6 +2,7 @@ package apptest
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"testing"
@@ -208,6 +209,9 @@ func TestControlAPIHooksReplaceMethods(t *testing.T) {
 		}
 		if !reflect.DeepEqual(received, request) {
 			t.Fatalf("Claim() forwarded request %#v, want %#v", received, request)
+		}
+		if got := control.Claims(); len(got) != 1 || !reflect.DeepEqual(got[0], request) {
+			t.Fatalf("Claim() with a hook set recorded %#v, want the request %#v", got, request)
 		}
 	})
 
@@ -419,6 +423,97 @@ func TestControlAPIRecordedRequestsAreDetachedCopies(t *testing.T) {
 			t.Fatalf("AcknowledgeCommand() error = %v", err)
 		}
 		assertDetachedRecord(t, control.Acknowledgements, request)
+	})
+}
+
+func TestControlAPINestedRecordsAreDetachedCopies(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("Registrations", func(t *testing.T) {
+		control := &ControlAPI{}
+		request := protocol.SessionRegistrationRequest{Runtimes: []protocol.RuntimeRegistration{{RuntimeKey: "runtime-1"}}}
+		if _, err := control.RegisterSession(ctx, "machine-1", "daemon-1", request); err != nil {
+			t.Fatalf("RegisterSession() error = %v", err)
+		}
+		request.Runtimes[0].RuntimeKey = "mutated-caller"
+		recorded := control.Registrations()
+		if len(recorded) != 1 || recorded[0].Runtimes[0].RuntimeKey != "runtime-1" {
+			t.Fatalf("record after mutating the caller's request = %#v, want runtime-1", recorded)
+		}
+		recorded[0].Runtimes[0].RuntimeKey = "mutated-reader"
+		if again := control.Registrations(); len(again) != 1 || again[0].Runtimes[0].RuntimeKey != "runtime-1" {
+			t.Fatalf("record after mutating the returned copy = %#v, want runtime-1", again)
+		}
+	})
+
+	t.Run("Heartbeats", func(t *testing.T) {
+		control := &ControlAPI{}
+		request := protocol.RuntimeHeartbeatRequest{RuntimeEpoch: 3, ActiveRuns: []protocol.ActiveRun{{RunID: "run-1"}}}
+		if _, err := control.Heartbeat(ctx, "runtime-1", request); err != nil {
+			t.Fatalf("Heartbeat() error = %v", err)
+		}
+		request.ActiveRuns[0].RunID = "mutated-caller"
+		recorded := control.Heartbeats()
+		if len(recorded) != 1 || recorded[0].ActiveRuns[0].RunID != "run-1" {
+			t.Fatalf("record after mutating the caller's request = %#v, want run-1", recorded)
+		}
+		recorded[0].ActiveRuns[0].RunID = "mutated-reader"
+		if again := control.Heartbeats(); len(again) != 1 || again[0].ActiveRuns[0].RunID != "run-1" {
+			t.Fatalf("record after mutating the returned copy = %#v, want run-1", again)
+		}
+	})
+
+	t.Run("AppendedEvents", func(t *testing.T) {
+		control := &ControlAPI{}
+		request := protocol.AppendEventsRequest{Fence: protocol.Fence{RuntimeID: "runtime-1"}, Events: []protocol.RunEvent{{EventID: "event-1", Sequence: 1, Kind: "output", Payload: json.RawMessage(`{"payload":true}`)}}}
+		if err := control.AppendEvents(ctx, "run-1", request); err != nil {
+			t.Fatalf("AppendEvents() error = %v", err)
+		}
+		request.Events[0].EventID = "mutated-caller"
+		request.Events[0].Payload[0] = 'X'
+		recorded := control.AppendedEvents()
+		if len(recorded) != 1 || recorded[0].Events[0].EventID != "event-1" || string(recorded[0].Events[0].Payload) != `{"payload":true}` {
+			t.Fatalf("record after mutating the caller's request = %#v, want event-1 with the original payload", recorded)
+		}
+		recorded[0].Events[0].EventID = "mutated-reader"
+		recorded[0].Events[0].Payload[0] = 'Y'
+		if again := control.AppendedEvents(); len(again) != 1 || again[0].Events[0].EventID != "event-1" || string(again[0].Events[0].Payload) != `{"payload":true}` {
+			t.Fatalf("record after mutating the returned copy = %#v, want event-1 with the original payload", again)
+		}
+	})
+
+	t.Run("Transitions", func(t *testing.T) {
+		control := &ControlAPI{}
+		request := protocol.StateTransitionRequest{Fence: protocol.Fence{RuntimeID: "runtime-1"}, TransitionID: "transition-1", State: "running", Payload: json.RawMessage(`{"payload":true}`)}
+		if err := control.Transition(ctx, "run-1", request); err != nil {
+			t.Fatalf("Transition() error = %v", err)
+		}
+		request.Payload[0] = 'X'
+		recorded := control.Transitions()
+		if len(recorded) != 1 || string(recorded[0].Payload) != `{"payload":true}` {
+			t.Fatalf("record after mutating the caller's payload = %#v, want the original payload", recorded)
+		}
+		recorded[0].Payload[0] = 'Y'
+		if again := control.Transitions(); len(again) != 1 || string(again[0].Payload) != `{"payload":true}` {
+			t.Fatalf("record after mutating the returned payload = %#v, want the original payload", again)
+		}
+	})
+
+	t.Run("Reconciliations", func(t *testing.T) {
+		control := &ControlAPI{}
+		request := protocol.ReconcileRequest{RuntimeEpoch: 3, Runs: []protocol.ReconcileRun{{RunID: "run-1", Generation: 7}}}
+		if _, err := control.Reconcile(ctx, "runtime-1", request); err != nil {
+			t.Fatalf("Reconcile() error = %v", err)
+		}
+		request.Runs[0].RunID = "mutated-caller"
+		recorded := control.Reconciliations()
+		if len(recorded) != 1 || recorded[0].Runs[0].RunID != "run-1" {
+			t.Fatalf("record after mutating the caller's request = %#v, want run-1", recorded)
+		}
+		recorded[0].Runs[0].RunID = "mutated-reader"
+		if again := control.Reconciliations(); len(again) != 1 || again[0].Runs[0].RunID != "run-1" {
+			t.Fatalf("record after mutating the returned copy = %#v, want run-1", again)
+		}
 	})
 }
 

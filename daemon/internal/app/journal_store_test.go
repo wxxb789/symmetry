@@ -192,7 +192,7 @@ func TestStorelessDaemonTakesEveryStoreNilBranch(t *testing.T) {
 				t.Fatalf("storeless containment clear = %v, want %v", err, errDaemonStoreClosing)
 			}
 		}},
-		{"cleanup_glue.go selectStoreWrite override wins without a store", func(t *testing.T, daemon *daemon) {
+		{"cleanup_glue.go selectStoreWrite hook wins with a store", func(t *testing.T, daemon *daemon) {
 			store := probeStore(t)
 			daemon.store = store
 			calls := 0
@@ -201,10 +201,10 @@ func TestStorelessDaemonTakesEveryStoreNilBranch(t *testing.T) {
 				return state.RunJournal{}, nil
 			}
 			if err := daemon.markContainmentUnprovenCallback(key)(81, "windows:81:0000000000000001"); err != nil {
-				t.Fatalf("override without a store = %v, want nil", err)
+				t.Fatalf("hook write = %v, want nil", err)
 			}
 			if calls != 1 {
-				t.Fatalf("override calls = %d, want 1", calls)
+				t.Fatalf("hook calls = %d, want 1", calls)
 			}
 		}},
 		{"cleanup_glue.go persistProcessAuthorityCallback", func(t *testing.T, daemon *daemon) {
@@ -219,7 +219,7 @@ func TestStorelessDaemonTakesEveryStoreNilBranch(t *testing.T) {
 				t.Fatalf("storeless process marker = %v, want %v", err, errDaemonStoreClosing)
 			}
 		}},
-		{"cleanup_glue.go persistProcessMarker mirror error skips the readback", func(t *testing.T, daemon *daemon) {
+		{"cleanup_glue.go persistProcessMarker hook error skips the readback", func(t *testing.T, daemon *daemon) {
 			store := probeStore(t)
 			daemon.store = store
 			store.OnSetProcessDetails = func(state.RunKey, int, string, time.Time) (state.RunJournal, error) {
@@ -227,7 +227,7 @@ func TestStorelessDaemonTakesEveryStoreNilBranch(t *testing.T) {
 			}
 			err := daemon.persistProcessMarker(key, 81, "windows:81:0000000000000001", time.Now())
 			if !errors.Is(err, errStoreCallbackProbe) {
-				t.Fatalf("marker mirror error = %v, want %v", err, errStoreCallbackProbe)
+				t.Fatalf("marker hook error = %v, want %v", err, errStoreCallbackProbe)
 			}
 		}},
 		{"cleanup_glue.go verifyDurableContainmentStopReceipt", func(t *testing.T, daemon *daemon) {

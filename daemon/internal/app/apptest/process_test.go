@@ -46,8 +46,8 @@ func TestProcessDefaultsAnswerTheMajorityBehaviour(t *testing.T) {
 
 	t.Run("ProcessDetails", func(t *testing.T) {
 		process := &Process{}
-		if pid, identity := process.ProcessDetails(); pid != DefaultProcessPID || identity != "test:42" {
-			t.Fatalf("ProcessDetails() = (%d, %q), want (%d, %q)", pid, identity, DefaultProcessPID, "test:42")
+		if pid, identity := process.ProcessDetails(); pid != 42 || identity != "test:42" {
+			t.Fatalf("ProcessDetails() = (%d, %q), want (42, %q)", pid, identity, "test:42")
 		}
 		if err := process.Terminate(ctx, time.Second); err != nil {
 			t.Fatalf("Terminate() error = %v", err)
@@ -62,8 +62,8 @@ func TestProcessDefaultsAnswerTheMajorityBehaviour(t *testing.T) {
 		if err := process.Terminate(ctx, time.Second); err != nil {
 			t.Fatalf("Terminate() error = %v", err)
 		}
-		if pid, identity := process.ProcessDetails(); pid != DefaultProcessPID || identity != "test:42" {
-			t.Fatalf("ProcessDetails() = (%d, %q), want (%d, %q)", pid, identity, DefaultProcessPID, "test:42")
+		if pid, identity := process.ProcessDetails(); pid != 42 || identity != "test:42" {
+			t.Fatalf("ProcessDetails() = (%d, %q), want (42, %q)", pid, identity, "test:42")
 		}
 	})
 }
@@ -84,6 +84,9 @@ func TestProcessHooksReplaceMethods(t *testing.T) {
 		}
 		if string(received) != "hook-input" {
 			t.Fatalf("OnWriteInput received %q, want %q", received, "hook-input")
+		}
+		if got := process.Inputs(); len(got) != 1 || string(got[0]) != "hook-input" {
+			t.Fatalf("Inputs() = %#v after a replaced WriteInput, want the recorded input", got)
 		}
 	})
 
@@ -108,6 +111,9 @@ func TestProcessHooksReplaceMethods(t *testing.T) {
 		}
 		if process.Terminated() {
 			t.Fatal("Terminated() = true although OnTerminate replaced the call")
+		}
+		if got := process.Terminations(); got != 1 {
+			t.Fatalf("Terminations() = %d after a replaced Terminate, want 1", got)
 		}
 	})
 

@@ -1,7 +1,9 @@
 package apptest
 
 import (
+	"bytes"
 	"context"
+	"slices"
 	"sync"
 	"time"
 
@@ -10,6 +12,7 @@ import (
 
 // ControlAPI is a configurable ControlAPI double. A nil hook answers with the
 // permissive behaviour most app fakes use; all methods but Dispatch record the request.
+// Every accessor returns a detached copy of the recorded request.
 type ControlAPI struct {
 	OnRegisterSession    func(context.Context, string, string, protocol.SessionRegistrationRequest) (protocol.SessionRegistrationResponse, error)
 	OnHeartbeat          func(context.Context, string, protocol.RuntimeHeartbeatRequest) (protocol.RuntimeSnapshot, error)
@@ -34,7 +37,7 @@ type ControlAPI struct {
 
 func (control *ControlAPI) RegisterSession(ctx context.Context, machineID, daemonInstanceID string, request protocol.SessionRegistrationRequest) (protocol.SessionRegistrationResponse, error) {
 	control.mu.Lock()
-	control.registrations = append(control.registrations, request)
+	control.registrations = append(control.registrations, copyRegistrationRequest(request))
 	hook := control.OnRegisterSession
 	control.mu.Unlock()
 	if hook != nil {
@@ -48,7 +51,7 @@ func (control *ControlAPI) RegisterSession(ctx context.Context, machineID, daemo
 
 func (control *ControlAPI) Heartbeat(ctx context.Context, runtimeID string, request protocol.RuntimeHeartbeatRequest) (protocol.RuntimeSnapshot, error) {
 	control.mu.Lock()
-	control.heartbeats = append(control.heartbeats, request)
+	control.heartbeats = append(control.heartbeats, copyHeartbeatRequest(request))
 	hook := control.OnHeartbeat
 	control.mu.Unlock()
 	if hook != nil {
@@ -96,7 +99,7 @@ func (control *ControlAPI) RenewLease(ctx context.Context, runID string, request
 
 func (control *ControlAPI) AppendEvents(ctx context.Context, runID string, request protocol.AppendEventsRequest) error {
 	control.mu.Lock()
-	control.appendedEvents = append(control.appendedEvents, request)
+	control.appendedEvents = append(control.appendedEvents, copyAppendEventsRequest(request))
 	hook := control.OnAppendEvents
 	control.mu.Unlock()
 	if hook != nil {
@@ -107,7 +110,7 @@ func (control *ControlAPI) AppendEvents(ctx context.Context, runID string, reque
 
 func (control *ControlAPI) Transition(ctx context.Context, runID string, request protocol.StateTransitionRequest) error {
 	control.mu.Lock()
-	control.transitions = append(control.transitions, request)
+	control.transitions = append(control.transitions, copyTransitionRequest(request))
 	hook := control.OnTransition
 	control.mu.Unlock()
 	if hook != nil {
@@ -118,7 +121,7 @@ func (control *ControlAPI) Transition(ctx context.Context, runID string, request
 
 func (control *ControlAPI) Reconcile(ctx context.Context, runtimeID string, request protocol.ReconcileRequest) (protocol.ReconcileResponse, error) {
 	control.mu.Lock()
-	control.reconciliations = append(control.reconciliations, request)
+	control.reconciliations = append(control.reconciliations, copyReconcileRequest(request))
 	hook := control.OnReconcile
 	control.mu.Unlock()
 	if hook != nil {
@@ -141,13 +144,21 @@ func (control *ControlAPI) AcknowledgeCommand(ctx context.Context, runID string,
 func (control *ControlAPI) Registrations() []protocol.SessionRegistrationRequest {
 	control.mu.Lock()
 	defer control.mu.Unlock()
-	return append([]protocol.SessionRegistrationRequest(nil), control.registrations...)
+	registrations := make([]protocol.SessionRegistrationRequest, 0, len(control.registrations))
+	for _, request := range control.registrations {
+		registrations = append(registrations, copyRegistrationRequest(request))
+	}
+	return registrations
 }
 
 func (control *ControlAPI) Heartbeats() []protocol.RuntimeHeartbeatRequest {
 	control.mu.Lock()
 	defer control.mu.Unlock()
-	return append([]protocol.RuntimeHeartbeatRequest(nil), control.heartbeats...)
+	heartbeats := make([]protocol.RuntimeHeartbeatRequest, 0, len(control.heartbeats))
+	for _, request := range control.heartbeats {
+		heartbeats = append(heartbeats, copyHeartbeatRequest(request))
+	}
+	return heartbeats
 }
 
 func (control *ControlAPI) Claims() []protocol.ClaimRequest {
@@ -165,23 +176,63 @@ func (control *ControlAPI) Renewals() []protocol.LeaseHeartbeatRequest {
 func (control *ControlAPI) AppendedEvents() []protocol.AppendEventsRequest {
 	control.mu.Lock()
 	defer control.mu.Unlock()
-	return append([]protocol.AppendEventsRequest(nil), control.appendedEvents...)
+	events := make([]protocol.AppendEventsRequest, 0, len(control.appendedEvents))
+	for _, request := range control.appendedEvents {
+		events = append(events, copyAppendEventsRequest(request))
+	}
+	return events
 }
 
 func (control *ControlAPI) Transitions() []protocol.StateTransitionRequest {
 	control.mu.Lock()
 	defer control.mu.Unlock()
-	return append([]protocol.StateTransitionRequest(nil), control.transitions...)
+	transitions := make([]protocol.StateTransitionRequest, 0, len(control.transitions))
+	for _, request := range control.transitions {
+		transitions = append(transitions, copyTransitionRequest(request))
+	}
+	return transitions
 }
 
 func (control *ControlAPI) Reconciliations() []protocol.ReconcileRequest {
 	control.mu.Lock()
 	defer control.mu.Unlock()
-	return append([]protocol.ReconcileRequest(nil), control.reconciliations...)
+	reconciliations := make([]protocol.ReconcileRequest, 0, len(control.reconciliations))
+	for _, request := range control.reconciliations {
+		reconciliations = append(reconciliations, copyReconcileRequest(request))
+	}
+	return reconciliations
 }
 
 func (control *ControlAPI) Acknowledgements() []protocol.CommandAcknowledgement {
 	control.mu.Lock()
 	defer control.mu.Unlock()
 	return append([]protocol.CommandAcknowledgement(nil), control.acknowledgements...)
+}
+
+func copyRegistrationRequest(request protocol.SessionRegistrationRequest) protocol.SessionRegistrationRequest {
+	request.Runtimes = slices.Clone(request.Runtimes)
+	return request
+}
+
+func copyHeartbeatRequest(request protocol.RuntimeHeartbeatRequest) protocol.RuntimeHeartbeatRequest {
+	request.ActiveRuns = slices.Clone(request.ActiveRuns)
+	return request
+}
+
+func copyAppendEventsRequest(request protocol.AppendEventsRequest) protocol.AppendEventsRequest {
+	request.Events = slices.Clone(request.Events)
+	for index := range request.Events {
+		request.Events[index].Payload = bytes.Clone(request.Events[index].Payload)
+	}
+	return request
+}
+
+func copyTransitionRequest(request protocol.StateTransitionRequest) protocol.StateTransitionRequest {
+	request.Payload = bytes.Clone(request.Payload)
+	return request
+}
+
+func copyReconcileRequest(request protocol.ReconcileRequest) protocol.ReconcileRequest {
+	request.Runs = slices.Clone(request.Runs)
+	return request
 }

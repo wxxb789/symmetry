@@ -135,10 +135,15 @@ divergences in §5.
 ## 5. Divergence table
 
 Rules applied: clause 1's "unmodified assertions and subtest names" was verified normalized
-(whitespace-stripped) across all 21 changed test files: the only delta is 3 added `t.Fatal(err)`
-lines in `journal_store_test.go`; no assertion text, no subtest name, no test function name, and no
-test-local `type` declaration changed anywhere (set-diff empty). Every row below is a setup or
-store-interaction change with the base and HEAD outcomes recorded.
+(whitespace-stripped) across all 21 changed test files. Re-derived at the final revision (§14's
+invariance command) the delta vs `2db5ed0c` is one added `t.Fatal(err)` line in
+`journal_store_test.go` (`:154`, inside the `probeStore` helper; the implement revision's "3 added"
+count predates the apply pass that introduced the helper, and the fix pass then renamed the
+identifiers listed in the plan's old-to-new map by the conductor ruling of 2026-11-22), with no
+test-local `type` declaration change and no other assertion or name change in the two renamed
+files. Every row below is a setup or store-interaction change with the base and HEAD outcomes
+recorded; the test names quoted in §5a/§5b are the implement-revision names (the renamed ones are
+mapped in the plan and §14).
 
 ### 5a. `store == nil` decisions (verification-amendment table)
 
@@ -193,6 +198,23 @@ No other base mirror site ran with `store == nil`.
 No assertion outcome changed. Every divergence is a test-side injection point that moved from a
 deleted mirror branch to the production write the base fallback already used; the two-step branches
 (§3 rows 22, 24, 26) existed only when a mirror was set, i.e. only in tests.
+
+### 5b-widened. Hook interception surface vs the deleted mirror (SPEC-A01)
+
+A per-method hook intercepts every `daemon.store` call of that method, not only the sites the
+per-site mirror read. Probe (base: `git grep -nE '\.RetainWorkspace\(|\.QueueTerminalTransitionAt\(|
+\.QueueGoalUsage\(' 2db5ed0c -- daemon/internal/app` plus the base mirror reads; HEAD: the same grep
+at the final tree; both filtered to non-`_test.go` files):
+
+| hook method | base mirror read sites | base store-path sites outside the mirror | HEAD `daemon.store.<method>` sites | widened by the hook |
+| --- | --- | --- | --- | --- |
+| `RetainWorkspace` | 2 (`native_run.go:727`, `supervisory.go:230`, both bound-method fallbacks) | 4 (`linux_owner_v2_linux.go:754/1008/1733`; `linux_owner_witness_linux.go:3738` keeps a local receiver and is intercepted by neither mechanism) | 5 (`linux_owner_v2_linux.go:754/1008/1733`, `native_run.go:727`, `supervisory.go:230`) | the 3 `linux_owner_v2_linux.go` sites |
+| `QueueTerminalTransitionAt` | 2 (`outbox.go:142`, `recovery.go:760`) | 1 (`outbox.go:112`) | 3 (`outbox.go:112/142`, `recovery.go:756`) | `outbox.go:112` |
+| `QueueGoalUsage` | 3 (`native_run.go:1022/1040/1084`) | 1 (`recovery_glue.go:811`) | 2 (`native_run.go:1025`, `recovery_glue.go:808`) | `recovery_glue.go:808`; the two mirror-only two-step sites are gone with §3 rows 22/24 |
+
+Reach for the other 24 hooks is the mirror site set (§4). No assertion outcome changes: the extra
+sites are reached by the same tests only through the daemon's single store, and the full suite is
+green at the final tree (§14). No migrated test asserted a call count at a widened site.
 
 ### 5c. Per-file fakes that stay local
 
@@ -262,7 +284,12 @@ the in-process handoff control an app test can install today is the FaultStore h
 ## 6. Base-vs-HEAD control-flow audit per deleted fake (lesson 32)
 
 No test-local type was deleted, added or renamed in the slice, and no test function was deleted,
-added or renamed (set diffs of `^type ` and `^func Test` over the 21 changed files are empty). The
+added or renamed (set diffs of `^type ` and `^func Test` over the 21 changed files are empty). That
+holds for the implement revision `b7d42074`; re-derived at the final revision (§14's invariance
+command) the apply pass added one test function (`TestNativeUsageSettlementAttemptRouting`, §13)
+and the fix pass added `TestControlAPINestedRecordsAreDetachedCopies` and renamed
+`TestStoreCallbackObserversFollowTheOverride` to `TestStoreCallbackObserversFollowTheHook` by the
+conductor ruling (plan map), while the `^type ` set diff over the 21 files stayed empty. The
 base-vs-HEAD control-flow audit therefore covers the one migration with internal branching — the
 `queueGoalUsage` two-step hooks — and the `FaultStore` delegations:
 
@@ -343,11 +370,11 @@ delivered (uncommitted) tree; the Windows suite and the WSL race suite never ran
 | vet, GOOS=windows | `GOOS=windows GOARCH=amd64 go vet ./internal/app/` | exit 0 |
 | builds | `GOOS=linux GOARCH=amd64 go build ./...`, `GOOS=windows GOARCH=amd64 go build ./...`, `GOOS=darwin GOARCH=amd64 go build ./...` | exit 0 each |
 | apptest import boundary | `go list -deps ./internal/app/apptest \| grep "symmetry/daemon/internal/app"` | only `.../internal/app/apptest` itself |
-| assertion/subtest-name invariance | one normalized set diff per changed test file — `diff <(git show 2db5ed0c:"$f" \| grep -E 't\.(Fatalf\|Fatal\|Errorf\|Error\|Skip\|Skipf)\(\|t\.Run\(\|name: "' \| sed 's/^[[:space:]]*//' \| sort) <(grep -E <same> "$f" \| sed <same> \| sort)` — plus the same over `^(type \|func Test)` | only 3 added `t.Fatal(err)` in `journal_store_test.go`; type and test-name set diffs empty |
+| assertion/subtest-name invariance | one normalized set diff per changed test file — `diff <(git show 2db5ed0c:"$f" \| grep -E 't\.(Fatalf\|Fatal\|Errorf\|Error\|Skip\|Skipf)\(\|t\.Run\(\|name: "' \| sed 's/^[[:space:]]*//' \| sort) <(grep -E <same> "$f" \| sed <same> \| sort)` — plus the same over `^(type \|func Test)` | implemented revision row: only 3 added `t.Fatal(err)` in `journal_store_test.go`; type and test-name set diffs empty. Corrected at the final revision (SPEC-A01): one added `t.Fatal(err)` (`journal_store_test.go:154`, the new `probeStore` helper; §13's `journal_store_test.go` "identical" row is scoped to the apply base `635c3f69`), the §14 ruled renames, and the two added test functions of §13/§14; the `^type ` set diff stayed empty. Exact final-tree output: §14 |
 | Windows suite | `go test -count=1 -timeout 1200s ./internal/app/...` | final tree: `ok .../internal/app 494.980s`; `ok .../internal/app/apptest 2.527s`; exit 0; 0 `--- FAIL` lines. Earlier green run on the pre-lint-fix tree: `ok .../internal/app 418.945s`; `ok .../internal/app/apptest 4.071s` |
 | suite-timeout note | first attempt without `-timeout` aborted at `panic: test timed out after 10m0s` (601.008s) while `TestDurablePiProviderBridgeExecutorReservesCompletionCapacityBeforeDispatch` was 4 s in, with **no** failing test before it; that run also overlapped foreground `go vet`/`go build` gates (CPU contention) | recorded; CI uses `-timeout 1200s` (`ci.yml:681`) |
 | earlier partial run | the same suite at `-timeout 1200s` completed in 541 s and exposed the one real failure fixed in §5a (`TestStoreCallbackFactoriesRefuseClosingStore`, 1 `--- FAIL`) | fixed; rerun above = green |
-| WSL race | `wsl -d Ubuntu-24.04 -u accept -- bash -lc 'cd /mnt/q/repos/wt-w4-12b-app-fault-store/symmetry/daemon && go test -count=1 -race -timeout 3000s ./internal/app/... ./internal/platform/... ./internal/execution/...'` | `ok .../internal/app 1138.724s`; `ok .../internal/app/apptest 2.101s`; `ok .../internal/platform 67.882s`; `ok .../internal/execution 24.494s`; exit 0; 0 `--- FAIL`, 0 `WARNING: DATA RACE` |
+| WSL race | `wsl -d Ubuntu-24.04 -u accept -- bash -lc 'cd <worktree>/daemon && go test -count=1 -race -timeout 3000s ./internal/app/... ./internal/platform/... ./internal/execution/...'` | `ok .../internal/app 1138.724s`; `ok .../internal/app/apptest 2.101s`; `ok .../internal/platform 67.882s`; `ok .../internal/execution 24.494s`; exit 0; 0 `--- FAIL`, 0 `WARNING: DATA RACE` |
 | WSL race, first attempt | same command with `-timeout 1200s` | `FAIL .../internal/app 1200.179s` (timeout panic; the same `TestDurablePiProviderBridgeExecutorReservesCompletionCapacityBeforeDispatch` was 6 s in at the deadline; platform/execution/apptest ok); no failing test before the deadline, no data race. CI's runner reports ~386 s for this package; this WSL needs ~1139 s |
 | R9 | `python scripts/ci/test-omo-control-native-evidence.py` | `Ran 15 tests ... OK`, exit 0 |
 | lint ratchet | `GOOS=linux golangci-lint run --config .golangci.yml --max-issues-per-linter=0 --max-same-issues=0 ./internal/app/...` (local golangci-lint 2.15.0 = the CI pin), at base (`2db5ed0c` scratch tree) and HEAD | base 146 findings; HEAD 145 (one new S1021 fixed, see below); `internal/app/apptest` = **0** findings; no new finding of any category at HEAD |
@@ -476,3 +503,97 @@ place; no other §1-§12 number required a change.
 | lint ratchet | `GOOS=linux golangci-lint run --config .golangci.yml --max-issues-per-linter=0 --max-same-issues=0 ./internal/app/...` | 145 issues, `internal/app/apptest` = 0 findings (equal to the implement-stage final count); one QF1001 the apply had introduced in the first helper shape was removed before this run |
 | assertion/subtest-name invariance | per-file normalized set diff vs `635c3f69` (the §9 one-liner) | only additions inside the new routing test in `goal_delivery_test.go`; `harness_test.go`, `cleanup_test.go`, `journal_store_test.go`, `export_test.go` sets identical |
 | receiver-method counts | the §7 statement, app-only and module-wide | identical to the §7 columns for all 14 methods |
+
+## 14. Fix pass (2026-11-22)
+
+Findings: `.../findings/rf-w4-12b-app-fault-store-fix1.md`; review artifact:
+`.../2026-11-22/symmetry-rf-w4-12b-app-fault-store-review/answer.md` (STD-A01–A04, SPEC-A01).
+Base of this pass: the §13 apply revision at `f0111f0f`. The pass changes 6 tracked code files
+(all test or test-support: `internal/app/apptest/{control.go,control_test.go,faultstore_test.go,
+process_test.go}`, `internal/app/{journal_store_test.go,process_persistence_test.go}`) plus this
+record and the plan; no production file is touched (`git diff --shortstat -- daemon` at the repo
+root: 6 files changed, 471 insertions(+), 102 deletions(-); code-only hash
+`git diff -- daemon | sha256sum` =
+`de9a443ebf9a66dac18a2c5b71af37a010c6061cb541d3b74ae52894b08fd8a6`). Mutant logs and the
+pre-fix/frozen sha256 sets were kept in the operator's scratch directory and are not committed.
+
+### 14.1 Per-finding outcome
+
+| finding | change | observed before-state | proof at the final tree |
+| --- | --- | --- | --- |
+| STD-A01 | the eight ruled renames (plan "Old → new name map") | the names reported `override`/`mirror` for hook injection; clause 3 froze them until the conductor ruling of 2026-11-22 | `grep -rn 'installOverride\|TestStoreCallbackObserversFollowTheOverride\|store callback override probe\|selectStoreWrite override wins\|marker mirror error\|override without a store = ' daemon --include='*.go'` = 0 matches (exit 1); §14.3 shows no other change in the two files |
+| STD-A02 | `apptest/process_test.go` asserts the literal `(42, "test:42")` pair in both subtests | with the constant flipped to 43 the existing test stayed green (M1 baseline, exit 0) | M1 red (§14.2) |
+| STD-A03 | all 27 delegation rows take non-zero arguments; 23 rows seed a fixture that makes the call succeed and assert `err == nil` plus a non-zero journal; the direct comparison runs on a second identically seeded store | the two named mutants stayed green (M2/M3 baselines, exit 0): zero-value arguments made both sides return zero journals and the same error text | M2/M3 red (§14.2); `TestFaultStoreNilHookDelegatesEveryWrite` green with 23/27 rows over a seeded fixture |
+| STD-A04 | recording assertions under a set hook (`ControlAPI.Claim`, `Process.WriteInput`, `Process.Terminate`); record-time and accessor-time copies of the nested slices/byte payloads in `apptest/control.go`; new `TestControlAPINestedRecordsAreDetachedCopies` | M4/M5 stayed green on the unfixed tree; the nested test was written first and failed on the unfixed tree in all 5 subtests (caller mutation reached the record through the shared inner slice) | M4/M5/M6a/M6b red (§14.2); nested test green; `apptest` coverage 99.6% (§14.4) |
+| SPEC-A01 | the §5/§5a/§5b/§6/§9 corrections above and the new §5b-widened table | §9 claimed "3 added `t.Fatal(err)`" (final measured 1, `journal_store_test.go:154`) and §6 claimed no test function was added while the apply had added one; the widened hook reach was only implicit | the re-derived invariance output is §14.3; the widen rows cite the base/final call-site probes in §5b-widened |
+
+### 14.2 Mutant rows (all reverted; frozen hashes verified)
+
+Every mutant was applied to the final code, run, reverted, and the tree re-verified with
+`sha256sum -c` over the seven frozen files (OK) plus `gofmt -l` (empty). "Baseline" is the same
+mutant on the pre-fix tree before any fix edit.
+
+| # | mutant | observing command (cwd `daemon/`) | pre-fix baseline | final tree |
+| --- | --- | --- | --- | --- |
+| M1 | `apptest/process.go`: `DefaultProcessPID` 42 -> 43 | `go test -count=1 -run TestProcessDefaultsAnswerTheMajorityBehaviour ./internal/app/apptest/` | ok, exit 0 | exit 1; `process_test.go:50`/`:66`: `ProcessDetails() = (43, "test:42"), want (42, "test:42")` |
+| M2 | `apptest/faultstore.go`: `RetainWorkspace` delegates to `store.Store.MarkCommandAcknowledgementsDelivered(key, nil)` | `go test -count=1 -run TestFaultStoreNilHookDelegatesEveryWrite ./internal/app/apptest/` | ok, exit 0 | exit 1; `TestFaultStoreNilHookDelegatesEveryWrite/RetainWorkspace` journal mismatch (the retention flag is not set) |
+| M3 | `apptest/faultstore.go`: `SetWorkspacePath` passes `""` instead of `path` | same command | ok, exit 0 | exit 1; `.../SetWorkspacePath`: `error = workspace path is invalid over a seeded fixture, want nil` |
+| M4 | `apptest/control.go`: `Claim` appends the claim only when `OnClaim` is nil | `go test -count=1 -run TestControlAPIHooksReplaceMethods ./internal/app/apptest/` | ok, exit 0 | exit 1; `.../Claim`: `recorded []protocol.ClaimRequest(nil), want the request` |
+| M5 | `apptest/process.go`: `WriteInput` records only when `OnWriteInput` is nil | `go test -count=1 -run TestProcessHooksReplaceMethods ./internal/app/apptest/` | ok, exit 0 | exit 1; `.../WriteInput`: `Inputs() = [][]uint8{} after a replaced WriteInput, want the recorded input` |
+| M6a | `apptest/control.go`: `RegisterSession` records the caller's request without a copy (the pre-fix state of that line) | `go test -count=1 -run TestControlAPINestedRecordsAreDetachedCopies ./internal/app/apptest/` | red before the fix: all 5 subtests failed, first line `record after mutating the caller's request = ... RuntimeKey:"mutated-caller", want runtime-1` | exit 1; `.../Registrations`: same caller-mutation line |
+| M6b | `apptest/control.go`: `Registrations()` returns the recorded element without a copy | same command | n/a (single-store pre-fix state) | exit 1; `.../Registrations`: `record after mutating the returned copy = ... RuntimeKey:"mutated-reader", want runtime-1` |
+
+### 14.3 Assertion/name invariance at the final tree
+
+Command (cwd `daemon/`; the §9 one-liner plus the `^type `/`^func Test` set diff):
+
+```
+norm(){ grep -E 't\.(Fatalf|Fatal|Errorf|Error|Skip|Skipf)\(|t\.Run\(|name: "' "$1" | sed 's/^[[:space:]]*//' | sort; }
+for f in journal_store_test.go process_persistence_test.go; do
+  diff <(git show 2db5ed0c:daemon/internal/app/$f | norm /dev/stdin) <(norm internal/app/$f)
+  diff <(git show 2db5ed0c:daemon/internal/app/$f | grep -E '^(type |func Test)' | sort) <(grep -E '^(type |func Test)' internal/app/$f | sort)
+done
+```
+
+`journal_store_test.go`: one added `t.Fatal(err)` (`:154`, `probeStore` helper) and the three
+messages of the plan's map (rows 2/3/5); `process_persistence_test.go`: one renamed test function
+(map row 6; the sentinel text and `installHook` renames are identifier/string changes outside these
+patterns and are pinned by the map); `^type ` and all other name sets identical. `git status
+--porcelain` at handoff lists only the 8 changed files of this pass.
+
+### 14.4 Final-tree gates
+
+Working directory `daemon/` unless stated; run after the fix edits and again after the mutant
+sweep (the seven frozen sha256s matched). WSL race, production R2 coverage, R9 and the lint
+ratchet were not re-run: this pass changes no production file (`git diff --stat`: test files and
+records only), so their subjects are unchanged from §9/§13/§10; `apptest`'s own coverage was
+re-measured.
+
+| gate | command | result |
+| --- | --- | --- |
+| gofmt | `gofmt -l internal/app internal/app/apptest` | empty, exit 0 |
+| whitespace | `git diff --check` (repo root) | empty, exit 0 |
+| mirror census | the §2 statement (repo root) | no match, exit 1 |
+| override mechanism | `rg -n 'storeCallbackWrite' daemon/internal/app` (repo root) | no match, exit 1 |
+| old identifiers | `grep -rn '<the eight old names>' daemon --include='*.go'` | 0 matches, exit 1 |
+| apptest import boundary | `go list -deps ./internal/app/apptest \| grep 'symmetry/daemon/internal/app'` | only `.../internal/app/apptest` itself, exit 0 |
+| vet | `go vet ./...`; `GOOS=linux\|windows GOARCH=amd64 go vet ./internal/app/` | exit 0 each |
+| builds | `GOOS=linux\|windows\|darwin GOARCH=amd64 go build ./...` | exit 0 each |
+| apptest suite | `go test -count=1 ./internal/app/apptest/` | `ok ... 7.731s`, exit 0 |
+| apptest coverage | `go test -count=1 -cover ./internal/app/apptest/` | `ok ... 4.868s coverage: 99.6% of statements`, exit 0 (unchanged) |
+| renamed focused tests | `go test -count=1 -run 'TestStorelessDaemonTakesEveryStoreNilBranch\|TestStoreCallbackFactoriesRefuseClosingStore\|TestStoreCallbackObserversFollowTheHook\|TestStoreCallbackFactoriesCloneCallerArguments\|TestPersistProcessAuthorityCallbackDoesNotCallMarkerOverride' ./internal/app/` | `ok ... 1.026s`, exit 0 |
+| Windows suite | `go test -count=1 -timeout 1800s ./internal/app/...` | `ok .../internal/app 281.482s`; `ok .../internal/app/apptest 6.357s`, exit 0 |
+| test-function counts | `git grep -h '^func Test'` HEAD vs worktree | `internal/app` 688 -> 688; `internal/app/apptest` 13 -> 14 (`TestControlAPINestedRecordsAreDetachedCopies`) |
+| record host paths | the conductor brief's host-path pattern (drive-letter absolute paths; the `/mnt`, `/tmp` and `/home` prefixes) applied to both record files | no match, exit 0; the branch-range diff (`54026392` to the working tree) holds no user-profile path |
+| DLP trigger | the conductor brief's trigger (a backslash immediately followed by the letter `u`) over the branch-range additions | 0 matches |
+
+### 14.5 Changed files of this pass
+
+| file | lines | sha256 |
+| --- | --- | --- |
+| `daemon/internal/app/apptest/control.go` | 238 | `31c86defe52e1054b271baef62d023cd753a540874985de7ccad7b05fb09db49` |
+| `daemon/internal/app/apptest/control_test.go` | 530 | `98d42ba15bbdb79e4b5f2d76c9f882aa914226388eaab8236894057890c89834` |
+| `daemon/internal/app/apptest/faultstore_test.go` | 772 | `97c2087fdf8e24e35bcd0626e8a5c89087d0ef484e59b1005289a2a351ddd4d4` |
+| `daemon/internal/app/apptest/process_test.go` | 177 | `d57e415b9345346fd36c73b2f3e01e518b43d3705ccbb2a611fab1cfce53ae7b` |
+| `daemon/internal/app/journal_store_test.go` | 448 | `746a4578013d85f012043ebeac315cd72d906dbadd0b5b1f198901fc68047a75` |
+| `daemon/internal/app/process_persistence_test.go` | 896 | `a052ab34866664376c1fde1ac478f13e44ad24c9df089d727a585f61ae4a58aa` |

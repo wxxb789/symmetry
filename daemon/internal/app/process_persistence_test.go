@@ -406,7 +406,7 @@ func TestStoreCallbackFactoriesRefuseClosingStore(t *testing.T) {
 			closing := &daemon{store: fault}
 			closing.storeClosing = true
 			var closingObserved storeCallbackObservations
-			pin.installOverride(fault, closing, &closingObserved)
+			pin.installHook(fault, closing, &closingObserved)
 			if err := pin.invoke(closing); !errors.Is(err, errDaemonStoreClosing) || err != errDaemonStoreClosing {
 				t.Fatalf("closing store: error = %v, want the unwrapped sentinel %v", err, errDaemonStoreClosing)
 			}
@@ -426,7 +426,7 @@ func TestStoreCallbackFactoriesRefuseClosingStore(t *testing.T) {
 
 			var overrideObserved storeCallbackObservations
 			overrideOnly := &daemon{store: fault}
-			pin.installOverride(fault, overrideOnly, &overrideObserved)
+			pin.installHook(fault, overrideOnly, &overrideObserved)
 			if err := pin.invoke(overrideOnly); !errors.Is(err, errStoreCallbackProbe) {
 				t.Fatalf("override without a store: error = %v, want %v", err, errStoreCallbackProbe)
 			}
@@ -478,7 +478,7 @@ func TestStoreCallbackFactoriesHoldStoreLifetimeReadLock(t *testing.T) {
 		t.Run(pin.name, func(t *testing.T) {
 			app := &daemon{store: fault}
 			var observed storeCallbackObservations
-			pin.installOverride(fault, app, &observed)
+			pin.installHook(fault, app, &observed)
 			if err := pin.invoke(app); !errors.Is(err, errStoreCallbackProbe) {
 				t.Fatalf("override error = %v, want %v", err, errStoreCallbackProbe)
 			}
@@ -502,7 +502,7 @@ func TestStoreCallbackFactoriesCloneCallerArguments(t *testing.T) {
 			app := &daemon{store: fault}
 			var received []*uint32
 			invoke, callerSessionID, mutateCaller := pin.buildCaller()
-			pin.installOverride(fault, &received, mutateCaller)
+			pin.installHook(fault, &received, mutateCaller)
 
 			original := sessionIDOf(callerSessionID)
 			if err := invoke(app); !errors.Is(err, errStoreCallbackProbe) {
@@ -524,7 +524,7 @@ func TestStoreCallbackFactoriesCloneCallerArguments(t *testing.T) {
 	}
 }
 
-func TestStoreCallbackObserversFollowTheOverride(t *testing.T) {
+func TestStoreCallbackObserversFollowTheHook(t *testing.T) {
 	store, key := claimedStore(t)
 	defer store.Close()
 	fault := apptest.NewFaultStoreFrom(store)
@@ -633,7 +633,7 @@ func testAppHandoffFixture(pid int, identity string) authority.SupervisorHandoff
 	}
 }
 
-var errStoreCallbackProbe = errors.New("store callback override probe")
+var errStoreCallbackProbe = errors.New("store callback hook probe")
 
 type storeCallbackObservations struct {
 	calls    int
@@ -643,17 +643,17 @@ type storeCallbackObservations struct {
 type storeCallbackPin struct {
 	name string
 
-	wantCalls       int
-	installOverride func(store *apptest.FaultStore, app *daemon, observed *storeCallbackObservations)
-	invoke          func(app *daemon) error
+	wantCalls   int
+	installHook func(store *apptest.FaultStore, app *daemon, observed *storeCallbackObservations)
+	invoke      func(app *daemon) error
 }
 
 type storeCallbackClonePin struct {
 	name string
 
-	wantCalls       int
-	installOverride func(store *apptest.FaultStore, received *[]*uint32, mutateCaller func())
-	buildCaller     func() (invoke func(app *daemon) error, callerSessionID *uint32, mutateCaller func())
+	wantCalls   int
+	installHook func(store *apptest.FaultStore, received *[]*uint32, mutateCaller func())
+	buildCaller func() (invoke func(app *daemon) error, callerSessionID *uint32, mutateCaller func())
 }
 
 func storeCallbackPins(key state.RunKey) []storeCallbackPin {
@@ -661,7 +661,7 @@ func storeCallbackPins(key state.RunKey) []storeCallbackPin {
 		{
 			name:      "persistProcessAuthorityCallback",
 			wantCalls: 2,
-			installOverride: func(store *apptest.FaultStore, app *daemon, observed *storeCallbackObservations) {
+			installHook: func(store *apptest.FaultStore, app *daemon, observed *storeCallbackObservations) {
 				store.OnSetProcessDetailsWithAuthority = func(state.RunKey, int, string, time.Time, authority.Supervisor) (state.RunJournal, error) {
 					return state.RunJournal{}, observeStoreCallback(app, observed)
 				}
@@ -674,7 +674,7 @@ func storeCallbackPins(key state.RunKey) []storeCallbackPin {
 		{
 			name:      "markContainmentUnprovenCallback",
 			wantCalls: 1,
-			installOverride: func(store *apptest.FaultStore, app *daemon, observed *storeCallbackObservations) {
+			installHook: func(store *apptest.FaultStore, app *daemon, observed *storeCallbackObservations) {
 				store.OnMarkContainmentUnproven = func(state.RunKey, int, string) (state.RunJournal, error) {
 					return state.RunJournal{}, observeStoreCallback(app, observed)
 				}
@@ -686,7 +686,7 @@ func storeCallbackPins(key state.RunKey) []storeCallbackPin {
 		{
 			name:      "clearContainmentUnprovenCallback",
 			wantCalls: 1,
-			installOverride: func(store *apptest.FaultStore, app *daemon, observed *storeCallbackObservations) {
+			installHook: func(store *apptest.FaultStore, app *daemon, observed *storeCallbackObservations) {
 				store.OnClearContainmentUnproven = func(state.RunKey, int, string) (state.RunJournal, error) {
 					return state.RunJournal{}, observeStoreCallback(app, observed)
 				}
@@ -698,7 +698,7 @@ func storeCallbackPins(key state.RunKey) []storeCallbackPin {
 		{
 			name:      "persistContainmentStopReceiptCallback",
 			wantCalls: 1,
-			installOverride: func(store *apptest.FaultStore, app *daemon, observed *storeCallbackObservations) {
+			installHook: func(store *apptest.FaultStore, app *daemon, observed *storeCallbackObservations) {
 				store.OnRecordContainmentStopReceipt = func(state.RunKey, int, string, authority.StopReceipt) (state.RunJournal, error) {
 					return state.RunJournal{}, observeStoreCallback(app, observed)
 				}
@@ -711,7 +711,7 @@ func storeCallbackPins(key state.RunKey) []storeCallbackPin {
 		{
 			name:      "prepareSupervisorHandoffCallback",
 			wantCalls: 1,
-			installOverride: func(store *apptest.FaultStore, app *daemon, observed *storeCallbackObservations) {
+			installHook: func(store *apptest.FaultStore, app *daemon, observed *storeCallbackObservations) {
 				store.OnPrepareSupervisorHandoff = func(state.RunKey, authority.SupervisorHandoff) (state.RunJournal, error) {
 					return state.RunJournal{}, observeStoreCallback(app, observed)
 				}
@@ -723,7 +723,7 @@ func storeCallbackPins(key state.RunKey) []storeCallbackPin {
 		{
 			name:      "bindSupervisorHandoffCallback",
 			wantCalls: 1,
-			installOverride: func(store *apptest.FaultStore, app *daemon, observed *storeCallbackObservations) {
+			installHook: func(store *apptest.FaultStore, app *daemon, observed *storeCallbackObservations) {
 				store.OnBindSupervisorHandoff = func(state.RunKey, authority.SupervisorHandoff, int, string) (state.RunJournal, error) {
 					return state.RunJournal{}, observeStoreCallback(app, observed)
 				}
@@ -735,7 +735,7 @@ func storeCallbackPins(key state.RunKey) []storeCallbackPin {
 		{
 			name:      "commitSupervisorHandoffCallback",
 			wantCalls: 1,
-			installOverride: func(store *apptest.FaultStore, app *daemon, observed *storeCallbackObservations) {
+			installHook: func(store *apptest.FaultStore, app *daemon, observed *storeCallbackObservations) {
 				store.OnCommitSupervisorHandoff = func(state.RunKey, authority.SupervisorHandoff, time.Time) (state.RunJournal, error) {
 					return state.RunJournal{}, observeStoreCallback(app, observed)
 				}
@@ -747,7 +747,7 @@ func storeCallbackPins(key state.RunKey) []storeCallbackPin {
 		{
 			name:      "clearSupervisorHandoffCallback",
 			wantCalls: 1,
-			installOverride: func(store *apptest.FaultStore, app *daemon, observed *storeCallbackObservations) {
+			installHook: func(store *apptest.FaultStore, app *daemon, observed *storeCallbackObservations) {
 				store.OnClearSupervisorHandoff = func(state.RunKey, authority.SupervisorHandoff, authority.SupervisorHandoffReleaseProof) (state.RunJournal, error) {
 					return state.RunJournal{}, observeStoreCallback(app, observed)
 				}
@@ -759,7 +759,7 @@ func storeCallbackPins(key state.RunKey) []storeCallbackPin {
 		{
 			name:      "clearSupervisorHandoffAfterAbortCallback",
 			wantCalls: 1,
-			installOverride: func(store *apptest.FaultStore, app *daemon, observed *storeCallbackObservations) {
+			installHook: func(store *apptest.FaultStore, app *daemon, observed *storeCallbackObservations) {
 				store.OnClearSupervisorHandoffAfterAbort = func(state.RunKey, authority.SupervisorHandoff, authority.SupervisorHandoffAbortProof) (state.RunJournal, error) {
 					return state.RunJournal{}, observeStoreCallback(app, observed)
 				}
@@ -776,7 +776,7 @@ func storeCallbackClonePins(key state.RunKey) []storeCallbackClonePin {
 		{
 			name:      "persistProcessAuthorityCallback",
 			wantCalls: 2,
-			installOverride: func(store *apptest.FaultStore, received *[]*uint32, mutateCaller func()) {
+			installHook: func(store *apptest.FaultStore, received *[]*uint32, mutateCaller func()) {
 				store.OnSetProcessDetailsWithAuthority = func(_ state.RunKey, _ int, _ string, _ time.Time, got authority.Supervisor) (state.RunJournal, error) {
 					*received = append(*received, got.CreatorSessionID)
 					if len(*received) == 1 {
@@ -860,7 +860,7 @@ func handoffClonePin(name string, setOverride func(store *apptest.FaultStore, ov
 	return storeCallbackClonePin{
 		name:      name,
 		wantCalls: 1,
-		installOverride: func(store *apptest.FaultStore, received *[]*uint32, _ func()) {
+		installHook: func(store *apptest.FaultStore, received *[]*uint32, _ func()) {
 			setOverride(store, func(got authority.SupervisorHandoff) (state.RunJournal, error) {
 				*received = append(*received, got.CreatorSessionID)
 				return state.RunJournal{}, errStoreCallbackProbe

@@ -152,7 +152,7 @@ behaviour is pinned by `process_test.go` and mutant (c).
   builds; Windows `go test -count=1 -timeout 1200s ./internal/app/...` (the repo's CI budget,
   `ci.yml:681`; the default 10m timeout aborts this host at 601 s mid-suite with no failing test —
   observed, evidence §9); WSL
-  `wsl -d Ubuntu-24.04 -u accept` `cd /mnt/q/repos/wt-w4-12b-app-fault-store/symmetry/daemon &&
+  `wsl -d Ubuntu-24.04 -u accept` `cd <worktree>/daemon &&
   go test -count=1 -race -timeout 3000s
   ./internal/app/... ./internal/platform/... ./internal/execution/...`.
   (CI's race step keeps a 600 s budget on its runner, `ci.yml:1121`; this host's WSL race leg for
@@ -195,3 +195,35 @@ S7 (`apptest/control.go` doc corrected), D1 and D2 record corrections. Rejected:
 (cross-file rename churn; every file already uses one name for the double, and the finding itself
 recommends skipping). Gate outputs and the apply revision identity:
 `docs/evidence/rf-w4-12b-app-fault-store-2026-11-22.md` §13.
+
+## Fix pass (2026-11-22)
+
+Findings file: `.../findings/rf-w4-12b-app-fault-store-fix1.md`; review artifact:
+`.../2026-11-22/symmetry-rf-w4-12b-app-fault-store-review/answer.md` (STD-A01–A04, SPEC-A01).
+Fixes: STD-A01 renames below; STD-A02 literal `42` expectations in `apptest/process_test.go`;
+STD-A03 non-zero delegation fixtures and seeds in `apptest/faultstore_test.go` (23 of 27 rows now
+call successfully over a seeded fixture and assert a non-zero journal; error-text comparison
+remains because two independent calls never share a fresh error value); STD-A04 recording
+assertions on the hook path plus detached-copy recorders and a nested-copy test in
+`apptest/control.go`/`control_test.go`; SPEC-A01 record corrections and the widened-hook
+divergence rows in the evidence record (§14). Per-finding evidence, mutant rows and gate outputs:
+`docs/evidence/rf-w4-12b-app-fault-store-2026-11-22.md` §14.
+
+### Old → new name map (conductor ruling 2026-11-22 on review STD-A01)
+
+For the renamed sites the assertions and bodies stay byte-identical; only the identifiers below
+were renamed so the names describe the hook injection the bodies perform. `git diff
+2db5ed0c..HEAD -- daemon/internal/app` shows no other name, message or assertion change in those
+two files (evidence §14, invariance command). The apptest double unit tests are separate: the
+fix pass strengthens them (STD-A02–A04) and adds `TestControlAPINestedRecordsAreDetachedCopies`.
+
+| # | file | old | new |
+| --- | --- | --- | --- |
+| 1 | `journal_store_test.go` subtest name | `cleanup_glue.go selectStoreWrite override wins without a store` | `cleanup_glue.go selectStoreWrite hook wins with a store` |
+| 2 | `journal_store_test.go` message | `override without a store = %v, want nil` | `hook write = %v, want nil` |
+| 3 | `journal_store_test.go` message | `override calls = %d, want 1` | `hook calls = %d, want 1` |
+| 4 | `journal_store_test.go` subtest name | `cleanup_glue.go persistProcessMarker mirror error skips the readback` | `cleanup_glue.go persistProcessMarker hook error skips the readback` |
+| 5 | `journal_store_test.go` message | `marker mirror error = %v, want %v` | `marker hook error = %v, want %v` |
+| 6 | `process_persistence_test.go` test function | `TestStoreCallbackObserversFollowTheOverride` | `TestStoreCallbackObserversFollowTheHook` |
+| 7 | `process_persistence_test.go` sentinel text | `store callback override probe` | `store callback hook probe` |
+| 8 | `process_persistence_test.go` fields | `storeCallbackPin.installOverride`, `storeCallbackClonePin.installOverride` | `storeCallbackPin.installHook`, `storeCallbackClonePin.installHook` (17 use sites) |
