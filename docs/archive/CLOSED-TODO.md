@@ -4653,8 +4653,9 @@ user (probe run `45169655828`: `55200:55200 200` and that user can open it for w
 diagnostic in run `45169868354`: `52000:52000 200` while the unit's own `cgroup.kill` stays
 `0:0 200`; refusal recorded in run `45164286155`). Making a credentialed run pass that step needed
 a production-side decision (installer re-chown once the subgroup exists, a reviewed preflight
-change, or a host whose systemd keeps the control root-owned). The entry text landed only on the
-unmerged branch `refactor/rf-acc-native-hosted-run`; it is not in `docs/TODO.md` at `b9d4b4a4`.
+change, or a host whose systemd keeps the control root-owned). The entry text landed on main as
+`dd758599` (#270, `refactor/rf-acc-native-hosted-run`) while this slice was in flight; it is not in
+`docs/TODO.md` at `b9d4b4a4`.
 
 **Closed (2026-11-23, branch `refactor/rf-acc-delegated-cgroup-kill`, base `b9d4b4a4`, plan
 `docs/plans/2026-11-23-rf-acc-delegated-cgroup-kill-plan.md`, record
@@ -4691,6 +4692,5 @@ capability) was never demonstrated live — a capable A client is refused earlie
 discovery (`sendmsg: broken pipe`; the refusing check was not identified, record sections 9 and
 11) — so on every known host state the probe is defense-in-depth beyond the metadata rule, and its
 decisions and derived-path wiring are now covered hermetically (record section 13); and the
-rf-acc-native-hosted-run paragraph, if it
-lands after this goal, records the decision as open while this entry and the goal record carry the
-closure.
+rf-acc-native-hosted-run paragraph, landed with #270 while this slice was in flight, records the
+decision as open while this entry and the goal record carry the closure.

@@ -3,7 +3,8 @@
 Contract: `goal-rf-acc-delegated-cgroup-kill.md` (GDD state root, external to the repository), with
 its binding conductor decision (option b, retarget and relax). Plan:
 `docs/plans/2026-11-23-rf-acc-delegated-cgroup-kill-plan.md`. Base revision:
-`b9d4b4a4cfff1467ce9bbd24c127107c884fd077` (#266; `refactor/rf-acc-native-hosted-run` is unmerged).
+`b9d4b4a4cfff1467ce9bbd24c127107c884fd077` (#266; `refactor/rf-acc-native-hosted-run` landed on
+main as `dd758599`, #270).
 Branch: `refactor/rf-acc-delegated-cgroup-kill`. Host: Windows, Go 1.27.4; the Linux rows ran on
 WSL2 Ubuntu 24.04 (Go 1.27.0) over the same worktree through its mount point, and the live rows ran
 on a second, disposable WSL2 Ubuntu 24.04 distro that carries a real v2 owner install (`systemd 255
@@ -17,11 +18,17 @@ on a second, disposable WSL2 Ubuntu 24.04 distro that carries a real v2 owner in
 | --- | --- |
 | `daemon/internal/linuxpreflight/cgroup_linux.go` | `69b0e0f9ed5c76a2e2278fb50dee72b92065ef34f2989cbb3b40afcb858c9fd9` |
 | `daemon/internal/linuxpreflight/preflight_linux_test.go` | `d06bb55f2f8f4f1a30f0d16f12d22f0184e9aa715a78230e802cae8619f96443` |
-| `docs/TODO.md` | `e00a0692942b9482624792a7fb6c2f25f1233ee76dbe88a22f2f4a8b5ace1a36` |
-| `docs/archive/CLOSED-TODO.md` | `3a132eed66efdc7155042d46d440dd8a5d0b47a0b31e7e34ec6b7e02868427df` |
 | `docs/evidence/goal-0006-linux-owner-design-2026-09-22.md` | `3e62bfdbedf0c1c5eb90d73200eafab52836c69e03e6ca6fdb99983e13b1d831` |
 | `docs/plans/2026-11-23-rf-acc-delegated-cgroup-kill-plan.md` | `914c306be9dabe8cdba16609149e655544ea784f45da7cf709a9b333382239a5` |
 | this record | the file you are reading (no self-referential hash) |
+
+`docs/TODO.md` and `docs/archive/CLOSED-TODO.md` carry no sha256 anywhere in this record: main
+merges rewrite both (this head merged main's #270, `dd758599`, which rewrote the `docs/TODO.md` item
+this slice appends to), so a byte binding re-stales on every merge. They are cited by
+heading/content instead: the `- [ ]` dispatch item under `## CI consolidation owner decisions
+(2026-11-17)` in `docs/TODO.md` (its recorded status carries this slice's `Retired (2026-11-23)`
+sentence and the root-run CI-oracle line), and the `docs/archive/CLOSED-TODO.md` section headed
+`Linux owner preflight: delegated manager/cgroup.kill root-only refusal under systemd ≥254`.
 
 The live rows bind the built bytes: the final tree builds reproducibly to
 `ea0dccd0a2d08828e10c4c1d8220d78b2c6860cfd32ebf5d24e674f35e13be91`
@@ -204,10 +211,12 @@ docs/design/` finds nothing), so no design page needed an edit — checked-absen
 
 ## 9. As-built decisions and limits
 
-- The contract's TODO clause was executed against the merge reality: the entry lands on the
-  unmerged branch `refactor/rf-acc-native-hosted-run` (its diff against `b9d4b4a4` adds it at
-  `docs/TODO.md:311-335`), so `docs/TODO.md` gains one recorded-status sentence retiring it and
-  `docs/archive/CLOSED-TODO.md` gains the closure section, which states the merge-order fact.
+- The contract's TODO clause was executed against the merge reality: the entry was not in the base
+  tree (`refactor/rf-acc-native-hosted-run`, whose diff against `b9d4b4a4` adds it at
+  `docs/TODO.md:311-335`) and landed on main as `dd758599` (#270) while this slice was in flight, so
+  this slice appends one recorded-status sentence retiring the preflight refusal to the merged item
+  in `docs/TODO.md`, and `docs/archive/CLOSED-TODO.md` gains the closure section, which states the
+  merge-order fact.
 - The manager kill keeps the base loop's owner-write requirement (`mustBeWritable`), so the rule
   reads "writable only by its trusted owner"; the contract's acceptance set is a subset of it.
 - The group rule for the accepted owners (`gid` 0 for root, A's primary gid for A) is the contract's
@@ -260,9 +269,14 @@ revision.
 - The package suite is the contract's WSL test gate; the full daemon suite was not part of the gate
   set and was not run (the change is one build-constrained package, and the live rows exercise the
   binary end to end).
-- If `refactor/rf-acc-native-hosted-run` lands after this branch, its `docs/TODO.md` paragraph
-  supersedes this branch's retirement sentence textually; the archive closure entry and this record
-  carry the resolution.
+- The CI `daemon` job runs as its runner's non-root user, so the row that pins the unit-kill
+  write-probe wiring (`TestLinuxOwnerUnitKillControlReadsTheDerivedUnitPath`) only discriminates as
+  root; non-root it refuses at the root:root metadata rule before the `O_WRONLY` probe runs. A
+  root-run (or WSL-root) pin of the probe wiring is the missing CI oracle; the metadata rule still
+  catches an A-owned unit kill without root.
+- The sibling `refactor/rf-acc-native-hosted-run` paragraph landed on main as `dd758599` (#270)
+  while this slice was in flight and precedes this branch's retirement sentence in the same
+  `docs/TODO.md` item; the archive closure entry and this record carry the resolution.
 
 ## 12. Apply-stage amendment (2026-11-23): accepted simplify findings
 
@@ -296,8 +310,6 @@ Subject bytes after apply (sha256):
 | --- | --- |
 | `daemon/internal/linuxpreflight/cgroup_linux.go` | `cb82e1e1d61c63e70542397a28629e3c321bcd841899c6090d8eb20628b90f05` |
 | `daemon/internal/linuxpreflight/preflight_linux_test.go` | `552a9576b6a855fb73664f257b2df8aad1fd7e8ddc103053b9a428689065e42f` |
-| `docs/TODO.md` (unchanged; matches §1) | `e00a0692942b9482624792a7fb6c2f25f1233ee76dbe88a22f2f4a8b5ace1a36` |
-| `docs/archive/CLOSED-TODO.md` | `bcd27881439f891a96184e62b2b31370db5bb50f23f03134d5c6c4927bf6529d` |
 | `docs/evidence/goal-0006-linux-owner-design-2026-09-22.md` | `4fa086ca51cf9401d299a1d17030fcc3df95f4f65337c3b5e977078e76c7fbe6` |
 | `docs/plans/2026-11-23-rf-acc-delegated-cgroup-kill-plan.md` (unchanged; matches §1) | `914c306be9dabe8cdba16609149e655544ea784f45da7cf709a9b333382239a5` |
 
@@ -317,13 +329,14 @@ The apply bytes build reproducibly to
 | `python scripts/ci/model-routing-record-sanitize.py --check --root-only` (git root; per changed doc) | 0 for `docs/evidence/goal-0006-linux-owner-design-2026-09-22.md`; 1 pre-existing for `docs/archive/CLOSED-TODO.md` and `docs/TODO.md`, unchanged from their `b9d4b4a4` blobs (first rendered host-path token: CLOSED-TODO line 247 at both revisions; TODO line 730 at base, 734 now) | this record: see the closing line of this section |
 
 Mutants, each applied alone to the apply bytes, run, and reverted; both Go files hash back to this
-section after every revert (`sha256sum` verified):
+section after every revert (`sha256sum` verified). The line citations are the delivered (fix-stage)
+numbers; the fix stage's added `fmt` import shifted every line after the import block by one.
 
 | Mutant | Killer (exit) | First red line |
 | --- | --- | --- |
-| M1 accept a B-owned manager kill | unit test, exit 1 | `preflight_linux_test.go:308` manager B-owned (+ the two wrong-group rows) |
-| M2 drop the unit-kill root check | unit test, exit 1 | `preflight_linux_test.go:328` unit A-owned (+ B-owned, foreign-group) - the finding 5 row moved this line from §5's 327 |
-| M4 accept a group-writable manager kill | unit test, exit 1 | `preflight_linux_test.go:308` manager group/other-writable, then the same unit rows at `:328` |
+| M1 accept a B-owned manager kill | unit test, exit 1 | `preflight_linux_test.go:309` manager B-owned (+ the two wrong-group rows) |
+| M2 drop the unit-kill root check | unit test, exit 1 | `preflight_linux_test.go:329` unit A-owned (+ B-owned, foreign-group) - `:327` at §5's implement bytes |
+| M4 accept a group-writable manager kill | unit test, exit 1 | `preflight_linux_test.go:309` manager group/other-writable, then the same unit rows at `:329` |
 | M3 union mutant (unit root check and A `O_WRONLY` refusal removed) | live hostile-state row, mutant exit 0 where the fixed binary exits 1 | mutant binary `4ca24d41fdc750037d8d54e802069a6ce8ebb296b6697dd3f251ca9f315f96d0` accepts the chowned host |
 | extra: retarget the unit check | live unchanged-host row, mutant exit 1 where the fixed binary exits 0 | mutant binary `fd8026a7e8833f57efbaefc165f08a14557e8741d6cdb5828850bf5a27013ebe` refuses with `unit cgroup.kill must remain root:root` |
 
@@ -375,11 +388,11 @@ Subject bytes after the fix (sha256):
 | --- | --- |
 | `daemon/internal/linuxpreflight/cgroup_linux.go` | `a474b6206f79d129ab5b7c20880c7fca63abbfd5d82c502ae77ba4a224c6c85a` |
 | `daemon/internal/linuxpreflight/preflight_linux_test.go` | `3a885793af323c6bc4be72786201f40575ca7607a1890af9af0711141e8544cb` |
-| `docs/archive/CLOSED-TODO.md` | `7476b1f3038ad3b452f26e7872d20632cd6e5e9dcd39cba9fd0e83d4561a7da8` |
 | `docs/plans/2026-11-23-rf-acc-delegated-cgroup-kill-plan.md` | `4eaacfd171789391750b34028c54a553eb1989729620141090f8b4ab94c63add` |
 
-`docs/TODO.md` and `docs/evidence/goal-0006-linux-owner-design-2026-09-22.md` are unchanged from
-§12 (`e00a0692…`, `4fa086ca…`); this record carries no self-referential hash.
+`docs/TODO.md` and `docs/archive/CLOSED-TODO.md` carry no hash binding (§1).
+`docs/evidence/goal-0006-linux-owner-design-2026-09-22.md` is unchanged from §12 (`4fa086ca…`);
+this record carries no self-referential hash.
 
 Structural change (STD-A03, SPEC-A01): the unit-kill metadata read, its root:root judgement and the
 A `O_WRONLY` probe move out of `verifyLinuxOwnerParentKillBoundary`'s inline tail into

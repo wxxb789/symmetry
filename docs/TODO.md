@@ -356,6 +356,12 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
     unit cgroup's own `cgroup.kill`); recorded in `docs/archive/CLOSED-TODO.md` and
     `docs/evidence/rf-acc-delegated-cgroup-kill-2026-11-23.md`.
 
+    Missing CI oracle (2026-11-23, goal `rf-acc-delegated-cgroup-kill`): the `daemon` CI job runs as
+    its runner's non-root user, so the row that pins the unit-kill write-probe wiring
+    (`TestLinuxOwnerUnitKillControlReadsTheDerivedUnitPath`) only discriminates as root - non-root it
+    refuses at the root:root metadata rule before the probe. A root-run (or WSL-root) pin of the probe
+    wiring is the missing CI oracle; the metadata rule still catches an A-owned unit kill without root.
+
     **When it must be dispatched.** At release acceptance, against the exact subject, and never cited as
     passed before it runs. The goals' pending predicate, quoted from `docs/goals/README.md`: "the operator
     must dispatch workflow "Linux native v2 acceptance"
