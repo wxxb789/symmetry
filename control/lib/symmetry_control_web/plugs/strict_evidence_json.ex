@@ -4,6 +4,7 @@ defmodule SymmetryControlWeb.StrictJSONDecoder do
   """
 
   defmodule DuplicateJSONKeyError do
+    @moduledoc false
     defexception message: "duplicate JSON object member"
   end
 
@@ -78,7 +79,9 @@ defmodule SymmetryControlWeb.Plugs.StrictEvidenceJSON do
   @behaviour Plug
 
   alias Plug.Conn
-  alias SymmetryControlWeb.{Protocol, StrictJSONDecoder}
+  alias Plug.Parsers.JSON
+  alias SymmetryControlWeb.Protocol
+  alias SymmetryControlWeb.StrictJSONDecoder
 
   @raw_body_private_key :symmetry_control_raw_evidence_json
 
@@ -111,10 +114,7 @@ defmodule SymmetryControlWeb.Plugs.StrictEvidenceJSON do
   end
 
   @impl true
-  def call(
-        %Conn{body_params: %Conn.Unfetched{}} = conn,
-        {parser_options, strict_options}
-      ) do
+  def call(%Conn{body_params: %Conn.Unfetched{}} = conn, {parser_options, strict_options}) do
     path_info = Plug.Router.Utils.decode_path_info!(conn)
 
     cond do
@@ -141,7 +141,7 @@ defmodule SymmetryControlWeb.Plugs.StrictEvidenceJSON do
         conn
         |> Conn.put_private(@raw_body_private_key, body)
         |> Map.put(:body_params, %{})
-        |> then(&Plug.Parsers.call(&1, parser_options))
+        |> Plug.Parsers.call(parser_options)
 
       {:more, _body, _conn} ->
         raise Plug.Parsers.RequestTooLargeError
@@ -154,26 +154,18 @@ defmodule SymmetryControlWeb.Plugs.StrictEvidenceJSON do
     end
   end
 
-  defp read_body(conn, {module, function, args}, options)
-       when is_atom(module) and is_atom(function) and is_list(args) do
+  defp read_body(conn, {module, function, args}, options) when is_atom(module) and is_atom(function) and is_list(args) do
     apply(module, function, [conn, options | args])
   end
 
-  defp evidence_json_request?(%Conn{method: "POST"} = conn, [
-         "api",
-         "v1",
-         "runs",
-         run_id,
-         "evidence"
-       ])
+  defp evidence_json_request?(%Conn{method: "POST"} = conn, ["api", "v1", "runs", run_id, "evidence"])
        when is_binary(run_id) and run_id != "" do
     json_content_type?(conn)
   end
 
   defp evidence_json_request?(_conn, _path_info), do: false
 
-  defp strict_json_mutation_request?(%Conn{method: method} = conn, path_info)
-       when method in @mutation_methods do
+  defp strict_json_mutation_request?(%Conn{method: method} = conn, path_info) when method in @mutation_methods do
     json_mutation_path?(path_info) and json_content_type?(conn)
   end
 
@@ -224,14 +216,14 @@ defmodule SymmetryControlWeb.Plugs.StrictEvidenceJSON do
     {parsers, pass, query_string_length, validate_utf8}
   end
 
-  defp strict_json_decoder({Plug.Parsers.JSON, {body_reader, _decoder, body_options}}) do
-    {Plug.Parsers.JSON, {body_reader, {StrictJSONDecoder, :decode!, []}, body_options}}
+  defp strict_json_decoder({JSON, {body_reader, _decoder, body_options}}) do
+    {JSON, {body_reader, {StrictJSONDecoder, :decode!, []}, body_options}}
   end
 
   defp strict_json_decoder(parser), do: parser
 
   defp json_options!({parsers, _pass, _query_string_length, _validate_utf8}) do
-    case Enum.find(parsers, fn {parser, _options} -> parser == Plug.Parsers.JSON end) do
+    case Enum.find(parsers, fn {parser, _options} -> parser == JSON end) do
       {_parser, options} -> options
       nil -> raise ArgumentError, "StrictEvidenceJSON expects the :json parser"
     end

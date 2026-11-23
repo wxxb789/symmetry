@@ -3,9 +3,14 @@ defmodule SymmetryControl.Workspaces.ReadModel do
 
   import Ecto.Query
 
-  alias SymmetryControl.Orchestration
   alias SymmetryControl.Integrations
-  alias SymmetryControl.Orchestration.{Command, Run, RunEvent, RunTransition, Runtime, Task}
+  alias SymmetryControl.Orchestration
+  alias SymmetryControl.Orchestration.Command
+  alias SymmetryControl.Orchestration.Run
+  alias SymmetryControl.Orchestration.RunEvent
+  alias SymmetryControl.Orchestration.Runtime
+  alias SymmetryControl.Orchestration.RunTransition
+  alias SymmetryControl.Orchestration.Task
   alias SymmetryControl.Repo
   alias SymmetryControl.Workspaces
 
@@ -116,7 +121,8 @@ defmodule SymmetryControl.Workspaces.ReadModel do
   defp current_runtimes(runs) do
     runtime_ids = runs |> Map.values() |> Enum.map(& &1.runtime_id) |> Enum.uniq()
 
-    Repo.all(from runtime in Runtime, where: runtime.id in ^runtime_ids)
+    from(runtime in Runtime, where: runtime.id in ^runtime_ids)
+    |> Repo.all()
     |> Map.new(&{&1.id, &1})
   end
 
@@ -151,41 +157,40 @@ defmodule SymmetryControl.Workspaces.ReadModel do
   defp pending_supervisory_commands(runs) do
     run_ids = runs |> Map.values() |> Enum.map(& &1.id)
 
-    Repo.all(
-      from command in Command,
-        where:
-          command.run_id in ^run_ids and command.kind in ["pause", "resume"] and
-            command.state in ["pending", "applied"],
-        select: command.run_id
+    from(command in Command,
+      where:
+        command.run_id in ^run_ids and command.kind in ["pause", "resume"] and
+          command.state in ["pending", "applied"],
+      select: command.run_id
     )
+    |> Repo.all()
     |> MapSet.new()
   end
 
   defp current_runs(task_ids) do
-    Repo.all(
-      from run in Run,
-        join: task in Task,
-        on: task.id == run.task_id and task.attempt_generation == run.generation,
-        where: task.id in ^task_ids,
-        select: run
+    from(run in Run,
+      join: task in Task,
+      on: task.id == run.task_id and task.attempt_generation == run.generation,
+      where: task.id in ^task_ids,
+      select: run
     )
+    |> Repo.all()
     |> Map.new(&{&1.task_id, &1})
   end
 
   defp latest_commands(task_ids) do
-    Repo.all(
-      from command in Command,
-        where: command.task_id in ^task_ids,
-        distinct: command.task_id,
-        order_by: [asc: command.task_id, desc: command.inserted_at, desc: command.id]
+    from(command in Command,
+      where: command.task_id in ^task_ids,
+      distinct: command.task_id,
+      order_by: [asc: command.task_id, desc: command.inserted_at, desc: command.id]
     )
+    |> Repo.all()
     |> Map.new(&{&1.task_id, &1})
   end
 
   defp waiting_contexts(tasks, runs) do
     waiting_runs =
-      tasks
-      |> Enum.flat_map(fn {task_id, task} ->
+      Enum.flat_map(tasks, fn {task_id, task} ->
         case {task.state, Map.get(runs, task_id)} do
           {"waiting_for_input", %Run{state: "waiting_for_input"} = run} -> [run]
           _other -> []
@@ -199,19 +204,19 @@ defmodule SymmetryControl.Workspaces.ReadModel do
       %{}
     else
       transitions =
-        Repo.all(
-          from transition in RunTransition,
-            where:
-              transition.transition_id in ^transition_ids and
-                transition.state == "waiting_for_input"
+        from(transition in RunTransition,
+          where:
+            transition.transition_id in ^transition_ids and
+              transition.state == "waiting_for_input"
         )
+        |> Repo.all()
         |> Map.new(&{&1.transition_id, &1})
 
       events =
-        Repo.all(
-          from event in RunEvent,
-            where: event.event_id in ^transition_ids and event.kind == "waiting_for_input"
+        from(event in RunEvent,
+          where: event.event_id in ^transition_ids and event.kind == "waiting_for_input"
         )
+        |> Repo.all()
         |> Map.new(&{&1.event_id, &1})
 
       Map.new(waiting_runs, fn run ->
@@ -257,35 +262,36 @@ defmodule SymmetryControl.Workspaces.ReadModel do
   end
 
   defp evidence(task_ids) do
-    from(event in RunEvent,
-      join: run in Run,
-      on: run.id == event.run_id,
-      join: task in Task,
-      on: task.id == run.task_id and task.attempt_generation == run.generation,
-      where: task.id in ^task_ids
+    project_evidence(
+      from(event in RunEvent,
+        join: run in Run,
+        on: run.id == event.run_id,
+        join: task in Task,
+        on: task.id == run.task_id and task.attempt_generation == run.generation,
+        where: task.id in ^task_ids
+      )
     )
-    |> project_evidence()
   end
 
   defp project_evidence(query) do
-    Repo.all(
-      from [event, run] in query,
-        where: event.kind in ^@semantic_kinds,
-        order_by: [
-          asc: run.generation,
-          asc: event.sequence,
-          asc: event.inserted_at,
-          asc: event.id
-        ],
-        select: %{
-          task_id: run.task_id,
-          generation: run.generation,
-          event_id: event.event_id,
-          kind: event.kind,
-          payload: event.payload,
-          recorded_at: event.inserted_at
-        }
+    from([event, run] in query,
+      where: event.kind in ^@semantic_kinds,
+      order_by: [
+        asc: run.generation,
+        asc: event.sequence,
+        asc: event.inserted_at,
+        asc: event.id
+      ],
+      select: %{
+        task_id: run.task_id,
+        generation: run.generation,
+        event_id: event.event_id,
+        kind: event.kind,
+        payload: event.payload,
+        recorded_at: event.inserted_at
+      }
     )
+    |> Repo.all()
     |> Enum.reduce(%{}, fn event, acc ->
       Map.update(
         acc,
@@ -440,11 +446,7 @@ defmodule SymmetryControl.Workspaces.ReadModel do
 
   defp compatible_runtimes(project, runtimes) do
     bindings =
-      [
-        {project.default_agent_profile, project.default_workspace}
-        | agent_bindings(project.work_items)
-      ]
-      |> MapSet.new()
+      MapSet.new([{project.default_agent_profile, project.default_workspace} | agent_bindings(project.work_items)])
 
     Enum.filter(runtimes, fn runtime ->
       MapSet.member?(bindings, {runtime.agent_profile, runtime.workspace})
@@ -580,8 +582,7 @@ defmodule SymmetryControl.Workspaces.ReadModel do
     end
   end
 
-  defp value(map, key) when is_map(map),
-    do: Map.get(map, key) || Map.get(map, String.to_atom(key))
+  defp value(map, key) when is_map(map), do: Map.get(map, key) || Map.get(map, String.to_atom(key))
 
   defp value(_map, _key), do: nil
 

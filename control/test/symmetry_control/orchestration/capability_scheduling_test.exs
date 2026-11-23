@@ -56,9 +56,7 @@ defmodule SymmetryControl.Orchestration.CapabilitySchedulingTest do
 
     connected =
       connected
-      |> Ecto.Changeset.change(
-        external_pull_request_url: "https://github.com/acme/symmetry/pull/41"
-      )
+      |> Ecto.Changeset.change(external_pull_request_url: "https://github.com/acme/symmetry/pull/41")
       |> Repo.update!()
 
     manual =
@@ -317,8 +315,7 @@ defmodule SymmetryControl.Orchestration.CapabilitySchedulingTest do
         register_runtime(machine, @now,
           runtime_key: "claim-#{label}",
           name: "claim-#{label}",
-          capabilities:
-            runtime_capabilities(%{"structured_input" => true, "provider_access" => true}, false),
+          capabilities: runtime_capabilities(%{"structured_input" => true, "provider_access" => true}, false),
           daemon_instance_id: daemon_instance_id,
           extra: @runtime_extra
         )

@@ -12,15 +12,16 @@ defmodule SymmetryControl.Goals.Workers.GoalControlWorker do
     ]
 
   alias Oban.Job
-  alias SymmetryControl.{Goals, Repo}
+  alias SymmetryControl.Goals
   alias SymmetryControl.Orchestration.Notifier
   alias SymmetryControl.Portal.Invalidations
+  alias SymmetryControl.Repo
 
   @impl Oban.Worker
   def perform(%Job{} = job), do: dispatch(job.args)
 
   @impl Oban.Worker
-  def timeout(_job), do: :timer.seconds(30)
+  def timeout(_job), do: to_timeout(second: 30)
 
   defp dispatch(%{"goal_id" => goal_id, "revision" => revision, "action_id" => action_id})
        when is_binary(goal_id) and is_integer(revision) and revision > 0 and is_binary(action_id) do
@@ -67,9 +68,9 @@ defmodule SymmetryControl.Goals.Workers.GoalControlWorker do
          payload: payload,
          idempotency_key: idempotency_key
        })
-       when is_binary(goal_id) and is_integer(revision) and revision > 0 and is_binary(action_id) and
-              is_binary(task_id) and kind in ["pause", "cancel"] and is_map(payload) and
-              payload == %{} and is_binary(idempotency_key) and byte_size(idempotency_key) > 0 do
+       when is_binary(goal_id) and is_integer(revision) and revision > 0 and is_binary(action_id) and is_binary(task_id) and
+              kind in ["pause", "cancel"] and is_map(payload) and payload == %{} and is_binary(idempotency_key) and
+              byte_size(idempotency_key) > 0 do
     case Goals.dispatch_goal_control_command(
            goal_id,
            revision,
@@ -86,7 +87,7 @@ defmodule SymmetryControl.Goals.Workers.GoalControlWorker do
         settle_unstarted_task(task_id)
 
       {:ok, command, _disposition} ->
-        unless Repo.in_transaction?(), do: Notifier.command_available(command)
+        if !Repo.in_transaction?(), do: Notifier.command_available(command)
         :ok
 
       {:error, :stale_revision} ->
@@ -97,8 +98,7 @@ defmodule SymmetryControl.Goals.Workers.GoalControlWorker do
     end
   end
 
-  defp dispatch_command(_goal_id, _revision, _action_id, _descriptor),
-    do: {:error, :invalid_goal_control_descriptor}
+  defp dispatch_command(_goal_id, _revision, _action_id, _descriptor), do: {:error, :invalid_goal_control_descriptor}
 
   defp settle_recoverable_tasks(task_ids) when is_list(task_ids) do
     Enum.reduce_while(task_ids, :ok, fn task_id, :ok ->

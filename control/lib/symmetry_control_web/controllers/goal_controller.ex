@@ -99,7 +99,8 @@ defmodule SymmetryControlWeb.GoalController do
   defp decision_versions(%{decisions: decisions}) do
     ids = Enum.map(decisions, & &1.id)
 
-    Repo.all(from decision in SymmetryControl.Goals.GoalDecision, where: decision.id in ^ids)
+    from(decision in SymmetryControl.Goals.GoalDecision, where: decision.id in ^ids)
+    |> Repo.all()
     |> Map.new(&{&1.id, &1.lock_version})
   end
 

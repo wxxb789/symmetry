@@ -21,7 +21,7 @@ defmodule SymmetryControl.Goals.Workers.WakeupWorker do
   def perform(%Job{} = job) do
     case reconcile(job.args) do
       :ok ->
-        unless Repo.in_transaction?(), do: Scheduler.wake()
+        if !Repo.in_transaction?(), do: Scheduler.wake()
         :ok
 
       result ->
@@ -30,7 +30,7 @@ defmodule SymmetryControl.Goals.Workers.WakeupWorker do
   end
 
   @impl Oban.Worker
-  def timeout(_job), do: :timer.seconds(30)
+  def timeout(_job), do: to_timeout(second: 30)
 
   defp reconcile(args) when is_map(args) and map_size(args) == 0 do
     reconcile_all([])
@@ -92,21 +92,23 @@ defmodule SymmetryControl.Goals.Workers.WakeupWorker do
   end
 
   defp recover_unstarted_cancellations(opts) do
-    with {:ok, goal_ids} <- Goals.recoverable_unstarted_cancellation_goal_ids(opts) do
-      Enum.reduce_while(goal_ids, :ok, fn goal_id, :ok ->
-        case Goals.recover_pending_unstarted_cancellations(goal_id) do
-          {:ok, task_ids} ->
-            settle_unstarted_tasks(task_ids)
+    case Goals.recoverable_unstarted_cancellation_goal_ids(opts) do
+      {:ok, goal_ids} ->
+        Enum.reduce_while(goal_ids, :ok, fn goal_id, :ok ->
+          case Goals.recover_pending_unstarted_cancellations(goal_id) do
+            {:ok, task_ids} ->
+              settle_unstarted_tasks(task_ids)
 
-          {:error, :not_found} ->
-            {:cont, :ok}
+            {:error, :not_found} ->
+              {:cont, :ok}
 
-          {:error, reason} ->
-            {:halt, {:error, reason}}
-        end
-      end)
-    else
-      {:error, reason} -> {:error, reason}
+            {:error, reason} ->
+              {:halt, {:error, reason}}
+          end
+        end)
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 

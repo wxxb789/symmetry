@@ -45,14 +45,12 @@ defmodule SymmetryControl.Portal.Invalidations do
   # cursor) rather than failing the request that already committed.
   defp enrich(%{kind: kind, id: id} = change)
        when kind in ["goal", :goal] and is_binary(id) and not is_map_key(change, :cursor) do
-    try do
-      case SymmetryControl.Goals.current_event_sequence(id) do
-        nil -> change
-        cursor -> Map.put(change, :cursor, cursor)
-      end
-    rescue
-      _exception -> change
+    case SymmetryControl.Goals.current_event_sequence(id) do
+      nil -> change
+      cursor -> Map.put(change, :cursor, cursor)
     end
+  rescue
+    _exception -> change
   end
 
   defp enrich(change), do: change

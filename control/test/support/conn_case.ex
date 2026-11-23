@@ -19,15 +19,16 @@ defmodule SymmetryControlWeb.ConnCase do
 
   using do
     quote do
-      # The default endpoint for testing
-      @endpoint SymmetryControlWeb.Endpoint
-
       use SymmetryControlWeb, :verified_routes
+
+      import Phoenix.ConnTest
 
       # Import conveniences for testing with connections
       import Plug.Conn
-      import Phoenix.ConnTest
       import SymmetryControlWeb.ConnCase
+
+      # The default endpoint for testing
+      @endpoint SymmetryControlWeb.Endpoint
     end
   end
 

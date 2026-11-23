@@ -1,9 +1,6 @@
 defmodule SymmetryControl.Goals.HarnessSessions do
   @moduledoc false
 
-  @terminal_run_states ["completed", "failed", "cancelled"]
-  @accounting_terminal_run_states @terminal_run_states ++ ["expired"]
-
   import Ecto.Query
 
   import SymmetryControl.Goals.Internal,
@@ -43,16 +40,18 @@ defmodule SymmetryControl.Goals.HarnessSessions do
   alias SymmetryControl.Repo
   alias SymmetryControl.RequestHash
 
+  @terminal_run_states ["completed", "failed", "cancelled"]
+  @accounting_terminal_run_states @terminal_run_states ++ ["expired"]
+
   def attach_harness_session(machine_id, run_id, fence, attrs, opts \\ [])
 
   def attach_harness_session(machine_id, run_id, fence, attrs, opts)
-      when is_binary(machine_id) and is_binary(run_id) and is_map(fence) and is_map(attrs) and
-             is_list(opts) do
+      when is_binary(machine_id) and is_binary(run_id) and is_map(fence) and is_map(attrs) and is_list(opts) do
     with :ok <- valid_uuid(machine_id),
          :ok <- valid_uuid(run_id),
          :ok <- valid_fence(fence),
          {:ok, session_attrs} <- session_attrs(attrs) do
-      Repo.transaction(fn ->
+      fn ->
         {goal, task, item, run, runtime} =
           lock_goal_run!(machine_id, run_id, fence, opts, :attach_replay)
 
@@ -109,7 +108,8 @@ defmodule SymmetryControl.Goals.HarnessSessions do
 
             {:created, response}
         end
-      end)
+      end
+      |> Repo.transaction()
       |> machine_write_result()
     end
   end
@@ -119,7 +119,7 @@ defmodule SymmetryControl.Goals.HarnessSessions do
   def fetch_harness_session_attachment(machine_id, run_id, fence)
       when is_binary(machine_id) and is_binary(run_id) and is_map(fence) do
     with :ok <- valid_uuid(machine_id), :ok <- valid_uuid(run_id), :ok <- valid_fence(fence) do
-      Repo.transaction(fn ->
+      fn ->
         {_goal, _task, _item, run, _runtime} =
           lock_goal_run!(machine_id, run_id, fence, [], :attach_replay)
 
@@ -128,7 +128,8 @@ defmodule SymmetryControl.Goals.HarnessSessions do
         if attach_receipt_fence_matches?(receipt, machine_id, fence),
           do: attachment_receipt_response(receipt),
           else: rollback(:ownership_lost)
-      end)
+      end
+      |> Repo.transaction()
       |> case do
         {:ok, receipt} -> {:ok, receipt}
         {:error, reason} -> {:error, reason}
@@ -141,17 +142,16 @@ defmodule SymmetryControl.Goals.HarnessSessions do
   def mark_harness_session_stopped(machine_id, run_id, fence, attrs, opts \\ [])
 
   def mark_harness_session_stopped(machine_id, run_id, fence, attrs, opts)
-      when is_binary(machine_id) and is_binary(run_id) and is_map(fence) and is_map(attrs) and
-             is_list(opts) do
+      when is_binary(machine_id) and is_binary(run_id) and is_map(fence) and is_map(attrs) and is_list(opts) do
     with :ok <- valid_uuid(machine_id),
          :ok <- valid_uuid(run_id),
          :ok <- valid_fence(fence),
          {:ok, stop_attrs} <- session_stop_attrs(attrs) do
-      Repo.transaction(fn ->
+      fn ->
         {_goal, _task, _item, run, runtime} =
           lock_goal_run!(machine_id, run_id, fence, opts, :session_stop)
 
-        unless run.state in @accounting_terminal_run_states, do: rollback(:state_conflict)
+        if run.state not in @accounting_terminal_run_states, do: rollback(:state_conflict)
 
         session =
           Repo.one(
@@ -205,7 +205,8 @@ defmodule SymmetryControl.Goals.HarnessSessions do
 
             {:created, response}
         end
-      end)
+      end
+      |> Repo.transaction()
       |> machine_session_stop_result()
     end
   end
@@ -312,7 +313,7 @@ defmodule SymmetryControl.Goals.HarnessSessions do
         session.state == "unavailable" and
         is_nil(session.active_run_id)
 
-    unless stoppable?, do: rollback(:ownership_lost)
+    if !stoppable?, do: rollback(:ownership_lost)
   end
 
   defp stop_receipt_matches?(receipt, machine_id, run, request_hash) do
@@ -323,23 +324,23 @@ defmodule SymmetryControl.Goals.HarnessSessions do
   defp ensure_session_scope!(attrs, task, item, run, runtime, machine_id) do
     repository_resource_id = task_repository_resource_id!(task, item)
 
-    unless attrs.workspace == task.workspace and
-             (is_nil(attrs.repository_resource_id) or
-                attrs.repository_resource_id == repository_resource_id) and
-             runtime.repository_resource_id == repository_resource_id and
-             runtime.id == run.runtime_id and runtime.machine_id == machine_id and
-             runtime.harness_kind == attrs.harness_kind and
-             runtime.harness_version == attrs.harness_version and
-             runtime.adapter_version == attrs.adapter_version do
+    if !(attrs.workspace == task.workspace and
+           (is_nil(attrs.repository_resource_id) or
+              attrs.repository_resource_id == repository_resource_id) and
+           runtime.repository_resource_id == repository_resource_id and
+           runtime.id == run.runtime_id and runtime.machine_id == machine_id and
+           runtime.harness_kind == attrs.harness_kind and
+           runtime.harness_version == attrs.harness_version and
+           runtime.adapter_version == attrs.adapter_version) do
       rollback(:ownership_lost)
     end
   end
 
   defp ensure_current_attachment!(goal, task, run, runtime, machine_id, fence, opts) do
-    unless task.goal_revision == goal.current_revision and
-             ((goal.state == "draft" and plan_task?(task)) or
-                (goal.state == "active" and task.purpose != "plan")),
-           do: rollback(:ownership_lost)
+    if !(task.goal_revision == goal.current_revision and
+           ((goal.state == "draft" and plan_task?(task)) or
+              (goal.state == "active" and task.purpose != "plan"))),
+       do: rollback(:ownership_lost)
 
     ensure_machine_fence!(machine_id, task, run, runtime, fence, :current, now(opts))
   end
@@ -347,9 +348,9 @@ defmodule SymmetryControl.Goals.HarnessSessions do
   # The admission mode, not the caller, decides binding authority: fresh/handoff
   # carry no server-issued identity; resume may only echo the reserved pair.
   defp ensure_attachment_binding_shape!("resume", run, attrs) do
-    unless attrs.binding_supplied?, do: rollback(:invalid_request)
+    if !attrs.binding_supplied?, do: rollback(:invalid_request)
 
-    unless is_binary(run.harness_session_id) and attrs.binding_id == run.harness_binding_id do
+    if !(is_binary(run.harness_session_id) and attrs.binding_id == run.harness_binding_id) do
       rollback(:ownership_lost)
     end
   end
@@ -377,8 +378,7 @@ defmodule SymmetryControl.Goals.HarnessSessions do
   defp reject_existing_handle!(machine_id, local_handle_id, reason) do
     if Repo.exists?(
          from(session in HarnessSession,
-           where:
-             session.machine_id == ^machine_id and session.local_handle_id == ^local_handle_id,
+           where: session.machine_id == ^machine_id and session.local_handle_id == ^local_handle_id,
            lock: "FOR KEY SHARE"
          )
        ),
@@ -438,7 +438,7 @@ defmodule SymmetryControl.Goals.HarnessSessions do
         session.state == "busy" and session.active_run_id == run.id and
         session.id == run.harness_session_id and session.binding_id == run.harness_binding_id
 
-    unless compatible?, do: rollback(:ownership_lost)
+    if !compatible?, do: rollback(:ownership_lost)
     session
   end
 
@@ -509,9 +509,7 @@ defmodule SymmetryControl.Goals.HarnessSessions do
 
   # Receipt storage stays JSONB string-keyed while direct callers expect atoms:
   # decode only the fixed envelope, never arbitrary persisted keys.
-  defp attachment_receipt_response(%HarnessSessionAttachReceipt{
-         response: %{"session" => session}
-       })
+  defp attachment_receipt_response(%HarnessSessionAttachReceipt{response: %{"session" => session}})
        when is_map(session) do
     fields = [
       {:attachment_receipt_id, "attachment_receipt_id"},

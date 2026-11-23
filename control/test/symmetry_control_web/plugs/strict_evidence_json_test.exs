@@ -4,6 +4,8 @@ defmodule SymmetryControlWeb.Plugs.StrictEvidenceJSONTest do
   import Plug.Conn
   import Plug.Test
 
+  alias Plug.Conn.Unfetched
+  alias Plug.Parsers.JSON
   alias SymmetryControlWeb.Plugs.StrictEvidenceJSON
   alias SymmetryControlWeb.StrictJSONDecoder
 
@@ -205,15 +207,14 @@ defmodule SymmetryControlWeb.Plugs.StrictEvidenceJSONTest do
   test "installs one ordered decoder on the strict options and keeps the plain decoder elsewhere" do
     {parser_options, strict_options} = @parser_options
 
-    strict_json = List.keyfind(elem(strict_options, 0), Plug.Parsers.JSON, 0)
-    plain_json = List.keyfind(elem(parser_options, 0), Plug.Parsers.JSON, 0)
+    strict_json = List.keyfind(elem(strict_options, 0), JSON, 0)
+    plain_json = List.keyfind(elem(parser_options, 0), JSON, 0)
 
     assert strict_json ==
-             {Plug.Parsers.JSON,
-              {{Plug.Conn, :read_body, []}, {StrictJSONDecoder, :decode!, []}, []}}
+             {JSON, {{Plug.Conn, :read_body, []}, {StrictJSONDecoder, :decode!, []}, []}}
 
     assert plain_json ==
-             {Plug.Parsers.JSON, {{Plug.Conn, :read_body, []}, {Jason, :decode!, []}, []}}
+             {JSON, {{Plug.Conn, :read_body, []}, {Jason, :decode!, []}, []}}
   end
 
   test "allows equal member names in distinct JSON objects on protocol mutation routes" do
@@ -309,7 +310,7 @@ defmodule SymmetryControlWeb.Plugs.StrictEvidenceJSONTest do
       |> put_private(:plug_skip_csrf_protection, true)
       |> SymmetryControlWeb.Endpoint.call([])
 
-    assert login.body_params == %Plug.Conn.Unfetched{aspect: :body_params}
+    assert login.body_params == %Unfetched{aspect: :body_params}
     assert login.status == 422
 
     machine_api =
@@ -318,7 +319,7 @@ defmodule SymmetryControlWeb.Plugs.StrictEvidenceJSONTest do
       |> put_req_header("content-type", multipart_type)
       |> SymmetryControlWeb.Endpoint.call([])
 
-    assert machine_api.body_params == %Plug.Conn.Unfetched{aspect: :body_params}
+    assert machine_api.body_params == %Unfetched{aspect: :body_params}
     assert machine_api.status == 401
   end
 

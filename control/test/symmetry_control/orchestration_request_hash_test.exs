@@ -2,7 +2,9 @@ defmodule SymmetryControl.OrchestrationRequestHashTest do
   use SymmetryControl.DataCase, async: false
 
   alias SymmetryControl.Orchestration
-  alias SymmetryControl.Orchestration.{RunEvent, RunTransition, Task}
+  alias SymmetryControl.Orchestration.RunEvent
+  alias SymmetryControl.Orchestration.RunTransition
+  alias SymmetryControl.Orchestration.Task
   alias SymmetryControl.Repo
   alias SymmetryControl.RequestHash
 
@@ -145,9 +147,7 @@ defmodule SymmetryControl.OrchestrationRequestHashTest do
     transition_id = Ecto.UUID.generate()
 
     assert {:ok, _} =
-             Orchestration.transition(run.id, fence, "running", %{}, transition_id,
-               now: occurred_at
-             )
+             Orchestration.transition(run.id, fence, "running", %{}, transition_id, now: occurred_at)
 
     stored_transition = Repo.get_by!(RunTransition, run_id: run.id, transition_id: transition_id)
     assert stored_transition.request_hash_version == 1
@@ -161,9 +161,7 @@ defmodule SymmetryControl.OrchestrationRequestHashTest do
     |> Repo.update!()
 
     assert {:ok, _} =
-             Orchestration.transition(run.id, fence, "running", %{}, transition_id,
-               now: occurred_at
-             )
+             Orchestration.transition(run.id, fence, "running", %{}, transition_id, now: occurred_at)
   end
 
   defp claimed_run do

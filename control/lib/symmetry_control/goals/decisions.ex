@@ -41,10 +41,9 @@ defmodule SymmetryControl.Goals.Decisions do
   @doc false
 
   def decision_request!(goal, "plan", nil, nil, proposal, opts) when is_map(proposal) do
-    unless PlanContracts.valid_plan_proposal?(proposal, goal, opts), do: rollback(:invalid_plan)
+    if !PlanContracts.valid_plan_proposal?(proposal, goal, opts), do: rollback(:invalid_plan)
 
-    {nil, nil, plan_action_hash(goal, RequestHash.canonical(proposal)),
-     "Accept the proposed plan?"}
+    {nil, nil, plan_action_hash(goal, RequestHash.canonical(proposal)), "Accept the proposed plan?"}
   end
 
   def decision_request!(goal, "scope", work_item_id, nil, proposal, _opts)
@@ -53,7 +52,7 @@ defmodule SymmetryControl.Goals.Decisions do
     operation = required_string!(proposal, :kind)
     dependency_id = required_uuid!(proposal, :depends_on_id)
 
-    unless operation in ["add_dependency", "remove_dependency"], do: rollback(:invalid_request)
+    if operation not in ["add_dependency", "remove_dependency"], do: rollback(:invalid_request)
 
     {work_item_id, nil, dependency_action_hash(goal, operation, work_item_id, dependency_id),
      "Approve the requested dependency change?"}
@@ -63,21 +62,18 @@ defmodule SymmetryControl.Goals.Decisions do
       when is_binary(work_item_id) and is_binary(subject_hash) do
     ensure_decision_work_item!(goal, work_item_id)
 
-    {work_item_id, subject_hash,
-     work_item_acceptance_action_hash(goal, work_item_id, subject_hash),
+    {work_item_id, subject_hash, work_item_acceptance_action_hash(goal, work_item_id, subject_hash),
      "Accept the validated work outcome?"}
   end
 
-  def decision_request!(goal, "completion", nil, subject_hash, nil, _opts)
-      when is_binary(subject_hash) do
+  def decision_request!(goal, "completion", nil, subject_hash, nil, _opts) when is_binary(subject_hash) do
     action_hash =
       ContractValidation.completion_action_hash(goal.id, goal.current_revision, subject_hash)
 
     {nil, subject_hash, action_hash, "Accept the Goal outcome?"}
   end
 
-  def decision_request!(_goal, _kind, _work_item_id, _subject_hash, _proposal, _opts),
-    do: rollback(:invalid_request)
+  def decision_request!(_goal, _kind, _work_item_id, _subject_hash, _proposal, _opts), do: rollback(:invalid_request)
 
   @doc false
 
@@ -169,13 +165,13 @@ defmodule SymmetryControl.Goals.Decisions do
   def ensure_resolved_scope_decision!(goal, item, decision_id, operation, dependency_id) do
     decision = lock_decision!(decision_id)
 
-    unless decision.goal_id == goal.id and decision.goal_revision == goal.current_revision and
-             decision.state == "resolved" and decision.kind == "scope" and
-             decision.work_item_id == item.id and
-             decision.action_hash ==
-               dependency_action_hash(goal, operation, item.id, dependency_id) and
-             value(decision.resolution || %{}, "option_id") == "accept",
-           do: rollback(:invalid_decision)
+    if !(decision.goal_id == goal.id and decision.goal_revision == goal.current_revision and
+           decision.state == "resolved" and decision.kind == "scope" and
+           decision.work_item_id == item.id and
+           decision.action_hash ==
+             dependency_action_hash(goal, operation, item.id, dependency_id) and
+           value(decision.resolution || %{}, "option_id") == "accept"),
+       do: rollback(:invalid_decision)
   end
 
   @doc false
@@ -186,13 +182,13 @@ defmodule SymmetryControl.Goals.Decisions do
     expected_action_hash =
       ContractValidation.completion_action_hash(goal.id, goal.current_revision, subject_hash)
 
-    unless decision.goal_id == goal.id and decision.goal_revision == goal.current_revision and
-             decision.state == "resolved" and decision.kind == "completion" and
-             is_nil(decision.work_item_id) and
-             decision.subject_hash == subject_hash and
-             decision.action_hash == expected_action_hash and
-             value(decision.resolution || %{}, "option_id") == "accept",
-           do: rollback(:invalid_decision)
+    if !(decision.goal_id == goal.id and decision.goal_revision == goal.current_revision and
+           decision.state == "resolved" and decision.kind == "completion" and
+           is_nil(decision.work_item_id) and
+           decision.subject_hash == subject_hash and
+           decision.action_hash == expected_action_hash and
+           value(decision.resolution || %{}, "option_id") == "accept"),
+       do: rollback(:invalid_decision)
   end
 
   @doc false
@@ -214,7 +210,7 @@ defmodule SymmetryControl.Goals.Decisions do
   @doc false
 
   def validate_decision_changeset!(changeset, opts) do
-    unless changeset.valid?, do: rollback(:invalid_request)
+    if !changeset.valid?, do: rollback(:invalid_request)
 
     decision = Changeset.apply_changes(changeset)
 

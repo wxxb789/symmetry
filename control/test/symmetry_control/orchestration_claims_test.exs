@@ -1,7 +1,17 @@
 defmodule SymmetryControl.OrchestrationClaimsTest do
   use SymmetryControl.OrchestrationCase, async: false
 
+  alias SymmetryControl.Goals
+  alias SymmetryControl.Goals.Goal
+  alias SymmetryControl.Goals.HarnessSession
   alias SymmetryControl.Orchestration
+  alias SymmetryControl.Orchestration.Run
+  alias SymmetryControl.Orchestration.Runtime
+  alias SymmetryControl.Orchestration.Task
+  alias SymmetryControl.Workspaces
+  alias SymmetryControl.Workspaces.Project
+  alias SymmetryControl.Workspaces.ProjectResource
+  alias SymmetryControl.Workspaces.WorkItem
 
   @now ~U[2026-09-02 00:00:00.000000Z]
 
@@ -24,7 +34,7 @@ defmodule SymmetryControl.OrchestrationClaimsTest do
     assert replayed.lease_token == first.lease_token
 
     assert {:error, :ownership_lost} =
-             Orchestration.claim(run.id, request, now: DateTime.add(@now, 31, :second))
+             Orchestration.claim(run.id, request, now: DateTime.shift(@now, second: 31))
 
     assert {:error, :ownership_lost} =
              Orchestration.claim(
@@ -51,7 +61,7 @@ defmodule SymmetryControl.OrchestrationClaimsTest do
     }
 
     assert {:ok, claimed} = Orchestration.claim(run.id, request, now: @now)
-    assert claimed.lease_expires_at == DateTime.add(@now, 30, :second)
+    assert claimed.lease_expires_at == DateTime.shift(@now, second: 30)
 
     fence = %{
       runtime_id: runtime.id,
@@ -61,22 +71,20 @@ defmodule SymmetryControl.OrchestrationClaimsTest do
       lease_token: claimed.lease_token
     }
 
-    renewed_at = DateTime.add(@now, 1, :second)
+    renewed_at = DateTime.shift(@now, second: 1)
     assert {:ok, renewed} = Orchestration.renew_lease(run.id, fence, now: renewed_at)
-    assert renewed.lease_expires_at == DateTime.add(renewed_at, 30, :second)
+    assert renewed.lease_expires_at == DateTime.shift(renewed_at, second: 30)
 
     assert {:ok, overridden} =
              Orchestration.renew_lease(run.id, fence,
-               now: DateTime.add(@now, 2, :second),
+               now: DateTime.shift(@now, second: 2),
                lease_duration_ms: 45_000
              )
 
-    assert overridden.lease_expires_at == DateTime.add(@now, 47, :second)
+    assert overridden.lease_expires_at == DateTime.shift(@now, second: 47)
 
     {:ok, _task, :created} =
-      Orchestration.submit_task(task_attrs(goal: "explicit-claim-lease"), "explicit-claim-lease",
-        now: @now
-      )
+      Orchestration.submit_task(task_attrs(goal: "explicit-claim-lease"), "explicit-claim-lease", now: @now)
 
     {:ok, override_run} = Orchestration.assign_one(now: @now)
 
@@ -101,7 +109,7 @@ defmodule SymmetryControl.OrchestrationClaimsTest do
                lease_duration_ms: 30_000
              )
 
-    assert explicitly_claimed.lease_expires_at == DateTime.add(@now, 30, :second)
+    assert explicitly_claimed.lease_expires_at == DateTime.shift(@now, second: 30)
 
     override_fence = Map.put(override_request, :lease_token, explicitly_claimed.lease_token)
 
@@ -122,14 +130,10 @@ defmodule SymmetryControl.OrchestrationClaimsTest do
     fence = claim(run, runtime, @now)
 
     assert {:error, :ownership_lost} =
-             Orchestration.renew_lease(run.id, %{fence | runtime_epoch: fence.runtime_epoch + 1},
-               now: @now
-             )
+             Orchestration.renew_lease(run.id, %{fence | runtime_epoch: fence.runtime_epoch + 1}, now: @now)
 
     assert {:error, :ownership_lost} =
-             Orchestration.renew_lease(run.id, %{fence | generation: fence.generation + 1},
-               now: @now
-             )
+             Orchestration.renew_lease(run.id, %{fence | generation: fence.generation + 1}, now: @now)
 
     assert {:error, :ownership_lost} =
              Orchestration.renew_lease(
@@ -151,13 +155,6 @@ defmodule SymmetryControl.OrchestrationClaimsTest do
 
     enrolled
   end
-
-  alias SymmetryControl.Goals
-  alias SymmetryControl.Goals.{Goal, HarnessSession}
-  alias SymmetryControl.Orchestration
-  alias SymmetryControl.Orchestration.{Run, Runtime, Task}
-  alias SymmetryControl.Workspaces
-  alias SymmetryControl.Workspaces.{Project, ProjectResource, WorkItem}
 
   # The cases below came from the other base file's region and pin its clock;
   # the shadowing is intentional, so do not move a case across this line.
@@ -274,7 +271,8 @@ defmodule SymmetryControl.OrchestrationClaimsTest do
       insert_goal_task(
         max_run_attempts: 2,
         execution_policy:
-          execution_policy(2)
+          2
+          |> execution_policy()
           |> Map.put("budget_mode", "strict")
           |> Map.put("per_run_cost_limit_microusd", 1)
           |> Map.put("hard_cost_limit_required", true)
@@ -394,7 +392,7 @@ defmodule SymmetryControl.OrchestrationClaimsTest do
         validation_bindings: [validation_binding("checks", "check", [replay_runtime.id])]
       )
 
-    assert {:ok, replay_run} = Orchestration.assign_one(now: DateTime.add(@now, 1, :second))
+    assert {:ok, replay_run} = Orchestration.assign_one(now: DateTime.shift(@now, second: 1))
 
     replay_request = %{
       runtime_id: replay_runtime.id,
@@ -404,10 +402,10 @@ defmodule SymmetryControl.OrchestrationClaimsTest do
     }
 
     assert {:ok, claimed} =
-             Goals.claim(replay_run.id, replay_request, now: DateTime.add(@now, 1, :second))
+             Goals.claim(replay_run.id, replay_request, now: DateTime.shift(@now, second: 1))
 
     assert {:ok, replayed} =
-             Goals.claim(replay_run.id, replay_request, now: DateTime.add(@now, 1, :second))
+             Goals.claim(replay_run.id, replay_request, now: DateTime.shift(@now, second: 1))
 
     assert replayed.lease_token == claimed.lease_token
   end
@@ -691,7 +689,7 @@ defmodule SymmetryControl.OrchestrationClaimsTest do
     admission_key = Ecto.UUID.generate()
     reservation_id = Ecto.UUID.generate()
     repository_id = Keyword.get(opts, :repository_id, Ecto.UUID.generate())
-    validation_of_task_id = if purpose == "validate", do: Ecto.UUID.generate(), else: nil
+    validation_of_task_id = if purpose == "validate", do: Ecto.UUID.generate()
     validation_bindings = Keyword.get(opts, :validation_bindings, [])
     policy = Keyword.get(opts, :execution_policy, execution_policy(max_run_attempts))
     allowed_runtime_ids = Map.get(policy, "allowed_runtime_ids", [])
@@ -704,27 +702,29 @@ defmodule SymmetryControl.OrchestrationClaimsTest do
     task_inserted_at = Keyword.get(opts, :inserted_at, @now)
 
     task_input =
-      %{
-        "subject" => %{
-          "resource_id" => repository_id,
-          "commit" => String.duplicate("a", 40),
-          "tree_digest" => "sha256:" <> String.duplicate("b", 64)
-        }
-      }
-      |> then(fn input ->
-        if requested_session_id do
-          input
-          |> Map.put("session_mode", "resume")
-          |> Map.put("requested_session_id", requested_session_id)
-        else
-          input
+      then(
+        %{
+          "subject" => %{
+            "resource_id" => repository_id,
+            "commit" => String.duplicate("a", 40),
+            "tree_digest" => "sha256:" <> String.duplicate("b", 64)
+          }
+        },
+        fn input ->
+          if requested_session_id do
+            input
+            |> Map.put("session_mode", "resume")
+            |> Map.put("requested_session_id", requested_session_id)
+          else
+            input
+          end
         end
-      end)
+      )
 
     task_input =
       Map.put(task_input, "limits", %{
         "max_turns" => 1,
-        "deadline_at" => DateTime.to_iso8601(DateTime.add(@now, 15 * 60, :second)),
+        "deadline_at" => DateTime.to_iso8601(DateTime.shift(@now, minute: 15)),
         "max_cost_microusd" =>
           if(strict_budget?,
             do: Integer.to_string(Map.fetch!(policy, "per_run_cost_limit_microusd"))
@@ -744,9 +744,7 @@ defmodule SymmetryControl.OrchestrationClaimsTest do
                  )
                end
 
-               unless Repo.exists?(
-                        from(resource in ProjectResource, where: resource.id == ^repository_id)
-                      ) do
+               if !Repo.exists?(from(resource in ProjectResource, where: resource.id == ^repository_id)) do
                  Repo.query!(
                    """
                    INSERT INTO project_resources (
@@ -787,7 +785,7 @@ defmodule SymmetryControl.OrchestrationClaimsTest do
                  [db_uuid(goal_id), Jason.encode!(policy), @now]
                )
 
-               unless planning? do
+               if !planning? do
                  Repo.query!(
                    """
                    INSERT INTO work_items (
@@ -1027,7 +1025,8 @@ defmodule SymmetryControl.OrchestrationClaimsTest do
       end
 
     adapter =
-      native_adapter(kind, native_version, implementation_version, protocol_version)
+      kind
+      |> native_adapter(native_version, implementation_version, protocol_version)
       |> Map.put("operations", %{
         "start" => false,
         "events" => false,
@@ -1057,9 +1056,7 @@ defmodule SymmetryControl.OrchestrationClaimsTest do
       })
 
     assert {:ok, [runtime]} =
-             Orchestration.register_runtimes(machine.id, Ecto.UUID.generate(), [specification],
-               now: @now
-             )
+             Orchestration.register_runtimes(machine.id, Ecto.UUID.generate(), [specification], now: @now)
 
     runtime
   end
@@ -1126,7 +1123,8 @@ defmodule SymmetryControl.OrchestrationClaimsTest do
       end)
 
     adapter =
-      native_adapter(harness_kind, harness_version, adapter_version, 1)
+      harness_kind
+      |> native_adapter(harness_version, adapter_version, 1)
       |> put_in(["operations", "resume"], resume?)
       |> put_in(["operations", "handoff"], handoff?)
       |> put_in(["operations", "hard_cost_limit"], hard_cost_limit?)
@@ -1136,27 +1134,29 @@ defmodule SymmetryControl.OrchestrationClaimsTest do
                machine_id,
                Ecto.UUID.generate(),
                [
-                 %{
-                   runtime_key: "goal-admission-#{label}",
-                   name: "Goal admission #{label}",
-                   capacity: capacity,
-                   agent_profile: "codex",
-                   workspace: "primary",
-                   harness_kind: harness_kind,
-                   harness_version: harness_version,
-                   adapter_version: adapter_version,
-                   adapter_protocol_version: 1,
-                   capabilities: %{
-                     "structured_input" => true,
-                     "interactive" => true,
-                     "adapter" => adapter
-                   }
-                 }
-                 |> then(fn specification ->
-                   if is_nil(repository_resource_id),
-                     do: specification,
-                     else: Map.put(specification, :repository_resource_id, repository_resource_id)
-                 end)
+                 then(
+                   %{
+                     runtime_key: "goal-admission-#{label}",
+                     name: "Goal admission #{label}",
+                     capacity: capacity,
+                     agent_profile: "codex",
+                     workspace: "primary",
+                     harness_kind: harness_kind,
+                     harness_version: harness_version,
+                     adapter_version: adapter_version,
+                     adapter_protocol_version: 1,
+                     capabilities: %{
+                       "structured_input" => true,
+                       "interactive" => true,
+                       "adapter" => adapter
+                     }
+                   },
+                   fn specification ->
+                     if is_nil(repository_resource_id),
+                       do: specification,
+                       else: Map.put(specification, :repository_resource_id, repository_resource_id)
+                   end
+                 )
                ],
                now: @now
              )
@@ -1190,7 +1190,7 @@ defmodule SymmetryControl.OrchestrationClaimsTest do
       generation: 1,
       state: "completed",
       assigned_at: @now,
-      assignment_expires_at: DateTime.add(@now, 60, :second)
+      assignment_expires_at: DateTime.shift(@now, minute: 1)
     })
     |> Repo.insert!()
   end
@@ -1208,7 +1208,7 @@ defmodule SymmetryControl.OrchestrationClaimsTest do
       generation: task.attempt_generation,
       state: "assigned",
       assigned_at: @now,
-      assignment_expires_at: DateTime.add(@now, 60, :second)
+      assignment_expires_at: DateTime.shift(@now, minute: 1)
     })
     |> Repo.insert!()
   end

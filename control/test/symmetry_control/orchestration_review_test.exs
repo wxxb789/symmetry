@@ -3,6 +3,7 @@ defmodule SymmetryControl.OrchestrationReviewTest do
 
   alias Ecto.Adapters.SQL.Sandbox
   alias SymmetryControl.Orchestration
+  alias SymmetryControl.Orchestration.Command
   alias SymmetryControl.Repo
 
   @now ~U[2026-09-02 00:00:00.000000Z]
@@ -12,7 +13,7 @@ defmodule SymmetryControl.OrchestrationReviewTest do
     runtime = register_runtime(machine, @now)
     {:ok, task, :created} = Orchestration.submit_task(task_attrs(), "cancel-expiry", now: @now)
     {:ok, run} = Orchestration.assign_one(now: @now)
-    claimed_at = DateTime.add(@now, 20, :second)
+    claimed_at = DateTime.shift(@now, second: 20)
     fence = claim(run, runtime, claimed_at)
 
     assert {:ok, cancelling, command} = Orchestration.request_cancel(task.id, now: claimed_at)
@@ -24,11 +25,11 @@ defmodule SymmetryControl.OrchestrationReviewTest do
     assert command.state == "pending"
     assert {:error, :ownership_lost} = Orchestration.renew_lease(run.id, fence, now: claimed_at)
 
-    assert %{expired_runs: 0} = Orchestration.expire(now: DateTime.add(@now, 31, :second))
+    assert %{expired_runs: 0} = Orchestration.expire(now: DateTime.shift(@now, second: 31))
     assert {:ok, still_cancelling} = Orchestration.fetch_run(run.id)
     assert still_cancelling.state == "cancelling"
 
-    assert %{expired_runs: 1} = Orchestration.expire(now: DateTime.add(@now, 51, :second))
+    assert %{expired_runs: 1} = Orchestration.expire(now: DateTime.shift(@now, second: 51))
     assert {:ok, cancelled_run} = Orchestration.fetch_run(run.id)
     assert cancelled_run.state == "cancelled"
     assert {:ok, cancelled_task} = Orchestration.fetch_task(task.id)
@@ -46,14 +47,12 @@ defmodule SymmetryControl.OrchestrationReviewTest do
                  target_state,
                  %{},
                  transition_id,
-                 now: DateTime.add(@now, 51, :second)
+                 now: DateTime.shift(@now, second: 51)
                )
     end
 
     assert {:ok, %{commands: []}} =
-             Orchestration.work_snapshot(runtime.id, runtime.connection_epoch,
-               now: DateTime.add(@now, 51, :second)
-             )
+             Orchestration.work_snapshot(runtime.id, runtime.connection_epoch, now: DateTime.shift(@now, second: 51))
   end
 
   test "assigned cancellation is applied by control, audited as a command, and rejects late claim" do
@@ -148,9 +147,7 @@ defmodule SymmetryControl.OrchestrationReviewTest do
     transition(run.id, fence, "waiting_for_input", 66)
 
     {:ok, first, :created} =
-      Orchestration.provide_input(task.id, %{"answer" => "first"}, "input-failed-first",
-        now: @now
-      )
+      Orchestration.provide_input(task.id, %{"answer" => "first"}, "input-failed-first", now: @now)
 
     assert {:ok, _} =
              Orchestration.acknowledge_command(first.id, fence, "failed", uuid(67), now: @now)
@@ -186,19 +183,17 @@ defmodule SymmetryControl.OrchestrationReviewTest do
     transition_id = uuid(72)
 
     assert {:ok, waiting} =
-             Orchestration.transition(run.id, fence, "waiting_for_input", %{}, transition_id,
-               now: @now
-             )
+             Orchestration.transition(run.id, fence, "waiting_for_input", %{}, transition_id, now: @now)
 
     assert waiting.state == "waiting_for_input"
-    transition(run.id, fence, "running", 73, DateTime.add(@now, 1, :second))
+    transition(run.id, fence, "running", 73, DateTime.shift(@now, second: 1))
 
     assert {:ok, current_run} = Orchestration.fetch_run(run.id)
     assert current_run.state == "running"
 
     assert {:ok, replayed} =
              Orchestration.transition(run.id, fence, "waiting_for_input", %{}, transition_id,
-               now: DateTime.add(@now, 2, :second)
+               now: DateTime.shift(@now, second: 2)
              )
 
     assert replayed.state == "waiting_for_input"
@@ -233,9 +228,7 @@ defmodule SymmetryControl.OrchestrationReviewTest do
       Orchestration.submit_task(task_attrs(agent_profile: "other"), "unmatched", now: @now)
 
     {:ok, matching, :created} =
-      Orchestration.submit_task(task_attrs(), "matching",
-        now: DateTime.add(@now, 1, :microsecond)
-      )
+      Orchestration.submit_task(task_attrs(), "matching", now: DateTime.add(@now, 1, :microsecond))
 
     assert {:ok, assigned} = Orchestration.assign_one(now: @now)
     assert assigned.task_id == matching.id
@@ -272,9 +265,7 @@ defmodule SymmetryControl.OrchestrationReviewTest do
     end
 
     assert {:ok, first_command, :created} =
-             Orchestration.provide_input(first_task.id, %{"answer" => "same"}, "shared-input-key",
-               now: @now
-             )
+             Orchestration.provide_input(first_task.id, %{"answer" => "same"}, "shared-input-key", now: @now)
 
     assert {:ok, second_command, :created} =
              Orchestration.provide_input(
@@ -379,9 +370,7 @@ defmodule SymmetryControl.OrchestrationReviewTest do
     transition(run.id, fence, "waiting_for_input", 122)
 
     {:ok, command, :created} =
-      Orchestration.provide_input(task.id, %{"answer" => "yes"}, "terminal-stale-command",
-        now: @now
-      )
+      Orchestration.provide_input(task.id, %{"answer" => "yes"}, "terminal-stale-command", now: @now)
 
     transition(run.id, fence, "running", 123)
     transition(run.id, fence, "completed", 124)
@@ -467,17 +456,13 @@ defmodule SymmetryControl.OrchestrationReviewTest do
     assert replayed.id == first.id
 
     assert {:error, :state_conflict} =
-             Orchestration.provide_input(task.id, %{"choice" => "release"}, "input-second",
-               now: @now
-             )
+             Orchestration.provide_input(task.id, %{"choice" => "release"}, "input-second", now: @now)
 
     assert {:error, :state_conflict} =
              Orchestration.acknowledge_command(first.id, fence, "applied", uuid(143), now: @now)
 
     assert {:error, :state_conflict} =
-             Orchestration.provide_input(task.id, %{"choice" => "release"}, "input-second",
-               now: @now
-             )
+             Orchestration.provide_input(task.id, %{"choice" => "release"}, "input-second", now: @now)
 
     transition(run.id, fence, "running", 144)
 
@@ -487,9 +472,7 @@ defmodule SymmetryControl.OrchestrationReviewTest do
     transition(run.id, fence, "waiting_for_input", 145)
 
     assert {:ok, _second, :created} =
-             Orchestration.provide_input(task.id, %{"choice" => "release"}, "input-second",
-               now: @now
-             )
+             Orchestration.provide_input(task.id, %{"choice" => "release"}, "input-second", now: @now)
   end
 
   test "concurrent first task submission and runtime registration are idempotent" do
@@ -499,17 +482,15 @@ defmodule SymmetryControl.OrchestrationReviewTest do
       agent_profile = "concurrent-#{suffix}"
       task_key = "concurrent-task-#{suffix}"
       runtime_key = "concurrent-runtime-#{suffix}"
-      concurrent_now = DateTime.add(@now, 1, :hour)
+      concurrent_now = DateTime.shift(@now, hour: 1)
 
       submitted =
         concurrently(2, fn _ ->
-          Orchestration.submit_task(task_attrs(agent_profile: agent_profile), task_key,
-            now: concurrent_now
-          )
+          Orchestration.submit_task(task_attrs(agent_profile: agent_profile), task_key, now: concurrent_now)
         end)
 
       assert Enum.count(submitted, &match?({:ok, _, _}, &1)) == 2
-      assert Enum.map(submitted, fn {:ok, task, _} -> task.id end) |> Enum.uniq() |> length() == 1
+      assert submitted |> Enum.map(fn {:ok, task, _} -> task.id end) |> Enum.uniq() |> length() == 1
 
       registered =
         concurrently(2, fn _ ->
@@ -523,11 +504,13 @@ defmodule SymmetryControl.OrchestrationReviewTest do
 
       assert Enum.all?(registered, &match?({:ok, [_]}, &1))
 
-      assert Enum.map(registered, fn {:ok, [runtime]} -> runtime.id end)
+      assert registered
+             |> Enum.map(fn {:ok, [runtime]} -> runtime.id end)
              |> Enum.uniq()
              |> length() == 1
 
-      assert Enum.map(registered, fn {:ok, [runtime]} -> runtime.connection_epoch end)
+      assert registered
+             |> Enum.map(fn {:ok, [runtime]} -> runtime.connection_epoch end)
              |> Enum.uniq() == [1]
 
       {:ok, task, _} = hd(submitted)
@@ -549,10 +532,10 @@ defmodule SymmetryControl.OrchestrationReviewTest do
 
       assert Enum.count(inputs, &match?({:ok, _, _}, &1)) == 2
 
-      assert Enum.map(inputs, fn {:ok, _command, disposition} -> disposition end) |> Enum.sort() ==
+      assert inputs |> Enum.map(fn {:ok, _command, disposition} -> disposition end) |> Enum.sort() ==
                [:created, :replayed]
 
-      assert Enum.map(inputs, fn {:ok, command, _} -> command.id end) |> Enum.uniq() |> length() ==
+      assert inputs |> Enum.map(fn {:ok, command, _} -> command.id end) |> Enum.uniq() |> length() ==
                1
 
       Repo.delete!(task)
@@ -574,10 +557,11 @@ defmodule SymmetryControl.OrchestrationReviewTest do
 
       results = concurrently(2, fn _ -> Orchestration.enroll_machine(attrs, key, opts) end)
 
-      assert Enum.map(results, fn {:ok, _enrolled, disposition} -> disposition end) |> Enum.sort() ==
+      assert results |> Enum.map(fn {:ok, _enrolled, disposition} -> disposition end) |> Enum.sort() ==
                [:created, :replayed]
 
-      assert Enum.map(results, fn {:ok, enrolled, _disposition} -> enrolled.machine.id end)
+      assert results
+             |> Enum.map(fn {:ok, enrolled, _disposition} -> enrolled.machine.id end)
              |> Enum.uniq()
              |> length() == 1
 
@@ -598,7 +582,7 @@ defmodule SymmetryControl.OrchestrationReviewTest do
       fence = claim(run, runtime, @now)
       transition(run.id, fence, "running", 151)
       transition(run.id, fence, "waiting_for_input", 152)
-      expired_at = DateTime.add(@now, 31, :second)
+      expired_at = DateTime.shift(@now, second: 31)
       parent = self()
 
       assert {:ok, {input_task, replacement_run}} =
@@ -641,12 +625,12 @@ defmodule SymmetryControl.OrchestrationReviewTest do
       assert {:error, :state_conflict} = Task.await(input_task, 5_000)
 
       refute Repo.exists?(
-               from command in SymmetryControl.Orchestration.Command,
+               from command in Command,
                  where: command.task_id == ^task.id and command.kind == "provide_input"
              )
 
       refute Repo.exists?(
-               from command in SymmetryControl.Orchestration.Command,
+               from command in Command,
                  where: command.run_id == ^replacement_run.id and command.kind == "provide_input"
              )
 
@@ -679,8 +663,8 @@ defmodule SymmetryControl.OrchestrationReviewTest do
       assert {:ok, run} = Orchestration.assign_one(now: @now)
       fence = claim(run, runtime, @now)
       transition(run.id, fence, "running", 251)
-      expired_at = DateTime.add(@now, 30, :second)
-      terminal_at = DateTime.add(expired_at, 1, :second)
+      expired_at = DateTime.shift(@now, second: 30)
+      terminal_at = DateTime.shift(expired_at, second: 1)
 
       assert %{expired_runs: 1} = Orchestration.expire(now: expired_at)
 
@@ -772,6 +756,5 @@ defmodule SymmetryControl.OrchestrationReviewTest do
     Enum.map(tasks, &Task.await(&1, 5_000))
   end
 
-  defp uuid(number),
-    do: "00000000-0000-0000-0000-" <> String.pad_leading(Integer.to_string(number), 12, "0")
+  defp uuid(number), do: "00000000-0000-0000-0000-" <> String.pad_leading(Integer.to_string(number), 12, "0")
 end

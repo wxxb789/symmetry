@@ -35,8 +35,7 @@ defmodule SymmetryControlWeb.TestConn do
 
   def bearer(conn, token), do: put_req_header(conn, "authorization", "Bearer " <> token)
 
-  def enforce_csrf(conn),
-    do: %{conn | private: Map.delete(conn.private, :plug_skip_csrf_protection)}
+  def enforce_csrf(conn), do: %{conn | private: Map.delete(conn.private, :plug_skip_csrf_protection)}
 
   def create_resource(project, connection, kind, name, external_ref) do
     %{"resource" => resource} =

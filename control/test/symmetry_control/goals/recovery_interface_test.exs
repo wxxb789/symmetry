@@ -82,9 +82,7 @@ defmodule SymmetryControl.Goals.RecoveryInterfaceTest do
     assert goal_id == goal.id
 
     assert {:ok, []} =
-             Recovery.recoverable_unstarted_cancellation_goal_ids(
-               goal_ids: [Ecto.UUID.generate()]
-             )
+             Recovery.recoverable_unstarted_cancellation_goal_ids(goal_ids: [Ecto.UUID.generate()])
 
     assert {:error, :invalid_request} =
              Recovery.recoverable_unstarted_cancellation_goal_ids(limit: 0)
@@ -104,9 +102,8 @@ defmodule SymmetryControl.Goals.RecoveryInterfaceTest do
 
     assert {:ok, []} = Recovery.recover_pending_terminal_settlements(now: @now)
 
-    assert Recovery.recover_pending_terminal_settlements(now: DateTime.add(@now, 8 * 60, :second)) ==
-             {:ok,
-              [%{task_id: task.id, run_id: run.id, generation: 1, reconciliation: :settlement}]}
+    assert Recovery.recover_pending_terminal_settlements(now: DateTime.shift(@now, minute: 8)) ==
+             {:ok, [%{task_id: task.id, run_id: run.id, generation: 1, reconciliation: :settlement}]}
   end
 
   test "recover_pending_goal_control_actions/1 returns the latest pending control action" do
@@ -156,8 +153,7 @@ defmodule SymmetryControl.Goals.RecoveryInterfaceTest do
              Goals.command(
                goal.id,
                goal_command(current, "amend", %{
-                 revision_contract:
-                   amended_revision_contract("Stale work must settle before resume."),
+                 revision_contract: amended_revision_contract("Stale work must settle before resume."),
                  reason: "Scope changed."
                }),
                "operator:test",

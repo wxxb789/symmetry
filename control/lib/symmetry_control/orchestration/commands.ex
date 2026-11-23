@@ -1,8 +1,6 @@
 defmodule SymmetryControl.Orchestration.Commands do
   @moduledoc false
 
-  @supervisory_commands ["guidance", "pause", "resume"]
-
   import Ecto.Query
 
   import SymmetryControl.Goals.Eligibility,
@@ -62,10 +60,12 @@ defmodule SymmetryControl.Orchestration.Commands do
     ]
 
   alias SymmetryControl.Orchestration.Command
-  alias SymmetryControl.Repo
-  alias SymmetryControl.RequestHash
   alias SymmetryControl.Orchestration.Run
   alias SymmetryControl.Orchestration.Task
+  alias SymmetryControl.Repo
+  alias SymmetryControl.RequestHash
+
+  @supervisory_commands ["guidance", "pause", "resume"]
 
   @spec retry_required_capabilities(map(), map() | nil) :: map()
   def retry_required_capabilities(required, current_required) when is_map(required) do
@@ -79,16 +79,14 @@ defmodule SymmetryControl.Orchestration.Commands do
   def create_command(task_id, kind, payload, idempotency_key, opts \\ [])
 
   def create_command(task_id, kind, payload, idempotency_key, opts)
-      when is_binary(task_id) and is_binary(kind) and is_map(payload) and
-             is_binary(idempotency_key) and byte_size(idempotency_key) > 0 do
-    if not (valid_uuid?(task_id) and valid_command_request?(kind, payload)) do
-      {:error, :invalid_request}
-    else
+      when is_binary(task_id) and is_binary(kind) and is_map(payload) and is_binary(idempotency_key) and
+             byte_size(idempotency_key) > 0 do
+    if valid_uuid?(task_id) and valid_command_request?(kind, payload) do
       normalized_payload = normalize_command_payload(kind, payload)
       command_hash = command_request_hash(kind, normalized_payload, opts)
       notify? = not Repo.in_transaction?()
 
-      Repo.transaction(fn ->
+      fn ->
         task = lock_task(task_id)
         current = now(opts)
 
@@ -103,7 +101,8 @@ defmodule SymmetryControl.Orchestration.Commands do
           current,
           opts
         )
-      end)
+      end
+      |> Repo.transaction()
       |> case do
         {:ok, {command, disposition, receipt}} ->
           notify_goal_task_terminal(receipt, opts, notify?)
@@ -112,6 +111,8 @@ defmodule SymmetryControl.Orchestration.Commands do
         error ->
           error
       end
+    else
+      {:error, :invalid_request}
     end
   end
 
@@ -128,30 +129,12 @@ defmodule SymmetryControl.Orchestration.Commands do
           String.t(),
           keyword()
         ) :: {:ok, Command.t(), :created | :replayed} | {:error, atom()}
-  def create_goal_control_command(
-        goal_id,
-        revision,
-        action_id,
-        task_id,
-        kind,
-        payload,
-        idempotency_key,
-        opts \\ []
-      )
+  def create_goal_control_command(goal_id, revision, action_id, task_id, kind, payload, idempotency_key, opts \\ [])
 
-  def create_goal_control_command(
-        goal_id,
-        revision,
-        action_id,
-        task_id,
-        kind,
-        payload,
-        idempotency_key,
-        opts
-      )
-      when is_binary(goal_id) and is_integer(revision) and revision > 0 and is_binary(action_id) and
-             is_binary(task_id) and is_binary(kind) and is_map(payload) and
-             is_binary(idempotency_key) and byte_size(idempotency_key) > 0 and is_list(opts) do
+  def create_goal_control_command(goal_id, revision, action_id, task_id, kind, payload, idempotency_key, opts)
+      when is_binary(goal_id) and is_integer(revision) and revision > 0 and is_binary(action_id) and is_binary(task_id) and
+             is_binary(kind) and is_map(payload) and is_binary(idempotency_key) and byte_size(idempotency_key) > 0 and
+             is_list(opts) do
     {:error, :goal_authority_required}
   end
 
@@ -163,18 +146,12 @@ defmodule SymmetryControl.Orchestration.Commands do
   def create_goal_control_command_in_transaction(authorization, envelope, opts \\ [])
 
   def create_goal_control_command_in_transaction(
-        %{
-          goal_id: goal_id,
-          revision: revision,
-          action_id: action_id,
-          kind: kind
-        },
+        %{goal_id: goal_id, revision: revision, action_id: action_id, kind: kind},
         %{task_id: task_id, payload: payload, idempotency_key: idempotency_key} = envelope,
         opts
       )
-      when is_integer(revision) and revision > 0 and is_binary(kind) and is_binary(task_id) and
-             is_map(payload) and is_binary(idempotency_key) and byte_size(idempotency_key) > 0 and
-             is_list(opts) do
+      when is_integer(revision) and revision > 0 and is_binary(kind) and is_binary(task_id) and is_map(payload) and
+             is_binary(idempotency_key) and byte_size(idempotency_key) > 0 and is_list(opts) do
     if valid_uuid?(goal_id) and valid_uuid?(action_id) and valid_uuid?(task_id) and
          kind in ["pause", "cancel"] and valid_command_request?(kind, payload) and
          idempotency_key == goal_control_idempotency_key(action_id, kind, task_id) do
@@ -212,9 +189,9 @@ defmodule SymmetryControl.Orchestration.Commands do
   def request_cancel(task_id, opts \\ [])
 
   def request_cancel(task_id, opts) when is_binary(task_id) do
-    if not valid_uuid?(task_id),
-      do: {:error, :invalid_request},
-      else: request_task_cancel(task_id, opts)
+    if valid_uuid?(task_id),
+      do: request_task_cancel(task_id, opts),
+      else: {:error, :invalid_request}
   end
 
   def request_cancel(_, _), do: {:error, :invalid_request}
@@ -222,7 +199,7 @@ defmodule SymmetryControl.Orchestration.Commands do
   defp request_task_cancel(task_id, opts) do
     notify? = not Repo.in_transaction?()
 
-    Repo.transaction(fn ->
+    fn ->
       task = lock_task(task_id)
       current = now(opts)
 
@@ -248,7 +225,8 @@ defmodule SymmetryControl.Orchestration.Commands do
         task = lock_task(task.id)
         {task, command, receipt}
       end
-    end)
+    end
+    |> Repo.transaction()
     |> case do
       {:ok, {task, command, receipt}} ->
         notify_goal_task_terminal(receipt, opts, notify?)
@@ -264,8 +242,7 @@ defmodule SymmetryControl.Orchestration.Commands do
   def provide_input(task_id, payload, idempotency_key, opts \\ [])
 
   def provide_input(task_id, payload, idempotency_key, opts)
-      when is_binary(task_id) and is_map(payload) and is_binary(idempotency_key) and
-             byte_size(idempotency_key) > 0 do
+      when is_binary(task_id) and is_map(payload) and is_binary(idempotency_key) and byte_size(idempotency_key) > 0 do
     create_command(task_id, "provide_input", payload, idempotency_key, opts)
   end
 
@@ -276,14 +253,11 @@ defmodule SymmetryControl.Orchestration.Commands do
   def retry_task(task_id, attrs, idempotency_key, opts \\ [])
 
   def retry_task(task_id, attrs, idempotency_key, opts)
-      when is_binary(task_id) and is_map(attrs) and is_binary(idempotency_key) and
-             byte_size(idempotency_key) > 0 do
+      when is_binary(task_id) and is_map(attrs) and is_binary(idempotency_key) and byte_size(idempotency_key) > 0 do
     task_attrs = normalize_task_attrs(attrs)
 
-    if not (valid_uuid?(task_id) and valid_task_attrs?(task_attrs)) do
-      {:error, :invalid_request}
-    else
-      Repo.transaction(fn ->
+    if valid_uuid?(task_id) and valid_task_attrs?(task_attrs) do
+      fn ->
         task = lock_task(task_id)
         current = now(opts)
 
@@ -315,8 +289,7 @@ defmodule SymmetryControl.Orchestration.Commands do
             else
               run =
                 if task.current_generation == task.attempt_generation,
-                  do: lock_current_run(task),
-                  else: nil
+                  do: lock_current_run(task)
 
               current = now(opts)
 
@@ -351,26 +324,21 @@ defmodule SymmetryControl.Orchestration.Commands do
               {task, command, :created}
             end
         end
-      end)
+      end
+      |> Repo.transaction()
       |> case do
         {:ok, {task, command, disposition}} -> {:ok, task, command, disposition}
         {:ok, {:attempt_limit, _task}} -> {:error, :attempt_limit}
         error -> error
       end
+    else
+      {:error, :invalid_request}
     end
   end
 
   def retry_task(_, _, _, _), do: {:error, :invalid_request}
 
-  defp create_or_replay_locked_command!(
-         task,
-         kind,
-         payload,
-         idempotency_key,
-         command_hash,
-         current,
-         opts
-       ) do
+  defp create_or_replay_locked_command!(task, kind, payload, idempotency_key, command_hash, current, opts) do
     case lock_task_command(task.id, idempotency_key) do
       %Command{} = command ->
         ensure_command_replay!(command, kind, payload, opts)
@@ -469,15 +437,7 @@ defmodule SymmetryControl.Orchestration.Commands do
     end
   end
 
-  defp create_new_command!(
-         task,
-         "provide_input",
-         payload,
-         idempotency_key,
-         command_hash,
-         _current,
-         opts
-       ) do
+  defp create_new_command!(task, "provide_input", payload, idempotency_key, command_hash, _current, opts) do
     ensure_expected_generation!(task, Keyword.get(opts, :expected_generation))
 
     if task.state != "waiting_for_input" do
@@ -528,9 +488,9 @@ defmodule SymmetryControl.Orchestration.Commands do
     runtime = lock_runtime(run.runtime_id)
     current = now(opts)
 
-    unless legacy_supervisory_runtime?(runtime) and
-             value(runtime.capabilities, :supervisory_control, false) == true,
-           do: rollback(:unsupported_control)
+    if !(legacy_supervisory_runtime?(runtime) and
+           value(runtime.capabilities, :supervisory_control, false) == true),
+       do: rollback(:unsupported_control)
 
     allowed? =
       case kind do
@@ -539,7 +499,7 @@ defmodule SymmetryControl.Orchestration.Commands do
         "resume" -> task.state == "paused"
       end
 
-    unless allowed? and run.state == task.state and task.attempt_generation == run.generation,
+    if !(allowed? and run.state == task.state and task.attempt_generation == run.generation),
       do: rollback(:state_conflict)
 
     if runtime.connection_epoch != run.claimed_runtime_epoch or
@@ -598,14 +558,10 @@ defmodule SymmetryControl.Orchestration.Commands do
 
   def acknowledge_command(command_id, fence, outcome, acknowledgement_id, opts)
       when is_map(fence) and is_binary(outcome) do
-    if not (valid_uuid?(command_id) and valid_fence?(fence) and valid_uuid?(acknowledgement_id)) do
-      {:error, :invalid_request}
-    else
+    if valid_uuid?(command_id) and valid_fence?(fence) and valid_uuid?(acknowledgement_id) do
       Repo.transaction(fn ->
         run_id =
-          Repo.one(
-            from command in Command, where: command.id == ^command_id, select: command.run_id
-          ) ||
+          Repo.one(from command in Command, where: command.id == ^command_id, select: command.run_id) ||
             rollback(:not_found)
 
         {task, run, runtime} = lock_chain(run_id)
@@ -682,6 +638,8 @@ defmodule SymmetryControl.Orchestration.Commands do
             end
         end
       end)
+    else
+      {:error, :invalid_request}
     end
   end
 
@@ -695,7 +653,7 @@ defmodule SymmetryControl.Orchestration.Commands do
           work_item_id -> (item && item.id == work_item_id) and item.goal_id == goal_id
         end
 
-    unless owned?, do: rollback(:ownership_lost)
+    if !owned?, do: rollback(:ownership_lost)
   end
 
   defp ensure_goal_control_run_envelope!(task, envelope) do
@@ -709,7 +667,7 @@ defmodule SymmetryControl.Orchestration.Commands do
       {run_id, generation} when is_binary(run_id) and is_integer(generation) and generation > 0 ->
         run = lock_current_run(task)
 
-        unless run.id == run_id and run.generation == generation,
+        if !(run.id == run_id and run.generation == generation),
           do: rollback(:ownership_lost)
 
       _ ->
@@ -737,8 +695,7 @@ defmodule SymmetryControl.Orchestration.Commands do
 
   defp ensure_expected_generation!(_task, nil), do: :ok
 
-  defp ensure_expected_generation!(task, expected_generation)
-       when is_integer(expected_generation) do
+  defp ensure_expected_generation!(task, expected_generation) when is_integer(expected_generation) do
     if task.attempt_generation != expected_generation, do: rollback(:state_conflict)
   end
 
@@ -746,13 +703,11 @@ defmodule SymmetryControl.Orchestration.Commands do
 
   defp ensure_expected_waiting!(_task, _run, nil), do: :ok
 
-  defp ensure_expected_waiting!(task, _run, expected_transition_id)
-       when is_binary(expected_transition_id) do
+  defp ensure_expected_waiting!(task, _run, expected_transition_id) when is_binary(expected_transition_id) do
     if task.waiting_transition_id != expected_transition_id, do: rollback(:state_conflict)
   end
 
-  defp ensure_expected_waiting!(_task, _run, _expected_transition_id),
-    do: rollback(:invalid_request)
+  defp ensure_expected_waiting!(_task, _run, _expected_transition_id), do: rollback(:invalid_request)
 
   defp normalize_command_payload("cancel", _payload), do: %{}
   defp normalize_command_payload("provide_input", payload), do: payload
@@ -777,7 +732,7 @@ defmodule SymmetryControl.Orchestration.Commands do
         3 -> RequestHash.canonical(command_request_body(kind, payload, opts))
       end
 
-    unless command.request_hash == expected_hash, do: rollback(:idempotency_conflict)
+    if command.request_hash != expected_hash, do: rollback(:idempotency_conflict)
   end
 
   defp lock_task_command(task_id, idempotency_key) do
@@ -788,8 +743,7 @@ defmodule SymmetryControl.Orchestration.Commands do
     )
   end
 
-  defp legacy_cancel_idempotency_key(%Task{current_generation: 0, id: task_id}),
-    do: "legacy-cancel:task:" <> task_id
+  defp legacy_cancel_idempotency_key(%Task{current_generation: 0, id: task_id}), do: "legacy-cancel:task:" <> task_id
 
   defp legacy_cancel_idempotency_key(task) do
     run = lock_current_run(task)

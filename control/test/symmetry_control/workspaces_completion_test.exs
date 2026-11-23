@@ -2,8 +2,11 @@ defmodule SymmetryControl.WorkspacesCompletionTest do
   use SymmetryControl.OrchestrationCase, async: false
 
   alias Ecto.Adapters.SQL.Sandbox
-  alias SymmetryControl.{Orchestration, Workspaces}
+  alias SymmetryControl.Orchestration
+  alias SymmetryControl.Workspaces
+  alias SymmetryControl.Workspaces.Project
   alias SymmetryControl.Workspaces.ProjectResource
+  alias SymmetryControl.Workspaces.WorkItem
 
   test "project settings use optimistic versions and archiving preserves project data" do
     project = project_fixture()
@@ -79,9 +82,7 @@ defmodule SymmetryControl.WorkspacesCompletionTest do
                sync_status: "failed"
              })
 
-    assert "must be present when health or synchronization needs attention" in errors_on(
-             changeset
-           ).status_message
+    assert "must be present when health or synchronization needs attention" in errors_on(changeset).status_message
 
     assert {:ok, resource} =
              Workspaces.create_resource(project.id, %{
@@ -580,8 +581,8 @@ defmodule SymmetryControl.WorkspacesCompletionTest do
     assert Enum.count(results, &match?({:error, :state_conflict}, &1)) == 1
 
     Sandbox.unboxed_run(Repo, fn ->
-      current_project = Repo.get!(SymmetryControl.Workspaces.Project, project.id)
-      current_item = Repo.get!(SymmetryControl.Workspaces.WorkItem, item.id)
+      current_project = Repo.get!(Project, project.id)
+      current_item = Repo.get!(WorkItem, item.id)
 
       refute current_project.status == "archived" and
                is_binary(current_item.orchestration_task_id)
@@ -624,7 +625,7 @@ defmodule SymmetryControl.WorkspacesCompletionTest do
     Sandbox.unboxed_run(Repo, fn ->
       items =
         Repo.all(
-          from item in SymmetryControl.Workspaces.WorkItem,
+          from item in WorkItem,
             where: item.project_id == ^project.id and item.status == "ready",
             order_by: [asc: item.position]
         )
@@ -704,23 +705,19 @@ defmodule SymmetryControl.WorkspacesCompletionTest do
     Sandbox.unboxed_run(Repo, fn ->
       task_ids =
         Repo.all(
-          from item in SymmetryControl.Workspaces.WorkItem,
+          from item in WorkItem,
             where: item.project_id == ^project_id and not is_nil(item.orchestration_task_id),
             select: item.orchestration_task_id
         )
 
-      Repo.delete_all(
-        from project in SymmetryControl.Workspaces.Project, where: project.id == ^project_id
-      )
+      Repo.delete_all(from project in Project, where: project.id == ^project_id)
 
-      Repo.delete_all(
-        from task in SymmetryControl.Orchestration.Task, where: task.id in ^task_ids
-      )
+      Repo.delete_all(from task in SymmetryControl.Orchestration.Task, where: task.id in ^task_ids)
     end)
   end
 
   defp unique_key(prefix) do
-    suffix = System.unique_integer([:positive]) |> rem(10_000_000) |> Integer.to_string()
+    suffix = [:positive] |> System.unique_integer() |> rem(10_000_000) |> Integer.to_string()
     prefix <> String.pad_leading(suffix, 7, "0")
   end
 

@@ -61,20 +61,16 @@ defmodule SymmetryControlWeb.PortalSession do
   # whose resource surface it scopes; both are shell-written view state. Without
   # the project clause a session expiry collapses a project-scoped connections
   # page to /portal.
-  defp shell_query?("/portal/connections", query),
-    do: all_params?(query, @connections_query_params)
+  defp shell_query?("/portal/connections", query), do: all_params?(query, @connections_query_params)
 
   # The shell's runtimes navigation carries the same project scope as the work
   # surface; without this clause a session expiry collapses a project-scoped
   # runtimes page to /portal.
-  defp shell_query?("/portal/runtimes", query),
-    do: Regex.match?(@work_project_param, query)
+  defp shell_query?("/portal/runtimes", query), do: Regex.match?(@work_project_param, query)
 
-  defp shell_query?("/portal/projects/" <> _project_id, query),
-    do: all_params?(query, @work_search_params)
+  defp shell_query?("/portal/projects/" <> _project_id, query), do: all_params?(query, @work_search_params)
 
-  defp shell_query?("/portal/work/" <> _work_item_id, query),
-    do: all_params?(query, @work_item_search_params)
+  defp shell_query?("/portal/work/" <> _work_item_id, query), do: all_params?(query, @work_item_search_params)
 
   defp shell_query?(_path, _query), do: false
 
@@ -86,8 +82,7 @@ defmodule SymmetryControlWeb.PortalSession do
 
   defp chat_query?(query), do: all_params?(query, [@chat_scope_param, @chat_identifier_param])
 
-  defp legacy_hash_query?(query),
-    do: all_params?(query, [@legacy_identifier_param, @legacy_chat_scope_param])
+  defp legacy_hash_query?(query), do: all_params?(query, [@legacy_identifier_param, @legacy_chat_scope_param])
 
   def issue(operator_token, opts \\ []) when is_binary(operator_token) do
     %{
@@ -120,8 +115,7 @@ defmodule SymmetryControlWeb.PortalSession do
     |> Keyword.get(:portal_session_max_age_seconds, @default_max_age_seconds)
   end
 
-  defp fingerprint(token),
-    do: token |> then(&:crypto.hash(:sha256, &1)) |> Base.encode16(case: :lower)
+  defp fingerprint(token), do: token |> then(&:crypto.hash(:sha256, &1)) |> Base.encode16(case: :lower)
 
   defp value(map, key), do: Map.get(map, key) || Map.get(map, Atom.to_string(key))
 end

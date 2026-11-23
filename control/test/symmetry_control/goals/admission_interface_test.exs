@@ -78,9 +78,7 @@ defmodule SymmetryControl.Goals.AdmissionInterfaceTest do
 
     assert {:ok, task} =
              Repo.transaction(fn ->
-               Admission.admit_authorized_task!(goal, item, "implement", "codex", payload,
-                 now: @now
-               )
+               Admission.admit_authorized_task!(goal, item, "implement", "codex", payload, now: @now)
              end)
 
     assert task.state == "queued"
@@ -155,9 +153,7 @@ defmodule SymmetryControl.Goals.AdmissionInterfaceTest do
 
     assert Repo.aggregate(WorkItem, :count) == 0
 
-    assert Repo.one!(
-             from(reservation in GoalBudgetReservation, where: reservation.task_id == ^task.id)
-           ).state == "held"
+    assert Repo.one!(from(reservation in GoalBudgetReservation, where: reservation.task_id == ^task.id)).state == "held"
   end
 
   test "admit_authorized_task!/6 rechecks item admissibility before one admission" do
@@ -178,9 +174,7 @@ defmodule SymmetryControl.Goals.AdmissionInterfaceTest do
 
     assert {:ok, task} =
              Repo.transaction(fn ->
-               Admission.admit_authorized_task!(goal, item, "implement", "codex", payload,
-                 now: @now
-               )
+               Admission.admit_authorized_task!(goal, item, "implement", "codex", payload, now: @now)
              end)
 
     assert task.work_item_id == item.id
@@ -223,8 +217,8 @@ defmodule SymmetryControl.Goals.AdmissionInterfaceTest do
   end
 
   test "ensure_achievable!/2 binds the accepted integration outcome to the frozen subject" do
-    {goal, item, _producer, _producer_run, validation, validation_run, validation_runtime,
-     validation_fence, candidate_subject} = independent_validation_attempt_fixture()
+    {goal, item, _producer, _producer_run, validation, validation_run, validation_runtime, validation_fence,
+     candidate_subject} = independent_validation_attempt_fixture()
 
     {_evidence, stored_evidence} =
       append_validation_evidence_and_settle_accepted!(
@@ -261,8 +255,8 @@ defmodule SymmetryControl.Goals.AdmissionInterfaceTest do
   end
 
   test "goal_predicate_matches_evidence?/2 matches evidence rows against the predicate it belongs to" do
-    {_goal, item, _producer, _producer_run, _validation, validation_run, validation_runtime,
-     validation_fence, candidate_subject} = independent_validation_attempt_fixture()
+    {_goal, item, _producer, _producer_run, _validation, validation_run, validation_runtime, validation_fence,
+     candidate_subject} = independent_validation_attempt_fixture()
 
     assert {:ok, %{evidence: receipt}, :created} =
              Goals.append_evidence(
@@ -351,9 +345,7 @@ defmodule SymmetryControl.Goals.AdmissionInterfaceTest do
 
     assert {:ok, server_payload} =
              Repo.transaction(fn ->
-               Admission.manual_admission_payload!(goal, item, "implement", payload, mutation_id,
-                 now: @now
-               )
+               Admission.manual_admission_payload!(goal, item, "implement", payload, mutation_id, now: @now)
              end)
 
     assert server_payload.admission_key == mutation_id

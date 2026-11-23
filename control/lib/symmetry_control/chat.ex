@@ -8,14 +8,22 @@ defmodule SymmetryControl.Chat do
 
   import Ecto.Query
 
-  alias SymmetryControl.Chat.{Action, Message, ReadModel}
+  alias SymmetryControl.Chat.Action
+  alias SymmetryControl.Chat.Message
+  alias SymmetryControl.Chat.ReadModel
   alias SymmetryControl.Orchestration
-  alias SymmetryControl.Orchestration.{Command, Notifier, Run, Runtime, Scheduler, Task}
+  alias SymmetryControl.Orchestration.Command
+  alias SymmetryControl.Orchestration.Notifier
+  alias SymmetryControl.Orchestration.Run
+  alias SymmetryControl.Orchestration.Runtime
+  alias SymmetryControl.Orchestration.Scheduler
+  alias SymmetryControl.Orchestration.Task
   alias SymmetryControl.Portal.Invalidations
   alias SymmetryControl.Repo
   alias SymmetryControl.RequestHash
   alias SymmetryControl.Workspaces
-  alias SymmetryControl.Workspaces.{Project, WorkItem}
+  alias SymmetryControl.Workspaces.Project
+  alias SymmetryControl.Workspaces.WorkItem
   alias SymmetryControlWeb.Protocol
 
   @intents ~w(discuss status start_work guidance decision pause resume cancel)
@@ -87,7 +95,7 @@ defmodule SymmetryControl.Chat do
                 else: Repo.rollback(:idempotency_conflict)
 
             nil ->
-              scope = resolve_scope(params) |> unwrap!()
+              scope = params |> resolve_scope() |> unwrap!()
               {work_item, command, reply, metadata} = execute(scope, params)
 
               attrs = %{
@@ -174,10 +182,8 @@ defmodule SymmetryControl.Chat do
           attrs = params["work"] || %{}
 
           attrs =
-            Map.take(
-              attrs,
-              ~w(title agent_profile workspace repository_resource_id ci_resource_id)
-            )
+            attrs
+            |> Map.take(~w(title agent_profile workspace repository_resource_id ci_resource_id))
             |> Map.put_new(
               "title",
               params["content"] |> String.split("\n", parts: 2) |> hd() |> String.slice(0, 160)
@@ -188,10 +194,10 @@ defmodule SymmetryControl.Chat do
               "assignee_type" => "agent"
             })
 
-          Workspaces.create_work_item(project_id, attrs) |> unwrap!()
+          project_id |> Workspaces.create_work_item(attrs) |> unwrap!()
 
         id ->
-          item = fetch(WorkItem, id) |> unwrap!()
+          item = WorkItem |> fetch(id) |> unwrap!()
           if item.project_id != project_id, do: Repo.rollback(:not_found)
           if params["generation"] != 0, do: Repo.rollback(:state_conflict)
           if item.orchestration_task_id, do: Repo.rollback(:state_conflict)
@@ -250,8 +256,7 @@ defmodule SymmetryControl.Chat do
 
     case result do
       {:ok, command, _disposition} ->
-        {work_item, command, control_reply(kind),
-         %{"source" => "durable_command", "generation" => generation}}
+        {work_item, command, control_reply(kind), %{"source" => "durable_command", "generation" => generation}}
 
       {:error, reason} ->
         Repo.rollback(reason)
@@ -311,12 +316,10 @@ defmodule SymmetryControl.Chat do
   end
 
   defp control_reply("guidance"),
-    do:
-      "Guidance saved for the worker's next safe execution boundary. Application is pending acknowledgement."
+    do: "Guidance saved for the worker's next safe execution boundary. Application is pending acknowledgement."
 
   defp control_reply("pause"),
-    do:
-      "Pause requested. The worker will pause at a safe boundary; check the command acknowledgement for confirmation."
+    do: "Pause requested. The worker will pause at a safe boundary; check the command acknowledgement for confirmation."
 
   defp control_reply("resume"),
     do: "Resume requested. Autonomous work continues after the worker acknowledges this command."
@@ -325,15 +328,14 @@ defmodule SymmetryControl.Chat do
     do: "Cancellation requested. Execution history and useful workspace artifacts are retained."
 
   defp control_reply("decision"),
-    do:
-      "Decision saved for this waiting request. The worker will continue after it consumes the response."
+    do: "Decision saved for this waiting request. The worker will continue after it consumes the response."
 
   defp optional_target(scope, %{"work_item_id" => _} = params), do: required_target(scope, params)
   defp optional_target(%{kind: "run", work_item: item}, _params), do: item
   defp optional_target(_scope, _params), do: nil
 
   defp required_target(scope, params) do
-    item = fetch(WorkItem, params["work_item_id"]) |> unwrap!()
+    item = WorkItem |> fetch(params["work_item_id"]) |> unwrap!()
 
     cond do
       scope.kind == "project" and item.project_id != scope.project_id -> Repo.rollback(:not_found)
@@ -351,8 +353,7 @@ defmodule SymmetryControl.Chat do
   defp resolve_scope(%{"scope" => "project", "project_id" => id} = params) do
     with {:ok, project} <- fetch(Project, id),
          true <- is_nil(params["run_id"]) do
-      {:ok,
-       %{kind: "project", key: "project:" <> project.id, project_id: project.id, run_id: nil}}
+      {:ok, %{kind: "project", key: "project:" <> project.id, project_id: project.id, run_id: nil}}
     else
       false -> {:error, :invalid_request}
       error -> error
@@ -407,8 +408,8 @@ defmodule SymmetryControl.Chat do
   end
 
   defp response(action) do
-    message = Repo.get!(Message, action.message_id) |> Repo.preload(:command)
-    reply = Repo.get!(Message, action.reply_id) |> Repo.preload(:command)
+    message = Message |> Repo.get!(action.message_id) |> Repo.preload(:command)
+    reply = Message |> Repo.get!(action.reply_id) |> Repo.preload(:command)
 
     %{
       message: message_json(message),

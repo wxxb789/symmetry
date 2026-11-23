@@ -17,13 +17,11 @@ defmodule SymmetryControl.Migrations.VersionRequestHashesTest do
         INSERT INTO machines (id, name, token_digest, inserted_at, updated_at)
         VALUES ($1, 'legacy-history', $2, now(), now())
         """,
-        [Ecto.UUID.generate() |> Ecto.UUID.dump!(), <<1>>]
+        [Ecto.UUID.dump!(Ecto.UUID.generate()), <<1>>]
       )
 
       assert %{rows: [[1]]} =
-               Repo.query!(
-                 "SELECT enrollment_request_hash_version FROM machines WHERE name = 'legacy-history'"
-               )
+               Repo.query!("SELECT enrollment_request_hash_version FROM machines WHERE name = 'legacy-history'")
 
       migrate_down!()
 
@@ -41,7 +39,7 @@ defmodule SymmetryControl.Migrations.VersionRequestHashesTest do
         INSERT INTO machines (id, name, token_digest, enrollment_request_hash_version, inserted_at, updated_at)
         VALUES ($1, 'canonical-history', $2, 2, now(), now())
         """,
-        [Ecto.UUID.generate() |> Ecto.UUID.dump!(), <<1>>]
+        [Ecto.UUID.dump!(Ecto.UUID.generate()), <<1>>]
       )
 
       assert_raise Postgrex.Error, ~r/cannot remove request hash versions/i, &migrate_down!/0

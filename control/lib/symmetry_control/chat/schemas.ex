@@ -1,5 +1,7 @@
 defmodule SymmetryControl.Chat.Message do
+  @moduledoc false
   use Ecto.Schema
+
   import Ecto.Changeset
 
   @primary_key {:id, :binary_id, autogenerate: true}
@@ -39,8 +41,12 @@ defmodule SymmetryControl.Chat.Message do
 end
 
 defmodule SymmetryControl.Chat.Action do
+  @moduledoc false
   use Ecto.Schema
+
   import Ecto.Changeset
+
+  alias SymmetryControl.Chat.Message
 
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
@@ -48,8 +54,8 @@ defmodule SymmetryControl.Chat.Action do
     field :action_id, :string
     field :request_hash, :binary
     field :request_hash_version, :integer, default: 1
-    belongs_to :message, SymmetryControl.Chat.Message
-    belongs_to :reply, SymmetryControl.Chat.Message
+    belongs_to :message, Message
+    belongs_to :reply, Message
     timestamps(type: :utc_datetime_usec, updated_at: false)
   end
 

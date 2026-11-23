@@ -84,9 +84,7 @@ defmodule SymmetryControl.Migrations.AddHistoryLookupIndexesTest do
 
   defp indexes_by_name do
     %{rows: rows} =
-      Repo.query!(
-        "SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = current_schema()"
-      )
+      Repo.query!("SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = current_schema()")
 
     Map.new(rows, fn [name, definition] -> {name, String.replace(definition, "\"", "")} end)
   end
@@ -103,13 +101,14 @@ defmodule SymmetryControl.Migrations.AddHistoryLookupIndexesTest do
 
   defp assert_indexes_valid! do
     valid_indexes =
-      Repo.query!("""
+      """
       SELECT index_class.relname, index_metadata.indisvalid
       FROM pg_index AS index_metadata
       JOIN pg_class AS index_class ON index_class.oid = index_metadata.indexrelid
       JOIN pg_namespace AS index_namespace ON index_namespace.oid = index_class.relnamespace
       WHERE index_namespace.nspname = current_schema()
-      """)
+      """
+      |> Repo.query!()
       |> Map.fetch!(:rows)
       |> Map.new(fn [name, valid] -> {name, valid} end)
 

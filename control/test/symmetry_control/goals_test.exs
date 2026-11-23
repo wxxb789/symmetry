@@ -2,14 +2,27 @@ Code.require_file("goals/goals_test_support.exs", __DIR__)
 
 defmodule SymmetryControl.GoalsTest do
   use SymmetryControl.OrchestrationCase, async: false
+  @now ~U[2026-09-09 00:00:00.000000Z]
+  use SymmetryControl.TestFixtures,
+    command_opts: [
+      now: @now,
+      validation_profiles: SymmetryControl.GoalsTestSupport.validation_profiles()
+    ]
 
   import SymmetryControl.GoalsTestSupport
 
   alias SymmetryControl.Goals
+  alias SymmetryControl.Goals.ContextSnapshot
+  alias SymmetryControl.Goals.GoalBudgetReservation
+  alias SymmetryControl.Goals.GoalDecision
+  alias SymmetryControl.Goals.GoalEvent
   alias SymmetryControl.Goals.HarnessSession
   alias SymmetryControl.Goals.ReadModel
+  alias SymmetryControl.Goals.RunEvidence
+  alias SymmetryControl.Goals.WorkDependency
   alias SymmetryControl.Goals.Workers.SettleTaskWorker
   alias SymmetryControl.Goals.Workers.WakeupWorker
+  alias SymmetryControl.Goals.WorkOutcome
   alias SymmetryControl.Orchestration.Run
   alias SymmetryControl.Orchestration.Runtime
   alias SymmetryControl.Orchestration.Task
@@ -17,11 +30,7 @@ defmodule SymmetryControl.GoalsTest do
   alias SymmetryControl.TelemetryReads
   alias SymmetryControl.Workspaces.WorkItem
 
-  @now ~U[2026-09-09 00:00:00.000000Z]
   @validation_runtime_id "00000000-0000-4000-8000-000000000001"
-
-  use SymmetryControl.TestFixtures,
-    command_opts: [now: @now, validation_profiles: validation_profiles()]
 
   setup :put_goal_validation_profiles
 
@@ -67,7 +76,7 @@ defmodule SymmetryControl.GoalsTest do
         generation: 1,
         state: "completed",
         assigned_at: now,
-        assignment_expires_at: DateTime.add(now, 60, :second)
+        assignment_expires_at: DateTime.shift(now, minute: 1)
       })
       |> Repo.insert!()
 
@@ -112,8 +121,8 @@ defmodule SymmetryControl.GoalsTest do
   end
 
   test "a rejected completion Subject refuses achieve for the current revision" do
-    {goal, item, _producer, _producer_run, validation, validation_run, validation_runtime,
-     validation_fence, candidate_subject} =
+    {goal, item, _producer, _producer_run, validation, validation_run, validation_runtime, validation_fence,
+     candidate_subject} =
       independent_validation_attempt_fixture()
 
     {evidence, stored_evidence} =
@@ -137,8 +146,7 @@ defmodule SymmetryControl.GoalsTest do
     assert {:ok, _resolved, :created} =
              command_current(goal.id, "resolve_decision", %{
                decision_id: rejected_decision_id,
-               expected_decision_version:
-                 Repo.get!(SymmetryControl.Goals.GoalDecision, rejected_decision_id).lock_version,
+               expected_decision_version: Repo.get!(GoalDecision, rejected_decision_id).lock_version,
                option_id: "reject"
              })
 
@@ -170,8 +178,8 @@ defmodule SymmetryControl.GoalsTest do
   end
 
   test "a conflicting stored optional integration marker refuses achieve for a single-required plan" do
-    {goal, item, _producer, _producer_run, validation, validation_run, validation_runtime,
-     validation_fence, candidate_subject} =
+    {goal, item, _producer, _producer_run, validation, validation_run, validation_runtime, validation_fence,
+     candidate_subject} =
       independent_validation_attempt_fixture(check_contract(), %{plan_integration: false})
 
     {evidence, stored_evidence} =
@@ -304,13 +312,13 @@ defmodule SymmetryControl.GoalsTest do
     assert :ok = WakeupWorker.perform(%Oban.Job{args: %{}})
 
     assert Repo.one!(
-             from(row in SymmetryControl.Goals.GoalBudgetReservation,
+             from(row in GoalBudgetReservation,
                where: row.task_id == ^task.id
              )
            ).state == "unknown"
 
     assert Repo.aggregate(
-             from(event in SymmetryControl.Goals.GoalEvent,
+             from(event in GoalEvent,
                where:
                  event.goal_id == ^goal.id and event.kind == "task_settled" and
                    event.payload["run_id"] == ^run.id
@@ -321,7 +329,7 @@ defmodule SymmetryControl.GoalsTest do
     assert :ok = WakeupWorker.perform(%Oban.Job{args: %{}})
 
     assert Repo.aggregate(
-             from(event in SymmetryControl.Goals.GoalEvent,
+             from(event in GoalEvent,
                where:
                  event.goal_id == ^goal.id and event.kind == "task_settled" and
                    event.payload["run_id"] == ^run.id
@@ -350,7 +358,7 @@ defmodule SymmetryControl.GoalsTest do
              })
 
     assert Repo.exists?(
-             from(event in SymmetryControl.Goals.GoalEvent,
+             from(event in GoalEvent,
                where:
                  event.goal_id == ^goal.id and event.kind == "task_settled" and
                    fragment("? ->> 'task_id' = ?", event.payload, ^task.id)
@@ -440,7 +448,7 @@ defmodule SymmetryControl.GoalsTest do
         }
       })
 
-    previous_snapshot = Repo.get!(SymmetryControl.Goals.ContextSnapshot, task.context_snapshot_id)
+    previous_snapshot = Repo.get!(ContextSnapshot, task.context_snapshot_id)
     complete_task_and_release_reservation!(goal, task)
 
     assert {:ok, admission, :created} =
@@ -453,7 +461,7 @@ defmodule SymmetryControl.GoalsTest do
 
     snapshot =
       Repo.get!(
-        SymmetryControl.Goals.ContextSnapshot,
+        ContextSnapshot,
         Repo.get!(Task, admission.response["task"]["id"]).context_snapshot_id
       )
 
@@ -552,10 +560,10 @@ defmodule SymmetryControl.GoalsTest do
     retained = available_session_fixture(runtime, item, session_attrs(item, "workspace-retained"))
 
     counts_before = %{
-      snapshots: Repo.aggregate(SymmetryControl.Goals.ContextSnapshot, :count),
+      snapshots: Repo.aggregate(ContextSnapshot, :count),
       tasks: Repo.aggregate(Task, :count),
-      reservations: Repo.aggregate(SymmetryControl.Goals.GoalBudgetReservation, :count),
-      events: Repo.aggregate(SymmetryControl.Goals.GoalEvent, :count)
+      reservations: Repo.aggregate(GoalBudgetReservation, :count),
+      events: Repo.aggregate(GoalEvent, :count)
     }
 
     assert {:error, :requested_session_unavailable} =
@@ -571,10 +579,10 @@ defmodule SymmetryControl.GoalsTest do
 
     assert counts_before ==
              %{
-               snapshots: Repo.aggregate(SymmetryControl.Goals.ContextSnapshot, :count),
+               snapshots: Repo.aggregate(ContextSnapshot, :count),
                tasks: Repo.aggregate(Task, :count),
-               reservations: Repo.aggregate(SymmetryControl.Goals.GoalBudgetReservation, :count),
-               events: Repo.aggregate(SymmetryControl.Goals.GoalEvent, :count)
+               reservations: Repo.aggregate(GoalBudgetReservation, :count),
+               events: Repo.aggregate(GoalEvent, :count)
              }
   end
 
@@ -597,10 +605,10 @@ defmodule SymmetryControl.GoalsTest do
       )
 
     counts_before = %{
-      snapshots: Repo.aggregate(SymmetryControl.Goals.ContextSnapshot, :count),
+      snapshots: Repo.aggregate(ContextSnapshot, :count),
       tasks: Repo.aggregate(Task, :count),
-      reservations: Repo.aggregate(SymmetryControl.Goals.GoalBudgetReservation, :count),
-      events: Repo.aggregate(SymmetryControl.Goals.GoalEvent, :count)
+      reservations: Repo.aggregate(GoalBudgetReservation, :count),
+      events: Repo.aggregate(GoalEvent, :count)
     }
 
     assert {:error, :requested_session_unavailable} =
@@ -616,10 +624,10 @@ defmodule SymmetryControl.GoalsTest do
 
     assert counts_before ==
              %{
-               snapshots: Repo.aggregate(SymmetryControl.Goals.ContextSnapshot, :count),
+               snapshots: Repo.aggregate(ContextSnapshot, :count),
                tasks: Repo.aggregate(Task, :count),
-               reservations: Repo.aggregate(SymmetryControl.Goals.GoalBudgetReservation, :count),
-               events: Repo.aggregate(SymmetryControl.Goals.GoalEvent, :count)
+               reservations: Repo.aggregate(GoalBudgetReservation, :count),
+               events: Repo.aggregate(GoalEvent, :count)
              }
 
     assert %{binding_verified: false, state: "available", active_run_id: nil} =
@@ -643,7 +651,7 @@ defmodule SymmetryControl.GoalsTest do
     producer_runtime = runtime_fixture()
     {_producer_run, _producer_fence} = completed_goal_run_fixture(producer, producer_runtime)
 
-    snapshot_count = Repo.aggregate(SymmetryControl.Goals.ContextSnapshot, :count)
+    snapshot_count = Repo.aggregate(ContextSnapshot, :count)
 
     assert {:error, :validation_runtime_not_allowed} =
              command_current(
@@ -654,11 +662,10 @@ defmodule SymmetryControl.GoalsTest do
                  validation_of_task_id: producer.id
                }),
                rollout_enabled: true,
-               validation_profiles:
-                 validation_profiles([validation_runtime_id], [validation_runtime_id])
+               validation_profiles: validation_profiles([validation_runtime_id], [validation_runtime_id])
              )
 
-    assert Repo.aggregate(SymmetryControl.Goals.ContextSnapshot, :count) == snapshot_count
+    assert Repo.aggregate(ContextSnapshot, :count) == snapshot_count
   end
 
   test "validation admission freezes the common runtime intersection for every required profile" do
@@ -689,7 +696,7 @@ defmodule SymmetryControl.GoalsTest do
     validation_task = Repo.get!(Task, admission.response["task"]["id"])
 
     snapshot =
-      Repo.get!(SymmetryControl.Goals.ContextSnapshot, validation_task.context_snapshot_id)
+      Repo.get!(ContextSnapshot, validation_task.context_snapshot_id)
 
     assert Enum.map(
              snapshot.payload["work_contract"]["validation_bindings"],
@@ -704,7 +711,7 @@ defmodule SymmetryControl.GoalsTest do
 
     empty_runtime = runtime_fixture()
     {_empty_run, _empty_fence} = completed_goal_run_fixture(empty_producer, empty_runtime)
-    snapshot_count = Repo.aggregate(SymmetryControl.Goals.ContextSnapshot, :count)
+    snapshot_count = Repo.aggregate(ContextSnapshot, :count)
 
     assert {:error, :validation_runtime_not_allowed} =
              command_current(
@@ -715,11 +722,10 @@ defmodule SymmetryControl.GoalsTest do
                  validation_of_task_id: empty_producer.id
                }),
                rollout_enabled: true,
-               validation_profiles:
-                 validation_profiles([Ecto.UUID.generate()], [Ecto.UUID.generate()])
+               validation_profiles: validation_profiles([Ecto.UUID.generate()], [Ecto.UUID.generate()])
              )
 
-    assert Repo.aggregate(SymmetryControl.Goals.ContextSnapshot, :count) == snapshot_count
+    assert Repo.aggregate(ContextSnapshot, :count) == snapshot_count
   end
 
   test "an expired earlier Run without usage blocks strict resume while its Task retries" do
@@ -762,7 +768,7 @@ defmodule SymmetryControl.GoalsTest do
         false
       )
 
-    snapshot_count = Repo.aggregate(SymmetryControl.Goals.ContextSnapshot, :count)
+    snapshot_count = Repo.aggregate(ContextSnapshot, :count)
 
     assert {:error, :required_context_source_missing} =
              command_current(
@@ -772,7 +778,7 @@ defmodule SymmetryControl.GoalsTest do
                rollout_enabled: true
              )
 
-    assert Repo.aggregate(SymmetryControl.Goals.ContextSnapshot, :count) == snapshot_count
+    assert Repo.aggregate(ContextSnapshot, :count) == snapshot_count
 
     {budget_goal, budget_item, _budget_task} =
       admitted_task_fixture(
@@ -788,7 +794,7 @@ defmodule SymmetryControl.GoalsTest do
         false
       )
 
-    snapshot_count = Repo.aggregate(SymmetryControl.Goals.ContextSnapshot, :count)
+    snapshot_count = Repo.aggregate(ContextSnapshot, :count)
 
     assert {:error, :context_budget_exceeded} =
              command_current(
@@ -798,7 +804,7 @@ defmodule SymmetryControl.GoalsTest do
                rollout_enabled: true
              )
 
-    assert Repo.aggregate(SymmetryControl.Goals.ContextSnapshot, :count) == snapshot_count
+    assert Repo.aggregate(ContextSnapshot, :count) == snapshot_count
   end
 
   test "admission rejects a caller-defined Subject before a Task row is written" do
@@ -925,7 +931,8 @@ defmodule SymmetryControl.GoalsTest do
              command_current(
                goal.id,
                "admit_task",
-               admission_payload(item, %{
+               item
+               |> admission_payload(%{
                  purpose: "validate",
                  validation_of_task_id: producer.id
                })
@@ -1045,7 +1052,7 @@ defmodule SymmetryControl.GoalsTest do
 
     [accepted_outcome] =
       Repo.all(
-        from(outcome in SymmetryControl.Goals.WorkOutcome,
+        from(outcome in WorkOutcome,
           where:
             outcome.goal_id == ^goal.id and outcome.work_item_id == ^item.id and
               outcome.validation_task_id == ^validation.id and outcome.disposition == "accepted"
@@ -1107,7 +1114,7 @@ defmodule SymmetryControl.GoalsTest do
              })
 
     decision_id = completion_request.response["decision"]["id"]
-    decision_version = Repo.get!(SymmetryControl.Goals.GoalDecision, decision_id).lock_version
+    decision_version = Repo.get!(GoalDecision, decision_id).lock_version
 
     assert {:ok, _resolved, :created} =
              command_current(goal.id, "resolve_decision", %{
@@ -1117,8 +1124,8 @@ defmodule SymmetryControl.GoalsTest do
              })
 
     weaker_evidence =
-      %SymmetryControl.Goals.RunEvidence{}
-      |> SymmetryControl.Goals.RunEvidence.changeset(%{
+      %RunEvidence{}
+      |> RunEvidence.changeset(%{
         run_id: validation_run.id,
         evidence_key: "check:weaker-profile",
         kind: "check",
@@ -1159,8 +1166,7 @@ defmodule SymmetryControl.GoalsTest do
     assert {:ok, _resolved, :created} =
              command_current(goal.id, "resolve_decision", %{
                decision_id: review_decision_id,
-               expected_decision_version:
-                 Repo.get!(SymmetryControl.Goals.GoalDecision, review_decision_id).lock_version,
+               expected_decision_version: Repo.get!(GoalDecision, review_decision_id).lock_version,
                option_id: "accept"
              })
 
@@ -1183,8 +1189,8 @@ defmodule SymmetryControl.GoalsTest do
     optional_dependency = optional_goal_work_item!(goal, item, "Optional prerequisite")
     optional_follow_up = optional_goal_work_item!(goal, item, "Optional follow-up")
 
-    %SymmetryControl.Goals.WorkDependency{}
-    |> SymmetryControl.Goals.WorkDependency.changeset(%{
+    %WorkDependency{}
+    |> WorkDependency.changeset(%{
       goal_id: goal.id,
       work_item_id: optional_follow_up.id,
       depends_on_id: optional_dependency.id
@@ -1218,12 +1224,7 @@ defmodule SymmetryControl.GoalsTest do
   end
 
   defp goal_loop_achieve_and_replay(
-         %{
-           goal: goal,
-           item: item,
-           evidence: evidence,
-           stored_evidence: stored_evidence
-         },
+         %{goal: goal, item: item, evidence: evidence, stored_evidence: stored_evidence},
          accepted_outcome,
          decision_id
        ) do
@@ -1243,14 +1244,14 @@ defmodule SymmetryControl.GoalsTest do
     assert achieved.goal.state == "achieved"
 
     assert Repo.exists?(
-             from(outcome in SymmetryControl.Goals.WorkOutcome,
+             from(outcome in WorkOutcome,
                where: outcome.id == ^accepted_outcome.id
              )
            )
 
     achieve_event_count =
       Repo.aggregate(
-        from(event in SymmetryControl.Goals.GoalEvent,
+        from(event in GoalEvent,
           where: event.goal_id == ^goal.id and event.kind == "achieve"
         ),
         :count
@@ -1264,7 +1265,7 @@ defmodule SymmetryControl.GoalsTest do
     assert replayed == achieved
 
     assert Repo.aggregate(
-             from(event in SymmetryControl.Goals.GoalEvent,
+             from(event in GoalEvent,
                where: event.goal_id == ^goal.id and event.kind == "achieve"
              ),
              :count
@@ -1277,7 +1278,7 @@ defmodule SymmetryControl.GoalsTest do
              Goals.command(goal.id, conflicting_achieve_command, "operator:test", now: @now)
 
     assert Repo.aggregate(
-             from(event in SymmetryControl.Goals.GoalEvent,
+             from(event in GoalEvent,
                where: event.goal_id == ^goal.id and event.kind == "achieve"
              ),
              :count
@@ -1328,10 +1329,10 @@ defmodule SymmetryControl.GoalsTest do
 
   defp handoff_admission_counts(goal_id) do
     %{
-      snapshots: Repo.aggregate(SymmetryControl.Goals.ContextSnapshot, :count),
+      snapshots: Repo.aggregate(ContextSnapshot, :count),
       tasks: Repo.aggregate(Task, :count),
-      reservations: Repo.aggregate(SymmetryControl.Goals.GoalBudgetReservation, :count),
-      events: Repo.aggregate(SymmetryControl.Goals.GoalEvent, :count),
+      reservations: Repo.aggregate(GoalBudgetReservation, :count),
+      events: Repo.aggregate(GoalEvent, :count),
       wakeups: wakeup_job_count(goal_id)
     }
   end
@@ -1349,7 +1350,8 @@ defmodule SymmetryControl.GoalsTest do
 
   defp assert_branch_target_rejected!(project, repository) do
     attrs =
-      goal_attrs(nil, %{
+      nil
+      |> goal_attrs(%{
         "allowed_actions" => ["change.upsert"],
         "allowed_resource_ids" => [repository.id]
       })
@@ -1393,8 +1395,7 @@ defmodule SymmetryControl.GoalsTest do
     assert {:ok, _resolved, :created} =
              command_current(created.goal.id, "resolve_decision", %{
                decision_id: decision_id,
-               expected_decision_version:
-                 Repo.get!(SymmetryControl.Goals.GoalDecision, decision_id).lock_version,
+               expected_decision_version: Repo.get!(GoalDecision, decision_id).lock_version,
                option_id: "accept"
              })
 

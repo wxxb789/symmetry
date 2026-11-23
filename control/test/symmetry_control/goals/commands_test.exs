@@ -2,23 +2,29 @@ Code.require_file("goals_test_support.exs", __DIR__)
 
 defmodule SymmetryControl.Goals.CommandsTest do
   use SymmetryControl.OrchestrationCase, async: false
+  @now ~U[2026-09-09 00:00:00.000000Z]
+  use SymmetryControl.TestFixtures,
+    command_opts: [
+      now: @now,
+      validation_profiles: SymmetryControl.GoalsTestSupport.validation_profiles()
+    ]
 
   import SymmetryControl.GoalsTestSupport
 
   alias SymmetryControl.Goals
   alias SymmetryControl.Goals.Budget
+  alias SymmetryControl.Goals.ContextSnapshot
   alias SymmetryControl.Goals.Goal
+  alias SymmetryControl.Goals.GoalBudgetReservation
+  alias SymmetryControl.Goals.GoalDecision
+  alias SymmetryControl.Goals.GoalEvent
   alias SymmetryControl.Goals.Internal
   alias SymmetryControl.Orchestration.Task
   alias SymmetryControl.Repo
   alias SymmetryControl.Workspaces
   alias SymmetryControl.Workspaces.WorkItem
 
-  @now ~U[2026-09-09 00:00:00.000000Z]
   @validation_runtime_id "00000000-0000-4000-8000-000000000001"
-
-  use SymmetryControl.TestFixtures,
-    command_opts: [now: @now, validation_profiles: validation_profiles()]
 
   setup :put_goal_validation_profiles
 
@@ -34,7 +40,7 @@ defmodule SymmetryControl.Goals.CommandsTest do
     assert created.goal.current_revision == 1
     assert created.goal.version == 2
 
-    assert Map.keys(created.goal) |> Enum.sort() == [
+    assert created.goal |> Map.keys() |> Enum.sort() == [
              :current_revision,
              :id,
              :next_wake_at,
@@ -67,19 +73,19 @@ defmodule SymmetryControl.Goals.CommandsTest do
 
     assert created_replay == created
 
-    stored_create_event = Repo.get!(SymmetryControl.Goals.GoalEvent, created.event.id)
+    stored_create_event = Repo.get!(GoalEvent, created.event.id)
     stored_create_receipt = stored_create_event.response["_receipt_v1"]
 
     assert stored_create_receipt["schema_version"] == "symmetry.goal_receipt.v1"
 
-    assert Map.keys(stored_create_receipt) |> Enum.sort() == [
+    assert stored_create_receipt |> Map.keys() |> Enum.sort() == [
              "event",
              "goal",
              "response",
              "schema_version"
            ]
 
-    assert Map.keys(stored_create_receipt["goal"]) |> Enum.sort() == [
+    assert stored_create_receipt["goal"] |> Map.keys() |> Enum.sort() == [
              "current_revision",
              "id",
              "next_wake_at",
@@ -101,7 +107,7 @@ defmodule SymmetryControl.Goals.CommandsTest do
       })
 
     assert {:ok, receipt, :created} = Goals.command(goal_id, command, "operator:test", now: @now)
-    assert Repo.get!(SymmetryControl.Goals.GoalEvent, receipt.event.id).request_hash_version == 2
+    assert Repo.get!(GoalEvent, receipt.event.id).request_hash_version == 2
     assert receipt.response["decision"]["action_hash"] =~ ~r/^sha256:[0-9a-f]{64}$/
 
     assert {:error, {:stale, %{current_revision: 1, current_version: _}}} =
@@ -137,8 +143,7 @@ defmodule SymmetryControl.Goals.CommandsTest do
     assert {:ok, ^created, :replayed} =
              Goals.create_goal(project.id, attrs, "operator:test", now: @now)
 
-    assert {:error,
-            {:stale, %{current_revision: 1, current_version: version, allowed_actions: actions}}} =
+    assert {:error, {:stale, %{current_revision: 1, current_version: version, allowed_actions: actions}}} =
              Goals.command(
                goal_id,
                goal_command(created.goal, "pause", %{reason: "later"}),
@@ -207,7 +212,7 @@ defmodule SymmetryControl.Goals.CommandsTest do
 
     mutation_id = command.mutation_id
     body = Map.take(command, [:expected_version, :expected_revision, :kind, :payload])
-    original_response = Repo.get!(SymmetryControl.Goals.GoalEvent, created.event.id).response
+    original_response = Repo.get!(GoalEvent, created.event.id).response
 
     event_name = [:symmetry_control, :goals, :command, :goal_lock]
     handler_id = {__MODULE__, :goal_lock_replay_race, make_ref()}
@@ -248,7 +253,7 @@ defmodule SymmetryControl.Goals.CommandsTest do
     assert replayed_receipt.event.id == mutation_id
 
     assert Repo.aggregate(
-             from(event in SymmetryControl.Goals.GoalEvent,
+             from(event in GoalEvent,
                where: event.id == ^mutation_id
              ),
              :count
@@ -262,7 +267,7 @@ defmodule SymmetryControl.Goals.CommandsTest do
     assert {:ok, created, :created} =
              Goals.create_goal(project.id, created_attrs, "operator:test", now: @now)
 
-    original_response = Repo.get!(SymmetryControl.Goals.GoalEvent, created.event.id).response
+    original_response = Repo.get!(GoalEvent, created.event.id).response
 
     corrupt_goal_id = Ecto.UUID.generate()
     corrupt_goal_mutation_id = Ecto.UUID.generate()
@@ -346,10 +351,10 @@ defmodule SymmetryControl.Goals.CommandsTest do
       "goal_created",
       created.event.revision,
       legacy_create_body,
-      Repo.get!(SymmetryControl.Goals.GoalEvent, created.event.id).response
+      Repo.get!(GoalEvent, created.event.id).response
     )
 
-    events_before = Repo.aggregate(SymmetryControl.Goals.GoalEvent, :count)
+    events_before = Repo.aggregate(GoalEvent, :count)
 
     assert {:ok, replayed_create, :replayed} =
              Goals.create_goal(project.id, legacy_create_attrs, "operator:test", now: @now)
@@ -365,7 +370,7 @@ defmodule SymmetryControl.Goals.CommandsTest do
                revision: 1
              }
 
-    assert Repo.aggregate(SymmetryControl.Goals.GoalEvent, :count) == events_before
+    assert Repo.aggregate(GoalEvent, :count) == events_before
 
     changed_create_attrs =
       put_in(
@@ -378,7 +383,8 @@ defmodule SymmetryControl.Goals.CommandsTest do
              Goals.create_goal(project.id, changed_create_attrs, "operator:test", now: @now)
 
     valid_revision =
-      amended_revision_contract("Legacy amendment replay.")
+      "Legacy amendment replay."
+      |> amended_revision_contract()
       |> put_in(
         [:acceptance_contract],
         artifact_acceptance_contract(artifact_resource_id, "proof.txt")
@@ -425,10 +431,10 @@ defmodule SymmetryControl.Goals.CommandsTest do
       "amend",
       created.event.revision,
       legacy_command_body,
-      Repo.get!(SymmetryControl.Goals.GoalEvent, command_id).response
+      Repo.get!(GoalEvent, command_id).response
     )
 
-    events_before_replay = Repo.aggregate(SymmetryControl.Goals.GoalEvent, :count)
+    events_before_replay = Repo.aggregate(GoalEvent, :count)
 
     assert {:ok, replayed_command, :replayed} =
              Goals.command(created.goal.id, legacy_command, "operator:test", now: @now)
@@ -436,7 +442,7 @@ defmodule SymmetryControl.Goals.CommandsTest do
     assert replayed_command.response == amendment_receipt.response
     assert replayed_command.event.id == legacy_command_id
     assert replayed_command.event.kind == "amend"
-    assert Repo.aggregate(SymmetryControl.Goals.GoalEvent, :count) == events_before_replay
+    assert Repo.aggregate(GoalEvent, :count) == events_before_replay
 
     changed_command =
       put_in(
@@ -461,7 +467,7 @@ defmodule SymmetryControl.Goals.CommandsTest do
                subject_hash: "sha256:" <> String.duplicate("a", 64)
              })
 
-    assert fetch_goal!(created.goal.id).decisions |> Enum.any?(&(&1.state == "open"))
+    assert Enum.any?(fetch_goal!(created.goal.id).decisions, &(&1.state == "open"))
 
     revision_contract = amended_revision_contract("Amended objective")
 
@@ -503,8 +509,7 @@ defmodule SymmetryControl.Goals.CommandsTest do
     project = project_fixture()
 
     duplicate_predicates =
-      goal_attrs()
-      |> put_in([:initial_revision, :acceptance_contract, "predicates"], [
+      put_in(goal_attrs(), [:initial_revision, :acceptance_contract, "predicates"], [
         %{"id" => "same", "kind" => "check", "validator_profile" => "test"},
         %{"id" => "same", "kind" => "check", "validator_profile" => "test"}
       ])
@@ -513,17 +518,11 @@ defmodule SymmetryControl.Goals.CommandsTest do
              Goals.create_goal(project.id, duplicate_predicates, "operator:test", now: @now)
 
     unsafe_artifact =
-      goal_attrs()
-      |> put_in([:initial_revision, :acceptance_contract], %{
+      put_in(goal_attrs(), [:initial_revision, :acceptance_contract], %{
         "schema_version" => "symmetry.acceptance.v1",
         "description" => "An approved artifact is required.",
         "predicates" => [
-          %{
-            "id" => "artifact",
-            "kind" => "artifact",
-            "resource_id" => Ecto.UUID.generate(),
-            "path" => "../proof.txt"
-          }
+          %{"id" => "artifact", "kind" => "artifact", "resource_id" => Ecto.UUID.generate(), "path" => "../proof.txt"}
         ]
       })
 
@@ -531,8 +530,7 @@ defmodule SymmetryControl.Goals.CommandsTest do
              Goals.create_goal(project.id, unsafe_artifact, "operator:test", now: @now)
 
     overlong_artifact =
-      goal_attrs()
-      |> put_in([:initial_revision, :acceptance_contract], %{
+      put_in(goal_attrs(), [:initial_revision, :acceptance_contract], %{
         "schema_version" => "symmetry.acceptance.v1",
         "description" => "An approved artifact is required.",
         "predicates" => [
@@ -552,7 +550,8 @@ defmodule SymmetryControl.Goals.CommandsTest do
              Goals.create_goal(project.id, goal_attrs(), "operator:test", now: @now)
 
     overlong_amendment =
-      amended_revision_contract("Reject codepoint-overlong artifact paths.")
+      "Reject codepoint-overlong artifact paths."
+      |> amended_revision_contract()
       |> put_in([:acceptance_contract, "predicates"], [
         %{
           "id" => "artifact",
@@ -571,14 +570,8 @@ defmodule SymmetryControl.Goals.CommandsTest do
     assert fetch_goal!(created.goal.id).current_revision == 1
 
     unexpected_predicate_field =
-      goal_attrs()
-      |> put_in([:initial_revision, :acceptance_contract, "predicates"], [
-        %{
-          "id" => "check",
-          "kind" => "check",
-          "validator_profile" => "test",
-          "unreviewed" => true
-        }
+      put_in(goal_attrs(), [:initial_revision, :acceptance_contract, "predicates"], [
+        %{"id" => "check", "kind" => "check", "validator_profile" => "test", "unreviewed" => true}
       ])
 
     assert {:error, {:invalid_contract, _}} =
@@ -810,7 +803,7 @@ defmodule SymmetryControl.Goals.CommandsTest do
              })
 
     decision_id = decision.response["decision"]["id"]
-    decision_version = Repo.get!(SymmetryControl.Goals.GoalDecision, decision_id).lock_version
+    decision_version = Repo.get!(GoalDecision, decision_id).lock_version
 
     for payload <- [
           %{
@@ -849,7 +842,7 @@ defmodule SymmetryControl.Goals.CommandsTest do
                comment: "The bounded completion is approved."
              })
 
-    assert Repo.get!(SymmetryControl.Goals.GoalDecision, decision_id).resolution == %{
+    assert Repo.get!(GoalDecision, decision_id).resolution == %{
              "option_id" => "accept",
              "comment" => "The bounded completion is approved.",
              "actor_ref" => "operator:test",
@@ -908,7 +901,7 @@ defmodule SymmetryControl.Goals.CommandsTest do
              })
 
     decision_id = decision.response["decision"]["id"]
-    decision_version = Repo.get!(SymmetryControl.Goals.GoalDecision, decision_id).lock_version
+    decision_version = Repo.get!(GoalDecision, decision_id).lock_version
 
     assert {:ok, _resolved, :created} =
              command_current(goal_id, "resolve_decision", %{
@@ -956,7 +949,7 @@ defmodule SymmetryControl.Goals.CommandsTest do
     [item] = fetch_goal!(goal_id).work_items
     assert item.admitted_revision == 1
     assert item.accepted? == false
-    assert Repo.get!(SymmetryControl.Workspaces.WorkItem, item.id).integration
+    assert Repo.get!(WorkItem, item.id).integration
 
     assert {:ok, _active, :created} =
              command_current(goal_id, "activate", %{approved_revision: 1})
@@ -986,7 +979,7 @@ defmodule SymmetryControl.Goals.CommandsTest do
     assert task.input["context_hash"] ==
              "sha256:" <>
                Base.encode16(
-                 Repo.get!(SymmetryControl.Goals.ContextSnapshot, task.context_snapshot_id).content_hash,
+                 Repo.get!(ContextSnapshot, task.context_snapshot_id).content_hash,
                  case: :lower
                )
 
@@ -995,13 +988,13 @@ defmodule SymmetryControl.Goals.CommandsTest do
     refute Map.has_key?(task.input, "goal_admission")
 
     assert Repo.exists?(
-             from(snapshot in SymmetryControl.Goals.ContextSnapshot,
+             from(snapshot in ContextSnapshot,
                where: snapshot.id == ^task.context_snapshot_id
              )
            )
 
     assert Repo.exists?(
-             from(reservation in SymmetryControl.Goals.GoalBudgetReservation,
+             from(reservation in GoalBudgetReservation,
                where: reservation.task_id == ^task.id and is_nil(reservation.reserved_microusd)
              )
            )
@@ -1012,7 +1005,8 @@ defmodule SymmetryControl.Goals.CommandsTest do
     repository = connected_github_repository_fixture(project, "acme/symmetry")
 
     attrs =
-      goal_attrs(nil, %{
+      nil
+      |> goal_attrs(%{
         "allowed_actions" => ["change.upsert", "change.update"],
         "allowed_resource_ids" => [repository.id]
       })
@@ -1069,7 +1063,7 @@ defmodule SymmetryControl.Goals.CommandsTest do
              )
 
     task = Repo.get!(Task, admitted.response["task"]["id"])
-    snapshot = Repo.get!(SymmetryControl.Goals.ContextSnapshot, task.context_snapshot_id)
+    snapshot = Repo.get!(ContextSnapshot, task.context_snapshot_id)
 
     assert task.required_capabilities["provider_access"]
 
@@ -1091,7 +1085,8 @@ defmodule SymmetryControl.Goals.CommandsTest do
     repository = connected_github_repository_fixture(project, "acme/symmetry")
 
     attrs =
-      goal_attrs(nil, %{
+      nil
+      |> goal_attrs(%{
         "allowed_actions" => ["change.update"],
         "allowed_resource_ids" => [repository.id]
       })
@@ -1153,7 +1148,8 @@ defmodule SymmetryControl.Goals.CommandsTest do
     repository = connected_github_repository_fixture(project, "acme/symmetry")
 
     attrs =
-      goal_attrs(nil, %{
+      nil
+      |> goal_attrs(%{
         "max_task_admissions" => 2,
         "allowed_actions" => ["change.upsert"],
         "allowed_resource_ids" => [repository.id]
@@ -1246,7 +1242,7 @@ defmodule SymmetryControl.Goals.CommandsTest do
              )
 
     task = Repo.get!(Task, admitted.response["task"]["id"])
-    snapshot = Repo.get!(SymmetryControl.Goals.ContextSnapshot, task.context_snapshot_id)
+    snapshot = Repo.get!(ContextSnapshot, task.context_snapshot_id)
 
     assert task.goal_id == created.goal.id
     assert task.goal_revision == created.goal.current_revision
@@ -1263,7 +1259,7 @@ defmodule SymmetryControl.Goals.CommandsTest do
     assert Repo.aggregate(WorkItem, :count) == 0
 
     assert Repo.aggregate(
-             from(reservation in SymmetryControl.Goals.GoalBudgetReservation,
+             from(reservation in GoalBudgetReservation,
                where: reservation.task_id == ^task.id
              ),
              :count
@@ -1300,8 +1296,8 @@ defmodule SymmetryControl.Goals.CommandsTest do
 
     complete_task_and_release_reservation!(goal, task)
 
-    snapshots_before = Repo.aggregate(SymmetryControl.Goals.ContextSnapshot, :count)
-    reservations_before = Repo.aggregate(SymmetryControl.Goals.GoalBudgetReservation, :count)
+    snapshots_before = Repo.aggregate(ContextSnapshot, :count)
+    reservations_before = Repo.aggregate(GoalBudgetReservation, :count)
 
     for {field, value} <- [
           {:subject,
@@ -1323,9 +1319,9 @@ defmodule SymmetryControl.Goals.CommandsTest do
                )
     end
 
-    assert Repo.aggregate(SymmetryControl.Goals.ContextSnapshot, :count) == snapshots_before
+    assert Repo.aggregate(ContextSnapshot, :count) == snapshots_before
 
-    assert Repo.aggregate(SymmetryControl.Goals.GoalBudgetReservation, :count) ==
+    assert Repo.aggregate(GoalBudgetReservation, :count) ==
              reservations_before
 
     assert {:ok, current} = Goals.fetch_goal(goal.id)
@@ -1345,7 +1341,7 @@ defmodule SymmetryControl.Goals.CommandsTest do
     assert Repo.get!(Task, task_id).admission_key == mutation_id
 
     assert Repo.one!(
-             from(reservation in SymmetryControl.Goals.GoalBudgetReservation,
+             from(reservation in GoalBudgetReservation,
                where: reservation.task_id == ^task_id,
                select: reservation.reserved_microusd
              )
@@ -1373,8 +1369,8 @@ defmodule SymmetryControl.Goals.CommandsTest do
 
     response = Map.put(response, "_receipt_v1", receipt_snapshot)
 
-    %SymmetryControl.Goals.GoalEvent{id: event_id}
-    |> SymmetryControl.Goals.GoalEvent.changeset(%{
+    %GoalEvent{id: event_id}
+    |> GoalEvent.changeset(%{
       goal_id: goal_id,
       sequence: sequence,
       kind: kind,

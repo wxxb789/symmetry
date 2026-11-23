@@ -50,7 +50,8 @@ defmodule SymmetryControl.ResourceSyncIdentityLossTest do
   alias SymmetryControl.Integrations
   alias SymmetryControl.Integrations.IdentityLossProviderStub
   alias SymmetryControl.TestEnv
-  alias SymmetryControl.Workspaces.{ProjectResource, ReadModel}
+  alias SymmetryControl.Workspaces.ProjectResource
+  alias SymmetryControl.Workspaces.ReadModel
 
   @checked_at ~U[2026-09-04 10:00:00.000000Z]
 
@@ -76,7 +77,8 @@ defmodule SymmetryControl.ResourceSyncIdentityLossTest do
     assert_receive {:identity_loss_waiting, provider_pid}
 
     winner =
-      Repo.get!(ProjectResource, resource.id)
+      ProjectResource
+      |> Repo.get!(resource.id)
       |> ProjectResource.sync_changeset(%{
         status: "healthy",
         sync_status: "synced",
@@ -96,12 +98,10 @@ defmodule SymmetryControl.ResourceSyncIdentityLossTest do
 
     for {reason, code, message} <- [
           {{:transport, :timeout}, :provider_failure, "Provider transport failed"},
-          {{:http, 401, "unauthorized"}, :provider_unauthorized,
-           "Provider authentication failed"},
+          {{:http, 401, "unauthorized"}, :provider_unauthorized, "Provider authentication failed"},
           {{:http, 403, "forbidden"}, :forbidden, "Provider permission denied"},
           {{:http, 503, "unavailable"}, :provider_failure, "Provider returned HTTP 503"},
-          {:capability_not_granted, :capability_not_granted,
-           "Connection capability is not granted"},
+          {:capability_not_granted, :capability_not_granted, "Connection capability is not granted"},
           {:invalid_provider_response, :provider_failure, "Provider response is invalid"},
           {:not_connected, :not_connected, "Resource has no external connection"}
         ] do
@@ -143,7 +143,7 @@ defmodule SymmetryControl.ResourceSyncIdentityLossTest do
     assert persisted.status == "degraded"
     assert persisted.sync_status == sync_status
     assert persisted.status_message == message
-    assert DateTime.compare(persisted.last_checked_at, @checked_at) == :gt
+    assert DateTime.after?(persisted.last_checked_at, @checked_at)
     assert persisted.last_synced_at == resource.last_synced_at
     assert persisted.metadata == resource.metadata
     assert persisted.external_ref == resource.external_ref

@@ -1,17 +1,6 @@
 defmodule SymmetryControl.Goals.RunFence do
   @moduledoc false
 
-  @nonterminal_task_states [
-    "queued",
-    "assigned",
-    "claimed",
-    "running",
-    "waiting_for_input",
-    "paused",
-    "cancelling"
-  ]
-  @max_evidence_batch_items 256
-
   import Ecto.Query
   import SymmetryControl.Goals.ContractValidation, only: [validate_contract: 3]
   import SymmetryControl.Goals.EventsReceipts, only: [enqueue_wakeup!: 2]
@@ -66,6 +55,17 @@ defmodule SymmetryControl.Goals.RunFence do
   alias SymmetryControl.RequestHash
   alias SymmetryControl.Workspaces.Project
   alias SymmetryControl.Workspaces.WorkItem
+
+  @nonterminal_task_states [
+    "queued",
+    "assigned",
+    "claimed",
+    "running",
+    "waiting_for_input",
+    "paused",
+    "cancelling"
+  ]
+  @max_evidence_batch_items 256
 
   @typedoc false
   @type new_claim_authority_envelope :: %{
@@ -128,8 +128,7 @@ defmodule SymmetryControl.Goals.RunFence do
 
   def claim_with_disposition(run_id, request, opts \\ [])
 
-  def claim_with_disposition(run_id, request, opts)
-      when is_binary(run_id) and is_map(request) and is_list(opts) do
+  def claim_with_disposition(run_id, request, opts) when is_binary(run_id) and is_map(request) and is_list(opts) do
     if valid_uuid?(run_id) do
       result =
         if Repo.in_transaction?() do
@@ -218,21 +217,19 @@ defmodule SymmetryControl.Goals.RunFence do
   def append_evidence(machine_id, run_id, fence, evidence, opts \\ [])
 
   def append_evidence(machine_id, run_id, fence, evidence, opts)
-      when is_binary(machine_id) and is_binary(run_id) and is_map(fence) and is_map(evidence) and
-             is_list(opts) do
+      when is_binary(machine_id) and is_binary(run_id) and is_map(fence) and is_map(evidence) and is_list(opts) do
     with :ok <- valid_uuid(machine_id),
          :ok <- valid_uuid(run_id),
          :ok <- valid_fence(fence),
          :ok <- ContextAssembly.safe_evidence_document(evidence),
          {:ok, evidence_attrs} <- evidence_attrs(evidence, run_id) do
-      Repo.transaction(fn ->
+      fn ->
         {goal, task, item, run, runtime} =
           lock_goal_run!(machine_id, run_id, fence, opts, :delivery_replay)
 
         case Repo.one(
                from(row in RunEvidence,
-                 where:
-                   row.run_id == ^run.id and row.evidence_key == ^evidence_attrs.evidence_key,
+                 where: row.run_id == ^run.id and row.evidence_key == ^evidence_attrs.evidence_key,
                  lock: "FOR UPDATE"
                )
              ) do
@@ -242,8 +239,8 @@ defmodule SymmetryControl.Goals.RunFence do
             snapshot =
               lock_context_snapshot!(goal.id, task.context_snapshot_id || rollback(:not_found))
 
-            unless snapshot.goal_revision == task.goal_revision and
-                     snapshot.work_item_id == task.work_item_id do
+            if !(snapshot.goal_revision == task.goal_revision and
+                   snapshot.work_item_id == task.work_item_id) do
               rollback(:ownership_lost)
             end
 
@@ -269,8 +266,7 @@ defmodule SymmetryControl.Goals.RunFence do
                 row =
                   Repo.one(
                     from(row in RunEvidence,
-                      where:
-                        row.run_id == ^run.id and row.evidence_key == ^evidence_attrs.evidence_key,
+                      where: row.run_id == ^run.id and row.evidence_key == ^evidence_attrs.evidence_key,
                       lock: "FOR UPDATE"
                     )
                   ) || rollback(:idempotency_conflict)
@@ -285,7 +281,8 @@ defmodule SymmetryControl.Goals.RunFence do
               do: {:replayed, evidence_receipt(row)},
               else: rollback(:idempotency_conflict)
         end
-      end)
+      end
+      |> Repo.transaction()
       |> machine_write_result()
     end
   end
@@ -295,14 +292,13 @@ defmodule SymmetryControl.Goals.RunFence do
   def append_evidence_batch(machine_id, run_id, fence, batch, opts \\ [])
 
   def append_evidence_batch(machine_id, run_id, fence, batch, opts)
-      when is_binary(machine_id) and is_binary(run_id) and is_map(fence) and is_map(batch) and
-             is_list(opts) do
+      when is_binary(machine_id) and is_binary(run_id) and is_map(fence) and is_map(batch) and is_list(opts) do
     with :ok <- valid_uuid(machine_id),
          :ok <- valid_uuid(run_id),
          :ok <- valid_fence(fence),
          :ok <- ContextAssembly.safe_evidence_document(batch),
          {:ok, evidence_items} <- evidence_batch_attrs(batch, run_id) do
-      Repo.transaction(fn ->
+      fn ->
         {goal, task, item, run, runtime} =
           lock_goal_run!(machine_id, run_id, fence, opts, :delivery_replay)
 
@@ -315,7 +311,8 @@ defmodule SymmetryControl.Goals.RunFence do
           evidence_items,
           opts
         )
-      end)
+      end
+      |> Repo.transaction()
       |> machine_write_result()
     end
   end
@@ -327,19 +324,17 @@ defmodule SymmetryControl.Goals.RunFence do
     ids = Enum.map(evidence_items, & &1.attrs.id)
 
     existing_by_key =
-      Repo.all(
-        from(row in RunEvidence,
-          where: row.run_id == ^run.id and row.evidence_key in ^keys
-        )
+      from(row in RunEvidence,
+        where: row.run_id == ^run.id and row.evidence_key in ^keys
       )
+      |> Repo.all()
       |> Map.new(&{&1.evidence_key, &1})
 
     existing_by_id =
-      Repo.all(
-        from(row in RunEvidence,
-          where: row.id in ^ids
-        )
+      from(row in RunEvidence,
+        where: row.id in ^ids
       )
+      |> Repo.all()
       |> Map.new(&{&1.id, &1})
 
     classified =
@@ -380,8 +375,8 @@ defmodule SymmetryControl.Goals.RunFence do
           snapshot =
             lock_context_snapshot!(goal.id, task.context_snapshot_id || rollback(:not_found))
 
-          unless snapshot.goal_revision == task.goal_revision and
-                   snapshot.work_item_id == task.work_item_id do
+          if !(snapshot.goal_revision == task.goal_revision and
+                 snapshot.work_item_id == task.work_item_id) do
             rollback(:ownership_lost)
           end
 
@@ -481,14 +476,13 @@ defmodule SymmetryControl.Goals.RunFence do
   def record_usage(machine_id, run_id, fence, usage, opts \\ [])
 
   def record_usage(machine_id, run_id, fence, usage, opts)
-      when is_binary(machine_id) and is_binary(run_id) and is_map(fence) and is_map(usage) and
-             is_list(opts) do
+      when is_binary(machine_id) and is_binary(run_id) and is_map(fence) and is_map(usage) and is_list(opts) do
     with :ok <- valid_uuid(machine_id),
          :ok <- valid_uuid(run_id),
          :ok <- valid_fence(fence),
          {:ok, usage_attrs} <- usage_attrs(usage, run_id),
          :ok <- validate_contract(:usage, usage, opts) do
-      Repo.transaction(fn ->
+      fn ->
         {goal, task, _item, run, _runtime} =
           lock_goal_run!(machine_id, run_id, fence, opts, :late_accounting)
 
@@ -535,17 +529,17 @@ defmodule SymmetryControl.Goals.RunFence do
               rollback(:idempotency_conflict)
             end
         end
-      end)
+      end
+      |> Repo.transaction()
       |> machine_write_result()
     end
   end
 
   def record_usage(_, _, _, _, _), do: {:error, :invalid_request}
 
-  def fetch_run_context(machine_id, run_id, fence)
-      when is_binary(machine_id) and is_binary(run_id) and is_map(fence) do
+  def fetch_run_context(machine_id, run_id, fence) when is_binary(machine_id) and is_binary(run_id) and is_map(fence) do
     with :ok <- valid_uuid(machine_id), :ok <- valid_uuid(run_id), :ok <- valid_fence(fence) do
-      Repo.transaction(fn ->
+      fn ->
         {goal, task, item, run, _runtime} =
           lock_goal_run!(machine_id, run_id, fence, [], :current)
 
@@ -555,15 +549,14 @@ defmodule SymmetryControl.Goals.RunFence do
             # Deterministic validation is daemon-owned: fence required, no handle.
             nil
           else
-            Repo.one(
-              from(session in HarnessSession,
-                where:
-                  session.id == ^run.harness_session_id and session.machine_id == ^machine_id and
-                    session.active_run_id == ^run.id and
-                    session.binding_id == ^run.harness_binding_id,
-                lock: "FOR UPDATE"
-              )
+            from(session in HarnessSession,
+              where:
+                session.id == ^run.harness_session_id and session.machine_id == ^machine_id and
+                  session.active_run_id == ^run.id and
+                  session.binding_id == ^run.harness_binding_id,
+              lock: "FOR UPDATE"
             )
+            |> Repo.one()
             |> case do
               %HarnessSession{id: id} -> id
               nil -> rollback(:ownership_lost)
@@ -581,7 +574,8 @@ defmodule SymmetryControl.Goals.RunFence do
           session_id: session_id,
           context: context_wire_envelope!(snapshot, goal, item, task)
         }
-      end)
+      end
+      |> Repo.transaction()
       |> case do
         {:ok, context} -> {:ok, context}
         {:error, reason} -> {:error, reason}
@@ -609,7 +603,7 @@ defmodule SymmetryControl.Goals.RunFence do
       Repo.one(from(runtime in Runtime, where: runtime.id == ^run.runtime_id, lock: "FOR UPDATE")) ||
         rollback(:not_found)
 
-    unless Settlement.settlement_task_owned_by_goal?(task, goal, item) do
+    if !Settlement.settlement_task_owned_by_goal?(task, goal, item) do
       rollback(:ownership_lost)
     end
 
@@ -634,7 +628,7 @@ defmodule SymmetryControl.Goals.RunFence do
         run.claim_id == value(fence, :claim_id) and
         run.lease_token == value(fence, :lease_token)
 
-    unless static?, do: rollback(:ownership_lost)
+    if !static?, do: rollback(:ownership_lost)
 
     if mode not in [:late_accounting, :attach_replay, :delivery_replay, :session_stop] and
          task.current_generation != value(fence, :generation),
@@ -644,9 +638,9 @@ defmodule SymmetryControl.Goals.RunFence do
       current? =
         runtime.connection_epoch == value(fence, :runtime_epoch) and
           run.state in @nonterminal_task_states and not is_nil(run.lease_expires_at) and
-          DateTime.compare(run.lease_expires_at, current) == :gt
+          DateTime.after?(run.lease_expires_at, current)
 
-      unless current?, do: rollback(:ownership_lost)
+      if !current?, do: rollback(:ownership_lost)
     end
   end
 
@@ -794,14 +788,14 @@ defmodule SymmetryControl.Goals.RunFence do
     subject = value(task.input || %{}, "subject")
     predicate_id = value(evidence.payload, "predicate_id")
 
-    unless is_map(subject) and subject == evidence.subject and
-             evidence.subject_hash == RequestHash.canonical(subject) and
-             is_binary(predicate_id) do
+    if !(is_map(subject) and subject == evidence.subject and
+           evidence.subject_hash == RequestHash.canonical(subject) and
+           is_binary(predicate_id)) do
       rollback(:invalid_evidence_identity)
     end
 
     if evidence.kind == "observation" do
-      unless source_matches_evidence?(evidence, subject, item, nil),
+      if !source_matches_evidence?(evidence, subject, item, nil),
         do: rollback(:invalid_evidence_identity)
 
       evidence
@@ -812,15 +806,15 @@ defmodule SymmetryControl.Goals.RunFence do
         |> value("predicates", [])
         |> Enum.find(&(value(&1, "id") == predicate_id and value(&1, "kind") == evidence.kind))
 
-      unless is_map(predicate) and source_matches_evidence?(evidence, subject, item, predicate),
+      if !(is_map(predicate) and source_matches_evidence?(evidence, subject, item, predicate)),
         do: rollback(:invalid_evidence_identity)
 
-      unless task.purpose == "validate" and not is_nil(task.validation_of_task_id),
+      if !(task.purpose == "validate" and not is_nil(task.validation_of_task_id)),
         do: rollback(:invalid_evidence_identity)
 
       expected_validator_profile = validator_profile_for!(predicate, evidence.kind)
 
-      unless evidence.validator_profile == expected_validator_profile,
+      if evidence.validator_profile != expected_validator_profile,
         do: rollback(:invalid_evidence_identity)
 
       if evidence.kind in ["check", "review"] do
@@ -862,8 +856,8 @@ defmodule SymmetryControl.Goals.RunFence do
         end)
       end
 
-    unless is_map(binding) and
-             binding_matches_evidence?(binding, evidence, expected_profile, task, run, runtime) do
+    if !(is_map(binding) and
+           binding_matches_evidence?(binding, evidence, expected_profile, task, run, runtime)) do
       rollback(:invalid_evidence_identity)
     end
   end
@@ -911,11 +905,11 @@ defmodule SymmetryControl.Goals.RunFence do
     payload_subject = value(evidence.payload, "subject")
     payload_hash = value(evidence.payload, "subject_hash")
 
-    unless payload_subject == subject and
-             payload_hash == "sha256:" <> Base.encode16(evidence.subject_hash, case: :lower) do
-      false
-    else
+    if payload_subject == subject and
+         payload_hash == "sha256:" <> Base.encode16(evidence.subject_hash, case: :lower) do
       source_matches_evidence_kind?(evidence, subject, item, predicate, source)
+    else
+      false
     end
   end
 
@@ -1074,7 +1068,7 @@ defmodule SymmetryControl.Goals.RunFence do
         )
       )
 
-    unless parent, do: rollback(:invalid_request)
+    if !parent, do: rollback(:invalid_request)
   end
 
   defp reconcile_reservation_and_arm!(goal, task, opts) do
@@ -1093,16 +1087,13 @@ defmodule SymmetryControl.Goals.RunFence do
     end
   end
 
-  defp evidence_validator_profile(evidence, "observation"),
-    do: nullable_string(evidence, :validator_profile)
+  defp evidence_validator_profile(evidence, "observation"), do: nullable_string(evidence, :validator_profile)
 
-  defp evidence_validator_profile(evidence, _kind),
-    do: required_string(evidence, :validator_profile)
+  defp evidence_validator_profile(evidence, _kind), do: required_string(evidence, :validator_profile)
 
   defp valid_usage_cost?("unknown", nil), do: true
 
-  defp valid_usage_cost?(basis, amount)
-       when basis in ["reported", "estimated"] and is_integer(amount), do: true
+  defp valid_usage_cost?(basis, amount) when basis in ["reported", "estimated"] and is_integer(amount), do: true
 
   defp valid_usage_cost?(_, _), do: false
 
@@ -1161,12 +1152,7 @@ defmodule SymmetryControl.Goals.RunFence do
          (goal.state == "active" and task.purpose != "plan"))
   end
 
-  defp claim_planning_task?(%Task{
-         purpose: "plan",
-         work_item_id: nil,
-         validation_of_task_id: nil
-       }),
-       do: true
+  defp claim_planning_task?(%Task{purpose: "plan", work_item_id: nil, validation_of_task_id: nil}), do: true
 
   defp claim_planning_task?(_task), do: false
 
@@ -1207,8 +1193,7 @@ defmodule SymmetryControl.Goals.RunFence do
     end
   end
 
-  def task_repository_resource_id!(_task, item) when not is_nil(item),
-    do: item.repository_resource_id
+  def task_repository_resource_id!(_task, item) when not is_nil(item), do: item.repository_resource_id
 
   defp validate_evidence_batch_contract(batch, opts) do
     case validate_contract(:evidence_batch, batch, opts) do

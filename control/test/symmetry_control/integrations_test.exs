@@ -16,17 +16,21 @@ defmodule SymmetryControl.IntegrationsTest do
 
   alias Ecto.Adapters.SQL.Sandbox
   alias SymmetryControl.Integrations
+  alias SymmetryControl.Integrations.Connection
   alias SymmetryControl.Integrations.CredentialLeakProviderStub
+  alias SymmetryControl.Integrations.ProviderStub
   alias SymmetryControl.Repo
   alias SymmetryControl.Workspaces
+  alias SymmetryControl.Workspaces.Project
+  alias SymmetryControl.Workspaces.ProjectResource
   alias SymmetryControl.Workspaces.WorkItem
 
   setup do
     previous = Application.get_env(:symmetry_control, :integration_providers)
 
     Application.put_env(:symmetry_control, :integration_providers,
-      github: SymmetryControl.Integrations.ProviderStub,
-      azure_devops: SymmetryControl.Integrations.ProviderStub
+      github: ProviderStub,
+      azure_devops: ProviderStub
     )
 
     on_exit(fn ->
@@ -55,8 +59,8 @@ defmodule SymmetryControl.IntegrationsTest do
     assert_receive {:integration_connection_check_waiting, provider_pid}
 
     Application.put_env(:symmetry_control, :integration_providers,
-      github: SymmetryControl.Integrations.ProviderStub,
-      azure_devops: SymmetryControl.Integrations.ProviderStub
+      github: ProviderStub,
+      azure_devops: ProviderStub
     )
 
     assert {:ok, healthy} = Integrations.check_connection(connection.id)
@@ -66,7 +70,7 @@ defmodule SymmetryControl.IntegrationsTest do
     send(provider_pid, :continue_failure)
     assert {:error, :stale} = Task.await(stale_check)
 
-    stored = Repo.get!(SymmetryControl.Integrations.Connection, connection.id)
+    stored = Repo.get!(Connection, connection.id)
     assert stored.lock_version == healthy.lock_version
     assert stored.status == "healthy"
     assert stored.status_message == nil
@@ -97,7 +101,7 @@ defmodule SymmetryControl.IntegrationsTest do
     send(provider_pid, :continue_failure)
     assert {:error, :stale} = Task.await(stale_check)
 
-    stored = Repo.get!(SymmetryControl.Integrations.Connection, connection.id)
+    stored = Repo.get!(Connection, connection.id)
     assert stored.lock_version == renamed.lock_version
     assert stored.name == "Renamed while checking"
     assert stored.status == "unknown"
@@ -376,7 +380,7 @@ defmodule SymmetryControl.IntegrationsTest do
           'unknown', '{}'::jsonb, 1, NOW(), NOW()
         )
         """,
-        [Ecto.UUID.generate() |> Ecto.UUID.dump!()]
+        [Ecto.UUID.dump!(Ecto.UUID.generate())]
       )
     end
   end
@@ -416,8 +420,7 @@ defmodule SymmetryControl.IntegrationsTest do
 
     assert Repo.aggregate(
              from(item in WorkItem,
-               where:
-                 item.external_work_item_resource_id == ^tracker.id and item.external_id == "101"
+               where: item.external_work_item_resource_id == ^tracker.id and item.external_id == "101"
              ),
              :count
            ) == 1
@@ -668,8 +671,8 @@ defmodule SymmetryControl.IntegrationsTest do
     connection = connection_fixture("github", "gh_cli")
 
     old =
-      provider_snapshot(
-        "github",
+      "github"
+      |> provider_snapshot(
         ~U[2026-09-06 09:00:00.000000Z],
         "Old duplicate",
         "open",
@@ -679,8 +682,8 @@ defmodule SymmetryControl.IntegrationsTest do
       |> hd()
 
     fresh =
-      provider_snapshot(
-        "github",
+      "github"
+      |> provider_snapshot(
         ~U[2026-09-06 10:00:00.000000Z],
         "Fresh duplicate",
         "closed",
@@ -730,8 +733,8 @@ defmodule SymmetryControl.IntegrationsTest do
              })
 
     valid =
-      provider_snapshot(
-        "github",
+      "github"
+      |> provider_snapshot(
         ~U[2026-09-06 09:00:00.000000Z],
         "Valid duplicate",
         "open",
@@ -951,8 +954,7 @@ defmodule SymmetryControl.IntegrationsTest do
     # definite (stored `failed` and replayed) like every other pre-dispatch
     # refusal.
     assert {:error,
-            {:provider_action_failure, :capability_not_granted, :definite,
-             "Connection capability is not granted"}} =
+            {:provider_action_failure, :capability_not_granted, :definite, "Connection capability is not granted"}} =
              Integrations.execute_unprojected_provider_action(
                connection,
                repository,
@@ -987,7 +989,7 @@ defmodule SymmetryControl.IntegrationsTest do
     assert renamed.status == "healthy"
     assert renamed.last_checked_at == checked.last_checked_at
 
-    unchanged_resource = Repo.get!(SymmetryControl.Workspaces.ProjectResource, synced.id)
+    unchanged_resource = Repo.get!(ProjectResource, synced.id)
     assert unchanged_resource.status == "healthy"
     assert unchanged_resource.sync_status == "synced"
     assert unchanged_resource.last_synced_at == synced.last_synced_at
@@ -1045,7 +1047,7 @@ defmodule SymmetryControl.IntegrationsTest do
     assert {:error, :state_conflict} = Integrations.sync_project(project.id)
     assert {:error, :state_conflict} = Integrations.sync_resource(resource.id)
     assert %{synced: 0, failed: 0} = Integrations.sync_all_resources()
-    assert Repo.get!(SymmetryControl.Workspaces.ProjectResource, resource.id).status == "unknown"
+    assert Repo.get!(ProjectResource, resource.id).status == "unknown"
   end
 
   test "a failed provider call cannot update resource health after the project is archived" do
@@ -1089,7 +1091,7 @@ defmodule SymmetryControl.IntegrationsTest do
     send(provider_pid, :continue)
     assert {:error, :state_conflict} = Task.await(sync_task)
 
-    unchanged = Repo.get!(SymmetryControl.Workspaces.ProjectResource, resource.id)
+    unchanged = Repo.get!(ProjectResource, resource.id)
     assert unchanged.status == "unknown"
     assert unchanged.sync_status == "unknown"
     assert unchanged.status_message == nil
@@ -1139,7 +1141,7 @@ defmodule SymmetryControl.IntegrationsTest do
     send(provider_pid, :continue)
     assert {:error, :stale} = Task.await(sync_task)
 
-    unchanged = Repo.get!(SymmetryControl.Workspaces.ProjectResource, resource.id)
+    unchanged = Repo.get!(ProjectResource, resource.id)
     assert unchanged.connection_id == rebound.connection_id
     assert unchanged.external_ref == rebound.external_ref
     assert unchanged.status == "unknown"
@@ -1171,7 +1173,7 @@ defmodule SymmetryControl.IntegrationsTest do
                String.contains?(metadata.query, "FOR SHARE") do
             {deleted, _} =
               Repo.delete_all(
-                from current in SymmetryControl.Workspaces.ProjectResource,
+                from current in ProjectResource,
                   where: current.id == ^resource.id
               )
 
@@ -1190,7 +1192,7 @@ defmodule SymmetryControl.IntegrationsTest do
     end
 
     assert_received {:resource_deleted_before_lock, ^ref, 1}
-    assert Repo.get(SymmetryControl.Workspaces.ProjectResource, resource.id)
+    assert Repo.get(ProjectResource, resource.id)
   end
 
   test "a resource deleted during the provider call stays stale instead of invalid" do
@@ -1229,7 +1231,7 @@ defmodule SymmetryControl.IntegrationsTest do
 
     assert {1, _} =
              Repo.delete_all(
-               from current in SymmetryControl.Workspaces.ProjectResource,
+               from current in ProjectResource,
                  where: current.id == ^resource.id
              )
 
@@ -1250,12 +1252,12 @@ defmodule SymmetryControl.IntegrationsTest do
       on_exit(fn ->
         Sandbox.unboxed_run(Repo, fn ->
           Repo.delete_all(
-            from project_row in SymmetryControl.Workspaces.Project,
+            from project_row in Project,
               where: project_row.id == ^project.id
           )
 
           Repo.delete_all(
-            from connection_row in SymmetryControl.Integrations.Connection,
+            from connection_row in Connection,
               where: connection_row.id == ^connection.id
           )
         end)
@@ -1279,7 +1281,7 @@ defmodule SymmetryControl.IntegrationsTest do
 
       provider_items =
         Enum.map(["101", "102"], fn external_id ->
-          provider_work_item(%{}) |> Map.put(:external_id, external_id)
+          %{} |> provider_work_item() |> Map.put(:external_id, external_id)
         end)
 
       CredentialLeakProviderStub.respond_with(:sync_resource, %{
@@ -1290,17 +1292,16 @@ defmodule SymmetryControl.IntegrationsTest do
       assert {:ok, _tracker} = Integrations.sync_resource(tracker.id)
 
       items =
-        Repo.all(
-          from item in WorkItem,
-            where: item.external_work_item_resource_id == ^tracker.id,
-            order_by: [asc: item.id]
+        from(item in WorkItem,
+          where: item.external_work_item_resource_id == ^tracker.id,
+          order_by: [asc: item.id]
         )
+        |> Repo.all()
         |> Enum.map(fn item ->
           assert {:ok, updated} =
                    Workspaces.update_work_item(item.id, %{
                      version: item.lock_version,
-                     pull_request_url:
-                       "https://github.com/acme/symmetry/pull/" <> item.external_id
+                     pull_request_url: "https://github.com/acme/symmetry/pull/" <> item.external_id
                    })
 
           updated
@@ -1311,7 +1312,8 @@ defmodule SymmetryControl.IntegrationsTest do
       # Import writes ascending UUIDs; delivery collection writes the same rows in reverse.
       provider_items =
         Enum.map(items, fn item ->
-          provider_work_item(%{})
+          %{}
+          |> provider_work_item()
           |> Map.merge(%{
             external_id: item.external_id,
             title: "Updated " <> item.external_id,
@@ -1398,12 +1400,12 @@ defmodule SymmetryControl.IntegrationsTest do
       on_exit(fn ->
         Sandbox.unboxed_run(Repo, fn ->
           Repo.delete_all(
-            from project_row in SymmetryControl.Workspaces.Project,
+            from project_row in Project,
               where: project_row.id == ^project.id
           )
 
           Repo.delete_all(
-            from connection_row in SymmetryControl.Integrations.Connection,
+            from connection_row in Connection,
               where: connection_row.id == ^connection.id
           )
         end)
@@ -1427,7 +1429,7 @@ defmodule SymmetryControl.IntegrationsTest do
 
       provider_items =
         Enum.map(["101", "102"], fn external_id ->
-          provider_work_item(%{}) |> Map.put(:external_id, external_id)
+          %{} |> provider_work_item() |> Map.put(:external_id, external_id)
         end)
 
       CredentialLeakProviderStub.respond_with(:sync_resource, %{
@@ -1457,7 +1459,8 @@ defmodule SymmetryControl.IntegrationsTest do
 
       provider_items =
         Enum.map(items, fn item ->
-          provider_work_item(%{})
+          %{}
+          |> provider_work_item()
           |> Map.merge(%{
             external_id: item.external_id,
             title: "Updated " <> item.external_id,
@@ -1626,7 +1629,7 @@ defmodule SymmetryControl.IntegrationsTest do
              })
 
     assert {:ok, _synced} = Integrations.sync_resource(resource.id)
-    resource = Repo.get!(SymmetryControl.Workspaces.ProjectResource, resource.id)
+    resource = Repo.get!(ProjectResource, resource.id)
 
     assert {:error, :state_conflict} =
              Workspaces.update_resource(resource.id, %{
@@ -1669,7 +1672,7 @@ defmodule SymmetryControl.IntegrationsTest do
     assert delivered.external_ci_status == "passed"
     assert delivered.external_review_status == "approved"
 
-    connection = Repo.get!(SymmetryControl.Integrations.Connection, connection.id)
+    connection = Repo.get!(Connection, connection.id)
 
     assert {:ok, without_ci} =
              Integrations.update_connection(connection.id, %{
@@ -1739,7 +1742,7 @@ defmodule SymmetryControl.IntegrationsTest do
                capabilities: ["repositories", "work_items"]
              })
 
-    archived_repository = Repo.get!(SymmetryControl.Workspaces.ProjectResource, repository.id)
+    archived_repository = Repo.get!(ProjectResource, repository.id)
     archived_item = Repo.get!(WorkItem, item.id)
 
     assert archived_repository.lock_version == synced_repository.lock_version
@@ -1786,8 +1789,7 @@ defmodule SymmetryControl.IntegrationsTest do
         ] do
       CredentialLeakProviderStub.respond_with(:execute, provider_result)
 
-      assert {:error,
-              failure = {:provider_action_failure, :provider_failure, :ambiguous, ^message}} =
+      assert {:error, failure = {:provider_action_failure, :provider_failure, :ambiguous, ^message}} =
                Integrations.execute_unprojected_provider_action(
                  connection,
                  repository,
@@ -1798,11 +1800,11 @@ defmodule SymmetryControl.IntegrationsTest do
 
       assert :ok =
                Integrations.project_provider_action_failure(
-                 Repo.get!(SymmetryControl.Workspaces.ProjectResource, repository.id),
+                 Repo.get!(ProjectResource, repository.id),
                  failure
                )
 
-      assert Repo.get!(SymmetryControl.Workspaces.ProjectResource, repository.id).status_message ==
+      assert Repo.get!(ProjectResource, repository.id).status_message ==
                message
     end
   end

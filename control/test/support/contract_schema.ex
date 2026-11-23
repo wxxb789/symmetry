@@ -25,8 +25,7 @@ defmodule SymmetryControl.ContractSchema do
     end)
   end
 
-  def rewrite_pcre2_pattern_escapes(value) when is_list(value),
-    do: Enum.map(value, &rewrite_pcre2_pattern_escapes/1)
+  def rewrite_pcre2_pattern_escapes(value) when is_list(value), do: Enum.map(value, &rewrite_pcre2_pattern_escapes/1)
 
   def rewrite_pcre2_pattern_escapes(value), do: value
 end
