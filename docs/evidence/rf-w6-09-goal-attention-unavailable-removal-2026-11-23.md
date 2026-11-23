@@ -64,9 +64,9 @@ Go gates run with the host's Go 1.27.4, the CI pin (`go.mod` `go 1.27`).
 | 25 | fixture builder assignment | `:158` | removed |
 | 26 | frontend served-fixture import | `api.fixtures.ts:6` | unchanged (reads the valid fixture, now without the member) |
 | 27 | frontend goal-refusal case | `frontend/src/features/goals/goal-attention.test.tsx:63` | replaced by the project-notice case at `:72`; absence pinned by the new case at `:63` |
-| 28 | browser member expectations | `browser/tests/portal-goal-attention.spec.mjs:127,136,487` | deleted |
-| 29 | browser page-level absence check | `:494` base / `:491` head | kept (`toHaveCount(0)` on the Goal refusal heading) |
-| 30 | browser case titles + capture captions | `:119,144,437,494,495` | byte-identical at head (`:119,144,436,491,492`); the rollout-off title stays CI-asserted at `ci.yml:550` |
+| 28 | browser member expectations | `browser/tests/portal-goal-attention.spec.mjs:127,136,487` base | the three `.toBe(null)` expectations deleted; one wire-level absence assertion added at head `:135` (`not.toHaveProperty("unavailable")`, review round 1 F6) |
+| 29 | browser page-level absence check | `:494` base / `:492` head | kept (`toHaveCount(0)` on the Goal refusal heading) |
+| 30 | browser case titles + capture captions | `:119,144,437,495` base | byte-identical base→head (`:119`→`:119`, `:144`→`:143`, `:437`→`:436`, `:495`→`:493`); the rollout-off title stays CI-asserted at `ci.yml:550` |
 | 31 | contracts boundary suite | `contracts/scripts/boundary.test.mjs:313-317` | unchanged (consumes the fixture; renames only live members) |
 | 32 | `services/api.ts` type derivation | `frontend/src/services/api.ts:195-197` | unchanged (follows the regenerated DTO) |
 
@@ -100,8 +100,9 @@ their failure reasons are elsewhere and the schema stays open to additional memb
 
 ## 4. The change
 
-- Projection (`portal_json.ex`): the goal member and its doc-comment claim removed (+6/−7); both
-  `project_blocked/1` clauses byte-identical (measured: base 129-140 == head 128-139).
+- Projection (`portal_json.ex`): the goal member and its doc-comment claim removed (+2/−12 vs base;
+  the `@doc` is one line, review round 1 F2); both `project_blocked/1` clauses byte-identical
+  (measured: base 129-140 == head 119-130).
 - Control test (+38/−5): 3 pattern lines + 1 dead literal dropped; two cases added —
   `attention serves no unavailable member on the Goal feed` (controller path, real project + Goal,
   `refute Map.has_key?(response["goal_attention"], "unavailable")`) and
@@ -122,20 +123,23 @@ their failure reasons are elsewhere and the schema stays open to additional memb
   option/assignment; the goal-refusal case becomes the project-notice case (notice heading, mapped
   message and code, the still-served Goal entry, no Goal refusal heading) plus the new served-document
   absence case.
-- Go: new `daemon/internal/contracts/attention_read_test.go` (42 lines) — the owned-set extension the
-  reconcile P1 requires (recorded in the plan §"Implementation choices" 2).
+- Go: new `daemon/internal/contracts/attention_read_test.go` (40 lines; one comment line after
+  review round 1 F2) — the owned-set extension the reconcile P1 requires (ratified in review round 1
+  F3; plan §"Implementation choices" 2).
 - Design amendments: `docs/design/protocol.md:44-54` (+12) and `docs/design/frontend.md:64-71` (+9)
   record the member removal as the program's one non-additive v1 change under the 2026-11-21 owner
   mandate; both cite the contract revision SHA-256.
-- Browser spec (−3): the three member expectations deleted; titles, the page-level absence check and
-  the capture captions byte-identical; `node --check` passes.
+- Browser spec (+1/−3): the three member expectations deleted and one wire-level absence assertion
+  added at `:135` (`not.toHaveProperty("unavailable")` on the served `goal_attention`, review round
+  1 F6); titles, the page-level absence check and the capture captions byte-identical; `node --check`
+  and the browser lint pass.
 
 ## 5. Control-flow preservation audit (base → HEAD; lesson 32)
 
 | surface | base | HEAD | preserved |
 | --- | --- | --- | --- |
-| `project_blocked({:error, reason})` | `portal_json.ex:137-140`, `unavailable: %{code, message}` from `Protocol.error_details/1` | head `136-139`, byte-identical | yes (measured) |
-| `project_blocked({:ok, model})` | `:129-135` | head `128-134`, byte-identical | yes (measured) |
+| `project_blocked({:error, reason})` | `portal_json.ex:137-140`, `unavailable: %{code, message}` from `Protocol.error_details/1` | head `127-130`, byte-identical | yes (measured) |
+| `project_blocked({:ok, model})` | `:129-135` | head `119-125`, byte-identical | yes (measured) |
 | `ProjectBlocked` notice condition + body | `attention.tsx:103-110` | byte-identical function (extracted base vs head, `diff` empty) | yes |
 | `GoalAttention` notice condition + body | `attention.tsx:74-88` | removed with the member (no input reaches it) | removed by design |
 | controller `with` chain + `goal_attention/1` mapping | `portal_api_controller.ex:34-72` | file not modified (`git status` lists it not at all) | yes |
@@ -162,9 +166,12 @@ their failure reasons are elsewhere and the schema stays open to additional memb
 - **Go:** `TestAttentionReadServesNoGoalUnavailableMember` decodes the served fixture against the
   embedded bundle and re-marshals the DTO: no `unavailable` key under `goal_attention`, `entries`
   present.
-- **Browser:** the three member expectations are deleted; the page-level absence check
-  (`Goal attention is unavailable on this server` → count 0) stays in the rollout-off case that the
-  render gate's executed-set assertion names (`ci.yml:550`).
+- **Browser:** the three member expectations are deleted and one wire-level absence assertion is
+  added on the served `goal_attention` (`served.body.goal_attention`
+  `not.toHaveProperty("unavailable")`, spec `:135`, the primary case of the render gate's executed
+  set); the page-level absence check (`Goal attention is unavailable on this server` → count 0)
+  stays in the rollout-off case that the render gate's executed-set assertion names (`ci.yml:550`).
+  The spec runs only under the CI render gate; its local equivalent is M8 (§8).
 
 ## 7. Gate table (foreground, serialized; exact commands and exit codes)
 
@@ -196,7 +203,10 @@ Every gate was run at least twice: once during implementation and again on the f
 ## 8. Mutation runs (judging)
 
 All mutants were applied with the patch tool, measured, and reverted; the reverts are byte-exact
-(§9). "Red" below means the named case failed with the named assertion.
+(§9). "Red" below means the named case failed with the named assertion. The contract gate's
+mutation (a) is read per side (review round 1 F4): M1 is the control side, M2/M3 the frontend side;
+the frontend project-notice case forces its refusal through the client fixture builder, so no
+single server-side mutation reddens both sides by construction.
 
 | # | mutation | target case(s) | measured |
 | --- | --- | --- | --- |
@@ -208,20 +218,26 @@ All mutants were applied with the patch tool, measured, and reverted; the revert
 | M5 | the frontend Goal notice restored (derivation + prop + notice branch) against the deleted member | `pnpm --filter @symmetry/frontend typecheck` | **exit 1**: `src/features/attention/attention.tsx(67,44): error TS2322: Type '{} | null' is not assignable to type '{ code: string; message: string; } | null'` — the deleted member no longer yields the typed refusal, so a retained notice cannot compile (the "no live consumer" proof) |
 | M6 | member re-added to the valid fixture only | frontend absence case + `contracts:check` + Go test | frontend `vitest … -t "serves the Goal feed with no unavailable member"` → **exit 1**, `AssertionError: expected true to be false`; `pnpm contracts:check` → **exit 0** (`Generated contract DTOs are up to date.`); `go test -run TestAttentionRead…` → **exit 0**. The schema's `additionalProperties` hides the member from every validator — the explicit absence assertions are the load-bearing pins (the P1 demonstration) |
 | M7 | member restored in the schema **and regenerated** (the DTO regains the field) | Go absence test | `go test -run TestAttentionReadServesNoGoalUnavailableMember` → **exit 1**: `attention_read_test.go:18: … missing properties: 'unavailable'` — the committed member-less fixture rejects the regenerated contract, so the wire change cannot be reverted silently |
+| M8 | the removed goal member re-added to the projection (`portal_json.ex` goal feed → `unavailable: nil`, review round 1 F6) | the browser spec's new wire-level absence assertion, exercised locally as its own equivalent (the spec itself runs only under the CI render gate) | **exit 1, red**: the Elixir served-document case `attention serves no unavailable member on the Goal feed` → `mix test` attention file **exit 2, `13/14 passed`**; the projected `goal_attention` document on the mutant tree (`{"unavailable":null,"entries":[],"next_cursor":null}`, `mix run --no-start` probe) fails the spec's exact expression `expect(document).not.toHaveProperty("unavailable")` run with `@playwright/test`'s `expect` (**exit 1**); after the byte-exact revert the probe yields `{"entries":[],"next_cursor":null}` and the same matcher holds (**exit 0**), the file 14/14 |
 
 The mutation is not applied by editing a generated file by hand (the failure control forbids that);
 M7 takes the real regression path (schema edit → regenerate), and the drift backstop (M4b) covers the
-un-regenerated variant.
+un-regenerated variant. M7's `:18` line reference predates review round 1 F2 (removing two comment
+lines shifts the same failure to `:16`); the recorded output is the stage's raw quote.
 
 ## 9. Scope, DLP, restore and report-only figures
 
-- Diff scope: 14 tracked files (+106/−75, net +31) and 3 new files — `git status --porcelain` lists
+- Diff scope: 15 tracked files (+104/−81, net +23) and 3 new files — `git status --porcelain` lists
   exactly the owned set plus `docs/design/{protocol,frontend}.md`, `daemon/internal/contracts/attention_read_test.go`
-  (owned-set extension), this slice's plan and this evidence record. The member-removal subset
-  (projection, schema, fixture, 4 generated files, frontend fix, browser spec) is **−31 dLOC**
-  (30 insertions / 61 deletions), consistent with the plan row's −30; the positive total comes from
-  the added clause tests (+38/−5 control, +17/−9 frontend) and the two design amendments (+21).
-- New-file sizes: Go test 42 L, plan 189 L, evidence 249 L.
+  (owned-set extension, ratified in review round 1 F3),
+  `docs/plans/2026-11-22-rf-w4-11-frontend-test-harness-plan.md` (one line, ratified in review round
+  1 F5), this slice's plan and this evidence record. The member-removal subset (projection, schema,
+  fixture, 4 generated files, frontend fix, browser spec) is **−39 dLOC** (27 insertions / 66
+  deletions), nine lines below the plan row's −30 because review round 1 compressed the projection
+  `@doc` to one line (F2, −9 net) and added the wire-absence assertion (F6, +1); the positive total
+  comes from the added clause tests (+38/−5 control, +17/−9 frontend) and the two design amendments
+  (+21).
+- New-file sizes (`wc -l` at the delivered tree): Go test 40 L, plan 196 L, evidence 288 L.
 - Host dependency tree: `frontend/package.json` and `pnpm-lock.yaml` restored to HEAD's bytes
   (sha256 `371e97c389f5fe61…` and `b9575212d79edd4f…`, re-measured after the restore) and absent
   from `git status`; the temporary feed-version lockfile is host-local and CI installs from HEAD's
@@ -244,11 +260,29 @@ un-regenerated variant.
 - The CI render gate is the only execution of the edited browser spec (this host cannot run the
   release-shell harness: no Docker daemon and no three-instance release/fixture stack — the
   conductor-verified slow oracle the contract names). Local surrogates: `node --check` on the spec,
-  the browser lint (`--max-warnings 0`), and the jsdom project-notice case that asserts the same
-  page-level absence of the Goal refusal heading.
+  the browser lint (`--max-warnings 0`), the jsdom project-notice case that asserts the same
+  page-level absence of the Goal refusal heading, and M8 (the served projection document fed to the
+  spec's own matcher, §8).
 - The host dependency-tree deviation (§1) is host-local; CI installs from HEAD's lockfile.
 - `contracts:check` cannot prove member absence (schema `additionalProperties`); M6 is the measured
   demonstration that the explicit absence assertions are load-bearing, and M7 that the regenerated
   Go DTO is pinned by a test rather than only by the drift check.
 - The frontend ~1.1 s pagination sleeps and the other W6-12 targets in the same attention test file
   are untouched (out of scope by contract).
+
+## 11. Review round 1 fixes (2026-11-23, PR #264)
+
+- F1: the record sizes are recomputed at the delivered tree (`wc -l`): Go test 40, plan 196,
+  evidence 288; the plan's figures read the same numbers.
+- F2: the `attention/3` `@doc` and the Go test comment are one line each (≤2); nothing else moved.
+- F3: `daemon/internal/contracts/attention_read_test.go` joins the owned set.
+- F4: the contract's mutation (a) is recorded per side (M1 control, M2/M3 frontend), see §8.
+- F5: the W4-11 plan line now reads the project-refusal case (`projectUnavailable`) instead of the
+  removed `goalUnavailable` refusal.
+- F6: the browser spec's wire-level absence assertion at `:135` — see §6 and mutant M8 (§8).
+- Gates re-run on the fixed tree: `mix format --check-formatted` 0; `mix test
+  test/symmetry_control_web/controllers/portal_goal_attention_test.exs` 0 (14 passed);
+  `node contracts/scripts/generate.mjs --check` 0; `tsc --noEmit` 0; `vitest run
+  src/features/goals/goal-attention.test.tsx` 0 (30 passed); `go test -count=1
+  ./internal/contracts/...` 0; `gofmt -l .` clean; `node --check` on the spec 0; browser `eslint .
+  --max-warnings 0` 0; `git diff --check` clean.

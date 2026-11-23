@@ -5,9 +5,7 @@ import (
 	"testing"
 )
 
-// The Goal attention feed no longer serves `unavailable`; the schema keeps
-// additionalProperties true, so validation alone cannot prove the member is gone
-// and the decoded DTO is re-marshalled to pin the wire shape.
+// Re-marshalled to pin the wire shape, since the schema admits additional members.
 func TestAttentionReadServesNoGoalUnavailableMember(t *testing.T) {
 	var read SymmetryAttentionReadV1
 	if err := DecodeSchema(

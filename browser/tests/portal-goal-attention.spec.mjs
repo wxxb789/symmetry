@@ -132,6 +132,7 @@ test.describe("Goal attention workspace", () => {
     // the page below renders those two reads, not a substituted response.
     const served = await api(page, "GET", `/portal/api/attention?project_id=${project.id}`);
     expect(served.status).toBe(200);
+    expect(served.body.goal_attention).not.toHaveProperty("unavailable");
     expect(served.body.goal_attention.entries.map((entry) => entry.goal_id)).toContain(goalId);
 
     await page.goto(`/portal/attention?projectId=${project.id}`);

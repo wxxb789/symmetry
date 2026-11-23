@@ -102,16 +102,7 @@ defmodule SymmetryControlWeb.PortalJSON do
     }
   end
 
-  @doc """
-  The attention entry point: Goal attention merged with the project blocked items
-  the workspace read already serves.
-
-  `goal_result` is `%{page: Goals attention page}`. The Goal feed cannot be
-  unavailable: a failed Goal read is answered as its mapped protocol status
-  before this projection runs, and a failed workspace read states the Project
-  refusal while the Goal entries stay served. Nothing here invents a Goal entry
-  or hides an authority refusal.
-  """
+  @doc "The Goal feed cannot be unavailable: a failed Goal read is answered as its mapped status."
   def attention(selected_project_id, goal_result, workspace_result) do
     goal_page = goal_result.page
 

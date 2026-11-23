@@ -44,8 +44,8 @@ frontend, browser and daemon, with its disposition:
 | 25 | fixture builder assignment | `:158` | removed |
 | 26 | frontend served fixture import | `api.fixtures.ts:6` | unchanged (reads the valid fixture, now without the member) |
 | 27 | frontend goal-refusal case | `frontend/src/features/goals/goal-attention.test.tsx:63-82` | replaced by the project-notice case |
-| 28 | browser member expectations | `browser/tests/portal-goal-attention.spec.mjs:127,136,487` | deleted |
-| 29 | browser page-level absence check | `:494` base / `:491` head | kept (`toHaveCount(0)` for the Goal refusal heading) |
+| 28 | browser member expectations | `browser/tests/portal-goal-attention.spec.mjs:127,136,487` | deleted (review round 1 F6 re-expresses one as the wire-absence assertion at head `:135`) |
+| 29 | browser page-level absence check | `:494` base / `:492` head | kept (`toHaveCount(0)` for the Goal refusal heading) |
 | 30 | browser case titles / capture captions | `:119,144,437,494,495` | kept byte-identical (the rollout-off title is CI-asserted at `ci.yml:550`) |
 | 31 | contracts boundary suite | `contracts/scripts/boundary.test.mjs:313-317` | unchanged (consumes the fixture; asserts rename refusal for live members only) |
 | 32 | `services/api.ts` type derivation | `frontend/src/services/api.ts:195-197` | unchanged (follows the regenerated DTO) |
@@ -127,9 +127,10 @@ destination redirect (a different feature, out of scope).
 5. Frontend: absence case + project-notice case added → red (fixture still carries the member) →
    `attention.tsx` / `api.fixtures.ts` edited → `typecheck`, `lint`, the file's vitest suite, then the
    full frontend suite.
-6. Browser spec: the three member expectation lines deleted; titles, the absence check and captions
-   byte-identical; local render gate unavailable on this host (no Docker/release stack) → recorded
-   with the exact CI step (`ci.yml` render gate, 7-spec set).
+6. Browser spec: the three member expectation lines deleted (review round 1 F6 re-expresses one as
+   the wire-absence assertion); titles, the absence check and captions byte-identical; local render
+   gate unavailable on this host (no Docker/release stack) → recorded with the exact CI step
+   (`ci.yml` render gate, 7-spec set).
 7. Mutants: (a) Elixir `project_blocked` error branch → control red; (a') fixture builder → frontend
    red; (b) schema member re-added without regenerating → `contracts:check` red (drift); (c) the
    frontend Goal notice re-rendered against the deleted member → typecheck red; (d) the member
@@ -150,8 +151,9 @@ destination redirect (a different feature, out of scope).
 ## Residual risks and limits
 
 - The render gate executes only in CI (this host has no Docker daemon, no staged release, no WSL
-  browser carrier); the deleted browser assertions are typed/edited but not executed locally — the
-  CI render gate is the oracle, and the contract names it a conductor-verified slow oracle.
+  browser carrier); the edited browser assertions (the F6 wire-absence assertion included) are
+  typed/edited but not executed locally — M8 is their local equivalent; the CI render gate is the
+  oracle, and the contract names it a conductor-verified slow oracle.
 - Linux-only executions behind the Go gate are build-only on this host; the package suites run
   natively.
 - `contracts:check` cannot prove member absence (schema `additionalProperties`), which is exactly
@@ -163,7 +165,7 @@ destination redirect (a different feature, out of scope).
 - Re-derivation corrections against `55ecd76a`, all carried into the change: the control test held
   **three** goal-member assertions (`:68`, `:116`, `:261`), not two; the four invalid-fixture
   occurrences stay unedited (not owned, additive, refusal reasons unchanged); the Go absence
-  assertion needed a new file (`daemon/internal/contracts/attention_read_test.go`, 42 L) — the
+  assertion needed a new file (`daemon/internal/contracts/attention_read_test.go`, 40 L) — the
   owned-set extension the reconcile P1 implies — and the two design files gained the P2-A amendment
   (contract SHA-256 cited in both).
 - Mutation (a) is per side, as recorded in "Implementation choices" 3: M1 reddens the control
@@ -178,12 +180,17 @@ destination redirect (a different feature, out of scope).
   (219 warnings under the pinned 229 cap), the attention file 0 (`30 passed`), the full frontend
   suite 0 (`27` files, `633 passed`), the frontend build 0, browser lint 0, `go test -count=1
   ./internal/contracts/... ./internal/protocol/...` 0, both GOOS builds 0, `git diff --check` 0.
-- Mutants M1-M7 measured red exactly as §8 of the evidence records; M6 additionally shows
-  `contracts:check` and the Go test stay green when the member is re-added to the fixture only —
-  the schema cannot prove absence, which is why the explicit assertions exist.
-- Report-only LOC (D2): tracked diff +106/−75 (net +31) over 14 files; the member-removal subset is
-  −31 dLOC (30/61), consistent with the plan row's −30; new files add 42 (Go test) + 189 (plan) +
-  249 (evidence) lines.
+- Mutants M1-M8 measured red exactly as §8 of the evidence records; M8 is the browser assertion's
+  local equivalent (the member re-added → the spec's own matcher fails on the served projection);
+  M6 additionally shows `contracts:check` and the Go test stay green when the member is re-added to
+  the fixture only — the schema cannot prove absence, which is why the explicit assertions exist.
+- Report-only LOC (D2): tracked diff +104/−81 (net +23) over 15 files; the member-removal subset is
+  −39 dLOC (27/66), nine below the plan row's −30 (the review-round-1 doc compression and the added
+  absence assertion); new files add 40 (Go test) + 196 (plan) + 288 (evidence) lines.
 - Host deviation recorded and reverted: the four feed-unavailable dev pins were downgraded for the
   local install only; `frontend/package.json` and `pnpm-lock.yaml` are back to HEAD's bytes
   (`371e97c3…` / `b9575212…`) and absent from `git status`.
+- Review round 1 (2026-11-23): F1 sizes recomputed at the delivered tree; F2 the `@doc` and the Go
+  comment compressed to one line each; F5 the W4-11 `goalUnavailable` line reworded; F6 the browser
+  wire-absence assertion added (`:135`, local equivalent mutant M8); F3/F4 ratifications recorded.
+  Commands and counts: evidence record §8/§11.
