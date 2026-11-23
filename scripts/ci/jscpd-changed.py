@@ -13,25 +13,32 @@ The corpus is the ``--head`` revision's own tree, materialized from Git with
 ``git archive`` - never the working tree - so a dirty checkout cannot change which
 clones are seen. jscpd is this repository's pinned devDependency
 (``node_modules/jscpd``, installed by ``pnpm install``); the gate never fetches a
-tool, and ``.jscpd.json`` at the repository root supplies the obligatory scope: the
-dependency/build trees are never scanned, and the detection mode is pinned.
+tool, and ``.jscpd.json`` supplies the obligatory scope: the dependency/build trees
+are never scanned, and the detection mode is pinned. The scope is read from the
+comparison base - falling back to the head only when the base holds none - so a range
+that rewrites the scope cannot exempt itself.
 
 Refused are *new* duplications only (D16's changed-file boundary, read strictly): a
 clone is refused when one of its occurrences holds a run of at least ``--min-lines``
-consecutive lines the range added whose content that file did not already hold at the
-comparison base, or a run of that length the range inserted that the same file did not
-delete elsewhere (a copy, not a move). A clone that only re-covers lines a reformat
-rewrote - the mechanical ``mix format`` pass re-touches every line of the files it
-reformats - is reported as tolerated and does not fail the range. Renames follow their
-base path, so a moved file is compared against the content it came from.
+consecutive added lines the file did not already hold as often at the comparison base.
+``held`` counts line-boundary-aligned occurrences of the line's whitespace-free text
+in the same path's base revision, so a reflow (a joined or split line) still matches
+while a comment marker or any other neighbouring token does not: uncommenting a block
+the file held only commented is new content, and so is a second copy of a block the
+file already held once. A clone that only re-covers lines a reformat rewrote - the
+mechanical ``mix format`` pass re-touches every line of the files it reformats - is
+reported as tolerated and does not fail the range. Renames follow their base path, so
+a moved file is compared against the content it came from.
 
 The limits are explicit and load-bearing, because jscpd's defaults (1000 lines,
 100kb) silently skip the largest files: ``--min-lines 10 --min-tokens 50`` are the
 audited thresholds and ``--max-lines 5000 --max-size 1mb`` raise the size ceiling.
 A changed file that carries added lines but was not scanned anyway (an unknown
 format, a path outside the configured scope, a file below the line threshold, or one
-still above the ceiling) is reported as a notice, never silently skipped - and a run
-that scanned no source file at all is refused instead of passing vacuously.
+still above the ceiling) is reported as a notice, never silently skipped. A run that
+scanned no source file at all is refused instead of passing vacuously - unless every
+changed file with added lines is shorter than ``--min-lines``, because no clone of
+that length can live in them.
 
 Changed-file selection is computed against an explicit comparison base, never from
 the checkout's last commit: CI passes the pull-request base commit, or the pushed
@@ -78,6 +85,10 @@ class CorpusRefused(Exception):
     pass
 
 
+class ReportMissing(CorpusRefused):
+    """jscpd selected no source file, so no report exists to read."""
+
+
 def jscpd_entrypoint(package: pathlib.Path) -> pathlib.Path:
     manifest = package / "package.json"
     if not manifest.is_file():
@@ -98,19 +109,15 @@ def jscpd_entrypoint(package: pathlib.Path) -> pathlib.Path:
 
 
 class RangeEdits:
-    """What a revision range does to each path's lines.
+    """The head lines a revision range adds, per path.
 
-    ``added`` holds the ranges of lines the range writes; ``inserted`` narrows them to
-    the lines a hunk adds beyond the ones it replaces - a pure insertion, or the surplus
-    of a mixed hunk (the shape a copied block takes); ``deleted`` holds the base lines
-    the range removes, so an inserted block can be told from a block the same file
-    merely moved.
+    A pure insertion and the replacement half of a rewrite hunk are both added lines:
+    the refusal rule counts how often the file held a line's content before, not how
+    the hunk that wrote it was shaped.
     """
 
     def __init__(self) -> None:
         self.added: dict[str, list[tuple[int, int]]] = {}
-        self.inserted: dict[str, list[tuple[int, int]]] = {}
-        self.deleted: dict[str, str] = {}
 
 
 def parse_target(field: str) -> str | None:
@@ -123,11 +130,15 @@ def parse_target(field: str) -> str | None:
 
 
 def range_edits(repository: pathlib.Path, base: str, head: str) -> RangeEdits:
-    """Parse ``base..head`` into added ranges, pure insertions and deleted lines.
+    """Parse ``base..head`` into the head lines each path adds.
 
     ``--no-renames`` keeps a rename a deletion plus an addition, and ``--unified=0``
     keeps every hunk header a bare range. A binary file reports no hunk at all, so it
     keeps its path with no ranges and its lines are never matched.
+
+    ``--no-ext-diff``/``--no-textconv`` keep an inherited ``GIT_EXTERNAL_DIFF``,
+    ``diff.external`` or text-conversion filter from replacing the patch this parser
+    reads: either would silently drop added lines and let the range pass.
 
     C-quoting is off and the prefixes are explicit, so a header's path field is the
     report's own raw path; a field git still quotes is refused, never silently skipped.
@@ -142,6 +153,8 @@ def range_edits(repository: pathlib.Path, base: str, head: str) -> RangeEdits:
         "--unified=0",
         "--no-renames",
         "--no-color",
+        "--no-ext-diff",
+        "--no-textconv",
         "--src-prefix=a/",
         "--dst-prefix=b/",
         base,
@@ -153,32 +166,20 @@ def range_edits(repository: pathlib.Path, base: str, head: str) -> RangeEdits:
         )
     edits = RangeEdits()
     path: str | None = None
-    old_path: str | None = None
-    removed: list[str] = []
     base_left = 0
     head_left = 0
-
-    def flush() -> None:
-        if removed and old_path is not None:
-            edits.deleted[old_path] = "\n".join([edits.deleted.get(old_path, ""), *removed])
-        removed.clear()
 
     for line in completed.stdout.decode("utf-8", "replace").splitlines():
         if base_left > 0 or head_left > 0:
             if line.startswith("-"):
-                removed.append(line[1:])
                 base_left -= 1
             elif line.startswith("+"):
                 head_left -= 1
             continue
-        if line.startswith("--- "):
-            flush()
-            old_path = parse_target(line[4:])
-        elif line.startswith("+++ "):
+        if line.startswith("+++ "):
             path = parse_target(line[4:])
             if path is not None:
                 edits.added.setdefault(path, [])
-                edits.inserted.setdefault(path, [])
         elif line.startswith("@@"):
             match = HUNK_HEADER.match(line)
             if match is None:
@@ -187,26 +188,31 @@ def range_edits(repository: pathlib.Path, base: str, head: str) -> RangeEdits:
             base_left, head_left = base_count, head_count
             if head_count > 0 and path is not None:
                 edits.added[path].append((head_start, head_start + head_count - 1))
-                if base_count == 0:
-                    edits.inserted[path].append((head_start, head_start + head_count - 1))
-                elif head_count > base_count:
-                    edits.inserted[path].append((head_start + base_count, head_start + head_count - 1))
-    flush()
     return edits
 
 
 def materialize_head(repository: pathlib.Path, head: str, corpus: pathlib.Path) -> None:
+    """Unpack the head tree into ``corpus``; an unpackable member refuses the corpus.
+
+    ``filter="data"`` rejects a member tarfile considers unsafe - an absolute or
+    escaping path, an absolute-target symlink - and Git stores a symlink as a plain
+    blob, so the tree can legally hold one. The unpack therefore runs inside the
+    refusal: the gate reports the unusable corpus (exit 2) instead of a traceback.
+    """
     archive = corpus.parent / "head.tar"
     completed = revision_scope.run_git(repository, "archive", "--format=tar", f"--output={archive}", head)
     if completed.returncode != 0:
         raise CorpusRefused(f"cannot archive {head}: {completed.stderr.decode('utf-8', 'replace').strip()}")
-    with tarfile.open(archive) as stream:
-        for member in stream.getmembers():
-            relative = pathlib.PurePosixPath(member.name)
-            if relative.is_absolute() or ".." in relative.parts:
-                raise CorpusRefused(f"the archive of {head} holds an unpackable member {member.name}")
-        stream.extractall(corpus, filter="data")
-    archive.unlink()
+    try:
+        with tarfile.open(archive) as stream:
+            for member in stream.getmembers():
+                relative = pathlib.PurePosixPath(member.name)
+                if relative.is_absolute() or ".." in relative.parts:
+                    raise CorpusRefused(f"the archive of {head} holds an unpackable member {member.name}")
+            stream.extractall(corpus, filter="data")
+        archive.unlink()
+    except (tarfile.TarError, OSError) as error:
+        raise CorpusRefused(f"cannot materialize the corpus of {head}: {error}") from error
 
 
 def run_jscpd(
@@ -245,7 +251,7 @@ def scanned_name(name: str) -> str:
 def load_report(report_directory: pathlib.Path) -> dict:
     report = report_directory / REPORT_NAME
     if not report.is_file():
-        raise CorpusRefused(
+        raise ReportMissing(
             "jscpd wrote no report: it recognized no source file in the corpus, so this gate cannot "
             "testify about this revision"
         )
@@ -256,6 +262,20 @@ def load_report(report_directory: pathlib.Path) -> dict:
     if not isinstance(document, dict) or not isinstance(document.get("duplicates"), list):
         raise CorpusRefused(f"{report} does not hold a duplicate list")
     return document
+
+
+def too_short_to_clone(corpus: pathlib.Path, path: str) -> bool:
+    """Whether the head file is shorter than ``--min-lines``, so no clone can live in it.
+
+    jscpd's walker skips such a file, and a clone of ``--min-lines`` consecutive lines
+    cannot fit in fewer lines than that. A file the corpus cannot read is not too short:
+    the gate must not pass on a path it could not measure.
+    """
+    try:
+        lines = (corpus / path).read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return False
+    return len(lines) < MIN_LINES
 
 
 def clone_report(duplicate: dict) -> dict[str, dict[str, int | str]]:
@@ -322,26 +342,79 @@ def runs(flags: list[bool], minimum: int) -> list[tuple[int, int]]:
     return found
 
 
+class TextIndex:
+    """One file's whitespace-free text, its line-boundary offsets and a count cache.
+
+    ``line_occurrences`` answers how often the file holds a line's content as a whole
+    number of its own lines: an occurrence must start at a line start and end at a line
+    end. A reflow therefore still matches - a joined line's text spans the two base
+    lines it came from, and a split line's text is inside its base line - while a
+    comment marker or any other neighbouring token keeps the occurrence from counting:
+    a block the base held only commented is not content the file "already held".
+    """
+
+    def __init__(self, lines: list[str]) -> None:
+        self._lines = ["".join(line.split()) for line in lines]
+        self._text = "".join(self._lines)
+        self._starts = {0}
+        self._ends: set[int] = set()
+        position = 0
+        for line in self._lines:
+            position += len(line)
+            self._starts.add(position)
+            self._ends.add(position)
+        self._counts: dict[str, int] = {}
+
+    def line_occurrences(self, line: str) -> int:
+        needle = "".join(line.split())
+        if not needle:
+            return 0
+        if needle not in self._counts:
+            count = 0
+            position = self._text.find(needle)
+            while position != -1:
+                if position in self._starts and position + len(needle) in self._ends:
+                    count += 1
+                position = self._text.find(needle, position + 1)
+            self._counts[needle] = count
+        return self._counts[needle]
+
+
 class Occurrence:
-    def __init__(self, head_lines: list[str], base_text: str, edits: RangeEdits, path: str, span: tuple[int, int]):
+    """One clone occurrence: the head lines it covers, against its base revision.
+
+    A line is *new* when the range added it and the file held fewer boundary-aligned
+    occurrences of its content at the comparison base than the head holds. A copy of a
+    block the file already carried is new because its multiplicity grew; a line a
+    reformat merely rewrote is not, because its content is still there.
+    """
+
+    def __init__(
+        self,
+        head_lines: list[str],
+        head_index: TextIndex,
+        base_index: TextIndex,
+        edits: RangeEdits,
+        path: str,
+        span: tuple[int, int],
+    ):
         self.window = list(range(span[0], min(span[1], len(head_lines)) + 1))
         self.lines = head_lines
-        self.content_new = [
-            overlaps(edits.added.get(path, []), line, line) and "".join(head_lines[line - 1].split()) not in base_text
-            for line in self.window
-        ]
-        self.inserted = [overlaps(edits.inserted.get(path, []), line, line) for line in self.window]
+        self.absent: list[bool] = []
+        self.new: list[bool] = []
+        for line in self.window:
+            text = head_lines[line - 1]
+            base_count = base_index.line_occurrences(text)
+            added = overlaps(edits.added.get(path, []), line, line)
+            self.absent.append(base_count == 0)
+            self.new.append(added and base_count < head_index.line_occurrences(text))
 
-    def new_content_runs(self) -> list[tuple[int, int]]:
-        return [(self.window[start], self.window[end]) for start, end in runs(self.content_new, MIN_LINES)]
-
-    def copied_runs(self, squashed_deleted: str) -> list[tuple[int, int]]:
-        copied = []
-        for start, end in runs(self.inserted, MIN_LINES):
-            block = "".join("".join(self.lines[line - 1].split()) for line in self.window[start : end + 1])
-            if block not in squashed_deleted:
-                copied.append((self.window[start], self.window[end]))
-        return copied
+    def refused_runs(self) -> list[tuple[str, tuple[int, int]]]:
+        refused = []
+        for start, end in runs(self.new, MIN_LINES):
+            reason = "new content" if all(self.absent[start : end + 1]) else "copied, not moved"
+            refused.append((reason, (self.window[start], self.window[end])))
+        return refused
 
 
 def refuse(message: str) -> int:
@@ -363,6 +436,32 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def governing_scope(repository: pathlib.Path, base: str, head: str) -> str:
+    """The scope config the range is judged by: the comparison base's, never its own.
+
+    A range that rewrites ``.jscpd.json`` would otherwise choose what is scanned and
+    could exempt its own files; the base revision's scope decides such a range, and the
+    edit takes effect from the next range on. Only a range that first introduces the
+    config is judged by the revision that adds it.
+    """
+    at_base = blob_text(repository, base, CONFIG_FILE)
+    at_head = blob_text(repository, head, CONFIG_FILE)
+    if at_base:
+        if at_base != at_head:
+            print(
+                f"{PROGRAM} notice: this range rewrites {CONFIG_FILE}; the scope of {base[:12]} "
+                "governs it, and the edit applies from the next range",
+                file=sys.stderr,
+            )
+        return at_base
+    if at_head:
+        print(
+            f"{PROGRAM} notice: {CONFIG_FILE} first appears in this range; it supplies the scope it is judged by",
+            file=sys.stderr,
+        )
+    return at_head
+
+
 def main(argv: list[str]) -> int:
     arguments = build_parser().parse_args(argv)
     repository = pathlib.Path(arguments.repo).resolve()
@@ -375,9 +474,6 @@ def main(argv: list[str]) -> int:
     head = revision_scope.resolve_commit(repository, arguments.head)
     if head is None:
         return refuse(f"cannot resolve the head {arguments.head!r}")
-    scope = blob_text(repository, head, CONFIG_FILE)
-    if not scope:
-        return refuse(f"{CONFIG_FILE} is missing at {head[:12]} (the committed jscpd scope config)")
     try:
         base, fallback = revision_scope.resolve_base(repository, arguments.base, head, PROGRAM)
     except revision_scope.ComparisonBaseRefused as refusal:
@@ -386,6 +482,9 @@ def main(argv: list[str]) -> int:
         return refuse(f"cannot resolve a comparison base ({arguments.base!r} against origin/main or HEAD^)")
     if fallback:
         base = revision_scope.narrow_to_merge_base(repository, base, head)
+    scope = governing_scope(repository, base, head)
+    if not scope:
+        return refuse(f"{CONFIG_FILE} is missing at {base[:12]} and {head[:12]} (the committed jscpd scope config)")
     try:
         changed = revision_scope.changed_paths(repository, base, head, ())
         edits = range_edits(repository, base, head)
@@ -405,7 +504,18 @@ def main(argv: list[str]) -> int:
             config = working / CONFIG_FILE
             config.write_text(scope, encoding="utf-8")
             run_jscpd(entrypoint, corpus, config, report_directory)
-            document = load_report(report_directory)
+            try:
+                document = load_report(report_directory)
+            except ReportMissing:
+                citable = [path for path in changed if edits.added.get(path) and not too_short_to_clone(corpus, path)]
+                if citable:
+                    raise
+                print(
+                    f"{PROGRAM}: {len(changed)} changed file(s), every added line in a file shorter than "
+                    f"{MIN_LINES} lines; no clone of {MIN_LINES}+ lines can live in them, so there is "
+                    "nothing to check"
+                )
+                return 0
         except CorpusRefused as refusal:
             return refuse(str(refusal))
 
@@ -428,8 +538,8 @@ def main(argv: list[str]) -> int:
         try:
             renamed = renamed_base_paths(repository, base, head)
             head_lines_by_path: dict[str, list[str]] = {}
-            squashed_base: dict[str, str] = {}
-            squashed_deletions: dict[str, str] = {}
+            head_indexes: dict[str, TextIndex] = {}
+            base_indexes: dict[str, TextIndex] = {}
 
             def read_head_lines(path: str) -> list[str]:
                 if path not in head_lines_by_path:
@@ -439,15 +549,15 @@ def main(argv: list[str]) -> int:
                         raise CorpusRefused(f"cannot read the scanned file {path}: {error}") from error
                 return head_lines_by_path[path]
 
-            def whitespace_free_base(source: str) -> str:
-                if source not in squashed_base:
-                    squashed_base[source] = "".join(blob_text(repository, base, source).split())
-                return squashed_base[source]
+            def head_index(path: str) -> TextIndex:
+                if path not in head_indexes:
+                    head_indexes[path] = TextIndex(read_head_lines(path))
+                return head_indexes[path]
 
-            def whitespace_free_deletions(source: str) -> str:
-                if source not in squashed_deletions:
-                    squashed_deletions[source] = "".join(edits.deleted.get(source, "").split())
-                return squashed_deletions[source]
+            def base_index(source: str) -> TextIndex:
+                if source not in base_indexes:
+                    base_indexes[source] = TextIndex(blob_text(repository, base, source).splitlines())
+                return base_indexes[source]
 
             for duplicate in document["duplicates"]:
                 sides = clone_report(duplicate)
@@ -459,26 +569,16 @@ def main(argv: list[str]) -> int:
                     source = renamed.get(path, path)
                     occurrence = Occurrence(
                         read_head_lines(path),
-                        whitespace_free_base(source),
+                        head_index(path),
+                        base_index(source),
                         edits,
                         path,
                         (min(side["start"], side["end"]), max(side["start"], side["end"])),
                     )
-                    reached.append(
-                        (
-                            side,
-                            occurrence.new_content_runs(),
-                            occurrence.copied_runs(whitespace_free_deletions(source)),
-                        )
-                    )
+                    reached.append((side, occurrence.refused_runs()))
                 if not reached:
                     continue
-                reasons = [
-                    (side["name"], reason, span)
-                    for side, new_spans, copied_spans in reached
-                    for reason, spans in (("new content", new_spans), ("copied, not moved", copied_spans))
-                    for span in spans
-                ]
+                reasons = [(side["name"], reason, span) for side, spans in reached for reason, span in spans]
                 if reasons:
                     refusals.append((duplicate, sides, reasons))
                 else:
@@ -487,9 +587,14 @@ def main(argv: list[str]) -> int:
             return refuse(str(refusal))
         notices = [path for path in changed if edits.added.get(path) and path not in scanned]
         for path in notices:
+            reason = (
+                f"it is shorter than {MIN_LINES} lines, so no clone of {MIN_LINES}+ lines can live in it"
+                if too_short_to_clone(corpus, path)
+                else "its format, path or size is outside the configured scope"
+            )
             print(
                 f"{PROGRAM} notice: {path} carries added lines but jscpd did not scan it "
-                "(format, scope or size limits); clones inside it are not checked",
+                f"({reason}); clones inside it are not checked",
                 file=sys.stderr,
             )
         for duplicate, sides in tolerated:
@@ -497,8 +602,8 @@ def main(argv: list[str]) -> int:
             print(
                 f"{PROGRAM}: tolerated: {first['name']} [{first['start']}-{first['end']}] duplicates "
                 f"{second['name']} [{second['start']}-{second['end']}] ({duplicate.get('lines')} lines, "
-                f"{duplicate.get('tokens')} tokens); no run of {MIN_LINES}+ added lines in it holds new "
-                "content or an unmoved copy"
+                f"{duplicate.get('tokens')} tokens); no run of {MIN_LINES}+ added lines in it holds "
+                "content the file did not already hold"
             )
         if refusals:
             for duplicate, sides, reasons in refusals:

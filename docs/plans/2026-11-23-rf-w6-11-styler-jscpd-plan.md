@@ -12,7 +12,7 @@ evidence pair.
 | --- | --- |
 | `control/mix.exs`, `control/mix.lock` | `{:styler, "~> 1.12", only: [:dev, :test], runtime: false}` (resolved 1.12.2) |
 | `control/.formatter.exs` | `plugins: [Styler]` (keys stay sorted by the key order the file already used) |
-| `control/**` | the mechanical `mix format` diff (187 files, +5301/−6303), every hunk reviewed |
+| `control/**` | the mechanical `mix format` diff (188 files, +5311/−6304 at the frozen head), every hunk reviewed |
 | `package.json`, `pnpm-lock.yaml` | `jscpd@4.3.0` devDependency, lockfile entry from canonical registry URLs |
 | `.jscpd.json` | the committed jscpd scope: corpus ignores, detection mode, format table |
 | `scripts/ci/jscpd-changed.py` | the changed-file gate (script, exit 0/1/2) |
@@ -32,16 +32,24 @@ evidence record.
    out of an *untouched* file), and scanning the working tree would let a dirty
    checkout change the verdict. The gate therefore materializes the `--head`
    revision's tree with `git archive` and matches each clone's interval against the
-   added-line ranges of `git diff --unified=0 --no-renames`.
+   added-line ranges of `git diff --unified=0 --no-renames`, read with
+   `--no-ext-diff --no-textconv` (fix stage, REV-04) so an inherited
+   `GIT_EXTERNAL_DIFF`, a `diff.external` driver or a text-conversion filter cannot
+   replace the patch and hide the range's added lines.
+   The scan scope — `.jscpd.json` — is read from the comparison base when the base
+   holds one (fix stage, REV-03): a range that rewrites the scope cannot exempt its own
+   files, and the edit applies from the next range on.
 2. **"New" is the criterion, and it is measured on the added lines.** A clone that
    merely re-covers lines a reformat rewrote is tolerated: the mechanical `mix format`
    pass re-touches every line of the 187 files it rewrites, so an added-line test
    alone would refuse the pass itself. A clone is refused when one occurrence holds a
-   run of at least `--min-lines` (10) consecutive added lines whose content the file
-   did not already hold at the comparison base (measured whitespace-insensitively, so
-   a reflow or a line join is not new content), or a run of that length whose lines
-   were *inserted* into the file while the same file deleted that block nowhere else
-   (a copy, not a move). Measured on this PR's changed set: 105 clones reach added
+   run of at least `--min-lines` (10) consecutive added lines the file did not already
+   hold *as often* at the comparison base: the rule counts line-boundary-aligned
+   occurrences of the line's whitespace-free text in the same path's base revision
+   (fix stage, REV-01/REV-02), so a reflow or a line join is not new content, an
+   uncommented block the base held only commented is, and a second copy of a block the
+   file already carried is (a rename can no longer launder it through the old path's
+   deleted text). Measured on this PR's changed set: 105 clones reach added
    lines, 3 are refused — the three blocks the new gate script shared verbatim with
    `check-citation-existence.py`/`check-record-cleanliness.py`, which the script was
    then restructured to avoid (the shared preamble is a follow-up in
@@ -54,7 +62,11 @@ evidence record.
    (`elixir: [ex, exs]` plus fifteen of the sixteen default-mapped formats the tree
    uses, each with the extensions the inventory produced). Consequence, asserted by the suite:
    an extension outside the table is never scanned, and a *changed* file in such an
-   extension is reported as a notice instead of being silently skipped.
+   extension is reported as a notice instead of being silently skipped. The fix stage
+   (REV-05) extends the table to the repository's data and configuration extensions the
+   inventory had missed (`jsonl`, `lock`, `mod`, `in`, `sum`, `conf`, `eex`,
+   `Dockerfile`), and the suite pins one of them (a `.jsonl` clone is refused) plus the
+   notice for a file still outside the table.
 3. **`mode: "mild"`, the audit's default-equivalent mode** (jscpd's own default), so
    the trend numbers the audit reported stay comparable; the suite pins the mode by
    mutating it (`strict` admits clones `mild` rejects and the fixture reddens).
@@ -64,8 +76,12 @@ evidence record.
 5. **Notice versus refusal.** A run whose report is missing, whose report lists no
    scanned source, or whose jscpd invocation failed is *refused* (exit 2) — a green
    verdict always rests on a report that scanned at least one file of the head tree.
-   A changed, unscanned file is a notice (exit 0 remains possible), because the
-   corpus is allowed to hold formats the table does not name.
+   The missing-report case has one measured exception (fix stage, REV-06): when every
+   changed file with added lines is shorter than `--min-lines`, no clone of that length
+   can live in them, and the range is green with `nothing to check`. A changed, unscanned
+   file is a notice naming the reason (shorter than the line threshold, or outside the
+   configured scope), because the corpus is allowed to hold formats the table does not
+   name.
 6. **Fixture design.** The suite builds real throwaway repositories (`testsupport.
    gitfixture`) and runs the *real* gate as a subprocess against the *committed*
    `.jscpd.json`, so the assertions pin observable behaviour (exit code + message)
@@ -78,13 +94,17 @@ evidence record.
 | --- | --- |
 | range changes no file | exit 0, "nothing to check" |
 | changed file deleted, or only its lines removed | exit 0 (nothing added to match) |
-| rename without `--no-renames` | deletion plus addition; the new path's added lines are checked like any other |
+| range whose changed files all hold fewer than `--min-lines` lines | exit 0, "nothing to check" (fix stage, REV-06: no clone of that length fits in them) |
+| rename without `--no-renames` | deletion plus addition; the new path's added lines are checked like any other, and a renamed file appending a verbatim copy of its own block is refused (fix stage, REV-01) |
+| range rewrites `.jscpd.json` | judged by the comparison base's scope; the run reports which revision governs, and the edit applies from the next range (fix stage, REV-03) |
+| corpus holds a member tarfile refuses (an absolute-target symlink) | exit 2, "cannot materialize the corpus" (fix stage, REV-07) |
+| inherited `GIT_EXTERNAL_DIFF`, `diff.external` or a text-conversion filter | ignored: the added-line diff is read with `--no-ext-diff --no-textconv` (fix stage, REV-04) |
 | binary changed file | no hunks, so no ranges to match |
 | added lines outside every clone | exit 0 (a clone elsewhere in the same file is not refused) |
 | clone inside an unchanged file | exit 0 (repo-wide duplication is a trend number, per D16) |
 | new file whose whole body is added | every line is an added line; a copied block reddens it |
 | changed file above `--max-lines`/`--max-size` | notice; the limits are passed explicitly so only files above 5000 lines/1 MB are affected |
-| changed file in an undeclared format | notice |
+| changed file in an undeclared format | notice naming the scope (the fix stage extends the table to the repository's data/configuration extensions, REV-05) |
 | `--base` missing / all-zero | `revision_scope`'s fallback: `origin/main`, then `HEAD^`, narrowed to the merge base |
 
 ## Evidence plan (foreground, serialized; never a measurement harness beside the suite)
@@ -116,9 +136,15 @@ evidence record.
 
 - `mode: mild` (like the audit) treats a block whose comments differ as non-cloned;
   the mode is pinned by test, and `strict` remains a one-key change.
-- A copy that deletes an equal block in the same file at the same time is tolerated
-  (the move-vs-copy clause cannot tell it apart); a copy of text the file did not hold
-  is still refused, so the tolerated shape needs a *matching* deletion.
+- A copy whose every line keeps its multiplicity — the range copies a block and deletes
+  an equal-content block elsewhere in the same file — is tolerated: the count rule
+  cannot tell a net-zero reshuffle from a move (fix stage, REV-01's rule). Any copy that
+  grows a line's multiplicity is refused.
+- A whitespace-only line is always held (the empty needle has no occurrences), so a
+  blank-only run can never refuse a range; one fixture pins the tolerance.
+- Only the first range that introduces `.jscpd.json` is judged by the scope it writes:
+  there is no earlier scope to read, the window is one range wide, and every later range
+  is judged by the base's table.
 - jscpd's clone intervals are token-anchored, and for chained clones a side's
   `start`/`end` is occasionally inverted (85 of 2548 sides over the whole corpus); a
   side is therefore only treated as reached when its own interval overlaps added
@@ -138,14 +164,14 @@ evidence record.
 
 | what | result |
 | --- | --- |
-| the pass | 187 `control` files, `+5301 −6303`; two hunks rejected and re-expressed (§4 of the plan / evidence §4) |
+| the pass | 188 `control` files, `+5311 −6304` at the frozen head; two hunks rejected and re-expressed (§4 of the plan / evidence §4) |
 | `mix format --check-formatted` | 0; the alias-order mutation reddens it (1) and the revert restores 0 |
 | `MIX_ENV=test mix compile --warnings-as-errors` | 0 |
-| full `mix test` | 0 — `1163 passed, 21 skipped` (331 s), the portal-bundle cases included (apply-stage re-run) |
-| test names | 130 test files, 1173 names each side, multiset identical base ↔ head for the format pass; the apply stage adds the one documentation assertion (1174 names at the head) |
+| full `mix test` | 0 — `1163 passed, 21 skipped` (331 s), the portal-bundle cases included (apply-stage re-run; the fix stage changes no `control/**` byte) |
+| test names | 130 files under `control/test` (109 `_test.exs`), 1173 names at the base and 1174 at the head: multiset identical for the format pass, plus the apply stage's one documentation assertion. **No test renamed or removed**; the added name is disclosed in evidence §13 |
 | `mix credo --strict` | alias class −46 (AliasOrder 26→0, AliasUsage 33→13); total 554→564 (MaxLineLength +120, the formatter's line joining); report-only |
-| the gate's suite | 23 tests green (`scripts/ci/test-jscpd-changed.py`) |
-| the gate on this PR's changed set | refused 3 clones before the script's preamble was restructured (real new duplication), green afterwards (100 clones tolerated, 0 new); apply-stage re-run with the hardened parser on `b9d4b4a4..4eb4682d`: 194 changed files, 1677 scanned sources, 1272 corpus clones, 100 tolerated, 0 new |
-| repo-wide jscpd (trend-only) | base 4.53 % → head 4.56 %; 244 → 250 clones with a `control/` side (the audit's "0 touching control/" was vacuous: jscpd 4.3.0 does not scan Elixir by default) |
+| the gate's suite | 32 tests green (`scripts/ci/test-jscpd-changed.py`; 23 before the fix stage) |
+| the gate on this PR's changed set | refused 3 clones before the script's preamble was restructured (real new duplication), green afterwards (100 clones tolerated, 0 new); at the frozen head `b9d4b4a4..482a37f8`: 195 changed files, 1677 scanned sources, 1272 corpus clones, 100 tolerated, 0 new; on the fix-stage tree (throwaway clone, the extended scope): 195 changed files, 1700 scanned sources, 1273 corpus clones, 100 tolerated, 0 new |
+| repo-wide jscpd (trend-only) | base 4.53 % (1275 clones, 1829 sources) → head 4.53 % (1273 clones, 1848 sources); 244 → 250 clones with a `control/` side (6235 → 6300 cloned lines) — the audit's "0 touching control/" was vacuous: jscpd 4.3.0 does not scan Elixir by default |
 | other gates | ruff 0, classifier suite 0 (31 tests), lockfile provenance 0 (405 URLs), `git diff --check` 0, record cleanliness 0, DLP scans clean |
 | CI step | delivered in evidence §9 for W6-12; `.github/workflows/ci.yml` untouched |

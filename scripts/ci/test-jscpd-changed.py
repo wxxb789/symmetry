@@ -23,6 +23,7 @@ def clone_block(prefix: str) -> str:
 
 
 CLONE = clone_block("value")
+FILLER = "\n".join(f"    step_{index} = transform(payload, options, {index})" for index in range(20))
 CLEAN = """\
 def untouched(payload, options):
     total = 0
@@ -42,11 +43,15 @@ class JscpdChangedTests(FixtureRepo, unittest.TestCase):
     def write_config(self, document: dict) -> None:
         citest.write_json(self.repo / ".jscpd.json", document)
 
-    def gate(self, *arguments: str) -> subprocess.CompletedProcess:
-        return citest.run_gate(SCRIPT, "--repo", str(self.repo), *arguments)
+    def gate(self, *arguments: str, env: dict | None = None) -> subprocess.CompletedProcess:
+        return citest.run_gate(SCRIPT, "--repo", str(self.repo), *arguments, env=env)
 
     def base_and_head(self) -> tuple[str, str]:
         return self.git_text("rev-parse", "HEAD~1"), self.git_text("rev-parse", "HEAD")
+
+    def commit_index(self, message: str) -> str:
+        self.git("commit", "--quiet", "-m", message)
+        return self.git_text("rev-parse", "HEAD")
 
     def seed_clone_pair(self) -> None:
         self.write("src/source.py", f"def build():\n{CLONE}\n    return value_0\n")
@@ -99,6 +104,16 @@ class JscpdChangedTests(FixtureRepo, unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn("1 tolerated among the added lines", completed.stdout)
 
+    def test_blank_lines_inside_a_cloned_block_are_not_new_content(self) -> None:
+        self.seed_twin_pair()
+        self.commit("base")
+        self.write("src/source.py", f"def build():\n{CLONE}\n" + "\n" * 12 + "    return value_0\n")
+        self.commit("head")
+        base, head = self.base_and_head()
+        completed = self.gate("--base", base, "--head", head)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("1 tolerated among the added lines", completed.stdout)
+
     def test_a_block_copied_inside_its_file_is_refused(self) -> None:
         self.seed_twin_pair()
         self.commit("base")
@@ -111,6 +126,34 @@ class JscpdChangedTests(FixtureRepo, unittest.TestCase):
         completed = self.gate("--base", base, "--head", head)
         self.assertEqual(completed.returncode, 1, completed.stderr)
         self.assertIn("copied, not moved", completed.stderr)
+
+    def test_a_renamed_file_appending_a_verbatim_copy_of_its_block_is_refused(self) -> None:
+        body = f"def build():\n{CLONE}\n    return value_0\n\n{FILLER}\n"
+        self.write("src/source.py", body)
+        self.write("src/clean.py", CLEAN)
+        self.commit("base")
+        self.git("mv", "src/source.py", "src/moved.py")
+        self.write("src/moved.py", body + f"def build():\n{CLONE}\n    return value_0\n")
+        self.commit("head")
+        base, head = self.base_and_head()
+        self.assertIn("R0", self.git_text("diff", "--name-status", "--find-renames", base, head))
+        completed = self.gate("--base", base, "--head", head)
+        self.assertEqual(completed.returncode, 1, completed.stderr)
+        self.assertIn("src/moved.py", completed.stderr)
+        self.assertIn("copied, not moved", completed.stderr)
+
+    def test_a_block_the_base_held_only_commented_is_refused_when_uncommented(self) -> None:
+        commented = "\n".join(f"# {line.strip()}" for line in CLONE.splitlines())
+        self.write("src/source.py", f"def build():\n{CLONE}\n    return value_0\n")
+        self.write("src/left.py", f"def left():\n{commented}\n    # return value_0\n")
+        self.commit("base")
+        self.write("src/left.py", f"def left():\n{CLONE}\n    return value_0\n")
+        self.commit("head")
+        base, head = self.base_and_head()
+        completed = self.gate("--base", base, "--head", head)
+        self.assertEqual(completed.returncode, 1, completed.stderr)
+        self.assertIn("src/left.py", completed.stderr)
+        self.assertIn("new content", completed.stderr)
 
     def test_a_third_copy_of_a_pre_existing_duplication_is_refused(self) -> None:
         self.seed_twin_pair()
@@ -279,7 +322,7 @@ class JscpdChangedTests(FixtureRepo, unittest.TestCase):
             ("--min-lines", "10", "--min-tokens", "50", "--max-lines", "5000", "--max-size", "1mb"),
         )
 
-    def test_the_committed_config_pins_the_detection_mode(self) -> None:
+    def test_the_comparison_bases_config_pins_the_detection_mode(self) -> None:
         commented = CLONE.replace("    value_3 =", "    # reconcile the third slot\n    value_3 =")
         self.write("src/source.py", f"def build():\n{CLONE}\n    return value_0\n")
         self.write("src/clean.py", CLEAN)
@@ -297,7 +340,15 @@ class JscpdChangedTests(FixtureRepo, unittest.TestCase):
 
         strict_head = self.commit("strict config")
         strict = self.gate("--base", base, "--head", strict_head)
-        self.assertEqual(strict.returncode, 1, strict.stderr)
+        self.assertEqual(strict.returncode, 0, strict.stderr)
+        self.assertIn("this range rewrites .jscpd.json", strict.stderr)
+
+        self.write("src/later.py", f"def later():\n{commented}\n    return value_0\n")
+        self.commit("later clone")
+        later = self.git_text("rev-parse", "HEAD")
+        governed = self.gate("--base", strict_head, "--head", later)
+        self.assertEqual(governed.returncode, 1, governed.stderr)
+        self.assertIn("src/later.py", governed.stderr)
 
     def test_the_committed_config_declares_the_elixir_format(self) -> None:
         block = CLONE
@@ -319,17 +370,20 @@ class JscpdChangedTests(FixtureRepo, unittest.TestCase):
 
         self.write_config({"gitignore": False, "mode": "mild", "formatsExts": {"python": ["py"]}})
         python_only = self.commit("python-only config")
-        undeclared = self.gate("--base", base, "--head", python_only)
-        self.assertEqual(undeclared.returncode, 2, undeclared.stderr)
-        self.assertIn("wrote no report", undeclared.stderr)
+        narrowed = self.gate("--base", base, "--head", python_only)
+        self.assertEqual(narrowed.returncode, 1, narrowed.stderr)
+        self.assertIn("lib/twin.ex", narrowed.stderr)
 
         self.write("src/helper.py", f"def helper(payload, options):\n{clone_block('helper')}\n    return helper_0\n")
-        self.commit("python context")
-        context_head = self.git_text("rev-parse", "HEAD")
-        noticed = self.gate("--base", base, "--head", context_head)
+        context = self.commit("python context")
+        self.write(
+            "lib/third.ex", f"defmodule Third do\n  def build(payload, options) do\n{block}\n    value_0\n  end\nend\n"
+        )
+        self.commit("elixir twin")
+        third = self.git_text("rev-parse", "HEAD")
+        noticed = self.gate("--base", context, "--head", third)
         self.assertEqual(noticed.returncode, 0, noticed.stderr)
-        self.assertIn("lib/twin.ex", noticed.stderr)
-        self.assertIn("did not scan it", noticed.stderr)
+        self.assertIn("lib/third.ex carries added lines but jscpd did not scan it", noticed.stderr)
 
     def test_the_committed_config_keeps_dependency_trees_out_of_the_corpus(self) -> None:
         self.write("deps/lib/source.py", f"def build():\n{CLONE}\n    return value_0\n")
@@ -344,9 +398,13 @@ class JscpdChangedTests(FixtureRepo, unittest.TestCase):
         self.assertIn("deps/lib/twin.py carries added lines but jscpd did not scan it", committed.stderr)
 
         self.write_config({"gitignore": False, "mode": "mild"})
-        unscoped_head = self.commit("unscoped config")
-        unscoped = self.gate("--base", base, "--head", unscoped_head)
-        self.assertEqual(unscoped.returncode, 1, unscoped.stderr)
+        unscoped = self.commit("unscoped config")
+        self.write("deps/lib/third.py", f"def third():\n{CLONE}\n    return value_0\n")
+        self.commit("dependency copy")
+        deps_head = self.git_text("rev-parse", "HEAD")
+        refused = self.gate("--base", unscoped, "--head", deps_head)
+        self.assertEqual(refused.returncode, 1, refused.stderr)
+        self.assertIn("deps/lib/third.py", refused.stderr)
 
     def test_a_changed_file_jscpd_cannot_scan_is_a_notice_not_a_pass(self) -> None:
         self.write("src/clean.py", CLEAN)
@@ -358,13 +416,101 @@ class JscpdChangedTests(FixtureRepo, unittest.TestCase):
         completed = self.gate("--base", base, "--head", head)
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn(".gitattributes carries added lines but jscpd did not scan it", completed.stderr)
+        self.assertIn("shorter than 10 lines", completed.stderr)
+
+    def test_a_changed_jsonl_file_carrying_a_clone_is_refused(self) -> None:
+        records = "\n".join(
+            json.dumps({"id": index, "name": f"record-{index}", "value": f"payload-{index}", "status": "ok"})
+            for index in range(15)
+        )
+        self.write("data/left.jsonl", records + "\n")
+        self.write("data/records.jsonl", '{"id": -1, "filler": true}\n' * 15)
+        self.commit("base")
+        self.write("data/records.jsonl", '{"id": -1, "filler": true}\n' * 15 + records + "\n")
+        self.commit("head")
+        base, head = self.base_and_head()
+        completed = self.gate("--base", base, "--head", head)
+        self.assertEqual(completed.returncode, 1, completed.stderr)
+        self.assertIn("data/records.jsonl", completed.stderr)
+
+    def test_a_changed_file_in_an_undeclared_format_is_a_notice(self) -> None:
+        self.write("src/source.py", f"def build():\n{CLONE}\n    return value_0\n")
+        rows = "\n".join(f"row_{index} = {index}" for index in range(20))
+        self.write("data/thing.xyz", rows + "\n")
+        self.commit("base")
+        self.write("data/thing.xyz", rows + "\nrow_20 = 20\n")
+        self.commit("head")
+        base, head = self.base_and_head()
+        completed = self.gate("--base", base, "--head", head)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("data/thing.xyz carries added lines but jscpd did not scan it", completed.stderr)
+        self.assertIn("outside the configured scope", completed.stderr)
+
+    def test_a_range_whose_changed_files_cannot_hold_a_clone_is_green(self) -> None:
+        self.write(".jscpd.json", '{"formatsExts": {"python": ["py"]}}\n')
+        self.write("src/small.py", "value = 1\nother = 2\n")
+        self.commit("base")
+        self.write("src/small.py", "value = 1\nother = 3\n")
+        self.commit("head")
+        base, head = self.base_and_head()
+        completed = self.gate("--base", base, "--head", head)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("1 changed file(s), every added line in a file shorter than 10 lines", completed.stdout)
+        self.assertIn("nothing to check", completed.stdout)
+
+    def test_a_range_cannot_exempt_itself_by_rewriting_the_scope_config(self) -> None:
+        self.write("src/source.py", f"def build():\n{CLONE}\n    return value_0\n")
+        self.write("src/left.py", "def left():\n    return 1\n")
+        self.commit("base")
+        self.write("src/left.py", f"def left():\n{CLONE}\n    return value_0\n")
+        self.write_config({"gitignore": False, "mode": "mild", "ignore": ["**/src/left.py"]})
+        self.commit("head")
+        base, head = self.base_and_head()
+        completed = self.gate("--base", base, "--head", head)
+        self.assertEqual(completed.returncode, 1, completed.stderr)
+        self.assertIn("src/left.py", completed.stderr)
+        self.assertIn("this range rewrites .jscpd.json", completed.stderr)
+
+    def test_an_external_diff_driver_cannot_hide_the_added_lines(self) -> None:
+        self.write("src/source.py", f"def build():\n{CLONE}\n    return value_0\n")
+        self.write("src/clean.py", CLEAN)
+        self.commit("base")
+        self.write("src/left.py", f"def left():\n{CLONE}\n    return value_0\n")
+        self.commit("head")
+        base, head = self.base_and_head()
+
+        baseline = self.gate("--base", base, "--head", head)
+        self.assertEqual(baseline.returncode, 1, baseline.stderr)
+
+        environment = self.gate(
+            "--base", base, "--head", head, env={**citest.git_environment(), "GIT_EXTERNAL_DIFF": "true"}
+        )
+        self.assertEqual(environment.returncode, 1, environment.stderr)
+        self.assertIn("src/left.py", environment.stderr)
+
+        self.git("config", "diff.external", "true")
+        configured = self.gate("--base", base, "--head", head)
+        self.assertEqual(configured.returncode, 1, configured.stderr)
+        self.assertIn("src/left.py", configured.stderr)
+
+    def test_an_absolute_symlink_in_the_corpus_is_refused(self) -> None:
+        self.write("src/clean.py", CLEAN)
+        self.commit("base")
+        blob = self.git("hash-object", "-w", "--stdin", input=b"/etc/passwd").decode("ascii").strip()
+        self.git("update-index", "--add", "--cacheinfo", f"120000,{blob},src/link")
+        self.commit_index("head")
+        base, head = self.base_and_head()
+        completed = self.gate("--base", base, "--head", head)
+        self.assertEqual(completed.returncode, 2, completed.stderr)
+        self.assertIn("refused", completed.stderr)
+        self.assertIn("src/link", completed.stderr)
 
     def test_a_corpus_without_a_scannable_source_is_refused(self) -> None:
-        self.write_config({"formatsExts": {}})
-        self.write(".gitattributes", "* text=auto\n")
-        self.write("docs/notes.md", "# one\n\ntwo\n")
+        self.write_config({"formatsExts": {"python": ["py"]}})
+        rows = "\n".join(f"    row_{index} = compute({index})" for index in range(20))
+        self.write("lib/big.ex", f"defmodule Big do\n{rows}\nend\n")
         self.commit("base")
-        self.write(".gitattributes", "* text=auto\neol=lf\n")
+        self.write("lib/big.ex", f"defmodule Big do\n{rows}\n    extra = compute(20)\nend\n")
         self.commit("head")
         base, head = self.base_and_head()
         completed = self.gate("--base", base, "--head", head)
