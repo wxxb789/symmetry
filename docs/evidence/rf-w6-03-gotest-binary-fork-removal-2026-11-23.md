@@ -36,7 +36,12 @@ Ubuntu-24.04 over the same worktree through its mount point (`<worktree>/daemon`
 | `daemon/internal/app/inprocess_containment_test.go` (new) | `f89720befa058d873158ac1f7182a33145569584351a9efe397cc8f448d3c274` |
 | `daemon/internal/harness/omp/inprocess_containment_test.go` (new) | `5accfb3aeba8ab405beff950d10f579feaac17c2697e535a4a31d3fa33be85c6` |
 | `daemon/internal/harness/omo/inprocess_containment_test.go` (new) | `050375be1782ff56d26b94f18dab347150208b8aeec7a7e24eef3cc017acecc8` |
-| `docs/plans/2026-11-23-rf-w6-03-gotest-binary-fork-removal-plan.md` | `f0a3cd984630da6ab0bbabb1fd1df19c38efa047a7e6b7f1b8120315b5ca0dfc` |
+| `daemon/cmd/symmetry-fake-agent/main_test.go` | `c51ee44cee372ebf1be64b3f8e3ccc4209f8e3caa7c39767d7f97bb4ba88d99d` |
+| `daemon/e2e/inprocess_containment_test.go` (new) | `03e35bdd0f0b821df2962d848038d66b4eeda39cb3ecc2c7530e5861e62bf4df` |
+| `daemon/internal/harness/pi/inprocess_containment_test.go` (new) | `b75fbb87c5016dc46822f75c1aa2d802b32072d0e792e32fae2bf171b11d091c` |
+| `daemon/internal/harness/claude/inprocess_containment_test.go` (new) | `2f8e67f7cbd19120a5b67d1621d67e51af52e83bea25b4abfe01b83289d9dfcd` |
+| `daemon/internal/harness/codex/inprocess_containment_test.go` (new) | `22ff98a42d56b28b671c9151668e53a5c24df5ba5c11b7d521a7991fc7622a2e` |
+| `docs/plans/2026-11-23-rf-w6-03-gotest-binary-fork-removal-plan.md` | `269f73ce963e7d8f9c85ea11aa81d7a9bf99b8057393e2908a62a4b227c73821` |
 | this record | the file you are reading (no self-referential hash) |
 
 The rows carrying apply-stage simplifications were re-hashed at the applied tree
@@ -47,6 +52,10 @@ comment-cap fixes) re-hashed the final tree: `containment_supervisor_testing_win
 `process_launcher_linux.go`, `process_launcher_windows.go`, `inprocess_containment_testing.go`,
 `no_test_binary_branch_test.go` and this plan carry the fix-stage digests above; the other 17
 rows matched the recorded values in a `sha256sum` over the 23 table paths.
+The round-1 dual-audit stage added the five install rows above (`cmd/symmetry-fake-agent/main_test.go`
+and the four new `inprocess_containment_test.go` files) and re-hashed the plan after its §7
+amendment; the remaining 22 pre-round-1 rows were re-verified unchanged against the delivered tree (no shipped
+file changed in this round).
 
 ## 2. Deleted fork sites and the replacement capability
 
@@ -152,6 +161,41 @@ no other shipped site read `flag.CommandLine.Lookup`, `os.Args[0]` or `os.Execut
 containment route (the remaining `flag.` uses in the platform package are `flag.NewFlagSet` in the
 helper/anchor parsers, unrelated to routing).
 
+### Round-1 census (2026-11-23, PR #269 dual audit): every test package that reaches the launcher
+
+Method: `go list -test -deps ./...` per package reduces the 28 packages of `go list ./...` to their
+test binaries; 14 test binaries depend on `internal/execution` (the launch boundary):
+`cmd/symmetry-daemon`, `cmd/symmetry-fake-agent`, `e2e`, `internal/app`, `internal/app/apptest`,
+`internal/execution`, `internal/harness`, the six `internal/harness/*` provider packages and
+`internal/harness/probeconformance`. Each was then checked in its test sources for the launch
+boundary (`execution.NewRunner()`, `app.Run(`, the adapter `Start` path bound to the production
+`runnerProcessStarter`, `platform.{LaunchSuspended,AttachSuspendedProcess,AttachSuspendedProcessWithHandoff,StartLinuxSupervisor}`)
+against the fake-start seams (`startProcess:` doubles, injected runners, `newTestAdapter`); the
+empirical cross-check is a pre-fix Windows `go test -count=1 -timeout 25m ./...` on this branch,
+where only `cmd/symmetry-fake-agent` failed (`TestExitOnFileCancellationStopsTheFixture`,
+`TestSlowCancellationStopsTheFixture`, helper connect timeout, 30.059s, failing lines `main_test.go:413/:473`
+of the pre-round-1 source — the run straddled the round-1 edits and this package provably compiled
+the pre-edit source) and every other package was `ok` or an env-gated `SKIP` (the packages whose
+installs the round adds stay `ok` in both revisions because every launching test there is gated).
+
+| Test binary | Reaches the launcher in a default run? | Install / disposition |
+| --- | --- | --- |
+| `cmd/symmetry-fake-agent` | yes — `main_test.go:405,:465` `execution.NewRunner().Start` of the fixture binary | install: `main_test.go:41-44` `TestMain` wraps `mainTest.Run()` with `execution.UseInProcessContainmentSupervisorForTesting` (round 1; the pre-fix `daemon-windows` failure) |
+| `e2e` | yes — the in-process `app.Run` host (`core_test.go:669`) under `SYMMETRY_E2E=1` (`integration` job) and `execution.NewRunner().Start` in the Linux v2 cleanup witness (`production_linux_v2_cleanup_witness_test.go:469`) | install: new `e2e/inprocess_containment_test.go` `TestMain` (round 1; the pre-fix `integration` "Run live daemon scenarios" failures) |
+| `internal/app` | yes — `decision_liveness_test.go:100,:180`, `output_settlement_test.go:300` | installed `app/inprocess_containment_test.go` |
+| `internal/execution` | yes — `runner_test.go`, `probe_test.go`, `runner_windows_test.go`, `identity_windows_test.go` helper invocations | installed `execution/inprocess_containment_windows_test.go`; the Linux explicit installs stay in `linux_owner_v2_test.go` |
+| `internal/platform` | Windows only, through the direct `launchContainmentSupervisor` seam (no `internal/execution` dependency) | installed `TestMain` in `containment_supervisor_windows_test.go`; the Linux tests fake the supervisor or exec the built production daemon |
+| `internal/harness/omp` | yes — `native_acceptance_test.go:1436` (default run) and `:774` (gated) | installed `omp/inprocess_containment_test.go` |
+| `internal/harness/omo` | gated — `native_test.go:359` under `SYMMETRY_OMO_NATIVE_ACCEPTANCE=1` | installed `omo/inprocess_containment_test.go` (no default-run oracle; residual noted in §10) |
+| `internal/harness/pi` | gated — `provider_extension_native_test.go:102` under `SYMMETRY_PI_PROVIDER_ACTION_SMOKE=1` (provisioned by `pi-control-e2e-windows`) and the `SYMMETRY_PI_NATIVE_*` smokes | install: new `pi/inprocess_containment_test.go` (round 1; the pre-fix job failure `start native Pi provider action transport: … containment supervisor connection timeout`) |
+| `internal/harness/claude` | gated — `adapter_native_test.go:86` (`SYMMETRY_CLAUDE_NATIVE_SMOKE=1`), `adapter_live_test.go:399` (`SYMMETRY_CLAUDE_LIVE_SMOKE=1`) | install: new `claude/inprocess_containment_test.go` (round 1; latent, developer-gated) |
+| `internal/harness/codex` | gated — `adapter_native_test.go` (`SYMMETRY_CODEX_NATIVE_SMOKE=1`), `adapter_live_turn_test.go:122` and `adapter_live_cancel_test.go:67` (`SYMMETRY_CODEX_LIVE_SMOKE=1`) | install: new `codex/inprocess_containment_test.go` (round 1; latent, developer-gated) |
+| `internal/harness/opencode` | gated only — `adapter_native*_test.go` under `SYMMETRY_OPENCODE_NATIVE_*=1`; every default-run adapter test injects a fake process starter (`adapter_test.go:141` `newTestAdapter(starter, api)`, `:227` `newAdapter(..., starter, ...)`) | not installed (`opencode/**` frozen, W6-04); recorded in `docs/TODO.md` as a W6-04 follow-up |
+| `cmd/symmetry-daemon`, `e2e/internal/operator`, `internal/app/apptest`, `internal/authority`, `internal/config`, `internal/contracts`, `internal/control`, `internal/harness` (root), `internal/harness/linejson`, `internal/harness/probeconformance`, `internal/linuxpreflight`, `internal/notification`, `internal/protocol`, `internal/state`, `internal/workspace`, `native/linux-gate/protocol` | no launch path: the test sources contain no `execution.NewRunner()`, no `app.Run(` and no platform launch call; they drive fakes (injected runners, fake processes) or `httptest` only | no install needed |
+
+No other test binary reaches the containment launcher: the round-1 installs above close the set,
+and the only package left without an install (`opencode`) launches only behind its own env gates.
+
 ## 5. Conversion table (fork branch → HEAD replacement)
 
 | Dependent | Base dependency | HEAD replacement |
@@ -164,6 +208,11 @@ helper/anchor parsers, unrelated to routing).
 | `TestProductionContainmentSupervisorReplaysReceiptAfterLostRecoverResponse` | n/a (ran in a real test binary; probe kept it on the local route) | restores the production launcher locally so the witness still drives `launchContainmentSupervisorProcess` (real helper dispatch of the built daemon) |
 | `TestDefaultLinuxLauncherDoesNotUseTestBinaryV1BypassForV2` | v2 precedes the gate | untouched; re-run green |
 | `execution` package launches without handoff capabilities (helper-invocation census) | probe false → local | unchanged route; the Windows local route needs the installed noop lease |
+| `cmd/symmetry-fake-agent` fixture launches (`main_test.go:405,:465`) | probe false → the test binary took the Windows local route through the noop take | `TestMain` install around `mainTest.Run()` (`main_test.go:41-44`); pre-fix red in `daemon-windows` and reproduced locally, green with the install |
+| `e2e` in-process `app.Run` host (`core_test.go:669`) and witness launches | probe false → local route (Linux: gate false → local) | new `e2e/inprocess_containment_test.go` `TestMain`; pre-fix the `integration` "Run live daemon scenarios" step failed (`task … last state="failed"` after the helper re-exec of `e2e.test`); fixed |
+| `internal/harness/pi` native/provider-action launches (`provider_extension_native_test.go:102`) | probe false → local | new `pi/inprocess_containment_test.go`; pre-fix red in `pi-control-e2e-windows` (5.04s connect timeout); fixed |
+| `internal/harness/claude`, `internal/harness/codex` gated live/native launches | probe false → local | new `claude/inprocess_containment_test.go`, `codex/inprocess_containment_test.go` (latent: only env-gated smokes launch) |
+| `internal/harness/opencode` gated native launches | probe false → local | not installed (frozen W6-04); recorded in `docs/TODO.md` as the W6-04 follow-up |
 
 ## 6. Route pins and the negative pin (red at base, green at HEAD)
 
@@ -239,6 +288,25 @@ not re-run. DLP at the final tree: the account-name string, and host-path-shaped
 letter followed by a separator, or a `/mnt`, `/home`, `/tmp` prefix in path position) over the
 branch-added lines and this record's text return no matches (`grep` exit 1, the pass condition),
 and the branch diff carries no backslash-u.
+
+Round-1 re-run (2026-11-23, after the five dual-audit installs; commands in `daemon/` unless
+noted, WSL over the same `<worktree>` mount): the six cheap gates re-ran green (`gofmt -l .` exit
+0, no files; `go vet ./...` exit 0; the three `GOOS` builds exit 0; `git diff --check` exit 0). The
+full Windows suite `go test -count=1 -timeout 25m ./...` → 27 packages `ok`, 0 `FAIL`, one `[no
+test files]` (`e2e/preauthority-sentinel`); the previously failing `./cmd/symmetry-fake-agent` is
+`ok 17.657s` and its two fixture tests pass under the targeted run (`ok 6.324s`); `./e2e` `ok`,
+`./internal/harness/{pi,claude,codex,opencode}` `ok`, `./internal/platform` `ok`. The frozen
+Windows witness re-ran green (`--- PASS (7.09s)`); the negative + capability pins and the Windows
+route pin re-ran green. WSL `go test -count=1 -race -timeout 40m -v ./cmd/symmetry-fake-agent/...
+./e2e/... ./internal/platform/... ./internal/execution/... ./internal/app/... ./internal/harness/...`
+→ 17 packages `ok`, 1703 `--- PASS` / 0 `--- FAIL` / 87 `--- SKIP` (84 distinct), with the four
+platform/execution pins passing inside the run (negative + capability 0.44s/5.24s, the two Linux
+launcher pins); every skip is a pre-existing env/platform gate — the fix-stage four-tree names
+plus the `e2e` gates (`SYMMETRY_E2E`, the production witness and Linux v2 witness vars) now in
+scope because this run also covers `./e2e/...` and `./cmd/...` — and the diff adds no `t.Skip`.
+The three CI jobs red at `3c9f7e66`
+(`daemon-windows`, `pi-control-e2e-windows`, `integration`) were not re-run here; the fix head is
+their oracle. No new skip was added (the branch diff adds no `t.Skip`).
 
 Windows SKIP names (all pre-existing env gates; the diff adds no `t.Skip`):
 `TestProductionContainmentSupervisorReplaysReceiptAfterLostRecoverResponse`,
@@ -373,3 +441,12 @@ the gate is the grep + the pins + the mutations).
 - The Linux e2e witness needs the GitHub-runner environment (live control plane at
   `http://127.0.0.1:4000`, fake agent, a `<scratch>` workspace); it is recorded CI-only with its exact
   command and the freezing CI step. No skip is counted as coverage of the removed branch.
+- The round-1 dual-audit census (2026-11-23) added the five missing installs outside the
+  implement-stage four trees (`cmd/symmetry-fake-agent`, `e2e`, `internal/harness/{pi,claude,codex}`);
+  `internal/harness/opencode` launches only behind its own native env gates and deliberately keeps
+  no install (`opencode/**` is frozen, W6-04) — recorded in `docs/TODO.md` as the W6-04 follow-up.
+- The round-1 local oracle is the full Windows `go test -count=1 -timeout 25m ./...` suite (27
+  packages `ok`, no `FAIL`, no added skip) plus the WSL `-race` run over the touched packages and
+  the four-tree contract set; the `integration` job (e2e live scenarios over the shared Postgres)
+  and `pi-control-e2e-windows` (the env-gated Pi provider-action smoke) remain the CI oracles for
+  the two fixed failures.

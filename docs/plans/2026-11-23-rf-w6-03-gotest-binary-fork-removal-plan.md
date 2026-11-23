@@ -146,3 +146,29 @@ witness-config consolidation (W5-01, merged), platform dead-helper deletion (W5-
 descendant-monitor state machine (W5-07, dropped), W4-22's recovery-seal write, `opencode/**`
 (W6-04), `LinuxV2JournalCallbacks` (W4-23), the Windows pre-authority witness-hook consolidation
 listed in `docs/TODO.md` under rf-w5-01 (not this slice's contract, although it names W6-03's files).
+
+## 7. Round-1 amendment (2026-11-23, PR #269 dual audit)
+
+The dual audit confirmed the shipped-route change but found the explicit-install census incomplete
+outside the four package trees the implement-stage gate covered (P0): `daemon-windows`,
+`pi-control-e2e-windows` and `integration` failed at `3c9f7e66` because `cmd/symmetry-fake-agent`,
+the `e2e` in-process host and the gated `internal/harness/pi` native launch still depended on the
+deleted noop take. The conductor ruling extends the owned set, for explicit installs only:
+
+- `cmd/symmetry-fake-agent/main_test.go` — the existing `TestMain` now wraps `mainTest.Run()` with
+  `execution.UseInProcessContainmentSupervisorForTesting`;
+- new `e2e/inprocess_containment_test.go` (`package e2e_test`) — the same `TestMain` install for
+  the in-process `app.Run` host;
+- new `internal/harness/{pi,claude,codex}/inprocess_containment_test.go` — the same install; the
+  claude/codex rows are latent (only env-gated smokes launch), the pi row is exercised by
+  `pi-control-e2e-windows`;
+- `internal/harness/opencode/**` stays frozen (W6-04); its env-gated native launches are recorded
+  in `docs/TODO.md` as the W6-04 follow-up (no default-run test in that package launches);
+- `docs/TODO.md` — the rf-w5-01 Windows witness-hook entry no longer names W6-03 as its owner
+  (owner: unassigned) and its two stale citations were re-pointed (`supervisor_windows_helper.go:
+  545-546`, `supervisor_windows_client.go:1038`); a new W6-04 OpenCode entry was added.
+
+The round also re-derived the census mechanically and empirically: every test binary that reaches
+the containment launcher in a default run installs the capability or is recorded as not launching
+(evidence record §4). No shipped file changes in this round; the truth table, the control-flow
+audit and the dLOC measurements of §§3-6 are unaffected.
