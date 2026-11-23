@@ -9,7 +9,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -335,26 +334,6 @@ func writeContainmentSupervisorWitnessMarker(path string, value any) error {
 		return err
 	}
 	return os.WriteFile(path, contents, 0o600)
-}
-
-type noopContainmentSupervisorLease struct{}
-
-func (noopContainmentSupervisorLease) close(time.Time) error { return nil }
-
-func (noopContainmentSupervisorLease) renew(time.Duration, uint64) error { return nil }
-
-func (noopContainmentSupervisorLease) stop(time.Time) (authority.StopReceipt, error) {
-	return authority.StopReceipt{}, nil
-}
-
-func (noopContainmentSupervisorLease) release(time.Time) error { return nil }
-
-func isGoTestBinary(path string) bool {
-	if flag.CommandLine.Lookup("test.v") == nil {
-		return false
-	}
-	name := strings.ToLower(path)
-	return strings.HasSuffix(name, ".test.exe") || strings.HasSuffix(name, ".test")
 }
 
 const containmentSupervisorPipeFileName = "containment supervisor pipe"

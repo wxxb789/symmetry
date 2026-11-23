@@ -34,43 +34,54 @@ func defaultProcessLauncher(
 	}
 	writes := invocationWrites(invocation)
 	capabilities := writes.Capabilities()
-	if capabilities.SupervisorHandoffRequested() && platform.DurableSupervisorHandoffAvailable() {
-		if !capabilities.SupervisorHandoffComplete() {
-			return nil, errors.New("durable Linux supervisor handoff callbacks are incomplete")
-		}
-		supervisor, launchErr := platform.StartLinuxSupervisor(linuxSupervisorStartSpec(command, invocation, writes))
-		if supervisor == nil {
-			return nil, launchErr
-		}
-		handoff := supervisor.Handoff()
-		started := &startedProcess{
-			pid:         supervisor.PID(),
-			identity:    supervisor.Identity(),
-			containment: supervisor,
-			wait:        supervisor.Wait,
-			kill:        func() error { return supervisor.Terminate(true) },
-			close:       supervisor.Close,
-			resume:      supervisor.Resume,
-		}
-		started.commitSupervisorHandoff = func(value authority.SupervisorHandoff, startedAt time.Time) error {
-			if writes.CommitSupervisorHandoff != nil {
-				if err := writes.CommitSupervisorHandoff(value, startedAt); err != nil {
-					return err
-				}
-			}
-			return supervisor.Commit()
-		}
-		if handoff.Validate() == nil {
-			started.containmentHandoff = &handoff
-		}
-		started.containmentHandoffPrepareUnknown = supervisor.PrepareUnknown()
-		started.containmentHandoffBindUnknown = supervisor.BindUnknown()
-		if launchErr != nil {
-			return started, fmt.Errorf("start durable Linux process tree: %w", launchErr)
-		}
-		return started, nil
+	if capabilities.SupervisorHandoffRequested() {
+		return launchLinuxSupervisor(command, invocation, writes)
 	}
+	return launchLocalLinuxProcess(command)
+}
 
+// launchLinuxSupervisor is the durable Linux dispatch; the in-process test capability
+// swaps in the local route a generated test main can dispatch.
+var launchLinuxSupervisor = launchLinuxSupervisorProcess
+
+func launchLinuxSupervisorProcess(command *exec.Cmd, invocation Invocation, writes RecorderFuncs) (*startedProcess, error) {
+	if !writes.Capabilities().SupervisorHandoffComplete() {
+		return nil, errors.New("durable Linux supervisor handoff callbacks are incomplete")
+	}
+	supervisor, launchErr := platform.StartLinuxSupervisor(linuxSupervisorStartSpec(command, invocation, writes))
+	if supervisor == nil {
+		return nil, launchErr
+	}
+	handoff := supervisor.Handoff()
+	started := &startedProcess{
+		pid:         supervisor.PID(),
+		identity:    supervisor.Identity(),
+		containment: supervisor,
+		wait:        supervisor.Wait,
+		kill:        func() error { return supervisor.Terminate(true) },
+		close:       supervisor.Close,
+		resume:      supervisor.Resume,
+	}
+	started.commitSupervisorHandoff = func(value authority.SupervisorHandoff, startedAt time.Time) error {
+		if writes.CommitSupervisorHandoff != nil {
+			if err := writes.CommitSupervisorHandoff(value, startedAt); err != nil {
+				return err
+			}
+		}
+		return supervisor.Commit()
+	}
+	if handoff.Validate() == nil {
+		started.containmentHandoff = &handoff
+	}
+	started.containmentHandoffPrepareUnknown = supervisor.PrepareUnknown()
+	started.containmentHandoffBindUnknown = supervisor.BindUnknown()
+	if launchErr != nil {
+		return started, fmt.Errorf("start durable Linux process tree: %w", launchErr)
+	}
+	return started, nil
+}
+
+func launchLocalLinuxProcess(command *exec.Cmd) (*startedProcess, error) {
 	if err := command.Start(); err != nil {
 		return nil, err
 	}
@@ -92,13 +103,18 @@ func defaultProcessLauncher(
 		close:  func() error { return containment.Close() },
 		resume: nil,
 	}
-	_ = stdinRead
-	_ = stdoutWrite
-	_ = stderrWrite
 	if attachErr != nil {
 		return started, fmt.Errorf("contain Linux process tree: %w", attachErr)
 	}
 	return started, nil
+}
+
+func installInProcessSupervisorRouteForTesting() func() {
+	previous := launchLinuxSupervisor
+	launchLinuxSupervisor = func(command *exec.Cmd, _ Invocation, _ RecorderFuncs) (*startedProcess, error) {
+		return launchLocalLinuxProcess(command)
+	}
+	return func() { launchLinuxSupervisor = previous }
 }
 
 func linuxSupervisorOwnerContext(invocation Invocation) string {

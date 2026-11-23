@@ -88,12 +88,6 @@ func TestLinuxSupervisorLeaseStateReplaysAndFencesGenerations(t *testing.T) {
 	}
 }
 
-func TestLinuxSupervisorDurableHandoffIsDisabledForGoTestBinary(t *testing.T) {
-	if DurableSupervisorHandoffAvailable() {
-		t.Fatal("Go test binary advertised production Linux supervisor dispatch")
-	}
-}
-
 func TestWaitForLinuxSupervisorTargetReturnsWhenComplete(t *testing.T) {
 	waitDone := make(chan struct{})
 	close(waitDone)
