@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wxxb789/symmetry/daemon/internal/app/apptest"
 	"github.com/wxxb789/symmetry/daemon/internal/control"
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
@@ -137,23 +138,24 @@ func TestCancelledNativeStartCloseFailureQueuesExplicitUsageBeforeTerminal(t *te
 		cleanupBlocked: true,
 	}
 	var order []string
+	faultStore := apptest.NewFaultStoreFrom(store)
 	app := &daemon{
 		config:  testConfig(t),
-		store:   store,
+		store:   faultStore,
 		log:     slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		running: map[state.RunKey]*runningRun{key: active},
 		options: options{
 			newID: ids(),
 			clock: time.Now,
-			queueGoalUsage: func(runKey state.RunKey, usage protocol.Usage) (state.RunJournal, error) {
-				order = append(order, "usage")
-				return store.QueueGoalUsage(runKey, usage)
-			},
-			queueTerminalTransitionAndAcknowledgement: func(runKey state.RunKey, transition protocol.StateTransitionRequest, acknowledgement protocol.CommandAcknowledgement, at time.Time) (state.RunJournal, error) {
-				order = append(order, "terminal")
-				return store.QueueTerminalTransitionAndAcknowledgementAt(runKey, transition, acknowledgement, at)
-			},
 		},
+	}
+	faultStore.OnQueueNativeUsageRecoverySettlement = func(key state.RunKey, usage protocol.Usage, settlement *state.NativeUsageTerminalRecovery) (state.RunJournal, error) {
+		order = append(order, "usage")
+		return store.QueueNativeUsageRecoverySettlement(key, usage, settlement)
+	}
+	faultStore.OnQueueTerminalTransitionAndAcknowledgementAt = func(runKey state.RunKey, transition protocol.StateTransitionRequest, acknowledgement protocol.CommandAcknowledgement, at time.Time) (state.RunJournal, error) {
+		order = append(order, "terminal")
+		return store.QueueTerminalTransitionAndAcknowledgementAt(runKey, transition, acknowledgement, at)
 	}
 
 	settled, _ := app.settleCancelledNativeStart(context.Background(), key, sessionKey, sessionKey.LocalHandleID, session, false, false)
@@ -323,9 +325,10 @@ func TestLateCancelSubjectMismatchSurvivesUsageRetry(t *testing.T) {
 		prepared:      workspace.Prepared{Path: `C:\workspace`},
 	}
 	usageAttempts := 0
+	faultStore := apptest.NewFaultStoreFrom(store)
 	app := &daemon{
 		config:    testConfig(t),
-		store:     store,
+		store:     faultStore,
 		control:   &fakeControl{},
 		workspace: &fakeWorkspace{subject: admission.Subject},
 		log:       slog.New(slog.NewJSONHandler(io.Discard, nil)),
@@ -333,14 +336,14 @@ func TestLateCancelSubjectMismatchSurvivesUsageRetry(t *testing.T) {
 		options: options{
 			newID: ids(),
 			clock: time.Now,
-			queueGoalUsage: func(runKey state.RunKey, usage protocol.Usage) (state.RunJournal, error) {
-				usageAttempts++
-				if usageAttempts == 1 {
-					return state.RunJournal{}, errors.New("injected usage persistence failure")
-				}
-				return store.QueueGoalUsage(runKey, usage)
-			},
 		},
+	}
+	faultStore.OnQueueNativeUsageRecoverySettlement = func(key state.RunKey, usage protocol.Usage, settlement *state.NativeUsageTerminalRecovery) (state.RunJournal, error) {
+		usageAttempts++
+		if usageAttempts == 1 {
+			return state.RunJournal{}, errors.New("injected usage persistence failure")
+		}
+		return store.QueueNativeUsageRecoverySettlement(key, usage, settlement)
 	}
 	command := protocol.Command{RunID: key.RunID, Generation: key.Generation, CommandID: "cancel-subject-mismatch", Kind: "cancel"}
 	if app.handleCommand(context.Background(), command) {
@@ -590,19 +593,20 @@ func TestNativeUsageRetryExhaustionKeepsAtomicCancelOutcomeAndOutputEvidence(t *
 				},
 			}
 			atomicCalls := 0
+			faultStore := apptest.NewFaultStoreFrom(store)
 			app := &daemon{
 				config:  testConfig(t),
-				store:   store,
+				store:   faultStore,
 				log:     slog.New(slog.NewJSONHandler(io.Discard, nil)),
 				running: map[state.RunKey]*runningRun{key: active},
 				options: options{
 					newID: ids(),
 					clock: time.Now,
-					queueTerminalTransitionAndAcknowledgement: func(runKey state.RunKey, transition protocol.StateTransitionRequest, acknowledgement protocol.CommandAcknowledgement, at time.Time) (state.RunJournal, error) {
-						atomicCalls++
-						return store.QueueTerminalTransitionAndAcknowledgementAt(runKey, transition, acknowledgement, at)
-					},
 				},
+			}
+			faultStore.OnQueueTerminalTransitionAndAcknowledgementAt = func(runKey state.RunKey, transition protocol.StateTransitionRequest, acknowledgement protocol.CommandAcknowledgement, at time.Time) (state.RunJournal, error) {
+				atomicCalls++
+				return store.QueueTerminalTransitionAndAcknowledgementAt(runKey, transition, acknowledgement, at)
 			}
 
 			app.exhaustNativeUsageRetry(context.Background(), key, active, errors.New("usage retries exhausted"))
@@ -948,22 +952,23 @@ func TestCancelledNativeStartAbortPostWriteReadbackConvergesAndReleasesOwner(t *
 		},
 		cleanupBlocked: true,
 	}
+	faultStore := apptest.NewFaultStoreFrom(store)
 	app := &daemon{
 		config:  testConfig(t),
-		store:   store,
+		store:   faultStore,
 		log:     slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		running: map[state.RunKey]*runningRun{key: active},
 		options: options{
 			newID: ids(),
 			clock: time.Now,
-			abortGoalSessionLaunchBeforeNativeStart: func(key state.GoalSessionKey) (state.GoalSessionJournal, error) {
-				journal, err := store.AbortGoalSessionLaunchBeforeNativeStart(key)
-				if err != nil {
-					return state.GoalSessionJournal{}, err
-				}
-				return journal, errors.New("injected post-write abort outcome")
-			},
 		},
+	}
+	faultStore.OnAbortGoalSessionLaunchBeforeNativeStart = func(key state.GoalSessionKey) (state.GoalSessionJournal, error) {
+		journal, err := store.AbortGoalSessionLaunchBeforeNativeStart(key)
+		if err != nil {
+			return state.GoalSessionJournal{}, err
+		}
+		return journal, errors.New("injected post-write abort outcome")
 	}
 
 	settled, err := app.settleCancelledNativeStart(context.Background(), key, sessionKey, sessionKey.LocalHandleID, nil, false, true)
@@ -1004,19 +1009,20 @@ func TestCancelledNativeStartAbortFailureRetainsRecoveryAndCannotCleanup(t *test
 		},
 		cleanupBlocked: true,
 	}
+	faultStore := apptest.NewFaultStoreFrom(store)
 	app := &daemon{
 		config:    testConfig(t),
-		store:     store,
+		store:     faultStore,
 		workspace: &fakeWorkspace{},
 		log:       slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		running:   map[state.RunKey]*runningRun{key: active},
 		options: options{
 			newID: ids(),
 			clock: time.Now,
-			abortGoalSessionLaunchBeforeNativeStart: func(state.GoalSessionKey) (state.GoalSessionJournal, error) {
-				return state.GoalSessionJournal{}, errors.New("injected uncommitted abort failure")
-			},
 		},
+	}
+	faultStore.OnAbortGoalSessionLaunchBeforeNativeStart = func(state.GoalSessionKey) (state.GoalSessionJournal, error) {
+		return state.GoalSessionJournal{}, errors.New("injected uncommitted abort failure")
 	}
 
 	settled, err := app.settleCancelledNativeStart(context.Background(), key, sessionKey, sessionKey.LocalHandleID, nil, false, true)
@@ -1263,26 +1269,27 @@ func TestOrphanedNativeUsageRetryCannotReleaseCancellationOwner(t *testing.T) {
 	var terminalEnteredOnce sync.Once
 	terminalCalls := 0
 	usageAttempts := 0
+	faultStore := apptest.NewFaultStoreFrom(store)
 	app := &daemon{
 		config:  testConfig(t),
-		store:   store,
+		store:   faultStore,
 		control: &fakeControl{},
 		log:     slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		running: map[state.RunKey]*runningRun{key: active},
 		options: options{
 			newID: ids(),
 			clock: time.Now,
-			queueGoalUsage: func(got state.RunKey, usage protocol.Usage) (state.RunJournal, error) {
-				usageAttempts++
-				return store.QueueGoalUsage(got, usage)
-			},
-			queueTerminalTransitionAndAcknowledgement: func(got state.RunKey, transition protocol.StateTransitionRequest, acknowledgement protocol.CommandAcknowledgement, at time.Time) (state.RunJournal, error) {
-				terminalCalls++
-				terminalEnteredOnce.Do(func() { close(terminalEntered) })
-				<-releaseTerminal
-				return store.QueueTerminalTransitionAndAcknowledgementAt(got, transition, acknowledgement, at)
-			},
 		},
+	}
+	faultStore.OnQueueNativeUsageRecoverySettlement = func(key state.RunKey, usage protocol.Usage, settlement *state.NativeUsageTerminalRecovery) (state.RunJournal, error) {
+		usageAttempts++
+		return store.QueueNativeUsageRecoverySettlement(key, usage, settlement)
+	}
+	faultStore.OnQueueTerminalTransitionAndAcknowledgementAt = func(got state.RunKey, transition protocol.StateTransitionRequest, acknowledgement protocol.CommandAcknowledgement, at time.Time) (state.RunJournal, error) {
+		terminalCalls++
+		terminalEnteredOnce.Do(func() { close(terminalEntered) })
+		<-releaseTerminal
+		return store.QueueTerminalTransitionAndAcknowledgementAt(got, transition, acknowledgement, at)
 	}
 
 	app.flushPendingNativeUsage(context.Background())
@@ -1381,9 +1388,10 @@ func TestPersistentTerminalJournalFailureAfterUsageRetryDoesNotBlockOtherRunOutb
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	flushDone := make(chan struct{})
+	faultStore := apptest.NewFaultStoreFrom(store)
 	app := &daemon{
 		config:  testConfig(t),
-		store:   store,
+		store:   faultStore,
 		control: controlClient,
 		log:     slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		running: map[state.RunKey]*runningRun{blockedKey: active},
@@ -1391,14 +1399,14 @@ func TestPersistentTerminalJournalFailureAfterUsageRetryDoesNotBlockOtherRunOutb
 			newID:    ids(),
 			clock:    time.Now,
 			newTimer: blockedTimerFactory,
-			queueTerminalTransition: func(runKey state.RunKey, transition protocol.StateTransitionRequest, at time.Time) (state.RunJournal, error) {
-				terminalAttemptOnce.Do(func() { close(terminalAttempted) })
-				if terminalWritesBlocked {
-					return state.RunJournal{}, errors.New("persistent terminal journal failure")
-				}
-				return store.QueueTerminalTransitionAt(runKey, transition, at)
-			},
 		},
+	}
+	faultStore.OnQueueTerminalTransitionAt = func(runKey state.RunKey, transition protocol.StateTransitionRequest, at time.Time) (state.RunJournal, error) {
+		terminalAttemptOnce.Do(func() { close(terminalAttempted) })
+		if terminalWritesBlocked {
+			return state.RunJournal{}, errors.New("persistent terminal journal failure")
+		}
+		return store.QueueTerminalTransitionAt(runKey, transition, at)
 	}
 	t.Cleanup(func() {
 		cancel()
@@ -1515,24 +1523,25 @@ func TestFlushRunDefersNativeUsageRecoveryToLiveTerminalOwner(t *testing.T) {
 	var terminalEnteredOnce sync.Once
 	var terminalCallsMu sync.Mutex
 	terminalCalls := 0
+	faultStore := apptest.NewFaultStoreFrom(store)
 	app := &daemon{
 		config:  testConfig(t),
-		store:   store,
+		store:   faultStore,
 		control: &fakeControl{},
 		log:     slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		running: map[state.RunKey]*runningRun{key: active},
 		options: options{
 			newID: ids(),
 			clock: time.Now,
-			queueTerminalTransition: func(got state.RunKey, transition protocol.StateTransitionRequest, at time.Time) (state.RunJournal, error) {
-				terminalCallsMu.Lock()
-				terminalCalls++
-				terminalCallsMu.Unlock()
-				terminalEnteredOnce.Do(func() { close(terminalEntered) })
-				<-releaseTerminal
-				return store.QueueTerminalTransitionAt(got, transition, at)
-			},
 		},
+	}
+	faultStore.OnQueueTerminalTransitionAt = func(got state.RunKey, transition protocol.StateTransitionRequest, at time.Time) (state.RunJournal, error) {
+		terminalCallsMu.Lock()
+		terminalCalls++
+		terminalCallsMu.Unlock()
+		terminalEnteredOnce.Do(func() { close(terminalEntered) })
+		<-releaseTerminal
+		return store.QueueTerminalTransitionAt(got, transition, at)
 	}
 
 	flushAllDone := make(chan struct{})

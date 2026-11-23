@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wxxb789/symmetry/daemon/internal/app/apptest"
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
@@ -115,6 +116,8 @@ func TestNativeHandlePersistenceAndDiscardFailureStillClosesOwner(t *testing.T) 
 	}
 	app, store, session, client := nativeAdmissionDaemon(t, admission, validNativeTaskResult(t, admission), nil)
 	defer store.Close()
+	faultStore := apptest.NewFaultStoreFrom(store)
+	app.store = faultStore
 	key := state.RunKey{RunID: "run-1", Generation: 1}
 	saveClaimedGoalRun(t, store, key)
 	app.running[key] = &runningRun{runLifecycle: runLifecycle{starting: true, claimed: true}}
@@ -123,7 +126,7 @@ func TestNativeHandlePersistenceAndDiscardFailureStillClosesOwner(t *testing.T) 
 	session.handle = harness.NativeSessionHandle{}
 	discardFailure := errors.New("discard write failed")
 	discardCalls := 0
-	app.options.discardUnreadyGoalSessionAttachDelivery = func(state.RunKey, string) (state.RunJournal, error) {
+	faultStore.OnDiscardUnreadyGoalSessionAttachDelivery = func(state.RunKey, string) (state.RunJournal, error) {
 		discardCalls++
 		return state.RunJournal{}, discardFailure
 	}
@@ -170,16 +173,17 @@ func TestCancelledNativeStartDiscardFailureStillSettlesAfterClose(t *testing.T) 
 	}
 	discardFailure := errors.New("discard write failed")
 	discardCalls := 0
+	faultStore := apptest.NewFaultStoreFrom(store)
 	daemon := &daemon{
-		config: testConfig(t), store: store,
+		config: testConfig(t), store: faultStore,
 		running: map[state.RunKey]*runningRun{key: active},
 		options: options{
 			newID: ids(), clock: time.Now,
-			discardUnreadyGoalSessionAttachDelivery: func(state.RunKey, string) (state.RunJournal, error) {
-				discardCalls++
-				return state.RunJournal{}, discardFailure
-			},
 		},
+	}
+	faultStore.OnDiscardUnreadyGoalSessionAttachDelivery = func(state.RunKey, string) (state.RunJournal, error) {
+		discardCalls++
+		return state.RunJournal{}, discardFailure
 	}
 
 	settled, err := daemon.settleCancelledNativeStart(context.Background(), key, sessionKey, sessionKey.LocalHandleID, session, true, false)
@@ -233,15 +237,16 @@ func TestCancelledNativeStartDiscardAndCloseFailuresJoinAndRetainRetry(t *testin
 		}, nativeSession: session, goalSession: &sessionKey, goalAdmission: &admission,
 	}
 	discardFailure := errors.New("discard write failed")
+	faultStore := apptest.NewFaultStoreFrom(store)
 	daemon := &daemon{
-		config: testConfig(t), store: store,
+		config: testConfig(t), store: faultStore,
 		running: map[state.RunKey]*runningRun{key: active},
 		options: options{
 			newID: ids(), clock: time.Now,
-			discardUnreadyGoalSessionAttachDelivery: func(state.RunKey, string) (state.RunJournal, error) {
-				return state.RunJournal{}, discardFailure
-			},
 		},
+	}
+	faultStore.OnDiscardUnreadyGoalSessionAttachDelivery = func(state.RunKey, string) (state.RunJournal, error) {
+		return state.RunJournal{}, discardFailure
 	}
 
 	settled, err := daemon.settleCancelledNativeStart(context.Background(), key, sessionKey, sessionKey.LocalHandleID, session, true, false)

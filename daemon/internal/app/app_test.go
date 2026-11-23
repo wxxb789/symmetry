@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wxxb789/symmetry/daemon/internal/app/apptest"
 	"github.com/wxxb789/symmetry/daemon/internal/authority"
 	"github.com/wxxb789/symmetry/daemon/internal/config"
 	"github.com/wxxb789/symmetry/daemon/internal/control"
@@ -2178,16 +2179,17 @@ func TestStartupFailureRetriesTerminalPersistenceWithStableID(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
+	faultStore := apptest.NewFaultStoreFrom(store)
 	retryTimer := &manualDeadlineTimer{channel: make(chan time.Time, 1)}
 	timerCreated := make(chan struct{}, 1)
 	firstFailure := make(chan struct{}, 1)
 	var transitions []protocol.StateTransitionRequest
-	daemon := startupTestDaemon(t, store, &fakeWorkspace{})
+	daemon := startupTestDaemon(t, faultStore, &fakeWorkspace{})
 	daemon.options.newTimer = func(time.Duration) deadlineTimer {
 		timerCreated <- struct{}{}
 		return retryTimer
 	}
-	daemon.options.queueTerminalTransition = func(key state.RunKey, transition protocol.StateTransitionRequest, pendingAt time.Time) (state.RunJournal, error) {
+	faultStore.OnQueueTerminalTransitionAt = func(key state.RunKey, transition protocol.StateTransitionRequest, pendingAt time.Time) (state.RunJournal, error) {
 		transitions = append(transitions, transition)
 		if len(transitions) == 1 {
 			firstFailure <- struct{}{}
@@ -2464,20 +2466,21 @@ func TestCancelDuringBlockedPrepareAcknowledgesAndCleansUp(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
+	faultStore := apptest.NewFaultStoreFrom(store)
 	workspace := newBlockingWorkspace()
-	daemon := startupTestDaemon(t, store, workspace)
+	daemon := startupTestDaemon(t, faultStore, workspace)
 	key := state.RunKey{RunID: "run-1", Generation: 1}
 	retryTimer := &manualDeadlineTimer{channel: make(chan time.Time, 1)}
 	firstPersistenceFailure := make(chan struct{}, 1)
 	attempts := 0
 	daemon.options.newTimer = func(time.Duration) deadlineTimer { return retryTimer }
-	daemon.options.queueCancelledTransitionAndAcknowledgement = func(key state.RunKey, transition protocol.StateTransitionRequest, acknowledgement protocol.CommandAcknowledgement, enteredAt time.Time) (state.RunJournal, error) {
+	faultStore.OnQueueTerminalTransitionAndAcknowledgementAt = func(key state.RunKey, transition protocol.StateTransitionRequest, acknowledgement protocol.CommandAcknowledgement, enteredAt time.Time) (state.RunJournal, error) {
 		attempts++
 		if attempts == 1 {
 			firstPersistenceFailure <- struct{}{}
 			return state.RunJournal{}, errors.New("injected atomic persistence failure before write")
 		}
-		return store.QueueCancelledTransitionAndAcknowledgementAt(key, transition, acknowledgement, enteredAt)
+		return store.QueueTerminalTransitionAndAcknowledgementAt(key, transition, acknowledgement, enteredAt)
 	}
 	daemon.startAssignment(context.Background(), protocol.Assignment{RunID: key.RunID, Generation: key.Generation, Work: protocol.Work{Goal: "g"}})
 	<-workspace.entered
@@ -2642,26 +2645,27 @@ func TestCancelledCommandSignalsOutboxAfterAtomicReceipt(t *testing.T) {
 func TestCancelledReceiptTreatsDurablePersistenceAsIdempotent(t *testing.T) {
 	store, key := claimedStore(t)
 	defer store.Close()
+	faultStore := apptest.NewFaultStoreFrom(store)
 	firstFailure := make(chan struct{}, 1)
 	type receiptIDs struct{ transition, acknowledgement string }
 	attempted := make([]receiptIDs, 0, 2)
+	faultStore.OnQueueTerminalTransitionAndAcknowledgementAt = func(key state.RunKey, transition protocol.StateTransitionRequest, acknowledgement protocol.CommandAcknowledgement, enteredAt time.Time) (state.RunJournal, error) {
+		attempted = append(attempted, receiptIDs{transition: transition.TransitionID, acknowledgement: acknowledgement.AckID})
+		journal, err := store.QueueTerminalTransitionAndAcknowledgementAt(key, transition, acknowledgement, enteredAt)
+		if err != nil {
+			return state.RunJournal{}, err
+		}
+		if len(attempted) == 1 {
+			firstFailure <- struct{}{}
+			return journal, errors.New("injected uncertain atomic persistence result")
+		}
+		return journal, nil
+	}
 	daemon := &daemon{
-		store: store,
+		store: faultStore,
 		log:   slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		options: options{
 			newID: ids(),
-			queueCancelledTransitionAndAcknowledgement: func(key state.RunKey, transition protocol.StateTransitionRequest, acknowledgement protocol.CommandAcknowledgement, enteredAt time.Time) (state.RunJournal, error) {
-				attempted = append(attempted, receiptIDs{transition: transition.TransitionID, acknowledgement: acknowledgement.AckID})
-				journal, err := store.QueueCancelledTransitionAndAcknowledgementAt(key, transition, acknowledgement, enteredAt)
-				if err != nil {
-					return state.RunJournal{}, err
-				}
-				if len(attempted) == 1 {
-					firstFailure <- struct{}{}
-					return journal, errors.New("injected uncertain atomic persistence result")
-				}
-				return journal, nil
-			},
 		},
 		running: map[state.RunKey]*runningRun{key: {}},
 	}
@@ -2721,20 +2725,21 @@ func TestTerminalTransitionRetryRejectsConflictingDurableTerminal(t *testing.T) 
 func TestTerminalTransitionRetryTreatsExactDurableTerminalAsIdempotent(t *testing.T) {
 	store, key := claimedStore(t)
 	defer store.Close()
+	faultStore := apptest.NewFaultStoreFrom(store)
 	attempts := 0
+	faultStore.OnQueueTerminalTransitionAt = func(key state.RunKey, transition protocol.StateTransitionRequest, pendingAt time.Time) (state.RunJournal, error) {
+		attempts++
+		journal, err := store.QueueTerminalTransitionAt(key, transition, pendingAt)
+		if err != nil {
+			return state.RunJournal{}, err
+		}
+		return journal, errors.New("injected uncertain terminal persistence result")
+	}
 	daemon := &daemon{
-		store: store,
+		store: faultStore,
 		log:   slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		options: options{
 			newID: ids(),
-			queueTerminalTransition: func(key state.RunKey, transition protocol.StateTransitionRequest, pendingAt time.Time) (state.RunJournal, error) {
-				attempts++
-				journal, err := store.QueueTerminalTransitionAt(key, transition, pendingAt)
-				if err != nil {
-					return state.RunJournal{}, err
-				}
-				return journal, errors.New("injected uncertain terminal persistence result")
-			},
 		},
 		running: map[state.RunKey]*runningRun{key: {}},
 	}
@@ -4352,6 +4357,7 @@ func TestRecoveredCancelQueuesReceiptBeforeResolvingGoalSessionBarrier(t *testin
 	}
 	store, key := claimedGoalDeliveryStore(t)
 	defer store.Close()
+	faultStore := apptest.NewFaultStoreFrom(store)
 	sessionKey := state.GoalSessionKey{GoalID: admission.GoalID, LocalHandleID: "00000000-0000-4000-8000-000000000007"}
 	saveAttachedGoalSession(t, store, key, admission, sessionKey)
 	if _, err := store.MarkGoalSessionUncertain(sessionKey, "native launch stop requires reconciliation"); err != nil {
@@ -4361,8 +4367,12 @@ func TestRecoveredCancelQueuesReceiptBeforeResolvingGoalSessionBarrier(t *testin
 		t.Fatal(err)
 	}
 	queueAttempted := make(chan struct{})
+	faultStore.OnQueueTerminalTransitionAndAcknowledgementAt = func(state.RunKey, protocol.StateTransitionRequest, protocol.CommandAcknowledgement, time.Time) (state.RunJournal, error) {
+		close(queueAttempted)
+		return state.RunJournal{}, errors.New("simulated durable cancellation write failure")
+	}
 	daemon := &daemon{
-		store:   store,
+		store:   faultStore,
 		log:     slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		running: map[state.RunKey]*runningRun{},
 		slots:   make(chan struct{}, 1),
@@ -4370,10 +4380,6 @@ func TestRecoveredCancelQueuesReceiptBeforeResolvingGoalSessionBarrier(t *testin
 			newID: ids(),
 			terminatePersist: func(int, string) error {
 				return nil
-			},
-			queueCancelledTransitionAndAcknowledgement: func(state.RunKey, protocol.StateTransitionRequest, protocol.CommandAcknowledgement, time.Time) (state.RunJournal, error) {
-				close(queueAttempted)
-				return state.RunJournal{}, errors.New("simulated durable cancellation write failure")
 			},
 		},
 	}
@@ -5706,27 +5712,28 @@ func TestScheduledSnapshotCancelPreemptsBlockedInputAndJoins(t *testing.T) {
 	verifyNoLeakedGoroutines(t)
 	store, key := claimedStore(t)
 	defer store.Close()
+	faultStore := apptest.NewFaultStoreFrom(store)
 	now := time.Date(2026, 9, 3, 1, 2, 3, 0, time.UTC)
 	if _, err := store.UpdateLeaseExpiry(key, now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	input := &blockingInputProcess{entered: make(chan struct{}, 1), release: make(chan struct{}), terminated: make(chan struct{})}
 	cancelPersisted := make(chan struct{}, 1)
+	faultStore.OnQueueTerminalTransitionAndAcknowledgementAt = func(key state.RunKey, transition protocol.StateTransitionRequest, acknowledgement protocol.CommandAcknowledgement, enteredAt time.Time) (state.RunJournal, error) {
+		journal, err := store.QueueTerminalTransitionAndAcknowledgementAt(key, transition, acknowledgement, enteredAt)
+		if err == nil {
+			cancelPersisted <- struct{}{}
+		}
+		return journal, err
+	}
 	daemon := &daemon{
-		store:   store,
+		store:   faultStore,
 		control: &terminalRetryControl{transitionErr: transportError("offline")},
 		log:     slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		options: options{
 			clock:    func() time.Time { return now },
 			newID:    ids(),
 			newTimer: blockedTimerFactory,
-			queueCancelledTransitionAndAcknowledgement: func(key state.RunKey, transition protocol.StateTransitionRequest, acknowledgement protocol.CommandAcknowledgement, enteredAt time.Time) (state.RunJournal, error) {
-				journal, err := store.QueueCancelledTransitionAndAcknowledgementAt(key, transition, acknowledgement, enteredAt)
-				if err == nil {
-					cancelPersisted <- struct{}{}
-				}
-				return journal, err
-			},
 		},
 		leaseDuration: 120 * time.Second,
 		running:       map[state.RunKey]*runningRun{key: {process: input, runLifecycle: runLifecycle{claimed: true}}},
@@ -6052,21 +6059,22 @@ func TestAcknowledgementDeliveryTombstonesEveryPreAckRequest(t *testing.T) {
 func TestAcknowledgementPersistenceDoesNotBlockNewCommandRequests(t *testing.T) {
 	store, key := claimedStore(t)
 	defer store.Close()
+	faultStore := apptest.NewFaultStoreFrom(store)
 	process := &recordingProcess{}
 	command := protocol.Command{CommandID: "input-1", RunID: key.RunID, Generation: key.Generation, Kind: "provide_input", Payload: json.RawMessage(`{}`)}
 	control := &lateCommandControl{method: "dispatch", entered: make(chan struct{}, 1), release: make(chan struct{}), command: command}
 	persistEntered := make(chan struct{}, 1)
 	persistRelease := make(chan struct{})
+	faultStore.OnMarkCommandAcknowledgementsDelivered = func(key state.RunKey, acknowledgementIDs []string) (state.RunJournal, error) {
+		persistEntered <- struct{}{}
+		<-persistRelease
+		return store.MarkCommandAcknowledgementsDelivered(key, acknowledgementIDs)
+	}
 	daemon := &daemon{
-		store:   store,
+		store:   faultStore,
 		control: control,
 		options: options{
 			newID: ids(),
-			markCommandAcknowledgementsDelivered: func(key state.RunKey, acknowledgementIDs []string) (state.RunJournal, error) {
-				persistEntered <- struct{}{}
-				<-persistRelease
-				return store.MarkCommandAcknowledgementsDelivered(key, acknowledgementIDs)
-			},
 		},
 		running:     map[state.RunKey]*runningRun{key: {process: process}},
 		commandWake: make(chan struct{}, 1),
@@ -6139,17 +6147,18 @@ func TestAcknowledgementPersistenceDoesNotBlockNewCommandRequests(t *testing.T) 
 func TestFailedAcknowledgementPersistenceKeepsProvisionalTombstoneUntilResponseEnds(t *testing.T) {
 	store, key := claimedStore(t)
 	defer store.Close()
+	faultStore := apptest.NewFaultStoreFrom(store)
 	process := &recordingProcess{}
 	command := protocol.Command{CommandID: "input-1", RunID: key.RunID, Generation: key.Generation, Kind: "provide_input", Payload: json.RawMessage(`{}`)}
 	control := &lateCommandControl{method: "dispatch", entered: make(chan struct{}, 1), release: make(chan struct{}), command: command}
+	faultStore.OnMarkCommandAcknowledgementsDelivered = func(state.RunKey, []string) (state.RunJournal, error) {
+		return state.RunJournal{}, errors.New("injected acknowledgement persistence failure")
+	}
 	daemon := &daemon{
-		store:   store,
+		store:   faultStore,
 		control: control,
 		options: options{
 			newID: ids(),
-			markCommandAcknowledgementsDelivered: func(state.RunKey, []string) (state.RunJournal, error) {
-				return state.RunJournal{}, errors.New("injected acknowledgement persistence failure")
-			},
 		},
 		running:     map[state.RunKey]*runningRun{key: {process: process}},
 		commandWake: make(chan struct{}, 1),
@@ -7292,7 +7301,7 @@ func terminalStore(t *testing.T) (*state.Store, state.RunKey) {
 	return store, key
 }
 
-func startupTestDaemon(t *testing.T, store *state.Store, service workspace.Service) *daemon {
+func startupTestDaemon(t *testing.T, store journalStore, service workspace.Service) *daemon {
 	t.Helper()
 	return &daemon{
 		config:       testConfig(t),

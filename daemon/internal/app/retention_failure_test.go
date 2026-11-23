@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wxxb789/symmetry/daemon/internal/app/apptest"
 	"github.com/wxxb789/symmetry/daemon/internal/control"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 	"github.com/wxxb789/symmetry/daemon/internal/state"
@@ -59,6 +60,8 @@ func TestRetentionWriteFailureNeverPreventsCancellationOrLeaseFencing(t *testing
 	for _, scenario := range []string{"cancel", "expired_lease", "ownership_lost"} {
 		t.Run(scenario, func(t *testing.T) {
 			app, key, process := supervisoryDaemon(t)
+			faultStore := apptest.NewFaultStoreFrom(app.store.(*state.Store))
+			app.store = faultStore
 			app.cleanupWake = make(chan struct{}, 1)
 			app.background = context.Background()
 			artifact := retainTestArtifact(t, app, key)
@@ -66,7 +69,7 @@ func TestRetentionWriteFailureNeverPreventsCancellationOrLeaseFencing(t *testing
 				t.Fatal("pause intent not prepared")
 			}
 			retentionAttempts := 0
-			app.options.retainWorkspace = func(got state.RunKey) (state.RunJournal, error) {
+			faultStore.OnRetainWorkspace = func(got state.RunKey) (state.RunJournal, error) {
 				retentionAttempts++
 				if got != key || process.terminations != 1 {
 					t.Fatalf("retention persistence preceded fencing: key=%#v terminations=%d", got, process.terminations)
@@ -133,19 +136,21 @@ func TestRetentionWriteFailureNeverPreventsCancellationOrLeaseFencing(t *testing
 
 func TestCancellationStopsWhileRetentionAndTerminalJournalWritesFail(t *testing.T) {
 	app, key, process := supervisoryDaemon(t)
+	faultStore := apptest.NewFaultStoreFrom(app.store.(*state.Store))
+	app.store = faultStore
 	artifact := retainTestArtifact(t, app, key)
 	if !app.handleCommand(context.Background(), supervisoryCommand(key, "pause-1", "pause")) {
 		t.Fatal("durable pause intent not prepared")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	app.options.retainWorkspace = func(state.RunKey) (state.RunJournal, error) {
+	faultStore.OnRetainWorkspace = func(state.RunKey) (state.RunJournal, error) {
 		if process.terminations != 1 {
 			t.Fatal("retention failure delayed process termination")
 		}
 		return state.RunJournal{}, os.ErrPermission
 	}
-	app.options.queueCancelledTransitionAndAcknowledgement = func(state.RunKey, protocol.StateTransitionRequest, protocol.CommandAcknowledgement, time.Time) (state.RunJournal, error) {
+	faultStore.OnQueueTerminalTransitionAndAcknowledgementAt = func(state.RunKey, protocol.StateTransitionRequest, protocol.CommandAcknowledgement, time.Time) (state.RunJournal, error) {
 		if process.terminations != 1 {
 			t.Fatal("terminal persistence preceded process termination")
 		}
@@ -170,6 +175,8 @@ func TestCancellationStopsWhileRetentionAndTerminalJournalWritesFail(t *testing.
 
 func TestRestartRetentionWriteFailureBlocksProcessControlAndPreservesJournal(t *testing.T) {
 	app, key, _ := supervisoryDaemon(t)
+	faultStore := apptest.NewFaultStoreFrom(app.store.(*state.Store))
+	app.store = faultStore
 	artifact := retainTestArtifact(t, app, key)
 	if !app.handleCommand(context.Background(), supervisoryCommand(key, "pause-1", "pause")) {
 		t.Fatal("pause intent not prepared")
@@ -186,7 +193,7 @@ func TestRestartRetentionWriteFailureBlocksProcessControlAndPreservesJournal(t *
 		terminated++
 		return nil
 	}
-	app.options.retainWorkspace = func(state.RunKey) (state.RunJournal, error) {
+	faultStore.OnRetainWorkspace = func(state.RunKey) (state.RunJournal, error) {
 		retentionAttempts++
 		if terminated != 0 {
 			t.Fatal("recovery process termination preceded workspace retention")

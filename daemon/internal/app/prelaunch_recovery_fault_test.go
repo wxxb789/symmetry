@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wxxb789/symmetry/daemon/internal/app/apptest"
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
 	"github.com/wxxb789/symmetry/daemon/internal/harness/codex"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
@@ -56,9 +57,14 @@ func TestPrelaunchRecoveryKeepsIntentUntilTerminalIsDurable(t *testing.T) {
 	startCalls := 0
 	failure := errors.New("injected terminal persistence failure")
 	queueCalls := 0
+	faultStore := apptest.NewFaultStoreFrom(store)
+	faultStore.OnQueueTerminalTransitionAt = func(state.RunKey, protocol.StateTransitionRequest, time.Time) (state.RunJournal, error) {
+		queueCalls++
+		return state.RunJournal{}, failure
+	}
 	failedRecovery := &daemon{
 		config: testConfig(t),
-		store:  store,
+		store:  faultStore,
 		start: func(context.Context, execution.Invocation, execution.Sink) (Process, error) {
 			startCalls++
 			return nil, errors.New("unexpected native start")
@@ -66,10 +72,6 @@ func TestPrelaunchRecoveryKeepsIntentUntilTerminalIsDurable(t *testing.T) {
 		options: options{
 			clock: time.Now,
 			newID: ids(),
-			queueTerminalTransition: func(state.RunKey, protocol.StateTransitionRequest, time.Time) (state.RunJournal, error) {
-				queueCalls++
-				return state.RunJournal{}, failure
-			},
 		},
 		running: make(map[state.RunKey]*runningRun),
 		slots:   make(chan struct{}, 1),
