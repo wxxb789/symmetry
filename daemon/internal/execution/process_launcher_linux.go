@@ -32,15 +32,17 @@ func defaultProcessLauncher(
 	if invocation.linuxV2Requested() {
 		return launchLinuxV2Process(ctx, command, invocation, stdinRead, stdoutWrite, stderrWrite)
 	}
-	if durableSupervisorHandoffRequested(invocation) && platform.DurableSupervisorHandoffAvailable() {
-		if !durableSupervisorHandoffCallbacksComplete(invocation) {
+	writes := invocationWrites(invocation)
+	capabilities := writes.Capabilities()
+	if capabilities.SupervisorHandoffRequested() && platform.DurableSupervisorHandoffAvailable() {
+		if !capabilities.SupervisorHandoffComplete() {
 			return nil, errors.New("durable Linux supervisor handoff callbacks are incomplete")
 		}
 		supervisor, launchErr := platform.StartLinuxSupervisor(platform.LinuxSupervisorStartSpec{
 			Command:      command,
 			OwnerContext: linuxSupervisorOwnerContext(invocation),
-			Prepare:      invocation.PrepareSupervisorHandoff,
-			Bind:         invocation.BindSupervisorHandoff,
+			Prepare:      writes.PrepareSupervisorHandoff,
+			Bind:         writes.BindSupervisorHandoff,
 		})
 		if supervisor == nil {
 			return nil, launchErr
@@ -56,8 +58,8 @@ func defaultProcessLauncher(
 			resume:      supervisor.Resume,
 		}
 		started.commitSupervisorHandoff = func(value authority.SupervisorHandoff, startedAt time.Time) error {
-			if invocation.CommitSupervisorHandoff != nil {
-				if err := invocation.CommitSupervisorHandoff(value, startedAt); err != nil {
+			if writes.CommitSupervisorHandoff != nil {
+				if err := writes.CommitSupervisorHandoff(value, startedAt); err != nil {
 					return err
 				}
 			}

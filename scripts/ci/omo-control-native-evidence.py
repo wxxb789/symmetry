@@ -83,6 +83,7 @@ SOURCE_PATHS = [
     "daemon/internal/app/native_run.go",
     "daemon/internal/app/outbox.go",
     "daemon/internal/app/probe.go",
+    "daemon/internal/app/process_recorder.go",
     "daemon/internal/app/recovery_glue.go",
     "daemon/internal/config/config.go",
     "daemon/internal/control/client.go",
