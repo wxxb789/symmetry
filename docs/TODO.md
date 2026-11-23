@@ -318,7 +318,12 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
     failure the scratch loop then reached: that read, the private Store StateDir ownership (its implicitly
     created parent came from `install -d` as root-owned), the guest A-search fence, the removed A-side `rmdir`,
     the fixture project key length and the debootstrap mirror source, verified by the loop's before/after runs
-    `45132022431` through `45169868354`. Two host-tooling facts this record must carry: the `ubuntu-latest`
+    `45132022431` through `45169868354`. The debootstrap source is now the image's own apt configuration (the
+    first archive URI in `/etc/apt/apt-mirrors.txt`, else the first `URIs:` entry in
+    `/etc/apt/sources.list.d/*.sources`), or the case set fails with a named message: the public-archive
+    fallback was removed deliberately, because that archive dropped individual packages from the hosted runner
+    network (runs `45154695682`, `45159670971`). The block is fail-closed and cannot be steered to an archive
+    this record does not name. Two host-tooling facts this record must carry: the `ubuntu-latest`
     image is `resolute`, whose `coreutils` package is the uutils Rust build (`/usr/bin/test` resolves to
     `/usr/lib/cargo/bin/coreutils/test`, version `9.5-1ubuntu2+0.0.0~ubuntu25`; guest images debootstrap the
     same package), and uutils evaluates `test -x/-r/-w` from stat mode bits only, ignoring POSIX ACLs. Probe
@@ -340,8 +345,12 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
     production-side decision (installer re-chown once the subgroup exists, a reviewed preflight change, or a
     host whose systemd keeps the control root-owned); the fixture keeps the production sequence unchanged. The
     scratch runs carried only the contract's dummy credentials, so the delivered bytes' final all-14 run
-    `45171498923` stops at that credential-dependent `gh auth login` (the fixture's `:292` refuses the dummy
-    `gho_` token) and every provider turn stays unproven until the owner dispatches the workflow again.
+    `45183708322` (scratch head `c514d3f6`, whose tree adds only the throwaway workflow to PR head `e329d8dd`;
+    script sha256 `8cc4bd831e89085ddfcf3b669ebc6756808d955659a4791cc4bde6e07edae089`, fixture sha256
+    `bf8f659b036fb32573b1f768db1dc8f1d913a1ada535835773233257864f10b5`) stops at that credential-dependent
+    `gh auth login` (the fixture's `:292` refuses the dummy `gho_` token) and every provider turn stays unproven
+    until the owner dispatches the workflow again. Run `45171498923` remains the historical all-14 run on the
+    pre-mirror-fix bytes (script sha256 `592b98f8a0be53aaeab9022c5cc692320dc1be49a6e10bdab00a05c5664fab68`).
 
     **When it must be dispatched.** At release acceptance, against the exact subject, and never cited as
     passed before it runs. The goals' pending predicate, quoted from `docs/goals/README.md`: "the operator
@@ -997,7 +1006,7 @@ version pinned` section of `docs/archive/CLOSED-TODO.md`.
       and `encodeGuardedRelease`'s body and grant bounds. The generation and minimum-length checks may
       be shadowed by later reads or `receipt.Validate`; the rest are real gaps. Add one rejection test
       per check in a separate maintenance slice.
-- [ ] `scripts/ci/linux-v2-native-acceptance.sh:1714` pins
+- [ ] `scripts/ci/linux-v2-native-acceptance.sh:1733` pins
       `TestInstalledLinuxOwnerRejectsUnexpectedCgroupKillFD`, which no Go file defines (base and
       HEAD); owner: the acceptance-script maintainer — restore the test or drop the pin.
 
