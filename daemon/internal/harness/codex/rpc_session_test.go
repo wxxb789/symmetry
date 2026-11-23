@@ -298,19 +298,7 @@ func TestDuplicatePreTurnNotificationsDeduplicateBeforeStageCapacity(t *testing.
 	if got := sink.count(harness.EventUsageObserved); got != 1 {
 		t.Fatalf("usage events = %d, want one deduplicated event", got)
 	}
-	closed := make(chan error, 1)
-	go func() { closed <- session.Close(context.Background()) }()
-	interrupt := process.nextRequest(t)
-	if interrupt.Method != appServerMethodTurnInterrupt {
-		t.Fatalf("Close() native request = %+v, want turn/interrupt", interrupt)
-	}
-	if interrupt.Params.ThreadID != "thread-1" || interrupt.Params.TurnID != "turn-1" {
-		t.Fatalf("Close() native interrupt params = %+v, want thread-1/turn-1", interrupt.Params)
-	}
-	process.reply(t, interrupt.ID, map[string]any{})
-	if err := <-closed; err != nil {
-		t.Fatalf("Close() error = %v, want known stopped after the served interrupt", err)
-	}
+	closeServingInterrupt(t, session, process)
 }
 
 func TestBufferedTerminalBeforeStartResponseSettlesBeforeProcessEOF(t *testing.T) {
@@ -751,19 +739,7 @@ func TestNativeSinkEventsDoNotExposeRawProtocolIdentityOrFrames(t *testing.T) {
 			}
 		}
 	}
-	closed := make(chan error, 1)
-	go func() { closed <- session.Close(context.Background()) }()
-	interrupt := process.nextRequest(t)
-	if interrupt.Method != appServerMethodTurnInterrupt {
-		t.Fatalf("Close() native request = %+v, want turn/interrupt", interrupt)
-	}
-	if interrupt.Params.ThreadID != "thread-1" || interrupt.Params.TurnID != "turn-1" {
-		t.Fatalf("Close() native interrupt params = %+v, want thread-1/turn-1", interrupt.Params)
-	}
-	process.reply(t, interrupt.ID, map[string]any{})
-	if err := <-closed; err != nil {
-		t.Fatalf("Close() error = %v, want known stopped after the served interrupt", err)
-	}
+	closeServingInterrupt(t, session, process)
 }
 
 func TestBlockedRPCWriteIsCancelledAndDoesNotLeak(t *testing.T) {
@@ -854,5 +830,22 @@ func TestSanitizedLifecycleFixturePreservesNativeInterleaving(t *testing.T) {
 	}
 	if frames[0].Method != "remoteControl/status/changed" || frames[1].Kind != FrameResponse || frames[3].Kind != FrameResponse || frames[8].Method != appServerEventTurnCompleted {
 		t.Fatalf("fixture ordering changed: %#v", frames)
+	}
+}
+
+func closeServingInterrupt(t *testing.T, session harness.StagedSession, process *fakeNativeProcess) {
+	t.Helper()
+	closed := make(chan error, 1)
+	go func() { closed <- session.Close(context.Background()) }()
+	interrupt := process.nextRequest(t)
+	if interrupt.Method != appServerMethodTurnInterrupt {
+		t.Fatalf("Close() native request = %+v, want turn/interrupt", interrupt)
+	}
+	if interrupt.Params.ThreadID != "thread-1" || interrupt.Params.TurnID != "turn-1" {
+		t.Fatalf("Close() native interrupt params = %+v, want thread-1/turn-1", interrupt.Params)
+	}
+	process.reply(t, interrupt.ID, map[string]any{})
+	if err := <-closed; err != nil {
+		t.Fatalf("Close() error = %v, want known stopped after the served interrupt", err)
 	}
 }

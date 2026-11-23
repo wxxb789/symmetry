@@ -23,10 +23,11 @@ D1. **Where the tables live.** Clause 2 names `answer.md`; the strict owned set 
 verifiable from the tree), `answer.md` (the stage report) mirrors the tables as the judging
 artifact the contract names, and neither writes a path outside the owned set.
 
-D2. **Import clean-up.** `claude/probe_test.go` loses its last real `time.` use (the two
-`time.After(testHangGuard)` guards of the converted test); the `time` import is removed so the file
-compiles. The other three files keep live `time.` uses (`time.After` in unconverted rows,
-`probeTimeout` duration constants, `time.Now()` event stamps) and keep the import.
+D2. **Import clean-up.** None: the converted `claude/probe_test.go` keeps its `time` import. The
+anticipated drop did not happen — the two `time.After(testHangGuard)` hang guards of the converted
+test stay in place (`:140`/`:152`), now reading the synctest bubble's virtual clock. The other
+three files likewise keep live `time.` uses (`time.After` in unconverted rows, `probeTimeout`
+duration constants, `time.Now()` event stamps).
 
 D3. **`synctest` callback shape.** `synctest.Test(t, func(t *testing.T) { … })`: the callback
 parameter shadows the outer `t`, so every assertion inside keeps its exact text. The wrapper sits
@@ -205,20 +206,25 @@ hash `ad3bdd9488da1e16d37ebb72b184ca0759dc3322`, `adapter.go` `0d0d85856a9210fdc
 | M3 | `adapter.go:717` interrupt turn ID → `"turn-0"` | both close rows | red in 0.04 s / 0.02 s on `Close() native interrupt params = … TurnID:turn-0, want thread-1/turn-1` | byte-identical |
 | M4 | `adapter.go:705` `active := false` (no interrupt attempt) | both close rows | red in 30.02 s each: `timed out waiting for native request` (slow red at the 30 s guard, as the contract predicted) | byte-identical |
 | M6 | `adapter.go:743` `return nil` → `return errors.New("mutant: refused a clean stop")` | both close rows (the assertion the conversion adds) | red in 0.03 s / 0.01 s: `Close() error = mutant: refused a clean stop, want known stopped after the served interrupt` | byte-identical |
+| M7 | `cancel_state.go:333` `appServerMethodTurnInterrupt` → `appServerMethodTurnStart` | both close rows | red in 0.02 s / 0.02 s at the helper call sites (`rpc_session_test.go:301`/`:742`): `Close() native request = {…Method:turn/start…}, want turn/interrupt`; same production path also red fast: `adapter_test.go:982` `TestCloseTimesOutNativeInterruptThenTerminatesProcess` 0.02 s, `adapter_test.go:1004` `TestCloseAttemptsNativeInterruptThenUsesProcessTermination` 0.01 s, `cancel_test.go:60` `TestControlCancelAwaitsTerminalInterruptedTurn` 0.01 s | byte-identical |
 
 M5 exists because M1 does not red the `caller_cancellation` arms: `context.WithCancel(ctx)` still
 propagates the caller's cancellation, and the parent `ctx.Err()` post-check reports it either way.
-M6 exists because the nil-close assertion is the branch this slice adds (lessons 55-56). The
-recorded trap stands: dropping only the interrupt reply does not red the close rows, because
+M6 exists because the nil-close assertion is the branch this slice adds (lessons 55-56). M7
+completes the added-guard rows for C5/C6 — the `Method` comparison had none of its own — and the
+helper's `t.Helper()` keeps its failures reported at the call site (`rpc_session_test.go:301`/`:742`).
+The recorded trap stands: dropping only the interrupt reply does not red the close rows, because
 `closeOnce` tolerates the interrupt timeout (`adapter.go:740-744`, pinned by
-`adapter_test.go:972`) — the request assertion is the guard, and M3/M4/M6 each exercise it.
+`adapter_test.go:972`) — the request assertion is the guard, and M3/M4/M6/M7 each exercise it.
 
 ## 8. Report-only rows (D2)
 
-- Test-LOC delta: +35 net lines over the four owned test files (`numstat`: claude +36/−31,
-  codex probe +28/−25, codex rpc_session +26/−2, probeconformance +29/−26). Nothing is deleted:
-  the conversions add wrapper indentation and the close-row assertions; the −150 target belongs to
-  W6-12's poll conversions, and this slice reports the deviation instead of hiding it.
+- Test-LOC delta: +28 net lines over the four owned test files (`numstat`: claude +36/−31,
+  codex probe +28/−25, codex rpc_session +19/−2, probeconformance +29/−26). No test, name or
+  assertion is deleted: the conversions add wrapper indentation and the close-row assertions, and
+  the close-row orchestration is shared through one helper (`closeServingInterrupt`); the −150
+  target belongs to W6-12's poll conversions, and this slice reports the deviation instead of
+  hiding it.
 - CI race-job delta: not measurable in this stage (the stage must not push). The conductor
   measures it on the PR with the `daemon_race_tests` step (`go test -race -count=1 -timeout 600s
   -json ./...` plus `scripts/ci/go-test-durations.py`, `.github/workflows/ci.yml:1114-1129`). The
