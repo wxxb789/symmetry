@@ -3353,8 +3353,6 @@ func (model *linuxSupervisorScanJournalModel) prepare(handoff authority.Supervis
 	return nil
 }
 
-// The store's RecordSupervisorRecoveryScanSeal rules: exact authority CAS, a prior durable clean
-// mirror seal with no unproven observation, the exact Completed+1 sequence and an idempotent replay.
 func (model *linuxSupervisorScanJournalModel) recordRecoveryScanSeal(expected authority.Supervisor, sequence uint64) error {
 	model.mutex.Lock()
 	defer model.mutex.Unlock()
@@ -3424,8 +3422,6 @@ type liveOwnerResponseLossOptions struct {
 	resume    bool
 }
 
-// One live-owner control close (the production response-loss close) against a real helper; the
-// caller owns the stop result, the model assertions and the helper release.
 func runLiveOwnerResponseLossStop(t *testing.T, model *linuxSupervisorScanJournalModel, options liveOwnerResponseLossOptions) liveOwnerResponseLossStop {
 	t.Helper()
 	stdinRead, stdinWrite, err := os.Pipe()
@@ -3542,8 +3538,6 @@ func releaseLiveOwnerHelper(t *testing.T, supervisor *linuxSupervisor, value aut
 	}
 }
 
-// The in-process consumer records the helper's owner-loss terminal seal after the mirror's durable
-// seal and before the all-sealed assertion, so the live-owner response-loss stop completes.
 func TestLinuxSupervisorLiveOwnerControlCloseInProcessStopRecordsSeal(t *testing.T) {
 	model := newLinuxSupervisorScanJournalModel()
 	scenario := runLiveOwnerResponseLossStop(t, model, liveOwnerResponseLossOptions{sealWrite: model.recordRecoveryScanSeal})
@@ -3592,8 +3586,6 @@ func TestLinuxSupervisorLiveOwnerControlCloseInProcessStopRecordsSeal(t *testing
 	releaseLiveOwnerHelper(t, scenario.supervisor, scenario.value, receipt)
 }
 
-// A failing recovery seal write keeps the stop fail-closed: one containment-unproven mark, no
-// receipt and no durable advance past the mirror seal.
 func TestLinuxSupervisorLiveOwnerControlCloseInProcessStopSealWriteFailureFailsClosed(t *testing.T) {
 	model := newLinuxSupervisorScanJournalModel()
 	model.recoverySealWriteErr = errors.New("durable recovery seal write failed")
@@ -3656,8 +3648,6 @@ func TestLinuxSupervisorLiveOwnerControlCloseInProcessStopSealWriteFailureFailsC
 	releaseLiveOwnerHelper(t, scenario.supervisor, scenario.value, receipt)
 }
 
-// A launch that cannot carry the seal write (an invocation rebuilt from the frozen OpenCode
-// members) keeps the base refusal, byte for byte.
 func TestLinuxSupervisorLiveOwnerControlCloseInProcessStopWithoutTheSealWriteFailsClosed(t *testing.T) {
 	model := newLinuxSupervisorScanJournalModel()
 	scenario := runLiveOwnerResponseLossStop(t, model, liveOwnerResponseLossOptions{})
@@ -3693,8 +3683,6 @@ func TestLinuxSupervisorLiveOwnerControlCloseInProcessStopWithoutTheSealWriteFai
 	releaseLiveOwnerHelper(t, scenario.supervisor, scenario.value, receipt)
 }
 
-// The consumer must record the sequence the helper attested, not a fixed value: a resumed helper
-// retires further durable sequences, so its terminal seal is no longer the second one.
 func TestLinuxSupervisorLiveOwnerControlCloseInProcessStopRecordsTheHelperReturnedSequence(t *testing.T) {
 	model := newLinuxSupervisorScanJournalModel()
 	scenario := runLiveOwnerResponseLossStop(t, model, liveOwnerResponseLossOptions{sealWrite: model.recordRecoveryScanSeal, resume: true})
@@ -3733,8 +3721,6 @@ func TestLinuxSupervisorLiveOwnerControlCloseInProcessStopRecordsTheHelperReturn
 	releaseLiveOwnerHelper(t, scenario.supervisor, scenario.value, receipt)
 }
 
-// The store CASes an assert update's sequence against the owner's durable progress
-// (`supervisor_handoff_journal.go`), so the model must refuse a stale assertion.
 func TestLinuxSupervisorScanJournalModelRefusesStaleAssertSequences(t *testing.T) {
 	model := newLinuxSupervisorScanJournalModel()
 	for _, step := range []struct {

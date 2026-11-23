@@ -47,7 +47,7 @@ type LinuxSupervisorStartSpec struct { RecordRecoveryScanSeal func(authority.Sup
   `daemon.persistSupervisorRecoveryScanSeal` (one exact replay, same wrapping) — the same shape as
   `recordSupervisorHandoffStopReceiptCallback`.
 - The launcher passes `writes.RecordSupervisorRecoveryScanSeal` into the spec; the supervisor copies
-  it into `recoveryScanSeal` and calls it from a new `recordRecoveryScanSeal(sequence)` step.
+  it into `recoveryScanSealWrite` and calls it from a new `recordRecoveryScanSeal(sequence)` step.
 - A nil function is an absent capability: the step is skipped and the all-sealed assertion refuses
   exactly as at base. This is the OpenCode-rebuilt-invocation path (the frozen members cannot carry
   the new write); the launch stays valid and its response-loss stop stays fail-closed until W6-04.
@@ -67,6 +67,8 @@ type LinuxSupervisorStartSpec struct { RecordRecoveryScanSeal func(authority.Sup
    (monitor stop, barrier restore, durable mirror seal, local assert) and the existing
    `assertDurableScanStateSealed`, with `freezeMirrorObservation` = both (the live path's call
    sequence is unchanged) and `recoverResponseLossStop` calling the three steps explicitly.
+   Ratified by the conductor (2026-11-23, PR #266 dual audit round 1): the as-built position is
+   binding, and Design 2's literal "before the mirror freeze" is superseded as infeasible.
 2. **One new durable write, one position.** The recovery arm's durable writes are
    `verifyMirrorObservation` (assert_clean) → mirror seal → recovery scan seal → assert_all_sealed.
    No other durable write, order, argument or error string changes; `stop()`'s live sequence is
@@ -78,7 +80,10 @@ type LinuxSupervisorStartSpec struct { RecordRecoveryScanSeal func(authority.Sup
    durable advance. "Same error text" is read as that unchanged surface; the inner cause names the
    failed write (the alternative — swallow the error and let the assertion refuse — would
    misattribute the cause; both are fail-closed, and for the *absent* capability the byte-identical
-   base refusal is preserved). Recorded as a decision, not a silent deviation.
+   base refusal is preserved). Recorded as a decision, not a silent deviation. Ratified by the
+   conductor (2026-11-23, PR #266 dual audit round 1): the unchanged wrapper, sentinel pair, single
+   unproven mark and durable order are the binding reading of "same error text"; the inner cause
+   names the failed write and no consumer keys on it.
 4. **Crash windows.** Seal recorded, crash before the receipt: the durable state is legitimately
    sealed (mirror + helper), so a restarted daemon either takes the plain
    `terminatePersistAuthority` route (helper alive, `RecoveryHelperScanSealEligible` is false
