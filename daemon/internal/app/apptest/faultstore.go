@@ -24,6 +24,7 @@ type FaultStore struct {
 	OnBindSupervisorHandoff                        func(state.RunKey, authority.SupervisorHandoff, int, string) (state.RunJournal, error)
 	OnCommitSupervisorHandoff                      func(state.RunKey, authority.SupervisorHandoff, time.Time) (state.RunJournal, error)
 	OnRecordSupervisorHandoffStopReceipt           func(state.RunKey, authority.SupervisorHandoff, authority.StopReceipt) (state.RunJournal, error)
+	OnRecordSupervisorRecoveryScanSeal             func(state.RunKey, authority.Supervisor, uint64) (state.RunJournal, error)
 	OnClearSupervisorHandoff                       func(state.RunKey, authority.SupervisorHandoff, authority.SupervisorHandoffReleaseProof) (state.RunJournal, error)
 	OnClearSupervisorHandoffAfterAbort             func(state.RunKey, authority.SupervisorHandoff, authority.SupervisorHandoffAbortProof) (state.RunJournal, error)
 	OnQueueTerminalTransitionAt                    func(state.RunKey, protocol.StateTransitionRequest, time.Time) (state.RunJournal, error)
@@ -125,6 +126,13 @@ func (store *FaultStore) RecordSupervisorHandoffStopReceipt(key state.RunKey, ex
 		return store.OnRecordSupervisorHandoffStopReceipt(key, expected, receipt)
 	}
 	return store.Store.RecordSupervisorHandoffStopReceipt(key, expected, receipt)
+}
+
+func (store *FaultStore) RecordSupervisorRecoveryScanSeal(key state.RunKey, expected authority.Supervisor, sequence uint64) (state.RunJournal, error) {
+	if store.OnRecordSupervisorRecoveryScanSeal != nil {
+		return store.OnRecordSupervisorRecoveryScanSeal(key, expected, sequence)
+	}
+	return store.Store.RecordSupervisorRecoveryScanSeal(key, expected, sequence)
 }
 
 func (store *FaultStore) ClearSupervisorHandoff(key state.RunKey, expected authority.SupervisorHandoff, proof authority.SupervisorHandoffReleaseProof) (state.RunJournal, error) {

@@ -40,13 +40,14 @@ type SupervisorHandoffAbortVerifier func() error
 // Consumed by execution's Linux launcher.  The target command is serialized over a private
 // inherited pipe; it never enters helper argv or environment.
 type LinuxSupervisorStartSpec struct {
-	Command       *exec.Cmd
-	HelperCommand *exec.Cmd
-	HelperPath    string
-	HelperArgs    []string
-	OwnerContext  string
-	Prepare       func(authority.SupervisorHandoff) error
-	Bind          func(authority.SupervisorHandoff, int, string) error
+	Command                *exec.Cmd
+	HelperCommand          *exec.Cmd
+	HelperPath             string
+	HelperArgs             []string
+	OwnerContext           string
+	Prepare                func(authority.SupervisorHandoff) error
+	Bind                   func(authority.SupervisorHandoff, int, string) error
+	RecordRecoveryScanSeal func(authority.Supervisor, uint64) error
 }
 
 type linuxSupervisor struct {
@@ -70,6 +71,7 @@ type linuxSupervisor struct {
 	scanConn                 *net.UnixConn
 	scanEventsDone           chan struct{}
 	scanPrepare              func(authority.SupervisorHandoff) error
+	recoveryScanSealWrite    func(authority.Supervisor, uint64) error
 	mirrorIdentity           string
 	mirrorScanBarrierRestore func()
 	pidfd                    int
@@ -295,7 +297,8 @@ func StartLinuxSupervisor(spec LinuxSupervisorStartSpec) (*linuxSupervisor, erro
 		helperDone: make(chan struct{}), ownerWrite: ownerWrite, controlWrite: controlWrite,
 		responseRead: responseRead, responseReader: bufio.NewReader(responseRead),
 		statusRead: statusRead, statusReader: bufio.NewReader(statusRead), scanConn: metadataConn,
-		scanPrepare: spec.Prepare, mirrorIdentity: mirrorIdentity, pidfd: pidfd, mirror: mirror,
+		scanPrepare: spec.Prepare, recoveryScanSealWrite: spec.RecordRecoveryScanSeal,
+		mirrorIdentity: mirrorIdentity, pidfd: pidfd, mirror: mirror,
 	}
 	go supervisor.waitHelper()
 
@@ -868,7 +871,7 @@ func (supervisor *linuxSupervisor) recoverResponseLossStop() error {
 		if channelClosedV2(supervisor.helperDone) {
 			return supervisor.stopWithMirror()
 		}
-		receipt, _, source, err := stopPersistedLinuxSupervisor(*value)
+		receipt, sequence, source, err := stopPersistedLinuxSupervisor(*value)
 		// The helper may die while the recovery endpoint is contacted. A receipt reconstructed from
 		// endpoint absence is not a healthy-helper stop response; re-enter mirror takeover for exact proof.
 		if source == linuxSupervisorStopReceiptFromAbsenceProof || channelClosedV2(supervisor.helperDone) {
@@ -883,7 +886,17 @@ func (supervisor *linuxSupervisor) recoverResponseLossStop() error {
 					_ = supervisor.containmentUnprovenCallback()
 				}
 				lastErr = fmt.Errorf("response-loss mirror proof: %w", mirrorErr)
-			} else if mirrorErr := supervisor.freezeMirrorObservation(); mirrorErr != nil {
+			} else if mirrorErr := supervisor.sealMirrorObservation(); mirrorErr != nil {
+				if supervisor.containmentUnprovenCallback != nil {
+					_ = supervisor.containmentUnprovenCallback()
+				}
+				lastErr = fmt.Errorf("response-loss mirror freeze: %w", mirrorErr)
+			} else if mirrorErr := supervisor.recordRecoveryScanSeal(sequence); mirrorErr != nil {
+				if supervisor.containmentUnprovenCallback != nil {
+					_ = supervisor.containmentUnprovenCallback()
+				}
+				lastErr = fmt.Errorf("response-loss mirror freeze: %w", mirrorErr)
+			} else if mirrorErr := supervisor.assertDurableScanStateSealed(); mirrorErr != nil {
 				if supervisor.containmentUnprovenCallback != nil {
 					_ = supervisor.containmentUnprovenCallback()
 				}
@@ -1230,6 +1243,13 @@ func (supervisor *linuxSupervisor) verifyMirrorObservation() error {
 }
 
 func (supervisor *linuxSupervisor) freezeMirrorObservation() error {
+	if err := supervisor.sealMirrorObservation(); err != nil {
+		return err
+	}
+	return supervisor.assertDurableScanStateSealed()
+}
+
+func (supervisor *linuxSupervisor) sealMirrorObservation() error {
 	if supervisor == nil {
 		return errors.New("Linux supervisor is unavailable")
 	}
@@ -1251,7 +1271,15 @@ func (supervisor *linuxSupervisor) freezeMirrorObservation() error {
 	if err := mirror.assertDescendantScanSealedLocally(); err != nil {
 		return err
 	}
-	return supervisor.assertDurableScanStateSealed()
+	return nil
+}
+
+// An absent write keeps the base fail-closed path: the all-sealed assertion refuses.
+func (supervisor *linuxSupervisor) recordRecoveryScanSeal(sequence uint64) error {
+	if supervisor == nil || supervisor.recoveryScanSealWrite == nil {
+		return nil
+	}
+	return supervisor.recoveryScanSealWrite(*supervisor.ContainmentAuthority(), sequence)
 }
 
 // The only local release path: a durable receipt proves the target tree stopped, and the helperDone

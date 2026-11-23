@@ -4552,3 +4552,68 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
       command/creation path's source (`postGoalCommand`/`postGoalCreation` through `goalCommand`)
       is unchanged; like every write, its fetch init no longer carries the runtime's
       never-aborted step signal, and `run()`'s optional `signal` remains for the read half only.
+
+- [ ] `daemon/internal/platform/supervisor_linux_helper.go`: the in-process consumer of
+      `recoverResponseLossStop` does not record the helper's authenticated recovery scan seal, so
+      such a stop fails closed into a durable containment-unproven mark; only the restarted-daemon
+      path records it (`TestLinuxSupervisorLiveOwnerControlCloseInProcessStopFailsClosed` pins the
+      behaviour, not the missing seal record).
+
+      **Closed (2026-11-23, branch `refactor/rf-w4-22-response-loss-seal-consumer`):** the same
+      change pays this debt. The in-process consumer now records the authenticated seal before the
+      receipt, and the pin that recorded the missing-seal behaviour asserts the durable seal under
+      its new name (`…StopRecordsSeal`). The entry's file reference is re-derived: the helper loop
+      and `enterRecovery` live in `daemon/internal/platform/supervisor_session.go` at this base, and
+      their surviving two-line comment needed no edit — the pre-slice #185 comment that named the
+      deferral was shortened by this sweep before the slice started. Evidence record:
+      `docs/evidence/rf-w4-22-response-loss-seal-consumer-2026-11-23.md`.
+
+## Linux supervisor: remaining sticky-refusal paths after the owner-loss latch
+
+- [ ] Give the in-process `recoverResponseLossStop` consumer the helper's owner-loss terminal seal.
+      The live-owner entries of the latch (a daemon-side control close on response-transport loss,
+      and response writes that fail before any pipe I/O) make the helper seal locally with no
+      observer writes, so the durable helper progress keeps its pre-latch sequence; the restarted
+      daemon records the seal returned over the recovery endpoint
+      (`RecordSupervisorRecoveryScanSeal`, exact `Completed+1`) before the receipt, but the
+      in-process consumer does not, `assert_all_sealed` refuses, and that stop fails closed into a
+      durable containment-unproven mark. Pinned by
+      `TestLinuxSupervisorLiveOwnerControlCloseInProcessStopFailsClosed`; the amendment (record the
+      returned seal before the mirror freeze, added once where the run-journal callback is plumbed)
+      is deferred to the RunJournalRecorder lane — the callback is added once there instead of being
+      hand-copied into every adapter — and the interim state stays fail-closed (PR #185 review
+      round 1, finding F1; conductor decision 2026-11-21).
+
+      **Closed (2026-11-23, branch `refactor/rf-w4-22-response-loss-seal-consumer`, base
+      `e13450bc`, plan `docs/plans/2026-11-23-rf-w4-22-response-loss-seal-consumer-plan.md`):** the
+      consumer records the helper's returned seal through one new `execution.Recorder` method,
+      `RecordSupervisorRecoveryScanSeal` (the port's eleventh member), implemented once in the app
+      by the restart consumer's own `daemon.persistSupervisorRecoveryScanSeal` (exact `Completed+1`,
+      one exact replay, plus the store-lifetime guard) and plumbed app → execution → platform as
+      `LinuxSupervisorStartSpec.RecordRecoveryScanSeal`; no adapter hand-copies it and the ten
+      frozen OpenCode mirrors stay ten. The write sits after the mirror's durable seal and before
+      the durable `assert_all_sealed` assertion — the literal "before the mirror freeze" is
+      infeasible because the store refuses a helper recovery seal without a durable mirror seal
+      (`daemon/internal/state/containment_journal.go:413-415`) and the mirror seal is written by the
+      freeze itself; the amendment is recorded in the plan §3.1 — and still before the receipt
+      adoption. The pin is renamed
+      `TestLinuxSupervisorLiveOwnerControlCloseInProcessStopFailsClosed` →
+      `TestLinuxSupervisorLiveOwnerControlCloseInProcessStopRecordsSeal` and asserts the durable
+      state (helper `completed=2, sealed=2`, mirror `2/2`, one accepted assertion, one seal write),
+      the ordered tail `mirror:assert_clean:2, mirror:seal:2, recovery-scan-seal:2,
+      mirror:assert_all_sealed:2` and the adopted receipt; three further arms pin a failing seal
+      write (fail-closed, one mark, no durable advance, the unchanged wrapper and sentinels), the
+      absent write (the byte-identical base refusal with its exact replay) and a resumed helper's
+      non-2 terminal seal (the recorded sequence is the helper's attested one, not a constant). The
+      launch carrier is pinned by `TestLinuxSupervisorStartSpecCarriesEveryLaunchWrite`. Measured
+      WSL durable order: base refuses `assert_all_sealed` twice and adopts no receipt; HEAD writes
+      exactly one `recovery-scan-seal:2` at that position and completes. Mutants killed on WSL
+      (evidence record §6): no write, write after the mirror freeze, `Completed+2`, swallowed write
+      error, constant `2`, and a nil launcher carrier. Gates: `go vet ./...` exit 0; `GOOS=linux`,
+      `GOOS=windows` and `GOOS=darwin` `go build ./...` exit 0; Windows `go test -count=1
+      ./internal/execution/... ./internal/platform/...` exit 0 (execution, platform) and
+      `./internal/app/...` exit 0 (app, apptest); WSL `go test -count=1 -race
+      ./internal/platform/... ./internal/app/... ./internal/execution/...` exit 0; `python3
+      scripts/ci/test-omo-control-native-evidence.py` exit 0. Residuals stay tracked: a
+      recorder-less OpenCode launch keeps the fail-closed stop until W6-04 (the port entry above),
+      and the lease-expiry arm stays open in `docs/TODO.md`.
